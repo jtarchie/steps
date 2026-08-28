@@ -377,11 +377,8 @@ func (s *session) uploadOnTunnel(frame wire.Frame) error {
 // receiveArtifact reads one artifact's bytes, caches it under its digest, and
 // places it in the work directory.
 //
-// ponytail: the digest is a KEY here, not a proof — nothing recomputes it over
-// what arrived, so whatever the peer sent is cached under the name it chose
-// and served to every later step on this worker. Upgrade: hash the staged tree
-// the way the orchestrator hashed it and refuse the commit on a mismatch. The
-// same note is on placeArtifact, which is this decision on the store plane.
+// The digest is verified over what actually arrived before any of it is
+// placed — see verifyArtifact for what trusting it cost.
 func (s *session) receiveArtifact(op uint32, cache string, artifact wire.UploadArtifact) error {
 	held := filepath.Join(cache, artifact.Digest)
 
@@ -394,7 +391,7 @@ func (s *session) receiveArtifact(op uint32, cache string, artifact wire.UploadA
 
 	reader, done := s.dataReader(op)
 
-	err = s.unpackInto(reader, staging)
+	err = unpackVerified(reader, staging, artifact.Digest, s.compression == wire.CompressionZstd)
 
 	// Drained BEFORE the acknowledgement, not after. The far end sends its
 	// next operation as soon as it hears this one landed, so a drain that ran
@@ -475,15 +472,6 @@ func (s *session) fetch(ctx context.Context, frame wire.Frame) error {
 	}
 
 	return s.sendEnd(frame.Op)
-}
-
-// unpackInto is unpack, into somewhere other than the work directory: an
-// incoming artifact lands in the cache first, under a staging name.
-func (s *session) unpackInto(reader io.Reader, dir string) error {
-	//nolint:wrapcheck // the caller wraps with the operation's own context
-	return compress.Unpack(reader, s.compression == wire.CompressionZstd, func(r io.Reader) error {
-		return wire.UnpackTree(r, dir) //nolint:wrapcheck // the caller wraps with the operation's own context
-	})
 }
 
 // pack writes the named outputs as one tar stream, through the negotiated

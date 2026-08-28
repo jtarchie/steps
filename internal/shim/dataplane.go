@@ -145,11 +145,10 @@ func (s *session) downloadTree(ctx context.Context, frame wire.Frame) error {
 // inputs and differ only in their outputs, so the second step's big input is
 // already here.
 //
-// ponytail: the digest is a KEY, not a proof — nothing here recomputes it over
-// what arrived, so a wrong object committed under it is served to every later
-// step on this worker. Upgrade: hash the staged tree the way the orchestrator
-// hashed it and refuse the commit on a mismatch. fetchArtifact bounds the
-// damage only to a transfer that completed rather than one that died halfway.
+// The digest is verified over what was actually fetched before any of it is
+// placed — see verifyArtifact. fetchArtifact alone bounded only a transfer
+// that died halfway; a completed transfer of the wrong bytes looked identical
+// to a correct one.
 func (s *session) placeArtifact(ctx context.Context, cache string, artifact wire.UploadArtifact) error {
 	err := checkArtifact(artifact)
 	if err != nil {
@@ -171,7 +170,7 @@ func (s *session) placeArtifact(ctx context.Context, cache string, artifact wire
 		return errNoURL
 	}
 
-	staging, err := fetchArtifact(ctx, artifact.URL, held)
+	staging, err := fetchArtifact(ctx, artifact.URL, held, artifact.Digest)
 	if err != nil {
 		return err
 	}
@@ -196,7 +195,7 @@ func (s *session) placeArtifact(ctx context.Context, cache string, artifact wire
 // a partial tree under a digest that claims to be complete — the next step
 // would find it, skip the download, and run against half its input. The caller
 // places from what this returns and commits it afterwards.
-func fetchArtifact(ctx context.Context, url, held string) (staging string, err error) {
+func fetchArtifact(ctx context.Context, url, held, digest string) (staging string, err error) {
 	staging, err = stageArtifact(filepath.Dir(held))
 	if err != nil {
 		return "", err
@@ -230,11 +229,12 @@ func fetchArtifact(ctx context.Context, url, held string) (staging string, err e
 		return staging, fmt.Errorf("the store answered %s", response.Status) //nolint:err113 // carries a status only the far end can act on
 	}
 
-	err = compress.Unpack(response.Body, true, func(r io.Reader) error {
-		return wire.UnpackTree(r, staging)
-	})
+	// Always zstd on this plane, and verified against the digest the URL was
+	// minted for: a store object is fetched over the network from a place this
+	// process does not control.
+	err = unpackVerified(response.Body, staging, digest, true)
 	if err != nil {
-		return staging, fmt.Errorf("%w", err)
+		return staging, err
 	}
 
 	return staging, nil

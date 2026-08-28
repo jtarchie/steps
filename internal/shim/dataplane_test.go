@@ -88,7 +88,7 @@ func TestShimSpeaksTheURLPlane(t *testing.T) {
 
 	// Upload: one control frame carrying the URL, then the ack.
 	peer.ackedSend(wire.FrameUpload, wire.Upload{Artifacts: []wire.UploadArtifact{
-		{Name: "seed.txt", Digest: "deadbeef", URL: server.URL + "/wire/tree"},
+		{Name: "seed.txt", Digest: artifactDigest(t, src, "seed.txt"), URL: server.URL + "/wire/tree"},
 	}})
 
 	stdout, _, exit := peer.exec("cat seed.txt; mkdir -p out; cp seed.txt out/copy.txt", nil)

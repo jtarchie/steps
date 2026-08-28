@@ -55,7 +55,7 @@ func (p *peer) uploadZstd(src string) {
 		p.t.Fatalf("closing the zstd stream: %v", err)
 	}
 
-	op := p.offerArtifact("seed.txt")
+	op := p.offerArtifact(src, "seed.txt")
 
 	err = p.encoder.Write(wire.Frame{Type: wire.FrameData, Op: op, Payload: buf.Bytes()})
 	if err != nil {
@@ -194,7 +194,7 @@ func TestShimRefusesRawBytesAfterNegotiatingZstd(t *testing.T) {
 		t.Fatalf("writing the seed: %v", err)
 	}
 
-	op := peer.offerArtifact("seed.txt")
+	op := peer.offerArtifact(src, "seed.txt")
 
 	writer := peer.dataWriter(op)
 

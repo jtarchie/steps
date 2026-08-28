@@ -334,7 +334,7 @@ func preflightTriggers(ctx context.Context, cfg *config.Config, resources []stri
 
 	for _, problem := range problems {
 		if problem.Transient {
-			fmt.Printf("trigger preflight: %s: %s (transient — polling anyway)\n", problem.Target, problem.Detail)
+			printf("trigger preflight: %s: %s (transient — polling anyway)\n", problem.Target, problem.Detail)
 			slog.Warn("watch.preflight_transient", "target", problem.Target, "detail", problem.Detail)
 
 			continue
@@ -379,7 +379,7 @@ func pollAndLog(ctx context.Context, cfg *config.Config, st *store.Store) {
 	}
 
 	for _, name := range enqueued {
-		fmt.Printf("trigger: enqueued %s\n", name)
+		printf("trigger: enqueued %s\n", name)
 	}
 }
 
@@ -576,7 +576,7 @@ func reportSerialWaits(ctx context.Context, cfg *config.Config, st *store.Store)
 			continue
 		}
 
-		fmt.Printf("trigger: %s waiting: lock held by %s\n", job.Name, holder)
+		printf("trigger: %s waiting: lock held by %s\n", job.Name, holder)
 		slog.Info("trigger.serial_wait", "job", job.Name, "held_by", holder)
 	}
 }
@@ -711,7 +711,7 @@ func jobReadyFor(ctx context.Context, st *store.Store, job *config.Job) (bool, e
 		if !passed {
 			names := slices.Sorted(maps.Keys(want))
 
-			fmt.Printf("trigger: %s waiting — %s has not gone green against this combination of %v yet\n", job.Name, upstreamJob, names)
+			printf("trigger: %s waiting — %s has not gone green against this combination of %v yet\n", job.Name, upstreamJob, names)
 			slog.Info("trigger.waiting_on_passed", "job", job.Name, "upstream", upstreamJob, "resources", names)
 
 			return false, nil
@@ -1119,7 +1119,7 @@ func drainOne(
 		return true, err
 	}
 
-	fmt.Printf("trigger: running %s\n", jobName)
+	printf("trigger: running %s\n", jobName)
 
 	runCtx, release := buildContext(ctx, job)
 	defer release()
@@ -1240,7 +1240,7 @@ func skipIfPaused(ctx context.Context, st *store.Store, jobName string, id int64
 		return false, nil
 	}
 
-	fmt.Printf("trigger: %s is paused (resume with: steps jobs resume %s)\n", jobName, jobName)
+	printf("trigger: %s is paused (resume with: steps jobs resume %s)\n", jobName, jobName)
 
 	err = st.CompleteJob(context.WithoutCancel(ctx), id, "skipped", nil)
 	if err != nil {
@@ -1277,12 +1277,12 @@ func recordBreaker(ctx context.Context, st *store.Store, job *config.Job, runErr
 	}
 
 	if !paused {
-		fmt.Printf("trigger: %s failed (%d/%d consecutive)\n", job.Name, consecutive, job.MaxConsecutiveFailures)
+		printf("trigger: %s failed (%d/%d consecutive)\n", job.Name, consecutive, job.MaxConsecutiveFailures)
 
 		return
 	}
 
-	fmt.Printf("trigger: %s PAUSED after %d consecutive failures — resume with: steps jobs resume %s\n",
+	printf("trigger: %s PAUSED after %d consecutive failures — resume with: steps jobs resume %s\n",
 		job.Name, consecutive, job.Name)
 
 	slog.Warn("trigger.job_paused",

@@ -14,12 +14,9 @@ import (
 func placeAt(ctx context.Context, t *testing.T, store *Store, placement Placement) {
 	t.Helper()
 
-	err := store.StartRun(ctx, placement.RunID, placement.JobName, "/tmp/ws")
-	if err != nil {
-		t.Fatalf("StartRun: %v", err)
-	}
+	ensureRun(ctx, t, store, placement.RunID, placement.JobName)
 
-	err = store.RecordNode(ctx, NodeRecord{
+	err := store.RecordNode(ctx, NodeRecord{
 		Hash: placement.NodeHash, Kind: "task", StepIndex: placement.StepIndex,
 		Resource: placement.StepName, Content: map[string]any{"body": "x"},
 	}, placement.JobName, "succeeded", nil, nil)
@@ -155,11 +152,14 @@ func hashOf(n int) string { return fmt.Sprintf("%064x", n) }
 // TestPlacementKeyIsScopedToItsPipeline holds the same rule one level down: it
 // is the KEY that has to carry the pipeline, not only the read.
 //
+// Defense in depth since StartRun stopped upserting — a run id now names a row
+// in exactly one pipeline — kept because the repo rule says a key carries the
+// pipeline and because that should not rest on one statement in one function.
+//
 // merkle.HashNode folds kind, content and parent but NOT the pipeline, so two
 // pipelines each running a job named build over a byte-identical task produce
 // the same node hash — which is exactly why nodes is keyed (pipeline_id, hash).
-// Run ids are eight characters of rand.Text() minted per pipeline, so they
-// collide too. Keyed on (run_id, node_hash) alone, the second pipeline's upsert
+// Keyed on (run_id, node_hash) alone, the second pipeline's upsert
 // lands on the first's row and rewrites every column except the one saying
 // whose it is: one pipeline then reports the other's machine, and the other
 // reports nothing at all.

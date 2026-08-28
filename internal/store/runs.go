@@ -85,15 +85,84 @@ func scanRunRow(sc rowScanner) (RunRow, error) {
 	return row, err //nolint:wrapcheck // every caller names the run it was reading
 }
 
-// StartRun records a run and the workspace its steps will share.
+var (
+	// ErrRunExists is a MINT against an id some run already holds.
+	//
+	// Loud on purpose, and the whole reason StartRun is no longer an upsert.
+	// runs.id is a single global primary key, and the upsert answered a
+	// collision by taking the existing row OVER: a finished run flipped back
+	// to running and its workspace repointed, while the row kept the old
+	// job_name and the old pipeline_id — so every child row the new run wrote
+	// hung off a record describing a different run of a different job. A
+	// build that refuses to start is a bad afternoon; that was silent history
+	// corruption, and nothing downstream could tell it had happened.
+	ErrRunExists = errors.New("a run with this id already exists")
+	// ErrNoSuchRun is a RESUME of a run this pipeline does not have.
+	ErrNoSuchRun = errors.New("no run with this id")
+)
+
+// StartRun records a NEW run and the workspace its steps will share.
+//
+// An insert, never an upsert: minting an id and continuing a run are
+// different acts, and the single statement that served both could not tell
+// them apart. Continuing one is ResumeRun.
+//
+// DO NOTHING plus a row count rather than letting the constraint violation
+// out, so the answer does not depend on how a driver spells its unique-index
+// error.
 func (s *Store) StartRun(ctx context.Context, id, jobName, workspaceDir string) error {
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO runs (id, pipeline_id, job_name, workspace, status, started_at)
 		VALUES (?, ?, ?, ?, 'running', ?)
-		ON CONFLICT (id) DO UPDATE SET status = 'running', workspace = excluded.workspace
+		ON CONFLICT (id) DO NOTHING
 	`, id, s.pipelineID, jobName, workspaceDir, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not record run %q: %w", id, err)
+	}
+
+	// Deliberately NOT scoped to this pipeline: runs.id is global across every
+	// pipeline in the state file, so a scoped check would report success and
+	// then write this run's events onto another pipeline's row.
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("could not record run %q: %w", id, err)
+	}
+
+	if inserted == 0 {
+		return fmt.Errorf("%w: %q", ErrRunExists, id)
+	}
+
+	return nil
+}
+
+// ResumeRun puts an existing run back in flight and points it at the build
+// this attempt is using.
+//
+// The legitimate half of what the old upsert did. It updates and never
+// inserts, so a resume of a run that is not there is an error instead of a
+// silently invented row — and it is scoped to this pipeline, because a run id
+// names a row in ONE pipeline and reaching another one would put a foreign
+// run back in flight under this pipeline name.
+//
+// job_name is deliberately not written: the job a run belongs to was decided
+// when it was minted, and a resume that could rewrite it would make the run
+// history disagree with the events already recorded against it.
+func (s *Store) ResumeRun(ctx context.Context, id, workspaceDir string) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE runs SET status = 'running', workspace = ?
+		WHERE id = ? AND pipeline_id = ?
+	`, workspaceDir, id, s.pipelineID)
+	if err != nil {
+		return fmt.Errorf("could not resume run %q: %w", id, err)
+	}
+
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("could not resume run %q: %w", id, err)
+	}
+
+	if updated == 0 {
+		return fmt.Errorf("%w: %q", ErrNoSuchRun, id)
 	}
 
 	return nil

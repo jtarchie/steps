@@ -10,10 +10,15 @@ import (
 
 // TestCompletedRunStepsAreScopedToTheirPipeline pins the read --resume trusts.
 //
-// Run ids are minted without a uniqueness check, so two pipelines sharing a
-// state file can hold the same id — and run_steps carries no pipeline column
-// to tell them apart. Unscoped, the second pipeline's resume reads the first's
-// finished steps as its own and skips work it never did.
+// run_steps carries no pipeline column of its own, so this read reaches the
+// pipeline only through runs. Unscoped, a pipeline asking about a run id it
+// does not own reads the OWNER's finished steps as its own and skips work it
+// never did — which for the resume index means skipping work, not just
+// misreporting it.
+//
+// Defense in depth since StartRun stopped upserting: a run id now names a row
+// in exactly one pipeline, so no honest resume can ask this question. The
+// predicate stays because the repo rule is categorical about it.
 func TestCompletedRunStepsAreScopedToTheirPipeline(t *testing.T) {
 	t.Parallel()
 
@@ -35,11 +40,10 @@ func TestCompletedRunStepsAreScopedToTheirPipeline(t *testing.T) {
 		t.Fatalf("RecordRunStep web: %v", err)
 	}
 
-	err = infra.StartRun(ctx, shared, "build", "/tmp/infra")
-	if err != nil {
-		t.Fatalf("StartRun infra: %v", err)
-	}
-
+	// infra records no run of its own: runs.id is global and StartRun refuses
+	// an id another pipeline holds. What is being asked is narrower and is the
+	// query's own contract — infra reading a run id it does not own must see
+	// nothing, rather than the other pipeline's finished steps.
 	done, err := infra.CompletedRunSteps(ctx, shared)
 	if err != nil {
 		t.Fatalf("CompletedRunSteps infra: %v", err)

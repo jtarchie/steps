@@ -52,11 +52,27 @@ func (r *resumeState) alreadyDone(index int) (string, bool) {
 	return name, ok
 }
 
-// NewRunID mints an identifier for a run. Random rather than sequential so two
-// runs of the same job — including concurrent ones under `steps watch` — never
-// collide on it.
+// runIDChars is how much of a crypto/rand base32 string a run id keeps.
+//
+// It was 8, which is 40 bits, under a comment claiming runs "never" collide —
+// a probability argument stated as a guarantee. At 40 bits the birthday bound
+// is about 1% at 149,000 retained runs and 12% at 525,600, which is a
+// one-minute poll for a year, and `run_history: 0` (no limit) is a documented
+// setting. 16 chars is 80 bits, where the same numbers are unreachable.
+//
+// Widening is not what makes this safe — StartRun refusing an id some run
+// already holds is. This only makes the refusal something nobody ever sees.
+const runIDChars = 16
+
+// NewRunID mints an identifier for a run.
+//
+// Random rather than sequential so two runs of the same job — including
+// concurrent ones under `steps watch` — do not have to coordinate to differ.
+// A collision is not prevented here and is not claimed to be: it is refused
+// by StartRun, which inserts rather than upserts precisely so that an
+// improbable event is an error instead of a silent takeover.
 func NewRunID() string {
-	return rand.Text()[:8]
+	return rand.Text()[:runIDChars]
 }
 
 // PrepareResume loads a previous run so this one can continue it, and reports
@@ -134,4 +150,31 @@ func forced(ctx context.Context) bool {
 	force, _ := ctx.Value(forceKey{}).(bool)
 
 	return force
+}
+
+// recordRunIdentity writes the row every event, history entry and resume of
+// this run keys on — minting it, or putting an existing one back in flight.
+//
+// The two are different acts and are no longer one upsert. The error is
+// RETURNED rather than logged, which is the point: a mint that collides with
+// an id some run already holds used to take that row over silently, and a
+// bookkeeping write nobody checks is exactly how that stayed invisible. A run
+// that cannot establish its own identity has nowhere to record what it does,
+// so there is nothing useful for it to go on and do.
+func recordRunIdentity(ctx context.Context, st *store.Store, resume *resumeState, jobName, workspaceRoot string) error {
+	if resume.resuming {
+		err := st.ResumeRun(ctx, resume.id, workspaceRoot)
+		if err != nil {
+			return fmt.Errorf("job %q: %w", jobName, err)
+		}
+
+		return nil
+	}
+
+	err := st.StartRun(ctx, resume.id, jobName, workspaceRoot)
+	if err != nil {
+		return fmt.Errorf("job %q: %w", jobName, err)
+	}
+
+	return nil
 }

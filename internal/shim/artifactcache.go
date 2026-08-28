@@ -11,6 +11,8 @@ package shim
 // differently.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +22,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jtarchie/steps/internal/compress"
+	"github.com/jtarchie/steps/internal/wire"
 )
 
 // artifactCacheBytes bounds what the cache may hold on a worker.
@@ -360,4 +365,54 @@ func placeHeldArtifact(tree, name, workdir string) error {
 	defer func() { _ = root.Close() }()
 
 	return copyTree(root, filepath.Join(tree, name), name)
+}
+
+// errDigestMismatch is an artifact whose bytes are not the ones the digest
+// names.
+var errDigestMismatch = errors.New("an artifact does not match the digest it was sent under")
+
+// unpackVerified unpacks a tar stream and refuses it unless the stream hashes
+// to the digest it was sent under.
+//
+// The digest used to be a KEY and not a proof, on both planes, and this is the
+// one place either could be checked. What that bought an attacker: the shim's
+// listener is unauthenticated by design and, under the aws:// bootstrap, runs
+// as ROOT, so an unprivileged local process that cannot exec it can still dial
+// it, commit arbitrary content under a legitimate digest, and have a later
+// step take that content as an input it never has to transfer — executing it
+// as root while `steps runs --where` reports 0 B, as though nothing was
+// needed. The attacker-free half is duller and likelier: a transfer that
+// completed but is wrong poisons this worker permanently, because eviction is
+// by size and nothing ever re-reads what the cache holds.
+//
+// Hashed over the UNCOMPRESSED tar stream, which is where the orchestrator
+// takes it (packArtifactToFile tees the hasher off PackPaths, inside the
+// compressor), so the two are the same bytes on both planes and under either
+// compression. It is deliberately not a digest of the unpacked TREE: the key
+// this proves has to be the key the cache is addressed by, and a second
+// content hash would be a different question with a different answer.
+//
+// The stream is consumed as it is unpacked rather than in a second pass, so
+// verification costs one sha256 over bytes already in flight and never buffers
+// an artifact that may be gigabytes.
+func unpackVerified(reader io.Reader, dir, digest string, zstd bool) error {
+	hasher := sha256.New()
+
+	err := compress.Unpack(reader, zstd, func(r io.Reader) error {
+		return wire.UnpackTree(io.TeeReader(r, hasher), dir)
+	})
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	// After the unpack, never instead of it: UnpackTree is what reads the
+	// stream, so nothing has been hashed until it has finished reading. The
+	// tree is refused before it is placed, which is what matters — placing is
+	// what puts the bytes where the step's command will run them.
+	got := hex.EncodeToString(hasher.Sum(nil))
+	if got != digest {
+		return fmt.Errorf("%w: sent as %s, hashes as %s", errDigestMismatch, digest, got)
+	}
+
+	return nil
 }

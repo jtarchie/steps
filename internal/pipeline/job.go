@@ -129,7 +129,10 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		workspaceRoot = rooted.Root()
 	}
 
-	_ = st.StartRun(ctx, resume.id, job.Name, workspaceRoot)
+	err = recordRunIdentity(ctx, st, resume, job.Name, workspaceRoot)
+	if err != nil {
+		return err
+	}
 
 	jobStarted := time.Now()
 

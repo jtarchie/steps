@@ -73,7 +73,7 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Printf("webhook: %s checked, enqueued %v\n", name, enqueued)
+	printf("webhook: %s checked, enqueued %v\n", name, enqueued)
 
 	// The response body deliberately echoes nothing back: the request path is
 	// attacker-controlled, and the sender already knows what it asked for.
@@ -170,7 +170,7 @@ func serveWebhooks(ctx context.Context, cfg *config.Config, st *store.Store, add
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
-	fmt.Printf("webhook: listening on %s for %d resource(s)\n", addr, len(tokens))
+	printf("webhook: listening on %s for %d resource(s)\n", addr, len(tokens))
 	slog.Info("webhook.listening", "addr", addr, "resources", len(tokens))
 
 	err := server.ListenAndServe()

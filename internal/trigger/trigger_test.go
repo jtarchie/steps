@@ -18,10 +18,17 @@ import (
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
-// captureStdout runs fn with os.Stdout redirected to a pipe, returning
-// everything fn wrote via fmt.Printf and friends. Not safe alongside other
-// tests running in parallel that also touch os.Stdout — callers must not use
-// t.Parallel().
+// captureStdout reads what fn printed through this package's own output
+// destination.
+//
+// It used to assign the os.Stdout GLOBAL, which the package's parallel tests
+// read concurrently through every fmt.Printf in the code under test — a data
+// race -race reported intermittently. Swapping trigger's own writer under its
+// lock is the same capture without the race; see output.go.
+//
+// The swap is released BEFORE fn runs: printf takes the read lock, and an
+// RWMutex is not reentrant, so holding the write lock across fn would deadlock
+// on the first line it tried to print.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 
@@ -30,14 +37,18 @@ func captureStdout(t *testing.T, fn func()) string {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 
-	orig := os.Stdout
-	os.Stdout = w
+	outMu.Lock()
+	orig := out
+	out = w
+	outMu.Unlock()
 
 	fn()
 
-	_ = w.Close()
+	outMu.Lock()
+	out = orig
+	outMu.Unlock()
 
-	os.Stdout = orig
+	_ = w.Close()
 
 	data, err := io.ReadAll(r)
 	if err != nil {

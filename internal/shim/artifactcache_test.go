@@ -5,7 +5,7 @@ package shim
 
 import (
 	"crypto/sha256"
-	"fmt"
+	"encoding/hex"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -14,10 +14,25 @@ import (
 	"github.com/jtarchie/steps/internal/wire"
 )
 
-// digestOf is the peer helpers' key: an artifact digested by its own name, so
-// a test can name the cache entry an upload will make.
-func digestOf(name string) string {
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
+// artifactDigest is the digest the ORCHESTRATOR would send one artifact under:
+// sha256 over the uncompressed tar stream, which is where packArtifactToFile
+// tees its hasher.
+//
+// Computed rather than invented, because the shim now verifies it. A test that
+// names content by a digest the content does not have is testing a message no
+// venue can send, and the fiction was load-bearing here before — the cache was
+// keyed on a hash of the artifact's NAME so the same artifact always repeated.
+func artifactDigest(t *testing.T, src, name string) string {
+	t.Helper()
+
+	hasher := sha256.New()
+
+	err := wire.PackPaths(hasher, src, []string{name})
+	if err != nil {
+		t.Fatalf("digesting artifact %q: %v", name, err)
+	}
+
+	return hex.EncodeToString(hasher.Sum(nil))
 }
 
 // TestHelloRefusesTheArtifactCacheAsASessionName is the collision between two
@@ -39,7 +54,7 @@ func TestHelloRefusesTheArtifactCacheAsASessionName(t *testing.T) {
 	mustWrite(t, filepath.Join(src, "data", "seed.txt"), "seed\n")
 	benign.upload(src)
 
-	cached := filepath.Join(root, "steps-shim", artifactCacheName, digestOf("data"))
+	cached := filepath.Join(root, "steps-shim", artifactCacheName, artifactDigest(t, src, "data"))
 
 	_, err := os.Stat(cached)
 	if err != nil {
@@ -91,7 +106,7 @@ func TestUploadRefetchesACacheEntryThatVanished(t *testing.T) {
 	src := t.TempDir()
 	mustWrite(t, filepath.Join(src, "data", "seed.txt"), "seed\n")
 
-	mustMkdir(t, filepath.Join(root, "steps-shim", artifactCacheName, digestOf("data")))
+	mustMkdir(t, filepath.Join(root, "steps-shim", artifactCacheName, artifactDigest(t, src, "data")))
 
 	// Fails the test if the shim answers an error rather than asking for the
 	// bytes it no longer holds.
@@ -115,10 +130,12 @@ func TestPlaceArtifactRefetchesACacheEntryThatVanished(t *testing.T) {
 	cache := t.TempDir()
 	session := &session{workdir: t.TempDir()}
 
-	mustMkdir(t, filepath.Join(cache, "deadbeef"))
+	digest := artifactDigest(t, src, "data")
+
+	mustMkdir(t, filepath.Join(cache, digest))
 
 	err := session.placeArtifact(t.Context(), cache, wire.UploadArtifact{
-		Name: "data", Digest: "deadbeef", URL: server.URL + "/wire/tree",
+		Name: "data", Digest: digest, URL: server.URL + "/wire/tree",
 	})
 	if err != nil {
 		t.Fatalf("placing an artifact whose cache entry vanished: %v", err)

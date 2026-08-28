@@ -470,11 +470,11 @@ func TestShimRefusesAMismatchedProtocol(t *testing.T) {
 // offerArtifact names one artifact and returns its operation once the shim
 // has asked for the bytes — the tunnel's upload handshake, for tests that
 // then write the payload themselves.
-func (p *peer) offerArtifact(name string) uint32 {
+func (p *peer) offerArtifact(src, name string) uint32 {
 	p.t.Helper()
 
 	op := p.next()
-	digest := digestOf(name)
+	digest := artifactDigest(p.t, src, name)
 
 	p.send(wire.FrameUpload, op, wire.Upload{
 		Artifacts: []wire.UploadArtifact{{Name: name, Digest: digest}},
@@ -504,13 +504,14 @@ func (p *peer) upload(src string) {
 	}
 }
 
-// uploadArtifact offers one named entry, keyed by a digest of its own name so
-// two different artifacts never collide and the same one always repeats.
+// uploadArtifact offers one named entry under the digest the orchestrator
+// would send it under — the hash of its own tar stream, which the shim now
+// verifies against the bytes that arrive.
 func (p *peer) uploadArtifact(src, name string) {
 	p.t.Helper()
 
 	op := p.next()
-	digest := digestOf(name)
+	digest := artifactDigest(p.t, src, name)
 
 	p.send(wire.FrameUpload, op, wire.Upload{
 		Artifacts: []wire.UploadArtifact{{Name: name, Digest: digest}},

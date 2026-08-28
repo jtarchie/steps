@@ -225,11 +225,18 @@ func (w *planWalk) runTriggeredBuild(
 	// Re-point the run at THIS build. A get fans the rest of the plan out per
 	// version into a build of its own, and that is where the artifacts and
 	// every subsequent step live — the job-level build recorded at RunJob
-	// holds none of it. StartRun upserts, so this is the same row with a
-	// better answer.
+	// holds none of it. An UPDATE of the row RunJob already wrote, never a
+	// mint: this is the same run with a better answer about where it lives.
 	if rooted, ok := bw.(workspace.RootedBuild); ok {
 		if resume := resumeFrom(ctx); resume != nil {
-			_ = w.st.StartRun(ctx, resume.id, w.jobName, rooted.Root())
+			err := w.st.ResumeRun(ctx, resume.id, rooted.Root())
+			if err != nil {
+				// Logged, not returned: the row exists by the time a get runs,
+				// so this cannot fail for a reason the get can act on, and a
+				// version fetched is not made wrong by a workspace column that
+				// still names the job-level build.
+				logFrom(ctx).Warn("job.run_workspace_unrecorded", "run", resume.id, "error", err)
+			}
 		}
 	}
 

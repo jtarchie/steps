@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 )
@@ -22,6 +23,24 @@ func mustOpenPipeline(t *testing.T, path, name string) *Store {
 	return store
 }
 
+// ensureRun records the run these tests hang their rows on, reusing one that
+// is already there.
+//
+// runs.id is a single GLOBAL primary key and StartRun refuses an id some run
+// already holds, so a cross-pipeline collision cannot be built by starting the
+// same run twice — that is the whole point of ErrRunExists. What CAN still
+// exist is the shape these tests are about: one run row, and a second pipeline
+// writing its own child rows against that run id. The child tables are what
+// have to survive it.
+func ensureRun(ctx context.Context, t *testing.T, store *Store, runID, jobName string) {
+	t.Helper()
+
+	err := store.StartRun(ctx, runID, jobName, "/tmp/ws")
+	if err != nil && !errors.Is(err, ErrRunExists) {
+		t.Fatalf("StartRun: %v", err)
+	}
+}
+
 // recordSpend records one agent step's node and what it spent.
 func recordSpend(ctx context.Context, t *testing.T, store *Store, runID, jobName, stepName string, tokens int) {
 	t.Helper()
@@ -34,10 +53,7 @@ func recordSpend(ctx context.Context, t *testing.T, store *Store, runID, jobName
 		t.Fatalf("RecordNode: %v", err)
 	}
 
-	err = store.StartRun(ctx, runID, jobName, "/tmp/ws")
-	if err != nil {
-		t.Fatalf("StartRun: %v", err)
-	}
+	ensureRun(ctx, t, store, runID, jobName)
 
 	err = store.RecordAgentUsage(ctx, AgentUsage{
 		RunID: runID, StepIndex: 0, StepName: stepName, JobName: jobName,
@@ -68,9 +84,14 @@ func onlyUsage(ctx context.Context, t *testing.T, store *Store, runID string) Ag
 // had, on the table that holds money.
 //
 // merkle.HashNode folds kind, content and parent but NOT the pipeline, so two
+// Defense in depth since StartRun stopped upserting: a run id now names a row
+// in exactly one pipeline, so the collision below is no longer reachable
+// through the API. The key still carries the pipeline, because the repo rule
+// says it must and because that guarantee should not rest on one statement in
+// one function.
+//
 // pipelines each with a job named build over a byte-identical agent step
-// produce the same node hash; run ids are minted per pipeline and collide on
-// their own terms. Keyed on (run_id, node_hash) alone the second pipeline's
+// produce the same node hash. Keyed on (run_id, node_hash) alone the second pipeline's
 // insert conflicts with the first's and takes the ACCUMULATING branch — which
 // is correct for a retried step and catastrophic across pipelines: the tokens
 // are added to a row belonging to someone else, so one pipeline is billed for

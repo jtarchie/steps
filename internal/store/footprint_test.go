@@ -926,9 +926,9 @@ func TestPruneKeepsTheRunItWasCalledFrom(t *testing.T) {
 	// Resume the oldest run, the way `steps run --resume` does.
 	const resumed = "RUN00001"
 
-	err := store.StartRun(ctx, resumed, "job", "/tmp/ws")
+	err := store.ResumeRun(ctx, resumed, "/tmp/ws")
 	if err != nil {
-		t.Fatalf("StartRun: %v", err)
+		t.Fatalf("ResumeRun: %v", err)
 	}
 
 	err = store.PruneRuns(ctx, "job", 3, resumed)

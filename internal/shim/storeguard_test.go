@@ -94,7 +94,7 @@ func TestStoreErrorsDoNotCarryTheSignatureFromAParseFailure(t *testing.T) {
 	// a hand-built *url.Error.
 	signed := "https://bucket.s3.amazonaws.com:notaport/wire/abc?X-Amz-Signature=deadbeefcafe"
 
-	_, fetchErr := fetchArtifact(t.Context(), signed, filepath.Join(t.TempDir(), "held"))
+	_, fetchErr := fetchArtifact(t.Context(), signed, filepath.Join(t.TempDir(), "held"), "unreached")
 	if fetchErr == nil {
 		t.Fatal("a url net/http cannot parse was accepted on the download path")
 	}
