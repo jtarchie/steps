@@ -3,7 +3,6 @@ package shell
 // Reclaiming containers a previous run could not clean up after itself.
 
 import (
-	"bufio"
 	"context"
 	"log/slog"
 	"os"
@@ -11,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/jtarchie/steps/internal/dockerapi"
 )
 
 // Labels stamped on every container this tool starts, so a container that
@@ -79,7 +80,16 @@ func SweepOrphanedContainers(ctx context.Context, dockerHost string) {
 	ctx, cancel := context.WithTimeout(ctx, dockerSweepTimeout)
 	defer cancel()
 
-	orphans := listOrphanedContainers(ctx, dockerHost)
+	client, err := dockerapi.New(dockerHost)
+	if err != nil {
+		slog.Debug("shell.docker.sweep_unavailable", "error", err)
+
+		return
+	}
+
+	defer func() { _ = client.Close() }()
+
+	orphans := listOrphanedContainers(ctx, client)
 	if len(orphans) == 0 {
 		return
 	}
@@ -87,22 +97,20 @@ func SweepOrphanedContainers(ctx context.Context, dockerHost string) {
 	for _, id := range orphans {
 		slog.Info("shell.docker.sweep_orphan", "container", id)
 
-		out, err := dockerCommand(ctx, dockerHost, []string{"rm", "-f", id}).CombinedOutput()
+		err := client.RemoveContainer(ctx, id)
 		if err != nil {
-			slog.Warn("shell.docker.sweep_failed", "container", id, "error", err, "output", string(out))
+			slog.Warn("shell.docker.sweep_failed", "container", id, "error", err)
 		}
 	}
 }
 
 // listOrphanedContainers returns the ids of our containers whose owning
 // process is gone.
-func listOrphanedContainers(ctx context.Context, dockerHost string) []string {
-	cmd := dockerCommand(ctx, dockerHost, []string{"ps", "--all", "--no-trunc",
-		"--filter", "label=" + dockerOwnerLabel + "=steps",
-		"--filter", "label=" + dockerHostLabel + "=" + ownerHostname(),
-		"--format", "{{.ID}} {{.Label \"" + dockerPIDLabel + "\"}}"})
-
-	out, err := cmd.Output()
+func listOrphanedContainers(ctx context.Context, client *dockerapi.Client) []string {
+	containers, err := client.ListContainers(ctx, map[string]string{
+		dockerOwnerLabel: "steps",
+		dockerHostLabel:  ownerHostname(),
+	})
 	if err != nil {
 		slog.Debug("shell.docker.sweep_list_failed", "error", err)
 
@@ -111,9 +119,8 @@ func listOrphanedContainers(ctx context.Context, dockerHost string) []string {
 
 	var orphans []string
 
-	scanner := bufio.NewScanner(strings.NewReader(string(out)))
-	for scanner.Scan() {
-		id, pid, ok := parseSweepLine(scanner.Text())
+	for _, container := range containers {
+		pid, ok := ownerPID(container.Labels[dockerPIDLabel])
 		if !ok {
 			continue
 		}
@@ -122,27 +129,22 @@ func listOrphanedContainers(ctx context.Context, dockerHost string) []string {
 			continue
 		}
 
-		orphans = append(orphans, id)
+		orphans = append(orphans, container.ID)
 	}
 
 	return orphans
 }
 
-// parseSweepLine splits one "<id> <pid>" row from docker ps. A row without a
-// usable pid is skipped rather than swept: an unattributable container is
+// ownerPID reads the pid a container was labelled with. A container without a
+// usable one is skipped rather than swept: an unattributable container is
 // exactly the one not to remove on a guess.
-func parseSweepLine(line string) (id string, pid int, ok bool) {
-	fields := strings.Fields(line)
-	if len(fields) != 2 {
-		return "", 0, false
-	}
-
-	pid, err := strconv.Atoi(fields[1])
+func ownerPID(label string) (int, bool) {
+	pid, err := strconv.Atoi(strings.TrimSpace(label))
 	if err != nil || pid <= 0 {
-		return "", 0, false
+		return 0, false
 	}
 
-	return fields[0], pid, true
+	return pid, true
 }
 
 // processAlive reports whether pid names a live process on this machine.

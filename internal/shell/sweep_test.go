@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"github.com/jtarchie/steps/internal/dockerapi"
 	"os"
 	"slices"
 	"strconv"
@@ -34,33 +35,38 @@ func TestDockerStartArgsCarriesOwnershipLabels(t *testing.T) {
 	}
 }
 
-func TestParseSweepLine(t *testing.T) {
+// TestOwnerPID covers the label a sweep attributes a container by.
+//
+// It used to parse a formatted `docker ps` row, so half these cases were
+// about the SHAPE of that line — a missing second field, a stray third. The
+// labels arrive structured now, so what is left is the only question that was
+// ever really being asked: is this a pid worth checking? Anything else is
+// skipped rather than swept, because an unattributable container is exactly
+// the one not to remove on a guess.
+func TestOwnerPID(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name    string
-		line    string
-		wantID  string
+		label   string
 		wantPID int
 		wantOK  bool
 	}{
-		{"ordinary row", "abc123 4242", "abc123", 4242, true},
-		{"missing pid label", "abc123", "", 0, false},
-		{"empty", "", "", 0, false},
-		{"non-numeric pid", "abc123 notapid", "", 0, false},
-		{"zero pid", "abc123 0", "", 0, false},
-		{"negative pid", "abc123 -1", "", 0, false},
-		{"extra fields", "abc123 42 stray", "", 0, false},
+		{"an ordinary pid", "4242", 4242, true},
+		{"whitespace around it", " 4242 ", 4242, true},
+		{"no label at all", "", 0, false},
+		{"not a number", "notapid", 0, false},
+		{"zero", "0", 0, false},
+		{"negative", "-1", 0, false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			id, pid, ok := parseSweepLine(tc.line)
-			if ok != tc.wantOK || id != tc.wantID || pid != tc.wantPID {
-				t.Errorf("parseSweepLine(%q) = (%q, %d, %v), want (%q, %d, %v)",
-					tc.line, id, pid, ok, tc.wantID, tc.wantPID, tc.wantOK)
+			pid, ok := ownerPID(tc.label)
+			if ok != tc.wantOK || pid != tc.wantPID {
+				t.Errorf("ownerPID(%q) = (%d, %v), want (%d, %v)", tc.label, pid, ok, tc.wantPID, tc.wantOK)
 			}
 		})
 	}
@@ -93,8 +99,11 @@ func TestProcessAliveRejectsAnImpossiblePid(t *testing.T) {
 
 // TestSweepOrphanedContainersToleratesNoDocker pins that the sweep can never
 // be the reason a run fails: it is tidying, and tidying is not the job.
+//
+// A daemon that does not answer rather than a missing binary, which is what
+// "no docker" means now that nothing is spawned.
 func TestSweepOrphanedContainersToleratesNoDocker(t *testing.T) {
-	t.Setenv("PATH", t.TempDir()) // docker cannot be found
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1")
 
 	SweepOrphanedContainers(t.Context(), "")
 }
@@ -111,7 +120,14 @@ func TestSweepHonoursTheDaemonItIsGiven(t *testing.T) {
 	// A daemon that is not there. Honoured, the listing fails and answers
 	// nothing; ignored, this reaches the real local daemon and answers about
 	// containers it was never asked about.
-	orphans := listOrphanedContainers(t.Context(), "unix:///nonexistent/steps-sweep-test.sock")
+	client, err := dockerapi.New("tcp://127.0.0.1:1")
+	if err != nil {
+		t.Fatalf("dockerapi.New: %v", err)
+	}
+
+	t.Cleanup(func() { _ = client.Close() })
+
+	orphans := listOrphanedContainers(t.Context(), client)
 	if len(orphans) != 0 {
 		t.Errorf("a sweep aimed at a daemon that does not exist listed %d containers — it is reading the local one", len(orphans))
 	}
