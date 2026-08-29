@@ -429,14 +429,19 @@ func TestDockerRunnerRunCaptureLogsStderrOnFailure(t *testing.T) {
 
 // entrypointImage builds an image whose ENTRYPOINT swallows any command given
 // to it, which is the shape that makes a session container die at birth.
+//
+// Tagged per test and removed afterwards, following the fixture in
+// internal/venue: a fixed tag would let a stale image from an older Dockerfile
+// be reused silently, which is a test passing for a reason nobody wrote.
 func entrypointImage(t *testing.T) string {
 	t.Helper()
 
-	const name = "steps-test-entrypoint:latest"
+	name := "steps-test-entrypoint:" + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
+	//nolint:gosec // name is derived from this test's own name
 	cmd := exec.CommandContext(ctx, "docker", "build", "-q", "-t", name, "-")
 	cmd.Stdin = strings.NewReader("FROM " + testImage + "\nENTRYPOINT [\"/bin/echo\"]\n")
 
@@ -444,6 +449,16 @@ func entrypointImage(t *testing.T) string {
 	if err != nil {
 		t.Skipf("cannot build the entrypoint fixture image: %v\n%s", err, out)
 	}
+
+	t.Cleanup(func() {
+		// Its own bounded context: cleanup most often runs because the test's
+		// was just cancelled.
+		removeCtx, removeCancel := context.WithTimeout(context.WithoutCancel(context.Background()), 30*time.Second)
+		defer removeCancel()
+
+		//nolint:gosec // as above
+		_ = exec.CommandContext(removeCtx, "docker", "rmi", "-f", name).Run()
+	})
 
 	return name
 }
