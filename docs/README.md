@@ -43,6 +43,7 @@ steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip
 steps runs <pipeline>       show what past runs recorded (--cost for spend,
                             --where for the machines placed steps ran on)
+steps runs --state <file>   with no pipeline: every pipeline in one state file
 steps preflight <pipeline>  check a job's models and MCP servers are live
 steps jobs <pipeline>       list jobs the circuit breaker paused, or resume one
 steps approvals <pipeline>  list approval: steps waiting for a decision

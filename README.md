@@ -66,7 +66,7 @@ See [`docs/resources.md`](docs/resources.md) for other resource types and the `c
 | `steps run <pipeline>` | Run one job once. |
 | `steps validate <pipeline>` | Check the file for errors without running anything. |
 | `steps plan <pipeline>` | Show which steps a run would execute and which are cached. |
-| `steps runs <pipeline>` | Show what past runs recorded (`--steps`, `--queue`). |
+| `steps runs <pipeline>` | Show what past runs recorded (`--steps`, `--queue`); with no pipeline and `--state`, every pipeline in one state file. |
 | `steps watch <pipeline>` | Poll `trigger: true` resources and run affected jobs. |
 | `steps test <pipeline>` | Run every job and check `assert:` directives. |
 | `steps web <pipeline>...` | Serve a local browser UI, and poll trigger resources while it serves ([docs](docs/web.md)). |

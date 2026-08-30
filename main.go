@@ -572,7 +572,7 @@ func (p *PlanCmd) Run() error {
 // not even be installed.
 type RunsCmd struct {
 	StateFlags `embed:""`
-	Pipeline   string `arg:""                                                  help:"path to the pipeline YAML file"`
+	Pipeline   string `arg:""                                                  help:"path to the pipeline YAML file (omit, with --state, to read every pipeline in one file)" optional:""`
 	Job        string `help:"only show runs of this job"`
 	Limit      int    `default:"20"                                            help:"maximum number of rows to show"`
 	Steps      bool   `help:"show individual steps instead of job outcomes"`
@@ -587,6 +587,13 @@ type RunsCmd struct {
 // one: a read command that leaves a .steps/ behind would be a surprising
 // thing for `steps runs` to do on a fresh checkout.
 func (r *RunsCmd) Run() error {
+	// No pipeline named is the cross-pipeline question, which only a --state
+	// file can hold: the default path is derived FROM a pipeline, so without
+	// one there is nothing to read.
+	if r.Pipeline == "" {
+		return r.runAcross()
+	}
+
 	path := statePath(r.Pipeline, r.State)
 
 	_, err := os.Stat(path)
@@ -624,6 +631,172 @@ func (r *RunsCmd) Run() error {
 	default:
 		return r.printJobRuns(ctx, st)
 	}
+}
+
+// runAcross reports on every pipeline in one state file: what it holds, and
+// the newest runs across all of it.
+//
+// This is the CLI's answer to the question --state created. `steps runs` is
+// otherwise scoped by the pipeline it is handed, so a file with three
+// pipelines in it took three invocations to read and gave no interleaving at
+// all — the web root has answered this since it learned to serve several
+// pipelines, and it reads through the same store.Reader.
+//
+// The view is chosen by whether a pipeline was NAMED, not by how many the
+// file turns out to hold: a one-pipeline file still prints the pipeline
+// column here, so a script that reads this output gets the same columns
+// whatever the file grows into.
+func (r *RunsCmd) runAcross() error {
+	if r.State == "" {
+		return errors.New("steps runs needs a pipeline to read, or --state <file> to read every pipeline in one state database")
+	}
+
+	flag, scoped := r.scopedFlag()
+	if scoped {
+		return fmt.Errorf("%s asks about one pipeline: run `steps runs <pipeline> %s --state %s`", flag, flag, r.State)
+	}
+
+	// Stat first, for the same reason the scoped path does: asking about
+	// history must not create the database it is asking about.
+	_, err := os.Stat(r.State)
+	if err != nil {
+		fmt.Printf("no state database at %s\n", r.State)
+
+		return nil
+	}
+
+	reader, err := store.OpenReader(r.State)
+	if err != nil {
+		return fmt.Errorf("could not open state store: %w", err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	ctx := context.Background()
+
+	pipelines, err := reader.Pipelines(ctx)
+	if err != nil {
+		return fmt.Errorf("could not read pipelines: %w", err)
+	}
+
+	if len(pipelines) == 0 {
+		fmt.Printf("no pipelines recorded in %s\n", r.State)
+
+		return nil
+	}
+
+	err = printPipelines(pipelines)
+	if err != nil {
+		return err
+	}
+
+	return r.printRunsAcross(ctx, reader, pipelines)
+}
+
+// scopedFlag reports the first flag that asks about a single pipeline, if one
+// was given without a pipeline to apply it to.
+//
+// Each of these is scoped by its nature rather than by implementation
+// convenience: a trigger queue and a circuit breaker belong to one pipeline, a
+// step's job name means nothing without one, --cost totals spend against a
+// pipeline's runs, and --run/--where already refuse an id belonging to a
+// different pipeline in the same file. Answering them across a file would
+// mean inventing a semantic; answering them for a pipeline nobody named would
+// mean picking one.
+func (r *RunsCmd) scopedFlag() (string, bool) {
+	switch {
+	case r.Job != "":
+		return "--job", true
+	case r.Queue:
+		return "--queue", true
+	case r.Steps:
+		return "--steps", true
+	case r.Cost:
+		return "--cost", true
+	case r.Where:
+		return "--where", true
+	case r.RunID != "":
+		return "--run", true
+	default:
+		return "", false
+	}
+}
+
+// printPipelines lists what the file holds. A name alone does not say which
+// YAML is behind it — the name is the identity and the path is only what a
+// human reads back — so both are printed.
+func printPipelines(pipelines []store.PipelineRow) error {
+	writer := newTabWriter()
+	_, _ = fmt.Fprintln(writer, "PIPELINE\tPATH")
+
+	for _, pipeline := range pipelines {
+		// Empty when no command that LOADED the YAML has opened this
+		// pipeline yet — `steps runs <typo>.yml` registers a name and knows
+		// no more than that. A dash rather than a blank column, so the row
+		// reads as unanswered rather than as a pipeline living at "".
+		path := pipeline.Path
+		if path == "" {
+			path = "-"
+		}
+
+		_, _ = fmt.Fprintf(writer, "%s\t%s\n", pipeline.Name, path)
+	}
+
+	err := flush(writer)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println()
+
+	return nil
+}
+
+// printRunsAcross prints the interleaved feed, newest first.
+//
+// Every pipeline in the FILE is named, which is where this parts company with
+// the web root: that one names only the pipelines the process serves, because
+// a row it cannot link anywhere is worse than a missing one. The CLI serves
+// nothing and links nowhere, so a run recorded by a pipeline whose YAML has
+// since moved is still an answer to what ran.
+//
+// Runs rather than job_runs, which is what the scoped default reads: job_runs
+// is the merkle cache index, keyed and upserted by content hash, so its
+// timestamp means "last time this content ran" rather than "a build
+// happened". Across pipelines the useful row is a real run with an id, which
+// is the handle for going and asking that pipeline about it.
+func (r *RunsCmd) printRunsAcross(ctx context.Context, reader *store.Reader, pipelines []store.PipelineRow) error {
+	names := make([]string, 0, len(pipelines))
+	for _, pipeline := range pipelines {
+		names = append(names, pipeline.Name)
+	}
+
+	rows, err := reader.RecentRuns(ctx, names, r.Limit)
+	if err != nil {
+		return fmt.Errorf("could not read runs: %w", err)
+	}
+
+	if len(rows) == 0 {
+		fmt.Println("no runs recorded")
+
+		return nil
+	}
+
+	writer := newTabWriter()
+	_, _ = fmt.Fprintln(writer, "WHEN\tPIPELINE\tJOB\tSTATUS\tRUN")
+
+	for _, row := range rows {
+		_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n",
+			formatWhen(row.StartedAt), row.Pipeline, row.JobName, row.Status, row.ID)
+	}
+
+	err = flush(writer)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("\nbreak one down with: steps runs <pipeline> --run <id> --state %s\n", r.State)
+
+	return nil
 }
 
 func (r *RunsCmd) printJobRuns(ctx context.Context, st *store.Store) error {
@@ -1245,6 +1418,16 @@ func setup(
 	st, err := store.OpenStore(statePath(pipelinePath, flags.State), resolvePipelineName(pipelinePath, flags.Name))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("could not open state store: %w", err)
+	}
+
+	// This is the funnel every command that LOADS a pipeline comes through
+	// (run, watch, test, web, jobs, approvals), and the only place holding
+	// both the YAML path and the handle to record it against.
+	err = st.SetSourcePath(context.Background(), pipelinePath)
+	if err != nil {
+		_ = st.Close()
+
+		return nil, nil, nil, fmt.Errorf("could not record the pipeline's source path: %w", err)
 	}
 
 	provider, err := workspace.NewProvider(cfg.Workspace, keepWorkspace)

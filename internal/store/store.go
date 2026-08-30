@@ -98,18 +98,10 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 	// database, so this takes effect for databases steps creates; an existing one
 	// keeps its mode until it is vacuumed. That is why Close still checkpoints
 	// explicitly rather than relying on the mode alone.
-	db, err := sql.Open("sqlite",
-		path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"+
-			"&_pragma=auto_vacuum(incremental)&_pragma=journal_size_limit(67108864)&_txlock=immediate")
+	db, err := openDB(path)
 	if err != nil {
-		return nil, fmt.Errorf("could not open state db %q: %w", path, err)
+		return nil, err
 	}
-
-	// SQLite only ever allows one writer at a time regardless of pool size, so
-	// a bigger pool adds contention for no write throughput. It also serializes
-	// `steps watch --max-concurrent`'s worker goroutines onto one connection.
-	// (Revisit if reads become hot: WAL permits a separate read pool.)
-	db.SetMaxOpenConns(1)
 
 	ctx := context.Background()
 
@@ -137,19 +129,45 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 	return &Store{db: db, path: path, pipeline: pipelineName, pipelineID: id}, nil
 }
 
+// openDB opens the sqlite file with the pragmas above, for a writer and a
+// reader alike. A Reader takes the same connection settings deliberately: it
+// reads the same file a writer may be appending to, so it wants the same WAL
+// and the same busy timeout, and the only thing it does differently is never
+// write.
+func openDB(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite",
+		path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"+
+			"&_pragma=auto_vacuum(incremental)&_pragma=journal_size_limit(67108864)&_txlock=immediate")
+	if err != nil {
+		return nil, fmt.Errorf("could not open state db %q: %w", path, err)
+	}
+
+	// SQLite only ever allows one writer at a time regardless of pool size, so
+	// a bigger pool adds contention for no write throughput. It also serializes
+	// `steps watch --max-concurrent`'s worker goroutines onto one connection.
+	// (Revisit if reads become hot: WAL permits a separate read pool.)
+	db.SetMaxOpenConns(1)
+
+	return db, nil
+}
+
 // registerPipeline resolves the name to its row id, inserting it the first
-// time. The path is refreshed on every open so a moved checkout stops
-// reporting where it used to live — the name is the identity, the path is
-// only what a human reads back.
+// time.
+//
+// It does NOT fill in the path: what belongs in that column is where the
+// pipeline's YAML lives, and this function is given the state file — the same
+// string for every pipeline sharing one, which is no answer at all to "which
+// checkout is `infra`". Only a command that LOADED the YAML knows, and
+// SetSourcePath is how it says so.
 func registerPipeline(ctx context.Context, db *sql.DB, name, path string) (int64, error) {
 	if name == "" {
 		return 0, errors.New("a state store needs a pipeline name; pass --name or let it default to the pipeline file's base name")
 	}
 
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO pipelines (name, path) VALUES (?, ?)
-		ON CONFLICT(name) DO UPDATE SET path = excluded.path
-	`, name, path)
+		INSERT INTO pipelines (name, path) VALUES (?, '')
+		ON CONFLICT(name) DO NOTHING
+	`, name)
 	if err != nil {
 		return 0, fmt.Errorf("could not register pipeline %q in %q: %w", name, path, err)
 	}
@@ -162,6 +180,24 @@ func registerPipeline(ctx context.Context, db *sql.DB, name, path string) (int64
 	}
 
 	return id, nil
+}
+
+// SetSourcePath records where this pipeline's YAML lives, for whoever reads
+// the file back — `steps runs --state shared.db` lists it, and a name alone
+// does not say which of two checkouts `pipeline` is.
+//
+// Written on every open by the commands that load a pipeline, so a checkout
+// that moves stops reporting where it used to live. A read-only command has
+// nothing to correct and does not call this: it would be recording a path it
+// never resolved.
+func (s *Store) SetSourcePath(ctx context.Context, source string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE pipelines SET path = ? WHERE id = ?`, source, s.pipelineID)
+	if err != nil {
+		return fmt.Errorf("could not record the source path of pipeline %q: %w", s.pipeline, err)
+	}
+
+	return nil
 }
 
 // Pipeline is the name this handle is scoped to.
@@ -193,11 +229,9 @@ var ErrSchemaVersion = errors.New("the state database was written by a different
 // PRAGMA user_version rather than a table: it lives in the file header, costs
 // no row, and cannot itself be the thing that is missing.
 func checkSchemaVersion(ctx context.Context, db *sql.DB, path string) error {
-	var found int
-
-	err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&found)
+	found, err := readSchemaVersion(ctx, db, path)
 	if err != nil {
-		return fmt.Errorf("could not read the schema version of %q: %w", path, err)
+		return err
 	}
 
 	// Zero is a database created before this check existed, which is every
@@ -218,6 +252,27 @@ func checkSchemaVersion(ctx context.Context, db *sql.DB, path string) error {
 		return nil
 	}
 
+	return schemaVersionError(path, found)
+}
+
+// readSchemaVersion reports what schema the file at path was written by.
+func readSchemaVersion(ctx context.Context, db *sql.DB, path string) (int, error) {
+	var found int
+
+	err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&found)
+	if err != nil {
+		return 0, fmt.Errorf("could not read the schema version of %q: %w", path, err)
+	}
+
+	return found, nil
+}
+
+// schemaVersionError is the one message a file this build cannot use gets,
+// whether the caller meant to write to it or only to read it — a reader of a
+// stale file is told the same thing, because the answer is the same and
+// because a read that silently returned nothing is the failure mode this
+// whole check exists for.
+func schemaVersionError(path string, found int) error {
 	return fmt.Errorf("%w: %s is at schema %d and this steps writes %d — there is no upgrade path (see the schema's own comment); delete the file and run again, which loses that pipeline's run history and cache but nothing else",
 		ErrSchemaVersion, path, found, schemaVersion)
 }

@@ -249,6 +249,28 @@ Two pipelines each with a job named `build` running an identical task do not
 share a cache entry, and one pipeline's `run_history:` cap never reaps
 another's runs.
 
+Reading one back needs no pipeline argument. `steps runs --state <file>` lists
+what the file holds and interleaves the newest runs of all of it, which is the
+terminal's version of the web root:
+
+```bash
+$ steps runs --state /var/lib/steps/state.db
+
+PIPELINE  PATH
+app       /src/app/pipeline.yml
+infra     /src/infra/pipeline.yml
+
+WHEN                 PIPELINE  JOB      STATUS     RUN
+2026-08-30 09:14:02  infra     deploy   succeeded  UNVFHMCHVWY6GV6N
+2026-08-30 09:12:40  app       build    failed     46UMHVPYRA6YHB7M
+```
+
+The `RUN` column is the handle for going back to one pipeline: `steps runs
+app.yml --run 46UMHVPYRA6YHB7M --state <file>`. That is also why the other
+views stay scoped — `--job`, `--queue`, `--steps`, `--cost`, `--where` and
+`--run` are questions about one pipeline, and asking them without naming one
+is refused rather than answered for a pipeline nobody picked.
+
 A pipeline's identity in the file is its **name**, which defaults to the YAML's
 base name — `infra/pipeline.yml` is `pipeline`. That is also its `/p/<name>/`
 route. When two files would claim one name, `--name` settles it:

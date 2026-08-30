@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -150,5 +152,178 @@ func mustStartRun(t *testing.T, st *Store, id, jobName string) {
 	err := st.StartRun(t.Context(), id, jobName, t.TempDir())
 	if err != nil {
 		t.Fatalf("StartRun(%q): %v", id, err)
+	}
+}
+
+// TestOpenReaderReadsAFileItDoesNotOwn: `steps runs --state shared.db` has no
+// pipeline to name, so there is no Store to borrow a connection from — and
+// opening one the ordinary way would register the very pipeline the caller
+// could not name.
+func TestOpenReaderReadsAFileItDoesNotOwn(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	stores := sharedFile(t, "app", "infra")
+	path := stores[0].Path()
+
+	mustStartRun(t, stores[0], "r1", "build")
+
+	reader, err := OpenReader(path)
+	if err != nil {
+		t.Fatalf("OpenReader: %v", err)
+	}
+
+	defer func() { _ = reader.Close() }()
+
+	pipelines, err := reader.Pipelines(ctx)
+	if err != nil {
+		t.Fatalf("Pipelines: %v", err)
+	}
+
+	if len(pipelines) != 2 {
+		t.Fatalf("reader sees %d pipelines, want the file's 2: %+v", len(pipelines), pipelines)
+	}
+
+	runs, err := reader.RecentRuns(ctx, []string{"app", "infra"}, 10)
+	if err != nil {
+		t.Fatalf("RecentRuns: %v", err)
+	}
+
+	if len(runs) != 1 || runs[0].ID != "r1" {
+		t.Errorf("runs = %+v, want the one recorded run", runs)
+	}
+}
+
+// TestOpenReaderInventsNoPipeline: the difference from OpenStore, and the
+// reason this exists at all. Opening a file to ask about it must not add a
+// row to the very list it is about to print.
+func TestOpenReaderInventsNoPipeline(t *testing.T) {
+	t.Parallel()
+
+	stores := sharedFile(t, "app")
+	path := stores[0].Path()
+
+	reader, err := OpenReader(path)
+	if err != nil {
+		t.Fatalf("OpenReader: %v", err)
+	}
+
+	defer func() { _ = reader.Close() }()
+
+	pipelines, err := reader.Pipelines(context.Background())
+	if err != nil {
+		t.Fatalf("Pipelines: %v", err)
+	}
+
+	if len(pipelines) != 1 || pipelines[0].Name != "app" {
+		t.Errorf("pipelines = %+v, want only the one that was actually opened", pipelines)
+	}
+}
+
+// TestOpenReaderRefusesAFileThatIsNotThere.
+//
+// The driver connects lazily, so an absent path otherwise becomes an empty
+// database at the first query: a command asking about history would create
+// the state file it was asking about, and answer "nothing ran" for a typo.
+func TestOpenReaderRefusesAFileThatIsNotThere(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "absent.db")
+
+	reader, err := OpenReader(path)
+	if err == nil {
+		_ = reader.Close()
+
+		t.Fatal("OpenReader opened a database that does not exist")
+	}
+
+	_, statErr := os.Stat(path)
+	if statErr == nil {
+		t.Error("OpenReader created the database it was asked to read")
+	}
+}
+
+// TestOpenReaderRefusesAnOlderSchema: a reader gets the same refusal a writer
+// does. A stale file's tables are missing columns, and a SELECT naming one
+// fails in a way that reads exactly like "nothing ever ran here".
+func TestOpenReaderRefusesAnOlderSchema(t *testing.T) {
+	t.Parallel()
+
+	stores := sharedFile(t, "app")
+	path := stores[0].Path()
+
+	mustStartRun(t, stores[0], "r1", "build")
+
+	err := stores[0].Close()
+	if err != nil {
+		t.Fatalf("closing: %v", err)
+	}
+
+	stampVersion(t, path, schemaVersion-1)
+
+	reader, err := OpenReader(path)
+	if err == nil {
+		_ = reader.Close()
+
+		t.Fatal("a database written by an older build was read as if this build understood it")
+	}
+
+	if !errors.Is(err, ErrSchemaVersion) {
+		t.Fatalf("error = %v, want a schema-version refusal", err)
+	}
+}
+
+// TestBorrowedReaderCloseLeavesTheStoreOpen: Store.Reader() shares the
+// store's connection, so closing the reader must not close the store's handle
+// out from under it — the store outlives it and its own Close is what
+// checkpoints the WAL.
+func TestBorrowedReaderCloseLeavesTheStoreOpen(t *testing.T) {
+	t.Parallel()
+
+	stores := sharedFile(t, "app")
+
+	err := stores[0].Reader().Close()
+	if err != nil {
+		t.Fatalf("closing a borrowed reader: %v", err)
+	}
+
+	_, err = stores[0].ListRuns(t.Context(), "", 10)
+	if err != nil {
+		t.Fatalf("the store's connection was closed by its reader: %v", err)
+	}
+}
+
+// TestSourcePathIsPerPipelineNotPerFile.
+//
+// The pipelines table records a path so a name can be traced back to a
+// checkout, and it was being filled with the STATE FILE — the same string for
+// every pipeline sharing one, which answers nothing. Only a command that
+// loaded the YAML knows, so only it writes.
+func TestSourcePathIsPerPipelineNotPerFile(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	stores := sharedFile(t, "app", "infra")
+
+	err := stores[0].SetSourcePath(ctx, "/src/app/pipeline.yml")
+	if err != nil {
+		t.Fatalf("SetSourcePath: %v", err)
+	}
+
+	err = stores[1].SetSourcePath(ctx, "/src/infra/pipeline.yml")
+	if err != nil {
+		t.Fatalf("SetSourcePath: %v", err)
+	}
+
+	rows, err := stores[0].Reader().Pipelines(ctx)
+	if err != nil {
+		t.Fatalf("Pipelines: %v", err)
+	}
+
+	want := map[string]string{"app": "/src/app/pipeline.yml", "infra": "/src/infra/pipeline.yml"}
+	for _, row := range rows {
+		if row.Path != want[row.Name] {
+			t.Errorf("pipeline %s reports path %q, want %q", row.Name, row.Path, want[row.Name])
+		}
 	}
 }

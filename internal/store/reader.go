@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"os"
 )
 
 // Reading ACROSS the pipelines in one state file.
@@ -38,15 +40,87 @@ type CrossRunRow struct {
 
 // Reader reads across every pipeline in one state file.
 //
-// It shares the Store's connection rather than opening its own: the same file,
-// the same WAL, and no second handle to keep in step. What it does not share
-// is the scoping, which is the whole point.
-type Reader struct{ db *sql.DB }
+// From a Store it shares that handle's connection rather than opening its own:
+// the same file, the same WAL, and no second handle to keep in step. From
+// OpenReader it owns one, because there is no Store to borrow from — which is
+// the only difference between the two, and what `owned` records so Close knows
+// whether the connection is its to close.
+//
+// What a Reader never shares is the scoping, which is the whole point.
+type Reader struct {
+	db *sql.DB
+	// owned is false for a Reader borrowing a Store's connection. Closing that
+	// one would leave the Store holding a dead handle, and the Store's own
+	// Close is what checkpoints the WAL.
+	owned bool
+}
 
 // Reader returns an unscoped reader over the same file this handle is scoped
 // to. Reading through it crosses pipelines by construction, so every method
 // on it names which ones it wants.
 func (s *Store) Reader() *Reader { return &Reader{db: s.db} }
+
+// OpenReader opens a state file for cross-pipeline reading, with no pipeline
+// to scope to and none to become.
+//
+// Every other way into this package registers the pipeline it was handed:
+// OpenStore creates the directory, the file and a pipelines row, which is
+// right for a command about to record something and wrong for one that is
+// only asking. `steps runs --state shared.db` has no pipeline to name, so it
+// has nothing to register — and a read command that left a database (or an
+// invented pipeline) behind would be a surprising answer to a question about
+// history.
+//
+// It refuses a file that is not there rather than creating one. The sqlite
+// driver connects lazily, so an absent path otherwise becomes an empty
+// database at the first query, and "no runs" and "no such file" are not the
+// same answer.
+func OpenReader(path string) (*Reader, error) {
+	_, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("could not open state db %q: %w", path, err)
+	}
+
+	db, err := openDB(path)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := context.Background()
+
+	// Refused, never stamped: OpenStore blesses a version-0 file when it just
+	// created it, and a reader never creates one, so any zero it sees belongs
+	// to a build older than the check. Stamping here would be a write from a
+	// command whose whole contract is that it only asks.
+	found, err := readSchemaVersion(ctx, db, path)
+	if err != nil {
+		_ = db.Close()
+
+		return nil, err
+	}
+
+	if found != schemaVersion {
+		_ = db.Close()
+
+		return nil, schemaVersionError(path, found)
+	}
+
+	return &Reader{db: db, owned: true}, nil
+}
+
+// Close releases the connection, if this Reader is the one that opened it.
+func (r *Reader) Close() error {
+	if !r.owned {
+		return nil
+	}
+
+	err := r.db.Close()
+	if err != nil {
+		return fmt.Errorf("could not close state db: %w", err)
+	}
+
+	return nil
+}
 
 // Pipelines lists every pipeline recorded in the file, by name.
 //
