@@ -317,6 +317,7 @@ mean to hand out the controls too.
 --no-preflight   skip the pre-poll health check of models and MCP servers
 --read-only      serve without trigger, approval, answer, or resume controls
 --keep-workspace leave build workspaces on disk
+--answer         answer an ask_user question in advance (repeatable)
 --state          sqlite state database (default .steps/<pipeline>.db per YAML)
 --name           name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml
 --var / --vars-file   pipeline vars, as everywhere else

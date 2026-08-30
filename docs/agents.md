@@ -239,7 +239,7 @@ jobs:
 
 A question goes to the first channel that can serve it:
 
-1. **An answer given in advance.** `steps run --answer 'which bump=minor'` (repeatable, also on `test` and `watch`) answers every question whose text contains that substring, case-insensitively. It is a supported way to run unattended, not only a test seam.
+1. **An answer given in advance.** `steps run --answer 'which bump=minor'` (repeatable, also on `test`, `watch` and `web`) answers every question whose text contains that substring, case-insensitively. It is a supported way to run unattended, not only a test seam.
 2. **`answered_by: <agent>`** — a declared `agents:` entry answers, with its own model, dials and tool grant. This is deliberately *not* the same as granting that agent as a sub-agent tool: a sub-agent is delegation the asking model chose, while a responder is an **escalation** a person can still intercept. The recorded row says which one answered. A responder that fails, or answers with nothing, hands the question on rather than resolving it.
 3. **A person, inline.** When `steps run` has a terminal, the question is asked right there.
 4. **A person, parked.** With no terminal — CI, a supervised `steps watch` — the run parks and the question waits:
