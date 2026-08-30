@@ -590,11 +590,18 @@ func cliEnv(ri config.ResolvedInvocation) []string {
 // the pipeline declared, and the model is told its question failed while a
 // person is still looking at it.
 //
-// Only widened, never narrowed: an operator who set MCP_TOOL_TIMEOUT already
-// keeps it, since a value they chose deliberately is not this function's to
-// overrule.
+// An operator's own value is FORWARDED rather than deferred to, which is not
+// the same thing and was the bug: MCP_TOOL_TIMEOUT is not on shell.HostEnv's
+// allowlist, so it never reaches the child on its own. Returning nil because
+// the operator had set one meant the child ran with no value at all — the
+// exact failure this function exists to prevent, in precisely the case where
+// somebody had thought about it.
 func cliToolTimeoutEnv(ri config.ResolvedInvocation) []string {
-	if os.Getenv(cliMCPToolTimeoutEnv) != "" || !grantsAskUserSpec(ri.ToolSpecs) {
+	if operator := os.Getenv(cliMCPToolTimeoutEnv); operator != "" {
+		return []string{cliMCPToolTimeoutEnv + "=" + operator}
+	}
+
+	if !config.GrantsAskUser(ri.ToolSpecs) {
 		return nil
 	}
 

@@ -34,6 +34,23 @@ func BuiltinIsNeverNativeToCLI(name string) bool {
 	return name == AskUserBuiltinName
 }
 
+// GrantsAskUser reports whether a resolved tool grant includes ask_user.
+//
+// Here rather than in each caller because two packages that cannot see each
+// other ask it — internal/agent, to size a CLI child's tool-call deadline, and
+// internal/merkle, to decide whether max_questions: belongs in the cache key.
+// Two copies would let the second silently disagree with the first, and the
+// merkle one decides whether a step skips work it never did.
+func GrantsAskUser(specs []ToolSpec) bool {
+	for _, spec := range specs {
+		if spec.Builtin == AskUserBuiltinName {
+			return true
+		}
+	}
+
+	return false
+}
+
 // validateAskUserShape enforces where ask_user's own dials may appear: on the
 // ask_user builtin, in the GRANT position, and nowhere else.
 //

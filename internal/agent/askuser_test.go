@@ -502,3 +502,168 @@ func TestAskUserWaitReadsTheGrant(t *testing.T) {
 		t.Errorf("askUserWait with no timeout = %s, want the package default", got)
 	}
 }
+
+// TestAskUserMemoDoesNotReplayAnUnansweredQuestion: the memo returns an
+// ANSWER, and an expired-with-no-default row has none. Handing that back as a
+// resolved call gave the second asker an empty string labelled as a default
+// the pipeline never declared — this design's own audit lie, with nothing in
+// it — and left the step running.
+func TestAskUserMemoDoesNotReplayAnUnansweredQuestion(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAskFixture(t)
+
+	// The first asker gives up with nothing: no default, so it aborts.
+	fixture.ask(impatient(""), "Which bump?")
+
+	// A second cell of the same matrix reaches the same row.
+	fresh := newAskFixture(t)
+	fresh.store, fresh.ctx = fixture.store, fixture.ctx
+	fresh.env.ask = fixture.env.ask
+	fresh.env.ask.state = &askState{}
+
+	second := fresh.ask(askGrant{wait: time.Minute}, "Which bump?")
+
+	if _, isError := second["error"]; !isError {
+		t.Errorf("the second asker got %v, want the first one's ending repeated", second)
+	}
+
+	if answer, given := second["answer"]; given && answer != "" {
+		t.Errorf("the memo produced an answer nobody gave: %v", answer)
+	}
+
+	if fresh.env.ask.state.aborted() == nil {
+		t.Error("the second asker carried on from a question that was never answered")
+	}
+}
+
+// TestAskUserExpiryYieldsToAnAnswerThatJustLanded: the poll sleeps in whole
+// intervals, so "the deadline passed" and "nobody answered" are different
+// statements. A person who typed at T-0.1s lands while the loop is asleep, and
+// expiring on the clock alone would discard the answer the row already holds
+// and abort a step somebody just unparked.
+func TestAskUserExpiryYieldsToAnAnswerThatJustLanded(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAskFixture(t)
+
+	row, _, err := fixture.store.AskQuestion(fixture.ctx, store.Question{
+		RunID: "run-1", JobName: "release-note", AgentName: "writer", Question: "Which bump?",
+	})
+	if err != nil {
+		t.Fatalf("AskQuestion: %v", err)
+	}
+
+	// Recorded before the expiry runs — the state a slept-through poll wakes to.
+	err = fixture.store.AnswerQuestion(fixture.ctx, row.ID, "minor", "jtarchie")
+	if err != nil {
+		t.Fatalf("AnswerQuestion: %v", err)
+	}
+
+	result := impatient("").expire(fixture.ctx, fixture.env, row)
+
+	if result["answer"] != "minor" || result["source"] != "jtarchie" {
+		t.Errorf("expire() = %v, want the answer that landed before the deadline", result)
+	}
+
+	if fixture.env.ask.state.aborted() != nil {
+		t.Error("a question somebody answered aborted the step anyway")
+	}
+}
+
+// TestAskUserRefusesOptionsRequiredWithNothingOffered: a fence that admits
+// nothing is a deadlock, not a fence — every channel would refuse every
+// possible answer and the question would run its whole wait out with no
+// diagnostic naming the cause.
+func TestAskUserRefusesOptionsRequiredWithNothingOffered(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAskFixture(t)
+
+	grant := impatient("patch")
+	grant.optionsRequired = true
+
+	result := fixture.ask(grant, "Which environment?")
+
+	message, _ := result["error"].(string)
+	if !strings.Contains(message, "options list") {
+		t.Errorf("ask = %v, want a refusal the model can fix by asking again with options", result)
+	}
+
+	pending, err := fixture.store.PendingQuestions(fixture.ctx)
+	if err != nil {
+		t.Fatalf("PendingQuestions: %v", err)
+	}
+
+	if len(pending) != 0 {
+		t.Errorf("an unanswerable question was parked for a person anyway: %+v", pending)
+	}
+}
+
+// TestAskUserKeepsWaitingAfterARefusedTerminalAnswer: an answer the options
+// fence rejects leaves the question OPEN. Returning an error there ended the
+// wait and stranded the row pending, with the person still sitting at the
+// terminal and `steps answer` still able to land.
+func TestAskUserKeepsWaitingAfterARefusedTerminalAnswer(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAskFixture(t)
+
+	typed := make(chan string, 2)
+	typed <- "canary" // not on the list
+	typed <- "prod"   // the correction
+
+	fixture.env.ask.prompt = func(ctx context.Context, _ store.Question) (string, bool) {
+		select {
+		case answer := <-typed:
+			return answer, true
+		case <-ctx.Done():
+			return "", false
+		}
+	}
+
+	grant := askGrant{wait: 10 * time.Second, optionsRequired: true}
+
+	result := fixture.ask(grant, "Which environment?", "staging", "prod")
+
+	if result["answer"] != "prod" || result["answered"] != true {
+		t.Errorf("ask = %v, want the corrected answer after the refused one", result)
+	}
+}
+
+// TestSubAgentCarriesTheAskContext: a sub-agent granted ask_user asks on
+// behalf of the same recorded run. Building its env without the parent's ask
+// context told it there was nobody to ask on a run that manifestly had
+// somebody — and nothing at load rejected the grant, so the capability
+// silently did not exist one level down.
+func TestSubAgentCarriesTheAskContext(t *testing.T) {
+	t.Parallel()
+
+	parent := newAskFixture(t)
+	child := parent.env.ask.forAgent("helper")
+
+	if child.st != parent.env.ask.st || child.jobName != parent.env.ask.jobName {
+		t.Error("a sub-agent's ask context lost the run it belongs to")
+	}
+
+	if child.agentName != "helper" {
+		t.Errorf("a sub-agent's question would be filed under %q, want the child's own name", child.agentName)
+	}
+
+	// And it really reaches the tool: asking through the child's context
+	// records a row naming the child.
+	env := parent.env
+	env.ask = child
+
+	grant := impatient("patch")
+	grant.ask(parent.ctx, map[string]any{askUserQuestionArg: "Which bump?"}, env)
+
+	recorded, err := parent.store.QuestionStatus(parent.ctx, 1)
+	if err != nil {
+		t.Fatalf("QuestionStatus: %v", err)
+	}
+
+	if recorded.AgentName != "helper" {
+		t.Errorf("recorded agent = %q, want the sub-agent that asked", recorded.AgentName)
+	}
+}

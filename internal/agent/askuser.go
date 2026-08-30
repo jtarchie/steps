@@ -48,17 +48,6 @@ const (
 	cliToolTimeoutMargin = time.Minute
 )
 
-// grantsAskUserSpec reports whether a resolved grant includes ask_user.
-func grantsAskUserSpec(specs []config.ToolSpec) bool {
-	for _, spec := range specs {
-		if spec.Builtin == config.AskUserBuiltinName {
-			return true
-		}
-	}
-
-	return false
-}
-
 // askUserWait is how long a grant says a person may be waited on, which is the
 // grant's timeout: or the package default. Read from the specs rather than
 // from the built grant because the CLI path needs it while assembling the
@@ -119,6 +108,18 @@ type askEnv struct {
 	// state carries the one thing a tool call cannot report as data: that
 	// nobody answered a question with no default, so the step must abort.
 	state *askState
+}
+
+// forAgent re-labels this ask context for a nested conversation. A sub-agent
+// asks on behalf of the same run and records against the same store; only the
+// name on the row changes, so a person reading `steps questions` sees the
+// agent that actually wants to know.
+func (e askEnv) forAgent(name string) askEnv {
+	if name != "" {
+		e.agentName = name
+	}
+
+	return e
 }
 
 // askPrompter puts a question to a person at a terminal. It returns the
@@ -240,8 +241,19 @@ func (g askGrant) ask(ctx context.Context, args map[string]any, env toolEnv) map
 		return errorResult("ask_user: question is required — say what you are deciding and why the answer matters")
 	}
 
+	options := stringsArg(args, askUserOptionsArg)
+
+	// A fence that admits nothing is not a fence, it is a deadlock: with no
+	// options offered, slices.Contains is false for every possible answer, so
+	// `steps answer`, the web form and the terminal are ALL refused and the
+	// question runs its whole wait out. Told to the model as data, which is the
+	// one channel that can still fix it — by asking again, with options.
+	if g.optionsRequired && len(options) == 0 {
+		return errorResult("ask_user: this grant requires the answer to be one of your offered options, so ask again with a non-empty options list")
+	}
+
 	if env.ask.st == nil {
-		return errorResult("ask_user: this step is not running inside a recorded run, so there is nobody to ask")
+		return errorResult("ask_user: this conversation records no questions (a hook or a task fix: agent holds no run to park one against), so there is nobody to ask")
 	}
 
 	runID := events.RunID(ctx)
@@ -251,7 +263,7 @@ func (g askGrant) ask(ctx context.Context, args map[string]any, env toolEnv) map
 
 	row, existing, err := env.ask.st.AskQuestion(ctx, store.Question{
 		RunID: runID, JobName: env.ask.jobName, AgentName: env.ask.agentName,
-		Question: question, Options: stringsArg(args, askUserOptionsArg),
+		Question: question, Options: options,
 		OptionsRequired: g.optionsRequired, Default: g.defaultAnswer,
 	})
 	if err != nil {
@@ -262,8 +274,14 @@ func (g askGrant) ask(ctx context.Context, args map[string]any, env toolEnv) map
 	// already given in this run — by another across: cell, by a previous
 	// attempt of this same conversation — is returned without asking anybody
 	// a second time.
+	//
+	// Only an ANSWER is memoized, though. A row this run already gave up on
+	// (expired with no default, or abandoned when a step ended) carries no
+	// answer at all, and handing it back as one would be this design's own
+	// audit lie with an empty string in place of the fact — so it resolves the
+	// second asker exactly the way it resolved the first.
 	if row.Status != "pending" {
-		return resolvedResult(row, "memo")
+		return g.memoResult(env, row)
 	}
 
 	if !existing {
@@ -274,6 +292,20 @@ func (g askGrant) ask(ctx context.Context, args map[string]any, env toolEnv) map
 	}
 
 	return g.waitForAnswer(ctx, env, row)
+}
+
+// memoResult reports a question this run already resolved. An answered one is
+// simply returned; an unanswered one repeats whatever ending the first asker
+// got, including its abort — never an empty answer dressed up as a default.
+func (g askGrant) memoResult(env toolEnv, row store.Question) map[string]any {
+	if row.Status == "answered" || row.Answer != "" {
+		return resolvedResult(row, "memo")
+	}
+
+	err := fmt.Errorf("question %d was %s with no answer earlier in this run: %s", row.ID, row.Status, row.Question)
+	env.ask.state.abort(err)
+
+	return errorResult("ask_user: " + err.Error())
 }
 
 // answerFromMachines tries the two channels that need no person: a pre-seeded
@@ -369,7 +401,15 @@ func (g askGrant) waitForAnswer(ctx context.Context, env toolEnv, row store.Ques
 	// The terminal channel runs alongside the poll rather than instead of it:
 	// a person at this terminal and a person running `steps answer` in another
 	// one are both answering the same row, and whichever lands first wins.
-	terminal := g.promptTerminal(ctx, env, row)
+	//
+	// Cancelled on every exit from this function, which is what lets an
+	// abandoned prompt cost nothing: a question answered from another terminal
+	// releases the prompt that was waiting on this one, instead of stranding it
+	// in a read that can never be cancelled.
+	promptCtx, endPrompt := context.WithCancel(ctx)
+	defer endPrompt()
+
+	terminal := g.promptTerminal(promptCtx, env, row)
 
 	for {
 		current, err := env.ask.st.QuestionStatus(ctx, row.ID)
@@ -397,12 +437,46 @@ func (g askGrant) waitForAnswer(ctx context.Context, env toolEnv, row store.Ques
 
 			return errorResult(fmt.Sprintf("ask_user: question %d was abandoned when the step ended", row.ID))
 		case answer := <-terminal:
+			// A refused answer (one the options fence rejected) leaves the
+			// question OPEN rather than ending the wait with an error: the
+			// person is still there, `steps answer` can still land, and
+			// returning here would strand the row pending with nobody left to
+			// resolve it. They are prompted again, since a fence they can
+			// satisfy on the second try is the whole reason it is a fence and
+			// not a rejection.
 			if answer != "" {
-				return g.record(ctx, env, row, answer, terminalAnswerer(), "terminal")
+				recorded, ok := g.recordTerminal(ctx, env, row, answer)
+				if ok {
+					return recorded
+				}
 			}
+
+			terminal = g.promptTerminal(promptCtx, env, row)
 		case <-time.After(askUserPollInterval):
 		}
 	}
+}
+
+// recordTerminal writes what somebody typed, reporting whether it stuck. A
+// refusal is printed where they can see it — they are at the terminal, which
+// is the only channel that can be told anything.
+func (g askGrant) recordTerminal(ctx context.Context, env toolEnv, row store.Question, answer string) (map[string]any, bool) {
+	err := env.ask.st.AnswerQuestion(ctx, row.ID, answer, terminalAnswerer())
+	if err == nil {
+		row.Answer, row.AnsweredBy, row.Status = answer, terminalAnswerer(), "answered"
+
+		return resolvedResult(row, "terminal"), true
+	}
+
+	if errors.Is(err, store.ErrQuestionNotPending) {
+		// Somebody (or something) else got there first; the next poll reads
+		// what they recorded.
+		return nil, false
+	}
+
+	fmt.Printf("question %d: %s\n", row.ID, err)
+
+	return nil, false
 }
 
 // promptTerminal starts the terminal channel, if there is one, and returns the
@@ -442,6 +516,17 @@ func (g askGrant) promptTerminal(ctx context.Context, env toolEnv, row store.Que
 // Without one, the step ABORTS, matching approval: exactly. Aborted, not
 // failed: nobody decided anything.
 func (g askGrant) expire(ctx context.Context, env toolEnv, row store.Question) map[string]any {
+	// The poll sleeps in whole intervals, so "the deadline passed" and "nobody
+	// answered" are not the same statement: a person who typed at T-0.1s lands
+	// while this loop is asleep, and expiring on the clock alone would discard
+	// an answer the row already holds and abort a step somebody just unparked.
+	// The write is what decides, not the reading of the clock — which is the
+	// same posture record() takes on the other side of the race.
+	current, err := env.ask.st.QuestionStatus(ctx, row.ID)
+	if err == nil && current.Status != "pending" {
+		return resolvedResult(current, answerSource(current))
+	}
+
 	slog.Warn("agent.question_expired", "question", row.ID, "job", row.JobName,
 		"agent", row.AgentName, "timeout", g.wait.String(), "default", g.defaultAnswer)
 

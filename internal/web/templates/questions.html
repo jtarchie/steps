@@ -8,14 +8,20 @@
   <div class="msg">{{.Question}}</div>
   {{if eq .Status "pending"}}
     {{if $.Nav.ReadOnly}}
-    <div class="meta">This server is read-only. Answer with <code>steps answer {{.ID}} &lt;answer&gt;</code>.</div>
+    <div class="meta">This server is read-only. Answer with <code>steps answer &lt;pipeline&gt; {{.ID}} &lt;answer&gt;</code>.</div>
     {{else}}
+    <!-- The free-text field and its own submit come FIRST, and the ordering is
+         load-bearing: pressing Enter in a text input submits the form with its
+         DEFAULT button, which is the first submit button in tree order. With
+         the option buttons first, typing an answer and pressing Enter — the
+         universal form gesture — silently submitted the first OPTION instead
+         of what was typed. -->
     <form class="decide" method="post" action="/p/{{$.Nav.Current}}/questions/{{.ID}}">
+      <input type="text" name="answer_text" placeholder="{{if .OptionsRequired}}one of the options below{{else}}answer in your own words{{end}}" aria-label="Answer">
+      <button class="btn primary" type="submit">Answer</button>
       {{range .Options}}
       <button class="btn" type="submit" name="answer" value="{{.}}">{{.}}</button>
       {{end}}
-      <input type="text" name="answer_text" placeholder="{{if .OptionsRequired}}one of the options above{{else}}or answer in your own words{{end}}" aria-label="Answer">
-      <button class="btn primary" type="submit">Answer</button>
     </form>
     {{end}}
   {{else}}

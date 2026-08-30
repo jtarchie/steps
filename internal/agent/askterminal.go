@@ -2,6 +2,14 @@ package agent
 
 // The terminal channel: putting a question to whoever is sitting at the
 // terminal that started the run.
+//
+// The shape here is decided by one fact: a read of stdin cannot be cancelled.
+// A prompt that gave up would otherwise sit in that read forever, so the read
+// belongs to ONE long-lived goroutine that outlives any individual question,
+// and a prompt is a select over what that goroutine delivers. Everything else
+// — one reader per prompt, a lock held across the read — leaks a goroutine per
+// question and, worse, strands whatever it holds when a question is answered
+// somewhere else.
 
 import (
 	"bufio"
@@ -41,41 +49,112 @@ func stdinIsTerminal() bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-// terminalReadMu serializes terminal prompts. Two steps of one job can be
-// asking at the same moment (in_parallel:, across:), and two goroutines
-// reading one stdin would each get half of what somebody typed.
+// terminalReader is the process's single stdin reader: started once, on the
+// first prompt, and never stopped — there is no way to stop it, which is the
+// whole reason it is one goroutine rather than one per question.
 //
-//nolint:gochecknoglobals // a lock on a process-wide resource; stdin is one
-var terminalReadMu sync.Mutex
+//nolint:gochecknoglobals // a handle on a process-wide resource; stdin is one
+var terminalReader struct {
+	once  sync.Once
+	lines chan string
+	// prompt serializes who is being asked. Two steps of one job can ask at
+	// the same moment (in_parallel:, across:), and two prompts printed over
+	// each other would leave a person answering they cannot tell which. Held
+	// only while a prompt is actually waiting, and released the moment its
+	// question resolves — by any channel — because the wait is a select on
+	// context rather than a blocking read.
+	prompt sync.Mutex
+}
 
-// promptOnTerminal prints the question and reads one line of answer.
+// terminalLines starts the reader on first use and returns its channel.
 //
-// It cannot be cancelled — a blocking read of stdin has no context — so it
-// returns through a channel the caller may abandon. That is deliberate and
-// bounded: at worst one goroutine sits here until somebody presses enter, on a
-// question the run has already resolved some other way, and the answer it
-// eventually reads is refused by the row rather than applied to it.
+// UNBUFFERED, deliberately: the goroutine blocks on the send until some prompt
+// takes the line, so a line typed ahead of the next question is delivered to
+// that question rather than dropped — which is how a terminal behaves and what
+// a per-prompt bufio.Reader could not do, since each one discarded whatever it
+// had read past the first newline.
+func terminalLines() <-chan string {
+	terminalReader.once.Do(func() {
+		terminalReader.lines = make(chan string)
+
+		go func() {
+			reader := bufio.NewReader(os.Stdin)
+
+			for {
+				line, err := reader.ReadString('\n')
+
+				answer := strings.TrimSpace(line)
+				if answer != "" {
+					terminalReader.lines <- answer
+				}
+
+				if err != nil {
+					return
+				}
+			}
+		}()
+	})
+
+	return terminalReader.lines
+}
+
+// promptOnTerminal prints the question and waits for a line.
+//
+// It returns as soon as ctx is done, which is what makes an abandoned prompt
+// cost nothing: the caller cancels when the question resolves by any route, so
+// the lock is released and this goroutine exits while the reader stays put,
+// still holding whatever was typed for whoever asks next.
 func promptOnTerminal(ctx context.Context, question store.Question) (string, bool) {
-	terminalReadMu.Lock()
-	defer terminalReadMu.Unlock()
+	lines := terminalLines()
 
-	// Re-checked after the lock: while this goroutine waited its turn behind
-	// another question, its own may have been answered elsewhere. Prompting
-	// for it now would ask somebody something nobody is waiting for.
+	if !lockTerminal(ctx) {
+		return "", false
+	}
+
+	defer terminalReader.prompt.Unlock()
+
+	// Re-checked under the lock: while this prompt waited its turn behind
+	// another question, its own may have been answered elsewhere. Prompting for
+	// it now would ask somebody something nobody is waiting for.
 	if ctx.Err() != nil {
 		return "", false
 	}
 
 	fmt.Printf("question %d> ", question.ID)
 
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-
-	answer := strings.TrimSpace(line)
-	if answer == "" || (err != nil && answer == "") {
+	select {
+	case answer := <-lines:
+		return answer, answer != ""
+	case <-ctx.Done():
 		return "", false
 	}
+}
 
-	return answer, true
+// lockTerminal takes the prompt lock without giving up cancellability — a
+// question resolved while queued behind another must not have to wait for that
+// one to finish before its own call can return.
+func lockTerminal(ctx context.Context) bool {
+	acquired := make(chan struct{})
+
+	go func() {
+		terminalReader.prompt.Lock()
+		close(acquired)
+	}()
+
+	select {
+	case <-acquired:
+		return true
+	case <-ctx.Done():
+		// The lock is still being waited for by that goroutine; when it lands,
+		// nothing holds it open — the deferred Unlock below never runs, so
+		// release it there instead.
+		go func() {
+			<-acquired
+			terminalReader.prompt.Unlock()
+		}()
+
+		return false
+	}
 }
 
 // terminalAnswerer is the audit record's "who" for an answer typed at this

@@ -989,18 +989,6 @@ func withAskUserContent(spec config.ToolSpec, content map[string]any) {
 	}
 }
 
-// grantsAskUser reports whether any of a step's resolved tools is the
-// ask_user builtin.
-func grantsAskUser(specs []config.ToolSpec) bool {
-	for _, spec := range specs {
-		if spec.Builtin == config.AskUserBuiltinName {
-			return true
-		}
-	}
-
-	return false
-}
-
 // AgentContentMap is the content hashed for an agent node: everything that
 // determines the model's output (agent, prompt, dir, resolved model/endpoint,
 // persona, dials, and the effective tool set — including any sub-agent tools,
@@ -1037,7 +1025,7 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 	// questions a step cannot ask changes nothing about what it does, and
 	// folding it in unconditionally would invalidate every cached agent step
 	// in every pipeline to record a dial with nothing to bound.
-	if grantsAskUser(ri.ToolSpecs) {
+	if config.GrantsAskUser(ri.ToolSpecs) {
 		content["max_questions"] = ri.MaxQuestions
 	}
 

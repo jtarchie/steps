@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -339,5 +340,85 @@ func TestQuestionsAreReapedWithTheirRun(t *testing.T) {
 
 	if count != 2 {
 		t.Errorf("%d questions survived a prune to 2 runs, want 2", count)
+	}
+}
+
+// TestAskQuestionRefusesARunFromAnotherPipeline: the run_id foreign key alone
+// does not scope this table. In a shared state file a sibling pipeline's run
+// satisfies it, and the row would be one this Store could never read back,
+// since every read joins runs on pipeline_id.
+func TestAskQuestionRefusesARunFromAnotherPipeline(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "shared.db")
+
+	mine := mustOpenStore(t, path)
+	defer func() { _ = mine.Close() }()
+
+	theirs, err := OpenStore(path, "other")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	defer func() { _ = theirs.Close() }()
+
+	err = theirs.StartRun(ctx, "their-run", "build", "/tmp/ws")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	_, _, err = mine.AskQuestion(ctx, Question{
+		RunID: "their-run", JobName: "build", AgentName: "writer", Question: "Which bump?",
+	})
+	if err == nil {
+		t.Fatal("a question was recorded against another pipeline's run")
+	}
+
+	var count int
+
+	err = mine.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM questions`).Scan(&count)
+	if err != nil {
+		t.Fatalf("count questions: %v", err)
+	}
+
+	if count != 0 {
+		t.Errorf("%d unreachable question row(s) were written", count)
+	}
+}
+
+// TestAllQuestionsListsWhatIsWaitingFirst: the listing is capped and it is the
+// only route the UI offers for answering, so recency ordering alone would push
+// a parked question off the page while the nav badge still counted it.
+func TestAllQuestionsListsWhatIsWaitingFirst(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := startQuestionRun(t)
+
+	parked, _ := askBump(t, store, "run-1")
+
+	for i := range 5 {
+		later, _, err := store.AskQuestion(ctx, Question{
+			RunID: "run-1", JobName: "release-note", AgentName: "writer",
+			Question: fmt.Sprintf("Later question %d?", i),
+		})
+		if err != nil {
+			t.Fatalf("AskQuestion: %v", err)
+		}
+
+		err = store.AnswerQuestion(ctx, later.ID, "sure", "jtarchie")
+		if err != nil {
+			t.Fatalf("AnswerQuestion: %v", err)
+		}
+	}
+
+	listed, err := store.AllQuestions(ctx, 3)
+	if err != nil {
+		t.Fatalf("AllQuestions: %v", err)
+	}
+
+	if len(listed) == 0 || listed[0].ID != parked.ID {
+		t.Errorf("AllQuestions listed %+v first, want the pending question %d", listed, parked.ID)
 	}
 }

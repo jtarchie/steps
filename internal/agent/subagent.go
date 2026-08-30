@@ -185,8 +185,13 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		system:        buildSystemMessage(c.ri.Persona, env.dir),
 		messages:      []string{request},
 		contextBlocks: contextBlocks,
-		env:           toolEnv{dir: env.dir, runner: runner, spillDir: env.spillDir},
-		tools:         c.tools,
+		// The parent's ask context travels down, renamed: a sub-agent granted
+		// ask_user is asking on behalf of a real, recorded run, and without
+		// this it was told there was nobody to ask on a run that manifestly
+		// had somebody. The NAME is the child's, so a parked question says
+		// which agent wants to know rather than which one delegated.
+		env:   toolEnv{dir: env.dir, runner: runner, spillDir: env.spillDir, ask: env.ask.forAgent(c.ri.AgentName)},
+		tools: c.tools,
 		params: agentGenParams{
 			temperature: c.ri.Temperature,
 			topP:        c.ri.TopP,

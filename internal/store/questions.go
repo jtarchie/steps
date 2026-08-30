@@ -71,13 +71,21 @@ func (s *Store) AskQuestion(ctx context.Context, question Question) (Question, b
 		return Question{}, false, err
 	}
 
+	// The SELECT is what scopes the insert to this pipeline. The run_id
+	// foreign key alone does not: in a shared state file a run id belonging to
+	// a SIBLING pipeline satisfies it, and the row would then be one this
+	// Store can never read back — every read of this table joins runs on
+	// pipeline_id. Written as an INSERT..SELECT rather than a checked read
+	// first, so the scoping cannot lose a race with retention.
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO questions (run_id, job_name, agent_name, question, options, options_required,
 		                       default_answer, memo_key, status, asked_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?
+		WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND pipeline_id = ?)
 		ON CONFLICT (run_id, memo_key) DO NOTHING
 	`, question.RunID, question.JobName, question.AgentName, question.Question, options,
-		question.OptionsRequired, nullableText(question.Default), question.MemoKey(), nowNano())
+		question.OptionsRequired, nullableText(question.Default), question.MemoKey(), nowNano(),
+		question.RunID, s.pipelineID)
 	if err != nil {
 		return Question{}, false, fmt.Errorf("could not record question for job %q: %w", question.JobName, err)
 	}
@@ -185,11 +193,19 @@ func (s *Store) PendingQuestions(ctx context.Context) ([]Question, error) {
 	})
 }
 
-// AllQuestions lists every question and what became of it, newest first — the
-// audit trail PendingQuestions deliberately does not carry.
+// AllQuestions lists every question and what became of it: everything still
+// waiting first, then the rest newest-first — the audit trail PendingQuestions
+// deliberately does not carry.
+//
+// Pending first is not cosmetic. The listing is capped, and the only route the
+// UI offers for ANSWERING a question is this page: ordered purely by recency,
+// a pipeline that asked `limit` more questions would push a parked one off the
+// page while the nav badge still counted it, leaving a run parked with nothing
+// on screen to unpark it.
 func (s *Store) AllQuestions(ctx context.Context, limit int) ([]Question, error) {
 	return collect(ctx, s.db, "questions", questionColumns+`
-		WHERE r.pipeline_id = ? ORDER BY q.id DESC LIMIT ?
+		WHERE r.pipeline_id = ?
+		ORDER BY (q.status = 'pending') DESC, q.id DESC LIMIT ?
 	`, []any{s.pipelineID, limit}, func(rows *sql.Rows) (Question, error) {
 		return s.scanQuestion(rows)
 	})
@@ -206,13 +222,7 @@ const questionColumns = `
 	FROM questions q JOIN runs r ON r.id = q.run_id
 `
 
-// scanner is the one method sql.Row and sql.Rows share, so a row read the
-// same way from either.
-type scanner interface {
-	Scan(dest ...any) error
-}
-
-func (s *Store) scanQuestion(row scanner) (Question, error) {
+func (s *Store) scanQuestion(row rowScanner) (Question, error) {
 	var (
 		question Question
 		options  string

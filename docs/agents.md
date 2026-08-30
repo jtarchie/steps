@@ -254,7 +254,7 @@ $ steps answer pipeline.yml 1 minor
 answered: question 1
 ```
 
-The row is written **before** any of those are tried, so nothing about the audit trail depends on which channel answered — or on the run still being alive when one does. The web UI's **questions** page reads the same rows and writes the same answer; `--read-only` withholds that control the way it withholds approve/reject (see [web.md](web.md)).
+The row is written **before** any of those are tried, so nothing about the audit trail depends on which channel answered — or on the run still being alive when one does. A sub-agent granted `ask_user` asks on behalf of the same run, and its question is filed under its own name. A task's `fix:` agent cannot ask at all — it holds no run to park a question against — and is told so as tool-result data rather than parking one nothing could surface. The web UI's **questions** page reads the same rows and writes the same answer; `--read-only` withholds that control the way it withholds approve/reject (see [web.md](web.md)).
 
 #### Nobody answered
 

@@ -14,6 +14,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // TestAskUserIsNeverNativeToACLI is the whole of the bridge wiring, asserted
@@ -139,10 +140,22 @@ func TestCLIToolTimeoutCoversAParkedQuestion(t *testing.T) {
 		t.Errorf("a step without an ask_user grant set %v", env)
 	}
 
-	// And an operator's own value is theirs, not this function's to overrule.
+	// An operator's own value is FORWARDED, not deferred to. The distinction
+	// is the whole bug: MCP_TOOL_TIMEOUT is not on shell.HostEnv's allowlist,
+	// so leaving it out of cmd.Env means the child never sees it — and the
+	// case where somebody had thought about the deadline was the one case
+	// where none was applied at all.
 	t.Setenv(cliMCPToolTimeoutEnv, "1000")
 
-	if env := cliToolTimeoutEnv(ri); env != nil {
-		t.Errorf("an explicitly configured %s was overruled by %v", cliMCPToolTimeoutEnv, env)
+	forwarded := cliToolTimeoutEnv(ri)
+	if len(forwarded) != 1 || forwarded[0] != cliMCPToolTimeoutEnv+"=1000" {
+		t.Errorf("cliToolTimeoutEnv = %v, want the operator's own value forwarded to the child", forwarded)
+	}
+
+	// The allowlist is why: without an explicit entry, nothing carries it.
+	for _, kv := range shell.HostEnv() {
+		if strings.HasPrefix(kv, cliMCPToolTimeoutEnv+"=") {
+			t.Errorf("%s is on the host env allowlist; this test's premise is stale", cliMCPToolTimeoutEnv)
+		}
 	}
 }

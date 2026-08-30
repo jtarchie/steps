@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -299,7 +300,9 @@ func (s *Server) handleApprovals(c echo.Context) error {
 	})
 }
 
-// handleQuestions lists what agents have asked, pending first.
+// handleQuestions lists what agents have asked: everything still waiting
+// first, then the rest newest-first (see AllQuestions for why the order is not
+// simply recency).
 func (s *Server) handleQuestions(c echo.Context) error {
 	pipeline := pipelineOf(c)
 
@@ -534,12 +537,23 @@ func (s *Server) handleAnswerQuestion(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "an answer is required")
 	}
 
-	// Same posture as a resubmitted approval: a question somebody else just
-	// answered (or that expired while this form sat open) is not a 500. The
-	// row is the answer of record, and it already has one.
+	// Two failures, and only one of them is the caller's business. A question
+	// somebody else just answered (or that expired while this form sat open) is
+	// a resubmission, exactly like a double-clicked approval: the row is the
+	// answer of record and it already has one, so settle on it.
+	//
+	// A REFUSED answer is different and must be shown. Redirecting on an
+	// options-fence rejection left the question listed as pending with no
+	// message anywhere, so the person retypes the same thing or concludes the
+	// step is stuck — while the agent is still waiting on them.
 	err = pipeline.Store.AnswerQuestion(c.Request().Context(), id, answer, "web")
-	if err != nil {
-		slog.Info("web.question_not_answered", "id", id, "error", err)
+
+	switch {
+	case err == nil:
+	case errors.Is(err, store.ErrQuestionNotPending):
+		slog.Info("web.question_already_resolved", "id", id, "error", err)
+	default:
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	//nolint:wrapcheck // echo's redirect error is returned verbatim

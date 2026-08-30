@@ -216,3 +216,89 @@ func TestAnswerQuestionRefusesWhatItCannotRecord(t *testing.T) {
 		t.Errorf("a refused submission resolved the question anyway: %q", still.Status)
 	}
 }
+
+// TestAnswerQuestionShowsARefusalRatherThanRedirecting: a resubmission and a
+// REFUSED answer are different failures, and only one of them is a no-op. An
+// options-fence rejection redirected to a page still listing the question as
+// pending with no message anywhere, so the person retypes the same thing or
+// concludes the step is stuck — while the agent is still waiting on them.
+func TestAnswerQuestionShowsARefusalRatherThanRedirecting(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	_, pipeline := testPipeline(t)
+
+	server, err := New([]*Pipeline{pipeline}, stubRunner{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	err = pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	fenced, _, err := pipeline.Store.AskQuestion(ctx, store.Question{
+		RunID: "run-1", JobName: "build", AgentName: "writer",
+		Question: "Which environment?", Options: []string{"staging", "prod"},
+		OptionsRequired: true,
+	})
+	if err != nil {
+		t.Fatalf("AskQuestion: %v", err)
+	}
+
+	if code := post(t, server, "/p/demo/questions/1", map[string]string{"answer_text": "canary"}); code != http.StatusBadRequest {
+		t.Errorf("POST of an off-list answer = %d, want 400 so the answerer sees the refusal", code)
+	}
+
+	// A resubmission is still a no-op, not an error: the row already has its
+	// answer and settling on it is the right posture.
+	err = pipeline.Store.AnswerQuestion(ctx, fenced.ID, "prod", "jtarchie")
+	if err != nil {
+		t.Fatalf("AnswerQuestion: %v", err)
+	}
+
+	if code := post(t, server, "/p/demo/questions/1", map[string]string{"answer": "staging"}); code != http.StatusSeeOther {
+		t.Errorf("POST to an already-answered question = %d, want a redirect", code)
+	}
+}
+
+// TestQuestionsFormPutsFreeTextFirst: pressing Enter in a text input submits
+// the form with its DEFAULT button — the first submit button in tree order.
+// With the option buttons first, typing an answer and pressing Enter silently
+// submitted the first OPTION instead of what was typed.
+func TestQuestionsFormPutsFreeTextFirst(t *testing.T) {
+	t.Parallel()
+
+	_, pipeline := testPipeline(t)
+	askOne(t, pipeline)
+
+	server, err := New([]*Pipeline{pipeline}, stubRunner{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/questions")
+
+	_, form, found := strings.Cut(body, "<form")
+	if !found {
+		t.Fatalf("no answer form on the page: %s", body)
+	}
+
+	form, _, found = strings.Cut(form, "</form>")
+	if !found {
+		t.Fatalf("the answer form is unclosed: %s", form)
+	}
+
+	text := strings.Index(form, `name="answer_text"`)
+	option := strings.Index(form, `name="answer"`)
+
+	if text < 0 || option < 0 {
+		t.Fatalf("the answer form is missing one of its controls: %s", form)
+	}
+
+	if text > option {
+		t.Error("an option button precedes the free-text field, so pressing Enter in the field submits that option instead of what was typed")
+	}
+}
