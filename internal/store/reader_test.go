@@ -502,3 +502,43 @@ func fileDigest(t *testing.T, path string) string {
 
 	return fmt.Sprintf("%x", sha256.Sum256(body))
 }
+
+// TestHasNothingRecorded covers the three answers a caller needs before it
+// opens anything: a file being created by a writer right now, a real
+// database, and a path with no file at all.
+//
+// It lives here because the guard does: the CLI asks this BEFORE opening, so
+// package-scoped mutation testing showed the branch executed by no test in
+// this package at all — the only thing exercising it was one level up.
+func TestHasNothingRecorded(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// Created but not filled in: what a writer's first open looks like from
+	// outside, and what a reader must not call a foreign schema.
+	empty := filepath.Join(dir, "empty.db")
+
+	err := os.WriteFile(empty, nil, 0o600)
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if !HasNothingRecorded(empty) {
+		t.Error("a file with no schema in it reads as holding something")
+	}
+
+	stores := sharedFile(t, "app")
+	mustStartRun(t, stores[0], "r1", "build")
+
+	if HasNothingRecorded(stores[0].Path()) {
+		t.Error("a database with a run in it reads as empty")
+	}
+
+	// A path with no file is a different question, and not this one's to
+	// answer: the caller stats before asking, and an absent file must not be
+	// reported as "nothing recorded" by a helper that could not open it.
+	if HasNothingRecorded(filepath.Join(dir, "absent.db")) {
+		t.Error("a missing file reads as an empty database")
+	}
+}

@@ -95,9 +95,9 @@ tasks:
       - rm -f .cover.out
 
   mutate-pkg:
-    desc: "Advisory mutation testing over one package: task mutate-pkg PKG=./internal/venue. Mechanizes the sabotage audit — every LIVED mutant is a code change no test notices. Needs gremlins (task install:tools). --integration because package-scoped mode times out spuriously here; go's build cache keeps unaffected packages cheap, but a package with heavy dependents (venue, pipeline) still costs minutes to hours — scope deliberately."
+    desc: "Advisory mutation testing over one package: task mutate-pkg PKG=./internal/venue [WORKERS=1]. Mechanizes the sabotage audit — every LIVED mutant is a code change no test notices. Needs gremlins (task install:tools). --integration because package-scoped mode times out spuriously here; go's build cache keeps unaffected packages cheap, but a package with heavy dependents (venue, pipeline) still costs minutes to hours — scope deliberately. WORKERS=1 serializes the run, which is what a package whose tests bind ports, spawn containers or share a docker daemon needs: parallel mutants otherwise fail each other's tests and report as KILLED for the wrong reason."
     cmds:
-      - gremlins unleash --integration --timeout-coefficient 10 {{.PKG}}
+      - gremlins unleash --integration --timeout-coefficient 10 --workers {{.WORKERS | default "0"}} {{.PKG}}
 
   build:
     desc: Build ./steps. CGO_ENABLED=0 is a guard, not an optimization — the planned remote-worker shim cross-compiles this binary for any GOOS/GOARCH and pushes it over SFTP, so a transitive dep that pulls in cgo must fail the build here.

@@ -489,3 +489,121 @@ func TestFanOutJobsRecordGreenVersions(t *testing.T) {
 		t.Errorf("deployed %v, want [v1]", got)
 	}
 }
+
+// TestPassedReleasesAJobOnce is the fact that stops a gate becoming a loop.
+//
+// A `passed:` constraint is re-evaluated on EVERY poll — it has to be, since
+// the poll that first sees a version comes before the upstream job goes green
+// on it. So the release has to be idempotent: once the downstream job has
+// itself succeeded against the green version, later polls must find nothing
+// to release. Without that, a gate that opens once opens forever, and the
+// thing it gates is usually a deploy.
+//
+// It went untested, which mutation testing is what found: the check for
+// "already ran these" could be inverted and every existing passed: test still
+// passed, because they all stop after the first poll that releases.
+func TestPassedReleasesAJobOnce(t *testing.T) {
+	dir := t.TempDir()
+	versions := filepath.Join(dir, "versions.json")
+	deployed := filepath.Join(dir, "deployed.txt")
+
+	writeVersions(t, versions, `[{"ref":"r0"}]`)
+
+	cfg := loadConfig(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+resource_types:
+- name: listing
+  config:
+    check: cat `+versions+`
+    in: echo {{ .version.ref | shellquote }} > ref.txt
+resources:
+- name: repo
+  type: listing
+  source: {}
+jobs:
+- name: test
+  plan:
+  - get: repo
+    trigger: true
+- name: deploy
+  plan:
+  - get: repo
+    trigger: true
+    passed: [test]
+  - task: ship
+    inputs: [repo]
+    run: cat repo/ref.txt >> `+deployed+`
+`)
+
+	st := mustOpenStore(t, dir)
+	ctx := context.Background()
+
+	_, err := pollOnce(ctx, cfg, st)
+	if err != nil {
+		t.Fatalf("pollOnce (baseline): %v", err)
+	}
+
+	encoded, err := json.Marshal(map[string]any{"ref": "r1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = st.RecordPassedVersion(ctx, "test", "repo", string(encoded), "build-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeVersions(t, versions, `[{"ref":"r0"},{"ref":"r1"}]`)
+
+	// The poll that opens the gate, and the build it releases.
+	_, err = pollOnce(ctx, cfg, st)
+	if err != nil {
+		t.Fatalf("pollOnce (release): %v", err)
+	}
+
+	drainQueue(ctx, t, cfg, st)
+
+	data, err := os.ReadFile(deployed) //nolint:gosec // a t.TempDir()-scoped file this test wrote itself
+	if err != nil {
+		t.Fatalf("deploy never ran, so the gate proves nothing: %v", err)
+	}
+
+	if got := strings.Fields(string(data)); len(got) != 1 || got[0] != "r1" {
+		t.Errorf("deployed %v, want r1", got)
+	}
+
+	// Two more polls with nothing new upstream. The constraint is re-checked
+	// each time — that is by design — and must now find the job has already
+	// run against the version it would release.
+	for attempt := 1; attempt <= 2; attempt++ {
+		assertQuietPollReleasesNothing(ctx, t, cfg, st, attempt)
+	}
+}
+
+// assertQuietPollReleasesNothing polls once and requires that no gated job
+// came back out of the gate.
+//
+// Asserted on what the POLL enqueued, not on what the build wrote: a
+// re-released job runs the same content, hits the merkle cache and produces
+// no second line, so a side effect cannot tell a gate that fired once from
+// one firing every 30 seconds forever.
+func assertQuietPollReleasesNothing(
+	ctx context.Context, t *testing.T, cfg *config.Config, st *store.Store, attempt int,
+) {
+	t.Helper()
+
+	enqueued, err := pollOnce(ctx, cfg, st)
+	if err != nil {
+		t.Fatalf("pollOnce (quiet %d): %v", attempt, err)
+	}
+
+	for _, job := range enqueued {
+		if job == "deploy" {
+			t.Fatalf("poll %d released deploy again; a gate that opens once must not reopen", attempt)
+		}
+	}
+
+	drainQueue(ctx, t, cfg, st)
+}

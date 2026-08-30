@@ -199,19 +199,100 @@ func TestReadOnlyServerRefusesMutations(t *testing.T) {
 
 // TestCrossOriginMutationRefused covers the one defense a no-auth server can
 // have: a page on another origin must not be able to aim a form at it.
+//
+// The server here has a RUNNER, which the test lacked until mutation testing
+// showed why it mattered: without one every mutation is refused as read-only,
+// so a 403 proved nothing about the origin check and the whole middleware
+// could be deleted with this test still green. The companion cases below are
+// the other half — a defense that refuses everything is not a defense either.
 func TestCrossOriginMutationRefused(t *testing.T) {
 	t.Parallel()
 
-	server, _ := testPipeline(t)
+	server, _ := mutableServer(t)
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/p/demo/jobs/build/trigger", nil)
-	req.Header.Set("Origin", "https://evil.example")
+	if code := postWithOrigin(t, server, "/p/demo/jobs/build/trigger", "https://evil.example"); code != http.StatusForbidden {
+		t.Errorf("cross-origin POST = %d, want 403", code)
+	}
+}
+
+// TestSameOriginMutationAllowed: the check compares against the host it was
+// sent to, so the UI's own forms must pass. A mutant that refused everything
+// would otherwise look exactly like a working defense.
+func TestSameOriginMutationAllowed(t *testing.T) {
+	t.Parallel()
+
+	server, _ := mutableServer(t)
+
+	if code := postWithOrigin(t, server, "/p/demo/jobs/build/trigger", "http://example.com"); code == http.StatusForbidden {
+		t.Error("the server refused a form served from its own origin")
+	}
+}
+
+// TestOriginlessMutationAllowed: a request with no Origin at all is a curl or
+// a CLI, not a browser being aimed at this port by another page. Refusing it
+// would break every scripted trigger while stopping no attack.
+func TestOriginlessMutationAllowed(t *testing.T) {
+	t.Parallel()
+
+	server, _ := mutableServer(t)
+
+	if code := postWithOrigin(t, server, "/p/demo/jobs/build/trigger", ""); code == http.StatusForbidden {
+		t.Error("the server refused a request carrying no Origin")
+	}
+}
+
+// TestSafeMethodsSkipTheOriginCheck: reads are not mutations, and the check
+// is about what another page can make this server DO. A mutant that moved a
+// safe method out of that list would make the UI unusable from anywhere the
+// browser sets an Origin.
+func TestSafeMethodsSkipTheOriginCheck(t *testing.T) {
+	t.Parallel()
+
+	server, _ := mutableServer(t)
+
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
+		req := httptest.NewRequestWithContext(t.Context(), method, "/p/demo", nil)
+		req.Header.Set("Origin", "https://evil.example")
+
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code == http.StatusForbidden {
+			t.Errorf("%s from another origin was refused; safe methods are not mutations", method)
+		}
+	}
+}
+
+// mutableServer is testPipeline's server with a runner attached, so a refusal
+// can only have come from the origin check rather than from --read-only.
+func mutableServer(t *testing.T) (*Server, *Pipeline) {
+	t.Helper()
+
+	_, pipeline := testPipeline(t)
+
+	server, err := New([]*Pipeline{pipeline}, stubRunner{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	return server, pipeline
+}
+
+// postWithOrigin sends a POST carrying origin (or none, when empty) and
+// returns the status. The Host is example.com, which is what httptest sets
+// and what "same origin" therefore means here.
+func postWithOrigin(t *testing.T, server *Server, target, origin string) int {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, target, nil)
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+	}
+
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("cross-origin POST = %d, want 403", rec.Code)
-	}
+	return rec.Code
 }
 
 // TestUnknownPipelineAndRun404 checks the error page renders rather than
