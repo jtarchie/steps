@@ -530,7 +530,7 @@ func runOneConversation(
 // checked and rejected at load like any other. Evaluating it at load and then
 // never running it made that promise a lie — the hook reported success on a
 // mismatch its own assert existed to catch.
-func RunHook(ctx context.Context, cfg *config.Config, jobName string, step config.Step, bw workspace.BuildWorkspace) error {
+func RunHook(ctx context.Context, cfg *config.Config, jobName string, step config.Step, bw workspace.BuildWorkspace, st *store.Store) error {
 	prepared, err := prepareAgentStep(ctx, cfg, step, bw)
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", step.Agent, err)
@@ -544,10 +544,9 @@ func RunHook(ctx context.Context, cfg *config.Config, jobName string, step confi
 	// have one, so its tool calls and any mid-run failover it triggers are
 	// attributable the same way a plan step's are, instead of publishing (and
 	// logging) nowhere. stepIndex is -1: a hook is not a plan position.
-	//
-	// It is given no ask_user store handle: a hook holds no store, so a hook
-	// that granted ask_user is told so as tool-result data rather than
-	// parking a question nothing could ever surface.
+	prepared.conv.env.ask.st = st
+	prepared.conv.env.ask.jobName = jobName
+
 	prepared.conv.recorder = &transcriptRecorder{live: liveContext{
 		bus: events.FromContext(ctx), runID: events.RunID(ctx), stepID: events.StepID(ctx), job: jobName, stepIndex: -1, stepName: step.DisplayName(),
 	}}

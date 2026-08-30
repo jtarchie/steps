@@ -254,7 +254,7 @@ $ steps answer pipeline.yml 1 minor
 answered: question 1
 ```
 
-The row is written **before** any of those are tried, so nothing about the audit trail depends on which channel answered — or on the run still being alive when one does. A sub-agent granted `ask_user` asks on behalf of the same run, and its question is filed under its own name. A task's `fix:` agent cannot ask at all — it holds no run to park a question against — and is told so as tool-result data rather than parking one nothing could surface. The web UI's **questions** page reads the same rows and writes the same answer; `--read-only` withholds that control the way it withholds approve/reject (see [web.md](web.md)).
+The row is written **before** any of those are tried, so nothing about the audit trail depends on which channel answered — or on the run still being alive when one does. Every conversation inside a run can ask: a plan step, a sub-agent (on behalf of the same run), a task's `fix:` agent mid-repair, and a hook. Each question is filed under the name of the agent that asked it, not the step that invoked it. The web UI's **questions** page reads the same rows and writes the same answer; `--read-only` withholds that control the way it withholds approve/reject (see [web.md](web.md)).
 
 #### Nobody answered
 

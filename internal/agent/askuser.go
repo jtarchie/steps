@@ -92,9 +92,14 @@ type askGrant struct {
 
 // askEnv is what the ask_user impl needs from the RUN rather than from the
 // grant: where to record the question, and who is asking. It rides on toolEnv
-// because that is what already reaches every toolImpl, and it is zero for
-// every caller that has no run to record against (tests, RunFix outside a
-// job) — which the tool reports as data rather than pretending to park.
+// because that is what already reaches every toolImpl, and it is zero only for
+// a caller with genuinely no run to record against (a test, a direct call) —
+// which the tool reports as data rather than pretending to park.
+//
+// Every conversation inside a run has one: a plan step gets it from RunStep, a
+// sub-agent inherits its parent's (renamed, see forAgent), and a task fix: or
+// a hook agent gets it from askContext. Being outside the merkle chain, as a
+// hook is, says nothing about whether there is somebody to ask.
 type askEnv struct {
 	st        *store.Store
 	jobName   string
@@ -108,6 +113,21 @@ type askEnv struct {
 	// state carries the one thing a tool call cannot report as data: that
 	// nobody answered a question with no default, so the step must abort.
 	state *askState
+}
+
+// askContext is the ask environment for a conversation that is NOT a plan
+// step — a task fix: agent, a hook — but is still inside a recorded run.
+//
+// It exists because the distinction that matters is having a run to park a
+// question against, and those conversations have one: only the store handle
+// was missing, three frames up its own call chain. A nil store still yields a
+// usable zero value, so a caller with genuinely nothing to record against
+// (a test, a direct call) degrades to the tool saying so as data.
+func askContext(st *store.Store, jobName, agentName string) askEnv {
+	return askEnv{
+		st: st, jobName: jobName, agentName: agentName,
+		prompt: terminalPrompter(), state: &askState{},
+	}
 }
 
 // forAgent re-labels this ask context for a nested conversation. A sub-agent
@@ -253,7 +273,7 @@ func (g askGrant) ask(ctx context.Context, args map[string]any, env toolEnv) map
 	}
 
 	if env.ask.st == nil {
-		return errorResult("ask_user: this conversation records no questions (a hook or a task fix: agent holds no run to park one against), so there is nobody to ask")
+		return errorResult("ask_user: this conversation has no run to record a question against, so there is nobody to ask")
 	}
 
 	runID := events.RunID(ctx)

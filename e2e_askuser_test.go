@@ -352,3 +352,140 @@ jobs:
 		t.Fatal("an answer to a question that does not exist was accepted")
 	}
 }
+
+// TestEndToEndFixAgentAsks: a task's fix: agent is a conversation like any
+// other, and a grant of ask_user on one has to mean what it says.
+//
+// It did not. The store handle reaches an agent STEP through RunStep and was
+// dropped three frames earlier on the fix path, so a pipeline could grant
+// ask_user to a fix agent, validate clean, and have the capability silently
+// not exist — the same shape as a sub-agent whose env dropped the ask context.
+// The test is the seam: a failing task, a fix agent that asks, an answer
+// supplied the way an unattended run supplies one, and the task green on the
+// re-run.
+func TestEndToEndFixAgentAsks(t *testing.T) {
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "counter.txt")
+
+	fake := newRoutedFakeLLM(t, func(req capturedRequest) turn {
+		if !req.historyCalled("ask_user") {
+			return callsTool("ask_user", map[string]any{
+				"question": "Should I relax the assertion or fix the code?",
+				"options":  []any{"relax", "fix"},
+			})
+		}
+
+		return says("Understood: " + answeredValue(req.toolResults()) + ".")
+	})
+
+	yaml := fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: fixer
+  source:
+    endpoint: %[1]s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools:
+  - read_file
+  - builtin: ask_user
+    timeout: 2m
+
+jobs:
+- name: build
+  plan:
+  - task: check
+    inputs: []
+    run: %[2]s
+    fix: fixer
+`, fake.URL, failThenPass(counter))
+
+	path := writePipeline(t, dir, yaml)
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	mustRun(t, "run", path, "--job", "build", "--answer", "relax the assertion=relax")
+
+	// The fix ran once and the task recovered — the control flow the fix loop
+	// exists for, unchanged by the agent having asked something mid-repair.
+	if got := strings.TrimSpace(readFileString(t, counter)); got != "2" {
+		t.Errorf("the task ran %s time(s), want 2 (fail, fix, pass)", got)
+	}
+
+	// The answer came back to the model as ordinary tool-result data.
+	answered := fake.request(2).toolResults()
+	if len(answered) != 1 || !strings.Contains(answered[0], `"relax"`) {
+		t.Errorf("the fix agent's question was not answered; got %v", answered)
+	}
+
+	// And it is recorded, under the fix agent's own name: a question filed
+	// under the task would name something that cannot ask.
+	questions := storeQuestions(t, path)
+	if len(questions) != 1 {
+		t.Fatalf("recorded %d questions, want 1: %+v", len(questions), questions)
+	}
+
+	if got := questions[0]; got.AgentName != "fixer" || got.Answer != "relax" || got.Status != "answered" {
+		t.Errorf("question row = %+v, want it answered under the fix agent's name", got)
+	}
+}
+
+// TestEndToEndHookAgentAsks: a hook agent has the same gap and the same fix.
+// A hook is a real conversation inside a real run — it is only outside the
+// merkle chain, which says nothing about whether it can ask a person something.
+func TestEndToEndHookAgentAsks(t *testing.T) {
+	dir := t.TempDir()
+
+	fake := newRoutedFakeLLM(t, func(req capturedRequest) turn {
+		if !req.historyCalled("ask_user") {
+			return callsTool("ask_user", map[string]any{"question": "Who should this failure be reported to?"})
+		}
+
+		return says("Reporting to " + answeredValue(req.toolResults()) + ".")
+	})
+
+	yaml := fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: reporter
+  source:
+    endpoint: %s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools:
+  - builtin: ask_user
+    timeout: 2m
+
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: "true"
+    on_success:
+      agent: reporter
+      messages:
+        - Ask who to report to, then say so.
+`, fake.URL)
+
+	path := writePipeline(t, dir, yaml)
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	mustRun(t, "run", path, "--job", "build", "--answer", "reported to=the release channel")
+
+	questions := storeQuestions(t, path)
+	if len(questions) != 1 {
+		t.Fatalf("recorded %d questions, want 1: %+v", len(questions), questions)
+	}
+
+	if got := questions[0]; got.AgentName != "reporter" || got.Answer != "the release channel" {
+		t.Errorf("question row = %+v, want the hook agent's question answered", got)
+	}
+}

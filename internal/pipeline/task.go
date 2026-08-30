@@ -16,6 +16,7 @@ import (
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/retry"
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/venue"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -78,7 +79,7 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 	// through a sink rather than a return value.
 	ctx, placed := withPlacementSink(ctx)
 
-	err = executeTask(ctx, r.cfg, step, rt, r.bw)
+	err = executeTask(ctx, r.cfg, step, rt, r.bw, r.st)
 	if err != nil {
 		wrapped := fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 		recordStepFailure(ctx, r, node, wrapped)
@@ -110,7 +111,10 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 // outputs — with no merkle/store recording. Shared by runTaskStep (which
 // records the aggregate outcome) and hook execution (where the enclosing
 // step/job records it).
-func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt config.ResolvedTask, bw workspace.BuildWorkspace) error {
+func executeTask(
+	ctx context.Context, cfg *config.Config, step config.Step,
+	rt config.ResolvedTask, bw workspace.BuildWorkspace, st *store.Store,
+) error {
 	// A cell of a collecting matrix captures each output under its own
 	// coordinates (findings -> findings/alpha) instead of the plain name, so
 	// N cells share one declared artifact without clobbering each other. An
@@ -176,7 +180,7 @@ func executeTask(ctx context.Context, cfg *config.Config, step config.Step, rt c
 			fmt.Printf("task: %s (attempt %d/%d)\n", executedStepName(step), attempt, total)
 			logFrom(ctx).Info("job.task.attempt", "task", executedStepName(step), "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
-			err := runTaskCommand(attemptCtx, cfg, runner, rt, space.Dir())
+			err := runTaskCommand(attemptCtx, cfg, runner, rt, space.Dir(), st)
 
 			// An eviction ends the attempts loop rather than spending it. The
 			// machine is gone: every remaining attempt would redial a dead
@@ -253,10 +257,13 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 
 // runTaskCommand runs a task's run: command. Without an assert: or fix:, it
 // streams output live and any nonzero exit is a hard failure.
-func runTaskCommand(ctx context.Context, cfg *config.Config, runner shell.Runner, rt config.ResolvedTask, workspaceDir string) error {
+func runTaskCommand(
+	ctx context.Context, cfg *config.Config, runner shell.Runner,
+	rt config.ResolvedTask, workspaceDir string, st *store.Store,
+) error {
 	switch {
 	case rt.Fix != nil:
-		return runFixTask(ctx, cfg, runner, rt, workspaceDir)
+		return runFixTask(ctx, cfg, runner, rt, workspaceDir, st)
 	case rt.Assert != nil:
 		return runAssertedTask(ctx, runner, rt, workspaceDir)
 	}
@@ -305,7 +312,10 @@ func classifyRunError(ctx context.Context, err error) error {
 // whose assert: was the real criterion got repaired when it had already
 // passed (and went red when the repair worked), and got no repair at all when
 // it failed while exiting 0.
-func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt config.ResolvedTask, workspaceDir string) error {
+func runFixTask(
+	ctx context.Context, cfg *config.Config, runner shell.Runner,
+	rt config.ResolvedTask, workspaceDir string, st *store.Store,
+) error {
 	stdout, stderr, exitCode, err := runCaptured(ctx, runner, rt)
 	if err != nil {
 		return err
@@ -330,7 +340,7 @@ func runFixTask(ctx context.Context, cfg *config.Config, runner shell.Runner, rt
 	// calls publish under it rather than nowhere (see agent.RunFix).
 	jobName, stepIndex := currentStepRef(ctx)
 
-	err = agent.RunFix(ctx, cfg, jobName, stepIndex, rt, taskFailureOutput(failure, stdout, stderr, exitCode), workspaceDir)
+	err = agent.RunFix(ctx, cfg, jobName, stepIndex, rt, st, taskFailureOutput(failure, stdout, stderr, exitCode), workspaceDir)
 	if err != nil {
 		return fmt.Errorf("fix agent %q: %w", rt.Fix.Agent, err)
 	}

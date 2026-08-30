@@ -148,7 +148,7 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 		// before, so it is deliberately outside the merkle chain.
 		ctx, placed := withPlacementSink(ctx)
 
-		err = executeTask(ctx, scope.cfg, step, rt, scope.bw)
+		err = executeTask(ctx, scope.cfg, step, rt, scope.bw, scope.st)
 
 		recordPlacement(ctx, scope.stepRunner, placed, 0, executedStepName(step), scope.label, "")
 
@@ -158,7 +158,7 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 
 		return err
 	case config.StepKindAgent:
-		err := agent.RunHook(ctx, scope.cfg, scope.jobName, step, scope.bw)
+		err := agent.RunHook(ctx, scope.cfg, scope.jobName, step, scope.bw, scope.st)
 		if err != nil {
 			return fmt.Errorf("agent hook: %w", err)
 		}

@@ -9,6 +9,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // defaultFixPrompt is used when a task's fix: supplies no prompt of its own.
@@ -57,7 +58,10 @@ func buildFixMessages(fix *config.FixSpec, rt config.ResolvedTask, failureOutput
 // resolving the exact failure the task hit; running under a different image
 // than the one that produced (and re-verifies) the failure would make the
 // loop incoherent.
-func RunFix(ctx context.Context, cfg *config.Config, jobName string, stepIndex int, rt config.ResolvedTask, failureOutput, workspaceDir string) error {
+func RunFix(
+	ctx context.Context, cfg *config.Config, jobName string, stepIndex int,
+	rt config.ResolvedTask, st *store.Store, failureOutput, workspaceDir string,
+) error {
 	fix := rt.Fix
 
 	// Project the fix spec onto an agent Step so ResolveAgentInvocation can
@@ -132,7 +136,7 @@ func RunFix(ctx context.Context, cfg *config.Config, jobName string, stepIndex i
 		system:        buildSystemMessage(ri.Persona, dir),
 		messages:      messages,
 		contextBlocks: contextBlocks,
-		env:           toolEnv{dir: dir, runner: runner, spillDir: spillDir},
+		env:           toolEnv{dir: dir, runner: runner, spillDir: spillDir, ask: askContext(st, jobName, fix.Agent)},
 		tools:         tools,
 		params: agentGenParams{
 			temperature: ri.Temperature,
