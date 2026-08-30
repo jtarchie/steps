@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // Reading ACROSS the pipelines in one state file.
@@ -106,6 +108,81 @@ func OpenReader(path string) (*Reader, error) {
 	}
 
 	return &Reader{db: db, owned: true}, nil
+}
+
+// ErrNoSuchPipeline is a name the state file has never heard of.
+var ErrNoSuchPipeline = errors.New("no such pipeline in this state file")
+
+// OpenExisting scopes a handle to a pipeline that is ALREADY in the file,
+// rather than to one this call creates.
+//
+// OpenStore registers what it is handed, which is right for a command about
+// to record something: `steps run new.yml` should not have to announce the
+// pipeline first. It is wrong for a command that only asks, and the
+// difference is not academic — `steps runs typo.yml` used to leave `typo` in
+// the pipelines table forever, and answer "no job runs recorded", which is
+// what a pipeline that has never run says too. A read that invents its own
+// subject cannot tell you that you misspelled it.
+//
+// The handle it returns is an ordinary Store, deliberately: the ~60 scoped
+// reads are already written and a read-only twin of them would be sixty
+// chances to diverge. What differs is how the scope was obtained — resolved,
+// never created.
+func OpenExisting(path, pipelineName string) (*Store, error) {
+	reader, err := OpenReader(path)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := context.Background()
+
+	var id int64
+
+	err = reader.db.QueryRowContext(ctx,
+		`SELECT id FROM pipelines WHERE name = ?`, pipelineName).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Named alongside what the file does hold: the mistake this catches
+		// is a name that is nearly right, and the fix is almost always
+		// visible in the list. Read through the reader still open here, not a
+		// second one.
+		held, listErr := reader.names(ctx)
+
+		_ = reader.Close()
+
+		if listErr != nil {
+			return nil, listErr
+		}
+
+		return nil, fmt.Errorf("%w: %s is not in %s, which holds: %s",
+			ErrNoSuchPipeline, pipelineName, path, held)
+	}
+
+	if err != nil {
+		_ = reader.Close()
+
+		return nil, fmt.Errorf("could not resolve pipeline %q in %q: %w", pipelineName, path, err)
+	}
+
+	return &Store{db: reader.db, path: path, pipeline: pipelineName, pipelineID: id}, nil
+}
+
+// names is the "did you mean" half of the refusal above.
+func (r *Reader) names(ctx context.Context) (string, error) {
+	rows, err := r.Pipelines(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	if len(rows) == 0 {
+		return "nothing", nil
+	}
+
+	names := make([]string, 0, len(rows))
+	for _, row := range rows {
+		names = append(names, row.Name)
+	}
+
+	return strings.Join(names, ", "), nil
 }
 
 // Close releases the connection, if this Reader is the one that opened it.

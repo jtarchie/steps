@@ -603,7 +603,9 @@ func (r *RunsCmd) Run() error {
 		return nil
 	}
 
-	st, err := store.OpenStore(path, resolvePipelineName(r.Pipeline, r.Name))
+	// OpenExisting, not OpenStore: this command asks, and asking must not
+	// register the pipeline it is asking about — see store.OpenExisting.
+	st, err := store.OpenExisting(path, resolvePipelineName(r.Pipeline, r.Name))
 	if err != nil {
 		return fmt.Errorf("could not open state store: %w", err)
 	}

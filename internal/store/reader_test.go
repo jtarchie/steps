@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -325,5 +326,76 @@ func TestSourcePathIsPerPipelineNotPerFile(t *testing.T) {
 		if row.Path != want[row.Name] {
 			t.Errorf("pipeline %s reports path %q, want %q", row.Name, row.Path, want[row.Name])
 		}
+	}
+}
+
+// TestOpenExistingResolvesRatherThanRegisters is the read/write split one
+// level below OpenReader: a scoped handle, obtained by looking a pipeline up
+// instead of creating it.
+func TestOpenExistingResolvesRatherThanRegisters(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	stores := sharedFile(t, "app", "infra")
+	path := stores[0].Path()
+
+	mustStartRun(t, stores[0], "r1", "build")
+
+	scoped, err := OpenExisting(path, "app")
+	if err != nil {
+		t.Fatalf("OpenExisting: %v", err)
+	}
+
+	defer func() { _ = scoped.Close() }()
+
+	// Scoped exactly like the handle that wrote the row: the pipeline's own
+	// runs, and none of its neighbor's.
+	runs, err := scoped.ListRuns(ctx, "", 10)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+
+	if len(runs) != 1 || runs[0].ID != "r1" {
+		t.Errorf("runs = %+v, want app's single run", runs)
+	}
+}
+
+// TestOpenExistingRefusesAnUnknownPipeline: the answer a typo deserves.
+//
+// Registering it instead gave back "no runs recorded" — the same words a
+// pipeline that has simply never run says — and left the invented name in the
+// file for good.
+func TestOpenExistingRefusesAnUnknownPipeline(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	stores := sharedFile(t, "app", "infra")
+	path := stores[0].Path()
+
+	scoped, err := OpenExisting(path, "aap")
+	if err == nil {
+		_ = scoped.Close()
+
+		t.Fatal("a pipeline the file does not hold was opened")
+	}
+
+	if !errors.Is(err, ErrNoSuchPipeline) {
+		t.Fatalf("error = %v, want ErrNoSuchPipeline", err)
+	}
+
+	// What the file holds, so a near-miss is fixable from the message.
+	for _, name := range []string{"app", "infra"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("refusal does not name %q as a candidate: %v", name, err)
+		}
+	}
+
+	rows, err := stores[0].Reader().Pipelines(ctx)
+	if err != nil {
+		t.Fatalf("Pipelines: %v", err)
+	}
+
+	if len(rows) != 2 {
+		t.Errorf("the failed open left %d pipelines in the file, want the original 2: %+v", len(rows), rows)
 	}
 }

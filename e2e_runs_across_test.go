@@ -271,3 +271,45 @@ func TestRunsAcrossPipelineWithNothingRecorded(t *testing.T) {
 		t.Errorf("a file whose pipelines have never run says nothing about it:\n%s", out)
 	}
 }
+
+// TestRunsDoesNotMintThePipelineItWasAskedAbout.
+//
+// `steps runs` is a read, and reads do not create. It used to open the state
+// store the ordinary way, which registers whatever name it was handed — so a
+// typo left a pipeline in the file forever, and the answer it gave back ("no
+// job runs recorded") was indistinguishable from a pipeline that simply had
+// not run yet.
+//
+// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+func TestRunsDoesNotMintThePipelineItWasAskedAbout(t *testing.T) {
+	state, _, _ := sharedRunsFixture(t)
+
+	var runErr error
+
+	out := captureStdout(t, func() {
+		runErr = run([]string{"runs", "typo.yml", "--state", state})
+	})
+
+	if runErr == nil {
+		t.Fatalf("a pipeline the file has never heard of was answered for:\n%s", out)
+	}
+
+	// The message names the file's actual contents, because the whole class
+	// of mistake here is a name that is nearly right.
+	for _, want := range []string{"typo", "first", "second"} {
+		if !strings.Contains(runErr.Error(), want) {
+			t.Errorf("refusal does not mention %q: %v", want, runErr)
+		}
+	}
+
+	listing := captureStdout(t, func() {
+		err := run([]string{"runs", "--state", state})
+		if err != nil {
+			t.Errorf("runs --state: %v", err)
+		}
+	})
+
+	if strings.Contains(listing, "typo") {
+		t.Errorf("the read registered the pipeline it was asked about:\n%s", listing)
+	}
+}
