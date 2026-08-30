@@ -2,8 +2,8 @@ package main
 
 // Multi-`version: every` through the CLI: input sets, observed from outside.
 //
-// Same discipline as watch_e2e_test.go — every test drives the real CLI
-// (`watch --once`, or `run` where a manual trigger is the shape under test)
+// Same discipline as trigger_e2e_test.go — every test drives the real CLI
+// (`web --once`, or `run` where a manual trigger is the shape under test)
 // against a real pipeline and asserts only on what an operator could see.
 // These are separate because they cover behavior that did not exist when that
 // file froze: more than one get fanning out, in lockstep.
@@ -111,7 +111,7 @@ func (f *lockstepFixture) feed(t *testing.T, path string, n int) {
 func (f *lockstepFixture) watch(t *testing.T) {
 	t.Helper()
 
-	mustRun(t, "watch", f.pipeline, "--once")
+	mustRun(t, "web", f.pipeline, "--once")
 }
 
 // watchExpectingFailure runs a cycle whose job is meant to fail, and insists
@@ -135,7 +135,7 @@ func (f *lockstepFixture) coldStart(t *testing.T) {
 func (f *lockstepFixture) watchExpectingFailure(t *testing.T) {
 	t.Helper()
 
-	err := run([]string{"watch", f.pipeline, "--once"})
+	err := run([]string{"web", f.pipeline, "--once"})
 	if err == nil {
 		t.Fatal("the cycle was supposed to fail a build; it succeeded")
 	}
@@ -256,7 +256,7 @@ func TestWatchLockstepSkipStillConsumesTheSet(t *testing.T) {
 	// A pinned run builds (a3, b3) out of band — and consumes nothing.
 	fixture.feed(t, fixture.feedA, 3)
 	fixture.feed(t, fixture.feedB, 3)
-	mustRun(t, "watch", fixture.pipeline, "--once", "--pin", "n=3")
+	mustRun(t, "web", fixture.pipeline, "--once", "--pin", "n=3")
 	fixture.assertDid(t, "2+2", "3+3")
 
 	// The natural flow reaches the same set — a MANUAL run, since the poll

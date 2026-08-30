@@ -195,7 +195,7 @@ type Preflight struct {
 	// reported as unavailable rather than waited on.
 	Timeout string `yaml:"timeout,omitempty"`
 	// Cache is how long a verified target is trusted for. It is a real
-	// requirement, not an afterthought: without it every `steps watch` poll
+	// requirement, not an afterthought: without it every `steps web` poll
 	// pays for a probe request against every model in the pipeline.
 	Cache string `yaml:"cache,omitempty"`
 }

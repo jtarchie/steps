@@ -5,7 +5,8 @@ package main
 //
 // The second half is not a hypothetical. --version-history was declared on
 // `run` and threaded nowhere, so it silently did nothing there and worked
-// only under `watch` — a flag that reads as configured while binding nothing.
+// only under the watcher — a flag that reads as configured while binding
+// nothing.
 // Sharing a flag between commands via an embed makes that failure cheaper to
 // repeat (one declaration, many commands, each of which must still apply it),
 // so the embeds arrive with the tests that would catch it.
@@ -29,7 +30,7 @@ func TestTopLevelCommandsAreTheDocumentedSet(t *testing.T) {
 	t.Parallel()
 
 	want := map[string]bool{
-		"Run": true, "Watch": true, "Test": true, "Validate": true,
+		"Run": true, "Test": true, "Validate": true,
 		"Runs": true, "Plan": true, "MCP": true,
 		"Jobs": true, "Approvals": true, "Questions": true,
 		"Web": true, "Docs": true,
@@ -96,7 +97,6 @@ func TestWorkerFlagAppliesWhereverItIsDeclared(t *testing.T) {
 
 	for _, args := range [][]string{
 		{"run", path, "--job", "build"},
-		{"watch", path, "--once"},
 		{"test", path},
 		// Port 1 is unbindable as an ordinary user, so a regression here
 		// fails in a second rather than serving until the test binary's own
@@ -128,7 +128,6 @@ func TestVarsFileAppliesWhereverItIsDeclared(t *testing.T) {
 
 	for _, args := range [][]string{
 		{"run", path, "--job", "build"},
-		{"watch", path, "--once"},
 		{"test", path},
 		{"validate", path},
 		{"validate", path, "--live", "--job", "build"},
@@ -249,7 +248,7 @@ func TestJobsResumeClearsTheBreaker(t *testing.T) {
 	}
 }
 
-// pauseJob leaves a job in the state `steps watch`'s circuit breaker would
+// pauseJob leaves a job in the state the trigger circuit breaker would
 // have left it in: enough consecutive failures to trip the limit.
 func pauseJob(t *testing.T, path, job string) {
 	t.Helper()

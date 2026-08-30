@@ -82,9 +82,9 @@ func TestWatchRefusesToStartOnAnUnsatisfiableCheck(t *testing.T) {
 
 	defer func() { _ = provider.Close() }()
 
-	err = Watch(context.Background(), cfg, provider, st, nil, time.Minute, 1, false, "")
+	err = Poll(context.Background(), cfg, st, time.Minute)
 	if err == nil {
-		t.Fatal("Watch: want an immediate error, not a poll loop logging the same failure forever")
+		t.Fatal("Poll: want an immediate error, not a poll loop logging the same failure forever")
 	}
 
 	if !strings.Contains(err.Error(), "query") {
@@ -195,9 +195,9 @@ func TestWatchStartsDespiteATransientOutage(t *testing.T) {
 	// Watch gets past preflight and then stops on the cancelled context, so
 	// the assertion is about WHICH error comes back: anything but the
 	// preflight refusal means the unreachable server did not stop it.
-	err = Watch(ctx, cfg, provider, st, nil, time.Minute, 1, false, "")
+	err = Poll(ctx, cfg, st, time.Minute)
 	if err != nil && strings.Contains(err.Error(), "preflight") {
-		t.Fatalf("Watch: %v; a transient outage must not stop the watcher starting", err)
+		t.Fatalf("Poll: %v; a transient outage must not stop the watcher starting", err)
 	}
 }
 
@@ -268,16 +268,16 @@ func TestWatchPreflightsAgentMCPServers(t *testing.T) {
 
 	defer func() { _ = provider.Close() }()
 
-	// Bounded, because the failure mode of a regression here is Watch
-	// STARTING — and a started watcher polls until the package's 10-minute
+	// Bounded, because the failure mode of a regression here is the poll loop
+	// STARTING — and a started poller polls until the package's 10-minute
 	// timeout, which reports a hang rather than the assertion that actually
 	// failed. With a deadline it comes back in seconds and says so.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	err = Watch(ctx, cfg, provider, st, nil, time.Minute, 1, false, "")
+	err = Poll(ctx, cfg, st, time.Minute)
 	if err == nil {
-		t.Fatal("Watch: started despite an agent MCP grant naming a tool the server does not expose")
+		t.Fatal("Poll: started despite an agent MCP grant naming a tool the server does not expose")
 	}
 
 	if !strings.Contains(err.Error(), "no_such_tool") {

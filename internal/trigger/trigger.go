@@ -18,7 +18,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -28,13 +27,9 @@ import (
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
-// workerIdleBackoff is how long an idle worker waits before checking the
-// queue again, so an empty queue doesn't busy-spin between poll ticks.
-const workerIdleBackoff = 500 * time.Millisecond
-
 // ErrNoTriggers reports a pipeline with no trigger: true get step: there is
 // nothing for a poll loop to check. Exported because whether that is fatal
-// depends on what the process is FOR — `steps watch` exists to poll and
+// depends on what the process is FOR — `steps web` exists to poll and
 // refuses to start, while `steps web` exists to serve and carries on.
 var ErrNoTriggers = errors.New("no get step in any job sets trigger: true; nothing for watch to poll")
 
@@ -143,16 +138,16 @@ func prepareWatch(ctx context.Context, cfg *config.Config, st *store.Store, inte
 // WatchOnce polls every trigger resource exactly once, runs whatever that
 // enqueues until the queue is empty, and returns.
 //
-// The same work Watch does on its first tick, without the loop: one poll,
-// then drain. It exists so steps can be driven by something that already
+// One poll, then drain — the cycle `steps web` repeats on an interval, done
+// exactly once. It exists so steps can be driven by something that already
 // owns the schedule — cron, a systemd timer, a CI step — instead of running
 // as a daemon, and so the behavior of a whole poll-to-build cycle can be
 // tested through the CLI rather than only from inside this package.
 //
-// Deliberately serial and listener-free. maxConcurrent exists to keep a long
+// Deliberately serial and listener-free. Concurrency exists to keep a long
 // watch responsive while a slow build runs, which a one-shot has no need of,
-// and a webhook listener with nothing to serve it would be a port opened for
-// the duration of one poll.
+// and a webhook route with nothing serving it would be an endpoint published
+// for the duration of one poll.
 func WatchOnce(
 	ctx context.Context,
 	cfg *config.Config,
@@ -190,71 +185,18 @@ func WatchOnce(
 	return nil
 }
 
-// Watch polls every trigger: true resource on an interval and runs the jobs a
-// version change affects, until ctx is canceled. See WatchOnce for the
-// single-cycle form.
-func Watch(
-	ctx context.Context,
-	cfg *config.Config,
-	provider workspace.Provider,
-	st *store.Store,
-	pinned map[string]string,
-	interval time.Duration,
-	maxConcurrent int,
-	force bool,
-	listenAddr string,
-) error {
-	if maxConcurrent < 1 {
-		maxConcurrent = 1
-	}
-
-	err := prepareWatch(ctx, cfg, st, interval)
-	if err != nil {
-		return err
-	}
-
-	var wg sync.WaitGroup
-
-	// The webhook listener runs alongside the poll loop, never instead of it:
-	// a missed delivery must not mean a change is never noticed.
-	if listenAddr != "" {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
-			serveErr := serveWebhooks(ctx, cfg, st, listenAddr)
-			if serveErr != nil {
-				slog.Error("webhook.stopped", "error", serveErr)
-			}
-		}()
-	}
-
-	for range maxConcurrent {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
-			runWorker(ctx, cfg, provider, st, pinned, force)
-		}()
-	}
-
-	runPoller(ctx, cfg, st, interval)
-
-	wg.Wait()
-
-	return nil
-}
-
-// Poll is Watch's producer half: it validates and preflights the pipeline,
+// Poll is the producer half of a watching process: it validates and
+// preflights the pipeline,
 // then checks every trigger: true resource on an interval and enqueues the
 // jobs a version change affects, until ctx is canceled. It never drains the
 // queue.
 //
-// That split exists for `steps web`, which drains the same queue through its
-// own in-process runner — a second set of workers here would claim rows out
-// from under it, and the two would report each other's runs.
+// The split exists because `steps web` drains the same queue through its own
+// in-process runner: a second set of workers here would claim rows out from
+// under it, and the two would report each other's runs. It was once paired
+// with a Watch that did both halves in this package; there is one daemon now,
+// so only the producer half remains here, and WatchOnce is the one-shot that
+// still owns both.
 //
 // Two things stay the caller's, because the answer differs by front end:
 //
@@ -380,31 +322,6 @@ func pollAndLog(ctx context.Context, cfg *config.Config, st *store.Store) {
 
 	for _, name := range enqueued {
 		printf("trigger: enqueued %s\n", name)
-	}
-}
-
-// runWorker repeatedly drains the queue until ctx is canceled, backing off
-// briefly whenever the queue is empty.
-func runWorker(ctx context.Context, cfg *config.Config, provider workspace.Provider, st *store.Store, pinned map[string]string, force bool) {
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-
-		ran, err := drainOne(ctx, cfg, provider, st, pinned, force)
-		if err != nil {
-			slog.Error("trigger.run", "error", err)
-		}
-
-		if ran {
-			continue
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(workerIdleBackoff):
-		}
 	}
 }
 

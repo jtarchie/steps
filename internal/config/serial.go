@@ -96,7 +96,7 @@ func checkJobMaxInFlight(job Job) error {
 // claim — free to default to 1, which is the conservative answer, instead of
 // being indistinguishable from "unlimited".
 //
-// Unlimited is bounded in practice anyway: `steps watch --max-concurrent`
+// Unlimited is bounded in practice anyway: `steps web --max-concurrent`
 // caps how many builds run at once across the whole pipeline.
 const UnlimitedInFlight = 1_000_000
 

@@ -67,7 +67,7 @@ func Preflight(ctx context.Context, cfg *config.Config, job *config.Job) []confi
 // PreflightPipeline probes everything remote a watcher will eventually depend
 // on — the models and MCP servers behind EVERY job's agents, and the
 // mcp-backed resource types behind the named trigger resources — the question
-// `steps watch` must answer before its first poll, where there is no single
+// `steps web` must answer before its first poll, where there is no single
 // job to preflight.
 //
 // Both halves, not just the resources, because a watcher's whole shape is
@@ -126,7 +126,7 @@ func watchedAgents(cfg *config.Config) []string {
 //
 // The failure it exists for is a plan like plan -> code -> check -> review ->
 // publish discovering, half an hour and real money in, that a model was never
-// going to answer. Under `steps watch` it is worse: nobody is watching, and a
+// going to answer. Under `steps web` it is worse: nobody is watching, and a
 // job re-triggers against a dead model indefinitely.
 //
 // A job with no agent steps checks nothing and costs nothing.

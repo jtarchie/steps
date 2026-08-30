@@ -10,7 +10,7 @@ steps is a Go CLI first: the terminal is where pipelines are authored, run, and 
 
 ## Users
 
-Engineers evaluating or adopting steps as an open-source pipeline runner — people who already think in Concourse-style `get`/`task`/`put` pipelines (or want to) and want an LLM agent invocation to be a first-class step type, not a bolt-on script. They author YAML pipelines, run them locally via `steps run`/`steps test`, and use `steps watch` for downstream-trigger automation.
+Engineers evaluating or adopting steps as an open-source pipeline runner — people who already think in Concourse-style `get`/`task`/`put` pipelines (or want to) and want an LLM agent invocation to be a first-class step type, not a bolt-on script. They author YAML pipelines, run them locally via `steps run`/`steps test`, and use `steps web` for downstream-trigger automation.
 
 ## Product Purpose
 
@@ -22,7 +22,7 @@ Unlike Concourse or GitHub Actions (no agent-native step type) and unlike LangCh
 
 ## Operating Context
 
-Primarily terminal: `steps run|watch|test|mcp`, plus `steps web` for a local browser view of the same state. Pipelines are authored as YAML; resources are fetched via shell commands or MCP; tasks run on the host shell or in Docker; agent steps call LLM providers (OpenAI-compatible APIs, OpenRouter, local models) with tool-calling. State persists in SQLite (WAL mode). Typical workflows: authoring pipeline YAML, running/testing pipelines locally, running `steps watch` for downstream triggers, resource steps backed by `gh`/git, and optionally MCP servers with OAuth.
+Primarily terminal: `steps run|web|test|mcp`, plus `steps web` for a local browser view of the same state. Pipelines are authored as YAML; resources are fetched via shell commands or MCP; tasks run on the host shell or in Docker; agent steps call LLM providers (OpenAI-compatible APIs, OpenRouter, local models) with tool-calling. State persists in SQLite (WAL mode). Typical workflows: authoring pipeline YAML, running/testing pipelines locally, running `steps web` for downstream triggers, resource steps backed by `gh`/git, and optionally MCP servers with OAuth.
 
 ## Capabilities and Constraints
 

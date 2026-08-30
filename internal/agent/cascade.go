@@ -219,7 +219,7 @@ func (p probeFact) recovered() bool { return p.healthy && p.fresh }
 // decidePreflightPin answers the question the mid-run cascade deliberately
 // does not: is the reason for this pin still true? Until this existed there
 // was no answer at all — an outage lasting ninety seconds could move a
-// `steps watch` agent onto a possibly-worse model for days, and silently,
+// `steps web` agent onto a possibly-worse model for days, and silently,
 // since agent.failover fires once at the swap and nothing afterwards says the
 // agent is still there.
 //

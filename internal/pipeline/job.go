@@ -213,7 +213,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 // wall-clock ceiling.
 //
 // The session is scoped to this invocation so concurrent jobs under
-// `steps watch --max-concurrent` never share a provider pin; non-OpenRouter
+// `steps web --max-concurrent` never share a provider pin; non-OpenRouter
 // providers ignore it outright. --force has to reach the runners that keep
 // their own cache rather than consulting the chain index (across: cells).
 // A load_var: value says nothing about the next run, so it is scoped here too.
@@ -236,7 +236,7 @@ func withRunContext(ctx context.Context, job *config.Job, skipCache bool) contex
 // image was pulled inside the 30s probe timeout instead of here.
 //
 // Present images are a local inspect, so a warm run — including every
-// subsequent job under `steps watch` — costs nothing.
+// subsequent job under `steps web` — costs nothing.
 func prepareImages(ctx context.Context, cfg *config.Config, jobName string) error {
 	// A PLACED containerized step needs nothing of this machine at all now.
 	// It used to need the docker BINARY, because the container was started by

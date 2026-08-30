@@ -365,7 +365,7 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, ext
 // plan-time hashing and run-time execution stay in lockstep.
 //
 // supplied lets a caller hand over versions it has already resolved, in which
-// case the check is not run at all. `steps watch` does this: its poll asked
+// case the check is not run at all. `steps web` does this: its poll asked
 // the resource what was new — precisely, using the cursor — and asking again
 // here would answer a different question (see WithResolvedVersions).
 //

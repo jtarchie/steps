@@ -67,7 +67,7 @@ const runIDChars = 16
 // NewRunID mints an identifier for a run.
 //
 // Random rather than sequential so two runs of the same job — including
-// concurrent ones under `steps watch` — do not have to coordinate to differ.
+// concurrent ones under `steps web` — do not have to coordinate to differ.
 // A collision is not prevented here and is not claimed to be: it is refused
 // by StartRun, which inserts rather than upserts precisely so that an
 // improbable event is an error instead of a silent takeover.

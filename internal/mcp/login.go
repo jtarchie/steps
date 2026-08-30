@@ -96,7 +96,7 @@ func checkUnattended(srv config.MCPServer, tok *oauth2.Token) error {
 
 	return fmt.Errorf(
 		"mcp server %q: authorized, and the token was saved — but the authorization server issued no refresh token, "+
-			"so this credential stops working at %s and `steps run`/`steps watch` will fail from then on with no way to renew it. "+
+			"so this credential stops working at %s and `steps run`/`steps web` will fail from then on with no way to renew it. "+
 			"If the server supports dynamic client registration it was asked for the refresh_token grant and declined; "+
 			"otherwise register an application that grants refresh tokens and set auth.client_id",
 		srv.Name, tok.Expiry.Format(time.RFC3339))

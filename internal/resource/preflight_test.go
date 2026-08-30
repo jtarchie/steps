@@ -75,7 +75,7 @@ func TestPreflightNamesAToolTheServerDoesNotHave(t *testing.T) {
 }
 
 // TestPreflightCatchesAnUnsatisfiableCheck is the failure that motivated all
-// of this: a `steps watch` whose check tool requires an argument the resource
+// of this: a `steps web` whose check tool requires an argument the resource
 // never sends polls forever, logging the same error, enqueueing nothing.
 func TestPreflightCatchesAnUnsatisfiableCheck(t *testing.T) {
 	t.Parallel()
@@ -232,7 +232,7 @@ func TestPreflightJudgesOnlyThePreflightedJobsPuts(t *testing.T) {
 		t.Fatalf("problems = %+v, want the one `report` actually causes", problems)
 	}
 
-	// A nil job is the `steps watch` scope: it will run every job, so every
+	// A nil job is the `steps web` scope: it will run every job, so every
 	// put in the pipeline is fair game.
 	problems = Preflight(context.Background(), cfg, nil, []string{"eng-bugs"}, nil)
 	if len(problems) != 1 {

@@ -48,7 +48,7 @@ type Job struct {
 	// a group never run at the same time, which is what stops two different
 	// deploy jobs mutating one target concurrently.
 	SerialGroups []string `yaml:"serial_groups,omitempty"`
-	// MaxConsecutiveFailures pauses this job under `steps watch` once it has
+	// MaxConsecutiveFailures pauses this job under `steps web` once it has
 	// failed this many triggered RUNS in a row, until someone resumes it.
 	//
 	// It counts runs, not the attempts: retries inside one — conflating them
@@ -57,19 +57,19 @@ type Job struct {
 	// breaker.
 	MaxConsecutiveFailures int `yaml:"max_consecutive_failures,omitempty"`
 	// MaxInFlight caps how many builds of this job run at once under
-	// `steps watch`. Mirrors Concourse's job-level max_in_flight
+	// `steps web`. Mirrors Concourse's job-level max_in_flight
 	// (concourse-ci.org/docs/jobs/), including that serial:/serial_groups:
 	// take precedence by forcing the effective value to 1.
 	//
 	// 0/unset is unlimited, as in Concourse — bounded in practice by
-	// `steps watch --max-concurrent`, which is the worker pool this runner
+	// `steps web --max-concurrent`, which is the worker pool this runner
 	// has instead of Concourse's workers.
 	//
 	// The same word appears on an across: step meaning cell concurrency.
 	// That is Concourse's own overload, not one invented here, and the two
 	// live on different things: a job field and a step field.
 	MaxInFlight int `yaml:"max_in_flight,omitempty"`
-	// Interruptible decides what a `steps watch` SHUTDOWN does to a build of
+	// Interruptible decides what a `steps web` SHUTDOWN does to a build of
 	// this job that is already running. Mirrors Concourse's interruptible:
 	// (concourse-ci.org/docs/jobs/), including its default of false.
 	//
@@ -80,7 +80,7 @@ type Job struct {
 	//   true             the build is cancelled with everything else, which
 	//                    is what every job did before this field existed.
 	//
-	// Scoped to `steps watch` deliberately. `steps run` is a person at a
+	// Scoped to `steps web` deliberately. `steps run` is a person at a
 	// terminal, and ctrl-C there must always mean now — a foreground run that
 	// ignored an interrupt for ten minutes would be a worse bug than the one
 	// this prevents. See internal/trigger's drainOne.

@@ -76,7 +76,7 @@ A `command:` server is a local subprocess `steps` spawns and speaks newline-deli
   A relative `cwd:` is rejected at load time for a server backing a **resource type's** `mcp:` config: a `check`/`in`/`out` has no agent step to resolve against. Those need an absolute `cwd:`.
 - **Auth is `none` only.** A stdio server has no HTTP request to attach a bearer token to; `auth:` set to anything else alongside `command:` is a load-time error, and `steps mcp login` never applies.
 - **Environment is filtered, not inherited.** The subprocess sees only the same host-command allowlist every other host-executed command gets (`PATH`, `HOME`, locale, `TMPDIR`/`USER`/`SHELL`, proxy vars) — **not** the operator's full environment, and specifically not any configured agent's `api_key_env` secret, nor `SSH_AUTH_SOCK`. There is currently no pass-through mechanism for stdio servers, so **a stdio server that needs a credential or any other ambient variable (e.g. `GOFLAGS`, `GOPRIVATE`) is not supported yet**.
-- **Lifecycle**: for an agent tool grant, one subprocess is spawned per agent step per grant and reaped when the step ends. For a resource-type `mcp:` backend, a fresh subprocess is spawned **per** `check`/`in`/`out` call — including every `steps watch` poll — fine for a fast-starting binary, a poor fit for one that's slow to start.
+- **Lifecycle**: for an agent tool grant, one subprocess is spawned per agent step per grant and reaped when the step ends. For a resource-type `mcp:` backend, a fresh subprocess is spawned **per** `check`/`in`/`out` call — including every `steps web` poll — fine for a fast-starting binary, a poor fit for one that's slow to start.
 - **Diagnostics**: the subprocess's stderr is logged at debug level (`--log-level=debug`), under `mcp.stdio.stderr` with the server's name attached — the only way to see why a stdio server failed to start.
 
 ## Taking inventory: `steps mcp list`
@@ -340,7 +340,7 @@ The rule of thumb: **a tool whose output a model was meant to read is an agent's
 
 ### Preflight checks this before anything runs
 
-Both ways an MCP call is wrong — a tool the server doesn't expose, and required arguments the call will never send — are answerable from the server's published tool list, without calling anything. So they are: `steps run` checks the resources its job touches before the first step, `steps validate --live` asks the same question on demand, and **`steps watch` checks every `trigger:` resource before its first poll and exits if one can't work**. That last one is the point: a poll loop's reaction to a permanent misconfiguration is to log it and try again on the next interval, forever, with nothing enqueued and nothing red.
+Both ways an MCP call is wrong — a tool the server doesn't expose, and required arguments the call will never send — are answerable from the server's published tool list, without calling anything. So they are: `steps run` checks the resources its job touches before the first step, `steps validate --live` asks the same question on demand, and **`steps web` checks every `trigger:` resource before its first poll and exits if one can't work**. That last one is the point: a poll loop's reaction to a permanent misconfiguration is to log it and try again on the next interval, forever, with nothing enqueued and nothing red.
 
 ```
 watch: preflight failed, nothing was polled:
@@ -423,14 +423,14 @@ This runs the OAuth 2.1 authorization-code + PKCE flow: discovers the server's m
 - **A slightly malformed `WWW-Authenticate` challenge is tolerated.** Some servers separate the challenge's parameters with spaces where the HTTP spec wants commas (Metabase's MCP endpoint does). The header still says exactly one thing, so steps normalizes it and continues rather than failing the login over punctuation.
 - **An unadvertised `iss` is tolerated, a wrong one is not.** RFC 9207 has the authorization server return its own identifier on the redirect, and servers are supposed to declare that in their metadata. Some return it without declaring it (Metabase again). steps checks the value against the issuer it discovered: matching is fine and the login proceeds; an `iss` naming a *different* issuer is the mix-up attack the parameter exists to catch, and fails the login by name.
 - **Per-user, not per-pipeline**: the token lands in `${XDG_CONFIG_HOME:-~/.config}/steps/mcp/<server-name>.json` (`0600`) — deliberately outside any pipeline's `.steps/`. Logging in once authorizes that server for **every** pipeline referencing it by the same name.
-- **Silent refresh, no re-prompting**: `steps run`/`steps watch` never run an interactive flow — they load the persisted token and refresh it silently. If it can't be refreshed, the error names the exact `steps mcp login` command to run.
+- **Silent refresh, no re-prompting**: `steps run`/`steps web` never run an interactive flow — they load the persisted token and refresh it silently. If it can't be refreshed, the error names the exact `steps mcp login` command to run.
 - **The refresh grant is registered, not assumed.** Dynamic registration declares `grant_types: [authorization_code, refresh_token]`, because RFC 7591 defaults an omitted `grant_types` to `authorization_code` *alone* — and a conforming server then issues an access token with no refresh token beside it, exactly as asked. That looks like a successful login and dies at the first expiry, unattended.
 - **A login that can't be renewed is a failed login.** If the authorization server returns no refresh token for a token that *does* expire, `steps mcp login` saves it (it works right now) and exits non-zero saying when it stops working:
 
   ```
   steps: error: mcp login: mcp server "metabase": authorized, and the token was saved —
     but the authorization server issued no refresh token, so this credential stops working
-    at 2026-08-13T22:44:05-06:00 and `steps run`/`steps watch` will fail from then on with
+    at 2026-08-13T22:44:05-06:00 and `steps run`/`steps web` will fail from then on with
     no way to renew it.
   ```
 

@@ -53,7 +53,7 @@ type sessionClient struct {
 // through, and a step only carries a deadline if the pipeline author wrote
 // `timeout:` — which trigger polling has no way to set at all. A server that
 // accepts a connection and then never answers `initialize`, or a subprocess
-// that spawns and says nothing, therefore blocked a `steps watch` poll loop
+// that spawns and says nothing, therefore blocked a `steps web` poll loop
 // for as long as the process lived, with the resource simply never checked
 // again. Preflight passing at startup says nothing about an hour later.
 //

@@ -78,7 +78,7 @@ func TestPreflightCLIBinaryPresent(t *testing.T) {
 
 	// A present binary is all a CLI probe asks. It deliberately does NOT
 	// spawn the process: that would put a launch in the path of every
-	// `steps watch` poll, and a CLI that is installed but broken produces a
+	// `steps web` poll, and a CLI that is installed but broken produces a
 	// better error at the step than a probe could synthesize.
 	if problems := Preflight(t.Context(), cfg, []string{"reviewer"}, &config.Preflight{}); len(problems) != 0 {
 		t.Errorf("problems = %+v, want none", problems)

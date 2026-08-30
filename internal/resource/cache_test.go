@@ -107,7 +107,7 @@ func TestCacheNilAlwaysMisses(t *testing.T) {
 // TestCacheWithResolvedVersionsSkipsTheCheck covers the seam that lets a
 // caller hand over versions it already resolved.
 //
-// The check must not run at all: this exists because `steps watch` has
+// The check must not run at all: this exists because `steps web` has
 // already asked, and asking again does not merely cost a round trip — a
 // cursor-driven check answers a DIFFERENT question the second time, which is
 // how a triggered job came to process its whole window instead of the items

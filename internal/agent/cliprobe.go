@@ -22,7 +22,7 @@ import (
 // real request because an endpoint can be reachable and still reject the
 // model or the key; a host CLI has no equivalent failure that a cheap check
 // would catch, and spawning one to find out would put a process launch in the
-// path of every `steps watch` poll. A CLI that is installed but broken fails
+// path of every `steps web` poll. A CLI that is installed but broken fails
 // at the step, with the CLI's own error, which is a better message than a
 // probe would synthesize.
 //

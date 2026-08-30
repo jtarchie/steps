@@ -469,7 +469,7 @@ func TestOpenRouterSessionScope(t *testing.T) {
 	t.Run("the same agent in two runs sends different sessions", func(t *testing.T) {
 		t.Parallel()
 
-		// Concurrent jobs under `steps watch --max-concurrent` must not share
+		// Concurrent jobs under `steps web --max-concurrent` must not share
 		// a provider pin.
 		_, base, captured := serveCapturing(t)
 		url := base + "/api/v1/chat/completions"

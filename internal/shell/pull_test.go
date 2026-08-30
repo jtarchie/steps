@@ -16,7 +16,7 @@ import (
 )
 
 // TestPrepareImagesAnnouncesOnlyTheMissingOne is the property that keeps this
-// cheap enough to run before every job, including every job `steps watch`
+// cheap enough to run before every job, including every job `steps web`
 // fires: an image already on the daemon costs one local lookup and no network.
 //
 // Asserted through the announcement, because that is the only externally

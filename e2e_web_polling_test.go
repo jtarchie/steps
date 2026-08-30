@@ -1,6 +1,6 @@
 package main
 
-// `steps web` as a watcher, end to end through the CLI.
+// `steps web` as the daemon, end to end through the CLI.
 //
 // The UI's own pages are covered by e2e_web_test.go; this file is about the
 // half that has nothing to do with HTML — whether the served process CHECKS
@@ -19,8 +19,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/jtarchie/steps/internal/store"
 )
 
 // webProcess is a backgrounded `steps web` and the address it serves on.
@@ -169,33 +167,6 @@ func TestWebPollsTriggerResourcesByDefault(t *testing.T) {
 	waitForDid(t, fixture, "1", "2")
 }
 
-// TestWebNoWatchLeavesPollingToWatch: --no-watch means this process does not
-// poll, so a `steps watch` beside it is the only thing noticing new versions.
-func TestWebNoWatchLeavesPollingToWatch(t *testing.T) {
-	fixture := newWatchFixture(t, cursorFeed)
-	fixture.items(t, 1)
-
-	served := startWeb(t, []string{fixture.pipeline}, "--no-watch", "--interval", "200ms")
-	defer served.stop(t)
-
-	fixture.items(t, 2)
-	assertNothingProcessed(t, fixture)
-}
-
-// assertNothingProcessed is the one time-bounded assertion here: proving a
-// poll did NOT happen has no event to wait for. The window is many multiples
-// of the 200ms interval every caller passes, so a poller that ran at all had
-// several chances to be caught.
-func assertNothingProcessed(t *testing.T, fixture *watchFixture) {
-	t.Helper()
-
-	time.Sleep(2 * time.Second)
-
-	if did := fixture.did(t); len(did) != 0 {
-		t.Errorf("job processed %v, want nothing — this process was not supposed to poll", did)
-	}
-}
-
 // newWatchFixtureIn writes a fixture into a directory that may already hold
 // another one, which is how pipelines actually sit next to each other —
 // `steps web app.yml infra.yml nightly.yml` is one repo folder, not three.
@@ -267,57 +238,10 @@ func TestWebPollsEveryPipelineItServes(t *testing.T) {
 	waitForDid(t, second, "1", "2")
 }
 
-// TestWebLeavesAForeignWatchersClaimedJobAlone: the recovery that re-queues
-// stranded work treats every running row as an abandoned leftover, which is
-// only true when no other watcher is alive. Serving alongside `steps watch`
-// is the pairing --no-watch exists for, so the drainer must not reach into
-// that watcher's in-flight job and run it a second time.
-func TestWebLeavesAForeignWatchersClaimedJobAlone(t *testing.T) {
-	fixture := newWatchFixture(t, cursorFeed)
-	fixture.items(t, 1)
-
-	st, err := store.OpenStore(statePath(fixture.pipeline, ""), pipelineName(fixture.pipeline))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer func() { _ = st.Close() }()
-
-	// Pose as the `steps watch` that is already running, by holding a job in
-	// flight. Nothing but --no-watch now keeps the served process off it: the
-	// single-watcher lock this test used to take is gone, so the flag IS the
-	// statement that some other process owns the queue.
-	err = st.EnqueueJob(t.Context(), "build", "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, _, claimed, err := st.ClaimNextJob(t.Context())
-	if err != nil || !claimed {
-		t.Fatalf("could not put a job in flight: claimed=%v err=%v", claimed, err)
-	}
-
-	served := startWeb(t, []string{fixture.pipeline}, "--no-watch")
-	defer served.stop(t)
-
-	assertNothingProcessed(t, fixture)
-
-	// Still in flight, and still the other watcher's: a reset would have made
-	// it claimable here (or run it, which the line above already rules out).
-	_, _, claimable, err := st.ClaimNextJob(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if claimable {
-		t.Error("the running job was re-queued: web recovered a row belonging to a live watcher")
-	}
-}
-
-// TestWebRejectsANonPositiveInterval: `steps watch` refuses one loudly, and a
-// flag that means "poll never" while the process reports itself as serving
-// normally is the same mistake with no error attached. --no-watch is the
-// spelling for not polling.
+// TestWebRejectsANonPositiveInterval: a value that means "poll never" while
+// the process reports itself as serving normally is a daemon that looks alive
+// and notices nothing — the exact confusion this command polls by default to
+// remove.
 func TestWebRejectsANonPositiveInterval(t *testing.T) {
 	fixture := newWatchFixture(t, cursorFeed)
 

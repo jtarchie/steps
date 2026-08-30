@@ -71,7 +71,7 @@ jobs:
 | `in` | `source`, `version`, `params` | an object of relative path → file contents |
 | `out` | `source`, `params`, and `file()` | the version it published, or `nil` |
 
-`check`'s `version` is the [check cursor](resources.md#the-check-cursor): the last version `steps watch` recorded, so a poll can ask for what it has not seen. It is an **empty map** on the first-ever poll — and under `steps run`/`steps test`, which never receive a cursor — which is what makes `version.ts ?? "0"` both the natural spelling and the correct one rather than an incantation.
+`check`'s `version` is the [check cursor](resources.md#the-check-cursor): the last version `steps web` recorded, so a poll can ask for what it has not seen. It is an **empty map** on the first-ever poll — and under `steps run`/`steps test`, which never receive a cursor — which is what makes `version.ts ?? "0"` both the natural spelling and the correct one rather than an incantation.
 
 `in` returns a file map rather than getting a `write()` builtin. That keeps an expression pure — no side effects, so its result is a function of its inputs, which is what the artifact cache is already built on. Paths must be relative and stay inside the artifact directory. Omit `in` entirely and steps writes `version.json` alone, which is all a type that merely detects change needs.
 

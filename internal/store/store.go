@@ -69,7 +69,7 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 	// rather than honoring busy_timeout, because waiting there could
 	// deadlock two transactions against each other. Taking the write lock up
 	// front turns that into an ordinary wait. Within one process this cannot
-	// arise (SetMaxOpenConns(1) below), but `steps watch` and `steps web`
+	// arise (SetMaxOpenConns(1) below), but `steps web` and `steps web`
 	// against one state.db are two processes, and both enqueue.
 	//
 	// Every transaction in this package is a writer, so there is no
@@ -90,7 +90,7 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 	//     by bounding a footprint. incremental rather than full: full vacuums on
 	//     every commit, paying for compaction in the middle of a build.
 	//   - journal_size_limit caps the write-ahead log, which is otherwise
-	//     truncated only at a checkpoint no long-lived `steps watch` ever
+	//     truncated only at a checkpoint no long-lived `steps web` ever
 	//     reaches on its own. An unbounded WAL is a second copy of the database
 	//     growing beside it.
 	//
@@ -144,7 +144,7 @@ func openDB(path string) (*sql.DB, error) {
 
 	// SQLite only ever allows one writer at a time regardless of pool size, so
 	// a bigger pool adds contention for no write throughput. It also serializes
-	// `steps watch --max-concurrent`'s worker goroutines onto one connection.
+	// `steps web --max-concurrent`'s worker goroutines onto one connection.
 	// (Revisit if reads become hot: WAL permits a separate read pool.)
 	db.SetMaxOpenConns(1)
 

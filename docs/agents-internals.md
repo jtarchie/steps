@@ -169,11 +169,11 @@ Session files are deleted afterwards by globbing `~/.claude/projects/*/<session>
 
 `AgentContentMap` folds in a `cli` key, value-gated so every pre-existing hosted agent hashes byte-identically and no cache entry was invalidated by this shipping. Moving an agent between a CLI and a hosted provider does change its hash, which is correct — it is a different thing producing the output.
 
-The CLI's own **version is deliberately not hashed**. It drifts under the operator exactly the way a hosted model's weights do, and this package has never claimed to hash the thing on the other end of the wire, only which thing was asked for. Folding in `claude --version` would also put a process spawn in the planning path, which `steps plan` and `steps watch` run constantly.
+The CLI's own **version is deliberately not hashed**. It drifts under the operator exactly the way a hosted model's weights do, and this package has never claimed to hash the thing on the other end of the wire, only which thing was asked for. Folding in `claude --version` would also put a process spawn in the planning path, which `steps plan` and `steps web` run constantly.
 
 ### Preflight
 
-A CLI target's probe is `exec.LookPath`, nothing more. The HTTP probe sends a real request because an endpoint can be reachable and still reject the model or the key; a CLI has no equivalent cheap failure, and spawning one to find out would put a process launch in every `steps watch` poll. A CLI that is installed but broken fails at the step with the CLI's own error, which beats anything a probe would synthesize.
+A CLI target's probe is `exec.LookPath`, nothing more. The HTTP probe sends a real request because an endpoint can be reachable and still reject the model or the key; a CLI has no equivalent cheap failure, and spawning one to find out would put a process launch in every `steps web` poll. A CLI that is installed but broken fails at the step with the CLI's own error, which beats anything a probe would synthesize.
 
 The probe cache is keyed `cli|<cli>|<model>` rather than `model|<baseURL>|<model>`: `""` is a perfectly ordinary `BaseURL` for a CLI source, so a shared key space would let a CLI agent collide with an endpoint-less hosted one.
 

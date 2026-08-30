@@ -690,9 +690,9 @@ jobs:
 
 	defer func() { _ = provider.Close() }()
 
-	err = Watch(context.Background(), cfg, provider, st, nil, 0, 1, false, "")
+	err = Poll(context.Background(), cfg, st, time.Minute)
 	if err == nil {
-		t.Fatal("Watch: expected an error when no get step sets trigger: true")
+		t.Fatal("Poll: expected an error when no get step sets trigger: true")
 	}
 }
 
@@ -716,9 +716,9 @@ func TestWatchRejectsNonPositiveInterval(t *testing.T) {
 
 	defer func() { _ = provider.Close() }()
 
-	err = Watch(context.Background(), cfg, provider, st, nil, 0, 1, false, "")
+	err = Poll(context.Background(), cfg, st, 0)
 	if err == nil {
-		t.Fatal("Watch: expected an error for a non-positive interval, not a ticker panic")
+		t.Fatal("Poll: expected an error for a non-positive interval, not a ticker panic")
 	}
 }
 
@@ -1106,7 +1106,7 @@ func assertTaskCounter(t *testing.T, path, want string) {
 // The counterpart is TestDrainOneLeavesCanceledJobReRunnableAfterSimulatedRestart,
 // which sets interruptible: true and asserts the opposite.
 //
-// Scoped to `steps watch`: `steps run` is a person at a terminal and ctrl-C
+// Scoped to `steps web`: `steps run` is a person at a terminal and ctrl-C
 // there is always immediate. See config.Job.Interruptible.
 func TestConformanceNonInterruptibleBuildSurvivesShutdown(t *testing.T) {
 	t.Parallel()

@@ -10,7 +10,7 @@ import (
 
 // TestSerialGroupsBlockConcurrentClaims is the hazard the feature exists for:
 // two jobs that mutate the same deploy target must never be in flight at once,
-// however many workers `steps watch --max-concurrent` is running.
+// however many workers `steps web --max-concurrent` is running.
 func TestSerialGroupsBlockConcurrentClaims(t *testing.T) {
 	t.Parallel()
 

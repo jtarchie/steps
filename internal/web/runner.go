@@ -2,7 +2,7 @@ package web
 
 // Making the UI able to act, not only report.
 //
-// A trigger from the web goes into the same durable queue `steps watch` uses,
+// A trigger from the web goes into the same durable queue `steps web` uses,
 // and is drained by the same pipeline.RunJob every other path calls. There is
 // deliberately no second execution route: a job started from a browser must
 // be the same job, with the same caching, hooks, serial groups, and recording,
@@ -28,6 +28,17 @@ const drainIdleBackoff = time.Second
 // the `steps web` command installs; a read-only server has none.
 type LocalRunner struct {
 	providers map[string]workspace.Provider
+	// pinned is --pin, the version fields every run this process starts is
+	// held to. A property of the process, not of a request: the operator
+	// pinned the daemon, and a job triggered from the browser is still that
+	// daemon running it.
+	pinned map[string]string
+	// concurrent bounds how many of one pipeline's queued jobs run at once.
+	// It was `steps web --max-concurrent`, and it is about keeping a daemon
+	// responsive while a slow build runs — serial:/max_in_flight are the
+	// pipeline's own limits and are enforced in SQL by ClaimNextJob, below
+	// whatever this allows.
+	concurrent int
 	// forced remembers which queued rows were requested with force, since the
 	// queue row itself has no such column. Keyed by queue id, consumed once.
 	//
@@ -41,9 +52,18 @@ type LocalRunner struct {
 }
 
 // NewLocalRunner builds a runner over per-pipeline workspace providers, keyed
-// by pipeline slug.
-func NewLocalRunner(providers map[string]workspace.Provider) *LocalRunner {
-	return &LocalRunner{providers: providers, forced: map[string]bool{}}
+// by pipeline slug. concurrent below 1 means one job at a time.
+func NewLocalRunner(providers map[string]workspace.Provider, pinned map[string]string, concurrent int) *LocalRunner {
+	if concurrent < 1 {
+		concurrent = 1
+	}
+
+	return &LocalRunner{
+		providers:  providers,
+		pinned:     pinned,
+		concurrent: concurrent,
+		forced:     map[string]bool{},
+	}
 }
 
 // Enqueue puts a job on the pipeline's queue.
@@ -107,9 +127,36 @@ func (r *LocalRunner) Drain(ctx context.Context, pipelines []*Pipeline) {
 	wg.Wait()
 }
 
+// drainPipeline runs one pipeline's queue with `concurrent` workers.
+//
+// Workers rather than one loop because a daemon that is mid-build stops
+// noticing everything else: the queue this drains is also where a browser
+// trigger and an approval release land, and one long agent step used to make
+// all of them wait. What it does NOT do is loosen the pipeline's own limits —
+// ClaimNextJob admits in a single statement against serial: and
+// max_in_flight, so extra workers find nothing to claim rather than running
+// what the pipeline forbade.
 func (r *LocalRunner) drainPipeline(ctx context.Context, target *Pipeline) {
-	slog.Info("web.pipeline.drain_start", "pipeline", target.Slug)
+	slog.Info("web.pipeline.drain_start", "pipeline", target.Slug, "workers", r.concurrent)
 
+	var wg sync.WaitGroup
+
+	for range r.concurrent {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			r.drainWorker(ctx, target)
+		}()
+	}
+
+	wg.Wait()
+}
+
+// drainWorker is one worker's loop: claim and run until the queue is empty,
+// then back off and try again.
+func (r *LocalRunner) drainWorker(ctx context.Context, target *Pipeline) {
 	for {
 		if ctx.Err() != nil {
 			return
@@ -128,7 +175,7 @@ func (r *LocalRunner) drainPipeline(ctx context.Context, target *Pipeline) {
 	}
 }
 
-// PrepareQueue is the startup recovery and config sync `steps watch` does,
+// PrepareQueue is the startup recovery and config sync `steps web` does,
 // mirrored here so admission decides the same way regardless of which front
 // end drains the queue. ClaimNextJob reads every input from SQL, so a table
 // this forgets to sync isn't a missing feature — it's a silently different
@@ -139,24 +186,21 @@ func (r *LocalRunner) drainPipeline(ctx context.Context, target *Pipeline) {
 // statements with no transaction around them, and an enqueue landing between
 // two of them leaves a row no later poll re-queues.
 //
-// recoverStale is the caller's answer to "does this process own the queue?" —
-// recovery reads every running row as an abandoned leftover, which is only
-// true when no other watcher is alive. Serving next to a live `steps watch`
-// and recovering anyway would flip that watcher's in-flight job back to
-// pending and run it a second time.
-//
-// It used to be answered by a file lock this process raced for; it is now
-// answered by --no-watch, which is the operator saying the polling belongs to
-// something else. See store.ResetStaleRunning for why the lock went.
-func PrepareQueue(ctx context.Context, target *Pipeline, recoverStale bool) {
-	if recoverStale {
-		err := target.Store.ResetStaleRunning(ctx)
-		if err != nil {
-			slog.Error("web.reset_stale", "pipeline", target.Slug, "error", err)
-		}
+// It recovers unconditionally, which is a statement about deployment rather
+// than a shortcut: recovery reads every `running` row as an abandoned
+// leftover, and `steps web` is the only daemon there is — so a row it finds
+// running at startup belongs to a process that is gone. Two of them against
+// one state file would each undo the other, which is the deployment mistake
+// the one-process-per-database rule names. It was once answered by a file
+// lock this process raced for, and then by --no-watch, which went with the
+// separate watcher; see store.ResetStaleRunning for why the lock went.
+func PrepareQueue(ctx context.Context, target *Pipeline) {
+	err := target.Store.ResetStaleRunning(ctx)
+	if err != nil {
+		slog.Error("web.reset_stale", "pipeline", target.Slug, "error", err)
 	}
 
-	err := target.Store.SyncSerialGroups(ctx, target.Cfg.SerialGroupsByJob())
+	err = target.Store.SyncSerialGroups(ctx, target.Cfg.SerialGroupsByJob())
 	if err != nil {
 		slog.Error("web.sync_serial_groups", "pipeline", target.Slug, "error", err)
 	}
@@ -224,5 +268,5 @@ func (r *LocalRunner) runJob(ctx context.Context, target *Pipeline, job *config.
 	}
 
 	//nolint:wrapcheck // the run error is reported to the queue row verbatim
-	return pipeline.RunJob(events.WithBus(ctx, target.Bus), target.Cfg, job, nil, provider, target.Store, force)
+	return pipeline.RunJob(events.WithBus(ctx, target.Bus), target.Cfg, job, r.pinned, provider, target.Store, force)
 }

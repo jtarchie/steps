@@ -32,7 +32,7 @@ jobs:
 - name: review
   plan:
   - get: repo                          # fetch: NOTES.txt lands in repo/
-    trigger: true                      # steps watch re-runs this on a new version
+    trigger: true                      # steps web re-runs this on a new version
   - task: prepare
     outputs: [guidelines]
     run: echo 'summaries must be one line' > guidelines/RULES.txt
@@ -64,13 +64,13 @@ What each piece is doing, with the page that explains it:
 - **`inputs:`/`outputs:`** — every step names what it reads and what it keeps; the agent cannot see anything it didn't declare. [workspace.md](workspace.md)
 - **`context_paths:`** — the guidelines arrive as a synthetic `read_file` result, no turn spent fetching them. [agents.md](agents.md#context_paths--files-delivered-as-synthetic-read_file-results)
 - **`verdicts:`** — the synthesized required verdict tool; `approve` jumps to the put, `reject` to the escalation. [control-flow.md](control-flow.md#step-transitions-tomax_visitsverdicts)
-- **`trigger:`** — under `steps watch`, a new version runs the job; under `steps run`/`steps test` it's inert. [infra.md](infra.md#downstream-triggers-trigger-true--steps-watch)
+- **`trigger:`** — under `steps web`, a new version runs the job; under `steps run`/`steps test` it's inert. [infra.md](infra.md#downstream-triggers-trigger-true--steps-web)
 
 Run it:
 
 ```bash
 steps run pipeline.yml          # one shot
-steps watch pipeline.yml        # keep running it on new versions
+steps web pipeline.yml        # keep running it on new versions
 steps web pipeline.yml          # watch the transcript in a browser
 ```
 

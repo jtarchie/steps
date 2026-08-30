@@ -13,7 +13,7 @@ import (
 // test.
 //
 // Preflight pins an agent name to whichever source answered, in a cache that
-// deliberately outlives a single run (a `steps watch` that failed over should
+// deliberately outlives a single run (a `steps web` that failed over should
 // stay failed over). Within one test binary that means the next test to
 // declare an agent of the same name silently inherits a torn-down fake
 // server's URL. Clearing on the way OUT as well as in is what makes that

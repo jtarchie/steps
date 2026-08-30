@@ -36,11 +36,11 @@ It fetches the exact commit the plan pinned, shallowly, so a branch that moves m
 
 Two more built-ins, both [expression-backed](expr.md) — Slack is a JSON HTTP API and nothing else, so there is no container and no `curl`/`jq` dependency to carry. `slack-mentions` is get-only: every unanswered `@mention` of the bot in a channel, plus every message in a 1:1 DM (no `@mention` required there — nobody types one in a 1:1 chat), oldest first, as a `{channel, ts, thread_ts}` version — `ts` is the message that named the bot, `thread_ts` the thread it lives in (the same value, for a top-level message). `slack-reply` is put-only: posts a message, threaded or top-level.
 
-Cold start does not mean a backlog: like every resource, the first-ever check of a freshly-deployed `slack-mentions` records everything it finds and answers only the newest of it — see [Version history](#version-history) below. That rule is a `steps watch` behavior; `steps run` has no persisted cursor, so every `steps run` check is a first check.
+Cold start does not mean a backlog: like every resource, the first-ever check of a freshly-deployed `slack-mentions` records everything it finds and answers only the newest of it — see [Version history](#version-history) below. That rule is a `steps web` behavior; `steps run` has no persisted cursor, so every `steps run` check is a first check.
 
 A cursorless check is also **bounded in what it asks Slack**. Finding a mention written as a reply means one `conversations.replies` call per thread, and the cursor is what normally keeps that set small — no cursor means every thread that has ever been replied to qualifies. On a workspace with more threads than the rate limit allows calls for, that check gets throttled, and a throttled check reports no version, which leaves no cursor for the next one: a watcher that can never run once. So a check with no cursor looks at the five most recently active threads and stops.
 
-Under `steps watch` that costs nothing that is ever built: everything below the newest version a first check reports is marked already-taken, and the cursor it leaves behind lifts the bound for every poll after it. Under `steps run` the bound never lifts, because no cursor is ever persisted — a mention written inside the sixth-most-recently-active thread is not delivered. Use `steps watch` for a Slack bot; `steps run` is for a one-shot answer to whatever is most recent.
+Under `steps web` that costs nothing that is ever built: everything below the newest version a first check reports is marked already-taken, and the cursor it leaves behind lifts the bound for every poll after it. Under `steps run` the bound never lifts, because no cursor is ever persisted — a mention written inside the sixth-most-recently-active thread is not delivered. Use `steps web` for a Slack bot; `steps run` is for a one-shot answer to whatever is most recent.
 
 ```yaml noexec=network
 resources:
@@ -149,7 +149,7 @@ jobs:
 
 ### `check` — what versions exist?
 
-Runs when a plan is built, and on every `steps watch` poll.
+Runs when a plan is built, and on every `steps web` poll.
 
 - **Sees**: `{{ .source }}` and `{{ .version }}` — the last version this pipeline recorded for the resource. See [the cursor](#the-check-cursor) below.
 - **Must print**: a JSON **array** of version objects to stdout, **oldest first**. A version object is a flat map of strings — `{"ref": "abc123"}`, `{"number": "87"}`. The whole object identifies the version; steps never interprets the fields.
@@ -186,7 +186,7 @@ Guess too small and items scroll past during a busy period — and while [histor
 Three things to know:
 
 - **Spell it `{{ index .version "ts" | default "0" }}`, not `{{ .version.ts }}`.** On the first-ever check there is no cursor and `.version` is an empty map; templates render with `missingkey=error`, so the bare form fails that first poll. This is the same shape an optional `source:` field or get `params:` already uses.
-- **The cursor belongs to `steps watch` alone**, which both advances it and is the only thing that reads it. A `steps run` or `steps plan` renders `{{ .version }}` as an empty map even when a watcher has been polling for weeks — a manual run asks what exists, not what is new.
+- **The cursor belongs to `steps web` alone**, which both advances it and is the only thing that reads it. A `steps run` or `steps plan` renders `{{ .version }}` as an empty map even when a watcher has been polling for weeks — a manual run asks what exists, not what is new.
 - **A check that ignores `.version` keeps working exactly as before.** The cursor narrows what a check *asks for*; it is not a filter steps applies to the answer, and it is not what decides which versions a job builds — that is [history](#version-history).
 
 ### Version history
@@ -559,7 +559,7 @@ assert:
 
 ## `trigger: true`
 
-Marks a `get` as something `steps watch` should poll. When its version changes, the jobs containing it run automatically. Valid only on `get` steps — setting it anywhere else is a load-time error.
+Marks a `get` as something `steps web` should poll. When its version changes, the jobs containing it run automatically. Valid only on `get` steps — setting it anywhere else is a load-time error.
 
 ```yaml
 resource_types:
@@ -578,7 +578,7 @@ jobs:
 - name: on-change
   plan:
   - get: clock
-    trigger: true      # steps watch polls this; a new version runs the job
+    trigger: true      # steps web polls this; a new version runs the job
   - task: react
     inputs: [clock]
     run: cat clock/tick.txt

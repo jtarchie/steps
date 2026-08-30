@@ -141,7 +141,7 @@ jobs:
 
 // TestVarsWorkOnEveryCommandThatLoadsAPipeline covers the gap that made the
 // feature unusable: --var and --vars-file existed only on `steps run`, so
-// `steps validate` in CI and `steps watch` in production both rejected the
+// `steps validate` in CI and `steps web` in production both rejected the
 // very pipelines vars were added for — an unresolved ((name)) is a load error,
 // and four of the five commands had no way to resolve one.
 func TestVarsWorkOnEveryCommandThatLoadsAPipeline(t *testing.T) {

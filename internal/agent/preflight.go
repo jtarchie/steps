@@ -47,7 +47,7 @@ import (
 // forever in a watcher — the safer direction to be wrong in.
 //
 // See config.Problem.Transient for what the two callers do with it, and why
-// `steps run` and `steps watch` want opposite reactions to the same fact.
+// `steps run` and `steps web` want opposite reactions to the same fact.
 type transientErr struct{ error }
 
 func (t transientErr) Unwrap() error { return t.error }
@@ -70,7 +70,7 @@ func isTransient(err error) bool {
 }
 
 // probeCache remembers what has already been verified in this process, so a
-// long-lived `steps watch` checks occasionally rather than on every poll. A
+// long-lived `steps web` checks occasionally rather than on every poll. A
 // process-wide cache rather than a per-run one for exactly that reason.
 //
 //nolint:gochecknoglobals // process-lifetime memo, deliberately shared across runs
@@ -529,7 +529,7 @@ type pinRecord struct {
 //
 // The pipeline half is the correction for a collision that was always latent
 // and became live traffic once a pin gained an exit condition. One process
-// serves several pipelines (`steps web app.yml infra.yml`, `steps watch` over
+// serves several pipelines (`steps web app.yml infra.yml`, `steps web` over
 // a shared state file), two of them may declare an agent called `reviewer`
 // with entirely different source: blocks, and keyed by name alone the first
 // one's outage resolved the second onto an endpoint it never declared —
@@ -561,7 +561,7 @@ func agentPinScope(cfg *config.Config, agentName string) pinScope {
 // by none of them. A release that is a feature of a check you can disable is
 // not a release: in exactly the configuration docs/agents.md recommends for a
 // cold local model — the one that also names a paid hosted fallback — a
-// ninety-second blip pinned a `steps watch` for the life of the process.
+// ninety-second blip pinned a `steps web` for the life of the process.
 //
 // So the expiry rides on the pin itself, evaluated wherever one is read, and
 // preflight stays what it always was: the cheaper, better-informed way to
@@ -580,7 +580,7 @@ func agentPinScope(cfg *config.Config, agentName string) pinScope {
 const pinLifetime = config.PinLifetime
 
 // selectedSources records which fallback an agent is running on, across runs.
-// Process-scoped like probeCache and for the same reason: a `steps watch`
+// Process-scoped like probeCache and for the same reason: a `steps web`
 // that failed over should stay failed over rather than re-failing-over on
 // every poll.
 //
@@ -688,7 +688,7 @@ func clearSource(scope pinScope) {
 //
 // The unconditional clearSource is right for the mid-run cascade, whose read
 // and write are the same step of the same conversation. It is wrong for a
-// decision that spans network probes: `steps watch --max-concurrent` and a
+// decision that spans network probes: `steps web --max-concurrent` and a
 // multi-pipeline `steps web` both run jobs as concurrent goroutines against
 // this one map, so another job's cascade can pin a source that has actually
 // SERVED while this one is still probing. Losing that write to a stale
@@ -1038,7 +1038,7 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 	// naming a tool the server does not expose passed preflight on the
 	// strength of a different grant's tool existing. Silent, and only in a
 	// process that had already probed the same server — which is every
-	// `steps watch`.
+	// `steps web`.
 	// The DEFINITION, not just the name. The cache is process-wide and
 	// pipeline-blind, and a name is not an identity: under
 	// `steps web app.yml infra.yml` two pipelines may each declare a server

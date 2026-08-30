@@ -24,7 +24,7 @@ import (
 // It exists to split one question preflight cannot answer from the error
 // text alone: would WAITING fix this? Every other way a server fails to
 // answer — DNS, a VPN not up yet, a 502 — is a fact about right now, and a
-// `steps watch` that quits over one is a watcher found dead on Monday for a
+// `steps web` that quits over one is a watcher found dead on Monday for a
 // blip that healed in a minute. These four are facts about the credential,
 // and no interval grows a refresh token. See config.Problem.Transient, which
 // is what both preflight callers set from this.
@@ -256,7 +256,7 @@ func oauthTokenSource(ctx context.Context, srv config.MCPServer) (oauth2.TokenSo
 // persistingTokenSource wraps an x/oauth2 refreshing TokenSource and writes
 // a rotated token back to disk. This is not optional: many providers rotate
 // the refresh token on every use, and without write-back the *second*
-// refresh under a long-running `steps watch` would fail with a stale
+// refresh under a long-running `steps web` would fail with a stale
 // refresh token — a silent correctness bug this wrapper exists to prevent.
 // A failed write is logged, not returned — the in-memory token is still
 // valid for this process; only a future process would be affected, and

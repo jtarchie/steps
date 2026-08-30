@@ -1,6 +1,6 @@
 package store
 
-// trigger_queue and the admission rules around it: what `steps watch` has
+// trigger_queue and the admission rules around it: what `steps web` has
 // queued, what it may claim, and the serial-group locks that hold it back.
 
 import (
@@ -134,7 +134,7 @@ func (s *Store) CompleteJob(ctx context.Context, id int64, status string, runErr
 //
 // It assumes ONE steps process is polling a pipeline at a time, and that
 // assumption is now the whole guard. A file lock used to enforce it, so that a
-// second `steps watch` (or a `steps web` that polls) would give way rather than
+// second `steps web` (or a `steps web` that polls) would give way rather than
 // treat a live build's row as an abandoned leftover — flip it, let the job be
 // claimed twice, and silently defeat serial:/max_in_flight. The lock is gone
 // deliberately: a state file belongs to one process, and the ways to run two
@@ -200,7 +200,7 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 }
 
 // ListTriggerQueue returns the most recent trigger-queue entries, newest
-// first — what `steps watch` has queued, run, or failed to run.
+// first — what `steps web` has queued, run, or failed to run.
 func (s *Store) ListTriggerQueue(ctx context.Context, limit int) ([]QueueRow, error) {
 	return collect(ctx, s.db, "trigger_queue", `
 		SELECT id, job_name, reason, status, enqueued_at, started_at, finished_at, error

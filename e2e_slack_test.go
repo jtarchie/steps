@@ -473,7 +473,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	mustRun(t, "watch", path, "--once")
+	mustRun(t, "web", path, "--once")
 
 	// One, not the backlog: a fresh watcher records what it finds and answers
 	// only the newest of it (docs/conformance.md's cold-start row).
@@ -489,7 +489,7 @@ jobs:
 
 	before := len(workspace.threadsAsked())
 
-	mustRun(t, "watch", path, "--once")
+	mustRun(t, "web", path, "--once")
 
 	// The wider discovery window is not a wider fan-out: a thread whose
 	// latest_reply is behind the cursor has nothing new in it and must cost

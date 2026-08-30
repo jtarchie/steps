@@ -6,7 +6,7 @@
 // exist and how they depend on each other, what a run did step by step, why a
 // step was skipped, what an agent actually said — and the two mutations it
 // offers (enqueue a job, decide an approval) go through the same rows
-// `steps watch` and `steps approvals approve` use. Nothing here is a parallel execution
+// `steps web` and `steps approvals approve` use. Nothing here is a parallel execution
 // path.
 //
 // The server is single-user and binds loopback by default: there is no
@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -59,6 +60,15 @@ type Pipeline struct {
 	// this bus, which is why every live view falls back to replaying the
 	// stored events rather than assuming the bus saw everything.
 	Bus *events.Bus
+	// Webhook serves POST /p/<slug>/check/<resource> for the resources this
+	// pipeline gave a webhook_token_env:, and is nil when it gave none.
+	//
+	// Built by the caller (trigger.WebhookHandler) rather than here: this
+	// package serves the surface and does not own the poll loop, the same
+	// division that keeps the runner an interface. It used to be a second
+	// listener on a second port under `steps watch --listen` (before the daemons merged); one daemon
+	// means one address.
+	Webhook http.Handler
 }
 
 // Server serves one or more pipelines.
@@ -157,6 +167,12 @@ func (s *Server) routes() error {
 	group.POST("/questions/:id", s.handleAnswerQuestion)
 	group.POST("/jobs/:job/resume", s.handleResumeBreaker)
 
+	// Not a UI route: an outside system saying "check this resource now".
+	// It authenticates with the resource's own token, which is why it is
+	// exempt from the same-origin check every browser mutation gets — a
+	// webhook sender is cross-origin by definition.
+	group.POST("/check/:resource", s.handleWebhook)
+
 	s.echo = e
 
 	return nil
@@ -222,6 +238,14 @@ func sameOriginMutations(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		method := c.Request().Method
 		if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
+			return next(c)
+		}
+
+		// A webhook is authenticated by its token and sent by a machine that
+		// has no reason to share this origin. Exempting it here rather than
+		// mounting it outside the group keeps it under /p/<slug>/, which is
+		// what says which pipeline it checks.
+		if strings.Contains(c.Path(), "/check/:resource") {
 			return next(c)
 		}
 

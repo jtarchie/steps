@@ -148,7 +148,7 @@ func TestOAuthTokenSourceRefreshesAndPersists(t *testing.T) {
 	// refresh_token the provider already invalidated.
 	assertPersistedRotatedToken(t, path, ts.URL)
 
-	// A second, independent token source (as a fresh `steps watch` process
+	// A second, independent token source (as a fresh `steps web` process
 	// would construct) must pick up the rotated refresh_token from disk, not
 	// the original stale one — proving persistence survives across
 	// "process restarts" (a fresh source here stands in for that).
@@ -247,7 +247,7 @@ func TestOAuthTokenSourceEndpointMismatch(t *testing.T) {
 // x/oauth2 answers this with "token expired and refresh token is not set",
 // which is true and names neither the server nor the fix, and only after a
 // transport has been built. It has to be ErrNeedsLogin, because that is what
-// tells `steps watch` this is not worth waiting out.
+// tells `steps web` this is not worth waiting out.
 func TestOAuthTokenSourceNeedsLoginWhenExpiredWithNoRefreshToken(t *testing.T) {
 	// Not t.Parallel(): uses t.Setenv.
 	dir := t.TempDir()

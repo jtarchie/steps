@@ -110,7 +110,7 @@ func pinConfigWithFallbacks(t *testing.T, name, primaryURL string, sources ...co
 
 // TestPreflightReturnsToARecoveredPrimary is the defect this closes. A pin is
 // process-lifetime and had no way back, so a ninety-second outage could move
-// a `steps watch` agent to a possibly-worse model for days — silently, since
+// a `steps web` agent to a possibly-worse model for days — silently, since
 // agent.failover fires once at the swap and nothing afterwards says the agent
 // is still on the fallback. Preflight was already re-probing the primary
 // every run and discarding the answer.
@@ -322,7 +322,7 @@ func offlinePinConfig(t *testing.T, name string) *config.Config {
 // reconsiderPin releases one only from inside Preflight — which `preflight:
 // false`, `defaults.preflight.disabled:` and `--no-preflight` each skip
 // entirely. A release that is a feature of a check you can turn off is not a
-// release, and a ninety-second blip pinned a `steps watch` for the life of
+// release, and a ninety-second blip pinned a `steps web` for the life of
 // the process in exactly the configuration most likely to hit it.
 func TestAPinSurvivesWithoutPreflightUntilItsLifetimeIsUp(t *testing.T) {
 	cfg := offlinePinConfig(t, "offline")
@@ -365,7 +365,7 @@ func TestAPinSurvivesWithoutPreflightUntilItsLifetimeIsUp(t *testing.T) {
 //
 // Every step that runs on a pinned fallback and reaches a conclusion re-pins
 // it — decideCascade returns pinThisSource for any source that carried a
-// conversation. If that reset the clock, a busy `steps watch` would refresh
+// conversation. If that reset the clock, a busy `steps web` would refresh
 // the pin faster than it could ever expire and the exit condition would be
 // unreachable in precisely the deployment it was written for. Using a
 // fallback says nothing whatever about the primary it replaced.

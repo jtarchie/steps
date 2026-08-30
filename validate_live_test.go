@@ -95,7 +95,7 @@ func TestPreflightPassesThroughToTheRun(t *testing.T) {
 }
 
 // TestPreflightCachesAcrossRuns pins the requirement that makes preflight
-// usable under `steps watch`: without a cache, every poll interval pays for a
+// usable under `steps web`: without a cache, every poll interval pays for a
 // probe request against every model in the pipeline.
 func TestPreflightCachesAcrossRuns(t *testing.T) {
 	pipeline.ResetPreflightCache()

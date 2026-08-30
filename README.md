@@ -67,9 +67,8 @@ See [`docs/resources.md`](docs/resources.md) for other resource types and the `c
 | `steps validate <pipeline>` | Check the file for errors without running anything. |
 | `steps plan <pipeline>` | Show which steps a run would execute and which are cached. |
 | `steps runs <pipeline>` | Show what past runs recorded (`steps`, `queue`, `cost`, `where` for the other views); with no pipeline and `--state`, every pipeline in one state file. |
-| `steps watch <pipeline>` | Poll `trigger: true` resources and run affected jobs. |
 | `steps test <pipeline>` | Run every job and check `assert:` directives. |
-| `steps web <pipeline>...` | Serve a local browser UI, and poll trigger resources while it serves ([docs](docs/web.md)). |
+| `steps web <pipeline>...` | The daemon: serve the browser UI, poll `trigger: true` resources, and run affected jobs (`--once` for cron) ([docs](docs/web.md)). |
 | `steps mcp list\|tools\|login` | List, inspect, or authorize `mcp_servers:` entries. |
 
 Exit codes: `0` success, `1` a step failed, `2` the pipeline could not be run (config or infrastructure), `130` interrupted.

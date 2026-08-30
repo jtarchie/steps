@@ -16,7 +16,7 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 | [agents.md](agents.md) | Agent steps: tools, prompts, verdicts, sub-agents, `fix:`, budgets, failover, CLI agents, ensembles | long |
 | [attempts-timeout.md](attempts-timeout.md) | `attempts:` and `timeout:`, and how they interact | short |
 | [workspace.md](workspace.md) | `inputs:`/`outputs:`, per-step isolation (always on), read-modify-write artifacts | short |
-| [infra.md](infra.md) | Containerized execution (`image:`) and cross-job triggers (`steps watch`) | medium |
+| [infra.md](infra.md) | Containerized execution (`image:`) and cross-job triggers (`steps web`) | medium |
 | [templating.md](templating.md) | `{{ }}` in resource commands and custom tools, `shellquote`, `((var))`, `load_var:` | short |
 | [mcp.md](mcp.md) | MCP servers as tool sources and as resource-type backends | medium |
 | [complete.md](complete.md) | A full pipeline putting the pieces together | short |
@@ -36,9 +36,9 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 steps run <pipeline>        run one job (--resume <id> continues a failed one,
                             --replay <id> --from <step> re-runs one step of one)
                             --worker <tag>=<url> places tags: steps on a machine
-steps watch <pipeline>      poll trigger: true resources, run affected jobs
 steps test <pipeline>       run every job and check assert: directives
-steps web <pipeline>...     serve the browser UI, polling as it serves
+steps web <pipeline>...     the daemon: serve the UI, poll trigger: true
+                            resources, run affected jobs (--once for cron)
 steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip
 steps runs <pipeline>       show what past runs recorded — job outcomes, or
@@ -98,7 +98,7 @@ agents:
   preflight: false    # opt one agent out — e.g. a local model slow to WAKE
 ```
 
-The cache is what makes this usable under `steps watch`: without it every poll interval would pay for a probe request against every model. `--no-preflight` skips it for one invocation. **What it does not do:** preflight catches "broken before we start", not "breaks halfway through" — failing over mid-run is [`fallback:`](agents.md#failover-fallback)'s territory.
+The cache is what makes this usable under `steps web`: without it every poll interval would pay for a probe request against every model. `--no-preflight` skips it for one invocation. **What it does not do:** preflight catches "broken before we start", not "breaks halfway through" — failing over mid-run is [`fallback:`](agents.md#failover-fallback)'s territory.
 
 Add `--syntax-only` to `steps validate` to check the file alone — the right flag for a pre-commit hook or a CI lint that should not need the pipeline's production credentials on hand.
 

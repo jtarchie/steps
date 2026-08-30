@@ -19,7 +19,7 @@ import (
 // have passed preflight because a DIFFERENT grant's tool existed.
 //
 // It only reproduces in a process that has already probed the server, which
-// is every `steps watch` and every second job in one — the cases preflight
+// is every `steps web` and every second job in one — the cases preflight
 // matters most in. It was found by a watch test that started cleanly and
 // then polled forever against a pipeline that could never run.
 func TestPreflightDoesNotShareOneToolsVerdictAcrossGrants(t *testing.T) {

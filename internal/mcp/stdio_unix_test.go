@@ -15,7 +15,7 @@ import (
 // child alone does not. A real stdio server is often a launcher — npx starting
 // node, gopls starting `go` — so signalling only the process steps spawned
 // leaves the work it started running, still holding the inherited stderr pipe.
-// Under `steps watch`, which reconnects on every poll, that is unbounded
+// Under `steps web`, which reconnects on every poll, that is unbounded
 // process-table growth from a pipeline that looks idle.
 //
 // Uses a shell that forks a long sleep and prints its pid, so the assertion is

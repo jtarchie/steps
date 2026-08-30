@@ -821,7 +821,7 @@ func assertSpentExactly(t *testing.T, stderr string, wantRequests int) {
 //
 // agentName is a parameter, not a constant, because the mid-run cascade pins
 // its choice of source for the life of the test binary (selectedSources,
-// preflight.go) — the same behavior a long-lived `steps watch` relies on. A
+// preflight.go) — the same behavior a long-lived `steps web` relies on. A
 // pin is scoped to (pipeline, agent) and every subtest writes its pipeline
 // into its own t.TempDir(), so the names need not differ for isolation; they
 // differ so a failure names the subtest that owns it.

@@ -15,22 +15,16 @@ package trigger
 import (
 	"context"
 	"crypto/subtle"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
 )
-
-// webhookShutdownGrace bounds how long a shutdown waits for in-flight webhook
-// requests before giving up on them.
-const webhookShutdownGrace = 5 * time.Second
 
 // webhookHandler serves POST /check/<resource>?token=… for the resources a
 // pipeline has given a webhook_token_env:.
@@ -49,8 +43,13 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := strings.TrimPrefix(r.URL.Path, "/check/")
-	if name == "" || strings.Contains(name, "/") {
+	// The last segment of .../check/<resource>. Taken from the end rather
+	// than by trimming a fixed prefix because this handler is mounted BY its
+	// server, and the web UI mounts it under the pipeline it belongs to
+	// (/p/<slug>/check/<resource>) — a pipeline-blind route would be
+	// ambiguous the moment one process serves two pipelines.
+	_, name, found := strings.Cut(r.URL.Path, "/check/")
+	if !found || name == "" || strings.Contains(name, "/") {
 		http.Error(w, "not found", http.StatusNotFound)
 
 		return
@@ -138,45 +137,20 @@ func (h *webhookHandler) checkNow(ctx context.Context, name string) ([]string, e
 	return enqueued, nil
 }
 
-// serveWebhooks runs the webhook listener until ctx is done.
+// WebhookHandler serves POST .../check/<resource> for the resources this
+// pipeline has given a webhook_token_env:, or nil when it has given none.
 //
-// It returns an error only for a listener that could not start or died
-// unexpectedly: a webhook endpoint that silently is not listening is worse
-// than one that refuses to start, because the pipeline looks configured and
-// reacts to nothing.
-func serveWebhooks(ctx context.Context, cfg *config.Config, st *store.Store, addr string) error {
+// A handler rather than a server: `steps watch --listen` (before the daemons merged) used to open a
+// second port of its own beside the UI, so a pipeline that wanted both had
+// two addresses, two flavors of HTTP surface and two things to expose. There
+// is one listener now — the web UI mounts this under the pipeline it belongs
+// to — and nil is how a caller learns there is nothing to mount, which is
+// different from mounting an endpoint that refuses everything.
+func WebhookHandler(cfg *config.Config, st *store.Store) http.Handler {
 	tokens := cfg.WebhookResources()
 	if len(tokens) == 0 {
-		return errors.New("--listen was given but no resource sets webhook_token_env:; nothing could ever be triggered")
+		return nil
 	}
 
-	mux := http.NewServeMux()
-	mux.Handle("/check/", &webhookHandler{cfg: cfg, st: st, tokens: tokens})
-
-	server := &http.Server{
-		Addr:    addr,
-		Handler: mux,
-		// A webhook body is tiny and a sender that stalls mid-request must not
-		// hold a connection open indefinitely.
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-
-	go func() {
-		<-ctx.Done()
-
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), webhookShutdownGrace)
-		defer cancel()
-
-		_ = server.Shutdown(shutdownCtx)
-	}()
-
-	printf("webhook: listening on %s for %d resource(s)\n", addr, len(tokens))
-	slog.Info("webhook.listening", "addr", addr, "resources", len(tokens))
-
-	err := server.ListenAndServe()
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("webhook listener: %w", err)
-	}
-
-	return nil
+	return &webhookHandler{cfg: cfg, st: st, tokens: tokens}
 }

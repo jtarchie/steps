@@ -140,7 +140,7 @@ func branchOutputs(step *Step) []string {
 		// defensive noise: validate() runs every checker and joins their
 		// errors, so this walk reaches a malformed race BEFORE validateRace
 		// can reject it — indexing [0] here panicked on an empty race nested
-		// in an in_parallel:, taking down `steps watch` on a config typo.
+		// in an in_parallel:, taking down `steps web` on a config typo.
 		if len(step.Race.Steps) == 0 {
 			return nil
 		}

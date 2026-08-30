@@ -1,8 +1,8 @@
 package main
 
-// The watch contract, end to end through the CLI.
+// The trigger contract, end to end through the CLI.
 //
-// Every test here drives `steps watch --once` against a real pipeline and a
+// Every test here drives `steps web --once` against a real pipeline and a
 // real store, and asserts only on what an operator could see: which versions
 // a job processed, and what the store holds afterwards. Nothing reaches into
 // an unexported function.
@@ -81,7 +81,7 @@ func (f *watchFixture) write(t *testing.T, path, contents string) {
 func (f *watchFixture) watch(t *testing.T, args ...string) {
 	t.Helper()
 
-	mustRun(t, append([]string{"watch", f.pipeline, "--once"}, args...)...)
+	mustRun(t, append([]string{"web", f.pipeline, "--once"}, args...)...)
 }
 
 // coldStart runs the first-ever poll, whose rule changed deliberately: it
@@ -100,7 +100,7 @@ func (f *watchFixture) coldStart(t *testing.T) {
 func (f *watchFixture) watchExpectingFailure(t *testing.T) {
 	t.Helper()
 
-	_ = run([]string{"watch", f.pipeline, "--once"})
+	_ = run([]string{"web", f.pipeline, "--once"})
 }
 
 // did returns the versions the job processed, in order.

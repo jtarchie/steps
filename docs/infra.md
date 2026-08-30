@@ -1,6 +1,6 @@
 # Infrastructure Features
 
-Two independent opt-in features for running pipelines beyond the simple one-shot host-execution case: containerized execution (`image:`) and cross-job downstream triggers (`steps watch`). Container examples on this page validate but aren't executed by the docs suite (they need a docker daemon); the watch/trigger examples run as shown.
+Two independent opt-in features for running pipelines beyond the simple one-shot host-execution case: containerized execution (`image:`) and cross-job downstream triggers (`steps web`). Container examples on this page validate but aren't executed by the docs suite (they need a docker daemon); the watch/trigger examples run as shown.
 
 ## Container execution (`image:`)
 
@@ -380,9 +380,9 @@ jobs:
 - **Step-level override**: a `task`/`agent` step's `env:` replaces the referenced entry's for that step only. Unlike `image:` this is *declared*-wins, not non-empty-wins — an explicit `env: []` means "nothing beyond the baseline", which is a real thing to want. Invalid on `get`/`put` steps (set it on the resource type).
 - **Caching**: the variable **names** fold into the node's hash. The values do not — a value changing is the operator's environment moving under the pipeline, which steps has never claimed to hash.
 
-## Downstream triggers (`trigger: true` + `steps watch`)
+## Downstream triggers (`trigger: true` + `steps web`)
 
-By default `steps` is a one-shot, single-job CLI. `steps watch pipeline.yml` adds a long-running mode that polls every resource named by any `get ..., trigger: true` step, across every job in the pipeline, and automatically runs whichever jobs are affected when that resource's latest version changes — including a version produced by another job's own `put`:
+By default `steps` is a one-shot, single-job CLI. `steps web pipeline.yml` adds a long-running mode that polls every resource named by any `get ..., trigger: true` step, across every job in the pipeline, and automatically runs whichever jobs are affected when that resource's latest version changes — including a version produced by another job's own `put`:
 
 ```yaml
 resource_types:
@@ -411,7 +411,7 @@ jobs:
 - name: notify
   plan:
   - get: counter
-    trigger: true      # steps watch runs this job when publish lands a new version
+    trigger: true      # steps web runs this job when publish lands a new version
   - task: announce
     inputs: [counter]
     run: echo "counter is now $(cat counter/n.txt)"
@@ -426,7 +426,7 @@ assert:
 ```
 
 ```bash
-steps watch pipeline.yml --interval 30s --max-concurrent 1
+steps web pipeline.yml --interval 30s --max-concurrent 1
 ```
 
 - **Two independent loops, connected only through a durable store-backed queue**: a **poller** checks every trigger resource on `--interval`, diffs the latest version against what's recorded, and enqueues every affected job; a **worker pool** (`--max-concurrent`, default 1) drains that queue by calling the same job runner `steps run` uses. The durable queue means a crash mid-run doesn't lose pending work.
@@ -469,13 +469,13 @@ jobs:
 
 The **artifact name is the `get:` value**; the **resource fetched is `resource:`**, defaulting to the `get:` value when omitted. This lets one resource appear under a task-friendly name, or twice in a plan under two names. Pair it with a task's `input_mapping:` (see [workspace.md](workspace.md)) to feed a reusable task's pinned input name from an aliased get.
 
-- **Triggers resolve by the underlying resource**: `steps watch` polls the *resolved* resource once no matter how many aliases reference it.
+- **Triggers resolve by the underlying resource**: `steps web` polls the *resolved* resource once no matter how many aliases reference it.
 - **Load-time**: `resource:` is valid only on `get` steps and must name an existing resource.
 - **Caching**: an unaliased `get` hashes byte-identically to before this feature; an aliased `get` folds the artifact name into its hash.
 
 ## Circuit breaker: `max_consecutive_failures:`
 
-`steps watch` runs unattended, and a job that fails on every new version will keep firing on every new version — burning model spend on a failure no automatic retry is going to fix:
+`steps web` runs unattended, and a job that fails on every new version will keep firing on every new version — burning model spend on a failure no automatic retry is going to fix:
 
 ```yaml
 jobs:
@@ -506,7 +506,7 @@ Sun 02:00  nightly-summary PAUSED after 3 consecutive failures — resume with: 
 
 ## How much history to keep: `run_history:`
 
-`steps watch` runs for weeks, and every build it does writes a run row, an event per step, what each agent step spent, the full text of every agent conversation, and a cached node per step. None of that used to be cleaned up. Measured on a pipeline answering Slack mentions overnight, one build cost about **23KB** — so a hundred builds a day added a couple of megabytes a day, forever, and three quarters of it was cached nodes and agent transcripts.
+`steps web` runs for weeks, and every build it does writes a run row, an event per step, what each agent step spent, the full text of every agent conversation, and a cached node per step. None of that used to be cleaned up. Measured on a pipeline answering Slack mentions overnight, one build cost about **23KB** — so a hundred builds a day added a couple of megabytes a day, forever, and three quarters of it was cached nodes and agent transcripts.
 
 `defaults.run_history:` caps it per job, keeping the newest:
 
@@ -530,7 +530,7 @@ jobs:
 ```
 
 - **Per job, not pipeline-wide.** A global cap makes the least active job the least inspectable, because a busy neighbour evicts its history. Twenty runs of `summarize` and twenty of `deploy`, not twenty between them.
-- **Default 100**, or `--run-history` on `steps run`/`steps watch`. The pipeline wins when both are set, because it is the thing that knows how much its jobs write.
+- **Default 100**, or `--run-history` on `steps run`/`steps web`. The pipeline wins when both are set, because it is the thing that knows how much its jobs write.
 - **`0` keeps everything**, the same convention [every other limit here uses](attempts-timeout.md#zero-means-no-limit) — including `version_history:`. That is a real choice with a real cost, not a safe default.
 - **A reaped run takes its whole story with it** — events, per-step records, agent spend and transcripts — so the run pages and `steps runs cost` reach back exactly as far as the cap.
 - **It also bounds the step cache**, but by COUNT rather than by age — cached steps are capped at a generous multiple of this number and the oldest go first. The distinction matters: a pipeline that is fully cached does no new work, so it adds no new cache entries, so nothing is ever evicted from it. Eviction happens only while new entries are being made, which is when the old ones are going stale anyway. What losing one costs is a re-run of a step whose content had not changed; nothing is recomputed *wrongly*.
@@ -539,7 +539,7 @@ jobs:
 
 ## `passed:` — only run against versions that are green upstream
 
-Without it, `steps watch` will trigger `deploy` on a commit the `test` job **already failed on**, and there is no way to say otherwise. This is a correctness gap, not a convenience:
+Without it, `steps web` will trigger `deploy` on a commit the `test` job **already failed on**, and there is no way to say otherwise. This is a correctness gap, not a convenience:
 
 ```yaml
 resource_types:
@@ -612,7 +612,7 @@ commit def456 → deploy  ok
 
 ## `max_in_flight:` — how many builds of one job at once
 
-By default a job's builds are **unlimited**, bounded only by `steps watch --max-concurrent`. Cap it per job when the work is not safe to overlap but does not need full serialization:
+By default a job's builds are **unlimited**, bounded only by `steps web --max-concurrent`. Cap it per job when the work is not safe to overlap but does not need full serialization:
 
 ```yaml
 jobs:
@@ -635,7 +635,7 @@ jobs:
 
 ## `serial:` / `serial_groups:` — stop jobs racing each other
 
-`steps watch --max-concurrent 4` runs jobs concurrently. For anything that deploys, publishes, or otherwise mutates the outside world, that is a hazard:
+`steps web --max-concurrent 4` runs jobs concurrently. For anything that deploys, publishes, or otherwise mutates the outside world, that is a hazard:
 
 ```yaml
 jobs:
@@ -675,11 +675,11 @@ assert:
 - **`serial: true` forces one build at a time.** It is [`max_in_flight: 1`](#max_in_flight--how-many-builds-of-one-job-at-once) in Concourse's older spelling, and it does something: an unset job is unlimited. `serial: false` is just that default spelled out — writing `serial: true` beside `max_in_flight:` is a load error, since the number would do nothing.
 - **The lock is taken inside the claim**, in one atomic statement — a read-then-claim would have a race exactly where the lock is supposed to be.
 - **"Queued" and "blocked on a lock" look different.** A blocked job says who is holding it; otherwise a held job is indistinguishable from an idle watcher.
-- **Membership is synced from the pipeline on every `steps watch` startup.** A group removed from the YAML stops holding a lock immediately.
+- **Membership is synced from the pipeline on every `steps web` startup.** A group removed from the YAML stops holding a lock immediately.
 
 ## `interruptible:` — what a shutdown does to a running build
 
-`steps watch` gets SIGTERM (a restart, a redeploy, a machine going down) while a job is mid-deploy. Whether that build is allowed to finish is the question this answers:
+`steps web` gets SIGTERM (a restart, a redeploy, a machine going down) while a job is mid-deploy. Whether that build is allowed to finish is the question this answers:
 
 ```yaml
 jobs:
@@ -712,11 +712,11 @@ assert:
 - **The default is to wait**, matching Concourse. Half-applying a deploy because someone restarted the watcher is the failure this exists to prevent.
 - **The wait is bounded** (10 minutes). A job needing longer should carry its own `timeout:`, which still applies.
 - **`interruptible: true`** shares the watcher's context and is cancelled with it. Its queue row stays `running`, so the next startup re-queues it — nothing is lost, it is just re-run.
-- **This affects `steps watch` only.** `steps run` is a person at a terminal, and ctrl-C there is always immediate.
+- **This affects `steps web` only.** `steps run` is a person at a terminal, and ctrl-C there is always immediate.
 
 ## Webhook-triggered checks
 
-`steps watch` polls on an interval: short means fast reaction and lots of API calls, long means slow reaction. A webhook removes the tradeoff — react instantly, poll rarely as a safety net:
+`steps web` polls on an interval: short means fast reaction and lots of API calls, long means slow reaction. A webhook removes the tradeoff — react instantly, poll rarely as a safety net:
 
 ```yaml
 resource_types:
@@ -748,13 +748,22 @@ jobs:
 ```
 
 ```bash
-steps watch pipeline.yml --listen :8080
-curl -X POST 'http://localhost:8080/check/repo?token=…'     # or: Authorization: Bearer …
+steps web pipeline.yml --listen :8080
+curl -X POST 'http://localhost:8080/p/pipeline/check/repo?token=…'   # or: Authorization: Bearer …
 ```
+
+The route lives under the pipeline it checks, on the same address the UI is
+served from. `steps watch --listen` used to open a second port of its own, so
+a deployment that wanted both had two addresses and two HTTP surfaces to
+expose; one daemon means one listener. `pipeline` in the path is the
+pipeline's name — the YAML's base name unless `--name` says otherwise, the
+same string as its `/p/<name>/` page.
 
 - **The token is a credential, not config.** `webhook_token_env:` names an environment variable, following `api_key_env:`. A literal is rejected at load — a resource's fields are hashed into the merkle content map, so a literal token would be written to `state.db` in cleartext.
 - **An unset token variable accepts nothing.** Reading an empty expectation as "no auth required" would turn a deployment mistake into an open trigger endpoint.
 - **A bad token and an unknown resource are indistinguishable** (both 401) — otherwise the endpoint is a free directory of a pipeline's resource names.
 - **POST only.** A GET would be triggerable by a browser preview or a link scanner.
+- **Exempt from the UI's same-origin check**, and only this route: a webhook sender is cross-origin by definition, and the resource's own token is the stronger check. Every browser mutation still requires a matching `Origin`.
+- **A pipeline that names no `webhook_token_env:` resource has no route at all** — 404 rather than an endpoint that authenticates nothing.
 - **The poll loop keeps running.** A webhook that is never delivered must not mean a change is never noticed.
 - **A webhook treats the version as changed** even when it matches what was last recorded: the sender knows something the check output may not show yet.

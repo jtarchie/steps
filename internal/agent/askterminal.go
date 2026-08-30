@@ -23,7 +23,7 @@ import (
 )
 
 // terminalPrompter returns the prompter for this process, or nil when nothing
-// is at the other end of stdin — which is every CI run, every `steps watch`
+// is at the other end of stdin — which is every CI run, every `steps web`
 // under a supervisor, and every test. A nil prompter is how the ladder skips
 // straight from the responder to a parked question.
 func terminalPrompter() askPrompter {

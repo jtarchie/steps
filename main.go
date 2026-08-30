@@ -50,19 +50,18 @@ import (
 // default logger before any subcommand's Run method executes — see
 // initLogging.
 type CLI struct {
-	LogLevel  string           `default:"info"                          enum:"debug,info,warn,error"                                               env:"STEPS_LOG_LEVEL"        help:"log verbosity: debug, info, warn, or error"`
+	LogLevel  string           `default:"info"                          enum:"debug,info,warn,error"                                             env:"STEPS_LOG_LEVEL"        help:"log verbosity: debug, info, warn, or error"`
 	Version   kong.VersionFlag `help:"print the steps version and exit" name:"version"`
-	Run       RunCmd           `cmd:""                                  default:"withargs"                                                         help:"run a single job once"`
-	Watch     WatchCmd         `cmd:""                                  help:"poll trigger: true resources and auto-run affected jobs"`
+	Run       RunCmd           `cmd:""                                  default:"withargs"                                                       help:"run a single job once"`
 	Test      TestCmd          `cmd:""                                  help:"run every job (force) and verify assert directives"`
 	Validate  ValidateCmd      `cmd:""                                  help:"check a pipeline for errors without running anything"`
 	Runs      RunsCmd          `cmd:""                                  help:"show what past runs recorded"`
 	Plan      PlanCmd          `cmd:""                                  help:"show which steps a run would execute or skip"`
 	MCP       MCPCmd           `cmd:""                                  help:"inspect or authorize a pipeline's mcp_servers: entries"`
-	Jobs      JobsCmd          `cmd:""                                  help:"jobs the watch circuit breaker has paused, and taking one out of it"`
+	Jobs      JobsCmd          `cmd:""                                  help:"jobs the circuit breaker has paused, and taking one out of it"`
 	Approvals ApprovalsCmd     `cmd:""                                  help:"approval: steps waiting for a decision, and deciding them"`
 	Questions QuestionsCmd     `cmd:""                                  help:"ask_user questions waiting for an answer, and answering them"`
-	Web       WebCmd           `cmd:""                                  help:"serve the pipeline UI over the same state the CLI writes"`
+	Web       WebCmd           `cmd:""                                  help:"serve the UI, poll trigger: true resources, and run affected jobs"`
 	Docs      DocsCmd          `cmd:""                                  help:"read the docs in the terminal (no page name lists them)"`
 	// Last, and hidden: see ShimCmd. Placing it here keeps the help ordering
 	// of the real commands untouched.
@@ -196,56 +195,6 @@ func (r *RunCmd) Run() error {
 	}
 
 	return wrapRunErr(runErr)
-}
-
-// WatchCmd polls every resource named by a trigger:true get step, across
-// every job in the pipeline, and runs whichever jobs a version change
-// affects — see internal/trigger.
-type WatchCmd struct {
-	StateFlags    `embed:""`
-	VarFlags      `embed:""`
-	ExecFlags     `embed:""`
-	HistoryFlags  `embed:""`
-	Pipeline      string            `arg:""                                                                       help:"path to the pipeline YAML file"`
-	Interval      time.Duration     `default:"30s"                                                                help:"how often to check trigger: true resources"`
-	Once          bool              `help:"poll once, run whatever that triggers, and exit (for cron or a timer)" name:"once"`
-	MaxConcurrent int               `default:"1"                                                                  help:"maximum number of triggered jobs running at once"`
-	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                      name:"pin"`
-	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
-	Listen        string            `help:"serve webhook checks on this address, e.g. :8080"                      name:"listen"`
-}
-
-// Run loads the pipeline and blocks in trigger.Watch until canceled
-// (SIGINT/SIGTERM), or polls exactly once under --once.
-func (w *WatchCmd) Run() error {
-	cfg, err := w.Load(w.Pipeline)
-	if err != nil {
-		return err
-	}
-
-	st, provider, cleanup, err := setup(cfg, w.Pipeline, w.StateFlags, w.ExecFlags)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-
-	ctx, cancel := withSignalCancel(context.Background())
-	defer cancel()
-
-	w.HistoryFlags.Apply(cfg)
-
-	ctx, err = w.ExecFlags.Apply(ctx)
-	if err != nil {
-		return err
-	}
-
-	slog.Info("pipeline.watch", "pipeline", w.Pipeline, "once", w.Once, "interval", w.Interval, "max_concurrent", w.MaxConcurrent)
-
-	if w.Once {
-		return wrapRunErr(trigger.WatchOnce(ctx, cfg, provider, st, w.Pin, w.Force))
-	}
-
-	return wrapRunErr(trigger.Watch(ctx, cfg, provider, st, w.Pin, w.Interval, w.MaxConcurrent, w.Force, w.Listen))
 }
 
 // TestCmd runs every job in the pipeline (force, so nothing is skipped and the
@@ -607,7 +556,7 @@ func (p *PlanCmd) Run() error {
 type RunsCmd struct {
 	List  RunsListCmd  `cmd:"" default:"withargs"                              help:"job outcomes, newest first"`
 	Steps RunsStepsCmd `cmd:"" help:"individual steps instead of job outcomes"`
-	Queue RunsQueueCmd `cmd:"" help:"what steps watch has queued"`
+	Queue RunsQueueCmd `cmd:"" help:"what the trigger loop has queued"`
 	Cost  RunsCostCmd  `cmd:"" help:"what a pipeline's agent steps spent"`
 	Where RunsWhereCmd `cmd:"" help:"the machines a run's placed steps ran on"`
 }
@@ -1819,7 +1768,7 @@ func applyHistoryFlags(cfg *config.Config, versions, runs int) {
 
 // JobsCmd inspects and clears the watch circuit breaker.
 //
-// It exists because a paused job is otherwise invisible: `steps watch` stops
+// It exists because a paused job is otherwise invisible: the trigger loop stops
 // triggering it and says so once, in output that has long since scrolled past
 // by the time anyone wonders why the nightly summary stopped arriving.
 type JobsCmd struct {
@@ -1950,7 +1899,14 @@ func loadWithVars(path string, flags map[string]string, varsFile string) (*confi
 	return cfg, nil
 }
 
-// WebCmd serves the pipeline UI.
+// WebCmd is the daemon: it serves the pipeline UI, polls every trigger: true
+// resource, and runs the jobs both of those enqueue.
+//
+// One command rather than two, since `steps watch` was this minus the UI and
+// running both against one state database was never a supported pairing —
+// they claim each other's work, and startup recovery reads the other's
+// in-flight rows as abandoned. --once is the cron form of the same cycle:
+// poll, drain, exit, without binding anything.
 //
 // One or more pipeline files: state is per-pipeline by construction
 // (.steps/state.db lives beside each YAML), so serving several means opening
@@ -1958,8 +1914,9 @@ func loadWithVars(path string, flags map[string]string, varsFile string) (*confi
 //
 // It polls trigger: true resources as well as serving, because a front end
 // that drains a queue nothing fills is a runner that looks alive and notices
-// nothing — the surprise this default exists to remove. --no-watch turns it
-// off for someone who runs `steps watch` separately.
+// nothing — the surprise this default exists to remove. There is no way to
+// turn it off: a served process that does not poll is the half-daemon this
+// command absorbed `steps watch` to stop being.
 //
 // It binds loopback by default and has no authentication, because there is
 // nothing to authenticate against — this is the local runner's own front end,
@@ -1968,29 +1925,33 @@ func loadWithVars(path string, flags map[string]string, varsFile string) (*confi
 // reach the port; --listen exists for the person who has decided that is what
 // they want, not as a default.
 type WebCmd struct {
-	StateFlags `embed:""`
-	VarFlags   `embed:""`
-	ExecFlags  `embed:""`
-	Pipeline   []string      `arg:""                                                     help:"path(s) to pipeline YAML files"`
-	Listen     string        `default:"127.0.0.1:8088"                                   help:"address to serve on"`
-	Interval   time.Duration `default:"30s"                                              help:"how often to check trigger: true resources"`
-	NoWatch    bool          `help:"serve without polling trigger: true resources"       name:"no-watch"`
-	ReadOnly   bool          `help:"serve without trigger, approval, or resume controls" name:"read-only"`
+	StateFlags    `embed:""`
+	VarFlags      `embed:""`
+	ExecFlags     `embed:""`
+	HistoryFlags  `embed:""`
+	Pipeline      []string          `arg:""                                                                       help:"path(s) to pipeline YAML files"`
+	Listen        string            `default:"127.0.0.1:8088"                                                     help:"address to serve on"`
+	Interval      time.Duration     `default:"30s"                                                                help:"how often to check trigger: true resources"`
+	Once          bool              `help:"poll once, run whatever that triggers, and exit (for cron or a timer)" name:"once"`
+	MaxConcurrent int               `default:"1"                                                                  help:"maximum number of queued jobs running at once, per pipeline"`
+	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                      name:"pin"`
+	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
+	ReadOnly      bool              `help:"serve without trigger, approval, or resume controls"                   name:"read-only"`
 }
 
 // Run loads every named pipeline, opens its store, and serves until canceled.
 func (w *WebCmd) Run() error {
-	// Rejected rather than shrugged at: `steps watch` refuses a non-positive
-	// interval, and a web that quietly served forever without ever polling
-	// would be the exact confusion this command's default exists to remove.
-	if !w.NoWatch && w.Interval <= 0 {
-		return fmt.Errorf("web: --interval must be positive, got %s; --no-watch is how polling is turned off", w.Interval)
+	// Rejected rather than shrugged at: a server that quietly served forever
+	// without ever polling would be the exact confusion this command's
+	// polling default exists to remove.
+	if w.Interval <= 0 {
+		return fmt.Errorf("web: --interval must be positive, got %s", w.Interval)
 	}
 
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	ctx, err := w.Apply(ctx)
+	ctx, err := w.ExecFlags.Apply(ctx)
 	if err != nil {
 		return err
 	}
@@ -2001,21 +1962,61 @@ func (w *WebCmd) Run() error {
 	}
 	defer cleanup()
 
-	// Before either loop below exists, because ResetStaleRunning is only safe
-	// with no concurrent writer — see web.PrepareQueue.
-	//
-	// --no-watch is what says this process is NOT the queue's owner: it exists
-	// to hand the polling to a separate `steps watch`, and re-queueing that
-	// watcher's in-flight rows would defeat the serial:/max_in_flight it is
-	// enforcing. The flag an operator typed decides it, rather than a race for
-	// a lock file — see store.ResetStaleRunning for why there is no longer one.
+	if w.Once {
+		return w.runOnce(ctx, pipelines, providers)
+	}
+
+	return w.serve(ctx, pipelines, providers)
+}
+
+// runOnce polls each served pipeline once, runs whatever that enqueues, and
+// returns — without binding the listen address.
+//
+// This is `steps web --once`, which is how steps is driven by something
+// that already owns the schedule: cron, a systemd timer, a CI step. It does
+// NOT serve, deliberately: a port opened for the duration of one poll is a
+// port nothing has time to reach, and a one-shot that left a listener behind
+// would be a daemon with extra steps.
+//
+// Serial across pipelines, like the watcher it replaces. A one-shot has
+// nothing to stay responsive for.
+func (w *WebCmd) runOnce(ctx context.Context, pipelines []*web.Pipeline, providers map[string]workspace.Provider) error {
 	for _, target := range pipelines {
-		web.PrepareQueue(ctx, target, !w.NoWatch)
+		w.HistoryFlags.Apply(target.Cfg)
+
+		provider, ok := providers[target.Slug]
+		if !ok {
+			return fmt.Errorf("web: no workspace provider for pipeline %q", target.Slug)
+		}
+
+		err := trigger.WatchOnce(ctx, target.Cfg, provider, target.Store, w.Pin, w.Force)
+		if err != nil {
+			return wrapRunErr(err)
+		}
+	}
+
+	return nil
+}
+
+// serve runs the UI, the poller and the drainer until the process is stopped.
+//
+// One process fills and drains the queue, because there is one daemon: a
+// front end that drains a queue nothing fills is a runner that looks alive
+// and notices nothing, and a second `steps web` on the same state database is
+// the deployment mistake the one-process-per-file rule already names.
+func (w *WebCmd) serve(ctx context.Context, pipelines []*web.Pipeline, providers map[string]workspace.Provider) error {
+	// Before either loop below exists, because ResetStaleRunning is only safe
+	// with no concurrent writer — see web.PrepareQueue. This process owns the
+	// queue, which is what makes recovery correct: every `running` row is a
+	// leftover of a process that is gone.
+	for _, target := range pipelines {
+		w.HistoryFlags.Apply(target.Cfg)
+		web.PrepareQueue(ctx, target)
 	}
 
 	var runner web.Runner
 
-	local := web.NewLocalRunner(providers)
+	local := web.NewLocalRunner(providers, w.Pin, w.MaxConcurrent)
 	if !w.ReadOnly {
 		runner = local
 	}
@@ -2025,20 +2026,22 @@ func (w *WebCmd) Run() error {
 		return fmt.Errorf("web: %w", err)
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+
 	var background sync.WaitGroup
 
-	// Registered after `defer cleanup()`, so it runs BEFORE it: both loops
-	// below write through stores cleanup closes. cancel() here rather than
-	// relying on the deferred one at the top, since Start also returns on its
-	// own error, with the context still live and the loops still running.
+	// Registered before the loops start, and it cancels rather than relying
+	// on the caller's deferred cancel: Start also returns on its own error,
+	// with the context still live and the loops still running — and both of
+	// them write through stores the caller's cleanup closes.
 	defer func() {
 		cancel()
 		background.Wait()
 	}()
 
-	// The drainer runs regardless of --read-only: a row queued by a separate
-	// `steps watch` against the same database is still work this process can
-	// do. What --read-only withholds is the UI's ability to ADD work.
+	// The drainer runs regardless of --read-only: a row queued before this
+	// process started is still work it can do. What --read-only withholds is
+	// the UI's ability to ADD work.
 	background.Add(1)
 
 	go func() {
@@ -2060,8 +2063,8 @@ func (w *WebCmd) Run() error {
 }
 
 // startPolling launches one trigger poller per served pipeline, so this
-// process both fills and drains the queue — unless --no-watch, which leaves
-// the filling to a separate `steps watch`.
+// process both fills and drains the queue, which is what makes it the whole
+// daemon rather than half of one.
 //
 // Each poller is handed its pipeline's OWN store handle rather than opening a
 // second one; trigger.Poll's doc comment says why, and is the one copy of
@@ -2072,12 +2075,6 @@ func (w *WebCmd) Run() error {
 // not about what this process does on its own. `--listen 0.0.0.0 --read-only`
 // is a build box that still has to notice new versions.
 func (w *WebCmd) startPolling(ctx context.Context, background *sync.WaitGroup, pipelines []*web.Pipeline) {
-	if w.NoWatch {
-		fmt.Println("steps web: not polling (--no-watch)")
-
-		return
-	}
-
 	for _, target := range pipelines {
 		// Said per pipeline, not counted up: a banner that reports "polling 3
 		// pipelines" while one of them gave up is worse than no banner, and
@@ -2153,6 +2150,10 @@ func (w *WebCmd) load() ([]*web.Pipeline, map[string]workspace.Provider, func(),
 		providers[slug] = provider
 		pipelines = append(pipelines, &web.Pipeline{
 			Slug: slug, Path: path, Cfg: cfg, Store: st, Bus: bus,
+			// nil when this pipeline names no webhook_token_env: resource,
+			// which is what makes /p/<slug>/check/<resource> a 404 there
+			// rather than an endpoint that authenticates nothing.
+			Webhook: trigger.WebhookHandler(cfg, st),
 		})
 	}
 

@@ -13,7 +13,7 @@ import (
 // exec.CommandContext, and the SDK's own SIGTERM/SIGKILL escalation, both
 // signal cmd.Process alone. An MCP server that forks — npx starting node,
 // gopls starting `go` — is not the process that needs to die, or not the only
-// one: its children survive, and under `steps watch`, which reconnects on
+// one: its children survive, and under `steps web`, which reconnects on
 // every poll, that is unbounded process-table growth from an otherwise
 // idle-looking pipeline.
 //

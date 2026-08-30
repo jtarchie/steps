@@ -176,7 +176,7 @@ and pauses while the tab is hidden.
 Four controls, each writing the same rows the CLI writes:
 
 - **Trigger** / **Re-run (forced)** enqueue the job into the durable trigger
-  queue `steps watch` uses — the same queue this process's own polling fills.
+  queue `steps web` uses — the same queue this process's own polling fills.
   `steps web` drains it in-process by calling `pipeline.RunJob` — there is no
   second execution path, so a job run from a browser gets the same caching,
   hooks, serial groups, and recording as any other. Forced re-run skips the merkle cache; an unforced one does not,
@@ -186,23 +186,33 @@ Four controls, each writing the same rows the CLI writes:
 - **Answer** an `ask_user` question a step is parked on — one click for an
   offered option, or your own words — the same row `steps questions answer` writes. See
   [agents.md](agents.md).
-- **Resume** a job the watch circuit breaker paused.
+- **Resume** a job the trigger circuit breaker paused.
 
 `--read-only` withholds all four: the controls disappear from the pages and
 the routes refuse. The queue is still drained, and polling still runs — that
 flag is a statement about the HTTP surface, not about what the process does on
 its own. `--listen 0.0.0.0:8088 --read-only` is a build box that still has to
-notice new versions; pair it with `--no-watch` if you meant a viewer.
+notice new versions.
 
-## Watching, or not
+## One daemon
 
-Polling is on by default, on the same terms `steps watch` polls:
+`steps web` is the whole long-running mode: it serves the UI, polls every
+`trigger: true` resource, and drains the queue both of those fill. There is no
+separate watcher — a front end that drains a queue nothing fills is a runner
+that looks alive and notices nothing, and two processes against one state
+database claim each other's work.
 
 ```bash
 steps web pipeline.yml                      # serve, and poll every 30s
 steps web pipeline.yml --interval 5m        # slower
-steps web pipeline.yml --no-watch           # serve only; something else polls
+steps web pipeline.yml --once               # poll once, run what that triggers, exit
+steps web pipeline.yml --max-concurrent 4   # up to four queued jobs at a time
 ```
+
+`--once` is the cron form: one poll, drain until the queue is empty, exit —
+**without binding the listen address**, because a port opened for the duration
+of one poll is a port nothing has time to reach. It is what a systemd timer or
+a CI step drives when the schedule already belongs to something else.
 
 - **One poller per pipeline.** Within one pipeline the poller is handed the
   store handle its drain already uses rather than opening a second one.
@@ -210,21 +220,16 @@ steps web pipeline.yml --no-watch           # serve only; something else polls
   is a single pooled connection, so sharing it queues the poll's writes behind
   the drain's instead of adding a second connection to fight for the same
   write lock.
-- **One `steps` process per state database.** Two pollers against one database
-  claim each other's work, and startup recovery — re-queueing rows a crashed
-  process left claimed — reads every `running` row as abandoned, which is true
-  only when nothing else is alive. Nothing enforces this; running a `steps
-  watch` and a polling `steps web` against one database is a deployment
-  mistake, not a supported pairing.
-- **`--no-watch` is how you pair them anyway.** It says this process does not
-  own the queue, so it neither polls nor recovers stranded rows, leaving both
-  to a separate `steps watch`. That flag, not a race for a lock file, is what
-  keeps the served process off a live watcher's in-flight job.
-- **A pipeline with no `trigger: true` get is not an error here.** `steps
-  watch` refuses it (there is nothing to poll and that is all it does); `steps
-  web` notes it in the log and serves, because plenty of pipelines are run by
-  hand and the UI is where you would run them from.
-- **Preflight runs before the first poll**, the same check `steps watch` does
+- **One `steps` process per state database, and nothing enforces it.** Two of
+  them claim each other's work, and startup recovery — re-queueing rows a
+  crashed process left claimed — reads every `running` row as abandoned, which
+  is true only when nothing else is alive. A second `steps web` against one
+  state file is a deployment mistake, not a supported pairing.
+- **A pipeline with no `trigger: true` get is not an error.** It is noted in
+  the log and served anyway, because plenty of pipelines are run by hand and
+  the UI is where you would run them from. Under `--once` it polls nothing and
+  exits.
+- **Preflight runs before the first poll**, the same check `steps web` does
   and with the same asymmetry: a problem *waiting cannot fix* — an `mcp:` tool
   the server does not expose — stops that pipeline's polling and says so,
   while a problem waiting might fix — a server that did not answer, a token a
@@ -313,7 +318,9 @@ mean to hand out the controls too.
 ```
 --listen         address to serve on (default 127.0.0.1:8088)
 --interval       how often to poll trigger: true resources (default 30s)
---no-watch       serve without polling; leave that to `steps watch`
+--once           poll once, run what that triggers, exit without serving
+--max-concurrent maximum queued jobs running at once, per pipeline (default 1)
+--pin / --force  pin a version field; ignore the cache and re-run every step
 --no-preflight   skip the pre-poll health check of models and MCP servers
 --read-only      serve without trigger, approval, answer, or resume controls
 --keep-workspace leave build workspaces on disk

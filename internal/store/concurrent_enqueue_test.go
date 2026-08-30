@@ -10,7 +10,7 @@ import (
 // TestConcurrentEnqueueAcrossProcesses keeps two processes able to write at
 // once.
 //
-// Two handles on one file is `steps watch` alongside `steps web`, both of
+// Two handles on one file is `steps web` alongside `steps web`, both of
 // which enqueue; within a single process SetMaxOpenConns(1) makes contention
 // unreachable, so a same-handle test would pass while the real shape failed.
 //

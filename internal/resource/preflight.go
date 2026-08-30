@@ -3,7 +3,7 @@ package resource
 // Preflight: prove an mcp-backed resource type can actually call its tools
 // before anything depends on it.
 //
-// The failure this exists for is quieter than a dead model. A `steps watch`
+// The failure this exists for is quieter than a dead model. A `steps web`
 // whose trigger resource is misconfigured — a tool the server does not expose,
 // or a tool whose required arguments the pipeline never sends — does not stop.
 // It logs the check error and polls again, forever, on an interval, having
@@ -199,7 +199,7 @@ func preflightResource(
 // eng-bugs` by a check: tool whose required arguments its source does not
 // supply — a check that job never runs.
 //
-// job == nil means "no single job" (`steps watch`, which will run all of
+// job == nil means "no single job" (`steps web`, which will run all of
 // them), and then every stage is fair game.
 func resourceStageProblems(
 	cfg *config.Config, job *config.Job, name string, mcp *config.MCPResourceConfig,

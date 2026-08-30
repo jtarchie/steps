@@ -744,3 +744,19 @@ func (s *Server) addRunHits(ctx context.Context, add func(searchHit), pipeline *
 		})
 	}
 }
+
+// handleWebhook hands a check request to the pipeline's own webhook handler.
+//
+// A 404 when the pipeline declares no webhook_token_env: resource, which is
+// the honest answer: there is nothing here to trigger. Publishing a route
+// that authenticates nothing and refuses everything would say the opposite.
+func (s *Server) handleWebhook(c echo.Context) error {
+	target := pipelineOf(c)
+	if target.Webhook == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "no webhook resources in this pipeline")
+	}
+
+	target.Webhook.ServeHTTP(c.Response(), c.Request())
+
+	return nil
+}
