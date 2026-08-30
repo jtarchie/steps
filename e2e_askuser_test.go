@@ -306,6 +306,16 @@ func awaitPendingQuestion(t *testing.T, pipelinePath string) string {
 			t.Fatalf("steps questions: %v", err)
 		}
 
+		// Only once the run has created it. The listing above no longer
+		// creates a state database just by being asked — it used to, which is
+		// what kept this loop from ever seeing the window between starting
+		// the run and its first write.
+		if !fileExists(statePath(pipelinePath, "")) {
+			time.Sleep(50 * time.Millisecond)
+
+			continue
+		}
+
 		if questions := storeQuestions(t, pipelinePath); len(questions) > 0 {
 			return "1"
 		}

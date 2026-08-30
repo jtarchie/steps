@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -398,4 +400,105 @@ func TestOpenExistingRefusesAnUnknownPipeline(t *testing.T) {
 	if len(rows) != 2 {
 		t.Errorf("the failed open left %d pipelines in the file, want the original 2: %+v", len(rows), rows)
 	}
+}
+
+// TestReadingDoesNotChangeTheFile.
+//
+// A reader carried the WRITER's pragmas — journal_mode and auto_vacuum are
+// recorded in the file header, _txlock=immediate takes the write lock at
+// BEGIN — and the Store it handed back compacted and checkpointed on Close.
+// So `steps runs`, whose whole contract is that it only asks, rewrote the
+// database every time it was asked a question, and took the write lock a
+// running daemon was using to do it.
+func TestReadingDoesNotChangeTheFile(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	stores := sharedFile(t, "app")
+	path := stores[0].Path()
+
+	mustStartRun(t, stores[0], "r1", "build")
+
+	// The writer stays OPEN, which is the case that matters: a daemon is
+	// running, its write-ahead log holds the run just recorded, and somebody
+	// asks a question about the same file. A reader that checkpoints folds
+	// that log away underneath the process still using it.
+	before := fileDigest(t, path+"-wal")
+
+	scoped, err := OpenExisting(path, "app")
+	if err != nil {
+		t.Fatalf("OpenExisting: %v", err)
+	}
+
+	runs, err := scoped.ListRuns(ctx, "", 10)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+
+	if len(runs) != 1 {
+		t.Fatalf("read %d runs, want the one recorded", len(runs))
+	}
+
+	err = scoped.Close()
+	if err != nil {
+		t.Fatalf("closing the reader: %v", err)
+	}
+
+	if after := fileDigest(t, path+"-wal"); after != before {
+		t.Errorf("the write-ahead log changed while the file was being read: %s -> %s", before, after)
+	}
+}
+
+// TestReadingAFileWithTheWriteBitOff is the same property from the other
+// side, and the one an operator can see: a state database on read-only media,
+// or one deliberately chmod'ed, is still answerable.
+func TestReadingAFileWithTheWriteBitOff(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	stores := sharedFile(t, "app")
+	path := stores[0].Path()
+
+	mustStartRun(t, stores[0], "r1", "build")
+
+	err := stores[0].Close()
+	if err != nil {
+		t.Fatalf("closing the writer: %v", err)
+	}
+
+	err = os.Chmod(path, 0o400)
+	if err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+
+	reader, err := OpenReader(path)
+	if err != nil {
+		t.Fatalf("OpenReader on a read-only file: %v", err)
+	}
+
+	defer func() { _ = reader.Close() }()
+
+	pipelines, err := reader.Pipelines(ctx)
+	if err != nil {
+		t.Fatalf("Pipelines on a read-only file: %v", err)
+	}
+
+	if len(pipelines) != 1 {
+		t.Errorf("read %d pipelines, want the one in the file", len(pipelines))
+	}
+}
+
+// fileDigest is the file's contents, hashed — the only assertion that catches
+// a rewrite which leaves the size and the answers identical.
+func fileDigest(t *testing.T, path string) string {
+	t.Helper()
+
+	body, err := os.ReadFile(path) //nolint:gosec // the test named this path
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	return fmt.Sprintf("%x", sha256.Sum256(body))
 }

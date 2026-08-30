@@ -563,14 +563,14 @@ func (p *PlanCmd) Run() error {
 // command that distinction was a runtime table of which combinations to
 // refuse; as subcommands it is the grammar, and kong enforces it.
 type RunsCmd struct {
-	List  RunsListCmd  `cmd:"" default:"withargs"                              help:"job outcomes, newest first"`
-	Steps RunsStepsCmd `cmd:"" help:"individual steps instead of job outcomes"`
+	List  RunsListCmd  `cmd:"" default:"withargs"                                   help:"runs, newest first"`
+	Steps RunsStepsCmd `cmd:"" help:"individual steps, with what each one recorded"`
 	Queue RunsQueueCmd `cmd:"" help:"what the trigger loop has queued"`
 	Cost  RunsCostCmd  `cmd:"" help:"what a pipeline's agent steps spent"`
 	Where RunsWhereCmd `cmd:"" help:"the machines a run's placed steps ran on"`
 }
 
-// RunsListCmd is the default view: job outcomes, newest first — and the one
+// RunsListCmd is the default view: runs, newest first — and the one
 // view that answers for a whole state file when no pipeline is named.
 type RunsListCmd struct {
 	StateFlags `embed:""`
@@ -588,7 +588,7 @@ func (r *RunsListCmd) Run() error {
 		return r.runAcross()
 	}
 
-	if nothingRecorded(r.Pipeline, r.StateFlags) {
+	if nothingRecorded(r.Pipeline, r.StateFlags, noRunsYet(r.Pipeline)) {
 		return nil
 	}
 
@@ -611,7 +611,7 @@ type RunsStepsCmd struct {
 
 // Run prints recorded steps, newest first.
 func (r *RunsStepsCmd) Run() error {
-	if nothingRecorded(r.Pipeline, r.StateFlags) {
+	if nothingRecorded(r.Pipeline, r.StateFlags, noRunsYet(r.Pipeline)) {
 		return nil
 	}
 
@@ -633,7 +633,7 @@ type RunsQueueCmd struct {
 
 // Run prints the trigger queue.
 func (r *RunsQueueCmd) Run() error {
-	if nothingRecorded(r.Pipeline, r.StateFlags) {
+	if nothingRecorded(r.Pipeline, r.StateFlags, noRunsYet(r.Pipeline)) {
 		return nil
 	}
 
@@ -660,7 +660,7 @@ type RunsCostCmd struct {
 
 // Run prints per-run totals, or one run's steps.
 func (r *RunsCostCmd) Run() error {
-	if nothingRecorded(r.Pipeline, r.StateFlags) {
+	if nothingRecorded(r.Pipeline, r.StateFlags, noRunsYet(r.Pipeline)) {
 		return nil
 	}
 
@@ -689,7 +689,7 @@ type RunsWhereCmd struct {
 
 // Run prints one run's placements.
 func (r *RunsWhereCmd) Run() error {
-	if nothingRecorded(r.Pipeline, r.StateFlags) {
+	if nothingRecorded(r.Pipeline, r.StateFlags, noRunsYet(r.Pipeline)) {
 		return nil
 	}
 
@@ -712,15 +712,33 @@ func (r *RunsWhereCmd) Run() error {
 // signature hands every caller a nil it must remember to check — which is
 // exactly what a sixth `runs` subcommand written by copying the other five
 // would forget.
-func nothingRecorded(pipelinePath string, flags StateFlags) bool {
-	_, err := os.Stat(statePath(pipelinePath, flags.State))
-	if err == nil {
-		return false
+func nothingRecorded(pipelinePath string, flags StateFlags, answer string) bool {
+	path := statePath(pipelinePath, flags.State)
+
+	_, err := os.Stat(path)
+	if err != nil {
+		fmt.Println(answer)
+
+		return true
 	}
 
-	fmt.Printf("no runs recorded yet for %s\n", pipelinePath)
+	// A file with no schema in it is the same answer as no file: a writer
+	// creates the database before it fills it in, so a reader arriving in
+	// that window must not report the operator's brand new database as one
+	// written by a different version of steps.
+	if store.HasNothingRecorded(path) {
+		fmt.Println(answer)
 
-	return true
+		return true
+	}
+
+	return false
+}
+
+// noRunsYet is the sentence every `steps runs` view says when the pipeline has
+// no state file.
+func noRunsYet(pipelinePath string) string {
+	return "no runs recorded yet for " + pipelinePath
 }
 
 // openRecorded opens a pipeline's recorded state for reading. It returns a
@@ -774,6 +792,14 @@ func (r *RunsListCmd) runAcross() error {
 	}
 
 	reader, err := store.OpenReader(r.State)
+	if errors.Is(err, store.ErrNoState) {
+		// Created but not yet filled in — a writer is mid-first-open. Nothing
+		// is recorded, which is an answer, not a file to delete.
+		fmt.Printf("no pipelines recorded in %s\n", r.State)
+
+		return nil
+	}
+
 	if err != nil {
 		return fmt.Errorf("could not open state store: %w", err)
 	}
@@ -878,27 +904,49 @@ func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader *store.Reader,
 	return nil
 }
 
+// printJobRuns lists what actually ran, newest first.
+//
+// The runs table, not job_runs, which is what this view read until it was
+// caught: job_runs is the merkle CACHE index, and recordChainSucceeded skips
+// a chain containing a put or an agent because such a chain is never
+// skippable — so the default history view of an agent pipeline recorded every
+// failure and no success, and read as all-red or empty after a run that
+// worked. It is also upserted by content hash, so twenty forced re-runs were
+// one row.
+//
+// This is the same source the web UI and the cross-pipeline view read, which
+// is the other half of the fix: one command that meant two different tables
+// depending on whether a pipeline was named is a command nobody can reason
+// about. The error text moves one command along, to `steps runs steps`, which
+// reports it per step — where the answer to "why did it fail" actually is.
 func (r *RunsListCmd) printJobRuns(ctx context.Context, st *store.Store) error {
-	rows, err := st.ListJobRuns(ctx, r.Job, r.Limit)
+	rows, err := st.ListRuns(ctx, r.Job, r.Limit)
 	if err != nil {
-		return fmt.Errorf("could not read job runs: %w", err)
+		return fmt.Errorf("could not read runs: %w", err)
 	}
 
 	if len(rows) == 0 {
-		fmt.Println("no job runs recorded")
+		fmt.Println("no runs recorded")
 
 		return nil
 	}
 
 	writer := newTabWriter()
-	_, _ = fmt.Fprintln(writer, "WHEN\tJOB\tSTATUS\tERROR")
+	_, _ = fmt.Fprintln(writer, "WHEN\tJOB\tSTATUS\tRUN")
 
 	for _, row := range rows {
 		_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n",
-			formatWhen(row.CreatedAt), row.JobName, row.Status, firstLine(row.Error))
+			formatWhen(row.StartedAt), row.JobName, row.Status, row.ID)
 	}
 
-	return flush(writer)
+	err = flush(writer)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("\nwhy a step did what it did: steps runs steps %s%s\n", r.Pipeline, stateNote(r.State))
+
+	return nil
 }
 
 func (r *RunsStepsCmd) printSteps(ctx context.Context, st *store.Store) error {
@@ -1827,6 +1875,10 @@ type JobsListCmd struct {
 
 // Run prints every paused job.
 func (j *JobsListCmd) Run() error {
+	if nothingRecorded(j.Pipeline, j.StateFlags, "no jobs are paused") {
+		return nil
+	}
+
 	st, cleanup, err := openStore(j.Pipeline, j.StateFlags)
 	if err != nil {
 		return err
@@ -2261,6 +2313,10 @@ type ApprovalsListCmd struct {
 
 // Run prints every pending approval.
 func (a *ApprovalsListCmd) Run() error {
+	if nothingRecorded(a.Pipeline, a.StateFlags, "no approvals are waiting") {
+		return nil
+	}
+
 	st, cleanup, err := openStore(a.Pipeline, a.StateFlags)
 	if err != nil {
 		return err
@@ -2366,6 +2422,10 @@ type QuestionsListCmd struct {
 
 // Run prints every question waiting for an answer.
 func (q *QuestionsListCmd) Run() error {
+	if nothingRecorded(q.Pipeline, q.StateFlags, "no questions are waiting") {
+		return nil
+	}
+
 	st, cleanup, err := openStore(q.Pipeline, q.StateFlags)
 	if err != nil {
 		return err
@@ -2457,20 +2517,22 @@ func currentUser() string {
 	return "unknown"
 }
 
-// openStore opens a pipeline's state store without building any workspace —
-// the read-only path the approval commands need.
+// openStore opens a pipeline's already-recorded state for the approval,
+// question and paused-job commands.
+//
+// The same resolve-never-register path `steps runs` takes, and for the same
+// reason one level along: every caller here acts on a row that must already
+// exist — an approval to decide, a question to answer, a breaker to read — so
+// none of them has any business CREATING the pipeline it was named. It used
+// to go through setup, which opened the store the writer's way and minted a
+// pipelines row for a typo; worse, it did so in a state file `steps runs` had
+// just learned to refuse that name in, so one listing quietly made the
+// refusal stop working.
+//
+// It also builds no workspace provider, which setup did — a listing that
+// creates and removes a temp root to print three rows.
 func openStore(pipelinePath string, flags StateFlags) (*store.Store, func(), error) {
-	cfg, err := config.LoadConfig(pipelinePath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("could not load pipeline: %w", err)
-	}
-
-	st, _, cleanup, err := setup(cfg, pipelinePath, flags, ExecFlags{})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return st, cleanup, nil
+	return openRecorded(pipelinePath, flags)
 }
 
 // applyResume points this invocation at a previous run: which steps it need

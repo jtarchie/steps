@@ -83,7 +83,7 @@ func OpenReader(path string) (*Reader, error) {
 		return nil, fmt.Errorf("could not open state db %q: %w", path, err)
 	}
 
-	db, err := openDB(path)
+	db, err := openReadOnlyDB(path)
 	if err != nil {
 		return nil, err
 	}
@@ -91,8 +91,9 @@ func OpenReader(path string) (*Reader, error) {
 	ctx := context.Background()
 
 	// Refused, never stamped: OpenStore blesses a version-0 file when it just
-	// created it, and a reader never creates one, so any zero it sees belongs
-	// to a build older than the check. Stamping here would be a write from a
+	// created it, and a reader never creates one, so a zero it sees is either
+	// a build older than the check or a file a writer has this instant
+	// created and not yet filled in. Stamping either would be a write from a
 	// command whose whole contract is that it only asks.
 	found, err := readSchemaVersion(ctx, db, path)
 	if err != nil {
@@ -102,12 +103,51 @@ func OpenReader(path string) (*Reader, error) {
 	}
 
 	if found != schemaVersion {
+		// Told apart by whether the schema is THERE. A database mid-creation
+		// has a file and no tables, and answering that with "written by a
+		// different version of steps — delete the file" is both wrong and the
+		// worst possible advice: it is the operator's brand new database,
+		// being written by the run they just started. Racing the first-ever
+		// `steps run` on a fresh checkout is all it takes.
+		empty, checkErr := schemaMissing(ctx, db)
+
 		_ = db.Close()
+
+		if checkErr != nil {
+			return nil, checkErr
+		}
+
+		if empty {
+			return nil, fmt.Errorf("%w: %s", ErrNoState, path)
+		}
 
 		return nil, schemaVersionError(path, found)
 	}
 
 	return &Reader{db: db, owned: true}, nil
+}
+
+// ErrNoState is a state file with no steps schema in it yet: a database a
+// writer is in the middle of creating, or one somebody made with touch.
+// Nothing has been recorded, which is an answer rather than a failure — see
+// OpenReader for why it is distinguished from a version mismatch.
+var ErrNoState = errors.New("state database has nothing recorded yet")
+
+// schemaMissing reports a database that does not have this package's tables.
+func schemaMissing(ctx context.Context, db *sql.DB) (bool, error) {
+	var name string
+
+	err := db.QueryRowContext(ctx,
+		`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pipelines'`).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("could not read the schema of the state db: %w", err)
+	}
+
+	return false, nil
 }
 
 // ErrNoSuchPipeline is a name the state file has never heard of.
@@ -163,7 +203,7 @@ func OpenExisting(path, pipelineName string) (*Store, error) {
 		return nil, fmt.Errorf("could not resolve pipeline %q in %q: %w", pipelineName, path, err)
 	}
 
-	return &Store{db: reader.db, path: path, pipeline: pipelineName, pipelineID: id}, nil
+	return &Store{db: reader.db, path: path, pipeline: pipelineName, pipelineID: id, readOnly: true}, nil
 }
 
 // names is the "did you mean" half of the refusal above.
@@ -275,4 +315,21 @@ type withLeadingDest struct {
 
 func (w withLeadingDest) Scan(dest ...any) error {
 	return w.rows.Scan(append(append([]any{}, w.extra...), dest...)...) //nolint:wrapcheck // the caller names the row it was reading
+}
+
+// HasNothingRecorded reports a path that exists but holds no steps schema —
+// the window between a writer creating the file and filling it in, and the
+// answer a reader gives instead of claiming the file is from another build.
+//
+// A function rather than an exported error check at every call site: the CLI
+// asks this BEFORE opening, so there is no handle to classify an error from.
+func HasNothingRecorded(path string) bool {
+	reader, err := OpenReader(path)
+	if err != nil {
+		return errors.Is(err, ErrNoState)
+	}
+
+	_ = reader.Close()
+
+	return false
 }

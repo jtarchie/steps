@@ -27,6 +27,13 @@ type Store struct {
 	path       string
 	pipeline   string
 	pipelineID int64
+	// readOnly marks a handle obtained by RESOLVING a pipeline rather than
+	// registering one (OpenExisting). It changes nothing about what the ~60
+	// methods can do — Go cannot enforce that — and everything about Close,
+	// which otherwise compacts and checkpoints the file. A command whose whole
+	// contract is that it only asks must not change the bytes on disk, and
+	// must not take the write lock a live daemon is using.
+	readOnly bool
 }
 
 // OpenStore opens (creating if necessary) the sqlite database at path, applies
@@ -136,9 +143,28 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 // and the same busy timeout, and the only thing it does differently is never
 // write.
 func openDB(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite",
-		path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"+
-			"&_pragma=auto_vacuum(incremental)&_pragma=journal_size_limit(67108864)&_txlock=immediate")
+	return openDSN(path, "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"+
+		"&_pragma=auto_vacuum(incremental)&_pragma=journal_size_limit(67108864)&_txlock=immediate")
+}
+
+// openReadOnlyDB opens an existing file for a reader.
+//
+// Every pragma the writer sets that WRITES is dropped: journal_mode and
+// auto_vacuum are recorded in the file header, journal_size_limit sizes a log
+// only a writer creates, and _txlock=immediate takes the write lock at BEGIN.
+// They are set on connect, so a reader carrying them modifies the database
+// before it has read anything — which is both a broken promise and, against a
+// file the operator has made read-only, an outright failure to open.
+//
+// busy_timeout stays: a reader still waits behind a daemon's writer rather
+// than failing instantly. foreign_keys stays because it costs nothing and
+// keeps every handle in this package answering the same way.
+func openReadOnlyDB(path string) (*sql.DB, error) {
+	return openDSN(path, "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+}
+
+func openDSN(path, dsn string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", path+dsn)
 	if err != nil {
 		return nil, fmt.Errorf("could not open state db %q: %w", path, err)
 	}
@@ -299,6 +325,15 @@ func freshlyCreated(ctx context.Context, db *sql.DB) bool {
 // growing.
 func (s *Store) Close() error {
 	ctx := context.Background()
+
+	// A reader compacts nothing. Both statements below are writes — one moves
+	// pages, the other rewrites the log — so a `steps runs` that ran them
+	// changed the file it was only asked to read, took the write lock a live
+	// daemon holds, and failed outright on a file with the write bit off.
+	if s.readOnly {
+		//nolint:wrapcheck // the caller names the store it was closing
+		return s.db.Close()
+	}
 
 	// Hands freed pages back to the filesystem. Unbounded on purpose: this runs
 	// once, at exit, with no build waiting on it.

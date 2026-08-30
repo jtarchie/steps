@@ -144,3 +144,60 @@ func TestRunsCostWillNotVouchForARunItDoesNotHave(t *testing.T) {
 		t.Errorf("output does not say the run has nothing recorded:\n%s", out)
 	}
 }
+
+// TestRunsListShowsASuccessfulAgentRun.
+//
+// The default history view read job_runs — the merkle CACHE index — and
+// recordChainSucceeded deliberately skips a chain containing an agent or a
+// put, because such a chain is never skippable. So a pipeline of exactly the
+// kind steps exists to run recorded every failure and no success: after a run
+// that worked, `steps runs list` said "no job runs recorded".
+//
+// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+func TestRunsListShowsASuccessfulAgentRun(t *testing.T) {
+	dir := t.TempDir()
+	fake := newFakeLLM(t, says("done"))
+
+	path := writePipeline(t, dir, `
+agents:
+- name: writer
+  source:
+    endpoint: `+fake.URL+`/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+
+defaults:
+  preflight:
+    disabled: true
+
+jobs:
+- name: review
+  plan:
+  - agent: writer
+    inputs: []
+    messages:
+      - Say something.
+`)
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	mustRun(t, "run", path, "--job", "review")
+
+	var err error
+
+	out := captureStdout(t, func() { err = run([]string{"runs", "list", path}) })
+
+	if err != nil {
+		t.Fatalf("runs list: %v", err)
+	}
+
+	if !strings.Contains(out, "succeeded") || !strings.Contains(out, "review") {
+		t.Errorf("a successful agent run is missing from the default history view:\n%s", out)
+	}
+
+	// And the row carries the run id, which is what makes the deeper views
+	// reachable from this one.
+	if !strings.Contains(out, "steps runs steps") {
+		t.Errorf("output does not point at where the per-step detail is:\n%s", out)
+	}
+}

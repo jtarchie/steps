@@ -12,6 +12,7 @@ package main
 // so the embeds arrive with the tests that would catch it.
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -327,5 +328,142 @@ func TestRunsCostTakesTheRunAsAnArgument(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "could not parse flags") {
 		t.Errorf("--run was rejected by the command rather than by the grammar: %v", err)
+	}
+}
+
+// TestListingsDoNotMintThePipelineTheyWereAskedAbout.
+//
+// The read-that-writes fix reached `steps runs` and stopped there: approvals,
+// questions and jobs still opened their store the writer's way, which
+// registers whatever name it is handed. That was worse than the original bug
+// it mirrored — one listing against a shared state file minted the phantom
+// row that made `steps runs` STOP refusing the same typo, so the fix undid
+// itself the moment an operator asked a second question.
+//
+// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+func TestListingsDoNotMintThePipelineTheyWereAskedAbout(t *testing.T) {
+	state, first, _ := sharedRunsFixture(t)
+	stranger := filepath.Join(filepath.Dir(first), "stranger.yml")
+
+	writePipelineFile(t, stranger, `
+jobs:
+- name: build
+  plan:
+  - task: compile
+    inputs: []
+    run: "true"
+`)
+
+	for _, args := range [][]string{
+		{"approvals", stranger, "--state", state},
+		{"questions", stranger, "--state", state},
+		{"jobs", stranger, "--state", state},
+	} {
+		t.Run(args[0], func(t *testing.T) {
+			var err error
+
+			_ = captureStdout(t, func() { err = run(args) })
+			if err == nil {
+				t.Fatalf("%v answered for a pipeline the file has never heard of", args)
+			}
+		})
+	}
+
+	// And the file still holds only what actually ran, which is the property
+	// a phantom row destroys for every later command.
+	listing := captureStdout(t, func() {
+		err := run([]string{"runs", "--state", state})
+		if err != nil {
+			t.Errorf("runs --state: %v", err)
+		}
+	})
+
+	if strings.Contains(listing, "stranger") {
+		t.Errorf("a listing registered the pipeline it was asked about:\n%s", listing)
+	}
+}
+
+// TestListingsAnswerBeforeAStateFileExists: on a fresh checkout there is no
+// database, and "nothing is waiting" is the answer — not an error, and not a
+// .steps/ directory created by asking.
+//
+// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+func TestListingsAnswerBeforeAStateFileExists(t *testing.T) {
+	path := flagFixture(t)
+
+	for _, probe := range []struct {
+		verb string
+		says string
+	}{
+		{"approvals", "no approvals are waiting"},
+		{"questions", "no questions are waiting"},
+		{"jobs", "no jobs are paused"},
+	} {
+		t.Run(probe.verb, func(t *testing.T) {
+			var err error
+
+			out := captureStdout(t, func() { err = run([]string{probe.verb, path}) })
+			if err != nil {
+				t.Fatalf("%s on a fresh checkout: %v", probe.verb, err)
+			}
+
+			if !strings.Contains(out, probe.says) {
+				t.Errorf("%s printed %q, want %q", probe.verb, out, probe.says)
+			}
+		})
+	}
+
+	if fileExists(statePath(path, "")) {
+		t.Error("a listing created the state database it was asked about")
+	}
+}
+
+// TestReadingADatabaseBeingCreated.
+//
+// A writer creates the file and stamps the schema into it as two steps, so a
+// reader can arrive in between — racing the first-ever `steps run` on a fresh
+// checkout is all it takes. It used to answer "the state database was written
+// by a different version of steps … delete the file", which is wrong and is
+// the worst possible advice: it is the operator's brand new database, being
+// written by the run they just started.
+//
+// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+func TestReadingADatabaseBeingCreated(t *testing.T) {
+	path := flagFixture(t)
+	state := statePath(path, "")
+
+	err := os.MkdirAll(filepath.Dir(state), 0o750)
+	if err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// An empty file is exactly what the window looks like from outside.
+	err = os.WriteFile(state, nil, 0o600)
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	for _, probe := range []struct {
+		args []string
+		says string
+	}{
+		{[]string{"runs", "list", path}, "no runs recorded yet"},
+		{[]string{"approvals", path}, "no approvals are waiting"},
+		{[]string{"questions", path}, "no questions are waiting"},
+		{[]string{"jobs", path}, "no jobs are paused"},
+		{[]string{"runs", "--state", state}, "no pipelines recorded"},
+	} {
+		t.Run(strings.Join(probe.args[:2], " "), func(t *testing.T) {
+			var runErr error
+
+			out := captureStdout(t, func() { runErr = run(probe.args) })
+			if runErr != nil {
+				t.Fatalf("%v: %v", probe.args, runErr)
+			}
+
+			if !strings.Contains(out, probe.says) {
+				t.Errorf("%v printed %q, want %q", probe.args, out, probe.says)
+			}
+		})
 	}
 }

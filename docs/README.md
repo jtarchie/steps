@@ -41,8 +41,8 @@ steps web <pipeline>...     the daemon: serve the UI, poll trigger: true
                             resources, run affected jobs (--once for cron)
 steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip
-steps runs <pipeline>       show what past runs recorded — job outcomes, or
-                            steps|queue|cost|where for the other four views
+steps runs <pipeline>       what ran, newest first (steps|queue|cost|where
+                            for the other four views; runs steps says why)
 steps runs --state <file>   with no pipeline: every pipeline in one state file
 steps validate --live       also probe the models and MCP servers themselves
                             (--job <name> narrows it to one job)
