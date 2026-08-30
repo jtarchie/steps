@@ -30,7 +30,7 @@ func TestTopLevelCommandsAreTheDocumentedSet(t *testing.T) {
 
 	want := map[string]bool{
 		"Run": true, "Watch": true, "Test": true, "Validate": true,
-		"Runs": true, "Plan": true, "MCP": true, "Preflight": true,
+		"Runs": true, "Plan": true, "MCP": true,
 		"Jobs": true, "Approvals": true, "Questions": true,
 		"Web": true, "Docs": true,
 	}
@@ -131,8 +131,8 @@ func TestVarsFileAppliesWhereverItIsDeclared(t *testing.T) {
 		{"watch", path, "--once"},
 		{"test", path},
 		{"validate", path},
+		{"validate", path, "--live", "--job", "build"},
 		{"plan", path, "--job", "build"},
-		{"preflight", path, "--job", "build"},
 		{"web", path},
 	} {
 		t.Run(args[0], func(t *testing.T) {

@@ -264,4 +264,4 @@ Stated plainly rather than discovered:
 - **No containers.** `image:`, `network:`, `privileged:` and `container_limits:` alongside `expr:` are load errors. An expression evaluates in this process; there is nothing to isolate. Per-call `timeout` and `max_response_bytes` on `http()` are what replace them.
 - **Text only.** Binary artifacts are shell's job.
 - **No shell, ever.** There is no builtin that runs a command, and expr has no way to reach one. That is the safety property, not an omission.
-- **Syntax errors are not load errors.** `steps validate` and `steps preflight` catch them — both before anything polls — but `steps` will parse a pipeline containing a broken expression. The config layer deliberately has no expression engine in it.
+- **Syntax errors are not load errors.** `steps validate` and `steps validate --live` catch them — both before anything polls — but `steps` will parse a pipeline containing a broken expression. The config layer deliberately has no expression engine in it.

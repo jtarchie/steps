@@ -216,9 +216,15 @@ jobs:
 	}
 }
 
-// TestPreflightCommandRunsNothing covers `steps preflight`: the same probe,
-// asked deliberately, before committing to an hour-long run.
-func TestPreflightCommandRunsNothing(t *testing.T) {
+// TestValidateLiveRunsNothing covers `steps validate --live`: the same probe
+// `steps preflight` used to be, asked deliberately, before committing to an
+// hour-long run.
+//
+// A depth on validate rather than a verb of its own, because both are reads
+// of the same question — validate answers "is this runnable at all", --live
+// answers "is it runnable right now" — and the flag says which without
+// changing what the command does.
+func TestValidateLiveRunsNothing(t *testing.T) {
 	pipeline.ResetPreflightCache()
 
 	dir := t.TempDir()
@@ -227,10 +233,76 @@ func TestPreflightCommandRunsNothing(t *testing.T) {
 
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
-	err := run([]string{"preflight", path, "--job", "publish"})
+	err := run([]string{"validate", path, "--live", "--job", "publish"})
 	if err != nil {
-		t.Fatalf("preflight failed against a live model: %v", err)
+		t.Fatalf("validate --live failed against a live model: %v", err)
 	}
 
 	assertNoFile(t, filepath.Join(dir, "task.log"))
+}
+
+// TestValidateLiveReportsAnUnreachableModel is the other half: --live has to
+// FAIL on what plain validate cannot see. The file is fine and the machine
+// has the credential; only the service is down.
+func TestValidateLiveReportsAnUnreachableModel(t *testing.T) {
+	pipeline.ResetPreflightCache()
+
+	dir := t.TempDir()
+
+	outage := make([]turn, 5)
+	for i := range outage {
+		outage[i] = failsWith(http.StatusInternalServerError)
+	}
+
+	fake := newFakeLLM(t, outage...)
+	path := preflightPipeline(t, dir, fake.URL, "")
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	// Plain validate passes: nothing about a dead endpoint is knowable from
+	// the file or from this machine.
+	err := run([]string{"validate", path})
+	if err != nil {
+		t.Fatalf("validate without --live should not reach the model: %v", err)
+	}
+
+	err = run([]string{"validate", path, "--live"})
+	if err == nil {
+		t.Fatal("--live passed against a model that answers 500 to everything")
+	}
+
+	if !strings.Contains(err.Error(), "cannot run here") {
+		t.Errorf("failure does not read as a pipeline that cannot run: %v", err)
+	}
+}
+
+// TestValidateDepthFlagsRefuseToContradict.
+//
+// The three depths are ordered — the file, this machine, the services — so
+// asking for the shallowest and the deepest together means nothing, and
+// --job without --live would be a flag that reads as configured while
+// binding nothing.
+func TestValidateDepthFlagsRefuseToContradict(t *testing.T) {
+	t.Parallel()
+
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: build
+  plan:
+  - task: compile
+    inputs: []
+    run: "true"
+`)
+
+	for name, args := range map[string][]string{
+		"live with syntax-only": {"validate", path, "--live", "--syntax-only"},
+		"job without live":      {"validate", path, "--job", "build"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := run(args)
+			if err == nil {
+				t.Fatalf("%v was accepted", args)
+			}
+		})
+	}
 }

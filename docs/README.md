@@ -44,7 +44,8 @@ steps plan <pipeline>       show what a run would execute vs skip
 steps runs <pipeline>       show what past runs recorded — job outcomes, or
                             steps|queue|cost|where for the other four views
 steps runs --state <file>   with no pipeline: every pipeline in one state file
-steps preflight <pipeline>  check a job's models and MCP servers are live
+steps validate --live       also probe the models and MCP servers themselves
+                            (--job <name> narrows it to one job)
 steps jobs <pipeline>       list jobs the circuit breaker paused
                             (steps jobs resume <pipeline> <job> clears one)
 steps approvals <pipeline>  list approval: steps waiting for a decision
@@ -72,7 +73,7 @@ steps: error: pipeline.yml cannot run here:
   mcp "gopls"    command "gopls" not found on PATH
 ```
 
-`steps preflight` answers the run-time version of the same question: not "is this pipeline runnable" but "is it runnable *right now*". It sends a minimal request to every model the job reaches and starts every MCP server it grants.
+`steps validate --live` answers the run-time version of the same question: not "is this pipeline runnable" but "is it runnable *right now*". It sends a minimal request to every model the pipeline reaches and starts every MCP server it grants; `--job <name>` narrows that to one job.
 
 **`steps run` does this automatically, before any step executes.** A plan like `plan -> code -> check -> review -> publish` used to discover a dead model half an hour in, with everything before it paid for and thrown away. Now it fails in seconds, saying explicitly that nothing ran:
 

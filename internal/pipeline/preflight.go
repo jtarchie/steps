@@ -42,7 +42,7 @@ func preflightSettings(cfg *config.Config) *config.Preflight {
 // Preflight probes every model and MCP server the job's plan reaches and
 // reports the ones that are not working. It runs nothing and changes nothing.
 //
-// Exported so `steps preflight` can ask the question without committing to a
+// Exported so `steps validate --live` can ask the question without committing to a
 // run. The CLI layer reaches internal/agent through here rather than directly,
 // keeping the dependency direction the depguard rules describe.
 func Preflight(ctx context.Context, cfg *config.Config, job *config.Job) []config.Problem {

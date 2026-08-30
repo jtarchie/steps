@@ -99,7 +99,7 @@ gopls   stdio      gopls mcp (cwd: repo)               none                agent
 - **A relative `cwd:` is listed but not probed** (`·`). It resolves against the agent step's own working directory, which only exists while a run is happening — spawning it from your shell's directory instead would report a working server as broken.
 - **`USED BY` is the consumers**: the agents whose `tools:` grant the server, the `fix:` blocks whose own `tools:` grant it, and the resource types whose `mcp:` backend calls it. `(unused)` means nothing in this pipeline can reach it.
 - **`AUTH` names the env var, never the value** — `bearer $GITHUB_PAT` is the variable to go check.
-- **It reports; it does not gate.** A server that doesn't answer is a row with an ✗ and a zero exit status. `steps preflight` is the verb that fails on one, and `steps validate` is the one that checks the file.
+- **It reports; it does not gate.** A server that doesn't answer is a row with an ✗ and a zero exit status. `steps validate --live` is what fails on one, and plain `steps validate` is what checks the file.
 
 ## Discovering a server's tools: `steps mcp tools`
 
@@ -340,7 +340,7 @@ The rule of thumb: **a tool whose output a model was meant to read is an agent's
 
 ### Preflight checks this before anything runs
 
-Both ways an MCP call is wrong — a tool the server doesn't expose, and required arguments the call will never send — are answerable from the server's published tool list, without calling anything. So they are: `steps run` checks the resources its job touches before the first step, `steps preflight` asks the same question on demand, and **`steps watch` checks every `trigger:` resource before its first poll and exits if one can't work**. That last one is the point: a poll loop's reaction to a permanent misconfiguration is to log it and try again on the next interval, forever, with nothing enqueued and nothing red.
+Both ways an MCP call is wrong — a tool the server doesn't expose, and required arguments the call will never send — are answerable from the server's published tool list, without calling anything. So they are: `steps run` checks the resources its job touches before the first step, `steps validate --live` asks the same question on demand, and **`steps watch` checks every `trigger:` resource before its first poll and exits if one can't work**. That last one is the point: a poll loop's reaction to a permanent misconfiguration is to log it and try again on the next interval, forever, with nothing enqueued and nothing red.
 
 ```
 watch: preflight failed, nothing was polled:
