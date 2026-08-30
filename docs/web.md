@@ -132,7 +132,7 @@ the things a scrollback cannot give you:
   and Reserved Instances, a spot instance's paid price is reported by no API,
   and real billing lands up to a day later. That is the opposite call from
   spend above, where the *provider* reports the dollars and steps only records
-  what it was told. `steps runs <pipeline> --where` reads the same rows in a
+  what it was told. `steps runs where <pipeline>` reads the same rows in a
   terminal.
 - **Every hash is a link** to the node page, and **every step has one too** —
   the `#` beside its name is a URL you can paste at someone, and it opens the
@@ -266,7 +266,7 @@ WHEN                 PIPELINE  JOB      STATUS     RUN
 ```
 
 The `RUN` column is the handle for going back to one pipeline: `steps runs
-app.yml --run 46UMHVPYRA6YHB7M --state <file>`. That is also why the other
+cost app.yml 46UMHVPYRA6YHB7M --state <file>`. That is also why the other
 views stay scoped — `--job`, `--queue`, `--steps`, `--cost`, `--where` and
 `--run` are questions about one pipeline, and asking them without naming one
 is refused rather than answered for a pipeline nobody picked.

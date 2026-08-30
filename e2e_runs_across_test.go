@@ -138,44 +138,58 @@ func TestRunsScopedStaysScoped(t *testing.T) {
 	}
 }
 
-// TestRunsAcrossRefusesScopedQuestions.
+// TestScopedViewsRequireAPipeline.
 //
-// --job, --queue, --steps, --cost, --where and --run are all questions about
-// one pipeline: a queue is per pipeline, a step's job name means nothing
-// without one, and --run refuses an id belonging to another pipeline by
-// design. Answering them across the file would mean inventing a semantic;
-// answering them for a pipeline nobody named would mean picking one. Both are
-// worse than saying so.
+// steps, queue, cost and where are questions about one pipeline: a queue
+// belongs to a pipeline, a step's job name means nothing without one, and
+// cost/where already refuse an id belonging to a neighbour in the same file.
+// Answering them across a file would mean inventing a semantic; answering
+// them for a pipeline nobody named would mean picking one.
 //
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
-func TestRunsAcrossRefusesScopedQuestions(t *testing.T) {
+// This used to be a runtime table of flag combinations to refuse. It is the
+// grammar now — which is the point of the subcommands, so the test asserts
+// the grammar rejects them rather than the command.
+func TestScopedViewsRequireAPipeline(t *testing.T) {
+	t.Parallel()
+
 	state, _, _ := sharedRunsFixture(t)
 
-	for _, flag := range [][]string{
-		{"--job", "build"},
-		{"--queue"},
-		{"--steps"},
-		{"--cost"},
-		{"--where"},
-		{"--run", "SOMERUNID"},
-	} {
-		t.Run(flag[0], func(t *testing.T) {
-			var err error
-
-			_ = captureStdout(t, func() {
-				err = run(append([]string{"runs", "--state", state}, flag...))
-			})
-
+	for _, view := range []string{"steps", "queue", "cost", "where"} {
+		t.Run(view, func(t *testing.T) {
+			err := run([]string{"runs", view, "--state", state})
 			if err == nil {
-				t.Fatalf("%s across pipelines was answered instead of refused", flag[0])
+				t.Fatalf("runs %s answered without a pipeline to answer for", view)
 			}
 
-			// The message has to name the way out, which is the pipeline
-			// argument the caller left off.
-			if !strings.Contains(err.Error(), flag[0]) || !strings.Contains(err.Error(), "steps runs <pipeline>") {
-				t.Errorf("refusal does not say what to do instead: %v", err)
+			if !strings.Contains(err.Error(), "could not parse flags") {
+				t.Errorf("runs %s was refused by the command rather than by the grammar: %v", view, err)
 			}
 		})
+	}
+}
+
+// TestJobFilterIsRefusedAcrossPipelines is the one flag the grammar cannot
+// settle: --job is legitimate on `list`, and meaningless when the listing
+// spans a file, because the cross-pipeline query does not filter by job and
+// two pipelines calling a job `build` are not one job. Silently ignoring it
+// would answer a different question than the one typed.
+//
+// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+func TestJobFilterIsRefusedAcrossPipelines(t *testing.T) {
+	state, _, _ := sharedRunsFixture(t)
+
+	var err error
+
+	_ = captureStdout(t, func() {
+		err = run([]string{"runs", "--state", state, "--job", "build"})
+	})
+
+	if err == nil {
+		t.Fatal("--job across a whole state file was answered rather than refused")
+	}
+
+	if !strings.Contains(err.Error(), "--job") || !strings.Contains(err.Error(), "steps runs list <pipeline>") {
+		t.Errorf("refusal does not say what to do instead: %v", err)
 	}
 }
 

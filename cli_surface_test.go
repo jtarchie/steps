@@ -309,3 +309,24 @@ func TestJobsResumeRefusesAJobThePipelineDoesNotHave(t *testing.T) {
 		t.Fatal("resuming a job the pipeline does not declare was reported as done")
 	}
 }
+
+// TestRunsCostTakesTheRunAsAnArgument.
+//
+// --run implied --cost, which is a flag that changes which view runs rather
+// than configuring one — the same smell as `jobs --resume`. As a positional
+// the deeper view is what you typed, and the old spelling has to be gone for
+// there to be one grammar.
+func TestRunsCostTakesTheRunAsAnArgument(t *testing.T) {
+	t.Parallel()
+
+	path := flagFixture(t)
+
+	err := run([]string{"runs", "cost", path, "--run", "SOMERUN"})
+	if err == nil {
+		t.Fatal("--run still parses; the run id is a positional now")
+	}
+
+	if !strings.Contains(err.Error(), "could not parse flags") {
+		t.Errorf("--run was rejected by the command rather than by the grammar: %v", err)
+	}
+}

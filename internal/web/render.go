@@ -163,7 +163,7 @@ func templateFuncs() template.FuncMap {
 // the column exists to show — the same reading an unpriced run must never
 // produce.
 //
-// Exported because the terminal report (`steps runs --cost`) prints the same
+// Exported because the terminal report (`steps runs cost`) prints the same
 // figures from the same rows, and two spellings of "how much" would disagree
 // on exactly the cheap runs where the difference is the whole answer.
 func FormatUSD(amount float64) string {

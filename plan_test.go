@@ -74,7 +74,7 @@ jobs:
 	}
 
 	before := captureStdout(t, func() {
-		runsErr := run([]string{"runs", path, "--steps"})
+		runsErr := run([]string{"runs", "steps", path})
 		if runsErr != nil {
 			t.Fatalf("runs: %v", runsErr)
 		}
@@ -88,7 +88,7 @@ jobs:
 	})
 
 	after := captureStdout(t, func() {
-		runsErr := run([]string{"runs", path, "--steps"})
+		runsErr := run([]string{"runs", "steps", path})
 		if runsErr != nil {
 			t.Fatalf("runs: %v", runsErr)
 		}

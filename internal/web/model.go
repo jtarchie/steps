@@ -529,7 +529,7 @@ func (r runView) UsageRows() []usageView {
 
 // PlacementView is one placed step's machine as the template reads it.
 //
-// Exported because `steps runs --where` renders the same rows through it. Two
+// Exported because `steps runs where` renders the same rows through it. Two
 // spellings of "which machine" had already drifted: the CLI's copy never
 // learned Volatile, so the terminal — where an operator debugging a placed
 // step looks first — reported a tmpfs workdir as an ordinary disk.

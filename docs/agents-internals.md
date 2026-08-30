@@ -58,7 +58,7 @@ Both mutations are transport-level only:
 - **No merkle impact.** The session ID and cache marker never enter a step's hashed content, so enabling caching cannot invalidate a cached step, and the same pipeline hashes identically before and after.
 - **No effect on other providers.** A non-OpenRouter base URL gets no custom HTTP client at all, leaving `openai-go` to build its own exactly as it did before this existed.
 
-Whether caching is landing is visible in `steps runs --cost`'s CACHED column — the provider's own reported cache figures, recorded per step (see [agents.md](agents.md#budgets-budgettokens)).
+Whether caching is landing is visible in `steps runs cost`'s CACHED column — the provider's own reported cache figures, recorded per step (see [agents.md](agents.md#budgets-budgettokens)).
 
 ## Timeout and Attempts on Agent Steps
 

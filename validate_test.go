@@ -220,7 +220,7 @@ jobs:
 	}
 
 	steps := captureStdout(t, func() {
-		runsErr := run([]string{"runs", path, "--steps"})
+		runsErr := run([]string{"runs", "steps", path})
 		if runsErr != nil {
 			t.Fatalf("runs --steps: %v", runsErr)
 		}

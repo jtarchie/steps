@@ -41,8 +41,8 @@ steps test <pipeline>       run every job and check assert: directives
 steps web <pipeline>...     serve the browser UI, polling as it serves
 steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip
-steps runs <pipeline>       show what past runs recorded (--cost for spend,
-                            --where for the machines placed steps ran on)
+steps runs <pipeline>       show what past runs recorded — job outcomes, or
+                            steps|queue|cost|where for the other four views
 steps runs --state <file>   with no pipeline: every pipeline in one state file
 steps preflight <pipeline>  check a job's models and MCP servers are live
 steps jobs <pipeline>       list jobs the circuit breaker paused
@@ -55,7 +55,7 @@ steps mcp tools|login       inspect or authorize mcp_servers: entries
 steps docs [page]           read these docs in the terminal
 ```
 
-Two of these answer most "why is it doing that?" questions: `steps plan` explains what the cache would skip, and `steps runs --steps` shows what previous runs actually did.
+Two of these answer most "why is it doing that?" questions: `steps plan` explains what the cache would skip, and `steps runs steps` shows what previous runs actually did.
 
 `steps validate` answers a third: *will this run at all?* It checks the file — syntax, references, field placement — and then the things the file depends on that live outside it:
 
@@ -121,7 +121,7 @@ steps run pipeline.yml --replay r-8f2a1c --from synthesizer
 
 That forks the recorded run and executes from `synthesizer` onward. It does **not** consult the merkle cache: state comes from the source run's workspace (the artifacts earlier steps produced are already on disk), its recorded `run_context`, and its step record.
 
-- **It forks, never mutates.** The source run stays exactly as it was, so the thing you are comparing against still exists — two prompt variants become two runs you can read side by side. `steps runs --cost` prices both.
+- **It forks, never mutates.** The source run stays exactly as it was, so the thing you are comparing against still exists — two prompt variants become two runs you can read side by side. `steps runs cost` prices both.
 - **`--from` names a step**, matched against the *current* plan. The pipeline has almost certainly changed since the source run; that is why you are replaying.
 - **A source run that never completed an earlier step is refused**, naming it.
 - **It needs the source workspace**, so the run being replayed must have been kept (`--keep-workspace`). A reaped tree is a clear error, not a silent full re-run.

@@ -912,11 +912,11 @@ A run that resumes continues its **job** budget from what earlier attempts alrea
 **Reporting happens whether or not you set one**, which is the point: it is what tells you which ceilings are even sensible. Every job that ran an agent step prints what it cost — **and records it**, so the question survives the terminal:
 
 ```
-$ steps runs pipeline.yml --cost
+$ steps runs cost pipeline.yml
 RUN                 TOKENS   CACHED        COST   STEPS
 r-8f2a1c         4,102,338      38%    unpriced       9
 
-$ steps runs pipeline.yml --cost --run r-8f2a1c
+$ steps runs cost pipeline.yml r-8f2a1c
 STEP                                TOKENS   CACHED   DURATION  FINISH
 reviewer [dim=state-mutation]      412,880      61%       1m02s  stop
 reviewer [dim=api]               1,204,551      22%      14m30s  length  <-- truncated

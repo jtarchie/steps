@@ -499,31 +499,40 @@ func (p *PlanCmd) Run() error {
 	return nil
 }
 
-// RunsCmd prints what past runs recorded — job outcomes by default, the
-// per-step detail with --steps, and what `steps watch` has queued with
-// --queue.
+// RunsCmd is what past runs recorded, in five views.
 //
 // The store has always written all of this and offered no way to read it: the
 // only route to "why did my last run fail" was opening .steps/state.db in
 // sqlite and knowing the schema, which the vendored pure-Go driver means may
 // not even be installed.
+//
+// Subcommands rather than a flag switch, and the difference is not
+// cosmetic: each view differs in what it needs NAMED. `list` reads one
+// pipeline or every pipeline in a --state file; the other four are questions
+// about one pipeline and cannot be anything else — a trigger queue belongs to
+// a pipeline, a step's job name means nothing without one, and --run already
+// refuses an id belonging to a neighbour in the same file. As flags on one
+// command that distinction was a runtime table of which combinations to
+// refuse; as subcommands it is the grammar, and kong enforces it.
 type RunsCmd struct {
-	StateFlags `embed:""`
-	Pipeline   string `arg:""                                                  help:"path to the pipeline YAML file (omit, with --state, to read every pipeline in one file)" optional:""`
-	Job        string `help:"only show runs of this job"`
-	Limit      int    `default:"20"                                            help:"maximum number of rows to show"`
-	Steps      bool   `help:"show individual steps instead of job outcomes"`
-	Queue      bool   `help:"show the watch trigger queue instead of job runs"`
-	Cost       bool   `help:"show what each run's agent steps spent"`
-	Where      bool   `help:"show the machines a run's placed steps ran on"`
-	RunID      string `help:"break one run's agent spend down per step"        name:"run"`
+	List  RunsListCmd  `cmd:"" default:"withargs"                              help:"job outcomes, newest first"`
+	Steps RunsStepsCmd `cmd:"" help:"individual steps instead of job outcomes"`
+	Queue RunsQueueCmd `cmd:"" help:"what steps watch has queued"`
+	Cost  RunsCostCmd  `cmd:"" help:"what a pipeline's agent steps spent"`
+	Where RunsWhereCmd `cmd:"" help:"the machines a run's placed steps ran on"`
 }
 
-// Run opens the pipeline's state store read-only and prints the requested
-// view. It stats the database first so asking about history never creates
-// one: a read command that leaves a .steps/ behind would be a surprising
-// thing for `steps runs` to do on a fresh checkout.
-func (r *RunsCmd) Run() error {
+// RunsListCmd is the default view: job outcomes, newest first — and the one
+// view that answers for a whole state file when no pipeline is named.
+type RunsListCmd struct {
+	StateFlags `embed:""`
+	Pipeline   string `arg:""                            help:"path to the pipeline YAML file (omit, with --state, to read every pipeline in one file)" optional:""`
+	Job        string `help:"only show runs of this job"`
+	Limit      int    `default:"20"                      help:"maximum number of rows to show"`
+}
+
+// Run prints one pipeline's job runs, or every pipeline's in a shared file.
+func (r *RunsListCmd) Run() error {
 	// No pipeline named is the cross-pipeline question, which only a --state
 	// file can hold: the default path is derived FROM a pipeline, so without
 	// one there is nothing to read.
@@ -531,45 +540,127 @@ func (r *RunsCmd) Run() error {
 		return r.runAcross()
 	}
 
-	path := statePath(r.Pipeline, r.State)
-
-	_, err := os.Stat(path)
-	if err != nil {
-		fmt.Printf("no runs recorded yet for %s\n", r.Pipeline)
-
-		return nil
+	st, done, ok, err := openRecorded(r.Pipeline, r.StateFlags)
+	if err != nil || !ok {
+		return err
 	}
+	defer done()
 
-	// OpenExisting, not OpenStore: this command asks, and asking must not
-	// register the pipeline it is asking about — see store.OpenExisting.
-	st, err := store.OpenExisting(path, resolvePipelineName(r.Pipeline, r.Name))
-	if err != nil {
-		return fmt.Errorf("could not open state store: %w", err)
+	return r.printJobRuns(context.Background(), st)
+}
+
+// RunsStepsCmd is the per-step detail: what previous runs actually did.
+type RunsStepsCmd struct {
+	StateFlags `embed:""`
+	Pipeline   string `arg:""                             help:"path to the pipeline YAML file"`
+	Job        string `help:"only show steps of this job"`
+	Limit      int    `default:"20"                       help:"maximum number of rows to show"`
+}
+
+// Run prints recorded steps, newest first.
+func (r *RunsStepsCmd) Run() error {
+	st, done, ok, err := openRecorded(r.Pipeline, r.StateFlags)
+	if err != nil || !ok {
+		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer done()
+
+	return r.printSteps(context.Background(), st)
+}
+
+// RunsQueueCmd is what the trigger loop has queued and not yet run.
+type RunsQueueCmd struct {
+	StateFlags `embed:""`
+	Pipeline   string `arg:""       help:"path to the pipeline YAML file"`
+	Limit      int    `default:"20" help:"maximum number of rows to show"`
+}
+
+// Run prints the trigger queue.
+func (r *RunsQueueCmd) Run() error {
+	st, done, ok, err := openRecorded(r.Pipeline, r.StateFlags)
+	if err != nil || !ok {
+		return err
+	}
+	defer done()
+
+	return r.printQueue(context.Background(), st)
+}
+
+// RunsCostCmd is what agent steps spent: per run, or per step within one run.
+//
+// The run id is a positional rather than a --run flag, because naming a run
+// IS choosing the deeper view. As a flag it had to imply --cost to mean
+// anything, which is a flag that reads as configured while binding nothing.
+type RunsCostCmd struct {
+	StateFlags `embed:""`
+	Pipeline   string `arg:""       help:"path to the pipeline YAML file"`
+	RunID      string `arg:""       help:"break this one run down per step" optional:""`
+	Limit      int    `default:"20" help:"maximum number of rows to show"`
+}
+
+// Run prints per-run totals, or one run's steps.
+func (r *RunsCostCmd) Run() error {
+	st, done, ok, err := openRecorded(r.Pipeline, r.StateFlags)
+	if err != nil || !ok {
+		return err
+	}
+	defer done()
 
 	ctx := context.Background()
 
-	switch {
-	// Before --run, which it composes with: --where --run <id> asks about one
-	// run's machines, and --where alone asks about the latest.
-	case r.Where:
-		return r.printPlacements(ctx, st)
-	// --run implies the per-step breakdown rather than needing --cost beside
-	// it. Naming a run is unambiguous about what is wanted, and a flag that
-	// reads as configured while binding nothing is the shape this codebase
-	// rejects everywhere else.
-	case r.RunID != "":
+	if r.RunID != "" {
 		return r.printRunCost(ctx, st)
-	case r.Cost:
-		return r.printCostTotals(ctx, st)
-	case r.Queue:
-		return r.printQueue(ctx, st)
-	case r.Steps:
-		return r.printSteps(ctx, st)
-	default:
-		return r.printJobRuns(ctx, st)
 	}
+
+	return r.printCostTotals(ctx, st)
+}
+
+// RunsWhereCmd is which machines a run's placed steps ran on.
+type RunsWhereCmd struct {
+	StateFlags `embed:""`
+	Pipeline   string `arg:""                                 help:"path to the pipeline YAML file"`
+	RunID      string `arg:""                                 help:"the run to report on (default: the newest)" optional:""`
+	Job        string `help:"take the newest run of this job"`
+}
+
+// Run prints one run's placements.
+func (r *RunsWhereCmd) Run() error {
+	st, done, ok, err := openRecorded(r.Pipeline, r.StateFlags)
+	if err != nil || !ok {
+		return err
+	}
+	defer done()
+
+	return r.printPlacements(context.Background(), st)
+}
+
+// openRecorded opens a pipeline's recorded state for reading.
+//
+// It stats the database first so asking about history never creates one: a
+// read command that leaves a .steps/ behind would be a surprising thing for
+// `steps runs` to do on a fresh checkout. A missing file is not an error —
+// nothing has run yet is an answer — so the caller is told to stop by ok
+// rather than by an error it would have to classify.
+//
+// OpenExisting, not OpenStore: asking must not register the pipeline it is
+// asking about — see store.OpenExisting.
+func openRecorded(pipelinePath string, flags StateFlags) (*store.Store, func(), bool, error) {
+	path := statePath(pipelinePath, flags.State)
+
+	_, err := os.Stat(path)
+	if err != nil {
+		fmt.Printf("no runs recorded yet for %s\n", pipelinePath)
+
+		//nolint:nilerr // a state file that is not there is an answer, not a failure: nothing has run yet
+		return nil, nil, false, nil
+	}
+
+	st, err := store.OpenExisting(path, resolvePipelineName(pipelinePath, flags.Name))
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("could not open state store: %w", err)
+	}
+
+	return st, func() { _ = st.Close() }, true, nil
 }
 
 // runAcross reports on every pipeline in one state file: what it holds, and
@@ -585,14 +676,16 @@ func (r *RunsCmd) Run() error {
 // file turns out to hold: a one-pipeline file still prints the pipeline
 // column here, so a script that reads this output gets the same columns
 // whatever the file grows into.
-func (r *RunsCmd) runAcross() error {
+func (r *RunsListCmd) runAcross() error {
 	if r.State == "" {
-		return errors.New("steps runs needs a pipeline to read, or --state <file> to read every pipeline in one state database")
+		return errors.New("steps runs list needs a pipeline to read, or --state <file> to read every pipeline in one state database")
 	}
 
-	flag, scoped := r.scopedFlag()
-	if scoped {
-		return fmt.Errorf("%s asks about one pipeline: run `steps runs <pipeline> %s --state %s`", flag, flag, r.State)
+	// The only flag left that a whole file cannot answer: RecentRuns spans
+	// pipelines and does not filter by job, and two pipelines calling a job
+	// `build` are not one job. Refused rather than silently ignored.
+	if r.Job != "" {
+		return fmt.Errorf("--job asks about one pipeline: run `steps runs list <pipeline> --job %s --state %s`", r.Job, r.State)
 	}
 
 	// Stat first, for the same reason the scoped path does: asking about
@@ -631,35 +724,6 @@ func (r *RunsCmd) runAcross() error {
 	return r.printRunsAcross(ctx, reader, pipelines)
 }
 
-// scopedFlag reports the first flag that asks about a single pipeline, if one
-// was given without a pipeline to apply it to.
-//
-// Each of these is scoped by its nature rather than by implementation
-// convenience: a trigger queue and a circuit breaker belong to one pipeline, a
-// step's job name means nothing without one, --cost totals spend against a
-// pipeline's runs, and --run/--where already refuse an id belonging to a
-// different pipeline in the same file. Answering them across a file would
-// mean inventing a semantic; answering them for a pipeline nobody named would
-// mean picking one.
-func (r *RunsCmd) scopedFlag() (string, bool) {
-	switch {
-	case r.Job != "":
-		return "--job", true
-	case r.Queue:
-		return "--queue", true
-	case r.Steps:
-		return "--steps", true
-	case r.Cost:
-		return "--cost", true
-	case r.Where:
-		return "--where", true
-	case r.RunID != "":
-		return "--run", true
-	default:
-		return "", false
-	}
-}
-
 // printPipelines lists what the file holds. A name alone does not say which
 // YAML is behind it — the name is the identity and the path is only what a
 // human reads back — so both are printed.
@@ -669,9 +733,9 @@ func printPipelines(pipelines []store.PipelineRow) error {
 
 	for _, pipeline := range pipelines {
 		// Empty when no command that LOADED the YAML has opened this
-		// pipeline yet — `steps runs <typo>.yml` registers a name and knows
-		// no more than that. A dash rather than a blank column, so the row
-		// reads as unanswered rather than as a pipeline living at "".
+		// pipeline yet, which a file written by an older build can hold. A
+		// dash rather than a blank column, so the row reads as unanswered
+		// rather than as a pipeline living at "".
 		path := pipeline.Path
 		if path == "" {
 			path = "-"
@@ -703,7 +767,7 @@ func printPipelines(pipelines []store.PipelineRow) error {
 // timestamp means "last time this content ran" rather than "a build
 // happened". Across pipelines the useful row is a real run with an id, which
 // is the handle for going and asking that pipeline about it.
-func (r *RunsCmd) printRunsAcross(ctx context.Context, reader *store.Reader, pipelines []store.PipelineRow) error {
+func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader *store.Reader, pipelines []store.PipelineRow) error {
 	names := make([]string, 0, len(pipelines))
 	for _, pipeline := range pipelines {
 		names = append(names, pipeline.Name)
@@ -733,12 +797,12 @@ func (r *RunsCmd) printRunsAcross(ctx context.Context, reader *store.Reader, pip
 		return err
 	}
 
-	fmt.Printf("\nbreak one down with: steps runs <pipeline> --run <id> --state %s\n", r.State)
+	fmt.Printf("\nbreak one down with: steps runs cost <pipeline> <run> --state %s\n", r.State)
 
 	return nil
 }
 
-func (r *RunsCmd) printJobRuns(ctx context.Context, st *store.Store) error {
+func (r *RunsListCmd) printJobRuns(ctx context.Context, st *store.Store) error {
 	rows, err := st.ListJobRuns(ctx, r.Job, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read job runs: %w", err)
@@ -761,7 +825,7 @@ func (r *RunsCmd) printJobRuns(ctx context.Context, st *store.Store) error {
 	return flush(writer)
 }
 
-func (r *RunsCmd) printSteps(ctx context.Context, st *store.Store) error {
+func (r *RunsStepsCmd) printSteps(ctx context.Context, st *store.Store) error {
 	rows, err := st.ListNodes(ctx, r.Job, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read steps: %w", err)
@@ -784,7 +848,7 @@ func (r *RunsCmd) printSteps(ctx context.Context, st *store.Store) error {
 	return flush(writer)
 }
 
-func (r *RunsCmd) printQueue(ctx context.Context, st *store.Store) error {
+func (r *RunsQueueCmd) printQueue(ctx context.Context, st *store.Store) error {
 	rows, err := st.ListTriggerQueue(ctx, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read the trigger queue: %w", err)
@@ -2343,7 +2407,7 @@ func applyResume(
 // The cache column is the one worth having: it is the only place prompt
 // caching reports whether it did anything, and a run that suddenly drops from
 // 60% to 0% is the visible half of a bill that doubled.
-func (r *RunsCmd) printCostTotals(ctx context.Context, st *store.Store) error {
+func (r *RunsCostCmd) printCostTotals(ctx context.Context, st *store.Store) error {
 	totals, err := st.RunCostTotals(ctx, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read usage: %w", err)
@@ -2363,13 +2427,13 @@ func (r *RunsCmd) printCostTotals(ctx context.Context, st *store.Store) error {
 			renderCost(total.CostUSD, total.Unpriced), total.Steps)
 	}
 
-	fmt.Printf("\nbreak one down with: steps runs %s --cost --run <id>\n", r.Pipeline)
+	fmt.Printf("\nbreak one down with: steps runs cost %s <run>\n", r.Pipeline)
 
 	return nil
 }
 
 // printRunCost breaks one run down per agent step.
-func (r *RunsCmd) printRunCost(ctx context.Context, st *store.Store) error {
+func (r *RunsCostCmd) printRunCost(ctx context.Context, st *store.Store) error {
 	usage, err := st.RunUsage(ctx, r.RunID)
 	if err != nil {
 		return fmt.Errorf("could not read usage: %w", err)
@@ -2408,7 +2472,7 @@ func (r *RunsCmd) printRunCost(ctx context.Context, st *store.Store) error {
 // spelling of what a machine was, so the browser and the terminal cannot
 // disagree about it. They did — the terminal's copy never learned which
 // filesystems are memory.
-func (r *RunsCmd) printPlacements(ctx context.Context, st *store.Store) error {
+func (r *RunsWhereCmd) printPlacements(ctx context.Context, st *store.Store) error {
 	run, ok, err := r.placementRun(ctx, st)
 	if err != nil || !ok {
 		return err
@@ -2466,7 +2530,7 @@ func (r *RunsCmd) printPlacements(ctx context.Context, st *store.Store) error {
 // this state file — reads back as zero rows, and the caller would print that
 // as a run that ran every step here: a positive claim about a run this
 // pipeline has never seen.
-func (r *RunsCmd) placementRun(ctx context.Context, st *store.Store) (store.RunRow, bool, error) {
+func (r *RunsWhereCmd) placementRun(ctx context.Context, st *store.Store) (store.RunRow, bool, error) {
 	if r.RunID != "" {
 		run, ok, err := st.FindRunRow(ctx, r.RunID)
 		if err != nil {

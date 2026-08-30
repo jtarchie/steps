@@ -150,7 +150,7 @@ jobs:
 	}
 
 	out := captureStdout(t, func() {
-		err = run([]string{"runs", path, "--where"})
+		err = run([]string{"runs", "where", path})
 	})
 	if err != nil {
 		t.Fatalf("steps runs --where: %v", err)
@@ -210,7 +210,7 @@ jobs:
 
 	// No --run: the newest, which is the one that never left this machine.
 	out := captureStdout(t, func() {
-		err = run([]string{"runs", path, "--where"})
+		err = run([]string{"runs", "where", path})
 	})
 	if err != nil {
 		t.Fatalf("steps runs --where: %v", err)
@@ -222,7 +222,7 @@ jobs:
 
 	// Named: the older run, which did.
 	out = captureStdout(t, func() {
-		err = run([]string{"runs", path, "--where", "--run", placedRun})
+		err = run([]string{"runs", "where", path, placedRun})
 	})
 	if err != nil {
 		t.Fatalf("steps runs --where --run: %v", err)
