@@ -22,7 +22,7 @@ Unlike Concourse or GitHub Actions (no agent-native step type) and unlike LangCh
 
 ## Operating Context
 
-Primarily terminal: `steps run|web|test|mcp`, plus `steps web` for a local browser view of the same state. Pipelines are authored as YAML; resources are fetched via shell commands or MCP; tasks run on the host shell or in Docker; agent steps call LLM providers (OpenAI-compatible APIs, OpenRouter, local models) with tool-calling. State persists in SQLite (WAL mode). Typical workflows: authoring pipeline YAML, running/testing pipelines locally, running `steps web` for downstream triggers, resource steps backed by `gh`/git, and optionally MCP servers with OAuth.
+Primarily terminal: `steps run|test|validate|runs|mcp`, plus `steps web` — the daemon that serves a local browser view of the same state, polls trigger: true resources, and runs what they enqueue. Pipelines are authored as YAML; resources are fetched via shell commands or MCP; tasks run on the host shell or in Docker; agent steps call LLM providers (OpenAI-compatible APIs, OpenRouter, local models) with tool-calling. State persists in SQLite (WAL mode). Typical workflows: authoring pipeline YAML, running/testing pipelines locally, running `steps web` for downstream triggers, resource steps backed by `gh`/git, and optionally MCP servers with OAuth.
 
 ## Capabilities and Constraints
 

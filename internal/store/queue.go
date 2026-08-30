@@ -113,7 +113,7 @@ func (s *Store) ClaimNextJob(ctx context.Context) (int64, string, bool, error) {
 // CompleteJob marks a claimed row done or failed. Callers must not call this
 // for a run that stopped because ctx was canceled (SIGINT/SIGTERM) — that
 // row should stay running so ResetStaleRunning re-queues it on the next
-// watch startup, since a graceful shutdown isn't a real failure and nothing
+// daemon startup, since a graceful shutdown isn't a real failure and nothing
 // else will re-trigger the job.
 func (s *Store) CompleteJob(ctx context.Context, id int64, status string, runErr error) error {
 	_, err := s.db.ExecContext(ctx, `
@@ -129,18 +129,19 @@ func (s *Store) CompleteJob(ctx context.Context, id int64, status string, runErr
 }
 
 // ResetStaleRunning flips this pipeline's running rows back to pending —
-// called once at Watch startup so a killed (or gracefully but incompletely
-// shut down) watch process doesn't strand claimed work forever.
+// called once at daemon startup so a killed (or gracefully but incompletely
+// shut down) process doesn't strand claimed work forever.
 //
-// It assumes ONE steps process is polling a pipeline at a time, and that
+// It assumes ONE steps process owns a pipeline's queue at a time, and that
 // assumption is now the whole guard. A file lock used to enforce it, so that a
-// second `steps web` (or a `steps web` that polls) would give way rather than
-// treat a live build's row as an abandoned leftover — flip it, let the job be
-// claimed twice, and silently defeat serial:/max_in_flight. The lock is gone
-// deliberately: a state file belongs to one process, and the ways to run two
-// against it (a watch beside a polling web) are a deployment mistake rather
-// than a case to support. `steps web --no-watch` is still how a UI defers the
-// polling to a separate watcher.
+// second daemon would give way rather than treat a live build's row as an
+// abandoned leftover — flip it, let the job be claimed twice, and silently
+// defeat serial:/max_in_flight. The lock is gone deliberately, and so is the
+// second daemon it arbitrated: `steps web` is the only long-running mode, so a
+// running row found at startup belongs to a process that is gone. Two of them
+// against one state file is a deployment mistake rather than a case to
+// support — see CLAUDE.md's one-process-per-state-database rule, which is what
+// replaced the lock.
 //
 // The rows are scoped to this pipeline because a state file may hold several,
 // and one pipeline's watcher starting up must not reach into another's

@@ -69,8 +69,9 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 	// rather than honoring busy_timeout, because waiting there could
 	// deadlock two transactions against each other. Taking the write lock up
 	// front turns that into an ordinary wait. Within one process this cannot
-	// arise (SetMaxOpenConns(1) below), but `steps web` and `steps web`
-	// against one state.db are two processes, and both enqueue.
+	// arise for one HANDLE (SetMaxOpenConns(1) below), but a --state file
+	// holding several pipelines gets one handle per pipeline — separate pools
+	// on one file, inside one process — and every one of them enqueues.
 	//
 	// Every transaction in this package is a writer, so there is no
 	// read-only transaction paying for the stricter lock.

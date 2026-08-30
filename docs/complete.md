@@ -70,8 +70,7 @@ Run it:
 
 ```bash
 steps run pipeline.yml          # one shot
-steps web pipeline.yml        # keep running it on new versions
-steps web pipeline.yml          # watch the transcript in a browser
+steps web pipeline.yml          # serve the UI, poll for new versions, run what they trigger
 ```
 
 From here, the usual next steps are wiring in a real resource (the built-in `git`, or your own type against an API), swapping the model for the one you use ([agents.md](agents.md)), and bounding the spend with `budget:` and `timeout:` ([attempts-timeout.md](attempts-timeout.md)).

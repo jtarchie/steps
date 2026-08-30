@@ -28,10 +28,13 @@ import (
 )
 
 // ErrNoTriggers reports a pipeline with no trigger: true get step: there is
-// nothing for a poll loop to check. Exported because whether that is fatal
-// depends on what the process is FOR — `steps web` exists to poll and
-// refuses to start, while `steps web` exists to serve and carries on.
-var ErrNoTriggers = errors.New("no get step in any job sets trigger: true; nothing for watch to poll")
+// nothing for a poll loop to check.
+//
+// Exported because it is a fact about the pipeline rather than a failure of
+// the process: `steps web` serves such a pipeline without polling it, and
+// `steps web --once` says so and moves on to the next one. Plenty of
+// pipelines are run by hand, and the UI is where you would run them from.
+var ErrNoTriggers = errors.New("no get step in any job sets trigger: true; there is nothing to poll")
 
 // Resources returns the distinct resource names referenced by any get
 // step with trigger: true, anywhere in any job's plan, in first-seen order.
@@ -95,13 +98,8 @@ func AffectedJobs(cfg *config.Config, resourceName string) []*config.Job {
 	return jobs
 }
 
-// Watch polls every trigger resource every interval, diffs against the last
-// checked version recorded in st, and enqueues every job affected by a
-// version change into st's durable queue. A pool of maxConcurrent workers
-// (at least 1) drains that queue by calling pipeline.RunJob. Blocks until
-// ctx is canceled.
-// prepareWatch runs the checks and state reconciliation both watch modes
-// need before anything polls.
+// prepareWatch runs the checks and state reconciliation a polling process
+// needs before anything polls.
 func prepareWatch(ctx context.Context, cfg *config.Config, st *store.Store, interval time.Duration) error {
 	err := watchable(ctx, cfg, interval)
 	if err != nil {
@@ -185,11 +183,10 @@ func WatchOnce(
 	return nil
 }
 
-// Poll is the producer half of a watching process: it validates and
-// preflights the pipeline,
-// then checks every trigger: true resource on an interval and enqueues the
-// jobs a version change affects, until ctx is canceled. It never drains the
-// queue.
+// Poll is the producer half of a watching process: it validates and preflights
+// the pipeline, then checks every trigger: true resource on an interval and
+// enqueues the jobs a version change affects, until ctx is canceled. It never
+// drains the queue.
 //
 // The split exists because `steps web` drains the same queue through its own
 // in-process runner: a second set of workers here would claim rows out from
@@ -220,8 +217,8 @@ func Poll(ctx context.Context, cfg *config.Config, st *store.Store, interval tim
 }
 
 // watchable reports whether there is anything to watch and whether what
-// there is can be checked at all — every reason to refuse to start, gathered
-// in one place so Watch's own body is the loop it exists to run.
+// there is can be checked at all — every reason not to poll, gathered in one
+// place so each caller's own body is the work it exists to do.
 func watchable(ctx context.Context, cfg *config.Config, interval time.Duration) error {
 	resources := Resources(cfg)
 	if len(resources) == 0 {
@@ -1157,7 +1154,7 @@ func skipIfPaused(ctx context.Context, st *store.Store, jobName string, id int64
 		return false, nil
 	}
 
-	printf("trigger: %s is paused (resume with: steps jobs resume %s)\n", jobName, jobName)
+	printf("trigger: %s is paused (resume with: steps jobs resume <pipeline> %s)\n", jobName, jobName)
 
 	err = st.CompleteJob(context.WithoutCancel(ctx), id, "skipped", nil)
 	if err != nil {
@@ -1199,12 +1196,12 @@ func recordBreaker(ctx context.Context, st *store.Store, job *config.Job, runErr
 		return
 	}
 
-	printf("trigger: %s PAUSED after %d consecutive failures — resume with: steps jobs resume %s\n",
+	printf("trigger: %s PAUSED after %d consecutive failures — resume with: steps jobs resume <pipeline> %s\n",
 		job.Name, consecutive, job.Name)
 
 	slog.Warn("trigger.job_paused",
 		"job", job.Name,
 		"consecutive_failures", consecutive,
 		"max_consecutive_failures", job.MaxConsecutiveFailures,
-		"resume", "steps jobs resume "+job.Name)
+		"resume", "steps jobs resume <pipeline> "+job.Name)
 }

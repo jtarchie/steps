@@ -1,6 +1,6 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps questions</b></h1>
-<p class="metaline">a step asked for a fact it could not get any other way — an answer here is the same record `steps answer` writes</p>
+<p class="metaline">a step asked for a fact it could not get any other way — an answer here is the same record `steps questions answer` writes</p>
 
 {{range .Questions}}
 <div class="approval {{if ne .Status "pending"}}decided{{end}}">
@@ -8,7 +8,7 @@
   <div class="msg">{{.Question}}</div>
   {{if eq .Status "pending"}}
     {{if $.Nav.ReadOnly}}
-    <div class="meta">This server is read-only. Answer with <code>steps answer &lt;pipeline&gt; {{.ID}} &lt;answer&gt;</code>.</div>
+    <div class="meta">This server is read-only. Answer with <code>steps questions answer &lt;pipeline&gt; {{.ID}} &lt;answer&gt;</code>.</div>
     {{else}}
     <!-- The free-text field and its own submit come FIRST, and the ordering is
          load-bearing: pressing Enter in a text input submits the form with its

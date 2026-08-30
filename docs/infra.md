@@ -494,7 +494,7 @@ jobs:
 ```
 Fri 02:00  nightly-summary failed (1/3 consecutive)
 Sat 02:00  nightly-summary failed (2/3 consecutive)
-Sun 02:00  nightly-summary PAUSED after 3 consecutive failures — resume with: steps jobs resume nightly-summary
+Sun 02:00  nightly-summary PAUSED after 3 consecutive failures — resume with: steps jobs resume <pipeline> nightly-summary
 ```
 
 - **It counts triggered RUNS, not the `attempts:` retries inside one** — conflating them would trip the breaker on ordinary flakiness a retry would have absorbed.
@@ -748,22 +748,32 @@ jobs:
 ```
 
 ```bash
-steps web pipeline.yml --listen :8080
+steps web pipeline.yml --listen 0.0.0.0:8080 --read-only
 curl -X POST 'http://localhost:8080/p/pipeline/check/repo?token=…'   # or: Authorization: Bearer …
 ```
 
 The route lives under the pipeline it checks, on the same address the UI is
-served from. `steps watch --listen` used to open a second port of its own, so
-a deployment that wanted both had two addresses and two HTTP surfaces to
-expose; one daemon means one listener. `pipeline` in the path is the
-pipeline's name — the YAML's base name unless `--name` says otherwise, the
-same string as its `/p/<name>/` page.
+served from. The poll loop used to open a second port of its own, so a
+deployment that wanted both had two addresses and two HTTP surfaces to expose;
+one daemon means one listener. `pipeline` in the path is the pipeline's name —
+the YAML's base name unless `--name` says otherwise, the same string as its
+`/p/<name>/` page.
+
+> **One listener means one exposure.** Reaching this endpoint from outside the
+> machine means binding `--listen` to a routable address, and that address also
+> serves the UI — which has **no authentication at all** (see
+> [web.md](web.md#security)). Anyone who can reach the port can read every run,
+> transcript and log, and — without `--read-only` — trigger any job, decide any
+> approval, and answer any question. Pair the two flags, as above: `--read-only`
+> withholds every browser control while leaving this token-authenticated route
+> working, which is exactly the shape a webhook receiver wants. Put it behind a
+> reverse proxy if the UI needs to be reachable too.
 
 - **The token is a credential, not config.** `webhook_token_env:` names an environment variable, following `api_key_env:`. A literal is rejected at load — a resource's fields are hashed into the merkle content map, so a literal token would be written to `state.db` in cleartext.
 - **An unset token variable accepts nothing.** Reading an empty expectation as "no auth required" would turn a deployment mistake into an open trigger endpoint.
 - **A bad token and an unknown resource are indistinguishable** (both 401) — otherwise the endpoint is a free directory of a pipeline's resource names.
 - **POST only.** A GET would be triggerable by a browser preview or a link scanner.
 - **Exempt from the UI's same-origin check**, and only this route: a webhook sender is cross-origin by definition, and the resource's own token is the stronger check. Every browser mutation still requires a matching `Origin`.
-- **A pipeline that names no `webhook_token_env:` resource has no route at all** — 404 rather than an endpoint that authenticates nothing.
+- **A pipeline that names no `webhook_token_env:` resource has no route at all** — 404 rather than an endpoint that authenticates nothing. That is also the way to turn the endpoint off: `--read-only` does *not* withhold it, deliberately (see [web.md](web.md#triggering-approving-resuming)).
 - **The poll loop keeps running.** A webhook that is never delivered must not mean a change is never noticed.
 - **A webhook treats the version as changed** even when it matches what was last recorded: the sender knows something the check output may not show yet.

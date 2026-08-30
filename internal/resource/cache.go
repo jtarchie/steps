@@ -87,7 +87,7 @@ type cacheEntry struct {
 }
 
 // NewCache returns an empty Cache, scoped to one RunJob invocation. Never
-// share one Cache instance across concurrent RunJob calls (as steps watch
+// share one Cache instance across concurrent RunJob calls (as steps web
 // --max-concurrent > 1 makes possible) — each invocation must get its own,
 // since a cached miss vs. hit is only valid within the single (cfg, pinned)
 // combination one invocation resolves against.

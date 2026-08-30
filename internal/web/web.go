@@ -6,8 +6,8 @@
 // exist and how they depend on each other, what a run did step by step, why a
 // step was skipped, what an agent actually said — and the two mutations it
 // offers (enqueue a job, decide an approval) go through the same rows
-// `steps web` and `steps approvals approve` use. Nothing here is a parallel execution
-// path.
+// `steps web` and `steps approvals approve` use. Nothing here is a parallel
+// execution path.
 //
 // The server is single-user and binds loopback by default: there is no
 // authentication, because the thing it authenticates against does not exist —
@@ -41,6 +41,11 @@ const historyLimit = 200
 // that reads a prior run's steps.
 const runEventLimit = 5000
 
+// readHeaderTimeout bounds how long a client may take to send its headers.
+// A page request and a webhook body are both small; a sender that dribbles
+// them is holding a connection, not making a request.
+const readHeaderTimeout = 5 * time.Second
+
 // Pipeline is one loaded pipeline the server serves, with its own config and
 // its own store handle. Two served pipelines may now share a state FILE (see
 // --state), but never a store handle: each one is scoped to its own pipeline
@@ -66,8 +71,8 @@ type Pipeline struct {
 	// Built by the caller (trigger.WebhookHandler) rather than here: this
 	// package serves the surface and does not own the poll loop, the same
 	// division that keeps the runner an interface. It used to be a second
-	// listener on a second port under `steps watch --listen` (before the daemons merged); one daemon
-	// means one address.
+	// listener on a second port of the poll loop's own; one daemon means one
+	// address.
 	Webhook http.Handler
 }
 
@@ -76,8 +81,14 @@ type Server struct {
 	pipelines []*Pipeline
 	bySlug    map[string]*Pipeline
 	echo      *echo.Echo
-	// runner enqueues and executes jobs. nil disables every mutation, which
-	// is what a read-only deployment gets.
+	// runner enqueues and executes jobs. nil disables every mutation a
+	// BROWSER can reach, which is what a read-only deployment gets.
+	//
+	// The webhook route is deliberately not among them: it carries the
+	// resource's own token rather than riding this server's (absent)
+	// authentication, and a read-only build box that could not be notified is
+	// most of what a read-only build box is for. A pipeline that wants no such
+	// endpoint declares no webhook_token_env: resource, and the route 404s.
 	runner Runner
 }
 
@@ -135,6 +146,13 @@ func (s *Server) routes() error {
 
 	e.Renderer = renderer
 	e.HTTPErrorHandler = s.handleError
+
+	// echo builds a bare http.Server, which has no read timeouts at all. The
+	// webhook listener this address absorbed set one explicitly, for a reason
+	// that survived the merge: a sender that stalls mid-request must not hold
+	// a connection open indefinitely, and this is the address an operator
+	// exposes to receive deliveries from outside.
+	e.Server.ReadHeaderTimeout = readHeaderTimeout
 
 	e.Use(middleware.Recover())
 

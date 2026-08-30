@@ -1,6 +1,6 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps approvals</b></h1>
-<p class="metaline">the row is the audit trail — a decision here is the same record `steps approve` writes</p>
+<p class="metaline">the row is the audit trail — a decision here is the same record `steps approvals approve` writes</p>
 
 {{range .Approvals}}
 <div class="approval {{if ne .Status "pending"}}decided{{end}}">
@@ -8,7 +8,7 @@
   <div class="msg">{{.Message}}</div>
   {{if eq .Status "pending"}}
     {{if $.Nav.ReadOnly}}
-    <div class="meta">This server is read-only. Decide with <code>steps approve {{.ID}}</code>.</div>
+    <div class="meta">This server is read-only. Decide with <code>steps approvals approve &lt;pipeline&gt; {{.ID}}</code>.</div>
     {{else}}
     <form class="decide" method="post" action="/p/{{$.Nav.Current}}/approvals/{{.ID}}">
       <input type="text" name="reason" placeholder="reason (recorded)" aria-label="Decision reason">

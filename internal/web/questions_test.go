@@ -151,7 +151,11 @@ func TestQuestionsPageWithholdsTheControlWhenReadOnly(t *testing.T) {
 		t.Error("a read-only server offered an answer form")
 	}
 
-	if !strings.Contains(body, "steps answer") {
+	// The whole spelling, not a prefix of it: `steps answer` was a real verb
+	// until the CLI consolidation, and asserting the prefix PINNED the
+	// retired one — the page could name a command that no longer parses and
+	// this test would pass, which is what happened.
+	if !strings.Contains(body, "steps questions answer") {
 		t.Error("a read-only server did not say how to answer instead")
 	}
 

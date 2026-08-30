@@ -141,7 +141,7 @@ func LoadTokenFile(path string) (*TokenFile, error) {
 }
 
 // Save writes t to path atomically (temp file in the same directory, then
-// rename), so a concurrent reader — e.g. another `steps watch
+// rename), so a concurrent reader — e.g. another `steps web
 // --max-concurrent` worker refreshing the same server's token — never
 // observes a half-written file. File permissions are 0600 (dir 0700).
 func (t *TokenFile) Save(path string) error {

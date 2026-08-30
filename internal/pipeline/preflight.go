@@ -32,11 +32,7 @@ func preflightDisabled(ctx context.Context) bool {
 }
 
 func preflightSettings(cfg *config.Config) *config.Preflight {
-	if cfg.Defaults == nil {
-		return nil
-	}
-
-	return cfg.Defaults.Preflight
+	return cfg.PreflightSettings()
 }
 
 // Preflight probes every model and MCP server the job's plan reaches and

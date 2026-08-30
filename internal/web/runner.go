@@ -10,6 +10,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -39,6 +40,11 @@ type LocalRunner struct {
 	// pipeline's own limits and are enforced in SQL by ClaimNextJob, below
 	// whatever this allows.
 	concurrent int
+	// force is --force: every job this process drains ignores the cache,
+	// however it was enqueued. A property of the process like pinned, and
+	// separate from `forced` below, which is one browser request asking for
+	// one re-run.
+	force bool
 	// forced remembers which queued rows were requested with force, since the
 	// queue row itself has no such column. Keyed by queue id, consumed once.
 	//
@@ -53,7 +59,9 @@ type LocalRunner struct {
 
 // NewLocalRunner builds a runner over per-pipeline workspace providers, keyed
 // by pipeline slug. concurrent below 1 means one job at a time.
-func NewLocalRunner(providers map[string]workspace.Provider, pinned map[string]string, concurrent int) *LocalRunner {
+func NewLocalRunner(
+	providers map[string]workspace.Provider, pinned map[string]string, concurrent int, force bool,
+) *LocalRunner {
 	if concurrent < 1 {
 		concurrent = 1
 	}
@@ -62,6 +70,7 @@ func NewLocalRunner(providers map[string]workspace.Provider, pinned map[string]s
 		providers:  providers,
 		pinned:     pinned,
 		concurrent: concurrent,
+		force:      force,
 		forced:     map[string]bool{},
 	}
 }
@@ -227,16 +236,35 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 
 	job, err := target.Cfg.FindJob(jobName)
 	if err != nil {
-		_ = target.Store.CompleteJob(ctx, id, "failed", err)
+		// Detached, like every other finalize here: a job the config no
+		// longer names is terminal, and a SIGINT at this instant must not
+		// strand the row running with nothing recorded.
+		_ = target.Store.CompleteJob(context.WithoutCancel(ctx), id, "failed", err)
 
 		return true
 	}
 
-	force := r.takeForce(target.Slug, jobName)
+	if r.skipIfPaused(ctx, target, job.Name, id) {
+		return true
+	}
+
+	force := r.takeForce(target.Slug, jobName) || r.force
 
 	slog.Info("web.job.run", "pipeline", target.Slug, "job", jobName)
 
 	runErr := r.runJob(ctx, target, job, force)
+
+	// A run the process's own shutdown cut short is not an outcome. Store's
+	// CompleteJob says so in its doc comment, and the contract is load-bearing
+	// in both directions: the row must stay `running` so the next startup's
+	// ResetStaleRunning re-queues it (nothing else would — only a new version
+	// change enqueues), and it must not count against the circuit breaker,
+	// because an operator pressing ctrl-C is not the job being broken.
+	if runErr != nil && interrupted(runErr) {
+		slog.Warn("web.job.interrupted", "pipeline", target.Slug, "job", jobName)
+
+		return true
+	}
 
 	status := "succeeded"
 	if runErr != nil {
@@ -252,7 +280,74 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 		slog.Error("web.complete", "pipeline", target.Slug, "job", jobName, "error", err)
 	}
 
+	r.recordBreaker(ctx, target, job, runErr)
+
 	return true
+}
+
+// interrupted reports a run that stopped because the process is going down,
+// rather than because the job answered.
+func interrupted(runErr error) bool {
+	return errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded)
+}
+
+// skipIfPaused finalizes a queued row for a job the circuit breaker has taken
+// out of the rotation, rather than running it.
+//
+// It lives here as well as in internal/trigger because this is the drainer the
+// daemon actually uses: `max_consecutive_failures:` is documented against
+// `steps web`, and a breaker that only the one-shot honours is a safety
+// feature that is off in the mode it exists for.
+func (r *LocalRunner) skipIfPaused(ctx context.Context, target *Pipeline, jobName string, id int64) bool {
+	paused, err := target.Store.IsJobPaused(ctx, jobName)
+	if err != nil {
+		slog.Warn("web.breaker_error", "pipeline", target.Slug, "job", jobName, "error", err)
+
+		return false
+	}
+
+	if !paused {
+		return false
+	}
+
+	slog.Warn("web.job.paused", "pipeline", target.Slug, "job", jobName,
+		"resume", "steps jobs resume <pipeline> "+jobName)
+
+	err = target.Store.CompleteJob(context.WithoutCancel(ctx), id, "skipped", nil)
+	if err != nil {
+		slog.Error("web.complete", "pipeline", target.Slug, "job", jobName, "error", err)
+	}
+
+	return true
+}
+
+// recordBreaker advances (or clears) a job's consecutive-failure count and
+// says so loudly when the breaker trips.
+//
+// Loudly is the requirement: the whole point is that somebody should know the
+// job stopped, and a daemon's scrollback is where that is least likely to be
+// noticed — which is why `steps jobs` exists to be asked afterwards.
+func (r *LocalRunner) recordBreaker(ctx context.Context, target *Pipeline, job *config.Job, runErr error) {
+	// Detached: the outcome is already terminal, and a SIGINT arriving here
+	// must not lose the count a later run reasons about.
+	paused, consecutive, err := target.Store.RecordJobOutcome(
+		context.WithoutCancel(ctx), job.Name, runErr == nil, job.MaxConsecutiveFailures)
+	if err != nil {
+		slog.Warn("web.breaker_error", "pipeline", target.Slug, "job", job.Name, "error", err)
+
+		return
+	}
+
+	if runErr == nil || job.MaxConsecutiveFailures <= 0 || !paused {
+		return
+	}
+
+	slog.Warn("web.job_paused",
+		"pipeline", target.Slug,
+		"job", job.Name,
+		"consecutive_failures", consecutive,
+		"max_consecutive_failures", job.MaxConsecutiveFailures,
+		"resume", "steps jobs resume <pipeline> "+job.Name)
 }
 
 // runJob executes one job with this pipeline's bus attached, so the run's

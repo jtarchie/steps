@@ -487,7 +487,7 @@ var errDigestMismatch = errors.New("an artifact does not match the digest it was
 // as ROOT, so an unprivileged local process that cannot exec it can still dial
 // it, commit arbitrary content under a legitimate digest, and have a later
 // step take that content as an input it never has to transfer — executing it
-// as root while `steps runs --where` reports 0 B, as though nothing was
+// as root while `steps runs where` reports 0 B, as though nothing was
 // needed. The attacker-free half is duller and likelier: a transfer that
 // completed but is wrong poisons this worker permanently, because eviction is
 // by size and nothing ever re-reads what the cache holds.

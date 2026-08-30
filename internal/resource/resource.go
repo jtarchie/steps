@@ -34,7 +34,7 @@ import (
 // {{ index .version "ts" | default "0" }} — the same shape an optional
 // source: field or get param: already uses.
 //
-// Only steps watch advances the cursor (see internal/trigger's pollOnce,
+// Only the trigger poll loop advances the cursor (see internal/trigger's pollOnce,
 // which records after a successful check AND enqueue, so a failed poll never
 // advances past items nobody saw). The run and plan paths read it and never
 // write it.

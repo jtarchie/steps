@@ -34,7 +34,7 @@ type AgentUsage struct {
 	RawMeta      string
 }
 
-// RunTotals is the per-run rollup `steps runs --cost` lists.
+// RunTotals is the per-run rollup `steps runs cost` lists.
 type RunTotals struct {
 	RunID    string
 	Tokens   int

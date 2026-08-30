@@ -219,6 +219,21 @@ func (p *Preflight) Enabled() bool {
 	return p == nil || !p.Disabled
 }
 
+// PreflightSettings is this pipeline's preflight block, or nil when it has
+// none — which every accessor above treats as the default.
+//
+// A method rather than two callers each reaching through `cfg.Defaults`: that
+// field is a pointer and is nil for any pipeline without a defaults: block, so
+// the reach is a nil dereference waiting for the first pipeline that does not
+// write one.
+func (c *Config) PreflightSettings() *Preflight {
+	if c.Defaults == nil {
+		return nil
+	}
+
+	return c.Defaults.Preflight
+}
+
 // ProbeTimeout is the per-check deadline.
 func (p *Preflight) ProbeTimeout() time.Duration {
 	return p.duration(func(pre *Preflight) string { return pre.Timeout }, defaultPreflightTimeout)

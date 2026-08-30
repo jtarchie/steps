@@ -119,7 +119,7 @@ type Resource struct {
 	Env []string `yaml:"env,omitempty"`
 	// WebhookTokenEnv names an OS environment variable holding the shared
 	// secret a webhook must present to trigger an immediate check of this
-	// resource (see `steps watch --listen` (before the daemons merged)).
+	// resource (see the webhook route `steps web` serves).
 	//
 	// A REFERENCE, never the token itself — the same rule api_key_env follows,
 	// and for a sharper reason here: a resource's fields are hashed into the

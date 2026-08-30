@@ -195,3 +195,117 @@ func postWebhook(t *testing.T, url string) int {
 
 	return resp.StatusCode
 }
+
+// TestWebhookRouteUnderAPipelineNamedCheck.
+//
+// The route is /p/<slug>/check/<resource>, and the handler finds the resource
+// by looking for "/check/" in the path. Looking from the FRONT made a pipeline
+// whose slug is literally `check` produce /p/check/check/<resource>, whose
+// first match yields "check/<resource>" — a name with a slash in it, rejected
+// as not-found before the token is even read. A correctly-signed delivery got
+// a permanent 404 and steps logged nothing, so the only symptom was a webhook
+// that never fired for one arbitrary-looking pipeline name.
+//
+// This is the seam test: the handler is exercised unmounted elsewhere and the
+// route is exercised with a safe slug elsewhere; only the two together find
+// this.
+func TestWebhookRouteUnderAPipelineNamedCheck(t *testing.T) {
+	t.Setenv("STEPS_TEST_WEBHOOK_TOKEN", "s3cret")
+
+	fixture := newWatchFixtureIn(t, t.TempDir(), "check", webhookPipeline)
+	fixture.items(t, 1)
+
+	served := startWeb(t, []string{fixture.pipeline}, "--interval", "1h")
+	defer served.stop(t)
+
+	slug := pipelineName(fixture.pipeline)
+	if slug != "check" {
+		t.Fatalf("slug = %q, want check — this test proves nothing otherwise", slug)
+	}
+
+	url := fmt.Sprintf("http://%s/p/%s/check/items?token=s3cret", served.addr, slug)
+
+	if status := postWebhook(t, url); status != http.StatusOK {
+		t.Fatalf("webhook answered %d for a pipeline named check, want 200", status)
+	}
+
+	waitForDid(t, fixture, "1")
+}
+
+// TestWebOnceToleratesAPipelineWithNoTriggers.
+//
+// The served path says so per pipeline ("serving it without polling"); --once
+// returned ErrNoTriggers as fatal, so one verb answered the same pipeline two
+// different ways depending on one flag. Worse, the loop returned on the first
+// offender: a hand-run pipeline added to a `steps web --once app.yml infra.yml`
+// cron line stopped every pipeline named after it from building at all.
+func TestWebOnceToleratesAPipelineWithNoTriggers(t *testing.T) {
+	dir := t.TempDir()
+
+	untriggered := newWatchFixtureIn(t, dir, "manual", `
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: echo ran
+`)
+
+	triggered := newWatchFixtureIn(t, dir, "auto", cursorFeed)
+	triggered.items(t, 1)
+
+	// The untriggered one FIRST, which is what makes the second pipeline the
+	// assertion: the bug returned before ever reaching it.
+	err := run([]string{"web", untriggered.pipeline, triggered.pipeline, "--once"})
+	if err != nil {
+		t.Fatalf("web --once refused a pipeline with nothing to poll: %v", err)
+	}
+
+	if did := triggered.did(t); strings.Join(did, " ") != "1" {
+		t.Errorf("the pipeline that DOES have triggers processed %v, want 1", did)
+	}
+}
+
+// TestWebhookRouteStillWorksUnderReadOnly pins a decision, not an accident.
+//
+// Every other mutating route refuses when --read-only withholds the runner;
+// this one does not, and the difference is deliberate: it authenticates with
+// the resource's own token rather than riding the server's absent
+// authentication, and a read-only build box that could not be notified is most
+// of what a read-only build box is for. Without this test the behavior is
+// indistinguishable from the missing `s.runner == nil` guard its four siblings
+// all have — which is how a hole and a design decision look identical.
+//
+// docs/web.md and docs/infra.md both say so now. If that call is ever
+// reversed, this test is what has to change with it.
+func TestWebhookRouteStillWorksUnderReadOnly(t *testing.T) {
+	t.Setenv("STEPS_TEST_WEBHOOK_TOKEN", "s3cret")
+
+	fixture := newWatchFixture(t, webhookPipeline)
+	fixture.items(t, 1)
+
+	served := startWeb(t, []string{fixture.pipeline}, "--read-only", "--interval", "1h")
+	defer served.stop(t)
+
+	slug := pipelineName(fixture.pipeline)
+
+	// The browser control is withheld, which is what --read-only means.
+	trigger := fmt.Sprintf("http://%s/p/%s/jobs/build/trigger", served.addr, slug)
+	if status := postWebhook(t, trigger); status != http.StatusForbidden {
+		t.Errorf("the UI trigger answered %d under --read-only, want 403", status)
+	}
+
+	// The token-authenticated one is not — and the job it enqueues runs.
+	hook := fmt.Sprintf("http://%s/p/%s/check/items?token=s3cret", served.addr, slug)
+	if status := postWebhook(t, hook); status != http.StatusOK {
+		t.Fatalf("webhook answered %d under --read-only, want 200", status)
+	}
+
+	waitForDid(t, fixture, "1")
+
+	// And a bad token is still refused, on a read-only server as anywhere.
+	bad := fmt.Sprintf("http://%s/p/%s/check/items?token=wrong", served.addr, slug)
+	if status := postWebhook(t, bad); status != http.StatusUnauthorized {
+		t.Errorf("webhook answered %d for a bad token under --read-only, want 401", status)
+	}
+}

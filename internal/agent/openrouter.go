@@ -78,7 +78,7 @@ type runIDKey struct{}
 // x-session-id header on OpenRouter chat completions (see composeSessionID).
 //
 // internal/pipeline calls this once per job run. The run token is random, so
-// two runs of the same job — including two concurrent ones under `steps watch
+// two runs of the same job — including two concurrent ones under `steps web
 // --max-concurrent` — never share a session and so never share a provider pin.
 // It rides on the context rather than the client precisely so those concurrent
 // runs stay separated while sharing everything else.

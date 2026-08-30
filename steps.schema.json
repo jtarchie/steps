@@ -93,7 +93,7 @@
             },
             "cache": {
               "type": "string",
-              "description": "How long a verified target stays trusted, e.g. 5m. Keeps steps watch from probing every poll. Default 5m."
+              "description": "How long a verified target stays trusted, e.g. 5m. Keeps the trigger loop from probing every poll. Default 5m."
             }
           }
         }
@@ -876,12 +876,12 @@
         },
         "interruptible": {
           "type": "boolean",
-          "description": "If true, a steps watch shutdown cancels a running build of this job. Default false: shutdown waits for it to finish (bounded). Does not affect steps run, where ctrl-C is always immediate."
+          "description": "If true, a steps web shutdown cancels a running build of this job. Default false: shutdown waits for it to finish (bounded). Does not affect steps run, where ctrl-C is always immediate."
         },
         "max_consecutive_failures": {
           "type": "integer",
           "minimum": 0,
-          "description": "Pause this job under steps watch after this many consecutive failed triggered runs. Resume with: steps jobs resume <name>. Omit (or 0) for no circuit breaker."
+          "description": "Pause this job under steps web after this many consecutive failed triggered runs. Resume with: steps jobs resume <pipeline> <job>. Omit (or 0) for no circuit breaker."
         },
         "on_success": {
           "$ref": "#/$defs/step"
@@ -905,7 +905,7 @@
         "max_in_flight": {
           "type": "integer",
           "minimum": 0,
-          "description": "Max concurrent builds of this job under steps watch. Omit (or 0) for unlimited (bounded by --max-concurrent). Rejected alongside serial:/serial_groups:, which force 1."
+          "description": "Max concurrent builds of this job under steps web. Omit (or 0) for unlimited (bounded by --max-concurrent). Rejected alongside serial:/serial_groups:, which force 1."
         }
       }
     },
@@ -919,7 +919,7 @@
         },
         "trigger": {
           "type": "boolean",
-          "description": "get only: poll this in `steps watch`."
+          "description": "get only: poll this in `steps web`."
         },
         "version": {
           "description": "get only: `latest` (default), `every`, or a pinned version object."

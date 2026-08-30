@@ -99,7 +99,7 @@ config:
     check: |
       let base = source.base_url ?? "https://slack.com";
       let auth = {Authorization: "Bearer " + env(source.token_env ?? "SLACK_BOT_TOKEN")};
-      // Every call carries it, not only the fan-outs. Under steps watch this
+      // Every call carries it, not only the fan-outs. Under steps web this
       // check runs on every poll interval, which makes the two serial calls
       // below the most-hit endpoints here and the likeliest to be rate
       // limited — and a 429 on either loses the whole poll.

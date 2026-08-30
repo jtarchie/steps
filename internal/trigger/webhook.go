@@ -43,12 +43,23 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The last segment of .../check/<resource>. Taken from the end rather
-	// than by trimming a fixed prefix because this handler is mounted BY its
-	// server, and the web UI mounts it under the pipeline it belongs to
+	// The last segment of .../check/<resource>, found from the END rather
+	// than by trimming a fixed prefix: this handler is mounted BY its server,
+	// and the web UI mounts it under the pipeline it belongs to
 	// (/p/<slug>/check/<resource>) — a pipeline-blind route would be
 	// ambiguous the moment one process serves two pipelines.
-	_, name, found := strings.Cut(r.URL.Path, "/check/")
+	//
+	// LastIndex, not Cut: Cut splits on the FIRST match, so a pipeline whose
+	// slug is literally `check` gave /p/check/check/<resource> a name of
+	// "check/<resource>", which the slash guard below then 404s — every
+	// correctly-signed delivery, silently, forever.
+	name := ""
+	found := false
+
+	if at := strings.LastIndex(r.URL.Path, "/check/"); at >= 0 {
+		name, found = r.URL.Path[at+len("/check/"):], true
+	}
+
 	if !found || name == "" || strings.Contains(name, "/") {
 		http.Error(w, "not found", http.StatusNotFound)
 
@@ -140,9 +151,9 @@ func (h *webhookHandler) checkNow(ctx context.Context, name string) ([]string, e
 // WebhookHandler serves POST .../check/<resource> for the resources this
 // pipeline has given a webhook_token_env:, or nil when it has given none.
 //
-// A handler rather than a server: `steps watch --listen` (before the daemons merged) used to open a
-// second port of its own beside the UI, so a pipeline that wanted both had
-// two addresses, two flavors of HTTP surface and two things to expose. There
+// A handler rather than a server: the poll loop used to open a second port of its
+// own beside the UI, so a pipeline that wanted both had two addresses, two
+// flavors of HTTP surface and two things to expose. There
 // is one listener now — the web UI mounts this under the pipeline it belongs
 // to — and nil is how a caller learns there is nothing to mount, which is
 // different from mounting an endpoint that refuses everything.

@@ -77,7 +77,7 @@ func renderStepVars(ctx context.Context, step config.Step) config.Step {
 	// Cloned, not rendered in place. step is a copy of the config's step, but
 	// a slice field still points at the config's own array — so rendering
 	// through it would substitute into the LOADED pipeline, and a long-lived
-	// process (steps web, steps watch) hands that same config to every run.
+	// process (steps web) hands that same config to every run.
 	// The second run would then find no placeholder left, send the first
 	// run's values, and — because the substituted text is what gets hashed —
 	// hash identically to it. A false cache hit, which is the failure the doc

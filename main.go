@@ -45,8 +45,8 @@ import (
 // CLI is the pipeline runner's command-line grammar, parsed by kong. Run is
 // default:"withargs" so today's flat invocation (steps pipeline.yml --job x)
 // keeps working unchanged, routed to it implicitly. LogLevel is a global flag
-// (available to every subcommand, not just Run) rather than living on RunCmd/
-// WatchCmd/TestCmd individually, since it configures the process-wide slog
+// (available to every subcommand, not just Run) rather than living on
+// RunCmd/TestCmd individually, since it configures the process-wide slog
 // default logger before any subcommand's Run method executes — see
 // initLogging.
 type CLI struct {
@@ -413,6 +413,15 @@ func (v *ValidateCmd) checkDepth() error {
 // job would answer a narrower question than it was asked. The probes are
 // cached for the process, so the jobs that share a model pay for it once.
 func (v *ValidateCmd) liveProblems(cfg *config.Config) ([]config.Problem, error) {
+	// Refused rather than answered emptily: the probes below return no
+	// problems when the pipeline has turned the check off, and the ok line
+	// would then vouch that every model and MCP server responded having
+	// contacted none of them. --live is the one depth whose whole claim is
+	// that something was asked.
+	if !cfg.PreflightSettings().Enabled() {
+		return nil, errors.New("--live cannot probe: this pipeline sets defaults.preflight.disabled: true, so there is nothing to ask; drop --live, or turn the check back on")
+	}
+
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
@@ -579,8 +588,12 @@ func (r *RunsListCmd) Run() error {
 		return r.runAcross()
 	}
 
-	st, done, ok, err := openRecorded(r.Pipeline, r.StateFlags)
-	if err != nil || !ok {
+	if nothingRecorded(r.Pipeline, r.StateFlags) {
+		return nil
+	}
+
+	st, done, err := openRecorded(r.Pipeline, r.StateFlags)
+	if err != nil {
 		return err
 	}
 	defer done()
@@ -598,8 +611,12 @@ type RunsStepsCmd struct {
 
 // Run prints recorded steps, newest first.
 func (r *RunsStepsCmd) Run() error {
-	st, done, ok, err := openRecorded(r.Pipeline, r.StateFlags)
-	if err != nil || !ok {
+	if nothingRecorded(r.Pipeline, r.StateFlags) {
+		return nil
+	}
+
+	st, done, err := openRecorded(r.Pipeline, r.StateFlags)
+	if err != nil {
 		return err
 	}
 	defer done()
@@ -616,8 +633,12 @@ type RunsQueueCmd struct {
 
 // Run prints the trigger queue.
 func (r *RunsQueueCmd) Run() error {
-	st, done, ok, err := openRecorded(r.Pipeline, r.StateFlags)
-	if err != nil || !ok {
+	if nothingRecorded(r.Pipeline, r.StateFlags) {
+		return nil
+	}
+
+	st, done, err := openRecorded(r.Pipeline, r.StateFlags)
+	if err != nil {
 		return err
 	}
 	defer done()
@@ -639,8 +660,12 @@ type RunsCostCmd struct {
 
 // Run prints per-run totals, or one run's steps.
 func (r *RunsCostCmd) Run() error {
-	st, done, ok, err := openRecorded(r.Pipeline, r.StateFlags)
-	if err != nil || !ok {
+	if nothingRecorded(r.Pipeline, r.StateFlags) {
+		return nil
+	}
+
+	st, done, err := openRecorded(r.Pipeline, r.StateFlags)
+	if err != nil {
 		return err
 	}
 	defer done()
@@ -664,8 +689,12 @@ type RunsWhereCmd struct {
 
 // Run prints one run's placements.
 func (r *RunsWhereCmd) Run() error {
-	st, done, ok, err := openRecorded(r.Pipeline, r.StateFlags)
-	if err != nil || !ok {
+	if nothingRecorded(r.Pipeline, r.StateFlags) {
+		return nil
+	}
+
+	st, done, err := openRecorded(r.Pipeline, r.StateFlags)
+	if err != nil {
 		return err
 	}
 	defer done()
@@ -673,33 +702,41 @@ func (r *RunsWhereCmd) Run() error {
 	return r.printPlacements(context.Background(), st)
 }
 
-// openRecorded opens a pipeline's recorded state for reading.
+// nothingRecorded reports — and says — that a pipeline has no state file yet.
 //
-// It stats the database first so asking about history never creates one: a
-// read command that leaves a .steps/ behind would be a surprising thing for
-// `steps runs` to do on a fresh checkout. A missing file is not an error —
-// nothing has run yet is an answer — so the caller is told to stop by ok
-// rather than by an error it would have to classify.
+// Asked BEFORE opening, so asking about history never creates the database it
+// is asking about: a read command that left a .steps/ behind would be a
+// surprising thing for `steps runs` to do on a fresh checkout. It is a
+// separate question from opening rather than a third return value, because a
+// helper that answers "here is the store" and "there is no store" through one
+// signature hands every caller a nil it must remember to check — which is
+// exactly what a sixth `runs` subcommand written by copying the other five
+// would forget.
+func nothingRecorded(pipelinePath string, flags StateFlags) bool {
+	_, err := os.Stat(statePath(pipelinePath, flags.State))
+	if err == nil {
+		return false
+	}
+
+	fmt.Printf("no runs recorded yet for %s\n", pipelinePath)
+
+	return true
+}
+
+// openRecorded opens a pipeline's recorded state for reading. It returns a
+// usable store or an error, never both nil — call nothingRecorded first.
 //
 // OpenExisting, not OpenStore: asking must not register the pipeline it is
 // asking about — see store.OpenExisting.
-func openRecorded(pipelinePath string, flags StateFlags) (*store.Store, func(), bool, error) {
+func openRecorded(pipelinePath string, flags StateFlags) (*store.Store, func(), error) {
 	path := statePath(pipelinePath, flags.State)
-
-	_, err := os.Stat(path)
-	if err != nil {
-		fmt.Printf("no runs recorded yet for %s\n", pipelinePath)
-
-		//nolint:nilerr // a state file that is not there is an answer, not a failure: nothing has run yet
-		return nil, nil, false, nil
-	}
 
 	st, err := store.OpenExisting(path, resolvePipelineName(pipelinePath, flags.Name))
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("could not open state store: %w", err)
+		return nil, nil, fmt.Errorf("could not open state store: %w", err)
 	}
 
-	return st, func() { _ = st.Close() }, true, nil
+	return st, func() { _ = st.Close() }, nil
 }
 
 // runAcross reports on every pipeline in one state file: what it holds, and
@@ -1432,7 +1469,7 @@ func main() {
 func run(args []string) error {
 	var cli CLI
 
-	parser, err := kong.New(&cli, kong.Name("steps"), kong.Description("run pipeline jobs, or watch for trigger: true resource changes"), kong.Vars{"version": buildVersion})
+	parser, err := kong.New(&cli, kong.Name("steps"), kong.Description("run pipeline jobs, or serve and poll them with steps web"), kong.Vars{"version": buildVersion})
 	if err != nil {
 		return fmt.Errorf("could not build CLI parser: %w", err)
 	}
@@ -1450,7 +1487,7 @@ func run(args []string) error {
 }
 
 // setup opens the state store and builds/validates the workspace provider
-// shared by RunCmd and WatchCmd, returning a cleanup func that closes both
+// shared by the commands that run steps, returning a cleanup func that closes both
 // (logging, not returning, any close error — mirroring the deferred
 // close-error handling both commands used inline before this helper
 // existed).
@@ -1463,7 +1500,7 @@ func setup(
 	}
 
 	// This is the funnel every command that LOADS a pipeline comes through
-	// (run, watch, test, web, jobs, approvals), and the only place holding
+	// (run, test, web, jobs, approvals), and the only place holding
 	// both the YAML path and the handle to record it against.
 	err = st.SetSourcePath(context.Background(), pipelinePath)
 	if err != nil {
@@ -1481,6 +1518,10 @@ func setup(
 
 	err = provider.Validate()
 	if err != nil {
+		// The provider owns a temp root it created; only its Close removes
+		// one. Closing the store alone left a steps-* directory behind on
+		// every attempt, with nothing to reap it.
+		_ = provider.Close()
 		_ = st.Close()
 
 		return nil, nil, nil, fmt.Errorf("workspace: %w", err)
@@ -1990,6 +2031,19 @@ func (w *WebCmd) runOnce(ctx context.Context, pipelines []*web.Pipeline, provide
 		}
 
 		err := trigger.WatchOnce(ctx, target.Cfg, provider, target.Store, w.Pin, w.Force)
+
+		// A pipeline with nothing to poll is not this command failing, and
+		// the served path already says so per pipeline. Answering the same
+		// pipeline two different ways depending on one flag is the shape
+		// this consolidation exists to remove — and returning here would
+		// also abandon every pipeline named after it, which is the whole
+		// point of a `steps web --once app.yml infra.yml` cron line.
+		if errors.Is(err, trigger.ErrNoTriggers) {
+			fmt.Printf("steps web: %s has no trigger: true get; nothing to poll\n", target.Slug)
+
+			continue
+		}
+
 		if err != nil {
 			return wrapRunErr(err)
 		}
@@ -2016,7 +2070,7 @@ func (w *WebCmd) serve(ctx context.Context, pipelines []*web.Pipeline, providers
 
 	var runner web.Runner
 
-	local := web.NewLocalRunner(providers, w.Pin, w.MaxConcurrent)
+	local := web.NewLocalRunner(providers, w.Pin, w.MaxConcurrent, w.Force)
 	if !w.ReadOnly {
 		runner = local
 	}
@@ -2478,9 +2532,23 @@ func (r *RunsCostCmd) printCostTotals(ctx context.Context, st *store.Store) erro
 			renderCost(total.CostUSD, total.Unpriced), total.Steps)
 	}
 
-	fmt.Printf("\nbreak one down with: steps runs cost %s <run>\n", r.Pipeline)
+	fmt.Printf("\nbreak one down with: steps runs cost %s <run>%s\n", r.Pipeline, stateNote(r.State))
 
 	return nil
+}
+
+// stateNote carries --state into a printed follow-up command.
+//
+// Without it the hint names a DIFFERENT database than the one it was just
+// printed from: the default path is derived from the pipeline, so a reader who
+// copies the line after `steps runs cost app.yml --state shared.db` is sent to
+// `.steps/app.yml.db` and told there is nothing there.
+func stateNote(state string) string {
+	if state == "" {
+		return ""
+	}
+
+	return " --state " + state
 }
 
 // printRunCost breaks one run down per agent step.

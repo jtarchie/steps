@@ -306,3 +306,37 @@ jobs:
 		})
 	}
 }
+
+// TestValidateLiveRefusesWhenPreflightIsDisabled.
+//
+// --live is the one depth whose whole claim is that something was ASKED. With
+// defaults.preflight.disabled: true the probes return no problems having
+// contacted nothing, so validate printed "ok … — every model and MCP server
+// responded" for a pipeline pointed at an endpoint that is not there: a
+// positive claim about a service nobody spoke to, produced from the pipeline's
+// own YAML.
+func TestValidateLiveRefusesWhenPreflightIsDisabled(t *testing.T) {
+	pipeline.ResetPreflightCache()
+
+	dir := t.TempDir()
+	// Port 1 is nothing: if a probe were made, it would fail.
+	path := preflightPipeline(t, dir, "http://127.0.0.1:1", "\ndefaults:\n  preflight:\n    disabled: true")
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	err := run([]string{"validate", path, "--live"})
+	if err == nil {
+		t.Fatal("--live vouched for a pipeline that had turned the probe off")
+	}
+
+	if !strings.Contains(err.Error(), "preflight") {
+		t.Errorf("refusal does not name what turned the probe off: %v", err)
+	}
+
+	// The shallower depths still answer: nothing about the file or this
+	// machine depends on the probe.
+	err = run([]string{"validate", path})
+	if err != nil {
+		t.Errorf("plain validate should still pass: %v", err)
+	}
+}

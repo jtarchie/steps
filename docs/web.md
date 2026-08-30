@@ -190,9 +190,19 @@ Four controls, each writing the same rows the CLI writes:
 
 `--read-only` withholds all four: the controls disappear from the pages and
 the routes refuse. The queue is still drained, and polling still runs — that
-flag is a statement about the HTTP surface, not about what the process does on
-its own. `--listen 0.0.0.0:8088 --read-only` is a build box that still has to
-notice new versions.
+flag is a statement about the browser's surface, not about what the process
+does on its own. `--listen 0.0.0.0:8088 --read-only` is a build box that still
+has to notice new versions.
+
+**The webhook route is the one exception, deliberately.**
+`POST /p/<slug>/check/<resource>` still works under `--read-only`, and the job
+it enqueues still runs. It is not a UI control: it carries the resource's own
+token, which is a stronger check than the four above have, and withholding it
+would mean a read-only box could not be the thing GitHub notifies — which is
+most of why a build box is exposed at all. `--read-only` says a *browser*
+cannot start work here; it does not say nothing can. If that is what you
+want, do not give the pipeline a `webhook_token_env:` resource — with none, the
+route is a 404. See [infra.md](infra.md#webhook-triggered-checks).
 
 ## One daemon
 
@@ -272,9 +282,9 @@ WHEN                 PIPELINE  JOB      STATUS     RUN
 
 The `RUN` column is the handle for going back to one pipeline: `steps runs
 cost app.yml 46UMHVPYRA6YHB7M --state <file>`. That is also why the other
-views stay scoped — `--job`, `--queue`, `--steps`, `--cost`, `--where` and
-`--run` are questions about one pipeline, and asking them without naming one
-is refused rather than answered for a pipeline nobody picked.
+views stay scoped — `runs steps`, `runs queue`, `runs cost` and `runs where`
+are questions about one pipeline, and each takes it as its first argument
+rather than being answered for a pipeline nobody picked.
 
 A pipeline's identity in the file is its **name**, which defaults to the YAML's
 base name — `infra/pipeline.yml` is `pipeline`. That is also its `/p/<name>/`
