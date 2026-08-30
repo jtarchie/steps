@@ -299,6 +299,22 @@ func (s *Server) handleApprovals(c echo.Context) error {
 	})
 }
 
+// handleQuestions lists what agents have asked, pending first.
+func (s *Server) handleQuestions(c echo.Context) error {
+	pipeline := pipelineOf(c)
+
+	questions, err := pipeline.Store.AllQuestions(c.Request().Context(), historyLimit)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	//nolint:wrapcheck // render errors surface through the shared error handler
+	return c.Render(http.StatusOK, "questions", map[string]any{
+		"Nav":       s.nav(c),
+		"Questions": questions,
+	})
+}
+
 // handleResources shows what the watcher has seen, and the breaker state that
 // stops it acting on what it sees.
 func (s *Server) handleResources(c echo.Context) error {
@@ -490,6 +506,44 @@ func (s *Server) handleDecideApproval(c echo.Context) error {
 
 	//nolint:wrapcheck // echo's redirect error is returned verbatim
 	return c.Redirect(http.StatusSeeOther, "/p/"+pipeline.Slug+"/approvals")
+}
+
+// handleAnswerQuestion records an answer, through the same row `steps answer`
+// writes — including its options fence, which lives in the store precisely so
+// that this handler cannot be the place it is forgotten.
+func (s *Server) handleAnswerQuestion(c echo.Context) error {
+	if s.runner == nil {
+		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
+	}
+
+	pipeline := pipelineOf(c)
+
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "question id must be a number")
+	}
+
+	// An option button wins over the free-text field, which is what somebody
+	// who clicked one meant even if they had typed something first.
+	answer := strings.TrimSpace(c.FormValue("answer"))
+	if answer == "" {
+		answer = strings.TrimSpace(c.FormValue("answer_text"))
+	}
+
+	if answer == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "an answer is required")
+	}
+
+	// Same posture as a resubmitted approval: a question somebody else just
+	// answered (or that expired while this form sat open) is not a 500. The
+	// row is the answer of record, and it already has one.
+	err = pipeline.Store.AnswerQuestion(c.Request().Context(), id, answer, "web")
+	if err != nil {
+		slog.Info("web.question_not_answered", "id", id, "error", err)
+	}
+
+	//nolint:wrapcheck // echo's redirect error is returned verbatim
+	return c.Redirect(http.StatusSeeOther, "/p/"+pipeline.Slug+"/questions")
 }
 
 // handleResumeBreaker puts a paused job back in the watch rotation.

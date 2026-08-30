@@ -110,10 +110,14 @@ var stepOperators = []stepOperator{
 	{tag: "when", apply: setString("when", "false")},
 	{tag: "to", apply: mutateRouteTargets("to")},
 	{tag: "verdicts", apply: mutateVerdictEntries},
-	{tag: "max_visits", apply: setInt("max_visits", 1)},
+	{tag: "max_visits", apply: capToOne("max_visits")},
 
-	{tag: "attempts", apply: setInt("attempts", 1)},
-	{tag: "max_turns", apply: setInt("max_turns", 1)},
+	{tag: "attempts", apply: capToOne("attempts")},
+	{tag: "max_turns", apply: capToOne("max_turns")},
+	// One question fewer than the example asks: the second ask comes back as
+	// budget-exhausted data, the model writes the answer it does not have, and
+	// the file the next step reads goes wrong.
+	{tag: "max_questions", apply: capToOne("max_questions")},
 	{tag: "timeout", apply: setString("timeout", "1ms")},
 	// Delete the placement and the step runs here instead, so STEPS_WORKER is
 	// unset and the example's own stdout assertion goes red. The falsifiable
@@ -418,13 +422,17 @@ func setString(key, value string) func(map[string]any) bool {
 	}
 }
 
-func setInt(key string, value int) func(map[string]any) bool {
+// capToOne is the operator every counting dial shares: one fewer than the
+// example needs. A budget an example cannot exhaust is a number the corpus
+// could get wrong in silence, so 1 is the value that makes each of them
+// falsifiable rather than decorative.
+func capToOne(key string) func(map[string]any) bool {
 	return func(step map[string]any) bool {
-		if current, ok := step[key].(int); ok && current == value {
+		if current, ok := step[key].(int); ok && current == 1 {
 			return false // already the mutant; nothing would change
 		}
 
-		step[key] = value
+		step[key] = 1
 
 		return true
 	}

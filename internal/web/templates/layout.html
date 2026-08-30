@@ -14,6 +14,7 @@
   <nav class="tabs" aria-label="Sections">
     <a class="tab" {{if eq .Page "jobs"}}aria-current="page"{{end}} href="/p/{{.Nav.Current}}">jobs</a>
     <a class="tab" {{if eq .Page "approvals"}}aria-current="page"{{end}} href="/p/{{.Nav.Current}}/approvals">approvals{{if .Nav.PendingApprovals}}<span class="badge">●{{.Nav.PendingApprovals}}</span>{{end}}</a>
+    <a class="tab" {{if eq .Page "questions"}}aria-current="page"{{end}} href="/p/{{.Nav.Current}}/questions">questions{{if .Nav.PendingQuestions}}<span class="badge">●{{.Nav.PendingQuestions}}</span>{{end}}</a>
     <a class="tab" {{if eq .Page "resources"}}aria-current="page"{{end}} href="/p/{{.Nav.Current}}/resources">resources</a>
     <a class="tab" {{if eq .Page "docs"}}aria-current="page"{{end}} href="/docs">docs</a>
   </nav>

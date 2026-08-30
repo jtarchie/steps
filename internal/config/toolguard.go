@@ -114,6 +114,11 @@ func checkToolCallGuardSpecs(context string, pos toolPosition, specs []ToolSpec)
 		if err != nil {
 			return err
 		}
+
+		err = validateAskUserShape(context, pos, spec)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

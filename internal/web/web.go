@@ -146,6 +146,7 @@ func (s *Server) routes() error {
 	group.GET("/runs/:run/events", s.handleRunEvents)
 	group.GET("/nodes/:hash", s.handleNode)
 	group.GET("/approvals", s.handleApprovals)
+	group.GET("/questions", s.handleQuestions)
 	group.GET("/resources", s.handleResources)
 	group.GET("/search", s.handleSearch)
 	group.GET("/jobs/:job/follow", s.handleFollow)
@@ -153,6 +154,7 @@ func (s *Server) routes() error {
 
 	group.POST("/jobs/:job/trigger", s.handleTrigger)
 	group.POST("/approvals/:id", s.handleDecideApproval)
+	group.POST("/questions/:id", s.handleAnswerQuestion)
 	group.POST("/jobs/:job/resume", s.handleResumeBreaker)
 
 	s.echo = e
@@ -311,6 +313,11 @@ func (s *Server) nav(c echo.Context) navData {
 		nav.PendingApprovals = len(pending)
 	}
 
+	questions, err := current.Store.PendingQuestions(c.Request().Context())
+	if err == nil {
+		nav.PendingQuestions = len(questions)
+	}
+
 	return nav
 }
 
@@ -320,6 +327,7 @@ type navData struct {
 	Current          string
 	CurrentPath      string
 	PendingApprovals int
+	PendingQuestions int
 	ReadOnly         bool
 }
 

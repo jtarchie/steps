@@ -809,6 +809,8 @@ func toolSpecsContent(cfg *config.Config, specs []config.ToolSpec) ([]map[string
 			content["max_output_bytes"] = t.MaxOutputBytes
 		}
 
+		withAskUserContent(t, content)
+
 		out[i] = content
 	}
 
@@ -968,6 +970,37 @@ func subAgentInvocationContent(cfg *config.Config, name string) (map[string]any,
 	return content, nil
 }
 
+// withAskUserContent folds ask_user's own dials into a builtin grant's
+// content, value-gated the way max_calls: and args: are. Each one changes what
+// comes back into the conversation: answered_by: decides who answers at all,
+// default: decides what the model is told when nobody does, and
+// options_required: decides whether an answer is accepted at all.
+func withAskUserContent(spec config.ToolSpec, content map[string]any) {
+	if spec.AnsweredBy != "" {
+		content["answered_by"] = spec.AnsweredBy
+	}
+
+	if spec.Default != "" {
+		content["default"] = spec.Default
+	}
+
+	if spec.OptionsRequired {
+		content["options_required"] = spec.OptionsRequired
+	}
+}
+
+// grantsAskUser reports whether any of a step's resolved tools is the
+// ask_user builtin.
+func grantsAskUser(specs []config.ToolSpec) bool {
+	for _, spec := range specs {
+		if spec.Builtin == config.AskUserBuiltinName {
+			return true
+		}
+	}
+
+	return false
+}
+
 // AgentContentMap is the content hashed for an agent node: everything that
 // determines the model's output (agent, prompt, dir, resolved model/endpoint,
 // persona, dials, and the effective tool set — including any sub-agent tools,
@@ -998,6 +1031,14 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 		"reasoning_effort": ri.ReasoningEffort,
 		"max_turns":        ri.MaxTurns,
 		"tools":            toolsContent,
+	}
+
+	// Value-gated on the grant, unlike max_turns: beside it. A budget for
+	// questions a step cannot ask changes nothing about what it does, and
+	// folding it in unconditionally would invalidate every cached agent step
+	// in every pipeline to record a dial with nothing to bound.
+	if grantsAskUser(ri.ToolSpecs) {
+		content["max_questions"] = ri.MaxQuestions
 	}
 
 	content["inputs"] = config.StableStrings(step.InputNames())

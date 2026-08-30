@@ -71,6 +71,28 @@ type ToolSpec struct {
 	// for the agent that is granted a browser but not a shell. Invalid on
 	// every other tool form (validateWebFetchAllowShape).
 	Allow []string
+	// AnsweredBy names an agents: entry that answers this grant's ask_user
+	// questions BEFORE a person is asked — the first rung of the ladder in
+	// docs/agents.md. It is deliberately not the same thing as granting that
+	// agent as a sub-agent tool: a sub-agent is delegation the asking model
+	// chose and paid for out of its own reasoning, while a responder is an
+	// ESCALATION a person can still intercept, and the recorded row says which
+	// one answered. Empty parks the question for a person straight away.
+	// Invalid on every tool but the ask_user builtin (validateAskUserShape).
+	AnsweredBy string
+	// Default is the answer ask_user resolves to when its wait expires. The
+	// model is told it was a default and that nobody answered — an
+	// indistinguishable default is the runtime telling a model a person
+	// confirmed something no person saw. With no default declared, an expiry
+	// ABORTS the step instead, matching approval: exactly: aborted, not
+	// failed, because nobody decided anything. Invalid on every other tool.
+	Default string
+	// OptionsRequired refuses an answer that is not one of the options the
+	// model offered. Off by default, and that default is the design: a wrong
+	// option list must never trap the person answering, so the free-text
+	// escape is what makes offering options safe. Turn it on for a question
+	// whose answer a later step will match on. Invalid on every other tool.
+	OptionsRequired bool
 	// MaxOutputBytes sets the inline output budget for this one tool
 	// (0/unset = the global default, maxToolOutputBytes in internal/agent).
 	// An explicit value wins in either direction, bounded above by the spill
@@ -105,8 +127,15 @@ type ToolSpec struct {
 	// GRANTED, except on an inline custom tool, which a step defines rather
 	// than selects (see validateToolTimeoutShape). The one exception to
 	// "every form" is a cli source, which runs its built-ins itself: there a
-	// timeout: on a BUILT-IN is refused (checkCLIAgentTools), while a custom
-	// or MCP tool — bridged, so the deadline binds — is accepted.
+	// timeout: on a NATIVE built-in is refused (checkCLIAgentTools), while a
+	// custom or MCP tool — bridged, so the deadline binds — is accepted, and
+	// so is ask_user, the one builtin no CLI runs natively.
+	//
+	// On ask_user the deadline is the WAIT, and what a breach resolves to is
+	// that tool's own contract: the declared default: with answered: false,
+	// or an aborted step when none was declared. That is the one place this
+	// word bends, and it bends the way web_fetch's hard 30s cap already
+	// established a built-in may.
 	//
 	// It is enforced through the call's context, so it stops what honors one:
 	// shell-backed tools (the sh -c process is killed, though not its own
@@ -136,26 +165,30 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 	case yaml.MappingNode:
 		err := rejectUnknownKeys(value, "agent tool",
 			"builtin", "name", "description", "run", "agent", "mcp", "tool", "tools",
-			"required", "max_calls", "max_output_bytes", "timeout", "args", "allow")
+			"required", "max_calls", "max_output_bytes", "timeout", "args", "allow",
+			"answered_by", "default", "options_required")
 		if err != nil {
 			return err
 		}
 
 		var m struct {
-			Builtin        string            `yaml:"builtin"`
-			Name           string            `yaml:"name"`
-			Description    string            `yaml:"description"`
-			Run            string            `yaml:"run"`
-			Agent          string            `yaml:"agent"`
-			MCP            string            `yaml:"mcp"`
-			Tool           string            `yaml:"tool"`
-			Tools          []string          `yaml:"tools"`
-			Required       bool              `yaml:"required"`
-			MaxCalls       int               `yaml:"max_calls"`
-			MaxOutputBytes int               `yaml:"max_output_bytes"`
-			Timeout        string            `yaml:"timeout"`
-			Args           map[string]string `yaml:"args"`
-			Allow          []string          `yaml:"allow"`
+			Builtin         string            `yaml:"builtin"`
+			Name            string            `yaml:"name"`
+			Description     string            `yaml:"description"`
+			Run             string            `yaml:"run"`
+			Agent           string            `yaml:"agent"`
+			MCP             string            `yaml:"mcp"`
+			Tool            string            `yaml:"tool"`
+			Tools           []string          `yaml:"tools"`
+			Required        bool              `yaml:"required"`
+			MaxCalls        int               `yaml:"max_calls"`
+			MaxOutputBytes  int               `yaml:"max_output_bytes"`
+			Timeout         string            `yaml:"timeout"`
+			Args            map[string]string `yaml:"args"`
+			Allow           []string          `yaml:"allow"`
+			AnsweredBy      string            `yaml:"answered_by"`
+			Default         string            `yaml:"default"`
+			OptionsRequired bool              `yaml:"options_required"`
 		}
 
 		err = value.Decode(&m)
@@ -167,6 +200,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 		t.MaxCalls, t.Args, t.MaxOutputBytes, t.Allow = m.MaxCalls, m.Args, m.MaxOutputBytes, m.Allow
 		t.Timeout = m.Timeout
 		t.MCP, t.MCPTool, t.MCPTools = m.MCP, m.Tool, m.Tools
+		t.AnsweredBy, t.Default, t.OptionsRequired = m.AnsweredBy, m.Default, m.OptionsRequired
 
 		return nil
 	default:

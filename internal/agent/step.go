@@ -216,6 +216,13 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	// publishable as belonging to this run, job, and step. Set here rather
 	// than in prepareAgentStep because only RunStep knows the plan index —
 	// a hook or fix conversation has none, and publishes nothing.
+	// Where a question this step asks is recorded, and under which job. Set
+	// here rather than in prepareAgentStep for the reason the recorder is:
+	// only RunStep holds the store handle and the job's name, and a hook or
+	// fix conversation has neither.
+	prepared.conv.env.ask.st = st
+	prepared.conv.env.ask.jobName = jobName
+
 	prepared.conv.recorder = &transcriptRecorder{live: liveContext{
 		bus: events.FromContext(ctx), runID: events.RunID(ctx), stepID: events.StepID(ctx), job: jobName, stepIndex: i, stepName: name,
 	}}
@@ -537,6 +544,10 @@ func RunHook(ctx context.Context, cfg *config.Config, jobName string, step confi
 	// have one, so its tool calls and any mid-run failover it triggers are
 	// attributable the same way a plan step's are, instead of publishing (and
 	// logging) nowhere. stepIndex is -1: a hook is not a plan position.
+	//
+	// It is given no ask_user store handle: a hook holds no store, so a hook
+	// that granted ask_user is told so as tool-result data rather than
+	// parking a question nothing could ever surface.
 	prepared.conv.recorder = &transcriptRecorder{live: liveContext{
 		bus: events.FromContext(ctx), runID: events.RunID(ctx), stepID: events.StepID(ctx), job: jobName, stepIndex: -1, stepName: step.DisplayName(),
 	}}

@@ -238,9 +238,15 @@ func checkCLIAgentSettings(agent Agent) error {
 //
 // timeout: splits along that same line, which is why it is only half
 // rejected: a custom or MCP tool is BRIDGED (the child calls the very impl
-// the deadline is bound to, so it holds), while every built-in is run by the
-// CLI natively — the bridge never sees the call, and a deadline written
+// the deadline is bound to, so it holds), while a NATIVE built-in is run by
+// the CLI itself — the bridge never sees the call, and a deadline written
 // there would be a fence that silently does not bind.
+//
+// "Native" is load-bearing and was once assumed rather than asked. ask_user
+// is the first builtin no CLI runs itself (BuiltinIsNeverNativeToCLI): the
+// child calls the parent's own impl over the bridge, so the deadline DOES
+// apply — and refusing it would deny a CLI agent the one dial that decides
+// how long a person is waited on.
 func (c *Config) checkCLIAgentTools(agent Agent) error {
 	for _, spec := range agent.Tools {
 		name := ToolSpecName(spec)
@@ -255,7 +261,7 @@ func (c *Config) checkCLIAgentTools(agent Agent) error {
 		case len(spec.Args) > 0:
 			return fmt.Errorf("agent %q: tool %q sets args, which is not supported with a cli source (%s...); pin the value inside the tool's run: instead",
 				agent.Name, name, CLISourcePrefix)
-		case spec.Timeout != "" && spec.Builtin != "":
+		case spec.Timeout != "" && spec.Builtin != "" && !BuiltinIsNeverNativeToCLI(spec.Builtin):
 			return fmt.Errorf("agent %q: builtin tool %q sets timeout, which is not supported with a cli source (%s...); the cli runs its built-ins itself — bound a custom or mcp tool instead, or the step",
 				agent.Name, name, CLISourcePrefix)
 		case spec.Agent != "":

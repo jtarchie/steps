@@ -33,6 +33,11 @@ type toolEnv struct {
 	dir      string
 	runner   shell.Runner
 	spillDir string
+	// ask is what the ask_user builtin needs from the run rather than from
+	// its grant — where to record a question and who is asking. Zero for
+	// every caller with no run to record against, which that tool reports as
+	// data rather than pretending to park (see askEnv).
+	ask askEnv
 	// transcript is the enclosing conversation's recorder, set by
 	// runAgentConversation. It rides in the env because the env is what
 	// already reaches every toolImpl — the sub-agent tool uses it to nest the
@@ -235,7 +240,7 @@ func resolveToolSpec(ctx context.Context, cfg *config.Config, spec config.ToolSp
 		return one(decl, impl, closer), nil
 
 	case spec.Builtin != "":
-		return resolveBuiltinSpec(spec, builtins)
+		return resolveBuiltinSpec(ctx, cfg, spec, builtins)
 
 	case spec.Name != "" && spec.Run != "":
 		decl, impl := customToolDecl(spec)
@@ -247,10 +252,22 @@ func resolveToolSpec(ctx context.Context, cfg *config.Config, spec config.ToolSp
 	}
 }
 
-// resolveBuiltinSpec resolves a builtin grant from the catalogue. web_fetch
-// is the one builtin whose declaration and impl depend on the grant itself:
-// allow: narrows what it may reach, and the declaration tells the model so.
-func resolveBuiltinSpec(spec config.ToolSpec, builtins map[string]builtinTool) (resolvedSpec, error) {
+// resolveBuiltinSpec resolves a builtin grant from the catalogue. Two
+// built-ins depend on the grant itself rather than only on the catalogue:
+// web_fetch, whose allow: narrows what it may reach and whose declaration
+// tells the model so, and ask_user, which is not in the catalogue at all
+// because a question needs a responder, a default and a wait resolved before
+// there is an impl to register.
+func resolveBuiltinSpec(ctx context.Context, cfg *config.Config, spec config.ToolSpec, builtins map[string]builtinTool) (resolvedSpec, error) {
+	if spec.Builtin == config.AskUserBuiltinName {
+		decl, impl, closer, err := buildAskUserTool(ctx, cfg, spec)
+		if err != nil {
+			return resolvedSpec{}, err
+		}
+
+		return one(decl, impl, closer), nil
+	}
+
 	bt, ok := builtins[spec.Builtin]
 	if !ok {
 		return resolvedSpec{}, fmt.Errorf("unknown builtin tool %q", spec.Builtin)
@@ -304,6 +321,16 @@ func customToolDecl(spec config.ToolSpec) (*genai.FunctionDeclaration, toolImpl)
 // exists only on one of two backends.
 func (r resolvedSpec) bound(spec config.ToolSpec) error {
 	if spec.Timeout == "" {
+		return nil
+	}
+
+	// ask_user reads the same field and means something else by it: the
+	// deadline IS the wait, and what a breach resolves to is that tool's own
+	// contract (the declared default:, or an aborted step). It binds the
+	// timeout itself at build time, so wrapping it here would run a second,
+	// identical deadline whose only effect is to relabel the honest result
+	// underneath it as an error.
+	if spec.Builtin == config.AskUserBuiltinName {
 		return nil
 	}
 

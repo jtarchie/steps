@@ -60,6 +60,10 @@ func (c *Config) validateAgentDials() error {
 			return fmt.Errorf("agent %q: max_turns must not be negative (omit it for the default of %d, or set 0 for no cap)", agent.Name, defaultMaxAgentTurns)
 		}
 
+		if agent.MaxQuestions != nil && *agent.MaxQuestions < 0 {
+			return fmt.Errorf("agent %q: max_questions must not be negative (omit it for the default of %d, or set 0 for no cap)", agent.Name, defaultMaxQuestions)
+		}
+
 		if agent.Timeout != "" {
 			_, err := ParseTimeout(agent.Timeout)
 			if err != nil {

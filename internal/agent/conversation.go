@@ -564,18 +564,9 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 		markTrajectoryResults(state.trajectory[turnStart:], parts)
 		conv.env.transcript.results(parts)
 
-		if choice, n := conv.trackToolResults(parts, state.satisfied); choice != "" {
-			state.verdict, state.note = choice, n // last successful verdict (and its note) wins across turns
-		}
-
-		req.Contents = append(req.Contents, &genai.Content{
-			Role:  genai.RoleUser,
-			Parts: parts,
-		})
-
-		detectErr := detector.respond(req, calls, parts)
-		if detectErr != nil {
-			return result("", turn+1), detectErr
+		turnErr := conv.finishToolTurn(req, calls, parts, detector, &state)
+		if turnErr != nil {
+			return result("", turn+1), turnErr
 		}
 	}
 
@@ -586,6 +577,38 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	exhausted := result("", turn)
 
 	return conv.outOfTurns(ctx, llm, req, exhausted, state.satisfied)
+}
+
+// finishToolTurn closes one tool-calling turn: the two things that can end the
+// attempt outright, and the two that carry state into the next turn.
+//
+// The abort latch is checked FIRST, and it is the one thing a tool result
+// cannot say for itself. A tool failure is data by contract, so the model
+// reacts to it and carries on — right for a command that exited nonzero, wrong
+// for a question that expired with no declared default, where carrying on
+// means answering from a fact nobody supplied. Checked on the turn it
+// happened, rather than after the model has spent more of the step reasoning
+// past it, and returned UNMARKED so it classifies as aborted rather than
+// failed: the same distinction approval: draws when nobody answers.
+func (conv agentConversation) finishToolTurn(
+	req *model.LLMRequest, calls []*genai.FunctionCall, parts []*genai.Part,
+	detector *loopDetector, state *resumeCheckpoint,
+) error {
+	abortErr := conv.env.ask.state.aborted()
+	if abortErr != nil {
+		return abortErr
+	}
+
+	if choice, n := conv.trackToolResults(parts, state.satisfied); choice != "" {
+		state.verdict, state.note = choice, n // last successful verdict (and its note) wins across turns
+	}
+
+	req.Contents = append(req.Contents, &genai.Content{
+		Role:  genai.RoleUser,
+		Parts: parts,
+	})
+
+	return detector.respond(req, calls, parts)
 }
 
 // handleStopAttempt decides what a turn requesting no tools means: the

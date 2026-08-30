@@ -188,7 +188,10 @@ type ResolvedInvocation struct {
 	// MaxTurns is the resolved tool-calling cap; 0 means no cap, which only an
 	// explicit max_turns: 0 produces.
 	MaxTurns int
-	Attempts int
+	// MaxQuestions is the resolved ask_user budget; 0 means no cap, which
+	// only an explicit max_questions: 0 produces.
+	MaxQuestions int
+	Attempts     int
 	// Timeout is the resolved wall-clock deadline per attempt. Empty means
 	// "take internal/agent's default"; "0" means no deadline. Unlike every
 	// other step kind, an agent step's empty is NOT "no deadline" — see
@@ -313,6 +316,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 	// that is what the pointers are for (see dials.go).
 	maxTurns := orDefault(step.MaxTurns, orDefault(agent.MaxTurns, defaultMaxAgentTurns))
 	attempts := orDefault(step.Attempts, orDefault(agent.Attempts, defaultAgentAttempts))
+	maxQuestions := orDefault(step.MaxQuestions, orDefault(agent.MaxQuestions, defaultMaxQuestions))
 
 	timeout := step.Timeout
 	if timeout == "" {
@@ -340,6 +344,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		MaxTokens:            agent.MaxTokens,
 		ReasoningEffort:      reasoning,
 		MaxTurns:             maxTurns,
+		MaxQuestions:         maxQuestions,
 		Attempts:             attempts,
 		Timeout:              timeout,
 		CompactAfterTokens:   compactAfterTokens,

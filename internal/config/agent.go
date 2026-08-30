@@ -74,6 +74,11 @@ type Agent struct {
 	// an explicit 0 removes the cap entirely — see dials.go for the
 	// convention this shares with MaxContextBytes and Timeout.
 	MaxTurns *int `yaml:"max_turns,omitempty"`
+	// MaxQuestions is the ask_user budget every step of this agent gets when
+	// it declares none of its own. Unset takes defaultMaxQuestions; an
+	// explicit 0 removes the cap. See Step.MaxQuestions for why the dial
+	// counts questions rather than turns.
+	MaxQuestions *int `yaml:"max_questions,omitempty"`
 	// Timeout is the wall-clock deadline every step of this agent gets when
 	// it declares none of its own (e.g. "20m"). Unset takes the package
 	// default (30 minutes — agent.agentStepTimeout); "0" means no deadline at
@@ -239,6 +244,17 @@ type AgentFallback struct {
 // extra turns on a conversation that was going to fail anyway — rarer, and
 // visible in the budget.
 const defaultMaxAgentTurns = 30
+
+// defaultMaxQuestions is how many times one agent step may interrupt its end
+// user when neither the step nor the agent says otherwise.
+//
+// Small, and the asymmetry is the argument. The cost of too low is that a
+// model runs out of asks and has to proceed on its best reading — which it
+// is told, as ordinary tool-result data, so it can say so in its answer. The
+// cost of too high is a person answering questions all afternoon, which is
+// how a feature stops being used at all. Three is enough for a step to
+// resolve the ambiguity it actually hit and not enough to hold an interview.
+const defaultMaxQuestions = 3
 
 // defaultAgentAttempts is how many times one agent step's requests may be
 // tried when the step sets no attempts: of its own. For a hosted agent this

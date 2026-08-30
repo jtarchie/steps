@@ -66,6 +66,10 @@ type cliBridge struct {
 	// 0600.
 	token string
 
+	// budgets bounds how many times a bridged tool may be called during this
+	// attempt; a tool absent from it is unlimited. See counts.
+	budgets map[string]int
+
 	// mu guards everything below: tool calls arrive on the HTTP server's
 	// goroutines, and the driver reads the captures after the child exits.
 	mu        sync.Mutex
@@ -76,6 +80,14 @@ type cliBridge struct {
 	// trajectory includes tools the CLI's own stream reports only by their
 	// prefixed name.
 	calls []recordedToolCall
+	// counts is how many times each budgeted tool has been called. The
+	// counter lives HERE because this is the only place on the CLI path that
+	// sees every call: internal/agent's turn loop enforces max_calls: and a
+	// CLI agent does not run one, which is exactly why the load-time guard
+	// refuses that field for a cli source. max_questions: is the one budget
+	// that must still bind — it is denominated in a person's attention, not
+	// in tool calls — so it is enforced here instead of promised and dropped.
+	counts map[string]int
 }
 
 // bridgeReach says where the child will dial this bridge FROM, which decides
@@ -119,10 +131,15 @@ func cliBridgeReach(ri config.ResolvedInvocation) bridgeReach {
 // The bearer token is unchanged and is what actually authorizes a request —
 // widening the bind widens who may DIAL the port, not what they may do with
 // it, and only for the length of one attempt.
+//
+// The conversation's per-tool call ceilings come along too, because this is
+// the only place on the CLI path that sees every call — see cliBridge.counts.
 func newCLIBridge(ctx context.Context, conv agentConversation, skip map[string]bool, reach bridgeReach) (*cliBridge, error) {
 	bridge := &cliBridge{
 		satisfied: map[string]bool{},
 		token:     rand.Text(),
+		budgets:   conv.tools.maxCalls,
+		counts:    map[string]int{},
 	}
 
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: cliBridgeServerName, Version: "v1"}, nil)
@@ -222,6 +239,20 @@ func (b *cliBridge) handler(name string, impl toolImpl, env toolEnv) sdkmcp.Tool
 
 		slog.Debug("agent.cli.bridge.call", "tool", name, "args", args)
 
+		// Rejected before the impl runs, never after: the point of a budget is
+		// bounding the side effect, which for ask_user is interrupting
+		// somebody. The refusal goes back as ordinary tool-result data, the
+		// same contract the HTTP path's executeBudgetedTool honours, so the
+		// child reacts to it instead of the attempt aborting.
+		if exhausted, budget := b.overBudget(name); exhausted {
+			return &sdkmcp.CallToolResult{
+				Content: []sdkmcp.Content{&sdkmcp.TextContent{
+					Text: fmt.Sprintf(`{"error": %q}`, fmt.Sprintf("%s: call budget (%d) exhausted for this attempt", name, budget)),
+				}},
+				IsError: true,
+			}, nil
+		}
+
 		result := impl(ctx, args, env)
 
 		b.capture(name, args, result)
@@ -236,6 +267,30 @@ func (b *cliBridge) handler(name string, impl toolImpl, env toolEnv) sdkmcp.Tool
 			IsError: !requiredCallSucceeded(result),
 		}, nil
 	}
+}
+
+// overBudget reports whether name has already used its ceiling, counting this
+// call against it when it has not.
+//
+// The check and the increment are one critical section on purpose: bridged
+// calls arrive on the HTTP server's own goroutines, so a check-then-increment
+// pair could let two concurrent asks both pass a budget of one.
+func (b *cliBridge) overBudget(name string) (bool, int) {
+	budget, capped := b.budgets[name]
+	if !capped || budget <= 0 {
+		return false, 0
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.counts[name] >= budget {
+		return true, budget
+	}
+
+	b.counts[name]++
+
+	return false, budget
 }
 
 // capture records what a call means to the step, as opposed to what it means

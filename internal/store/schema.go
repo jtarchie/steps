@@ -9,6 +9,11 @@ package store
 //
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
+// 6 added questions. Same shape of reason as 3: an older database opened
+// without the table, every INSERT naming it failed, and the run-event sink
+// only warns — so a step that asked a person something would have gone green
+// having recorded that it asked nobody.
+//
 // 5 keyed run_placements on a slot rather than a node hash, and made the hash
 // nullable, so a tagged HOOK — which has no node, and really does acquire a
 // billed machine — records the machine that ran it.
@@ -19,7 +24,7 @@ package store
 // 4 put pipeline_id into the keys of run_placements and agent_usage. Without
 // it, two pipelines sharing a state file collided on (run_id, node_hash) and
 // one upserted over the other's row.
-const schemaVersion = 5
+const schemaVersion = 6
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -351,6 +356,44 @@ CREATE TABLE IF NOT EXISTS approvals (
     decided_by   TEXT,
     reason       TEXT
 );
+
+-- Questions an agent step asked its end user, and what came back.
+--
+-- Its own table rather than a kind: column on approvals, because the two
+-- record different things. An approval gates an ACT and answers yes or no; a
+-- question gates a FACT and carries options, a default, an answerer identity,
+-- free text and a memo key — five nullable columns on the one row in this
+-- schema whose whole job is being a clean audit record.
+--
+-- RUN-scoped, not pipeline-scoped: it reaches its pipeline through runs, the
+-- way run_steps and agent_usage do, so retention reaps a run's questions with
+-- the run and no query has to remember a second predicate.
+--
+-- memo_key is what makes one question asked by twelve across: cells one
+-- question (see Question.MemoKey). The unique index is the mechanism, not an
+-- optimization: it is what makes the de-duplication hold between concurrent
+-- askers, where a map in one process would not.
+CREATE TABLE IF NOT EXISTS questions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id          TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    job_name        TEXT NOT NULL,
+    agent_name      TEXT NOT NULL,
+    question        TEXT NOT NULL,
+    -- A JSON array, '[]' when the model offered nothing. Never NULL: "offered
+    -- no options" and "we did not record what was offered" are different facts.
+    options         TEXT NOT NULL,
+    options_required INTEGER NOT NULL DEFAULT 0,
+    default_answer  TEXT,
+    memo_key        TEXT NOT NULL,
+    status          TEXT NOT NULL,
+    asked_at        TEXT NOT NULL,
+    answered_at     TEXT,
+    answered_by     TEXT,
+    answer          TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_memo ON questions(run_id, memo_key);
+-- The waiting-on-a-person listing, which both the CLI and the web UI poll.
+CREATE INDEX IF NOT EXISTS idx_questions_pending ON questions(status, id);
 
 -- How many builds of each job may run at once. Synced from config at startup,
 -- for the reason job_serial_groups is: Store.ClaimNextJob decides admission in

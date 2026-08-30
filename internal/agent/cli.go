@@ -739,6 +739,17 @@ func runCLIAttempt(
 		return runErr
 	}
 
+	// The same latch the HTTP loop checks after each turn, read here because
+	// this path has no turns of its own: a bridged ask_user that expired with
+	// no declared default ends the attempt rather than letting the child carry
+	// on from a fact nobody supplied. Before the obligations check, since a
+	// step that never got its answer has no business being told which tool it
+	// still owes.
+	abortErr := prepared.conv.env.ask.state.aborted()
+	if abortErr != nil {
+		return abortErr
+	}
+
 	// Checked against the STEP's satisfied set, not this attempt's: a verdict
 	// emitted before an earlier attempt died still counts, and the resumed
 	// model can see it already called the tool.

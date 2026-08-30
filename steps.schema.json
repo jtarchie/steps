@@ -446,6 +446,11 @@
           "type": "integer",
           "minimum": 0,
           "description": "How much of one context_paths: file reaches the model at conversation start. Omit for the default of 100000; 0 hands the file over whole. Over the cap the file is truncated with a pointer to read_file paging, never refused."
+        },
+        "max_questions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "ask_user calls per step. Omit for the default of 3; 0 removes the cap."
         }
       }
     },
@@ -483,7 +488,8 @@
             "write_file",
             "edit_file",
             "search_files",
-            "web_fetch"
+            "web_fetch",
+            "ask_user"
           ]
         },
         {
@@ -509,6 +515,18 @@
             "timeout": {
               "type": "string",
               "description": "Bounds ONE call of this tool (e.g. 30s, 5m); the step's own deadline still holds. An expired call is reported to the model as an error it can react to, not an aborted step. Only where the tool is granted, except on an inline custom tool."
+            },
+            "answered_by": {
+              "type": "string",
+              "description": "ask_user only, and only where the tool is granted: an agents: entry that answers the question before a person is asked. Omit to park it for a person straight away."
+            },
+            "default": {
+              "type": "string",
+              "description": "ask_user only: the answer used when the wait expires. The model is told nobody answered. Without one, an expiry aborts the step."
+            },
+            "options_required": {
+              "type": "boolean",
+              "description": "ask_user only: refuse an answer that is not one of the options the model offered. Off by default, so a wrong option list never traps the answerer."
             }
           }
         },
@@ -1270,6 +1288,11 @@
               "description": "What admission assumes an unfinished cell will spend, so tokens: binds at any max_in_flight -- without it the first max_in_flight cells are admitted against a total of ~0, and a width covering every cell bounds nothing. Omit to reserve the cell agent's own budget.tokens instead; with neither, the block admits as it did before this existed."
             }
           }
+        },
+        "max_questions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Agent steps only: ask_user calls for this one step, overriding the agent entry's max_questions. 0 removes the cap."
         }
       }
     },

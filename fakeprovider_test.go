@@ -297,6 +297,24 @@ func (r capturedRequest) historyCalled(name string) bool {
 	return false
 }
 
+// historyCallCount is how many times the request's history already shows this
+// tool being CALLED — what a routed fake needs when a step calls one tool
+// several times and "has it been called at all" no longer distinguishes the
+// turns.
+func (r capturedRequest) historyCallCount(name string) int {
+	count := 0
+
+	for _, msg := range r.Messages {
+		for _, call := range msg.ToolCalls {
+			if call.Function.Name == name {
+				count++
+			}
+		}
+	}
+
+	return count
+}
+
 // forcedTool returns the name of the tool this request's tool_choice forces,
 // or "" when the model was left free to choose. A non-empty value is the
 // observable signal that the conversation loop caught the model trying to

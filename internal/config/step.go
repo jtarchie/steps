@@ -108,6 +108,18 @@ type Step struct {
 	// for this step alone. Agent steps only — one long-horizon step can buy
 	// more turns without every step of the same agent paying for them.
 	MaxTurns *int `yaml:"max_turns,omitempty"`
+	// MaxQuestions caps how many ask_user calls this step may make. Unset
+	// inherits the agent entry's value (itself defaulting to
+	// defaultMaxQuestions); an explicit 0 removes the cap for this step alone,
+	// per the zero-means-no-limit convention. Agent steps only.
+	//
+	// It lives on the STEP, unlike ask_user's other dials, for the reason
+	// max_turns: does: how much one step may spend is a property of that step.
+	// And it is denominated in questions rather than turns because the thing
+	// being spent is a person's attention — a model that asks twenty questions
+	// burns somebody's afternoon, not a token budget, and max_turns: cannot
+	// say anything about that.
+	MaxQuestions *int `yaml:"max_questions,omitempty"`
 	// Timeout is a wall-clock deadline per attempt (e.g., "2m", "30s"). Empty
 	// means no timeout on a task/get/put step, and the agent entry's timeout:
 	// — or the 30-minute package default — on an agent step, which is the one

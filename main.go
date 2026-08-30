@@ -63,6 +63,8 @@ type CLI struct {
 	Jobs      JobsCmd          `cmd:""                                  help:"list jobs the watch circuit breaker has paused, or resume one"`
 	Approvals ApprovalsCmd     `cmd:""                                  help:"list approval: steps waiting for a decision"`
 	Approve   ApproveCmd       `cmd:""                                  help:"approve a waiting approval: step"`
+	Questions QuestionsCmd     `cmd:""                                  help:"list ask_user questions waiting for an answer"`
+	Answer    AnswerCmd        `cmd:""                                  help:"answer a waiting ask_user question"`
 	Reject    RejectCmd        `cmd:""                                  help:"reject a waiting approval: step"`
 	Web       WebCmd           `cmd:""                                  help:"serve the pipeline UI over the same state the CLI writes"`
 	Docs      DocsCmd          `cmd:""                                  help:"read the docs in the terminal (no page name lists them)"`
@@ -94,6 +96,7 @@ type RunCmd struct {
 	VarsFile       string            `help:"YAML file of pipeline vars"                                                                        name:"vars-file"`
 	VersionHistory int               `help:"how many versions of each resource to remember (pipeline defaults.version_history wins)"           name:"version-history"`
 	RunHistory     int               `help:"how many runs of each job to keep (pipeline defaults.run_history wins)"                            name:"run-history"`
+	Answer         []string          `help:"answer an ask_user question in advance, e.g. --answer 'which bump=minor' (repeatable)"             name:"answer"`
 }
 
 // applyContinuation handles the flags that point this invocation at a previous
@@ -180,6 +183,11 @@ func (r *RunCmd) Run() error {
 
 	ctx = pipeline.WithArtifactStore(ctx, r.ArtifactStore)
 
+	ctx, err = pipeline.WithAnswers(ctx, r.Answer)
+	if err != nil {
+		return fmt.Errorf("could not read --answer: %w", err)
+	}
+
 	jobName := r.Job
 
 	ctx, jobName, err = r.applyContinuation(ctx, st, provider, jobName)
@@ -233,6 +241,7 @@ type WatchCmd struct {
 	Worker         map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)"                           name:"worker"`
 	ArtifactStore  string            `help:"mirror cached step outputs to a content-addressed store, e.g. --artifact-store s3://bucket/prefix" name:"artifact-store"`
 	VarsFile       string            `help:"YAML file of pipeline vars"                                                                        name:"vars-file"`
+	Answer         []string          `help:"answer an ask_user question in advance, e.g. --answer 'which bump=minor' (repeatable)"             name:"answer"`
 }
 
 // Run loads the pipeline and blocks in trigger.Watch until canceled
@@ -263,6 +272,11 @@ func (w *WatchCmd) Run() error {
 
 	ctx = pipeline.WithArtifactStore(ctx, w.ArtifactStore)
 
+	ctx, err = pipeline.WithAnswers(ctx, w.Answer)
+	if err != nil {
+		return fmt.Errorf("could not read --answer: %w", err)
+	}
+
 	slog.Info("pipeline.watch", "pipeline", w.Pipeline, "once", w.Once, "interval", w.Interval, "max_concurrent", w.MaxConcurrent)
 
 	if w.Once {
@@ -285,6 +299,28 @@ type TestCmd struct {
 	Worker        map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)"                           name:"worker"`
 	ArtifactStore string            `help:"mirror cached step outputs to a content-addressed store, e.g. --artifact-store s3://bucket/prefix" name:"artifact-store"`
 	VarsFile      string            `help:"YAML file of pipeline vars"                                                                        name:"vars-file"`
+	Answer        []string          `help:"answer an ask_user question in advance, e.g. --answer 'which bump=minor' (repeatable)"             name:"answer"`
+}
+
+// applyFlags folds this command's run-shaping flags into the context: which
+// machines its tags: resolve to, where cached outputs are mirrored, and what
+// an ask_user question is answered with. Lifted out of Run because they are
+// one idea (what the operator asked for) rather than three, and because Run
+// has enough branches of its own.
+func (t *TestCmd) applyFlags(ctx context.Context) (context.Context, error) {
+	ctx, err := applyWorkerFlags(ctx, t.Worker)
+	if err != nil {
+		return ctx, err
+	}
+
+	ctx = pipeline.WithArtifactStore(ctx, t.ArtifactStore)
+
+	ctx, err = pipeline.WithAnswers(ctx, t.Answer)
+	if err != nil {
+		return ctx, fmt.Errorf("could not read --answer: %w", err)
+	}
+
+	return ctx, nil
 }
 
 // Run loads the pipeline, runs every job (force), and reports pass/fail per
@@ -306,12 +342,10 @@ func (t *TestCmd) Run() error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	ctx, err = applyWorkerFlags(ctx, t.Worker)
+	ctx, err = t.applyFlags(ctx)
 	if err != nil {
 		return err
 	}
-
-	ctx = pipeline.WithArtifactStore(ctx, t.ArtifactStore)
 
 	var (
 		executed []string
@@ -1947,6 +1981,99 @@ func decideApproval(pipelinePath string, flags StateFlags, id int64, status, rea
 	}
 
 	fmt.Printf("%s: approval %d\n", status, id)
+
+	return nil
+}
+
+// QuestionsCmd is the "what is waiting on me?" command for questions, the way
+// ApprovalsCmd is for approvals. It reads the same rows the audit trail is
+// made of.
+//
+// Separate from `steps approvals` because the two park for different reasons
+// and are answered differently: an approval takes a yes or a no, a question
+// takes a fact — and a listing that mixed them would have to leave out the
+// options, which are most of what makes a question one keystroke to answer.
+type QuestionsCmd struct {
+	StateFlags `embed:""`
+	Pipeline   string `arg:""   help:"path to the pipeline YAML file"`
+}
+
+// Run prints every question waiting for an answer.
+func (q *QuestionsCmd) Run() error {
+	st, cleanup, err := openStore(q.Pipeline, q.StateFlags)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	pending, err := st.PendingQuestions(context.Background())
+	if err != nil {
+		return fmt.Errorf("could not list questions: %w", err)
+	}
+
+	if len(pending) == 0 {
+		fmt.Println("no questions are waiting")
+
+		return nil
+	}
+
+	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+
+	_, _ = fmt.Fprintln(writer, "ID\tJOB\tSTEP\tASKED\tQUESTION")
+
+	for _, question := range pending {
+		_, _ = fmt.Fprintf(writer, "%d\t%s\t%s\t%s\t%s\n",
+			question.ID, question.JobName, question.AgentName, question.AskedAt, question.Question)
+
+		// Under the question rather than in a column of its own: an option
+		// list is as long as the answers are, and squeezing it into a cell
+		// makes the table unreadable exactly when it matters.
+		if len(question.Options) > 0 {
+			_, _ = fmt.Fprintf(writer, "\t\t\t\toptions: %s\n", strings.Join(question.Options, " | "))
+		}
+	}
+
+	err = writer.Flush()
+	if err != nil {
+		return fmt.Errorf("could not write the questions table: %w", err)
+	}
+
+	return nil
+}
+
+// AnswerCmd supplies the fact a parked agent step is waiting on.
+//
+// ⚠️ Same v1 scope as ApproveCmd, stated deliberately: anyone who can run this
+// command can answer. The recorded answerer is the OS user, which is an audit
+// record and not an authorization check.
+type AnswerCmd struct {
+	StateFlags `embed:""`
+	Pipeline   string `arg:""   help:"path to the pipeline YAML file"`
+	ID         int64  `arg:""   help:"the question id, from steps questions"`
+	// Variadic so an answer can be written without quoting it, which is what
+	// somebody typing a sentence back at a parked step will do.
+	Answer []string `arg:"" help:"the answer — one of the offered options, or your own words"`
+}
+
+// Run answers the named question.
+func (a *AnswerCmd) Run() error {
+	st, cleanup, err := openStore(a.Pipeline, a.StateFlags)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	answer := strings.TrimSpace(strings.Join(a.Answer, " "))
+	if answer == "" {
+		return errors.New("an answer is required: steps answer <pipeline> <id> <answer>")
+	}
+
+	err = st.AnswerQuestion(context.Background(), a.ID, answer, currentUser())
+	if err != nil {
+		return fmt.Errorf("could not record the answer: %w", err)
+	}
+
+	fmt.Printf("answered: question %d\n", a.ID)
 
 	return nil
 }

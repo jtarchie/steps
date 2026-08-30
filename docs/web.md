@@ -29,6 +29,7 @@ one directory. `--state` is how you ask them to; see
 | `…/runs/:run` | **The transcript**: every step in plan order, what it did, and — for agent steps — what the model said and which tools it called |
 | `…/nodes/:hash` | What a merkle hash is made of, and every run that reused it: the cache's receipt |
 | `…/approvals` | Pending `approval:` steps, and the decisions already made |
+| `…/questions` | Pending `ask_user` questions, and the answers already given |
 | `…/resources` | Latest checked version per resource, and any job the circuit breaker has paused |
 | `/docs` | These docs, rendered with syntax-highlighted examples — the same pages `steps docs` shows in a terminal |
 
@@ -172,7 +173,7 @@ and pauses while the tab is hidden.
 
 ## Triggering, approving, resuming
 
-Three controls, each writing the same rows the CLI writes:
+Four controls, each writing the same rows the CLI writes:
 
 - **Trigger** / **Re-run (forced)** enqueue the job into the durable trigger
   queue `steps watch` uses — the same queue this process's own polling fills.
@@ -182,9 +183,12 @@ Three controls, each writing the same rows the CLI writes:
   which on an unchanged pipeline correctly does almost nothing.
 - **Approve / Reject** on an `approval:` step, with the reason recorded — the
   same row `steps approve` writes.
+- **Answer** an `ask_user` question a step is parked on — one click for an
+  offered option, or your own words — the same row `steps answer` writes. See
+  [agents.md](agents.md).
 - **Resume** a job the watch circuit breaker paused.
 
-`--read-only` withholds all three: the controls disappear from the pages and
+`--read-only` withholds all four: the controls disappear from the pages and
 the routes refuse. The queue is still drained, and polling still runs — that
 flag is a statement about the HTTP surface, not about what the process does on
 its own. `--listen 0.0.0.0:8088 --read-only` is a build box that still has to
@@ -289,7 +293,7 @@ mean to hand out the controls too.
 --interval       how often to poll trigger: true resources (default 30s)
 --no-watch       serve without polling; leave that to `steps watch`
 --no-preflight   skip the pre-poll health check of models and MCP servers
---read-only      serve without trigger, approval, or resume controls
+--read-only      serve without trigger, approval, answer, or resume controls
 --keep-workspace leave build workspaces on disk
 --state          sqlite state database (default .steps/<pipeline>.db per YAML)
 --name           name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml

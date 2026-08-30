@@ -566,7 +566,7 @@ func renderCLIPrompt(conv agentConversation) string {
 // credentials and a subscription login works with no api_key_env at all —
 // plus an explicitly configured key when the pipeline named one.
 func cliEnv(ri config.ResolvedInvocation) []string {
-	env := shell.HostEnv()
+	env := append(shell.HostEnv(), cliToolTimeoutEnv(ri)...)
 
 	if ri.APIKeyEnv == "" {
 		return env
@@ -577,6 +577,33 @@ func cliEnv(ri config.ResolvedInvocation) []string {
 	}
 
 	return env
+}
+
+// cliToolTimeoutEnv widens the CHILD's own MCP tool-call deadline to cover a
+// parked question.
+//
+// A bridged call blocks until it returns, and ask_user blocks for as long as
+// the pipeline said a person may be waited on. The bridge's own HTTP side is
+// fine — no write deadline — but the binding constraint is the CLI's tool-call
+// timeout, which is its default and not ours: without this, a parked question
+// on a CLI agent dies at whatever the CLI decided rather than at the deadline
+// the pipeline declared, and the model is told its question failed while a
+// person is still looking at it.
+//
+// Only widened, never narrowed: an operator who set MCP_TOOL_TIMEOUT already
+// keeps it, since a value they chose deliberately is not this function's to
+// overrule.
+func cliToolTimeoutEnv(ri config.ResolvedInvocation) []string {
+	if os.Getenv(cliMCPToolTimeoutEnv) != "" || !grantsAskUserSpec(ri.ToolSpecs) {
+		return nil
+	}
+
+	// A margin over the wait itself, so the deadline that fires is ask_user's
+	// own — which resolves to the declared default: — rather than the child's,
+	// which resolves to nothing anybody declared.
+	budget := askUserWait(ri.ToolSpecs) + cliToolTimeoutMargin
+
+	return []string{fmt.Sprintf("%s=%d", cliMCPToolTimeoutEnv, budget.Milliseconds())}
 }
 
 // cliStderrLogger turns the CLI's stderr into debug records line by line,

@@ -29,6 +29,12 @@ type docScenario struct {
 	// run_file:/message_files:/load_var: targets a doc example references.
 	files map[string]string
 
+	// answers are passed as --answer flags: the ask_user answers an operator
+	// supplies in advance for an unattended run. A doc example that asks
+	// something has to carry them, since no test has a terminal and a parked
+	// question would hold the corpus until its wait expired.
+	answers []string
+
 	// vars are passed as --var flags: what an operator supplies for a
 	// ((name)) the doc example deliberately leaves unresolved.
 	vars map[string]string
@@ -193,6 +199,50 @@ var docScenarios = map[string]docScenario{
 	// any connection — the example needs no network), and the model records
 	// it. Routed rather than positional so a broken fence — the fetch
 	// somehow succeeding, or erroring differently — starves the write.
+	// ask_user, answered the way an unattended run answers: the seed resolves
+	// the question before anybody is disturbed, and the model must carry the
+	// answer it was GIVEN into the file the next step reads — which a
+	// positional script could not show, since it would be echoing a constant
+	// the fixture already wrote.
+	"agents-ask-user": {
+		answers: []string{"which bump=minor", "storage migration=yes"},
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			// Two questions, because one is not enough to make max_questions:
+			// falsifiable — a budget nothing can exhaust is a number the
+			// example could get wrong without anything going red.
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				asked, wrote := req.historyCallCount("ask_user"), req.historyCallCount("write_file")
+
+				switch {
+				case asked == 0:
+					return callsTool("ask_user", map[string]any{
+						"question": "Which bump is this release?",
+						"options":  []any{"major", "minor", "patch"},
+					})
+				case wrote == 0:
+					return callsTool("write_file", map[string]any{
+						"path":    "decision/bump.txt",
+						"content": answeredValue(req.toolResults()),
+					})
+				case asked == 1:
+					return callsTool("ask_user", map[string]any{
+						"question": "Should the note mention the storage migration?",
+						"options":  []any{"yes", "no"},
+					})
+				case wrote == 1:
+					return callsTool("write_file", map[string]any{
+						"path":    "decision/migration.txt",
+						"content": answeredValue(req.toolResults()),
+					})
+				default:
+					return says("Recorded the bump and the migration note.")
+				}
+			})
+		},
+	},
+
 	"agents-web-fetch": {
 		fake: func(t *testing.T) *fakeLLM {
 			t.Helper()

@@ -194,6 +194,8 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	// along only so a nudge can say so when the two differ.
 	expect := newAssertFilesExpectation(step.Assert, space.Dir(), dir)
 
+	applyQuestionBudget(tools, ri)
+
 	verdictTool, err := injectVerdictTool(step.VerdictNames(), step.NoteRequired, tools, expect)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
@@ -240,8 +242,14 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		messages:      step.Messages,
 		contextBlocks: contextBlocks,
 		upstream:      upstreamBlocks(ctx, step),
-		env:           toolEnv{dir: dir, runner: runner, spillDir: spillDir},
-		tools:         tools,
+		env: toolEnv{dir: dir, runner: runner, spillDir: spillDir, ask: askEnv{
+			// The step's own name, not the agent's: an across: cell parks a
+			// question under the identity a reader can find in the plan.
+			agentName: step.DisplayName(),
+			prompt:    terminalPrompter(),
+			state:     &askState{},
+		}},
+		tools: tools,
 		params: agentGenParams{
 			temperature: ri.Temperature,
 			topP:        ri.TopP,
@@ -262,6 +270,27 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		space: space, conv: conv, llm: invocationLLM(ri, apiKey),
 		closers: closers, spillDir: spillDir,
 	}, nil
+}
+
+// applyQuestionBudget binds max_questions: to the ask_user grant, if the step
+// has one.
+//
+// It rides the max_calls: machinery rather than adding a counter of its own,
+// which is what makes the (N+1)th ask come back as ordinary tool-result data
+// naming the exhausted budget — never an aborted attempt — with no new
+// enforcement code. The dial keeps its own name because what is being spent is
+// a person's attention rather than a tool call, and 0 means no cap, per the
+// convention every other dial follows.
+func applyQuestionBudget(tools agentTools, ri config.ResolvedInvocation) {
+	if ri.MaxQuestions <= 0 {
+		return
+	}
+
+	if _, granted := tools.registry[config.AskUserBuiltinName]; !granted {
+		return
+	}
+
+	tools.maxCalls[config.AskUserBuiltinName] = ri.MaxQuestions
 }
 
 // invocationLLM builds the client an invocation talks to, or nil for a CLI

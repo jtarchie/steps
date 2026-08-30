@@ -160,6 +160,7 @@ func (c *Config) validate() error {
 		c.validateHooks,
 		c.validateAgentGraph,
 		c.validateToolCallGuards,
+		c.validateAskUserResponders,
 		c.validateStepGuards,
 		c.validateStepContextPaths,
 		c.validateMaxContextBytes,

@@ -195,6 +195,8 @@ func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName str
 		t.Fatalf("RecordPlacement: %v", err)
 	}
 
+	syntheticQuestion(ctx, t, store, runID, jobName)
+
 	err = store.SaveNodeTranscript(ctx, hashes[3], transcriptJSON(transcriptBytes))
 	if err != nil {
 		t.Fatalf("SaveNodeTranscript: %v", err)
@@ -203,6 +205,28 @@ func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName str
 	err = store.FinishRun(ctx, runID, "succeeded")
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
+	}
+}
+
+// syntheticQuestion records one answered question per build, so the measured
+// footprint prices a build whose agent asked its end user something — and so
+// the orphan sweep has a table with rows in it to ask about.
+func syntheticQuestion(ctx context.Context, t *testing.T, store *Store, runID, jobName string) {
+	t.Helper()
+
+	question, _, err := store.AskQuestion(ctx, Question{
+		RunID: runID, JobName: jobName, AgentName: "responder",
+		Question: "Is this release a major or a minor bump?",
+		Options:  []string{"major", "minor", "patch"},
+		Default:  "patch",
+	})
+	if err != nil {
+		t.Fatalf("AskQuestion: %v", err)
+	}
+
+	err = store.AnswerQuestion(ctx, question.ID, "minor", "jtarchie")
+	if err != nil {
+		t.Fatalf("AnswerQuestion: %v", err)
 	}
 }
 
@@ -473,6 +497,8 @@ func TestFootprintNoOrphansSurviveAPrune(t *testing.T) {
 			`SELECT COUNT(*) FROM agent_usage a WHERE NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = a.run_id)`},
 		{"agent_usage rows whose node is gone",
 			`SELECT COUNT(*) FROM agent_usage a WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.hash = a.node_hash)`},
+		{"questions rows whose run is gone",
+			`SELECT COUNT(*) FROM questions q WHERE NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = q.run_id)`},
 		{"run_placements rows whose run is gone",
 			`SELECT COUNT(*) FROM run_placements p WHERE NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = p.run_id)`},
 		{"run_placements rows whose node is gone",
@@ -756,6 +782,7 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 		{"run_events", "run_id", "runs", "CASCADE"},
 		{"run_steps", "run_id", "runs", "CASCADE"},
 		{"agent_usage", "run_id", "runs", "CASCADE"},
+		{"questions", "run_id", "runs", "CASCADE"},
 		{"agent_usage", "node_hash", "nodes", "CASCADE"},
 		{"run_placements", "run_id", "runs", "CASCADE"},
 		{"run_placements", "node_hash", "nodes", "CASCADE"},

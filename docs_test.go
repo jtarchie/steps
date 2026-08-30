@@ -111,6 +111,10 @@ func scenarioFlags(scenario docScenario) []string {
 		flags = append(flags, "--worker", tag+"="+worker)
 	}
 
+	for _, answer := range scenario.answers {
+		flags = append(flags, "--answer", answer)
+	}
+
 	return flags
 }
 

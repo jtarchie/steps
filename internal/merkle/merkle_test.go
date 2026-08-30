@@ -1504,3 +1504,33 @@ func TestNonExprHashesUnchanged(t *testing.T) {
 		t.Error("a shell-backed get folded expr_in into its content; every existing cached node would be invalidated")
 	}
 }
+
+// TestAskUserDialsChangeTheAgentHash: answered_by:/default:/options_required:
+// each change what comes back into the conversation, so they belong in the
+// content — value-gated, so an agent that grants none of them hashes exactly
+// as it did before the tool existed.
+func TestAskUserDialsChangeTheAgentHash(t *testing.T) {
+	t.Parallel()
+
+	bare := config.ToolSpec{Builtin: config.AskUserBuiltinName}
+
+	content := map[string]any{}
+	withAskUserContent(bare, content)
+
+	if len(content) != 0 {
+		t.Errorf("a bare ask_user grant folded %v into its content", content)
+	}
+
+	for name, spec := range map[string]config.ToolSpec{
+		"answered_by":      {Builtin: config.AskUserBuiltinName, AnsweredBy: "architect"},
+		"default":          {Builtin: config.AskUserBuiltinName, Default: "patch"},
+		"options_required": {Builtin: config.AskUserBuiltinName, OptionsRequired: true},
+	} {
+		dialed := map[string]any{}
+		withAskUserContent(spec, dialed)
+
+		if _, folded := dialed[name]; !folded {
+			t.Errorf("%s: not folded into the hashed content, so changing it would reuse a cached step", name)
+		}
+	}
+}

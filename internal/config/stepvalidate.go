@@ -196,6 +196,8 @@ func checkAgentOnlyFields(label string, step *Step) error {
 	return firstMisplaced(label, []misplacedField{
 		{step.MaxTurns != nil && *step.MaxTurns < 0, "max_turns must not be negative (omit it to take the agent's, or set 0 for no cap)"},
 		{step.MaxTurns != nil && !isAgent, "max_turns is only valid on agent steps (it bounds the tool-calling loop; a task has no turns)"},
+		{step.MaxQuestions != nil && *step.MaxQuestions < 0, "max_questions must not be negative (omit it to take the agent's, or set 0 for no cap)"},
+		{step.MaxQuestions != nil && !isAgent, "max_questions is only valid on agent steps (it bounds ask_user calls; nothing else can ask)"},
 		{len(step.Messages) > 0 && !isAgent, "messages is only valid on agent steps (nothing else holds a conversation)"},
 		{len(step.MessageFiles) > 0 && !isAgent, "message_files is only valid on agent steps (nothing else holds a conversation)"},
 		{step.Dir != "" && !isAgent, "dir is only valid on agent steps (a task embeds a cd in its run:)"},

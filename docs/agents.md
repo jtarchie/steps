@@ -93,6 +93,7 @@ The built-ins that mutate state or reach beyond the workspace are deliberately n
 | `write_file` | Write (or with `append: true`, append) a UTF-8 text file. Replaces a whole file. |
 | `edit_file` | Replace an exact string in an existing file — change part of a file without re-emitting it. |
 | `web_fetch` | HTTP GET a URL and return its body — optionally fenced to named hosts with `allow:`. |
+| `ask_user` | Ask the person running the pipeline a question and wait for the answer. |
 
 ```yaml test=agents-writer
 agents:
@@ -186,6 +187,110 @@ Two rules keep a written fence honest, both enforced at load:
 
 - **`allow:` belongs on the `agents:` entry that grants the tool.** A step's `tools:` *selects* from the grant, and a selection is resolved by substituting the agent's own spec — so an `allow:` written on a step would read as a fence and bind nothing. Select by bare name (`tools: [web_fetch]`) and the agent's fence comes with it.
 - **Entries are bare hostnames** — no scheme, path, port, or wildcard. A host already covers its subdomains, and a pattern-shaped entry is refused rather than interpreted, because the two backends read the list differently enough that one written fence could otherwise mean two different things (see below).
+
+### `ask_user`
+
+An agent can read files, run shells, fetch pages and delegate to a sub-agent. Without this tool the one thing it cannot do is **say it does not know something and get an answer** — the only ways to handle a missing fact are to guess in prose, or to fail the step and make a person restart the run with the fact baked into `messages:`.
+
+`approval:` is the closest thing that already exists, and it is deliberately not this. An approval gates an **act** — publish, deploy, send — and answers exactly one question, yes or no, at a place the pipeline author chose in advance. `ask_user` gates a **fact**, at a place only the model can know it needs, with an answer that is information rather than permission.
+
+It takes a `question` and an optional list of `options`, and it is granted like `run_shell` or `write_file` — never by default, because interrupting a person is a capability the pipeline hands over explicitly:
+
+```yaml test=agents-ask-user
+agents:
+- name: architect          # a bigger model, asked before a person is
+  source: { model: openrouter/anthropic/claude-opus-4 }
+- name: writer
+  source: { model: openrouter/qwen/qwen3.7-flash }
+  max_questions: 5         # every step of this agent, unless the step says otherwise
+  tools:
+  - write_file
+  - builtin: ask_user
+    answered_by: architect   # escalate before parking for a person
+    timeout: 5m              # how long a person is waited on
+    default: patch           # what the model is told when nobody answers
+    options_required: true   # refuse an answer that is not one of the offered options
+
+jobs:
+- name: release-note
+  plan:
+  - agent: writer
+    max_questions: 2         # this step may interrupt somebody twice
+    outputs: [decision]
+    messages:
+      - "Draft the release note. Ask which version bump this is and whether to mention the storage migration, then write each answer on its own into decision/bump.txt and decision/migration.txt."
+    assert:
+      tool_calls:
+      - name: ask_user
+      files: [decision/bump.txt, decision/migration.txt]
+  - task: tag
+    inputs: [decision]
+    run: cat decision/migration.txt
+    assert:
+      stdout: "yes"          # the second answer reached the next step — as a file
+  assert:
+    execution: [writer, tag]
+    outcome: succeeded
+```
+
+**An answer does not escape the conversation.** It is a tool result and a transcript entry: it is not readable through `context: { from: ... }`, and a chosen option is not a routing key. A pipeline that needs the answer downstream has the agent write it to an output, exactly as above. This is the rule the verdict design already landed — decisions travel as verdicts, everything else travels as explicit files — and `verdicts:` is still the right tool when a decision should steer the plan.
+
+#### Who answers, in order
+
+A question goes to the first channel that can serve it:
+
+1. **An answer given in advance.** `steps run --answer 'which bump=minor'` (repeatable, also on `test` and `watch`) answers every question whose text contains that substring, case-insensitively. It is a supported way to run unattended, not only a test seam.
+2. **`answered_by: <agent>`** — a declared `agents:` entry answers, with its own model, dials and tool grant. This is deliberately *not* the same as granting that agent as a sub-agent tool: a sub-agent is delegation the asking model chose, while a responder is an **escalation** a person can still intercept. The recorded row says which one answered. A responder that fails, or answers with nothing, hands the question on rather than resolving it.
+3. **A person, inline.** When `steps run` has a terminal, the question is asked right there.
+4. **A person, parked.** With no terminal — CI, a supervised `steps watch` — the run parks and the question waits:
+
+```console
+$ steps questions pipeline.yml
+ID  JOB           STEP    ASKED                          QUESTION
+1   release-note  writer  2026-08-25T09:14:02.000000000Z Which bump is this release?
+                                                         options: major | minor | patch
+
+$ steps answer pipeline.yml 1 minor
+answered: question 1
+```
+
+The row is written **before** any of those are tried, so nothing about the audit trail depends on which channel answered — or on the run still being alive when one does. The web UI's **questions** page reads the same rows and writes the same answer; `--read-only` withholds that control the way it withholds approve/reject (see [web.md](web.md)).
+
+#### Nobody answered
+
+When the wait expires, what happens depends on whether the grant declared a `default:`:
+
+```
+tool_result ask_user:
+  answered: false
+  answer:   "patch"
+  source:   default
+  note:     "nobody answered within 5m; the declared default was used"
+```
+
+The model is **told**. An indistinguishable default would be the runtime saying a person confirmed something no person saw — the same audit lie `approval:` refuses when it classifies an expiry as aborted rather than rejected.
+
+With no `default:`, an expiry **aborts** the step, matching `approval:` exactly. Aborted, not failed: nobody decided anything.
+
+#### Asked once per run, however many steps ask
+
+Within one run, an answer is memoized by the question's text and the options offered. One mechanism covers three otherwise-separate problems:
+
+- **`across:`** — a twelve-cell matrix whose cells each ask the same thing asks **once**, and all twelve receive that answer.
+- **`in_parallel:` / `ensemble:`** — concurrent steps asking the same question do not stampede a person; the second waits on the first.
+- **`attempts:`** — a retried conversation does not re-ask what the previous attempt already had answered.
+
+The memo is per **run**, not per pipeline: a new run is a new set of circumstances, and yesterday's answer standing in silently for today's question is the failure this whole design exists to avoid.
+
+#### Bounding, and caching
+
+`max_questions:` caps `ask_user` calls per step (default 3), with an agent-level default and the usual step-wins override. The call past the budget comes back as ordinary tool-result data naming it, never an aborted attempt. `max_turns:` is not a substitute: a model that asks twenty questions burns somebody's afternoon rather than a token budget, and the failure mode is social.
+
+Caching diverges from `approval:` deliberately. An approval is never cached — re-asking is the point. A question is a fact, so a step that hits the step cache does not run, cannot ask, and replays its recorded answer; nobody is asked twice. There is no "never cacheable" carve-out for a step that grants `ask_user`, because a `steps watch` polling every 30 seconds and re-asking the same question forever is not a gate, it is a reason nobody uses the feature. `volatile: true` remains the opt-out for a question that genuinely must be re-asked every run.
+
+#### On a CLI-backed agent
+
+`ask_user` works unchanged on `@claude/...` sources, and it is the one builtin a CLI never runs itself: the call is bridged back to steps, so the answer lands here — where the row, the memo and the responder ladder live — rather than in the child's own transcript. Two consequences worth knowing: the call is recorded in the trajectory under its bridged name, `mcp__steps__ask_user`, and `timeout:` on this builtin IS accepted for a CLI agent, unlike every other builtin, because the deadline really does bind.
 
 ## Working directory, inputs, and dir:
 
