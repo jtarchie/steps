@@ -50,9 +50,9 @@ import (
 // default logger before any subcommand's Run method executes — see
 // initLogging.
 type CLI struct {
-	LogLevel  string           `default:"info"                          enum:"debug,info,warn,error"                                          env:"STEPS_LOG_LEVEL"        help:"log verbosity: debug, info, warn, or error"`
+	LogLevel  string           `default:"info"                          enum:"debug,info,warn,error"                                               env:"STEPS_LOG_LEVEL"        help:"log verbosity: debug, info, warn, or error"`
 	Version   kong.VersionFlag `help:"print the steps version and exit" name:"version"`
-	Run       RunCmd           `cmd:""                                  default:"withargs"                                                    help:"run a single job once"`
+	Run       RunCmd           `cmd:""                                  default:"withargs"                                                         help:"run a single job once"`
 	Watch     WatchCmd         `cmd:""                                  help:"poll trigger: true resources and auto-run affected jobs"`
 	Test      TestCmd          `cmd:""                                  help:"run every job (force) and verify assert directives"`
 	Validate  ValidateCmd      `cmd:""                                  help:"check a pipeline for errors without running anything"`
@@ -60,12 +60,9 @@ type CLI struct {
 	Plan      PlanCmd          `cmd:""                                  help:"show which steps a run would execute or skip"`
 	MCP       MCPCmd           `cmd:""                                  help:"inspect or authorize a pipeline's mcp_servers: entries"`
 	Preflight PreflightCmd     `cmd:""                                  help:"check a job's models and MCP servers are live, running nothing"`
-	Jobs      JobsCmd          `cmd:""                                  help:"list jobs the watch circuit breaker has paused, or resume one"`
-	Approvals ApprovalsCmd     `cmd:""                                  help:"list approval: steps waiting for a decision"`
-	Approve   ApproveCmd       `cmd:""                                  help:"approve a waiting approval: step"`
-	Questions QuestionsCmd     `cmd:""                                  help:"list ask_user questions waiting for an answer"`
-	Answer    AnswerCmd        `cmd:""                                  help:"answer a waiting ask_user question"`
-	Reject    RejectCmd        `cmd:""                                  help:"reject a waiting approval: step"`
+	Jobs      JobsCmd          `cmd:""                                  help:"jobs the watch circuit breaker has paused, and taking one out of it"`
+	Approvals ApprovalsCmd     `cmd:""                                  help:"approval: steps waiting for a decision, and deciding them"`
+	Questions QuestionsCmd     `cmd:""                                  help:"ask_user questions waiting for an answer, and answering them"`
 	Web       WebCmd           `cmd:""                                  help:"serve the pipeline UI over the same state the CLI writes"`
 	Docs      DocsCmd          `cmd:""                                  help:"read the docs in the terminal (no page name lists them)"`
 	// Last, and hidden: see ShimCmd. Placing it here keeps the help ordering
@@ -1712,13 +1709,61 @@ func (p *PreflightCmd) Run() error {
 // triggering it and says so once, in output that has long since scrolled past
 // by the time anyone wonders why the nightly summary stopped arriving.
 type JobsCmd struct {
-	StateFlags `embed:""`
-	Pipeline   string `arg:""                                     help:"path to the pipeline YAML file"`
-	Resume     string `help:"job to take out of the paused state"`
+	List   JobsListCmd   `cmd:"" default:"withargs"                        help:"list jobs the circuit breaker has paused"`
+	Resume JobsResumeCmd `cmd:"" help:"take a job out of the paused state"`
 }
 
 // Run lists paused jobs, or resumes one.
-func (j *JobsCmd) Run() error {
+// JobsListCmd is the listing, and the group's default: bare `steps jobs
+// <pipeline>` still answers "what has the breaker stopped?".
+type JobsListCmd struct {
+	StateFlags `embed:""`
+	Pipeline   string `arg:""   help:"path to the pipeline YAML file"`
+}
+
+// Run prints every paused job.
+func (j *JobsListCmd) Run() error {
+	st, cleanup, err := openStore(j.Pipeline, j.StateFlags)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	paused, err := st.PausedJobs(context.Background())
+	if err != nil {
+		return fmt.Errorf("could not list paused jobs: %w", err)
+	}
+
+	if len(paused) == 0 {
+		fmt.Println("no jobs are paused")
+
+		return nil
+	}
+
+	writer := newTabWriter()
+
+	_, _ = fmt.Fprintln(writer, "JOB\tCONSECUTIVE FAILURES\tPAUSED AT")
+
+	for _, job := range paused {
+		_, _ = fmt.Fprintf(writer, "%s\t%d\t%s\n", job.Name, job.Consecutive, job.PausedAt)
+	}
+
+	return flush(writer)
+}
+
+// JobsResumeCmd clears the breaker for one job.
+//
+// A subcommand rather than `jobs --resume <name>`: a flag that turns a
+// listing into a write reads as configuration and behaves as a mutation, and
+// the verb should say which one it is.
+type JobsResumeCmd struct {
+	StateFlags `embed:""`
+	Pipeline   string `arg:""   help:"path to the pipeline YAML file"`
+	Job        string `arg:""   help:"job to take out of the paused state"`
+}
+
+// Run resumes the named job.
+func (j *JobsResumeCmd) Run() error {
 	cfg, err := config.LoadConfig(j.Pipeline)
 	if err != nil {
 		return fmt.Errorf("could not load pipeline: %w", err)
@@ -1730,37 +1775,7 @@ func (j *JobsCmd) Run() error {
 	}
 	defer cleanup()
 
-	ctx := context.Background()
-
-	if j.Resume != "" {
-		return resumeJob(ctx, cfg, st, j.Resume)
-	}
-
-	paused, err := st.PausedJobs(ctx)
-	if err != nil {
-		return fmt.Errorf("could not list paused jobs: %w", err)
-	}
-
-	if len(paused) == 0 {
-		fmt.Println("no jobs are paused")
-
-		return nil
-	}
-
-	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-
-	_, _ = fmt.Fprintln(writer, "JOB\tCONSECUTIVE FAILURES\tPAUSED AT")
-
-	for _, job := range paused {
-		_, _ = fmt.Fprintf(writer, "%s\t%d\t%s\n", job.Name, job.Consecutive, job.PausedAt)
-	}
-
-	err = writer.Flush()
-	if err != nil {
-		return fmt.Errorf("could not write the paused-job table: %w", err)
-	}
-
-	return nil
+	return resumeJob(context.Background(), cfg, st, j.Job)
 }
 
 // resumeJob takes a job back out of the paused state, refusing a name the
@@ -2063,12 +2078,20 @@ func (w *WebCmd) checkNamesAreDistinct() error {
 // is the "what is waiting on me?" command. It reads the same rows the audit
 // trail is made of.
 type ApprovalsCmd struct {
+	List    ApprovalsListCmd `cmd:"" default:"withargs"                      help:"list approval: steps waiting for a decision"`
+	Approve ApproveCmd       `cmd:"" help:"approve a waiting approval: step"`
+	Reject  RejectCmd        `cmd:"" help:"reject a waiting approval: step"`
+}
+
+// ApprovalsListCmd is the listing itself, and the group's default: bare
+// `steps approvals <pipeline>` still answers "what is waiting on me?".
+type ApprovalsListCmd struct {
 	StateFlags `embed:""`
 	Pipeline   string `arg:""   help:"path to the pipeline YAML file"`
 }
 
 // Run prints every pending approval.
-func (a *ApprovalsCmd) Run() error {
+func (a *ApprovalsListCmd) Run() error {
 	st, cleanup, err := openStore(a.Pipeline, a.StateFlags)
 	if err != nil {
 		return err
@@ -2162,12 +2185,18 @@ func decideApproval(pipelinePath string, flags StateFlags, id int64, status, rea
 // takes a fact — and a listing that mixed them would have to leave out the
 // options, which are most of what makes a question one keystroke to answer.
 type QuestionsCmd struct {
+	List   QuestionsListCmd `cmd:"" default:"withargs"                        help:"list ask_user questions waiting for an answer"`
+	Answer AnswerCmd        `cmd:"" help:"answer a waiting ask_user question"`
+}
+
+// QuestionsListCmd is the listing itself, and the group's default.
+type QuestionsListCmd struct {
 	StateFlags `embed:""`
 	Pipeline   string `arg:""   help:"path to the pipeline YAML file"`
 }
 
 // Run prints every question waiting for an answer.
-func (q *QuestionsCmd) Run() error {
+func (q *QuestionsListCmd) Run() error {
 	st, cleanup, err := openStore(q.Pipeline, q.StateFlags)
 	if err != nil {
 		return err
@@ -2233,7 +2262,7 @@ func (a *AnswerCmd) Run() error {
 
 	answer := strings.TrimSpace(strings.Join(a.Answer, " "))
 	if answer == "" {
-		return errors.New("an answer is required: steps answer <pipeline> <id> <answer>")
+		return errors.New("an answer is required: steps questions answer <pipeline> <id> <answer>")
 	}
 
 	err = st.AnswerQuestion(context.Background(), a.ID, answer, currentUser())

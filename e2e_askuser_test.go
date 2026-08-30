@@ -277,7 +277,7 @@ jobs:
 	// they were shown.
 	id := awaitPendingQuestion(t, path)
 
-	mustRun(t, "answer", path, id, "staging")
+	mustRun(t, "questions", "answer", path, id, "staging")
 
 	err := <-done
 	if err != nil {
@@ -338,7 +338,7 @@ jobs:
 	mustRun(t, "run", path, "--job", "build")
 	mustRun(t, "questions", path)
 
-	err := run([]string{"answer", path, "1", "   "})
+	err := run([]string{"questions", "answer", path, "1", "   "})
 	if err == nil {
 		t.Fatal("an empty answer was accepted")
 	}
@@ -347,7 +347,7 @@ jobs:
 		t.Errorf("empty answer error = %q, want it to say what is missing", err)
 	}
 
-	err = run([]string{"answer", path, "7", "minor"})
+	err = run([]string{"questions", "answer", path, "7", "minor"})
 	if err == nil {
 		t.Fatal("an answer to a question that does not exist was accepted")
 	}

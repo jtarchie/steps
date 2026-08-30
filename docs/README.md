@@ -45,10 +45,12 @@ steps runs <pipeline>       show what past runs recorded (--cost for spend,
                             --where for the machines placed steps ran on)
 steps runs --state <file>   with no pipeline: every pipeline in one state file
 steps preflight <pipeline>  check a job's models and MCP servers are live
-steps jobs <pipeline>       list jobs the circuit breaker paused, or resume one
+steps jobs <pipeline>       list jobs the circuit breaker paused
+                            (steps jobs resume <pipeline> <job> clears one)
 steps approvals <pipeline>  list approval: steps waiting for a decision
-steps approve <pipeline> <id>
-steps reject <pipeline> <id>
+                            (steps approvals approve|reject <pipeline> <id>)
+steps questions <pipeline>  list ask_user questions waiting for an answer
+                            (steps questions answer <pipeline> <id> <answer>)
 steps mcp tools|login       inspect or authorize mcp_servers: entries
 steps docs [page]           read these docs in the terminal
 ```

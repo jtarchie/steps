@@ -49,7 +49,7 @@ func runApprovalStep(ctx context.Context, r stepRunner, i int, step config.Step,
 	// nobody is told about is useless in practice, and this is the last line
 	// anyone sees before the run stops making progress.
 	fmt.Printf("approval %d: %s\n", id, step.Approval.Message)
-	fmt.Printf("approval %d: waiting up to %s — steps approve <pipeline> %d  |  steps reject <pipeline> %d\n",
+	fmt.Printf("approval %d: waiting up to %s — steps approvals approve <pipeline> %d  |  steps approvals reject <pipeline> %d\n",
 		id, timeout, id, id)
 	slog.Warn("job.approval_pending",
 		"job", r.jobName, "approval", id, "message", step.Approval.Message, "timeout", timeout.String())

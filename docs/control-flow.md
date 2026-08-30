@@ -737,7 +737,7 @@ $ steps approvals pipeline.yml
 ID  JOB      REQUESTED             MESSAGE
 1   publish  2026-08-05T14:02:11Z  Draft is in draft/summary.md — publish?
 
-$ steps approve pipeline.yml 1
+$ steps approvals approve pipeline.yml 1
 approved: approval 1
 ```
 

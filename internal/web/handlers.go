@@ -511,7 +511,7 @@ func (s *Server) handleDecideApproval(c echo.Context) error {
 	return c.Redirect(http.StatusSeeOther, "/p/"+pipeline.Slug+"/approvals")
 }
 
-// handleAnswerQuestion records an answer, through the same row `steps answer`
+// handleAnswerQuestion records an answer, through the same row `steps questions answer`
 // writes — including its options fence, which lives in the store precisely so
 // that this handler cannot be the place it is forgotten.
 func (s *Server) handleAnswerQuestion(c echo.Context) error {

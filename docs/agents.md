@@ -250,7 +250,7 @@ ID  JOB           STEP    ASKED                          QUESTION
 1   release-note  writer  2026-08-25T09:14:02.000000000Z Which bump is this release?
                                                          options: major | minor | patch
 
-$ steps answer pipeline.yml 1 minor
+$ steps questions answer pipeline.yml 1 minor
 answered: question 1
 ```
 

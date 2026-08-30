@@ -501,7 +501,7 @@ Sun 02:00  nightly-summary PAUSED after 3 consecutive failures — resume with: 
 - **Consecutive, not cumulative.** A job that fails, passes, then fails is flaky, not broken. Any success resets the count.
 - **Tripping is loud**: a printed line plus a `trigger.job_paused` log record.
 - **An interrupted run does not count.** Ctrl-C is an operator, not a broken job.
-- **Resume is manual, deliberately** (`steps jobs <pipeline> --resume <job>`). Any successful run clears the breaker — including a manual `steps run`, the natural way to confirm a fix. Unattended auto-resume would defeat the safety purpose.
+- **Resume is manual, deliberately** (`steps jobs resume <pipeline> <job>`). Any successful run clears the breaker — including a manual `steps run`, the natural way to confirm a fix. Unattended auto-resume would defeat the safety purpose.
 - **Off by default.** A job that declares no ceiling never pauses; the count is still kept, so turning a breaker on later starts from a real number.
 
 ## How much history to keep: `run_history:`

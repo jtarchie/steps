@@ -146,7 +146,7 @@ func approveFirstPending(t *testing.T, pipelinePath, verb string) {
 	var last error
 
 	for time.Now().Before(deadline) {
-		last = run([]string{verb, pipelinePath, "1"})
+		last = run([]string{"approvals", verb, pipelinePath, "1"})
 		if last == nil {
 			return
 		}

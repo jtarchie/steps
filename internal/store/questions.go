@@ -32,7 +32,7 @@ type Question struct {
 	Options   []string
 	// OptionsRequired is recorded rather than only enforced in the asking
 	// process, because the process that ANSWERS is usually a different one:
-	// `steps answer` and the web UI both write this row directly, and a fence
+	// `steps questions answer` and the web UI both write this row directly, and a fence
 	// only the asker knew about would be no fence on either of them.
 	OptionsRequired bool
 	Default         string
@@ -105,7 +105,7 @@ func (s *Store) AskQuestion(ctx context.Context, question Question) (Question, b
 
 // AnswerQuestion records an answer against a pending question. It is the one
 // write every ANSWERING channel shares — a seeded answer, a responder agent, a
-// person at a TTY, `steps answer`, the web UI — so the options fence and the
+// person at a TTY, `steps questions answer`, the web UI — so the options fence and the
 // already-resolved race are decided once, here, rather than five times.
 func (s *Store) AnswerQuestion(ctx context.Context, id int64, answer, by string) error {
 	question, err := s.QuestionStatus(ctx, id)

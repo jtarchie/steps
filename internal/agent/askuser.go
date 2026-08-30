@@ -265,7 +265,7 @@ func (g askGrant) ask(ctx context.Context, args map[string]any, env toolEnv) map
 
 	// A fence that admits nothing is not a fence, it is a deadlock: with no
 	// options offered, slices.Contains is false for every possible answer, so
-	// `steps answer`, the web form and the terminal are ALL refused and the
+	// `steps questions answer`, the web form and the terminal are ALL refused and the
 	// question runs its whole wait out. Told to the model as data, which is the
 	// one channel that can still fix it — by asking again, with options.
 	if g.optionsRequired && len(options) == 0 {
@@ -419,7 +419,7 @@ func (g askGrant) waitForAnswer(ctx context.Context, env toolEnv, row store.Ques
 	announceQuestion(row, g.wait)
 
 	// The terminal channel runs alongside the poll rather than instead of it:
-	// a person at this terminal and a person running `steps answer` in another
+	// a person at this terminal and a person running `steps questions answer` in another
 	// one are both answering the same row, and whichever lands first wins.
 	//
 	// Cancelled on every exit from this function, which is what lets an
@@ -459,7 +459,7 @@ func (g askGrant) waitForAnswer(ctx context.Context, env toolEnv, row store.Ques
 		case answer := <-terminal:
 			// A refused answer (one the options fence rejected) leaves the
 			// question OPEN rather than ending the wait with an error: the
-			// person is still there, `steps answer` can still land, and
+			// person is still there, `steps questions answer` can still land, and
 			// returning here would strand the row pending with nobody left to
 			// resolve it. They are prompted again, since a fence they can
 			// satisfy on the second try is the whole reason it is a fence and
@@ -595,7 +595,7 @@ func announceQuestion(row store.Question, wait time.Duration) {
 		fmt.Printf("question %d: options: %s\n", row.ID, strings.Join(row.Options, " | "))
 	}
 
-	fmt.Printf("question %d: waiting up to %s — steps answer <pipeline> %d <answer>\n", row.ID, wait, row.ID)
+	fmt.Printf("question %d: waiting up to %s — steps questions answer <pipeline> %d <answer>\n", row.ID, wait, row.ID)
 
 	slog.Warn("agent.question_pending", "question", row.ID, "job", row.JobName,
 		"agent", row.AgentName, "question_text", row.Question, "timeout", wait.String())

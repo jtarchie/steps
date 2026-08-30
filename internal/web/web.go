@@ -6,7 +6,7 @@
 // exist and how they depend on each other, what a run did step by step, why a
 // step was skipped, what an agent actually said — and the two mutations it
 // offers (enqueue a job, decide an approval) go through the same rows
-// `steps watch` and `steps approve` use. Nothing here is a parallel execution
+// `steps watch` and `steps approvals approve` use. Nothing here is a parallel execution
 // path.
 //
 // The server is single-user and binds loopback by default: there is no

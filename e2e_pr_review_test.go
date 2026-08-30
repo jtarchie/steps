@@ -229,7 +229,7 @@ func approveWhenPending(pipelinePath string, stop <-chan struct{}) error {
 	var last error
 
 	for time.Now().Before(deadline) {
-		last = run([]string{"approve", pipelinePath, "1"})
+		last = run([]string{"approvals", "approve", pipelinePath, "1"})
 		if last == nil {
 			return nil
 		}

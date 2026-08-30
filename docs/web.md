@@ -182,9 +182,9 @@ Four controls, each writing the same rows the CLI writes:
   hooks, serial groups, and recording as any other. Forced re-run skips the merkle cache; an unforced one does not,
   which on an unchanged pipeline correctly does almost nothing.
 - **Approve / Reject** on an `approval:` step, with the reason recorded — the
-  same row `steps approve` writes.
+  same row `steps approvals approve` writes.
 - **Answer** an `ask_user` question a step is parked on — one click for an
-  offered option, or your own words — the same row `steps answer` writes. See
+  offered option, or your own words — the same row `steps questions answer` writes. See
   [agents.md](agents.md).
 - **Resume** a job the watch circuit breaker paused.
 

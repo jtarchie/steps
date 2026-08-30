@@ -160,7 +160,7 @@ func lockTerminal(ctx context.Context) bool {
 // terminalAnswerer is the audit record's "who" for an answer typed at this
 // terminal. Deliberately not an authorization check — it records who ran the
 // command on this host, which is what somebody reconstructing a decision later
-// needs. Same chain as `steps approve`'s, for the same reason.
+// needs. Same chain as `steps approvals approve`'s, for the same reason.
 func terminalAnswerer() string {
 	for _, key := range []string{"STEPS_APPROVER", "USER", "LOGNAME"} {
 		if value := os.Getenv(key); value != "" {
