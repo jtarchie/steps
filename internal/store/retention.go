@@ -227,7 +227,16 @@ func pruneNodes(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName strin
 		      JOIN runs r ON r.id = e.run_id
 		      WHERE e.hash <> '' AND r.pipeline_id = ?
 		  )
-		  AND hash NOT IN (SELECT node_hash FROM run_placements WHERE pipeline_id = ?)
+		  -- node_hash IS NOT NULL is load-bearing, not tidiness. It is
+		  -- nullable because a tagged HOOK records a machine without having a
+		  -- node, and SQL answers a NOT IN whose subquery yields one NULL with
+		  -- UNKNOWN — never TRUE. Without this, a single hook placement
+		  -- anywhere in the pipeline's history makes this whole clause match
+		  -- nothing and the node cache stops being pruned at all.
+		  AND hash NOT IN (
+		      SELECT node_hash FROM run_placements
+		      WHERE pipeline_id = ? AND node_hash IS NOT NULL
+		  )
 		  AND hash NOT IN (SELECT node_hash FROM agent_usage WHERE pipeline_id = ?)
 		  AND rowid NOT IN (
 		      SELECT rowid FROM nodes WHERE pipeline_id = ? AND job_name = ?

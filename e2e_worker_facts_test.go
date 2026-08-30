@@ -302,3 +302,66 @@ jobs:
 	// hook records the machine at all.
 	assertMachineFacts(t, placements[0])
 }
+
+// TestEndToEndRecordsEveryTaggedHookSeparately pins that two hooks on one step
+// are two machines, and are recorded as two.
+//
+// A tagged hook really does acquire one — on aws://launch/ it launches and
+// bills an instance — and it is the place an operator is least likely to
+// expect one running, which is the whole reason hooks are recorded at all. A
+// hook is deliberately outside the merkle chain (it must never be skipped for
+// having succeeded before), so it has no node hash to be keyed on and is
+// identified by its own scope instead.
+//
+// Its OWN scope. Keyed on the enclosing step's label, an on_failure: and an
+// ensure: on the same step produce the same key, the second upserts over the
+// first, and one of two billed machines vanishes from the record — silently,
+// because an upsert is a success.
+func TestEndToEndRecordsEveryTaggedHookSeparately(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: here
+    run: "false"
+    on_failure:
+      task: notify
+      tags: [gpu]
+      run: "true"
+    ensure:
+      task: cleanup
+      tags: [gpu]
+      run: "true"
+`)
+
+	// The job fails: the step runs `false`, which is what makes on_failure
+	// fire. Its error is the point, not a problem.
+	_ = run([]string{path, "--worker", "gpu=local:"})
+
+	placements := runPlacements(t, path)
+
+	slots := map[string]bool{}
+	for _, placement := range placements {
+		slots[placement.Slot] = true
+	}
+
+	if len(slots) != 2 {
+		t.Fatalf("recorded %d distinct placement slots from two tagged hooks, want 2: %+v", len(slots), placements)
+	}
+
+	// And each names the hook it was, rather than the step both hang off.
+	for _, want := range []string{"on_failure", "ensure"} {
+		found := false
+
+		for slot := range slots {
+			if strings.Contains(slot, want) {
+				found = true
+			}
+		}
+
+		if !found {
+			t.Errorf("no placement slot names the %s hook; slots are %v", want, slots)
+		}
+	}
+}

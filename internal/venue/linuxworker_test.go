@@ -66,13 +66,16 @@ const workerScratchRoot = "/var/tmp/steps"
 // The image is loaded into that daemon over a pipe rather than pulled, so the
 // test needs no more network than the fixture already does — the plain worker
 // image runs `apk add` at build time, so this file has never been offline.
-func startLinuxWorkerWithDocker(t *testing.T) linuxWorker {
+func startLinuxWorkerWithDocker(t *testing.T, seedImage bool) linuxWorker {
 	t.Helper()
 
 	worker := startLinuxWorkerWith(t, dindWorkerDockerfile, "--privileged")
 
 	waitForWorkerDaemon(t, worker.container)
-	loadImageIntoWorker(t, worker.container, containerizedStepImage)
+
+	if seedImage {
+		loadImageIntoWorker(t, worker.container, containerizedStepImage)
+	}
 
 	return worker
 }
@@ -528,7 +531,7 @@ func TestLinuxRootWorkerDecidesTheContainerUser(t *testing.T) {
 func TestLinuxRootWorkerRunsAContainerizedStep(t *testing.T) {
 	t.Parallel()
 
-	worker := startLinuxWorkerWithDocker(t)
+	worker := startLinuxWorkerWithDocker(t, true)
 
 	cwd := t.TempDir()
 	mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), "seed\n")
@@ -564,5 +567,54 @@ func TestLinuxRootWorkerRunsAContainerizedStep(t *testing.T) {
 	const want = "seed\ncontainer\nlinux\n"
 	if report != want {
 		t.Errorf("report = %q, want %q", report, want)
+	}
+}
+
+// TestLinuxRootWorkerPullsAPlacedImage pins who fetches the image a placed
+// containerized step runs in.
+//
+// Nothing on this machine can. Config.Images() deliberately omits a placed
+// step's image and says why: the worker does not exist yet when the pipeline
+// is asked, so pulling here would download it to a machine that will never run
+// it. The image therefore has to arrive on the WORKER's daemon, and the only
+// moment that can happen is when the container is created.
+//
+// `docker run` did it implicitly and nobody had to think about it. Creating a
+// container over the engine API does not — it answers a missing image with a
+// 404 — so a step on a freshly acquired machine would die on an image the old
+// implementation would have fetched, after the machine was launched and billed
+// and the tree pushed.
+//
+// The worker's daemon is deliberately NOT seeded here, which is the whole
+// test: it starts empty, and the step only runs if something pulled.
+func TestLinuxRootWorkerPullsAPlacedImage(t *testing.T) {
+	t.Parallel()
+
+	worker := startLinuxWorkerWithDocker(t, false)
+
+	cwd := t.TempDir()
+	mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), "seed\n")
+	mustMkdir(t, filepath.Join(cwd, "out"))
+
+	runner, err := NewRunner(shell.RunnerSpec{
+		Cwd:       cwd,
+		Worker:    worker.url,
+		WorkerTag: "linux",
+		Image:     containerizedStepImage,
+		Fetch:     []string{"out"},
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	t.Cleanup(func() { _ = runner.Close() })
+
+	err = runner.Run(context.Background(), `cat data/seed.txt > out/report.txt`)
+	if err != nil {
+		t.Fatalf("Run: %v; the worker's daemon started empty, so the image was never pulled", err)
+	}
+
+	if report := mustRead(t, filepath.Join(cwd, "out", "report.txt")); report != "seed\n" {
+		t.Errorf("report = %q, want the step to have run in the pulled image", report)
 	}
 }

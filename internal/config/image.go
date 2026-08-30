@@ -230,38 +230,6 @@ func (c *Config) Images() []string {
 	return images
 }
 
-// UsesPlacedImages reports whether any image: this pipeline names runs on a
-// WORKER's daemon — exactly the images Images() leaves out.
-//
-// Asked separately because the two halves of the docker preflight have
-// different answers here: the daemon is the worker's, so `docker info` on this
-// machine proves nothing and a daemonless orchestrator is the arrangement the
-// feature exists for — but the client that drives the forwarded socket is this
-// machine's docker binary, so it still has to be here, and has to be found
-// before a machine is acquired and billed.
-func (c *Config) UsesPlacedImages() bool {
-	placedOnly := c.placedOnlyEntries()
-
-	placed := false
-
-	_ = c.visitContainerSettings(func(_ string, settings containerSettings) error {
-		if settings.Image == "" {
-			return nil
-		}
-
-		// The two shapes a placed image takes: a step carrying its own image:
-		// alongside tags:, and a tasks:/agents: entry every reference to which
-		// is tagged. Both are the predicate Images() inverts.
-		if len(settings.Tags) > 0 || placedOnly[settings.Entry] {
-			placed = true
-		}
-
-		return nil
-	})
-
-	return placed
-}
-
 // placedOnlyEntries names the tasks: and agents: entries that are referenced,
 // and referenced ONLY by steps that run on a worker — the entries whose image
 // this machine therefore never runs.

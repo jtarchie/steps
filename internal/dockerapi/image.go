@@ -40,6 +40,16 @@ func (c *Client) ImagePresent(ctx context.Context, image string) bool {
 	return !errdefs.IsNotFound(err) && !errdefs.IsInvalidArgument(err)
 }
 
+// IsImageNotFound reports whether err is the daemon saying it does not have
+// the image asked for.
+//
+// Exported because creating a container is the one place a caller has to act
+// on it rather than report it: `docker run` pulled implicitly, and the engine
+// API does not, so the caller restores that by pulling and asking again.
+func IsImageNotFound(err error) bool {
+	return errdefs.IsNotFound(err)
+}
+
 // Pull fetches image, reporting the daemon's progress to progress.
 //
 // The reporting is not decoration. An image pull is minutes of silence

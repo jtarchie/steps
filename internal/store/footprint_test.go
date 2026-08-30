@@ -1272,3 +1272,84 @@ func TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
 			len(usage))
 	}
 }
+
+// TestPruneStillWorksBesideAHookPlacement is the trap a nullable column sets
+// for an anti-join.
+//
+// node_hash became nullable so a tagged HOOK could record the machine it
+// acquired: a hook is deliberately never merkle-hashed, so it has no node to
+// be keyed on. The node prune exempts anything a placement still points at,
+// and it asks with `hash NOT IN (SELECT node_hash FROM run_placements ...)`.
+//
+// SQL answers `x NOT IN (...)` with UNKNOWN — never TRUE — the moment the
+// subquery yields a single NULL. So one tagged hook, anywhere in the
+// pipeline's history, makes that clause match no rows at all and the node
+// cache stops being pruned FOREVER. It is the exact bound footprint_test.go
+// exists to measure, defeated silently: nothing errors, nothing warns, the
+// table just grows.
+func TestPruneStillWorksBesideAHookPlacement(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	const (
+		runID   = "HOOKRUN1"
+		jobName = "build"
+		keep    = 1
+	)
+
+	err := store.StartRun(ctx, runID, jobName, "/tmp/ws")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	// A tagged hook: a real machine, billed, with no node of its own. Slot is
+	// its scope label precisely because there is no hash to key on.
+	err = store.RecordPlacement(ctx, Placement{
+		RunID: runID, StepIndex: 0, StepName: "build", JobName: jobName,
+		Slot: `step 0 (task "build") (on_failure hook)`,
+		Tag:  "spot", Address: "aws://i-0123456789abcdef0", GOOS: "linux", GOARCH: "arm64",
+		Workdir: "/var/tmp/w", FSType: "ext4", FSFree: 1 << 30, BytesSent: 512,
+	})
+	if err != nil {
+		t.Fatalf("RecordPlacement: %v", err)
+	}
+
+	overflow := keep*nodesPerRetainedRun + 40
+	fillNodeCache(ctx, t, store, jobName, overflow)
+
+	before := countNodes(ctx, t, store, jobName)
+
+	err = store.PruneRuns(ctx, jobName, keep, runID)
+	if err != nil {
+		t.Fatalf("PruneRuns: %v", err)
+	}
+
+	after := countNodes(ctx, t, store, jobName)
+
+	if after >= before {
+		t.Errorf("nodes went %d -> %d beside a hook placement; the cache is no longer bounded at all", before, after)
+	}
+
+	if after > keep*nodesPerRetainedRun {
+		t.Errorf("nodes = %d after pruning, want no more than the cap of %d", after, keep*nodesPerRetainedRun)
+	}
+}
+
+// countNodes reports how many cache entries a job currently holds.
+func countNodes(ctx context.Context, t *testing.T, store *Store, jobName string) int {
+	t.Helper()
+
+	var count int
+
+	err := store.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM nodes WHERE pipeline_id = ? AND job_name = ?`, store.pipelineID, jobName).Scan(&count)
+	if err != nil {
+		t.Fatalf("counting nodes: %v", err)
+	}
+
+	return count
+}

@@ -66,7 +66,7 @@ func (c *Client) StartAttached(
 		Stderr: true,
 	})
 	if err != nil {
-		reclaimAttached(ctx, c, id, spec)
+		reclaimAttached(ctx, c, id)
 
 		return nil, fmt.Errorf("attaching to container %s: %w", id, err)
 	}
@@ -74,7 +74,7 @@ func (c *Client) StartAttached(
 	err = c.StartContainer(ctx, id)
 	if err != nil {
 		hijack.Close()
-		reclaimAttached(ctx, c, id, spec)
+		reclaimAttached(ctx, c, id)
 
 		return nil, err
 	}
@@ -108,13 +108,13 @@ func (c *Client) StartAttached(
 
 // reclaimAttached takes away a container that was created but never got to
 // run, on a context that a cancelled caller cannot abort.
-func reclaimAttached(ctx context.Context, c *Client, id string, spec ContainerSpec) {
-	if spec.AutoRemove {
-		// The daemon removes it on exit, and it never started, so removing it
-		// here races that with nothing to gain.
-		return
-	}
-
+// Unconditionally, including for a self-removing one. AutoRemove is honoured
+// when a STARTED container exits; a container still in Created because the
+// attach or the start failed never exits, so the daemon never reaps it. The
+// ownership labels mean a later run's sweep would eventually find it, but that
+// is a later PROCESS — this one's pid is still alive, so the sweep skips it —
+// and it would sit on the daemon for the rest of the run.
+func reclaimAttached(ctx context.Context, c *Client, id string) {
 	_ = c.RemoveContainer(context.WithoutCancel(ctx), id)
 }
 
@@ -133,23 +133,47 @@ func reclaimAttached(ctx context.Context, c *Client, id string, spec ContainerSp
 // unblocks it. It is the same reason exec.Cmd.Wait closes the pipe it handed
 // out, and it carries the same obligation: finish reading before calling this.
 func (a *Attached) Wait(ctx context.Context) (int, error) {
-	defer a.close()
-
 	result := a.client.api.ContainerWait(ctx, a.id, client.ContainerWaitOptions{
 		Condition: container.WaitConditionNotRunning,
 	})
 
 	select {
 	case status := <-result.Result:
-		_ = a.stdout.CloseWithError(errAttachClosed)
-		<-a.pumped
+		a.settle(false)
 
 		return int(status.StatusCode), nil
 	case err := <-result.Error:
+		a.settle(true)
+
 		return 0, fmt.Errorf("waiting on container %s: %w", a.id, err)
 	case <-ctx.Done():
+		a.settle(true)
+
 		return 0, fmt.Errorf("waiting on container %s: %w", a.id, ctx.Err())
 	}
+}
+
+// settle ends both streams and waits for the demultiplexer, so that when Wait
+// returns nothing is still writing to the writers the caller handed in.
+//
+// Every path, not just the successful one, which is the bug this had. A caller
+// passes its own stderr buffer here and reads it the moment Wait returns; a
+// strings.Builder still being written to by the pump is a data race, and the
+// timeout path — where the caller most wants to read what was said — was
+// exactly the one that skipped the wait.
+//
+// interrupt closes the connection FIRST, and only when the container did not
+// finish: the demultiplexer is then blocked in a read nothing else will end.
+// On the ordinary path the daemon has already closed its side, and cutting the
+// connection there could truncate the last bytes instead of delivering them.
+func (a *Attached) settle(interrupt bool) {
+	if interrupt {
+		a.close()
+	}
+
+	_ = a.stdout.CloseWithError(errAttachClosed)
+	<-a.pumped
+	a.close()
 }
 
 // close releases the hijacked connection, once however many times it is asked.

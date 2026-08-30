@@ -108,9 +108,15 @@ func runMatchedHook(ctx context.Context, scope hookScope, name string, step *con
 	hookCtx = withHookIdentity(hookCtx, scope.jobName)
 	logFrom(hookCtx).Debug("job.hook")
 
-	hookErr := runHookStep(hookCtx, scope, *step)
-
+	// Built BEFORE the body runs, and handed to it. The label is the identity
+	// a placement is recorded under, and a hook has no node hash to be keyed
+	// on instead — so the enclosing step's label made an on_failure: and an
+	// ensure: on one step the same key, the second upserting over the first.
+	// Two machines were acquired and billed and one of them vanished from the
+	// record, silently, because an upsert is a success.
 	nested := scope.scope(fmt.Sprintf("%s (%s hook)", scope.label, name))
+
+	hookErr := runHookStep(hookCtx, nested, *step)
 
 	return runHooks(hookCtx, nested, step.Hooks, hookErr)
 }

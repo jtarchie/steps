@@ -128,7 +128,13 @@ type dockerSession struct {
 }
 
 // ensure starts the container if it has not been started yet, returning its
-// id.
+// id and the client to reach it through.
+//
+// The client is RETURNED rather than read off the session afterwards, because
+// every other field here is guarded by the mutex and that one was not: close()
+// clears it, so a Close racing a command in flight was a nil dereference and a
+// race besides. Handing it back keeps the rule that nothing outside this
+// function touches session state.
 //
 // A daemon-side refusal — an unknown image is the one that matters — is
 // reported as an *ExitError carrying 125, the status `docker run` exits with
@@ -137,16 +143,16 @@ type dockerSession struct {
 // task's failure classifying as a task failure via IsExitError. A container
 // that started and then DIED is a different answer and deliberately not an
 // ExitError: see checkAlive.
-func (s *dockerSession) ensure(ctx context.Context) (id, stderr string, err error) {
+func (s *dockerSession) ensure(ctx context.Context) (*dockerapi.Client, string, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return "", "", errSessionClosed
+		return nil, "", "", errSessionClosed
 	}
 
 	if s.attempted {
-		return s.id, s.startOut, s.startErr
+		return s.client, s.id, s.startOut, s.startErr
 	}
 
 	s.attempted = true
@@ -155,14 +161,14 @@ func (s *dockerSession) ensure(ctx context.Context) (id, stderr string, err erro
 	if err != nil {
 		s.startErr = err
 
-		return "", "", err
+		return nil, "", "", err
 	}
 
 	client, err := dockerapi.New(s.dockerHost)
 	if err != nil {
 		s.startErr = fmt.Errorf("connecting to the daemon for image %q: %w", s.image, err)
 
-		return "", "", s.startErr
+		return nil, "", "", s.startErr
 	}
 
 	s.client = client
@@ -176,7 +182,7 @@ func (s *dockerSession) ensure(ctx context.Context) (id, stderr string, err erro
 
 		slog.Debug("shell.docker.session_start_failed", "image", s.image, "error", startErr)
 
-		return "", s.startOut, s.startErr
+		return s.client, "", s.startOut, s.startErr
 	}
 
 	// Starting reports that the container STARTED, not that it is still up:
@@ -198,12 +204,12 @@ func (s *dockerSession) ensure(ctx context.Context) (id, stderr string, err erro
 		// unset, so close has nothing to do for this session.
 		reclaim(removalContext(ctx), s.client, containerID)
 
-		return "", s.startOut, s.startErr
+		return s.client, "", s.startOut, s.startErr
 	}
 
 	s.name, s.id = containerName, containerID
 
-	return s.id, "", nil
+	return s.client, s.id, "", nil
 }
 
 // dockerDaemonRefusedCode is the status a daemon-side refusal reports. 125 is
@@ -236,6 +242,10 @@ func (s *dockerSession) start(ctx context.Context, name string) (string, error) 
 	}
 
 	id, err := s.client.CreateContainer(ctx, spec)
+	if err != nil && dockerapi.IsImageNotFound(err) {
+		id, err = s.pullAndCreate(ctx, spec)
+	}
+
 	if err != nil {
 		return "", fmt.Errorf("%w", err)
 	}
@@ -246,6 +256,36 @@ func (s *dockerSession) start(ctx context.Context, name string) (string, error) 
 		// to be reclaimed here.
 		reclaim(removalContext(ctx), s.client, id)
 
+		return "", fmt.Errorf("%w", err)
+	}
+
+	return id, nil
+}
+
+// pullAndCreate fetches the image onto this session's daemon and tries again.
+//
+// This is what `docker run` did for free and creating a container does not:
+// the engine API answers a missing image with a 404 rather than fetching it.
+// For a LOCAL step it never fires, because PrepareImages pulled every image
+// the pipeline names before the first step ran. For a PLACED one it is the
+// only moment there is — Config.Images() deliberately omits a placed step's
+// image, since the worker does not exist yet when the pipeline is asked, so
+// pulling it here would send it to a machine that will never run it.
+//
+// The cost lands inside the step, which is exactly what PrepareImages exists
+// to avoid, and is accepted because there is no earlier moment: a machine
+// acquired for this job has no daemon to pull onto until it has been
+// acquired. It is also what the shape this replaced did, silently.
+func (s *dockerSession) pullAndCreate(ctx context.Context, spec dockerapi.ContainerSpec) (string, error) {
+	slog.Debug("shell.docker.session_pull", "image", s.image, "host", s.dockerHost)
+
+	err := s.client.Pull(ctx, s.image, os.Stdout)
+	if err != nil {
+		return "", fmt.Errorf("%w", err)
+	}
+
+	id, err := s.client.CreateContainer(ctx, spec)
+	if err != nil {
 		return "", fmt.Errorf("%w", err)
 	}
 
@@ -425,7 +465,7 @@ func NewContainerName() (string, error) {
 func (d DockerRunner) dockerExec(
 	ctx context.Context, command string, stdin, streamStdout, streamStderr bool, maxBytes int, spillDir string,
 ) (stdout, stderr string, exitCode int, runErr error) {
-	id, startStderr, startErr := d.session.ensure(ctx)
+	client, id, startStderr, startErr := d.session.ensure(ctx)
 	if startErr != nil {
 		return "", startStderr, exitCodeOf(startErr), startErr
 	}
@@ -462,7 +502,7 @@ func (d DockerRunner) dockerExec(
 		opts.Stdin = os.Stdin
 	}
 
-	code, execErr := d.session.client.Exec(ctx, id, opts)
+	code, execErr := client.Exec(ctx, id, opts)
 
 	flushStdout()
 	flushStderr()

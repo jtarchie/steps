@@ -286,21 +286,31 @@ func (c *Client) Exec(ctx context.Context, containerID string, opts ExecOptions)
 	// a resource step parses.
 	_, copyErr := stdcopy.StdCopy(writerOrDiscard(opts.Stdout), writerOrDiscard(opts.Stderr), attached.Reader)
 
-	inspected, err := c.api.ExecInspect(ctx, created.ID, client.ExecInspectOptions{})
+	// Answered BEFORE the status is asked for, and the order is the bug this
+	// had. A copy that ended early because the CALLER gave up is not a failure
+	// to run the command: it ran, and this end stopped listening. Asking the
+	// daemon first meant asking on a context that had just died, so the
+	// inspect failed and its error was reported instead — a timed-out step
+	// came back as "docker failed to start", classified as infrastructure
+	// rather than as the step being cut off, and threw away every byte it had
+	// captured before the deadline.
+	if copyErr != nil && ctx.Err() != nil {
+		return SignalledExitCode, nil
+	}
+
+	// Stripped of cancellation for the narrow window that is left: the output
+	// is already complete, so a context dying between the last byte and this
+	// question would lose a status the daemon is holding. Not covered by a
+	// test — the cancel branch above catches every case a test can arrange,
+	// and this is the gap between two statements — so it is written to be
+	// obviously right rather than proven.
+	inspected, err := c.api.ExecInspect(context.WithoutCancel(ctx), created.ID, client.ExecInspectOptions{})
 	if err != nil {
 		if copyErr != nil {
 			return 0, fmt.Errorf("reading the command's output: %w", copyErr)
 		}
 
 		return 0, fmt.Errorf("reading the command's status: %w", err)
-	}
-
-	// A copy that ended early on a cancelled context is not a failure to run
-	// the command: it ran, and this end stopped listening. Reported as a
-	// signalled status, which is what a locally killed process reports too,
-	// so nothing downstream has to know which side gave up.
-	if copyErr != nil && ctx.Err() != nil {
-		return SignalledExitCode, nil
 	}
 
 	if copyErr != nil {

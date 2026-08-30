@@ -676,3 +676,50 @@ func writeJSON(t *testing.T, path string, value any) {
 		t.Fatalf("writing %s: %v", path, err)
 	}
 }
+
+// TestContractCancelledCommandKeepsItsOutput pins what a step that hits its
+// timeout: inside a container reports.
+//
+// A cancelled command RAN. It produced output, and it was cut off — which is
+// the same thing a locally signalled process is, and os/exec reports that as
+// exit -1 WITH whatever was captured before the kill. RunCaptureFull's own
+// doc promises the same: a signal-killed command surfaces as data, and only a
+// failure to have a container at all is a Go error.
+//
+// Getting this wrong is expensive twice over. The partial output is the only
+// evidence of what the step managed to do before its deadline, and the
+// classification decides whether the author's on_failure: or on_error: runs.
+func TestContractCancelledCommandKeepsItsOutput(t *testing.T) {
+	requireDocker(t)
+
+	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+
+	// Started first, so the container exists and the cancel lands on the
+	// command rather than on the session start.
+	_, _, _, err := runner.RunCaptureFull(context.Background(), "true")
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		time.Sleep(750 * time.Millisecond)
+		cancel()
+	}()
+
+	defer cancel()
+
+	stdout, _, exitCode, err := runner.RunCaptureFull(ctx, "echo partial; sleep 30")
+	if err != nil {
+		t.Fatalf("a cancelled command must be reported as data, not a Go error: %v", err)
+	}
+
+	if exitCode != SignalledExitCode {
+		t.Errorf("exitCode = %d, want %d for a command that was cut off", exitCode, SignalledExitCode)
+	}
+
+	if !strings.Contains(stdout, "partial") {
+		t.Errorf("stdout = %q, want the output captured before the cancel", stdout)
+	}
+}
