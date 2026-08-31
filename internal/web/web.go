@@ -172,6 +172,7 @@ func (s *Server) routes() error {
 	group := e.Group("/p/:pipeline", s.resolvePipeline)
 	group.GET("", s.handleJobs)
 	group.GET("/jobs/:job", s.handleJob)
+	group.GET("/runs", s.handleRunHistory)
 	group.GET("/runs/:run", s.handleRun)
 	group.GET("/runs/:run/events", s.handleRunEvents)
 	group.GET("/nodes/:hash", s.handleNode)

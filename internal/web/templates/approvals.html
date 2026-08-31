@@ -4,7 +4,7 @@
 
 {{range .Approvals}}
 <div class="approval {{if ne .Status "pending"}}decided{{end}}">
-  <div class="meta">{{.JobName}} · requested {{.RequestedAt}}{{if .DecidedAt}} · decided {{.DecidedAt}} by {{.DecidedBy}}{{end}}</div>
+  <div class="meta"><a href="/p/{{$.Nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · requested {{agoText .RequestedAt}}{{if .DecidedAt}} · decided {{agoText .DecidedAt}} by {{.DecidedBy}}{{end}}</div>
   <div class="msg">{{.Message}}</div>
   {{if eq .Status "pending"}}
     {{if $.Nav.ReadOnly}}
@@ -17,7 +17,7 @@
     </form>
     {{end}}
   {{else}}
-  <div class="meta"><span class="stamp st-{{if eq .Status "approved"}}passed{{else}}failed{{end}}">{{.Status}}</span>{{if .Reason}} — "{{.Reason}}"{{end}}</div>
+  <div class="meta"><span class="stamp st st-{{if eq .Status "approved"}}passed{{else}}failed{{end}}">{{.Status}}</span>{{if .Reason}} — "{{.Reason}}"{{end}}</div>
   {{end}}
 </div>
 {{else}}

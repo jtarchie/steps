@@ -12,6 +12,9 @@
  */
 
 :root {
+  /* Single-theme, but say so: without this the UA paints form controls and
+     scrollbars for whatever the OS prefers, light chrome on a dark page. */
+  color-scheme: dark;
   --bg: #111310;
   --panel: #171a16;
   --panel2: #1c201b;
@@ -66,6 +69,8 @@ code { font-family: var(--mono); color: var(--fg); }
 }
 .statusline .brand { padding: 8px 14px; color: var(--green); border-right: 1px solid var(--line); white-space: nowrap; }
 .statusline .brand b { color: var(--fg); font-weight: 600; }
+.statusline .brand:hover { text-decoration: none; }
+.statusline .brand:hover b { color: var(--green); }
 .tabs { display: flex; }
 .tab {
   padding: 8px 14px;
@@ -127,6 +132,16 @@ code { font-family: var(--mono); color: var(--fg); }
 /* ---- page frame ---- */
 main { max-width: 1000px; margin: 0 auto; padding: 26px 20px 80px; }
 
+/* What a hidden action says instead of vanishing on a read-only server. */
+.rohint { font-family: var(--sans); font-size: 12px; color: var(--dim); max-width: 340px; text-align: right; }
+
+/* Breadcrumbs: the way back up from a detail page. */
+.crumbs { font-size: 12px; color: var(--faint); margin: 0 0 12px; overflow-wrap: anywhere; }
+.crumbs a { color: var(--dim); }
+.crumbs a:hover { color: var(--fg); }
+.crumbs .csep { margin: 0 7px; color: var(--line); }
+.crumbs .here { color: var(--fg); }
+
 .prompt { color: var(--dim); margin: 0 0 4px; font-size: 13px; font-weight: 400; }
 .prompt::before { content: "$ "; color: var(--green); }
 .prompt b { color: var(--fg); font-weight: 600; }
@@ -176,16 +191,22 @@ td.dim { color: var(--dim); }
 td.faint, .faint { color: var(--faint); }
 .res { color: var(--cyan); }
 
-/* ---- status ---- */
+/* ---- status ----
+   One glyph per outcome, everywhere a status word appears: color is never
+   the only signal. Glyph overrides are scoped to .st so a bare color class
+   (a breaker count, a DAG node) does not sprout a second marker. */
 .st { white-space: nowrap; }
 .st::before { content: "● "; }
 .st-passed, .st-succeeded { color: var(--green); }
 .st-failed, .st-errored, .st-aborted { color: var(--red); }
 .st-running { color: var(--yellow); }
-.st-running::before { content: "◐ "; }
 .st-pending { color: var(--yellow); }
-.st-pending::before { content: "○ "; }
 .st-skipped { color: var(--faint); }
+.st.st-passed::before, .st.st-succeeded::before { content: "✓ "; }
+.st.st-failed::before, .st.st-errored::before, .st.st-aborted::before { content: "✗ "; }
+.st.st-running::before { content: "◐ "; }
+.st.st-pending::before { content: "○ "; }
+.st.st-skipped::before { content: "– "; }
 
 .hash { color: var(--blue); }
 .hash::before { content: "["; color: var(--faint); }
@@ -212,19 +233,35 @@ td.faint, .faint { color: var(--faint); }
 .viewtoggle button { font: inherit; font-size: 11px; color: var(--dim); background: none; border: 0; cursor: pointer; padding: 2px 10px; }
 .viewtoggle button[aria-pressed="true"] { color: var(--fg); background: var(--panel2); }
 
-/* ---- dependency graph ---- */
-.dag {
+/* ---- dependency graph ----
+   Server-laid-out SVG; the pane scrolls sideways like every wide table. */
+.dagwrap {
   border: 1px solid var(--line);
   background: var(--panel);
-  padding: 18px 20px;
+  padding: 14px 16px 6px;
   overflow-x: auto;
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.9;
 }
-.dag .rail { color: var(--faint); }
-.dag .res { font-size: 12px; }
-.dag .jobref { font-weight: 600; }
+.dagwrap .rail { color: var(--faint); font-size: 11px; }
+svg.dag { display: block; }
+.dagedge { fill: none; stroke: var(--faint); stroke-width: 1.5; }
+.dagedge:hover { stroke: var(--fg); }
+.dagnode rect { fill: var(--panel2); stroke: var(--faint); rx: 3px; }
+.dagnode:hover rect { stroke: var(--fg); }
+.dagnode:hover { text-decoration: none; }
+.dagnode text { font-family: var(--mono); font-size: 12px; fill: var(--fg); }
+.dagnode .dagstatus { font-size: 11px; fill: var(--dim); }
+.dagnode.st-passed rect { stroke: var(--green); }
+.dagnode.st-passed .dagstatus { fill: var(--green); }
+.dagnode.st-failed rect, .dagnode.st-errored rect, .dagnode.st-aborted rect { stroke: var(--red); }
+.dagnode.st-failed .dagstatus, .dagnode.st-errored .dagstatus, .dagnode.st-aborted .dagstatus { fill: var(--red); }
+.dagnode.st-running rect, .dagnode.st-pending rect { stroke: var(--yellow); }
+.dagnode.st-running .dagstatus, .dagnode.st-pending .dagstatus { fill: var(--yellow); }
+.dagnode.st-none .dagstatus { fill: var(--faint); }
+.dagnode.running rect { animation: dagpulse 1.6s ease-in-out infinite; }
+@keyframes dagpulse { 50% { stroke-opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .dagnode.running rect { animation: none; }
+}
 .deps { font-size: 12.5px; color: var(--dim); line-height: 2; }
 .deps .arrow { color: var(--faint); }
 
@@ -264,6 +301,14 @@ td.faint, .faint { color: var(--faint); }
 .step.failed  > .stephead::before { background: var(--red); }
 .step.running > .stephead::before { background: var(--yellow); }
 .step.skipped > .stephead::before { background: var(--line); }
+
+/* The rail tick's readable twin: same outcome as a glyph, so a row's status
+   survives colorblindness and screen readers. */
+.stmark { flex: none; width: 14px; text-align: center; }
+.step.passed  > .stephead > .stmark { color: var(--green); }
+.step.failed  > .stephead > .stmark { color: var(--red); }
+.step.running > .stephead > .stmark { color: var(--yellow); }
+.step.skipped > .stephead > .stmark { color: var(--faint); }
 
 /* ---- depth ----
  *

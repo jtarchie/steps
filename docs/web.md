@@ -24,7 +24,8 @@ one directory. `--state` is how you ask them to; see
 | Route | Answers |
 |---|---|
 | `/` | With several pipelines served: what this process holds, and one run feed across all of them, newest first. With one, it redirects straight through |
-| `/p/:pipeline` | Which jobs exist, how each last run went, and which jobs feed which — list or `git log`-style graph |
+| `/p/:pipeline` | Which jobs exist, how each last run went, and which jobs feed which — as a list, or as a dependency graph laid out from the `passed:` constraints, each node carrying its latest status |
+| `…/runs` | One run history across every job of the pipeline, newest first — the cross-job view the per-job history can't give |
 | `…/jobs/:job` | This job's dependencies in both directions, its run history with a duration trend, the resource versions it has passed against, and the resolved limits each agent step runs under |
 | `…/runs/:run` | **The transcript**: every step in plan order, what it did, and — for agent steps — what the model said and which tools it called |
 | `…/nodes/:hash` | What a merkle hash is made of, and every run that reused it: the cache's receipt |
@@ -72,7 +73,7 @@ the things a scrollback cannot give you:
   a transcript that stops at the cache hit reads as a truncated run rather
   than a cheap one.
 - **A failed run leads with the error**, and says what changed since the last
-  green run of that job — computed by comparing content hashes, so it names
+  passed run of that job — computed by comparing content hashes, so it names
   the steps whose inputs, command, or prompt actually moved.
 - **A task step expands into what it printed.** Output is captured while it
   still streams to the terminal and bounded at 16KB per step. Recorded

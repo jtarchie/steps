@@ -1,13 +1,15 @@
 {{define "page"}}
 <div class="pagehead">
   <div>
-    <h1 class="prompt"><b>steps run {{.Job.Name}}</b></h1>
+    <h1 class="prompt"><b>steps job {{.Job.Name}}</b></h1>
     <p class="metaline">
       {{len .Runs}} runs recorded
       {{if .Job.Paused}}<span class="sep">·</span><span class="st-failed">paused after {{.Job.Failures}} failures</span>{{end}}
     </p>
   </div>
-  {{if not .Nav.ReadOnly}}
+  {{if .Nav.ReadOnly}}
+  <div class="actions"><span class="rohint">This server is read-only. Trigger with <code>steps run {{.Nav.CurrentPath}} --job {{.Job.Name}}</code>.</span></div>
+  {{else}}
   <div class="actions">
     <form method="post" action="/p/{{.Nav.Current}}/jobs/{{.Job.Name}}/trigger">
       <button class="btn primary" type="submit">▶ Trigger</button>
@@ -24,7 +26,7 @@
 <h2 class="eyebrow">Depends on</h2>
 <p class="deps">
   {{range .Job.Upstream}}<a href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a>
-  <span class="arrow">must be green for</span> <span class="res">{{.Resource}}</span><br>{{end}}
+  <span class="arrow">must have passed for</span> <span class="res">{{.Resource}}</span><br>{{end}}
 </p>
 {{end}}
 
@@ -84,7 +86,7 @@
 {{end}}
 
 {{if .Versions}}
-<h2 class="eyebrow">Green versions <span class="unbold">— what this job has passed against</span></h2>
+<h2 class="eyebrow">Passed versions <span class="unbold">— what this job has passed against</span></h2>
 <div class="tablewrap">
   <table class="kv">
     <thead><tr><th>Resource</th><th>Version</th><th>Recorded</th></tr></thead>

@@ -3,7 +3,7 @@
 <p class="metaline">
   {{.Node.Kind}} {{.Node.Resource}}<span class="sep">·</span>
   <span class="st st-{{statusWord .Node.Status}}">{{statusWord .Node.Status}}</span><span class="sep">·</span>
-  executed {{ago .Node.CreatedAt}}<span class="sep">·</span>job {{.Node.JobName}}
+  executed {{ago .Node.CreatedAt}}<span class="sep">·</span>job <a href="/p/{{.Nav.Current}}/jobs/{{.Node.JobName}}">{{.Node.JobName}}</a>
 </p>
 
 {{if .Node.Error}}<div class="errblock"><span class="lbl">error:</span> {{.Node.Error}}</div>{{end}}
@@ -36,7 +36,7 @@
       {{range .Runs}}
       <tr>
         <td><a class="hash" href="/p/{{$.Nav.Current}}/runs/{{.ID}}">{{short .ID}}</a></td>
-        <td>{{.JobName}}</td>
+        <td><a href="/p/{{$.Nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a></td>
         <td><span class="st st-{{statusWord .Status}}">{{statusWord .Status}}</span></td>
         <td class="dim">{{ago .StartedAt}}</td>
       </tr>

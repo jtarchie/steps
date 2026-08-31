@@ -36,10 +36,13 @@ func (s *Server) handleJobs(c echo.Context) error {
 		return fmt.Errorf("web: %w", err)
 	}
 
+	views := buildJobViews(pipeline.Cfg, latest, paused)
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "jobs", map[string]any{
 		"Nav":   s.nav(c),
-		"Jobs":  buildJobViews(pipeline.Cfg, latest, paused),
+		"Jobs":  views,
+		"Graph": buildGraph(views),
 		"Queue": pendingQueue(queue),
 	})
 }
@@ -103,11 +106,30 @@ func (s *Server) handleJob(c echo.Context) error {
 	return c.Render(http.StatusOK, "job", map[string]any{
 		"Nav":      s.nav(c),
 		"Title":    job.Name,
+		"Crumbs":   []crumb{{Label: "jobs", URL: "/p/" + pipeline.Slug}, {Label: job.Name}},
 		"Job":      view,
 		"Runs":     runs,
 		"Versions": versions,
 		"Spark":    sparkline(runs),
 		"Dials":    agentDials(pipeline.Cfg, *job),
+	})
+}
+
+// handleRunHistory renders the pipeline-wide run list, newest first — the
+// cross-job history that otherwise only exists per job, or on the
+// multi-pipeline overview a single-pipeline deployment never sees.
+func (s *Server) handleRunHistory(c echo.Context) error {
+	pipeline := pipelineOf(c)
+
+	runs, err := pipeline.Store.ListRuns(c.Request().Context(), "", historyLimit)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	//nolint:wrapcheck // render errors surface through the shared error handler
+	return c.Render(http.StatusOK, "runs", map[string]any{
+		"Nav":  s.nav(c),
+		"Runs": runs,
 	})
 }
 
@@ -144,8 +166,13 @@ func (s *Server) handleRun(c echo.Context) error {
 	return c.Render(http.StatusOK, "run", map[string]any{
 		"Nav":       s.nav(c),
 		"Run":       view,
-		"Title":     view.Run.JobName,
+		"Title":     view.Run.JobName + " #" + shortID(view.Run.ID),
 		"TitleMark": statusMark(view.Run.Status),
+		"Crumbs": []crumb{
+			{Label: "jobs", URL: "/p/" + pipeline.Slug},
+			{Label: view.Run.JobName, URL: "/p/" + pipeline.Slug + "/jobs/" + view.Run.JobName},
+			{Label: "#" + shortID(view.Run.ID)},
+		},
 	})
 }
 
@@ -273,9 +300,19 @@ func (s *Server) handleNode(c echo.Context) error {
 		return fmt.Errorf("web: %w", err)
 	}
 
+	// A node knows which job recorded it, but not which run a reader came
+	// from — so the trail goes up through the job when there is one.
+	crumbs := []crumb{{Label: "jobs", URL: "/p/" + pipeline.Slug}}
+	if node.JobName != "" {
+		crumbs = append(crumbs, crumb{Label: node.JobName, URL: "/p/" + pipeline.Slug + "/jobs/" + node.JobName})
+	}
+
+	crumbs = append(crumbs, crumb{Label: "node " + shortID(hash)})
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "node", map[string]any{
 		"Nav":        s.nav(c),
+		"Crumbs":     crumbs,
 		"Node":       node,
 		"Content":    node.Content,
 		"Result":     node.Result,
@@ -411,8 +448,13 @@ func (s *Server) handleFollow(c echo.Context) error {
 		"Nav":       s.nav(c),
 		"Title":     name,
 		"TitleMark": statusMark("running"),
-		"Job":       name,
-		"Since":     c.QueryParam("since"),
+		"Crumbs": []crumb{
+			{Label: "jobs", URL: "/p/" + pipeline.Slug},
+			{Label: name, URL: "/p/" + pipeline.Slug + "/jobs/" + name},
+			{Label: "trigger"},
+		},
+		"Job":   name,
+		"Since": c.QueryParam("since"),
 	})
 }
 

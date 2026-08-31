@@ -1,0 +1,59 @@
+{{define "page"}}
+<h1 class="prompt"><b>steps runs</b></h1>
+<p class="metaline">{{len .Runs}} recent runs<span class="sep">·</span>{{.Nav.CurrentPath}}</p>
+
+<div id="runs-region">
+{{if .Runs}}
+<div class="tablewrap">
+  <table>
+    <thead>
+      <tr><th>Status</th><th>Job</th><th>Run</th><th>Started</th><th class="num">Duration</th></tr>
+    </thead>
+    <tbody>
+      {{range .Runs}}
+      <tr>
+        <td><a class="st st-{{statusWord .Status}}" href="/p/{{$.Nav.Current}}/runs/{{.ID}}">{{statusWord .Status}}</a></td>
+        <td><a href="/p/{{$.Nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a></td>
+        <td class="dim"><a class="hash" href="/p/{{$.Nav.Current}}/runs/{{.ID}}">{{short .ID}}</a></td>
+        <td class="dim">{{agoTag .StartedAt}}</td>
+        <td class="num dim">{{elapsedTag .}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{else}}
+<p class="faint">No runs recorded yet.</p>
+{{end}}
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+(function () {
+  // Same in-place refresh the jobs board uses, wholesale on one region: the
+  // list appears with its first run and rows change status while watched, and
+  // a full reload would throw away scroll position to show it.
+  var REFRESH = 2500;
+
+  function refresh() {
+    if (document.hidden) return;
+
+    fetch(window.location.pathname, { headers: { 'Accept': 'text/html' } })
+      .then(function (r) { return r.text(); })
+      .then(function (html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var next = doc.querySelector('#runs-region');
+        var current = document.querySelector('#runs-region');
+        if (next && current) current.innerHTML = next.innerHTML;
+      })
+      .catch(function () { /* a missed refresh costs nothing; the next one covers it */ });
+  }
+
+  setInterval(refresh, REFRESH);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refresh();
+  });
+})();
+</script>
+{{end}}

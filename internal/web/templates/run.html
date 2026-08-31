@@ -2,9 +2,8 @@
 {{$run := .Run}}
 <div class="pagehead">
   <div>
-    <h1 class="prompt"><b>steps run {{$run.Run.JobName}}</b></h1>
+    <h1 class="prompt"><b>steps run {{$run.Run.JobName}} #{{short $run.Run.ID}}</b></h1>
     <p class="metaline">
-      run <span class="hash">{{short $run.Run.ID}}</span><span class="sep">·</span>
       <span class="st st-{{statusWord $run.Run.Status}}">{{statusWord $run.Run.Status}}</span><span class="sep">·</span>
       {{stamp $run.Run.StartedAt}}<span class="sep">·</span>
       <span id="run-duration">{{elapsedTag $run.Run}}</span>
@@ -31,7 +30,7 @@
 {{end}}
 
 {{if $run.Changed}}
-<p class="diffnote">vs last green <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.ComparedTo}}">{{short $run.ComparedTo}}</a>:
+<p class="diffnote">vs last passed <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.ComparedTo}}">{{short $run.ComparedTo}}</a>:
   {{range $run.Changed}}<span class="chg">{{.}}</span> {{end}}changed content — everything else replayed from cache</p>
 {{end}}
 
@@ -435,6 +434,9 @@
     head.setAttribute('role', 'button');
     head.setAttribute('tabindex', '0');
     head.appendChild(el('span', 'chev chev-icon'));
+    // The server draws a status glyph on every finished row, so a row born
+    // here starts with the running one — same vocabulary as statusvocab.
+    head.appendChild(stmark('running'));
     head.appendChild(el('span', 'kind', e.step_kind));
     head.appendChild(el('span', 'name', e.step_name));
 
@@ -525,14 +527,30 @@
     if (!existing) meta.insertBefore(box, meta.firstChild);
   }
 
+  var STMARKS = { passed: '✓', failed: '✗', running: '◐', skipped: '–' };
+
+  function stmark(word) {
+    var span = el('span', 'stmark', STMARKS[word]);
+    span.setAttribute('role', 'img');
+    span.setAttribute('aria-label', word);
+    return span;
+  }
+
   function finishStep(e, node) {
     var skipped = e.type === 'step_skipped';
+    var word = skipped ? 'skipped' : (e.status === 'succeeded' ? 'passed' : 'failed');
     // Only the STATUS class changes. Rewriting className wholesale dropped
     // "open" and "container" with it, so a step collapsed at the instant it
     // finished — hiding the turns a reader was in the middle of, and the
     // subtree of every block.
     node.classList.remove('running', 'active');
-    node.classList.add(skipped ? 'skipped' : (e.status === 'succeeded' ? 'passed' : 'failed'));
+    node.classList.add(word);
+
+    var glyph = node.querySelector(':scope > .stephead > .stmark');
+    if (glyph) {
+      glyph.textContent = STMARKS[word];
+      glyph.setAttribute('aria-label', word);
+    }
 
     // The server draws this for a finished step, so the stream has to too:
     // a reader watching live and one who reloaded must see the same row.
@@ -559,7 +577,9 @@
       if (e.hash) {
         dur.appendChild(document.createTextNode(' · '));
         var link = el('a', 'hash', e.hash.slice(0, 7));
-        link.href = '../nodes/' + encodeURIComponent(e.hash);
+        // The same absolute spelling the server renders — see the step
+        // template. Two spellings of one destination is how they drift.
+        link.href = '/p/{{.Nav.Current}}/nodes/' + encodeURIComponent(e.hash);
         dur.appendChild(link);
       }
     }
@@ -733,6 +753,7 @@
 <div id="{{$anchor}}" class="step{{if $step.Skipped}} skipped{{else if $step.Failed}} failed{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail (or $step.Failed $step.Turns $step.Container)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}">
   <div class="stephead"{{if $detail}} role="button" tabindex="0"{{end}}>
     <span class="chev{{if $detail}} chev-icon{{end}}"></span>
+    {{if $step.Skipped}}<span class="stmark" role="img" aria-label="skipped">–</span>{{else if $step.Failed}}<span class="stmark" role="img" aria-label="failed">✗</span>{{else if $step.Running}}<span class="stmark" role="img" aria-label="running">◐</span>{{else}}<span class="stmark" role="img" aria-label="passed">✓</span>{{end}}
     <span class="kind">{{$step.Kind}}</span>
     <span class="name">{{$step.Name}}</span>
     <a class="anchor" href="#{{$anchor}}" title="Link to this step" aria-label="Link to this step">#</a>

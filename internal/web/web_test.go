@@ -107,7 +107,7 @@ func TestJobsBoardShowsDependencyEdges(t *testing.T) {
 	}
 
 	_, deployBody := get(t, server, "/p/demo/jobs/deploy")
-	if !strings.Contains(deployBody, "must be green for") {
+	if !strings.Contains(deployBody, "must have passed for") {
 		t.Error("deploy page does not show its upstream constraint")
 	}
 
@@ -479,7 +479,7 @@ func TestRunPageTitleCarriesStatus(t *testing.T) {
 
 		_, body := get(t, server, "/p/demo/runs/"+tc.id)
 
-		want := "<title>" + tc.mark + " build — steps</title>"
+		want := "<title>" + tc.mark + " build #" + tc.id + " — steps</title>"
 		if !strings.Contains(body, want) {
 			t.Errorf("%s: title missing %q", tc.status, want)
 		}

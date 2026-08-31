@@ -83,6 +83,7 @@ func (r *renderer) Render(w io.Writer, name string, data any, _ echo.Context) er
 	}
 
 	values["Page"] = name
+	values["Section"] = sectionOf(name)
 
 	// Title and TitleMark are optional per page, but the layout always reads
 	// them — and `favicon` takes a string, so a missing key would reach it as
@@ -101,6 +102,24 @@ func (r *renderer) Render(w io.Writer, name string, data any, _ echo.Context) er
 	}
 
 	return nil
+}
+
+// crumb is one segment of a detail page's breadcrumb trail. An empty URL
+// marks the segment the reader is on.
+type crumb struct{ Label, URL string }
+
+// sectionOf maps a page template to the nav tab it lives under, so entering a
+// detail page does not unlight the whole bar. Defaults to the template's own
+// name, which is exactly what the collection pages are called.
+func sectionOf(page string) string {
+	switch page {
+	case "job", "follow":
+		return "jobs"
+	case "run", "node":
+		return "runs"
+	default:
+		return page
+	}
 }
 
 // handleCSS serves the stylesheet from the embedded assets.
@@ -122,6 +141,7 @@ func templateFuncs() template.FuncMap {
 		"duration":   formatDuration,
 		"ago":        formatAgo,
 		"agoTag":     agoTag,
+		"agoText":    agoText,
 		"elapsedTag": elapsedTag,
 		"stamp":      formatStamp,
 		"short":      shortID,
@@ -456,6 +476,18 @@ func agoTag(t time.Time) template.HTML {
 	//nolint:gosec // G203: both interpolations are machine-formatted, not input
 	return template.HTML(fmt.Sprintf(`<time data-ago=%q>%s</time>`,
 		t.UTC().Format(time.RFC3339Nano), template.HTMLEscapeString(formatAgo(t))))
+}
+
+// agoText is agoTag for the tables that store their stamps as TEXT
+// (approvals, questions, the breaker). Falls back to the raw string when it
+// will not parse, which beats hiding a record over a formatting quirk.
+func agoText(stamp string) template.HTML {
+	t, err := time.Parse(time.RFC3339Nano, stamp)
+	if err != nil {
+		return template.HTML(template.HTMLEscapeString(stamp)) //nolint:gosec // G203: escaped above
+	}
+
+	return agoTag(t)
 }
 
 // elapsedTag renders a duration that is still accumulating: a finished run
