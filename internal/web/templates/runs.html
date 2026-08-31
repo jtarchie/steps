@@ -1,8 +1,11 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps runs</b></h1>
+
+{{/* The count sits inside the refreshed region, or it reads whatever it said
+     at load while the refresh fills the table under it. */}}
+<div id="runs-region">
 <p class="metaline">{{len .Runs}} recent runs<span class="sep">·</span>{{.Nav.CurrentPath}}</p>
 
-<div id="runs-region">
 {{if .Runs}}
 <div class="tablewrap">
   <table>
@@ -36,8 +39,15 @@
   // a full reload would throw away scroll position to show it.
   var REFRESH = 2500;
 
+  // One poll at a time. Without the guard, a response slower than the
+  // interval stacks requests and can resolve after a newer one, rewriting
+  // the table with stale rows — the same race the palette's search guards
+  // with a generation token.
+  var inflight = false;
+
   function refresh() {
-    if (document.hidden) return;
+    if (document.hidden || inflight) return;
+    inflight = true;
 
     fetch(window.location.pathname, { headers: { 'Accept': 'text/html' } })
       .then(function (r) { return r.text(); })
@@ -45,9 +55,12 @@
         var doc = new DOMParser().parseFromString(html, 'text/html');
         var next = doc.querySelector('#runs-region');
         var current = document.querySelector('#runs-region');
-        if (next && current) current.innerHTML = next.innerHTML;
+        // Swapping costs the reader any selection or in-progress click in
+        // the table, so pay it only for a real change.
+        if (next && current && current.innerHTML !== next.innerHTML) current.innerHTML = next.innerHTML;
       })
-      .catch(function () { /* a missed refresh costs nothing; the next one covers it */ });
+      .catch(function () { /* a missed refresh costs nothing; the next one covers it */ })
+      .then(function () { inflight = false; });
   }
 
   setInterval(refresh, REFRESH);

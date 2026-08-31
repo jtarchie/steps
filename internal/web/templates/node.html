@@ -3,7 +3,7 @@
 <p class="metaline">
   {{.Node.Kind}} {{.Node.Resource}}<span class="sep">·</span>
   <span class="st st-{{statusWord .Node.Status}}">{{statusWord .Node.Status}}</span><span class="sep">·</span>
-  executed {{ago .Node.CreatedAt}}<span class="sep">·</span>job <a href="/p/{{.Nav.Current}}/jobs/{{.Node.JobName}}">{{.Node.JobName}}</a>
+  executed {{ago .Node.CreatedAt}}{{if .Node.JobName}}<span class="sep">·</span>job <a href="/p/{{.Nav.Current}}/jobs/{{.Node.JobName}}">{{.Node.JobName}}</a>{{end}}
 </p>
 
 {{if .Node.Error}}<div class="errblock"><span class="lbl">error:</span> {{.Node.Error}}</div>{{end}}

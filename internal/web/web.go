@@ -299,8 +299,11 @@ func (s *Server) handleError(err error, c echo.Context) {
 		message = fmt.Sprintf("%v", httpErr.Message)
 	}
 
+	// globalNav, not nav: most errors fire where no pipeline resolved (a bad
+	// slug, a stray 404), and bare nav leaves Current empty — every tab then
+	// links /p//…, which 404s straight back into this handler.
 	renderErr := c.Render(status, "error", map[string]any{
-		"Nav":     s.nav(c),
+		"Nav":     s.globalNav(c),
 		"Status":  status,
 		"Message": message,
 	})

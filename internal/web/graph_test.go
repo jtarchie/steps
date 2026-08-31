@@ -142,6 +142,30 @@ func TestGraphIgnoresAnUnknownUpstream(t *testing.T) {
 	}
 }
 
+// TestGraphMergesParallelConstraintsIntoOneEdge: two passed: constraints
+// between the same job pair drew two byte-identical overlapping paths — the
+// lower one's <title> could never be hovered, hiding that resource's
+// constraint entirely. One drawn edge carries both resources instead.
+func TestGraphMergesParallelConstraintsIntoOneEdge(t *testing.T) {
+	t.Parallel()
+
+	graph := buildGraph(linkDownstream([]jobView{
+		{Name: "b"},
+		{Name: "d", Upstream: []edgeView{
+			{Resource: "img", Job: "b"},
+			{Resource: "repo", Job: "b"},
+		}},
+	}))
+
+	if len(graph.Edges) != 1 {
+		t.Fatalf("edges: %d, want 1 merged edge", len(graph.Edges))
+	}
+
+	if graph.Edges[0].Resource != "img, repo" {
+		t.Errorf("merged edge resource = %q, want %q", graph.Edges[0].Resource, "img, repo")
+	}
+}
+
 // TestGraphNodeGrowsWithItsName: a long job name widens its node instead of
 // overflowing it.
 func TestGraphNodeGrowsWithItsName(t *testing.T) {
@@ -184,6 +208,9 @@ func TestJobsBoardGraphIsSVG(t *testing.T) {
 		`href="/p/demo/jobs/build"`,
 		`href="/p/demo/jobs/deploy"`,
 		"never ran",
+		// role="img" would flatten the job links and status text out of the
+		// accessibility tree; a group keeps them reachable.
+		`role="group"`,
 	} {
 		if !strings.Contains(svg, want) {
 			t.Errorf("graph svg missing %q", want)

@@ -94,14 +94,21 @@ func buildGraph(views []jobView) graphView {
 	return graphView{W: width, H: height, Nodes: nodes, Edges: graphEdges(views, nodes)}
 }
 
-// graphEdges draws every passed: constraint between placed nodes.
+// graphEdges draws every passed: constraint between placed nodes. Constraints
+// sharing a job pair merge into one drawn edge carrying every resource:
+// separate edges would overlap exactly, and only the topmost <title> is ever
+// hoverable — hiding the rest.
 func graphEdges(views []jobView, nodes []graphNode) []graphEdge {
 	byNode := map[string]graphNode{}
 	for _, node := range nodes {
 		byNode[node.Name] = node
 	}
 
-	var edges []graphEdge
+	// Assigned, not var-declared: merging writes back through edges[at], and
+	// nilaway cannot see that drawn only ever holds appended indices.
+	edges := []graphEdge{}
+
+	drawn := map[[2]string]int{}
 
 	for _, view := range views {
 		to := byNode[view.Name]
@@ -111,6 +118,15 @@ func graphEdges(views []jobView, nodes []graphNode) []graphEdge {
 			if !ok {
 				continue
 			}
+
+			pair := [2]string{up.Job, view.Name}
+			if at, merged := drawn[pair]; merged {
+				edges[at].Resource += ", " + up.Resource
+
+				continue
+			}
+
+			drawn[pair] = len(edges)
 
 			edges = append(edges, graphEdge{
 				From:     up.Job,
@@ -284,14 +300,9 @@ func nodeStatus(view jobView) (word, glyph, class string) {
 
 	word = statusWord(view.Latest.Status)
 
-	switch word {
-	case "passed":
-		glyph = "✓"
-	case "failed", "errored", "aborted":
-		glyph = "✗"
-	case "running":
-		glyph = "◐"
-	default:
+	// One glyph vocabulary: the browser tab's statusMark, plus the graph's
+	// own fallback for the words the tab never shows (pending).
+	if glyph = statusMark(word); glyph == "" {
 		glyph = "○"
 	}
 

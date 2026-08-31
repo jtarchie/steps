@@ -16,22 +16,9 @@ func TestRunsPageListsRunsAcrossJobs(t *testing.T) {
 	t.Parallel()
 
 	server, pipeline := testPipeline(t)
-	ctx := context.Background()
 
-	for _, run := range []struct{ id, job, status string }{
-		{"run-old", "build", "succeeded"},
-		{"run-new", "deploy", "failed"},
-	} {
-		err := pipeline.Store.StartRun(ctx, run.id, run.job, "/tmp/ws")
-		if err != nil {
-			t.Fatalf("StartRun %s: %v", run.id, err)
-		}
-
-		err = pipeline.Store.FinishRun(ctx, run.id, run.status)
-		if err != nil {
-			t.Fatalf("FinishRun %s: %v", run.id, err)
-		}
-	}
+	startFinishedRun(t, pipeline, "run-old", "build", "succeeded")
+	startFinishedRun(t, pipeline, "run-new", "deploy", "failed")
 
 	code, body := get(t, server, "/p/demo/runs")
 	if code != http.StatusOK {
@@ -95,6 +82,49 @@ func TestRunsPageScopedToItsPipeline(t *testing.T) {
 
 	if strings.Contains(body, "run-foreign") {
 		t.Error("runs page leaked a run from a pipeline sharing the state file")
+	}
+}
+
+// TestRunsPageCountLivesInsideTheRefreshRegion: the "N recent runs" count
+// must sit inside #runs-region, or the page's own 2.5s refresh fills the
+// table while the header keeps saying whatever it said at load.
+func TestRunsPageCountLivesInsideTheRefreshRegion(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+
+	_, body := get(t, server, "/p/demo/runs")
+
+	region := strings.Index(body, `id="runs-region"`)
+	count := strings.Index(body, "recent runs")
+
+	if region < 0 || count < 0 {
+		t.Fatalf("region at %d, count at %d — one is missing", region, count)
+	}
+
+	if count < region {
+		t.Error("run count is outside #runs-region, so the refresh never updates it")
+	}
+}
+
+// TestRunsPageRefreshGuardsOverlappingPolls: the poll loop must not stack
+// requests when a response is slow — an older response resolving after a
+// newer one rewrote the table with stale rows (the same race the palette
+// guards with a generation token), and identical markup must not cost the
+// reader their selection or an in-progress click.
+func TestRunsPageRefreshGuardsOverlappingPolls(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+
+	_, body := get(t, server, "/p/demo/runs")
+
+	if !strings.Contains(body, "inflight") {
+		t.Error("refresh script has no in-flight guard")
+	}
+
+	if !strings.Contains(body, "current.innerHTML !== next.innerHTML") {
+		t.Error("refresh script swaps the region even when the markup is unchanged")
 	}
 }
 

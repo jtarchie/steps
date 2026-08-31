@@ -2,8 +2,11 @@ package web
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // startFinishedRun records one completed run so detail pages have something
@@ -64,6 +67,55 @@ func TestActiveTabFollowsSection(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("%s: expected current tab %q", tc.page, want)
 		}
+	}
+}
+
+// TestNodePageLightsTheRunsTab: the node page is a cache receipt reached from
+// run transcripts, so it lives under runs — the branch TestActiveTabFollowsSection
+// cannot reach without a recorded node.
+func TestNodePageLightsTheRunsTab(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+
+	record := store.NodeRecord{
+		Hash:     "cccc111122223333",
+		Kind:     "task",
+		Resource: "compile",
+		Content:  map[string]any{"run": "true"},
+	}
+
+	err := pipeline.Store.RecordNode(context.Background(), record, "build", "succeeded", nil, nil)
+	if err != nil {
+		t.Fatalf("RecordNode: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/nodes/"+record.Hash)
+
+	if !strings.Contains(body, `aria-current="page" href="/p/demo/runs">runs`) {
+		t.Error("node page does not light the runs tab")
+	}
+}
+
+// TestErrorPageKeepsNavAlive: an error outside any pipeline (a bad slug, a
+// stray 404) still renders the layout's tab bar — anchored to a real
+// pipeline, not to /p//… links that 404 into the same error page again.
+func TestErrorPageKeepsNavAlive(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+
+	code, body := get(t, server, "/p/no-such-pipeline")
+	if code != http.StatusNotFound {
+		t.Fatalf("GET /p/no-such-pipeline = %d, want 404", code)
+	}
+
+	if strings.Contains(body, `href="/p//`) {
+		t.Error("error page renders dead /p//… links")
+	}
+
+	if !strings.Contains(body, `href="/p/demo/runs"`) {
+		t.Error("error page tabs are not anchored to a served pipeline")
 	}
 }
 

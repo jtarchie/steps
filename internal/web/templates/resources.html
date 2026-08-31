@@ -25,7 +25,7 @@
   <div class="meta"><a href="/p/{{$.Nav.Current}}/jobs/{{.Name}}">{{.Name}}</a> · {{.Consecutive}} consecutive failures · paused {{agoText .PausedAt}}</div>
   <div class="msg">Out of rotation — will not auto-trigger until resumed.</div>
   {{if $.Nav.ReadOnly}}
-  <div class="meta">This server is read-only. Resume with <code>steps web</code> on the machine that runs this pipeline.</div>
+  <div class="meta">This server is read-only. Resume with <code>steps jobs resume {{$.Nav.CurrentPath}} {{.Name}}</code>.</div>
   {{else}}
   <form class="decide" method="post" action="/p/{{$.Nav.Current}}/jobs/{{.Name}}/resume">
     <button class="btn primary" type="submit">Resume</button>

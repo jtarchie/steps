@@ -146,3 +146,61 @@ func TestJobPageSaysPassedNotGreen(t *testing.T) {
 		t.Error("deploy page does not phrase its upstream constraint in the shared vocabulary")
 	}
 }
+
+// TestBreakerCardSharesVocabularyAndNamesTheResumeCommand — the breaker card
+// follows the same contract as approvals: relative time, a job link, and a
+// read-only hint naming the EXACT command. The hint said `steps web`, which
+// on a machine sharing the state file is the forbidden second daemon; the
+// real command is `steps jobs resume <pipeline> <job>`.
+func TestBreakerCardSharesVocabularyAndNamesTheResumeCommand(t *testing.T) {
+	t.Parallel()
+
+	// testPipeline passes runner == nil, which IS the read-only deployment.
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	paused, _, err := pipeline.Store.RecordJobOutcome(ctx, "build", false, 1)
+	if err != nil {
+		t.Fatalf("RecordJobOutcome: %v", err)
+	}
+
+	if !paused {
+		t.Fatal("job did not pause")
+	}
+
+	_, body := get(t, server, "/p/demo/resources")
+
+	if !strings.Contains(body, `<time data-ago=`) {
+		t.Error("breaker card shows a raw timestamp, not relative time")
+	}
+
+	if !strings.Contains(body, `href="/p/demo/jobs/build"`) {
+		t.Error("breaker card does not link its job")
+	}
+
+	if !strings.Contains(body, "steps jobs resume ") {
+		t.Error("read-only breaker card does not name the resume command")
+	}
+
+	if !strings.Contains(body, "demo.yml build</code>") {
+		t.Error("resume hint does not name this pipeline's path and the paused job")
+	}
+}
+
+// TestJobsBoardSaysNeverRanInBothViews: the list view said "never run" while
+// the graph said "never ran" — two spellings of one state on one board.
+func TestJobsBoardSaysNeverRanInBothViews(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+
+	_, body := get(t, server, "/p/demo")
+
+	if strings.Contains(body, ">never run<") {
+		t.Error(`jobs board still spells the state "never run" somewhere`)
+	}
+
+	if strings.Count(body, "never ran") < 2 {
+		t.Error("expected both the list and the graph to say \"never ran\"")
+	}
+}

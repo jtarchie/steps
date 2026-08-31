@@ -8,7 +8,9 @@
 <p class="metaline">{{len .Jobs}} jobs<span class="sep">·</span>{{.Nav.CurrentPath}}</p>
 
 <div class="dagwrap" id="jobs-graph" hidden>
-  <svg class="dag" width="{{.Graph.W}}" height="{{.Graph.H}}" viewBox="0 0 {{.Graph.W}} {{.Graph.H}}" role="img" aria-label="Job dependency graph">
+  {{/* role=group, not img: an image's children are presentational, which
+       would flatten every job link and status word out of the a11y tree. */}}
+  <svg class="dag" width="{{.Graph.W}}" height="{{.Graph.H}}" viewBox="0 0 {{.Graph.W}} {{.Graph.H}}" role="group" aria-label="Job dependency graph">
     {{range .Graph.Edges}}<path class="dagedge" d="{{.Path}}"><title>{{.Resource}} from {{.From}} must have passed</title></path>
     {{end}}{{range .Graph.Nodes}}<a class="dagnode {{.StatusClass}}{{if .Running}} running{{end}}" href="/p/{{$.Nav.Current}}/jobs/{{.Name}}">
       <rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}"></rect>
@@ -31,7 +33,7 @@
         <td><a href="/p/{{$.Nav.Current}}/jobs/{{.Name}}">{{.Name}}</a></td>
         <td>
           {{if .HasRun}}<a class="st st-{{statusWord .Latest.Status}}" href="/p/{{$.Nav.Current}}/runs/{{.Latest.ID}}">{{statusWord .Latest.Status}}</a>
-          {{else}}<span class="faint">never run</span>{{end}}
+          {{else}}<span class="faint">never ran</span>{{end}}
         </td>
         <td class="dim">{{if .HasRun}}{{agoTag .Latest.StartedAt}}{{else}}—{{end}}</td>
         <td class="num dim">{{if .HasRun}}{{elapsedTag .Latest}}{{else}}—{{end}}</td>

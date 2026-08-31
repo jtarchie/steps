@@ -35,6 +35,33 @@ func TestNodePageLinksItsJob(t *testing.T) {
 	}
 }
 
+// TestNodePageDropsJobLinkForAJoblessNode: handleNode's crumbs already guard
+// an empty JobName; the metaline link has to match, or a jobless node renders
+// an invisible zero-text anchor pointing at /p/demo/jobs/.
+func TestNodePageDropsJobLinkForAJoblessNode(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+
+	record := store.NodeRecord{
+		Hash:     "dddd111122223333",
+		Kind:     "task",
+		Resource: "compile",
+		Content:  map[string]any{"run": "true"},
+	}
+
+	err := pipeline.Store.RecordNode(context.Background(), record, "", "succeeded", nil, nil)
+	if err != nil {
+		t.Fatalf("RecordNode: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/nodes/"+record.Hash)
+
+	if strings.Contains(body, `href="/p/demo/jobs/"`) {
+		t.Error("jobless node page renders an empty job link")
+	}
+}
+
 // TestLiveNodeLinkMatchesServerSpelling: the SSE path built a RELATIVE node
 // link while the server renders an absolute one — two spellings of the same
 // destination, and the relative one breaks the day the route gains a
