@@ -150,6 +150,19 @@ type HelloOK struct {
 	// about a different machine.
 	UID *int `json:"uid,omitempty"`
 	GID *int `json:"gid,omitempty"`
+	// ExecBit is whether Workdir's filesystem round-tripped a chmod 0700 the
+	// shim just performed on a file it just made there — measured, because
+	// the OS is the wrong question and answers it wrongly on workers that
+	// are reachable today: /mnt/c on WSL2 is DrvFs over NTFS and reports a
+	// perfectly ordinary GOOS=linux, and ?root= aimed at vfat, exfat, CIFS
+	// without unix extensions, or 9p/virtiofs is the same story on a machine
+	// nobody would call unusual.
+	//
+	// A pointer for the same reason UID is, though the pair it separates is
+	// different: nil is a shim too old to have probed, which stays ACCEPTED
+	// on the compatibility posture the rest of this handshake takes, while
+	// false is a measurement and is refused.
+	ExecBit *bool `json:"exec_bit,omitempty"`
 }
 
 // Exec asks for one command.

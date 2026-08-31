@@ -72,6 +72,8 @@ func serveShim() {
 		{wrongBuildEnv, serveWrongBuildShim},
 		// A shim on a filesystem that cannot store an executable bit.
 		{windowsWorkerEnv, serveWindowsShim},
+		// A shim on an ordinary OS whose workdir cannot store one.
+		{lossyFSWorkerEnv, serveLossyFSShim},
 		// A shim built before compression existed.
 		{legacyShimEnv, serveLegacyShim},
 		// A shim that greets and then dies as the tree arrives, once.

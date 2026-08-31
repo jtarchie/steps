@@ -43,7 +43,8 @@ func newCopyProvider(ws *config.WorkspaceConfig, keep bool) (Provider, error) {
 // validateRootWritable probes root by creating and removing a temp
 // directory inside it — root itself is already guaranteed to exist by
 // newIsolatingRoot, but existence doesn't imply writability (e.g. a
-// read-only mount).
+// read-only mount) and being writable does not mean it can hold everything
+// digestTree treats as content.
 func validateRootWritable(root string) error {
 	probe, err := os.MkdirTemp(root, ".steps-probe-*")
 	if err != nil {
@@ -55,7 +56,9 @@ func validateRootWritable(root string) error {
 		return fmt.Errorf("could not remove probe directory %q: %w", probe, err)
 	}
 
-	return nil
+	// After the writability probe, because a root that cannot be written to
+	// has a plainer answer than one that quietly loses a mode.
+	return validateRootHoldsExecBit(root)
 }
 
 // copyBackend implements treeBackend by shelling out to cp: correct

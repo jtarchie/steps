@@ -275,9 +275,10 @@ func (s *session) hello(frame wire.Frame) error {
 	// never made.
 	s.workdir = workdir
 
-	// After MkdirAll, so this describes the filesystem the tree will really
+	// After MkdirAll, so these describe the filesystem the tree will really
 	// land on rather than whichever ancestor happened to exist.
 	fstype, free := fsInfo(s.workdir)
+	execbit := execBit(s.workdir)
 
 	return s.send(wire.FrameHelloOK, frame.Op, wire.HelloOK{
 		Protocol:    wire.Protocol,
@@ -289,6 +290,7 @@ func (s *session) hello(frame wire.Frame) error {
 		DataPlane:   s.dataplane,
 		FSType:      fstype,
 		FSFree:      free,
+		ExecBit:     execbit,
 		UID:         reportableID(os.Getuid()),
 		GID:         reportableID(os.Getgid()),
 	})

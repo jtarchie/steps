@@ -202,7 +202,9 @@ var (
 	// errWrongBuild is a worker running a steps binary this run did not push.
 	errWrongBuild = errors.New("the worker is not running the binary that was pushed to it")
 	// errLossyWorker is a worker whose filesystem cannot represent something
-	// the step cache treats as content. See lossyGOOS.
+	// the step cache treats as content — measured by the shim where it can
+	// be (wire.HelloOK.ExecBit), and inferred from lossyGOOS where an older
+	// shim did not measure.
 	errLossyWorker = errors.New("the worker's filesystem cannot hold what the step's tree carries")
 )
 
@@ -455,6 +457,57 @@ func (s *session) offerDataPlane() string {
 	return wire.DataPlaneURLs
 }
 
+// checkFilesystem decides whether the worker's work directory can hold what a
+// step's tree carries, from the shim's own measurement and — for a shim too
+// old to have made one — from its operating system.
+//
+// Split out of checkHello because the two are one question asked twice, while
+// checkHello's own job is the list of unrelated things a handshake settles.
+func (s *session) checkFilesystem(ok wire.HelloOK) error {
+	// Refused rather than warned, matching what the codec does one package
+	// over: wire.PackTree refuses to ship a fifo because dropping an entry
+	// would change what digestTree computes over the extracted copy, and a
+	// cache that quietly disagrees with itself is worse than a step that
+	// refuses to ship one. This is that hazard with a machine in the middle.
+	//
+	// On silence, not refused: an empty GOOS is a shim that said nothing about
+	// its filesystem — one an operator started by hand over a bare ssh
+	// command, say — and rejecting a worker for answering a shorter hello
+	// would break machines that are fine. checkHello's build check takes the
+	// same view of an empty Build.
+	if lost, lossy := lossyGOOS[ok.GOOS]; lossy {
+		return fmt.Errorf("%w: %s runs %s, which has nowhere to store %s — a tree sent there comes back without one, and nothing reports it",
+			errLossyWorker, s.worker.URL, ok.GOOS, lost)
+	}
+
+	// The measurement, and the reason the check above is not enough on its
+	// own: the OS is a proxy for the filesystem and they come apart on
+	// workers reachable today. /mnt/c on a WSL2 machine answers GOOS=linux
+	// and is DrvFs over NTFS; a ?root= aimed at vfat or exfat (fmask/dmask
+	// synthesize a fixed mode), at CIFS without unix extensions, or at
+	// 9p/virtiofs under Lima is the same worker spelled differently. Worker.Root
+	// comes straight off the URL, so this is something an operator can reach
+	// rather than something to guard against in principle.
+	//
+	// Both are consulted and either refuses, rather than the measurement
+	// winning where it exists. The platform the OS check names is precisely
+	// the one whose measurement cannot be trusted to disagree usefully —
+	// os.Chmod there sets the read-only attribute and reports success, and
+	// os.Stat synthesizes bits back — so a windows shim answering true is a
+	// wrong answer unlocking the case the check was written for. A shim built
+	// from this tree measures false there anyway, so failing closed costs
+	// nothing real.
+	//
+	// Silence is accepted, for the reason the GOOS check above states: nil is
+	// a shim too old to have probed, not a filesystem that failed one.
+	if ok.ExecBit != nil && !*ok.ExecBit {
+		return fmt.Errorf("%w: %s put its work directory at %s, and that filesystem did not give back the executable bit the shim had just set on a file there — a tree sent there comes back without one, and nothing reports it. Name a path on a filesystem that can hold one in the worker URL",
+			errLossyWorker, s.worker.URL, ok.Workdir)
+	}
+
+	return nil
+}
+
 // checkHello decides whether the shim that answered is one this run can use:
 // the right protocol, the binary this run pushed, and a machine that can hold
 // what a step's tree carries.
@@ -478,20 +531,9 @@ func (s *session) checkHello(ok wire.HelloOK, build string) error {
 			errWrongBuild, short(ok.Build), short(build), remoteShimPath(s.worker, build))
 	}
 
-	// Refused rather than warned, matching what the codec does one package
-	// over: wire.PackTree refuses to ship a fifo because dropping an entry
-	// would change what digestTree computes over the extracted copy, and a
-	// cache that quietly disagrees with itself is worse than a step that
-	// refuses to ship one. This is that hazard with a machine in the middle.
-	//
-	// On silence, not refused: an empty GOOS is a shim that said nothing about
-	// its filesystem — one an operator started by hand over a bare ssh
-	// command, say — and rejecting a worker for answering a shorter hello
-	// would break machines that are fine. The build check above takes the
-	// same view of an empty Build.
-	if lost, lossy := lossyGOOS[ok.GOOS]; lossy {
-		return fmt.Errorf("%w: %s runs %s, which has nowhere to store %s — a tree sent there comes back without one, and nothing reports it",
-			errLossyWorker, s.worker.URL, ok.GOOS, lost)
+	err := s.checkFilesystem(ok)
+	if err != nil {
+		return err
 	}
 
 	// The shim may accept the offered compression or stay silent; a third
