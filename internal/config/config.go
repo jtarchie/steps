@@ -32,30 +32,66 @@ type Config struct {
 	// `steps test` must have run (see Assert). It's a self-verification
 	// meta-check, never hashed.
 	Assert *Assert `yaml:"assert,omitempty"`
-	// Path is the file this pipeline was loaded from, stamped by
-	// LoadConfigWithVars. Not YAML, never hashed: it is identity, not
-	// content.
+	// Name is WHICH pipeline this is, stamped by the loader. Not YAML, never
+	// hashed: it is identity, not content.
 	//
 	// It exists because one process can serve several pipelines (`steps web
 	// app.yml infra.yml`), and process-wide state keyed by a name a pipeline
-	// chose — an agent, a job — collides across them. A path is the only
-	// discriminator every Config has without a caller remembering to supply
-	// one, which is the same argument store.Store makes for holding its
-	// pipeline_id: the scope has to be impossible to forget.
+	// chose — an agent, a job — collides across them. The Config holds it for
+	// the same reason store.Store holds its pipeline_id: the scope has to be
+	// impossible to forget.
 	//
-	// A Config built in a test rather than loaded has an empty Path, which
+	// It is the SAME STRING the store's pipelines.name and the web UI's
+	// /p/<slug> route use, and that is the whole point of it being supplied
+	// rather than derived here. A path was the obvious discriminator and was
+	// the wrong one: it is a second identity that disagrees with the one the
+	// repo already resolves and publishes, so a pin log line said
+	// /abs/infra/deploy.yml where every run record said deploy — and --name,
+	// which exists precisely to say which pipeline this is, moved the store
+	// and the route and not the pin.
+	//
+	// A Config built in a test rather than loaded has an empty Name, which
 	// shares one scope with every other such Config, exactly as everything
 	// did before this field existed.
-	Path string `yaml:"-"`
+	Name string `yaml:"-"`
 }
 
-// LoadConfig reads and parses a pipeline YAML file at path.
+// Slugify turns a pipeline path into its identity: the base name without its
+// extension.
+//
+// It lives here, and web.Slugify calls it, because a second copy is how the
+// identity split the first time. internal/web cannot be imported from this
+// package, and the string is needed on both sides.
+func Slugify(path string) string {
+	base := filepath.Base(path)
+
+	return base[:len(base)-len(filepath.Ext(base))]
+}
+
+// LoadConfig reads and parses a pipeline YAML file at path, under the
+// identity its file name implies.
+//
+// The convenience form. A caller that resolves identities of its own — main,
+// which applies the --name overrides — calls Load and says which one, so the
+// Config cannot end up under a name nothing else uses.
 func LoadConfig(path string) (*Config, error) {
-	return LoadConfigWithVars(path, nil)
+	return Load(path, Slugify(path), nil)
 }
 
-// LoadConfigWithVars is LoadConfig with ((name)) substitution applied to the
-// source before it is parsed.
+// LoadConfigWithVars is LoadConfig with vars, under the same default
+// identity.
+func LoadConfigWithVars(path string, vars map[string]string) (*Config, error) {
+	return Load(path, Slugify(path), vars)
+}
+
+// Load reads and parses the pipeline YAML at path under the identity name,
+// with ((name)) substitution applied to the source before it is parsed.
+//
+// name is a parameter rather than something derived here because the identity
+// is the caller's to decide: `--name prod=infra/deploy.yml` is an operator
+// saying which pipeline this is, and it must reach the store, the /p/<slug>
+// route and the Config as one string. Positional, so a call site cannot
+// quietly skip it — the same reason store.OpenStore takes one.
 //
 // Substituting before the parse is what lets a var appear anywhere a value
 // does — inside a URI, mid-command, as a whole mapping value — without this
@@ -65,7 +101,7 @@ func LoadConfig(path string) (*Config, error) {
 // in state.db like anything else written in the file. Vars separate a
 // pipeline's shape from its parameters; they are not a secret store. Keep
 // credentials in the env-var references (api_key_env:) that exist for them.
-func LoadConfigWithVars(path string, vars map[string]string) (*Config, error) {
+func Load(path string, name string, vars map[string]string) (*Config, error) {
 	slog.Debug("config.load", "path", path)
 
 	data, err := os.ReadFile(path) //nolint:gosec // path is the pipeline file the user asked to run, not untrusted input
@@ -113,16 +149,7 @@ func LoadConfigWithVars(path string, vars map[string]string) (*Config, error) {
 		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
 	}
 
-	// Absolute, because this is an identity and `./app.yml` and `app.yml` are
-	// the same pipeline. Left as typed, the two spellings produced two
-	// independent process-wide scopes for one pipeline — an agent pinned
-	// under one of them and read under the other.
-	cfg.Path = path
-
-	abs, absErr := filepath.Abs(path)
-	if absErr == nil {
-		cfg.Path = abs
-	}
+	cfg.Name = name
 
 	return &cfg, nil
 }

@@ -883,6 +883,14 @@ func TestEndToEndAgentMidRunFailover(t *testing.T) {
 // a real request, to another pipeline's fallback provider, for a primary that
 // was answering fine. Both pipelines here declare `crosser`; only the first
 // has anything wrong with it.
+//
+// Each is given its identity explicitly, because that is what the scope now
+// IS: the same name the store, the /p/<slug> route and the run record use,
+// rather than the file's path (#94). Both files here are called pipeline.yml,
+// which without --name is one identity for two pipelines — and that is not a
+// gap this test papers over: it is refused outright by the only mode that
+// serves several pipelines from one process, which
+// TestWebRefusesTwoPipelinesClaimingOneName holds.
 func testMidRunFailoverPinIsScopedToItsPipeline(t *testing.T) {
 	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
@@ -895,7 +903,8 @@ func testMidRunFailoverPinIsScopedToItsPipeline(t *testing.T) {
 	)
 	outageFallback := newFakeLLM(t, says("Summarized via fallback."))
 
-	mustRun(t, midRunFailoverPipeline(t, t.TempDir(), "crosser", outagePrimary.URL, outageFallback.URL))
+	outagePath := midRunFailoverPipeline(t, t.TempDir(), "crosser", outagePrimary.URL, outageFallback.URL)
+	mustRun(t, outagePath, "--name", "outage="+outagePath)
 
 	// The healthy pipeline, in its own file, declaring its own `crosser`
 	// against its own endpoints. Its fallback is scripted with nothing at
@@ -906,7 +915,8 @@ func testMidRunFailoverPinIsScopedToItsPipeline(t *testing.T) {
 	)
 	healthyFallback := newFakeLLM(t)
 
-	mustRun(t, midRunFailoverPipeline(t, t.TempDir(), "crosser", healthyPrimary.URL, healthyFallback.URL))
+	healthyPath := midRunFailoverPipeline(t, t.TempDir(), "crosser", healthyPrimary.URL, healthyFallback.URL)
+	mustRun(t, healthyPath, "--name", "healthy="+healthyPath)
 
 	if got := healthyPrimary.requestCount(); got != 2 {
 		t.Errorf("the healthy pipeline's own primary served %d requests, want 2 — its step was resolved onto another pipeline's source", got)

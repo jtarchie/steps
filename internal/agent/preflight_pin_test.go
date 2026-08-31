@@ -27,7 +27,7 @@ func expireProbes() {
 }
 
 // testPin is the scope of a pin belonging to a Config that was built rather
-// than loaded: config.Path is empty, so every such Config shares one scope —
+// than loaded: config.Name is empty, so every such Config shares one scope —
 // which is what every pin shared before pinScope existed. Tests that are
 // about the SCOPE build two real pipelines instead (see the root package's
 // mid-run failover e2e).
@@ -743,5 +743,44 @@ func TestPreflightReleasesAnAgentWhoseNeighbourAskedTheQuestion(t *testing.T) {
 		if _, pinned := selectedSource(scope); pinned {
 			t.Errorf("%q is still pinned after the primary answered — for it, only a neighbour's pass had asked", name)
 		}
+	}
+}
+
+// TestAPinIsScopedByThePipelineIdentityEveryoneElseUses pins WHICH string
+// separates two pipelines' pins, which is the half of pinScope nothing tested.
+//
+// The scope was the Config's file PATH, a second identity that disagreed with
+// the one the repo already resolves and publishes. Two costs, both real: a pin
+// log line said pipeline=/abs/infra/deploy.yml where the store, /p/<slug> and
+// every run_events row said deploy, so correlating a model-quality shift
+// against a run record meant knowing the two spellings named one thing; and
+// `--name prod=infra/deploy.yml` — an operator saying which pipeline this is —
+// moved the store identity and the UI route and left the pin under the path.
+//
+// Both directions are asserted, because the field has two jobs: two pipelines
+// must not share a pin (the collision it was added for), and one pipeline
+// under two spellings must not have two (the reason it is an identity rather
+// than a path).
+func TestAPinIsScopedByThePipelineIdentityEveryoneElseUses(t *testing.T) {
+	t.Parallel()
+
+	deploy := &config.Config{Name: "deploy"}   //nolint:exhaustruct // the identity is the field under test
+	sameName := &config.Config{Name: "deploy"} //nolint:exhaustruct // loaded from another spelling of one pipeline
+	infra := &config.Config{Name: "infra"}     //nolint:exhaustruct // a different pipeline entirely
+
+	scope := agentPinScope(deploy, "reviewer")
+
+	// The string the store's pipelines.name and the web UI's /p/<slug> also
+	// carry. A scope spelled any other way cannot be joined to a run record.
+	if scope.pipeline != deploy.Name {
+		t.Errorf("pin scoped to %q, want the pipeline identity %q", scope.pipeline, deploy.Name)
+	}
+
+	if scope != agentPinScope(sameName, "reviewer") {
+		t.Error("one pipeline had two pin scopes — an agent pinned under one spelling is read under the other, and neither ever expires the other")
+	}
+
+	if scope == agentPinScope(infra, "reviewer") {
+		t.Error("two pipelines shared one pin scope: infra's reviewer outage would resolve deploy's reviewer onto an endpoint it never declared")
 	}
 }

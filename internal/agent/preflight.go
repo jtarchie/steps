@@ -544,11 +544,15 @@ type pinScope struct {
 }
 
 // agentPinScope names an agent's pin within the pipeline that declared it.
-// config.Path is stamped by the loader, so every real run has one; a Config
-// built in a test rather than loaded shares the empty scope, as everything
-// did before this existed.
+//
+// config.Name is the identity the store and the web UI also use, so a pin log
+// line saying pipeline=deploy joins to the run record written under deploy —
+// and --name, which is an operator saying which pipeline this is, moves this
+// scope along with the other two. It is stamped by the loader, so every real
+// run has one; a Config built in a test rather than loaded shares the empty
+// scope, as everything did before this existed.
 func agentPinScope(cfg *config.Config, agentName string) pinScope {
-	return pinScope{pipeline: cfg.Path, agent: agentName}
+	return pinScope{pipeline: cfg.Name, agent: agentName}
 }
 
 // pinLifetime is how long an agent stays on a fallback without anything

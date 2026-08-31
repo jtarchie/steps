@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -127,10 +126,13 @@ func New(pipelines []*Pipeline, runner Runner) (*Server, error) {
 }
 
 // Slugify turns a pipeline path into its URL identity.
+//
+// Delegated rather than computed, because the /p/<slug> route, the store's
+// pipelines.name and the Config's own name are ONE identity: a second copy of
+// this three-line function is how they came apart before, and two copies that
+// agree today are two copies that can stop agreeing.
 func Slugify(path string) string {
-	base := filepath.Base(path)
-
-	return base[:len(base)-len(filepath.Ext(base))]
+	return config.Slugify(path)
 }
 
 // routes wires the handler table and the middleware every route shares.

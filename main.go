@@ -143,7 +143,7 @@ func (r *RunCmd) applyReplay(
 // Run loads the pipeline, selects a job, and runs it once via
 // pipeline.RunJob.
 func (r *RunCmd) Run() error {
-	cfg, err := r.Load(r.Pipeline)
+	cfg, err := r.Load(r.Pipeline, resolvePipelineName(r.Pipeline, r.Name))
 	if err != nil {
 		return err
 	}
@@ -215,7 +215,7 @@ type TestCmd struct {
 // any job failed or the pipeline assert mismatched, so the process exits
 // non-zero.
 func (t *TestCmd) Run() error {
-	cfg, err := t.Load(t.Pipeline)
+	cfg, err := t.Load(t.Pipeline, resolvePipelineName(t.Pipeline, t.Name))
 	if err != nil {
 		return err
 	}
@@ -311,7 +311,7 @@ func (v *ValidateCmd) Run() error {
 		return err
 	}
 
-	cfg, err := v.Load(v.Pipeline)
+	cfg, err := v.Load(v.Pipeline, pipelineName(v.Pipeline))
 	if err != nil {
 		return err
 	}
@@ -492,7 +492,7 @@ type PlanCmd struct {
 // step. Resource check commands run (planning has always resolved get
 // versions), but no step executes and nothing is recorded.
 func (p *PlanCmd) Run() error {
-	cfg, err := p.Load(p.Pipeline)
+	cfg, err := p.Load(p.Pipeline, resolvePipelineName(p.Pipeline, p.Name))
 	if err != nil {
 		return err
 	}
@@ -1542,7 +1542,23 @@ func run(args []string) error {
 func setup(
 	cfg *config.Config, pipelinePath string, flags StateFlags, exec ExecFlags,
 ) (*store.Store, workspace.Provider, func(), error) {
-	st, err := store.OpenStore(statePath(pipelinePath, flags.State), resolvePipelineName(pipelinePath, flags.Name))
+	name := resolvePipelineName(pipelinePath, flags.Name)
+
+	// The identity the caller loaded the Config under has to be the identity
+	// the store is opened under, because they are one identity: the store
+	// scopes every row by it, the /p/<slug> route is it, and the Config
+	// carries it to whatever else is keyed by pipeline (an agent pin). They
+	// were computed independently and silently disagreed, which is the whole
+	// of #94 — so a caller that resolves it differently, or forgets and takes
+	// the file-name default while --name says otherwise, is told rather than
+	// left to split.
+	if cfg.Name != name {
+		return nil, nil, nil, fmt.Errorf(
+			"the pipeline was loaded as %q but its state is scoped to %q — these are one identity, so load it with resolvePipelineName(path, flags.Name)",
+			cfg.Name, name)
+	}
+
+	st, err := store.OpenStore(statePath(pipelinePath, flags.State), name)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("could not open state store: %w", err)
 	}
@@ -1661,9 +1677,15 @@ type VarFlags struct {
 	VarsFile string            `help:"YAML file of pipeline vars"                          name:"vars-file"`
 }
 
-// Load reads the pipeline at path with these vars applied.
-func (v VarFlags) Load(path string) (*config.Config, error) {
-	return loadWithVars(path, v.Var, v.VarsFile)
+// Load reads the pipeline at path, under the identity name, with these vars
+// applied.
+//
+// name is passed rather than derived from path because --name lives on
+// StateFlags and this embed cannot see it: a caller resolves the identity once
+// (resolvePipelineName) and hands the same string to the store and to here, so
+// the two cannot disagree. Positional for the reason config.Load makes it so.
+func (v VarFlags) Load(path string, name string) (*config.Config, error) {
+	return loadWithVars(path, name, v.Var, v.VarsFile)
 }
 
 // ExecFlags shape how a command that RUNS steps executes them: which machines
@@ -1748,11 +1770,11 @@ func statePath(pipeline, state string) string {
 // pipelineName is a pipeline's identity inside a state database: the YAML's
 // base name without its extension.
 //
-// The same string web.Slugify produces, and deliberately so — the UI's /p/<slug>
-// route and the database's pipelines.name are one identity, not two that have to
-// be kept in agreement.
+// The same string web.Slugify and config.Slugify produce, and deliberately so
+// — the UI's /p/<slug> route, the database's pipelines.name and the Config's
+// own name are one identity, not three that have to be kept in agreement.
 func pipelineName(pipeline string) string {
-	return web.Slugify(pipeline)
+	return config.Slugify(pipeline)
 }
 
 // resolvePipelineName applies the --name overrides to one pipeline path.
@@ -1920,7 +1942,7 @@ type JobsResumeCmd struct {
 
 // Run resumes the named job.
 func (j *JobsResumeCmd) Run() error {
-	cfg, err := config.LoadConfig(j.Pipeline)
+	cfg, err := config.Load(j.Pipeline, resolvePipelineName(j.Pipeline, j.Name), nil)
 	if err != nil {
 		return fmt.Errorf("could not load pipeline: %w", err)
 	}
@@ -1959,7 +1981,7 @@ func resumeJob(ctx context.Context, cfg *config.Config, st *store.Store, name st
 // Flags win over the file: the file is the shared, checked-in set and the flag
 // is the one-off override, which is the only ordering that makes overriding
 // possible at all.
-func loadWithVars(path string, flags map[string]string, varsFile string) (*config.Config, error) {
+func loadWithVars(path string, name string, flags map[string]string, varsFile string) (*config.Config, error) {
 	vars := map[string]string{}
 
 	if varsFile != "" {
@@ -1984,7 +2006,7 @@ func loadWithVars(path string, flags map[string]string, varsFile string) (*confi
 		vars[name] = value
 	}
 
-	cfg, err := config.LoadConfigWithVars(path, vars)
+	cfg, err := config.Load(path, name, vars)
 	if err != nil {
 		return nil, fmt.Errorf("could not load pipeline: %w", err)
 	}
@@ -2231,7 +2253,12 @@ func (w *WebCmd) load() ([]*web.Pipeline, map[string]workspace.Provider, func(),
 	}
 
 	for _, path := range w.Pipeline {
-		cfg, err := w.Load(path)
+		// Resolved before the load, not after it: the slug IS the Config's
+		// identity, and computing it four lines later is how the two came to
+		// disagree.
+		slug := resolvePipelineName(path, w.Name)
+
+		cfg, err := w.Load(path, slug)
 		if err != nil {
 			cleanup()
 
@@ -2245,7 +2272,6 @@ func (w *WebCmd) load() ([]*web.Pipeline, map[string]workspace.Provider, func(),
 			return nil, nil, nil, err
 		}
 
-		slug := resolvePipelineName(path, w.Name)
 		bus := events.New(pipeline.StoreSink(st))
 
 		// Bus first, store second: cleanup runs these in order, and the bus
