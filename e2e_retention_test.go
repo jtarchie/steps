@@ -470,3 +470,63 @@ jobs:
 
 	t.Logf("state.db after 40 builds under run_history: 5 = %d bytes", info.Size())
 }
+
+// TestVersionHistoryFlagAppliesWhenThePipelineIsSilent.
+//
+// --version-history is the flag whose whole story is that it was declared and
+// applied nowhere: it read as configured on `steps run` and bound nothing, and
+// that bug is what the flag embeds exist to prevent. It still had no test of
+// its own — the run-history sibling above was doing the work — so mutation
+// testing walked straight through the line that applies it.
+func TestVersionHistoryFlagAppliesWhenThePipelineIsSilent(t *testing.T) {
+	dir := t.TempDir()
+	versions := dir + "/versions.json"
+
+	writePipelineFile(t, versions, `[{"ref":"v1"},{"ref":"v2"},{"ref":"v3"},{"ref":"v4"},{"ref":"v5"}]`)
+
+	path := writePipeline(t, dir, `
+resource_types:
+- name: listing
+  config:
+    check: cat `+versions+`
+    in: echo {{ .version.ref | shellquote }} > ref.txt
+resources:
+- name: repo
+  type: listing
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: repo
+  - task: work
+    inputs: [repo]
+    run: cat repo/ref.txt
+`)
+
+	err := run([]string{"run", path, "--job", "build", "--version-history", "2"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// Nothing is pruned yet, and that is the documented rule rather than the
+	// flag failing: the cap bounds what has SCROLLED AWAY, and a window still
+	// being reported is kept whole however small the cap (see
+	// store.RecordVersions — pruning a version the check still reports makes
+	// the next poll rediscover it at a fresh order, and the table oscillates).
+	if got := countTableRows(t, path, "resource_versions"); got != 5 {
+		t.Fatalf("resource_versions = %d, want the 5 the check still reports", got)
+	}
+
+	// Now they scroll away: the check reports only the newest, so the older
+	// four are finally prunable and the cap is what decides how many survive.
+	writePipelineFile(t, versions, `[{"ref":"v5"}]`)
+
+	err = run([]string{"run", path, "--job", "build", "--force", "--version-history", "2"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if got := countTableRows(t, path, "resource_versions"); got != 2 {
+		t.Errorf("resource_versions = %d, want 2 — --version-history must apply when the pipeline says nothing", got)
+	}
+}

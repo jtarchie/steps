@@ -284,3 +284,61 @@ jobs:
 	// Sanity: the state dir the test run created lives beside the pipeline.
 	_ = os.RemoveAll(filepath.Join(dir, ".steps"))
 }
+
+// TestPipelineAssertWithNoExecutionListAssertsNothing.
+//
+// `assert: execution:` omits by exclusion — a job listed nowhere in it must
+// NOT have run — which raises a real question about the empty list: does it
+// assert that nothing ran, or nothing at all? The code answers "nothing at
+// all", and nothing pinned that answer, so the guard could be moved to the
+// other reading and every suite stayed green while `steps test` began failing
+// any pipeline carrying a bare assert block.
+func TestPipelineAssertWithNoExecutionListAssertsNothing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+
+	writePipelineFile(t, path, `
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: "true"
+
+assert: {}
+`)
+
+	err := run([]string{"test", path})
+	if err != nil {
+		t.Fatalf("an assert block with no execution list failed the run: %v", err)
+	}
+}
+
+// TestPipelineAssertExecutionStillChecksWhatItLists is the other half: a list
+// that IS given is enforced, so the guard above cannot be satisfied by
+// skipping the comparison entirely.
+func TestPipelineAssertExecutionStillChecksWhatItLists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+
+	writePipelineFile(t, path, `
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: "true"
+
+assert:
+  execution: [nosuchjob]
+`)
+
+	err := run([]string{"test", path})
+	if err == nil {
+		t.Fatal("a pipeline assert naming a job that never ran was reported as passing")
+	}
+
+	if !strings.Contains(err.Error(), "assert.execution mismatch") {
+		t.Errorf("error does not report the mismatch: %v", err)
+	}
+}

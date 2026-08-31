@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestEndToEndAgentAskUser proves the ask_user grant end to end: the tool
@@ -497,5 +499,72 @@ jobs:
 
 	if got := questions[0]; got.AgentName != "reporter" || got.Answer != "the release channel" {
 		t.Errorf("question row = %+v, want the hook agent's question answered", got)
+	}
+}
+
+// TestQuestionsListsWhatIsWaiting.
+//
+// `steps questions` is how somebody finds out a run is parked on them, and
+// nothing checked what it PRINTS — the existing coverage runs the command and
+// then reads the table directly, so the listing could report "no questions
+// are waiting" with a question waiting and every test stayed green. The
+// options line matters as much as the row: it is what makes a question one
+// keystroke to answer instead of a guess.
+//
+// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+func TestQuestionsListsWhatIsWaiting(t *testing.T) {
+	dir := t.TempDir()
+
+	path := writePipeline(t, dir, `
+jobs:
+- name: deploy
+  plan:
+  - task: unit
+    inputs: []
+    run: "true"
+`)
+
+	st, err := store.OpenStore(statePath(path, ""), pipelineName(path))
+	if err != nil {
+		t.Fatalf("open state store: %v", err)
+	}
+
+	ctx := t.Context()
+
+	err = st.StartRun(ctx, "PARKEDRUN", "deploy", dir)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	_, _, err = st.AskQuestion(ctx, store.Question{
+		RunID: "PARKEDRUN", JobName: "deploy", AgentName: "deployer",
+		Question: "Which environment?",
+		Options:  []string{"staging", "production"},
+	})
+	if err != nil {
+		t.Fatalf("AskQuestion: %v", err)
+	}
+
+	err = st.Close()
+	if err != nil {
+		t.Fatalf("close state store: %v", err)
+	}
+
+	var runErr error
+
+	out := captureStdout(t, func() { runErr = run([]string{"questions", path}) })
+
+	if runErr != nil {
+		t.Fatalf("steps questions: %v", runErr)
+	}
+
+	for _, want := range []string{"deploy", "deployer", "Which environment?", "staging | production"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the listing is missing %q:\n%s", want, out)
+		}
+	}
+
+	if strings.Contains(out, "no questions are waiting") {
+		t.Errorf("a waiting question was reported as nothing waiting:\n%s", out)
 	}
 }

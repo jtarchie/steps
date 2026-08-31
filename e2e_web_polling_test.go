@@ -245,7 +245,12 @@ func TestWebPollsEveryPipelineItServes(t *testing.T) {
 func TestWebRejectsANonPositiveInterval(t *testing.T) {
 	fixture := newWatchFixture(t, cursorFeed)
 
-	err := run([]string{"web", fixture.pipeline, "--listen", freeAddr(t), "--interval", "0"})
+	// Port 1 is unbindable as an ordinary user, so a regression fails in a
+	// second instead of serving forever. Mutation testing is what made this
+	// non-optional: with the guard weakened, --interval 0 was ACCEPTED and
+	// this test blocked until the run's own timeout — one mutant stalled a
+	// seven-hour run for an hour and forty minutes.
+	err := run([]string{"web", fixture.pipeline, "--listen", "127.0.0.1:1", "--interval", "0"})
 	if err == nil {
 		t.Fatal("--interval 0 was accepted; it silently disables polling")
 	}

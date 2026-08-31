@@ -467,3 +467,93 @@ func TestReadingADatabaseBeingCreated(t *testing.T) {
 		})
 	}
 }
+
+// TestSuccessfulRunClearsTheBreaker.
+//
+// Running the job by hand is the natural way to confirm a fix, so a manual
+// run that succeeds takes the job out of the paused state — otherwise every
+// recovery needs a second command nobody remembers. The line that does it had
+// no test at all: mutation testing could delete the clearing and every suite
+// stayed green, which makes this the THIRD place this one feature was found
+// unproven (inert in the daemon, unwired in the one-shot, unasserted here).
+//
+// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+func TestSuccessfulRunClearsTheBreaker(t *testing.T) {
+	path := flagFixture(t)
+
+	pauseJob(t, path, "build")
+
+	err := run([]string{"run", path, "--job", "build"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if jobPaused(t, path, "build") {
+		t.Error("a successful manual run left the job paused; the fix cannot be confirmed by running it")
+	}
+}
+
+// TestFailedRunLeavesTheBreakerAlone is the other half: only SUCCESS clears
+// it. A mutant that cleared on every outcome would make the breaker
+// unreachable through the one command most likely to be run against a broken
+// job.
+//
+// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+func TestFailedRunLeavesTheBreakerAlone(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: compile
+    inputs: []
+    run: exit 1
+`)
+
+	pauseJob(t, path, "build")
+
+	err := run([]string{"run", path, "--job", "build"})
+	if err == nil {
+		t.Fatal("the failing job reported success")
+	}
+
+	if !jobPaused(t, path, "build") {
+		t.Error("a failed manual run cleared the breaker")
+	}
+}
+
+// TestStateNoteOnlyCarriesAFlagThatWasGiven.
+//
+// The follow-up command a listing prints has to name the same database the
+// listing read, or it sends the reader to the pipeline's default path and
+// tells them nothing is there. The other direction matters too, and is what a
+// mutant walked through: with no --state given, appending an empty flag emits
+// `steps runs cost pipeline.yml <run> --state ` — a command that does not
+// parse.
+//
+// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+func TestStateNoteOnlyCarriesAFlagThatWasGiven(t *testing.T) {
+	path := costFixture(t)
+
+	var err error
+
+	out := captureStdout(t, func() { err = run([]string{"runs", "cost", path}) })
+	if err != nil {
+		t.Fatalf("runs cost: %v", err)
+	}
+
+	if strings.Contains(out, "--state") {
+		t.Errorf("the hint names a --state nobody passed:\n%s", out)
+	}
+
+	state := statePath(path, "")
+
+	out = captureStdout(t, func() { err = run([]string{"runs", "cost", path, "--state", state}) })
+	if err != nil {
+		t.Fatalf("runs cost --state: %v", err)
+	}
+
+	if !strings.Contains(out, "--state "+state) {
+		t.Errorf("the hint drops the --state the reader is using:\n%s", out)
+	}
+}
