@@ -705,6 +705,31 @@ jobs:
 - **Not hashed**, unlike `in_parallel:`'s `limit:`/`fail_fast:`. Those change which steps run at all; this changes only how many run at once — so widening a matrix whose cells are all cached re-runs nothing.
 - **Above 1 requires `strategy: copy`** (the default).
 
+### Sharding: `parallelism:`
+
+Sometimes the axis is just "run N copies" — a test suite split into shards, where each copy needs only its slot number and the total. `parallelism: N` is that matrix without the hand-written axis: `across:` over an implicit 1-based `index`, plus a `count` var no hand-written axis could carry (an axis knows its values, not its width):
+
+```yaml
+jobs:
+- name: sharded
+  plan:
+  - task: unit
+    parallelism: 3
+    run: sh -c 'echo "slot {{ .vars.index }} of {{ .vars.count }}"'
+  assert:
+    execution:
+    - unit [index=1]
+    - unit [index=2]
+    - unit [index=3]
+    outcome: succeeded
+```
+
+- **It IS an `across:` matrix** — desugared at load, so per-cell caching, coordinate naming, collected `outputs:`, `budget:` and the failure rule (every shard runs, every failure is reported) all apply exactly as written above. Some diagnostics accordingly name `across`.
+- **Shards run concurrently by default**: `parallelism: N` implies `max_in_flight: N`, and writing your own narrows it (`parallelism: 6` with `max_in_flight: 2`). The matrix default is serial because hand-written cells often mean to run in order; N copies of one command have no order to mean.
+- **Task steps only, and not beside `across:`** — a matrix that also needs real axes declares the shard axis itself, and `{{ .vars.count }}` exists only under `parallelism:`.
+- **The command learns its slot by interpolation, never injected env** — `env:` passes operator variables through by name and cannot carry values, so a tool that wants environment is spelled `run: sh -c 'SHARD_INDEX={{ .vars.index }} SHARD_COUNT={{ .vars.count }} ./run-tests'`.
+- **With `tags:`, every shard lands on the one worker the tag names**, concurrently. On an `aws://launch/…` worker the machine is still acquired once per job — the first shard to arrive pays for it, the rest share it. There is no Concourse counterpart to `parallelism:`; Concourse's nearest primitive is its `across:` step.
+
 ## `approval:` — a human in the plan
 
 Agent pipelines eventually gate something that cannot be undone — publishing, deploying, sending. `approval:` is the place in a plan to stop and ask. It parks the run until someone decides, so it can't be executed by the docs suite:

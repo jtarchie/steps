@@ -131,6 +131,9 @@ var stepOperators = []stepOperator{
 	{tag: "budget", apply: scaleBudgetTokens},
 	// A narrower matrix is a shorter execution log.
 	{tag: "across", apply: truncateAcross},
+	// Fewer shards, same thing: the missing [index=N] cells are names the
+	// execution log no longer carries.
+	{tag: "parallelism", apply: capToOne("parallelism")},
 
 	// Each container loses a branch, so its children no longer match.
 	{tag: "do", apply: truncateList("do")},

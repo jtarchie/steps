@@ -8,6 +8,7 @@ import (
 	"maps"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"text/template"
 )
@@ -131,6 +132,16 @@ func ExpandAcrossValues(label string, step Step, runtime map[string][]string) ([
 
 	combos := combinations(axes)
 
+	// A parallelism: matrix renders one var no axis carries: count, the
+	// matrix's own width. Render-only — identical in every cell, so folding
+	// it into vars would stamp it into every cell's coordinates too.
+	if step.Parallelism > 0 {
+		count := strconv.Itoa(step.Parallelism)
+		for i := range combos {
+			combos[i].extra = map[string]string{"count": count}
+		}
+	}
+
 	cells := make([]Step, 0, len(combos))
 
 	// Every cell is rendered HERE, before any of them runs. That is what makes
@@ -139,7 +150,7 @@ func ExpandAcrossValues(label string, step Step, runtime map[string][]string) ([
 	// have already run.
 	for _, combo := range combos {
 		cell := step
-		cell.Across = nil
+		cell.Across, cell.Parallelism = nil, 0
 
 		err = renderCell(label, &cell, combo)
 		if err != nil {
@@ -165,6 +176,10 @@ type acrossAxis struct {
 type acrossCombo struct {
 	vars map[string]string
 	segs []string
+	// extra are render-only vars: substituted like vars but absent from a
+	// cell's identity — its name suffix and capture path. parallelism:'s
+	// count is the only occupant.
+	extra map[string]string
 }
 
 // staticAxes returns just the values: axes as resolved axes — what a matrix
@@ -400,7 +415,13 @@ func renderVars(value string, combo acrossCombo) (string, error) {
 
 	var out bytes.Buffer
 
-	err = parsed.Execute(&out, map[string]any{"vars": combo.vars})
+	data := combo.vars
+	if len(combo.extra) > 0 {
+		data = maps.Clone(combo.vars)
+		maps.Copy(data, combo.extra)
+	}
+
+	err = parsed.Execute(&out, map[string]any{"vars": data})
 	if err != nil {
 		return "", fmt.Errorf("could not render the template: %w", err)
 	}

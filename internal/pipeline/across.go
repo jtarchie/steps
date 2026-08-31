@@ -119,15 +119,30 @@ func resetCollectedArtifacts(ctx context.Context, label string, step config.Step
 // wants an empty list to fail asserts it where the file is written, which is
 // the step that knows what empty means.
 func reportCellCount(jobName string, i int, step config.Step, cells int) {
+	kind := cellBlockKind(step)
+
 	if cells > 0 {
-		fmt.Printf("across: %d cells\n", cells)
-		slog.Debug("job.step", "job", jobName, "index", i, "kind", "across", "cells", cells)
+		fmt.Printf("%s: %d cells\n", kind, cells)
+		slog.Debug("job.step", "job", jobName, "index", i, "kind", kind, "cells", cells)
 
 		return
 	}
 
 	fmt.Printf("across: 0 cells (%s is empty); nothing to run\n", emptyAxisSource(step))
 	slog.Warn("across.empty", "job", jobName, "index", i, "source", emptyAxisSource(step))
+}
+
+// cellBlockKind names a matrix block the way its author wrote it: the
+// desugared Parallelism field is the one trace that this across: began as
+// parallelism:, and the run report speaks that word back. The zero-cell
+// branch above stays across-only — a parallelism: matrix is static, so it is
+// never empty.
+func cellBlockKind(step config.Step) string {
+	if step.Parallelism > 0 {
+		return "parallelism"
+	}
+
+	return "across"
 }
 
 // emptyAxisSource names what a zero-cell matrix read, for the line above. The
