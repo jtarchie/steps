@@ -223,10 +223,10 @@ type Fetch struct {
 // rebalance recommendation, seen by the shim and relayed before the machine
 // goes away.
 //
-// Advisory, not fatal. A spot eviction gives about two minutes, so the
-// command in flight may well finish; what this buys the orchestrator is
-// knowing that a failure which follows is infrastructure rather than the
-// step's own verdict.
+// Advisory, not fatal. A spot eviction gives warning — about two minutes on
+// EC2, about thirty seconds on GCE — so the command in flight may well
+// finish; what this buys the orchestrator is knowing that a failure which
+// follows is infrastructure rather than the step's own verdict.
 type Draining struct {
 	// Reason is what the worker learned, verbatim where possible — an
 	// operator reading a build wants the words the cloud used.
@@ -237,9 +237,10 @@ type Draining struct {
 	// matters — is the machine definitely going — is Terminal's.
 	Deadline string `json:"deadline,omitempty"`
 	// Terminal separates a machine that IS going away from one that merely
-	// might. EC2 says both through the same metadata service: a spot
+	// might. EC2 says both through the same metadata service — a spot
 	// instance-action is a decision already taken, while a rebalance
 	// recommendation is a hint that need never be followed by anything.
+	// GCE's preempted flag only ever says the first kind.
 	//
 	// Carried explicitly because the two must not be treated alike. Acting on
 	// an advisory the way this end acts on a reclamation would terminate a

@@ -301,8 +301,10 @@ linters:
         Venue:
           files:
             - "**/internal/venue/**"
-            # ssmdial is a protocol port with its own tier below; see SSMDial.
+            # ssmdial and iapdial are protocol ports with their own tiers
+            # below; see SSMDial and IAPDial.
             - "!**/internal/venue/ssmdial/**"
+            - "!**/internal/venue/iapdial/**"
           allow:
             - "$gostd"
             # The SSH client and its sftp subsystem: the whole remote contract
@@ -332,6 +334,13 @@ linters:
             # listening. Both pure Go.
             - "github.com/jtarchie/steps/internal/venue/ssmdial"
             - "github.com/aws/aws-sdk-go-v2"
+            # iapdial is the gcp:// tunnel, and these two are its control
+            # plane: the generated Compute Engine REST client (instances,
+            # metadata, guest attributes) and the ADC credential chain that
+            # signs for both it and the relay. Pure Go, like the AWS pair.
+            - "github.com/jtarchie/steps/internal/venue/iapdial"
+            - "google.golang.org/api"
+            - "golang.org/x/oauth2"
             # smithy is the SDK's error interface, not a second SDK: EC2 answers
             # a just-created instance with InvalidInstanceID.NotFound until its
             # replica catches up, and telling that lag apart from a bad id means
@@ -399,6 +408,20 @@ linters:
             - "github.com/gorilla/websocket"
             - "github.com/google/uuid"
             - "github.com/aws/aws-sdk-go-v2"
+            - "go.uber.org/goleak"
+        # iapdial is a PORT of the Cloud IAP TCP-forwarding relay protocol,
+        # on the same terms as ssmdial above: no published specification, no
+        # importable client (the canonical implementation is gcloud's Python;
+        # see the package doc for the sources and their licenses). A leaf
+        # under venue with no steps imports at all — its allow-list is the
+        # websocket and nothing else, pure Go so a cross-built binary stays
+        # pushable.
+        IAPDial:
+          files:
+            - "**/internal/venue/iapdial/**"
+          allow:
+            - "$gostd"
+            - "github.com/gorilla/websocket"
             - "go.uber.org/goleak"
         # compress is the zstd wrap around wire's tar stream — one package so
         # every path that ships a tree (the venue's upload, the shim's fetch,

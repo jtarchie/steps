@@ -37,12 +37,13 @@ func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m, sdkPoolIgnores()...)
 }
 
-// sdkPoolIgnores relaxes the leak check for the AWS SDK's own connection
-// pool, and ONLY when the real-AWS tests are the ones running — see the
-// identical note in internal/venue/ssmdial. Every other run keeps the strict
-// check, which is what catches this package's own session goroutines.
+// sdkPoolIgnores relaxes the leak check for the cloud SDKs' own connection
+// pools, and ONLY when the real-AWS or real-GCP tests are the ones running —
+// see the identical note in internal/venue/ssmdial. Every other run keeps
+// the strict check, which is what catches this package's own session
+// goroutines.
 func sdkPoolIgnores() []goleak.Option {
-	if os.Getenv("STEPS_TEST_AWS_INSTANCE") == "" {
+	if os.Getenv("STEPS_TEST_AWS_INSTANCE") == "" && os.Getenv("STEPS_TEST_GCP_INSTANCE") == "" {
 		return nil
 	}
 

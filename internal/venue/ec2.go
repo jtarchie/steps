@@ -117,6 +117,10 @@ var errNoCapacity = errors.New("no capacity for the requested worker")
 // acquire brings a worker's machine into existence and returns the static
 // worker that names it, plus how to give it back.
 func acquire(ctx context.Context, worker Worker) (Worker, func(context.Context, bool) error, error) {
+	if worker.Scheme == SchemeGCP {
+		return acquireGCE(ctx, worker)
+	}
+
 	api, err := ec2For(ctx, worker)
 	if err != nil {
 		return Worker{}, nil, err
@@ -490,15 +494,15 @@ func instanceState(out *ec2.DescribeInstancesOutput) ec2types.InstanceStateName 
 func (w Worker) asStatic(instance string) Worker {
 	w.Rung = RungStatic
 	w.Instance = instance
-	w.URL = staticURL(instance, w.Root, w.Query)
+	w.URL = staticURL(w.Scheme, instance, w.Root, w.Query)
 
 	return w
 }
 
 // staticURL names a running instance the way ParseWorker reads one, keeping
 // every connection option and dropping the acquisition ones.
-func staticURL(instance, root, rawQuery string) string {
-	address := "aws://" + instance + root
+func staticURL(scheme Scheme, instance, root, rawQuery string) string {
+	address := string(scheme) + "://" + instance + root
 
 	query, err := url.ParseQuery(rawQuery)
 	if err != nil {

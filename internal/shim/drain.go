@@ -2,11 +2,18 @@ package shim
 
 // Watching for the machine's own end.
 //
-// A spot instance is told it is going away about two minutes ahead, through
-// the instance metadata service and nowhere else — the orchestrator has no
-// way to learn it except from the machine itself. So the shim polls, and
-// relays what it sees as a draining frame, which is the one thing this end
-// ever says without being asked.
+// A spot instance is told it is going away ahead of time — about two minutes
+// on EC2, about thirty seconds on GCE — through the instance metadata
+// service and nowhere else; the orchestrator has no way to learn it except
+// from the machine itself. So the shim polls, and relays what it sees as a
+// draining frame, which is the one thing this end ever says without being
+// asked.
+//
+// Both clouds answer the same link-local address, so which one this machine
+// is on is itself a question the watcher settles once: GCE identifies itself
+// with a Metadata-Flavor header no other service sends, and EC2 by answering
+// the IMDSv2 token handshake. A machine that answers as neither cannot have
+// a notice, and the watcher stops for good.
 
 import (
 	"context"
@@ -19,10 +26,14 @@ import (
 	"github.com/jtarchie/steps/internal/wire"
 )
 
-// imdsBase is the link-local address every EC2 instance answers metadata on.
-// A machine that is not an EC2 instance refuses or blackholes the very first
-// call, and the watcher stops for good then — see watchForDrain.
-const imdsBase = "http://169.254.169.254"
+// metadataBase is the link-local address both EC2 and GCE answer instance
+// metadata on. A machine that is on neither cloud refuses or blackholes the
+// very first call, and the watcher stops for good then — see watchForDrain.
+// A variable rather than a constant so a test can stand a server in for a
+// cloud without being on one.
+//
+//nolint:gochecknoglobals // a test seam for the metadata service
+var metadataBase = "http://169.254.169.254"
 
 // drainPoll is how often the metadata service is asked. A spot notice gives
 // roughly two minutes, so five seconds spends a negligible fraction of the
@@ -46,6 +57,15 @@ type spotAction struct {
 	Time   string `json:"time"`
 }
 
+// metadataCloud is which cloud's metadata service this machine answers as.
+type metadataCloud int
+
+const (
+	cloudUnknown metadataCloud = iota
+	cloudEC2
+	cloudGCE
+)
+
 // watchForDrain polls the metadata service until the session ends, sending at
 // most one draining frame.
 //
@@ -57,9 +77,9 @@ func (s *session) watchForDrain(ctx context.Context) {
 
 	// advised remembers that the softer notice has been sent, so it is not
 	// repeated while the watcher keeps looking for a real reclamation.
-	// everReached distinguishes "not an EC2 instance" from a blip on one.
+	// cloud starts unknown and is settled by the first probe.
 	advised := false
-	everReached := false
+	cloud := cloudUnknown
 
 	// A transport with no proxy, deliberately: the default one reads
 	// HTTP_PROXY from the environment, and Go bypasses only loopback — not
@@ -84,7 +104,7 @@ func (s *session) watchForDrain(ctx context.Context) {
 		case <-ticker.C:
 		}
 
-		done, sent := s.pollDrain(ctx, client, advised, &everReached)
+		done, sent := s.pollDrain(ctx, client, advised, &cloud)
 		if done {
 			return
 		}
@@ -96,21 +116,21 @@ func (s *session) watchForDrain(ctx context.Context) {
 // pollDrain runs one probe: done says the watcher's work is over — a machine
 // that cannot have a notice, or a terminal notice already relayed — and sent
 // says an advisory notice went out this round.
-func (s *session) pollDrain(ctx context.Context, client *http.Client, advised bool, everReached *bool) (done, sent bool) {
-	token, reachable := imdsToken(ctx, client)
-	if !reachable && !*everReached {
-		// Not an EC2 instance: the metadata service is link-local and
-		// answers nothing anywhere else. One failed probe settles it for
-		// the life of the session — polling a machine that cannot have a
-		// notice would spend three timeouts a tick for nothing.
-		return true, false
+func (s *session) pollDrain(ctx context.Context, client *http.Client, advised bool, cloud *metadataCloud) (done, sent bool) {
+	if *cloud == cloudUnknown {
+		detected, settled := detectCloud(ctx, client)
+		if !settled {
+			// On neither cloud: the metadata service is link-local and
+			// answers nothing anywhere else. One failed probe settles it for
+			// the life of the session — polling a machine that cannot have a
+			// notice would spend timeouts every tick for nothing.
+			return true, false
+		}
+
+		*cloud = detected
 	}
 
-	if reachable {
-		*everReached = true
-	}
-
-	notice, terminal := spotNotice(ctx, client, token)
+	notice, terminal := cloudNotice(ctx, client, *cloud)
 	if notice.Reason == "" || (advised && !terminal) {
 		return false, false
 	}
@@ -126,13 +146,109 @@ func (s *session) pollDrain(ctx context.Context, client *http.Client, advised bo
 	return terminal, !terminal
 }
 
+// detectCloud asks which cloud's metadata service is answering, reporting
+// settled=false when neither is.
+//
+// GCE first, because its answer is the stronger claim: the response carries
+// a Metadata-Flavor header nothing else sends, while EC2 is identified only
+// by the token handshake answering at all.
+func detectCloud(ctx context.Context, client *http.Client) (metadataCloud, bool) {
+	if gceReachable(ctx, client) {
+		return cloudGCE, true
+	}
+
+	if _, reachable := imdsToken(ctx, client); reachable {
+		return cloudEC2, true
+	}
+
+	return cloudUnknown, false
+}
+
+// cloudNotice asks the settled cloud whether this machine is being taken.
+func cloudNotice(ctx context.Context, client *http.Client, cloud metadataCloud) (wire.Draining, bool) {
+	switch cloud {
+	case cloudGCE:
+		return gceNotice(ctx, client)
+	case cloudEC2:
+		token, _ := imdsToken(ctx, client)
+
+		return spotNotice(ctx, client, token)
+	case cloudUnknown:
+	}
+
+	return wire.Draining{}, false
+}
+
+// gceReachable reports whether the GCE metadata service is answering. The
+// Metadata-Flavor response header is required, not just a 200: the same
+// address on EC2 answers requests too, with different content.
+func gceReachable(ctx context.Context, client *http.Client) bool {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataBase+"/computeMetadata/v1/instance/id", nil)
+	if err != nil {
+		return false
+	}
+
+	request.Header.Set("Metadata-Flavor", "Google")
+
+	response, err := client.Do(request)
+	if err != nil {
+		return false
+	}
+
+	defer func() { _ = response.Body.Close() }()
+
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxMetadataBytes))
+
+	return response.StatusCode == http.StatusOK && response.Header.Get("Metadata-Flavor") == "Google"
+}
+
+// gceNotice asks whether this instance is being preempted.
+//
+// One question, unlike EC2's two: GCE has no rebalance-recommendation
+// analog, and a maintenance event on a spot instance surfaces as this same
+// flag. The answer is TRUE or FALSE from the instance's first boot, so only
+// the exact affirmative is a notice.
+func gceNotice(ctx context.Context, client *http.Client) (wire.Draining, bool) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataBase+"/computeMetadata/v1/instance/preempted", nil)
+	if err != nil {
+		return wire.Draining{}, false
+	}
+
+	request.Header.Set("Metadata-Flavor", "Google")
+
+	response, err := client.Do(request)
+	if err != nil {
+		return wire.Draining{}, false
+	}
+
+	defer func() { _ = response.Body.Close() }()
+
+	if response.StatusCode != http.StatusOK {
+		return wire.Draining{}, false
+	}
+
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxMetadataBytes))
+	if err != nil {
+		return wire.Draining{}, false
+	}
+
+	if !strings.EqualFold(strings.TrimSpace(string(body)), "TRUE") {
+		return wire.Draining{}, false
+	}
+
+	// Terminal: by the time the flag flips the decision is taken, and the
+	// ACPI shutdown follows within about thirty seconds. No deadline field,
+	// because GCE publishes no timestamp to relay.
+	return wire.Draining{Reason: "GCE preemption", Terminal: true}, true
+}
+
 // imdsToken fetches an IMDSv2 session token, reporting whether the metadata
 // service ANSWERED at all — a 4xx is an answer, a refused or timed-out dial
 // is not, and only the second means this is not an EC2 instance. An instance
 // configured to require IMDSv2 — the default for new AMIs — returns nothing
 // useful without the token; an instance allowing v1 ignores the header.
 func imdsToken(ctx context.Context, client *http.Client) (string, bool) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPut, imdsBase+"/latest/api/token", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut, metadataBase+"/latest/api/token", nil)
 	if err != nil {
 		return "", false
 	}
@@ -205,7 +321,7 @@ func spotNotice(ctx context.Context, client *http.Client, token string) (wire.Dr
 // the service says "no notice" — so absence is reported as not-ok rather than
 // as an error.
 func imdsGet(ctx context.Context, client *http.Client, token, path string) (string, bool) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, imdsBase+path, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataBase+path, nil)
 	if err != nil {
 		return "", false
 	}

@@ -482,6 +482,10 @@ func checkAWS(worker Worker) error {
 // launches a real, billed instance before the dial discovers a condition that
 // was decidable while kong was still parsing.
 func (w Worker) PlacementCheck(hasArtifactStore bool) error {
+	if w.Scheme == SchemeGCP {
+		return w.gcpPlacementCheck()
+	}
+
 	if w.Scheme != SchemeAWS {
 		return nil
 	}

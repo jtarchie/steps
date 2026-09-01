@@ -47,10 +47,11 @@ func TestMain(m *testing.M) {
 		goleak.IgnoreTopFunction("github.com/modelcontextprotocol/go-sdk/mcp.(*streamableServerConn).Read"),
 	}
 
-	// The AWS SDK's pooled keep-alive connections, and only when the
-	// real-AWS tests are the ones running — see internal/venue/ssmdial for
-	// the full note. Every other run keeps the strict check.
-	if os.Getenv("STEPS_TEST_AWS_INSTANCE") != "" {
+	// The cloud SDKs' pooled keep-alive connections, and only when the
+	// real-AWS or real-GCP tests are the ones running — see
+	// internal/venue/ssmdial for the full note. Every other run keeps the
+	// strict check.
+	if os.Getenv("STEPS_TEST_AWS_INSTANCE") != "" || os.Getenv("STEPS_TEST_GCP_INSTANCE") != "" {
 		options = append(options,
 			goleak.IgnoreTopFunction("net/http.(*persistConn).readLoop"),
 			goleak.IgnoreTopFunction("net/http.(*persistConn).writeLoop"),

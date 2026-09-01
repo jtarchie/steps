@@ -40,6 +40,11 @@ const (
 	// sshd, no host key. The instance dials the control plane outward, which
 	// is what makes a NAT-hidden worker reachable at all.
 	SchemeAWS Scheme = "aws"
+	// SchemeGCP reaches a Compute Engine instance through IAP TCP forwarding
+	// to its sshd: no public address, and the only ingress is Google's own
+	// relay range. GCP has no SSM-shaped exec channel, so the SSH contract is
+	// the transport — the tunnel is just how the connection gets there.
+	SchemeGCP Scheme = "gcp"
 )
 
 // Worker is a parsed worker URL: where a tagged step goes.
@@ -98,6 +103,14 @@ type Worker struct {
 	IdleSet bool
 	// Region overrides the ambient AWS region for an aws:// worker.
 	Region string
+	// Project is the GCP project a gcp:// worker lives in. Empty falls back
+	// to the ambient project — the CLOUDSDK/GOOGLE_CLOUD env vars, then what
+	// the application default credentials name.
+	Project string
+	// Zone is the GCP zone a gcp:// worker lives in. An instance lives in
+	// exactly one, and unlike the project there is no credentials file to
+	// fall back to — only ?zone= or CLOUDSDK_COMPUTE_ZONE can answer.
+	Zone string
 	// Shim is an absolute path to a steps binary ALREADY on the instance —
 	// one baked into an AMI — so nothing is transferred to start a session.
 	Shim string
@@ -164,14 +177,27 @@ func ParseWorker(raw string) (Worker, error) {
 		return Worker{}, err
 	}
 
-	if worker.Scheme == SchemeAWS {
-		err = checkAWS(worker)
-		if err != nil {
-			return Worker{}, err
-		}
+	err = checkScheme(worker)
+	if err != nil {
+		return Worker{}, err
 	}
 
 	return worker, nil
+}
+
+// checkScheme runs whichever scheme-specific refusals the mapping's scheme
+// carries.
+func checkScheme(worker Worker) error {
+	switch worker.Scheme {
+	case SchemeAWS:
+		return checkAWS(worker)
+	case SchemeGCP:
+		return checkGCP(worker)
+	case SchemeLocal, SchemeSSH:
+		return nil
+	default:
+		return nil
+	}
 }
 
 // applyQuery reads a mapping's options, refusing what the grammar does not
@@ -194,6 +220,8 @@ func applyQuery(worker Worker, parsed *url.URL) (Worker, error) {
 	worker.Shim = query.Get("shim")
 	worker.Capacity = Capacity(query.Get("capacity"))
 	worker.IdleSet = query.Has("idle")
+	worker.Project = query.Get("project")
+	worker.Zone = query.Get("zone")
 
 	worker.Version, err = parseTemplateVersion(worker, query)
 	if err != nil {
@@ -215,16 +243,18 @@ func applyQuery(worker Worker, parsed *url.URL) (Worker, error) {
 //
 //nolint:gochecknoglobals // a fact about the grammar, not state
 var queryKeys = map[string][]Scheme{
-	"binary":      {SchemeLocal, SchemeSSH, SchemeAWS},
+	"binary":      {SchemeLocal, SchemeSSH, SchemeAWS, SchemeGCP},
 	"identity":    {SchemeSSH},
 	"known_hosts": {SchemeSSH},
-	"hostkey":     {SchemeSSH},
+	"hostkey":     {SchemeSSH, SchemeGCP},
 	"ssh_config":  {SchemeSSH},
 	"region":      {SchemeAWS},
 	"shim":        {SchemeAWS},
 	"capacity":    {SchemeAWS},
-	"idle":        {SchemeAWS},
+	"idle":        {SchemeAWS, SchemeGCP},
 	"version":     {SchemeAWS},
+	"project":     {SchemeGCP},
+	"zone":        {SchemeGCP},
 }
 
 // acquisitionKeys are the options that describe how a machine is BROUGHT INTO
@@ -343,6 +373,8 @@ func applyScheme(worker Worker, parsed *url.URL) (Worker, error) {
 	switch worker.Scheme {
 	case SchemeAWS:
 		return applyAWS(worker, parsed)
+	case SchemeGCP:
+		return applyGCP(worker, parsed)
 	case SchemeSSH:
 		if parsed.Host == "" {
 			return Worker{}, fmt.Errorf("%w %q: ssh needs a host, as in ssh://user@box", ErrWorker, worker.URL)
@@ -366,7 +398,7 @@ func applyScheme(worker Worker, parsed *url.URL) (Worker, error) {
 
 		return worker, nil
 	default:
-		return Worker{}, fmt.Errorf("%w %q: unknown scheme %q, want local:, ssh:// or aws://", ErrWorker, worker.URL, parsed.Scheme)
+		return Worker{}, fmt.Errorf("%w %q: unknown scheme %q, want local:, ssh://, aws:// or gcp://", ErrWorker, worker.URL, parsed.Scheme)
 	}
 }
 
@@ -384,17 +416,19 @@ func (w Worker) Address() string {
 		return "local:"
 	}
 
-	if w.Scheme == SchemeAWS {
+	if w.Scheme == SchemeAWS || w.Scheme == SchemeGCP {
 		// The rung is part of the address: a machine that was launched for
 		// this job is a different fact about where a step ran than one that
 		// was already up, and the run record has to be able to say which.
+		prefix := string(w.Scheme) + "://"
+
 		switch w.Rung {
 		case RungLaunch:
-			return "aws://launch/" + w.Template + w.Root
+			return prefix + "launch/" + w.Template + w.Root
 		case RungStopped:
-			return "aws://stopped/" + w.Instance + w.Root
+			return prefix + "stopped/" + w.Instance + w.Root
 		case RungStatic:
-			return "aws://" + w.Instance + w.Root
+			return prefix + w.Instance + w.Root
 		}
 	}
 
