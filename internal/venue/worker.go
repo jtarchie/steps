@@ -98,9 +98,6 @@ type Worker struct {
 	// started it, for an operator who wants back-to-back jobs to skip the
 	// cold start and accepts that the releasing job waits out the window.
 	Idle time.Duration
-	// IdleSet distinguishes ?idle= being given from the default, so a rung
-	// the option cannot describe can refuse it.
-	IdleSet bool
 	// Region overrides the ambient AWS region for an aws:// worker.
 	Region string
 	// Project is the GCP project a gcp:// worker lives in. Empty falls back
@@ -219,7 +216,6 @@ func applyQuery(worker Worker, parsed *url.URL) (Worker, error) {
 	worker.Region = query.Get("region")
 	worker.Shim = query.Get("shim")
 	worker.Capacity = Capacity(query.Get("capacity"))
-	worker.IdleSet = query.Has("idle")
 	worker.Project = query.Get("project")
 	worker.Zone = query.Get("zone")
 
@@ -228,7 +224,7 @@ func applyQuery(worker Worker, parsed *url.URL) (Worker, error) {
 		return Worker{}, err
 	}
 
-	worker.Idle, err = parseIdle(worker, query.Get("idle"))
+	worker.Idle, err = parseIdle(worker, query)
 	if err != nil {
 		return Worker{}, err
 	}
@@ -330,12 +326,13 @@ func parseTemplateVersion(worker Worker, query url.Values) (string, error) {
 // scheme-local copy is one a new scheme forgets, and an idle= that parses
 // clean and silently never applies is exactly the mapping-that-LOOKS-
 // configured the grammar exists to refuse.
-func parseIdle(worker Worker, raw string) (time.Duration, error) {
-	if worker.IdleSet && worker.Rung != RungStopped {
+func parseIdle(worker Worker, query url.Values) (time.Duration, error) {
+	if query.Has("idle") && worker.Rung != RungStopped {
 		return 0, fmt.Errorf("%w %q: idle= describes how long a PARKED machine stays warm, and this worker is not on the stopped rung",
 			ErrWorker, worker.URL)
 	}
 
+	raw := query.Get("idle")
 	if raw == "" {
 		return defaultIdle, nil
 	}

@@ -233,13 +233,13 @@ func TestRealGCPParkedRungStartsAndStops(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
-	gcloudCLI(ctx, t, fixture, "compute", "instances", "stop", fixture.instance)
-
-	// Registered before anything can Fatalf: this test parks the SHARED
-	// fixture instance, and every other real test needs it RUNNING — a
-	// failure between the stop and an inline courtesy restart would strand
-	// it parked, making every later test's 4-minute relay wait end in a
-	// firewall-blaming message about a firewall that was never wrong.
+	// Registered BEFORE the stop, not after: gcloudCLI Fatalf's on a nonzero
+	// exit, and `instances stop` can be accepted and then report one — so a
+	// cleanup registered afterwards never runs for the very failure it
+	// exists to cover. This test parks the SHARED fixture instance, and every
+	// other real test needs it RUNNING; strand it parked and every later
+	// test's 4-minute relay wait ends in a firewall-blaming message about a
+	// firewall that was never wrong.
 	t.Cleanup(func() {
 		restartCtx, restartCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer restartCancel()
@@ -250,6 +250,8 @@ func TestRealGCPParkedRungStartsAndStops(t *testing.T) {
 			t.Errorf("restarting the shared fixture instance: %v\n%s — later real tests will fail until it is started by hand", restartErr, out)
 		}
 	})
+
+	gcloudCLI(ctx, t, fixture, "compute", "instances", "stop", fixture.instance)
 
 	worker, err := ParseWorker("gcp://stopped/" + fixture.instance + "/var/tmp/steps?idle=0&" + fixture.options())
 	if err != nil {

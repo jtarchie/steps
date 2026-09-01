@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/api/compute/v1"
@@ -68,14 +69,38 @@ var errGuestAttributesDisabled = errors.New("guest attributes are disabled on th
 //
 //nolint:gochecknoglobals // a test seam for a control plane, documented above
 var gceFor = func(ctx context.Context, worker Worker) (gceAPI, error) {
-	service, err := compute.NewService(ctx)
+	gceServiceMu.Lock()
+	defer gceServiceMu.Unlock()
+
+	if gceService != nil {
+		return &gceClient{service: gceService}, nil
+	}
+
+	// Not the caller's context, for the reason gcpToken gives: the service
+	// carries its own token source, and a refresh an hour from now must not
+	// fail because the step that happened to build it was cancelled.
+	service, err := compute.NewService(context.WithoutCancel(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("%w %q: no GCP credentials (log in with `gcloud auth application-default login`): %w",
 			ErrWorker, worker.URL, err)
 	}
 
+	gceService = service
+
 	return &gceClient{service: service}, nil
 }
+
+// gceService is the process's Compute Engine client, resolved once and cached
+// only on success. A session is dialled per STEP, so without this every
+// placed step re-read the credentials, re-minted a token and opened a fresh
+// connection pool — the same cost artifactStores caches away for the data
+// plane. Nothing about the client is worker-specific, so one serves them all.
+//
+//nolint:gochecknoglobals // one credential resolution per process, documented above
+var (
+	gceServiceMu sync.Mutex
+	gceService   *compute.Service
+)
 
 // gceClient adapts the generated compute client to gceAPI.
 type gceClient struct {
@@ -354,7 +379,12 @@ func (c *gceClient) GuestAttributes(ctx context.Context, project, zone, name, pa
 	if err != nil {
 		switch {
 		case isGoogleAPIStatus(err, 403):
-			return nil, fmt.Errorf("%w: %s", errGuestAttributesDisabled, name)
+			// 403 is also how the API answers a caller without
+			// compute.instances.getGuestAttributes, so the API's own message
+			// travels: it is the only thing that tells the two apart, and
+			// discarding it sends an operator to edit a template that was
+			// already correct.
+			return nil, fmt.Errorf("%w: %s: %w", errGuestAttributesDisabled, name, err)
 		case isGoogleAPIStatus(err, 404):
 			// The namespace does not exist yet: the agent has not published.
 			return map[string]string{}, nil
@@ -427,6 +457,12 @@ func gceStartParked(ctx context.Context, api gceAPI, worker Worker, project, zon
 
 	err = api.Start(ctx, project, zone, worker.Instance)
 	if err != nil {
+		// Start is two-phased like the insert is — the call is ACCEPTED
+		// before its operation is waited out — so an error here can be a
+		// machine that is already booting, which nothing later would stop.
+		//nolint:contextcheck // deliberately not the caller's context: its being cancelled is the likeliest reason to be here
+		gceStopInstance(api, worker, project, zone, worker.Instance)
+
 		return Worker{}, nil, fmt.Errorf("starting %s for %q: %w", worker.Instance, worker.URL, err)
 	}
 

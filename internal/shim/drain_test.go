@@ -7,11 +7,15 @@ package shim
 // reading each one's notice.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/wire"
 )
 
 // swapMetadataBase points the watcher at a stand-in metadata service.
@@ -286,5 +290,101 @@ func TestCloudNoticeRoutesEachCloud(t *testing.T) {
 	notice, terminal = cloudNotice(context.Background(), drainClient(), cloudEC2)
 	if !terminal || notice.Reason != "EC2 spot terminate" || notice.Deadline != "2030-01-01T00:00:00Z" {
 		t.Fatalf("cloudNotice(EC2) = %+v, %v", notice, terminal)
+	}
+}
+
+// TestPollDrainRelaysANoticeAcrossTheWire crosses the seam the rest of this
+// file stops short of. Detection, settling and each cloud's notice reader all
+// had tests; the function that puts them together and WRITES the frame had
+// none, so deleting the send — the whole point of the watcher — shipped green.
+func TestPollDrainRelaysANoticeAcrossTheWire(t *testing.T) {
+	fakeGCEMetadata(t, "TRUE")
+
+	var out bytes.Buffer
+
+	s := &session{encoder: wire.NewEncoder(&out)}
+	cloud := cloudUnknown
+
+	done, sent := s.pollDrain(context.Background(), drainClient(), false, &cloud)
+	if !done || sent {
+		t.Fatalf("pollDrain = done %v, sent %v — a preemption is terminal, said once", done, sent)
+	}
+
+	if cloud != cloudGCE {
+		t.Errorf("cloud = %v, want the probe to have settled on GCE", cloud)
+	}
+
+	frame, err := wire.NewDecoder(&out).Read()
+	if err != nil {
+		t.Fatalf("nothing was written for a preempted machine: %v", err)
+	}
+
+	if frame.Type != wire.FrameDraining || frame.Op != wire.DrainOp {
+		t.Fatalf("frame = %v/%d, want a draining frame", frame.Type, frame.Op)
+	}
+
+	var notice wire.Draining
+
+	err = json.Unmarshal(frame.Payload, &notice)
+	if err != nil {
+		t.Fatalf("decoding the notice: %v", err)
+	}
+
+	if !notice.Terminal || notice.Reason == "" {
+		t.Errorf("notice = %+v, want a terminal one naming the reason", notice)
+	}
+}
+
+// TestPollDrainStopsForGoodOffCloud is the other exit: nothing answers, so
+// the watcher can never have a notice and must not spend a timeout per tick
+// for the life of the session.
+func TestPollDrainStopsForGoodOffCloud(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	server.Close()
+	swapMetadataBase(t, server.URL)
+
+	var out bytes.Buffer
+
+	s := &session{encoder: wire.NewEncoder(&out)}
+	cloud := cloudUnknown
+
+	done, sent := s.pollDrain(context.Background(), drainClient(), false, &cloud)
+	if !done || sent {
+		t.Fatalf("pollDrain = done %v, sent %v — want the watcher retired with nothing said", done, sent)
+	}
+
+	if out.Len() != 0 {
+		t.Errorf("wrote %d bytes off-cloud, want a notice fabricated from nothing to be impossible", out.Len())
+	}
+}
+
+// TestDetectCloudSettlesEC2WithoutAToken is the case a token-only claim
+// strands: an EC2 instance whose /latest/api/token PUT is refused while the
+// v1 GETs still work. Unidentified, its spot reclamation is never read and
+// never relayed, so the machine's death arrives as a lost connection instead
+// of an eviction — and GCE cannot be mistaken for it, because GCE serves no
+// path under /latest/ at all.
+func TestDetectCloudSettlesEC2WithoutAToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodPut && req.URL.Path == "/latest/api/token" {
+			http.Error(w, "IMDSv2 is not available here", http.StatusForbidden)
+
+			return
+		}
+
+		if req.URL.Path == "/latest/meta-data/instance-id" {
+			_, _ = w.Write([]byte("i-0abc123def456789"))
+
+			return
+		}
+
+		http.NotFound(w, req)
+	}))
+	t.Cleanup(server.Close)
+	swapMetadataBase(t, server.URL)
+
+	cloud, answered := detectCloud(context.Background(), drainClient())
+	if !answered || cloud != cloudEC2 {
+		t.Fatalf("detectCloud = %v, %v — want EC2, settled, from the v1 tree alone", cloud, answered)
 	}
 }

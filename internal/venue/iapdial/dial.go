@@ -50,11 +50,16 @@ func Open(ctx context.Context, connectURL, token string) (*Channel, error) {
 	header.Set("Authorization", "Bearer "+token)
 
 	conn, response, err := dialer.DialContext(ctx, connectURL, header)
-	if err != nil {
+
+	// Deferred rather than closed on each path: only the status is ever read,
+	// and a third early return between the paths would otherwise leak.
+	defer func() {
 		if response != nil && response.Body != nil {
 			_ = response.Body.Close()
 		}
+	}()
 
+	if err != nil {
 		// The relay answers a principal it will not carry with a plain HTTP
 		// status before any websocket exists, and the status alone reads as a
 		// transport hiccup rather than the IAM answer it is.
@@ -63,10 +68,6 @@ func Open(ctx context.Context, connectURL, token string) (*Channel, error) {
 		}
 
 		return nil, fmt.Errorf("dialling the IAP relay: %w", err)
-	}
-
-	if response != nil && response.Body != nil {
-		_ = response.Body.Close()
 	}
 
 	// Bounded before the first read, not after: a frame over the limit fails

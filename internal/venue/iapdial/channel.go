@@ -374,9 +374,11 @@ func (c *Channel) isConnected() bool {
 	}
 }
 
-// SessionID is the relay's identifier for this session, for an error message
-// that has to name it.
-func (c *Channel) SessionID() []byte {
+// sessionID is the relay identifier this channel was handed. Unexported
+// because nothing outside the package names it: it exists so the tests can
+// prove connectSuccess reads a LENGTH-PREFIXED string rather than the bare
+// uint64 two community clients misread it as.
+func (c *Channel) sessionID() []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

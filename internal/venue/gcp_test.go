@@ -8,6 +8,9 @@ package venue
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
@@ -45,6 +48,7 @@ type fakeGCE struct {
 	attributesBlips    int
 	attributesDisabled bool
 	insertErr          error
+	startErr           error
 }
 
 func (f *fakeGCE) InsertFromTemplate(_ context.Context, _, _, name, template string) error {
@@ -66,7 +70,7 @@ func (f *fakeGCE) Start(_ context.Context, _, _, name string) error {
 
 	f.starts = append(f.starts, name)
 
-	return nil
+	return f.startErr
 }
 
 func (f *fakeGCE) Stop(_ context.Context, _, _, name string) error {
@@ -150,7 +154,7 @@ func newGCPSSHD(t *testing.T) *testSSHD {
 // newGCPSSHDRejectingFirst refuses the first n authentication attempts the
 // way a guest agent that has not yet applied a freshly-installed metadata
 // key does, then accepts — the propagation window the dial must wait out.
-func newGCPSSHDRejectingFirst(t *testing.T, n int) *testSSHD {
+func newGCPSSHDRejectingFirst(t *testing.T, n int, configure ...func(*testing.T, *ssh.ServerConfig)) *testSSHD {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -189,6 +193,10 @@ func newGCPSSHDRejectingFirst(t *testing.T, n int) *testSSHD {
 	}
 	config.AddHostKey(hostSigner)
 
+	for _, apply := range configure {
+		apply(t, config)
+	}
+
 	var listenConfig net.ListenConfig
 
 	server.listener, err = listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -209,6 +217,24 @@ func newGCPSSHDRejectingFirst(t *testing.T, n int) *testSSHD {
 	return server
 }
 
+// addECDSAHostKey gives a test sshd a SECOND host key of a type the client
+// prefers over ed25519, so the negotiation has a real choice to get wrong.
+func addECDSAHostKey(t *testing.T, config *ssh.ServerConfig) {
+	t.Helper()
+
+	private, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generating an ECDSA host key: %v", err)
+	}
+
+	signer, err := ssh.NewSignerFromKey(private)
+	if err != nil {
+		t.Fatalf("building an ECDSA signer: %v", err)
+	}
+
+	config.AddHostKey(signer)
+}
+
 // hostKeyAttributes is the sshd's host key in the shape the guest agent
 // publishes: the hostkeys/ namespace, keyed by algorithm.
 func hostKeyAttributes(t *testing.T, pub ssh.PublicKey) map[string]string {
@@ -224,20 +250,51 @@ func hostKeyAttributes(t *testing.T, pub ssh.PublicKey) map[string]string {
 	return map[string]string{keyType: value}
 }
 
+// dialedTargets records what the tunnel was actually ASKED to reach. It is
+// the one hop that carries the resolved machine out of the acquisition and
+// into the transport, and a stub that discards it lets the launch rung dial
+// a template name — or nothing — with the whole suite still green.
+type dialedTargets struct {
+	mu      sync.Mutex
+	targets []iapdial.Target
+}
+
+func (d *dialedTargets) record(target iapdial.Target) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.targets = append(d.targets, target)
+}
+
+func (d *dialedTargets) last(t *testing.T) iapdial.Target {
+	t.Helper()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if len(d.targets) == 0 {
+		t.Fatal("nothing was dialled through the relay")
+	}
+
+	return d.targets[len(d.targets)-1]
+}
+
 // seamGCP points gcp:// dials at the fake control plane and the local sshd,
 // with only Google itself replaced.
-func seamGCP(t *testing.T, fake *fakeGCE, sshd *testSSHD) {
+func seamGCP(t *testing.T, fake *fakeGCE, sshd *testSSHD) *dialedTargets {
 	t.Helper()
 
 	if fake.hostKeys == nil && sshd != nil {
 		fake.hostKeys = hostKeyAttributes(t, sshd.HostKey)
 	}
 
+	dialed := &dialedTargets{}
 	previousFor, previousToken, previousOpen := gceFor, gcpToken, iapOpen
 
 	gceFor = func(context.Context, Worker) (gceAPI, error) { return fake, nil }
 	gcpToken = func(context.Context) (string, error) { return "test-token", nil }
-	iapOpen = func(ctx context.Context, _ iapdial.Target, token string) (net.Conn, error) {
+	iapOpen = func(ctx context.Context, target iapdial.Target, token string) (net.Conn, error) {
+		dialed.record(target)
+
 		if token != "test-token" {
 			return nil, fmt.Errorf("the dial carried token %q", token)
 		}
@@ -259,6 +316,8 @@ func seamGCP(t *testing.T, fake *fakeGCE, sshd *testSSHD) {
 	})
 
 	t.Cleanup(func() { gceFor, gcpToken, iapOpen = previousFor, previousToken, previousOpen })
+
+	return dialed
 }
 
 // shrinkGCPWaits makes the boot waits testable: the branches worth proving
@@ -478,6 +537,49 @@ func TestGCPWrongHostKeyIsRefused(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "guest attributes") {
 		t.Errorf("error = %v, want the attestation mismatch named", err)
+	}
+}
+
+// TestGCPLaunchRungDialsTheMachineItAcquired crosses the seam the rest of
+// this file stubs over. Acquisition resolves a template into a created
+// instance name; the tunnel is a separate call that takes a Target — and
+// every other test discards it, so a dial that asked the relay for the
+// TEMPLATE name, or for an empty instance, would pass all of them. This is
+// the shape that already shipped once: the launch rung never dialing the
+// machine it acquired.
+func TestGCPLaunchRungDialsTheMachineItAcquired(t *testing.T) {
+	shrinkGCPWaits(t)
+
+	sshd := newGCPSSHD(t)
+	fake := &fakeGCE{}
+	dialed := seamGCP(t, fake, sshd)
+
+	worker, err := ParseWorker("gcp://launch/steps-workers" + sshd.Root + "?project=test-project&zone=us-central1-a")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	resolved, release, err := acquire(context.Background(), worker)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+
+	defer func() { _ = release(context.Background(), true) }()
+
+	tunnel, err := dialGCP(context.Background(), resolved)
+	if err != nil {
+		t.Fatalf("dialGCP on the acquired worker: %v", err)
+	}
+
+	_ = tunnel.close(context.Background())
+
+	fake.mu.Lock()
+	created := strings.TrimPrefix(fake.inserts[0], "steps-workers->")
+	fake.mu.Unlock()
+
+	want := iapdial.Target{Project: "test-project", Zone: "us-central1-a", Instance: created, Port: 22}
+	if got := dialed.last(t); got != want {
+		t.Errorf("the relay was asked for %+v, want the machine that was created: %+v", got, want)
 	}
 }
 
@@ -966,6 +1068,33 @@ func TestGCPParkedRungWaitsOutAnUnfinishedStop(t *testing.T) {
 	}
 }
 
+// TestGCPParkedRungStopsAnInstanceItsStartLeftBooting pins the give-back on
+// the one two-phased call that had none. Start is ACCEPTED before its zone
+// operation is waited out, so an error can mean a machine that is already on
+// its way up — and a failed acquire records no release, so nothing later
+// would ever stop it.
+func TestGCPParkedRungStopsAnInstanceItsStartLeftBooting(t *testing.T) {
+	fake := &fakeGCE{statuses: []string{"TERMINATED"}, startErr: errors.New("scripted: the start operation was cancelled mid-wait")}
+	seamGCP(t, fake, nil)
+
+	worker, err := ParseWorker("gcp://stopped/worker-1?project=test-project&zone=us-central1-a")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	_, _, err = acquire(context.Background(), worker)
+	if err == nil {
+		t.Fatal("acquire succeeded, but the start failed")
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.stops) != 1 {
+		t.Errorf("stops = %v, want the booting machine stopped — nothing else ever will", fake.stops)
+	}
+}
+
 // TestGCPLaunchVanishedInstanceFailsFast pins the seen latch: a 404 AFTER
 // the instance has been sighted is a deletion (a preempted spot instance
 // whose template says DELETE), not replica lag, and must not spend the whole
@@ -1070,6 +1199,96 @@ func TestGCPAuthFailureInvalidatesTheInstallCache(t *testing.T) {
 
 	if _, ok := gcpInstalled.Load("test-project/us-central1-a/worker-1"); ok {
 		t.Error("the install cache still trusts an instance that refused the key — a recreated machine stays undialable")
+	}
+}
+
+// TestGCPNonAuthFailureAfterARefusalInvalidatesTheInstallCache pins the
+// third failing exit. The refusal path and the deadline path both drop the
+// install cache; the "this was not an authentication error" return did not,
+// so an auth refusal followed by a dropped handshake — sshd restarting, a
+// reset mid-KEX — left the entry behind, and gcpEnsureKey then skipped the
+// metadata write for six hours against a machine that never got the key.
+func TestGCPNonAuthFailureAfterARefusalInvalidatesTheInstallCache(t *testing.T) {
+	shrinkGCPWaits(t)
+
+	sshd := newGCPSSHDRejectingFirst(t, 1<<30)
+	fake := &fakeGCE{}
+	seamGCP(t, fake, sshd)
+
+	// A listener that accepts and hangs up: the handshake dies with EOF,
+	// which is not an authentication refusal and so takes the third exit.
+	var listenConfig net.ListenConfig
+
+	dead, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+
+	t.Cleanup(func() { _ = dead.Close() })
+
+	go func() {
+		for {
+			conn, err := dead.Accept()
+			if err != nil {
+				return
+			}
+
+			_ = conn.Close()
+		}
+	}()
+
+	var dials atomic.Int64
+
+	innerOpen := iapOpen
+	iapOpen = func(ctx context.Context, target iapdial.Target, token string) (net.Conn, error) {
+		if dials.Add(1) == 1 {
+			return innerOpen(ctx, target, token)
+		}
+
+		return (&net.Dialer{}).DialContext(ctx, "tcp", dead.Addr().String())
+	}
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locating the test binary: %v", err)
+	}
+
+	worker, err := ParseWorker("gcp://worker-1" + sshd.Root + "?project=test-project&zone=us-central1-a&binary=" + self)
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	_, err = dialGCP(context.Background(), worker)
+	if err == nil {
+		t.Fatal("dialGCP succeeded against a hung-up handshake")
+	}
+
+	if _, ok := gcpInstalled.Load("test-project/us-central1-a/worker-1"); ok {
+		t.Error("the install cache survived a refusal, so the next dial skips the key write a recreated machine needs")
+	}
+}
+
+// TestGCPDialNegotiatesOnlyAttestedHostKeyAlgorithms pins the narrowing.
+// An instance publishes its host keys one at a time, so a poll during boot
+// can see one of several — and a client left to its own preference order
+// then negotiates an algorithm nothing attested. That reads as an impostor,
+// which gcpConnect treats as final, so a launch rung deletes a healthy
+// machine over a key that simply had not landed yet.
+func TestGCPDialNegotiatesOnlyAttestedHostKeyAlgorithms(t *testing.T) {
+	shrinkGCPWaits(t)
+
+	// The server offers ECDSA and ed25519; the client prefers ECDSA. Only
+	// the ed25519 key is attested, so a dial that does not narrow the
+	// negotiation is handed a key the attestation cannot match.
+	sshd := newGCPSSHDRejectingFirst(t, 0, addECDSAHostKey)
+	fake := &fakeGCE{hostKeys: hostKeyAttributes(t, sshd.HostKey)}
+	seamGCP(t, fake, sshd)
+
+	runner := newLocalRunner(t, localGCPWorker(t, sshd, t.TempDir()))
+
+	err := runner.Run(context.Background(), "true")
+	if err != nil {
+		t.Fatalf("Run against a partially-attested instance: %v", err)
 	}
 }
 

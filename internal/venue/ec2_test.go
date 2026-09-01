@@ -26,6 +26,10 @@ type fakeEC2 struct {
 	// before the instance becomes visible — a fleet's instance is not in
 	// DescribeInstances the moment CreateFleet returns its id.
 	notFoundBefore int
+	// stoppingBefore is how many describes report "stopping" before anything
+	// else, standing in for a previous job's park still settling: the release
+	// returns once StopInstances is ACCEPTED.
+	stoppingBefore int
 	// stoppedBefore is how many describes still report "stopped" after a
 	// start, standing in for EC2's read-after-write lag: DescribeInstances
 	// answers from a replica that has not seen the StartInstances yet.
@@ -43,8 +47,12 @@ type fakeEC2 struct {
 	started    []string
 	stopped    []string
 	terminated []string
-	describes  int
-	fleets     []*ec2.CreateFleetInput
+	// describes counts from the acquisition action, so a post-action script
+	// says what the START looks like; probes counts every describe ever,
+	// which is what an unsettled stop is scripted against.
+	describes int
+	probes    int
+	fleets    []*ec2.CreateFleetInput
 }
 
 func (f *fakeEC2) StartInstances(_ context.Context, in *ec2.StartInstancesInput, _ ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error) {
@@ -52,6 +60,7 @@ func (f *fakeEC2) StartInstances(_ context.Context, in *ec2.StartInstancesInput,
 	defer f.mu.Unlock()
 
 	f.started = append(f.started, in.InstanceIds...)
+	f.describes = 0
 
 	return &ec2.StartInstancesOutput{}, nil
 }
@@ -78,7 +87,24 @@ func (f *fakeEC2) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesI
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	f.probes++
 	f.describes++
+
+	// A machine still on its way down answers "stopping" however it is asked,
+	// and a start does not change that — which is the whole reason the parked
+	// rung has to wait the stop out before starting. Counted from the very
+	// first describe, so skipping the wait is VISIBLE rather than merely
+	// unscripted.
+	if f.probes <= f.stoppingBefore {
+		return describeOne(ec2types.InstanceStateNameStopping)
+	}
+
+	// Before any acquisition action, this is a machine at rest with its park
+	// settled. Not counted against the scripts below — those say what happens
+	// after the start, and a probe that precedes it must not consume a step.
+	if len(f.started) == 0 && len(f.fleets) == 0 {
+		return describeOne(ec2types.InstanceStateNameStopped)
+	}
 
 	if f.describes <= f.notFoundBefore {
 		return nil, &smithy.GenericAPIError{
@@ -100,6 +126,11 @@ func (f *fakeEC2) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesI
 		state = f.endState
 	}
 
+	return describeOne(state)
+}
+
+// describeOne is a describe response naming one instance in one state.
+func describeOne(state ec2types.InstanceStateName) (*ec2.DescribeInstancesOutput, error) {
 	return &ec2.DescribeInstancesOutput{
 		Reservations: []ec2types.Reservation{{
 			Instances: []ec2types.Instance{{State: &ec2types.InstanceState{Name: state}}},
@@ -681,6 +712,39 @@ func TestLeaseWaitsOutTheStoppedStateAfterStarting(t *testing.T) {
 
 	if len(fake.stopped) != 0 {
 		t.Errorf("stopped = %v, want the machine it just started left running", fake.stopped)
+	}
+}
+
+// TestParkedRungWaitsOutAnUnfinishedStop is the window BEFORE the start.
+// The release returns once StopInstances is accepted, so back-to-back serial
+// jobs on one parked worker find the instance still "stopping" — a state EC2
+// refuses to start from, and one arrivedOrDead reads as terminal, so the
+// acquisition would fail and then stop the machine the next job wanted.
+func TestParkedRungWaitsOutAnUnfinishedStop(t *testing.T) {
+	fake := &fakeEC2{stoppingBefore: 1}
+	seamEC2(t, fake)
+
+	worker, err := ParseWorker("aws://stopped/i-0abc123def456789?idle=0")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	resolved, release, err := acquire(context.Background(), worker)
+	if err != nil {
+		t.Fatalf("acquire through an unfinished stop: %v", err)
+	}
+
+	_ = release(context.Background(), true)
+
+	if resolved.Instance != "i-0abc123def456789" {
+		t.Errorf("resolved instance = %q, want the parked one", resolved.Instance)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.started) != 1 {
+		t.Errorf("started = %v, want exactly one, after the stop settled", fake.started)
 	}
 }
 

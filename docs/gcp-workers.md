@@ -67,10 +67,16 @@ Each flag is a decision:
 
 ```bash
 gcloud compute instances create "$NAME" \
-  --zone="$ZONE" --source-instance-template="$NAME"
+  --zone="$ZONE" \
+  --machine-type=e2-small \
+  --image-family=debian-12 --image-project=debian-cloud \
+  --no-service-account --no-scopes \
+  --no-address \
+  --tags="$NAME" \
+  --metadata=enable-guest-attributes=TRUE,enable-oslogin=FALSE
 ```
 
-One machine from the template — the **static** worker, one you own and steps merely dials. (For a personal box you may want a second template without `--provisioning-model=SPOT`; a spot instance can be taken while you are using it.)
+One machine you own and steps merely dials — the **static** worker. Deliberately **not** `--source-instance-template="$NAME"`: that template is `SPOT` with `--instance-termination-action=DELETE`, so a machine built from it can be reclaimed and *destroyed* mid-run — and the static rung acquires nothing, so there is no re-placement to fall back on. Spot belongs on the rungs that own the machine's whole life (`gcp://stopped/`, `gcp://launch/`), where an eviction is a re-placement rather than a worker that stopped existing.
 
 ## 4. The worker's binary
 

@@ -154,7 +154,17 @@ func acquireEC2(ctx context.Context, worker Worker) (Worker, func(context.Contex
 // startParked starts a stopped instance and parks it again when the job is
 // done with it.
 func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(context.Context, bool) error, error) {
-	_, err := api.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: []string{worker.Instance}})
+	// A previous job's park may still be settling: release returns once
+	// StopInstances is ACCEPTED, and EC2 refuses a start against an instance
+	// that is still `stopping`. Back-to-back serial jobs on one parked worker
+	// hit this window every time, so wait it out first — the same reason
+	// gceStartParked opens with gceAwaitParkComplete.
+	err := awaitParkComplete(ctx, api, worker)
+	if err != nil {
+		return Worker{}, nil, err
+	}
+
+	_, err = api.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: []string{worker.Instance}})
 	if err != nil {
 		return Worker{}, nil, fmt.Errorf("starting %s for %q: %w", worker.Instance, worker.URL, err)
 	}
@@ -425,6 +435,42 @@ func waitForRunning(ctx context.Context, api ec2API, worker Worker, instance str
 		}
 
 		err = awaitTick(deadline, ticker, worker, instance)
+		if err != nil {
+			return err
+		}
+	}
+}
+
+// awaitParkComplete waits out an in-flight stop, so StartInstances acts on a
+// machine that has finished parking rather than one still on its way down.
+func awaitParkComplete(ctx context.Context, api ec2API, worker Worker) error {
+	deadline, cancel := context.WithTimeout(ctx, acquireTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(acquirePoll)
+	defer ticker.Stop()
+
+	for {
+		out, err := api.DescribeInstances(deadline, &ec2.DescribeInstancesInput{InstanceIds: []string{worker.Instance}})
+		if err != nil {
+			err = waitOutInvisible(deadline, ticker, worker, worker.Instance, err)
+			if err != nil {
+				return err
+			}
+
+			continue
+		}
+
+		switch instanceState(out) {
+		case ec2types.InstanceStateNameStopping, ec2types.InstanceStateNameShuttingDown:
+		case ec2types.InstanceStateNamePending, ec2types.InstanceStateNameRunning,
+			ec2types.InstanceStateNameStopped, ec2types.InstanceStateNameTerminated:
+			// Settled, one way or the other: whether starting it can work is
+			// the next call's answer, not this one's.
+			return nil
+		}
+
+		err = awaitTick(deadline, ticker, worker, worker.Instance)
 		if err != nil {
 			return err
 		}

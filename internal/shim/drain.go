@@ -176,20 +176,36 @@ func settleCloud(ctx context.Context, client *http.Client, cloud *metadataCloud)
 // identifying itself.
 //
 // GCE first, because its answer is the stronger claim: the response carries
-// a Metadata-Flavor header nothing else sends. EC2 is claimed only by the
-// token handshake GRANTING a token — merely answering is not enough, since
-// GCE answers the same PUT too, with a 404.
+// a Metadata-Flavor header nothing else sends. EC2 is claimed by the token
+// handshake GRANTING a token — merely answering is not enough, since GCE
+// answers the same PUT too, with a 404 — or, for an instance whose token PUT
+// is refused while v1 GETs still work, by the /latest/ tree answering at all,
+// which GCE 404s. Both are positive claims; neither settles on a bare answer,
+// because doing so would disarm the watch on a GCE machine mid-blip.
 func detectCloud(ctx context.Context, client *http.Client) (metadataCloud, bool) {
 	if gceReachable(ctx, client) {
 		return cloudGCE, true
 	}
 
 	token, reachable := imdsToken(ctx, client)
-	if reachable && token != "" {
+	if !reachable {
+		return cloudUnknown, false
+	}
+
+	if token != "" || ec2Reachable(ctx, client, token) {
 		return cloudEC2, true
 	}
 
-	return cloudUnknown, reachable
+	return cloudUnknown, true
+}
+
+// ec2Reachable reports whether the IMDS /latest/ tree answers, which is the
+// EC2 claim left when the v2 token handshake grants nothing. GCE serves no
+// path under /latest/, so an answer here is as identifying as a token.
+func ec2Reachable(ctx context.Context, client *http.Client, token string) bool {
+	_, ok := imdsGet(ctx, client, token, "/latest/meta-data/instance-id")
+
+	return ok
 }
 
 // cloudNotice asks the settled cloud whether this machine is being taken.
@@ -211,23 +227,9 @@ func cloudNotice(ctx context.Context, client *http.Client, cloud metadataCloud) 
 // Metadata-Flavor response header is required, not just a 200: the same
 // address on EC2 answers requests too, with different content.
 func gceReachable(ctx context.Context, client *http.Client) bool {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataBase+"/computeMetadata/v1/instance/id", nil)
-	if err != nil {
-		return false
-	}
+	_, header, ok := metadataGet(ctx, client, "/computeMetadata/v1/instance/id", "Metadata-Flavor", "Google")
 
-	request.Header.Set("Metadata-Flavor", "Google")
-
-	response, err := client.Do(request)
-	if err != nil {
-		return false
-	}
-
-	defer func() { _ = response.Body.Close() }()
-
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxMetadataBytes))
-
-	return response.StatusCode == http.StatusOK && response.Header.Get("Metadata-Flavor") == "Google"
+	return ok && header.Get("Metadata-Flavor") == "Google"
 }
 
 // gceNotice asks whether this instance is being taken.
@@ -264,7 +266,9 @@ func gceNotice(ctx context.Context, client *http.Client) (wire.Draining, bool) {
 // gceValue reads one GCE metadata path. Absence, emptiness and errors all
 // report not-ok — the same no-fabricated-notices rule imdsGet holds.
 func gceValue(ctx context.Context, client *http.Client, path string) (string, bool) {
-	return metadataGet(ctx, client, path, "Metadata-Flavor", "Google")
+	value, _, ok := metadataGet(ctx, client, path, "Metadata-Flavor", "Google")
+
+	return value, ok
 }
 
 // metadataGet reads one metadata path, for either cloud — the same request,
@@ -272,10 +276,13 @@ func gceValue(ctx context.Context, client *http.Client, path string) (string, bo
 // header differs, and an empty header value sends none at all. Absence, a
 // non-200, an empty body and errors all report not-ok: a fabricated notice
 // terminates a healthy machine.
-func metadataGet(ctx context.Context, client *http.Client, path, header, headerValue string) (string, bool) {
+//
+// The response headers come back because identifying GCE needs one: a 200 is
+// not the claim, the Metadata-Flavor it answers with is.
+func metadataGet(ctx context.Context, client *http.Client, path, header, headerValue string) (string, http.Header, bool) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataBase+path, nil)
 	if err != nil {
-		return "", false
+		return "", nil, false
 	}
 
 	if headerValue != "" {
@@ -284,26 +291,26 @@ func metadataGet(ctx context.Context, client *http.Client, path, header, headerV
 
 	response, err := client.Do(request)
 	if err != nil {
-		return "", false
+		return "", nil, false
 	}
 
 	defer func() { _ = response.Body.Close() }()
 
 	if response.StatusCode != http.StatusOK {
-		return "", false
+		return "", response.Header, false
 	}
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxMetadataBytes))
 	if err != nil {
-		return "", false
+		return "", response.Header, false
 	}
 
 	value := strings.TrimSpace(string(body))
 	if value == "" {
-		return "", false
+		return "", response.Header, false
 	}
 
-	return value, true
+	return value, response.Header, true
 }
 
 // imdsToken fetches an IMDSv2 session token, reporting whether the metadata
@@ -384,7 +391,10 @@ func spotNotice(ctx context.Context, client *http.Client, token string) (wire.Dr
 // imdsGet reads one metadata path. A 404 is the ordinary answer — it is how
 // the service says "no notice" — so absence is reported as not-ok rather than
 // as an error. An empty token sends no header, for the v1-allowed instance
-// that never granted one.
+// whose token PUT is refused — the case detectCloud identifies through the
+// /latest/ tree instead.
 func imdsGet(ctx context.Context, client *http.Client, token, path string) (string, bool) {
-	return metadataGet(ctx, client, path, "X-aws-ec2-metadata-token", token)
+	value, _, ok := metadataGet(ctx, client, path, "X-aws-ec2-metadata-token", token)
+
+	return value, ok
 }

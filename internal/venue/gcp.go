@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"regexp"
@@ -79,30 +80,7 @@ func applyGCP(worker Worker, parsed *url.URL) (Worker, error) {
 			ErrWorker, worker.URL, gcpUser)
 	}
 
-	target, root := parsed.Host, parsed.Path
-
-	switch Rung(parsed.Host) {
-	case RungStopped, RungLaunch:
-		worker.Rung = Rung(parsed.Host)
-
-		target, root = splitFirstSegment(parsed.Path)
-		if target == "" {
-			return Worker{}, fmt.Errorf("%w %q: %s needs something to acquire, as in gcp://stopped/worker-1 or gcp://launch/template-1",
-				ErrWorker, worker.URL, parsed.Host)
-		}
-	case RungStatic:
-	}
-
-	if worker.Rung == RungLaunch {
-		worker.Template = target
-	} else {
-		worker.Instance = target
-	}
-
-	// Absolute, for the same reason ssh:// keeps it absolute.
-	worker.Root = root
-
-	return worker, nil
+	return applyRungs(worker, parsed, "gcp://stopped/worker-1 or gcp://launch/template-1")
 }
 
 // checkGCP refuses a gcp:// mapping this venue cannot act on. The options
@@ -231,8 +209,15 @@ var gcpToken = func(ctx context.Context) (string, error) {
 
 		// Deliberately not the caller's context: the source outlives every
 		// dial, and a later refresh must not fail because the FIRST caller's
-		// step happened to be cancelled.
-		source, err = google.DefaultTokenSource(context.WithoutCancel(ctx), gcpScope)
+		// step happened to be cancelled. It outlives the caller's DEADLINE
+		// too, though, and oauth2 with no client of its own falls back to
+		// http.DefaultClient — whose zero Timeout would let a refresh against
+		// an accepted-but-silent token endpoint hang with nothing left to
+		// interrupt it, so the source carries its own bound instead.
+		base := context.WithValue(context.WithoutCancel(ctx), oauth2.HTTPClient,
+			&http.Client{Timeout: dialTimeout})
+
+		source, err = google.DefaultTokenSource(base, gcpScope)
 		if err != nil {
 			gcpRelayMu.Unlock()
 
@@ -296,16 +281,17 @@ func dialGCP(ctx context.Context, worker Worker) (*transport, error) {
 		return nil, err
 	}
 
-	hostKeys, err := gcpHostKeys(ctx, api, worker, project, zone)
+	hostKeys, algorithms, err := gcpHostKeys(ctx, api, worker, project, zone)
 	if err != nil {
 		return nil, err
 	}
 
 	config := &ssh.ClientConfig{
-		User:            gcpUser,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: hostKeys,
-		Timeout:         dialTimeout,
+		User:              gcpUser,
+		Auth:              []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback:   hostKeys,
+		HostKeyAlgorithms: algorithms,
+		Timeout:           dialTimeout,
 	}
 
 	client, err := gcpConnect(ctx, api, worker, project, zone, config)
@@ -365,6 +351,8 @@ func gcpConnect(ctx context.Context, api gceAPI, worker Worker, project, zone st
 		}
 
 		if !strings.Contains(err.Error(), "ssh: unable to authenticate") {
+			forgetInstall()
+
 			return nil, fmt.Errorf("connecting to %s for %q: %w", worker.Instance, worker.URL, err)
 		}
 
@@ -396,6 +384,16 @@ func sshHandshake(conn net.Conn, address string, config *ssh.ClientConfig) (*ssh
 		return nil, err //nolint:wrapcheck // the caller names the worker and instance
 	}
 
+	// Stop answers false once the watchdog has already fired, which means the
+	// conn this client would ride on is being closed right now: report the
+	// timeout the watchdog exists to report, rather than hand back a live
+	// client over a dead transport whose first use fails as something else.
+	if !watchdog.Stop() {
+		_ = sshConn.Close()
+
+		return nil, fmt.Errorf("the SSH handshake did not finish within %s", config.Timeout)
+	}
+
 	return ssh.NewClient(sshConn, channels, requests), nil
 }
 
@@ -414,19 +412,22 @@ func gcpDialRelay(ctx context.Context, api gceAPI, worker Worker, project, zone 
 		Port:     22,
 	}
 
-	deadline, cancel := context.WithTimeout(ctx, gcpReadyTimeout)
-	defer cancel()
-
+	// The caller owns the ready budget — gcpConnect already bounded ctx with
+	// gcpReadyTimeout — so a second bound of the same size can never fire on
+	// its own, and reporting it as the wait would name four minutes on a
+	// redial that waited seconds.
 	ticker := time.NewTicker(gcpReadyPoll)
 	defer ticker.Stop()
 
+	started := time.Now()
+
 	for {
-		token, err := gcpToken(deadline)
+		token, err := gcpToken(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("worker %q: %w", worker.URL, err)
 		}
 
-		conn, err := iapOpen(deadline, target, token)
+		conn, err := iapOpen(ctx, target, token)
 		if err == nil {
 			return conn, nil
 		}
@@ -435,16 +436,16 @@ func gcpDialRelay(ctx context.Context, api gceAPI, worker Worker, project, zone 
 			return nil, fmt.Errorf("worker %q: %w", worker.URL, err)
 		}
 
-		refusal := gcpBackendRefusal(deadline, api, worker, project, zone)
+		refusal := gcpBackendRefusal(ctx, api, worker, project, zone)
 		if refusal != nil {
 			return nil, refusal
 		}
 
 		select {
 		case <-ticker.C:
-		case <-deadline.Done():
+		case <-ctx.Done():
 			return nil, fmt.Errorf("waiting %s for sshd on %s for %q: %w",
-				gcpReadyTimeout, worker.Instance, worker.URL, err)
+				time.Since(started).Round(time.Second), worker.Instance, worker.URL, err)
 		}
 	}
 }
@@ -581,9 +582,16 @@ var errNoHostKeys = errors.New("the instance published no SSH host keys in guest
 // instance's guest attributes — written by its own guest agent at boot, read
 // back over the authenticated API — are the attestation, polled because a
 // machine acquired moments ago has not finished booting.
-func gcpHostKeys(ctx context.Context, api gceAPI, worker Worker, project, zone string) (ssh.HostKeyCallback, error) {
+// It also reports which host key algorithms the attestation can verify: an
+// instance publishes its keys one at a time, so a poll during boot can see
+// one of them, and a client left to its own preference order then negotiates
+// an algorithm nothing attested. That reads as an impostor — a final error
+// that deletes a launched machine — when the truth is "not yet".
+func gcpHostKeys(ctx context.Context, api gceAPI, worker Worker, project, zone string) (ssh.HostKeyCallback, []string, error) {
 	if worker.HostKey != "" {
-		return pinnedHostKey(worker.HostKey), nil
+		// A fingerprint names no algorithm, so a pin cannot narrow the
+		// negotiation the way an attestation can.
+		return pinnedHostKey(worker.HostKey), nil, nil
 	}
 
 	deadline, cancel := context.WithTimeout(ctx, gcpReadyTimeout)
@@ -597,15 +605,18 @@ func gcpHostKeys(ctx context.Context, api gceAPI, worker Worker, project, zone s
 
 		switch {
 		case err == nil:
-			var callback ssh.HostKeyCallback
+			var (
+				callback   ssh.HostKeyCallback
+				algorithms []string
+			)
 
-			callback, err = hostKeysFromAttributes(worker, attributes)
+			callback, algorithms, err = hostKeysFromAttributes(worker, attributes)
 			if err == nil {
-				return callback, nil
+				return callback, algorithms, nil
 			}
 		case errors.Is(err, errGuestAttributesDisabled):
-			return nil, fmt.Errorf("%w %q: guest attributes are disabled on %s, so its host keys cannot be attested — set enable-guest-attributes=TRUE in the instance metadata (or template), or pin the key with ?hostkey=",
-				ErrWorker, worker.URL, worker.Instance)
+			return nil, nil, fmt.Errorf("%w %q: %s could not be asked for its host keys, so they cannot be attested — either guest attributes are disabled (set enable-guest-attributes=TRUE in the instance metadata, or the template) or this credential lacks compute.instances.getGuestAttributes; pin the key with ?hostkey= to skip the attestation: %w",
+				ErrWorker, worker.URL, worker.Instance, err)
 		default:
 			// A transient control-plane error is waited out like an empty
 			// answer: one 503 mid-boot must not fail a dial — and delete the
@@ -618,7 +629,7 @@ func gcpHostKeys(ctx context.Context, api gceAPI, worker Worker, project, zone s
 		select {
 		case <-ticker.C:
 		case <-deadline.Done():
-			return nil, fmt.Errorf("waiting %s for %s to publish host keys for %q: %w",
+			return nil, nil, fmt.Errorf("waiting %s for %s to publish host keys for %q: %w",
 				gcpReadyTimeout, worker.Instance, worker.URL, err)
 		}
 	}
@@ -626,30 +637,43 @@ func gcpHostKeys(ctx context.Context, api gceAPI, worker Worker, project, zone s
 
 // hostKeysFromAttributes turns the hostkeys/ namespace into a verifier that
 // accepts any key the instance itself published.
-func hostKeysFromAttributes(worker Worker, attributes map[string]string) (ssh.HostKeyCallback, error) {
-	var accepted []ssh.PublicKey
+func hostKeysFromAttributes(worker Worker, attributes map[string]string) (ssh.HostKeyCallback, []string, error) {
+	var (
+		accepted   [][]byte
+		algorithms []string
+	)
 
 	for keyType, value := range attributes {
 		line := keyType + " " + strings.TrimSpace(value)
 
 		public, _, _, _, err := ssh.ParseAuthorizedKey([]byte(line))
 		if err == nil {
-			accepted = append(accepted, public)
+			accepted = append(accepted, public.Marshal())
+
+			if public.Type() == ssh.KeyAlgoRSA {
+				// One RSA host key signs under three algorithm names, and a
+				// modern sshd offers the SHA-2 pair: naming only "ssh-rsa"
+				// would refuse the very key that was attested.
+				algorithms = append(algorithms, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512)
+			}
+
+			algorithms = append(algorithms, public.Type())
 		}
 	}
 
 	if len(accepted) == 0 {
-		return nil, errNoHostKeys
+		return nil, nil, errNoHostKeys
 	}
 
 	return func(_ string, remote net.Addr, key ssh.PublicKey) error {
+		offered := key.Marshal()
 		for _, candidate := range accepted {
-			if bytes.Equal(key.Marshal(), candidate.Marshal()) {
+			if bytes.Equal(offered, candidate) {
 				return nil
 			}
 		}
 
 		return fmt.Errorf("%w: %s offered %s, and %s attested %d other key(s) in guest attributes",
 			errHostKeyMismatch, remote, ssh.FingerprintSHA256(key), worker.Instance, len(accepted))
-	}, nil
+	}, algorithms, nil
 }

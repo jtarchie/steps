@@ -64,24 +64,27 @@ func TestRealGCPRelayCarriesASession(t *testing.T) {
 
 	t.Cleanup(func() { _ = channel.Close() })
 
-	if len(channel.SessionID()) == 0 {
+	if len(channel.sessionID()) == 0 {
 		t.Error("the relay sent no session id — or the SID frame was misread")
 	}
 
 	// An SSH server speaks first, so the banner arrives unprompted.
 	banner := make([]byte, 64)
 
-	deadline := time.Now().Add(30 * time.Second)
+	// The deadline is enforced by closing the channel, not by re-checking the
+	// clock: Channel.Read blocks indefinitely (SetReadDeadline is a documented
+	// no-op), so a backend that connects and says nothing would otherwise hang
+	// here until the whole package run hit go test's timeout, with none of
+	// this fixture's context in the message.
+	silent := time.AfterFunc(30*time.Second, func() { _ = channel.Close() })
+	defer silent.Stop()
+
 	read := 0
 
 	for read < 8 {
-		if time.Now().After(deadline) {
-			t.Fatalf("no SSH banner after 30s; got %q", banner[:read])
-		}
-
 		n, err := channel.Read(banner[read:])
 		if err != nil {
-			t.Fatalf("reading the banner: %v (got %q)", err, banner[:read])
+			t.Fatalf("no SSH banner within 30s: %v (got %q)", err, banner[:read])
 		}
 
 		read += n

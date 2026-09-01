@@ -326,8 +326,8 @@ func TestSessionIDIsLengthPrefixedNotAnInteger(t *testing.T) {
 		conn.readFrames()
 	})
 
-	if !bytes.Equal(channel.SessionID(), sid) {
-		t.Fatalf("SessionID = %q, want %q", channel.SessionID(), sid)
+	if !bytes.Equal(channel.sessionID(), sid) {
+		t.Fatalf("sessionID = %q, want %q", channel.sessionID(), sid)
 	}
 }
 

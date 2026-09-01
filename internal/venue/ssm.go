@@ -403,6 +403,15 @@ var (
 // what the URL NAMES — an instance in two cases, a template in the third —
 // and a mapping should read as the thing it points at.
 func applyAWS(worker Worker, parsed *url.URL) (Worker, error) {
+	return applyRungs(worker, parsed, "aws://stopped/i-0abc123 or aws://launch/lt-0def456")
+}
+
+// applyRungs reads the acquisition rung out of a scheme's URL. Shared,
+// because the grammar is: gcp://stopped/worker-1 and aws://stopped/i-0abc123
+// differ only in the example a refusal quotes, and a fourth rung — or a
+// change to how the root is split off — has one place to be made rather than
+// one per cloud.
+func applyRungs(worker Worker, parsed *url.URL, examples string) (Worker, error) {
 	target, root := parsed.Host, parsed.Path
 
 	switch Rung(parsed.Host) {
@@ -411,8 +420,8 @@ func applyAWS(worker Worker, parsed *url.URL) (Worker, error) {
 
 		target, root = splitFirstSegment(parsed.Path)
 		if target == "" {
-			return Worker{}, fmt.Errorf("%w %q: %s needs something to acquire, as in aws://stopped/i-0abc123 or aws://launch/lt-0def456",
-				ErrWorker, worker.URL, parsed.Host)
+			return Worker{}, fmt.Errorf("%w %q: %s needs something to acquire, as in %s",
+				ErrWorker, worker.URL, parsed.Host, examples)
 		}
 	case RungStatic:
 	}
@@ -476,15 +485,26 @@ func checkAWS(worker Worker) error {
 // The alternative was the shape money dislikes: an acquisition-rung worker
 // launches a real, billed instance before the dial discovers a condition that
 // was decidable while kong was still parsing.
+//
+// A switch rather than an if-chain, for the reason acquire is one: this is
+// the check that stands between a mapping and a billed machine, so the next
+// scheme has to decide whether it has one instead of inheriting silence.
 func (w Worker) PlacementCheck(hasArtifactStore bool) error {
-	if w.Scheme == SchemeGCP {
+	switch w.Scheme {
+	case SchemeGCP:
 		return w.gcpPlacementCheck()
-	}
-
-	if w.Scheme != SchemeAWS {
+	case SchemeAWS:
+		return w.awsPlacementCheck(hasArtifactStore)
+	case SchemeLocal, SchemeSSH:
 		return nil
 	}
 
+	return nil
+}
+
+// awsPlacementCheck is PlacementCheck's aws:// arm: the shim has to come from
+// somewhere, and ?binary= only reaches an SSM tunnel through the store.
+func (w Worker) awsPlacementCheck(hasArtifactStore bool) error {
 	if w.Shim == "" && w.Binary == "" {
 		return fmt.Errorf("%w %q: an aws:// worker needs a shim binary built for it — name a local one with ?binary=/path/to/steps-linux-amd64, or one already on the instance with ?shim=/usr/local/bin/steps",
 			ErrWorker, w.URL)
