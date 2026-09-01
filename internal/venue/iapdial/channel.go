@@ -208,6 +208,14 @@ func closeExplanation(err error) error {
 		// the port — or a firewall dropped it, which looks identical from
 		// here. The firewall is the likelier miss on a fresh project.
 		return fmt.Errorf("%w: nothing listening there, or no firewall rule allows the IAP range 35.235.240.0/20 to reach it (%w)", ErrBackendNotReached, err)
+	case 4047:
+		// "Failed to lookup instance": the relay's own directory has not
+		// caught up with an instance created moments ago — observed against
+		// the real relay on a machine that was RUNNING with its host keys
+		// already published. Retryable for the same reason 4003 is; for an
+		// instance that genuinely does not exist, the caller's retry window
+		// bounds the wait and this text is the explanation it reports.
+		return fmt.Errorf("%w: the relay could not find the instance — for a machine created moments ago this means not yet (%w)", ErrBackendNotReached, err)
 	case 4004:
 		return fmt.Errorf("%w: the access token needs reauthentication (%w)", errRelayClosed, err)
 	default:

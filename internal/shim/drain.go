@@ -202,44 +202,69 @@ func gceReachable(ctx context.Context, client *http.Client) bool {
 	return response.StatusCode == http.StatusOK && response.Header.Get("Metadata-Flavor") == "Google"
 }
 
-// gceNotice asks whether this instance is being preempted.
+// gceNotice asks whether this instance is being taken.
 //
-// One question, unlike EC2's two: GCE has no rebalance-recommendation
-// analog, and a maintenance event on a spot instance surfaces as this same
-// flag. The answer is TRUE or FALSE from the instance's first boot, so only
-// the exact affirmative is a notice.
+// Two keys, because GCE says it two ways and neither covers the other —
+// MEASURED against the real service, not read from its docs: a market
+// preemption flips `preempted` to TRUE, while a maintenance event that will
+// terminate the machine (including instances.simulateMaintenanceEvent on a
+// spot instance, which is Google's own preemption drill) announces itself
+// only through `maintenance-event` and never touches `preempted`. A watcher
+// reading one key relayed nothing for the other, and the machine's death was
+// classified as a lost connection instead of an eviction.
+//
+// A MIGRATE maintenance event is deliberately not a notice: a live migration
+// pauses the machine briefly and it survives, and fabricating an eviction
+// from one would destroy a healthy worker.
 func gceNotice(ctx context.Context, client *http.Client) (wire.Draining, bool) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataBase+"/computeMetadata/v1/instance/preempted", nil)
+	preempted, ok := gceValue(ctx, client, "/computeMetadata/v1/instance/preempted")
+	if ok && strings.EqualFold(preempted, "TRUE") {
+		// Terminal: by the time the flag flips the decision is taken, and
+		// the ACPI shutdown follows within about thirty seconds. No deadline
+		// field, because GCE publishes no timestamp to relay.
+		return wire.Draining{Reason: "GCE preemption", Terminal: true}, true
+	}
+
+	event, ok := gceValue(ctx, client, "/computeMetadata/v1/instance/maintenance-event")
+	if ok && strings.EqualFold(event, "TERMINATE_ON_HOST_MAINTENANCE") {
+		return wire.Draining{Reason: "GCE maintenance: the host is being taken out of service", Terminal: true}, true
+	}
+
+	return wire.Draining{}, false
+}
+
+// gceValue reads one GCE metadata path. Absence, emptiness and errors all
+// report not-ok — the same no-fabricated-notices rule imdsGet holds.
+func gceValue(ctx context.Context, client *http.Client, path string) (string, bool) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataBase+path, nil)
 	if err != nil {
-		return wire.Draining{}, false
+		return "", false
 	}
 
 	request.Header.Set("Metadata-Flavor", "Google")
 
 	response, err := client.Do(request)
 	if err != nil {
-		return wire.Draining{}, false
+		return "", false
 	}
 
 	defer func() { _ = response.Body.Close() }()
 
 	if response.StatusCode != http.StatusOK {
-		return wire.Draining{}, false
+		return "", false
 	}
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxMetadataBytes))
 	if err != nil {
-		return wire.Draining{}, false
+		return "", false
 	}
 
-	if !strings.EqualFold(strings.TrimSpace(string(body)), "TRUE") {
-		return wire.Draining{}, false
+	value := strings.TrimSpace(string(body))
+	if value == "" {
+		return "", false
 	}
 
-	// Terminal: by the time the flag flips the decision is taken, and the
-	// ACPI shutdown follows within about thirty seconds. No deadline field,
-	// because GCE publishes no timestamp to relay.
-	return wire.Draining{Reason: "GCE preemption", Terminal: true}, true
+	return value, true
 }
 
 // imdsToken fetches an IMDSv2 session token, reporting whether the metadata

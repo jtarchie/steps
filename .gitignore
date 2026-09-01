@@ -28,5 +28,8 @@
 # hack/aws-fixture.sh's cross-compiled worker binary
 /.aws-fixture/
 
+# hack/gcp-fixture.sh's cross-compiled worker binary
+/.gcp-fixture/
+
 # scratch a shim writes if it is ever handed a relative root
 steps-shim/

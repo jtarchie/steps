@@ -207,9 +207,12 @@ func awaitInstanceGone(ctx context.Context, t *testing.T, fixture gcpFixture, na
 	deadline := time.Now().Add(3 * time.Minute)
 
 	for {
+		// Output, not CombinedOutput: gcloud warns on stderr when a filter
+		// matches nothing — which is exactly the empty answer this waits for,
+		// and reading the warning as output made "gone" unrecognizable.
 		out, listErr := exec.CommandContext(ctx, "gcloud", "compute", "instances", "list", //nolint:gosec // fixed argv over fixture names
 			"--project", fixture.project, "--zones", fixture.zone,
-			"--filter=name="+name, "--format=value(name)").CombinedOutput()
+			"--filter=name="+name, "--format=value(name)").Output()
 		if listErr == nil && strings.TrimSpace(string(out)) == "" {
 			return
 		}
@@ -253,8 +256,36 @@ func TestRealGCPParkedRungStartsAndStops(t *testing.T) {
 		t.Fatalf("parking it again: %v", err)
 	}
 
+	// The release returns once the stop is ACCEPTED; starting again while
+	// the instance is still STOPPING loses a fingerprint race inside GCE
+	// ("the resource fingerprint changed during the start operation" —
+	// observed). Wait for parked before the courtesy restart.
+	awaitInstanceStatus(ctx, t, fixture, fixture.instance, "TERMINATED")
+
 	// Left running for whatever runs next, since every other test wants it up.
 	gcloudCLI(ctx, t, fixture, "compute", "instances", "start", fixture.instance)
+}
+
+// awaitInstanceStatus polls until the instance reports one status.
+func awaitInstanceStatus(ctx context.Context, t *testing.T, fixture gcpFixture, name, want string) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Minute)
+
+	for {
+		out, err := exec.CommandContext(ctx, "gcloud", "compute", "instances", "describe", name, //nolint:gosec // fixed argv over fixture names
+			"--project", fixture.project, "--zone", fixture.zone,
+			"--format=value(status)").Output()
+		if err == nil && strings.TrimSpace(string(out)) == want {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("instance %s never reached %s (last: %s)", name, want, strings.TrimSpace(string(out)))
+		}
+
+		time.Sleep(10 * time.Second)
+	}
 }
 
 // TestRealGCPPreemption is the one this whole fixture exists for.

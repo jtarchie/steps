@@ -32,6 +32,12 @@ func drainClient() *http.Client {
 // header on every response, an instance id, and a scripted preempted flag.
 func fakeGCEMetadata(t *testing.T, preempted string) {
 	t.Helper()
+	fakeGCEMetadataFull(t, preempted, "NONE")
+}
+
+// fakeGCEMetadataFull also scripts the maintenance-event key.
+func fakeGCEMetadataFull(t *testing.T, preempted, maintenance string) {
+	t.Helper()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.Header.Get("Metadata-Flavor") != "Google" {
@@ -47,6 +53,8 @@ func fakeGCEMetadata(t *testing.T, preempted string) {
 			_, _ = w.Write([]byte("1234567890"))
 		case "/computeMetadata/v1/instance/preempted":
 			_, _ = w.Write([]byte(preempted))
+		case "/computeMetadata/v1/instance/maintenance-event":
+			_, _ = w.Write([]byte(maintenance))
 		default:
 			http.NotFound(w, req)
 		}
@@ -153,6 +161,29 @@ func TestGCENoticeIgnoresAnEmptyAnswer(t *testing.T) {
 	notice, terminal := gceNotice(context.Background(), drainClient())
 	if terminal || notice.Reason != "" {
 		t.Fatalf("gceNotice on empty = %+v, %v — want no notice", notice, terminal)
+	}
+}
+
+func TestGCENoticeReportsATerminatingMaintenanceEvent(t *testing.T) {
+	// What instances.simulateMaintenanceEvent actually does to a spot
+	// instance — measured against the real service: preempted stays FALSE
+	// and maintenance-event announces the termination.
+	fakeGCEMetadataFull(t, "FALSE", "TERMINATE_ON_HOST_MAINTENANCE")
+
+	notice, terminal := gceNotice(context.Background(), drainClient())
+	if !terminal || !notice.Terminal || notice.Reason == "" {
+		t.Fatalf("gceNotice = %+v, %v — want a terminal maintenance notice", notice, terminal)
+	}
+}
+
+func TestGCENoticeIgnoresALiveMigration(t *testing.T) {
+	// A MIGRATE event pauses the machine and it survives; reading it as an
+	// eviction would destroy a healthy worker over routine host maintenance.
+	fakeGCEMetadataFull(t, "FALSE", "MIGRATE_ON_HOST_MAINTENANCE")
+
+	notice, terminal := gceNotice(context.Background(), drainClient())
+	if terminal || notice.Reason != "" {
+		t.Fatalf("gceNotice on MIGRATE = %+v, %v — want no notice", notice, terminal)
 	}
 }
 

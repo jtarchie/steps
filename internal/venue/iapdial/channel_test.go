@@ -553,6 +553,20 @@ func TestPortRefusalIsExplained(t *testing.T) {
 	}
 }
 
+func TestInstanceLookupLagIsRetryable(t *testing.T) {
+	t.Parallel()
+
+	channel := dialFake(t, func(conn *relayConn) {
+		conn.sendSID([]byte("sid"))
+		conn.close(4047, "Failed to lookup instance")
+	})
+
+	_, err := channel.Read(make([]byte, 1))
+	if !errors.Is(err, ErrBackendNotReached) {
+		t.Fatalf("Read = %v, want ErrBackendNotReached so a fresh instance's dial retries", err)
+	}
+}
+
 func TestReauthenticationIsExplained(t *testing.T) {
 	t.Parallel()
 
