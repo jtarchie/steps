@@ -179,3 +179,45 @@ func TestStepTimeoutZeroOnlyOnAgentSteps(t *testing.T) {
 		})
 	}
 }
+
+// TestReasoningEffortIsCheckedAtLoad pins the check to load time. It lived
+// only in ResolveAgentInvocation, which runs when a job runs, so a typo
+// passed `steps validate` and failed at build start instead — and for a
+// @claude/ agent it did not fail at all, because the cli source's blanket
+// refusal of reasoning_effort had just been lifted for a flag that now exists.
+func TestReasoningEffortIsCheckedAtLoad(t *testing.T) {
+	t.Parallel()
+
+	sources := map[string]AgentSource{
+		"hosted": {Model: "openai/gpt-4o"},
+		"cli":    {Model: CLISourcePrefix + "sonnet"},
+	}
+
+	for name, source := range sources {
+		t.Run(name+" refuses an invalid value", func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Config{Agents: []Agent{{Name: "a", Source: source, ReasoningEffort: "extreme"}}}
+
+			err := cfg.validateAgentDials()
+			if err == nil {
+				t.Fatal("reasoning_effort: extreme loaded cleanly")
+			}
+
+			if !strings.Contains(err.Error(), "one of low, medium, high") {
+				t.Errorf("error = %v, want one naming the accepted values", err)
+			}
+		})
+
+		t.Run(name+" accepts a valid value", func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Config{Agents: []Agent{{Name: "a", Source: source, ReasoningEffort: "HIGH"}}}
+
+			err := cfg.validateAgentDials()
+			if err != nil {
+				t.Errorf("reasoning_effort: HIGH was refused: %v", err)
+			}
+		})
+	}
+}

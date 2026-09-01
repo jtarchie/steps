@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // The limit-dial convention, and the one helper that enforces it.
 //
@@ -71,10 +74,27 @@ func (c *Config) validateAgentDials() error {
 			}
 		}
 
-		err := validateAttemptCount(agent.Attempts, fmt.Sprintf("agent %q", agent.Name))
+		err := validateReasoningEffort(agent)
 		if err != nil {
 			return err
 		}
+
+		err = validateAttemptCount(agent.Attempts, fmt.Sprintf("agent %q", agent.Name))
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateReasoningEffort holds reasoning_effort to its three values at LOAD
+// time. ResolveAgentInvocation checks it too, but that runs when the job runs
+// — so a typo passed `steps validate` and failed at build start instead.
+func validateReasoningEffort(agent Agent) error {
+	effort := strings.ToLower(agent.ReasoningEffort)
+	if effort != "" && !validReasoningEfforts[effort] {
+		return fmt.Errorf("agent %q: reasoning_effort %q must be one of low, medium, high", agent.Name, agent.ReasoningEffort)
 	}
 
 	return nil

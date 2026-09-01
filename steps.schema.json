@@ -405,7 +405,8 @@
           "type": "integer"
         },
         "reasoning_effort": {
-          "type": "string"
+          "type": "string",
+          "enum": ["low", "medium", "high"]
         },
         "max_turns": {
           "type": "integer",
