@@ -15,7 +15,7 @@ package venue
 //
 // Authentication is minted, not configured. The dial generates an ephemeral
 // key, installs its public half through instance metadata (the google-ssh
-// expiring-key form, so the guest agent removes it later), and reads the
+// expiring-key form, so the guest agent stops honoring it later), and reads the
 // instance's own SSH host keys back out of guest attributes — the one channel
 // that can attest a machine created moments ago. ?hostkey= remains for an
 // image whose template cannot set enable-guest-attributes=TRUE.
@@ -25,6 +25,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -37,6 +38,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
 	"github.com/jtarchie/steps/internal/venue/iapdial"
@@ -120,11 +122,6 @@ func checkGCP(worker Worker) error {
 			ErrWorker, worker.URL, target, kind)
 	}
 
-	if worker.IdleSet && worker.Rung != RungStopped {
-		return fmt.Errorf("%w %q: idle= describes how long a PARKED machine stays warm, and this worker is not on the stopped rung",
-			ErrWorker, worker.URL)
-	}
-
 	return nil
 }
 
@@ -188,18 +185,64 @@ var gcpDefaultProject = func(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("reading application default credentials: %w", err)
 	}
 
-	return credentials.ProjectID, nil
+	if credentials.ProjectID != "" {
+		return credentials.ProjectID, nil
+	}
+
+	// The authorized_user file `gcloud auth application-default login`
+	// writes carries no project_id — only a quota_project_id, stamped from
+	// the active project at login. Reading it is what makes the fallback
+	// real for the one credential type every error message here prescribes;
+	// without it the refusal's advice was to re-run the login the user had
+	// already run.
+	var quota struct {
+		QuotaProjectID string `json:"quota_project_id"`
+	}
+
+	if len(credentials.JSON) > 0 && json.Unmarshal(credentials.JSON, &quota) == nil {
+		return quota.QuotaProjectID, nil
+	}
+
+	return "", nil
 }
+
+// gcpRelaySource is the process's credential stack for the relay, resolved
+// once and cached only on success: DefaultTokenSource wraps the ADC in a
+// ReuseTokenSource, so Token answers from cache until near expiry and then
+// refreshes itself — one credential resolution per process instead of one
+// per dial, and a token that cannot go stale across a long boot wait.
+//
+//nolint:gochecknoglobals // process-lifetime credentials, resolved once
+var (
+	gcpRelayMu     sync.Mutex
+	gcpRelaySource oauth2.TokenSource
+)
 
 // gcpToken mints the OAuth access token the relay's websocket handshake
 // carries.
 //
 //nolint:gochecknoglobals // a test seam for ambient credentials
 var gcpToken = func(ctx context.Context) (string, error) {
-	source, err := google.DefaultTokenSource(ctx, gcpScope)
-	if err != nil {
-		return "", fmt.Errorf("no GCP credentials for the IAP relay (log in with `gcloud auth application-default login`): %w", err)
+	gcpRelayMu.Lock()
+
+	source := gcpRelaySource
+	if source == nil {
+		var err error
+
+		// Deliberately not the caller's context: the source outlives every
+		// dial, and a later refresh must not fail because the FIRST caller's
+		// step happened to be cancelled.
+		source, err = google.DefaultTokenSource(context.WithoutCancel(ctx), gcpScope)
+		if err != nil {
+			gcpRelayMu.Unlock()
+
+			return "", fmt.Errorf("no GCP credentials for the IAP relay (log in with `gcloud auth application-default login`): %w", err)
+		}
+
+		gcpRelaySource = source
 	}
+
+	gcpRelayMu.Unlock()
 
 	token, err := source.Token()
 	if err != nil {
@@ -258,11 +301,6 @@ func dialGCP(ctx context.Context, worker Worker) (*transport, error) {
 		return nil, err
 	}
 
-	conn, err := gcpDialRelay(ctx, worker, project, zone)
-	if err != nil {
-		return nil, err
-	}
-
 	config := &ssh.ClientConfig{
 		User:            gcpUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
@@ -270,16 +308,10 @@ func dialGCP(ctx context.Context, worker Worker) (*transport, error) {
 		Timeout:         dialTimeout,
 	}
 
-	address := worker.Instance + ":22"
-
-	sshConn, channels, requests, err := ssh.NewClientConn(conn, address, config)
+	client, err := gcpConnect(ctx, api, worker, project, zone, config)
 	if err != nil {
-		_ = conn.Close()
-
-		return nil, fmt.Errorf("connecting to %s for %q: %w", worker.Instance, worker.URL, err)
+		return nil, err
 	}
-
-	client := ssh.NewClient(sshConn, channels, requests)
 
 	remote, build, err := pushShim(client, worker)
 	if err != nil {
@@ -291,10 +323,90 @@ func dialGCP(ctx context.Context, worker Worker) (*transport, error) {
 	return startShim(client, remote, build)
 }
 
+// gcpConnect opens the tunnel and completes the SSH handshake, retrying an
+// authentication refusal inside the ready window: AddSSHKey returns once the
+// API holds the key, but the guest agent ON the instance applies it to the
+// account asynchronously — typically within seconds — and gcloud's own
+// client waits out exactly this gap. Every other handshake answer (a host
+// key mismatch above all) is final.
+func gcpConnect(ctx context.Context, api gceAPI, worker Worker, project, zone string, config *ssh.ClientConfig) (*ssh.Client, error) {
+	deadline, cancel := context.WithTimeout(ctx, gcpReadyTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(gcpReadyPoll)
+	defer ticker.Stop()
+
+	address := worker.Instance + ":22"
+
+	// A dial that gives up after an authentication refusal stops trusting
+	// the install cache: the likeliest reason a key never becomes usable is
+	// an instance recreated under the same name since the cached install,
+	// and the next dial must write the key again rather than skip it for
+	// hours. Deleted on every failing exit past the first refusal, so a
+	// deadline that fires mid-redial cannot leave the stale entry behind.
+	authRefused := false
+	forgetInstall := func() {
+		if authRefused {
+			gcpInstalled.Delete(project + "/" + zone + "/" + worker.Instance)
+		}
+	}
+
+	for {
+		conn, err := gcpDialRelay(deadline, api, worker, project, zone)
+		if err != nil {
+			forgetInstall()
+
+			return nil, err
+		}
+
+		client, err := sshHandshake(conn, address, config)
+		if err == nil {
+			return client, nil
+		}
+
+		if !strings.Contains(err.Error(), "ssh: unable to authenticate") {
+			return nil, fmt.Errorf("connecting to %s for %q: %w", worker.Instance, worker.URL, err)
+		}
+
+		authRefused = true
+
+		select {
+		case <-ticker.C:
+		case <-deadline.Done():
+			forgetInstall()
+
+			return nil, fmt.Errorf("connecting to %s for %q: %w", worker.Instance, worker.URL, err)
+		}
+	}
+}
+
+// sshHandshake runs the SSH handshake with a watchdog. The tunnel conn has
+// no deadlines (its SetDeadline is a no-op) and NewClientConn ignores
+// config.Timeout — only ssh.Dial's TCP dial honors it — so a peer that
+// stalls mid-handshake would otherwise hold the dial forever, and closing
+// the conn is the one interruption that reaches a blocked handshake.
+func sshHandshake(conn net.Conn, address string, config *ssh.ClientConfig) (*ssh.Client, error) {
+	watchdog := time.AfterFunc(config.Timeout, func() { _ = conn.Close() })
+	defer watchdog.Stop()
+
+	sshConn, channels, requests, err := ssh.NewClientConn(conn, address, config)
+	if err != nil {
+		_ = conn.Close()
+
+		return nil, err //nolint:wrapcheck // the caller names the worker and instance
+	}
+
+	return ssh.NewClient(sshConn, channels, requests), nil
+}
+
 // gcpDialRelay opens the tunnel, waiting out the window where the instance
 // is up but sshd is not yet answering — the relay reports that as "could not
 // reach the backend", which for a machine acquired seconds ago means "yet".
-func gcpDialRelay(ctx context.Context, worker Worker, project, zone string) (net.Conn, error) {
+// The control plane referees, because the relay cannot tell "not yet" from
+// "never": a parked or vanished machine will refuse the backend exactly the
+// same way forever, and waiting four minutes to then blame the firewall
+// sends an operator auditing rules that were never wrong.
+func gcpDialRelay(ctx context.Context, api gceAPI, worker Worker, project, zone string) (net.Conn, error) {
 	target := iapdial.Target{
 		Project:  project,
 		Zone:     zone,
@@ -308,12 +420,12 @@ func gcpDialRelay(ctx context.Context, worker Worker, project, zone string) (net
 	ticker := time.NewTicker(gcpReadyPoll)
 	defer ticker.Stop()
 
-	token, err := gcpToken(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("worker %q: %w", worker.URL, err)
-	}
-
 	for {
+		token, err := gcpToken(deadline)
+		if err != nil {
+			return nil, fmt.Errorf("worker %q: %w", worker.URL, err)
+		}
+
 		conn, err := iapOpen(deadline, target, token)
 		if err == nil {
 			return conn, nil
@@ -323,6 +435,11 @@ func gcpDialRelay(ctx context.Context, worker Worker, project, zone string) (net
 			return nil, fmt.Errorf("worker %q: %w", worker.URL, err)
 		}
 
+		refusal := gcpBackendRefusal(deadline, api, worker, project, zone)
+		if refusal != nil {
+			return nil, refusal
+		}
+
 		select {
 		case <-ticker.C:
 		case <-deadline.Done():
@@ -330,6 +447,30 @@ func gcpDialRelay(ctx context.Context, worker Worker, project, zone string) (net
 				gcpReadyTimeout, worker.Instance, worker.URL, err)
 		}
 	}
+}
+
+// gcpBackendRefusal decides whether the relay failing to reach the port is
+// worth waiting out. nil means keep trying: the machine is RUNNING or still
+// booting, so sshd may answer the next attempt — and a control-plane blip
+// answers nil too, so a 503 from the API cannot kill a dial the relay
+// itself is still willing to retry.
+func gcpBackendRefusal(ctx context.Context, api gceAPI, worker Worker, project, zone string) error {
+	status, err := api.Status(ctx, project, zone, worker.Instance)
+	if err != nil {
+		if errors.Is(err, errGCENotFound) {
+			return fmt.Errorf("%w %q: %s does not exist", ErrWorker, worker.URL, worker.Instance)
+		}
+
+		return nil
+	}
+
+	switch status {
+	case "RUNNING", "PROVISIONING", "STAGING", "REPAIRING", "PENDING":
+		return nil
+	}
+
+	return fmt.Errorf("%w %q: %s is %s, so nothing can answer on its port — start it, or name it gcp://stopped/%s to have steps start and park it around each job",
+		ErrWorker, worker.URL, worker.Instance, status, worker.Instance)
 }
 
 // The dial's ephemeral identity: one keypair per process, installed into an
@@ -379,8 +520,17 @@ func gcpKey() (ssh.Signer, error) {
 	return gcpKeySigner, nil
 }
 
+// gcpKeyExpiryLayout renders and parses a google-ssh entry's expireOn — the
+// shape gcloud writes and the guest agent checks. The zone element matters:
+// a literal "+0000" would render UTC correctly too, but only for a time
+// something upstream remembered to convert, and the wrong string would be
+// accepted and then expire hours early with nothing pointing here.
+const gcpKeyExpiryLayout = "2006-01-02T15:04:05-0700"
+
 // gcpEnsureKey installs this process's public key on the instance, in the
-// google-ssh expiring form so the guest agent removes it after the TTL.
+// google-ssh expiring form: the guest agent stops honoring the entry after
+// the TTL, and mergeSSHKey prunes what expired the next time a key is
+// installed — the agent itself has no credentials to clean metadata with.
 func gcpEnsureKey(ctx context.Context, api gceAPI, worker Worker, project, zone string) (ssh.Signer, error) {
 	signer, err := gcpKey()
 	if err != nil {
@@ -396,7 +546,7 @@ func gcpEnsureKey(ctx context.Context, api gceAPI, worker Worker, project, zone 
 		}
 	}
 
-	expiry := time.Now().Add(gcpKeyTTL).UTC().Format("2006-01-02T15:04:05+0000")
+	expiry := time.Now().Add(gcpKeyTTL).UTC().Format(gcpKeyExpiryLayout)
 	entry := fmt.Sprintf(`%s:%s google-ssh {"userName":%q,"expireOn":%q}`,
 		gcpUser,
 		strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))),
@@ -408,6 +558,17 @@ func gcpEnsureKey(ctx context.Context, api gceAPI, worker Worker, project, zone 
 	}
 
 	gcpInstalled.Store(cacheKey, time.Now())
+
+	// Installs are rare, so sweep here: a launched instance never dials
+	// again once its job ends, and a daemon would otherwise accrue one
+	// permanent entry per machine it ever created.
+	gcpInstalled.Range(func(key, at any) bool {
+		if installed, ok := at.(time.Time); !ok || time.Since(installed) > gcpKeyTTL {
+			gcpInstalled.Delete(key)
+		}
+
+		return true
+	})
 
 	return signer, nil
 }
@@ -433,18 +594,25 @@ func gcpHostKeys(ctx context.Context, api gceAPI, worker Worker, project, zone s
 
 	for {
 		attributes, err := api.GuestAttributes(deadline, project, zone, worker.Instance, "hostkeys/")
-		if err != nil {
-			if errors.Is(err, errGuestAttributesDisabled) {
-				return nil, fmt.Errorf("%w %q: guest attributes are disabled on %s, so its host keys cannot be attested — set enable-guest-attributes=TRUE in the instance metadata (or template), or pin the key with ?hostkey=",
-					ErrWorker, worker.URL, worker.Instance)
+
+		switch {
+		case err == nil:
+			var callback ssh.HostKeyCallback
+
+			callback, err = hostKeysFromAttributes(worker, attributes)
+			if err == nil {
+				return callback, nil
 			}
-
-			return nil, fmt.Errorf("reading host keys for %s for %q: %w", worker.Instance, worker.URL, err)
-		}
-
-		callback, err := hostKeysFromAttributes(worker, attributes)
-		if err == nil {
-			return callback, nil
+		case errors.Is(err, errGuestAttributesDisabled):
+			return nil, fmt.Errorf("%w %q: guest attributes are disabled on %s, so its host keys cannot be attested — set enable-guest-attributes=TRUE in the instance metadata (or template), or pin the key with ?hostkey=",
+				ErrWorker, worker.URL, worker.Instance)
+		default:
+			// A transient control-plane error is waited out like an empty
+			// answer: one 503 mid-boot must not fail a dial — and delete the
+			// machine a launch rung just paid for — when the next poll would
+			// have connected. The deadline reports the last error if it
+			// never clears.
+			err = fmt.Errorf("reading host keys for %s for %q: %w", worker.Instance, worker.URL, err)
 		}
 
 		select {

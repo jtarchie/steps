@@ -235,6 +235,22 @@ func TestRealGCPParkedRungStartsAndStops(t *testing.T) {
 
 	gcloudCLI(ctx, t, fixture, "compute", "instances", "stop", fixture.instance)
 
+	// Registered before anything can Fatalf: this test parks the SHARED
+	// fixture instance, and every other real test needs it RUNNING — a
+	// failure between the stop and an inline courtesy restart would strand
+	// it parked, making every later test's 4-minute relay wait end in a
+	// firewall-blaming message about a firewall that was never wrong.
+	t.Cleanup(func() {
+		restartCtx, restartCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer restartCancel()
+
+		out, restartErr := exec.CommandContext(restartCtx, "gcloud", "compute", "instances", "start", fixture.instance, //nolint:gosec // fixed argv over fixture names
+			"--project", fixture.project, "--zone", fixture.zone, "--quiet").CombinedOutput()
+		if restartErr != nil {
+			t.Errorf("restarting the shared fixture instance: %v\n%s — later real tests will fail until it is started by hand", restartErr, out)
+		}
+	})
+
 	worker, err := ParseWorker("gcp://stopped/" + fixture.instance + "/var/tmp/steps?idle=0&" + fixture.options())
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
@@ -256,14 +272,11 @@ func TestRealGCPParkedRungStartsAndStops(t *testing.T) {
 		t.Fatalf("parking it again: %v", err)
 	}
 
-	// The release returns once the stop is ACCEPTED; starting again while
-	// the instance is still STOPPING loses a fingerprint race inside GCE
+	// The release returns once the stop is ACCEPTED; wait for parked so the
+	// cleanup's restart cannot lose GCE's fingerprint race against the stop
 	// ("the resource fingerprint changed during the start operation" —
-	// observed). Wait for parked before the courtesy restart.
+	// observed) — and so this asserts release genuinely parked the machine.
 	awaitInstanceStatus(ctx, t, fixture, fixture.instance, "TERMINATED")
-
-	// Left running for whatever runs next, since every other test wants it up.
-	gcloudCLI(ctx, t, fixture, "compute", "instances", "start", fixture.instance)
 }
 
 // awaitInstanceStatus polls until the instance reports one status.

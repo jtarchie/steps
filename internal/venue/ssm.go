@@ -465,11 +465,6 @@ func checkAWS(worker Worker) error {
 			ErrWorker, worker.URL)
 	}
 
-	if worker.IdleSet && worker.Rung != RungStopped {
-		return fmt.Errorf("%w %q: idle= describes how long a PARKED machine stays warm, and this worker is not on the stopped rung",
-			ErrWorker, worker.URL)
-	}
-
 	return nil
 }
 

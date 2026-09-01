@@ -20,8 +20,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -102,32 +104,65 @@ func (c *gceClient) InsertFromTemplate(ctx context.Context, project, zone, name,
 }
 
 // awaitZoneOperation blocks until a zone operation finishes, and returns what
-// it says went wrong.
+// it says went wrong. Bounded by acquireTimeout on top of the caller's
+// context, because every other acquisition wait is and a wedged operation
+// would otherwise hold a lease forever in a daemon with no step timeout.
 func (c *gceClient) awaitZoneOperation(ctx context.Context, project, zone, operation string) error {
+	deadline, cancel := context.WithTimeout(ctx, acquireTimeout)
+	defer cancel()
+
 	for {
-		op, err := c.service.ZoneOperations.Wait(project, zone, operation).Context(ctx).Do()
+		op, err := c.service.ZoneOperations.Wait(project, zone, operation).Context(deadline).Do()
 		if err != nil {
 			return fmt.Errorf("waiting for the operation: %w", err)
 		}
 
-		if op.Status != "DONE" {
-			// Wait returns after at most two minutes whether or not the
-			// operation finished; only the caller's context bounds the total.
-			continue
+		if op.Status == "DONE" {
+			return zoneOperationOutcome(op)
 		}
 
-		if op.Error != nil && len(op.Error.Errors) > 0 {
-			first := op.Error.Errors[0]
-
-			return fmt.Errorf("the operation failed: %s: %s", first.Code, first.Message)
+		// Wait normally holds the request open up to two minutes, but the
+		// SDK documents it as best-effort — under load it "might return
+		// after zero seconds" — so the pause is what keeps a hot server from
+		// being hammered in a tight loop.
+		select {
+		case <-deadline.Done():
+			return fmt.Errorf("waiting for the operation: %w", deadline.Err())
+		case <-time.After(time.Second):
 		}
-
-		return nil
 	}
 }
 
+// zoneOperationOutcome reads a DONE operation's verdict. The Error list is
+// the usual carrier, but the API also expresses failure as a bare HTTP
+// status on the operation — belt and braces, since the docs promise neither
+// shape exclusively and a failure read as success becomes a silent
+// ten-minute wait for a machine that was never coming.
+func zoneOperationOutcome(op *compute.Operation) error {
+	if op.Error != nil && len(op.Error.Errors) > 0 {
+		first := op.Error.Errors[0]
+
+		return fmt.Errorf("the operation failed: %s: %s", first.Code, first.Message)
+	}
+
+	if op.HttpErrorStatusCode >= http.StatusBadRequest {
+		return fmt.Errorf("the operation failed: HTTP %d: %s", op.HttpErrorStatusCode, op.HttpErrorMessage)
+	}
+
+	return nil
+}
+
+// Start waits the operation out for the same reason InsertFromTemplate does:
+// GCE reports a start that cannot happen — an exhausted zone, a fingerprint
+// conflict — in the operation, not the accepting call, and skipping the wait
+// turns each into a silent ten-minute poll of an instance that stays parked.
 func (c *gceClient) Start(ctx context.Context, project, zone, name string) error {
-	_, err := c.service.Instances.Start(project, zone, name).Context(ctx).Do()
+	op, err := c.service.Instances.Start(project, zone, name).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("starting %s: %w", name, err)
+	}
+
+	err = c.awaitZoneOperation(ctx, project, zone, op.Name)
 	if err != nil {
 		return fmt.Errorf("starting %s: %w", name, err)
 	}
@@ -221,8 +256,16 @@ func (c *gceClient) AddSSHKey(ctx context.Context, project, zone, name, entry st
 	return fmt.Errorf("writing metadata on %s: lost the update race %d times: %w", name, attempts, lastErr)
 }
 
-// mergeSSHKey appends one entry to the metadata's ssh-keys item, reporting
-// whether anything changed.
+// mergeSSHKey merges one entry into the metadata's ssh-keys item, pruning
+// expired google-ssh entries as it goes, and reports whether anything
+// changed.
+//
+// The pruning is this end's job, not the guest agent's: the agent only
+// stops HONORING an expired key — it has no credentials to write metadata
+// back (the worker may hold no service account at all) — so without a
+// client-side sweep every install would append forever, until the value hit
+// GCE's 256KB metadata cap and no key could be installed at all. gcloud
+// prunes on install for exactly this reason.
 func mergeSSHKey(metadata *compute.Metadata, entry string) bool {
 	for _, item := range metadata.Items {
 		if item.Key != "ssh-keys" {
@@ -234,18 +277,16 @@ func mergeSSHKey(metadata *compute.Metadata, entry string) bool {
 			existing = *item.Value
 		}
 
-		for line := range strings.SplitSeq(existing, "\n") {
-			if strings.TrimSpace(line) == entry {
-				return false
-			}
+		kept, present, pruned := liveSSHKeys(existing, entry)
+		if !present {
+			kept = append(kept, entry)
 		}
 
-		combined := strings.TrimRight(existing, "\n")
-		if combined != "" {
-			combined += "\n"
+		if present && !pruned {
+			return false
 		}
 
-		combined += entry
+		combined := strings.Join(kept, "\n")
 		item.Value = &combined
 
 		return true
@@ -255,6 +296,56 @@ func mergeSSHKey(metadata *compute.Metadata, entry string) bool {
 	metadata.Items = append(metadata.Items, &compute.MetadataItems{Key: "ssh-keys", Value: &value})
 
 	return true
+}
+
+// liveSSHKeys filters an ssh-keys value down to the lines worth keeping,
+// reporting whether entry was among them and whether anything was dropped.
+func liveSSHKeys(existing, entry string) (kept []string, present, pruned bool) {
+	for line := range strings.SplitSeq(existing, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+
+		if expiredSSHKey(trimmed) {
+			pruned = true
+
+			continue
+		}
+
+		if trimmed == entry {
+			present = true
+		}
+
+		kept = append(kept, trimmed)
+	}
+
+	return kept, present, pruned
+}
+
+// expiredSSHKey reports whether a line is a google-ssh entry whose expireOn
+// has passed. Anything unparseable is kept — a permanent key an operator
+// installed by hand is not this end's to remove.
+func expiredSSHKey(line string) bool {
+	_, rest, found := strings.Cut(line, " google-ssh ")
+	if !found {
+		return false
+	}
+
+	var grant struct {
+		ExpireOn string `json:"expireOn"`
+	}
+
+	if json.Unmarshal([]byte(rest), &grant) != nil || grant.ExpireOn == "" {
+		return false
+	}
+
+	expiry, err := time.Parse(gcpKeyExpiryLayout, grant.ExpireOn)
+	if err != nil {
+		return false
+	}
+
+	return time.Now().After(expiry)
 }
 
 func (c *gceClient) GuestAttributes(ctx context.Context, project, zone, name, path string) (map[string]string, error) {
@@ -324,7 +415,17 @@ func acquireGCE(ctx context.Context, worker Worker) (Worker, func(context.Contex
 // is done with it. A stopped GCE instance reports TERMINATED — Compute
 // Engine's word for "stopped, disk kept", not for "gone".
 func gceStartParked(ctx context.Context, api gceAPI, worker Worker, project, zone string) (Worker, func(context.Context, bool) error, error) {
-	err := api.Start(ctx, project, zone, worker.Instance)
+	// A previous job's park may still be settling: release returns once the
+	// stop is ACCEPTED, and starting again while the instance is STOPPING
+	// loses a fingerprint race inside GCE ("the resource fingerprint changed
+	// during the start operation" — observed). Back-to-back serial jobs on
+	// one parked worker hit this window every time, so wait it out first.
+	err := gceAwaitParkComplete(ctx, api, worker, project, zone)
+	if err != nil {
+		return Worker{}, nil, err
+	}
+
+	err = api.Start(ctx, project, zone, worker.Instance)
 	if err != nil {
 		return Worker{}, nil, fmt.Errorf("starting %s for %q: %w", worker.Instance, worker.URL, err)
 	}
@@ -340,16 +441,7 @@ func gceStartParked(ctx context.Context, api gceAPI, worker Worker, project, zon
 	}
 
 	release := func(ctx context.Context, immediate bool) error {
-		// The idle window first, exactly as the EC2 parked rung holds one.
-		if worker.Idle > 0 && !immediate {
-			fmt.Printf("worker %s: holding %s for %s before parking (?idle=0 parks immediately)\n",
-				worker.URL, worker.Instance, worker.Idle)
-
-			select {
-			case <-time.After(worker.Idle):
-			case <-ctx.Done():
-			}
-		}
+		holdIdleWindow(ctx, worker, immediate)
 
 		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
@@ -369,6 +461,34 @@ func gceStartParked(ctx context.Context, api gceAPI, worker Worker, project, zon
 	return worker.asStatic(worker.Instance), release, nil
 }
 
+// gceAwaitParkComplete waits out an in-flight stop, so Start acts on a
+// machine that has finished parking rather than one still on its way down.
+func gceAwaitParkComplete(ctx context.Context, api gceAPI, worker Worker, project, zone string) error {
+	deadline, cancel := context.WithTimeout(ctx, acquireTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(acquirePoll)
+	defer ticker.Stop()
+
+	for {
+		status, err := api.Status(deadline, project, zone, worker.Instance)
+		if err != nil {
+			return fmt.Errorf("asking about %s for %q before starting it: %w", worker.Instance, worker.URL, err)
+		}
+
+		switch status {
+		case "STOPPING", "PENDING_STOP", "DEPROVISIONING", "SUSPENDING":
+		default:
+			return nil
+		}
+
+		err = awaitTick(deadline, ticker, worker, worker.Instance)
+		if err != nil {
+			return err
+		}
+	}
+}
+
 // gceStopInstance is the best-effort stop for a machine a failed acquisition
 // leaves running, under its own context for the reason cleanupTimeout gives.
 func gceStopInstance(api gceAPI, worker Worker, project, zone, name string) {
@@ -386,8 +506,21 @@ func gceStopInstance(api gceAPI, worker Worker, project, zone, name string) {
 func gceLaunch(ctx context.Context, api gceAPI, worker Worker, project, zone string) (Worker, func(context.Context, bool) error, error) {
 	name := gceWorkerName()
 
+	// Named BEFORE the money is spent: the name is client-chosen, so a crash
+	// anywhere past the insert leaves a findable trace rather than an
+	// anonymous billing machine.
+	fmt.Printf("worker %s: creating %s from template %s\n", worker.URL, name, worker.Template)
+
 	err := api.InsertFromTemplate(ctx, project, zone, name, worker.Template)
 	if err != nil {
+		// The insert is two-phased — the create is ACCEPTED before its
+		// operation is waited out — so an error here (the caller's context
+		// cancelled mid-wait, most likely) can leave a machine being built
+		// that nothing later will delete. Deleting a machine that was never
+		// created answers 404 and is a no-op.
+		//nolint:contextcheck // as gceStopInstance: the caller's context may be the problem
+		gceDeleteInstance(api, worker, project, zone, name)
+
 		return Worker{}, nil, fmt.Errorf("launching a worker for %q: %w", worker.URL, err)
 	}
 
@@ -459,16 +592,26 @@ func gceWaitForRunning(ctx context.Context, api gceAPI, worker Worker, project, 
 
 	left := leaving == ""
 
+	// seen latches once the instance has answered a Status at all — for a
+	// parked machine immediately, since its existence was proven before
+	// Start. Unlike EC2, where a dead instance stays describable for an
+	// hour, GCE answers a DELETED instance with an immediate and permanent
+	// 404 — indistinguishable from creation lag only until the first
+	// sighting.
+	seen := leaving != ""
+
 	for {
 		status, err := api.Status(deadline, project, zone, name)
 		if err != nil {
-			err = gceWaitOutInvisible(deadline, ticker, worker, name, err)
+			err = gceWaitOutInvisible(deadline, ticker, worker, name, err, seen)
 			if err != nil {
 				return err
 			}
 
 			continue
 		}
+
+		seen = true
 
 		if !left {
 			if status == leaving {
@@ -497,11 +640,18 @@ func gceWaitForRunning(ctx context.Context, api gceAPI, worker Worker, project, 
 
 // gceWaitOutInvisible sleeps through the API's replica lag, or gives back
 // the error that was not lag: every name that reaches the wait was accepted
-// by the API itself, so "does not exist" before the first sighting can only
-// mean "not yet".
-func gceWaitOutInvisible(ctx context.Context, ticker *time.Ticker, worker Worker, name string, cause error) error {
+// by the API itself, so "does not exist" BEFORE the first sighting can only
+// mean "not yet". After one, it means the opposite — a machine that existed
+// and now does not was deleted out from under the wait (a preempted spot
+// instance whose template says DELETE, most likely), and waiting longer
+// would spend the whole timeout on a machine that is never coming back.
+func gceWaitOutInvisible(ctx context.Context, ticker *time.Ticker, worker Worker, name string, cause error, seen bool) error {
 	if !errors.Is(cause, errGCENotFound) {
 		return fmt.Errorf("waiting for %s for %q: %w", name, worker.URL, cause)
+	}
+
+	if seen {
+		return fmt.Errorf("%w %q: %s vanished while being acquired", ErrWorker, worker.URL, name)
 	}
 
 	return awaitTick(ctx, ticker, worker, name)
@@ -513,12 +663,17 @@ func gceArrivedOrDead(status string, worker Worker, name string) (bool, error) {
 	switch status {
 	case "RUNNING":
 		return true, nil
-	case "STOPPING", "SUSPENDING", "SUSPENDED", "TERMINATED":
+	case "STOPPING", "PENDING_STOP", "DEPROVISIONING", "SUSPENDING", "SUSPENDED", "TERMINATED":
 		// A machine going the other way is never going to arrive: a
-		// preemption, or an operator's stop, mid-acquisition.
+		// preemption, or an operator's stop, mid-acquisition. PENDING_STOP
+		// and DEPROVISIONING are the graceful-shutdown and teardown phases
+		// of the same journey.
 		return false, fmt.Errorf("%w %q: %s went to %s while being acquired", ErrWorker, worker.URL, name, status)
 	}
 
-	// PROVISIONING, STAGING, REPAIRING: still on its way.
+	// PROVISIONING, STAGING, REPAIRING, PENDING: still on its way. STOPPED
+	// deliberately waits too — it is a resting state a parked machine can be
+	// STARTED from, and the parked rung's wait must be able to watch one
+	// depart it.
 	return false, nil
 }

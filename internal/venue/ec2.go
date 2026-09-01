@@ -115,12 +115,25 @@ func (w Worker) needsAcquisition() bool {
 var errNoCapacity = errors.New("no capacity for the requested worker")
 
 // acquire brings a worker's machine into existence and returns the static
-// worker that names it, plus how to give it back.
+// worker that names it, plus how to give it back. A scheme switch rather
+// than an if-chain, so the exhaustive linter makes the next scheme decide
+// its acquisition story instead of falling into another cloud's.
 func acquire(ctx context.Context, worker Worker) (Worker, func(context.Context, bool) error, error) {
-	if worker.Scheme == SchemeGCP {
+	switch worker.Scheme {
+	case SchemeAWS:
+		return acquireEC2(ctx, worker)
+	case SchemeGCP:
 		return acquireGCE(ctx, worker)
+	case SchemeLocal, SchemeSSH:
+		// Machines that already exist by definition; nothing to acquire.
+		return worker, nil, nil
+	default:
+		return worker, nil, nil
 	}
+}
 
+// acquireEC2 is acquire for the aws:// rungs.
+func acquireEC2(ctx context.Context, worker Worker) (Worker, func(context.Context, bool) error, error) {
 	api, err := ec2For(ctx, worker)
 	if err != nil {
 		return Worker{}, nil, err
@@ -158,20 +171,7 @@ func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(c
 	}
 
 	release := func(ctx context.Context, immediate bool) error {
-		// After the idle window, not immediately: an operator who set ?idle=
-		// asked for back-to-back jobs to find the machine warm, at the
-		// stated price of the releasing job waiting out the window. An
-		// immediate release skips it — a machine being reclaimed is not one
-		// anybody is waiting to reuse.
-		if worker.Idle > 0 && !immediate {
-			fmt.Printf("worker %s: holding %s for %s before parking (?idle=0 parks immediately)\n",
-				worker.URL, worker.Instance, worker.Idle)
-
-			select {
-			case <-time.After(worker.Idle):
-			case <-ctx.Done():
-			}
-		}
+		holdIdleWindow(ctx, worker, immediate)
 
 		// A context of its own for the Stop itself: the wait above may have
 		// consumed the caller's entire budget, and returning without stopping
@@ -192,6 +192,27 @@ func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(c
 	fmt.Printf("worker %s: started %s\n", worker.URL, worker.Instance)
 
 	return worker.asStatic(worker.Instance), release, nil
+}
+
+// holdIdleWindow waits out a parked worker's ?idle= window before it is
+// stopped — after the window, not immediately: an operator who set ?idle=
+// asked for back-to-back jobs to find the machine warm, at the stated price
+// of the releasing job waiting it out. An immediate release skips it — a
+// machine being reclaimed is not one anybody is waiting to reuse. Shared by
+// every parked rung, because ?idle= is steps' own semantics rather than any
+// one cloud's.
+func holdIdleWindow(ctx context.Context, worker Worker, immediate bool) {
+	if worker.Idle <= 0 || immediate {
+		return
+	}
+
+	fmt.Printf("worker %s: holding %s for %s before parking (?idle=0 parks immediately)\n",
+		worker.URL, worker.Instance, worker.Idle)
+
+	select {
+	case <-time.After(worker.Idle):
+	case <-ctx.Done():
+	}
 }
 
 // cleanupTimeout bounds the API call that gives a machine back on a path

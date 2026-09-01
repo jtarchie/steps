@@ -16,36 +16,23 @@ type Target struct {
 	Project  string
 	Zone     string
 	Instance string
-	// Interface is the instance NIC, defaultInterface when empty.
-	Interface string
-	Port      int
-	// Endpoint overrides the relay's public address, for tests that stand in
-	// for it. A ws:// or wss:// base URL ending in the version path.
-	Endpoint string
+	Port     int
 }
 
 // ConnectURL is the relay URL for a target, in the exact shape the canonical
-// client builds.
+// client builds. Always the first NIC and the public relay: nothing in the
+// worker grammar can name another, and the tests that stand a relay in seam
+// at Open with a literal URL rather than through here.
 func ConnectURL(target Target) string {
-	endpoint := target.Endpoint
-	if endpoint == "" {
-		endpoint = defaultEndpoint
-	}
-
-	nic := target.Interface
-	if nic == "" {
-		nic = defaultInterface
-	}
-
 	query := url.Values{}
 	query.Set("project", target.Project)
 	query.Set("port", strconv.Itoa(target.Port))
 	query.Set("newWebsocket", "true")
 	query.Set("zone", target.Zone)
 	query.Set("instance", target.Instance)
-	query.Set("interface", nic)
+	query.Set("interface", defaultInterface)
 
-	return endpoint + "/connect?" + query.Encode()
+	return defaultEndpoint + "/connect?" + query.Encode()
 }
 
 // Open dials the relay and waits for it to confirm the backend connection,

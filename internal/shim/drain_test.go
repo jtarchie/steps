@@ -10,6 +10,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -104,16 +105,17 @@ func TestDetectCloudSettlesOnEC2(t *testing.T) {
 
 func TestDetectCloudGivesUpOffCloud(t *testing.T) {
 	// A server that answers, but as neither cloud: no Metadata-Flavor
-	// header, and a refused token handshake. A 200 alone must not read as
-	// GCE — any captive portal answers 200.
+	// header anywhere. A 200 alone must not read as GCE — any captive
+	// portal answers 200.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("hello"))
 	}))
 	t.Cleanup(server.Close)
 	swapMetadataBase(t, server.URL)
 
-	// The IMDS token PUT gets a 200 here too, which counts as "answered" for
-	// EC2 — so this asserts only that GCE is not claimed without its header.
+	// The IMDS token PUT gets a 200 "hello" here too, which reads as a
+	// granted token — so this asserts only that GCE is not claimed without
+	// its header.
 	cloud, _ := detectCloud(context.Background(), drainClient())
 	if cloud == cloudGCE {
 		t.Fatal("a server without the Metadata-Flavor header was read as GCE")
@@ -127,9 +129,77 @@ func TestDetectCloudGivesUpWhenNothingAnswers(t *testing.T) {
 	server.Close()
 	swapMetadataBase(t, server.URL)
 
-	_, settled := detectCloud(context.Background(), drainClient())
-	if settled {
-		t.Fatal("an unreachable metadata service settled on a cloud")
+	_, answered := detectCloud(context.Background(), drainClient())
+	if answered {
+		t.Fatal("an unreachable metadata service read as answering")
+	}
+}
+
+func TestDetectCloudDoesNotSettleEC2WithoutAToken(t *testing.T) {
+	// GCE's metadata service answers the IMDS token PUT too — with a 404.
+	// An answer without a token must not settle EC2: on a GCE machine whose
+	// identifying probe blipped, that misread would poll EC2 spot paths for
+	// the life of the session and never see a real preemption.
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+	swapMetadataBase(t, server.URL)
+
+	cloud, answered := detectCloud(context.Background(), drainClient())
+	if cloud != cloudUnknown || !answered {
+		t.Fatalf("detectCloud = %v, %v — want unknown but answered", cloud, answered)
+	}
+}
+
+func TestSettleCloudRetriesAfterABlipAndSettlesGCE(t *testing.T) {
+	// The sharp scenario: a GCE machine whose identifying probe fails once
+	// (a 5xx — carrying the Metadata-Flavor header, as every GCE response
+	// does), while the token PUT gets GCE's 404. The watcher must neither
+	// stop nor settle on EC2; the next tick's probe settles GCE.
+	var blipped atomic.Bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Metadata-Flavor", "Google")
+
+		if req.URL.Path == "/computeMetadata/v1/instance/id" {
+			if blipped.CompareAndSwap(false, true) {
+				http.Error(w, "transient", http.StatusInternalServerError)
+
+				return
+			}
+
+			_, _ = w.Write([]byte("1234567890"))
+
+			return
+		}
+
+		http.NotFound(w, req)
+	}))
+	t.Cleanup(server.Close)
+	swapMetadataBase(t, server.URL)
+
+	cloud := cloudUnknown
+
+	done := settleCloud(context.Background(), drainClient(), &cloud)
+	if done || cloud != cloudUnknown {
+		t.Fatalf("first probe: done=%v cloud=%v — want the watcher alive and unsettled", done, cloud)
+	}
+
+	done = settleCloud(context.Background(), drainClient(), &cloud)
+	if done || cloud != cloudGCE {
+		t.Fatalf("second probe: done=%v cloud=%v — want GCE settled", done, cloud)
+	}
+}
+
+func TestSettleCloudStopsForGoodWhenNothingAnswers(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	server.Close()
+	swapMetadataBase(t, server.URL)
+
+	cloud := cloudUnknown
+
+	done := settleCloud(context.Background(), drainClient(), &cloud)
+	if !done {
+		t.Fatal("a dead metadata address kept the watcher polling")
 	}
 }
 

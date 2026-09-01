@@ -11,9 +11,12 @@ package shim
 //
 // Both clouds answer the same link-local address, so which one this machine
 // is on is itself a question the watcher settles once: GCE identifies itself
-// with a Metadata-Flavor header no other service sends, and EC2 by answering
-// the IMDSv2 token handshake. A machine that answers as neither cannot have
-// a notice, and the watcher stops for good.
+// with a Metadata-Flavor header no other service sends, and EC2 by the
+// IMDSv2 token handshake granting a token. A machine where nothing answers
+// at all cannot have a notice, and the watcher stops for good; one that
+// answered without identifying itself is asked again next tick, because the
+// likeliest such machine is a cloud machine mid-blip — and settling on a
+// guess would disarm the watch for the life of the session.
 
 import (
 	"context"
@@ -117,17 +120,14 @@ func (s *session) watchForDrain(ctx context.Context) {
 // that cannot have a notice, or a terminal notice already relayed — and sent
 // says an advisory notice went out this round.
 func (s *session) pollDrain(ctx context.Context, client *http.Client, advised bool, cloud *metadataCloud) (done, sent bool) {
-	if *cloud == cloudUnknown {
-		detected, settled := detectCloud(ctx, client)
-		if !settled {
-			// On neither cloud: the metadata service is link-local and
-			// answers nothing anywhere else. One failed probe settles it for
-			// the life of the session — polling a machine that cannot have a
-			// notice would spend timeouts every tick for nothing.
-			return true, false
-		}
+	if done := settleCloud(ctx, client, cloud); done {
+		return true, false
+	}
 
-		*cloud = detected
+	if *cloud == cloudUnknown {
+		// Answered, but as neither cloud — a blip, most likely. Detection
+		// runs again next tick; the address is alive, so the retry is cheap.
+		return false, false
 	}
 
 	notice, terminal := cloudNotice(ctx, client, *cloud)
@@ -146,22 +146,50 @@ func (s *session) pollDrain(ctx context.Context, client *http.Client, advised bo
 	return terminal, !terminal
 }
 
-// detectCloud asks which cloud's metadata service is answering, reporting
-// settled=false when neither is.
+// settleCloud runs detection once if it is still needed. done says the
+// watcher can never have a notice: nothing answers the link-local address at
+// all, which no retry will change — the metadata service answers nothing
+// anywhere outside a cloud, and polling a machine that cannot have a notice
+// would spend timeouts every tick for nothing. An ANSWER that identifies
+// neither cloud deliberately does not settle anything: a GCE machine whose
+// identifying probe blipped still answers the EC2 token PUT (with a 404),
+// and settling on that answer would poll spot paths GCE 404s forever — a
+// real preemption never relayed, on the machine the watch exists for.
+func settleCloud(ctx context.Context, client *http.Client, cloud *metadataCloud) (done bool) {
+	if *cloud != cloudUnknown {
+		return false
+	}
+
+	detected, answered := detectCloud(ctx, client)
+	if detected == cloudUnknown {
+		return !answered
+	}
+
+	*cloud = detected
+
+	return false
+}
+
+// detectCloud asks which cloud's metadata service is answering. answered
+// reports whether anything answered at all — a settled cloud always did,
+// while cloudUnknown with answered=true is a service that spoke without
+// identifying itself.
 //
 // GCE first, because its answer is the stronger claim: the response carries
-// a Metadata-Flavor header nothing else sends, while EC2 is identified only
-// by the token handshake answering at all.
+// a Metadata-Flavor header nothing else sends. EC2 is claimed only by the
+// token handshake GRANTING a token — merely answering is not enough, since
+// GCE answers the same PUT too, with a 404.
 func detectCloud(ctx context.Context, client *http.Client) (metadataCloud, bool) {
 	if gceReachable(ctx, client) {
 		return cloudGCE, true
 	}
 
-	if _, reachable := imdsToken(ctx, client); reachable {
+	token, reachable := imdsToken(ctx, client)
+	if reachable && token != "" {
 		return cloudEC2, true
 	}
 
-	return cloudUnknown, false
+	return cloudUnknown, reachable
 }
 
 // cloudNotice asks the settled cloud whether this machine is being taken.
@@ -236,12 +264,23 @@ func gceNotice(ctx context.Context, client *http.Client) (wire.Draining, bool) {
 // gceValue reads one GCE metadata path. Absence, emptiness and errors all
 // report not-ok — the same no-fabricated-notices rule imdsGet holds.
 func gceValue(ctx context.Context, client *http.Client, path string) (string, bool) {
+	return metadataGet(ctx, client, path, "Metadata-Flavor", "Google")
+}
+
+// metadataGet reads one metadata path, for either cloud — the same request,
+// bound, and no-fabricated-notices rule either way; only the identifying
+// header differs, and an empty header value sends none at all. Absence, a
+// non-200, an empty body and errors all report not-ok: a fabricated notice
+// terminates a healthy machine.
+func metadataGet(ctx context.Context, client *http.Client, path, header, headerValue string) (string, bool) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataBase+path, nil)
 	if err != nil {
 		return "", false
 	}
 
-	request.Header.Set("Metadata-Flavor", "Google")
+	if headerValue != "" {
+		request.Header.Set(header, headerValue)
+	}
 
 	response, err := client.Do(request)
 	if err != nil {
@@ -344,39 +383,8 @@ func spotNotice(ctx context.Context, client *http.Client, token string) (wire.Dr
 
 // imdsGet reads one metadata path. A 404 is the ordinary answer — it is how
 // the service says "no notice" — so absence is reported as not-ok rather than
-// as an error.
+// as an error. An empty token sends no header, for the v1-allowed instance
+// that never granted one.
 func imdsGet(ctx context.Context, client *http.Client, token, path string) (string, bool) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataBase+path, nil)
-	if err != nil {
-		return "", false
-	}
-
-	if token != "" {
-		request.Header.Set("X-aws-ec2-metadata-token", token)
-	}
-
-	response, err := client.Do(request)
-	if err != nil {
-		return "", false
-	}
-
-	defer func() { _ = response.Body.Close() }()
-
-	if response.StatusCode != http.StatusOK {
-		return "", false
-	}
-
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxMetadataBytes))
-	if err != nil {
-		return "", false
-	}
-
-	value := strings.TrimSpace(string(body))
-	if value == "" {
-		// A 200 with nothing in it is not a notice. Reporting one would
-		// fabricate an eviction and terminate a healthy machine.
-		return "", false
-	}
-
-	return value, true
+	return metadataGet(ctx, client, path, "X-aws-ec2-metadata-token", token)
 }

@@ -710,19 +710,3 @@ func TestConnectURLCarriesTheTarget(t *testing.T) {
 		}
 	}
 }
-
-func TestConnectURLHonorsAnEndpointOverride(t *testing.T) {
-	t.Parallel()
-
-	connectURL := ConnectURL(Target{
-		Project:  "p",
-		Zone:     "z",
-		Instance: "i",
-		Port:     22,
-		Endpoint: "ws://127.0.0.1:9999/v4",
-	})
-
-	if !strings.HasPrefix(connectURL, "ws://127.0.0.1:9999/v4/connect?") {
-		t.Fatalf("URL = %q, want the override endpoint", connectURL)
-	}
-}

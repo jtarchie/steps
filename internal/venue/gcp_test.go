@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,8 +32,6 @@ import (
 // fakeGCE is the control plane: instance lifecycle, metadata, and guest
 // attributes, scripted per test.
 type fakeGCE struct {
-	t *testing.T
-
 	mu       sync.Mutex
 	statuses []string
 	inserts  []string
@@ -43,6 +42,7 @@ type fakeGCE struct {
 
 	hostKeys           map[string]string
 	attributesDelay    int
+	attributesBlips    int
 	attributesDisabled bool
 	insertErr          error
 }
@@ -124,6 +124,12 @@ func (f *fakeGCE) GuestAttributes(_ context.Context, _, _, name, _ string) (map[
 		return nil, fmt.Errorf("%w: %s", errGuestAttributesDisabled, name)
 	}
 
+	if f.attributesBlips > 0 {
+		f.attributesBlips--
+
+		return nil, errors.New("scripted: 503 from the control plane")
+	}
+
 	if f.attributesDelay > 0 {
 		f.attributesDelay--
 
@@ -136,6 +142,15 @@ func (f *fakeGCE) GuestAttributes(_ context.Context, _, _, name, _ string) (map[
 // newGCPSSHD is the worker's sshd: the shared harness, configured to accept
 // the process's own gcp:// identity — the key dialGCP mints and installs.
 func newGCPSSHD(t *testing.T) *testSSHD {
+	t.Helper()
+
+	return newGCPSSHDRejectingFirst(t, 0)
+}
+
+// newGCPSSHDRejectingFirst refuses the first n authentication attempts the
+// way a guest agent that has not yet applied a freshly-installed metadata
+// key does, then accepts — the propagation window the dial must wait out.
+func newGCPSSHDRejectingFirst(t *testing.T, n int) *testSSHD {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -153,8 +168,14 @@ func newGCPSSHD(t *testing.T) *testSSHD {
 		t.Fatalf("gcpKey: %v", err)
 	}
 
+	var rejections atomic.Int64
+
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			if int(rejections.Add(1)) <= n {
+				return nil, errors.New("the key has not propagated yet")
+			}
+
 			if meta.User() != gcpUser {
 				return nil, fmt.Errorf("unexpected user %q", meta.User())
 			}
@@ -207,8 +228,6 @@ func hostKeyAttributes(t *testing.T, pub ssh.PublicKey) map[string]string {
 // with only Google itself replaced.
 func seamGCP(t *testing.T, fake *fakeGCE, sshd *testSSHD) {
 	t.Helper()
-
-	fake.t = t
 
 	if fake.hostKeys == nil && sshd != nil {
 		fake.hostKeys = hostKeyAttributes(t, sshd.HostKey)
@@ -886,5 +905,326 @@ func TestGCPPlacementCheck(t *testing.T) {
 		}
 	} else if err == nil || !strings.Contains(err.Error(), "?binary=") {
 		t.Errorf("PlacementCheck off linux = %v, want the fix named", err)
+	}
+}
+
+// TestGCPLaunchFailedInsertDeletesTheInstance pins the cleanup on the
+// two-phase insert: the create can be ACCEPTED even though the wait for its
+// operation fails (the caller's context cancelled mid-wait, most likely), so
+// the error path must delete what may be building — a machine that was never
+// created answers the delete with a 404 no-op.
+func TestGCPLaunchFailedInsertDeletesTheInstance(t *testing.T) {
+	fake := &fakeGCE{insertErr: errors.New("scripted: the operation failed mid-wait")}
+	seamGCP(t, fake, nil)
+
+	worker, err := ParseWorker("gcp://launch/steps-workers?project=test-project&zone=us-central1-a")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	_, _, err = acquire(context.Background(), worker)
+	if err == nil {
+		t.Fatal("a failed insert was acquired")
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.deletes) != 1 {
+		t.Errorf("deletes = %v, want the possibly-building instance deleted rather than leaked", fake.deletes)
+	}
+}
+
+// TestGCPParkedRungWaitsOutAnUnfinishedStop pins the pre-Start wait: release
+// returns once the stop is ACCEPTED, so back-to-back jobs find the instance
+// still STOPPING — and starting it then loses a fingerprint race inside GCE.
+func TestGCPParkedRungWaitsOutAnUnfinishedStop(t *testing.T) {
+	fake := &fakeGCE{statuses: []string{"STOPPING", "TERMINATED", "RUNNING"}}
+	seamGCP(t, fake, nil)
+
+	worker, err := ParseWorker("gcp://stopped/worker-1?project=test-project&zone=us-central1-a")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	resolved, release, err := acquire(context.Background(), worker)
+	if err != nil {
+		t.Fatalf("acquire through an unfinished stop: %v", err)
+	}
+
+	_ = release(context.Background(), true)
+
+	if resolved.Instance != "worker-1" {
+		t.Errorf("resolved = %+v, want the parked instance", resolved)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.starts) != 1 {
+		t.Errorf("starts = %v, want exactly one, after the stop settled", fake.starts)
+	}
+}
+
+// TestGCPLaunchVanishedInstanceFailsFast pins the seen latch: a 404 AFTER
+// the instance has been sighted is a deletion (a preempted spot instance
+// whose template says DELETE), not replica lag, and must not spend the whole
+// acquire timeout waiting for a machine that is never coming back.
+func TestGCPLaunchVanishedInstanceFailsFast(t *testing.T) {
+	fake := &fakeGCE{statuses: []string{"PROVISIONING", "notfound"}}
+	seamGCP(t, fake, nil)
+
+	worker, err := ParseWorker("gcp://launch/steps-workers?project=test-project&zone=us-central1-a")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	_, _, err = acquire(context.Background(), worker)
+	if err == nil || !strings.Contains(err.Error(), "vanished") {
+		t.Fatalf("acquire = %v, want the deletion named rather than a timeout", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.deletes) != 1 {
+		t.Errorf("deletes = %v, want the cleanup attempted all the same", fake.deletes)
+	}
+}
+
+// TestGCPLaunchGracefulShutdownIsNeverComing pins PENDING_STOP in the dead
+// list: a spot template with a graceful-shutdown window parks a preempted
+// machine there for minutes, and reading it as still-booting spends the
+// whole wait on a machine already leaving.
+func TestGCPLaunchGracefulShutdownIsNeverComing(t *testing.T) {
+	fake := &fakeGCE{statuses: []string{"PENDING_STOP"}}
+	seamGCP(t, fake, nil)
+
+	worker, err := ParseWorker("gcp://launch/steps-workers?project=test-project&zone=us-central1-a")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	_, _, err = acquire(context.Background(), worker)
+	if err == nil || !strings.Contains(err.Error(), "PENDING_STOP") {
+		t.Fatalf("acquire = %v, want the terminal status named", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.deletes) != 1 {
+		t.Errorf("deletes = %v, want the unusable instance deleted", fake.deletes)
+	}
+}
+
+// TestGCPDialRetriesWhileTheKeyPropagates pins the authentication retry:
+// AddSSHKey returns once the API holds the key, but the guest agent applies
+// it asynchronously, and the first handshakes lose that race. gcloud waits
+// this window out; so must the dial, instead of failing the step against a
+// healthy machine.
+func TestGCPDialRetriesWhileTheKeyPropagates(t *testing.T) {
+	shrinkGCPWaits(t)
+
+	sshd := newGCPSSHDRejectingFirst(t, 2)
+	fake := &fakeGCE{}
+	seamGCP(t, fake, sshd)
+
+	runner := newLocalRunner(t, localGCPWorker(t, sshd, t.TempDir()))
+
+	err := runner.Run(context.Background(), "true")
+	if err != nil {
+		t.Fatalf("Run against a slow guest agent: %v", err)
+	}
+}
+
+// TestGCPAuthFailureInvalidatesTheInstallCache pins the cache hygiene: a key
+// that never became usable means the cache is lying — the instance was
+// recreated under the same name, most likely — so the entry must go, letting
+// the next dial write the key again instead of skipping it for hours.
+func TestGCPAuthFailureInvalidatesTheInstallCache(t *testing.T) {
+	shrinkGCPWaits(t)
+
+	sshd := newGCPSSHDRejectingFirst(t, 1<<30)
+	fake := &fakeGCE{}
+	seamGCP(t, fake, sshd)
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locating the test binary: %v", err)
+	}
+
+	worker, err := ParseWorker("gcp://worker-1" + sshd.Root + "?project=test-project&zone=us-central1-a&binary=" + self)
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	// The exact final error varies with where the deadline lands — the last
+	// handshake's refusal, or a redial it cut off — so the assertion that
+	// matters is the cache one below: refusals were seen, and the entry must
+	// not outlive them.
+	_, err = dialGCP(context.Background(), worker)
+	if err == nil {
+		t.Fatal("dialGCP succeeded against an sshd that refuses every key")
+	}
+
+	if _, ok := gcpInstalled.Load("test-project/us-central1-a/worker-1"); ok {
+		t.Error("the install cache still trusts an instance that refused the key — a recreated machine stays undialable")
+	}
+}
+
+// TestGCPHostKeyWaitRidesOutAControlPlaneBlip pins the boot wait's error
+// tolerance: one 503 from the API mid-wait must not fail the dial — and
+// delete the machine a launch rung just paid for — when the next poll would
+// have connected.
+func TestGCPHostKeyWaitRidesOutAControlPlaneBlip(t *testing.T) {
+	shrinkGCPWaits(t)
+
+	sshd := newGCPSSHD(t)
+	fake := &fakeGCE{attributesBlips: 1}
+	seamGCP(t, fake, sshd)
+
+	runner := newLocalRunner(t, localGCPWorker(t, sshd, t.TempDir()))
+
+	err := runner.Run(context.Background(), "true")
+	if err != nil {
+		t.Fatalf("Run through a control-plane blip: %v", err)
+	}
+}
+
+// TestGCPDialFailsFastOnAParkedInstance pins the refusal's honesty: the
+// relay reports a parked machine and a missing firewall rule identically, so
+// the control plane referees — naming the real state at once instead of
+// blaming the firewall four minutes later.
+func TestGCPDialFailsFastOnAParkedInstance(t *testing.T) {
+	shrinkGCPWaits(t)
+
+	_, otherPub, _ := generateKey(t)
+	fake := &fakeGCE{
+		statuses: []string{"TERMINATED"},
+		hostKeys: hostKeyAttributes(t, otherPub),
+	}
+	seamGCP(t, fake, nil)
+
+	iapOpen = func(context.Context, iapdial.Target, string) (net.Conn, error) {
+		return nil, fmt.Errorf("scripted: %w", iapdial.ErrBackendNotReached)
+	}
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locating the test binary: %v", err)
+	}
+
+	worker, err := ParseWorker("gcp://worker-1?project=test-project&zone=us-central1-a&binary=" + self)
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	_, err = dialGCP(context.Background(), worker)
+	if err == nil || !strings.Contains(err.Error(), "is TERMINATED") || !strings.Contains(err.Error(), "gcp://stopped/") {
+		t.Fatalf("dialGCP = %v, want the parked state named with the stopped-rung fix", err)
+	}
+}
+
+// TestGCPTokenIsMintedPerDialAttempt pins where the token is minted: inside
+// the retry loop, so a boot wait that outlives the first token retries with
+// a fresh one instead of collecting misleading reauthentication refusals.
+func TestGCPTokenIsMintedPerDialAttempt(t *testing.T) {
+	shrinkGCPWaits(t)
+
+	sshd := newGCPSSHD(t)
+	fake := &fakeGCE{}
+	seamGCP(t, fake, sshd)
+
+	var mints atomic.Int64
+
+	gcpToken = func(context.Context) (string, error) {
+		mints.Add(1)
+
+		return "test-token", nil
+	}
+
+	var refusals atomic.Int64
+
+	innerOpen := iapOpen
+	iapOpen = func(ctx context.Context, target iapdial.Target, token string) (net.Conn, error) {
+		if refusals.Add(1) <= 2 {
+			return nil, fmt.Errorf("scripted: %w", iapdial.ErrBackendNotReached)
+		}
+
+		return innerOpen(ctx, target, token)
+	}
+
+	runner := newLocalRunner(t, localGCPWorker(t, sshd, t.TempDir()))
+
+	err := runner.Run(context.Background(), "true")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if mints.Load() < 3 {
+		t.Errorf("gcpToken minted %d times across 3 attempts — a token from before the wait can expire mid-wait", mints.Load())
+	}
+}
+
+// TestGCPProjectFromQuotaProjectID pins the ADC fallback for the credential
+// the docs prescribe: the authorized_user file `gcloud auth
+// application-default login` writes has no project_id, only a
+// quota_project_id — which must satisfy the documented "the credentials' own
+// project" fallback rather than sending the user back to a login they
+// already ran.
+func TestGCPProjectFromQuotaProjectID(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "adc.json")
+
+	err := os.WriteFile(file, []byte(`{"type":"authorized_user","client_id":"c","client_secret":"s","refresh_token":"r","quota_project_id":"quota-proj"}`), 0o600)
+	if err != nil {
+		t.Fatalf("writing the ADC file: %v", err)
+	}
+
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", file)
+
+	project, err := gcpDefaultProject(context.Background())
+	if err != nil || project != "quota-proj" {
+		t.Errorf("gcpDefaultProject = %q, %v — want the quota project the login stamped", project, err)
+	}
+}
+
+// TestMergeSSHKeyPrunesExpiredEntries pins the sweep: the guest agent only
+// stops HONORING an expired google-ssh entry — it cannot write metadata —
+// so the install is what keeps the value from growing to GCE's 256KB cap
+// and bricking the worker. Anything unparseable is an operator's to keep.
+func TestMergeSSHKeyPrunesExpiredEntries(t *testing.T) {
+	t.Parallel()
+
+	expired := fmt.Sprintf(`steps:ssh-ed25519 AAAA google-ssh {"userName":"steps","expireOn":%q}`,
+		time.Now().Add(-time.Hour).UTC().Format(gcpKeyExpiryLayout))
+	live := fmt.Sprintf(`steps:ssh-ed25519 BBBB google-ssh {"userName":"steps","expireOn":%q}`,
+		time.Now().Add(time.Hour).UTC().Format(gcpKeyExpiryLayout))
+	operator := "op:ssh-rsa CCCC op@laptop"
+
+	value := expired + "\n" + live + "\n" + operator
+	metadata := &compute.Metadata{Items: []*compute.MetadataItems{{Key: "ssh-keys", Value: &value}}}
+
+	if !mergeSSHKey(metadata, "steps:key-new") {
+		t.Fatal("merging into a value with an expired entry reported no change")
+	}
+
+	got := *metadata.Items[0].Value
+	if got != live+"\n"+operator+"\n"+"steps:key-new" {
+		t.Fatalf("ssh-keys after merge = %q — want the expired entry gone, the live and operator entries kept", got)
+	}
+
+	// A present entry still writes when there is something to prune, so a
+	// redial's no-op install is what sweeps the backlog.
+	expiredAgain := expired
+	value2 := expiredAgain + "\n" + "steps:key-new"
+	metadata2 := &compute.Metadata{Items: []*compute.MetadataItems{{Key: "ssh-keys", Value: &value2}}}
+
+	if !mergeSSHKey(metadata2, "steps:key-new") {
+		t.Fatal("a prunable value with the entry already present reported nothing to write")
+	}
+
+	if *metadata2.Items[0].Value != "steps:key-new" {
+		t.Fatalf("ssh-keys = %q, want only the live entry", *metadata2.Items[0].Value)
 	}
 }

@@ -294,10 +294,12 @@ func (c *Channel) data(body []byte) error {
 		return nil
 	}
 
-	chunk := append([]byte(nil), payload...)
-
+	// Delivered without a copy: ReadMessage allocates a fresh slice per
+	// message and gorilla never touches it again, so the payload is already
+	// exclusively this channel's — unlike ssmdial, whose reorder buffer
+	// retains payloads and must copy.
 	select {
-	case c.delivered <- chunk:
+	case c.delivered <- payload:
 	case <-c.stop:
 		return c.err()
 	}
