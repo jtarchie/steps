@@ -401,6 +401,17 @@ func cliArgs(prepared preparedAgentStep, runtime cliRuntime, mcpConfig string, p
 		args = append(args, "--append-system-prompt", persona)
 	}
 
+	// The one generation dial a CLI does take. The others (temperature,
+	// top_p, max_tokens) are refused at load because there is no request for
+	// steps to shape; reasoning depth is different — the CLI exposes it as a
+	// session-level flag, so the value the pipeline wrote binds. steps'
+	// accepted set (low/medium/high) is a subset of the CLI's, so no
+	// translation is needed; a value the CLI does not know would be its
+	// error to report, and validReasoningEfforts means it cannot arrive.
+	if prepared.ri.ReasoningEffort != "" {
+		args = append(args, "--effort", prepared.ri.ReasoningEffort)
+	}
+
 	// The CLI meters itself in dollars and can stop mid-conversation, which is
 	// the one circuit breaker available across the process boundary — a token
 	// count here only ever arrives after the spending is done.

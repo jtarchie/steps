@@ -373,3 +373,78 @@ func TestCLIAgentContainerRules(t *testing.T) {
 		})
 	}
 }
+
+// TestCLIAgentGenerationDials pins the split among the generation dials: a
+// CLI refuses the ones that would shape a request it makes itself, and takes
+// reasoning_effort, which it exposes as its own session-level --effort flag.
+//
+// The refused rows are asserted alongside the accepted one deliberately.
+// reasoning_effort was refused here until the CLI grew the flag, and the risk
+// in un-refusing one row of a table is deleting a neighbour with it — a
+// temperature: that loads while binding nothing is exactly the silent no-op
+// this file exists to prevent.
+func TestCLIAgentGenerationDials(t *testing.T) {
+	t.Parallel()
+
+	temperature, topP := 0.5, 0.9
+
+	tests := []struct {
+		name          string
+		mutate        func(*Agent)
+		wantErrSubstr string
+	}{
+		{
+			name:   "reasoning_effort is passed through",
+			mutate: func(a *Agent) { a.ReasoningEffort = "high" },
+		},
+		{
+			name:          "temperature is refused",
+			mutate:        func(a *Agent) { a.Temperature = &temperature },
+			wantErrSubstr: "temperature is not supported with a cli source",
+		},
+		{
+			name:          "top_p is refused",
+			mutate:        func(a *Agent) { a.TopP = &topP },
+			wantErrSubstr: "top_p is not supported with a cli source",
+		},
+		{
+			name:          "max_tokens is refused",
+			mutate:        func(a *Agent) { a.MaxTokens = 100 },
+			wantErrSubstr: "max_tokens is not supported with a cli source",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			agent := Agent{Name: "reviewer", Source: AgentSource{Model: "@claude/sonnet"}}
+			tt.mutate(&agent)
+
+			cfg := &Config{
+				Agents: []Agent{agent},
+				Jobs: []Job{{Name: "review", Plan: []Step{
+					{Agent: "reviewer", Messages: []string{"go"}, Inputs: &InputSpec{}},
+				}}},
+			}
+
+			err := cfg.validate()
+
+			if tt.wantErrSubstr == "" {
+				if err != nil {
+					t.Fatalf("validate: %v", err)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("expected an error containing %q", tt.wantErrSubstr)
+			}
+
+			if !strings.Contains(err.Error(), tt.wantErrSubstr) {
+				t.Errorf("error = %q, want it to contain %q", err, tt.wantErrSubstr)
+			}
+		})
+	}
+}

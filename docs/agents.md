@@ -819,7 +819,7 @@ jobs:
     outcome: succeeded
 ```
 
-- **A dial left unset is not sent**, so the provider's own default applies — steps never invents a temperature. `reasoning_effort:` is passed through to models that accept one and ignored by those that don't; a value outside `low`/`medium`/`high` is a load error.
+- **A dial left unset is not sent**, so the provider's own default applies — steps never invents a temperature. `reasoning_effort:` is passed through to models that accept one and ignored by those that don't; a value outside `low`/`medium`/`high` is a load error. It is the one dial on this list a [`@claude/` agent](#cli-backed-agents-claudesonnet) also takes, reaching the CLI as its own `--effort` flag rather than as part of a request steps shapes.
 - **Every dial folds into the step's hash**, unlike the operational limits (`attempts:`/`timeout:`/`budget:`): changing how the model samples changes what the step produces, so a cached result from one setting must not stand in for another.
 - **`defaults:` is a fallback, never an override.** Anything an agent states for itself wins; `defaults.model` fills in only for an agent whose `source:` names no model, which is what lets a whole pipeline be pointed at a different model by editing one line.
 - **`preflight:` composes both ways** — tune it pipeline-wide under `defaults:`, opt one agent out with `preflight: false`. See [the preflight section](README.md#commands).
@@ -1037,6 +1037,7 @@ agents:
     model: "@claude/sonnet"     # quotes required -- YAML reserves a leading @
   tools: [read_file, run_shell]
   settings: project             # opt in to the repo's checked-in .claude/ scope
+  reasoning_effort: high        # the one generation dial a CLI takes
   budget:
     usd: 0.50                   # CLI agents meter in dollars, not tokens
 
@@ -1105,7 +1106,7 @@ These are load errors, not silent no-ops, because a setting that reads as config
 | rejected | why |
 | --- | --- |
 | `source.endpoint:` | there is no request to aim anywhere |
-| `temperature:`, `top_p:`, `max_tokens:`, `reasoning_effort:` | the CLI chooses its own sampling |
+| `temperature:`, `top_p:`, `max_tokens:` | the CLI chooses its own sampling and its own output limits |
 | `source.string_tool_choice:` | no `tool_choice` on the wire to spell |
 | `compact_after_tokens:`, `context_window:` | the CLI compacts its own conversation |
 | `budget.tokens:` | nothing counts tokens until the subprocess exits (use `budget.usd:`) |

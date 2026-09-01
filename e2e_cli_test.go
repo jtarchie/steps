@@ -36,6 +36,7 @@ agents:
     model: "@claude/sonnet"
   system: You review code.
   max_turns: 12
+  reasoning_effort: high
   tools:
   - read_file
   - run_shell
@@ -95,6 +96,10 @@ func TestE2ECLIAgentInvocation(t *testing.T) {
 		"--setting-sources||",
 		// The built-in surface is an allow-list of exactly what was granted.
 		"--tools|Bash,Read|",
+		// reasoning_effort: reaches the CLI as its own --effort dial rather
+		// than being refused: the CLI grew one, and a step that asks for
+		// deeper reasoning should get it on either runner.
+		"--effort|high|",
 	} {
 		if !strings.Contains(argv, want) {
 			t.Errorf("argv is missing %q:\n%s", want, argv)

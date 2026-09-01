@@ -669,3 +669,30 @@ func newFakeBridgeObservation(t *testing.T, verdict, note string, calls []record
 
 	return bridge
 }
+
+// TestCLIArgsEffort covers the value-gating contract for reasoning_effort:
+// set, it becomes the CLI's own --effort; unset, the flag is absent entirely
+// so the CLI applies whatever default it would have without steps in the
+// picture. A zero-valued dial that still emitted a flag would be steps
+// choosing a reasoning depth the pipeline never asked for.
+func TestCLIArgsEffort(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, []string{"read_file"})
+	prepared.ri.ReasoningEffort = "medium"
+
+	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
+
+	if !slices.Contains(args, "--effort") {
+		t.Fatalf("args do not carry --effort: %v", args)
+	}
+
+	if i := slices.Index(args, "--effort"); args[i+1] != "medium" {
+		t.Errorf("--effort = %q, want %q", args[i+1], "medium")
+	}
+
+	unset := cliArgs(cliPrepared(t, []string{"read_file"}), cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
+	if slices.Contains(unset, "--effort") {
+		t.Errorf("an agent with no reasoning_effort still got --effort: %v", unset)
+	}
+}

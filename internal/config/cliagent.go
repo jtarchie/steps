@@ -210,7 +210,6 @@ func checkCLIAgentSettings(agent Agent) error {
 		{agent.Temperature != nil, "temperature", "the cli chooses its own sampling"},
 		{agent.TopP != nil, "top_p", "the cli chooses its own sampling"},
 		{agent.MaxTokens > 0, "max_tokens", "the cli manages its own output limits"},
-		{agent.ReasoningEffort != "", "reasoning_effort", "the cli manages its own reasoning budget"},
 		{agent.Source.StringToolChoice != nil, "source.string_tool_choice", "there is no tool_choice on the wire to spell"},
 		{agent.CompactAfterTokens != nil, "compact_after_tokens", "the cli compacts its own conversation"},
 		{agent.ContextWindow > 0, "context_window", "the cli compacts its own conversation, against a window it resolves itself"},
