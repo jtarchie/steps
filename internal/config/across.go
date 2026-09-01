@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+	"text/template/parse"
 )
 
 // AcrossVar is one axis of a matrix: a variable name and the values it takes.
@@ -135,10 +136,10 @@ func ExpandAcrossValues(label string, step Step, runtime map[string][]string) ([
 	// A parallelism: matrix renders one var no axis carries: count, the
 	// matrix's own width. Render-only — identical in every cell, so folding
 	// it into vars would stamp it into every cell's coordinates too.
-	if step.Parallelism > 0 {
-		count := strconv.Itoa(step.Parallelism)
+	if step.Sharded() {
+		count := strconv.Itoa(*step.Parallelism)
 		for i := range combos {
-			combos[i].extra = map[string]string{"count": count}
+			combos[i].count = count
 		}
 	}
 
@@ -150,7 +151,7 @@ func ExpandAcrossValues(label string, step Step, runtime map[string][]string) ([
 	// have already run.
 	for _, combo := range combos {
 		cell := step
-		cell.Across, cell.Parallelism = nil, 0
+		cell.Across, cell.Parallelism = nil, nil
 
 		err = renderCell(label, &cell, combo)
 		if err != nil {
@@ -176,10 +177,11 @@ type acrossAxis struct {
 type acrossCombo struct {
 	vars map[string]string
 	segs []string
-	// extra are render-only vars: substituted like vars but absent from a
-	// cell's identity — its name suffix and capture path. parallelism:'s
-	// count is the only occupant.
-	extra map[string]string
+	// count is the one render-only var: substituted like vars but absent
+	// from a cell's identity — its name suffix and capture path. Set only
+	// under parallelism:, and cell-INVARIANT, which is why nameCell must not
+	// count a reference to it as the author distinguishing the cells.
+	count string
 }
 
 // staticAxes returns just the values: axes as resolved axes — what a matrix
@@ -381,12 +383,46 @@ func renderCell(label string, cell *Step, combo acrossCombo) error {
 // concluded the author had distinguished that cell, so one cell was named
 // "shared" and its sibling "shared [shard=b]". Whether the author interpolated
 // anything is a fact about the template, and the template can simply be asked.
+//
+// Asked for an AXIS reference, not for braces: count renders identically in
+// every shard, so a name interpolating only {{ .vars.count }} is one name N
+// times — and identical labels are identical cell hashes, which let shard 2
+// cache-skip against shard 1's success on the FIRST build. Only a per-cell
+// var makes a name the author's own distinction.
 func nameCell(cell *Step, templateName string, vars map[string]string) {
-	if len(vars) == 0 || templateName == "" || strings.Contains(templateName, "{{") {
+	if len(vars) == 0 || templateName == "" {
+		return
+	}
+
+	if strings.Contains(templateName, "{{") && templateReferencesAxis(templateName, vars) {
 		return
 	}
 
 	cell.Label = stepName(*cell) + " [" + coordinates(vars) + "]"
+}
+
+// templateReferencesAxis reports whether the template names at least one of
+// this matrix's per-cell axis vars. An unparseable template references
+// nothing — the fields renderCell renders have already parsed by the time a
+// name is decided, so this only happens for a name no substitution touches,
+// where the suffix is the safe answer.
+func templateReferencesAxis(templateName string, vars map[string]string) bool {
+	parsed, err := template.New("across").Parse(templateName)
+	if err != nil || parsed.Tree == nil || parsed.Root == nil {
+		return false
+	}
+
+	found := false
+
+	walkTemplateFields(parsed.Root, func(node *parse.FieldNode) {
+		if len(node.Ident) >= 2 && node.Ident[0] == "vars" {
+			if _, ok := vars[node.Ident[1]]; ok {
+				found = true
+			}
+		}
+	})
+
+	return found
 }
 
 // coordinates renders a cell's variables in declaration-independent, stable
@@ -416,9 +452,11 @@ func renderVars(value string, combo acrossCombo) (string, error) {
 	var out bytes.Buffer
 
 	data := combo.vars
-	if len(combo.extra) > 0 {
-		data = maps.Clone(combo.vars)
-		maps.Copy(data, combo.extra)
+	if combo.count != "" {
+		merged := make(map[string]string, len(combo.vars)+1)
+		maps.Copy(merged, combo.vars)
+		merged["count"] = combo.count
+		data = merged
 	}
 
 	err = parsed.Execute(&out, map[string]any{"vars": data})

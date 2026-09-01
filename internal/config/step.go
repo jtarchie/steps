@@ -221,15 +221,16 @@ type Step struct {
 	MaxInFlight int `yaml:"max_in_flight,omitempty"`
 	// Parallelism shards this task step: N copies of one command, run
 	// concurrently, each knowing its slot. Sugar for across: over an implicit
-	// 1-based index axis — desugared at load (desugarParallelism), so every
-	// later consumer (expansion, hashing, caching, placement, the web UI)
-	// sees an ordinary matrix. What the sugar adds over writing the axis:
-	// MaxInFlight defaults to N rather than serial (an authored value
-	// narrows it), and cells render {{ .vars.count }}, the width no
+	// 1-based index axis — desugared at load (desugarParallelism), so what
+	// runs, hashes and caches is an ordinary matrix. What the sugar adds over
+	// writing the axis: MaxInFlight defaults to N rather than serial (an
+	// authored value wins), and cells render {{ .vars.count }}, the width no
 	// hand-written axis can carry. Task steps only; invalid beside across:,
-	// which declares its own axes. Still set after desugar — it is what
-	// marks the matrix as shard-shaped for the count var and the run report.
-	Parallelism int `yaml:"parallelism,omitempty"`
+	// which declares its own axes, and on hooks, which never expand one. A
+	// pointer like Attempts, so an explicit 0 is a load error rather than a
+	// silent single copy. Still set after desugar — the marker (Sharded) the
+	// count injection and the parallelism-worded diagnostics key on.
+	Parallelism *int `yaml:"parallelism,omitempty"`
 	// Inputs/Outputs declare which named artifacts a task/agent/put step
 	// draws from and (task/agent only) produces. Each name is either a
 	// resource fetched by an earlier get step or an output produced by an

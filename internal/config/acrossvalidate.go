@@ -21,60 +21,87 @@ import (
 // apply, so the shape mistakes a load can catch are still caught at load.
 func (c *Config) validateAcross() error {
 	for _, job := range c.Jobs {
-		err := job.visitSteps(func(label string, step *Step) error {
-			// Checked before the early return below, so max_in_flight: on a
-			// step with no across: is caught rather than silently ignored.
-			err := c.validateAcrossConcurrency(label, step)
-			if err != nil {
-				return err
-			}
+		// Hooks first: runHookStep dispatches task/put/agent/try and never
+		// expands a matrix, so an across: there would load clean, run ONCE
+		// with its {{ .vars.* }} text unrendered, and stay green — the silent
+		// no-op shape rejectVolatileOnHook and friends exist to prevent.
+		err := job.visitHookSteps(rejectAcrossOnHook)
+		if err != nil {
+			return err
+		}
 
-			if len(step.Across) == 0 {
-				return nil
-			}
-
-			err = c.validateAcrossOutputs(label, step)
-			if err != nil {
-				return err
-			}
-
-			if HasRuntimeAxis(*step) {
-				err = validateAcrossAxes(label, step.Across)
-				if err != nil {
-					return err
-				}
-
-				// A collecting matrix's static axes are fully known here, so
-				// they get the directory-name checks at load even when a file
-				// axis defers its own to dispatch — a hostile values: entry
-				// must not wait for the producer step to run before failing.
-				if collectsOutputs(*step) {
-					err = validateCollectedValues(label, staticAxes(step.Across))
-					if err != nil {
-						return err
-					}
-				}
-
-				// The templates are the one thing a file-driven matrix would
-				// otherwise never have checked. A static matrix gets them
-				// validated as a side effect of expanding here; a file one
-				// cannot expand until the step that writes its source has run,
-				// so without this an unclosed brace loads clean and fails
-				// mid-run — after the step that produced the array has already
-				// been paid for.
-				return validateAcrossTemplates(label, *step)
-			}
-
-			_, expandErr := ExpandAcross(label, *step)
-
-			return expandErr
-		})
+		err = job.visitSteps(c.validateAcrossStep)
 		if err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// validateAcrossStep is the per-step half of validateAcross.
+func (c *Config) validateAcrossStep(label string, step *Step) error {
+	// Checked before the early return below, so max_in_flight: on a
+	// step with no across: is caught rather than silently ignored.
+	err := c.validateAcrossConcurrency(label, step)
+	if err != nil {
+		return err
+	}
+
+	if len(step.Across) == 0 {
+		return nil
+	}
+
+	err = c.validateAcrossOutputs(label, step)
+	if err != nil {
+		return err
+	}
+
+	if HasRuntimeAxis(*step) {
+		err = validateAcrossAxes(label, step.Across)
+		if err != nil {
+			return err
+		}
+
+		// A collecting matrix's static axes are fully known here, so
+		// they get the directory-name checks at load even when a file
+		// axis defers its own to dispatch — a hostile values: entry
+		// must not wait for the producer step to run before failing.
+		if collectsOutputs(*step) {
+			err = validateCollectedValues(label, staticAxes(step.Across))
+			if err != nil {
+				return err
+			}
+		}
+
+		// The templates are the one thing a file-driven matrix would
+		// otherwise never have checked. A static matrix gets them
+		// validated as a side effect of expanding here; a file one
+		// cannot expand until the step that writes its source has run,
+		// so without this an unclosed brace loads clean and fails
+		// mid-run — after the step that produced the array has already
+		// been paid for.
+		return validateAcrossTemplates(label, *step)
+	}
+
+	_, expandErr := ExpandAcross(label, *step)
+
+	return expandErr
+}
+
+// rejectAcrossOnHook refuses a matrix on a hook step, worded for the spelling
+// the author wrote: a desugared parallelism: still carries its marker, and
+// speaking "across:" back at it would name a key that is not in the file.
+func rejectAcrossOnHook(label string, step *Step) error {
+	if len(step.Across) == 0 {
+		return nil
+	}
+
+	if step.Sharded() {
+		return fmt.Errorf("%s: parallelism: is not valid on hook steps; a hook runs a single step", label)
+	}
+
+	return fmt.Errorf("%s: across: is not valid on hook steps; a hook runs a single step", label)
 }
 
 // validateAcrossConcurrency checks max_in_flight: — that it describes a matrix

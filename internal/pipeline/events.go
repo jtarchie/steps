@@ -366,8 +366,10 @@ func stepKindName(step config.Step) string {
 	// dispatchNonGetStep resolves it to before it ever asks for a kind. Left
 	// as the cell kind, a matrix and its cells were three rows all labelled
 	// "try", with nothing on the page saying which one was the matrix.
+	// Through cellBlockKind, so the web UI and the CLI transcript agree on
+	// the author's word for a parallelism: block.
 	if len(step.Across) > 0 {
-		return "across"
+		return cellBlockKind(step)
 	}
 
 	kind, ok := step.Kind()

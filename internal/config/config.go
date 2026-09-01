@@ -145,13 +145,11 @@ func Load(path string, name string, vars map[string]string) (*Config, error) {
 	}
 
 	// Before validate(), so the across: it writes is checked like any
-	// hand-written matrix — see desugarParallelism.
-	err = cfg.desugarParallelism()
-	if err != nil {
-		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
-	}
-
-	err = cfg.validate()
+	// hand-written matrix — see desugarParallelism. Joined rather than
+	// returned first: a rejected step is simply left unrewritten, and hiding
+	// validate()'s independent findings behind a desugar mistake would cost
+	// the extra load the joined-errors contract below exists to save.
+	err = errors.Join(cfg.desugarParallelism(), cfg.validate())
 	if err != nil {
 		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
 	}

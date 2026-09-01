@@ -134,11 +134,11 @@ func reportCellCount(jobName string, i int, step config.Step, cells int) {
 
 // cellBlockKind names a matrix block the way its author wrote it: the
 // desugared Parallelism field is the one trace that this across: began as
-// parallelism:, and the run report speaks that word back. The zero-cell
-// branch above stays across-only — a parallelism: matrix is static, so it is
-// never empty.
+// parallelism:, and the run report and the published step kind (stepKindName)
+// speak that word back. The zero-cell branch above stays across-only — a
+// parallelism: matrix is static, so it is never empty.
 func cellBlockKind(step config.Step) string {
-	if step.Parallelism > 0 {
+	if step.Sharded() {
 		return "parallelism"
 	}
 

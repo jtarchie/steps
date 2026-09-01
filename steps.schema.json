@@ -1110,13 +1110,14 @@
         "max_in_flight": {
           "type": "integer",
           "minimum": 0,
-          "description": "across: steps only. How many cells may run at once. Unset, 0 or 1 runs them serially in declaration order. Not hashed \u2014 changing it never re-runs a cached cell.",
+          "description": "across: and parallelism: steps only. How many cells may run at once. Unset, 0 or 1 runs them serially in declaration order \u2014 except under parallelism:, where unset or 0 means N (write 1 to serialize shards). Not hashed \u2014 changing it never re-runs a cached cell.",
           "default": 1
         },
         "parallelism": {
           "type": "integer",
           "minimum": 1,
-          "description": "Task steps only. Run N copies of this step concurrently, each rendering {{ .vars.index }} (1-based) and {{ .vars.count }}. Sugar for across: over an implicit index axis; max_in_flight: defaults to N (an authored value narrows it). Invalid beside across:."
+          "maximum": 1000,
+          "description": "Task steps only (never on a hook). Run N copies of this step concurrently, each rendering {{ .vars.index }} (1-based) and {{ .vars.count }}. Sugar for across: over an implicit index axis; max_in_flight: defaults to N (an authored value wins). Invalid beside across:. At most 1000, the ceiling every matrix width has."
         },
         "do": {
           "type": "array",

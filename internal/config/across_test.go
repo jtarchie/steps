@@ -228,3 +228,74 @@ func TestAcrossContextPathTemplateErrors(t *testing.T) {
 		t.Fatalf("error = %v, want it to name the offending path entry", err)
 	}
 }
+
+// TestAcrossOnHookRejected: the hook runner dispatches task/put/agent/try and
+// never expands a matrix, so before this rejection an across: hook loaded
+// clean, ran ONCE with its {{ .vars.* }} text unrendered, and stayed green.
+func TestAcrossOnHookRejected(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+jobs:
+- name: j
+  plan:
+  - task: main
+    run: echo hi
+  on_failure:
+    task: cleanup
+    across:
+    - var: shard
+      values: [a, b]
+    run: echo {{ .vars.shard }}
+`)
+
+	wantLoadError(t, path, "across: is not valid on hook steps")
+}
+
+// TestTemplateReferencesAxisUnparseable pins the safe answer for a name no
+// substitution touches (an agent name is not a rendered field, so a malformed
+// {{ can reach naming): treat it as referencing nothing, so the cell gets its
+// coordinate suffix rather than colliding with its siblings.
+func TestTemplateReferencesAxisUnparseable(t *testing.T) {
+	t.Parallel()
+
+	if templateReferencesAxis("x-{{", map[string]string{"shard": "a"}) {
+		t.Error("an unparseable template must not count as the author distinguishing cells")
+	}
+}
+
+// TestMaxInFlightOffMatrixRejected: the concurrency dial describes a matrix;
+// on a plain step it would be silently dead config.
+func TestMaxInFlightOffMatrixRejected(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+jobs:
+- name: j
+  plan:
+  - task: unit
+    max_in_flight: 2
+    run: echo hi
+`)
+
+	wantLoadError(t, path, "max_in_flight is only valid on an across: step")
+}
+
+// TestNameCellNeedsANameAndVars: nothing to suffix without both.
+func TestNameCellNeedsANameAndVars(t *testing.T) {
+	t.Parallel()
+
+	unnamed := Step{}
+	nameCell(&unnamed, "", map[string]string{"shard": "a"})
+
+	if unnamed.Label != "" {
+		t.Errorf("Label = %q, want none for a nameless cell", unnamed.Label)
+	}
+
+	named := Step{Task: "unit"}
+	nameCell(&named, "unit", nil)
+
+	if named.Label != "" {
+		t.Errorf("Label = %q, want none outside a matrix", named.Label)
+	}
+}
