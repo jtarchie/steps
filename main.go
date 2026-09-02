@@ -932,11 +932,11 @@ func (r *RunsListCmd) printJobRuns(ctx context.Context, st *store.Store) error {
 	}
 
 	writer := newTabWriter()
-	_, _ = fmt.Fprintln(writer, "WHEN\tJOB\tSTATUS\tRUN")
+	_, _ = fmt.Fprintln(writer, "WHEN\tJOB\tSTATUS\tRUN\tCONFIG")
 
 	for _, row := range rows {
-		_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n",
-			formatWhen(row.StartedAt), row.JobName, row.Status, row.ID)
+		_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n",
+			formatWhen(row.StartedAt), row.JobName, row.Status, row.ID, shortConfig(row.ConfigSHA))
 	}
 
 	err = flush(writer)
@@ -947,6 +947,48 @@ func (r *RunsListCmd) printJobRuns(ctx context.Context, st *store.Store) error {
 	fmt.Printf("\nwhy a step did what it did: steps runs steps %s%s\n", r.Pipeline, stateNote(r.State))
 
 	return nil
+}
+
+// recordRevision writes down WHICH configuration the runs opened against this
+// handle will have executed.
+//
+// Called from the same funnel as SetSourcePath, and for the same reason: it
+// is the only place holding both the configuration that was parsed and the
+// handle its runs are recorded against. A command that only READS history
+// never comes through there and records no revision, which is right — it
+// resolved no configuration.
+func recordRevision(st *store.Store, cfg *config.Config) error {
+	if !cfg.Revision.Recorded() {
+		return nil
+	}
+
+	err := st.RecordRevision(context.Background(), cfg.Revision.SHA, cfg.Revision.Source)
+	if err != nil {
+		return fmt.Errorf("could not record the pipeline's configuration: %w", err)
+	}
+
+	return nil
+}
+
+// shortConfig abbreviates a configuration hash for a column a human scans.
+//
+// The question this column answers is "did the pipeline change between these
+// two runs", which is a comparison and not an identifier — so it is prefixed
+// to something that fits beside the other four rather than printed whole. A
+// run that recorded no configuration says so rather than printing a blank
+// cell, which reads as a column that failed to fill in.
+func shortConfig(sha string) string {
+	const shown = 12
+
+	if sha == "" {
+		return "-"
+	}
+
+	if len(sha) <= shown {
+		return sha
+	}
+
+	return sha[:shown]
 }
 
 func (r *RunsStepsCmd) printSteps(ctx context.Context, st *store.Store) error {
@@ -1571,6 +1613,13 @@ func setup(
 		_ = st.Close()
 
 		return nil, nil, nil, fmt.Errorf("could not record the pipeline's source path: %w", err)
+	}
+
+	err = recordRevision(st, cfg)
+	if err != nil {
+		_ = st.Close()
+
+		return nil, nil, nil, err
 	}
 
 	provider, err := workspace.NewProvider(cfg.Workspace, exec.KeepWorkspace)

@@ -9,6 +9,11 @@ package store
 //
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
+// 7 added pipeline_revisions and runs.revision_id. An older database opened
+// without the table and every INSERT naming it failed — and StartRun's error
+// aborts the run, so this one is loud rather than silent, which is the
+// exception among these and not the rule.
+//
 // 6 added questions. Same shape of reason as 3: an older database opened
 // without the table, every INSERT naming it failed, and the run-event sink
 // only warns — so a step that asked a person something would have gone green
@@ -24,7 +29,7 @@ package store
 // 4 put pipeline_id into the keys of run_placements and agent_usage. Without
 // it, two pipelines sharing a state file collided on (run_id, node_hash) and
 // one upserted over the other's row.
-const schemaVersion = 6
+const schemaVersion = 7
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -306,6 +311,32 @@ CREATE TABLE IF NOT EXISTS job_version_cursor (
     PRIMARY KEY (pipeline_id, job_name, resource_name)
 );
 
+-- One row per CONFIGURATION this pipeline has been run with: the substituted
+-- source and the hash of it.
+--
+-- A run recorded what it did and never what it was told to do, so a job that
+-- started behaving differently had no answer to "did the pipeline change?" —
+-- the file on disk is only ever its newest version, and the run that broke
+-- may have executed a different one.
+--
+-- Keyed by (pipeline_id, sha), so two runs of one configuration share a row
+-- however many times it is loaded, and re-saving a file without changing it
+-- mints nothing. The sha is over the source AFTER ((var)) substitution: one
+-- file under two --vars-files is two configurations (see config.Revision).
+--
+-- Pipeline-scoped rather than content-keyed like node_content, though the sha
+-- alone would identify the bytes: this is a pipeline's history, and one
+-- pipeline's retention must not reach into another's — two pipelines that
+-- happen to share a YAML are still two histories.
+CREATE TABLE IF NOT EXISTS pipeline_revisions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    sha         TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    loaded_at   TEXT NOT NULL,
+    UNIQUE (pipeline_id, sha)
+);
+
 -- One row per run invocation, with the steps it got through. It is what
 -- --resume reads: not "has this content succeeded before" (that is the merkle
 -- cache) but "did THIS run already do this step".
@@ -331,7 +362,18 @@ CREATE TABLE IF NOT EXISTS runs (
     -- SET NULL rather than CASCADE because a forked run is a run in its own
     -- right — retention reaping its parent must not reach forward and delete
     -- the child too.
-    parent_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL
+    parent_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+    -- WHICH configuration this run executed. NULL for a run started by a
+    -- caller that loaded no pipeline file — a test building a Config in
+    -- memory — because there is no revision to point at, not because the
+    -- column is optional for anything that has one.
+    --
+    -- RESTRICT rather than CASCADE or SET NULL, and it is the rule that makes
+    -- the reap order in PruneRuns a constraint the database keeps: a
+    -- revision may only go once no run needs it. SET NULL would quietly turn
+    -- a reaped revision into "this run ran no configuration", which is the
+    -- one thing this column exists to deny.
+    revision_id INTEGER REFERENCES pipeline_revisions(id) ON DELETE RESTRICT
 );
 -- Retention orders a job's runs by recency to find the ones past the cap.
 CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(pipeline_id, job_name, started_at);

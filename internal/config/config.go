@@ -5,6 +5,7 @@
 package config
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -54,7 +55,37 @@ type Config struct {
 	// shares one scope with every other such Config, exactly as everything
 	// did before this field existed.
 	Name string `yaml:"-"`
+	// Revision is WHICH configuration this is: the bytes it was parsed from,
+	// and their hash. Stamped by the loader, never YAML, never hashed into a
+	// node — it identifies the content, so folding it into a step's content
+	// would make every step of an edited file re-run, which is the merkle
+	// cache's job to decide and not this field's.
+	//
+	// Computed AFTER ((var)) substitution, because substitution happens
+	// before the parse: one file under two --vars-files is two
+	// configurations, and a revision taken from the file on disk would call
+	// them one.
+	//
+	// A Config built in a test rather than loaded has an empty Revision, and
+	// a run started from one records no revision at all — see
+	// store.Store.RecordRevision.
+	Revision Revision `yaml:"-"`
 }
+
+// Revision is one configuration, as parsed: the substituted source and its
+// hash.
+//
+// The source is carried rather than re-read on demand because only the loader
+// ever holds it — by the time anything asks, the file on disk may be a later
+// revision, which is precisely the situation this exists to answer.
+type Revision struct {
+	SHA    string
+	Source string
+}
+
+// Recorded reports whether this Config was loaded from a file (rather than
+// built in a test), which is what makes its revision worth writing down.
+func (r Revision) Recorded() bool { return r.SHA != "" }
 
 // Slugify turns a pipeline path into its identity: the base name without its
 // extension.
@@ -111,6 +142,8 @@ func Load(path string, name string, vars map[string]string) (*Config, error) {
 
 	data = InterpolateVars(data, vars)
 
+	revision := Revision{SHA: fmt.Sprintf("%x", sha256.Sum256(data)), Source: string(data)}
+
 	var cfg Config
 
 	err = strictUnmarshal(data, &cfg)
@@ -155,6 +188,7 @@ func Load(path string, name string, vars map[string]string) (*Config, error) {
 	}
 
 	cfg.Name = name
+	cfg.Revision = revision
 
 	return &cfg, nil
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver name used by sql.Open below
@@ -27,6 +28,11 @@ type Store struct {
 	path       string
 	pipeline   string
 	pipelineID int64
+	// revisionID is the configuration StartRun pins onto new runs, 0 before
+	// anything has recorded one (see RecordRevision). Atomic because a
+	// `steps web` handle is shared by the poller and the queue drain, and a
+	// reload writes it while a build reads it.
+	revisionID atomic.Int64
 	// readOnly marks a handle obtained by RESOLVING a pipeline rather than
 	// registering one (OpenExisting). It changes nothing about what the ~60
 	// methods can do — Go cannot enforce that — and everything about Close,

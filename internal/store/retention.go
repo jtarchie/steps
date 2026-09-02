@@ -110,7 +110,7 @@ func (s *Store) PruneRuns(ctx context.Context, jobName string, limit int, keepRu
 		return err
 	}
 
-	err = sweepAfterNodePrune(ctx, tx, s.pipelineID, prunedNodes)
+	err = sweepAfterPrune(ctx, tx, s.pipelineID, s.revisionID.Load(), deleted, prunedNodes)
 	if err != nil {
 		return err
 	}
@@ -126,6 +126,19 @@ func (s *Store) PruneRuns(ctx context.Context, jobName string, limit int, keepRu
 	}
 
 	return nil
+}
+
+// sweepAfterPrune is everything that only makes sense once the run and node
+// passes above have actually deleted something. Each half has its own guard
+// and they are not the same guard: a revision is orphaned by reaping RUNS,
+// while the dangling-parent and content sweeps are orphaned by reaping NODES.
+func sweepAfterPrune(ctx context.Context, tx *sql.Tx, pipelineID, current int64, deletedRuns, prunedNodes bool) error {
+	err := sweepAfterNodePrune(ctx, tx, pipelineID, prunedNodes)
+	if err != nil {
+		return err
+	}
+
+	return pruneRevisions(ctx, tx, pipelineID, current, deletedRuns)
 }
 
 // sweepAfterNodePrune runs the two whole-table passes that only make sense once

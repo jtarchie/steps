@@ -42,7 +42,8 @@ steps web <pipeline>...     the daemon: serve the UI, poll trigger: true
                             resources, run affected jobs (--once for cron)
 steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip
-steps runs <pipeline>       what ran, newest first (steps|queue|cost|where
+steps runs <pipeline>       what ran, newest first, each row naming the
+                            configuration it executed (steps|queue|cost|where
                             for the other four views; runs steps says why)
 steps runs --state <file>   with no pipeline: every pipeline in one state file
 steps validate --live       also probe the models and MCP servers themselves
@@ -58,6 +59,8 @@ steps docs [page]           read these docs in the terminal
 ```
 
 Two of these answer most "why is it doing that?" questions: `steps plan` explains what the cache would skip, and `steps runs steps` shows what previous runs actually did.
+
+A third answers "did the pipeline change?" — `steps runs` carries a `CONFIG` column, the hash of the configuration each run was started from. Two runs of one file agree; an edit between them does not, and a run whose rows disagree with the last green one is a run that executed something else. The hash is taken after `((var))` substitution, so one file under two `--vars-file`s is two configurations. A run started by something that loaded no file at all shows `-`.
 
 `steps validate` answers a third: *will this run at all?* It checks the file — syntax, references, field placement — and then the things the file depends on that live outside it:
 

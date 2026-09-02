@@ -40,6 +40,10 @@ type RunRow struct {
 	// forked run was ordinary while its own page linked its parent. That is
 	// what runColumns below exists to make impossible.
 	ParentRunID string
+	// ConfigSHA is the configuration this run executed, empty for a run
+	// started by a caller that loaded no pipeline file. Selected by every
+	// RunRow query for the same reason ParentRunID is — see runColumns.
+	ConfigSHA string
 }
 
 // Replayed reports a run forked from another by --replay.
@@ -63,8 +67,14 @@ func (r RunRow) Duration() time.Duration {
 // is the same list for a query that aliases runs as r). scanRunRow decodes
 // exactly this order.
 const (
-	runColumns  = `id, job_name, workspace, status, started_at, COALESCE(finished_at, ''), COALESCE(parent_run_id, '')`
-	runColumnsR = `r.id, r.job_name, r.workspace, r.status, r.started_at, COALESCE(r.finished_at, ''), COALESCE(r.parent_run_id, '')`
+	runColumns  = `id, job_name, workspace, status, started_at, COALESCE(finished_at, ''), COALESCE(parent_run_id, ''), ` + configSHA
+	runColumnsR = `r.id, r.job_name, r.workspace, r.status, r.started_at, COALESCE(r.finished_at, ''), COALESCE(r.parent_run_id, ''), ` + configSHAR
+	// A subselect rather than a join, so adding the column changed no query's
+	// shape: several of the reads above already join, group and alias, and a
+	// second join would have had to be threaded correctly through each one
+	// for a value every RunRow is contracted to carry.
+	configSHA  = `COALESCE((SELECT sha FROM pipeline_revisions WHERE id = revision_id), '')`
+	configSHAR = `COALESCE((SELECT sha FROM pipeline_revisions WHERE id = r.revision_id), '')`
 )
 
 // rowScanner is what both *sql.Row and *sql.Rows satisfy, so scanRunRow serves
@@ -77,7 +87,7 @@ func scanRunRow(sc rowScanner) (RunRow, error) {
 		startedAt, finishedAt string
 	)
 
-	err := sc.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt, &row.ParentRunID)
+	err := sc.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt, &row.ParentRunID, &row.ConfigSHA)
 
 	row.StartedAt = parseTimestamp(startedAt)
 	row.FinishedAt = parseTimestamp(finishedAt)
@@ -112,10 +122,10 @@ var (
 // error.
 func (s *Store) StartRun(ctx context.Context, id, jobName, workspaceDir string) error {
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO runs (id, pipeline_id, job_name, workspace, status, started_at)
-		VALUES (?, ?, ?, ?, 'running', ?)
+		INSERT INTO runs (id, pipeline_id, job_name, workspace, status, started_at, revision_id)
+		VALUES (?, ?, ?, ?, 'running', ?, ?)
 		ON CONFLICT (id) DO NOTHING
-	`, id, s.pipelineID, jobName, workspaceDir, nowNano())
+	`, id, s.pipelineID, jobName, workspaceDir, nowNano(), s.currentRevision())
 	if err != nil {
 		return fmt.Errorf("could not record run %q: %w", id, err)
 	}
