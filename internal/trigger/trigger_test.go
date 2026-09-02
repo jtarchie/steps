@@ -690,7 +690,7 @@ jobs:
 
 	defer func() { _ = provider.Close() }()
 
-	err = Poll(context.Background(), cfg, st, time.Minute)
+	err = Poll(context.Background(), staticConfig(cfg), st, time.Minute)
 	if err == nil {
 		t.Fatal("Poll: expected an error when no get step sets trigger: true")
 	}
@@ -716,7 +716,7 @@ func TestWatchRejectsNonPositiveInterval(t *testing.T) {
 
 	defer func() { _ = provider.Close() }()
 
-	err = Poll(context.Background(), cfg, st, 0)
+	err = Poll(context.Background(), staticConfig(cfg), st, 0)
 	if err == nil {
 		t.Fatal("Poll: expected an error for a non-positive interval, not a ticker panic")
 	}
@@ -1227,4 +1227,10 @@ func TestBuildContextInterruptibleSharesTheWatcherContext(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Error("an interruptible build outlived the watcher's cancellation")
 	}
+}
+
+// staticConfig is a ConfigSource for a test whose configuration never
+// changes, which is every test but the reload one.
+func staticConfig(cfg *config.Config) ConfigSource {
+	return func() *config.Config { return cfg }
 }

@@ -224,13 +224,7 @@ func webServerFor(t *testing.T, pipelinePath string) (*web.Server, *web.Pipeline
 
 	t.Cleanup(func() { _ = st.Close() })
 
-	pipeline := &web.Pipeline{
-		Slug:  web.Slugify(pipelinePath),
-		Path:  pipelinePath,
-		Cfg:   cfg,
-		Store: st,
-		Bus:   events.New(nil),
-	}
+	pipeline := web.NewPipeline(web.Slugify(pipelinePath), pipelinePath, cfg, st, events.New(nil))
 
 	server, err := web.New([]*web.Pipeline{pipeline}, nil)
 	if err != nil {
@@ -238,6 +232,34 @@ func webServerFor(t *testing.T, pipelinePath string) (*web.Server, *web.Pipeline
 	}
 
 	return server, pipeline
+}
+
+// webPipelineWithVars is webServerFor's pipeline half, loaded under the vars
+// the daemon was started with — which is what makes a --vars-file part of
+// the configuration a reload compares against.
+func webPipelineWithVars(t *testing.T, pipelinePath string, vars VarFlags) *web.Pipeline {
+	t.Helper()
+
+	slug := web.Slugify(pipelinePath)
+
+	cfg, err := vars.Load(pipelinePath, slug)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	st, err := store.OpenStore(statePath(pipelinePath, ""), slug)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	t.Cleanup(func() { _ = st.Close() })
+
+	err = recordRevision(t.Context(), st, cfg)
+	if err != nil {
+		t.Fatalf("recordRevision: %v", err)
+	}
+
+	return web.NewPipeline(slug, pipelinePath, cfg, st, events.New(nil))
 }
 
 // webGet performs a GET against the server and returns status and body.

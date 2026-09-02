@@ -46,7 +46,7 @@ jobs:
 	t.Cleanup(func() { _ = st.Close() })
 
 	ctx := t.Context()
-	target := &Pipeline{Slug: "demo", Path: path, Cfg: cfg, Store: st, Bus: events.New(nil)}
+	target := NewPipeline("demo", path, cfg, st, events.New(nil))
 
 	PrepareQueue(ctx, target)
 
@@ -136,7 +136,7 @@ jobs:
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
-	target := &Pipeline{Slug: "demo", Path: path, Cfg: cfg, Store: st, Bus: events.New(nil)}
+	target := NewPipeline("demo", path, cfg, st, events.New(nil))
 
 	PrepareQueue(ctx, target)
 
@@ -254,7 +254,7 @@ jobs:
 	t.Cleanup(func() { _ = provider.Close() })
 
 	ctx := t.Context()
-	target := &Pipeline{Slug: "demo", Path: path, Cfg: cfg, Store: st, Bus: events.New(nil)}
+	target := NewPipeline("demo", path, cfg, st, events.New(nil))
 
 	PrepareQueue(ctx, target)
 
@@ -353,7 +353,7 @@ jobs:
 
 	t.Cleanup(func() { _ = provider.Close() })
 
-	target := &Pipeline{Slug: "demo", Path: path, Cfg: cfg, Store: st, Bus: events.New(nil)}
+	target := NewPipeline("demo", path, cfg, st, events.New(nil))
 
 	PrepareQueue(t.Context(), target)
 
@@ -439,7 +439,7 @@ jobs:
 	t.Cleanup(func() { _ = provider.Close() })
 
 	ctx := t.Context()
-	target := &Pipeline{Slug: "demo", Path: path, Cfg: cfg, Store: st, Bus: events.New(nil)}
+	target := NewPipeline("demo", path, cfg, st, events.New(nil))
 
 	PrepareQueue(ctx, target)
 

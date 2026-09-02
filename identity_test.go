@@ -58,9 +58,9 @@ func TestLoadedPipelineCarriesTheIdentityTheRestOfTheProcessUses(t *testing.T) {
 		t.Fatalf("slug = %q, want the --name override", loaded.Slug)
 	}
 
-	if loaded.Cfg.Name != loaded.Slug {
+	if loaded.Config().Name != loaded.Slug {
 		t.Errorf("the Config calls this pipeline %q while everything else calls it %q — an agent pin scoped by the first cannot be joined to a run record written under the second",
-			loaded.Cfg.Name, loaded.Slug)
+			loaded.Config().Name, loaded.Slug)
 	}
 }
 
@@ -85,8 +85,8 @@ func TestPipelineIdentityDefaultsToTheSlugWithoutAnOverride(t *testing.T) {
 
 	t.Cleanup(cleanup)
 
-	if pipelines[0].Cfg.Name != pipelines[0].Slug {
-		t.Errorf("Config name %q, slug %q", pipelines[0].Cfg.Name, pipelines[0].Slug)
+	if pipelines[0].Config().Name != pipelines[0].Slug {
+		t.Errorf("Config name %q, slug %q", pipelines[0].Config().Name, pipelines[0].Slug)
 	}
 }
 

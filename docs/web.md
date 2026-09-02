@@ -248,6 +248,62 @@ a CI step drives when the schedule already belongs to something else.
   left to the loop, which retries by its nature. `--no-preflight` skips the
   check entirely. It runs inside the poller, so it never delays serving.
 
+## Reloading the pipeline file
+
+`steps web` watches the file it was started with, and every `--vars-file`
+alongside it. Save one, and the daemon picks the change up on its own — no
+restart, and nothing in flight is interrupted:
+
+```bash
+steps web pipeline.yml       # edit pipeline.yml; the change lands within a second
+```
+
+The rule for what is watched is *if it changes the parse, it swaps*. A
+`--vars-file` is watched because `((var))` substitution happens before the
+parse, so one file under two vars files is two configurations. A `run_file:`,
+`system_file:` or `message_files:` entry is not: those are step content, and
+they reach a run through its plan rather than through the parse — an edit to
+one is picked up at the next swap or restart, exactly as it was before this
+existed.
+
+**A save is validated before it is served**, to the same depth `steps validate`
+checks without the network: the file, the references, the field placement,
+every model name resolving, every `api_key_env:` actually set, every stdio
+`mcp_servers:` command on `PATH`. That is the bar `steps run` already enforces
+before any step executes, so a swap that passes cannot produce a run that dies
+at preflight — and no save waits on a model endpoint to answer.
+
+**A save that does not pass is held, and said.** The previous configuration
+keeps serving, and every page of that pipeline carries a banner naming what is
+wrong with the file on disk, because a daemon quietly serving something the
+operator's editor no longer shows is worse than one that will not reload:
+
+```
+the file on disk is not being served — this pipeline is still running the
+configuration it last loaded successfully:
+
+  pipeline YAML "app.yml": job "build": step 2 wants artifact "dist",
+  which nothing before it produces
+```
+
+**A run in flight finishes against the configuration it started under.** The
+swap is immediate for everything that comes after it: the pages, the trigger
+poller, and the next job the queue admits. What the running job is executing
+does not change underneath it — and the run records which configuration that
+was, which is the `CONFIG` column `steps runs` prints and the revision named
+on the run page.
+
+Two things it does not do:
+
+- **A pipeline that gains its FIRST `trigger: true` get needs a restart to
+  begin polling it.** Whether there is anything to poll is decided when the
+  daemon starts, and this swaps the configuration rather than supervising the
+  poll loop. The reload says so when it happens rather than leaving you
+  watching a resource nothing checks.
+- **It does not fetch.** The file still has to arrive on the box the daemon
+  runs on — by `scp`, by a deploy job, by whatever already puts it there.
+  `steps web` reads a path, not a repository.
+
 ## One database, several pipelines
 
 `--state` points any command at a specific sqlite file, and several pipelines
@@ -334,6 +390,7 @@ mean to hand out the controls too.
 --pin / --force  pin a version field; ignore the cache and re-run every step
 --no-preflight   skip the pre-poll health check of models and MCP servers
 --read-only      serve without trigger, approval, answer, or resume controls
+                 (the pipeline file is still watched — see above)
 --keep-workspace leave build workspaces on disk
 --answer         answer an ask_user question in advance (repeatable)
 --state          sqlite state database (default .steps/<pipeline>.db per YAML)

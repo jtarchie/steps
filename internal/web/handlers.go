@@ -36,7 +36,7 @@ func (s *Server) handleJobs(c echo.Context) error {
 		return fmt.Errorf("web: %w", err)
 	}
 
-	views := buildJobViews(pipeline.Cfg, latest, paused)
+	views := buildJobViews(pipeline.Config(), latest, paused)
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "jobs", map[string]any{
@@ -67,7 +67,7 @@ func (s *Server) handleJob(c echo.Context) error {
 	ctx := c.Request().Context()
 	name := c.Param("job")
 
-	job, err := pipeline.Cfg.FindJob(name)
+	job, err := pipeline.Config().FindJob(name)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", name))
 	}
@@ -96,7 +96,7 @@ func (s *Server) handleJob(c echo.Context) error {
 	// recomputing, so the board and this page can never disagree.
 	var view jobView
 
-	for _, candidate := range buildJobViews(pipeline.Cfg, latest, paused) {
+	for _, candidate := range buildJobViews(pipeline.Config(), latest, paused) {
 		if candidate.Name == job.Name {
 			view = candidate
 		}
@@ -111,7 +111,7 @@ func (s *Server) handleJob(c echo.Context) error {
 		"Runs":     runs,
 		"Versions": versions,
 		"Spark":    sparkline(runs),
-		"Dials":    agentDials(pipeline.Cfg, *job),
+		"Dials":    agentDials(pipeline.Config(), *job),
 	})
 }
 
@@ -374,7 +374,7 @@ func (s *Server) handleResources(c echo.Context) error {
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "resources", map[string]any{
 		"Nav":       s.nav(c),
-		"Resources": pipeline.Cfg.Resources,
+		"Resources": pipeline.Config().Resources,
 		"Checked":   checkedByName(checked),
 		"Paused":    paused,
 	})
@@ -400,7 +400,7 @@ func (s *Server) handleTrigger(c echo.Context) error {
 	pipeline := pipelineOf(c)
 	name := c.Param("job")
 
-	_, err := pipeline.Cfg.FindJob(name)
+	_, err := pipeline.Config().FindJob(name)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", name))
 	}
@@ -438,7 +438,7 @@ func (s *Server) handleFollow(c echo.Context) error {
 	pipeline := pipelineOf(c)
 	name := c.Param("job")
 
-	_, err := pipeline.Cfg.FindJob(name)
+	_, err := pipeline.Config().FindJob(name)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", name))
 	}
@@ -740,7 +740,7 @@ func addJobHits(add func(searchHit), pipeline *Pipeline, elsewhere bool) {
 		where = pipeline.Slug
 	}
 
-	for _, job := range pipeline.Cfg.Jobs {
+	for _, job := range pipeline.Config().Jobs {
 		add(searchHit{
 			Kind:  "job",
 			Name:  job.Name,

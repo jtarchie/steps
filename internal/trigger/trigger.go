@@ -205,16 +205,26 @@ func WatchOnce(
 //     this loop's writes behind that pool instead of putting a second
 //     connection on the same file to contend for its write lock. One handle
 //     per pipeline, never one per loop.
-func Poll(ctx context.Context, cfg *config.Config, st *store.Store, interval time.Duration) error {
-	err := watchable(ctx, cfg, interval)
+//   - the configuration, as a SOURCE rather than a value. The daemon reloads
+//     its pipeline file while this loop runs, and a loop holding the config
+//     it started with would go on checking resources the operator deleted and
+//     never check the ones they added — a poller quietly polling a file that
+//     no longer exists. Each cycle takes the current one; only the startup
+//     checks below read it once, because that is when they run.
+func Poll(ctx context.Context, current ConfigSource, st *store.Store, interval time.Duration) error {
+	err := watchable(ctx, current(), interval)
 	if err != nil {
 		return err
 	}
 
-	runPoller(ctx, cfg, st, interval)
+	runPoller(ctx, current, st, interval)
 
 	return nil
 }
+
+// ConfigSource hands out the configuration to poll against, which the daemon
+// swaps under this loop when its pipeline file changes.
+type ConfigSource func() *config.Config
 
 // watchable reports whether there is anything to watch and whether what
 // there is can be checked at all — every reason not to poll, gathered in one
@@ -293,8 +303,8 @@ func preflightTriggers(ctx context.Context, cfg *config.Config, resources []stri
 
 // runPoller calls pollOnce immediately and then once per interval tick,
 // until ctx is canceled.
-func runPoller(ctx context.Context, cfg *config.Config, st *store.Store, interval time.Duration) {
-	pollAndLog(ctx, cfg, st)
+func runPoller(ctx context.Context, current ConfigSource, st *store.Store, interval time.Duration) {
+	pollAndLog(ctx, current(), st)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -304,7 +314,8 @@ func runPoller(ctx context.Context, cfg *config.Config, st *store.Store, interva
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			pollAndLog(ctx, cfg, st)
+			// Read per cycle, not captured: see Poll.
+			pollAndLog(ctx, current(), st)
 		}
 	}
 }

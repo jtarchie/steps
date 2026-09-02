@@ -209,12 +209,12 @@ func PrepareQueue(ctx context.Context, target *Pipeline) {
 		slog.Error("web.reset_stale", "pipeline", target.Slug, "error", err)
 	}
 
-	err = target.Store.SyncSerialGroups(ctx, target.Cfg.SerialGroupsByJob())
+	err = target.Store.SyncSerialGroups(ctx, target.Config().SerialGroupsByJob())
 	if err != nil {
 		slog.Error("web.sync_serial_groups", "pipeline", target.Slug, "error", err)
 	}
 
-	err = target.Store.SyncMaxInFlight(ctx, target.Cfg.MaxInFlightByJob())
+	err = target.Store.SyncMaxInFlight(ctx, target.Config().MaxInFlightByJob())
 	if err != nil {
 		slog.Error("web.sync_max_in_flight", "pipeline", target.Slug, "error", err)
 	}
@@ -234,7 +234,7 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 		return false
 	}
 
-	job, err := target.Cfg.FindJob(jobName)
+	job, err := target.Config().FindJob(jobName)
 	if err != nil {
 		// Detached, like every other finalize here: a job the config no
 		// longer names is terminal, and a SIGINT at this instant must not
@@ -363,5 +363,5 @@ func (r *LocalRunner) runJob(ctx context.Context, target *Pipeline, job *config.
 	}
 
 	//nolint:wrapcheck // the run error is reported to the queue row verbatim
-	return pipeline.RunJob(events.WithBus(ctx, target.Bus), target.Cfg, job, r.pinned, provider, target.Store, force)
+	return pipeline.RunJob(events.WithBus(ctx, target.Bus), target.Config(), job, r.pinned, provider, target.Store, force)
 }

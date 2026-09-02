@@ -57,7 +57,7 @@ jobs:
 
 	t.Cleanup(func() { _ = st.Close() })
 
-	pipeline := &Pipeline{Slug: "demo", Path: path, Cfg: cfg, Store: st, Bus: events.New(nil)}
+	pipeline := NewPipeline("demo", path, cfg, st, events.New(nil))
 
 	server, err := New([]*Pipeline{pipeline}, nil)
 	if err != nil {

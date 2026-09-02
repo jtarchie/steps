@@ -82,7 +82,7 @@ func TestWatchRefusesToStartOnAnUnsatisfiableCheck(t *testing.T) {
 
 	defer func() { _ = provider.Close() }()
 
-	err = Poll(context.Background(), cfg, st, time.Minute)
+	err = Poll(context.Background(), staticConfig(cfg), st, time.Minute)
 	if err == nil {
 		t.Fatal("Poll: want an immediate error, not a poll loop logging the same failure forever")
 	}
@@ -195,7 +195,7 @@ func TestWatchStartsDespiteATransientOutage(t *testing.T) {
 	// Watch gets past preflight and then stops on the cancelled context, so
 	// the assertion is about WHICH error comes back: anything but the
 	// preflight refusal means the unreachable server did not stop it.
-	err = Poll(ctx, cfg, st, time.Minute)
+	err = Poll(ctx, staticConfig(cfg), st, time.Minute)
 	if err != nil && strings.Contains(err.Error(), "preflight") {
 		t.Fatalf("Poll: %v; a transient outage must not stop the watcher starting", err)
 	}
@@ -275,7 +275,7 @@ func TestWatchPreflightsAgentMCPServers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	err = Poll(ctx, cfg, st, time.Minute)
+	err = Poll(ctx, staticConfig(cfg), st, time.Minute)
 	if err == nil {
 		t.Fatal("Poll: started despite an agent MCP grant naming a tool the server does not expose")
 	}

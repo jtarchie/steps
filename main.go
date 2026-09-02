@@ -957,12 +957,12 @@ func (r *RunsListCmd) printJobRuns(ctx context.Context, st *store.Store) error {
 // handle its runs are recorded against. A command that only READS history
 // never comes through there and records no revision, which is right — it
 // resolved no configuration.
-func recordRevision(st *store.Store, cfg *config.Config) error {
+func recordRevision(ctx context.Context, st *store.Store, cfg *config.Config) error {
 	if !cfg.Revision.Recorded() {
 		return nil
 	}
 
-	err := st.RecordRevision(context.Background(), cfg.Revision.SHA, cfg.Revision.Source)
+	err := st.RecordRevision(ctx, cfg.Revision.SHA, cfg.Revision.Source)
 	if err != nil {
 		return fmt.Errorf("could not record the pipeline's configuration: %w", err)
 	}
@@ -1615,7 +1615,7 @@ func setup(
 		return nil, nil, nil, fmt.Errorf("could not record the pipeline's source path: %w", err)
 	}
 
-	err = recordRevision(st, cfg)
+	err = recordRevision(context.Background(), st, cfg)
 	if err != nil {
 		_ = st.Close()
 
@@ -2146,14 +2146,14 @@ func (w *WebCmd) Run() error {
 // nothing to stay responsive for.
 func (w *WebCmd) runOnce(ctx context.Context, pipelines []*web.Pipeline, providers map[string]workspace.Provider) error {
 	for _, target := range pipelines {
-		w.HistoryFlags.Apply(target.Cfg)
+		w.HistoryFlags.Apply(target.Config())
 
 		provider, ok := providers[target.Slug]
 		if !ok {
 			return fmt.Errorf("web: no workspace provider for pipeline %q", target.Slug)
 		}
 
-		err := trigger.WatchOnce(ctx, target.Cfg, provider, target.Store, w.Pin, w.Force)
+		err := trigger.WatchOnce(ctx, target.Config(), provider, target.Store, w.Pin, w.Force)
 
 		// A pipeline with nothing to poll is not this command failing, and
 		// the served path already says so per pipeline. Answering the same
@@ -2187,7 +2187,7 @@ func (w *WebCmd) serve(ctx context.Context, pipelines []*web.Pipeline, providers
 	// queue, which is what makes recovery correct: every `running` row is a
 	// leftover of a process that is gone.
 	for _, target := range pipelines {
-		w.HistoryFlags.Apply(target.Cfg)
+		w.HistoryFlags.Apply(target.Config())
 		web.PrepareQueue(ctx, target)
 	}
 
@@ -2228,6 +2228,7 @@ func (w *WebCmd) serve(ctx context.Context, pipelines []*web.Pipeline, providers
 	}()
 
 	w.startPolling(ctx, &background, pipelines)
+	w.startWatchingConfig(ctx, &background, pipelines)
 
 	fmt.Printf("steps web: http://%s\n", w.Listen)
 
@@ -2259,7 +2260,7 @@ func (w *WebCmd) startPolling(ctx context.Context, background *sync.WaitGroup, p
 		//
 		// Not a failure: plenty of pipelines are run by hand, and the UI is
 		// exactly where you would run them from.
-		if len(trigger.Resources(target.Cfg)) == 0 {
+		if len(trigger.Resources(target.Config())) == 0 {
 			fmt.Printf("steps web: %s has no trigger: true get; serving it without polling\n", target.Slug)
 
 			continue
@@ -2272,10 +2273,42 @@ func (w *WebCmd) startPolling(ctx context.Context, background *sync.WaitGroup, p
 		go func() {
 			defer background.Done()
 
-			err := trigger.Poll(ctx, target.Cfg, target.Store, w.Interval)
+			// The METHOD, not its result: the watcher swaps the
+			// configuration under this loop, and a value taken here would
+			// pin it to whatever the file said at startup.
+			err := trigger.Poll(ctx, target.Config, target.Store, w.Interval)
 			if err != nil && !errors.Is(err, trigger.ErrNoTriggers) {
 				slog.Error("web.poll_stopped", "pipeline", target.Slug, "error", err)
 			}
+		}()
+	}
+}
+
+// reloadInterval is how often the daemon re-reads its pipeline files.
+//
+// A constant rather than a flag: it is one read of a small local file, so
+// there is nothing to tune — the number exists only because a save should
+// take effect at human speed, and every value between "immediately" and "a
+// second later" reads the same to whoever pressed save.
+const reloadInterval = time.Second
+
+// startWatchingConfig keeps every served pipeline in step with the file it
+// was loaded from, so an edit no longer needs a restart to take effect.
+//
+// Not gated on --read-only, for the same reason polling is not: that flag
+// withholds the BROWSER's ability to start work. The file on disk is the
+// operator's own statement of what this daemon serves, and a build box that
+// ignored it would be one more thing to remember to restart.
+func (w *WebCmd) startWatchingConfig(ctx context.Context, background *sync.WaitGroup, pipelines []*web.Pipeline) {
+	for _, target := range pipelines {
+		watcher := newConfigWatcher(target, w.VarFlags)
+
+		background.Add(1)
+
+		go func() {
+			defer background.Done()
+
+			watcher.Watch(ctx, reloadInterval)
 		}()
 	}
 }
@@ -2329,13 +2362,12 @@ func (w *WebCmd) load() ([]*web.Pipeline, map[string]workspace.Provider, func(),
 		closers = append(closers, bus.Close, closeOne)
 
 		providers[slug] = provider
-		pipelines = append(pipelines, &web.Pipeline{
-			Slug: slug, Path: path, Cfg: cfg, Store: st, Bus: bus,
-			// nil when this pipeline names no webhook_token_env: resource,
-			// which is what makes /p/<slug>/check/<resource> a 404 there
-			// rather than an endpoint that authenticates nothing.
-			Webhook: trigger.WebhookHandler(cfg, st),
-		})
+		served := web.NewPipeline(slug, path, cfg, st, bus)
+		// nil when this pipeline names no webhook_token_env: resource, which
+		// is what makes /p/<slug>/check/<resource> a 404 there rather than an
+		// endpoint that authenticates nothing.
+		served.Webhook = trigger.WebhookHandler(cfg, st)
+		pipelines = append(pipelines, served)
 	}
 
 	return pipelines, providers, cleanup, nil

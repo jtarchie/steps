@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -55,9 +56,15 @@ type Pipeline struct {
 	// that have to be kept in agreement. It is the YAML's base name without
 	// extension unless --name overrides it, and two pipelines resolving to one
 	// slug is refused at startup (see New).
-	Slug  string
-	Path  string
-	Cfg   *config.Config
+	Slug string
+	Path string
+	// cfg is the configuration currently being served, swapped when the file
+	// on disk changes (see SetConfig). Unexported behind an atomic pointer
+	// because every reader of it runs concurrently with that swap — handlers
+	// serving requests, the queue drain starting a job, the trigger poller
+	// deciding what to check — and a plain field read while the daemon
+	// reloads is a data race, not a stale read.
+	cfg   atomic.Pointer[config.Config]
 	Store *store.Store
 	// Bus carries live run events for runs this process itself executes.
 	// Runs started by a separate `steps run` land in the store but not on
@@ -73,6 +80,58 @@ type Pipeline struct {
 	// listener on a second port of the poll loop's own; one daemon means one
 	// address.
 	Webhook http.Handler
+	// held is the error from the most recent configuration that FAILED to
+	// load, cleared by the next one that succeeds. It is what the pages say
+	// when the file on disk is not the file being served: a daemon that held
+	// its old configuration silently is a daemon serving something the
+	// operator's editor disagrees with, and nothing on the page would say so.
+	held atomic.Pointer[string]
+}
+
+// NewPipeline builds a served pipeline around the configuration it starts
+// with.
+//
+// A constructor rather than a struct literal because cfg is behind an atomic
+// pointer: it is read by handlers, the drain and the poller at once, and a
+// literal would leave it nil for whatever ran before the caller filled it in.
+func NewPipeline(slug, path string, cfg *config.Config, st *store.Store, bus *events.Bus) *Pipeline {
+	pipeline := &Pipeline{Slug: slug, Path: path, Store: st, Bus: bus}
+	pipeline.cfg.Store(cfg)
+
+	return pipeline
+}
+
+// Config is the configuration being served right now.
+//
+// Every reader goes through here rather than holding the pointer across a
+// swap: a job started before a reload must run the plan it was queued
+// against, which it does by taking this once, while the NEXT job takes the
+// new one.
+func (p *Pipeline) Config() *config.Config { return p.cfg.Load() }
+
+// SetConfig swaps in a newly loaded configuration and clears whatever
+// complaint the last failed load left behind.
+func (p *Pipeline) SetConfig(cfg *config.Config) {
+	p.cfg.Store(cfg)
+	p.held.Store(nil)
+}
+
+// Hold records why the file on disk is not being served, leaving the current
+// configuration in place.
+func (p *Pipeline) Hold(err error) {
+	message := err.Error()
+	p.held.Store(&message)
+}
+
+// Held is the complaint about the file on disk, empty when it is the file
+// being served.
+func (p *Pipeline) Held() string {
+	message := p.held.Load()
+	if message == nil {
+		return ""
+	}
+
+	return *message
 }
 
 // Server serves one or more pipelines.
@@ -340,7 +399,7 @@ func (s *Server) nav(c echo.Context) navData {
 		nav.Pipelines = append(nav.Pipelines, pipelineSummary{
 			Slug: pipeline.Slug,
 			Path: pipeline.Path,
-			Jobs: len(pipeline.Cfg.Jobs),
+			Jobs: len(pipeline.Config().Jobs),
 		})
 	}
 
@@ -355,6 +414,7 @@ func (s *Server) nav(c echo.Context) navData {
 
 	nav.Current = current.Slug
 	nav.CurrentPath = current.Path
+	nav.Held = current.Held()
 
 	pending, err := current.Store.PendingApprovals(c.Request().Context())
 	if err == nil {
@@ -377,6 +437,11 @@ type navData struct {
 	PendingApprovals int
 	PendingQuestions int
 	ReadOnly         bool
+	// Held is why the file on disk is not the file being served, empty when
+	// they agree. On the nav rather than one page's data because it is a fact
+	// about the whole daemon: every page of this pipeline is rendering a
+	// configuration the operator's editor no longer shows.
+	Held string
 }
 
 type pipelineSummary struct {

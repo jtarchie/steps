@@ -34,6 +34,8 @@
 </div>
 
 <main>
+{{if .Nav.Held}}<div class="held" role="alert"><b>the file on disk is not being served</b> — this pipeline is still running the configuration it last loaded successfully:
+<pre>{{.Nav.Held}}</pre></div>{{end}}
 {{template "crumbs" .}}
 {{template "page" .}}
 </main>

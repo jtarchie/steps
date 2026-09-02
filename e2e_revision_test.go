@@ -202,7 +202,7 @@ func TestRecordRevisionSkipsAConfigThatWasNeverLoaded(t *testing.T) {
 
 	defer func() { _ = st.Close() }()
 
-	err = recordRevision(st, &config.Config{})
+	err = recordRevision(t.Context(), st, &config.Config{})
 	if err != nil {
 		t.Fatalf("recording a config that was never loaded: %v", err)
 	}

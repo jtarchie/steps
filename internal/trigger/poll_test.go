@@ -8,10 +8,13 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -84,7 +87,7 @@ func TestPollEnqueuesAndLeavesTheRowAlone(t *testing.T) {
 
 	done := make(chan error, 1)
 
-	go func() { done <- Poll(ctx, cfg, st, 20*time.Millisecond) }()
+	go func() { done <- Poll(ctx, staticConfig(cfg), st, 20*time.Millisecond) }()
 
 	id, jobName := waitForQueuedJob(ctx, t, st)
 
@@ -121,7 +124,7 @@ func TestPollReportsNothingToWatch(t *testing.T) {
 	cfg := loadConfig(t, dir, untriggeredPipeline)
 	st := mustOpenStore(t, dir)
 
-	err := Poll(t.Context(), cfg, st, time.Second)
+	err := Poll(t.Context(), staticConfig(cfg), st, time.Second)
 	if !errors.Is(err, ErrNoTriggers) {
 		t.Fatalf("Poll = %v, want ErrNoTriggers", err)
 	}
@@ -149,4 +152,119 @@ func waitForQueuedJob(ctx context.Context, t *testing.T, st *store.Store) (int64
 	t.Fatal("nothing was ever enqueued")
 
 	return 0, ""
+}
+
+// swappedFeed is pollFeed with a second resource and a job that triggers on
+// it — the shape of an edit that adds something to watch.
+const swappedFeed = `
+defaults:
+  preflight:
+    disabled: true
+resource_types:
+- name: feed
+  config:
+    check: cat VERSIONS
+    in: "true"
+resources:
+- name: items
+  type: feed
+  source: {}
+- name: extras
+  type: feed
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: items
+    trigger: true
+  - task: work
+    run: echo built
+- name: publish
+  plan:
+  - get: extras
+    trigger: true
+  - task: ship
+    run: echo shipped
+`
+
+// TestPollFollowsAConfigSwap is the seam between the daemon's reload and this
+// loop: `steps web` swaps the configuration under a running poller, and a
+// loop holding the one it started with would go on checking resources the
+// operator deleted while never checking the ones they added.
+//
+// Asserted through what the poll ENQUEUES, not through what it read: a
+// source consulted per cycle whose result is then ignored would pass any
+// check of the reading alone.
+func TestPollFollowsAConfigSwap(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	versions := filepath.Join(dir, "versions.json")
+
+	// Empty at the cold start, so it records nothing and enqueues nothing —
+	// which is what makes every row below attributable to a poll cycle. A
+	// cold start over a non-empty feed takes the newest version and triggers
+	// once, and that row would satisfy the wait before the loop had run.
+	writeVersions(t, versions, `[]`)
+
+	before := loadConfig(t, dir, strings.Replace(pollFeed, "VERSIONS", versions, 1))
+	after := loadConfig(t, dir, strings.ReplaceAll(swappedFeed, "VERSIONS", versions))
+	st := mustOpenStore(t, dir)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	_, err := pollOnce(ctx, before, st)
+	if err != nil {
+		t.Fatalf("cold start: %v", err)
+	}
+
+	current := &atomic.Pointer[config.Config]{}
+	current.Store(before)
+
+	done := make(chan error, 1)
+
+	go func() { done <- Poll(ctx, current.Load, st, 20*time.Millisecond) }()
+
+	// build can only come from a poll cycle, and the swap below can only
+	// happen after one — so publish, which exists in no configuration the
+	// loop has read yet, is reachable only by reading the source again.
+	writeVersions(t, versions, `[{"n":"1"}]`)
+	waitForQueuedName(ctx, t, st, "build")
+
+	current.Store(after)
+	writeVersions(t, versions, `[{"n":"1"},{"n":"2"}]`)
+
+	waitForQueuedName(ctx, t, st, "publish")
+
+	cancel()
+
+	err = <-done
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+}
+
+// waitForQueuedName waits for the trigger queue to hold a row for one job,
+// without claiming it — the caller is asserting what polling decided, not
+// standing in for a drainer.
+func waitForQueuedName(ctx context.Context, t *testing.T, st *store.Store, jobName string) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for time.Now().Before(deadline) {
+		rows, err := st.ListTriggerQueue(ctx, 25)
+		if err != nil {
+			t.Fatalf("ListTriggerQueue: %v", err)
+		}
+
+		if slices.ContainsFunc(rows, func(row store.QueueRow) bool { return row.JobName == jobName }) {
+			return
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("the poller never enqueued %s", jobName)
 }

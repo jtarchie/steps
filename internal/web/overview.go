@@ -79,7 +79,7 @@ func (s *Server) overviewPipelines() []overviewPipeline {
 		out = append(out, overviewPipeline{
 			Slug: pipeline.Slug,
 			Path: pipeline.Path,
-			Jobs: len(pipeline.Cfg.Jobs),
+			Jobs: len(pipeline.Config().Jobs),
 		})
 	}
 

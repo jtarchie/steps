@@ -135,6 +135,22 @@ main { max-width: 1000px; margin: 0 auto; padding: 26px 20px 80px; }
 /* What a hidden action says instead of vanishing on a read-only server. */
 .rohint { font-family: var(--sans); font-size: 12px; color: var(--dim); max-width: 340px; text-align: right; }
 
+/* The reload banner: the file on disk failed to load and the daemon is still
+   serving the last configuration that worked. Red-edged rather than a tint,
+   because it is not a status of anything on the page — it is a statement that
+   the page is out of date with the operator's editor. */
+.held {
+  font-family: var(--sans);
+  font-size: 12.5px;
+  color: var(--fg);
+  border: 1px solid #4a2c29;
+  border-left: 3px solid var(--red);
+  padding: 10px 12px;
+  margin: 0 0 14px;
+}
+.held b { color: var(--red); font-weight: 600; }
+.held pre { font-family: var(--mono); font-size: 12px; color: var(--dim); margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* Breadcrumbs: the way back up from a detail page. */
 .crumbs { font-size: 12px; color: var(--faint); margin: 0 0 12px; overflow-wrap: anywhere; }
 .crumbs a { color: var(--dim); }

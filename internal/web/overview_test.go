@@ -48,9 +48,7 @@ jobs:
 
 		t.Cleanup(func() { _ = st.Close() })
 
-		pipelines = append(pipelines, &Pipeline{
-			Slug: name, Path: path, Cfg: cfg, Store: st, Bus: events.New(nil),
-		})
+		pipelines = append(pipelines, NewPipeline(name, path, cfg, st, events.New(nil)))
 	}
 
 	server, err := New(pipelines, nil)
@@ -401,9 +399,7 @@ jobs:
 
 	t.Cleanup(func() { _ = st.Close() })
 
-	server, err := New([]*Pipeline{{
-		Slug: "demo", Path: path, Cfg: cfg, Store: st, Bus: events.New(nil),
-	}}, nil)
+	server, err := New([]*Pipeline{NewPipeline("demo", path, cfg, st, events.New(nil))}, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
