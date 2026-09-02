@@ -887,11 +887,11 @@ func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader *store.Reader,
 	}
 
 	writer := newTabWriter()
-	_, _ = fmt.Fprintln(writer, "WHEN\tPIPELINE\tJOB\tSTATUS\tRUN")
+	_, _ = fmt.Fprintln(writer, "WHEN\tPIPELINE\tJOB\tSTATUS\tRUN\tCONFIG")
 
 	for _, row := range rows {
-		_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n",
-			formatWhen(row.StartedAt), row.Pipeline, row.JobName, row.Status, row.ID)
+		_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			formatWhen(row.StartedAt), row.Pipeline, row.JobName, row.Status, row.ID, shortConfig(row.ConfigSHA))
 	}
 
 	err = flush(writer)
@@ -1737,6 +1737,25 @@ func (v VarFlags) Load(path string, name string) (*config.Config, error) {
 	return loadWithVars(path, name, v.Var, v.VarsFile)
 }
 
+// Revision is WHICH configuration the file at path currently is, under these
+// vars — the same hash Load would stamp, for the cost of a read.
+//
+// It is what the reload watcher asks once a second so that parsing, and every
+// validator behind it, happens only when the answer has actually moved.
+func (v VarFlags) Revision(path string) (config.Revision, error) {
+	vars, err := resolveVars(v.Var, v.VarsFile)
+	if err != nil {
+		return config.Revision{}, err
+	}
+
+	revision, err := config.FileRevision(path, vars)
+	if err != nil {
+		return config.Revision{}, fmt.Errorf("could not load pipeline: %w", err)
+	}
+
+	return revision, nil
+}
+
 // ExecFlags shape how a command that RUNS steps executes them: which machines
 // tags: resolve to, where cached outputs are mirrored, what a parked question
 // is answered with, whether the workspace survives, and whether the pre-run
@@ -2031,6 +2050,25 @@ func resumeJob(ctx context.Context, cfg *config.Config, st *store.Store, name st
 // is the one-off override, which is the only ordering that makes overriding
 // possible at all.
 func loadWithVars(path string, name string, flags map[string]string, varsFile string) (*config.Config, error) {
+	vars, err := resolveVars(flags, varsFile)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg, err := config.Load(path, name, vars)
+	if err != nil {
+		return nil, fmt.Errorf("could not load pipeline: %w", err)
+	}
+
+	return cfg, nil
+}
+
+// resolveVars gathers the ((name)) substitutions from --vars-file and --var.
+//
+// Flags win over the file: the file is the shared, checked-in set and the flag
+// is the one-off override, which is the only ordering that makes overriding
+// possible at all.
+func resolveVars(flags map[string]string, varsFile string) (map[string]string, error) {
 	vars := map[string]string{}
 
 	if varsFile != "" {
@@ -2055,12 +2093,7 @@ func loadWithVars(path string, name string, flags map[string]string, varsFile st
 		vars[name] = value
 	}
 
-	cfg, err := config.Load(path, name, vars)
-	if err != nil {
-		return nil, fmt.Errorf("could not load pipeline: %w", err)
-	}
-
-	return cfg, nil
+	return vars, nil
 }
 
 // WebCmd is the daemon: it serves the pipeline UI, polls every trigger: true
@@ -2301,7 +2334,7 @@ const reloadInterval = time.Second
 // ignored it would be one more thing to remember to restart.
 func (w *WebCmd) startWatchingConfig(ctx context.Context, background *sync.WaitGroup, pipelines []*web.Pipeline) {
 	for _, target := range pipelines {
-		watcher := newConfigWatcher(target, w.VarFlags)
+		watcher := newConfigWatcher(target, w.VarFlags, w.HistoryFlags)
 
 		background.Add(1)
 
@@ -2363,10 +2396,12 @@ func (w *WebCmd) load() ([]*web.Pipeline, map[string]workspace.Provider, func(),
 
 		providers[slug] = provider
 		served := web.NewPipeline(slug, path, cfg, st, bus)
-		// nil when this pipeline names no webhook_token_env: resource, which
-		// is what makes /p/<slug>/check/<resource> a 404 there rather than an
-		// endpoint that authenticates nothing.
-		served.Webhook = trigger.WebhookHandler(cfg, st)
+		// The METHOD, not its result, for the reason trigger.Poll takes one:
+		// the watcher swaps the configuration under this handler, and a
+		// pipeline that names no webhook_token_env: resource today may name
+		// one after the next save. /p/<slug>/check/<resource> is still a 404
+		// while there are none — decided per request now, rather than once.
+		served.Webhook = trigger.WebhookHandler(served.Config, st)
 		pipelines = append(pipelines, served)
 	}
 

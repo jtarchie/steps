@@ -18,7 +18,7 @@ import (
 // clockEnd` and then clears `running` and returns, and every match extends
 // clockEnd by about a second — so the goroutine exits on its own shortly after
 // the last match, and there is no handle to close it sooner. goleak simply
-// samples inside that window. Re-check when regexp2 moves past v2.6.0.
+// samples inside that window. Re-check when regexp2 moves past v2.7.1.
 func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m,
 		goleak.IgnoreAnyFunction("github.com/dlclark/regexp2/v2.runClock"),

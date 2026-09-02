@@ -115,7 +115,10 @@ func sectionOf(page string) string {
 	switch page {
 	case "job", "follow":
 		return "jobs"
-	case "run", "node":
+	case "run", "node", "config":
+		// config is reached from a run page — the configuration THAT run
+		// executed — so it belongs under the same tab rather than unlighting
+		// the whole bar.
 		return "runs"
 	default:
 		return page

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -38,7 +39,7 @@ func webhookFixture(t *testing.T) *webhookHandler {
 
 	st := mustOpenStore(t, dir)
 
-	return &webhookHandler{cfg: cfg, st: st, tokens: cfg.WebhookResources()}
+	return &webhookHandler{current: staticConfig(cfg), st: st}
 }
 
 // post issues a webhook request and returns the status code.
@@ -150,5 +151,37 @@ func TestWebhookAcceptsABearerToken(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200 for a bearer token", rec.Code)
+	}
+}
+
+// TestWebhookFollowsAConfigSwap is the seam between the daemon's reload and
+// this endpoint. The handler used to capture the configuration it was mounted
+// with, which made two things impossible to fix without a restart: a pipeline
+// that GAINED its first webhook_token_env: was mounted as nil and 404'd
+// forever, and one that LOST a resource kept an endpoint live that
+// authenticated against a token the operator believed they had deleted.
+func TestWebhookFollowsAConfigSwap(t *testing.T) {
+	t.Setenv("STEPS_TEST_HOOK_TOKEN", "s3cret")
+
+	fixture := webhookFixture(t)
+	served := fixture.current()
+
+	current := &atomic.Pointer[config.Config]{}
+	current.Store(served)
+
+	handler := &webhookHandler{current: current.Load, st: fixture.st}
+
+	if code := post(t, handler, "/check/repo?token=s3cret"); code != http.StatusOK {
+		t.Fatalf("before the swap: status = %d, want 200", code)
+	}
+
+	// The edit that revokes it: the resource keeps its name and loses its
+	// webhook_token_env:, which is how an operator turns the endpoint off.
+	revoked := *served
+	revoked.Resources = []config.Resource{{Name: "repo", Type: "listing"}}
+	current.Store(&revoked)
+
+	if code := post(t, handler, "/check/repo?token=s3cret"); code == http.StatusOK {
+		t.Error("a revoked webhook token still triggered a check after the swap")
 	}
 }

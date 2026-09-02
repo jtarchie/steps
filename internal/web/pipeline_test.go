@@ -102,17 +102,39 @@ func TestConfigIsSafeUnderAReload(t *testing.T) {
 func TestHighlightYAMLEscapesMarkup(t *testing.T) {
 	t.Parallel()
 
-	body, err := highlightYAML("jobs:\n- name: build\n  run: echo '<script>alert(1)</script>'\n")
-	if err != nil {
-		t.Fatalf("highlightYAML: %v", err)
-	}
-
-	rendered := string(body)
+	rendered := string(highlightYAML("jobs:\n- name: build\n  run: echo '<script>alert(1)</script>'\n"))
 	if strings.Contains(rendered, "<script>") {
 		t.Errorf("a configuration's contents reached the page as markup:\n%s", rendered)
 	}
 
 	if !strings.Contains(rendered, "&lt;script&gt;") {
 		t.Errorf("the configuration's own text is not shown:\n%s", rendered)
+	}
+}
+
+// TestHighlightYAMLKeepsAFencedPromptInTheConfiguration is the corruption
+// this page shipped with, and the reason it no longer goes through the
+// markdown renderer.
+//
+// A block scalar at two spaces puts its content at three, and CommonMark
+// closes a fenced block on a ``` indented by up to three — so a configuration
+// wrapped in a synthetic ```yaml fence ENDED at the first such line, and
+// everything after it rendered as markdown: a YAML comment became a heading,
+// tags vanished, and half the file was silently dropped. On the one page
+// whose entire promise is showing what the run was told to do.
+func TestHighlightYAMLKeepsAFencedPromptInTheConfiguration(t *testing.T) {
+	t.Parallel()
+
+	rendered := string(highlightYAML("agents:\n- name: reviewer\n  system: |\n   ```\n   # not a heading\n   ```\njobs: []\n"))
+
+	if strings.Contains(rendered, "<h1") {
+		t.Errorf("a fence inside the configuration broke out into markdown:\n%s", rendered)
+	}
+
+	// Everything after the fence is still there — the corruption dropped it.
+	for _, want := range []string{"# not a heading", "jobs", "reviewer"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("the configuration is missing %q after the fenced block:\n%s", want, rendered)
+		}
 	}
 }

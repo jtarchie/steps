@@ -116,6 +116,16 @@ func (p *Pipeline) SetConfig(cfg *config.Config) {
 	p.held.Store(nil)
 }
 
+// Clear drops the complaint about the file on disk without touching what is
+// served.
+//
+// The unchanged-file case: a load that produced the configuration already
+// running is news only if a previous one had failed. Swapping the identical
+// parse in anyway is not free — the served Config carries decisions made on
+// it in place (the command line's retention limits), and replacing it every
+// tick silently threw them away.
+func (p *Pipeline) Clear() { p.held.Store(nil) }
+
 // Hold records why the file on disk is not being served, leaving the current
 // configuration in place.
 func (p *Pipeline) Hold(err error) {

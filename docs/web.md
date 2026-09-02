@@ -265,20 +265,23 @@ restart, and nothing in flight is interrupted:
 steps web pipeline.yml       # edit pipeline.yml; the change lands within a second
 ```
 
-The rule for what is watched is *if it changes the parse, it swaps*. A
-`--vars-file` is watched because `((var))` substitution happens before the
+The rule for what is watched is *the pipeline file and its vars, and nothing
+else*. A `--vars-file` counts because `((var))` substitution happens before the
 parse, so one file under two vars files is two configurations. A `run_file:`,
-`system_file:` or `message_files:` entry is not: those are step content, and
-they reach a run through its plan rather than through the parse — an edit to
-one is picked up at the next swap or restart, exactly as it was before this
+`system_file:` or `message_files:` entry does not: an edit to one changes what
+a step executes without changing the pipeline, so it is not a new
+configuration, is not a swap, carries no new `CONFIG` hash, and is simply
+picked up by the next run that reads it — exactly as it was before this
 existed.
 
 **A save is validated before it is served**, to the same depth `steps validate`
 checks without the network: the file, the references, the field placement,
 every model name resolving, every `api_key_env:` actually set, every stdio
-`mcp_servers:` command on `PATH`. That is the bar `steps run` already enforces
-before any step executes, so a swap that passes cannot produce a run that dies
-at preflight — and no save waits on a model endpoint to answer.
+`mcp_servers:` command on `PATH`. What that does NOT cover is the part that
+needs the network — the per-job preflight still probes the models and MCP
+servers a job actually uses, so a swap can pass here and a job can still fail
+at preflight when a key is present but revoked, or an endpoint is down. Use
+`steps validate --live` for that; no save waits on a model endpoint to answer.
 
 **A save that does not pass is held, and said.** The previous configuration
 keeps serving, and every page of that pipeline carries a banner naming what is
@@ -295,10 +298,13 @@ configuration it last loaded successfully:
 
 **A run in flight finishes against the configuration it started under.** The
 swap is immediate for everything that comes after it: the pages, the trigger
-poller, and the next job the queue admits. What the running job is executing
-does not change underneath it — and the run records which configuration that
-was, which is the `CONFIG` column `steps runs` prints and the revision named
-on the run page, where it links the configuration itself.
+poller, the webhook endpoints, and the next job the queue admits — including
+the `serial:`, `serial_groups:` and `max_in_flight:` a job is admitted under,
+which live in the database and are rewritten from the new file on every swap.
+What the running job is executing does not change underneath it — and the run
+records which configuration that was, which is the `CONFIG` column `steps
+runs` prints and the revision named on the run page, where it links the
+configuration itself.
 
 **`--replay` still resolves `--from` against the CURRENT plan**, deliberately:
 the pipeline has almost certainly changed since the run being replayed, which

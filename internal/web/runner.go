@@ -209,12 +209,28 @@ func PrepareQueue(ctx context.Context, target *Pipeline) {
 		slog.Error("web.reset_stale", "pipeline", target.Slug, "error", err)
 	}
 
-	err = target.Store.SyncSerialGroups(ctx, target.Config().SerialGroupsByJob())
+	SyncQueueLimits(ctx, target)
+}
+
+// SyncQueueLimits mirrors the served configuration's admission rules into the
+// tables ClaimNextJob reads.
+//
+// Split out of PrepareQueue because it is the half a RELOAD owes too, while
+// recovery is startup-only: ResetStaleRunning reads every `running` row as an
+// abandoned leftover, which is true once, at startup, and false while this
+// process is mid-build. Everything a swap changes about who may run — a job
+// joining a serial group, a max_in_flight raised or removed — lives in SQL
+// rather than in the Config, so a swap that skipped this served pages
+// promising a `serial:` the queue went on ignoring.
+func SyncQueueLimits(ctx context.Context, target *Pipeline) {
+	cfg := target.Config()
+
+	err := target.Store.SyncSerialGroups(ctx, cfg.SerialGroupsByJob())
 	if err != nil {
 		slog.Error("web.sync_serial_groups", "pipeline", target.Slug, "error", err)
 	}
 
-	err = target.Store.SyncMaxInFlight(ctx, target.Config().MaxInFlightByJob())
+	err = target.Store.SyncMaxInFlight(ctx, cfg.MaxInFlightByJob())
 	if err != nil {
 		slog.Error("web.sync_max_in_flight", "pipeline", target.Slug, "error", err)
 	}
@@ -234,7 +250,13 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 		return false
 	}
 
-	job, err := target.Config().FindJob(jobName)
+	// One read of the served configuration for the whole claim, threaded from
+	// here. Two reads is two configurations: the watcher swaps this pointer
+	// under the drain, and a job resolved from one while the plan executes
+	// against another is a combination that existed in no file on disk.
+	cfg := target.Config()
+
+	job, err := cfg.FindJob(jobName)
 	if err != nil {
 		// Detached, like every other finalize here: a job the config no
 		// longer names is terminal, and a SIGINT at this instant must not
@@ -252,7 +274,7 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 
 	slog.Info("web.job.run", "pipeline", target.Slug, "job", jobName)
 
-	runErr := r.runJob(ctx, target, job, force)
+	runErr := r.runJob(ctx, target, cfg, job, force)
 
 	// A run the process's own shutdown cut short is not an outcome. Store's
 	// CompleteJob says so in its doc comment, and the contract is load-bearing
@@ -352,7 +374,9 @@ func (r *LocalRunner) recordBreaker(ctx context.Context, target *Pipeline, job *
 
 // runJob executes one job with this pipeline's bus attached, so the run's
 // events reach any browser watching it.
-func (r *LocalRunner) runJob(ctx context.Context, target *Pipeline, job *config.Job, force bool) error {
+func (r *LocalRunner) runJob(
+	ctx context.Context, target *Pipeline, cfg *config.Config, job *config.Job, force bool,
+) error {
 	provider, ok := r.providers[target.Slug]
 	if !ok {
 		// A pipeline with no provider was never registered, which means the
@@ -363,5 +387,5 @@ func (r *LocalRunner) runJob(ctx context.Context, target *Pipeline, job *config.
 	}
 
 	//nolint:wrapcheck // the run error is reported to the queue row verbatim
-	return pipeline.RunJob(events.WithBus(ctx, target.Bus), target.Config(), job, r.pinned, provider, target.Store, force)
+	return pipeline.RunJob(events.WithBus(ctx, target.Bus), cfg, job, r.pinned, provider, target.Store, force)
 }

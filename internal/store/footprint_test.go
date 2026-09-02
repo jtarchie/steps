@@ -789,6 +789,11 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 		{"node_transcripts", "hash", "nodes", "CASCADE"},
 		{"nodes", "content_hash", "node_content", "RESTRICT"},
 		{"runs", "parent_run_id", "runs", "SET NULL"},
+		// RESTRICT, and it is what makes PruneRuns' reap order a rule the
+		// database keeps rather than a convention retention remembers. SET
+		// NULL would turn a reaped configuration into "this run ran none",
+		// which is the one thing the column exists to deny.
+		{"runs", "revision_id", "pipeline_revisions", "RESTRICT"},
 		{"job_versions", "resource_name", "resource_versions", "CASCADE"},
 		// Every pipeline-scoped table cascades off the pipelines row, which is
 		// what makes forgetting a pipeline one DELETE rather than fourteen.
@@ -805,6 +810,7 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 		{"job_concurrency", "pipeline_id", "pipelines", "CASCADE"},
 		{"job_serial_groups", "pipeline_id", "pipelines", "CASCADE"},
 		{"job_breaker", "pipeline_id", "pipelines", "CASCADE"},
+		{"pipeline_revisions", "pipeline_id", "pipelines", "CASCADE"},
 	} {
 		if !hasForeignKey(ctx, t, store, want.table, want.column, want.target, want.onDelete) {
 			t.Errorf("%s.%s does not declare REFERENCES %s ... ON DELETE %s",

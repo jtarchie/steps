@@ -377,6 +377,10 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 -- Retention orders a job's runs by recency to find the ones past the cap.
 CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(pipeline_id, job_name, started_at);
+-- The RESTRICT child key. Without an index here sqlite proves a revision
+-- unreferenced by scanning every run, once per revision deleted, inside the
+-- write transaction at the end of a build.
+CREATE INDEX IF NOT EXISTS idx_runs_revision ON runs(revision_id);
 
 CREATE TABLE IF NOT EXISTS run_steps (
     run_id     TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,

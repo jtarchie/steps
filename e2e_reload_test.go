@@ -9,6 +9,8 @@ package main
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -65,7 +67,7 @@ func TestReloadServesTheEditedConfig(t *testing.T) {
 	reloadPipeline(t, path, "build")
 
 	server, target := webServerFor(t, path)
-	watcher := newConfigWatcher(target, VarFlags{})
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
 
 	before := servedRevision(t, target)
 
@@ -119,7 +121,7 @@ func TestReloadHoldsTheOldConfigWhenTheEditIsInvalid(t *testing.T) {
 	reloadPipeline(t, path, "build")
 
 	server, target := webServerFor(t, path)
-	watcher := newConfigWatcher(target, VarFlags{})
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
 
 	before := servedRevision(t, target)
 
@@ -176,7 +178,7 @@ func TestReloadHoldsAConfigThatWouldNotRun(t *testing.T) {
 	reloadPipeline(t, path, "build")
 
 	_, target := webServerFor(t, path)
-	watcher := newConfigWatcher(target, VarFlags{})
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
 
 	before := servedRevision(t, target)
 
@@ -239,7 +241,7 @@ jobs:
 	writePipelineFile(t, varsPath, "greeting: hello\n")
 
 	target := webPipelineWithVars(t, path, VarFlags{VarsFile: varsPath})
-	watcher := newConfigWatcher(target, VarFlags{VarsFile: varsPath})
+	watcher := newConfigWatcher(target, VarFlags{VarsFile: varsPath}, HistoryFlags{})
 
 	before := servedRevision(t, target)
 
@@ -275,7 +277,7 @@ func TestReloadSaysWhenAnEditAddsTheFirstTrigger(t *testing.T) {
 	reloadPipeline(t, path, "build")
 
 	_, target := webServerFor(t, path)
-	watcher := newConfigWatcher(target, VarFlags{})
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
 
 	writePipelineFile(t, path, `
 resource_types:
@@ -323,7 +325,7 @@ func TestWatchStopsWithItsContext(t *testing.T) {
 	reloadPipeline(t, path, "build")
 
 	server, target := webServerFor(t, path)
-	watcher := newConfigWatcher(target, VarFlags{})
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
 
 	ctx, cancel := context.WithCancel(t.Context())
 
@@ -358,7 +360,7 @@ func TestWatchKeepsGoingAfterABadSave(t *testing.T) {
 	reloadPipeline(t, path, "build")
 
 	server, target := webServerFor(t, path)
-	watcher := newConfigWatcher(target, VarFlags{})
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -407,3 +409,168 @@ func waitForPage(t *testing.T, server *web.Server, target *web.Pipeline, want st
 
 // secondReturn is webGet's body, for a loop that only cares about the body.
 func secondReturn(_ int, body string) string { return body }
+
+// TestWebActuallyWatchesTheFileItWasStartedWith crosses the seam the rest of
+// this file stops short of: every test above drives configWatcher.check by
+// hand, so deleting the one line in WebCmd.serve that starts a watcher at all
+// shipped a daemon that never reloads with the whole suite green.
+//
+// Through run(["web", ...]) — the real command, a real listener, a real edit —
+// because that line is the only thing between a working watcher and a
+// feature nobody has.
+func TestWebActuallyWatchesTheFileItWasStartedWith(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+
+	reloadPipeline(t, path, "build")
+
+	served := startWeb(t, []string{path})
+	defer served.stop(t)
+
+	reloadPipeline(t, path, "build", "deploy")
+
+	waitForServedPage(t, served, "/p/"+web.Slugify(path), "deploy")
+}
+
+// TestReloadKeepsTheRetentionLimitsTheCommandLineAsked is the flag a swap
+// used to eat.
+//
+// --run-history is applied to the Config the daemon parsed, in place, and
+// nothing else ever applied it — so a watcher that replaced that object
+// reverted the limit to the built-in default, silently, at the first tick,
+// with or without an edit. The daemon then kept 100 runs of history on a box
+// whose operator had asked for a handful.
+func TestReloadKeepsTheRetentionLimitsTheCommandLineAsked(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+
+	reloadPipeline(t, path, "build")
+
+	const asked = 5
+
+	target := webPipelineWithVars(t, path, VarFlags{})
+	history := HistoryFlags{RunHistory: asked, VersionHistory: asked}
+	history.Apply(target.Config())
+
+	watcher := newConfigWatcher(target, VarFlags{}, history)
+
+	// The unchanged file first: this is the tick that fires one second after
+	// every startup, edit or no edit.
+	_, err := watcher.check(t.Context())
+	if err != nil {
+		t.Fatalf("check with no edit: %v", err)
+	}
+
+	if got := target.Config().RunHistoryLimit(); got != asked {
+		t.Errorf("an unedited file reset the run history limit to %d, want %d", got, asked)
+	}
+
+	// And an actual edit, which parses a Config the flags were never applied
+	// to at all.
+	reloadPipeline(t, path, "build", "deploy")
+
+	swapped, err := watcher.check(t.Context())
+	if err != nil {
+		t.Fatalf("check after an edit: %v", err)
+	}
+
+	if !swapped {
+		t.Fatal("the edit did not swap")
+	}
+
+	if got := target.Config().RunHistoryLimit(); got != asked {
+		t.Errorf("the swapped configuration reports a run history limit of %d, want %d", got, asked)
+	}
+
+	if got := target.Config().VersionHistoryLimit(); got != asked {
+		t.Errorf("the swapped configuration reports a version history limit of %d, want %d", got, asked)
+	}
+}
+
+// TestReloadResyncsTheQueueLimits is the other half of "the swap is immediate
+// for the next job the queue admits": ClaimNextJob decides in SQL, from
+// tables mirrored out of the configuration, so a swap that left them alone
+// served a page promising a serial: the queue went on ignoring.
+func TestReloadResyncsTheQueueLimits(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+
+	reloadPipeline(t, path, "build", "deploy")
+
+	target := webPipelineWithVars(t, path, VarFlags{})
+	web.PrepareQueue(t.Context(), target)
+
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
+
+	// The edit an operator makes when two jobs must stop overlapping.
+	writePipelineFile(t, path, "jobs:\n"+
+		"- name: build\n  serial_groups: [release]\n  plan:\n  - task: compile\n    inputs: []\n    run: echo build\n"+
+		"- name: deploy\n  serial_groups: [release]\n  plan:\n  - task: ship\n    inputs: []\n    run: echo deploy\n")
+
+	swapped, err := watcher.check(t.Context())
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+
+	if !swapped {
+		t.Fatal("the edit did not swap")
+	}
+
+	// Asserted through ADMISSION rather than through the mirrored table: two
+	// jobs the edit put in one serial group must not be claimed at once,
+	// which is the behaviour the operator asked for and the only thing the
+	// mirror is for.
+	for _, jobName := range []string{"build", "deploy"} {
+		err = target.Store.EnqueueJob(t.Context(), jobName, "test")
+		if err != nil {
+			t.Fatalf("EnqueueJob: %v", err)
+		}
+	}
+
+	claimed := 0
+
+	for range 2 {
+		_, _, ok, err := target.Store.ClaimNextJob(t.Context())
+		if err != nil {
+			t.Fatalf("ClaimNextJob: %v", err)
+		}
+
+		if ok {
+			claimed++
+		}
+	}
+
+	if claimed != 1 {
+		t.Errorf("a serial group added by an edit admitted %d builds at once, want 1", claimed)
+	}
+}
+
+// waitForServedPage polls a real backgrounded daemon's page until it says
+// what the caller expects.
+func waitForServedPage(t *testing.T, served *webProcess, path, want string) {
+	t.Helper()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.Now().Add(15 * time.Second)
+
+	for time.Now().Before(deadline) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+served.addr+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		resp, err := client.Do(req)
+		if err == nil {
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+
+			if strings.Contains(string(body), want) {
+				return
+			}
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatalf("the served page %s never said %q", path, want)
+}

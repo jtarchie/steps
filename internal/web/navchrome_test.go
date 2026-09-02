@@ -97,6 +97,31 @@ func TestNodePageLightsTheRunsTab(t *testing.T) {
 	}
 }
 
+// TestConfigPageLightsTheRunsTab: the recorded-configuration page is reached
+// from a run transcript, so it belongs under runs too. Its own branch, for the
+// reason the node page has one — sectionOf's default returns the page name,
+// so a detail page nobody added leaves the WHOLE bar unlit rather than
+// lighting the wrong tab, which is a state neither of these tests would catch
+// for the other.
+func TestConfigPageLightsTheRunsTab(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+
+	const sha = "dddd111122223333"
+
+	err := pipeline.Store.RecordRevision(context.Background(), sha, "jobs: []\n")
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/config/"+sha)
+
+	if !strings.Contains(body, `aria-current="page" href="/p/demo/runs">runs`) {
+		t.Error("config page does not light the runs tab")
+	}
+}
+
 // TestErrorPageKeepsNavAlive: an error outside any pipeline (a bad slug, a
 // stray 404) still renders the layout's tab bar — anchored to a real
 // pipeline, not to /p//… links that 404 into the same error page again.

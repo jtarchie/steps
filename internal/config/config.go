@@ -6,6 +6,7 @@ package config
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -87,6 +88,31 @@ type Revision struct {
 // built in a test), which is what makes its revision worth writing down.
 func (r Revision) Recorded() bool { return r.SHA != "" }
 
+// FileRevision answers WHICH configuration a file currently is — the
+// substituted bytes and their hash — without parsing them.
+//
+// Split out of Load so a caller that only needs "has this changed?" can pay a
+// read and a hash for it. `steps web` asks once a second, and asking through
+// Load meant a full parse, every validator, an exec.LookPath per stdio MCP
+// server and a re-read of every run_file:/system_file: include on every tick
+// — a measured few milliseconds of CPU and a log line per pipeline per
+// second, all of it to conclude that nothing had changed.
+//
+// Load is written on top of this rather than beside it: one definition of the
+// hash is what stops the cheap answer and the parsed one from disagreeing.
+func FileRevision(path string, vars map[string]string) (Revision, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // path is the pipeline file the user asked to run, not untrusted input
+	if err != nil {
+		return Revision{}, fmt.Errorf("could not read pipeline file %q: %w", path, err)
+	}
+
+	data = InterpolateVars(data, vars)
+
+	sum := sha256.Sum256(data)
+
+	return Revision{SHA: hex.EncodeToString(sum[:]), Source: string(data)}, nil
+}
+
 // Slugify turns a pipeline path into its identity: the base name without its
 // extension.
 //
@@ -135,14 +161,12 @@ func LoadConfigWithVars(path string, vars map[string]string) (*Config, error) {
 func Load(path string, name string, vars map[string]string) (*Config, error) {
 	slog.Debug("config.load", "path", path)
 
-	data, err := os.ReadFile(path) //nolint:gosec // path is the pipeline file the user asked to run, not untrusted input
+	revision, err := FileRevision(path, vars)
 	if err != nil {
-		return nil, fmt.Errorf("could not read pipeline file %q: %w", path, err)
+		return nil, err
 	}
 
-	data = InterpolateVars(data, vars)
-
-	revision := Revision{SHA: fmt.Sprintf("%x", sha256.Sum256(data)), Source: string(data)}
+	data := []byte(revision.Source)
 
 	var cfg Config
 

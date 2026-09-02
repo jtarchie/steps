@@ -19,17 +19,29 @@ import (
 // anyone editing a pipeline first had to check whether a build was in flight.
 //
 // What it watches is the file and its vars, and nothing else: substitution
-// happens before the parse, so a --vars-file is part of the configuration,
-// while a run_file: or system_file: is step content that reaches a run
-// through the plan rather than through the parse. Those are picked up by the
-// next swap or restart, as they were before this existed.
+// happens before the parse, so a --vars-file is part of the configuration.
+// A run_file: or system_file: is not, and neither is it covered by the
+// revision hash — the hash is over the substituted pipeline file, taken
+// before config.Load resolves the includes. An edit to one changes what a
+// step executes without changing the pipeline, so it is picked up by the next
+// run that reads it, as it was before this existed.
 type configWatcher struct {
 	target *web.Pipeline
 	vars   VarFlags
+	// history is the command line's retention limits, re-applied to every
+	// configuration this loads. Startup applied them to the Config it parsed
+	// and nothing else did: a swap replaces that object, so without this
+	// `steps web --run-history 5` reverted to the built-in default at the
+	// first tick, whether or not anyone had edited the file.
+	history HistoryFlags
+	// held is the last complaint logged, so a file left broken says so once
+	// rather than once per tick — at a second apiece that is 86k identical
+	// lines a day, which buries the save that finally fixed it.
+	held string
 }
 
-func newConfigWatcher(target *web.Pipeline, vars VarFlags) *configWatcher {
-	return &configWatcher{target: target, vars: vars}
+func newConfigWatcher(target *web.Pipeline, vars VarFlags, history HistoryFlags) *configWatcher {
+	return &configWatcher{target: target, vars: vars, history: history}
 }
 
 // Watch applies edits until the daemon stops.
@@ -50,14 +62,20 @@ func (w *configWatcher) Watch(ctx context.Context, interval time.Duration) {
 		case <-ticker.C:
 			swapped, err := w.check(ctx)
 			if err != nil {
-				// Logged once per failed check rather than once per edit: a
-				// file left broken keeps saying so, which is what an operator
-				// tailing the log wants, and the page says it too (see
-				// Pipeline.Hold).
-				slog.Error("web.reload_refused", "pipeline", w.target.Slug, "error", err)
+				// Once per distinct complaint, not once per tick: the page
+				// carries the standing one (see Pipeline.Hold), so the log's
+				// job is to timestamp the moment it started and the moment it
+				// changed.
+				if message := err.Error(); message != w.held {
+					w.held = message
+
+					slog.Error("web.reload_refused", "pipeline", w.target.Slug, "error", err)
+				}
 
 				continue
 			}
+
+			w.held = ""
 
 			if swapped {
 				fmt.Printf("steps web: %s reloaded %s\n", w.target.Slug, w.target.Path)
@@ -69,13 +87,33 @@ func (w *configWatcher) Watch(ctx context.Context, interval time.Duration) {
 // check loads the file and swaps it in if it is a configuration this daemon
 // is not already serving. It reports whether it swapped.
 //
-// The whole load every time, rather than a cheap stat first: it is one read
-// of a small local file, and the alternative is a second notion of "changed"
-// — an mtime, a size — that has to agree with the revision hash forever. The
-// hash the loader already computes is the one answer, and comparing it is
-// what makes a re-saved but unedited file a no-op.
+// The hash first, and the parse only behind it. Not a stat: an mtime or a
+// size would be a SECOND notion of "changed" that has to agree with the
+// revision hash forever, and this is the revision hash — the same bytes, the
+// same sha256, computed by the same function the loader calls. What it buys
+// is that the steady state costs a read rather than a full parse, every
+// validator, an exec.LookPath per stdio MCP server and a re-read of every
+// run_file: include, once a second, forever.
 func (w *configWatcher) check(ctx context.Context) (bool, error) {
 	name := w.target.Slug
+
+	revision, err := w.vars.Revision(w.target.Path)
+	if err != nil {
+		w.target.Hold(err)
+
+		return false, err
+	}
+
+	if revision.SHA == w.target.Config().Revision.SHA {
+		// Unchanged, so the served Config is left exactly as it is — swapping
+		// in an identical parse would throw away every in-place decision made
+		// on the startup one (see history). The complaint still clears: a
+		// broken save that has since been reverted is the same file arriving
+		// at the same configuration by a different route.
+		w.target.Clear()
+
+		return false, nil
+	}
 
 	cfg, err := w.vars.Load(w.target.Path, name)
 	if err != nil {
@@ -104,14 +142,10 @@ func (w *configWatcher) check(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	if cfg.Revision.SHA == w.target.Config().Revision.SHA {
-		// Unchanged. Still clears a complaint left by an earlier broken save
-		// that has since been reverted, which is the same file arriving at
-		// the same configuration by a different route.
-		w.target.SetConfig(cfg)
-
-		return false, nil
-	}
+	// The command line's limits stand in for what the pipeline did not set,
+	// exactly as they did at startup — applied here rather than left to the
+	// caller because this is the only place a newly parsed Config exists.
+	w.history.Apply(cfg)
 
 	// Recorded BEFORE the swap: the store handle is what StartRun reads, so a
 	// run admitted between the two would otherwise pin the configuration it
@@ -126,6 +160,12 @@ func (w *configWatcher) check(ctx context.Context) (bool, error) {
 	w.noteNewTriggers(cfg)
 	w.target.SetConfig(cfg)
 
+	// The queue admits from SQL, not from the Config: serial groups and
+	// max_in_flight are mirrored into tables ClaimNextJob reads, so a swap
+	// that changed either is not in effect until they are rewritten. Without
+	// this the pages showed a `serial: true` the queue went on ignoring.
+	web.SyncQueueLimits(ctx, w.target)
+
 	return true, nil
 }
 
@@ -139,6 +179,11 @@ func (w *configWatcher) check(ctx context.Context) (bool, error) {
 // supervising the poll loop across swaps, which is a bigger change than this
 // slice, and being quiet about it would leave an operator watching a resource
 // that is never checked.
+//
+// ponytail: the poller is not supervised across swaps. Upgrade path is for
+// startWatchingConfig to own the poll goroutine's lifetime — start one on the
+// 0 -> N transition, cancel it on N -> 0 — at which point this message and
+// the limitation it announces both go.
 func (w *configWatcher) noteNewTriggers(cfg *config.Config) {
 	had := len(trigger.Resources(w.target.Config()))
 	has := len(trigger.Resources(cfg))

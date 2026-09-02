@@ -67,7 +67,13 @@ func (s *Server) handleJob(c echo.Context) error {
 	ctx := c.Request().Context()
 	name := c.Param("job")
 
-	job, err := pipeline.Config().FindJob(name)
+	// One read for the whole request. A reload swaps this pointer under a
+	// handler mid-render, and three reads is three configurations: the 404
+	// guard would pass against one while the view came up empty from another
+	// and the agent dials were resolved out of a third.
+	cfg := pipeline.Config()
+
+	job, err := cfg.FindJob(name)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", name))
 	}
@@ -96,7 +102,7 @@ func (s *Server) handleJob(c echo.Context) error {
 	// recomputing, so the board and this page can never disagree.
 	var view jobView
 
-	for _, candidate := range buildJobViews(pipeline.Config(), latest, paused) {
+	for _, candidate := range buildJobViews(cfg, latest, paused) {
 		if candidate.Name == job.Name {
 			view = candidate
 		}
@@ -111,7 +117,7 @@ func (s *Server) handleJob(c echo.Context) error {
 		"Runs":     runs,
 		"Versions": versions,
 		"Spark":    sparkline(runs),
-		"Dials":    agentDials(pipeline.Config(), *job),
+		"Dials":    agentDials(cfg, *job),
 	})
 }
 

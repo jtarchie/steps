@@ -29,9 +29,13 @@ import (
 // webhookHandler serves POST /check/<resource>?token=… for the resources a
 // pipeline has given a webhook_token_env:.
 type webhookHandler struct {
-	cfg    *config.Config
-	st     *store.Store
-	tokens map[string]string
+	// current is read per request, not captured, for the reason Poll takes a
+	// source: the daemon swaps its configuration while this handler is
+	// mounted. A captured one kept authenticating against a token env var the
+	// operator had deleted and checking a resource definition the file no
+	// longer held.
+	current ConfigSource
+	st      *store.Store
 }
 
 func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -39,6 +43,19 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// A GET would be triggerable from a browser preview or a link
 		// scanner, which is not a thing a pipeline should be startable by.
 		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	cfg := h.current()
+
+	tokens := cfg.WebhookResources()
+	if len(tokens) == 0 {
+		// The pipeline as it stands names no webhook_token_env: resource, so
+		// there is nothing here to trigger — the same answer the server gave
+		// when this was decided once, at mount time, and now an answer that
+		// follows a reload in both directions.
+		http.Error(w, "no webhook resources in this pipeline", http.StatusNotFound)
 
 		return
 	}
@@ -69,13 +86,13 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Authenticate before saying anything about whether the resource exists:
 	// otherwise the endpoint is a free directory of a pipeline's resource
 	// names to anyone who can reach it.
-	if !h.authorized(name, r) {
+	if !authorized(tokens, name, r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 
 		return
 	}
 
-	enqueued, err := h.checkNow(r.Context(), name)
+	enqueued, err := h.checkNow(r.Context(), cfg, name)
 	if err != nil {
 		slog.Warn("webhook.check_failed", "resource", name, "error", err)
 		http.Error(w, "check failed", http.StatusInternalServerError)
@@ -93,8 +110,12 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // authorized compares the presented token against the one the named
 // resource's environment variable holds, in constant time.
-func (h *webhookHandler) authorized(name string, r *http.Request) bool {
-	envVar, ok := h.tokens[name]
+//
+// tokens is passed rather than held, so the answer comes from the
+// configuration being served at this instant and not the one this handler was
+// mounted with.
+func authorized(tokens map[string]string, name string, r *http.Request) bool {
+	envVar, ok := tokens[name]
 	if !ok {
 		return false
 	}
@@ -120,8 +141,8 @@ func (h *webhookHandler) authorized(name string, r *http.Request) bool {
 // checkNow checks one resource immediately and enqueues whatever it affects,
 // reusing exactly the poll path so a webhook and a poll cannot disagree about
 // what a version change means.
-func (h *webhookHandler) checkNow(ctx context.Context, name string) ([]string, error) {
-	obs, hasVersion, err := checkResource(ctx, h.cfg, h.st, name)
+func (h *webhookHandler) checkNow(ctx context.Context, cfg *config.Config, name string) ([]string, error) {
+	obs, hasVersion, err := checkResource(ctx, cfg, h.st, name)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +156,7 @@ func (h *webhookHandler) checkNow(ctx context.Context, name string) ([]string, e
 	// the check output may not show yet.
 	obs.dirty = true
 
-	enqueued, err := enqueueAffected(ctx, h.cfg, h.st, map[string]observedResource{name: obs})
+	enqueued, err := enqueueAffected(ctx, cfg, h.st, map[string]observedResource{name: obs})
 	if err != nil {
 		return nil, err
 	}
@@ -148,20 +169,21 @@ func (h *webhookHandler) checkNow(ctx context.Context, name string) ([]string, e
 	return enqueued, nil
 }
 
-// WebhookHandler serves POST .../check/<resource> for the resources this
-// pipeline has given a webhook_token_env:, or nil when it has given none.
+// WebhookHandler serves POST .../check/<resource> for the resources a
+// pipeline has given a webhook_token_env:.
 //
 // A handler rather than a server: the poll loop used to open a second port of its
 // own beside the UI, so a pipeline that wanted both had two addresses, two
 // flavors of HTTP surface and two things to expose. There
 // is one listener now — the web UI mounts this under the pipeline it belongs
-// to — and nil is how a caller learns there is nothing to mount, which is
-// different from mounting an endpoint that refuses everything.
-func WebhookHandler(cfg *config.Config, st *store.Store) http.Handler {
-	tokens := cfg.WebhookResources()
-	if len(tokens) == 0 {
-		return nil
-	}
-
-	return &webhookHandler{cfg: cfg, st: st, tokens: tokens}
+// to.
+//
+// It takes a SOURCE, and "is there anything here to trigger?" is answered per
+// request rather than once, at mount. Deciding it once was correct only while
+// a daemon's configuration could not change: a pipeline that GAINED its first
+// webhook resource by edit was mounted as nil and 404'd forever, and one that
+// LOST a resource kept an endpoint live that authenticated against a token
+// env var the operator believed they had deleted.
+func WebhookHandler(current ConfigSource, st *store.Store) http.Handler {
+	return &webhookHandler{current: current, st: st}
 }
