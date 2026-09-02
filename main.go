@@ -1742,13 +1742,13 @@ func (v VarFlags) Load(path string, name string) (*config.Config, error) {
 //
 // It is what the reload watcher asks once a second so that parsing, and every
 // validator behind it, happens only when the answer has actually moved.
-func (v VarFlags) Revision(path string) (config.Revision, error) {
+func (v VarFlags) Revision(path string, includes []string) (config.Revision, error) {
 	vars, err := resolveVars(v.Var, v.VarsFile)
 	if err != nil {
 		return config.Revision{}, err
 	}
 
-	revision, err := config.FileRevision(path, vars)
+	revision, err := config.FileRevision(path, vars, includes)
 	if err != nil {
 		return config.Revision{}, fmt.Errorf("could not load pipeline: %w", err)
 	}
@@ -2219,9 +2219,24 @@ func (w *WebCmd) serve(ctx context.Context, pipelines []*web.Pipeline, providers
 	// with no concurrent writer — see web.PrepareQueue. This process owns the
 	// queue, which is what makes recovery correct: every `running` row is a
 	// leftover of a process that is gone.
+	//
+	// Then the configuration is ADOPTED through the same function a reload
+	// uses (configWatcher.adopt), rather than through a startup copy of some
+	// of what that function does. The copy is how `steps web --run-history 5`
+	// came to work at startup and stop working a second later: two lists,
+	// only one of them maintained.
+	watchers := make([]*configWatcher, 0, len(pipelines))
+
 	for _, target := range pipelines {
-		w.HistoryFlags.Apply(target.Config())
 		web.PrepareQueue(ctx, target)
+
+		watcher := newConfigWatcher(target, w.VarFlags, w.HistoryFlags)
+		watchers = append(watchers, watcher)
+
+		err := watcher.adopt(ctx, target.Config())
+		if err != nil {
+			return fmt.Errorf("web: %s: %w", target.Slug, err)
+		}
 	}
 
 	var runner web.Runner
@@ -2261,7 +2276,7 @@ func (w *WebCmd) serve(ctx context.Context, pipelines []*web.Pipeline, providers
 	}()
 
 	w.startPolling(ctx, &background, pipelines)
-	w.startWatchingConfig(ctx, &background, pipelines)
+	w.startWatchingConfig(ctx, &background, watchers)
 
 	fmt.Printf("steps web: http://%s\n", w.Listen)
 
@@ -2286,20 +2301,18 @@ func (w *WebCmd) serve(ctx context.Context, pipelines []*web.Pipeline, providers
 // not about what this process does on its own. `--listen 0.0.0.0 --read-only`
 // is a build box that still has to notice new versions.
 func (w *WebCmd) startPolling(ctx context.Context, background *sync.WaitGroup, pipelines []*web.Pipeline) {
+	// One per served pipeline, unconditionally — including the ones with
+	// nothing to poll right now.
+	//
+	// Deciding at startup which pipelines were worth a loop is what made a
+	// `trigger: true` added by an edit go unchecked until a restart: the
+	// decision had been taken once, against a file that has since changed.
+	// The loop itself re-decides per configuration and says which way it went
+	// (see trigger.Poll), which is also where the per-pipeline banner moved
+	// to — it is a statement about what is being polled, and that is now a
+	// thing that changes while the daemon runs.
 	for _, target := range pipelines {
-		// Said per pipeline, not counted up: a banner that reports "polling 3
-		// pipelines" while one of them gave up is worse than no banner, and
-		// which one gave up is the part an operator needs.
-		//
-		// Not a failure: plenty of pipelines are run by hand, and the UI is
-		// exactly where you would run them from.
-		if len(trigger.Resources(target.Config())) == 0 {
-			fmt.Printf("steps web: %s has no trigger: true get; serving it without polling\n", target.Slug)
-
-			continue
-		}
-
-		fmt.Printf("steps web: polling %s every %s\n", target.Slug, w.Interval)
+		fmt.Printf("steps web: watching %s, checking every %s\n", target.Slug, w.Interval)
 
 		background.Add(1)
 
@@ -2310,7 +2323,7 @@ func (w *WebCmd) startPolling(ctx context.Context, background *sync.WaitGroup, p
 			// configuration under this loop, and a value taken here would
 			// pin it to whatever the file said at startup.
 			err := trigger.Poll(ctx, target.Config, target.Store, w.Interval)
-			if err != nil && !errors.Is(err, trigger.ErrNoTriggers) {
+			if err != nil {
 				slog.Error("web.poll_stopped", "pipeline", target.Slug, "error", err)
 			}
 		}()
@@ -2332,10 +2345,8 @@ const reloadInterval = time.Second
 // withholds the BROWSER's ability to start work. The file on disk is the
 // operator's own statement of what this daemon serves, and a build box that
 // ignored it would be one more thing to remember to restart.
-func (w *WebCmd) startWatchingConfig(ctx context.Context, background *sync.WaitGroup, pipelines []*web.Pipeline) {
-	for _, target := range pipelines {
-		watcher := newConfigWatcher(target, w.VarFlags, w.HistoryFlags)
-
+func (w *WebCmd) startWatchingConfig(ctx context.Context, background *sync.WaitGroup, watchers []*configWatcher) {
+	for _, watcher := range watchers {
 		background.Add(1)
 
 		go func() {

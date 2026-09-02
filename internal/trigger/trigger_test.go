@@ -659,7 +659,14 @@ func TestDrainOneRecoversFromPanic(t *testing.T) {
 	}
 }
 
-func TestWatchErrorsImmediatelyWithNoTriggerResources(t *testing.T) {
+// TestWatchOnceStillReportsNothingToWatch: the ONE-SHOT keeps the old answer.
+//
+// For a `steps web --once` or a `steps watch` there is no later edit to
+// change the verdict, so "no get step sets trigger: true" is final and worth
+// reporting. The long-running loop cannot say that any more — see
+// TestPollWaitsOutAConfigWithNothingToPoll — which is why this asks the check
+// rather than Poll.
+func TestWatchOnceStillReportsNothingToWatch(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -681,8 +688,6 @@ jobs:
   - get: thing
 `)
 
-	st := mustOpenStore(t, dir)
-
 	provider, err := workspace.NewProvider(cfg.Workspace, false)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
@@ -690,9 +695,9 @@ jobs:
 
 	defer func() { _ = provider.Close() }()
 
-	err = Poll(context.Background(), staticConfig(cfg), st, time.Minute)
-	if err == nil {
-		t.Fatal("Poll: expected an error when no get step sets trigger: true")
+	err = watchable(context.Background(), cfg, time.Minute)
+	if !errors.Is(err, ErrNoTriggers) {
+		t.Fatalf("watchable = %v, want ErrNoTriggers", err)
 	}
 }
 

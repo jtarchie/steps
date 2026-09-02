@@ -6,7 +6,6 @@ package trigger
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -114,19 +113,40 @@ func TestPollEnqueuesAndLeavesTheRowAlone(t *testing.T) {
 	}
 }
 
-// TestPollReportsNothingToWatch: the caller decides whether that is fatal —
-// watch refuses to start, web serves anyway — so it has to be recognizable
-// rather than just an error string.
-func TestPollReportsNothingToWatch(t *testing.T) {
+// TestPollWaitsOutAConfigWithNothingToPoll: having nothing to poll is a
+// STATE the loop sits in, not an error it exits on.
+//
+// It used to be an error, and that was right when a configuration lasted as
+// long as the process. Under a daemon that reloads, refusing to start means a
+// `trigger: true` added by an edit is never checked — so the loop stays, and
+// re-decides when the file changes. The one-shot keeps the old answer, where
+// "nothing to poll" really is final; see TestWatchOnceStillReportsNothingToWatch.
+func TestPollWaitsOutAConfigWithNothingToPoll(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	cfg := loadConfig(t, dir, untriggeredPipeline)
 	st := mustOpenStore(t, dir)
 
-	err := Poll(t.Context(), staticConfig(cfg), st, time.Second)
-	if !errors.Is(err, ErrNoTriggers) {
-		t.Fatalf("Poll = %v, want ErrNoTriggers", err)
+	ctx, cancel := context.WithCancel(t.Context())
+
+	done := make(chan error, 1)
+
+	go func() { done <- Poll(ctx, staticConfig(cfg), st, 20*time.Millisecond) }()
+
+	time.Sleep(100 * time.Millisecond)
+
+	select {
+	case err := <-done:
+		t.Fatalf("Poll returned %v; it must wait for a configuration it can poll", err)
+	default:
+	}
+
+	cancel()
+
+	err := <-done
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
 	}
 }
 
@@ -267,4 +287,147 @@ func waitForQueuedName(ctx context.Context, t *testing.T, st *store.Store, jobNa
 	}
 
 	t.Fatalf("the poller never enqueued %s", jobName)
+}
+
+// TestPollStartsPollingAConfigThatGainsATrigger: a pipeline with nothing to
+// poll is not a pipeline that will never have anything to poll. The daemon
+// reloads, and a `trigger: true` added by an edit has to be checked — the
+// loop used to refuse to start at all in this case, so the resource was
+// served on every page and checked by nothing until a restart.
+func TestPollStartsPollingAConfigThatGainsATrigger(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	versions := filepath.Join(dir, "versions.json")
+	writeVersions(t, versions, `[]`)
+
+	before := loadConfig(t, dir, untriggeredPipeline)
+	after := loadConfig(t, dir, strings.Replace(pollFeed, "VERSIONS", versions, 1))
+	st := mustOpenStore(t, dir)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	source := newSwappableConfig(before)
+
+	done := make(chan error, 1)
+
+	go func() { done <- Poll(ctx, source.get, st, 20*time.Millisecond) }()
+
+	// Two reads: the loop has been round at least once with nothing to poll,
+	// so the enqueue below cannot be the work of a first cycle that happened
+	// to read the pointer after the swap.
+	source.waitForReads(t, 2)
+
+	// The edit that adds the first trigger, and then some news for it.
+	source.value.Store(after)
+	writeVersions(t, versions, `[{"n":"1"}]`)
+
+	waitForQueuedName(ctx, t, st, "build")
+
+	cancel()
+
+	err := <-done
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+}
+
+// TestPollStopsPollingAConfigThatLosesItsTriggers is the same door in the
+// other direction: an edit that removes the last `trigger: true` leaves a
+// loop with nothing to check, and it must simply have nothing to do rather
+// than error every cycle.
+func TestPollStopsPollingAConfigThatLosesItsTriggers(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	versions := filepath.Join(dir, "versions.json")
+	writeVersions(t, versions, `[]`)
+
+	before := loadConfig(t, dir, strings.Replace(pollFeed, "VERSIONS", versions, 1))
+	after := loadConfig(t, dir, untriggeredPipeline)
+	st := mustOpenStore(t, dir)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	source := newSwappableConfig(before)
+
+	done := make(chan error, 1)
+
+	go func() { done <- Poll(ctx, source.get, st, 20*time.Millisecond) }()
+
+	source.waitForReads(t, 2)
+	source.value.Store(after)
+
+	// And one more read, which is a cycle STARTING with the new
+	// configuration — so the cycle that read the old one has finished. News
+	// written before that point would be seen by a poll that was legitimately
+	// still running under the trigger the edit removed.
+	source.waitForReads(t, 1)
+
+	// The news arrives AFTER the trigger was removed, so a loop still
+	// checking the old configuration would enqueue and this would see it.
+	writeVersions(t, versions, `[{"n":"1"}]`)
+
+	time.Sleep(200 * time.Millisecond)
+
+	rows, err := st.ListTriggerQueue(ctx, 25)
+	if err != nil {
+		t.Fatalf("ListTriggerQueue: %v", err)
+	}
+
+	if len(rows) != 0 {
+		t.Errorf("a configuration with no trigger enqueued %d row(s)", len(rows))
+	}
+
+	cancel()
+
+	err = <-done
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+}
+
+// swappableConfig is a ConfigSource whose value the test changes, and which
+// reports every read.
+//
+// The reports are what make these tests about the loop rather than about
+// goroutine scheduling: a swap performed before the loop has read anything
+// proves nothing, and reads is how a test waits for a cycle to have happened
+// under the OLD configuration first. An earlier version of this raced and
+// passed against an implementation that read its configuration exactly once.
+type swappableConfig struct {
+	value atomic.Pointer[config.Config]
+	reads chan struct{}
+}
+
+func newSwappableConfig(cfg *config.Config) *swappableConfig {
+	source := &swappableConfig{reads: make(chan struct{}, 64)}
+	source.value.Store(cfg)
+
+	return source
+}
+
+func (s *swappableConfig) get() *config.Config {
+	select {
+	case s.reads <- struct{}{}:
+	default:
+	}
+
+	return s.value.Load()
+}
+
+// waitForReads blocks until the loop has read its configuration count times,
+// so whatever the caller does next provably follows those reads.
+func (s *swappableConfig) waitForReads(t *testing.T, count int) {
+	t.Helper()
+
+	for range count {
+		select {
+		case <-s.reads:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the poll loop never read its configuration")
+		}
+	}
 }

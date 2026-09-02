@@ -316,13 +316,19 @@ the pipeline has almost certainly changed since the run being replayed, which
 is usually why anyone is replaying it. A `--from` naming a step the current
 plan does not have is refused, listing the steps it does have.
 
+**Adding or removing a `trigger: true` get takes effect too.** The poll loop
+re-decides what it can check each time the configuration changes, so a
+resource an edit adds is preflighted and then polled, and one an edit removes
+stops being checked. A pipeline with nothing to poll is a state the loop sits
+in, not a reason it was never started.
+
 Two things it does not do:
 
-- **A pipeline that gains its FIRST `trigger: true` get needs a restart to
-  begin polling it.** Whether there is anything to poll is decided when the
-  daemon starts, and this swaps the configuration rather than supervising the
-  poll loop. The reload says so when it happens rather than leaving you
-  watching a resource nothing checks.
+- **A changed `workspace:` is validated but not adopted.** The provider that
+  materializes build directories is built once, at startup, and handed to
+  every run — so an edit this machine cannot provide is refused (which is the
+  reason it is checked at all), and one it can is served with a line saying a
+  restart is what runs under it.
 - **It does not fetch.** The file still has to arrive on the box the daemon
   runs on — by `scp`, by a deploy job, by whatever already puts it there.
   `steps web` reads a path, not a repository.

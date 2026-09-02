@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 // Config is the top-level shape of a Concourse-style pipeline YAML file.
@@ -82,6 +83,50 @@ type Config struct {
 type Revision struct {
 	SHA    string
 	Source string
+	// Includes are the files on disk whose contents this configuration folded
+	// in — every run_file:, system_file:, message file, task file and agent
+	// file it resolved, as absolute paths. They are part of the hash, and a
+	// caller re-checking whether the configuration has changed has to re-read
+	// them; see withIncludes.
+	Includes []string
+}
+
+// withIncludes folds the resolved include files into the revision, so an edit
+// to one is an edit to the pipeline.
+//
+// The digest describes path→content PAIRS rather than a concatenation of
+// bodies. Sorting by path already makes the concatenation order stable, so
+// nothing reachable today distinguishes the two — this is what keeps that
+// true if the ordering ever stops being by path.
+func (r Revision) withIncludes(paths []string) (Revision, error) {
+	if len(paths) == 0 {
+		return r, nil
+	}
+
+	// Sorted and de-duplicated, so the hash describes the SET of includes
+	// rather than the order the resolver happened to walk the config in — a
+	// step moved from one job to another changes that order and nothing else.
+	unique := slices.Clone(paths)
+	slices.Sort(unique)
+	unique = slices.Compact(unique)
+
+	sum := sha256.New()
+	sum.Write([]byte(r.Source))
+
+	for _, path := range unique {
+		body, err := os.ReadFile(path) //nolint:gosec // the loader just read this same file to build the config
+		if err != nil {
+			return Revision{}, fmt.Errorf("could not read included file %q: %w", path, err)
+		}
+
+		sum.Write([]byte("\x00" + path + "\x00"))
+		sum.Write(body)
+	}
+
+	r.SHA = hex.EncodeToString(sum.Sum(nil))
+	r.Includes = unique
+
+	return r, nil
 }
 
 // Recorded reports whether this Config was loaded from a file (rather than
@@ -100,7 +145,7 @@ func (r Revision) Recorded() bool { return r.SHA != "" }
 //
 // Load is written on top of this rather than beside it: one definition of the
 // hash is what stops the cheap answer and the parsed one from disagreeing.
-func FileRevision(path string, vars map[string]string) (Revision, error) {
+func FileRevision(path string, vars map[string]string, includes []string) (Revision, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // path is the pipeline file the user asked to run, not untrusted input
 	if err != nil {
 		return Revision{}, fmt.Errorf("could not read pipeline file %q: %w", path, err)
@@ -109,8 +154,13 @@ func FileRevision(path string, vars map[string]string) (Revision, error) {
 	data = InterpolateVars(data, vars)
 
 	sum := sha256.Sum256(data)
+	revision := Revision{SHA: hex.EncodeToString(sum[:]), Source: string(data)}
 
-	return Revision{SHA: hex.EncodeToString(sum[:]), Source: string(data)}, nil
+	// The includes a caller already knows about, which is the set the
+	// configuration it is holding resolved. An edit that changes WHICH files
+	// are included changes the YAML too, so it is caught by the hash above
+	// before this list is out of date.
+	return revision.withIncludes(includes)
 }
 
 // Slugify turns a pipeline path into its identity: the base name without its
@@ -161,7 +211,9 @@ func LoadConfigWithVars(path string, vars map[string]string) (*Config, error) {
 func Load(path string, name string, vars map[string]string) (*Config, error) {
 	slog.Debug("config.load", "path", path)
 
-	revision, err := FileRevision(path, vars)
+	// No includes yet — they are not known until the parse below resolves
+	// them, and are folded in there (see withIncludes).
+	revision, err := FileRevision(path, vars, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +236,17 @@ func Load(path string, name string, vars map[string]string) (*Config, error) {
 		"jobs", len(cfg.Jobs),
 	)
 
-	err = cfg.resolveFileIncludes(filepath.Dir(path))
+	includes, err := cfg.resolveFileIncludes(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
+	}
+
+	// The revision covers the includes, not just the YAML. A run_file: or a
+	// system_file: decides what a step executes, so a hash over the pipeline
+	// file alone answered "did the pipeline change?" with a confident no for
+	// the edit that changed everything — the CONFIG column stayed put across
+	// runs that ran different code.
+	revision, err = revision.withIncludes(includes)
 	if err != nil {
 		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
 	}

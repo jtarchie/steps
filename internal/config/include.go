@@ -27,38 +27,40 @@ import (
 // step fetches, which does not exist yet at load time, so it is left
 // untouched here and resolved later by internal/agent, once the artifact is
 // on disk.
-func (c *Config) resolveFileIncludes(baseDir string) error {
+func (c *Config) resolveFileIncludes(baseDir string) ([]string, error) {
+	resolver := &includeResolver{baseDir: baseDir}
+
 	for i := range c.Tasks {
-		err := resolveTaskIncludes(baseDir, &c.Tasks[i])
+		err := resolveTaskIncludes(resolver, &c.Tasks[i])
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	for i := range c.Agents {
-		err := resolveAgentIncludes(baseDir, &c.Agents[i])
+		err := resolveAgentIncludes(resolver, &c.Agents[i])
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	for i := range c.ResourceTypes {
-		err := resolveResourceTypeIncludes(baseDir, &c.ResourceTypes[i])
+		err := resolveResourceTypeIncludes(resolver, &c.ResourceTypes[i])
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	for i := range c.Jobs {
 		err := c.Jobs[i].visitSteps(func(label string, step *Step) error {
-			return resolveStepIncludes(baseDir, label, step)
+			return resolveStepIncludes(resolver, label, step)
 		})
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	return nil
+	return resolver.read, nil
 }
 
 // include describes one text field and the optional path that may supply its
@@ -76,7 +78,7 @@ type include struct {
 // included file — either would silently change what the entry means (e.g. an
 // empty run_file: would leave a task step's Run == "", making it fall through
 // ResolveTask's inline short-circuit to a tasks: reference instead).
-func applyInclude(baseDir string, inc include) error {
+func applyInclude(resolver *includeResolver, inc include) error {
 	if inc.path == "" {
 		return nil
 	}
@@ -85,7 +87,7 @@ func applyInclude(baseDir string, inc include) error {
 		return fmt.Errorf("%s: %s: and %s_file: are mutually exclusive", inc.context, inc.key, inc.key)
 	}
 
-	data, err := readIncludeFile(baseDir, inc.context, inc.key+"_file", inc.path)
+	data, err := resolver.readFile(inc.context, inc.key+"_file", inc.path)
 	if err != nil {
 		return err
 	}
@@ -95,7 +97,22 @@ func applyInclude(baseDir string, inc include) error {
 	return nil
 }
 
-// readIncludeFile resolves path relative to baseDir and reads it. A path may
+// includeResolver reads a pipeline's *_file includes and remembers which
+// files on disk it read.
+//
+// The list is what puts an include inside the pipeline's REVISION. The
+// content of a run_file: or a system_file: decides what a step executes, so a
+// hash taken over the YAML alone answers "did the pipeline change?" with a
+// confident no for the edit that changed everything — see Load.
+//
+// @builtin/ includes are deliberately not listed: they are compiled into this
+// binary, so no edit can move them while a daemon runs.
+type includeResolver struct {
+	baseDir string
+	read    []string
+}
+
+// readFile resolves path relative to baseDir and reads it. A path may
 // use ".." to escape baseDir: the pipeline file is trusted input (see
 // LoadConfig's own os.ReadFile), and a file placed beside it by the same
 // author is at the same trust level — a shared ../tasks/ directory next to a
@@ -109,7 +126,9 @@ func applyInclude(baseDir string, inc include) error {
 // mistake (run_file: repo/ci/build.sh, meaning a fetched artifact): that path
 // essentially never exists next to a pipeline YAML, so this fires in
 // practice for exactly that case.
-func readIncludeFile(baseDir, context, key, path string) ([]byte, error) {
+func (r *includeResolver) readFile(context, key, path string) ([]byte, error) {
+	baseDir := r.baseDir
+
 	if strings.HasPrefix(path, "@builtin/") {
 		name := strings.TrimPrefix(path, "@builtin/")
 		data, err := ReadBuiltinPrompt(name)
@@ -139,6 +158,8 @@ func readIncludeFile(baseDir, context, key, path string) ([]byte, error) {
 		return nil, fmt.Errorf("%s: %s %q is empty", context, key, path)
 	}
 
+	r.read = append(r.read, full)
+
 	return data, nil
 }
 
@@ -149,7 +170,7 @@ func readIncludeFile(baseDir, context, key, path string) ([]byte, error) {
 // and reads fine inline; an expression that walks three dependent API calls
 // is twenty, and belongs in a file that a diff and a review comment can
 // address.
-func resolveResourceTypeIncludes(baseDir string, rt *ResourceType) error {
+func resolveResourceTypeIncludes(resolver *includeResolver, rt *ResourceType) error {
 	if rt.Config.Expr == nil {
 		return nil
 	}
@@ -162,7 +183,7 @@ func resolveResourceTypeIncludes(baseDir string, rt *ResourceType) error {
 		{context: context, key: "in", path: expression.InFile, target: &expression.In},
 		{context: context, key: "out", path: expression.OutFile, target: &expression.Out},
 	} {
-		err := applyInclude(baseDir, inc)
+		err := applyInclude(resolver, inc)
 		if err != nil {
 			return err
 		}
@@ -174,11 +195,11 @@ func resolveResourceTypeIncludes(baseDir string, rt *ResourceType) error {
 // resolveTaskIncludes applies a tasks: entry's file: (a whole-document
 // include, merged so the entry's own inline fields win) and its run_file:/
 // fix.message_files:.
-func resolveTaskIncludes(baseDir string, t *Task) error {
+func resolveTaskIncludes(resolver *includeResolver, t *Task) error {
 	context := fmt.Sprintf("task %q", t.Name)
 
 	if t.File != "" {
-		doc, err := loadTaskDocument(baseDir, context, t.File)
+		doc, err := loadTaskDocument(resolver, context, t.File)
 		if err != nil {
 			return err
 		}
@@ -186,19 +207,19 @@ func resolveTaskIncludes(baseDir string, t *Task) error {
 		mergeTaskDocument(t, doc)
 	}
 
-	err := applyInclude(baseDir, include{context: context, key: "run", path: t.RunFile, target: &t.Run})
+	err := applyInclude(resolver, include{context: context, key: "run", path: t.RunFile, target: &t.Run})
 	if err != nil {
 		return err
 	}
 
-	return applyFixInclude(baseDir, context, t.Fix)
+	return applyFixInclude(resolver, context, t.Fix)
 }
 
 // loadTaskDocument reads and parses path as a standalone Task document. The
 // document may not itself use file:/run_file: — includes are resolved one
 // level deep only, which is what makes cycle detection unnecessary.
-func loadTaskDocument(baseDir, context, path string) (Task, error) {
-	data, err := readIncludeFile(baseDir, context, "file", path)
+func loadTaskDocument(resolver *includeResolver, context, path string) (Task, error) {
+	data, err := resolver.readFile(context, "file", path)
 	if err != nil {
 		return Task{}, err
 	}
@@ -249,11 +270,11 @@ func mergeTaskDocument(t *Task, doc Task) {
 
 // resolveAgentIncludes applies an agents: entry's file: (a whole-document
 // include, merged so the entry's own inline fields win) and its system_file:.
-func resolveAgentIncludes(baseDir string, a *Agent) error {
+func resolveAgentIncludes(resolver *includeResolver, a *Agent) error {
 	context := fmt.Sprintf("agent %q", a.Name)
 
 	if a.File != "" {
-		doc, err := loadAgentDocument(baseDir, context, a.File)
+		doc, err := loadAgentDocument(resolver, context, a.File)
 		if err != nil {
 			return err
 		}
@@ -261,14 +282,14 @@ func resolveAgentIncludes(baseDir string, a *Agent) error {
 		mergeAgentDocument(a, doc)
 	}
 
-	return applyInclude(baseDir, include{context: context, key: "system", path: a.SystemFile, target: &a.System})
+	return applyInclude(resolver, include{context: context, key: "system", path: a.SystemFile, target: &a.System})
 }
 
 // loadAgentDocument reads and parses path as a standalone Agent document. The
 // document may not itself use file:/system_file: — includes are resolved one
 // level deep only.
-func loadAgentDocument(baseDir, context, path string) (Agent, error) {
-	data, err := readIncludeFile(baseDir, context, "file", path)
+func loadAgentDocument(resolver *includeResolver, context, path string) (Agent, error) {
+	data, err := resolver.readFile(context, "file", path)
 	if err != nil {
 		return Agent{}, err
 	}
@@ -371,22 +392,22 @@ func mergeAgentLimits(a *Agent, doc Agent) {
 // only), message_files: when it's the load-time scalar form (agent steps only —
 // the {artifact, path} mapping form is deferred to run time; see FileRef and
 // internal/agent), and its fix:'s message_files:.
-func resolveStepIncludes(baseDir, label string, step *Step) error {
+func resolveStepIncludes(resolver *includeResolver, label string, step *Step) error {
 	if step.RunFile != "" && step.Task == "" {
 		return fmt.Errorf("%s: run_file: is only valid on task steps", label)
 	}
 
-	err := applyInclude(baseDir, include{context: label, key: "run", path: step.RunFile, target: &step.Run})
+	err := applyInclude(resolver, include{context: label, key: "run", path: step.RunFile, target: &step.Run})
 	if err != nil {
 		return err
 	}
 
-	err = resolveStepMessages(baseDir, label, step)
+	err = resolveStepMessages(resolver, label, step)
 	if err != nil {
 		return err
 	}
 
-	return applyFixInclude(baseDir, label, step.Fix)
+	return applyFixInclude(resolver, label, step.Fix)
 }
 
 // resolveStepMessages turns a step's message_files: into messages:, for the
@@ -399,7 +420,7 @@ func resolveStepIncludes(baseDir, label string, step *Step) error {
 // by the loader — a pipeline that could never work, discovered after twenty
 // minutes of fetching. Both forms now fail at load, where `steps validate` can
 // see them.
-func resolveStepMessages(baseDir, label string, step *Step) error {
+func resolveStepMessages(resolver *includeResolver, label string, step *Step) error {
 	if len(step.MessageFiles) > 0 && step.Agent == "" {
 		return fmt.Errorf("%s: message_files: is only valid on agent steps", label)
 	}
@@ -426,7 +447,7 @@ func resolveStepMessages(baseDir, label string, step *Step) error {
 	messages := make([]string, 0, len(step.MessageFiles))
 
 	for _, ref := range step.MessageFiles {
-		data, err := readIncludeFile(baseDir, label, "message_files", ref.Path)
+		data, err := resolver.readFile(label, "message_files", ref.Path)
 		if err != nil {
 			return err
 		}
@@ -487,7 +508,7 @@ func checkMessageFileForms(label string, refs []*FileRef) error {
 
 // applyFixInclude resolves a fix:'s message_files:, shared by a task step's own
 // fix: and a tasks: entry's.
-func applyFixInclude(baseDir, context string, fix *FixSpec) error {
+func applyFixInclude(resolver *includeResolver, context string, fix *FixSpec) error {
 	if fix == nil || len(fix.MessageFiles) == 0 {
 		return nil
 	}
@@ -501,7 +522,7 @@ func applyFixInclude(baseDir, context string, fix *FixSpec) error {
 	for _, path := range fix.MessageFiles {
 		var message string
 
-		err := applyInclude(baseDir, include{context: context + " fix", key: "messages", path: path, target: &message})
+		err := applyInclude(resolver, include{context: context + " fix", key: "messages", path: path, target: &message})
 		if err != nil {
 			return err
 		}

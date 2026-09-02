@@ -60,7 +60,7 @@ steps docs [page]           read these docs in the terminal
 
 Two of these answer most "why is it doing that?" questions: `steps plan` explains what the cache would skip, and `steps runs steps` shows what previous runs actually did.
 
-A third answers "did the pipeline change?" — `steps runs` carries a `CONFIG` column, the hash of the configuration each run was started from. Two runs of one file agree; an edit between them does not, and a run whose rows disagree with the last green one is a run that executed something else. The hash is taken after `((var))` substitution, so one file under two `--vars-file`s is two configurations. A run started by something that loaded no file at all shows `-`.
+A third answers "did the pipeline change?" — `steps runs` carries a `CONFIG` column, the hash of the configuration each run was started from. Two runs of one file agree; an edit between them does not, and a run whose rows disagree with the last green one is a run that executed something else. The hash covers everything the configuration is made of: the pipeline file after `((var))` substitution — so one file under two `--vars-file`s is two configurations — and every file it includes, so editing a `run_file:` script is editing the pipeline. A run started by something that loaded no file at all shows `-`.
 
 `steps validate` answers a third: *will this run at all?* It checks the file — syntax, references, field placement — and then the things the file depends on that live outside it:
 

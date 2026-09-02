@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/trigger"
 	"github.com/jtarchie/steps/internal/web"
+	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // configWatcher keeps a served pipeline in step with the file it was loaded
@@ -97,7 +98,10 @@ func (w *configWatcher) Watch(ctx context.Context, interval time.Duration) {
 func (w *configWatcher) check(ctx context.Context) (bool, error) {
 	name := w.target.Slug
 
-	revision, err := w.vars.Revision(w.target.Path)
+	// Re-checked against the includes the SERVED configuration resolved: an
+	// edit that changes which files are included changes the YAML too, so it
+	// is caught by the hash before this list can be out of date.
+	revision, err := w.vars.Revision(w.target.Path, w.target.Config().Revision.Includes)
 	if err != nil {
 		w.target.Hold(err)
 
@@ -142,64 +146,106 @@ func (w *configWatcher) check(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	// The command line's limits stand in for what the pipeline did not set,
-	// exactly as they did at startup — applied here rather than left to the
-	// caller because this is the only place a newly parsed Config exists.
-	w.history.Apply(cfg)
-
-	// Recorded BEFORE the swap: the store handle is what StartRun reads, so a
-	// run admitted between the two would otherwise pin the configuration it
-	// is no longer running.
-	err = recordRevision(ctx, w.target.Store, cfg)
+	err = w.checkWorkspace(cfg)
 	if err != nil {
 		w.target.Hold(err)
 
 		return false, err
 	}
 
-	w.noteNewTriggers(cfg)
-	w.target.SetConfig(cfg)
-
-	// The queue admits from SQL, not from the Config: serial groups and
-	// max_in_flight are mirrored into tables ClaimNextJob reads, so a swap
-	// that changed either is not in effect until they are rewritten. Without
-	// this the pages showed a `serial: true` the queue went on ignoring.
-	web.SyncQueueLimits(ctx, w.target)
-
-	// The configuration this one replaced is unreachable if nothing ever ran
-	// under it, which is the common case while a pipeline is being edited:
-	// each save mints a multi-kilobyte row, and leaving them for a run prune
-	// means keeping every autosave until some job passes run_history:.
-	// Best-effort — a swap that has already happened is not undone by a
-	// sweep that did not.
-	err = w.target.Store.PruneRevisions(ctx)
+	err = w.adopt(ctx, cfg)
 	if err != nil {
-		slog.Warn("web.reload_prune_failed", "pipeline", w.target.Slug, "error", err)
+		w.target.Hold(err)
+
+		return false, err
 	}
 
 	return true, nil
 }
 
-// noteNewTriggers says so when an edit adds the first trigger: true get to a
-// pipeline that had none.
+// adopt makes a configuration the one this pipeline is served and run under,
+// and IS the list of everything that has to be re-derived when it changes.
 //
-// A stated limitation rather than a silent one: the daemon decides at startup
-// whether a pipeline has anything to poll, and starts no poller when it does
-// not — so a pipeline that gains its first trigger is served with the new
-// configuration and polled by nothing until a restart. The alternative is
-// supervising the poll loop across swaps, which is a bigger change than this
-// slice, and being quiet about it would leave an operator watching a resource
-// that is never checked.
+// One list, called from both ends: `steps web` adopts the configuration it
+// parsed at startup through this same function, so anything added here is
+// applied on the first load and on every reload without either place
+// remembering the other. That is the point of it existing at all. Every entry
+// below was once a fact copied out of the Config at startup and left behind
+// by a swap, and each one was found the same way — not by a failing test, but
+// by someone reading the diff and asking what else came from the file:
 //
-// ponytail: the poller is not supervised across swaps. Upgrade path is for
-// startWatchingConfig to own the poll goroutine's lifetime — start one on the
-// 0 -> N transition, cancel it on N -> 0 — at which point this message and
-// the limitation it announces both go.
-func (w *configWatcher) noteNewTriggers(cfg *config.Config) {
-	had := len(trigger.Resources(w.target.Config()))
-	has := len(trigger.Resources(cfg))
+//   - the command line's retention limits, applied in place to the Config
+//     startup parsed, so a swap reverted --run-history to the built-in default
+//   - the revision, recorded before the swap so a run admitted between the two
+//     names the configuration it is actually running
+//   - the queue's admission rules, which live in SQL rather than in the Config,
+//     so a serial group added by an edit rendered on the board while the queue
+//     went on admitting both jobs
+//   - the superseded configuration's row, unreachable the moment nothing ran
+//     under it
+//
+// A new thing derived from configuration goes here, or it becomes the next
+// entry in that list.
+func (w *configWatcher) adopt(ctx context.Context, cfg *config.Config) error {
+	w.history.Apply(cfg)
 
-	if had == 0 && has > 0 {
-		fmt.Printf("steps web: %s now has trigger: true resources; restart to begin polling them\n", w.target.Slug)
+	err := recordRevision(ctx, w.target.Store, cfg)
+	if err != nil {
+		return err
 	}
+
+	w.target.SetConfig(cfg)
+
+	web.SyncQueueLimits(ctx, w.target)
+
+	// Best-effort: a configuration that has already been adopted is not
+	// un-adopted by a sweep that did not run.
+	err = w.target.Store.PruneRevisions(ctx)
+	if err != nil {
+		slog.Warn("web.reload_prune_failed", "pipeline", w.target.Slug, "error", err)
+	}
+
+	return nil
+}
+
+// checkWorkspace validates an edited `workspace:` block, and says that a
+// restart is what adopts it.
+//
+// The provider is built once, at startup, and handed to every run for the
+// life of the process — so an edited workspace: renders on every page and
+// changes nothing about where runs are materialized. Worse than stale:
+// Validate() is what refuses an unusable one, and it had run only at startup,
+// so an edit that would have been rejected then was accepted and silently
+// ignored. This restores the refusal, which is the half that matters: a
+// pipeline that cannot build its workspaces should not be served as though it
+// can.
+//
+// ponytail: the edited workspace is validated but not adopted. Upgrading it
+// means rebuilding the provider and swapping it under the drain, which reads
+// the provider map per run — so the map has to become something safe to write
+// while a build reads it, and a run holding the old provider has to keep it
+// until it finishes. That is a larger change than the gap is worth today, and
+// leaving it unsaid was the actual defect.
+func (w *configWatcher) checkWorkspace(cfg *config.Config) error {
+	if reflect.DeepEqual(w.target.Config().Workspace, cfg.Workspace) {
+		return nil
+	}
+
+	// keep=false: this provider exists to answer whether the configuration is
+	// usable, and is closed before it materializes anything.
+	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	if err != nil {
+		return fmt.Errorf("workspace: %w", err)
+	}
+
+	defer func() { _ = provider.Close() }()
+
+	err = provider.Validate()
+	if err != nil {
+		return fmt.Errorf("workspace: %w", err)
+	}
+
+	fmt.Printf("steps web: %s changed workspace:; restart to run under it\n", w.target.Slug)
+
+	return nil
 }

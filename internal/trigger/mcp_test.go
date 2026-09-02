@@ -12,7 +12,9 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/pipeline"
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -82,14 +84,19 @@ func TestWatchRefusesToStartOnAnUnsatisfiableCheck(t *testing.T) {
 
 	defer func() { _ = provider.Close() }()
 
-	err = Poll(context.Background(), staticConfig(cfg), st, time.Minute)
+	// Asked of the check rather than of the loop. Poll no longer returns this
+	// — a daemon that reloads has to stay alive to see the fix — so the loop
+	// logs it and polls nothing, and what it polled is asserted below.
+	err = watchable(context.Background(), cfg, time.Minute)
 	if err == nil {
-		t.Fatal("Poll: want an immediate error, not a poll loop logging the same failure forever")
+		t.Fatal("preflight passed a tool call the server would refuse")
 	}
 
 	if !strings.Contains(err.Error(), "query") {
 		t.Errorf("error = %v, want it to name the argument the tool requires", err)
 	}
+
+	assertNothingPolled(t, cfg, st)
 }
 
 // mcpSearchServer exposes one tool that DECLARES a required argument, like
@@ -177,7 +184,6 @@ func TestWatchStartsDespiteATransientOutage(t *testing.T) {
 	// A port nothing is listening on: the shape of every outage worth
 	// surviving — unreachable now, fine in a minute.
 	cfg := loadConfig(t, dir, mcpTriggerPipeline("http://127.0.0.1:1/mcp"))
-	st := mustOpenStore(t, dir)
 
 	provider, err := workspace.NewProvider(cfg.Workspace, false)
 	if err != nil {
@@ -186,18 +192,12 @@ func TestWatchStartsDespiteATransientOutage(t *testing.T) {
 
 	defer func() { _ = provider.Close() }()
 
-	// Cancelled immediately: Watch must get PAST preflight and into its loop,
-	// where the cancellation stops it. A preflight exit would return the
-	// unreachable-server error instead.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	// Watch gets past preflight and then stops on the cancelled context, so
-	// the assertion is about WHICH error comes back: anything but the
-	// preflight refusal means the unreachable server did not stop it.
-	err = Poll(ctx, staticConfig(cfg), st, time.Minute)
-	if err != nil && strings.Contains(err.Error(), "preflight") {
-		t.Fatalf("Poll: %v; a transient outage must not stop the watcher starting", err)
+	// Asked of the check, which is where the transient/terminal distinction
+	// is made: a model that is not answering must not be what stops a daemon
+	// from polling the resources it can reach.
+	err = watchable(context.Background(), cfg, time.Minute)
+	if err != nil {
+		t.Fatalf("preflight refused a transient outage: %v", err)
 	}
 }
 
@@ -268,20 +268,44 @@ func TestWatchPreflightsAgentMCPServers(t *testing.T) {
 
 	defer func() { _ = provider.Close() }()
 
-	// Bounded, because the failure mode of a regression here is the poll loop
-	// STARTING — and a started poller polls until the package's 10-minute
-	// timeout, which reports a hang rather than the assertion that actually
-	// failed. With a deadline it comes back in seconds and says so.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	err = Poll(ctx, staticConfig(cfg), st, time.Minute)
+	err = watchable(context.Background(), cfg, time.Minute)
 	if err == nil {
-		t.Fatal("Poll: started despite an agent MCP grant naming a tool the server does not expose")
+		t.Fatal("preflight passed an agent MCP grant naming a tool the server does not expose")
 	}
 
 	if !strings.Contains(err.Error(), "no_such_tool") {
 		t.Errorf("error = %v, want it to name the tool the agent was granted", err)
+	}
+
+	assertNothingPolled(t, cfg, st)
+}
+
+// assertNothingPolled runs the loop briefly against a configuration whose
+// preflight fails, and requires that it checked nothing.
+//
+// This is the invariant the old "Poll returns the error" assertion was really
+// protecting: a permanent misconfiguration must not be hidden by a loop that
+// goes on checking. Poll no longer refuses to start — a daemon that reloads
+// has to stay alive to notice the fix — so the promise moved from the return
+// value to the behaviour, and this is where it is kept.
+func assertNothingPolled(t *testing.T, cfg *config.Config, st *store.Store) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	err := Poll(ctx, staticConfig(cfg), st, 20*time.Millisecond)
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+
+	rows, err := st.ListTriggerQueue(context.Background(), 25)
+	if err != nil {
+		t.Fatalf("ListTriggerQueue: %v", err)
+	}
+
+	if len(rows) != 0 {
+		t.Errorf("a configuration whose preflight failed enqueued %d row(s)", len(rows))
 	}
 }
 

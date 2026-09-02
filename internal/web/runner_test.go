@@ -18,7 +18,7 @@ import (
 // syncs and the web runner forgot: without job_concurrency rows,
 // ClaimNextJob's COALESCE defaults every job to one build at a time, so a
 // web-only deployment silently ignored max_in_flight.
-func TestPrepareQueueSyncsConcurrency(t *testing.T) {
+func TestAdoptingAConfigSyncsConcurrency(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -48,7 +48,11 @@ jobs:
 	ctx := t.Context()
 	target := NewPipeline("demo", path, cfg, st, events.New(nil))
 
+	// Recovery and adoption are separate acts now — the daemon does both at
+	// startup, and only the second on a reload. This test is about the
+	// admission tables, which adoption owns.
 	PrepareQueue(ctx, target)
+	SyncQueueLimits(ctx, target)
 
 	// Claim two builds of the job without completing either: the second claim
 	// is the one a missing job_concurrency row denies.

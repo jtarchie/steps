@@ -212,9 +212,8 @@ func WatchOnce(
 //     no longer exists. Each cycle takes the current one; only the startup
 //     checks below read it once, because that is when they run.
 func Poll(ctx context.Context, current ConfigSource, st *store.Store, interval time.Duration) error {
-	err := watchable(ctx, current(), interval)
-	if err != nil {
-		return err
+	if interval <= 0 {
+		return fmt.Errorf("watch: interval must be positive, got %s", interval)
 	}
 
 	runPoller(ctx, current, st, interval)
@@ -229,6 +228,11 @@ type ConfigSource func() *config.Config
 // watchable reports whether there is anything to watch and whether what
 // there is can be checked at all — every reason not to poll, gathered in one
 // place so each caller's own body is the work it exists to do.
+//
+// Used by the ONE-SHOT callers (WatchOnce), for whom "nothing to poll" really
+// is a final answer. The long-running loop asks the same questions per
+// configuration instead, because a reload can change either answer — see
+// admission.
 func watchable(ctx context.Context, cfg *config.Config, interval time.Duration) error {
 	resources := Resources(cfg)
 	if len(resources) == 0 {
@@ -304,7 +308,9 @@ func preflightTriggers(ctx context.Context, cfg *config.Config, resources []stri
 // runPoller calls pollOnce immediately and then once per interval tick,
 // until ctx is canceled.
 func runPoller(ctx context.Context, current ConfigSource, st *store.Store, interval time.Duration) {
-	pollAndLog(ctx, current(), st)
+	admitted := &admission{}
+
+	admitted.poll(ctx, current(), st)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -315,9 +321,70 @@ func runPoller(ctx context.Context, current ConfigSource, st *store.Store, inter
 			return
 		case <-ticker.C:
 			// Read per cycle, not captured: see Poll.
-			pollAndLog(ctx, current(), st)
+			admitted.poll(ctx, current(), st)
 		}
 	}
+}
+
+// admission decides, once per configuration rather than once per cycle,
+// whether this loop has anything it can poll.
+//
+// Once per CONFIGURATION is the whole design. The check it gates —
+// preflightTriggers — proves a trigger resource can be checked at all, and it
+// used to run once before the loop started, which was right when a
+// configuration lasted as long as the process. Under a daemon that reloads it
+// was wrong in both directions: a resource added by an edit was never
+// preflighted, so an unsatisfiable one logged the same error every cycle
+// forever — exactly the failure the check exists to prevent — and a pipeline
+// that gained its FIRST trigger: true get was never polled at all, because
+// the decision not to poll had been taken at startup and never revisited.
+//
+// A configuration that cannot be polled is not an error the loop exits on. It
+// is a state the loop sits in until the file changes, which is the only thing
+// that can change the answer.
+type admission struct {
+	// decided is the configuration this verdict is about, compared by
+	// identity: a reload stores a new pointer, and nothing else does.
+	decided  *config.Config
+	pollable bool
+}
+
+func (a *admission) poll(ctx context.Context, cfg *config.Config, st *store.Store) {
+	if cfg != a.decided {
+		a.decided = cfg
+		a.pollable = a.decide(ctx, cfg)
+	}
+
+	if !a.pollable {
+		return
+	}
+
+	pollAndLog(ctx, cfg, st)
+}
+
+// decide reports whether this configuration can be polled, and says out loud
+// what it decided — once per configuration, which is what makes it readable
+// rather than a line a second.
+func (a *admission) decide(ctx context.Context, cfg *config.Config) bool {
+	resources := Resources(cfg)
+	if len(resources) == 0 {
+		// Not a failure: plenty of pipelines are run by hand, and an edit may
+		// add a trigger later — which is why the loop stays.
+		printf("trigger: nothing to poll — no get step sets trigger: true\n")
+
+		return false
+	}
+
+	err := preflightTriggers(ctx, cfg, resources)
+	if err != nil {
+		slog.Error("trigger.unpollable", "error", err)
+
+		return false
+	}
+
+	printf("trigger: polling %d resource(s)\n", len(resources))
+
+	return true
 }
 
 func pollAndLog(ctx context.Context, cfg *config.Config, st *store.Store) {

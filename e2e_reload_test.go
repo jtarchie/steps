@@ -306,6 +306,232 @@ jobs:
 	}
 }
 
+// TestReloadRefusesAWorkspaceThisMachineCannotProvide: the provider is built
+// and validated once, at startup, so an edited `workspace:` used to be
+// accepted by a gate that never looked at it — including one this machine
+// cannot provide at all, which then rendered on every page while runs went on
+// using the boot provider.
+func TestReloadRefusesAWorkspaceThisMachineCannotProvide(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+
+	reloadPipeline(t, path, "build")
+
+	_, target := webServerFor(t, path)
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
+
+	before := target.Config().Revision.SHA
+
+	// btrfs over a directory that is not a btrfs filesystem: refused on
+	// Linux by the provider and on every other platform by the platform.
+	writePipelineFile(t, path, `
+workspace:
+  strategy: btrfs
+  root: `+filepath.Join(dir, "not-btrfs")+`
+jobs:
+- name: build
+  plan:
+  - task: compile
+    inputs: []
+    run: echo built
+`)
+
+	swapped, err := watcher.check(t.Context())
+	if err == nil {
+		t.Fatal("a workspace this machine cannot provide was accepted")
+	}
+
+	if swapped {
+		t.Error("the unusable workspace was swapped in")
+	}
+
+	if got := target.Config().Revision.SHA; got != before {
+		t.Errorf("the served configuration moved to %s", got)
+	}
+
+	if !strings.Contains(target.Held(), "workspace") {
+		t.Errorf("the page does not say the workspace is the problem: %q", target.Held())
+	}
+}
+
+// TestReloadSaysAChangedWorkspaceNeedsARestart: the gate validates an edited
+// workspace: and does not adopt it, because the provider handed to every run
+// is built once. Saying so is the difference between a stated limitation and
+// a silent one.
+//
+// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+func TestReloadSaysAChangedWorkspaceNeedsARestart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+
+	reloadPipeline(t, path, "build")
+
+	_, target := webServerFor(t, path)
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
+
+	writePipelineFile(t, path, `
+workspace:
+  strategy: copy
+  root: `+filepath.Join(dir, "elsewhere")+`
+jobs:
+- name: build
+  plan:
+  - task: compile
+    inputs: []
+    run: echo built
+`)
+
+	var (
+		swapped bool
+		err     error
+	)
+
+	out := captureStdout(t, func() {
+		swapped, err = watcher.check(t.Context())
+	})
+
+	if err != nil || !swapped {
+		t.Fatalf("check = (%v, %v), want a swap", swapped, err)
+	}
+
+	if !strings.Contains(out, "restart to run under it") {
+		t.Errorf("a changed workspace: said nothing about the provider still being the boot one:\n%s", out)
+	}
+}
+
+// TestReloadFollowsAnIncludedFile is the answer to what the CONFIG column was
+// getting wrong.
+//
+// A run_file: or a system_file: decides what a step executes, and the
+// revision used to be a hash of the pipeline YAML alone — taken before the
+// loader resolved the includes. So editing ci/build.sh changed every run of
+// that job while `steps runs` showed the same configuration for both, a
+// failed run's page said nothing had changed, and the /config/:sha page
+// served a source whose run_file: line pointed at bytes nobody recorded. The
+// feature's headline question answered no for the edit that broke the build.
+func TestReloadFollowsAnIncludedFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+	script := filepath.Join(dir, "build.sh")
+
+	writePipelineFile(t, script, "echo one\n")
+	writePipelineFile(t, path, `
+jobs:
+- name: build
+  plan:
+  - task: compile
+    inputs: []
+    run_file: build.sh
+`)
+
+	target := webPipelineWithVars(t, path, VarFlags{})
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
+
+	before := target.Config().Revision.SHA
+
+	// The pipeline file is untouched; only the script it names changes.
+	writePipelineFile(t, script, "echo two\n")
+
+	swapped, err := watcher.check(t.Context())
+	if err != nil {
+		t.Fatalf("check after an include edit: %v", err)
+	}
+
+	if !swapped {
+		t.Fatal("an edited include did not change the configuration")
+	}
+
+	if got := target.Config().Revision.SHA; got == before {
+		t.Errorf("the revision is unchanged (%s) though the step now runs different code", got)
+	}
+
+	// And the served configuration is the edited one: a swap that reported a
+	// change and served the old parse would be worse than not swapping.
+	if got := target.Config().Jobs[0].Plan[0].Run; !strings.Contains(got, "two") {
+		t.Errorf("the served configuration still runs %q", got)
+	}
+}
+
+// TestReloadIsQuietWhenAnIncludeIsRewrittenUnchanged: the hash is over the
+// include's CONTENT, so an editor that rewrites a file byte-identically is
+// not a change — the same promise the pipeline file itself makes.
+func TestReloadIsQuietWhenAnIncludeIsRewrittenUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+	script := filepath.Join(dir, "build.sh")
+
+	writePipelineFile(t, script, "echo one\n")
+	writePipelineFile(t, path, `
+jobs:
+- name: build
+  plan:
+  - task: compile
+    inputs: []
+    run_file: build.sh
+`)
+
+	target := webPipelineWithVars(t, path, VarFlags{})
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
+
+	writePipelineFile(t, script, "echo one\n")
+
+	swapped, err := watcher.check(t.Context())
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+
+	if swapped {
+		t.Error("rewriting an include with the same bytes reported a change")
+	}
+}
+
+// TestReloadNoticesTwoIncludesSwappingContents: a pipeline with several
+// includes is one configuration, and moving code between two of them changes
+// what both steps run.
+//
+// It does NOT pin the paths being in the digest — the bodies are folded in
+// sorted-path order, so the concatenation alone already tells this case
+// apart. Nothing reachable distinguishes the two; see withIncludes.
+func TestReloadNoticesTwoIncludesSwappingContents(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+	first := filepath.Join(dir, "first.sh")
+	second := filepath.Join(dir, "second.sh")
+
+	writePipelineFile(t, first, "echo one\n")
+	writePipelineFile(t, second, "echo two\n")
+	writePipelineFile(t, path, `
+jobs:
+- name: build
+  plan:
+  - task: one
+    inputs: []
+    run_file: first.sh
+  - task: two
+    inputs: []
+    run_file: second.sh
+`)
+
+	target := webPipelineWithVars(t, path, VarFlags{})
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
+
+	before := target.Config().Revision.SHA
+
+	// The same two bodies, now behind the other name — so every step runs
+	// something different and the bytes on disk, taken as a set, are equal.
+	writePipelineFile(t, first, "echo two\n")
+	writePipelineFile(t, second, "echo one\n")
+
+	swapped, err := watcher.check(t.Context())
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+
+	if !swapped || target.Config().Revision.SHA == before {
+		t.Error("two includes exchanging contents was not a change")
+	}
+}
+
 // TestReloadWatchesTheVarsFile pins the watch set: ((var)) substitution
 // happens BEFORE the parse, so a vars file is part of the configuration —
 // watching only the YAML would serve one thing while the operator's files say
@@ -346,29 +572,47 @@ jobs:
 	}
 }
 
-// TestReloadSaysWhenAnEditAddsTheFirstTrigger pins the stated limitation.
+// TestReloadStartsPollingATriggerAnEditAdded is the seam between the reload
+// and the poll loop, and it replaces a stated limitation rather than
+// documenting one.
 //
-// The daemon decides at startup whether a pipeline has anything to poll, so a
-// pipeline that gains its first trigger: true get is served with the new
-// configuration and polled by nothing until a restart. Supervising the poll
-// loop across swaps is a bigger change than this one; being quiet about it
-// would leave an operator watching a resource that is never checked.
+// Whether a pipeline had anything to poll used to be decided once, at
+// startup, so a pipeline that gained its FIRST `trigger: true` get was served
+// with the new configuration and checked by nothing until a restart. The
+// decision is now the loop's, taken per configuration.
 //
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
-func TestReloadSaysWhenAnEditAddsTheFirstTrigger(t *testing.T) {
+// Driven through the real daemon: this is exactly the kind of claim that
+// passes when asserted against a watcher and a poller separately.
+func TestReloadStartsPollingATriggerAnEditAdded(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pipeline.yml")
+	versions := filepath.Join(dir, "versions.json")
+	log := filepath.Join(dir, "ran.log")
 
-	reloadPipeline(t, path, "build")
+	writePipelineFile(t, versions, `[{"n":"1"}]`)
 
-	_, target := webServerFor(t, path)
-	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
-
+	// Nothing to poll: one job, run by hand.
 	writePipelineFile(t, path, `
+jobs:
+- name: build
+  plan:
+  - task: compile
+    inputs: []
+    run: echo built
+`)
+
+	served := startWeb(t, []string{path}, "--interval", "100ms")
+	defer served.stop(t)
+
+	// The edit that gives it something to check.
+	writePipelineFile(t, path, `
+defaults:
+  preflight:
+    disabled: true
 resource_types:
 - name: feed
   config:
-    check: "echo '[]'"
+    check: cat `+versions+`
     in: "true"
 resources:
 - name: items
@@ -379,24 +623,14 @@ jobs:
   plan:
   - get: items
     trigger: true
+  - task: compile
+    inputs: [items]
+    run: echo built >> `+log+`
 `)
 
-	var (
-		swapped bool
-		err     error
-	)
-
-	out := captureStdout(t, func() {
-		swapped, err = watcher.check(t.Context())
-	})
-
-	if err != nil || !swapped {
-		t.Fatalf("check = (%v, %v), want a swap", swapped, err)
-	}
-
-	if !strings.Contains(out, "restart to begin polling") {
-		t.Errorf("an edit that added the first trigger said nothing about polling:\n%s", out)
-	}
+	// The run the poller enqueued and the drain executed — end to end, from a
+	// file that was saved while the daemon was already running.
+	waitForFile(t, log)
 }
 
 // TestWatchStopsWithItsContext is the loop around check: it applies edits on

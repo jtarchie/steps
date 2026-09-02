@@ -184,7 +184,7 @@ func (r *LocalRunner) drainWorker(ctx context.Context, target *Pipeline) {
 	}
 }
 
-// PrepareQueue is the startup recovery and config sync `steps web` does,
+// PrepareQueue is the startup recovery `steps web` does,
 // mirrored here so admission decides the same way regardless of which front
 // end drains the queue. ClaimNextJob reads every input from SQL, so a table
 // this forgets to sync isn't a missing feature — it's a silently different
@@ -208,20 +208,19 @@ func PrepareQueue(ctx context.Context, target *Pipeline) {
 	if err != nil {
 		slog.Error("web.reset_stale", "pipeline", target.Slug, "error", err)
 	}
-
-	SyncQueueLimits(ctx, target)
 }
 
 // SyncQueueLimits mirrors the served configuration's admission rules into the
 // tables ClaimNextJob reads.
 //
-// Split out of PrepareQueue because it is the half a RELOAD owes too, while
-// recovery is startup-only: ResetStaleRunning reads every `running` row as an
-// abandoned leftover, which is true once, at startup, and false while this
-// process is mid-build. Everything a swap changes about who may run — a job
-// joining a serial group, a max_in_flight raised or removed — lives in SQL
-// rather than in the Config, so a swap that skipped this served pages
-// promising a `serial:` the queue went on ignoring.
+// NOT part of PrepareQueue, though it once was: it belongs to ADOPTING a
+// configuration, which happens at startup and at every reload, while recovery
+// belongs to starting the process. ResetStaleRunning reads every `running`
+// row as an abandoned leftover, which is true once, at startup, and false
+// while this process is mid-build. Everything a swap changes about who may
+// run — a job joining a serial group, a max_in_flight raised or removed —
+// lives in SQL rather than in the Config, so a configuration adopted without
+// this serves pages promising a `serial:` the queue goes on ignoring.
 func SyncQueueLimits(ctx context.Context, target *Pipeline) {
 	cfg := target.Config()
 
