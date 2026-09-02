@@ -7,6 +7,7 @@
       <span class="st st-{{statusWord $run.Run.Status}}">{{statusWord $run.Run.Status}}</span><span class="sep">·</span>
       {{stamp $run.Run.StartedAt}}<span class="sep">·</span>
       <span id="run-duration">{{elapsedTag $run.Run}}</span>
+      {{if $run.Run.ConfigSHA}}<span class="sep">·</span>config <a class="hash" href="/p/{{.Nav.Current}}/config/{{$run.Run.ConfigSHA}}">{{short $run.Run.ConfigSHA}}</a>{{end}}
       {{if $run.Run.Workspace}}<span class="sep">·</span><span class="faint">{{$run.Run.Workspace}}</span>{{end}}
     </p>
   </div>
@@ -27,6 +28,13 @@
 {{if $run.Run.Replayed}}
 <p class="diffnote">replayed from <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.Run.ParentRunID}}">{{short $run.Run.ParentRunID}}</a>
   — the steps before the replay point were restored from that run, not re-executed</p>
+{{end}}
+
+{{if $run.ComparedConfig}}
+<p class="diffnote">the <b>configuration changed</b> since last passed
+  <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.ComparedTo}}">{{short $run.ComparedTo}}</a>,
+  which ran <a class="hash" href="/p/{{.Nav.Current}}/config/{{$run.ComparedConfig}}">{{short $run.ComparedConfig}}</a>
+  — the steps below moved because the pipeline did</p>
 {{end}}
 
 {{if $run.Changed}}

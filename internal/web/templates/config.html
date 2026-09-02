@@ -1,0 +1,12 @@
+{{define "page"}}
+<div class="pagehead">
+  <div>
+    <h1 class="prompt"><b>steps config {{short .SHA}}</b></h1>
+    <p class="metaline">the pipeline as the runs pinned to this hash executed it<span class="sep">·</span><span class="faint">{{.SHA}}</span></p>
+  </div>
+</div>
+
+<article class="docs">
+{{.Body}}
+</article>
+{{end}}

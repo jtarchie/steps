@@ -18,6 +18,14 @@ import (
 // session-termination DELETE (verified in isolation, both with and without
 // the client's standalone SSE stream — go-sdk@v1.7.0, no fix in a later
 // release as of this writing). Not steps' leak to fix.
+//
+// regexp2's runClock is ignored for the reason internal/web's TestMain sets
+// out in full: chroma's lexers match with regexp2, whose match-timeout support
+// runs a shared background clock that exits on its own about a second after
+// the last match, with no handle to close it sooner. It reaches this package
+// through the /p/:pipeline/config/:sha page, which highlights a recorded
+// configuration. Re-verified against regexp2 v2.7.1: runClock still loops only
+// while current <= clockEnd and clears running on the way out (fastclock.go).
 func TestMain(m *testing.M) {
 	// A local: worker execs `<this binary> _shim`, and under `go test` this
 	// binary is the test binary — which answers to nothing but the suite, so
@@ -45,6 +53,7 @@ func TestMain(m *testing.M) {
 
 	options := []goleak.Option{
 		goleak.IgnoreTopFunction("github.com/modelcontextprotocol/go-sdk/mcp.(*streamableServerConn).Read"),
+		goleak.IgnoreAnyFunction("github.com/dlclark/regexp2/v2.runClock"),
 	}
 
 	// The cloud SDKs' pooled keep-alive connections, and only when the

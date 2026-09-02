@@ -250,6 +250,14 @@ func (s *Server) attachDiff(c echo.Context, view *runView) error {
 		view.Changed = diffAgainst(*view, prior)
 		view.ComparedTo = candidate.ID
 
+		// Only when they differ, and only when both are known: a run
+		// recorded before revisions existed has no hash, and reporting that
+		// as a change would make every such page claim an edit that never
+		// happened.
+		if candidate.ConfigSHA != "" && view.Run.ConfigSHA != "" && candidate.ConfigSHA != view.Run.ConfigSHA {
+			view.ComparedConfig = candidate.ConfigSHA
+		}
+
 		return nil
 	}
 

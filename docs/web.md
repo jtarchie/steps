@@ -29,6 +29,7 @@ one directory. `--state` is how you ask them to; see
 | `…/jobs/:job` | This job's dependencies in both directions, its run history with a duration trend, the resource versions it has passed against, and the resolved limits each agent step runs under |
 | `…/runs/:run` | **The transcript**: every step in plan order, what it did, and — for agent steps — what the model said and which tools it called |
 | `…/nodes/:hash` | What a merkle hash is made of, and every run that reused it: the cache's receipt |
+| `…/config/:sha` | The pipeline as the runs pinned to that hash executed it — readable after the file on disk has moved on |
 | `…/approvals` | Pending `approval:` steps, and the decisions already made |
 | `…/questions` | Pending `ask_user` questions, and the answers already given |
 | `…/resources` | Latest checked version per resource, and any job the circuit breaker has paused |
@@ -75,6 +76,12 @@ the things a scrollback cannot give you:
 - **A failed run leads with the error**, and says what changed since the last
   passed run of that job — computed by comparing content hashes, so it names
   the steps whose inputs, command, or prompt actually moved.
+- **Every run names the configuration it executed**, linking the pipeline as
+  it was when that run started — which the file on disk no longer holds once
+  anyone edits it. When a failed run's configuration differs from the last
+  passed one's, the page says so above the step diff and links both, because
+  "the steps moved because the pipeline did" and "the steps moved on their
+  own" are different problems and the step diff alone cannot tell them apart.
 - **A task step expands into what it printed.** Output is captured while it
   still streams to the terminal and bounded at 16KB per step. Recorded
   whichever way the step ended, and especially when it failed: the error a
@@ -291,7 +298,12 @@ swap is immediate for everything that comes after it: the pages, the trigger
 poller, and the next job the queue admits. What the running job is executing
 does not change underneath it — and the run records which configuration that
 was, which is the `CONFIG` column `steps runs` prints and the revision named
-on the run page.
+on the run page, where it links the configuration itself.
+
+**`--replay` still resolves `--from` against the CURRENT plan**, deliberately:
+the pipeline has almost certainly changed since the run being replayed, which
+is usually why anyone is replaying it. A `--from` naming a step the current
+plan does not have is refused, listing the steps it does have.
 
 Two things it does not do:
 

@@ -388,6 +388,12 @@ type runView struct {
 	Changed []string
 	// ComparedTo is the run Changed was computed against.
 	ComparedTo string
+	// ComparedConfig is the configuration THAT run executed, when it is not
+	// the one this run executed. Empty when the two agree, because a line
+	// saying the configuration changed after every run says nothing — the
+	// question it answers is whether a job that started behaving differently
+	// was given different instructions.
+	ComparedConfig string
 	// Usage is what this run's agent steps spent, in step order. Empty for a
 	// run with no agent steps, which is what keeps the panel off a page that
 	// has nothing to say about spend.

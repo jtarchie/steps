@@ -14,7 +14,7 @@ import (
 // One third-party exception, and it is bounded rather than leaked: chroma's
 // lexers (prose.go, for the fenced code inside an agent's response) match with
 // regexp2, whose match-timeout support runs a shared background clock. Read
-// fastclock.go in regexp2 v2.6.0: runClock loops only while `current <=
+// fastclock.go in regexp2 v2.7.1: runClock loops only while `current <=
 // clockEnd` and then clears `running` and returns, and every match extends
 // clockEnd by about a second — so the goroutine exits on its own shortly after
 // the last match, and there is no handle to close it sooner. goleak simply

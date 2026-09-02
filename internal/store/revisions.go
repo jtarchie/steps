@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -35,6 +36,38 @@ func (s *Store) RecordRevision(ctx context.Context, sha, source string) error {
 	s.revisionID.Store(id)
 
 	return nil
+}
+
+// Revision is one recorded configuration: the substituted source a run was
+// started from, and the hash that identifies it.
+type Revision struct {
+	SHA    string
+	Source string
+}
+
+// FindRevision returns a configuration this pipeline has run, by its hash.
+//
+// Scoped to this pipeline like everything else here, even though the hash
+// alone would find the row: a state file may hold several pipelines, and one
+// answering for another's configuration would be a page showing a file the
+// reader's pipeline never ran.
+func (s *Store) FindRevision(ctx context.Context, sha string) (Revision, bool, error) {
+	var rev Revision
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT sha, source FROM pipeline_revisions
+		WHERE pipeline_id = ? AND sha = ?
+	`, s.pipelineID, sha).Scan(&rev.SHA, &rev.Source)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return Revision{}, false, nil
+	}
+
+	if err != nil {
+		return Revision{}, false, fmt.Errorf("could not read configuration %q of pipeline %q: %w", sha, s.pipeline, err)
+	}
+
+	return rev, true, nil
 }
 
 // pruneRevisions drops the configurations nothing points at any more.

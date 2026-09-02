@@ -8,6 +8,7 @@ package web
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -91,4 +92,27 @@ func TestConfigIsSafeUnderAReload(t *testing.T) {
 	}
 
 	readers.Wait()
+}
+
+// TestHighlightYAMLEscapesMarkup: a configuration is rendered as a code
+// block, so whatever it contains stays text. The source is the operator's own
+// file rather than a stranger's, which makes this a property worth pinning
+// rather than a threat worth fearing — a pipeline that legitimately echoes
+// HTML must read as YAML, not disappear into the page.
+func TestHighlightYAMLEscapesMarkup(t *testing.T) {
+	t.Parallel()
+
+	body, err := highlightYAML("jobs:\n- name: build\n  run: echo '<script>alert(1)</script>'\n")
+	if err != nil {
+		t.Fatalf("highlightYAML: %v", err)
+	}
+
+	rendered := string(body)
+	if strings.Contains(rendered, "<script>") {
+		t.Errorf("a configuration's contents reached the page as markup:\n%s", rendered)
+	}
+
+	if !strings.Contains(rendered, "&lt;script&gt;") {
+		t.Errorf("the configuration's own text is not shown:\n%s", rendered)
+	}
 }

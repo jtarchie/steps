@@ -230,3 +230,61 @@ func TestCurrentRevisionSurvivesRetention(t *testing.T) {
 		}
 	}
 }
+
+// TestFindRevisionIsScopedToItsPipeline: a state file may hold several
+// pipelines, and a hash identifies bytes rather than a pipeline — so an
+// unscoped lookup would serve one pipeline's page a configuration another
+// pipeline ran, which is the shape of bug every query in this package carries
+// a pipeline_id predicate to prevent.
+func TestFindRevisionIsScopedToItsPipeline(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "shared.db")
+
+	mine := mustOpenStore(t, path)
+	defer func() { _ = mine.Close() }()
+
+	theirs, err := OpenStore(path, "other")
+	if err != nil {
+		t.Fatalf("OpenStore as other: %v", err)
+	}
+
+	defer func() { _ = theirs.Close() }()
+
+	err = theirs.RecordRevision(ctxFor(t), "sha-theirs", pipelineSource(1))
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	_, found, err := mine.FindRevision(ctxFor(t), "sha-theirs")
+	if err != nil {
+		t.Fatalf("FindRevision: %v", err)
+	}
+
+	if found {
+		t.Error("one pipeline read a configuration another pipeline recorded")
+	}
+
+	// And its own is still found, so the scoping is a predicate rather than a
+	// lookup that never works.
+	err = mine.RecordRevision(ctxFor(t), "sha-mine", pipelineSource(2))
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	revision, found, err := mine.FindRevision(ctxFor(t), "sha-mine")
+	if err != nil || !found {
+		t.Fatalf("FindRevision of its own configuration = (%v, %v, %v)", revision.SHA, found, err)
+	}
+
+	if revision.Source != pipelineSource(2) {
+		t.Error("FindRevision returned a configuration that is not the one recorded")
+	}
+}
+
+// ctxFor is the test's context, named so the calls above read as one line.
+func ctxFor(t *testing.T) context.Context {
+	t.Helper()
+
+	return t.Context()
+}

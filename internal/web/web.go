@@ -235,6 +235,7 @@ func (s *Server) routes() error {
 	group.GET("/runs/:run", s.handleRun)
 	group.GET("/runs/:run/events", s.handleRunEvents)
 	group.GET("/nodes/:hash", s.handleNode)
+	group.GET("/config/:sha", s.handleConfig)
 	group.GET("/approvals", s.handleApprovals)
 	group.GET("/questions", s.handleQuestions)
 	group.GET("/resources", s.handleResources)
