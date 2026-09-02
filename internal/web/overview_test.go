@@ -111,7 +111,7 @@ func TestRootFeedSpansPipelines(t *testing.T) {
 		{pipelines[1], "infra-1", "infra-job"},
 		{pipelines[0], "app-2", "app-job"},
 	} {
-		err := seed.pipeline.Store.StartRun(ctx, seed.id, seed.job, t.TempDir())
+		err := seed.pipeline.Store.StartRun(ctx, seed.id, seed.job, t.TempDir(), "")
 		if err != nil {
 			t.Fatalf("StartRun(%s): %v", seed.id, err)
 		}
@@ -160,7 +160,7 @@ func TestRootFeedIgnoresUnservedPipelines(t *testing.T) {
 
 	t.Cleanup(func() { _ = other.Close() })
 
-	err = other.StartRun(t.Context(), "unserved-1", "secret", t.TempDir())
+	err = other.StartRun(t.Context(), "unserved-1", "secret", t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestSearchSpansServedPipelines(t *testing.T) {
 
 	server, pipelines := testPipelines(t, "app", "infra")
 
-	err := pipelines[1].Store.StartRun(t.Context(), "infra-run", "infra-job", t.TempDir())
+	err := pipelines[1].Store.StartRun(t.Context(), "infra-run", "infra-job", t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestSearchReachesOtherPipelinesPastTheCap(t *testing.T) {
 	for i := range searchHitLimit + 5 {
 		id := fmt.Sprintf("app-run-%02d", i)
 
-		err := pipelines[0].Store.StartRun(t.Context(), id, "app-job", t.TempDir())
+		err := pipelines[0].Store.StartRun(t.Context(), id, "app-job", t.TempDir(), "")
 		if err != nil {
 			t.Fatalf("StartRun(%s): %v", id, err)
 		}
@@ -300,7 +300,7 @@ func TestRunPageMarksAWrappedUpStep(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-wrap", "build", t.TempDir())
+	err := pipeline.Store.StartRun(ctx, "run-wrap", "build", t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestRunPageLeavesAnOrdinaryStepAlone(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-ok", "build", t.TempDir())
+	err := pipeline.Store.StartRun(ctx, "run-ok", "build", t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -470,7 +470,7 @@ func TestLiveStreamCarriesWrappedUp(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-live-wrap", "build", "")
+	err := pipeline.Store.StartRun(ctx, "run-live-wrap", "build", "", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -518,7 +518,7 @@ func TestLiveStreamCarriesWrappedUpForACachedStep(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-cached-wrap", "build", "")
+	err := pipeline.Store.StartRun(ctx, "run-cached-wrap", "build", "", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

@@ -161,9 +161,16 @@ func forced(ctx context.Context) bool {
 // bookkeeping write nobody checks is exactly how that stayed invisible. A run
 // that cannot establish its own identity has nowhere to record what it does,
 // so there is nothing useful for it to go on and do.
-func recordRunIdentity(ctx context.Context, st *store.Store, resume *resumeState, jobName, workspaceRoot string) error {
+//
+// configSHA comes from the CONFIG this run was handed, never from the store
+// handle: this write happens long after the caller took that config — past
+// placement, leases, image pulls and preflight — and a daemon that reloaded
+// in between would otherwise stamp a configuration this run never executed.
+func recordRunIdentity(
+	ctx context.Context, st *store.Store, resume *resumeState, jobName, workspaceRoot, configSHA string,
+) error {
 	if resume.resuming {
-		err := st.ResumeRun(ctx, resume.id, workspaceRoot)
+		err := st.ResumeRun(ctx, resume.id, workspaceRoot, configSHA)
 		if err != nil {
 			return fmt.Errorf("job %q: %w", jobName, err)
 		}
@@ -171,7 +178,7 @@ func recordRunIdentity(ctx context.Context, st *store.Store, resume *resumeState
 		return nil
 	}
 
-	err := st.StartRun(ctx, resume.id, jobName, workspaceRoot)
+	err := st.StartRun(ctx, resume.id, jobName, workspaceRoot, configSHA)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", jobName, err)
 	}

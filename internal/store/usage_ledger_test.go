@@ -29,7 +29,7 @@ func TestAgentUsageAccumulatesAcrossAttempts(t *testing.T) {
 	// agent_usage.run_id references runs(id) as well, so the run has to exist —
 	// which in production it always does: usage is recorded from inside a step
 	// of a run that StartRun already filed.
-	err = st.StartRun(ctx, "r1", "j", "/tmp/ws")
+	err = st.StartRun(ctx, "r1", "j", "/tmp/ws", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestAgentUsageCostSurvivesAnUnpricedAttempt(t *testing.T) {
 
 	mustRecordNode(t, st, "j", "node")
 
-	err = st.StartRun(ctx, "r1", "j", "/tmp/ws")
+	err = st.StartRun(ctx, "r1", "j", "/tmp/ws", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestAgentUsageNeverPricedStaysNull(t *testing.T) {
 
 	mustRecordNode(t, st, "j", "node")
 
-	err = st.StartRun(ctx, "r1", "j", "/tmp/ws")
+	err = st.StartRun(ctx, "r1", "j", "/tmp/ws", "")
 	if err != nil {
 		t.Fatal(err)
 	}

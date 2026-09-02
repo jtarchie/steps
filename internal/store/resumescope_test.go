@@ -30,7 +30,7 @@ func TestCompletedRunStepsAreScopedToTheirPipeline(t *testing.T) {
 
 	const shared = "SHARED01"
 
-	err := web.StartRun(ctx, shared, "build", "/tmp/web")
+	err := web.StartRun(ctx, shared, "build", "/tmp/web", "")
 	if err != nil {
 		t.Fatalf("StartRun web: %v", err)
 	}

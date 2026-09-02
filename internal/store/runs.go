@@ -63,6 +63,20 @@ func (r RunRow) Duration() time.Duration {
 	return r.FinishedAt.Sub(r.StartedAt)
 }
 
+// revisionBySHA resolves the configuration a run says it executed, as a
+// subselect rather than an id the caller looked up first.
+//
+// The SHA is the caller's answer because it travels with the CONFIGURATION —
+// it is a field on the *config.Config the run was handed — while the row id
+// is this database's business. That is the whole correction: the revision
+// used to be read off the store handle at write time, minutes after the run
+// took its config, so a reload in between made a run name a configuration it
+// never executed.
+//
+// An unmatched sha resolves to NULL, which is what an empty one means too: a
+// run started by a caller that loaded no pipeline file.
+const revisionBySHA = `(SELECT id FROM pipeline_revisions WHERE pipeline_id = ? AND sha = ?)`
+
 // runColumns is the one column list every RunRow query selects (runColumnsR
 // is the same list for a query that aliases runs as r). scanRunRow decodes
 // exactly this order.
@@ -120,12 +134,12 @@ var (
 // DO NOTHING plus a row count rather than letting the constraint violation
 // out, so the answer does not depend on how a driver spells its unique-index
 // error.
-func (s *Store) StartRun(ctx context.Context, id, jobName, workspaceDir string) error {
+func (s *Store) StartRun(ctx context.Context, id, jobName, workspaceDir, configSHA string) error {
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO runs (id, pipeline_id, job_name, workspace, status, started_at, revision_id)
-		VALUES (?, ?, ?, ?, 'running', ?, ?)
+		VALUES (?, ?, ?, ?, 'running', ?, `+revisionBySHA+`)
 		ON CONFLICT (id) DO NOTHING
-	`, id, s.pipelineID, jobName, workspaceDir, nowNano(), s.currentRevision())
+	`, id, s.pipelineID, jobName, workspaceDir, nowNano(), s.pipelineID, configSHA)
 	if err != nil {
 		return fmt.Errorf("could not record run %q: %w", id, err)
 	}
@@ -157,11 +171,16 @@ func (s *Store) StartRun(ctx context.Context, id, jobName, workspaceDir string) 
 // job_name is deliberately not written: the job a run belongs to was decided
 // when it was minted, and a resume that could rewrite it would make the run
 // history disagree with the events already recorded against it.
-func (s *Store) ResumeRun(ctx context.Context, id, workspaceDir string) error {
+//
+// The REVISION is written, and for the mirror of that reason: a resume
+// continues a failed run under the configuration it is being resumed with,
+// which is usually the one that fixed it. Leaving the original would make the
+// run claim it executed a pipeline that nothing in it ever ran.
+func (s *Store) ResumeRun(ctx context.Context, id, workspaceDir, configSHA string) error {
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE runs SET status = 'running', workspace = ?
+		UPDATE runs SET status = 'running', workspace = ?, revision_id = `+revisionBySHA+`
 		WHERE id = ? AND pipeline_id = ?
-	`, workspaceDir, id, s.pipelineID)
+	`, workspaceDir, s.pipelineID, configSHA, id, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not resume run %q: %w", id, err)
 	}

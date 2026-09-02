@@ -32,7 +32,7 @@ jobs:
         tags: [box]
         image: alpine:3
         run: "true"
-`, "build")
+`)
 
 	defer func() { _ = st.Close() }()
 	defer func() { _ = provider.Close() }()

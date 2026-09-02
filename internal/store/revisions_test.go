@@ -48,14 +48,14 @@ func TestRecordRevisionInternsOneRowPerConfiguration(t *testing.T) {
 	}
 }
 
-// TestRunsPinTheRevisionTheyStartedUnder is the pin, read back through the
-// row a history view reads: a run started under one configuration keeps
-// naming it after the handle has moved on to another.
+// TestRunsRecordTheRevisionTheyWereGiven is the correction that removed the
+// revision from this handle: a run names the configuration IT was handed,
+// which is not necessarily the newest one this pipeline has loaded.
 //
-// This is the half the watcher will stand on. A run that read the CURRENT
-// revision at display time instead of the one it started under would report
-// every historical run as having executed today's file.
-func TestRunsPinTheRevisionTheyStartedUnder(t *testing.T) {
+// Every argument order is exercised, because the defect it replaces was an
+// ordering one — the row was written long after the caller took its config,
+// so whichever revision happened to be newest at write time won.
+func TestRunsRecordTheRevisionTheyWereGiven(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -63,32 +63,32 @@ func TestRunsPinTheRevisionTheyStartedUnder(t *testing.T) {
 
 	defer func() { _ = store.Close() }()
 
-	err := store.RecordRevision(ctx, "sha-one", pipelineSource(1))
-	if err != nil {
-		t.Fatalf("RecordRevision: %v", err)
+	for _, sha := range []string{"sha-one", "sha-two"} {
+		err := store.RecordRevision(ctx, sha, pipelineSource(1))
+		if err != nil {
+			t.Fatalf("RecordRevision(%s): %v", sha, err)
+		}
 	}
 
-	err = store.StartRun(ctx, "run-one", "build", "/tmp/ws-one")
+	// Started under the OLDER one, with the newer already interned — the
+	// daemon reloaded while this run was getting under way.
+	err := store.StartRun(ctx, "run-one", "build", "/tmp/ws-one", "sha-one")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = store.RecordRevision(ctx, "sha-two", pipelineSource(2))
-	if err != nil {
-		t.Fatalf("RecordRevision: %v", err)
-	}
-
-	err = store.StartRun(ctx, "run-two", "build", "/tmp/ws-two")
+	err = store.StartRun(ctx, "run-two", "build", "/tmp/ws-two", "sha-two")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
+
+	got := map[string]string{}
 
 	rows, err := store.ListRuns(ctx, "build", 10)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
 
-	got := map[string]string{}
 	for _, row := range rows {
 		got[row.ID] = row.ConfigSHA
 	}
@@ -97,6 +97,50 @@ func TestRunsPinTheRevisionTheyStartedUnder(t *testing.T) {
 		if got[id] != want {
 			t.Errorf("run %s reports configuration %q, want %q", id, got[id], want)
 		}
+	}
+}
+
+// TestResumeRecordsTheConfigItResumesUnder: a resume continues a failed run
+// under the configuration it is being resumed WITH, which is usually the one
+// that fixed it. Keeping the original would make the run claim it executed a
+// pipeline nothing in it ever ran.
+func TestResumeRecordsTheConfigItResumesUnder(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	for _, sha := range []string{"sha-broken", "sha-fixed"} {
+		err := store.RecordRevision(ctx, sha, pipelineSource(1))
+		if err != nil {
+			t.Fatalf("RecordRevision(%s): %v", sha, err)
+		}
+	}
+
+	err := store.StartRun(ctx, "run-one", "build", "/tmp/ws", "sha-broken")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	err = store.FinishRun(ctx, "run-one", "failed")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	err = store.ResumeRun(ctx, "run-one", "/tmp/ws", "sha-fixed")
+	if err != nil {
+		t.Fatalf("ResumeRun: %v", err)
+	}
+
+	rows, err := store.ListRuns(ctx, "build", 10)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+
+	if len(rows) != 1 || rows[0].ConfigSHA != "sha-fixed" {
+		t.Errorf("after a resume the run reports %+v, want sha-fixed", rows)
 	}
 }
 
@@ -111,7 +155,7 @@ func TestRunWithNoRecordedConfigurationSaysSo(t *testing.T) {
 
 	defer func() { _ = store.Close() }()
 
-	err := store.StartRun(ctx, "run-one", "build", "/tmp/ws-one")
+	err := store.StartRun(ctx, "run-one", "build", "/tmp/ws-one", "")
 	if err != nil {
 		t.Fatalf("StartRun with no configuration recorded: %v", err)
 	}
@@ -149,14 +193,11 @@ func TestRevisionsAreBoundedByRunRetention(t *testing.T) {
 	)
 
 	for build := 1; build <= builds; build++ {
-		err := store.RecordRevision(ctx, fmt.Sprintf("sha-%03d", build), pipelineSource(build))
-		if err != nil {
-			t.Fatalf("RecordRevision: %v", err)
-		}
-
+		// syntheticBuild records a configuration of its own per build, which
+		// is the worst case a reloading daemon produces.
 		syntheticBuild(ctx, t, store, jobName, build)
 
-		err = store.PruneRuns(ctx, jobName, keep, "")
+		err := store.PruneRuns(ctx, jobName, keep, "")
 		if err != nil {
 			t.Fatalf("PruneRuns: %v", err)
 		}
@@ -170,17 +211,12 @@ func TestRevisionsAreBoundedByRunRetention(t *testing.T) {
 	}
 }
 
-// TestCurrentRevisionSurvivesRetention is the exemption, and it is the window
-// a swap opens: a configuration is loaded, and a build that STARTED under the
-// previous one finishes and prunes before anything has run under the new one.
-// Without the exemption that sweep reaps a revision referenced by nothing
-// yet, and the next run fails its foreign key on a row that was about to be
-// pinned.
-//
-// Constructed by pruning once at the end rather than per build, which is what
-// puts runs past the cap in the same sweep that sees the fresh revision
-// unreferenced.
-func TestCurrentRevisionSurvivesRetention(t *testing.T) {
+// TestTheNewestRevisionSurvivesRetention is the exemption, and it is the
+// window a reload opens: a configuration is loaded, and a build that STARTED
+// under the previous one finishes and prunes before anything has run under
+// the new one. Without the exemption that sweep reaps the row the next run is
+// about to name, and that run records no configuration at all.
+func TestTheNewestRevisionSurvivesRetention(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -190,20 +226,15 @@ func TestCurrentRevisionSurvivesRetention(t *testing.T) {
 
 	const (
 		keep    = 2
-		jobName = "build"
+		jobName = "answer-mention"
 	)
-
-	err := store.RecordRevision(ctx, "sha-before", pipelineSource(1))
-	if err != nil {
-		t.Fatalf("RecordRevision: %v", err)
-	}
 
 	for build := 1; build <= 5; build++ {
 		syntheticBuild(ctx, t, store, jobName, build)
 	}
 
 	// The swap: loaded, and referenced by nothing that has run yet.
-	err = store.RecordRevision(ctx, "sha-current", pipelineSource(2))
+	err := store.RecordRevision(ctx, "sha-current", pipelineSource(2))
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
@@ -214,9 +245,9 @@ func TestCurrentRevisionSurvivesRetention(t *testing.T) {
 		t.Fatalf("PruneRuns: %v", err)
 	}
 
-	err = store.StartRun(ctx, "run-after-prune", jobName, "/tmp/ws-after")
+	err = store.StartRun(ctx, "run-after-prune", jobName, "/tmp/ws-after", "sha-current")
 	if err != nil {
-		t.Fatalf("a run started after retention swept the loaded configuration: %v", err)
+		t.Fatalf("StartRun: %v", err)
 	}
 
 	rows, err := store.ListRuns(ctx, jobName, 10)
@@ -226,8 +257,69 @@ func TestCurrentRevisionSurvivesRetention(t *testing.T) {
 
 	for _, row := range rows {
 		if row.ID == "run-after-prune" && row.ConfigSHA != "sha-current" {
-			t.Errorf("the run pinned %q, want sha-current", row.ConfigSHA)
+			t.Errorf("the run pinned %q, want sha-current — the sweep reaped the configuration it was about to name", row.ConfigSHA)
 		}
+	}
+}
+
+// TestRevisionsAreBoundedWithoutAnyRunsBeingReaped is the other orphaning
+// event, and the one the first bound missed entirely: an operator iterating
+// on a pipeline with `steps web` watching it mints a multi-kilobyte row per
+// distinct save, and none of those saves has to run anything. Waiting for a
+// job to pass run_history: before reclaiming them is not a bound.
+func TestRevisionsAreBoundedWithoutAnyRunsBeingReaped(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	for edit := 1; edit <= 50; edit++ {
+		err := store.RecordRevision(ctx, fmt.Sprintf("sha-%03d", edit), pipelineSource(edit))
+		if err != nil {
+			t.Fatalf("RecordRevision: %v", err)
+		}
+
+		err = store.PruneRevisions(ctx)
+		if err != nil {
+			t.Fatalf("PruneRevisions: %v", err)
+		}
+	}
+
+	// One: the newest. Nothing ran, so nothing else is reachable.
+	if rows := countRows(ctx, t, store, "pipeline_revisions"); rows != 1 {
+		t.Errorf("%d configurations survive 50 saves that ran nothing, want 1", rows)
+	}
+}
+
+// TestRevisionsAreBoundedWhenRunsAreUnlimited: run_history: 0 means no limit
+// on RUNS, and PruneRuns returns early on it — which left the configurations
+// unbounded for the life of the file, on the one setting an operator chooses
+// when they want to keep everything about their runs and nothing about their
+// editor's autosaves.
+func TestRevisionsAreBoundedWhenRunsAreUnlimited(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	for edit := 1; edit <= 20; edit++ {
+		err := store.RecordRevision(ctx, fmt.Sprintf("sha-%03d", edit), pipelineSource(edit))
+		if err != nil {
+			t.Fatalf("RecordRevision: %v", err)
+		}
+
+		err = store.PruneRuns(ctx, "build", 0, "")
+		if err != nil {
+			t.Fatalf("PruneRuns: %v", err)
+		}
+	}
+
+	if rows := countRows(ctx, t, store, "pipeline_revisions"); rows != 1 {
+		t.Errorf("%d configurations survive under run_history: 0, want 1", rows)
 	}
 }
 

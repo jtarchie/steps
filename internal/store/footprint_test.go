@@ -113,6 +113,34 @@ func runIDFor(store *Store, build int) string {
 	return fmt.Sprintf("RUN%d-%05d", store.pipelineID, build)
 }
 
+// syntheticRevision records the configuration one build ran, and returns its
+// hash for the run row.
+//
+// A configuration per build is the worst case a reloading daemon produces,
+// and the only one worth measuring: a fixture that recorded none left
+// pipeline_revisions contributing zero bytes to the one dbstat measurement in
+// this repo, so the table could grow without bound while the footprint test
+// went on reporting a flat file.
+func syntheticRevision(ctx context.Context, t *testing.T, store *Store, build int) string {
+	t.Helper()
+
+	sha := fmt.Sprintf("sha-%s-%04d", store.pipeline, build)
+
+	err := store.RecordRevision(ctx, sha, syntheticPipelineSource(build))
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	return sha
+}
+
+// syntheticPipelineSource is a pipeline of a few kilobytes — what a revision
+// row actually holds. A short stand-in would make the table look free.
+func syntheticPipelineSource(build int) string {
+	return fmt.Sprintf("# revision %d\njobs:\n- name: answer-mention\n  plan:\n  - task: work\n    run: |\n      %s\n",
+		build, strings.Repeat("echo working; ", 200))
+}
+
 func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName string, build int) {
 	t.Helper()
 
@@ -127,7 +155,9 @@ func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName str
 	// growing 3.4x under a cap while claiming the cap was applied.
 	defer func() { backdateBuild(ctx, t, store, runID, build) }()
 
-	err := store.StartRun(ctx, runID, jobName, "/tmp/steps-ws-"+runID+"/b-"+runID+"-1-"+jobName)
+	sha := syntheticRevision(ctx, t, store, build)
+
+	err := store.StartRun(ctx, runID, jobName, "/tmp/steps-ws-"+runID+"/b-"+runID+"-1-"+jobName, sha)
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -959,7 +989,7 @@ func TestPruneKeepsTheRunItWasCalledFrom(t *testing.T) {
 	// Resume the oldest run, the way `steps run --resume` does.
 	const resumed = "RUN00001"
 
-	err := store.ResumeRun(ctx, resumed, "/tmp/ws")
+	err := store.ResumeRun(ctx, resumed, "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("ResumeRun: %v", err)
 	}
@@ -1002,7 +1032,7 @@ func TestPruneSparesARunStillInFlight(t *testing.T) {
 	}
 
 	// An older run that is still going: started before the others, never finished.
-	err := store.StartRun(ctx, "INFLIGHT", "job", "/tmp/ws")
+	err := store.StartRun(ctx, "INFLIGHT", "job", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1243,7 +1273,7 @@ func TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
 		keep    = 1
 	)
 
-	err := store.StartRun(ctx, runID, jobName, "/tmp/ws")
+	err := store.StartRun(ctx, runID, jobName, "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1334,7 +1364,7 @@ func TestPruneStillWorksBesideAHookPlacement(t *testing.T) {
 		keep    = 1
 	)
 
-	err := store.StartRun(ctx, runID, jobName, "/tmp/ws")
+	err := store.StartRun(ctx, runID, jobName, "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

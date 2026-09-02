@@ -39,7 +39,12 @@ func reloadPipeline(t *testing.T, path string, jobs ...string) {
 func servedRevision(t *testing.T, target *web.Pipeline) string {
 	t.Helper()
 
-	err := target.Store.StartRun(t.Context(), "probe-"+time.Now().Format("150405.000000000"), "build", "/tmp/ws")
+	// Pinned with what the daemon is serving right now, which is what a job
+	// admitted at this moment would be handed — the run row is written from
+	// the CONFIG, not from anything the store remembers on its own.
+	err := target.Store.StartRun(t.Context(),
+		"probe-"+time.Now().Format("150405.000000000"), "build", "/tmp/ws",
+		target.Config().Revision.SHA)
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -108,6 +113,86 @@ func TestReloadServesTheEditedConfig(t *testing.T) {
 
 	if swapped {
 		t.Error("an unchanged file reported a swap")
+	}
+}
+
+// TestReloadSweepsTheConfigurationItSuperseded: an operator iterating on a
+// pipeline with the daemon watching mints a multi-kilobyte row per distinct
+// save, and none of those saves has to run anything. Leaving them for a run
+// prune means keeping every autosave until some job passes run_history:,
+// which is not a bound at all.
+func TestReloadSweepsTheConfigurationItSuperseded(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+
+	reloadPipeline(t, path, "build")
+
+	target := webPipelineWithVars(t, path, VarFlags{})
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
+
+	superseded := target.Config().Revision.SHA
+
+	reloadPipeline(t, path, "build", "deploy")
+
+	swapped, err := watcher.check(t.Context())
+	if err != nil || !swapped {
+		t.Fatalf("check = (%v, %v), want a swap", swapped, err)
+	}
+
+	_, found, err := target.Store.FindRevision(t.Context(), superseded)
+	if err != nil {
+		t.Fatalf("FindRevision: %v", err)
+	}
+
+	if found {
+		t.Error("the configuration the swap replaced is still stored, though nothing ever ran under it")
+	}
+
+	// And the one now being served is kept, which is the exemption the sweep
+	// leans on: the next run admitted will name it.
+	_, found, err = target.Store.FindRevision(t.Context(), target.Config().Revision.SHA)
+	if err != nil {
+		t.Fatalf("FindRevision: %v", err)
+	}
+
+	if !found {
+		t.Error("the swap swept the configuration it had just started serving")
+	}
+}
+
+// TestReloadKeepsAConfigurationSomethingRan is the other side of it: a sweep
+// that reclaimed rows a run still points at would break the run page's whole
+// promise, and the foreign key would refuse it anyway.
+func TestReloadKeepsAConfigurationSomethingRan(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+
+	reloadPipeline(t, path, "build")
+
+	target := webPipelineWithVars(t, path, VarFlags{})
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
+
+	ran := target.Config().Revision.SHA
+
+	err := target.Store.StartRun(t.Context(), "run-one", "build", "/tmp/ws", ran)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	reloadPipeline(t, path, "build", "deploy")
+
+	_, err = watcher.check(t.Context())
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+
+	_, found, err := target.Store.FindRevision(t.Context(), ran)
+	if err != nil {
+		t.Fatalf("FindRevision: %v", err)
+	}
+
+	if !found {
+		t.Error("the swap swept a configuration a recorded run says it executed")
 	}
 }
 

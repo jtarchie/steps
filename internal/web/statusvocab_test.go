@@ -18,7 +18,7 @@ func TestTranscriptStepsCarryStatusGlyph(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-glyph", "build", "/tmp/ws")
+	err := pipeline.Store.StartRun(ctx, "run-glyph", "build", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestQuestionsUseSharedTimeAndStatusVocabulary(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-q", "deploy", "/tmp/ws")
+	err := pipeline.Store.StartRun(ctx, "run-q", "deploy", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

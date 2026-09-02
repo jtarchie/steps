@@ -17,7 +17,7 @@ func startQuestionRun(t *testing.T) *Store {
 	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 	t.Cleanup(func() { _ = store.Close() })
 
-	err := store.StartRun(context.Background(), "run-1", "release-note", "/tmp/ws")
+	err := store.StartRun(context.Background(), "run-1", "release-note", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestAskQuestionMemoIsPerRun(t *testing.T) {
 
 	store := startQuestionRun(t)
 
-	err := store.StartRun(context.Background(), "run-2", "release-note", "/tmp/ws")
+	err := store.StartRun(context.Background(), "run-2", "release-note", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestPendingQuestionsAreScopedToTheirPipeline(t *testing.T) {
 
 	defer func() { _ = theirs.Close() }()
 
-	err = mine.StartRun(ctx, "run-1", "release-note", "/tmp/ws")
+	err = mine.StartRun(ctx, "run-1", "release-note", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -363,7 +363,7 @@ func TestAskQuestionRefusesARunFromAnotherPipeline(t *testing.T) {
 
 	defer func() { _ = theirs.Close() }()
 
-	err = theirs.StartRun(ctx, "their-run", "build", "/tmp/ws")
+	err = theirs.StartRun(ctx, "their-run", "build", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

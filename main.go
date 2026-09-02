@@ -122,7 +122,7 @@ func (r *RunCmd) applyContinuation(
 
 // applyReplay forks a recorded run once the job is known.
 func (r *RunCmd) applyReplay(
-	ctx context.Context, st *store.Store, provider workspace.Provider, job *config.Job,
+	ctx context.Context, st *store.Store, provider workspace.Provider, cfg *config.Config, job *config.Job,
 ) (context.Context, error) {
 	if r.Replay == "" {
 		return ctx, nil
@@ -132,7 +132,7 @@ func (r *RunCmd) applyReplay(
 		return ctx, errors.New("--replay needs --from <step>: a replay re-runs from a step you name, and without one it would just re-run the whole plan")
 	}
 
-	ctx, _, err := pipeline.PrepareReplay(ctx, st, provider, r.Replay, r.From, job)
+	ctx, _, err := pipeline.PrepareReplay(ctx, st, provider, r.Replay, r.From, cfg, job)
 	if err != nil {
 		return ctx, fmt.Errorf("could not replay: %w", err)
 	}
@@ -176,7 +176,7 @@ func (r *RunCmd) Run() error {
 		return err
 	}
 
-	ctx, err = r.applyReplay(ctx, st, provider, job)
+	ctx, err = r.applyReplay(ctx, st, provider, cfg, job)
 	if err != nil {
 		return err
 	}

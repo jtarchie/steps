@@ -61,12 +61,12 @@ func TestRunsPageScopedToItsPipeline(t *testing.T) {
 
 	t.Cleanup(func() { _ = other.Close() })
 
-	err = other.StartRun(ctx, "run-foreign", "build", "/tmp/ws")
+	err = other.StartRun(ctx, "run-foreign", "build", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun foreign: %v", err)
 	}
 
-	err = pipeline.Store.StartRun(ctx, "run-mine", "build", "/tmp/ws")
+	err = pipeline.Store.StartRun(ctx, "run-mine", "build", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun mine: %v", err)
 	}

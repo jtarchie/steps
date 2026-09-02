@@ -166,6 +166,17 @@ func (w *configWatcher) check(ctx context.Context) (bool, error) {
 	// this the pages showed a `serial: true` the queue went on ignoring.
 	web.SyncQueueLimits(ctx, w.target)
 
+	// The configuration this one replaced is unreachable if nothing ever ran
+	// under it, which is the common case while a pipeline is being edited:
+	// each save mints a multi-kilobyte row, and leaving them for a run prune
+	// means keeping every autosave until some job passes run_history:.
+	// Best-effort — a swap that has already happened is not undone by a
+	// sweep that did not.
+	err = w.target.Store.PruneRevisions(ctx)
+	if err != nil {
+		slog.Warn("web.reload_prune_failed", "pipeline", w.target.Slug, "error", err)
+	}
+
 	return true, nil
 }
 

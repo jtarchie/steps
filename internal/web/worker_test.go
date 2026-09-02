@@ -87,7 +87,7 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "placed", "build", "")
+	err := pipeline.Store.StartRun(ctx, "placed", "build", "", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestRunPageKeepsTheMachinesPanelOffAnUnplacedRun(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "local", "build", "")
+	err := pipeline.Store.StartRun(ctx, "local", "build", "", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

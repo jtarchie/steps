@@ -54,7 +54,7 @@ jobs:
 // exit 0.
 func TestWhereWillNotVouchForARunItDoesNotHave(t *testing.T) {
 	path := whereFixture(t, func(ctx context.Context, st *store.Store) {
-		err := st.StartRun(ctx, "mid-flight", "build", "")
+		err := st.StartRun(ctx, "mid-flight", "build", "", "")
 		if err != nil {
 			t.Fatalf("StartRun: %v", err)
 		}
@@ -102,7 +102,7 @@ func TestWhereMarksAMemoryWorkdir(t *testing.T) {
 	hash := strings.Repeat("d", 64)
 
 	path := whereFixture(t, func(ctx context.Context, st *store.Store) {
-		err := st.StartRun(ctx, "in-memory", "build", "")
+		err := st.StartRun(ctx, "in-memory", "build", "", "")
 		if err != nil {
 			t.Fatalf("StartRun: %v", err)
 		}

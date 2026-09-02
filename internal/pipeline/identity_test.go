@@ -152,7 +152,7 @@ jobs:
     plan:
       - get: alpha
       - get: beta
-`, "build")
+`)
 }
 
 // triggeredBuildFixture is a triggering get followed by a task, so the task
@@ -179,10 +179,15 @@ jobs:
         trigger: true
       - task: compile
         run: "true"
-`, "build")
+`)
 }
 
-func fixtureFrom(t *testing.T, pipeline, jobName string) (*config.Config, *config.Job, *store.Store, workspace.Provider) {
+// The job is always named build: every fixture here is a one-job pipeline
+// written for the test that uses it, so a name to pass was flexibility no
+// caller ever wanted.
+func fixtureFrom(t *testing.T, pipeline string) (*config.Config, *config.Job, *store.Store, workspace.Provider) {
+	const jobName = "build"
+
 	t.Helper()
 
 	dir := t.TempDir()

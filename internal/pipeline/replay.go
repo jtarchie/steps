@@ -34,13 +34,17 @@ import (
 // because the run record says it ran, not because a hash matched — which is
 // why this works even though agent steps are unskippable.
 //
+// The forked run records THIS configuration, not the source run's: a replay
+// executes the plan in front of it, which is usually the edited one — that is
+// why anyone is replaying.
+//
 // It FORKS rather than re-entering the source run. History stays immutable, so
 // the run being compared against is still there — and two prompt variants
 // become two runs, side by side, which is the entire point of being able to do
 // this cheaply.
 func PrepareReplay(
 	ctx context.Context, st *store.Store, provider workspace.Provider,
-	sourceRunID, fromStep string, job *config.Job,
+	sourceRunID, fromStep string, cfg *config.Config, job *config.Job,
 ) (context.Context, string, error) {
 	source, err := st.FindRun(ctx, sourceRunID)
 	if err != nil {
@@ -78,7 +82,7 @@ func PrepareReplay(
 		return ctx, "", err
 	}
 
-	err = st.StartRun(ctx, replayID, job.Name, dir)
+	err = st.StartRun(ctx, replayID, job.Name, dir, cfg.Revision.SHA)
 	if err != nil {
 		return ctx, "", err //nolint:wrapcheck // StartRun already names the run
 	}

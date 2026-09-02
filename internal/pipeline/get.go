@@ -229,7 +229,9 @@ func (w *planWalk) runTriggeredBuild(
 	// mint: this is the same run with a better answer about where it lives.
 	if rooted, ok := bw.(workspace.RootedBuild); ok {
 		if resume := resumeFrom(ctx); resume != nil {
-			err := w.st.ResumeRun(ctx, resume.id, rooted.Root())
+			// The same configuration the run is already recorded under: this
+			// is a workspace correction, not a change of what is executing.
+			err := w.st.ResumeRun(ctx, resume.id, rooted.Root(), w.cfg.Revision.SHA)
 			if err != nil {
 				// Logged, not returned: the row exists by the time a get runs,
 				// so this cannot fail for a reason the get can act on, and a

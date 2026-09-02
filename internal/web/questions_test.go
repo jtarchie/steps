@@ -26,7 +26,7 @@ func askOne(t *testing.T, pipeline *Pipeline) store.Question {
 
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws")
+	err := pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestAnswerQuestionShowsARefusalRatherThanRedirecting(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	err = pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws")
+	err = pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

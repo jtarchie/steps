@@ -531,7 +531,7 @@ jobs:
 
 	ctx := t.Context()
 
-	err = st.StartRun(ctx, "PARKEDRUN", "deploy", dir)
+	err = st.StartRun(ctx, "PARKEDRUN", "deploy", dir, "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

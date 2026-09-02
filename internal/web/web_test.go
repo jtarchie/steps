@@ -126,7 +126,7 @@ func TestRunTranscriptRendersStepsAndAgentTurns(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws")
+	err := pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestLiveStreamReplaysThenCloses(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-2", "build", "")
+	err := pipeline.Store.StartRun(ctx, "run-2", "build", "", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -411,7 +411,7 @@ func TestGuardSkippedStepDoesNotStayRunning(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-guard", "build", "/tmp/ws")
+	err := pipeline.Store.StartRun(ctx, "run-guard", "build", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -465,7 +465,7 @@ func TestRunPageTitleCarriesStatus(t *testing.T) {
 		{"t-bad", "failed", "✗"},
 		{"t-live", "running", "◐"},
 	} {
-		err := pipeline.Store.StartRun(ctx, tc.id, "build", "")
+		err := pipeline.Store.StartRun(ctx, tc.id, "build", "", "")
 		if err != nil {
 			t.Fatalf("StartRun: %v", err)
 		}
@@ -498,7 +498,7 @@ func TestStepAnchors(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "anchored", "build", "")
+	err := pipeline.Store.StartRun(ctx, "anchored", "build", "", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -547,7 +547,7 @@ func TestFollowRedirectAndPolling(t *testing.T) {
 		t.Errorf("expected no run yet, got %s", empty)
 	}
 
-	err := pipeline.Store.StartRun(ctx, "followed", "build", "")
+	err := pipeline.Store.StartRun(ctx, "followed", "build", "", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -585,7 +585,7 @@ func TestRelativeTimesAreMachineReadable(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "ticking", "build", "")
+	err := pipeline.Store.StartRun(ctx, "ticking", "build", "", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -640,7 +640,7 @@ func TestTranscriptShowsTaskOutput(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "noisy", "build", "")
+	err := pipeline.Store.StartRun(ctx, "noisy", "build", "", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -705,7 +705,7 @@ func TestRunTranscriptHighlightsToolJSON(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-json", "build", "")
+	err := pipeline.Store.StartRun(ctx, "run-json", "build", "", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -787,7 +787,7 @@ func TestLiveViewResumesAfterWhatItRendered(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-live", "build", "")
+	err := pipeline.Store.StartRun(ctx, "run-live", "build", "", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -828,7 +828,7 @@ func TestEveryOutputEventSurvives(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-retry", "build", "")
+	err := pipeline.Store.StartRun(ctx, "run-retry", "build", "", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -967,7 +967,7 @@ func TestFailedRunNamesWhatChangedSinceTheLastGreen(t *testing.T) {
 		{"green", "succeeded", strings.Repeat("b", 16)},
 		{"red", "failed", strings.Repeat("c", 16)},
 	} {
-		err := pipeline.Store.StartRun(ctx, run.id, "build", "")
+		err := pipeline.Store.StartRun(ctx, run.id, "build", "", "")
 		if err != nil {
 			t.Fatalf("StartRun %s: %v", run.id, err)
 		}

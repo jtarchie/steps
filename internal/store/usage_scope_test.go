@@ -35,7 +35,7 @@ func mustOpenPipeline(t *testing.T, path, name string) *Store {
 func ensureRun(ctx context.Context, t *testing.T, store *Store, runID, jobName string) {
 	t.Helper()
 
-	err := store.StartRun(ctx, runID, jobName, "/tmp/ws")
+	err := store.StartRun(ctx, runID, jobName, "/tmp/ws", "")
 	if err != nil && !errors.Is(err, ErrRunExists) {
 		t.Fatalf("StartRun: %v", err)
 	}

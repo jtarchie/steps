@@ -30,7 +30,7 @@ func TestStartRunRefusesAnIdSomeRunAlreadyHas(t *testing.T) {
 
 	defer func() { _ = store.Close() }()
 
-	err := store.StartRun(ctx, "COLLIDE1", "build", "/tmp/first")
+	err := store.StartRun(ctx, "COLLIDE1", "build", "/tmp/first", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestStartRunRefusesAnIdSomeRunAlreadyHas(t *testing.T) {
 		t.Fatalf("FinishRun: %v", err)
 	}
 
-	err = store.StartRun(ctx, "COLLIDE1", "deploy", "/tmp/second")
+	err = store.StartRun(ctx, "COLLIDE1", "deploy", "/tmp/second", "")
 	if !errors.Is(err, ErrRunExists) {
 		t.Fatalf("minting a colliding id returned %v, want ErrRunExists", err)
 	}
@@ -84,12 +84,12 @@ func TestStartRunRefusesAnIdHeldByAnotherPipeline(t *testing.T) {
 
 	defer func() { _ = infra.Close() }()
 
-	err = web.StartRun(ctx, "SHARED01", "build", "/tmp/web")
+	err = web.StartRun(ctx, "SHARED01", "build", "/tmp/web", "")
 	if err != nil {
 		t.Fatalf("StartRun web: %v", err)
 	}
 
-	err = infra.StartRun(ctx, "SHARED01", "build", "/tmp/infra")
+	err = infra.StartRun(ctx, "SHARED01", "build", "/tmp/infra", "")
 	if !errors.Is(err, ErrRunExists) {
 		t.Fatalf("minting an id another pipeline holds returned %v, want ErrRunExists", err)
 	}
@@ -106,12 +106,12 @@ func TestResumeRunNeedsARunToResume(t *testing.T) {
 
 	defer func() { _ = store.Close() }()
 
-	err := store.ResumeRun(ctx, "MISSING1", "/tmp/ws")
+	err := store.ResumeRun(ctx, "MISSING1", "/tmp/ws", "")
 	if !errors.Is(err, ErrNoSuchRun) {
 		t.Fatalf("resuming a run that does not exist returned %v, want ErrNoSuchRun", err)
 	}
 
-	err = store.StartRun(ctx, "REAL0001", "build", "/tmp/first")
+	err = store.StartRun(ctx, "REAL0001", "build", "/tmp/first", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestResumeRunNeedsARunToResume(t *testing.T) {
 	// A resume puts the run back in flight and repoints it at the build this
 	// attempt is using — which is the whole of what the upsert was doing that
 	// was legitimate.
-	err = store.ResumeRun(ctx, "REAL0001", "/tmp/second")
+	err = store.ResumeRun(ctx, "REAL0001", "/tmp/second", "")
 	if err != nil {
 		t.Fatalf("ResumeRun: %v", err)
 	}
@@ -166,12 +166,12 @@ func TestResumeRunIsScopedToItsPipeline(t *testing.T) {
 
 	defer func() { _ = infra.Close() }()
 
-	err = web.StartRun(ctx, "WEBRUN01", "build", "/tmp/web")
+	err = web.StartRun(ctx, "WEBRUN01", "build", "/tmp/web", "")
 	if err != nil {
 		t.Fatalf("StartRun web: %v", err)
 	}
 
-	err = infra.ResumeRun(ctx, "WEBRUN01", "/tmp/infra")
+	err = infra.ResumeRun(ctx, "WEBRUN01", "/tmp/infra", "")
 	if !errors.Is(err, ErrNoSuchRun) {
 		t.Fatalf("resuming another pipeline's run returned %v, want ErrNoSuchRun", err)
 	}

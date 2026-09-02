@@ -207,7 +207,7 @@ func TestRecordRevisionSkipsAConfigThatWasNeverLoaded(t *testing.T) {
 		t.Fatalf("recording a config that was never loaded: %v", err)
 	}
 
-	err = st.StartRun(t.Context(), "run-one", "build", "/tmp/ws")
+	err = st.StartRun(t.Context(), "run-one", "build", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -236,5 +236,68 @@ func TestShortConfigKeepsAHashThatAlreadyFits(t *testing.T) {
 
 	if got := shortConfig("abc123"); got != "abc123" {
 		t.Errorf("shortConfig(%q) = %q, want it printed whole", "abc123", got)
+	}
+}
+
+// TestResumeRecordsTheConfigurationThatFixedIt: a resume continues a failed
+// run under the pipeline it is resumed WITH, which is usually the edit that
+// fixed it — so the row must name that one. Leaving the original would have
+// the run claim it executed a pipeline nothing in it ever ran, on the page
+// whose whole job is answering what a run was told to do.
+func TestResumeRecordsTheConfigurationThatFixedIt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+	state := filepath.Join(dir, "state.db")
+
+	revisionPipeline(t, path, "exit 1")
+
+	out := captureStdout(t, func() {
+		err := run([]string{"run", path, "--job", "build", "--state", state})
+		if err == nil {
+			t.Fatal("the pipeline was supposed to fail")
+		}
+	})
+
+	runID := resumeID(t, out)
+
+	broken := configColumn(t, captureStdout(t, func() {
+		err := run([]string{"runs", path, "--state", state})
+		if err != nil {
+			t.Fatalf("steps runs: %v", err)
+		}
+	}))
+
+	// The fix.
+	revisionPipeline(t, path, "echo fixed")
+
+	err := run([]string{"run", path, "--resume", runID, "--state", state})
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+
+	fixed := configColumn(t, captureStdout(t, func() {
+		err := run([]string{"runs", path, "--state", state})
+		if err != nil {
+			t.Fatalf("steps runs: %v", err)
+		}
+	}))
+
+	if len(broken) != 1 || len(fixed) != 1 {
+		t.Fatalf("expected one run before and after the resume, got %d and %d", len(broken), len(fixed))
+	}
+
+	if fixed[0] == broken[0] {
+		t.Errorf("the resumed run still reports the configuration that failed (%s)", fixed[0])
+	}
+
+	// Named, not merely changed: a resume that recorded NO configuration
+	// would also differ from the broken one, and would be worse than either.
+	after, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	if want := shortConfig(after.Revision.SHA); fixed[0] != want {
+		t.Errorf("the resumed run reports %q, want the configuration it resumed with (%q)", fixed[0], want)
 	}
 }

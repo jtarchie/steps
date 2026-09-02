@@ -36,7 +36,7 @@ func newAskFixture(t *testing.T) *askFixture {
 
 	ctx := events.WithRunID(t.Context(), "run-1")
 
-	err = st.StartRun(ctx, "run-1", "release-note", "/tmp/ws")
+	err = st.StartRun(ctx, "run-1", "release-note", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

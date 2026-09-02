@@ -129,7 +129,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		workspaceRoot = rooted.Root()
 	}
 
-	err = recordRunIdentity(ctx, st, resume, job.Name, workspaceRoot)
+	err = recordRunIdentity(ctx, st, resume, job.Name, workspaceRoot, cfg.Revision.SHA)
 	if err != nil {
 		return err
 	}

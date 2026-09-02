@@ -37,7 +37,7 @@ jobs:
 
 	ctx := context.Background()
 
-	err = st.StartRun(ctx, "REVIEWRUN", "review", t.TempDir())
+	err = st.StartRun(ctx, "REVIEWRUN", "review", t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

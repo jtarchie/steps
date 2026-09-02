@@ -304,7 +304,12 @@ which live in the database and are rewritten from the new file on every swap.
 What the running job is executing does not change underneath it — and the run
 records which configuration that was, which is the `CONFIG` column `steps
 runs` prints and the revision named on the run page, where it links the
-configuration itself.
+configuration itself. That record comes from the configuration the job was
+handed, not from whatever the daemon has loaded most recently, so a save
+landing while a job is between its first step and its last does not change
+what that run says it ran. A `--resume` is the exception, and deliberately:
+it continues a failed run under the configuration it is resumed *with*, which
+is usually the one that fixed it.
 
 **`--replay` still resolves `--from` against the CURRENT plan**, deliberately:
 the pipeline has almost certainly changed since the run being replayed, which

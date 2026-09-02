@@ -72,7 +72,7 @@ func TestLiveNodeLinkMatchesServerSpelling(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-live", "build", "/tmp/ws")
+	err := pipeline.Store.StartRun(ctx, "run-live", "build", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

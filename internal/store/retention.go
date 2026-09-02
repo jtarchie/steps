@@ -85,7 +85,11 @@ const chainsPerRetainedRun = 5
 // gets forgotten leaves rows nothing can ever reach again.
 func (s *Store) PruneRuns(ctx context.Context, jobName string, limit int, keepRunID string) error {
 	if limit <= 0 {
-		return nil
+		// Runs are unbounded by request (zero means no limit), and
+		// configurations are not the same question: a revision nothing points
+		// at is unreachable however many runs are kept, and a reload can
+		// orphan one without any run being reaped at all.
+		return s.PruneRevisions(ctx)
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -110,13 +114,12 @@ func (s *Store) PruneRuns(ctx context.Context, jobName string, limit int, keepRu
 		return err
 	}
 
-	err = sweepAfterPrune(ctx, tx, s.pipelineID, s.revisionID.Load(), deleted, prunedNodes)
+	prunedRevisions, err := sweepAfterPrune(ctx, tx, s.pipelineID, prunedNodes)
 	if err != nil {
 		return err
 	}
 
-	if !deleted && !prunedNodes {
-		// Nothing changed, so there is nothing to commit.
+	if nothingSwept(deleted, prunedNodes, prunedRevisions) {
 		return nil
 	}
 
@@ -128,17 +131,30 @@ func (s *Store) PruneRuns(ctx context.Context, jobName string, limit int, keepRu
 	return nil
 }
 
-// sweepAfterPrune is everything that only makes sense once the run and node
-// passes above have actually deleted something. Each half has its own guard
-// and they are not the same guard: a revision is orphaned by reaping RUNS,
-// while the dangling-parent and content sweeps are orphaned by reaping NODES.
-func sweepAfterPrune(ctx context.Context, tx *sql.Tx, pipelineID, current int64, deletedRuns, prunedNodes bool) error {
+// nothingSwept reports that no pass deleted anything, so there is no
+// transaction worth committing — and, more importantly, that taking the
+// exclusive write lock to commit nothing is avoidable on the common build,
+// where a job has fewer runs than its cap.
+func nothingSwept(deletedRuns, prunedNodes, prunedRevisions bool) bool {
+	return !deletedRuns && !prunedNodes && !prunedRevisions
+}
+
+// sweepAfterPrune is what follows the run and node passes above. It reports
+// whether the revision sweep deleted anything, which its caller needs in
+// order to decide there is a transaction worth committing — a sweep whose
+// deletion was rolled back for want of a commit is a table that never shrinks.
+func sweepAfterPrune(ctx context.Context, tx *sql.Tx, pipelineID int64, prunedNodes bool) (bool, error) {
 	err := sweepAfterNodePrune(ctx, tx, pipelineID, prunedNodes)
 	if err != nil {
-		return err
+		return false, err
 	}
 
-	return pruneRevisions(ctx, tx, pipelineID, current, deletedRuns)
+	// Unconditional, unlike the node sweeps above: a configuration is
+	// orphaned by a reload as readily as by a reaped run, so gating this on
+	// runs having gone left the table growing on the one workflow that mints
+	// rows fastest — an operator saving a file over and over while the daemon
+	// watches it.
+	return pruneRevisions(ctx, tx, pipelineID)
 }
 
 // sweepAfterNodePrune runs the two whole-table passes that only make sense once
