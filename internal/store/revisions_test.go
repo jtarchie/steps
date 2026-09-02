@@ -380,3 +380,142 @@ func ctxFor(t *testing.T) context.Context {
 
 	return t.Context()
 }
+
+// TestARevertedConfigurationSurvivesTheSweep is the row the sweep protects
+// getting the wrong answer from MAX(id).
+//
+// RecordRevision upserts by (pipeline_id, sha), and an upsert keeps the row it
+// conflicts with — so reverting an edit re-loads a configuration whose id was
+// minted BEFORE the one it supersedes. Keyed by id, the exemption then guarded
+// the superseded row nobody was serving and swept the one every subsequent run
+// was about to name.
+func TestARevertedConfigurationSurvivesTheSweep(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	// The original, and a run under it: without one, the first sweep reclaims
+	// it and the revert mints a fresh id, which is the case that already works.
+	err := store.RecordRevision(ctx, "sha-original", pipelineSource(1))
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	err = store.StartRun(ctx, "run-one", "build", "/tmp/ws", "sha-original")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	// The edit, then the revert. The daemon is serving sha-original again.
+	for _, sha := range []string{"sha-edited", "sha-original"} {
+		err = store.RecordRevision(ctx, sha, pipelineSource(2))
+		if err != nil {
+			t.Fatalf("RecordRevision(%s): %v", sha, err)
+		}
+	}
+
+	// The run that referenced it ages out, which is what makes the exemption
+	// the only thing left holding the served configuration in the table.
+	err = store.PruneRuns(ctx, "build", 0, "")
+	if err != nil {
+		t.Fatalf("PruneRuns: %v", err)
+	}
+
+	_, err = store.db.ExecContext(ctx, `DELETE FROM runs WHERE id = 'run-one'`)
+	if err != nil {
+		t.Fatalf("delete run: %v", err)
+	}
+
+	err = store.PruneRevisions(ctx)
+	if err != nil {
+		t.Fatalf("PruneRevisions: %v", err)
+	}
+
+	_, found, err := store.FindRevision(ctx, "sha-original")
+	if err != nil {
+		t.Fatalf("FindRevision: %v", err)
+	}
+
+	if !found {
+		t.Error("the sweep reclaimed the configuration being served, so the next run records none")
+	}
+}
+
+// TestResumeKeepsTheConfigurationItCannotName: a resume writes the
+// configuration it is resumed WITH, and a subselect that matches nothing is
+// not one. Assigning it turned "this run executed that" into "this run
+// executed nothing", which is the single answer the column exists to deny.
+func TestResumeKeepsTheConfigurationItCannotName(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	err := store.RecordRevision(ctx, "sha-recorded", pipelineSource(1))
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	err = store.StartRun(ctx, "run-one", "build", "/tmp/ws", "sha-recorded")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	// A sha this pipeline has no row for: swept, or a caller that loaded no
+	// file at all.
+	err = store.ResumeRun(ctx, "run-one", "/tmp/ws", "sha-nobody-recorded")
+	if err != nil {
+		t.Fatalf("ResumeRun: %v", err)
+	}
+
+	rows, err := store.ListRuns(ctx, "build", 10)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+
+	if len(rows) != 1 || rows[0].ConfigSHA != "sha-recorded" {
+		t.Errorf("after a resume the run reports configuration %q, want it to keep %q",
+			rows[0].ConfigSHA, "sha-recorded")
+	}
+}
+
+// TestATrimmedChainCacheIsCommitted: the chain cache is capped at a different
+// multiple of run_history: than runs and nodes are, so a build can cross it
+// while both of those stay under theirs. A commit decision that did not ask
+// this pass rolled its deletions back, and the table never shrank.
+func TestATrimmedChainCacheIsCommitted(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	const (
+		keep   = 10
+		chains = keep*chainsPerRetainedRun + 20
+	)
+
+	for chain := range chains {
+		err := store.RecordJobRun(ctx, "build", fmt.Sprintf("root-%04d", chain), "succeeded", nil)
+		if err != nil {
+			t.Fatalf("RecordJobRun: %v", err)
+		}
+	}
+
+	// No runs and no nodes, so this pass is the only one with anything to do.
+	err := store.PruneRuns(ctx, "build", keep, "")
+	if err != nil {
+		t.Fatalf("PruneRuns: %v", err)
+	}
+
+	if rows := countRows(ctx, t, store, "job_runs"); rows != keep*chainsPerRetainedRun {
+		t.Errorf("%d chain cache entries survive a cap of %d — the trim was rolled back",
+			rows, keep*chainsPerRetainedRun)
+	}
+}

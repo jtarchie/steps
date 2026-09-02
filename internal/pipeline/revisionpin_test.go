@@ -68,3 +68,58 @@ jobs:
 		t.Errorf("the run recorded configuration %q, but executed %q", rows[0].ConfigSHA, cfg.Revision.SHA)
 	}
 }
+
+// TestRunRecordsAConfigASweepAlreadyReclaimed is the other half of the same
+// window, and the one that survives an edit landing MID-BUILD.
+//
+// A run's row is written after placement, leases, image pulls and preflight —
+// long after the job was handed its configuration. A reload in that window
+// adopts a newer one and sweeps every revision no run references yet, which is
+// exactly what this one still is. The sha alone then resolves to nothing, and
+// the run that was executing across the edit is the only one to record no
+// configuration at all.
+func TestRunRecordsAConfigASweepAlreadyReclaimed(t *testing.T) {
+	t.Parallel()
+
+	cfg, job, st, provider := fixtureFrom(t, `
+jobs:
+  - name: build
+    plan:
+      - task: work
+        inputs: []
+        run: echo built
+`)
+
+	defer func() { _ = st.Close() }()
+	defer func() { _ = provider.Close() }()
+
+	// The daemon reloads: a newer configuration is interned, and the sweep
+	// reclaims the one this job is holding because nothing has run under it.
+	err := st.RecordRevision(t.Context(), "sha-swapped-in", "jobs: []\n")
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	err = st.PruneRevisions(t.Context())
+	if err != nil {
+		t.Fatalf("PruneRevisions: %v", err)
+	}
+
+	err = RunJob(context.Background(), cfg, job, nil, provider, st, false)
+	if err != nil {
+		t.Fatalf("RunJob: %v", err)
+	}
+
+	rows, err := st.ListRuns(t.Context(), "build", 10)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+
+	if len(rows) != 1 {
+		t.Fatalf("got %d runs, want 1", len(rows))
+	}
+
+	if rows[0].ConfigSHA != cfg.Revision.SHA {
+		t.Errorf("the run recorded configuration %q, but executed %q", rows[0].ConfigSHA, cfg.Revision.SHA)
+	}
+}

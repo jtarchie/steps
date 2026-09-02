@@ -109,7 +109,9 @@ func applyInclude(resolver *includeResolver, inc include) error {
 // binary, so no edit can move them while a daemon runs.
 type includeResolver struct {
 	baseDir string
-	read    []string
+	// read is the include paths as the pipeline wrote them, relative to
+	// baseDir — see readFile for why they are not resolved.
+	read []string
 }
 
 // readFile resolves path relative to baseDir and reads it. A path may
@@ -158,7 +160,11 @@ func (r *includeResolver) readFile(context, key, path string) ([]byte, error) {
 		return nil, fmt.Errorf("%s: %s %q is empty", context, key, path)
 	}
 
-	r.read = append(r.read, full)
+	// Recorded as the pipeline names it, not as it resolved: baseDir carries
+	// how the pipeline file was invoked, and the revision hash folds these
+	// strings in — so a resolved path made ci/app.yml and /repo/ci/app.yml two
+	// different configurations of the same bytes.
+	r.read = append(r.read, filepath.Clean(path))
 
 	return data, nil
 }

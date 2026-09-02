@@ -72,7 +72,9 @@ type Pipeline struct {
 	// stored events rather than assuming the bus saw everything.
 	Bus *events.Bus
 	// Webhook serves POST /p/<slug>/check/<resource> for the resources this
-	// pipeline gave a webhook_token_env:, and is nil when it gave none.
+	// pipeline gives a webhook_token_env:. Whether there are any is decided per
+	// request, not here, because a reload can add or remove one; nil means only
+	// that nobody attached a handler, which is a Pipeline built in a test.
 	//
 	// Built by the caller (trigger.WebhookHandler) rather than here: this
 	// package serves the surface and does not own the poll loop, the same

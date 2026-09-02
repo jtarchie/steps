@@ -365,24 +365,30 @@ func (a *admission) poll(ctx context.Context, cfg *config.Config, st *store.Stor
 // decide reports whether this configuration can be polled, and says out loud
 // what it decided — once per configuration, which is what makes it readable
 // rather than a line a second.
+//
+// Every line names the pipeline, because the daemon serves several and this
+// verdict changes while it runs: "polling 3 resources" beside "nothing to
+// poll" is worse than no banner when neither says which pipeline gave up.
 func (a *admission) decide(ctx context.Context, cfg *config.Config) bool {
+	name := cfg.Name
+
 	resources := Resources(cfg)
 	if len(resources) == 0 {
 		// Not a failure: plenty of pipelines are run by hand, and an edit may
 		// add a trigger later — which is why the loop stays.
-		printf("trigger: nothing to poll — no get step sets trigger: true\n")
+		printf("trigger: %s: nothing to poll — no get step sets trigger: true\n", name)
 
 		return false
 	}
 
 	err := preflightTriggers(ctx, cfg, resources)
 	if err != nil {
-		slog.Error("trigger.unpollable", "error", err)
+		slog.Error("trigger.unpollable", "pipeline", name, "error", err)
 
 		return false
 	}
 
-	printf("trigger: polling %d resource(s)\n", len(resources))
+	printf("trigger: %s: polling %d resource(s)\n", name, len(resources))
 
 	return true
 }

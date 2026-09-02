@@ -265,14 +265,12 @@ restart, and nothing in flight is interrupted:
 steps web pipeline.yml       # edit pipeline.yml; the change lands within a second
 ```
 
-The rule for what is watched is *the pipeline file and its vars, and nothing
-else*. A `--vars-file` counts because `((var))` substitution happens before the
-parse, so one file under two vars files is two configurations. A `run_file:`,
-`system_file:` or `message_files:` entry does not: an edit to one changes what
-a step executes without changing the pipeline, so it is not a new
-configuration, is not a swap, carries no new `CONFIG` hash, and is simply
-picked up by the next run that reads it — exactly as it was before this
-existed.
+The rule for what is watched is *the configuration*, which is everything the
+`CONFIG` hash covers. A `--vars-file` counts because `((var))` substitution
+happens before the parse, so one file under two vars files is two
+configurations. A `run_file:`, `system_file:` or `message_files:` entry counts
+too: its contents decide what a step executes, so editing one is editing the
+pipeline — a new hash, and a swap, exactly as if the YAML itself had moved.
 
 **A save is validated before it is served**, to the same depth `steps validate`
 checks without the network: the file, the references, the field placement,

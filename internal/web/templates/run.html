@@ -34,7 +34,7 @@
 <p class="diffnote">the <b>configuration changed</b> since last passed
   <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.ComparedTo}}">{{short $run.ComparedTo}}</a>,
   which ran <a class="hash" href="/p/{{.Nav.Current}}/config/{{$run.ComparedConfig}}">{{short $run.ComparedConfig}}</a>
-  — the steps below moved because the pipeline did</p>
+  {{if $run.Changed}}— the steps below moved because the pipeline did{{else}}— no step's content moved with it{{end}}</p>
 {{end}}
 
 {{if $run.Changed}}

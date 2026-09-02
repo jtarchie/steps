@@ -19,13 +19,11 @@ import (
 // restarting the daemon — which drops whatever was running and is the reason
 // anyone editing a pipeline first had to check whether a build was in flight.
 //
-// What it watches is the file and its vars, and nothing else: substitution
-// happens before the parse, so a --vars-file is part of the configuration.
-// A run_file: or system_file: is not, and neither is it covered by the
-// revision hash — the hash is over the substituted pipeline file, taken
-// before config.Load resolves the includes. An edit to one changes what a
-// step executes without changing the pipeline, so it is picked up by the next
-// run that reads it, as it was before this existed.
+// What it watches is the file, its vars, and the files it includes:
+// substitution happens before the parse, so a --vars-file is part of the
+// configuration, and a run_file: or system_file: decides what a step
+// executes, so the revision hash covers those too (see Revision.withIncludes).
+// An edit to any of them is a new configuration and a swap.
 type configWatcher struct {
 	target *web.Pipeline
 	vars   VarFlags
@@ -92,23 +90,23 @@ func (w *configWatcher) Watch(ctx context.Context, interval time.Duration) {
 // size would be a SECOND notion of "changed" that has to agree with the
 // revision hash forever, and this is the revision hash — the same bytes, the
 // same sha256, computed by the same function the loader calls. What it buys
-// is that the steady state costs a read rather than a full parse, every
-// validator, an exec.LookPath per stdio MCP server and a re-read of every
-// run_file: include, once a second, forever.
+// is that the steady state costs the reads and a hash rather than a full
+// parse, every validator and an exec.LookPath per stdio MCP server, once a
+// second, forever.
 func (w *configWatcher) check(ctx context.Context) (bool, error) {
 	name := w.target.Slug
 
-	// Re-checked against the includes the SERVED configuration resolved: an
-	// edit that changes which files are included changes the YAML too, so it
-	// is caught by the hash before this list can be out of date.
+	// Re-checked against the includes the SERVED configuration resolved, which
+	// is a guess about a file that may no longer be included at all — so its
+	// FAILURE is not a verdict. A save that deletes an include and the line
+	// naming it is a perfectly good pipeline whose old include list cannot be
+	// read, and holding on that error wedged the daemon: the served
+	// configuration never swapped, so the stale list never updated, so the
+	// same read failed every tick until a restart. An unreadable include just
+	// means the cheap answer is unavailable; the full load below resolves the
+	// include set again and is the one entitled to refuse.
 	revision, err := w.vars.Revision(w.target.Path, w.target.Config().Revision.Includes)
-	if err != nil {
-		w.target.Hold(err)
-
-		return false, err
-	}
-
-	if revision.SHA == w.target.Config().Revision.SHA {
+	if err == nil && revision.SHA == w.target.Config().Revision.SHA {
 		// Unchanged, so the served Config is left exactly as it is — swapping
 		// in an identical parse would throw away every in-place decision made
 		// on the startup one (see history). The complaint still clears: a
@@ -231,9 +229,17 @@ func (w *configWatcher) checkWorkspace(cfg *config.Config) error {
 		return nil
 	}
 
-	// keep=false: this provider exists to answer whether the configuration is
-	// usable, and is closed before it materializes anything.
-	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	// keep is what suppresses Validate()'s stale-build sweep, and a durable
+	// root: is exactly when that sweep is unsurvivable: it removes EVERY build
+	// directory under the root with no ownership check, so a second provider
+	// on the root this daemon is already building in deletes the tree of
+	// whatever is running — once a second, for as long as the block stays
+	// unusable. Without a root: the provider owns a fresh temp directory and
+	// there is nothing under it to sweep, so keep stays false and Close still
+	// removes what it made.
+	sharedRoot := cfg.Workspace != nil && cfg.Workspace.Root != ""
+
+	provider, err := workspace.NewProvider(cfg.Workspace, sharedRoot)
 	if err != nil {
 		return fmt.Errorf("workspace: %w", err)
 	}

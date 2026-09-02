@@ -83,22 +83,29 @@ type Config struct {
 type Revision struct {
 	SHA    string
 	Source string
-	// Includes are the files on disk whose contents this configuration folded
-	// in — every run_file:, system_file:, message file, task file and agent
-	// file it resolved, as absolute paths. They are part of the hash, and a
-	// caller re-checking whether the configuration has changed has to re-read
-	// them; see withIncludes.
+	// Includes are the files whose contents this configuration folded in —
+	// every run_file:, system_file:, message file, task file and agent file it
+	// resolved — named as the pipeline names them, relative to its own
+	// directory. They are part of the hash, and a caller re-checking whether
+	// the configuration has changed has to re-read them; see withIncludes.
+	//
+	// Relative rather than resolved, because the path STRING is hashed: a
+	// resolved one carries how the pipeline was invoked, so the same file
+	// loaded as ci/app.yml and as /repo/ci/app.yml produced two different
+	// configuration hashes and a run page reporting an edit that never
+	// happened.
 	Includes []string
 }
 
 // withIncludes folds the resolved include files into the revision, so an edit
-// to one is an edit to the pipeline.
+// to one is an edit to the pipeline. Paths are relative to baseDir, which is
+// the pipeline file's own directory.
 //
 // The digest describes path→content PAIRS rather than a concatenation of
 // bodies. Sorting by path already makes the concatenation order stable, so
 // nothing reachable today distinguishes the two — this is what keeps that
 // true if the ordering ever stops being by path.
-func (r Revision) withIncludes(paths []string) (Revision, error) {
+func (r Revision) withIncludes(baseDir string, paths []string) (Revision, error) {
 	if len(paths) == 0 {
 		return r, nil
 	}
@@ -114,9 +121,11 @@ func (r Revision) withIncludes(paths []string) (Revision, error) {
 	sum.Write([]byte(r.Source))
 
 	for _, path := range unique {
-		body, err := os.ReadFile(path) //nolint:gosec // the loader just read this same file to build the config
+		full := filepath.Join(baseDir, path)
+
+		body, err := os.ReadFile(full) //nolint:gosec // the loader just read this same file to build the config
 		if err != nil {
-			return Revision{}, fmt.Errorf("could not read included file %q: %w", path, err)
+			return Revision{}, fmt.Errorf("could not read included file %q: %w", full, err)
 		}
 
 		sum.Write([]byte("\x00" + path + "\x00"))
@@ -136,12 +145,12 @@ func (r Revision) Recorded() bool { return r.SHA != "" }
 // FileRevision answers WHICH configuration a file currently is — the
 // substituted bytes and their hash — without parsing them.
 //
-// Split out of Load so a caller that only needs "has this changed?" can pay a
-// read and a hash for it. `steps web` asks once a second, and asking through
-// Load meant a full parse, every validator, an exec.LookPath per stdio MCP
-// server and a re-read of every run_file:/system_file: include on every tick
-// — a measured few milliseconds of CPU and a log line per pipeline per
-// second, all of it to conclude that nothing had changed.
+// Split out of Load so a caller that only needs "has this changed?" can pay
+// the reads and a hash for it. `steps web` asks once a second, and asking
+// through Load meant a full parse, every validator and an exec.LookPath per
+// stdio MCP server on every tick — a measured few milliseconds of CPU and a
+// log line per pipeline per second, all of it to conclude that nothing had
+// changed.
 //
 // Load is written on top of this rather than beside it: one definition of the
 // hash is what stops the cheap answer and the parsed one from disagreeing.
@@ -160,7 +169,7 @@ func FileRevision(path string, vars map[string]string, includes []string) (Revis
 	// configuration it is holding resolved. An edit that changes WHICH files
 	// are included changes the YAML too, so it is caught by the hash above
 	// before this list is out of date.
-	return revision.withIncludes(includes)
+	return revision.withIncludes(filepath.Dir(path), includes)
 }
 
 // Slugify turns a pipeline path into its identity: the base name without its
@@ -246,7 +255,7 @@ func Load(path string, name string, vars map[string]string) (*Config, error) {
 	// file alone answered "did the pipeline change?" with a confident no for
 	// the edit that changed everything — the CONFIG column stayed put across
 	// runs that ran different code.
-	revision, err = revision.withIncludes(includes)
+	revision, err = revision.withIncludes(filepath.Dir(path), includes)
 	if err != nil {
 		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
 	}

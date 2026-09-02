@@ -109,7 +109,7 @@ func (s *Store) PruneRuns(ctx context.Context, jobName string, limit int, keepRu
 		return err
 	}
 
-	err = pruneJobRuns(ctx, tx, s.pipelineID, jobName, limit*chainsPerRetainedRun)
+	prunedChains, err := pruneJobRuns(ctx, tx, s.pipelineID, jobName, limit*chainsPerRetainedRun)
 	if err != nil {
 		return err
 	}
@@ -119,7 +119,7 @@ func (s *Store) PruneRuns(ctx context.Context, jobName string, limit int, keepRu
 		return err
 	}
 
-	if nothingSwept(deleted, prunedNodes, prunedRevisions) {
+	if nothingSwept(deleted, prunedNodes, prunedChains, prunedRevisions) {
 		return nil
 	}
 
@@ -132,11 +132,14 @@ func (s *Store) PruneRuns(ctx context.Context, jobName string, limit int, keepRu
 }
 
 // nothingSwept reports that no pass deleted anything, so there is no
-// transaction worth committing — and, more importantly, that taking the
-// exclusive write lock to commit nothing is avoidable on the common build,
-// where a job has fewer runs than its cap.
-func nothingSwept(deletedRuns, prunedNodes, prunedRevisions bool) bool {
-	return !deletedRuns && !prunedNodes && !prunedRevisions
+// transaction worth committing and the fsync of the common build — where a
+// job has fewer runs than its cap — is avoidable.
+//
+// EVERY pass reports, because the caps are different multiples of one limit
+// and are crossed independently: an omitted pass is a deletion silently rolled
+// back, and a table that never shrinks.
+func nothingSwept(deletedRuns, prunedNodes, prunedChains, prunedRevisions bool) bool {
+	return !deletedRuns && !prunedNodes && !prunedChains && !prunedRevisions
 }
 
 // sweepAfterPrune is what follows the run and node passes above. It reports
@@ -324,9 +327,13 @@ func clearDanglingParents(ctx context.Context, tx *sql.Tx, pipelineID int64) err
 // the cache existed to avoid, on a pipeline where nothing was wrong.
 //
 // This table carries no reference to nodes (see the schema), so its bound is
-// independent of theirs by construction.
-func pruneJobRuns(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName string, keep int) error {
-	_, err := tx.ExecContext(ctx, `
+// independent of theirs by construction — which is exactly why it reports
+// whether it deleted anything. Its cap is a different multiple of the same
+// limit, so a build can cross it while runs and nodes are both under theirs;
+// a caller deciding there was nothing to commit without asking rolled those
+// deletions back, and the table never shrank.
+func pruneJobRuns(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName string, keep int) (bool, error) {
+	result, err := tx.ExecContext(ctx, `
 		DELETE FROM job_runs
 		WHERE pipeline_id = ? AND job_name = ?
 		  AND rowid NOT IN (
@@ -336,10 +343,15 @@ func pruneJobRuns(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName str
 		  )
 	`, pipelineID, jobName, pipelineID, jobName, keep)
 	if err != nil {
-		return fmt.Errorf("could not prune the chain cache of %q: %w", jobName, err)
+		return false, fmt.Errorf("could not prune the chain cache of %q: %w", jobName, err)
 	}
 
-	return nil
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("could not prune the chain cache of %q: %w", jobName, err)
+	}
+
+	return deleted > 0, nil
 }
 
 // pruneNodeContent drops interned content nothing points at any more.

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"sync/atomic"
 
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -162,15 +163,30 @@ func forced(ctx context.Context) bool {
 // that cannot establish its own identity has nowhere to record what it does,
 // so there is nothing useful for it to go on and do.
 //
-// configSHA comes from the CONFIG this run was handed, never from the store
+// The revision comes from the CONFIG this run was handed, never from the store
 // handle: this write happens long after the caller took that config — past
 // placement, leases, image pulls and preflight — and a daemon that reloaded
 // in between would otherwise stamp a configuration this run never executed.
+//
+// It is re-interned here rather than trusted to still be in the table, and for
+// the same window: a reload adopting a newer configuration sweeps every
+// revision no run references yet, which is exactly what this one is until the
+// line below runs. Without this the row resolves to NULL and the run that was
+// executing across the edit — the one whose configuration anybody would want —
+// is the only one that records none. The upsert is idempotent, so the common
+// case pays one statement against a row that is already there.
 func recordRunIdentity(
-	ctx context.Context, st *store.Store, resume *resumeState, jobName, workspaceRoot, configSHA string,
+	ctx context.Context, st *store.Store, resume *resumeState, jobName, workspaceRoot string, revision config.Revision,
 ) error {
+	if revision.Recorded() {
+		err := st.RecordRevision(ctx, revision.SHA, revision.Source)
+		if err != nil {
+			return fmt.Errorf("job %q: %w", jobName, err)
+		}
+	}
+
 	if resume.resuming {
-		err := st.ResumeRun(ctx, resume.id, workspaceRoot, configSHA)
+		err := st.ResumeRun(ctx, resume.id, workspaceRoot, revision.SHA)
 		if err != nil {
 			return fmt.Errorf("job %q: %w", jobName, err)
 		}
@@ -178,7 +194,7 @@ func recordRunIdentity(
 		return nil
 	}
 
-	err := st.StartRun(ctx, resume.id, jobName, workspaceRoot, configSHA)
+	err := st.StartRun(ctx, resume.id, jobName, workspaceRoot, revision.SHA)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", jobName, err)
 	}

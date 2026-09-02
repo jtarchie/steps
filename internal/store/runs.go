@@ -176,9 +176,17 @@ func (s *Store) StartRun(ctx context.Context, id, jobName, workspaceDir, configS
 // continues a failed run under the configuration it is being resumed with,
 // which is usually the one that fixed it. Leaving the original would make the
 // run claim it executed a pipeline that nothing in it ever ran.
+//
+// COALESCEd rather than assigned, because a subselect that matches nothing is
+// not an answer: an empty sha (a caller that loaded no file) or a row this
+// pipeline no longer has would ERASE a configuration the run had correctly
+// recorded, turning "it ran that" into "it ran none" — the one thing this
+// column exists to deny. An update that cannot name a new configuration keeps
+// the old one.
 func (s *Store) ResumeRun(ctx context.Context, id, workspaceDir, configSHA string) error {
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE runs SET status = 'running', workspace = ?, revision_id = `+revisionBySHA+`
+		UPDATE runs SET status = 'running', workspace = ?,
+		                revision_id = COALESCE(`+revisionBySHA+`, revision_id)
 		WHERE id = ? AND pipeline_id = ?
 	`, workspaceDir, s.pipelineID, configSHA, id, s.pipelineID)
 	if err != nil {

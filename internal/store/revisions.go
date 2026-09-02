@@ -7,8 +7,7 @@ import (
 	"fmt"
 )
 
-// RecordRevision interns the configuration this handle's runs were started
-// from, and makes it the one StartRun pins onto every run from here on.
+// RecordRevision interns the configuration a run was started from.
 //
 // Interning only: it does NOT decide what the next run records. That was the
 // original design — the id lived on this handle and StartRun read it — and it
@@ -19,18 +18,17 @@ import (
 // (see revisionBySHA).
 //
 // Upsert by (pipeline_id, sha), so an unchanged configuration loaded a
-// thousand times is one row. DO UPDATE rather than DO NOTHING on the
-// conflict, because RETURNING wants a row: source is written back to itself,
-// which is the same bytes by definition — the sha is over them.
+// thousand times is one row. The conflict refreshes loaded_at and nothing
+// else: source is the same bytes by definition — the sha is over them, so
+// rewriting a multi-KB column would be a WAL page per load for no change —
+// while loaded_at is what the sweep reads to know which row is the one being
+// served, and a conflict is precisely a re-load.
 func (s *Store) RecordRevision(ctx context.Context, sha, source string) error {
-	var id int64
-
-	err := s.db.QueryRowContext(ctx, `
+	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO pipeline_revisions (pipeline_id, sha, source, loaded_at)
 		VALUES (?, ?, ?, ?)
-		ON CONFLICT (pipeline_id, sha) DO UPDATE SET source = excluded.source
-		RETURNING id
-	`, s.pipelineID, sha, source, nowNano()).Scan(&id)
+		ON CONFLICT (pipeline_id, sha) DO UPDATE SET loaded_at = excluded.loaded_at
+	`, s.pipelineID, sha, source, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not record the configuration of pipeline %q: %w", s.pipeline, err)
 	}
@@ -110,21 +108,36 @@ func (s *Store) PruneRevisions(ctx context.Context) error {
 // Runs first, then this: the RESTRICT on runs.revision_id makes that order a
 // rule the database keeps rather than a convention this function remembers.
 //
-// The NEWEST revision is exempt however few runs reference it, and that is
-// not a nicety. It is the one a run admitted a moment from now will name: a
-// daemon that reloads and then prunes — because a build that started under
-// the previous configuration just finished — would otherwise reap the row its
-// next run is about to point at, and that run would record no configuration
-// at all. Newest rather than a "current" the handle tracks, because the
-// newest row IS the most recently loaded one, and a rule the table can state
-// about itself cannot fall out of step with a field somewhere else.
+// The most recently LOADED revision is exempt however few runs reference it,
+// and that is not a nicety. It is the one a run admitted a moment from now
+// will name: a daemon that reloads and then prunes — because a build that
+// started under the previous configuration just finished — would otherwise
+// reap the row its next run is about to point at, and that run would record
+// no configuration at all. A rule the table states about itself rather than a
+// "current" the handle tracks, because the two cannot fall out of step.
+//
+// By loaded_at and not by id, because an upsert keeps the row it conflicts
+// with: reverting an edit re-loads a configuration whose id was minted before
+// the one it supersedes, so the highest id was the row NOBODY was serving and
+// the exemption protected it while the served one was swept.
+//
+// The runs subquery is scoped like every other read here. It is one pipeline's
+// history: an unscoped anti-join is only harmless while revision ids happen to
+// be unique across pipelines, and it makes the end of every build consult the
+// runs of pipelines that share the state file.
 func pruneRevisions(ctx context.Context, tx *sql.Tx, pipelineID int64) (bool, error) {
 	result, err := tx.ExecContext(ctx, `
 		DELETE FROM pipeline_revisions
 		WHERE pipeline_id = ?
-		  AND id != (SELECT MAX(id) FROM pipeline_revisions WHERE pipeline_id = ?)
-		  AND id NOT IN (SELECT revision_id FROM runs WHERE revision_id IS NOT NULL)
-	`, pipelineID, pipelineID)
+		  AND id != (
+		      SELECT id FROM pipeline_revisions WHERE pipeline_id = ?
+		      ORDER BY loaded_at DESC, id DESC LIMIT 1
+		  )
+		  AND id NOT IN (
+		      SELECT revision_id FROM runs
+		      WHERE pipeline_id = ? AND revision_id IS NOT NULL
+		  )
+	`, pipelineID, pipelineID, pipelineID)
 	if err != nil {
 		return false, fmt.Errorf("could not prune configurations: %w", err)
 	}

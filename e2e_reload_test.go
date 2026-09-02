@@ -11,6 +11,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -892,4 +893,125 @@ func waitForServedPage(t *testing.T, served *webProcess, path, want string) {
 	}
 
 	t.Fatalf("the served page %s never said %q", path, want)
+}
+
+// TestReloadAdoptsASaveThatDeletesAnInclude: the cheap probe re-reads the
+// includes the SERVED configuration resolved, which is a guess about a file
+// the new pipeline may no longer name. Treating that read's failure as a
+// verdict wedged the daemon: the save was held, so the configuration never
+// swapped, so the stale include list was re-read and failed again — every
+// tick, until a restart, for a pipeline that loads perfectly.
+func TestReloadAdoptsASaveThatDeletesAnInclude(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+	script := filepath.Join(dir, "build.sh")
+
+	writePipelineFile(t, script, "echo one\n")
+	writePipelineFile(t, path, `
+jobs:
+- name: build
+  plan:
+  - task: compile
+    inputs: []
+    run_file: build.sh
+`)
+
+	target := webPipelineWithVars(t, path, VarFlags{})
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
+
+	// The save an operator actually makes: inline the script, and delete it.
+	writePipelineFile(t, path, `
+jobs:
+- name: build
+  plan:
+  - task: compile
+    inputs: []
+    run: echo one
+`)
+
+	err := os.Remove(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	swapped, err := watcher.check(t.Context())
+	if err != nil {
+		t.Fatalf("check after an include was deleted: %v", err)
+	}
+
+	if !swapped {
+		t.Fatal("the daemon refused a pipeline that no longer includes the deleted file")
+	}
+
+	if held := target.Held(); held != "" {
+		t.Errorf("the pages complain about a file the pipeline no longer names: %s", held)
+	}
+
+	if got := target.Config().Revision.Includes; len(got) != 0 {
+		t.Errorf("the served configuration still lists includes %v", got)
+	}
+}
+
+// TestReloadDoesNotSweepTheLiveWorkspaceRoot: validating an edited workspace:
+// builds a second provider, and a provider's Validate() sweeps every build
+// directory under its root with no ownership check. Pointed at a durable
+// root: — the one this daemon is already building in — that deletes the tree
+// of whatever is running, once a second for as long as the block stays
+// unusable.
+func TestReloadDoesNotSweepTheLiveWorkspaceRoot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+	root := filepath.Join(dir, "ws")
+
+	// A build directory of the shape the sweep looks for, with a run's work
+	// inside it.
+	live := filepath.Join(root, "b-live-build")
+
+	err := os.MkdirAll(live, 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writePipelineFile(t, filepath.Join(live, "artifact"), "in flight\n")
+
+	writePipelineFile(t, path, `
+workspace:
+  strategy: copy
+  root: `+root+`
+jobs:
+- name: build
+  plan:
+  - task: compile
+    inputs: []
+    run: echo one
+`)
+
+	target := webPipelineWithVars(t, path, VarFlags{})
+	watcher := newConfigWatcher(target, VarFlags{}, HistoryFlags{})
+
+	// Any other field of the block moving is enough: the root stays the one
+	// the daemon is using.
+	writePipelineFile(t, path, `
+workspace:
+  strategy: copy
+  root: `+root+`
+  cache:
+    resources: true
+jobs:
+- name: build
+  plan:
+  - task: compile
+    inputs: []
+    run: echo one
+`)
+
+	_, err = watcher.check(t.Context())
+	if err != nil {
+		t.Fatalf("check after a workspace edit: %v", err)
+	}
+
+	_, err = os.Stat(filepath.Join(live, "artifact"))
+	if err != nil {
+		t.Errorf("validating an edited workspace: deleted the build in flight under the same root: %v", err)
+	}
 }

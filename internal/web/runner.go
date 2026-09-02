@@ -184,11 +184,11 @@ func (r *LocalRunner) drainWorker(ctx context.Context, target *Pipeline) {
 	}
 }
 
-// PrepareQueue is the startup recovery `steps web` does,
-// mirrored here so admission decides the same way regardless of which front
-// end drains the queue. ClaimNextJob reads every input from SQL, so a table
-// this forgets to sync isn't a missing feature — it's a silently different
-// default (job_concurrency's COALESCE pins an unsynced job to one build).
+// PrepareQueue is the startup recovery `steps web` does, mirrored here so
+// recovery happens the same way regardless of which front end drains the
+// queue. It is recovery ONLY: what a configuration says about who may run is
+// SyncQueueLimits' job, because that has to happen again on every reload while
+// this must happen exactly once.
 //
 // The caller runs this BEFORE starting any drain or poll goroutine, which is
 // a requirement rather than a convention: ResetStaleRunning is three
