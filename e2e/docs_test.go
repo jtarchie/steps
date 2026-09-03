@@ -1,0 +1,820 @@
+package e2e
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
+	"gopkg.in/yaml.v3"
+
+	"github.com/jtarchie/steps/docs"
+	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/pipeline"
+)
+
+// The docs ARE the tests: every fenced ```yaml block in docs/*.md is
+// extracted here and — per its fence-info mode (see package docs) —
+// schema-validated, loaded, and executed. A doc example that stops working
+// fails the build, which is the entire sync mechanism; there is no separate
+// example corpus to keep honest.
+//
+// Agent examples run against the same fake provider the e2e tests use
+// (fakeprovider_test.go). The rendered doc stays bare-minimum: the fence
+// carries test=<id>, and docScenarios (docs_scenarios_test.go) supplies the
+// scripted turns, any files the pipeline expects on disk, and Go-side
+// assertions. The harness rewrites each agent's source: to point at the
+// fake endpoint before running — the same source.endpoint: seam, applied to
+// YAML the reader never sees mutated.
+
+// mustBlocks extracts every yaml block from the embedded docs, failing on
+// authoring errors (an unterminated fence).
+func mustBlocks(t *testing.T) []docs.Block {
+	t.Helper()
+
+	blocks, err := docs.Blocks()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(blocks) == 0 {
+		t.Fatal("no yaml blocks found in docs/*.md")
+	}
+
+	return blocks
+}
+
+// yamlStringAsJSONValue converts YAML source to the any-typed value the
+// schema validator expects — the string twin of yamlAsJSONValue
+// (schema_test.go), for blocks that never exist as files.
+func yamlStringAsJSONValue(t *testing.T, source string) any {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "block.yml")
+
+	err := os.WriteFile(path, []byte(source), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return yamlAsJSONValue(t, path)
+}
+
+// TestDocsExamples is the extracted-block pipeline: schema → load/validate →
+// run. Fragments are rendered prose and skipped; noexec blocks stop after
+// validation (they need docker, the network, or real credentials); run
+// blocks execute end to end via the same cli.Run the CLI uses.
+func TestDocsExamples(t *testing.T) {
+	schema := loadSchema(t)
+
+	for _, block := range mustBlocks(t) {
+		t.Run(block.Name(), func(t *testing.T) {
+			runDocBlock(t, schema, block)
+		})
+	}
+}
+
+// runDocBlock is one block's whole treatment: schema validation, syntax-only
+// validate, and — for run-mode blocks — full validate of the original text
+// plus end-to-end execution and the scenario's own assertions.
+// scenarioVarFlags is what every command accepts: the --var values an operator
+// supplies for a ((name)) the example leaves unresolved.
+func scenarioVarFlags(scenario docScenario) []string {
+	flags := make([]string, 0, 2*len(scenario.vars))
+
+	for name, value := range scenario.vars {
+		flags = append(flags, "--var", name+"="+value)
+	}
+
+	return flags
+}
+
+// scenarioFlags is everything an operator would have typed to RUN a doc
+// example: its vars plus its --worker mappings. Only the commands that execute
+// a plan take the latter — validate answers whether a pipeline is loadable,
+// which is true or false regardless of what machines exist.
+//
+// One helper rather than a loop per caller, because the mutation harness has
+// to invoke a block exactly the way the docs harness does. Building the flags
+// separately would make every mutant of a field only one side passed register
+// as a crash instead of a caught assertion — which reads as coverage while
+// proving nothing.
+func scenarioFlags(scenario docScenario) []string {
+	flags := scenarioVarFlags(scenario)
+
+	for tag, worker := range scenario.workers {
+		flags = append(flags, "--worker", tag+"="+worker)
+	}
+
+	for _, answer := range scenario.answers {
+		flags = append(flags, "--answer", answer)
+	}
+
+	return flags
+}
+
+func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
+	t.Helper()
+
+	// A block whose fallback: actually fires (or whose primary fails
+	// preflight) pins the agent name process-wide (see preflight.go's
+	// selectedSources) — otherwise-harmless state that would leak into
+	// whichever LATER test in this binary happens to declare an agent of the
+	// same name, pointed at a by-then-torn-down fake server. Resetting
+	// around every block, not just ones known to trigger it, is what makes
+	// that impossible regardless of which page a future example lands on.
+	pipeline.ResetPreflightCache()
+	t.Cleanup(pipeline.ResetPreflightCache)
+
+	if block.Mode() == "fragment" {
+		t.Skip("fragment: rendered only")
+	}
+
+	err := schema.Validate(yamlStringAsJSONValue(t, block.Body))
+	if err != nil {
+		t.Fatalf("does not match steps.schema.json:\n%v", err)
+	}
+
+	scenario, hasScenario := docScenarios[block.TestID()]
+	if block.TestID() != "" && !hasScenario {
+		t.Fatalf("fence names test=%s but docs_scenarios_test.go has no such scenario", block.TestID())
+	}
+
+	dir := t.TempDir()
+	path := writeDocBlock(t, dir, block, scenario)
+
+	varFlags := scenarioVarFlags(scenario)
+	runFlags := scenarioFlags(scenario)
+
+	err = cli.Run(append([]string{"validate", "--syntax-only", path}, varFlags...))
+	if err != nil {
+		t.Fatalf("steps validate: %v", err)
+	}
+
+	if block.Mode() == "noexec" {
+		return
+	}
+
+	executeDocBlock(t, block, scenario, dir, path, varFlags, runFlags)
+
+	// The MCP twin of scenario.check: assertions against what the fixture
+	// server RECEIVED, which no YAML assert can see (an out: tool's
+	// arguments never land in the workspace).
+	if fixture, ok := docMCPFixtures[block.MCPID()]; ok && fixture.check != nil {
+		fixture.check(t, activeDocMCPServer)
+	}
+}
+
+// executeDocBlock is the run-mode half: full validate of the block's ORIGINAL
+// text (not the fake-injected rewrite — the credential/provider checks
+// --syntax-only skips are exactly what a reader's copy hits first), then
+// end-to-end execution, then the scenario's own assertions. One dummy key per
+// provider the docs reach for, so a block naming a provider with no key here
+// fails loudly instead of silently skipping the check. noexec blocks never
+// get here: their stdio MCP binaries aren't on this host.
+func executeDocBlock(t *testing.T, block docs.Block, scenario docScenario, dir, path string, varFlags, runFlags []string) {
+	t.Helper()
+
+	for _, key := range []string{"OPENROUTER_API_KEY", "OPENCODE_API_KEY", "ANTHROPIC_API_KEY"} {
+		t.Setenv(key, "test-key-not-used-for-any-call")
+	}
+
+	// Written beside the injected pipeline so the scenario's files
+	// (run_file:/file: targets) resolve for it too.
+	original := filepath.Join(dir, "original.yml")
+
+	err := os.WriteFile(original, []byte(block.Body), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = cli.Run(append([]string{"validate", original}, varFlags...))
+	if err != nil {
+		t.Fatalf("steps validate (full, original text): %v", err)
+	}
+
+	err = cli.Run(append([]string{"test", path}, runFlags...))
+	if err != nil {
+		t.Fatalf("steps test: %v", err)
+	}
+
+	if scenario.check != nil {
+		scenario.check(t, dir)
+	}
+}
+
+// writeDocBlock materializes a block into dir: any files the scenario
+// declares, plus the pipeline itself — with every agent pointed at the fake
+// provider when the scenario scripts one.
+func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScenario) string {
+	t.Helper()
+
+	for name, body := range scenario.files {
+		full := filepath.Join(dir, name)
+
+		err := os.MkdirAll(filepath.Dir(full), 0o750)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = os.WriteFile(full, []byte(body), 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	body := injectDocMCPFixture(t, block, block.Body)
+
+	if usesAgents(t, body) {
+		if block.Mode() == "run" && scenario.fake == nil {
+			t.Fatalf("%s runs agent steps and must carry test=<id> naming a scenario with a scripted provider", block.Name())
+		}
+
+		if scenario.fake != nil {
+			var fallbackEndpoint string
+
+			if scenario.fallbackFake != nil {
+				fallbackEndpoint = scenario.fallbackFake(t).URL
+			}
+
+			body = injectFakeProvider(t, body, scenario.fake(t).URL, fallbackEndpoint)
+			t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+		}
+	}
+
+	pipelinePath := filepath.Join(dir, "pipeline.yml")
+
+	err := os.WriteFile(pipelinePath, []byte(body), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return pipelinePath
+}
+
+// usesAgents reports whether the pipeline defines agents: — the signal that
+// running it will reach a provider.
+func usesAgents(t *testing.T, body string) bool {
+	t.Helper()
+
+	var doc map[string]any
+
+	err := yaml.Unmarshal([]byte(body), &doc)
+	if err != nil {
+		t.Fatalf("block is not valid YAML: %v", err)
+	}
+
+	agents, ok := doc["agents"].([]any)
+
+	return ok && len(agents) > 0
+}
+
+// injectFakeProvider rewrites every agent's source: to the fake endpoint and
+// disables preflight, leaving everything else the doc showed intact. The
+// reader sees a real model name; the test sees a scripted one — the same
+// substitution a $STEPS_MODEL override performs, done structurally.
+//
+// fallbackEndpoint, when non-"", additionally rewrites every agent's
+// fallback: [0].source the same way — for a doc example whose fallback must
+// actually be reachable rather than the common declared-but-never-dialed
+// case.
+func injectFakeProvider(t *testing.T, body, endpoint, fallbackEndpoint string) string {
+	t.Helper()
+
+	var doc map[string]any
+
+	err := yaml.Unmarshal([]byte(body), &doc)
+	if err != nil {
+		t.Fatalf("block is not valid YAML: %v", err)
+	}
+
+	injectedFallbacks := 0
+
+	agents, _ := doc["agents"].([]any)
+	for _, entry := range agents {
+		agent, ok := entry.(map[string]any)
+		if !ok {
+			t.Fatalf("agents: entry is not a mapping: %v", entry)
+		}
+
+		agent["source"] = map[string]any{
+			"endpoint":    endpoint + "/v1/",
+			"model":       "test-model",
+			"api_key_env": "STEPS_TEST_AGENT_API_KEY",
+		}
+
+		if fallbackEndpoint != "" && injectFakeFallback(t, agent, fallbackEndpoint) {
+			injectedFallbacks++
+		}
+	}
+
+	// A scenario that stands up a second provider expects SOMETHING to be
+	// pointed at it. Per-agent the absence is legitimate (see
+	// injectFakeFallback), but across the whole block it means the fallback:
+	// this scenario exists to exercise is gone — and the example would still
+	// pass, running entirely on the primary while proving nothing about
+	// failover.
+	if fallbackEndpoint != "" && injectedFallbacks == 0 {
+		t.Fatal("this scenario registers a fallback provider, but no agent in the block declares a fallback: to point at it")
+	}
+
+	defaults, ok := doc["defaults"].(map[string]any)
+	if !ok {
+		defaults = map[string]any{}
+		doc["defaults"] = defaults
+	}
+
+	// A defaults.model would fight the per-agent source above; preflight
+	// would spend a scripted turn on a probe (see fakeprovider_test.go).
+	delete(defaults, "model")
+	defaults["preflight"] = map[string]any{"disabled": true}
+
+	rewritten, err := yaml.Marshal(doc)
+	if err != nil {
+		t.Fatalf("re-marshal block: %v", err)
+	}
+
+	return string(rewritten)
+}
+
+// injectDocMCPFixture starts the mcp= fixture a block's fence names (leaving
+// body untouched when it names none) and returns body rewritten to point at
+// it, tracking the started server in activeDocMCPServer for the post-run
+// check.
+func injectDocMCPFixture(t *testing.T, block docs.Block, body string) string {
+	t.Helper()
+
+	activeDocMCPServer = nil
+
+	id := block.MCPID()
+	if id == "" {
+		return body
+	}
+
+	fixture, ok := docMCPFixtures[id]
+	if !ok {
+		t.Fatalf("fence names mcp=%s but docs_mcp_test.go has no such fixture", id)
+	}
+
+	activeDocMCPServer = fixture.start(t)
+
+	return injectFakeMCP(t, body, activeDocMCPServer.URL)
+}
+
+// injectFakeMCP rewrites every mcp_servers: entry's endpoint: to the fixture
+// server and drops its auth:, leaving everything else the doc showed intact —
+// the MCP twin of injectFakeProvider. The reader sees a vendor's endpoint and
+// auth; the test sees an in-process server that needs neither. Preflight is
+// deliberately NOT disabled: probing the fake — the named tool exists, the
+// required arguments are sent — is part of the contract these examples pin.
+func injectFakeMCP(t *testing.T, body, endpoint string) string {
+	t.Helper()
+
+	var doc map[string]any
+
+	err := yaml.Unmarshal([]byte(body), &doc)
+	if err != nil {
+		t.Fatalf("block is not valid YAML: %v", err)
+	}
+
+	servers, _ := doc["mcp_servers"].([]any)
+	if len(servers) == 0 {
+		t.Fatal("the fence names an mcp fixture, but the block declares no mcp_servers: to point at it")
+	}
+
+	for _, entry := range servers {
+		server, ok := entry.(map[string]any)
+		if !ok {
+			t.Fatalf("mcp_servers: entry is not a mapping: %v", entry)
+		}
+
+		server["endpoint"] = endpoint
+
+		// The fixture checks no credential, and anything but "none" would
+		// demand an env var or a stored oauth token this host does not have.
+		delete(server, "auth")
+	}
+
+	rewritten, err := yaml.Marshal(doc)
+	if err != nil {
+		t.Fatalf("re-marshal block: %v", err)
+	}
+
+	return string(rewritten)
+}
+
+// injectFakeFallback rewrites agent's first fallback: entry's source: to
+// endpoint, leaving the rest of the entry (and any later ones) intact. Only
+// the first entry, matching the scope of the doc examples that need it —
+// a scenario wanting more would extend this rather than the doc growing a
+// convention nothing else follows.
+//
+// It reports whether it found anything to rewrite, which is what lets the
+// caller tell "this agent has no fallback:" from "no agent in this block
+// does". The first is ordinary; the second means the scenario is testing
+// nothing.
+func injectFakeFallback(t *testing.T, agentEntry map[string]any, endpoint string) bool {
+	t.Helper()
+
+	// An agent with no fallback: is not an error — a scenario registers ONE
+	// fallback fake, but the rewrite above visits every agent in the block, so
+	// an example pairing a failing-over writer with an ordinary reviewer would
+	// otherwise fail on the reviewer for a reason unrelated to what it tests.
+	// Nothing to inject, nothing to do.
+	fallback, ok := agentEntry["fallback"].([]any)
+	if !ok || len(fallback) == 0 {
+		return false
+	}
+
+	first, ok := fallback[0].(map[string]any)
+	if !ok {
+		t.Fatalf("fallback: [0] is not a mapping: %v", fallback[0])
+	}
+
+	first["source"] = map[string]any{
+		"endpoint":    endpoint + "/v1/",
+		"model":       "test-fallback-model",
+		"api_key_env": "STEPS_TEST_AGENT_API_KEY",
+	}
+
+	return true
+}
+
+// TestDocsExamplesAssert is the ratchet that keeps the corpus from decaying
+// back into smoke tests: every job of every executed block must carry a
+// job-level assert: with BOTH execution: and outcome:, and a block declaring
+// more than one job must also carry the pipeline-level assert.execution that
+// names them.
+//
+// Without it a doc example proves only "this loads and exits 0" — 58 of the
+// 63 executed blocks were in exactly that state when this was written, so
+// `upper` could stop uppercasing and every one of them stayed green. Both
+// fields are required because each covers the other's blind spot:
+// execution: names which steps ran in what order (the load-bearing half, and
+// the only way to prove something did NOT run), while outcome: is what stops
+// a matching execution: from CLEARING a real plan failure — the clearing rule
+// makes execution: alone unable to tell a fixed build from a broken one.
+//
+// Job-level rather than step-level because it is the one position always
+// available: assert: is rejected on get/put steps and anywhere inside a try:.
+// Step asserts are the richer check where they are legal, and examples carry
+// them too — they just cannot be the rule.
+func TestDocsExamplesAssert(t *testing.T) {
+	for _, block := range mustBlocks(t) {
+		if block.Mode() != "run" {
+			continue // fragments are prose; noexec blocks never execute
+		}
+
+		t.Run(block.Name(), func(t *testing.T) {
+			checkBlockAsserts(t, block)
+		})
+	}
+}
+
+// checkBlockAsserts enforces the rule above for one block.
+func checkBlockAsserts(t *testing.T, block docs.Block) {
+	t.Helper()
+
+	var doc struct {
+		Assert *config.Assert `yaml:"assert"`
+		Jobs   []struct {
+			Name   string         `yaml:"name"`
+			Assert *config.Assert `yaml:"assert"`
+		} `yaml:"jobs"`
+	}
+
+	err := yaml.Unmarshal([]byte(block.Body), &doc)
+	if err != nil {
+		t.Fatalf("block is not valid YAML: %v", err)
+	}
+
+	if len(doc.Jobs) == 0 {
+		t.Fatal("an executed block must declare at least one job")
+	}
+
+	for _, job := range doc.Jobs {
+		switch {
+		case job.Assert == nil:
+			t.Errorf("job %q has no assert: — an executed example must verify itself, not just run", job.Name)
+		case len(job.Assert.Execution) == 0:
+			t.Errorf("job %q asserts no execution: — name the steps that must run, in order", job.Name)
+		case job.Assert.Outcome == "":
+			t.Errorf("job %q asserts no outcome: — a matching execution: CLEARS a plan failure, so without it a broken build passes too", job.Name)
+		}
+	}
+
+	if len(doc.Jobs) > 1 && (doc.Assert == nil || len(doc.Assert.Execution) == 0) {
+		t.Errorf("a block with %d jobs needs a pipeline-level assert.execution naming them in order", len(doc.Jobs))
+	}
+}
+
+// TestDocsNoexecReasons makes opting out of execution cost a sentence. A
+// noexec block is validated but never run, so it is the one kind that can rot
+// silently — `noexec` alone was the cheapest way to make a stubborn example
+// stop failing. The reason must come from docs.NoexecReasons(), so "which
+// examples would run if this host had docker?" stays a grep.
+func TestDocsNoexecReasons(t *testing.T) {
+	allowed := map[string]bool{}
+	for _, reason := range docs.NoexecReasons() {
+		allowed[reason] = true
+	}
+
+	for _, block := range mustBlocks(t) {
+		if block.Mode() != "noexec" {
+			continue
+		}
+
+		reason := block.NoexecReason()
+
+		switch {
+		case reason == "":
+			t.Errorf("%s: bare `noexec` — say which capability this host lacks (noexec=<%s>)",
+				block.Name(), strings.Join(docs.NoexecReasons(), "|"))
+		case !allowed[reason]:
+			t.Errorf("%s: noexec=%s is not one of %v — add it to docs.NoexecReasons if it is a real new class",
+				block.Name(), reason, docs.NoexecReasons())
+		}
+	}
+}
+
+// docsCoverageTypes is every config type the pipeline format exposes, with
+// the name used in failure messages. Adding a type here is how a new corner
+// of the DSL becomes subject to the documented-or-red rule below.
+//
+// Types absent on purpose, in two groups.
+//
+// ToolSpec, Source, PromptFile and their siblings decode through hand-written
+// UnmarshalYAML rather than struct tags, so reflection reports no yaml keys
+// to require — their spellings are pinned by internal/config's own decoder
+// tests instead.
+//
+// The resource-type BACKEND configs — ExprResourceConfig, MCPResourceConfig,
+// MCPToolCall — are absent for a different reason, and it is a real limit
+// rather than an oversight. collectPipelineKeys records the keys of each
+// resource_types: entry and does not descend into config:, so listing them
+// here would demand keys this walk cannot see. Two of their fields could not
+// satisfy the rule even if it did: expr's check_file/in_file/out_file need a
+// sibling file on disk, and a doc block is a single self-contained pipeline
+// with nowhere to put one. They are held to the schema instead —
+// schema_test.go's schemaDefsByType compares ExprResourceConfig against
+// $defs/exprResourceConfig by reflection in both directions, so a new expr
+// field is still a red build until the schema names it. Widening this walk
+// to nested config types is worth doing; it is not a one-line map entry.
+func docsCoverageTypes() map[string]reflect.Type {
+	return map[string]reflect.Type{
+		"Config":          reflect.TypeOf(config.Config{}),
+		"Job":             reflect.TypeOf(config.Job{}),
+		"Step":            reflect.TypeOf(config.Step{}),
+		"Task":            reflect.TypeOf(config.Task{}),
+		"Agent":           reflect.TypeOf(config.Agent{}),
+		"Resource":        reflect.TypeOf(config.Resource{}),
+		"ResourceType":    reflect.TypeOf(config.ResourceType{}),
+		"MCPServer":       reflect.TypeOf(config.MCPServer{}),
+		"Assert":          reflect.TypeOf(config.Assert{}),
+		"Defaults":        reflect.TypeOf(config.Defaults{}),
+		"WorkspaceConfig": reflect.TypeOf(config.WorkspaceConfig{}),
+	}
+}
+
+// TestDocsCoverage is the schema_test pattern applied to prose: every yaml
+// key of every config type must appear in at least one *tested* doc block.
+// Adding a DSL field without documenting it is a red build, not a forgotten
+// TODO.
+//
+// Keys are collected BY POSITION, not by name. A flat name-based sweep — what
+// this test used to do — cannot tell config.Step's tools: from config.Agent's,
+// so a step-level grant that no example had ever demonstrated read as covered
+// because agents: entries use the same word. Six field names collide that way
+// (name, run, image, env, tools, assert, ...), and each collision is a place
+// where "documented" quietly meant "some other type documented it".
+func TestDocsCoverage(t *testing.T) {
+	used := map[string]map[string]bool{}
+
+	for _, block := range mustBlocks(t) {
+		if block.Mode() == "fragment" {
+			continue // fragments are unvalidated prose; they don't count
+		}
+
+		var doc map[string]any
+
+		err := yaml.Unmarshal([]byte(block.Body), &doc)
+		if err != nil {
+			t.Fatalf("%s: %v", block.Name(), err)
+		}
+
+		collectPipelineKeys(doc, used)
+	}
+
+	for name, typ := range docsCoverageTypes() {
+		var missing []string
+
+		for tag := range yamlTagNames(typ) {
+			if !used[name][tag] {
+				missing = append(missing, tag)
+			}
+		}
+
+		sort.Strings(missing)
+
+		if len(missing) > 0 {
+			t.Errorf("config.%s fields with no tested doc example (add one to docs/*.md): %v", name, missing)
+		}
+	}
+}
+
+// record marks every key of a mapping as seen for one config type.
+func record(used map[string]map[string]bool, typeName string, node any) {
+	mapping, ok := node.(map[string]any)
+	if !ok {
+		return
+	}
+
+	if used[typeName] == nil {
+		used[typeName] = map[string]bool{}
+	}
+
+	for key := range mapping {
+		used[typeName][key] = true
+	}
+}
+
+// eachOf calls fn for every element of a list-valued key.
+func eachOf(doc map[string]any, key string, fn func(any)) {
+	list, ok := doc[key].([]any)
+	if !ok {
+		return
+	}
+
+	for _, entry := range list {
+		fn(entry)
+	}
+}
+
+// collectPipelineKeys walks one decoded block, recording each mapping's keys
+// against the config type that position decodes into.
+func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
+	record(used, "Config", doc)
+	record(used, "Defaults", doc["defaults"])
+	record(used, "WorkspaceConfig", doc["workspace"])
+	record(used, "Assert", doc["assert"])
+
+	for key, typeName := range map[string]string{
+		"resource_types": "ResourceType",
+		"resources":      "Resource",
+		"agents":         "Agent",
+		"mcp_servers":    "MCPServer",
+		"tasks":          "Task",
+	} {
+		eachOf(doc, key, func(entry any) { record(used, typeName, entry) })
+	}
+
+	eachOf(doc, "jobs", func(entry any) {
+		job, ok := entry.(map[string]any)
+		if !ok {
+			return
+		}
+
+		record(used, "Job", job)
+		record(used, "Assert", job["assert"])
+
+		plan, _ := job["plan"].([]any)
+		collectStepKeys(plan, used)
+	})
+}
+
+// collectStepKeys records a plan's steps and everything nested inside them,
+// through the same walk both mutation harnesses use.
+func collectStepKeys(steps []any, used map[string]map[string]bool) {
+	for _, entry := range steps {
+		step, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		record(used, "Step", step)
+		record(used, "Assert", step["assert"])
+
+		for _, group := range nestedStepGroups(step) {
+			collectStepKeys(group.steps, used)
+		}
+	}
+}
+
+// docLinkPattern matches [text](target) inline links. Good enough for this
+// corpus: the docs never nest brackets inside link text.
+var docLinkPattern = regexp.MustCompile(`\]\(([^)\s]+)\)`)
+
+// TestDocsAnchors is link integrity for the corpus: every relative .md link
+// must name an existing page, and every #fragment (same-page or cross-page)
+// must name a heading id that page actually renders. The ids come from
+// docs.Headings — the same GitHub-style slugs the web renderer emits — so a
+// broken anchor is a red build here instead of a silent jump-to-top in the
+// UI. (The YAML examples got this guarantee first; the anchors were the
+// untested half.)
+func TestDocsAnchors(t *testing.T) {
+	ids := map[string]map[string]bool{}
+
+	for _, page := range docs.Pages() {
+		body, err := docs.Page(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ids[page] = map[string]bool{}
+		for _, heading := range docs.Headings(string(body)) {
+			ids[page][heading.ID] = true
+		}
+	}
+
+	for _, page := range docs.Pages() {
+		body, _ := docs.Page(page)
+
+		for _, match := range docLinkPattern.FindAllStringSubmatch(string(body), -1) {
+			checkDocLink(t, ids, page, match[1])
+		}
+	}
+}
+
+// checkDocLink verifies one link target against the corpus's rendered ids.
+func checkDocLink(t *testing.T, ids map[string]map[string]bool, page, target string) {
+	t.Helper()
+
+	if strings.Contains(target, "://") || strings.HasPrefix(target, "..") {
+		return // external, or repo files outside the embed
+	}
+
+	targetPage, fragment, _ := strings.Cut(target, "#")
+	if targetPage == "" {
+		targetPage = page // same-page #fragment
+	}
+
+	pageIDs, exists := ids[targetPage]
+	if !exists {
+		t.Errorf("%s links to %q, which is not an embedded doc page", page, target)
+
+		return
+	}
+
+	if fragment != "" && !pageIDs[fragment] {
+		t.Errorf("%s links to %q, but %s has no heading with id %q", page, target, targetPage, fragment)
+	}
+}
+
+// TestDocsGroupsComplete keeps the curated navigation table (docs.Groups)
+// covering every page: a new page must be placed in a group, or the web
+// rail would silently omit it.
+func TestDocsGroupsComplete(t *testing.T) {
+	grouped := map[string]bool{}
+
+	for _, group := range docs.Groups() {
+		for _, page := range group.Pages {
+			if grouped[page] {
+				t.Errorf("docs.Groups lists %s twice", page)
+			}
+
+			grouped[page] = true
+		}
+	}
+
+	for _, page := range docs.Pages() {
+		if page == "README.md" {
+			continue // the index is the rail's "start here", not a group member
+		}
+
+		if !grouped[page] {
+			t.Errorf("docs.Groups has no group for %s — add it to the table in docs/docs.go", page)
+		}
+	}
+
+	for page := range grouped {
+		_, err := docs.Page(page)
+		if err != nil {
+			t.Errorf("docs.Groups names %s, which is not an embedded page", page)
+		}
+	}
+}
+
+// TestDocsPagesListed keeps the index honest: every page docs.Pages reports
+// must be linked from README.md, so nothing ships unfindable.
+func TestDocsPagesListed(t *testing.T) {
+	index, err := docs.Page("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, page := range docs.Pages() {
+		if page == "README.md" {
+			continue
+		}
+
+		if !strings.Contains(string(index), fmt.Sprintf("(%s)", page)) {
+			t.Errorf("docs/README.md has no link to %s", page)
+		}
+	}
+}

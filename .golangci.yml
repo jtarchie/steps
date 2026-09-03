@@ -81,35 +81,37 @@ linters:
         - G706
     depguard:
       rules:
-        # Root (package main): a thin CLI entrypoint — parse flags, wire up
-        # config/store/workspace, and hand off to internal/pipeline. It must
-        # not reach past internal/pipeline into the packages pipeline itself
-        # orchestrates (merkle/resource/agent/shell/template/retry).
-        # tools/ holds build-time checkers, not shipped code. They are package
-        # main too, so they must be carved out of the rule below explicitly.
-        Tools:
-          files:
-            - "**/tools/**"
-          allow:
-            - "$gostd"
-            - "golang.org/x/tools"
-        # docs is the embedded documentation and its fenced-example
-        # extractor: a stdlib-only leaf, importable by main (steps docs) and
-        # internal/web (/docs) alike. Rendering (glamour, goldmark) lives in
-        # the importers, never here — this package is what the root docs
-        # tests walk, and a render dependency would drag terminal/HTML
-        # concerns into every consumer.
-        Docs:
-          files:
-            - "**/docs/**"
-          allow:
-            - "$gostd"
+        # Root (package main): the process boundary and nothing else —
+        # hand os.Args to internal/cli, turn the error it returns into an
+        # exit code. Every command lives BELOW it so the end-to-end suite in
+        # ./e2e can drive the whole stack through a package it can import; a
+        # package main test file cannot live anywhere but the root, which is
+        # what kept a hundred of them there. A new import here means logic
+        # has leaked back into main.
         Main:
           files:
             - "$all"
             - "!**/internal/**"
             - "!**/tools/**"
             - "!**/docs/**"
+            - "!**/e2e/**"
+          allow:
+            - "$gostd"
+            - "github.com/jtarchie/steps/internal/cli"
+            # outcome is a stdlib-only leaf supplying the vocabulary main
+            # needs at the process boundary: which exit code an error earns
+            # (outcome.ExitCode). Classifying a failure as "the pipeline said
+            # no" vs "the pipeline could not run" is the same distinction
+            # pipeline already uses for hook dispatch, so main consumes it
+            # rather than keeping a second, drifting copy.
+            - "github.com/jtarchie/steps/internal/outcome"
+        # internal/cli is the CLI itself: parse flags, wire up
+        # config/store/workspace, and hand off to internal/pipeline. It must
+        # not reach past internal/pipeline into the packages pipeline itself
+        # orchestrates (merkle/resource/agent/shell/template/retry).
+        CLI:
+          files:
+            - "**/internal/cli/**"
           allow:
             - "$gostd"
             - "github.com/alecthomas/kong"
@@ -120,21 +122,74 @@ linters:
             - "github.com/charmbracelet/glamour"
             - "golang.org/x/sys/unix"
             - "github.com/jtarchie/steps/docs"
-            # Test-only, both of them: schema_test.go validates every shipped
-            # example against steps.schema.json (the published editor schema)
-            # and asserts its step properties still match config.Step's yaml
-            # tags. main's own code imports neither — the schema is a
-            # documentation artifact, and this is what stops it drifting.
+            - "gopkg.in/yaml.v3"
+            # goleak is test-only: goleak_test.go's TestMain fails a package's
+            # tests if any leaves a goroutine running.
+            - "go.uber.org/goleak"
+            - "github.com/modelcontextprotocol/go-sdk/mcp"
+            - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/pipeline"
+            # blobstore is provider setup, like workspace below: the CLI parses
+            # --artifact-store, builds the S3 client, and hands it into the
+            # workspace's injected interfaces — the one place the SDK is
+            # allowed to meet the step cache, so neither workspace nor the
+            # shim ever imports it.
+            - "github.com/jtarchie/steps/internal/blobstore"
+            # internal/mcp is a setup/tooling dependency here, not an
+            # execution-path one: `steps mcp login`/`steps mcp tools` are
+            # standalone auth bootstrap/discovery commands with no
+            # relationship to pipeline.RunJob, the same way the CLI already
+            # reaches internal/workspace directly for provider setup rather
+            # than through pipeline. It is NOT a precedent for the CLI reaching
+            # into resource/agent territory, which pipeline.RunJob still
+            # exclusively orchestrates.
+            - "github.com/jtarchie/steps/internal/mcp"
+            # shim is the same shape of dependency as mcp: `steps _shim` is a
+            # standalone process mode with no relationship to pipeline.RunJob.
+            # It is what a worker runs after the orchestrator pushes this
+            # binary to it, so the CLI constructs it directly rather than
+            # through a pipeline that, on that machine, does not exist.
+            - "github.com/jtarchie/steps/internal/shim"
+            - "github.com/jtarchie/steps/internal/store"
+            - "github.com/jtarchie/steps/internal/trigger"
+            # web is the UI front end: the CLI constructs it and hands it
+            # loaded pipelines, exactly as it does trigger.Watch. events is the
+            # leaf both need in order to wire a bus to a store sink.
+            - "github.com/jtarchie/steps/internal/events"
+            - "github.com/jtarchie/steps/internal/web"
+            - "github.com/jtarchie/steps/internal/workspace"
+        # e2e is the end-to-end suite: nothing but _test.go files, driving the
+        # whole stack through cli.Run the way a user's shell would. It reads
+        # back what a run produced (store, web, events) and validates the
+        # shipped artifacts (steps.schema.json, docs, examples), so its extra
+        # dependencies are all assertion machinery — it must never grow a
+        # production import path of its own.
+        E2E:
+          files:
+            - "**/e2e/**"
+          allow:
+            - "$gostd"
+            - "github.com/jtarchie/steps/internal/cli"
+            - "github.com/alecthomas/kong"
+            - "github.com/jtarchie/steps/docs"
+            - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/pipeline"
+            - "github.com/jtarchie/steps/internal/store"
+            - "github.com/jtarchie/steps/internal/events"
+            - "github.com/jtarchie/steps/internal/web"
+            # schema_test.go validates every shipped example against
+            # steps.schema.json (the published editor schema) and asserts its
+            # step properties still match config.Step's yaml tags. The schema
+            # is a documentation artifact, and this is what stops it drifting.
             - "github.com/santhosh-tekuri/jsonschema/v6"
             - "gopkg.in/yaml.v3"
-            # goleak is test-only too: goleak_test.go's TestMain fails a
-            # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
-            # wire is test-only as well: the eviction e2e impersonates a
-            # reclaimed worker at the frame level, the same way the venue
-            # package's own helper-process variants do. main's shipped code
-            # still reaches workers only through internal/pipeline.
+            # wire: the eviction e2e impersonates a reclaimed worker at the
+            # frame level, the same way the venue package's own helper-process
+            # variants do. The shipped code still reaches workers only through
+            # internal/pipeline.
             - "github.com/jtarchie/steps/internal/wire"
+            - "github.com/modelcontextprotocol/go-sdk/mcp"
             # go/ast, go/parser and go/token are test-only and stay that way:
             # captureguard_test.go reads every _test.go in the module to hold
             # one convention that nothing else can check — a test that
@@ -147,45 +202,6 @@ linters:
             - "go/ast"
             - "go/parser"
             - "go/token"
-            - "github.com/modelcontextprotocol/go-sdk/mcp"
-            - "github.com/jtarchie/steps/internal/config"
-            - "github.com/jtarchie/steps/internal/pipeline"
-            # blobstore is provider setup, like workspace below: main parses
-            # --artifact-store, builds the S3 client, and hands it into the
-            # workspace's injected interfaces — the one place the SDK is
-            # allowed to meet the step cache, so neither workspace nor the
-            # shim ever imports it.
-            - "github.com/jtarchie/steps/internal/blobstore"
-            # internal/mcp is a setup/tooling dependency here, not an
-            # execution-path one: `steps mcp login`/`steps mcp tools` are
-            # standalone auth bootstrap/discovery commands with no
-            # relationship to pipeline.RunJob, the same way main already
-            # reaches internal/workspace directly for provider setup rather
-            # than through pipeline. It is NOT a precedent for main reaching
-            # into resource/agent territory, which pipeline.RunJob still
-            # exclusively orchestrates.
-            - "github.com/jtarchie/steps/internal/mcp"
-            # shim is the same shape of dependency as mcp: `steps _shim` is a
-            # standalone process mode with no relationship to pipeline.RunJob.
-            # It is what a worker runs after the orchestrator pushes this
-            # binary to it, so main constructs it directly rather than through
-            # a pipeline that, on that machine, does not exist.
-            - "github.com/jtarchie/steps/internal/shim"
-            # outcome is a stdlib-only leaf supplying the vocabulary main
-            # needs at the process boundary: which exit code an error earns
-            # (outcome.ExitCode). Classifying a failure as "the pipeline said
-            # no" vs "the pipeline could not run" is the same distinction
-            # pipeline already uses for hook dispatch, so main consumes it
-            # rather than keeping a second, drifting copy.
-            - "github.com/jtarchie/steps/internal/outcome"
-            - "github.com/jtarchie/steps/internal/store"
-            - "github.com/jtarchie/steps/internal/trigger"
-            # web is the UI front end: main constructs it and hands it loaded
-            # pipelines, exactly as it does trigger.Watch. events is the leaf
-            # both need in order to wire a bus to a store sink.
-            - "github.com/jtarchie/steps/internal/events"
-            - "github.com/jtarchie/steps/internal/web"
-            - "github.com/jtarchie/steps/internal/workspace"
         # dockerapi is the docker engine client, and the ONLY package allowed
         # to hold one. It exists because internal/shell is depended on by
         # nearly everything and had been stdlib-only: putting an engine client

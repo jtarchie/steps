@@ -1,0 +1,168 @@
+package e2e
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// TestRunJobAgentNeverSkipped mirrors TestRunJobPutNeverSkipped's intent,
+// counting provider requests since HTTP calls aren't file-shaped like that
+// test's shell-builtin counters. Not run with t.Parallel(): it uses
+// t.Setenv, which panics if called after a parallel test has started.
+func TestRunJobAgentNeverSkipped(t *testing.T) {
+	fake := newRepeatingFakeLLM(t, says("done"))
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+
+	pipeline := fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: reviewer
+  source:
+    endpoint: %s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+
+jobs:
+- name: build
+  plan:
+  - agent: reviewer
+    inputs: []
+    messages:
+      - hello
+`, fake.URL)
+
+	err := os.WriteFile(path, []byte(pipeline), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	mustRun(t, path)
+
+	if got := fake.requestCount(); got != 1 {
+		t.Errorf("calls after first run = %d, want 1", got)
+	}
+
+	mustRun(t, path)
+
+	if got := fake.requestCount(); got != 2 {
+		t.Errorf("calls after second run = %d, want 2 (agent steps are never skip-cached)", got)
+	}
+}
+
+// TestRunJobAgentPromptFileArtifactReadsRepoFile is the end-to-end proof for
+// the run-time message_files: {artifact, path} form: an agent step's prompt
+// text is read out of a get step's fetched artifact and actually reaches the
+// model. The dummy resource's in: writes PROMPT.md directly into the fetched
+// directory (its cwd, per resource.RunIn), and the agent step declares repo
+// as an input so it's materialized into its own working directory (see
+// resolveDeferredPrompt) — matching how internal/workspace's
+// checkPromptFileArtifactAvailable requires it to be declared.
+func TestRunJobAgentPromptFileArtifactReadsRepoFile(t *testing.T) {
+	fake := newRepeatingFakeLLM(t, says("done"))
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+
+	pipeline := fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+resource_types:
+- name: dummy
+  config:
+    check: echo '[{"ref":"v1"}]'
+    in: echo 'Review this repo carefully.' > PROMPT.md
+
+resources:
+- name: repo
+  type: dummy
+  source: {}
+
+agents:
+- name: reviewer
+  source:
+    endpoint: %s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+  - agent: reviewer
+    inputs: [repo]
+    message_files: [{ artifact: repo, path: PROMPT.md }]
+`, fake.URL)
+
+	err := os.WriteFile(path, []byte(pipeline), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	mustRun(t, path)
+
+	if got := fake.request(1).Messages; len(got) != 2 || !strings.Contains(got[1].Content, "Review this repo carefully.") {
+		t.Errorf("the message_files's loaded text did not reach the model as the user message; got %+v", got)
+	}
+}
+
+// TestAgentAnswersWhenTurnsRunOut is the feature the PR-review pipeline needed
+// through four failed live runs: a spent budget must END a conversation, not
+// destroy it.
+//
+// A model that is still calling tools on its final turn used to return no text
+// at all, and the step failed with "exceeded N turns without a final response"
+// — twelve turns of real investigation thrown away. Now the runner takes the
+// tools away and asks for an answer from what was gathered.
+func TestAgentAnswersWhenTurnsRunOut(t *testing.T) {
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	dir := t.TempDir()
+
+	// Never stops calling tools on its own — exactly the model this exists for.
+	// The final turn is offered no tools, so the only thing it can do is answer.
+	fake := newRoutedFakeLLM(t, func(req capturedRequest) turn {
+		if len(req.Tools) == 0 {
+			return says("I ran out of budget. Based on what I read: the config parser is fine.")
+		}
+
+		return callsTool("list_dir", map[string]any{"path": "."})
+	})
+
+	path := writePipeline(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: browser
+  max_turns: 3
+  source: { model: openai/test-model, endpoint: `+fake.URL+`/v1/, api_key_env: STEPS_TEST_AGENT_API_KEY }
+
+jobs:
+- name: look
+  plan:
+  - agent: browser
+    inputs: []
+    messages:
+      - Investigate the repository.
+`)
+
+	mustRun(t, path)
+
+	nodes := storeNodes(t, path)
+	assertSucceeded(t, nodes, "agent", "browser")
+}

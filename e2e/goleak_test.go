@@ -1,0 +1,72 @@
+package e2e
+
+import (
+	"os"
+	"testing"
+
+	"github.com/jtarchie/steps/internal/cli"
+	"go.uber.org/goleak"
+)
+
+// TestMain enforces that no goroutines leak from the root package's e2e
+// tests, which drive the full CLI stack: workspaces, agent conversations,
+// resource fetches, and (opt-in) Docker/btrfs backends. A leak here usually
+// means a spawned process, watcher, or HTTP client wasn't shut down before
+// the test returned.
+//
+// streamableServerConn.Read is ignored: it's the go-sdk's server-side
+// streamable-HTTP read loop, which does not exit when a client sends the
+// session-termination DELETE (verified in isolation, both with and without
+// the client's standalone SSE stream — go-sdk@v1.7.0, no fix in a later
+// release as of this writing). Not steps' leak to fix.
+//
+// regexp2's runClock is ignored for the reason internal/web's TestMain sets
+// out in full: chroma's lexers match with regexp2, whose match-timeout support
+// runs a shared background clock that exits on its own about a second after
+// the last match, with no handle to close it sooner. It reaches this package
+// through the /p/:pipeline/config/:sha page, which highlights a recorded
+// configuration. Re-verified against regexp2 v2.7.1: runClock still loops only
+// while current <= clockEnd and clears running on the way out (fastclock.go).
+func TestMain(m *testing.M) {
+	// A local: worker execs `<this binary> _shim`, and under `go test` this
+	// binary is the test binary — which answers to nothing but the suite, so
+	// without this a placed step would re-run the whole suite as a subprocess
+	// instead of serving one session. Dispatching before goleak and before
+	// m.Run is what makes the documented example an example that runs.
+	//
+	// The os/exec TestHelperProcess pattern: same binary, told which half to
+	// be.
+	if len(os.Args) > 1 && os.Args[1] == "_shim" {
+		// One impersonated worker, for the eviction e2e: environment rather
+		// than argv, because the venue execs a fixed "<binary> _shim" — the
+		// same seam the venue package's own variants use.
+		if count := os.Getenv(drainingWorkerEnv); count != "" {
+			serveEvictedWorker(count)
+		}
+
+		err := cli.Run(os.Args[1:])
+		if err != nil {
+			os.Exit(1)
+		}
+
+		os.Exit(0)
+	}
+
+	options := []goleak.Option{
+		goleak.IgnoreTopFunction("github.com/modelcontextprotocol/go-sdk/mcp.(*streamableServerConn).Read"),
+		goleak.IgnoreAnyFunction("github.com/dlclark/regexp2/v2.runClock"),
+	}
+
+	// The cloud SDKs' pooled keep-alive connections, and only when the
+	// real-AWS or real-GCP tests are the ones running — see
+	// internal/venue/ssmdial for the full note. Every other run keeps the
+	// strict check.
+	if os.Getenv("STEPS_TEST_AWS_INSTANCE") != "" || os.Getenv("STEPS_TEST_GCP_INSTANCE") != "" {
+		options = append(options,
+			goleak.IgnoreTopFunction("net/http.(*persistConn).readLoop"),
+			goleak.IgnoreTopFunction("net/http.(*persistConn).writeLoop"),
+			goleak.IgnoreAnyFunction("internal/poll.runtime_pollWait"))
+	}
+
+	goleak.VerifyTestMain(m, options...)
+}

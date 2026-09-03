@@ -2,7 +2,7 @@
 
 Read the page for what you're doing. Nothing here needs to be read in order, except that [resources.md](resources.md) is the one most people need second, right after the quick start.
 
-**Every YAML example in these docs is a complete pipeline, extracted and executed by the test suite** (`docs_test.go`). An example that needs docker, btrfs, the network, a CLI, or real credentials says which one; everything else runs exactly as shown, and a doc example that stops working fails the build. Read them via `steps docs` in a terminal, `/docs` in the [web UI](web.md), or the files themselves.
+**Every YAML example in these docs is a complete pipeline, extracted and executed by the test suite** (`e2e/docs_test.go`). An example that needs docker, btrfs, the network, a CLI, or real credentials says which one; everything else runs exactly as shown, and a doc example that stops working fails the build. Read them via `steps docs` in a terminal, `/docs` in the [web UI](web.md), or the files themselves.
 
 **The `assert:` blocks you see in them are load-bearing, not decoration.** Every executed example verifies its own behavior — which steps ran in what order, what a command printed, what a model decided, what a step wrote — so the examples are regression tests for the features they document, and the claims in the prose beside them are checked rather than asserted by an author. A separate mutation suite proves those assertions can actually fail: it rewrites each one to something the pipeline does not satisfy and requires the build to go red. See [`assert:`](control-flow.md#assert-self-verification--steps-test).
 

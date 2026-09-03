@@ -85,7 +85,7 @@ tasks:
   mutate:
     desc: Just the mutation suites — break each doc-corpus assertion in turn and require the build to notice. Part of `task test`; this is the fast way to iterate on them alone.
     cmds:
-      - go test . -run 'Mutation' -count=1
+      - go test ./e2e -run 'Mutation' -count=1
 
   cover-diff:
     desc: "Advisory: which changed lines (vs BASE, default HEAD) did no test execute. Born from a measured failure: a whole eviction layer landed uncovered and its deletion shipped green. Run before committing; triage every line it names — add the test, or know exactly why not."

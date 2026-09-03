@@ -1,6 +1,6 @@
 # examples/
 
-The runnable example corpus lives in `docs/*.md` — every fenced ```yaml block there is a complete pipeline, extracted and executed by the root package's `TestDocsExamples` (see `docs_test.go`). This directory keeps the two things that can't be doc blocks:
+The runnable example corpus lives in `docs/*.md` — every fenced ```yaml block there is a complete pipeline, extracted and executed by `TestDocsExamples` in `./e2e` (see `e2e/docs_test.go`). This directory keeps the two things that can't be doc blocks:
 
 **`pr-review.yml`** is the capstone example: the full adaptive PR-review pipeline (planner-decided matrix width, concurrent reviewer cells, collected outputs, synthesizer fan-in, human approval before posting), meant to be run against a real model and a real repo. Its *verdict* can never be a fixture — pass/fail depends on what the reviewers find — but the file itself is executed by `TestEndToEndPRReviewExample`: read from disk, every agent pointed at a scripted provider through the same `source:` seam the doc corpus uses, with `gh` and `git` stubbed on PATH so the resource type's real `check`/`in`/`out` text runs, and the `approval:` answered through `steps approve` from outside the run. `TestValidatePRReviewExample` still validates it statically (schema + full `steps validate`).
 

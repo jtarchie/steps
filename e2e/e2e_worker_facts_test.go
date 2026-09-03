@@ -1,0 +1,368 @@
+package e2e
+
+// What the machine that ran the step was.
+
+import (
+	"context"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/store"
+)
+
+// runPlacements returns the placement rows of the most recent run.
+func runPlacements(t *testing.T, pipelinePath string) []store.Placement {
+	t.Helper()
+
+	st, err := store.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
+	if err != nil {
+		t.Fatalf("open state store: %v", err)
+	}
+
+	defer func() { _ = st.Close() }()
+
+	runs, err := st.ListRuns(context.Background(), "", 1)
+	if err != nil || len(runs) == 0 {
+		t.Fatalf("listing runs: %v (%d found)", err, len(runs))
+	}
+
+	placements, err := st.RunPlacements(context.Background(), runs[0].ID)
+	if err != nil {
+		t.Fatalf("reading placements: %v", err)
+	}
+
+	return placements
+}
+
+// TestEndToEndRecordsWhatRanTheStep is the diagnosis half of placement.
+//
+// The event row already names WHICH machine — a tag and an address. What it
+// cannot say is what that machine turned out to BE: the architecture, the
+// filesystem the tree landed on, how many bytes had to be pushed there. Those
+// are the answers to "it passed on my laptop and failed on the fleet", and
+// they are only knowable from the worker's own hello, which nothing outside
+// the session could see.
+//
+// Facts and not a price, deliberately: what an instance-hour costs is not
+// something this process can honestly know, and a wrong number in a cost
+// column is worse than no column.
+func TestEndToEndRecordsWhatRanTheStep(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: here
+    outputs: [seed]
+    run: head -c 4096 /dev/urandom > seed/blob
+  - task: there
+    tags: [gpu]
+    inputs: [seed]
+    run: test -s seed/blob
+`)
+
+	err := cli.Run([]string{path, "--worker", "gpu=local:"})
+	if err != nil {
+		t.Fatalf("running: %v", err)
+	}
+
+	placements := runPlacements(t, path)
+
+	// Exactly one: the untagged step ran on this machine, and there is no
+	// worker to describe. A row for it would claim a placement that never
+	// happened.
+	if len(placements) != 1 {
+		t.Fatalf("recorded %d placements, want 1 (only the tagged step ran on a worker): %+v", len(placements), placements)
+	}
+
+	placement := placements[0]
+
+	if placement.StepName != "there" {
+		t.Errorf("step_name = %q, want the tagged step", placement.StepName)
+	}
+
+	if placement.Tag != "gpu" {
+		t.Errorf("tag = %q, want the tag that chose the machine", placement.Tag)
+	}
+
+	if placement.JobName != "build" {
+		t.Errorf("job_name = %q, want build", placement.JobName)
+	}
+
+	assertMachineFacts(t, placement)
+	assertBytesCrossed(t, placement)
+}
+
+// assertMachineFacts holds the half of a placement that comes from the
+// worker's own hello rather than from this end's bookkeeping.
+func assertMachineFacts(t *testing.T, placement store.Placement) {
+	t.Helper()
+
+	// From the worker's own hello, not from this process's runtime — the
+	// whole point is that a placed step can run somewhere else. A local:
+	// worker happens to agree, which is what makes it assertable here.
+	if placement.GOOS != runtime.GOOS || placement.GOARCH != runtime.GOARCH {
+		t.Errorf("platform = %s/%s, want %s/%s", placement.GOOS, placement.GOARCH, runtime.GOOS, runtime.GOARCH)
+	}
+
+	if placement.Workdir == "" {
+		t.Error("workdir is empty — the record cannot say where on the machine the tree landed")
+	}
+
+	if placement.FSType == "" {
+		t.Error("fstype is empty — a tmpfs workdir is the failure this column exists to name")
+	}
+}
+
+// assertBytesCrossed is separate from the facts above because zero is an
+// honest answer: a worker KEEPS what it receives, and a step whose tree is
+// empty or already held sends nothing. Only a caller that knows bytes had to
+// move can assert that they did.
+func assertBytesCrossed(t *testing.T, placement store.Placement) {
+	t.Helper()
+
+	if placement.BytesSent <= 0 {
+		t.Errorf("bytes_sent = %d, want the tree that was pushed to the worker", placement.BytesSent)
+	}
+}
+
+// TestEndToEndReportsWhereStepsRan is the other half: a row nothing can read
+// is not a record. `steps runs --where` is the CLI that answers it.
+func TestEndToEndReportsWhereStepsRan(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: seeded-locally
+    outputs: [seed]
+    run: head -c 4096 /dev/urandom > seed/blob
+  - task: there
+    tags: [gpu]
+    inputs: [seed]
+    run: test -s seed/blob
+`)
+
+	err := cli.Run([]string{path, "--worker", "gpu=local:"})
+	if err != nil {
+		t.Fatalf("running: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		err = cli.Run([]string{"runs", "where", path})
+	})
+	if err != nil {
+		t.Fatalf("steps runs --where: %v", err)
+	}
+
+	for _, want := range []string{"there", "gpu", runtime.GOOS + "/" + runtime.GOARCH} {
+		if !strings.Contains(out, want) {
+			t.Errorf("steps runs --where did not mention %q:\n%s", want, out)
+		}
+	}
+
+	// The untagged step ran here; naming it would claim a placement that
+	// never happened.
+	if strings.Contains(out, "seeded-locally") {
+		t.Errorf("steps runs --where named a step that ran locally:\n%s", out)
+	}
+}
+
+// TestEndToEndWhereNamesOneRunAndSaysWhenNoneWerePlaced covers the two
+// answers --where gives beside the table: a specific run, and a run that
+// never left this machine.
+//
+// Two runs, because one cannot tell a --run that is honoured from a --run
+// that is ignored in favour of the newest — they are the same run. The
+// PLACED one is the older, so a report that quietly takes the latest says
+// the opposite of the truth.
+//
+// The unplaced answer is worth stating out loud: a pipeline that names no
+// worker is the ordinary case, and an empty table for it reads as "the
+// record is broken" rather than "nothing was placed".
+func TestEndToEndWhereNamesOneRunAndSaysWhenNoneWerePlaced(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: placed
+  plan:
+  - task: on-a-worker
+    tags: [gpu]
+    run: "true"
+- name: unplaced
+  plan:
+  - task: right-here
+    run: "true"
+`)
+
+	err := cli.Run([]string{"run", path, "--job", "placed", "--worker", "gpu=local:"})
+	if err != nil {
+		t.Fatalf("running the placed job: %v", err)
+	}
+
+	placedRun := latestRunID(t, path)
+
+	err = cli.Run([]string{"run", path, "--job", "unplaced"})
+	if err != nil {
+		t.Fatalf("running the unplaced job: %v", err)
+	}
+
+	// No --run: the newest, which is the one that never left this machine.
+	out := captureStdout(t, func() {
+		err = cli.Run([]string{"runs", "where", path})
+	})
+	if err != nil {
+		t.Fatalf("steps runs --where: %v", err)
+	}
+
+	if !strings.Contains(out, "ran every step on this machine") {
+		t.Errorf("steps runs --where on an unplaced run printed:\n%s", out)
+	}
+
+	// Named: the older run, which did.
+	out = captureStdout(t, func() {
+		err = cli.Run([]string{"runs", "where", path, placedRun})
+	})
+	if err != nil {
+		t.Fatalf("steps runs --where --run: %v", err)
+	}
+
+	if !strings.Contains(out, "on-a-worker") {
+		t.Errorf("steps runs --where --run %s does not report the run it was asked about:\n%s", placedRun, out)
+	}
+}
+
+// latestRunID is the newest recorded run of a pipeline.
+func latestRunID(t *testing.T, pipelinePath string) string {
+	t.Helper()
+
+	st, err := store.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
+	if err != nil {
+		t.Fatalf("open state store: %v", err)
+	}
+
+	defer func() { _ = st.Close() }()
+
+	runs, err := st.ListRuns(context.Background(), "", 1)
+	if err != nil || len(runs) == 0 {
+		t.Fatalf("listing runs: %v (%d found)", err, len(runs))
+	}
+
+	return runs[0].ID
+}
+
+// TestEndToEndRecordsWhereAHookRan is the gap a placement record must not
+// have: a hook that carries tags: really does acquire a machine.
+//
+// Hooks run outside the plan's merkle chain — deliberately, since "run this
+// when the step fails" must never be skipped because it succeeded last time —
+// so a hook has no node, and the placement row keyed on a node hash had
+// nothing to hang off. What that meant in practice is that the one place an
+// operator would least expect a machine to be running is the one place the
+// record said nothing: an `ensure:` hook on an aws://launch/ worker launches
+// and bills an instance, and `steps runs --where` reported that the run never
+// left this machine.
+func TestEndToEndRecordsWhereAHookRan(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "false"
+    on_failure:
+      task: tell-someone
+      tags: [gpu]
+      run: "true"
+`)
+
+	// The job fails: the point is the hook that ran because it did.
+	err := cli.Run([]string{path, "--worker", "gpu=local:"})
+	if err == nil {
+		t.Fatal("the pipeline was supposed to fail so its on_failure hook would run")
+	}
+
+	placements := runPlacements(t, path)
+
+	if len(placements) != 1 {
+		t.Fatalf("recorded %d placements, want the hook's one: %+v", len(placements), placements)
+	}
+
+	if placements[0].StepName != "tell-someone" {
+		t.Errorf("placement names step %q, want the hook that ran on a worker", placements[0].StepName)
+	}
+
+	if placements[0].Tag != "gpu" {
+		t.Errorf("tag = %q, want the tag that chose the machine", placements[0].Tag)
+	}
+
+	// Not assertBytesCrossed: this hook declares no inputs, so its tree is
+	// empty and nothing legitimately crosses. What is being proven is that a
+	// hook records the machine at all.
+	assertMachineFacts(t, placements[0])
+}
+
+// TestEndToEndRecordsEveryTaggedHookSeparately pins that two hooks on one step
+// are two machines, and are recorded as two.
+//
+// A tagged hook really does acquire one — on aws://launch/ it launches and
+// bills an instance — and it is the place an operator is least likely to
+// expect one running, which is the whole reason hooks are recorded at all. A
+// hook is deliberately outside the merkle chain (it must never be skipped for
+// having succeeded before), so it has no node hash to be keyed on and is
+// identified by its own scope instead.
+//
+// Its OWN scope. Keyed on the enclosing step's label, an on_failure: and an
+// ensure: on the same step produce the same key, the second upserts over the
+// first, and one of two billed machines vanishes from the record — silently,
+// because an upsert is a success.
+func TestEndToEndRecordsEveryTaggedHookSeparately(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: here
+    run: "false"
+    on_failure:
+      task: notify
+      tags: [gpu]
+      run: "true"
+    ensure:
+      task: cleanup
+      tags: [gpu]
+      run: "true"
+`)
+
+	// The job fails: the step runs `false`, which is what makes on_failure
+	// fire. Its error is the point, not a problem.
+	_ = cli.Run([]string{path, "--worker", "gpu=local:"})
+
+	placements := runPlacements(t, path)
+
+	slots := map[string]bool{}
+	for _, placement := range placements {
+		slots[placement.Slot] = true
+	}
+
+	if len(slots) != 2 {
+		t.Fatalf("recorded %d distinct placement slots from two tagged hooks, want 2: %+v", len(slots), placements)
+	}
+
+	// And each names the hook it was, rather than the step both hang off.
+	for _, want := range []string{"on_failure", "ensure"} {
+		found := false
+
+		for slot := range slots {
+			if strings.Contains(slot, want) {
+				found = true
+			}
+		}
+
+		if !found {
+			t.Errorf("no placement slot names the %s hook; slots are %v", want, slots)
+		}
+	}
+}

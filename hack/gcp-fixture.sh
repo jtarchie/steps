@@ -192,7 +192,7 @@ export STEPS_TEST_GCP_BINARY=$binary
 
 #   go test ./internal/venue/iapdial -run TestRealGCP -v      # relay protocol conformance
 #   go test ./internal/venue -run TestRealGCP -v              # dial, acquisition rungs
-#   go test . -run TestRealGCP -v                             # a pipeline step, end to end
+#   go test ./e2e -run TestRealGCP -v                             # a pipeline step, end to end
 #   go test ./internal/venue -run TestRealGCPPreemption -v    # a real preemption (~15 min)
 #
 # Tear it all down with: hack/gcp-fixture.sh down

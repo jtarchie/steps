@@ -398,7 +398,7 @@ export STEPS_TEST_AWS_FIS_ROLE=$fis
 
 #   go test ./internal/venue/ssmdial -run TestRealAWS -v      # protocol conformance
 #   go test ./internal/venue -run TestRealAWS -v              # dial, acquisition rungs
-#   go test . -run TestRealAWS -v                             # a pipeline step, end to end
+#   go test ./e2e -run TestRealAWS -v                             # a pipeline step, end to end
 #   go test ./internal/venue -run TestRealAWSSpotEviction -v  # FIS interruption (costs ~\$0.20)
 #
 # Tear it all down with: hack/aws-fixture.sh down
