@@ -140,8 +140,6 @@ func serveRelay(t *testing.T, handler func(*relayConn)) string {
 		CheckOrigin: func(*http.Request) bool { return true },
 	}
 
-	var conns sync.WaitGroup
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if got := req.Header.Get("Origin"); got != relayOrigin {
 			t.Errorf("Origin = %q, want %q", got, relayOrigin)
@@ -158,18 +156,18 @@ func serveRelay(t *testing.T, handler func(*relayConn)) string {
 			return
 		}
 
-		conns.Add(1)
-
-		defer conns.Done()
 		defer func() { _ = ws.Close() }()
 
 		handler(&relayConn{t: t, ws: ws})
 	}))
 
-	t.Cleanup(func() {
-		server.Close()
-		conns.Wait()
-	})
+	// Close blocks until every in-flight handler has returned, so nothing
+	// further is needed to keep a handler from outliving its test. A
+	// WaitGroup the handler Add(1)s to is not an improvement: a dial that
+	// times out mid-handshake leaves the handler reaching its Add as the
+	// cleanup reaches Wait, which is the Add-from-zero-concurrent-with-Wait
+	// misuse the race detector reports (1 in ~300 runs under -cpu 1,2,8).
+	t.Cleanup(server.Close)
 
 	return "ws" + strings.TrimPrefix(server.URL, "http") + "/v4/connect?stub=true"
 }
