@@ -36,13 +36,14 @@ func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 	worker.ArtifactStore = spec.ArtifactStore
 
 	return runner{session: &session{
-		worker:  worker,
-		cwd:     spec.Cwd,
-		outputs: spec.Fetch,
-		env:     withWorkerTag(resolveEnv(spec.Env), spec.WorkerTag),
-		tag:     spec.WorkerTag,
-		keep:    spec.Keep,
-		blobs:   blobs,
+		worker:   worker,
+		cwd:      spec.Cwd,
+		outputs:  spec.Fetch,
+		fetchAll: spec.FetchAll,
+		env:      withWorkerTag(resolveEnv(spec.Env), spec.WorkerTag),
+		tag:      spec.WorkerTag,
+		keep:     spec.Keep,
+		blobs:    blobs,
 		// The container half of a placed step, if it has one. Kept as the
 		// caller's own spec so nothing about what a container means is
 		// re-decided here: the tree still travels the venue's way, and the

@@ -91,10 +91,14 @@ type transport struct {
 // DockerRunner holds its session by pointer.
 type session struct {
 	worker Worker
-	// cwd is the local tree that goes out and results come back into.
+	// cwd is the local tree that goes out and results come back into. Empty
+	// for a command with no tree at all — a resource check: — which sends
+	// nothing and fetches nothing.
 	cwd string
-	// outputs names what to bring back after each command.
-	outputs []string
+	// outputs names what to bring back after each command; fetchAll brings
+	// back everything instead, for a command whose output is the tree.
+	outputs  []string
+	fetchAll bool
 	// env carries the values the pipeline's env: opted into, resolved here.
 	env map[string]string
 	// keep leaves the worker's scratch behind, following --keep-workspace.
@@ -1058,7 +1062,14 @@ func sessionName(cwd string) (string, error) {
 		return "", fmt.Errorf("naming the session: %w", err)
 	}
 
-	return fmt.Sprintf("%s-%d-%s", filepath.Base(cwd), os.Getpid(), hex.EncodeToString(suffix)), nil
+	// A command without a tree still needs a scratch of its own on the
+	// worker, and a name that says what it was for.
+	base := "check"
+	if cwd != "" {
+		base = filepath.Base(cwd)
+	}
+
+	return fmt.Sprintf("%s-%d-%s", base, os.Getpid(), hex.EncodeToString(suffix)), nil
 }
 
 func decode(frame wire.Frame, v any) error {

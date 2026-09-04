@@ -123,8 +123,11 @@ func (s *session) containerSpec(dockerHost string) shell.RunnerSpec {
 	spec.WorkerTag = ""
 	spec.DockerHost = dockerHost
 	// The daemon resolves -v against ITS filesystem, so the mount is the
-	// tree the shim unpacked, not this machine's copy of anything.
-	spec.MountPath = s.workdir
+	// tree the shim unpacked, not this machine's copy of anything. No tree
+	// (a resource check:) mounts nothing, as it does locally.
+	if spec.Cwd != "" {
+		spec.MountPath = s.workdir
+	}
 
 	// An explicit user: crosses verbatim — the same contract Concourse has,
 	// where the value is a name the far end resolves. Only the DEFAULT is
@@ -171,12 +174,13 @@ func (r runner) runContained(ctx context.Context, command string, p plan) (strin
 		//
 		// ponytail: RunCapture DOES ask for one and not the other —
 		// plan{streamStderr: true, capture: true} — so a placed image: step
-		// reached through it would stream the stdout its caller asked to have
+		// reached through it streams the stdout its caller asked to have
 		// captured quietly. p.capture is ignored here for the same reason:
-		// this path always captures. Neither has a production caller today
-		// (nothing calls RunCapture on a placed image step), and the honest
-		// fix is a shell API that can split the two, not a cleverer branch
-		// here.
+		// this path always captures. The callers today are a resource
+		// type's check: and out: on a worker, whose stdout is a short JSON
+		// answer that is captured correctly and merely echoed as well; the
+		// honest fix is a shell API that can split the two, not a cleverer
+		// branch here.
 		if p.streamStdout || p.streamStderr {
 			stdout, stderr, code, runErr = inner.RunCaptureFullLimitedStreamed(ctx, command, p.maxBytes, p.spillDir)
 		} else {

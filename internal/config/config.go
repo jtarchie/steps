@@ -282,6 +282,8 @@ func Load(path string, name string, vars map[string]string) (*Config, error) {
 		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
 	}
 
+	cfg.inheritResourceTags()
+
 	cfg.Name = name
 	cfg.Revision = revision
 

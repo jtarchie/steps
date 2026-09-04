@@ -106,7 +106,7 @@ type RunnerSpec struct {
 	Image string
 	// Cwd is the working directory. For a container it is bind-mounted at its
 	// own resolved host path and set as the workdir; empty (only a resource
-	// check:) mounts nothing.
+	// check:) mounts nothing — and, with a Worker, sends and fetches nothing.
 	Cwd string
 	// MountPath is where Cwd's tree lives on the DAEMON's filesystem, when
 	// that is not this machine. Set it and Cwd is not resolved locally —
@@ -178,6 +178,11 @@ type RunnerSpec struct {
 	// with a Worker set means a command whose effects on the tree are not
 	// wanted — a guard, which reads the tree and answers a question about it.
 	Fetch []string
+	// FetchAll brings the WHOLE tree back after each command, for a command
+	// whose output is the directory itself rather than a declared subset — a
+	// resource's in:, which fills an empty directory and declares nothing.
+	// Meaningless without a Worker.
+	FetchAll bool
 	// Keep leaves a worker's scratch behind, following --keep-workspace. Read
 	// only by the venue: on this machine the workspace decides its own fate,
 	// and it is the one that answered this.

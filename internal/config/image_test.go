@@ -173,3 +173,27 @@ func TestImagesKeepsAnAgentSharingAPlacedTasksName(t *testing.T) {
 		t.Errorf("Images() = %v, want registry/agent:1 — the agent entry is used locally", got)
 	}
 }
+
+// TestImagesSkipsAResourceTypeOnlyPlacedResourcesUse: a resource_type's
+// commands run wherever its resources say, so its image is pulled here only
+// while some resource of the type is checked from here.
+func TestImagesSkipsAResourceTypeOnlyPlacedResourcesUse(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		ResourceTypes: []ResourceType{{Name: "probe", Image: "alpine:3"}},
+		Resources:     []Resource{{Name: "repo", Type: "probe", Tags: []string{"vpc"}}},
+	}
+
+	if got := cfg.Images(); len(got) != 0 {
+		t.Errorf("Images() = %v, want none — every check, in and out of the type runs on the worker", got)
+	}
+
+	// One untagged resource of the type keeps the image local: the poller
+	// checks it from this machine.
+	cfg.Resources = append(cfg.Resources, Resource{Name: "other", Type: "probe"})
+
+	if got := cfg.Images(); len(got) != 1 || got[0] != "alpine:3" {
+		t.Errorf("Images() = %v, want the type's image, pulled for the un-placed resource", got)
+	}
+}

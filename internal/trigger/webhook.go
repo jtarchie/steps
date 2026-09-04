@@ -142,6 +142,9 @@ func authorized(tokens map[string]string, name string, r *http.Request) bool {
 // reusing exactly the poll path so a webhook and a poll cannot disagree about
 // what a version change means.
 func (h *webhookHandler) checkNow(ctx context.Context, cfg *config.Config, name string) ([]string, error) {
+	ctx, release := leasedChecks(ctx)
+	defer release()
+
 	obs, hasVersion, err := checkResource(ctx, cfg, h.st, name)
 	if err != nil {
 		return nil, err

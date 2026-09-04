@@ -207,10 +207,9 @@ func (c *Config) Images() []string {
 		// step runs them HERE; a step's own image: is already covered by the
 		// tags: check above.
 		//
-		// Keyed by KIND and name. A resource_type's check, in and out always
-		// run on this machine, so it can never be placed — and it shares a
-		// label format with the two collections that can, which is how a
-		// resource_type named like a placed task lost its pre-pull.
+		// Keyed by KIND and name: a resource_type shares a label format with
+		// the other two collections, which is how a resource_type named like
+		// a placed task once lost its pre-pull.
 		if placedOnly[settings.Entry] {
 			return nil
 		}
@@ -258,6 +257,19 @@ func (c *Config) placedOnlyEntries() map[entryRef]bool {
 
 			return nil
 		})
+	}
+
+	// A resource_type's commands run wherever its resources say. Every
+	// resource of the type tagged means no check, in or out of it runs here
+	// (a step's own tags: can only move one elsewhere); one untagged resource
+	// keeps the image local, since the poller checks it from this machine.
+	for _, resource := range c.Resources {
+		entry := entryRef{Kind: "resource_type", Name: resource.Type}
+		referenced[entry] = true
+
+		if len(resource.Tags) == 0 {
+			local[entry] = true
+		}
 	}
 
 	placedOnly := map[entryRef]bool{}

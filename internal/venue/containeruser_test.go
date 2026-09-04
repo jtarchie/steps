@@ -77,3 +77,19 @@ func TestContainerSpecMountsTheWorkersTree(t *testing.T) {
 		t.Errorf("docker host = %q, want the worker's forwarded socket", spec.DockerHost)
 	}
 }
+
+// TestContainerSpecMountsNothingWithoutATree: a resource check: has no
+// directory, and a container for it on the worker mounts nothing — as it
+// does locally — rather than the shim's empty scratch.
+func TestContainerSpecMountsNothingWithoutATree(t *testing.T) {
+	t.Parallel()
+
+	session := &session{
+		workdir:   "/var/tmp/steps/steps-shim/abc/work",
+		container: shell.RunnerSpec{Image: "alpine"},
+	}
+
+	if got := session.containerSpec("unix:///tmp/x.sock").MountPath; got != "" {
+		t.Errorf("MountPath = %q, want none for a command with no tree", got)
+	}
+}

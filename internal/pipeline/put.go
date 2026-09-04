@@ -4,11 +4,14 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
 	rsrc "github.com/jtarchie/steps/internal/resource"
+	"github.com/jtarchie/steps/internal/retry"
+	"github.com/jtarchie/steps/internal/venue"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -52,10 +55,13 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindPut, StepIndex: i, Resource: resource.Name, Content: content}
 
+	ctx, placed := withPlacementSink(ctx)
+
 	result, err := executePut(ctx, r.cfg, step, r.bw)
 	if err != nil {
 		wrapped := fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 		recordStepFailure(ctx, r, node, wrapped)
+		recordPlacement(ctx, r, placed, i, step.Put, hash, hash)
 
 		return stepResult{}, wrapped
 	}
@@ -64,6 +70,9 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
+
+	// After the node, never before: run_placements references it.
+	recordPlacement(ctx, r, placed, i, step.Put, hash, hash)
 
 	return ran(hash), nil
 }
@@ -92,20 +101,30 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 
 	var result map[string]any
 
-	retryErr := retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
-		fmt.Printf("put: %s (attempt %d/%d)\n", step.Put, attempt, total)
-		logFrom(ctx).Info("job.put.attempt", "put", step.Put, "attempt", attempt, "total_attempts", total)
-	}, func(attemptCtx context.Context) error {
-		runResult, runErr := rsrc.RunOut(attemptCtx, cfg, *resourceType, resource.Env, resource.Source, step.Params, space.Dir())
-		if runErr != nil {
-			// Classified against the ATTEMPT's context, so a per-attempt
-			// timeout is told apart from a real nonzero out:.
-			return classifyRunError(attemptCtx, runErr)
-		}
+	// The venue retry wraps the attempts: loop, as a task's does — see
+	// runPlacedStage.
+	retryErr := runPlacedStage(ctx, step, func(ctx context.Context) error {
+		return retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
+			fmt.Printf("put: %s (attempt %d/%d)\n", step.Put, attempt, total)
+			logFrom(ctx).Info("job.put.attempt", "put", step.Put, "attempt", attempt, "total_attempts", total)
+		}, func(attemptCtx context.Context) error {
+			runResult, runErr := rsrc.RunOut(attemptCtx, cfg, *resourceType, resource.Env, resource.Source, step.Params, space.Dir())
+			if runErr != nil {
+				// An eviction ends the attempts loop rather than spending
+				// it — the machine is gone, and the venue retry re-places.
+				if errors.Is(runErr, venue.ErrEvicted) {
+					return retry.Stop(runErr)
+				}
 
-		result = runResult
+				// Classified against the ATTEMPT's context, so a per-attempt
+				// timeout is told apart from a real nonzero out:.
+				return classifyRunError(attemptCtx, runErr)
+			}
 
-		return nil
+			result = runResult
+
+			return nil
+		})
 	})
 	if retryErr != nil {
 		return nil, fmt.Errorf("put %q: %w", step.Put, retryErr)

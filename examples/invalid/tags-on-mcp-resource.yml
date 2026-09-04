@@ -1,0 +1,24 @@
+# A resource's tags: place its check, in and out on a worker — which only a
+# shell-backed type can be, since its stages are commands. An mcp: type's tool
+# call and file writing happen inside this process, so a tag could move only a
+# fraction of the stage; the load refuses it rather than placing half.
+# expect: tags: is not valid on a resource of type "tracker"
+mcp_servers:
+- name: tools
+  endpoint: http://127.0.0.1:1/mcp
+
+resource_types:
+- name: tracker
+  config:
+    mcp: { server: tools, check: { tool: list_issues } }
+
+resources:
+- name: issues
+  type: tracker
+  tags: [vpc]
+  source: {}
+
+jobs:
+- name: triage
+  plan:
+  - get: issues

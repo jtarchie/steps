@@ -310,6 +310,16 @@
         "webhook_token_env": {
           "type": "string",
           "description": "Environment variable holding the shared secret a webhook must present to trigger an immediate check of this resource. The variable NAME, never the token itself."
+        },
+        "tags": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Names the worker this resource's check, in and out run on, for a source only reachable from that machine's network; the invocation maps the name with --worker. A get or put step's own tags: overrides it for that step. Shell-backed types only."
         }
       }
     },
@@ -1007,7 +1017,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "task steps only. Names the worker the step's commands run on; the invocation maps the name to a machine with --worker. One entry: there is no worker pool to intersect against. Composes with image:, which runs the command in a container on that worker. Invalid on agent steps, and on a task with fix:."
+          "description": "Names the worker the step's commands run on; the invocation maps the name to a machine with --worker. One entry: there is no worker pool to intersect against. On a get or put it overrides the resource's own tags:. Composes with image:, which runs the command in a container on that worker. Invalid on agent steps, on a task with fix:, and on a get/put of a type that is not shell-backed."
         },
         "context_paths": {
           "type": "array",

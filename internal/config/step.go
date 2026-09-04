@@ -285,8 +285,10 @@ type Step struct {
 	// Retagging a step, or repointing a tag at another machine, therefore does
 	// not invalidate work that already succeeded.
 	//
-	// Invalid on get/put/try steps, on agent steps and on a task with fix:
-	// (both would leave half a step on each machine), and alongside image:.
+	// On a get or put it overrides the resource's own tags: (Resource.Tags)
+	// for that step. Invalid on try: steps, on agent steps and on a task with
+	// fix: (both would leave half a step on each machine), and on a get or
+	// put whose type is not shell-backed.
 	Tags []string `yaml:"tags,omitempty"`
 	// Privileged, on a task or agent step, overrides the referenced task's/
 	// agent's Privileged for this step only. True-wins, like Image's

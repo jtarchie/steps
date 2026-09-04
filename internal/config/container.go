@@ -114,10 +114,11 @@ func (c *Config) visitContainerSettings(fn func(context string, settings contain
 	return nil
 }
 
-// rejectOnGetAndPut is the shared placement rule for every execution setting:
+// rejectOnGetAndPut is the shared rule for every execution setting but tags:
 // they describe how a task's or agent's own command runs, so a get (which has
 // no such command) and a put (whose command comes from its resource type)
-// can't scope one. A try: wrapper is refused for a different reason — the
+// can't scope one. tags: is the exception because it describes WHERE, which a
+// get or put does decide — see validateTagRules. A try: wrapper is refused for a different reason — the
 // value would be accepted and then ignored, since resolution reads the wrapped
 // step, never the wrapper.
 //

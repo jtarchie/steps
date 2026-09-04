@@ -22,6 +22,10 @@ import (
 // inputs and nothing else — so filtering again here would be a second, drifting
 // opinion about the same question.
 func (s *session) upload(ctx context.Context) error {
+	if s.cwd == "" {
+		return nil
+	}
+
 	stop := s.watchTransfer(ctx)
 	defer stop()
 
@@ -148,7 +152,7 @@ func (s *session) fetch(ctx context.Context) error {
 	stop := s.watchTransfer(ctx)
 	defer stop()
 
-	if len(s.outputs) == 0 {
+	if len(s.outputs) == 0 && !s.fetchAll {
 		return nil
 	}
 
@@ -179,6 +183,8 @@ func (s *session) fetch(ctx context.Context) error {
 
 	op := s.nextOp()
 
+	// Empty Paths asks the shim for the whole tree, which is what fetchAll
+	// means; s.outputs is nil exactly then.
 	err = s.write(wire.Frame{Type: wire.FrameFetch, Op: op}, wire.Fetch{Paths: s.outputs})
 	if err != nil {
 		return err
@@ -199,7 +205,23 @@ func (s *session) fetch(ctx context.Context) error {
 // and produced nothing already means everywhere else — a fact reported where
 // outputs are checked, not a reason to delete the previous one here.
 func (s *session) swapFetched(staging string) error {
-	for _, name := range s.outputs {
+	names := s.outputs
+
+	if s.fetchAll {
+		// Whatever the worker sent — the tree IS the output. The staging
+		// directory sits inside cwd, so it is never among these.
+		entries, err := os.ReadDir(staging)
+		if err != nil {
+			return fmt.Errorf("reading the fetched tree: %w", err)
+		}
+
+		names = make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+	}
+
+	for _, name := range names {
 		src := filepath.Join(staging, name)
 
 		_, err := os.Lstat(src)

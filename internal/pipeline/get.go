@@ -12,6 +12,8 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
 	rsrc "github.com/jtarchie/steps/internal/resource"
+	"github.com/jtarchie/steps/internal/retry"
+	"github.com/jtarchie/steps/internal/venue"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -252,7 +254,9 @@ func (w *planWalk) runTriggeredBuild(
 	// loud the moment resolution started reading job_versions for real.
 	recordFetchedVersion(ctx, resource.Name, version)
 
-	err = fetchGetStepWithStep(ctx, w.cfg, step, step.Get, resource, resourceType, version, bw)
+	fetchCtx, placed := withPlacementSink(ctx)
+
+	err = fetchGetStepWithStep(fetchCtx, w.cfg, step, step.Get, resource, resourceType, version, bw)
 
 	// Get-step hooks fire once per triggered build, in that build's own
 	// workspace, observing the fetch outcome. A fetch failure (or a hook that
@@ -263,6 +267,7 @@ func (w *planWalk) runTriggeredBuild(
 
 	if err != nil {
 		recordStepFailure(ctx, build, node, err)
+		recordPlacement(ctx, build, placed, w.index, step.Get, node.Hash, node.Hash)
 
 		return err
 	}
@@ -271,6 +276,9 @@ func (w *planWalk) runTriggeredBuild(
 	if err != nil {
 		return fmt.Errorf("could not record node %q: %w", node.Hash, err)
 	}
+
+	// After the node, never before: run_placements references it.
+	recordPlacement(ctx, build, placed, w.index, step.Get, node.Hash, node.Hash)
 
 	remainderWalk := *w
 	remainderWalk.stepRunner = build
@@ -425,6 +433,8 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	// step kind keeps, and hid a get whose fetch failed.
 	recordExecution(ctx, resource.Name)
 
+	ctx, placed := withPlacementSink(ctx)
+
 	err = fetchGetStepWithStep(ctx, w.cfg, step, step.Get, *resource, *resourceType, version, w.bw)
 
 	// Get-step hooks fire in the same workspace the resource was fetched into.
@@ -434,6 +444,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 
 	if err != nil {
 		recordStepFailure(ctx, w.stepRunner, node, err)
+		recordPlacement(ctx, w.stepRunner, placed, i, step.Get, hash, hash)
 
 		return stepResult{}, err
 	}
@@ -442,6 +453,9 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	if err != nil {
 		return stepResult{}, fmt.Errorf("could not record node %q: %w", node.Hash, err)
 	}
+
+	// After the node, never before: run_placements references it.
+	recordPlacement(ctx, w.stepRunner, placed, i, step.Get, hash, hash)
 
 	return ran(hash), nil
 }
@@ -512,11 +526,23 @@ func fetchGetVersions(ctx context.Context, cfg *config.Config, step config.Step,
 // artifact name (its get: value), which differs from the resource when the get
 // aliases it via resource:; only the fetched content comes from the resource.
 func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, step config.Step, artifact string, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
-	err := retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
-		fmt.Printf("get: %s (version: %v, attempt %d/%d)\n", artifact, version, attempt, total)
-		logFrom(ctx).Info("job.get.in.attempt", "artifact", artifact, "attempt", attempt, "total_attempts", total)
-	}, func(attemptCtx context.Context) error {
-		return fetchGetStep(attemptCtx, cfg, artifact, resource, resourceType, version, step.Params, bw)
+	// The venue retry wraps the attempts: loop, as a task's does — see
+	// runPlacedStage.
+	err := runPlacedStage(ctx, step, func(ctx context.Context) error {
+		return retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
+			fmt.Printf("get: %s (version: %v, attempt %d/%d)\n", artifact, version, attempt, total)
+			logFrom(ctx).Info("job.get.in.attempt", "artifact", artifact, "attempt", attempt, "total_attempts", total)
+		}, func(attemptCtx context.Context) error {
+			err := fetchGetStep(attemptCtx, cfg, artifact, resource, resourceType, version, step.Params, bw)
+
+			// An eviction ends the attempts loop rather than spending it —
+			// the machine is gone, and the venue retry is what re-places.
+			if errors.Is(err, venue.ErrEvicted) {
+				return retry.Stop(err)
+			}
+
+			return err
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("get %q: %w", artifact, err)

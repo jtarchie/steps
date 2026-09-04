@@ -154,7 +154,13 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 
 		return err
 	case config.StepKindPut:
+		// Recorded on the same terms as a task hook, keyed on the scope's
+		// label because a hook has no node.
+		ctx, placed := withPlacementSink(ctx)
+
 		_, err := executePut(ctx, scope.cfg, step, scope.bw)
+
+		recordPlacement(ctx, scope.stepRunner, placed, 0, step.Put, scope.label, "")
 
 		return err
 	case config.StepKindAgent:

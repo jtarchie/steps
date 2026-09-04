@@ -21,10 +21,10 @@ import (
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
-// workerReleaseTimeout bounds giving a machine back. Its own budget, and not
+// WorkerReleaseTimeout bounds giving a machine back. Its own budget, and not
 // the job's: a cancelled job is exactly when an instance left running would
 // be worst, and the release has to outlive the cancellation that triggered it.
-const workerReleaseTimeout = 15 * time.Minute
+const WorkerReleaseTimeout = 15 * time.Minute
 
 // RunJob executes job's plan steps in order. pinned applies to any `get`
 // step's version selection. provider materializes every build/step
@@ -80,11 +80,15 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	ctx, releaseWorkers := WithLeases(ctx)
 
 	defer func() {
-		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), workerReleaseTimeout)
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), WorkerReleaseTimeout)
 		defer cancel()
 
 		releaseWorkers(releaseCtx)
 	}()
+
+	// Under the leases, above every check, in: and out: — including the
+	// checks the plan below resolves versions with.
+	ctx = WithResourcePlacement(ctx)
 
 	// One register of step decisions per job run, for context: from: readers.
 	// Installed here rather than in runSteps because a get: version: every

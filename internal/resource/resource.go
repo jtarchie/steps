@@ -71,7 +71,8 @@ func CheckVersions(
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
-	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
+	// No Cwd: a check has no tree, here or on a worker.
+	runner, err := newRunner(ctx, shell.RunnerSpec{Image: rt.Image, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()})
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
@@ -196,6 +197,14 @@ func versionsFor(
 		}
 	}
 
+	// The check runs where the RESOURCE says, as every other check of it
+	// does — a source only reachable from a worker has to be asked from
+	// there — while the step's own tags: govern only its in:.
+	ctx, err := Place(ctx, config.Step{Get: res.Name, Tags: res.Tags})
+	if err != nil {
+		return nil, fmt.Errorf("get %q: %w", step.Get, err)
+	}
+
 	versions, err := CheckVersions(ctx, cfg, *resourceType, res.Env, res.Source, nil)
 	if err != nil {
 		return nil, fmt.Errorf("get %q: %w", step.Get, err)
@@ -279,8 +288,10 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, extr
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
-	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: destDir, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
-		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()})
+	// FetchAll: the directory IS the output, so a worker sends the whole of
+	// it home — there is no declared outputs: list to name a subset.
+	runner, err := newRunner(ctx, shell.RunnerSpec{Image: rt.Image, Cwd: destDir, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
+		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes(), FetchAll: true})
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
@@ -329,7 +340,8 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, ext
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
 
-	runner, err := shell.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: srcDir, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
+	// Nothing fetched back: an out publishes elsewhere and answers on stdout.
+	runner, err := newRunner(ctx, shell.RunnerSpec{Image: rt.Image, Cwd: srcDir, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()})
 	if err != nil {
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)

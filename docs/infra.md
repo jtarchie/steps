@@ -127,7 +127,7 @@ Keeping machines out of the pipeline file is what lets the same pipeline run on 
 - **One tag.** Concourse intersects a step's tags against a pool of workers advertising theirs; there is no pool here, so a second tag would name a second machine and the step would have no home.
 - **An unmapped tag is an error before the run starts**, not a fall back to local execution. A step that says it needs a GPU box, quietly running on a laptop, is the same broken promise `network:` without `image:` is refused for.
 - **`local:`** runs the step through a shim in a child process on this machine — for trying a tagged pipeline out without a worker, and for debugging the shim itself: `--worker gpu=local:`.
-- Valid on **task steps only**. Invalid on `get`/`put` steps (their commands come from the resource type), on `agent` steps and on a task with `fix:` — an agent's tools and conversation run in the orchestrator, so only its shell commands would move, leaving half a step on each machine.
+- Valid on **task, get and put steps**, and on a **resource** (below). Invalid on `agent` steps and on a task with `fix:` — an agent's tools and conversation run in the orchestrator, so only its shell commands would move, leaving half a step on each machine — and, for the same reason, on a get or put whose resource type is `mcp:`- or `expr:`-backed, whose in and out do their file writing inside this process.
 - **`image:` composes with `tags:`**: the step's tree is sent to the worker as usual and its command runs in a container **on that worker**, against the worker's own docker daemon. steps drives that daemon with its own client through a socket forwarded over the session's existing connection — no second port, and the worker needs no steps-specific container logic. The bind mount names the copy of the tree the worker holds, because a daemon resolves `-v` against its own filesystem. Two consequences worth knowing:
   - **The daemon that must exist is the worker's**, so the up-front `docker info` check cannot cover it: a machine acquired for the job does not exist when planning happens. A worker with no daemon fails the first placed step that names an image, in the daemon's own words, rather than at load time.
   - **`user:` is resolved on the worker.** An explicit `user:` crosses verbatim, as it does for a local container — it is a name the far end resolves, which is also how Concourse treats it. What changes is the *default*: unset takes the identity the **shim** runs as on a Linux worker, because the tree the container writes into lives there, so the ownership mismatch the default exists to prevent happens there too. Taking the orchestrator's own uid would answer about a different machine — a Linux orchestrator against a root shim asks for `--user 1000:1000` over a root-owned directory it cannot read. A worker that cannot report an identity, or one that is not Linux, defers to the image.
@@ -171,6 +171,53 @@ Keeping machines out of the pipeline file is what lets the same pipeline run on 
   **Facts, never a price.** There is no cost column, deliberately: what an instance-hour actually cost is not knowable from inside a run — list prices ignore Savings Plans and Reserved Instances, a spot instance's paid price is reported by no API, and real billing lands up to a day later. A confident wrong number under `COST` is worse than no column, and anyone holding their own rate card can price these rows. This is the opposite call from `steps runs cost`, where the *provider* reports the dollars and steps only records what it was told (and shows nothing when it was told nothing).
 
 - **Caching**: `tags:` does **not** fold into the node's hash. Placement decides where a step runs, not what it produces, and a tree that crossed the wire digests identically to one that never left — so retagging a step, or repointing a tag at a new machine, does not re-run work that already succeeded.
+
+### Resources on workers
+
+A source only reachable from a worker's network — a git host inside a VPC, a registry behind a bastion — has to be checked, fetched and pushed from there. `tags:` on the **resource** places all three:
+
+```yaml test=infra-resource-worker
+resource_types:
+- name: probe
+  config:
+    check: printf '[{"ref":"v1","where":"%s"}]' "${STEPS_WORKER:-here}"
+    in: printf '%s' "${STEPS_WORKER:-here}" > where.txt
+    out: printf '{"ref":"pushed","where":"%s"}' "${STEPS_WORKER:-here}"
+
+resources:
+- name: repo
+  type: probe
+  tags: [vpc]
+  source: {}
+
+jobs:
+- name: mirror
+  assert:
+    execution: [repo, inspect, repo, compare, repo]
+    outcome: succeeded
+  plan:
+  - get: repo
+  - task: inspect
+    inputs: [repo]
+    run: cat repo/where.txt
+    assert:
+      stdout: vpc
+  - get: mirror
+    resource: repo
+    tags: [edge]
+  - task: compare
+    inputs: [mirror]
+    run: cat mirror/where.txt
+    assert:
+      stdout: edge
+  - put: repo
+    inputs: [repo]
+```
+
+- **The resource's tag covers its check, in and out.** Every `get` and `put` of `repo` runs on `vpc` unless the step names a tag of its own — the `mirror` get above fetches the same resource from `edge`. This is a deliberate divergence from Concourse, whose resource-level `tags:` places only the check and has to be repeated on every step: a get's own version check and its `in` have to land on the same machine, and the repetition is the papercut Concourse's docs warn about.
+- **The fetched tree comes home.** A placed `in:` fills a directory on the worker and the whole of it is brought back, so a later step — here or on another worker — reads it exactly as it would a local fetch, and the resource cache digests it identically. The cost is that bytes travel worker → orchestrator → wherever the next step runs; there is no worker-to-worker streaming.
+- **The poller places checks too.** `steps web` polls with the same `--worker` mappings, and takes a lease of its own around each poll: a resource tagged onto a machine steps has to acquire (`aws://launch/`, `aws://stopped/`, `gcp://`) is started for the poll and given back after it, every interval. That is a real cost; `?idle=` on the mapping keeps the machine warm between polls, where the cost is yours to see. An unmapped resource tag is refused before anything is polled.
+- **Shell-backed types only.** An `mcp:` or `expr:` type's in and out write their files from inside this process, so a tag could move only a fraction of the stage; the load refuses it and says so.
 
 ### The life of an `aws://` worker
 

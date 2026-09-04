@@ -243,6 +243,14 @@ func watchable(ctx context.Context, cfg *config.Config, interval time.Duration) 
 		return fmt.Errorf("watch: interval must be positive, got %s", interval)
 	}
 
+	// Before the preflight, which may dial an MCP server: a resource that
+	// names a machine this invocation cannot supply is refused with the same
+	// message a job's step gets, and before anything is polled.
+	err := pipeline.ValidatePipelinePlacement(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("watch: %w", err)
+	}
+
 	return preflightTriggers(ctx, cfg, resources)
 }
 
@@ -381,7 +389,14 @@ func (a *admission) decide(ctx context.Context, cfg *config.Config) bool {
 		return false
 	}
 
-	err := preflightTriggers(ctx, cfg, resources)
+	err := pipeline.ValidatePipelinePlacement(ctx, cfg)
+	if err != nil {
+		slog.Error("trigger.unpollable", "pipeline", name, "error", err)
+
+		return false
+	}
+
+	err = preflightTriggers(ctx, cfg, resources)
 	if err != nil {
 		slog.Error("trigger.unpollable", "pipeline", name, "error", err)
 
@@ -394,6 +409,9 @@ func (a *admission) decide(ctx context.Context, cfg *config.Config) bool {
 }
 
 func pollAndLog(ctx context.Context, cfg *config.Config, st *store.Store) {
+	ctx, release := leasedChecks(ctx)
+	defer release()
+
 	enqueued, err := pollOnce(ctx, cfg, st)
 	if err != nil {
 		slog.Error("trigger.poll", "error", err)
@@ -794,6 +812,11 @@ func checkResource(ctx context.Context, cfg *config.Config, st *store.Store, res
 	previous, cursor, found, err := recordedVersion(ctx, st, resourceName)
 	if err != nil {
 		return observedResource{}, false, err
+	}
+
+	ctx, err = pipeline.PlaceResource(ctx, cfg, resourceName)
+	if err != nil {
+		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
 
 	versions, err := rsrc.CheckVersions(ctx, cfg, *resourceType, resource.Env, resource.Source, cursor)
@@ -1288,4 +1311,23 @@ func recordBreaker(ctx context.Context, st *store.Store, job *config.Job, runErr
 		"consecutive_failures", consecutive,
 		"max_consecutive_failures", job.MaxConsecutiveFailures,
 		"resume", "steps jobs resume <pipeline> "+job.Name)
+}
+
+// leasedChecks scopes one round of checks the way RunJob scopes a job: a
+// resource tagged onto a machine that has to be acquired is paid for by the
+// first check that needs it and given back when the round ends, under a
+// context of its own so a cancelled poll still returns what it took.
+//
+// Per POLL, deliberately. A worker held between polls would be a machine
+// billing for a check that runs once an interval; an operator who wants it
+// warm says so on the mapping (?idle=), where the cost is theirs to see.
+func leasedChecks(ctx context.Context) (context.Context, func()) {
+	ctx, releaseWorkers := pipeline.WithLeases(ctx)
+
+	return pipeline.WithResourcePlacement(ctx), func() {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pipeline.WorkerReleaseTimeout)
+		defer cancel()
+
+		releaseWorkers(releaseCtx)
+	}
 }

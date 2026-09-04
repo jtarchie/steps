@@ -127,6 +127,16 @@ type Resource struct {
 	// cleartext. That is precisely the trust-boundary problem the env-var
 	// indirection exists to prevent.
 	WebhookTokenEnv string `yaml:"webhook_token_env,omitempty"`
+	// Tags names the worker this resource's check, in and out run on, for a
+	// source only reachable from that machine's network. A get or put step's
+	// own tags: overrides it for that step; empty runs them here.
+	//
+	// A deliberate divergence from Concourse, whose resource tags place only
+	// the check and must be repeated on every get and put: a get's own
+	// version check and its in: have to land on the same machine, and the
+	// repetition is the papercut Concourse's docs warn about. Same shape as a
+	// step's tags: — one entry, not hashed (see Step.Tags).
+	Tags []string `yaml:"tags,omitempty"`
 }
 
 // validateResourcePut rejects a put step against a resource type that declares
