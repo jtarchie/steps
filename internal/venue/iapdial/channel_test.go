@@ -161,12 +161,8 @@ func serveRelay(t *testing.T, handler func(*relayConn)) string {
 		handler(&relayConn{t: t, ws: ws})
 	}))
 
-	// Close blocks until every in-flight handler has returned, so nothing
-	// further is needed to keep a handler from outliving its test. A
-	// WaitGroup the handler Add(1)s to is not an improvement: a dial that
-	// times out mid-handshake leaves the handler reaching its Add as the
-	// cleanup reaches Wait, which is the Add-from-zero-concurrent-with-Wait
-	// misuse the race detector reports (1 in ~300 runs under -cpu 1,2,8).
+	// Close waits for in-flight handlers. A WaitGroup the handler Add(1)s
+	// to races its own Wait when a dial times out mid-handshake.
 	t.Cleanup(server.Close)
 
 	return "ws" + strings.TrimPrefix(server.URL, "http") + "/v4/connect?stub=true"
