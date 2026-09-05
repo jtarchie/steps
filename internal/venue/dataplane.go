@@ -225,7 +225,7 @@ func (s *session) fetchViaStore(ctx context.Context) error {
 	defer func() { _ = os.RemoveAll(staging) }()
 
 	err = compress.Unpack(body, true, func(r io.Reader) error {
-		return wire.UnpackTree(r, staging)
+		return wire.UnpackFetchedTree(r, staging)
 	})
 	if err != nil {
 		return fmt.Errorf("unpacking what the worker shipped: %w", err)

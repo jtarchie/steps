@@ -34,8 +34,9 @@ func WithPlacerFor(ctx context.Context, fn PlacerFor) context.Context {
 }
 
 // Place resolves the placer for step and installs it for the stage calls that
-// follow. Without a PlacerFor, or for an untagged step, ctx comes back as it
-// was and the stage runs here.
+// follow. Without a PlacerFor ctx comes back as it was; an untagged step
+// installs a nil placer, which is what runs a stage here even under a ctx
+// that already carried a worker for some other step.
 func Place(ctx context.Context, step config.Step) (context.Context, error) {
 	fn, _ := ctx.Value(placerForKey{}).(PlacerFor)
 	if fn == nil {

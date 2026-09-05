@@ -36,6 +36,27 @@ type webhookHandler struct {
 	// longer held.
 	current ConfigSource
 	st      *store.Store
+	// base is the daemon's context: the --worker map and artifact store a
+	// placed check resolves through. A request's own context carries none
+	// of it — the server minted it — so a tagged resource's webhook checked
+	// from nowhere and failed.
+	base context.Context //nolint:containedctx // the values, not the lifetime; see requestContext
+}
+
+// requestContext is a request's context for cancellation and the daemon's for
+// values: what the invocation knows, ended when the sender goes away.
+type requestContext struct {
+	context.Context //nolint:containedctx // it IS a context: the request's, with a second source of values
+
+	base context.Context //nolint:containedctx // the fallback for values only
+}
+
+func (c requestContext) Value(key any) any {
+	if value := c.Context.Value(key); value != nil || c.base == nil {
+		return value
+	}
+
+	return c.base.Value(key)
 }
 
 func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -92,7 +113,8 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	enqueued, err := h.checkNow(r.Context(), cfg, name)
+	//nolint:contextcheck // the request's own context, with the daemon's values behind it — see requestContext
+	enqueued, err := h.checkNow(requestContext{Context: r.Context(), base: h.base}, cfg, name)
 	if err != nil {
 		slog.Warn("webhook.check_failed", "resource", name, "error", err)
 		http.Error(w, "check failed", http.StatusInternalServerError)
@@ -187,6 +209,6 @@ func (h *webhookHandler) checkNow(ctx context.Context, cfg *config.Config, name 
 // webhook resource by edit was mounted as nil and 404'd forever, and one that
 // LOST a resource kept an endpoint live that authenticated against a token
 // env var the operator believed they had deleted.
-func WebhookHandler(current ConfigSource, st *store.Store) http.Handler {
-	return &webhookHandler{current: current, st: st}
+func WebhookHandler(base context.Context, current ConfigSource, st *store.Store) http.Handler {
+	return &webhookHandler{current: current, st: st, base: base}
 }

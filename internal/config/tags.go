@@ -68,11 +68,11 @@ func validateTagList(label string, tags []string) error {
 	}
 
 	if len(tags) == 0 {
-		return fmt.Errorf("%s: tags: is empty — remove it, or name the worker the step needs", label)
+		return fmt.Errorf("%s: tags: is empty — remove it, or name the worker it needs", label)
 	}
 
 	if len(tags) > 1 {
-		return fmt.Errorf("%s: tags: names %d workers (%s); a step runs on one machine, so name one",
+		return fmt.Errorf("%s: tags: names %d workers (%s); commands run on one machine, so name one",
 			label, len(tags), strings.Join(tags, ", "))
 	}
 

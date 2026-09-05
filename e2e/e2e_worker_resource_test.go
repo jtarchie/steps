@@ -9,6 +9,8 @@ package e2e
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,7 +29,7 @@ resource_types:
 - name: probe
   config:
     check: printf '[{"ref":"v1","where":"%s"}]' "${STEPS_WORKER:-here}"
-    in: printf '%s/%s' "{{ .version.where }}" "${STEPS_WORKER:-here}" > where.txt
+    in: printf '%s/%s' {{ .version.where | shellquote }} "${STEPS_WORKER:-here}" > where.txt
     out: test -f src/where.txt && printf '{"ref":"pushed","where":"%s"}' "${STEPS_WORKER:-here}"
 `
 
@@ -56,8 +58,8 @@ jobs:
 `)
 }
 
-// checkedVersions returns the versions a check of the resource recorded.
-func checkedVersions(t *testing.T, pipelinePath, resource string) []map[string]any {
+// checkedVersions returns the versions a check of the probe resource recorded.
+func checkedVersions(t *testing.T, pipelinePath string) []map[string]any {
 	t.Helper()
 
 	st, err := store.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
@@ -67,7 +69,7 @@ func checkedVersions(t *testing.T, pipelinePath, resource string) []map[string]a
 
 	defer func() { _ = st.Close() }()
 
-	versions, err := st.ResourceVersions(context.Background(), resource)
+	versions, err := st.ResourceVersions(context.Background(), "repo")
 	if err != nil {
 		t.Fatalf("reading versions: %v", err)
 	}
@@ -93,7 +95,7 @@ func TestEndToEndResourceTagPlacesCheckInAndOut(t *testing.T) {
 	}
 
 	// The check ran there: the version it reported carries the tag.
-	versions := checkedVersions(t, path, "repo")
+	versions := checkedVersions(t, path)
 	if len(versions) == 0 || versions[0]["where"] != "vpc" {
 		t.Errorf("checked versions = %v, want one reporting the worker", versions)
 	}
@@ -251,7 +253,7 @@ jobs:
 
 	mustRun(t, "web", path, "--once", "--worker", "vpc=local:")
 
-	versions := checkedVersions(t, path, "repo")
+	versions := checkedVersions(t, path)
 	if len(versions) == 0 || versions[0]["where"] != "vpc" {
 		t.Errorf("the poll recorded %v, want a version the worker reported", versions)
 	}
@@ -284,7 +286,7 @@ jobs:
 		t.Errorf("error = %v, want it to name the unmapped tag", err)
 	}
 
-	if versions := checkedVersions(t, path, "repo"); len(versions) != 0 {
+	if versions := checkedVersions(t, path); len(versions) != 0 {
 		t.Errorf("the refused poll still recorded %v", versions)
 	}
 }
@@ -388,4 +390,186 @@ jobs:
 	}
 
 	t.Fatal("no run_placements row for the put hook — the machine it ran on was not recorded")
+}
+
+// TestEndToEndEvictionIsNotAFailure: a worker the cloud took away is
+// infrastructure, not the step saying no — on_error, never on_failure. The
+// shim reports the reclaimed command as a signalled exit, which used to
+// classify as the step failing.
+func TestEndToEndEvictionIsNotAFailure(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(drainingWorkerEnv, filepath.Join(dir, "execs"))
+
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: doomed
+    tags: [gpu]
+    run: echo never-finishes
+    on_failure:
+      task: note
+      run: echo failed > `+filepath.Join(dir, "on-failure.txt")+`
+    on_error:
+      task: note
+      run: echo errored > `+filepath.Join(dir, "on-error.txt")+`
+`)
+
+	err := cli.Run([]string{path, "--worker", "gpu=local:"})
+	if err == nil {
+		t.Fatal("a step on a permanently reclaimed worker reported success")
+	}
+
+	readFileString(t, filepath.Join(dir, "on-error.txt"))
+	assertNoFile(t, filepath.Join(dir, "on-failure.txt"))
+}
+
+// TestEndToEndOverriddenResourceTagIsStillValidated: a get that overrides its
+// resource's tag still has its check run on the resource's, so both have to
+// be mapped — refused before the run, not discovered at resolution.
+func TestEndToEndOverriddenResourceTagIsStillValidated(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, probeType+`
+resources:
+- name: repo
+  type: probe
+  tags: [vpc]
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: src
+    resource: repo
+    tags: [edge]
+  - task: note
+    inputs: [src]
+    run: cp src/where.txt `+filepath.Join(dir, "fetched.txt")+`
+`)
+
+	err := cli.Run([]string{path, "--worker", "edge=local:"})
+	if err == nil {
+		t.Fatal("a get whose resource carries an unmapped tag ran anyway")
+	}
+
+	if !strings.Contains(err.Error(), "vpc") || !strings.Contains(err.Error(), "no worker is registered") {
+		t.Errorf("error = %v, want the up-front refusal naming the resource's tag", err)
+	}
+
+	assertNoFile(t, filepath.Join(dir, "fetched.txt"))
+}
+
+// TestEndToEndPlanChecksOnTheResourceWorker: planning resolves versions with
+// live checks, so a tagged resource's check has to go where a run's would —
+// and be refused, not quietly run here, when nothing maps the tag.
+func TestEndToEndPlanChecksOnTheResourceWorker(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "checked-from")
+	path := writePipeline(t, dir, `
+resource_types:
+- name: probe
+  config:
+    check: printf '%s' "${STEPS_WORKER:-here}" > `+marker+` && echo '[{"ref":"v1"}]'
+    in: "true"
+
+resources:
+- name: repo
+  type: probe
+  tags: [vpc]
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+`)
+
+	err := cli.Run([]string{"plan", path})
+	if err == nil {
+		t.Fatal("plan checked a resource whose tag maps to nothing")
+	}
+
+	// The up-front refusal, with the mapping hint — not the resolver's own
+	// "no worker is mapped" met halfway through resolving versions.
+	if !strings.Contains(err.Error(), "no worker is registered for tag (vpc") {
+		t.Errorf("error = %v, want the same refusal a run gives before it starts", err)
+	}
+
+	assertNoFile(t, marker)
+
+	mustRun(t, "plan", path, "--worker", "vpc=local:")
+
+	if got := readFileString(t, marker); got != "vpc" {
+		t.Errorf("plan checked from %q, want the worker", got)
+	}
+}
+
+// TestEndToEndWebhookChecksOnTheResourceWorker: a webhook check resolves its
+// worker through what the daemon was started with, not through the request
+// the server minted.
+func TestEndToEndWebhookChecksOnTheResourceWorker(t *testing.T) {
+	t.Setenv("STEPS_TEST_WEBHOOK_TOKEN", "s3cret")
+
+	dir := t.TempDir()
+	path := writePipeline(t, dir, probeType+`
+resources:
+- name: repo
+  type: probe
+  tags: [vpc]
+  source: {}
+  webhook_token_env: STEPS_TEST_WEBHOOK_TOKEN
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+    trigger: true
+`)
+
+	served := startWeb(t, []string{path}, "--interval", "1h", "--worker", "vpc=local:")
+	defer served.stop(t)
+
+	url := fmt.Sprintf("http://%s/p/%s/check/repo?token=s3cret", served.addr, cli.PipelineName(path))
+
+	if status := postWebhook(t, url); status != http.StatusOK {
+		t.Fatalf("webhook answered %d, want 200", status)
+	}
+
+	versions := checkedVersions(t, path)
+	if len(versions) == 0 || versions[0]["where"] != "vpc" {
+		t.Errorf("the webhook recorded %v, want a version the worker reported", versions)
+	}
+}
+
+// TestEndToEndPollerRefusesAnAcquirableResourceWorker: a polled check needs a
+// machine that already exists — a poll and a job hold independent leases, and
+// a poll giving its machine back would stop the one a job is on.
+func TestEndToEndPollerRefusesAnAcquirableResourceWorker(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, probeType+`
+resources:
+- name: repo
+  type: probe
+  tags: [vpc]
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: repo
+    trigger: true
+`)
+
+	err := cli.Run([]string{"web", path, "--once", "--worker", "vpc=aws://stopped/i-0123456789abcdef0"})
+	if err == nil {
+		t.Fatal("a poll of a resource on an acquisition rung ran anyway")
+	}
+
+	if !strings.Contains(err.Error(), "acquire") {
+		t.Errorf("error = %v, want it to say the machine would have to be acquired", err)
+	}
+
+	if versions := checkedVersions(t, path); len(versions) != 0 {
+		t.Errorf("the refused poll still recorded %v", versions)
+	}
 }

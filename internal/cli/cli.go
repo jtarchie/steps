@@ -488,6 +488,9 @@ type PlanCmd struct {
 	Pipeline   string            `arg:""                                                   help:"path to the pipeline YAML file"`
 	Job        string            `help:"job to plan (defaults to the pipeline's only job)"`
 	Pin        map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"  name:"pin"`
+	// Worker alone of ExecFlags: planning runs a tagged resource's check where
+	// a run would, and nothing else of a run.
+	Worker map[string]string `help:"map a resource tag to a worker, e.g. --worker vpc=ssh://jt@box (repeatable)" name:"worker"`
 }
 
 // Run loads the pipeline, plans the selected job, and prints one line per
@@ -512,6 +515,11 @@ func (p *PlanCmd) Run() error {
 
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
+
+	ctx, err = pipeline.WithWorkers(ctx, p.Worker)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
 
 	rows, err := pipeline.Explain(ctx, cfg, job, p.Pin, st)
 	if err != nil {
@@ -1779,6 +1787,7 @@ func (e ExecFlags) Apply(ctx context.Context) (context.Context, error) {
 	}
 
 	ctx = pipeline.WithArtifactStore(ctx, e.ArtifactStore)
+	ctx = pipeline.WithKeepWorkspace(ctx, e.KeepWorkspace)
 
 	ctx, err = pipeline.WithAnswers(ctx, e.Answer)
 	if err != nil {
@@ -2220,6 +2229,15 @@ func (w *WebCmd) serve(ctx context.Context, pipelines []*web.Pipeline, providers
 	for _, target := range pipelines {
 		web.PrepareQueue(ctx, target)
 
+		// The METHOD, not its result, for the reason trigger.Poll takes one:
+		// the watcher swaps the configuration under this handler, and a
+		// pipeline that names no webhook_token_env: resource today may name
+		// one after the next save. /p/<slug>/check/<resource> is still a 404
+		// while there are none — decided per request now, rather than once.
+		// Mounted HERE, with the daemon's context, because a placed check
+		// resolves its worker through what --worker put on it.
+		target.Webhook = trigger.WebhookHandler(ctx, target.Config, target.Store)
+
 		watcher := NewConfigWatcher(target, w.VarFlags, w.HistoryFlags)
 		watchers = append(watchers, watcher)
 
@@ -2397,12 +2415,6 @@ func (w *WebCmd) load() ([]*web.Pipeline, map[string]workspace.Provider, func(),
 
 		providers[slug] = provider
 		served := web.NewPipeline(slug, path, cfg, st, bus)
-		// The METHOD, not its result, for the reason trigger.Poll takes one:
-		// the watcher swaps the configuration under this handler, and a
-		// pipeline that names no webhook_token_env: resource today may name
-		// one after the next save. /p/<slug>/check/<resource> is still a 404
-		// while there are none — decided per request now, rather than once.
-		served.Webhook = trigger.WebhookHandler(served.Config, st)
 		pipelines = append(pipelines, served)
 	}
 

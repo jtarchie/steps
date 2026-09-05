@@ -149,12 +149,12 @@ func (s *session) sendArtifact(op uint32, staged string) error {
 // method returns, the local tree reflects the worker, exactly as it would have
 // if the command had run here.
 func (s *session) fetch(ctx context.Context) error {
-	stop := s.watchTransfer(ctx)
-	defer stop()
-
-	if len(s.outputs) == 0 && !s.fetchAll {
+	if s.cwd == "" || (len(s.outputs) == 0 && !s.fetchAll) {
 		return nil
 	}
+
+	stop := s.watchTransfer(ctx)
+	defer stop()
 
 	if s.dataplane == wire.DataPlaneURLs {
 		return s.fetchViaStore(ctx)
@@ -208,16 +208,21 @@ func (s *session) swapFetched(staging string) error {
 	names := s.outputs
 
 	if s.fetchAll {
-		// Whatever the worker sent — the tree IS the output. The staging
-		// directory sits inside cwd, so it is never among these.
-		entries, err := os.ReadDir(staging)
+		// Whatever the worker sent — the tree IS the output, so what the
+		// worker no longer has goes too, or a retried in: would leave the
+		// local tree a union of every attempt and the resource cache would
+		// keep it under the version. The staging directory sits inside cwd
+		// and is skipped by name.
+		var err error
+
+		names, err = treeArtifacts(staging)
 		if err != nil {
-			return fmt.Errorf("reading the fetched tree: %w", err)
+			return err
 		}
 
-		names = make([]string, 0, len(entries))
-		for _, entry := range entries {
-			names = append(names, entry.Name())
+		err = s.removeAbsent(names, filepath.Base(staging))
+		if err != nil {
+			return err
 		}
 	}
 
@@ -243,6 +248,33 @@ func (s *session) swapFetched(staging string) error {
 		err = os.Rename(src, dst)
 		if err != nil {
 			return fmt.Errorf("replacing %q with what the worker sent: %w", name, err)
+		}
+	}
+
+	return nil
+}
+
+// removeAbsent deletes the local top-level entries the worker did not send,
+// bar the staging directory itself.
+func (s *session) removeAbsent(sent []string, staging string) error {
+	keep := map[string]bool{staging: true}
+	for _, name := range sent {
+		keep[name] = true
+	}
+
+	local, err := treeArtifacts(s.cwd)
+	if err != nil {
+		return err
+	}
+
+	for _, name := range local {
+		if keep[name] {
+			continue
+		}
+
+		err := os.RemoveAll(filepath.Join(s.cwd, name))
+		if err != nil {
+			return fmt.Errorf("removing %q, which the worker no longer has: %w", name, err)
 		}
 	}
 
@@ -291,7 +323,7 @@ func (s *session) receive(op uint32, into string) error {
 func (s *session) unpackTree(r io.Reader, into string) error {
 	//nolint:wrapcheck // receive wraps with the transfer's own context
 	return compress.Unpack(r, s.compression == wire.CompressionZstd, func(r io.Reader) error {
-		return wire.UnpackTree(r, into) //nolint:wrapcheck // receive wraps with the transfer's own context
+		return wire.UnpackFetchedTree(r, into) //nolint:wrapcheck // receive wraps with the transfer's own context
 	})
 }
 

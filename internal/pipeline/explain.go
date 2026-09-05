@@ -39,6 +39,25 @@ func Explain(ctx context.Context, cfg *config.Config, job *config.Job, pinned ma
 		return nil, fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
+	// The checks planning runs land where a run's would, refused on the same
+	// terms: a plan that quietly checked a worker-only source from this
+	// machine described a run that could not happen.
+	err = ValidateWorkerPlacement(ctx, cfg, job)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, releaseWorkers := WithLeases(ctx)
+
+	defer func() {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), WorkerReleaseTimeout)
+		defer cancel()
+
+		releaseWorkers(releaseCtx)
+	}()
+
+	ctx = WithResourcePlacement(ctx)
+
 	// Same cursor a run would use, so `steps plan` does not list versions a
 	// version: every fan-out has already taken and would not run.
 	cursor, err := loadVersionCursor(ctx, st, job, true)

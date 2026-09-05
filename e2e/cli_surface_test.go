@@ -87,7 +87,8 @@ jobs:
 
 // TestWorkerFlagAppliesWhereverItIsDeclared.
 //
-// --worker is declared by four commands and parsed in one place, which is the
+// --worker is declared by four commands (plan takes it alone, for the checks
+// planning runs) and parsed in one place, which is the
 // arrangement that lets a command declare it and never call the parser. An
 // unparseable worker URL is the cheapest proof that each of them does: the
 // command must refuse before it does any work, and a command that never
@@ -100,6 +101,7 @@ func TestWorkerFlagAppliesWhereverItIsDeclared(t *testing.T) {
 	for _, args := range [][]string{
 		{"run", path, "--job", "build"},
 		{"test", path},
+		{"plan", path},
 		// Port 1 is unbindable as an ordinary user, so a regression here
 		// fails in a second rather than serving until the test binary's own
 		// timeout — which is how this case behaved when it was first

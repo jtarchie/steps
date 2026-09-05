@@ -39,7 +39,7 @@ func webhookFixture(t *testing.T) *webhookHandler {
 
 	st := mustOpenStore(t, dir)
 
-	return &webhookHandler{current: staticConfig(cfg), st: st}
+	return &webhookHandler{current: staticConfig(cfg), st: st, base: context.Background()}
 }
 
 // post issues a webhook request and returns the status code.

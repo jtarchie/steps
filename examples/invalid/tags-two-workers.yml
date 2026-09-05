@@ -2,7 +2,7 @@
 # their own. There is no pool here: an invocation maps one name to one machine,
 # so two tags name two machines and the step has no home. The ambiguity is
 # refused rather than resolved by a rule nobody would guess.
-# expect: a step runs on one machine, so name one
+# expect: commands run on one machine, so name one
 jobs:
 - name: build
   plan:

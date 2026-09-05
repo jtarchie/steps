@@ -315,30 +315,30 @@ func placementTag(step config.Step) string {
 // step that says it needs a GPU box, quietly running on a laptop instead, is
 // the kind of promise-it-cannot-keep that network: without image: is refused
 // for. A pipeline that has to run without workers says so by not tagging.
-func ValidateWorkerPlacement(ctx context.Context, job *config.Job) error {
+func ValidateWorkerPlacement(ctx context.Context, cfg *config.Config, job *config.Job) error {
 	workers := workersFrom(ctx)
 
 	missing := map[string][]string{}
 
 	err := job.VisitSteps(func(label string, step *config.Step) error {
-		tag := placementTag(*step)
-		if tag == "" {
-			return nil
-		}
+		// The step's own tag, and — for a get or put — the RESOURCE's, which
+		// is where its check runs even when the step overrides it for the
+		// fetch. Both are dialled, so both have to be mapped.
+		for _, tag := range stepPlacementTags(cfg, *step) {
+			worker, ok := workers[tag]
+			if !ok {
+				missing[tag] = append(missing[tag], label)
 
-		worker, ok := workers[tag]
-		if !ok {
-			missing[tag] = append(missing[tag], label)
+				continue
+			}
 
-			return nil
-		}
-
-		// With what the invocation already knows: a dial certain to fail is
-		// refused before any step runs — and before an acquisition rung
-		// launches a billed machine to discover it.
-		checkErr := worker.PlacementCheck(artifactStoreFrom(ctx) != "")
-		if checkErr != nil {
-			return fmt.Errorf("--worker %s: %w", tag, checkErr)
+			// With what the invocation already knows: a dial certain to
+			// fail is refused before any step runs — and before an
+			// acquisition rung launches a billed machine to discover it.
+			checkErr := worker.PlacementCheck(artifactStoreFrom(ctx) != "")
+			if checkErr != nil {
+				return fmt.Errorf("--worker %s: %w", tag, checkErr)
+			}
 		}
 
 		return nil

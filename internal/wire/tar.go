@@ -332,6 +332,24 @@ func writeHeader(writer *tar.Writer, header *tar.Header) error {
 // which has to be refused on the way in too, or the protection sits on the
 // wrong side of the trust boundary.
 func UnpackTree(r io.Reader, root string) error {
+	return unpackTree(r, root, false)
+}
+
+// UnpackFetchedTree is UnpackTree for a tree another machine produced: a
+// symlink whose target leaves the tree is refused (ErrUnsafeLink).
+//
+// Separate from UnpackTree rather than the rule everywhere, because the
+// digest contract is that a tree round-trips verbatim, escaping links and all
+// — a checkout can legitimately hold one, and a step's tree sent OUT to a
+// worker must arrive as it was. What comes BACK is different: the link's
+// target names a path on this machine, and the copy that materializes the
+// tree into a later step, and whatever that step reads or archives, would
+// follow it. A worker does not get to name files here.
+func UnpackFetchedTree(r io.Reader, root string) error {
+	return unpackTree(r, root, true)
+}
+
+func unpackTree(r io.Reader, root string, fetched bool) error {
 	dir, err := os.OpenRoot(root)
 	if err != nil {
 		return fmt.Errorf("unpacking into %q: %w", root, err)
@@ -362,7 +380,7 @@ func UnpackTree(r io.Reader, root string) error {
 			return fmt.Errorf("unpacking into %q: %w", root, err)
 		}
 
-		err = unpackEntry(dir, reader, header, name)
+		err = unpackEntry(dir, reader, header, name, fetched)
 		if err != nil {
 			return fmt.Errorf("unpacking %q into %q: %w", name, root, err)
 		}
@@ -407,7 +425,27 @@ func unpackName(name string) (string, error) {
 	return filepath.FromSlash(clean), nil
 }
 
-func unpackEntry(dir *os.Root, reader *tar.Reader, header *tar.Header, name string) error {
+// ErrUnsafeLink is a symlink whose target leaves the tree.
+var ErrUnsafeLink = errors.New("archive symlink points outside the tree")
+
+// checkLinkTarget refuses a symlink target that resolves outside the tree:
+// absolute, or with enough ".." to climb past the root from where the link
+// sits. Resolved lexically, since the tree is being written and nothing
+// below the link exists yet to resolve through.
+func checkLinkTarget(name, target string) error {
+	if target == "" || filepath.IsAbs(target) {
+		return fmt.Errorf("%w: %q -> %q", ErrUnsafeLink, name, target)
+	}
+
+	resolved := filepath.Clean(filepath.Join(filepath.Dir(filepath.FromSlash(name)), filepath.FromSlash(target)))
+	if resolved == ".." || strings.HasPrefix(resolved, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%w: %q -> %q", ErrUnsafeLink, name, target)
+	}
+
+	return nil
+}
+
+func unpackEntry(dir *os.Root, reader *tar.Reader, header *tar.Header, name string, fetched bool) error {
 	switch header.Typeflag {
 	case tar.TypeDir:
 		return mkdirAll(dir, name)
@@ -419,8 +457,17 @@ func unpackEntry(dir *os.Root, reader *tar.Reader, header *tar.Header, name stri
 
 		// os.Root.Symlink does not validate the target, so an absolute or
 		// escaping target round-trips verbatim — which is what digestTree
-		// hashes. Writing THROUGH the link later is what os.Root refuses, and
-		// that is the operation that was ever dangerous.
+		// hashes, and what a tree sent out must keep. Writing THROUGH the
+		// link is what os.Root refuses; READING through one is what a later
+		// step does, which is why a tree fetched from a worker is held to
+		// the stricter rule — see UnpackFetchedTree.
+		if fetched {
+			err = checkLinkTarget(name, header.Linkname)
+			if err != nil {
+				return err
+			}
+		}
+
 		return dir.Symlink(header.Linkname, name) //nolint:wrapcheck // the caller names the entry and the tree
 	case tar.TypeReg:
 		return unpackFile(dir, reader, header, name)

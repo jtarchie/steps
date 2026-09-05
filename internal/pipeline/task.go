@@ -293,6 +293,14 @@ func classifyRunError(ctx context.Context, err error) error {
 		return cancelErr //nolint:wrapcheck // the caller names the task; this only classifies
 	}
 
+	// Before the exit check: a reclaimed worker signals the command, which
+	// reports as an exit, and reading that as the step's own verdict fired
+	// on_failure for a machine the cloud took away. Classified as
+	// infrastructure once the venue retry has given up on re-placing it.
+	if errors.Is(err, venue.ErrEvicted) {
+		return err
+	}
+
 	if shell.IsExitError(err) {
 		return outcome.Fail(err) //nolint:wrapcheck // Fail only marks the classification
 	}

@@ -181,7 +181,7 @@ resource_types:
 - name: probe
   config:
     check: printf '[{"ref":"v1","where":"%s"}]' "${STEPS_WORKER:-here}"
-    in: printf '%s' "${STEPS_WORKER:-here}" > where.txt
+    in: printf '%s/%s' {{ .version.where | shellquote }} "${STEPS_WORKER:-here}" > where.txt
     out: printf '{"ref":"pushed","where":"%s"}' "${STEPS_WORKER:-here}"
 
 resources:
@@ -201,7 +201,7 @@ jobs:
     inputs: [repo]
     run: cat repo/where.txt
     assert:
-      stdout: vpc
+      stdout: vpc/vpc
   - get: mirror
     resource: repo
     tags: [edge]
@@ -209,14 +209,15 @@ jobs:
     inputs: [mirror]
     run: cat mirror/where.txt
     assert:
-      stdout: edge
+      stdout: vpc/edge
   - put: repo
     inputs: [repo]
 ```
 
-- **The resource's tag covers its check, in and out.** Every `get` and `put` of `repo` runs on `vpc` unless the step names a tag of its own — the `mirror` get above fetches the same resource from `edge`. This is a deliberate divergence from Concourse, whose resource-level `tags:` places only the check and has to be repeated on every step: a get's own version check and its `in` have to land on the same machine, and the repetition is the papercut Concourse's docs warn about.
+- **The resource's tag covers its check, in and out.** Every `get` and `put` of `repo` runs on `vpc` unless the step names a tag of its own — the `mirror` get above fetches the same resource from `edge`, while the check that found its version still ran on `vpc`: a check is the resource's, wherever the fetch goes, which is why `mirror/where.txt` reads `vpc/edge`. This is a deliberate divergence from Concourse, whose resource-level `tags:` places only the check and has to be repeated on every step: a get's own version check and its `in` have to land on the same machine, and the repetition is the papercut Concourse's docs warn about.
 - **The fetched tree comes home.** A placed `in:` fills a directory on the worker and the whole of it is brought back, so a later step — here or on another worker — reads it exactly as it would a local fetch, and the resource cache digests it identically. The cost is that bytes travel worker → orchestrator → wherever the next step runs; there is no worker-to-worker streaming.
-- **The poller places checks too.** `steps web` polls with the same `--worker` mappings, and takes a lease of its own around each poll: a resource tagged onto a machine steps has to acquire (`aws://launch/`, `aws://stopped/`, `gcp://`) is started for the poll and given back after it, every interval. That is a real cost; `?idle=` on the mapping keeps the machine warm between polls, where the cost is yours to see. An unmapped resource tag is refused before anything is polled.
+- **The poller places checks too — on a machine that already exists.** `steps web` polls with the same `--worker` mappings, and a polled resource's tag must name a standing worker (`ssh://`, `local:`, `aws://i-…`, `gcp://name`): an acquisition rung (`aws://launch/`, `aws://stopped/`, `gcp://` launch) is refused at startup, because a poll and a running job would each hold a lease on the same machine with nothing saying who owns it, and a check that runs once an interval is the wrong thing to launch a billed instance for. A job's own get/put may still name an acquirable rung — it pays for the machine per job, as a task does — but the pre-plan freshness check skips such a resource and resolves from recorded history rather than launching a machine for a run that may turn out fully cached. An unmapped resource tag is refused before anything is polled, and `steps plan` takes `--worker` for the same checks.
+- **A version is text the worker wrote.** What a placed `check:` prints becomes `{{ .version.* }}` in the `in:` that runs next — on the step's worker, or on this machine when a step overrides the resource's tag with `local:` — so a version field crossing machines is exactly the untrusted value [templating.md](templating.md#shell-quoting-untrusted-values) says to pass through `shellquote`. The example above does.
 - **Shell-backed types only.** An `mcp:` or `expr:` type's in and out write their files from inside this process, so a tag could move only a fraction of the stage; the load refuses it and says so.
 
 ### The life of an `aws://` worker

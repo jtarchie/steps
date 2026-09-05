@@ -69,3 +69,32 @@ func TestVenueNoTreeRunsACommand(t *testing.T) {
 		t.Errorf("stdout = %q, want the command's answer, tagged", out)
 	}
 }
+
+// TestVenueFetchAllRemovesWhatTheWorkerDeleted: the tree IS the output, so a
+// local entry the command removed on the worker goes too — or a retried in:
+// leaves a union of attempts for the resource cache to keep.
+func TestVenueFetchAllRemovesWhatTheWorkerDeleted(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	mustWrite(t, filepath.Join(cwd, "stale.tgz"), "leftover\n")
+
+	spec := localWorker(t, cwd)
+	spec.FetchAll = true
+
+	runner := newLocalRunner(t, spec)
+
+	err := runner.Run(context.Background(), "rm stale.tgz && echo fresh > src.txt")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	_, err = os.Stat(filepath.Join(cwd, "stale.tgz"))
+	if err == nil {
+		t.Error("stale.tgz survived a fetch of a tree the worker had deleted it from")
+	}
+
+	if got := mustRead(t, filepath.Join(cwd, "src.txt")); got != "fresh\n" {
+		t.Errorf("src.txt = %q, want the worker's file", got)
+	}
+}

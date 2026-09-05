@@ -432,3 +432,60 @@ func TestPackPathsAcceptsARelativeRoot(t *testing.T) {
 		t.Errorf("PackPaths(escape) = %v, want ErrUnsafePath", err)
 	}
 }
+
+// TestUnpackFetchedRefusesASymlinkOutOfTheTree: a worker answering a fetch
+// could plant a link to a path on THIS machine, which the copy into a later
+// step and that step's own reading would follow. Refused like an escaping
+// name — for a FETCHED tree; a tree sent out keeps its links verbatim, which
+// workspace's fidelity tests pin.
+func TestUnpackFetchedRefusesASymlinkOutOfTheTree(t *testing.T) {
+	t.Parallel()
+
+	for name, target := range map[string]string{
+		"absolute":    "/etc/passwd",
+		"climbs out":  "../../outside",
+		"climbs deep": "sub/../../..",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			err := UnpackFetchedTree(symlinkArchive(t, "dir/link", target), t.TempDir())
+			if !errors.Is(err, ErrUnsafeLink) {
+				t.Errorf("UnpackFetchedTree(link -> %q) = %v, want ErrUnsafeLink", target, err)
+			}
+
+			// The lenient unpack still takes it: a tree going OUT is verbatim.
+			err = UnpackTree(symlinkArchive(t, "dir/link", target), t.TempDir())
+			if err != nil {
+				t.Errorf("UnpackTree(link -> %q) = %v, want the verbatim round trip", target, err)
+			}
+		})
+	}
+
+	// And one that stays inside, so the guard does not refuse the ordinary
+	// relative link a checkout is full of.
+	err := UnpackFetchedTree(symlinkArchive(t, "dir/link", "../sibling"), t.TempDir())
+	if err != nil {
+		t.Errorf("UnpackFetchedTree(link -> ../sibling) = %v, want an inside link accepted", err)
+	}
+}
+
+// symlinkArchive is a tar holding one symlink.
+func symlinkArchive(t *testing.T, name, target string) io.Reader {
+	t.Helper()
+
+	buf := new(bytes.Buffer)
+	w := tar.NewWriter(buf)
+
+	err := w.WriteHeader(&tar.Header{Typeflag: tar.TypeSymlink, Name: name, Linkname: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return buf
+}
