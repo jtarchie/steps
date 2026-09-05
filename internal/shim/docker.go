@@ -20,11 +20,11 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/jtarchie/steps/internal/dockerapi"
 	"github.com/jtarchie/steps/internal/wire"
 )
 
@@ -33,18 +33,23 @@ const defaultDockerSocket = "/var/run/docker.sock"
 
 // dockerSocketPath answers which daemon THIS machine talks to.
 //
-// DOCKER_HOST before the default, because that variable is already the
-// answer to exactly this question everywhere else — and on a machine whose
-// daemon runs in a VM (colima, Rancher, Docker Desktop) the socket is under
-// the user's home directory, not in /var/run. Only the unix form: a worker
-// pointed at a tcp daemon is one this forwarding has no reason to reach,
-// since the orchestrator could dial that itself.
+// The way docker answers it — DOCKER_HOST, then the selected context, then
+// the platform default — because a session opened over ssh has no shell
+// profile: DOCKER_HOST alone found nothing on a machine where `docker` works
+// through `docker context use colima`, and the daemon runs in a VM with its
+// socket under the user's home, not in /var/run. Only the unix form: a
+// worker pointed at a tcp daemon is one this forwarding has no reason to
+// reach, since the orchestrator could dial that itself.
 func dockerSocketPath(configured string) string {
 	if configured != "" {
 		return configured
 	}
 
-	host := os.Getenv("DOCKER_HOST")
+	host, err := dockerapi.ResolveHost()
+	if err != nil {
+		return defaultDockerSocket
+	}
+
 	if path, ok := strings.CutPrefix(host, "unix://"); ok {
 		return path
 	}

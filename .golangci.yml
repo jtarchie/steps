@@ -378,6 +378,12 @@ linters:
             - "$gostd"
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/compress"
+            # dockerapi for ONE question — which daemon this machine talks
+            # to — answered the way docker answers it (DOCKER_HOST, then the
+            # context store). An ssh session has no shell profile, so
+            # DOCKER_HOST alone found nothing on a machine whose `docker`
+            # works, and the forwarded socket answered EOF.
+            - "github.com/jtarchie/steps/internal/dockerapi"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/wire"
         # wire is the framed protocol and tree codec the orchestrator and a
