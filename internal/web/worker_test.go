@@ -4,7 +4,6 @@ package web
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -44,37 +43,34 @@ func TestRunViewCarriesTheWorker(t *testing.T) {
 
 // TestLiveStreamDrawsTheWorkerToo is this package's standing rule: anything
 // the server draws for a finished step, the stream has to draw too, or a
-// reader watching live and one who reloaded see different rows.
+// reader watching live and one who reloaded see different rows. It holds now
+// because the stream renders the row with the page's own template — this test
+// is what says so out loud.
 func TestLiveStreamDrawsTheWorkerToo(t *testing.T) {
 	t.Parallel()
 
-	encoded, err := json.Marshal(liveEvent{RunEventRow: store.RunEventRow{
-		Type: events.TypeStepFinished, StepName: "there", Status: "succeeded",
-		Worker: "gpu (ssh://jt@box)",
-	}})
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-worker", "build", "/tmp/ws", "")
 	if err != nil {
-		t.Fatalf("marshalling a live event: %v", err)
+		t.Fatalf("StartRun: %v", err)
 	}
 
-	var payload map[string]any
+	appendEvents(t, pipeline.Store, "run-worker", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "there", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "there", StepKind: "task", StepID: 1,
+			Status: "succeeded", Worker: "gpu (ssh://jt@box)"},
+	})
 
-	err = json.Unmarshal(encoded, &payload)
+	err = pipeline.Store.FinishRun(ctx, "run-worker", "succeeded")
 	if err != nil {
-		t.Fatalf("decoding the live payload: %v", err)
+		t.Fatalf("FinishRun: %v", err)
 	}
 
-	if got, _ := payload["worker"].(string); got != "gpu (ssh://jt@box)" {
-		t.Fatalf("the live payload carried worker %v, want the machine", payload["worker"])
-	}
-
-	// And the client has to do something with it.
-	source, err := assets.ReadFile("templates/run.html")
-	if err != nil {
-		t.Fatalf("reading the run template: %v", err)
-	}
-
-	if !strings.Contains(string(source), "e.worker") {
-		t.Error("the live renderer never reads the field, so a step that finishes while watching names no machine until reload")
+	stream := sseHTML(streamOf(t, server, "/p/demo/runs/run-worker/events"))
+	if !strings.Contains(stream, `on gpu (ssh://jt@box)`) {
+		t.Errorf("a step that finishes while watching names no machine until reload:\n%s", stream)
 	}
 }
 

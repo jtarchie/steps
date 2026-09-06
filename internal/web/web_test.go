@@ -348,8 +348,10 @@ func TestLiveStreamReplaysThenCloses(t *testing.T) {
 
 	select {
 	case body := <-done:
-		if !strings.Contains(body, "event: event") {
-			t.Errorf("stream delivered no events: %q", body)
+		// Content frames are UNNAMED, which is what hx-sse swaps; a named one
+		// only fires a DOM event, and `done` is the one that does.
+		if !strings.Contains(body, `data: <div id="step-`) {
+			t.Errorf("stream delivered no step markup: %q", body)
 		}
 
 		if !strings.Contains(body, "event: done") {
@@ -805,16 +807,13 @@ func TestLiveViewResumesAfterWhatItRendered(t *testing.T) {
 		t.Fatalf("RunEvents: %v", err)
 	}
 
-	want := fmt.Sprintf(`data-last-seq="%d"`, rows[len(rows)-1].Seq)
+	// The sequence rides in the URL the page connects with, so the resume
+	// point and the connection are one thing rather than two that can drift.
+	want := fmt.Sprintf(`/events?after=%d"`, rows[len(rows)-1].Seq)
 
 	_, body := get(t, server, "/p/demo/runs/run-live")
 	if !strings.Contains(body, want) {
-		t.Errorf("transcript does not carry the sequence it rendered (want %s)", want)
-	}
-
-	// And the script must read it rather than starting from zero.
-	if !strings.Contains(body, "Number(transcript.dataset.lastSeq)") {
-		t.Error("live stream does not resume from the rendered sequence")
+		t.Errorf("the live view does not resume from the sequence it rendered (want %s)", want)
 	}
 }
 

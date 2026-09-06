@@ -259,6 +259,8 @@ td.faint, .faint { color: var(--faint); }
 body:not([data-view="graph"]) #jobs-graph { display: none; }
 body[data-view="graph"] #jobs-list { display: none; }
 
+#run-empty:not(:only-child) { display: none; }
+
 .dagwrap {
   border: 1px solid var(--line);
   background: var(--panel);

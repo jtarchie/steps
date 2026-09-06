@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -62,10 +63,11 @@ func TestNodePageDropsJobLinkForAJoblessNode(t *testing.T) {
 	}
 }
 
-// TestLiveNodeLinkMatchesServerSpelling: the SSE path built a RELATIVE node
-// link while the server renders an absolute one — two spellings of the same
-// destination, and the relative one breaks the day the route gains a
-// trailing segment.
+// TestLiveNodeLinkMatchesServerSpelling: the live path built a RELATIVE node
+// link while the server rendered an absolute one — two spellings of the same
+// destination, and the relative one breaks the day the route gains a trailing
+// segment. There is now one spelling because there is one renderer, and this
+// is the test that says the stream really does use it.
 func TestLiveNodeLinkMatchesServerSpelling(t *testing.T) {
 	t.Parallel()
 
@@ -77,14 +79,20 @@ func TestLiveNodeLinkMatchesServerSpelling(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	_, body := get(t, server, "/p/demo/runs/run-live")
+	appendEvents(t, pipeline.Store, "run-live", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1,
+			Status: "succeeded", Hash: "cafe1234567"},
+	})
 
-	if strings.Contains(body, "'../nodes/'") {
-		t.Error("live script still builds a relative node link")
+	err = pipeline.Store.FinishRun(ctx, "run-live", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
 	}
 
-	if !strings.Contains(body, "'/p/demo/nodes/'") {
-		t.Error("live script does not build the absolute node link the server renders")
+	stream := sseHTML(streamOf(t, server, "/p/demo/runs/run-live/events"))
+	if !strings.Contains(stream, `href="/p/demo/nodes/cafe1234567"`) {
+		t.Errorf("the streamed row does not link its hash the way the page does:\n%s", stream)
 	}
 }
 

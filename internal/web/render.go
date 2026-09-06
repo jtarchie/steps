@@ -138,6 +138,12 @@ func (s *Server) handleHTMX(c echo.Context) error {
 	return serveAsset(c, "static/htmx.min.js", "text/javascript; charset=utf-8")
 }
 
+// handleHTMXSSE serves htmx's server-sent-events extension, which the run
+// page uses to receive the step fragments the stream renders.
+func (s *Server) handleHTMXSSE(c echo.Context) error {
+	return serveAsset(c, "static/hx-sse.min.js", "text/javascript; charset=utf-8")
+}
+
 func serveAsset(c echo.Context, path, contentType string) error {
 	data, err := assets.ReadFile(path)
 	if err != nil {

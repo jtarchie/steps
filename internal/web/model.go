@@ -1015,4 +1015,10 @@ func sortEdges(edges []edgeView) {
 type stepCtx struct {
 	Page map[string]any
 	Step *stepView
+	// OOB marks the ROOT of a fragment the live stream is sending, so it
+	// carries the attribute that swaps it over the row already on the page.
+	// Set only on the outermost step: the children rendered under it are
+	// inside that row, and an out-of-band swap on each of them would fight
+	// the one swapping their parent.
+	OOB bool
 }

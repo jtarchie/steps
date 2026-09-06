@@ -1,14 +1,11 @@
 package web
 
 import (
-	"context"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
@@ -487,22 +484,9 @@ func TestLiveStreamCarriesWrappedUp(t *testing.T) {
 		t.Fatalf("FinishRun: %v", err)
 	}
 
-	done := make(chan string, 1)
-
-	go func() {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/p/demo/runs/run-live-wrap/events", nil)
-		rec := httptest.NewRecorder()
-		server.Handler().ServeHTTP(rec, req)
-		done <- rec.Body.String()
-	}()
-
-	select {
-	case body := <-done:
-		if !strings.Contains(body, `"wrapped_up":true`) {
-			t.Errorf("the stream does not carry wrapped_up: %q", body)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("SSE stream did not close for a finished run")
+	stream := sseHTML(streamOf(t, server, "/p/demo/runs/run-live-wrap/events"))
+	if !strings.Contains(stream, `<span class="note spendwarn"`) {
+		t.Errorf("the stream does not mark a wrapped-up step: %q", stream)
 	}
 }
 
@@ -541,23 +525,10 @@ func TestLiveStreamCarriesWrappedUpForACachedStep(t *testing.T) {
 		t.Fatalf("the rendered page does not mark a cached wrapped-up step: %s", page)
 	}
 
-	done := make(chan string, 1)
-
-	go func() {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/p/demo/runs/run-cached-wrap/events", nil)
-		rec := httptest.NewRecorder()
-		server.Handler().ServeHTTP(rec, req)
-		done <- rec.Body.String()
-	}()
-
-	select {
-	case body := <-done:
-		// ...and the stream a reader who watched sees.
-		if !strings.Contains(body, `"wrapped_up":true`) {
-			t.Errorf("the stream does not carry wrapped_up for a cached step: %q", body)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("SSE stream did not close for a finished run")
+	// ...and the stream a reader who watched sees.
+	stream := sseHTML(streamOf(t, server, "/p/demo/runs/run-cached-wrap/events"))
+	if !strings.Contains(stream, `<span class="note spendwarn"`) {
+		t.Errorf("the stream does not mark a cached wrapped-up step: %q", stream)
 	}
 }
 

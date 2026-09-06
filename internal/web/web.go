@@ -160,6 +160,10 @@ type Server struct {
 	// most of what a read-only build box is for. A pipeline that wants no such
 	// endpoint declares no webhook_token_env: resource, and the route 404s.
 	runner Runner
+	// renderer is held rather than only handed to echo because the live
+	// stream renders one step with the SAME templates the page renders, which
+	// is what keeps a row drawn live and a row drawn on reload identical.
+	renderer *renderer
 }
 
 // Runner is what the web layer needs in order to act rather than only
@@ -217,6 +221,7 @@ func (s *Server) routes() error {
 		return fmt.Errorf("web: %w", err)
 	}
 
+	s.renderer = renderer
 	e.Renderer = renderer
 	e.HTTPErrorHandler = s.handleError
 
@@ -238,6 +243,7 @@ func (s *Server) routes() error {
 	e.GET("/", s.handleIndex)
 	e.GET("/static/app.css", s.handleCSS)
 	e.GET("/static/htmx.min.js", s.handleHTMX)
+	e.GET("/static/hx-sse.min.js", s.handleHTMXSSE)
 	e.GET("/docs", s.handleDocsIndex)
 	e.GET("/docs/:page", s.handleDocs)
 

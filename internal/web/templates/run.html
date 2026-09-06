@@ -104,10 +104,12 @@
   <span><kbd>enter</kbd> toggle</span>
 </div>
 
-<div class="transcript" id="transcript" data-last-seq="{{$run.LastSeq}}">
-  {{range $run.Roots}}{{template "step" (stepctx $ .)}}{{else}}
-  <div class="step"><div class="stephead"><span class="faint">This run recorded no steps.</span></div></div>
-  {{end}}
+{{/* The placeholder hides itself rather than being removed, because the
+     stream APPENDS the first step beside it: :only-child is true exactly
+     while the transcript is empty, so no fragment has to know it exists. */}}
+<div class="transcript" id="transcript">
+  {{range $run.Roots}}{{template "step" (stepctx $ .)}}{{end}}
+  <div class="step" id="run-empty"><div class="stephead"><span class="faint">{{if $run.Running}}Waiting for the first step…{{else}}This run recorded no steps.{{end}}</span></div></div>
 </div>
 
 {{if $run.HasSkipped}}
@@ -117,591 +119,36 @@
 
 {{define "scripts"}}
 {{if .Run.Running}}
+{{/* The live view, and all of it: the server renders each changed step with
+     the same template this page renders, and the extension swaps the
+     fragments in. The element carries no target of its own — every fragment
+     names where it goes — so the swap here is none. */}}
+<div id="run-stream" hidden
+     hx-sse:connect="/p/{{.Nav.Current}}/runs/{{.Run.Run.ID}}/events?after={{.Run.LastSeq}}"
+     hx-sse:close="done"
+     hx-swap="none"
+     hx-on:done="runFinished(event)"></div>
 <script>
 (function () {
-  var transcript = document.getElementById('transcript');
-  var eventsURL = window.location.pathname + '/events';
-  // The sequence already applied — seeded from what the SERVER already drew.
-  // A page opened mid-run is rendered from the same event table this stream
-  // reads, so starting at 0 would append a second copy of every turn already
-  // on the page. It is also what a reconnect resumes from: the browser retries
-  // an EventSource against its ORIGINAL url, so without taking the retry over
-  // ourselves a dropped connection would replay the whole run.
-  var last = Number(transcript.dataset.lastSeq) || 0;
-  var source;
-
-  // Every node is built with createElement + textContent rather than
-  // innerHTML: step names come from pipeline YAML, error text is command
-  // output, and a tool name is chosen by the model — all of it untrusted
-  // enough that the server-rendered path escapes it, and this path must not
-  // be the one that doesn't.
-  function el(tag, cls, text) {
-    var node = document.createElement(tag);
-    if (cls) node.className = cls;
-    if (text !== undefined && text !== null && text !== '') node.textContent = text;
-    return node;
-  }
-
-  function stepEl(key) { return transcript.querySelector('[data-step="' + CSS.escape(key) + '"]'); }
-
-  // A step's body, created the first time it has something in it. An empty
-  // .stepbody still carries its padding, which on a container opened a gap
-  // between the block and the first step inside it.
-  //
-  // Also the one place a row becomes foldable, because it is the one place a
-  // row gains something to fold. The server decides data-toggle from what a
-  // step had WHEN THE PAGE WAS DRAWN, so a step that was running and empty
-  // then — the common case for a page opened mid-run — rendered without one,
-  // and every turn that streamed in afterwards landed in a body nothing could
-  // open.
-  function bodyOf(step) {
-    if (!step.hasAttribute('data-toggle')) {
-      step.setAttribute('data-toggle', '');
-
-      var head = step.querySelector(':scope > .stephead');
-      if (head) {
-        head.setAttribute('role', 'button');
-        head.setAttribute('tabindex', '0');
-        var chev = head.querySelector(':scope > .chev');
-        if (chev) chev.classList.add('chev-icon');
-      }
-    }
-
-    var body = step.querySelector(':scope > .stepbody');
-    if (!body) {
-      body = el('div', 'stepbody');
-      step.insertBefore(body, step.querySelector(':scope > .substeps'));
-    }
-    return body;
-  }
-
-  // The key a row is found by, mirroring the server's stepKey: the minted id
-  // when the event carries one, and the old (index, name) pair when it does
-  // not — which is the only thing a run recorded before ids existed has.
-  function keyOf(e) {
-    return e.step_id ? '#' + e.step_id : e.step_index + '/' + e.step_name;
-  }
-
-  // Where a new step belongs: inside its container's subtree, or at the top
-  // of the transcript. A container that has not drawn a subtree yet grows one
-  // — a matrix's first cell is what turns the matrix into a container.
-  function containerFor(e) {
-    if (!e.parent_step_id) return transcript;
-
-    var parent = stepEl('#' + e.parent_step_id);
-    if (!parent) return transcript;
-
-    parent.classList.add('container');
-    if (!parent.hasAttribute('data-toggle')) parent.setAttribute('data-toggle', '');
-    parent.classList.add('open');
-
-    var sub = parent.querySelector(':scope > .substeps');
-    if (!sub) {
-      sub = el('div', 'substeps');
-      parent.appendChild(sub);
-    }
-    return sub;
-  }
-
-  // JSON is rendered here the way jsonview.go renders it server-side: token
-  // spans, a document escaped inside a string unescaped into a block, and a
-  // bulky payload folded behind a summary. Mirrored rather than shipped as
-  // ready-made HTML because this path builds every node with
-  // createElement/textContent (see the note above), and duplicated at all
-  // because a payload that looks one way while a run is live and another way
-  // after the closing reload reads as two different pages. jsonview.go is the
-  // definition; keep the two in step.
-  //
-  // Structure, folding, and token colors match exactly, and every decision the
-  // mirror itself makes — the depth bound, the trailing-newline rule, the
-  // inline threshold, byte sizes — is kept in step with jsonview.go. What
-  // cannot match is whatever JSON.parse has already decided before this code
-  // runs: a number past 2^53 or written 0.50 renders as JavaScript prints it
-  // (the server keeps the source text via json.Decoder with UseNumber), a
-  // repeated key keeps only its last member, and integer-like keys come back in
-  // numeric rather than source order. Closing any of those means shipping a
-  // second JSON tokenizer to the browser — a poor trade for a view the run's
-  // own closing reload replaces with the server's rendering seconds later.
-  var JSON_INLINE_WIDTH = 96;
-  var JSON_DEPTH_LIMIT = 6;
-
-  // parseDoc parses an object or array, and nothing else — a bare string or
-  // number is already its own best rendering.
-  function parseDoc(raw) {
-    if (typeof raw !== 'string') return undefined;
-    var text = raw.trim();
-    if (text === '' || (text[0] !== '{' && text[0] !== '[')) return undefined;
-    try { return JSON.parse(text); } catch (err) { return undefined; }
-  }
-
-  // embedded is the document a string value turned out to hold: the read_file
-  // shape, and the whole reason this is a renderer and not a formatter. Bounded
-  // at the depth jsonStringNode bounds it, so a deeply nested sub-agent
-  // trajectory does not unwrap further here than it will after the reload.
-  function embedded(value, nesting) {
-    if (typeof value !== 'string' || nesting >= JSON_DEPTH_LIMIT) return undefined;
-    return parseDoc(value);
-  }
-
-  // A TRAILING newline is not structure — jsonview.go's block() makes the same
-  // exemption, and without it here a live "3\n" folded behind a summary while
-  // the same value rendered inline after the closing reload.
-  function isBlockString(value, nesting) {
-    return typeof value === 'string' &&
-      (value.replace(/\n+$/, '').indexOf('\n') >= 0 || embedded(value, nesting) !== undefined);
-  }
-
-  function hasBlock(value, nesting) {
-    if (isBlockString(value, nesting)) return true;
-    if (value && typeof value === 'object') {
-      return Object.keys(value).some(function (key) { return hasBlock(value[key], nesting); });
-    }
-    return false;
-  }
-
-  // Measured the way jsonNode.inlineWidth measures: the decoded string's own
-  // length, not its escaped spelling, so the two agree at the threshold.
-  function inlineWidth(value) {
-    if (typeof value === 'string') return value.length + 2;
-    if (value === null || typeof value !== 'object') return String(value).length;
-    var keys = Object.keys(value);
-    var width = 2;
-    keys.forEach(function (key, i) {
-      if (i > 0) width += 1;
-      width += 1 + inlineWidth(value[key]);
-      if (!Array.isArray(value)) width += key.length + 4;
-    });
-    return width + (keys.length ? 1 : 0);
-  }
-
-  function inlineable(value, nesting) {
-    return !hasBlock(value, nesting) && inlineWidth(value) <= JSON_INLINE_WIDTH;
-  }
-
-  function tok(parent, cls, text) { parent.appendChild(el('span', cls, text)); }
-  function raw(parent, text) { parent.appendChild(document.createTextNode(text)); }
-  function pad(parent, depth) { raw(parent, '  '.repeat(depth)); }
-
-  function scalar(parent, value) {
-    if (typeof value === 'string') tok(parent, 'j-str', JSON.stringify(value));
-    else if (typeof value === 'number') tok(parent, 'j-num', String(value));
-    else tok(parent, 'j-lit', String(value));
-  }
-
-  function appendInline(parent, value) {
-    if (value === null || typeof value !== 'object') { scalar(parent, value); return; }
-
-    var array = Array.isArray(value);
-    var keys = Object.keys(value);
-    tok(parent, 'j-punc', array ? '[' : '{');
-
-    keys.forEach(function (key, i) {
-      if (i > 0) tok(parent, 'j-punc', ',');
-      raw(parent, ' ');
-      if (!array) {
-        tok(parent, 'j-key', JSON.stringify(key));
-        tok(parent, 'j-punc', ':');
-        raw(parent, ' ');
-      }
-      appendInline(parent, value[key]);
-    });
-
-    if (keys.length) raw(parent, ' ');
-    tok(parent, 'j-punc', array ? ']' : '}');
-  }
-
-  function appendStringBlock(parent, value, depth, nesting) {
-    if (!isBlockString(value, nesting)) { scalar(parent, value); return; }
-
-    // The quotes stay, on their own lines: this value IS a string, and a
-    // reader has to be able to tell a document from a document-shaped string.
-    tok(parent, 'j-str', '"');
-    raw(parent, '\n');
-
-    var doc = embedded(value, nesting);
-    if (doc !== undefined) {
-      pad(parent, depth + 1);
-      appendBlock(parent, doc, depth + 1, nesting + 1);
-      raw(parent, '\n');
-    } else {
-      value.replace(/\n+$/, '').split('\n').forEach(function (line) {
-        pad(parent, depth + 1);
-        tok(parent, 'j-doc', line);
-        raw(parent, '\n');
-      });
-    }
-
-    pad(parent, depth);
-    tok(parent, 'j-str', '"');
-  }
-
-  function appendBlock(parent, value, depth, nesting) {
-    nesting = nesting || 0;
-    if (typeof value === 'string') { appendStringBlock(parent, value, depth, nesting); return; }
-    if (value === null || typeof value !== 'object') { scalar(parent, value); return; }
-
-    var array = Array.isArray(value);
-    var keys = Object.keys(value);
-
-    if (!keys.length) { tok(parent, 'j-punc', array ? '[]' : '{}'); return; }
-    if (inlineable(value, nesting)) { appendInline(parent, value); return; }
-
-    tok(parent, 'j-punc', array ? '[' : '{');
-    raw(parent, '\n');
-
-    keys.forEach(function (key, i) {
-      pad(parent, depth + 1);
-      if (!array) {
-        tok(parent, 'j-key', JSON.stringify(key));
-        tok(parent, 'j-punc', ':');
-        raw(parent, ' ');
-      }
-      appendBlock(parent, value[key], depth + 1, nesting);
-      if (i < keys.length - 1) tok(parent, 'j-punc', ',');
-      raw(parent, '\n');
-    });
-
-    pad(parent, depth);
-    tok(parent, 'j-punc', array ? ']' : '}');
-  }
-
-  // Counted in BYTES, the way formatBytes counts them: source.length counts
-  // UTF-16 units and would report a different size than the server for the
-  // same payload the moment one non-ASCII character is in it.
-  function byteLength(text) { return new TextEncoder().encode(text).length; }
-
-  function bytes(size) {
-    if (size < 1000) return size + ' B';
-    if (size < 1000000) return (size / 1000).toFixed(1) + ' kB';
-    return (size / 1000000).toFixed(1) + ' MB';
-  }
-
-  function plural(n, noun) { return n === 1 ? '1 ' + noun : n + ' ' + noun + 's'; }
-
-  function summarize(value, source) {
-    var size = bytes(byteLength(source));
-    if (Array.isArray(value)) return 'array · ' + plural(value.length, 'item') + ' · ' + size;
-    var keys = Object.keys(value);
-    if (keys.length > 0 && keys.length <= 3) return keys.join(', ') + ' · ' + size;
-    return 'object · ' + plural(keys.length, 'key') + ' · ' + size;
-  }
-
-  // jsonNode returns the element for one payload: inline when small, a folded
-  // <details> otherwise, and escaped text when it is not JSON at all.
-  function jsonNode(source) {
-    var value = parseDoc(source);
-
-    if (value === undefined) {
-      var text = source.replace(/\n+$/, '');
-      if (text.indexOf('\n') < 0 && text.length <= JSON_INLINE_WIDTH) {
-        return el('span', 'jsonline', text);
-      }
-      return foldNode(
-        'text · ' + plural(text.split('\n').length, 'line') + ' · ' + bytes(byteLength(source)),
-        function (pre) { raw(pre, text); });
-    }
-
-    if (inlineable(value, 0)) {
-      var span = el('span', 'jsonline');
-      appendInline(span, value);
-      return span;
-    }
-
-    return foldNode(summarize(value, source), function (pre) { appendBlock(pre, value, 0, 0); });
-  }
-
-  function foldNode(summary, fill) {
-    var details = el('details', 'jsonbox');
-    details.appendChild(el('summary', null, summary));
-    var pre = el('pre', 'json');
-    fill(pre);
-    details.appendChild(pre);
-    return details;
-  }
-
-  // outputEl is a step's printed output: highlighted when it is JSON, and the
-  // text as it came out when it is not.
-  function outputEl(text) {
-    var pre = el('pre', 'log output');
-    var value = parseDoc(text);
-    if (value === undefined) raw(pre, text);
-    else appendBlock(pre, value, 0, 0);
-    return pre;
-  }
-
-  function startStep(e, key) {
-    if (stepEl(key)) return;
-    var div = el('div', 'step running open');
-    // data-toggle is what makes the row respond to a click. The server puts
-    // it on every row with a body; a row built here always gets one, because
-    // the turns and the answer that arrive next are exactly that body.
-    div.setAttribute('data-toggle', '');
-    div.dataset.step = key;
-
-    var head = el('div', 'stephead');
-    head.setAttribute('role', 'button');
-    head.setAttribute('tabindex', '0');
-    head.appendChild(el('span', 'chev chev-icon'));
-    // The server draws a status glyph on every finished row, so a row born
-    // here starts with the running one — same vocabulary as statusvocab.
-    head.appendChild(stmark('running'));
-    head.appendChild(el('span', 'kind', e.step_kind));
-    head.appendChild(el('span', 'name', e.step_name));
-
-    var meta = el('span', 'headmeta');
-    var dur = el('span', 'dur');
-    // Counted by the same ticker the server-rendered rows use, so a step that
-    // started while the page was open reads identically to one that was
-    // already running when it loaded.
-    var clock = document.createElement('time');
-    clock.className = 'live';
-    clock.dataset.elapsedSince = new Date().toISOString();
-    clock.textContent = '0s';
-    dur.appendChild(clock);
-    dur.appendChild(document.createTextNode(' '));
-    dur.appendChild(el('span', 'cursor', '▍'));
-    meta.appendChild(dur);
-    head.appendChild(meta);
-
-    div.appendChild(head);
-    containerFor(e).appendChild(div);
-    refreshTree();
-  }
-
-  // The container-level state, recomputed from what is on the page rather
-  // than tracked — the active rail and the rollup counts.
-  //
-  // Both are derived from the children's own status, so re-deriving them is
-  // simpler than maintaining them, and it is the only way they stay right
-  // when a nested cell finishes: nothing publishes an event on the CONTAINER
-  // when its third child goes green, so a rollup the server drew as
-  // "3 running" said 3 running for the rest of the run.
-  //
-  // This mirrors stepView.Rollup and stepView.Active in model.go. Keep the
-  // two in step: a count that reads one way live and another after the
-  // closing reload is the drift this whole view refuses.
-  var ROLLUP = [
-    {cls: 'passed', label: 'passed', mark: 'r-pass'},
-    {cls: 'failed', label: 'failed', mark: 'r-fail'},
-    {cls: 'running', label: 'running', mark: 'r-run'},
-    {cls: 'skipped', label: 'skipped', mark: 'r-skip'},
-  ];
-
-  function refreshTree() {
-    transcript.querySelectorAll('.step').forEach(function (step) {
-      var running = step.classList.contains('running');
-      var holds = step.querySelector('.step.running') !== null;
-      step.classList.toggle('active', running && (holds || !step.querySelector('.substeps')));
-
-      drawRollup(step);
-    });
-  }
-
-  function drawRollup(step) {
-    var sub = step.querySelector(':scope > .substeps');
-    if (!sub) return;
-
-    var children = Array.from(sub.children).filter(function (node) {
-      return node.classList.contains('step');
-    });
-
-    var counts = {};
-    children.forEach(function (child) {
-      ROLLUP.forEach(function (state) {
-        if (child.classList.contains(state.cls)) counts[state.cls] = (counts[state.cls] || 0) + 1;
-      });
-    });
-
-    var meta = step.querySelector(':scope > .stephead .headmeta');
-    var existing = meta && meta.querySelector(':scope > .rollup');
-
-    // One child says nothing its own row does not — unless it failed, which
-    // has to survive the fold. Mirrors rollup.Empty.
-    if (!meta || !children.length || (children.length === 1 && !counts.failed)) {
-      if (existing) existing.remove();
-      return;
-    }
-
-    var box = existing || el('span', 'rollup');
-    box.textContent = '';
-    box.appendChild(el('span', null, children.length + ' step' + (children.length === 1 ? '' : 's')));
-
-    ROLLUP.forEach(function (state) {
-      if (!counts[state.cls]) return;
-      box.appendChild(el('span', 'r-sep', '·'));
-      box.appendChild(el('b', state.mark, counts[state.cls] + ' ' + state.label));
-    });
-
-    if (!existing) meta.insertBefore(box, meta.firstChild);
-  }
-
-  var STMARKS = { passed: '✓', failed: '✗', running: '◐', skipped: '–' };
-
-  function stmark(word) {
-    var span = el('span', 'stmark', STMARKS[word]);
-    span.setAttribute('role', 'img');
-    span.setAttribute('aria-label', word);
-    return span;
-  }
-
-  function finishStep(e, node) {
-    var skipped = e.type === 'step_skipped';
-    var word = skipped ? 'skipped' : (e.status === 'succeeded' ? 'passed' : 'failed');
-    // Only the STATUS class changes. Rewriting className wholesale dropped
-    // "open" and "container" with it, so a step collapsed at the instant it
-    // finished — hiding the turns a reader was in the middle of, and the
-    // subtree of every block.
-    node.classList.remove('running', 'active');
-    node.classList.add(word);
-
-    var glyph = node.querySelector(':scope > .stephead > .stmark');
-    if (glyph) {
-      glyph.textContent = STMARKS[word];
-      glyph.setAttribute('aria-label', word);
-    }
-
-    // The server draws this for a finished step, so the stream has to too:
-    // a reader watching live and one who reloaded must see the same row.
-    if (e.wrapped_up) {
-      var nameEl = node.querySelector(':scope > .stephead .name');
-      if (nameEl && !node.querySelector(':scope > .stephead .spendwarn')) {
-        var warn = el('span', 'note spendwarn', 'stopped early');
-        warn.title = 'The turn budget ran out; this answer was written from what the model had already gathered';
-        nameEl.insertAdjacentElement('afterend', warn);
-      }
-    }
-
-    if (e.worker) {
-      var head = node.querySelector(':scope > .stephead .headmeta');
-      var slot = head && head.querySelector(':scope > .dur');
-      if (slot && !head.querySelector('.worker')) {
-        head.insertBefore(el('span', 'note worker', 'on ' + e.worker), slot);
-      }
-    }
-
-    var dur = node.querySelector(':scope > .stephead .dur');
-    if (dur) {
-      dur.textContent = skipped ? '' : e.duration;
-      if (e.hash) {
-        dur.appendChild(document.createTextNode(' · '));
-        var link = el('a', 'hash', e.hash.slice(0, 7));
-        // The same absolute spelling the server renders — see the step
-        // template. Two spellings of one destination is how they drift.
-        link.href = '/p/{{.Nav.Current}}/nodes/' + encodeURIComponent(e.hash);
-        dur.appendChild(link);
-      }
-    }
-
-    if (e.text && !skipped && e.status !== 'succeeded') {
-      var log = el('div', 'log');
-      log.appendChild(el('span', 'err', e.text));
-      bodyOf(node).appendChild(log);
-    }
-
-    if (e.text && skipped) {
-      var name = node.querySelector(':scope > .stephead .name');
-      name.insertAdjacentElement('afterend', el('span', 'note', e.text));
-    }
-
-    // The answer the step ended on. The server draws it for a finished run,
-    // and without it here a live reader watched an agent work and then saw
-    // the one thing it produced only after a reload.
-    if (e.response) {
-      var turn = el('div', 'turn answer');
-      turn.appendChild(el('span', 'who', 'answer'));
-      var body = el('div', 'response');
-      // The one place this file uses innerHTML, and the only one that can:
-      // the markup is prose.go's output, which is the same renderer — and the
-      // same bytes — the server-rendered page ships. See answerFor in live.go.
-      var md = el('div', 'md');
-      md.innerHTML = e.response;
-      body.appendChild(md);
-      turn.appendChild(body);
-      bodyOf(node).appendChild(turn);
-    }
-
-    refreshTree();
-  }
-
-  function addTurn(e, node) {
-    // A turn normally matches its own step. The fallback covers a delegated
-    // conversation whose events arrive before its parent step is on the page.
-    var target = node || Array.from(transcript.querySelectorAll('.step.running')).pop();
-    if (!target) return;
-
-    var who = e.type === 'agent_text' ? 'model'
-      : e.type === 'agent_call' ? 'tool'
-      : e.type === 'agent_result' ? 'result' : 'delegate';
-
-    var turn = el('div', 'turn ' + (e.type === 'agent_text' ? 'model' : 'tool') + (e.depth > 0 ? ' nested' : ''));
-    turn.appendChild(el('span', 'who', who));
-
-    var what = el('div', 'what');
-    if (e.name) what.appendChild(el('code', null, e.name));
-    if (e.text) what.appendChild(el('span', 'say', e.text));
-    if (e.detail) what.appendChild(jsonNode(e.detail));
-
-    turn.appendChild(what);
-    bodyOf(target).appendChild(turn);
-    target.classList.add('open');
-    follow();
-  }
-
   // Follow the stream only for a reader who is already at the bottom.
   // Unconditional, it yanked the page back down every time a tool call landed
   // — so reading anything above the fold during a live run was impossible.
-  function follow() {
+  document.addEventListener('htmx:after:swap', function () {
     var slack = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
     if (slack < 120) window.scrollTo(0, document.documentElement.scrollHeight);
-  }
+  });
 
-  function onEvent(msg) {
-    var e = JSON.parse(msg.data);
-    // A replayed event (a reconnect that overlapped, a server that resent)
-    // must not be applied twice.
-    if (e.seq <= last) return;
-    last = e.seq;
-
-    var key = keyOf(e);
-
-    if (e.type === 'step_started') { startStep(e, key); return; }
-
-    var node = stepEl(key);
-
-    if (e.type === 'step_finished' || e.type === 'step_skipped') {
-      if (node) finishStep(e, node);
-      return;
-    }
-
-    if (e.type === 'step_output') {
-      // Same fallback addTurn uses. The server-side assembler opens a step for
-      // an output event whose step it has not seen; dropping it here instead
-      // would mean the output appeared only after a reload, which is exactly
-      // the live-versus-replay drift this design refuses.
-      var target = node || Array.from(transcript.querySelectorAll('.step.running')).pop();
-      if (target && e.text) {
-        bodyOf(target).appendChild(outputEl(e.text));
-        target.classList.add('open');
-      }
-      return;
-    }
-
-    if (e.agent) addTurn(e, node);
-  }
-
-  // Reconnects back off and eventually stop. Left open after the server goes
-  // away — Ctrl-C on `steps web` with the tab still up — a fixed-interval
-  // retry would hammer a dead port for as long as the tab lives.
-  var retries = 0;
-  var maxRetries = 6;
-
-  // The tab is the status display for a run nobody is looking at. Update it
-  // the moment the run ends, before the reload, so a background tab reports
-  // the outcome without being reopened.
-  function markTitle(status) {
+  // The tab is the status display for a run nobody is looking at. Mark it the
+  // moment the run ends, BEFORE the reload: a backgrounded tab may defer the
+  // reload indefinitely, and reporting the outcome unwatched is the point.
+  //
+  // The reload is what draws everything the transcript is not — the run's own
+  // status, its duration, the spend and placement tables — and it is also the
+  // backstop for a fragment a dropped connection lost.
+  window.runFinished = function (event) {
+    var status = (event.detail && event.detail.data && JSON.parse(event.detail.data).status) || '';
     var mark = status === 'succeeded' ? '✓' : status === 'running' ? '◐' : '✗';
-    document.title = document.title.replace(/^[✓✗◐]\s*/, '');
-    document.title = mark + ' ' + document.title;
+    document.title = mark + ' ' + document.title.replace(/^[✓✗◐]\s*/, '');
 
     var dot = mark === '✓' ? '%2384c06d' : mark === '◐' ? '%23d9a94a' : '%23e0645a';
     var icon = document.getElementById('favicon');
@@ -709,46 +156,14 @@
       icon.href = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E" +
         "%3Ccircle cx='8' cy='8' r='6' fill='" + dot + "'/%3E%3C/svg%3E";
     }
-  }
 
-  function connect() {
-    source = new EventSource(eventsURL + '?after=' + last);
-
-    source.addEventListener('event', function (msg) {
-      retries = 0;
-      onEvent(msg);
-    });
-
-    source.addEventListener('done', function (msg) {
-      source.onerror = null;
-      source.close();
-
-      // Mark the tab before reloading: if the tab is backgrounded the reload
-      // may be deferred, and the whole point is that it reports the outcome
-      // without being looked at.
-      try { markTitle(JSON.parse(msg.data).status); } catch (err) { /* status is a nicety */ }
-
-      window.location.reload();
-    });
-
-    source.onerror = function () {
-      // Take the retry over so it resumes from `last` instead of the
-      // browser's automatic retry against ?after=0.
-      source.close();
-
-      if (retries >= maxRetries) return;
-
-      setTimeout(connect, 1000 * Math.pow(2, retries));
-      retries++;
-    };
-  }
-
-  connect();
+    window.location.reload();
+  };
 })();
 </script>
 {{end}}
 {{end}}
-\n
+
 {{/* One step, and everything that ran inside it.
      Recursive: a container renders its children through this same template,
      so a matrix's cells are INSIDE the matrix's markup rather than beside it.
@@ -758,7 +173,7 @@
 {{$page := .Page}}{{$step := .Step}}{{$run := .Page.Run}}
 {{$detail := $step.HasDetail $run.JobError}}
 {{$anchor := $step.Anchor}}
-<div id="{{$anchor}}" class="step{{if $step.Skipped}} skipped{{else if $step.Failed}} failed{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail (or $step.Failed $step.Turns $step.Container)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}">
+<div id="{{$anchor}}"{{if .OOB}} hx-swap-oob="outerMorph"{{end}} class="step{{if $step.Skipped}} skipped{{else if $step.Failed}} failed{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail (or $step.Failed $step.Turns $step.Container)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}">
   <div class="stephead"{{if $detail}} role="button" tabindex="0"{{end}}>
     <span class="chev{{if $detail}} chev-icon{{end}}"></span>
     {{if $step.Skipped}}<span class="stmark" role="img" aria-label="skipped">–</span>{{else if $step.Failed}}<span class="stmark" role="img" aria-label="failed">✗</span>{{else if $step.Running}}<span class="stmark" role="img" aria-label="running">◐</span>{{else}}<span class="stmark" role="img" aria-label="passed">✓</span>{{end}}

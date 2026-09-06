@@ -6,10 +6,17 @@
 <title>{{with .TitleMark}}{{.}} {{end}}{{with .Title}}{{.}} — {{end}}steps</title>
 <link rel="icon" id="favicon" href="{{favicon .TitleMark}}">
 <link rel="stylesheet" href="/static/app.css">
+{{/* A fold the reader opened is THEIRS: morph reconciles attributes, so an
+     expanded <details> inside a step the stream re-renders would snap shut
+     under them on the next event. Skipping only [open] leaves every closed
+     fold to update normally. */}}
+<meta name="htmx-config" content='{"morphSkip": "[hx-morph-skip], details[open]"}'>
 {{/* Vendored, not from a CDN: this server is expected to run on machines
      with no route to the internet, and a page whose refresh depends on one
-     is a page that silently stops refreshing there. */}}
+     is a page that silently stops refreshing there. The extension carries the
+     run page's live transcript; it is not bundled in htmx itself. */}}
 <script src="/static/htmx.min.js" defer></script>
+<script src="/static/hx-sse.min.js" defer></script>
 </head>
 <body>
 
@@ -92,10 +99,34 @@
     return step && step.hasAttribute('data-toggle') ? step : null;
   }
 
+  // What the reader has folded or unfolded, and which row they are on, are
+  // the two pieces of state the SERVER cannot know — and a swap reconciles
+  // the row to what the server drew, so both are lost the moment a step
+  // changes. Recorded as the reader makes them and re-applied after every
+  // swap, which is what keeps a live transcript readable while it grows.
+  var folds = new Map();
+
+  function fold(step) {
+    step.classList.toggle('open');
+    if (step.dataset.step) folds.set(step.dataset.step, step.classList.contains('open'));
+  }
+
+  document.addEventListener('htmx:after:swap', function () {
+    folds.forEach(function (open, key) {
+      var step = document.querySelector('[data-step="' + CSS.escape(key) + '"]');
+      if (step) step.classList.toggle('open', open);
+    });
+
+    if (chosen) {
+      var step = document.querySelector('[data-step="' + CSS.escape(chosen) + '"]');
+      if (step) step.classList.add('sel');
+    }
+  });
+
   document.addEventListener('click', function (e) {
     if (e.target.closest('a')) return;
     var step = toggleFrom(e.target);
-    if (step) step.classList.toggle('open');
+    if (step) fold(step);
   });
 
   document.addEventListener('keydown', function (e) {
@@ -103,7 +134,7 @@
     var step = toggleFrom(e.target);
     if (!step) return;
     e.preventDefault();
-    step.classList.toggle('open');
+    fold(step);
   });
 
   // Keyboard navigation over the step tree.
@@ -113,6 +144,7 @@
   // is tall. j/k walk it, e/c change what is open wholesale, and f goes
   // straight to the thing a person opened a failed run to find.
   var transcript = document.querySelector('.transcript');
+  var chosen = null;
 
   function steps() { return transcript ? Array.from(transcript.querySelectorAll('.step')) : []; }
 
@@ -120,6 +152,7 @@
     if (!step) return;
     steps().forEach(function (other) { other.classList.remove('sel'); });
     step.classList.add('sel');
+    chosen = step.dataset.step || null;
     // Focused as well as marked, so Enter and Space reach the toggle handler
     // above rather than needing a second copy of it here.
     var head = step.querySelector(':scope > .stephead');
@@ -138,7 +171,9 @@
 
   function foldAll(open) {
     steps().forEach(function (node) {
-      if (node.hasAttribute('data-toggle')) node.classList.toggle('open', open);
+      if (!node.hasAttribute('data-toggle')) return;
+      node.classList.toggle('open', open);
+      if (node.dataset.step) folds.set(node.dataset.step, open);
     });
   }
 
@@ -152,7 +187,9 @@
 
   function reveal(node) {
     for (var at = node; at; at = at.parentElement) {
-      if (at.classList && at.classList.contains('step')) at.classList.add('open');
+      if (!at.classList || !at.classList.contains('step')) continue;
+      at.classList.add('open');
+      if (at.dataset.step) folds.set(at.dataset.step, true);
     }
   }
 
