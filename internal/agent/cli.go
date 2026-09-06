@@ -200,11 +200,9 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		_, pending := pendingCLIMessage(prepared, sent, state)
 
 		if plan.outOfTurns() {
-			// Carrying lastErr matters: the budget ran out because of whatever
-			// failed a moment ago, and reporting only the ceiling would hide
-			// the thing actually worth investigating.
-			return retry.Stop(outcome.Fail(fmt.Errorf("agent %q: exhausted its %d-turn budget across %d attempt(s); last failure: %w",
-				prepared.ri.AgentName, prepared.ri.MaxTurns, attempt, lastErr)))
+			return retry.Stop(outcome.Fail(cliCeilingError(prepared.ri.AgentName,
+				fmt.Sprintf("its %d-turn budget", prepared.ri.MaxTurns),
+				sent, len(prepared.conv.messages), attempt, lastErr)))
 		}
 
 		// Same shape, same reason, for the other ceiling on this step: a
@@ -212,8 +210,9 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		// provider to discover that is the outcome budget: usd exists to
 		// prevent.
 		if plan.outOfBudget() {
-			return retry.Stop(outcome.Fail(fmt.Errorf("agent %q: exhausted its $%v budget across %d attempt(s), spending $%.4f; last failure: %w",
-				prepared.ri.AgentName, prepared.ri.BudgetUSD, attempt, state.costUSD, lastErr)))
+			return retry.Stop(outcome.Fail(cliCeilingError(prepared.ri.AgentName,
+				fmt.Sprintf("its $%v budget, spending $%.4f", prepared.ri.BudgetUSD, state.costUSD),
+				sent, len(prepared.conv.messages), attempt, lastErr)))
 		}
 
 		attemptErr := runCLIAttempt(attemptCtx, prepared, runtime, plan, state)
@@ -530,6 +529,35 @@ type cliAttempt struct {
 	// (empty on the host path). Per-step, not per-attempt: a resumed attempt
 	// needs the transcript the previous one wrote there.
 	home string
+}
+
+// cliCeilingError reports a step that ran into one of its two pooled
+// ceilings, saying which message it was asking when it did and naming the
+// failure that caused it only when there is one.
+//
+// Both halves were wrong in the same failure, and both were wrong precisely in
+// the case the ceilings exist for. max_turns: and budget: usd do not reset at
+// a message boundary, so the ordinary way to exhaust one is for an EARLIER
+// message to finish cleanly having spent it — which leaves lastErr nil, and
+// wrapping nil with %w printed the literal "%!w(<nil>)" as the last word of
+// the one line a reader has to explain the failure. The attempt counter has
+// the mirror problem: it belongs to the message being asked NOW, so a step
+// that spent a whole conversation answering message one reported "across 0
+// attempt(s)" and read as a step that never started.
+//
+// sent is zero-based; the message is named from one, as an author counts the
+// list they wrote.
+func cliCeilingError(agent, ceiling string, sent, messages, attempt int, lastErr error) error {
+	where := fmt.Sprintf("agent %q: exhausted %s on message %d of %d, across %d attempt(s) at it",
+		agent, ceiling, sent+1, messages, attempt)
+
+	// Not merely omitted from the text: %w is what lets a consumer reach past
+	// the ceiling for the outage underneath, so it stays whenever there is one.
+	if lastErr == nil {
+		return errors.New(where)
+	}
+
+	return fmt.Errorf("%s; last failure: %w", where, lastErr)
 }
 
 // outOfTurns reports whether earlier attempts have spent the step's whole

@@ -7,6 +7,8 @@ package agent
 // mechanism a died attempt and a missing-file nudge already use.
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -167,5 +169,121 @@ func TestCLIAttemptPromptDoesNotConsumeTheMessage(t *testing.T) {
 	second := cliAttemptPrompt(true, true, 1, state, prepared)
 	if !strings.Contains(second, "Name the line.") {
 		t.Errorf("the retry asked %q — the message was consumed by composing the first prompt, so the child is told to continue something it never got", second)
+	}
+}
+
+// spendingCLI is recordingCLI's twin for the pooled ceilings: the child
+// reports `turns` turns and `cost` dollars on every invocation, so one
+// invocation can be made to spend a whole step's allowance.
+func spendingCLI(t *testing.T, turns int, cost float64) {
+	t.Helper()
+
+	if os.Getenv("STEPS_TEST_SKIP_SHELL") != "" {
+		t.Skip("fake cli binaries are shell scripts")
+	}
+
+	dir := t.TempDir()
+
+	result := fmt.Sprintf(
+		`{"type":"result","subtype":"success","result":"answered","num_turns":%d,"total_cost_usd":%v,"is_error":false}`,
+		turns, cost)
+
+	script := "#!/bin/sh\ncat > /dev/null\n" + `printf '%s\n' '` + result + "'\n"
+
+	err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o700) //nolint:gosec // a test stub must be executable
+	if err != nil {
+		t.Fatalf("writing the fake cli: %v", err)
+	}
+
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestCLICeilingNamesTheMessageItStoppedOn is the seam the pooled ceilings
+// actually break on, and the reason this is an integration test rather than a
+// unit test of the formatter: message one finishes CLEANLY and spends the
+// whole allowance, and message two is refused before it is ever asked.
+//
+// Both halves of that sentence were unreportable. `lastErr` is nil precisely
+// because the previous message succeeded — the common case, since max_turns:
+// does not reset at a message boundary — so wrapping it put the literal text
+// "%!w(<nil>)" at the end of the one line explaining the failure. And the
+// attempt counter belongs to the message being asked NOW, so a step that had
+// spent a real conversation's worth of turns reported "0 attempt(s)" and read
+// as a step that never started.
+func TestCLICeilingNamesTheMessageItStoppedOn(t *testing.T) {
+	spendingCLI(t, 30, 0)
+
+	prepared := cliPrepared(t, nil)
+	prepared.ri.MaxTurns = 30
+	prepared.conv.messages = []string{"Plan it.", "Now do it.", "Write it up."}
+
+	_, err := runCLIConversation(t.Context(), prepared, time.Minute)
+	if err == nil {
+		t.Fatal("a step whose first message spent the whole turn budget succeeded")
+	}
+
+	got := err.Error()
+
+	if strings.Contains(got, "%!") {
+		t.Errorf("the failure carries a formatting error where a cause should be: %s", got)
+	}
+
+	if !strings.Contains(got, "message 2 of 3") {
+		t.Errorf("the failure does not say which message was never asked: %s", got)
+	}
+}
+
+// TestCLIBudgetCeilingNamesTheMessageToo keeps the other pooled ceiling
+// honest. It is the same shape and the same nil cause, and fixing only the
+// turn branch would leave the dollar branch printing "%!w(<nil>)" for exactly
+// the run that spent the most money.
+func TestCLIBudgetCeilingNamesTheMessageToo(t *testing.T) {
+	spendingCLI(t, 1, 5)
+
+	prepared := cliPrepared(t, nil)
+	prepared.ri.BudgetUSD = 5
+	prepared.conv.messages = []string{"Plan it.", "Now do it."}
+
+	_, err := runCLIConversation(t.Context(), prepared, time.Minute)
+	if err == nil {
+		t.Fatal("a step whose first message spent the whole dollar budget succeeded")
+	}
+
+	got := err.Error()
+
+	if strings.Contains(got, "%!") {
+		t.Errorf("the failure carries a formatting error where a cause should be: %s", got)
+	}
+
+	if !strings.Contains(got, "message 2 of 2") {
+		t.Errorf("the failure does not say which message was never asked: %s", got)
+	}
+}
+
+// TestCLICeilingKeepsTheFailureThatCausedIt is the other direction, and the
+// reason the cause is dropped CONDITIONALLY rather than removed: when the
+// allowance ran out because attempts kept dying, that error is the thing worth
+// investigating and the ceiling is only how the step finally stopped.
+func TestCLICeilingKeepsTheFailureThatCausedIt(t *testing.T) {
+	t.Parallel()
+
+	cause := errors.New("the daemon went away")
+	got := cliCeilingError("reviewer", "its 9-turn budget", 1, 2, 2, cause)
+
+	if !strings.Contains(got.Error(), "the daemon went away") {
+		t.Errorf("the ceiling swallowed the failure that caused it: %s", got)
+	}
+
+	// Wrapped, not merely printed: a consumer reaching past the ceiling for
+	// the real outage does it with errors.Is/As.
+	if !errors.Is(got, cause) {
+		t.Error("the cause is not unwrappable; errors.Is past the ceiling stops working")
+	}
+
+	// And the nil case says nothing about a cause at all, rather than saying
+	// it in a way fmt cannot render.
+	quiet := cliCeilingError("reviewer", "its 9-turn budget", 1, 2, 2, nil)
+	if strings.Contains(quiet.Error(), "last failure") || strings.Contains(quiet.Error(), "%!") {
+		t.Errorf("a ceiling with no cause still claims one: %s", quiet)
 	}
 }
