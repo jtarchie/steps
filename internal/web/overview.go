@@ -172,6 +172,13 @@ type agentDialView struct {
 	// Timeout is the per-attempt deadline as written; empty means the
 	// built-in default applies.
 	Timeout string
+	// BudgetTokens and BudgetUSD are the step's spend ceiling, in whichever
+	// unit its runner can actually enforce. Never both: validation rejects
+	// budget.tokens on a cli source and budget.usd on a hosted one, because
+	// nothing counts a subprocess's tokens until it exits and no hosted
+	// provider reports dollars. Zero in both means no ceiling.
+	BudgetTokens int
+	BudgetUSD    float64
 	// Broken is why this step's invocation would not resolve, empty for the
 	// ordinary case. A row with it carries no numbers, because there are
 	// none.
@@ -185,6 +192,25 @@ func (a agentDialView) UncappedTurns() bool { return a.Turns == 0 }
 
 // UncappedContext is the same for the context ceiling.
 func (a agentDialView) UncappedContext() bool { return a.ContextBytes == 0 }
+
+// UncappedBudget is the same for spend, and it is the one where the word
+// carries the most weight. A cli agent's budget.usd is the ONLY ceiling its
+// runner enforces mid-conversation — max_turns: is spent inside a subprocess
+// this process cannot interrupt, and a job budget is tokens-only — so an
+// uncapped row beside an uncapped turn count says the step is held by wall
+// clock and nothing else.
+func (a agentDialView) UncappedBudget() bool { return a.BudgetTokens == 0 && a.BudgetUSD == 0 }
+
+// Budget renders the ceiling in the unit it is metered in. One column rather
+// than two: the spellings are mutually exclusive by source kind, so a second
+// column would be empty on every row of a pipeline that does not mix them.
+func (a agentDialView) Budget() string {
+	if a.BudgetUSD > 0 {
+		return FormatUSD(a.BudgetUSD)
+	}
+
+	return thousands(a.BudgetTokens) + " tokens"
+}
 
 // UncappedTimeout is the same for the deadline, and it is the one that had to
 // be spelled out rather than left to the template.
@@ -244,6 +270,8 @@ func agentDials(cfg *config.Config, job config.Job) []agentDialView {
 			Turns:        ri.MaxTurns,
 			ContextBytes: ri.MaxContextBytes,
 			Timeout:      ri.Timeout,
+			BudgetTokens: ri.BudgetTokens,
+			BudgetUSD:    ri.BudgetUSD,
 		})
 
 		return nil

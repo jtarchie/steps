@@ -366,12 +366,22 @@ func agentJobPipeline(t *testing.T) *Server {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "demo.yml")
 
+	// Three agents because the budget column has three states and they are not
+	// interchangeable: a hosted agent takes budget.tokens, a cli agent takes
+	// budget.usd (validation rejects each on the other), and an agent with
+	// neither must read as uncapped rather than as zero.
 	writeFile(t, path, `
 agents:
   - name: reviewer
     source: { model: openrouter/qwen/qwen3.7-flash }
     max_turns: 17
     max_context_bytes: 400000
+    budget: { tokens: 2000000 }
+  - name: builder
+    source: { model: "@claude/sonnet" }
+    budget: { usd: 12.5 }
+  - name: drifter
+    source: { model: openrouter/qwen/qwen3.7-flash }
 
 jobs:
   - name: review
@@ -382,6 +392,10 @@ jobs:
         messages: ["go"]
       - agent: reviewer
         messages: ["again"]
+      - agent: builder
+        messages: ["build"]
+      - agent: drifter
+        messages: ["drift"]
 `)
 
 	cfg, err := config.LoadConfig(path)
@@ -439,6 +453,49 @@ func TestJobPageShowsResolvedAgentDials(t *testing.T) {
 
 	if !strings.Contains(body, "20m") {
 		t.Error("the job page does not show the step's deadline")
+	}
+}
+
+// TestJobPageShowsTheBudgetEachStepRunsUnder is the other half of "why did
+// this step stop", and the half the page could not answer at all.
+//
+// A budget is the ceiling that binds when max_turns: does not, and for a CLI
+// agent it is the ONLY one that binds: budget.tokens is a load error for a
+// @cli source (nothing counts tokens until the subprocess exits) and a job
+// budget is tokens-only, so a cli agent with no budget.usd is held by wall
+// clock alone. A page that lists every other dial and omits this one is at its
+// least useful for the step most able to spend.
+func TestJobPageShowsTheBudgetEachStepRunsUnder(t *testing.T) {
+	t.Parallel()
+
+	server := agentJobPipeline(t)
+
+	code, body := get(t, server, "/p/demo/jobs/review")
+	if code != http.StatusOK {
+		t.Fatalf("job page = %d", code)
+	}
+
+	// A hosted agent's ceiling, in the unit it is actually metered in.
+	if !strings.Contains(body, "2,000,000 tokens") {
+		t.Errorf("the job page does not show the hosted agent's token budget: %s", body)
+	}
+
+	// A cli agent's, in the other unit — and not silently rendered as tokens,
+	// which is the mistake one shared column invites.
+	if !strings.Contains(body, "$12.50") {
+		t.Errorf("the job page does not show the cli agent's dollar budget: %s", body)
+	}
+
+	// And the state that matters most: no ceiling at all reads as a word. A 0
+	// in a limit column says "nothing allowed", the exact opposite — and the
+	// cell is matched with its delimiters because every token figure on the
+	// page ends in "0 tokens".
+	if strings.Contains(body, ">0 tokens<") {
+		t.Errorf("an agent with no budget renders a zero ceiling: %s", body)
+	}
+
+	if !strings.Contains(body, "uncapped") {
+		t.Errorf("an agent with no budget does not read as uncapped: %s", body)
 	}
 }
 

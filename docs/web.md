@@ -39,7 +39,9 @@ Press `/` anywhere for a jump palette over pipelines, jobs, and recent runs — 
 
 ### Agent dials
 
-A job page lists the **resolved** limits of each agent step in its plan: turns, context ceiling, and deadline, after the step, the agent and the built-in default have all had their say. It exists so "why did this step stop at 30 turns" is answerable without cross-referencing three files, and it shows `uncapped` rather than `0` for a dial an author explicitly removed — `0` in a limit column reads as the opposite of what it means.
+A job page lists the **resolved** limits of each agent step in its plan: turns, context ceiling, deadline, and spend budget, after the step, the agent and the built-in default have all had their say. It exists so "why did this step stop at 30 turns" is answerable without cross-referencing three files, and it shows `uncapped` rather than `0` for a dial an author explicitly removed — `0` in a limit column reads as the opposite of what it means.
+
+The budget column carries one unit or the other, never both, because the two spellings are exclusive by source kind: a hosted agent is metered in `budget.tokens` and a CLI agent in `budget.usd` (see [attempts-timeout.md](attempts-timeout.md)). Read `uncapped` there together with the turn column: for a CLI agent `budget.usd` is the only ceiling anything enforces mid-conversation, so an uncapped budget beside uncapped turns means the step is held by its deadline and nothing else.
 
 It covers the agents a *step* names. A task's `fix:` agent and a step's sub-agent `tools:` grants run under limits of their own and are not listed.
 
