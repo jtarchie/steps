@@ -71,7 +71,6 @@ func TestEndToEndContextFromDeliversDecisions(t *testing.T) {
 		says("Filed under bugs."),
 	)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 	mustRun(t, fromPipeline(t, dir, fake.URL))
 
 	// ── the demand became an obligation ───────────────────────────────────
@@ -118,8 +117,6 @@ func TestEndToEndContextFromToleratesAnUnrunSender(t *testing.T) {
 		callsTool("verdict", map[string]any{"choice": "approve", "note": "good enough"}),
 		says("Judged."),
 	)
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
 defaults:
@@ -180,8 +177,6 @@ func TestEndToEndInjectedContextFollowsTheUserPrompt(t *testing.T) {
 		says("Classified."),
 		says("Filed under bugs."),
 	)
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
 defaults:

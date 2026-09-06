@@ -57,7 +57,6 @@ func TestEndToEndBareVerdictsClassifyAndCarryOn(t *testing.T) {
 		says("Filed as a bug."),
 	)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 	mustRun(t, classifierPipeline(t, dir, fake.URL, ""))
 
 	// The plan continued past the verdict step: a bare verdict routes nowhere.
@@ -87,8 +86,6 @@ func TestEndToEndBareVerdictsClassifyAndCarryOn(t *testing.T) {
 // before this the only assertable trace of it was that the verdict tool had
 // been called — so a fixture passed whatever the model chose.
 func TestEndToEndAssertVerdictPinsTheDecision(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	const assertBug = "    assert:\n      verdict: bug\n"
 
 	t.Run("matching verdict passes", func(t *testing.T) {

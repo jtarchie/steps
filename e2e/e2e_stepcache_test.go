@@ -121,8 +121,6 @@ func TestStepCacheReusesAnAgentStep(t *testing.T) {
 	fetchLog := filepath.Join(dir, "fetch.log")
 	notifyLog := filepath.Join(dir, "notify.log")
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	fake := newFakeLLM(t, stepCacheScript()...)
 	path := stepCachePipeline(t, dir, fake.URL, root, publishLog, fetchLog, notifyLog, stepCacheNotes)
 
@@ -184,8 +182,6 @@ func TestStepCacheRerunsWhenAnInputChanges(t *testing.T) {
 	fetchLog := filepath.Join(dir, "fetch.log")
 	notifyLog := filepath.Join(dir, "notify.log")
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	fake := newFakeLLM(t, stepCacheScriptTimes(2)...)
 
 	mustRun(t, "test", stepCachePipeline(t, dir, fake.URL, root, publishLog, fetchLog, notifyLog, stepCacheNotes))
@@ -209,8 +205,6 @@ func TestStepCacheVolatileAgentAlwaysRuns(t *testing.T) {
 	publishLog := filepath.Join(dir, "publish.log")
 	fetchLog := filepath.Join(dir, "fetch.log")
 	notifyLog := filepath.Join(dir, "notify.log")
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	fake := newFakeLLM(t, stepCacheScriptTimes(2)...)
 

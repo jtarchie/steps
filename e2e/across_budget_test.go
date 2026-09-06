@@ -19,8 +19,6 @@ import (
 // A job budget would have failed the run here and published nothing. That
 // difference is the reason this ceiling exists separately from that one.
 func TestAcrossBudgetStopsAdmittingCells(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 
 	// Every reply reports 400 tokens, so a 700-token allowance covers exactly
@@ -81,8 +79,6 @@ jobs:
 // never started recorded nothing, so a rerun with a larger allowance picks up
 // exactly where the first stopped instead of paying for the whole matrix again.
 func TestAcrossBudgetLetsARerunFinishTheWork(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
 
@@ -246,8 +242,6 @@ jobs:
 // The first two start blind, which is unavoidable: no spend exists yet. What
 // must not happen is all six running.
 func TestAcrossBudgetBindsUnderConcurrency(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
 
@@ -294,8 +288,6 @@ jobs:
 // the block's ceiling bounding precisely nothing. Reserving 400 per cell means
 // the 700 allowance is consumed after two, and the third is refused.
 func TestAcrossBudgetBindsAtFullWidth(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
 
@@ -343,8 +335,6 @@ jobs:
 // may cost supplies the number, so a block inherits a binding ceiling without
 // naming reserve_per_cell: at all.
 func TestAcrossBudgetReservesTheCellAgentsOwnBudget(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
 

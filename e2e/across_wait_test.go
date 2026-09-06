@@ -49,8 +49,6 @@ jobs:
 // tokens of three thousand six hundred — the reservations it stopped on were
 // released milliseconds later.
 func TestAcrossBudgetWaitsRatherThanTruncating(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(10))
 
@@ -66,8 +64,6 @@ func TestAcrossBudgetWaitsRatherThanTruncating(t *testing.T) {
 // the ceiling off. The same full-width matrix with cells that genuinely cost
 // more than the allowance still stops.
 func TestAcrossBudgetStillBindsOnRealSpend(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 	// 900 apiece against a 2,000 ceiling: the third cell's admission is the
 	// first that can see 1,800 of real spend, and the fourth cannot fit.

@@ -159,10 +159,31 @@ func (f *fakeEC2) CreateFleet(_ context.Context, in *ec2.CreateFleetInput, _ ...
 func seamEC2(t *testing.T, fake *fakeEC2) {
 	t.Helper()
 
+	shrinkAcquireWaits(t)
+
 	previous := ec2For
 	ec2For = func(context.Context, Worker) (ec2API, error) { return fake, nil }
 
 	t.Cleanup(func() { ec2For = previous })
+}
+
+// shrinkAcquireWaits makes the acquisition polls testable, for the reason
+// shrinkGCPWaits and shrinkRegisterWait give: the branch worth proving is
+// that the loop polls AGAIN rather than reading a lagging state as terminal,
+// and every fixture that proves it answers the second poll instantly. At the
+// production interval each such test slept a real five seconds to observe a
+// fake change its mind.
+//
+// Wired into the seams rather than called per test so a new fake-backed test
+// cannot silently reintroduce the sleep; the timeout stays generous, since no
+// test here means to exercise giving up.
+func shrinkAcquireWaits(t *testing.T) {
+	t.Helper()
+
+	previousTimeout, previousPoll := acquireTimeout, acquirePoll
+	acquireTimeout, acquirePoll = 30*time.Second, 20*time.Millisecond
+
+	t.Cleanup(func() { acquireTimeout, acquirePoll = previousTimeout, previousPoll })
 }
 
 // TestLeaseStartsAndParksAWorker is the stopped rung: the first step starts

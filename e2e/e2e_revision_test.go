@@ -98,7 +98,7 @@ func configColumn(t *testing.T, out string) []string {
 func TestRunsReportTheConfigTheyRan(t *testing.T) {
 	dir := t.TempDir()
 	state := filepath.Join(dir, "state.db")
-	pipeline := filepath.Join(dir, "pipeline.yml")
+	pipeline := pipelinePath(t, dir)
 	log := filepath.Join(dir, "build.log")
 
 	revisionPipeline(t, pipeline, "echo one >> "+log)
@@ -153,7 +153,7 @@ func TestRunsReportTheConfigTheyRan(t *testing.T) {
 func TestRunsSeparateConfigsThatDifferOnlyByVars(t *testing.T) {
 	dir := t.TempDir()
 	state := filepath.Join(dir, "state.db")
-	pipeline := filepath.Join(dir, "pipeline.yml")
+	pipeline := pipelinePath(t, dir)
 	log := filepath.Join(dir, "build.log")
 
 	revisionPipeline(t, pipeline, "echo ((greeting)) >> "+log)
@@ -197,7 +197,7 @@ func TestRunsSeparateConfigsThatDifferOnlyByVars(t *testing.T) {
 // whose whole job is answering what a run was told to do.
 func TestResumeRecordsTheConfigurationThatFixedIt(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 	state := filepath.Join(dir, "state.db")
 
 	revisionPipeline(t, path, "exit 1")

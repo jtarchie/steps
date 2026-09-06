@@ -30,8 +30,6 @@ import (
 // plan order, the agent's turns and tool calls beneath its step, and the
 // verdict it reached.
 func TestWebUIRendersARealAgentRun(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 	fake := newFakeLLM(t, happyPathScript()...)
 	path := e2ePipeline(t, dir, fake.URL, "")
@@ -103,8 +101,6 @@ func assertAgentTranscript(t *testing.T, body string) {
 // "stopped early" badge, the worker, the node link) was found by a reader who
 // had to reload.
 func TestWebUILiveStreamDrawsTheSameRunThePageDoes(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 	fake := newFakeLLM(t, happyPathScript()...)
 	path := e2ePipeline(t, dir, fake.URL, "")

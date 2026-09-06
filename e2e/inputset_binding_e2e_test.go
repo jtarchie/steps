@@ -32,7 +32,7 @@ func newBindingFixture(t *testing.T, pipelineYAML string) *bindingFixture {
 
 	dir := t.TempDir()
 	fixture := &bindingFixture{
-		pipeline:  filepath.Join(dir, "pipeline.yml"),
+		pipeline:  pipelinePath(t, dir),
 		feed:      filepath.Join(dir, "feed.txt"),
 		processed: filepath.Join(dir, "processed.txt"),
 	}

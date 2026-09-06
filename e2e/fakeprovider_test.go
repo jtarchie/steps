@@ -703,7 +703,7 @@ func findNode(t *testing.T, nodes []nodeRow, kind, resource string) nodeRow {
 func writePipeline(t *testing.T, dir, yaml string) string {
 	t.Helper()
 
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	err := os.WriteFile(path, []byte(yaml), 0o600)
 	if err != nil {

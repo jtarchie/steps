@@ -96,8 +96,6 @@ jobs:
 // the same mapping tasks do: two agent cells, each told by its prompt to
 // write the same file name, both land under their own coordinates.
 func TestEndToEndAcrossCollectsAgentCells(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 	log := filepath.Join(dir, "seen.log")
 

@@ -16,7 +16,7 @@ func TestTaskAssertCodeClearsFailure(t *testing.T) {
 	dir := t.TempDir()
 	onSuccess := filepath.Join(dir, "on_success.txt")
 	onFailure := filepath.Join(dir, "on_failure.txt")
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipelineFile(t, path, fmt.Sprintf(`
 jobs:
@@ -46,7 +46,7 @@ jobs:
 func TestTaskAssertStdoutMismatchFails(t *testing.T) {
 	dir := t.TempDir()
 	onFailure := filepath.Join(dir, "on_failure.txt")
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipelineFile(t, path, fmt.Sprintf(`
 jobs:
@@ -70,7 +70,7 @@ jobs:
 // makes a job containing a failing task exit green.
 func TestJobAssertClearsFailure(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipelineFile(t, path, `
 jobs:
@@ -93,7 +93,7 @@ jobs:
 // doesn't match its assert fails, even when the plan itself succeeded.
 func TestJobAssertMismatchFailsGreenJob(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipelineFile(t, path, `
 jobs:
@@ -125,7 +125,7 @@ func TestJobAssertOutcomeFailedRequiresAFailure(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "pipeline.yml")
+			path := pipelinePath(t, t.TempDir())
 
 			writePipelineFile(t, path, fmt.Sprintf(`
 jobs:
@@ -155,7 +155,7 @@ jobs:
 // not a no-op: a matching execution: normally clears a plan failure, and this
 // is how a fixture says "no, that failure is real."
 func TestJobAssertOutcomeSucceededOptsOutOfClearing(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pipeline.yml")
+	path := pipelinePath(t, t.TempDir())
 
 	writePipelineFile(t, path, `
 jobs:
@@ -183,7 +183,7 @@ jobs:
 // absent outcome:, a matching execution: clears the plan's failure exactly as
 // it did before the field existed.
 func TestJobAssertExecutionStillClearsWithoutOutcome(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pipeline.yml")
+	path := pipelinePath(t, t.TempDir())
 
 	writePipelineFile(t, path, `
 jobs:
@@ -202,7 +202,7 @@ jobs:
 // TestJobAssertOutcomeAndExecutionCompose verifies a mismatch in EITHER
 // directive fails the job, including when the other one holds.
 func TestJobAssertOutcomeAndExecutionCompose(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pipeline.yml")
+	path := pipelinePath(t, t.TempDir())
 
 	// outcome: failed holds — the plan does fail — but execution: names a step
 	// that never ran.
@@ -238,7 +238,7 @@ jobs:
 // assert.execution names something that didn't run.
 func TestStepsTestDetectsWrongAssert(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipelineFile(t, path, `
 assert:
@@ -264,7 +264,7 @@ jobs:
 // (job names) is enforced by `steps test`.
 func TestStepsTestPipelineAssertMismatch(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipelineFile(t, path, `
 assert:
@@ -297,7 +297,7 @@ jobs:
 // any pipeline carrying a bare assert block.
 func TestPipelineAssertWithNoExecutionListAssertsNothing(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipelineFile(t, path, `
 jobs:
@@ -321,7 +321,7 @@ assert: {}
 // skipping the comparison entirely.
 func TestPipelineAssertExecutionStillChecksWhatItLists(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipelineFile(t, path, `
 jobs:

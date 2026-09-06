@@ -73,8 +73,6 @@ func TestEndToEndAssertFilesNudgesBeforeFailing(t *testing.T) {
 	)
 	path := assertFilesPipeline(t, dir, fake.URL)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, path)
 
 	// The artifact exists, was captured, and reached the step downstream —
@@ -109,8 +107,6 @@ func TestEndToEndAssertFilesFailsAWillfulModel(t *testing.T) {
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("The answer is in this message."))
 	path := assertFilesPipeline(t, dir, fake.URL)
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	err := cli.Run([]string{path})
 	if err == nil {

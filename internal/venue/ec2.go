@@ -69,10 +69,18 @@ const defaultIdle = 0
 // acquireTimeout bounds waiting for a machine to reach a usable state. Cloud
 // acquisition is 20-90 seconds; a Windows instance without fast launch is
 // minutes, which is one more reason Windows is refused earlier.
-const acquireTimeout = 10 * time.Minute
-
 // acquirePoll is how often a starting instance is asked whether it is ready.
-const acquirePoll = 5 * time.Second
+//
+// Variables rather than constants so a test can shrink them, exactly as the
+// SSM registration and GCP boot waits are: every branch here is reached by
+// polling at least twice, so against a fake the constants bought nothing but
+// a real five-second sleep per test.
+//
+//nolint:gochecknoglobals // test seams for a wait measured in minutes
+var (
+	acquireTimeout = 10 * time.Minute
+	acquirePoll    = 5 * time.Second
+)
 
 // ec2API is the slice of EC2 this package uses, declared so a test can stand
 // in for it without an account.

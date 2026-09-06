@@ -18,7 +18,7 @@ func TestRunJobIsolatedTaskSeesOnlyDeclaredInputsAndOutputs(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipeline := `
 workspace:
@@ -74,7 +74,7 @@ func TestRunJobIsolatedGetAliasMappingAndPutAll(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipeline := `
 workspace:
@@ -126,7 +126,7 @@ func TestRunJobIsolatedPutSeesOnlyDeclaredInputs(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipeline := `
 workspace:
@@ -176,7 +176,7 @@ func TestRunJobIsolatedUnknownInputFailsAtPlanTimeEvenWithForce(t *testing.T) {
 
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "counter.txt")
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipeline := fmt.Sprintf(`
 workspace:
@@ -212,7 +212,7 @@ func TestRunJobIsolatedMerkleSkipRespectsInputsChange(t *testing.T) {
 
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "counter.txt")
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipeline := func(inputs string) {
 		t.Helper()

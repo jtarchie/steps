@@ -54,7 +54,6 @@ func TestEndToEndSecondMessageIsSentAfterTheFirstIsAnswered(t *testing.T) {
 		says("Line 42 of parser.go."),
 	)
 	path := messagesPipeline(t, dir, fake.URL)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	mustRun(t, path)
 
@@ -109,7 +108,6 @@ jobs:
     messages:
       - "Review the diff."
 `)
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	mustRun(t, path)
 

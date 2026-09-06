@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,6 +21,11 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
+
+// captureMu serializes captures against each other; see captureStdout.
+//
+//nolint:gochecknoglobals // one capture at a time, for one process-wide destination
+var captureMu sync.Mutex
 
 // captureStdout reads what fn printed through this package's own output
 // destination.
@@ -34,6 +40,22 @@ import (
 // on the first line it tried to print.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
+
+	// One capture at a time. The lock above makes the SWAP safe; it does not
+	// make two captures independent, because there is one destination to swap.
+	// Two parallel tests capturing at once both point `out` at their own pipe,
+	// the second swap wins, and the first test's own line is delivered to the
+	// second test's pipe — so the first fails saying it never printed
+	// something it did print. That is what TestDrainOneSkipsAPausedJob hit
+	// under a full-suite run, reporting "drainOne did not say the job was
+	// paused" beneath a wall of another test's output.
+	//
+	// Serializing captures is enough because it is only the CAPTURING tests
+	// that must not overlap: a test that merely prints has nothing to lose,
+	// and its lines landing in someone's capture is the interleaving that
+	// TestCaptureDoesNotRaceConcurrentOutput documents as acceptable.
+	captureMu.Lock()
+	defer captureMu.Unlock()
 
 	r, w, err := os.Pipe()
 	if err != nil {

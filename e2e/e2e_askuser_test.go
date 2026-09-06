@@ -84,8 +84,6 @@ jobs:
 
 	path := writePipeline(t, dir, yaml)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, "run", path, "--job", "release-note", "--answer", "major or a minor bump=minor")
 
 	// ── wire layer ──────────────────────────────────────────────────────────
@@ -271,8 +269,6 @@ jobs:
 
 	path := writePipeline(t, dir, yaml)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	done := make(chan error, 1)
 	go func() { done <- cli.Run([]string{"run", path, "--job", "deploy"}) }()
 
@@ -418,8 +414,6 @@ jobs:
 
 	path := writePipeline(t, dir, yaml)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, "run", path, "--job", "build", "--answer", "relax the assertion=relax")
 
 	// The fix ran once and the task recovered — the control flow the fix loop
@@ -488,8 +482,6 @@ jobs:
 `, fake.URL)
 
 	path := writePipeline(t, dir, yaml)
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	mustRun(t, "run", path, "--job", "build", "--answer", "reported to=the release channel")
 

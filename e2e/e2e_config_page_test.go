@@ -20,7 +20,7 @@ import (
 // configuration the run executed, and links the configuration itself.
 func TestRunPageNamesTheConfigItRan(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 	log := filepath.Join(dir, "build.log")
 
 	revisionPipeline(t, path, "echo one >> "+log)
@@ -73,7 +73,7 @@ func TestRunPageNamesTheConfigItRan(t *testing.T) {
 // asks.
 func TestConfigPageServesTheOldRevisionAfterAnEdit(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 	log := filepath.Join(dir, "build.log")
 
 	revisionPipeline(t, path, "echo one >> "+log)
@@ -119,7 +119,7 @@ func TestConfigPageServesTheOldRevisionAfterAnEdit(t *testing.T) {
 // and on a green run it is trivia that costs a query.
 func TestRunPageSaysTheConfigChanged(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	revisionPipeline(t, path, "echo one")
 	mustRun(t, "run", path, "--job", "build")
@@ -163,7 +163,7 @@ func TestRunPageSaysTheConfigChanged(t *testing.T) {
 // moving — which is exactly the case a config-change claim would misdiagnose.
 func TestRunPageIsQuietWhenTheConfigDidNotChange(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 	marker := filepath.Join(dir, "marker")
 
 	// Succeeds once, fails ever after, without the file changing.
@@ -207,7 +207,7 @@ func TestRunPageIsQuietWhenTheConfigDidNotChange(t *testing.T) {
 // 404, not an empty page that reads as a configuration with nothing in it.
 func TestConfigPageRefusesAnUnknownRevision(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	revisionPipeline(t, path, "echo one")
 	mustRun(t, "run", path, "--job", "build")

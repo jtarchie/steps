@@ -94,8 +94,6 @@ jobs:
 // command must refuse before it does any work, and a command that never
 // applied the flag would sail past it.
 func TestWorkerFlagAppliesWhereverItIsDeclared(t *testing.T) {
-	t.Parallel()
-
 	path := flagFixture(t)
 
 	for _, args := range [][]string{

@@ -3,7 +3,6 @@ package e2e
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -16,7 +15,7 @@ func TestRunJobAgentNeverSkipped(t *testing.T) {
 	fake := newRepeatingFakeLLM(t, says("done"))
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipeline := fmt.Sprintf(`
 defaults:
@@ -44,8 +43,6 @@ jobs:
 		t.Fatal(err)
 	}
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, path)
 
 	if got := fake.requestCount(); got != 1 {
@@ -71,7 +68,7 @@ func TestRunJobAgentPromptFileArtifactReadsRepoFile(t *testing.T) {
 	fake := newRepeatingFakeLLM(t, says("done"))
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipeline := fmt.Sprintf(`
 defaults:
@@ -110,8 +107,6 @@ jobs:
 		t.Fatal(err)
 	}
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, path)
 
 	if got := fake.request(1).Messages; len(got) != 2 || !strings.Contains(got[1].Content, "Review this repo carefully.") {
@@ -128,8 +123,6 @@ jobs:
 // — twelve turns of real investigation thrown away. Now the runner takes the
 // tools away and asks for an answer from what was gathered.
 func TestAgentAnswersWhenTurnsRunOut(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 
 	// Never stops calling tools on its own — exactly the model this exists for.

@@ -66,7 +66,7 @@ func newLockstepFixture(t *testing.T, pipelineYAML string) *lockstepFixture {
 
 	dir := t.TempDir()
 	fixture := &lockstepFixture{
-		pipeline:  filepath.Join(dir, "pipeline.yml"),
+		pipeline:  pipelinePath(t, dir),
 		feedA:     filepath.Join(dir, "feed-a.txt"),
 		feedB:     filepath.Join(dir, "feed-b.txt"),
 		processed: filepath.Join(dir, "processed.txt"),

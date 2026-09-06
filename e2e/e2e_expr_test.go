@@ -69,7 +69,7 @@ func TestEndToEndExprResourceType(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipelineYAML := `
 resource_types:
@@ -160,7 +160,7 @@ func TestEndToEndExprSyntaxErrorFailsValidate(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	err := os.WriteFile(path, []byte(`
 resource_types:

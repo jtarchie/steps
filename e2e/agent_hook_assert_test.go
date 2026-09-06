@@ -35,8 +35,6 @@ func TestAgentHookHonorsAssert(t *testing.T) {
 		fake := newRepeatingFakeLLM(t, says("All good, I have filed the incident note."))
 		path := agentHookAssertPipeline(t, dir, fake.URL, "files: [note/incident.md]")
 
-		t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 		err := cli.Run([]string{"run", path, "--job", "build"})
 		if err == nil {
 			t.Fatal("cli.Run = nil, want a failure: the hook's assert.files names a file the agent never wrote")
@@ -60,8 +58,6 @@ func TestAgentHookHonorsAssert(t *testing.T) {
 			says("Incident note filed."),
 		)
 		path := agentHookAssertPipeline(t, dir, fake.URL, "files: [note/incident.md]")
-
-		t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 		mustRun(t, "run", path, "--job", "build")
 	})

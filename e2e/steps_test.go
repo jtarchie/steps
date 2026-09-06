@@ -2,15 +2,12 @@ package e2e
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
 )
 
 func TestRunFlagParsing(t *testing.T) {
-	t.Parallel()
-
 	const pipeline = `
 jobs:
 - name: build
@@ -31,7 +28,7 @@ jobs:
 	writePipeline := func(t *testing.T) string {
 		t.Helper()
 
-		path := filepath.Join(t.TempDir(), "pipeline.yml")
+		path := pipelinePath(t, t.TempDir())
 
 		err := os.WriteFile(path, []byte(pipeline), 0o600)
 		if err != nil {

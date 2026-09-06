@@ -72,8 +72,6 @@ func TestFailoverUsesTheBackupWhenThePrimaryIsDown(t *testing.T) {
 
 	path := failoverPipeline(t, dir, dead.URL, live.URL)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	logs := captureStderr(t)
 
 	err := cli.Run([]string{"run", path, "--job", "publish"})
@@ -112,8 +110,6 @@ func TestFailoverFailsWhenEverySourceIsDown(t *testing.T) {
 	alsoDead := newFakeLLM(t, outage...)
 
 	path := failoverPipeline(t, dir, dead.URL, alsoDead.URL)
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	err := cli.Run([]string{"run", path, "--job", "publish"})
 	if err == nil {
@@ -178,8 +174,6 @@ jobs:
     messages:
       - Build it.
 `, dead.URL, live.URL))
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	err := cli.Run([]string{"run", path, "--job", "publish"})
 	if err == nil {

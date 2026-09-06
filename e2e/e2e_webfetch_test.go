@@ -65,8 +65,6 @@ jobs:
 
 	path := writePipeline(t, dir, yaml)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, path)
 
 	// ── wire layer ──────────────────────────────────────────────────────────

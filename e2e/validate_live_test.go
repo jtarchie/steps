@@ -56,8 +56,6 @@ func TestPreflightStopsBeforeAnyStepRuns(t *testing.T) {
 	fake := newFakeLLM(t, outage...)
 	path := preflightPipeline(t, dir, fake.URL, "")
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	err := cli.Run([]string{"run", path, "--job", "publish"})
 	if err == nil {
 		t.Fatal("run succeeded against a model that never answers")
@@ -84,8 +82,6 @@ func TestPreflightPassesThroughToTheRun(t *testing.T) {
 	fake := newFakeLLM(t, says("probe ok"), says("done"))
 	path := preflightPipeline(t, dir, fake.URL, "")
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, path)
 
 	assertLineCount(t, filepath.Join(dir, "task.log"), 1)
@@ -105,8 +101,6 @@ func TestPreflightCachesAcrossRuns(t *testing.T) {
 	fake := newFakeLLM(t, says("probe ok"), says("first"), says("second"))
 	path := preflightPipeline(t, dir, fake.URL, "")
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, path)
 	mustRun(t, path)
 
@@ -124,8 +118,6 @@ func TestNoPreflightFlagSkipsTheCheck(t *testing.T) {
 	dir := t.TempDir()
 	fake := newFakeLLM(t, says("done"))
 	path := preflightPipeline(t, dir, fake.URL, "")
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	err := cli.Run([]string{"run", path, "--job", "publish", "--no-preflight"})
 	if err != nil {
@@ -148,8 +140,6 @@ func TestPerAgentPreflightOptOut(t *testing.T) {
 	dir := t.TempDir()
 	fake := newFakeLLM(t, says("done"))
 	path := preflightPipeline(t, dir, fake.URL, "  preflight: false")
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	err := cli.Run([]string{"run", path, "--job", "publish"})
 	if err != nil {
@@ -205,8 +195,6 @@ jobs:
       - Build it.
 `, fake.URL))
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	err := cli.Run([]string{"run", path, "--job", "publish"})
 	if err == nil {
 		t.Fatal("run succeeded with one of its models down")
@@ -232,8 +220,6 @@ func TestValidateLiveRunsNothing(t *testing.T) {
 	fake := newFakeLLM(t, says("probe ok"))
 	path := preflightPipeline(t, dir, fake.URL, "")
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	err := cli.Run([]string{"validate", path, "--live", "--job", "publish"})
 	if err != nil {
 		t.Fatalf("validate --live failed against a live model: %v", err)
@@ -257,8 +243,6 @@ func TestValidateLiveReportsAnUnreachableModel(t *testing.T) {
 
 	fake := newFakeLLM(t, outage...)
 	path := preflightPipeline(t, dir, fake.URL, "")
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	// Plain validate passes: nothing about a dead endpoint is knowable from
 	// the file or from this machine.
@@ -322,8 +306,6 @@ func TestValidateLiveRefusesWhenPreflightIsDisabled(t *testing.T) {
 	dir := t.TempDir()
 	// Port 1 is nothing: if a probe were made, it would fail.
 	path := preflightPipeline(t, dir, "http://127.0.0.1:1", "\ndefaults:\n  preflight:\n    disabled: true")
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	err := cli.Run([]string{"validate", path, "--live"})
 	if err == nil {

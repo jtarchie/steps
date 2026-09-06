@@ -52,13 +52,6 @@ func (s *docMCPServer) lastCall(t *testing.T, tool string) map[string]any {
 	return calls[len(calls)-1]
 }
 
-// activeDocMCPServer is the fixture writeDocBlock most recently started, how
-// runDocBlock's post-run check reaches the same instance the run recorded
-// calls on. A package variable is safe because the docs suites are serial
-// (t.Setenv forbids t.Parallel), and it keeps writeDocBlock's signature
-// stable for the two mutation harnesses that share it.
-var activeDocMCPServer *docMCPServer
-
 // docMCPTool is one tool a fixture exposes: the argument names its schema
 // declares required — what preflight verifies a stage will send — and the
 // text content it answers with, built from the decoded arguments.

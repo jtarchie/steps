@@ -30,8 +30,6 @@ import (
 // turns plus the tool-less wrap-up); uncapped it is called 36 (35 tool turns
 // plus the model's own final answer).
 func TestAgentMaxTurnsZeroIsUnlimited(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 
 	const toolTurns = 35
@@ -91,8 +89,6 @@ jobs:
 // 1ns is not a realistic deadline — it is a deterministic one. Any real
 // value would make this test a race against an httptest round trip.
 func TestAgentEntryTimeoutIsInheritedByItsSteps(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 	fake := newRoutedFakeLLM(t, func(_ capturedRequest) turn { return says("fine") })
 
@@ -128,8 +124,6 @@ jobs:
 // TestStepTimeoutBeatsAgentEntryTimeout is the other half of the precedence:
 // the narrower statement wins, exactly as max_turns: already behaves.
 func TestStepTimeoutBeatsAgentEntryTimeout(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 	fake := newRoutedFakeLLM(t, func(_ capturedRequest) turn { return says("fine") })
 
@@ -166,8 +160,6 @@ jobs:
 // whether or not the entry's value was read at all. One attempt means the
 // first 503 is terminal, which only the inherited value produces.
 func TestAgentEntryAttemptsIsInheritedByItsSteps(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 	fake := newFakeLLM(t, failsWith(503), says("recovered"))
 

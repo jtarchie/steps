@@ -47,8 +47,11 @@ type docScenario struct {
 	workers map[string]string
 
 	// check runs after a green `steps test`, for assertions the YAML itself
-	// can't carry (which branch a verdict took, what a put received).
-	check func(t *testing.T, dir string)
+	// can't carry (which branch a verdict took, what a put received). It is
+	// given the pipeline's path as well as its directory, because the state
+	// database is named after the pipeline and the corpus no longer names
+	// every block the same thing (see docPipelineName).
+	check func(t *testing.T, dir, path string)
 }
 
 // scripted is the common case: a positional script of provider turns.
@@ -90,10 +93,10 @@ var docScenarios = map[string]docScenario{
 			callsTool("verdict", map[string]any{"choice": "approve", "note": "accurate one-liner"}),
 			says("Summary written and approved."),
 		),
-		check: func(t *testing.T, dir string) {
+		check: func(t *testing.T, _, path string) {
 			t.Helper()
 
-			nodes := storeNodes(t, dir+"/pipeline.yml")
+			nodes := storeNodes(t, path)
 			findNode(t, nodes, "put", "results")
 
 			for _, node := range nodes {
@@ -123,10 +126,10 @@ var docScenarios = map[string]docScenario{
 			callsTool("verdict", map[string]any{"choice": "approve", "note": "reads fine"}),
 			says("Approved the draft."),
 		),
-		check: func(t *testing.T, dir string) {
+		check: func(t *testing.T, _, path string) {
 			t.Helper()
 
-			nodes := storeNodes(t, dir+"/pipeline.yml")
+			nodes := storeNodes(t, path)
 			findNode(t, nodes, "task", "publish")
 
 			for _, node := range nodes {
@@ -530,10 +533,10 @@ var docScenarios = map[string]docScenario{
 				return callsTool("verdict", map[string]any{"choice": "approve", "note": "correct"})
 			})
 		},
-		check: func(t *testing.T, dir string) {
+		check: func(t *testing.T, _, path string) {
 			t.Helper()
 
-			nodes := storeNodes(t, dir+"/pipeline.yml")
+			nodes := storeNodes(t, path)
 			findNode(t, nodes, "task", "publish")
 
 			for _, node := range nodes {

@@ -56,7 +56,7 @@ func wantRunError(t *testing.T, path string) {
 func TestStepHooksGreenTask(t *testing.T) {
 	dir := t.TempDir()
 	p := newHookPaths(dir)
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipelineFile(t, path, fmt.Sprintf(`
 jobs:
@@ -89,7 +89,7 @@ jobs:
 func TestStepHooksRedTask(t *testing.T) {
 	dir := t.TempDir()
 	p := newHookPaths(dir)
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipelineFile(t, path, fmt.Sprintf(`
 jobs:
@@ -121,7 +121,7 @@ jobs:
 func TestStepHooksOnSuccessFailureFailsGreenStep(t *testing.T) {
 	dir := t.TempDir()
 	p := newHookPaths(dir)
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipelineFile(t, path, fmt.Sprintf(`
 jobs:
@@ -149,7 +149,7 @@ jobs:
 func TestStepHooksNotFiredWhenSkipped(t *testing.T) {
 	dir := t.TempDir()
 	p := newHookPaths(dir)
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipelineFile(t, path, fmt.Sprintf(`
 jobs:
@@ -184,7 +184,7 @@ jobs:
 func TestJobHooksOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	p := newHookPaths(dir)
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipelineFile(t, path, fmt.Sprintf(`
 jobs:
@@ -212,7 +212,7 @@ jobs:
 func TestStepHookEditRerunsParent(t *testing.T) {
 	dir := t.TempDir()
 	p := newHookPaths(dir)
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	write := func(hookMsg string) {
 		t.Helper()

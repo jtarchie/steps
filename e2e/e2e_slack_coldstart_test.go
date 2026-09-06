@@ -18,7 +18,6 @@ package e2e
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -111,7 +110,7 @@ func TestEndToEndBuiltinSlackColdStartStillAnswersTheNewestThreadMention(t *test
 func coldStartPipeline(t *testing.T, baseURL string) string {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), "pipeline.yml")
+	path := pipelinePath(t, t.TempDir())
 
 	body := strings.ReplaceAll(`
 resources:

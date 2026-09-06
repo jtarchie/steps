@@ -52,6 +52,26 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
+	// Process-wide rather than a t.Setenv per test, because t.Setenv is what
+	// forbids t.Parallel — and the doc corpus pays for that ~400 times over,
+	// serially, for four variables every one of them sets to the same dummy
+	// string. Nothing here reads a real credential: the fake provider ignores
+	// the key and asserts only that one was sent, so the value carries no
+	// information and no test wants a different one. A test that does want a
+	// different value still calls t.Setenv and stays serial, which is the
+	// same bargain it made before.
+	for key, value := range map[string]string{
+		"STEPS_TEST_AGENT_API_KEY": "test-key",
+		"OPENROUTER_API_KEY":       "test-key-not-used-for-any-call",
+		"OPENCODE_API_KEY":         "test-key-not-used-for-any-call",
+		"ANTHROPIC_API_KEY":        "test-key-not-used-for-any-call",
+	} {
+		err := os.Setenv(key, value)
+		if err != nil {
+			panic(err)
+		}
+	}
+
 	options := []goleak.Option{
 		goleak.IgnoreTopFunction("github.com/modelcontextprotocol/go-sdk/mcp.(*streamableServerConn).Read"),
 		goleak.IgnoreAnyFunction("github.com/dlclark/regexp2/v2.runClock"),

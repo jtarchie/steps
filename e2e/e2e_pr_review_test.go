@@ -43,8 +43,6 @@ import (
 
 // TestEndToEndPRReviewExample runs examples/pr-review.yml end to end.
 func TestEndToEndPRReviewExample(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 	fake := newRoutedFakeLLM(t, reviewScript())
 	path := writeExampleAgainstFake(t, dir, repoFile("examples", "pr-review.yml"), fake.URL)
@@ -386,8 +384,6 @@ func reviewerFindings(dim string) string {
 // seen all three. Serially the first request waits out the barrier and the
 // test fails with a message saying so, rather than passing slowly.
 func TestEndToEndPRReviewFanOutIsConcurrent(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 
 	barrier := newRendezvous(3)

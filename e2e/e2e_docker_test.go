@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -135,7 +134,7 @@ jobs:
       - Inspect the checked-out repo.
 `, endpoint, dockerE2EImage)
 
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	err := os.WriteFile(path, []byte(yaml), 0o600)
 	if err != nil {
@@ -160,8 +159,6 @@ func TestEndToEndAgentInContainer(t *testing.T) {
 	)
 
 	path := dockerAgentPipeline(t, dir, fake.URL)
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	mustRun(t, path)
 
@@ -203,8 +200,6 @@ func TestEndToEndAgentContainerStatePersistsAcrossToolCalls(t *testing.T) {
 
 	path := dockerAgentPipeline(t, dir, fake.URL)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, path)
 
 	second := lastToolResult(t, fake.request(3))
@@ -228,7 +223,6 @@ func TestEndToEndAgentContainerEnvPassthrough(t *testing.T) {
 
 	path := dockerAgentPipeline(t, dir, fake.URL)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 	t.Setenv("STEPS_TEST_PASSED_THROUGH", "visible")
 	t.Setenv("STEPS_TEST_WITHHELD", "should-not-appear")
 
@@ -259,8 +253,6 @@ func TestEndToEndAgentContainerNonzeroExitIsData(t *testing.T) {
 
 	path := dockerAgentPipeline(t, dir, fake.URL)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, path)
 
 	result := lastToolResult(t, fake.request(2))
@@ -287,8 +279,6 @@ func TestEndToEndAgentContainerLeavesNothingRunning(t *testing.T) {
 	)
 
 	path := dockerAgentPipeline(t, dir, fake.URL)
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	mustRun(t, path)
 

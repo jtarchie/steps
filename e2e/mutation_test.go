@@ -40,7 +40,6 @@ import (
 
 	"github.com/jtarchie/steps/docs"
 	"github.com/jtarchie/steps/internal/cli"
-	"github.com/jtarchie/steps/internal/pipeline"
 )
 
 // mutantMarker is the text an operator splices in where a match must fail.
@@ -87,20 +86,7 @@ func TestAssertMutation(t *testing.T) {
 func checkMutantIsCaught(t *testing.T, block docs.Block, mut mutant) {
 	t.Helper()
 
-	// Same reason runDocBlock resets it (see its own comment): a block whose
-	// fallback: fires pins that agent name process-wide, and the pinned source
-	// carries the endpoint of a fake server this mutant is about to tear down.
-	// Every mutant re-runs the same block in this one process, so without the
-	// reset the SECOND mutant of a failing-over example runs against the
-	// FIRST's dead endpoint — failing for a reason that has nothing to do with
-	// the assertion under test, which is exactly what a mutant surviving
-	// looks like.
-	pipeline.ResetPreflightCache()
-	t.Cleanup(pipeline.ResetPreflightCache)
-
-	for _, key := range []string{"OPENROUTER_API_KEY", "OPENCODE_API_KEY", "ANTHROPIC_API_KEY"} {
-		t.Setenv(key, "test-key-not-used-for-any-call")
-	}
+	t.Parallel()
 
 	scenario := docScenarios[block.TestID()].tolerateOverrun()
 
@@ -108,7 +94,7 @@ func checkMutantIsCaught(t *testing.T, block docs.Block, mut mutant) {
 	mutated.Body = mut.body
 
 	dir := t.TempDir()
-	path := writeDocBlock(t, dir, mutated, scenario)
+	path, _ := writeDocBlock(t, dir, mutated, scenario)
 
 	err := cli.Run(append([]string{"validate", "--syntax-only", path}, scenarioVarFlags(scenario)...))
 	if err != nil {

@@ -283,6 +283,8 @@ func (d *dialedTargets) last(t *testing.T) iapdial.Target {
 func seamGCP(t *testing.T, fake *fakeGCE, sshd *testSSHD) *dialedTargets {
 	t.Helper()
 
+	shrinkAcquireWaits(t)
+
 	if fake.hostKeys == nil && sshd != nil {
 		fake.hostKeys = hostKeyAttributes(t, sshd.HostKey)
 	}

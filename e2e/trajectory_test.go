@@ -109,8 +109,6 @@ jobs:
       - write some notes
 `)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	err := cli.Run([]string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -157,8 +155,6 @@ jobs:
     assert:
       stdout: "a phrase the model never says"
 `)
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	err := cli.Run([]string{path})
 	if err == nil {
@@ -207,8 +203,6 @@ jobs:
     messages:
       - write a big file
 `)
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	err := cli.Run([]string{path})
 	if err != nil {
@@ -389,8 +383,6 @@ jobs:
       run: exit 1
 `)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	out := captureStdout(t, func() {
 		err := cli.Run([]string{path, "--keep-workspace"})
 		if err == nil {
@@ -472,8 +464,6 @@ jobs:
       test -f built/base.txt
       test ! -e built/.steps-agent-out
 `)
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	err := cli.Run([]string{path})
 	if err != nil {

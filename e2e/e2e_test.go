@@ -173,8 +173,6 @@ func runHappyPath(t *testing.T, workspaceBlock string) {
 	fake := newFakeLLM(t, happyPathScript()...)
 	path := e2ePipeline(t, dir, fake.URL, workspaceBlock)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, path)
 
 	// ── resource layer ────────────────────────────────────────────────────
@@ -367,8 +365,6 @@ func testSadPathModelRejects(t *testing.T) {
 	)
 	path := e2ePipeline(t, dir, fake.URL, "")
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	err := cli.Run([]string{path})
 	if err == nil {
 		t.Fatal("run succeeded; the reject branch's escalate step exits 1, so the job must fail")
@@ -441,8 +437,6 @@ func testSadPathProviderUnreachable(t *testing.T) {
 
 	fake := newFakeLLM(t, outage...)
 	path := e2ePipeline(t, dir, fake.URL, "")
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	logs := captureStderr(t)
 
@@ -639,8 +633,6 @@ jobs:
 
 	path := writePipeline(t, dir, pipeline)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	err := cli.Run([]string{path})
 	if err != nil {
 		t.Fatalf("run failed: %v — try: tolerates an infrastructure error", err)
@@ -688,8 +680,6 @@ jobs:
 `, errorLog, failureLog)
 
 	path := writePipeline(t, dir, pipeline)
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	err := cli.Run([]string{path})
 	if err == nil {
@@ -771,8 +761,6 @@ jobs:
       - Say something.
     attempts: 3
 `, fake.URL))
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	logs := captureStderr(t)
 
@@ -894,8 +882,6 @@ func TestEndToEndAgentMidRunFailover(t *testing.T) {
 // serves several pipelines from one process, which
 // TestWebRefusesTwoPipelinesClaimingOneName holds.
 func testMidRunFailoverPinIsScopedToItsPipeline(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	// The pipeline with the outage: its primary completes a turn, then dies,
 	// and its fallback finishes the step — pinning that fallback.
 	outagePrimary := newFakeLLM(t,
@@ -949,8 +935,6 @@ func testMidRunFailoverResumes(t *testing.T) {
 	fallback := newFakeLLM(t, says("Summarized via fallback."))
 
 	path := midRunFailoverPipeline(t, dir, "resumer", primary.URL, fallback.URL)
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	mustRun(t, path)
 
@@ -1027,8 +1011,6 @@ func testMidRunFailoverSkipsNonTransient(t *testing.T) {
 	fallback := newFakeLLM(t, says("Summarized via fallback."))
 
 	path := midRunFailoverPipeline(t, dir, "rejector", primary.URL, fallback.URL)
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	err := cli.Run([]string{path})
 	if err == nil {
@@ -1114,8 +1096,6 @@ jobs:
 `, agentName, primary.URL, fallback.URL)
 
 	path := writePipeline(t, dir, yaml)
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	mustRun(t, path)
 
@@ -1252,8 +1232,6 @@ jobs:
     messages:
       - Check on the deploy.
 `, fake.URL))
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	start := time.Now()
 

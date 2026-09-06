@@ -508,7 +508,7 @@ func TestOneMessagePerFlush(t *testing.T) {
 // transcript on a live socket, with nothing logged anywhere. The stream pages
 // instead, and folds each page into the view it already has.
 func TestStreamKeepsDrawingPastTheRunEventLimit(t *testing.T) {
-	t.Parallel()
+	shrinkRunEventLimit(t, 40, 10)
 
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
@@ -548,4 +548,26 @@ func TestStreamKeepsDrawingPastTheRunEventLimit(t *testing.T) {
 	if !strings.Contains(stream, `id="step-2-after-the-bound"`) {
 		t.Errorf("the stream stops at the page's event limit, and says nothing about it")
 	}
+}
+
+// shrinkRunEventLimit lowers the transcript bound for one test, so a test
+// about what happens PAST it does not have to write five thousand rows — one
+// SQLite transaction each — to get there.
+//
+// batch moves with it so the run still outruns one read of the stream, which
+// is the other thing this fixture proves; see liveBatch.
+//
+// The test that uses it gives up t.Parallel() in exchange: these are package
+// globals, and a parallel sibling reading the page would see the shrunk bounds.
+// That is a good trade, because the events were the whole cost: the test was
+// the slowest in the package by an order of magnitude and is now among the
+// fastest, and a serial test that takes 80ms costs less wall clock than a
+// parallel one that takes eight seconds.
+func shrinkRunEventLimit(t *testing.T, limit, batch int) {
+	t.Helper()
+
+	previousLimit, previousBatch := runEventLimit, liveBatch
+	runEventLimit, liveBatch = limit, batch
+
+	t.Cleanup(func() { runEventLimit, liveBatch = previousLimit, previousBatch })
 }

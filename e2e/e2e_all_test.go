@@ -197,8 +197,6 @@ jobs:
 
 	path := writePipeline(t, dir, pipeline)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	err := cli.Run([]string{"test", path})
 	if err != nil {
 		t.Fatalf("steps test failed: %v", err)

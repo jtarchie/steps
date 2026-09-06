@@ -131,8 +131,6 @@ func TestRunJobTaskFixRecovers(t *testing.T) {
 	counter := filepath.Join(dir, "counter.txt")
 	path := writeFixPipeline(t, dir, fake.URL, failThenPass(counter))
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, path)
 
 	if got := fake.requestCount(); got != 1 {
@@ -154,8 +152,6 @@ func TestRunJobTaskFixPrintsResponse(t *testing.T) {
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "counter.txt")
 	path := writeFixPipeline(t, dir, fake.URL, failThenPass(counter))
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	// Not mustRun: captureStdout's os.Stdout restore only runs if fn returns
 	// normally, and t.Fatalf inside fn would Goexit past it, leaving stdout
@@ -182,8 +178,6 @@ func TestRunJobTaskFixGreenPathSkipsAgent(t *testing.T) {
 	dir := t.TempDir()
 	path := writeFixPipeline(t, dir, fake.URL, "true")
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, path)
 
 	if got := fake.requestCount(); got != 0 {
@@ -198,8 +192,6 @@ func TestRunJobTaskFixStillFailing(t *testing.T) {
 
 	dir := t.TempDir()
 	path := writeFixPipeline(t, dir, fake.URL, "false")
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	err := cli.Run([]string{path})
 	if err == nil {
@@ -227,8 +219,6 @@ func TestRunJobTaskFixRunsBeforeAssertJudges(t *testing.T) {
 		"code: 0\nstdout: run 2",
 		"execution: [fixer, check]\noutcome: succeeded")
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, path)
 
 	if got := fake.requestCount(); got != 1 {
@@ -251,8 +241,6 @@ func TestRunJobTaskFixAssertStillJudges(t *testing.T) {
 	counter := filepath.Join(dir, "counter.txt")
 	path := writeFixAssertPipeline(t, dir, fake.URL, failThenPass(counter),
 		"stdout: run 3", "")
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	err := cli.Run([]string{path})
 	if err == nil {
@@ -288,8 +276,6 @@ func TestRunJobTaskFixGreenPathSkipsAgentWithAssert(t *testing.T) {
 		"code: 0\nstdout: all good",
 		"execution: [check]\noutcome: succeeded")
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, path)
 
 	if got := fake.requestCount(); got != 0 {
@@ -313,8 +299,6 @@ func TestRunJobTaskFixRepairsAnAssertMissAtExitZero(t *testing.T) {
 	path := writeFixAssertPipeline(t, dir, fake.URL, run,
 		"stdout: run 2",
 		"execution: [fixer, check]\noutcome: succeeded")
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	mustRun(t, path)
 
@@ -342,8 +326,6 @@ func TestRunJobTaskFixSkipsAnAssertedNonZeroExit(t *testing.T) {
 	path := writeFixAssertPipeline(t, dir, fake.URL, failThenPass(counter),
 		"code: 1\nstdout: run 1",
 		"execution: [check]\noutcome: succeeded")
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	mustRun(t, path)
 

@@ -160,8 +160,6 @@ jobs:
       - review the notes
 `)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	err := cli.Run([]string{path})
 	if err != nil {
 		t.Fatalf("run: %v", err)

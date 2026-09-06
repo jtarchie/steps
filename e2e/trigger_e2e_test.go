@@ -41,7 +41,7 @@ func newWatchFixture(t *testing.T, pipelineYAML string) *watchFixture {
 	dir := t.TempDir()
 	fixture := &watchFixture{
 		dir:       dir,
-		pipeline:  filepath.Join(dir, "pipeline.yml"),
+		pipeline:  pipelinePath(t, dir),
 		feed:      filepath.Join(dir, "feed.txt"),
 		processed: filepath.Join(dir, "processed.txt"),
 	}

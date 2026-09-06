@@ -51,7 +51,7 @@ func TestRunJobSkipsUnchangedAndReexecutesOnChange(t *testing.T) {
 	dir := t.TempDir()
 	getCounter := filepath.Join(dir, "get-counter.txt")
 	taskCounter := filepath.Join(dir, "task-counter.txt")
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipeline := func(source string) {
 		t.Helper()
@@ -111,7 +111,7 @@ func TestRunJobPutNeverSkipped(t *testing.T) {
 	dir := t.TempDir()
 	getCounter := filepath.Join(dir, "get-counter.txt")
 	putCounter := filepath.Join(dir, "put-counter.txt")
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipeline := fmt.Sprintf(`
 resource_types:
@@ -160,7 +160,7 @@ jobs:
 func TestRunJobCheckCommandRunsOnceNotTwice(t *testing.T) {
 	dir := t.TempDir()
 	checkCounter := filepath.Join(dir, "check-counter.txt")
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipeline := fmt.Sprintf(`
 resource_types:
@@ -209,7 +209,7 @@ jobs:
 func TestRunJobGuardDecidesWhenAnInputWasNeverProduced(t *testing.T) {
 	dir := t.TempDir()
 	published := filepath.Join(dir, "published.txt")
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipeline := fmt.Sprintf(`
 jobs:
@@ -246,7 +246,7 @@ jobs:
 func TestRunJobGuardSeesTheSameInputsTheStepDoes(t *testing.T) {
 	dir := t.TempDir()
 	published := filepath.Join(dir, "published.txt")
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipeline := fmt.Sprintf(`
 tasks:

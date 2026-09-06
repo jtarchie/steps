@@ -180,8 +180,6 @@ jobs:
       - Say something.
 `)
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, "run", path, "--job", "review")
 
 	var err error

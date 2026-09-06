@@ -22,8 +22,6 @@ import (
 // that 400 already gone and refuse to spend another 400 on top — 800 would be
 // over the ceiling — so the second agent step never runs.
 func TestResumeContinuesTheJobBudget(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
 

@@ -69,8 +69,6 @@ func TestAgentBudgetStopsTheStep(t *testing.T) {
 
 	path := budgetPipeline(t, dir, fake.URL, "  budget:\n    tokens: 100", "")
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	logs := captureStderr(t)
 
 	err := cli.Run([]string{"run", path, "--job", "publish"})
@@ -142,8 +140,6 @@ jobs:
       - Build it.
 `, fake.URL))
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	err := cli.Run([]string{"run", path, "--job", "publish"})
 	if err == nil {
 		t.Fatal("job succeeded despite blowing its job-level token budget")
@@ -180,8 +176,6 @@ func TestAgentUsageIsPersisted(t *testing.T) {
 	)
 
 	path := budgetPipeline(t, dir, fake.URL, "", "")
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	err := cli.Run([]string{"run", path, "--job", "publish"})
 	if err != nil {
@@ -260,8 +254,6 @@ func assertRecordedStepUsage(t *testing.T, st *store.Store, runID string) {
 // six-cell review matrix reported one reviewer and under-counted the run by
 // the whole fan-out: the exact pipeline this feature exists to make legible.
 func TestAgentUsageRecordsEveryCellOfAMatrix(t *testing.T) {
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	dir := t.TempDir()
 
 	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))

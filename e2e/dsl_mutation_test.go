@@ -29,6 +29,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -158,15 +159,30 @@ var stepOperators = []stepOperator{
 func TestDSLMutation(t *testing.T) {
 	blocks := runnableBlocks(t)
 
-	modes := map[string]string{}
+	// Guarded because the operators run concurrently: each is an independent
+	// walk of the corpus, and the tally is the only thing they share.
+	var (
+		mu    sync.Mutex
+		modes = map[string]string{}
+	)
 
 	for _, operator := range stepOperators {
 		t.Run(operator.tag, func(t *testing.T) {
-			modes[operator.tag] = detectFieldSomewhere(t, blocks, operator)
+			t.Parallel()
+
+			mode := detectFieldSomewhere(t, blocks, operator)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			modes[operator.tag] = mode
 		})
 	}
 
-	reportDetectionModes(t, modes)
+	// After the subtests, not between them: a parallel subtest is paused at
+	// t.Parallel() and resumes only once this function returns, so a tally
+	// read here would report an empty map.
+	t.Cleanup(func() { reportDetectionModes(t, modes) })
 }
 
 // reportDetectionModes prints the tally, naming the fields whose only
@@ -347,17 +363,13 @@ func applyToNested(step map[string]any, operator stepOperator) bool {
 func detectMutant(t *testing.T, block docs.Block, body string) string {
 	t.Helper()
 
-	for _, key := range []string{"OPENROUTER_API_KEY", "OPENCODE_API_KEY", "ANTHROPIC_API_KEY"} {
-		t.Setenv(key, "test-key-not-used-for-any-call")
-	}
-
 	scenario := docScenarios[block.TestID()].tolerateOverrun()
 
 	mutated := block
 	mutated.Body = body
 
 	dir := t.TempDir()
-	path := writeDocBlock(t, dir, mutated, scenario)
+	path, _ := writeDocBlock(t, dir, mutated, scenario)
 
 	varFlags := scenarioVarFlags(scenario)
 	runFlags := scenarioFlags(scenario)

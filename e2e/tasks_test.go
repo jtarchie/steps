@@ -15,7 +15,7 @@ import (
 func TestRunJobTaskReferenceRunsNamedTask(t *testing.T) {
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "counter.txt")
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipeline := fmt.Sprintf(`
 tasks:
@@ -49,7 +49,7 @@ func TestRunJobTaskInlineIgnoresSameNamedTopLevelTask(t *testing.T) {
 	dir := t.TempDir()
 	topLevelCounter := filepath.Join(dir, "top-level-counter.txt")
 	inlineCounter := filepath.Join(dir, "inline-counter.txt")
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipeline := fmt.Sprintf(`
 tasks:
@@ -85,7 +85,7 @@ func TestRunJobTaskRunFileEditBustsCache(t *testing.T) {
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "counter.txt")
 	scriptPath := filepath.Join(dir, "unit.sh")
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipeline := `
 tasks:
@@ -137,7 +137,7 @@ jobs:
 func TestRunJobTaskRunFileRenameDoesNotBustCache(t *testing.T) {
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "counter.txt")
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	writePipeline := func(scriptName string) {
 		t.Helper()
@@ -185,7 +185,7 @@ jobs:
 // tasks: entry (and no run: of its own) fails clearly at plan time.
 func TestRunJobTaskReferenceUndefinedErrors(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipeline := `
 jobs:
@@ -218,7 +218,7 @@ jobs:
 func writeTaskFixPipeline(t *testing.T, dir, endpointA, endpointB, run, taskFix, stepFixLine string) string {
 	t.Helper()
 
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 	pipeline := fmt.Sprintf(`
 defaults:
   preflight:
@@ -269,8 +269,6 @@ func TestRunJobTaskReferenceUsesTaskFix(t *testing.T) {
 	run := failThenPass(counter)
 	path := writeTaskFixPipeline(t, dir, fakeA.URL, fakeB.URL, run, "fixerA", "")
 
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
-
 	mustRun(t, path)
 
 	if got := fakeA.requestCount(); got != 1 {
@@ -292,8 +290,6 @@ func TestRunJobTaskReferenceStepFixOverridesTaskFix(t *testing.T) {
 	counter := filepath.Join(dir, "counter.txt")
 	run := failThenPass(counter)
 	path := writeTaskFixPipeline(t, dir, fakeA.URL, fakeB.URL, run, "fixerA", "    fix: fixerB\n")
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	mustRun(t, path)
 

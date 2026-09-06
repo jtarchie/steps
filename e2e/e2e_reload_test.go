@@ -47,7 +47,7 @@ func reloadPipeline(t *testing.T, path string, jobs ...string) {
 // passes when asserted against a watcher and a poller separately.
 func TestReloadStartsPollingATriggerAnEditAdded(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 	versions := filepath.Join(dir, "versions.json")
 	log := filepath.Join(dir, "ran.log")
 
@@ -105,7 +105,7 @@ jobs:
 // feature nobody has.
 func TestWebActuallyWatchesTheFileItWasStartedWith(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	reloadPipeline(t, path, "build")
 

@@ -16,7 +16,6 @@ import (
 	"github.com/jtarchie/steps/docs"
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/pipeline"
 )
 
 // The docs ARE the tests: every fenced ```yaml block in docs/*.md is
@@ -75,6 +74,8 @@ func TestDocsExamples(t *testing.T) {
 
 	for _, block := range mustBlocks(t) {
 		t.Run(block.Name(), func(t *testing.T) {
+			t.Parallel()
+
 			runDocBlock(t, schema, block)
 		})
 	}
@@ -122,16 +123,6 @@ func scenarioFlags(scenario docScenario) []string {
 func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 	t.Helper()
 
-	// A block whose fallback: actually fires (or whose primary fails
-	// preflight) pins the agent name process-wide (see preflight.go's
-	// selectedSources) — otherwise-harmless state that would leak into
-	// whichever LATER test in this binary happens to declare an agent of the
-	// same name, pointed at a by-then-torn-down fake server. Resetting
-	// around every block, not just ones known to trigger it, is what makes
-	// that impossible regardless of which page a future example lands on.
-	pipeline.ResetPreflightCache()
-	t.Cleanup(pipeline.ResetPreflightCache)
-
 	if block.Mode() == "fragment" {
 		t.Skip("fragment: rendered only")
 	}
@@ -147,7 +138,7 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 	}
 
 	dir := t.TempDir()
-	path := writeDocBlock(t, dir, block, scenario)
+	path, mcpServer := writeDocBlock(t, dir, block, scenario)
 
 	varFlags := scenarioVarFlags(scenario)
 	runFlags := scenarioFlags(scenario)
@@ -167,7 +158,7 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 	// server RECEIVED, which no YAML assert can see (an out: tool's
 	// arguments never land in the workspace).
 	if fixture, ok := docMCPFixtures[block.MCPID()]; ok && fixture.check != nil {
-		fixture.check(t, activeDocMCPServer)
+		fixture.check(t, mcpServer)
 	}
 }
 
@@ -181,13 +172,11 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 func executeDocBlock(t *testing.T, block docs.Block, scenario docScenario, dir, path string, varFlags, runFlags []string) {
 	t.Helper()
 
-	for _, key := range []string{"OPENROUTER_API_KEY", "OPENCODE_API_KEY", "ANTHROPIC_API_KEY"} {
-		t.Setenv(key, "test-key-not-used-for-any-call")
-	}
-
 	// Written beside the injected pipeline so the scenario's files
-	// (run_file:/file: targets) resolve for it too.
-	original := filepath.Join(dir, "original.yml")
+	// (run_file:/file: targets) resolve for it too, and named apart from it
+	// for the reason docPipelineName gives — a full validate resolves agents,
+	// so it reaches the same process-wide pin scope a run does.
+	original := filepath.Join(dir, docPipelineName(t)+"-original.yml")
 
 	err := os.WriteFile(original, []byte(block.Body), 0o600)
 	if err != nil {
@@ -205,14 +194,14 @@ func executeDocBlock(t *testing.T, block docs.Block, scenario docScenario, dir, 
 	}
 
 	if scenario.check != nil {
-		scenario.check(t, dir)
+		scenario.check(t, dir, path)
 	}
 }
 
 // writeDocBlock materializes a block into dir: any files the scenario
 // declares, plus the pipeline itself — with every agent pointed at the fake
 // provider when the scenario scripts one.
-func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScenario) string {
+func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScenario) (string, *docMCPServer) {
 	t.Helper()
 
 	for name, body := range scenario.files {
@@ -229,7 +218,7 @@ func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScena
 		}
 	}
 
-	body := injectDocMCPFixture(t, block, block.Body)
+	body, mcpServer := injectDocMCPFixture(t, block, block.Body)
 
 	if usesAgents(t, body) {
 		if block.Mode() == "run" && scenario.fake == nil {
@@ -244,18 +233,63 @@ func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScena
 			}
 
 			body = injectFakeProvider(t, body, scenario.fake(t).URL, fallbackEndpoint)
-			t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 		}
 	}
 
-	pipelinePath := filepath.Join(dir, "pipeline.yml")
+	pipelinePath := filepath.Join(dir, docPipelineName(t)+".yml")
 
 	err := os.WriteFile(pipelinePath, []byte(body), 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return pipelinePath
+	return pipelinePath, mcpServer
+}
+
+// pipelinePath is where a test's pipeline goes: inside dir, under a file name
+// derived from the test itself. Everything docPipelineName says about the
+// doc corpus applies to every other fixture too — they all used to be
+// "pipeline.yml", so every test in this binary shared one agent pin scope.
+func pipelinePath(t *testing.T, dir string) string {
+	t.Helper()
+
+	return filepath.Join(dir, docPipelineName(t)+".yml")
+}
+
+// docPipelineName is the file name — and therefore, via config.Slugify, the
+// pipeline IDENTITY — this block runs under: the test's own name, which the
+// framework already guarantees is unique.
+//
+// It is unique on purpose. An agent that fails over is pinned to its fallback
+// under pinScope{pipeline, agent}, process-wide and outliving the run, so
+// every block written to the same "pipeline.yml" shared one scope: block A's
+// pin was still installed when block B declared an agent of the same name,
+// pointing B at A's by-then-closed fake server. The old harness bought
+// isolation by resetting that state globally around every block, which works
+// only while the corpus is serial — a reset is indiscriminate, and a parallel
+// sibling's pin is exactly as reachable as one's own.
+//
+// Naming the pipelines apart fixes the collision at its source instead: two
+// blocks no longer share a scope, so there is nothing to reset and the corpus
+// can run concurrently.
+func docPipelineName(t *testing.T) string {
+	t.Helper()
+
+	return sanitizeForFileName(t.Name())
+}
+
+// sanitizeForFileName reduces a test name to something safe on any filesystem
+// and legal as a pipeline slug. Go's own subtest names carry "/" and ":" (a
+// block is named "control-flow.md:140"), neither of which can appear here.
+func sanitizeForFileName(name string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		default:
+			return '-'
+		}
+	}, name)
 }
 
 // usesAgents reports whether the pipeline defines agents: — the signal that
@@ -345,16 +379,18 @@ func injectFakeProvider(t *testing.T, body, endpoint, fallbackEndpoint string) s
 
 // injectDocMCPFixture starts the mcp= fixture a block's fence names (leaving
 // body untouched when it names none) and returns body rewritten to point at
-// it, tracking the started server in activeDocMCPServer for the post-run
-// check.
-func injectDocMCPFixture(t *testing.T, block docs.Block, body string) string {
+// it, plus the server it started so the post-run check can assert on the
+// calls THIS run recorded.
+//
+// Returned rather than parked in a package variable, which is what it used to
+// be: the doc suites run their blocks in parallel now, and a single global
+// would hand every concurrent block whichever fixture started last.
+func injectDocMCPFixture(t *testing.T, block docs.Block, body string) (string, *docMCPServer) {
 	t.Helper()
-
-	activeDocMCPServer = nil
 
 	id := block.MCPID()
 	if id == "" {
-		return body
+		return body, nil
 	}
 
 	fixture, ok := docMCPFixtures[id]
@@ -362,9 +398,9 @@ func injectDocMCPFixture(t *testing.T, block docs.Block, body string) string {
 		t.Fatalf("fence names mcp=%s but docs_mcp_test.go has no such fixture", id)
 	}
 
-	activeDocMCPServer = fixture.start(t)
+	server := fixture.start(t)
 
-	return injectFakeMCP(t, body, activeDocMCPServer.URL)
+	return injectFakeMCP(t, body, server.URL), server
 }
 
 // injectFakeMCP rewrites every mcp_servers: entry's endpoint: to the fixture
@@ -472,6 +508,8 @@ func TestDocsExamplesAssert(t *testing.T) {
 		}
 
 		t.Run(block.Name(), func(t *testing.T) {
+			t.Parallel()
+
 			checkBlockAsserts(t, block)
 		})
 	}

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
@@ -338,7 +337,7 @@ func TestEndToEndBuiltinSlackMentionsAndReply(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipelineYAML := `
 resources:
@@ -439,7 +438,7 @@ func TestEndToEndBuiltinSlackAnswersAReplyBehindTheCursor(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipelineYAML := `
 resources:
@@ -540,7 +539,7 @@ func TestEndToEndBuiltinSlackSurvivesRateLimits(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipelineYAML := `
 resources:
@@ -595,7 +594,7 @@ func TestEndToEndBuiltinSlackReplyWithoutThread(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipelineYAML := `
 resources:
@@ -652,7 +651,7 @@ func TestEndToEndBuiltinSlackReplyCustomTokenEnv(t *testing.T) {
 	// either way this proves the custom name is what actually got used.
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipelineYAML := `
 resources:
@@ -703,7 +702,7 @@ func TestEndToEndBuiltinSlackReplyUnlistedTokenEnvFails(t *testing.T) {
 	t.Setenv("SECOND_BOT_TOKEN", "xoxb-second")
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipelineYAML := `
 resources:

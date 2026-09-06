@@ -3,7 +3,6 @@ package e2e
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
@@ -19,7 +18,7 @@ import (
 // row for a chain that should never be treated as a cacheable success.
 func TestRunJobDoesNotRecordSucceededForInheritedFix(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "pipeline.yml")
+	path := pipelinePath(t, dir)
 
 	pipeline := `
 defaults:
@@ -50,8 +49,6 @@ jobs:
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
 
 	mustRun(t, path)
 

@@ -52,7 +52,15 @@ const liveIdleTimeout = 5 * time.Minute
 // rather than reading a run whole, which is what keeps it working past
 // runEventLimit — the page's own bound, and one a delta has no reason to
 // inherit.
-const liveBatch = 500
+//
+// A variable rather than a constant so a test can shrink it alongside
+// runEventLimit. Both have to move together: the test for what happens past
+// the page's bound is only ALSO a test of paging while the run outruns one
+// batch, so shrinking the bound alone would quietly retire the paging
+// coverage while the test kept passing.
+//
+//nolint:gochecknoglobals // a test seam; see runEventLimit
+var liveBatch = 500
 
 // handleRunEvents streams a run's events as server-sent events.
 func (s *Server) handleRunEvents(c echo.Context) error {

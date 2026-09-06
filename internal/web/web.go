@@ -39,7 +39,18 @@ const historyLimit = 200
 
 // runEventLimit bounds one run's transcript, for the page and for the diff
 // that reads a prior run's steps.
-const runEventLimit = 5000
+//
+// A variable rather than a constant so a test can shrink it. The branch worth
+// proving is that the STREAM does not inherit the page's bound — a flush past
+// it once found no touched step and wrote nothing, freezing a live transcript
+// — and that branch is reached by exceeding the bound, whatever it is. At
+// 5,000 the only test that covers it had to write 5,013 events one
+// transaction at a time, which cost more wall clock than the rest of the
+// package put together and made the test the first thing to time out when the
+// machine was busy.
+//
+//nolint:gochecknoglobals // a test seam for a bound no run reaches cheaply
+var runEventLimit = 5000
 
 // readHeaderTimeout bounds how long a client may take to send its headers.
 // A page request and a webhook body are both small; a sender that dribbles

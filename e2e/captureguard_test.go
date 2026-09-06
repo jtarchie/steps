@@ -49,12 +49,12 @@ func TestNoParallelTestRedirectsStdout(t *testing.T) {
 	}
 
 	if total == 0 {
-		t.Fatal("no function assigning os.Stdout was found — this check no longer checks anything")
+		t.Fatal("no function assigning os.Stdout or os.Stderr was found — this check no longer checks anything")
 	}
 
 	for _, pkg := range packages {
 		for _, offender := range pkg.parallelRedirectors() {
-			t.Errorf("%s is parallel AND redirects os.Stdout — that is a data race, not a flake", offender)
+			t.Errorf("%s is parallel AND redirects os.Stdout/os.Stderr — that is a data race, not a flake", offender)
 		}
 	}
 }
@@ -65,6 +65,39 @@ type testPackage struct {
 	dir         string
 	tests       map[string]*ast.FuncDecl
 	redirectors map[string]bool
+	// helpers is every non-test function in the package, so redirection can
+	// be traced through the ones that only pass it along.
+	helpers map[string]*ast.FuncDecl
+}
+
+// closeOverHelpers grows redirectors to its transitive closure: a helper that
+// calls a redirector is itself one.
+//
+// One hop is not enough, and the shortfall was live rather than theoretical.
+// TestEndToEndAgentSadPath reaches captureStderr through
+// testSadPathProviderUnreachable, so a check that asked only whether the TEST
+// calls a redirector saw a clean test calling an innocent-looking helper —
+// and the race it was built to prevent was reported by the race detector
+// instead of by this test.
+func (p testPackage) closeOverHelpers() {
+	for {
+		grew := false
+
+		for name, fn := range p.helpers {
+			if p.redirectors[name] {
+				continue
+			}
+
+			if callsAny(fn.Body, p.redirectors) {
+				p.redirectors[name] = true
+				grew = true
+			}
+		}
+
+		if !grew {
+			return
+		}
+	}
 }
 
 // parallelRedirectors names the tests in this package that are parallel and
@@ -109,7 +142,7 @@ func parseTestPackages(t *testing.T) []testPackage {
 
 		pkg, ok := byDir[dir]
 		if !ok {
-			pkg = &testPackage{dir: dir, tests: map[string]*ast.FuncDecl{}, redirectors: map[string]bool{}}
+			pkg = &testPackage{dir: dir, tests: map[string]*ast.FuncDecl{}, redirectors: map[string]bool{}, helpers: map[string]*ast.FuncDecl{}}
 			byDir[dir] = pkg
 		}
 
@@ -122,7 +155,9 @@ func parseTestPackages(t *testing.T) []testPackage {
 	}
 
 	packages := make([]testPackage, 0, len(byDir))
+
 	for _, pkg := range byDir {
+		pkg.closeOverHelpers()
 		packages = append(packages, *pkg)
 	}
 
@@ -139,6 +174,10 @@ func collectFuncs(file *ast.File, pkg *testPackage) {
 
 		if strings.HasPrefix(fn.Name.Name, "Test") {
 			pkg.tests[fn.Name.Name] = fn
+		}
+
+		if !strings.HasPrefix(fn.Name.Name, "Test") {
+			pkg.helpers[fn.Name.Name] = fn
 		}
 
 		if assignsStdout(fn.Body) && !strings.HasPrefix(fn.Name.Name, "Test") {
@@ -158,7 +197,13 @@ func assignsStdout(body *ast.BlockStmt) bool {
 		}
 
 		for _, target := range assign.Lhs {
-			if selectorText(target) == "os.Stdout" {
+			// os.Stderr for exactly the same reason as os.Stdout, and it was
+			// the gap that proved the point: captureStderr swaps the same
+			// kind of global for the logger's benefit, went unchecked while
+			// only stdout was named, and raced the moment its callers were
+			// made parallel.
+			switch selectorText(target) {
+			case "os.Stdout", "os.Stderr":
 				found = true
 			}
 		}
@@ -169,15 +214,27 @@ func assignsStdout(body *ast.BlockStmt) bool {
 	return found
 }
 
-// callsAny reports whether body calls any of the named functions.
+// callsAny reports whether body reaches any of the named functions — calling
+// one, or naming one at all.
+//
+// Naming counts because of how subtests are written here: `t.Run("provider
+// unreachable", testSadPathProviderUnreachable)` hands the function over as a
+// VALUE, so a walk looking only for call expressions sees the parent test as
+// touching nothing while the child redirects os.Stderr under it. That is the
+// shape the race detector caught. Over-matching a same-named local is the
+// safe direction for a guard whose failure mode is a silent data race.
 func callsAny(body *ast.BlockStmt, names map[string]bool) bool {
-	for name := range names {
-		if calls(body, name) {
-			return true
-		}
-	}
+	found := false
 
-	return false
+	ast.Inspect(body, func(node ast.Node) bool {
+		if ident, ok := node.(*ast.Ident); ok && names[ident.Name] {
+			found = true
+		}
+
+		return !found
+	})
+
+	return found
 }
 
 // calls reports whether body calls a function with this name, on any receiver.
