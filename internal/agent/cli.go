@@ -543,7 +543,10 @@ type cliAttempt struct {
 // the one line a reader has to explain the failure. The attempt counter has
 // the mirror problem: it belongs to the message being asked NOW, so a step
 // that spent a whole conversation answering message one reported "across 0
-// attempt(s)" and read as a step that never started.
+// attempt(s)" and read as a step that never started. It is the number of
+// attempts at THIS message that failed before the ceiling was found spent,
+// and when that is none the sentence says so in words — "0 attempt(s)" is
+// what read as a step that never started.
 //
 // sent is zero-based; the message is named from one, as an author counts the
 // list they wrote.
@@ -554,8 +557,13 @@ func cliCeilingError(agent, ceiling string, sent, messages, attempt int, lastErr
 	// message 1 of 0".
 	messages = max(messages, 1)
 
-	where := fmt.Sprintf("agent %q: exhausted %s on message %d of %d, across %d attempt(s) at it",
-		agent, ceiling, sent+1, messages, attempt)
+	tries := fmt.Sprintf("after %d failed attempt(s) at it", attempt)
+	if attempt == 0 {
+		tries = "before its first attempt at it"
+	}
+
+	where := fmt.Sprintf("agent %q: exhausted %s on message %d of %d, %s",
+		agent, ceiling, sent+1, messages, tries)
 
 	// Not merely omitted from the text: %w is what lets a consumer reach past
 	// the ceiling for the outage underneath, so it stays whenever there is one.

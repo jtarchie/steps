@@ -161,12 +161,9 @@
     // mark, not the redraw.
     try { status = JSON.parse(event.detail.data).status || ''; } catch (err) { /* the mark is a nicety */ }
 
-    // 'idle' is the server saying the run went quiet for five minutes, not
-    // that it ended — a task that prints nothing for longer than that is
-    // ordinary. Marking it would paint a red ✗ over a job still running.
-    // 'gone' is the run reaped by retention mid-watch: also not an outcome,
-    // and the reload below is what shows the reader what happened instead.
-    if (status && status !== 'idle' && status !== 'gone') {
+    // 'gone' is the run reaped by retention mid-watch: not an outcome, and
+    // the reload below is what shows the reader what happened instead.
+    if (status && status !== 'gone') {
       var mark = status === 'succeeded' ? '✓' : status === 'running' ? '◐' : '✗';
       document.title = mark + ' ' + document.title.replace(/^[✓✗◐]\s*/, '');
 
@@ -180,6 +177,26 @@
 
     window.location.reload();
   };
+
+  // A stream that cannot be re-established is not coming back, and the
+  // extension says so only as events: a reconnect answered 404 is the run
+  // reaped by retention while the laptop was shut, which six retries will
+  // not bring back; six failed reconnects end in a close whose reason is
+  // 'ended'; and the FIRST connection has no reconnect loop to fall into at
+  // all — a non-stream answer is a plain response error. Each used to leave
+  // the tab marked running forever. The reload is what shows the reader what
+  // happened, exactly as it does on `done`.
+  var stream = document.getElementById('run-stream');
+  stream.addEventListener('htmx:sse:error', function (event) {
+    if (event.detail && event.detail.status === 404) window.location.reload();
+  });
+  stream.addEventListener('htmx:sse:close', function (event) {
+    if (event.detail && event.detail.reason === 'ended') window.location.reload();
+  });
+  stream.addEventListener('htmx:response:error', function (event) {
+    var response = event.detail && event.detail.ctx && event.detail.ctx.response;
+    if (response && response.status === 404) window.location.reload();
+  });
 })();
 </script>
 {{end}}

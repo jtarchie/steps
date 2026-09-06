@@ -83,7 +83,10 @@ func refreshedIDs(body string) []string {
 			}
 
 			for _, ref := range strings.Split(body[mark:mark+shut], ",") {
-				ids = append(ids, strings.TrimPrefix(strings.TrimSpace(ref), "#"))
+				// An entry may name its swap style after a colon
+				// (`#nav-tabs:outerMorph`); the id is what precedes it.
+				id, _, _ := strings.Cut(strings.TrimSpace(ref), ":")
+				ids = append(ids, strings.TrimPrefix(id, "#"))
 			}
 
 			at = mark + shut
@@ -409,6 +412,8 @@ func TestLiveRegionsAreDrivenByHtmx(t *testing.T) {
 				t.Errorf("%s is missing %s: %s", path, want, cost)
 			}
 		}
+
+		assertOOBEntriesMorph(t, path, body)
 	}
 
 	for _, asset := range []string{"/static/htmx.min.js", "/static/hx-sse.min.js"} {
@@ -437,5 +442,45 @@ func TestLiveRegionsAreDrivenByHtmx(t *testing.T) {
 	_, ext := get(t, server, "/static/hx-sse.min.js")
 	if !strings.Contains(ext, "hx-sse:connect") {
 		t.Error("the served extension does not know hx-sse:connect, which the live transcript depends on")
+	}
+}
+
+// assertOOBEntriesMorph: an out-of-band entry with no style of its own is
+// REPLACED, not morphed. The nav's tabs and the graph's links are focusable,
+// and a replacement dropped a keyboard reader's focus to <body> on every poll
+// — htmx restores focus only to an element with an id, and then to a
+// different node.
+func assertOOBEntriesMorph(t *testing.T, path, body string) {
+	t.Helper()
+
+	for _, entry := range oobEntries(body) {
+		if !strings.HasSuffix(entry, ":outerMorph") {
+			t.Errorf("%s refreshes %s by replacement, which drops focus inside it every poll", path, entry)
+		}
+	}
+}
+
+// oobEntries is every hx-select-oob entry on the page, as written.
+func oobEntries(body string) []string {
+	var entries []string
+
+	for at := 0; ; {
+		mark := strings.Index(body[at:], ` hx-select-oob="`)
+		if mark < 0 {
+			return entries
+		}
+
+		mark += at + len(` hx-select-oob="`)
+
+		shut := strings.Index(body[mark:], `"`)
+		if shut < 0 {
+			return entries
+		}
+
+		for _, ref := range strings.Split(body[mark:mark+shut], ",") {
+			entries = append(entries, strings.TrimSpace(ref))
+		}
+
+		at = mark + shut
 	}
 }

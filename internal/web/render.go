@@ -3,7 +3,10 @@ package web
 // Templates, and the small formatting decisions they share.
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -149,14 +152,26 @@ func (s *Server) handleHTMXSSE(c echo.Context) error {
 	return serveAsset(c, "static/hx-sse.min.js", "text/javascript; charset=utf-8")
 }
 
+// serveAsset serves one embedded file with a validator, so a browser that
+// already holds it asks and is told 304 instead of taking the ~80KB of
+// stylesheet and library again on every navigation. The tag is the content's
+// own hash, which is what lets `no-cache` be safe: a vendored bump changes
+// the tag, and the next request after it gets the new bytes.
 func serveAsset(c echo.Context, path, contentType string) error {
 	data, err := assets.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
-	//nolint:wrapcheck // echo's blob error is returned verbatim
-	return c.Blob(http.StatusOK, contentType, data)
+	sum := sha256.Sum256(data)
+	header := c.Response().Header()
+	header.Set(echo.HeaderContentType, contentType)
+	header.Set("ETag", `"`+hex.EncodeToString(sum[:8])+`"`)
+	header.Set("Cache-Control", "no-cache")
+
+	http.ServeContent(c.Response(), c.Request(), path, time.Time{}, bytes.NewReader(data))
+
+	return nil
 }
 
 // templateFuncs are the formatting decisions the templates share. They live

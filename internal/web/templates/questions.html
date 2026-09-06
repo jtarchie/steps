@@ -1,7 +1,7 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps questions</b></h1>
 <p class="metaline">a step asked for a fact it could not get any other way — an answer here is the same record `steps questions answer` writes</p>
-<div id="questions-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#questions-region" hx-swap="outerMorph" hx-select-oob="#nav-tabs">
+<div id="questions-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#questions-region" hx-swap="outerMorph" hx-select-oob="#nav-tabs:outerMorph">
 
 {{range .Questions}}
 <div class="approval {{if ne .Status "pending"}}decided{{end}}">

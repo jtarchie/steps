@@ -3,7 +3,9 @@ package web
 // The live stream ships the page's own markup.
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -680,5 +682,239 @@ func TestStreamRefusesAnUnknownRun(t *testing.T) {
 	code, _ := get(t, server, "/p/demo/runs/no-such-run/events")
 	if code != http.StatusNotFound {
 		t.Errorf("the stream for a run that does not exist answered %d, want 404", code)
+	}
+}
+
+// TestStreamRetractsARowItsMorphedContainerAdopts is the other half of the
+// retraction above. There the container was NEW to the reader and appended;
+// here they already hold it, empty, and it goes over whole as a MORPH — and
+// the morph re-draws the loose grandchild nested without taking back the
+// copy at the transcript's top level, so the page carried two rows with one
+// id and every later swap landed on the wrong one.
+func TestStreamRetractsARowItsMorphedContainerAdopts(t *testing.T) {
+	shrinkRunEventLimit(t, 40, 1)
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-morph-adopt", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-morph-adopt", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "block", StepKind: "do", StepID: 20},
+		{Type: events.TypeStepSkipped, StepIndex: 1, StepName: "inner", StepKind: "task", StepID: 22,
+			ParentStepID: 21, Status: "skipped", Text: "cached"},
+		{Type: events.TypeStepSkipped, StepIndex: 1, StepName: "wrap", StepKind: "try", StepID: 21,
+			ParentStepID: 20, Status: "skipped", Text: "cached"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "block", StepKind: "do", StepID: 20,
+			Status: "succeeded"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-morph-adopt", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	// The reader's page holds the block: resume from its start.
+	stream := sseHTML(streamOf(t, server, "/p/demo/runs/run-morph-adopt/events?after=1"))
+
+	retract := strings.Index(stream, `<div id="step-22-inner" hx-swap-oob="delete">`)
+	if retract < 0 {
+		t.Fatalf("the container's morph does not retract the row it adopts:\n%s", stream)
+	}
+
+	if morph := strings.Index(stream, `<div id="step-20-block" hx-swap-oob="outerMorph"`); morph < 0 || morph < retract {
+		t.Errorf("the retraction does not precede the morph it exists to precede:\n%s", stream)
+	}
+
+	// And a child the reader already holds INSIDE the block is not touched:
+	// there is nothing loose about it, and deleting it would cost them its
+	// fold. The block's own close is the second whole send here.
+	if got := strings.Count(stream, `hx-swap-oob="delete"`); got != 1 {
+		t.Errorf("%d retractions for one loose row:\n%s", got, stream)
+	}
+}
+
+// TestStreamSendsACarriageReturnAsTheLineItIsOnReload: a bare CR in a step's
+// output is a line ending to the HTML parser — it folds every CR in a page's
+// bytes to LF before it tokenizes — so a progress bar's overwrites are three
+// lines on reload. Sent as `&#13;` to keep the SSE frame intact, the CR
+// survived into the live DOM as U+000D, which CSS draws as a space, and the
+// reader watched one run-on line become three at the closing reload. The
+// stream's bytes are asserted, not the page equality: that comparison
+// collapses whitespace, and a CR sent as a space would pass it too.
+func TestStreamSendsACarriageReturnAsTheLineItIsOnReload(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-bar", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-bar", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "pull", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepOutput, StepIndex: 0, StepName: "pull", StepKind: "task", StepID: 1, Text: "10%\r20%\r30%"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "pull", StepKind: "task", StepID: 1, Status: "succeeded"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-bar", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	raw := streamOf(t, server, "/p/demo/runs/run-bar/events")
+
+	if strings.Contains(raw, "&#13;") {
+		t.Errorf("a carriage return goes over as an entity the parser would not have made of it:\n%q", raw)
+	}
+
+	if !strings.Contains(sseHTML(raw), "10%\n20%\n30%") {
+		t.Errorf("the overwrites do not reach the reader as the lines a reload draws:\n%q", raw)
+	}
+}
+
+// shrinkIdleTimeout makes the idle deadline fire within a test. Serial, for
+// the reason shrinkRunEventLimit is.
+func shrinkIdleTimeout(t *testing.T, timeout time.Duration) {
+	t.Helper()
+
+	previous := liveIdleTimeout
+	liveIdleTimeout = timeout
+
+	t.Cleanup(func() { liveIdleTimeout = previous })
+}
+
+// TestIdleStreamClosesWithoutAWord: the idle deadline exists to shed a peer
+// that went away without a FIN, and a live reader is told nothing so that
+// hx-sse simply reconnects with its Last-Event-ID. It used to send `done`
+// with "idle", which the page could only answer with a reload — every five
+// quiet minutes a reader lost the rows they had folded, on a job that had
+// done nothing wrong.
+func TestIdleStreamClosesWithoutAWord(t *testing.T) {
+	shrinkIdleTimeout(t, 50*time.Millisecond)
+
+	server, pipeline := testPipeline(t)
+
+	err := pipeline.Store.StartRun(t.Context(), "run-quiet", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-quiet", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+	})
+
+	// Still running: only the deadline can end this.
+	raw := streamOf(t, server, "/p/demo/runs/run-quiet/events")
+
+	if !strings.Contains(raw, `id="step-1-compile"`) {
+		t.Fatalf("the stream closed before delivering what it had:\n%q", raw)
+	}
+
+	if strings.Contains(raw, "event: done") {
+		t.Errorf("silence on a running job was reported as an outcome:\n%q", raw)
+	}
+}
+
+// cancellingRecorder cancels the request the moment the handler flushes a
+// frame — the deterministic version of a reader closing the tab while the
+// stream is mid-tick, so the next store call sees a cancelled context.
+type cancellingRecorder struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+}
+
+func (r *cancellingRecorder) Flush() {
+	r.ResponseRecorder.Flush()
+	r.cancel()
+}
+
+// captureLogs routes slog's default logger into a buffer for one serial test.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	return &buf
+}
+
+// TestStreamDoesNotReportAReaderWhoLeft: a closed tab cancels the request
+// context, and a store call caught mid-tick reports that as its error — which
+// endStream logged as the stream having FAILED. Nothing failed. Serial: the
+// batch is shrunk so the flush that cancels is followed by another read, and
+// the logger is the process's.
+func TestStreamDoesNotReportAReaderWhoLeft(t *testing.T) {
+	shrinkRunEventLimit(t, 40, 1)
+	logs := captureLogs(t)
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-left", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-left", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1, Status: "succeeded"},
+	})
+
+	reqCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	req := httptest.NewRequestWithContext(reqCtx, http.MethodGet, "/p/demo/runs/run-left/events", nil)
+	rec := &cancellingRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+	server.Handler().ServeHTTP(rec, req)
+
+	if strings.Contains(logs.String(), "stream_failed") {
+		t.Errorf("a reader leaving was logged as a failure:\n%s", logs.String())
+	}
+}
+
+// TestStreamReportsAFailureOnce: a failure after the response is committed is
+// logged by endStream, and a render failure inside a flush was passed through
+// endStream twice — two warnings for one failure, the second reading
+// "web: web: web:". Serial: the logger is the process's.
+func TestStreamReportsAFailureOnce(t *testing.T) {
+	logs := captureLogs(t)
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-broken", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-broken", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-broken", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	// The one post-commit failure a test can arrange: nothing to render with.
+	delete(server.renderer.pages, "run")
+
+	streamOf(t, server, "/p/demo/runs/run-broken/events")
+
+	if got := strings.Count(logs.String(), "stream_failed"); got != 1 {
+		t.Errorf("one failure was reported %d times:\n%s", got, logs.String())
+	}
+
+	if strings.Contains(logs.String(), "web: web:") {
+		t.Errorf("the failure is wrapped twice over:\n%s", logs.String())
 	}
 }

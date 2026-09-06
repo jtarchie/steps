@@ -337,28 +337,16 @@ func TestLiveStreamReplaysThenCloses(t *testing.T) {
 		t.Fatalf("FinishRun: %v", err)
 	}
 
-	done := make(chan string, 1)
+	body := streamOf(t, server, "/p/demo/runs/run-2/events")
 
-	go func() {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/p/demo/runs/run-2/events", nil)
-		rec := httptest.NewRecorder()
-		server.Handler().ServeHTTP(rec, req)
-		done <- rec.Body.String()
-	}()
+	// Content frames are UNNAMED, which is what hx-sse swaps; a named one
+	// only fires a DOM event, and `done` is the one that does.
+	if !strings.Contains(body, `data: <div id="step-`) {
+		t.Errorf("stream delivered no step markup: %q", body)
+	}
 
-	select {
-	case body := <-done:
-		// Content frames are UNNAMED, which is what hx-sse swaps; a named one
-		// only fires a DOM event, and `done` is the one that does.
-		if !strings.Contains(body, `data: <div id="step-`) {
-			t.Errorf("stream delivered no step markup: %q", body)
-		}
-
-		if !strings.Contains(body, "event: done") {
-			t.Errorf("stream did not close with a done event: %q", body)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("SSE stream did not close for a finished run")
+	if !strings.Contains(body, "event: done") {
+		t.Errorf("stream did not close with a done event: %q", body)
 	}
 }
 

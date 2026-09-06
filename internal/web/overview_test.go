@@ -424,10 +424,7 @@ jobs:
 func agentSpendPipeline(t *testing.T) (*Server, *Pipeline) {
 	t.Helper()
 
-	dir := t.TempDir()
-	path := filepath.Join(dir, "demo.yml")
-
-	writeFile(t, path, `
+	return serverFromYAML(t, `
 agents:
   - name: reviewer
     source: { model: openrouter/qwen/qwen3.7-flash }
@@ -443,6 +440,18 @@ jobs:
       - agent: drifter
         messages: ["go"]
 `)
+}
+
+// serverFromYAML serves one pipeline written from the YAML, loaded from disk
+// the way `steps web` loads it, so the config carries a real revision and the
+// store knows it.
+func serverFromYAML(t *testing.T, yaml string) (*Server, *Pipeline) {
+	t.Helper()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "demo.yml")
+
+	writeFile(t, path, yaml)
 
 	cfg, err := config.Load(path, "demo", nil)
 	if err != nil {
@@ -1086,5 +1095,200 @@ func TestSpendPanelSaysNothingWithoutAFinishReason(t *testing.T) {
 
 	if strings.Contains(body, "— step failed") {
 		t.Errorf("a row with no finish reason is annotated as if the provider had said one: %s", body)
+	}
+}
+
+// TestSpendPanelDoesNotBlameASiblingMember is the collision the cell's
+// coordinates cannot save: every member of an ensemble: (and every branch of
+// an in_parallel:) is handed the block's index, and two of them may name the
+// SAME agent — so the pair a spend row is joined on is shared, and one
+// member's failure was drawn beside the one that succeeded. The node tells
+// them apart: a usage row always records its hash, and a step that ended well
+// publishes the same hash on its finish, where a failed one publishes none.
+func TestSpendPanelDoesNotBlameASiblingMember(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := agentSpendPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-members", "review", t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-members", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 2},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1,
+			Status: "succeeded", Hash: "hash-for"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 2,
+			Status: "failed", Text: "the model gave up"},
+	})
+
+	for _, hash := range []string{"hash-for", "hash-against"} {
+		mustRecordResult(t, pipeline, hash, map[string]any{"response": "done"})
+
+		err = pipeline.Store.RecordAgentUsage(ctx, store.AgentUsage{
+			RunID: "run-members", StepIndex: 0, StepName: "reviewer", JobName: "review",
+			NodeHash: hash, ModelReq: "opus", Total: 10, FinishReason: "stop",
+		})
+		if err != nil {
+			t.Fatalf("RecordAgentUsage: %v", err)
+		}
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-members")
+
+	if marked := strings.Count(body, "— step failed"); marked != 1 {
+		t.Errorf("one member failed and %d spend rows say so: %s", marked, body)
+	}
+
+	// The right one: the row for the node the surviving member finished with
+	// is the one left alone.
+	if at := strings.Index(body, "— step failed"); at >= 0 && strings.LastIndex(body[:at], "hash-for") > strings.LastIndex(body[:at], "hash-against") {
+		t.Errorf("the member that succeeded is the one blamed: %s", body)
+	}
+}
+
+// TestJobPageShowsTheMatrixBudgetBesideThePerCellOne: an across: block's own
+// budget: is the ceiling the runner enforces on the matrix — it stops
+// admitting cells once they have spent it together — and it lives on the
+// STEP, which ResolveAgentInvocation never reads. So the one step whose
+// spend the pipeline actively bounds read "uncapped", and the doc's gloss on
+// that word ("held by its deadline and nothing else") was false for it.
+func TestJobPageShowsTheMatrixBudgetBesideThePerCellOne(t *testing.T) {
+	t.Parallel()
+
+	server, _ := serverFromYAML(t, `
+agents:
+  - name: reviewer
+    source: { model: openrouter/qwen/qwen3.7-flash }
+
+jobs:
+  - name: sweep
+    plan:
+      - agent: reviewer
+        across:
+          - var: dim
+            values: [a, b, c]
+        budget: { tokens: 50000 }
+        messages: ["look at {{.vars.dim}}"]
+`)
+
+	code, body := get(t, server, "/p/demo/jobs/sweep")
+	if code != http.StatusOK {
+		t.Fatalf("job page = %d", code)
+	}
+
+	if !strings.Contains(body, "50,000 tokens for the matrix") {
+		t.Errorf("the job page does not show the block budget the matrix runs under: %s", body)
+	}
+
+	// The per-cell word stays, qualified: the agent itself has no ceiling,
+	// and saying so without the qualifier is what read as "held by nothing".
+	if !strings.Contains(body, "uncapped per cell") {
+		t.Errorf("the per-cell ceiling is not said to be per cell: %s", body)
+	}
+}
+
+// ensembleJudgePipeline is a job whose ensemble decides with a judge: an
+// agent step the plan never spells out, built at run time from decide:.
+func ensembleJudgePipeline(t *testing.T) (*Server, *Pipeline) {
+	t.Helper()
+
+	return serverFromYAML(t, `
+agents:
+  - name: reviewer-a
+    source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: reviewer-b
+    source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: arbiter
+    source: { model: openrouter/qwen/qwen3.7-flash }
+    budget: { tokens: 123456 }
+
+jobs:
+  - name: gate
+    plan:
+      - ensemble:
+          verdicts:
+            - reject: revise
+            - approve: publish
+          decide: arbiter
+          agents:
+            - {agent: reviewer-a, messages: ["Review for correctness."]}
+            - {agent: reviewer-b, messages: ["Review for style."]}
+      - task: revise
+        run: echo sending back
+      - task: publish
+        run: echo shipping
+`)
+}
+
+// TestJobPageListsTheEnsembleJudge: the judge runs — and spends — as an agent
+// step of its own, so its limits are as worth seeing as any member's. The
+// walk the dials table is built from yields only the members, and the judge
+// was missing from the one table that exists to answer "what was this
+// allowed to spend".
+func TestJobPageListsTheEnsembleJudge(t *testing.T) {
+	t.Parallel()
+
+	server, _ := ensembleJudgePipeline(t)
+
+	code, body := get(t, server, "/p/demo/jobs/gate")
+	if code != http.StatusOK {
+		t.Fatalf("job page = %d", code)
+	}
+
+	if !strings.Contains(body, "(judge)") || !strings.Contains(body, "123,456 tokens") {
+		t.Errorf("the dials table does not list the judge and its budget: %s", body)
+	}
+}
+
+// TestSpendPanelKnowsTheEnsembleJudgesCeiling crosses the seam the judge's
+// row crosses: its spend is recorded under the judge's name, and the ceiling
+// column looked that name up in a map the judge was never put in — so it
+// printed "unknown", with a tooltip saying the name resolves to no agent in
+// the loaded configuration, about the one agent the block cannot load
+// without.
+func TestSpendPanelKnowsTheEnsembleJudgesCeiling(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := ensembleJudgePipeline(t)
+	ctx := t.Context()
+
+	sha := pipeline.Config().Revision.SHA
+	if sha == "" {
+		t.Fatal("the loaded config carries no revision to match against")
+	}
+
+	err := pipeline.Store.StartRun(ctx, "run-judge", "gate", t.TempDir(), sha)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-judge", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "arbiter", StepKind: "agent", StepID: 4},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "arbiter", StepKind: "agent", StepID: 4,
+			Status: "succeeded", Hash: "judge-hash"},
+	})
+
+	mustRecordResult(t, pipeline, "judge-hash", map[string]any{"response": "approve", "verdict": "approve"})
+
+	err = pipeline.Store.RecordAgentUsage(ctx, store.AgentUsage{
+		RunID: "run-judge", StepIndex: 0, StepName: "arbiter", JobName: "gate",
+		NodeHash: "judge-hash", ModelReq: "opus", Total: 4000, FinishReason: "stop",
+	})
+	if err != nil {
+		t.Fatalf("RecordAgentUsage: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-judge")
+
+	if !strings.Contains(body, "123,456 tokens") {
+		t.Errorf("the spend panel does not show the judge's ceiling: %s", body)
+	}
+
+	if strings.Contains(body, ">unknown<") {
+		t.Errorf("the judge's ceiling is called unknown on a run whose configuration is the loaded one: %s", body)
 	}
 }

@@ -188,14 +188,9 @@ func (s *Server) assembleRun(c echo.Context, run store.RunRow) (runView, error) 
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 
-	rows, err := pipeline.Store.RunEvents(ctx, run.ID, 0, runEventLimit)
+	rows, nodes, err := readBatch(ctx, pipeline.Store, run.ID, 0, runEventLimit)
 	if err != nil {
-		return runView{}, fmt.Errorf("web: %w", err)
-	}
-
-	nodes, err := pipeline.Store.NodesByHash(ctx, hashesOf(rows))
-	if err != nil {
-		return runView{}, fmt.Errorf("web: %w", err)
+		return runView{}, err
 	}
 
 	view := buildRunView(run, rows, nodes)

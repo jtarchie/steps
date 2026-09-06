@@ -179,6 +179,14 @@ type agentDialView struct {
 	// provider reports dollars. Zero in both means no ceiling.
 	BudgetTokens int
 	BudgetUSD    float64
+	// BlockTokens is the across: block's own budget:, which every cell of the
+	// matrix spends TOGETHER — a ceiling the pipeline enforces (it stops
+	// admitting cells once it is spent) and one that lives on the step, not
+	// the agent, so ResolveAgentInvocation never sees it. Zero for any step
+	// that is not a budgeted matrix. Drawn beside the per-cell ceiling,
+	// because "uncapped" alone on the one dial the runner does enforce read
+	// as the step being held by its deadline and nothing else.
+	BlockTokens int
 	// Broken is why this step's invocation would not resolve, empty for the
 	// ordinary case. A row with it carries no numbers, because there are
 	// none.
@@ -198,7 +206,8 @@ func (a agentDialView) UncappedContext() bool { return a.ContextBytes == 0 }
 // runner enforces mid-conversation — max_turns: is spent inside a subprocess
 // this process cannot interrupt, and a job budget is tokens-only — so an
 // uncapped row beside an uncapped turn count says the step is held by wall
-// clock and nothing else.
+// clock and nothing else. Per invocation: a matrix's cells may still be
+// held together by BlockTokens, which the template draws beside this.
 func (a agentDialView) UncappedBudget() bool { return a.BudgetTokens == 0 && a.BudgetUSD == 0 }
 
 // Budget renders the ceiling in the unit it is metered in. One column rather
@@ -232,10 +241,11 @@ func (a agentDialView) UncappedTimeout() bool {
 }
 
 // agentDials resolves the effective limits of every agent step in a job.
-// It covers the agents a step names DIRECTLY. A task's `fix:` agent and a
-// step's sub-agent `tools:` grants run real conversations under limits of
-// their own and are not listed — Job.AgentNames walks all three, this walks
-// one — so the heading says "steps", not "agents".
+// It covers the agents a step names DIRECTLY, and an ensemble's `decide:`
+// judge, which is an agent step the plan does not spell out as one. A task's
+// `fix:` agent and a step's sub-agent `tools:` grants run real conversations
+// under limits of their own and are not listed — Job.AgentNames walks all
+// three, this walks one — so the heading says "steps", not "agents".
 func agentDials(cfg *config.Config, job config.Job) []agentDialView {
 	var dials []agentDialView
 
@@ -243,41 +253,58 @@ func agentDials(cfg *config.Config, job config.Job) []agentDialView {
 	// do:, in_parallel:, across: and try: all hold steps, and an agent nested
 	// in one runs under limits just as worth seeing.
 	_ = job.VisitSteps(func(label string, step *config.Step) error {
+		where := strings.TrimPrefix(label, fmt.Sprintf("job %q ", job.Name))
+
+		// The judge is built at run time from decide: (runEnsembleJudge) and
+		// runs — and records its spend — as an agent step of its own, so the
+		// walk, which sees only the members, never yields it. Listed here or
+		// its spend row on the run page reads "unknown", saying its name
+		// resolves to no agent, about the one agent the block cannot load
+		// without.
+		if judge := step.Ensemble.JudgeAgent(); judge != "" {
+			dials = append(dials, dialFor(cfg, where+" (judge)", config.Step{Agent: judge}))
+		}
+
 		if step.Agent == "" {
 			return nil
 		}
 
-		where := strings.TrimPrefix(label, fmt.Sprintf("job %q ", job.Name))
-
-		ri, err := cfg.ResolveAgentInvocation(*step)
-		if err != nil {
-			// Shown, not dropped. Not every resolution failure is caught at
-			// load — `reasoning_effort:` is validated here and nowhere else,
-			// and an endpoint credential is deferred on purpose — so a
-			// silently missing row would leave the page confidently listing
-			// the job's other agents and looking complete while omitting the
-			// one that is broken. That is the failure this section exists to
-			// surface, not to hide.
-			dials = append(dials, agentDialView{Where: where, Agent: step.Agent, Broken: err.Error()})
-
-			//nolint:nilerr // the error is rendered as the row above; see Broken
-			return nil
+		dial := dialFor(cfg, where, *step)
+		if step.Budget != nil {
+			dial.BlockTokens = step.Budget.Tokens
 		}
 
-		dials = append(dials, agentDialView{
-			Where:        where,
-			Agent:        ri.AgentName,
-			Turns:        ri.MaxTurns,
-			ContextBytes: ri.MaxContextBytes,
-			Timeout:      ri.Timeout,
-			BudgetTokens: ri.BudgetTokens,
-			BudgetUSD:    ri.BudgetUSD,
-		})
+		dials = append(dials, dial)
 
 		return nil
 	})
 
 	return dials
+}
+
+// dialFor is one step's row.
+func dialFor(cfg *config.Config, where string, step config.Step) agentDialView {
+	ri, err := cfg.ResolveAgentInvocation(step)
+	if err != nil {
+		// Shown, not dropped. Not every resolution failure is caught at
+		// load — `reasoning_effort:` is validated here and nowhere else,
+		// and an endpoint credential is deferred on purpose — so a
+		// silently missing row would leave the page confidently listing
+		// the job's other agents and looking complete while omitting the
+		// one that is broken. That is the failure this section exists to
+		// surface, not to hide.
+		return agentDialView{Where: where, Agent: step.Agent, Broken: err.Error()}
+	}
+
+	return agentDialView{
+		Where:        where,
+		Agent:        ri.AgentName,
+		Turns:        ri.MaxTurns,
+		ContextBytes: ri.MaxContextBytes,
+		Timeout:      ri.Timeout,
+		BudgetTokens: ri.BudgetTokens,
+		BudgetUSD:    ri.BudgetUSD,
+	}
 }
 
 // agentCeilings is what each agent step of one job was allowed to spend, by

@@ -1,7 +1,7 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps approvals</b></h1>
 <p class="metaline">the row is the audit trail — a decision here is the same record `steps approvals approve` writes</p>
-<div id="approvals-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#approvals-region" hx-swap="outerMorph" hx-select-oob="#nav-tabs">
+<div id="approvals-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#approvals-region" hx-swap="outerMorph" hx-select-oob="#nav-tabs:outerMorph">
 
 {{range .Approvals}}
 <div class="approval {{if ne .Status "pending"}}decided{{end}}">

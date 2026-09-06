@@ -232,6 +232,13 @@ func TestCLICeilingNamesTheMessageItStoppedOn(t *testing.T) {
 	if !strings.Contains(got, "message 2 of 3") {
 		t.Errorf("the failure does not say which message was never asked: %s", got)
 	}
+
+	// The attempt clause belongs to message two, which was never tried: said
+	// in words, because "0 attempt(s)" is the phrase that read as a step
+	// that never started.
+	if !strings.Contains(got, "before its first attempt at it") || strings.Contains(got, "0 attempt") {
+		t.Errorf("the failure still counts attempts at a message that was never asked: %s", got)
+	}
 }
 
 // TestCLIBudgetCeilingNamesTheMessageToo keeps the other pooled ceiling

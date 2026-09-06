@@ -414,6 +414,12 @@ type runView struct {
 	// only, so a run older than the last edit cannot be reconstructed. Showing
 	// today's ceiling for it would be wrong in exactly the case the column is
 	// consulted for, so it is withheld and said to be withheld.
+	//
+	// ponytail: the sha gate. The upgrade is recording the ceilings the step
+	// ran under on its agent_usage row at the moment it spends them (they are
+	// resolved and in hand in saveAgentUsage), which needs a schemaVersion
+	// bump and deletes agentCeilings, ceilingFor, ConfigDrifted and both the
+	// "config changed" and "unknown" states.
 	Ceilings map[string]string
 	// ConfigDrifted is why Ceilings is empty: this run opened against a
 	// configuration that is no longer loaded.
@@ -587,10 +593,22 @@ func (r runView) UsageRows() []usageView {
 	// row failed when one cell failed. The name tells them apart — both sides
 	// of this join spell it the same way, agent_usage from step.DisplayName()
 	// and the event from eventStepName(), and both prefer a cell's Label.
+	// The pair is still not a step: every member of an ensemble:, every
+	// branch of an in_parallel: or race:, and the step a try: wraps are all
+	// handed the block's index, and two of them may name the same agent. What
+	// tells those apart is the node — a usage row always records its hash,
+	// and a step that ENDED WELL publishes the same hash on its finish, while
+	// a failed one publishes none. So a row whose node some step under this
+	// key finished with is provably not the one that failed, and only the
+	// rest are blamed.
 	failed := make(map[string]bool, len(r.Steps))
+	succeeded := make(map[string]bool, len(r.Steps))
+
 	for _, step := range r.Steps {
 		if step.Failed() {
 			failed[usageKey(step.Index, step.Name)] = true
+		} else if step.Hash != "" {
+			succeeded[step.Hash] = true
 		}
 	}
 
@@ -600,7 +618,7 @@ func (r runView) UsageRows() []usageView {
 		ceiling, known := r.ceilingFor(step.StepName)
 		rows = append(rows, usageView{
 			AgentUsage:   step,
-			StepFailed:   failed[usageKey(step.StepIndex, step.StepName)],
+			StepFailed:   failed[usageKey(step.StepIndex, step.StepName)] && !succeeded[step.NodeHash],
 			Ceiling:      ceiling,
 			CeilingKnown: known,
 		})
@@ -835,6 +853,19 @@ func (f *runFolder) add(rows []store.RunEventRow, results map[string]store.NodeR
 		if position, change := f.fold(row, results); change.any() {
 			key := f.run.Steps[position].Key()
 			touched[key] = touched[key].merge(change)
+		}
+
+		// The job's error is read by every row, not one: a step's own error
+		// line is dropped once the job's error quotes it (DistinctError), and
+		// with it, for a step that printed nothing else, the body and the
+		// toggle. Those rows are re-drawn, or the reader keeps an error line a
+		// reload no longer shows.
+		if row.Type == events.TypeJobFinished && row.Text != "" {
+			for _, step := range f.run.Steps {
+				if step.Error != "" && strings.Contains(row.Text, step.Error) {
+					touched[step.Key()] = touched[step.Key()].merge(stepChange{Other: true})
+				}
+			}
 		}
 	}
 

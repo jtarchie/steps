@@ -1,6 +1,6 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps resources</b></h1>
-<div id="resources-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#resources-region" hx-swap="outerMorph" hx-select-oob="#nav-tabs">
+<div id="resources-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#resources-region" hx-swap="outerMorph" hx-select-oob="#nav-tabs:outerMorph">
 {{/* Inside the region, not above it: the count changes with the config a
      reload swaps in, and left outside it would keep reporting the old number
      over a table the poll had already refreshed. */}}

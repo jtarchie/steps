@@ -22,6 +22,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -44,9 +45,19 @@ import (
 // privileged subset.
 const livePollInterval = 400 * time.Millisecond
 
-// liveIdleTimeout ends a stream that has gone quiet on a run that is over,
-// so a forgotten browser tab does not hold a connection forever.
-const liveIdleTimeout = 5 * time.Minute
+// liveIdleTimeout closes a stream that has gone quiet, so a peer that went
+// away without a FIN — a closed lid — does not hold a poller on the store
+// forever. It can only fire on a run still running (a finished one is sent
+// `done` the tick it is seen), so the close is SILENT: no `done`, and hx-sse
+// reconnects with its Last-Event-ID and resumes exactly where it was. It used
+// to send `done` with "idle", which the page could only answer with a reload
+// — every five quiet minutes a reader lost the rows they had folded and the
+// row they were on, on a job that had done nothing wrong.
+//
+// A variable so a test can shrink it; see liveBatch.
+//
+//nolint:gochecknoglobals // a test seam; see liveBatch
+var liveIdleTimeout = 5 * time.Minute
 
 // liveBatch is how many events one read of the stream takes. The stream pages
 // rather than reading a run whole, which is what keeps it working past
@@ -68,7 +79,7 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 	ctx := c.Request().Context()
 	runID := c.Param("run")
 
-	err := requireRun(c, runID)
+	run, err := requireRun(c, runID)
 	if err != nil {
 		return err
 	}
@@ -109,26 +120,6 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 	defer deadline.Stop()
 
 	for {
-		// Read the run BEFORE flushing, not after: the flush needs the row
-		// anyway, and a run that finishes mid-flush is still seen as running
-		// here, so the loop comes round once more and delivers its last events
-		// before saying done.
-		run, ok, err := pipeline.Store.FindRunRow(ctx, runID)
-		if err != nil {
-			return endStream(c, runID, err)
-		}
-
-		if !ok {
-			// Reaped out from under the reader (retention runs at the end of
-			// every build). "gone" rather than the zero row's empty status,
-			// which the page read as no outcome at all and skipped the tab
-			// mark for — on the one case where the mark is all a backgrounded
-			// tab gets.
-			writeSSE(response, "done", map[string]any{"status": "gone"})
-
-			return nil
-		}
-
 		before := after
 
 		after, err = s.flushEvents(c, run, after, drawn, folder)
@@ -152,14 +143,35 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 			return nil
 		}
 
-		if !waitForMore(ctx, ticker.C, deadline.C, response) {
+		if !waitForMore(ctx, ticker.C, deadline.C) {
+			return nil
+		}
+
+		// Read the run BEFORE the next flush, not after it: a run that
+		// finishes mid-flush is still seen as running here, so the loop comes
+		// round once more and delivers its last events before saying done.
+		var ok bool
+
+		run, ok, err = pipeline.Store.FindRunRow(ctx, runID)
+		if err != nil {
+			return endStream(c, runID, err)
+		}
+
+		if !ok {
+			// Reaped out from under the reader (retention runs at the end of
+			// every build). "gone" rather than the zero row's empty status,
+			// which the page read as no outcome at all and skipped the tab
+			// mark for — on the one case where the mark is all a backgrounded
+			// tab gets.
+			writeSSE(response, "done", map[string]any{"status": "gone"})
+
 			return nil
 		}
 	}
 }
 
 // requireRun refuses a run this pipeline does not have, before anything has
-// committed the response.
+// committed the response, and hands back the row the first flush reads.
 //
 // It has to come first, because everything after it commits: once openStream
 // has written the 200 and the event-stream header, echo's error handler
@@ -168,43 +180,53 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 // the page reloads on, into a 404 it cannot explain. It also keeps seedFold
 // from paging a run this pipeline does not own: RunEvents filters on run_id
 // alone, and FindRunRow is the pipeline-scoped question.
-func requireRun(c echo.Context, runID string) error {
-	_, ok, err := pipelineOf(c).Store.FindRunRow(c.Request().Context(), runID)
+func requireRun(c echo.Context, runID string) (store.RunRow, error) {
+	run, ok, err := pipelineOf(c).Store.FindRunRow(c.Request().Context(), runID)
 	if err != nil {
-		return fmt.Errorf("web: %w", err)
+		return store.RunRow{}, fmt.Errorf("web: %w", err)
 	}
 
 	if !ok {
-		return echo.NewHTTPError(http.StatusNotFound, "no such run")
+		return store.RunRow{}, echo.NewHTTPError(http.StatusNotFound, "no such run")
 	}
 
-	return nil
+	return run, nil
 }
 
 // endStream reports a failure that happened after the response was committed.
 //
 // Returning the error alone is not enough: openStream has already written the
 // 200, so echo's handler sees Committed and returns without rendering OR
-// logging. The reader's stream just closes, hx-sse reconnects into the same
-// failure six times and then gives up on a page that silently stops updating,
-// and the operator has nothing at all — which is the "green having recorded
-// nothing" shape this repo has been bitten by before.
+// logging. The reader's stream just closes and hx-sse reconnects — and keeps
+// reconnecting, because its attempt cap counts only failures to CONNECT, and
+// a stream that dies after its 200 resets the count — so a persistent
+// post-commit failure is a reconnect every half second per watcher, with the
+// operator seeing nothing at all. That is the "green having recorded nothing"
+// shape this repo has been bitten by before, and this line is the whole of
+// what they get.
+//
+// Not for a reader who left: the request context is cancelled the moment the
+// tab closes, and a store call caught mid-tick reports that as its error.
+// Nothing failed, so nothing is logged.
 func endStream(c echo.Context, runID string, err error) error {
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+
 	slog.Warn("web.live.stream_failed", "run", runID, "path", c.Request().URL.Path, "error", err)
 
 	return fmt.Errorf("web: %w", err)
 }
 
 // waitForMore holds until the next poll, reporting whether the stream should
-// keep going. Silence long enough to trip the deadline ends it: the run is
-// still running, so this says idle rather than claiming an outcome.
-func waitForMore(ctx context.Context, tick, deadline <-chan time.Time, response *echo.Response) bool {
+// keep going. Silence long enough to trip the deadline ends it without a
+// word — see liveIdleTimeout for why a live reader is better off reconnecting
+// than being told anything.
+func waitForMore(ctx context.Context, tick, deadline <-chan time.Time) bool {
 	select {
 	case <-ctx.Done():
 		return false
 	case <-deadline:
-		writeSSE(response, "done", map[string]any{"status": "idle"})
-
 		return false
 	case <-tick:
 		return true
@@ -234,13 +256,9 @@ func (s *Server) seedFold(c echo.Context, runID string, seq int64, folder *runFo
 	ctx := c.Request().Context()
 
 	for at := int64(0); at < seq; {
-		rows, err := pipeline.Store.RunEvents(ctx, runID, at, liveBatch)
+		rows, nodes, err := readBatch(ctx, pipeline.Store, runID, at, liveBatch)
 		if err != nil {
-			return fmt.Errorf("web: %w", err)
-		}
-
-		if len(rows) == 0 {
-			return nil
+			return err
 		}
 
 		// Anything past the reader's own sequence belongs to the first flush,
@@ -251,11 +269,6 @@ func (s *Server) seedFold(c echo.Context, runID string, seq int64, folder *runFo
 
 		if len(rows) == 0 {
 			return nil
-		}
-
-		nodes, err := pipeline.Store.NodesByHash(ctx, hashesOf(rows))
-		if err != nil {
-			return fmt.Errorf("web: %w", err)
 		}
 
 		folder.add(rows, nodes)
@@ -305,45 +318,40 @@ func (s *Server) flushEvents(
 	// finished when the reader connected — would otherwise deliver a batch
 	// and close, leaving a transcript that ends mid-run with no sign it was
 	// cut. Each batch is its own message, so what a reconnect resumes from
-	// stays exact.
+	// stays exact. A short page is the end: the store had nothing more when
+	// it answered, so asking again would only buy an empty read.
 	for {
-		before := after
-
-		next, err := s.flushBatch(c, run, after, drawn, folder)
+		next, more, err := s.flushBatch(c, run, after, drawn, folder)
 		if err != nil {
 			return next, err
 		}
 
 		after = next
 
-		if after == before {
+		if !more {
 			return after, nil
 		}
 	}
 }
 
+// flushBatch folds and sends one page of events, reporting the new high-water
+// mark and whether the page was full — in which case another may follow.
 func (s *Server) flushBatch(
 	c echo.Context, run store.RunRow, after int64, drawn *sentRows, folder *runFolder,
-) (int64, error) {
-	pipeline := pipelineOf(c)
-	ctx := c.Request().Context()
-
-	rows, err := pipeline.Store.RunEvents(ctx, run.ID, after, liveBatch)
-	if err != nil {
-		return after, fmt.Errorf("web: %w", err)
-	}
-
-	if len(rows) == 0 {
-		return after, nil
-	}
-
+) (int64, bool, error) {
 	// Only the nodes THIS batch names: a finished agent step's answer and
 	// trajectory live in its node, and the rest of the run's nodes are
 	// already folded in.
-	nodes, err := pipeline.Store.NodesByHash(ctx, hashesOf(rows))
+	rows, nodes, err := readBatch(c.Request().Context(), pipelineOf(c).Store, run.ID, after, liveBatch)
 	if err != nil {
-		return after, fmt.Errorf("web: %w", err)
+		return after, false, err
 	}
+
+	if len(rows) == 0 {
+		return after, false, nil
+	}
+
+	more := len(rows) == liveBatch
 
 	// The fold says what it touched, rather than this reading it off the rows:
 	// the two disagree for a sub-agent's turns, which name a step no row ever
@@ -366,7 +374,7 @@ func (s *Server) flushBatch(
 		// node links are scoped by — and s.nav() would buy that with the two
 		// pending counts nothing in a row displays, 2.5 times a second per
 		// watcher.
-		page:    map[string]any{"Nav": navData{Current: pipeline.Slug}, "Run": view},
+		page:    map[string]any{"Nav": navData{Current: pipelineOf(c).Slug}, "Run": view},
 		drawn:   drawn,
 		changes: changes,
 	}
@@ -374,19 +382,36 @@ func (s *Server) flushBatch(
 	for _, root := range view.Roots {
 		err := frame.visit(root, nil)
 		if err != nil {
-			return after, endStream(c, run.ID, err)
+			return after, false, err
 		}
 	}
 
 	if frame.out.Len() == 0 {
-		return after, nil
+		return after, more, nil
 	}
 
 	writeFrame(c.Response(), after, frame.out.String())
 
-	c.Response().Flush()
+	return after, more, nil
+}
 
-	return after, nil
+// readBatch is one page of a run's events with the nodes they name — the
+// unit every fold is fed, whether it is the page's one read, the stream's
+// seed or its delta.
+func readBatch(
+	ctx context.Context, st *store.Store, runID string, after int64, limit int,
+) ([]store.RunEventRow, map[string]store.NodeRow, error) {
+	rows, err := st.RunEvents(ctx, runID, after, limit)
+	if err != nil {
+		return nil, nil, fmt.Errorf("web: %w", err)
+	}
+
+	nodes, err := st.NodesByHash(ctx, hashesOf(rows))
+	if err != nil {
+		return nil, nil, fmt.Errorf("web: %w", err)
+	}
+
+	return rows, nodes, nil
 }
 
 // framer builds one flush's frame by walking the tree and choosing, per row,
@@ -422,8 +447,12 @@ type framer struct {
 func (f *framer) visit(step *stepView, parent *stepView) error {
 	switch {
 	case !f.drawn.has(step):
+		f.retract(step)
+
 		return f.appendRow(step, parent)
 	case f.wantsWhole(step):
+		f.retract(step)
+
 		return f.morphRow(step)
 	}
 
@@ -472,18 +501,24 @@ func (f *framer) wantsWhole(step *stepView) bool {
 	return f.firstChildren(step)
 }
 
+// retract deletes, ahead of a whole send of step, every row the reader holds
+// loose that the send is about to draw again inside it — in the same frame
+// and BEFORE it, because htmx applies out-of-band swaps in the order they
+// arrive. See adopted(). Both whole senders need it: a container the reader
+// lacks is appended, and one they have is morphed, and either re-draws its
+// subtree; only the append used to retract, so a container morphed whole
+// over a loose grandchild left two rows with one id on the page.
+func (f *framer) retract(step *stepView) {
+	for _, orphan := range adopted(step, f.drawn.has) {
+		fmt.Fprintf(&f.out, `<div id="%s" hx-swap-oob="delete"></div>`, orphan.Anchor())
+	}
+}
+
 // appendRow sends a row the reader does not have, whole, to be appended
 // under its parent — or to the transcript when it has none. htmx drops an
 // out-of-band swap at a missing id without a word, so a missing row is never
 // morphed.
 func (f *framer) appendRow(step *stepView, parent *stepView) error {
-	// Retracted in the same frame and AHEAD of the append that re-draws them
-	// nested, because htmx applies out-of-band swaps in the order they
-	// arrive. See adopted().
-	for _, orphan := range adopted(step, f.drawn.has) {
-		fmt.Fprintf(&f.out, `<div id="%s" hx-swap-oob="delete"></div>`, orphan.Anchor())
-	}
-
 	target := "#transcript"
 	if parent != nil {
 		target = "#" + parent.Anchor() + "_substeps"
@@ -640,8 +675,8 @@ func (s *sentRows) seed(steps []*stepView) {
 	}
 }
 
-// adopted names the rows the reader already has that this step is about to
-// draw again INSIDE itself.
+// adopted names the rows the reader already has LOOSE that a whole send of
+// this step is about to draw again inside it.
 //
 // A step is hung under its container only once the container has a row of its
 // own, and the two events do not arrive in that order: a container swallowed
@@ -649,15 +684,21 @@ func (s *sentRows) seed(steps []*stepView) {
 // after the steps that ran inside it (the same ordering that makes
 // run_events.parent_step_id a deliberate non-foreign-key). Until then the
 // child is a root and the reader carries it at the transcript's top level, so
-// appending the container would put a SECOND element with that id on the page
+// drawing the container would put a SECOND element with that id on the page
 // — and every later out-of-band swap resolves to the first match, leaving the
 // orphan updating and the real row frozen.
+//
+// A row is loose exactly when the reader has it but not its parent: a drawn
+// parent's drawn child is INSIDE it — the page hung it there, or an earlier
+// send carried or adopted it — and must not be retracted, or the reader
+// loses the fold state on a row that never moved. So a drawn child of a drawn
+// step is searched, not named; a drawn child of a step the reader lacks is
+// the orphan, and whatever is under it came with it.
 func adopted(step *stepView, has func(*stepView) bool) []*stepView {
 	var found []*stepView
 
 	for _, child := range step.Children {
-		if has(child) {
-			// Whatever is under it came with it, so nothing below is loose.
+		if has(child) && !has(step) {
 			found = append(found, child)
 
 			continue
@@ -676,13 +717,18 @@ func adopted(step *stepView, has func(*stepView) bool) []*stepView {
 // output (every progress bar writes them) ends the data line early and the
 // markup after it is read as SSE fields. `\r\revent: done\rdata: 0\r\r` on a
 // task's stdout is a forged run-completion frame: it closes the reader's
-// stream and paints the tab red on a job that is still running. A CRLF is a
-// line ending like any other; a lone CR is content, and goes over as the
-// entity so the frame's shape stays the server's decision.
+// stream and paints the tab red on a job that is still running.
+//
+// Every line ending becomes a data line, and a lone CR is a line ending too —
+// not because SSE says so but because HTML does: the parser turns every CR
+// in a page's bytes into LF before it tokenizes, so on reload a progress
+// bar's overwrites are three lines. Sent as the entity instead, the CR
+// survived into the live DOM as U+000D, which CSS draws as a space, and the
+// reader watched one run-on line become three at the closing reload.
 func frameLines(html string) []string {
 	normalized := strings.ReplaceAll(html, "\r\n", "\n")
 
-	return strings.Split(strings.ReplaceAll(normalized, "\r", "&#13;"), "\n")
+	return strings.Split(strings.ReplaceAll(normalized, "\r", "\n"), "\n")
 }
 
 // writeFrame emits one HTML fragment as an unnamed SSE message, which is the

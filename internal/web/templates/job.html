@@ -42,7 +42,7 @@
      button above it, by the queue, by a check — has to land in the history
      without a reload. htmx re-reads this page every 2.5s and morphs in what
      changed; the metaline and the nav badges ride along out of band. */}}
-<div id="job-runs" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#job-runs" hx-swap="outerMorph" hx-select-oob="#job-meta,#nav-tabs">
+<div id="job-runs" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#job-runs" hx-swap="outerMorph" hx-select-oob="#job-meta:outerMorph,#nav-tabs:outerMorph">
 <h2 class="eyebrow">Run history
   {{if .Spark}}
   <svg class="spark" width="{{mul2 (len .Spark)}}" height="16" viewBox="0 0 {{mul2 (len .Spark)}} 16" aria-label="Duration trend">
@@ -83,7 +83,7 @@
         {{else}}<td class="num">{{if .UncappedTurns}}<span class="faint">uncapped</span>{{else}}{{.Turns}}{{end}}</td>
         <td class="num">{{if .UncappedContext}}<span class="faint">uncapped</span>{{else}}{{thousands .ContextBytes}}{{end}}</td>
         <td class="dim">{{if .UncappedTimeout}}<span class="faint">uncapped</span>{{else if .Timeout}}{{.Timeout}}{{else}}<span class="faint">default</span>{{end}}</td>
-        <td class="num">{{if .UncappedBudget}}<span class="faint">uncapped</span>{{else}}{{.Budget}}{{end}}</td>{{end}}
+        <td class="num">{{if .UncappedBudget}}<span class="faint">uncapped{{if .BlockTokens}} per cell{{end}}</span>{{else}}{{.Budget}}{{end}}{{if .BlockTokens}} <span class="dim" title="The across: block's own budget:, which every cell spends together — the block stops admitting cells once it is gone. It is the one spend ceiling enforced on this step besides the agent's own.">· {{thousands .BlockTokens}} tokens for the matrix</span>{{end}}</td>{{end}}
       </tr>
       {{end}}
     </tbody>

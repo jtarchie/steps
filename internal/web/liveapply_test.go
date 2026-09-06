@@ -30,9 +30,11 @@ import (
 // the reader has (appended inside it), a container whose rollup changes when
 // a child finishes (its shell), a sub-agent's turns (the child's name, no
 // step of their own), an agent that ends by repeating its answer (the turn
-// the page drops), an output on a step already drawn, and a step re-parented
+// the page drops), an output on a step already drawn, a step re-parented
 // under a container that opened after it (retracted, then re-appended
-// nested).
+// nested) — both when the container is APPENDED and when the reader already
+// has it and it is morphed whole — and a job error that quotes a step's own,
+// which changes what that step's row shows without an event on the step.
 //
 // Serial, because liveBatch is a package global: every batch size is tried,
 // and one event per flush is the hardest case — every unit stands alone.
@@ -82,7 +84,7 @@ func TestStreamAppliedToThePageIsTheReloadedPage(t *testing.T) {
 
 			// The comparison is only worth anything if the stream sent
 			// something a plain reload would not have drawn already.
-			for _, want := range []string{"the sub-agent said this", "second attempt", "1eaf1eaf1eaf", "unchanged — replayed"} {
+			for _, want := range []string{"the sub-agent said this", "second attempt", "1eaf1eaf1eaf", "unchanged — replayed", `id="step-22-inner"`} {
 				if !strings.Contains(watched, want) {
 					t.Errorf("the watched page never shows %q", want)
 				}
@@ -110,12 +112,14 @@ func assertTurnsWereAppended(t *testing.T, raw string) {
 }
 
 // eventsBeforeThePage is what the reader's page was drawn from: an agent
-// step already talking.
+// step already talking, and a container the reader holds with nothing in it
+// yet.
 func eventsBeforeThePage() []store.RunEventRow {
 	return []store.RunEventRow{
 		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent", StepID: 1},
 		{Type: events.TypeAgentText, StepIndex: 0, StepName: "review", StepID: 1, Text: "Reading the diff first."},
 		{Type: events.TypeAgentCall, StepIndex: 0, StepName: "review", StepID: 1, Name: "read_file", Detail: `{"path":"main.go"}`},
+		{Type: events.TypeStepStarted, StepIndex: 7, StepName: "block", StepKind: "do", StepID: 20},
 	}
 }
 
@@ -127,7 +131,9 @@ func eventsAfterThePage() []store.RunEventRow {
 		{Type: events.TypeAgentText, StepIndex: 0, StepName: "helper", Status: "depth:1", Text: "the sub-agent said this"},
 		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "matrix", StepKind: "across", StepID: 2},
 		{Type: events.TypeStepStarted, StepIndex: 2, StepName: "cell-a", StepKind: "task", StepID: 3, ParentStepID: 2},
-		{Type: events.TypeStepOutput, StepIndex: 2, StepName: "cell-a", StepKind: "task", StepID: 3, ParentStepID: 2, Text: "first attempt\n"},
+		// A bare CR inside: the parser folds it to a newline on reload, and
+		// the stream has to hand the reader the same lines.
+		{Type: events.TypeStepOutput, StepIndex: 2, StepName: "cell-a", StepKind: "task", StepID: 3, ParentStepID: 2, Text: "first\rattempt\n"},
 		{Type: events.TypeStepOutput, StepIndex: 2, StepName: "cell-a", StepKind: "task", StepID: 3, ParentStepID: 2, Text: "second attempt\n"},
 		{Type: events.TypeStepFinished, StepIndex: 2, StepName: "cell-a", StepKind: "task", StepID: 3, ParentStepID: 2, Status: "failed", Text: "exit 1", Worker: "gpu (ssh://jt@box)"},
 		{Type: events.TypeStepStarted, StepIndex: 2, StepName: "cell-b", StepKind: "task", StepID: 4, ParentStepID: 2},
@@ -154,8 +160,17 @@ func eventsAfterThePage() []store.RunEventRow {
 		{Type: events.TypeAgentText, StepIndex: 6, StepName: "assist", StepID: 10, Text: "Starting."},
 		{Type: events.TypeAgentText, StepIndex: 6, StepName: "assist", StepID: 10, Text: "Still going."},
 		{Type: events.TypeStepFinished, StepIndex: 6, StepName: "assist", StepKind: "agent", StepID: 10, Status: "succeeded"},
-		// Changes no row: the flush that reads it must write nothing.
-		{Type: events.TypeJobFinished, Status: "failed"},
+		// The reader HAS `block`; its grandchild lands first, as a root, and
+		// the wrapper that hangs it under the block arrives after. Sending the
+		// block whole again — a morph, since they have it — has to retract
+		// the loose copy first.
+		{Type: events.TypeStepSkipped, StepIndex: 8, StepName: "inner", StepKind: "task", StepID: 22, ParentStepID: 21, Status: "skipped", Text: "cached"},
+		{Type: events.TypeStepSkipped, StepIndex: 8, StepName: "wrap", StepKind: "try", StepID: 21, ParentStepID: 20, Status: "skipped", Text: "cached"},
+		{Type: events.TypeStepFinished, StepIndex: 7, StepName: "block", StepKind: "do", StepID: 20, Status: "succeeded"},
+		// Names no step, yet changes a row: cell-a's own error line is dropped
+		// once the job's error quotes it, so the flush that reads this has to
+		// re-send cell-a and nothing else.
+		{Type: events.TypeJobFinished, Status: "failed", Text: "step 2 (task cell-a): exit 1"},
 	}
 }
 

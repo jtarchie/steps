@@ -238,14 +238,14 @@ func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScena
 		}
 	}
 
-	pipelinePath := filepath.Join(dir, docPipelineName(t, dir)+".yml")
+	path := pipelinePath(t, dir)
 
-	err := os.WriteFile(pipelinePath, []byte(body), 0o600)
+	err := os.WriteFile(path, []byte(body), 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return pipelinePath, mcpServer
+	return path, mcpServer
 }
 
 // pipelinePath is where a test's pipeline goes: inside dir, under a file name

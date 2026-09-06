@@ -421,7 +421,7 @@
         "max_turns": {
           "type": "integer",
           "minimum": 0,
-          "description": "Tool-calling turns per attempt. Omit for the default of 30; 0 removes the cap."
+          "description": "Tool-calling turns per attempt. Omit for the default: 30 for a hosted agent, no cap at all for a CLI source (its turns are a different unit, pooled across every message); 0 removes the cap."
         },
         "timeout": {
           "type": "string",
