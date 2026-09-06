@@ -499,3 +499,53 @@ func TestOneMessagePerFlush(t *testing.T) {
 		t.Errorf("a flush wrote %d messages after the first, want the whole flush in one:\n%s", got, raw)
 	}
 }
+
+// TestStreamKeepsDrawingPastTheRunEventLimit: the page reads a run whole and
+// stops at runEventLimit, and for a moment the stream inherited that bound by
+// re-reading the run on every flush. Past 5,000 events the touched steps were
+// simply absent from the truncated view, so the flush wrote NOTHING while the
+// connection stayed open and the idle deadline kept re-arming — a frozen
+// transcript on a live socket, with nothing logged anywhere. The stream pages
+// instead, and folds each page into the view it already has.
+func TestStreamKeepsDrawingPastTheRunEventLimit(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-long", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	// One step, then chatter past the page's bound, then the step that has to
+	// still be drawn on the other side of it.
+	rows := make([]store.RunEventRow, 0, runEventLimit+13)
+	rows = append(rows,
+		store.RunEventRow{Type: events.TypeStepStarted, StepIndex: 0, StepName: "chatty", StepKind: "agent", StepID: 1})
+
+	for range runEventLimit + 10 {
+		rows = append(rows, store.RunEventRow{
+			Type: events.TypeAgentText, StepIndex: 0, StepName: "chatty", StepID: 1, Text: "turn",
+		})
+	}
+
+	rows = append(rows,
+		store.RunEventRow{Type: events.TypeStepFinished, StepIndex: 0, StepName: "chatty", StepKind: "agent", StepID: 1, Status: "succeeded"},
+		store.RunEventRow{Type: events.TypeStepStarted, StepIndex: 1, StepName: "after-the-bound", StepKind: "task", StepID: 2},
+		store.RunEventRow{Type: events.TypeStepFinished, StepIndex: 1, StepName: "after-the-bound", StepKind: "task", StepID: 2, Status: "succeeded"},
+	)
+
+	appendEvents(t, pipeline.Store, "run-long", rows)
+
+	err = pipeline.Store.FinishRun(ctx, "run-long", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	stream := sseHTML(streamOf(t, server, "/p/demo/runs/run-long/events"))
+
+	if !strings.Contains(stream, `id="step-2-after-the-bound"`) {
+		t.Errorf("the stream stops at the page's event limit, and says nothing about it")
+	}
+}

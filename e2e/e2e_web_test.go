@@ -95,6 +95,76 @@ func assertAgentTranscript(t *testing.T, body string) {
 	}
 }
 
+// TestWebUILiveStreamDrawsTheSameRunThePageDoes is the live path over data
+// nothing here hand-fed: a real agent conversation, real tool-call payloads,
+// real node results. The stream renders each changed step with the page's own
+// template, so the property worth asserting end to end is that the two agree
+// — for years they did not, and each divergence (the agent's answer, the
+// "stopped early" badge, the worker, the node link) was found by a reader who
+// had to reload.
+func TestWebUILiveStreamDrawsTheSameRunThePageDoes(t *testing.T) {
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+	dir := t.TempDir()
+	fake := newFakeLLM(t, happyPathScript()...)
+	path := e2ePipeline(t, dir, fake.URL, "")
+
+	mustRun(t, "run", path, "--job", "build")
+
+	server, pipeline := webServerFor(t, path)
+
+	runs, err := pipeline.Store.ListRuns(t.Context(), "build", 10)
+	if err != nil || len(runs) == 0 {
+		t.Fatalf("ListRuns: %v (%d runs)", err, len(runs))
+	}
+
+	run := runs[0]
+
+	_, page := webGet(t, server, "/p/"+pipeline.Slug+"/runs/"+run.ID)
+
+	// after=0: a reader whose page holds nothing yet, so the stream has to
+	// draw the whole run — which is what makes the comparison total.
+	code, raw := webGet(t, server, "/p/"+pipeline.Slug+"/runs/"+run.ID+"/events?after=0")
+	if code != http.StatusOK {
+		t.Fatalf("event stream = %d: %s", code, raw)
+	}
+
+	var markup []string
+
+	for _, line := range strings.Split(raw, "\n") {
+		if after, found := strings.CutPrefix(line, "data: "); found {
+			markup = append(markup, after)
+		}
+	}
+
+	stream := strings.Join(markup, "\n")
+
+	// The transcript the page draws, drawn again by the stream: same steps,
+	// same conversation, same verdict.
+	assertAgentTranscript(t, stream)
+
+	// And the rows themselves are the page's, not a second rendering of them.
+	for _, want := range []string{"reviewer", "prepare"} {
+		anchor := `class="name">` + want + `</span>`
+
+		at := strings.Index(page, anchor)
+		if at < 0 {
+			t.Fatalf("the page never draws %q", want)
+		}
+
+		row := page[strings.LastIndex(page[:at], `<div id="step-`):at]
+		if !strings.Contains(strings.ReplaceAll(stream, ` hx-swap-oob="beforeend:#transcript"`, ""), row) {
+			t.Errorf("the stream draws %q differently from the page:\npage: %s", want, row)
+		}
+	}
+
+	// The stream closes rather than holding a socket open on a run that is
+	// over, and it says how the run ended.
+	if !strings.Contains(raw, "event: done") {
+		t.Error("the stream never closes for a finished run")
+	}
+}
+
 // TestWebUIShowsCachedStepsAsSkipped is the product's central mechanism seen
 // through the UI: rerun the same pipeline and the second run's transcript
 // must distinguish what it replayed from what it paid for.

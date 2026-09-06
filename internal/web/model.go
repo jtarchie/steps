@@ -659,38 +659,67 @@ func (r runView) HasSkipped() bool {
 // onto it would render a fan-out as one flickering step instead of the
 // several concurrent ones it is.
 func buildRunView(run store.RunRow, rows []store.RunEventRow, results map[string]store.NodeRow) runView {
-	view := runView{Run: run}
-	index := map[string]int{}
+	folder := newRunFolder()
+	folder.add(rows, results)
 
+	return folder.view(run)
+}
+
+// runFolder is the fold itself, kept open.
+//
+// The page reads a run once and folds every event in one go; the live stream
+// folds each flush into the view it already has, which is the only way it can
+// render a delta without re-reading the whole run 2.5 times a second — and
+// without stopping dead at runEventLimit, which is what a re-read does to a
+// run longer than that. Both go through this type rather than through two
+// folds that would have to agree.
+type runFolder struct {
+	run   runView
+	index map[string]int
+}
+
+func newRunFolder() *runFolder {
+	return &runFolder{index: map[string]int{}}
+}
+
+// add folds one batch of events in, in order.
+func (f *runFolder) add(rows []store.RunEventRow, results map[string]store.NodeRow) {
 	for _, row := range rows {
-		if row.Seq > view.LastSeq {
-			view.LastSeq = row.Seq
+		if row.Seq > f.run.LastSeq {
+			f.run.LastSeq = row.Seq
 		}
 
 		switch row.Type {
 		case events.TypeJobFinished:
 			if row.Text != "" {
-				view.JobError = row.Text
+				f.run.JobError = row.Text
 			}
 		case events.TypeStepStarted:
-			openStep(&view, index, row)
+			openStep(&f.run, f.index, row)
 		case events.TypeStepFinished, events.TypeStepSkipped:
-			closeStep(&view, index, row, results)
+			closeStep(&f.run, f.index, row, results)
 		case events.TypeStepOutput:
-			attachOutput(&view, index, row)
+			attachOutput(&f.run, f.index, row)
 		default:
 			// Agent conversation traffic; anything unrecognized is ignored
 			// rather than rendered, so an event type added later cannot break
 			// an older reader.
 			if isAgentTraffic(row.Type) {
-				attachTurn(&view, index, row)
+				attachTurn(&f.run, f.index, row)
 			}
 		}
 	}
+}
 
-	linkTree(&view)
+// view is what has been folded so far, with the tree hung and the run row as
+// it stands — the row keeps changing under a live fold, and it is read for
+// the job error the step template asks each row about. Safe to call after
+// every batch: linkTree rebuilds the parent links rather than adding to them.
+func (f *runFolder) view(run store.RunRow) runView {
+	f.run.Run = run
+	linkTree(&f.run)
 
-	return view
+	return f.run
 }
 
 // attachOutput hangs one of a step's printed outputs on it. The event can
@@ -854,6 +883,15 @@ func stepKey(row store.RunEventRow) string {
 // open, and a child is appended to its parent as it is linked, so a matrix's
 // cells appear in the order they began rather than the order they finished.
 func linkTree(view *runView) {
+	// Rebuilt, not appended to: the live stream re-hangs the tree after every
+	// flush, and appending would give a container a second copy of each of its
+	// children per batch.
+	view.Roots = view.Roots[:0]
+
+	for _, step := range view.Steps {
+		step.Children = step.Children[:0]
+	}
+
 	byID := make(map[int64]*stepView, len(view.Steps))
 
 	for _, step := range view.Steps {

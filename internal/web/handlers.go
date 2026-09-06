@@ -193,23 +193,7 @@ func (s *Server) assembleRun(c echo.Context, run store.RunRow) (runView, error) 
 		return runView{}, fmt.Errorf("web: %w", err)
 	}
 
-	// Deduped: a hash repeats across a run's events (and across the steps a
-	// chain-skip swallowed), and each repeat would add a redundant bind
-	// parameter to the IN clause below.
-	seen := map[string]bool{}
-	hashes := make([]string, 0, len(rows))
-
-	for _, row := range rows {
-		if row.Hash == "" || seen[row.Hash] {
-			continue
-		}
-
-		seen[row.Hash] = true
-
-		hashes = append(hashes, row.Hash)
-	}
-
-	nodes, err := pipeline.Store.NodesByHash(ctx, hashes)
+	nodes, err := pipeline.Store.NodesByHash(ctx, hashesOf(rows))
 	if err != nil {
 		return runView{}, fmt.Errorf("web: %w", err)
 	}
@@ -392,6 +376,27 @@ func (s *Server) handleResources(c echo.Context) error {
 		"Checked":   checkedByName(checked),
 		"Paused":    paused,
 	})
+}
+
+// hashesOf is the node hashes a batch of events names, deduped: a hash
+// repeats across a run's events (and across the steps a chain-skip
+// swallowed), and each repeat would add a redundant bind parameter to the IN
+// clause it feeds.
+func hashesOf(rows []store.RunEventRow) []string {
+	seen := map[string]bool{}
+	hashes := make([]string, 0, len(rows))
+
+	for _, row := range rows {
+		if row.Hash == "" || seen[row.Hash] {
+			continue
+		}
+
+		seen[row.Hash] = true
+
+		hashes = append(hashes, row.Hash)
+	}
+
+	return hashes
 }
 
 func checkedByName(rows []store.CheckedResource) map[string]store.CheckedResource {

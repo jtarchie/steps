@@ -21,6 +21,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -47,6 +48,12 @@ const livePollInterval = 400 * time.Millisecond
 // so a forgotten browser tab does not hold a connection forever.
 const liveIdleTimeout = 5 * time.Minute
 
+// liveBatch is how many events one read of the stream takes. The stream pages
+// rather than reading a run whole, which is what keeps it working past
+// runEventLimit — the page's own bound, and one a delta has no reason to
+// inherit.
+const liveBatch = 500
+
 // handleRunEvents streams a run's events as server-sent events.
 func (s *Server) handleRunEvents(c echo.Context) error {
 	pipeline := pipelineOf(c)
@@ -59,16 +66,26 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 	// what decides whether a fragment is morphed onto a row or appended as a
 	// new one, and getting it wrong is silent either way.
 	drawn := drawnAt(after)
+	// The fold stays open for the life of the connection. Re-reading the run
+	// on every tick was the obvious way to render a delta and the wrong one
+	// twice over: it re-folded thousands of events 2.5 times a second per
+	// watcher, and it stopped at runEventLimit — past that the flush had no
+	// touched step in its truncated view, so it wrote nothing at all while
+	// holding the socket open and re-arming the idle deadline. A reader
+	// watched a frozen transcript on a live connection, with nothing logged.
+	folder := newRunFolder()
 
-	response := c.Response()
-	response.Header().Set(echo.HeaderContentType, "text/event-stream")
-	response.Header().Set("Cache-Control", "no-cache")
-	response.Header().Set("Connection", "keep-alive")
-	// Without this an intermediary that buffers by default (a proxy someone
-	// put in front of this) turns a live stream into one big delivery at the
-	// end, which is the exact opposite of the feature.
-	response.Header().Set("X-Accel-Buffering", "no")
-	response.WriteHeader(http.StatusOK)
+	// Catch the fold up to what the reader is already looking at, without
+	// sending any of it: their page was rendered from exactly these events,
+	// and the fold has to hold them or a row they can see is missing from
+	// every fragment that follows — a container whose children arrived before
+	// they connected would re-render with none of them.
+	err := s.seedFold(c, runID, after, folder)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	response := openStream(c)
 
 	ticker := time.NewTicker(livePollInterval)
 	defer ticker.Stop()
@@ -94,7 +111,7 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 
 		before := after
 
-		after, err = s.flushEvents(c, run, after, drawn)
+		after, err = s.flushEvents(c, run, after, drawn, folder)
 		if err != nil {
 			return fmt.Errorf("web: %w", err)
 		}
@@ -115,16 +132,81 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 			return nil
 		}
 
-		select {
-		case <-ctx.Done():
+		if !waitForMore(ctx, ticker.C, deadline.C, response) {
 			return nil
-		case <-deadline.C:
-			writeSSE(response, "done", map[string]any{"status": "idle"})
-
-			return nil
-		case <-ticker.C:
 		}
 	}
+}
+
+// waitForMore holds until the next poll, reporting whether the stream should
+// keep going. Silence long enough to trip the deadline ends it: the run is
+// still running, so this says idle rather than claiming an outcome.
+func waitForMore(ctx context.Context, tick, deadline <-chan time.Time, response *echo.Response) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-deadline:
+		writeSSE(response, "done", map[string]any{"status": "idle"})
+
+		return false
+	case <-tick:
+		return true
+	}
+}
+
+// openStream puts the response into server-sent-event mode.
+func openStream(c echo.Context) *echo.Response {
+	response := c.Response()
+	response.Header().Set(echo.HeaderContentType, "text/event-stream")
+	response.Header().Set("Cache-Control", "no-cache")
+	response.Header().Set("Connection", "keep-alive")
+	// Without this an intermediary that buffers by default (a proxy someone
+	// put in front of this) turns a live stream into one big delivery at the
+	// end, which is the exact opposite of the feature.
+	response.Header().Set("X-Accel-Buffering", "no")
+	response.WriteHeader(http.StatusOK)
+
+	return response
+}
+
+// seedFold folds everything up to seq into the fold, in pages, so a run
+// longer than one read stays whole. Nothing is written to the client: this is
+// the history they already have on the page.
+func (s *Server) seedFold(c echo.Context, runID string, seq int64, folder *runFolder) error {
+	pipeline := pipelineOf(c)
+	ctx := c.Request().Context()
+
+	for at := int64(0); at < seq; {
+		rows, err := pipeline.Store.RunEvents(ctx, runID, at, liveBatch)
+		if err != nil {
+			return fmt.Errorf("web: %w", err)
+		}
+
+		if len(rows) == 0 {
+			return nil
+		}
+
+		// Anything past the reader's own sequence belongs to the first flush,
+		// which has to SEND it.
+		for len(rows) > 0 && rows[len(rows)-1].Seq > seq {
+			rows = rows[:len(rows)-1]
+		}
+
+		if len(rows) == 0 {
+			return nil
+		}
+
+		nodes, err := pipeline.Store.NodesByHash(ctx, hashesOf(rows))
+		if err != nil {
+			return fmt.Errorf("web: %w", err)
+		}
+
+		folder.add(rows, nodes)
+
+		at = rows[len(rows)-1].Seq
+	}
+
+	return nil
 }
 
 // resumeFrom is the sequence number this connection already has.
@@ -156,11 +238,38 @@ func resumeFrom(c echo.Context) int64 {
 // re-rendered from the assembled view, which is the same one the page
 // renders. Only the roots the flushed events touched are sent, which is what
 // keeps a page-sized payload off the wire for a one-line change.
-func (s *Server) flushEvents(c echo.Context, run store.RunRow, after int64, drawn func(*stepView) bool) (int64, error) {
+func (s *Server) flushEvents(
+	c echo.Context, run store.RunRow, after int64, drawn func(*stepView) bool, folder *runFolder,
+) (int64, error) {
+	// Drained, not read once: a tick reads a bounded batch, and a run that
+	// recorded more than one batch between ticks — or that had already
+	// finished when the reader connected — would otherwise deliver a batch
+	// and close, leaving a transcript that ends mid-run with no sign it was
+	// cut. Each batch is its own message, so what a reconnect resumes from
+	// stays exact.
+	for {
+		before := after
+
+		next, err := s.flushBatch(c, run, after, drawn, folder)
+		if err != nil {
+			return next, err
+		}
+
+		after = next
+
+		if after == before {
+			return after, nil
+		}
+	}
+}
+
+func (s *Server) flushBatch(
+	c echo.Context, run store.RunRow, after int64, drawn func(*stepView) bool, folder *runFolder,
+) (int64, error) {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 
-	rows, err := pipeline.Store.RunEvents(ctx, run.ID, after, 500)
+	rows, err := pipeline.Store.RunEvents(ctx, run.ID, after, liveBatch)
 	if err != nil {
 		return after, fmt.Errorf("web: %w", err)
 	}
@@ -171,10 +280,17 @@ func (s *Server) flushEvents(c echo.Context, run store.RunRow, after int64, draw
 
 	touched, after := reach(rows, after)
 
-	view, err := s.assembleRun(c, run)
+	// Only the nodes THIS batch names: a finished agent step's answer and
+	// trajectory live in its node, and the rest of the run's nodes are
+	// already folded in.
+	nodes, err := pipeline.Store.NodesByHash(ctx, hashesOf(rows))
 	if err != nil {
 		return after, fmt.Errorf("web: %w", err)
 	}
+
+	folder.add(rows, nodes)
+
+	view := folder.view(run)
 
 	// The `step` template reads one thing off the nav — the slug its node
 	// links are scoped by — and s.nav() would buy that with the two pending
