@@ -30,7 +30,6 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -55,6 +54,11 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 	runID := c.Param("run")
 
 	after := resumeFrom(c)
+	// What the reader is looking at: everything at or before the sequence
+	// they resumed from, plus every row sent since on THIS connection. It is
+	// what decides whether a fragment is morphed onto a row or appended as a
+	// new one, and getting it wrong is silent either way.
+	drawn := drawnAt(after)
 
 	response := c.Response()
 	response.Header().Set(echo.HeaderContentType, "text/event-stream")
@@ -73,11 +77,24 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 	defer deadline.Stop()
 
 	for {
-		var err error
+		// Read the run BEFORE flushing, not after: the flush needs the row
+		// anyway, and a run that finishes mid-flush is still seen as running
+		// here, so the loop comes round once more and delivers its last events
+		// before saying done.
+		run, ok, err := pipeline.Store.FindRunRow(ctx, runID)
+		if err != nil {
+			return fmt.Errorf("web: %w", err)
+		}
+
+		if !ok {
+			writeSSE(response, "done", map[string]any{"status": run.Status})
+
+			return nil
+		}
 
 		before := after
 
-		after, err = s.flushEvents(c, runID, after)
+		after, err = s.flushEvents(c, run, after, drawn)
 		if err != nil {
 			return fmt.Errorf("web: %w", err)
 		}
@@ -92,12 +109,7 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 		// Once the run is over and its events are all delivered, say so and
 		// close: the page has everything, and holding the socket open would
 		// only poll a table that can no longer change.
-		run, ok, err := pipeline.Store.FindRunRow(ctx, runID)
-		if err != nil {
-			return fmt.Errorf("web: %w", err)
-		}
-
-		if !ok || run.Status != "running" {
+		if run.Status != "running" {
 			writeSSE(response, "done", map[string]any{"status": run.Status})
 
 			return nil
@@ -144,11 +156,11 @@ func resumeFrom(c echo.Context) int64 {
 // re-rendered from the assembled view, which is the same one the page
 // renders. Only the roots the flushed events touched are sent, which is what
 // keeps a page-sized payload off the wire for a one-line change.
-func (s *Server) flushEvents(c echo.Context, runID string, after int64) (int64, error) {
+func (s *Server) flushEvents(c echo.Context, run store.RunRow, after int64, drawn func(*stepView) bool) (int64, error) {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 
-	rows, err := pipeline.Store.RunEvents(ctx, runID, after, 500)
+	rows, err := pipeline.Store.RunEvents(ctx, run.ID, after, 500)
 	if err != nil {
 		return after, fmt.Errorf("web: %w", err)
 	}
@@ -157,71 +169,85 @@ func (s *Server) flushEvents(c echo.Context, runID string, after int64) (int64, 
 		return after, nil
 	}
 
-	touched, opened, after := reach(rows, after)
-
-	run, ok, err := pipeline.Store.FindRunRow(ctx, runID)
-	if err != nil {
-		return after, fmt.Errorf("web: %w", err)
-	}
-
-	if !ok {
-		return after, nil
-	}
+	touched, after := reach(rows, after)
 
 	view, err := s.assembleRun(c, run)
 	if err != nil {
 		return after, fmt.Errorf("web: %w", err)
 	}
 
-	page := map[string]any{"Nav": s.nav(c), "Run": view}
+	// The `step` template reads one thing off the nav — the slug its node
+	// links are scoped by — and s.nav() would buy that with the two pending
+	// counts nothing in a row displays, 2.5 times a second per watcher.
+	page := map[string]any{"Nav": navData{Current: pipeline.Slug}, "Run": view}
+
+	// ONE message per flush, however many rows changed. The id a browser
+	// resends on a reconnect names the last message it applied, so a flush
+	// split across several messages could be resumed from the middle of
+	// itself: the rows in the frames that never arrived would be skipped, and
+	// an appended row skipped that way is gone for the rest of the run —
+	// every later flush renders it as a swap onto an id the page never drew.
+	// Whole flush or nothing.
+	var frame strings.Builder
 
 	for _, root := range view.Roots {
 		if !subtreeTouched(root, touched) {
 			continue
 		}
 
-		// A root the client has is morphed onto the row already on the page;
-		// one this flush OPENED is appended, because there is nothing there to
-		// morph. The client's own drawing is exactly the events at or before
-		// `after`, so a root whose step.started arrives in this flush is a row
-		// it cannot have — including on the first connection, where the page
-		// itself drew everything up to the sequence it asked to resume from.
-		fragment, err := s.renderStep(page, root, !opened[root.Key()])
+		// A row the reader has is morphed onto it; one they do not have is
+		// appended, because there is nothing there to morph — and htmx drops
+		// an out-of-band swap at a missing id without a word.
+		fragment, err := s.renderStep(page, root, drawn(root))
 		if err != nil {
 			return after, err
 		}
 
-		// Every frame of one flush carries the SAME id, deliberately. A
-		// connection that dies between two frames leaves the client resuming
-		// past the whole flush: it loses the frames it never got (the closing
-		// reload draws them) rather than replaying the ones it applied, which
-		// on an appended row would draw it twice.
-		writeFrame(c.Response(), after, fragment)
+		frame.WriteString(fragment)
 	}
+
+	if frame.Len() == 0 {
+		return after, nil
+	}
+
+	writeFrame(c.Response(), after, frame.String())
 
 	c.Response().Flush()
 
 	return after, nil
 }
 
-// reach reads what a flush is ABOUT: the steps its events name, the ones it
-// opened, and the sequence it ends at.
-func reach(rows []store.RunEventRow, after int64) (touched, opened map[string]bool, seq int64) {
+// reach reads what a flush is ABOUT: the steps its events name, and the
+// sequence it ends at.
+func reach(rows []store.RunEventRow, after int64) (touched map[string]bool, seq int64) {
 	touched = map[string]bool{}
-	opened = map[string]bool{}
 
 	for _, row := range rows {
-		key := stepKey(row)
-		touched[key] = true
-
-		if row.Type == events.TypeStepStarted {
-			opened[key] = true
-		}
-
+		touched[stepKey(row)] = true
 		after = row.Seq
 	}
 
-	return touched, opened, after
+	return touched, after
+}
+
+// drawnAt answers, for one connection, whether the reader already has a row.
+//
+// A row is theirs if the event that put it on the page came at or before the
+// sequence they resumed from — the page they are looking at was rendered from
+// exactly those events — or if this connection has since sent it. Asking
+// instead whether a step.started arrived in the current flush was almost the
+// same question and wrong for the case that has no start at all: a step
+// swallowed by a chain skip is opened by its step.skipped, so its row was
+// swapped over an id nothing had drawn and vanished.
+func drawnAt(origin int64) func(*stepView) bool {
+	sent := map[string]bool{}
+
+	return func(step *stepView) bool {
+		has := step.FirstSeq <= origin || sent[step.Key()]
+		sent[step.Key()] = true
+
+		return has
+	}
 }
 
 // subtreeTouched reports whether any step in this root's subtree was named by
@@ -265,6 +291,22 @@ func (s *Server) renderStep(page map[string]any, step *stepView, oob bool) (stri
 	return `<div hx-swap-oob="beforeend:#transcript">` + out.String() + `</div>`, nil
 }
 
+// frameLines cuts a fragment into the data lines one SSE message carries.
+//
+// html/template escapes the five HTML metacharacters and NOT the carriage
+// return, but SSE ends a line on CRLF, CR *or* LF — so a lone CR in a step's
+// output (every progress bar writes them) ends the data line early and the
+// markup after it is read as SSE fields. `\r\revent: done\rdata: 0\r\r` on a
+// task's stdout is a forged run-completion frame: it closes the reader's
+// stream and paints the tab red on a job that is still running. A CRLF is a
+// line ending like any other; a lone CR is content, and goes over as the
+// entity so the frame's shape stays the server's decision.
+func frameLines(html string) []string {
+	normalized := strings.ReplaceAll(html, "\r\n", "\n")
+
+	return strings.Split(strings.ReplaceAll(normalized, "\r", "&#13;"), "\n")
+}
+
 // writeFrame emits one HTML fragment as an unnamed SSE message, which is the
 // shape hx-sse swaps. Named messages dispatch a DOM event instead, which is
 // what `done` is for.
@@ -274,7 +316,7 @@ func writeFrame(response *echo.Response, id int64, html string) {
 	// One data: line per line of markup. SSE rejoins them with newlines, so a
 	// <pre> block arrives with its whitespace intact — the whole point of
 	// sending markup the server already escaped.
-	for _, line := range strings.Split(html, "\n") {
+	for _, line := range frameLines(html) {
 		_, _ = fmt.Fprintf(response, "data: %s\n", line)
 	}
 

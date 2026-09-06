@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -259,5 +260,242 @@ func TestStreamResumesFromLastEventID(t *testing.T) {
 	// Every frame is stamped, or the browser has nothing to resume WITH.
 	if !strings.HasPrefix(raw, "id: ") {
 		t.Errorf("the stream stamps no event ids:\n%s", raw)
+	}
+}
+
+// TestStreamFramesSurviveACarriageReturn: the wire is line-oriented and the
+// payload is command output, which is the one combination html/template does
+// not cover. It escapes the five HTML metacharacters and not CR — but an SSE
+// reader ends a line on CRLF, CR *or* LF, so a bare CR in a step's output
+// ends the data line early and everything after it is read as SSE FIELDS.
+// A task that prints `\r\revent: done\r\r` forges the run-completion frame:
+// the reader's stream closes and the tab goes red on a job still running.
+func TestStreamFramesSurviveACarriageReturn(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-cr", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-cr", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "pull", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "pull", StepKind: "task", StepID: 1,
+			Status: "failed", Text: "50%\r\revent: done\rdata: {\"status\":\"failed\"}\r\r100%"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-cr", "failed")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	raw := streamOf(t, server, "/p/demo/runs/run-cr/events")
+
+	// Read it the way the vendored extension does: split on all three
+	// terminators, and dispatch a message on every blank line that ends one.
+	var messages, named, fields int
+
+	for _, line := range regexp.MustCompile(`\r\n|\r|\n`).Split(raw, -1) {
+		if line == "" {
+			if fields > 0 {
+				messages++
+			}
+
+			fields = 0
+
+			continue
+		}
+
+		fields++
+
+		if strings.HasPrefix(line, "event: ") {
+			named++
+		}
+	}
+
+	// One content frame plus the closing `done`, and `done` is the only named
+	// event on the wire — the step's own output must not have minted a second.
+	if named != 1 {
+		t.Errorf("step output forged %d named SSE events, want only `done`:\n%q", named, raw)
+	}
+
+	if messages != 2 {
+		t.Errorf("the stream carried %d messages, want the frame and its done:\n%q", messages, raw)
+	}
+}
+
+// TestStreamAppendsIntoTheContainerThePageDraws is the seam: the server picks
+// the id it appends into and the template picks the id it draws, and nothing
+// tied the two together — renaming the container left every test green while
+// every step that started after page load vanished, because htmx drops an
+// out-of-band swap whose target is not there.
+func TestStreamAppendsIntoTheContainerThePageDraws(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-target", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	_, page := get(t, server, "/p/demo/runs/run-target")
+
+	// The run page must ask for the stream at all, with the extension the
+	// layout serves — this is the only place that wiring is asserted.
+	for _, want := range []string{`hx-sse:connect="/p/demo/runs/run-target/events?after=`,
+		`hx-sse:close="done"`, `hx-on:done="runFinished(event)"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("a running run's page does not carry %s", want)
+		}
+	}
+
+	appendEvents(t, pipeline.Store, "run-target", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1,
+			Status: "succeeded"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-target", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	stream := sseHTML(streamOf(t, server, "/p/demo/runs/run-target/events"))
+
+	target := regexp.MustCompile(`hx-swap-oob="beforeend:#([\w-]+)"`).FindStringSubmatch(stream)
+	if target == nil {
+		t.Fatalf("the stream appends nothing, so a step that opens after the page loads never lands:\n%s", stream)
+	}
+
+	if !strings.Contains(page, `id="`+target[1]+`"`) {
+		t.Errorf("the stream appends into #%s, which the page never draws — htmx drops the swap", target[1])
+	}
+}
+
+// TestEmptyTranscriptPlaceholderIsNotAStepToWalk: the placeholder exists for
+// the stream's sake — it is always in the DOM so `beforeend:#transcript` has
+// somewhere to append beside, and CSS hides it once a real row lands. That
+// makes it a `.step` on every run page, and the keyboard walk in layout.html
+// selects `.step`, so an unfiltered walk parks the reader on an invisible row
+// in the MIDDLE of the list (the stream appends after the placeholder).
+func TestEmptyTranscriptPlaceholderIsNotAStepToWalk(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-placeholder", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-placeholder", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1,
+			Status: "succeeded"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-placeholder", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	_, page := get(t, server, "/p/demo/runs/run-placeholder")
+
+	if !strings.Contains(page, `<div class="step" id="run-empty">`) {
+		t.Fatal("the placeholder is no longer a .step, so the walk needs no exception — drop it")
+	}
+
+	if !strings.Contains(page, `querySelectorAll('.step:not(#run-empty)')`) {
+		t.Error("the step walk collects the hidden placeholder, so j/k lands on a row nobody can see")
+	}
+}
+
+// TestStreamAppendsAChainSkippedRow: a step swallowed by a chain skip never
+// starts — its ONLY event is step.skipped, and the view opens the row from
+// that. Asking "did a start arrive in this flush" therefore answered no for a
+// row the reader had never been sent, so it was swapped over an id nothing
+// had drawn and htmx dropped it without a word: the transcript simply stopped
+// at the last executed step.
+func TestStreamAppendsAChainSkippedRow(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-chain", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-chain", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1, Status: "succeeded"},
+		// No start: the chain skip swallowed it.
+		{Type: events.TypeStepSkipped, StepIndex: 1, StepName: "ship", StepKind: "put", StepID: 2,
+			Status: "skipped", Text: "unchanged — replayed from cache"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-chain", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	// A reader whose page was drawn before the skip was recorded.
+	stream := sseHTML(streamOf(t, server, "/p/demo/runs/run-chain/events?after=2"))
+
+	at := strings.Index(stream, `id="step-2-ship"`)
+	if at < 0 {
+		t.Fatalf("the stream never draws the chain-skipped row:\n%s", stream)
+	}
+
+	if !strings.Contains(stream[:at], `hx-swap-oob="beforeend:#transcript"`) {
+		t.Errorf("the chain-skipped row is swapped over an id the page never drew:\n%s", stream)
+	}
+}
+
+// TestOneMessagePerFlush: a browser resends the id of the last message it
+// APPLIED, so a flush split across several messages can be resumed from the
+// middle of itself — and a row appended in a message that never arrived is
+// gone for the rest of the run, since every later flush renders it as a swap
+// onto an id the page does not have.
+func TestOneMessagePerFlush(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-atomic", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	// Two roots, both changed by the same flush.
+	appendEvents(t, pipeline.Store, "run-atomic", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "one", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "two", StepKind: "task", StepID: 2},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "one", StepKind: "task", StepID: 1, Status: "succeeded"},
+		{Type: events.TypeStepFinished, StepIndex: 1, StepName: "two", StepKind: "task", StepID: 2, Status: "succeeded"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-atomic", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	raw := streamOf(t, server, "/p/demo/runs/run-atomic/events")
+
+	if !strings.Contains(sseHTML(raw), `id="step-1-one"`) || !strings.Contains(sseHTML(raw), `id="step-2-two"`) {
+		t.Fatalf("the stream did not draw both rows:\n%s", raw)
+	}
+
+	// Both rows, one id to resume from. The `done` message is the other one.
+	if got := strings.Count(raw, "\nid: "); got != 0 {
+		t.Errorf("a flush wrote %d messages after the first, want the whole flush in one:\n%s", got, raw)
 	}
 }

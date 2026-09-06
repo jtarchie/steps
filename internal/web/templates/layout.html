@@ -71,6 +71,13 @@
   });
   document.addEventListener('click', function () { pipemenu.classList.remove('open'); });
 
+  // What the reader has folded or unfolded, and which row they are on, are
+  // the two pieces of state the SERVER cannot know — and a swap reconciles
+  // the row to what the server drew, so both are lost the moment a step
+  // changes. Recorded as the reader makes them and re-applied after every
+  // swap, which is what keeps a live transcript readable while it grows.
+  var folds = new Map();
+
   // A shared link names a step; open it so the reader lands on the content
   // rather than on a collapsed row they still have to click. Here rather than
   // in the live-run script, which is where it used to live: the link a person
@@ -80,7 +87,10 @@
   function openHashTarget() {
     if (!window.location.hash) return;
     var target = document.querySelector(window.location.hash);
-    if (target && target.classList.contains('step')) target.classList.add('open');
+    if (!target || !target.classList.contains('step')) return;
+    target.classList.add('open');
+    // Recorded like any other fold, or the next swap of a live run closes it.
+    if (target.dataset.step) folds.set(target.dataset.step, true);
   }
 
   openHashTarget();
@@ -98,13 +108,6 @@
     var step = head.parentElement;
     return step && step.hasAttribute('data-toggle') ? step : null;
   }
-
-  // What the reader has folded or unfolded, and which row they are on, are
-  // the two pieces of state the SERVER cannot know — and a swap reconciles
-  // the row to what the server drew, so both are lost the moment a step
-  // changes. Recorded as the reader makes them and re-applied after every
-  // swap, which is what keeps a live transcript readable while it grows.
-  var folds = new Map();
 
   function fold(step) {
     step.classList.toggle('open');
@@ -146,7 +149,11 @@
   var transcript = document.querySelector('.transcript');
   var chosen = null;
 
-  function steps() { return transcript ? Array.from(transcript.querySelectorAll('.step')) : []; }
+  // Not #run-empty: the placeholder is a `.step` that is always in the DOM
+  // and hidden by CSS once a real row exists, so an unfiltered walk lands the
+  // reader on an invisible row — mid-list, because the stream appends after
+  // it — and drops the selection there.
+  function steps() { return transcript ? Array.from(transcript.querySelectorAll('.step:not(#run-empty)')) : []; }
 
   function select(step) {
     if (!step) return;

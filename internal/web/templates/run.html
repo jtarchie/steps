@@ -123,9 +123,17 @@
      the same template this page renders, and the extension swaps the
      fragments in. The element carries no target of its own — every fragment
      names where it goes — so the swap here is none. */}}
+{{/* Both settings override an hx-sse default that would silently undo what
+     this element is for. pauseOnBackground cancels the stream while the tab
+     is hidden, which is exactly when the title mark below is the only thing
+     reporting the run; and reconnectMaxAttempts is Infinity, so a tab left
+     open after `steps web` exits would retry a dead port for as long as it
+     lives. Six tries with the extension's own backoff is where the hand-
+     written EventSource stopped. */}}
 <div id="run-stream" hidden
      hx-sse:connect="/p/{{.Nav.Current}}/runs/{{.Run.Run.ID}}/events?after={{.Run.LastSeq}}"
      hx-sse:close="done"
+     hx-config='{"sse":{"pauseOnBackground":false,"reconnectMaxAttempts":6}}'
      hx-swap="none"
      hx-on:done="runFinished(event)"></div>
 <script>
@@ -146,15 +154,25 @@
   // status, its duration, the spend and placement tables — and it is also the
   // backstop for a fragment a dropped connection lost.
   window.runFinished = function (event) {
-    var status = (event.detail && event.detail.data && JSON.parse(event.detail.data).status) || '';
-    var mark = status === 'succeeded' ? '✓' : status === 'running' ? '◐' : '✗';
-    document.title = mark + ' ' + document.title.replace(/^[✓✗◐]\s*/, '');
+    var status = '';
+    // The reload below is the backstop for everything the transcript is not,
+    // so nothing before it may throw: an unparseable payload must cost the
+    // mark, not the redraw.
+    try { status = JSON.parse(event.detail.data).status || ''; } catch (err) { /* the mark is a nicety */ }
 
-    var dot = mark === '✓' ? '%2384c06d' : mark === '◐' ? '%23d9a94a' : '%23e0645a';
-    var icon = document.getElementById('favicon');
-    if (icon) {
-      icon.href = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E" +
-        "%3Ccircle cx='8' cy='8' r='6' fill='" + dot + "'/%3E%3C/svg%3E";
+    // 'idle' is the server saying the run went quiet for five minutes, not
+    // that it ended — a task that prints nothing for longer than that is
+    // ordinary. Marking it would paint a red ✗ over a job still running.
+    if (status && status !== 'idle') {
+      var mark = status === 'succeeded' ? '✓' : status === 'running' ? '◐' : '✗';
+      document.title = mark + ' ' + document.title.replace(/^[✓✗◐]\s*/, '');
+
+      var dot = mark === '✓' ? '%2384c06d' : mark === '◐' ? '%23d9a94a' : '%23e0645a';
+      var icon = document.getElementById('favicon');
+      if (icon) {
+        icon.href = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E" +
+          "%3Ccircle cx='8' cy='8' r='6' fill='" + dot + "'/%3E%3C/svg%3E";
+      }
     }
 
     window.location.reload();

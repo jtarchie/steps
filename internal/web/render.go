@@ -130,10 +130,15 @@ func (s *Server) handleCSS(c echo.Context) error {
 	return serveAsset(c, "static/app.css", "text/css; charset=utf-8")
 }
 
-// handleHTMX serves the vendored copy of htmx, which drives every live region
-// in the UI. Vendored and embedded rather than pulled from a CDN: this server
-// is expected to run where there is no route to one, and a refresh that
-// silently stops working there is worse than no refresh at all.
+// handleHTMX serves the vendored copy of htmx (4.0.0), which drives every
+// live region in the UI. Vendored and embedded rather than pulled from a CDN:
+// this server is expected to run where there is no route to one, and a
+// refresh that silently stops working there is worse than no refresh at all.
+//
+// The version is pinned by a test, because 4.x is not a drop-in for 2.x and
+// the differences are silent: the events renamed to `htmx:after:swap`,
+// `hx-sync` defaults to `queue first`, and the trigger grammar became HCON —
+// which is what turned `every 2.5s` into a 2-millisecond poll.
 func (s *Server) handleHTMX(c echo.Context) error {
 	return serveAsset(c, "static/htmx.min.js", "text/javascript; charset=utf-8")
 }

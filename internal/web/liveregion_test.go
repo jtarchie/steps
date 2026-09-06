@@ -132,6 +132,10 @@ func closeOf(t *testing.T, body string, open int, name string) int {
 // apart legitimately disagree about "4s ago", and that is not staleness.
 var timeText = regexp.MustCompile(`<time[^>]*>[^<]*</time>`)
 
+// markup strips tags, which is how a line with nothing a reader can read is
+// told from one carrying a fact.
+var markup = regexp.MustCompile(`(?s)<[^>]*>|\s+`)
+
 func TestNothingThatChangesLivesOutsideALiveRegion(t *testing.T) {
 	t.Parallel()
 
@@ -250,9 +254,15 @@ func TestNothingThatChangesLivesOutsideALiveRegion(t *testing.T) {
 func assertChangesAreLive(t *testing.T, path, before, after string) {
 	t.Helper()
 
-	was := map[string]bool{}
+	// Counted, not a set, over the lines that carry TEXT. A set says "was
+	// already there" about the second copy of a line, so a whole new run row
+	// spelled the same way as the one above it passed a probe written to
+	// catch exactly that. Structural lines (a bare </div>, a blank) are
+	// exempt in the other direction: a page that grows gains more of them
+	// everywhere, and none of them is something a reader misses.
+	was := map[string]int{}
 	for _, line := range strings.Split(timeText.ReplaceAllString(before, "<time/>"), "\n") {
-		was[strings.TrimSpace(line)] = true
+		was[strings.TrimSpace(line)]++
 	}
 
 	regions := liveRegions(t, after)
@@ -263,7 +273,13 @@ func assertChangesAreLive(t *testing.T, path, before, after string) {
 		start := at
 		at += len(line) + 1
 
-		if was[strings.TrimSpace(timeText.ReplaceAllString(line, "<time/>"))] {
+		if markup.ReplaceAllString(line, "") == "" {
+			continue
+		}
+
+		if key := strings.TrimSpace(timeText.ReplaceAllString(line, "<time/>")); was[key] > 0 {
+			was[key]--
+
 			continue
 		}
 
@@ -316,36 +332,85 @@ func startRunningBuild(t *testing.T, pipeline *Pipeline) {
 // reconciles the existing DOM instead of replacing it, which is what lets the
 // approvals and questions regions — forms somebody is typing a reason into —
 // be refreshed at all; a plain outerHTML swap empties the input every 2.5
-// seconds. The [!document.hidden] filter is what stops a forgotten background
-// tab polling this server forever. Overlapping polls need no guard of ours:
-// htmx's hx-sync defaults to `drop`, so a poll issued while one is in flight
-// is ignored rather than queued behind it.
+// seconds. The filter is what stops a forgotten background tab polling this
+// server forever. Overlapping polls need no guard of ours: hx-sync defaults to
+// `queue first`, so a poll issued while one is in flight is queued rather than
+// stacked — serialized, which is what kills the stale-response race — and the
+// one after that is dropped.
+//
+// The SPELLING of the trigger is asserted on every polling page, and it is
+// not cosmetic. htmx 4 parses the modifiers with HCON, where a bare token
+// holding a dot is a nested PATH: `every 2.5s` becomes {"2":{"5s":true}}, the
+// interval is read as the first non-name key, integer-like keys sort first,
+// and the poll runs at 2 MILLISECONDS. And a filter is only a filter when it
+// is attached to the event name — `every 2.5s [x]` parses the bracket as junk
+// and drops the guard. Both shipped, both were invisible to a test that
+// checked the attribute was present rather than what it parses to.
 func TestLiveRegionsAreDrivenByHtmx(t *testing.T) {
 	t.Parallel()
 
 	server, _ := testPipeline(t)
 
-	_, body := get(t, server, "/p/demo/runs")
+	// `/` needs more than one pipeline to be the overview rather than a
+	// redirect into the only one.
+	overview, _ := testPipelines(t, "app", "infra")
 
-	if !strings.Contains(body, `<script src="/static/htmx.min.js"`) {
-		t.Error("the page carries hx- attributes but never loads htmx")
-	}
-
-	for want, missing := range map[string]string{
-		`hx-swap="outerMorph"`:                       "morph swap, so a swap empties the form under a reader",
-		`hx-trigger="every 2.5s [!document.hidden]"`: "hidden-tab filter, so a forgotten tab polls forever",
+	for _, page := range []struct {
+		server *Server
+		path   string
+	}{
+		{overview, "/"},
+		{server, "/p/demo"},
+		{server, "/p/demo/runs"},
+		{server, "/p/demo/jobs/build"},
+		{server, "/p/demo/resources"},
+		{server, "/p/demo/approvals"},
+		{server, "/p/demo/questions"},
 	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("live region has no %s", missing)
+		path := page.path
+
+		_, body := get(t, page.server, path)
+
+		if !strings.Contains(body, `<script src="/static/htmx.min.js"`) {
+			t.Errorf("%s carries hx- attributes but never loads htmx", path)
+		}
+
+		for want, cost := range map[string]string{
+			`hx-swap="outerMorph"`:                        "a swap empties the form under a reader",
+			`hx-trigger="every[!document.hidden] 2500ms"`: "the trigger is not the spelling htmx 4 parses — see above",
+			`hx-select-oob="`:                             "nothing outside the region refreshes, so the nav badges go stale",
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s is missing %s: %s", path, want, cost)
+			}
 		}
 	}
 
-	code, script := get(t, server, "/static/htmx.min.js")
-	if code != http.StatusOK {
-		t.Fatalf("GET /static/htmx.min.js = %d — the library is referenced but not served", code)
+	for _, asset := range []string{"/static/htmx.min.js", "/static/hx-sse.min.js"} {
+		code, _ := get(t, server, asset)
+		if code != http.StatusOK {
+			t.Fatalf("GET %s = %d — the library is referenced but not served", asset, code)
+		}
 	}
 
-	if !strings.Contains(script, "hx-select-oob") {
+	_, htmx := get(t, server, "/static/htmx.min.js")
+	if !strings.Contains(htmx, "hx-select-oob") {
 		t.Error("the served htmx does not know hx-select-oob, which every page depends on")
+	}
+
+	// Pinned, because every attribute spelling above was verified against
+	// THIS parser and 4.x changed the grammar from 2.x without warning. An
+	// upgrade should fail here and be re-read, not swap the poll interval out
+	// from under seven pages.
+	if !strings.Contains(htmx, `version="4.0.0"`) {
+		t.Error("the vendored htmx is not the 4.0.0 these attribute spellings were verified against")
+	}
+
+	// The run page's transcript rides the EXTENSION, not htmx proper, and the
+	// two are separate files: deleting hx-sse.min.js left every poll working
+	// and every live run frozen.
+	_, ext := get(t, server, "/static/hx-sse.min.js")
+	if !strings.Contains(ext, "hx-sse:connect") {
+		t.Error("the served extension does not know hx-sse:connect, which the live transcript depends on")
 	}
 }

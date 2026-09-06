@@ -413,7 +413,7 @@ func (s *Server) globalNav(c echo.Context) navData {
 }
 
 func (s *Server) nav(c echo.Context) navData {
-	nav := navData{ReadOnly: s.runner == nil, URL: c.Request().URL.EscapedPath()}
+	nav := navData{ReadOnly: s.runner == nil, URL: c.Request().URL.RequestURI()}
 
 	for _, pipeline := range s.pipelines {
 		nav.Pipelines = append(nav.Pipelines, pipelineSummary{
@@ -454,9 +454,11 @@ type navData struct {
 	Pipelines   []pipelineSummary
 	Current     string
 	CurrentPath string
-	// URL is the path this page was requested at, which is what the live
+	// URL is the URL this page was requested at, which is what the live
 	// regions poll: htmx needs a URL on the element, and the page rendering
-	// itself is the one thing that reliably knows its own.
+	// itself is the one thing that reliably knows its own. Query included —
+	// the poll has to reproduce the page, and the day one of these pages
+	// takes a filter, a path-only re-fetch would reset it every 2.5s.
 	URL              string
 	PendingApprovals int
 	PendingQuestions int

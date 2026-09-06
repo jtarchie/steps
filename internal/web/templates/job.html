@@ -42,7 +42,7 @@
      button above it, by the queue, by a check — has to land in the history
      without a reload. htmx re-reads this page every 2.5s and morphs in what
      changed; the metaline and the nav badges ride along out of band. */}}
-<div id="job-runs" hx-get="{{.Nav.URL}}" hx-trigger="every 2.5s [!document.hidden]" hx-select="#job-runs" hx-swap="outerMorph" hx-select-oob="#job-meta,#nav-tabs">
+<div id="job-runs" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#job-runs" hx-swap="outerMorph" hx-select-oob="#job-meta,#nav-tabs">
 <h2 class="eyebrow">Run history
   {{if .Spark}}
   <svg class="spark" width="{{mul2 (len .Spark)}}" height="16" viewBox="0 0 {{mul2 (len .Spark)}} 16" aria-label="Duration trend">

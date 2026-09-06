@@ -22,7 +22,7 @@
   <p class="rail">edges are get-step passed: constraints — hover one for the resource it carries</p>
 </div>
 
-<div class="tablewrap" id="jobs-list" hx-get="{{.Nav.URL}}" hx-trigger="every 2.5s [!document.hidden]" hx-select="#jobs-list" hx-swap="outerMorph" hx-select-oob="#jobs-graph,#queue-region,#nav-tabs">
+<div class="tablewrap" id="jobs-list" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#jobs-list" hx-swap="outerMorph" hx-select-oob="#jobs-graph,#queue-region,#nav-tabs">
   <table>
     <thead>
       <tr><th>Job</th><th>Latest run</th><th>Started</th><th class="num">Duration</th><th>Depends on</th><th>Breaker</th></tr>

@@ -31,6 +31,13 @@ type stepView struct {
 	ParentID int64
 	// Children are the steps that ran inside this one, in start order.
 	Children []*stepView
+	// FirstSeq is the sequence of the event that PUT this step on the page,
+	// which is what the live stream asks when deciding whether the reader
+	// already has the row. Not always a step.started: a step swallowed by a
+	// chain skip is opened by its step.skipped, and asking about starts alone
+	// meant such a row was swapped over an id that was never drawn — an
+	// out-of-band swap htmx drops in silence.
+	FirstSeq int64
 	Index    int
 	Name     string
 	Kind     string
@@ -726,6 +733,7 @@ func openStep(view *runView, index map[string]int, row store.RunEventRow) {
 		Name:     row.StepName,
 		Kind:     row.StepKind,
 		Started:  row.At,
+		FirstSeq: row.Seq,
 	})
 }
 
