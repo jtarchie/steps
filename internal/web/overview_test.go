@@ -499,6 +499,27 @@ func TestJobPageShowsTheBudgetEachStepRunsUnder(t *testing.T) {
 	}
 }
 
+// TestJobPageSaysWhatATurnIs guards a word that means two different things in
+// one column.
+//
+// A hosted agent's turn is one request/tool-execute round driven in this
+// process. A CLI agent's is whatever the child reports as num_turns -- one per
+// tool ROUND, pooled across every message: in the step -- which in practice
+// runs an order of magnitude higher for the same work. The column cannot show
+// two units, so it says which is which; without that, 30 beside a @claude
+// source reads as generous and is not.
+func TestJobPageSaysWhatATurnIs(t *testing.T) {
+	t.Parallel()
+
+	server := agentJobPipeline(t)
+
+	_, body := get(t, server, "/p/demo/jobs/review")
+
+	if !strings.Contains(body, "tool round") {
+		t.Errorf("the Turns column does not say a cli counts turns differently: %s", body)
+	}
+}
+
 // TestJobPageOmitsDialsWithoutAgents keeps the section off a job that has no
 // agent step, rather than rendering an empty table on every ordinary job.
 func TestJobPageOmitsDialsWithoutAgents(t *testing.T) {

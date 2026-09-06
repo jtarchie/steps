@@ -73,7 +73,7 @@
 <h2 class="eyebrow">Agent dials <span class="unbold">— the limits each agent STEP runs under (a fix: or sub-agent has its own)</span></h2>
 <div class="tablewrap">
   <table class="kv">
-    <thead><tr><th>Agent</th><th>Step</th><th class="num">Turns</th><th class="num">Context</th><th>Deadline</th><th class="num">Budget</th></tr></thead>
+    <thead><tr><th>Agent</th><th>Step</th><th class="num"><abbr title="A hosted agent's turn is one request/tool-execute round driven by steps. A cli agent's is whatever the child reports as num_turns — one per tool round, pooled across every message: in the step — which runs far higher for the same work.">Turns</abbr></th><th class="num">Context</th><th>Deadline</th><th class="num">Budget</th></tr></thead>
     <tbody>
       {{range .Dials}}
       <tr>
