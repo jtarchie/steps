@@ -432,11 +432,15 @@ agents:
   - name: reviewer
     source: { model: openrouter/qwen/qwen3.7-flash }
     budget: { tokens: 2000000 }
+  - name: drifter
+    source: { model: openrouter/qwen/qwen3.7-flash }
 
 jobs:
   - name: review
     plan:
       - agent: reviewer
+        messages: ["go"]
+      - agent: drifter
         messages: ["go"]
 `)
 
@@ -722,6 +726,74 @@ func TestSpendPanelShowsTheCeilingWhenTheConfigStillMatches(t *testing.T) {
 	}
 }
 
+// TestAgentCeilingsRecordsUncappedAgentsToo is the producing half of that
+// doctrine: absence from the map has to keep meaning "unresolved", so an agent
+// the configuration says has no ceiling is present with an empty value rather
+// than left out. Dropping it makes every uncapped agent indistinguishable from
+// a step whose name resolves to no agent at all.
+func TestAgentCeilingsRecordsUncappedAgentsToo(t *testing.T) {
+	t.Parallel()
+
+	_, pipeline := agentSpendPipeline(t)
+	cfg := pipeline.Config()
+
+	ceilings, drifted := agentCeilings(cfg, "review", cfg.Revision.SHA)
+	if drifted {
+		t.Fatal("the loaded config reports as drifted against its own sha")
+	}
+
+	if got := ceilings["reviewer"]; got != "2,000,000 tokens" {
+		t.Errorf("ceilings[reviewer] = %q, want the agent's budget", got)
+	}
+
+	got, known := ceilings["drifter"]
+	if !known {
+		t.Error("an agent with no budget is absent from the map, which reads as unresolved")
+	}
+
+	if got != "" {
+		t.Errorf("ceilings[drifter] = %q, want empty — it has no ceiling", got)
+	}
+}
+
+// TestSpendPanelNeverCallsAnUnknownCeilingUncapped is the doctrine of this
+// column, asserted against the case that keeps finding a way around it.
+//
+// Ceilings are the AGENT's, and agent_usage records a STEP name. Those agree
+// for an ordinary step and disagree for an across: cell — which renames itself
+// "<agent> [k=v]" unless its name: template references an axis, in which case
+// it takes an arbitrary name matching neither. A lookup miss that renders as
+// "uncapped" states the opposite of the truth for a step that has a ceiling,
+// on the run where the ceiling is why it died. Unknown must read as unknown.
+func TestSpendPanelNeverCallsAnUnknownCeilingUncapped(t *testing.T) {
+	t.Parallel()
+
+	view := runView{
+		Ceilings: map[string]string{"reviewer": "$3.00", "drifter": ""},
+	}
+
+	if got, known := view.ceilingFor("reviewer"); !known || got != "$3.00" {
+		t.Errorf("ceilingFor(agent) = %q/%v, want the agent's own ceiling", got, known)
+	}
+
+	// A cell that renamed itself resolves through the agent underneath it.
+	if got, known := view.ceilingFor("reviewer [shard=a]"); !known || got != "$3.00" {
+		t.Errorf("ceilingFor(cell) = %q/%v, want the agent's ceiling", got, known)
+	}
+
+	// An agent the config says has no ceiling is KNOWN to be uncapped.
+	if got, known := view.ceilingFor("drifter"); !known || got != "" {
+		t.Errorf("ceilingFor(uncapped agent) = %q/%v, want known and empty", got, known)
+	}
+
+	// A name that resolves to no agent at all is not uncapped, it is unknown —
+	// an across: cell whose name: template names an axis takes a name matching
+	// neither the agent nor the "[k=v]" shape.
+	if _, known := view.ceilingFor("review-shard-a"); known {
+		t.Error("a step whose ceiling could not be resolved reports as uncapped")
+	}
+}
+
 // TestSpendPanelWithholdsTheCeilingAfterAnEdit is the half that keeps the
 // column honest, and the reason it exists at all.
 //
@@ -883,5 +955,136 @@ func TestGlobalPagesKeepAWayBack(t *testing.T) {
 				t.Errorf("%s renders the dead link %q", page, dead)
 			}
 		}
+	}
+}
+
+// TestSpendPanelCeilingReachesAnAcrossCell crosses the seam the ceiling
+// column is built on: ceilings are keyed by the AGENT a step resolves through
+// and spend is recorded under the name the step is KNOWN by, and an across:
+// cell is the case where those two are different strings (config.nameCell
+// renames it to "<agent> [k=v]"). A missed lookup does not render as a blank
+// — it falls through to "uncapped", which is the opposite of the truth and
+// the one word this column exists to avoid printing.
+func TestSpendPanelCeilingReachesAnAcrossCell(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := agentSpendPipeline(t)
+	ctx := t.Context()
+
+	sha := pipeline.Config().Revision.SHA
+
+	err := pipeline.Store.StartRun(ctx, "run-cell", "review", t.TempDir(), sha)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-cell", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer [shard=a]", StepKind: "agent", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer [shard=a]", StepKind: "agent", StepID: 1,
+			Status: "succeeded"},
+	})
+
+	mustRecordResult(t, pipeline, "cell-hash", map[string]any{"response": "done"})
+
+	err = pipeline.Store.RecordAgentUsage(ctx, store.AgentUsage{
+		RunID: "run-cell", StepIndex: 0, StepName: "reviewer [shard=a]", JobName: "review",
+		NodeHash: "cell-hash", ModelReq: "opus", Total: 500000, FinishReason: "success",
+	})
+	if err != nil {
+		t.Fatalf("RecordAgentUsage: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-cell")
+
+	if !strings.Contains(body, "2,000,000") {
+		t.Errorf("a matrix cell's row does not show the ceiling its agent runs under: %s", body)
+	}
+
+	if strings.Contains(body, "uncapped") {
+		t.Errorf("a capped matrix cell is reported as uncapped: %s", body)
+	}
+}
+
+// TestSpendPanelDoesNotBlameASiblingCell: every cell of an across: and every
+// member of an ensemble: is handed the block's OWN plan index, so a `failed`
+// set keyed on the index alone marked all of them when one failed — the
+// "step failed" annotation drawn beside four rows that succeeded, which the
+// marker is worthless if it does.
+func TestSpendPanelDoesNotBlameASiblingCell(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := agentSpendPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-cells", "review", t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-cells", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer [shard=a]", StepKind: "agent", StepID: 1},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer [shard=b]", StepKind: "agent", StepID: 2},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer [shard=a]", StepKind: "agent", StepID: 1,
+			Status: "succeeded"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer [shard=b]", StepKind: "agent", StepID: 2,
+			Status: "failed", Text: "the model gave up"},
+	})
+
+	for _, cell := range []string{"reviewer [shard=a]", "reviewer [shard=b]"} {
+		mustRecordResult(t, pipeline, "hash-"+cell, map[string]any{"response": "done"})
+
+		err = pipeline.Store.RecordAgentUsage(ctx, store.AgentUsage{
+			RunID: "run-cells", StepIndex: 0, StepName: cell, JobName: "review",
+			NodeHash: "hash-" + cell, ModelReq: "opus", Total: 10, FinishReason: "stop",
+		})
+		if err != nil {
+			t.Fatalf("RecordAgentUsage: %v", err)
+		}
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-cells")
+
+	// The exact cell text, not the bare words: `class="step failed"` on the
+	// transcript row above it matches a looser search.
+	if marked := strings.Count(body, "— step failed"); marked != 1 {
+		t.Errorf("one cell failed and %d spend rows say so: %s", marked, body)
+	}
+}
+
+// TestSpendPanelSaysNothingWithoutAFinishReason: a provider that reported
+// nothing gets a row of zeros on purpose (saveAgentUsage), and a step killed
+// by timeout: is the common producer of one. Annotating that empty cell drew
+// a dangling " — step failed" under a tooltip quoting a word never said.
+func TestSpendPanelSaysNothingWithoutAFinishReason(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := agentSpendPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-quiet", "review", t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-quiet", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1,
+			Status: "aborted", Text: "context deadline exceeded"},
+	})
+
+	mustRecordResult(t, pipeline, "quiet-hash", map[string]any{"response": "done"})
+
+	err = pipeline.Store.RecordAgentUsage(ctx, store.AgentUsage{
+		RunID: "run-quiet", StepIndex: 0, StepName: "reviewer", JobName: "review",
+		NodeHash: "quiet-hash", ModelReq: "opus", Total: 10,
+	})
+	if err != nil {
+		t.Fatalf("RecordAgentUsage: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-quiet")
+
+	if strings.Contains(body, "— step failed") {
+		t.Errorf("a row with no finish reason is annotated as if the provider had said one: %s", body)
 	}
 }

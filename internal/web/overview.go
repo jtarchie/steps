@@ -291,9 +291,12 @@ func agentDials(cfg *config.Config, job config.Job) []agentDialView {
 // failed", which makes today's ceiling on last week's run the one wrong answer
 // worse than no answer — so a mismatch reports drift and no numbers.
 //
-// Keyed by step NAME because that is what agent_usage records; a job running
-// one agent twice gets one ceiling for both rows, which is right — the budget
-// is the agent's, not the step's (see config.ResolveAgentInvocation).
+// Keyed by AGENT name, which is what a ceiling belongs to (see
+// config.ResolveAgentInvocation): a job running one agent twice gets one
+// ceiling for both rows, which is right. agent_usage records a STEP name
+// instead, and the two coincide for every step except an across: cell, which
+// renames itself — runView.ceilingFor is the side that knows to ask again
+// without the cell's coordinates.
 func agentCeilings(cfg *config.Config, jobName, runSHA string) (map[string]string, bool) {
 	// Three states, and collapsing any two of them puts a wrong word on the
 	// page. A run whose configuration is not the loaded one has ceilings that
@@ -313,7 +316,17 @@ func agentCeilings(cfg *config.Config, jobName, runSHA string) (map[string]strin
 	ceilings := map[string]string{}
 
 	for _, dial := range agentDials(cfg, *job) {
-		if dial.Broken != "" || dial.UncappedBudget() {
+		if dial.Broken != "" {
+			continue
+		}
+
+		// An uncapped agent is IN the map with an empty value, not left out of
+		// it. Absence has to keep meaning "could not be resolved" — see
+		// runView.ceilingFor — because a step whose name matches no agent
+		// would otherwise render as uncapped, which is the opposite answer.
+		if dial.UncappedBudget() {
+			ceilings[dial.Agent] = ""
+
 			continue
 		}
 

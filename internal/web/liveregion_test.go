@@ -93,6 +93,31 @@ func refreshedIDs(body string) []string {
 	return ids
 }
 
+// nextOpen is the offset of the next <name tag, or -1.
+//
+// The name has to be followed by a delimiter, because a prefix match is not a
+// tag match: with name "p" — the job page's metaline is a <p> and job.html
+// names it in hx-select-oob — every <pre>, <path> and <progress> after it
+// counts as another open that no </p> ever closes, so the span runs to the end
+// of the document. An over-wide span makes within() true for every line, and
+// the staleness probe passes while checking nothing.
+func nextOpen(body, name string) int {
+	for at := 0; ; {
+		mark := strings.Index(body[at:], "<"+name)
+		if mark < 0 {
+			return -1
+		}
+
+		mark += at
+
+		if rest := mark + len(name) + 1; rest >= len(body) || strings.IndexByte(" \t\r\n>/", body[rest]) >= 0 {
+			return mark
+		}
+
+		at = mark + 1
+	}
+}
+
 // closeOf finds the index just past the element's closing tag, counting
 // nested opens of the same name.
 func closeOf(t *testing.T, body string, open int, name string) int {
@@ -101,7 +126,7 @@ func closeOf(t *testing.T, body string, open int, name string) int {
 	depth := 0
 
 	for at := open; at < len(body); {
-		next := strings.Index(body[at:], "<"+name)
+		next := nextOpen(body[at:], name)
 		shut := strings.Index(body[at:], "</"+name+">")
 
 		if shut < 0 {

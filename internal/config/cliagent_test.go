@@ -168,8 +168,79 @@ func TestWithSourceIntoCLI(t *testing.T) {
 	}
 
 	// The point of WithSource: only the destination moves.
-	if toCLI.AgentName != primary.AgentName || toCLI.MaxTurns != primary.MaxTurns {
+	if toCLI.AgentName != primary.AgentName {
 		t.Error("failover changed something other than the source")
+	}
+
+	// Except the one dial whose DEFAULT is a property of the source. A turn is
+	// not the same quantity on the two paths (see defaultTurnsFor), so
+	// carrying the hosted 30 across hands the child an order-of-magnitude
+	// under-cap — the failure that default was written to remove, arriving by
+	// the back door.
+	if primary.MaxTurns != defaultMaxAgentTurns {
+		t.Fatalf("the hosted primary resolved %d turns, want the hosted default", primary.MaxTurns)
+	}
+
+	if toCLI.MaxTurns != 0 {
+		t.Errorf("failing over onto a cli kept %d turns, want the cli default of none", toCLI.MaxTurns)
+	}
+}
+
+// TestWithSourceKeepsAnExplicitTurnCap: the source-kind default moves on
+// failover, an author's number does not. A max_turns: written on the agent is
+// a decision about the step, not about whichever endpoint happens to serve it.
+func TestWithSourceKeepsAnExplicitTurnCap(t *testing.T) {
+	t.Parallel()
+
+	turns := 7
+	cfg := &Config{
+		Agents: []Agent{{Name: "reviewer", Source: AgentSource{Model: "openai/gpt-4o"}, MaxTurns: &turns}},
+	}
+
+	primary, err := cfg.ResolveAgentInvocation(Step{Agent: "reviewer"})
+	if err != nil {
+		t.Fatalf("ResolveAgentInvocation: %v", err)
+	}
+
+	toCLI, err := primary.WithSource(AgentSource{Model: "@claude/opus"}, nil)
+	if err != nil {
+		t.Fatalf("WithSource to cli: %v", err)
+	}
+
+	if toCLI.MaxTurns != turns {
+		t.Errorf("failover rewrote an explicit max_turns: %d, want %d", toCLI.MaxTurns, turns)
+	}
+}
+
+// TestWithSourceOutOfCLICapsTheHostedLoop is the direction that removes a
+// backstop rather than tightening one: a cli agent takes no default turn cap,
+// and carrying that 0 onto a hosted fallback makes remainingTurns report
+// unlimitedTurns — an unbounded tool-calling loop, on a step whose budget: usd
+// only the cli child could enforce.
+func TestWithSourceOutOfCLICapsTheHostedLoop(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Agents: []Agent{{Name: "impl", Source: AgentSource{Model: "@claude/opus"}}},
+	}
+
+	primary, err := cfg.ResolveAgentInvocation(Step{Agent: "impl"})
+	if err != nil {
+		t.Fatalf("ResolveAgentInvocation: %v", err)
+	}
+
+	if primary.MaxTurns != 0 {
+		t.Fatalf("the cli primary resolved %d turns, want none", primary.MaxTurns)
+	}
+
+	toHTTP, err := primary.WithSource(AgentSource{Model: "openai/gpt-4o"}, nil)
+	if err != nil {
+		t.Fatalf("WithSource to hosted: %v", err)
+	}
+
+	if toHTTP.MaxTurns != defaultMaxAgentTurns {
+		t.Errorf("failing over onto a hosted provider kept %d turns, want the hosted default of %d",
+			toHTTP.MaxTurns, defaultMaxAgentTurns)
 	}
 }
 

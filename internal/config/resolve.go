@@ -185,9 +185,18 @@ type ResolvedInvocation struct {
 	TopP            *float64
 	MaxTokens       int
 	ReasoningEffort string // "", "low", "medium", or "high"
-	// MaxTurns is the resolved tool-calling cap; 0 means no cap, which only an
-	// explicit max_turns: 0 produces.
+	// MaxTurns is the resolved tool-calling cap; 0 means no cap, which an
+	// explicit max_turns: 0 produces and so does an unset cap on a cli source
+	// (see defaultTurnsFor).
 	MaxTurns int
+	// TurnsDefaulted records that neither the step nor the agent named a turn
+	// cap, so MaxTurns is this package's answer rather than the author's.
+	//
+	// Kept because the default is the one dial whose value depends on the
+	// SOURCE KIND, and a failover crosses that boundary: WithSource has to
+	// re-derive it, and can only tell "the author chose 0" from "nobody chose"
+	// if resolution says which happened.
+	TurnsDefaulted bool
 	// MaxQuestions is the resolved ask_user budget; 0 means no cap, which
 	// only an explicit max_questions: 0 produces.
 	MaxQuestions int
@@ -286,7 +295,9 @@ func resolveAgentRuntime(agent *Agent, step Step) (settings containerSettings) {
 // ResolveAgentInvocation resolves the agent named by step against c,
 // applying provider-prefix resolution, tool-grant merging, and defaulting
 // (step.Attempts defaults to defaultAgentAttempts;
-// agent.MaxTurns defaults to defaultMaxAgentTurns;
+// agent.MaxTurns defaults to defaultTurnsFor(agent.Source) — 30 for a hosted
+// agent and no cap for a cli one, since a turn is not the same quantity on the
+// two paths;
 // agent.CompactAfterTokens, when nil, defaults to defaultCompactAfterTokens —
 // unlike every other field resolved here, an explicit zero value is
 // meaningfully different from "unset" and is preserved as 0, not defaulted).
@@ -344,6 +355,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 		MaxTokens:            agent.MaxTokens,
 		ReasoningEffort:      reasoning,
 		MaxTurns:             maxTurns,
+		TurnsDefaulted:       step.MaxTurns == nil && agent.MaxTurns == nil,
 		MaxQuestions:         maxQuestions,
 		Attempts:             attempts,
 		Timeout:              timeout,
@@ -396,6 +408,18 @@ func (ri ResolvedInvocation) WithSource(source AgentSource, agent *Agent) (Resol
 	// Set AND cleared: failing over between a CLI and a hosted provider in
 	// either direction has to change which machinery runs the conversation.
 	ri.CLI = target.CLI
+
+	// The turn cap follows the machinery too, because a turn is not the same
+	// quantity on the two paths (see defaultTurnsFor). Carried verbatim, a
+	// hosted primary handed its CLI fallback 30 of a unit that counts an order
+	// of magnitude faster — the exact under-cap that default was written to
+	// remove — and a CLI primary handed its hosted fallback an UNCAPPED
+	// tool-calling loop, deleting the non-convergence backstop. Only when the
+	// author named no number: an explicit max_turns: is a decision about the
+	// step, not about the endpoint that happens to serve it.
+	if ri.TurnsDefaulted {
+		ri.MaxTurns = defaultTurnsFor(source)
+	}
 
 	// The compaction budget follows the model that will actually serve the
 	// conversation — a 200K fallback must not inherit a 1M primary's budget.

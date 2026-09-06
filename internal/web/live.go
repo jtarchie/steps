@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -68,12 +69,17 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 	ctx := c.Request().Context()
 	runID := c.Param("run")
 
+	err := requireRun(c, runID)
+	if err != nil {
+		return err
+	}
+
 	after := resumeFrom(c)
 	// What the reader is looking at: everything at or before the sequence
 	// they resumed from, plus every row sent since on THIS connection. It is
 	// what decides whether a fragment is morphed onto a row or appended as a
 	// new one, and getting it wrong is silent either way.
-	drawn := drawnAt(after)
+	drawn := newSentRows(after)
 	// The fold stays open for the life of the connection. Re-reading the run
 	// on every tick was the obvious way to render a delta and the wrong one
 	// twice over: it re-folded thousands of events 2.5 times a second per
@@ -88,7 +94,7 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 	// and the fold has to hold them or a row they can see is missing from
 	// every fragment that follows — a container whose children arrived before
 	// they connected would re-render with none of them.
-	err := s.seedFold(c, runID, after, folder)
+	err = s.seedFold(c, runID, after, folder)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
@@ -108,11 +114,16 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 		// before saying done.
 		run, ok, err := pipeline.Store.FindRunRow(ctx, runID)
 		if err != nil {
-			return fmt.Errorf("web: %w", err)
+			return endStream(c, runID, err)
 		}
 
 		if !ok {
-			writeSSE(response, "done", map[string]any{"status": run.Status})
+			// Reaped out from under the reader (retention runs at the end of
+			// every build). "gone" rather than the zero row's empty status,
+			// which the page read as no outcome at all and skipped the tab
+			// mark for — on the one case where the mark is all a backgrounded
+			// tab gets.
+			writeSSE(response, "done", map[string]any{"status": "gone"})
 
 			return nil
 		}
@@ -121,7 +132,7 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 
 		after, err = s.flushEvents(c, run, after, drawn, folder)
 		if err != nil {
-			return fmt.Errorf("web: %w", err)
+			return endStream(c, runID, err)
 		}
 
 		// Activity re-arms the deadline: it bounds SILENCE, not the run. Armed
@@ -144,6 +155,43 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 			return nil
 		}
 	}
+}
+
+// requireRun refuses a run this pipeline does not have, before anything has
+// committed the response.
+//
+// It has to come first, because everything after it commits: once openStream
+// has written the 200 and the event-stream header, echo's error handler
+// returns on Committed without so much as a log line, so an unknown run id
+// answered 200 and a `done` frame carrying the zero row's empty status — which
+// the page reloads on, into a 404 it cannot explain. It also keeps seedFold
+// from paging a run this pipeline does not own: RunEvents filters on run_id
+// alone, and FindRunRow is the pipeline-scoped question.
+func requireRun(c echo.Context, runID string) error {
+	_, ok, err := pipelineOf(c).Store.FindRunRow(c.Request().Context(), runID)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	if !ok {
+		return echo.NewHTTPError(http.StatusNotFound, "no such run")
+	}
+
+	return nil
+}
+
+// endStream reports a failure that happened after the response was committed.
+//
+// Returning the error alone is not enough: openStream has already written the
+// 200, so echo's handler sees Committed and returns without rendering OR
+// logging. The reader's stream just closes, hx-sse reconnects into the same
+// failure six times and then gives up on a page that silently stops updating,
+// and the operator has nothing at all — which is the "green having recorded
+// nothing" shape this repo has been bitten by before.
+func endStream(c echo.Context, runID string, err error) error {
+	slog.Warn("web.live.stream_failed", "run", runID, "path", c.Request().URL.Path, "error", err)
+
+	return fmt.Errorf("web: %w", err)
 }
 
 // waitForMore holds until the next poll, reporting whether the stream should
@@ -247,7 +295,7 @@ func resumeFrom(c echo.Context) int64 {
 // renders. Only the roots the flushed events touched are sent, which is what
 // keeps a page-sized payload off the wire for a one-line change.
 func (s *Server) flushEvents(
-	c echo.Context, run store.RunRow, after int64, drawn func(*stepView) bool, folder *runFolder,
+	c echo.Context, run store.RunRow, after int64, drawn *sentRows, folder *runFolder,
 ) (int64, error) {
 	// Drained, not read once: a tick reads a bounded batch, and a run that
 	// recorded more than one batch between ticks — or that had already
@@ -272,7 +320,7 @@ func (s *Server) flushEvents(
 }
 
 func (s *Server) flushBatch(
-	c echo.Context, run store.RunRow, after int64, drawn func(*stepView) bool, folder *runFolder,
+	c echo.Context, run store.RunRow, after int64, drawn *sentRows, folder *runFolder,
 ) (int64, error) {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
@@ -286,8 +334,6 @@ func (s *Server) flushBatch(
 		return after, nil
 	}
 
-	touched, after := reach(rows, after)
-
 	// Only the nodes THIS batch names: a finished agent step's answer and
 	// trajectory live in its node, and the rest of the run's nodes are
 	// already folded in.
@@ -296,7 +342,11 @@ func (s *Server) flushBatch(
 		return after, fmt.Errorf("web: %w", err)
 	}
 
-	folder.add(rows, nodes)
+	// The fold says what it touched, rather than this reading it off the rows:
+	// the two disagree for a sub-agent's turns, which name a step no row ever
+	// opened. See runFolder.add.
+	touched := folder.add(rows, nodes)
+	after = rows[len(rows)-1].Seq
 
 	view := folder.view(run)
 
@@ -322,12 +372,23 @@ func (s *Server) flushBatch(
 		// A row the reader has is morphed onto it; one they do not have is
 		// appended, because there is nothing there to morph — and htmx drops
 		// an out-of-band swap at a missing id without a word.
-		fragment, err := s.renderStep(page, root, drawn(root))
+		oob := drawn.has(root)
+		if !oob {
+			// Retracted in the same frame and AHEAD of the append that
+			// re-draws them nested, because htmx applies out-of-band swaps in
+			// the order they arrive. See adopted().
+			for _, orphan := range adopted(root, drawn.has) {
+				fmt.Fprintf(&frame, `<div id="%s" hx-swap-oob="delete"></div>`, orphan.Anchor())
+			}
+		}
+
+		fragment, err := s.renderStep(page, root, oob)
 		if err != nil {
-			return after, err
+			return after, endStream(c, run.ID, err)
 		}
 
 		frame.WriteString(fragment)
+		drawn.drew(root)
 	}
 
 	if frame.Len() == 0 {
@@ -341,20 +402,7 @@ func (s *Server) flushBatch(
 	return after, nil
 }
 
-// reach reads what a flush is ABOUT: the steps its events name, and the
-// sequence it ends at.
-func reach(rows []store.RunEventRow, after int64) (touched map[string]bool, seq int64) {
-	touched = map[string]bool{}
-
-	for _, row := range rows {
-		touched[stepKey(row)] = true
-		after = row.Seq
-	}
-
-	return touched, after
-}
-
-// drawnAt answers, for one connection, whether the reader already has a row.
+// sentRows answers, for one connection, whether the reader already has a row.
 //
 // A row is theirs if the event that put it on the page came at or before the
 // sequence they resumed from — the page they are looking at was rendered from
@@ -363,15 +411,55 @@ func reach(rows []store.RunEventRow, after int64) (touched map[string]bool, seq 
 // same question and wrong for the case that has no start at all: a step
 // swallowed by a chain skip is opened by its step.skipped, so its row was
 // swapped over an id nothing had drawn and vanished.
-func drawnAt(origin int64) func(*stepView) bool {
-	sent := map[string]bool{}
+//
+// Asking and recording are separate calls rather than one predicate that
+// marks what it is asked about: adopted() below asks about rows it is not
+// sending, and marking those would turn their own later append into a swap at
+// an id the page never drew — which htmx drops in silence.
+type sentRows struct {
+	origin int64
+	sent   map[string]bool
+}
 
-	return func(step *stepView) bool {
-		has := step.FirstSeq <= origin || sent[step.Key()]
-		sent[step.Key()] = true
+func newSentRows(origin int64) *sentRows {
+	return &sentRows{origin: origin, sent: map[string]bool{}}
+}
 
-		return has
+// has reports whether the reader's page already carries this row.
+func (s *sentRows) has(step *stepView) bool {
+	return step.FirstSeq <= s.origin || s.sent[step.Key()]
+}
+
+// drew records a row this connection has sent.
+func (s *sentRows) drew(step *stepView) { s.sent[step.Key()] = true }
+
+// adopted names the rows the reader already has that this step is about to
+// draw again INSIDE itself.
+//
+// A step is hung under its container only once the container has a row of its
+// own, and the two events do not arrive in that order: a container swallowed
+// by a chain skip is opened by its own step.skipped, which the store records
+// after the steps that ran inside it (the same ordering that makes
+// run_events.parent_step_id a deliberate non-foreign-key). Until then the
+// child is a root and the reader carries it at the transcript's top level, so
+// appending the container would put a SECOND element with that id on the page
+// — and every later out-of-band swap resolves to the first match, leaving the
+// orphan updating and the real row frozen.
+func adopted(step *stepView, has func(*stepView) bool) []*stepView {
+	var found []*stepView
+
+	for _, child := range step.Children {
+		if has(child) {
+			// Whatever is under it came with it, so nothing below is loose.
+			found = append(found, child)
+
+			continue
+		}
+
+		found = append(found, adopted(child, has)...)
 	}
+
+	return found
 }
 
 // subtreeTouched reports whether any step in this root's subtree was named by

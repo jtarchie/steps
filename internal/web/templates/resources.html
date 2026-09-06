@@ -1,8 +1,11 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps resources</b></h1>
+<div id="resources-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#resources-region" hx-swap="outerMorph" hx-select-oob="#nav-tabs">
+{{/* Inside the region, not above it: the count changes with the config a
+     reload swaps in, and left outside it would keep reporting the old number
+     over a table the poll had already refreshed. */}}
 <p class="metaline">{{len .Resources}} resources<span class="sep">·</span>versions recorded by check</p>
 
-<div id="resources-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#resources-region" hx-swap="outerMorph" hx-select-oob="#nav-tabs">
 <div class="tablewrap">
   <table>
     <thead><tr><th>Resource</th><th>Type</th><th>Latest version</th><th>Checked</th></tr></thead>

@@ -23,7 +23,12 @@ func streamOf(t *testing.T, server *Server, path string) string {
 	body := make(chan string, 1)
 
 	go func() {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, nil)
+		// The test's context, not Background: on the t.Fatal below this
+		// goroutine is abandoned, and under Background it keeps polling for
+		// the whole liveIdleTimeout — reading liveBatch past the t.Cleanup
+		// that restores it, which is a data race on the failure path of the
+		// very test that shrinks it.
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		server.Handler().ServeHTTP(rec, req)
 		body <- rec.Body.String()
@@ -570,4 +575,110 @@ func shrinkRunEventLimit(t *testing.T, limit, batch int) {
 	runEventLimit, liveBatch = limit, batch
 
 	t.Cleanup(func() { runEventLimit, liveBatch = previousLimit, previousBatch })
+}
+
+// TestStreamCarriesASubAgentsTurns crosses the seam between what the fold
+// does with an event and what the flush sends.
+//
+// A sub-agent's conversation events carry the CHILD's name, not the plan
+// step's, so attachTurn hangs them on the agent step still running — a
+// deliberate fallback. A flush that decided what to send by asking
+// stepKey(row) instead held a key belonging to no row: the fold changed, no
+// root matched, and the whole of a sub-agent conversation appeared only at
+// the closing reload.
+//
+// Serial, because shrinkRunEventLimit writes package globals: one event per
+// batch is what puts the turn in a flush of its own, which is the case the
+// bug needed.
+func TestStreamCarriesASubAgentsTurns(t *testing.T) {
+	shrinkRunEventLimit(t, 40, 1)
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-sub", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-sub", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1},
+		// No step id and a name no step.started used: what a delegated
+		// conversation publishes.
+		{Type: events.TypeAgentText, StepIndex: 0, StepName: "helper", Text: "the sub-agent said this"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-sub", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	stream := sseHTML(streamOf(t, server, "/p/demo/runs/run-sub/events"))
+	if !strings.Contains(stream, "the sub-agent said this") {
+		t.Errorf("a sub-agent's turn never reaches the stream:\n%s", stream)
+	}
+}
+
+// TestStreamRetractsARowItsContainerAdopts: a step is hung under its
+// container only once the container has a row, and the two events do not
+// arrive in that order — a container swallowed by a chain skip is opened by
+// its OWN step.skipped, recorded after the steps inside it. Until then the
+// child is a root and the reader carries it at the transcript's top level, so
+// appending the container puts a SECOND element with that id on the page.
+// htmx resolves every later out-of-band swap to the first match, which leaves
+// the orphan updating and the real row frozen — forever, and in silence.
+func TestStreamRetractsARowItsContainerAdopts(t *testing.T) {
+	shrinkRunEventLimit(t, 40, 1)
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-adopt", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-adopt", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "cell", StepKind: "task", StepID: 2, ParentStepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "cell", StepKind: "task", StepID: 2,
+			ParentStepID: 1, Status: "succeeded"},
+		{Type: events.TypeStepSkipped, StepIndex: 0, StepName: "matrix", StepKind: "across", StepID: 1,
+			Status: "skipped", Text: "cached"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-adopt", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	raw := streamOf(t, server, "/p/demo/runs/run-adopt/events")
+
+	stream := sseHTML(raw)
+	if !strings.Contains(stream, `<div id="step-2-cell" hx-swap-oob="delete">`) {
+		t.Fatalf("the container's append does not retract the row it adopts:\n%s", stream)
+	}
+
+	// Ahead of the append, because htmx applies out-of-band swaps in the
+	// order they arrive: after it, the delete would take the copy the append
+	// had just drawn.
+	retract := strings.Index(stream, `<div id="step-2-cell" hx-swap-oob="delete">`)
+	if adopts := strings.Index(stream, `<div id="step-1-matrix"`); adopts >= 0 && adopts < retract {
+		t.Errorf("the retraction arrives after the append it exists to precede:\n%s", stream)
+	}
+}
+
+// TestStreamRefusesAnUnknownRun: openStream commits the response, and echo's
+// error handler returns on Committed without rendering or logging — so a run
+// this pipeline does not have answered 200 and an event-stream carrying the
+// zero row's empty status, which the page reloaded on into a 404 it could not
+// explain. The check belongs before the first byte.
+func TestStreamRefusesAnUnknownRun(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+
+	code, _ := get(t, server, "/p/demo/runs/no-such-run/events")
+	if code != http.StatusNotFound {
+		t.Errorf("the stream for a run that does not exist answered %d, want 404", code)
+	}
 }

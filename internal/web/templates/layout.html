@@ -86,7 +86,12 @@
   // the chevron honest and the row still collapsible.
   function openHashTarget() {
     if (!window.location.hash) return;
-    var target = document.querySelector(window.location.hash);
+    // Guarded because a fragment is not necessarily a selector: '#2' is a
+    // SyntaxError, not a miss, and the throw would escape this IIFE and take
+    // every listener registered below it — the fold restore, the toggle
+    // handlers, j/k navigation, the palette — with it, on every page.
+    var target = null;
+    try { target = document.querySelector(window.location.hash); } catch (err) { return; }
     if (!target || !target.classList.contains('step')) return;
     target.classList.add('open');
     // Recorded like any other fold, or the next swap of a live run closes it.

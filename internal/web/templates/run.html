@@ -63,7 +63,7 @@
       <td class="num">{{.CachePercent}}%</td>
       <td class="model">{{if .ModelServed}}{{.ModelServed}}{{else}}{{.ModelReq}}{{end}}</td>
       <td class="num">{{.Cost}}</td>
-      <td class="num">{{if .Ceiling}}<span class="dim">{{.Ceiling}}</span>{{else if $run.ConfigDrifted}}<span class="faint" title="This run opened against a configuration that is no longer loaded. Its ceilings are not reconstructable from the recorded revision, so showing today's would be wrong for exactly this run.">config changed</span>{{else}}<span class="faint">uncapped</span>{{end}}</td>
+      <td class="num">{{if .Ceiling}}<span class="dim">{{.Ceiling}}</span>{{else if $run.ConfigDrifted}}<span class="faint" title="This run opened against a configuration that is no longer loaded. Its ceilings are not reconstructable from the recorded revision, so showing today's would be wrong for exactly this run.">config changed</span>{{else if .CeilingKnown}}<span class="faint">uncapped</span>{{else}}<span class="faint" title="This step's name does not resolve to an agent in the loaded configuration, so what it was allowed to spend is not knowable here. Not the same as uncapped.">unknown</span>{{end}}</td>
       <td>{{if .Truncated}}<span class="spendwarn">{{lower .FinishReason}} — truncated</span>{{else if .FailedAfter}}<span class="spendwarn" title="The provider's word about the last request that completed. The step failed after it — a cli agent's pooled max_turns: or budget: usd can run out between messages, leaving the last invocation's success as the final word.">{{lower .FinishReason}} — step failed</span>{{else}}<span class="dim">{{lower .FinishReason}}</span>{{end}}</td>
     </tr>
     {{end}}
@@ -164,7 +164,9 @@
     // 'idle' is the server saying the run went quiet for five minutes, not
     // that it ended — a task that prints nothing for longer than that is
     // ordinary. Marking it would paint a red ✗ over a job still running.
-    if (status && status !== 'idle') {
+    // 'gone' is the run reaped by retention mid-watch: also not an outcome,
+    // and the reload below is what shows the reader what happened instead.
+    if (status && status !== 'idle' && status !== 'gone') {
       var mark = status === 'succeeded' ? '✓' : status === 'running' ? '◐' : '✗';
       document.title = mark + ' ' + document.title.replace(/^[✓✗◐]\s*/, '');
 

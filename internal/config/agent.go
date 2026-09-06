@@ -70,9 +70,10 @@ type Agent struct {
 	TopP            *float64 `yaml:"top_p,omitempty"`
 	MaxTokens       int      `yaml:"max_tokens,omitempty"`
 	ReasoningEffort string   `yaml:"reasoning_effort,omitempty"`
-	// MaxTurns caps the tool-calling loop. Unset takes defaultMaxAgentTurns;
-	// an explicit 0 removes the cap entirely — see dials.go for the
-	// convention this shares with MaxContextBytes and Timeout.
+	// MaxTurns caps the tool-calling loop. Unset takes defaultTurnsFor(source)
+	// — 30 for a hosted agent, none for a cli one; an explicit 0 removes the
+	// cap entirely — see dials.go for the convention this shares with
+	// MaxContextBytes and Timeout.
 	MaxTurns *int `yaml:"max_turns,omitempty"`
 	// MaxQuestions is the ask_user budget every step of this agent gets when
 	// it declares none of its own. Unset takes defaultMaxQuestions; an

@@ -548,6 +548,12 @@ type cliAttempt struct {
 // sent is zero-based; the message is named from one, as an author counts the
 // list they wrote.
 func cliCeilingError(agent, ceiling string, sent, messages, attempt int, lastErr error) error {
+	// A step with only a prompt: still sends one message — runCLIMessages
+	// substitutes a single empty entry for an empty messages: — so the count
+	// has to agree with it, or the overwhelmingly common case reads "on
+	// message 1 of 0".
+	messages = max(messages, 1)
+
 	where := fmt.Sprintf("agent %q: exhausted %s on message %d of %d, across %d attempt(s) at it",
 		agent, ceiling, sent+1, messages, attempt)
 

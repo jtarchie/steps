@@ -5,7 +5,7 @@
     <button aria-pressed="false" data-view="graph">graph</button>
   </span>
 </h1>
-<p class="metaline">{{len .Jobs}} jobs<span class="sep">·</span>{{.Nav.CurrentPath}}</p>
+<p class="metaline" id="jobs-meta">{{len .Jobs}} jobs<span class="sep">·</span>{{.Nav.CurrentPath}}</p>
 
 <div class="dagwrap" id="jobs-graph">
   {{/* role=group, not img: an image's children are presentational, which
@@ -22,7 +22,7 @@
   <p class="rail">edges are get-step passed: constraints — hover one for the resource it carries</p>
 </div>
 
-<div class="tablewrap" id="jobs-list" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#jobs-list" hx-swap="outerMorph" hx-select-oob="#jobs-graph,#queue-region,#nav-tabs">
+<div class="tablewrap" id="jobs-list" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#jobs-list" hx-swap="outerMorph" hx-select-oob="#jobs-meta,#jobs-graph,#queue-region,#nav-tabs">
   <table>
     <thead>
       <tr><th>Job</th><th>Latest run</th><th>Started</th><th class="num">Duration</th><th>Depends on</th><th>Breaker</th></tr>

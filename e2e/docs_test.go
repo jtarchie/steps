@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -173,10 +174,11 @@ func executeDocBlock(t *testing.T, block docs.Block, scenario docScenario, dir, 
 	t.Helper()
 
 	// Written beside the injected pipeline so the scenario's files
-	// (run_file:/file: targets) resolve for it too, and named apart from it
-	// for the reason docPipelineName gives — a full validate resolves agents,
-	// so it reaches the same process-wide pin scope a run does.
-	original := filepath.Join(dir, docPipelineName(t)+"-original.yml")
+	// (run_file:/file: targets) resolve for it too, and named off THAT file
+	// rather than off the test again, for the reason docPipelineName gives —
+	// a full validate resolves agents, so it reaches the same process-wide
+	// pin scope a run does, and the two must not share a scope or drift apart.
+	original := strings.TrimSuffix(path, ".yml") + "-original.yml"
 
 	err := os.WriteFile(original, []byte(block.Body), 0o600)
 	if err != nil {
@@ -236,7 +238,7 @@ func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScena
 		}
 	}
 
-	pipelinePath := filepath.Join(dir, docPipelineName(t)+".yml")
+	pipelinePath := filepath.Join(dir, docPipelineName(t, dir)+".yml")
 
 	err := os.WriteFile(pipelinePath, []byte(body), 0o600)
 	if err != nil {
@@ -253,12 +255,12 @@ func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScena
 func pipelinePath(t *testing.T, dir string) string {
 	t.Helper()
 
-	return filepath.Join(dir, docPipelineName(t)+".yml")
+	return filepath.Join(dir, docPipelineName(t, dir)+".yml")
 }
 
 // docPipelineName is the file name — and therefore, via config.Slugify, the
-// pipeline IDENTITY — this block runs under: the test's own name, which the
-// framework already guarantees is unique.
+// pipeline IDENTITY — this block runs under: the test's own name, plus a
+// counter.
 //
 // It is unique on purpose. An agent that fails over is pinned to its fallback
 // under pinScope{pipeline, agent}, process-wide and outliving the run, so
@@ -269,13 +271,23 @@ func pipelinePath(t *testing.T, dir string) string {
 // only while the corpus is serial — a reset is indiscriminate, and a parallel
 // sibling's pin is exactly as reachable as one's own.
 //
-// Naming the pipelines apart fixes the collision at its source instead: two
-// blocks no longer share a scope, so there is nothing to reset and the corpus
-// can run concurrently.
-func docPipelineName(t *testing.T) string {
+// Naming the pipelines apart fixes the collision at its source instead. The
+// test name alone is not enough to do it: the mutation harness walks EVERY
+// runnable block under one *testing.T (detectFieldSomewhere, one t.TempDir()
+// per mutant), so every block in that walk would resolve to one name and go on
+// sharing the scope this exists to separate.
+//
+// The directory is what actually differs between them, and it is also STABLE —
+// which the name has to be, because a test writes its pipeline and then asks
+// for the same path again to read the state database back, or to run it a
+// second time and see the cache hit.
+func docPipelineName(t *testing.T, dir string) string {
 	t.Helper()
 
-	return sanitizeForFileName(t.Name())
+	digest := fnv.New32a()
+	_, _ = digest.Write([]byte(dir))
+
+	return fmt.Sprintf("%s-%x", sanitizeForFileName(t.Name()), digest.Sum32())
 }
 
 // sanitizeForFileName reduces a test name to something safe on any filesystem

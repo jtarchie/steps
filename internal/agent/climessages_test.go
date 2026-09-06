@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ import (
 func recordingCLI(t *testing.T) string {
 	t.Helper()
 
-	if os.Getenv("STEPS_TEST_SKIP_SHELL") != "" {
+	if runtime.GOOS == "windows" {
 		t.Skip("fake cli binaries are shell scripts")
 	}
 
@@ -178,7 +179,7 @@ func TestCLIAttemptPromptDoesNotConsumeTheMessage(t *testing.T) {
 func spendingCLI(t *testing.T, turns int, cost float64) {
 	t.Helper()
 
-	if os.Getenv("STEPS_TEST_SKIP_SHELL") != "" {
+	if runtime.GOOS == "windows" {
 		t.Skip("fake cli binaries are shell scripts")
 	}
 
@@ -285,5 +286,38 @@ func TestCLICeilingKeepsTheFailureThatCausedIt(t *testing.T) {
 	quiet := cliCeilingError("reviewer", "its 9-turn budget", 1, 2, 2, nil)
 	if strings.Contains(quiet.Error(), "last failure") || strings.Contains(quiet.Error(), "%!") {
 		t.Errorf("a ceiling with no cause still claims one: %s", quiet)
+	}
+}
+
+// TestCeilingErrorNamesOneMessageForAPromptOnlyStep: runCLIMessages
+// substitutes a single empty entry when a step declares no messages:, so the
+// count the error quotes has to agree with it. Reading the raw slice length
+// made the overwhelmingly common case — one prompt: — report "on message 1 of
+// 0", which reads as a step that never started.
+func TestCeilingErrorNamesOneMessageForAPromptOnlyStep(t *testing.T) {
+	t.Parallel()
+
+	err := cliCeilingError("impl", "its $0.5 budget, spending $0.5100", 0, 0, 1, nil)
+
+	if !strings.Contains(err.Error(), "on message 1 of 1") {
+		t.Errorf("a prompt-only step reports %q", err)
+	}
+}
+
+// TestCeilingErrorWithoutAFailureDoesNotWrapNil: the ordinary way to exhaust a
+// pooled ceiling is for an EARLIER message to finish cleanly having spent it,
+// which leaves no last failure — and %w on a nil error printed
+// "%!w(<nil>)" as the last word of the one line explaining the step.
+func TestCeilingErrorWithoutAFailureDoesNotWrapNil(t *testing.T) {
+	t.Parallel()
+
+	err := cliCeilingError("impl", "its 30-turn budget", 2, 4, 1, nil)
+
+	if strings.Contains(err.Error(), "%!w") || strings.Contains(err.Error(), "last failure") {
+		t.Errorf("a ceiling reached with nothing failing reports %q", err)
+	}
+
+	if !strings.Contains(err.Error(), "on message 3 of 4") {
+		t.Errorf("the message counter is off: %q", err)
 	}
 }

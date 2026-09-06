@@ -530,9 +530,12 @@ type usageView struct {
 	// which finish_reason cannot say. See FailedAfter.
 	StepFailed bool
 	// Ceiling is what this step was allowed to spend, rendered as the dials
-	// table renders it. Empty means either no ceiling or an unknowable one —
-	// runView.ConfigDrifted is what tells the template which.
+	// table renders it, empty when the step's agent declared none.
 	Ceiling string
+	// CeilingKnown is whether Ceiling was resolved at all. An empty Ceiling
+	// with this false is UNKNOWN, not uncapped — see runView.ceilingFor for
+	// why the two must not share a spelling.
+	CeilingKnown bool
 }
 
 // FailedAfter reports a step that failed after the request this row describes
@@ -547,8 +550,13 @@ type usageView struct {
 // Annotated rather than overwritten. The reason is a fact about a request;
 // replacing it with steps' verdict on the step would put two vocabularies in
 // one column and lose the only record of how the model actually stopped.
+// Only when there IS a reason: a provider that reported nothing gets a row of
+// zeros on purpose (see saveAgentUsage), and a step killed by timeout: is the
+// common producer of one. Annotating that empty cell drew a dangling " — step
+// failed" under a tooltip quoting a provider word that was never said.
 func (u usageView) FailedAfter() bool {
-	return u.StepFailed && !u.Truncated() && !strings.EqualFold(u.FinishReason, "error")
+	return u.StepFailed && u.FinishReason != "" &&
+		!u.Truncated() && !strings.EqualFold(u.FinishReason, "error")
 }
 
 // Cost renders this step's price, empty when nothing reported one — a blank
@@ -572,23 +580,70 @@ func (u usageView) CachePercent() int {
 
 // UsageRows wraps the raw rows for the template.
 func (r runView) UsageRows() []usageView {
-	failed := make(map[int]bool, len(r.Steps))
+	// Keyed by index AND name, because a plan index is not a step: every cell
+	// of an across: and every member of an ensemble: is handed the block's own
+	// index (internal/pipeline/across.go's runAcrossCell, ensemble.go's
+	// runEnsembleMembers), so keying on it alone marked every sibling's spend
+	// row failed when one cell failed. The name tells them apart — both sides
+	// of this join spell it the same way, agent_usage from step.DisplayName()
+	// and the event from eventStepName(), and both prefer a cell's Label.
+	failed := make(map[string]bool, len(r.Steps))
 	for _, step := range r.Steps {
 		if step.Failed() {
-			failed[step.Index] = true
+			failed[usageKey(step.Index, step.Name)] = true
 		}
 	}
 
 	rows := make([]usageView, 0, len(r.Usage))
+
 	for _, step := range r.Usage {
+		ceiling, known := r.ceilingFor(step.StepName)
 		rows = append(rows, usageView{
-			AgentUsage: step,
-			StepFailed: failed[step.StepIndex],
-			Ceiling:    r.Ceilings[step.StepName],
+			AgentUsage:   step,
+			StepFailed:   failed[usageKey(step.StepIndex, step.StepName)],
+			Ceiling:      ceiling,
+			CeilingKnown: known,
 		})
 	}
 
 	return rows
+}
+
+// usageKey identifies one executed step across the two tables that describe
+// it. Not stepKey: agent_usage records no step id, so the pair is all there
+// is to join on.
+func usageKey(index int, name string) string {
+	return strconv.Itoa(index) + "/" + name
+}
+
+// ceilingFor is the spend ceiling of the step this spend row belongs to, and
+// whether it could be resolved at all.
+//
+// Ceilings are the AGENT's (see agentCeilings), and agent_usage records a STEP
+// name. Those agree for an ordinary step and disagree for an across: cell,
+// which renames itself to "<agent> [k=v]" (config.nameCell) while still
+// resolving through the same agent — so the coordinates are dropped and the
+// agent asked again.
+//
+// The bool is the part that matters, and it is why an uncapped agent is IN the
+// map with an empty value rather than absent from it. nameCell returns early
+// when a cell's name: template references an axis, leaving a name that matches
+// neither the agent nor the "[k=v]" shape, so a miss is always reachable. A
+// miss and a known-uncapped agent are opposite answers, and collapsing them
+// prints "uncapped" for a step that had a ceiling — on the run where that
+// ceiling is why it died, which is the one run this column exists for.
+func (r runView) ceilingFor(stepName string) (string, bool) {
+	if ceiling, known := r.Ceilings[stepName]; known {
+		return ceiling, true
+	}
+
+	if at := strings.LastIndex(stepName, " ["); at > 0 && strings.HasSuffix(stepName, "]") {
+		ceiling, known := r.Ceilings[stepName[:at]]
+
+		return ceiling, known
+	}
+
+	return "", false
 }
 
 // PlacementView is one placed step's machine as the template reads it.
@@ -733,33 +788,59 @@ func newRunFolder() *runFolder {
 	return &runFolder{index: map[string]int{}}
 }
 
-// add folds one batch of events in, in order.
-func (f *runFolder) add(rows []store.RunEventRow, results map[string]store.NodeRow) {
+// add folds one batch of events in, in order, reporting which steps' rows
+// changed as a result.
+//
+// The fold reports it rather than the caller reading it off the events,
+// because the two disagree exactly where it matters: a sub-agent's turns
+// carry the CHILD's name, and attachTurn hangs them on the plan step still
+// running. A caller deriving the set from stepKey(row) alone therefore holds
+// a key belonging to no row — and the live stream, which sends only the roots
+// its batch named, sent NOTHING for the whole of a sub-agent conversation.
+func (f *runFolder) add(rows []store.RunEventRow, results map[string]store.NodeRow) map[string]bool {
+	touched := make(map[string]bool, len(rows))
+
 	for _, row := range rows {
 		if row.Seq > f.run.LastSeq {
 			f.run.LastSeq = row.Seq
 		}
 
-		switch row.Type {
-		case events.TypeJobFinished:
-			if row.Text != "" {
-				f.run.JobError = row.Text
-			}
-		case events.TypeStepStarted:
-			openStep(&f.run, f.index, row)
-		case events.TypeStepFinished, events.TypeStepSkipped:
-			closeStep(&f.run, f.index, row, results)
-		case events.TypeStepOutput:
-			attachOutput(&f.run, f.index, row)
-		default:
-			// Agent conversation traffic; anything unrecognized is ignored
-			// rather than rendered, so an event type added later cannot break
-			// an older reader.
-			if isAgentTraffic(row.Type) {
-				attachTurn(&f.run, f.index, row)
-			}
+		if position, changed := f.fold(row, results); changed {
+			touched[f.run.Steps[position].Key()] = true
 		}
 	}
+
+	return touched
+}
+
+// fold applies one event, reporting the position of the step whose row it
+// changed — which is not always the step the event names. See add.
+func (f *runFolder) fold(row store.RunEventRow, results map[string]store.NodeRow) (int, bool) {
+	switch row.Type {
+	case events.TypeJobFinished:
+		if row.Text != "" {
+			f.run.JobError = row.Text
+		}
+	case events.TypeStepStarted:
+		openStep(&f.run, f.index, row)
+
+		return f.index[stepKey(row)], true
+	case events.TypeStepFinished, events.TypeStepSkipped:
+		return closeStep(&f.run, f.index, row, results)
+	case events.TypeStepOutput:
+		attachOutput(&f.run, f.index, row)
+
+		return f.index[stepKey(row)], true
+	default:
+		// Agent conversation traffic; anything unrecognized is ignored
+		// rather than rendered, so an event type added later cannot break
+		// an older reader.
+		if isAgentTraffic(row.Type) {
+			return attachTurn(&f.run, f.index, row)
+		}
+	}
+
+	return 0, false
 }
 
 // view is what has been folded so far, with the tree hung and the run row as
@@ -817,8 +898,11 @@ func openStep(view *runView, index map[string]int, row store.RunEventRow) {
 	})
 }
 
-// closeStep records how a step ended, folding in whatever its node recorded.
-func closeStep(view *runView, index map[string]int, row store.RunEventRow, results map[string]store.NodeRow) {
+// closeStep records how a step ended, folding in whatever its node recorded,
+// and reports the position it wrote to.
+func closeStep(
+	view *runView, index map[string]int, row store.RunEventRow, results map[string]store.NodeRow,
+) (int, bool) {
 	position, seen := index[stepKey(row)]
 	if !seen {
 		// A step swallowed by a chain skip never started, so there is no row
@@ -827,7 +911,7 @@ func closeStep(view *runView, index map[string]int, row store.RunEventRow, resul
 		// unaccounted for, which reads as a truncated run rather than a
 		// cached one.
 		if row.Type != events.TypeStepSkipped {
-			return
+			return 0, false
 		}
 
 		openStep(view, index, row)
@@ -854,20 +938,23 @@ func closeStep(view *runView, index map[string]int, row store.RunEventRow, resul
 	if node, ok := results[row.Hash]; ok && node.Result != "" {
 		step.Result = decodeResult(node.Result)
 	}
+
+	return position, true
 }
 
-// attachTurn hangs one conversation event on the step it belongs to. A turn
-// whose step is not in the transcript is dropped rather than inventing a
+// attachTurn hangs one conversation event on the step it belongs to, and
+// reports which step that was — which is not always the one the row names. A
+// turn whose step is not in the transcript is dropped rather than inventing a
 // step for it — that only happens for a hook or fix conversation, which by
 // design records no plan step.
-func attachTurn(view *runView, index map[string]int, row store.RunEventRow) {
+func attachTurn(view *runView, index map[string]int, row store.RunEventRow) (int, bool) {
 	position, seen := index[stepKey(row)]
 	if !seen {
 		// A sub-agent's turns carry the CHILD's name, not the plan step's, so
 		// fall back to the most recent agent step still running.
 		position, seen = lastRunningAgent(view)
 		if !seen {
-			return
+			return 0, false
 		}
 	}
 
@@ -879,6 +966,8 @@ func attachTurn(view *runView, index map[string]int, row store.RunEventRow) {
 		Depth:  parseDepth(row.Status),
 		At:     row.At,
 	})
+
+	return position, true
 }
 
 // lastRunningAgent finds the newest agent step that has not finished.

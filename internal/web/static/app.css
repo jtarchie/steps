@@ -259,12 +259,14 @@ td.faint, .faint { color: var(--faint); }
 body:not([data-view="graph"]) #jobs-graph { display: none; }
 body[data-view="graph"] #jobs-list { display: none; }
 
-/* The placeholder is always in the DOM (the stream appends beside it), so it
-   is what :last-child matches on a finished run — and .step:last-child is the
-   rule that drops the transcript's trailing hairline. Hand it to the last row
-   a reader can actually see. */
+/* The placeholder is always in the DOM, so it is what :last-child matches on a
+   finished run — and .step:last-child is the rule that drops the transcript's
+   trailing hairline. Hand it to the last row a reader can actually see.
+   Scoped to a placeholder that really is last, because the stream appends
+   AFTER it: unscoped, a run being watched lost the hairline from whichever
+   row happened to precede the placeholder, mid-list. */
 #run-empty:not(:only-child) { display: none; }
-.step:has(+ #run-empty) { border-bottom: 0; }
+.step:has(+ #run-empty:last-child) { border-bottom: 0; }
 
 .dagwrap {
   border: 1px solid var(--line);
