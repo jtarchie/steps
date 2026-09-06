@@ -245,6 +245,41 @@ type AgentFallback struct {
 // visible in the budget.
 const defaultMaxAgentTurns = 30
 
+// defaultTurnsFor is the cap an agent takes when neither it nor its step names
+// one. A CLI source takes none, and the reason is that a "turn" is not the
+// same quantity on the two paths.
+//
+// defaultMaxAgentTurns counts what this process drives: one request, its tool
+// calls, their results. A CLI reports num_turns in its own units — one per
+// tool ROUND — and that count is POOLED across every entry in messages:,
+// because a resumed session is the same conversation and the remainder is
+// tracked per step (see internal/agent's remainingCLITurns). A five-message
+// implementation task therefore spends turns at something like an order of
+// magnitude the hosted rate, and 30 was measured running out during the FIRST
+// message: the step died holding a plan, having never been asked to carry it
+// out, and reported it as an exhausted budget rather than as a cap that never
+// fit.
+//
+// So the number was not wrong, it was the wrong unit — and the honest default
+// for a unit this package does not define is none. That matches what the CLIs
+// themselves do: Claude Code, opencode and aider impose no turn cap, bounding
+// a conversation by context and cost instead.
+//
+// What still bounds an uncapped CLI step: budget: usd (which the child
+// enforces mid-conversation, and which the job page now shows beside this),
+// the step's timeout:, and the job's. None of them is automatic, which is the
+// cost of this default and is stated in docs/agents.md — a CLI agent with no
+// budget: and no deadline is held by the job's timeout alone. The alternative,
+// making budget: mandatory for a CLI source, was rejected: it turns a cap
+// nobody chose into a load error on every existing pipeline.
+func defaultTurnsFor(source AgentSource) int {
+	if IsCLISource(source) {
+		return 0
+	}
+
+	return defaultMaxAgentTurns
+}
+
 // defaultMaxQuestions is how many times one agent step may interrupt its end
 // user when neither the step nor the agent says otherwise.
 //

@@ -6,7 +6,7 @@ How an `agent` step in a pipeline actually runs, and the features around custom 
 
 An agent step runs a tool-calling conversation loop:
 
-1. Parse the agent's config: model/endpoint, system prompt, granted tools, `max_turns` (default 30, `0` for no cap; a step may override it with its own `max_turns:` so one long-horizon step can buy more turns without every step of the same agent paying for them). Same for `timeout:` and `attempts:`, which an `agents:` entry may also carry — see [attempts-timeout.md](attempts-timeout.md).
+1. Parse the agent's config: model/endpoint, system prompt, granted tools, `max_turns` (default 30 for a hosted agent and **none at all for a CLI one**, `0` for no cap; a step may override it with its own `max_turns:` so one long-horizon step can buy more turns without every step of the same agent paying for them). Same for `timeout:` and `attempts:`, which an `agents:` entry may also carry — see [attempts-timeout.md](attempts-timeout.md).
 2. Build a system message combining the agent's persona with working-directory context (any `context_paths:` files are delivered as synthetic `read_file` tool results — see below).
 3. Loop, up to `max_turns`:
    - Send the conversation + tool definitions to the model.
@@ -51,6 +51,10 @@ That sequencing is the whole difference from writing both asks in one message. A
 - **One `max_turns:` budget** covers the whole conversation, not each message. It is a cost ceiling; a long list can exhaust it.
 - **The agent's standing instructions are not here.** Those are its `system:`. `messages:` is what you are asking it this time.
 - **A CLI-backed agent gets every message too**, each one resuming the session the last was answered in — the same `--resume` mechanism a retry and a missing-file nudge already use. A resumed invocation is sent only the message: the session already holds the task and its context blocks, and re-sending them invites redoing finished work. `attempts:` applies per message, since a child that dies answering the third question should still have retries; `max_turns:` does not reset, because it bounds the whole conversation.
+
+  That pooling is why a CLI agent takes **no default turn cap**. A CLI reports `num_turns` in its own units — one per tool *round* — so a five-message implementation task spends turns at roughly an order of magnitude the hosted rate, and the hosted default of 30 was measured running out during the *first* message: the step died holding a plan it was never asked to carry out. The number was not wrong, it was the wrong unit, and the honest default for a unit steps does not define is none — which is also what Claude Code, opencode and aider do. Set `max_turns:` explicitly if you want one.
+
+  **What bounds an uncapped CLI step, then:** `budget: usd` (the child enforces it mid-conversation, and the job page shows it beside the turn column), the step's `timeout:`, and the job's. None is automatic. A CLI agent with no `budget:` and no deadline of its own is held by the job's `timeout:` alone — a real choice, and one worth making deliberately rather than inheriting.
 - A **single message** is the overwhelmingly common case and behaves exactly as it always has: one request, one answer.
 
 Beware the obvious use. "Are you sure?" as a second message is one of the most reliable ways to make a model abandon a correct answer, and the flip has little to do with whether the first answer was right. A second message earns its place when it demands something checkable — a file, a line, a counterfactual — rather than asking for more confidence. If the question is really *"is this verdict robust?"*, [`ensemble:`](#ensembles-asking-several-agents-the-same-question) answers it better, because independent members have no such channel.

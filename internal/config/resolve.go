@@ -314,7 +314,7 @@ func (c *Config) ResolveAgentInvocation(step Step) (ResolvedInvocation, error) {
 	// Step wins over agent entry, agent entry over the package default. Every
 	// one of these honors an explicit 0 rather than treating it as unset —
 	// that is what the pointers are for (see dials.go).
-	maxTurns := orDefault(step.MaxTurns, orDefault(agent.MaxTurns, defaultMaxAgentTurns))
+	maxTurns := orDefault(step.MaxTurns, orDefault(agent.MaxTurns, defaultTurnsFor(agent.Source)))
 	attempts := orDefault(step.Attempts, orDefault(agent.Attempts, defaultAgentAttempts))
 	maxQuestions := orDefault(step.MaxQuestions, orDefault(agent.MaxQuestions, defaultMaxQuestions))
 

@@ -325,7 +325,7 @@ jobs:
     outcome: succeeded
 ```
 
-Both steps get 20 minutes, five attempts and 50 turns; the second one asks for 45 minutes and gets it. **Precedence is step, then agent entry, then the package default** — the same order `max_turns:` has always had, and nothing about it is new here except that two more dials now participate.
+Both steps get 20 minutes, five attempts and 50 turns; the second one asks for 45 minutes and gets it. **Precedence is step, then agent entry, then the package default** (30 turns for a hosted agent, none for a CLI one — see [agents.md](agents.md)) — the same order `max_turns:` has always had, and nothing about it is new here except that two more dials now participate.
 
 The reason this belongs on the agent is that the right deadline is usually a property of the agent rather than of the step invoking it: a deep reviewer needs twenty minutes whoever calls it. Before an entry could carry one, a deadline shared by six steps was six copies of one number.
 

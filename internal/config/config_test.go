@@ -634,6 +634,67 @@ func TestResolveEffectiveToolsBoundary(t *testing.T) {
 	})
 }
 
+// TestResolveDefaultTurnsDependsOnTheSource pins the one dial whose default
+// is not a single number, and why.
+//
+// A hosted turn is one request/tool-execute round driven by this process; a
+// CLI's is whatever the child reports as num_turns, one per tool ROUND, pooled
+// across every message: in the step. Those are different quantities, so one
+// default cannot serve both — 30 was measured running out during a CLI step's
+// FIRST message, killing it mid-task with four messages unasked.
+func TestResolveDefaultTurnsDependsOnTheSource(t *testing.T) {
+	t.Parallel()
+
+	baseCfg := func(agent Agent) *Config {
+		return &Config{Agents: []Agent{agent}}
+	}
+
+	t.Run("a cli agent takes no turn cap by default", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := baseCfg(Agent{Name: "a", Source: AgentSource{Model: "@claude/sonnet"}})
+
+		ri, err := cfg.ResolveAgentInvocation(Step{Agent: "a"})
+		if err != nil {
+			t.Fatalf("ResolveAgentInvocation: %v", err)
+		}
+
+		if ri.MaxTurns != 0 {
+			t.Errorf("maxTurns = %d, want 0 (a cli source takes no default cap)", ri.MaxTurns)
+		}
+	})
+
+	t.Run("a cli agent still honours a cap it asks for", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := baseCfg(Agent{Name: "a", Source: AgentSource{Model: "@claude/sonnet"}, MaxTurns: intPtr(50)})
+
+		ri, err := cfg.ResolveAgentInvocation(Step{Agent: "a"})
+		if err != nil {
+			t.Fatalf("ResolveAgentInvocation: %v", err)
+		}
+
+		if ri.MaxTurns != 50 {
+			t.Errorf("maxTurns = %d, want the 50 the agent asked for", ri.MaxTurns)
+		}
+	})
+
+	t.Run("a hosted agent keeps the package default", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := baseCfg(Agent{Name: "a", Source: AgentSource{Model: "openai/gpt-4o"}})
+
+		ri, err := cfg.ResolveAgentInvocation(Step{Agent: "a"})
+		if err != nil {
+			t.Fatalf("ResolveAgentInvocation: %v", err)
+		}
+
+		if ri.MaxTurns != defaultMaxAgentTurns {
+			t.Errorf("maxTurns = %d, want the package default %d", ri.MaxTurns, defaultMaxAgentTurns)
+		}
+	})
+}
+
 func TestResolveAgentInvocation(t *testing.T) {
 	t.Parallel()
 
