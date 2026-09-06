@@ -7,7 +7,7 @@
 </h1>
 <p class="metaline">{{len .Jobs}} jobs<span class="sep">·</span>{{.Nav.CurrentPath}}</p>
 
-<div class="dagwrap" id="jobs-graph" hidden>
+<div class="dagwrap" id="jobs-graph" data-live="jobs-graph" hidden>
   {{/* role=group, not img: an image's children are presentational, which
        would flatten every job link and status word out of the a11y tree. */}}
   <svg class="dag" width="{{.Graph.W}}" height="{{.Graph.H}}" viewBox="0 0 {{.Graph.W}} {{.Graph.H}}" role="group" aria-label="Job dependency graph">
@@ -22,7 +22,7 @@
   <p class="rail">edges are get-step passed: constraints — hover one for the resource it carries</p>
 </div>
 
-<div class="tablewrap" id="jobs-list">
+<div class="tablewrap" id="jobs-list" data-live="jobs-list">
   <table>
     <thead>
       <tr><th>Job</th><th>Latest run</th><th>Started</th><th class="num">Duration</th><th>Depends on</th><th>Breaker</th></tr>
@@ -47,7 +47,7 @@
   </table>
 </div>
 
-<div id="queue-region">
+<div id="queue-region" data-live="queue">
 {{if .Queue}}
 <h2 class="eyebrow">Trigger queue</h2>
 <div class="tablewrap">
@@ -81,43 +81,6 @@
         b.setAttribute('aria-pressed', String(b === btn));
       });
     });
-  });
-
-  // Refresh the board in place. The page is its own API: fetching it and
-  // swapping only the two regions that carry state keeps the list/graph
-  // toggle, the scroll position, and any open menu — all of which a whole
-  // page reload would throw away — while a job left running stops reading as
-  // running forever.
-  var REFRESH = 2500;
-
-  function swap(from, selector) {
-    var next = from.querySelector(selector);
-    var current = document.querySelector(selector);
-    if (next && current) current.innerHTML = next.innerHTML;
-  }
-
-  function refresh() {
-    if (document.hidden) return;
-
-    fetch(window.location.pathname, { headers: { 'Accept': 'text/html' } })
-      .then(function (r) { return r.text(); })
-      .then(function (html) {
-        var doc = new DOMParser().parseFromString(html, 'text/html');
-        swap(doc, '#jobs-list tbody');
-        swap(doc, '#jobs-graph');
-
-        // The queue section appears and disappears with its contents, so it
-        // is replaced wholesale rather than by inner swap.
-        var nextQueue = doc.querySelector('#queue-region');
-        var queue = document.querySelector('#queue-region');
-        if (nextQueue && queue) queue.innerHTML = nextQueue.innerHTML;
-      })
-      .catch(function () { /* a missed refresh costs nothing; the next one covers it */ });
-  }
-
-  setInterval(refresh, REFRESH);
-  document.addEventListener('visibilitychange', function () {
-    if (!document.hidden) refresh();
   });
 })();
 </script>

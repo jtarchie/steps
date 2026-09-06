@@ -1,5 +1,6 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps</b></h1>
+<div data-live="overview">
 <p class="metaline">{{len .Pipelines}} pipelines<span class="sep">·</span>{{len .Runs}} recent runs</p>
 
 <div class="tablewrap">
@@ -42,4 +43,5 @@
 {{else}}
 <p class="faint">No runs recorded yet.</p>
 {{end}}
+</div>
 {{end}}

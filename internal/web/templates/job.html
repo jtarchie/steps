@@ -2,7 +2,7 @@
 <div class="pagehead">
   <div>
     <h1 class="prompt"><b>steps job {{.Job.Name}}</b></h1>
-    <p class="metaline">
+    <p class="metaline" data-live="job-meta">
       {{len .Runs}} runs recorded
       {{if .Job.Paused}}<span class="sep">·</span><span class="st-failed">paused after {{.Job.Failures}} failures</span>{{end}}
     </p>
@@ -38,6 +38,7 @@
 </p>
 {{end}}
 
+<div data-live="job-runs">
 <h2 class="eyebrow">Run history
   {{if .Spark}}
   <svg class="spark" width="{{mul2 (len .Spark)}}" height="16" viewBox="0 0 {{mul2 (len .Spark)}} 16" aria-label="Duration trend">
@@ -98,4 +99,5 @@
   </table>
 </div>
 {{end}}
+</div>
 {{end}}

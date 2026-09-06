@@ -1,6 +1,7 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps approvals</b></h1>
 <p class="metaline">the row is the audit trail — a decision here is the same record `steps approvals approve` writes</p>
+<div data-live="approvals">
 
 {{range .Approvals}}
 <div class="approval {{if ne .Status "pending"}}decided{{end}}">
@@ -23,4 +24,5 @@
 {{else}}
 <p class="faint">No approvals requested yet.</p>
 {{end}}
+</div>
 {{end}}
