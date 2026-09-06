@@ -418,6 +418,58 @@ jobs:
 	return server
 }
 
+// agentSpendPipeline is a pipeline whose agent step has a budget, LOADED from
+// disk so the config carries a real revision — the spend panel's ceiling is
+// gated on the run's sha matching it, and a hand-built Config has none.
+func agentSpendPipeline(t *testing.T) (*Server, *Pipeline) {
+	t.Helper()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "demo.yml")
+
+	writeFile(t, path, `
+agents:
+  - name: reviewer
+    source: { model: openrouter/qwen/qwen3.7-flash }
+    budget: { tokens: 2000000 }
+
+jobs:
+  - name: review
+    plan:
+      - agent: reviewer
+        messages: ["go"]
+`)
+
+	cfg, err := config.Load(path, "demo", nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "demo")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	t.Cleanup(func() { _ = st.Close() })
+
+	// Interned the way a real load interns it: runs.revision_id is resolved by
+	// looking the sha up in pipeline_revisions, so a run started against a
+	// revision nobody recorded reads back with no config sha at all.
+	err = st.RecordRevision(t.Context(), cfg.Revision.SHA, cfg.Revision.Source)
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	pipeline := NewPipeline("demo", path, cfg, st, events.New(nil))
+
+	server, err := New([]*Pipeline{pipeline}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	return server, pipeline
+}
+
 // TestJobPageShowsResolvedAgentDials answers "why did this step stop at N
 // turns" on the page, rather than by cross-referencing the step, the agent,
 // and a default constant in Go. The values shown are the RESOLVED ones, which
@@ -615,6 +667,110 @@ func TestSpendRowLeavesASucceededStepAlone(t *testing.T) {
 
 	if strings.Contains(body, "step failed") {
 		t.Errorf("a step that succeeded carries the failed-after marker: %s", body)
+	}
+}
+
+// TestSpendPanelShowsTheCeilingWhenTheConfigStillMatches puts the number
+// beside the ceiling it was spent against.
+//
+// A cost with nothing to read it against answers no question: $2.83 of
+// unlimited and $2.83 of $3 are the same cell, and the run page is where a
+// reader is standing when a step dies on a ceiling.
+//
+// The ceiling comes from the LIVE configuration, which is only the truth for a
+// run that opened against it — so it is shown only when the run's recorded
+// config sha still matches, and withheld otherwise. That gate is the whole
+// design: a revision stores its source but not its include files, and
+// internal/config can only load from a path, so a historical run's ceiling
+// cannot honestly be reconstructed today. Silently rendering today's ceiling
+// on last week's failure would be wrong exactly when the column is consulted.
+func TestSpendPanelShowsTheCeilingWhenTheConfigStillMatches(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := agentSpendPipeline(t)
+	ctx := t.Context()
+
+	sha := pipeline.Config().Revision.SHA
+	if sha == "" {
+		t.Fatal("the loaded config carries no revision to match against")
+	}
+
+	err := pipeline.Store.StartRun(ctx, "run-cap", "review", t.TempDir(), sha)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-cap", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1, Status: "succeeded"},
+	})
+
+	mustRecordResult(t, pipeline, "cap-hash", map[string]any{"response": "done"})
+
+	err = pipeline.Store.RecordAgentUsage(ctx, store.AgentUsage{
+		RunID: "run-cap", StepIndex: 0, StepName: "reviewer", JobName: "review",
+		NodeHash: "cap-hash", ModelReq: "opus", Total: 500000, FinishReason: "success",
+	})
+	if err != nil {
+		t.Fatalf("RecordAgentUsage: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-cap")
+
+	if !strings.Contains(body, "2,000,000") {
+		t.Errorf("the spend panel does not show the ceiling the step ran under: %s", body)
+	}
+}
+
+// TestSpendPanelWithholdsTheCeilingAfterAnEdit is the half that keeps the
+// column honest, and the reason it exists at all.
+//
+// "What was this capped at when it failed?" is the question the column is
+// consulted for, so answering it with a number from a configuration the run
+// never saw is worse than answering nothing. A run whose sha does not match
+// says the config changed instead.
+func TestSpendPanelWithholdsTheCeilingAfterAnEdit(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := agentSpendPipeline(t)
+	ctx := t.Context()
+
+	// Interned, so the run genuinely carries the older sha rather than none —
+	// runs.revision_id resolves by lookup, and an unrecorded sha reads back
+	// empty, which is a different state (see agentCeilings).
+	err := pipeline.Store.RecordRevision(ctx, "a-sha-from-an-older-file", "agents: []\n")
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	err = pipeline.Store.StartRun(ctx, "run-old", "review", t.TempDir(), "a-sha-from-an-older-file")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-old", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1, Status: "succeeded"},
+	})
+
+	mustRecordResult(t, pipeline, "old-hash", map[string]any{"response": "done"})
+
+	err = pipeline.Store.RecordAgentUsage(ctx, store.AgentUsage{
+		RunID: "run-old", StepIndex: 0, StepName: "reviewer", JobName: "review",
+		NodeHash: "old-hash", ModelReq: "opus", Total: 500000, FinishReason: "success",
+	})
+	if err != nil {
+		t.Fatalf("RecordAgentUsage: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-old")
+
+	if strings.Contains(body, "2,000,000") {
+		t.Errorf("the spend panel shows a ceiling from a config this run never opened against: %s", body)
+	}
+
+	if !strings.Contains(body, "config changed") {
+		t.Errorf("the spend panel withholds the ceiling without saying why: %s", body)
 	}
 }
 

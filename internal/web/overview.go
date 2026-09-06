@@ -279,3 +279,46 @@ func agentDials(cfg *config.Config, job config.Job) []agentDialView {
 
 	return dials
 }
+
+// agentCeilings is what each agent step of one job was allowed to spend, by
+// step name, for a run that opened against the configuration now being served.
+//
+// The sha gate is the whole of the honesty here. The right answer would come
+// from the run's OWN revision, and cannot today: a revision stores its source
+// but not its include files, and internal/config loads from a path rather than
+// from bytes, so a run older than the last edit is not reconstructable. The
+// question this column is consulted for is "what was it capped at when it
+// failed", which makes today's ceiling on last week's run the one wrong answer
+// worse than no answer — so a mismatch reports drift and no numbers.
+//
+// Keyed by step NAME because that is what agent_usage records; a job running
+// one agent twice gets one ceiling for both rows, which is right — the budget
+// is the agent's, not the step's (see config.ResolveAgentInvocation).
+func agentCeilings(cfg *config.Config, jobName, runSHA string) (map[string]string, bool) {
+	// Three states, and collapsing any two of them puts a wrong word on the
+	// page. A run whose configuration is not the loaded one has ceilings that
+	// cannot be known; a run whose configuration IS loaded may still have an
+	// agent with no ceiling at all. "Unknowable" and "uncapped" are opposite
+	// answers, so a run with no recorded sha reports the former rather than
+	// falling through to the latter.
+	if cfg == nil || cfg.Revision.SHA == "" || runSHA != cfg.Revision.SHA {
+		return nil, true
+	}
+
+	job, err := cfg.FindJob(jobName)
+	if err != nil {
+		return nil, true
+	}
+
+	ceilings := map[string]string{}
+
+	for _, dial := range agentDials(cfg, *job) {
+		if dial.Broken != "" || dial.UncappedBudget() {
+			continue
+		}
+
+		ceilings[dial.Agent] = dial.Budget()
+	}
+
+	return ceilings, false
+}

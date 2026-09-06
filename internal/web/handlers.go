@@ -205,6 +205,7 @@ func (s *Server) assembleRun(c echo.Context, run store.RunRow) (runView, error) 
 	usage, err := pipeline.Store.RunUsage(ctx, run.ID)
 	if err == nil {
 		view.Usage = usage
+		view.Ceilings, view.ConfigDrifted = agentCeilings(pipeline.Config(), run.JobName, run.ConfigSHA)
 	}
 
 	// Same terms: a run page that cannot say which machines it used is worth

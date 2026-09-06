@@ -401,6 +401,23 @@ type runView struct {
 	// question it answers is whether a job that started behaving differently
 	// was given different instructions.
 	ComparedConfig string
+	// Ceilings is what each agent step was ALLOWED to spend, by step name,
+	// empty when this run's configuration is no longer the one being served.
+	//
+	// Spend with nothing to read it against answers no question — $2.83 of
+	// unlimited and $2.83 of $3 are the same number — and this is the page a
+	// reader is standing on when a step dies against a ceiling.
+	//
+	// Gated on the sha rather than resolved from the run's OWN revision, which
+	// would be the better answer and is not available: a revision stores its
+	// source but not its include files, and internal/config loads from a path
+	// only, so a run older than the last edit cannot be reconstructed. Showing
+	// today's ceiling for it would be wrong in exactly the case the column is
+	// consulted for, so it is withheld and said to be withheld.
+	Ceilings map[string]string
+	// ConfigDrifted is why Ceilings is empty: this run opened against a
+	// configuration that is no longer loaded.
+	ConfigDrifted bool
 	// Usage is what this run's agent steps spent, in step order. Empty for a
 	// run with no agent steps, which is what keeps the panel off a page that
 	// has nothing to say about spend.
@@ -512,6 +529,10 @@ type usageView struct {
 	// StepFailed is whether the step this spend belongs to ended failed,
 	// which finish_reason cannot say. See FailedAfter.
 	StepFailed bool
+	// Ceiling is what this step was allowed to spend, rendered as the dials
+	// table renders it. Empty means either no ceiling or an unknowable one —
+	// runView.ConfigDrifted is what tells the template which.
+	Ceiling string
 }
 
 // FailedAfter reports a step that failed after the request this row describes
@@ -560,7 +581,11 @@ func (r runView) UsageRows() []usageView {
 
 	rows := make([]usageView, 0, len(r.Usage))
 	for _, step := range r.Usage {
-		rows = append(rows, usageView{AgentUsage: step, StepFailed: failed[step.StepIndex]})
+		rows = append(rows, usageView{
+			AgentUsage: step,
+			StepFailed: failed[step.StepIndex],
+			Ceiling:    r.Ceilings[step.StepName],
+		})
 	}
 
 	return rows
