@@ -520,6 +520,104 @@ func TestJobPageSaysWhatATurnIs(t *testing.T) {
 	}
 }
 
+// TestSpendRowMarksAStepThatFailedAfterItsLastAnswer keeps the spend panel
+// from contradicting the run beside it.
+//
+// finish_reason is the PROVIDER's word about the last request that completed,
+// and for a cli agent it is the last INVOCATION's -- so a step whose first
+// message finished cleanly and then died against a pooled ceiling, before the
+// second message was ever asked, records "success" on a step that failed. The
+// panel rendered that verbatim next to a failed run.
+//
+// The provider's word is not overwritten: it is a fact about a request, and
+// replacing it with steps' verdict on the step would put two vocabularies in
+// one column. A second signal is added instead, which is what the neighbouring
+// "truncated" decoration already does.
+func TestSpendRowMarksAStepThatFailedAfterItsLastAnswer(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-ceiling", "build", t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-ceiling", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 2, StepName: "implementer", StepKind: "agent", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 2, StepName: "implementer", StepKind: "agent", StepID: 1, Status: "failed"},
+	})
+
+	mustRecordResult(t, pipeline, "ceiling-hash", map[string]any{"response": "a plan"})
+
+	// What the run actually recorded: the child's first message succeeded and
+	// reported its own spend, and the step then died on the pooled ceiling.
+	err = pipeline.Store.RecordAgentUsage(ctx, store.AgentUsage{
+		RunID: "run-ceiling", StepIndex: 2, StepName: "implementer", JobName: "build",
+		NodeHash: "ceiling-hash", ModelReq: "opus", Total: 2333801, FinishReason: "success",
+	})
+	if err != nil {
+		t.Fatalf("RecordAgentUsage: %v", err)
+	}
+
+	code, body := get(t, server, "/p/demo/runs/run-ceiling")
+	if code != http.StatusOK {
+		t.Fatalf("run page = %d", code)
+	}
+
+	// The premise, asserted rather than assumed: without the spend row there
+	// is no column for either signal to be wrong in, and the test would pass
+	// against a page that rendered neither.
+	if !strings.Contains(body, "spendtable") {
+		t.Fatalf("the run recorded no spend panel to assert about: %s", body)
+	}
+
+	// The whole cell, not either word alone: "failed" appears on the step row
+	// as a CSS class and "success" is the reason being annotated, so matching
+	// either separately passes against a page that draws neither signal.
+	if !strings.Contains(body, "success \u2014 step failed") {
+		t.Errorf("the spend panel reports success on a step that failed, with nothing saying otherwise: %s", body)
+	}
+}
+
+// TestSpendRowLeavesASucceededStepAlone is the other half: the marker says
+// something only if the ordinary case does not carry it. Every agent step that
+// works reports a finish reason, so a marker that fires on all of them is
+// noise on every run in the pipeline.
+func TestSpendRowLeavesASucceededStepAlone(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-fine", "build", t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-fine", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 2, StepName: "implementer", StepKind: "agent", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 2, StepName: "implementer", StepKind: "agent", StepID: 1, Status: "succeeded"},
+	})
+
+	mustRecordResult(t, pipeline, "fine-hash", map[string]any{"response": "done"})
+
+	err = pipeline.Store.RecordAgentUsage(ctx, store.AgentUsage{
+		RunID: "run-fine", StepIndex: 2, StepName: "implementer", JobName: "build",
+		NodeHash: "fine-hash", ModelReq: "opus", Total: 1200, FinishReason: "success",
+	})
+	if err != nil {
+		t.Fatalf("RecordAgentUsage: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-fine")
+
+	if strings.Contains(body, "step failed") {
+		t.Errorf("a step that succeeded carries the failed-after marker: %s", body)
+	}
+}
+
 // TestJobPageOmitsDialsWithoutAgents keeps the section off a job that has no
 // agent step, rather than rendering an empty table on every ordinary job.
 func TestJobPageOmitsDialsWithoutAgents(t *testing.T) {

@@ -509,6 +509,25 @@ func (u usageView) Truncated() bool { return truncatedFinish(u.FinishReason) }
 // usageView is one agent step's spend as the template reads it.
 type usageView struct {
 	store.AgentUsage
+	// StepFailed is whether the step this spend belongs to ended failed,
+	// which finish_reason cannot say. See FailedAfter.
+	StepFailed bool
+}
+
+// FailedAfter reports a step that failed after the request this row describes
+// succeeded — the case where the finish column and the run contradict.
+//
+// finish_reason is the PROVIDER's word about the last request that completed,
+// and for a cli agent it is the last INVOCATION's. A step whose first message
+// finished cleanly and then died against a pooled ceiling — max_turns: and
+// budget: usd do not reset at a message boundary — records "success" on a step
+// that failed, and the panel drew it verbatim beside a failed run.
+//
+// Annotated rather than overwritten. The reason is a fact about a request;
+// replacing it with steps' verdict on the step would put two vocabularies in
+// one column and lose the only record of how the model actually stopped.
+func (u usageView) FailedAfter() bool {
+	return u.StepFailed && !u.Truncated() && !strings.EqualFold(u.FinishReason, "error")
 }
 
 // Cost renders this step's price, empty when nothing reported one — a blank
@@ -532,9 +551,16 @@ func (u usageView) CachePercent() int {
 
 // UsageRows wraps the raw rows for the template.
 func (r runView) UsageRows() []usageView {
+	failed := make(map[int]bool, len(r.Steps))
+	for _, step := range r.Steps {
+		if step.Failed() {
+			failed[step.Index] = true
+		}
+	}
+
 	rows := make([]usageView, 0, len(r.Usage))
 	for _, step := range r.Usage {
-		rows = append(rows, usageView{AgentUsage: step})
+		rows = append(rows, usageView{AgentUsage: step, StepFailed: failed[step.StepIndex]})
 	}
 
 	return rows
