@@ -434,11 +434,15 @@ func (c *Config) PutSteps(resource string) []Step {
 // version OBSERVED for the constraint to be judged at all, even when a
 // change to it triggers nothing: without this a `get: artifacts, passed:
 // [build]` with no trigger: was never checked, so the constraint could never
-// be judged. A resource reached only by a plain get is deliberately excluded
-// — nothing polls it, and internal/pipeline's per-run refresh records its
-// version instead (see internal/pipeline/get.go's recordResolvedVersion),
-// which must never touch a resource this function names, or a run would
-// corrupt the poller's dirty-bit baseline for it.
+// be judged. Polling it enqueues nothing on its own, though: AffectedJobs
+// still requires trigger: true, so a change to a passed:-only resource
+// cannot start a build that never asked to be started by it.
+//
+// A resource reached only by a plain get is deliberately excluded — nothing
+// polls it, and internal/pipeline's per-run refresh records its version
+// instead (see internal/pipeline/passed.go's recordResolvedVersion, gated by
+// ResourceIsPolled below), which must never touch a resource this function
+// names, or a run would corrupt the poller's dirty-bit baseline for it.
 func (c *Config) PolledResourceNames() []string {
 	seen := map[string]bool{}
 
@@ -446,7 +450,7 @@ func (c *Config) PolledResourceNames() []string {
 
 	for _, job := range c.Jobs {
 		for _, step := range job.Plan {
-			if step.Get == "" || (!step.Trigger && len(step.Passed) == 0) {
+			if !stepIsPolled(step) {
 				continue
 			}
 
@@ -462,6 +466,29 @@ func (c *Config) PolledResourceNames() []string {
 	}
 
 	return names
+}
+
+// ResourceIsPolled reports whether resourceName is in PolledResourceNames,
+// without building the whole list — for a caller (internal/pipeline's
+// recordResolvedVersion) that asks this once per fetched version and only
+// ever wants a yes/no answer.
+func (c *Config) ResourceIsPolled(resourceName string) bool {
+	for _, job := range c.Jobs {
+		for _, step := range job.Plan {
+			if stepIsPolled(step) && step.GetResourceName() == resourceName {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// stepIsPolled is the one predicate PolledResourceNames and ResourceIsPolled
+// share: a get step is polled when it sets trigger: true or names an
+// upstream job via passed: — see PolledResourceNames for why passed: counts.
+func stepIsPolled(step Step) bool {
+	return step.Get != "" && (step.Trigger || len(step.Passed) > 0)
 }
 
 // FindResourceType returns the resource type with the given name, or an error if not found.

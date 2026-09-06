@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"slices"
 	"sync"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -55,8 +54,9 @@ func recordFetchedVersion(ctx context.Context, resource string, version map[stri
 
 // recordResolvedVersion mirrors a get step's fetched version into
 // resource_checks — the table the web UI's resources page reads — for a
-// resource nothing polls. A resource config.Config.PolledResourceNames
-// names is skipped: that table doubles as internal/trigger's poller's
+// resource nothing polls. A resource config.Config.ResourceIsPolled (the
+// single-name form of PolledResourceNames, which internal/trigger's poller
+// uses) answers yes for is skipped: that table doubles as the poller's
 // dirty-bit baseline, and this run's version is not necessarily the poller's
 // latest (a passed:-constrained get fetches whatever version satisfied the
 // constraint, which can be older than the current head) — recording it
@@ -66,18 +66,18 @@ func recordFetchedVersion(ctx context.Context, resource string, version map[stri
 // Best-effort, same posture as recordFetchedVersion: this is bookkeeping for
 // a page, not the work the step was asked to do.
 func recordResolvedVersion(ctx context.Context, st *store.Store, cfg *config.Config, resourceName string, version map[string]any) {
-	if slices.Contains(cfg.PolledResourceNames(), resourceName) {
+	if cfg.ResourceIsPolled(resourceName) {
 		return
 	}
 
-	encoded, err := json.Marshal(version)
+	encoded, err := store.EncodeVersion(version)
 	if err != nil {
 		slog.Warn("job.resolved_version_unrecordable", "resource", resourceName, "error", err)
 
 		return
 	}
 
-	err = st.RecordCheckedVersion(ctx, resourceName, string(encoded))
+	err = st.RecordCheckedVersion(ctx, resourceName, encoded)
 	if err != nil {
 		slog.Warn("job.resolved_version_unrecorded", "resource", resourceName, "error", err)
 	}

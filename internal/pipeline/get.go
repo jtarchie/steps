@@ -253,7 +253,6 @@ func (w *planWalk) runTriggeredBuild(
 	// the gate was checked only at trigger time against hand-me-down state;
 	// loud the moment resolution started reading job_versions for real.
 	recordFetchedVersion(ctx, resource.Name, version)
-	recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version)
 
 	fetchCtx, placed := withPlacementSink(ctx)
 
@@ -272,6 +271,10 @@ func (w *planWalk) runTriggeredBuild(
 
 		return err
 	}
+
+	// Only now that the fetch (and its hooks) actually succeeded: recording
+	// it earlier would show resource_checks a version nothing ever fetched.
+	recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version)
 
 	err = w.st.RecordNode(ctx, nodeRecord(node), w.jobName, "succeeded", nil, nil)
 	if err != nil {
@@ -405,7 +408,6 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	}
 
 	recordFetchedVersion(ctx, resource.Name, version)
-	recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version)
 
 	content, err := merkle.GetNodeContent(w.cfg, step, *resourceType, resource.Env, resource.Source, version)
 	if err != nil {
@@ -420,6 +422,10 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	if w.skippable[hash] {
 		fmt.Printf("skip: %s (version: %v)\n", resource.Name, version)
 		logFrom(ctx).Info("job.skip", "resource", resource.Name, "reason", "cached", "hash", hash)
+
+		// A skip means this exact chain already succeeded once — the version
+		// was genuinely fetched, just not by this run.
+		recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version)
 
 		return stepResult{hash: w.parentHash, disposition: stepChainSkipped}, nil
 	}
@@ -450,6 +456,10 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 
 		return stepResult{}, err
 	}
+
+	// Only now that the fetch (and its hooks) actually succeeded: recording
+	// it earlier would show resource_checks a version nothing ever fetched.
+	recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version)
 
 	err = w.st.RecordNode(ctx, nodeRecord(node), w.jobName, "succeeded", nil, nil)
 	if err != nil {

@@ -189,6 +189,249 @@ func TestRunDoesNotAdvanceAPolledResourcesBaseline(t *testing.T) {
 	}
 }
 
+// TestRunDoesNotRecordResolvedVersionOnFetchFailure: a version that fails to
+// fetch must not appear as the resource's "checked" version on the web UI's
+// resources page — that page would then show a version nothing actually
+// retrieved, indistinguishable from a real, successful check. This is what
+// separates recordResolvedVersion's write from recordFetchedVersion's: the
+// latter's effect (recordPassedVersions) is already gated on the whole build
+// succeeding, and recordResolvedVersion must be gated on the FETCH
+// succeeding for the same reason.
+func TestRunDoesNotRecordResolvedVersionOnFetchFailure(t *testing.T) {
+	dir := t.TempDir()
+	feed := filepath.Join(dir, "feed.json")
+	path := filepath.Join(dir, "pipeline.yml")
+
+	pipelineYAML := fmt.Sprintf(`
+resource_types:
+- name: listing
+  config:
+    check: cat %s
+    in: exit 1
+resources:
+- name: items
+  type: listing
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: items
+`, feed)
+
+	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(feed, []byte(`[{"n":"v1"}]`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.OpenStore(filepath.Join(dir, "state.db"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	ctx := context.Background()
+
+	err = runBuild(ctx, t, cfg, st)
+	if err == nil {
+		t.Fatal("RunJob succeeded despite in: exiting 1 — the fetch should have failed")
+	}
+
+	_, found, err := st.LastCheckedVersion(ctx, "items")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if found {
+		t.Error("resource_checks has an entry for items even though its fetch failed — a failed fetch must not be shown as the resource's checked version")
+	}
+}
+
+// TestRunRecordsResolvedVersionForInPlaceGet exercises the OTHER call site of
+// recordResolvedVersion: a job's second get, which — unlike its first —
+// fetches in place inside the first get's triggered build
+// (fetchGetStepInPlace) rather than fanning out its own
+// (runTriggeredBuild, already covered by TestRunRefreshesResourceHistory).
+// Both call the same recordResolvedVersion; only a two-get job proves the
+// in-place one actually runs.
+func TestRunRecordsResolvedVersionForInPlaceGet(t *testing.T) {
+	dir := t.TempDir()
+	feed1 := filepath.Join(dir, "items.json")
+	feed2 := filepath.Join(dir, "extra.json")
+	posted := filepath.Join(dir, "posted.txt")
+	path := filepath.Join(dir, "pipeline.yml")
+
+	pipelineYAML := fmt.Sprintf(`
+resource_types:
+- name: listing1
+  config:
+    check: cat %s
+    in: echo {{ .version.n | shellquote }} > n.txt
+- name: listing2
+  config:
+    check: cat %s
+    in: echo {{ .version.n | shellquote }} > n.txt
+resources:
+- name: items
+  type: listing1
+  source: {}
+- name: extra
+  type: listing2
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: items
+  - get: extra
+  - task: work
+    inputs: [items, extra]
+    run: cat items/n.txt extra/n.txt >> %s
+`, feed1, feed2, posted)
+
+	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(feed1, []byte(`[{"n":"i1"}]`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(feed2, []byte(`[{"n":"e1"}]`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.OpenStore(filepath.Join(dir, "state.db"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	ctx := context.Background()
+
+	err = runBuild(ctx, t, cfg, st)
+	if err != nil {
+		t.Fatalf("RunJob: %v", err)
+	}
+
+	// "extra" is the job's SECOND get — fetched via fetchGetStepInPlace
+	// inside "items"'s triggered build, not via runTriggeredBuild's own call.
+	baseline, _, err := st.LastCheckedVersion(ctx, "extra")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if baseline != `{"n":"e1"}` {
+		t.Errorf("baseline = %s, want e1 — the in-place get path records a resolved version too", baseline)
+	}
+}
+
+// TestRunSkipsResolvedVersionForPassedOnlyResource proves recordResolvedVersion
+// stays out of resource_checks for a resource reached only via passed: (no
+// trigger: anywhere in the pipeline) — config.Config.ResourceIsPolled names
+// it, per PolledResourceNames' doc, as territory the poller owns. A run
+// recording its own resolved version there would corrupt the poller's
+// dirty-bit baseline for a resource nothing has ever polled yet.
+func TestRunSkipsResolvedVersionForPassedOnlyResource(t *testing.T) {
+	dir := t.TempDir()
+	feed := filepath.Join(dir, "feed.json")
+	postedBuild := filepath.Join(dir, "build.txt")
+	postedDeploy := filepath.Join(dir, "deploy.txt")
+	path := filepath.Join(dir, "pipeline.yml")
+
+	pipelineYAML := fmt.Sprintf(`
+resource_types:
+- name: listing
+  config:
+    check: cat %s
+    in: echo {{ .version.n | shellquote }} > n.txt
+resources:
+- name: items
+  type: listing
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: items
+  - task: work
+    inputs: [items]
+    run: cat items/n.txt >> %s
+- name: deploy
+  plan:
+  - get: items
+    passed: [build]
+  - task: work
+    inputs: [items]
+    run: cat items/n.txt >> %s
+`, feed, postedBuild, postedDeploy)
+
+	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(feed, []byte(`[{"n":"v1"}]`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.OpenStore(filepath.Join(dir, "state.db"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	ctx := context.Background()
+
+	provider, err := workspace.NewProvider(nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
+	if err != nil {
+		t.Fatalf("RunJob(build): %v", err)
+	}
+
+	err = RunJob(ctx, cfg, &cfg.Jobs[1], nil, provider, st, false)
+	if err != nil {
+		t.Fatalf("RunJob(deploy): %v", err)
+	}
+
+	// items is referenced only via passed: (no trigger: anywhere), so
+	// ResourceIsPolled names it — recordResolvedVersion must skip it in both
+	// jobs, leaving resource_checks untouched.
+	_, found, err := st.LastCheckedVersion(ctx, "items")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if found {
+		t.Error("resource_checks has an entry for items — a passed:-only resource must be left to the poller, never a run")
+	}
+}
+
 // TestRefreshFailureWarnsAndProceeds: the version record is the truth and
 // checks feed it, so a check outage must not block building what is already
 // known.
