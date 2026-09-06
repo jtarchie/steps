@@ -6,12 +6,19 @@
 <title>{{with .TitleMark}}{{.}} {{end}}{{with .Title}}{{.}} — {{end}}steps</title>
 <link rel="icon" id="favicon" href="{{favicon .TitleMark}}">
 <link rel="stylesheet" href="/static/app.css">
+{{/* Vendored, not from a CDN: this server is expected to run on machines
+     with no route to the internet, and a page whose refresh depends on one
+     is a page that silently stops refreshing there. */}}
+<script src="/static/htmx.min.js" defer></script>
 </head>
 <body>
 
 <div class="statusline">
   <a class="brand" href="/"><b>steps</b> web</a>
-  <nav class="tabs" data-live="tabs" aria-label="Sections">
+  {{/* The badges count work waiting on a person, so they go stale on every
+       page that is left open. Each page that polls names #nav-tabs in its
+       hx-select-oob, which is why this carries an id. */}}
+  <nav class="tabs" id="nav-tabs" aria-label="Sections">
     <a class="tab" {{if eq .Section "jobs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}">jobs</a>
     <a class="tab" {{if eq .Section "runs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/runs">runs</a>
     <a class="tab" {{if eq .Section "resources"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/resources">resources</a>
@@ -282,59 +289,6 @@
   // minute is plenty for text measured in minutes and hours.
   var live = document.querySelector('time[data-elapsed-since]') !== null;
   setInterval(tick, live ? 1000 : 30000);
-})();
-
-// The page refreshes itself in place.
-//
-// Anything marked data-live is re-read from the page's own URL and swapped,
-// so a job that starts, an approval that arrives or a version a check records
-// shows up without the reader pressing reload. The page is its own API: one
-// GET of the same URL, and only the marked elements change — which is what
-// keeps scroll position, the jobs board's list/graph toggle and an open menu,
-// all of which a full reload throws away.
-//
-// The counter marks live but does not by itself make a page poll: it rides on
-// every page including the static ones, and only a page that marks a region
-// of its own has anything worth asking about.
-(function () {
-  if (!document.querySelector('main [data-live]')) return;
-
-  var REFRESH = 2500;
-
-  // One poll at a time. Without the guard, a response slower than the
-  // interval stacks requests and can resolve after a newer one, rewriting a
-  // region with stale rows — the same race the palette's search guards with a
-  // generation token.
-  var inflight = false;
-
-  function refresh() {
-    if (document.hidden || inflight) return;
-    inflight = true;
-
-    fetch(window.location.pathname + window.location.search, { headers: { 'Accept': 'text/html' } })
-      .then(function (r) { return r.text(); })
-      .then(function (html) {
-        var doc = new DOMParser().parseFromString(html, 'text/html');
-
-        document.querySelectorAll('[data-live]').forEach(function (current) {
-          var next = doc.querySelector('[data-live="' + CSS.escape(current.dataset.live) + '"]');
-          if (!next) return;
-          // A swap costs the reader anything they were doing inside the
-          // region: a half-typed approval reason, a selection, a click in
-          // flight. Pay it only for a real change, and never under the cursor.
-          if (next.innerHTML === current.innerHTML) return;
-          if (current.contains(document.activeElement)) return;
-          current.innerHTML = next.innerHTML;
-        });
-      })
-      .catch(function () { /* a missed refresh costs nothing; the next one covers it */ })
-      .then(function () { inflight = false; });
-  }
-
-  setInterval(refresh, REFRESH);
-  document.addEventListener('visibilitychange', function () {
-    if (!document.hidden) refresh();
-  });
 })();
 </script>
 {{block "scripts" .}}{{end}}

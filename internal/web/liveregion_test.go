@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -13,17 +14,22 @@ import (
 //
 // Every page here answers a question whose answer changes while somebody is
 // looking at it: a job starts, an agent parks a question, a check records a
-// version. The page is refreshed by swapping the elements marked `data-live`,
-// so anything that changes and is NOT inside one of them is a line the reader
-// can only get by reloading — which is exactly how the job page sat there
-// saying "No runs recorded yet" through a run it had itself triggered.
+// version. htmx re-reads the page every 2.5s and swaps the elements named in
+// hx-select and hx-select-oob, so anything that changes and is NOT inside one
+// of them is a line the reader can only get by reloading — which is exactly
+// how the job page sat there saying "No runs recorded yet" through a run it
+// had itself triggered.
 //
 // The test renders each page, changes the state behind it, renders again, and
-// insists every line that appeared lies inside a live region. It is a probe
-// for a whole class of bug rather than one instance of it: a new page, or a
-// new stateful section on an old one, fails here until it is marked.
+// insists every line that appeared lies inside a refreshed region. It is a
+// probe for a whole class of bug rather than one instance of it: a new page,
+// or a new stateful section on an old one, fails here until htmx is pointed
+// at it.
 
-// liveRegions returns the byte spans of every element marked data-live.
+// liveRegions returns the byte spans of every element htmx refreshes on this
+// page, read the way htmx itself reads them: an element that polls names its
+// own target in hx-select and everything else it swaps out of band in
+// hx-select-oob, and both name ids.
 //
 // A tag-depth scan rather than a parser: internal/web renders its own
 // templates, the markup is balanced, and adding an HTML parser to this
@@ -33,17 +39,17 @@ func liveRegions(t *testing.T, body string) [][2]int {
 
 	var spans [][2]int
 
-	for at := 0; ; {
-		mark := strings.Index(body[at:], " data-live=")
+	for _, id := range refreshedIDs(body) {
+		mark := strings.Index(body, `id="`+id+`"`)
 		if mark < 0 {
-			break
-		}
+			t.Errorf("htmx refreshes #%s, but nothing on the page has that id", id)
 
-		mark += at
+			continue
+		}
 
 		open := strings.LastIndex(body[:mark], "<")
 		if open < 0 {
-			t.Fatalf("data-live at %d is not inside a tag", mark)
+			t.Fatalf("id=%q at %d is not inside a tag", id, mark)
 		}
 
 		name := body[open+1:]
@@ -52,10 +58,39 @@ func liveRegions(t *testing.T, body string) [][2]int {
 		}
 
 		spans = append(spans, [2]int{open, closeOf(t, body, open, name)})
-		at = mark + 1
 	}
 
 	return spans
+}
+
+// refreshedIDs reads the ids named by every hx-select and hx-select-oob on
+// the page.
+func refreshedIDs(body string) []string {
+	var ids []string
+
+	for _, attr := range []string{` hx-select="`, ` hx-select-oob="`} {
+		for at := 0; ; {
+			mark := strings.Index(body[at:], attr)
+			if mark < 0 {
+				break
+			}
+
+			mark += at + len(attr)
+
+			shut := strings.Index(body[mark:], `"`)
+			if shut < 0 {
+				break
+			}
+
+			for _, ref := range strings.Split(body[mark:mark+shut], ",") {
+				ids = append(ids, strings.TrimPrefix(strings.TrimSpace(ref), "#"))
+			}
+
+			at = mark + shut
+		}
+	}
+
+	return ids
 }
 
 // closeOf finds the index just past the element's closing tag, counting
@@ -235,7 +270,7 @@ func assertChangesAreLive(t *testing.T, path, before, after string) {
 		fresh++
 
 		if !within(regions, start) {
-			t.Errorf("this line changed but sits outside every data-live region,\n"+
+			t.Errorf("this line changed but sits outside every region htmx refreshes,\n"+
 				"so a reader only sees it by reloading %s:\n\t%s", path, strings.TrimSpace(line))
 		}
 	}
@@ -244,12 +279,11 @@ func assertChangesAreLive(t *testing.T, path, before, after string) {
 		t.Fatal("the state change did not alter this page at all — the probe proves nothing")
 	}
 
-	// The poller is gated on a region inside <main>: the nav's badges are
-	// marked live too, and a page whose only marked region were the shared
-	// chrome would never ask the server anything.
-	main := strings.Index(after, "<main>")
-	if main < 0 || !within(regions, strings.Index(after[main:], " data-live=")+main) {
-		t.Error("no live region inside <main>, so this page never polls at all")
+	// Something on the page has to actually ASK. Every id above could be
+	// named by an hx-select on a page whose poller sits in the chrome, or on
+	// no element at all — regions nothing polls are regions nothing refreshes.
+	if !strings.Contains(after, "hx-trigger=") {
+		t.Error("no hx-trigger on this page, so it never polls at all")
 	}
 }
 
@@ -271,5 +305,47 @@ func startRunningBuild(t *testing.T, pipeline *Pipeline) {
 	err := pipeline.Store.StartRun(context.Background(), "run-1", "build", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
+	}
+}
+
+// TestLiveRegionsAreDrivenByHtmx: the attributes above are inert markup
+// unless the library that reads them is actually on the page and actually
+// served, which is the seam a template-only assertion never crosses.
+//
+// The two modifiers are load-bearing and neither is htmx's default. outerMorph
+// reconciles the existing DOM instead of replacing it, which is what lets the
+// approvals and questions regions — forms somebody is typing a reason into —
+// be refreshed at all; a plain outerHTML swap empties the input every 2.5
+// seconds. The [!document.hidden] filter is what stops a forgotten background
+// tab polling this server forever. Overlapping polls need no guard of ours:
+// htmx's hx-sync defaults to `drop`, so a poll issued while one is in flight
+// is ignored rather than queued behind it.
+func TestLiveRegionsAreDrivenByHtmx(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+
+	_, body := get(t, server, "/p/demo/runs")
+
+	if !strings.Contains(body, `<script src="/static/htmx.min.js"`) {
+		t.Error("the page carries hx- attributes but never loads htmx")
+	}
+
+	for want, missing := range map[string]string{
+		`hx-swap="outerMorph"`:                       "morph swap, so a swap empties the form under a reader",
+		`hx-trigger="every 2.5s [!document.hidden]"`: "hidden-tab filter, so a forgotten tab polls forever",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("live region has no %s", missing)
+		}
+	}
+
+	code, script := get(t, server, "/static/htmx.min.js")
+	if code != http.StatusOK {
+		t.Fatalf("GET /static/htmx.min.js = %d — the library is referenced but not served", code)
+	}
+
+	if !strings.Contains(script, "hx-select-oob") {
+		t.Error("the served htmx does not know hx-select-oob, which every page depends on")
 	}
 }

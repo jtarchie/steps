@@ -251,6 +251,14 @@ td.faint, .faint { color: var(--faint); }
 
 /* ---- dependency graph ----
    Server-laid-out SVG; the pane scrolls sideways like every wide table. */
+/* Which of the two views is showing lives on <body>, not on the views
+   themselves: both are swapped by the page refresh, and a `hidden` attribute
+   or an inline style set by the toggle would be replaced by the server's
+   every 2.5 seconds — the graph would snap back to hidden under a reader
+   who had chosen it. */
+body:not([data-view="graph"]) #jobs-graph { display: none; }
+body[data-view="graph"] #jobs-list { display: none; }
+
 .dagwrap {
   border: 1px solid var(--line);
   background: var(--panel);

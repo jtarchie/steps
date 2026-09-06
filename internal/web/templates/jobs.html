@@ -7,7 +7,7 @@
 </h1>
 <p class="metaline">{{len .Jobs}} jobs<span class="sep">·</span>{{.Nav.CurrentPath}}</p>
 
-<div class="dagwrap" id="jobs-graph" data-live="jobs-graph" hidden>
+<div class="dagwrap" id="jobs-graph">
   {{/* role=group, not img: an image's children are presentational, which
        would flatten every job link and status word out of the a11y tree. */}}
   <svg class="dag" width="{{.Graph.W}}" height="{{.Graph.H}}" viewBox="0 0 {{.Graph.W}} {{.Graph.H}}" role="group" aria-label="Job dependency graph">
@@ -22,7 +22,7 @@
   <p class="rail">edges are get-step passed: constraints — hover one for the resource it carries</p>
 </div>
 
-<div class="tablewrap" id="jobs-list" data-live="jobs-list">
+<div class="tablewrap" id="jobs-list" hx-get="{{.Nav.URL}}" hx-trigger="every 2.5s [!document.hidden]" hx-select="#jobs-list" hx-swap="outerMorph" hx-select-oob="#jobs-graph,#queue-region,#nav-tabs">
   <table>
     <thead>
       <tr><th>Job</th><th>Latest run</th><th>Started</th><th class="num">Duration</th><th>Depends on</th><th>Breaker</th></tr>
@@ -47,7 +47,7 @@
   </table>
 </div>
 
-<div id="queue-region" data-live="queue">
+<div id="queue-region">
 {{if .Queue}}
 <h2 class="eyebrow">Trigger queue</h2>
 <div class="tablewrap">
@@ -74,9 +74,7 @@
 (function () {
   document.querySelectorAll('.viewtoggle button').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      var graph = btn.dataset.view === 'graph';
-      document.getElementById('jobs-graph').hidden = !graph;
-      document.getElementById('jobs-list').style.display = graph ? 'none' : '';
+      document.body.dataset.view = btn.dataset.view;
       document.querySelectorAll('.viewtoggle button').forEach(function (b) {
         b.setAttribute('aria-pressed', String(b === btn));
       });

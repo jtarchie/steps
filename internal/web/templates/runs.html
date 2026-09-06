@@ -3,7 +3,7 @@
 
 {{/* The count sits inside the refreshed region, or it reads whatever it said
      at load while the refresh fills the table under it. */}}
-<div id="runs-region" data-live="runs">
+<div id="runs-region" hx-get="{{.Nav.URL}}" hx-trigger="every 2.5s [!document.hidden]" hx-select="#runs-region" hx-swap="outerMorph" hx-select-oob="#nav-tabs">
 <p class="metaline">{{len .Runs}} recent runs<span class="sep">·</span>{{.Nav.CurrentPath}}</p>
 
 {{if .Runs}}

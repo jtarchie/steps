@@ -2,7 +2,7 @@
 <h1 class="prompt"><b>steps resources</b></h1>
 <p class="metaline">{{len .Resources}} resources<span class="sep">·</span>versions recorded by check</p>
 
-<div data-live="resources">
+<div id="resources-region" hx-get="{{.Nav.URL}}" hx-trigger="every 2.5s [!document.hidden]" hx-select="#resources-region" hx-swap="outerMorph" hx-select-oob="#nav-tabs">
 <div class="tablewrap">
   <table>
     <thead><tr><th>Resource</th><th>Type</th><th>Latest version</th><th>Checked</th></tr></thead>

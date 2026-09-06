@@ -107,31 +107,6 @@ func TestRunsPageCountLivesInsideTheRefreshRegion(t *testing.T) {
 	}
 }
 
-// TestSharedRefreshGuardsWhatASwapCosts: the one refresh loop every page
-// shares must not stack requests when a response is slow — an older response
-// resolving after a newer one rewrote a region with stale rows (the same race
-// the palette guards with a generation token) — must not cost the reader
-// their selection or an in-progress click on markup that did not change, and
-// must not swap a region the reader is typing in, which is the whole approvals
-// and questions form.
-func TestSharedRefreshGuardsWhatASwapCosts(t *testing.T) {
-	t.Parallel()
-
-	server, _ := testPipeline(t)
-
-	_, body := get(t, server, "/p/demo/runs")
-
-	for want, missing := range map[string]string{
-		"inflight":                                 "in-flight guard",
-		"next.innerHTML === current.innerHTML":     "check for unchanged markup",
-		"current.contains(document.activeElement)": "guard against swapping under the cursor",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("refresh script has no %s", missing)
-		}
-	}
-}
-
 // TestRunsPageEmptyState says something rather than rendering a bare table.
 func TestRunsPageEmptyState(t *testing.T) {
 	t.Parallel()

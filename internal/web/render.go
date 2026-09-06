@@ -127,13 +127,25 @@ func sectionOf(page string) string {
 
 // handleCSS serves the stylesheet from the embedded assets.
 func (s *Server) handleCSS(c echo.Context) error {
-	data, err := assets.ReadFile("static/app.css")
+	return serveAsset(c, "static/app.css", "text/css; charset=utf-8")
+}
+
+// handleHTMX serves the vendored copy of htmx, which drives every live region
+// in the UI. Vendored and embedded rather than pulled from a CDN: this server
+// is expected to run where there is no route to one, and a refresh that
+// silently stops working there is worse than no refresh at all.
+func (s *Server) handleHTMX(c echo.Context) error {
+	return serveAsset(c, "static/htmx.min.js", "text/javascript; charset=utf-8")
+}
+
+func serveAsset(c echo.Context, path, contentType string) error {
+	data, err := assets.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
 	//nolint:wrapcheck // echo's blob error is returned verbatim
-	return c.Blob(http.StatusOK, "text/css; charset=utf-8", data)
+	return c.Blob(http.StatusOK, contentType, data)
 }
 
 // templateFuncs are the formatting decisions the templates share. They live
