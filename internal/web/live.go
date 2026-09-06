@@ -20,7 +20,6 @@ package web
 // fix; there is now nothing for the two to disagree about.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -98,6 +97,8 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
+
+	drawn.seed(folder.run.Steps)
 
 	response := openStream(c)
 
@@ -288,12 +289,14 @@ func resumeFrom(c echo.Context) int64 {
 // flushEvents writes what changed since seq and returns the new high-water
 // mark.
 //
-// The unit is a ROOT step, not an event: a step's row shows facts no single
-// event carries — a container's rollup changes when its third child finishes,
-// and nothing publishes an event on the container — so the fragment is
-// re-rendered from the assembled view, which is the same one the page
-// renders. Only the roots the flushed events touched are sent, which is what
-// keeps a page-sized payload off the wire for a one-line change.
+// What a flush sends is the smallest unit that leaves the page right, per
+// row: a whole row only when the reader lacks it or it closed, a turn's own
+// markup when an agent spoke, and a container's attributes and head — its
+// shell — when a step under it came or went, because that changes its rollup
+// and nothing publishes an event on the container. Sending the root's whole
+// subtree instead was measured quadratic: flush k of an agent step re-shipped
+// k turns, and a container re-shipped every child on each event under it.
+// See framer.
 func (s *Server) flushEvents(
 	c echo.Context, run store.RunRow, after int64, drawn *sentRows, folder *runFolder,
 ) (int64, error) {
@@ -345,15 +348,10 @@ func (s *Server) flushBatch(
 	// The fold says what it touched, rather than this reading it off the rows:
 	// the two disagree for a sub-agent's turns, which name a step no row ever
 	// opened. See runFolder.add.
-	touched := folder.add(rows, nodes)
+	changes := folder.add(rows, nodes)
 	after = rows[len(rows)-1].Seq
 
 	view := folder.view(run)
-
-	// The `step` template reads one thing off the nav — the slug its node
-	// links are scoped by — and s.nav() would buy that with the two pending
-	// counts nothing in a row displays, 2.5 times a second per watcher.
-	page := map[string]any{"Nav": navData{Current: pipeline.Slug}, "Run": view}
 
 	// ONE message per flush, however many rows changed. The id a browser
 	// resends on a reconnect names the last message it applied, so a flush
@@ -362,47 +360,235 @@ func (s *Server) flushBatch(
 	// an appended row skipped that way is gone for the rest of the run —
 	// every later flush renders it as a swap onto an id the page never drew.
 	// Whole flush or nothing.
-	var frame strings.Builder
+	frame := framer{
+		server: s,
+		// The `step` template reads one thing off the nav — the slug its
+		// node links are scoped by — and s.nav() would buy that with the two
+		// pending counts nothing in a row displays, 2.5 times a second per
+		// watcher.
+		page:    map[string]any{"Nav": navData{Current: pipeline.Slug}, "Run": view},
+		drawn:   drawn,
+		changes: changes,
+	}
 
 	for _, root := range view.Roots {
-		if !subtreeTouched(root, touched) {
-			continue
-		}
-
-		// A row the reader has is morphed onto it; one they do not have is
-		// appended, because there is nothing there to morph — and htmx drops
-		// an out-of-band swap at a missing id without a word.
-		oob := drawn.has(root)
-		if !oob {
-			// Retracted in the same frame and AHEAD of the append that
-			// re-draws them nested, because htmx applies out-of-band swaps in
-			// the order they arrive. See adopted().
-			for _, orphan := range adopted(root, drawn.has) {
-				fmt.Fprintf(&frame, `<div id="%s" hx-swap-oob="delete"></div>`, orphan.Anchor())
-			}
-		}
-
-		fragment, err := s.renderStep(page, root, oob)
+		err := frame.visit(root, nil)
 		if err != nil {
 			return after, endStream(c, run.ID, err)
 		}
-
-		frame.WriteString(fragment)
-		drawn.drew(root)
 	}
 
-	if frame.Len() == 0 {
+	if frame.out.Len() == 0 {
 		return after, nil
 	}
 
-	writeFrame(c.Response(), after, frame.String())
+	writeFrame(c.Response(), after, frame.out.String())
 
 	c.Response().Flush()
 
 	return after, nil
 }
 
-// sentRows answers, for one connection, whether the reader already has a row.
+// framer builds one flush's frame by walking the tree and choosing, per row,
+// the smallest fragment that leaves the reader's page identical to a reload.
+//
+// Four fragments exist, and the choice is made top-down so that a row sent
+// whole covers everything under it:
+//
+//   - a row the reader lacks is sent whole and APPENDED — into its parent's
+//     substeps, or the transcript for a root;
+//   - a row that opened, closed or printed is sent whole and MORPHED over
+//     the copy the reader has, because those change its body in ways an
+//     append cannot express (the answer an agent ends on is the turn the
+//     page then drops);
+//   - a running agent's new turns are APPENDED to its body, each one drawn
+//     by the same `turn` template the page uses, and the row is not re-sent;
+//   - a container whose descendants came or went gets its SHELL — the
+//     attributes and head, where the rollup and the active rail live — and
+//     nothing it holds, because the children that did not move are already
+//     right and the ones that did are sent on their own.
+//
+// The shell is the fragment that depends on htmx: an outerMorph carrying
+// hx-morph-skip-children syncs the element's attributes and leaves its
+// children alone. See the template.
+type framer struct {
+	server  *Server
+	page    map[string]any
+	drawn   *sentRows
+	changes map[string]stepChange
+	out     strings.Builder
+}
+
+func (f *framer) visit(step *stepView, parent *stepView) error {
+	switch {
+	case !f.drawn.has(step):
+		return f.appendRow(step, parent)
+	case f.wantsWhole(step):
+		return f.morphRow(step)
+	}
+
+	if f.changes[step.Key()].Turns > 0 {
+		err := f.appendTurns(step)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Decided before the children are visited: a visit marks what it sends
+	// as drawn, and this asks what the reader was missing.
+	if descendantsMoved(step, f.drawn, f.changes) {
+		err := f.render("stepshell", stepCtx{Page: f.page, Step: step, OOB: true})
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, child := range step.Children {
+		err := f.visit(child, step)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// wantsWhole reports a row the reader has that only a whole re-send leaves
+// right: it opened, closed or printed; every child under it is new, so their
+// copy holds no substeps element to append into; or it gained turns that
+// cannot be appended — their copy has no body yet (the row was drawn before
+// its first turn), or the step has finished, and the page then drops the
+// turn that repeats the answer, which is a change to what is already drawn.
+func (f *framer) wantsWhole(step *stepView) bool {
+	change := f.changes[step.Key()]
+	if change.Opened || change.Closed || change.Other {
+		return true
+	}
+
+	if change.Turns > 0 && (f.drawn.turns[step.Key()] == 0 || !step.Running()) {
+		return true
+	}
+
+	return f.firstChildren(step)
+}
+
+// appendRow sends a row the reader does not have, whole, to be appended
+// under its parent — or to the transcript when it has none. htmx drops an
+// out-of-band swap at a missing id without a word, so a missing row is never
+// morphed.
+func (f *framer) appendRow(step *stepView, parent *stepView) error {
+	// Retracted in the same frame and AHEAD of the append that re-draws them
+	// nested, because htmx applies out-of-band swaps in the order they
+	// arrive. See adopted().
+	for _, orphan := range adopted(step, f.drawn.has) {
+		fmt.Fprintf(&f.out, `<div id="%s" hx-swap-oob="delete"></div>`, orphan.Anchor())
+	}
+
+	target := "#transcript"
+	if parent != nil {
+		target = "#" + parent.Anchor() + "_substeps"
+	}
+
+	// beforeend strips this wrapper and appends what is inside it, which is
+	// how a row that does not exist yet gets onto the page at all.
+	fmt.Fprintf(&f.out, `<div hx-swap-oob="beforeend:%s">`, target)
+
+	err := f.render("step", stepCtx{Page: f.page, Step: step})
+	if err != nil {
+		return err
+	}
+
+	f.out.WriteString(`</div>`)
+	f.drawn.drew(step)
+
+	return nil
+}
+
+// morphRow sends a row the reader has, whole, to be morphed over their copy.
+func (f *framer) morphRow(step *stepView) error {
+	err := f.render("step", stepCtx{Page: f.page, Step: step, OOB: true})
+	if err != nil {
+		return err
+	}
+
+	f.drawn.drew(step)
+
+	return nil
+}
+
+// appendTurns sends the turns the reader has not seen, appended to the body
+// of a running agent's row. wantsWhole has already ruled out the rows this
+// cannot be done to.
+func (f *framer) appendTurns(step *stepView) error {
+	shown := f.drawn.turns[step.Key()]
+
+	fmt.Fprintf(&f.out, `<div hx-swap-oob="beforeend:#%s_body">`, step.Anchor())
+
+	for _, turn := range step.Turns[shown:] {
+		err := f.render("turn", turn)
+		if err != nil {
+			return err
+		}
+	}
+
+	f.out.WriteString(`</div>`)
+	f.drawn.turns[step.Key()] = len(step.Turns)
+
+	return nil
+}
+
+// firstChildren reports a step whose children are all new to the reader:
+// their copy of the row was drawn with none, so it carries no substeps
+// element for an append to land in.
+func (f *framer) firstChildren(step *stepView) bool {
+	if len(step.Children) == 0 {
+		return false
+	}
+
+	for _, child := range step.Children {
+		if f.drawn.has(child) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (f *framer) render(name string, data any) error {
+	tmpl, ok := f.server.renderer.pages["run"]
+	if !ok {
+		return fmt.Errorf("web: no run template to render %q with", name)
+	}
+
+	err := tmpl.ExecuteTemplate(&f.out, name, data)
+	if err != nil {
+		return fmt.Errorf("web: could not render %s: %w", name, err)
+	}
+
+	return nil
+}
+
+// descendantsMoved reports whether a step under this one came or went this
+// flush — the changes a container's rollup and active rail show, and the
+// only ones that reach a row from below. A turn or an output under it does
+// not.
+func descendantsMoved(step *stepView, drawn *sentRows, changes map[string]stepChange) bool {
+	for _, child := range step.Children {
+		change := changes[child.Key()]
+		if !drawn.has(child) || change.Opened || change.Closed {
+			return true
+		}
+
+		if descendantsMoved(child, drawn, changes) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// sentRows answers, for one connection, what the reader's page already holds:
+// which rows, and how many turns each shows.
 //
 // A row is theirs if the event that put it on the page came at or before the
 // sequence they resumed from — the page they are looking at was rendered from
@@ -419,10 +605,14 @@ func (s *Server) flushBatch(
 type sentRows struct {
 	origin int64
 	sent   map[string]bool
+	// turns is how many of a row's turns the reader's copy shows, which is
+	// where the next append starts. Seeded from the fold for the rows the
+	// page drew, and set by every whole-row send after that.
+	turns map[string]int
 }
 
 func newSentRows(origin int64) *sentRows {
-	return &sentRows{origin: origin, sent: map[string]bool{}}
+	return &sentRows{origin: origin, sent: map[string]bool{}, turns: map[string]int{}}
 }
 
 // has reports whether the reader's page already carries this row.
@@ -430,8 +620,25 @@ func (s *sentRows) has(step *stepView) bool {
 	return step.FirstSeq <= s.origin || s.sent[step.Key()]
 }
 
-// drew records a row this connection has sent.
-func (s *sentRows) drew(step *stepView) { s.sent[step.Key()] = true }
+// drew records a row this connection has sent whole — and with it everything
+// under it, because a row goes over with its subtree and a child drawn that
+// way must not be appended a second time on its own.
+func (s *sentRows) drew(step *stepView) {
+	s.sent[step.Key()] = true
+	s.turns[step.Key()] = len(step.Turns)
+
+	for _, child := range step.Children {
+		s.drew(child)
+	}
+}
+
+// seed records what the page drew for each row the reader already has, so
+// the first append to any of them starts after the turns they can see.
+func (s *sentRows) seed(steps []*stepView) {
+	for _, step := range steps {
+		s.turns[step.Key()] = len(step.Turns)
+	}
+}
 
 // adopted names the rows the reader already has that this step is about to
 // draw again INSIDE itself.
@@ -460,47 +667,6 @@ func adopted(step *stepView, has func(*stepView) bool) []*stepView {
 	}
 
 	return found
-}
-
-// subtreeTouched reports whether any step in this root's subtree was named by
-// the flushed events.
-func subtreeTouched(step *stepView, touched map[string]bool) bool {
-	if touched[step.Key()] {
-		return true
-	}
-
-	for _, child := range step.Children {
-		if subtreeTouched(child, touched) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// renderStep renders one step's subtree with the page's own `step` template.
-// oob asks for the attribute that swaps it over the row already on the page;
-// without it the fragment is wrapped to be appended to the transcript.
-func (s *Server) renderStep(page map[string]any, step *stepView, oob bool) (string, error) {
-	tmpl, ok := s.renderer.pages["run"]
-	if !ok {
-		return "", fmt.Errorf("web: no run template to render %q with", step.Name)
-	}
-
-	var out bytes.Buffer
-
-	err := tmpl.ExecuteTemplate(&out, "step", stepCtx{Page: page, Step: step, OOB: oob})
-	if err != nil {
-		return "", fmt.Errorf("web: could not render step %q: %w", step.Name, err)
-	}
-
-	if oob {
-		return out.String(), nil
-	}
-
-	// beforeend strips this wrapper and appends what is inside it, which is
-	// how a row that does not exist yet gets onto the page at all.
-	return `<div hx-swap-oob="beforeend:#transcript">` + out.String() + `</div>`, nil
 }
 
 // frameLines cuts a fragment into the data lines one SSE message carries.

@@ -192,15 +192,58 @@
      and this needs both the page (for pipeline-scoped links) and the step. */}}
 {{define "step"}}
 {{$page := .Page}}{{$step := .Step}}{{$run := .Page.Run}}
-{{$detail := $step.HasDetail $run.JobError}}
 {{$anchor := $step.Anchor}}
-<div id="{{$anchor}}"{{if .OOB}} hx-swap-oob="outerMorph"{{end}} class="step{{if $step.Skipped}} skipped{{else if $step.Failed}} failed{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail (or $step.Failed $step.Turns $step.Container)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}">
-  <div class="stephead"{{if $detail}} role="button" tabindex="0"{{end}}>
+<div id="{{$anchor}}"{{if .OOB}} hx-swap-oob="outerMorph"{{end}}{{template "stepattrs" .}}>
+  {{template "stephead" (stepctx $page $step)}}
+  {{if $step.HasBody $run.JobError}}<div class="stepbody" id="{{$anchor}}_body">
+    {{with $step.DistinctError $run.JobError}}<div class="log"><span class="err">{{.}}</span></div>{{end}}
+    {{if $step.Reason}}<div class="log">{{$step.Reason}}{{if $step.Hash}} · content hash {{short $step.Hash}}{{end}}</div>{{end}}
+    {{range $step.Outputs}}<pre class="log output">{{jsonPre .}}</pre>{{end}}
+
+    {{range $step.Conversation}}{{template "turn" .}}{{end}}
+
+    {{range $step.Trajectory}}
+    <div class="turn tool">
+      <span class="who">tool</span>
+      <div class="what"><code>{{.Name}}</code>{{if not .OK}}<span class="note">failed</span>{{end}}{{template "jsonvalue" (jsonValue .ArgsJSON)}}</div>
+    </div>
+    {{end}}
+
+    {{if $step.Response}}
+    <div class="turn answer">
+      <span class="who">answer</span>
+      <div class="response">{{template "prosebody" $step.Response}}</div>
+    </div>
+    {{end}}
+    {{if $step.Note}}<div class="agentmeta">note: {{$step.Note}}</div>{{end}}
+  </div>{{end}}
+  {{if $step.Container}}<div class="substeps" id="{{$anchor}}_substeps">
+    {{range $step.Children}}{{template "step" (stepctx $page .)}}{{end}}
+  </div>{{end}}
+</div>
+{{end}}
+
+{{/* The row's own attributes, in one place because two things draw them:
+     the row, and the shell the stream sends when only these moved — a
+     container whose child finished changes class and rollup and nothing
+     under it. Rendered INSIDE the opening tag, so it starts with a space. */}}
+{{define "stepattrs"}}{{$step := .Step}}{{$detail := $step.HasDetail .Page.Run.JobError}} class="step{{if $step.Skipped}} skipped{{else if $step.Failed}} failed{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail (or $step.Failed $step.Turns $step.Container)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}"{{end}}
+
+{{/* The shell: a row's attributes and head, and nothing it holds. The
+     attribute-only morph is what hx-morph-skip-children buys — htmx syncs the
+     attributes off the new element first and only then asks whether to leave
+     the children alone, so carrying the attribute on the fragment protects the
+     body and substeps the reader already has. Verified against the vendored
+     build; see TestVendoredHtmxStillSupportsWhatTheStreamSends. */}}
+{{define "stepshell"}}<div id="{{.Step.Anchor}}" hx-swap-oob="outerMorph" hx-morph-skip-children{{template "stepattrs" .}}></div>
+{{template "stephead" .}}{{end}}
+
+{{define "stephead"}}{{$page := .Page}}{{$step := .Step}}{{$detail := $step.HasDetail .Page.Run.JobError}}<div class="stephead" id="{{$step.Anchor}}_head"{{if .OOB}} hx-swap-oob="outerMorph"{{end}}{{if $detail}} role="button" tabindex="0"{{end}}>
     <span class="chev{{if $detail}} chev-icon{{end}}"></span>
     {{if $step.Skipped}}<span class="stmark" role="img" aria-label="skipped">–</span>{{else if $step.Failed}}<span class="stmark" role="img" aria-label="failed">✗</span>{{else if $step.Running}}<span class="stmark" role="img" aria-label="running">◐</span>{{else}}<span class="stmark" role="img" aria-label="passed">✓</span>{{end}}
     <span class="kind">{{$step.Kind}}</span>
     <span class="name">{{$step.Name}}</span>
-    <a class="anchor" href="#{{$anchor}}" title="Link to this step" aria-label="Link to this step">#</a>
+    <a class="anchor" href="#{{$step.Anchor}}" title="Link to this step" aria-label="Link to this step">#</a>
     {{if $step.Reason}}<span class="note">{{$step.Reason}}</span>{{end}}
     {{if $step.Verdict}}<span class="note">verdict: {{$step.Verdict}}</span>{{end}}
     {{if $step.WrappedUp}}<span class="note spendwarn" title="The turn budget ran out; this answer was written from what the model had already gathered">stopped early</span>{{end}}
@@ -220,13 +263,12 @@
         {{if $step.Running}}<span class="cursor">▍</span>{{end}}
       </span>
     </span>
-  </div>
-  {{if $step.HasBody $run.JobError}}<div class="stepbody">
-    {{with $step.DistinctError $run.JobError}}<div class="log"><span class="err">{{.}}</span></div>{{end}}
-    {{if $step.Reason}}<div class="log">{{$step.Reason}}{{if $step.Hash}} · content hash {{short $step.Hash}}{{end}}</div>{{end}}
-    {{range $step.Outputs}}<pre class="log output">{{jsonPre .}}</pre>{{end}}
+  </div>{{end}}
 
-    {{range $step.Conversation}}
+{{/* One turn of an agent's conversation. Its own template because the stream
+     APPENDS turns to a running step's body one at a time — the row is not
+     re-sent for each — and the page draws them through the same one. */}}
+{{define "turn"}}
     <div class="turn {{if eq .Type "agent_text"}}model{{else}}tool{{end}}{{if .Nested}} nested{{end}}">
       <span class="who">{{if eq .Type "agent_text"}}model{{else if eq .Type "agent_call"}}tool{{else if eq .Type "agent_result"}}result{{else}}delegate{{end}}</span>
       <div class="what">
@@ -235,25 +277,4 @@
         {{if .Detail}}{{template "jsonvalue" (jsonValue .Detail)}}{{end}}
       </div>
     </div>
-    {{end}}
-
-    {{range $step.Trajectory}}
-    <div class="turn tool">
-      <span class="who">tool</span>
-      <div class="what"><code>{{.Name}}</code>{{if not .OK}}<span class="note">failed</span>{{end}}{{template "jsonvalue" (jsonValue .ArgsJSON)}}</div>
-    </div>
-    {{end}}
-
-    {{if $step.Response}}
-    <div class="turn answer">
-      <span class="who">answer</span>
-      <div class="response">{{template "prosebody" $step.Response}}</div>
-    </div>
-    {{end}}
-    {{if $step.Note}}<div class="agentmeta">note: {{$step.Note}}</div>{{end}}
-  </div>{{end}}
-  {{if $step.Container}}<div class="substeps">
-    {{range $step.Children}}{{template "step" (stepctx $page .)}}{{end}}
-  </div>{{end}}
-</div>
 {{end}}

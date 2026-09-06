@@ -188,7 +188,7 @@ func subtreeOf(t *testing.T, body, kind string) string {
 
 	rest := body[start:]
 
-	open := strings.Index(rest, `<div class="substeps">`)
+	open := strings.Index(rest, `<div class="substeps"`)
 	if open < 0 {
 		t.Fatalf("step of kind %q renders no subtree", kind)
 	}

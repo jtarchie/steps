@@ -788,25 +788,53 @@ func newRunFolder() *runFolder {
 	return &runFolder{index: map[string]int{}}
 }
 
-// add folds one batch of events in, in order, reporting which steps' rows
-// changed as a result.
+// stepChange is what one batch of events did to a step's row, in the terms
+// the live stream decides by: whether the row itself came or went, how many
+// turns were hung under it, and whether anything else about it moved.
+//
+// Turns are counted rather than flagged because they are the one change the
+// stream can send as an APPEND — the turn's own markup, not the row's — and
+// only when nothing else about the row moved in the same batch. An agent step
+// that spoke three hundred times used to be re-sent whole on each of them.
+type stepChange struct {
+	Opened bool
+	Closed bool
+	Other  bool
+	Turns  int
+}
+
+// merge folds a later change on the same row into this one.
+func (c stepChange) merge(other stepChange) stepChange {
+	return stepChange{
+		Opened: c.Opened || other.Opened,
+		Closed: c.Closed || other.Closed,
+		Other:  c.Other || other.Other,
+		Turns:  c.Turns + other.Turns,
+	}
+}
+
+func (c stepChange) any() bool { return c.Opened || c.Closed || c.Other || c.Turns > 0 }
+
+// add folds one batch of events in, in order, reporting what changed on
+// which steps' rows as a result.
 //
 // The fold reports it rather than the caller reading it off the events,
 // because the two disagree exactly where it matters: a sub-agent's turns
 // carry the CHILD's name, and attachTurn hangs them on the plan step still
 // running. A caller deriving the set from stepKey(row) alone therefore holds
-// a key belonging to no row — and the live stream, which sends only the roots
+// a key belonging to no row — and the live stream, which sends only the rows
 // its batch named, sent NOTHING for the whole of a sub-agent conversation.
-func (f *runFolder) add(rows []store.RunEventRow, results map[string]store.NodeRow) map[string]bool {
-	touched := make(map[string]bool, len(rows))
+func (f *runFolder) add(rows []store.RunEventRow, results map[string]store.NodeRow) map[string]stepChange {
+	touched := make(map[string]stepChange, len(rows))
 
 	for _, row := range rows {
 		if row.Seq > f.run.LastSeq {
 			f.run.LastSeq = row.Seq
 		}
 
-		if position, changed := f.fold(row, results); changed {
-			touched[f.run.Steps[position].Key()] = true
+		if position, change := f.fold(row, results); change.any() {
+			key := f.run.Steps[position].Key()
+			touched[key] = touched[key].merge(change)
 		}
 	}
 
@@ -814,8 +842,8 @@ func (f *runFolder) add(rows []store.RunEventRow, results map[string]store.NodeR
 }
 
 // fold applies one event, reporting the position of the step whose row it
-// changed — which is not always the step the event names. See add.
-func (f *runFolder) fold(row store.RunEventRow, results map[string]store.NodeRow) (int, bool) {
+// changed — which is not always the step the event names — and how. See add.
+func (f *runFolder) fold(row store.RunEventRow, results map[string]store.NodeRow) (int, stepChange) {
 	switch row.Type {
 	case events.TypeJobFinished:
 		if row.Text != "" {
@@ -824,23 +852,27 @@ func (f *runFolder) fold(row store.RunEventRow, results map[string]store.NodeRow
 	case events.TypeStepStarted:
 		openStep(&f.run, f.index, row)
 
-		return f.index[stepKey(row)], true
+		return f.index[stepKey(row)], stepChange{Opened: true}
 	case events.TypeStepFinished, events.TypeStepSkipped:
-		return closeStep(&f.run, f.index, row, results)
+		if position, closed := closeStep(&f.run, f.index, row, results); closed {
+			return position, stepChange{Closed: true}
+		}
 	case events.TypeStepOutput:
 		attachOutput(&f.run, f.index, row)
 
-		return f.index[stepKey(row)], true
+		return f.index[stepKey(row)], stepChange{Other: true}
 	default:
 		// Agent conversation traffic; anything unrecognized is ignored
 		// rather than rendered, so an event type added later cannot break
 		// an older reader.
 		if isAgentTraffic(row.Type) {
-			return attachTurn(&f.run, f.index, row)
+			if position, hung := attachTurn(&f.run, f.index, row); hung {
+				return position, stepChange{Turns: 1}
+			}
 		}
 	}
 
-	return 0, false
+	return 0, stepChange{}
 }
 
 // view is what has been folded so far, with the tree hung and the run row as
@@ -1202,9 +1234,11 @@ type stepCtx struct {
 	Page map[string]any
 	Step *stepView
 	// OOB marks the ROOT of a fragment the live stream is sending, so it
-	// carries the attribute that swaps it over the row already on the page.
-	// Set only on the outermost step: the children rendered under it are
-	// inside that row, and an out-of-band swap on each of them would fight
-	// the one swapping their parent.
+	// carries the attribute that swaps it over the element already on the
+	// page — the row for the `step` template, the head for `stephead`. Set
+	// only on the outermost element: everything rendered under it is inside
+	// that fragment, and htmx lifts any nested element carrying the attribute
+	// OUT of the fragment to swap it on its own, which would leave the parent
+	// morphed without it.
 	OOB bool
 }
