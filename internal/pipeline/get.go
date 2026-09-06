@@ -253,6 +253,7 @@ func (w *planWalk) runTriggeredBuild(
 	// the gate was checked only at trigger time against hand-me-down state;
 	// loud the moment resolution started reading job_versions for real.
 	recordFetchedVersion(ctx, resource.Name, version)
+	recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version)
 
 	fetchCtx, placed := withPlacementSink(ctx)
 
@@ -404,6 +405,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	}
 
 	recordFetchedVersion(ctx, resource.Name, version)
+	recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version)
 
 	content, err := merkle.GetNodeContent(w.cfg, step, *resourceType, resource.Env, resource.Source, version)
 	if err != nil {

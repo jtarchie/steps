@@ -41,39 +41,14 @@ var ErrNoTriggers = errors.New("no get step in any job sets trigger: true; there
 // A get step's resource: alias is resolved to the underlying resource name
 // (see config.Step.GetResourceName), so two gets aliasing the same resource
 // poll it once and a version change affects every job that references it.
+//
+// Delegates to config.Config.PolledResourceNames, which carries the full
+// doc on why passed: counts alongside trigger: true — internal/pipeline
+// needs the same predicate (to know which resources NOT to touch when
+// recording a run's resolved version) and cannot import this package, since
+// this package already imports internal/pipeline.
 func Resources(cfg *config.Config) []string {
-	seen := map[string]bool{}
-
-	names := make([]string, 0)
-
-	for _, job := range cfg.Jobs {
-		for _, step := range job.Plan {
-			// trigger: true is the reason to poll. passed: is the other one:
-			// a constrained get needs its version OBSERVED for the constraint
-			// to be judged at all, even when a change to it triggers nothing.
-			// Without this a `get: artifacts, passed: [build]` with no
-			// trigger: was never checked, so jobReadyFor saw no version and
-			// held the job back for the lifetime of the watcher, silently.
-			//
-			// Polling it enqueues nothing on its own: AffectedJobs still
-			// requires trigger: true, so a change here cannot start a build
-			// that never asked to be started by it.
-			if step.Get == "" || (!step.Trigger && len(step.Passed) == 0) {
-				continue
-			}
-
-			name := step.GetResourceName()
-			if seen[name] {
-				continue
-			}
-
-			seen[name] = true
-
-			names = append(names, name)
-		}
-	}
-
-	return names
+	return cfg.PolledResourceNames()
 }
 
 // AffectedJobs returns every job that has a trigger:true get step resolving to

@@ -425,6 +425,45 @@ func (c *Config) PutSteps(resource string) []Step {
 	return steps
 }
 
+// PolledResourceNames returns every resource a get step references with
+// trigger: true or passed: anywhere in the pipeline, in first-seen order —
+// the resources internal/trigger's poller checks on an interval and owns the
+// resource_checks baseline for (internal/trigger.Resources delegates here).
+//
+// passed: counts alongside trigger: true because a constrained get needs its
+// version OBSERVED for the constraint to be judged at all, even when a
+// change to it triggers nothing: without this a `get: artifacts, passed:
+// [build]` with no trigger: was never checked, so the constraint could never
+// be judged. A resource reached only by a plain get is deliberately excluded
+// — nothing polls it, and internal/pipeline's per-run refresh records its
+// version instead (see internal/pipeline/get.go's recordResolvedVersion),
+// which must never touch a resource this function names, or a run would
+// corrupt the poller's dirty-bit baseline for it.
+func (c *Config) PolledResourceNames() []string {
+	seen := map[string]bool{}
+
+	names := make([]string, 0)
+
+	for _, job := range c.Jobs {
+		for _, step := range job.Plan {
+			if step.Get == "" || (!step.Trigger && len(step.Passed) == 0) {
+				continue
+			}
+
+			name := step.GetResourceName()
+			if seen[name] {
+				continue
+			}
+
+			seen[name] = true
+
+			names = append(names, name)
+		}
+	}
+
+	return names
+}
+
 // FindResourceType returns the resource type with the given name, or an error if not found.
 func (c *Config) FindResourceType(name string) (*ResourceType, error) {
 	slog.Debug("resource_type.find", "name", name)
