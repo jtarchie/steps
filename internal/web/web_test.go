@@ -2,7 +2,9 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -181,6 +183,183 @@ func TestRunTranscriptRendersStepsAndAgentTurns(t *testing.T) {
 	// Hashes link to the node page — the cache receipt.
 	if !strings.Contains(body, "/p/demo/nodes/beef7654321") {
 		t.Error("transcript does not link its step hashes to node pages")
+	}
+}
+
+// TestTranscriptHighlightsDetectedContent pins the whole feature end to end:
+// a diff and a YAML document, each turn text a model could plausibly have
+// sent or received, must arrive on the page as chroma spans — and, since
+// they were never fenced, detected rather than declared. The contiguity
+// assertions guard against the highlighter (or the detector's choice of
+// language) breaking a line or a sentence apart with stray markup.
+func TestTranscriptHighlightsDetectedContent(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	err := pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	diff := "--- a/main.go\n+++ b/main.go\n@@ -1,3 +1,4 @@\n+// added\n func main() {}\n"
+	yamlDoc := "resources:\n  - name: repo\n    type: git\n"
+	prose := "The reviewer found no issues and recommended merging."
+
+	appendEvents(t, pipeline.Store, "run-1", []store.RunEventRow{
+		{Type: events.TypeJobStarted, StepIndex: -1},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent"},
+		{Type: events.TypeAgentUser, StepIndex: 0, StepName: "review", Text: diff},
+		{Type: events.TypeAgentSystem, StepIndex: 0, StepName: "review", Text: yamlDoc},
+		{Type: events.TypeAgentSystem, StepIndex: 0, StepName: "review", Text: prose},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "review", StepKind: "agent", Status: "succeeded", Hash: "beef000", DurationMS: 100},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-1", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	code, body := get(t, server, "/p/demo/runs/run-1")
+	if code != http.StatusOK {
+		t.Fatalf("GET run = %d: %s", code, body)
+	}
+
+	if !strings.Contains(body, "<span style=") {
+		t.Error("transcript carries no highlighted spans at all")
+	}
+
+	for _, want := range []string{"@@ -1,3 +1,4 @@", prose} {
+		if !strings.Contains(body, want) {
+			t.Errorf("transcript does not carry %q as one contiguous substring — Coalesce may be missing", want)
+		}
+	}
+}
+
+// TestPromptIsShownLiterally covers finding (5): a prompt is text SENT to a
+// model, built by concatenation, not authored for a reader — rendering it as
+// markdown restructures it (a "---" line turns the line above it into a
+// setext heading, and a raw <tag> is dropped as unsafe HTML). It must
+// survive as literal text instead.
+//
+// The prompt is built to detect as no particular language (no colons, no
+// fences, no heading marks): message() and renderModelText() would
+// otherwise both short-circuit through the SAME detected-language
+// highlighter, and the test would not be able to tell "shown literally"
+// apart from "rendered as markdown, but it happened not to have anything to
+// restructure".
+func TestPromptIsShownLiterally(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	err := pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	prompt := "Summarize the notes below.\n<file>\nfirst line\n---\nsecond line\n</file>\n"
+
+	if got := detectLanguage(prompt); got != "" {
+		t.Fatalf("test prompt detects as %q, want no detection — pick different content", got)
+	}
+
+	appendEvents(t, pipeline.Store, "run-1", []store.RunEventRow{
+		{Type: events.TypeJobStarted, StepIndex: -1},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent"},
+		{Type: events.TypeAgentUser, StepIndex: 0, StepName: "review", Text: prompt},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "review", StepKind: "agent", Status: "succeeded", Hash: "beef111", DurationMS: 100},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-1", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-1")
+
+	turnHTML := extractDiv(t, body, "turn user")
+
+	if strings.Contains(turnHTML, "<h2>") {
+		t.Errorf("the prompt's \"---\" line was rendered as a markdown heading: %s", turnHTML)
+	}
+
+	// stripTags, not strings.Contains on the raw body: message() may still
+	// wrap tokens in <span>s — the assertion is about the TEXT that
+	// survives, not the exact bytes.
+	turn := stripTags(turnHTML)
+
+	if !strings.Contains(turn, "first line\n---\nsecond line\n") {
+		t.Errorf("prompt's line breaks did not survive as literal text: %q", turn)
+	}
+
+	if !strings.Contains(turn, "<file>") || !strings.Contains(turn, "</file>") {
+		t.Errorf("prompt's own tag markers were parsed instead of shown literally: %q", turn)
+	}
+}
+
+// stripTags removes every HTML tag and unescapes entities, leaving the text
+// content a reader would see. Used where an assertion is about content
+// surviving, not about which spans a highlighter wrapped it in.
+func stripTags(s string) string {
+	var out strings.Builder
+
+	depth := 0
+
+	for _, r := range s {
+		switch {
+		case r == '<':
+			depth++
+		case r == '>':
+			depth--
+		case depth == 0:
+			out.WriteRune(r)
+		}
+	}
+
+	return html.UnescapeString(out.String())
+}
+
+// TestDelegateLineStaysAnAnnotation covers the regression the first pass of
+// this feature would have shipped: an agent_subagent turn's request line is
+// the one .Text branch that must stay exactly as it was — plain, dim, never
+// routed through the highlighter — because doing so would brighten a
+// delegation line to the visual weight of a message.
+func TestDelegateLineStaysAnAnnotation(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	err := pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-1", []store.RunEventRow{
+		{Type: events.TypeJobStarted, StepIndex: -1},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent"},
+		{Type: events.TypeAgentSubagent, StepIndex: 0, StepName: "review", Name: "test-runner", Text: "package main\n\nfunc main() {}\n", Status: "depth:1"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "review", StepKind: "agent", Status: "succeeded", Hash: "beef222", DurationMS: 100},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-1", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-1")
+
+	delegate := extractDiv(t, body, "turn tool")
+
+	if !strings.Contains(delegate, "test-runner") {
+		t.Fatalf("delegate turn not found: %s", delegate)
+	}
+
+	if strings.Contains(delegate, "<span style=") {
+		t.Errorf("delegate line was highlighted, but must stay a plain annotation: %s", delegate)
 	}
 }
 
@@ -947,6 +1126,135 @@ func TestNodePageRendersSystemAndUserTurns(t *testing.T) {
 
 	if !strings.Contains(body, `class="turn user"`) {
 		t.Error("node transcript does not render the user turn")
+	}
+}
+
+// extractDiv returns the substring of body from a div opening tag carrying
+// class through its matching closing tag, counting nested <div>/</div> pairs
+// rather than stopping at the first close — the turn markup nests a .what
+// div inside the .turn div, so a naive first-close would cut it short.
+func extractDiv(t *testing.T, body, class string) string {
+	t.Helper()
+
+	marker := `<div class="` + class
+	start := strings.Index(body, marker)
+
+	if start < 0 {
+		t.Fatalf("marker %q not found in %s", marker, body)
+	}
+
+	depth := 0
+	i := start
+
+	for {
+		rest := body[i:]
+		openAt := strings.Index(rest, "<div")
+		closeAt := strings.Index(rest, "</div>")
+
+		if closeAt < 0 {
+			t.Fatalf("unterminated div for %q", marker)
+		}
+
+		if openAt >= 0 && openAt < closeAt {
+			depth++
+			i += openAt + len("<div")
+
+			continue
+		}
+
+		depth--
+		i += closeAt + len("</div>")
+
+		if depth == 0 {
+			return body[start:i]
+		}
+	}
+}
+
+// normalizeMarkup collapses whitespace runs, then drops whitespace that sits
+// purely BETWEEN two tags — template indentation a browser also collapses —
+// so two templates that emit the same elements with different formatting
+// compare equal.
+func normalizeMarkup(s string) string {
+	collapsed := strings.Join(strings.Fields(s), " ")
+
+	for strings.Contains(collapsed, "> <") {
+		collapsed = strings.ReplaceAll(collapsed, "> <", "><")
+	}
+
+	return collapsed
+}
+
+// TestRunAndNodePagesDrawTheSameConversation closes the drift finding (4)
+// names: run.html printed a turn's text raw and unhighlighted while
+// node.html ran the same three turn types through renderProse. Both pages
+// must now draw a system, a user and a model turn identically.
+func TestRunAndNodePagesDrawTheSameConversation(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	systemText := "resources:\n  - name: repo\n    type: git\n"
+	userText := "Review this diff for bugs."
+	modelText := "## Verdict\n\nLooks fine."
+
+	err := pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-1", []store.RunEventRow{
+		{Type: events.TypeJobStarted, StepIndex: -1},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent"},
+		{Type: events.TypeAgentSystem, StepIndex: 0, StepName: "review", Text: systemText},
+		{Type: events.TypeAgentUser, StepIndex: 0, StepName: "review", Text: userText},
+		{Type: events.TypeAgentText, StepIndex: 0, StepName: "review", Text: modelText},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "review", StepKind: "agent", Status: "succeeded", Hash: "beef333", DurationMS: 100},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-1", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	record := store.NodeRecord{
+		Hash:      "beef333",
+		Kind:      "agent",
+		StepIndex: 0,
+		Resource:  "review",
+		Content:   map[string]any{"agent": "reviewer"},
+	}
+
+	err = pipeline.Store.RecordNode(ctx, record, "build", "succeeded", nil, nil)
+	if err != nil {
+		t.Fatalf("RecordNode: %v", err)
+	}
+
+	transcript, err := json.Marshal([]map[string]string{
+		{"type": "system", "text": systemText},
+		{"type": "user", "text": userText},
+		{"type": "text", "text": modelText},
+	})
+	if err != nil {
+		t.Fatalf("marshal transcript: %v", err)
+	}
+
+	err = pipeline.Store.SaveNodeTranscript(ctx, record.Hash, string(transcript))
+	if err != nil {
+		t.Fatalf("SaveNodeTranscript: %v", err)
+	}
+
+	_, runBody := get(t, server, "/p/demo/runs/run-1")
+	_, nodeBody := get(t, server, "/p/demo/nodes/"+record.Hash)
+
+	for _, class := range []string{"turn system", "turn user", "turn model"} {
+		runTurn := normalizeMarkup(extractDiv(t, runBody, class))
+		nodeTurn := normalizeMarkup(extractDiv(t, nodeBody, class))
+
+		if runTurn != nodeTurn {
+			t.Errorf("%s turn drifted between pages:\n run:  %s\n node: %s", class, runTurn, nodeTurn)
+		}
 	}
 }
 

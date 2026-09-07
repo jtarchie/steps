@@ -196,7 +196,13 @@ func templateFuncs() template.FuncMap {
 		"jsonValue": jsonValue,
 		"jsonPre":   jsonPre,
 		"jsonLine":  jsonLine,
-		"prose":     renderProse,
+		// prose resolves to the hybrid (detect.go) rather than to
+		// renderProse directly: renderProse remains the fallback for text
+		// that detection has nothing to say about, but "prosebody" — the one
+		// template that draws an agent's answer on both the run and node
+		// pages — must pick up highlighting with no template edit.
+		"prose":     renderModelText,
+		"message":   highlightMessage,
 		"thousands": thousands,
 		"lower":     strings.ToLower,
 		"trimMD":    func(name string) string { return strings.TrimSuffix(name, ".md") },

@@ -402,15 +402,51 @@ func (n jsonNode) writeStringBlock(out *strings.Builder, depth int) {
 		n.doc.writeBlock(out, depth+1)
 		out.WriteString("\n")
 	} else {
-		for _, line := range strings.Split(strings.TrimRight(n.text, "\n"), "\n") {
-			indent(out, depth+1)
-			span(out, "j-doc", line)
-			out.WriteString("\n")
-		}
+		writeDocLines(out, n.text, depth+1)
 	}
 
 	indent(out, depth)
 	span(out, "j-str", `"`)
+}
+
+// jsonDocLineLimit bounds per-line tokenising: 16KB of one-character lines
+// would otherwise be 16,000 tokenise calls.
+const jsonDocLineLimit = 2000
+
+// writeDocLines renders a multi-line string's own lines — the read_file
+// {"content": …} shape that this file's header comment calls the shape that
+// matters most. Detection runs once over the whole string; when it is
+// decisive every line is highlighted in that language, tokenised
+// independently so each still ends where the "j-doc" rendering did.
+//
+// ponytail: per-line tokenising loses a construct that crosses a line (a
+// block comment, a YAML | literal) — those lines colour as something else
+// rather than correctly. Upgrade: split one whole-string token stream around
+// each line's own indentation, a rewrite of this loop; per-line is a few
+// lines and degrades visibly but harmlessly.
+func writeDocLines(out *strings.Builder, text string, depth int) {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+
+	lang := ""
+	if len(lines) <= jsonDocLineLimit {
+		lang = detectLanguage(text)
+	}
+
+	for _, line := range lines {
+		indent(out, depth)
+
+		// A blank line stays blank: highlightCode answers " " for an empty
+		// body so an empty <pre> cannot collapse, and inside a document
+		// that placeholder is a trailing space on every blank line — in the
+		// reader's copy buffer as well as on the page.
+		if lang != "" && line != "" {
+			out.WriteString(string(highlightCode(line, lang)))
+		} else {
+			span(out, "j-doc", line)
+		}
+
+		out.WriteString("\n")
+	}
 }
 
 func writeJSONKey(out *strings.Builder, key string) {
@@ -480,13 +516,16 @@ func jsonValue(raw string) jsonView {
 // plainView renders a payload that is not a JSON document — a file's text, a
 // command's stdout, a bare number. It still folds when it is bulky, so one
 // tool returning 400 lines cannot bury the conversation around it.
+//
+// Inline and Summary are computed from the raw text, not the highlighted
+// markup: a fold decision measured against markup length would be
+// meaningless.
 func plainView(raw string) jsonView {
 	text := strings.TrimRight(raw, "\n")
 	single := !strings.Contains(text, "\n")
 
 	view := jsonView{
-		//nolint:gosec // G203: escaped here, and the only markup is the escape's own output
-		HTML:    template.HTML(template.HTMLEscapeString(text)),
+		HTML:    highlightPayload(text),
 		Inline:  single && len(text) <= jsonInlineWidth,
 		Summary: plainSummary(text, raw),
 	}
@@ -502,8 +541,7 @@ func jsonPre(raw string) template.HTML {
 		return block
 	}
 
-	//nolint:gosec // G203: escaped, no markup added
-	return template.HTML(template.HTMLEscapeString(strings.TrimRight(raw, "\n")))
+	return highlightPayload(strings.TrimRight(raw, "\n"))
 }
 
 // jsonBlock renders a payload as a highlighted block, reporting false when it

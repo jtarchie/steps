@@ -281,6 +281,91 @@ func TestRenderProseHighlightsOtherLanguages(t *testing.T) {
 	}
 }
 
+// TestPlainViewHighlightsDetectedContent covers a non-JSON payload that IS
+// something else recognisable: a YAML document. Inline and Summary must stay
+// computed from the raw text — a fold decision measured against markup
+// length would be meaningless — while HTML picks up spans.
+func TestPlainViewHighlightsDetectedContent(t *testing.T) {
+	t.Parallel()
+
+	raw := "resources:\n  - name: repo\n    type: git\n"
+
+	plain := plainView(raw)
+
+	if !strings.Contains(string(plain.HTML), "<span style=") {
+		t.Errorf("yaml payload was not highlighted: %s", plain.HTML)
+	}
+
+	// Multi-line, so not inline — computed from the raw text, unaffected by
+	// however much markup highlighting adds.
+	if plain.Inline {
+		t.Errorf("a multi-line payload was folded as inline once highlighted")
+	}
+
+	if !strings.HasPrefix(plain.Summary, "text ·") {
+		t.Errorf("Summary changed by highlighting: %q", plain.Summary)
+	}
+}
+
+// TestWriteStringBlockHighlightsNestedContent covers the read_file
+// {"content": …} shape this file's header comment calls the shape that
+// matters most: a nested string holding Go source is highlighted line by
+// line, and the enclosing quotes and j-str markers survive.
+func TestWriteStringBlockHighlightsNestedContent(t *testing.T) {
+	t.Parallel()
+
+	source := "package main\n\nfunc main() {}\n"
+
+	payload, err := json.Marshal(map[string]string{"content": source})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	html := string(jsonValue(string(payload)).HTML)
+
+	if !strings.Contains(html, "<span style=") {
+		t.Errorf("nested go source was not highlighted:\n%s", html)
+	}
+
+	if strings.Count(html, `<span class="j-str">&#34;</span>`) != 2 {
+		t.Errorf("nested string lost its enclosing quotes:\n%s", html)
+	}
+
+	if !strings.Contains(html, "func") || !strings.Contains(html, "main") {
+		t.Errorf("nested source content is missing:\n%s", html)
+	}
+
+	// highlightCode answers " " for an empty body so an empty <pre> cannot
+	// collapse; per line, that placeholder is a trailing space on every
+	// blank line of a file — in the reader's copy buffer, not just on the
+	// page. The source above has one blank line between its statements.
+	if strings.Contains(html, " \n") {
+		t.Errorf("a blank line in the nested document gained a trailing space:\n%q", html)
+	}
+}
+
+// TestWriteStringBlockFallsBackAboveLineLimit guards jsonDocLineLimit: a
+// nested string of many one-character lines must not tokenise once per line.
+func TestWriteStringBlockFallsBackAboveLineLimit(t *testing.T) {
+	t.Parallel()
+
+	var lines strings.Builder
+	for range jsonDocLineLimit + 1 {
+		lines.WriteString("x\n")
+	}
+
+	payload, err := json.Marshal(map[string]string{"content": lines.String()})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	html := string(jsonValue(string(payload)).HTML)
+
+	if !strings.Contains(html, `class="j-doc"`) {
+		t.Errorf("payload over the line limit did not fall back to j-doc rendering:\n%.200s", html)
+	}
+}
+
 func TestThousandsMatchesTheCLI(t *testing.T) {
 	t.Parallel()
 

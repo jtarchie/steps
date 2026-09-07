@@ -291,7 +291,11 @@
       <span class="who">{{if eq .Type "agent_text"}}model{{else if eq .Type "agent_system"}}system{{else if eq .Type "agent_user"}}user{{else if eq .Type "agent_call"}}tool{{else if eq .Type "agent_result"}}result{{else}}delegate{{end}}</span>
       <div class="what">
         {{if .Name}}<code>{{.Name}}</code>{{end}}
-        {{if .Text}}<span class="say">{{.Text}}</span>{{end}}
+        {{if .Text}}
+          {{if .IsMessage}}<span class="say">{{message .Text}}</span>
+          {{else if .IsModelText}}<div class="prose">{{template "prosebody" .Text}}</div>
+          {{else}}<span class="say">{{.Text}}</span>{{end}}
+        {{end}}
         {{if .Detail}}{{template "jsonvalue" (jsonValue .Detail)}}{{end}}
       </div>
     </div>

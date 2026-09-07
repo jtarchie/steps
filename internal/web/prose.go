@@ -36,6 +36,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/alecthomas/chroma/v2"
 	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/yuin/goldmark"
@@ -46,6 +47,18 @@ import (
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
 )
+
+// codeFormatter is shared across every caller: the page renderer and the
+// live stream's flush goroutine. Safe to share — RegexLexer guards its own
+// lazy compilation with sync.Once, and the HTML formatter's style cache is
+// mutex-guarded — and cheaper than building one per call, which is what this
+// used to do on every fenced block and now would do on every turn.
+//
+// WithClasses(false): the style is carried inline rather than by a
+// stylesheet this page does not serve. PreventSurroundingPre(true): the
+// caller owns its own <pre>, so the block matches every other code block on
+// the page.
+var codeFormatter = chromahtml.New(chromahtml.WithClasses(false), chromahtml.PreventSurroundingPre(true))
 
 // agentMarkdown renders untrusted, model-authored prose.
 //
@@ -142,7 +155,24 @@ func blockText(lines *text.Segments, source []byte) string {
 // document, chroma's lexer for everything else — including a JSON fence cut
 // off mid-object, which is not a document and which the lexer can color where
 // the parser can only refuse it.
-func highlightCode(body, lang string) template.HTML {
+//
+// This is now on the path of every message and every payload (detect.go's
+// callers), not just a fenced block in an answer — its input is
+// model-authored or file-derived, so a panic anywhere below it is wrapped
+// rather than left to propagate out of a template.Execute: a 500 on the page
+// a person is triaging on, or a dead flush goroutine on the live stream.
+func highlightCode(body, lang string) (result template.HTML) {
+	defer func() {
+		if r := recover(); r != nil {
+			//nolint:gosec // G203: escaped, no markup added
+			result = template.HTML(template.HTMLEscapeString(body))
+		}
+	}()
+
+	return highlightCodeUnguarded(body, lang)
+}
+
+func highlightCodeUnguarded(body, lang string) template.HTML {
 	if body == "" {
 		return " "
 	}
@@ -159,7 +189,19 @@ func highlightCode(body, lang string) template.HTML {
 		return template.HTML(template.HTMLEscapeString(body))
 	}
 
-	iterator, err := lexer.Tokenise(nil, body)
+	// Coalesce merges adjacent same-type tokens before they reach the
+	// formatter. lexers.Get returns an uncoalesced lexer, and this is now
+	// reached for a whole plain-text message (detect.go's markdown
+	// fallback), not just a fenced block — markdown's inline rule falls back
+	// to one Text token per unmatched character, which without Coalesce is
+	// dozens of tiny tokens per sentence instead of one run. docsCodeStyle
+	// leaves Text unstyled today, so that specific case emits no markup
+	// either way, but a styled token type produced piecewise by any lexer
+	// (a future style change, a different detected language) would fragment
+	// into one <span> per token without this — cheap insurance for a
+	// correctness property this file does not want to have to rediscover.
+	// Coalesce(nil) panics, hence the nil check above running first.
+	iterator, err := chroma.Coalesce(lexer).Tokenise(nil, body)
 	if err != nil {
 		//nolint:gosec // G203: as above
 		return template.HTML(template.HTMLEscapeString(body))
@@ -167,13 +209,7 @@ func highlightCode(body, lang string) template.HTML {
 
 	var out strings.Builder
 
-	// Standalone: no wrapping <pre> (writeCodeBlock owns that, so the block
-	// matches every other code block on the page) and no class prefix, since
-	// the style is carried inline rather than by a stylesheet this page does
-	// not serve.
-	formatter := chromahtml.New(chromahtml.WithClasses(false), chromahtml.PreventSurroundingPre(true))
-
-	err = formatter.Format(&out, docsCodeStyle, iterator)
+	err = codeFormatter.Format(&out, docsCodeStyle, iterator)
 	if err != nil {
 		//nolint:gosec // G203: as above
 		return template.HTML(template.HTMLEscapeString(body))
