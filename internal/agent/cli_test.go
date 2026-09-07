@@ -761,7 +761,7 @@ func TestRecordCLIMessageDeliverySkipsUndeliveredRetries(t *testing.T) {
 
 	// A failed attempt to deliver a resumed prompt: nothing recorded, so the
 	// eventual successful retry is the only copy in the transcript.
-	recordCLIMessageDelivery(prepared, plan, errors.New("boom"))
+	recordCLIMessageDelivery(prepared, plan, errors.New("boom"), rec.pendingIndex())
 
 	if len(rec.events) != 0 {
 		t.Fatalf("a failed delivery recorded %+v, want nothing", rec.events)
@@ -772,14 +772,16 @@ func TestRecordCLIMessageDeliverySkipsUndeliveredRetries(t *testing.T) {
 	opening := plan
 	opening.resume = false
 
-	recordCLIMessageDelivery(prepared, opening, nil)
+	recordCLIMessageDelivery(prepared, opening, nil, rec.pendingIndex())
 
 	if len(rec.events) != 0 {
 		t.Fatalf("a non-resumed invocation recorded %+v, want nothing", rec.events)
 	}
 
-	// The successful, resumed delivery: recorded exactly once.
-	recordCLIMessageDelivery(prepared, plan, nil)
+	// The successful, resumed delivery: recorded exactly once, at the index
+	// reserved before the (simulated) attempt ran — 0, since nothing above
+	// actually recorded anything.
+	recordCLIMessageDelivery(prepared, plan, nil, rec.pendingIndex())
 
 	if len(rec.events) != 1 || rec.events[0].Type != "user" || rec.events[0].Text != "second ask" {
 		t.Fatalf("delivered message = %+v, want one user event with text %q", rec.events, "second ask")
@@ -805,13 +807,17 @@ func TestRecordCLIMessageDeliveryRecordsContinuationAndNudgePrompts(t *testing.T
 	continuation.resume = true
 	continuation.prompt = "Your previous attempt did not finish. Continue."
 
-	recordCLIMessageDelivery(prepared, continuation, nil)
+	// pendingIndex read fresh before each call, exactly as cli.go's attempts
+	// closure reserves it before its own runCLIAttempt — each recorded prompt
+	// lands where the transcript stood right before the (simulated) attempt
+	// that answered it ran, not wherever the slice happens to end afterward.
+	recordCLIMessageDelivery(prepared, continuation, nil, rec.pendingIndex())
 
 	nudge := firstAttempt()
 	nudge.resume = true
 	nudge.prompt = "You declared assert.files: [out.txt], which is still missing."
 
-	recordCLIMessageDelivery(prepared, nudge, nil)
+	recordCLIMessageDelivery(prepared, nudge, nil, rec.pendingIndex())
 
 	if len(rec.events) != 2 {
 		t.Fatalf("got %d events, want 2 (continuation + nudge)", len(rec.events))
@@ -819,5 +825,45 @@ func TestRecordCLIMessageDeliveryRecordsContinuationAndNudgePrompts(t *testing.T
 
 	if rec.events[0].Text != continuation.prompt || rec.events[1].Text != nudge.prompt {
 		t.Fatalf("recorded texts = %+v, want the continuation then the nudge prompt", rec.events)
+	}
+}
+
+// TestRecordCLIMessageDeliveryOrdersPromptBeforeItsReply pins the fix for a
+// real ordering bug: recordCLIMessageDelivery only learns delivery succeeded
+// AFTER runCLIAttempt has already streamed the child's whole reply into the
+// same recorder (parseCLIStream, clistream.go) — so appending the prompt at
+// that point, as user() would, landed a resumed message's "user" turn AFTER
+// the assistant text/call/result events answering it, for every multi-message
+// step, files-nudge, or attempt retry. pendingAt (reserved by the caller
+// before the simulated attempt below) is what lets the prompt be inserted
+// back where it belongs instead.
+func TestRecordCLIMessageDeliveryOrdersPromptBeforeItsReply(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, []string{"read_file"})
+	rec := &transcriptRecorder{}
+	prepared.conv.recorder = rec
+
+	plan := firstAttempt()
+	plan.prompt = "second ask"
+	plan.resume = true
+
+	// Mirrors cli.go's attempts closure: reserved BEFORE the attempt runs.
+	pendingAt := rec.pendingIndex()
+
+	// Simulates runCLIAttempt: the child's reply to "second ask" streams in
+	// and is recorded before delivery of the prompt is known to have
+	// succeeded.
+	rec.text("done with the second ask")
+
+	recordCLIMessageDelivery(prepared, plan, nil, pendingAt)
+
+	want := []string{"user", "text"}
+	if got := eventTypes(rec.events); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("event order = %v, want %v — the prompt must precede the reply it prompted", got, want)
+	}
+
+	if rec.events[0].Text != "second ask" {
+		t.Errorf("events[0].Text = %q, want the prompt %q", rec.events[0].Text, "second ask")
 	}
 }

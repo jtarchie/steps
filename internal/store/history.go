@@ -251,28 +251,15 @@ func pruneVersions(
 // a version field goes back out to the API that reported it, and float64
 // turns an id into exponent notation.
 func (s *Store) ResourceVersions(ctx context.Context, resourceName string) ([]map[string]any, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT version_json FROM resource_versions
-		WHERE pipeline_id = ? AND resource_name = ? AND from_check = 1
-		ORDER BY check_order
-	`, s.pipelineID, resourceName)
+	encoded, err := s.ResourceVersionsJSON(ctx, resourceName)
 	if err != nil {
-		return nil, fmt.Errorf("could not read versions for %q: %w", resourceName, err)
+		return nil, err
 	}
-
-	defer func() { _ = rows.Close() }()
 
 	var versions []map[string]any
 
-	for rows.Next() {
-		var encoded string
-
-		err = rows.Scan(&encoded)
-		if err != nil {
-			return nil, fmt.Errorf("could not read versions for %q: %w", resourceName, err)
-		}
-
-		version, err := DecodeVersion(encoded)
+	for _, e := range encoded {
+		version, err := DecodeVersion(e)
 		if err != nil {
 			return nil, fmt.Errorf("could not read versions for %q: %w", resourceName, err)
 		}
@@ -280,12 +267,26 @@ func (s *Store) ResourceVersions(ctx context.Context, resourceName string) ([]ma
 		versions = append(versions, version)
 	}
 
-	err = rows.Err()
-	if err != nil {
-		return nil, fmt.Errorf("could not read versions for %q: %w", resourceName, err)
-	}
-
 	return versions, nil
+}
+
+// ResourceVersionsJSON is ResourceVersions without the decode into
+// map[string]any — for a caller that only DISPLAYS each version (the web
+// UI's resource detail page) rather than inspects its fields, and would
+// otherwise decode every row with UseNumber only to re-encode it right back
+// to an equivalent JSON string a moment later.
+func (s *Store) ResourceVersionsJSON(ctx context.Context, resourceName string) ([]string, error) {
+	return collect(ctx, s.db, "resource versions",
+		`SELECT version_json FROM resource_versions
+		 WHERE pipeline_id = ? AND resource_name = ? AND from_check = 1
+		 ORDER BY check_order`,
+		[]any{s.pipelineID, resourceName}, func(rows *sql.Rows) (string, error) {
+			var encoded string
+
+			err := rows.Scan(&encoded)
+
+			return encoded, err //nolint:wrapcheck // collect wraps with the thing being read
+		})
 }
 
 // VersionOrders maps every recorded version of a resource to its

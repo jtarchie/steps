@@ -313,6 +313,34 @@ func TestTimeoutWarningFiresBeforeDeadline(t *testing.T) {
 	if fake.requests[1].Config.Tools == nil {
 		t.Error("tools must stay granted after the warning — unlike answerWithoutTools, this is not a wrap-up")
 	}
+
+	assertTimeoutWarningRecorded(t, res.transcript)
+}
+
+// assertTimeoutWarningRecorded checks the warning landed in the persisted
+// transcript — like every other synthetic user turn this file injects (the
+// opening message, a later messages: entry) — not just the live request: a
+// reader reconstructing why the model suddenly wrapped up needs to see what
+// it was shown. Pulled out of TestTimeoutWarningFiresBeforeDeadline to keep
+// that test's cyclomatic complexity under the linter budget.
+func assertTimeoutWarningRecorded(t *testing.T, transcript []transcriptEvent) {
+	t.Helper()
+
+	var got []transcriptEvent
+
+	for _, ev := range transcript {
+		if ev.Type == "user" {
+			got = append(got, ev)
+		}
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("got %d user transcript events, want 2 (the opening message and the timeout warning): %+v", len(got), transcript)
+	}
+
+	if got[1].Text != timeoutWarningText {
+		t.Errorf("second user event text = %q, want the timeout warning %q", got[1].Text, timeoutWarningText)
+	}
 }
 
 func TestTimeoutWarningNeverFiresWithinBudget(t *testing.T) {

@@ -208,6 +208,109 @@ func TestStreamAppendsWhatThePageHasNotDrawnAndMorphsWhatItHas(t *testing.T) {
 	}
 }
 
+// TestLiveStreamShowsATimeoutCountdownForAStepStartedAfterConnecting pins the
+// fix for a real gap: attachStepDeadlines used to be wired into ONLY
+// handlers.go's assembleRun (the full-page render), never into this stream's
+// own view (folder.view, built fresh in flushBatch) — so a bounded-timeout
+// agent step that started AFTER a reader's SSE connection was already open
+// was appended live with no countdown at all, even though reloading the
+// identical page an instant later would have shown one. See
+// attachStepDeadlines' doc comment in overview.go.
+func TestLiveStreamShowsATimeoutCountdownForAStepStartedAfterConnecting(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline, sha := timeoutPipelineSHA(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-live-deadline", "review", t.TempDir(), sha)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-live-deadline", []store.RunEventRow{
+		// seq 1-2: already on the reader's page when they connected.
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "setup", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "setup", StepKind: "task", StepID: 1, Status: "succeeded"},
+		// seq 3: "reviewer" (the default-timeout agent) starts only now —
+		// after=2 below puts this squarely on the live-delta path.
+		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "reviewer", StepKind: "agent", StepID: 2},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-live-deadline", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	stream := sseHTML(streamOf(t, server, "/p/demo/runs/run-live-deadline/events?after=2"))
+
+	if !strings.Contains(stream, "data-deadline=") {
+		t.Errorf("a bounded-timeout agent step appended live (started after the reader connected) shows no countdown:\n%s", stream)
+	}
+}
+
+// TestLiveStreamClearsTheCountdownOnceAStepFinishes is
+// attachStepDeadlines' other half, needed only because live.go's runFolder
+// is long-lived and reuses the same *stepView pointers across flushes
+// (unlike assembleRun's fresh-every-request view): a step whose countdown
+// was set while it was running must have it CLEARED once it finishes and its
+// row is re-sent whole (morphed), or the closed row still carries a stale
+// "timeout in ..." — attachStepDeadlines only ever SET Deadline for a
+// running step before this fix, and never zeroed it back out for one that
+// stopped.
+func TestLiveStreamClearsTheCountdownOnceAStepFinishes(t *testing.T) {
+	// liveBatch shrunk to 1, not t.Parallel(): the started and finished
+	// events must land in SEPARATE flushBatch calls to exercise the
+	// set-then-clear transition at all — otherwise both fold in before
+	// attachStepDeadlines ever runs and the step's Deadline is zero (never
+	// having been set) for a reason that has nothing to do with the fix.
+	shrinkRunEventLimit(t, 5000, 1)
+
+	server, pipeline, sha := timeoutPipelineSHA(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-live-deadline-done", "review", t.TempDir(), sha)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-live-deadline-done", []store.RunEventRow{
+		// seq 1: "reviewer" starts live (its own flushBatch call), getting a
+		// countdown (proven by the sibling test above).
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1},
+		// seq 2: and finishes in a SEPARATE flushBatch call, in the same
+		// connection — its row is re-sent whole (morphed), and that copy
+		// must show no countdown.
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1, Status: "succeeded"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-live-deadline-done", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	stream := sseHTML(streamOf(t, server, "/p/demo/runs/run-live-deadline-done/events?after=0"))
+
+	firstRow := strings.Index(stream, `id="step-1-reviewer"`)
+	lastRow := strings.LastIndex(stream, `id="step-1-reviewer"`)
+
+	if firstRow < 0 || firstRow == lastRow {
+		t.Fatalf("expected step-1-reviewer to appear twice (opened, then closed):\n%s", stream)
+	}
+
+	if !strings.Contains(stream[firstRow:lastRow], "data-deadline=") {
+		t.Fatalf("sanity check failed: expected a countdown on the row while it was still running, before its close:\n%s", stream)
+	}
+
+	// The row's close is a whole re-send (morph) starting at its SECOND
+	// (last) occurrence of the id — the final thing the stream says about
+	// this step, and the one that matters: it must carry no countdown once
+	// finished.
+	closedRow := stream[lastRow:]
+	if strings.Contains(closedRow, "data-deadline=") {
+		t.Errorf("the step's row re-sent after it finished still carries a countdown:\n%s", closedRow)
+	}
+}
+
 // TestStreamResumesFromLastEventID: the header a browser resends on a
 // reconnect is what says where to pick up. Without it a dropped connection
 // replays the run from the sequence baked into the page's URL, and every row

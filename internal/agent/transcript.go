@@ -184,6 +184,50 @@ func (r *transcriptRecorder) user(text string) {
 	r.publish(events.TypeAgentUser, text, "", "")
 }
 
+// pendingIndex reports how many events are recorded so far — for a caller
+// that must reserve a position before doing work whose OUTCOME decides
+// whether an earlier turn gets recorded at all. See insertUserAt: cli.go's
+// recordCLIMessageDelivery only learns a resumed prompt was delivered once
+// the child's whole reply to it has already streamed in and been recorded,
+// so it cannot simply append the prompt afterward without landing it below
+// the answer it prompted.
+func (r *transcriptRecorder) pendingIndex() int {
+	if r == nil {
+		return 0
+	}
+
+	return len(r.events)
+}
+
+// insertUserAt records text as a user event at position at in the PERSISTED
+// transcript, ahead of whatever was appended at or after at in the meantime,
+// rather than at the end — the counterpart to user() for a caller that
+// learns a turn belongs earlier only after later turns already landed.
+//
+// Only the persisted slice is reordered; publish() still fires now, in call
+// order, same as ever — a live viewer sees the child's reply stream in
+// before delivery of the prompt it answered is confirmed, which is inherent
+// to how CLI delivery is only known to have succeeded once the reply is
+// already back, not a defect this can retroactively undo for a connection
+// already watching.
+func (r *transcriptRecorder) insertUserAt(at int, text string) {
+	if r == nil || text == "" {
+		return
+	}
+
+	text = truncateToolOutputLimit(text, maxRecordedResultBytes)
+
+	if at < 0 || at > len(r.events) {
+		at = len(r.events)
+	}
+
+	r.events = append(r.events, transcriptEvent{})
+	copy(r.events[at+1:], r.events[at:])
+	r.events[at] = transcriptEvent{Type: "user", Text: text}
+
+	r.publish(events.TypeAgentUser, text, "", "")
+}
+
 // call records one model-authored tool call, with over-long argument values
 // elided the same way the trajectory elides them (truncateArgs).
 func (r *transcriptRecorder) call(name string, args map[string]any) {

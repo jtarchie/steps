@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"google.golang.org/genai"
 
@@ -390,6 +391,31 @@ func TestTruncateToolOutput(t *testing.T) {
 			t.Errorf("expected a truncation marker, got tail %q", got[len(got)-40:])
 		}
 	})
+}
+
+// TestTruncateToolOutputLimitKeepsValidUTF8 pins truncateToolOutputLimit's
+// rune-boundary backoff: limit is a byte offset with no knowledge of UTF-8,
+// and a naive s[:limit] can split a multi-byte rune in half — now also live
+// on the system()/user() transcript path (internal/agent/transcript.go),
+// which is far more likely to carry non-ASCII text (a persona, a rendered
+// CLI prompt) than a shell command's stdout ever was.
+func TestTruncateToolOutputLimitKeepsValidUTF8(t *testing.T) {
+	t.Parallel()
+
+	// "é" is the 2-byte UTF-8 sequence 0xC3 0xA9; a limit landing on its
+	// second byte used to slice it in half.
+	s := "x" + "é"
+	const limit = 2 // splits "é" (bytes 1-2) after its first byte
+
+	got := truncateToolOutputLimit(s, limit)
+
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncateToolOutputLimit(%q, %d) = %q, not valid UTF-8", s, limit, got)
+	}
+
+	if !strings.HasPrefix(got, "x") {
+		t.Errorf("got %q, want it to keep the leading ASCII byte", got)
+	}
 }
 
 func TestSpillOrTruncate(t *testing.T) {

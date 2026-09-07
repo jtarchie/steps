@@ -342,6 +342,44 @@ func TestTranscriptRecorderSystemAndUserTruncate(t *testing.T) {
 	}
 }
 
+// TestTranscriptRecorderInsertUserAt pins insertUserAt's contract: it lands
+// text at the reserved position, shifting whatever was already appended at
+// or after it, rather than at the end — the mechanism cli.go's
+// recordCLIMessageDelivery needs because it only learns a resumed prompt was
+// delivered after the child's reply to it has already been recorded (see
+// pendingIndex's own doc comment).
+func TestTranscriptRecorderInsertUserAt(t *testing.T) {
+	t.Parallel()
+
+	rec := &transcriptRecorder{}
+
+	at := rec.pendingIndex()
+	if at != 0 {
+		t.Fatalf("pendingIndex on an empty recorder = %d, want 0", at)
+	}
+
+	rec.text("a reply that arrived before delivery of the prompt was confirmed")
+	rec.insertUserAt(at, "the prompt")
+
+	want := []string{"user", "text"}
+	if got := eventTypes(rec.events); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("event order = %v, want %v", got, want)
+	}
+
+	if rec.events[0].Text != "the prompt" {
+		t.Errorf("events[0].Text = %q, want %q", rec.events[0].Text, "the prompt")
+	}
+
+	// A nil recorder stays a no-op, matching every other recorder method.
+	var nilRec *transcriptRecorder
+
+	nilRec.insertUserAt(0, "text")
+
+	if got := nilRec.pendingIndex(); got != 0 {
+		t.Errorf("pendingIndex on a nil recorder = %d, want 0", got)
+	}
+}
+
 // TestRenderResultContentTruncates pins the persistence cap: one oversized
 // tool result must not dominate a stored transcript, and it must say it was
 // cut — using the package's own truncation marker rather than a private one.

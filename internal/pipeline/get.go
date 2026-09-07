@@ -96,7 +96,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 			// FIRST get is unpolled goes stale in resource_checks the moment its
 			// chain starts being cached, because this is the only skip path for
 			// that get and nothing else ever calls recordResolvedVersion again.
-			recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version)
+			recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version, pinnedRun)
 
 			// Taken, even though nothing ran: the cache skipped it because
 			// this exact chain already succeeded, which is the definition of
@@ -282,7 +282,7 @@ func (w *planWalk) runTriggeredBuild(
 
 	// Only now that the fetch (and its hooks) actually succeeded: recording
 	// it earlier would show resource_checks a version nothing ever fetched.
-	recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version)
+	recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
 
 	err = w.st.RecordNode(ctx, nodeRecord(node), w.jobName, "succeeded", nil, nil)
 	if err != nil {
@@ -433,7 +433,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 
 		// A skip means this exact chain already succeeded once — the version
 		// was genuinely fetched, just not by this run.
-		recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version)
+		recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
 
 		return stepResult{hash: w.parentHash, disposition: stepChainSkipped}, nil
 	}
@@ -467,7 +467,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 
 	// Only now that the fetch (and its hooks) actually succeeded: recording
 	// it earlier would show resource_checks a version nothing ever fetched.
-	recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version)
+	recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
 
 	err = w.st.RecordNode(ctx, nodeRecord(node), w.jobName, "succeeded", nil, nil)
 	if err != nil {

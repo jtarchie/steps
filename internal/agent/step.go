@@ -49,6 +49,29 @@ func agentTimeout(riTimeout string) time.Duration {
 // asked for.
 const noAgentDeadline time.Duration = 0
 
+// remainingOrNoDeadline reports how long is left until ctx's own deadline, or
+// noAgentDeadline when ctx carries none — for a caller (subagent.go) that
+// discloses a deadline it inherited rather than one it resolved itself, and
+// so has no config.ResolvedAgentTimeout call of its own to fall back through.
+//
+// Floored at noAgentDeadline rather than returning a negative remainder: a
+// delegation started right as (or just after) the parent conversation's
+// deadline expires still finds ctx.Deadline's ok true with a past time, and
+// disclosing "-50ms" is nonsensical when the request is already on its way
+// to being cancelled outright.
+func remainingOrNoDeadline(ctx context.Context) time.Duration {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return noAgentDeadline
+	}
+
+	if remaining := time.Until(deadline); remaining > 0 {
+		return remaining
+	}
+
+	return noAgentDeadline
+}
+
 // withAgentDeadline applies a resolved agent deadline to ctx, or leaves ctx
 // alone when the step opted out. It exists so the three attempt loops
 // (failover, cli, fix) cannot each get the noAgentDeadline check subtly

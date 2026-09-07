@@ -395,26 +395,19 @@ func (s *Server) handleResource(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no resource %q in this pipeline", name))
 	}
 
-	versions, err := pipeline.Store.ResourceVersions(ctx, res.Name)
+	// The raw-JSON form, not ResourceVersions: jsonLine wants the same
+	// string every other version field on this page already carries, and
+	// this page never inspects a version's fields — decoding each one with
+	// UseNumber only to re-encode it right back a moment later would be a
+	// pointless round trip through this handler on every 2500ms self-poll.
+	lines, err := pipeline.Store.ResourceVersionsJSON(ctx, res.Name)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
-	// ResourceVersions is oldest-first (the order a check discovered them
-	// in); the newest belongs at the top, matching the "Latest version"
-	// framing on the collection page. jsonLine wants the same raw-JSON string
-	// every other version field on this page already carries.
-	lines := make([]string, len(versions))
-
-	for i, version := range versions {
-		encoded, encodeErr := store.EncodeVersion(version)
-		if encodeErr != nil {
-			return fmt.Errorf("web: %w", encodeErr)
-		}
-
-		lines[i] = encoded
-	}
-
+	// Oldest-first (the order a check discovered them in); the newest
+	// belongs at the top, matching the "Latest version" framing on the
+	// collection page.
 	slices.Reverse(lines)
 
 	checked, _, err := pipeline.Store.LastChecked(ctx, res.Name)

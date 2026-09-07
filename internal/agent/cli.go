@@ -201,6 +201,13 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 
 		recordCLIOpening(prepared, plan)
 
+		// Reserved BEFORE the attempt runs: recordCLIMessageDelivery only
+		// learns delivery succeeded after runCLIAttempt has already streamed
+		// the child's whole reply into this same recorder, so without this
+		// the prompt would land in the persisted transcript AFTER the answer
+		// it prompted. See transcriptRecorder.insertUserAt.
+		pendingAt := prepared.conv.recorder.pendingIndex()
+
 		if plan.outOfTurns() {
 			return retry.Stop(outcome.Fail(cliCeilingError(prepared.ri.AgentName,
 				fmt.Sprintf("its %d-turn budget", prepared.ri.MaxTurns),
@@ -221,7 +228,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		lastErr = attemptErr
 
 		markDelivered(state, sent, pending, attemptErr)
-		recordCLIMessageDelivery(prepared, plan, attemptErr)
+		recordCLIMessageDelivery(prepared, plan, attemptErr, pendingAt)
 
 		if attemptErr != nil {
 			slog.Warn("agent.cli.attempt_failed",
@@ -387,9 +394,16 @@ func recordCLIOpening(prepared preparedAgentStep, plan cliAttempt) {
 // prompt is retried, and recording it before delivery succeeds would leave a
 // duplicate (or, for the eventually-abandoned case, a phantom) turn in the
 // transcript.
-func recordCLIMessageDelivery(prepared preparedAgentStep, plan cliAttempt, attemptErr error) {
+//
+// Recorded at pendingAt — reserved by the caller BEFORE runCLIAttempt ran —
+// rather than appended now: by the time delivery is known to have succeeded,
+// runCLIAttempt has already streamed the child's whole reply into this same
+// recorder (parseCLIStream, clistream.go), so appending here would place the
+// prompt in the persisted transcript AFTER the answer it prompted. See
+// transcriptRecorder.insertUserAt.
+func recordCLIMessageDelivery(prepared preparedAgentStep, plan cliAttempt, attemptErr error, pendingAt int) {
 	if plan.resume && attemptErr == nil {
-		prepared.conv.recorder.user(plan.prompt)
+		prepared.conv.recorder.insertUserAt(pendingAt, plan.prompt)
 	}
 }
 

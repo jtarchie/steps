@@ -72,10 +72,10 @@ func (c *Config) validateTaskTimeouts() error {
 // A zero duration is accepted on an AGENT step and rejected everywhere else.
 // The asymmetry is not a special case so much as the absence of one: an agent
 // step is the only kind that gets a deadline it never asked for (see
-// agent.agentStepTimeout), so it is the only kind where "no deadline" needs a
-// spelling at all. On a task/get/put step the empty field already says it, and
-// a 0 there would be the ambiguity validateJobTimeouts rejects for the same
-// reason.
+// DefaultAgentStepTimeout below), so it is the only kind where "no deadline"
+// needs a spelling at all. On a task/get/put step the empty field already
+// says it, and a 0 there would be the ambiguity validateJobTimeouts rejects
+// for the same reason.
 func (c *Config) validateStepTimeouts() error {
 	for _, job := range c.Jobs {
 		err := job.visitSteps(func(label string, step *Step) error {

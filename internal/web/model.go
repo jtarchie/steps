@@ -677,17 +677,30 @@ func usageKey(index int, name string) string {
 // prints "uncapped" for a step that had a ceiling — on the run where that
 // ceiling is why it died, which is the one run this column exists for.
 func (r runView) ceilingFor(stepName string) (string, bool) {
-	if ceiling, known := r.Ceilings[stepName]; known {
-		return ceiling, true
+	return lookupByCellName(r.Ceilings, stepName)
+}
+
+// lookupByCellName resolves stepName against m, falling back to the base
+// agent name when stepName carries an across: cell's "<agent> [k=v]" naming
+// (see nameCell) — shared by ceilingFor and overview.go's timeoutForStep,
+// which answer the same "which agent does this row belong to" question
+// against two differently-typed per-agent maps (a spend ceiling, a resolved
+// timeout), so the cell-name rule is defined once rather than risking the
+// two drifting apart the next time either changes.
+func lookupByCellName[T any](m map[string]T, stepName string) (T, bool) {
+	if v, known := m[stepName]; known {
+		return v, true
 	}
 
 	if at := strings.LastIndex(stepName, " ["); at > 0 && strings.HasSuffix(stepName, "]") {
-		ceiling, known := r.Ceilings[stepName[:at]]
+		v, known := m[stepName[:at]]
 
-		return ceiling, known
+		return v, known
 	}
 
-	return "", false
+	var zero T
+
+	return zero, false
 }
 
 // PlacementView is one placed step's machine as the template reads it.

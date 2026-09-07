@@ -522,3 +522,63 @@ func TestRefreshFailureWithNoHistoryStillFails(t *testing.T) {
 		t.Fatal("RunJob succeeded with no versions from any source")
 	}
 }
+
+// TestRunDoesNotRegressResolvedVersionOnAPinnedRun: a --pin'd run resolves
+// whatever OLDER version the pin names, on purpose — but recordResolvedVersion
+// must not mistake that for a fresh "latest" and drag an unpolled resource's
+// displayed checked version backward. A regression here would also feed
+// checkCursorFor (refresh.go) a stale cursor on the run after, making it
+// re-walk ground an earlier, unpinned run already covered.
+func TestRunDoesNotRegressResolvedVersionOnAPinnedRun(t *testing.T) {
+	dir := t.TempDir()
+	feed := filepath.Join(dir, "feed.json")
+
+	cfg, st, _ := refreshFixture(t, "cat "+feed)
+	ctx := context.Background()
+
+	// First, ordinary run: only v1 exists, so it's both fetched and recorded.
+	err := os.WriteFile(feed, []byte(`[{"n":"v1"}]`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = runBuild(ctx, t, cfg, st)
+	if err != nil {
+		t.Fatalf("RunJob (v1): %v", err)
+	}
+
+	// The world moves on and a second ordinary run sees it, advancing the
+	// displayed checked version to v2 — TestRunRefreshesResourceHistory
+	// already proves this half.
+	err = os.WriteFile(feed, []byte(`[{"n":"v1"},{"n":"v2"}]`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = runBuild(ctx, t, cfg, st)
+	if err != nil {
+		t.Fatalf("RunJob (v2): %v", err)
+	}
+
+	// A one-off, explicitly pinned rerun against the OLDER v1 — an operator
+	// re-running a stale build, say. It must fetch v1 (the pin wins), but
+	// must NOT be mistaken for a new "latest".
+	provider, err := workspace.NewProvider(nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = RunJob(ctx, cfg, &cfg.Jobs[0], map[string]string{"n": "v1"}, provider, st, false)
+	if err != nil {
+		t.Fatalf("RunJob (pinned v1): %v", err)
+	}
+
+	baseline, _, err := st.LastCheckedVersion(ctx, "items")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if baseline != `{"n":"v2"}` {
+		t.Errorf("baseline = %s, want unchanged v2 — a pinned run's older fetch must not regress the displayed checked version", baseline)
+	}
+}

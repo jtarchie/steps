@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"unicode/utf8"
 
 	"github.com/jtarchie/steps/internal/shell"
 )
@@ -51,12 +52,24 @@ func truncateToolOutput(s string) string {
 
 // truncateToolOutputLimit is truncateToolOutput with an explicit budget, for
 // a grant that tuned its own via max_output_bytes:.
+//
+// limit is a byte offset with no knowledge of UTF-8, and this is now also the
+// cut point for a system prompt or a fully-rendered CLI prompt (see
+// transcriptRecorder.system/user) rather than only tool output — content far
+// more likely to carry multi-byte runes than a shell command's stdout. Backing
+// off to the nearest rune boundary keeps a split sequence from being stored
+// (and later re-serialized) as invalid UTF-8.
 func truncateToolOutputLimit(s string, limit int) string {
 	if len(s) <= limit {
 		return s
 	}
 
-	return s[:limit] + fmt.Sprintf("\n... [truncated %d bytes]", len(s)-limit)
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+
+	return s[:cut] + fmt.Sprintf("\n... [truncated %d bytes]", len(s)-cut)
 }
 
 // spillOrTruncate is the one-shot counterpart to shellToolResult's streaming

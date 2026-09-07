@@ -82,9 +82,9 @@ type Agent struct {
 	MaxQuestions *int `yaml:"max_questions,omitempty"`
 	// Timeout is the wall-clock deadline every step of this agent gets when
 	// it declares none of its own (e.g. "20m"). Unset takes the package
-	// default (30 minutes — agent.agentStepTimeout); "0" means no deadline at
-	// all, which no other step kind needs a spelling for because omitting the
-	// field already says it there.
+	// default (30 minutes — DefaultAgentStepTimeout); "0" means no deadline
+	// at all, which no other step kind needs a spelling for because omitting
+	// the field already says it there.
 	//
 	// It lives here as well as on the step because the right deadline is
 	// usually a property of the AGENT — a deep reviewer needs twenty minutes

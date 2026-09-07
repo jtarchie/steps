@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -66,6 +67,57 @@ func TestRecordVersionsKeepsDiscoveryOrder(t *testing.T) {
 
 	if got := versionNames(t, versions); fmt.Sprint(got) != "[1 2 3]" {
 		t.Errorf("versions = %v, want [1 2 3] oldest first", got)
+	}
+}
+
+// TestResourceVersionsJSONMatchesResourceVersions pins ResourceVersionsJSON
+// (the web UI resource detail page's own read) as the same rows,
+// same order, as ResourceVersions — just not decoded into map[string]any —
+// so a caller that only displays a version is not paying for a decode/
+// re-encode round trip ResourceVersions' own UseNumber decoding buys it
+// nothing for.
+func TestResourceVersionsJSONMatchesResourceVersions(t *testing.T) {
+	t.Parallel()
+
+	store := newHistoryStore(t)
+	ctx := context.Background()
+
+	// A wide id, to prove the raw form survives untouched rather than going
+	// through a decode that could normalize it.
+	_, err := store.RecordVersions(ctx, "items", []map[string]any{
+		{"n": "1"}, {"id": json.Number("1234567890123456789")},
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decoded, err := store.ResourceVersions(ctx, "items")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := store.ResourceVersionsJSON(ctx, "items")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(raw) != len(decoded) {
+		t.Fatalf("ResourceVersionsJSON returned %d rows, ResourceVersions returned %d", len(raw), len(decoded))
+	}
+
+	for i, encoded := range raw {
+		reDecoded, err := DecodeVersion(encoded)
+		if err != nil {
+			t.Fatalf("row %d: %v", i, err)
+		}
+
+		if fmt.Sprint(reDecoded) != fmt.Sprint(decoded[i]) {
+			t.Errorf("row %d = %v, want it to decode to the same value as ResourceVersions' %v", i, reDecoded, decoded[i])
+		}
+	}
+
+	if !strings.Contains(raw[1], "1234567890123456789") {
+		t.Errorf("raw row 1 = %q, want the wide id preserved exactly", raw[1])
 	}
 }
 

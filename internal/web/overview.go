@@ -308,30 +308,33 @@ func dialFor(cfg *config.Config, where string, step config.Step) agentDialView {
 	}
 }
 
-// agentCeilings is what each agent step of one job was allowed to spend, by
-// step name, for a run that opened against the configuration now being served.
+// agentDialValues resolves cfg/jobName/runSHA down to one map per AGENT name
+// of whatever val reads off that agent's dial, gated on the run-configuration
+// match every per-dial run-page fact shares (agentCeilings' spend ceiling,
+// agentTimeouts' resolved wall-clock timeout, and any later one).
 //
 // The sha gate is the whole of the honesty here. The right answer would come
 // from the run's OWN revision, and cannot today: a revision stores its source
 // but not its include files, and internal/config loads from a path rather than
 // from bytes, so a run older than the last edit is not reconstructable. The
-// question this column is consulted for is "what was it capped at when it
-// failed", which makes today's ceiling on last week's run the one wrong answer
-// worse than no answer — so a mismatch reports drift and no numbers.
+// question a caller consults this for is "what was it capped/held to when it
+// failed", which makes today's dial on last week's run the one wrong answer
+// worse than no answer — so a mismatch reports drift (the true return) and no
+// values, rather than falling through to whatever the loaded config says now.
 //
-// Keyed by AGENT name, which is what a ceiling belongs to (see
+// Keyed by AGENT name, which is what a dial belongs to (see
 // config.ResolveAgentInvocation): a job running one agent twice gets one
-// ceiling for both rows, which is right. agent_usage records a STEP name
+// entry for both rows, which is right. agent_usage records a STEP name
 // instead, and the two coincide for every step except an across: cell, which
-// renames itself — runView.ceilingFor is the side that knows to ask again
-// without the cell's coordinates.
-func agentCeilings(cfg *config.Config, jobName, runSHA string) (map[string]string, bool) {
+// renames itself — lookupByCellName (model.go) is the side that knows to ask
+// again without the cell's coordinates.
+func agentDialValues[T any](cfg *config.Config, jobName, runSHA string, val func(agentDialView) T) (map[string]T, bool) {
 	// Three states, and collapsing any two of them puts a wrong word on the
-	// page. A run whose configuration is not the loaded one has ceilings that
+	// page. A run whose configuration is not the loaded one has dials that
 	// cannot be known; a run whose configuration IS loaded may still have an
-	// agent with no ceiling at all. "Unknowable" and "uncapped" are opposite
-	// answers, so a run with no recorded sha reports the former rather than
-	// falling through to the latter.
+	// agent with no ceiling/deadline at all. "Unknowable" and "uncapped" are
+	// opposite answers, so a run with no recorded sha reports the former
+	// rather than falling through to the latter.
 	if cfg == nil || cfg.Revision.SHA == "" || runSHA != cfg.Revision.SHA {
 		return nil, true
 	}
@@ -341,73 +344,51 @@ func agentCeilings(cfg *config.Config, jobName, runSHA string) (map[string]strin
 		return nil, true
 	}
 
-	ceilings := map[string]string{}
+	values := map[string]T{}
 
 	for _, dial := range agentDials(cfg, *job) {
 		if dial.Broken != "" {
 			continue
 		}
 
-		// An uncapped agent is IN the map with an empty value, not left out of
-		// it. Absence has to keep meaning "could not be resolved" — see
+		values[dial.Agent] = val(dial)
+	}
+
+	return values, false
+}
+
+// agentCeilings is what each agent step of one job was allowed to spend, by
+// step name, for a run that opened against the configuration now being
+// served. See agentDialValues for the sha-drift gate and the agent-name key.
+func agentCeilings(cfg *config.Config, jobName, runSHA string) (map[string]string, bool) {
+	return agentDialValues(cfg, jobName, runSHA, func(dial agentDialView) string {
+		// An uncapped agent is IN the map with an empty value, not left out
+		// of it. Absence has to keep meaning "could not be resolved" — see
 		// runView.ceilingFor — because a step whose name matches no agent
 		// would otherwise render as uncapped, which is the opposite answer.
 		if dial.UncappedBudget() {
-			ceilings[dial.Agent] = ""
-
-			continue
+			return ""
 		}
 
-		ceilings[dial.Agent] = dial.Budget()
-	}
-
-	return ceilings, false
+		return dial.Budget()
+	})
 }
 
 // agentTimeouts is what each agent step of one job would be held to on the
 // currently loaded configuration, by AGENT name — the resolved wall-clock
-// ceiling (config.ResolvedAgentTimeout, 0 meaning unlimited), gated on the
-// same run-configuration match as agentCeilings and for the same reason:
-// today's timeout: for last week's run is the one wrong answer worse than
-// none.
+// ceiling (config.ResolvedAgentTimeout, 0 meaning unlimited). See
+// agentDialValues for the sha-drift gate this shares with agentCeilings.
 func agentTimeouts(cfg *config.Config, jobName, runSHA string) (map[string]time.Duration, bool) {
-	if cfg == nil || cfg.Revision.SHA == "" || runSHA != cfg.Revision.SHA {
-		return nil, true
-	}
-
-	job, err := cfg.FindJob(jobName)
-	if err != nil {
-		return nil, true
-	}
-
-	timeouts := map[string]time.Duration{}
-
-	for _, dial := range agentDials(cfg, *job) {
-		if dial.Broken != "" {
-			continue
-		}
-
-		timeouts[dial.Agent] = config.ResolvedAgentTimeout(dial.Timeout)
-	}
-
-	return timeouts, false
+	return agentDialValues(cfg, jobName, runSHA, func(dial agentDialView) time.Duration {
+		return config.ResolvedAgentTimeout(dial.Timeout)
+	})
 }
 
-// timeoutForStep mirrors runView.ceilingFor's agent/cell-name reconciliation
-// (an across: cell renames itself to "<agent> [k=v]" but resolves through
-// the same agent) against a map keyed by agent name.
+// timeoutForStep resolves a step's agent/cell name against timeouts, sharing
+// runView.ceilingFor's lookupByCellName (model.go) rather than a second copy
+// of the same "<agent> [k=v]" reconciliation.
 func timeoutForStep(timeouts map[string]time.Duration, stepName string) (time.Duration, bool) {
-	if d, known := timeouts[stepName]; known {
-		return d, true
-	}
-
-	if at := strings.LastIndex(stepName, " ["); at > 0 && strings.HasSuffix(stepName, "]") {
-		d, known := timeouts[stepName[:at]]
-
-		return d, known
-	}
-
-	return 0, false
+	return lookupByCellName(timeouts, stepName)
 }
 
 // attachStepDeadlines resolves each currently-running agent step's wall-clock
@@ -416,19 +397,37 @@ func timeoutForStep(timeouts map[string]time.Duration, stepName string) (time.Du
 // every step when the run's configuration has drifted (agentTimeouts' own
 // gate), for a non-agent or finished step, or for a step whose resolved
 // timeout is unlimited.
+//
+// Called on BOTH of the run page's two rendering paths — handlers.go's
+// assembleRun for a full load, and live.go's flushBatch for the SSE stream's
+// persistent, incrementally-folded view — because the countdown is drawn
+// inside the per-step row, which is exactly the part of the page the two
+// paths share (see internal/web/CLAUDE.md, "the live view and the post-hoc
+// view are the SAME rendering"). A run's own status and spend tables are the
+// only things the stream is documented not to draw; this isn't one of them.
+//
+// That second call site is why every branch below explicitly ZEROES Deadline
+// rather than merely skipping a step that doesn't qualify: assembleRun builds
+// a fresh runView from scratch every call, so a `continue` and a zero start
+// out identical there, but the SSE path's runFolder is long-lived and its
+// *stepView pointers are reused across flushes — a step that had a deadline
+// while running must have it cleared once it finishes, or its row still
+// carries a stale "timeout in ..." the next time something else about it
+// changes and the row is re-sent.
 func attachStepDeadlines(view *runView, cfg *config.Config, jobName, runSHA string) {
 	timeouts, drifted := agentTimeouts(cfg, jobName, runSHA)
-	if drifted {
-		return
-	}
 
 	for _, step := range view.Steps {
-		if step.Kind != "agent" || !step.Running() || step.Started.IsZero() {
+		if drifted || step.Kind != "agent" || !step.Running() || step.Started.IsZero() {
+			step.Deadline = time.Time{}
+
 			continue
 		}
 
 		timeout, known := timeoutForStep(timeouts, step.Name)
 		if !known || timeout == 0 {
+			step.Deadline = time.Time{}
+
 			continue
 		}
 

@@ -361,6 +361,13 @@ func (s *Server) flushBatch(
 
 	view := folder.view(run)
 
+	// The same decoration assembleRun gives a full-page render (handlers.go)
+	// — a running agent step's countdown is drawn inside the per-step row,
+	// which this stream sends, so without this a step that starts (or is
+	// re-sent for any other reason) while a connection is already open never
+	// shows one. See attachStepDeadlines' own doc comment.
+	attachStepDeadlines(&view, pipelineOf(c).Config(), run.JobName, run.ConfigSHA)
+
 	// ONE message per flush, however many rows changed. The id a browser
 	// resends on a reconnect names the last message it applied, so a flush
 	// split across several messages could be resumed from the middle of

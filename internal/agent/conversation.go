@@ -563,7 +563,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	for ; budget == unlimitedTurns || turn < budget; turn++ {
 		state.summary, state.stalled = maybeCompact(ctx, llm, req, conv, state.summary, state.stalled)
 
-		maybeWarnTimeout(req, hasTimeout, timeoutDeadline, budgetAtEntry, &timeoutWarned)
+		maybeWarnTimeout(req, conv.env.transcript, hasTimeout, timeoutDeadline, budgetAtEntry, &timeoutWarned)
 
 		// The budget is checked before the turn's tool calls run: a step that
 		// has already blown its ceiling must not go on to have side effects.
@@ -791,10 +791,14 @@ func timeoutWarningContent() *genai.Content {
 }
 
 // maybeWarnTimeout appends the proactive timeout warning to req exactly
-// once, when hasTimeout and timeoutWarningDue agree it is due. Extracted
-// from runConversationLoop to keep its cyclomatic complexity under the
-// linter budget.
-func maybeWarnTimeout(req *model.LLMRequest, hasTimeout bool, deadline time.Time, budgetAtEntry time.Duration, warned *bool) {
+// once, when hasTimeout and timeoutWarningDue agree it is due, and records it
+// on transcript the same way every other synthetic user turn in this file
+// does (buildAgentRequest's opening, advance's later messages:) — without
+// this, node_transcripts and the live run page showed the model's reaction
+// to the warning with no turn explaining what prompted it. Extracted from
+// runConversationLoop to keep its cyclomatic complexity under the linter
+// budget.
+func maybeWarnTimeout(req *model.LLMRequest, transcript *transcriptRecorder, hasTimeout bool, deadline time.Time, budgetAtEntry time.Duration, warned *bool) {
 	if !hasTimeout || *warned {
 		return
 	}
@@ -804,6 +808,7 @@ func maybeWarnTimeout(req *model.LLMRequest, hasTimeout bool, deadline time.Time
 	}
 
 	req.Contents = append(req.Contents, timeoutWarningContent())
+	transcript.user(timeoutWarningText)
 	*warned = true
 }
 

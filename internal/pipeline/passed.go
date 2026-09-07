@@ -63,10 +63,18 @@ func recordFetchedVersion(ctx context.Context, resource string, version map[stri
 // there would either suppress a real trigger or show a stale-looking
 // "latest" for a resource the poller already tracks correctly.
 //
+// pinned is the same skip fanOutGet's takeSet gives a --pin'd run (see
+// planWalk.pinned): naming a version is an instruction outside the normal
+// discovery flow, so an older, explicitly-pinned fetch must not overwrite an
+// unpolled resource's displayed "last checked" version with something older
+// than what an unpinned run already recorded — display would regress, and
+// the next refresh's cursor (checkCursorFor, internal/pipeline/refresh.go)
+// would re-walk ground it already covered.
+//
 // Best-effort, same posture as recordFetchedVersion: this is bookkeeping for
 // a page, not the work the step was asked to do.
-func recordResolvedVersion(ctx context.Context, st *store.Store, cfg *config.Config, resourceName string, version map[string]any) {
-	if cfg.ResourceIsPolled(resourceName) {
+func recordResolvedVersion(ctx context.Context, st *store.Store, cfg *config.Config, resourceName string, version map[string]any, pinned bool) {
+	if pinned || cfg.ResourceIsPolled(resourceName) {
 		return
 	}
 

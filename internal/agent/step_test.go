@@ -8,10 +8,51 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/workspace"
 )
+
+// TestRemainingOrNoDeadline pins the floor: a context whose deadline has
+// already passed reports noAgentDeadline rather than a negative duration —
+// the case that let a sub-agent's system message disclose "must finish
+// within -50ms from now" when a delegation started right as the parent
+// conversation's own deadline expired.
+func TestRemainingOrNoDeadline(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no deadline at all", func(t *testing.T) {
+		t.Parallel()
+
+		if got := remainingOrNoDeadline(context.Background()); got != noAgentDeadline {
+			t.Errorf("got %v, want noAgentDeadline", got)
+		}
+	})
+
+	t.Run("a future deadline reports what remains", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		defer cancel()
+
+		got := remainingOrNoDeadline(ctx)
+		if got <= 0 || got > time.Hour {
+			t.Errorf("got %v, want a positive duration close to an hour", got)
+		}
+	})
+
+	t.Run("an already-passed deadline floors at noAgentDeadline, not negative", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+		defer cancel()
+
+		if got := remainingOrNoDeadline(ctx); got != noAgentDeadline {
+			t.Errorf("got %v, want noAgentDeadline (0), not a negative duration", got)
+		}
+	})
+}
 
 // captureStdout runs fn with os.Stdout redirected to a pipe, returning
 // everything fn wrote via fmt.Printf and friends. Not safe alongside other
