@@ -449,20 +449,27 @@ func (c *Config) PolledResourceNames() []string {
 	names := make([]string, 0)
 
 	for _, job := range c.Jobs {
-		for _, step := range job.Plan {
-			if !stepIsPolled(step) {
-				continue
+		// visitSteps, not job.Plan directly: a get is rejected inside do:/
+		// try:/a hook, but is legal (just not version:every-eligible) inside
+		// an in_parallel:/race: branch, and still trigger:/passed: eligible
+		// there — GetResourceNames a few lines below already walks this far
+		// for the same reason. A flat scan over job.Plan silently drops one.
+		_ = job.visitSteps(func(_ string, step *Step) error {
+			if !stepIsPolled(*step) {
+				return nil
 			}
 
 			name := step.GetResourceName()
 			if seen[name] {
-				continue
+				return nil
 			}
 
 			seen[name] = true
 
 			names = append(names, name)
-		}
+
+			return nil
+		})
 	}
 
 	return names
@@ -474,10 +481,18 @@ func (c *Config) PolledResourceNames() []string {
 // ever wants a yes/no answer.
 func (c *Config) ResourceIsPolled(resourceName string) bool {
 	for _, job := range c.Jobs {
-		for _, step := range job.Plan {
-			if stepIsPolled(step) && step.GetResourceName() == resourceName {
-				return true
+		polled := false
+
+		_ = job.visitSteps(func(_ string, step *Step) error {
+			if stepIsPolled(*step) && step.GetResourceName() == resourceName {
+				polled = true
 			}
+
+			return nil
+		})
+
+		if polled {
+			return true
 		}
 	}
 

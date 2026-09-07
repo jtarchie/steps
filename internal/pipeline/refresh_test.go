@@ -432,6 +432,62 @@ jobs:
 	}
 }
 
+// TestRunRefreshesResolvedVersionOnFanOutCacheSkip proves the OTHER skip path
+// calls recordResolvedVersion too: a job's FIRST get always fetches through
+// fanOutGet (see runTriggeredBuild's own comment on why), so once its chain
+// is cached, fanOutGet's cache-skip branch — not fetchGetStepInPlace's — is
+// the one a second, unchanged run takes. Without the call there, an unpolled
+// resource's resource_checks row goes stale the moment its job starts being
+// skipped, even though the job keeps succeeding on the same version.
+func TestRunRefreshesResolvedVersionOnFanOutCacheSkip(t *testing.T) {
+	dir := t.TempDir()
+	feed := filepath.Join(dir, "feed.json")
+
+	cfg, st, posted := refreshFixture(t, "cat "+feed)
+	ctx := context.Background()
+
+	err := os.WriteFile(feed, []byte(`[{"n":"v1"}]`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = runBuild(ctx, t, cfg, st)
+	if err != nil {
+		t.Fatalf("RunJob (1st): %v", err)
+	}
+
+	// Corrupt what the first run recorded, so the second run — which must
+	// hit the cache-skip branch, since nothing about the pipeline or feed
+	// changed — is the only thing that can repair it.
+	err = st.RecordCheckedVersion(ctx, "items", `{"n":"stale"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = runBuild(ctx, t, cfg, st)
+	if err != nil {
+		t.Fatalf("RunJob (2nd): %v", err)
+	}
+
+	data, err := os.ReadFile(posted) //nolint:gosec // a t.TempDir()-scoped file this test wrote itself
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(data) != "v1\n" {
+		t.Fatalf("built %q, want a single v1 — the second run's get (and so its task) is cache-skipped", data)
+	}
+
+	baseline, _, err := st.LastCheckedVersion(ctx, "items")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if baseline != `{"n":"v1"}` {
+		t.Errorf("baseline = %s, want v1 — a cache-skipped fan-out get must still refresh an unpolled resource's checked version", baseline)
+	}
+}
+
 // TestRefreshFailureWarnsAndProceeds: the version record is the truth and
 // checks feed it, so a check outage must not block building what is already
 // known.

@@ -113,6 +113,55 @@ jobs:
 	}
 }
 
+// TestPolledResourceNamesReachesNestedGets confirms a trigger: get nested
+// inside an in_parallel: branch is found — a get is rejected inside do:/
+// try:/a hook, but is legal (just not version:every-eligible) inside an
+// in_parallel:/race: branch, and GetResourceNames a few lines up already
+// walks that far for the same reason. A flat scan over job.Plan alone would
+// silently exclude it from the poller and, worse, tell recordResolvedVersion
+// it is safe to overwrite this resource's resource_checks row even though
+// the poller means to own it.
+func TestPolledResourceNamesReachesNestedGets(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+defaults:
+  preflight:
+    disabled: true
+
+resource_types:
+- name: dummy
+  config: {check: "echo []", in: "true", out: "true"}
+resources:
+- name: nested
+  type: dummy
+  source: {}
+jobs:
+- name: build
+  plan:
+  - in_parallel:
+      steps:
+      - get: nested
+        trigger: true
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	got := cfg.PolledResourceNames()
+	want := []string{"nested"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("PolledResourceNames = %v, want %v — a trigger: get nested in an in_parallel: branch must still be found", got, want)
+	}
+
+	if !cfg.ResourceIsPolled("nested") {
+		t.Error("ResourceIsPolled(nested) = false, want true — a trigger: get nested in an in_parallel: branch is still polled")
+	}
+}
+
 // TestResourceIsPolledAgreesWithPolledResourceNames checks the two forms
 // answer the same question for a plain get (neither trigger: nor passed:) —
 // ResourceIsPolled is a faster path to the same membership test, not a

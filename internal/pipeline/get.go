@@ -90,6 +90,14 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 			logFrom(getCtx).Info("job.skip", "resource", resource.Name, "reason", "cached", "hash", hash)
 			publishStepSkipped(getCtx, w.jobName, i, step, markStep(getCtx), hash, skipReason(stepChainSkipped))
 
+			// A skip means this exact chain already succeeded once — the version
+			// was genuinely fetched, just not by this run. Mirrors
+			// fetchGetStepInPlace's own skip branch: without this, a job whose
+			// FIRST get is unpolled goes stale in resource_checks the moment its
+			// chain starts being cached, because this is the only skip path for
+			// that get and nothing else ever calls recordResolvedVersion again.
+			recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version)
+
 			// Taken, even though nothing ran: the cache skipped it because
 			// this exact chain already succeeded, which is the definition of
 			// a set this job is done with. All of the set's bindings advance,
