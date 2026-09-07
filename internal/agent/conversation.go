@@ -307,14 +307,21 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 		args := map[string]any{"step": block.path}
 		contents = append(contents, syntheticToolExchange(fmt.Sprintf("upstream_%d", i), readStepToolName, args, block.content)...)
 		conv.env.transcript.call(readStepToolName, args)
-		conv.env.transcript.result(readStepToolName, block.content)
+		// Bounded like every other tool result recorded here (renderResultContent,
+		// recordCLIResults): block.content is a context: {from:} block, uncapped
+		// by anything upstream of this call, and result() deliberately does NOT
+		// cap on its own — it assumes the caller already did.
+		conv.env.transcript.result(readStepToolName, truncateToolOutputLimit(block.content, maxRecordedResultBytes))
 	}
 
 	for i, block := range conv.contextBlocks {
 		args := map[string]any{"path": block.path}
 		contents = append(contents, syntheticToolExchange(fmt.Sprintf("ctx_%d", i), "read_file", args, block.content)...)
 		conv.env.transcript.call("read_file", args)
-		conv.env.transcript.result("read_file", block.content)
+		// Bounded for the same reason: context_paths: caps what the MODEL sees
+		// at max_context_bytes (default 100,000, or uncapped at 0), which is a
+		// much looser ceiling than what a transcript result normally carries.
+		conv.env.transcript.result("read_file", truncateToolOutputLimit(block.content, maxRecordedResultBytes))
 	}
 
 	return &model.LLMRequest{

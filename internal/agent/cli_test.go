@@ -742,10 +742,12 @@ func TestRecordCLIOpeningFiresOnce(t *testing.T) {
 }
 
 // TestRecordCLIMessageDeliverySkipsUndeliveredRetries pins
-// recordCLIMessageDelivery's gate: a later messages: entry is recorded once
-// it actually reaches the child, matching markDelivered's own condition —
-// not on a failed attempt, and not when the invocation isn't a pending
-// message at all.
+// recordCLIMessageDelivery's gate: a resumed invocation's prompt (a real
+// messages: entry, a continuation, or a files-nudge — recordCLIMessageDelivery
+// does not distinguish, since all three are text the child was actually
+// told) is recorded once delivery succeeds, matching markDelivered's own
+// condition — never on a failed attempt, and never on the opening invocation
+// (plan.resume == false), which recordCLIOpening already covers.
 func TestRecordCLIMessageDeliverySkipsUndeliveredRetries(t *testing.T) {
 	t.Parallel()
 
@@ -755,28 +757,67 @@ func TestRecordCLIMessageDeliverySkipsUndeliveredRetries(t *testing.T) {
 
 	plan := firstAttempt()
 	plan.prompt = "second ask"
+	plan.resume = true
 
-	// A failed attempt to deliver the pending message: nothing recorded, so
-	// the eventual successful retry is the only copy in the transcript.
-	recordCLIMessageDelivery(prepared, plan, true, errors.New("boom"))
+	// A failed attempt to deliver a resumed prompt: nothing recorded, so the
+	// eventual successful retry is the only copy in the transcript.
+	recordCLIMessageDelivery(prepared, plan, errors.New("boom"))
 
 	if len(rec.events) != 0 {
 		t.Fatalf("a failed delivery recorded %+v, want nothing", rec.events)
 	}
 
-	// Not a pending message at all (a continuation/nudge prompt): never
-	// recorded here — that text was already covered by recordCLIOpening or
-	// an earlier successful delivery.
-	recordCLIMessageDelivery(prepared, plan, false, nil)
+	// The opening invocation (plan.resume == false): never recorded here —
+	// that text is recordCLIOpening's to record.
+	opening := plan
+	opening.resume = false
+
+	recordCLIMessageDelivery(prepared, opening, nil)
 
 	if len(rec.events) != 0 {
-		t.Fatalf("a non-pending invocation recorded %+v, want nothing", rec.events)
+		t.Fatalf("a non-resumed invocation recorded %+v, want nothing", rec.events)
 	}
 
-	// The successful delivery: recorded exactly once.
-	recordCLIMessageDelivery(prepared, plan, true, nil)
+	// The successful, resumed delivery: recorded exactly once.
+	recordCLIMessageDelivery(prepared, plan, nil)
 
 	if len(rec.events) != 1 || rec.events[0].Type != "user" || rec.events[0].Text != "second ask" {
 		t.Fatalf("delivered message = %+v, want one user event with text %q", rec.events, "second ask")
+	}
+}
+
+// TestRecordCLIMessageDeliveryRecordsContinuationAndNudgePrompts proves the
+// gap the old `pending`-only gate left: a session-continuation prompt (sent
+// after a dead prior attempt) and a files-nudge prompt (sent when a step's
+// assert.files: are still missing) are not pendingCLIMessage entries —
+// pendingCLIMessage returns false for both — yet they are real text put to
+// the child, and the child's own recorded reply answers exactly this text.
+// Before this fix, neither was ever recorded, leaving a transcript with a
+// model turn nothing explained.
+func TestRecordCLIMessageDeliveryRecordsContinuationAndNudgePrompts(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, []string{"read_file"})
+	rec := &transcriptRecorder{}
+	prepared.conv.recorder = rec
+
+	continuation := firstAttempt()
+	continuation.resume = true
+	continuation.prompt = "Your previous attempt did not finish. Continue."
+
+	recordCLIMessageDelivery(prepared, continuation, nil)
+
+	nudge := firstAttempt()
+	nudge.resume = true
+	nudge.prompt = "You declared assert.files: [out.txt], which is still missing."
+
+	recordCLIMessageDelivery(prepared, nudge, nil)
+
+	if len(rec.events) != 2 {
+		t.Fatalf("got %d events, want 2 (continuation + nudge)", len(rec.events))
+	}
+
+	if rec.events[0].Text != continuation.prompt || rec.events[1].Text != nudge.prompt {
+		t.Fatalf("recorded texts = %+v, want the continuation then the nudge prompt", rec.events)
 	}
 }

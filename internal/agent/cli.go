@@ -221,7 +221,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		lastErr = attemptErr
 
 		markDelivered(state, sent, pending, attemptErr)
-		recordCLIMessageDelivery(prepared, plan, pending, attemptErr)
+		recordCLIMessageDelivery(prepared, plan, attemptErr)
 
 		if attemptErr != nil {
 			slog.Warn("agent.cli.attempt_failed",
@@ -369,13 +369,26 @@ func recordCLIOpening(prepared preparedAgentStep, plan cliAttempt) {
 	prepared.conv.recorder.user(plan.prompt)
 }
 
-// recordCLIMessageDelivery records a later messages: entry once it has
-// actually reached the child — the same gate markDelivered uses, so a
-// message is recorded exactly once even though pendingCLIMessage (and so
-// plan.prompt) keeps reporting it as pending across every retry of the round
-// that eventually delivers it.
-func recordCLIMessageDelivery(prepared preparedAgentStep, plan cliAttempt, pending bool, attemptErr error) {
-	if pending && attemptErr == nil {
+// recordCLIMessageDelivery records whatever this invocation actually put to
+// the child, once delivery succeeds — every resumed invocation (plan.resume,
+// which recordCLIOpening's own gate already excludes), not just a real
+// messages: entry.
+//
+// A resumed invocation says one of three things: a genuine messages: entry
+// (pendingCLIMessage), a "your previous attempt did not finish" continuation
+// after a dead attempt, or a files-nudge. All three are prompt text the child
+// is actually told and none of them was ever gated for the same reason
+// pendingCLIMessage isn't — this used to gate on `pending` alone, which is
+// true only for the first case, so the transcript recorded system/opening
+// and any real messages:, but never the continuation or nudge text the
+// child's OWN recorded reply was actually answering.
+//
+// Gated on success for the same reason markDelivered is: a failed attempt's
+// prompt is retried, and recording it before delivery succeeds would leave a
+// duplicate (or, for the eventually-abandoned case, a phantom) turn in the
+// transcript.
+func recordCLIMessageDelivery(prepared preparedAgentStep, plan cliAttempt, attemptErr error) {
+	if plan.resume && attemptErr == nil {
 		prepared.conv.recorder.user(plan.prompt)
 	}
 }

@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 )
 
@@ -386,6 +387,33 @@ func (j Job) GetsResource(resource string) bool {
 	return found
 }
 
+// TriggersOn reports whether this job has a trigger:true get step resolving
+// to resourceName, walking the same nested tree PolledResourceNames does (a
+// trigger:true get is legal — just not version:every-eligible — inside an
+// in_parallel:/race: branch).
+//
+// Exported because internal/trigger.AffectedJobs needs it from outside this
+// package (visitSteps is unexported): AffectedJobs used to scan job.Plan
+// flatly, which was symmetric with the old Resources() before it started
+// delegating to PolledResourceNames — once the poller started reaching a
+// nested trigger:true get, a flat AffectedJobs stopped being able to find
+// the job for it, so the resource's baseline in resource_checks would
+// advance on every poll while the job it was meant to trigger was never
+// enqueued.
+func (j Job) TriggersOn(resourceName string) bool {
+	found := false
+
+	_ = j.visitSteps(func(_ string, step *Step) error {
+		if step.Trigger && step.GetResourceName() == resourceName {
+			found = true
+		}
+
+		return nil
+	})
+
+	return found
+}
+
 // PutSteps returns every step in this job's plan and hooks that publishes to
 // the named resource.
 //
@@ -475,28 +503,14 @@ func (c *Config) PolledResourceNames() []string {
 	return names
 }
 
-// ResourceIsPolled reports whether resourceName is in PolledResourceNames,
-// without building the whole list — for a caller (internal/pipeline's
-// recordResolvedVersion) that asks this once per fetched version and only
-// ever wants a yes/no answer.
+// ResourceIsPolled reports whether resourceName is in PolledResourceNames —
+// for a caller (internal/pipeline's recordResolvedVersion) that asks this
+// once per fetched version and only ever wants a yes/no answer. A second,
+// independent traversal here would risk answering a different question than
+// PolledResourceNames does the moment one of them changes and the other
+// doesn't; delegating makes that impossible by construction.
 func (c *Config) ResourceIsPolled(resourceName string) bool {
-	for _, job := range c.Jobs {
-		polled := false
-
-		_ = job.visitSteps(func(_ string, step *Step) error {
-			if stepIsPolled(*step) && step.GetResourceName() == resourceName {
-				polled = true
-			}
-
-			return nil
-		})
-
-		if polled {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(c.PolledResourceNames(), resourceName)
 }
 
 // stepIsPolled is the one predicate PolledResourceNames and ResourceIsPolled

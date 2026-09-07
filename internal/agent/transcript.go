@@ -147,10 +147,18 @@ func (r *transcriptRecorder) text(text string) {
 // from buildAgentRequest's fresh branch (never on a failover resume, which
 // reuses the same conversation rather than starting a new one) — the same
 // placement user() uses, for the same reason.
+//
+// Bounded the same as a tool result: a system_file: can be arbitrarily large,
+// and on the CLI path this is also where the whole rendered prompt lands
+// (recordCLIOpening), which folds in every upstream/context block with no
+// cap of its own (renderCLIPrompt). Capping here, once, protects every
+// caller instead of relying on each one to remember to.
 func (r *transcriptRecorder) system(text string) {
 	if r == nil || text == "" {
 		return
 	}
+
+	text = truncateToolOutputLimit(text, maxRecordedResultBytes)
 
 	r.events = append(r.events, transcriptEvent{Type: "system", Text: text})
 	r.publish(events.TypeAgentSystem, text, "", "")
@@ -160,10 +168,17 @@ func (r *transcriptRecorder) system(text string) {
 // starts with, or a later message: entry sent mid-conversation via advance.
 // Both call sites fire exactly once per real message — see buildAgentRequest
 // and advance in conversation.go.
+//
+// Bounded like system(): the CLI path's recordCLIOpening/
+// recordCLIMessageDelivery record the fully-rendered prompt here, which can
+// carry an unbounded context_paths:/upstream block folded in by
+// renderCLIPrompt.
 func (r *transcriptRecorder) user(text string) {
 	if r == nil || text == "" {
 		return
 	}
+
+	text = truncateToolOutputLimit(text, maxRecordedResultBytes)
 
 	r.events = append(r.events, transcriptEvent{Type: "user", Text: text})
 	r.publish(events.TypeAgentUser, text, "", "")

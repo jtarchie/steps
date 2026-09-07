@@ -54,19 +54,17 @@ func Resources(cfg *config.Config) []string {
 // AffectedJobs returns every job that has a trigger:true get step resolving to
 // resourceName, in declaration order. A job with more than one such step on
 // the same resource is returned once. Matching is on the resolved resource
-// name (get: aliases included), matching Resources.
+// name (get: aliases included), matching Resources — including a trigger:true
+// get nested inside an in_parallel:/race: branch, which config.Job.TriggersOn
+// walks the same tree config.PolledResourceNames does to find.
 func AffectedJobs(cfg *config.Config, resourceName string) []*config.Job {
 	jobs := make([]*config.Job, 0)
 
 	for i := range cfg.Jobs {
 		job := &cfg.Jobs[i]
 
-		for _, step := range job.Plan {
-			if step.GetResourceName() == resourceName && step.Trigger {
-				jobs = append(jobs, job)
-
-				break
-			}
+		if job.TriggersOn(resourceName) {
+			jobs = append(jobs, job)
 		}
 	}
 

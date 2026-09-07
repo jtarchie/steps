@@ -222,6 +222,52 @@ jobs:
 	}
 }
 
+// TestAffectedJobsReachesNestedTrigger proves AffectedJobs finds a
+// trigger:true get nested inside an in_parallel: branch — the same depth
+// Resources (via config.PolledResourceNames) already reaches. Before
+// config.Job.TriggersOn, AffectedJobs scanned job.Plan flatly: the poller
+// would check and advance resource_checks for "nested" on every version
+// change, yet no job would ever be enqueued for it, because the top-level
+// step in job.Plan is the in_parallel: container itself (GetResourceName()
+// == "").
+func TestAffectedJobsReachesNestedTrigger(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := loadConfig(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
+resource_types:
+- name: dummy
+  config: {check: "echo []", in: "true", out: "true"}
+resources:
+- name: nested
+  type: dummy
+  source: {}
+jobs:
+- name: build
+  plan:
+  - in_parallel:
+      steps:
+      - get: nested
+        trigger: true
+`)
+
+	jobs := AffectedJobs(cfg, "nested")
+
+	names := make([]string, len(jobs))
+	for i, j := range jobs {
+		names[i] = j.Name
+	}
+
+	want := []string{"build"}
+	if !reflect.DeepEqual(names, want) {
+		t.Errorf("AffectedJobs names = %v, want %v — a trigger:true get nested in an in_parallel: branch must still enqueue its job", names, want)
+	}
+}
+
 // TestResourcesAndAffectedJobsResolveGetAlias confirms a get: aliasing its
 // resource is polled and matched by the RESOLVED resource name, not the alias
 // — so two aliases of one resource poll it once and both jobs are affected.

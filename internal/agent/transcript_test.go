@@ -150,6 +150,44 @@ func TestRunAgentConversationRecordsSyntheticExchanges(t *testing.T) {
 	}
 }
 
+// TestRunAgentConversationBoundsSyntheticExchangeContent proves an oversized
+// upstream/context_paths block is capped the same way a model-issued tool
+// result is (renderResultContent -> maxRecordedResultBytes), instead of
+// landing in node_transcripts raw — context_paths: alone allows up to
+// max_context_bytes (100,000 by default, unbounded at 0), far past what a
+// transcript result normally carries.
+func TestRunAgentConversationBoundsSyntheticExchangeContent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	fake := &fakeLLM{responses: []*model.LLMResponse{textResponse("done")}}
+
+	conv := newTestConversation(t, "do the thing", dir)
+	conv.contextBlocks = []contextBlock{{path: "big.md", content: strings.Repeat("x", maxRecordedResultBytes*2)}}
+
+	res, err := runAgentConversation(context.Background(), fake, conv)
+	if err != nil {
+		t.Fatalf("runAgentConversation: %v", err)
+	}
+
+	var resultEvent *transcriptEvent
+
+	for i := range res.transcript {
+		if res.transcript[i].Type == "result" {
+			resultEvent = &res.transcript[i]
+		}
+	}
+
+	if resultEvent == nil {
+		t.Fatalf("transcript = %+v, want a result event", res.transcript)
+	}
+
+	if len(resultEvent.Content) >= maxRecordedResultBytes*2 {
+		t.Errorf("context block result = %d bytes, want it capped near maxRecordedResultBytes (%d), not stored raw", len(resultEvent.Content), maxRecordedResultBytes)
+	}
+}
+
 // TestRunAgentConversationRecordsLaterMessages asserts every messages: entry
 // past the first is recorded as its own "user" event when advance sends it,
 // in order.
@@ -271,6 +309,36 @@ func TestTranscriptSubagentNesting(t *testing.T) {
 
 	if len(sub.Events) != 1 || sub.Events[0].Text != "child says hi" {
 		t.Fatalf("nested events = %+v, want the child's text event", sub.Events)
+	}
+}
+
+// TestTranscriptRecorderSystemAndUserTruncate pins the same persistence cap
+// on system()/user() as result() gets via renderResultContent — the CLI
+// path's recordCLIOpening records the fully-rendered prompt here
+// (renderCLIPrompt folds in every upstream/context block with no cap of its
+// own), so without this an oversized system_file: or CLI prompt would be
+// persisted to node_transcripts raw.
+func TestTranscriptRecorderSystemAndUserTruncate(t *testing.T) {
+	t.Parallel()
+
+	rec := &transcriptRecorder{}
+	big := strings.Repeat("x", maxRecordedResultBytes*2)
+
+	rec.system(big)
+	rec.user(big)
+
+	if len(rec.events) != 2 {
+		t.Fatalf("got %d events, want 2", len(rec.events))
+	}
+
+	for _, ev := range rec.events {
+		if len(ev.Text) >= maxRecordedResultBytes*2 {
+			t.Errorf("%s event text = %d bytes, want it capped near maxRecordedResultBytes (%d)", ev.Type, len(ev.Text), maxRecordedResultBytes)
+		}
+
+		if !strings.Contains(ev.Text, "[truncated") {
+			t.Errorf("%s event text has no truncation marker", ev.Type)
+		}
 	}
 }
 
