@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // Tests that drive the REAL `claude` binary.
@@ -46,9 +47,10 @@ const liveCLIModel = "@claude/haiku"
 // TestLiveCLIGrantedWriteActuallyWrites pins the permission half of the tool
 // grant against the real binary.
 //
-// Write and Edit are permission-gated in the CLI, unlike Read/Glob/Grep, so
-// "granted write_file can write" is a claim about how --allowedTools interacts
-// with non-interactive mode, not something the argument vector alone proves.
+// A granted write_file is bridged now (issue #100: `--tools ""` leaves the
+// CLI no native Write of its own), so "granted write_file can write" is a
+// claim about how --allowedTools interacts with an MCP tool the CLI was
+// never trained to prefer, not something the argument vector alone proves.
 // The inverse (an ungranted tool is denied) is covered by the fake-backed
 // suite; this is the direction a fake cannot answer.
 func TestLiveCLIGrantedWriteActuallyWrites(t *testing.T) {
@@ -89,11 +91,19 @@ jobs:
 		t.Errorf("out.txt = %q, want it to contain WROTE", got)
 	}
 
-	// The trajectory has to show the native tool, not a bridged stand-in:
-	// a granted built-in is supposed to become the CLI's own Write.
 	node := findNode(t, storeNodes(t, path), "agent", "writer")
 	if node.Status != "succeeded" {
 		t.Errorf("agent node status = %q (%s), want succeeded", node.Status, node.Error)
+	}
+
+	// The trajectory has to show the DE-NAMESPACED name, "write_file" — not
+	// "Write" (there is no native tool left to report) and not the bridge's
+	// own "mcp__steps__write_file" spelling either, which would leak steps'
+	// wire format into the authoring surface. assert.tool_calls: reads the
+	// same name on a CLI agent as it would on a hosted one.
+	rows := agentEventsFor(t, path, "writer")
+	if call := findEvent(rows, events.TypeAgentCall, "write_file"); call == nil {
+		t.Error("the trajectory does not show a de-namespaced write_file call")
 	}
 }
 
@@ -146,6 +156,54 @@ jobs:
 	node := findNode(t, storeNodes(t, path), "agent", "limited")
 	if node.Status != "succeeded" {
 		t.Errorf("agent node status = %q (%s), want succeeded", node.Status, node.Error)
+	}
+}
+
+// TestLiveCLIAttestationPassesAgainstTheRealBinary is issue #100 security
+// item 1's own verification: the real claude CLI's stream-json init event
+// carries `tools`, matching exactly what this build bridged, with no `Task`
+// (sub-agent) entry alongside it — the fence a surplus native or an
+// unstripped subagent would need to slip through. A live run SUCCEEDING is
+// itself most of the proof (a real mismatch would fail the step with
+// errCLIToolSurface's message); the trajectory check below is what would
+// catch a `Task` call specifically, since the CLI could in principle report
+// its own tools correctly while still allowing a sub-agent to reach a native
+// one internally.
+func TestLiveCLIAttestationPassesAgainstTheRealBinary(t *testing.T) {
+	requireClaudeCLI(t)
+
+	dir := t.TempDir()
+
+	path := writePipeline(t, dir, `
+agents:
+- name: reviewer
+  source:
+    model: "`+liveCLIModel+`"
+  max_turns: 6
+  tools: [read_file]
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    messages:
+      - Say hello. Do not use any tool.
+`)
+
+	err := cli.Run([]string{path})
+	if err != nil {
+		t.Fatalf("run: %v (an attestation mismatch would fail here, naming the surplus or missing tool)", err)
+	}
+
+	node := findNode(t, storeNodes(t, path), "agent", "reviewer")
+	if node.Status != "succeeded" {
+		t.Errorf("agent node status = %q (%s), want succeeded", node.Status, node.Error)
+	}
+
+	rows := agentEventsFor(t, path, "reviewer")
+	if call := findEvent(rows, events.TypeAgentCall, "Task"); call != nil {
+		t.Error("a Task (sub-agent) call reached the trajectory; --tools \"\" must strip it like every other native")
 	}
 }
 

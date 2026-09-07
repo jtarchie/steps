@@ -181,14 +181,16 @@ var allowedHostPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-
 // server's), in the GRANT position (see toolPosition), and made of bare
 // hostnames.
 //
-// The entry-shape rule is not pedantry. The two backends read the list
-// differently — steps compares each entry against url.Hostname(), the claude
-// CLI compiles it into WebFetch(domain:…) permission rules — so a
-// pattern-shaped entry does not merely fail to match, it can mean OPPOSITE
-// things on the two paths. "*" is the worst case: inert here (it equals no
-// hostname and suffixes none, so it denies everything), a documented
-// match-all wildcard there. Refusing the shape is what keeps one written
-// fence from being two different fences.
+// The entry-shape rule survives a reason that no longer applies: a CLI-backed
+// agent's web_fetch used to compile the list into the CLI's own
+// WebFetch(domain:…) permission rules, a second backend with its own reading
+// of the same list. Every CLI call now reaches this package's own
+// checkWebFetchHost through the bridge instead (see the issue #100 design
+// note in internal/agent/cliexec.go), so there is only one reader left. "*"
+// is simply inert against it (it equals no hostname and suffixes none, so it
+// denies everything) rather than a wildcard meaning something else on a
+// second path — but refusing the shape stays right regardless: a
+// pattern-shaped entry was never what url.Hostname() compares against.
 func validateWebFetchAllowShape(context string, pos toolPosition, spec ToolSpec) error {
 	if len(spec.Allow) == 0 {
 		return nil

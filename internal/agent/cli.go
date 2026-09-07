@@ -10,9 +10,10 @@ package agent
 // the whole design; see docs/agents-internals.md.
 //
 // The two halves of making it work are here and in clibridge.go. This file
-// decides what the subprocess is allowed to do (which native tools, which
-// bridged ones) and reads back what it did. The bridge is how the tools the
-// pipeline actually granted reach a process that only speaks MCP.
+// decides what the subprocess is allowed to do — every granted tool, bridged,
+// since `--tools ""` (cliexec.go) leaves the CLI no native surface of its
+// own — and reads back what it did. The bridge is how the tools the pipeline
+// actually granted reach a process that only speaks MCP.
 
 import (
 	"context"
@@ -25,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/retry"
 )
@@ -33,47 +35,6 @@ import (
 // canceled before it is killed outright — the same grace internal/mcp gives a
 // stdio server.
 const cliWaitDelay = 5 * time.Second
-
-// cliRuntime is how one coding-agent CLI is invoked: which of its native
-// tools stand in for steps' built-ins, and which of its tools must be denied
-// outright.
-//
-// The native mapping is the load-bearing part. A CLI is good at its own
-// tools — they are what its model was trained against — so a grant of
-// `read_file` becomes permission to use `Read` rather than a bridged
-// reimplementation the CLI would use worse. The tradeoff is that the
-// grant becomes a permission boundary expressed in the CLI's vocabulary, and
-// steps' own path confinement no longer applies; the subprocess's working
-// directory is the fence instead. (A grant including run_shell makes that
-// distinction academic anyway — it does on the HTTP path too.)
-type cliRuntime struct {
-	// natives maps a steps built-in tool name to the CLI's equivalent.
-	natives map[string]string
-}
-
-// cliRuntimes mirrors config.cliProviders — same keys, invocation details
-// instead of load-time facts. TestCLIRuntimesCoverProviders keeps them in
-// step, so half-adding a CLI fails the build rather than a run.
-//
-//nolint:gochecknoglobals // static, read-only lookup table
-var cliRuntimes = map[string]cliRuntime{
-	"claude": {
-		natives: map[string]string{
-			"read_file":    "Read",
-			"list_dir":     "Glob",
-			"run_shell":    "Bash",
-			"write_file":   "Write",
-			"edit_file":    "Edit",
-			"search_files": "Grep",
-			// A known contract divergence, accepted deliberately: the CLI's
-			// WebFetch takes url+prompt and answers with a model-written
-			// summary, where the HTTP path's web_fetch returns the raw body.
-			// The native tool is what the CLI's model was trained against,
-			// which is the same reasoning as every other row here.
-			"web_fetch": "WebFetch",
-		},
-	},
-}
 
 // runCLIConversation runs a prepared agent step as a CLI subprocess, once per
 // attempt, and returns the same conversationResult an HTTP conversation would
@@ -97,8 +58,7 @@ var cliRuntimes = map[string]cliRuntime{
 // Only INFRASTRUCTURE failures are retried either way: a CLI that ran and
 // decided the task failed gets its answer respected, not re-rolled.
 func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout time.Duration) (conversationResult, error) {
-	runtime, known := cliRuntimes[prepared.ri.CLI]
-	if !known {
+	if config.CLIBinary(prepared.ri.CLI) == "" {
 		return conversationResult{}, fmt.Errorf("agent %q: no runtime for cli %q", prepared.ri.AgentName, prepared.ri.CLI)
 	}
 
@@ -120,29 +80,11 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		return conversationResult{}, fmt.Errorf("agent %q: %w", prepared.ri.AgentName, err)
 	}
 
-	// A containerized step gets a private $HOME for the CLI (see
-	// newCLIStepHome), created once per STEP rather than per attempt: a
-	// retried attempt resumes the same session, and the transcript it resumes
-	// lives in that home. Removing the directory afterwards is the
-	// containerized equivalent of cleanupCLISession — the transcript never
-	// touches the host's own ~/.claude at all.
-	var stepHome string
-
-	if prepared.ri.Image != "" {
-		stepHome, err = newCLIStepHome()
-		if err != nil {
-			return conversationResult{}, fmt.Errorf("agent %q: %w", prepared.ri.AgentName, err)
-		}
-
-		defer func() {
-			removeErr := os.RemoveAll(stepHome)
-			if removeErr != nil {
-				slog.Debug("agent.cli.step_home_cleanup_failed", "path", stepHome, "error", removeErr)
-			}
-		}()
-	} else {
-		defer cleanupCLISession(session)
-	}
+	// The CLI is always a host subprocess now (see cliexec.go), so its
+	// transcript always lands under the host's own ~/.claude and
+	// cleanupCLISession always applies — there is no containerized $HOME to
+	// clean up instead.
+	defer cleanupCLISession(session)
 
 	// One state for the whole step, not one per attempt: the attempts share a
 	// conversation now, so what an attempt observed stays true for the ones
@@ -180,7 +122,6 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 			// retried attempt does. Nothing about the child's memory is
 			// different; only the reason for speaking to it again is.
 			resume: rejoiningCLISession(attempt, nudges, sent),
-			home:   stepHome,
 			// The turn budget is per STEP, not per attempt — the hosted path
 			// counts turns in one conversation that request retries never
 			// reset, and a resumed session is the same conversation. The CLI
@@ -224,7 +165,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 				sent, len(prepared.conv.messages), attempt, lastErr)))
 		}
 
-		attemptErr := runCLIAttempt(attemptCtx, prepared, runtime, plan, state)
+		attemptErr := runCLIAttempt(attemptCtx, prepared, plan, state)
 		lastErr = attemptErr
 
 		markDelivered(state, sent, pending, attemptErr)
@@ -245,6 +186,14 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		// retrying it would just pay twice for the same conclusion.
 		var failure *outcome.Failure
 		if errors.As(attemptErr, &failure) {
+			return retry.Stop(attemptErr)
+		}
+
+		// An attestation failure is steps refusing to trust the child, not the
+		// child's own answer to its task — an infrastructure condition (fires
+		// on_error) rather than outcome.Fail, and retrying is deterministic
+		// waste: a second attempt just re-triggers the same fence.
+		if errors.Is(attemptErr, errCLIToolSurface) {
 			return retry.Stop(attemptErr)
 		}
 
@@ -585,10 +534,6 @@ type cliAttempt struct {
 	// unlimitedBudget when it declared none.
 	budgetUSD float64
 	prompt    string
-	// home is the per-step directory a containerized CLI gets as its $HOME
-	// (empty on the host path). Per-step, not per-attempt: a resumed attempt
-	// needs the transcript the previous one wrote there.
-	home string
 }
 
 // cliCeilingError reports a step that ran into one of its two pooled
@@ -814,11 +759,10 @@ func cleanupCLISession(session string) {
 func runCLIAttempt(
 	ctx context.Context,
 	prepared preparedAgentStep,
-	runtime cliRuntime,
 	plan cliAttempt,
 	state *cliStepState,
 ) error {
-	bridge, err := newCLIBridge(ctx, prepared.conv, nativeToolNames(prepared.conv, runtime), cliBridgeReach(prepared.ri))
+	bridge, err := newCLIBridge(ctx, prepared.conv)
 	if err != nil {
 		return err
 	}
@@ -832,7 +776,9 @@ func runCLIAttempt(
 
 	defer func() { _ = os.Remove(mcpConfig) }()
 
-	run, runErr := execCLI(ctx, prepared, runtime, mcpConfig, plan)
+	expected := cliToolPermissions(prepared.conv)
+
+	run, runErr := execCLI(ctx, prepared, mcpConfig, plan, expected)
 
 	state.absorb(prepared.ri.ModelName, run, bridge)
 	prepared.conv.usage.addTokens(run.inputTokens, run.outputTokens)
@@ -904,11 +850,17 @@ func checkCLIObligations(prepared preparedAgentStep, run cliRunResult, satisfied
 }
 
 // mergeCLITrajectory combines what the CLI reported calling with what the
-// bridge saw called. The CLI's own stream is authoritative for order and for
-// its native tools; the bridge contributes the ARGUMENTS of bridged calls,
-// which the stream reports too — so the stream alone would do, except when it
-// was truncated. Bridged calls the stream never mentioned are appended, since
-// a call the parent executed definitely happened.
+// bridge saw called. The CLI's own stream is authoritative for order; the
+// bridge contributes the ARGUMENTS of bridged calls, which the stream reports
+// too — so the stream alone would do, except when it was truncated. Bridged
+// calls the stream never mentioned are appended, since a call the parent
+// executed definitely happened.
+//
+// Both sides are already BARE names by the time they reach here — the stream
+// side because recordCLIToolCalls de-namespaces as it parses (clistream.go),
+// the bridge side because a bridged call is always captured under the tool's
+// own declared name (clibridge.go's handler) — so this dedupes on bare names
+// directly, with no bridgedToolName round trip.
 func mergeCLITrajectory(streamed, bridged []recordedToolCall) []recordedToolCall {
 	seen := map[string]int{}
 	for _, call := range streamed {
@@ -922,14 +874,13 @@ func mergeCLITrajectory(streamed, bridged []recordedToolCall) []recordedToolCall
 	copy(merged, streamed)
 
 	for _, call := range bridged {
-		prefixed := bridgedToolName(call.name)
-		if seen[prefixed] > 0 {
-			seen[prefixed]--
+		if seen[call.name] > 0 {
+			seen[call.name]--
 
 			continue
 		}
 
-		merged = append(merged, recordedToolCall{name: prefixed, args: call.args, ok: call.ok})
+		merged = append(merged, recordedToolCall{name: call.name, args: call.args, ok: call.ok})
 	}
 
 	return merged

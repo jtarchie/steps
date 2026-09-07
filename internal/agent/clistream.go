@@ -65,6 +65,16 @@ type cliRunResult struct {
 	// False means the stream was truncated, which the driver treats as a
 	// failed invocation rather than an empty answer.
 	sawResult bool
+	// sawInit reports whether the system/init event arrived — the one
+	// attestation reads (see cliattest.go). Distinct from sawResult: a stream
+	// that produced neither is a crash ("exited without reporting a result"),
+	// and only a result WITHOUT an init is an attestation failure — the
+	// precedence a killed-before-anything child needs to be diagnosed
+	// correctly.
+	sawInit bool
+	// initTools is the tool list the child's own init event reported, unsorted
+	// and exactly as received.
+	initTools []string
 }
 
 // cliEvent is the subset of a stream event this package reads. Everything
@@ -85,6 +95,10 @@ type cliEvent struct {
 	NumTurns int      `json:"num_turns"`
 	IsError  bool     `json:"is_error"`
 	Errors   []string `json:"errors"`
+	// Tools is the session's tool list, carried on the system/init event —
+	// the attestation surface (see cliattest.go). Absent from every other
+	// event type.
+	Tools []string `json:"tools"`
 	// TotalCostUSD is what the CLI says the run cost. The only provider path
 	// steps has that reports a dollar figure at all — the HTTP ones report
 	// tokens and leave pricing to whoever knows the rate card.
@@ -146,14 +160,26 @@ type cliContentBlock struct {
 
 // parseCLIStream reads a CLI's line-delimited JSON transcript.
 //
-// It returns an error only for a failure to READ the stream. A stream that
-// parsed but never ended is reported through sawResult, so the caller can
-// combine it with the process's exit status — which is the pair that actually
+// It used to return an error only for a failure to READ the stream; it now
+// also returns errCLIToolSurface (see cliattest.go) the instant a
+// system/init event disagrees with expected — the bridged grant — so the
+// call returns EARLY, before the rest of the stream (any further tool calls)
+// is even read, rather than merely being reported after the fact. A stream
+// that parsed cleanly but never ended is still reported through sawResult, so
+// the caller can combine it with the process's exit status — the pair that
 // distinguishes "crashed" from "finished badly".
+//
+// expected is the bridged tool set an attempt was granted (cliToolPermissions).
+// A literal nil (as opposed to a non-nil, possibly-empty slice) means "no
+// attestation to perform" — every production caller passes cliToolPermissions'
+// result, which is never nil, even for a grant of nothing; most existing
+// tests pass nil because they predate attestation entirely.
 // The recorder may be nil — a caller that only wants the reduced result, and
 // every test that predates the transcript, passes one.
-func parseCLIStream(reader io.Reader, rec *transcriptRecorder) (cliRunResult, error) {
+func parseCLIStream(reader io.Reader, rec *transcriptRecorder, expected []string) (cliRunResult, error) {
 	var result cliRunResult
+
+	attesting := expected != nil
 
 	// Tool calls are indexed by the id the CLI assigns them, so a result
 	// block arriving several events later can mark the right one.
@@ -163,44 +189,9 @@ func parseCLIStream(reader io.Reader, rec *transcriptRecorder) (cliRunResult, er
 	scanner.Buffer(make([]byte, 0, 64<<10), cliStreamMaxLine)
 
 	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-
-		var event cliEvent
-
-		err := json.Unmarshal(line, &event)
+		err := parseCLILine(scanner.Bytes(), &result, rec, index, expected, attesting)
 		if err != nil {
-			slog.Debug("agent.cli.stream.skip", "reason", "unparsable line", "error", err)
-
-			continue
-		}
-
-		switch event.Type {
-		case "assistant":
-			recordCLIToolCalls(&result, index, event)
-			recordCLITurn(rec, event)
-			addCLIUsage(&result.streamed, event.Message.Usage)
-		case "user":
-			markCLIToolResults(&result, index, event)
-			recordCLIResults(rec, result.trajectory, index, event)
-		case "result":
-			result.sawResult = true
-			result.text = event.Result
-			result.turns = event.NumTurns
-			result.isError = event.IsError
-			result.errSubtype = event.Subtype
-			result.inputTokens = event.promptTokens()
-			result.outputTokens = event.Usage.OutputTokens
-			result.cachedTokens = event.cachedTokens()
-			result.costUSD = event.TotalCostUSD
-
-			if len(event.Errors) > 0 {
-				result.errMessage = event.Errors[0]
-			}
-		default:
-			slog.Debug("agent.cli.stream.skip", "type", event.Type)
+			return result, err
 		}
 	}
 
@@ -209,7 +200,104 @@ func parseCLIStream(reader io.Reader, rec *transcriptRecorder) (cliRunResult, er
 		return result, fmt.Errorf("reading cli stream: %w", err)
 	}
 
+	// The precedence fix: a result with no init IS an attestation failure —
+	// the child finished without ever proving its tool surface — but a
+	// stream that produced NEITHER stays "exited without reporting a
+	// result" (execCLI's own fallback), since a child that died before
+	// saying anything was never in a position to misreport its tools either.
+	if attesting && result.sawResult && !result.sawInit {
+		return result, fmt.Errorf("%w: the cli finished without ever reporting a system/init event listing its tools — "+
+			"check that the cli's minimum supported version reports `tools` on it", errCLIToolSurface)
+	}
+
 	return result, nil
+}
+
+// parseCLILine unmarshals and dispatches one line of the stream, extracted
+// from parseCLIStream to keep that function's complexity within the linter's
+// budget. A blank or unparsable line is skipped, not an error — the schema
+// belongs to the CLI, so tolerance is the point (see the file header).
+func parseCLILine(
+	line []byte, result *cliRunResult, rec *transcriptRecorder, index map[string]int, expected []string, attesting bool,
+) error {
+	if len(line) == 0 {
+		return nil
+	}
+
+	var event cliEvent
+
+	err := json.Unmarshal(line, &event)
+	if err != nil {
+		slog.Debug("agent.cli.stream.skip", "reason", "unparsable line", "error", err)
+
+		return nil
+	}
+
+	switch event.Type {
+	case "assistant":
+		recordCLIToolCalls(result, index, event)
+		recordCLITurn(rec, event)
+		addCLIUsage(&result.streamed, event.Message.Usage)
+	case "user":
+		markCLIToolResults(result, index, event)
+		recordCLIResults(rec, result.trajectory, index, event)
+	case "system":
+		return recordCLIInit(result, event, expected, attesting)
+	case "result":
+		recordCLIResult(result, event)
+	default:
+		slog.Debug("agent.cli.stream.skip", "type", event.Type)
+	}
+
+	return nil
+}
+
+// recordCLIInit handles one system event: recorded only when it is the
+// system/init event attestation reads, and checked against expected the
+// instant it is parsed when attesting — extracted from parseCLIStream's own
+// switch to keep that function's complexity within the linter's budget.
+func recordCLIInit(result *cliRunResult, event cliEvent, expected []string, attesting bool) error {
+	if event.Subtype != "init" {
+		slog.Debug("agent.cli.stream.skip", "type", event.Type, "subtype", event.Subtype)
+
+		return nil
+	}
+
+	result.sawInit = true
+	result.initTools = event.Tools
+
+	if !attesting {
+		return nil
+	}
+
+	// Checked the instant this line is parsed, not after the stream ends: the
+	// point is stopping a child this process no longer trusts before it makes
+	// another bridged call.
+	err := checkCLIToolSurface(event.Tools, expected)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// recordCLIResult handles the terminal result event — extracted from
+// parseCLIStream's own switch for the same complexity-budget reason as
+// recordCLIInit.
+func recordCLIResult(result *cliRunResult, event cliEvent) {
+	result.sawResult = true
+	result.text = event.Result
+	result.turns = event.NumTurns
+	result.isError = event.IsError
+	result.errSubtype = event.Subtype
+	result.inputTokens = event.promptTokens()
+	result.outputTokens = event.Usage.OutputTokens
+	result.cachedTokens = event.cachedTokens()
+	result.costUSD = event.TotalCostUSD
+
+	if len(event.Errors) > 0 {
+		result.errMessage = event.Errors[0]
+	}
 }
 
 // addCLIUsage folds one turn's bill into a running total. Each assistant
@@ -224,10 +312,21 @@ func addCLIUsage(total *cliUsage, turn cliUsage) {
 }
 
 // recordCLIToolCalls appends this assistant turn's tool calls to the
-// trajectory. Names are recorded exactly as the CLI reports them — `Bash`,
-// `Read`, `mcp__steps__verdict` — because that is what actually ran; renaming
-// them back to steps' own builtin names would make the record a translation
-// rather than an observation.
+// trajectory, DE-NAMESPACED — `mcp__steps__read_file` records as `read_file`,
+// identical to what a hosted step's trajectory shows for the same call. This
+// is a deliberate reversal of the old "names are recorded exactly as the CLI
+// reported them" rule: `mcp__steps__` is OUR OWN server's namespace (see
+// clibridge.go), so removing it is de-namespacing what steps itself put
+// there, not translating an observation into something it wasn't. It also
+// makes `assert.tool_calls: [{name: read_file}]` mean the same thing on a
+// CLI agent as on a hosted one, which is the issue #100 goal.
+//
+// A name this build does not recognize as bridged (`Bash`, `Task`, anything
+// the CLI's own natives could still report despite `--tools ""`) is kept
+// VERBATIM rather than guessed at — which doubles as a second, human-readable
+// surplus-tool signal alongside the init-event attestation (cliattest.go): a
+// stray `Bash` entry in a recorded trajectory is exactly what a fence failure
+// looks like to a reader of `steps runs --steps`.
 func recordCLIToolCalls(result *cliRunResult, index map[string]int, event cliEvent) {
 	for _, block := range event.Message.Content {
 		if block.Type != "tool_use" || block.Name == "" {
@@ -246,7 +345,7 @@ func recordCLIToolCalls(result *cliRunResult, index map[string]int, event cliEve
 		// Optimistically ok: a call with no matching result block (the CLI
 		// was interrupted before it reported one) reads as having run, which
 		// is the safer direction for a record of what touched the workspace.
-		result.trajectory = append(result.trajectory, recordedToolCall{name: block.Name, args: args, ok: true})
+		result.trajectory = append(result.trajectory, recordedToolCall{name: debridgedToolName(block.Name), args: args, ok: true})
 
 		if block.ID != "" {
 			index[block.ID] = len(result.trajectory) - 1
@@ -258,10 +357,11 @@ func recordCLIToolCalls(result *cliRunResult, index map[string]int, event cliEve
 // said, then what it called, in the order the blocks arrived.
 //
 // Recorded from the STREAM rather than from the bridge, including for bridged
-// mcp__steps__* tools that the parent itself executes. The stream sees both
-// kinds and is authoritative for order (the same rule mergeCLITrajectory
-// follows), so recording the bridge's view as well would show every bridged
-// call twice and race the stdout reader for the position it appears at.
+// tools that the parent itself executes. The stream sees both kinds and is
+// authoritative for order (the same rule mergeCLITrajectory follows), so
+// recording the bridge's view as well would show every bridged call twice
+// and race the stdout reader for the position it appears at. De-namespaced
+// exactly as recordCLIToolCalls is, for the same reason.
 func recordCLITurn(rec *transcriptRecorder, event cliEvent) {
 	for _, block := range event.Message.Content {
 		switch block.Type {
@@ -269,7 +369,7 @@ func recordCLITurn(rec *transcriptRecorder, event cliEvent) {
 			rec.text(block.Text)
 		case "tool_use":
 			if block.Name != "" {
-				rec.call(block.Name, block.Input)
+				rec.call(debridgedToolName(block.Name), block.Input)
 			}
 		}
 	}

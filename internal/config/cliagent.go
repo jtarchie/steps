@@ -229,41 +229,33 @@ func checkCLIAgentSettings(agent Agent) error {
 	return nil
 }
 
-// checkCLIAgentTools rejects tool grants a CLI agent cannot enforce. The tool
-// GUARDS are the load-bearing ones: required:/max_calls:/args: are enforced by
-// internal/agent's own turn loop, which a CLI agent does not run, so accepting
-// them would promise a constraint nothing applies. max_output_bytes survives —
-// it is enforced inside the tool implementation, which the bridge reuses.
+// checkCLIAgentTools rejects the one tool grant a CLI agent genuinely cannot
+// run: a sub-agent, which nests a conversation inside internal/agent's own
+// turn loop — a loop a CLI source replaces wholesale, so there is nothing to
+// nest into (see checkNoCLISubAgents for the symmetric case of a CLI agent
+// being the callee).
 //
-// timeout: splits along that same line, which is why it is only half
-// rejected: a custom or MCP tool is BRIDGED (the child calls the very impl
-// the deadline is bound to, so it holds), while a NATIVE built-in is run by
-// the CLI itself — the bridge never sees the call, and a deadline written
-// there would be a fence that silently does not bind.
+// required:/max_calls:/args: used to be refused here too, on the reasoning
+// that they were enforced by internal/agent's turn loop, which a CLI agent
+// does not run. Since issue #100 every tool a CLI agent calls — builtin
+// included — goes through the bridge, and the bridge (or the exit check
+// below it) is exactly where each of those already binds for every OTHER
+// agent kind:
+//   - max_calls: is cliBridge.overBudget, counting every bridged call behind
+//     one mutex — the same machinery max_questions: already rides.
+//   - args: pins merge inside execCustomTool, which the bridge calls
+//     unchanged; the model never sees a pinned key in its schema either way.
+//   - required: is checked at exit by checkCLIObligations against the
+//     bridge's observed calls — stricter than the hosted path's force-one-
+//     more-turn-and-hope, not weaker, so there is no gap to leave refused.
 //
-// "Native" is load-bearing and was once assumed rather than asked. ask_user
-// is the first builtin no CLI runs itself (BuiltinIsNeverNativeToCLI): the
-// child calls the parent's own impl over the bridge, so the deadline DOES
-// apply — and refusing it would deny a CLI agent the one dial that decides
-// how long a person is waited on.
+// So there is no longer a NATIVE builtin the bridge never sees, and refusing
+// these would be a fence with nothing behind it.
 func (c *Config) checkCLIAgentTools(agent Agent) error {
 	for _, spec := range agent.Tools {
 		name := ToolSpecName(spec)
 
-		switch {
-		case spec.Required:
-			return fmt.Errorf("agent %q: tool %q sets required, which is not supported with a cli source (%s...); the cli decides its own tool calls",
-				agent.Name, name, CLISourcePrefix)
-		case spec.MaxCalls > 0:
-			return fmt.Errorf("agent %q: tool %q sets max_calls, which is not supported with a cli source (%s...); the cli owns its own tool loop",
-				agent.Name, name, CLISourcePrefix)
-		case len(spec.Args) > 0:
-			return fmt.Errorf("agent %q: tool %q sets args, which is not supported with a cli source (%s...); pin the value inside the tool's run: instead",
-				agent.Name, name, CLISourcePrefix)
-		case spec.Timeout != "" && spec.Builtin != "" && !BuiltinIsNeverNativeToCLI(spec.Builtin):
-			return fmt.Errorf("agent %q: builtin tool %q sets timeout, which is not supported with a cli source (%s...); the cli runs its built-ins itself — bound a custom or mcp tool instead, or the step",
-				agent.Name, name, CLISourcePrefix)
-		case spec.Agent != "":
+		if spec.Agent != "" {
 			return fmt.Errorf("agent %q: tool %q grants a sub-agent, which is not supported with a cli source (%s...); delegate with a separate agent step instead",
 				agent.Name, name, CLISourcePrefix)
 		}
@@ -289,12 +281,7 @@ func (c *Config) checkCLIAgentReferences() error {
 		return err
 	}
 
-	err = c.checkNoCLIFixAgents(isCLI)
-	if err != nil {
-		return err
-	}
-
-	return c.checkCLIContainerNetwork()
+	return c.checkNoCLIFixAgents(isCLI)
 }
 
 // checkNoCLISubAgents rejects a CLI agent named by any sub-agent grant. A
@@ -347,46 +334,6 @@ func checkCLIStepReferences(label string, step *Step, isCLI func(string) bool) e
 	return nil
 }
 
-// checkCLIContainerNetwork rejects `network: none` on a containerized CLI
-// agent step.
-//
-// A CLI agent's non-native tools — the synthesized verdict/context tools
-// among them, not just custom run: ones — reach the child over a
-// loopback MCP server this process hosts (see internal/agent's clibridge).
-// Containerizing the CLI means that connection has to cross out of the
-// container, so cutting the container's network does not merely narrow what
-// the agent can reach: it removes the channel the step's own verdict comes
-// back on. That is a step which cannot possibly succeed, and it is worth
-// saying so at load rather than after the run burns its budget.
-//
-// This is distinct from the same setting on an HTTP agent, where `network:
-// none` is a perfectly coherent (and useful) way to sandbox model-written
-// commands — nothing there depends on egress.
-func (c *Config) checkCLIContainerNetwork() error {
-	for i := range c.Agents {
-		agent := &c.Agents[i]
-		if !agentUsesCLI(*agent) {
-			continue
-		}
-
-		err := c.visitAgentSteps(agent.Name, func(label string, step *Step) error {
-			settings := resolveAgentRuntime(agent, *step)
-			if settings.Image != "" && settings.Network == noNetwork {
-				return fmt.Errorf("%s: network %q is not supported on a containerized agent %q, which has a cli source (%s...); "+
-					"the cli reaches its steps-provided tools (including the verdict tool) over a connection back to this process, which %q severs",
-					label, settings.Network, agent.Name, CLISourcePrefix, noNetwork)
-			}
-
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 // visitAgentSteps calls fn for every step that runs the named agent.
 func (c *Config) visitAgentSteps(name string, fn func(label string, step *Step) error) error {
 	for _, job := range c.Jobs {
@@ -425,43 +372,16 @@ func (c *Config) StepsForAgent(name string) []Step {
 	return steps
 }
 
-// AgentRunsOnHost reports whether any step running this agent executes it
-// outside a container — i.e. whether this machine needs the agent's own
-// binary at all.
-//
-// An agent named by no step answers true: that is the sub-agent/unused case,
-// where there is no step-level override to find and the agent's own settings
-// are the whole story.
-func (c *Config) AgentRunsOnHost(name string) bool {
-	agent, err := c.FindAgent(name)
-	if err != nil {
-		return true
-	}
-
-	steps := c.StepsForAgent(name)
-	if len(steps) == 0 {
-		return agent.Image == ""
-	}
-
-	for _, step := range steps {
-		if resolveAgentRuntime(agent, step).Image == "" {
-			return true
-		}
-	}
-
-	return false
-}
-
 // checkCLIBinaries reports CLI agents whose executable is not on PATH — the
 // same class of check as checkMCPCommands, answered before a run rather than
 // at the step that needed it.
 //
-// A CONTAINERIZED cli agent is exempt: its binary lives in the image, which
-// is the entire point of setting image: on it, and demanding the host have
-// one too would reject exactly the machine the feature exists for (a CI
-// runner with docker and no CLI installed). Whether the image really has the
-// binary is a question only docker can answer, so it belongs to preflight
-// (see internal/agent's probeCLIImage), not to this microsecond check.
+// No containerized exemption: image: now places only the step's TOOLS (see
+// the issue #100 design note in internal/agent/cliexec.go), and the CLI
+// process itself always runs as a subprocess of this one — so the binary is
+// needed on the orchestrator whether or not a step names an image, and a
+// machine relying on the old exemption (a CI runner with docker and no
+// `claude` on PATH) now correctly fails here instead of at the step.
 func (c *Config) checkCLIBinaries() []Problem {
 	var problems []Problem
 
@@ -475,10 +395,6 @@ func (c *Config) checkCLIBinaries() []Problem {
 
 		seen[name] = true
 
-		if !c.AgentRunsOnHost(name) {
-			continue
-		}
-
 		target, err := resolveCLITarget(agent.Source)
 		if err != nil {
 			continue // already a load error (see validateAgentProviders)
@@ -490,7 +406,9 @@ func (c *Config) checkCLIBinaries() []Problem {
 		if err != nil {
 			problems = append(problems, Problem{
 				Target: fmt.Sprintf("agent %q", name),
-				Detail: fmt.Sprintf("cli %q not found on PATH (source.model %q)", binary, agent.Source.Model),
+				Detail: fmt.Sprintf("cli %q not found on PATH of the machine running steps (source.model %q); "+
+					"an image: does not supply it — the cli always runs here, only its tools run in the container",
+					binary, agent.Source.Model),
 			})
 		}
 	}

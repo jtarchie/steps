@@ -904,13 +904,13 @@ func preflightEnabled(agent *config.Agent, settings *config.Preflight) bool {
 	return settings.Enabled()
 }
 
-// cliProbeKey is the probe cache key for a CLI target. Image is part of it
-// because it changes what the probe ASKS: an image-less target is answered by
-// a PATH lookup on this host, an image-bearing one by starting that image and
-// checking credentials. A shared key would let either answer stand in for the
-// other.
+// cliProbeKey is the probe cache key for a CLI target — the
+// `cli|<cli>|<model>` shape docs/agents-internals.md documents. No Image
+// component: the CLI is always a host subprocess now (see the issue #100
+// design note in cliexec.go), whether or not the step's TOOLS are
+// containerized, so image: no longer changes what probeCLI asks.
 func cliProbeKey(ri config.ResolvedInvocation) string {
-	return "cli|" + ri.CLI + "|" + ri.ModelName + "|" + ri.Image
+	return "cli|" + ri.CLI + "|" + ri.ModelName
 }
 
 // probeModelCached probes a model, or answers from the cache, and reports

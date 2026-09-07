@@ -349,9 +349,12 @@ func TestBudgetSpellingFollowsTheRunner(t *testing.T) {
 }
 
 // TestCLIAgentContainerRules covers what image: means for a CLI agent now
-// that it containerizes the CLI process itself: allowed, including with the
-// step-level override, but not together with network: none, which would
-// sever the connection the CLI's steps-provided tools come back over.
+// that it places the step's TOOLS in a container while the CLI process itself
+// always runs as a subprocess of this one (issue #100): image: loads freely,
+// including with the step-level override, and — unlike the old
+// containerize-the-whole-CLI design — network: none loads too, since cutting
+// the container's egress no longer touches the bridge (loopback, always
+// host-side) that the verdict comes back on.
 func TestCLIAgentContainerRules(t *testing.T) {
 	t.Parallel()
 
@@ -385,22 +388,14 @@ func TestCLIAgentContainerRules(t *testing.T) {
 			agentNetwork: "my-compose-net",
 		},
 		{
-			name:          "network none on a containerized cli agent",
-			agentImage:    "alpine:3",
-			agentNetwork:  "none",
-			wantErrSubstr: "the cli reaches its steps-provided tools",
+			name:         "network none on a containerized cli agent now loads",
+			agentImage:   "alpine:3",
+			agentNetwork: "none",
 		},
 		{
-			name:          "network none set on the step instead",
-			agentImage:    "alpine:3",
-			stepNetwork:   "none",
-			wantErrSubstr: "the cli reaches its steps-provided tools",
-		},
-		{
-			name:          "image on the step, network none on the agent",
-			agentNetwork:  "none",
-			stepImage:     "alpine:3",
-			wantErrSubstr: "the cli reaches its steps-provided tools",
+			name:        "network none set on the step instead",
+			agentImage:  "alpine:3",
+			stepNetwork: "none",
 		},
 	}
 
@@ -504,6 +499,90 @@ func TestCLIAgentGenerationDials(t *testing.T) {
 			if tt.wantErrSubstr == "" {
 				if err != nil {
 					t.Fatalf("validate: %v", err)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("expected an error containing %q", tt.wantErrSubstr)
+			}
+
+			if !strings.Contains(err.Error(), tt.wantErrSubstr) {
+				t.Errorf("error = %q, want it to contain %q", err, tt.wantErrSubstr)
+			}
+		})
+	}
+}
+
+// TestCLIAgentToolGuardsUnrefused pins the issue #100 slice 3 un-refusal:
+// required:/max_calls:/args: used to be load errors on a CLI agent because
+// "the cli owns its own tool loop" — true of the HOSTED turn loop, but every
+// CLI call now reaches the bridge (or the exit check below it), which is
+// exactly where each of these already binds for every other agent kind. A
+// sub-agent grant is the one case left refused: it has no turn loop to nest
+// into on either path.
+func TestCLIAgentToolGuardsUnrefused(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		tools         string
+		wantErrSubstr string
+	}{
+		{
+			name: "required loads",
+			tools: `
+  - builtin: run_shell
+    required: true`,
+		},
+		{
+			name: "max_calls loads",
+			tools: `
+  - name: post_review
+    description: d
+    run: echo done
+    max_calls: 1`,
+		},
+		{
+			name: "args loads",
+			tools: `
+  - name: post_review
+    description: d
+    run: echo {{ .args.repo }}
+    args:
+      repo: jtarchie/ci`,
+		},
+		{
+			name: "sub-agent grant still refused",
+			tools: `
+  - agent: extra
+    description: d`,
+			wantErrSubstr: "grants a sub-agent, which is not supported with a cli source",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pipeline := "agents:\n" +
+				"- name: coder\n" +
+				"  source: { model: \"@claude/sonnet\" }\n" +
+				"  tools:" + tt.tools + "\n" +
+				"- name: extra\n" +
+				"  source: { model: lmstudio/qwen }\n" +
+				"jobs:\n" +
+				"- name: j\n" +
+				"  plan: [{ agent: coder, messages: [x], inputs: [] }]\n"
+
+			path := writeConfig(t, pipeline)
+
+			_, err := LoadConfig(path)
+
+			if tt.wantErrSubstr == "" {
+				if err != nil {
+					t.Fatalf("LoadConfig: %v", err)
 				}
 
 				return

@@ -93,13 +93,14 @@ func TestE2ECLIAgentBudgetCarriesAcrossAttempts(t *testing.T) {
 	// ceiling, so the retry gets a REDUCED purse rather than an exhausted one.
 	claude := writeFakeClaude(t, fmt.Sprintf(`
 if [ -f %[1]q ]; then
+  echo '%[4]s'
   echo '%[3]s'
 else
   : > %[1]q
   echo '%[2]s'
   exit 1
 fi
-`, marker, cliUsageOnlyRun(50_000, 5_000), cliResultEvent("done", 2)))
+`, marker, cliUsageOnlyRun(50_000, 5_000), cliResultEvent("done", 2), cliInitEvent("mcp__steps__read_file")))
 
 	path := cliBudgetPipeline(t, dir, 0.50)
 

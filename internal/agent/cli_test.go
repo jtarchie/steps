@@ -48,13 +48,6 @@ func cliPrepared(t *testing.T, toolNames []string) preparedAgentStep {
 	conv.system = "You are a reviewer."
 	conv.messages = []string{"Review the diff."}
 
-	// Every name is treated as a builtin grant, which is what these tests
-	// mean by a granted tool; a test about custom tools clears this.
-	conv.tools.builtins = map[string]bool{}
-	for _, name := range toolNames {
-		conv.tools.builtins[name] = true
-	}
-
 	return preparedAgentStep{
 		step: config.Step{Agent: "reviewer"},
 		ri: config.ResolvedInvocation{
@@ -72,7 +65,7 @@ func TestCLIArgs(t *testing.T) {
 	t.Parallel()
 
 	prepared := cliPrepared(t, []string{"read_file", "run_shell", "count_lines"})
-	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
+	args := cliArgs(prepared, "/tmp/mcp.json", firstAttempt())
 
 	for flag, want := range map[string]string{
 		"--model":                "sonnet",
@@ -97,173 +90,68 @@ func TestCLIArgs(t *testing.T) {
 	}
 }
 
+// TestCLIToolPermissions pins the flat post-#100 shape: EVERY granted tool —
+// builtin or custom alike — is bridged, under the bridge's namespace, and
+// --tools carries an empty value rather than any per-grant computation.
 func TestCLIToolPermissions(t *testing.T) {
 	t.Parallel()
 
 	prepared := cliPrepared(t, []string{"read_file", "run_shell", "count_lines"})
-	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
+	args := cliArgs(prepared, "/tmp/mcp.json", firstAttempt())
 
-	tools := strings.Split(argValue(args, "--tools"), ",")
-	allowed := strings.Split(argValue(args, "--allowedTools"), ",")
-
-	// --tools IS the surface, and it is an allow-list: exactly the granted
-	// built-ins, nothing else. Deny-by-default is the point — a built-in this
-	// build has never heard of is withheld because it was never named, where
-	// the old enumerate-and-deny list would have let it through.
-	if want := []string{"Bash", "Read"}; !slices.Equal(tools, want) {
-		t.Errorf("--tools = %v, want exactly %v", tools, want)
+	// --tools "" unconditionally: present (an operator's own value is never
+	// mistaken for a missing flag) and empty (there is no native surface left
+	// to name).
+	if !slices.Contains(args, "--tools") {
+		t.Fatal("--tools is missing from argv entirely")
 	}
 
-	// Granted built-ins are also pre-approved, since Bash is permission-gated
-	// and would otherwise stall on a prompt nobody can answer.
-	for _, want := range []string{"Read", "Bash"} {
+	if got := argValue(args, "--tools"); got != "" {
+		t.Errorf("--tools = %q, want empty", got)
+	}
+
+	allowed := strings.Split(argValue(args, "--allowedTools"), ",")
+
+	// Every granted tool, builtin or custom, reaches the child only through
+	// the bridge — there is no shorter native spelling to prefer.
+	for _, want := range []string{"mcp__steps__read_file", "mcp__steps__run_shell", "mcp__steps__count_lines"} {
 		if !slices.Contains(allowed, want) {
 			t.Errorf("allowed = %v, want it to contain %q", allowed, want)
 		}
 	}
 
-	// A custom tool has no native equivalent; it reaches the CLI through the
-	// bridge, under the bridge's namespaced name. --tools governs built-ins
-	// only, so bridge tools have to be named on --allowedTools instead.
-	if !slices.Contains(allowed, "mcp__steps__count_lines") {
-		t.Errorf("allowed = %v, want the bridged custom tool", allowed)
-	}
-
-	if slices.Contains(tools, "mcp__steps__count_lines") {
-		t.Errorf("--tools = %v, want built-ins only", tools)
-	}
-
-	// Nothing ungranted reaches the child on either axis. Task/WebFetch/
-	// WebSearch used to need naming on a deny list; under --tools they are
-	// excluded by never having been mentioned, which is what makes this
-	// robust against the CLI growing a tool we have not heard of.
-	for _, unwanted := range []string{"Write", "Edit", "Grep", "Task", "WebFetch", "WebSearch"} {
-		if slices.Contains(tools, unwanted) || slices.Contains(allowed, unwanted) {
-			t.Errorf("ungranted %q reached the child: tools %v, allowed %v", unwanted, tools, allowed)
+	// Nothing native ever reaches the child: neither this build's own natives
+	// table (there is none left) nor an ungranted tool's bare name.
+	for _, unwanted := range []string{"Read", "Bash", "Write", "Edit", "Grep", "Task", "WebFetch", "WebSearch"} {
+		if slices.Contains(allowed, unwanted) {
+			t.Errorf("a native name %q reached --allowedTools: %v", unwanted, allowed)
 		}
 	}
 }
 
-// TestCLIToolPermissionsGrantedGatedTools is the half a fake cannot prove on
-// its own: a GRANTED gated tool has to be pre-approved, or the step silently
-// loses a capability its pipeline asked for. Write and Edit need permission in
-// non-interactive mode where Read does not, so naming them is what makes them
-// usable (checked against the real binary by
-// TestLiveCLIGrantedWriteActuallyWrites).
-func TestCLIToolPermissionsGrantedGatedTools(t *testing.T) {
-	t.Parallel()
-
-	args := cliArgs(cliPrepared(t, []string{"write_file", "edit_file"}), cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
-	allowed := strings.Split(argValue(args, "--allowedTools"), ",")
-	tools := strings.Split(argValue(args, "--tools"), ",")
-
-	for _, want := range []string{"Write", "Edit"} {
-		if !slices.Contains(allowed, want) {
-			t.Errorf("allowed = %v, want the granted gated tool %q", allowed, want)
-		}
-
-		if !slices.Contains(tools, want) {
-			t.Errorf("--tools = %v, want the granted tool %q on the surface", tools, want)
-		}
-	}
-}
-
-// TestCLIToolPermissionsWebFetch: web_fetch rides the CLI's native WebFetch,
-// and an allow: list arrives as per-domain permission entries rather than a
-// blanket grant — the CLI's own permission engine enforces the same fence the
-// HTTP path's impl does.
-func TestCLIToolPermissionsWebFetch(t *testing.T) {
-	t.Parallel()
-
-	prepared := cliPrepared(t, []string{"web_fetch"})
-	prepared.conv.tools.webFetchAllow = []string{"specification.website", "backerkit.com"}
-
-	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
-	tools := strings.Split(argValue(args, "--tools"), ",")
-	allowed := strings.Split(argValue(args, "--allowedTools"), ",")
-
-	if want := []string{"WebFetch"}; !slices.Equal(tools, want) {
-		t.Errorf("--tools = %v, want exactly %v", tools, want)
-	}
-
-	// TWO rules per entry, because the CLI's matcher is exact where steps' is
-	// suffix-aware: domain:h alone denies api.h, which checkWebFetchHost
-	// allows, and domain:*.h alone denies the apex. Emitting both is what
-	// makes one written fence mean the same thing on both backends
-	// (semantics verified against Claude Code's permission reference).
-	for _, want := range []string{
-		"WebFetch(domain:specification.website)", "WebFetch(domain:*.specification.website)",
-		"WebFetch(domain:backerkit.com)", "WebFetch(domain:*.backerkit.com)",
-	} {
-		if !slices.Contains(allowed, want) {
-			t.Errorf("allowed = %v, want it to contain %q", allowed, want)
-		}
-	}
-
-	// A bare WebFetch entry alongside the scoped ones would BE the blanket
-	// grant the list exists to prevent.
-	if slices.Contains(allowed, "WebFetch") {
-		t.Errorf("allowed = %v, want no unscoped WebFetch entry", allowed)
-	}
-}
-
-// TestCLIToolPermissionsWebFetchBareGrant: no allow: list means the whole
-// web, so the permission entry is the unscoped native name.
-func TestCLIToolPermissionsWebFetchBareGrant(t *testing.T) {
-	t.Parallel()
-
-	args := cliArgs(cliPrepared(t, []string{"web_fetch"}), cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
-
-	if allowed := strings.Split(argValue(args, "--allowedTools"), ","); !slices.Contains(allowed, "WebFetch") {
-		t.Errorf("allowed = %v, want the unscoped WebFetch entry", allowed)
-	}
-}
-
-// TestCLIToolPermissionsCustomToolKeepsItsName: the natives table is keyed by
-// steps' BUILTIN names, and a custom tool is free to reuse one. Matching the
-// mapping by name alone would swap that pipeline's own command for the CLI's
-// tool of the same shape — a curl-through-an-authed-proxy tool silently
-// becoming the CLI's own unrestricted fetcher, with the run: never executing.
-// Provenance, not spelling, decides what is native.
+// TestCLIToolPermissionsCustomToolKeepsItsName is the one-line survivor of
+// the old provenance test: a custom {name: web_fetch, run: ...} is bridged
+// under its own name exactly like any other tool, which is now structurally
+// true rather than something a natives-table lookup could get wrong.
 func TestCLIToolPermissionsCustomToolKeepsItsName(t *testing.T) {
 	t.Parallel()
 
-	prepared := cliPrepared(t, []string{"web_fetch"})
-	prepared.conv.tools.builtins = nil // the grant was a custom {name: web_fetch, run: ...}
-
-	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
-	tools := strings.Split(argValue(args, "--tools"), ",")
-	allowed := strings.Split(argValue(args, "--allowedTools"), ",")
-
-	if slices.Contains(tools, "WebFetch") {
-		t.Errorf("--tools = %v, want no native WebFetch — the grant was a custom tool", tools)
-	}
+	allowed := cliToolPermissions(cliPrepared(t, []string{"web_fetch"}).conv)
 
 	if !slices.Contains(allowed, "mcp__steps__web_fetch") {
 		t.Errorf("allowed = %v, want the custom tool bridged under its own name", allowed)
 	}
-
-	// The bridge must serve it, or the model is offered a tool nothing runs.
-	if skip := nativeToolNames(prepared.conv, cliRuntimes["claude"]); skip["web_fetch"] {
-		t.Error("the bridge skipped a custom tool as if it were native")
-	}
 }
 
-// TestCLIToolPermissionsEmptyGrant pins the floor: an agent granted no
-// built-ins gets an empty surface rather than the CLI's default set.
+// TestCLIToolPermissionsEmptyGrant pins the floor: an agent granted nothing
+// gets an empty --allowedTools, not the CLI's default set.
 func TestCLIToolPermissionsEmptyGrant(t *testing.T) {
 	t.Parallel()
 
-	prepared := cliPrepared(t, []string{"count_lines"})
-	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
+	args := cliArgs(cliPrepared(t, nil), "/tmp/mcp.json", firstAttempt())
 
-	if got := argValue(args, "--tools"); got != "" {
-		t.Errorf("--tools = %q, want empty — no built-in was granted", got)
-	}
-
-	// The bridged tool still has to get through; it is not a built-in.
-	if got := argValue(args, "--allowedTools"); got != "mcp__steps__count_lines" {
-		t.Errorf("--allowedTools = %q, want the bridged tool", got)
+	if got := argValue(args, "--allowedTools"); got != "" {
+		t.Errorf("--allowedTools = %q, want empty for a grant of nothing", got)
 	}
 }
 
@@ -277,59 +165,17 @@ func TestCLIArgsIsolatesUserConfig(t *testing.T) {
 	t.Parallel()
 
 	prepared := cliPrepared(t, []string{"read_file"})
-	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
+	args := cliArgs(prepared, "/tmp/mcp.json", firstAttempt())
 
 	if got := argValue(args, "--setting-sources"); got != "" {
 		t.Errorf("--setting-sources = %q, want empty (no scope loads without a settings: declaration)", got)
 	}
 
 	prepared.ri.CLISettings = config.CLISettingsProject
-	args = cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
+	args = cliArgs(prepared, "/tmp/mcp.json", firstAttempt())
 
 	if got := argValue(args, "--setting-sources"); got != "project" {
 		t.Errorf("--setting-sources = %q, want project once the agent declares settings: project", got)
-	}
-}
-
-// TestCLIRuntimesCoverProviders keeps the two halves of the CLI tables in
-// step: config knows which "@name" sources load, this package knows how to
-// invoke them, and a CLI present in one but not the other would resolve at
-// load and fail at the step.
-func TestCLIRuntimesCoverProviders(t *testing.T) {
-	t.Parallel()
-
-	for _, name := range config.CLIProviderNames() {
-		runtime, ok := cliRuntimes[name]
-		if !ok {
-			t.Errorf("config knows cli %q but internal/agent has no runtime for it", name)
-
-			continue
-		}
-
-		if len(runtime.natives) == 0 {
-			t.Errorf("cli %q maps no built-in tools to natives", name)
-		}
-	}
-
-	for name := range cliRuntimes {
-		if !slices.Contains(config.CLIProviderNames(), name) {
-			t.Errorf("internal/agent has a runtime for cli %q, which config does not recognize", name)
-		}
-	}
-}
-
-// TestCLINativeMappingCoversBuiltins pins that every built-in tool a grant can
-// name has a native equivalent. A built-in with no mapping would silently fall
-// through to the bridge, which works but duplicates a capability the CLI
-// already has — the failure this catches is a NEW built-in being added without
-// deciding which side runs it.
-func TestCLINativeMappingCoversBuiltins(t *testing.T) {
-	t.Parallel()
-
-	for name := range builtinAgentTools("") {
-		if _, mapped := cliRuntimes["claude"].natives[name]; !mapped {
-			t.Errorf("built-in %q has no native claude equivalent; map it or decide it belongs on the bridge", name)
-		}
 	}
 }
 
@@ -366,12 +212,16 @@ func TestRenderCLIPrompt(t *testing.T) {
 	}
 }
 
+// TestMergeCLITrajectory: both sides arrive here already de-namespaced (the
+// stream side via recordCLIToolCalls, the bridge side because a bridged call
+// is captured under its own declared name — see clistream.go/clibridge.go),
+// so this dedupes on bare names directly.
 func TestMergeCLITrajectory(t *testing.T) {
 	t.Parallel()
 
 	streamed := []recordedToolCall{
-		{name: "Read", args: map[string]any{"file_path": "a.go"}, ok: true},
-		{name: "mcp__steps__verdict", args: map[string]any{"choice": "approve"}, ok: true},
+		{name: "read_file", args: map[string]any{"file_path": "a.go"}, ok: true},
+		{name: "verdict", args: map[string]any{"choice": "approve"}, ok: true},
 	}
 
 	bridged := []recordedToolCall{
@@ -385,7 +235,7 @@ func TestMergeCLITrajectory(t *testing.T) {
 	verdicts := 0
 
 	for _, call := range merged {
-		if call.name == "mcp__steps__verdict" {
+		if call.name == "verdict" {
 			verdicts++
 		}
 	}
@@ -396,7 +246,7 @@ func TestMergeCLITrajectory(t *testing.T) {
 
 	// A bridged call the stream never mentioned definitely happened — the
 	// parent executed it.
-	if !slices.ContainsFunc(merged, func(call recordedToolCall) bool { return call.name == "mcp__steps__count_lines" }) {
+	if !slices.ContainsFunc(merged, func(call recordedToolCall) bool { return call.name == "count_lines" }) {
 		t.Errorf("merged = %+v, want the bridge-only call to survive", merged)
 	}
 }
@@ -471,7 +321,7 @@ func TestCLIArgsBudgetUSD(t *testing.T) {
 	plan := firstAttempt()
 	plan.budgetUSD = remainingCLIBudget(prepared.ri.BudgetUSD, 0)
 
-	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", plan)
+	args := cliArgs(prepared, "/tmp/mcp.json", plan)
 
 	if got := argValue(args, "--max-budget-usd"); got != "0.25" {
 		t.Errorf("--max-budget-usd = %q, want 0.25", got)
@@ -484,14 +334,14 @@ func TestCLIArgsBudgetUSD(t *testing.T) {
 	retried := firstAttempt()
 	retried.budgetUSD = remainingCLIBudget(prepared.ri.BudgetUSD, 0.10)
 
-	if got := argValue(cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", retried), "--max-budget-usd"); got != "0.15" {
+	if got := argValue(cliArgs(prepared, "/tmp/mcp.json", retried), "--max-budget-usd"); got != "0.15" {
 		t.Errorf("a retry's --max-budget-usd = %q, want 0.15 -- what is left of 0.25", got)
 	}
 
 	// Unset means no ceiling, not a zero one -- a "0" would stop the run
 	// before it started.
 	noBudget := cliPrepared(t, []string{"read_file"})
-	if slices.Contains(cliArgs(noBudget, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt()), "--max-budget-usd") {
+	if slices.Contains(cliArgs(noBudget, "/tmp/mcp.json", firstAttempt()), "--max-budget-usd") {
 		t.Error("--max-budget-usd was passed for an agent with no budget")
 	}
 }
@@ -507,7 +357,7 @@ func TestCLIArgsSessionFlags(t *testing.T) {
 	prepared := cliPrepared(t, []string{"read_file"})
 	session := "11111111-2222-4333-8444-555555555555"
 
-	opening := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json",
+	opening := cliArgs(prepared, "/tmp/mcp.json",
 		cliAttempt{session: session, maxTurns: 12, prompt: "go"})
 
 	if got := argValue(opening, "--session-id"); got != session {
@@ -518,7 +368,7 @@ func TestCLIArgsSessionFlags(t *testing.T) {
 		t.Error("the opening invocation resumed something")
 	}
 
-	retried := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp2.json",
+	retried := cliArgs(prepared, "/tmp/mcp2.json",
 		cliAttempt{session: session, resume: true, maxTurns: 9, prompt: "continue"})
 
 	if got := argValue(retried, "--resume"); got != session {
@@ -571,6 +421,36 @@ func TestCLIContinuationPrompt(t *testing.T) {
 	// it invites redoing finished work.
 	if strings.Contains(prompt, "Review the diff.") {
 		t.Errorf("continuation prompt re-sent the original task:\n%s", prompt)
+	}
+}
+
+// TestCheckCLIObligationsRequiredToolFailsAtExit is issue #100 slice 3's
+// required: un-refusal: checkCLIObligations already enforces conv.tools.
+// required against whatever the bridge saw satisfied — that is exactly how
+// the verdict tool is enforced today, and required: was refused on any OTHER
+// tool only because config assumed there was nowhere for it to bind. There
+// is: this function, unconditionally, checked at exit rather than forced
+// mid-conversation.
+func TestCheckCLIObligationsRequiredToolFailsAtExit(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, []string{"post_review"})
+	prepared.conv.tools.required = map[string]bool{"post_review": true}
+
+	// Never called: satisfied is empty.
+	err := checkCLIObligations(prepared, cliRunResult{}, map[string]bool{})
+	if err == nil {
+		t.Fatal("expected a failure for a required tool never satisfied")
+	}
+
+	if !strings.Contains(err.Error(), "post_review") {
+		t.Errorf("error = %q, want it to name the unsatisfied tool", err)
+	}
+
+	// Satisfied: no error.
+	err = checkCLIObligations(prepared, cliRunResult{}, map[string]bool{"post_review": true})
+	if err != nil {
+		t.Errorf("checkCLIObligations: %v, want nil once the required tool succeeded", err)
 	}
 }
 
@@ -682,7 +562,7 @@ func TestCLIArgsEffort(t *testing.T) {
 	prepared := cliPrepared(t, []string{"read_file"})
 	prepared.ri.ReasoningEffort = "medium"
 
-	args := cliArgs(prepared, cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
+	args := cliArgs(prepared, "/tmp/mcp.json", firstAttempt())
 
 	if !slices.Contains(args, "--effort") {
 		t.Fatalf("args do not carry --effort: %v", args)
@@ -692,7 +572,7 @@ func TestCLIArgsEffort(t *testing.T) {
 		t.Errorf("--effort = %q, want %q", args[i+1], "medium")
 	}
 
-	unset := cliArgs(cliPrepared(t, []string{"read_file"}), cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
+	unset := cliArgs(cliPrepared(t, []string{"read_file"}), "/tmp/mcp.json", firstAttempt())
 	if slices.Contains(unset, "--effort") {
 		t.Errorf("an agent with no reasoning_effort still got --effort: %v", unset)
 	}

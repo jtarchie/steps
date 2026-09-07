@@ -17,35 +17,12 @@ import (
 	"github.com/jtarchie/steps/internal/shell"
 )
 
-// TestAskUserIsNeverNativeToACLI is the whole of the bridge wiring, asserted
-// rather than assumed: not adding ask_user to a runtime's natives table is
-// what makes it bridged, which is in turn what makes the question land in THIS
-// process — where the questions row, the memo and the responder ladder live.
-//
-// Mapping it onto a CLI's own ask-the-user tool would mean the CLI path had a
-// different feature with the same name: the answer would land in the child's
-// transcript, and nothing here would ever see it.
-func TestAskUserIsNeverNativeToACLI(t *testing.T) {
-	t.Parallel()
-
-	for cli, runtime := range cliRuntimes {
-		if native, claimed := runtime.natives[config.AskUserBuiltinName]; claimed {
-			t.Errorf("cli %q claims %s is native (as %q); it must be bridged so the answer reaches this process",
-				cli, config.AskUserBuiltinName, native)
-		}
-
-		if !config.BuiltinIsNeverNativeToCLI(config.AskUserBuiltinName) {
-			t.Errorf("config and this package disagree about whether %s is native to cli %q",
-				config.AskUserBuiltinName, cli)
-		}
-	}
-}
-
 // TestCLIBridgeEnforcesTheQuestionBudget: max_questions: is a config.Step dial
-// rather than a ToolSpec guard, so it slips past the load-time check that
-// refuses required:/max_calls:/args: for a cli source — and would land in the
-// same trap those refusals exist to prevent, a promise nothing applies. The
-// bridge handler is the only place on this path that sees every ask.
+// rather than a ToolSpec guard, so it has never gone through the load-time
+// tool-guard check at all (see internal/config's checkCLIAgentTools, which
+// since issue #100 no longer refuses required:/max_calls:/args: either — the
+// bridge, or the exit check below it, is where all of them bind). The bridge
+// handler is the only place on this path that sees every ask.
 func TestCLIBridgeEnforcesTheQuestionBudget(t *testing.T) {
 	t.Parallel()
 
@@ -66,7 +43,7 @@ func TestCLIBridgeEnforcesTheQuestionBudget(t *testing.T) {
 	conv := bridgeConversation(decls, registry, nil)
 	conv.tools.maxCalls = map[string]int{config.AskUserBuiltinName: 2}
 
-	bridge, err := newCLIBridge(t.Context(), conv, nil, reachHost)
+	bridge, err := newCLIBridge(t.Context(), conv)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}
@@ -130,14 +107,10 @@ func TestCLIToolTimeoutCoversAParkedQuestion(t *testing.T) {
 		t.Fatalf("cliToolTimeoutEnv = %v, want one entry", env)
 	}
 
-	want := (45*time.Minute + cliToolTimeoutMargin).Milliseconds()
+	// max(the default step timeout, the ask_user wait + a margin) + a margin.
+	want := (45*time.Minute + 2*cliToolTimeoutMargin).Milliseconds()
 	if got := env[0]; got != cliMCPToolTimeoutEnv+"="+strconv.FormatInt(want, 10) {
-		t.Errorf("cliToolTimeoutEnv = %q, want %s=%d (the declared wait plus a margin)", got, cliMCPToolTimeoutEnv, want)
-	}
-
-	// A step that cannot ask needs no widening at all.
-	if env := cliToolTimeoutEnv(config.ResolvedInvocation{}); env != nil {
-		t.Errorf("a step without an ask_user grant set %v", env)
+		t.Errorf("cliToolTimeoutEnv = %q, want %s=%d (the declared wait plus two margins)", got, cliMCPToolTimeoutEnv, want)
 	}
 
 	// An operator's own value is FORWARDED, not deferred to. The distinction
@@ -157,5 +130,37 @@ func TestCLIToolTimeoutCoversAParkedQuestion(t *testing.T) {
 		if strings.HasPrefix(kv, cliMCPToolTimeoutEnv+"=") {
 			t.Errorf("%s is on the host env allowlist; this test's premise is stale", cliMCPToolTimeoutEnv)
 		}
+	}
+}
+
+// TestCLIToolTimeoutCoversEveryToolNow is R1: after issue #100's flip, EVERY
+// tool call is a bridged MCP call, so a step with no ask_user grant at all
+// still needs MCP_TOOL_TIMEOUT set — an ordinary run_shell must not die at
+// the CLI's own un-widened default. Before the flip this returned nil.
+func TestCLIToolTimeoutCoversEveryToolNow(t *testing.T) {
+	env := cliToolTimeoutEnv(config.ResolvedInvocation{})
+	if len(env) != 1 {
+		t.Fatalf("cliToolTimeoutEnv = %v, want one entry even with no ask_user grant", env)
+	}
+
+	// The bound is the LARGER of the step's own default timeout and
+	// askUserWait's own default (even absent a grant — see cliToolTimeoutEnv),
+	// plus a margin over whichever won.
+	base := agentStepTimeout
+	if ask := defaultAskUserWait + cliToolTimeoutMargin; ask > base {
+		base = ask
+	}
+
+	want := (base + cliToolTimeoutMargin).Milliseconds()
+	if got := env[0]; got != cliMCPToolTimeoutEnv+"="+strconv.FormatInt(want, 10) {
+		t.Errorf("cliToolTimeoutEnv = %q, want %s=%d (the step's own default timeout plus two margins)", got, cliMCPToolTimeoutEnv, want)
+	}
+
+	// An explicit timeout: 0 (no deadline of its own) still needs a number:
+	// MCP_TOOL_TIMEOUT cannot be left unset, so it gets a generous ceiling
+	// rather than nothing — the real bound is then the job's.
+	uncapped := cliToolTimeoutEnv(config.ResolvedInvocation{Timeout: "0"})
+	if got := uncapped[0]; got != cliMCPToolTimeoutEnv+"="+strconv.FormatInt((cliUnboundedToolTimeout+cliToolTimeoutMargin).Milliseconds(), 10) {
+		t.Errorf("cliToolTimeoutEnv(timeout: 0) = %q, want the unbounded ceiling plus a margin", got)
 	}
 }

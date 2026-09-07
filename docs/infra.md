@@ -74,19 +74,20 @@ Point `TMPDIR` at a shared path before running:
 export TMPDIR="$HOME/.steps-tmp" && mkdir -p "$TMPDIR"
 ```
 
-Native Linux is unaffected. The same constraint applies to a CLI agent's container `$HOME` and its mounted credentials file; a credentials file whose host path isn't shared arrives as a *directory*, and the CLI reports being logged out.
+Native Linux is unaffected.
 
 ### CLI agents
 
-For a [CLI-backed agent](agents.md#cli-backed-agents-claudesonnet) (`source.model: "@claude/..."`), `image:` containerizes **the CLI process itself**, not just the tools steps serves it. Most of a CLI agent's tools are its own natives (`Read`, `Bash`, `Edit`), which never route through steps, so without a container the working directory is their only fence. The CLI runs as a one-shot `docker run --rm` for the length of the step.
+For a [CLI-backed agent](agents.md#cli-backed-agents-claudesonnet) (`source.model: "@claude/..."`), `image:` containerizes the step's **tools** — exactly as it does for a hosted agent — never the CLI process itself. The CLI is always a host subprocess of the `steps` process; only the `run_shell`/custom-tool/MCP execution a bridged call performs happens inside the container, through the same `toolEnv.runner` a hosted agent's tools already run through.
 
-- **The tool bridge stays reachable.** A CLI agent's non-native tools — custom `run:` tools, `mcp_servers:` grants, the synthesized verdict/context tools — reach the CLI over a loopback MCP server the steps process hosts. From inside a container that means `host.docker.internal`, which steps makes resolvable everywhere via `--add-host host.docker.internal:host-gateway`. Under `network: host` the container shares this namespace, so the bridge stays on loopback.
-- **The container is named, and removed on every exit path** — including `timeout:` and cancellation, where the CLI would otherwise keep running and spending.
-- **`network: none` is rejected at load time** for a containerized CLI agent: cutting egress severs the channel the step's own verdict comes back on. (On an HTTP agent, `network: none` remains a perfectly good sandbox.)
-- **`$HOME` is a fresh per-step directory**, bind-mounted from a host temp dir and deleted when the step ends — which also removes the CLI's session transcript. Nothing of yours is mounted: no history, no transcripts, no settings.
-- **Credentials, the one platform-dependent part.** On **Linux**, `~/.claude/.credentials.json` is bind-mounted **read-only** into the container's `$HOME` (a token refresh inside can't write back; an expired token heals on your next host-side use). On **macOS**, the login Keychain can't cross into a container at all — `source.api_key_env:` is the only route there, and the portable choice everywhere. Preflight checks that at least one route exists.
-- **Preflight also checks the image has the CLI** (`docker run --rm --pull=never <image> claude --version`), after the up-front pull. Pointing `image:` at something without the CLI is easy and otherwise invisible until the step runs.
-- **A containerized CLI agent does not need the CLI on the host** — `steps validate`'s PATH check is skipped for any agent whose every step resolves an image.
+That single fact is why a CLI agent's containerization has none of the machinery a "containerize the whole CLI" design would need:
+
+- **No credentials cross into any container.** The subscription login (or `source.api_key_env:`) stays in the `steps` process's own environment, forwarded to the CLI's host-side subprocess exactly as it would be for an uncontainerized step. There is no macOS-Keychain-vs-Linux-file asymmetry to reason about, because nothing about authentication changed.
+- **The bridge stays loopback, always.** The MCP server the CLI's tools reach back through never has to be dialled from inside a container — the CLI itself is never in one — so there is no `host.docker.internal` reach analysis and no wider bind to reason about.
+- **`network: none` is a coherent, useful sandbox**, exactly as it is for a hosted agent: cutting the container's egress narrows what the step's shell commands can reach, and never touches the bridge the verdict comes back on, since that bridge was never inside the container.
+- **The CLI is needed on the host, always** — `steps validate`'s PATH check applies to every CLI agent uniformly, whether or not any of its steps names an `image:`. An operator relying on the old containerized exemption (a CI runner with docker and no `claude` on PATH) now gets a validate failure naming the orchestrator, which is the machine that actually needs the binary.
+
+One thing containerizing a CLI agent's tools does **not** fence: `web_fetch` is an in-process HTTP implementation on both the hosted and the CLI path, not a shell tool, so `network: none` narrows `run_shell` and custom tools without touching it.
 
 ## Remote workers (`tags:`)
 

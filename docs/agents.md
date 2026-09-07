@@ -1069,29 +1069,19 @@ This is **delegation, not a different transport**. The CLI owns the conversation
 
 ### The tool grant becomes the CLI's permissions
 
-Granted built-ins map to the CLI's *native* tools, because a CLI is best at the tools its model was trained against:
+The CLI is passed `--tools ""` **unconditionally** — no built-in of its own, ever — and every granted tool, built-in or custom alike, reaches it over the same loopback MCP bridge that already served custom `run:` tools, `mcp:` grants, and the synthesized `verdict` tool. A hosted agent is a brain whose hands are steps' own tool implementations, executing wherever steps decides; a CLI agent is now the same shape — a brain that happens to live in a subprocess. The bridged tools are the *same* implementations a hosted agent runs: path confinement, output caps, `allow:` enforcement, all apply unchanged, including for a tool (`read_file`, `run_shell`, ...) that used to run as the CLI's own native `Read`/`Bash`.
 
-| granted built-in | claude CLI tool |
-| --- | --- |
-| `read_file` | `Read` |
-| `list_dir` | `Glob` |
-| `run_shell` | `Bash` |
-| `write_file` | `Write` |
-| `edit_file` | `Edit` |
-| `search_files` | `Grep` |
-| `web_fetch` | `WebFetch` |
+Anything not granted is **absent**, not merely unapproved: `--tools ""` gives the CLI no built-in surface to fall back on, and `--allowedTools` names only what the bridge exports. That is deny-by-default — a capability this build of steps has never heard of is withheld because it was never granted, rather than surviving because nobody remembered to forbid it. The CLI's own configured MCP servers are excluded too (`--strict-mcp-config`).
 
-One row diverges in contract, deliberately: the CLI's `WebFetch` takes a URL *and a prompt* and answers with a model-written summary of the page, where the hosted path's `web_fetch` returns the raw body.
+**Attestation: the fence is enforced, not merely asked for.** `--tools ""` is policy inside an upstream binary steps does not pin, so each attempt checks the CLI's own stream-json `init` event — which lists the session's tools — against exactly the bridged grant, and kills the child the instant they disagree. This is *detection*, not prevention: the check runs after `init` is parsed, so it cannot stop a single surplus call made in the same breath as `init` itself, but every call after that is refused. A mismatch is an infrastructure condition (it fires `on_error`, not a step failure `to:` can route on) — retrying would just re-trigger the same fence.
 
-An `allow:` list binds on both paths, but it is *compiled* for this one: each entry becomes a **pair** of permission rules, `WebFetch(domain:host)` and `WebFetch(domain:*.host)`, because the CLI matches domains exactly where steps matches a host and its subdomains — one rule alone would deny the subdomains, the other would deny the apex. This is also why a wildcard entry is a load error rather than a pattern: `*` denies everything here and matches everything there. One divergence is left standing, since it belongs to the CLI's engine: it checks the domain of the request, not each hop of a redirect chain.
-
-Everything else in the grant — custom `run:` tools, `mcp:` grants, and the synthesized `verdict` tool — reaches the CLI over a loopback MCP server steps starts for the step and tears down after. Those are the *same* implementations a hosted agent runs. Credentials stay in the parent process; nothing reaches the CLI's config but a URL and a single-use token.
-
-Anything not granted is **absent**, not merely unapproved: the grant becomes the CLI's entire built-in surface. That is deny-by-default — a capability this build of steps has never heard of is withheld because it was never granted, rather than surviving because nobody remembered to forbid it. The CLI's own configured MCP servers are excluded too.
+A bridged call's trajectory entry is recorded **de-namespaced**: `mcp__steps__read_file` records as `read_file`, identical to what a hosted step's own trajectory shows for the same call, so one `assert.tool_calls: [{name: read_file}]` reads the same on either agent kind. A name this build does not recognize as bridged (`Bash`, `Task`, anything the CLI's own natives could in principle still report despite `--tools ""`) is kept **verbatim** — a second, human-readable signal of the same fence failure the attestation check exists to catch.
 
 ### A step is not your session
 
 A CLI agent step runs with **no configuration scopes by default**. Your personal `~/.claude` never applies — no user settings, hooks, plugins, skills — and the repo's own `.claude/` scope loads only when the agent opts in with `settings: project` (as above). A pipeline whose behavior depends on who ran it is not a pipeline. The opt-in is hashed, so granting or revoking it invalidates the step's cache. It is also markedly cheaper: dropping user-level config cut a trivial one-step pipeline from ~76K prompt tokens to ~25K in a measured run.
+
+`--setting-sources`, `--strict-mcp-config` and `--tools ""` are now the **entire** fence a `settings: project` step runs inside — three flags, all load-bearing. That matters most for `settings: project` **together with `image:`**: the CLI process itself is always host-side (see "Containerizing a CLI agent" below), so a fetched PR's own `.claude/settings.json` hooks execute on the orchestrator, not inside whatever container the step's tools run in. `image:` narrows what the *tools* can reach; it does not, and cannot, contain a `settings: project` agent's own config loading. Grant `settings:` only to a repo whose `.claude/` you trust the same way you trust its `run:` scripts.
 
 ### Verdicts are enforced at exit
 
@@ -1115,15 +1105,14 @@ These are load errors, not silent no-ops, because a setting that reads as config
 | `source.string_tool_choice:` | no `tool_choice` on the wire to spell |
 | `compact_after_tokens:`, `context_window:` | the CLI compacts its own conversation |
 | `budget.tokens:` | nothing counts tokens until the subprocess exits (use `budget.usd:`) |
-| `required:`, `max_calls:`, `args:` on a tool | enforced by the turn loop the CLI replaces |
-| `timeout:` on a **built-in** tool | the CLI runs its built-ins itself; on a custom or MCP tool it is bridged, so it binds and is accepted |
 | sub-agent tools, in either direction | a sub-agent nests inside a turn loop there is none of |
 | a CLI agent as a task's `fix:` agent | same reason |
-| `network: none` together with `image:` | the CLI reaches its steps-provided tools over a connection back to this process |
+
+`required:`, `max_calls:` and `args:` on a tool are accepted, same as a hosted agent's: every call now reaches the bridge (or, for `required:`, is checked at exit against what the bridge observed — see "Verdicts are enforced at exit" above), so there is no longer a turn loop these would promise a constraint nothing applies. `timeout:` on a tool is accepted regardless of whether it names a built-in or a custom/MCP tool, for the same reason: every call now reaches the bridge, so there is no longer a native path a per-call deadline would silently miss. `network: none` together with `image:` is accepted too — see below.
 
 ### Containerizing a CLI agent
 
-`image:` **is** supported, and it does more here than for a hosted agent: it containerizes the CLI process itself, so its native tools are confined to the container rather than running on the host with only the working directory as a fence. Credentials are the part that needs a decision — a Linux subscription login is bind-mounted in read-only; macOS keeps it in the Keychain where no container can reach it, so `source.api_key_env:` is the portable answer. See [infra.md](infra.md#cli-agents).
+`image:` places the step's **tools**, never the CLI process itself — the CLI is always a host subprocess of this one, exactly as a hosted agent's conversation always runs here while its tools may run in a container. That single move is what makes containerizing a CLI agent unremarkable: credentials never approach the container (the subscription login / `api_key_env:` stays in this process, forwarded to the CLI's own host-side environment exactly as an uncontainerized step's would), there is no macOS-vs-Linux asymmetry to reason about, and `network: none` is now a coherent, useful way to sandbox a CLI agent's shell commands — cutting the *tools'* egress no longer touches the bridge the verdict comes back on, because the bridge was never inside the container to begin with. See [infra.md](infra.md#cli-agents).
 
 ### Budgets are in dollars
 
@@ -1133,7 +1122,7 @@ A CLI agent takes `budget: {usd: 0.50}` rather than `budget: {tokens:}`. The two
 
 *About:* a subprocess that CRASHES never reports what it spent — the dollar figure rides the terminal event a dead child never emits — so its share is priced from the token usage it streamed before dying, using a rate card covering the models the CLI runtimes run. A model outside that card is debited nothing, which is how every model behaved before the ceiling carried across attempts at all. The estimate is only ever used to decide how much budget is left; recorded cost stays exactly what the provider reported, so a run whose cost nobody reported still records none.
 
-`fallback:` works in both directions — a CLI agent can fall back to a hosted provider, and a hosted agent to a CLI. Preflight checks a CLI target by looking for its binary on `PATH` (or, containerized, by probing the image).
+`fallback:` works in both directions — a CLI agent can fall back to a hosted provider, and a hosted agent to a CLI. Preflight checks a CLI target by looking for its binary on `PATH` — the same check whether or not the step names an `image:`, since the CLI is always a host subprocess.
 
 ## Ensembles: asking several agents the same question
 

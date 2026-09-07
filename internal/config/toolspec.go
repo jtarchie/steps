@@ -125,11 +125,12 @@ type ToolSpec struct {
 	// with no designed per-tool contract, and run_shell — a builtin — is the
 	// likeliest thing in the system to hang. It binds only where the tool is
 	// GRANTED, except on an inline custom tool, which a step defines rather
-	// than selects (see validateToolTimeoutShape). The one exception to
-	// "every form" is a cli source, which runs its built-ins itself: there a
-	// timeout: on a NATIVE built-in is refused (checkCLIAgentTools), while a
-	// custom or MCP tool — bridged, so the deadline binds — is accepted, and
-	// so is ask_user, the one builtin no CLI runs natively.
+	// than selects (see validateToolTimeoutShape). A cli source used to be an
+	// exception — a builtin ran as the CLI's own native tool, which the
+	// deadline never reached — but since issue #100 every tool a CLI agent
+	// calls goes through the bridge, the same impl a hosted agent's deadline
+	// already binds to, so a builtin's timeout: on a cli source binds exactly
+	// like any other form.
 	//
 	// On ask_user the deadline is the WAIT, and what a breach resolves to is
 	// that tool's own contract: the declared default: with answered: false,

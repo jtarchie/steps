@@ -10,8 +10,10 @@ package shell
 // stay data — is asked of the daemon now, and the answers mean the same thing
 // they always did rather than one indirection short of it.
 //
-// The flag-block assertions that survive as argv tests live in
-// dockerrun_test.go, which covers the one foreground `docker run` left.
+// No argv-shaped test is left anywhere in the package: the one that was —
+// dockerrun_test.go, over the foreground `docker run` a containerized CLI
+// subprocess used — went with the facility itself when issue #100 made the
+// CLI always a host subprocess.
 
 import (
 	"bytes"

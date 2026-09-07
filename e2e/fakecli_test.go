@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -117,6 +118,25 @@ func (c fakeCLI) invocations(t *testing.T) int {
 	return len(c.records(t, "argv"))
 }
 
+// cliInitEvent is the system/init event a well-behaved CLI reports at the
+// start of its stream, carrying exactly the tools it will use — the
+// attestation surface (see internal/agent/cliattest.go). tools are the exact
+// strings the init event should report, i.e. already in the CLI's own
+// namespace (mcp__steps__read_file, not read_file), since that is what a real
+// `--tools "" --allowedTools mcp__steps__...` session reports.
+//
+// Since issue #100, every fake script that reaches a result event a step's
+// attestation is enabled for must emit this first, or the step fails with
+// "the cli finished without ever reporting a system/init event".
+func cliInitEvent(tools ...string) string {
+	quoted := make([]string, len(tools))
+	for i, tool := range tools {
+		quoted[i] = fmt.Sprintf("%q", tool)
+	}
+
+	return fmt.Sprintf(`{"type":"system","subtype":"init","tools":[%s]}`, strings.Join(quoted, ","))
+}
+
 // cliResultEvent is the terminal event of a CLI transcript, as a shell-safe
 // single line.
 func cliResultEvent(text string, turns int) string {
@@ -140,6 +160,16 @@ func cliToolUseEvent(id, name, argsJSON string) string {
 // bridge rejects an unauthenticated caller, which is what stops any other
 // local process from running this step's tools.
 func callBridgeScript(tool, argsJSON string) string {
+	return captureBridgeScript("/dev/null", tool, argsJSON)
+}
+
+// captureBridgeScript is callBridgeScript with the tool's ANSWER kept, written
+// to dest. A test that only needs the side effect uses callBridgeScript; one
+// asserting on what the parent's own implementation returned — where it ran,
+// what it read — needs the response body, and the fake CLI has nowhere else to
+// put it (the driver hands it shell.HostEnv(), so nothing can be passed back
+// out through the environment).
+func captureBridgeScript(dest, tool, argsJSON string) string {
 	return fmt.Sprintf(`
 config=$(echo "$*" | tr ' ' '\n' | grep -A0 'steps-cli-mcp' | head -1)
 url=$(sed 's/.*"url":"\([^"]*\)".*/\1/' "$config")
@@ -148,8 +178,8 @@ curl -sS -X POST "$url" \
   -H "Authorization: Bearer $token" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":%q,"arguments":%s}}' >/dev/null
-`, tool, argsJSON)
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":%q,"arguments":%s}}' > %[3]q
+`, tool, argsJSON, dest)
 }
 
 // cliErrorResultEvent is the terminal event of a run the CLI itself judged a
