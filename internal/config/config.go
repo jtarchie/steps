@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"slices"
 )
@@ -98,14 +97,15 @@ type Revision struct {
 }
 
 // withIncludes folds the resolved include files into the revision, so an edit
-// to one is an edit to the pipeline. Paths are relative to baseDir, which is
-// the pipeline file's own directory.
+// to one is an edit to the pipeline. Paths are read through fsys, exactly as
+// resolveFileIncludes read them — a DirFS rooted at the pipeline's directory,
+// or the Bundle a `steps pipeline set` uploaded.
 //
 // The digest describes path→content PAIRS rather than a concatenation of
 // bodies. Sorting by path already makes the concatenation order stable, so
 // nothing reachable today distinguishes the two — this is what keeps that
 // true if the ordering ever stops being by path.
-func (r Revision) withIncludes(baseDir string, paths []string) (Revision, error) {
+func (r Revision) withIncludes(fsys Files, paths []string) (Revision, error) {
 	if len(paths) == 0 {
 		return r, nil
 	}
@@ -121,11 +121,9 @@ func (r Revision) withIncludes(baseDir string, paths []string) (Revision, error)
 	sum.Write([]byte(r.Source))
 
 	for _, path := range unique {
-		full := filepath.Join(baseDir, path)
-
-		body, err := os.ReadFile(full) //nolint:gosec // the loader just read this same file to build the config
+		body, err := fsys.ReadFile(path)
 		if err != nil {
-			return Revision{}, fmt.Errorf("could not read included file %q: %w", full, err)
+			return Revision{}, fmt.Errorf("could not read included file %q: %w", describe(fsys, path), err)
 		}
 
 		sum.Write([]byte("\x00" + path + "\x00"))
@@ -155,9 +153,27 @@ func (r Revision) Recorded() bool { return r.SHA != "" }
 // Load is written on top of this rather than beside it: one definition of the
 // hash is what stops the cheap answer and the parsed one from disagreeing.
 func FileRevision(path string, vars map[string]string, includes []string) (Revision, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // path is the pipeline file the user asked to run, not untrusted input
+	return fsRevision(DirFS(filepath.Dir(path)), filepath.Base(path), vars, includes)
+}
+
+// fsRevision is that one definition: the substituted bytes of file as read
+// through fsys, and their hash.
+//
+// Shared by FileRevision's cheap "has this changed?" answer and LoadFS's
+// parsed one for the reason FileRevision's comment gives, and for a second
+// one an upload adds: a `steps pipeline set` sends the SHA the CLI hashed
+// locally, and the daemon re-hashes the same bytes through a Bundle. Two
+// copies of "what a revision is" makes that comparison a coin flip.
+//
+// includes is the set a caller already knows about, which is the set the
+// configuration it is holding resolved. An edit that changes WHICH files are
+// included changes the YAML too, so it is caught by the hash above before
+// this list is out of date. LoadFS passes none: they are not known until its
+// parse resolves them, and it folds them in afterwards.
+func fsRevision(fsys Files, file string, vars map[string]string, includes []string) (Revision, error) {
+	data, err := fsys.ReadFile(file)
 	if err != nil {
-		return Revision{}, fmt.Errorf("could not read pipeline file %q: %w", path, err)
+		return Revision{}, fmt.Errorf("could not read pipeline file %q: %w", describe(fsys, file), err)
 	}
 
 	data = InterpolateVars(data, vars)
@@ -165,11 +181,7 @@ func FileRevision(path string, vars map[string]string, includes []string) (Revis
 	sum := sha256.Sum256(data)
 	revision := Revision{SHA: hex.EncodeToString(sum[:]), Source: string(data)}
 
-	// The includes a caller already knows about, which is the set the
-	// configuration it is holding resolved. An edit that changes WHICH files
-	// are included changes the YAML too, so it is caught by the hash above
-	// before this list is out of date.
-	return revision.withIncludes(filepath.Dir(path), includes)
+	return revision.withIncludes(fsys, includes)
 }
 
 // Slugify turns a pipeline path into its identity: the base name without its
@@ -203,6 +215,22 @@ func LoadConfigWithVars(path string, vars map[string]string) (*Config, error) {
 // Load reads and parses the pipeline YAML at path under the identity name,
 // with ((name)) substitution applied to the source before it is parsed.
 //
+// The path-based convenience form over LoadFS, for every caller that reads a
+// pipeline off this machine's own disk (run/test/validate/plan/mcp). A daemon
+// serving a `steps pipeline set` upload has no sibling filesystem to resolve
+// a relative path against — see LoadFS and config.Bundle.
+func Load(path string, name string, vars map[string]string) (*Config, error) {
+	return LoadFS(DirFS(filepath.Dir(path)), filepath.Base(path), name, vars)
+}
+
+// LoadFS reads and parses the pipeline YAML named file, resolved through
+// fsys, under the identity name, with ((name)) substitution applied to the
+// source before it is parsed.
+//
+// fsys is a parameter rather than a path because the caller is the one who
+// knows where the bytes live — a directory on disk (DirFS) or an uploaded
+// Bundle — and this function must not care.
+//
 // name is a parameter rather than something derived here because the identity
 // is the caller's to decide: `--name prod=infra/deploy.yml` is an operator
 // saying which pipeline this is, and it must reach the store, the /p/<slug>
@@ -217,12 +245,14 @@ func LoadConfigWithVars(path string, vars map[string]string) (*Config, error) {
 // in state.db like anything else written in the file. Vars separate a
 // pipeline's shape from its parameters; they are not a secret store. Keep
 // credentials in the env-var references (api_key_env:) that exist for them.
-func Load(path string, name string, vars map[string]string) (*Config, error) {
-	slog.Debug("config.load", "path", path)
+func LoadFS(fsys Files, file string, name string, vars map[string]string) (*Config, error) {
+	where := describe(fsys, file)
+
+	slog.Debug("config.load", "file", where)
 
 	// No includes yet — they are not known until the parse below resolves
-	// them, and are folded in there (see withIncludes).
-	revision, err := FileRevision(path, vars, nil)
+	// them, and are folded in after it (see withIncludes).
+	revision, err := fsRevision(fsys, file, vars, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -233,21 +263,21 @@ func Load(path string, name string, vars map[string]string) (*Config, error) {
 
 	err = strictUnmarshal(data, &cfg)
 	if err != nil {
-		return nil, fmt.Errorf("could not parse pipeline YAML %q: %w", path, err)
+		return nil, fmt.Errorf("could not parse pipeline YAML %q: %w", where, err)
 	}
 
 	cfg.stampLines(data)
 
 	slog.Info("config.loaded",
-		"path", path,
+		"file", where,
 		"resource_types", len(cfg.ResourceTypes),
 		"resources", len(cfg.Resources),
 		"jobs", len(cfg.Jobs),
 	)
 
-	includes, err := cfg.resolveFileIncludes(filepath.Dir(path))
+	includes, err := cfg.resolveFileIncludes(fsys)
 	if err != nil {
-		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
+		return nil, fmt.Errorf("pipeline YAML %q: %w", where, err)
 	}
 
 	// The revision covers the includes, not just the YAML. A run_file: or a
@@ -255,9 +285,9 @@ func Load(path string, name string, vars map[string]string) (*Config, error) {
 	// file alone answered "did the pipeline change?" with a confident no for
 	// the edit that changed everything — the CONFIG column stayed put across
 	// runs that ran different code.
-	revision, err = revision.withIncludes(filepath.Dir(path), includes)
+	revision, err = revision.withIncludes(fsys, includes)
 	if err != nil {
-		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
+		return nil, fmt.Errorf("pipeline YAML %q: %w", where, err)
 	}
 
 	cfg.registerBuiltinAgents()
@@ -269,7 +299,7 @@ func Load(path string, name string, vars map[string]string) (*Config, error) {
 
 	err = cfg.resolveSubAgentDescriptions()
 	if err != nil {
-		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
+		return nil, fmt.Errorf("pipeline YAML %q: %w", where, err)
 	}
 
 	// Before validate(), so the across: it writes is checked like any
@@ -279,7 +309,7 @@ func Load(path string, name string, vars map[string]string) (*Config, error) {
 	// the extra load the joined-errors contract below exists to save.
 	err = errors.Join(cfg.desugarParallelism(), cfg.validate())
 	if err != nil {
-		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
+		return nil, fmt.Errorf("pipeline YAML %q: %w", where, err)
 	}
 
 	cfg.inheritResourceTags()

@@ -1807,4 +1807,66 @@ func TestResolveAgentInvocationDerivesCompactionBudget(t *testing.T) {
 	}
 }
 
+// TestFileRevisionAgreesWithLoad holds FileRevision's own contract: the cheap
+// "has this changed?" answer and the parsed one are the same hash over the
+// same bytes, includes and all. They are only that while they share one
+// definition — two copies of read-substitute-hash agree until one of them is
+// edited, and the disagreement is invisible (a poll that re-parses forever, a
+// `set` refused for a configuration the sender hashed identically).
+func TestFileRevisionAgreesWithLoad(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+tasks:
+- name: unit
+  run_file: ci/unit.sh
+  image: ((image))
+jobs:
+- name: build
+  plan:
+  - task: unit
+`)
+	writeSibling(t, path, "ci/unit.sh", "echo hi\n")
+
+	vars := map[string]string{"image": "alpine"}
+
+	cfg, err := LoadConfigWithVars(path, vars)
+	if err != nil {
+		t.Fatalf("LoadConfigWithVars: %v", err)
+	}
+
+	cheap, err := FileRevision(path, vars, cfg.Revision.Includes)
+	if err != nil {
+		t.Fatalf("FileRevision: %v", err)
+	}
+
+	if cheap.SHA != cfg.Revision.SHA {
+		t.Errorf("FileRevision SHA = %q, Load SHA = %q", cheap.SHA, cfg.Revision.SHA)
+	}
+
+	if cheap.Source != cfg.Revision.Source {
+		t.Errorf("FileRevision source differs from Load's")
+	}
+
+	// Without includes nothing recomputes the digest afterwards, so this is
+	// the only case where the FIRST hash either side takes is the one that
+	// ships — and the only one that catches a second definition taking it
+	// over different bytes (before substitution, say).
+	bare := writeConfig(t, "jobs:\n- name: build\n  plan:\n  - task: unit\n    run: echo ((image))\n")
+
+	bareCfg, err := LoadConfigWithVars(bare, vars)
+	if err != nil {
+		t.Fatalf("LoadConfigWithVars: %v", err)
+	}
+
+	bareCheap, err := FileRevision(bare, vars, bareCfg.Revision.Includes)
+	if err != nil {
+		t.Fatalf("FileRevision: %v", err)
+	}
+
+	if bareCheap.SHA != bareCfg.Revision.SHA {
+		t.Errorf("no includes: FileRevision SHA = %q, Load SHA = %q", bareCheap.SHA, bareCfg.Revision.SHA)
+	}
+}
+
 func ptrTo[T any](v T) *T { return &v }
