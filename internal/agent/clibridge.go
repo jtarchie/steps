@@ -5,18 +5,27 @@ package agent
 //
 // A CLI owns its own tool loop, so steps cannot hand it a tool registry the
 // way it hands one to a model. What a CLI does accept is an MCP server. So
-// the parent process becomes one: every tool the step's grant produced that
-// the CLI has no native equivalent for — custom run: tools, mcp_servers:
-// grants, and the synthesized verdict/context tools — is re-exported over a
-// loopback MCP server the child connects back to.
+// the parent process becomes one, serving EVERY tool the step's grant
+// produced — custom run: tools, mcp_servers: grants, the synthesized
+// verdict/context tools, and (see issue #100) every built-in too, since
+// `--tools ""` denies the CLI's own natives outright and the bridge is the
+// tool surface, not a side channel next to a smaller native one.
 //
 // Two things fall out of this that are worth stating plainly. First, the tool
 // implementations are the SAME ones an HTTP agent runs: path confinement,
 // output caps and spilling, MCP subsetting and auth all apply unchanged,
-// because nothing was reimplemented. Second, a verdict call lands in the
+// because nothing was reimplemented — including for a built-in that used to
+// run as the CLI's own native tool. Second, a verdict call lands in the
 // parent's memory as it happens, over a channel the model cannot forge — the
 // CLI never has to be trusted to report what it decided, which is what keeps
 // verdict routing meaningful across the process boundary.
+//
+// The residual trust window: the CLI's own binary decides what it offers the
+// model at all, and `--tools ""` is policy inside a process this build does
+// not pin. The init-event attestation in cliattest.go is the per-run proof
+// that policy held — detection, not prevention, since it lands after the
+// child has already parsed its own argv — with `--tools ""` remaining the
+// primary fence.
 
 import (
 	"context"
@@ -36,9 +45,6 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/genai"
-
-	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/shell"
 )
 
 // cliBridgeServerName is the MCP server name the child CLI knows the bridge
@@ -51,8 +57,8 @@ const cliBridgeServerName = "steps"
 // that outlived it.
 const cliBridgeShutdownTimeout = 5 * time.Second
 
-// cliBridge is a running loopback MCP server exposing one step's non-native
-// tools, plus what it observed the child do with them.
+// cliBridge is a running loopback MCP server exposing every tool this step's
+// grant produced, plus what it observed the child do with them.
 type cliBridge struct {
 	server    *http.Server
 	listener  net.Listener
@@ -60,10 +66,11 @@ type cliBridge struct {
 	closeOnce sync.Once
 	// token authenticates the child. Loopback is not a permission boundary:
 	// every process on the host can reach an open localhost port, and what
-	// this one serves is the step's custom run: tools (arbitrary shell in the
-	// workspace) and its verdict tool (which decides where the job goes next).
-	// The child learns the token from the mcp-config file, which is written
-	// 0600.
+	// this one serves is now the step's ENTIRE tool surface — every built-in,
+	// every custom run: tool (arbitrary shell in the workspace), every mcp:
+	// grant, and the verdict tool that decides where the job goes next — not
+	// a side channel next to a smaller native one. The child learns the token
+	// from the mcp-config file, which is written 0600.
 	token string
 
 	// budgets bounds how many times a bridged tool may be called during this
@@ -82,59 +89,27 @@ type cliBridge struct {
 	calls []recordedToolCall
 	// counts is how many times each budgeted tool has been called. The
 	// counter lives HERE because this is the only place on the CLI path that
-	// sees every call: internal/agent's turn loop enforces max_calls: and a
-	// CLI agent does not run one, which is exactly why the load-time guard
-	// refuses that field for a cli source. max_questions: is the one budget
-	// that must still bind — it is denominated in a person's attention, not
-	// in tool calls — so it is enforced here instead of promised and dropped.
+	// sees every call: internal/agent's turn loop enforces max_calls: on the
+	// HTTP path, and a CLI agent does not run one, so this is where max_calls:
+	// binds instead (see internal/config's checkCLIAgentTools, which no
+	// longer refuses it for exactly this reason). max_questions: rides the
+	// same machinery — it is denominated in a person's attention, not in tool
+	// calls, so it is enforced here rather than by the turn loop either way.
 	counts map[string]int
 }
 
-// bridgeReach says where the child will dial this bridge FROM, which decides
-// both what address to bind and what address to advertise. Getting it wrong
-// means every bridged tool call — including the verdict — is refused.
-type bridgeReach int
-
-const (
-	// reachHost: the child is a subprocess on this machine. Loopback, which
-	// is reachable by it and by nothing else on the network.
-	reachHost bridgeReach = iota
-	// reachGateway: the child is in a container, and reaches us by the
-	// docker gateway rather than this machine's loopback. Requires binding
-	// all interfaces.
-	//
-	// This covers `network: host` too, which looks like it should be the
-	// loopback case and is not: when the daemon runs in a VM (Docker
-	// Desktop, colima) that "host" is the VM, so a bridge on this machine's
-	// loopback is unreachable from the container — verified against colima,
-	// where host.docker.internal resolves under host networking and 127.0.0.1
-	// does not answer. A daemon sharing this kernel would make loopback work,
-	// but steps cannot tell the two apart from here, and the gateway route
-	// is correct for both.
-	reachGateway
-)
-
-// cliBridgeReach classifies a step's child by the runtime it resolved.
-func cliBridgeReach(ri config.ResolvedInvocation) bridgeReach {
-	if ri.Image == "" {
-		return reachHost
-	}
-
-	return reachGateway
-}
-
-// newCLIBridge starts a bridge serving every tool in conv's registry except
-// those named in skip — the built-ins the CLI runs natively (see
-// cliRuntime.natives). The caller must Close it.
+// newCLIBridge starts a bridge serving every tool in conv's registry. The
+// caller must Close it.
 //
-// reach changes only where the bridge is reachable FROM; see bridgeReach.
-// The bearer token is unchanged and is what actually authorizes a request —
-// widening the bind widens who may DIAL the port, not what they may do with
-// it, and only for the length of one attempt.
+// Always loopback: the CLI process is always a host subprocess of this one
+// (see the issue #100 design note in cliexec.go), a bridged tool's own
+// container — if `image:` names one — is where the TOOL runs, never where
+// the CLI does, so there is no longer a child in its own network namespace
+// that needs anything wider to dial back with.
 //
 // The conversation's per-tool call ceilings come along too, because this is
 // the only place on the CLI path that sees every call — see cliBridge.counts.
-func newCLIBridge(ctx context.Context, conv agentConversation, skip map[string]bool, reach bridgeReach) (*cliBridge, error) {
+func newCLIBridge(ctx context.Context, conv agentConversation) (*cliBridge, error) {
 	bridge := &cliBridge{
 		satisfied: map[string]bool{},
 		token:     rand.Text(),
@@ -145,7 +120,7 @@ func newCLIBridge(ctx context.Context, conv agentConversation, skip map[string]b
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: cliBridgeServerName, Version: "v1"}, nil)
 
 	for _, decl := range conv.tools.decls.FunctionDeclarations {
-		if decl == nil || skip[decl.Name] {
+		if decl == nil {
 			continue
 		}
 
@@ -164,14 +139,8 @@ func newCLIBridge(ctx context.Context, conv agentConversation, skip map[string]b
 	var listenConfig net.ListenConfig
 
 	// Loopback only, ephemeral port: reachable by the child this process
-	// spawned and by nothing else on the network. Only a child in its OWN
-	// network namespace needs more than that.
-	address := "127.0.0.1:0"
-	if reach == reachGateway {
-		address = "0.0.0.0:0"
-	}
-
-	listener, err := listenConfig.Listen(ctx, "tcp", address)
+	// spawned and by nothing else on the network.
+	listener, err := listenConfig.Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("cli bridge: listen: %w", err)
 	}
@@ -188,7 +157,7 @@ func newCLIBridge(ctx context.Context, conv agentConversation, skip map[string]b
 	}
 
 	bridge.listener = listener
-	bridge.url = bridgeURL(listener.Addr().String(), reach)
+	bridge.url = "http://" + listener.Addr().String()
 	bridge.server = httpServer
 
 	// The goroutine closes over its OWN reference rather than reading
@@ -202,25 +171,6 @@ func newCLIBridge(ctx context.Context, conv agentConversation, skip map[string]b
 	}()
 
 	return bridge, nil
-}
-
-// bridgeURL is the address to TELL the child, which is not always the one
-// bound: a child in its own network namespace cannot dial this host's
-// loopback, and the wildcard address that case binds is not a destination at
-// all. A bind address that will not split is passed through as-is rather
-// than guessed at — the child then fails to connect with a URL that at least
-// says what happened.
-func bridgeURL(bound string, reach bridgeReach) string {
-	if reach != reachGateway {
-		return "http://" + bound
-	}
-
-	_, port, err := net.SplitHostPort(bound)
-	if err != nil {
-		return "http://" + bound
-	}
-
-	return "http://" + net.JoinHostPort(shell.HostGatewayName, port)
 }
 
 // handler adapts one toolImpl to MCP. The adaptation is deliberately thin —
@@ -411,6 +361,22 @@ func (b *cliBridge) Close(ctx context.Context) error {
 // namespace — what --allowedTools must name to permit it.
 func bridgedToolName(name string) string {
 	return "mcp__" + cliBridgeServerName + "__" + name
+}
+
+// cliBridgeToolPrefix is bridgedToolName's fixed prefix, factored out so
+// debridgedToolName can strip exactly it without reconstructing the format
+// string.
+const cliBridgeToolPrefix = "mcp__" + cliBridgeServerName + "__"
+
+// debridgedToolName reverses bridgedToolName for recording a trajectory (see
+// clistream.go): `mcp__steps__read_file` becomes `read_file`, identical to
+// what a hosted step's trajectory shows for the same call. A name with no
+// such prefix — a surplus native the child called despite `--tools ""` — is
+// returned VERBATIM rather than guessed at, which is deliberate: it is a
+// second, human-readable signal of the same fence failure the init-event
+// attestation exists to catch.
+func debridgedToolName(name string) string {
+	return strings.TrimPrefix(name, cliBridgeToolPrefix)
 }
 
 // declInputSchema renders a tool declaration's parameters as a JSON Schema

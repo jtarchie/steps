@@ -321,12 +321,12 @@ jobs:
 	}
 }
 
-// TestCLIAgentToolTimeoutSplitsOnWhoRunsTheTool pins the half-rejection: a
-// CLI-backed agent calls a custom or MCP tool through the bridge — the same
-// impl the deadline is bound to, so it holds — but runs every built-in
-// natively, where the bridge never sees the call and a deadline would be a
-// fence that silently does not bind.
-func TestCLIAgentToolTimeoutSplitsOnWhoRunsTheTool(t *testing.T) {
+// TestCLIAgentToolTimeoutAppliesToBuiltinsToo pins the un-refusal: a
+// CLI-backed agent now calls EVERY tool — builtin included — through the
+// bridge (issue #100), the same impl the deadline is bound to, so a builtin's
+// timeout: binds exactly as a custom or MCP tool's does. There is no longer a
+// native path the bridge never sees.
+func TestCLIAgentToolTimeoutAppliesToBuiltinsToo(t *testing.T) {
 	t.Parallel()
 
 	builtin := writeConfig(t, `
@@ -340,7 +340,11 @@ jobs:
 - name: j
   plan: [{ agent: coder, messages: [x], inputs: [] }]
 `)
-	wantLoadError(t, builtin, "sets timeout, which is not supported with a cli source")
+
+	_, err := LoadConfig(builtin)
+	if err != nil {
+		t.Fatalf("LoadConfig rejected a cli agent's builtin timeout: %v", err)
+	}
 
 	custom := writeConfig(t, `
 agents:
@@ -356,7 +360,7 @@ jobs:
   plan: [{ agent: coder, messages: [x], inputs: [] }]
 `)
 
-	_, err := LoadConfig(custom)
+	_, err = LoadConfig(custom)
 	if err != nil {
 		t.Errorf("LoadConfig rejected a bridged custom tool's timeout: %v", err)
 	}

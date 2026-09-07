@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -17,9 +19,20 @@ func TestParseCLIStream(t *testing.T) {
 		`{"type":"result","subtype":"success","result":"all done","num_turns":3,"is_error":false,"usage":{"input_tokens":120,"output_tokens":45}}`,
 	}, "\n")
 
-	result, err := parseCLIStream(strings.NewReader(stream), nil)
+	result, err := parseCLIStream(strings.NewReader(stream), nil, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
+	}
+
+	// nil expected means "no attestation to perform" — this test predates
+	// attestation — but the init event is still PARSED regardless, since
+	// cliRunResult.sawInit/initTools are what a caller that DOES attest reads.
+	if !result.sawInit {
+		t.Error("the init event was not recorded")
+	}
+
+	if want := []string{"Read", "Bash"}; !slices.Equal(result.initTools, want) {
+		t.Errorf("initTools = %v, want %v", result.initTools, want)
 	}
 
 	assertCLIResultSummary(t, result)
@@ -51,7 +64,9 @@ func assertCLIResultTrajectory(t *testing.T, result cliRunResult) {
 		t.Fatalf("trajectory has %d calls, want 2: %+v", len(result.trajectory), result.trajectory)
 	}
 
-	// Names are recorded as the CLI reported them — what actually ran.
+	// Neither name carries the mcp__steps__ bridge prefix, so de-namespacing
+	// (debridgedToolName) leaves them unchanged — these are exactly the
+	// surplus-native names a real attestation failure would also flag.
 	if result.trajectory[0].name != "Read" || !result.trajectory[0].ok {
 		t.Errorf("first call = %+v, want a successful Read", result.trajectory[0])
 	}
@@ -82,7 +97,7 @@ func TestParseCLIStreamTolerance(t *testing.T) {
 		`{"type":"result","subtype":"success","result":"fine","num_turns":1}`,
 	}, "\n")
 
-	result, err := parseCLIStream(strings.NewReader(stream), nil)
+	result, err := parseCLIStream(strings.NewReader(stream), nil, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -109,7 +124,7 @@ func TestParseCLIStreamTruncated(t *testing.T) {
 	// retry this and not that.
 	stream := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sleep 1"}}]}}`
 
-	result, err := parseCLIStream(strings.NewReader(stream), nil)
+	result, err := parseCLIStream(strings.NewReader(stream), nil, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -130,7 +145,7 @@ func TestParseCLIStreamReportsFailure(t *testing.T) {
 
 	stream := `{"type":"result","subtype":"error_max_turns","result":"","num_turns":8,"is_error":true}`
 
-	result, err := parseCLIStream(strings.NewReader(stream), nil)
+	result, err := parseCLIStream(strings.NewReader(stream), nil, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -155,7 +170,7 @@ func TestParseCLIStreamRecordsTheConversation(t *testing.T) {
 
 	rec := &transcriptRecorder{}
 
-	_, err := parseCLIStream(strings.NewReader(stream), rec)
+	_, err := parseCLIStream(strings.NewReader(stream), rec, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -191,6 +206,9 @@ func TestParseCLIStreamRecordsTheConversation(t *testing.T) {
 // TestParseCLIStreamRecordsABridgedCallOnce pins the choice not to record the
 // bridge's own view as well. A bridged tool is executed by the parent AND
 // reported by the child's stream; recording both would double every verdict.
+// It also pins de-namespacing (issue #100): the recorded name is `verdict`,
+// not `mcp__steps__verdict` — mcp__steps__ is steps' OWN bridge namespace, so
+// stripping it is de-namespacing an observation, not translating one.
 func TestParseCLIStreamRecordsABridgedCallOnce(t *testing.T) {
 	t.Parallel()
 
@@ -198,9 +216,13 @@ func TestParseCLIStreamRecordsABridgedCallOnce(t *testing.T) {
 
 	rec := &transcriptRecorder{}
 
-	_, err := parseCLIStream(strings.NewReader(stream), rec)
+	result, err := parseCLIStream(strings.NewReader(stream), rec, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
+	}
+
+	if len(result.trajectory) != 1 || result.trajectory[0].name != "verdict" {
+		t.Fatalf("trajectory = %+v, want one call named %q", result.trajectory, "verdict")
 	}
 
 	calls := 0
@@ -208,11 +230,34 @@ func TestParseCLIStreamRecordsABridgedCallOnce(t *testing.T) {
 	for _, event := range rec.events {
 		if event.Type == "call" {
 			calls++
+
+			if event.Name != "verdict" {
+				t.Errorf("recorded transcript call name = %q, want the de-namespaced %q", event.Name, "verdict")
+			}
 		}
 	}
 
 	if calls != 1 {
 		t.Errorf("recorded %d calls for one bridged tool_use, want 1: %+v", calls, rec.events)
+	}
+}
+
+// TestParseCLIStreamKeepsAnUnrecognizedNameVerbatim: a surplus native the
+// child called despite `--tools ""` has no mcp__steps__ prefix to strip, so
+// it is recorded exactly as reported — a second, human-readable surplus-tool
+// signal alongside the init-event attestation (cliattest.go).
+func TestParseCLIStreamKeepsAnUnrecognizedNameVerbatim(t *testing.T) {
+	t.Parallel()
+
+	stream := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"echo hi"}}]}}`
+
+	result, err := parseCLIStream(strings.NewReader(stream), nil, nil)
+	if err != nil {
+		t.Fatalf("parseCLIStream: %v", err)
+	}
+
+	if len(result.trajectory) != 1 || result.trajectory[0].name != "Bash" {
+		t.Fatalf("trajectory = %+v, want one call named %q, verbatim", result.trajectory, "Bash")
 	}
 }
 
@@ -230,7 +275,7 @@ func TestParseCLIStreamRecordsBlockShapedResults(t *testing.T) {
 
 	rec := &transcriptRecorder{}
 
-	_, err := parseCLIStream(strings.NewReader(stream), rec)
+	_, err := parseCLIStream(strings.NewReader(stream), rec, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -257,7 +302,7 @@ func TestParseCLIStreamReportsWhatItSpent(t *testing.T) {
 		`"total_cost_usd":0.25,"usage":{"input_tokens":10,"output_tokens":5,` +
 		`"cache_creation_input_tokens":100,"cache_read_input_tokens":900}}`
 
-	result, err := parseCLIStream(strings.NewReader(stream), nil)
+	result, err := parseCLIStream(strings.NewReader(stream), nil, nil)
 	if err != nil {
 		t.Fatalf("parseCLIStream: %v", err)
 	}
@@ -274,5 +319,161 @@ func TestParseCLIStreamReportsWhatItSpent(t *testing.T) {
 
 	if result.costUSD != 0.25 {
 		t.Errorf("cost = %v, want 0.25", result.costUSD)
+	}
+}
+
+// TestParseCLIStreamAttestationExact is the happy path: the init event
+// reports exactly the expected bridged grant, and the stream is read to
+// completion.
+func TestParseCLIStreamAttestationExact(t *testing.T) {
+	t.Parallel()
+
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","tools":["mcp__steps__read_file","mcp__steps__run_shell"]}`,
+		`{"type":"result","subtype":"success","result":"done","num_turns":1,"is_error":false}`,
+	}, "\n")
+
+	result, err := parseCLIStream(strings.NewReader(stream), nil, []string{"mcp__steps__read_file", "mcp__steps__run_shell"})
+	if err != nil {
+		t.Fatalf("parseCLIStream: %v", err)
+	}
+
+	if !result.sawResult {
+		t.Error("an exact attestation match still failed to reach the result event")
+	}
+}
+
+// TestParseCLIStreamAttestationSurplus is the fence actually failing: the
+// child reports a native tool `--tools ""` should have withheld. The call
+// must return the INSTANT the init line is parsed — proven by the later
+// result event's fields never reaching cliRunResult, since parseCLIStream
+// returns before the scanner ever reads that line.
+func TestParseCLIStreamAttestationSurplus(t *testing.T) {
+	t.Parallel()
+
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","tools":["mcp__steps__read_file","Bash"]}`,
+		`{"type":"result","subtype":"success","result":"done","num_turns":1,"is_error":false}`,
+	}, "\n")
+
+	result, err := parseCLIStream(strings.NewReader(stream), nil, []string{"mcp__steps__read_file"})
+	if !errors.Is(err, errCLIToolSurface) {
+		t.Fatalf("parseCLIStream error = %v, want errCLIToolSurface", err)
+	}
+
+	if !strings.Contains(err.Error(), "Bash") {
+		t.Errorf("error %q does not name the surplus tool", err)
+	}
+
+	if result.sawResult {
+		t.Error("the stream was read past the attestation failure — the later result event should never have been reached")
+	}
+}
+
+// TestParseCLIStreamAttestationMissing: the init event is present but omits a
+// tool the grant expected — set EQUALITY, not a subset check.
+func TestParseCLIStreamAttestationMissing(t *testing.T) {
+	t.Parallel()
+
+	stream := `{"type":"system","subtype":"init","tools":["mcp__steps__read_file"]}`
+
+	_, err := parseCLIStream(strings.NewReader(stream), nil, []string{"mcp__steps__read_file", "mcp__steps__run_shell"})
+	if !errors.Is(err, errCLIToolSurface) {
+		t.Fatalf("parseCLIStream error = %v, want errCLIToolSurface", err)
+	}
+
+	if !strings.Contains(err.Error(), "mcp__steps__run_shell") {
+		t.Errorf("error %q does not name the missing tool", err)
+	}
+}
+
+// TestParseCLIStreamAttestationAbsent covers the precedence fix: a RESULT
+// with no init event is an attestation failure (the child never proved its
+// tool surface), but a stream with NEITHER stays the ordinary "exited without
+// reporting a result" case that execCLI's own fallback handles — parseCLIStream
+// itself returns a nil error for that stream, matching its pre-attestation
+// behavior.
+func TestParseCLIStreamAttestationAbsent(t *testing.T) {
+	t.Parallel()
+
+	resultOnly := `{"type":"result","subtype":"success","result":"done","num_turns":1,"is_error":false}`
+
+	_, err := parseCLIStream(strings.NewReader(resultOnly), nil, []string{"mcp__steps__read_file"})
+	if !errors.Is(err, errCLIToolSurface) {
+		t.Fatalf("parseCLIStream error = %v, want errCLIToolSurface for a result with no init", err)
+	}
+
+	result, err := parseCLIStream(strings.NewReader(""), nil, []string{"mcp__steps__read_file"})
+	if err != nil {
+		t.Fatalf("an empty stream (neither event) should not be an attestation failure: %v", err)
+	}
+
+	if result.sawResult || result.sawInit {
+		t.Fatalf("result = %+v, want neither flag set for an empty stream", result)
+	}
+}
+
+// TestParseCLIStreamAttestationLateArriving covers a stream where the init
+// event is not the first line — some CLI transcripts open with unrelated
+// system events. The check still fires the instant init is actually parsed,
+// wherever that is in the stream.
+func TestParseCLIStreamAttestationLateArriving(t *testing.T) {
+	t.Parallel()
+
+	stream := strings.Join([]string{
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"warming up"}]}}`,
+		`{"type":"system","subtype":"init","tools":["Bash"]}`,
+		`{"type":"result","subtype":"success","result":"done","num_turns":1,"is_error":false}`,
+	}, "\n")
+
+	_, err := parseCLIStream(strings.NewReader(stream), nil, []string{"mcp__steps__read_file"})
+	if !errors.Is(err, errCLIToolSurface) {
+		t.Fatalf("parseCLIStream error = %v, want errCLIToolSurface even for a late-arriving init event", err)
+	}
+}
+
+// TestParseCLIStreamOtherSystemEventsAreNotAttestations is the tolerance half
+// of the same rule: `system` is a family, not one event, and a CLI is free to
+// grow another subtype in it. Only `init` carries a tool list, so anything
+// else in the family must be skipped — reading one as an empty attestation
+// would fail every step the moment the CLI shipped a new system event.
+func TestParseCLIStreamOtherSystemEventsAreNotAttestations(t *testing.T) {
+	t.Parallel()
+
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"compact_boundary"}`,
+		`{"type":"system","subtype":"init","tools":["mcp__steps__read_file"]}`,
+		`{"type":"result","subtype":"success","result":"done","num_turns":1,"is_error":false}`,
+	}, "\n")
+
+	result, err := parseCLIStream(strings.NewReader(stream), nil, []string{"mcp__steps__read_file"})
+	if err != nil {
+		t.Fatalf("an unrelated system event tripped attestation: %v", err)
+	}
+
+	if !result.sawInit || !result.sawResult {
+		t.Errorf("result = %+v, want both the init and the result event seen", result)
+	}
+}
+
+// TestCheckCLIToolSurface exercises the set-comparison directly, including
+// that "the bridge never connected" (an empty report against a non-empty
+// grant) is subsumed by the ordinary missing-tool case.
+func TestCheckCLIToolSurface(t *testing.T) {
+	t.Parallel()
+
+	err := checkCLIToolSurface([]string{"b", "a"}, []string{"a", "b"})
+	if err != nil {
+		t.Errorf("checkCLIToolSurface: order-independent equality failed: %v", err)
+	}
+
+	err = checkCLIToolSurface(nil, []string{"mcp__steps__read_file"})
+	if !errors.Is(err, errCLIToolSurface) {
+		t.Errorf("checkCLIToolSurface(nil, non-empty) = %v, want errCLIToolSurface", err)
+	}
+
+	err = checkCLIToolSurface(nil, nil)
+	if err != nil {
+		t.Errorf("checkCLIToolSurface(nil, nil): a step granted nothing should attest cleanly: %v", err)
 	}
 }

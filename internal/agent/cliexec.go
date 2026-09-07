@@ -1,257 +1,37 @@
 package agent
 
-// Spawning the CLI: the argument vector that IS the permission boundary, the
-// host-vs-container command, and the environment each gets.
+// Spawning the CLI: the argument vector that IS the permission boundary, and
+// the environment it gets.
+//
+// The CLI process is ALWAYS a host subprocess of this one — even when the
+// step resolved an image: for its tools. That is the issue #100 design: a
+// hosted agent is a brain whose hands are steps' own tool implementations,
+// executing wherever steps decides (host, or a container against whatever
+// daemon internal/shell resolves); a CLI agent is now the same shape. `image:`
+// on a CLI agent step places the TOOLS — toolEnv.runner, built by
+// prepareAgentStep exactly as it is for a hosted agent — never the CLI
+// process itself. That single move is what deletes the credentials
+// bind-mount, the macOS Keychain asymmetry, the container $HOME, and the
+// host.docker.internal reach analysis: the bridge is loopback, full stop,
+// because nothing dialling it is ever anywhere but this host.
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/shell"
 )
-
-// cliContainerHome is the container-side path a containerized CLI gets as its
-// $HOME. A fixed path of our own rather than the image's user home: the
-// container may run as a uid the image never heard of (see
-// shell.defaultContainerUser's Linux default), so no image-defined home can be
-// assumed writable.
-const cliContainerHome = "/steps-home"
-
-// cliStepHomeMode is the permission the containerized $HOME and its .claude
-// subdirectory get.
-//
-// 0777 rather than the 0700 a private directory would normally take, because
-// the process that must write here is NOT necessarily the user that created
-// it: user: can name any uid, and the Linux default is the host uid:gid,
-// neither of which this process can chown to without privileges it does not
-// have. A 0700 directory owned by the steps user is unwritable by a
-// container running as anyone else, and the CLI then fails trying to write
-// its own transcript.
-//
-// The exposure is bounded and short: the directory is a fresh per-step temp
-// dir removed when the step ends, holding only what the CLI writes there.
-// The credentials file mounted into it is a separate host path with its own
-// (unchanged, 0600) permissions — this mode does not touch it.
-const cliStepHomeMode = 0o777
-
-// newCLIStepHome creates the host directory a containerized CLI gets as its
-// $HOME, with the .claude subdirectory ALREADY created. Pre-creating it
-// host-side is load-bearing: docker creates missing bind-mount targets as
-// root, and a root-owned .claude would be unwritable by the process that has
-// to write its transcript into it. A directory made here arrives with a mode
-// the container's uid can use, whatever that uid turns out to be.
-//
-// Note nothing seeds a ~/.claude.json (onboarding/trust state) into it: the
-// CLI is always invoked with --print (see cliArgs), and the trust dialog is
-// documented as skipped in non-interactive mode. If --print ever stopped
-// being passed, a fresh $HOME would block on an interactive prompt inside a
-// container nothing can answer — that connection is why this comment exists.
-func newCLIStepHome() (string, error) {
-	home, err := os.MkdirTemp("", "steps-cli-home-*")
-	if err != nil {
-		return "", fmt.Errorf("creating cli home: %w", err)
-	}
-
-	// Explicitly chmod: MkdirTemp always makes 0700, and Mkdir's mode is
-	// masked by the process umask, so neither reaches the mode on its own.
-	for _, dir := range []string{home, filepath.Join(home, ".claude")} {
-		err = os.MkdirAll(dir, cliStepHomeMode)
-		if err == nil {
-			err = os.Chmod(dir, cliStepHomeMode)
-		}
-
-		if err != nil {
-			_ = os.RemoveAll(home)
-
-			return "", fmt.Errorf("creating cli home: %w", err)
-		}
-	}
-
-	return home, nil
-}
-
-// cliProcess is one CLI attempt, however it is being run: a child of this
-// process on the host, or a container on the daemon.
-//
-// An interface rather than an *exec.Cmd for both, because the container is no
-// longer a subprocess to wire up — it is a container this code talks to over
-// the engine API, and the only things the caller ever did with the command
-// were start it, read its transcript, and wait. Those are the three methods.
-type cliProcess interface {
-	// Start begins the run and returns the stream its transcript arrives on.
-	Start(ctx context.Context, stdin io.Reader, stderr io.Writer) (io.Reader, error)
-	// Wait ends it, reporting a nonzero exit as an error — the same shape
-	// exec.Cmd has, so the caller needs one branch and not two.
-	Wait(ctx context.Context) error
-	// Close releases whatever the run holds, on every exit path including the
-	// ones that never reach Wait.
-	Close()
-}
-
-// buildCLIProcess constructs the run for one CLI attempt: the binary itself on
-// the host, or a container when the step resolved an image. Everything the
-// caller does afterwards is identical either way — only what the process IS
-// differs.
-//
-// The second return is the container's name, empty on the host path. It is
-// what makes the run RECLAIMABLE: nothing this end does stops a container, so
-// a caller whose context is cancelled can only tear it down by name.
-func buildCLIProcess(
-	ctx context.Context, prepared preparedAgentStep, binary string, args []string, stepHome string,
-) (cliProcess, string, error) {
-	if prepared.ri.Image == "" {
-		cmd := exec.CommandContext(ctx, binary, args...) //nolint:gosec // binary comes from the static cliProviders table
-		cmd.Dir = prepared.conv.env.dir
-		cmd.Env = cliEnv(prepared.ri)
-
-		return &hostCLIProcess{cmd: cmd}, "", nil
-	}
-
-	resolvedCwd, err := shell.ResolveMountPath(prepared.conv.env.dir)
-	if err != nil {
-		return nil, "", fmt.Errorf("agent %q: resolving workspace for container: %w", prepared.ri.AgentName, err)
-	}
-
-	// Named so it can always be reclaimed. Killing the docker CLIENT does
-	// nothing to the container it started, so a step that times out could
-	// otherwise leave the CLI running — still spending, and still writing
-	// into the bind-mounted workspace the next step is about to read. A name
-	// this process generated is one it can `docker rm -f` knowing nothing
-	// else could own it.
-	name, err := shell.NewContainerName()
-	if err != nil {
-		return nil, "", fmt.Errorf("agent %q: %w", prepared.ri.AgentName, err)
-	}
-
-	spec := shell.DockerRunSpec{
-		Image:       prepared.ri.Image,
-		Name:        name,
-		Argv:        append([]string{binary}, args...),
-		ResolvedCwd: resolvedCwd,
-		EnvNames:    prepared.ri.Env,
-		User:        prepared.ri.User,
-		Network:     prepared.ri.Network,
-		Privileged:  prepared.ri.Privileged,
-		CPUShares:   prepared.ri.Limits.CPUShares(),
-		MemoryBytes: prepared.ri.Limits.MemoryBytes(),
-		ExtraMounts: []shell.Mount{{HostPath: stepHome, ContainerPath: cliContainerHome}},
-		// A literal -e HOME=value is fine precisely because a path is not a
-		// secret — the value-free `-e NAME` convention exists to keep secret
-		// VALUES out of the docker client's argv.
-		ExtraEnv: map[string]string{"HOME": cliContainerHome},
-	}
-
-	// A subscription login lives at ~/.claude/.credentials.json on Linux (on
-	// macOS it lives in the Keychain and this file simply does not exist).
-	// Mount exactly that one file, read-only: the rest of the operator's
-	// ~/.claude (history, transcripts, settings) is not the container's
-	// business, and read-only bounds a hostile image to reading the one token
-	// it was deliberately given. The cost: a token refresh cannot write back
-	// through the mount, so an expired token heals on the next host-side use,
-	// not here.
-	if credentials, ok := hostCLICredentials(); ok {
-		spec.ExtraMounts = append(spec.ExtraMounts, shell.Mount{
-			HostPath:      credentials,
-			ContainerPath: cliContainerHome + "/.claude/.credentials.json",
-			ReadOnly:      true,
-		})
-	}
-
-	// The api_key_env: value crosses under the CLI's own name, carried by
-	// value. It used to be forwarded value-free so the secret stayed out of
-	// the docker client's argv; there is no argv now, and the value travels in
-	// a request body that no process list shows.
-	//
-	// Conditioned on the variable actually being EXPORTED, not merely named.
-	// Passing the name alone would hand the container whatever
-	// ANTHROPIC_API_KEY this process happens to have — so a pipeline naming an
-	// unset api_key_env: would silently authenticate with the operator's
-	// personal key instead of failing. The host path cannot do that
-	// (shell.HostEnv's allowlist excludes it), and the two must agree.
-	if key := lookupCLIKey(prepared.ri); key != "" {
-		spec.ExtraEnv[cliAPIKeyEnv] = key
-	}
-
-	return &containerCLIProcess{spec: spec}, name, nil
-}
-
-// hostCLIProcess runs the CLI as a child of this process.
-type hostCLIProcess struct {
-	cmd *exec.Cmd
-}
-
-func (h *hostCLIProcess) Start(_ context.Context, stdin io.Reader, stderr io.Writer) (io.Reader, error) {
-	h.cmd.Stdin = stdin
-	h.cmd.Stderr = stderr
-	h.cmd.WaitDelay = cliWaitDelay
-
-	stdout, err := h.cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("cli stdout: %w", err)
-	}
-
-	err = h.cmd.Start()
-	if err != nil {
-		return nil, fmt.Errorf("starting %s: %w", h.cmd.Path, err)
-	}
-
-	return stdout, nil
-}
-
-// Close is a no-op: a child process owns nothing this end has to release.
-func (h *hostCLIProcess) Close() {}
-
-func (h *hostCLIProcess) Wait(context.Context) error {
-	err := h.cmd.Wait()
-	if err != nil {
-		return fmt.Errorf("%w", err)
-	}
-
-	return nil
-}
-
-// containerCLIProcess runs the CLI in a container on the daemon.
-type containerCLIProcess struct {
-	spec shell.DockerRunSpec
-	run  *shell.ForegroundRun
-}
-
-func (c *containerCLIProcess) Start(ctx context.Context, stdin io.Reader, stderr io.Writer) (io.Reader, error) {
-	run, err := shell.StartForeground(ctx, c.spec, stdin, stderr)
-	if err != nil {
-		return nil, fmt.Errorf("starting the cli container: %w", err)
-	}
-
-	c.run = run
-
-	return run.Stdout, nil
-}
-
-func (c *containerCLIProcess) Wait(ctx context.Context) error {
-	err := c.run.Wait(ctx)
-	if err != nil {
-		return fmt.Errorf("%w", err)
-	}
-
-	return nil
-}
-
-// Close releases what the run holds, for the paths that never reach Wait.
-func (c *containerCLIProcess) Close() {
-	if c.run != nil {
-		c.run.Close()
-	}
-}
 
 // cliAPIKeyEnv is the variable the claude CLI reads its key from, whatever
 // the pipeline chose to call its own.
@@ -259,71 +39,44 @@ func (c *containerCLIProcess) Close() {
 //nolint:gosec // an environment variable NAME, not a credential
 const cliAPIKeyEnv = "ANTHROPIC_API_KEY"
 
-// lookupCLIKey returns the value of the pipeline's api_key_env:, or "" when
-// none was named or the named variable is not exported.
-func lookupCLIKey(ri config.ResolvedInvocation) string {
-	if ri.APIKeyEnv == "" {
-		return ""
-	}
-
-	return os.Getenv(ri.APIKeyEnv)
-}
-
-// hostCLICredentials reports the host path of the CLI's on-disk credentials
-// file, if there is one.
-func hostCLICredentials() (string, bool) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", false
-	}
-
-	path := filepath.Join(home, ".claude", ".credentials.json")
-
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return "", false
-	}
-
-	return path, true
-}
-
 // execCLI spawns the CLI and reads its transcript off stdout as it runs.
+//
+// It wraps its own cancellable context around ctx so an attestation failure
+// (parseCLIStream disagreeing with expected — see cliattest.go) can KILL the
+// child immediately, before the rest of the stream is drained: the point of
+// the kill is to stop a child this process no longer trusts from acting
+// further, not merely to stop reading what it says.
 func execCLI(
 	ctx context.Context,
 	prepared preparedAgentStep,
-	runtime cliRuntime,
 	mcpConfig string,
 	plan cliAttempt,
+	expected []string,
 ) (cliRunResult, error) {
 	binary := config.CLIBinary(prepared.ri.CLI)
-	args := cliArgs(prepared, runtime, mcpConfig, plan)
+	args := cliArgs(prepared, mcpConfig, plan)
 
 	slog.Debug("agent.cli.exec", "agent", prepared.ri.AgentName, "binary", binary, "args", args,
-		"dir", prepared.conv.env.dir, "image", prepared.ri.Image)
+		"dir", prepared.conv.env.dir)
 
-	process, container, err := buildCLIProcess(ctx, prepared, binary, args, plan.home)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, binary, args...) //nolint:gosec // binary comes from the static cliProviders table
+	cmd.Dir = prepared.conv.env.dir
+	cmd.Env = cliEnv(prepared.ri)
+	cmd.Stdin = strings.NewReader(plan.prompt)
+	cmd.Stderr = &cliStderrLogger{agent: prepared.ri.AgentName}
+	cmd.WaitDelay = cliWaitDelay
+
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return cliRunResult{}, err
+		return cliRunResult{}, fmt.Errorf("cli stdout: %w", err)
 	}
 
-	// The container outlives its client, so removing it is this function's
-	// job on EVERY exit path — a timeout, a cancel, a parse failure. The
-	// context is stripped of cancellation for the same reason
-	// shell.dockerSession.close builds its own: the cases where teardown
-	// matters most are exactly the ones where the caller's context is
-	// already dead. A normal exit has nothing to remove (--rm got there
-	// first) and this is a no-op against an absent container.
-	defer process.Close()
-
-	if container != "" {
-		defer shell.RemoveContainer(context.WithoutCancel(ctx), container)
-	}
-
-	stdout, err := process.Start(ctx,
-		strings.NewReader(plan.prompt),
-		&cliStderrLogger{agent: prepared.ri.AgentName})
+	err = cmd.Start()
 	if err != nil {
-		return cliRunResult{}, fmt.Errorf("agent %q: %w", prepared.ri.AgentName, err)
+		return cliRunResult{}, fmt.Errorf("agent %q: starting %s: %w", prepared.ri.AgentName, binary, err)
 	}
 
 	// Parsed as it arrives, not buffered whole: a step that times out
@@ -331,19 +84,30 @@ func execCLI(
 	// The step's own recorder, so every turn the child takes is published as
 	// it happens under the step that spawned it. It is set for every agent
 	// step in RunStep, whichever path runs — this one just never used it.
-	run, parseErr := parseCLIStream(stdout, prepared.conv.recorder)
+	run, parseErr := parseCLIStream(stdout, prepared.conv.recorder, expected)
+
+	// An attestation failure kills the child right here, before Wait: the
+	// child's own natives are gone and its tool surface is exactly what the
+	// bridge served, but the kill is what turns that claim into an enforced
+	// one for the calls the child has not made yet.
+	if errors.Is(parseErr, errCLIToolSurface) {
+		cancel()
+	}
 
 	// Drain whatever is left before waiting. A parse that stopped early (an
-	// over-long line) leaves the child writing into a pipe nobody reads, and
-	// waiting would then block on a process blocked on us until the step
-	// timeout expired.
+	// over-long line, an attestation kill) leaves the child writing into a
+	// pipe nobody reads, and waiting would then block on a process blocked on
+	// us until the step timeout expired.
 	if parseErr != nil {
 		_, _ = io.Copy(io.Discard, stdout)
 	}
 
-	waitErr := process.Wait(ctx)
+	waitErr := cmd.Wait()
 
 	switch {
+	case errors.Is(parseErr, errCLIToolSurface):
+		return run, fmt.Errorf("agent %q: %w", prepared.ri.AgentName, parseErr)
+
 	case parseErr != nil:
 		return run, fmt.Errorf("agent %q: reading %s output: %w", prepared.ri.AgentName, binary, parseErr)
 
@@ -371,7 +135,7 @@ func execCLI(
 // cliArgs builds the CLI's command line. Kept pure and separate from spawning
 // so what a grant translates to is directly assertable in a test — the
 // argument vector IS the permission boundary.
-func cliArgs(prepared preparedAgentStep, runtime cliRuntime, mcpConfig string, plan cliAttempt) []string {
+func cliArgs(prepared preparedAgentStep, mcpConfig string, plan cliAttempt) []string {
 	args := []string{
 		"--print",
 		"--output-format", "stream-json",
@@ -424,24 +188,16 @@ func cliArgs(prepared preparedAgentStep, runtime cliRuntime, mcpConfig string, p
 		args = append(args, "--max-budget-usd", strconv.FormatFloat(plan.budgetUSD, 'f', -1, 64))
 	}
 
-	natives, allowed := cliToolPermissions(prepared.conv, runtime)
+	// --tools "" unconditionally: the CLI's own natives are never the
+	// surface, whatever this build ships (see the file header). Verified —
+	// `--tools ""` reports an empty session tool list — so this, not a
+	// per-grant computation, IS the whole of the CLI-side fence; the
+	// stream-json init event asserts it held (see cliattest.go).
+	args = append(args, "--tools", "")
 
-	// Two flags for two different questions, and the distinction is the whole
-	// fence.
-	//
-	// --tools is the SURFACE: the CLI offers only the built-ins named here
-	// (verified — `--tools Read` reports exactly ["Read"] and nothing else).
-	// It is deny-by-default, which is why there is no list of things to deny:
-	// a built-in this build has never heard of is withheld because it was
-	// never named, rather than surviving because nobody remembered to add it.
-	// An empty value means no built-ins at all.
-	args = append(args, "--tools", strings.Join(natives, ","))
-
-	// --allowedTools is PERMISSION. Read/Glob/Grep need none, but Bash, Write
-	// and Edit are gated and would otherwise stall on a prompt nobody can
-	// answer in non-interactive mode; the bridge's own tools need naming here
-	// too, since --tools governs built-ins only.
-	args = append(args, "--allowedTools", strings.Join(allowed, ","))
+	// --allowedTools names every granted tool under the bridge's namespace —
+	// there are no natives left to also name here.
+	args = append(args, "--allowedTools", strings.Join(cliToolPermissions(prepared.conv), ","))
 
 	// --strict-mcp-config is what makes the grant a limit rather than a
 	// suggestion: without it the CLI would also load the user's own MCP
@@ -460,81 +216,27 @@ func cliArgs(prepared preparedAgentStep, runtime cliRuntime, mcpConfig string, p
 	return args
 }
 
-// cliToolPermissions translates a step's grant into the CLI's two axes:
-// natives is the built-in surface (--tools), allowed is everything the child
-// may use without being asked (--allowedTools), which is the natives plus the
-// bridge's tools.
-func cliToolPermissions(conv agentConversation, runtime cliRuntime) (natives, allowed []string) {
+// cliToolPermissions translates a step's grant into the bridged names the
+// child may use without being asked (--allowedTools) — every declared tool,
+// under the bridge's namespace, since --tools "" leaves no native to also
+// name. The same list is what an attempt expects the CLI's own init event to
+// report back (see cliattest.go): one written grant, one enforced surface.
+func cliToolPermissions(conv agentConversation) []string {
+	allowed := make([]string, 0, len(conv.tools.decls.FunctionDeclarations))
+
 	for _, decl := range conv.tools.decls.FunctionDeclarations {
 		if decl == nil {
 			continue
 		}
 
-		// Provenance, not spelling: the natives table is keyed by builtin
-		// name, and a custom tool may reuse one (see agentTools.builtins).
-		if native, isNative := runtime.natives[decl.Name]; isNative && conv.tools.builtins[decl.Name] {
-			natives = append(natives, native)
-
-			// A web_fetch allow: list becomes per-domain permission entries
-			// instead of one blanket grant, so the CLI enforces the same
-			// fence the HTTP path's impl does.
-			//
-			// TWO rules per entry, and both are needed: the CLI's domain
-			// matcher is exact where checkWebFetchHost is suffix-aware, so
-			// `domain:h` alone denies api.h (which the hosted path allows)
-			// and `domain:*.h` alone denies the apex. Emitting the pair is
-			// what keeps one written fence from being two different fences.
-			//
-			// One divergence remains and is not closable from here: the CLI
-			// matches the requested domain, not each redirect hop, so a hop
-			// off an allowed host is its enforcement to make, not steps'.
-			if decl.Name == config.WebFetchBuiltinName && len(conv.tools.webFetchAllow) > 0 {
-				for _, host := range conv.tools.webFetchAllow {
-					allowed = append(allowed,
-						fmt.Sprintf("%s(domain:%s)", native, host),
-						fmt.Sprintf("%s(domain:*.%s)", native, host))
-				}
-
-				continue
-			}
-
-			allowed = append(allowed, native)
-
-			continue
-		}
-
-		// Everything else reaches the CLI through the bridge.
 		allowed = append(allowed, bridgedToolName(decl.Name))
 	}
 
 	// Sorted so the command line is stable run to run — a permission boundary
 	// that reorders itself is one nobody can diff.
-	sort.Strings(natives)
 	sort.Strings(allowed)
 
-	return natives, allowed
-}
-
-// nativeToolNames is the set of tool names the CLI serves itself, which the
-// bridge must therefore NOT re-export — exporting both would offer the model
-// the same capability twice under two names.
-func nativeToolNames(conv agentConversation, runtime cliRuntime) map[string]bool {
-	skip := map[string]bool{}
-
-	for _, decl := range conv.tools.decls.FunctionDeclarations {
-		if decl == nil {
-			continue
-		}
-
-		// Same provenance rule as cliToolPermissions: a custom tool sharing a
-		// builtin's name is NOT served by the CLI, so the bridge must serve
-		// it or the model is offered a tool nothing runs.
-		if _, isNative := runtime.natives[decl.Name]; isNative && conv.tools.builtins[decl.Name] {
-			skip[decl.Name] = true
-		}
-	}
-
-	return skip
+	return allowed
 }
 
 // renderCLIPrompt assembles what goes in on stdin.
@@ -584,22 +286,31 @@ func cliEnv(ri config.ResolvedInvocation) []string {
 	}
 
 	if key := os.Getenv(ri.APIKeyEnv); key != "" {
-		env = append(env, "ANTHROPIC_API_KEY="+key)
+		env = append(env, cliAPIKeyEnv+"="+key)
 	}
 
 	return env
 }
 
-// cliToolTimeoutEnv widens the CHILD's own MCP tool-call deadline to cover a
-// parked question.
+// cliUnboundedToolTimeout is the ceiling cliToolTimeoutEnv gives the child's
+// per-tool-call deadline when the step itself declared timeout: 0 (no
+// deadline of its own). MCP_TOOL_TIMEOUT cannot be left unset — see below —
+// so an uncapped step still needs a number; the real bound in that case is
+// whatever the enclosing job imposes, not this one, so this is deliberately
+// generous rather than a considered ceiling of its own.
+const cliUnboundedToolTimeout = 24 * time.Hour
+
+// cliToolTimeoutEnv widens the CHILD's own MCP tool-call deadline.
 //
-// A bridged call blocks until it returns, and ask_user blocks for as long as
-// the pipeline said a person may be waited on. The bridge's own HTTP side is
-// fine — no write deadline — but the binding constraint is the CLI's tool-call
-// timeout, which is its default and not ours: without this, a parked question
-// on a CLI agent dies at whatever the CLI decided rather than at the deadline
-// the pipeline declared, and the model is told its question failed while a
-// person is still looking at it.
+// EVERY tool call is now a bridged MCP call (issue #100: `--tools ""` leaves
+// no native path), so this no longer widens only for a parked ask_user
+// question — an ordinary run_shell building a project would otherwise die at
+// the CLI's own default per-call deadline, where before it ran under the
+// CLI's native Bash timeout instead. The bound is max(the step's own
+// timeout:, a parked ask_user's wait plus a margin) plus a further margin, so
+// the deadline that actually fires in the ordinary case is the step's own
+// (enforced by this process's context, not the child's), and in the
+// ask_user case is ask_user's — never the child's un-widened default.
 //
 // An operator's own value is FORWARDED rather than deferred to, which is not
 // the same thing and was the bug: MCP_TOOL_TIMEOUT is not on shell.HostEnv's
@@ -612,16 +323,19 @@ func cliToolTimeoutEnv(ri config.ResolvedInvocation) []string {
 		return []string{cliMCPToolTimeoutEnv + "=" + operator}
 	}
 
-	if !config.GrantsAskUser(ri.ToolSpecs) {
-		return nil
+	bound := agentTimeout(ri.Timeout)
+	if bound == noAgentDeadline {
+		bound = cliUnboundedToolTimeout
 	}
 
 	// A margin over the wait itself, so the deadline that fires is ask_user's
 	// own — which resolves to the declared default: — rather than the child's,
 	// which resolves to nothing anybody declared.
-	budget := askUserWait(ri.ToolSpecs) + cliToolTimeoutMargin
+	if ask := askUserWait(ri.ToolSpecs) + cliToolTimeoutMargin; ask > bound {
+		bound = ask
+	}
 
-	return []string{fmt.Sprintf("%s=%d", cliMCPToolTimeoutEnv, budget.Milliseconds())}
+	return []string{fmt.Sprintf("%s=%d", cliMCPToolTimeoutEnv, (bound + cliToolTimeoutMargin).Milliseconds())}
 }
 
 // cliStderrLogger turns the CLI's stderr into debug records line by line,

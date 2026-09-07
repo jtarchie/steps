@@ -16,24 +16,6 @@ import "fmt"
 // to write a file.
 const AskUserBuiltinName = "ask_user"
 
-// BuiltinIsNeverNativeToCLI reports whether a coding-agent CLI can never run
-// this builtin itself, so a grant of it is always bridged back to this
-// process.
-//
-// It exists because two load-time guards were written when every builtin WAS
-// native to the CLI, and each reads a non-native one wrong in the opposite
-// direction — see checkCLIAgentTools. ask_user is the first such builtin: a
-// CLI has no equivalent that could work (an answer would land in the child's
-// transcript rather than in the parent, where the questions row, the memo and
-// the responder ladder all live), so the bridge is the only implementation
-// there is, and the dials bound to it therefore DO bind.
-//
-// internal/agent's cliRuntimes natives table is the authority on the other
-// direction; TestNonNativeBuiltinsAreNotClaimedAsNative keeps the two honest.
-func BuiltinIsNeverNativeToCLI(name string) bool {
-	return name == AskUserBuiltinName
-}
-
 // GrantsAskUser reports whether a resolved tool grant includes ask_user.
 //
 // Here rather than in each caller because two packages that cannot see each

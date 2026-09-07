@@ -159,12 +159,12 @@ func TestCLIArgsOmitsMaxTurnsWhenUncapped(t *testing.T) {
 	plan := firstAttempt()
 	plan.maxTurns = unlimitedTurns
 
-	args := cliArgs(cliPrepared(t, nil), cliRuntimes["claude"], "/tmp/mcp.json", plan)
+	args := cliArgs(cliPrepared(t, nil), "/tmp/mcp.json", plan)
 	if slices.Contains(args, "--max-turns") {
 		t.Errorf("args = %v, want no --max-turns for an uncapped step", args)
 	}
 
-	capped := cliArgs(cliPrepared(t, nil), cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
+	capped := cliArgs(cliPrepared(t, nil), "/tmp/mcp.json", firstAttempt())
 	if got := argValue(capped, "--max-turns"); got != "12" {
 		t.Errorf("--max-turns = %q, want 12", got)
 	}

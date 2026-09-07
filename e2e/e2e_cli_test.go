@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,8 +23,8 @@ import (
 // editing PATH for the process.
 
 // cliPipeline is the fixture: one CLI agent with a verdict route, granted two
-// built-ins (which become the CLI's native tools) and one custom tool (which
-// can only reach it through the bridge).
+// built-ins and one custom tool — all three reaching the child the same way,
+// over the bridge, since `--tools ""` leaves it no native surface of its own.
 func cliPipeline(t *testing.T, dir string) string {
 	t.Helper()
 
@@ -70,9 +71,16 @@ jobs:
 	return writePipeline(t, dir, yaml)
 }
 
+// cliPipelineGrantedTools is the bridged spelling of cliPipeline's grant,
+// including the verdict tool its verdicts: declaration adds — what a
+// well-behaved fake claude's init event must report to pass attestation.
+func cliPipelineGrantedTools() []string {
+	return []string{"mcp__steps__read_file", "mcp__steps__run_shell", "mcp__steps__count_lines", "mcp__steps__verdict"}
+}
+
 func TestE2ECLIAgentInvocation(t *testing.T) {
 	dir := t.TempDir()
-	claude := writeFakeClaude(t, "echo '"+cliResultEvent("looks fine", 2)+"'")
+	claude := writeFakeClaude(t, "echo '"+cliInitEvent(cliPipelineGrantedTools()...)+"'\necho '"+cliResultEvent("looks fine", 2)+"'")
 	path := cliPipeline(t, dir)
 
 	// No verdict is emitted, so the step fails its declared-verdicts
@@ -96,8 +104,9 @@ func TestE2ECLIAgentInvocation(t *testing.T) {
 		// nor the repo's .claude/ scope without a settings: declaration —
 		// empty means the child loads no configuration scopes at all.
 		"--setting-sources||",
-		// The built-in surface is an allow-list of exactly what was granted.
-		"--tools|Bash,Read|",
+		// --tools "" unconditionally (issue #100): present and empty, since
+		// there is no native surface left for the CLI to offer.
+		"--tools||",
 		// reasoning_effort: reaches the CLI as its own --effort dial rather
 		// than being refused: the CLI grew one, and a step that asks for
 		// deeper reasoning should get it on either runner.
@@ -108,20 +117,19 @@ func TestE2ECLIAgentInvocation(t *testing.T) {
 		}
 	}
 
-	// The grant, translated: granted built-ins become the CLI's own native
-	// tools, and the custom tool is reachable only through the bridge.
-	for _, want := range []string{"Read", "Bash", "mcp__steps__count_lines", "mcp__steps__verdict"} {
+	// Every granted tool, builtin or custom, reaches the child only through
+	// the bridge — there is no shorter native spelling left to prefer.
+	for _, want := range []string{"mcp__steps__read_file", "mcp__steps__run_shell", "mcp__steps__count_lines", "mcp__steps__verdict"} {
 		if !strings.Contains(argv, want) {
 			t.Errorf("argv does not allow %q:\n%s", want, argv)
 		}
 	}
 
-	// Nothing ungranted appears anywhere on the command line. Under --tools
-	// there is no deny list to name them on: they are withheld by omission,
-	// which is what makes a built-in this build has never heard of safe.
-	for _, unwanted := range []string{"Write", "Edit", "Grep", "Task", "WebFetch", "WebSearch"} {
+	// Nothing native ever reaches the child: neither this build's own natives
+	// (there are none left) nor an ungranted tool's bare name.
+	for _, unwanted := range []string{"Read", "Bash", "Write", "Edit", "Grep", "Task", "WebFetch", "WebSearch"} {
 		if strings.Contains(argv, unwanted) {
-			t.Errorf("ungranted %q appears in argv:\n%s", unwanted, argv)
+			t.Errorf("a native name %q appears in argv:\n%s", unwanted, argv)
 		}
 	}
 
@@ -138,7 +146,8 @@ func TestE2ECLIAgentVerdictRoutesTheJob(t *testing.T) {
 	// The fake CLI calls the verdict tool on the parent's bridge — the same
 	// round trip the real CLI makes — then reports itself finished.
 	writeFakeClaude(t,
-		callBridgeScript("verdict", `{"choice":"approve","note":"ship it"}`)+
+		"echo '"+cliInitEvent(cliPipelineGrantedTools()...)+"'\n"+
+			callBridgeScript("verdict", `{"choice":"approve","note":"ship it"}`)+
 			"echo '"+cliToolUseEvent("t1", "mcp__steps__verdict", `{"choice":"approve"}`)+"'\n"+
 			"echo '"+cliResultEvent("approved", 1)+"'")
 
@@ -168,7 +177,7 @@ func TestE2ECLIAgentVerdictRoutesTheJob(t *testing.T) {
 // got none is a failure, not a success with an empty verdict.
 func TestE2ECLIAgentWithoutVerdictFails(t *testing.T) {
 	dir := t.TempDir()
-	writeFakeClaude(t, "echo '"+cliResultEvent("I have decided nothing.", 1)+"'")
+	writeFakeClaude(t, "echo '"+cliInitEvent(cliPipelineGrantedTools()...)+"'\necho '"+cliResultEvent("I have decided nothing.", 1)+"'")
 	path := cliPipeline(t, dir)
 
 	err := cli.Run([]string{path})
@@ -192,6 +201,66 @@ func TestE2ECLIAgentWithoutVerdictFails(t *testing.T) {
 	}
 }
 
+// TestE2ECLIAgentSurplusToolFailsTheStep is the init-event attestation as a
+// whole pass rather than a parser unit: a child reporting a tool beyond the
+// bridged grant is killed on the spot, its step fails naming the surplus, and
+// the failure is NOT retried — refusing to trust the child is deterministic,
+// so a second attempt would just re-trigger the same fence.
+//
+// The side effect the fake would have produced a moment later is what proves
+// the kill landed. A step that merely stopped READING the stream would leave
+// the child running, and the marker would appear.
+func TestE2ECLIAgentSurplusToolFailsTheStep(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "kept-going")
+
+	claude := writeFakeClaude(t, strings.Join([]string{
+		"echo '" + cliInitEvent("mcp__steps__read_file", "Bash") + "'",
+		"sleep 3",
+		"touch " + marker,
+		"echo '" + cliResultEvent("done anyway", 1) + "'",
+	}, "\n"))
+
+	path := writePipeline(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: reviewer
+  source:
+    model: "@claude/sonnet"
+  attempts: 3
+  tools: [read_file]
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    inputs: []
+    messages:
+      - Review the diff.
+`)
+
+	err := cli.Run([]string{path})
+	if err == nil {
+		t.Fatal("a cli reporting a tool beyond its grant was trusted")
+	}
+
+	if !strings.Contains(err.Error(), "Bash") {
+		t.Errorf("error %q does not name the surplus tool", err)
+	}
+
+	_, statErr := os.Stat(marker)
+	if statErr == nil {
+		t.Error("the child went on running past the attestation failure; the kill never landed")
+	}
+
+	if got := claude.invocations(t); got != 1 {
+		t.Errorf("the fake claude ran %d times, want 1 — an attestation failure is not retryable", got)
+	}
+}
+
 // TestE2ECLIAgentRetriesInfrastructureFailure pins what attempts: means for a
 // process that cannot be resumed: the whole invocation is re-run, but only
 // when it failed to RUN. A CLI that ran and reported a bad outcome is not
@@ -208,7 +277,8 @@ if [ ! -f "$0.attempted" ]; then
   echo '{"type":"assistant","message":{"content":[{"type":"text","text":"dying"}]}}'
   exit 3
 fi
-`+callBridgeScript("verdict", `{"choice":"approve"}`)+
+`+"echo '"+cliInitEvent(cliPipelineGrantedTools()...)+"'\n"+
+		callBridgeScript("verdict", `{"choice":"approve"}`)+
 		"echo '"+cliResultEvent("recovered", 1)+"'")
 
 	yaml := strings.Replace(
@@ -284,7 +354,8 @@ func TestE2ECLIAgentDoesNotRetryTaskFailure(t *testing.T) {
 	// the whole point of the finding this pins is that the exit status must
 	// not turn a reported failure into a retryable infrastructure error.
 	claude := writeFakeClaude(t,
-		"echo '"+cliErrorResultEvent("error_max_turns", "Reached maximum number of turns (12)")+"'\nexit 1")
+		"echo '"+cliInitEvent(cliPipelineGrantedTools()...)+"'\n"+
+			"echo '"+cliErrorResultEvent("error_max_turns", "Reached maximum number of turns (12)")+"'\nexit 1")
 
 	yaml := strings.Replace(
 		readFileString(t, cliPipeline(t, dir)),
@@ -329,7 +400,8 @@ func TestE2ECLIAgentsRunConcurrently(t *testing.T) {
 	// between two bridges shows up as the wrong log file being written rather
 	// than as a silent pass.
 	claude := writeFakeClaude(t,
-		callBridgeScript("verdict", `{"choice":"approve"}`)+
+		"echo '"+cliInitEvent("mcp__steps__read_file", "mcp__steps__verdict")+"'\n"+
+			callBridgeScript("verdict", `{"choice":"approve"}`)+
 			"echo '"+cliResultEvent("done", 1)+"'")
 
 	yaml := fmt.Sprintf(`

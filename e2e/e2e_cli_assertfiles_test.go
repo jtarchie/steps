@@ -62,6 +62,7 @@ func TestE2ECLIAgentNudgedIntoWritingItsFile(t *testing.T) {
 	// The child writes relative to its own working directory, which is the
 	// step's — the same place assert.files: looks.
 	claude := writeFakeClaude(t, fmt.Sprintf(`
+echo '%[4]s'
 if [ -f %[1]q ]; then
   mkdir -p answer
   echo 'The catalog is seeded from widgets.json.' > answer/reply.md
@@ -70,7 +71,8 @@ else
   : > %[1]q
   echo '%[3]s'
 fi
-`, marker, cliResultEvent("Written.", 1), cliResultEvent("Here is the answer: it comes from widgets.json.", 1)))
+`, marker, cliResultEvent("Written.", 1), cliResultEvent("Here is the answer: it comes from widgets.json.", 1),
+		cliInitEvent("mcp__steps__write_file")))
 
 	path := cliAssertFilesPipeline(t, dir)
 
@@ -111,7 +113,7 @@ fi
 // path — the same verdict a CLI step reached before the nudge existed.
 func TestE2ECLIAgentStillFailsWithoutItsFile(t *testing.T) {
 	dir := t.TempDir()
-	claude := writeFakeClaude(t, "echo '"+cliResultEvent("The answer is in this message.", 1)+"'")
+	claude := writeFakeClaude(t, "echo '"+cliInitEvent("mcp__steps__write_file")+"'\necho '"+cliResultEvent("The answer is in this message.", 1)+"'")
 	path := cliAssertFilesPipeline(t, dir)
 
 	err := cli.Run([]string{path})
@@ -172,8 +174,9 @@ printf x >> %[1]q
 if [ $(( $(wc -c < %[1]q) %% 2 )) -eq 1 ]; then
   exit 3
 fi
+echo '%[3]s'
 echo '%[2]s'
-`, counter, cliResultEvent("The answer is in this message.", 1)))
+`, counter, cliResultEvent("The answer is in this message.", 1), cliInitEvent("mcp__steps__write_file")))
 
 	path := writePipeline(t, dir, strings.Replace(
 		readFileString(t, cliAssertFilesPipeline(t, dir)),

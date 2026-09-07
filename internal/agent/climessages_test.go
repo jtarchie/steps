@@ -19,10 +19,14 @@ import (
 
 // recordingCLI puts a fake CLI on PATH that appends each invocation's stdin to
 // a log and answers with a valid result event, and returns the log's path.
+// grantedTools names the tools the step granted (steps' own bare names,
+// e.g. "read_file") — reported back on the init event exactly as the bridge
+// would name them, since the attestation check (cliattest.go) fails a step
+// whose fake CLI does not honestly report its tool surface.
 //
 // One line per invocation, so a test can assert both WHAT the child was asked
 // and how many times it was woken.
-func recordingCLI(t *testing.T) string {
+func recordingCLI(t *testing.T, grantedTools ...string) string {
 	t.Helper()
 
 	if runtime.GOOS == "windows" {
@@ -32,10 +36,13 @@ func recordingCLI(t *testing.T) string {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "asked.log")
 
+	initEvent := cliInitEventJSON(grantedTools)
+
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' \"--- invocation ---\" >> " + log + "\n" +
 		"cat >> " + log + "\n" +
 		"printf '\\n' >> " + log + "\n" +
+		`printf '%s\n' '` + initEvent + "'\n" +
 		`printf '%s\n' '{"type":"result","subtype":"success","result":"answered","num_turns":1,"is_error":false}'` + "\n"
 
 	err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o700) //nolint:gosec // a test stub must be executable
@@ -46,6 +53,18 @@ func recordingCLI(t *testing.T) string {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	return log
+}
+
+// cliInitEventJSON renders a system/init event reporting exactly the bridged
+// spelling of grantedTools — the shape a well-behaved child's init event
+// would carry for that grant.
+func cliInitEventJSON(grantedTools []string) string {
+	bridged := make([]string, len(grantedTools))
+	for i, name := range grantedTools {
+		bridged[i] = `"` + bridgedToolName(name) + `"`
+	}
+
+	return `{"type":"system","subtype":"init","tools":[` + strings.Join(bridged, ",") + `]}`
 }
 
 func askedLog(t *testing.T, path string) string {
@@ -96,7 +115,7 @@ func TestCLIAgentIsAskedEveryMessage(t *testing.T) {
 // session already holds the task and its context blocks, and re-sending them
 // is what invites the child to redo work it has already finished.
 func TestCLIAgentSecondMessageResumesRatherThanRestarts(t *testing.T) {
-	log := recordingCLI(t)
+	log := recordingCLI(t, "read_file")
 
 	prepared := cliPrepared(t, []string{"read_file"})
 	prepared.conv.messages = []string{"Review the diff.", "Name the line it turns on."}
@@ -189,7 +208,11 @@ func spendingCLI(t *testing.T, turns int, cost float64) {
 		`{"type":"result","subtype":"success","result":"answered","num_turns":%d,"total_cost_usd":%v,"is_error":false}`,
 		turns, cost)
 
-	script := "#!/bin/sh\ncat > /dev/null\n" + `printf '%s\n' '` + result + "'\n"
+	// Every caller of spendingCLI grants no tools (cliPrepared(t, nil)), so an
+	// empty init event is what a well-behaved child would report.
+	script := "#!/bin/sh\ncat > /dev/null\n" +
+		`printf '%s\n' '` + cliInitEventJSON(nil) + "'\n" +
+		`printf '%s\n' '` + result + "'\n"
 
 	err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o700) //nolint:gosec // a test stub must be executable
 	if err != nil {

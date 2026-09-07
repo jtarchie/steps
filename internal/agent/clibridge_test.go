@@ -3,16 +3,15 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/genai"
-
-	"github.com/jtarchie/steps/internal/shell"
 )
 
 // bridgeAuth attaches the bridge's bearer token to every request, standing in
@@ -63,7 +62,10 @@ func dialBridge(t *testing.T, bridge *cliBridge) *sdkmcp.ClientSession {
 	return session
 }
 
-func TestCLIBridgeServesNonNativeTools(t *testing.T) {
+// TestCLIBridgeServesEveryDeclaredTool pins the post-#100 shape: the bridge
+// exports EVERY tool in the conversation's registry, builtin included — there
+// is no longer a native the CLI serves itself for it to skip.
+func TestCLIBridgeServesEveryDeclaredTool(t *testing.T) {
 	t.Parallel()
 
 	decls := []*genai.FunctionDeclaration{
@@ -80,10 +82,7 @@ func TestCLIBridgeServesNonNativeTools(t *testing.T) {
 		"count_lines": func(context.Context, map[string]any, toolEnv) map[string]any { return map[string]any{"exit_code": 0} },
 	}
 
-	// read_file is served by the CLI natively, so the bridge must not
-	// re-export it — offering the same capability twice under two names would
-	// leave the model choosing between them.
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(decls, registry, nil), map[string]bool{"read_file": true}, reachHost)
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(decls, registry, nil))
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}
@@ -95,20 +94,27 @@ func TestCLIBridgeServesNonNativeTools(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 
-	if len(listed.Tools) != 1 || listed.Tools[0].Name != "count_lines" {
-		names := make([]string, 0, len(listed.Tools))
-		for _, tool := range listed.Tools {
-			names = append(names, tool.Name)
-		}
+	names := make([]string, 0, len(listed.Tools))
+	for _, tool := range listed.Tools {
+		names = append(names, tool.Name)
+	}
 
-		t.Fatalf("bridged tools = %v, want [count_lines]", names)
+	for _, want := range []string{"read_file", "count_lines"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("bridged tools = %v, want it to contain %q", names, want)
+		}
 	}
 
 	// The schema has to survive the genai -> JSON Schema conversion, or the
 	// CLI cannot call the tool with the right arguments.
-	schema, ok := listed.Tools[0].InputSchema.(map[string]any)
+	at := slices.IndexFunc(listed.Tools, func(tool *sdkmcp.Tool) bool { return tool.Name == "count_lines" })
+	if at < 0 {
+		t.Fatalf("count_lines missing from %v", names)
+	}
+
+	schema, ok := listed.Tools[at].InputSchema.(map[string]any)
 	if !ok {
-		t.Fatalf("input schema is %T, want a JSON object", listed.Tools[0].InputSchema)
+		t.Fatalf("input schema is %T, want a JSON object", listed.Tools[at].InputSchema)
 	}
 
 	if schema["type"] != "object" {
@@ -121,6 +127,75 @@ func TestCLIBridgeServesNonNativeTools(t *testing.T) {
 	}
 }
 
+// TestCLIBridgeEnforcesMaxCallsOnAnyTool is issue #100 slice 3's max_calls:
+// un-refusal, proven the way TestCLIBridgeEnforcesTheQuestionBudget proves it
+// for ask_user's own budget: cliBridge.overBudget does not special-case which
+// tool it counts, so an ordinary custom tool's max_calls: binds through the
+// same mutex. The (N+1)th call must come back as ordinary tool-result data
+// naming the exhausted budget — never an aborted attempt — exactly the
+// contract the HTTP path's executeBudgetedTool honours.
+func TestCLIBridgeEnforcesMaxCallsOnAnyTool(t *testing.T) {
+	t.Parallel()
+
+	var invocations atomic.Int64
+
+	decls := []*genai.FunctionDeclaration{{
+		Name: "post_review", Description: "post", Parameters: &genai.Schema{Type: genai.TypeObject},
+	}}
+
+	registry := map[string]toolImpl{
+		"post_review": func(context.Context, map[string]any, toolEnv) map[string]any {
+			invocations.Add(1)
+
+			return map[string]any{"exit_code": 0}
+		},
+	}
+
+	conv := bridgeConversation(decls, registry, nil)
+	conv.tools.maxCalls = map[string]int{"post_review": 1}
+
+	bridge, err := newCLIBridge(t.Context(), conv)
+	if err != nil {
+		t.Fatalf("newCLIBridge: %v", err)
+	}
+
+	t.Cleanup(func() { _ = bridge.Close(t.Context()) })
+
+	session := dialBridge(t, bridge)
+
+	first, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{Name: "post_review"})
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	if first.IsError {
+		t.Errorf("the first call, within budget, came back as an error: %v", first.Content)
+	}
+
+	second, err := session.CallTool(t.Context(), &sdkmcp.CallToolParams{Name: "post_review"})
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+
+	if !second.IsError {
+		t.Error("the second call exceeded max_calls: 1 but was not reported as an error")
+	}
+
+	if !strings.Contains(bridgeText(t, second), "budget") {
+		t.Errorf("the refusal does not name the exhausted budget: %s", bridgeText(t, second))
+	}
+
+	// Data, not an abort: the session is still alive to make a third call.
+	_, err = session.CallTool(t.Context(), &sdkmcp.CallToolParams{Name: "post_review"})
+	if err != nil {
+		t.Fatalf("a budget-exhausted call must not abort the session: %v", err)
+	}
+
+	if invocations.Load() != 1 {
+		t.Errorf("the tool impl ran %d times under a budget of 1", invocations.Load())
+	}
+}
+
 func TestCLIBridgeExecutesAndCapturesVerdict(t *testing.T) {
 	t.Parallel()
 
@@ -129,8 +204,6 @@ func TestCLIBridgeExecutesAndCapturesVerdict(t *testing.T) {
 	bridge, err := newCLIBridge(
 		t.Context(),
 		bridgeConversation([]*genai.FunctionDeclaration{decl}, map[string]toolImpl{verdictToolName: impl}, map[string]bool{verdictToolName: true}),
-		nil,
-		reachHost,
 	)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
@@ -175,8 +248,6 @@ func TestCLIBridgeReportsToolFailureAsError(t *testing.T) {
 	bridge, err := newCLIBridge(
 		t.Context(),
 		bridgeConversation([]*genai.FunctionDeclaration{decl}, map[string]toolImpl{verdictToolName: impl}, nil),
-		nil,
-		reachHost,
 	)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
@@ -207,7 +278,7 @@ func TestCLIBridgeReportsToolFailureAsError(t *testing.T) {
 func TestCLIBridgeWriteConfig(t *testing.T) {
 	t.Parallel()
 
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, reachHost)
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil))
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}
@@ -290,8 +361,6 @@ func TestCLIBridgeRejectsUnauthenticatedCallers(t *testing.T) {
 	bridge, err := newCLIBridge(
 		t.Context(),
 		bridgeConversation([]*genai.FunctionDeclaration{decl}, map[string]toolImpl{verdictToolName: impl}, nil),
-		nil,
-		reachHost,
 	)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
@@ -341,46 +410,19 @@ func TestCLIBridgeRejectsUnauthenticatedCallers(t *testing.T) {
 	}
 }
 
-// TestCLIBridgeContainerizedIsReachableFromAContainer covers the two things a
-// containerized child needs that a host child does not: a bind it can
-// actually reach (a container is not on the host's loopback), and a URL
-// naming the host rather than the wildcard address that bind produced.
-func TestCLIBridgeContainerizedIsReachableFromAContainer(t *testing.T) {
+// TestCLIBridgeAlwaysLoopback pins the post-#100 shape: the CLI process is
+// always a host subprocess of this one (see the design note in cliexec.go),
+// so the bridge binds loopback unconditionally — there is no longer a
+// containerized-CLI case that needs a wider bind to be reachable from.
+// `image:` on a step now places the step's TOOLS, never the CLI, and nothing
+// inside that container ever dials this bridge: a bridged call arrives here
+// from the host-side CLI, and it is THIS process that then runs the tool
+// through internal/shell's runner. The container is downstream of the bridge,
+// never a client of it.
+func TestCLIBridgeAlwaysLoopback(t *testing.T) {
 	t.Parallel()
 
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, reachGateway)
-	if err != nil {
-		t.Fatalf("newCLIBridge: %v", err)
-	}
-
-	t.Cleanup(func() { _ = bridge.Close(t.Context()) })
-
-	if !strings.HasPrefix(bridge.url, "http://"+shell.HostGatewayName+":") {
-		t.Errorf("url = %q, want it to name %s", bridge.url, shell.HostGatewayName)
-	}
-
-	// A wildcard bind is not a destination: if the URL kept it, every bridged
-	// tool call from the container would go nowhere.
-	if strings.Contains(bridge.url, "0.0.0.0") {
-		t.Errorf("url = %q, must not hand the child the wildcard address", bridge.url)
-	}
-
-	host, _, err := net.SplitHostPort(bridge.listener.Addr().String())
-	if err != nil {
-		t.Fatalf("SplitHostPort: %v", err)
-	}
-
-	if host == "127.0.0.1" {
-		t.Errorf("listener bound %q, which a container cannot reach", host)
-	}
-}
-
-// TestCLIBridgeHostPathStaysLoopback is the other half: nothing widens for a
-// step that never asked for a container.
-func TestCLIBridgeHostPathStaysLoopback(t *testing.T) {
-	t.Parallel()
-
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil, reachHost)
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil))
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}

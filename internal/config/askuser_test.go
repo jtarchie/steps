@@ -123,12 +123,10 @@ jobs:
 	}
 }
 
-// TestAskUserTimeoutIsAcceptedOnACLIAgent is the guard that had to change.
-// checkCLIAgentTools refuses timeout: on a builtin because the CLI runs its
-// built-ins itself and the deadline would silently not apply — true of every
-// builtin until ask_user, which no CLI runs: the child calls the parent's own
-// impl over the bridge, so the deadline binds and refusing it would deny a
-// CLI agent the one dial that decides how long a person is waited on.
+// TestAskUserTimeoutIsAcceptedOnACLIAgent: ask_user's timeout: decides how
+// long a person is waited on, and it binds on a CLI agent exactly as it does
+// on a hosted one — the child calls the parent's own impl over the bridge,
+// so the deadline is enforced in this process either way.
 func TestAskUserTimeoutIsAcceptedOnACLIAgent(t *testing.T) {
 	t.Parallel()
 
@@ -149,9 +147,15 @@ jobs:
 		t.Fatalf("a cli agent's ask_user timeout was refused: %v", err)
 	}
 
-	// And the rule it is an exception to still holds for a native builtin.
+	// Every builtin's tool call now reaches the CLI over the bridge (issue
+	// #100), so the same is true of an ordinary builtin like read_file — there
+	// is no longer a native path the deadline would silently miss.
 	native := strings.Replace(pipeline, "builtin: ask_user", "builtin: read_file", 1)
-	wantLoadError(t, writeConfig(t, native), "the cli runs its built-ins itself")
+
+	_, err = LoadConfig(writeConfig(t, native))
+	if err != nil {
+		t.Fatalf("a cli agent's read_file timeout was refused: %v", err)
+	}
 }
 
 // TestMaxQuestionsResolution: step wins over agent, agent over the package

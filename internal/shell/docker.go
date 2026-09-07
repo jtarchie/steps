@@ -355,10 +355,16 @@ func removalContext(ctx context.Context) context.Context {
 	return context.WithoutCancel(ctx)
 }
 
-// RemoveContainer deletes a container by name, best-effort. Exported so
-// internal/agent can reclaim the one-shot container behind its containerized
-// CLI run: that run has no session to Close, and nothing this end does stops
-// a container, so its caller owns teardown.
+// RemoveContainer deletes a container by name, best-effort, against the
+// default daemon.
+//
+// It was exported for internal/agent to reclaim the one-shot container behind
+// its containerized CLI run — a run with no session to Close, where nothing
+// this end does stops a container, so the caller owned teardown. Issue #100
+// deleted that path (the CLI is always a host subprocess now), leaving the
+// name reachable for a caller outside this package that has a container name
+// and no session; every caller inside it holds a daemon and uses
+// removeContainerOn.
 func RemoveContainer(ctx context.Context, name string) {
 	removeContainerOn(ctx, "", name)
 }
@@ -432,9 +438,10 @@ func (s *dockerSession) close() error {
 // watch loop, a retried attempt) must never contend for one name, and a name
 // we generated is one Close can remove knowing nothing else could own it.
 //
-// Exported alongside RemoveContainer for internal/agent's one-shot CLI run,
-// which needs the same "name it so you can always reclaim it" property
-// without a session to hold the name for it.
+// Exported alongside RemoveContainer, for the same reason and with the same
+// history: a caller with no session to hold a name for it needs the "name it
+// so you can always reclaim it" property too. The one that did — internal/
+// agent's containerized CLI run — went away with issue #100.
 func NewContainerName() (string, error) {
 	var buf [8]byte
 
@@ -691,9 +698,11 @@ func keepAliveCommand() string {
 // filesystem location Docker Desktop (or the daemon) actually shares. Rejects
 // a resolved path containing ':' — a bind mount is spelled `host:container`,
 // so a path containing one would be silently misparsed into the wrong mount
-// (or rejected with a confusing error) rather than failing clearly here. Exported for internal/agent's
-// containerized CLI run (DockerRunArgv), which must mount the same directory
-// at the same resolved path the step's session container uses.
+// (or rejected with a confusing error) rather than failing clearly here.
+//
+// Exported for a caller outside this package that mounts the same directory
+// at the same resolved path a step's session container uses. The one that did
+// was internal/agent's containerized CLI run, deleted by issue #100.
 func ResolveMountPath(cwd string) (string, error) {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {

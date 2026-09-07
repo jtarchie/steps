@@ -32,8 +32,9 @@ func TestE2ECLIAgentPublishesItsConversation(t *testing.T) {
 	dir := t.TempDir()
 
 	writeFakeClaude(t, strings.Join([]string{
+		"echo '" + cliInitEvent(cliPipelineGrantedTools()...) + "'",
 		`echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Reading the diff first."}]}}'`,
-		"echo '" + cliToolUseEvent("t1", "Read", `{"file_path":"main.go"}`) + "'",
+		"echo '" + cliToolUseEvent("t1", "mcp__steps__read_file", `{"file_path":"main.go"}`) + "'",
 		`echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"package main"}]}}'`,
 		callBridgeScript("verdict", `{"choice":"approve"}`),
 		"echo '" + cliResultEvent("Looks fine.", 2) + "'",
@@ -54,15 +55,16 @@ func TestE2ECLIAgentPublishesItsConversation(t *testing.T) {
 		t.Errorf("agent_text carried %q", text.Text)
 	}
 
-	// A native CLI tool: one the parent never runs and only ever hears about
-	// through the stream.
-	if call := findEvent(rows, events.TypeAgentCall, "Read"); call == nil {
-		t.Error("the cli's own tool call never reached the event bus")
+	// A bridged tool call, recorded DE-NAMESPACED — "read_file", not
+	// "mcp__steps__read_file" — identical to what a hosted step's own
+	// trajectory would show for the same call (issue #100).
+	if call := findEvent(rows, events.TypeAgentCall, "read_file"); call == nil {
+		t.Error("the cli's tool call never reached the event bus under its de-namespaced name")
 	} else if !strings.Contains(call.Detail, "main.go") {
 		t.Errorf("agent_call carried no arguments: %q", call.Detail)
 	}
 
-	if result := findEvent(rows, events.TypeAgentResult, "Read"); result == nil {
+	if result := findEvent(rows, events.TypeAgentResult, "read_file"); result == nil {
 		t.Error("the tool result never reached the event bus")
 	} else if !strings.Contains(result.Detail, "package main") {
 		t.Errorf("agent_result carried %q", result.Detail)
@@ -80,6 +82,7 @@ func TestE2ECLIAgentRecordsABridgedCallExactlyOnce(t *testing.T) {
 	// the parent through the bridge — the shape that is both executed here and
 	// reported by the child, and therefore the one at risk of double-counting.
 	writeFakeClaude(t, strings.Join([]string{
+		"echo '" + cliInitEvent(cliPipelineGrantedTools()...) + "'",
 		"echo '" + cliToolUseEvent("c1", "mcp__steps__count_lines", `{"path":"main.go"}`) + "'",
 		callBridgeScript("count_lines", `{"path":"main.go"}`),
 		callBridgeScript("verdict", `{"choice":"approve"}`),
@@ -113,6 +116,7 @@ func TestE2ECLIAgentStoresItsTranscript(t *testing.T) {
 	dir := t.TempDir()
 
 	writeFakeClaude(t, strings.Join([]string{
+		"echo '" + cliInitEvent(cliPipelineGrantedTools()...) + "'",
 		`echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Working on it."}]}}'`,
 		callBridgeScript("verdict", `{"choice":"approve"}`),
 		"echo '" + cliResultEvent("Done.", 1) + "'",
@@ -164,6 +168,7 @@ func TestE2ECLIAgentRecordsWhatItSpent(t *testing.T) {
 	dir := t.TempDir()
 
 	writeFakeClaude(t, strings.Join([]string{
+		"echo '" + cliInitEvent(cliPipelineGrantedTools()...) + "'",
 		callBridgeScript("verdict", `{"choice":"approve"}`),
 		`echo '{"type":"result","subtype":"success","result":"Done.","num_turns":1,` +
 			`"is_error":false,"total_cost_usd":0.0425,` +
