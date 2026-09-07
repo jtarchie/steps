@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/retry"
@@ -189,7 +190,29 @@ func (w *planWalk) takeSet(ctx context.Context, pinnedRun bool, set merkle.Input
 	for _, every := range w.resolution.everyInputs {
 		if version := set[every.input]; version != nil {
 			w.cursor.take(ctx, w.st, w.jobName, every.resource, version)
+			w.recordRunInput(ctx, every.resource, version)
 		}
+	}
+}
+
+// recordRunInput files the version this build was created with, so --resume
+// can reach it after the cursor has moved past it. The cursor mark beside it
+// says the version is spent; this says which run spent it, which is the half
+// a recovery needs.
+//
+// Best-effort, and detached for the same reason take is: a build already under
+// way must not fail over bookkeeping, and the cost of a lost row is a resume
+// that cannot re-open one version — which is where this path started, so it is
+// no worse than not recording at all.
+func (w *planWalk) recordRunInput(ctx context.Context, resourceName string, version map[string]any) {
+	key, ok := encodeVersion(version)
+	if !ok {
+		return
+	}
+
+	err := w.st.RecordRunInput(context.WithoutCancel(ctx), events.RunID(ctx), resourceName, key)
+	if err != nil {
+		logFrom(ctx).Warn("job.run_input_unrecorded", "resource", resourceName, "error", err)
 	}
 }
 

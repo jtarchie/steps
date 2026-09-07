@@ -50,6 +50,14 @@ type versionCursor struct {
 	// next ordinary run. Forcing is "ignore what was taken", not "forget what
 	// this run is doing".
 	suppress bool
+
+	// reopen names the versions a resumed run already took, as resource ->
+	// canonical version JSON. Those alone escape suppression, which is what
+	// separates --resume from --force: forcing re-opens every version any run
+	// ever took and rebuilds history with it, where resuming re-opens exactly
+	// the versions THIS run was created with and leaves every other job's
+	// progress where it is. Empty for an ordinary run.
+	reopen map[string]map[string]bool
 }
 
 // loadVersionCursor reads the consumed set for every resource this job fans
@@ -62,8 +70,11 @@ type versionCursor struct {
 //
 // suppress is false under --force. The cursor is still built and still
 // records, so the versions a forced run completes are marked taken; only the
-// filtering is switched off.
-func loadVersionCursor(ctx context.Context, st *store.Store, job *config.Job, suppress bool) (*versionCursor, error) {
+// filtering is switched off. reopen is --resume's narrower version of the same
+// exemption, naming the versions of one run rather than lifting the filter.
+func loadVersionCursor(
+	ctx context.Context, st *store.Store, job *config.Job, suppress bool, reopen map[string]map[string]bool,
+) (*versionCursor, error) {
 	var resources []string
 
 	seen := map[string]bool{}
@@ -91,6 +102,7 @@ func loadVersionCursor(ctx context.Context, st *store.Store, job *config.Job, su
 		marks:    make(map[string]int64, len(resources)),
 		orders:   make(map[string]map[string]int64, len(resources)),
 		suppress: suppress,
+		reopen:   reopen,
 	}
 
 	for _, name := range resources {
@@ -226,6 +238,13 @@ func (c *versionCursor) has(resourceName string, version map[string]any) bool {
 		// An unencodable version cannot be placed in the order, so it cannot
 		// be suppressed either. Running it again is the recoverable failure;
 		// skipping work that was never recorded is not.
+		return false
+	}
+
+	// A version the resumed run was created with is never treated as taken:
+	// the run being continued is the one that took it, and refusing it here is
+	// how a resume came to select nothing, run nothing, and report success.
+	if c.reopen[resourceName][key] {
 		return false
 	}
 

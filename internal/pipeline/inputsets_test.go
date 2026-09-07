@@ -95,7 +95,7 @@ func (f *setsFixture) resolve(t *testing.T, pinned map[string]string) setResolut
 	ctx := context.Background()
 	job := &f.cfg.Jobs[0]
 
-	cursor, err := loadVersionCursor(ctx, f.st, job, true)
+	cursor, err := loadVersionCursor(ctx, f.st, job, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

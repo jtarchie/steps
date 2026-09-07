@@ -9,6 +9,12 @@ package store
 //
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
+// 8 added run_inputs, without which --resume could not reach a version the
+// cursor had already taken: the resumed run selected nothing, ran no steps,
+// and reported SUCCESS. An older database opened without the table and every
+// INSERT naming it failed — recorded best-effort, so silent, and the silence
+// would restore exactly the false green the table exists to remove.
+//
 // 7 added pipeline_revisions and runs.revision_id. An older database opened
 // without the table and every INSERT naming it failed — and StartRun's error
 // aborts the run, so this one is loud rather than silent, which is the
@@ -29,7 +35,7 @@ package store
 // 4 put pipeline_id into the keys of run_placements and agent_usage. Without
 // it, two pipelines sharing a state file collided on (run_id, node_hash) and
 // one upserted over the other's row.
-const schemaVersion = 7
+const schemaVersion = 8
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -597,6 +603,29 @@ CREATE INDEX IF NOT EXISTS idx_agent_usage_run ON agent_usage(run_id, step_index
 -- rows hanging under a hash it is deleting. Without it both are a full scan of
 -- this table inside the write transaction holding the exclusive lock.
 CREATE INDEX IF NOT EXISTS idx_agent_usage_node ON agent_usage(pipeline_id, node_hash);
+
+-- The versions each run's builds were CREATED with -- Concourse's
+-- build_resource_config_version_inputs, and named after it in spirit.
+--
+-- It exists for one caller: --resume. The version: every cursor is taken as a
+-- build STARTS, whatever that build then does (runGetStep says why), so a
+-- build that fails halfway leaves its version consumed and the ordinary rerun
+-- finds nothing to do. Recovering means re-opening the version THIS run took
+-- and no other, which is a question only a per-run record can answer: --force
+-- re-opens every version any run ever took, which rebuilds history, and the
+-- cursor itself keeps only a high-water mark, which has forgotten which rows
+-- it passed.
+--
+-- Written best-effort as the build starts, like the cursor mark beside it: a
+-- row that fails to record costs a resume, never a running build.
+CREATE TABLE IF NOT EXISTS run_inputs (
+    run_id        TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    resource_name TEXT NOT NULL,
+    -- Canonical JSON, the same encoding the cursor keys on, so a version
+    -- recorded here compares equal to one a later check returns.
+    version_json  TEXT NOT NULL,
+    PRIMARY KEY (run_id, resource_name, version_json)
+) WITHOUT ROWID;
 
 -- Where a placed step actually ran, and what it cost in bytes rather than in
 -- money.

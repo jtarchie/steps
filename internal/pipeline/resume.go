@@ -201,3 +201,25 @@ func recordRunIdentity(
 
 	return nil
 }
+
+// resumedRunInputs reports the versions the run being resumed was created
+// with, so the cursor can re-open them. Nil for an ordinary run, which is
+// every run that is not a resume.
+//
+// The read is NOT best-effort, unlike the write that fills the table: a resume
+// that cannot tell which versions it is continuing would silently select the
+// wrong ones — or none, which is the false green this whole path exists to
+// remove.
+func resumedRunInputs(ctx context.Context, st *store.Store) (map[string]map[string]bool, error) {
+	state := resumeFrom(ctx)
+	if state == nil || !state.resuming {
+		return nil, nil //nolint:nilnil // "not a resume" is the common case, and a nil map is the right answer
+	}
+
+	inputs, err := st.RunInputs(ctx, state.id)
+	if err != nil {
+		return nil, fmt.Errorf("could not read what run %q was created with: %w", state.id, err)
+	}
+
+	return inputs, nil
+}
