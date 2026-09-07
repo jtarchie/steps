@@ -1,0 +1,23 @@
+{{define "page"}}
+<h1 class="prompt"><b>steps resource {{.Resource.Name}}</b></h1>
+<p class="metaline" id="resource-meta">
+  {{.Resource.Type}}<span class="sep">·</span>
+  {{if .Checked.Name}}last checked {{ago .Checked.CheckedAt}}{{else}}<span class="faint">never checked</span>{{end}}
+</p>
+
+<div id="resource-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#resource-region" hx-swap="outerMorph" hx-select-oob="#resource-meta:outerMorph,#nav-tabs:outerMorph">
+<h2 class="eyebrow">Versions <span class="unbold">— newest first, capped by <code>version_history:</code></span></h2>
+<div class="tablewrap">
+  <table>
+    <thead><tr><th>Version</th></tr></thead>
+    <tbody>
+      {{range .Versions}}
+      <tr><td>{{jsonLine .}}</td></tr>
+      {{else}}
+      <tr><td class="faint">never checked</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+</div>
+{{end}}

@@ -302,7 +302,7 @@ func TestUnknownPipelineAndRun404(t *testing.T) {
 
 	server, _ := testPipeline(t)
 
-	for _, target := range []string{"/p/nope", "/p/demo/runs/nosuch", "/p/demo/jobs/nosuch"} {
+	for _, target := range []string{"/p/nope", "/p/demo/runs/nosuch", "/p/demo/jobs/nosuch", "/p/demo/resources/nosuch"} {
 		code, body := get(t, server, target)
 		if code != http.StatusNotFound {
 			t.Errorf("GET %s = %d, want 404", target, code)

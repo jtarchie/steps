@@ -66,6 +66,32 @@ func (s *Store) RecordCheckedVersion(ctx context.Context, resourceName, versionJ
 	return nil
 }
 
+// LastChecked returns one resource's last-checked row — the single-resource
+// counterpart to CheckedResources, for a caller (the web UI's resource detail
+// page) that wants one row rather than every resource's just to look one up.
+func (s *Store) LastChecked(ctx context.Context, resourceName string) (CheckedResource, bool, error) {
+	var (
+		row       CheckedResource
+		checkedAt string
+	)
+
+	err := s.db.QueryRowContext(ctx,
+		`SELECT resource_name, version_json, checked_at FROM resource_checks WHERE pipeline_id = ? AND resource_name = ?`,
+		s.pipelineID, resourceName,
+	).Scan(&row.Name, &row.Version, &checkedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CheckedResource{}, false, nil
+	}
+
+	if err != nil {
+		return CheckedResource{}, false, fmt.Errorf("could not query resource_checks: %w", err)
+	}
+
+	row.CheckedAt = parseTimestamp(checkedAt)
+
+	return row, true, nil
+}
+
 // CheckedResources lists every resource version the watcher has recorded.
 func (s *Store) CheckedResources(ctx context.Context) ([]CheckedResource, error) {
 	return collect(ctx, s.db, "resource checks",

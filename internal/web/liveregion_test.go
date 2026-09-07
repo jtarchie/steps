@@ -246,6 +246,23 @@ func TestNothingThatChangesLivesOutsideALiveRegion(t *testing.T) {
 			},
 		},
 		{
+			name:  "resource detail",
+			path:  "/p/demo/resources/repo",
+			setup: testPipeline,
+			change: func(t *testing.T, pipeline *Pipeline) {
+				t.Helper()
+
+				// RecordVersions, not RecordCheckedVersion: the detail page
+				// reads resource_versions (the history table), and only
+				// RecordVersions writes it — RecordCheckedVersion writes just
+				// resource_checks, the collection page's latest-only table.
+				_, err := pipeline.Store.RecordVersions(context.Background(), "repo", []map[string]any{{"ref": "abc123"}}, 0)
+				if err != nil {
+					t.Fatalf("RecordVersions: %v", err)
+				}
+			},
+		},
+		{
 			name: "overview",
 			path: "/",
 			setup: func(t *testing.T) (*Server, *Pipeline) {

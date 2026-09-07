@@ -96,6 +96,35 @@ func TestLiveNodeLinkMatchesServerSpelling(t *testing.T) {
 	}
 }
 
+// TestResourcesPageLinksItsVersionHistory: the collection page named a
+// resource in plain text, making its recorded history unreachable — the same
+// dead-end TestNodePageLinksItsJob caught for nodes.
+func TestResourcesPageLinksItsVersionHistory(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	_, err := pipeline.Store.RecordVersions(ctx, "repo", []map[string]any{{"ref": "abc123"}}, 0)
+	if err != nil {
+		t.Fatalf("RecordVersions: %v", err)
+	}
+
+	_, listBody := get(t, server, "/p/demo/resources")
+	if !strings.Contains(listBody, `<a href="/p/demo/resources/repo">repo</a>`) {
+		t.Error("resources page does not link the resource's history")
+	}
+
+	code, detailBody := get(t, server, "/p/demo/resources/repo")
+	if code != 200 {
+		t.Fatalf("GET /p/demo/resources/repo = %d, want 200", code)
+	}
+
+	if !strings.Contains(detailBody, "abc123") {
+		t.Errorf("resource detail page does not show its recorded version:\n%s", detailBody)
+	}
+}
+
 // TestJobPageExplainsReadOnly: a read-only server HIDES the trigger buttons;
 // it has to say why, the way approvals already do.
 func TestJobPageExplainsReadOnly(t *testing.T) {

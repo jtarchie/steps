@@ -269,6 +269,7 @@ func (s *Server) routes() error {
 	group.GET("/approvals", s.handleApprovals)
 	group.GET("/questions", s.handleQuestions)
 	group.GET("/resources", s.handleResources)
+	group.GET("/resources/:resource", s.handleResource)
 	group.GET("/search", s.handleSearch)
 	group.GET("/jobs/:job/follow", s.handleFollow)
 	group.GET("/jobs/:job/latest-run", s.handleLatestRun)

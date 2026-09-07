@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -371,6 +372,59 @@ func (s *Server) handleResources(c echo.Context) error {
 		"Resources": pipeline.Config().Resources,
 		"Checked":   checkedByName(checked),
 		"Paused":    paused,
+	})
+}
+
+// handleResource shows one resource's full recorded history — every version
+// a check has reported, not just the latest, which is all handleResources
+// has room for on the collection page.
+func (s *Server) handleResource(c echo.Context) error {
+	pipeline := pipelineOf(c)
+	ctx := c.Request().Context()
+	name := c.Param("resource")
+
+	cfg := pipeline.Config()
+
+	res, err := cfg.FindResource(name)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no resource %q in this pipeline", name))
+	}
+
+	versions, err := pipeline.Store.ResourceVersions(ctx, res.Name)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	// ResourceVersions is oldest-first (the order a check discovered them
+	// in); the newest belongs at the top, matching the "Latest version"
+	// framing on the collection page. jsonLine wants the same raw-JSON string
+	// every other version field on this page already carries.
+	lines := make([]string, len(versions))
+
+	for i, version := range versions {
+		encoded, encodeErr := store.EncodeVersion(version)
+		if encodeErr != nil {
+			return fmt.Errorf("web: %w", encodeErr)
+		}
+
+		lines[i] = encoded
+	}
+
+	slices.Reverse(lines)
+
+	checked, _, err := pipeline.Store.LastChecked(ctx, res.Name)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	//nolint:wrapcheck // render errors surface through the shared error handler
+	return c.Render(http.StatusOK, "resource", map[string]any{
+		"Nav":      s.nav(c),
+		"Title":    res.Name,
+		"Crumbs":   []crumb{{Label: "resources", URL: "/p/" + pipeline.Slug + "/resources"}, {Label: res.Name}},
+		"Resource": res,
+		"Versions": lines,
+		"Checked":  checked,
 	})
 }
 
