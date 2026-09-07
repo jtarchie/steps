@@ -470,6 +470,8 @@ svg.dag { display: block; }
 }
 .turn.model .who { color: var(--magenta); }
 .turn.tool .who { color: var(--cyan); }
+.turn.system .who { color: var(--yellow); }
+.turn.user .who { color: var(--blue); }
 .turn .what { color: var(--dim); min-width: 0; flex: 1; overflow-wrap: anywhere; }
 /* The tool being called is the row's subject; everything else on the row is
    about it. */
@@ -478,6 +480,7 @@ svg.dag { display: block; }
 /* What the model said is content, not annotation — the only turn text a
    reader is here to read. */
 .turn.model .what .say { color: var(--fg); }
+.turn.system .what .say, .turn.user .what .say { color: var(--fg); }
 .turn.nested { opacity: 0.85; }
 .turn.nested .who::before { content: "└ "; color: var(--faint); }
 
@@ -578,7 +581,7 @@ pre.log { margin: 8px 0 0; font-family: var(--mono); }
 /* .prose is the same body mid-conversation, where the model's running
    commentary is an annotation rather than the conclusion. */
 .response .say, .prose .say { white-space: pre-wrap; margin: 0 0 10px; overflow-wrap: anywhere; }
-.turn.model .prose { color: var(--fg); min-width: 0; }
+.turn.model .prose, .turn.system .prose, .turn.user .prose { color: var(--fg); min-width: 0; }
 .response > :last-child, .prose > :last-child { margin-bottom: 0; }
 /* Qualified past pre.json.code, which would otherwise keep its own bottom
    margin on the answers most likely to end in a code block. */

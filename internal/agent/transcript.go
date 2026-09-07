@@ -21,14 +21,16 @@ import (
 const maxRecordedResultBytes = 16_384
 
 // transcriptEvent is one entry in an agent conversation's persisted
-// transcript: the model's visible text for a turn, a tool call it made, the
+// transcript: the system prompt, a user/task message, the model's visible
+// text for a turn, a tool call (model-issued or the synthetic
+// upstream/context_paths exchanges built into the opening request), the
 // result that came back, or a sub-agent delegation carrying the child's own
 // nested events. Unlike the trajectory in nodes.result (tool calls only,
 // bounded for downstream consumers), the transcript is the full exchange —
 // it lives in its own node_transcripts row precisely so nodes.result stays
 // small for the readers that load it on every run.
 type transcriptEvent struct {
-	Type    string            `json:"type"` // "text" | "call" | "result" | "subagent"
+	Type    string            `json:"type"` // "system" | "user" | "text" | "call" | "result" | "subagent"
 	Text    string            `json:"text,omitempty"`
 	Name    string            `json:"name,omitempty"`
 	Args    map[string]any    `json:"args,omitempty"`
@@ -139,6 +141,32 @@ func (r *transcriptRecorder) text(text string) {
 
 	r.events = append(r.events, transcriptEvent{Type: "text", Text: text})
 	r.publish(events.TypeAgentText, text, "", "")
+}
+
+// system records the system prompt a conversation started with. Called once,
+// from buildAgentRequest's fresh branch (never on a failover resume, which
+// reuses the same conversation rather than starting a new one) — the same
+// placement user() uses, for the same reason.
+func (r *transcriptRecorder) system(text string) {
+	if r == nil || text == "" {
+		return
+	}
+
+	r.events = append(r.events, transcriptEvent{Type: "system", Text: text})
+	r.publish(events.TypeAgentSystem, text, "", "")
+}
+
+// user records a user/task message: the opening message a conversation
+// starts with, or a later message: entry sent mid-conversation via advance.
+// Both call sites fire exactly once per real message — see buildAgentRequest
+// and advance in conversation.go.
+func (r *transcriptRecorder) user(text string) {
+	if r == nil || text == "" {
+		return
+	}
+
+	r.events = append(r.events, transcriptEvent{Type: "user", Text: text})
+	r.publish(events.TypeAgentUser, text, "", "")
 }
 
 // call records one model-authored tool call, with over-long argument values

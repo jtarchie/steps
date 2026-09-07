@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"slices"
 	"strings"
@@ -694,5 +695,88 @@ func TestCLIArgsEffort(t *testing.T) {
 	unset := cliArgs(cliPrepared(t, []string{"read_file"}), cliRuntimes["claude"], "/tmp/mcp.json", firstAttempt())
 	if slices.Contains(unset, "--effort") {
 		t.Errorf("an agent with no reasoning_effort still got --effort: %v", unset)
+	}
+}
+
+// TestRecordCLIOpeningFiresOnce pins recordCLIOpening's whole contract: it
+// records on the one invocation that opens a session fresh (plan.resume ==
+// false) and never again once the session is being rejoined — a retry, a
+// nudge round, or a later message all set plan.resume, which is the CLI
+// path's analogue of buildAgentRequest's hosted-side resume guard
+// (conversation.go).
+func TestRecordCLIOpeningFiresOnce(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, []string{"read_file"})
+	rec := &transcriptRecorder{}
+	prepared.conv.recorder = rec
+
+	plan := firstAttempt()
+	plan.resume = false
+
+	recordCLIOpening(prepared, plan)
+
+	want := []string{"system", "user"}
+	if got := eventTypes(rec.events); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("after the fresh invocation, transcript = %v, want %v", got, want)
+	}
+
+	if rec.events[0].Text != prepared.conv.system {
+		t.Errorf("system event text = %q, want %q", rec.events[0].Text, prepared.conv.system)
+	}
+
+	if rec.events[1].Text != plan.prompt {
+		t.Errorf("user event text = %q, want %q", rec.events[1].Text, plan.prompt)
+	}
+
+	// A retry, a nudge round, or a later message all rejoin the session:
+	// nothing further must be recorded.
+	resumed := plan
+	resumed.resume = true
+
+	recordCLIOpening(prepared, resumed)
+
+	if got := eventTypes(rec.events); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("after a resumed invocation, transcript = %v, want unchanged %v", got, want)
+	}
+}
+
+// TestRecordCLIMessageDeliverySkipsUndeliveredRetries pins
+// recordCLIMessageDelivery's gate: a later messages: entry is recorded once
+// it actually reaches the child, matching markDelivered's own condition —
+// not on a failed attempt, and not when the invocation isn't a pending
+// message at all.
+func TestRecordCLIMessageDeliverySkipsUndeliveredRetries(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, []string{"read_file"})
+	rec := &transcriptRecorder{}
+	prepared.conv.recorder = rec
+
+	plan := firstAttempt()
+	plan.prompt = "second ask"
+
+	// A failed attempt to deliver the pending message: nothing recorded, so
+	// the eventual successful retry is the only copy in the transcript.
+	recordCLIMessageDelivery(prepared, plan, true, errors.New("boom"))
+
+	if len(rec.events) != 0 {
+		t.Fatalf("a failed delivery recorded %+v, want nothing", rec.events)
+	}
+
+	// Not a pending message at all (a continuation/nudge prompt): never
+	// recorded here — that text was already covered by recordCLIOpening or
+	// an earlier successful delivery.
+	recordCLIMessageDelivery(prepared, plan, false, nil)
+
+	if len(rec.events) != 0 {
+		t.Fatalf("a non-pending invocation recorded %+v, want nothing", rec.events)
+	}
+
+	// The successful delivery: recorded exactly once.
+	recordCLIMessageDelivery(prepared, plan, true, nil)
+
+	if len(rec.events) != 1 || rec.events[0].Type != "user" || rec.events[0].Text != "second ask" {
+		t.Fatalf("delivered message = %+v, want one user event with text %q", rec.events, "second ask")
 	}
 }

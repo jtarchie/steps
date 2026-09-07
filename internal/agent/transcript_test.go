@@ -11,8 +11,10 @@ import (
 
 // TestRunAgentConversationRecordsTranscript walks the same two-turn
 // conversation as TestRunAgentConversationMultiTurnToolCalling and asserts
-// the transcript captured the full exchange in order: the tool call, its
-// result, and the final text — the parts the bounded trajectory drops.
+// the transcript captured the full exchange in order: the opening user
+// message, the tool call, its result, and the final text — the parts the
+// bounded trajectory drops. newTestConversation sets no system prompt, so no
+// "system" event is expected here (see TestRunAgentConversationRecordsSystemPrompt).
 func TestRunAgentConversationRecordsTranscript(t *testing.T) {
 	t.Parallel()
 
@@ -44,26 +46,195 @@ func TestRunAgentConversationRecordsTranscript(t *testing.T) {
 		types = append(types, ev.Type)
 	}
 
-	want := []string{"text", "call", "result", "text"}
+	want := []string{"user", "text", "call", "result", "text"}
 	if strings.Join(types, ",") != strings.Join(want, ",") {
 		t.Fatalf("transcript event types = %v, want %v", types, want)
 	}
 
-	if res.transcript[0].Text != "let me check" {
-		t.Errorf("mid-conversation text = %q, want %q", res.transcript[0].Text, "let me check")
+	assertTranscriptText(t, res.transcript, 0, "do the thing")
+	assertTranscriptText(t, res.transcript, 1, "let me check")
+	assertTranscriptText(t, res.transcript, 4, "done")
+
+	if res.transcript[2].Name != "run_shell" || res.transcript[2].Args["command"] != "echo hi" {
+		t.Errorf("call event = %+v, want run_shell echo hi", res.transcript[2])
 	}
 
-	if res.transcript[1].Name != "run_shell" || res.transcript[1].Args["command"] != "echo hi" {
-		t.Errorf("call event = %+v, want run_shell echo hi", res.transcript[1])
+	if res.transcript[3].Name != "run_shell" || !strings.Contains(res.transcript[3].Content, "hi") {
+		t.Errorf("result event = %+v, want run_shell output containing %q", res.transcript[3], "hi")
+	}
+}
+
+// assertTranscriptText checks one recorded event's Text field, pulled out of
+// TestRunAgentConversationRecordsTranscript so that test's per-event checks
+// don't each cost it a branch.
+func assertTranscriptText(t *testing.T, transcript []transcriptEvent, i int, want string) {
+	t.Helper()
+
+	if got := transcript[i].Text; got != want {
+		t.Errorf("transcript[%d].Text = %q, want %q", i, got, want)
+	}
+}
+
+// TestRunAgentConversationRecordsSystemPrompt asserts a non-empty system:
+// leads the transcript, ahead of the opening user message.
+func TestRunAgentConversationRecordsSystemPrompt(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	fake := &fakeLLM{
+		responses: []*model.LLMResponse{textResponse("done")},
 	}
 
-	if res.transcript[2].Name != "run_shell" || !strings.Contains(res.transcript[2].Content, "hi") {
-		t.Errorf("result event = %+v, want run_shell output containing %q", res.transcript[2], "hi")
+	conv := newTestConversation(t, "do the thing", dir)
+	conv.system = "you are a careful reviewer"
+
+	res, err := runAgentConversation(context.Background(), fake, conv)
+	if err != nil {
+		t.Fatalf("runAgentConversation: %v", err)
 	}
 
-	if res.transcript[3].Text != "done" {
-		t.Errorf("final text = %q, want %q", res.transcript[3].Text, "done")
+	if len(res.transcript) < 2 || res.transcript[0].Type != "system" || res.transcript[1].Type != "user" {
+		t.Fatalf("transcript = %+v, want it to lead with a system then a user event", res.transcript)
 	}
+
+	if res.transcript[0].Text != conv.system {
+		t.Errorf("system event text = %q, want %q", res.transcript[0].Text, conv.system)
+	}
+}
+
+// TestRunAgentConversationRecordsSyntheticExchanges asserts the
+// upstream:/context_paths: synthetic call/result pairs built into the
+// opening request — the same content the model is handed — are recorded
+// like any other tool exchange, not silently absorbed into the request.
+func TestRunAgentConversationRecordsSyntheticExchanges(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	fake := &fakeLLM{responses: []*model.LLMResponse{textResponse("done")}}
+
+	conv := newTestConversation(t, "do the thing", dir)
+	conv.upstream = []contextBlock{{path: "build", content: "verdict: pass"}}
+	conv.contextBlocks = []contextBlock{{path: "notes.md", content: "read me"}}
+
+	res, err := runAgentConversation(context.Background(), fake, conv)
+	if err != nil {
+		t.Fatalf("runAgentConversation: %v", err)
+	}
+
+	types := make([]string, 0, len(res.transcript))
+	for _, ev := range res.transcript {
+		types = append(types, ev.Type)
+	}
+
+	want := []string{"user", "call", "result", "call", "result", "text"}
+	if strings.Join(types, ",") != strings.Join(want, ",") {
+		t.Fatalf("transcript event types = %v, want %v", types, want)
+	}
+
+	if res.transcript[1].Name != readStepToolName || res.transcript[1].Args["step"] != "build" {
+		t.Errorf("upstream call event = %+v, want read_step for build", res.transcript[1])
+	}
+
+	if res.transcript[2].Content != "verdict: pass" {
+		t.Errorf("upstream result event = %+v, want content %q", res.transcript[2], "verdict: pass")
+	}
+
+	if res.transcript[3].Name != "read_file" || res.transcript[3].Args["path"] != "notes.md" {
+		t.Errorf("context call event = %+v, want read_file for notes.md", res.transcript[3])
+	}
+
+	if res.transcript[4].Content != "read me" {
+		t.Errorf("context result event = %+v, want content %q", res.transcript[4], "read me")
+	}
+}
+
+// TestRunAgentConversationRecordsLaterMessages asserts every messages: entry
+// past the first is recorded as its own "user" event when advance sends it,
+// in order.
+func TestRunAgentConversationRecordsLaterMessages(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	fake := &fakeLLM{
+		responses: []*model.LLMResponse{textResponse("first done"), textResponse("second done")},
+	}
+
+	conv := newTestConversation(t, "first ask", dir)
+	conv.messages = []string{"first ask", "second ask"}
+
+	res, err := runAgentConversation(context.Background(), fake, conv)
+	if err != nil {
+		t.Fatalf("runAgentConversation: %v", err)
+	}
+
+	types := make([]string, 0, len(res.transcript))
+	texts := make([]string, 0, len(res.transcript))
+
+	for _, ev := range res.transcript {
+		types = append(types, ev.Type)
+		texts = append(texts, ev.Text)
+	}
+
+	wantTypes := []string{"user", "text", "user", "text"}
+	if strings.Join(types, ",") != strings.Join(wantTypes, ",") {
+		t.Fatalf("transcript event types = %v, want %v", types, wantTypes)
+	}
+
+	wantTexts := []string{"first ask", "first done", "second ask", "second done"}
+	if strings.Join(texts, "|") != strings.Join(wantTexts, "|") {
+		t.Fatalf("transcript event texts = %v, want %v", texts, wantTexts)
+	}
+}
+
+// TestBuildAgentRequestRecordsSystemAndUserOnceAcrossACascade pins the exact
+// seam a failover cascade relies on to avoid double-recording: buildAgentRequest
+// is the ONLY call site that records the system prompt and opening message,
+// and it does so only on the fresh branch — never when conv.resume carries a
+// prior source's checkpoint. Since a cascade (failover.go) reuses the same
+// recorder across every source it tries, gating recording on conv.resume is
+// what keeps the transcript from repeating the opening once per source.
+func TestBuildAgentRequestRecordsSystemAndUserOnceAcrossACascade(t *testing.T) {
+	t.Parallel()
+
+	rec := &transcriptRecorder{}
+	conv := agentConversation{
+		system:   "you are a writer",
+		messages: []string{"write it"},
+		env:      toolEnv{transcript: rec},
+		tools:    agentTools{decls: &genai.Tool{}}, //nolint:exhaustruct // zero value tool declarations are fine for this request-shape test
+		recorder: rec,
+	}
+
+	req := buildAgentRequest(conv)
+
+	want := []string{"system", "user"}
+	if got := eventTypes(rec.events); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("after the fresh branch, transcript = %v, want %v", got, want)
+	}
+
+	// A cascade swap sets conv.resume from the prior source's checkpoint and
+	// calls buildAgentRequest again on the SAME recorder — simulated here
+	// directly, the way failover.go's loop does it.
+	conv.resume = &resumeCheckpoint{contents: req.Contents}
+	buildAgentRequest(conv)
+
+	if got := eventTypes(rec.events); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("after the resumed branch, transcript = %v, want unchanged %v (no re-recording)", got, want)
+	}
+}
+
+// eventTypes projects a transcript's event Type field, for assertions that
+// only care about the shape of the sequence.
+func eventTypes(events []transcriptEvent) []string {
+	types := make([]string, 0, len(events))
+	for _, ev := range events {
+		types = append(types, ev.Type)
+	}
+
+	return types
 }
 
 // TestTranscriptRecorderNilSafe covers the contract toolEnv.transcript

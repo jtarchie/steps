@@ -199,6 +199,8 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		plan.prompt = cliAttemptPrompt(plan.resume, attempt > 0, sent, state, prepared)
 		_, pending := pendingCLIMessage(prepared, sent, state)
 
+		recordCLIOpening(prepared, plan)
+
 		if plan.outOfTurns() {
 			return retry.Stop(outcome.Fail(cliCeilingError(prepared.ri.AgentName,
 				fmt.Sprintf("its %d-turn budget", prepared.ri.MaxTurns),
@@ -219,6 +221,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		lastErr = attemptErr
 
 		markDelivered(state, sent, pending, attemptErr)
+		recordCLIMessageDelivery(prepared, plan, pending, attemptErr)
 
 		if attemptErr != nil {
 			slog.Warn("agent.cli.attempt_failed",
@@ -344,6 +347,36 @@ func runCLIRounds(
 func markDelivered(state *cliStepState, sent int, pending bool, attemptErr error) {
 	if pending && attemptErr == nil {
 		state.asked = sent
+	}
+}
+
+// recordCLIOpening records the system prompt and opening prompt exactly once
+// per step — the CLI-path analogue of buildAgentRequest's hosted "fresh
+// branch" (conversation.go).
+//
+// plan.resume is false exactly once across a step's whole life: attempt 0,
+// nudges 0, sent 0. Every later invocation rejoins the session (attempt,
+// nudges, and sent only ever increase — see rejoiningCLISession), so gating
+// on it here, unconditionally of the attempt's outcome, records what was
+// sent to the child exactly once, the same way buildAgentRequest records the
+// hosted opening before knowing whether the request will succeed.
+func recordCLIOpening(prepared preparedAgentStep, plan cliAttempt) {
+	if plan.resume {
+		return
+	}
+
+	prepared.conv.recorder.system(prepared.conv.system)
+	prepared.conv.recorder.user(plan.prompt)
+}
+
+// recordCLIMessageDelivery records a later messages: entry once it has
+// actually reached the child — the same gate markDelivered uses, so a
+// message is recorded exactly once even though pendingCLIMessage (and so
+// plan.prompt) keeps reporting it as pending across every retry of the round
+// that eventually delivers it.
+func recordCLIMessageDelivery(prepared preparedAgentStep, plan cliAttempt, pending bool, attemptErr error) {
+	if pending && attemptErr == nil {
+		prepared.conv.recorder.user(plan.prompt)
 	}
 }
 

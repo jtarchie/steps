@@ -52,6 +52,38 @@ func TestSubAgentRunReturnsResult(t *testing.T) {
 	}
 }
 
+// TestSubAgentRunNestsChildSystemAndUser asserts a delegation's system prompt
+// and opening message land in the PARENT's transcript nested under the
+// "subagent" event, exactly like the child's text/call/result already do —
+// buildAgentRequest needs no sub-agent-specific handling for this, since
+// preparedSubAgent.run hands the child a childRecorder() off the parent's own.
+func TestSubAgentRunNestsChildSystemAndUser(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeLLM{responses: []*model.LLMResponse{
+		{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "the gist"}}}},
+	}}
+
+	child := newTestSubAgent(t, fake)
+	rec := &transcriptRecorder{}
+	env := toolEnv{dir: t.TempDir(), transcript: rec}
+
+	child.run(context.Background(), map[string]any{"request": "summarize this"}, env)
+
+	if len(rec.events) != 1 || rec.events[0].Type != "subagent" {
+		t.Fatalf("parent transcript = %+v, want exactly one subagent event", rec.events)
+	}
+
+	nested := rec.events[0].Events
+	if len(nested) < 2 || nested[0].Type != "system" || nested[1].Type != "user" {
+		t.Fatalf("nested child events = %+v, want it to lead with a system then a user event", nested)
+	}
+
+	if nested[1].Text != "summarize this" {
+		t.Errorf("nested opening message = %q, want %q", nested[1].Text, "summarize this")
+	}
+}
+
 // TestSubAgentRunPrintsResponse: a sub-agent's own final text must reach the
 // terminal (labeled as a sub-agent), not just come back as an opaque tool
 // result the parent model consumes — previously the child conversation's

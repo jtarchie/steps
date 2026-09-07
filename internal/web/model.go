@@ -934,7 +934,8 @@ func attachOutput(view *runView, index map[string]int, row store.RunEventRow) {
 // than being one.
 func isAgentTraffic(eventType string) bool {
 	switch eventType {
-	case events.TypeAgentText, events.TypeAgentCall, events.TypeAgentResult, events.TypeAgentSubagent:
+	case events.TypeAgentSystem, events.TypeAgentUser,
+		events.TypeAgentText, events.TypeAgentCall, events.TypeAgentResult, events.TypeAgentSubagent:
 		return true
 	default:
 		return false

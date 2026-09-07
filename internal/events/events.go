@@ -43,6 +43,8 @@ const (
 	// Agent conversation traffic, mirroring the persisted transcript's own
 	// event vocabulary (see internal/agent/transcript.go) so a live view and
 	// a stored transcript render through the same code path.
+	TypeAgentSystem   = "agent_system"
+	TypeAgentUser     = "agent_user"
 	TypeAgentText     = "agent_text"
 	TypeAgentCall     = "agent_call"
 	TypeAgentResult   = "agent_result"

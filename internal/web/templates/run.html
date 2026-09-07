@@ -286,8 +286,8 @@
      APPENDS turns to a running step's body one at a time — the row is not
      re-sent for each — and the page draws them through the same one. */}}
 {{define "turn"}}
-    <div class="turn {{if eq .Type "agent_text"}}model{{else}}tool{{end}}{{if .Nested}} nested{{end}}">
-      <span class="who">{{if eq .Type "agent_text"}}model{{else if eq .Type "agent_call"}}tool{{else if eq .Type "agent_result"}}result{{else}}delegate{{end}}</span>
+    <div class="turn {{if eq .Type "agent_text"}}model{{else if eq .Type "agent_system"}}system{{else if eq .Type "agent_user"}}user{{else}}tool{{end}}{{if .Nested}} nested{{end}}">
+      <span class="who">{{if eq .Type "agent_text"}}model{{else if eq .Type "agent_system"}}system{{else if eq .Type "agent_user"}}user{{else if eq .Type "agent_call"}}tool{{else if eq .Type "agent_result"}}result{{else}}delegate{{end}}</span>
       <div class="what">
         {{if .Name}}<code>{{.Name}}</code>{{end}}
         {{if .Text}}<span class="say">{{.Text}}</span>{{end}}

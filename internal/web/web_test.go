@@ -136,6 +136,8 @@ func TestRunTranscriptRendersStepsAndAgentTurns(t *testing.T) {
 		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "repo", StepKind: "get"},
 		{Type: events.TypeStepSkipped, StepIndex: 0, StepName: "repo", StepKind: "get", Status: "skipped", Hash: "cafe1234567", Text: "unchanged — replayed from cache"},
 		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "review", StepKind: "agent"},
+		{Type: events.TypeAgentSystem, StepIndex: 1, StepName: "review", Text: "You are a careful reviewer."},
+		{Type: events.TypeAgentUser, StepIndex: 1, StepName: "review", Text: "Review this diff for bugs."},
 		{Type: events.TypeAgentText, StepIndex: 1, StepName: "review", Text: "Reading the diff first."},
 		{Type: events.TypeAgentCall, StepIndex: 1, StepName: "review", Name: "read_file", Detail: `{"path":"main.go"}`},
 		{Type: events.TypeAgentSubagent, StepIndex: 1, StepName: "review", Name: "test-runner", Text: "run the suite", Status: "depth:1"},
@@ -162,10 +164,17 @@ func TestRunTranscriptRendersStepsAndAgentTurns(t *testing.T) {
 		t.Error("cached step is not rendered as skipped")
 	}
 
-	// The agent's turns hang under its step, including the delegation.
-	for _, want := range []string{"Reading the diff first.", "read_file", "test-runner"} {
+	// The agent's turns hang under its step, including the system prompt,
+	// the opening message, and the delegation — each labeled as itself
+	// rather than folded into the catch-all "delegate" label
+	// isAgentTraffic's default case used to leave system/user turns under.
+	for _, want := range []string{
+		"You are a careful reviewer.", "Review this diff for bugs.",
+		"Reading the diff first.", "read_file", "test-runner",
+		`class="who">system<`, `class="who">user<`,
+	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("transcript missing agent turn %q", want)
+			t.Errorf("transcript missing %q", want)
 		}
 	}
 
@@ -883,6 +892,61 @@ func TestAnswerIsNotPrintedTwice(t *testing.T) {
 	other := stepView{Result: map[string]any{"response": "different"}, Turns: step.Turns}
 	if len(other.Conversation()) != len(step.Turns) {
 		t.Error("a non-matching response dropped a turn anyway")
+	}
+}
+
+// TestNodePageRendersSystemAndUserTurns pins the static transcript view's
+// "turns" template branches for the two newest event kinds: a node's
+// persisted transcript leads with the system prompt and the opening user
+// message, and both must render labeled rather than being silently dropped
+// by the if/else chain's lack of a fallback branch.
+func TestNodePageRendersSystemAndUserTurns(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	record := store.NodeRecord{
+		Hash:      "bbbb222233334444",
+		Kind:      "agent",
+		StepIndex: 0,
+		Resource:  "review",
+		Content:   map[string]any{"agent": "reviewer"},
+	}
+
+	err := pipeline.Store.RecordNode(ctx, record, "build", "succeeded", nil, nil)
+	if err != nil {
+		t.Fatalf("RecordNode: %v", err)
+	}
+
+	transcript := `[
+		{"type":"system","text":"You are a careful reviewer."},
+		{"type":"user","text":"Review this diff for bugs."},
+		{"type":"text","text":"Looks fine."}
+	]`
+
+	err = pipeline.Store.SaveNodeTranscript(ctx, record.Hash, transcript)
+	if err != nil {
+		t.Fatalf("SaveNodeTranscript: %v", err)
+	}
+
+	code, body := get(t, server, "/p/demo/nodes/"+record.Hash)
+	if code != http.StatusOK {
+		t.Fatalf("GET node = %d: %s", code, body)
+	}
+
+	for _, want := range []string{"You are a careful reviewer.", "Review this diff for bugs.", "Looks fine."} {
+		if !strings.Contains(body, want) {
+			t.Errorf("node transcript missing %q", want)
+		}
+	}
+
+	if !strings.Contains(body, `class="turn system"`) {
+		t.Error("node transcript does not render the system turn")
+	}
+
+	if !strings.Contains(body, `class="turn user"`) {
+		t.Error("node transcript does not render the user turn")
 	}
 }
 

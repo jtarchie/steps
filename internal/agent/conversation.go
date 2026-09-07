@@ -277,6 +277,14 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 		return &model.LLMRequest{Contents: conv.resume.contents, Config: cfg}
 	}
 
+	// This is the one point a conversation is genuinely fresh: a failover
+	// swap to another source takes the resume branch above and reuses the
+	// same recorder, so recording here — and only here — records the system
+	// prompt and opening exactly once per step, never once per source or
+	// once per attempts: retry (which happens below buildAgentRequest,
+	// inside the HTTP transport).
+	conv.env.transcript.system(conv.system)
+
 	contents := make([]*genai.Content, 0, 3+(len(conv.contextBlocks)+len(conv.upstream))*2)
 
 	// The task comes first, because everything below it is a tool exchange
@@ -285,22 +293,28 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 	// model was trained on, and a chat template is entitled to refuse it —
 	// LM Studio's qwen3.8 answers such a conversation with "No user query
 	// found in messages" rather than a completion.
+	opening := conv.opening()
 	contents = append(contents, &genai.Content{
 		Role:  genai.RoleUser,
-		Parts: []*genai.Part{{Text: conv.opening()}},
+		Parts: []*genai.Part{{Text: opening}},
 	})
+	conv.env.transcript.user(opening)
 
 	// The decisions this step asked upstream steps for come first of the
 	// injected pair: they are what happened BEFORE this step, and the
 	// context_paths files below are what this step was handed to work on.
 	for i, block := range conv.upstream {
-		contents = append(contents, syntheticToolExchange(
-			fmt.Sprintf("upstream_%d", i), readStepToolName, map[string]any{"step": block.path}, block.content)...)
+		args := map[string]any{"step": block.path}
+		contents = append(contents, syntheticToolExchange(fmt.Sprintf("upstream_%d", i), readStepToolName, args, block.content)...)
+		conv.env.transcript.call(readStepToolName, args)
+		conv.env.transcript.result(readStepToolName, block.content)
 	}
 
 	for i, block := range conv.contextBlocks {
-		contents = append(contents, syntheticToolExchange(
-			fmt.Sprintf("ctx_%d", i), "read_file", map[string]any{"path": block.path}, block.content)...)
+		args := map[string]any{"path": block.path}
+		contents = append(contents, syntheticToolExchange(fmt.Sprintf("ctx_%d", i), "read_file", args, block.content)...)
+		conv.env.transcript.call("read_file", args)
+		conv.env.transcript.result("read_file", block.content)
 	}
 
 	return &model.LLMRequest{
@@ -915,10 +929,12 @@ func (conv agentConversation) advance(req *model.LLMRequest, state *resumeCheckp
 	// satisfied for a question it has not yet been asked.
 	req.Config.ToolConfig = nil
 
+	message := conv.messages[state.sent]
 	req.Contents = append(req.Contents, &genai.Content{
 		Role:  genai.RoleUser,
-		Parts: []*genai.Part{{Text: conv.messages[state.sent]}},
+		Parts: []*genai.Part{{Text: message}},
 	})
+	conv.env.transcript.user(message)
 }
 
 // carriedSatisfaction is what stays satisfied across a message boundary.
