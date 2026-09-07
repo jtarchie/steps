@@ -107,6 +107,34 @@ func (c *Config) validateStepTimeouts() error {
 	return nil
 }
 
+// DefaultAgentStepTimeout is the wall-clock ceiling an agent step gets when
+// it declares no timeout: of its own (see docs/attempts-timeout.md, "Agent
+// steps: the one implicit deadline"). Kept here rather than in
+// internal/agent so internal/web can resolve the same effective deadline a
+// running step is actually held to — depguard forbids internal/web from
+// importing internal/agent.
+const DefaultAgentStepTimeout = 30 * time.Minute
+
+// ResolvedAgentTimeout applies the default-and-zero-means-unlimited
+// convention documented in docs/attempts-timeout.md to an agent step's
+// timeout: string: empty resolves to DefaultAgentStepTimeout, "0" resolves
+// to 0 (no deadline — the caller's convention for "unlimited"), and an
+// (unreachable against a validated config) parse error falls back to the
+// default rather than to "no deadline" — a typo must never silently produce
+// an unbounded step.
+func ResolvedAgentTimeout(riTimeout string) time.Duration {
+	if riTimeout == "" {
+		return DefaultAgentStepTimeout
+	}
+
+	parsed, err := ParseTimeout(riTimeout)
+	if err != nil {
+		return DefaultAgentStepTimeout
+	}
+
+	return parsed
+}
+
 // ParseTimeout parses a timeout string into a time.Duration. Empty string
 // is valid and returns 0 (no timeout). Returns an error for invalid Go
 // duration format (e.g., "2m", "30s", "1h30m" are valid; "2 minutes" is not).

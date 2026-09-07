@@ -181,8 +181,18 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		return map[string]any{"error": fmt.Sprintf("%s: %s", c.ri.AgentName, err)}
 	}
 
+	// A sub-agent has no timeout: of its own — it shares whatever deadline
+	// the parent conversation is already running under (ctx, here, is the
+	// parent's convCtx, already wrapped by withAgentDeadline). Disclosing
+	// THAT deadline, not a re-resolved one, is what the child is actually
+	// bound by.
+	timeout := noAgentDeadline
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = time.Until(deadline)
+	}
+
 	conv := agentConversation{
-		system:        buildSystemMessage(c.ri.Persona, env.dir),
+		system:        buildSystemMessage(c.ri.Persona, env.dir, timeout),
 		messages:      []string{request},
 		contextBlocks: contextBlocks,
 		// The parent's ask context travels down, renamed: a sub-agent granted

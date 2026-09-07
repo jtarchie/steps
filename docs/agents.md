@@ -7,7 +7,7 @@ How an `agent` step in a pipeline actually runs, and the features around custom 
 An agent step runs a tool-calling conversation loop:
 
 1. Parse the agent's config: model/endpoint, system prompt, granted tools, `max_turns` (default 30 for a hosted agent and **none at all for a CLI one**, `0` for no cap; a step may override it with its own `max_turns:` so one long-horizon step can buy more turns without every step of the same agent paying for them). Same for `timeout:` and `attempts:`, which an `agents:` entry may also carry — see [attempts-timeout.md](attempts-timeout.md).
-2. Build a system message combining the agent's persona with working-directory context (any `context_paths:` files are delivered as synthetic `read_file` tool results — see below).
+2. Build a system message combining the agent's persona with working-directory context (any `context_paths:` files are delivered as synthetic `read_file` tool results — see below), plus a one-line disclosure of the step's resolved wall-clock deadline when one applies — see the timeout note under step 4.
 3. Loop, up to `max_turns`:
    - Send the conversation + tool definitions to the model.
    - If the model requests tools, execute them (`read_file`, `list_dir`, `search_files`, `run_shell`, `write_file`, `edit_file`, `web_fetch`, or a custom/sub-agent tool).
@@ -16,6 +16,7 @@ An agent step runs a tool-calling conversation loop:
 4. Exit when the model stops requesting tools, `max_turns` is exceeded, or [loop detection](agents-internals.md#loop-detection) kills a stuck conversation.
    - A spent turn budget **ends** the conversation rather than destroying it: the runner makes one final request with the tools withheld, asking the model to answer from what it already gathered, and records the answer with `wrapped_up: true` so a degraded answer is tellable from a confident one.
    - If that final request *itself* fails — a 5xx, or a token ceiling breached by it — the step reports **that** failure, unmarked, so it classifies as `errored` and fires `on_error`.
+   - The wall-clock `timeout:` (see [attempts-timeout.md](attempts-timeout.md)) is handled differently, and proactively rather than only at the end: the model is told its deadline once, up front, in the system message, and — once less than a fifth of that budget remains — gets one mid-conversation nudge to wrap up. Neither costs a turn or ends the conversation; tools stay granted throughout. Only the deadline itself expiring does that, by cancelling the request outright with no further message — there is no wrap-up request for a wall-clock timeout the way there is for a spent turn budget, since the model was already warned it was coming.
 5. Print the model's final response text to the terminal, followed by its verdict and note if the step declares `verdicts:`.
 6. Record the step's output.
 

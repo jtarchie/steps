@@ -1292,3 +1292,102 @@ func TestSpendPanelKnowsTheEnsembleJudgesCeiling(t *testing.T) {
 		t.Errorf("the judge's ceiling is called unknown on a run whose configuration is the loaded one: %s", body)
 	}
 }
+
+// timeoutPipeline is two agents differing only in timeout: — one left unset
+// (the implicit 30m default resolves to a real deadline) and one set to "0"
+// (unlimited) — for TestRunPageShowsATimeoutCountdown.
+func timeoutPipeline(t *testing.T) (*Server, *Pipeline) {
+	t.Helper()
+
+	return serverFromYAML(t, `
+agents:
+  - name: reviewer
+    source: { model: openrouter/qwen/qwen3.7-flash }
+  - name: patient
+    source: { model: openrouter/qwen/qwen3.7-flash }
+
+jobs:
+  - name: review
+    plan:
+      - agent: reviewer
+        messages: ["go"]
+      - agent: patient
+        messages: ["go"]
+        timeout: "0"
+`)
+}
+
+// timeoutPipelineSHA loads timeoutPipeline and fails the test outright if it
+// somehow carries no revision to match runs against — every test below
+// needs one to start a run under.
+func timeoutPipelineSHA(t *testing.T) (*Server, *Pipeline, string) {
+	t.Helper()
+
+	server, pipeline := timeoutPipeline(t)
+
+	sha := pipeline.Config().Revision.SHA
+	if sha == "" {
+		t.Fatal("the loaded config carries no revision to match against")
+	}
+
+	return server, pipeline, sha
+}
+
+// TestRunPageShowsATimeoutCountdownForABoundedRunningAgentStep is the
+// producing half of attachStepDeadlines: a countdown appears for a running
+// agent step with a resolved (non-unlimited) timeout, and nowhere else —
+// not for a step whose timeout: is explicitly unlimited, not for a
+// non-agent step.
+func TestRunPageShowsATimeoutCountdownForABoundedRunningAgentStep(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline, sha := timeoutPipelineSHA(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-deadline", "review", t.TempDir(), sha)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-deadline", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1},
+		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "patient", StepKind: "agent", StepID: 2},
+		{Type: events.TypeStepStarted, StepIndex: 2, StepName: "build", StepKind: "task", StepID: 3},
+	})
+
+	_, body := get(t, server, "/p/demo/runs/run-deadline")
+
+	if !strings.Contains(body, "data-deadline=") {
+		t.Errorf("expected a countdown for the default-timeout running agent step: %s", body)
+	}
+
+	if got := strings.Count(body, "data-deadline="); got != 1 {
+		t.Errorf("got %d countdowns, want exactly 1 (the unlimited agent and the task step must not get one): %s", got, body)
+	}
+}
+
+// TestRunPageOmitsTheCountdownOnceAStepHasFinished is the other half: the
+// countdown is a property of a step still running, not of the agent it
+// named.
+func TestRunPageOmitsTheCountdownOnceAStepHasFinished(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline, sha := timeoutPipelineSHA(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-done", "review", t.TempDir(), sha)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-done", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1, Status: "succeeded"},
+	})
+
+	_, body := get(t, server, "/p/demo/runs/run-done")
+
+	if strings.Contains(body, "data-deadline=") {
+		t.Errorf("a finished step must not show a countdown: %s", body)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
@@ -361,4 +362,76 @@ func agentCeilings(cfg *config.Config, jobName, runSHA string) (map[string]strin
 	}
 
 	return ceilings, false
+}
+
+// agentTimeouts is what each agent step of one job would be held to on the
+// currently loaded configuration, by AGENT name — the resolved wall-clock
+// ceiling (config.ResolvedAgentTimeout, 0 meaning unlimited), gated on the
+// same run-configuration match as agentCeilings and for the same reason:
+// today's timeout: for last week's run is the one wrong answer worse than
+// none.
+func agentTimeouts(cfg *config.Config, jobName, runSHA string) (map[string]time.Duration, bool) {
+	if cfg == nil || cfg.Revision.SHA == "" || runSHA != cfg.Revision.SHA {
+		return nil, true
+	}
+
+	job, err := cfg.FindJob(jobName)
+	if err != nil {
+		return nil, true
+	}
+
+	timeouts := map[string]time.Duration{}
+
+	for _, dial := range agentDials(cfg, *job) {
+		if dial.Broken != "" {
+			continue
+		}
+
+		timeouts[dial.Agent] = config.ResolvedAgentTimeout(dial.Timeout)
+	}
+
+	return timeouts, false
+}
+
+// timeoutForStep mirrors runView.ceilingFor's agent/cell-name reconciliation
+// (an across: cell renames itself to "<agent> [k=v]" but resolves through
+// the same agent) against a map keyed by agent name.
+func timeoutForStep(timeouts map[string]time.Duration, stepName string) (time.Duration, bool) {
+	if d, known := timeouts[stepName]; known {
+		return d, true
+	}
+
+	if at := strings.LastIndex(stepName, " ["); at > 0 && strings.HasSuffix(stepName, "]") {
+		d, known := timeouts[stepName[:at]]
+
+		return d, known
+	}
+
+	return 0, false
+}
+
+// attachStepDeadlines resolves each currently-running agent step's wall-clock
+// deadline (Started + its resolved timeout:) so the run page can show a
+// countdown alongside the elapsed time it already shows. Left at zero for
+// every step when the run's configuration has drifted (agentTimeouts' own
+// gate), for a non-agent or finished step, or for a step whose resolved
+// timeout is unlimited.
+func attachStepDeadlines(view *runView, cfg *config.Config, jobName, runSHA string) {
+	timeouts, drifted := agentTimeouts(cfg, jobName, runSHA)
+	if drifted {
+		return
+	}
+
+	for _, step := range view.Steps {
+		if step.Kind != "agent" || !step.Running() || step.Started.IsZero() {
+			continue
+		}
+
+		timeout, known := timeoutForStep(timeouts, step.Name)
+		if !known || timeout == 0 {
+			continue
+		}
+
+		step.Deadline = step.Started.Add(timeout)
+	}
 }

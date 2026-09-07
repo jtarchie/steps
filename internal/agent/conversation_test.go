@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
@@ -32,12 +33,22 @@ type fakeLLM struct {
 	errs      []error
 	calls     int
 	requests  []*model.LLMRequest
+	// delay, when set, sleeps for real before yielding a response — used only
+	// by the proactive timeout-warning tests (TestRunConversationLoopTimeoutWarning)
+	// to force real wall-clock time to pass between turns without depending on
+	// scheduler jitter for the outcome: the test picks a ctx deadline far
+	// shorter than delay, so the margin swamps any timer imprecision.
+	delay time.Duration
 }
 
 func (f *fakeLLM) Name() string { return "fake" }
 
 func (f *fakeLLM) GenerateContent(_ context.Context, req *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
+		if f.delay > 0 {
+			time.Sleep(f.delay)
+		}
+
 		i := f.calls
 		f.calls++
 		// runAgentConversation reuses and mutates the same *LLMRequest across
@@ -204,6 +215,138 @@ func TestRunAgentConversationExceedsMaxTurns(t *testing.T) {
 
 	if res.turns != testMaxTurns {
 		t.Errorf("turns = %d, want %d", res.turns, testMaxTurns)
+	}
+}
+
+func TestTimeoutWarningDue(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		budgetAtEntry time.Duration
+		remaining     time.Duration
+		want          bool
+	}{
+		{"comfortably within budget", time.Minute, 50 * time.Second, false},
+		{"exactly at the threshold fires", time.Minute, 12 * time.Second, true},
+		{"just above the threshold does not", time.Minute, 13 * time.Second, false},
+		{"already past the deadline fires", time.Minute, -5 * time.Second, true},
+		{"no deadline (zero budget) never fires", 0, -5 * time.Second, false},
+		{"a deadline already passed at entry never fires", -time.Minute, -2 * time.Minute, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := timeoutWarningDue(tc.budgetAtEntry, tc.remaining); got != tc.want {
+				t.Errorf("timeoutWarningDue(%v, %v) = %v, want %v", tc.budgetAtEntry, tc.remaining, got, tc.want)
+			}
+		})
+	}
+}
+
+// warningTextIn reports whether any content across requests carries
+// timeoutWarningText.
+func warningTextIn(requests []*model.LLMRequest) bool {
+	for _, req := range requests {
+		for _, c := range req.Contents {
+			for _, p := range c.Parts {
+				if p.Text == timeoutWarningText {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// timeoutWarningTestResponses is turn 1 (a tool call, keeping the
+// conversation going into turn 2) then turn 2 (a plain text answer, ending
+// it) — shared by every TestTimeoutWarning* test below.
+func timeoutWarningTestResponses() []*model.LLMResponse {
+	return []*model.LLMResponse{
+		{Content: &genai.Content{
+			Role:  genai.RoleModel,
+			Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "call1", Name: "run_shell", Args: map[string]any{"command": "echo hi"}}}},
+		}},
+		{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "done"}}}},
+	}
+}
+
+// TestTimeoutWarningFiresBeforeDeadline: the fake sleeps BEFORE returning
+// turn 1's response, so by the top of turn 2 (where the warning check runs)
+// real elapsed time already exceeds the short ctx deadline below —
+// deterministically, since the sleep (40ms) is chosen far longer than the
+// deadline (10ms), swamping any scheduler jitter.
+func TestTimeoutWarningFiresBeforeDeadline(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	fake := &fakeLLM{responses: timeoutWarningTestResponses(), delay: 40 * time.Millisecond}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	res, err := runAgentConversation(ctx, fake, newTestConversation(t, "do the thing", dir))
+	if err != nil {
+		t.Fatalf("runAgentConversation: %v", err)
+	}
+
+	if res.text != "done" {
+		t.Errorf("text = %q, want %q", res.text, "done")
+	}
+
+	if len(fake.requests) != 2 {
+		t.Fatalf("got %d requests, want 2", len(fake.requests))
+	}
+
+	if warningTextIn(fake.requests[:1]) {
+		t.Error("the warning must not appear in the first request — the deadline had not yet been crossed")
+	}
+
+	if !warningTextIn(fake.requests[1:]) {
+		t.Error("expected the timeout warning in the second request's contents")
+	}
+
+	if fake.requests[1].Config.Tools == nil {
+		t.Error("tools must stay granted after the warning — unlike answerWithoutTools, this is not a wrap-up")
+	}
+}
+
+func TestTimeoutWarningNeverFiresWithinBudget(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	fake := &fakeLLM{responses: timeoutWarningTestResponses()}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+
+	_, err := runAgentConversation(ctx, fake, newTestConversation(t, "do the thing", dir))
+	if err != nil {
+		t.Fatalf("runAgentConversation: %v", err)
+	}
+
+	if warningTextIn(fake.requests) {
+		t.Error("did not expect a timeout warning with an hour of budget left")
+	}
+}
+
+func TestTimeoutWarningNeverFiresWithNoDeadline(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	fake := &fakeLLM{responses: timeoutWarningTestResponses()}
+
+	_, err := runAgentConversation(context.Background(), fake, newTestConversation(t, "do the thing", dir))
+	if err != nil {
+		t.Fatalf("runAgentConversation: %v", err)
+	}
+
+	if warningTextIn(fake.requests) {
+		t.Error("did not expect a timeout warning on a context with no deadline")
 	}
 }
 

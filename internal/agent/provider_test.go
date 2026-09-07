@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 )
@@ -55,7 +56,7 @@ func TestBuildSystemMessage(t *testing.T) {
 	t.Run("custom persona is preserved and dir noted", func(t *testing.T) {
 		t.Parallel()
 
-		got := buildSystemMessage("You are a terse reviewer.", "/work/prs")
+		got := buildSystemMessage("You are a terse reviewer.", "/work/prs", noAgentDeadline)
 		if !strings.HasPrefix(got, "You are a terse reviewer.") {
 			t.Errorf("persona not preserved: %q", got)
 		}
@@ -68,7 +69,7 @@ func TestBuildSystemMessage(t *testing.T) {
 	t.Run("empty persona falls back to the default", func(t *testing.T) {
 		t.Parallel()
 
-		got := buildSystemMessage("", "/work")
+		got := buildSystemMessage("", "/work", noAgentDeadline)
 		if !strings.HasPrefix(got, defaultAgentPersona) {
 			t.Errorf("expected the default persona, got %q", got)
 		}
@@ -77,9 +78,31 @@ func TestBuildSystemMessage(t *testing.T) {
 	t.Run("context blocks are NOT in the system message", func(t *testing.T) {
 		t.Parallel()
 
-		got := buildSystemMessage("persona", "/work")
+		got := buildSystemMessage("persona", "/work", noAgentDeadline)
 		if strings.Contains(got, "<context") || strings.Contains(got, "</context>") {
 			t.Errorf("system message should not contain context blocks: %q", got)
+		}
+	})
+
+	t.Run("noAgentDeadline (timeout: 0) discloses no deadline", func(t *testing.T) {
+		t.Parallel()
+
+		got := buildSystemMessage("persona", "/work", noAgentDeadline)
+		if strings.Contains(got, "wall-clock deadline") {
+			t.Errorf("expected no timeout disclosure for noAgentDeadline, got %q", got)
+		}
+	})
+
+	t.Run("a real timeout is disclosed", func(t *testing.T) {
+		t.Parallel()
+
+		got := buildSystemMessage("persona", "/work", 30*time.Minute)
+		if !strings.Contains(got, "wall-clock deadline") {
+			t.Errorf("expected a timeout disclosure, got %q", got)
+		}
+
+		if !strings.Contains(got, "30m0s") {
+			t.Errorf("expected the disclosed duration to appear, got %q", got)
 		}
 	})
 }

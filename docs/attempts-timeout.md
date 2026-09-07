@@ -293,6 +293,8 @@ jobs:
 > **Deleting a `timeout:` from an agent step therefore does not remove its deadline — it may shorten it.** Removing `timeout: 45m` leaves 30m, not "no limit". A long-running agent (a coding agent over 100+ turns) needs an explicit generous value. The symptom when 30 minutes isn't enough is `agent: generate content: context deadline exceeded`, classified not-retryable, because a fresh conversation would hit the same wall.
 >
 > `task:`/`put:`/`get:` steps have no such default: unset means no deadline.
+>
+> **The model is told about this deadline — it is not a silent cutoff.** Whenever a resolved `timeout:` applies (the implicit 30m default counts), the agent's system message discloses it once, up front. Once less than a fifth of that budget remains, the conversation gets one further nudge to wrap up — a plain message, tools left granted, costing no turn of its own. Neither disclosure ends the conversation; only the deadline actually expiring does that, the same `context deadline exceeded` cutoff described above. An explicit `timeout: "0"` (no deadline) discloses nothing, since there is nothing to disclose. The web UI's run page mirrors the same resolved deadline as a live countdown beside a running agent step's elapsed time.
 
 ## Put the deadline on the agent, not on every step
 

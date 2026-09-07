@@ -332,11 +332,19 @@
     document.querySelectorAll('time[data-elapsed-since]').forEach(function (node) {
       node.textContent = fmt(now - Date.parse(node.dataset.elapsedSince));
     });
+    // The countdown counterpart: how long until a running agent step's
+    // resolved timeout: expires, rather than how long it has run. Floored at
+    // "expired" instead of ticking on into a negative duration, which fmt
+    // does not format.
+    document.querySelectorAll('time[data-deadline]').forEach(function (node) {
+      var remaining = Date.parse(node.dataset.deadline) - now;
+      node.textContent = remaining <= 0 ? 'expired' : fmt(remaining);
+    });
   }
 
   // A second only when something is actively counting; otherwise half a
   // minute is plenty for text measured in minutes and hours.
-  var live = document.querySelector('time[data-elapsed-since]') !== null;
+  var live = document.querySelector('time[data-elapsed-since], time[data-deadline]') !== null;
   setInterval(tick, live ? 1000 : 30000);
 })();
 </script>

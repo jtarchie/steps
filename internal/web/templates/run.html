@@ -276,6 +276,7 @@
       <span class="dur">
         {{if and (not $step.Skipped) (not $step.Running)}}{{duration $step.Duration}}{{end}}
         {{if $step.Running}}<time class="live" data-elapsed-since="{{rfc3339 $step.Started}}">{{duration $step.Elapsed}}</time>{{end}}
+        {{if $step.HasDeadline}}<span class="note timeout-left">timeout in <time class="live countdown" data-deadline="{{rfc3339 $step.Deadline}}">{{duration $step.Remaining}}</time></span>{{end}}
         {{if $step.Hash}} · <a class="hash" href="/p/{{$page.Nav.Current}}/nodes/{{$step.Hash}}">{{short $step.Hash}}</a>{{end}}
         {{if $step.Running}}<span class="cursor">▍</span>{{end}}
       </span>

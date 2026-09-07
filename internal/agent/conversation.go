@@ -542,8 +542,28 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 
 	turn := 0
 
+	// timeoutDeadline/hasTimeout/budgetAtEntry anchor the proactive warning
+	// below to how much of THIS attempt's own deadline was left when it
+	// started. Recomputed fresh per call to runConversationLoop (i.e. per
+	// cascade attempt) rather than carried in resumeCheckpoint: a source that
+	// picks up a conversation close to the step's shared deadline (see
+	// failover.go) is judged against what it actually has left, not what the
+	// very first source started with. timeoutWarned is likewise loop-local —
+	// a swap re-arming it is a harmless, rare duplicate notice, not a
+	// correctness issue.
+	timeoutDeadline, hasTimeout := ctx.Deadline()
+
+	var budgetAtEntry time.Duration
+	if hasTimeout {
+		budgetAtEntry = time.Until(timeoutDeadline)
+	}
+
+	timeoutWarned := false
+
 	for ; budget == unlimitedTurns || turn < budget; turn++ {
 		state.summary, state.stalled = maybeCompact(ctx, llm, req, conv, state.summary, state.stalled)
+
+		maybeWarnTimeout(req, hasTimeout, timeoutDeadline, budgetAtEntry, &timeoutWarned)
 
 		// The budget is checked before the turn's tool calls run: a step that
 		// has already blown its ceiling must not go on to have side effects.
@@ -733,6 +753,58 @@ func (conv agentConversation) outOfTurns(
 
 	//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
 	return exhausted, outcome.Fail(fmt.Errorf("agent exceeded %d turns without a final response, and produced none when asked to answer from what it had", conv.maxTurns))
+}
+
+// timeoutWarningText is injected once, mid-conversation, when
+// timeoutWarningDue fires. Unlike answerWithoutTools' reactive turn-budget
+// nudge, this is proactive and does not end the attempt: tools stay
+// granted, and the message rides along with the next regular turn instead
+// of forcing an extra tools-withheld request.
+const timeoutWarningText = "Your wall-clock deadline is approaching. Wrap up soon: work still in progress when it expires will be cut off mid-request with no chance to respond."
+
+// timeoutWarningFraction is the share of an attempt's starting budget that
+// must remain before timeoutWarningDue stops firing — the warning goes out
+// once remaining time drops to (at most) a fifth of what this attempt had
+// when it began.
+const timeoutWarningFraction = 5
+
+// timeoutWarningDue reports whether remaining has dropped to or below
+// budgetAtEntry/timeoutWarningFraction. budgetAtEntry <= 0 — no deadline
+// applies, or one had already passed by the time this attempt started —
+// never warns: there is no proactive notice left to give.
+func timeoutWarningDue(budgetAtEntry, remaining time.Duration) bool {
+	if budgetAtEntry <= 0 {
+		return false
+	}
+
+	return remaining <= budgetAtEntry/timeoutWarningFraction
+}
+
+// timeoutWarningContent is the synthetic user turn timeoutWarningDue
+// injects — same append shape as answerWithoutTools' turn-budget nudge, but
+// added mid-loop rather than in place of the model's next real turn.
+func timeoutWarningContent() *genai.Content {
+	return &genai.Content{
+		Role:  genai.RoleUser,
+		Parts: []*genai.Part{{Text: timeoutWarningText}},
+	}
+}
+
+// maybeWarnTimeout appends the proactive timeout warning to req exactly
+// once, when hasTimeout and timeoutWarningDue agree it is due. Extracted
+// from runConversationLoop to keep its cyclomatic complexity under the
+// linter budget.
+func maybeWarnTimeout(req *model.LLMRequest, hasTimeout bool, deadline time.Time, budgetAtEntry time.Duration, warned *bool) {
+	if !hasTimeout || *warned {
+		return
+	}
+
+	if !timeoutWarningDue(budgetAtEntry, time.Until(deadline)) {
+		return
+	}
+
+	req.Contents = append(req.Contents, timeoutWarningContent())
+	*warned = true
 }
 
 // answerWithoutTools makes the final request of a conversation whose budget is

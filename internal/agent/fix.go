@@ -132,8 +132,13 @@ func RunFix(
 		return fmt.Errorf("fix agent %q: %w", fix.Agent, err)
 	}
 
+	// Computed here, before buildSystemMessage, rather than just before
+	// runOneConversation below (where it used to live): the disclosure needs
+	// the same resolved value the deadline itself will use.
+	timeout := agentTimeout(ri.Timeout)
+
 	conv := agentConversation{
-		system:        buildSystemMessage(ri.Persona, dir),
+		system:        buildSystemMessage(ri.Persona, dir, timeout),
 		messages:      messages,
 		contextBlocks: contextBlocks,
 		env:           toolEnv{dir: dir, runner: runner, spillDir: spillDir, ask: askContext(st, jobName, fix.Agent)},
@@ -163,8 +168,6 @@ func RunFix(
 	defer conv.usage.finish()
 
 	llm := newAgentLLM(ri, apiKey)
-
-	timeout := agentTimeout(ri.Timeout)
 
 	// Keep the latest attempt's result either way, same as runPrepared: on
 	// success it's the fix agent's own account of what it did (the

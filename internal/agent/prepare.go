@@ -238,7 +238,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	conv := agentConversation{
-		system:        buildSystemMessage(ri.Persona, dir),
+		system:        buildSystemMessage(ri.Persona, dir, agentTimeout(ri.Timeout)),
 		messages:      step.Messages,
 		contextBlocks: contextBlocks,
 		upstream:      upstreamBlocks(ctx, step),

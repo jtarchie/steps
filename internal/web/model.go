@@ -51,6 +51,13 @@ type stepView struct {
 	Worker   string
 	Duration time.Duration
 	Started  time.Time
+	// Deadline is when a running agent step's resolved timeout: expires —
+	// Started plus the ceiling — set by attachStepDeadlines (overview.go).
+	// Zero (HasDeadline false) for a finished or non-agent step, an
+	// unlimited timeout, or a run whose configuration no longer matches
+	// what is loaded — the same "unknowable, not uncapped" reasoning
+	// runView.Ceilings documents.
+	Deadline time.Time
 	// Turns is agent conversation traffic that arrived while this step was
 	// the one running. Empty for every other kind.
 	Turns []turnView
@@ -78,6 +85,25 @@ func (s stepView) Elapsed() time.Duration {
 	}
 
 	return time.Since(s.Started)
+}
+
+// HasDeadline reports whether Deadline could be resolved for this step.
+func (s stepView) HasDeadline() bool { return !s.Deadline.IsZero() }
+
+// Remaining is how long until Deadline, for the row's own clock — the
+// countdown counterpart to Elapsed, floored at 0 rather than going negative
+// for the rare page load that lands after the deadline technically passed
+// but before the step's own end event has arrived.
+func (s stepView) Remaining() time.Duration {
+	if s.Deadline.IsZero() {
+		return 0
+	}
+
+	if remaining := time.Until(s.Deadline); remaining > 0 {
+		return remaining
+	}
+
+	return 0
 }
 
 // Skipped reports a step that did not execute.

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	genaiopenai "github.com/achetronic/adk-utils-go/genai/openai/completions"
 	"google.golang.org/adk/v2/model"
@@ -28,6 +29,14 @@ const defaultAgentPersona = `You are an automated agent running as one step of a
 // resolved working directory.
 const agentOperatingNote = `Your working directory is %s. Use the tools available to you (all scoped to that directory) to complete the task described below. When finished, reply with a final plain-text message and no further tool calls.`
 
+// agentTimeoutNote discloses this conversation's wall-clock deadline, so the
+// model can pace itself instead of being cut off mid-request with no warning
+// it was ever running against a clock. Appended only when a deadline
+// actually applies (see buildSystemMessage) — an agent step's timeout: is
+// otherwise invisible to the model, which used to learn about it only by
+// being cut off.
+const agentTimeoutNote = `This conversation has a wall-clock deadline: it must finish within %s from now, or it will be cut off mid-request with no chance to respond.`
+
 // contextBlock is one resolved context_paths: file — the path as declared
 // (shown to the model, so it can cite or re-read the file) and its full
 // contents.
@@ -37,15 +46,27 @@ type contextBlock struct {
 }
 
 // buildSystemMessage combines an agent's persona with the operating note
-// for a given working directory. context_paths content is no longer injected
-// here — it is delivered as synthetic read_file tool results (see
-// buildAgentRequest).
-func buildSystemMessage(persona, dir string) string {
+// for a given working directory, plus a timeout disclosure when timeout is
+// a real deadline (not noAgentDeadline — timeout: "0"). context_paths
+// content is no longer injected here — it is delivered as synthetic
+// read_file tool results (see buildAgentRequest).
+//
+// Folded into the system message rather than appended as an ordinary user
+// turn: SystemInstruction is separate from req.Contents and survives
+// maybeCompact untouched, so the disclosure is still visible late into a
+// long, compacted conversation.
+func buildSystemMessage(persona, dir string, timeout time.Duration) string {
 	if persona == "" {
 		persona = defaultAgentPersona
 	}
 
-	return persona + "\n\n" + fmt.Sprintf(agentOperatingNote, dir)
+	msg := persona + "\n\n" + fmt.Sprintf(agentOperatingNote, dir)
+
+	if timeout != noAgentDeadline {
+		msg += "\n\n" + fmt.Sprintf(agentTimeoutNote, timeout.Round(time.Second))
+	}
+
+	return msg
 }
 
 // loadContextBlocks reads an agent's declared context_paths out of the

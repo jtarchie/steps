@@ -26,32 +26,21 @@ import (
 // relies entirely on ctx. 30 minutes: a 30-turn conversation on a slow or
 // reasoning-heavy model routinely outlives the previous 10, and a step
 // that wants a tighter leash sets timeout: itself.
-const agentStepTimeout = 30 * time.Minute
-
-// agentTimeout resolves the per-attempt conversation deadline. It returns
-// noAgentDeadline when the step asked for none — an explicit timeout: 0,
-// which is the only way to opt out of the implicit ceiling above, since an
-// EMPTY timeout: on an agent step means "the default", not "no limit".
 //
-// A parse error can't happen for a validated config (config.validateTimeouts
-// rejects it at LoadConfig), so an unexpected one falls back to the default
-// rather than failing the run — and deliberately not to "no deadline", which
-// would turn a typo into an unbounded step.
+// The value itself lives in internal/config (DefaultAgentStepTimeout), not
+// here, so internal/web can resolve the same effective deadline a running
+// step is actually held to without importing internal/agent.
+const agentStepTimeout = config.DefaultAgentStepTimeout
+
+// agentTimeout resolves the per-attempt conversation deadline, delegating to
+// config.ResolvedAgentTimeout (the empty/zero/parse-error rules are
+// documented there — internal/web's job-page dials table and web countdown
+// resolve a step's timeout the same way, off the same function).
+// noAgentDeadline is what it returns for an explicit timeout: 0, the only
+// way to opt out of the implicit ceiling above, since an EMPTY timeout: on
+// an agent step means "the default", not "no limit".
 func agentTimeout(riTimeout string) time.Duration {
-	if riTimeout == "" {
-		return agentStepTimeout
-	}
-
-	parsed, err := config.ParseTimeout(riTimeout)
-	if err != nil {
-		return agentStepTimeout
-	}
-
-	if parsed == 0 {
-		return noAgentDeadline
-	}
-
-	return parsed
+	return config.ResolvedAgentTimeout(riTimeout)
 }
 
 // noAgentDeadline is what agentTimeout returns for timeout: 0. Callers must

@@ -196,6 +196,11 @@ func (s *Server) assembleRun(c echo.Context, run store.RunRow) (runView, error) 
 
 	view := buildRunView(run, rows, nodes)
 
+	// Independent of the usage query below: a countdown on a running step
+	// needs no spend history, only the config a running step's deadline is
+	// resolved against.
+	attachStepDeadlines(&view, pipeline.Config(), run.JobName, run.ConfigSHA)
+
 	// Best-effort: a run page that cannot show spend is worth more than one
 	// that 500s over it. A run predating this table simply has none.
 	usage, err := pipeline.Store.RunUsage(ctx, run.ID)
