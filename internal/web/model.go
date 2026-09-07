@@ -403,6 +403,18 @@ type turnView struct {
 // step's own conversation.
 func (t turnView) Nested() bool { return t.Depth > 0 }
 
+// IsMessage reports a turn that was SENT to the model — a system prompt or a
+// user message — as opposed to one it wrote. The template branches on this
+// rather than on a third copy of the type-string list, so run.html and
+// node.html can agree on which turns are shown literally and coloured
+// versus rendered as prose (see prose.go's file comment).
+func (t turnView) IsMessage() bool {
+	return t.Type == events.TypeAgentSystem || t.Type == events.TypeAgentUser
+}
+
+// IsModelText reports the model's own running commentary or final answer.
+func (t turnView) IsModelText() bool { return t.Type == events.TypeAgentText }
+
 // runView is a whole run, assembled.
 type runView struct {
 	Run store.RunRow

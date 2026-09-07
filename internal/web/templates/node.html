@@ -53,9 +53,9 @@
 {{define "turns"}}
 {{range .}}
   {{if eq .Type "system"}}
-  <div class="turn system"><span class="who">system</span><div class="what"><div class="prose">{{template "prosebody" .Text}}</div></div></div>
+  <div class="turn system"><span class="who">system</span><div class="what"><span class="say">{{message .Text}}</span></div></div>
   {{else if eq .Type "user"}}
-  <div class="turn user"><span class="who">user</span><div class="what"><div class="prose">{{template "prosebody" .Text}}</div></div></div>
+  <div class="turn user"><span class="who">user</span><div class="what"><span class="say">{{message .Text}}</span></div></div>
   {{else if eq .Type "text"}}
   <div class="turn model"><span class="who">model</span><div class="what"><div class="prose">{{template "prosebody" .Text}}</div></div></div>
   {{else if eq .Type "call"}}

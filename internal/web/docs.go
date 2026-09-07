@@ -43,6 +43,15 @@ var docsCodeStyle = chroma.MustNewStyle("steps", chroma.StyleEntries{
 	chroma.Operator:          "#83887b",
 	chroma.Punctuation:       "#83887b",
 	chroma.GenericSubheading: "#83887b",
+	// The rest of Generic*, added for diff and markdown detection
+	// (internal/web/detect.go): without these a highlighted diff or heading
+	// rendered flat, one colour, which made the single most valuable
+	// detection buy nothing.
+	chroma.GenericDeleted:  "#e0645a",      // --red: a removed line — the ANSI-16 reading this whole UI is built on
+	chroma.GenericInserted: "#84c06d",      // --green: an added line
+	chroma.GenericHeading:  "bold #7aa4d9", // --blue: `diff --git`/`Index:` lines, a markdown h1
+	chroma.GenericStrong:   "bold",         // markdown **bold**, a diff's ! line
+	chroma.GenericEmph:     "italic",       // markdown _emph_
 })
 
 // markdown is the shared converter: GFM for the docs' tables, heading ids so

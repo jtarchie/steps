@@ -9,7 +9,11 @@ package web
 
 import (
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/lexers"
 )
 
 func TestRenderProseRendersWhatModelsWrite(t *testing.T) {
@@ -146,4 +150,119 @@ func TestRenderProseIsEmptyForEmptyInput(t *testing.T) {
 			t.Errorf("renderProse(%q) = %q, want empty", input, got)
 		}
 	}
+}
+
+// TestDiffRendersAddedAndRemovedDistinctly pins docsCodeStyle's Generic*
+// entries: without them a highlighted diff renders flat, one colour, which
+// makes the single most valuable detection buy nothing.
+func TestDiffRendersAddedAndRemovedDistinctly(t *testing.T) {
+	t.Parallel()
+
+	diff := "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old line\n+new line\n"
+
+	got := string(highlightCode(diff, "diff"))
+
+	if !strings.Contains(got, "#e0645a") {
+		t.Errorf("diff rendering missing the removed-line colour: %s", got)
+	}
+
+	if !strings.Contains(got, "#84c06d") {
+		t.Errorf("diff rendering missing the added-line colour: %s", got)
+	}
+}
+
+// TestHighlightEscapes is the security contract for the highlighting path,
+// mirroring TestRenderProseRefusesToActOnThePage for prose: none of these
+// entry points may let model- or file-authored content act on the page.
+func TestHighlightEscapes(t *testing.T) {
+	t.Parallel()
+
+	const payload = `<script>alert(1)</script>`
+
+	for name, got := range map[string]string{
+		"highlightMessage": string(highlightMessage(payload)),
+		"highlightPayload": string(highlightPayload(payload)),
+		"renderModelText":  string(renderModelText(payload)),
+	} {
+		if strings.Contains(got, "<script") {
+			t.Errorf("%s(%q) leaked a raw <script>: %s", name, payload, got)
+		}
+	}
+}
+
+// panicLexer is a chroma.Lexer whose Tokenise always panics, used to prove
+// highlightCode's recover actually fires rather than merely existing.
+type panicLexer struct{}
+
+func (panicLexer) Config() *chroma.Config { return &chroma.Config{Name: "panic-test-lexer"} }
+
+func (panicLexer) Tokenise(*chroma.TokeniseOptions, string) (chroma.Iterator, error) {
+	panic("boom")
+}
+
+func (l panicLexer) SetRegistry(*chroma.LexerRegistry) chroma.Lexer { return l }
+
+func (l panicLexer) SetAnalyser(func(string) float32) chroma.Lexer { return l }
+
+func (panicLexer) AnalyseText(string) float32 { return 0 }
+
+// TestHighlightSurvivesAPanic is the resiliency hole a highlighter reachable
+// from every message and payload opens: a panic inside a template func
+// propagates out of ExecuteTemplate as a 500 on the page a person is
+// triaging on, and kills the live stream's flush goroutine. The fallback
+// must be escaped plain text, not a crash.
+func TestHighlightSurvivesAPanic(t *testing.T) {
+	// Registered here, NOT via t.Parallel(): this happens during the test
+	// binary's strictly-sequential phase (every test's code before its own
+	// call to t.Parallel() runs one at a time), before any other test's
+	// parallel phase resumes concurrently — chroma's LexerRegistry has no
+	// lock, so registering after t.Parallel() would race every other
+	// parallel test's lexers.Get.
+	lexers.Register(panicLexer{})
+
+	t.Parallel()
+
+	got := highlightCode(`<script>still escaped</script>`, "panic-test-lexer")
+
+	if strings.Contains(string(got), "<script") {
+		t.Errorf("recovered output leaked markup: %s", got)
+	}
+
+	if !strings.Contains(string(got), "still escaped") {
+		t.Errorf("recovered output dropped the text entirely: %s", got)
+	}
+}
+
+// TestHighlightIsSafeForConcurrentRenders exercises the package-level
+// formatter and lexer registry from many goroutines at once — the page
+// renderer and the live stream's flush goroutine are exactly this shape.
+// -race is what actually catches a regression here.
+func TestHighlightIsSafeForConcurrentRenders(t *testing.T) {
+	t.Parallel()
+
+	const goroutines = 16
+
+	inputs := []string{
+		"package main\n\nfunc main() {}\n",
+		"--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n",
+		"just an ordinary sentence about the weather",
+		`{"a": 1, "b": [1, 2, 3]}`,
+	}
+
+	var wg sync.WaitGroup
+
+	for i := range goroutines {
+		wg.Add(1)
+
+		go func(n int) {
+			defer wg.Done()
+
+			text := inputs[n%len(inputs)]
+			_ = highlightMessage(text)
+			_ = highlightPayload(text)
+			_ = renderModelText(text)
+		}(i)
+	}
+
+	wg.Wait()
 }

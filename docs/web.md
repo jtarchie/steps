@@ -107,15 +107,27 @@ the things a scrollback cannot give you:
   often JSON itself — is shown as the document it is, unescaped, still inside
   its quotes so the nesting stays legible. Small payloads sit on the row; a
   bulky one folds behind a summary that names what is inside it (`content ·
-  555 B`), so one 30KB tool result cannot bury the conversation around it.
-- **An agent's answer is rendered as markdown**, because that is what models
-  write: headings, lists, tables, emphasis. A ```` ```json ```` block is
-  highlighted exactly like the tool results above it; every other language goes
-  through the same highlighter `/docs` uses.
+  555 B`), so one 30KB tool result cannot bury the conversation around it. A
+  string value that is not itself JSON is sniffed for a language — Go, YAML,
+  a diff, a shebang script — and colored the same way, line by line.
+- **What was written for a reader is rendered; what was written to the model,
+  and what a program produced, is shown literally and colored.** A model's
+  answer, and its running commentary mid-conversation, is markdown — headings,
+  lists, tables, emphasis, because that is what a model writes for a person to
+  read. A system prompt, a user message, a tool payload and a task's output are
+  never re-rendered: they are text sent to a model or produced by a program,
+  and showing them as anything other than what they are would show something
+  that was never sent or printed. Each is still colored when the content can be
+  told apart from prose with confidence — a diff's `@@` hunks, a YAML document,
+  a Go file, an unfenced JSON blob — through the same highlighter `/docs` uses.
+  Detection is best-effort over a fragment that may be truncated mid-token, and
+  it declines rather than guesses: anything it cannot tell apart from prose
+  renders as plain text. No detected language is ever named on the page — a
+  guess is not a fact, unlike the byte counts and worker names beside it.
 
-  The text came from a model, so the renderer is a deliberately narrowed one.
-  Raw HTML is dropped rather than parsed. A `javascript:` or `data:` link
-  renders with no destination, and every surviving link carries
+  Rendered markdown's renderer is a deliberately narrowed one, because the text
+  came from a model. Raw HTML is dropped rather than parsed. A `javascript:` or
+  `data:` link renders with no destination, and every surviving link carries
   `rel="noopener noreferrer nofollow"`. **Images are never fetched** — an
   `![](http://…)` in a review is a request the browser makes on its own, so the
   page shows the alt text and the host it wanted instead. Headings mint no
