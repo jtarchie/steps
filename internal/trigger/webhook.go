@@ -23,7 +23,6 @@ import (
 	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/store"
 )
 
 // webhookHandler serves POST /check/<resource>?token=… for the resources a
@@ -35,7 +34,7 @@ type webhookHandler struct {
 	// operator had deleted and checking a resource definition the file no
 	// longer held.
 	current ConfigSource
-	st      store.Store
+	st      PollStore
 	// base is the daemon's context: the --worker map and artifact store a
 	// placed check resolves through. A request's own context carries none
 	// of it — the server minted it — so a tagged resource's webhook checked
@@ -209,6 +208,6 @@ func (h *webhookHandler) checkNow(ctx context.Context, cfg *config.Config, name 
 // webhook resource by edit was mounted as nil and 404'd forever, and one that
 // LOST a resource kept an endpoint live that authenticated against a token
 // env var the operator believed they had deleted.
-func WebhookHandler(base context.Context, current ConfigSource, st store.Store) http.Handler {
+func WebhookHandler(base context.Context, current ConfigSource, st PollStore) http.Handler {
 	return &webhookHandler{current: current, st: st, base: base}
 }

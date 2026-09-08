@@ -402,11 +402,18 @@ func (s *Server) flushBatch(
 	return after, more, nil
 }
 
+// eventReader is what one page of a run costs: the events, and the cache the
+// hashes in them name.
+type eventReader interface {
+	store.Events
+	store.Cache
+}
+
 // readBatch is one page of a run's events with the nodes they name — the
 // unit every fold is fed, whether it is the page's one read, the stream's
 // seed or its delta.
 func readBatch(
-	ctx context.Context, st store.Store, runID string, after int64, limit int,
+	ctx context.Context, st eventReader, runID string, after int64, limit int,
 ) ([]store.RunEventRow, map[string]store.NodeRow, error) {
 	rows, err := st.RunEvents(ctx, runID, after, limit)
 	if err != nil {

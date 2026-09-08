@@ -71,9 +71,19 @@ func AffectedJobs(cfg *config.Config, resourceName string) []*config.Job {
 	return jobs
 }
 
+// PollStore is what polling itself touches: the trigger queue it fills and
+// drains (with the breaker that decides which rows may be claimed), and the
+// resource versions a check compares against. Everything else a build records
+// belongs to the build — the drain hands a full store.Store down to
+// pipeline.RunJob and never reads through it here.
+type PollStore interface {
+	store.Queue
+	store.Versions
+}
+
 // prepareWatch runs the checks and state reconciliation a polling process
 // needs before anything polls.
-func prepareWatch(ctx context.Context, cfg *config.Config, st store.Store, interval time.Duration) error {
+func prepareWatch(ctx context.Context, cfg *config.Config, st PollStore, interval time.Duration) error {
 	err := watchable(ctx, cfg, interval)
 	if err != nil {
 		return err
@@ -177,7 +187,7 @@ func WatchOnce(
 //     never check the ones they added — a poller quietly polling a file that
 //     no longer exists. Each cycle takes the current one; only the startup
 //     checks below read it once, because that is when they run.
-func Poll(ctx context.Context, current ConfigSource, st store.Store, interval time.Duration) error {
+func Poll(ctx context.Context, current ConfigSource, st PollStore, interval time.Duration) error {
 	if interval <= 0 {
 		return fmt.Errorf("watch: interval must be positive, got %s", interval)
 	}
@@ -281,7 +291,7 @@ func preflightTriggers(ctx context.Context, cfg *config.Config, resources []stri
 
 // runPoller calls pollOnce immediately and then once per interval tick,
 // until ctx is canceled.
-func runPoller(ctx context.Context, current ConfigSource, st store.Store, interval time.Duration) {
+func runPoller(ctx context.Context, current ConfigSource, st PollStore, interval time.Duration) {
 	admitted := &admission{}
 
 	admitted.poll(ctx, current(), st)
@@ -323,7 +333,7 @@ type admission struct {
 	pollable bool
 }
 
-func (a *admission) poll(ctx context.Context, cfg *config.Config, st store.Store) {
+func (a *admission) poll(ctx context.Context, cfg *config.Config, st PollStore) {
 	if cfg != a.decided {
 		a.decided = cfg
 		a.pollable = a.decide(ctx, cfg)
@@ -374,7 +384,7 @@ func (a *admission) decide(ctx context.Context, cfg *config.Config) bool {
 	return true
 }
 
-func pollAndLog(ctx context.Context, cfg *config.Config, st store.Store) {
+func pollAndLog(ctx context.Context, cfg *config.Config, st PollStore) {
 	ctx, release := leasedChecks(ctx)
 	defer release()
 
@@ -420,7 +430,7 @@ type observedResource struct {
 // first time ever seeds a baseline and is never itself considered dirty on
 // that first check — this keeps a fresh (or freshly lost) state db from
 // mass-triggering every job on watch startup.
-func pollOnce(ctx context.Context, cfg *config.Config, st store.Store) ([]string, error) {
+func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, error) {
 	observed := map[string]observedResource{}
 
 	for _, name := range Resources(cfg) {
@@ -482,7 +492,7 @@ func pollOnce(ctx context.Context, cfg *config.Config, st store.Store) ([]string
 // enqueueAffected enqueues, once each, every job affected by a dirty resource
 // in observed, returning the job names enqueued. It runs before any version
 // is recorded, so a failure here leaves every resource dirty for retry.
-func enqueueAffected(ctx context.Context, cfg *config.Config, st store.Store, observed map[string]observedResource) ([]string, error) {
+func enqueueAffected(ctx context.Context, cfg *config.Config, st PollStore, observed map[string]observedResource) ([]string, error) {
 	reasons, err := affectedJobs(ctx, cfg, st, observed)
 	if err != nil {
 		return nil, err
@@ -508,7 +518,7 @@ func enqueueAffected(ctx context.Context, cfg *config.Config, st store.Store, ob
 // a job then builds is not decided here at all, but read from history when
 // the job runs (see internal/pipeline's loadResourceHistory).
 func affectedJobs(
-	ctx context.Context, cfg *config.Config, st store.Store, observed map[string]observedResource,
+	ctx context.Context, cfg *config.Config, st PollStore, observed map[string]observedResource,
 ) (map[string]string, error) {
 	reasons := map[string]string{}
 
@@ -545,7 +555,7 @@ func affectedJobs(
 // nothing is running for that job, nothing is being said, and the operator
 // cannot tell "nobody has picked this up" from "something is holding the
 // lock". Best-effort — a reporting failure must not fail the drain.
-func reportSerialWaits(ctx context.Context, cfg *config.Config, st store.Store) {
+func reportSerialWaits(ctx context.Context, cfg *config.Config, st PollStore) {
 	for i := range cfg.Jobs {
 		job := &cfg.Jobs[i]
 
@@ -579,7 +589,7 @@ func reportSerialWaits(ctx context.Context, cfg *config.Config, st store.Store) 
 // one at a time (the queue holds at most one pending row per job) until the
 // circuit breaker pauses it, which is what the breaker is for.
 func releaseConstrainedJobs(
-	ctx context.Context, cfg *config.Config, st store.Store, alreadyEnqueued []string,
+	ctx context.Context, cfg *config.Config, st PollStore, alreadyEnqueued []string,
 ) ([]string, error) {
 	var released []string
 
@@ -624,7 +634,7 @@ func releaseConstrainedJobs(
 // against every constrained resource's candidate version — the fact that
 // stops a released job being released again on the next poll.
 func jobAlreadyRanThese(
-	ctx context.Context, st store.Store, jobName string,
+	ctx context.Context, st PollStore, jobName string,
 	constraints map[string][]string,
 ) (bool, error) {
 	want, complete, err := candidateSetFor(ctx, st, constraints)
@@ -655,7 +665,7 @@ func jobAlreadyRanThese(
 // A job held back is not an error and not a lost trigger: the green record
 // is durable, so the poll after the upstream job goes green enqueues it —
 // even if newer, unproven versions have arrived on top in the meantime.
-func jobReadyFor(ctx context.Context, st store.Store, job *config.Job) (bool, error) {
+func jobReadyFor(ctx context.Context, st PollStore, job *config.Job) (bool, error) {
 	// Inverted from resource -> upstream jobs into upstream job -> the set of
 	// constrained resources naming it. That inversion IS the fix: each
 	// upstream job is asked once, about every version it vouches for at once,
@@ -731,7 +741,7 @@ func upstreamJobsOf(job *config.Job) []string {
 // there come from the same durable record rather than a moment that has
 // passed.
 func candidateSetFor(
-	ctx context.Context, st store.Store, constraints map[string][]string,
+	ctx context.Context, st PollStore, constraints map[string][]string,
 ) (want map[string]map[string]any, complete bool, err error) {
 	want = make(map[string]map[string]any, len(constraints))
 
@@ -764,7 +774,7 @@ func candidateSetFor(
 // rather than guessing a window; and, compared against what the check
 // returned, it is the dirty bit that decides whether to enqueue. Reading it
 // once serves both.
-func checkResource(ctx context.Context, cfg *config.Config, st store.Store, resourceName string) (obs observedResource, hasVersion bool, err error) {
+func checkResource(ctx context.Context, cfg *config.Config, st PollStore, resourceName string) (obs observedResource, hasVersion bool, err error) {
 	resource, err := cfg.FindResource(resourceName)
 	if err != nil {
 		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
@@ -829,7 +839,7 @@ func checkResource(ctx context.Context, cfg *config.Config, st store.Store, reso
 // It is the check cursor and, when a check reports nothing new, still the
 // resource's current version.
 func recordedVersion(
-	ctx context.Context, st store.Store, resourceName string,
+	ctx context.Context, st PollStore, resourceName string,
 ) (encoded string, version map[string]any, found bool, err error) {
 	last, found, err := st.LastChecked(ctx, resourceName)
 	if err != nil {
@@ -890,7 +900,7 @@ func recordedVersion(
 // run fans only over what arrived since. The backlog is bounded by the seed,
 // not by version_history:.
 func recordHistory(
-	ctx context.Context, cfg *config.Config, st store.Store, resourceName string, obs observedResource,
+	ctx context.Context, cfg *config.Config, st PollStore, resourceName string, obs observedResource,
 ) (bool, error) {
 	if len(obs.versions) == 0 {
 		return false, nil
@@ -928,7 +938,7 @@ func recordHistory(
 // seedColdStart marks a first-seen resource's whole history as taken for
 // every job that reads it, and records the baseline in the same breath — see
 // recordHistory for why neither may wait for the end of the poll.
-func seedColdStart(ctx context.Context, cfg *config.Config, st store.Store, resourceName, latest string) error {
+func seedColdStart(ctx context.Context, cfg *config.Config, st PollStore, resourceName, latest string) error {
 	orders, err := st.VersionOrders(ctx, resourceName)
 	if err != nil {
 		return fmt.Errorf("trigger resource %q: %w", resourceName, err)
@@ -1000,7 +1010,7 @@ func coldStartMark(orders map[string]int64, latest string) int64 {
 // it. claimed is false when the panic happened before ClaimNextJob returned a
 // row (or ClaimNextJob itself panicked), in which case there's no row to
 // finalize.
-func recoverDrainPanic(ctx context.Context, st store.Store, jobName string, id int64, claimed bool, r any) error {
+func recoverDrainPanic(ctx context.Context, st PollStore, jobName string, id int64, claimed bool, r any) error {
 	slog.Error("trigger.panic", "job", jobName, "recovered", r, "stack", string(debug.Stack()))
 
 	panicErr := fmt.Errorf("recovered from panic running job %q: %v", jobName, r)
@@ -1020,7 +1030,7 @@ func recoverDrainPanic(ctx context.Context, st store.Store, jobName string, id i
 // finalizeMissingJob records a terminal failure for a queued job whose name
 // no longer resolves in cfg (removed from the pipeline between enqueue and
 // claim), returning the error drainOne should report.
-func finalizeMissingJob(ctx context.Context, st store.Store, jobName string, id int64, findErr error) error {
+func finalizeMissingJob(ctx context.Context, st PollStore, jobName string, id int64, findErr error) error {
 	completeErr := st.CompleteJob(context.WithoutCancel(ctx), id, "failed", findErr)
 	if completeErr != nil {
 		return fmt.Errorf("triggered job %q: %w (and could not record failure: %w)", jobName, findErr, completeErr)
@@ -1178,7 +1188,7 @@ func buildContext(ctx context.Context, job *config.Job) (context.Context, contex
 
 // finalizeRun records a completed triggered run: its queue row, its breaker
 // count, and the error the caller reports.
-func finalizeRun(ctx context.Context, st store.Store, job *config.Job, id int64, runErr error) error {
+func finalizeRun(ctx context.Context, st PollStore, job *config.Job, id int64, runErr error) error {
 	// A job interrupted by ctx-cancellation (SIGINT/SIGTERM mid-run) isn't a
 	// real failure: leave its row running so the next watch startup's
 	// ResetStaleRunning re-queues it, rather than marking it failed and
@@ -1219,7 +1229,7 @@ func finalizeRun(ctx context.Context, st store.Store, job *config.Job, id int64,
 // skipIfPaused finalizes a queued row for a job the breaker has taken out of
 // the rotation, rather than leaving it pending — the queue would otherwise
 // fill with work nobody intends to do.
-func skipIfPaused(ctx context.Context, st store.Store, jobName string, id int64) (bool, error) {
+func skipIfPaused(ctx context.Context, st PollStore, jobName string, id int64) (bool, error) {
 	paused, err := st.IsJobPaused(ctx, jobName)
 	if err != nil {
 		return false, fmt.Errorf("triggered job %q: %w", jobName, err)
@@ -1249,7 +1259,7 @@ func skipIfPaused(ctx context.Context, st store.Store, jobName string, id int64)
 //
 // Best-effort by design: failing to record a breaker count must not turn a
 // successful job into a failed one, or mask the real failure of a failed one.
-func recordBreaker(ctx context.Context, st store.Store, job *config.Job, runErr error) {
+func recordBreaker(ctx context.Context, st PollStore, job *config.Job, runErr error) {
 	// Detached: the outcome is already terminal, and a SIGINT arriving here
 	// must not lose the count that a later run reasons about.
 	recCtx := context.WithoutCancel(ctx)

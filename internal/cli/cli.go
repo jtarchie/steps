@@ -930,7 +930,7 @@ func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader store.Reader, 
 // depending on whether a pipeline was named is a command nobody can reason
 // about. The error text moves one command along, to `steps runs steps`, which
 // reports it per step — where the answer to "why did it fail" actually is.
-func (r *RunsListCmd) printJobRuns(ctx context.Context, st store.Store) error {
+func (r *RunsListCmd) printJobRuns(ctx context.Context, st store.Runs) error {
 	rows, err := st.ListRuns(ctx, r.Job, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read runs: %w", err)
@@ -968,7 +968,7 @@ func (r *RunsListCmd) printJobRuns(ctx context.Context, st store.Store) error {
 // handle its runs are recorded against. A command that only READS history
 // never comes through there and records no revision, which is right — it
 // resolved no configuration.
-func RecordRevision(ctx context.Context, st store.Store, cfg *config.Config) error {
+func RecordRevision(ctx context.Context, st store.Revisions, cfg *config.Config) error {
 	if !cfg.Revision.Recorded() {
 		return nil
 	}
@@ -1002,7 +1002,7 @@ func shortConfig(sha string) string {
 	return sha[:shown]
 }
 
-func (r *RunsStepsCmd) printSteps(ctx context.Context, st store.Store) error {
+func (r *RunsStepsCmd) printSteps(ctx context.Context, st store.Cache) error {
 	rows, err := st.ListNodes(ctx, r.Job, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read steps: %w", err)
@@ -1025,7 +1025,7 @@ func (r *RunsStepsCmd) printSteps(ctx context.Context, st store.Store) error {
 	return flush(writer)
 }
 
-func (r *RunsQueueCmd) printQueue(ctx context.Context, st store.Store) error {
+func (r *RunsQueueCmd) printQueue(ctx context.Context, st store.Queue) error {
 	rows, err := st.ListTriggerQueue(ctx, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read the trigger queue: %w", err)
@@ -1668,7 +1668,7 @@ func setup(
 // are truth in. A pipeline with no durable workspace.root: has no step cache
 // to mirror — that half is warned about rather than refused, because the
 // flag's other consumer, a placed step's data plane, works without one.
-func attachArtifactStore(provider workspace.Provider, st store.Store, raw string) error {
+func attachArtifactStore(provider workspace.Provider, st store.Blobs, raw string) error {
 	if raw == "" {
 		return nil
 	}
@@ -2730,7 +2730,7 @@ func applyResume(
 // The cache column is the one worth having: it is the only place prompt
 // caching reports whether it did anything, and a run that suddenly drops from
 // 60% to 0% is the visible half of a bill that doubled.
-func (r *RunsCostCmd) printCostTotals(ctx context.Context, st store.Store) error {
+func (r *RunsCostCmd) printCostTotals(ctx context.Context, st store.Usage) error {
 	totals, err := st.RunCostTotals(ctx, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read usage: %w", err)
@@ -2770,7 +2770,7 @@ func stateNote(state string) string {
 }
 
 // printRunCost breaks one run down per agent step.
-func (r *RunsCostCmd) printRunCost(ctx context.Context, st store.Store) error {
+func (r *RunsCostCmd) printRunCost(ctx context.Context, st store.Usage) error {
 	usage, err := st.RunUsage(ctx, r.RunID)
 	if err != nil {
 		return fmt.Errorf("could not read usage: %w", err)
@@ -2795,6 +2795,14 @@ func (r *RunsCostCmd) printRunCost(ctx context.Context, st store.Store) error {
 	return nil
 }
 
+// placementReader is `steps runs where`: the placements themselves, plus the
+// run history it resolves "the last run of this job" through when no run id
+// was given.
+type placementReader interface {
+	store.Placements
+	store.Runs
+}
+
 // printPlacements says which machines a run's placed steps ran on, and what
 // those machines turned out to be.
 //
@@ -2809,7 +2817,7 @@ func (r *RunsCostCmd) printRunCost(ctx context.Context, st store.Store) error {
 // spelling of what a machine was, so the browser and the terminal cannot
 // disagree about it. They did — the terminal's copy never learned which
 // filesystems are memory.
-func (r *RunsWhereCmd) printPlacements(ctx context.Context, st store.Store) error {
+func (r *RunsWhereCmd) printPlacements(ctx context.Context, st placementReader) error {
 	run, ok, err := r.placementRun(ctx, st)
 	if err != nil || !ok {
 		return err
@@ -2867,7 +2875,7 @@ func (r *RunsWhereCmd) printPlacements(ctx context.Context, st store.Store) erro
 // this state file — reads back as zero rows, and the caller would print that
 // as a run that ran every step here: a positive claim about a run this
 // pipeline has never seen.
-func (r *RunsWhereCmd) placementRun(ctx context.Context, st store.Store) (store.RunRow, bool, error) {
+func (r *RunsWhereCmd) placementRun(ctx context.Context, st placementReader) (store.RunRow, bool, error) {
 	if r.RunID != "" {
 		run, ok, err := st.FindRunRow(ctx, r.RunID)
 		if err != nil {

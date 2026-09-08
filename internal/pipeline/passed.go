@@ -135,7 +135,7 @@ func recordPassedVersions(ctx context.Context, st store.Store, jobName, buildID 
 // Exported for internal/trigger, which is where the constraint bites: a set
 // that has not passed upstream must not enqueue the downstream job at all,
 // rather than starting it and discovering the problem later.
-func VersionSetPassedUpstream(ctx context.Context, st store.Store, upstreamJob string, versions map[string]map[string]any) (bool, error) {
+func VersionSetPassedUpstream(ctx context.Context, st store.Versions, upstreamJob string, versions map[string]map[string]any) (bool, error) {
 	want := make(map[string]string, len(versions))
 
 	for resource, version := range versions {

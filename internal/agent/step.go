@@ -115,6 +115,17 @@ func resolveAgentDir(workspaceDir, stepDir string) (string, error) {
 	return dir, nil
 }
 
+// StepStore is the part of the state database an agent step touches: its node
+// in the merkle cache, its spend in the usage ledger, and the questions it
+// parks for a person. It is not the run history, the trigger queue or the
+// resource versions — an agent step has no business in any of those, and this
+// is where the type says so.
+type StepStore interface {
+	store.Cache
+	store.Usage
+	store.Questions
+}
+
 // recordAgentFailure records a failed agent step the same way the
 // pipeline's task/put steps do — best-effort, errors ignored, since a
 // failure to record must not mask the original error being returned to the
@@ -126,7 +137,7 @@ func resolveAgentDir(workspaceDir, stepDir string) (string, error) {
 // (rather than the nil this used to store) is the whole point: a failed agent
 // step is exactly the one you need to reconstruct afterwards, and its response
 // and tool calls were being thrown away.
-func recordAgentFailure(ctx context.Context, st store.Store, node merkle.Node, jobName string, res conversationResult, runErr error) {
+func recordAgentFailure(ctx context.Context, st store.Cache, node merkle.Node, jobName string, res conversationResult, runErr error) {
 	status := string(outcome.Classify(ctx, runErr))
 	recCtx := context.WithoutCancel(ctx)
 	_ = st.RecordNode(recCtx, nodeRecord(node), jobName, status, agentResultRecord(res), runErr)
@@ -180,7 +191,7 @@ func printAgentResponse(res conversationResult) {
 // skippable) and runs it, retrying the whole conversation up to the
 // resolved attempt count. internal/pipeline routes the plan on the returned
 // StepOutcome.Verdict.
-func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st store.Store, parentHash string) (StepOutcome, error) {
+func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st StepStore, parentHash string) (StepOutcome, error) {
 	prepared, err := prepareAgentStep(ctx, cfg, step, bw)
 	if err != nil {
 		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
@@ -342,7 +353,7 @@ type stepCacheLookup struct {
 // when the lookup hit.
 func reuseAgentStep(
 	ctx context.Context, cfg *config.Config, prepared preparedAgentStep, content map[string]any,
-	bw workspace.BuildWorkspace, st store.Store, node merkle.Node, jobName, name string,
+	bw workspace.BuildWorkspace, st store.Cache, node merkle.Node, jobName, name string,
 ) (stepCacheLookup, StepOutcome, error) {
 	cached, err := lookupStepCache(ctx, cfg, prepared, content, bw, jobName, name)
 	if err != nil || !cached.Hit {
@@ -542,7 +553,7 @@ func runOneConversation(
 // checked and rejected at load like any other. Evaluating it at load and then
 // never running it made that promise a lie — the hook reported success on a
 // mismatch its own assert existed to catch.
-func RunHook(ctx context.Context, cfg *config.Config, jobName string, step config.Step, bw workspace.BuildWorkspace, st store.Store) error {
+func RunHook(ctx context.Context, cfg *config.Config, jobName string, step config.Step, bw workspace.BuildWorkspace, st StepStore) error {
 	prepared, err := prepareAgentStep(ctx, cfg, step, bw)
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", step.Agent, err)

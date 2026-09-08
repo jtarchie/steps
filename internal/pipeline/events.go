@@ -25,7 +25,7 @@ import (
 // watching: a job started from a terminal and the same job started from the
 // UI have to leave the same record, or "open the run that failed last night"
 // works only for runs that were being watched at the time.
-func StoreSink(st store.Store) func(events.Event) {
+func StoreSink(st store.Events) func(events.Event) {
 	return func(event events.Event) {
 		err := st.AppendRunEvent(context.Background(), store.RunEventRow{
 			RunID:        event.RunID,

@@ -76,6 +76,15 @@ func NewRunID() string {
 	return rand.Text()[:runIDChars]
 }
 
+// runLookup is a run read that can also name the pipeline it read: Meta beside
+// Runs, because a run id is globally unique while the lookup is scoped, so the
+// pipeline is the fact that explains a miss ("no run X in pipeline Y" versus
+// "no run X anywhere", which are different bugs to chase).
+type runLookup interface {
+	store.Meta
+	store.Runs
+}
+
 // PrepareResume loads a previous run so this one can continue it, and reports
 // the workspace to reuse.
 //
@@ -86,7 +95,7 @@ func NewRunID() string {
 // distinction is the whole feature. An agent step is not repeatable, so
 // re-running it does not reproduce the reviewed output — it produces a
 // different one, which makes a restart lossy as well as expensive.
-func PrepareResume(ctx context.Context, st store.Store, runID string) (context.Context, string, error) {
+func PrepareResume(ctx context.Context, st runLookup, runID string) (context.Context, string, error) {
 	run, err := findRun(ctx, st, runID)
 	if err != nil {
 		return ctx, "", err
@@ -104,7 +113,7 @@ func PrepareResume(ctx context.Context, st store.Store, runID string) (context.C
 
 // ResumeJobName is the job a recorded run belongs to, so `--resume` alone
 // selects the right one.
-func ResumeJobName(ctx context.Context, st store.Store, runID string) (string, error) {
+func ResumeJobName(ctx context.Context, st runLookup, runID string) (string, error) {
 	run, err := findRun(ctx, st, runID)
 	if err != nil {
 		return "", err
@@ -232,7 +241,7 @@ func resumedRunInputs(ctx context.Context, st store.Store) (map[string]map[strin
 // a command that cannot proceed, and the pipeline is named because run ids are
 // globally unique while the lookup is scoped — asking the wrong pipeline of a
 // shared state file is the way this fails.
-func findRun(ctx context.Context, st store.Store, runID string) (store.RunRow, error) {
+func findRun(ctx context.Context, st runLookup, runID string) (store.RunRow, error) {
 	run, ok, err := st.FindRunRow(ctx, runID)
 	if err != nil {
 		return store.RunRow{}, fmt.Errorf("could not read run %q: %w", runID, err)
