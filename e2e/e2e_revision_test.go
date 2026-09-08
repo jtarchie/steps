@@ -107,7 +107,7 @@ func TestRunsReportTheConfigTheyRan(t *testing.T) {
 	// revision however many runs execute it, so the second run must NOT mint
 	// a row of its own.
 	for range 2 {
-		err := cli.Run([]string{"run", pipeline, "--job", "build", "--state", state, "--force"})
+		err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", state, "--force"})
 		if err != nil {
 			t.Fatalf("run against the first config: %v", err)
 		}
@@ -115,7 +115,7 @@ func TestRunsReportTheConfigTheyRan(t *testing.T) {
 
 	revisionPipeline(t, pipeline, "echo two >> "+log)
 
-	err := cli.Run([]string{"run", pipeline, "--job", "build", "--state", state, "--force"})
+	err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", state, "--force"})
 	if err != nil {
 		t.Fatalf("run against the edited config: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestRunsReportTheConfigTheyRan(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = cli.Run([]string{"runs", pipeline, "--state", state})
+		runErr = cli.Run([]string{"runs", pipeline, "--db", state})
 	})
 
 	if runErr != nil {
@@ -161,7 +161,7 @@ func TestRunsSeparateConfigsThatDifferOnlyByVars(t *testing.T) {
 	for _, greeting := range []string{"hello", "goodbye"} {
 		err := cli.Run([]string{
 			"run", pipeline, "--job", "build",
-			"--state", state, "--force",
+			"--db", state, "--force",
 			"--var", "greeting=" + greeting,
 		})
 
@@ -173,7 +173,7 @@ func TestRunsSeparateConfigsThatDifferOnlyByVars(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = cli.Run([]string{"runs", pipeline, "--state", state})
+		runErr = cli.Run([]string{"runs", pipeline, "--db", state})
 	})
 
 	if runErr != nil {
@@ -203,7 +203,7 @@ func TestResumeRecordsTheConfigurationThatFixedIt(t *testing.T) {
 	revisionPipeline(t, path, "exit 1")
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--job", "build", "--state", state})
+		err := cli.Run([]string{"run", path, "--job", "build", "--db", state})
 		if err == nil {
 			t.Fatal("the pipeline was supposed to fail")
 		}
@@ -212,7 +212,7 @@ func TestResumeRecordsTheConfigurationThatFixedIt(t *testing.T) {
 	runID := resumeID(t, out)
 
 	broken := configColumn(t, captureStdout(t, func() {
-		err := cli.Run([]string{"runs", path, "--state", state})
+		err := cli.Run([]string{"runs", path, "--db", state})
 		if err != nil {
 			t.Fatalf("steps runs: %v", err)
 		}
@@ -221,13 +221,13 @@ func TestResumeRecordsTheConfigurationThatFixedIt(t *testing.T) {
 	// The fix.
 	revisionPipeline(t, path, "echo fixed")
 
-	err := cli.Run([]string{"run", path, "--resume", runID, "--state", state})
+	err := cli.Run([]string{"run", path, "--resume", runID, "--db", state})
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 
 	fixed := configColumn(t, captureStdout(t, func() {
-		err := cli.Run([]string{"runs", path, "--state", state})
+		err := cli.Run([]string{"runs", path, "--db", state})
 		if err != nil {
 			t.Fatalf("steps runs: %v", err)
 		}

@@ -14,7 +14,7 @@ import (
 )
 
 // testPipelines builds a server over several pipelines sharing one state
-// file, which is what `steps web app.yml infra.yml --state shared.db`
+// file, which is what `steps web app.yml infra.yml --db shared.db`
 // produces. Each gets one job named after itself, so a page can be checked
 // for having reached the right one.
 func testPipelines(t *testing.T, names ...string) (*Server, []*Pipeline) {

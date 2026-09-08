@@ -1091,7 +1091,7 @@ func TestRunOrderIsTimeOrder(t *testing.T) {
 	}
 }
 
-// TestFootprintSharedDatabaseCostsWhatItHolds is the measurement for --state:
+// TestFootprintSharedDatabaseCostsWhatItHolds is the measurement for --db:
 // several pipelines in one file must cost about what they cost apart, and each
 // one's retention must bound its own rows and only its own.
 //

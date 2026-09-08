@@ -59,7 +59,7 @@ const readHeaderTimeout = 5 * time.Second
 
 // Pipeline is one loaded pipeline the server serves, with its own config and
 // its own store handle. Two served pipelines may now share a state FILE (see
-// --state), but never a store handle: each one is scoped to its own pipeline
+// --db), but never a store handle: each one is scoped to its own pipeline
 // row, which is what keeps their histories and caches apart.
 type Pipeline struct {
 	// Slug is the URL-safe identity a route carries, and the same string the

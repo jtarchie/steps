@@ -35,7 +35,7 @@ func TestLoadedPipelineCarriesTheIdentityTheRestOfTheProcessUses(t *testing.T) {
 	cmd := &WebCmd{ //nolint:exhaustruct // the identity flags are what is under test
 		Pipeline: []string{path},
 		StateFlags: StateFlags{
-			State: filepath.Join(dir, "shared.db"),
+			DB: DB(filepath.Join(dir, "shared.db")),
 			// The flag that used to move only some of them.
 			Name: map[string]string{"prod": path},
 		},
@@ -75,7 +75,7 @@ func TestPipelineIdentityDefaultsToTheSlugWithoutAnOverride(t *testing.T) {
 
 	cmd := &WebCmd{ //nolint:exhaustruct // the identity flags are what is under test
 		Pipeline:   []string{path},
-		StateFlags: StateFlags{State: filepath.Join(dir, "shared.db")}, //nolint:exhaustruct // no --name is the case under test
+		StateFlags: StateFlags{DB: DB(filepath.Join(dir, "shared.db"))}, //nolint:exhaustruct // no --name is the case under test
 	}
 
 	pipelines, _, cleanup, err := cmd.load()
@@ -114,8 +114,8 @@ func TestSetupRefusesAConfigLoadedUnderADifferentIdentity(t *testing.T) {
 	}
 
 	flags := StateFlags{
-		State: filepath.Join(dir, "shared.db"),
-		Name:  map[string]string{"prod": path},
+		DB:   DB(filepath.Join(dir, "shared.db")),
+		Name: map[string]string{"prod": path},
 	}
 
 	_, _, cleanup, err := setup(cfg, path, flags, ExecFlags{}) //nolint:exhaustruct // no execution flags are read on this path
@@ -162,7 +162,7 @@ func TestJobsResumeHonoursTheNameOverride(t *testing.T) {
 	}
 
 	out := captureStdout(t, func() {
-		err = Run([]string{"jobs", "resume", path, "build", "--state", state, "--name", "prod=" + path})
+		err = Run([]string{"jobs", "resume", path, "build", "--db", state, "--name", "prod=" + path})
 	})
 
 	if err != nil {

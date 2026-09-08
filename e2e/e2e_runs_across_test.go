@@ -3,7 +3,7 @@ package e2e
 // `steps runs` over a state file holding several pipelines.
 //
 // The scoped views answer "what did THIS pipeline do", which is every view
-// the command had: a `--state shared.db` with three pipelines in it had no
+// the command had: a `--db shared.db` with three pipelines in it had no
 // CLI answer to "what ran, across everything in this file" — only the web
 // root did. Naming no pipeline is that question, and it reads through
 // store.Reader, which crosses pipelines by construction.
@@ -60,7 +60,7 @@ func sharedRunsFixture(t *testing.T) (state, first, second string) {
 	second = sharedStatePipeline(t, filepath.Join(dir, "second.yml"), filepath.Join(dir, "second.log"))
 
 	for _, pipeline := range []string{first, second} {
-		err := cli.Run([]string{"run", pipeline, "--job", "build", "--state", state})
+		err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", state})
 		if err != nil {
 			t.Fatalf("run %s: %v", filepath.Base(pipeline), err)
 		}
@@ -69,7 +69,7 @@ func sharedRunsFixture(t *testing.T) (state, first, second string) {
 	return state, first, second
 }
 
-// TestRunsAcrossPipelines is the headline: no pipeline argument, one --state,
+// TestRunsAcrossPipelines is the headline: no pipeline argument, one --db,
 // and every pipeline in the file reports.
 //
 // Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
@@ -79,14 +79,14 @@ func TestRunsAcrossPipelines(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = cli.Run([]string{"runs", "--state", state})
+		runErr = cli.Run([]string{"runs", "--db", state})
 	})
 
 	if runErr != nil {
-		t.Fatalf("runs --state: %v", runErr)
+		t.Fatalf("runs --db: %v", runErr)
 	}
 
-	// What the file holds, which is the other half of the question --state
+	// What the file holds, which is the other half of the question --db
 	// created: a name alone does not say which YAML is behind it.
 	for _, want := range []string{"PIPELINE", "first", "second", first, second} {
 		if !strings.Contains(out, want) {
@@ -120,7 +120,7 @@ func TestRunsScopedStaysScoped(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = cli.Run([]string{"runs", first, "--state", state})
+		runErr = cli.Run([]string{"runs", first, "--db", state})
 	})
 
 	if runErr != nil {
@@ -157,7 +157,7 @@ func TestScopedViewsRequireAPipeline(t *testing.T) {
 
 	for _, view := range []string{"steps", "queue", "cost", "where"} {
 		t.Run(view, func(t *testing.T) {
-			err := cli.Run([]string{"runs", view, "--state", state})
+			err := cli.Run([]string{"runs", view, "--db", state})
 			if err == nil {
 				t.Fatalf("runs %s answered without a pipeline to answer for", view)
 			}
@@ -182,7 +182,7 @@ func TestJobFilterIsRefusedAcrossPipelines(t *testing.T) {
 	var err error
 
 	_ = captureStdout(t, func() {
-		err = cli.Run([]string{"runs", "--state", state, "--job", "build"})
+		err = cli.Run([]string{"runs", "--db", state, "--job", "build"})
 	})
 
 	if err == nil {
@@ -208,10 +208,10 @@ func TestRunsWithNoPipelineNeedsAState(t *testing.T) {
 	})
 
 	if err == nil {
-		t.Fatal("`steps runs` with neither a pipeline nor --state was answered")
+		t.Fatal("`steps runs` with neither a pipeline nor --db was answered")
 	}
 
-	if !strings.Contains(err.Error(), "--state") {
+	if !strings.Contains(err.Error(), "--db") {
 		t.Errorf("refusal does not name the flag that would make it answerable: %v", err)
 	}
 }
@@ -226,7 +226,7 @@ func TestRunsAcrossMissingStateCreatesNothing(t *testing.T) {
 	var err error
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"runs", "--state", state})
+		err = cli.Run([]string{"runs", "--db", state})
 	})
 
 	if err != nil {
@@ -268,11 +268,11 @@ func TestRunsAcrossPipelineWithNothingRecorded(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = cli.Run([]string{"runs", "--state", state})
+		runErr = cli.Run([]string{"runs", "--db", state})
 	})
 
 	if runErr != nil {
-		t.Fatalf("runs --state: %v", runErr)
+		t.Fatalf("runs --db: %v", runErr)
 	}
 
 	// The whole row, not just the name: "never-run" contains a dash of its
@@ -302,7 +302,7 @@ func TestRunsDoesNotMintThePipelineItWasAskedAbout(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = cli.Run([]string{"runs", "typo.yml", "--state", state})
+		runErr = cli.Run([]string{"runs", "typo.yml", "--db", state})
 	})
 
 	if runErr == nil {
@@ -318,9 +318,9 @@ func TestRunsDoesNotMintThePipelineItWasAskedAbout(t *testing.T) {
 	}
 
 	listing := captureStdout(t, func() {
-		err := cli.Run([]string{"runs", "--state", state})
+		err := cli.Run([]string{"runs", "--db", state})
 		if err != nil {
-			t.Errorf("runs --state: %v", err)
+			t.Errorf("runs --db: %v", err)
 		}
 	})
 

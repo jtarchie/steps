@@ -11,7 +11,7 @@ import (
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
-// End-to-end proof for --state: several pipelines recording into ONE sqlite
+// End-to-end proof for --db: several pipelines recording into ONE sqlite
 // file while staying strangers to each other.
 //
 // The fixture is deliberately hostile. Both pipelines declare a job named
@@ -40,7 +40,7 @@ jobs:
 }
 
 // TestSharedStateKeepsPipelinesApart is the headline: two pipeline files, one
-// --state database, and neither one's cache answers for the other.
+// --db database, and neither one's cache answers for the other.
 func TestSharedStateKeepsPipelinesApart(t *testing.T) {
 	dir := t.TempDir()
 	state := filepath.Join(dir, "shared.db")
@@ -49,7 +49,7 @@ func TestSharedStateKeepsPipelinesApart(t *testing.T) {
 	second := sharedStatePipeline(t, filepath.Join(dir, "second.yml"), filepath.Join(dir, "second.log"))
 
 	for _, pipeline := range []string{first, second} {
-		err := cli.Run([]string{"run", pipeline, "--job", "build", "--state", state})
+		err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", state})
 		if err != nil {
 			t.Fatalf("run %s: %v", filepath.Base(pipeline), err)
 		}
@@ -73,7 +73,7 @@ func TestSharedStateKeepsPipelinesApart(t *testing.T) {
 	}
 }
 
-// TestSharedStateWritesOneFile: --state means one database, and no .steps/
+// TestSharedStateWritesOneFile: --db means one database, and no .steps/
 // beside either YAML. The layout is half of what the flag promises.
 func TestSharedStateWritesOneFile(t *testing.T) {
 	dir := t.TempDir()
@@ -83,7 +83,7 @@ func TestSharedStateWritesOneFile(t *testing.T) {
 	second := sharedStatePipeline(t, filepath.Join(dir, "second.yml"), filepath.Join(dir, "second.log"))
 
 	for _, pipeline := range []string{first, second} {
-		err := cli.Run([]string{"run", pipeline, "--job", "build", "--state", state})
+		err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", state})
 		if err != nil {
 			t.Fatalf("run %s: %v", filepath.Base(pipeline), err)
 		}
@@ -96,7 +96,7 @@ func TestSharedStateWritesOneFile(t *testing.T) {
 
 	_, err = os.Stat(filepath.Join(dir, ".steps"))
 	if !os.IsNotExist(err) {
-		t.Error("--state was given, but a default .steps/ directory was created anyway")
+		t.Error("--db was given, but a default .steps/ directory was created anyway")
 	}
 }
 
@@ -133,7 +133,7 @@ func TestSharedStateRerunStillSkips(t *testing.T) {
 	pipeline := sharedStatePipeline(t, filepath.Join(dir, "only.yml"), log)
 
 	for range 2 {
-		err := cli.Run([]string{"run", pipeline, "--job", "build", "--state", state})
+		err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", state})
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
@@ -163,7 +163,7 @@ func TestSharedStateNameFlagOverridesTheFilename(t *testing.T) {
 			filepath.Join(repo, "pipeline.yml"),
 			filepath.Join(dir, sub+".log"))
 
-		err = cli.Run([]string{"run", path, "--job", "build", "--state", state, "--name", name + "=" + path})
+		err = cli.Run([]string{"run", path, "--job", "build", "--db", state, "--name", name + "=" + path})
 		if err != nil {
 			t.Fatalf("run %s: %v", name, err)
 		}
@@ -194,7 +194,7 @@ func TestSharedStateRefusesAForeignRunID(t *testing.T) {
 	first := sharedStatePipeline(t, filepath.Join(dir, "first.yml"), filepath.Join(dir, "first.log"))
 	second := sharedStatePipeline(t, filepath.Join(dir, "second.yml"), filepath.Join(dir, "second.log"))
 
-	err := cli.Run([]string{"run", first, "--job", "build", "--state", state})
+	err := cli.Run([]string{"run", first, "--job", "build", "--db", state})
 	if err != nil {
 		t.Fatalf("run first: %v", err)
 	}
@@ -216,12 +216,72 @@ func TestSharedStateRefusesAForeignRunID(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	err = cli.Run([]string{"run", second, "--job", "build", "--state", state, "--resume", foreign})
+	err = cli.Run([]string{"run", second, "--job", "build", "--db", state, "--resume", foreign})
 	if err == nil {
 		t.Fatal("second.yml resumed a run belonging to first.yml")
 	}
 
 	if !strings.Contains(err.Error(), foreign) {
 		t.Errorf("error %q does not name the run id that was refused", err)
+	}
+}
+
+// TestDBSchemeNamesTheSqliteFile: `--db sqlite:///path` is the same database
+// as `--db /path`. The scheme exists so a second driver can be chosen the way
+// `--worker ssh://` chooses a transport; a bare path stays what it always was.
+func TestDBSchemeNamesTheSqliteFile(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "shared.db")
+
+	pipeline := sharedStatePipeline(t, filepath.Join(dir, "only.yml"), filepath.Join(dir, "build.log"))
+
+	err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", "sqlite://" + state})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if !fileExists(state) {
+		t.Fatalf("sqlite://%s did not open the file at that path", state)
+	}
+
+	if fileExists(filepath.Join(dir, ".steps")) {
+		t.Error("--db was given, but a default .steps/ directory was created anyway")
+	}
+
+	// And the two spellings are ONE database: read back through the bare
+	// path what the url recorded.
+	assertRunCount(t, state, cli.PipelineName(pipeline), 1)
+}
+
+// TestDBRefusesAnUnknownScheme: a scheme no driver answers to is a usage
+// error, refused at the flag — before a .steps/ is created, a file is
+// stat'd, or a job runs against a database the operator did not name.
+func TestDBRefusesAnUnknownScheme(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "build.log")
+	pipeline := sharedStatePipeline(t, filepath.Join(dir, "only.yml"), log)
+
+	err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", "postgres://steps:hunter2@db.internal/steps"})
+	if err == nil {
+		t.Fatal("a postgres:// database was accepted with no driver to open it")
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "postgres") || !strings.Contains(msg, "sqlite") {
+		t.Errorf("the refusal names neither the scheme it got nor the one it takes: %q", msg)
+	}
+
+	// The scheme is refused, not the URL echoed: a credential in it must not
+	// come back through a usage error that lands in a shell log.
+	if strings.Contains(msg, "hunter2") {
+		t.Errorf("the refusal echoes the URL's credentials: %q", msg)
+	}
+
+	if fileExists(log) {
+		t.Error("the job ran against some database anyway")
+	}
+
+	if fileExists(filepath.Join(dir, ".steps")) {
+		t.Error("a default .steps/ directory was created for a database that was refused")
 	}
 }

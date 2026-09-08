@@ -22,7 +22,7 @@ import (
 // view above that, so it is the one place that reads through store.Reader —
 // which crosses pipelines by construction and therefore has to name them.
 //
-// It exists because `--state shared.db` made "what does this file hold" a
+// It exists because `--db shared.db` made "what does this file hold" a
 // real question, and because the previous root answered a question nobody
 // asked: it redirected to whichever slug sorted first, silently picking one
 // of several.
@@ -94,7 +94,7 @@ func (s *Server) overviewPipelines() []overviewPipeline {
 //
 // Grouped by state FILE rather than queried per pipeline, because served
 // pipelines need not share one: `steps web app.yml infra.yml` gives each its
-// own `.steps/<name>.db` unless --state says otherwise. Within a file, one
+// own `.steps/<name>.db` unless --db says otherwise. Within a file, one
 // ordered query does the interleaving; across files there is nothing to do
 // but merge, and each group returns its own top `limit` so the merge cannot
 // be short of rows it should have had.

@@ -356,9 +356,9 @@ jobs:
 `)
 
 	for _, args := range [][]string{
-		{"approvals", stranger, "--state", state},
-		{"questions", stranger, "--state", state},
-		{"jobs", stranger, "--state", state},
+		{"approvals", stranger, "--db", state},
+		{"questions", stranger, "--db", state},
+		{"jobs", stranger, "--db", state},
 	} {
 		t.Run(args[0], func(t *testing.T) {
 			var err error
@@ -373,9 +373,9 @@ jobs:
 	// And the file still holds only what actually ran, which is the property
 	// a phantom row destroys for every later command.
 	listing := captureStdout(t, func() {
-		err := cli.Run([]string{"runs", "--state", state})
+		err := cli.Run([]string{"runs", "--db", state})
 		if err != nil {
-			t.Errorf("runs --state: %v", err)
+			t.Errorf("runs --db: %v", err)
 		}
 	})
 
@@ -452,7 +452,7 @@ func TestReadingADatabaseBeingCreated(t *testing.T) {
 		{[]string{"approvals", path}, "no approvals are waiting"},
 		{[]string{"questions", path}, "no questions are waiting"},
 		{[]string{"jobs", path}, "no jobs are paused"},
-		{[]string{"runs", "--state", state}, "no pipelines recorded"},
+		{[]string{"runs", "--db", state}, "no pipelines recorded"},
 	} {
 		t.Run(strings.Join(probe.args[:2], " "), func(t *testing.T) {
 			var runErr error
@@ -528,8 +528,8 @@ jobs:
 // The follow-up command a listing prints has to name the same database the
 // listing read, or it sends the reader to the pipeline's default path and
 // tells them nothing is there. The other direction matters too, and is what a
-// mutant walked through: with no --state given, appending an empty flag emits
-// `steps runs cost pipeline.yml <run> --state ` — a command that does not
+// mutant walked through: with no --db given, appending an empty flag emits
+// `steps runs cost pipeline.yml <run> --db ` — a command that does not
 // parse.
 //
 // Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
@@ -543,18 +543,31 @@ func TestStateNoteOnlyCarriesAFlagThatWasGiven(t *testing.T) {
 		t.Fatalf("runs cost: %v", err)
 	}
 
-	if strings.Contains(out, "--state") {
-		t.Errorf("the hint names a --state nobody passed:\n%s", out)
+	if strings.Contains(out, "--db") {
+		t.Errorf("the hint names a --db nobody passed:\n%s", out)
 	}
 
 	state := cli.StatePath(path, "")
 
-	out = captureStdout(t, func() { err = cli.Run([]string{"runs", "cost", path, "--state", state}) })
+	out = captureStdout(t, func() { err = cli.Run([]string{"runs", "cost", path, "--db", state}) })
 	if err != nil {
-		t.Fatalf("runs cost --state: %v", err)
+		t.Fatalf("runs cost --db: %v", err)
 	}
 
-	if !strings.Contains(out, "--state "+state) {
-		t.Errorf("the hint drops the --state the reader is using:\n%s", out)
+	if !strings.Contains(out, "--db "+state) {
+		t.Errorf("the hint drops the --db the reader is using:\n%s", out)
+	}
+
+	// The hint prints the store's own description, not the flag as typed:
+	// that is the form a driver calls safe to print, and for a network
+	// database the difference is the credentials. For sqlite it is the bare
+	// path, whichever spelling opened it.
+	out = captureStdout(t, func() { err = cli.Run([]string{"runs", "cost", path, "--db", "sqlite://" + state}) })
+	if err != nil {
+		t.Fatalf("runs cost --db sqlite://: %v", err)
+	}
+
+	if !strings.Contains(out, "--db "+state) || strings.Contains(out, "sqlite://") {
+		t.Errorf("the hint echoes the flag instead of the store's description:\n%s", out)
 	}
 }

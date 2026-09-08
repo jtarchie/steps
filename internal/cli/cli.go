@@ -508,7 +508,7 @@ func (p *PlanCmd) Run() error {
 		return err
 	}
 
-	st, err := sqlite.OpenStore(StatePath(p.Pipeline, p.State), resolvePipelineName(p.Pipeline, p.Name))
+	st, err := sqlite.OpenStore(StatePath(p.Pipeline, p.DB), resolvePipelineName(p.Pipeline, p.Name))
 	if err != nil {
 		return fmt.Errorf("could not open state store: %w", err)
 	}
@@ -567,7 +567,7 @@ func (p *PlanCmd) Run() error {
 //
 // Subcommands rather than a flag switch, and the difference is not
 // cosmetic: each view differs in what it needs NAMED. `list` reads one
-// pipeline or every pipeline in a --state file; the other four are questions
+// pipeline or every pipeline in a --db file; the other four are questions
 // about one pipeline and cannot be anything else — a trigger queue belongs to
 // a pipeline, a step's job name means nothing without one, and --run already
 // refuses an id belonging to a neighbour in the same file. As flags on one
@@ -585,14 +585,14 @@ type RunsCmd struct {
 // view that answers for a whole state file when no pipeline is named.
 type RunsListCmd struct {
 	StateFlags `embed:""`
-	Pipeline   string `arg:""                            help:"path to the pipeline YAML file (omit, with --state, to read every pipeline in one file)" optional:""`
+	Pipeline   string `arg:""                            help:"path to the pipeline YAML file (omit, with --db, to read every pipeline in one file)" optional:""`
 	Job        string `help:"only show runs of this job"`
 	Limit      int    `default:"20"                      help:"maximum number of rows to show"`
 }
 
 // Run prints one pipeline's job runs, or every pipeline's in a shared file.
 func (r *RunsListCmd) Run() error {
-	// No pipeline named is the cross-pipeline question, which only a --state
+	// No pipeline named is the cross-pipeline question, which only a --db
 	// file can hold: the default path is derived FROM a pipeline, so without
 	// one there is nothing to read.
 	if r.Pipeline == "" {
@@ -724,7 +724,7 @@ func (r *RunsWhereCmd) Run() error {
 // exactly what a sixth `runs` subcommand written by copying the other five
 // would forget.
 func nothingRecorded(pipelinePath string, flags StateFlags, answer string) bool {
-	path := StatePath(pipelinePath, flags.State)
+	path := StatePath(pipelinePath, flags.DB)
 
 	_, err := os.Stat(path)
 	if err != nil {
@@ -758,7 +758,7 @@ func noRunsYet(pipelinePath string) string {
 // OpenExisting, not OpenStore: asking must not register the pipeline it is
 // asking about — see sqlite.OpenExisting.
 func openRecorded(pipelinePath string, flags StateFlags) (store.Store, func(), error) {
-	path := StatePath(pipelinePath, flags.State)
+	path := StatePath(pipelinePath, flags.DB)
 
 	st, err := sqlite.OpenExisting(path, resolvePipelineName(pipelinePath, flags.Name))
 	if err != nil {
@@ -771,7 +771,7 @@ func openRecorded(pipelinePath string, flags StateFlags) (store.Store, func(), e
 // runAcross reports on every pipeline in one state file: what it holds, and
 // the newest runs across all of it.
 //
-// This is the CLI's answer to the question --state created. `steps runs` is
+// This is the CLI's answer to the question --db created. `steps runs` is
 // otherwise scoped by the pipeline it is handed, so a file with three
 // pipelines in it took three invocations to read and gave no interleaving at
 // all — the web root has answered this since it learned to serve several
@@ -782,31 +782,32 @@ func openRecorded(pipelinePath string, flags StateFlags) (store.Store, func(), e
 // column here, so a script that reads this output gets the same columns
 // whatever the file grows into.
 func (r *RunsListCmd) runAcross() error {
-	if r.State == "" {
-		return errors.New("steps runs list needs a pipeline to read, or --state <file> to read every pipeline in one state database")
+	path := r.DB.path()
+	if path == "" {
+		return errors.New("steps runs list needs a pipeline to read, or --db <file> to read every pipeline in one state database")
 	}
 
 	// The only flag left that a whole file cannot answer: RecentRuns spans
 	// pipelines and does not filter by job, and two pipelines calling a job
 	// `build` are not one job. Refused rather than silently ignored.
 	if r.Job != "" {
-		return fmt.Errorf("--job asks about one pipeline: run `steps runs list <pipeline> --job %s --state %s`", r.Job, r.State)
+		return fmt.Errorf("--job asks about one pipeline: run `steps runs list <pipeline> --job %s --db %s`", r.Job, path)
 	}
 
 	// Stat first, for the same reason the scoped path does: asking about
 	// history must not create the database it is asking about.
-	_, err := os.Stat(r.State)
+	_, err := os.Stat(path)
 	if err != nil {
-		fmt.Printf("no state database at %s\n", r.State)
+		fmt.Printf("no state database at %s\n", path)
 
 		return nil
 	}
 
-	reader, err := sqlite.OpenReader(r.State)
+	reader, err := sqlite.OpenReader(path)
 	if errors.Is(err, store.ErrNoState) {
 		// Created but not yet filled in — a writer is mid-first-open. Nothing
 		// is recorded, which is an answer, not a file to delete.
-		fmt.Printf("no pipelines recorded in %s\n", r.State)
+		fmt.Printf("no pipelines recorded in %s\n", path)
 
 		return nil
 	}
@@ -824,7 +825,7 @@ func (r *RunsListCmd) runAcross() error {
 	}
 
 	if len(pipelines) == 0 {
-		fmt.Printf("no pipelines recorded in %s\n", r.State)
+		fmt.Printf("no pipelines recorded in %s\n", path)
 
 		return nil
 	}
@@ -834,7 +835,7 @@ func (r *RunsListCmd) runAcross() error {
 		return err
 	}
 
-	return r.printRunsAcross(ctx, reader, pipelines)
+	return r.printRunsAcross(ctx, reader, pipelines, path)
 }
 
 // printPipelines lists what the file holds. A name alone does not say which
@@ -880,7 +881,7 @@ func printPipelines(pipelines []store.PipelineRow) error {
 // timestamp means "last time this content ran" rather than "a build
 // happened". Across pipelines the useful row is a real run with an id, which
 // is the handle for going and asking that pipeline about it.
-func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader store.Reader, pipelines []store.PipelineRow) error {
+func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader store.Reader, pipelines []store.PipelineRow, path string) error {
 	names := make([]string, 0, len(pipelines))
 	for _, pipeline := range pipelines {
 		names = append(names, pipeline.Name)
@@ -910,7 +911,9 @@ func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader store.Reader, 
 		return err
 	}
 
-	fmt.Printf("\nbreak one down with: steps runs cost <pipeline> <run> --state %s\n", r.State)
+	// The path rather than a Description: a Reader has no pipeline and no
+	// handle, and this view only opens sqlite files (see runAcross).
+	fmt.Printf("\nbreak one down with: steps runs cost <pipeline> <run> --db %s\n", path)
 
 	return nil
 }
@@ -930,7 +933,11 @@ func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader store.Reader, 
 // depending on whether a pipeline was named is a command nobody can reason
 // about. The error text moves one command along, to `steps runs steps`, which
 // reports it per step — where the answer to "why did it fail" actually is.
-func (r *RunsListCmd) printJobRuns(ctx context.Context, st store.Runs) error {
+func (r *RunsListCmd) printJobRuns(ctx context.Context, st interface {
+	store.Runs
+	store.Meta
+},
+) error {
 	rows, err := st.ListRuns(ctx, r.Job, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read runs: %w", err)
@@ -955,7 +962,7 @@ func (r *RunsListCmd) printJobRuns(ctx context.Context, st store.Runs) error {
 		return err
 	}
 
-	fmt.Printf("\nwhy a step did what it did: steps runs steps %s%s\n", r.Pipeline, stateNote(r.State))
+	fmt.Printf("\nwhy a step did what it did: steps runs steps %s%s\n", r.Pipeline, dbNote(r.DB, st))
 
 	return nil
 }
@@ -1600,7 +1607,7 @@ func setup(
 			cfg.Name, name)
 	}
 
-	st, err := sqlite.OpenStore(StatePath(pipelinePath, flags.State), name)
+	st, err := sqlite.OpenStore(StatePath(pipelinePath, flags.DB), name)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("could not open state store: %w", err)
 	}
@@ -1707,10 +1714,44 @@ func wrapRunErr(err error) error {
 // carries: WHERE the database is, and WHAT this pipeline is called inside it.
 //
 // Embedded rather than repeated because they always travel together — a
-// --state naming a shared file is exactly when --name starts to matter.
+// --db naming a shared file is exactly when --name starts to matter.
 type StateFlags struct {
-	State string            `help:"path to the sqlite state database (default: .steps/<pipeline>.db beside the YAML)"      name:"state"`
-	Name  map[string]string `help:"name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
+	DB   DB                `help:"state database: a sqlite file path or sqlite:// url (default: .steps/<pipeline>.db beside the YAML)" name:"db"   placeholder:"URL"`
+	Name map[string]string `help:"name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml (repeatable)"              name:"name"`
+}
+
+// DB is the --db value: the state database as a bare sqlite path or as a url
+// whose scheme picks the driver, the way --worker's ssh:// and aws:// pick a
+// transport. sqlite:// is the only scheme until a second driver lands (#117),
+// and the switch is here in the CLI rather than in internal/store because the
+// contract package cannot import its own drivers.
+//
+// Checked while the flag is parsed, so an unknown scheme is a usage error
+// before any command runs: opened as a file, `postgres://…` would have been a
+// freshly created sqlite database of that name, and a job recorded into it.
+type DB string
+
+// UnmarshalText is kong's parse hook for the flag.
+func (d *DB) UnmarshalText(text []byte) error {
+	raw := string(text)
+
+	scheme, _, isURL := strings.Cut(raw, "://")
+	if isURL && scheme != "sqlite" {
+		// The scheme alone, never the url: a network url carries credentials,
+		// and a usage error lands in shell history and CI logs.
+		return fmt.Errorf("no driver for %s:// (only a sqlite file path, or sqlite://<path>, until a second driver lands)", scheme)
+	}
+
+	*d = DB(raw)
+
+	return nil
+}
+
+// path is the sqlite file a DB names, or "" for the default.
+func (d DB) path() string {
+	path, _ := strings.CutPrefix(string(d), "sqlite://")
+
+	return path
 }
 
 // VarFlags carry ((name)) substitutions into a pipeline load.
@@ -1817,7 +1858,8 @@ func (h HistoryFlags) Apply(cfg *config.Config) {
 
 // StatePath returns the sqlite database path for pipeline's persisted job
 // state: under .steps/ beside the pipeline YAML, named for the FILE — unless
-// --state names one, which is how several pipelines come to share a file.
+// --db names one, which is how several pipelines come to share a file.
+// A sqlite:// url and the bare path it wraps are one file.
 //
 // Per file BY DEFAULT, not per directory, and that default is load-bearing on
 // its own. Two pipelines in one folder are two namespaces, and a `.steps/state.db`
@@ -1828,9 +1870,9 @@ func (h HistoryFlags) Apply(cfg *config.Config) {
 //
 // There is no migration, per this repo's no-migration rule: a database from an
 // older schema is refused rather than upgraded.
-func StatePath(pipeline, state string) string {
-	if state != "" {
-		return state
+func StatePath(pipeline string, db DB) string {
+	if path := db.path(); path != "" {
+		return path
 	}
 
 	return filepath.Join(filepath.Dir(pipeline), ".steps", filepath.Base(pipeline)+".db")
@@ -1852,7 +1894,7 @@ func PipelineName(pipeline string) string {
 // and giving uniqueness for free: two paths cannot claim one name, because the
 // second assignment would replace the first rather than collide silently.
 // Nothing matching means the default — the base name — which is what makes the
-// flag needed only when a shared --state has two pipeline.yml in it.
+// flag needed only when a shared --db has two pipeline.yml in it.
 func resolvePipelineName(pipeline string, names map[string]string) string {
 	want, err := filepath.Abs(pipeline)
 	if err != nil {
@@ -2427,7 +2469,7 @@ func (w *WebCmd) load() ([]*web.Pipeline, map[string]workspace.Provider, func(),
 // Before any store is opened, deliberately: a name IS a pipeline's identity in
 // the state database, so opening them first would register both against one
 // row and leave the second's path overwriting the first's before the error
-// surfaced. Two app/pipeline.yml and infra/pipeline.yml under one --state is
+// surfaced. Two app/pipeline.yml and infra/pipeline.yml under one --db is
 // the case, and it is a question only the operator can answer — hence --name
 // rather than a generated suffix, which would be an identity nobody could
 // predict and every rerun would have to rediscover.
@@ -2730,7 +2772,11 @@ func applyResume(
 // The cache column is the one worth having: it is the only place prompt
 // caching reports whether it did anything, and a run that suddenly drops from
 // 60% to 0% is the visible half of a bill that doubled.
-func (r *RunsCostCmd) printCostTotals(ctx context.Context, st store.Usage) error {
+func (r *RunsCostCmd) printCostTotals(ctx context.Context, st interface {
+	store.Usage
+	store.Meta
+},
+) error {
 	totals, err := st.RunCostTotals(ctx, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read usage: %w", err)
@@ -2750,23 +2796,27 @@ func (r *RunsCostCmd) printCostTotals(ctx context.Context, st store.Usage) error
 			renderCost(total.CostUSD, total.Unpriced), total.Steps)
 	}
 
-	fmt.Printf("\nbreak one down with: steps runs cost %s <run>%s\n", r.Pipeline, stateNote(r.State))
+	fmt.Printf("\nbreak one down with: steps runs cost %s <run>%s\n", r.Pipeline, dbNote(r.DB, st))
 
 	return nil
 }
 
-// stateNote carries --state into a printed follow-up command.
+// dbNote carries --db into a printed follow-up command.
 //
 // Without it the hint names a DIFFERENT database than the one it was just
 // printed from: the default path is derived from the pipeline, so a reader who
-// copies the line after `steps runs cost app.yml --state shared.db` is sent to
+// copies the line after `steps runs cost app.yml --db shared.db` is sent to
 // `.steps/app.yml.db` and told there is nothing there.
-func stateNote(state string) string {
-	if state == "" {
+//
+// The store's Description rather than the flag as typed: it is the form the
+// driver calls safe to print, which for a network database means without its
+// credentials.
+func dbNote(typed DB, st store.Meta) string {
+	if typed == "" {
 		return ""
 	}
 
-	return " --state " + state
+	return " --db " + st.Description()
 }
 
 // printRunCost breaks one run down per agent step.

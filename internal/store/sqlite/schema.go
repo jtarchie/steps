@@ -39,7 +39,7 @@ const schemaVersion = 8
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
--- the --state flag), and this table is what keeps them strangers: every
+-- the --db flag), and this table is what keeps them strangers: every
 -- pipeline-scoped table below carries a pipeline_id, and deleting a row here
 -- takes that pipeline's entire history with it.
 --

@@ -16,7 +16,7 @@ steps web app.yml infra.yml nightly.yml
 Each is routed under `/p/<name>/`, where the name is the YAML's base name
 unless `--name` says otherwise. By default each pipeline gets its own
 `.steps/<filename>.db`, so two never share a database — not even two sitting in
-one directory. `--state` is how you ask them to; see
+one directory. `--db` is how you ask them to; see
 [One database, several pipelines](#one-database-several-pipelines).
 
 ## What it shows
@@ -353,13 +353,18 @@ Two things it does not do:
 
 ## One database, several pipelines
 
-`--state` points any command at a specific sqlite file, and several pipelines
+`--db` points any command at a specific state database, and several pipelines
 may share one:
 
 ```bash
-steps web app.yml infra.yml --state /var/lib/steps/state.db
-steps run app.yml --job deploy --state /var/lib/steps/state.db
+steps web app.yml infra.yml --db /var/lib/steps/state.db
+steps run app.yml --job deploy --db /var/lib/steps/state.db
 ```
+
+A bare path is a sqlite file, and so is `sqlite:///var/lib/steps/state.db`
+— the scheme is how a second driver will be chosen, the way `--worker` takes
+`ssh://` and `aws://`, and sqlite is the only one today. A scheme no driver
+answers to is refused before anything is opened.
 
 One file to back up, and one file to delete. What it is *not* is a merge:
 inside the database every row carries the pipeline it belongs to, so histories,
@@ -368,12 +373,12 @@ Two pipelines each with a job named `build` running an identical task do not
 share a cache entry, and one pipeline's `run_history:` cap never reaps
 another's runs.
 
-Reading one back needs no pipeline argument. `steps runs --state <file>` lists
+Reading one back needs no pipeline argument. `steps runs --db <file>` lists
 what the file holds and interleaves the newest runs of all of it, which is the
 terminal's version of the web root:
 
 ```bash
-$ steps runs --state /var/lib/steps/state.db
+$ steps runs --db /var/lib/steps/state.db
 
 PIPELINE  PATH
 app       /src/app/pipeline.yml
@@ -385,7 +390,7 @@ WHEN                 PIPELINE  JOB      STATUS     RUN
 ```
 
 The `RUN` column is the handle for going back to one pipeline: `steps runs
-cost app.yml 46UMHVPYRA6YHB7M --state <file>`. That is also why the other
+cost app.yml 46UMHVPYRA6YHB7M --db <file>`. That is also why the other
 views stay scoped — `runs steps`, `runs queue`, `runs cost` and `runs where`
 are questions about one pipeline, and each takes it as its first argument
 rather than being answered for a pipeline nobody picked.
@@ -395,7 +400,7 @@ base name — `infra/pipeline.yml` is `pipeline`. That is also its `/p/<name>/`
 route. When two files would claim one name, `--name` settles it:
 
 ```bash
-steps web app/pipeline.yml infra/pipeline.yml --state shared.db \
+steps web app/pipeline.yml infra/pipeline.yml --db shared.db \
   --name app=app/pipeline.yml --name infra=infra/pipeline.yml
 ```
 
@@ -440,7 +445,7 @@ mean to hand out the controls too.
                  (the pipeline file is still watched — see above)
 --keep-workspace leave build workspaces on disk
 --answer         answer an ask_user question in advance (repeatable)
---state          sqlite state database (default .steps/<pipeline>.db per YAML)
+--db             state database: a sqlite path or sqlite:// url (default .steps/<pipeline>.db per YAML)
 --name           name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml
 --var / --vars-file   pipeline vars, as everywhere else
 ```

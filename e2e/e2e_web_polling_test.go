@@ -195,7 +195,7 @@ func newWatchFixtureIn(t *testing.T, dir, name, pipelineYAML string) *watchFixtu
 // TestStatePathIsPerPipelineFile pins the DEFAULT every claim about serving
 // several pipelines rests on. Keyed by directory, two pipelines in one folder
 // would share a database by accident of layout rather than because anyone
-// asked — which is what --state is for, and why it is not the default.
+// asked — which is what --db is for, and why it is not the default.
 func TestStatePathIsPerPipelineFile(t *testing.T) {
 	first := cli.StatePath("/srv/pipelines/app.yml", "")
 	second := cli.StatePath("/srv/pipelines/infra.yml", "")
@@ -208,9 +208,9 @@ func TestStatePathIsPerPipelineFile(t *testing.T) {
 		t.Errorf("state moved out from under .steps/: %q", first)
 	}
 
-	// --state overrides both, which is the whole feature.
+	// --db overrides both, which is the whole feature.
 	if got := cli.StatePath("/srv/pipelines/app.yml", "/var/lib/steps.db"); got != "/var/lib/steps.db" {
-		t.Errorf("--state was ignored: %q", got)
+		t.Errorf("--db was ignored: %q", got)
 	}
 }
 

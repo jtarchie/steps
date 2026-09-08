@@ -14,7 +14,7 @@ import (
 )
 
 // sharedFile opens two pipelines onto one state file, which is what
-// `steps web app.yml infra.yml --state shared.db` produces.
+// `steps web app.yml infra.yml --db shared.db` produces.
 func sharedFile(t *testing.T, names ...string) []*Store {
 	t.Helper()
 
@@ -111,7 +111,7 @@ func TestReaderRunsSpanPipelinesNewestFirst(t *testing.T) {
 
 // TestReaderRunsFilterToTheNamedPipelines is why the filter is in SQL rather
 // than applied to the result. A state file may hold a pipeline this process
-// does not serve — nothing stops `steps run other.yml --state shared.db` —
+// does not serve — nothing stops `steps run other.yml --db shared.db` —
 // and a feed that fetched a limit and then dropped those rows would show
 // fewer runs the busier the pipeline it cannot link to.
 func TestReaderRunsFilterToTheNamedPipelines(t *testing.T) {
@@ -160,7 +160,7 @@ func mustStartRun(t *testing.T, st *Store, id, jobName string) {
 	}
 }
 
-// TestOpenReaderReadsAFileItDoesNotOwn: `steps runs --state shared.db` has no
+// TestOpenReaderReadsAFileItDoesNotOwn: `steps runs --db shared.db` has no
 // pipeline to name, so there is no Store to borrow a connection from — and
 // opening one the ordinary way would register the very pipeline the caller
 // could not name.

@@ -40,7 +40,7 @@ func (s *Store) Reader() store.Reader { return &Reader{db: s.db} }
 // Every other way into this package registers the pipeline it was handed:
 // OpenStore creates the directory, the file and a pipelines row, which is
 // right for a command about to record something and wrong for one that is
-// only asking. `steps runs --state shared.db` has no pipeline to name, so it
+// only asking. `steps runs --db shared.db` has no pipeline to name, so it
 // has nothing to register — and a read command that left a database (or an
 // invented pipeline) behind would be a surprising answer to a question about
 // history.

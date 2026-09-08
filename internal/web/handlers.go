@@ -769,7 +769,7 @@ func (s *Server) handleSearch(c echo.Context) error {
 		if full() {
 			// Nothing left to fill, and a run query is the expensive part:
 			// the palette refetches on every keystroke, and under one shared
-			// --state file these serialize on the same connection the runner
+			// --db file these serialize on the same connection the runner
 			// writes events through.
 			break
 		}

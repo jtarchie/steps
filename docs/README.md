@@ -45,7 +45,7 @@ steps plan <pipeline>       show what a run would execute vs skip
 steps runs <pipeline>       what ran, newest first, each row naming the
                             configuration it executed (steps|queue|cost|where
                             for the other four views; runs steps says why)
-steps runs --state <file>   with no pipeline: every pipeline in one state file
+steps runs --db <file>      with no pipeline: every pipeline in one state file
 steps validate --live       also probe the models and MCP servers themselves
                             (--job <name> narrows it to one job)
 steps jobs <pipeline>       list jobs the circuit breaker paused

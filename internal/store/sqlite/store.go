@@ -90,7 +90,7 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 	// rather than honoring busy_timeout, because waiting there could
 	// deadlock two transactions against each other. Taking the write lock up
 	// front turns that into an ordinary wait. Within one process this cannot
-	// arise for one HANDLE (SetMaxOpenConns(1) below), but a --state file
+	// arise for one HANDLE (SetMaxOpenConns(1) below), but a --db file
 	// holding several pipelines gets one handle per pipeline — separate pools
 	// on one file, inside one process — and every one of them enqueues.
 	//
@@ -224,7 +224,7 @@ func registerPipeline(ctx context.Context, db *sql.DB, name, path string) (int64
 }
 
 // SetSourcePath records where this pipeline's YAML lives, for whoever reads
-// the file back — `steps runs --state shared.db` lists it, and a name alone
+// the file back — `steps runs --db shared.db` lists it, and a name alone
 // does not say which of two checkouts `pipeline` is.
 //
 // Written on every open by the commands that load a pipeline, so a checkout
