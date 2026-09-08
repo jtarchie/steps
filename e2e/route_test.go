@@ -1,22 +1,24 @@
 package e2e
 
 import (
-	"context"
 	"os"
+	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
-	"github.com/jtarchie/steps/internal/store"
 )
 
-// TestRunJobDoesNotRecordSucceededForInheritedFix: a task step referencing a
-// top-level tasks: entry whose fix: is set only there (not inline on the
-// step) must be treated as unskippable the same way merkle.PlanChains treats
-// it at plan time — route.go's runtime stepForcesUnskippable used to check
-// only the step's own literal Fix field, missing a fix: inherited via
-// Config.ResolveTask, so it would incorrectly record a job_runs "succeeded"
-// row for a chain that should never be treated as a cacheable success.
-func TestRunJobDoesNotRecordSucceededForInheritedFix(t *testing.T) {
+// TestRunSaysAnInheritedFixMakesTheChainUncacheable: a task step referencing a
+// top-level tasks: entry whose fix: is set only there (not inline on the step)
+// must be treated as unskippable the same way merkle.PlanChains treats it at
+// plan time — route.go's runtime stepForcesUnskippable used to check only the
+// step's own literal Fix field, missing a fix: inherited via
+// Config.ResolveTask.
+//
+// Asserted on the note the run prints rather than on the absence of a job_runs
+// row, because the row the bug wrote is INERT: the plan-time Unskippable flag
+// keeps the chain from ever being asked about, so nothing downstream can tell
+// the two apart. The note is the same runtime answer, and it is the half a
+// user actually sees.
+func TestRunSaysAnInheritedFixMakesTheChainUncacheable(t *testing.T) {
 	dir := t.TempDir()
 	path := pipelinePath(t, dir)
 
@@ -50,22 +52,12 @@ jobs:
 		t.Fatal(err)
 	}
 
-	mustRun(t, path)
+	out := captureStdout(t, func() { mustRun(t, path) })
 
-	st, err := store.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
-	if err != nil {
-		t.Fatalf("open state store: %v", err)
-	}
-	defer func() { _ = st.Close() }()
-
-	runs, err := st.ListJobRuns(context.Background(), "build", 10)
-	if err != nil {
-		t.Fatalf("list job_runs: %v", err)
-	}
-
-	if count := len(runs); count != 0 {
-		t.Errorf("job_runs rows for job %q = %d, want 0: a task whose fix: is inherited from a tasks: entry "+
-			"must never be recorded as a reusable succeeded chain", "build", count)
+	const want = "makes this chain uncacheable (fix: agent)"
+	if !strings.Contains(out, want) {
+		t.Errorf("run output does not contain %q, so a fix: inherited from a tasks: entry "+
+			"was not seen at runtime and the chain was recorded as a reusable success:\n%s", want, out)
 	}
 }
 

@@ -7,17 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"time"
 )
-
-// JobRunRow is one recorded job run.
-type JobRunRow struct {
-	JobName   string
-	RootHash  string
-	Status    string
-	Error     string
-	CreatedAt time.Time
-}
 
 // RecordJobRun upserts the outcome of a job run's chain, keyed by
 // (jobName, rootHash).
@@ -78,29 +68,4 @@ func (s *Store) HasSucceededBatch(ctx context.Context, jobName string, rootHashe
 	}
 
 	return result, nil
-}
-
-// ListJobRuns returns the most recent job runs, newest first. An empty
-// jobName covers every job.
-func (s *Store) ListJobRuns(ctx context.Context, jobName string, limit int) ([]JobRunRow, error) {
-	return collect(ctx, s.db, "job_runs", `
-		SELECT job_name, root_hash, status, error, created_at
-		FROM job_runs
-		WHERE pipeline_id = ? AND (? = '' OR job_name = ?)
-		ORDER BY created_at DESC, rowid DESC
-		LIMIT ?
-	`, []any{s.pipelineID, jobName, jobName, limit}, func(rows *sql.Rows) (JobRunRow, error) {
-		var (
-			row       JobRunRow
-			errCol    sql.NullString
-			createdAt string
-		)
-
-		err := rows.Scan(&row.JobName, &row.RootHash, &row.Status, &errCol, &createdAt)
-
-		row.Error = errCol.String
-		row.CreatedAt = parseTimestamp(createdAt)
-
-		return row, err //nolint:wrapcheck // collect wraps with the thing being read
-	})
 }
