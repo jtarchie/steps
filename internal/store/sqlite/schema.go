@@ -9,6 +9,14 @@ package sqlite
 //
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
+// 9 dropped job_runs.status, .error and .created_at: the table now holds only
+// green chains, a failure being a DELETE. A failed chain used to be a row
+// too, and a job failing through fresh content each time pushed the green
+// rows out of a table capped by count regardless of status — so the rerun
+// redid work that had succeeded. An older file's INSERT names no missing
+// column, but its stale failed rows would answer HasSucceededBatch as green
+// once the status predicate is gone, so it is refused.
+//
 // 8 added run_inputs, without which --resume could not reach a version the
 // cursor had already taken: the resumed run selected nothing, ran no steps,
 // and reported SUCCESS. An older database opened without the table and every
@@ -35,7 +43,7 @@ package sqlite
 // 4 put pipeline_id into the keys of run_placements and agent_usage. Without
 // it, two pipelines sharing a state file collided on (run_id, node_hash) and
 // one upserted over the other's row.
-const schemaVersion = 8
+const schemaVersion = 9
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -151,13 +159,15 @@ CREATE INDEX IF NOT EXISTS idx_nodes_content_hash ON nodes(content_hash);
 -- Bounded by count instead (see pruneJobRuns), which is the bound that matches
 -- what it holds: a chain last green before the retention window is one whose
 -- content nobody is about to submit again.
+--
+-- No status column: a row IS the green. A failed rerun deletes the row rather
+-- than flipping it (see store.Cache), so the count cap only ever bounds chains
+-- worth keeping, and a job failing its way through fresh content cannot push
+-- them out.
 CREATE TABLE IF NOT EXISTS job_runs (
     pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     job_name   TEXT NOT NULL,
     root_hash  TEXT NOT NULL,
-    status     TEXT NOT NULL,
-    error      TEXT,
-    created_at TEXT NOT NULL,
     PRIMARY KEY (pipeline_id, job_name, root_hash)
 );
 

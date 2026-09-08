@@ -11,7 +11,6 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
-	"github.com/jtarchie/steps/internal/outcome"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -298,7 +297,7 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 
 	final := runHooks(ctx, r.scope(stepLabel(i, step)), step.Hooks, err)
 	if err == nil && final != nil {
-		_ = r.st.RecordJobRun(context.WithoutCancel(ctx), r.jobName, res.hash, string(outcome.Failed), final)
+		_ = r.st.ForgetChain(context.WithoutCancel(ctx), r.jobName, res.hash)
 
 		return stepResult{verdict: res.verdict, note: res.note}, final
 	}

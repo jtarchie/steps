@@ -287,9 +287,9 @@ func TestATrimmedChainCacheIsCommitted(t *testing.T) {
 	)
 
 	for chain := range chains {
-		err := st.RecordJobRun(ctx, "build", fmt.Sprintf("root-%04d", chain), "succeeded", nil)
+		err := st.RecordChainSucceeded(ctx, "build", fmt.Sprintf("root-%04d", chain))
 		if err != nil {
-			t.Fatalf("RecordJobRun: %v", err)
+			t.Fatalf("RecordChainSucceeded: %v", err)
 		}
 	}
 

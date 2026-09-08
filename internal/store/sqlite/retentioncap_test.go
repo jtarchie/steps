@@ -46,10 +46,9 @@ func TestRetentionCarriesTheCacheItsCapAllows(t *testing.T) {
 		// holds one row per whole chain, and without any the cap on it is a
 		// statement about an empty table.
 		for chain := range chainsPerBuild {
-			err := st.RecordJobRun(ctx, "job",
-				fmt.Sprintf("%064x", build*1000+chain), "succeeded", nil)
+			err := st.RecordChainSucceeded(ctx, "job", fmt.Sprintf("%064x", build*1000+chain))
 			if err != nil {
-				t.Fatalf("RecordJobRun: %v", err)
+				t.Fatalf("RecordChainSucceeded: %v", err)
 			}
 		}
 	}

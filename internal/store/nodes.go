@@ -13,7 +13,16 @@ import (
 // and refreshes no timestamp, so an age floor sweeps past a working
 // pipeline's cache, the faster it polls the sooner it loses it.
 type Cache interface {
-	RecordJobRun(ctx context.Context, jobName, rootHash, status string, runErr error) error
+	// RecordChainSucceeded adds a whole chain to the skip index.
+	// ForgetChain removes it: a chain that ran again and failed — a --force
+	// rerun, a hook — must not be skipped on the strength of the older
+	// success. Failure is a removal rather than a row because the index
+	// holds only what a rerun may skip; a failed run's classification lives
+	// on its run and its nodes, and a job failing through fresh content
+	// every time must not be able to crowd the green chains out of a
+	// count-capped table.
+	RecordChainSucceeded(ctx context.Context, jobName, rootHash string) error
+	ForgetChain(ctx context.Context, jobName, rootHash string) error
 	HasSucceededBatch(ctx context.Context, jobName string, rootHashes []string) (map[string]bool, error)
 	RecordNode(ctx context.Context, node NodeRecord, jobName, status string, result map[string]any, execErr error) error
 	HasNodeSucceeded(ctx context.Context, jobName, hash string) (bool, error)

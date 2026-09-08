@@ -124,21 +124,7 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 
 	ctx := context.Background()
 
-	_, err = db.ExecContext(ctx, schema)
-	if err != nil {
-		_ = db.Close()
-
-		return nil, fmt.Errorf("could not migrate state db %q: %w", path, err)
-	}
-
-	err = checkSchemaVersion(ctx, db, path)
-	if err != nil {
-		_ = db.Close()
-
-		return nil, err
-	}
-
-	id, err := registerPipeline(ctx, db, pipelineName, path)
+	id, err := initDB(ctx, db, path, pipelineName)
 	if err != nil {
 		_ = db.Close()
 
@@ -146,6 +132,59 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 	}
 
 	return &Store{db: db, path: path, pipeline: pipelineName, pipelineID: id}, nil
+}
+
+// initDB creates the schema, stamps it, and registers the pipeline under ONE
+// transaction, returning the pipeline's id.
+//
+// One transaction because a reader tells a file mid-creation from an old one
+// by whether the schema is there (see OpenReader): tables committed ahead of
+// the stamp are a file "written by a different build" for the instant between
+// the two, and the reader's advice for that is to delete it. `_txlock=immediate`
+// takes the write lock at BEGIN, so under WAL a concurrent reader sees either
+// nothing or all of it.
+func initDB(ctx context.Context, db *sql.DB, path, pipelineName string) (int64, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("could not open state db %q: %w", path, err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	err = initSchema(ctx, tx, path)
+	if err != nil {
+		return 0, err
+	}
+
+	id, err := registerPipeline(ctx, tx, pipelineName, path)
+	if err != nil {
+		return 0, err
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return 0, fmt.Errorf("could not open state db %q: %w", path, err)
+	}
+
+	return id, nil
+}
+
+// initSchema applies the DDL and the version stamp to an open transaction;
+// the commit is the caller's, and TestSchemaAndStampLandInOneCommit holds it
+// open to prove nothing shows before it.
+func initSchema(ctx context.Context, tx *sql.Tx, path string) error {
+	_, err := tx.ExecContext(ctx, schema)
+	if err != nil {
+		return fmt.Errorf("could not migrate state db %q: %w", path, err)
+	}
+
+	return checkSchemaVersion(ctx, tx, path)
+}
+
+// executor is what a query needs from either a connection or a transaction.
+type executor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 // openDB opens the sqlite file with the pragmas above, for a writer and a
@@ -197,7 +236,7 @@ func openDSN(path, dsn string) (*sql.DB, error) {
 // string for every pipeline sharing one, which is no answer at all to "which
 // checkout is `infra`". Only a command that LOADED the YAML knows, and
 // SetSourcePath is how it says so.
-func registerPipeline(ctx context.Context, db *sql.DB, name, path string) (int64, error) {
+func registerPipeline(ctx context.Context, db executor, name, path string) (int64, error) {
 	if name == "" {
 		return 0, errors.New("a state store needs a pipeline name; pass --name or let it default to the pipeline file's base name")
 	}
@@ -266,7 +305,7 @@ func (s *Store) Description() string { return s.path }
 //
 // PRAGMA user_version rather than a table: it lives in the file header, costs
 // no row, and cannot itself be the thing that is missing.
-func checkSchemaVersion(ctx context.Context, db *sql.DB, path string) error {
+func checkSchemaVersion(ctx context.Context, db executor, path string) error {
 	found, err := readSchemaVersion(ctx, db, path)
 	if err != nil {
 		return err
@@ -294,7 +333,7 @@ func checkSchemaVersion(ctx context.Context, db *sql.DB, path string) error {
 }
 
 // readSchemaVersion reports what schema the file at path was written by.
-func readSchemaVersion(ctx context.Context, db *sql.DB, path string) (int, error) {
+func readSchemaVersion(ctx context.Context, db executor, path string) (int, error) {
 	var found int
 
 	err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&found)
@@ -318,7 +357,7 @@ func schemaVersionError(path string, found int) error {
 // freshlyCreated reports that this open made the database, rather than
 // inheriting one an older build left. A database with no run and no node has
 // nothing to lose by being stamped.
-func freshlyCreated(ctx context.Context, db *sql.DB) bool {
+func freshlyCreated(ctx context.Context, db executor) bool {
 	var rows int
 
 	err := db.QueryRowContext(ctx,

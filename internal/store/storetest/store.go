@@ -5,7 +5,6 @@ package storetest
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -38,14 +37,23 @@ func mustRecordNode(t *testing.T, st store.Store, jobName, hash string) {
 	}
 }
 
-func mustRecordJobRun(t *testing.T, st store.Store, jobName, rootHash, status string, runErr error) {
+func mustRecordChainSucceeded(t *testing.T, st store.Store, jobName, rootHash string) {
 	t.Helper()
 
 	mustRecordNode(t, st, jobName, rootHash)
 
-	err := st.RecordJobRun(context.Background(), jobName, rootHash, status, runErr)
+	err := st.RecordChainSucceeded(context.Background(), jobName, rootHash)
 	if err != nil {
-		t.Fatalf("RecordJobRun(%q, %q, %q): %v", jobName, rootHash, status, err)
+		t.Fatalf("RecordChainSucceeded(%q, %q): %v", jobName, rootHash, err)
+	}
+}
+
+func mustForgetChain(t *testing.T, st store.Store, jobName, rootHash string) {
+	t.Helper()
+
+	err := st.ForgetChain(context.Background(), jobName, rootHash)
+	if err != nil {
+		t.Fatalf("ForgetChain(%q, %q): %v", jobName, rootHash, err)
 	}
 }
 
@@ -54,9 +62,9 @@ func (s suite) TestStoreHasSucceededBatch(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	mustRecordJobRun(t, st, "job", "hash1", "succeeded", nil)
-	mustRecordJobRun(t, st, "job", "hash2", "failed", errors.New("boom"))
-	mustRecordJobRun(t, st, "other-job", "hash1", "succeeded", nil)
+	mustRecordChainSucceeded(t, st, "job", "hash1")
+	mustForgetChain(t, st, "job", "hash2")
+	mustRecordChainSucceeded(t, st, "other-job", "hash1")
 
 	got, err := st.HasSucceededBatch(context.Background(), "job", []string{"hash1", "hash2", "hash3"})
 	if err != nil {
@@ -94,7 +102,7 @@ func (s suite) TestStoreHasSucceededBatchManyHashes(t *testing.T) {
 		hash := fmt.Sprintf("hash-%d", i)
 		hashes[i] = hash
 
-		mustRecordJobRun(t, st, "job", hash, "succeeded", nil)
+		mustRecordChainSucceeded(t, st, "job", hash)
 	}
 
 	got, err := st.HasSucceededBatch(context.Background(), "job", hashes)
@@ -690,8 +698,8 @@ func (s suite) TestAFailedRerunUngreensTheChain(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	mustRecordJobRun(t, st, "job", "hash1", "succeeded", nil)
-	mustRecordJobRun(t, st, "job", "hash1", "failed", errors.New("boom"))
+	mustRecordChainSucceeded(t, st, "job", "hash1")
+	mustForgetChain(t, st, "job", "hash1")
 
 	got, err := st.HasSucceededBatch(ctx, "job", []string{"hash1"})
 	if err != nil {
@@ -700,6 +708,45 @@ func (s suite) TestAFailedRerunUngreensTheChain(t *testing.T) {
 
 	if got["hash1"] {
 		t.Fatal("a chain whose latest run failed is still reported as succeeded")
+	}
+}
+
+// TestFailedChainsDoNotCrowdOutGreenOnes: the index is capped by count, and a
+// job can fail through fresh content every run — a flaky agent, a moving
+// input. Each failure used to be a row, so a run of failures pushed the green
+// chains out of the cap and the next rerun redid work that had succeeded.
+// A failure is a removal, never a row, so however many there are the cap
+// only ever bounds chains worth keeping.
+func (s suite) TestFailedChainsDoNotCrowdOutGreenOnes(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	green := []string{"green-1", "green-2", "green-3"}
+	for _, hash := range green {
+		mustRecordChainSucceeded(t, st, "build", hash)
+	}
+
+	// Far past any multiple of a one-run history a driver could choose.
+	for i := range 200 {
+		mustForgetChain(t, st, "build", fmt.Sprintf("failed-%03d", i))
+	}
+
+	err := st.Prune(ctx, store.Retention{JobName: "build", Runs: 1}, "")
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+
+	got, err := st.HasSucceededBatch(ctx, "build", green)
+	if err != nil {
+		t.Fatalf("HasSucceededBatch: %v", err)
+	}
+
+	for _, hash := range green {
+		if !got[hash] {
+			t.Errorf("green chain %q was evicted by failed ones — the next run redoes work that succeeded", hash)
+		}
 	}
 }
 

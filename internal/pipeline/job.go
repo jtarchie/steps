@@ -391,7 +391,7 @@ func recordChainSucceeded(ctx context.Context, r stepRunner, rootHash string, ch
 		return nil
 	}
 
-	err := r.st.RecordJobRun(ctx, r.jobName, rootHash, "succeeded", nil)
+	err := r.st.RecordChainSucceeded(ctx, r.jobName, rootHash)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", r.jobName, err)
 	}

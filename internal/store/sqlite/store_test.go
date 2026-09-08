@@ -86,18 +86,18 @@ func mustRecordNode(t *testing.T, st *Store, jobName, hash string) {
 	}
 }
 
-func mustRecordJobRun(t *testing.T, st *Store, jobName, rootHash, status string, runErr error) {
+func mustRecordChainSucceeded(t *testing.T, st *Store, jobName, rootHash string) {
 	t.Helper()
 
 	mustRecordNode(t, st, jobName, rootHash)
 
-	err := st.RecordJobRun(context.Background(), jobName, rootHash, status, runErr)
+	err := st.RecordChainSucceeded(context.Background(), jobName, rootHash)
 	if err != nil {
-		t.Fatalf("RecordJobRun(%q, %q, %q): %v", jobName, rootHash, status, err)
+		t.Fatalf("RecordChainSucceeded(%q, %q): %v", jobName, rootHash, err)
 	}
 }
 
-func TestStoreHasSucceededAndRecordJobRun(t *testing.T) {
+func TestStoreHasSucceededAndRecordChain(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -112,12 +112,16 @@ func TestStoreHasSucceededAndRecordJobRun(t *testing.T) {
 
 	assertHasSucceeded(t, st, "job", "hash1", false)
 
-	mustRecordJobRun(t, st, "job", "hash1", "succeeded", nil)
+	mustRecordChainSucceeded(t, st, "job", "hash1")
 	assertHasSucceeded(t, st, "job", "hash1", true)
 	assertHasSucceeded(t, st, "job", "hash2", false)
 	assertHasSucceeded(t, st, "other-job", "hash1", false)
 
-	mustRecordJobRun(t, st, "job", "hash3", "failed", errors.New("boom"))
+	err = st.ForgetChain(context.Background(), "job", "hash3")
+	if err != nil {
+		t.Fatalf("ForgetChain: %v", err)
+	}
+
 	assertHasSucceeded(t, st, "job", "hash3", false)
 
 	err = st.Close()

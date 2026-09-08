@@ -525,12 +525,12 @@ type nodeRow struct {
 	Error     string
 }
 
-// jobRunRow is one row of the store's job_runs table: a chain's recorded
-// outcome, which is what a later run consults to decide whether to skip.
+// jobRunRow is one row of the store's job_runs table: a chain that went
+// green, which is what a later run consults to decide whether to skip. A
+// failed chain is no row at all — its classification is on the node.
 type jobRunRow struct {
-	JobName string
-	Status  string
-	Error   string
+	JobName  string
+	RootHash string
 }
 
 // openStateDB opens the state database colocated with a pipeline YAML, for
@@ -647,13 +647,13 @@ func storeNodes(t *testing.T, pipelinePath string) []nodeRow {
 	return nodes
 }
 
-// storeJobRuns returns every recorded chain outcome.
+// storeJobRuns returns every green chain in the skip index.
 func storeJobRuns(t *testing.T, pipelinePath string) []jobRunRow {
 	t.Helper()
 
 	db := openStateDB(t, pipelinePath)
 
-	rows, err := db.QueryContext(t.Context(), `SELECT job_name, status, COALESCE(error, '') FROM job_runs ORDER BY created_at`)
+	rows, err := db.QueryContext(t.Context(), `SELECT job_name, root_hash FROM job_runs ORDER BY rowid`)
 	if err != nil {
 		t.Fatalf("query job_runs: %v", err)
 	}
@@ -666,7 +666,7 @@ func storeJobRuns(t *testing.T, pipelinePath string) []jobRunRow {
 	for rows.Next() {
 		var run jobRunRow
 
-		err = rows.Scan(&run.JobName, &run.Status, &run.Error)
+		err = rows.Scan(&run.JobName, &run.RootHash)
 		if err != nil {
 			t.Fatalf("scan job_run: %v", err)
 		}

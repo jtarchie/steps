@@ -408,14 +408,12 @@ func testSadPathModelRejects(t *testing.T) {
 		}
 	}
 
-	// The chain's job_runs row carries the classification, not just
-	// "didn't work": a task exiting nonzero is a task-level *failure*.
-	// Compare with the provider-outage subtest below, which records the
-	// same shape with status errored — that difference is the whole
-	// point of outcome.Classify, and this is where it lands durably.
-	runs := storeJobRuns(t, path)
-	if len(runs) != 1 || runs[0].Status != "failed" {
-		t.Errorf("job_runs = %+v, want exactly one row with status failed", runs)
+	// The classification — a task exiting nonzero is a task-level
+	// *failure*, where the provider-outage subtest below lands errored —
+	// lives on the node asserted above; the skip index holds only green
+	// chains, so a failed one leaves no row for a rerun to skip on.
+	if runs := storeJobRuns(t, path); len(runs) != 0 {
+		t.Errorf("job_runs = %+v, want none (a failed chain is not in the skip index)", runs)
 	}
 }
 
@@ -497,9 +495,8 @@ func testSadPathProviderUnreachable(t *testing.T) {
 		}
 	}
 
-	runs := storeJobRuns(t, path)
-	if len(runs) != 1 || runs[0].Status != "errored" {
-		t.Errorf("job_runs = %+v, want exactly one row with status errored", runs)
+	if runs := storeJobRuns(t, path); len(runs) != 0 {
+		t.Errorf("job_runs = %+v, want none (an errored chain is not in the skip index)", runs)
 	}
 }
 

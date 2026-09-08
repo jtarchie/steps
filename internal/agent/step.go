@@ -130,8 +130,9 @@ type StepStore interface {
 // pipeline's task/put steps do — best-effort, errors ignored, since a
 // failure to record must not mask the original error being returned to the
 // caller. The recorded status reflects the classified outcome (failed vs
-// errored vs aborted), and the write uses a detached context so an aborted
-// step's outcome still persists rather than being dropped by the canceled ctx.
+// errored vs aborted), the chain leaves the skip index, and the write uses a
+// detached context so an aborted step's outcome still persists rather than
+// being dropped by the canceled ctx.
 //
 // res is whatever the conversation produced before it failed. Recording it
 // (rather than the nil this used to store) is the whole point: a failed agent
@@ -141,7 +142,7 @@ func recordAgentFailure(ctx context.Context, st store.Cache, node merkle.Node, j
 	status := string(outcome.Classify(ctx, runErr))
 	recCtx := context.WithoutCancel(ctx)
 	_ = st.RecordNode(recCtx, nodeRecord(node), jobName, status, agentResultRecord(res), runErr)
-	_ = st.RecordJobRun(recCtx, jobName, node.Hash, status, runErr)
+	_ = st.ForgetChain(recCtx, jobName, node.Hash)
 }
 
 // StepOutcome is what RunStep reports about a completed agent step, beyond

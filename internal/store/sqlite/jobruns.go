@@ -1,7 +1,8 @@
 package sqlite
 
 // job_runs: the chain-level cache index. A row means "this job has already
-// run this exact content", which is what lets a rerun skip work.
+// run this exact content", which is what lets a rerun skip work. Only green
+// chains are rows; see store.Cache for why a failure deletes instead.
 
 import (
 	"context"
@@ -9,19 +10,27 @@ import (
 	"fmt"
 )
 
-// RecordJobRun upserts the outcome of a job run's chain, keyed by
-// (jobName, rootHash).
-func (s *Store) RecordJobRun(ctx context.Context, jobName, rootHash, status string, runErr error) error {
+// RecordChainSucceeded adds (jobName, rootHash) to the skip index.
+func (s *Store) RecordChainSucceeded(ctx context.Context, jobName, rootHash string) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO job_runs (pipeline_id, job_name, root_hash, status, error, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(pipeline_id, job_name, root_hash) DO UPDATE SET
-			status     = excluded.status,
-			error      = excluded.error,
-			created_at = excluded.created_at
-	`, s.pipelineID, jobName, rootHash, status, errText(runErr), now())
+		INSERT OR IGNORE INTO job_runs (pipeline_id, job_name, root_hash)
+		VALUES (?, ?, ?)
+	`, s.pipelineID, jobName, rootHash)
 	if err != nil {
 		return fmt.Errorf("could not record job run (job %q, root %q): %w", jobName, rootHash, err)
+	}
+
+	return nil
+}
+
+// ForgetChain removes (jobName, rootHash) from the skip index; a chain never
+// recorded is a no-op.
+func (s *Store) ForgetChain(ctx context.Context, jobName, rootHash string) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM job_runs WHERE pipeline_id = ? AND job_name = ? AND root_hash = ?
+	`, s.pipelineID, jobName, rootHash)
+	if err != nil {
+		return fmt.Errorf("could not forget job run (job %q, root %q): %w", jobName, rootHash, err)
 	}
 
 	return nil
@@ -51,7 +60,7 @@ func (s *Store) HasSucceededBatch(ctx context.Context, jobName string, rootHashe
 		}
 
 		found, err := collect(ctx, s.db, "job_runs",
-			`SELECT root_hash FROM job_runs WHERE pipeline_id = ? AND job_name = ? AND status = 'succeeded' AND root_hash IN (`+
+			`SELECT root_hash FROM job_runs WHERE pipeline_id = ? AND job_name = ? AND root_hash IN (`+
 				placeholders(len(chunk))+`)`,
 			args, func(rows *sql.Rows) (string, error) {
 				var hash string

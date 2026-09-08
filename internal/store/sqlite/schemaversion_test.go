@@ -149,3 +149,76 @@ func stampVersion(t *testing.T, path string, version int) {
 		t.Fatalf("stamping user_version: %v", err)
 	}
 }
+
+// TestSchemaAndStampLandInOneCommit: the reader tells a file mid-creation
+// from an old one by whether the schema is THERE, so a writer that commits
+// its tables before its stamp shows a reader tables at version 0 — and the
+// reader's answer to that is "written by a different build, delete the file",
+// about the database the operator just started. Racing `steps runs` against
+// the first `steps run` is all it takes.
+//
+// So the DDL and the stamp are one transaction, and this holds the
+// transaction open to look from a second connection: nothing, then both.
+func TestSchemaAndStampLandInOneCommit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+
+	writer, err := openDB(path)
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+
+	defer func() { _ = writer.Close() }()
+
+	tx, err := writer.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+
+	err = initSchema(ctx, tx, path)
+	if err != nil {
+		t.Fatalf("initSchema: %v", err)
+	}
+
+	reader, err := openReadOnlyDB(path)
+	if err != nil {
+		t.Fatalf("openReadOnlyDB: %v", err)
+	}
+
+	defer func() { _ = reader.Close() }()
+
+	missing, found := readerSees(ctx, t, reader, path)
+	if !missing || found != 0 {
+		t.Fatalf("before commit a reader sees schema missing=%v at version %d, want missing at 0 — it will call this file an older build's and tell the operator to delete it", missing, found)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	missing, found = readerSees(ctx, t, reader, path)
+	if missing || found != schemaVersion {
+		t.Fatalf("after commit a reader sees schema missing=%v at version %d, want present at %d", missing, found, schemaVersion)
+	}
+}
+
+// readerSees is what OpenReader would decide from: whether the schema is
+// there, and what version the file claims.
+func readerSees(ctx context.Context, t *testing.T, db *sql.DB, path string) (missing bool, version int) {
+	t.Helper()
+
+	missing, err := schemaMissing(ctx, db)
+	if err != nil {
+		t.Fatalf("schemaMissing: %v", err)
+	}
+
+	version, err = readSchemaVersion(ctx, db, path)
+	if err != nil {
+		t.Fatalf("readSchemaVersion: %v", err)
+	}
+
+	return missing, version
+}

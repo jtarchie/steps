@@ -87,14 +87,15 @@ func nodeRecord(n merkle.Node) store.NodeRecord {
 	}
 }
 
-// recordStepFailure records a step's failed node and job_run, classifying the
-// outcome (failed vs errored vs aborted) and writing under a detached context
-// so an aborted step's outcome still persists rather than being dropped by the
-// canceled context. Best-effort: recording errors are ignored so they can't
+// recordStepFailure records a step's failed node, classifying the outcome
+// (failed vs errored vs aborted), and drops the chain from the skip index —
+// a --force rerun that fails must not skip on the older success. Both write
+// under a detached context so an aborted step's outcome still persists rather
+// than being dropped by the canceled context. Best-effort: recording errors are ignored so they can't
 // mask the original error returned to the caller.
 func recordStepFailure(ctx context.Context, r stepRunner, node merkle.Node, err error) {
 	status := string(outcome.Classify(ctx, err))
 	recCtx := context.WithoutCancel(ctx)
 	_ = r.st.RecordNode(recCtx, nodeRecord(node), r.jobName, status, nil, err)
-	_ = r.st.RecordJobRun(recCtx, r.jobName, node.Hash, status, err)
+	_ = r.st.ForgetChain(recCtx, r.jobName, node.Hash)
 }
