@@ -12,15 +12,6 @@ import (
 	"time"
 )
 
-// Run is one `steps run` invocation that can be resumed.
-type Run struct {
-	ID        string
-	JobName   string
-	Workspace string
-	Status    string
-	StartedAt string
-}
-
 // RunRow is one run invocation as the history views read it: the resume
 // record plus the finish timestamp that makes a duration answerable.
 type RunRow struct {
@@ -256,33 +247,6 @@ func (s *Store) RecordRunParent(ctx context.Context, runID, parentID string) err
 	return nil
 }
 
-// FindRun reads a run in the resume shape, which predates finished_at and is
-// what --resume needs.
-//
-// Scoped like everything else, and here that is load-bearing rather than
-// uniform: run ids are globally unique (pipeline.NewRunID is random), so in a
-// shared state file `steps run a.yml --resume <id>` would otherwise happily
-// continue a run of b.yml — reusing another pipeline's workspace and step
-// indexes against this pipeline's plan. The id not being found is the right
-// answer, and the message says which pipeline was asked.
-func (s *Store) FindRun(ctx context.Context, id string) (Run, error) {
-	var run Run
-
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, job_name, workspace, status, started_at FROM runs WHERE id = ? AND pipeline_id = ?`,
-		id, s.pipelineID).
-		Scan(&run.ID, &run.JobName, &run.Workspace, &run.Status, &run.StartedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Run{}, fmt.Errorf("no run %q was recorded for pipeline %q", id, s.pipeline)
-	}
-
-	if err != nil {
-		return Run{}, fmt.Errorf("could not read run %q: %w", id, err)
-	}
-
-	return run, nil
-}
-
 // CompletedRunSteps returns the step indexes a run already finished.
 func (s *Store) CompletedRunSteps(ctx context.Context, runID string) (map[int]string, error) {
 	type step struct {
@@ -370,8 +334,14 @@ func (s *Store) RunsUsingNode(ctx context.Context, hash string, limit int) ([]Ru
 	`, []any{s.pipelineID, hash, limit}, scanRunRowFrom)
 }
 
-// FindRunRow reads one run in the history shape, with its finish timestamp —
-// so a single run's page and the run list render from identical data.
+// FindRunRow reads one run by id, with ok reporting whether this pipeline has
+// it — the single lookup every caller shares, from a run page to --resume.
+//
+// Scoped like everything else, and here that is load-bearing rather than
+// uniform: run ids are globally unique (pipeline.NewRunID is random), so in a
+// shared state file `steps run a.yml --resume <id>` would otherwise happily
+// continue a run of b.yml — reusing another pipeline's workspace and step
+// indexes against this pipeline's plan. Not found is the right answer.
 func (s *Store) FindRunRow(ctx context.Context, id string) (RunRow, bool, error) {
 	return s.oneRun(ctx, `SELECT `+runColumns+` FROM runs WHERE id = ? AND pipeline_id = ?`,
 		fmt.Sprintf("could not read run %q", id), id, s.pipelineID)

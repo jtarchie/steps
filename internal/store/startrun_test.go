@@ -46,9 +46,9 @@ func TestStartRunRefusesAnIdSomeRunAlreadyHas(t *testing.T) {
 	}
 
 	// And it did not take the first run over on its way to failing.
-	run, err := store.FindRun(ctx, "COLLIDE1")
-	if err != nil {
-		t.Fatalf("FindRun: %v", err)
+	run, ok, err := store.FindRunRow(ctx, "COLLIDE1")
+	if err != nil || !ok {
+		t.Fatalf("FindRunRow: %v (found %v)", err, ok)
 	}
 
 	if run.Status != "succeeded" {
@@ -129,9 +129,9 @@ func TestResumeRunNeedsARunToResume(t *testing.T) {
 		t.Fatalf("ResumeRun: %v", err)
 	}
 
-	run, err := store.FindRun(ctx, "REAL0001")
-	if err != nil {
-		t.Fatalf("FindRun: %v", err)
+	run, ok, err := store.FindRunRow(ctx, "REAL0001")
+	if err != nil || !ok {
+		t.Fatalf("FindRunRow: %v (found %v)", err, ok)
 	}
 
 	if run.Status != "running" || run.Workspace != "/tmp/second" {

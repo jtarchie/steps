@@ -972,7 +972,7 @@ func declaresForeignKey(ctx context.Context, t *testing.T, store *Store, table, 
 // StartRun upserts without touching started_at — correctly, since that is when
 // the run started — so resuming an old run leaves it the OLDEST row. Retention
 // then deleted it, cascading away the run_steps a further resume reads and the
-// agent_usage a budget continues from, and FindRun answered "no run recorded":
+// agent_usage a budget continues from, and the run lookup answered "no such run":
 // permanently unresumable, caused by the resume itself.
 func TestPruneKeepsTheRunItWasCalledFrom(t *testing.T) {
 	t.Parallel()
@@ -999,9 +999,9 @@ func TestPruneKeepsTheRunItWasCalledFrom(t *testing.T) {
 		t.Fatalf("PruneRuns: %v", err)
 	}
 
-	_, err = store.FindRun(ctx, resumed)
-	if err != nil {
-		t.Errorf("the run being resumed was deleted by its own prune: %v", err)
+	_, ok, err := store.FindRunRow(ctx, resumed)
+	if err != nil || !ok {
+		t.Errorf("the run being resumed was deleted by its own prune: %v (found %v)", err, ok)
 	}
 
 	// Its resume record has to survive with it, or the resume restarts from zero.
@@ -1049,9 +1049,9 @@ func TestPruneSparesARunStillInFlight(t *testing.T) {
 		t.Fatalf("PruneRuns: %v", err)
 	}
 
-	_, err = store.FindRun(ctx, "INFLIGHT")
-	if err != nil {
-		t.Errorf("a run still in flight was deleted by another build's prune: %v", err)
+	_, ok, err := store.FindRunRow(ctx, "INFLIGHT")
+	if err != nil || !ok {
+		t.Errorf("a run still in flight was deleted by another build's prune: %v (found %v)", err, ok)
 	}
 }
 
@@ -1310,9 +1310,9 @@ func TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
 		t.Fatalf("PruneRuns: %v", err)
 	}
 
-	_, err = store.FindRun(ctx, runID)
-	if err != nil {
-		t.Fatalf("the run itself was reaped, so this proves nothing about its records: %v", err)
+	_, found, err := store.FindRunRow(ctx, runID)
+	if err != nil || !found {
+		t.Fatalf("the run itself was reaped, so this proves nothing about its records: %v (found %v)", err, found)
 	}
 
 	placements, err := store.RunPlacements(ctx, runID)

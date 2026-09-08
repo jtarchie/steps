@@ -46,9 +46,9 @@ func PrepareReplay(
 	ctx context.Context, st *store.Store, provider workspace.Provider,
 	sourceRunID, fromStep string, cfg *config.Config, job *config.Job,
 ) (context.Context, string, error) {
-	source, err := st.FindRun(ctx, sourceRunID)
+	source, err := findRun(ctx, st, sourceRunID)
 	if err != nil {
-		return ctx, "", err //nolint:wrapcheck // FindRun already names the run
+		return ctx, "", err
 	}
 
 	if source.Workspace == "" {

@@ -87,9 +87,9 @@ func NewRunID() string {
 // re-running it does not reproduce the reviewed output — it produces a
 // different one, which makes a restart lossy as well as expensive.
 func PrepareResume(ctx context.Context, st *store.Store, runID string) (context.Context, string, error) {
-	run, err := st.FindRun(ctx, runID)
+	run, err := findRun(ctx, st, runID)
 	if err != nil {
-		return ctx, "", err //nolint:wrapcheck // FindRun already names the run
+		return ctx, "", err
 	}
 
 	done, err := st.CompletedRunSteps(ctx, runID)
@@ -105,9 +105,9 @@ func PrepareResume(ctx context.Context, st *store.Store, runID string) (context.
 // ResumeJobName is the job a recorded run belongs to, so `--resume` alone
 // selects the right one.
 func ResumeJobName(ctx context.Context, st *store.Store, runID string) (string, error) {
-	run, err := st.FindRun(ctx, runID)
+	run, err := findRun(ctx, st, runID)
 	if err != nil {
-		return "", err //nolint:wrapcheck // FindRun already names the run
+		return "", err
 	}
 
 	return run.JobName, nil
@@ -222,4 +222,25 @@ func resumedRunInputs(ctx context.Context, st *store.Store) (map[string]map[stri
 	}
 
 	return inputs, nil
+}
+
+// findRun reads the run a --resume or --replay names, turning "this pipeline
+// does not have it" into the error the operator needs to see.
+//
+// The store reports absence as ok=false rather than an error because most of
+// its callers render "no such run" as a page; the three callers here are all
+// a command that cannot proceed, and the pipeline is named because run ids are
+// globally unique while the lookup is scoped — asking the wrong pipeline of a
+// shared state file is the way this fails.
+func findRun(ctx context.Context, st *store.Store, runID string) (store.RunRow, error) {
+	run, ok, err := st.FindRunRow(ctx, runID)
+	if err != nil {
+		return store.RunRow{}, fmt.Errorf("could not read run %q: %w", runID, err)
+	}
+
+	if !ok {
+		return store.RunRow{}, fmt.Errorf("no run %q was recorded for pipeline %q", runID, st.Pipeline())
+	}
+
+	return run, nil
 }
