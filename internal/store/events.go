@@ -1,8 +1,15 @@
 package store
 
 import (
+	"context"
 	"time"
 )
+
+// Events is what the web UI replays and streams.
+type Events interface {
+	AppendRunEvent(ctx context.Context, row RunEventRow) error
+	RunEvents(ctx context.Context, runID string, afterSeq int64, limit int) ([]RunEventRow, error)
+}
 
 // RunEventRow is one persisted run event — the stored form of events.Event,
 // which is what a finished run is replayed from.

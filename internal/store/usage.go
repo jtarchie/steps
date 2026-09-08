@@ -1,6 +1,16 @@
 package store
 
-import ()
+import (
+	"context"
+)
+
+// Usage is the agent token and cost ledger.
+type Usage interface {
+	RecordAgentUsage(ctx context.Context, usage AgentUsage) error
+	RunTokensSpent(ctx context.Context, runID string) (int, error)
+	RunUsage(ctx context.Context, runID string) ([]AgentUsage, error)
+	RunCostTotals(ctx context.Context, limit int) ([]RunTotals, error)
+}
 
 // AgentUsage is one agent step's recorded spend, as it goes in and comes back
 // out of agent_usage.

@@ -1,8 +1,29 @@
 package store
 
 import (
+	"context"
 	"time"
 )
+
+// Cache is the merkle skip index — the nodes and job_runs a rerun consults to
+// decide what it does not have to do again — plus the transcript a cached
+// agent step is still readable through.
+//
+// Bounded by COUNT and never by age: a fully-cached poll records no new node
+// and refreshes no timestamp, so an age floor sweeps past a working
+// pipeline's cache, the faster it polls the sooner it loses it.
+type Cache interface {
+	RecordJobRun(ctx context.Context, jobName, rootHash, status string, runErr error) error
+	HasSucceededBatch(ctx context.Context, jobName string, rootHashes []string) (map[string]bool, error)
+	RecordNode(ctx context.Context, node NodeRecord, jobName, status string, result map[string]any, execErr error) error
+	HasNodeSucceeded(ctx context.Context, jobName, hash string) (bool, error)
+	ListNodes(ctx context.Context, jobName string, limit int) ([]NodeRow, error)
+	NodesByHash(ctx context.Context, hashes []string) (map[string]NodeRow, error)
+	// SaveNodeTranscript replaces the transcript of a node, truncated to
+	// MaxTranscriptBytes along whole events so it stays valid JSON.
+	SaveNodeTranscript(ctx context.Context, hash, transcript string) error
+	NodeTranscript(ctx context.Context, hash string) (string, bool, error)
+}
 
 // NodeRecord is the subset of a merkle plan node's fields a driver persists.
 // It's a plain data shape rather than an import of merkle.Node so this leaf

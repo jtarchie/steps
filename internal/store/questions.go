@@ -1,11 +1,32 @@
 package store
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"strings"
 )
+
+// Questions is a build waiting on a person for a FACT — the ask_user tool and
+// the two ways a question ends. See Approvals for why the two stay apart.
+type Questions interface {
+	// AskQuestion records a pending question, or returns the one this run
+	// already asked under the same memo key — reporting false when it did.
+	// The memo is the row, so twelve across: cells asking the same thing all
+	// reach one row rather than one person twelve times.
+	AskQuestion(ctx context.Context, question Question) (Question, bool, error)
+	// AnswerQuestion is a person's answer, ErrQuestionNotPending if somebody
+	// or something got there first.
+	AnswerQuestion(ctx context.Context, id int64, answer, by string) error
+	// CloseQuestion resolves a question with a status the caller chooses, for
+	// the endings nobody answered.
+	CloseQuestion(ctx context.Context, id int64, status, answer, by string) error
+	QuestionStatus(ctx context.Context, id int64) (Question, error)
+	// Questions lists newest first; pendingOnly is never capped, for the same
+	// reason Approvals is not.
+	Questions(ctx context.Context, pendingOnly bool, limit int) ([]Question, error)
+}
 
 // Question is one recorded ask_user call, and what became of it. Like an
 // approval, the row IS the audit trail — but it records a FACT rather than a

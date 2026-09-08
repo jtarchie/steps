@@ -1,5 +1,16 @@
 package store
 
+import (
+	"context"
+)
+
+// Placements is which machine ran a step, and what it found there.
+type Placements interface {
+	RecordPlacement(ctx context.Context, placement Placement) error
+	// RunPlacements returns a run's placements in plan order.
+	RunPlacements(ctx context.Context, runID string) ([]Placement, error)
+}
+
 // Placement is one placed step's record of the machine that ran it.
 //
 // InstanceID, UID and GID are pointers because absent and zero are different

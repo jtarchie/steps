@@ -1,9 +1,32 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"time"
 )
+
+// Runs is one row per invocation: what --resume continues and what the
+// history views list.
+type Runs interface {
+	// StartRun mints a run. An id some run already holds is ErrRunExists,
+	// never an overwrite.
+	StartRun(ctx context.Context, id, jobName, workspaceDir, configSHA string) error
+	// ResumeRun continues a run this pipeline already has, ErrNoSuchRun
+	// otherwise.
+	ResumeRun(ctx context.Context, id, workspaceDir, configSHA string) error
+	FinishRun(ctx context.Context, id, status string) error
+	RecordRunStep(ctx context.Context, runID string, index int, name string) error
+	RecordRunParent(ctx context.Context, runID, parentID string) error
+	CompletedRunSteps(ctx context.Context, runID string) (map[int]string, error)
+	// ListRuns returns a job's runs newest first. Zero means no limit, the
+	// convention everywhere here.
+	ListRuns(ctx context.Context, jobName string, limit int) ([]RunRow, error)
+	LatestRunByJob(ctx context.Context) (map[string]RunRow, error)
+	RunsUsingNode(ctx context.Context, hash string, limit int) ([]RunRow, error)
+	FindRunRow(ctx context.Context, id string) (RunRow, bool, error)
+	FirstRunSince(ctx context.Context, jobName string, since time.Time) (RunRow, bool, error)
+}
 
 // RunRow is one run invocation as the history views read it: the resume
 // record plus the finish timestamp that makes a duration answerable.
