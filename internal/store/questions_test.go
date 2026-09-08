@@ -256,13 +256,13 @@ func TestCloseQuestionRecordsWhatTheModelWasTold(t *testing.T) {
 		t.Fatalf("CloseQuestion: %v", err)
 	}
 
-	pending, err := store.PendingQuestions(ctx)
+	pending, err := store.Questions(ctx, true, 0)
 	if err != nil {
-		t.Fatalf("PendingQuestions: %v", err)
+		t.Fatalf("Questions: %v", err)
 	}
 
 	if len(pending) != 0 {
-		t.Errorf("PendingQuestions listed %d resolved questions: %+v", len(pending), pending)
+		t.Errorf("Questions(pendingOnly) listed %d resolved questions: %+v", len(pending), pending)
 	}
 }
 
@@ -292,9 +292,9 @@ func TestPendingQuestionsAreScopedToTheirPipeline(t *testing.T) {
 
 	question, _ := askBump(t, mine, "run-1")
 
-	pending, err := theirs.PendingQuestions(ctx)
+	pending, err := theirs.Questions(ctx, true, 0)
 	if err != nil {
-		t.Fatalf("PendingQuestions: %v", err)
+		t.Fatalf("Questions: %v", err)
 	}
 
 	if len(pending) != 0 {
@@ -413,12 +413,52 @@ func TestAllQuestionsListsWhatIsWaitingFirst(t *testing.T) {
 		}
 	}
 
-	listed, err := store.AllQuestions(ctx, 3)
+	listed, err := store.Questions(ctx, false, 3)
 	if err != nil {
-		t.Fatalf("AllQuestions: %v", err)
+		t.Fatalf("Questions: %v", err)
 	}
 
 	if len(listed) == 0 || listed[0].ID != parked.ID {
-		t.Errorf("AllQuestions listed %+v first, want the pending question %d", listed, parked.ID)
+		t.Errorf("Questions listed %+v first, want the pending question %d", listed, parked.ID)
+	}
+}
+
+// TestPendingQuestionsAreNotCapped: the waiting list is what the nav badge
+// counts and the only page that can unpark a run, so it takes every pending
+// question however many there are. Zero means no limit here the way it does
+// everywhere else — a listing that quietly capped itself would hide a parked
+// run behind a count that still included it.
+func TestPendingQuestionsAreNotCapped(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := startQuestionRun(t)
+
+	const asked = 4
+
+	for i := range asked {
+		_, _, err := store.AskQuestion(ctx, Question{
+			RunID: "run-1", JobName: "release-note", AgentName: "writer",
+			Question: fmt.Sprintf("Question %d?", i),
+		})
+		if err != nil {
+			t.Fatalf("AskQuestion: %v", err)
+		}
+	}
+
+	pending, err := store.Questions(ctx, true, 0)
+	if err != nil {
+		t.Fatalf("Questions: %v", err)
+	}
+
+	if len(pending) != asked {
+		t.Fatalf("got %d pending questions, want all %d", len(pending), asked)
+	}
+
+	// Oldest first: the order somebody should answer them in.
+	for i := 1; i < len(pending); i++ {
+		if pending[i-1].ID > pending[i].ID {
+			t.Errorf("pending questions are not oldest-first: %d before %d", pending[i-1].ID, pending[i].ID)
+		}
 	}
 }

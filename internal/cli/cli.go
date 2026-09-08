@@ -2587,7 +2587,7 @@ func (q *QuestionsListCmd) Run() error {
 	}
 	defer cleanup()
 
-	pending, err := st.PendingQuestions(context.Background())
+	pending, err := st.Questions(context.Background(), true, 0)
 	if err != nil {
 		return fmt.Errorf("could not list questions: %w", err)
 	}

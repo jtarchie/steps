@@ -435,6 +435,17 @@ func parseTimestamp(value string) time.Time {
 	return parsed
 }
 
+// rowLimit turns this repo's "zero means no limit" convention into the LIMIT
+// sqlite wants for it, which is -1. Without it a caller asking for everything
+// has to pass a number it invented, and the number it invents is the bug.
+func rowLimit(limit int) int {
+	if limit <= 0 {
+		return -1
+	}
+
+	return limit
+}
+
 // collect runs a query and decodes every row through scan.
 //
 // It exists because the alternative — query, defer Close, loop, scan, check

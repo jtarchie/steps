@@ -453,7 +453,7 @@ func (s *Server) nav(c echo.Context) navData {
 		nav.PendingApprovals = len(pending)
 	}
 
-	questions, err := current.Store.PendingQuestions(c.Request().Context())
+	questions, err := current.Store.Questions(c.Request().Context(), true, 0)
 	if err == nil {
 		nav.PendingQuestions = len(questions)
 	}

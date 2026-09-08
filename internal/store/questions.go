@@ -184,29 +184,28 @@ func (s *Store) questionByMemo(ctx context.Context, runID, memoKey string) (Ques
 	return question, nil
 }
 
-// PendingQuestions lists every question still waiting, oldest first.
-func (s *Store) PendingQuestions(ctx context.Context) ([]Question, error) {
-	return collect(ctx, s.db, "pending questions", questionColumns+`
-		WHERE q.status = 'pending' AND r.pipeline_id = ? ORDER BY q.id
-	`, []any{s.pipelineID}, func(rows *sql.Rows) (Question, error) {
-		return s.scanQuestion(rows)
-	})
-}
-
-// AllQuestions lists every question and what became of it: everything still
-// waiting first, then the rest newest-first — the audit trail PendingQuestions
-// deliberately does not carry.
+// Questions lists what a pipeline has asked. pendingOnly narrows it to the
+// questions still waiting; limit <= 0 means no limit, the convention this repo
+// uses everywhere.
 //
-// Pending first is not cosmetic. The listing is capped, and the only route the
-// UI offers for ANSWERING a question is this page: ordered purely by recency,
+// The two orders are not cosmetic, and are why this is one method rather than
+// a filter bolted onto one query. Waiting questions read oldest-first, because
+// that is the order somebody should answer them in. The full listing puts
+// pending FIRST and then the rest newest-first: it is capped, and the only
+// route the UI offers for ANSWERING is this page, so ordered purely by recency
 // a pipeline that asked `limit` more questions would push a parked one off the
-// page while the nav badge still counted it, leaving a run parked with nothing
-// on screen to unpark it.
-func (s *Store) AllQuestions(ctx context.Context, limit int) ([]Question, error) {
-	return collect(ctx, s.db, "questions", questionColumns+`
-		WHERE r.pipeline_id = ?
-		ORDER BY (q.status = 'pending') DESC, q.id DESC LIMIT ?
-	`, []any{s.pipelineID, limit}, func(rows *sql.Rows) (Question, error) {
+// page while the nav badge still counted it — a run parked with nothing on
+// screen to unpark it.
+func (s *Store) Questions(ctx context.Context, pendingOnly bool, limit int) ([]Question, error) {
+	where, order, what := `q.status = 'pending'`, `q.id`, "pending questions"
+	if !pendingOnly {
+		where, order, what = `1 = 1`, `(q.status = 'pending') DESC, q.id DESC`, "questions"
+	}
+
+	return collect(ctx, s.db, what, questionColumns+`
+		WHERE `+where+` AND r.pipeline_id = ?
+		ORDER BY `+order+` LIMIT ?
+	`, []any{s.pipelineID, rowLimit(limit)}, func(rows *sql.Rows) (Question, error) {
 		return s.scanQuestion(rows)
 	})
 }

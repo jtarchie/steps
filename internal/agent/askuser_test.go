@@ -81,9 +81,9 @@ func TestAskUserSeededAnswerSkipsEveryoneElse(t *testing.T) {
 		t.Errorf("seeded ask = %v, want answered/minor/seed", result)
 	}
 
-	pending, err := fixture.store.PendingQuestions(fixture.ctx)
+	pending, err := fixture.store.Questions(fixture.ctx, true, 0)
 	if err != nil {
-		t.Fatalf("PendingQuestions: %v", err)
+		t.Fatalf("Questions: %v", err)
 	}
 
 	if len(pending) != 0 {
@@ -175,9 +175,9 @@ func TestAskUserRecordsWhatWasOfferedBeforeAnybodyAnswers(t *testing.T) {
 
 	fixture.ask(impatient("patch"), "Which bump?", "major", "minor", "patch")
 
-	questions, err := fixture.store.PendingQuestions(fixture.ctx)
+	questions, err := fixture.store.Questions(fixture.ctx, true, 0)
 	if err != nil {
-		t.Fatalf("PendingQuestions: %v", err)
+		t.Fatalf("Questions: %v", err)
 	}
 
 	if len(questions) != 0 {
@@ -270,9 +270,9 @@ func TestAskUserAbandonsItsQuestionWhenTheStepEnds(t *testing.T) {
 		t.Errorf("an abandoned question returned %v, want an error result", result)
 	}
 
-	pending, err := fixture.store.PendingQuestions(context.Background())
+	pending, err := fixture.store.Questions(context.Background(), true, 0)
 	if err != nil {
-		t.Fatalf("PendingQuestions: %v", err)
+		t.Fatalf("Questions: %v", err)
 	}
 
 	if len(pending) != 0 {
@@ -590,9 +590,9 @@ func TestAskUserRefusesOptionsRequiredWithNothingOffered(t *testing.T) {
 		t.Errorf("ask = %v, want a refusal the model can fix by asking again with options", result)
 	}
 
-	pending, err := fixture.store.PendingQuestions(fixture.ctx)
+	pending, err := fixture.store.Questions(fixture.ctx, true, 0)
 	if err != nil {
-		t.Fatalf("PendingQuestions: %v", err)
+		t.Fatalf("Questions: %v", err)
 	}
 
 	if len(pending) != 0 {

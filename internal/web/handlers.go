@@ -339,12 +339,12 @@ func (s *Server) handleApprovals(c echo.Context) error {
 }
 
 // handleQuestions lists what agents have asked: everything still waiting
-// first, then the rest newest-first (see AllQuestions for why the order is not
+// first, then the rest newest-first (see Store.Questions for why the order is not
 // simply recency).
 func (s *Server) handleQuestions(c echo.Context) error {
 	pipeline := pipelineOf(c)
 
-	questions, err := pipeline.Store.AllQuestions(c.Request().Context(), historyLimit)
+	questions, err := pipeline.Store.Questions(c.Request().Context(), false, historyLimit)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
