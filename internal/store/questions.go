@@ -107,6 +107,10 @@ func (s *Store) AskQuestion(ctx context.Context, question Question) (Question, b
 // write every ANSWERING channel shares — a seeded answer, a responder agent, a
 // person at a TTY, `steps questions answer`, the web UI — so the options fence and the
 // already-resolved race are decided once, here, rather than five times.
+//
+// The gate is the method. Answering is the only outcome those two checks apply
+// to, so they cannot move down into closeQuestion, which serves the outcomes
+// nobody chose — see CloseQuestion on why these stay two entry points.
 func (s *Store) AnswerQuestion(ctx context.Context, id int64, answer, by string) error {
 	question, err := s.QuestionStatus(ctx, id)
 	if err != nil {
@@ -133,6 +137,18 @@ func (s *Store) AnswerQuestion(ctx context.Context, id int64, answer, by string)
 // question left `pending` after its step is gone is unanswerable, and showing
 // it in `steps questions` as though somebody could still answer it is the same
 // class of lie as presenting a default as a person's decision.
+//
+// It reads like AnswerQuestion with the status fixed, and is not: the shared
+// half is closeQuestion, already. What AnswerQuestion adds is the options
+// fence, and the fence must NOT reach here. An expiry carries the `default:`
+// declared on the grant, in the YAML, while the options come from the model's
+// own tool call — nothing has ever compared the two, and nothing can, since
+// the options do not exist until the call. An abort carries no answer at all.
+//
+// Fold the two and that fence becomes conditional on a caller-supplied string
+// the four answering sites each have to spell right to be checked at all. No
+// constraint covers this column, so one misspelling writes a status no reader
+// knows AND skips the fence, in the same silent step.
 func (s *Store) CloseQuestion(ctx context.Context, id int64, status, answer, by string) error {
 	return s.closeQuestion(ctx, id, status, answer, by)
 }
