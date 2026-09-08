@@ -624,13 +624,13 @@ func TestConformanceSerialGroupsBlockAcrossJobs(t *testing.T) {
 
 	defer func() { _ = store.Close() }()
 
-	err := store.SyncSerialGroups(context.Background(), map[string][]string{
+	err := store.SyncJobLimits(context.Background(), map[string][]string{
 		"deploy-staging": {"deploy"},
 		"deploy-prod":    {"deploy"},
 		// "lint" belongs to no group at all.
-	})
+	}, nil)
 	if err != nil {
-		t.Fatalf("SyncSerialGroups: %v", err)
+		t.Fatalf("SyncJobLimits: %v", err)
 	}
 
 	mustEnqueueJob(t, store, "deploy-staging", "resource-a")
@@ -667,7 +667,7 @@ func TestConformanceSerialGroupsBlockAcrossJobs(t *testing.T) {
 // maximum number of concurrent builds", with serial:/serial_groups: taking
 // precedence and forcing 1.
 //
-// steps claim under test: config.Job.EffectiveMaxInFlight, Store.SyncMaxInFlight,
+// steps claim under test: config.Job.EffectiveMaxInFlight, Store.SyncJobLimits,
 // and ClaimNextJob's admission predicate.
 //
 // This test replaces the guarantee TestConformanceEveryJobIsSerialRegardlessOfConfig
@@ -681,9 +681,9 @@ func TestConformanceMaxInFlightAdmitsUpToTheLimit(t *testing.T) {
 
 	defer func() { _ = store.Close() }()
 
-	err := store.SyncMaxInFlight(context.Background(), map[string]int{"build": 2})
+	err := store.SyncJobLimits(context.Background(), nil, map[string]int{"build": 2})
 	if err != nil {
-		t.Fatalf("SyncMaxInFlight: %v", err)
+		t.Fatalf("SyncJobLimits: %v", err)
 	}
 
 	// Three changes queue up. Only one row may be PENDING per job at a time,
@@ -719,9 +719,9 @@ func TestConformanceSerialForcesOneInFlight(t *testing.T) {
 	defer func() { _ = store.Close() }()
 
 	// What EffectiveMaxInFlight produces for a serial job.
-	err := store.SyncMaxInFlight(context.Background(), map[string]int{"deploy": 1})
+	err := store.SyncJobLimits(context.Background(), nil, map[string]int{"deploy": 1})
 	if err != nil {
-		t.Fatalf("SyncMaxInFlight: %v", err)
+		t.Fatalf("SyncJobLimits: %v", err)
 	}
 
 	mustEnqueueJob(t, store, "deploy", "resource-a")
@@ -808,4 +808,41 @@ func TestConsumedMarkRoundTrip(t *testing.T) {
 	if other != 0 {
 		t.Errorf("another job reports mark %d; the cursor is per job", other)
 	}
+}
+
+// TestSyncJobLimitsClearsBothMirrors: the tables are a declarative mirror of
+// the YAML, so a max_in_flight removed from it must stop applying — the same
+// property the serial-group side has, and the one a shared sync can drop by
+// clearing one table and refilling both.
+//
+// A stale limit is the dangerous direction: 2 left behind after the field is
+// deleted admits a second concurrent build of a job whose pipeline now says
+// nothing about concurrency, and default-1 is what the config means by
+// silence.
+func TestSyncJobLimitsClearsBothMirrors(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = store.Close() }()
+
+	err := store.SyncJobLimits(ctx, nil, map[string]int{"build": 2})
+	if err != nil {
+		t.Fatalf("SyncJobLimits: %v", err)
+	}
+
+	// max_in_flight: gone from the pipeline, alongside a serial group that is
+	// arriving — the shape of an ordinary edit, and what makes clearing only
+	// one of the two tables look like it worked.
+	err = store.SyncJobLimits(ctx, map[string][]string{"lint": {"slow"}}, nil)
+	if err != nil {
+		t.Fatalf("SyncJobLimits: %v", err)
+	}
+
+	mustEnqueueJob(t, store, "build", "resource-a")
+	mustClaimJob(t, store, "build")
+
+	mustEnqueueJob(t, store, "build", "resource-b")
+	assertQueueEmpty(t, store)
 }

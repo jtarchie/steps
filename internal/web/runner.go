@@ -224,14 +224,9 @@ func PrepareQueue(ctx context.Context, target *Pipeline) {
 func SyncQueueLimits(ctx context.Context, target *Pipeline) {
 	cfg := target.Config()
 
-	err := target.Store.SyncSerialGroups(ctx, cfg.SerialGroupsByJob())
+	err := target.Store.SyncJobLimits(ctx, cfg.SerialGroupsByJob(), cfg.MaxInFlightByJob())
 	if err != nil {
-		slog.Error("web.sync_serial_groups", "pipeline", target.Slug, "error", err)
-	}
-
-	err = target.Store.SyncMaxInFlight(ctx, cfg.MaxInFlightByJob())
-	if err != nil {
-		slog.Error("web.sync_max_in_flight", "pipeline", target.Slug, "error", err)
+		slog.Error("web.sync_job_limits", "pipeline", target.Slug, "error", err)
 	}
 }
 

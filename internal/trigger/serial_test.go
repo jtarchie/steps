@@ -23,9 +23,9 @@ func TestSerialGroupsBlockConcurrentClaims(t *testing.T) {
 		{Name: "unrelated"},
 	}}
 
-	err := st.SyncSerialGroups(ctx, cfg.SerialGroupsByJob())
+	err := st.SyncJobLimits(ctx, cfg.SerialGroupsByJob(), nil)
 	if err != nil {
-		t.Fatalf("SyncSerialGroups: %v", err)
+		t.Fatalf("SyncJobLimits: %v", err)
 	}
 
 	for _, name := range []string{"deploy-staging", "deploy-prod", "unrelated"} {
@@ -82,9 +82,9 @@ func TestSerialGroupHolderNamesWhoHasIt(t *testing.T) {
 		{Name: "deploy-prod", SerialGroups: []string{"deploy-lock"}},
 	}}
 
-	err := st.SyncSerialGroups(ctx, cfg.SerialGroupsByJob())
+	err := st.SyncJobLimits(ctx, cfg.SerialGroupsByJob(), nil)
 	if err != nil {
-		t.Fatalf("SyncSerialGroups: %v", err)
+		t.Fatalf("SyncJobLimits: %v", err)
 	}
 
 	holder, err := st.SerialGroupHolder(ctx, "deploy-prod")
@@ -112,10 +112,10 @@ func TestSerialGroupHolderNamesWhoHasIt(t *testing.T) {
 	}
 }
 
-// TestSyncSerialGroupsReplacesStaleMembership verifies a group removed from
+// TestSyncJobLimitsReplacesStaleMembership verifies a group removed from
 // the pipeline stops holding a lock. A stale row would keep two jobs apart
 // forever with nothing in the YAML to explain why.
-func TestSyncSerialGroupsReplacesStaleMembership(t *testing.T) {
+func TestSyncJobLimitsReplacesStaleMembership(t *testing.T) {
 	t.Parallel()
 
 	st := mustOpenStore(t, t.TempDir())
@@ -126,15 +126,15 @@ func TestSyncSerialGroupsReplacesStaleMembership(t *testing.T) {
 		{Name: "b", SerialGroups: []string{"lock"}},
 	}}
 
-	err := st.SyncSerialGroups(ctx, withGroups.SerialGroupsByJob())
+	err := st.SyncJobLimits(ctx, withGroups.SerialGroupsByJob(), nil)
 	if err != nil {
-		t.Fatalf("SyncSerialGroups: %v", err)
+		t.Fatalf("SyncJobLimits: %v", err)
 	}
 
 	// The pipeline drops the groups.
-	err = st.SyncSerialGroups(ctx, (&config.Config{Jobs: []config.Job{{Name: "a"}, {Name: "b"}}}).SerialGroupsByJob())
+	err = st.SyncJobLimits(ctx, (&config.Config{Jobs: []config.Job{{Name: "a"}, {Name: "b"}}}).SerialGroupsByJob(), nil)
 	if err != nil {
-		t.Fatalf("SyncSerialGroups (cleared): %v", err)
+		t.Fatalf("SyncJobLimits (cleared): %v", err)
 	}
 
 	for _, name := range []string{"a", "b"} {

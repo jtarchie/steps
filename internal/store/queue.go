@@ -228,80 +228,66 @@ func (s *Store) ListTriggerQueue(ctx context.Context, limit int) ([]QueueRow, er
 	})
 }
 
-// SyncSerialGroups replaces the recorded job/serial-group membership with
-// what the pipeline currently declares.
+// SyncJobLimits replaces the recorded admission rules — serial-group
+// membership and per-job concurrency — with what the pipeline currently
+// declares.
 //
-// Replaced wholesale rather than merged: a group removed from the YAML must
-// stop holding a lock, and a stale row would keep two jobs apart forever with
-// nothing in the pipeline to explain why.
-func (s *Store) SyncSerialGroups(ctx context.Context, groups map[string][]string) error {
-	return s.replaceAll(ctx, "serial groups", "job_serial_groups", func(exec execFunc) error {
-		for jobName, names := range groups {
-			for _, group := range names {
-				err := exec(`INSERT INTO job_serial_groups (pipeline_id, job_name, group_name) VALUES (?, ?, ?)
-					 ON CONFLICT (pipeline_id, job_name, group_name) DO NOTHING`, s.pipelineID, jobName, group)
-				if err != nil {
-					return fmt.Errorf("could not record serial group %q for job %q: %w", group, jobName, err)
-				}
-			}
-		}
-
-		return nil
-	})
-}
-
-// SyncMaxInFlight replaces the recorded per-job concurrency with what the
-// pipeline currently declares, for the reason SyncSerialGroups replaces rather
-// than merges: a limit removed from the YAML must stop applying, and a stale
-// row would throttle a job with nothing in the pipeline to explain why.
-func (s *Store) SyncMaxInFlight(ctx context.Context, limits map[string]int) error {
-	return s.replaceAll(ctx, "job concurrency", "job_concurrency", func(exec execFunc) error {
-		for jobName, limit := range limits {
-			err := exec(`INSERT INTO job_concurrency (pipeline_id, job_name, max_in_flight) VALUES (?, ?, ?)`,
-				s.pipelineID, jobName, limit)
-			if err != nil {
-				return fmt.Errorf("could not record concurrency for job %q: %w", jobName, err)
-			}
-		}
-
-		return nil
-	})
-}
-
-// execFunc is one statement inside replaceAll's transaction.
-type execFunc func(query string, args ...any) error
-
-// replaceAll empties THIS PIPELINE's rows in table and refills them from fill,
-// in one transaction. Both config-synced tables are declarative mirrors of the
-// YAML, so a partial rewrite is never a valid state to leave behind — and the
-// delete is scoped, since a shared state file holds other pipelines' mirrors
-// of their own YAML.
-func (s *Store) replaceAll(ctx context.Context, what, table string, fill func(execFunc) error) error {
+// Both live in SQL rather than in the Config because ClaimNextJob admits in
+// one atomic statement, so who may run has to be readable from the claim
+// itself rather than consulted in Go afterwards.
+//
+// Replaced wholesale rather than merged: a group or a limit removed from the
+// YAML must stop applying, and a stale row would hold two jobs apart, or
+// throttle one, with nothing in the pipeline to explain why.
+//
+// One transaction over both tables, because they are one answer. They are
+// always synced together, from one config, at the two moments a configuration
+// is ADOPTED (startup and every reload) — and a swap that landed the serial
+// groups and then failed would serve a `max_in_flight:` the queue goes on
+// ignoring, which is exactly the half-applied state a declarative mirror must
+// never be left in.
+//
+// The delete is scoped, since a shared state file holds other pipelines'
+// mirrors of their own YAML.
+func (s *Store) SyncJobLimits(ctx context.Context, groups map[string][]string, limits map[string]int) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("could not sync %s: %w", what, err)
+		return fmt.Errorf("could not sync job limits: %w", err)
 	}
 
 	defer func() { _ = tx.Rollback() }()
 
-	//nolint:gosec // G202: table is a package-internal literal, never input
-	_, err = tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE pipeline_id = ?`, s.pipelineID)
-	if err != nil {
-		return fmt.Errorf("could not clear %s: %w", what, err)
+	for _, table := range []string{"job_serial_groups", "job_concurrency"} {
+		//nolint:gosec // G202: table is a package-internal literal, never input
+		_, err = tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE pipeline_id = ?`, s.pipelineID)
+		if err != nil {
+			return fmt.Errorf("could not clear %s: %w", table, err)
+		}
 	}
 
-	err = fill(func(query string, args ...any) error {
-		_, execErr := tx.ExecContext(ctx, query, args...)
+	for jobName, names := range groups {
+		for _, group := range names {
+			_, err = tx.ExecContext(ctx,
+				`INSERT INTO job_serial_groups (pipeline_id, job_name, group_name) VALUES (?, ?, ?)
+				 ON CONFLICT (pipeline_id, job_name, group_name) DO NOTHING`, s.pipelineID, jobName, group)
+			if err != nil {
+				return fmt.Errorf("could not record serial group %q for job %q: %w", group, jobName, err)
+			}
+		}
+	}
 
-		return execErr //nolint:wrapcheck // the caller names the row it was writing
-	})
-	if err != nil {
-		return err
+	for jobName, limit := range limits {
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO job_concurrency (pipeline_id, job_name, max_in_flight) VALUES (?, ?, ?)`,
+			s.pipelineID, jobName, limit)
+		if err != nil {
+			return fmt.Errorf("could not record concurrency for job %q: %w", jobName, err)
+		}
 	}
 
 	err = tx.Commit()
 	if err != nil {
-		return fmt.Errorf("could not sync %s: %w", what, err)
+		return fmt.Errorf("could not sync job limits: %w", err)
 	}
 
 	return nil

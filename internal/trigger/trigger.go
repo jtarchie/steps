@@ -87,18 +87,11 @@ func prepareWatch(ctx context.Context, cfg *config.Config, st *store.Store, inte
 		return fmt.Errorf("watch: %w", err)
 	}
 
-	// Serial-group membership lives in the database so the claim can stay one
-	// atomic statement (see Store.ClaimNextJob). Sync it from the pipeline as
-	// it is right now, so a group removed from the YAML stops holding a lock.
-	err = st.SyncSerialGroups(ctx, cfg.SerialGroupsByJob())
-	if err != nil {
-		return fmt.Errorf("watch: %w", err)
-	}
-
-	// Synced next to the serial groups and for the same reason: ClaimNextJob
-	// admits in one atomic statement, so a job's concurrency has to be
-	// readable from SQL rather than consulted in Go afterwards.
-	err = st.SyncMaxInFlight(ctx, cfg.MaxInFlightByJob())
+	// Admission rules live in the database so the claim can stay one atomic
+	// statement (see Store.ClaimNextJob). Synced from the pipeline as it is
+	// right now, so a serial group or a max_in_flight removed from the YAML
+	// stops applying.
+	err = st.SyncJobLimits(ctx, cfg.SerialGroupsByJob(), cfg.MaxInFlightByJob())
 	if err != nil {
 		return fmt.Errorf("watch: %w", err)
 	}
