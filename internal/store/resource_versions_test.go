@@ -60,7 +60,7 @@ func TestRecordVersionsKeepsDiscoveryOrder(t *testing.T) {
 	recordN(t, store, "items", "1", "2", "3")
 	recordN(t, store, "items", "2", "3")
 
-	versions, err := store.ResourceVersions(context.Background(), "items")
+	versions, err := decodedVersions(t, store, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,28 +70,20 @@ func TestRecordVersionsKeepsDiscoveryOrder(t *testing.T) {
 	}
 }
 
-// TestResourceVersionsJSONMatchesResourceVersions pins ResourceVersionsJSON
-// (the web UI resource detail page's own read) as the same rows,
-// same order, as ResourceVersions — just not decoded into map[string]any —
-// so a caller that only displays a version is not paying for a decode/
-// re-encode round trip ResourceVersions' own UseNumber decoding buys it
-// nothing for.
-func TestResourceVersionsJSONMatchesResourceVersions(t *testing.T) {
+// TestResourceVersionsJSONPreservesAWideID pins what the store hands back: the
+// stored bytes, not a value that has been through a decode. It is the whole
+// reason this read is JSON and DecodeVersion (with its UseNumber) is the
+// caller's business — a round trip through float64 turns a wide id into
+// exponent notation, and the version goes back out to the API that reported it.
+func TestResourceVersionsJSONPreservesAWideID(t *testing.T) {
 	t.Parallel()
 
 	store := newHistoryStore(t)
 	ctx := context.Background()
 
-	// A wide id, to prove the raw form survives untouched rather than going
-	// through a decode that could normalize it.
 	_, err := store.RecordVersions(ctx, "items", []map[string]any{
 		{"n": "1"}, {"id": json.Number("1234567890123456789")},
 	}, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	decoded, err := store.ResourceVersions(ctx, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,23 +93,21 @@ func TestResourceVersionsJSONMatchesResourceVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(raw) != len(decoded) {
-		t.Fatalf("ResourceVersionsJSON returned %d rows, ResourceVersions returned %d", len(raw), len(decoded))
-	}
-
-	for i, encoded := range raw {
-		reDecoded, err := DecodeVersion(encoded)
-		if err != nil {
-			t.Fatalf("row %d: %v", i, err)
-		}
-
-		if fmt.Sprint(reDecoded) != fmt.Sprint(decoded[i]) {
-			t.Errorf("row %d = %v, want it to decode to the same value as ResourceVersions' %v", i, reDecoded, decoded[i])
-		}
+	if len(raw) != 2 {
+		t.Fatalf("got %d rows, want 2", len(raw))
 	}
 
 	if !strings.Contains(raw[1], "1234567890123456789") {
 		t.Errorf("raw row 1 = %q, want the wide id preserved exactly", raw[1])
+	}
+
+	decoded, err := DecodeVersion(raw[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if fmt.Sprint(decoded["id"]) != "1234567890123456789" {
+		t.Errorf("decoded id = %v, want the wide id intact", decoded["id"])
 	}
 }
 
@@ -131,7 +121,7 @@ func TestResourceVersionsAreScopedToTheirResource(t *testing.T) {
 	recordN(t, store, "items", "1", "2")
 	recordN(t, store, "other", "9")
 
-	versions, err := store.ResourceVersions(context.Background(), "other")
+	versions, err := decodedVersions(t, store, "other")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +145,7 @@ func TestRecordVersionsKeepsExactDigits(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	versions, err := store.ResourceVersions(context.Background(), "items")
+	versions, err := decodedVersions(t, store, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +193,7 @@ func TestRecordVersionsPrunesOldestAndCascades(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	versions, err := store.ResourceVersions(ctx, "items")
+	versions, err := decodedVersions(t, store, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +248,7 @@ func TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
 		t.Fatalf("recording a passed version nothing had filed: %v", err)
 	}
 
-	versions, err := store.ResourceVersions(ctx, "items")
+	versions, err := decodedVersions(t, store, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +262,7 @@ func TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
 	// is permanently invisible.
 	recordN(t, store, "items", "7")
 
-	versions, err = store.ResourceVersions(ctx, "items")
+	versions, err = decodedVersions(t, store, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +380,7 @@ func TestCheckReDiscoveryReMintsARunFiledOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	history, err := store.ResourceVersions(ctx, "items")
+	history, err := decodedVersions(t, store, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +453,7 @@ func TestPruneNeverEatsTheReportedWindow(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		history, err := store.ResourceVersions(ctx, "items")
+		history, err := decodedVersions(t, store, "items")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -487,4 +477,28 @@ func mustEncode(t *testing.T, version map[string]any) string {
 	}
 
 	return encoded
+}
+
+// decodedVersions reads a resource's check history the way version resolution
+// does: the stored JSON, through DecodeVersion.
+func decodedVersions(t *testing.T, st *Store, name string) ([]map[string]any, error) {
+	t.Helper()
+
+	encoded, err := st.ResourceVersionsJSON(context.Background(), name)
+	if err != nil {
+		return nil, err
+	}
+
+	versions := make([]map[string]any, 0, len(encoded))
+
+	for _, one := range encoded {
+		version, err := DecodeVersion(one)
+		if err != nil {
+			return nil, err
+		}
+
+		versions = append(versions, version)
+	}
+
+	return versions, nil
 }

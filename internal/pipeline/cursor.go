@@ -24,6 +24,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -184,7 +185,7 @@ func loadResourceHistory(ctx context.Context, st *store.Store, job *config.Job) 
 				versions = []map[string]any{}
 			}
 		} else {
-			versions, err = st.ResourceVersions(ctx, name)
+			versions, err = checkedVersions(ctx, st, name)
 		}
 
 		if err != nil {
@@ -323,4 +324,29 @@ func encodeVersion(version map[string]any) (string, bool) {
 	}
 
 	return encoded, true
+}
+
+// checkedVersions is a resource's recorded check history, decoded.
+//
+// The store hands back the stored JSON because its other reader only displays
+// it; resolution is the caller that inspects fields, so it is the one that
+// pays for the decode.
+func checkedVersions(ctx context.Context, st *store.Store, name string) ([]map[string]any, error) {
+	encoded, err := st.ResourceVersionsJSON(ctx, name)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the store names the resource
+	}
+
+	versions := make([]map[string]any, 0, len(encoded))
+
+	for _, one := range encoded {
+		version, err := store.DecodeVersion(one)
+		if err != nil {
+			return nil, fmt.Errorf("could not read versions for %q: %w", name, err)
+		}
+
+		versions = append(versions, version)
+	}
+
+	return versions, nil
 }

@@ -236,45 +236,21 @@ func pruneVersions(
 	return nil
 }
 
-// ResourceVersions returns the versions a CHECK has reported for a resource,
-// oldest first — the same order and the same contract a check's own output
-// has, so a caller can treat it as the check's answer without knowing where
-// it came from.
+// ResourceVersionsJSON returns the versions a CHECK has reported for a
+// resource, oldest first — the same order and the same contract a check's own
+// output has, so a caller can treat it as the check's answer without knowing
+// where it came from.
 //
-// Rows that exist only because something referenced them are excluded, and
-// an empty result means "nothing has checked this resource, go and check".
+// Rows that exist only because something referenced them are excluded, and an
+// empty result means "nothing has checked this resource, go and check".
 // Returning them would be worse than useless: a `steps run` records the one
-// version it took, and treating that lone row as the resource's history
-// would hide every other version from the next run.
+// version it took, and treating that lone row as the resource's history would
+// hide every other version from the next run.
 //
-// Decoded with UseNumber, for the reason every other version reader has it:
-// a version field goes back out to the API that reported it, and float64
-// turns an id into exponent notation.
-func (s *Store) ResourceVersions(ctx context.Context, resourceName string) ([]map[string]any, error) {
-	encoded, err := s.ResourceVersionsJSON(ctx, resourceName)
-	if err != nil {
-		return nil, err
-	}
-
-	var versions []map[string]any
-
-	for _, e := range encoded {
-		version, err := DecodeVersion(e)
-		if err != nil {
-			return nil, fmt.Errorf("could not read versions for %q: %w", resourceName, err)
-		}
-
-		versions = append(versions, version)
-	}
-
-	return versions, nil
-}
-
-// ResourceVersionsJSON is ResourceVersions without the decode into
-// map[string]any — for a caller that only DISPLAYS each version (the web
-// UI's resource detail page) rather than inspects its fields, and would
-// otherwise decode every row with UseNumber only to re-encode it right back
-// to an equivalent JSON string a moment later.
+// Stored JSON rather than map[string]any, because half the callers only
+// DISPLAY a version and decoding every row only to re-encode it a moment later
+// buys nothing. A caller that inspects fields runs DecodeVersion, which is
+// where the UseNumber that keeps an id out of exponent notation lives.
 func (s *Store) ResourceVersionsJSON(ctx context.Context, resourceName string) ([]string, error) {
 	return collect(ctx, s.db, "resource versions",
 		`SELECT version_json FROM resource_versions

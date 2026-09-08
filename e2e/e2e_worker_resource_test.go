@@ -69,9 +69,20 @@ func checkedVersions(t *testing.T, pipelinePath string) []map[string]any {
 
 	defer func() { _ = st.Close() }()
 
-	versions, err := st.ResourceVersions(context.Background(), "repo")
+	encoded, err := st.ResourceVersionsJSON(context.Background(), "repo")
 	if err != nil {
 		t.Fatalf("reading versions: %v", err)
+	}
+
+	versions := make([]map[string]any, 0, len(encoded))
+
+	for _, one := range encoded {
+		version, err := store.DecodeVersion(one)
+		if err != nil {
+			t.Fatalf("decoding version %q: %v", one, err)
+		}
+
+		versions = append(versions, version)
 	}
 
 	return versions
