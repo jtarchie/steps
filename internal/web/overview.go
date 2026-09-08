@@ -105,7 +105,7 @@ func (s *Server) overviewPipelines() []overviewPipeline {
 // crowd out rows that do have one.
 func (s *Server) recentRunsAcross(ctx context.Context, limit int) ([]overviewRun, error) {
 	var (
-		handles = map[string]*store.Store{}
+		handles = map[string]store.Store{}
 		names   = map[string][]string{}
 		// The store scopes itself by pipeline NAME and the URL is built from
 		// the slug. They are the same string today — both come from
@@ -116,18 +116,18 @@ func (s *Server) recentRunsAcross(ctx context.Context, limit int) ([]overviewRun
 	)
 
 	for _, pipeline := range s.pipelines {
-		path := pipeline.Store.Path()
+		database := pipeline.Store.Description()
 		name := pipeline.Store.Pipeline()
 
-		handles[path] = pipeline.Store
-		names[path] = append(names[path], name)
+		handles[database] = pipeline.Store
+		names[database] = append(names[database], name)
 		slugByName[name] = pipeline.Slug
 	}
 
 	var runs []overviewRun
 
-	for path, handle := range handles {
-		rows, err := handle.Reader().RecentRuns(ctx, names[path], limit)
+	for database, handle := range handles {
+		rows, err := handle.Reader().RecentRuns(ctx, names[database], limit)
 		if err != nil {
 			return nil, fmt.Errorf("web: %w", err)
 		}

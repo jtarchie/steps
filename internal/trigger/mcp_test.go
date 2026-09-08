@@ -288,7 +288,7 @@ func TestWatchPreflightsAgentMCPServers(t *testing.T) {
 // goes on checking. Poll no longer refuses to start — a daemon that reloads
 // has to stay alive to notice the fix — so the promise moved from the return
 // value to the behaviour, and this is where it is kept.
-func assertNothingPolled(t *testing.T, cfg *config.Config, st *store.Store) {
+func assertNothingPolled(t *testing.T, cfg *config.Config, st store.Store) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)

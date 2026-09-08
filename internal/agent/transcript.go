@@ -381,7 +381,7 @@ func renderResultContent(response map[string]any) string {
 // recordAgentFailure, and on a detached context for the same reason: an
 // auxiliary record must neither mask the step's own outcome nor be dropped
 // because the step was aborted.
-func saveAgentTranscript(ctx context.Context, st *store.Store, hash, jobName string, res conversationResult) {
+func saveAgentTranscript(ctx context.Context, st store.Store, hash, jobName string, res conversationResult) {
 	if len(res.transcript) == 0 {
 		return
 	}

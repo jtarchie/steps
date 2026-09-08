@@ -1,0 +1,263 @@
+package sqlite
+
+// questions: the record of every question an agent step asked its end user,
+// and of what came back.
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/jtarchie/steps/internal/store"
+)
+
+// AskQuestion records a pending question, or returns the one this run already
+// asked.
+//
+// The memo is the row, not a map beside it. Within one run a question is
+// identified by its memo key, and the unique index is what makes that true
+// under concurrency: an across: matrix whose twelve cells each ask the same
+// thing, or two in_parallel: branches racing, all reach the SAME row — the
+// first insert wins and every other caller gets that row back to wait on.
+// Twelve identical prompts to one person is the behavior that ends adoption of
+// a feature, and a map in the asking process would not survive the second
+// process anyway.
+//
+// existing reports whether the row was already there, which is what lets the
+// caller tell "I am the one who asked this" from "I am waiting on somebody
+// else's ask" — they are answered by the same row but reported to the model
+// differently.
+func (s *Store) AskQuestion(ctx context.Context, question store.Question) (store.Question, bool, error) {
+	options, err := encodeOptions(question.Options)
+	if err != nil {
+		return store.Question{}, false, err
+	}
+
+	// The SELECT is what scopes the insert to this pipeline. The run_id
+	// foreign key alone does not: in a shared state file a run id belonging to
+	// a SIBLING pipeline satisfies it, and the row would then be one this
+	// Store can never read back — every read of this table joins runs on
+	// pipeline_id. Written as an INSERT..SELECT rather than a checked read
+	// first, so the scoping cannot lose a race with retention.
+	result, err := s.db.ExecContext(ctx, `
+		INSERT INTO questions (run_id, job_name, agent_name, question, options, options_required,
+		                       default_answer, memo_key, status, asked_at)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?
+		WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND pipeline_id = ?)
+		ON CONFLICT (run_id, memo_key) DO NOTHING
+	`, question.RunID, question.JobName, question.AgentName, question.Question, options,
+		question.OptionsRequired, nullableText(question.Default), question.MemoKey(), nowNano(),
+		question.RunID, s.pipelineID)
+	if err != nil {
+		return store.Question{}, false, fmt.Errorf("could not record question for job %q: %w", question.JobName, err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return store.Question{}, false, fmt.Errorf("could not record question for job %q: %w", question.JobName, err)
+	}
+
+	stored, err := s.questionByMemo(ctx, question.RunID, question.MemoKey())
+	if err != nil {
+		return store.Question{}, false, err
+	}
+
+	return stored, affected == 0, nil
+}
+
+// AnswerQuestion records an answer against a pending question. It is the one
+// write every ANSWERING channel shares — a seeded answer, a responder agent, a
+// person at a TTY, `steps questions answer`, the web UI — so the options fence and the
+// already-resolved race are decided once, here, rather than five times.
+//
+// The gate is the method. Answering is the only outcome those two checks apply
+// to, so they cannot move down into closeQuestion, which serves the outcomes
+// nobody chose — see CloseQuestion on why these stay two entry points.
+func (s *Store) AnswerQuestion(ctx context.Context, id int64, answer, by string) error {
+	question, err := s.QuestionStatus(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	if question.Status != "pending" {
+		return fmt.Errorf("question %d: %w (already %s)", id, store.ErrQuestionNotPending, question.Status)
+	}
+
+	if question.OptionsRequired && !slices.Contains(question.Options, answer) {
+		return fmt.Errorf("question %d: answer %q is not one of the offered options: %s",
+			id, answer, strings.Join(question.Options, ", "))
+	}
+
+	return s.closeQuestion(ctx, id, "answered", answer, by)
+}
+
+// CloseQuestion resolves a question nobody answered: 'expired' when the wait
+// ran out (carrying the declared default, if there was one, so the row says
+// what the model was actually told) or 'aborted' when the step ended first.
+//
+// The aborted case is why this exists separately from AnswerQuestion. A
+// question left `pending` after its step is gone is unanswerable, and showing
+// it in `steps questions` as though somebody could still answer it is the same
+// class of lie as presenting a default as a person's decision.
+//
+// It reads like AnswerQuestion with the status fixed, and is not: the shared
+// half is closeQuestion, already. What AnswerQuestion adds is the options
+// fence, and the fence must NOT reach here. An expiry carries the `default:`
+// declared on the grant, in the YAML, while the options come from the model's
+// own tool call — nothing has ever compared the two, and nothing can, since
+// the options do not exist until the call. An abort carries no answer at all.
+//
+// Fold the two and that fence becomes conditional on a caller-supplied string
+// the four answering sites each have to spell right to be checked at all. No
+// constraint covers this column, so one misspelling writes a status no reader
+// knows AND skips the fence, in the same silent step.
+func (s *Store) CloseQuestion(ctx context.Context, id int64, status, answer, by string) error {
+	return s.closeQuestion(ctx, id, status, answer, by)
+}
+
+func (s *Store) closeQuestion(ctx context.Context, id int64, status, answer, by string) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE questions SET status = ?, answered_at = ?, answered_by = ?, answer = ?
+		WHERE id = ? AND status = 'pending'
+		  AND run_id IN (SELECT id FROM runs WHERE pipeline_id = ?)
+	`, status, nowNano(), by, nullableText(answer), id, s.pipelineID)
+	if err != nil {
+		return fmt.Errorf("could not resolve question %d: %w", id, err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("could not resolve question %d: %w", id, err)
+	}
+
+	if affected == 0 {
+		return fmt.Errorf("question %d: %w (already resolved, or never existed)", id, store.ErrQuestionNotPending)
+	}
+
+	return nil
+}
+
+// QuestionStatus reads one question's current state.
+func (s *Store) QuestionStatus(ctx context.Context, id int64) (store.Question, error) {
+	question, err := s.scanQuestion(s.db.QueryRowContext(ctx, questionColumns+`
+		WHERE q.id = ? AND r.pipeline_id = ?
+	`, id, s.pipelineID))
+	if err != nil {
+		return store.Question{}, fmt.Errorf("could not read question %d: %w", id, err)
+	}
+
+	return question, nil
+}
+
+// questionByMemo reads back the row a memo key resolved to, which is the one
+// AskQuestion just inserted or the one that beat it there.
+func (s *Store) questionByMemo(ctx context.Context, runID, memoKey string) (store.Question, error) {
+	question, err := s.scanQuestion(s.db.QueryRowContext(ctx, questionColumns+`
+		WHERE q.run_id = ? AND q.memo_key = ? AND r.pipeline_id = ?
+	`, runID, memoKey, s.pipelineID))
+	if err != nil {
+		return store.Question{}, fmt.Errorf("could not read the question just recorded: %w", err)
+	}
+
+	return question, nil
+}
+
+// Questions lists what a pipeline has asked. pendingOnly narrows it to the
+// questions still waiting; limit <= 0 means no limit, the convention this repo
+// uses everywhere.
+//
+// The two orders are not cosmetic, and are why this is one method rather than
+// a filter bolted onto one query. Waiting questions read oldest-first, because
+// that is the order somebody should answer them in. The full listing puts
+// pending FIRST and then the rest newest-first: it is capped, and the only
+// route the UI offers for ANSWERING is this page, so ordered purely by recency
+// a pipeline that asked `limit` more questions would push a parked one off the
+// page while the nav badge still counted it — a run parked with nothing on
+// screen to unpark it.
+func (s *Store) Questions(ctx context.Context, pendingOnly bool, limit int) ([]store.Question, error) {
+	where, order, what := `q.status = 'pending'`, `q.id`, "pending questions"
+	if !pendingOnly {
+		where, order, what = `1 = 1`, `(q.status = 'pending') DESC, q.id DESC`, "questions"
+	}
+
+	return collect(ctx, s.db, what, questionColumns+`
+		WHERE `+where+` AND r.pipeline_id = ?
+		ORDER BY `+order+` LIMIT ?
+	`, []any{s.pipelineID, rowLimit(limit)}, func(rows *sql.Rows) (store.Question, error) {
+		return s.scanQuestion(rows)
+	})
+}
+
+// questionColumns is the SELECT every read shares. The join is how a question
+// is pipeline-scoped: it is run-scoped, like run_steps and agent_usage, and
+// reaches its pipeline through the run it belongs to rather than carrying a
+// second copy of the answer.
+const questionColumns = `
+	SELECT q.id, q.run_id, q.job_name, q.agent_name, q.question, q.options, q.options_required,
+	       COALESCE(q.default_answer, ''), q.status, q.asked_at,
+	       COALESCE(q.answered_at, ''), COALESCE(q.answered_by, ''), COALESCE(q.answer, '')
+	FROM questions q JOIN runs r ON r.id = q.run_id
+`
+
+func (s *Store) scanQuestion(row rowScanner) (store.Question, error) {
+	var (
+		question store.Question
+		options  string
+	)
+
+	err := row.Scan(&question.ID, &question.RunID, &question.JobName, &question.AgentName,
+		&question.Question, &options, &question.OptionsRequired, &question.Default,
+		&question.Status, &question.AskedAt, &question.AnsweredAt, &question.AnsweredBy, &question.Answer)
+	if err != nil {
+		return store.Question{}, err //nolint:wrapcheck // every caller wraps with what it was reading
+	}
+
+	question.Options, err = decodeOptions(options)
+
+	return question, err
+}
+
+// encodeOptions stores the offered list as JSON. Always a JSON array, never
+// NULL: "the model offered nothing" and "we did not record what it offered"
+// are different facts, and an empty array says the first one.
+func encodeOptions(options []string) (string, error) {
+	if len(options) == 0 {
+		return "[]", nil
+	}
+
+	encoded, err := json.Marshal(options)
+	if err != nil {
+		return "", fmt.Errorf("could not record the question's options: %w", err)
+	}
+
+	return string(encoded), nil
+}
+
+func decodeOptions(encoded string) ([]string, error) {
+	if encoded == "" || encoded == "[]" {
+		return nil, nil
+	}
+
+	var options []string
+
+	err := json.Unmarshal([]byte(encoded), &options)
+	if err != nil {
+		return nil, fmt.Errorf("could not read the question's options: %w", err)
+	}
+
+	return options, nil
+}
+
+// nullableText keeps "not declared" out of the answer columns as NULL rather
+// than as an empty string, so a question answered with deliberate silence
+// stays tellable apart from one nobody reached.
+func nullableText(value string) any {
+	if value == "" {
+		return nil
+	}
+
+	return value
+}

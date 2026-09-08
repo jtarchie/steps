@@ -14,6 +14,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // costFixture writes a pipeline and records one run with two agent steps in
@@ -31,7 +32,7 @@ jobs:
     run: "true"
 `)
 
-	st, err := store.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
+	st, err := sqlite.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
 	if err != nil {
 		t.Fatalf("open state store: %v", err)
 	}

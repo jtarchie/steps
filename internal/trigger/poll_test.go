@@ -151,7 +151,7 @@ func TestPollWaitsOutAConfigWithNothingToPoll(t *testing.T) {
 }
 
 // waitForQueuedJob claims the first row polling enqueues.
-func waitForQueuedJob(ctx context.Context, t *testing.T, st *store.Store) (int64, string) {
+func waitForQueuedJob(ctx context.Context, t *testing.T, st store.Store) (int64, string) {
 	t.Helper()
 
 	deadline := time.Now().Add(10 * time.Second)
@@ -268,7 +268,7 @@ func TestPollFollowsAConfigSwap(t *testing.T) {
 // waitForQueuedName waits for the trigger queue to hold a row for one job,
 // without claiming it — the caller is asserting what polling decided, not
 // standing in for a drainer.
-func waitForQueuedName(ctx context.Context, t *testing.T, st *store.Store, jobName string) {
+func waitForQueuedName(ctx context.Context, t *testing.T, st store.Store, jobName string) {
 	t.Helper()
 
 	deadline := time.Now().Add(10 * time.Second)

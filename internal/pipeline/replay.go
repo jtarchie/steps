@@ -43,7 +43,7 @@ import (
 // become two runs, side by side, which is the entire point of being able to do
 // this cheaply.
 func PrepareReplay(
-	ctx context.Context, st *store.Store, provider workspace.Provider,
+	ctx context.Context, st store.Store, provider workspace.Provider,
 	sourceRunID, fromStep string, cfg *config.Config, job *config.Job,
 ) (context.Context, string, error) {
 	source, err := findRun(ctx, st, sourceRunID)
@@ -130,7 +130,7 @@ func replayIndex(job *config.Job, fromStep string) (int, error) {
 // that never existed. Refusing names the step rather than producing a
 // confidently wrong run.
 func replayDoneSteps(
-	ctx context.Context, st *store.Store, sourceRunID string, job *config.Job, from int,
+	ctx context.Context, st store.Store, sourceRunID string, job *config.Job, from int,
 ) (map[int]string, error) {
 	recorded, err := st.CompletedRunSteps(ctx, sourceRunID)
 	if err != nil {

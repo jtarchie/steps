@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
-	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // End-to-end proof for --state: several pipelines recording into ONE sqlite
@@ -105,7 +105,7 @@ func TestSharedStateWritesOneFile(t *testing.T) {
 func assertRunCount(t *testing.T, state, name string, want int) {
 	t.Helper()
 
-	st, err := store.OpenStore(state, name)
+	st, err := sqlite.OpenStore(state, name)
 	if err != nil {
 		t.Fatalf("open shared store as %s: %v", name, err)
 	}
@@ -199,7 +199,7 @@ func TestSharedStateRefusesAForeignRunID(t *testing.T) {
 		t.Fatalf("run first: %v", err)
 	}
 
-	st, err := store.OpenStore(state, cli.PipelineName(first))
+	st, err := sqlite.OpenStore(state, cli.PipelineName(first))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 // Opening a database this build cannot write to.
 
@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestOpenStoreRefusesAnOlderSchema is the alternative to losing a run's whole
@@ -54,7 +56,7 @@ func TestOpenStoreRefusesAnOlderSchema(t *testing.T) {
 		t.Fatal("a database written by an older build was opened — its records are silently discarded from here on")
 	}
 
-	if !errors.Is(err, ErrSchemaVersion) {
+	if !errors.Is(err, store.ErrSchemaVersion) {
 		t.Fatalf("error = %v, want a schema-version refusal", err)
 	}
 
@@ -127,7 +129,7 @@ func TestOpenStoreRefusesANewerSchema(t *testing.T) {
 	stampVersion(t, path, schemaVersion+1)
 
 	_, err = OpenStore(path, "test")
-	if !errors.Is(err, ErrSchemaVersion) {
+	if !errors.Is(err, store.ErrSchemaVersion) {
 		t.Fatalf("error = %v, want a schema-version refusal", err)
 	}
 }

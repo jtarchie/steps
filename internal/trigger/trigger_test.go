@@ -19,6 +19,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -110,10 +111,10 @@ func loadConfig(t *testing.T, dir, yaml string) *config.Config {
 	return cfg
 }
 
-func mustOpenStore(t *testing.T, dir string) *store.Store {
+func mustOpenStore(t *testing.T, dir string) store.Store {
 	t.Helper()
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

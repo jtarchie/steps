@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 // What a build costs on disk. The retention, interning and cascade work in
 // this package was motivated by a real database (a Slack-bot pipeline polling
@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // The synthetic build below reproduces the SHAPE and the BYTE SIZES of the
@@ -73,18 +75,18 @@ var syntheticPlan = []syntheticStep{
 // syntheticStepRecords writes the per-step rows that hang off a node: the
 // resume record and the pair of events a step publishes.
 func syntheticStepRecords(
-	ctx context.Context, t *testing.T, store *Store,
+	ctx context.Context, t *testing.T, st *Store,
 	runID string, index int, step syntheticStep, hash string,
 ) {
 	t.Helper()
 
-	err := store.RecordRunStep(ctx, runID, index, step.name)
+	err := st.RecordRunStep(ctx, runID, index, step.name)
 	if err != nil {
 		t.Fatalf("RecordRunStep: %v", err)
 	}
 
 	for _, eventType := range []string{"step_started", "step_finished"} {
-		err = store.AppendRunEvent(ctx, RunEventRow{
+		err = st.AppendRunEvent(ctx, store.RunEventRow{
 			RunID: runID, Type: eventType, StepIndex: index,
 			StepName: step.name, StepKind: step.kind, Status: "succeeded",
 			Hash: hash, DurationMS: 1_234, At: time.Now(),
@@ -105,12 +107,12 @@ func syntheticStepRecords(
 // same id would upsert onto one row rather than record two runs — which is why
 // production ids are random (pipeline.NewRunID) and why this one carries the
 // pipeline.
-func runIDFor(store *Store, build int) string {
-	if store.pipelineID == 1 {
+func runIDFor(st *Store, build int) string {
+	if st.pipelineID == 1 {
 		return fmt.Sprintf("RUN%05d", build)
 	}
 
-	return fmt.Sprintf("RUN%d-%05d", store.pipelineID, build)
+	return fmt.Sprintf("RUN%d-%05d", st.pipelineID, build)
 }
 
 // syntheticRevision records the configuration one build ran, and returns its
@@ -121,12 +123,12 @@ func runIDFor(store *Store, build int) string {
 // pipeline_revisions contributing zero bytes to the one dbstat measurement in
 // this repo, so the table could grow without bound while the footprint test
 // went on reporting a flat file.
-func syntheticRevision(ctx context.Context, t *testing.T, store *Store, build int) string {
+func syntheticRevision(ctx context.Context, t *testing.T, st *Store, build int) string {
 	t.Helper()
 
-	sha := fmt.Sprintf("sha-%s-%04d", store.pipeline, build)
+	sha := fmt.Sprintf("sha-%s-%04d", st.pipeline, build)
 
-	err := store.RecordRevision(ctx, sha, syntheticPipelineSource(build))
+	err := st.RecordRevision(ctx, sha, syntheticPipelineSource(build))
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
@@ -141,10 +143,10 @@ func syntheticPipelineSource(build int) string {
 		build, strings.Repeat("echo working; ", 200))
 }
 
-func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName string, build int) {
+func syntheticBuild(ctx context.Context, t *testing.T, st *Store, jobName string, build int) {
 	t.Helper()
 
-	runID := runIDFor(store, build)
+	runID := runIDFor(st, build)
 	version := fmt.Sprintf(`{"channel":"C0BQ88M07NV","ts":"17869%05d.021829"}`, build)
 
 	// Every build is backdated to its own minute, because a test that writes
@@ -153,11 +155,11 @@ func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName str
 	// compares against is the oldest retained run's start. The first version of
 	// this generator did write them all at once, and it reported a footprint
 	// growing 3.4x under a cap while claiming the cap was applied.
-	defer func() { backdateBuild(ctx, t, store, runID, build) }()
+	defer func() { backdateBuild(ctx, t, st, runID, build) }()
 
-	sha := syntheticRevision(ctx, t, store, build)
+	sha := syntheticRevision(ctx, t, st, build)
 
-	err := store.StartRun(ctx, runID, jobName, "/tmp/steps-ws-"+runID+"/b-"+runID+"-1-"+jobName, sha)
+	err := st.StartRun(ctx, runID, jobName, "/tmp/steps-ws-"+runID+"/b-"+runID+"-1-"+jobName, sha)
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -168,7 +170,7 @@ func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName str
 	hashes := make([]string, 0, 6)
 
 	for index, step := range syntheticPlan {
-		hash := fmt.Sprintf("%064x", int(store.pipelineID)*1_000_000+build*100+index)
+		hash := fmt.Sprintf("%064x", int(st.pipelineID)*1_000_000+build*100+index)
 
 		// The invariant part: a prompt, an expr script, a tool list. Identical in
 		// every build, which is what interning collapses.
@@ -182,7 +184,7 @@ func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName str
 			result = map[string]any{"output": strings.Repeat("r", step.result)}
 		}
 
-		err = store.RecordNode(ctx, NodeRecord{
+		err = st.RecordNode(ctx, store.NodeRecord{
 			Hash: hash, ParentHash: parent, Kind: step.kind,
 			StepIndex: index, Resource: step.name, Content: content,
 		}, jobName, "succeeded", result, nil)
@@ -193,10 +195,10 @@ func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName str
 		hashes = append(hashes, hash)
 		parent = hash
 
-		syntheticStepRecords(ctx, t, store, runID, index, step, hash)
+		syntheticStepRecords(ctx, t, st, runID, index, step, hash)
 	}
 
-	err = store.RecordAgentUsage(ctx, AgentUsage{
+	err = st.RecordAgentUsage(ctx, store.AgentUsage{
 		RunID: runID, StepIndex: 3, StepName: "responder", JobName: jobName,
 		NodeHash: hashes[3], ModelReq: "haiku",
 		Prompt: 1_014_963, Completion: 4_140, Total: 1_019_103,
@@ -211,7 +213,7 @@ func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName str
 	instance := "i-0123456789abcdef0"
 	uid, gid := 0, 0
 
-	err = store.RecordPlacement(ctx, Placement{
+	err = st.RecordPlacement(ctx, store.Placement{
 		RunID: runID, StepIndex: 1, StepName: "unit", JobName: jobName,
 		NodeHash: hashes[1], Slot: hashes[1], Tag: "linux-arm64",
 		Address: "aws://" + instance, InstanceID: &instance,
@@ -225,14 +227,14 @@ func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName str
 		t.Fatalf("RecordPlacement: %v", err)
 	}
 
-	syntheticQuestion(ctx, t, store, runID, jobName)
+	syntheticQuestion(ctx, t, st, runID, jobName)
 
-	err = store.SaveNodeTranscript(ctx, hashes[3], transcriptJSON(transcriptBytes))
+	err = st.SaveNodeTranscript(ctx, hashes[3], transcriptJSON(transcriptBytes))
 	if err != nil {
 		t.Fatalf("SaveNodeTranscript: %v", err)
 	}
 
-	err = store.FinishRun(ctx, runID, "succeeded")
+	err = st.FinishRun(ctx, runID, "succeeded")
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
@@ -241,10 +243,10 @@ func syntheticBuild(ctx context.Context, t *testing.T, store *Store, jobName str
 // syntheticQuestion records one answered question per build, so the measured
 // footprint prices a build whose agent asked its end user something — and so
 // the orphan sweep has a table with rows in it to ask about.
-func syntheticQuestion(ctx context.Context, t *testing.T, store *Store, runID, jobName string) {
+func syntheticQuestion(ctx context.Context, t *testing.T, st *Store, runID, jobName string) {
 	t.Helper()
 
-	question, _, err := store.AskQuestion(ctx, Question{
+	question, _, err := st.AskQuestion(ctx, store.Question{
 		RunID: runID, JobName: jobName, AgentName: "responder",
 		Question: "Is this release a major or a minor bump?",
 		Options:  []string{"major", "minor", "patch"},
@@ -254,7 +256,7 @@ func syntheticQuestion(ctx context.Context, t *testing.T, store *Store, runID, j
 		t.Fatalf("AskQuestion: %v", err)
 	}
 
-	err = store.AnswerQuestion(ctx, question.ID, "minor", "jtarchie")
+	err = st.AnswerQuestion(ctx, question.ID, "minor", "jtarchie")
 	if err != nil {
 		t.Fatalf("AnswerQuestion: %v", err)
 	}
@@ -268,12 +270,12 @@ var buildEpoch = time.Date(2026, time.August, 16, 0, 0, 0, 0, time.UTC)
 // backdateBuild rewrites one build's timestamps so a database of N builds looks
 // like it accumulated over N minutes.
 //
-// Written as direct UPDATEs rather than by making the store's clock injectable:
+// Written as direct UPDATEs rather than by making the st's clock injectable:
 // a package-level clock variable is shared state, and these tests run in
 // parallel. The columns are stamped in the same two formats production uses —
 // whole seconds for nodes, nanoseconds for runs — because the mismatch between
 // them is precisely what pruneNodes has to survive.
-func backdateBuild(ctx context.Context, t *testing.T, store *Store, runID string, build int) {
+func backdateBuild(ctx context.Context, t *testing.T, st *Store, runID string, build int) {
 	t.Helper()
 
 	at := buildEpoch.Add(time.Duration(build) * time.Minute)
@@ -288,9 +290,9 @@ func backdateBuild(ctx context.Context, t *testing.T, store *Store, runID string
 			[]any{at.Format(time.RFC3339Nano), runID}},
 		{`UPDATE nodes SET created_at = ?
 		    WHERE pipeline_id = ? AND hash IN (SELECT hash FROM run_events WHERE run_id = ?)`,
-			[]any{at.Format(time.RFC3339), store.pipelineID, runID}},
+			[]any{at.Format(time.RFC3339), st.pipelineID, runID}},
 	} {
-		_, err := store.db.ExecContext(ctx, update.query, update.args...)
+		_, err := st.db.ExecContext(ctx, update.query, update.args...)
 		if err != nil {
 			t.Fatalf("backdate %s: %v", runID, err)
 		}
@@ -315,15 +317,15 @@ func transcriptJSON(size int) string {
 // Read through a fresh connection with a checkpoint first: dbstat sees the
 // database FILE, so uncheckpointed WAL pages would be invisible and every
 // measurement would read low by however much was still in the log.
-func tableBytes(ctx context.Context, t *testing.T, store *Store) map[string]int64 {
+func tableBytes(ctx context.Context, t *testing.T, st *Store) map[string]int64 {
 	t.Helper()
 
-	_, err := store.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
+	_, err := st.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
 	if err != nil {
 		t.Fatalf("wal_checkpoint: %v", err)
 	}
 
-	rows, err := store.db.QueryContext(ctx,
+	rows, err := st.db.QueryContext(ctx,
 		`SELECT name, SUM(pgsize) FROM dbstat GROUP BY name`)
 	if err != nil {
 		t.Fatalf("dbstat: %v", err)
@@ -391,13 +393,13 @@ func totalBytes(sizes map[string]int64) int64 {
 	return total
 }
 
-func countRows(ctx context.Context, t *testing.T, store *Store, table string) int {
+func countRows(ctx context.Context, t *testing.T, st *Store, table string) int {
 	t.Helper()
 
 	var count int
 
 	// The table name is a literal from this test, never caller input.
-	err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count)
+	err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count)
 	if err != nil {
 		t.Fatalf("count %s: %v", table, err)
 	}
@@ -418,9 +420,9 @@ func TestFootprintPerBuildIsBounded(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	// Both measurement points are past the point where the CACHE has filled, which
 	// is what makes comparing them meaningful. Retention bounds two things with two
@@ -438,9 +440,9 @@ func TestFootprintPerBuildIsBounded(t *testing.T) {
 
 	buildAndPrune := func(from, to int) {
 		for build := from; build <= to; build++ {
-			syntheticBuild(ctx, t, store, jobName, build)
+			syntheticBuild(ctx, t, st, jobName, build)
 
-			err := store.Prune(ctx, Retention{JobName: jobName, Runs: keep}, "")
+			err := st.Prune(ctx, store.Retention{JobName: jobName, Runs: keep}, "")
 			if err != nil {
 				t.Fatalf("Prune: %v", err)
 			}
@@ -449,12 +451,12 @@ func TestFootprintPerBuildIsBounded(t *testing.T) {
 
 	buildAndPrune(1, saturated)
 
-	atCap := tableBytes(ctx, t, store)
+	atCap := tableBytes(ctx, t, st)
 	logFootprint(t, fmt.Sprintf("after %d builds (cap %d)", saturated, keep), atCap)
 
 	buildAndPrune(saturated+1, builds)
 
-	atSteadyState := tableBytes(ctx, t, store)
+	atSteadyState := tableBytes(ctx, t, st)
 	logFootprint(t, fmt.Sprintf("after %d builds (cap %d)", builds, keep), atSteadyState)
 
 	// Six times the builds, and the file must not have grown like it. A little
@@ -474,19 +476,19 @@ func TestFootprintPerBuildIsBounded(t *testing.T) {
 		{"nodes", keep * nodesPerRetainedRun},
 		{"job_runs", keep * chainsPerRetainedRun},
 	} {
-		if got := countRows(ctx, t, store, bounded.table); got > bounded.limit {
+		if got := countRows(ctx, t, st, bounded.table); got > bounded.limit {
 			t.Errorf("%s = %d rows after %d builds, want at most %d", bounded.table, got, builds, bounded.limit)
 		}
 	}
 
 	// And the reason it did not grow is that the old rows are gone, not that
 	// they compressed well.
-	if got := countRows(ctx, t, store, "runs"); got != keep {
+	if got := countRows(ctx, t, st, "runs"); got != keep {
 		t.Errorf("runs = %d rows, want %d — the cap is not being applied", got, keep)
 	}
 
 	for _, table := range []string{"run_events", "run_steps", "agent_usage", "run_placements", "node_transcripts", "nodes"} {
-		if countRows(ctx, t, store, table) == 0 {
+		if countRows(ctx, t, st, table) == 0 {
 			t.Errorf("%s is empty; the prune took the retained builds with it", table)
 		}
 	}
@@ -505,15 +507,15 @@ func TestFootprintNoOrphansSurviveAPrune(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	for build := 1; build <= 12; build++ {
-		syntheticBuild(ctx, t, store, "answer-mention", build)
+		syntheticBuild(ctx, t, st, "answer-mention", build)
 	}
 
-	err := store.Prune(ctx, Retention{JobName: "answer-mention", Runs: 3}, "")
+	err := st.Prune(ctx, store.Retention{JobName: "answer-mention", Runs: 3}, "")
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
@@ -549,7 +551,7 @@ func TestFootprintNoOrphansSurviveAPrune(t *testing.T) {
 	} {
 		var count int
 
-		err = store.db.QueryRowContext(ctx, orphan.query).Scan(&count)
+		err = st.db.QueryRowContext(ctx, orphan.query).Scan(&count)
 		if err != nil {
 			t.Fatalf("%s: %v", orphan.what, err)
 		}
@@ -571,14 +573,14 @@ func TestFootprintInternedContentDoesNotRepeat(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	const builds = 40
 
 	for build := 1; build <= builds; build++ {
-		syntheticBuild(ctx, t, store, "answer-mention", build)
+		syntheticBuild(ctx, t, st, "answer-mention", build)
 	}
 
 	var (
@@ -586,7 +588,7 @@ func TestFootprintInternedContentDoesNotRepeat(t *testing.T) {
 		rows     int
 	)
 
-	err := store.db.QueryRowContext(ctx,
+	err := st.db.QueryRowContext(ctx,
 		`SELECT (SELECT COUNT(*) FROM node_content), (SELECT COUNT(*) FROM nodes)`).Scan(&distinct, &rows)
 	if err != nil {
 		t.Fatalf("count content: %v", err)
@@ -599,7 +601,7 @@ func TestFootprintInternedContentDoesNotRepeat(t *testing.T) {
 		t.Errorf("node_content has %d rows for %d nodes; identical content is not being shared", distinct, rows)
 	}
 
-	sizes := tableBytes(ctx, t, store)
+	sizes := tableBytes(ctx, t, st)
 	logFootprint(t, fmt.Sprintf("%d builds, interned content", builds), sizes)
 }
 
@@ -611,11 +613,11 @@ func TestFootprintTranscriptIsCapped(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
-	err := store.RecordNode(ctx, NodeRecord{
+	err := st.RecordNode(ctx, store.NodeRecord{
 		Hash: strings.Repeat("a", 64), Kind: "agent", Resource: "responder",
 		Content: map[string]any{"body": "x"},
 	}, "job", "succeeded", nil, nil)
@@ -623,28 +625,28 @@ func TestFootprintTranscriptIsCapped(t *testing.T) {
 		t.Fatalf("RecordNode: %v", err)
 	}
 
-	err = store.SaveNodeTranscript(ctx, strings.Repeat("a", 64),
-		transcriptJSON(MaxTranscriptBytes*3))
+	err = st.SaveNodeTranscript(ctx, strings.Repeat("a", 64),
+		transcriptJSON(store.MaxTranscriptBytes*3))
 	if err != nil {
 		t.Fatalf("SaveNodeTranscript: %v", err)
 	}
 
 	var stored int
 
-	err = store.db.QueryRowContext(ctx,
+	err = st.db.QueryRowContext(ctx,
 		`SELECT LENGTH(transcript) FROM node_transcripts`).Scan(&stored)
 	if err != nil {
 		t.Fatalf("read transcript length: %v", err)
 	}
 
-	if stored > MaxTranscriptBytes {
-		t.Errorf("stored transcript is %d bytes, want at most %d", stored, MaxTranscriptBytes)
+	if stored > store.MaxTranscriptBytes {
+		t.Errorf("stored transcript is %d bytes, want at most %d", stored, store.MaxTranscriptBytes)
 	}
 
 	// Truncated, not dropped: the head of a long conversation is where the task
 	// and the first decisions are, so a reader still gets the part that
 	// explains what the step was doing.
-	transcript, ok, err := store.NodeTranscript(ctx, strings.Repeat("a", 64))
+	transcript, ok, err := st.NodeTranscript(ctx, strings.Repeat("a", 64))
 	if err != nil || !ok {
 		t.Fatalf("NodeTranscript: ok=%v err=%v", ok, err)
 	}
@@ -706,10 +708,10 @@ func TestTranscriptTruncationSurvivesNonJSON(t *testing.T) {
 
 	// Multi-byte runes on purpose: a byte-offset cut can split one in half, which
 	// is how the first version could produce invalid UTF-8 as well as invalid JSON.
-	got := truncateTranscript(strings.Repeat("日本語", MaxTranscriptBytes))
+	got := truncateTranscript(strings.Repeat("日本語", store.MaxTranscriptBytes))
 
-	if len(got) > MaxTranscriptBytes {
-		t.Errorf("non-JSON transcript stored %d bytes, want at most %d", len(got), MaxTranscriptBytes)
+	if len(got) > store.MaxTranscriptBytes {
+		t.Errorf("non-JSON transcript stored %d bytes, want at most %d", len(got), store.MaxTranscriptBytes)
 	}
 
 	if !utf8.ValidString(got) {
@@ -724,24 +726,24 @@ func TestFootprintPruneKeepsTheNewestRuns(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	for build := 1; build <= 8; build++ {
-		syntheticBuild(ctx, t, store, "answer-mention", build)
+		syntheticBuild(ctx, t, st, "answer-mention", build)
 	}
 
 	// A second job, to prove the cap is per job rather than global — one busy
 	// job must not evict a quiet one's only run.
-	syntheticBuild(ctx, t, store, "other", 99)
+	syntheticBuild(ctx, t, st, "other", 99)
 
-	err := store.Prune(ctx, Retention{JobName: "answer-mention", Runs: 3}, "")
+	err := st.Prune(ctx, store.Retention{JobName: "answer-mention", Runs: 3}, "")
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	kept, err := store.ListRuns(ctx, "answer-mention", 100)
+	kept, err := st.ListRuns(ctx, "answer-mention", 100)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
@@ -758,7 +760,7 @@ func TestFootprintPruneKeepsTheNewestRuns(t *testing.T) {
 		t.Errorf("kept %v, want %v", got, want)
 	}
 
-	other, err := store.ListRuns(ctx, "other", 100)
+	other, err := st.ListRuns(ctx, "other", 100)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
@@ -774,24 +776,24 @@ func TestFootprintPruneIsSafeOnAnEmptyDatabase(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
-	err := store.Prune(ctx, Retention{JobName: "nothing-here", Runs: 10}, "")
+	err := st.Prune(ctx, store.Retention{JobName: "nothing-here", Runs: 10}, "")
 	if err != nil {
 		t.Fatalf("Prune on an empty database: %v", err)
 	}
 
 	// Zero means no limit, the convention every other cap in this repo uses.
-	syntheticBuild(ctx, t, store, "job", 1)
+	syntheticBuild(ctx, t, st, "job", 1)
 
-	err = store.Prune(ctx, Retention{JobName: "job", Runs: 0}, "")
+	err = st.Prune(ctx, store.Retention{JobName: "job", Runs: 0}, "")
 	if err != nil {
 		t.Fatalf("Prune with no cap: %v", err)
 	}
 
-	if got := countRows(ctx, t, store, "runs"); got != 1 {
+	if got := countRows(ctx, t, st, "runs"); got != 1 {
 		t.Errorf("runs = %d after an uncapped prune, want 1 — zero must mean no limit", got)
 	}
 }
@@ -804,9 +806,9 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	for _, want := range []struct{ table, column, target, onDelete string }{
 		{"run_events", "run_id", "runs", "CASCADE"},
@@ -842,7 +844,7 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 		{"job_breaker", "pipeline_id", "pipelines", "CASCADE"},
 		{"pipeline_revisions", "pipeline_id", "pipelines", "CASCADE"},
 	} {
-		if !hasForeignKey(ctx, t, store, want.table, want.column, want.target, want.onDelete) {
+		if !hasForeignKey(ctx, t, st, want.table, want.column, want.target, want.onDelete) {
 			t.Errorf("%s.%s does not declare REFERENCES %s ... ON DELETE %s",
 				want.table, want.column, want.target, want.onDelete)
 		}
@@ -854,7 +856,7 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 	// precedes its parent — adding this constraint makes every block step fail
 	// to record, which is how it was found. pruneNodes nulls dangling links
 	// instead.
-	if declaresForeignKey(ctx, t, store, "nodes", "parent_hash") {
+	if declaresForeignKey(ctx, t, st, "nodes", "parent_hash") {
 		t.Error("nodes.parent_hash declares a foreign key; a container node is recorded " +
 			"after its branches, so the child exists before the parent and every " +
 			"in_parallel/race/ensemble/try step will fail to record")
@@ -864,7 +866,7 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 	// has a leaf hash no node row describes — the block records nothing of its
 	// own — and cascading this away when a node is reaped would make retention
 	// re-run work that succeeded. Aged out by pruneJobRuns instead.
-	if declaresForeignKey(ctx, t, store, "job_runs", "root_hash") {
+	if declaresForeignKey(ctx, t, st, "job_runs", "root_hash") {
 		t.Error("job_runs.root_hash declares a foreign key; a chain whose leaf is a " +
 			"container block has no node to point at, and cascading the skip index " +
 			"off node retention silently re-runs succeeded work")
@@ -876,18 +878,18 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 	// one table besides, where a cascade would take a whole subtree out on a
 	// pass that meant to trim one row. Both rows die with their run either
 	// way, via run_id.
-	if declaresForeignKey(ctx, t, store, "run_events", "parent_step_id") {
+	if declaresForeignKey(ctx, t, st, "run_events", "parent_step_id") {
 		t.Error("run_events.parent_step_id declares a foreign key; a container's own " +
 			"event is written after its children's, so the parent row does not exist " +
 			"yet when the child is recorded")
 	}
 }
 
-func hasForeignKey(ctx context.Context, t *testing.T, store *Store, table, column, target, onDelete string) bool {
+func hasForeignKey(ctx context.Context, t *testing.T, st *Store, table, column, target, onDelete string) bool {
 	t.Helper()
 
 	// table is a literal from the table above, never caller input.
-	rows, err := store.db.QueryContext(ctx, `PRAGMA foreign_key_list(`+table+`)`)
+	rows, err := st.db.QueryContext(ctx, `PRAGMA foreign_key_list(`+table+`)`)
 	if err != nil {
 		t.Fatalf("foreign_key_list(%s): %v", table, err)
 	}
@@ -929,11 +931,11 @@ func hasForeignKey(ctx context.Context, t *testing.T, store *Store, table, colum
 // `REFERENCES nodes(hash) ON DELETE CASCADE` to nodes.parent_hash left the test
 // green while every in_parallel/race/ensemble/try step failed to record, which is
 // the whole regression the assertion exists to catch.
-func declaresForeignKey(ctx context.Context, t *testing.T, store *Store, table, column string) bool {
+func declaresForeignKey(ctx context.Context, t *testing.T, st *Store, table, column string) bool {
 	t.Helper()
 
 	// table is a literal from the caller in this file, never external input.
-	rows, err := store.db.QueryContext(ctx, `PRAGMA foreign_key_list(`+table+`)`)
+	rows, err := st.db.QueryContext(ctx, `PRAGMA foreign_key_list(`+table+`)`)
 	if err != nil {
 		t.Fatalf("foreign_key_list(%s): %v", table, err)
 	}
@@ -978,31 +980,31 @@ func TestPruneKeepsTheRunItWasCalledFrom(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	for build := 1; build <= 4; build++ {
-		syntheticBuild(ctx, t, store, "job", build)
+		syntheticBuild(ctx, t, st, "job", build)
 	}
 
 	// Resume the oldest run, the way `steps run --resume` does.
 	const resumed = "RUN00001"
 
-	err := store.ResumeRun(ctx, resumed, "/tmp/ws", "")
+	err := st.ResumeRun(ctx, resumed, "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("ResumeRun: %v", err)
 	}
 
-	err = store.Prune(ctx, Retention{JobName: "job", Runs: 3}, resumed)
+	err = st.Prune(ctx, store.Retention{JobName: "job", Runs: 3}, resumed)
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	assertRunSurvives(t, store, resumed, "the run being resumed was deleted by its own prune")
+	assertRunSurvives(t, st, resumed, "the run being resumed was deleted by its own prune")
 
 	// Its resume record has to survive with it, or the resume restarts from zero.
-	steps, err := store.CompletedRunSteps(ctx, resumed)
+	steps, err := st.CompletedRunSteps(ctx, resumed)
 	if err != nil {
 		t.Fatalf("CompletedRunSteps: %v", err)
 	}
@@ -1020,33 +1022,33 @@ func TestPruneSparesARunStillInFlight(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	for build := 1; build <= 4; build++ {
-		syntheticBuild(ctx, t, store, "job", build)
+		syntheticBuild(ctx, t, st, "job", build)
 	}
 
 	// An older run that is still going: started before the others, never finished.
-	err := store.StartRun(ctx, "INFLIGHT", "job", "/tmp/ws", "")
+	err := st.StartRun(ctx, "INFLIGHT", "job", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	_, err = store.db.ExecContext(ctx,
+	_, err = st.db.ExecContext(ctx,
 		`UPDATE runs SET started_at = ? WHERE id = 'INFLIGHT'`,
 		buildEpoch.Format(sortableNano))
 	if err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
 
-	err = store.Prune(ctx, Retention{JobName: "job", Runs: 2}, "")
+	err = st.Prune(ctx, store.Retention{JobName: "job", Runs: 2}, "")
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	assertRunSurvives(t, store, "INFLIGHT", "a run still in flight was deleted by another build's prune")
+	assertRunSurvives(t, st, "INFLIGHT", "a run still in flight was deleted by another build's prune")
 }
 
 // TestRunOrderIsTimeOrder pins the stored timestamp format against the trap that
@@ -1125,18 +1127,18 @@ func TestFootprintSharedDatabaseCostsWhatItHolds(t *testing.T) {
 	shared := make([]*Store, 0, pipelines)
 
 	for i := range pipelines {
-		store, err := OpenStore(path, fmt.Sprintf("pipeline-%d", i))
+		st, err := OpenStore(path, fmt.Sprintf("pipeline-%d", i))
 		if err != nil {
 			t.Fatalf("OpenStore: %v", err)
 		}
 
-		defer func() { _ = store.Close() }()
+		defer func() { _ = st.Close() }()
 
-		shared = append(shared, store)
+		shared = append(shared, st)
 	}
 
-	for _, store := range shared {
-		buildAndPrune(ctx, t, store, jobName, builds, keep)
+	for _, st := range shared {
+		buildAndPrune(ctx, t, st, jobName, builds, keep)
 	}
 
 	sizes := tableBytes(ctx, t, shared[0])
@@ -1160,15 +1162,15 @@ func TestFootprintSharedDatabaseCostsWhatItHolds(t *testing.T) {
 	assertEachPipelineAtItsOwnCap(ctx, t, shared, jobName, keep)
 }
 
-// buildAndPrune runs `builds` synthetic builds through one store, pruning to
+// buildAndPrune runs `builds` synthetic builds through one st, pruning to
 // `keep` after each, which is what a real build does at the end of RunJob.
-func buildAndPrune(ctx context.Context, t *testing.T, store *Store, jobName string, builds, keep int) {
+func buildAndPrune(ctx context.Context, t *testing.T, st *Store, jobName string, builds, keep int) {
 	t.Helper()
 
 	for build := 1; build <= builds; build++ {
-		syntheticBuild(ctx, t, store, jobName, build)
+		syntheticBuild(ctx, t, st, jobName, build)
 
-		err := store.Prune(ctx, Retention{JobName: jobName, Runs: keep}, "")
+		err := st.Prune(ctx, store.Retention{JobName: jobName, Runs: keep}, "")
 		if err != nil {
 			t.Fatalf("Prune: %v", err)
 		}
@@ -1182,8 +1184,8 @@ func buildAndPrune(ctx context.Context, t *testing.T, store *Store, jobName stri
 func assertEachPipelineAtItsOwnCap(ctx context.Context, t *testing.T, shared []*Store, jobName string, keep int) {
 	t.Helper()
 
-	for i, store := range shared {
-		runs, err := store.ListRuns(ctx, jobName, keep*len(shared))
+	for i, st := range shared {
+		runs, err := st.ListRuns(ctx, jobName, keep*len(shared))
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
 		}
@@ -1203,12 +1205,12 @@ func assertEachPipelineAtItsOwnCap(ctx context.Context, t *testing.T, shared []*
 // the step_finished event carrying no hash at all — which is the whole reason
 // an events-only exemption could not see it.
 func recordFailedStep(
-	ctx context.Context, t *testing.T, store *Store,
+	ctx context.Context, t *testing.T, st *Store,
 	runID, jobName string, index int, hash, name, kind string,
 ) {
 	t.Helper()
 
-	err := store.RecordNode(ctx, NodeRecord{
+	err := st.RecordNode(ctx, store.NodeRecord{
 		Hash: hash, Kind: kind, StepIndex: index,
 		Resource: name, Content: map[string]any{"body": name},
 	}, jobName, "failed", nil, errors.New("boom"))
@@ -1216,7 +1218,7 @@ func recordFailedStep(
 		t.Fatalf("RecordNode %s: %v", name, err)
 	}
 
-	err = store.AppendRunEvent(ctx, RunEventRow{
+	err = st.AppendRunEvent(ctx, store.RunEventRow{
 		RunID: runID, Type: "step_finished", StepIndex: index,
 		StepName: name, StepKind: kind, Status: "failed",
 		Hash: "", At: time.Now(),
@@ -1228,11 +1230,11 @@ func recordFailedStep(
 
 // fillNodeCache records later builds' cache entries, which is the pressure that
 // makes pruneNodes delete anything at all.
-func fillNodeCache(ctx context.Context, t *testing.T, store *Store, jobName string, count int) {
+func fillNodeCache(ctx context.Context, t *testing.T, st *Store, jobName string, count int) {
 	t.Helper()
 
 	for i := range count {
-		err := store.RecordNode(ctx, NodeRecord{
+		err := st.RecordNode(ctx, store.NodeRecord{
 			Hash: hashOf(i + 1), Kind: "task", StepIndex: 0,
 			Resource: "later", Content: map[string]any{"body": i},
 		}, jobName, "succeeded", nil, nil)
@@ -1257,9 +1259,9 @@ func TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	const (
 		runID   = "FAILED01"
@@ -1267,7 +1269,7 @@ func TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
 		keep    = 1
 	)
 
-	err := store.StartRun(ctx, runID, jobName, "/tmp/ws", "")
+	err := st.StartRun(ctx, runID, jobName, "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1276,10 +1278,10 @@ func TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
 	// rather than being carried by the other's node.
 	placedHash, agentHash := hashOf(900_001), hashOf(900_002)
 
-	recordFailedStep(ctx, t, store, runID, jobName, 0, placedHash, "unit", "task")
-	recordFailedStep(ctx, t, store, runID, jobName, 1, agentHash, "review", "agent")
+	recordFailedStep(ctx, t, st, runID, jobName, 0, placedHash, "unit", "task")
+	recordFailedStep(ctx, t, st, runID, jobName, 1, agentHash, "review", "agent")
 
-	err = store.RecordPlacement(ctx, Placement{
+	err = st.RecordPlacement(ctx, store.Placement{
 		RunID: runID, StepIndex: 0, StepName: "unit", JobName: jobName, NodeHash: placedHash, Slot: placedHash,
 		Tag: "spot", Address: "aws://i-0123456789abcdef0", GOOS: "linux", GOARCH: "arm64",
 		Workdir: "/var/tmp/w", FSType: "btrfs", FSFree: 1 << 30, BytesSent: 4_096,
@@ -1288,7 +1290,7 @@ func TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
 		t.Fatalf("RecordPlacement: %v", err)
 	}
 
-	err = store.RecordAgentUsage(ctx, AgentUsage{
+	err = st.RecordAgentUsage(ctx, store.AgentUsage{
 		RunID: runID, StepIndex: 1, StepName: "review", JobName: jobName, NodeHash: agentHash,
 		ModelReq: "haiku", Prompt: 1_000, Completion: 100, Total: 1_100,
 		FinishReason: "error", DurationMS: 900,
@@ -1297,17 +1299,17 @@ func TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
 		t.Fatalf("RecordAgentUsage: %v", err)
 	}
 
-	fillNodeCache(ctx, t, store, jobName, keep*nodesPerRetainedRun+5)
+	fillNodeCache(ctx, t, st, jobName, keep*nodesPerRetainedRun+5)
 
-	err = store.Prune(ctx, Retention{JobName: jobName, Runs: keep}, runID)
+	err = st.Prune(ctx, store.Retention{JobName: jobName, Runs: keep}, runID)
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	assertRunSurvives(t, store, runID,
+	assertRunSurvives(t, st, runID,
 		"the run itself was reaped, so this proves nothing about its records")
 
-	placements, err := store.RunPlacements(ctx, runID)
+	placements, err := st.RunPlacements(ctx, runID)
 	if err != nil {
 		t.Fatalf("RunPlacements: %v", err)
 	}
@@ -1317,7 +1319,7 @@ func TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
 			len(placements))
 	}
 
-	usage, err := store.RunUsage(ctx, runID)
+	usage, err := st.RunUsage(ctx, runID)
 	if err != nil {
 		t.Fatalf("RunUsage: %v", err)
 	}
@@ -1346,9 +1348,9 @@ func TestPruneStillWorksBesideAHookPlacement(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	const (
 		runID   = "HOOKRUN1"
@@ -1356,14 +1358,14 @@ func TestPruneStillWorksBesideAHookPlacement(t *testing.T) {
 		keep    = 1
 	)
 
-	err := store.StartRun(ctx, runID, jobName, "/tmp/ws", "")
+	err := st.StartRun(ctx, runID, jobName, "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
 	// A tagged hook: a real machine, billed, with no node of its own. Slot is
 	// its scope label precisely because there is no hash to key on.
-	err = store.RecordPlacement(ctx, Placement{
+	err = st.RecordPlacement(ctx, store.Placement{
 		RunID: runID, StepIndex: 0, StepName: "build", JobName: jobName,
 		Slot: `step 0 (task "build") (on_failure hook)`,
 		Tag:  "spot", Address: "aws://i-0123456789abcdef0", GOOS: "linux", GOARCH: "arm64",
@@ -1374,16 +1376,16 @@ func TestPruneStillWorksBesideAHookPlacement(t *testing.T) {
 	}
 
 	overflow := keep*nodesPerRetainedRun + 40
-	fillNodeCache(ctx, t, store, jobName, overflow)
+	fillNodeCache(ctx, t, st, jobName, overflow)
 
-	before := countNodes(ctx, t, store, jobName)
+	before := countNodes(ctx, t, st, jobName)
 
-	err = store.Prune(ctx, Retention{JobName: jobName, Runs: keep}, runID)
+	err = st.Prune(ctx, store.Retention{JobName: jobName, Runs: keep}, runID)
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	after := countNodes(ctx, t, store, jobName)
+	after := countNodes(ctx, t, st, jobName)
 
 	if after >= before {
 		t.Errorf("nodes went %d -> %d beside a hook placement; the cache is no longer bounded at all", before, after)
@@ -1395,13 +1397,13 @@ func TestPruneStillWorksBesideAHookPlacement(t *testing.T) {
 }
 
 // countNodes reports how many cache entries a job currently holds.
-func countNodes(ctx context.Context, t *testing.T, store *Store, jobName string) int {
+func countNodes(ctx context.Context, t *testing.T, st *Store, jobName string) int {
 	t.Helper()
 
 	var count int
 
-	err := store.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM nodes WHERE pipeline_id = ? AND job_name = ?`, store.pipelineID, jobName).Scan(&count)
+	err := st.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM nodes WHERE pipeline_id = ? AND job_name = ?`, st.pipelineID, jobName).Scan(&count)
 	if err != nil {
 		t.Fatalf("counting nodes: %v", err)
 	}
@@ -1411,10 +1413,10 @@ func countNodes(ctx context.Context, t *testing.T, store *Store, jobName string)
 
 // assertRunSurvives fails with what the survival was proving when a run is
 // gone after a prune.
-func assertRunSurvives(t *testing.T, store *Store, runID, what string) {
+func assertRunSurvives(t *testing.T, st *Store, runID, what string) {
 	t.Helper()
 
-	_, found, err := store.FindRunRow(context.Background(), runID)
+	_, found, err := st.FindRunRow(context.Background(), runID)
 	if err != nil {
 		t.Fatalf("FindRunRow(%q): %v", runID, err)
 	}

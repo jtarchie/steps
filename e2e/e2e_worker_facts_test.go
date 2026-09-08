@@ -10,13 +10,14 @@ import (
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // runPlacements returns the placement rows of the most recent run.
 func runPlacements(t *testing.T, pipelinePath string) []store.Placement {
 	t.Helper()
 
-	st, err := store.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
+	st, err := sqlite.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
 	if err != nil {
 		t.Fatalf("open state store: %v", err)
 	}
@@ -238,7 +239,7 @@ jobs:
 func latestRunID(t *testing.T, pipelinePath string) string {
 	t.Helper()
 
-	st, err := store.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
+	st, err := sqlite.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
 	if err != nil {
 		t.Fatalf("open state store: %v", err)
 	}

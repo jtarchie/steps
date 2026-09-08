@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 // The artifact-store index: action key -> output digests. See the schema
 // comment on step_blobs for why this lives in SQLite while the bytes live in

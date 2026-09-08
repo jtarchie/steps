@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 // agent_usage across the several pipelines one state file may hold.
 
@@ -7,20 +7,22 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // mustOpenPipeline opens one named pipeline's handle on a shared state file.
 func mustOpenPipeline(t *testing.T, path, name string) *Store {
 	t.Helper()
 
-	store, err := OpenStore(path, name)
+	st, err := OpenStore(path, name)
 	if err != nil {
 		t.Fatalf("OpenStore %s: %v", name, err)
 	}
 
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 
-	return store
+	return st
 }
 
 // ensureRun records the run these tests hang their rows on, reusing one that
@@ -32,20 +34,20 @@ func mustOpenPipeline(t *testing.T, path, name string) *Store {
 // exist is the shape these tests are about: one run row, and a second pipeline
 // writing its own child rows against that run id. The child tables are what
 // have to survive it.
-func ensureRun(ctx context.Context, t *testing.T, store *Store, runID, jobName string) {
+func ensureRun(ctx context.Context, t *testing.T, st *Store, runID, jobName string) {
 	t.Helper()
 
-	err := store.StartRun(ctx, runID, jobName, "/tmp/ws", "")
-	if err != nil && !errors.Is(err, ErrRunExists) {
+	err := st.StartRun(ctx, runID, jobName, "/tmp/ws", "")
+	if err != nil && !errors.Is(err, store.ErrRunExists) {
 		t.Fatalf("StartRun: %v", err)
 	}
 }
 
 // recordSpend records one agent step's node and what it spent.
-func recordSpend(ctx context.Context, t *testing.T, store *Store, runID, jobName, stepName string, tokens int) {
+func recordSpend(ctx context.Context, t *testing.T, st *Store, runID, jobName, stepName string, tokens int) {
 	t.Helper()
 
-	err := store.RecordNode(ctx, NodeRecord{
+	err := st.RecordNode(ctx, store.NodeRecord{
 		Hash: hashOf(7), Kind: "agent", Resource: "review",
 		Content: map[string]any{"prompt": "identical in both pipelines"},
 	}, jobName, "succeeded", nil, nil)
@@ -53,9 +55,9 @@ func recordSpend(ctx context.Context, t *testing.T, store *Store, runID, jobName
 		t.Fatalf("RecordNode: %v", err)
 	}
 
-	ensureRun(ctx, t, store, runID, jobName)
+	ensureRun(ctx, t, st, runID, jobName)
 
-	err = store.RecordAgentUsage(ctx, AgentUsage{
+	err = st.RecordAgentUsage(ctx, store.AgentUsage{
 		RunID: runID, StepIndex: 0, StepName: stepName, JobName: jobName,
 		NodeHash: hashOf(7), ModelReq: "haiku",
 		Prompt: tokens, Total: tokens, FinishReason: "stop",
@@ -65,10 +67,10 @@ func recordSpend(ctx context.Context, t *testing.T, store *Store, runID, jobName
 	}
 }
 
-func onlyUsage(ctx context.Context, t *testing.T, store *Store, runID string) AgentUsage {
+func onlyUsage(ctx context.Context, t *testing.T, st *Store, runID string) store.AgentUsage {
 	t.Helper()
 
-	rows, err := store.RunUsage(ctx, runID)
+	rows, err := st.RunUsage(ctx, runID)
 	if err != nil {
 		t.Fatalf("RunUsage: %v", err)
 	}

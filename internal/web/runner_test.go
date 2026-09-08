@@ -11,6 +11,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -38,7 +39,7 @@ jobs:
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -123,7 +124,7 @@ jobs:
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -187,7 +188,7 @@ jobs:
 // succeededQueueRows counts finished-and-green queue rows, failing the test on
 // the first red one — which under one worker is how this test ends: the job
 // that blocked waiting for the other is killed by its own step timeout.
-func succeededQueueRows(ctx context.Context, t *testing.T, st *store.Store) int {
+func succeededQueueRows(ctx context.Context, t *testing.T, st store.Store) int {
 	t.Helper()
 
 	rows, err := st.ListTriggerQueue(ctx, 10)
@@ -243,7 +244,7 @@ jobs:
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -292,7 +293,7 @@ jobs:
 // assertOneSkippedRow is the second half of the breaker: a paused job is not
 // claimed and run, it is finalized as skipped so the queue does not fill with
 // work nobody intends to do.
-func assertOneSkippedRow(ctx context.Context, t *testing.T, st *store.Store) {
+func assertOneSkippedRow(ctx context.Context, t *testing.T, st store.Store) {
 	t.Helper()
 
 	rows, err := st.ListTriggerQueue(ctx, 10)
@@ -343,7 +344,7 @@ jobs:
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -428,7 +429,7 @@ jobs:
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

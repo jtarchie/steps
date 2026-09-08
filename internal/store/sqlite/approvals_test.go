@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 import (
 	"context"
@@ -13,9 +13,9 @@ func TestApprovalsListsOnlyWhatIsWaiting(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := twoApprovals(t)
+	st := twoApprovals(t)
 
-	pending, err := store.Approvals(ctx, true, 0)
+	pending, err := st.Approvals(ctx, true, 0)
 	if err != nil {
 		t.Fatalf("Approvals: %v", err)
 	}
@@ -37,9 +37,9 @@ func TestApprovalsListsTheDecisionsNewestFirst(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := twoApprovals(t)
+	st := twoApprovals(t)
 
-	all, err := store.Approvals(ctx, false, 10)
+	all, err := st.Approvals(ctx, false, 10)
 	if err != nil {
 		t.Fatalf("Approvals: %v", err)
 	}
@@ -64,25 +64,25 @@ func twoApprovals(t *testing.T) *Store {
 
 	ctx := context.Background()
 
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
-	t.Cleanup(func() { _ = store.Close() })
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	t.Cleanup(func() { _ = st.Close() })
 
-	first, err := store.RequestApproval(ctx, "deploy", "ship it?")
+	first, err := st.RequestApproval(ctx, "deploy", "ship it?")
 	if err != nil {
 		t.Fatalf("RequestApproval: %v", err)
 	}
 
-	_, err = store.RequestApproval(ctx, "deploy", "and again?")
+	_, err = st.RequestApproval(ctx, "deploy", "and again?")
 	if err != nil {
 		t.Fatalf("RequestApproval: %v", err)
 	}
 
-	err = store.DecideApproval(ctx, first, "approved", "jtarchie", "looks fine")
+	err = st.DecideApproval(ctx, first, "approved", "jtarchie", "looks fine")
 	if err != nil {
 		t.Fatalf("DecideApproval: %v", err)
 	}
 
-	return store
+	return st
 }
 
 // TestPendingApprovalsAreNotCapped: a job is parked behind every waiting
@@ -92,20 +92,20 @@ func TestPendingApprovalsAreNotCapped(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	const asked = 4
 
 	for range asked {
-		_, err := store.RequestApproval(ctx, "deploy", "ship it?")
+		_, err := st.RequestApproval(ctx, "deploy", "ship it?")
 		if err != nil {
 			t.Fatalf("RequestApproval: %v", err)
 		}
 	}
 
-	pending, err := store.Approvals(ctx, true, 0)
+	pending, err := st.Approvals(ctx, true, 0)
 	if err != nil {
 		t.Fatalf("Approvals: %v", err)
 	}

@@ -224,7 +224,7 @@ func recordStepOutcome(ctx context.Context, step config.Step, out agent.StepOutc
 // And on PLAN steps only — the concurrent block runners call runNonGetStep
 // with the enclosing block's index, so recording from there marked a whole
 // block done the moment any one branch succeeded.
-func recordCompletedStep(ctx context.Context, st *store.Store, i int, step config.Step, err error) {
+func recordCompletedStep(ctx context.Context, st store.Store, i int, step config.Step, err error) {
 	if err != nil {
 		return
 	}

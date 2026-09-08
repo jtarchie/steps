@@ -45,13 +45,13 @@ import (
 // case that fails to self-trigger is a run-discovered backfill BELOW an
 // unchanged head — which then builds on the next genuine trigger instead of
 // its own.
-func refreshResourceHistory(ctx context.Context, cfg *config.Config, st *store.Store, job *config.Job) {
+func refreshResourceHistory(ctx context.Context, cfg *config.Config, st store.Store, job *config.Job) {
 	for _, name := range job.GetResourceNames() {
 		refreshOneResource(ctx, cfg, st, job, name)
 	}
 }
 
-func refreshOneResource(ctx context.Context, cfg *config.Config, st *store.Store, job *config.Job, name string) {
+func refreshOneResource(ctx context.Context, cfg *config.Config, st store.Store, job *config.Job, name string) {
 	resource, err := cfg.FindResource(name)
 	if err != nil {
 		return // an unresolvable resource is a load error long before here
@@ -112,7 +112,7 @@ func refreshOneResource(ctx context.Context, cfg *config.Config, st *store.Store
 // checkCursorFor reads the recorded check cursor, decoded — the same value a
 // watch poll hands the check, so a cursor-driven type answers the refresh as
 // cheaply as it answers a poll.
-func checkCursorFor(ctx context.Context, st *store.Store, name string) (map[string]any, error) {
+func checkCursorFor(ctx context.Context, st store.Store, name string) (map[string]any, error) {
 	last, found, err := st.LastChecked(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("reading the check cursor for %q: %w", name, err)

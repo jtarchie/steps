@@ -247,7 +247,7 @@ jobs:
 
 // drainAll drains the queue, tolerating failed jobs — scenarios here make
 // upstream jobs fail on purpose.
-func drainAll(ctx context.Context, t *testing.T, cfg *config.Config, st *store.Store) {
+func drainAll(ctx context.Context, t *testing.T, cfg *config.Config, st store.Store) {
 	t.Helper()
 
 	provider, err := workspace.NewProvider(nil, false)
@@ -269,7 +269,7 @@ func drainAll(ctx context.Context, t *testing.T, cfg *config.Config, st *store.S
 	t.Fatal("queue did not drain")
 }
 
-func recordGreen(t *testing.T, st *store.Store, jobName, ref, buildID string) {
+func recordGreen(t *testing.T, st store.Store, jobName, ref, buildID string) {
 	t.Helper()
 
 	encoded, err := json.Marshal(map[string]any{"ref": ref})
@@ -590,7 +590,7 @@ jobs:
 // no second line, so a side effect cannot tell a gate that fired once from
 // one firing every 30 seconds forever.
 func assertQuietPollReleasesNothing(
-	ctx context.Context, t *testing.T, cfg *config.Config, st *store.Store, attempt int,
+	ctx context.Context, t *testing.T, cfg *config.Config, st store.Store, attempt int,
 ) {
 	t.Helper()
 

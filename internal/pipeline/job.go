@@ -39,7 +39,7 @@ const WorkerReleaseTimeout = 15 * time.Minute
 // get/task work can be skipped entirely. put steps are never skipped — see
 // runSteps. skipCache (--force) bypasses only the chain-skip planning and
 // re-runs everything, though results are still recorded as usual.
-func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string, provider workspace.Provider, st *store.Store, skipCache bool) error {
+func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string, provider workspace.Provider, st store.Store, skipCache bool) error {
 	// A run identifies itself so a failure can be continued rather than
 	// restarted, and so every log line below — including this one — can be
 	// correlated to one invocation. Minted first, before validation or
@@ -372,7 +372,7 @@ func runJobPlan(
 // the time this fires.
 // keepRunID is this build's own run, which retention must never delete — see
 // store.Prune, where a resumed run reaped itself.
-func pruneHistory(ctx context.Context, st *store.Store, cfg *config.Config, jobName, keepRunID string) {
+func pruneHistory(ctx context.Context, st store.Store, cfg *config.Config, jobName, keepRunID string) {
 	err := st.Prune(context.WithoutCancel(ctx), store.Retention{
 		JobName:      jobName,
 		Runs:         cfg.RunHistoryLimit(),
@@ -428,7 +428,7 @@ func jobBudgetTokens(job *config.Job) int {
 // Best-effort by design: a store that cannot answer must not stop the run.
 // Failing open costs at most one budget's overshoot on a resume, where failing
 // closed would refuse to continue work that has already been paid for.
-func priorSpend(ctx context.Context, st *store.Store, resume *resumeState) int {
+func priorSpend(ctx context.Context, st store.Store, resume *resumeState) int {
 	if st == nil || resume == nil || !resume.resuming {
 		return 0
 	}

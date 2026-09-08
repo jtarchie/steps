@@ -406,7 +406,7 @@ func (s *Server) flushBatch(
 // unit every fold is fed, whether it is the page's one read, the stream's
 // seed or its delta.
 func readBatch(
-	ctx context.Context, st *store.Store, runID string, after int64, limit int,
+	ctx context.Context, st store.Store, runID string, after int64, limit int,
 ) ([]store.RunEventRow, map[string]store.NodeRow, error) {
 	rows, err := st.RunEvents(ctx, runID, after, limit)
 	if err != nil {

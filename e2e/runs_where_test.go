@@ -14,13 +14,14 @@ import (
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // whereFixture writes a pipeline and a state database beside it, with the
 // caller's rows already in it. No pipeline is executed: `steps runs` reads the
 // database and never loads the YAML, and every case here is about a run that
 // cannot be produced by running one.
-func whereFixture(t *testing.T, record func(context.Context, *store.Store)) string {
+func whereFixture(t *testing.T, record func(context.Context, store.Store)) string {
 	t.Helper()
 
 	path := writePipeline(t, t.TempDir(), `
@@ -31,7 +32,7 @@ jobs:
     run: "true"
 `)
 
-	st, err := store.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
+	st, err := sqlite.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
 	if err != nil {
 		t.Fatalf("open state store: %v", err)
 	}
@@ -54,7 +55,7 @@ jobs:
 // is a positive claim about a run this pipeline has never seen, made with
 // exit 0.
 func TestWhereWillNotVouchForARunItDoesNotHave(t *testing.T) {
-	path := whereFixture(t, func(ctx context.Context, st *store.Store) {
+	path := whereFixture(t, func(ctx context.Context, st store.Store) {
 		err := st.StartRun(ctx, "mid-flight", "build", "", "")
 		if err != nil {
 			t.Fatalf("StartRun: %v", err)
@@ -102,7 +103,7 @@ func TestWhereWillNotVouchForARunItDoesNotHave(t *testing.T) {
 func TestWhereMarksAMemoryWorkdir(t *testing.T) {
 	hash := strings.Repeat("d", 64)
 
-	path := whereFixture(t, func(ctx context.Context, st *store.Store) {
+	path := whereFixture(t, func(ctx context.Context, st store.Store) {
 		err := st.StartRun(ctx, "in-memory", "build", "", "")
 		if err != nil {
 			t.Fatalf("StartRun: %v", err)

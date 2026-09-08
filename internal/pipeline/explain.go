@@ -33,7 +33,7 @@ type ExplainRow struct {
 //
 // It resolves get versions the way planning always has (check commands do
 // run), but executes no step and writes no node, job_run, or workspace.
-func Explain(ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string, st *store.Store) ([]ExplainRow, error) {
+func Explain(ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string, st store.Store) ([]ExplainRow, error) {
 	err := workspace.ValidateArtifactFlow(cfg, job)
 	if err != nil {
 		return nil, fmt.Errorf("job %q: %w", job.Name, err)

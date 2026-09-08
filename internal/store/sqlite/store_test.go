@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 import (
 	"context"
@@ -8,15 +8,17 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
-// journalMode reports the sqlite journal mode of the store's database.
-func journalMode(t *testing.T, store *Store) string {
+// journalMode reports the sqlite journal mode of the st's database.
+func journalMode(t *testing.T, st *Store) string {
 	t.Helper()
 
 	var mode string
 
-	err := store.db.QueryRowContext(context.Background(), "PRAGMA journal_mode").Scan(&mode)
+	err := st.db.QueryRowContext(context.Background(), "PRAGMA journal_mode").Scan(&mode)
 	if err != nil {
 		t.Fatalf("PRAGMA journal_mode: %v", err)
 	}
@@ -28,11 +30,11 @@ func TestStoreUsesWAL(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
-	mode := journalMode(t, store)
+	mode := journalMode(t, st)
 	if mode != "wal" {
 		t.Errorf("journal_mode = %q, want %q", mode, "wal")
 	}
@@ -41,18 +43,18 @@ func TestStoreUsesWAL(t *testing.T) {
 func mustOpenStore(t *testing.T, path string) *Store {
 	t.Helper()
 
-	store, err := OpenStore(path, "test")
+	st, err := OpenStore(path, "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
 
-	return store
+	return st
 }
 
-func assertHasSucceeded(t *testing.T, store *Store, jobName, rootHash string, want bool) {
+func assertHasSucceeded(t *testing.T, st *Store, jobName, rootHash string, want bool) {
 	t.Helper()
 
-	found, err := store.HasSucceededBatch(context.Background(), jobName, []string{rootHash})
+	found, err := st.HasSucceededBatch(context.Background(), jobName, []string{rootHash})
 	if err != nil {
 		t.Fatalf("HasSucceededBatch(%q, %q): %v", jobName, rootHash, err)
 	}
@@ -75,10 +77,10 @@ func assertHasSucceeded(t *testing.T, store *Store, jobName, rootHash string, wa
 // The node is recorded as SUCCEEDED, which is a cache-hit state: a test about
 // HasNodeSucceeded or across-cell memoization should record its own nodes rather
 // than inherit this one.
-func mustRecordNode(t *testing.T, store *Store, jobName, hash string) {
+func mustRecordNode(t *testing.T, st *Store, jobName, hash string) {
 	t.Helper()
 
-	err := store.RecordNode(context.Background(), NodeRecord{
+	err := st.RecordNode(context.Background(), store.NodeRecord{
 		Hash: hash, Kind: "task", Resource: "step", Content: map[string]any{"hash": hash},
 	}, jobName, "succeeded", nil, nil)
 	if err != nil {
@@ -86,12 +88,12 @@ func mustRecordNode(t *testing.T, store *Store, jobName, hash string) {
 	}
 }
 
-func mustRecordJobRun(t *testing.T, store *Store, jobName, rootHash, status string, runErr error) {
+func mustRecordJobRun(t *testing.T, st *Store, jobName, rootHash, status string, runErr error) {
 	t.Helper()
 
-	mustRecordNode(t, store, jobName, rootHash)
+	mustRecordNode(t, st, jobName, rootHash)
 
-	err := store.RecordJobRun(context.Background(), jobName, rootHash, status, runErr)
+	err := st.RecordJobRun(context.Background(), jobName, rootHash, status, runErr)
 	if err != nil {
 		t.Fatalf("RecordJobRun(%q, %q, %q): %v", jobName, rootHash, status, err)
 	}
@@ -103,24 +105,24 @@ func TestStoreHasSucceededAndRecordJobRun(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "state.db")
 
-	store := mustOpenStore(t, path)
+	st := mustOpenStore(t, path)
 
 	_, err := os.Stat(filepath.Dir(path))
 	if err != nil {
 		t.Fatalf("expected parent directory to be created: %v", err)
 	}
 
-	assertHasSucceeded(t, store, "job", "hash1", false)
+	assertHasSucceeded(t, st, "job", "hash1", false)
 
-	mustRecordJobRun(t, store, "job", "hash1", "succeeded", nil)
-	assertHasSucceeded(t, store, "job", "hash1", true)
-	assertHasSucceeded(t, store, "job", "hash2", false)
-	assertHasSucceeded(t, store, "other-job", "hash1", false)
+	mustRecordJobRun(t, st, "job", "hash1", "succeeded", nil)
+	assertHasSucceeded(t, st, "job", "hash1", true)
+	assertHasSucceeded(t, st, "job", "hash2", false)
+	assertHasSucceeded(t, st, "other-job", "hash1", false)
 
-	mustRecordJobRun(t, store, "job", "hash3", "failed", errors.New("boom"))
-	assertHasSucceeded(t, store, "job", "hash3", false)
+	mustRecordJobRun(t, st, "job", "hash3", "failed", errors.New("boom"))
+	assertHasSucceeded(t, st, "job", "hash3", false)
 
-	err = store.Close()
+	err = st.Close()
 	if err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -135,15 +137,15 @@ func TestStoreHasSucceededBatch(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
-	mustRecordJobRun(t, store, "job", "hash1", "succeeded", nil)
-	mustRecordJobRun(t, store, "job", "hash2", "failed", errors.New("boom"))
-	mustRecordJobRun(t, store, "other-job", "hash1", "succeeded", nil)
+	mustRecordJobRun(t, st, "job", "hash1", "succeeded", nil)
+	mustRecordJobRun(t, st, "job", "hash2", "failed", errors.New("boom"))
+	mustRecordJobRun(t, st, "other-job", "hash1", "succeeded", nil)
 
-	got, err := store.HasSucceededBatch(context.Background(), "job", []string{"hash1", "hash2", "hash3"})
+	got, err := st.HasSucceededBatch(context.Background(), "job", []string{"hash1", "hash2", "hash3"})
 	if err != nil {
 		t.Fatalf("HasSucceededBatch: %v", err)
 	}
@@ -153,7 +155,7 @@ func TestStoreHasSucceededBatch(t *testing.T) {
 		t.Errorf("HasSucceededBatch = %v, want a map with only hash1=true (hash2 failed, hash3 unknown, other-job's hash1 is a different job)", got)
 	}
 
-	got, err = store.HasSucceededBatch(context.Background(), "job", nil)
+	got, err = st.HasSucceededBatch(context.Background(), "job", nil)
 	if err != nil {
 		t.Fatalf("HasSucceededBatch(nil): %v", err)
 	}
@@ -170,9 +172,9 @@ func TestStoreHasSucceededBatchManyHashes(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	const n = 1500
 
@@ -182,10 +184,10 @@ func TestStoreHasSucceededBatchManyHashes(t *testing.T) {
 		hash := fmt.Sprintf("hash-%d", i)
 		hashes[i] = hash
 
-		mustRecordJobRun(t, store, "job", hash, "succeeded", nil)
+		mustRecordJobRun(t, st, "job", hash, "succeeded", nil)
 	}
 
-	got, err := store.HasSucceededBatch(context.Background(), "job", hashes)
+	got, err := st.HasSucceededBatch(context.Background(), "job", hashes)
 	if err != nil {
 		t.Fatalf("HasSucceededBatch: %v", err)
 	}
@@ -205,13 +207,13 @@ func TestStoreRecordNode(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	ctx := context.Background()
 
-	node := NodeRecord{
+	node := store.NodeRecord{
 		Hash:       "abc",
 		ParentHash: "",
 		Kind:       "get",
@@ -220,22 +222,22 @@ func TestStoreRecordNode(t *testing.T) {
 		Content:    map[string]any{"source": map[string]any{"key": "v1"}},
 	}
 
-	err := store.RecordNode(ctx, node, "job", "succeeded", map[string]any{"ref": "v1"}, nil)
+	err := st.RecordNode(ctx, node, "job", "succeeded", map[string]any{"ref": "v1"}, nil)
 	if err != nil {
 		t.Fatalf("RecordNode: %v", err)
 	}
 
 	// Recording the same hash again (an upsert) should not error.
-	err = store.RecordNode(ctx, node, "job", "succeeded", map[string]any{"ref": "v1"}, nil)
+	err = st.RecordNode(ctx, node, "job", "succeeded", map[string]any{"ref": "v1"}, nil)
 	if err != nil {
 		t.Fatalf("RecordNode (upsert): %v", err)
 	}
 }
 
-func mustEnqueueJob(t *testing.T, store *Store, jobName, reason string) {
+func mustEnqueueJob(t *testing.T, st *Store, jobName, reason string) {
 	t.Helper()
 
-	err := store.EnqueueJob(context.Background(), jobName, reason)
+	err := st.EnqueueJob(context.Background(), jobName, reason)
 	if err != nil {
 		t.Fatalf("EnqueueJob(%q, %q): %v", jobName, reason, err)
 	}
@@ -243,10 +245,10 @@ func mustEnqueueJob(t *testing.T, store *Store, jobName, reason string) {
 
 // mustClaimJob claims the next pending job and fails the test if the queue
 // was empty or the claimed job doesn't match want (when want != "").
-func mustClaimJob(t *testing.T, store *Store, want string) (id int64, jobName string) {
+func mustClaimJob(t *testing.T, st *Store, want string) (id int64, jobName string) {
 	t.Helper()
 
-	id, jobName, found, err := store.ClaimNextJob(context.Background())
+	id, jobName, found, err := st.ClaimNextJob(context.Background())
 	if err != nil {
 		t.Fatalf("ClaimNextJob: %v", err)
 	}
@@ -262,10 +264,10 @@ func mustClaimJob(t *testing.T, store *Store, want string) (id int64, jobName st
 	return id, jobName
 }
 
-func assertQueueEmpty(t *testing.T, store *Store) {
+func assertQueueEmpty(t *testing.T, st *Store) {
 	t.Helper()
 
-	_, _, found, err := store.ClaimNextJob(context.Background())
+	_, _, found, err := st.ClaimNextJob(context.Background())
 	if err != nil {
 		t.Fatalf("ClaimNextJob: %v", err)
 	}
@@ -275,10 +277,10 @@ func assertQueueEmpty(t *testing.T, store *Store) {
 	}
 }
 
-func assertLastCheckedVersion(t *testing.T, store *Store, resourceName string, wantFound bool, wantVersion string) {
+func assertLastCheckedVersion(t *testing.T, st *Store, resourceName string, wantFound bool, wantVersion string) {
 	t.Helper()
 
-	last, found, err := store.LastChecked(context.Background(), resourceName)
+	last, found, err := st.LastChecked(context.Background(), resourceName)
 	if err != nil {
 		t.Fatalf("LastChecked(%q): %v", resourceName, err)
 	}
@@ -292,48 +294,48 @@ func TestStoreCheckedVersionRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	ctx := context.Background()
 
-	assertLastCheckedVersion(t, store, "thing", false, "")
+	assertLastCheckedVersion(t, st, "thing", false, "")
 
-	err := store.RecordCheckedVersion(ctx, "thing", `{"ref":"v1"}`)
+	err := st.RecordCheckedVersion(ctx, "thing", `{"ref":"v1"}`)
 	if err != nil {
 		t.Fatalf("RecordCheckedVersion: %v", err)
 	}
 
-	assertLastCheckedVersion(t, store, "thing", true, `{"ref":"v1"}`)
+	assertLastCheckedVersion(t, st, "thing", true, `{"ref":"v1"}`)
 
 	// Upsert: recording a new version for the same resource replaces it.
-	err = store.RecordCheckedVersion(ctx, "thing", `{"ref":"v2"}`)
+	err = st.RecordCheckedVersion(ctx, "thing", `{"ref":"v2"}`)
 	if err != nil {
 		t.Fatalf("RecordCheckedVersion (upsert): %v", err)
 	}
 
-	assertLastCheckedVersion(t, store, "thing", true, `{"ref":"v2"}`)
+	assertLastCheckedVersion(t, st, "thing", true, `{"ref":"v2"}`)
 }
 
 func TestStoreEnqueueJobDedupsOnlyWhilePending(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	// Two enqueues while nothing has claimed the row yet: one pending row.
-	mustEnqueueJob(t, store, "build", "resource-a")
-	mustEnqueueJob(t, store, "build", "resource-b")
+	mustEnqueueJob(t, st, "build", "resource-a")
+	mustEnqueueJob(t, st, "build", "resource-b")
 
-	mustClaimJob(t, store, "build")
-	assertQueueEmpty(t, store)
+	mustClaimJob(t, st, "build")
+	assertQueueEmpty(t, st)
 
 	// Enqueuing again while the job is running (not pending) creates a fresh
 	// pending row — the partial unique index only covers status='pending'.
-	mustEnqueueJob(t, store, "build", "resource-c")
+	mustEnqueueJob(t, st, "build", "resource-c")
 }
 
 // TestStoreClaimSerializesSameJob asserts a pending row for a job that is
@@ -343,26 +345,26 @@ func TestStoreClaimSerializesSameJob(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
-	mustEnqueueJob(t, store, "build", "resource-a")
+	mustEnqueueJob(t, st, "build", "resource-a")
 
-	id, _ := mustClaimJob(t, store, "build")
+	id, _ := mustClaimJob(t, st, "build")
 
 	// A change enqueued mid-run: a pending row exists, but it must not be
 	// claimable while "build" is still running.
-	mustEnqueueJob(t, store, "build", "resource-b")
-	assertQueueEmpty(t, store)
+	mustEnqueueJob(t, st, "build", "resource-b")
+	assertQueueEmpty(t, st)
 
 	// Once the running build completes, the queued change becomes claimable.
-	err := store.CompleteJob(context.Background(), id, "done", nil)
+	err := st.CompleteJob(context.Background(), id, "done", nil)
 	if err != nil {
 		t.Fatalf("CompleteJob: %v", err)
 	}
 
-	mustClaimJob(t, store, "build")
+	mustClaimJob(t, st, "build")
 }
 
 // TestStoreResetStaleRunningWithPendingSuccessor covers the case a running
@@ -373,42 +375,42 @@ func TestStoreResetStaleRunningWithPendingSuccessor(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
-	mustEnqueueJob(t, store, "build", "resource-a")
-	mustClaimJob(t, store, "build")                 // now running
-	mustEnqueueJob(t, store, "build", "resource-b") // pending successor
+	mustEnqueueJob(t, st, "build", "resource-a")
+	mustClaimJob(t, st, "build")                 // now running
+	mustEnqueueJob(t, st, "build", "resource-b") // pending successor
 
-	err := store.ResetStaleRunning(context.Background())
+	err := st.ResetStaleRunning(context.Background())
 	if err != nil {
 		t.Fatalf("ResetStaleRunning: %v", err)
 	}
 
 	// Exactly one claimable build remains (the pending successor); no
 	// duplicate, no unique-constraint error.
-	mustClaimJob(t, store, "build")
-	assertQueueEmpty(t, store)
+	mustClaimJob(t, st, "build")
+	assertQueueEmpty(t, st)
 }
 
 func TestStoreClaimNextJobOrdering(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	jobNames := []string{"job-a", "job-b", "job-c", "job-d", "job-e"}
 
 	for _, name := range jobNames {
-		mustEnqueueJob(t, store, name, "resource")
+		mustEnqueueJob(t, st, name, "resource")
 	}
 
 	// Claims must come back oldest-enqueued-first.
 	for _, want := range jobNames {
-		mustClaimJob(t, store, want)
+		mustClaimJob(t, st, want)
 	}
 }
 
@@ -416,14 +418,14 @@ func TestStoreClaimNextJobAtomicity(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	const jobCount = 5
 
 	for i := range jobCount {
-		mustEnqueueJob(t, store, fmt.Sprintf("job-%d", i), "resource")
+		mustEnqueueJob(t, st, fmt.Sprintf("job-%d", i), "resource")
 	}
 
 	// Concurrent claimers must never both come back with the same job.
@@ -439,7 +441,7 @@ func TestStoreClaimNextJobAtomicity(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			_, jobName, found, err := store.ClaimNextJob(context.Background())
+			_, jobName, found, err := st.ClaimNextJob(context.Background())
 			if err != nil {
 				t.Errorf("ClaimNextJob: %v", err)
 
@@ -480,17 +482,17 @@ func TestStoreCompleteJob(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	ctx := context.Background()
 
-	mustEnqueueJob(t, store, "build", "resource")
+	mustEnqueueJob(t, st, "build", "resource")
 
-	id, _ := mustClaimJob(t, store, "build")
+	id, _ := mustClaimJob(t, st, "build")
 
-	err := store.CompleteJob(ctx, id, "failed", errors.New("boom"))
+	err := st.CompleteJob(ctx, id, "failed", errors.New("boom"))
 	if err != nil {
 		t.Fatalf("CompleteJob: %v", err)
 	}
@@ -500,7 +502,7 @@ func TestStoreCompleteJob(t *testing.T) {
 		errText *string
 	)
 
-	scanErr := store.db.QueryRowContext(ctx, "SELECT status, error FROM trigger_queue WHERE id = ?", id).Scan(&status, &errText)
+	scanErr := st.db.QueryRowContext(ctx, "SELECT status, error FROM trigger_queue WHERE id = ?", id).Scan(&status, &errText)
 	if scanErr != nil {
 		t.Fatalf("scan trigger_queue row: %v", scanErr)
 	}
@@ -518,35 +520,35 @@ func TestStoreResetStaleRunning(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
-	mustEnqueueJob(t, store, "build", "resource")
-	mustClaimJob(t, store, "build")
+	mustEnqueueJob(t, st, "build", "resource")
+	mustClaimJob(t, st, "build")
 
 	// Simulate a crash/interrupted run: the row is stuck "running". A fresh
 	// watch startup must recover it, not leave it stranded forever.
-	err := store.ResetStaleRunning(context.Background())
+	err := st.ResetStaleRunning(context.Background())
 	if err != nil {
 		t.Fatalf("ResetStaleRunning: %v", err)
 	}
 
-	mustClaimJob(t, store, "build")
+	mustClaimJob(t, st, "build")
 }
 
-// TestNodeTranscriptRoundTrip covers the transcript store: absent before any
+// TestNodeTranscriptRoundTrip covers the transcript st: absent before any
 // save, returned verbatim after, and replaced (not duplicated) on a re-save
 // under the same hash — the same replace-on-re-record shape nodes has.
 func TestNodeTranscriptRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
 	ctx := context.Background()
 
-	_, ok, err := store.NodeTranscript(ctx, "abc123")
+	_, ok, err := st.NodeTranscript(ctx, "abc123")
 	if err != nil {
 		t.Fatalf("NodeTranscript (empty): %v", err)
 	}
@@ -555,14 +557,14 @@ func TestNodeTranscriptRoundTrip(t *testing.T) {
 		t.Fatal("expected no transcript before any save")
 	}
 
-	mustRecordNode(t, store, "build", "abc123")
+	mustRecordNode(t, st, "build", "abc123")
 
-	err = store.SaveNodeTranscript(ctx, "abc123", `[{"type":"text","text":"hi"}]`)
+	err = st.SaveNodeTranscript(ctx, "abc123", `[{"type":"text","text":"hi"}]`)
 	if err != nil {
 		t.Fatalf("SaveNodeTranscript: %v", err)
 	}
 
-	got, ok, err := store.NodeTranscript(ctx, "abc123")
+	got, ok, err := st.NodeTranscript(ctx, "abc123")
 	if err != nil || !ok {
 		t.Fatalf("NodeTranscript: ok=%v err=%v", ok, err)
 	}
@@ -579,20 +581,20 @@ func TestNodeTranscriptReplace(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
 	ctx := context.Background()
 
-	mustRecordNode(t, store, "build", "abc123")
+	mustRecordNode(t, st, "build", "abc123")
 
 	for _, transcript := range []string{`[{"type":"text","text":"hi"}]`, `[{"type":"text","text":"replaced"}]`} {
-		err := store.SaveNodeTranscript(ctx, "abc123", transcript)
+		err := st.SaveNodeTranscript(ctx, "abc123", transcript)
 		if err != nil {
 			t.Fatalf("SaveNodeTranscript: %v", err)
 		}
 	}
 
-	got, ok, err := store.NodeTranscript(ctx, "abc123")
+	got, ok, err := st.NodeTranscript(ctx, "abc123")
 	if err != nil || !ok {
 		t.Fatalf("NodeTranscript: ok=%v err=%v", ok, err)
 	}
@@ -620,11 +622,11 @@ func TestConformanceSerialGroupsBlockAcrossJobs(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
-	err := store.SyncJobLimits(context.Background(), map[string][]string{
+	err := st.SyncJobLimits(context.Background(), map[string][]string{
 		"deploy-staging": {"deploy"},
 		"deploy-prod":    {"deploy"},
 		// "lint" belongs to no group at all.
@@ -633,27 +635,27 @@ func TestConformanceSerialGroupsBlockAcrossJobs(t *testing.T) {
 		t.Fatalf("SyncJobLimits: %v", err)
 	}
 
-	mustEnqueueJob(t, store, "deploy-staging", "resource-a")
-	mustEnqueueJob(t, store, "deploy-prod", "resource-a")
-	mustEnqueueJob(t, store, "lint", "resource-a")
+	mustEnqueueJob(t, st, "deploy-staging", "resource-a")
+	mustEnqueueJob(t, st, "deploy-prod", "resource-a")
+	mustEnqueueJob(t, st, "lint", "resource-a")
 
-	id, first := mustClaimJob(t, store, "deploy-staging")
+	id, first := mustClaimJob(t, st, "deploy-staging")
 
 	// lint shares no group, so it is claimable while a deploy runs.
-	_, third := mustClaimJob(t, store, "lint")
+	_, third := mustClaimJob(t, st, "lint")
 	if third != "lint" {
 		t.Errorf("claimed %q, want lint — a job in no serial group must not be blocked by one that is", third)
 	}
 
 	// deploy-prod shares "deploy" with the running deploy-staging, so it is not.
-	assertQueueEmpty(t, store)
+	assertQueueEmpty(t, st)
 
-	err = store.CompleteJob(context.Background(), id, "done", nil)
+	err = st.CompleteJob(context.Background(), id, "done", nil)
 	if err != nil {
 		t.Fatalf("CompleteJob: %v", err)
 	}
 
-	_, second := mustClaimJob(t, store, "deploy-prod")
+	_, second := mustClaimJob(t, st, "deploy-prod")
 	if second != "deploy-prod" {
 		t.Errorf("claimed %q, want deploy-prod once %q finished", second, first)
 	}
@@ -677,11 +679,11 @@ func TestConformanceMaxInFlightAdmitsUpToTheLimit(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
-	err := store.SyncJobLimits(context.Background(), nil, map[string]int{"build": 2})
+	err := st.SyncJobLimits(context.Background(), nil, map[string]int{"build": 2})
 	if err != nil {
 		t.Fatalf("SyncJobLimits: %v", err)
 	}
@@ -689,23 +691,23 @@ func TestConformanceMaxInFlightAdmitsUpToTheLimit(t *testing.T) {
 	// Three changes queue up. Only one row may be PENDING per job at a time,
 	// so each is claimed before the next is enqueued — which is exactly how a
 	// real watcher reaches two concurrent builds of one job.
-	mustEnqueueJob(t, store, "build", "resource-a")
-	first, _ := mustClaimJob(t, store, "build")
+	mustEnqueueJob(t, st, "build", "resource-a")
+	first, _ := mustClaimJob(t, st, "build")
 
-	mustEnqueueJob(t, store, "build", "resource-b")
-	mustClaimJob(t, store, "build")
+	mustEnqueueJob(t, st, "build", "resource-b")
+	mustClaimJob(t, st, "build")
 
 	// Two running, limit is two: the third must wait.
-	mustEnqueueJob(t, store, "build", "resource-c")
-	assertQueueEmpty(t, store)
+	mustEnqueueJob(t, st, "build", "resource-c")
+	assertQueueEmpty(t, st)
 
 	// One finishes, so a slot opens.
-	err = store.CompleteJob(context.Background(), first, "done", nil)
+	err = st.CompleteJob(context.Background(), first, "done", nil)
 	if err != nil {
 		t.Fatalf("CompleteJob: %v", err)
 	}
 
-	mustClaimJob(t, store, "build")
+	mustClaimJob(t, st, "build")
 }
 
 // TestConformanceSerialForcesOneInFlight pins the precedence rule: serial:
@@ -714,21 +716,21 @@ func TestConformanceSerialForcesOneInFlight(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	// What EffectiveMaxInFlight produces for a serial job.
-	err := store.SyncJobLimits(context.Background(), nil, map[string]int{"deploy": 1})
+	err := st.SyncJobLimits(context.Background(), nil, map[string]int{"deploy": 1})
 	if err != nil {
 		t.Fatalf("SyncJobLimits: %v", err)
 	}
 
-	mustEnqueueJob(t, store, "deploy", "resource-a")
-	mustClaimJob(t, store, "deploy")
+	mustEnqueueJob(t, st, "deploy", "resource-a")
+	mustClaimJob(t, st, "deploy")
 
-	mustEnqueueJob(t, store, "deploy", "resource-b")
-	assertQueueEmpty(t, store)
+	mustEnqueueJob(t, st, "deploy", "resource-b")
+	assertQueueEmpty(t, st)
 }
 
 // TestMaxInFlightDefaultsToOneForAnUnknownJob covers the row that is not
@@ -741,16 +743,16 @@ func TestMaxInFlightDefaultsToOneForAnUnknownJob(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := mustOpenStore(t, filepath.Join(dir, "state.db"))
+	st := mustOpenStore(t, filepath.Join(dir, "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	// Nothing synced at all.
-	mustEnqueueJob(t, store, "ghost", "resource-a")
-	mustClaimJob(t, store, "ghost")
+	mustEnqueueJob(t, st, "ghost", "resource-a")
+	mustClaimJob(t, st, "ghost")
 
-	mustEnqueueJob(t, store, "ghost", "resource-b")
-	assertQueueEmpty(t, store)
+	mustEnqueueJob(t, st, "ghost", "resource-b")
+	assertQueueEmpty(t, st)
 }
 
 // TestConsumedMarkRoundTrip covers the get: version: every cursor: how far a
@@ -767,7 +769,7 @@ func TestConsumedMarkRoundTrip(t *testing.T) {
 	}
 
 	if mark != 0 {
-		t.Fatalf("a fresh store reports mark %d, want 0 — nothing taken", mark)
+		t.Fatalf("a fresh st reports mark %d, want 0 — nothing taken", mark)
 	}
 
 	err = st.RecordConsumedMark(ctx, "answer", "mentions", 5)
@@ -823,11 +825,11 @@ func TestSyncJobLimitsClearsBothMirrors(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
-	err := store.SyncJobLimits(ctx, nil, map[string]int{"build": 2})
+	err := st.SyncJobLimits(ctx, nil, map[string]int{"build": 2})
 	if err != nil {
 		t.Fatalf("SyncJobLimits: %v", err)
 	}
@@ -835,14 +837,14 @@ func TestSyncJobLimitsClearsBothMirrors(t *testing.T) {
 	// max_in_flight: gone from the pipeline, alongside a serial group that is
 	// arriving — the shape of an ordinary edit, and what makes clearing only
 	// one of the two tables look like it worked.
-	err = store.SyncJobLimits(ctx, map[string][]string{"lint": {"slow"}}, nil)
+	err = st.SyncJobLimits(ctx, map[string][]string{"lint": {"slow"}}, nil)
 	if err != nil {
 		t.Fatalf("SyncJobLimits: %v", err)
 	}
 
-	mustEnqueueJob(t, store, "build", "resource-a")
-	mustClaimJob(t, store, "build")
+	mustEnqueueJob(t, st, "build", "resource-a")
+	mustClaimJob(t, st, "build")
 
-	mustEnqueueJob(t, store, "build", "resource-b")
-	assertQueueEmpty(t, store)
+	mustEnqueueJob(t, st, "build", "resource-b")
+	assertQueueEmpty(t, st)
 }

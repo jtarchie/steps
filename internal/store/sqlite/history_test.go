@@ -1,10 +1,12 @@
-package store
+package sqlite
 
 import (
 	"context"
 	"errors"
 	"path/filepath"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // openTestStore returns a Store backed by a fresh temp database.
@@ -27,7 +29,7 @@ func TestListNodes(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)
 
-	record := NodeRecord{
+	record := store.NodeRecord{
 		Hash: "node-1", ParentHash: "", Kind: "task", StepIndex: 0,
 		Resource: "compile", Content: map[string]any{"run": "make"},
 	}
@@ -61,11 +63,11 @@ func TestListNodesOnAnEmptyStore(t *testing.T) {
 
 	rows, err := openTestStore(t).ListNodes(context.Background(), "", 10)
 	if err != nil {
-		t.Fatalf("listing an empty store should not error: %v", err)
+		t.Fatalf("listing an empty st should not error: %v", err)
 	}
 
 	if len(rows) != 0 {
-		t.Errorf("got %d rows from an empty store, want 0", len(rows))
+		t.Errorf("got %d rows from an empty st, want 0", len(rows))
 	}
 }
 

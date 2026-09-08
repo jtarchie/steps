@@ -101,7 +101,7 @@ type askGrant struct {
 // a hook agent gets it from askContext. Being outside the merkle chain, as a
 // hook is, says nothing about whether there is somebody to ask.
 type askEnv struct {
-	st        *store.Store
+	st        store.Store
 	jobName   string
 	agentName string
 	// prompt is the terminal channel: a function that puts the question to
@@ -123,7 +123,7 @@ type askEnv struct {
 // was missing, three frames up its own call chain. A nil store still yields a
 // usable zero value, so a caller with genuinely nothing to record against
 // (a test, a direct call) degrades to the tool saying so as data.
-func askContext(st *store.Store, jobName, agentName string) askEnv {
+func askContext(st store.Store, jobName, agentName string) askEnv {
 	return askEnv{
 		st: st, jobName: jobName, agentName: agentName,
 		prompt: terminalPrompter(), state: &askState{},

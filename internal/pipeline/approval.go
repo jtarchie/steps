@@ -85,7 +85,7 @@ func runApprovalStep(ctx context.Context, r stepRunner, i int, step config.Step,
 }
 
 // awaitApproval polls for the decision until one is made or the wait expires.
-func awaitApproval(ctx context.Context, st *store.Store, id int64, timeout time.Duration) (store.Approval, error) {
+func awaitApproval(ctx context.Context, st store.Store, id int64, timeout time.Duration) (store.Approval, error) {
 	deadline := time.Now().Add(timeout)
 
 	for {

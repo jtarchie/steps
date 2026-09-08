@@ -10,6 +10,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // testPipelines builds a server over several pipelines sharing one state
@@ -38,7 +39,7 @@ jobs:
 			t.Fatalf("LoadConfig(%s): %v", name, err)
 		}
 
-		st, err := store.OpenStore(statePath, name)
+		st, err := sqlite.OpenStore(statePath, name)
 		if err != nil {
 			t.Fatalf("OpenStore(%s): %v", name, err)
 		}
@@ -150,7 +151,7 @@ func TestRootFeedIgnoresUnservedPipelines(t *testing.T) {
 	server, pipelines := testPipelines(t, "app", "infra")
 
 	// A third pipeline writing into the same file, served by nobody here.
-	other, err := store.OpenStore(filepath.Join(filepath.Dir(pipelines[0].Path), ".steps", "shared.db"), "unserved")
+	other, err := sqlite.OpenStore(filepath.Join(filepath.Dir(pipelines[0].Path), ".steps", "shared.db"), "unserved")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -403,7 +404,7 @@ jobs:
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "demo")
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "demo")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -458,7 +459,7 @@ func serverFromYAML(t *testing.T, yaml string) (*Server, *Pipeline) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "demo")
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "demo")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

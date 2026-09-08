@@ -41,7 +41,7 @@ type Config struct {
 	// It exists because one process can serve several pipelines (`steps web
 	// app.yml infra.yml`), and process-wide state keyed by a name a pipeline
 	// chose — an agent, a job — collides across them. The Config holds it for
-	// the same reason store.Store holds its pipeline_id: the scope has to be
+	// the same reason a store.Store handle holds its pipeline: the scope has to be
 	// impossible to forget.
 	//
 	// It is the SAME STRING the store's pipelines.name and the web UI's
@@ -207,7 +207,7 @@ func LoadConfigWithVars(path string, vars map[string]string) (*Config, error) {
 // is the caller's to decide: `--name prod=infra/deploy.yml` is an operator
 // saying which pipeline this is, and it must reach the store, the /p/<slug>
 // route and the Config as one string. Positional, so a call site cannot
-// quietly skip it — the same reason store.OpenStore takes one.
+// quietly skip it — the same reason sqlite.OpenStore takes one.
 //
 // Substituting before the parse is what lets a var appear anywhere a value
 // does — inside a URI, mid-command, as a whole mapping value — without this

@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 // Foreign-key enforcement, which SQLite leaves off unless a connection asks.
 
@@ -20,14 +20,14 @@ import (
 func TestForeignKeysAreEnforced(t *testing.T) {
 	t.Parallel()
 
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
-	defer func() { _ = store.Close() }()
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	defer func() { _ = st.Close() }()
 
 	ctx := context.Background()
 
 	var enabled int
 
-	err := store.db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&enabled)
+	err := st.db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&enabled)
 	if err != nil {
 		t.Fatalf("PRAGMA foreign_keys: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestForeignKeysAreEnforced(t *testing.T) {
 		t.Fatalf("PRAGMA foreign_keys = %d, want 1 — a REFERENCES clause would be ignored", enabled)
 	}
 
-	_, err = store.db.ExecContext(ctx, `
+	_, err = st.db.ExecContext(ctx, `
 		CREATE TABLE fk_parent (id TEXT PRIMARY KEY);
 		CREATE TABLE fk_child (
 			id        TEXT PRIMARY KEY,
@@ -50,20 +50,20 @@ func TestForeignKeysAreEnforced(t *testing.T) {
 	}
 
 	// A child with no parent is refused rather than accepted.
-	_, err = store.db.ExecContext(ctx, `INSERT INTO fk_child (id, parent_id) VALUES ('c2', 'nope')`)
+	_, err = st.db.ExecContext(ctx, `INSERT INTO fk_child (id, parent_id) VALUES ('c2', 'nope')`)
 	if err == nil || !strings.Contains(err.Error(), "FOREIGN KEY") {
 		t.Errorf("inserting an orphan: err = %v, want a foreign-key violation", err)
 	}
 
 	// And deleting the parent takes the child with it.
-	_, err = store.db.ExecContext(ctx, `DELETE FROM fk_parent WHERE id = 'p1'`)
+	_, err = st.db.ExecContext(ctx, `DELETE FROM fk_parent WHERE id = 'p1'`)
 	if err != nil {
 		t.Fatalf("deleting parent: %v", err)
 	}
 
 	var children int
 
-	err = store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fk_child`).Scan(&children)
+	err = st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fk_child`).Scan(&children)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 import (
 	"context"
@@ -7,28 +7,30 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
-// startQuestionRun opens a store with one running run to hang questions off,
+// startQuestionRun opens a st with one running run to hang questions off,
 // since a question is run-scoped and the foreign key means it.
 func startQuestionRun(t *testing.T) *Store {
 	t.Helper()
 
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
-	t.Cleanup(func() { _ = store.Close() })
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	t.Cleanup(func() { _ = st.Close() })
 
-	err := store.StartRun(context.Background(), "run-1", "release-note", "/tmp/ws", "")
+	err := st.StartRun(context.Background(), "run-1", "release-note", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	return store
+	return st
 }
 
-func askBump(t *testing.T, store *Store, runID string) (Question, bool) {
+func askBump(t *testing.T, st *Store, runID string) (store.Question, bool) {
 	t.Helper()
 
-	question, existing, err := store.AskQuestion(context.Background(), Question{
+	question, existing, err := st.AskQuestion(context.Background(), store.Question{
 		RunID: runID, JobName: "release-note", AgentName: "writer",
 		Question: "Is this release a major or a minor bump?",
 		Options:  []string{"major", "minor"},
@@ -46,14 +48,14 @@ func askBump(t *testing.T, store *Store, runID string) (Question, bool) {
 func TestAskQuestionMemoizesWithinARun(t *testing.T) {
 	t.Parallel()
 
-	store := startQuestionRun(t)
+	st := startQuestionRun(t)
 
-	first, existing := askBump(t, store, "run-1")
+	first, existing := askBump(t, st, "run-1")
 	if existing {
 		t.Error("the first ask reported an existing question")
 	}
 
-	second, existing := askBump(t, store, "run-1")
+	second, existing := askBump(t, st, "run-1")
 	if !existing {
 		t.Error("the second ask of the same question did not report the existing row")
 	}
@@ -68,15 +70,15 @@ func TestAskQuestionMemoizesWithinARun(t *testing.T) {
 func TestAskQuestionMemoIsPerRun(t *testing.T) {
 	t.Parallel()
 
-	store := startQuestionRun(t)
+	st := startQuestionRun(t)
 
-	err := store.StartRun(context.Background(), "run-2", "release-note", "/tmp/ws", "")
+	err := st.StartRun(context.Background(), "run-2", "release-note", "/tmp/ws", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	first, _ := askBump(t, store, "run-1")
-	second, existing := askBump(t, store, "run-2")
+	first, _ := askBump(t, st, "run-1")
+	second, existing := askBump(t, st, "run-2")
 
 	if existing || second.ID == first.ID {
 		t.Errorf("a new run reused question %d; a new run is a new set of circumstances", first.ID)
@@ -90,11 +92,11 @@ func TestAskQuestionMemoIsPerRun(t *testing.T) {
 func TestAskQuestionMemoSeparatesDifferentOptions(t *testing.T) {
 	t.Parallel()
 
-	store := startQuestionRun(t)
+	st := startQuestionRun(t)
 
-	first, _ := askBump(t, store, "run-1")
+	first, _ := askBump(t, st, "run-1")
 
-	widened, existing, err := store.AskQuestion(context.Background(), Question{
+	widened, existing, err := st.AskQuestion(context.Background(), store.Question{
 		RunID: "run-1", JobName: "release-note", AgentName: "writer",
 		Question: "Is this release a major or a minor bump?",
 		Options:  []string{"major", "minor", "patch"},
@@ -114,7 +116,7 @@ func TestAskQuestionMemoSeparatesDifferentOptions(t *testing.T) {
 func TestAskQuestionMemoHoldsUnderConcurrentAskers(t *testing.T) {
 	t.Parallel()
 
-	store := startQuestionRun(t)
+	st := startQuestionRun(t)
 
 	const askers = 8
 
@@ -130,7 +132,7 @@ func TestAskQuestionMemoHoldsUnderConcurrentAskers(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			question, _ := askBump(t, store, "run-1")
+			question, _ := askBump(t, st, "run-1")
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -152,15 +154,15 @@ func TestAnswerQuestionRecordsWhoAndWhat(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := startQuestionRun(t)
-	question, _ := askBump(t, store, "run-1")
+	st := startQuestionRun(t)
+	question, _ := askBump(t, st, "run-1")
 
-	err := store.AnswerQuestion(ctx, question.ID, "minor", "jtarchie")
+	err := st.AnswerQuestion(ctx, question.ID, "minor", "jtarchie")
 	if err != nil {
 		t.Fatalf("AnswerQuestion: %v", err)
 	}
 
-	answered, err := store.QuestionStatus(ctx, question.ID)
+	answered, err := st.QuestionStatus(ctx, question.ID)
 	if err != nil {
 		t.Fatalf("QuestionStatus: %v", err)
 	}
@@ -174,12 +176,12 @@ func TestAnswerQuestionRecordsWhoAndWhat(t *testing.T) {
 		t.Error("an answered question recorded no answered_at")
 	}
 
-	err = store.AnswerQuestion(ctx, question.ID, "major", "someone-else")
-	if !errors.Is(err, ErrQuestionNotPending) {
-		t.Errorf("answering an already-answered question = %v, want ErrQuestionNotPending", err)
+	err = st.AnswerQuestion(ctx, question.ID, "major", "someone-else")
+	if !errors.Is(err, store.ErrQuestionNotPending) {
+		t.Errorf("answering an already-answered question = %v, want store.ErrQuestionNotPending", err)
 	}
 
-	if again, _ := store.QuestionStatus(ctx, question.ID); again.Answer != "minor" {
+	if again, _ := st.QuestionStatus(ctx, question.ID); again.Answer != "minor" {
 		t.Errorf("the second answer overwrote the first: %q", again.Answer)
 	}
 }
@@ -191,9 +193,9 @@ func TestAnswerQuestionEnforcesOptionsRequired(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := startQuestionRun(t)
+	st := startQuestionRun(t)
 
-	question, _, err := store.AskQuestion(ctx, Question{
+	question, _, err := st.AskQuestion(ctx, store.Question{
 		RunID: "run-1", JobName: "release-note", AgentName: "writer",
 		Question: "Which environment?", Options: []string{"staging", "prod"},
 		OptionsRequired: true,
@@ -202,16 +204,16 @@ func TestAnswerQuestionEnforcesOptionsRequired(t *testing.T) {
 		t.Fatalf("AskQuestion: %v", err)
 	}
 
-	err = store.AnswerQuestion(ctx, question.ID, "canary", "jtarchie")
+	err = st.AnswerQuestion(ctx, question.ID, "canary", "jtarchie")
 	if err == nil {
 		t.Fatal("an off-list answer was accepted for an options_required question")
 	}
 
-	if still, _ := store.QuestionStatus(ctx, question.ID); still.Status != "pending" {
+	if still, _ := st.QuestionStatus(ctx, question.ID); still.Status != "pending" {
 		t.Errorf("a refused answer resolved the question anyway: %q", still.Status)
 	}
 
-	err = store.AnswerQuestion(ctx, question.ID, "prod", "jtarchie")
+	err = st.AnswerQuestion(ctx, question.ID, "prod", "jtarchie")
 	if err != nil {
 		t.Fatalf("an on-list answer was refused: %v", err)
 	}
@@ -224,16 +226,16 @@ func TestCloseQuestionRecordsWhatTheModelWasTold(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := startQuestionRun(t)
+	st := startQuestionRun(t)
 
-	expired, _ := askBump(t, store, "run-1")
+	expired, _ := askBump(t, st, "run-1")
 
-	err := store.CloseQuestion(ctx, expired.ID, "expired", "minor", "default")
+	err := st.CloseQuestion(ctx, expired.ID, "expired", "minor", "default")
 	if err != nil {
 		t.Fatalf("CloseQuestion: %v", err)
 	}
 
-	got, err := store.QuestionStatus(ctx, expired.ID)
+	got, err := st.QuestionStatus(ctx, expired.ID)
 	if err != nil {
 		t.Fatalf("QuestionStatus: %v", err)
 	}
@@ -244,19 +246,19 @@ func TestCloseQuestionRecordsWhatTheModelWasTold(t *testing.T) {
 	}
 
 	// A question the step abandoned must not keep showing up as answerable.
-	aborted, _, err := store.AskQuestion(ctx, Question{
+	aborted, _, err := st.AskQuestion(ctx, store.Question{
 		RunID: "run-1", JobName: "release-note", AgentName: "writer", Question: "Anything else?",
 	})
 	if err != nil {
 		t.Fatalf("AskQuestion: %v", err)
 	}
 
-	err = store.CloseQuestion(ctx, aborted.ID, "aborted", "", "step")
+	err = st.CloseQuestion(ctx, aborted.ID, "aborted", "", "step")
 	if err != nil {
 		t.Fatalf("CloseQuestion: %v", err)
 	}
 
-	pending, err := store.Questions(ctx, true, 0)
+	pending, err := st.Questions(ctx, true, 0)
 	if err != nil {
 		t.Fatalf("Questions: %v", err)
 	}
@@ -318,22 +320,22 @@ func TestQuestionsAreReapedWithTheirRun(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	for build := 1; build <= 6; build++ {
-		syntheticBuild(ctx, t, store, "answer-mention", build)
+		syntheticBuild(ctx, t, st, "answer-mention", build)
 	}
 
-	err := store.Prune(ctx, Retention{JobName: "answer-mention", Runs: 2}, "")
+	err := st.Prune(ctx, store.Retention{JobName: "answer-mention", Runs: 2}, "")
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
 	var count int
 
-	err = store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM questions`).Scan(&count)
+	err = st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM questions`).Scan(&count)
 	if err != nil {
 		t.Fatalf("count questions: %v", err)
 	}
@@ -368,7 +370,7 @@ func TestAskQuestionRefusesARunFromAnotherPipeline(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	_, _, err = mine.AskQuestion(ctx, Question{
+	_, _, err = mine.AskQuestion(ctx, store.Question{
 		RunID: "their-run", JobName: "build", AgentName: "writer", Question: "Which bump?",
 	})
 	if err == nil {
@@ -394,12 +396,12 @@ func TestAllQuestionsListsWhatIsWaitingFirst(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := startQuestionRun(t)
+	st := startQuestionRun(t)
 
-	parked, _ := askBump(t, store, "run-1")
+	parked, _ := askBump(t, st, "run-1")
 
 	for i := range 5 {
-		later, _, err := store.AskQuestion(ctx, Question{
+		later, _, err := st.AskQuestion(ctx, store.Question{
 			RunID: "run-1", JobName: "release-note", AgentName: "writer",
 			Question: fmt.Sprintf("Later question %d?", i),
 		})
@@ -407,13 +409,13 @@ func TestAllQuestionsListsWhatIsWaitingFirst(t *testing.T) {
 			t.Fatalf("AskQuestion: %v", err)
 		}
 
-		err = store.AnswerQuestion(ctx, later.ID, "sure", "jtarchie")
+		err = st.AnswerQuestion(ctx, later.ID, "sure", "jtarchie")
 		if err != nil {
 			t.Fatalf("AnswerQuestion: %v", err)
 		}
 	}
 
-	listed, err := store.Questions(ctx, false, 3)
+	listed, err := st.Questions(ctx, false, 3)
 	if err != nil {
 		t.Fatalf("Questions: %v", err)
 	}
@@ -432,21 +434,21 @@ func TestPendingQuestionsAreNotCapped(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := startQuestionRun(t)
+	st := startQuestionRun(t)
 
 	const asked = 4
 
 	for i := range asked {
-		_, _, err := store.AskQuestion(ctx, Question{
+		_, _, err := st.AskQuestion(ctx, store.Question{
 			RunID: "run-1", JobName: "release-note", AgentName: "writer",
-			Question: fmt.Sprintf("Question %d?", i),
+			Question: fmt.Sprintf("store.Question %d?", i),
 		})
 		if err != nil {
 			t.Fatalf("AskQuestion: %v", err)
 		}
 	}
 
-	pending, err := store.Questions(ctx, true, 0)
+	pending, err := st.Questions(ctx, true, 0)
 	if err != nil {
 		t.Fatalf("Questions: %v", err)
 	}

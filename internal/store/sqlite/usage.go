@@ -1,0 +1,148 @@
+package sqlite
+
+// agent_usage: what each agent step spent, and the provider metadata that
+// explains it.
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/jtarchie/steps/internal/store"
+)
+
+// usageColumns is the column list RecordAgentUsage writes and RunUsage reads
+// back, in the field order of AgentUsage.
+const usageColumns = `run_id, step_index, step_name, job_name, node_hash,
+	model_requested, model_served,
+	prompt_tokens, completion_tokens, total_tokens,
+	cached_tokens, reasoning_tokens, cost_usd,
+	finish_reason, duration_ms, raw_meta`
+
+// RecordAgentUsage stores what one agent step spent.
+//
+// ACCUMULATES the token counts on conflict, and replaces the descriptive
+// fields.
+//
+// A step can execute more than once against the same node hash: a to: route
+// sending the plan back over it, or a resumed run re-running the step its
+// predecessor died on. You paid for every one of those attempts, so the
+// counts are a running total — replacing them reported the last attempt as
+// though it were the whole bill, and made this table unusable as the ledger a
+// resumed run reads its prior spend from (RunTokensSpent).
+//
+// The descriptive columns still take the newest value: model_served,
+// finish_reason and raw_meta describe ONE response and cannot be summed, and
+// the last attempt is the one whose result the run actually used.
+//
+// The conflict is on the node hash, so two DIFFERENT steps sharing a plan
+// index — the cells of a matrix, the members of an ensemble — never collide.
+func (s *Store) RecordAgentUsage(ctx context.Context, usage store.AgentUsage) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO agent_usage (pipeline_id, `+usageColumns+`, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (pipeline_id, run_id, node_hash) DO UPDATE SET
+			step_index = excluded.step_index,
+			step_name = excluded.step_name,
+			model_served = excluded.model_served,
+			prompt_tokens = agent_usage.prompt_tokens + excluded.prompt_tokens,
+			completion_tokens = agent_usage.completion_tokens + excluded.completion_tokens,
+			total_tokens = agent_usage.total_tokens + excluded.total_tokens,
+			cached_tokens = agent_usage.cached_tokens + excluded.cached_tokens,
+			reasoning_tokens = agent_usage.reasoning_tokens + excluded.reasoning_tokens,
+			-- NULL means unpriced, and NULL + anything is NULL in SQL — so a plain
+			-- sum erased a reported cost the moment a second attempt against the
+			-- same node reported none, and reported nothing for the whole row.
+			-- Unpriced only when BOTH sides are, which keeps "no provider told us"
+			-- distinguishable from "$0.00" (see the schema, and RunCostTotals,
+			-- which counts unpriced steps so a partial total is shown as partial).
+			cost_usd = CASE
+				WHEN agent_usage.cost_usd IS NULL AND excluded.cost_usd IS NULL THEN NULL
+				ELSE COALESCE(agent_usage.cost_usd, 0) + COALESCE(excluded.cost_usd, 0)
+			END,
+			finish_reason = excluded.finish_reason,
+			duration_ms = agent_usage.duration_ms + excluded.duration_ms,
+			raw_meta = excluded.raw_meta,
+			created_at = excluded.created_at
+	`,
+		s.pipelineID,
+		usage.RunID, usage.StepIndex, usage.StepName, usage.JobName, usage.NodeHash,
+		usage.ModelReq, usage.ModelServed,
+		usage.Prompt, usage.Completion, usage.Total,
+		usage.Cached, usage.Reasoning, usage.CostUSD,
+		usage.FinishReason, usage.DurationMS, usage.RawMeta,
+		now())
+	if err != nil {
+		return fmt.Errorf("could not record agent usage for run %q: %w", usage.RunID, err)
+	}
+
+	return nil
+}
+
+// RunTokensSpent is the total tokens already recorded against a run.
+//
+// Read when RESUMING, so a job budget continues from what earlier attempts of
+// the same run spent instead of restarting at zero. Summed in SQL rather than
+// by walking RunUsage: the caller wants one number, and a resumed run may
+// carry hundreds of step rows.
+//
+// A run with no agent steps yet returns 0, which is also what a fresh run's
+// id yields — both mean "nothing spent", so there is nothing to distinguish.
+func (s *Store) RunTokensSpent(ctx context.Context, runID string) (int, error) {
+	var total int
+
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(total_tokens), 0) FROM agent_usage WHERE pipeline_id = ? AND run_id = ?`,
+		s.pipelineID, runID).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("could not read spend for run %q: %w", runID, err)
+	}
+
+	return total, nil
+}
+
+// RunUsage is every agent step's spend for one run, in step order.
+func (s *Store) RunUsage(ctx context.Context, runID string) ([]store.AgentUsage, error) {
+	return collect(ctx, s.db, "usage for run "+runID,
+		`SELECT `+usageColumns+` FROM agent_usage
+		 WHERE pipeline_id = ? AND run_id = ? ORDER BY step_index, rowid`,
+		[]any{s.pipelineID, runID}, func(rows *sql.Rows) (store.AgentUsage, error) {
+			var usage store.AgentUsage
+
+			return usage, rows.Scan(&usage.RunID, &usage.StepIndex, &usage.StepName, &usage.JobName, &usage.NodeHash,
+				&usage.ModelReq, &usage.ModelServed,
+				&usage.Prompt, &usage.Completion, &usage.Total,
+				&usage.Cached, &usage.Reasoning, &usage.CostUSD,
+				&usage.FinishReason, &usage.DurationMS, &usage.RawMeta)
+		})
+}
+
+// RunCostTotals rolls agent_usage up per run, newest first.
+//
+// Unpriced counts the steps with no reported cost, so a partial dollar total
+// can be shown AS partial rather than presented as the whole bill.
+func (s *Store) RunCostTotals(ctx context.Context, limit int) ([]store.RunTotals, error) {
+	return collect(ctx, s.db, "the usage rollup", `
+		SELECT run_id,
+		       SUM(total_tokens), SUM(cached_tokens),
+		       SUM(COALESCE(cost_usd, 0)), COUNT(*),
+		       SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END)
+		FROM agent_usage
+		WHERE pipeline_id = ?
+		GROUP BY run_id
+		ORDER BY MAX(created_at) DESC
+		LIMIT ?
+	`, []any{s.pipelineID, limit}, func(rows *sql.Rows) (store.RunTotals, error) {
+		var (
+			totals store.RunTotals
+			cost   float64
+		)
+
+		err := rows.Scan(&totals.RunID, &totals.Tokens, &totals.Cached, &cost, &totals.Steps, &totals.Unpriced)
+		if totals.Unpriced < totals.Steps {
+			totals.CostUSD = &cost
+		}
+
+		return totals, err //nolint:wrapcheck // collect wraps with the thing being read
+	})
+}

@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 import (
 	"context"
@@ -13,35 +13,35 @@ import (
 func TestStepBlobsRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 	ctx := context.Background()
 
-	got, err := store.StepBlobs(ctx, "unknown")
+	got, err := st.StepBlobs(ctx, "unknown")
 	if err != nil || len(got) != 0 {
 		t.Fatalf("StepBlobs of an unknown key = %v, %v; want empty, nil", got, err)
 	}
 
-	err = store.RecordStepBlobs(ctx, "key-1", map[string]string{"out": "d1", "logs": "d2"})
+	err = st.RecordStepBlobs(ctx, "key-1", map[string]string{"out": "d1", "logs": "d2"})
 	if err != nil {
 		t.Fatalf("RecordStepBlobs: %v", err)
 	}
 
-	assertBlobs(t, store, "key-1", map[string]string{"out": "d1", "logs": "d2"})
+	assertBlobs(t, st, "key-1", map[string]string{"out": "d1", "logs": "d2"})
 
 	// A re-record replaces the entry: an output the step no longer declares
 	// must not survive as a stale row.
-	err = store.RecordStepBlobs(ctx, "key-1", map[string]string{"out": "d3"})
+	err = st.RecordStepBlobs(ctx, "key-1", map[string]string{"out": "d3"})
 	if err != nil {
 		t.Fatalf("RecordStepBlobs again: %v", err)
 	}
 
-	assertBlobs(t, store, "key-1", map[string]string{"out": "d3"})
+	assertBlobs(t, st, "key-1", map[string]string{"out": "d3"})
 }
 
-func assertBlobs(t *testing.T, store *Store, key string, want map[string]string) {
+func assertBlobs(t *testing.T, st *Store, key string, want map[string]string) {
 	t.Helper()
 
-	got, err := store.StepBlobs(context.Background(), key)
+	got, err := st.StepBlobs(context.Background(), key)
 	if err != nil {
 		t.Fatalf("StepBlobs(%q): %v", key, err)
 	}
@@ -97,22 +97,22 @@ func TestStepBlobsAreScopedToThePipeline(t *testing.T) {
 func TestStepBlobsEvictWholeEntriesByCount(t *testing.T) {
 	t.Parallel()
 
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 	ctx := context.Background()
 
 	for i := range stepBlobEntryCap + 1 {
-		err := store.RecordStepBlobs(ctx, fmt.Sprintf("key-%d", i), map[string]string{"out": "d", "logs": "d2"})
+		err := st.RecordStepBlobs(ctx, fmt.Sprintf("key-%d", i), map[string]string{"out": "d", "logs": "d2"})
 		if err != nil {
 			t.Fatalf("RecordStepBlobs %d: %v", i, err)
 		}
 	}
 
-	oldest, err := store.StepBlobs(ctx, "key-0")
+	oldest, err := st.StepBlobs(ctx, "key-0")
 	if err != nil || len(oldest) != 0 {
 		t.Fatalf("the oldest entry = %v, %v; want evicted", oldest, err)
 	}
 
-	newest, err := store.StepBlobs(ctx, fmt.Sprintf("key-%d", stepBlobEntryCap))
+	newest, err := st.StepBlobs(ctx, fmt.Sprintf("key-%d", stepBlobEntryCap))
 	if err != nil || len(newest) != 2 {
 		t.Fatalf("the newest entry = %v, %v; want both rows intact", newest, err)
 	}

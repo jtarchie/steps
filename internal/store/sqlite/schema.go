@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 // schemaVersion is stamped into PRAGMA user_version and checked on open.
 //
@@ -422,7 +422,7 @@ CREATE TABLE IF NOT EXISTS approvals (
 -- the run and no query has to remember a second predicate.
 --
 -- memo_key is what makes one question asked by twelve across: cells one
--- question (see Question.MemoKey). The unique index is the mechanism, not an
+-- question (see store.Question.MemoKey). The unique index is the mechanism, not an
 -- optimization: it is what makes the de-duplication hold between concurrent
 -- askers, where a map in one process would not.
 CREATE TABLE IF NOT EXISTS questions (
@@ -700,7 +700,7 @@ CREATE INDEX IF NOT EXISTS idx_run_placements_node ON run_placements(pipeline_id
 --
 -- The largest single value the schema stores, and the one whose bound was
 -- missing: internal/agent caps a single tool RESULT, but a conversation has
--- unboundedly many turns, so the row itself needs MaxTranscriptBytes.
+-- unboundedly many turns, so the row itself needs store.MaxTranscriptBytes.
 CREATE TABLE IF NOT EXISTS node_transcripts (
     pipeline_id INTEGER NOT NULL,
     hash       TEXT NOT NULL,

@@ -21,7 +21,7 @@ import (
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
-	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -284,7 +284,7 @@ func webServerFor(t *testing.T, pipelinePath string) (*web.Server, *web.Pipeline
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := store.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
+	st, err := sqlite.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

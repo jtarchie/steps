@@ -74,7 +74,7 @@ type versionCursor struct {
 // filtering is switched off. reopen is --resume's narrower version of the same
 // exemption, naming the versions of one run rather than lifting the filter.
 func loadVersionCursor(
-	ctx context.Context, st *store.Store, job *config.Job, suppress bool, reopen map[string]map[string]bool,
+	ctx context.Context, st store.Store, job *config.Job, suppress bool, reopen map[string]map[string]bool,
 ) (*versionCursor, error) {
 	var resources []string
 
@@ -154,7 +154,7 @@ type resourceHistory struct {
 // up front — the same reason the consumed set is read once: the planner and
 // the executor have to judge the same list, and a lazy per-resource read
 // could see a poll land between them.
-func loadResourceHistory(ctx context.Context, st *store.Store, job *config.Job) (*resourceHistory, error) {
+func loadResourceHistory(ctx context.Context, st store.Store, job *config.Job) (*resourceHistory, error) {
 	history := &resourceHistory{versions: map[string][]map[string]any{}, gated: map[string]bool{}}
 
 	// A passed:-constrained resource resolves among GREEN versions, not raw
@@ -272,7 +272,7 @@ func (c *versionCursor) has(resourceName string, version map[string]any) bool {
 // a failed one. The cost of a lost row is that the version is taken once more
 // later, which is the direction this errs on everywhere.
 func (c *versionCursor) take(
-	ctx context.Context, st *store.Store, jobName, resourceName string, version map[string]any,
+	ctx context.Context, st store.Store, jobName, resourceName string, version map[string]any,
 ) {
 	if c == nil {
 		return
@@ -331,7 +331,7 @@ func encodeVersion(version map[string]any) (string, bool) {
 // The store hands back the stored JSON because its other reader only displays
 // it; resolution is the caller that inspects fields, so it is the one that
 // pays for the decode.
-func checkedVersions(ctx context.Context, st *store.Store, name string) ([]map[string]any, error) {
+func checkedVersions(ctx context.Context, st store.Store, name string) ([]map[string]any, error) {
 	encoded, err := st.ResourceVersionsJSON(ctx, name)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // the store names the resource

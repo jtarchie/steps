@@ -14,13 +14,14 @@ import (
 	"github.com/jtarchie/steps/internal/merkle"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // setsFixture: a pipeline with gets over resources a and b whose checks read
 // files, so tests control exactly what exists.
 type setsFixture struct {
 	cfg    *config.Config
-	st     *store.Store
+	st     store.Store
 	cursor *versionCursor
 }
 
@@ -50,7 +51,7 @@ func newSetsFixture(t *testing.T, gets ...config.Step) *setsFixture {
 		Jobs: []config.Job{{Name: "build", Plan: plan}},
 	}
 
-	st, err := store.OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}

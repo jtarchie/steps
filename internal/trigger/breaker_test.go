@@ -200,7 +200,7 @@ func TestDrainOneSkipsAPausedJob(t *testing.T) {
 
 // pendingCount reports how many queue rows are still waiting, by trying to
 // claim one: a claimable row means work is still queued.
-func pendingCount(t *testing.T, st *store.Store) int {
+func pendingCount(t *testing.T, st store.Store) int {
 	t.Helper()
 
 	_, _, found, err := st.ClaimNextJob(context.Background())

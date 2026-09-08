@@ -12,6 +12,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -82,7 +83,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +221,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +298,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,7 +455,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -571,7 +572,7 @@ func TestGetVersionEveryForceRecordsWhatItTook(t *testing.T) {
 // everyVersionFixture builds the pipeline the test above runs: a get with
 // version: every feeding a put, whose out: appends to a file. The put is the
 // point — replace it with a task and the merkle cache alone would pass.
-func everyVersionFixture(t *testing.T, dir, posted, versionsFile string) (*config.Config, *store.Store) {
+func everyVersionFixture(t *testing.T, dir, posted, versionsFile string) (*config.Config, store.Store) {
 	t.Helper()
 
 	path := filepath.Join(dir, "pipeline.yml")
@@ -609,7 +610,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -627,7 +628,7 @@ func writeEveryVersions(t *testing.T, path, versions string) {
 	}
 }
 
-func mustRunEvery(ctx context.Context, t *testing.T, cfg *config.Config, job *config.Job, st *store.Store, force bool) {
+func mustRunEvery(ctx context.Context, t *testing.T, cfg *config.Config, job *config.Job, st store.Store, force bool) {
 	t.Helper()
 
 	provider, err := workspace.NewProvider(nil, false)

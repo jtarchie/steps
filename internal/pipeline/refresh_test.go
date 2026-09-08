@@ -11,19 +11,20 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // refreshFixture: one resource whose check reads a file, one task that
 // records which version it built. The get is plain — no trigger:, no
 // passed: — unless triggerGet adds one.
-func refreshFixture(t *testing.T, check string) (*config.Config, *store.Store, string) {
+func refreshFixture(t *testing.T, check string) (*config.Config, store.Store, string) {
 	t.Helper()
 
 	return refreshFixtureWithGet(t, check, "get: items")
 }
 
-func refreshFixtureWithGet(t *testing.T, check, getStep string) (*config.Config, *store.Store, string) {
+func refreshFixtureWithGet(t *testing.T, check, getStep string) (*config.Config, store.Store, string) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -59,7 +60,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +69,7 @@ jobs:
 	return cfg, st, posted
 }
 
-func runBuild(ctx context.Context, t *testing.T, cfg *config.Config, st *store.Store) error {
+func runBuild(ctx context.Context, t *testing.T, cfg *config.Config, st store.Store) error {
 	t.Helper()
 
 	provider, err := workspace.NewProvider(nil, false)
@@ -233,7 +234,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +318,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +397,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -586,7 +587,7 @@ func TestRunDoesNotRegressResolvedVersionOnAPinnedRun(t *testing.T) {
 // lastCheckedVersion is the check cursor's JSON, which is all these tests
 // compare — the row it sits on carries a timestamp they have nothing to say
 // about.
-func lastCheckedVersion(t *testing.T, st *store.Store, name string) (string, bool, error) {
+func lastCheckedVersion(t *testing.T, st store.Store, name string) (string, bool, error) {
 	t.Helper()
 
 	last, found, err := st.LastChecked(context.Background(), name)

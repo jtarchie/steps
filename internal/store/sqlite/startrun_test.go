@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 // Minting a run is not the same act as continuing one.
 
@@ -7,6 +7,8 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestStartRunRefusesAnIdSomeRunAlreadyHas is the loud half of the fix for a
@@ -26,27 +28,27 @@ func TestStartRunRefusesAnIdSomeRunAlreadyHas(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
-	err := store.StartRun(ctx, "COLLIDE1", "build", "/tmp/first", "")
+	err := st.StartRun(ctx, "COLLIDE1", "build", "/tmp/first", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = store.FinishRun(ctx, "COLLIDE1", "succeeded")
+	err = st.FinishRun(ctx, "COLLIDE1", "succeeded")
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
 
-	err = store.StartRun(ctx, "COLLIDE1", "deploy", "/tmp/second", "")
-	if !errors.Is(err, ErrRunExists) {
-		t.Fatalf("minting a colliding id returned %v, want ErrRunExists", err)
+	err = st.StartRun(ctx, "COLLIDE1", "deploy", "/tmp/second", "")
+	if !errors.Is(err, store.ErrRunExists) {
+		t.Fatalf("minting a colliding id returned %v, want store.ErrRunExists", err)
 	}
 
 	// And it did not take the first run over on its way to failing.
-	run, ok, err := store.FindRunRow(ctx, "COLLIDE1")
+	run, ok, err := st.FindRunRow(ctx, "COLLIDE1")
 	if err != nil || !ok {
 		t.Fatalf("FindRunRow: %v (found %v)", err, ok)
 	}
@@ -90,8 +92,8 @@ func TestStartRunRefusesAnIdHeldByAnotherPipeline(t *testing.T) {
 	}
 
 	err = infra.StartRun(ctx, "SHARED01", "build", "/tmp/infra", "")
-	if !errors.Is(err, ErrRunExists) {
-		t.Fatalf("minting an id another pipeline holds returned %v, want ErrRunExists", err)
+	if !errors.Is(err, store.ErrRunExists) {
+		t.Fatalf("minting an id another pipeline holds returned %v, want store.ErrRunExists", err)
 	}
 }
 
@@ -102,21 +104,21 @@ func TestResumeRunNeedsARunToResume(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
-	err := store.ResumeRun(ctx, "MISSING1", "/tmp/ws", "")
-	if !errors.Is(err, ErrNoSuchRun) {
-		t.Fatalf("resuming a run that does not exist returned %v, want ErrNoSuchRun", err)
+	err := st.ResumeRun(ctx, "MISSING1", "/tmp/ws", "")
+	if !errors.Is(err, store.ErrNoSuchRun) {
+		t.Fatalf("resuming a run that does not exist returned %v, want store.ErrNoSuchRun", err)
 	}
 
-	err = store.StartRun(ctx, "REAL0001", "build", "/tmp/first", "")
+	err = st.StartRun(ctx, "REAL0001", "build", "/tmp/first", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = store.FinishRun(ctx, "REAL0001", "failed")
+	err = st.FinishRun(ctx, "REAL0001", "failed")
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
@@ -124,12 +126,12 @@ func TestResumeRunNeedsARunToResume(t *testing.T) {
 	// A resume puts the run back in flight and repoints it at the build this
 	// attempt is using — which is the whole of what the upsert was doing that
 	// was legitimate.
-	err = store.ResumeRun(ctx, "REAL0001", "/tmp/second", "")
+	err = st.ResumeRun(ctx, "REAL0001", "/tmp/second", "")
 	if err != nil {
 		t.Fatalf("ResumeRun: %v", err)
 	}
 
-	run, ok, err := store.FindRunRow(ctx, "REAL0001")
+	run, ok, err := st.FindRunRow(ctx, "REAL0001")
 	if err != nil || !ok {
 		t.Fatalf("FindRunRow: %v (found %v)", err, ok)
 	}
@@ -172,7 +174,7 @@ func TestResumeRunIsScopedToItsPipeline(t *testing.T) {
 	}
 
 	err = infra.ResumeRun(ctx, "WEBRUN01", "/tmp/infra", "")
-	if !errors.Is(err, ErrNoSuchRun) {
-		t.Fatalf("resuming another pipeline's run returned %v, want ErrNoSuchRun", err)
+	if !errors.Is(err, store.ErrNoSuchRun) {
+		t.Fatalf("resuming another pipeline's run returned %v, want store.ErrNoSuchRun", err)
 	}
 }

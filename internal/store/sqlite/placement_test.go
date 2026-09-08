@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 // What a placement row must be able to say, and what it must refuse to invent.
 
@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
-// placeAt records a run, a node and a placement against store, returning the
+// placeAt records a run, a node and a placement against st, returning the
 // run id.
-func placeAt(ctx context.Context, t *testing.T, store *Store, placement Placement) {
+func placeAt(ctx context.Context, t *testing.T, st *Store, placement store.Placement) {
 	t.Helper()
 
 	// A plan step's slot IS its node hash; only a hook needs a different one,
@@ -20,9 +22,9 @@ func placeAt(ctx context.Context, t *testing.T, store *Store, placement Placemen
 		placement.Slot = placement.NodeHash
 	}
 
-	ensureRun(ctx, t, store, placement.RunID, placement.JobName)
+	ensureRun(ctx, t, st, placement.RunID, placement.JobName)
 
-	err := store.RecordNode(ctx, NodeRecord{
+	err := st.RecordNode(ctx, store.NodeRecord{
 		Hash: placement.NodeHash, Kind: "task", StepIndex: placement.StepIndex,
 		Resource: placement.StepName, Content: map[string]any{"body": "x"},
 	}, placement.JobName, "succeeded", nil, nil)
@@ -30,7 +32,7 @@ func placeAt(ctx context.Context, t *testing.T, store *Store, placement Placemen
 		t.Fatalf("RecordNode: %v", err)
 	}
 
-	err = store.RecordPlacement(ctx, placement)
+	err = st.RecordPlacement(ctx, placement)
 	if err != nil {
 		t.Fatalf("RecordPlacement: %v", err)
 	}
@@ -48,14 +50,14 @@ func TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	instance := "i-0123456789abcdef0"
 	root := 0
 
-	placeAt(ctx, t, store, Placement{
+	placeAt(ctx, t, st, store.Placement{
 		RunID: "AAAA1111", StepIndex: 0, StepName: "on-ec2", JobName: "build",
 		NodeHash: hashOf(1), Tag: "aws", Address: "aws://" + instance,
 		InstanceID: &instance, GOOS: "linux", GOARCH: "arm64",
@@ -64,14 +66,14 @@ func TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 	})
 
 	// A machine steps did not acquire, run by a user the shim did not name.
-	placeAt(ctx, t, store, Placement{
+	placeAt(ctx, t, st, store.Placement{
 		RunID: "BBBB2222", StepIndex: 0, StepName: "on-ssh", JobName: "build",
 		NodeHash: hashOf(2), Tag: "box", Address: "ssh://box",
 		GOOS: "linux", GOARCH: "amd64", Workdir: "/tmp/steps/work",
 		FSType: "ext4", FSFree: 1 << 30, BytesSent: 512,
 	})
 
-	onEC2 := onlyPlacement(ctx, t, store, "AAAA1111")
+	onEC2 := onlyPlacement(ctx, t, st, "AAAA1111")
 
 	if onEC2.InstanceID == nil || *onEC2.InstanceID != instance {
 		t.Errorf("instance_id = %v, want %q", onEC2.InstanceID, instance)
@@ -81,7 +83,7 @@ func TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 		t.Errorf("uid = %v, want a reported 0 — root is not the same as silence", onEC2.UID)
 	}
 
-	onSSH := onlyPlacement(ctx, t, store, "BBBB2222")
+	onSSH := onlyPlacement(ctx, t, st, "BBBB2222")
 
 	if onSSH.InstanceID != nil {
 		t.Errorf("instance_id = %q for an ssh:// worker, want nothing — there is no instance to name", *onSSH.InstanceID)
@@ -118,12 +120,12 @@ func TestPlacementsAreScopedToTheirPipeline(t *testing.T) {
 
 	// The same run id in both pipelines, which is what makes this a real
 	// collision rather than a coincidence: ids are minted per pipeline.
-	placeAt(ctx, t, web, Placement{
+	placeAt(ctx, t, web, store.Placement{
 		RunID: "SHARED01", StepName: "web-step", JobName: "build", NodeHash: hashOf(1),
 		Tag: "web", Address: "ssh://web", GOOS: "linux", GOARCH: "amd64",
 		Workdir: "/tmp/w", FSType: "ext4",
 	})
-	placeAt(ctx, t, infra, Placement{
+	placeAt(ctx, t, infra, store.Placement{
 		RunID: "SHARED01", StepName: "infra-step", JobName: "build", NodeHash: hashOf(2),
 		Tag: "infra", Address: "ssh://infra", GOOS: "linux", GOARCH: "amd64",
 		Workdir: "/tmp/i", FSType: "ext4",
@@ -138,10 +140,10 @@ func TestPlacementsAreScopedToTheirPipeline(t *testing.T) {
 	}
 }
 
-func onlyPlacement(ctx context.Context, t *testing.T, store *Store, runID string) Placement {
+func onlyPlacement(ctx context.Context, t *testing.T, st *Store, runID string) store.Placement {
 	t.Helper()
 
-	placements, err := store.RunPlacements(ctx, runID)
+	placements, err := st.RunPlacements(ctx, runID)
 	if err != nil {
 		t.Fatalf("RunPlacements: %v", err)
 	}
@@ -196,12 +198,12 @@ func TestPlacementKeyIsScopedToItsPipeline(t *testing.T) {
 		jobName = "build"
 	)
 
-	placeAt(ctx, t, web, Placement{
+	placeAt(ctx, t, web, store.Placement{
 		RunID: runID, StepName: "unit", JobName: jobName, NodeHash: hashOf(7),
 		Tag: "web", Address: "ssh://web", GOOS: "linux", GOARCH: "amd64",
 		Workdir: "/tmp/web", FSType: "ext4",
 	})
-	placeAt(ctx, t, infra, Placement{
+	placeAt(ctx, t, infra, store.Placement{
 		RunID: runID, StepName: "unit", JobName: jobName, NodeHash: hashOf(7),
 		Tag: "infra", Address: "ssh://infra", GOOS: "linux", GOARCH: "amd64",
 		Workdir: "/tmp/infra", FSType: "ext4",
@@ -225,21 +227,21 @@ func TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	reclaimed := "i-000000000000000aa"
 	replaced := "i-000000000000000bb"
 
-	placeAt(ctx, t, store, Placement{
+	placeAt(ctx, t, st, store.Placement{
 		RunID: "EVICTED1", StepIndex: 0, StepName: "unit", JobName: "build", NodeHash: hashOf(1),
 		Tag: "spot", Address: "aws://" + reclaimed, InstanceID: &reclaimed,
 		GOOS: "linux", GOARCH: "arm64", Workdir: "/var/tmp/a", FSType: "btrfs",
 		FSFree: 1 << 30, Image: "golang:1.25", BytesSent: 1_000,
 	})
 
-	err := store.RecordPlacement(ctx, Placement{
+	err := st.RecordPlacement(ctx, store.Placement{
 		RunID: "EVICTED1", StepIndex: 0, StepName: "unit", JobName: "build",
 		NodeHash: hashOf(1), Slot: hashOf(1),
 		Tag: "spot", Address: "aws://" + replaced, InstanceID: &replaced,
@@ -250,7 +252,7 @@ func TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T) {
 		t.Fatalf("RecordPlacement of the re-placement: %v", err)
 	}
 
-	got := onlyPlacement(ctx, t, store, "EVICTED1")
+	got := onlyPlacement(ctx, t, st, "EVICTED1")
 
 	if got.Address != "aws://"+replaced {
 		t.Errorf("address = %q, want the machine that finished the step (%q)", got.Address, "aws://"+replaced)
@@ -276,9 +278,9 @@ func TestPlacementsReadBackInPlanOrder(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	// Recorded last-step-first, under hashes whose own order matches the order
 	// they were written — so nothing about the storage happens to be plan order.
@@ -290,14 +292,14 @@ func TestPlacementsReadBackInPlanOrder(t *testing.T) {
 		{0, hashOf(2)},
 		{1, hashOf(3)},
 	} {
-		placeAt(ctx, t, store, Placement{
+		placeAt(ctx, t, st, store.Placement{
 			RunID: "ORDER001", StepIndex: step.index, StepName: fmt.Sprintf("step-%d", step.index),
 			JobName: "build", NodeHash: step.hash, Tag: "box", Address: "ssh://box",
 			GOOS: "linux", GOARCH: "amd64", Workdir: "/tmp/w", FSType: "ext4",
 		})
 	}
 
-	placements, err := store.RunPlacements(ctx, "ORDER001")
+	placements, err := st.RunPlacements(ctx, "ORDER001")
 	if err != nil {
 		t.Fatalf("RunPlacements: %v", err)
 	}
@@ -341,20 +343,20 @@ func TestPlacementWithoutANodeIsStillKeyed(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
-	ensureRun(ctx, t, store, "HOOKRUN1", "build")
+	ensureRun(ctx, t, st, "HOOKRUN1", "build")
 
-	hook := Placement{
+	hook := store.Placement{
 		RunID: "HOOKRUN1", StepIndex: 0, StepName: "tell-someone", JobName: "build",
 		Slot: `step 0 (task "work") (on_failure hook)`,
 		Tag:  "gpu", Address: "ssh://first", GOOS: "linux", GOARCH: "arm64",
 		Workdir: "/tmp/w", FSType: "ext4",
 	}
 
-	err := store.RecordPlacement(ctx, hook)
+	err := st.RecordPlacement(ctx, hook)
 	if err != nil {
 		t.Fatalf("RecordPlacement: %v", err)
 	}
@@ -363,12 +365,12 @@ func TestPlacementWithoutANodeIsStillKeyed(t *testing.T) {
 	// on the machine it ended on.
 	hook.Address = "ssh://second"
 
-	err = store.RecordPlacement(ctx, hook)
+	err = st.RecordPlacement(ctx, hook)
 	if err != nil {
 		t.Fatalf("RecordPlacement again: %v", err)
 	}
 
-	placements, err := store.RunPlacements(ctx, "HOOKRUN1")
+	placements, err := st.RunPlacements(ctx, "HOOKRUN1")
 	if err != nil {
 		t.Fatalf("RunPlacements: %v", err)
 	}

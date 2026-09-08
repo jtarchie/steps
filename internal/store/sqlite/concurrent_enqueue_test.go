@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 // unreachable, so a same-handle test would pass while the real shape failed.
 //
 // Enqueuing is a single statement again now that a row carries no versions
-// to merge, but the store still runs read-modify-write transactions
+// to merge, but the st still runs read-modify-write transactions
 // elsewhere (RecordVersions assigns check_order from a MAX it just read), and
 // those are the shape SQLite refuses to let wait: a deferred transaction that
 // reads and then writes must UPGRADE its lock, and SQLite answers SQLITE_BUSY

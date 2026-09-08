@@ -150,7 +150,7 @@ func TestPollVersionsSurviveAReEnqueue(t *testing.T) {
 // drainQueue runs claimed jobs the way runWorker does, until the queue is
 // empty. Deliberately the real claim path rather than a direct RunJob: what
 // is under test is what survives the round trip through the queue row.
-func drainQueue(ctx context.Context, t *testing.T, cfg *config.Config, st *store.Store) {
+func drainQueue(ctx context.Context, t *testing.T, cfg *config.Config, st store.Store) {
 	t.Helper()
 
 	provider, err := workspace.NewProvider(nil, false)

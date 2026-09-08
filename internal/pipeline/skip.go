@@ -14,7 +14,7 @@ import (
 // prior succeeded job_runs row — batched into one query (per
 // Store.HasSucceededBatch) instead of one per chain. An Unskippable chain is
 // never even asked about; it stays false.
-func computeChainSkippable(ctx context.Context, st *store.Store, jobName string, chains []merkle.Chain) ([]bool, error) {
+func computeChainSkippable(ctx context.Context, st store.Store, jobName string, chains []merkle.Chain) ([]bool, error) {
 	toCheck := make([]string, 0, len(chains))
 
 	for _, chain := range chains {
@@ -48,7 +48,7 @@ func computeChainSkippable(ctx context.Context, st *store.Store, jobName string,
 // (AND-rollup), which correctly forces get/task ancestors of an
 // unskippable branch to execute even if a sibling branch is independently
 // skippable.
-func buildSkippableIndex(ctx context.Context, st *store.Store, jobName string, chains []merkle.Chain) (map[string]bool, error) {
+func buildSkippableIndex(ctx context.Context, st store.Store, jobName string, chains []merkle.Chain) (map[string]bool, error) {
 	chainSkippable, err := computeChainSkippable(ctx, st, jobName, chains)
 	if err != nil {
 		return nil, fmt.Errorf("job %q: %w", jobName, err)

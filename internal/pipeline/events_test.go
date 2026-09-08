@@ -12,6 +12,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -208,7 +209,7 @@ func countSkips(t *testing.T, collected []events.Event) int {
 
 // eventFixture builds a two-task pipeline with its store and workspace
 // provider — everything RunJob needs and nothing the assertions care about.
-func eventFixture(t *testing.T) (*config.Config, *config.Job, *store.Store, workspace.Provider) {
+func eventFixture(t *testing.T) (*config.Config, *config.Job, store.Store, workspace.Provider) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -232,7 +233,7 @@ jobs:
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -345,7 +346,7 @@ func runFixturePipeline(t *testing.T, yaml string, wantFailure bool) []events.Ev
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

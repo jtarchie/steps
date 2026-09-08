@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
-	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // runIDsOf reads back the run ids one pipeline recorded in a shared file —
@@ -23,7 +23,7 @@ import (
 func runIDsOf(t *testing.T, state, name string) []string {
 	t.Helper()
 
-	st, err := store.OpenStore(state, name)
+	st, err := sqlite.OpenStore(state, name)
 	if err != nil {
 		t.Fatalf("open shared store as %s: %v", name, err)
 	}
@@ -255,7 +255,7 @@ func TestRunsAcrossMissingStateCreatesNothing(t *testing.T) {
 func TestRunsAcrossPipelineWithNothingRecorded(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "shared.db")
 
-	st, err := store.OpenStore(state, "never-run")
+	st, err := sqlite.OpenStore(state, "never-run")
 	if err != nil {
 		t.Fatalf("open state store: %v", err)
 	}

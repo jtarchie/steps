@@ -20,7 +20,7 @@ type stepRunner struct {
 	cfg     *config.Config
 	jobName string
 	bw      workspace.BuildWorkspace
-	st      *store.Store
+	st      store.Store
 }
 
 func (r stepRunner) withBuild(bw workspace.BuildWorkspace) stepRunner {

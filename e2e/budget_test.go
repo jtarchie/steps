@@ -9,6 +9,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // budgetPipeline renders a one-agent pipeline with an optional agent budget,
@@ -182,7 +183,7 @@ func TestAgentUsageIsPersisted(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	st, err := store.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
+	st, err := sqlite.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +215,7 @@ func TestAgentUsageIsPersisted(t *testing.T) {
 
 // assertRecordedStepUsage checks the per-step row behind the rollup: the
 // metadata is what makes a token count actionable afterwards.
-func assertRecordedStepUsage(t *testing.T, st *store.Store, runID string) {
+func assertRecordedStepUsage(t *testing.T, st store.Store, runID string) {
 	t.Helper()
 
 	usage, err := st.RunUsage(context.Background(), runID)
@@ -283,7 +284,7 @@ jobs:
 		t.Fatalf("run: %v", err)
 	}
 
-	st, err := store.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
+	st, err := sqlite.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +317,7 @@ jobs:
 // assertCellsNamedByCoordinate checks each cell is recorded under its own
 // label, which is what makes a cost report say WHICH reviewer was expensive
 // rather than only that one was.
-func assertCellsNamedByCoordinate(t *testing.T, st *store.Store, runID string) {
+func assertCellsNamedByCoordinate(t *testing.T, st store.Store, runID string) {
 	t.Helper()
 
 	usage, err := st.RunUsage(context.Background(), runID)

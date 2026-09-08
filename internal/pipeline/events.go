@@ -25,7 +25,7 @@ import (
 // watching: a job started from a terminal and the same job started from the
 // UI have to leave the same record, or "open the run that failed last night"
 // works only for runs that were being watched at the time.
-func StoreSink(st *store.Store) func(events.Event) {
+func StoreSink(st store.Store) func(events.Event) {
 	return func(event events.Event) {
 		err := st.AppendRunEvent(context.Background(), store.RunEventRow{
 			RunID:        event.RunID,
@@ -57,7 +57,7 @@ func StoreSink(st *store.Store) func(events.Event) {
 //
 // The returned func must be called when the run ends: it drains the sink so
 // the last events land before the process moves on.
-func attachEventBus(ctx context.Context, st *store.Store) (context.Context, func()) {
+func attachEventBus(ctx context.Context, st store.Store) (context.Context, func()) {
 	if events.FromContext(ctx) != nil {
 		return ctx, func() {}
 	}

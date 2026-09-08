@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 // The columns where NULL and a value mean different things.
 
@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestRecordNodeStoresWhatItWasGiven covers three inversions mutation testing
@@ -23,14 +25,14 @@ func TestRecordNodeStoresWhatItWasGiven(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	root := strings.Repeat("a", 64)
 	child := strings.Repeat("b", 64)
 
-	err := store.RecordNode(ctx, NodeRecord{
+	err := st.RecordNode(ctx, store.NodeRecord{
 		Hash: root, Kind: "get", StepIndex: 0, Resource: "mentions",
 		Content: map[string]any{"body": "the first step of the chain"},
 	}, "build", "succeeded", nil, nil)
@@ -38,7 +40,7 @@ func TestRecordNodeStoresWhatItWasGiven(t *testing.T) {
 		t.Fatalf("RecordNode root: %v", err)
 	}
 
-	err = store.RecordNode(ctx, NodeRecord{
+	err = st.RecordNode(ctx, store.NodeRecord{
 		Hash: child, ParentHash: root, Kind: "task", StepIndex: 1, Resource: "compile",
 		Content: map[string]any{"body": "the second"},
 	}, "build", "succeeded", map[string]any{"output": "built"}, nil)
@@ -46,7 +48,7 @@ func TestRecordNodeStoresWhatItWasGiven(t *testing.T) {
 		t.Fatalf("RecordNode child: %v", err)
 	}
 
-	rows, err := store.NodesByHash(ctx, []string{root, child})
+	rows, err := st.NodesByHash(ctx, []string{root, child})
 	if err != nil {
 		t.Fatalf("NodesByHash: %v", err)
 	}

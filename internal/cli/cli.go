@@ -39,6 +39,7 @@ import (
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/trigger"
 	"github.com/jtarchie/steps/internal/web"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -97,7 +98,7 @@ type RunCmd struct {
 // because preparing it needs the job's plan to turn --from into a position —
 // see applyReplay, which runs after selectJob.
 func (r *RunCmd) applyContinuation(
-	ctx context.Context, st *store.Store, provider workspace.Provider, jobName string,
+	ctx context.Context, st store.Store, provider workspace.Provider, jobName string,
 ) (context.Context, string, error) {
 	if r.Resume != "" && r.Replay != "" {
 		return ctx, "", errors.New("--resume and --replay cannot be combined: one continues a failed run in place, the other forks a recorded one from a step you name")
@@ -124,7 +125,7 @@ func (r *RunCmd) applyContinuation(
 
 // applyReplay forks a recorded run once the job is known.
 func (r *RunCmd) applyReplay(
-	ctx context.Context, st *store.Store, provider workspace.Provider, cfg *config.Config, job *config.Job,
+	ctx context.Context, st store.Store, provider workspace.Provider, cfg *config.Config, job *config.Job,
 ) (context.Context, error) {
 	if r.Replay == "" {
 		return ctx, nil
@@ -507,7 +508,7 @@ func (p *PlanCmd) Run() error {
 		return err
 	}
 
-	st, err := store.OpenStore(StatePath(p.Pipeline, p.State), resolvePipelineName(p.Pipeline, p.Name))
+	st, err := sqlite.OpenStore(StatePath(p.Pipeline, p.State), resolvePipelineName(p.Pipeline, p.Name))
 	if err != nil {
 		return fmt.Errorf("could not open state store: %w", err)
 	}
@@ -736,7 +737,7 @@ func nothingRecorded(pipelinePath string, flags StateFlags, answer string) bool 
 	// creates the database before it fills it in, so a reader arriving in
 	// that window must not report the operator's brand new database as one
 	// written by a different version of steps.
-	if store.HasNothingRecorded(path) {
+	if sqlite.HasNothingRecorded(path) {
 		fmt.Println(answer)
 
 		return true
@@ -755,11 +756,11 @@ func noRunsYet(pipelinePath string) string {
 // usable store or an error, never both nil — call nothingRecorded first.
 //
 // OpenExisting, not OpenStore: asking must not register the pipeline it is
-// asking about — see store.OpenExisting.
-func openRecorded(pipelinePath string, flags StateFlags) (*store.Store, func(), error) {
+// asking about — see sqlite.OpenExisting.
+func openRecorded(pipelinePath string, flags StateFlags) (store.Store, func(), error) {
 	path := StatePath(pipelinePath, flags.State)
 
-	st, err := store.OpenExisting(path, resolvePipelineName(pipelinePath, flags.Name))
+	st, err := sqlite.OpenExisting(path, resolvePipelineName(pipelinePath, flags.Name))
 	if err != nil {
 		return nil, nil, fmt.Errorf("could not open state store: %w", err)
 	}
@@ -801,7 +802,7 @@ func (r *RunsListCmd) runAcross() error {
 		return nil
 	}
 
-	reader, err := store.OpenReader(r.State)
+	reader, err := sqlite.OpenReader(r.State)
 	if errors.Is(err, store.ErrNoState) {
 		// Created but not yet filled in — a writer is mid-first-open. Nothing
 		// is recorded, which is an answer, not a file to delete.
@@ -879,7 +880,7 @@ func printPipelines(pipelines []store.PipelineRow) error {
 // timestamp means "last time this content ran" rather than "a build
 // happened". Across pipelines the useful row is a real run with an id, which
 // is the handle for going and asking that pipeline about it.
-func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader *store.Reader, pipelines []store.PipelineRow) error {
+func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader store.Reader, pipelines []store.PipelineRow) error {
 	names := make([]string, 0, len(pipelines))
 	for _, pipeline := range pipelines {
 		names = append(names, pipeline.Name)
@@ -929,7 +930,7 @@ func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader *store.Reader,
 // depending on whether a pipeline was named is a command nobody can reason
 // about. The error text moves one command along, to `steps runs steps`, which
 // reports it per step — where the answer to "why did it fail" actually is.
-func (r *RunsListCmd) printJobRuns(ctx context.Context, st *store.Store) error {
+func (r *RunsListCmd) printJobRuns(ctx context.Context, st store.Store) error {
 	rows, err := st.ListRuns(ctx, r.Job, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read runs: %w", err)
@@ -967,7 +968,7 @@ func (r *RunsListCmd) printJobRuns(ctx context.Context, st *store.Store) error {
 // handle its runs are recorded against. A command that only READS history
 // never comes through there and records no revision, which is right — it
 // resolved no configuration.
-func RecordRevision(ctx context.Context, st *store.Store, cfg *config.Config) error {
+func RecordRevision(ctx context.Context, st store.Store, cfg *config.Config) error {
 	if !cfg.Revision.Recorded() {
 		return nil
 	}
@@ -1001,7 +1002,7 @@ func shortConfig(sha string) string {
 	return sha[:shown]
 }
 
-func (r *RunsStepsCmd) printSteps(ctx context.Context, st *store.Store) error {
+func (r *RunsStepsCmd) printSteps(ctx context.Context, st store.Store) error {
 	rows, err := st.ListNodes(ctx, r.Job, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read steps: %w", err)
@@ -1024,7 +1025,7 @@ func (r *RunsStepsCmd) printSteps(ctx context.Context, st *store.Store) error {
 	return flush(writer)
 }
 
-func (r *RunsQueueCmd) printQueue(ctx context.Context, st *store.Store) error {
+func (r *RunsQueueCmd) printQueue(ctx context.Context, st store.Store) error {
 	rows, err := st.ListTriggerQueue(ctx, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read the trigger queue: %w", err)
@@ -1582,7 +1583,7 @@ func Run(args []string) error {
 // existed).
 func setup(
 	cfg *config.Config, pipelinePath string, flags StateFlags, exec ExecFlags,
-) (*store.Store, workspace.Provider, func(), error) {
+) (store.Store, workspace.Provider, func(), error) {
 	name := resolvePipelineName(pipelinePath, flags.Name)
 
 	// The identity the caller loaded the Config under has to be the identity
@@ -1599,7 +1600,7 @@ func setup(
 			cfg.Name, name)
 	}
 
-	st, err := store.OpenStore(StatePath(pipelinePath, flags.State), name)
+	st, err := sqlite.OpenStore(StatePath(pipelinePath, flags.State), name)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("could not open state store: %w", err)
 	}
@@ -1667,7 +1668,7 @@ func setup(
 // are truth in. A pipeline with no durable workspace.root: has no step cache
 // to mirror — that half is warned about rather than refused, because the
 // flag's other consumer, a placed step's data plane, works without one.
-func attachArtifactStore(provider workspace.Provider, st *store.Store, raw string) error {
+func attachArtifactStore(provider workspace.Provider, st store.Store, raw string) error {
 	if raw == "" {
 		return nil
 	}
@@ -2026,7 +2027,7 @@ func (j *JobsResumeCmd) Run() error {
 // resumeJob takes a job back out of the paused state, refusing a name the
 // pipeline does not have — a typo would otherwise report success while
 // resuming nothing.
-func resumeJob(ctx context.Context, cfg *config.Config, st *store.Store, name string) error {
+func resumeJob(ctx context.Context, cfg *config.Config, st store.Store, name string) error {
 	_, err := cfg.FindJob(name)
 	if err != nil {
 		return fmt.Errorf("cannot resume: %w", err)
@@ -2686,7 +2687,7 @@ func currentUser() string {
 //
 // It also builds no workspace provider, which setup did — a listing that
 // creates and removes a temp root to print three rows.
-func openStore(pipelinePath string, flags StateFlags) (*store.Store, func(), error) {
+func openStore(pipelinePath string, flags StateFlags) (store.Store, func(), error) {
 	return openRecorded(pipelinePath, flags)
 }
 
@@ -2697,7 +2698,7 @@ func openStore(pipelinePath string, flags StateFlags) (*store.Store, func(), err
 // `--resume <id>` alone is enough — asking an operator to remember which job a
 // run id belonged to would make the id useless on its own.
 func applyResume(
-	ctx context.Context, st *store.Store, provider workspace.Provider, runID, jobName string,
+	ctx context.Context, st store.Store, provider workspace.Provider, runID, jobName string,
 ) (context.Context, string, error) {
 	resumable, ok := provider.(workspace.Resumable)
 	if !ok {
@@ -2729,7 +2730,7 @@ func applyResume(
 // The cache column is the one worth having: it is the only place prompt
 // caching reports whether it did anything, and a run that suddenly drops from
 // 60% to 0% is the visible half of a bill that doubled.
-func (r *RunsCostCmd) printCostTotals(ctx context.Context, st *store.Store) error {
+func (r *RunsCostCmd) printCostTotals(ctx context.Context, st store.Store) error {
 	totals, err := st.RunCostTotals(ctx, r.Limit)
 	if err != nil {
 		return fmt.Errorf("could not read usage: %w", err)
@@ -2769,7 +2770,7 @@ func stateNote(state string) string {
 }
 
 // printRunCost breaks one run down per agent step.
-func (r *RunsCostCmd) printRunCost(ctx context.Context, st *store.Store) error {
+func (r *RunsCostCmd) printRunCost(ctx context.Context, st store.Store) error {
 	usage, err := st.RunUsage(ctx, r.RunID)
 	if err != nil {
 		return fmt.Errorf("could not read usage: %w", err)
@@ -2808,7 +2809,7 @@ func (r *RunsCostCmd) printRunCost(ctx context.Context, st *store.Store) error {
 // spelling of what a machine was, so the browser and the terminal cannot
 // disagree about it. They did — the terminal's copy never learned which
 // filesystems are memory.
-func (r *RunsWhereCmd) printPlacements(ctx context.Context, st *store.Store) error {
+func (r *RunsWhereCmd) printPlacements(ctx context.Context, st store.Store) error {
 	run, ok, err := r.placementRun(ctx, st)
 	if err != nil || !ok {
 		return err
@@ -2866,7 +2867,7 @@ func (r *RunsWhereCmd) printPlacements(ctx context.Context, st *store.Store) err
 // this state file — reads back as zero rows, and the caller would print that
 // as a run that ran every step here: a positive claim about a run this
 // pipeline has never seen.
-func (r *RunsWhereCmd) placementRun(ctx context.Context, st *store.Store) (store.RunRow, bool, error) {
+func (r *RunsWhereCmd) placementRun(ctx context.Context, st store.Store) (store.RunRow, bool, error) {
 	if r.RunID != "" {
 		run, ok, err := st.FindRunRow(ctx, r.RunID)
 		if err != nil {

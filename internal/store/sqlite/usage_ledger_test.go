@@ -1,8 +1,10 @@
-package store
+package sqlite
 
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestAgentUsageAccumulatesAcrossAttempts pins agent_usage as a LEDGER.
@@ -35,7 +37,7 @@ func TestAgentUsageAccumulatesAcrossAttempts(t *testing.T) {
 	}
 
 	for range 4 {
-		err = st.RecordAgentUsage(ctx, AgentUsage{
+		err = st.RecordAgentUsage(ctx, store.AgentUsage{
 			RunID: "r1", StepIndex: 0, StepName: "writer", JobName: "j",
 			NodeHash: "same-hash", Prompt: 150, Completion: 50, Total: 200,
 			ModelServed: "m", FinishReason: "stop",
@@ -58,7 +60,7 @@ func TestAgentUsageAccumulatesAcrossAttempts(t *testing.T) {
 	// above — the ledger is per node, summed per run.
 	mustRecordNode(t, st, "j", "other-hash")
 
-	err = st.RecordAgentUsage(ctx, AgentUsage{
+	err = st.RecordAgentUsage(ctx, store.AgentUsage{
 		RunID: "r1", StepIndex: 1, StepName: "editor", JobName: "j",
 		NodeHash: "other-hash", Total: 100,
 	})
@@ -107,7 +109,7 @@ func TestAgentUsageCostSurvivesAnUnpricedAttempt(t *testing.T) {
 	priced := 0.25
 
 	for _, cost := range []*float64{&priced, nil} {
-		err = st.RecordAgentUsage(ctx, AgentUsage{
+		err = st.RecordAgentUsage(ctx, store.AgentUsage{
 			RunID: "r1", StepName: "writer", JobName: "j", NodeHash: "node",
 			Total: 100, CostUSD: cost,
 		})
@@ -159,7 +161,7 @@ func TestAgentUsageNeverPricedStaysNull(t *testing.T) {
 	}
 
 	for range 2 {
-		err = st.RecordAgentUsage(ctx, AgentUsage{
+		err = st.RecordAgentUsage(ctx, store.AgentUsage{
 			RunID: "r1", StepName: "editor", JobName: "j", NodeHash: "node", Total: 50,
 		})
 		if err != nil {
@@ -179,7 +181,7 @@ func TestAgentUsageNeverPricedStaysNull(t *testing.T) {
 
 // assertAccumulatedRow checks the counts summed and the descriptive fields —
 // which cannot be summed — took the newest attempt's value.
-func assertAccumulatedRow(t *testing.T, row AgentUsage) {
+func assertAccumulatedRow(t *testing.T, row store.AgentUsage) {
 	t.Helper()
 
 	if row.Total != 800 || row.Prompt != 600 || row.Completion != 200 {

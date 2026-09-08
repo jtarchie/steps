@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -142,7 +142,7 @@ func TestJobsResumeHonoursTheNameOverride(t *testing.T) {
 	path := flagFixture(t)
 	state := filepath.Join(t.TempDir(), "shared.db")
 
-	st, err := store.OpenStore(state, "prod")
+	st, err := sqlite.OpenStore(state, "prod")
 	if err != nil {
 		t.Fatalf("open state store: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestJobsResumeHonoursTheNameOverride(t *testing.T) {
 		t.Errorf("output does not say what was resumed:\n%s", out)
 	}
 
-	reopened, err := store.OpenStore(state, "prod")
+	reopened, err := sqlite.OpenStore(state, "prod")
 	if err != nil {
 		t.Fatalf("reopen state store: %v", err)
 	}

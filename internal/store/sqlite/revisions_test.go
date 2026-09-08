@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // pipelineSource is a plausible pipeline YAML of a few kilobytes, which is
@@ -23,27 +25,27 @@ func TestRecordRevisionInternsOneRowPerConfiguration(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	for range 5 {
-		err := store.RecordRevision(ctx, "sha-one", pipelineSource(1))
+		err := st.RecordRevision(ctx, "sha-one", pipelineSource(1))
 		if err != nil {
 			t.Fatalf("RecordRevision: %v", err)
 		}
 	}
 
-	if rows := countRows(ctx, t, store, "pipeline_revisions"); rows != 1 {
+	if rows := countRows(ctx, t, st, "pipeline_revisions"); rows != 1 {
 		t.Errorf("one configuration loaded five times recorded %d rows, want 1", rows)
 	}
 
-	err := store.RecordRevision(ctx, "sha-two", pipelineSource(2))
+	err := st.RecordRevision(ctx, "sha-two", pipelineSource(2))
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
 
-	if rows := countRows(ctx, t, store, "pipeline_revisions"); rows != 2 {
+	if rows := countRows(ctx, t, st, "pipeline_revisions"); rows != 2 {
 		t.Errorf("an edited configuration recorded %d rows in total, want 2", rows)
 	}
 }
@@ -59,12 +61,12 @@ func TestRunsRecordTheRevisionTheyWereGiven(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	for _, sha := range []string{"sha-one", "sha-two"} {
-		err := store.RecordRevision(ctx, sha, pipelineSource(1))
+		err := st.RecordRevision(ctx, sha, pipelineSource(1))
 		if err != nil {
 			t.Fatalf("RecordRevision(%s): %v", sha, err)
 		}
@@ -72,19 +74,19 @@ func TestRunsRecordTheRevisionTheyWereGiven(t *testing.T) {
 
 	// Started under the OLDER one, with the newer already interned — the
 	// daemon reloaded while this run was getting under way.
-	err := store.StartRun(ctx, "run-one", "build", "/tmp/ws-one", "sha-one")
+	err := st.StartRun(ctx, "run-one", "build", "/tmp/ws-one", "sha-one")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = store.StartRun(ctx, "run-two", "build", "/tmp/ws-two", "sha-two")
+	err = st.StartRun(ctx, "run-two", "build", "/tmp/ws-two", "sha-two")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
 	got := map[string]string{}
 
-	rows, err := store.ListRuns(ctx, "build", 10)
+	rows, err := st.ListRuns(ctx, "build", 10)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
@@ -108,33 +110,33 @@ func TestResumeRecordsTheConfigItResumesUnder(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	for _, sha := range []string{"sha-broken", "sha-fixed"} {
-		err := store.RecordRevision(ctx, sha, pipelineSource(1))
+		err := st.RecordRevision(ctx, sha, pipelineSource(1))
 		if err != nil {
 			t.Fatalf("RecordRevision(%s): %v", sha, err)
 		}
 	}
 
-	err := store.StartRun(ctx, "run-one", "build", "/tmp/ws", "sha-broken")
+	err := st.StartRun(ctx, "run-one", "build", "/tmp/ws", "sha-broken")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = store.FinishRun(ctx, "run-one", "failed")
+	err = st.FinishRun(ctx, "run-one", "failed")
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
 
-	err = store.ResumeRun(ctx, "run-one", "/tmp/ws", "sha-fixed")
+	err = st.ResumeRun(ctx, "run-one", "/tmp/ws", "sha-fixed")
 	if err != nil {
 		t.Fatalf("ResumeRun: %v", err)
 	}
 
-	rows, err := store.ListRuns(ctx, "build", 10)
+	rows, err := st.ListRuns(ctx, "build", 10)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
@@ -151,16 +153,16 @@ func TestRunWithNoRecordedConfigurationSaysSo(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
-	err := store.StartRun(ctx, "run-one", "build", "/tmp/ws-one", "")
+	err := st.StartRun(ctx, "run-one", "build", "/tmp/ws-one", "")
 	if err != nil {
 		t.Fatalf("StartRun with no configuration recorded: %v", err)
 	}
 
-	rows, err := store.ListRuns(ctx, "build", 10)
+	rows, err := st.ListRuns(ctx, "build", 10)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
@@ -182,9 +184,9 @@ func TestRevisionsAreBoundedByRunRetention(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	const (
 		keep    = 10
@@ -195,9 +197,9 @@ func TestRevisionsAreBoundedByRunRetention(t *testing.T) {
 	for build := 1; build <= builds; build++ {
 		// syntheticBuild records a configuration of its own per build, which
 		// is the worst case a reloading daemon produces.
-		syntheticBuild(ctx, t, store, jobName, build)
+		syntheticBuild(ctx, t, st, jobName, build)
 
-		err := store.Prune(ctx, Retention{JobName: jobName, Runs: keep}, "")
+		err := st.Prune(ctx, store.Retention{JobName: jobName, Runs: keep}, "")
 		if err != nil {
 			t.Fatalf("Prune: %v", err)
 		}
@@ -205,7 +207,7 @@ func TestRevisionsAreBoundedByRunRetention(t *testing.T) {
 
 	// One per retained run, and never more: the run cap is the only bound,
 	// which is the whole reason there is no config_history: setting.
-	if rows := countRows(ctx, t, store, "pipeline_revisions"); rows > keep {
+	if rows := countRows(ctx, t, st, "pipeline_revisions"); rows > keep {
 		t.Errorf("%d configurations survive %d builds under a run cap of %d; retention is not reaching them",
 			rows, builds, keep)
 	}
@@ -220,9 +222,9 @@ func TestTheNewestRevisionSurvivesRetention(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	const (
 		keep    = 2
@@ -230,27 +232,27 @@ func TestTheNewestRevisionSurvivesRetention(t *testing.T) {
 	)
 
 	for build := 1; build <= 5; build++ {
-		syntheticBuild(ctx, t, store, jobName, build)
+		syntheticBuild(ctx, t, st, jobName, build)
 	}
 
 	// The swap: loaded, and referenced by nothing that has run yet.
-	err := store.RecordRevision(ctx, "sha-current", pipelineSource(2))
+	err := st.RecordRevision(ctx, "sha-current", pipelineSource(2))
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
 
 	// The build that started under the old configuration, finishing now.
-	err = store.Prune(ctx, Retention{JobName: jobName, Runs: keep}, "")
+	err = st.Prune(ctx, store.Retention{JobName: jobName, Runs: keep}, "")
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	err = store.StartRun(ctx, "run-after-prune", jobName, "/tmp/ws-after", "sha-current")
+	err = st.StartRun(ctx, "run-after-prune", jobName, "/tmp/ws-after", "sha-current")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	rows, err := store.ListRuns(ctx, jobName, 10)
+	rows, err := st.ListRuns(ctx, jobName, 10)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
@@ -271,24 +273,24 @@ func TestRevisionsAreBoundedWithoutAnyRunsBeingReaped(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	for edit := 1; edit <= 50; edit++ {
-		err := store.RecordRevision(ctx, fmt.Sprintf("sha-%03d", edit), pipelineSource(edit))
+		err := st.RecordRevision(ctx, fmt.Sprintf("sha-%03d", edit), pipelineSource(edit))
 		if err != nil {
 			t.Fatalf("RecordRevision: %v", err)
 		}
 
-		err = store.Prune(ctx, Retention{}, "")
+		err = st.Prune(ctx, store.Retention{}, "")
 		if err != nil {
 			t.Fatalf("Prune: %v", err)
 		}
 	}
 
 	// One: the newest. Nothing ran, so nothing else is reachable.
-	if rows := countRows(ctx, t, store, "pipeline_revisions"); rows != 1 {
+	if rows := countRows(ctx, t, st, "pipeline_revisions"); rows != 1 {
 		t.Errorf("%d configurations survive 50 saves that ran nothing, want 1", rows)
 	}
 }
@@ -302,23 +304,23 @@ func TestRevisionsAreBoundedWhenRunsAreUnlimited(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	for edit := 1; edit <= 20; edit++ {
-		err := store.RecordRevision(ctx, fmt.Sprintf("sha-%03d", edit), pipelineSource(edit))
+		err := st.RecordRevision(ctx, fmt.Sprintf("sha-%03d", edit), pipelineSource(edit))
 		if err != nil {
 			t.Fatalf("RecordRevision: %v", err)
 		}
 
-		err = store.Prune(ctx, Retention{JobName: "build", Runs: 0}, "")
+		err = st.Prune(ctx, store.Retention{JobName: "build", Runs: 0}, "")
 		if err != nil {
 			t.Fatalf("Prune: %v", err)
 		}
 	}
 
-	if rows := countRows(ctx, t, store, "pipeline_revisions"); rows != 1 {
+	if rows := countRows(ctx, t, st, "pipeline_revisions"); rows != 1 {
 		t.Errorf("%d configurations survive under run_history: 0, want 1", rows)
 	}
 }
@@ -393,25 +395,25 @@ func TestARevertedConfigurationSurvivesTheSweep(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	// The original, and a run under it: without one, the first sweep reclaims
 	// it and the revert mints a fresh id, which is the case that already works.
-	err := store.RecordRevision(ctx, "sha-original", pipelineSource(1))
+	err := st.RecordRevision(ctx, "sha-original", pipelineSource(1))
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
 
-	err = store.StartRun(ctx, "run-one", "build", "/tmp/ws", "sha-original")
+	err = st.StartRun(ctx, "run-one", "build", "/tmp/ws", "sha-original")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
 	// The edit, then the revert. The daemon is serving sha-original again.
 	for _, sha := range []string{"sha-edited", "sha-original"} {
-		err = store.RecordRevision(ctx, sha, pipelineSource(2))
+		err = st.RecordRevision(ctx, sha, pipelineSource(2))
 		if err != nil {
 			t.Fatalf("RecordRevision(%s): %v", sha, err)
 		}
@@ -419,22 +421,22 @@ func TestARevertedConfigurationSurvivesTheSweep(t *testing.T) {
 
 	// The run that referenced it ages out, which is what makes the exemption
 	// the only thing left holding the served configuration in the table.
-	err = store.Prune(ctx, Retention{JobName: "build", Runs: 0}, "")
+	err = st.Prune(ctx, store.Retention{JobName: "build", Runs: 0}, "")
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	_, err = store.db.ExecContext(ctx, `DELETE FROM runs WHERE id = 'run-one'`)
+	_, err = st.db.ExecContext(ctx, `DELETE FROM runs WHERE id = 'run-one'`)
 	if err != nil {
 		t.Fatalf("delete run: %v", err)
 	}
 
-	err = store.Prune(ctx, Retention{}, "")
+	err = st.Prune(ctx, store.Retention{}, "")
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	_, found, err := store.FindRevision(ctx, "sha-original")
+	_, found, err := st.FindRevision(ctx, "sha-original")
 	if err != nil {
 		t.Fatalf("FindRevision: %v", err)
 	}
@@ -452,28 +454,28 @@ func TestResumeKeepsTheConfigurationItCannotName(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
-	err := store.RecordRevision(ctx, "sha-recorded", pipelineSource(1))
+	err := st.RecordRevision(ctx, "sha-recorded", pipelineSource(1))
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
 
-	err = store.StartRun(ctx, "run-one", "build", "/tmp/ws", "sha-recorded")
+	err = st.StartRun(ctx, "run-one", "build", "/tmp/ws", "sha-recorded")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
 	// A sha this pipeline has no row for: swept, or a caller that loaded no
 	// file at all.
-	err = store.ResumeRun(ctx, "run-one", "/tmp/ws", "sha-nobody-recorded")
+	err = st.ResumeRun(ctx, "run-one", "/tmp/ws", "sha-nobody-recorded")
 	if err != nil {
 		t.Fatalf("ResumeRun: %v", err)
 	}
 
-	rows, err := store.ListRuns(ctx, "build", 10)
+	rows, err := st.ListRuns(ctx, "build", 10)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
@@ -492,9 +494,9 @@ func TestATrimmedChainCacheIsCommitted(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	const (
 		keep   = 10
@@ -502,19 +504,19 @@ func TestATrimmedChainCacheIsCommitted(t *testing.T) {
 	)
 
 	for chain := range chains {
-		err := store.RecordJobRun(ctx, "build", fmt.Sprintf("root-%04d", chain), "succeeded", nil)
+		err := st.RecordJobRun(ctx, "build", fmt.Sprintf("root-%04d", chain), "succeeded", nil)
 		if err != nil {
 			t.Fatalf("RecordJobRun: %v", err)
 		}
 	}
 
 	// No runs and no nodes, so this pass is the only one with anything to do.
-	err := store.Prune(ctx, Retention{JobName: "build", Runs: keep}, "")
+	err := st.Prune(ctx, store.Retention{JobName: "build", Runs: keep}, "")
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	if rows := countRows(ctx, t, store, "job_runs"); rows != keep*chainsPerRetainedRun {
+	if rows := countRows(ctx, t, st, "job_runs"); rows != keep*chainsPerRetainedRun {
 		t.Errorf("%d chain cache entries survive a cap of %d — the trim was rolled back",
 			rows, keep*chainsPerRetainedRun)
 	}

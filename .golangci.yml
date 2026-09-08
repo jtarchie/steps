@@ -151,6 +151,10 @@ linters:
             # through a pipeline that, on that machine, does not exist.
             - "github.com/jtarchie/steps/internal/shim"
             - "github.com/jtarchie/steps/internal/store"
+            # cli is where a driver is CHOSEN: it turns the state flag into an
+            # open sqlite database and hands the store.Store down. Nothing
+            # below it names a driver.
+            - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/trigger"
             # web is the UI front end: the CLI constructs it and hands it
             # loaded pipelines, exactly as it does trigger.Watch. events is the
@@ -175,6 +179,9 @@ linters:
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/pipeline"
             - "github.com/jtarchie/steps/internal/store"
+            # the suite reads state databases back to check what a run
+            # recorded, so it opens the driver the CLI it drives would have.
+            - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/web"
             # schema_test.go validates every shipped example against
@@ -277,12 +284,27 @@ linters:
             - "**/internal/outcome/**"
           allow:
             - "$gostd"
+        # store is the CONTRACT: row types, error sentinels, and the Store and
+        # Reader interfaces every driver implements. Stdlib only, and that is
+        # the point — it cannot import a driver without a cycle, which is why
+        # the scheme-to-driver switch lives in internal/cli instead.
         Store:
           files:
             - "**/internal/store/**"
+            - "!**/internal/store/sqlite/**"
+          allow:
+            - "$gostd"
+        # store/sqlite is the sqlite driver: the only package here that holds a
+        # sqlite connection, the way dockerapi is the only one that holds an
+        # engine client. It owns its schema and its SQL end to end rather than
+        # sharing a dialect with a future second driver.
+        StoreSQLite:
+          files:
+            - "**/internal/store/sqlite/**"
           allow:
             - "$gostd"
             - "modernc.org/sqlite"
+            - "github.com/jtarchie/steps/internal/store"
         # config is the shared data-model root: it must not depend on any
         # other internal package (see CLAUDE.md's package-seam plan).
         Config:
@@ -535,6 +557,11 @@ linters:
             - "github.com/jtarchie/steps/internal/retry"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/store"
+            # store/sqlite is test-only here: a test needs a concrete driver
+            # to open a database with. Production code in this package takes
+            # the store.Store it was handed — internal/cli is the only package
+            # that chooses one.
+            - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/template"
             - "github.com/jtarchie/steps/internal/workspace"
         # pipeline is the top-level orchestrator: it composes every other
@@ -563,6 +590,11 @@ linters:
             - "github.com/jtarchie/steps/internal/retry"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/store"
+            # store/sqlite is test-only here: a test needs a concrete driver
+            # to open a database with. Production code in this package takes
+            # the store.Store it was handed — internal/cli is the only package
+            # that chooses one.
+            - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/workspace"
         # trigger polls resources with any get/trigger:true step and runs
         # affected jobs via pipeline.RunJob — the cross-job counterpart to
@@ -586,6 +618,11 @@ linters:
             - "github.com/jtarchie/steps/internal/pipeline"
             - "github.com/jtarchie/steps/internal/resource"
             - "github.com/jtarchie/steps/internal/store"
+            # store/sqlite is test-only here: a test needs a concrete driver
+            # to open a database with. Production code in this package takes
+            # the store.Store it was handed — internal/cli is the only package
+            # that chooses one.
+            - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/workspace"
         # web serves the UI. Like trigger, it sits above pipeline and reaches
         # execution territory only through pipeline.RunJob — never into
@@ -632,4 +669,9 @@ linters:
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/pipeline"
             - "github.com/jtarchie/steps/internal/store"
+            # store/sqlite is test-only here: a test needs a concrete driver
+            # to open a database with. Production code in this package takes
+            # the store.Store it was handed — internal/cli is the only package
+            # that chooses one.
+            - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/workspace"

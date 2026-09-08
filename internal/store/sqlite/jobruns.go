@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 // job_runs: the chain-level cache index. A row means "this job has already
 // run this exact content", which is what lets a rerun skip work.

@@ -12,6 +12,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // TestEndToEndAgentAskUser proves the ask_user grant end to end: the tool
@@ -517,7 +518,7 @@ jobs:
     run: "true"
 `)
 
-	st, err := store.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
+	st, err := sqlite.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
 	if err != nil {
 		t.Fatalf("open state store: %v", err)
 	}

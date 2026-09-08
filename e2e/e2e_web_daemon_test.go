@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/cli"
-	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // TestWebMaxConcurrentReachesTheDrainer.
@@ -49,7 +49,7 @@ jobs:
       until [ -f `+first+` ]; do sleep 0.05; done
 `)
 
-	st, err := store.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
+	st, err := sqlite.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
 	if err != nil {
 		t.Fatalf("open state store: %v", err)
 	}
@@ -82,7 +82,7 @@ func waitForQueueSuccess(t *testing.T, pipelinePath string, want int) {
 	deadline := time.Now().Add(40 * time.Second)
 
 	for time.Now().Before(deadline) {
-		st, err := store.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
+		st, err := sqlite.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
 		if err != nil {
 			t.Fatalf("open state store: %v", err)
 		}

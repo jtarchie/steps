@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // TestRecordRevisionSkipsAConfigThatWasNeverLoaded covers the branch every
@@ -20,7 +20,7 @@ import (
 func TestRecordRevisionSkipsAConfigThatWasNeverLoaded(t *testing.T) {
 	t.Parallel()
 
-	st, err := store.OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

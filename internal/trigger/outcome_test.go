@@ -26,7 +26,7 @@ import (
 // outcomeFixture is a one-job pipeline whose task exits with `code`, plus the
 // breaker limit to run it under. Everything else is the smallest pipeline
 // drainOne will accept.
-func outcomeFixture(t *testing.T, code, maxFailures int) (*config.Config, *store.Store, workspace.Provider) {
+func outcomeFixture(t *testing.T, code, maxFailures int) (*config.Config, store.Store, workspace.Provider) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -71,7 +71,7 @@ jobs:
 }
 
 // queueStatus is what the row this drain finished says it finished as.
-func queueStatus(t *testing.T, st *store.Store, jobName string) string {
+func queueStatus(t *testing.T, st store.Store, jobName string) string {
 	t.Helper()
 
 	rows, err := st.ListTriggerQueue(context.Background(), 10)

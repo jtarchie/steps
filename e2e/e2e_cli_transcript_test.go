@@ -23,6 +23,7 @@ import (
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // TestE2ECLIAgentPublishesItsConversation is the feature: the turns a CLI
@@ -257,10 +258,10 @@ func agentUsageFor(t *testing.T, path string) store.AgentUsage {
 
 // openStoreFor opens the state database the pipeline at path wrote, through
 // the same statePath() every other end-to-end test derives it with.
-func openStoreFor(t *testing.T, path string) *store.Store {
+func openStoreFor(t *testing.T, path string) store.Store {
 	t.Helper()
 
-	st, err := store.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
+	st, err := sqlite.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

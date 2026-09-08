@@ -654,7 +654,7 @@ type saveUsageArgs struct {
 // no job_run and no transcript, and their spend already rolls into the parent
 // step's total through the shared accumulator — giving them rows of their own
 // would double-count every job report.
-func saveAgentUsage(ctx context.Context, st *store.Store, args saveUsageArgs) {
+func saveAgentUsage(ctx context.Context, st store.Store, args saveUsageArgs) {
 	if st == nil {
 		return
 	}

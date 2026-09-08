@@ -86,7 +86,7 @@ func NewRunID() string {
 // distinction is the whole feature. An agent step is not repeatable, so
 // re-running it does not reproduce the reviewed output — it produces a
 // different one, which makes a restart lossy as well as expensive.
-func PrepareResume(ctx context.Context, st *store.Store, runID string) (context.Context, string, error) {
+func PrepareResume(ctx context.Context, st store.Store, runID string) (context.Context, string, error) {
 	run, err := findRun(ctx, st, runID)
 	if err != nil {
 		return ctx, "", err
@@ -104,7 +104,7 @@ func PrepareResume(ctx context.Context, st *store.Store, runID string) (context.
 
 // ResumeJobName is the job a recorded run belongs to, so `--resume` alone
 // selects the right one.
-func ResumeJobName(ctx context.Context, st *store.Store, runID string) (string, error) {
+func ResumeJobName(ctx context.Context, st store.Store, runID string) (string, error) {
 	run, err := findRun(ctx, st, runID)
 	if err != nil {
 		return "", err
@@ -176,7 +176,7 @@ func forced(ctx context.Context) bool {
 // is the only one that records none. The upsert is idempotent, so the common
 // case pays one statement against a row that is already there.
 func recordRunIdentity(
-	ctx context.Context, st *store.Store, resume *resumeState, jobName, workspaceRoot string, revision config.Revision,
+	ctx context.Context, st store.Store, resume *resumeState, jobName, workspaceRoot string, revision config.Revision,
 ) error {
 	if revision.Recorded() {
 		err := st.RecordRevision(ctx, revision.SHA, revision.Source)
@@ -210,7 +210,7 @@ func recordRunIdentity(
 // that cannot tell which versions it is continuing would silently select the
 // wrong ones — or none, which is the false green this whole path exists to
 // remove.
-func resumedRunInputs(ctx context.Context, st *store.Store) (map[string]map[string]bool, error) {
+func resumedRunInputs(ctx context.Context, st store.Store) (map[string]map[string]bool, error) {
 	state := resumeFrom(ctx)
 	if state == nil || !state.resuming {
 		return nil, nil //nolint:nilnil // "not a resume" is the common case, and a nil map is the right answer
@@ -232,7 +232,7 @@ func resumedRunInputs(ctx context.Context, st *store.Store) (map[string]map[stri
 // a command that cannot proceed, and the pipeline is named because run ids are
 // globally unique while the lookup is scoped — asking the wrong pipeline of a
 // shared state file is the way this fails.
-func findRun(ctx context.Context, st *store.Store, runID string) (store.RunRow, error) {
+func findRun(ctx context.Context, st store.Store, runID string) (store.RunRow, error) {
 	run, ok, err := st.FindRunRow(ctx, runID)
 	if err != nil {
 		return store.RunRow{}, fmt.Errorf("could not read run %q: %w", runID, err)

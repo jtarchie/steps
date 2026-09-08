@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 // The cache the count cap is supposed to CARRY.
 
@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestRetentionCarriesTheCacheItsCapAllows is the lower bound nothing asserted.
@@ -34,18 +36,18 @@ func TestRetentionCarriesTheCacheItsCapAllows(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	for build := 1; build <= builds; build++ {
-		syntheticBuild(ctx, t, store, "job", build)
+		syntheticBuild(ctx, t, st, "job", build)
 
 		// Chains of their own, which syntheticBuild does not record: job_runs
 		// holds one row per whole chain, and without any the cap on it is a
 		// statement about an empty table.
 		for chain := range chainsPerBuild {
-			err := store.RecordJobRun(ctx, "job",
+			err := st.RecordJobRun(ctx, "job",
 				fmt.Sprintf("%064x", build*1000+chain), "succeeded", nil)
 			if err != nil {
 				t.Fatalf("RecordJobRun: %v", err)
@@ -63,17 +65,17 @@ func TestRetentionCarriesTheCacheItsCapAllows(t *testing.T) {
 		t.Fatalf("the fixture never exceeds the chain cap (%d <= %d)", builds*chainsPerBuild, keep*chainsPerRetainedRun)
 	}
 
-	err := store.Prune(ctx, Retention{JobName: "job", Runs: keep}, "")
+	err := st.Prune(ctx, store.Retention{JobName: "job", Runs: keep}, "")
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	if got := countRows(ctx, t, store, "nodes"); got != keep*nodesPerRetainedRun {
+	if got := countRows(ctx, t, st, "nodes"); got != keep*nodesPerRetainedRun {
 		t.Errorf("nodes = %d after a prune to %d runs, want %d — the cap is a MULTIPLE of run_history, and carrying less than it allows re-runs work that was cached",
 			got, keep, keep*nodesPerRetainedRun)
 	}
 
-	if got := countRows(ctx, t, store, "job_runs"); got != keep*chainsPerRetainedRun {
+	if got := countRows(ctx, t, st, "job_runs"); got != keep*chainsPerRetainedRun {
 		t.Errorf("job_runs = %d after a prune to %d runs, want %d — a reaped chain index re-runs a whole job that already went green",
 			got, keep, keep*chainsPerRetainedRun)
 	}
@@ -93,9 +95,9 @@ func TestVersionHistoryZeroMeansNoLimit(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	// Filed across several checks, not one. A prune never touches versions the
 	// CURRENT check just reported — minReportedOrder is the floor — so a
@@ -113,15 +115,15 @@ func TestVersionHistoryZeroMeansNoLimit(t *testing.T) {
 			versions = append(versions, map[string]any{"ref": fmt.Sprintf("v%04d", check*perCheck+i)})
 		}
 
-		_, err := store.RecordVersions(ctx, "mentions", versions, 0)
+		_, err := st.RecordVersions(ctx, "mentions", versions, 0)
 		if err != nil {
 			t.Fatalf("RecordVersions check %d: %v", check, err)
 		}
 	}
 
-	if got := countRows(ctx, t, store, "resource_versions"); got != filed {
+	if got := countRows(ctx, t, st, "resource_versions"); got != filed {
 		t.Errorf("kept %d of %d versions under version_history: 0, want all of them — zero means no limit, not the default cap of %d",
-			got, filed, DefaultResourceVersionCap)
+			got, filed, store.DefaultResourceVersionCap)
 	}
 }
 
@@ -137,9 +139,9 @@ func TestPruneBoundsTheTriggerQueue(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
 
-	defer func() { _ = store.Close() }()
+	defer func() { _ = st.Close() }()
 
 	const (
 		finished = 6
@@ -150,25 +152,25 @@ func TestPruneBoundsTheTriggerQueue(t *testing.T) {
 	// before the next is enqueued — which is how a poller reaches a pile of
 	// finished rows in the first place.
 	for range finished {
-		mustEnqueueJob(t, store, "build", "resource-a")
+		mustEnqueueJob(t, st, "build", "resource-a")
 
-		id, _ := mustClaimJob(t, store, "build")
+		id, _ := mustClaimJob(t, st, "build")
 
-		err := store.CompleteJob(ctx, id, "failed", errors.New("the remote is down"))
+		err := st.CompleteJob(ctx, id, "failed", errors.New("the remote is down"))
 		if err != nil {
 			t.Fatalf("CompleteJob: %v", err)
 		}
 	}
 
 	// One row left in flight, which retention must leave alone.
-	mustEnqueueJob(t, store, "build", "resource-b")
+	mustEnqueueJob(t, st, "build", "resource-b")
 
-	err := store.Prune(ctx, Retention{JobName: "build", TriggerQueue: keep}, "")
+	err := st.Prune(ctx, store.Retention{JobName: "build", TriggerQueue: keep}, "")
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	rows, err := store.ListTriggerQueue(ctx, 100)
+	rows, err := st.ListTriggerQueue(ctx, 100)
 	if err != nil {
 		t.Fatalf("ListTriggerQueue: %v", err)
 	}

@@ -73,7 +73,7 @@ func recordFetchedVersion(ctx context.Context, resource string, version map[stri
 //
 // Best-effort, same posture as recordFetchedVersion: this is bookkeeping for
 // a page, not the work the step was asked to do.
-func recordResolvedVersion(ctx context.Context, st *store.Store, cfg *config.Config, resourceName string, version map[string]any, pinned bool) {
+func recordResolvedVersion(ctx context.Context, st store.Store, cfg *config.Config, resourceName string, version map[string]any, pinned bool) {
 	if pinned || cfg.ResourceIsPolled(resourceName) {
 		return
 	}
@@ -108,7 +108,7 @@ func recordResolvedVersion(ctx context.Context, st *store.Store, cfg *config.Con
 // to a downstream gate forever. They could not be recovered later either: an
 // exhausted input holds at its NEWEST covered version, so a version
 // superseded within one run is never bound again.
-func recordPassedVersions(ctx context.Context, st *store.Store, jobName, buildID string, fetched *fetchedVersions) {
+func recordPassedVersions(ctx context.Context, st store.Store, jobName, buildID string, fetched *fetchedVersions) {
 	fetched.mu.Lock()
 	defer fetched.mu.Unlock()
 
@@ -135,7 +135,7 @@ func recordPassedVersions(ctx context.Context, st *store.Store, jobName, buildID
 // Exported for internal/trigger, which is where the constraint bites: a set
 // that has not passed upstream must not enqueue the downstream job at all,
 // rather than starting it and discovering the problem later.
-func VersionSetPassedUpstream(ctx context.Context, st *store.Store, upstreamJob string, versions map[string]map[string]any) (bool, error) {
+func VersionSetPassedUpstream(ctx context.Context, st store.Store, upstreamJob string, versions map[string]map[string]any) (bool, error) {
 	want := make(map[string]string, len(versions))
 
 	for resource, version := range versions {

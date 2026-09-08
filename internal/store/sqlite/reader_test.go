@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 import (
 	"context"
@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // sharedFile opens two pipelines onto one state file, which is what
@@ -167,7 +169,7 @@ func TestOpenReaderReadsAFileItDoesNotOwn(t *testing.T) {
 
 	ctx := context.Background()
 	stores := sharedFile(t, "app", "infra")
-	path := stores[0].Path()
+	path := stores[0].Description()
 
 	mustStartRun(t, stores[0], "r1", "build")
 
@@ -204,7 +206,7 @@ func TestOpenReaderInventsNoPipeline(t *testing.T) {
 	t.Parallel()
 
 	stores := sharedFile(t, "app")
-	path := stores[0].Path()
+	path := stores[0].Description()
 
 	reader, err := OpenReader(path)
 	if err != nil {
@@ -253,7 +255,7 @@ func TestOpenReaderRefusesAnOlderSchema(t *testing.T) {
 	t.Parallel()
 
 	stores := sharedFile(t, "app")
-	path := stores[0].Path()
+	path := stores[0].Description()
 
 	mustStartRun(t, stores[0], "r1", "build")
 
@@ -271,14 +273,14 @@ func TestOpenReaderRefusesAnOlderSchema(t *testing.T) {
 		t.Fatal("a database written by an older build was read as if this build understood it")
 	}
 
-	if !errors.Is(err, ErrSchemaVersion) {
+	if !errors.Is(err, store.ErrSchemaVersion) {
 		t.Fatalf("error = %v, want a schema-version refusal", err)
 	}
 }
 
 // TestBorrowedReaderCloseLeavesTheStoreOpen: Store.Reader() shares the
-// store's connection, so closing the reader must not close the store's handle
-// out from under it — the store outlives it and its own Close is what
+// st's connection, so closing the reader must not close the st's handle
+// out from under it — the st outlives it and its own Close is what
 // checkpoints the WAL.
 func TestBorrowedReaderCloseLeavesTheStoreOpen(t *testing.T) {
 	t.Parallel()
@@ -292,7 +294,7 @@ func TestBorrowedReaderCloseLeavesTheStoreOpen(t *testing.T) {
 
 	_, err = stores[0].ListRuns(t.Context(), "", 10)
 	if err != nil {
-		t.Fatalf("the store's connection was closed by its reader: %v", err)
+		t.Fatalf("the st's connection was closed by its reader: %v", err)
 	}
 }
 
@@ -339,7 +341,7 @@ func TestOpenExistingResolvesRatherThanRegisters(t *testing.T) {
 
 	ctx := context.Background()
 	stores := sharedFile(t, "app", "infra")
-	path := stores[0].Path()
+	path := stores[0].Description()
 
 	mustStartRun(t, stores[0], "r1", "build")
 
@@ -372,7 +374,7 @@ func TestOpenExistingRefusesAnUnknownPipeline(t *testing.T) {
 
 	ctx := context.Background()
 	stores := sharedFile(t, "app", "infra")
-	path := stores[0].Path()
+	path := stores[0].Description()
 
 	scoped, err := OpenExisting(path, "aap")
 	if err == nil {
@@ -381,8 +383,8 @@ func TestOpenExistingRefusesAnUnknownPipeline(t *testing.T) {
 		t.Fatal("a pipeline the file does not hold was opened")
 	}
 
-	if !errors.Is(err, ErrNoSuchPipeline) {
-		t.Fatalf("error = %v, want ErrNoSuchPipeline", err)
+	if !errors.Is(err, store.ErrNoSuchPipeline) {
+		t.Fatalf("error = %v, want store.ErrNoSuchPipeline", err)
 	}
 
 	// What the file holds, so a near-miss is fixable from the message.
@@ -415,7 +417,7 @@ func TestReadingDoesNotChangeTheFile(t *testing.T) {
 
 	ctx := context.Background()
 	stores := sharedFile(t, "app")
-	path := stores[0].Path()
+	path := stores[0].Description()
 
 	mustStartRun(t, stores[0], "r1", "build")
 
@@ -457,7 +459,7 @@ func TestReadingAFileWithTheWriteBitOff(t *testing.T) {
 
 	ctx := context.Background()
 	stores := sharedFile(t, "app")
-	path := stores[0].Path()
+	path := stores[0].Description()
 
 	mustStartRun(t, stores[0], "r1", "build")
 
@@ -531,7 +533,7 @@ func TestHasNothingRecorded(t *testing.T) {
 	stores := sharedFile(t, "app")
 	mustStartRun(t, stores[0], "r1", "build")
 
-	if HasNothingRecorded(stores[0].Path()) {
+	if HasNothingRecorded(stores[0].Description()) {
 		t.Error("a database with a run in it reads as empty")
 	}
 

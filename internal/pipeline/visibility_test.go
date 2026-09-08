@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -120,7 +120,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, "state.db"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}

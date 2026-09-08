@@ -16,6 +16,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // testPipeline writes a pipeline YAML, opens its store, and returns a server
@@ -52,7 +53,7 @@ jobs:
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -561,7 +562,7 @@ func TestSearchFindsJobsAndRuns(t *testing.T) {
 
 // appendEvents persists a scripted event sequence, stamping each one so the
 // ordering the reader depends on is real rather than incidental.
-func appendEvents(t *testing.T, st *store.Store, runID string, rows []store.RunEventRow) {
+func appendEvents(t *testing.T, st store.Store, runID string, rows []store.RunEventRow) {
 	t.Helper()
 
 	at := time.Now().UTC()

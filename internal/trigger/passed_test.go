@@ -124,7 +124,7 @@ func TestPassedReleasesOnceUpstreamHasPassedThatVersion(t *testing.T) {
 // passedAllUpstream mirrors what jobReadyFor does now: ask each named upstream
 // job whether it has one build green against the whole constrained set. The
 // per-resource question this replaced could not express the set at all.
-func passedAllUpstream(t *testing.T, st *store.Store, upstream []string, resource string, version map[string]any) bool {
+func passedAllUpstream(t *testing.T, st store.Store, upstream []string, resource string, version map[string]any) bool {
 	t.Helper()
 
 	for _, jobName := range upstream {

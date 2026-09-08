@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // TestRunsPageListsRunsAcrossJobs is the view a single-pipeline deployment
@@ -54,7 +54,7 @@ func TestRunsPageScopedToItsPipeline(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	other, err := store.OpenStore(pipeline.Store.Path(), "neighbour")
+	other, err := sqlite.OpenStore(pipeline.Store.Description(), "neighbour")
 	if err != nil {
 		t.Fatalf("OpenStore neighbour: %v", err)
 	}

@@ -9,13 +9,14 @@ import (
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // stepEvents returns the recorded events of the most recent run.
 func stepEvents(t *testing.T, pipelinePath string) []store.RunEventRow {
 	t.Helper()
 
-	st, err := store.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
+	st, err := sqlite.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
 	if err != nil {
 		t.Fatalf("open state store: %v", err)
 	}

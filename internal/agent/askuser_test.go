@@ -14,12 +14,13 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // askFixture is one ask_user call's worth of world: a store with a live run to
 // record against, and the env the tool reads its run identity from.
 type askFixture struct {
-	store *store.Store
+	store store.Store
 	env   toolEnv
 	ctx   context.Context //nolint:containedctx // the run identity is a context value; every call in a case shares it
 }
@@ -27,7 +28,7 @@ type askFixture struct {
 func newAskFixture(t *testing.T) *askFixture {
 	t.Helper()
 
-	st, err := store.OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

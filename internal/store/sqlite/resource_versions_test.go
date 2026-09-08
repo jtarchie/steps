@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 // resource_versions: what steps remembers, in what order, and what goes with
 // a version when it is forgotten.
@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 func versionNames(t *testing.T, versions []map[string]any) []string {
@@ -27,13 +29,13 @@ func versionNames(t *testing.T, versions []map[string]any) []string {
 func newHistoryStore(t *testing.T) *Store {
 	t.Helper()
 
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
-	t.Cleanup(func() { _ = store.Close() })
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	t.Cleanup(func() { _ = st.Close() })
 
-	return store
+	return st
 }
 
-func recordN(t *testing.T, store *Store, resource string, names ...string) {
+func recordN(t *testing.T, st *Store, resource string, names ...string) {
 	t.Helper()
 
 	versions := make([]map[string]any, 0, len(names))
@@ -41,7 +43,7 @@ func recordN(t *testing.T, store *Store, resource string, names ...string) {
 		versions = append(versions, map[string]any{"n": name})
 	}
 
-	_, err := store.RecordVersions(context.Background(), resource, versions, 0)
+	_, err := st.RecordVersions(context.Background(), resource, versions, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,13 +56,13 @@ func recordN(t *testing.T, store *Store, resource string, names ...string) {
 func TestRecordVersionsKeepsDiscoveryOrder(t *testing.T) {
 	t.Parallel()
 
-	store := newHistoryStore(t)
+	st := newHistoryStore(t)
 
-	recordN(t, store, "items", "1", "2")
-	recordN(t, store, "items", "1", "2", "3")
-	recordN(t, store, "items", "2", "3")
+	recordN(t, st, "items", "1", "2")
+	recordN(t, st, "items", "1", "2", "3")
+	recordN(t, st, "items", "2", "3")
 
-	versions, err := decodedVersions(t, store, "items")
+	versions, err := decodedVersions(t, st, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +72,7 @@ func TestRecordVersionsKeepsDiscoveryOrder(t *testing.T) {
 	}
 }
 
-// TestResourceVersionsJSONPreservesAWideID pins what the store hands back: the
+// TestResourceVersionsJSONPreservesAWideID pins what the st hands back: the
 // stored bytes, not a value that has been through a decode. It is the whole
 // reason this read is JSON and DecodeVersion (with its UseNumber) is the
 // caller's business — a round trip through float64 turns a wide id into
@@ -78,17 +80,17 @@ func TestRecordVersionsKeepsDiscoveryOrder(t *testing.T) {
 func TestResourceVersionsJSONPreservesAWideID(t *testing.T) {
 	t.Parallel()
 
-	store := newHistoryStore(t)
+	st := newHistoryStore(t)
 	ctx := context.Background()
 
-	_, err := store.RecordVersions(ctx, "items", []map[string]any{
+	_, err := st.RecordVersions(ctx, "items", []map[string]any{
 		{"n": "1"}, {"id": json.Number("1234567890123456789")},
 	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	raw, err := store.ResourceVersionsJSON(ctx, "items")
+	raw, err := st.ResourceVersionsJSON(ctx, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +103,7 @@ func TestResourceVersionsJSONPreservesAWideID(t *testing.T) {
 		t.Errorf("raw row 1 = %q, want the wide id preserved exactly", raw[1])
 	}
 
-	decoded, err := DecodeVersion(raw[1])
+	decoded, err := store.DecodeVersion(raw[1])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,12 +118,12 @@ func TestResourceVersionsJSONPreservesAWideID(t *testing.T) {
 func TestResourceVersionsAreScopedToTheirResource(t *testing.T) {
 	t.Parallel()
 
-	store := newHistoryStore(t)
+	st := newHistoryStore(t)
 
-	recordN(t, store, "items", "1", "2")
-	recordN(t, store, "other", "9")
+	recordN(t, st, "items", "1", "2")
+	recordN(t, st, "other", "9")
 
-	versions, err := decodedVersions(t, store, "other")
+	versions, err := decodedVersions(t, st, "other")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,16 +138,16 @@ func TestResourceVersionsAreScopedToTheirResource(t *testing.T) {
 func TestRecordVersionsKeepsExactDigits(t *testing.T) {
 	t.Parallel()
 
-	store := newHistoryStore(t)
+	st := newHistoryStore(t)
 
-	_, err := store.RecordVersions(context.Background(), "items", []map[string]any{
+	_, err := st.RecordVersions(context.Background(), "items", []map[string]any{
 		{"id": json.Number("1234567890123456789"), "ts": json.Number("1699887654.001200")},
 	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	versions, err := decodedVersions(t, store, "items")
+	versions, err := decodedVersions(t, st, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,29 +173,29 @@ func TestRecordVersionsKeepsExactDigits(t *testing.T) {
 func TestRecordVersionsPrunesOldestAndCascades(t *testing.T) {
 	t.Parallel()
 
-	store := newHistoryStore(t)
+	st := newHistoryStore(t)
 	ctx := context.Background()
 
-	oldest, err := EncodeVersion(map[string]any{"n": "1"})
+	oldest, err := store.EncodeVersion(map[string]any{"n": "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	recordN(t, store, "items", "1", "2", "3")
+	recordN(t, st, "items", "1", "2", "3")
 
 	// The oldest version has been passed by a job.
-	err = store.RecordPassedVersion(ctx, "build", "items", oldest, "build-1")
+	err = st.RecordPassedVersion(ctx, "build", "items", oldest, "build-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// A cap of two, applied as a fourth version arrives.
-	_, err = store.RecordVersions(ctx, "items", []map[string]any{{"n": "4"}}, 2)
+	_, err = st.RecordVersions(ctx, "items", []map[string]any{{"n": "4"}}, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	versions, err := decodedVersions(t, store, "items")
+	versions, err := decodedVersions(t, st, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +204,7 @@ func TestRecordVersionsPrunesOldestAndCascades(t *testing.T) {
 		t.Errorf("versions = %v, want the newest two [3 4]", got)
 	}
 
-	passed, err := store.PassedVersions(ctx, "build", 10)
+	passed, err := st.PassedVersions(ctx, "build", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,25 +232,25 @@ func TestRecordVersionsPrunesOldestAndCascades(t *testing.T) {
 func TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
 	t.Parallel()
 
-	store := newHistoryStore(t)
+	st := newHistoryStore(t)
 	ctx := context.Background()
 
-	version, err := EncodeVersion(map[string]any{"n": "7"})
+	version, err := store.EncodeVersion(map[string]any{"n": "7"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = store.RecordVersionOrder(ctx, "items", version)
+	_, err = st.RecordVersionOrder(ctx, "items", version)
 	if err != nil {
 		t.Fatalf("filing a version nothing had checked: %v", err)
 	}
 
-	err = store.RecordPassedVersion(ctx, "build", "items", version, "build-1")
+	err = st.RecordPassedVersion(ctx, "build", "items", version, "build-1")
 	if err != nil {
 		t.Fatalf("recording a passed version nothing had filed: %v", err)
 	}
 
-	versions, err := decodedVersions(t, store, "items")
+	versions, err := decodedVersions(t, st, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,9 +262,9 @@ func TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
 
 	// A later check filing the same version DOES make it history, so nothing
 	// is permanently invisible.
-	recordN(t, store, "items", "7")
+	recordN(t, st, "items", "7")
 
-	versions, err = decodedVersions(t, store, "items")
+	versions, err = decodedVersions(t, st, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +289,7 @@ func TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
 func TestTheMarkCannotDevelopHoles(t *testing.T) {
 	t.Parallel()
 
-	store := newHistoryStore(t)
+	st := newHistoryStore(t)
 	ctx := context.Background()
 
 	// Far more versions than any set-based cap would have kept.
@@ -298,12 +300,12 @@ func TestTheMarkCannotDevelopHoles(t *testing.T) {
 		versions = append(versions, map[string]any{"n": strconv.Itoa(i)})
 	}
 
-	_, err := store.RecordVersions(ctx, "items", versions, total)
+	_, err := st.RecordVersions(ctx, "items", versions, total)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	orders, err := store.VersionOrders(ctx, "items")
+	orders, err := st.VersionOrders(ctx, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,12 +315,12 @@ func TestTheMarkCannotDevelopHoles(t *testing.T) {
 	}
 
 	// The job builds all of them, which is one row rather than 5000.
-	err = store.RecordConsumedMark(ctx, "build", "items", highestOrder(orders))
+	err = st.RecordConsumedMark(ctx, "build", "items", highestOrder(orders))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	mark, err := store.ConsumedMark(ctx, "build", "items")
+	mark, err := st.ConsumedMark(ctx, "build", "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,13 +360,13 @@ func highestOrder(orders map[string]int64) int64 {
 func TestCheckReDiscoveryReMintsARunFiledOrder(t *testing.T) {
 	t.Parallel()
 
-	store := newHistoryStore(t)
+	st := newHistoryStore(t)
 	ctx := context.Background()
 
 	// A manual run files v10 before any check has seen the resource.
 	v10 := mustEncode(t, map[string]any{"n": "10"})
 
-	_, err := store.RecordVersionOrder(ctx, "items", v10)
+	_, err := st.RecordVersionOrder(ctx, "items", v10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,12 +377,12 @@ func TestCheckReDiscoveryReMintsARunFiledOrder(t *testing.T) {
 		versions = append(versions, map[string]any{"n": strconv.Itoa(i)})
 	}
 
-	_, err = store.RecordVersions(ctx, "items", versions, 0)
+	_, err = st.RecordVersions(ctx, "items", versions, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	history, err := decodedVersions(t, store, "items")
+	history, err := decodedVersions(t, st, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,12 +398,12 @@ func TestCheckReDiscoveryReMintsARunFiledOrder(t *testing.T) {
 func TestSteadyStateReportWritesNothing(t *testing.T) {
 	t.Parallel()
 
-	store := newHistoryStore(t)
+	st := newHistoryStore(t)
 	ctx := context.Background()
 
 	report := []map[string]any{{"n": "1"}, {"n": "2"}, {"n": "3"}}
 
-	added, err := store.RecordVersions(ctx, "items", report, 0)
+	added, err := st.RecordVersions(ctx, "items", report, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +412,7 @@ func TestSteadyStateReportWritesNothing(t *testing.T) {
 		t.Fatalf("first report added %d, want 3", added)
 	}
 
-	added, err = store.RecordVersions(ctx, "items", report, 0)
+	added, err = st.RecordVersions(ctx, "items", report, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +421,7 @@ func TestSteadyStateReportWritesNothing(t *testing.T) {
 		t.Errorf("a re-reported window counted as %d new versions, want 0", added)
 	}
 
-	orders, err := store.VersionOrders(ctx, "items")
+	orders, err := st.VersionOrders(ctx, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +441,7 @@ func TestSteadyStateReportWritesNothing(t *testing.T) {
 func TestPruneNeverEatsTheReportedWindow(t *testing.T) {
 	t.Parallel()
 
-	store := newHistoryStore(t)
+	st := newHistoryStore(t)
 	ctx := context.Background()
 
 	window := make([]map[string]any, 0, 20)
@@ -448,12 +450,12 @@ func TestPruneNeverEatsTheReportedWindow(t *testing.T) {
 	}
 
 	for poll := 1; poll <= 3; poll++ {
-		_, err := store.RecordVersions(ctx, "items", window, 10)
+		_, err := st.RecordVersions(ctx, "items", window, 10)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		history, err := decodedVersions(t, store, "items")
+		history, err := decodedVersions(t, st, "items")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -471,7 +473,7 @@ func TestPruneNeverEatsTheReportedWindow(t *testing.T) {
 func mustEncode(t *testing.T, version map[string]any) string {
 	t.Helper()
 
-	encoded, err := EncodeVersion(version)
+	encoded, err := store.EncodeVersion(version)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,9 +494,9 @@ func decodedVersions(t *testing.T, st *Store, name string) ([]map[string]any, er
 	versions := make([]map[string]any, 0, len(encoded))
 
 	for _, one := range encoded {
-		version, err := DecodeVersion(one)
+		version, err := store.DecodeVersion(one)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("could not decode a stored version: %w", err)
 		}
 
 		versions = append(versions, version)

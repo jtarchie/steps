@@ -60,7 +60,7 @@ func buildFixMessages(fix *config.FixSpec, rt config.ResolvedTask, failureOutput
 // loop incoherent.
 func RunFix(
 	ctx context.Context, cfg *config.Config, jobName string, stepIndex int,
-	rt config.ResolvedTask, st *store.Store, failureOutput, workspaceDir string,
+	rt config.ResolvedTask, st store.Store, failureOutput, workspaceDir string,
 ) error {
 	fix := rt.Fix
 

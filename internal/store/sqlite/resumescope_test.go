@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 // The resume index across the several pipelines one state file may hold.
 

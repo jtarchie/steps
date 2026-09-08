@@ -76,7 +76,7 @@ type Pipeline struct {
 	// deciding what to check — and a plain field read while the daemon
 	// reloads is a data race, not a stale read.
 	cfg   atomic.Pointer[config.Config]
-	Store *store.Store
+	Store store.Store
 	// Bus carries live run events for runs this process itself executes.
 	// Runs started by a separate `steps run` land in the store but not on
 	// this bus, which is why every live view falls back to replaying the
@@ -107,7 +107,7 @@ type Pipeline struct {
 // A constructor rather than a struct literal because cfg is behind an atomic
 // pointer: it is read by handlers, the drain and the poller at once, and a
 // literal would leave it nil for whatever ran before the caller filled it in.
-func NewPipeline(slug, path string, cfg *config.Config, st *store.Store, bus *events.Bus) *Pipeline {
+func NewPipeline(slug, path string, cfg *config.Config, st store.Store, bus *events.Bus) *Pipeline {
 	pipeline := &Pipeline{Slug: slug, Path: path, Store: st, Bus: bus}
 	pipeline.cfg.Store(cfg)
 

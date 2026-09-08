@@ -11,6 +11,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -129,7 +130,7 @@ func TestJobHookKeepsItsJobAndDropsTheStepIndex(t *testing.T) {
 
 // twoGetFixture is a job with two get steps of the same trivial resource
 // type, so a log line naming only "a get" cannot be told from the other one.
-func twoGetFixture(t *testing.T) (*config.Config, *config.Job, *store.Store, workspace.Provider) {
+func twoGetFixture(t *testing.T) (*config.Config, *config.Job, store.Store, workspace.Provider) {
 	t.Helper()
 
 	return fixtureFrom(t, `
@@ -157,7 +158,7 @@ jobs:
 
 // triggeredBuildFixture is a triggering get followed by a task, so the task
 // runs inside the build the get fans out into.
-func triggeredBuildFixture(t *testing.T) (*config.Config, *config.Job, *store.Store, workspace.Provider) {
+func triggeredBuildFixture(t *testing.T) (*config.Config, *config.Job, store.Store, workspace.Provider) {
 	t.Helper()
 
 	return fixtureFrom(t, `
@@ -185,7 +186,7 @@ jobs:
 // The job is always named build: every fixture here is a one-job pipeline
 // written for the test that uses it, so a name to pass was flexibility no
 // caller ever wanted.
-func fixtureFrom(t *testing.T, pipeline string) (*config.Config, *config.Job, *store.Store, workspace.Provider) {
+func fixtureFrom(t *testing.T, pipeline string) (*config.Config, *config.Job, store.Store, workspace.Provider) {
 	const jobName = "build"
 
 	t.Helper()
@@ -203,7 +204,7 @@ func fixtureFrom(t *testing.T, pipeline string) (*config.Config, *config.Job, *s
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := store.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

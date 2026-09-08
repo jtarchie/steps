@@ -230,7 +230,7 @@ Three things follow:
 `defaults.version_history:` caps it per resource, keeping the newest (`0` keeps everything, as [every limit here does](attempts-timeout.md#zero-means-no-limit)):
 
 ```yaml
-# The cap itself is not observable in one run — internal/store's tests measure
+# The cap itself is not observable in one run — internal/store/sqlite's tests measure
 # the pruning. This example pins only that the field loads and a capped
 # resource still fetches normally.
 defaults:

@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
-	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // replayIDPattern pulls the forked run's id out of the line a replay prints.
@@ -197,7 +197,7 @@ jobs:
 func runIDFromStore(t *testing.T, pipelinePath string) string {
 	t.Helper()
 
-	st, err := store.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
+	st, err := sqlite.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func runIDFromStore(t *testing.T, pipelinePath string) string {
 func runExists(t *testing.T, pipelinePath, runID string) bool {
 	t.Helper()
 
-	st, err := store.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
+	st, err := sqlite.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
 	if err != nil {
 		t.Fatal(err)
 	}

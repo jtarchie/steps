@@ -52,7 +52,7 @@ func TestSerialGroupsBlockConcurrentClaims(t *testing.T) {
 }
 
 // mustClaim claims the next job, returning "" when nothing is claimable.
-func mustClaim(t *testing.T, st *store.Store) string {
+func mustClaim(t *testing.T, st store.Store) string {
 	t.Helper()
 
 	_, name, found, err := st.ClaimNextJob(context.Background())
