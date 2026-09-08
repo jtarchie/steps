@@ -368,7 +368,7 @@ func (s *Store) SaveNodeTranscript(ctx context.Context, hash, transcript string)
 }
 
 // NodeTranscript returns the stored transcript JSON for a node hash, with ok
-// reporting whether one exists — mirroring LastCheckedVersion's shape rather
+// reporting whether one exists — mirroring LastChecked's shape rather
 // than inventing a sentinel error for the common "never recorded" case.
 func (s *Store) NodeTranscript(ctx context.Context, hash string) (string, bool, error) {
 	var transcript string

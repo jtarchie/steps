@@ -27,26 +27,6 @@ type PassedVersion struct {
 	RecordedAt time.Time
 }
 
-// LastCheckedVersion returns the JSON of the most recently recorded version
-// for resourceName, or found=false if it's never been checked.
-func (s *Store) LastCheckedVersion(ctx context.Context, resourceName string) (string, bool, error) {
-	var versionJSON string
-
-	err := s.db.QueryRowContext(ctx,
-		`SELECT version_json FROM resource_checks WHERE pipeline_id = ? AND resource_name = ?`,
-		s.pipelineID, resourceName,
-	).Scan(&versionJSON)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
-
-	if err != nil {
-		return "", false, fmt.Errorf("could not query resource_checks: %w", err)
-	}
-
-	return versionJSON, true, nil
-}
-
 // RecordCheckedVersion upserts the latest observed version JSON for
 // resourceName, independent of whether any job triggered by the change
 // succeeds — version-checking and build outcomes are tracked separately,
@@ -66,9 +46,14 @@ func (s *Store) RecordCheckedVersion(ctx context.Context, resourceName, versionJ
 	return nil
 }
 
-// LastChecked returns one resource's last-checked row — the single-resource
-// counterpart to CheckedResources, for a caller (the web UI's resource detail
-// page) that wants one row rather than every resource's just to look one up.
+// LastChecked returns one resource's last-checked row, with found=false when
+// nothing has checked it yet — the single-resource counterpart to
+// CheckedResources, for a caller that wants one row rather than every
+// resource's just to look one up.
+//
+// The version JSON on it is the check cursor: what the next check is handed to
+// say "anything after this", and still the resource's current version when a
+// check reports nothing new.
 func (s *Store) LastChecked(ctx context.Context, resourceName string) (CheckedResource, bool, error) {
 	var (
 		row       CheckedResource

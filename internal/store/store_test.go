@@ -278,13 +278,13 @@ func assertQueueEmpty(t *testing.T, store *Store) {
 func assertLastCheckedVersion(t *testing.T, store *Store, resourceName string, wantFound bool, wantVersion string) {
 	t.Helper()
 
-	version, found, err := store.LastCheckedVersion(context.Background(), resourceName)
+	last, found, err := store.LastChecked(context.Background(), resourceName)
 	if err != nil {
-		t.Fatalf("LastCheckedVersion(%q): %v", resourceName, err)
+		t.Fatalf("LastChecked(%q): %v", resourceName, err)
 	}
 
-	if found != wantFound || (found && version != wantVersion) {
-		t.Fatalf("LastCheckedVersion(%q) = (%q, %v), want (%q, %v)", resourceName, version, found, wantVersion, wantFound)
+	if found != wantFound || (found && last.Version != wantVersion) {
+		t.Fatalf("LastChecked(%q) = (%q, %v), want (%q, %v)", resourceName, last.Version, found, wantVersion, wantFound)
 	}
 }
 

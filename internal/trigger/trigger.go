@@ -838,7 +838,7 @@ func checkResource(ctx context.Context, cfg *config.Config, st *store.Store, res
 func recordedVersion(
 	ctx context.Context, st *store.Store, resourceName string,
 ) (encoded string, version map[string]any, found bool, err error) {
-	encoded, found, err = st.LastCheckedVersion(ctx, resourceName)
+	last, found, err := st.LastChecked(ctx, resourceName)
 	if err != nil {
 		return "", nil, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
@@ -846,6 +846,8 @@ func recordedVersion(
 	if !found {
 		return "", nil, false, nil
 	}
+
+	encoded = last.Version
 
 	version, err = rsrc.ParseVersionJSON(encoded)
 	if err != nil {

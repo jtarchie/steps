@@ -125,7 +125,7 @@ func TestRunRefreshesResourceHistory(t *testing.T) {
 	// resources page would show "never checked" forever otherwise. The run
 	// that just fetched v2 is the only place that version is ever observed,
 	// so it records it as the checked baseline for display.
-	baseline, _, err := st.LastCheckedVersion(ctx, "items")
+	baseline, _, err := lastCheckedVersion(t, st, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestRunDoesNotAdvanceAPolledResourcesBaseline(t *testing.T) {
 		t.Errorf("built %q, want v2 — the run must still see past the last poll", data)
 	}
 
-	baseline, _, err := st.LastCheckedVersion(ctx, "items")
+	baseline, _, err := lastCheckedVersion(t, st, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ jobs:
 		t.Fatal("RunJob succeeded despite in: exiting 1 — the fetch should have failed")
 	}
 
-	_, found, err := st.LastCheckedVersion(ctx, "items")
+	_, found, err := lastCheckedVersion(t, st, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ jobs:
 
 	// "extra" is the job's SECOND get — fetched via fetchGetStepInPlace
 	// inside "items"'s triggered build, not via runTriggeredBuild's own call.
-	baseline, _, err := st.LastCheckedVersion(ctx, "extra")
+	baseline, _, err := lastCheckedVersion(t, st, "extra")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +422,7 @@ jobs:
 	// items is referenced only via passed: (no trigger: anywhere), so
 	// ResourceIsPolled names it — recordResolvedVersion must skip it in both
 	// jobs, leaving resource_checks untouched.
-	_, found, err := st.LastCheckedVersion(ctx, "items")
+	_, found, err := lastCheckedVersion(t, st, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +478,7 @@ func TestRunRefreshesResolvedVersionOnFanOutCacheSkip(t *testing.T) {
 		t.Fatalf("built %q, want a single v1 — the second run's get (and so its task) is cache-skipped", data)
 	}
 
-	baseline, _, err := st.LastCheckedVersion(ctx, "items")
+	baseline, _, err := lastCheckedVersion(t, st, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +573,7 @@ func TestRunDoesNotRegressResolvedVersionOnAPinnedRun(t *testing.T) {
 		t.Fatalf("RunJob (pinned v1): %v", err)
 	}
 
-	baseline, _, err := st.LastCheckedVersion(ctx, "items")
+	baseline, _, err := lastCheckedVersion(t, st, "items")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -581,4 +581,15 @@ func TestRunDoesNotRegressResolvedVersionOnAPinnedRun(t *testing.T) {
 	if baseline != `{"n":"v2"}` {
 		t.Errorf("baseline = %s, want unchanged v2 — a pinned run's older fetch must not regress the displayed checked version", baseline)
 	}
+}
+
+// lastCheckedVersion is the check cursor's JSON, which is all these tests
+// compare — the row it sits on carries a timestamp they have nothing to say
+// about.
+func lastCheckedVersion(t *testing.T, st *store.Store, name string) (string, bool, error) {
+	t.Helper()
+
+	last, found, err := st.LastChecked(context.Background(), name)
+
+	return last.Version, found, err
 }

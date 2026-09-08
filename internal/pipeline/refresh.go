@@ -113,7 +113,7 @@ func refreshOneResource(ctx context.Context, cfg *config.Config, st *store.Store
 // watch poll hands the check, so a cursor-driven type answers the refresh as
 // cheaply as it answers a poll.
 func checkCursorFor(ctx context.Context, st *store.Store, name string) (map[string]any, error) {
-	encoded, found, err := st.LastCheckedVersion(ctx, name)
+	last, found, err := st.LastChecked(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("reading the check cursor for %q: %w", name, err)
 	}
@@ -123,7 +123,7 @@ func checkCursorFor(ctx context.Context, st *store.Store, name string) (map[stri
 		return nil, nil //nolint:nilnil // absence is the meaning
 	}
 
-	cursor, err := rsrc.ParseVersionJSON(encoded)
+	cursor, err := rsrc.ParseVersionJSON(last.Version)
 	if err != nil {
 		return nil, fmt.Errorf("reading the check cursor for %q: %w", name, err)
 	}
