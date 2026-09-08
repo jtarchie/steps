@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS pipelines (
 --
 -- Nothing cascades INTO it: a row is shared by an unknown number of nodes, so
 -- one node's deletion says nothing about whether the content is still needed.
--- Retention sweeps the unreferenced rows explicitly (see PruneRuns), and the
+-- Retention sweeps the unreferenced rows explicitly (see Store.Prune), and the
 -- RESTRICT on the referencing side is what makes a mistake there an error
 -- rather than a dangling node.
 --
@@ -375,7 +375,7 @@ CREATE TABLE IF NOT EXISTS runs (
     -- column is optional for anything that has one.
     --
     -- RESTRICT rather than CASCADE or SET NULL, and it is the rule that makes
-    -- the reap order in PruneRuns a constraint the database keeps: a
+    -- the reap order in Store.Prune a constraint the database keeps: a
     -- revision may only go once no run needs it. SET NULL would quietly turn
     -- a reaped revision into "this run ran no configuration", which is the
     -- one thing this column exists to deny.

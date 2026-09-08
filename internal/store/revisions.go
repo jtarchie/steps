@@ -68,15 +68,15 @@ func (s *Store) FindRevision(ctx context.Context, sha string) (Revision, bool, e
 	return rev, true, nil
 }
 
-// PruneRevisions drops the configurations nothing points at any more.
+// pruneAllRevisions drops the configurations nothing points at any more.
 //
-// Its own entry point as well as part of a run prune, because the two
+// Reached from a zero Retention as well as from a run prune, because the two
 // orphaning events are different: runs are reaped when a job passes its cap,
 // and a configuration is orphaned either by that or by a reload superseding
 // one nothing ever ran. An operator iterating on a pipeline with `steps web`
 // running mints a multi-kilobyte row per distinct save, and waiting for a job
 // to pass run_history: before reclaiming any of them is not a bound.
-func (s *Store) PruneRevisions(ctx context.Context) error {
+func (s *Store) pruneAllRevisions(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("could not prune configurations: %w", err)

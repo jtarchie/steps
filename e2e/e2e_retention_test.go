@@ -2,7 +2,7 @@ package e2e
 
 // Retention, end to end: does `defaults.run_history:` actually bound what a
 // pipeline leaves on disk when it is run through cli.Run, rather than only when
-// store.PruneRuns is called directly?
+// store.Prune is called directly?
 //
 // internal/store proves the prune itself (see its footprint_test.go, which
 // measures the bytes). This proves the WIRING — the config field, the flag, the
@@ -294,7 +294,7 @@ jobs:
 // A version cursor or a recorded version lost to retention would do exactly
 // that — the pipeline this work came from is a Slack bot, and re-answering is
 // the failure mode that costs money and looks broken in public. So those tables
-// are deliberately outside everything PruneRuns touches.
+// are deliberately outside everything Prune touches.
 func TestRetentionLeavesTriggerStateAlone(t *testing.T) {
 	dir := t.TempDir()
 

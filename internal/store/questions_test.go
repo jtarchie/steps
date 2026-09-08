@@ -326,9 +326,9 @@ func TestQuestionsAreReapedWithTheirRun(t *testing.T) {
 		syntheticBuild(ctx, t, store, "answer-mention", build)
 	}
 
-	err := store.PruneRuns(ctx, "answer-mention", 2, "")
+	err := store.Prune(ctx, Retention{JobName: "answer-mention", Runs: 2}, "")
 	if err != nil {
-		t.Fatalf("PruneRuns: %v", err)
+		t.Fatalf("Prune: %v", err)
 	}
 
 	var count int

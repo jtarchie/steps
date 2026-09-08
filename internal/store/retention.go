@@ -34,6 +34,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -59,37 +60,68 @@ const nodesPerRetainedRun = 20
 // several chains under one job.
 const chainsPerRetainedRun = 5
 
-// PruneRuns keeps the newest `limit` runs of a job and deletes the rest, and
-// bounds the caches that job has accumulated.
+// Retention is what one build is allowed to leave behind: a policy read off
+// the configuration, applied once, at the end.
 //
-// Per job rather than globally, so one busy job cannot evict a quiet one's only
-// run — a global cap makes the least active job the least inspectable, which is
-// backwards.
+// Zero means no limit in both fields, the convention this repo documents in
+// docs/attempts-timeout.md. A wholly zero Retention is therefore the
+// configuration sweep on its own — what a reload wants, having just adopted a
+// configuration and orphaned the one it replaced, with no job in play and no
+// run to reap.
+type Retention struct {
+	// JobName is the job whose history is being bounded. Per job rather than
+	// globally, so one busy job cannot evict a quiet one's only run — a global
+	// cap makes the least active job the least inspectable, which is backwards.
+	JobName string
+	// Runs is how many of that job's runs to keep, newest first.
+	Runs int
+	// TriggerQueue is how many of its FINISHED queue rows to keep. A separate
+	// number because the queue is a work list rather than history: see
+	// DefaultTriggerQueueHistory, which is what the run passes.
+	TriggerQueue int
+}
+
+// Prune applies one build's retention policy: its job's run history, the
+// caches that job has accumulated, and its finished trigger-queue rows.
 //
-// limit <= 0 means no limit, the convention this repo documents in
-// docs/attempts-timeout.md: omitted takes the default, 0 means no limit.
+// One method because it is one decision made once, at the end of a build, and
+// because the footprint contract is a statement about the whole sweep rather
+// than about whichever half a caller remembered to invoke.
+//
+// Both passes always run, and their failures are joined rather than
+// short-circuited: they bound different tables for different reasons, and the
+// first one failing is no reason to leave the second table growing.
 //
 // keepRunID is the run that must survive whatever the cap says — the one whose
 // build is calling this. Without it, retention could delete the run it was
 // invoked from: a RESUMED run keeps its original started_at (StartRun inserts
 // and ResumeRun leaves it alone, which is right — it is when the run started),
 // so a resume of an older run is the OLDEST row, and it reaped itself at the
-// end of its own build. That left its run_steps and agent_usage cascaded away and FindRun
-// answering "no run recorded", making the run permanently unresumable. Pass ""
-// when no run is in play.
+// end of its own build. That left its run_steps and agent_usage cascaded away
+// and the run lookup answering "no such run", making the run permanently
+// unresumable. Pass "" when no run is in play.
+func (s *Store) Prune(ctx context.Context, policy Retention, keepRunID string) error {
+	return errors.Join(
+		s.pruneRuns(ctx, policy.JobName, policy.Runs, keepRunID),
+		s.pruneTriggerQueue(ctx, policy.JobName, policy.TriggerQueue),
+	)
+}
+
+// pruneRuns keeps the newest `limit` runs of a job and deletes the rest, and
+// bounds the caches that job has accumulated.
 //
 // Almost all of the deleting is done by foreign keys: a run takes its events,
 // its steps and its usage rows with it, and a node takes its transcript and its
 // usage row. That is why the constraints came first — without them this would be
 // eight DELETEs that have to agree with each other forever, and the one that
 // gets forgotten leaves rows nothing can ever reach again.
-func (s *Store) PruneRuns(ctx context.Context, jobName string, limit int, keepRunID string) error {
+func (s *Store) pruneRuns(ctx context.Context, jobName string, limit int, keepRunID string) error {
 	if limit <= 0 {
 		// Runs are unbounded by request (zero means no limit), and
 		// configurations are not the same question: a revision nothing points
 		// at is unreachable however many runs are kept, and a reload can
 		// orphan one without any run being reaped at all.
-		return s.PruneRevisions(ctx)
+		return s.pruneAllRevisions(ctx)
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -187,7 +219,7 @@ func sweepAfterNodePrune(ctx context.Context, tx *sql.Tx, pipelineID int64, prun
 // another build in flight (max_in_flight, or a watch alongside a browser
 // trigger) and deleting it would make its own event and usage inserts fail the
 // foreign keys they now declare. And keepRunID is the caller's own run — see
-// PruneRuns.
+// Store.Prune.
 //
 // started_at is compared as text, which is only correct because it is written in
 // a zero-padded fixed-width layout; see sortableNano for what went wrong when it
@@ -393,14 +425,14 @@ func pruneNodeContent(ctx context.Context, tx *sql.Tx) error {
 // runs`, and far too few to matter on disk.
 const DefaultTriggerQueueHistory = 50
 
-// PruneTriggerQueue keeps the newest finished rows of a job and deletes the
+// pruneTriggerQueue keeps the newest finished rows of a job and deletes the
 // rest. Pending and running rows are never touched — they are the work list.
 //
 // limit <= 0 means no limit, the same way it does everywhere else here. It read
 // the other way round at first — 0 meaning "use the default" — which made the
 // one call site, passing a literal 0, mean the opposite of what it looked like
 // and left no value that could switch this off.
-func (s *Store) PruneTriggerQueue(ctx context.Context, jobName string, limit int) error {
+func (s *Store) pruneTriggerQueue(ctx context.Context, jobName string, limit int) error {
 	if limit <= 0 {
 		return nil
 	}

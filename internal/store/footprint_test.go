@@ -440,9 +440,9 @@ func TestFootprintPerBuildIsBounded(t *testing.T) {
 		for build := from; build <= to; build++ {
 			syntheticBuild(ctx, t, store, jobName, build)
 
-			err := store.PruneRuns(ctx, jobName, keep, "")
+			err := store.Prune(ctx, Retention{JobName: jobName, Runs: keep}, "")
 			if err != nil {
-				t.Fatalf("PruneRuns: %v", err)
+				t.Fatalf("Prune: %v", err)
 			}
 		}
 	}
@@ -513,9 +513,9 @@ func TestFootprintNoOrphansSurviveAPrune(t *testing.T) {
 		syntheticBuild(ctx, t, store, "answer-mention", build)
 	}
 
-	err := store.PruneRuns(ctx, "answer-mention", 3, "")
+	err := store.Prune(ctx, Retention{JobName: "answer-mention", Runs: 3}, "")
 	if err != nil {
-		t.Fatalf("PruneRuns: %v", err)
+		t.Fatalf("Prune: %v", err)
 	}
 
 	for _, orphan := range []struct{ what, query string }{
@@ -736,9 +736,9 @@ func TestFootprintPruneKeepsTheNewestRuns(t *testing.T) {
 	// job must not evict a quiet one's only run.
 	syntheticBuild(ctx, t, store, "other", 99)
 
-	err := store.PruneRuns(ctx, "answer-mention", 3, "")
+	err := store.Prune(ctx, Retention{JobName: "answer-mention", Runs: 3}, "")
 	if err != nil {
-		t.Fatalf("PruneRuns: %v", err)
+		t.Fatalf("Prune: %v", err)
 	}
 
 	kept, err := store.ListRuns(ctx, "answer-mention", 100)
@@ -778,17 +778,17 @@ func TestFootprintPruneIsSafeOnAnEmptyDatabase(t *testing.T) {
 
 	defer func() { _ = store.Close() }()
 
-	err := store.PruneRuns(ctx, "nothing-here", 10, "")
+	err := store.Prune(ctx, Retention{JobName: "nothing-here", Runs: 10}, "")
 	if err != nil {
-		t.Fatalf("PruneRuns on an empty database: %v", err)
+		t.Fatalf("Prune on an empty database: %v", err)
 	}
 
 	// Zero means no limit, the convention every other cap in this repo uses.
 	syntheticBuild(ctx, t, store, "job", 1)
 
-	err = store.PruneRuns(ctx, "job", 0, "")
+	err = store.Prune(ctx, Retention{JobName: "job", Runs: 0}, "")
 	if err != nil {
-		t.Fatalf("PruneRuns with no cap: %v", err)
+		t.Fatalf("Prune with no cap: %v", err)
 	}
 
 	if got := countRows(ctx, t, store, "runs"); got != 1 {
@@ -819,7 +819,7 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 		{"node_transcripts", "hash", "nodes", "CASCADE"},
 		{"nodes", "content_hash", "node_content", "RESTRICT"},
 		{"runs", "parent_run_id", "runs", "SET NULL"},
-		// RESTRICT, and it is what makes PruneRuns' reap order a rule the
+		// RESTRICT, and it is what makes Prune's reap order a rule the
 		// database keeps rather than a convention retention remembers. SET
 		// NULL would turn a reaped configuration into "this run ran none",
 		// which is the one thing the column exists to deny.
@@ -994,9 +994,9 @@ func TestPruneKeepsTheRunItWasCalledFrom(t *testing.T) {
 		t.Fatalf("ResumeRun: %v", err)
 	}
 
-	err = store.PruneRuns(ctx, "job", 3, resumed)
+	err = store.Prune(ctx, Retention{JobName: "job", Runs: 3}, resumed)
 	if err != nil {
-		t.Fatalf("PruneRuns: %v", err)
+		t.Fatalf("Prune: %v", err)
 	}
 
 	_, ok, err := store.FindRunRow(ctx, resumed)
@@ -1044,9 +1044,9 @@ func TestPruneSparesARunStillInFlight(t *testing.T) {
 		t.Fatalf("backdate: %v", err)
 	}
 
-	err = store.PruneRuns(ctx, "job", 2, "")
+	err = store.Prune(ctx, Retention{JobName: "job", Runs: 2}, "")
 	if err != nil {
-		t.Fatalf("PruneRuns: %v", err)
+		t.Fatalf("Prune: %v", err)
 	}
 
 	_, ok, err := store.FindRunRow(ctx, "INFLIGHT")
@@ -1174,9 +1174,9 @@ func buildAndPrune(ctx context.Context, t *testing.T, store *Store, jobName stri
 	for build := 1; build <= builds; build++ {
 		syntheticBuild(ctx, t, store, jobName, build)
 
-		err := store.PruneRuns(ctx, jobName, keep, "")
+		err := store.Prune(ctx, Retention{JobName: jobName, Runs: keep}, "")
 		if err != nil {
-			t.Fatalf("PruneRuns: %v", err)
+			t.Fatalf("Prune: %v", err)
 		}
 	}
 }
@@ -1305,9 +1305,9 @@ func TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
 
 	fillNodeCache(ctx, t, store, jobName, keep*nodesPerRetainedRun+5)
 
-	err = store.PruneRuns(ctx, jobName, keep, runID)
+	err = store.Prune(ctx, Retention{JobName: jobName, Runs: keep}, runID)
 	if err != nil {
-		t.Fatalf("PruneRuns: %v", err)
+		t.Fatalf("Prune: %v", err)
 	}
 
 	_, found, err := store.FindRunRow(ctx, runID)
@@ -1386,9 +1386,9 @@ func TestPruneStillWorksBesideAHookPlacement(t *testing.T) {
 
 	before := countNodes(ctx, t, store, jobName)
 
-	err = store.PruneRuns(ctx, jobName, keep, runID)
+	err = store.Prune(ctx, Retention{JobName: jobName, Runs: keep}, runID)
 	if err != nil {
-		t.Fatalf("PruneRuns: %v", err)
+		t.Fatalf("Prune: %v", err)
 	}
 
 	after := countNodes(ctx, t, store, jobName)

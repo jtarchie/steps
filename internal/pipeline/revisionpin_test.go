@@ -12,6 +12,8 @@ package pipeline
 import (
 	"context"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestRunRecordsTheConfigItWasHanded is the seam: the daemon has already
@@ -100,9 +102,9 @@ jobs:
 		t.Fatalf("RecordRevision: %v", err)
 	}
 
-	err = st.PruneRevisions(t.Context())
+	err = st.Prune(t.Context(), store.Retention{}, "")
 	if err != nil {
-		t.Fatalf("PruneRevisions: %v", err)
+		t.Fatalf("Prune: %v", err)
 	}
 
 	err = RunJob(context.Background(), cfg, job, nil, provider, st, false)

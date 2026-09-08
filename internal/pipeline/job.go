@@ -371,18 +371,15 @@ func runJobPlan(
 // whose history is worth bounding, and the ambient context is already done by
 // the time this fires.
 // keepRunID is this build's own run, which retention must never delete — see
-// store.PruneRuns, where a resumed run reaped itself.
+// store.Prune, where a resumed run reaped itself.
 func pruneHistory(ctx context.Context, st *store.Store, cfg *config.Config, jobName, keepRunID string) {
-	pruneCtx := context.WithoutCancel(ctx)
-
-	err := st.PruneRuns(pruneCtx, jobName, cfg.RunHistoryLimit(), keepRunID)
+	err := st.Prune(context.WithoutCancel(ctx), store.Retention{
+		JobName:      jobName,
+		Runs:         cfg.RunHistoryLimit(),
+		TriggerQueue: store.DefaultTriggerQueueHistory,
+	}, keepRunID)
 	if err != nil {
-		logFrom(ctx).Warn("store.prune_runs", "job", jobName, "error", err)
-	}
-
-	err = st.PruneTriggerQueue(pruneCtx, jobName, store.DefaultTriggerQueueHistory)
-	if err != nil {
-		logFrom(ctx).Warn("store.prune_trigger_queue", "job", jobName, "error", err)
+		logFrom(ctx).Warn("store.prune", "job", jobName, "error", err)
 	}
 }
 

@@ -197,9 +197,9 @@ func TestRevisionsAreBoundedByRunRetention(t *testing.T) {
 		// is the worst case a reloading daemon produces.
 		syntheticBuild(ctx, t, store, jobName, build)
 
-		err := store.PruneRuns(ctx, jobName, keep, "")
+		err := store.Prune(ctx, Retention{JobName: jobName, Runs: keep}, "")
 		if err != nil {
-			t.Fatalf("PruneRuns: %v", err)
+			t.Fatalf("Prune: %v", err)
 		}
 	}
 
@@ -240,9 +240,9 @@ func TestTheNewestRevisionSurvivesRetention(t *testing.T) {
 	}
 
 	// The build that started under the old configuration, finishing now.
-	err = store.PruneRuns(ctx, jobName, keep, "")
+	err = store.Prune(ctx, Retention{JobName: jobName, Runs: keep}, "")
 	if err != nil {
-		t.Fatalf("PruneRuns: %v", err)
+		t.Fatalf("Prune: %v", err)
 	}
 
 	err = store.StartRun(ctx, "run-after-prune", jobName, "/tmp/ws-after", "sha-current")
@@ -281,9 +281,9 @@ func TestRevisionsAreBoundedWithoutAnyRunsBeingReaped(t *testing.T) {
 			t.Fatalf("RecordRevision: %v", err)
 		}
 
-		err = store.PruneRevisions(ctx)
+		err = store.Prune(ctx, Retention{}, "")
 		if err != nil {
-			t.Fatalf("PruneRevisions: %v", err)
+			t.Fatalf("Prune: %v", err)
 		}
 	}
 
@@ -294,7 +294,7 @@ func TestRevisionsAreBoundedWithoutAnyRunsBeingReaped(t *testing.T) {
 }
 
 // TestRevisionsAreBoundedWhenRunsAreUnlimited: run_history: 0 means no limit
-// on RUNS, and PruneRuns returns early on it — which left the configurations
+// on RUNS, and the run pass returns early on it — which left the configurations
 // unbounded for the life of the file, on the one setting an operator chooses
 // when they want to keep everything about their runs and nothing about their
 // editor's autosaves.
@@ -312,9 +312,9 @@ func TestRevisionsAreBoundedWhenRunsAreUnlimited(t *testing.T) {
 			t.Fatalf("RecordRevision: %v", err)
 		}
 
-		err = store.PruneRuns(ctx, "build", 0, "")
+		err = store.Prune(ctx, Retention{JobName: "build", Runs: 0}, "")
 		if err != nil {
-			t.Fatalf("PruneRuns: %v", err)
+			t.Fatalf("Prune: %v", err)
 		}
 	}
 
@@ -419,9 +419,9 @@ func TestARevertedConfigurationSurvivesTheSweep(t *testing.T) {
 
 	// The run that referenced it ages out, which is what makes the exemption
 	// the only thing left holding the served configuration in the table.
-	err = store.PruneRuns(ctx, "build", 0, "")
+	err = store.Prune(ctx, Retention{JobName: "build", Runs: 0}, "")
 	if err != nil {
-		t.Fatalf("PruneRuns: %v", err)
+		t.Fatalf("Prune: %v", err)
 	}
 
 	_, err = store.db.ExecContext(ctx, `DELETE FROM runs WHERE id = 'run-one'`)
@@ -429,9 +429,9 @@ func TestARevertedConfigurationSurvivesTheSweep(t *testing.T) {
 		t.Fatalf("delete run: %v", err)
 	}
 
-	err = store.PruneRevisions(ctx)
+	err = store.Prune(ctx, Retention{}, "")
 	if err != nil {
-		t.Fatalf("PruneRevisions: %v", err)
+		t.Fatalf("Prune: %v", err)
 	}
 
 	_, found, err := store.FindRevision(ctx, "sha-original")
@@ -509,9 +509,9 @@ func TestATrimmedChainCacheIsCommitted(t *testing.T) {
 	}
 
 	// No runs and no nodes, so this pass is the only one with anything to do.
-	err := store.PruneRuns(ctx, "build", keep, "")
+	err := store.Prune(ctx, Retention{JobName: "build", Runs: keep}, "")
 	if err != nil {
-		t.Fatalf("PruneRuns: %v", err)
+		t.Fatalf("Prune: %v", err)
 	}
 
 	if rows := countRows(ctx, t, store, "job_runs"); rows != keep*chainsPerRetainedRun {

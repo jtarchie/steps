@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/web"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -201,7 +202,7 @@ func (w *ConfigWatcher) adopt(ctx context.Context, cfg *config.Config) error {
 
 	// Best-effort: a configuration that has already been adopted is not
 	// un-adopted by a sweep that did not run.
-	err = w.target.Store.PruneRevisions(ctx)
+	err = w.target.Store.Prune(ctx, store.Retention{}, "")
 	if err != nil {
 		slog.Warn("web.reload_prune_failed", "pipeline", w.target.Slug, "error", err)
 	}
