@@ -241,18 +241,6 @@ func (s *Store) NodesByHash(ctx context.Context, hashes []string) (map[string]No
 	return found, nil
 }
 
-// FindNode reads one node by hash, with ok reporting whether it exists.
-func (s *Store) FindNode(ctx context.Context, hash string) (NodeRow, bool, error) {
-	byHash, err := s.NodesByHash(ctx, []string{hash})
-	if err != nil {
-		return NodeRow{}, false, err
-	}
-
-	row, ok := byHash[hash]
-
-	return row, ok, nil
-}
-
 // placeholders builds the "?,?,?" list for an IN (...) clause of n bound
 // arguments. sqlite has no array binding, so the count has to be generated.
 func placeholders(n int) string {

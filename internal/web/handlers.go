@@ -281,11 +281,12 @@ func (s *Server) handleNode(c echo.Context) error {
 	ctx := c.Request().Context()
 	hash := c.Param("hash")
 
-	node, ok, err := pipeline.Store.FindNode(ctx, hash)
+	byHash, err := pipeline.Store.NodesByHash(ctx, []string{hash})
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
+	node, ok := byHash[hash]
 	if !ok {
 		return echo.NewHTTPError(http.StatusNotFound, "no node with that hash")
 	}
