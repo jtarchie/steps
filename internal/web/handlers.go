@@ -326,7 +326,7 @@ func (s *Server) handleNode(c echo.Context) error {
 func (s *Server) handleApprovals(c echo.Context) error {
 	pipeline := pipelineOf(c)
 
-	approvals, err := pipeline.Store.AllApprovals(c.Request().Context(), historyLimit)
+	approvals, err := pipeline.Store.Approvals(c.Request().Context(), false, historyLimit)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}

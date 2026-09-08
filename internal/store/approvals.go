@@ -80,26 +80,26 @@ func (s *Store) ApprovalStatus(ctx context.Context, id int64) (Approval, error) 
 	return approval, nil
 }
 
-// PendingApprovals lists every approval still waiting, oldest first.
-func (s *Store) PendingApprovals(ctx context.Context) ([]Approval, error) {
-	return collect(ctx, s.db, "pending approvals", `
-		SELECT id, job_name, message, requested_at FROM approvals
-		WHERE pipeline_id = ? AND status = 'pending' ORDER BY id
-	`, []any{s.pipelineID}, func(rows *sql.Rows) (Approval, error) {
-		approval := Approval{Status: "pending"}
+// Approvals lists what a pipeline has asked a person to decide. pendingOnly
+// narrows it to the requests still waiting; limit <= 0 means no limit, the
+// convention this repo uses everywhere.
+//
+// Two orders, for the reason Store.Questions has two. Waiting requests read
+// oldest-first, the order somebody should work through them in, and are never
+// capped — a job is parked behind each one. The audit listing reads
+// newest-first and is capped, because it is history.
+func (s *Store) Approvals(ctx context.Context, pendingOnly bool, limit int) ([]Approval, error) {
+	where, order, what := `AND status = 'pending'`, `id`, "pending approvals"
+	if !pendingOnly {
+		where, order, what = ``, `id DESC`, "approvals"
+	}
 
-		return approval, rows.Scan(&approval.ID, &approval.JobName, &approval.Message, &approval.RequestedAt)
-	})
-}
-
-// AllApprovals lists every approval decision, newest first — the audit trail
-// PendingApprovals deliberately does not carry.
-func (s *Store) AllApprovals(ctx context.Context, limit int) ([]Approval, error) {
-	return collect(ctx, s.db, "approvals", `
+	return collect(ctx, s.db, what, `
 		SELECT id, job_name, message, status, requested_at,
 		       COALESCE(decided_at, ''), COALESCE(decided_by, ''), COALESCE(reason, '')
-		FROM approvals WHERE pipeline_id = ? ORDER BY id DESC LIMIT ?
-	`, []any{s.pipelineID, limit}, func(rows *sql.Rows) (Approval, error) {
+		FROM approvals WHERE pipeline_id = ? `+where+`
+		ORDER BY `+order+` LIMIT ?
+	`, []any{s.pipelineID, rowLimit(limit)}, func(rows *sql.Rows) (Approval, error) {
 		var approval Approval
 
 		return approval, rows.Scan(&approval.ID, &approval.JobName, &approval.Message, &approval.Status,

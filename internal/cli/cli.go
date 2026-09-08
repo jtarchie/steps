@@ -2478,7 +2478,7 @@ func (a *ApprovalsListCmd) Run() error {
 	}
 	defer cleanup()
 
-	pending, err := st.PendingApprovals(context.Background())
+	pending, err := st.Approvals(context.Background(), true, 0)
 	if err != nil {
 		return fmt.Errorf("could not list approvals: %w", err)
 	}

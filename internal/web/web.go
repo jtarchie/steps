@@ -448,7 +448,7 @@ func (s *Server) nav(c echo.Context) navData {
 	nav.CurrentPath = current.Path
 	nav.Held = current.Held()
 
-	pending, err := current.Store.PendingApprovals(c.Request().Context())
+	pending, err := current.Store.Approvals(c.Request().Context(), true, 0)
 	if err == nil {
 		nav.PendingApprovals = len(pending)
 	}
