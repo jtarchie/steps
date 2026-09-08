@@ -37,26 +37,6 @@ func (s *Store) RecordJobRun(ctx context.Context, jobName, rootHash, status stri
 	return nil
 }
 
-// HasSucceeded reports whether jobName has a prior succeeded run recorded
-// against rootHash.
-func (s *Store) HasSucceeded(ctx context.Context, jobName, rootHash string) (bool, error) {
-	var status string
-
-	err := s.db.QueryRowContext(ctx,
-		`SELECT status FROM job_runs WHERE pipeline_id = ? AND job_name = ? AND root_hash = ?`,
-		s.pipelineID, jobName, rootHash,
-	).Scan(&status)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-
-	if err != nil {
-		return false, fmt.Errorf("could not query job_runs: %w", err)
-	}
-
-	return status == "succeeded", nil
-}
-
 // hasSucceededBatchChunkSize bounds how many root hashes go into a single
 // IN (...) query, well under sqlite's compiled-in bind-variable limit
 // regardless of how many chains a version: every fanout produces.

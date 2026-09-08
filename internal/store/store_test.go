@@ -52,13 +52,13 @@ func mustOpenStore(t *testing.T, path string) *Store {
 func assertHasSucceeded(t *testing.T, store *Store, jobName, rootHash string, want bool) {
 	t.Helper()
 
-	got, err := store.HasSucceeded(context.Background(), jobName, rootHash)
+	found, err := store.HasSucceededBatch(context.Background(), jobName, []string{rootHash})
 	if err != nil {
-		t.Fatalf("HasSucceeded(%q, %q): %v", jobName, rootHash, err)
+		t.Fatalf("HasSucceededBatch(%q, %q): %v", jobName, rootHash, err)
 	}
 
-	if got != want {
-		t.Errorf("HasSucceeded(%q, %q) = %v, want %v", jobName, rootHash, got, want)
+	if got := found[rootHash]; got != want {
+		t.Errorf("HasSucceededBatch(%q, %q) = %v, want %v", jobName, rootHash, got, want)
 	}
 }
 
