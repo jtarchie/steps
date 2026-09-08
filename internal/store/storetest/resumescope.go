@@ -1,10 +1,9 @@
-package sqlite
+package storetest
 
 // The resume index across the several pipelines one state file may hold.
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 )
 
@@ -19,14 +18,12 @@ import (
 // Defense in depth since StartRun stopped upserting: a run id now names a row
 // in exactly one pipeline, so no honest resume can ask this question. The
 // predicate stays because the repo rule is categorical about it.
-func TestCompletedRunStepsAreScopedToTheirPipeline(t *testing.T) {
+func (s suite) TestCompletedRunStepsAreScopedToTheirPipeline(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "shared.db")
-
-	web := mustOpenPipeline(t, path, "web")
-	infra := mustOpenPipeline(t, path, "infra")
+	web := s.mustOpenPipeline(t, "web")
+	infra := s.mustOpenPipeline(t, "infra")
 
 	const shared = "SHARED01"
 

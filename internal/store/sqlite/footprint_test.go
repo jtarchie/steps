@@ -393,6 +393,9 @@ func totalBytes(sizes map[string]int64) int64 {
 	return total
 }
 
+// hashOf is a node hash from a number, so a fixture can mint distinct ones.
+func hashOf(n int) string { return fmt.Sprintf("%064x", n) }
+
 func countRows(ctx context.Context, t *testing.T, st *Store, table string) int {
 	t.Helper()
 

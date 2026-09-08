@@ -1,11 +1,10 @@
-package sqlite
+package storetest
 
 // What a placement row must be able to say, and what it must refuse to invent.
 
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -13,7 +12,7 @@ import (
 
 // placeAt records a run, a node and a placement against st, returning the
 // run id.
-func placeAt(ctx context.Context, t *testing.T, st *Store, placement store.Placement) {
+func placeAt(ctx context.Context, t *testing.T, st store.Store, placement store.Placement) {
 	t.Helper()
 
 	// A plan step's slot IS its node hash; only a hook needs a different one,
@@ -46,11 +45,11 @@ func placeAt(ctx context.Context, t *testing.T, st *Store, placement store.Place
 // plain integers those two collapse into the same row, and they demand
 // opposite readings: "this ran as root" is a finding, "we do not know who
 // this ran as" is a gap.
-func TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
+func (s suite) TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := s.open(t, "test")
 
 	defer func() { _ = st.Close() }()
 
@@ -98,23 +97,15 @@ func TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 // this package without a pipeline_id predicate is a bug. One state file may
 // hold several pipelines, and run ids are minted per pipeline, so an unscoped
 // read hands one pipeline's report another's machines.
-func TestPlacementsAreScopedToTheirPipeline(t *testing.T) {
+func (s suite) TestPlacementsAreScopedToTheirPipeline(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "shared.db")
-
-	web, err := OpenStore(path, "web")
-	if err != nil {
-		t.Fatalf("OpenStore web: %v", err)
-	}
+	web := s.open(t, "web")
 
 	defer func() { _ = web.Close() }()
 
-	infra, err := OpenStore(path, "infra")
-	if err != nil {
-		t.Fatalf("OpenStore infra: %v", err)
-	}
+	infra := s.open(t, "infra")
 
 	defer func() { _ = infra.Close() }()
 
@@ -140,7 +131,7 @@ func TestPlacementsAreScopedToTheirPipeline(t *testing.T) {
 	}
 }
 
-func onlyPlacement(ctx context.Context, t *testing.T, st *Store, runID string) store.Placement {
+func onlyPlacement(ctx context.Context, t *testing.T, st store.Store, runID string) store.Placement {
 	t.Helper()
 
 	placements, err := st.RunPlacements(ctx, runID)
@@ -171,23 +162,15 @@ func hashOf(n int) string { return fmt.Sprintf("%064x", n) }
 // lands on the first's row and rewrites every column except the one saying
 // whose it is: one pipeline then reports the other's machine, and the other
 // reports nothing at all.
-func TestPlacementKeyIsScopedToItsPipeline(t *testing.T) {
+func (s suite) TestPlacementKeyIsScopedToItsPipeline(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "shared.db")
-
-	web, err := OpenStore(path, "web")
-	if err != nil {
-		t.Fatalf("OpenStore web: %v", err)
-	}
+	web := s.open(t, "web")
 
 	defer func() { _ = web.Close() }()
 
-	infra, err := OpenStore(path, "infra")
-	if err != nil {
-		t.Fatalf("OpenStore infra: %v", err)
-	}
+	infra := s.open(t, "infra")
 
 	defer func() { _ = infra.Close() }()
 
@@ -223,11 +206,11 @@ func TestPlacementKeyIsScopedToItsPipeline(t *testing.T) {
 // (pipeline/venue.go's withVenueRetry). The row describes a machine, and the
 // machine the work ran on is the one that finished it — so the second write
 // must win outright rather than be dropped as a duplicate.
-func TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T) {
+func (s suite) TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := s.open(t, "test")
 
 	defer func() { _ = st.Close() }()
 
@@ -274,11 +257,11 @@ func TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T) {
 // TestPlacementsReadBackInPlanOrder: a run's placements are a report someone
 // reads top to bottom against the plan they wrote, so step 0 comes first
 // whatever order the steps finished in — and a fan-out finishes them in none.
-func TestPlacementsReadBackInPlanOrder(t *testing.T) {
+func (s suite) TestPlacementsReadBackInPlanOrder(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := s.open(t, "test")
 
 	defer func() { _ = st.Close() }()
 
@@ -339,11 +322,11 @@ func derefOr(value *string, absent string) string {
 // The nullable hash is what makes the row legal in the first place: the
 // composite foreign key into nodes is exempt when a child column is NULL, and
 // a hook row cascades off its RUN instead.
-func TestPlacementWithoutANodeIsStillKeyed(t *testing.T) {
+func (s suite) TestPlacementWithoutANodeIsStillKeyed(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := s.open(t, "test")
 
 	defer func() { _ = st.Close() }()
 

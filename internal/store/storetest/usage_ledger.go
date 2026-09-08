@@ -1,7 +1,6 @@
-package sqlite
+package storetest
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -14,13 +13,10 @@ import (
 // predecessor died on. Replacing the counts reported the last attempt as the
 // whole bill, so a resumed run seeded its budget from a fraction of what it
 // had really spent and bought most of the allowance a second time.
-func TestAgentUsageAccumulatesAcrossAttempts(t *testing.T) {
+func (s suite) TestAgentUsageAccumulatesAcrossAttempts(t *testing.T) {
 	t.Parallel()
 
-	st, err := OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := s.open(t, "test")
 
 	defer func() { _ = st.Close() }()
 
@@ -31,7 +27,7 @@ func TestAgentUsageAccumulatesAcrossAttempts(t *testing.T) {
 	// agent_usage.run_id references runs(id) as well, so the run has to exist —
 	// which in production it always does: usage is recorded from inside a step
 	// of a run that StartRun already filed.
-	err = st.StartRun(ctx, "r1", "j", "/tmp/ws", "")
+	err := st.StartRun(ctx, "r1", "j", "/tmp/ws", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,13 +83,10 @@ func TestAgentUsageAccumulatesAcrossAttempts(t *testing.T) {
 // second reporting none left the row NULL, discarding a cost that HAD been
 // reported. The direction matters: it under-reports spend, on exactly the runs
 // that retried.
-func TestAgentUsageCostSurvivesAnUnpricedAttempt(t *testing.T) {
+func (s suite) TestAgentUsageCostSurvivesAnUnpricedAttempt(t *testing.T) {
 	t.Parallel()
 
-	st, err := OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := s.open(t, "test")
 
 	defer func() { _ = st.Close() }()
 
@@ -101,7 +94,7 @@ func TestAgentUsageCostSurvivesAnUnpricedAttempt(t *testing.T) {
 
 	mustRecordNode(t, st, "j", "node")
 
-	err = st.StartRun(ctx, "r1", "j", "/tmp/ws", "")
+	err := st.StartRun(ctx, "r1", "j", "/tmp/ws", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,13 +134,10 @@ func TestAgentUsageCostSurvivesAnUnpricedAttempt(t *testing.T) {
 // erasure above would be a COALESCE to zero, which reports every unpriced run as
 // $0.00 — see RunCostTotals, which counts unpriced steps precisely so a partial
 // dollar total can be shown AS partial.
-func TestAgentUsageNeverPricedStaysNull(t *testing.T) {
+func (s suite) TestAgentUsageNeverPricedStaysNull(t *testing.T) {
 	t.Parallel()
 
-	st, err := OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := s.open(t, "test")
 
 	defer func() { _ = st.Close() }()
 
@@ -155,7 +145,7 @@ func TestAgentUsageNeverPricedStaysNull(t *testing.T) {
 
 	mustRecordNode(t, st, "j", "node")
 
-	err = st.StartRun(ctx, "r1", "j", "/tmp/ws", "")
+	err := st.StartRun(ctx, "r1", "j", "/tmp/ws", "")
 	if err != nil {
 		t.Fatal(err)
 	}

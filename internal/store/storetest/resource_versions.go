@@ -1,4 +1,4 @@
-package sqlite
+package storetest
 
 // resource_versions: what steps remembers, in what order, and what goes with
 // a version when it is forgotten.
@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,16 +25,16 @@ func versionNames(t *testing.T, versions []map[string]any) []string {
 	return names
 }
 
-func newHistoryStore(t *testing.T) *Store {
+func (s suite) newHistoryStore(t *testing.T) store.Store {
 	t.Helper()
 
-	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := s.open(t, "test")
 	t.Cleanup(func() { _ = st.Close() })
 
 	return st
 }
 
-func recordN(t *testing.T, st *Store, resource string, names ...string) {
+func recordN(t *testing.T, st store.Store, resource string, names ...string) {
 	t.Helper()
 
 	versions := make([]map[string]any, 0, len(names))
@@ -53,10 +52,10 @@ func recordN(t *testing.T, st *Store, resource string, names ...string) {
 // it was first seen, and re-reporting it does not move it. A check that
 // returns its whole window every poll is the common case, and it has to be
 // idempotent — otherwise the order a job walks would shuffle underneath it.
-func TestRecordVersionsKeepsDiscoveryOrder(t *testing.T) {
+func (s suite) TestRecordVersionsKeepsDiscoveryOrder(t *testing.T) {
 	t.Parallel()
 
-	st := newHistoryStore(t)
+	st := s.newHistoryStore(t)
 
 	recordN(t, st, "items", "1", "2")
 	recordN(t, st, "items", "1", "2", "3")
@@ -77,10 +76,10 @@ func TestRecordVersionsKeepsDiscoveryOrder(t *testing.T) {
 // reason this read is JSON and DecodeVersion (with its UseNumber) is the
 // caller's business — a round trip through float64 turns a wide id into
 // exponent notation, and the version goes back out to the API that reported it.
-func TestResourceVersionsJSONPreservesAWideID(t *testing.T) {
+func (s suite) TestResourceVersionsJSONPreservesAWideID(t *testing.T) {
 	t.Parallel()
 
-	st := newHistoryStore(t)
+	st := s.newHistoryStore(t)
 	ctx := context.Background()
 
 	_, err := st.RecordVersions(ctx, "items", []map[string]any{
@@ -115,10 +114,10 @@ func TestResourceVersionsJSONPreservesAWideID(t *testing.T) {
 
 // TestResourceVersionsAreScopedToTheirResource: two resources keep separate
 // histories and separate orders.
-func TestResourceVersionsAreScopedToTheirResource(t *testing.T) {
+func (s suite) TestResourceVersionsAreScopedToTheirResource(t *testing.T) {
 	t.Parallel()
 
-	st := newHistoryStore(t)
+	st := s.newHistoryStore(t)
 
 	recordN(t, st, "items", "1", "2")
 	recordN(t, st, "other", "9")
@@ -135,10 +134,10 @@ func TestResourceVersionsAreScopedToTheirResource(t *testing.T) {
 
 // TestRecordVersionsKeepsExactDigits: history is read back into templates and
 // sent to APIs, so a wide id or a fractional timestamp must survive storage.
-func TestRecordVersionsKeepsExactDigits(t *testing.T) {
+func (s suite) TestRecordVersionsKeepsExactDigits(t *testing.T) {
 	t.Parallel()
 
-	st := newHistoryStore(t)
+	st := s.newHistoryStore(t)
 
 	_, err := st.RecordVersions(context.Background(), "items", []map[string]any{
 		{"id": json.Number("1234567890123456789"), "ts": json.Number("1699887654.001200")},
@@ -170,10 +169,10 @@ func TestRecordVersionsKeepsExactDigits(t *testing.T) {
 // key, so nothing is left pointing at a version that no longer exists — and
 // so a `passed:` gate stops clearing for it, which is correct and is also
 // why the cap is configurable.
-func TestRecordVersionsPrunesOldestAndCascades(t *testing.T) {
+func (s suite) TestRecordVersionsPrunesOldestAndCascades(t *testing.T) {
 	t.Parallel()
 
-	st := newHistoryStore(t)
+	st := s.newHistoryStore(t)
 	ctx := context.Background()
 
 	oldest, err := store.EncodeVersion(map[string]any{"n": "1"})
@@ -229,10 +228,10 @@ func TestRecordVersionsPrunesOldestAndCascades(t *testing.T) {
 // would have found the others never runs. That is a real failure, not a
 // hypothetical — it is what TestConformanceGetVersionEveryTakesEachVersionOnce
 // caught.
-func TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
+func (s suite) TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
 	t.Parallel()
 
-	st := newHistoryStore(t)
+	st := s.newHistoryStore(t)
 	ctx := context.Background()
 
 	version, err := store.EncodeVersion(map[string]any{"n": "7"})
@@ -286,10 +285,10 @@ func TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
 //
 // A mark has no members to forget. Whatever the history limit, everything at
 // or below it is done.
-func TestTheMarkCannotDevelopHoles(t *testing.T) {
+func (s suite) TestTheMarkCannotDevelopHoles(t *testing.T) {
 	t.Parallel()
 
-	st := newHistoryStore(t)
+	st := s.newHistoryStore(t)
 	ctx := context.Background()
 
 	// Far more versions than any set-based cap would have kept.
@@ -357,10 +356,10 @@ func highestOrder(orders map[string]int64) int64 {
 // version would sort below everything the check reported after it, and the
 // prune would treat the NEWEST version as the oldest and delete it first.
 // The check is discovering it now, so it takes a fresh order now.
-func TestCheckReDiscoveryReMintsARunFiledOrder(t *testing.T) {
+func (s suite) TestCheckReDiscoveryReMintsARunFiledOrder(t *testing.T) {
 	t.Parallel()
 
-	st := newHistoryStore(t)
+	st := s.newHistoryStore(t)
 	ctx := context.Background()
 
 	// A manual run files v10 before any check has seen the resource.
@@ -395,10 +394,10 @@ func TestCheckReDiscoveryReMintsARunFiledOrder(t *testing.T) {
 // TestSteadyStateReportWritesNothing: the common case is a check re-reporting
 // its whole window every poll, and it must cost nothing — no order advance,
 // no row rewrite, and no "new versions" signal that would re-trigger jobs.
-func TestSteadyStateReportWritesNothing(t *testing.T) {
+func (s suite) TestSteadyStateReportWritesNothing(t *testing.T) {
 	t.Parallel()
 
-	st := newHistoryStore(t)
+	st := s.newHistoryStore(t)
 	ctx := context.Background()
 
 	report := []map[string]any{{"n": "1"}, {"n": "2"}, {"n": "3"}}
@@ -438,10 +437,10 @@ func TestSteadyStateReportWritesNothing(t *testing.T) {
 // old version on alternate polls, and every prune cascades away green
 // records so gates re-open and jobs re-fan-out each cycle. The cap bounds
 // what has scrolled AWAY; a window larger than the cap is kept whole.
-func TestPruneNeverEatsTheReportedWindow(t *testing.T) {
+func (s suite) TestPruneNeverEatsTheReportedWindow(t *testing.T) {
 	t.Parallel()
 
-	st := newHistoryStore(t)
+	st := s.newHistoryStore(t)
 	ctx := context.Background()
 
 	window := make([]map[string]any, 0, 20)
@@ -483,12 +482,12 @@ func mustEncode(t *testing.T, version map[string]any) string {
 
 // decodedVersions reads a resource's check history the way version resolution
 // does: the stored JSON, through DecodeVersion.
-func decodedVersions(t *testing.T, st *Store, name string) ([]map[string]any, error) {
+func decodedVersions(t *testing.T, st store.Store, name string) ([]map[string]any, error) {
 	t.Helper()
 
 	encoded, err := st.ResourceVersionsJSON(context.Background(), name)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("could not read the stored versions: %w", err)
 	}
 
 	versions := make([]map[string]any, 0, len(encoded))

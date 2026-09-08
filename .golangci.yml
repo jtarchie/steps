@@ -292,8 +292,20 @@ linters:
           files:
             - "**/internal/store/**"
             - "!**/internal/store/sqlite/**"
+            - "!**/internal/store/storetest/**"
           allow:
             - "$gostd"
+        # store/storetest is the conformance suite: the behavior tests written
+        # against the contract rather than against a driver, so a second driver
+        # is proven by the same tests the first one passes. It imports the
+        # contract and nothing else — a driver import here would make the suite
+        # one driver's, which is the whole thing it must not be.
+        StoreTest:
+          files:
+            - "**/internal/store/storetest/**"
+          allow:
+            - "$gostd"
+            - "github.com/jtarchie/steps/internal/store"
         # store/sqlite is the sqlite driver: the only package here that holds a
         # sqlite connection, the way dockerapi is the only one that holds an
         # engine client. It owns its schema and its SQL end to end rather than
@@ -305,6 +317,9 @@ linters:
             - "$gostd"
             - "modernc.org/sqlite"
             - "github.com/jtarchie/steps/internal/store"
+            # storetest is test-only: conformance_test.go runs the shared suite
+            # against this driver.
+            - "github.com/jtarchie/steps/internal/store/storetest"
         # config is the shared data-model root: it must not depend on any
         # other internal package (see CLAUDE.md's package-seam plan).
         Config:

@@ -1,5 +1,8 @@
 package sqlite
 
+// What the revisions table costs and what a sweep leaves in it — measured
+// against the rows themselves, which is why these stay with the driver.
+
 import (
 	"context"
 	"fmt"
@@ -47,128 +50,6 @@ func TestRecordRevisionInternsOneRowPerConfiguration(t *testing.T) {
 
 	if rows := countRows(ctx, t, st, "pipeline_revisions"); rows != 2 {
 		t.Errorf("an edited configuration recorded %d rows in total, want 2", rows)
-	}
-}
-
-// TestRunsRecordTheRevisionTheyWereGiven is the correction that removed the
-// revision from this handle: a run names the configuration IT was handed,
-// which is not necessarily the newest one this pipeline has loaded.
-//
-// Every argument order is exercised, because the defect it replaces was an
-// ordering one — the row was written long after the caller took its config,
-// so whichever revision happened to be newest at write time won.
-func TestRunsRecordTheRevisionTheyWereGiven(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
-
-	defer func() { _ = st.Close() }()
-
-	for _, sha := range []string{"sha-one", "sha-two"} {
-		err := st.RecordRevision(ctx, sha, pipelineSource(1))
-		if err != nil {
-			t.Fatalf("RecordRevision(%s): %v", sha, err)
-		}
-	}
-
-	// Started under the OLDER one, with the newer already interned — the
-	// daemon reloaded while this run was getting under way.
-	err := st.StartRun(ctx, "run-one", "build", "/tmp/ws-one", "sha-one")
-	if err != nil {
-		t.Fatalf("StartRun: %v", err)
-	}
-
-	err = st.StartRun(ctx, "run-two", "build", "/tmp/ws-two", "sha-two")
-	if err != nil {
-		t.Fatalf("StartRun: %v", err)
-	}
-
-	got := map[string]string{}
-
-	rows, err := st.ListRuns(ctx, "build", 10)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-
-	for _, row := range rows {
-		got[row.ID] = row.ConfigSHA
-	}
-
-	for id, want := range map[string]string{"run-one": "sha-one", "run-two": "sha-two"} {
-		if got[id] != want {
-			t.Errorf("run %s reports configuration %q, want %q", id, got[id], want)
-		}
-	}
-}
-
-// TestResumeRecordsTheConfigItResumesUnder: a resume continues a failed run
-// under the configuration it is being resumed WITH, which is usually the one
-// that fixed it. Keeping the original would make the run claim it executed a
-// pipeline nothing in it ever ran.
-func TestResumeRecordsTheConfigItResumesUnder(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
-
-	defer func() { _ = st.Close() }()
-
-	for _, sha := range []string{"sha-broken", "sha-fixed"} {
-		err := st.RecordRevision(ctx, sha, pipelineSource(1))
-		if err != nil {
-			t.Fatalf("RecordRevision(%s): %v", sha, err)
-		}
-	}
-
-	err := st.StartRun(ctx, "run-one", "build", "/tmp/ws", "sha-broken")
-	if err != nil {
-		t.Fatalf("StartRun: %v", err)
-	}
-
-	err = st.FinishRun(ctx, "run-one", "failed")
-	if err != nil {
-		t.Fatalf("FinishRun: %v", err)
-	}
-
-	err = st.ResumeRun(ctx, "run-one", "/tmp/ws", "sha-fixed")
-	if err != nil {
-		t.Fatalf("ResumeRun: %v", err)
-	}
-
-	rows, err := st.ListRuns(ctx, "build", 10)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-
-	if len(rows) != 1 || rows[0].ConfigSHA != "sha-fixed" {
-		t.Errorf("after a resume the run reports %+v, want sha-fixed", rows)
-	}
-}
-
-// TestRunWithNoRecordedConfigurationSaysSo pins the NULL: a caller that
-// loaded no pipeline file records no revision, and its runs must still be
-// insertable — the column is a foreign key, and 0 is not a row id.
-func TestRunWithNoRecordedConfigurationSaysSo(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
-
-	defer func() { _ = st.Close() }()
-
-	err := st.StartRun(ctx, "run-one", "build", "/tmp/ws-one", "")
-	if err != nil {
-		t.Fatalf("StartRun with no configuration recorded: %v", err)
-	}
-
-	rows, err := st.ListRuns(ctx, "build", 10)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-
-	if len(rows) != 1 || rows[0].ConfigSHA != "" {
-		t.Errorf("a run started with no configuration reports %+v, want one row with an empty ConfigSHA", rows)
 	}
 }
 
@@ -325,64 +206,6 @@ func TestRevisionsAreBoundedWhenRunsAreUnlimited(t *testing.T) {
 	}
 }
 
-// TestFindRevisionIsScopedToItsPipeline: a state file may hold several
-// pipelines, and a hash identifies bytes rather than a pipeline — so an
-// unscoped lookup would serve one pipeline's page a configuration another
-// pipeline ran, which is the shape of bug every query in this package carries
-// a pipeline_id predicate to prevent.
-func TestFindRevisionIsScopedToItsPipeline(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "shared.db")
-
-	mine := mustOpenStore(t, path)
-	defer func() { _ = mine.Close() }()
-
-	theirs, err := OpenStore(path, "other")
-	if err != nil {
-		t.Fatalf("OpenStore as other: %v", err)
-	}
-
-	defer func() { _ = theirs.Close() }()
-
-	err = theirs.RecordRevision(ctxFor(t), "sha-theirs", pipelineSource(1))
-	if err != nil {
-		t.Fatalf("RecordRevision: %v", err)
-	}
-
-	_, found, err := mine.FindRevision(ctxFor(t), "sha-theirs")
-	if err != nil {
-		t.Fatalf("FindRevision: %v", err)
-	}
-
-	if found {
-		t.Error("one pipeline read a configuration another pipeline recorded")
-	}
-
-	// And its own is still found, so the scoping is a predicate rather than a
-	// lookup that never works.
-	err = mine.RecordRevision(ctxFor(t), "sha-mine", pipelineSource(2))
-	if err != nil {
-		t.Fatalf("RecordRevision: %v", err)
-	}
-
-	revision, found, err := mine.FindRevision(ctxFor(t), "sha-mine")
-	if err != nil || !found {
-		t.Fatalf("FindRevision of its own configuration = (%v, %v, %v)", revision.SHA, found, err)
-	}
-
-	if revision.Source != pipelineSource(2) {
-		t.Error("FindRevision returned a configuration that is not the one recorded")
-	}
-}
-
-// ctxFor is the test's context, named so the calls above read as one line.
-func ctxFor(t *testing.T) context.Context {
-	t.Helper()
-
-	return t.Context()
-}
-
 // TestARevertedConfigurationSurvivesTheSweep is the row the sweep protects
 // getting the wrong answer from MAX(id).
 //
@@ -443,46 +266,6 @@ func TestARevertedConfigurationSurvivesTheSweep(t *testing.T) {
 
 	if !found {
 		t.Error("the sweep reclaimed the configuration being served, so the next run records none")
-	}
-}
-
-// TestResumeKeepsTheConfigurationItCannotName: a resume writes the
-// configuration it is resumed WITH, and a subselect that matches nothing is
-// not one. Assigning it turned "this run executed that" into "this run
-// executed nothing", which is the single answer the column exists to deny.
-func TestResumeKeepsTheConfigurationItCannotName(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
-
-	defer func() { _ = st.Close() }()
-
-	err := st.RecordRevision(ctx, "sha-recorded", pipelineSource(1))
-	if err != nil {
-		t.Fatalf("RecordRevision: %v", err)
-	}
-
-	err = st.StartRun(ctx, "run-one", "build", "/tmp/ws", "sha-recorded")
-	if err != nil {
-		t.Fatalf("StartRun: %v", err)
-	}
-
-	// A sha this pipeline has no row for: swept, or a caller that loaded no
-	// file at all.
-	err = st.ResumeRun(ctx, "run-one", "/tmp/ws", "sha-nobody-recorded")
-	if err != nil {
-		t.Fatalf("ResumeRun: %v", err)
-	}
-
-	rows, err := st.ListRuns(ctx, "build", 10)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-
-	if len(rows) != 1 || rows[0].ConfigSHA != "sha-recorded" {
-		t.Errorf("after a resume the run reports configuration %q, want it to keep %q",
-			rows[0].ConfigSHA, "sha-recorded")
 	}
 }
 

@@ -1,24 +1,20 @@
-package sqlite
+package storetest
 
 // agent_usage across the several pipelines one state file may hold.
 
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
 )
 
 // mustOpenPipeline opens one named pipeline's handle on a shared state file.
-func mustOpenPipeline(t *testing.T, path, name string) *Store {
+func (s suite) mustOpenPipeline(t *testing.T, name string) store.Store {
 	t.Helper()
 
-	st, err := OpenStore(path, name)
-	if err != nil {
-		t.Fatalf("OpenStore %s: %v", name, err)
-	}
+	st := s.open(t, name)
 
 	t.Cleanup(func() { _ = st.Close() })
 
@@ -34,7 +30,7 @@ func mustOpenPipeline(t *testing.T, path, name string) *Store {
 // exist is the shape these tests are about: one run row, and a second pipeline
 // writing its own child rows against that run id. The child tables are what
 // have to survive it.
-func ensureRun(ctx context.Context, t *testing.T, st *Store, runID, jobName string) {
+func ensureRun(ctx context.Context, t *testing.T, st store.Store, runID, jobName string) {
 	t.Helper()
 
 	err := st.StartRun(ctx, runID, jobName, "/tmp/ws", "")
@@ -44,7 +40,7 @@ func ensureRun(ctx context.Context, t *testing.T, st *Store, runID, jobName stri
 }
 
 // recordSpend records one agent step's node and what it spent.
-func recordSpend(ctx context.Context, t *testing.T, st *Store, runID, jobName, stepName string, tokens int) {
+func recordSpend(ctx context.Context, t *testing.T, st store.Store, runID, jobName, stepName string, tokens int) {
 	t.Helper()
 
 	err := st.RecordNode(ctx, store.NodeRecord{
@@ -67,7 +63,7 @@ func recordSpend(ctx context.Context, t *testing.T, st *Store, runID, jobName, s
 	}
 }
 
-func onlyUsage(ctx context.Context, t *testing.T, st *Store, runID string) store.AgentUsage {
+func onlyUsage(ctx context.Context, t *testing.T, st store.Store, runID string) store.AgentUsage {
 	t.Helper()
 
 	rows, err := st.RunUsage(ctx, runID)
@@ -98,14 +94,12 @@ func onlyUsage(ctx context.Context, t *testing.T, st *Store, runID string) store
 // is correct for a retried step and catastrophic across pipelines: the tokens
 // are added to a row belonging to someone else, so one pipeline is billed for
 // work it never ran and the other reports nothing at all.
-func TestAgentUsageKeyIsScopedToItsPipeline(t *testing.T) {
+func (s suite) TestAgentUsageKeyIsScopedToItsPipeline(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "shared.db")
-
-	web := mustOpenPipeline(t, path, "web")
-	infra := mustOpenPipeline(t, path, "infra")
+	web := s.mustOpenPipeline(t, "web")
+	infra := s.mustOpenPipeline(t, "infra")
 
 	const (
 		runID   = "SHARED01"

@@ -1,33 +1,29 @@
-package sqlite
+package storetest
 
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
 )
 
 // openTestStore returns a Store backed by a fresh temp database.
-func openTestStore(t *testing.T) *Store {
+func (s suite) openTestStore(t *testing.T) store.Store {
 	t.Helper()
 
-	st, err := OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := s.open(t, "test")
 
 	t.Cleanup(func() { _ = st.Close() })
 
 	return st
 }
 
-func TestListNodes(t *testing.T) {
+func (s suite) TestListNodes(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	st := openTestStore(t)
+	st := s.openTestStore(t)
 
 	record := store.NodeRecord{
 		Hash: "node-1", ParentHash: "", Kind: "task", StepIndex: 0,
@@ -58,10 +54,10 @@ func TestListNodes(t *testing.T) {
 	}
 }
 
-func TestListNodesOnAnEmptyStore(t *testing.T) {
+func (s suite) TestListNodesOnAnEmptyStore(t *testing.T) {
 	t.Parallel()
 
-	rows, err := openTestStore(t).ListNodes(context.Background(), "", 10)
+	rows, err := s.openTestStore(t).ListNodes(context.Background(), "", 10)
 	if err != nil {
 		t.Fatalf("listing an empty st should not error: %v", err)
 	}
@@ -71,11 +67,11 @@ func TestListNodesOnAnEmptyStore(t *testing.T) {
 	}
 }
 
-func TestListTriggerQueue(t *testing.T) {
+func (s suite) TestListTriggerQueue(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	st := openTestStore(t)
+	st := s.openTestStore(t)
 
 	err := st.EnqueueJob(ctx, "build", "resource repo changed")
 	if err != nil {

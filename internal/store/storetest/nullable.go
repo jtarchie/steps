@@ -1,10 +1,9 @@
-package sqlite
+package storetest
 
 // The columns where NULL and a value mean different things.
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -21,11 +20,11 @@ import (
 // the whole suite. The reason they matter is the same reason nodes.parent_hash
 // is a deliberate non-foreign-key: the chain is what the cache is read back
 // along, and a node whose parent is NULL is a chain that starts over.
-func TestRecordNodeStoresWhatItWasGiven(t *testing.T) {
+func (s suite) TestRecordNodeStoresWhatItWasGiven(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := s.open(t, "test")
 
 	defer func() { _ = st.Close() }()
 

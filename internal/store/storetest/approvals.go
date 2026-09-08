@@ -1,19 +1,20 @@
-package sqlite
+package storetest
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestApprovalsListsOnlyWhatIsWaiting: the waiting list is what a job is
 // parked behind and what the nav badge counts, so a decided request must drop
 // off it.
-func TestApprovalsListsOnlyWhatIsWaiting(t *testing.T) {
+func (s suite) TestApprovalsListsOnlyWhatIsWaiting(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	st := twoApprovals(t)
+	st := s.twoApprovals(t)
 
 	pending, err := st.Approvals(ctx, true, 0)
 	if err != nil {
@@ -33,11 +34,11 @@ func TestApprovalsListsOnlyWhatIsWaiting(t *testing.T) {
 // listing is the audit trail — who approved a deploy, when, and why a
 // rejection was a rejection. Those facts must not depend on external chat
 // history, so the row carries them and the listing selects them.
-func TestApprovalsListsTheDecisionsNewestFirst(t *testing.T) {
+func (s suite) TestApprovalsListsTheDecisionsNewestFirst(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	st := twoApprovals(t)
+	st := s.twoApprovals(t)
 
 	all, err := st.Approvals(ctx, false, 10)
 	if err != nil {
@@ -59,12 +60,12 @@ func TestApprovalsListsTheDecisionsNewestFirst(t *testing.T) {
 }
 
 // twoApprovals records one decided request and one still waiting.
-func twoApprovals(t *testing.T) *Store {
+func (s suite) twoApprovals(t *testing.T) store.Store {
 	t.Helper()
 
 	ctx := context.Background()
 
-	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := s.open(t, "test")
 	t.Cleanup(func() { _ = st.Close() })
 
 	first, err := st.RequestApproval(ctx, "deploy", "ship it?")
@@ -88,11 +89,11 @@ func twoApprovals(t *testing.T) *Store {
 // TestPendingApprovalsAreNotCapped: a job is parked behind every waiting
 // approval, and the nav badge counts them, so the waiting list takes them all.
 // Zero means no limit here the way it does everywhere else.
-func TestPendingApprovalsAreNotCapped(t *testing.T) {
+func (s suite) TestPendingApprovalsAreNotCapped(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	st := s.open(t, "test")
 
 	defer func() { _ = st.Close() }()
 
