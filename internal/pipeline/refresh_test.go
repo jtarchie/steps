@@ -590,6 +590,9 @@ func lastCheckedVersion(t *testing.T, st *store.Store, name string) (string, boo
 	t.Helper()
 
 	last, found, err := st.LastChecked(context.Background(), name)
+	if err != nil {
+		return "", false, fmt.Errorf("reading the check cursor for %q: %w", name, err)
+	}
 
-	return last.Version, found, err
+	return last.Version, found, nil
 }

@@ -999,10 +999,7 @@ func TestPruneKeepsTheRunItWasCalledFrom(t *testing.T) {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	_, ok, err := store.FindRunRow(ctx, resumed)
-	if err != nil || !ok {
-		t.Errorf("the run being resumed was deleted by its own prune: %v (found %v)", err, ok)
-	}
+	assertRunSurvives(t, store, resumed, "the run being resumed was deleted by its own prune")
 
 	// Its resume record has to survive with it, or the resume restarts from zero.
 	steps, err := store.CompletedRunSteps(ctx, resumed)
@@ -1049,10 +1046,7 @@ func TestPruneSparesARunStillInFlight(t *testing.T) {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	_, ok, err := store.FindRunRow(ctx, "INFLIGHT")
-	if err != nil || !ok {
-		t.Errorf("a run still in flight was deleted by another build's prune: %v (found %v)", err, ok)
-	}
+	assertRunSurvives(t, store, "INFLIGHT", "a run still in flight was deleted by another build's prune")
 }
 
 // TestRunOrderIsTimeOrder pins the stored timestamp format against the trap that
@@ -1310,10 +1304,8 @@ func TestPruneKeepsWhatASurvivingRunPointsAt(t *testing.T) {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	_, found, err := store.FindRunRow(ctx, runID)
-	if err != nil || !found {
-		t.Fatalf("the run itself was reaped, so this proves nothing about its records: %v (found %v)", err, found)
-	}
+	assertRunSurvives(t, store, runID,
+		"the run itself was reaped, so this proves nothing about its records")
 
 	placements, err := store.RunPlacements(ctx, runID)
 	if err != nil {
@@ -1415,4 +1407,19 @@ func countNodes(ctx context.Context, t *testing.T, store *Store, jobName string)
 	}
 
 	return count
+}
+
+// assertRunSurvives fails with what the survival was proving when a run is
+// gone after a prune.
+func assertRunSurvives(t *testing.T, store *Store, runID, what string) {
+	t.Helper()
+
+	_, found, err := store.FindRunRow(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("FindRunRow(%q): %v", runID, err)
+	}
+
+	if !found {
+		t.Fatal(what)
+	}
 }

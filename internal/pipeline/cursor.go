@@ -189,7 +189,7 @@ func loadResourceHistory(ctx context.Context, st *store.Store, job *config.Job) 
 		}
 
 		if err != nil {
-			return nil, err //nolint:wrapcheck // the store names the resource
+			return nil, err
 		}
 
 		history.versions[name] = versions

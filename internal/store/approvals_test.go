@@ -6,25 +6,73 @@ import (
 	"testing"
 )
 
-// TestApprovalsListsWaitingAndDecided covers both halves of the one listing:
-// the waiting list a job is parked behind, and the audit trail of what was
-// decided. They differ in filter, order and cap, which is the whole reason
-// they are one method with one branch rather than two queries that have to
-// agree about the columns.
-func TestApprovalsListsWaitingAndDecided(t *testing.T) {
+// TestApprovalsListsOnlyWhatIsWaiting: the waiting list is what a job is
+// parked behind and what the nav badge counts, so a decided request must drop
+// off it.
+func TestApprovalsListsOnlyWhatIsWaiting(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	store := twoApprovals(t)
 
-	defer func() { _ = store.Close() }()
+	pending, err := store.Approvals(ctx, true, 0)
+	if err != nil {
+		t.Fatalf("Approvals: %v", err)
+	}
+
+	if len(pending) != 1 {
+		t.Fatalf("waiting approvals = %+v, want only the undecided one", pending)
+	}
+
+	if pending[0].Status != "pending" || pending[0].Message != "and again?" {
+		t.Errorf("waiting approval = %+v, want the pending request", pending[0])
+	}
+}
+
+// TestApprovalsListsTheDecisionsNewestFirst: the other half of the same
+// listing is the audit trail — who approved a deploy, when, and why a
+// rejection was a rejection. Those facts must not depend on external chat
+// history, so the row carries them and the listing selects them.
+func TestApprovalsListsTheDecisionsNewestFirst(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := twoApprovals(t)
+
+	all, err := store.Approvals(ctx, false, 10)
+	if err != nil {
+		t.Fatalf("Approvals: %v", err)
+	}
+
+	if len(all) != 2 {
+		t.Fatalf("history = %+v, want both approvals", all)
+	}
+
+	if all[0].Message != "and again?" {
+		t.Errorf("history leads with %q, want the newest request", all[0].Message)
+	}
+
+	decided := all[1]
+	if decided.Status != "approved" || decided.DecidedBy != "jtarchie" || decided.Reason != "looks fine" {
+		t.Errorf("decided approval = %+v, want approved by jtarchie because it looks fine", decided)
+	}
+}
+
+// twoApprovals records one decided request and one still waiting.
+func twoApprovals(t *testing.T) *Store {
+	t.Helper()
+
+	ctx := context.Background()
+
+	store := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+	t.Cleanup(func() { _ = store.Close() })
 
 	first, err := store.RequestApproval(ctx, "deploy", "ship it?")
 	if err != nil {
 		t.Fatalf("RequestApproval: %v", err)
 	}
 
-	second, err := store.RequestApproval(ctx, "deploy", "and again?")
+	_, err = store.RequestApproval(ctx, "deploy", "and again?")
 	if err != nil {
 		t.Fatalf("RequestApproval: %v", err)
 	}
@@ -34,34 +82,7 @@ func TestApprovalsListsWaitingAndDecided(t *testing.T) {
 		t.Fatalf("DecideApproval: %v", err)
 	}
 
-	pending, err := store.Approvals(ctx, true, 0)
-	if err != nil {
-		t.Fatalf("Approvals: %v", err)
-	}
-
-	if len(pending) != 1 || pending[0].ID != second {
-		t.Fatalf("waiting approvals = %+v, want only the undecided %d", pending, second)
-	}
-
-	if pending[0].Status != "pending" {
-		t.Errorf("waiting approval reads status %q, want pending", pending[0].Status)
-	}
-
-	all, err := store.Approvals(ctx, false, 10)
-	if err != nil {
-		t.Fatalf("Approvals: %v", err)
-	}
-
-	if len(all) != 2 || all[0].ID != second {
-		t.Fatalf("history = %+v, want both approvals newest first", all)
-	}
-
-	// The decision is the audit trail; a listing that dropped it would be a
-	// record of who asked and of nothing else.
-	decided := all[1]
-	if decided.Status != "approved" || decided.DecidedBy != "jtarchie" || decided.Reason != "looks fine" {
-		t.Errorf("decided approval = %+v, want approved by jtarchie because it looks fine", decided)
-	}
+	return store
 }
 
 // TestPendingApprovalsAreNotCapped: a job is parked behind every waiting
