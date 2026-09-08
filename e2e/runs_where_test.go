@@ -14,7 +14,6 @@ import (
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
-	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // whereFixture writes a pipeline and a state database beside it, with the
@@ -32,10 +31,9 @@ jobs:
     run: "true"
 `)
 
-	st, err := sqlite.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
-	if err != nil {
-		t.Fatalf("open state store: %v", err)
-	}
+	st := openStoreFor(t, path)
+
+	var err error
 
 	record(context.Background(), st)
 

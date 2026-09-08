@@ -199,9 +199,10 @@ func (s *Store) CompletedRunSteps(ctx context.Context, runID string) (map[int]st
 	}
 
 	// Joined to runs for the pipeline, which run_steps has no column of its
-	// own for. Run ids are minted without a uniqueness check, so an unscoped
-	// read here would hand one run another's completed steps and --resume
-	// would skip work it never did.
+	// own for. StartRun refuses an id another pipeline holds, so this is
+	// defense in depth — but the rule is categorical, and an unscoped read
+	// here would hand one run another's completed steps and --resume would
+	// skip work it never did.
 	steps, err := collect(ctx, s.db, "the steps of run "+runID,
 		`SELECT s.step_index, s.step_name FROM run_steps s
 		 JOIN runs r ON r.id = s.run_id
@@ -232,7 +233,7 @@ func (s *Store) ListRuns(ctx context.Context, jobName string, limit int) ([]stor
 		WHERE pipeline_id = ? AND (? = '' OR job_name = ?)
 		ORDER BY started_at DESC, rowid DESC
 		LIMIT ?
-	`, []any{s.pipelineID, jobName, jobName, limit}, scanRunRowFrom)
+	`, []any{s.pipelineID, jobName, jobName, rowLimit(limit)}, scanRunRowFrom)
 }
 
 // LatestRunByJob returns the most recent run for every job that has one,
@@ -275,7 +276,7 @@ func (s *Store) RunsUsingNode(ctx context.Context, hash string, limit int) ([]st
 		  AND r.id IN (SELECT DISTINCT run_id FROM run_events WHERE hash = ?)
 		ORDER BY r.started_at DESC
 		LIMIT ?
-	`, []any{s.pipelineID, hash, limit}, scanRunRowFrom)
+	`, []any{s.pipelineID, hash, rowLimit(limit)}, scanRunRowFrom)
 }
 
 // FindRunRow reads one run by id, with ok reporting whether this pipeline has

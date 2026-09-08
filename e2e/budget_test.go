@@ -9,7 +9,6 @@ import (
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
-	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // budgetPipeline renders a one-agent pipeline with an optional agent budget,
@@ -183,11 +182,7 @@ func TestAgentUsageIsPersisted(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	st, err := sqlite.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = st.Close() }()
+	st := openStoreFor(t, path)
 
 	ctx := context.Background()
 
@@ -284,11 +279,7 @@ jobs:
 		t.Fatalf("run: %v", err)
 	}
 
-	st, err := sqlite.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = st.Close() }()
+	st := openStoreFor(t, path)
 
 	ctx := context.Background()
 

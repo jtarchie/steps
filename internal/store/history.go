@@ -48,3 +48,20 @@ func DecodeVersion(encoded string) (map[string]any, error) {
 
 	return version, nil
 }
+
+// DecodeVersions decodes a stored check history in order — what
+// ResourceVersionsJSON hands back, for the caller that inspects fields.
+func DecodeVersions(encoded []string) ([]map[string]any, error) {
+	versions := make([]map[string]any, 0, len(encoded))
+
+	for _, one := range encoded {
+		version, err := DecodeVersion(one)
+		if err != nil {
+			return nil, err
+		}
+
+		versions = append(versions, version)
+	}
+
+	return versions, nil
+}

@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
-	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // TestTopLevelCommandsAreTheDocumentedSet pins the CLI's verb list.
@@ -255,10 +254,9 @@ func TestJobsResumeClearsTheBreaker(t *testing.T) {
 func pauseJob(t *testing.T, path, job string) {
 	t.Helper()
 
-	st, err := sqlite.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
-	if err != nil {
-		t.Fatalf("open state store: %v", err)
-	}
+	st := openStoreFor(t, path)
+
+	var err error
 
 	const limit = 3
 
@@ -284,12 +282,7 @@ func pauseJob(t *testing.T, path, job string) {
 func jobPaused(t *testing.T, path, job string) bool {
 	t.Helper()
 
-	st, err := sqlite.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
-	if err != nil {
-		t.Fatalf("open state store: %v", err)
-	}
-
-	defer func() { _ = st.Close() }()
+	st := openStoreFor(t, path)
 
 	paused, err := st.IsJobPaused(t.Context(), job)
 	if err != nil {

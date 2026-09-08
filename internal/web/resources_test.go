@@ -38,7 +38,7 @@ func TestResourcesPageShowsNeverCheckedForAnUncheckedResource(t *testing.T) {
 	}
 }
 
-// TestResourceDetailListsVersionsNewestFirst: ResourceVersions returns
+// TestResourceDetailListsVersionsNewestFirst: ResourceVersionsJSON returns
 // oldest-first (the order a check discovered them in), which is the wrong
 // order for a reader comparing against the "Latest version" column they just
 // came from.

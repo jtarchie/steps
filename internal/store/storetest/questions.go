@@ -12,13 +12,12 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// startQuestionRun opens a st with one running run to hang questions off,
+// startQuestionRun opens a store with one running run to hang questions off,
 // since a question is run-scoped and the foreign key means it.
 func (s suite) startQuestionRun(t *testing.T) store.Store {
 	t.Helper()
 
 	st := s.open(t, "test")
-	t.Cleanup(func() { _ = st.Close() })
 
 	err := st.StartRun(context.Background(), "run-1", "release-note", "/tmp/ws", "")
 	if err != nil {
@@ -277,11 +276,8 @@ func (s suite) TestPendingQuestionsAreScopedToTheirPipeline(t *testing.T) {
 
 	ctx := context.Background()
 	mine := s.open(t, "test")
-	defer func() { _ = mine.Close() }()
 
 	theirs := s.open(t, "other")
-
-	defer func() { _ = theirs.Close() }()
 
 	err := mine.StartRun(ctx, "run-1", "release-note", "/tmp/ws", "")
 	if err != nil {
@@ -340,7 +336,11 @@ func (s suite) TestAllQuestionsListsWhatIsWaitingFirst(t *testing.T) {
 		t.Fatalf("Questions: %v", err)
 	}
 
-	if len(listed) == 0 || listed[0].ID != parked.ID {
+	if len(listed) != 3 {
+		t.Fatalf("Questions listed %d rows, want the limit of 3", len(listed))
+	}
+
+	if listed[0].ID != parked.ID {
 		t.Errorf("Questions listed %+v first, want the pending question %d", listed, parked.ID)
 	}
 }
@@ -356,12 +356,14 @@ func (s suite) TestPendingQuestionsAreNotCapped(t *testing.T) {
 	ctx := context.Background()
 	st := s.startQuestionRun(t)
 
-	const asked = 4
+	// Above every bound the tree uses (web lists 200, the CLI 20): fewer and
+	// a default cap someone adds to the driver passes here.
+	const asked = 201
 
 	for i := range asked {
 		_, _, err := st.AskQuestion(ctx, store.Question{
 			RunID: "run-1", JobName: "release-note", AgentName: "writer",
-			Question: fmt.Sprintf("store.Question %d?", i),
+			Question: fmt.Sprintf("Question %d?", i),
 		})
 		if err != nil {
 			t.Fatalf("AskQuestion: %v", err)

@@ -23,8 +23,10 @@ type Questions interface {
 	// the endings nobody answered.
 	CloseQuestion(ctx context.Context, id int64, status, answer, by string) error
 	QuestionStatus(ctx context.Context, id int64) (Question, error)
-	// Questions lists newest first; pendingOnly is never capped, for the same
-	// reason Approvals is not.
+	// Questions is the audit trail, what is still waiting first and then
+	// newest first, capped by limit (zero means no limit). pendingOnly lists
+	// only what is waiting, OLDEST first, and its callers pass zero — for the
+	// same reason Approvals' do.
 	Questions(ctx context.Context, pendingOnly bool, limit int) ([]Question, error)
 }
 

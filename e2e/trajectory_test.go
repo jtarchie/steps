@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
-	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // agentNodeResult returns the decoded nodes.result for the single agent step
@@ -18,12 +17,7 @@ import (
 func agentNodeResult(t *testing.T, pipelinePath string) map[string]any {
 	t.Helper()
 
-	st, err := sqlite.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
-	if err != nil {
-		t.Fatalf("open state store: %v", err)
-	}
-
-	defer func() { _ = st.Close() }()
+	st := openStoreFor(t, pipelinePath)
 
 	rows, err := st.ListNodes(context.Background(), "", 50)
 	if err != nil {

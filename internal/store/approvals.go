@@ -14,8 +14,10 @@ type Approvals interface {
 	RequestApproval(ctx context.Context, jobName, message string) (int64, error)
 	DecideApproval(ctx context.Context, id int64, status, by, reason string) error
 	ApprovalStatus(ctx context.Context, id int64) (Approval, error)
-	// Approvals lists newest first; pendingOnly is never capped, because a
-	// waiting build that scrolled off the list waits forever.
+	// Approvals is the audit trail newest first, capped by limit (zero means
+	// no limit). pendingOnly lists only what is still waiting, OLDEST first —
+	// the order to work through them in — and its callers pass zero, because
+	// a waiting build that scrolled off the list waits forever.
 	Approvals(ctx context.Context, pendingOnly bool, limit int) ([]Approval, error)
 }
 

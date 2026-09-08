@@ -240,7 +240,7 @@ func (r *Reader) RecentRuns(ctx context.Context, pipelines []string, limit int) 
 		args = append(args, name)
 	}
 
-	args = append(args, limit)
+	args = append(args, rowLimit(limit))
 
 	// One ordering pass over the joined rows rather than a query per pipeline
 	// merged afterwards: a merge would have to fetch `limit` from each to be

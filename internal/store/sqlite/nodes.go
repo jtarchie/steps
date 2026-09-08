@@ -113,7 +113,7 @@ func nullableHash(hash string) any {
 // HasNodeSucceeded reports whether a node with this exact hash has already
 // been recorded as succeeded for this job.
 //
-// It is per-NODE memoization, distinct from HasSucceeded's per-CHAIN check.
+// It is per-NODE memoization, distinct from HasSucceededBatch's per-CHAIN check.
 // The chain form asks "did this whole path succeed", which is right for a
 // sequence: a changed step invalidates everything after it. An across: cell
 // has no such sequence — cells are siblings, and one cell changing says
@@ -140,7 +140,7 @@ func (s *Store) ListNodes(ctx context.Context, jobName string, limit int) ([]sto
 		WHERE pipeline_id = ? AND (? = '' OR job_name = ?)
 		ORDER BY created_at DESC, rowid DESC
 		LIMIT ?
-	`, []any{s.pipelineID, jobName, jobName, limit}, func(rows *sql.Rows) (store.NodeRow, error) {
+	`, []any{s.pipelineID, jobName, jobName, rowLimit(limit)}, func(rows *sql.Rows) (store.NodeRow, error) {
 		var (
 			row            store.NodeRow
 			errCol, result sql.NullString

@@ -148,7 +148,7 @@ CREATE INDEX IF NOT EXISTS idx_nodes_content_hash ON nodes(content_hash);
 -- what a cache should do under pressure. The chain's identity is its hash, not
 -- the survival of a row describing one of its steps.
 --
--- Bounded by age instead (see pruneJobRuns), which is the bound that matches
+-- Bounded by count instead (see pruneJobRuns), which is the bound that matches
 -- what it holds: a chain last green before the retention window is one whose
 -- content nobody is about to submit again.
 CREATE TABLE IF NOT EXISTS job_runs (

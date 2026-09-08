@@ -73,14 +73,11 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 	//   - _txlock=immediate takes the write lock when a transaction BEGINS
 	//     rather than when it first writes.
 	//
-	// foreign_keys is on so that a declared constraint means something. No
-	// table declares one today, which is exactly why it is set now and
-	// separately: switching enforcement on is a no-op that can be verified
-	// against the whole existing schema, rather than a variable in whichever
-	// change first depends on it. From here a REFERENCES clause is a rule the
-	// database keeps, not documentation — and ON DELETE CASCADE is how a row
-	// takes its dependents with it instead of leaving orphans for application
-	// code to remember.
+	// foreign_keys is on so that a declared constraint means something: a
+	// REFERENCES clause is a rule the database keeps, not documentation — and
+	// ON DELETE CASCADE is how a row takes its dependents with it instead of
+	// leaving orphans for application code to remember. Retention leans on
+	// exactly that (see pruneRuns).
 	//
 	// That last one is not a tuning knob. A deferred transaction that reads
 	// and then writes — which is what RecordVersions is, assigning

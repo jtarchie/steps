@@ -8,7 +8,9 @@
 package storetest
 
 import (
+	"context"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -39,14 +41,28 @@ type suite struct {
 func Run(t *testing.T, open OpenFunc) {
 	t.Helper()
 
-	value := reflect.ValueOf(suite{open: open})
+	// Closed here, once, rather than by each test: a handle a test forgot
+	// leaks a connection past the test's own cleanup, and nothing in this
+	// package would notice.
+	closing := func(t *testing.T, pipeline string) store.Store {
+		t.Helper()
+
+		st := open(t, pipeline)
+		t.Cleanup(func() { _ = st.Close() })
+
+		return st
+	}
+
+	// A pointer, so a method with either receiver is in the set: reflected
+	// over a value, a pointer-receiver test compiles and is never run.
+	value := reflect.ValueOf(&suite{open: closing})
 	typ := value.Type()
 	ran := 0
 
 	for index := range typ.NumMethod() {
 		method := typ.Method(index)
 		if !strings.HasPrefix(method.Name, "Test") {
-			continue
+			t.Fatalf("%s is exported but is not a Test, so nobody would run it", method.Name)
 		}
 
 		test, ok := value.Method(index).Interface().(func(*testing.T))
@@ -75,12 +91,7 @@ func (s suite) TestTheOpenerSharesOneDatabase(t *testing.T) {
 	t.Parallel()
 
 	web := s.open(t, "web")
-
-	defer func() { _ = web.Close() }()
-
 	infra := s.open(t, "infra")
-
-	defer func() { _ = infra.Close() }()
 
 	if web.Pipeline() != "web" || infra.Pipeline() != "infra" {
 		t.Fatalf("the handles are scoped to %q and %q, want web and infra", web.Pipeline(), infra.Pipeline())
@@ -88,5 +99,22 @@ func (s suite) TestTheOpenerSharesOneDatabase(t *testing.T) {
 
 	if web.Description() != infra.Description() {
 		t.Fatalf("the handles are backed by %q and %q, want one database — Description is stable, so two of them means the scoping tests below assert nothing", web.Description(), infra.Description())
+	}
+
+	// The description is a promise; this is the storage. Two private
+	// databases can answer to one description (`:memory:` does), and the
+	// scoping tests would then assert nothing.
+	rows, err := web.Reader().Pipelines(context.Background())
+	if err != nil {
+		t.Fatalf("Pipelines through web: %v", err)
+	}
+
+	names := make([]string, 0, len(rows))
+	for _, row := range rows {
+		names = append(names, row.Name)
+	}
+
+	if !slices.Contains(names, "infra") {
+		t.Fatalf("web's database holds pipelines %q, want infra among them — the descriptions matched but the storage did not", names)
 	}
 }

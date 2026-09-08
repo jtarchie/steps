@@ -8,22 +8,11 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// openTestStore returns a Store backed by a fresh temp database.
-func (s suite) openTestStore(t *testing.T) store.Store {
-	t.Helper()
-
-	st := s.open(t, "test")
-
-	t.Cleanup(func() { _ = st.Close() })
-
-	return st
-}
-
 func (s suite) TestListNodes(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	st := s.openTestStore(t)
+	st := s.open(t, "test")
 
 	record := store.NodeRecord{
 		Hash: "node-1", ParentHash: "", Kind: "task", StepIndex: 0,
@@ -57,13 +46,13 @@ func (s suite) TestListNodes(t *testing.T) {
 func (s suite) TestListNodesOnAnEmptyStore(t *testing.T) {
 	t.Parallel()
 
-	rows, err := s.openTestStore(t).ListNodes(context.Background(), "", 10)
+	rows, err := s.open(t, "test").ListNodes(context.Background(), "", 10)
 	if err != nil {
-		t.Fatalf("listing an empty st should not error: %v", err)
+		t.Fatalf("listing an empty store should not error: %v", err)
 	}
 
 	if len(rows) != 0 {
-		t.Errorf("got %d rows from an empty st, want 0", len(rows))
+		t.Errorf("got %d rows from an empty store, want 0", len(rows))
 	}
 }
 
@@ -71,7 +60,7 @@ func (s suite) TestListTriggerQueue(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	st := s.openTestStore(t)
+	st := s.open(t, "test")
 
 	err := st.EnqueueJob(ctx, "build", "resource repo changed")
 	if err != nil {

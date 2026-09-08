@@ -253,6 +253,39 @@ func TestDBSchemeNamesTheSqliteFile(t *testing.T) {
 	assertRunCount(t, state, cli.PipelineName(pipeline), 1)
 }
 
+// TestDBRefusesAMalformedSqliteURL: the spellings that LOOK like a database
+// and would quietly open a different one are usage errors too. A bare
+// `sqlite://` strips to nothing and would fall through to the per-pipeline
+// default; `sqlite:` without slashes is a file literally called that; and a
+// query string rides into the driver's DSN, which splits at the first '?'
+// and drops the pragmas steps sets after the file name.
+func TestDBRefusesAMalformedSqliteURL(t *testing.T) {
+	for _, db := range []string{"sqlite://", "sqlite:state.db", "sqlite://state.db?_pragma=foreign_keys(OFF)"} {
+		t.Run(db, func(t *testing.T) {
+			dir := t.TempDir()
+			log := filepath.Join(dir, "build.log")
+			pipeline := sharedStatePipeline(t, filepath.Join(dir, "only.yml"), log)
+
+			err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", db})
+			if err == nil {
+				t.Fatalf("--db %s was accepted", db)
+			}
+
+			if !strings.Contains(err.Error(), "sqlite://<path>") {
+				t.Errorf("the refusal does not say what to write instead: %q", err)
+			}
+
+			if fileExists(log) {
+				t.Error("the job ran against some database anyway")
+			}
+
+			if fileExists(filepath.Join(dir, ".steps")) || fileExists(filepath.Join(dir, "state.db")) {
+				t.Error("a database was created for a --db that was refused")
+			}
+		})
+	}
+}
+
 // TestDBRefusesAnUnknownScheme: a scheme no driver answers to is a usage
 // error, refused at the flag — before a .steps/ is created, a file is
 // stat'd, or a job runs against a database the operator did not name.

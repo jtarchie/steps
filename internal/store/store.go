@@ -63,8 +63,9 @@ type Meta interface {
 // It is a composition and NOTHING else — facets_test.go holds it to that.
 // The facets are the aggregates the files here are already cut along, and they
 // exist so a consumer can name the parts of the database it touches: agent
-// takes Questions and Usage, trigger takes Queue and Versions, and only
-// pipeline, which runs the whole build, needs all of it. A method declared
+// takes Cache, Usage and Questions, trigger's poll takes Queue and Versions,
+// and only what runs a whole build — pipeline, trigger's drain, web — needs
+// all of it. A method declared
 // straight on Store would belong to no aggregate, so nobody could ask for it
 // by name and a second driver would have no facet to write it under.
 type Store interface {

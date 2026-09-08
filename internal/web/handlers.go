@@ -396,7 +396,7 @@ func (s *Server) handleResource(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no resource %q in this pipeline", name))
 	}
 
-	// The raw-JSON form, not ResourceVersions: jsonLine wants the same
+	// The raw-JSON form, not decoded versions: jsonLine wants the same
 	// string every other version field on this page already carries, and
 	// this page never inspects a version's fields — decoding each one with
 	// UseNumber only to re-encode it right back a moment later would be a

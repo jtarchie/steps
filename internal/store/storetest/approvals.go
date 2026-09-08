@@ -66,7 +66,6 @@ func (s suite) twoApprovals(t *testing.T) store.Store {
 	ctx := context.Background()
 
 	st := s.open(t, "test")
-	t.Cleanup(func() { _ = st.Close() })
 
 	first, err := st.RequestApproval(ctx, "deploy", "ship it?")
 	if err != nil {
@@ -95,9 +94,9 @@ func (s suite) TestPendingApprovalsAreNotCapped(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
-	const asked = 4
+	// Above every bound the tree uses (web lists 200, the CLI 20): fewer and
+	// a default cap someone adds to the driver passes here.
+	const asked = 201
 
 	for range asked {
 		_, err := st.RequestApproval(ctx, "deploy", "ship it?")

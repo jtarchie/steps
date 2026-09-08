@@ -10,12 +10,16 @@ type Pruning interface {
 	// Prune applies one retention policy at the end of a build: the job's runs
 	// and its finished queue rows are capped by COUNT, newest kept, and a
 	// reaped run takes its events, steps, usage, placements, questions and
-	// transcripts with it. keepRunID is never reaped, however the counts fall.
+	// inputs with it. keepRunID is never reaped, however the counts fall.
 	//
-	// Newest is by insertion order, not by timestamp: two runs can land in the
-	// same instant, and the one to keep is the one recorded last.
+	// Newest is by start time, with insertion order breaking a tie: two runs
+	// can land in the same instant, and the one to keep is the one recorded
+	// last.
 	//
 	// The merkle caches are bounded here too, and by count alone — see Cache.
+	// A transcript hangs off the node cache, not the run, and goes with its
+	// node. Every call also sweeps the configuration revisions nothing refers
+	// to any more; a wholly zero Retention is that sweep alone.
 	Prune(ctx context.Context, policy Retention, keepRunID string) error
 }
 

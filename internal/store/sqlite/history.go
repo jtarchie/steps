@@ -252,7 +252,7 @@ func (s *Store) ResourceVersionsJSON(ctx context.Context, resourceName string) (
 // VersionOrders maps every recorded version of a resource to its
 // check_order, INCLUDING the rows a check did not file.
 //
-// Deliberately wider than ResourceVersions, which answers "what exists" and
+// Deliberately wider than ResourceVersionsJSON, which answers "what exists" and
 // therefore reports only what a check saw. This answers "where does this
 // version sit", and a job that resolved its own versions needs an order for
 // them or its cursor could never advance past them — a `steps run` against an
@@ -341,7 +341,7 @@ func ensureVersion(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceNa
 	}
 
 	// from_check stays 0: this records that a version was USED, which is not
-	// the same as a check reporting what exists. See ResourceVersions.
+	// the same as a check reporting what exists. See ResourceVersionsJSON.
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO resource_versions (pipeline_id, resource_name, version_json, check_order, from_check)
 		VALUES (?, ?, ?, ?, 0)

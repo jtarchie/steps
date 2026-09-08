@@ -26,8 +26,6 @@ func (s suite) TestRecordNodeStoresWhatItWasGiven(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	root := strings.Repeat("a", 64)
 	child := strings.Repeat("b", 64)
 

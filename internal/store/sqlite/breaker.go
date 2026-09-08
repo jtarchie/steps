@@ -87,7 +87,7 @@ func (s *Store) IsJobPaused(ctx context.Context, jobName string) (bool, error) {
 func (s *Store) PausedJobs(ctx context.Context) ([]store.PausedJob, error) {
 	return collect(ctx, s.db, "paused jobs",
 		`SELECT job_name, consecutive, paused_at FROM job_breaker
-		 WHERE pipeline_id = ? AND paused_at IS NOT NULL ORDER BY paused_at`,
+		 WHERE pipeline_id = ? AND paused_at IS NOT NULL ORDER BY paused_at, rowid`,
 		[]any{s.pipelineID}, func(rows *sql.Rows) (store.PausedJob, error) {
 			var job store.PausedJob
 

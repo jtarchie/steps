@@ -51,8 +51,6 @@ func (s suite) TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	instance := "i-0123456789abcdef0"
 	root := 0
 
@@ -103,11 +101,7 @@ func (s suite) TestPlacementsAreScopedToTheirPipeline(t *testing.T) {
 	ctx := context.Background()
 	web := s.open(t, "web")
 
-	defer func() { _ = web.Close() }()
-
 	infra := s.open(t, "infra")
-
-	defer func() { _ = infra.Close() }()
 
 	// The same run id in both pipelines, which is what makes this a real
 	// collision rather than a coincidence: ids are minted per pipeline.
@@ -168,11 +162,7 @@ func (s suite) TestPlacementKeyIsScopedToItsPipeline(t *testing.T) {
 	ctx := context.Background()
 	web := s.open(t, "web")
 
-	defer func() { _ = web.Close() }()
-
 	infra := s.open(t, "infra")
-
-	defer func() { _ = infra.Close() }()
 
 	// Every part of the key the two can agree on by accident: one job name, one
 	// content hash, one run id.
@@ -211,8 +201,6 @@ func (s suite) TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T)
 
 	ctx := context.Background()
 	st := s.open(t, "test")
-
-	defer func() { _ = st.Close() }()
 
 	reclaimed := "i-000000000000000aa"
 	replaced := "i-000000000000000bb"
@@ -262,8 +250,6 @@ func (s suite) TestPlacementsReadBackInPlanOrder(t *testing.T) {
 
 	ctx := context.Background()
 	st := s.open(t, "test")
-
-	defer func() { _ = st.Close() }()
 
 	// Recorded last-step-first, under hashes whose own order matches the order
 	// they were written — so nothing about the storage happens to be plan order.
@@ -327,8 +313,6 @@ func (s suite) TestPlacementWithoutANodeIsStillKeyed(t *testing.T) {
 
 	ctx := context.Background()
 	st := s.open(t, "test")
-
-	defer func() { _ = st.Close() }()
 
 	ensureRun(ctx, t, st, "HOOKRUN1", "build")
 

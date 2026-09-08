@@ -30,8 +30,6 @@ func (s suite) TestRunsRecordTheRevisionTheyWereGiven(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	for _, sha := range []string{"sha-one", "sha-two"} {
 		err := st.RecordRevision(ctx, sha, pipelineSource(1))
 		if err != nil {
@@ -79,8 +77,6 @@ func (s suite) TestResumeRecordsTheConfigItResumesUnder(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	for _, sha := range []string{"sha-broken", "sha-fixed"} {
 		err := st.RecordRevision(ctx, sha, pipelineSource(1))
 		if err != nil {
@@ -122,8 +118,6 @@ func (s suite) TestRunWithNoRecordedConfigurationSaysSo(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	err := st.StartRun(ctx, "run-one", "build", "/tmp/ws-one", "")
 	if err != nil {
 		t.Fatalf("StartRun with no configuration recorded: %v", err)
@@ -148,11 +142,8 @@ func (s suite) TestFindRevisionIsScopedToItsPipeline(t *testing.T) {
 	t.Parallel()
 
 	mine := s.open(t, "test")
-	defer func() { _ = mine.Close() }()
 
 	theirs := s.open(t, "other")
-
-	defer func() { _ = theirs.Close() }()
 
 	err := theirs.RecordRevision(ctxFor(t), "sha-theirs", pipelineSource(1))
 	if err != nil {
@@ -201,8 +192,6 @@ func (s suite) TestResumeKeepsTheConfigurationItCannotName(t *testing.T) {
 
 	ctx := context.Background()
 	st := s.open(t, "test")
-
-	defer func() { _ = st.Close() }()
 
 	err := st.RecordRevision(ctx, "sha-recorded", pipelineSource(1))
 	if err != nil {

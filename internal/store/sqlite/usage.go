@@ -130,9 +130,9 @@ func (s *Store) RunCostTotals(ctx context.Context, limit int) ([]store.RunTotals
 		FROM agent_usage
 		WHERE pipeline_id = ?
 		GROUP BY run_id
-		ORDER BY MAX(created_at) DESC
+		ORDER BY MAX(created_at) DESC, MAX(rowid) DESC
 		LIMIT ?
-	`, []any{s.pipelineID, limit}, func(rows *sql.Rows) (store.RunTotals, error) {
+	`, []any{s.pipelineID, rowLimit(limit)}, func(rows *sql.Rows) (store.RunTotals, error) {
 		var (
 			totals store.RunTotals
 			cost   float64

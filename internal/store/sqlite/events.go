@@ -38,16 +38,22 @@ func (s *Store) AppendRunEvent(ctx context.Context, row store.RunEventRow) error
 // RunEvents replays a run's events in order, from afterSeq exclusive. Pass 0
 // for the whole run — which is also how a reconnecting live view catches up
 // on what it missed without re-reading what it already has.
+//
+// Joined to runs for the pipeline, which run_events has no column of its own
+// for: a holder of this facet alone has no FindRunRow to ask first, so a run
+// id another pipeline minted must read as nothing here rather than as that
+// pipeline's events.
 func (s *Store) RunEvents(ctx context.Context, runID string, afterSeq int64, limit int) ([]store.RunEventRow, error) {
 	return collect(ctx, s.db, "run events", `
-		SELECT seq, run_id, type, step_index, step_name, step_kind,
-		       step_id, parent_step_id,
-		       status, hash, text, name, detail, duration_ms, worker, created_at
-		FROM run_events
-		WHERE run_id = ? AND seq > ?
-		ORDER BY seq
+		SELECT e.seq, e.run_id, e.type, e.step_index, e.step_name, e.step_kind,
+		       e.step_id, e.parent_step_id,
+		       e.status, e.hash, e.text, e.name, e.detail, e.duration_ms, e.worker, e.created_at
+		FROM run_events e
+		JOIN runs r ON r.id = e.run_id
+		WHERE e.run_id = ? AND r.pipeline_id = ? AND e.seq > ?
+		ORDER BY e.seq
 		LIMIT ?
-	`, []any{runID, afterSeq, limit}, func(rows *sql.Rows) (store.RunEventRow, error) {
+	`, []any{runID, s.pipelineID, afterSeq, rowLimit(limit)}, func(rows *sql.Rows) (store.RunEventRow, error) {
 		var (
 			row       store.RunEventRow
 			createdAt string

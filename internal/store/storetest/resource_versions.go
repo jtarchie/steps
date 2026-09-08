@@ -25,15 +25,6 @@ func versionNames(t *testing.T, versions []map[string]any) []string {
 	return names
 }
 
-func (s suite) newHistoryStore(t *testing.T) store.Store {
-	t.Helper()
-
-	st := s.open(t, "test")
-	t.Cleanup(func() { _ = st.Close() })
-
-	return st
-}
-
 func recordN(t *testing.T, st store.Store, resource string, names ...string) {
 	t.Helper()
 
@@ -55,7 +46,7 @@ func recordN(t *testing.T, st store.Store, resource string, names ...string) {
 func (s suite) TestRecordVersionsKeepsDiscoveryOrder(t *testing.T) {
 	t.Parallel()
 
-	st := s.newHistoryStore(t)
+	st := s.open(t, "test")
 
 	recordN(t, st, "items", "1", "2")
 	recordN(t, st, "items", "1", "2", "3")
@@ -71,7 +62,7 @@ func (s suite) TestRecordVersionsKeepsDiscoveryOrder(t *testing.T) {
 	}
 }
 
-// TestResourceVersionsJSONPreservesAWideID pins what the st hands back: the
+// TestResourceVersionsJSONPreservesAWideID pins what the store hands back: the
 // stored bytes, not a value that has been through a decode. It is the whole
 // reason this read is JSON and DecodeVersion (with its UseNumber) is the
 // caller's business — a round trip through float64 turns a wide id into
@@ -79,7 +70,7 @@ func (s suite) TestRecordVersionsKeepsDiscoveryOrder(t *testing.T) {
 func (s suite) TestResourceVersionsJSONPreservesAWideID(t *testing.T) {
 	t.Parallel()
 
-	st := s.newHistoryStore(t)
+	st := s.open(t, "test")
 	ctx := context.Background()
 
 	_, err := st.RecordVersions(ctx, "items", []map[string]any{
@@ -117,7 +108,7 @@ func (s suite) TestResourceVersionsJSONPreservesAWideID(t *testing.T) {
 func (s suite) TestResourceVersionsAreScopedToTheirResource(t *testing.T) {
 	t.Parallel()
 
-	st := s.newHistoryStore(t)
+	st := s.open(t, "test")
 
 	recordN(t, st, "items", "1", "2")
 	recordN(t, st, "other", "9")
@@ -137,7 +128,7 @@ func (s suite) TestResourceVersionsAreScopedToTheirResource(t *testing.T) {
 func (s suite) TestRecordVersionsKeepsExactDigits(t *testing.T) {
 	t.Parallel()
 
-	st := s.newHistoryStore(t)
+	st := s.open(t, "test")
 
 	_, err := st.RecordVersions(context.Background(), "items", []map[string]any{
 		{"id": json.Number("1234567890123456789"), "ts": json.Number("1699887654.001200")},
@@ -147,8 +138,8 @@ func (s suite) TestRecordVersionsKeepsExactDigits(t *testing.T) {
 	}
 
 	versions, err := decodedVersions(t, st, "items")
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || len(versions) != 1 {
+		t.Fatalf("decoded %d versions, err %v; want the one recorded", len(versions), err)
 	}
 
 	if got := fmt.Sprint(versions[0]["id"]); got != "1234567890123456789" {
@@ -172,7 +163,7 @@ func (s suite) TestRecordVersionsKeepsExactDigits(t *testing.T) {
 func (s suite) TestRecordVersionsPrunesOldestAndCascades(t *testing.T) {
 	t.Parallel()
 
-	st := s.newHistoryStore(t)
+	st := s.open(t, "test")
 	ctx := context.Background()
 
 	oldest, err := store.EncodeVersion(map[string]any{"n": "1"})
@@ -231,7 +222,7 @@ func (s suite) TestRecordVersionsPrunesOldestAndCascades(t *testing.T) {
 func (s suite) TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
 	t.Parallel()
 
-	st := s.newHistoryStore(t)
+	st := s.open(t, "test")
 	ctx := context.Background()
 
 	version, err := store.EncodeVersion(map[string]any{"n": "7"})
@@ -288,7 +279,7 @@ func (s suite) TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
 func (s suite) TestTheMarkCannotDevelopHoles(t *testing.T) {
 	t.Parallel()
 
-	st := s.newHistoryStore(t)
+	st := s.open(t, "test")
 	ctx := context.Background()
 
 	// Far more versions than any set-based cap would have kept.
@@ -359,7 +350,7 @@ func highestOrder(orders map[string]int64) int64 {
 func (s suite) TestCheckReDiscoveryReMintsARunFiledOrder(t *testing.T) {
 	t.Parallel()
 
-	st := s.newHistoryStore(t)
+	st := s.open(t, "test")
 	ctx := context.Background()
 
 	// A manual run files v10 before any check has seen the resource.
@@ -382,8 +373,8 @@ func (s suite) TestCheckReDiscoveryReMintsARunFiledOrder(t *testing.T) {
 	}
 
 	history, err := decodedVersions(t, st, "items")
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || len(history) == 0 {
+		t.Fatalf("decoded %d versions, err %v; want the recorded history", len(history), err)
 	}
 
 	if got := fmt.Sprint(history[len(history)-1]["n"]); got != "10" {
@@ -397,7 +388,7 @@ func (s suite) TestCheckReDiscoveryReMintsARunFiledOrder(t *testing.T) {
 func (s suite) TestSteadyStateReportWritesNothing(t *testing.T) {
 	t.Parallel()
 
-	st := s.newHistoryStore(t)
+	st := s.open(t, "test")
 	ctx := context.Background()
 
 	report := []map[string]any{{"n": "1"}, {"n": "2"}, {"n": "3"}}
@@ -440,7 +431,7 @@ func (s suite) TestSteadyStateReportWritesNothing(t *testing.T) {
 func (s suite) TestPruneNeverEatsTheReportedWindow(t *testing.T) {
 	t.Parallel()
 
-	st := s.newHistoryStore(t)
+	st := s.open(t, "test")
 	ctx := context.Background()
 
 	window := make([]map[string]any, 0, 20)
@@ -490,16 +481,59 @@ func decodedVersions(t *testing.T, st store.Store, name string) ([]map[string]an
 		return nil, fmt.Errorf("could not read the stored versions: %w", err)
 	}
 
-	versions := make([]map[string]any, 0, len(encoded))
-
-	for _, one := range encoded {
-		version, err := store.DecodeVersion(one)
-		if err != nil {
-			return nil, fmt.Errorf("could not decode a stored version: %w", err)
-		}
-
-		versions = append(versions, version)
+	versions, err := store.DecodeVersions(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("could not decode a stored version: %w", err)
 	}
 
 	return versions, nil
+}
+
+// TestVersionHistoryZeroMeansNoLimit: the deleted-versions bound, and the
+// one value of it that is easy to get wrong.
+//
+// `version_history: 0` means no limit, the same convention every other cap in
+// this repo uses (docs/attempts-timeout.md). The branch that enforces it is
+// `if limit < 0`, and widening it to `limit <= 0` restores exactly the bug the
+// comment records — zero silently becoming the 1000 default — with the whole
+// suite still green. A cap nobody asked for is not a visible failure: it looks
+// like a working pipeline until a resource passes a thousand versions and the
+// oldest start disappearing.
+func (s suite) TestVersionHistoryZeroMeansNoLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	// Filed across several checks, not one. A prune never touches versions the
+	// CURRENT check just reported — minReportedOrder is the floor — so a
+	// single call of everything is protected in full and would pass under any
+	// cap at all. The cap only bites on versions an EARLIER check filed.
+	const (
+		perCheck = 200
+		checks   = 6
+		filed    = perCheck * checks
+	)
+
+	for check := range checks {
+		versions := make([]map[string]any, 0, perCheck)
+		for i := range perCheck {
+			versions = append(versions, map[string]any{"ref": fmt.Sprintf("v%04d", check*perCheck+i)})
+		}
+
+		_, err := st.RecordVersions(ctx, "mentions", versions, 0)
+		if err != nil {
+			t.Fatalf("RecordVersions check %d: %v", check, err)
+		}
+	}
+
+	orders, err := st.VersionOrders(ctx, "mentions")
+	if err != nil {
+		t.Fatalf("VersionOrders: %v", err)
+	}
+
+	if len(orders) != filed {
+		t.Errorf("kept %d of %d versions under version_history: 0, want all of them — zero means no limit, not the default cap of %d",
+			len(orders), filed, store.DefaultResourceVersionCap)
+	}
 }

@@ -5,6 +5,9 @@ package storetest
 import (
 	"context"
 	"testing"
+	"time"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestCompletedRunStepsAreScopedToTheirPipeline pins the read --resume trusts.
@@ -22,8 +25,8 @@ func (s suite) TestCompletedRunStepsAreScopedToTheirPipeline(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	web := s.mustOpenPipeline(t, "web")
-	infra := s.mustOpenPipeline(t, "infra")
+	web := s.open(t, "web")
+	infra := s.open(t, "infra")
 
 	const shared = "SHARED01"
 
@@ -48,5 +51,52 @@ func (s suite) TestCompletedRunStepsAreScopedToTheirPipeline(t *testing.T) {
 
 	if len(done) != 0 {
 		t.Fatalf("infra sees %d completed steps of a run it never finished: %v", len(done), done)
+	}
+}
+
+// TestRunEventsAreScopedToTheirPipeline: run_events reaches its pipeline
+// only through runs, like run_steps, and the Events facet can be held on its
+// own — with no FindRunRow to ask first, the read has to refuse the other
+// pipeline's run by itself.
+func (s suite) TestRunEventsAreScopedToTheirPipeline(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	web := s.open(t, "web")
+	infra := s.open(t, "infra")
+
+	const shared = "SHARED02"
+
+	err := web.StartRun(ctx, shared, "build", "/tmp/web", "")
+	if err != nil {
+		t.Fatalf("StartRun web: %v", err)
+	}
+
+	err = web.AppendRunEvent(ctx, store.RunEventRow{RunID: shared, Type: "step_started", StepName: "compile", At: time.Now()})
+	if err != nil {
+		t.Fatalf("AppendRunEvent web: %v", err)
+	}
+
+	err = web.RecordRunInput(ctx, shared, "repo", `{"ref":"abc"}`)
+	if err != nil {
+		t.Fatalf("RecordRunInput web: %v", err)
+	}
+
+	events, err := infra.RunEvents(ctx, shared, 0, 0)
+	if err != nil {
+		t.Fatalf("RunEvents infra: %v", err)
+	}
+
+	if len(events) != 0 {
+		t.Fatalf("infra sees %d event(s) of a run it never ran: %+v", len(events), events)
+	}
+
+	inputs, err := infra.RunInputs(ctx, shared)
+	if err != nil {
+		t.Fatalf("RunInputs infra: %v", err)
+	}
+
+	if len(inputs) != 0 {
+		t.Fatalf("infra sees the inputs of a run it never created: %v", inputs)
 	}
 }

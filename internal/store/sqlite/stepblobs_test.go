@@ -16,6 +16,9 @@ func TestStepBlobsEvictWholeEntriesByCount(t *testing.T) {
 	t.Parallel()
 
 	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = st.Close() }()
+
 	ctx := context.Background()
 
 	for i := range stepBlobEntryCap + 1 {

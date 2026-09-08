@@ -129,8 +129,8 @@ func (s *Store) PassedVersions(ctx context.Context, jobName string, limit int) (
 	return collect(ctx, s.db, "job versions", `
 		SELECT resource_name, version_json, recorded_at
 		FROM job_versions WHERE pipeline_id = ? AND job_name = ?
-		ORDER BY recorded_at DESC LIMIT ?
-	`, []any{s.pipelineID, jobName, limit}, func(rows *sql.Rows) (store.PassedVersion, error) {
+		ORDER BY recorded_at DESC, rowid DESC LIMIT ?
+	`, []any{s.pipelineID, jobName, rowLimit(limit)}, func(rows *sql.Rows) (store.PassedVersion, error) {
 		var (
 			row        store.PassedVersion
 			recordedAt string
@@ -269,13 +269,14 @@ func (s *Store) RecordRunInput(ctx context.Context, runID, resourceName, version
 // RunInputs reports the versions a run's builds were created with, as
 // resource name -> the canonical JSON of each version.
 //
-// No pipeline_id predicate: run_inputs reaches its pipeline through runs(id),
-// which is how every other run-scoped table is scoped, and runID is already
-// unique across the file.
+// Joined to runs for the pipeline, which run_inputs has no column of its own
+// for — the same shape as CompletedRunSteps, and for the same reason.
 func (s *Store) RunInputs(ctx context.Context, runID string) (map[string]map[string]bool, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT resource_name, version_json FROM run_inputs WHERE run_id = ?
-	`, runID)
+		SELECT i.resource_name, i.version_json FROM run_inputs i
+		JOIN runs r ON r.id = i.run_id
+		WHERE i.run_id = ? AND r.pipeline_id = ?
+	`, runID, s.pipelineID)
 	if err != nil {
 		return nil, fmt.Errorf("could not read the inputs of run %q: %w", runID, err)
 	}

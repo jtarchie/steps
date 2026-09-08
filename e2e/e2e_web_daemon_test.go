@@ -49,10 +49,9 @@ jobs:
       until [ -f `+first+` ]; do sleep 0.05; done
 `)
 
-	st, err := sqlite.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
-	if err != nil {
-		t.Fatalf("open state store: %v", err)
-	}
+	st := openStoreFor(t, path)
+
+	var err error
 
 	for _, job := range []string{"first", "second"} {
 		err = st.EnqueueJob(t.Context(), job, "test")

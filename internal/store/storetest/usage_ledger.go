@@ -18,8 +18,6 @@ func (s suite) TestAgentUsageAccumulatesAcrossAttempts(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	ctx := t.Context()
 
 	mustRecordNode(t, st, "j", "same-hash")
@@ -88,8 +86,6 @@ func (s suite) TestAgentUsageCostSurvivesAnUnpricedAttempt(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	ctx := t.Context()
 
 	mustRecordNode(t, st, "j", "node")
@@ -138,8 +134,6 @@ func (s suite) TestAgentUsageNeverPricedStaysNull(t *testing.T) {
 	t.Parallel()
 
 	st := s.open(t, "test")
-
-	defer func() { _ = st.Close() }()
 
 	ctx := t.Context()
 

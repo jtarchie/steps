@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/storetest"
 )
 
 // The synthetic build below reproduces the SHAPE and the BYTE SIZES of the
@@ -229,7 +230,7 @@ func syntheticBuild(ctx context.Context, t *testing.T, st *Store, jobName string
 
 	syntheticQuestion(ctx, t, st, runID, jobName)
 
-	err = st.SaveNodeTranscript(ctx, hashes[3], transcriptJSON(transcriptBytes))
+	err = st.SaveNodeTranscript(ctx, hashes[3], storetest.TranscriptJSON(transcriptBytes))
 	if err != nil {
 		t.Fatalf("SaveNodeTranscript: %v", err)
 	}
@@ -301,16 +302,6 @@ func backdateBuild(ctx context.Context, t *testing.T, st *Store, runID string, b
 
 // transcriptJSON builds a transcript of roughly the requested size, in the
 // shape internal/agent persists (a JSON array of typed events).
-func transcriptJSON(size int) string {
-	events := []map[string]string{{"type": "text", "text": strings.Repeat("t", size)}}
-
-	encoded, err := json.Marshal(events)
-	if err != nil {
-		panic(err)
-	}
-
-	return string(encoded)
-}
 
 // tableBytes is what dbstat reports each table and index occupies, in bytes.
 //
@@ -629,7 +620,7 @@ func TestFootprintTranscriptIsCapped(t *testing.T) {
 	}
 
 	err = st.SaveNodeTranscript(ctx, strings.Repeat("a", 64),
-		transcriptJSON(store.MaxTranscriptBytes*3))
+		storetest.TranscriptJSON(store.MaxTranscriptBytes*3))
 	if err != nil {
 		t.Fatalf("SaveNodeTranscript: %v", err)
 	}
@@ -696,7 +687,7 @@ func assertRendersAsTranscript(t *testing.T, transcript string) {
 func TestTranscriptUnderTheCapIsStoredVerbatim(t *testing.T) {
 	t.Parallel()
 
-	original := transcriptJSON(1_024)
+	original := storetest.TranscriptJSON(1_024)
 
 	if got := truncateTranscript(original); got != original {
 		t.Errorf("a transcript under the cap was rewritten:\n got %d bytes\nwant %d", len(got), len(original))

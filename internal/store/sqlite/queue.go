@@ -198,7 +198,7 @@ func (s *Store) ListTriggerQueue(ctx context.Context, limit int) ([]store.QueueR
 		WHERE pipeline_id = ?
 		ORDER BY id DESC
 		LIMIT ?
-	`, []any{s.pipelineID, limit}, func(rows *sql.Rows) (store.QueueRow, error) {
+	`, []any{s.pipelineID, rowLimit(limit)}, func(rows *sql.Rows) (store.QueueRow, error) {
 		var (
 			row                       store.QueueRow
 			started, finished, errCol sql.NullString

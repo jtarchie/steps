@@ -4,8 +4,10 @@ package storetest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -52,8 +54,6 @@ func (s suite) TestStoreHasSucceededBatch(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	mustRecordJobRun(t, st, "job", "hash1", "succeeded", nil)
 	mustRecordJobRun(t, st, "job", "hash2", "failed", errors.New("boom"))
 	mustRecordJobRun(t, st, "other-job", "hash1", "succeeded", nil)
@@ -86,8 +86,6 @@ func (s suite) TestStoreHasSucceededBatchManyHashes(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	const n = 1500
 
 	hashes := make([]string, n)
@@ -119,8 +117,6 @@ func (s suite) TestStoreRecordNode(t *testing.T) {
 	t.Parallel()
 
 	st := s.open(t, "test")
-
-	defer func() { _ = st.Close() }()
 
 	ctx := context.Background()
 
@@ -206,8 +202,6 @@ func (s suite) TestStoreCheckedVersionRoundTrip(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	ctx := context.Background()
 
 	assertLastCheckedVersion(t, st, "thing", false, "")
@@ -233,8 +227,6 @@ func (s suite) TestStoreEnqueueJobDedupsOnlyWhilePending(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	// Two enqueues while nothing has claimed the row yet: one pending row.
 	mustEnqueueJob(t, st, "build", "resource-a")
 	mustEnqueueJob(t, st, "build", "resource-b")
@@ -254,8 +246,6 @@ func (s suite) TestStoreClaimSerializesSameJob(t *testing.T) {
 	t.Parallel()
 
 	st := s.open(t, "test")
-
-	defer func() { _ = st.Close() }()
 
 	mustEnqueueJob(t, st, "build", "resource-a")
 
@@ -284,8 +274,6 @@ func (s suite) TestStoreResetStaleRunningWithPendingSuccessor(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	mustEnqueueJob(t, st, "build", "resource-a")
 	mustClaimJob(t, st, "build")                 // now running
 	mustEnqueueJob(t, st, "build", "resource-b") // pending successor
@@ -306,8 +294,6 @@ func (s suite) TestStoreClaimNextJobOrdering(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	jobNames := []string{"job-a", "job-b", "job-c", "job-d", "job-e"}
 
 	for _, name := range jobNames {
@@ -324,8 +310,6 @@ func (s suite) TestStoreClaimNextJobAtomicity(t *testing.T) {
 	t.Parallel()
 
 	st := s.open(t, "test")
-
-	defer func() { _ = st.Close() }()
 
 	const jobCount = 5
 
@@ -388,8 +372,6 @@ func (s suite) TestStoreResetStaleRunning(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	mustEnqueueJob(t, st, "build", "resource")
 	mustClaimJob(t, st, "build")
 
@@ -403,7 +385,7 @@ func (s suite) TestStoreResetStaleRunning(t *testing.T) {
 	mustClaimJob(t, st, "build")
 }
 
-// TestNodeTranscriptRoundTrip covers the transcript st: absent before any
+// TestNodeTranscriptRoundTrip covers the transcript store: absent before any
 // save, returned verbatim after, and replaced (not duplicated) on a re-save
 // under the same hash — the same replace-on-re-record shape nodes has.
 func (s suite) TestNodeTranscriptRoundTrip(t *testing.T) {
@@ -487,8 +469,6 @@ func (s suite) TestConformanceSerialGroupsBlockAcrossJobs(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	err := st.SyncJobLimits(context.Background(), map[string][]string{
 		"deploy-staging": {"deploy"},
 		"deploy-prod":    {"deploy"},
@@ -543,8 +523,6 @@ func (s suite) TestConformanceMaxInFlightAdmitsUpToTheLimit(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	err := st.SyncJobLimits(context.Background(), nil, map[string]int{"build": 2})
 	if err != nil {
 		t.Fatalf("SyncJobLimits: %v", err)
@@ -579,8 +557,6 @@ func (s suite) TestConformanceSerialForcesOneInFlight(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	// What EffectiveMaxInFlight produces for a serial job.
 	err := st.SyncJobLimits(context.Background(), nil, map[string]int{"deploy": 1})
 	if err != nil {
@@ -605,8 +581,6 @@ func (s suite) TestMaxInFlightDefaultsToOneForAnUnknownJob(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	// Nothing synced at all.
 	mustEnqueueJob(t, st, "ghost", "resource-a")
 	mustClaimJob(t, st, "ghost")
@@ -620,7 +594,7 @@ func (s suite) TestMaxInFlightDefaultsToOneForAnUnknownJob(t *testing.T) {
 func (s suite) TestConsumedMarkRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	st := s.openTestStore(t)
+	st := s.open(t, "test")
 	ctx := context.Background()
 
 	mark, err := st.ConsumedMark(ctx, "answer", "mentions")
@@ -629,7 +603,7 @@ func (s suite) TestConsumedMarkRoundTrip(t *testing.T) {
 	}
 
 	if mark != 0 {
-		t.Fatalf("a fresh st reports mark %d, want 0 — nothing taken", mark)
+		t.Fatalf("a fresh store reports mark %d, want 0 — nothing taken", mark)
 	}
 
 	err = st.RecordConsumedMark(ctx, "answer", "mentions", 5)
@@ -687,8 +661,6 @@ func (s suite) TestSyncJobLimitsClearsBothMirrors(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	err := st.SyncJobLimits(ctx, nil, map[string]int{"build": 2})
 	if err != nil {
 		t.Fatalf("SyncJobLimits: %v", err)
@@ -707,4 +679,75 @@ func (s suite) TestSyncJobLimitsClearsBothMirrors(t *testing.T) {
 
 	mustEnqueueJob(t, st, "build", "resource-b")
 	assertQueueEmpty(t, st)
+}
+
+// TestAFailedRerunUngreensTheChain: --force re-runs a chain the index holds
+// as green. If that run fails, the next unforced run must not skip it on the
+// strength of the older success.
+func (s suite) TestAFailedRerunUngreensTheChain(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	mustRecordJobRun(t, st, "job", "hash1", "succeeded", nil)
+	mustRecordJobRun(t, st, "job", "hash1", "failed", errors.New("boom"))
+
+	got, err := st.HasSucceededBatch(ctx, "job", []string{"hash1"})
+	if err != nil {
+		t.Fatalf("HasSucceededBatch: %v", err)
+	}
+
+	if got["hash1"] {
+		t.Fatal("a chain whose latest run failed is still reported as succeeded")
+	}
+}
+
+// TranscriptJSON is a transcript of one text event carrying size bytes of
+// text — the shape a cap test needs, exported so a driver's own footprint
+// measurement can store the same thing.
+func TranscriptJSON(size int) string {
+	events := []map[string]string{{"type": "text", "text": strings.Repeat("t", size)}}
+
+	encoded, err := json.Marshal(events)
+	if err != nil {
+		panic(err)
+	}
+
+	return string(encoded)
+}
+
+// TestNodeTranscriptIsCapped: a transcript is the largest single value a
+// driver stores, and a conversation has unboundedly many turns. Over the cap
+// it is truncated, not dropped — the head is where the task and the first
+// decisions are — and what remains is still JSON.
+func (s suite) TestNodeTranscriptIsCapped(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	mustRecordNode(t, st, "job", "agent-node")
+
+	err := st.SaveNodeTranscript(ctx, "agent-node", TranscriptJSON(store.MaxTranscriptBytes*3))
+	if err != nil {
+		t.Fatalf("SaveNodeTranscript: %v", err)
+	}
+
+	transcript, ok, err := st.NodeTranscript(ctx, "agent-node")
+	if err != nil || !ok {
+		t.Fatalf("NodeTranscript: ok=%v err=%v", ok, err)
+	}
+
+	if transcript == "" {
+		t.Fatal("a transcript over the cap was stored as nothing at all")
+	}
+
+	if len(transcript) > store.MaxTranscriptBytes {
+		t.Errorf("stored transcript is %d bytes, want at most %d", len(transcript), store.MaxTranscriptBytes)
+	}
+
+	if !json.Valid([]byte(transcript)) {
+		t.Error("the truncated transcript is not valid JSON")
+	}
 }

@@ -18,7 +18,6 @@ import (
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
-	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // probeType is a resource type whose every stage reports where it ran: the
@@ -63,27 +62,16 @@ jobs:
 func checkedVersions(t *testing.T, pipelinePath string) []map[string]any {
 	t.Helper()
 
-	st, err := sqlite.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
-	if err != nil {
-		t.Fatalf("open state store: %v", err)
-	}
-
-	defer func() { _ = st.Close() }()
+	st := openStoreFor(t, pipelinePath)
 
 	encoded, err := st.ResourceVersionsJSON(context.Background(), "repo")
 	if err != nil {
 		t.Fatalf("reading versions: %v", err)
 	}
 
-	versions := make([]map[string]any, 0, len(encoded))
-
-	for _, one := range encoded {
-		version, err := store.DecodeVersion(one)
-		if err != nil {
-			t.Fatalf("decoding version %q: %v", one, err)
-		}
-
-		versions = append(versions, version)
+	versions, err := store.DecodeVersions(encoded)
+	if err != nil {
+		t.Fatalf("decoding versions: %v", err)
 	}
 
 	return versions

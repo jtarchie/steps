@@ -23,7 +23,10 @@ type Queue interface {
 	ResetStaleRunning(ctx context.Context) error
 	ListTriggerQueue(ctx context.Context, limit int) ([]QueueRow, error)
 	// SyncJobLimits replaces both admission mirrors from one configuration, in
-	// one transaction: a job in neither map has no serial group and no limit.
+	// one transaction. A job in neither map has no serial group and is
+	// admitted one at a time: a missing row means the job left the pipeline
+	// between enqueue and claim, and serializing what nobody can describe is
+	// the conservative reading.
 	SyncJobLimits(ctx context.Context, groups map[string][]string, limits map[string]int) error
 	SerialGroupHolder(ctx context.Context, jobName string) (string, error)
 	RecordJobOutcome(ctx context.Context, jobName string, succeeded bool, maxFailures int) (paused bool, consecutive int, err error)

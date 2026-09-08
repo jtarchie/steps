@@ -10,17 +10,6 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// mustOpenPipeline opens one named pipeline's handle on a shared state file.
-func (s suite) mustOpenPipeline(t *testing.T, name string) store.Store {
-	t.Helper()
-
-	st := s.open(t, name)
-
-	t.Cleanup(func() { _ = st.Close() })
-
-	return st
-}
-
 // ensureRun records the run these tests hang their rows on, reusing one that
 // is already there.
 //
@@ -98,8 +87,8 @@ func (s suite) TestAgentUsageKeyIsScopedToItsPipeline(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	web := s.mustOpenPipeline(t, "web")
-	infra := s.mustOpenPipeline(t, "infra")
+	web := s.open(t, "web")
+	infra := s.open(t, "infra")
 
 	const (
 		runID   = "SHARED01"

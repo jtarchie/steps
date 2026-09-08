@@ -66,11 +66,7 @@ func (s suite) TestStepBlobsAreScopedToThePipeline(t *testing.T) {
 
 	first := s.open(t, "app")
 
-	t.Cleanup(func() { _ = first.Close() })
-
 	second := s.open(t, "infra")
-
-	t.Cleanup(func() { _ = second.Close() })
 
 	err := first.RecordStepBlobs(ctx, "same-key", map[string]string{"out": "app-digest"})
 	if err != nil {

@@ -29,8 +29,6 @@ func (s suite) TestStartRunRefusesAnIDSomeRunAlreadyHas(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	err := st.StartRun(ctx, "COLLIDE1", "build", "/tmp/first", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
@@ -71,11 +69,7 @@ func (s suite) TestStartRunRefusesAnIDHeldByAnotherPipeline(t *testing.T) {
 	ctx := context.Background()
 	web := s.open(t, "web")
 
-	defer func() { _ = web.Close() }()
-
 	infra := s.open(t, "infra")
-
-	defer func() { _ = infra.Close() }()
 
 	err := web.StartRun(ctx, "SHARED01", "build", "/tmp/web", "")
 	if err != nil {
@@ -96,8 +90,6 @@ func (s suite) TestResumeRunNeedsARunToResume(t *testing.T) {
 
 	ctx := context.Background()
 	st := s.open(t, "test")
-
-	defer func() { _ = st.Close() }()
 
 	err := st.ResumeRun(ctx, "MISSING1", "/tmp/ws", "")
 	if !errors.Is(err, store.ErrNoSuchRun) {
@@ -145,11 +137,7 @@ func (s suite) TestResumeRunIsScopedToItsPipeline(t *testing.T) {
 	ctx := context.Background()
 	web := s.open(t, "web")
 
-	defer func() { _ = web.Close() }()
-
 	infra := s.open(t, "infra")
-
-	defer func() { _ = infra.Close() }()
 
 	err := web.StartRun(ctx, "WEBRUN01", "build", "/tmp/web", "")
 	if err != nil {

@@ -14,7 +14,8 @@ import (
 type Versions interface {
 	// RecordVersions files what a check reported and prunes beyond limit,
 	// returning how many were new to check-history. A version already filed
-	// keeps its discovery order.
+	// keeps its discovery order. Zero means no limit, as Retention's fields
+	// do; a negative limit prunes at DefaultResourceVersionCap.
 	RecordVersions(ctx context.Context, resourceName string, versions []map[string]any, limit int) (int, error)
 	ResourceVersionsJSON(ctx context.Context, resourceName string) ([]string, error)
 	VersionOrders(ctx context.Context, resourceName string) (map[string]int64, error)

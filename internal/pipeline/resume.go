@@ -244,7 +244,7 @@ func resumedRunInputs(ctx context.Context, st store.Store) (map[string]map[strin
 func findRun(ctx context.Context, st runLookup, runID string) (store.RunRow, error) {
 	run, ok, err := st.FindRunRow(ctx, runID)
 	if err != nil {
-		return store.RunRow{}, fmt.Errorf("could not read run %q: %w", runID, err)
+		return store.RunRow{}, err //nolint:wrapcheck // the store names the run
 	}
 
 	if !ok {

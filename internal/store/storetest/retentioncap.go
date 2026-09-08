@@ -24,8 +24,6 @@ func (s suite) TestPruneBoundsTheTriggerQueue(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	defer func() { _ = st.Close() }()
-
 	const (
 		finished = 6
 		keep     = 2

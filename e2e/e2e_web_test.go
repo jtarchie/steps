@@ -21,7 +21,6 @@ import (
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
-	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -284,12 +283,7 @@ func webServerFor(t *testing.T, pipelinePath string) (*web.Server, *web.Pipeline
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	st, err := sqlite.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-
-	t.Cleanup(func() { _ = st.Close() })
+	st := openStoreFor(t, pipelinePath)
 
 	pipeline := web.NewPipeline(web.Slugify(pipelinePath), pipelinePath, cfg, st, events.New(nil))
 

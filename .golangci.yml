@@ -320,6 +320,26 @@ linters:
             # storetest is test-only: conformance_test.go runs the shared suite
             # against this driver.
             - "github.com/jtarchie/steps/internal/store/storetest"
+            # goleak is test-only: goleak_test.go's TestMain fails a package's
+            # tests if any leaves a goroutine running.
+            - "go.uber.org/goleak"
+        # The driver is test-only everywhere but internal/cli: a test needs a
+        # concrete driver to open a database with, so the allow-lists above
+        # admit store/sqlite where tests use it, but production code takes the
+        # store.Store it was handed and internal/cli is the only package that
+        # chooses one. depguard applies EVERY rule a file matches, so this
+        # deny-only rule over non-test files is what turns that sentence into
+        # a lint failure; the allow entries alone cannot tell a test from a
+        # production import.
+        StoreDriverTestOnly:
+          files:
+            - "$all"
+            - "!$test"
+            - "!**/internal/cli/**"
+            - "!**/internal/store/sqlite/**"
+          deny:
+            - pkg: "github.com/jtarchie/steps/internal/store/sqlite"
+              desc: "test-only outside internal/cli: production code takes the store.Store it was handed"
         # config is the shared data-model root: it must not depend on any
         # other internal package (see CLAUDE.md's package-seam plan).
         Config:

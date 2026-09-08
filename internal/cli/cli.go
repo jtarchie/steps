@@ -1735,11 +1735,25 @@ type DB string
 func (d *DB) UnmarshalText(text []byte) error {
 	raw := string(text)
 
-	scheme, _, isURL := strings.Cut(raw, "://")
-	if isURL && scheme != "sqlite" {
+	scheme, rest, isURL := strings.Cut(raw, "://")
+
+	switch {
+	case isURL && scheme != "sqlite":
 		// The scheme alone, never the url: a network url carries credentials,
 		// and a usage error lands in shell history and CI logs.
 		return fmt.Errorf("no driver for %s:// (only a sqlite file path, or sqlite://<path>, until a second driver lands)", scheme)
+	case isURL && rest == "":
+		// Stripped to "", the bare scheme would read as the flag not given
+		// and quietly open the per-pipeline default instead.
+		return errors.New("sqlite:// names no file: write sqlite://<path>")
+	case !isURL && strings.HasPrefix(raw, "sqlite:"):
+		return errors.New("sqlite: needs //: write sqlite://<path>")
+	case strings.Contains(raw, "?"):
+		// The driver splits its DSN at the first '?', so a query string here
+		// swallows the pragmas steps sets after the file name (busy_timeout
+		// first) with no error — and the read commands stat a file of that
+		// whole name and report nothing recorded.
+		return errors.New("--db takes a sqlite file path or sqlite://<path>, with no query string")
 	}
 
 	*d = DB(raw)

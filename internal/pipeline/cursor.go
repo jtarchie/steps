@@ -337,15 +337,9 @@ func checkedVersions(ctx context.Context, st store.Store, name string) ([]map[st
 		return nil, err //nolint:wrapcheck // the store names the resource
 	}
 
-	versions := make([]map[string]any, 0, len(encoded))
-
-	for _, one := range encoded {
-		version, err := store.DecodeVersion(one)
-		if err != nil {
-			return nil, fmt.Errorf("could not read versions for %q: %w", name, err)
-		}
-
-		versions = append(versions, version)
+	versions, err := store.DecodeVersions(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("could not read versions for %q: %w", name, err)
 	}
 
 	return versions, nil
