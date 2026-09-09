@@ -82,7 +82,7 @@ func TestCLIBridgeServesEveryDeclaredTool(t *testing.T) {
 		"count_lines": func(context.Context, map[string]any, toolEnv) map[string]any { return map[string]any{"exit_code": 0} },
 	}
 
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(decls, registry, nil))
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(decls, registry, nil), nil)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestCLIBridgeEnforcesMaxCallsOnAnyTool(t *testing.T) {
 	conv := bridgeConversation(decls, registry, nil)
 	conv.tools.maxCalls = map[string]int{"post_review": 1}
 
-	bridge, err := newCLIBridge(t.Context(), conv)
+	bridge, err := newCLIBridge(t.Context(), conv, nil)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}
@@ -199,11 +199,12 @@ func TestCLIBridgeEnforcesMaxCallsOnAnyTool(t *testing.T) {
 func TestCLIBridgeExecutesAndCapturesVerdict(t *testing.T) {
 	t.Parallel()
 
-	decl, impl := buildVerdictTool([]string{"approve", "reject"}, false, assertFilesExpectation{})
+	decl, impl := buildVerdictTool([]string{"approve", "reject"}, false, stepExpectation{})
 
 	bridge, err := newCLIBridge(
 		t.Context(),
 		bridgeConversation([]*genai.FunctionDeclaration{decl}, map[string]toolImpl{verdictToolName: impl}, map[string]bool{verdictToolName: true}),
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
@@ -243,11 +244,12 @@ func TestCLIBridgeExecutesAndCapturesVerdict(t *testing.T) {
 func TestCLIBridgeReportsToolFailureAsError(t *testing.T) {
 	t.Parallel()
 
-	decl, impl := buildVerdictTool([]string{"approve"}, false, assertFilesExpectation{})
+	decl, impl := buildVerdictTool([]string{"approve"}, false, stepExpectation{})
 
 	bridge, err := newCLIBridge(
 		t.Context(),
 		bridgeConversation([]*genai.FunctionDeclaration{decl}, map[string]toolImpl{verdictToolName: impl}, nil),
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
@@ -278,7 +280,7 @@ func TestCLIBridgeReportsToolFailureAsError(t *testing.T) {
 func TestCLIBridgeWriteConfig(t *testing.T) {
 	t.Parallel()
 
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil))
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}
@@ -356,11 +358,12 @@ func assertPrivateFile(t *testing.T, path string) {
 func TestCLIBridgeRejectsUnauthenticatedCallers(t *testing.T) {
 	t.Parallel()
 
-	decl, impl := buildVerdictTool([]string{"approve"}, false, assertFilesExpectation{})
+	decl, impl := buildVerdictTool([]string{"approve"}, false, stepExpectation{})
 
 	bridge, err := newCLIBridge(
 		t.Context(),
 		bridgeConversation([]*genai.FunctionDeclaration{decl}, map[string]toolImpl{verdictToolName: impl}, nil),
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
@@ -422,7 +425,7 @@ func TestCLIBridgeRejectsUnauthenticatedCallers(t *testing.T) {
 func TestCLIBridgeAlwaysLoopback(t *testing.T) {
 	t.Parallel()
 
-	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil))
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}

@@ -99,8 +99,8 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 
 	var (
 		lastErr error
-		// nudges counts the rounds spent telling the child its declared
-		// assert.files: are missing — see nudgeCLIForMissingFiles.
+		// nudges counts the rounds spent telling the child what its step
+		// still owes — see nudgeCLIForOwed.
 		nudges int
 		// spent counts CHILD INVOCATIONS across every round, which is what
 		// the pooled budget is denominated in — see cliRoundAttempts.
@@ -282,7 +282,7 @@ func runCLIRounds(
 		// Files are owed by the STEP, so a message with another after it is
 		// not the moment to ask for them: the question that produces the file
 		// may be the one still unasked.
-		if err != nil || !last || !nudgeCLIForMissingFiles(prepared, state, *nudges) {
+		if err != nil || !last || !nudgeCLIForOwed(prepared, state, *nudges) {
 			//nolint:wrapcheck // the attempt already wrapped and classified its own failure
 			return err
 		}
@@ -376,14 +376,14 @@ func rejoiningCLISession(attempt, nudges, sent int) bool {
 // a round from doing both, so handing each round a fresh attempts: budget
 // MULTIPLIES them: attempts: 3 against five nudges is eighteen real
 // invocations of a model, each paid for, under a promise of five chances.
-// They pool instead, at attempts + maxFilesNudges for the step, which leaves
+// They pool instead, at attempts + maxNudges for the step, which leaves
 // the common attempts: 1 case exactly where it was and stops a retry taken in
 // one round from being handed back in the next.
 //
 // Never below 1: a round that has arrived here is a round that is going to
 // run, and zero would make retry.Do's meaning the caller's problem.
 func cliRoundAttempts(attempts, spent int) int {
-	return max(min(attempts, attempts+maxFilesNudges-spent), 1)
+	return max(min(attempts, attempts+maxNudges-spent), 1)
 }
 
 // cliAttemptPrompt is what one invocation is told.
@@ -418,19 +418,19 @@ func cliAttemptPrompt(resume, retrying bool, sent int, state *cliStepState, prep
 		return next
 	}
 
-	unmet := prepared.conv.expect.unmet()
+	_, owed := prepared.conv.expect.owed(state.trajectory)
 
 	if retrying {
 		prompt := cliContinuationPrompt(state, prepared)
-		if len(unmet) > 0 {
-			prompt += " " + prepared.conv.expect.nudge(unmet)
+		if owed != "" {
+			prompt += " " + owed
 		}
 
 		return prompt
 	}
 
-	if len(unmet) > 0 {
-		return prepared.conv.expect.nudge(unmet)
+	if owed != "" {
+		return owed
 	}
 
 	return cliContinuationPrompt(state, prepared)
@@ -456,16 +456,16 @@ func pendingCLIMessage(prepared preparedAgentStep, sent int, state *cliStepState
 	return prepared.conv.messages[sent], true
 }
 
-// nudgeCLIForMissingFiles reports whether the child should be woken again
-// because its step's assert.files: are still missing.
+// nudgeCLIForOwed reports whether the child should be woken again because
+// its step still owes something it opted into being told about.
 //
-// False when there is nothing missing, when the allowance is spent, or when
-// the step has no turns left to spend on another round — after which
+// False when nothing is owed, when the allowance is spent, or when the step
+// has no turns left to spend on another round — after which
 // assertAgentResponse reports the mismatch exactly as it would have anyway.
 // The nudge buys the model chances; it never changes the verdict on them.
-func nudgeCLIForMissingFiles(prepared preparedAgentStep, state *cliStepState, nudges int) bool {
-	unmet := prepared.conv.expect.unmet()
-	if len(unmet) == 0 || nudges >= maxFilesNudges {
+func nudgeCLIForOwed(prepared preparedAgentStep, state *cliStepState, nudges int) bool {
+	unmet, _ := prepared.conv.expect.owed(state.trajectory)
+	if len(unmet) == 0 || nudges >= maxNudges {
 		return false
 	}
 
@@ -473,11 +473,11 @@ func nudgeCLIForMissingFiles(prepared preparedAgentStep, state *cliStepState, nu
 		return false
 	}
 
-	slog.Info("agent.cli.files_nudge",
+	slog.Info("agent.cli.nudge",
 		"agent", prepared.ri.AgentName,
 		"cli", prepared.ri.CLI,
 		"round", nudges+1,
-		"of", maxFilesNudges,
+		"of", maxNudges,
 		"unmet", strings.Join(unmet, "; "))
 
 	return true
@@ -762,7 +762,7 @@ func runCLIAttempt(
 	plan cliAttempt,
 	state *cliStepState,
 ) error {
-	bridge, err := newCLIBridge(ctx, prepared.conv)
+	bridge, err := newCLIBridge(ctx, prepared.conv, state.trajectory)
 	if err != nil {
 		return err
 	}

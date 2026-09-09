@@ -1473,6 +1473,10 @@
             "type": "string"
           },
           "description": "Task/agent steps only. Every listed path must exist as a non-empty file among the step's outputs when it finishes -- checks what the step WROTE, not just what it said. Artifact-relative: the first path segment must name one of the step's outputs:."
+        },
+        "nudge": {
+          "type": "boolean",
+          "description": "Agent steps only. Tell the model which files/tool_calls it still owes at the moment it tries to stop (up to five times), and refuse a verdict over the same gap. Opt-in: without it the assert is a silent post-hoc check. Not valid alongside stdout/verdict, which name a conclusion rather than an obligation."
         }
       }
     },

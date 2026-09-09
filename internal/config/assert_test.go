@@ -119,7 +119,7 @@ jobs:
     inputs: []
     run: "true"
 `,
-			want: "stdout/code/verdict/files are only valid on task/agent step asserts",
+			want: "stdout/code/verdict/files/nudge are only valid on task/agent step asserts",
 		},
 		{
 			name: "job assert with code",
@@ -133,7 +133,7 @@ jobs:
   assert:
     code: 0
 `,
-			want: "stdout/code/verdict/files are only valid on task/agent step asserts",
+			want: "stdout/code/verdict/files/nudge are only valid on task/agent step asserts",
 		},
 		{
 			name: "step assert with execution",
@@ -248,6 +248,95 @@ jobs:
 `,
 			want: "execution is only valid on job/pipeline asserts",
 		},
+		{
+			// A nudge may name an obligation, never the conclusion the
+			// assert waits for: a model told the substring satisfies it
+			// without the assert testing anything.
+			name: "assert.nudge alongside stdout",
+			pipeline: `
+agents:
+- name: bot
+  source: { model: openrouter/test/model }
+
+jobs:
+- name: build
+  plan:
+  - agent: bot
+    outputs: [answer]
+    assert:
+      files: [answer/reply.md]
+      stdout: done
+      nudge: true
+`,
+			want: "assert.nudge is not valid alongside stdout/verdict",
+		},
+		{
+			name: "assert.nudge alongside verdict",
+			pipeline: `
+agents:
+- name: bot
+  source: { model: openrouter/test/model }
+
+jobs:
+- name: build
+  plan:
+  - agent: bot
+    verdicts: [approve, reject]
+    assert:
+      tool_calls:
+      - name: read_file
+      verdict: approve
+      nudge: true
+`,
+			want: "assert.nudge is not valid alongside stdout/verdict",
+		},
+		{
+			name: "assert.nudge with nothing to nudge about",
+			pipeline: `
+agents:
+- name: bot
+  source: { model: openrouter/test/model }
+
+jobs:
+- name: build
+  plan:
+  - agent: bot
+    assert:
+      nudge: true
+`,
+			want: "assert.nudge names nothing to nudge about",
+		},
+		{
+			name: "assert.nudge on a task",
+			pipeline: `
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    outputs: [answer]
+    run: "true"
+    assert:
+      files: [answer/reply.md]
+      nudge: true
+`,
+			want: "assert.nudge is only valid on agent steps",
+		},
+		{
+			name: "job assert with nudge",
+			pipeline: `
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: "true"
+  assert:
+    execution: [work]
+    nudge: true
+`,
+			want: "stdout/code/verdict/files/nudge are only valid on task/agent step asserts",
+		},
 	}
 
 	for _, tt := range tests {
@@ -286,5 +375,43 @@ jobs:
 	_, err := LoadConfig(path)
 	if err != nil {
 		t.Fatalf("LoadConfig: %v, want a step referencing a named task to inherit its outputs: for assert.files", err)
+	}
+}
+
+// TestAssertNudgeAcceptedWithObligations is the other half of the load rule:
+// nudge: true beside files: and tool_calls: — the two fields that name an
+// obligation rather than a conclusion — loads, and the flag survives into
+// the step.
+func TestAssertNudgeAcceptedWithObligations(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: bot
+  source: { model: openrouter/test/model }
+  tools:
+  - name: run_tests
+    description: run them
+    run: "true"
+
+jobs:
+- name: build
+  plan:
+  - agent: bot
+    outputs: [answer]
+    assert:
+      files: [answer/reply.md]
+      tool_calls:
+      - name: run_tests
+      nudge: true
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	if !cfg.Jobs[0].Plan[0].Assert.Nudge {
+		t.Error("assert.nudge did not survive the load")
 	}
 }

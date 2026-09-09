@@ -377,7 +377,7 @@ jobs:
 
 ## Delivering files the pipeline will read
 
-An agent's answer is not its final message. Everything downstream — a `put:`, a task, another agent — reads **files**, and a model that summarizes its work in prose instead of writing it has produced nothing while sounding finished. `assert.files:` already states which files a step owes ([control-flow.md](control-flow.md#assert-self-verification--steps-test)); on an agent step it is also enforced *while the model can still act on it*:
+An agent's answer is not its final message. Everything downstream — a `put:`, a task, another agent — reads **files**, and a model that summarizes its work in prose instead of writing it has produced nothing while sounding finished. `assert.files:` already states which files a step owes ([control-flow.md](control-flow.md#assert-self-verification--steps-test)), and `assert.tool_calls:` states the procedure it must follow. Both are checked after the step ends, and the step fails naming what is missing. With **`nudge: true`** on the assert, the model is also told *while it can still act on it*:
 
 ```yaml test=agents-delivers-files
 agents:
@@ -394,6 +394,7 @@ jobs:
       - "Answer the question. Write your answer to answer/reply.md."
     assert:
       files: [answer/reply.md]
+      nudge: true
   - task: deliver
     inputs: [answer]
     run: cat answer/reply.md
@@ -413,11 +414,39 @@ The model in that example answers in prose first and writes nothing. Rather than
 - **Every missing file is named at once.** Told one at a time, a model pays a turn per artifact to learn what one sentence could have said.
 - **An empty file is a missing file** — the same rule the assert already used, which matters here because `touch`ing the path is what a model reaching for the letter of the instruction does.
 - **It gates `verdicts:`.** A step declaring both cannot record a decision while its files are absent: the `verdict` tool refuses with an error naming them. A verdict is the model's report on the work and the files *are* the work, so a decision accepted over missing artifacts is precisely the false success worth preventing — the report routes the job, and the job goes green having produced nothing.
+- **`tool_calls:` is nudged the same way, in the same message.** A step that declares the procedure — "run the tests, *then* post the review" — and a model that answers without following it is told which calls it still owes, in order, and nothing else: names, never arguments (naming a wanted value would be dictating the call). The wording is deliberately plainer than the files nudge: a model that answered in prose held a wrong belief about who reads its message, and the files sentence corrects it; a skipped step of a procedure has no belief behind it to correct. Because the matcher accepts extra calls anywhere, a model that called things out of order can always recover by making the remaining calls in order — there is no unrecoverable state, so the nudge only ever names the remainder.
+
+```yaml test=agents-follows-procedure
+agents:
+- name: reviewer
+  source: { model: openrouter/qwen/qwen3.7-flash }
+  tools:
+  - name: run_tests
+    description: Run the test suite and report the result.
+    run: echo "42 passed"
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    messages:
+      - "Review the change. Run the tests before you answer."
+    assert:
+      tool_calls:
+      - name: run_tests
+      nudge: true
+  assert:
+    execution: [reviewer]
+    outcome: succeeded
+```
+
 - **The nudge waits for the last message.** `assert.files:` is an obligation on the step, not on each message, so a step with more to ask is not nudged at an earlier boundary — telling a model it owes files before it has been asked the question meant to produce them is worse than not asking.
 - **CLI-backed agents get the same thing through a resumed session.** A subprocess owns its own tool loop, so the check runs after it exits and the child is woken with `--resume` and told what is missing — its conversation, its working directory and its task all still intact. A restart would re-send work it has already done; see [attempts-timeout.md](attempts-timeout.md#what-attempts-costs-on-an-agent). A child woken because it *died* still gets the "continue, do not start over" prompt it always did, with the missing files added; the two reasons for rejoining are not interchangeable. The nudge and `attempts:` share one budget of `attempts + 5` child invocations for the step, rather than each round getting a fresh `attempts:` — otherwise the two limits multiply.
 - **When the step gives up, the failure names the file**, whichever backstop caught it — the refused verdict, a forced tool, the loop detector, the turn ceiling. All of them are downstream of the same cause, and naming the mechanism instead would point an operator at the symptom. An infrastructure error is left alone: the missing file is incidental to a transport failure, and restating it would turn an errored step into a failed one and fire the wrong hook.
 
-Nothing to enable and no field to set. `assert.files:` was already the contract; the only question was whether the one party who could still honor it got to hear about it.
+**Why it is opt-in.** The nudge was never the protection: a model that answers in prose already fails the step, loudly, naming the file. What the nudge adds is automatic *recovery*, and whether recovery is part of a step's behavior is the author's call. It matters most for `steps test` against a real model: with an unconditional nudge, deleting "write it to answer/reply.md" from the prompt left the fixture green, because the nudge rescued the model every time — a test that cannot fail. Setting `nudge: true` declares that recovery is part of the step, so the fixture tests the step *including* recovery; leaving it out gives a strict fixture that tests the prompt. A step without the flag that fails an unmet `files:` or `tool_calls:` says so in its error, so the choice is discoverable from the failure itself.
+
+**What a nudge may say.** It may name an unmet *obligation* — the deliverable (`files:`), the procedure (`tool_calls:`). It may never name a wanted *conclusion*: `nudge: true` beside `stdout:` or `verdict:` is a load error, because a classifier told which verdict is expected, or a step told which substring is being looked for, satisfies the assert without the assert having tested anything.
 
 ## Sub-agent delegation (`agent:` tools)
 

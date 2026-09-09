@@ -42,17 +42,30 @@ func assertAgentResponse(assert *config.Assert, res conversationResult, dir stri
 		err := matchToolCallTrajectory(assert.ToolCalls, res.trajectory)
 		if err != nil {
 			//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
-			return outcome.Fail(err)
+			return outcome.Fail(withNudgeHint(err, assert.Nudge))
 		}
 	}
 
 	err := config.AssertFilesMismatch(assert.Files, dir)
 	if err != nil {
 		//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error
-		return outcome.Fail(err)
+		return outcome.Fail(withNudgeHint(err, assert.Nudge))
 	}
 
 	return nil
+}
+
+// withNudgeHint tells an operator reading an unmet obligation that the model
+// could have been told. assert.files: used to nudge unconditionally, so the
+// first run after that changed would otherwise fail on a prompt that worked
+// yesterday with nothing saying why; naming the flag makes it a one-line
+// migration. A step that already nudged and still failed gets the bare error.
+func withNudgeHint(err error, nudged bool) error {
+	if nudged {
+		return err
+	}
+
+	return fmt.Errorf("%w (set assert.nudge: true to tell the model while it can still act)", err)
 }
 
 // matchToolCallTrajectory reports whether want appears, in order, as a
@@ -68,27 +81,42 @@ func assertAgentResponse(assert *config.Assert, res conversationResult, dir stri
 // matched and prints the observed trajectory, so a fixture failure is
 // debuggable without re-running with verbose logging.
 func matchToolCallTrajectory(want []config.ExpectedToolCall, got []recordedToolCall) error {
+	matched := matchToolCallPrefix(want, got)
+	if matched < len(want) {
+		return fmt.Errorf("assert.tool_calls: no call matching %s after the previously matched calls; got %s",
+			describeExpectedCall(want[matched]), describeTrajectory(got))
+	}
+
+	return nil
+}
+
+// matchToolCallPrefix walks want against got as a subsequence and reports how
+// many leading entries of want were matched — len(want) when every one was.
+// want[matched:] is therefore what the model still owes, in order: because
+// extras are ignored anywhere, appending those calls in that order satisfies
+// the assert from any trajectory, so there is no unrecoverable state and a
+// nudge needs no omission-versus-order split.
+func matchToolCallPrefix(want []config.ExpectedToolCall, got []recordedToolCall) int {
 	next := 0
 
-	for _, expected := range want {
-		matched := false
+	for matched, expected := range want {
+		found := false
 
 		for ; next < len(got); next++ {
 			if toolCallMatches(expected, got[next]) {
 				next++
-				matched = true
+				found = true
 
 				break
 			}
 		}
 
-		if !matched {
-			return fmt.Errorf("assert.tool_calls: no call matching %s after the previously matched calls; got %s",
-				describeExpectedCall(expected), describeTrajectory(got))
+		if !found {
+			return matched
 		}
 	}
 
-	return nil
+	return len(want)
 }
 
 // toolCallMatches reports whether one observed call satisfies one expected
@@ -145,6 +173,114 @@ func describeTrajectory(got []recordedToolCall) string {
 	}
 
 	return "[" + strings.Join(names, ", ") + "]"
+}
+
+// stepExpectation is what an agent step's assert: lets the MODEL be told
+// about while it can still act: its files: (a deliverable) and its
+// tool_calls: (a procedure), under nudge: true. Off — the zero value, and
+// every step that did not opt in — nothing is owed early and every method is
+// a no-op, so the assert stays the silent post-hoc judge assertAgentResponse
+// makes of it.
+//
+// stdout: and verdict: are deliberately absent: they name a conclusion, and a
+// model told the conclusion satisfies the assert without the assert having
+// tested anything. config.validateAssertNudge refuses the combination at load.
+type stepExpectation struct {
+	files     assertFilesExpectation
+	toolCalls []config.ExpectedToolCall
+	nudge     bool
+}
+
+// newStepExpectation reads the contract off a step. dir and agentDir are what
+// newAssertFilesExpectation takes them for.
+func newStepExpectation(assert *config.Assert, dir, agentDir string) stepExpectation {
+	if assert == nil || !assert.Nudge {
+		return stepExpectation{}
+	}
+
+	return stepExpectation{
+		files:     newAssertFilesExpectation(assert, dir, agentDir),
+		toolCalls: assert.ToolCalls,
+		nudge:     true,
+	}
+}
+
+// owed reports what the step still owes right now — every unmet files: entry
+// (as the reason, "x does not exist") and every tool_calls: entry not yet
+// matched against trajectory (as its name) — and the ONE message the model is
+// told about all of it. Both empty when the step opted out or owes nothing.
+//
+// One message rather than one per field: told one thing at a time, a model
+// pays a turn per obligation to learn what one message could have said —
+// the same reason the files nudge names every missing file at once.
+func (e stepExpectation) owed(trajectory []recordedToolCall) (unmet []string, message string) {
+	if !e.nudge {
+		return nil, ""
+	}
+
+	files := e.files.unmet()
+
+	var calls []string
+
+	for _, expected := range e.toolCalls[matchToolCallPrefix(e.toolCalls, trajectory):] {
+		calls = append(calls, expected.Name)
+	}
+
+	if len(files) == 0 && len(calls) == 0 {
+		return nil, ""
+	}
+
+	var parts []string
+
+	if len(files) > 0 {
+		parts = append(parts, e.files.nudge(files))
+	}
+
+	if len(calls) > 0 {
+		parts = append(parts, assertToolCallsNudge(calls, len(files) > 0))
+	}
+
+	return append(files, calls...), strings.Join(parts, " ")
+}
+
+// mismatch is what the post-hoc check would report about the step right now
+// — the files first, since a missing deliverable outranks a skipped step of
+// the procedure — or nil when the step opted out or owes nothing. It reuses
+// the post-hoc wording so an operator reads the same sentence whichever path
+// reached the failure.
+func (e stepExpectation) mismatch(trajectory []recordedToolCall) error {
+	if !e.nudge {
+		return nil
+	}
+
+	err := e.files.mismatch()
+	if err != nil {
+		return err
+	}
+
+	if len(e.toolCalls) == 0 {
+		return nil
+	}
+
+	return matchToolCallTrajectory(e.toolCalls, trajectory)
+}
+
+// assertToolCallsNudge is what a model trying to finish without the calls its
+// step declared is told: the names still owed, in order, and nothing else.
+//
+// Mechanical on purpose, where the files nudge argues. The files wording
+// corrects a BELIEF (that the final message is the deliverable); a procedure
+// gap has no belief behind it to correct. Names only, never arguments —
+// naming a wanted argument value is dictating the call, the line
+// config.validateAssertPinnedArgs already draws.
+func assertToolCallsNudge(remaining []string, alsoFiles bool) string {
+	opening := "This step declared tool calls it must make before it finishes"
+	if alsoFiles {
+		opening = "This step also declared tool calls it must make before it finishes"
+	}
+
+	return fmt.Sprintf("%s, and these have not been made yet, in this order: %s. Make them now, then finish.",
+		opening, strings.Join(remaining, ", then "))
 }
 
 // assertFilesExpectation is a step's assert.files: contract bound to the

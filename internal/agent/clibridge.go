@@ -109,12 +109,23 @@ type cliBridge struct {
 //
 // The conversation's per-tool call ceilings come along too, because this is
 // the only place on the CLI path that sees every call — see cliBridge.counts.
-func newCLIBridge(ctx context.Context, conv agentConversation) (*cliBridge, error) {
+//
+// prior is the trajectory earlier attempts of the same step recorded, so a
+// tool judging the step's tool_calls: contract (the verdict gate) sees the
+// whole conversation's calls and not only this child's.
+func newCLIBridge(ctx context.Context, conv agentConversation, prior []recordedToolCall) (*cliBridge, error) {
 	bridge := &cliBridge{
 		satisfied: map[string]bool{},
 		token:     rand.Text(),
 		budgets:   conv.tools.maxCalls,
 		counts:    map[string]int{},
+	}
+
+	env := conv.env
+	env.trajectory = func() []recordedToolCall {
+		_, _, _, calls := bridge.observed()
+
+		return append(append([]recordedToolCall(nil), prior...), calls...)
 	}
 
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: cliBridgeServerName, Version: "v1"}, nil)
@@ -133,7 +144,7 @@ func newCLIBridge(ctx context.Context, conv agentConversation) (*cliBridge, erro
 			Name:        decl.Name,
 			Description: decl.Description,
 			InputSchema: declInputSchema(decl),
-		}, bridge.handler(decl.Name, impl, conv.env))
+		}, bridge.handler(decl.Name, impl, env))
 	}
 
 	var listenConfig net.ListenConfig

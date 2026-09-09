@@ -43,7 +43,7 @@ func TestCLIBridgeEnforcesTheQuestionBudget(t *testing.T) {
 	conv := bridgeConversation(decls, registry, nil)
 	conv.tools.maxCalls = map[string]int{config.AskUserBuiltinName: 2}
 
-	bridge, err := newCLIBridge(t.Context(), conv)
+	bridge, err := newCLIBridge(t.Context(), conv, nil)
 	if err != nil {
 		t.Fatalf("newCLIBridge: %v", err)
 	}

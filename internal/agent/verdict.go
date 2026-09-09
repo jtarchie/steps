@@ -33,7 +33,7 @@ const verdictToolName = "verdict"
 // run is green. Refusing as {"error": ...} rather than by any new mechanism
 // is what keeps the enforcement free: an unsuccessful call leaves the required
 // tool unsatisfied, so the loop's existing forcing asks again.
-func buildVerdictTool(verdicts []string, noteRequired bool, expect assertFilesExpectation) (*genai.FunctionDeclaration, toolImpl) {
+func buildVerdictTool(verdicts []string, noteRequired bool, expect stepExpectation) (*genai.FunctionDeclaration, toolImpl) {
 	decl := &genai.FunctionDeclaration{
 		Name:        verdictToolName,
 		Description: "Emit your decision. Call this exactly once with your final verdict — it is how the pipeline decides which step runs next.",
@@ -52,14 +52,14 @@ func buildVerdictTool(verdicts []string, noteRequired bool, expect assertFilesEx
 		allowed[verdict] = true
 	}
 
-	impl := func(_ context.Context, args map[string]any, _ toolEnv) map[string]any {
+	impl := func(_ context.Context, args map[string]any, env toolEnv) map[string]any {
 		choice := stringArg(args, "choice")
 		if !allowed[choice] {
 			return map[string]any{"error": fmt.Sprintf("verdict: choice %q is not one of: %s", choice, strings.Join(verdicts, ", "))}
 		}
 
-		if unmet := expect.unmet(); len(unmet) > 0 {
-			return map[string]any{"error": "verdict: " + expect.nudge(unmet)}
+		if _, message := expect.owed(verdictTrajectory(env, args)); message != "" {
+			return map[string]any{"error": "verdict: " + message}
 		}
 
 		result := map[string]any{"exit_code": 0, "verdict": choice}
@@ -79,7 +79,21 @@ func buildVerdictTool(verdicts []string, noteRequired bool, expect assertFilesEx
 // step's already-built tool set when the step declares verdicts:, and returns
 // the tool's name (or "" when verdict mode is off). A pre-existing tool of the
 // same name is a conflict — rejected here rather than silently shadowed.
-func injectVerdictTool(verdicts []string, noteRequired bool, tools agentTools, expect assertFilesExpectation) (string, error) {
+// verdictTrajectory is the record the gate judges: every call so far plus
+// this verdict call. The hosted loop records a turn's calls BEFORE running
+// them and the bridge records a call AFTER, so without this a tool_calls:
+// contract ending in the verdict would be met on one path and refused forever
+// on the other.
+func verdictTrajectory(env toolEnv, args map[string]any) []recordedToolCall {
+	calls := env.calls()
+	if n := len(calls); n > 0 && calls[n-1].name == verdictToolName {
+		return calls
+	}
+
+	return append(append([]recordedToolCall(nil), calls...), recordedToolCall{name: verdictToolName, args: args})
+}
+
+func injectVerdictTool(verdicts []string, noteRequired bool, tools agentTools, expect stepExpectation) (string, error) {
 	if len(verdicts) == 0 {
 		return "", nil
 	}

@@ -40,7 +40,7 @@ func expectingConversation(t *testing.T, dir string, files ...string) agentConve
 		env:      toolEnv{dir: dir, runner: runner},
 		tools:    built,
 		maxTurns: testMaxTurns,
-		expect:   newAssertFilesExpectation(&config.Assert{Files: files}, dir, dir),
+		expect:   newStepExpectation(&config.Assert{Files: files, Nudge: true}, dir, dir),
 	}
 }
 
@@ -65,10 +65,10 @@ func TestNudgeStopsAfterItsAllowance(t *testing.T) {
 		t.Errorf("final text = %q, want the model's own last answer", res.text)
 	}
 
-	// One stop attempt, then maxFilesNudges more — and no more than that,
+	// One stop attempt, then maxNudges more — and no more than that,
 	// which is what proves the counter never resets.
-	if want := maxFilesNudges + 1; fake.calls != want {
-		t.Errorf("provider saw %d turns, want %d (the stop attempt plus %d nudges)", fake.calls, want, maxFilesNudges)
+	if want := maxNudges + 1; fake.calls != want {
+		t.Errorf("provider saw %d turns, want %d (the stop attempt plus %d nudges)", fake.calls, want, maxNudges)
 	}
 }
 
@@ -199,7 +199,7 @@ func TestVerdictAcceptedOnceFilesExist(t *testing.T) {
 func expectingVerdictConversation(t *testing.T, dir string, verdicts []string, files ...string) agentConversation {
 	t.Helper()
 
-	expect := newAssertFilesExpectation(&config.Assert{Files: files}, dir, dir)
+	expect := newStepExpectation(&config.Assert{Files: files, Nudge: true}, dir, dir)
 
 	built, _, err := buildAgentTools(context.Background(), nil, nil, "")
 	if err != nil {
@@ -230,7 +230,7 @@ func expectingVerdictConversation(t *testing.T, dir string, verdicts []string, f
 // the nudge allowance, so a test asserting on the nudge never runs out of
 // provider before the loop runs out of patience.
 func refusals(text string) []*model.LLMResponse {
-	out := make([]*model.LLMResponse, maxFilesNudges+2)
+	out := make([]*model.LLMResponse, maxNudges+2)
 	for i := range out {
 		out[i] = textResponse(text)
 	}

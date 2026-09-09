@@ -353,6 +353,19 @@ func mutateField(assert map[string]any, step map[string]any, field string) bool 
 	case "tool_calls":
 		return mutateToolCalls(assert)
 
+	case "nudge":
+		// Off, the model is never put back: an example whose model answers
+		// in prose before writing the file then fails on the prose, which
+		// is what proves the example depends on the flag and not on a
+		// model that happened to comply first time.
+		if assert[field] != true {
+			return false
+		}
+
+		assert[field] = false
+
+		return true
+
 	default:
 		return false
 	}

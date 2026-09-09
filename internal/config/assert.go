@@ -59,6 +59,19 @@ type Assert struct {
 	// path is artifact-relative (ValidateArtifactPath), and its first
 	// component must name one of the step's declared outputs:.
 	Files []string `yaml:"files,omitempty"`
+	// Nudge, on an agent step, opts the step into being TOLD about an unmet
+	// files:/tool_calls: entry while the model can still act on it — a
+	// message at the moment it tries to stop, up to a fixed allowance — and
+	// into the verdict tool refusing a decision over the same gap. Off, the
+	// assert is the silent post-hoc judge every other field is.
+	//
+	// Opt-in because a nudge is automatic RECOVERY, not detection: a step
+	// that never writes its file fails loudly either way, but a fixture whose
+	// model is always put back cannot prove its prompt asked for the file at
+	// all. It may only name an unmet obligation, never a wanted conclusion:
+	// alongside stdout: or verdict: it is a load error, since a classifier
+	// told the answer is not a test of anything.
+	Nudge bool `yaml:"nudge,omitempty"`
 }
 
 // The two legal values of a job's assert.outcome.
@@ -249,8 +262,30 @@ func validateAssertOutcome(label, outcome string) error {
 // requireExecutionOnly rejects an execution-level assert (Config/Job) that
 // carries the step-only stdout:/code:/files: fields.
 func requireExecutionOnly(label string, assert *Assert) error {
-	if assert.Stdout != nil || assert.Code != nil || assert.Verdict != nil || len(assert.Files) > 0 {
-		return fmt.Errorf("%s: stdout/code/verdict/files are only valid on task/agent step asserts, not an execution assert", label)
+	if assert.Stdout != nil || assert.Code != nil || assert.Verdict != nil || len(assert.Files) > 0 || assert.Nudge {
+		return fmt.Errorf("%s: stdout/code/verdict/files/nudge are only valid on task/agent step asserts, not an execution assert", label)
+	}
+
+	return nil
+}
+
+// validateAssertNudge enforces what nudge: true may disclose. An obligation
+// (files:, tool_calls:) can be named to the model without weakening the
+// assert; a conclusion (stdout:, verdict:) cannot — naming the substring or
+// the verdict makes the assert trivially satisfiable, so the fixture would
+// prove nothing. Refused at load, with the reason, rather than silently
+// nudging about one field and not the other.
+func validateAssertNudge(label string, assert *Assert) error {
+	if !assert.Nudge {
+		return nil
+	}
+
+	if assert.Stdout != nil || assert.Verdict != nil {
+		return fmt.Errorf("%s: assert.nudge is not valid alongside stdout/verdict — a nudge may name an unmet obligation (files, tool_calls), never the conclusion the assert is waiting for, or the model is handed the answer and the assert proves nothing", label)
+	}
+
+	if len(assert.Files) == 0 && len(assert.ToolCalls) == 0 {
+		return fmt.Errorf("%s: assert.nudge names nothing to nudge about; it needs files or tool_calls", label)
 	}
 
 	return nil
@@ -319,8 +354,17 @@ func validateStepAssert(label string, step *Step) error {
 			return err
 		}
 
+		err = validateAssertNudge(fmt.Sprintf("%s (agent %q)", label, step.Agent), step.Assert)
+		if err != nil {
+			return err
+		}
+
 		return validateExpectedToolCalls(fmt.Sprintf("%s (agent %q)", label, step.Agent), step.Assert.ToolCalls)
 	default: // StepKindTask
+		if step.Assert.Nudge {
+			return fmt.Errorf("%s: assert.nudge is only valid on agent steps (a task has no model to tell)", label)
+		}
+
 		if len(step.Assert.ToolCalls) > 0 {
 			return fmt.Errorf("%s: assert.tool_calls is only valid on agent steps (a task runs no tools)", label)
 		}

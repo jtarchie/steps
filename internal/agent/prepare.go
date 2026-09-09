@@ -192,7 +192,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	// Checked against the SPACE, not against dir: assert.files: paths are
 	// relative to what the step captures, which dir: does not move. dir goes
 	// along only so a nudge can say so when the two differ.
-	expect := newAssertFilesExpectation(step.Assert, space.Dir(), dir)
+	expect := newStepExpectation(step.Assert, space.Dir(), dir)
 
 	applyQuestionBudget(tools, ri)
 

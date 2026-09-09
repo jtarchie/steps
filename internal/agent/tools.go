@@ -50,6 +50,21 @@ type toolEnv struct {
 	// and to charge the child's spend back against it. Nil outside a
 	// conversation, which leaves a child on its own declared budget.
 	usage *stepUsage
+	// trajectory reports the tool calls the conversation has recorded so
+	// far, set by whichever loop owns the record — runAgentConversation for
+	// a hosted step, the bridge for a CLI child. Nil outside a conversation.
+	// The verdict tool reads it to judge a nudge-enabled tool_calls:
+	// contract before it accepts a decision.
+	trajectory func() []recordedToolCall
+}
+
+// calls is the recorded trajectory so far, or nothing outside a conversation.
+func (env toolEnv) calls() []recordedToolCall {
+	if env.trajectory == nil {
+		return nil
+	}
+
+	return env.trajectory()
 }
 
 // toolImpl executes one resolved tool against env, given the model's args.

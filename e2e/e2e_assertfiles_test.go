@@ -23,8 +23,9 @@ import (
 )
 
 // assertFilesPipeline is an agent that must leave answer/reply.md behind, and
-// a task that copies it out so the test can see what survived capture.
-func assertFilesPipeline(t *testing.T, dir, endpoint string) string {
+// a task that copies it out so the test can see what survived capture. nudge
+// is whether the step opts into being told while it can still act.
+func assertFilesPipeline(t *testing.T, dir, endpoint string, nudge bool) string {
 	t.Helper()
 
 	return writePipeline(t, dir, fmt.Sprintf(`
@@ -49,10 +50,11 @@ jobs:
       - Answer the question. Write your answer to answer/reply.md.
     assert:
       files: [answer/reply.md]
+      nudge: %[3]t
   - task: deliver
     inputs: [answer]
     run: cat answer/reply.md >> %[2]s
-`, endpoint, filepath.Join(dir, "delivered.log")))
+`, endpoint, filepath.Join(dir, "delivered.log"), nudge))
 }
 
 // TestEndToEndAssertFilesNudgesBeforeFailing is the whole contract in one
@@ -71,7 +73,7 @@ func TestEndToEndAssertFilesNudgesBeforeFailing(t *testing.T) {
 		}),
 		says("Written."),
 	)
-	path := assertFilesPipeline(t, dir, fake.URL)
+	path := assertFilesPipeline(t, dir, fake.URL, true)
 
 	mustRun(t, path)
 
@@ -106,7 +108,7 @@ func TestEndToEndAssertFilesNudgesBeforeFailing(t *testing.T) {
 func TestEndToEndAssertFilesFailsAWillfulModel(t *testing.T) {
 	dir := t.TempDir()
 	fake := newRepeatingFakeLLM(t, says("The answer is in this message."))
-	path := assertFilesPipeline(t, dir, fake.URL)
+	path := assertFilesPipeline(t, dir, fake.URL, true)
 
 	err := cli.Run([]string{path})
 	if err == nil {
@@ -124,4 +126,143 @@ func TestEndToEndAssertFilesFailsAWillfulModel(t *testing.T) {
 	}
 
 	assertNoFile(t, filepath.Join(dir, "delivered.log"))
+}
+
+// TestEndToEndAssertFilesWithoutNudgeFailsAtOnce pins that the nudge is
+// opt-in: the SAME script that the nudged run rescues — prose first, the
+// file on the turn after — fails on the prose when the step never asked to
+// be told. Without this, deleting "write it to answer/reply.md" from a
+// prompt could never be caught by a real-model fixture, because the nudge
+// would rescue the model every time.
+//
+// The failure also says how to opt in, so the change from always-nudging
+// reads as a one-line migration rather than a mystery regression.
+func TestEndToEndAssertFilesWithoutNudgeFailsAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	fake := newFakeLLM(t,
+		says("Here is the answer: the catalog is seeded from widgets.json."),
+		callsTool("write_file", map[string]any{
+			"path":    "answer/reply.md",
+			"content": "The catalog is seeded from widgets.json.",
+		}),
+		says("Written."),
+	)
+	path := assertFilesPipeline(t, dir, fake.URL, false)
+
+	err := cli.Run([]string{path})
+	if err == nil {
+		t.Fatal("cli.Run succeeded, but the step never opted into a nudge and the model answered in prose")
+	}
+
+	if !strings.Contains(err.Error(), "answer/reply.md") {
+		t.Errorf("failure does not name the missing file: %v", err)
+	}
+
+	if !strings.Contains(err.Error(), "nudge: true") {
+		t.Errorf("failure does not say how to opt into being told: %v", err)
+	}
+
+	if len(fake.requests) != 1 {
+		t.Errorf("provider saw %d requests, want exactly 1: nothing may put the model back without the flag", len(fake.requests))
+	}
+
+	assertNoFile(t, filepath.Join(dir, "delivered.log"))
+}
+
+// assertToolCallsPipeline is an agent that must run the tests before it
+// finishes — a procedure, where assertFilesPipeline declares a deliverable.
+func assertToolCallsPipeline(t *testing.T, dir, endpoint string, nudge bool) string {
+	t.Helper()
+
+	return writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: reviewer
+  source:
+    endpoint: %[1]s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools:
+  - name: run_tests
+    description: Run the test suite.
+    run: echo "tests pass" >> %[2]s
+
+jobs:
+- name: build
+  plan:
+  - agent: reviewer
+    messages:
+      - Review the change. Run the tests before you answer.
+    assert:
+      tool_calls:
+      - name: run_tests
+      nudge: %[3]t
+`, endpoint, filepath.Join(dir, "tests.log"), nudge))
+}
+
+// TestEndToEndAssertToolCallsNudgesBeforeFailing is the seam for the second
+// obligation: a model that answers without following the declared procedure
+// is told which calls it still owes, makes them, and the step succeeds.
+func TestEndToEndAssertToolCallsNudgesBeforeFailing(t *testing.T) {
+	dir := t.TempDir()
+	fake := newFakeLLM(t,
+		says("Looks good to me."),
+		callsTool("run_tests", map[string]any{}),
+		says("Tests pass; looks good to me."),
+	)
+	path := assertToolCallsPipeline(t, dir, fake.URL, true)
+
+	mustRun(t, path)
+
+	if got := readFileString(t, filepath.Join(dir, "tests.log")); !strings.Contains(got, "tests pass") {
+		t.Errorf("the tool never ran; got %q", got)
+	}
+
+	if len(fake.requests) < 2 {
+		t.Fatalf("provider saw %d requests, want at least 2 (the stop attempt and the nudged turn)", len(fake.requests))
+	}
+
+	nudged := fake.requests[1].Raw
+	if !strings.Contains(nudged, "run_tests") {
+		t.Errorf("the nudged turn does not name the tool still owed; got %q", nudged)
+	}
+
+	// Names only: an argument value would be dictating the call, and the
+	// files wording ("final message is not the deliverable") corrects a
+	// belief a procedure gap does not involve.
+	if strings.Contains(nudged, "final message is not the deliverable") {
+		t.Errorf("a tool_calls nudge borrowed the files wording; got %q", nudged)
+	}
+
+	assertSucceeded(t, storeNodes(t, path), "agent", "reviewer")
+}
+
+// TestEndToEndAssertToolCallsWithoutNudgeFailsAtOnce is the opt-in half for
+// tool_calls, over the same script.
+func TestEndToEndAssertToolCallsWithoutNudgeFailsAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	fake := newFakeLLM(t,
+		says("Looks good to me."),
+		callsTool("run_tests", map[string]any{}),
+		says("Tests pass; looks good to me."),
+	)
+	path := assertToolCallsPipeline(t, dir, fake.URL, false)
+
+	err := cli.Run([]string{path})
+	if err == nil {
+		t.Fatal("cli.Run succeeded, but the model never ran the tests and the step never opted into a nudge")
+	}
+
+	if !strings.Contains(err.Error(), "assert.tool_calls") || !strings.Contains(err.Error(), "run_tests") {
+		t.Errorf("failure does not name the assert and the tool: %v", err)
+	}
+
+	if len(fake.requests) != 1 {
+		t.Errorf("provider saw %d requests, want exactly 1", len(fake.requests))
+	}
+
+	assertNoFile(t, filepath.Join(dir, "tests.log"))
 }

@@ -46,6 +46,7 @@ jobs:
       - Answer the question. Write your answer to answer/reply.md.
     assert:
       files: [answer/reply.md]
+      nudge: true
   - task: deliver
     inputs: [answer]
     run: cat answer/reply.md >> %[1]s
@@ -161,7 +162,7 @@ func cliSessionID(t *testing.T, argv string) string {
 // multiplying them is how "five chances" turns into eighteen real model
 // invocations — each one paid for.
 //
-// They pool instead: a step spends at most attempts + maxFilesNudges child
+// They pool instead: a step spends at most attempts + maxNudges child
 // invocations, so a retry taken in one round is not handed back in the next.
 // The fake fails every odd invocation and finishes every even one without
 // writing, which is the compound the multiplication needs.

@@ -28,10 +28,9 @@ func TestAgentHookHonorsAssert(t *testing.T) {
 		// The agent answers in prose and writes nothing, which is precisely
 		// the failure assert.files exists to catch.
 		//
-		// Repeating rather than scripted: an unmet assert.files: is now put
-		// back to the model when it tries to stop, so a model that refuses is
-		// asked more than once by design (see maxFilesNudges). The refusal is
-		// the fixture; how many times it takes to establish is not.
+		// Repeating rather than scripted: how many times the model is asked
+		// depends on whether the step opted into a nudge (see maxNudges),
+		// and the refusal is the fixture, not the count.
 		fake := newRepeatingFakeLLM(t, says("All good, I have filed the incident note."))
 		path := agentHookAssertPipeline(t, dir, fake.URL, "files: [note/incident.md]")
 

@@ -355,6 +355,26 @@ var docScenarios = map[string]docScenario{
 		},
 	},
 
+	// The tool_calls nudge in a doc example: the model answers without
+	// running the tests, is told the call it still owes, and makes it.
+	// Routed on the nudge's own text, like agents-delivers-files.
+	"agents-follows-procedure": {
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				switch {
+				case req.historyCalled("run_tests"):
+					return says("Tests pass; the change looks good.")
+				case req.userMessageContains("have not been made yet"):
+					return callsTool("run_tests", map[string]any{})
+				default:
+					return says("The change looks good.")
+				}
+			})
+		},
+	},
+
 	"agents-files": {
 		files: map[string]string{
 			"ci/unit.sh":          "echo unit tests pass\n",
