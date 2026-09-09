@@ -25,7 +25,7 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 
 | Page | What it covers |
 |---|---|
-| [web.md](web.md) | The browser UI: run transcripts, the dependency graph, live runs, triggering, and sharing one state database between pipelines |
+| [web.md](web.md) | The daemon: `steps pipeline set`, the browser UI, run transcripts, the dependency graph, live runs, triggering, and one state database for every pipeline it holds |
 | [agents-internals.md](agents-internals.md) | How agent steps work underneath: transport, tool-call repair, compaction, caching |
 | [aws-workers.md](aws-workers.md) | Standing up an `aws://` worker by hand with the AWS CLI: IAM, security group, launch template, instance, bucket — and running a pipeline on it |
 | [gcp-workers.md](gcp-workers.md) | Standing up a `gcp://` worker by hand with gcloud: the IAP firewall rule, instance template, instance — and running a pipeline on it |
@@ -38,22 +38,27 @@ steps run <pipeline>        run one job (--resume <id> continues a failed one,
                             --replay <id> --from <step> re-runs one step of one)
                             --worker <tag>=<url> places tags: steps on a machine
 steps test <pipeline>       run every job and check assert: directives
-steps web <pipeline>...     the daemon: serve the UI, poll trigger: true
-                            resources, run affected jobs (--once for cron)
 steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip
-steps runs <pipeline>       what ran, newest first, each row naming the
-                            configuration it executed (steps|queue|cost|where
-                            for the other four views; runs steps says why)
-steps runs --db <file>      with no pipeline: every pipeline in one state file
 steps validate --live       also probe the models and MCP servers themselves
                             (--job <name> narrows it to one job)
-steps jobs <pipeline>       list jobs the circuit breaker paused
-                            (steps jobs resume <pipeline> <job> clears one)
-steps approvals <pipeline>  list approval: steps waiting for a decision
-                            (steps approvals approve|reject <pipeline> <id>)
-steps questions <pipeline>  list ask_user questions waiting for an answer
-                            (steps questions answer <pipeline> <id> <answer>)
+
+steps web                   the daemon: serve the UI, hold the pipelines set
+                            into it, poll trigger: true resources, run jobs
+steps pipeline set -c f.yml upload a pipeline into a daemon — the only way a
+                            served pipeline changes (list|get|pause|unpause|
+                            rename|destroy for the rest; --target names one)
+
+steps runs -p <name>        what ran, newest first, each row naming the
+                            configuration it executed (steps|queue|cost|where
+                            for the other four views; runs steps says why)
+steps runs                  with no -p: every pipeline in the state file
+steps jobs -p <name>        list jobs the circuit breaker paused
+                            (steps jobs resume <job> -p <name> clears one)
+steps approvals -p <name>   list approval: steps waiting for a decision
+                            (steps approvals approve|reject <id> -p <name>)
+steps questions -p <name>   list ask_user questions waiting for an answer
+                            (steps questions answer <id> <answer> -p <name>)
 steps mcp tools|login       inspect or authorize mcp_servers: entries
 steps docs [page]           read these docs in the terminal
 ```

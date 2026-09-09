@@ -9,13 +9,13 @@ import (
 )
 
 // resolveFileIncludes inlines every *_file field's contents (and every
-// whole-document file: reference) into its sibling struct field, resolving
-// each path relative to baseDir — the directory holding the pipeline YAML.
-// It runs between yaml.Unmarshal and validate() (see LoadConfig), so every
+// whole-document file: reference) into its sibling struct field, reading each
+// path through fsys — a directory on disk, or an uploaded Bundle (see Files).
+// It runs between yaml.Unmarshal and validate() (see parseSource), so every
 // validator, every merkle content builder, and every executor afterwards sees
 // a *Config indistinguishable from one whose text was written inline.
 //
-// baseDir is a parameter, never stored on Config: merkle hashing must stay a
+// fsys is a parameter, never stored on Config: merkle hashing must stay a
 // pure function of *Config, and the path a file was loaded from is
 // deliberately not hashed — only the text it resolves to is, which is what
 // actually determines a step's result (see TaskNodeContent/AgentContentMap).
@@ -27,8 +27,8 @@ import (
 // step fetches, which does not exist yet at load time, so it is left
 // untouched here and resolved later by internal/agent, once the artifact is
 // on disk.
-func (c *Config) resolveFileIncludes(baseDir string) ([]string, error) {
-	resolver := &includeResolver{baseDir: baseDir}
+func (c *Config) resolveFileIncludes(fsys Files) (map[string]string, error) {
+	resolver := &includeResolver{files: fsys, read: map[string]string{}}
 
 	for i := range c.Tasks {
 		err := resolveTaskIncludes(resolver, &c.Tasks[i])
@@ -97,40 +97,41 @@ func applyInclude(resolver *includeResolver, inc include) error {
 	return nil
 }
 
-// includeResolver reads a pipeline's *_file includes and remembers which
-// files on disk it read.
+// includeResolver reads a pipeline's *_file includes and remembers what it
+// read, path and content.
 //
-// The list is what puts an include inside the pipeline's REVISION. The
-// content of a run_file: or a system_file: decides what a step executes, so a
-// hash taken over the YAML alone answers "did the pipeline change?" with a
-// confident no for the edit that changed everything — see Load.
+// The map is what puts an include inside the pipeline's REVISION, and what a
+// `steps pipeline set` sends along with the YAML. The content of a run_file:
+// or a system_file: decides what a step executes, so a hash taken over the
+// YAML alone answers "did the pipeline change?" with a confident no for the
+// edit that changed everything — see parseSource.
 //
 // @builtin/ includes are deliberately not listed: they are compiled into this
 // binary, so no edit can move them while a daemon runs.
 type includeResolver struct {
-	baseDir string
-	// read is the include paths as the pipeline wrote them, relative to
-	// baseDir — see readFile for why they are not resolved.
-	read []string
+	files Files
+	// read is keyed by the include paths as the pipeline wrote them, cleaned
+	// — see readFile for why they are not resolved.
+	read map[string]string
 }
 
-// readFile resolves path relative to baseDir and reads it. A path may
-// use ".." to escape baseDir: the pipeline file is trusted input (see
-// LoadConfig's own os.ReadFile), and a file placed beside it by the same
-// author is at the same trust level — a shared ../tasks/ directory next to a
-// pipelines/ directory is a legitimate layout, not a hole to close.
+// readFile resolves path through r.files and reads it. A DirFS allows ".."
+// to escape its directory: the pipeline file is trusted input, and a file
+// placed beside it by the same author is at the same trust level — a shared
+// ../tasks/ directory next to a pipelines/ directory is a legitimate layout,
+// not a hole to close. A Bundle is a closed set instead: on a daemon, "beside
+// the pipeline file" is somebody else's disk.
 //
 // A path with the "@builtin/<name>" prefix reads from the embedded prompt
-// library instead of from disk, so pipelines can reference the curated
-// system prompts shipped with the binary without needing a sibling file.
+// library instead of through r.files, so pipelines can reference the curated
+// system prompts shipped with the binary without needing a sibling file — on
+// either side of a `steps pipeline set` upload.
 //
 // A not-found error carries a specific hint for the common Concourse-habit
 // mistake (run_file: repo/ci/build.sh, meaning a fetched artifact): that path
 // essentially never exists next to a pipeline YAML, so this fires in
 // practice for exactly that case.
 func (r *includeResolver) readFile(context, key, path string) ([]byte, error) {
-	baseDir := r.baseDir
-
 	if strings.HasPrefix(path, "@builtin/") {
 		name := strings.TrimPrefix(path, "@builtin/")
 		data, err := ReadBuiltinPrompt(name)
@@ -144,13 +145,11 @@ func (r *includeResolver) readFile(context, key, path string) ([]byte, error) {
 		return nil, fmt.Errorf("%s: %s %q must be a path relative to the pipeline file's directory", context, key, path)
 	}
 
-	full := filepath.Join(baseDir, path)
-
-	data, err := os.ReadFile(full) //nolint:gosec // resolved from the pipeline file's own directory, which is trusted input — same rationale as LoadConfig's read of the pipeline file itself
+	data, err := r.files.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("%s: %s %q: no such file relative to the pipeline directory %q "+
-				"(a path naming a fetched artifact is not supported here — see docs/agents.md)", context, key, path, baseDir)
+			return nil, fmt.Errorf("%s: %s %q: no such file relative to %s "+
+				"(a path naming a fetched artifact is not supported here — see docs/agents.md)", context, key, path, origin(r.files))
 		}
 
 		return nil, fmt.Errorf("%s: could not read %s %q: %w", context, key, path, err)
@@ -160,11 +159,12 @@ func (r *includeResolver) readFile(context, key, path string) ([]byte, error) {
 		return nil, fmt.Errorf("%s: %s %q is empty", context, key, path)
 	}
 
-	// Recorded as the pipeline names it, not as it resolved: baseDir carries
-	// how the pipeline file was invoked, and the revision hash folds these
-	// strings in — so a resolved path made ci/app.yml and /repo/ci/app.yml two
-	// different configurations of the same bytes.
-	r.read = append(r.read, filepath.Clean(path))
+	// Recorded as the pipeline names it, not as it resolved: a resolved path
+	// carries how the pipeline file was invoked, and the revision hash folds
+	// these strings in — so it made ci/app.yml and /repo/ci/app.yml two
+	// different configurations of the same bytes. It is also the exact key a
+	// Bundle sender uses — see Bundle.ReadFile.
+	r.read[filepath.Clean(path)] = string(data)
 
 	return data, nil
 }

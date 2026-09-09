@@ -18,6 +18,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // probeType is a resource type whose every stage reports where it ran: the
@@ -62,7 +63,20 @@ jobs:
 func checkedVersions(t *testing.T, pipelinePath string) []map[string]any {
 	t.Helper()
 
-	st := openStoreFor(t, pipelinePath)
+	return checkedVersionsIn(t, cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
+}
+
+// checkedVersionsIn reads what a daemon's poll recorded, which is in the
+// database it holds its pipelines in rather than one derived from a file.
+func checkedVersionsIn(t *testing.T, state, name string) []map[string]any {
+	t.Helper()
+
+	st, err := sqlite.OpenExisting(state, name)
+	if err != nil {
+		return nil
+	}
+
+	t.Cleanup(func() { _ = st.Close() })
 
 	encoded, err := st.ResourceVersionsJSON(context.Background(), "repo")
 	if err != nil {
@@ -251,9 +265,12 @@ jobs:
     trigger: true
 `)
 
-	mustRun(t, "web", path, "--once", "--worker", "vpc=local:")
+	served := startWebFor(t, path, "--interval", "50ms", "--worker", "vpc=local:")
+	defer served.stop(t)
 
-	versions := checkedVersions(t, path)
+	settle(t, served.state, cli.PipelineName(path), "repo")
+
+	versions := checkedVersionsIn(t, served.state, cli.PipelineName(path))
 	if len(versions) == 0 || versions[0]["where"] != "vpc" {
 		t.Errorf("the poll recorded %v, want a version the worker reported", versions)
 	}
@@ -277,17 +294,23 @@ jobs:
     trigger: true
 `)
 
-	err := cli.Run([]string{"web", path, "--once"})
+	// Refused at the SET rather than logged by the poll loop forever: a
+	// daemon that cannot reach a resource's machine has to say so to whoever
+	// is deploying, and that is a person at a terminal.
+	served := startWebFor(t, path, "--interval", "1h", "--skip-set")
+	defer served.stop(t)
+
+	err := cli.Run([]string{"pipeline", "set", "-p", "probe", "-c", path, "-n", "--target", served.target()})
 	if err == nil {
-		t.Fatal("a poll of a resource with an unmapped tag ran anyway")
+		t.Fatal("a pipeline whose polled resource has an unmapped tag was accepted")
 	}
 
 	if !strings.Contains(err.Error(), "vpc") {
 		t.Errorf("error = %v, want it to name the unmapped tag", err)
 	}
 
-	if versions := checkedVersions(t, path); len(versions) != 0 {
-		t.Errorf("the refused poll still recorded %v", versions)
+	if versions := checkedVersionsIn(t, served.state, "probe"); len(versions) != 0 {
+		t.Errorf("the refused pipeline still recorded %v", versions)
 	}
 }
 
@@ -526,7 +549,7 @@ jobs:
     trigger: true
 `)
 
-	served := startWeb(t, []string{path}, "--interval", "1h", "--worker", "vpc=local:")
+	served := startWebFor(t, path, "--interval", "1h", "--worker", "vpc=local:")
 	defer served.stop(t)
 
 	url := fmt.Sprintf("http://%s/p/%s/check/repo?token=s3cret", served.addr, cli.PipelineName(path))
@@ -535,7 +558,7 @@ jobs:
 		t.Fatalf("webhook answered %d, want 200", status)
 	}
 
-	versions := checkedVersions(t, path)
+	versions := checkedVersionsIn(t, served.state, cli.PipelineName(path))
 	if len(versions) == 0 || versions[0]["where"] != "vpc" {
 		t.Errorf("the webhook recorded %v, want a version the worker reported", versions)
 	}
@@ -560,9 +583,13 @@ jobs:
     trigger: true
 `)
 
-	err := cli.Run([]string{"web", path, "--once", "--worker", "vpc=aws://stopped/i-0123456789abcdef0"})
+	served := startWebFor(t, path, "--interval", "1h", "--skip-set",
+		"--worker", "vpc=aws://stopped/i-0123456789abcdef0")
+	defer served.stop(t)
+
+	err := cli.Run([]string{"pipeline", "set", "-p", "probe", "-c", path, "-n", "--target", served.target()})
 	if err == nil {
-		t.Fatal("a poll of a resource on an acquisition rung ran anyway")
+		t.Fatal("a pipeline whose polled resource sits on an acquisition rung was accepted")
 	}
 
 	if !strings.Contains(err.Error(), "acquire") {

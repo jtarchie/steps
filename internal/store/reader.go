@@ -35,6 +35,9 @@ type Reader interface {
 type PipelineRow struct {
 	Name string
 	Path string
+	// CurrentSHA is the revision a `steps pipeline set` made current, empty for a pipeline that only ever ran by hand; a daemon serves exactly the rows that have one.
+	CurrentSHA string
+	Paused     bool
 }
 
 // CrossRunRow is a run plus the pipeline it belongs to. The pipeline is not

@@ -63,7 +63,7 @@ func TestWhereWillNotVouchForARunItDoesNotHave(t *testing.T) {
 	var err error
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"runs", "where", path, "never-happened"})
+		err = cli.Run(append([]string{"runs", "where", "never-happened"}, readArgs(path)...))
 	})
 	if err != nil {
 		t.Fatalf("steps runs --where --run: %v", err)
@@ -80,7 +80,7 @@ func TestWhereWillNotVouchForARunItDoesNotHave(t *testing.T) {
 	// A run still in flight records its placements as its steps finish, so
 	// the same past-tense claim is just as wrong about one that exists.
 	out = captureStdout(t, func() {
-		err = cli.Run([]string{"runs", "where", path, "mid-flight"})
+		err = cli.Run(append([]string{"runs", "where", "mid-flight"}, readArgs(path)...))
 	})
 	if err != nil {
 		t.Fatalf("steps runs --where --run: %v", err)
@@ -135,7 +135,7 @@ func TestWhereMarksAMemoryWorkdir(t *testing.T) {
 	var err error
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"runs", "where", path, "in-memory"})
+		err = cli.Run(append([]string{"runs", "where", "in-memory"}, readArgs(path)...))
 	})
 	if err != nil {
 		t.Fatalf("steps runs --where --run: %v", err)

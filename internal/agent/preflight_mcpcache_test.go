@@ -91,7 +91,7 @@ func TestPreflightStillCachesAnIdenticalGrant(t *testing.T) {
 // unscoped-cache class one level up from the grant.
 //
 // The key named the server by NAME alone, and nothing about the definition
-// behind it. Under `steps web app.yml infra.yml` two pipelines may each
+// behind it. Under one daemon holding several pipelines two pipelines may each
 // declare `mcp_servers: [{name: test, ...}]` pointing at entirely different
 // things, and one answer served both: a healthy server vouched for a broken
 // neighbour, and a broken one condemned a healthy neighbour.

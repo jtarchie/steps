@@ -112,6 +112,30 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.deliver(w, r, cfg, name)
+}
+
+// deliver runs the check a delivery asked for, unless the pipeline is paused.
+//
+// A paused pipeline RECEIVES the delivery and enqueues nothing: refusing would
+// make a sender retry work this daemon has been told not to do, and the poll
+// the delivery would have prompted happens on unpause anyway.
+func (h *webhookHandler) deliver(w http.ResponseWriter, r *http.Request, cfg *config.Config, name string) {
+	stopped, err := h.st.Paused(r.Context())
+	if err != nil {
+		slog.Warn("webhook.paused", "resource", name, "error", err)
+		http.Error(w, "check failed", http.StatusInternalServerError)
+
+		return
+	}
+
+	if stopped {
+		printf("webhook: %s received while the pipeline is paused; nothing enqueued\n", name)
+		ok(w)
+
+		return
+	}
+
 	//nolint:contextcheck // the request's own context, with the daemon's values behind it — see requestContext
 	enqueued, err := h.checkNow(requestContext{Context: r.Context(), base: h.base}, cfg, name)
 	if err != nil {
@@ -122,9 +146,12 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	printf("webhook: %s checked, enqueued %v\n", name, enqueued)
+	ok(w)
+}
 
-	// The response body deliberately echoes nothing back: the request path is
-	// attacker-controlled, and the sender already knows what it asked for.
+// ok answers a delivery, echoing nothing back: the request path is
+// attacker-controlled, and the sender already knows what it asked for.
+func ok(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, "ok\n")
 }

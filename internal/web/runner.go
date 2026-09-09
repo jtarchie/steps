@@ -23,12 +23,18 @@ import (
 )
 
 // drainIdleBackoff is how long a drainer waits after finding nothing to do.
-const drainIdleBackoff = time.Second
+//
+// A quarter second rather than the one it was: this is a SELECT against a
+// local sqlite queue, so four a second per pipeline costs nothing measurable,
+// and the number is the latency a person watching the follow page pays
+// between pressing trigger and the run appearing. A second of that is visible;
+// a quarter is not.
+const drainIdleBackoff = 250 * time.Millisecond
 
 // LocalRunner drains each pipeline's queue in this process. It is the Runner
 // the `steps web` command installs; a read-only server has none.
 type LocalRunner struct {
-	providers map[string]workspace.Provider
+	providers *providers
 	// pinned is --pin, the version fields every run this process starts is
 	// held to. A property of the process, not of a request: the operator
 	// pinned the daemon, and a job triggered from the browser is still that
@@ -60,20 +66,33 @@ type LocalRunner struct {
 // NewLocalRunner builds a runner over per-pipeline workspace providers, keyed
 // by pipeline slug. concurrent below 1 means one job at a time.
 func NewLocalRunner(
-	providers map[string]workspace.Provider, pinned map[string]string, concurrent int, force bool,
+	initial map[string]workspace.Provider, pinned map[string]string, concurrent int, force bool,
 ) *LocalRunner {
 	if concurrent < 1 {
 		concurrent = 1
 	}
 
+	held := newProviders()
+	for slug, provider := range initial {
+		held.set(slug, provider)
+	}
+
 	return &LocalRunner{
-		providers:  providers,
+		providers:  held,
 		pinned:     pinned,
 		concurrent: concurrent,
 		force:      force,
 		forced:     map[string]bool{},
 	}
 }
+
+// SetProvider installs the workspace a pipeline's runs materialize in, retiring whatever it replaces once the runs holding it finish.
+func (r *LocalRunner) SetProvider(slug string, provider workspace.Provider) {
+	r.providers.set(slug, provider)
+}
+
+// RemoveProvider retires a destroyed pipeline's workspace, once nothing is running in it.
+func (r *LocalRunner) RemoveProvider(slug string) { r.providers.remove(slug) }
 
 // Enqueue puts a job on the pipeline's queue.
 func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, reason string, force bool) (int64, error) {
@@ -129,14 +148,14 @@ func (r *LocalRunner) Drain(ctx context.Context, pipelines []*Pipeline) {
 		go func() {
 			defer wg.Done()
 
-			r.drainPipeline(ctx, target)
+			r.DrainPipeline(ctx, target)
 		}()
 	}
 
 	wg.Wait()
 }
 
-// drainPipeline runs one pipeline's queue with `concurrent` workers.
+// DrainPipeline runs one pipeline's queue with `concurrent` workers.
 //
 // Workers rather than one loop because a daemon that is mid-build stops
 // noticing everything else: the queue this drains is also where a browser
@@ -145,7 +164,7 @@ func (r *LocalRunner) Drain(ctx context.Context, pipelines []*Pipeline) {
 // ClaimNextJob admits in a single statement against serial: and
 // max_in_flight, so extra workers find nothing to claim rather than running
 // what the pipeline forbade.
-func (r *LocalRunner) drainPipeline(ctx context.Context, target *Pipeline) {
+func (r *LocalRunner) DrainPipeline(ctx context.Context, target *Pipeline) {
 	slog.Info("web.pipeline.drain_start", "pipeline", target.Slug, "workers", r.concurrent)
 
 	var wg sync.WaitGroup
@@ -233,6 +252,10 @@ func SyncQueueLimits(ctx context.Context, target *Pipeline) {
 // drainOne claims at most one queued job and runs it. It reports whether it
 // ran anything, so the caller knows whether to back off.
 func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
+	if !admits(ctx, target) {
+		return false
+	}
+
 	id, jobName, claimed, err := target.Store.ClaimNextJob(ctx)
 	if err != nil {
 		slog.Error("web.claim", "pipeline", target.Slug, "error", err)
@@ -264,9 +287,18 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 		return true
 	}
 
-	force := r.takeForce(target.Slug, jobName) || r.force
+	r.runAndFinalize(ctx, target, cfg, job, id)
 
-	slog.Info("web.job.run", "pipeline", target.Slug, "job", jobName)
+	return true
+}
+
+// runAndFinalize executes one claimed job and records how it went.
+func (r *LocalRunner) runAndFinalize(
+	ctx context.Context, target *Pipeline, cfg *config.Config, job *config.Job, id int64,
+) {
+	force := r.takeForce(target.Slug, job.Name) || r.force
+
+	slog.Info("web.job.run", "pipeline", target.Slug, "job", job.Name)
 
 	runErr := r.runJob(ctx, target, cfg, job, force)
 
@@ -277,28 +309,41 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 	// change enqueues), and it must not count against the circuit breaker,
 	// because an operator pressing ctrl-C is not the job being broken.
 	if runErr != nil && interrupted(runErr) {
-		slog.Warn("web.job.interrupted", "pipeline", target.Slug, "job", jobName)
+		slog.Warn("web.job.interrupted", "pipeline", target.Slug, "job", job.Name)
 
-		return true
+		return
 	}
 
 	status := "succeeded"
 	if runErr != nil {
 		status = "failed"
 
-		slog.Error("web.run", "pipeline", target.Slug, "job", jobName, "error", runErr)
+		slog.Error("web.run", "pipeline", target.Slug, "job", job.Name, "error", runErr)
 	}
 
-	slog.Info("web.job.done", "pipeline", target.Slug, "job", jobName, "status", status)
+	slog.Info("web.job.done", "pipeline", target.Slug, "job", job.Name, "status", status)
 
-	err = target.Store.CompleteJob(context.WithoutCancel(ctx), id, status, runErr)
+	err := target.Store.CompleteJob(context.WithoutCancel(ctx), id, status, runErr)
 	if err != nil {
-		slog.Error("web.complete", "pipeline", target.Slug, "job", jobName, "error", err)
+		slog.Error("web.complete", "pipeline", target.Slug, "job", job.Name, "error", err)
 	}
 
 	r.recordBreaker(ctx, target, job, runErr)
+}
 
-	return true
+// admits reports whether the pipeline-level breaker lets anything be claimed.
+//
+// Asked before the claim rather than after it: a paused pipeline admits
+// nothing, so a row queued before the pause waits rather than running.
+func admits(ctx context.Context, target *Pipeline) bool {
+	stopped, err := target.Store.Paused(ctx)
+	if err != nil {
+		slog.Error("web.paused", "pipeline", target.Slug, "error", err)
+
+		return false
+	}
+
+	return !stopped
 }
 
 // interrupted reports a run that stopped because the process is going down,
@@ -327,7 +372,7 @@ func (r *LocalRunner) skipIfPaused(ctx context.Context, target *Pipeline, jobNam
 	}
 
 	slog.Warn("web.job.paused", "pipeline", target.Slug, "job", jobName,
-		"resume", "steps jobs resume <pipeline> "+jobName)
+		"resume", "steps jobs resume "+jobName+" -p <pipeline>")
 
 	err = target.Store.CompleteJob(context.WithoutCancel(ctx), id, "skipped", nil)
 	if err != nil {
@@ -363,7 +408,7 @@ func (r *LocalRunner) recordBreaker(ctx context.Context, target *Pipeline, job *
 		"job", job.Name,
 		"consecutive_failures", consecutive,
 		"max_consecutive_failures", job.MaxConsecutiveFailures,
-		"resume", "steps jobs resume <pipeline> "+job.Name)
+		"resume", "steps jobs resume "+job.Name+" -p <pipeline>")
 }
 
 // runJob executes one job with this pipeline's bus attached, so the run's
@@ -371,7 +416,7 @@ func (r *LocalRunner) recordBreaker(ctx context.Context, target *Pipeline, job *
 func (r *LocalRunner) runJob(
 	ctx context.Context, target *Pipeline, cfg *config.Config, job *config.Job, force bool,
 ) error {
-	provider, ok := r.providers[target.Slug]
+	provider, release, ok := r.providers.take(target.Slug)
 	if !ok {
 		// A pipeline with no provider was never registered, which means the
 		// server was built by hand (a test) rather than by the command. Refuse
@@ -379,6 +424,9 @@ func (r *LocalRunner) runJob(
 		// caller did not choose is worse than not running it.
 		return fmt.Errorf("web: no workspace provider registered for pipeline %q", target.Slug)
 	}
+
+	// Held for the life of the run, so a set that swaps the workspace under this pipeline cannot close the tree this build is materializing into.
+	defer release()
 
 	//nolint:wrapcheck // the run error is reported to the queue row verbatim
 	return pipeline.RunJob(events.WithBus(ctx, target.Bus), cfg, job, r.pinned, provider, target.Store, force)

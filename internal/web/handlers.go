@@ -473,6 +473,17 @@ func (s *Server) handleTrigger(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", name))
 	}
 
+	// Refused rather than queued: a pause that let the button enqueue would fill the queue with work nobody intends to run, and say nothing about why nothing happened.
+	stopped, err := pipeline.Store.Paused(c.Request().Context())
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	if stopped {
+		return echo.NewHTTPError(http.StatusConflict,
+			"this pipeline is paused; resume it with steps pipeline unpause -p "+pipeline.Slug)
+	}
+
 	force := c.FormValue("force") != ""
 
 	reason := "manual (web)"
@@ -509,6 +520,17 @@ func (s *Server) handleFollow(c echo.Context) error {
 	_, err := pipeline.Config().FindJob(name)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", name))
+	}
+
+	// Refused rather than queued: a pause that let the button enqueue would fill the queue with work nobody intends to run, and say nothing about why nothing happened.
+	stopped, err := pipeline.Store.Paused(c.Request().Context())
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	if stopped {
+		return echo.NewHTTPError(http.StatusConflict,
+			"this pipeline is paused; resume it with steps pipeline unpause -p "+pipeline.Slug)
 	}
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
@@ -755,9 +777,9 @@ func (s *Server) handleSearch(c echo.Context) error {
 		add(searchHit{
 			Kind:  "pipeline",
 			Name:  other.Slug,
-			Hint:  other.Path,
+			Hint:  other.Path(),
 			URL:   "/p/" + other.Slug,
-			match: "pipeline " + other.Slug + " " + other.Path,
+			match: "pipeline " + other.Slug + " " + other.Path(),
 		})
 	}
 
@@ -783,9 +805,11 @@ func (s *Server) handleSearch(c echo.Context) error {
 
 // others is every served pipeline except the one given, in slug order.
 func (s *Server) others(current *Pipeline) []*Pipeline {
-	out := make([]*Pipeline, 0, len(s.pipelines))
+	served := s.Served()
 
-	for _, pipeline := range s.pipelines {
+	out := make([]*Pipeline, 0, len(served))
+
+	for _, pipeline := range served {
 		if pipeline != current {
 			out = append(out, pipeline)
 		}

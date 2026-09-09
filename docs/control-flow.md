@@ -758,11 +758,11 @@ jobs:
 ```
 
 ```
-$ steps approvals pipeline.yml
+$ steps approvals -p pipeline
 ID  JOB      REQUESTED             MESSAGE
 1   publish  2026-08-05T14:02:11Z  Draft is in draft/summary.md — publish?
 
-$ steps approvals approve pipeline.yml 1
+$ steps approvals approve 1 -p pipeline
 approved: approval 1
 ```
 

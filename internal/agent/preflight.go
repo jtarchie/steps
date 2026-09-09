@@ -529,7 +529,7 @@ type pinRecord struct {
 //
 // The pipeline half is the correction for a collision that was always latent
 // and became live traffic once a pin gained an exit condition. One process
-// serves several pipelines (`steps web app.yml infra.yml`, `steps web` over
+// serves several pipelines (one daemon holding several pipelines, `steps web` over
 // a shared state file), two of them may declare an agent called `reviewer`
 // with entirely different source: blocks, and keyed by name alone the first
 // one's outage resolved the second onto an endpoint it never declared —
@@ -1045,7 +1045,7 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 	// `steps web`.
 	// The DEFINITION, not just the name. The cache is process-wide and
 	// pipeline-blind, and a name is not an identity: under
-	// `steps web app.yml infra.yml` two pipelines may each declare a server
+	// one daemon holding several pipelines two pipelines may each declare a server
 	// called `test` pointing at different things, and one verdict served
 	// both — a healthy server vouching for a broken neighbour, and a broken
 	// one condemning a healthy neighbour. Naming the definition is stronger

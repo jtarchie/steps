@@ -66,9 +66,10 @@ See [`docs/resources.md`](docs/resources.md) for other resource types and the `c
 | `steps run <pipeline>` | Run one job once. |
 | `steps validate <pipeline>` | Check the file for errors without running anything. |
 | `steps plan <pipeline>` | Show which steps a run would execute and which are cached. |
-| `steps runs <pipeline>` | Show what past runs recorded (`steps`, `queue`, `cost`, `where` for the other views); with no pipeline and `--db`, every pipeline in one state file. |
+| `steps runs -p <name>` | Show what past runs recorded (`steps`, `queue`, `cost`, `where` for the other views); with no `-p`, every pipeline in the state file. |
 | `steps test <pipeline>` | Run every job and check `assert:` directives. |
-| `steps web <pipeline>...` | The daemon: serve the browser UI, poll `trigger: true` resources, and run affected jobs (`--once` for cron) ([docs](docs/web.md)). |
+| `steps web` | The daemon: serve the browser UI, hold the pipelines set into it, poll `trigger: true` resources, and run affected jobs ([docs](docs/web.md)). |
+| `steps pipeline set -c <pipeline>` | Upload a pipeline to a daemon — the only way a served pipeline changes (`list`, `get`, `pause`, `unpause`, `rename`, `destroy` for the rest). |
 | `steps mcp list\|tools\|login` | List, inspect, or authorize `mcp_servers:` entries. |
 
 Exit codes: `0` success, `1` a step failed, `2` the pipeline could not be run (config or infrastructure), `130` interrupted.
@@ -76,7 +77,7 @@ Exit codes: `0` success, `1` a step failed, `2` the pipeline could not be run (c
 ## Learn more
 
 - [`docs/`](docs/README.md) — indexed reference: start with [resources](docs/resources.md), then [control flow](docs/control-flow.md) or [agents](docs/agents.md).
-- [`steps web`](docs/web.md) — run transcripts with cached steps folded, agent conversations expanded, the job dependency graph, and live runs streaming as they happen.
+- [`steps web`](docs/web.md) — the daemon: `steps pipeline set` uploads a pipeline into it, and it serves run transcripts with cached steps folded, agent conversations expanded, the job dependency graph, and live runs streaming as they happen.
 - Every YAML example in `docs/` is a complete, minimal pipeline the test suite extracts and executes — copy one out and run it. Read them with `steps docs [page]` in a terminal or at `/docs` in the web UI. Agent examples name `openrouter/qwen/qwen3.7-flash` (cheap, tool-calling; needs `OPENROUTER_API_KEY`) — swap the model for yours, including a local server that needs no key (`lmstudio/your-model`).
 - [`examples/pr-review.yml`](examples/pr-review.yml) — the capstone: an adaptive PR review whose matrix width a planner step decides mid-run, reviewers fanned out concurrently, findings collected and synthesized, a human approval before anything posts. Needs a live model and an authenticated `gh`: `PR_REPO=owner/name steps run examples/pr-review.yml --job review`.
 - [`CLAUDE.md`](CLAUDE.md) — architecture, build constraints, and contribution notes for anyone (human or agent) changing this codebase.

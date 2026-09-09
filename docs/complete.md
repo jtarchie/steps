@@ -32,7 +32,7 @@ jobs:
 - name: review
   plan:
   - get: repo                          # fetch: NOTES.txt lands in repo/
-    trigger: true                      # steps web re-runs this on a new version
+    trigger: true                      # a steps web daemon re-runs this on a new version
   - task: prepare
     outputs: [guidelines]
     run: echo 'summaries must be one line' > guidelines/RULES.txt
@@ -64,13 +64,14 @@ What each piece is doing, with the page that explains it:
 - **`inputs:`/`outputs:`** — every step names what it reads and what it keeps; the agent cannot see anything it didn't declare. [workspace.md](workspace.md)
 - **`context_paths:`** — the guidelines arrive as a synthetic `read_file` result, no turn spent fetching them. [agents.md](agents.md#context_paths--files-delivered-as-synthetic-read_file-results)
 - **`verdicts:`** — the synthesized required verdict tool; `approve` jumps to the put, `reject` to the escalation. [control-flow.md](control-flow.md#step-transitions-tomax_visitsverdicts)
-- **`trigger:`** — under `steps web`, a new version runs the job; under `steps run`/`steps test` it's inert. [infra.md](infra.md#downstream-triggers-trigger-true--steps-web)
+- **`trigger:`** — under `steps web`, once the pipeline has been set into it, a new version runs the job; under `steps run`/`steps test` it's inert. [infra.md](infra.md#downstream-triggers-trigger-true--steps-web)
 
 Run it:
 
 ```bash
-steps run pipeline.yml          # one shot
-steps web pipeline.yml          # serve the UI, poll for new versions, run what they trigger
+steps run pipeline.yml               # one shot
+steps web                            # the daemon: serve the UI, poll, run what triggers
+steps pipeline set -c pipeline.yml   # upload it into that daemon
 ```
 
 From here, the usual next steps are wiring in a real resource (the built-in `git`, or your own type against an API), swapping the model for the one you use ([agents.md](agents.md)), and bounding the spend with `budget:` and `timeout:` ([attempts-timeout.md](attempts-timeout.md)).

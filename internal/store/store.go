@@ -81,6 +81,7 @@ type Store interface {
 	Usage
 	Events
 	Revisions
+	Control
 	Pruning
 }
 

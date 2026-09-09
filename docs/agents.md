@@ -250,12 +250,12 @@ A question goes to the first channel that can serve it:
 4. **A person, parked.** With no terminal — CI, a supervised `steps web` — the run parks and the question waits:
 
 ```console
-$ steps questions pipeline.yml
+$ steps questions -p pipeline
 ID  JOB           STEP    ASKED                          QUESTION
 1   release-note  writer  2026-08-25T09:14:02.000000000Z Which bump is this release?
                                                          options: major | minor | patch
 
-$ steps questions answer pipeline.yml 1 minor
+$ steps questions answer 1 minor -p pipeline
 answered: question 1
 ```
 
@@ -946,11 +946,11 @@ A run that resumes continues its **job** budget from what earlier attempts alrea
 **Reporting happens whether or not you set one**, which is the point: it is what tells you which ceilings are even sensible. Every job that ran an agent step prints what it cost — **and records it**, so the question survives the terminal:
 
 ```
-$ steps runs cost pipeline.yml
+$ steps runs cost -p pipeline
 RUN                 TOKENS   CACHED        COST   STEPS
 r-8f2a1c         4,102,338      38%    unpriced       9
 
-$ steps runs cost pipeline.yml r-8f2a1c
+$ steps runs cost -p pipeline r-8f2a1c
 STEP                                TOKENS   CACHED   DURATION  FINISH
 reviewer [dim=state-mutation]      412,880      61%       1m02s  stop
 reviewer [dim=api]               1,204,551      22%      14m30s  length  <-- truncated
@@ -1034,7 +1034,7 @@ jobs:
 - **Never hashed.** Which source served a run is *availability*, not content — the alternative would invalidate every agent step at exactly the moment things are already going badly.
 - **Loudly visible.** A run that used a fallback says so in the log (`agent.failover`), on the step's own output line, and in the recorded result (`fallback_model`).
 - **Every fallback endpoint is validated** like the primary — no credentials in the URL, and the provider prefix must resolve at load.
-- **Pinned across runs, reconsidered per run, and never forever.** Once a source (preflight-picked or mid-run-picked) has *served* one run, a `steps web` process keeps using it rather than re-failing-over on every poll. A pin belongs to one `(pipeline, agent)` pair: a process serving several pipelines that each declare a `reviewer` keeps their outages apart. The pipeline half is the same name the state database, the `/p/<slug>` route and every run record use — so a pin log line's `pipeline=` joins to the run you are correlating it against, and `--name` (see [web.md](web.md)) moves all of them together.
+- **Pinned across runs, reconsidered per run, and never forever.** Once a source (preflight-picked or mid-run-picked) has *served* one run, a `steps web` process keeps using it rather than re-failing-over on every poll. A pin belongs to one `(pipeline, agent)` pair: a daemon holding several pipelines that each declare a `reviewer` keeps their outages apart. The pipeline half is the same name the state database, the `/p/<slug>` route and every run record use — one identity, chosen by whoever ran `steps pipeline set -p <name>` (see [web.md](web.md)) — so a pin log line's `pipeline=` joins to the run you are correlating it against.
 
   Both directions take positive evidence. Mid-run, a source is pinned only after it carried a conversation to an end, which a provider answering `400` did not do; a pin is dropped only after the cascade actually *tried* the alternatives and none of them served, since a step that failed without ever swapping has learned nothing, and dropping the pin there would send the next step back to a primary the probe may already have found dead. Anything ambiguous — the step spending its own `timeout:`, the run being cancelled — changes nothing in either direction. The pre-run probe's bar is necessarily lower: it pins whatever answers a one-token request, which is all a probe can ask.
 

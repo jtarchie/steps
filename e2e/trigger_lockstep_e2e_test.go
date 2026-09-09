@@ -14,8 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // lockstepFixture is watchFixture with two independent feeds, for a job whose
@@ -25,6 +23,8 @@ type lockstepFixture struct {
 	feedA     string
 	feedB     string
 	processed string
+	db        string
+	served    *webProcess
 }
 
 // lockstepPipeline pairs two cursor-driven feeds: each build appends
@@ -70,6 +70,7 @@ func newLockstepFixture(t *testing.T, pipelineYAML string) *lockstepFixture {
 		feedA:     filepath.Join(dir, "feed-a.txt"),
 		feedB:     filepath.Join(dir, "feed-b.txt"),
 		processed: filepath.Join(dir, "processed.txt"),
+		db:        filepath.Join(dir, "daemon.db"),
 	}
 
 	body := strings.NewReplacer(
@@ -110,10 +111,38 @@ func (f *lockstepFixture) feed(t *testing.T, path string, n int) {
 	}
 }
 
+// serve starts the daemon these scenarios drive and sets the pipeline into it.
+func (f *lockstepFixture) serve(t *testing.T, args ...string) {
+	t.Helper()
+
+	f.served = startWeb(t, append([]string{"--db", f.db, "--interval", pollInterval}, args...)...)
+	t.Cleanup(func() { f.served.stopIfRunning(t) })
+
+	f.served.set(t, "pipeline", f.pipeline)
+}
+
+// restart replaces the daemon, for the one test whose subject is --pin — a
+// fact about the process rather than about the pipeline.
+func (f *lockstepFixture) restart(t *testing.T, args ...string) {
+	t.Helper()
+
+	if f.served != nil {
+		f.served.stop(t)
+	}
+
+	f.served = startWeb(t, append([]string{"--db", f.db, "--interval", pollInterval}, args...)...)
+	t.Cleanup(func() { f.served.stopIfRunning(t) })
+}
+
+// watch lets the daemon complete a poll-and-drain cycle — see watchFixture.watch.
 func (f *lockstepFixture) watch(t *testing.T) {
 	t.Helper()
 
-	mustRun(t, "web", f.pipeline, "--once")
+	if f.served == nil {
+		f.serve(t)
+	}
+
+	settle(t, f.db, "pipeline", "a", "b")
 }
 
 // watchExpectingFailure runs a cycle whose job is meant to fail, and insists
@@ -134,12 +163,16 @@ func (f *lockstepFixture) coldStart(t *testing.T) {
 	}
 }
 
+// watchExpectingFailure runs a cycle whose job is meant to fail. A daemon
+// records that on the queue row rather than in an exit code, so the failure
+// is asserted here instead of inferred from one.
 func (f *lockstepFixture) watchExpectingFailure(t *testing.T) {
 	t.Helper()
 
-	err := cli.Run([]string{"web", f.pipeline, "--once"})
-	if err == nil {
-		t.Fatal("the cycle was supposed to fail a build; it succeeded")
+	f.watch(t)
+
+	if !queueHasFailure(t, f.db, "pipeline") {
+		t.Fatal("the cycle was supposed to fail a build; every queued job succeeded")
 	}
 }
 
@@ -255,17 +288,20 @@ func TestWatchLockstepSkipStillConsumesTheSet(t *testing.T) {
 	fixture.watch(t)
 	fixture.assertDid(t, "2+2")
 
-	// A pinned run builds (a3, b3) out of band — and consumes nothing.
+	// A pinned daemon builds (a3, b3) out of band — and consumes nothing. A
+	// pin is a fact about the process, so pinning is a redeployment.
 	fixture.feed(t, fixture.feedA, 3)
 	fixture.feed(t, fixture.feedB, 3)
-	mustRun(t, "web", fixture.pipeline, "--once", "--pin", "n=3")
+	fixture.restart(t, "--pin", "n=3")
+	fixture.watch(t)
 	fixture.assertDid(t, "2+2", "3+3")
 
 	// The natural flow reaches the same set — a MANUAL run, since the poll
 	// already baselined a3/b3 during the pinned cycle and will not trigger
 	// again. Its chain already succeeded, so it skips — and is consumed by
 	// the skip.
-	mustRun(t, "run", fixture.pipeline)
+	fixture.restart(t)
+	mustRun(t, "run", fixture.pipeline, "--db", fixture.db, "--name", "pipeline="+fixture.pipeline)
 	fixture.assertDid(t, "2+2", "3+3")
 
 	// The proof the skip consumed it: change the task — so the old chain no
@@ -283,6 +319,9 @@ func TestWatchLockstepSkipStillConsumesTheSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// Applied by a set, because nothing watches the file any more.
+	fixture.served.set(t, "pipeline", fixture.pipeline)
 
 	fixture.feed(t, fixture.feedA, 4)
 	fixture.watch(t)

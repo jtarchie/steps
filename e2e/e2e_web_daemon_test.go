@@ -49,39 +49,29 @@ jobs:
       until [ -f `+first+` ]; do sleep 0.05; done
 `)
 
-	st := openStoreFor(t, path)
-
-	var err error
-
-	for _, job := range []string{"first", "second"} {
-		err = st.EnqueueJob(t.Context(), job, "test")
-		if err != nil {
-			t.Fatalf("EnqueueJob %s: %v", job, err)
-		}
-	}
-
-	err = st.Close()
-	if err != nil {
-		t.Fatalf("close state store: %v", err)
-	}
-
-	// A long interval: this pipeline has nothing to poll, and the queue rows
-	// are already there. What is being tested is the drain.
-	served := startWeb(t, []string{path}, "--max-concurrent", "2", "--interval", "1h")
+	// A long interval: this pipeline has nothing to poll, so what is being
+	// tested is the drain and not the poller that would otherwise fill it.
+	served := startWebFor(t, path, "--max-concurrent", "2", "--interval", "1h")
 	defer served.stop(t)
 
-	waitForQueueSuccess(t, path, 2)
+	name := cli.PipelineName(path)
+
+	for _, job := range []string{"first", "second"} {
+		served.trigger(t, name, job)
+	}
+
+	waitForQueueSuccess(t, filepath.Join(dir, "daemon.db"), name, 2)
 }
 
 // waitForQueueSuccess waits until `want` queue rows have succeeded, failing
 // on the first row that did not.
-func waitForQueueSuccess(t *testing.T, pipelinePath string, want int) {
+func waitForQueueSuccess(t *testing.T, state, name string, want int) {
 	t.Helper()
 
 	deadline := time.Now().Add(40 * time.Second)
 
 	for time.Now().Before(deadline) {
-		st, err := sqlite.OpenStore(cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
+		st, err := sqlite.OpenStore(state, name)
 		if err != nil {
 			t.Fatalf("open state store: %v", err)
 		}
@@ -125,7 +115,7 @@ func TestWebPinReachesTheRun(t *testing.T) {
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 3)
 
-	served := startWeb(t, []string{fixture.pipeline}, "--interval", "200ms", "--pin", "n=2")
+	served := startWebFor(t, fixture.pipeline, "--interval", "200ms", "--pin", "n=2")
 	defer served.stop(t)
 
 	waitForDid(t, fixture, "2")

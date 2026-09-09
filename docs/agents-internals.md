@@ -147,7 +147,7 @@ The check runs the instant `parseCLIStream` parses the `init` line, not after th
 
 This is **detection, not prevention** — say so plainly rather than overclaiming. The kill lands after `init` is parsed, so a single surplus call made in the same breath as `init` itself could in principle land before the kill reaches the child. `--tools ""` remains the primary fence; attestation is the per-run proof that it held. An attestation failure is reported as an infrastructure condition (`errCLIToolSurface`, `retry.Stop`'d rather than retried) — steps refusing to trust the child is not the child's own answer to its task, and re-running it would just re-trigger the same fence.
 
-A bridged call's trajectory entry is recorded **de-namespaced** (see "Reading the transcript back" below) as a second, human-readable signal alongside the machine check: a surplus native shows up as `Bash` in `steps runs --steps` rather than disappearing into a `mcp__steps__*`-shaped record nobody reads.
+A bridged call's trajectory entry is recorded **de-namespaced** (see "Reading the transcript back" below) as a second, human-readable signal alongside the machine check: a surplus native shows up as `Bash` in `steps runs steps` rather than disappearing into a `mcp__steps__*`-shaped record nobody reads.
 
 ### Configuration scope, and what is still not hashed
 

@@ -862,7 +862,7 @@ func TestEndToEndAgentMidRunFailover(t *testing.T) {
 }
 
 // testMidRunFailoverPinIsScopedToItsPipeline: one process serves several
-// pipelines (`steps web app.yml infra.yml`, and this binary), and two of them
+// pipelines (one daemon holding several pipelines, and this binary), and two of them
 // may name an agent the same thing while meaning entirely different sources.
 //
 // A pin used to be keyed by agent NAME alone, so the first pipeline's outage

@@ -26,30 +26,29 @@
        page that is left open. Each page that polls names #nav-tabs in its
        hx-select-oob, which is why this carries an id. */}}
   <nav class="tabs" id="nav-tabs" aria-label="Sections">
-    <a class="tab" {{if eq .Section "jobs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}">jobs</a>
+    {{if .Nav.Pipelines}}<a class="tab" {{if eq .Section "jobs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}">jobs</a>
     <a class="tab" {{if eq .Section "runs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/runs">runs</a>
     <a class="tab" {{if eq .Section "resources"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/resources">resources</a>
     <a class="tab" {{if eq .Section "approvals"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/approvals">approvals{{if .Nav.PendingApprovals}}<span class="badge">●{{.Nav.PendingApprovals}}</span>{{end}}</a>
     <a class="tab" {{if eq .Section "questions"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/questions">questions{{if .Nav.PendingQuestions}}<span class="badge">●{{.Nav.PendingQuestions}}</span>{{end}}</a>
-    <a class="tab" {{if eq .Section "docs"}}aria-current="page" {{end}}href="/docs">docs</a>
+    {{end}}<a class="tab" {{if eq .Section "docs"}}aria-current="page" {{end}}href="/docs">docs</a>
   </nav>
   <div class="right">
-    <span class="pipeswitch">
+    {{if .Nav.Pipelines}}<span class="pipeswitch">
       <button class="pipebtn" id="pipebtn" aria-haspopup="listbox" aria-expanded="false">{{.Nav.Current}} ▾</button>
       <div class="pipemenu" id="pipemenu" role="listbox">
         {{range .Nav.Pipelines}}
         <a role="option" {{if eq .Slug $.Nav.Current}}aria-selected="true"{{end}} href="/p/{{.Slug}}">{{.Slug}} <span class="hint">{{.Jobs}} jobs</span></a>
         {{end}}
       </div>
-    </span>
+    </span>{{end}}
     {{if .Nav.ReadOnly}}<span class="ro">read-only</span>{{end}}
     <span><kbd>/</kbd> jump</span>
   </div>
 </div>
 
 <main>
-{{if .Nav.Held}}<div class="held" role="alert"><b>the file on disk is not being served</b> — this pipeline is still running the configuration it last loaded successfully:
-<pre>{{.Nav.Held}}</pre></div>{{end}}
+{{if .Nav.Paused}}<div class="held" role="alert"><b>this pipeline is paused</b> — nothing is being polled, nothing will be admitted from the queue, and a webhook delivery enqueues nothing. Resume it with <code>steps pipeline unpause -p {{.Nav.Current}}</code>.</div>{{end}}
 {{template "crumbs" .}}
 {{template "page" .}}
 </main>
@@ -62,14 +61,17 @@
 
 <script>
 (function () {
+  // Absent on a daemon holding no pipelines, where a switcher would offer nothing to switch to.
   var pipebtn = document.getElementById('pipebtn');
   var pipemenu = document.getElementById('pipemenu');
-  pipebtn.addEventListener('click', function (e) {
-    e.stopPropagation();
-    var open = pipemenu.classList.toggle('open');
-    pipebtn.setAttribute('aria-expanded', String(open));
-  });
-  document.addEventListener('click', function () { pipemenu.classList.remove('open'); });
+  if (pipebtn && pipemenu) {
+    pipebtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var open = pipemenu.classList.toggle('open');
+      pipebtn.setAttribute('aria-expanded', String(open));
+    });
+    document.addEventListener('click', function () { pipemenu.classList.remove('open'); });
+  }
 
   // What the reader has folded or unfolded, and which row they are on, are
   // the two pieces of state the SERVER cannot know — and a swap reconciles

@@ -22,8 +22,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // watchFixture writes a pipeline plus the file its check reads, and returns
@@ -33,6 +31,18 @@ type watchFixture struct {
 	pipeline  string
 	feed      string
 	processed string
+	// db is the daemon's state database, and name is what the pipeline is
+	// called on it — a set names the pipeline, so neither is derived from the
+	// file any more.
+	db   string
+	name string
+	// resources are what this fixture's pipeline polls, which is how settle
+	// tells "the daemon has seen my edit" from "the daemon has not looked yet".
+	resources []string
+	// served is the daemon these scenarios drive. One per fixture, started on
+	// demand: `steps web --once` is gone, so a poll is something a running
+	// daemon does rather than something an invocation is.
+	served *webProcess
 }
 
 func newWatchFixture(t *testing.T, pipelineYAML string) *watchFixture {
@@ -44,6 +54,9 @@ func newWatchFixture(t *testing.T, pipelineYAML string) *watchFixture {
 		pipeline:  pipelinePath(t, dir),
 		feed:      filepath.Join(dir, "feed.txt"),
 		processed: filepath.Join(dir, "processed.txt"),
+		db:        filepath.Join(dir, "daemon.db"),
+		name:      "pipeline",
+		resources: []string{"items"},
 	}
 
 	body := strings.NewReplacer("FEED", fixture.feed, "PROCESSED", fixture.processed).Replace(pipelineYAML)
@@ -79,11 +92,51 @@ func (f *watchFixture) write(t *testing.T, path, contents string) {
 	}
 }
 
-// watch runs one poll-and-drain cycle through the CLI.
-func (f *watchFixture) watch(t *testing.T, args ...string) {
+// serve starts the daemon these scenarios drive and sets the pipeline into it.
+//
+// One daemon per fixture, rather than one invocation per poll: `steps web
+// --once` is gone, so a poll is something a running process does. The
+// interval is short and every assertion below waits for the outcome rather
+// than for a tick, which is what keeps the timing out of the test.
+func (f *watchFixture) serve(t *testing.T, args ...string) {
 	t.Helper()
 
-	mustRun(t, append([]string{"web", f.pipeline, "--once"}, args...)...)
+	f.served = startWeb(t, append([]string{"--db", f.db, "--interval", pollInterval}, args...)...)
+	t.Cleanup(func() { f.served.stopIfRunning(t) })
+
+	f.served.set(t, f.name, f.pipeline)
+}
+
+// restart replaces the daemon, for the tests whose subject is a flag that
+// belongs to the PROCESS — a --pin or a --worker is a fact about the box, so
+// changing one is a redeployment rather than a set.
+func (f *watchFixture) restart(t *testing.T, args ...string) {
+	t.Helper()
+
+	if f.served != nil {
+		f.served.stop(t)
+		f.served = nil
+	}
+
+	f.served = startWeb(t, append([]string{"--db", f.db, "--interval", pollInterval}, args...)...)
+	t.Cleanup(func() { f.served.stopIfRunning(t) })
+}
+
+// watch lets the daemon complete a poll-and-drain cycle, and is what every
+// `steps web --once` in this file became.
+//
+// It waits for QUIESCENCE rather than for a tick: the queue empty of pending
+// and running rows, several intervals in a row. A fixed sleep would be either
+// flaky or slow, and the property these tests assert — what a poll did — is
+// only readable once the drain behind it has finished.
+func (f *watchFixture) watch(t *testing.T) {
+	t.Helper()
+
+	if f.served == nil {
+		f.serve(t)
+	}
+
+	settle(t, f.db, f.name, f.resources...)
 }
 
 // coldStart runs the first-ever poll, whose rule changed deliberately: it
@@ -98,11 +151,17 @@ func (f *watchFixture) coldStart(t *testing.T) {
 	f.write(t, f.processed, "")
 }
 
-// watchExpectingFailure runs a cycle whose job is meant to fail.
+// pollInterval is how often a daemon under test checks. Short, because every
+// assertion waits for an outcome rather than for a number of ticks.
+const pollInterval = "50ms"
+
+// watchExpectingFailure runs a cycle whose job is meant to fail. A daemon
+// reports a failed build on the queue row rather than through an exit code,
+// so this is watch under another name — kept so the intent still reads.
 func (f *watchFixture) watchExpectingFailure(t *testing.T) {
 	t.Helper()
 
-	_ = cli.Run([]string{"web", f.pipeline, "--once"})
+	f.watch(t)
 }
 
 // did returns the versions the job processed, in order.
@@ -299,8 +358,11 @@ func TestWatchPinReachesPastWhatThePollSaw(t *testing.T) {
 	fixture.write(t, fixture.feed, `[{"n":"1"},{"n":"2"}]`)
 	fixture.coldStart(t)
 
+	// A pin is a fact about the process, so pinning is a redeployment rather
+	// than an argument to one poll.
 	fixture.write(t, fixture.feed, `[{"n":"1"},{"n":"2"},{"n":"3"}]`)
-	fixture.watch(t, "--pin", "n=1")
+	fixture.restart(t, "--pin", "n=1")
+	fixture.watch(t)
 
 	if got := fixture.did(t); len(got) == 0 || got[len(got)-1] != "1" {
 		t.Errorf("processed %v, want the pinned version 1 to have been built", got)

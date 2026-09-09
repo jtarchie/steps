@@ -19,7 +19,7 @@ import (
 
 // runIDsOf reads back the run ids one pipeline recorded in a shared file —
 // what the cross-pipeline feed has to print for a row to be followable back
-// to `steps runs <pipeline> --run <id>`.
+// to `steps runs cost -p <pipeline> <id>`.
 func runIDsOf(t *testing.T, state, name string) []string {
 	t.Helper()
 
@@ -120,7 +120,7 @@ func TestRunsScopedStaysScoped(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = cli.Run([]string{"runs", first, "--db", state})
+		runErr = cli.Run([]string{"runs", "-p", cli.PipelineName(first), "--db", state})
 	})
 
 	if runErr != nil {
@@ -147,9 +147,10 @@ func TestRunsScopedStaysScoped(t *testing.T) {
 // Answering them across a file would mean inventing a semantic; answering
 // them for a pipeline nobody named would mean picking one.
 //
-// This used to be a runtime table of flag combinations to refuse. It is the
-// grammar now — which is the point of the subcommands, so the test asserts
-// the grammar rejects them rather than the command.
+// A refusal from the COMMAND rather than the grammar, which is what `-p`
+// changed: the pipeline is a flag now, because a served pipeline has no file
+// here to name — so the refusal has to name the flag and say where to find
+// the names it takes.
 func TestScopedViewsRequireAPipeline(t *testing.T) {
 	t.Parallel()
 
@@ -162,8 +163,8 @@ func TestScopedViewsRequireAPipeline(t *testing.T) {
 				t.Fatalf("runs %s answered without a pipeline to answer for", view)
 			}
 
-			if !strings.Contains(err.Error(), "could not parse flags") {
-				t.Errorf("runs %s was refused by the command rather than by the grammar: %v", view, err)
+			if !strings.Contains(err.Error(), "-p") {
+				t.Errorf("runs %s does not say which flag names a pipeline: %v", view, err)
 			}
 		})
 	}
@@ -189,30 +190,39 @@ func TestJobFilterIsRefusedAcrossPipelines(t *testing.T) {
 		t.Fatal("--job across a whole state file was answered rather than refused")
 	}
 
-	if !strings.Contains(err.Error(), "--job") || !strings.Contains(err.Error(), "steps runs list <pipeline>") {
+	if !strings.Contains(err.Error(), "--job") || !strings.Contains(err.Error(), "steps runs list -p <name>") {
 		t.Errorf("refusal does not say what to do instead: %v", err)
 	}
 }
 
-// TestRunsWithNoPipelineNeedsAState: without a pipeline there is no YAML to
-// derive .steps/<name>.db from, so a bare `steps runs` has no file to read —
-// and must say that rather than reading whatever `.steps/.db` resolves to in
-// the current directory.
+// TestRunsWithNoPipelineReadsTheDaemonsOwnState: a bare `steps runs` reads
+// the database a daemon keeps its pipelines in, which is the whole reason
+// that database has a fixed name rather than one derived from a file.
+//
+// It used to be a refusal, because without a pipeline there was no YAML to
+// derive a path from. There is one now, and answering "nothing there" for a
+// file that does not exist is the honest answer rather than a usage error.
 //
 // Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
-func TestRunsWithNoPipelineNeedsAState(t *testing.T) {
+func TestRunsWithNoPipelineReadsTheDaemonsOwnState(t *testing.T) {
+	absent := filepath.Join(t.TempDir(), "nothing-here.db")
+
 	var err error
 
-	_ = captureStdout(t, func() {
-		err = cli.Run([]string{"runs"})
+	out := captureStdout(t, func() {
+		err = cli.Run([]string{"runs", "--db", absent})
 	})
 
-	if err == nil {
-		t.Fatal("`steps runs` with neither a pipeline nor --db was answered")
+	if err != nil {
+		t.Fatalf("`steps runs` against a database that is not there: %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "--db") {
-		t.Errorf("refusal does not name the flag that would make it answerable: %v", err)
+	if !strings.Contains(out, absent) {
+		t.Errorf("the answer does not name the database it looked in:\n%s", out)
+	}
+
+	if fileExists(absent) {
+		t.Error("asking about history created the database it was asking about")
 	}
 }
 
@@ -302,7 +312,7 @@ func TestRunsDoesNotMintThePipelineItWasAskedAbout(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = cli.Run([]string{"runs", "typo.yml", "--db", state})
+		runErr = cli.Run([]string{"runs", "-p", "typo", "--db", state})
 	})
 
 	if runErr == nil {

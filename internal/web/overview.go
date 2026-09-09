@@ -54,10 +54,19 @@ type overviewPipeline struct {
 // One — the overwhelmingly common case — redirects straight through to that
 // pipeline's board, so nobody pays a click for a list of one. Several render
 // the overview, because with several there is no defensible pipeline to pick.
+// None renders the empty page: a daemon holds nothing until somebody sets a
+// pipeline into it, and the page that says how is the whole of its UI.
 func (s *Server) handleIndex(c echo.Context) error {
-	if len(s.pipelines) == 1 {
+	served := s.Served()
+
+	if len(served) == 0 {
+		//nolint:wrapcheck // render errors surface through the shared error handler
+		return c.Render(http.StatusOK, "empty", map[string]any{"Nav": s.globalNav(c)})
+	}
+
+	if len(served) == 1 {
 		//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
-		return c.Redirect(http.StatusFound, "/p/"+s.pipelines[0].Slug)
+		return c.Redirect(http.StatusFound, "/p/"+served[0].Slug)
 	}
 
 	runs, err := s.recentRunsAcross(c.Request().Context(), overviewLimit)
@@ -75,11 +84,13 @@ func (s *Server) handleIndex(c echo.Context) error {
 
 // overviewPipelines describes what this process serves, sorted by slug.
 func (s *Server) overviewPipelines() []overviewPipeline {
-	out := make([]overviewPipeline, 0, len(s.pipelines))
-	for _, pipeline := range s.pipelines {
+	served := s.Served()
+
+	out := make([]overviewPipeline, 0, len(served))
+	for _, pipeline := range served {
 		out = append(out, overviewPipeline{
 			Slug: pipeline.Slug,
-			Path: pipeline.Path,
+			Path: pipeline.Path(),
 			Jobs: len(pipeline.Config().Jobs),
 		})
 	}
@@ -93,7 +104,7 @@ func (s *Server) overviewPipelines() []overviewPipeline {
 // first.
 //
 // Grouped by state FILE rather than queried per pipeline, because served
-// pipelines need not share one: `steps web app.yml infra.yml` gives each its
+// pipelines need not share one: one daemon holding several pipelines gives each its
 // own `.steps/<name>.db` unless --db says otherwise. Within a file, one
 // ordered query does the interleaving; across files there is nothing to do
 // but merge, and each group returns its own top `limit` so the merge cannot
@@ -115,7 +126,7 @@ func (s *Server) recentRunsAcross(ctx context.Context, limit int) ([]overviewRun
 		slugByName = map[string]string{}
 	)
 
-	for _, pipeline := range s.pipelines {
+	for _, pipeline := range s.Served() {
 		database := pipeline.Store.Description()
 		name := pipeline.Store.Pipeline()
 

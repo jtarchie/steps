@@ -35,12 +35,10 @@ import (
 
 	"github.com/jtarchie/steps/internal/blobstore"
 	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/events"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
-	"github.com/jtarchie/steps/internal/trigger"
 	"github.com/jtarchie/steps/internal/web"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -65,6 +63,7 @@ type CLI struct {
 	Approvals ApprovalsCmd     `cmd:""                                  help:"approval: steps waiting for a decision, and deciding them"`
 	Questions QuestionsCmd     `cmd:""                                  help:"ask_user questions waiting for an answer, and answering them"`
 	Web       WebCmd           `cmd:""                                  help:"serve the UI, poll trigger: true resources, and run affected jobs"`
+	Pipeline  PipelineCmd      `cmd:""                                  help:"tell a steps web daemon which pipelines to serve"`
 	Docs      DocsCmd          `cmd:""                                  help:"read the docs in the terminal (no page name lists them)"`
 	// Last, and hidden: see ShimCmd. Placing it here keeps the help ordering
 	// of the real commands untouched.
@@ -584,26 +583,23 @@ type RunsCmd struct {
 // RunsListCmd is the default view: runs, newest first — and the one
 // view that answers for a whole state file when no pipeline is named.
 type RunsListCmd struct {
-	StateFlags `embed:""`
-	Pipeline   string `arg:""                            help:"path to the pipeline YAML file (omit, with --db, to read every pipeline in one file)" optional:""`
-	Job        string `help:"only show runs of this job"`
-	Limit      int    `default:"20"                      help:"maximum number of rows to show"`
+	ReadFlags `embed:""`
+	Job       string `help:"only show runs of this job"`
+	Limit     int    `default:"20"                      help:"maximum number of rows to show"`
 }
 
 // Run prints one pipeline's job runs, or every pipeline's in a shared file.
 func (r *RunsListCmd) Run() error {
-	// No pipeline named is the cross-pipeline question, which only a --db
-	// file can hold: the default path is derived FROM a pipeline, so without
-	// one there is nothing to read.
+	// No pipeline named is the cross-pipeline question: one database holds however many a daemon was given, which is what the web root answers too.
 	if r.Pipeline == "" {
 		return r.runAcross()
 	}
 
-	if nothingRecorded(r.Pipeline, r.StateFlags, noRunsYet(r.Pipeline)) {
+	if nothingRecorded(r.ReadFlags, noRunsYet(r.Pipeline)) {
 		return nil
 	}
 
-	st, done, err := openRecorded(r.Pipeline, r.StateFlags)
+	st, done, err := openRecorded(r.ReadFlags)
 	if err != nil {
 		return err
 	}
@@ -614,19 +610,18 @@ func (r *RunsListCmd) Run() error {
 
 // RunsStepsCmd is the per-step detail: what previous runs actually did.
 type RunsStepsCmd struct {
-	StateFlags `embed:""`
-	Pipeline   string `arg:""                             help:"path to the pipeline YAML file"`
-	Job        string `help:"only show steps of this job"`
-	Limit      int    `default:"20"                       help:"maximum number of rows to show"`
+	ReadFlags `embed:""`
+	Job       string `help:"only show steps of this job"`
+	Limit     int    `default:"20"                       help:"maximum number of rows to show"`
 }
 
 // Run prints recorded steps, newest first.
 func (r *RunsStepsCmd) Run() error {
-	if nothingRecorded(r.Pipeline, r.StateFlags, noRunsYet(r.Pipeline)) {
+	if nothingRecorded(r.ReadFlags, noRunsYet(r.Pipeline)) {
 		return nil
 	}
 
-	st, done, err := openRecorded(r.Pipeline, r.StateFlags)
+	st, done, err := openRecorded(r.ReadFlags)
 	if err != nil {
 		return err
 	}
@@ -637,18 +632,17 @@ func (r *RunsStepsCmd) Run() error {
 
 // RunsQueueCmd is what the trigger loop has queued and not yet run.
 type RunsQueueCmd struct {
-	StateFlags `embed:""`
-	Pipeline   string `arg:""       help:"path to the pipeline YAML file"`
-	Limit      int    `default:"20" help:"maximum number of rows to show"`
+	ReadFlags `embed:""`
+	Limit     int `default:"20" help:"maximum number of rows to show"`
 }
 
 // Run prints the trigger queue.
 func (r *RunsQueueCmd) Run() error {
-	if nothingRecorded(r.Pipeline, r.StateFlags, noRunsYet(r.Pipeline)) {
+	if nothingRecorded(r.ReadFlags, noRunsYet(r.Pipeline)) {
 		return nil
 	}
 
-	st, done, err := openRecorded(r.Pipeline, r.StateFlags)
+	st, done, err := openRecorded(r.ReadFlags)
 	if err != nil {
 		return err
 	}
@@ -663,19 +657,18 @@ func (r *RunsQueueCmd) Run() error {
 // IS choosing the deeper view. As a flag it had to imply --cost to mean
 // anything, which is a flag that reads as configured while binding nothing.
 type RunsCostCmd struct {
-	StateFlags `embed:""`
-	Pipeline   string `arg:""       help:"path to the pipeline YAML file"`
-	RunID      string `arg:""       help:"break this one run down per step" optional:""`
-	Limit      int    `default:"20" help:"maximum number of rows to show"`
+	ReadFlags `embed:""`
+	RunID     string `arg:""       help:"break this one run down per step" optional:""`
+	Limit     int    `default:"20" help:"maximum number of rows to show"`
 }
 
 // Run prints per-run totals, or one run's steps.
 func (r *RunsCostCmd) Run() error {
-	if nothingRecorded(r.Pipeline, r.StateFlags, noRunsYet(r.Pipeline)) {
+	if nothingRecorded(r.ReadFlags, noRunsYet(r.Pipeline)) {
 		return nil
 	}
 
-	st, done, err := openRecorded(r.Pipeline, r.StateFlags)
+	st, done, err := openRecorded(r.ReadFlags)
 	if err != nil {
 		return err
 	}
@@ -692,19 +685,18 @@ func (r *RunsCostCmd) Run() error {
 
 // RunsWhereCmd is which machines a run's placed steps ran on.
 type RunsWhereCmd struct {
-	StateFlags `embed:""`
-	Pipeline   string `arg:""                                 help:"path to the pipeline YAML file"`
-	RunID      string `arg:""                                 help:"the run to report on (default: the newest)" optional:""`
-	Job        string `help:"take the newest run of this job"`
+	ReadFlags `embed:""`
+	RunID     string `arg:""                                 help:"the run to report on (default: the newest)" optional:""`
+	Job       string `help:"take the newest run of this job"`
 }
 
 // Run prints one run's placements.
 func (r *RunsWhereCmd) Run() error {
-	if nothingRecorded(r.Pipeline, r.StateFlags, noRunsYet(r.Pipeline)) {
+	if nothingRecorded(r.ReadFlags, noRunsYet(r.Pipeline)) {
 		return nil
 	}
 
-	st, done, err := openRecorded(r.Pipeline, r.StateFlags)
+	st, done, err := openRecorded(r.ReadFlags)
 	if err != nil {
 		return err
 	}
@@ -723,8 +715,8 @@ func (r *RunsWhereCmd) Run() error {
 // signature hands every caller a nil it must remember to check — which is
 // exactly what a sixth `runs` subcommand written by copying the other five
 // would forget.
-func nothingRecorded(pipelinePath string, flags StateFlags, answer string) bool {
-	path := StatePath(pipelinePath, flags.DB)
+func nothingRecorded(flags ReadFlags, answer string) bool {
+	path := flags.state()
 
 	_, err := os.Stat(path)
 	if err != nil {
@@ -748,8 +740,12 @@ func nothingRecorded(pipelinePath string, flags StateFlags, answer string) bool 
 
 // noRunsYet is the sentence every `steps runs` view says when the pipeline has
 // no state file.
-func noRunsYet(pipelinePath string) string {
-	return "no runs recorded yet for " + pipelinePath
+func noRunsYet(name string) string {
+	if name == "" {
+		return "no runs recorded yet"
+	}
+
+	return "no runs recorded yet for " + name
 }
 
 // openRecorded opens a pipeline's recorded state for reading. It returns a
@@ -757,10 +753,12 @@ func noRunsYet(pipelinePath string) string {
 //
 // OpenExisting, not OpenStore: asking must not register the pipeline it is
 // asking about — see sqlite.OpenExisting.
-func openRecorded(pipelinePath string, flags StateFlags) (store.Store, func(), error) {
-	path := StatePath(pipelinePath, flags.DB)
+func openRecorded(flags ReadFlags) (store.Store, func(), error) {
+	if flags.Pipeline == "" {
+		return nil, nil, errors.New("which pipeline? pass -p <name> — `steps pipeline list` says what a daemon holds")
+	}
 
-	st, err := sqlite.OpenExisting(path, resolvePipelineName(pipelinePath, flags.Name))
+	st, err := sqlite.OpenExisting(flags.state(), flags.Pipeline)
 	if err != nil {
 		return nil, nil, fmt.Errorf("could not open state store: %w", err)
 	}
@@ -782,16 +780,13 @@ func openRecorded(pipelinePath string, flags StateFlags) (store.Store, func(), e
 // column here, so a script that reads this output gets the same columns
 // whatever the file grows into.
 func (r *RunsListCmd) runAcross() error {
-	path := r.DB.path()
-	if path == "" {
-		return errors.New("steps runs list needs a pipeline to read, or --db <file> to read every pipeline in one state database")
-	}
+	path := r.state()
 
 	// The only flag left that a whole file cannot answer: RecentRuns spans
 	// pipelines and does not filter by job, and two pipelines calling a job
 	// `build` are not one job. Refused rather than silently ignored.
 	if r.Job != "" {
-		return fmt.Errorf("--job asks about one pipeline: run `steps runs list <pipeline> --job %s --db %s`", r.Job, path)
+		return fmt.Errorf("--job asks about one pipeline: run `steps runs list -p <name> --job %s --db %s`", r.Job, path)
 	}
 
 	// Stat first, for the same reason the scoped path does: asking about
@@ -913,7 +908,7 @@ func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader store.Reader, 
 
 	// The path rather than a Description: a Reader has no pipeline and no
 	// handle, and this view only opens sqlite files (see runAcross).
-	fmt.Printf("\nbreak one down with: steps runs cost <pipeline> <run> --db %s\n", path)
+	fmt.Printf("\nbreak one down with: steps runs cost -p <pipeline> <run> --db %s\n", path)
 
 	return nil
 }
@@ -962,7 +957,7 @@ func (r *RunsListCmd) printJobRuns(ctx context.Context, st interface {
 		return err
 	}
 
-	fmt.Printf("\nwhy a step did what it did: steps runs steps %s%s\n", r.Pipeline, dbNote(r.DB, st))
+	fmt.Printf("\nwhy a step did what it did: steps runs steps -p %s%s\n", r.Pipeline, dbNote(r.DB, st))
 
 	return nil
 }
@@ -980,7 +975,7 @@ func RecordRevision(ctx context.Context, st store.Revisions, cfg *config.Config)
 		return nil
 	}
 
-	err := st.RecordRevision(ctx, cfg.Revision.SHA, cfg.Revision.Source)
+	err := st.RecordRevision(ctx, cfg.Revision.SHA, cfg.Revision.Source, cfg.Revision.Includes)
 	if err != nil {
 		return fmt.Errorf("could not record the pipeline's configuration: %w", err)
 	}
@@ -1720,6 +1715,20 @@ type StateFlags struct {
 	Name map[string]string `help:"name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml (repeatable)"              name:"name"`
 }
 
+// ReadFlags is what a command that only READS a daemon's database needs: which database, and which pipeline in it.
+//
+// A NAME rather than a path, because a served pipeline no longer has a file
+// here — `steps pipeline set` uploaded it, and the name is what the daemon,
+// the /p/<slug> route and every row it wrote agree on. The database defaults
+// to the daemon's own for the same reason: there is no YAML to derive one from.
+type ReadFlags struct {
+	DB       DB     `help:"state database: a sqlite file path or sqlite:// url (default: .steps/steps.db)" name:"db"       placeholder:"URL"`
+	Pipeline string `help:"the pipeline's name in the state database"                                      name:"pipeline" short:"p"`
+}
+
+// state is the database these flags name.
+func (r ReadFlags) state() string { return DaemonStatePath(r.DB) }
+
 // DB is the --db value: the state database as a bare sqlite path or as a url
 // whose scheme picks the driver, the way --worker's ssh:// and aws:// pick a
 // transport. sqlite:// is the only scheme until a second driver lands (#117),
@@ -1777,7 +1786,7 @@ func (d DB) path() string {
 // an input it does not read, which is the shape of bug this consolidation
 // exists to make impossible.
 type VarFlags struct {
-	Var      map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..." name:"var"`
+	Var      map[string]string `help:"set a pipeline var, e.g. --var repo_uri=https://..." name:"var"       short:"v"`
 	VarsFile string            `help:"YAML file of pipeline vars"                          name:"vars-file"`
 }
 
@@ -1790,25 +1799,6 @@ type VarFlags struct {
 // the two cannot disagree. Positional for the reason config.Load makes it so.
 func (v VarFlags) Load(path string, name string) (*config.Config, error) {
 	return loadWithVars(path, name, v.Var, v.VarsFile)
-}
-
-// Revision is WHICH configuration the file at path currently is, under these
-// vars — the same hash Load would stamp, for the cost of a read.
-//
-// It is what the reload watcher asks once a second so that parsing, and every
-// validator behind it, happens only when the answer has actually moved.
-func (v VarFlags) Revision(path string, includes []string) (config.Revision, error) {
-	vars, err := resolveVars(v.Var, v.VarsFile)
-	if err != nil {
-		return config.Revision{}, err
-	}
-
-	revision, err := config.FileRevision(path, vars, includes)
-	if err != nil {
-		return config.Revision{}, fmt.Errorf("could not load pipeline: %w", err)
-	}
-
-	return revision, nil
 }
 
 // ExecFlags shape how a command that RUNS steps executes them: which machines
@@ -1868,6 +1858,23 @@ type HistoryFlags struct {
 // pipeline wins where it spoke: it is the thing under version control.
 func (h HistoryFlags) Apply(cfg *config.Config) {
 	applyHistoryFlags(cfg, h.VersionHistory, h.RunHistory)
+}
+
+// DefaultDaemonState is where a daemon and the commands that read its
+// database look when --db says nothing.
+//
+// A fixed name rather than one derived from a file, because there is no file:
+// a daemon is handed pipelines by `steps pipeline set`, and the commands that
+// read what it recorded are handed a NAME. See docs/web.md.
+const DefaultDaemonState = ".steps/steps.db"
+
+// DaemonStatePath is the state database `steps web` and the read commands use.
+func DaemonStatePath(db DB) string {
+	if path := db.path(); path != "" {
+		return path
+	}
+
+	return DefaultDaemonState
 }
 
 // StatePath returns the sqlite database path for pipeline's persisted job
@@ -2015,17 +2022,16 @@ type JobsCmd struct {
 // JobsListCmd is the listing, and the group's default: bare `steps jobs
 // <pipeline>` still answers "what has the breaker stopped?".
 type JobsListCmd struct {
-	StateFlags `embed:""`
-	Pipeline   string `arg:""   help:"path to the pipeline YAML file"`
+	ReadFlags `embed:""`
 }
 
 // Run prints every paused job.
 func (j *JobsListCmd) Run() error {
-	if nothingRecorded(j.Pipeline, j.StateFlags, "no jobs are paused") {
+	if nothingRecorded(j.ReadFlags, "no jobs are paused") {
 		return nil
 	}
 
-	st, cleanup, err := openStore(j.Pipeline, j.StateFlags)
+	st, cleanup, err := openStore(j.ReadFlags)
 	if err != nil {
 		return err
 	}
@@ -2059,34 +2065,54 @@ func (j *JobsListCmd) Run() error {
 // listing into a write reads as configuration and behaves as a mutation, and
 // the verb should say which one it is.
 type JobsResumeCmd struct {
-	StateFlags `embed:""`
-	Pipeline   string `arg:""   help:"path to the pipeline YAML file"`
-	Job        string `arg:""   help:"job to take out of the paused state"`
+	ReadFlags `embed:""`
+	Job       string `arg:""   help:"job to take out of the paused state"`
 }
 
 // Run resumes the named job.
 func (j *JobsResumeCmd) Run() error {
-	cfg, err := config.Load(j.Pipeline, resolvePipelineName(j.Pipeline, j.Name), nil)
-	if err != nil {
-		return fmt.Errorf("could not load pipeline: %w", err)
-	}
-
-	st, _, cleanup, err := setup(cfg, j.Pipeline, j.StateFlags, ExecFlags{})
+	st, cleanup, err := openStore(j.ReadFlags)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	return resumeJob(context.Background(), cfg, st, j.Job)
+	return resumeJob(context.Background(), st, j.Job)
 }
 
-// resumeJob takes a job back out of the paused state, refusing a name the
-// pipeline does not have — a typo would otherwise report success while
-// resuming nothing.
-func resumeJob(ctx context.Context, cfg *config.Config, st store.Store, name string) error {
-	_, err := cfg.FindJob(name)
+// resumeJob takes a job back out of the paused state, refusing a name that is
+// not in it.
+//
+// Checked against the BREAKER rather than against a configuration, and that is
+// the change `-p` forced: the pipeline this is about may exist nowhere on this
+// machine — it was uploaded to a daemon — so there is no file to check a name
+// against. The paused list is the better check anyway: it catches the typo
+// this exists to catch, and it also catches resuming something that was never
+// stopped, which used to report success having done nothing.
+func resumeJob(ctx context.Context, st store.Store, name string) error {
+	paused, err := st.PausedJobs(ctx)
 	if err != nil {
-		return fmt.Errorf("cannot resume: %w", err)
+		return fmt.Errorf("could not read paused jobs: %w", err)
+	}
+
+	found := false
+
+	held := make([]string, 0, len(paused))
+
+	for _, job := range paused {
+		held = append(held, job.Name)
+
+		if job.Name == name {
+			found = true
+		}
+	}
+
+	if !found {
+		if len(held) == 0 {
+			return fmt.Errorf("cannot resume %q: no jobs are paused", name)
+		}
+
+		return fmt.Errorf("cannot resume %q: the paused jobs are %s", name, strings.Join(held, ", "))
 	}
 
 	err = st.ResetJobFailures(ctx, name)
@@ -2152,47 +2178,35 @@ func resolveVars(flags map[string]string, varsFile string) (map[string]string, e
 	return vars, nil
 }
 
-// WebCmd is the daemon: it serves the pipeline UI, polls every trigger: true
-// resource, and runs the jobs both of those enqueue.
+// WebCmd is the daemon: it serves the pipeline UI, holds whatever pipelines
+// have been set into it, polls their trigger: true resources, and runs the
+// jobs both of those enqueue.
 //
-// One command rather than two, since `steps watch` was this minus the UI and
-// running both against one state database was never a supported pairing —
-// they claim each other's work, and startup recovery reads the other's
-// in-flight rows as abandoned. --once is the cron form of the same cycle:
-// poll, drain, exit, without binding anything.
-//
-// One or more pipeline files: state is per-pipeline by construction
-// (.steps/state.db lives beside each YAML), so serving several means opening
-// several stores, and the UI routes them under /p/<name>/.
-//
-// It polls trigger: true resources as well as serving, because a front end
-// that drains a queue nothing fills is a runner that looks alive and notices
-// nothing — the surprise this default exists to remove. There is no way to
-// turn it off: a served process that does not poll is the half-daemon this
-// command absorbed `steps watch` to stop being.
+// It takes no pipeline arguments, and that is the whole shape of it: a
+// pipeline arrives by `steps pipeline set` and by nothing else, so vars are
+// per-set rather than process-wide, a pipeline's identity is a name somebody
+// chose rather than a filename, and a change happens when somebody asks for
+// it rather than when a file moves. Nothing here watches a file.
 //
 // It binds loopback by default and has no authentication, because there is
 // nothing to authenticate against — this is the local runner's own front end,
-// in the same trust domain as the shell that started it. Binding it to a
-// routable address publishes trigger and approval controls to anyone who can
-// reach the port; --listen exists for the person who has decided that is what
-// they want, not as a default.
+// in the same trust domain as the shell that started it. `steps pipeline set`
+// makes that sharper than it was: a pipeline is arbitrary commands, so the
+// set endpoint is a remote shell. --listen exists for the person who has
+// decided that is what they want, not as a default.
 type WebCmd struct {
 	StateFlags    `embed:""`
-	VarFlags      `embed:""`
 	ExecFlags     `embed:""`
 	HistoryFlags  `embed:""`
-	Pipeline      []string          `arg:""                                                                       help:"path(s) to pipeline YAML files"`
-	Listen        string            `default:"127.0.0.1:8088"                                                     help:"address to serve on"`
-	Interval      time.Duration     `default:"30s"                                                                help:"how often to check trigger: true resources"`
-	Once          bool              `help:"poll once, run whatever that triggers, and exit (for cron or a timer)" name:"once"`
-	MaxConcurrent int               `default:"1"                                                                  help:"maximum number of queued jobs running at once, per pipeline"`
-	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                      name:"pin"`
+	Listen        string            `default:"127.0.0.1:8088"                                                  help:"address to serve on"`
+	Interval      time.Duration     `default:"30s"                                                             help:"how often to check trigger: true resources"`
+	MaxConcurrent int               `default:"1"                                                               help:"maximum number of queued jobs running at once, per pipeline"`
+	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                   name:"pin"`
 	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
-	ReadOnly      bool              `help:"serve without trigger, approval, or resume controls"                   name:"read-only"`
+	ReadOnly      bool              `help:"serve without trigger, approval, resume or steps pipeline controls" name:"read-only"`
 }
 
-// Run loads every named pipeline, opens its store, and serves until canceled.
+// Run serves until canceled, holding whatever the state database says was set.
 func (w *WebCmd) Run() error {
 	// Rejected rather than shrugged at: a server that quietly served forever
 	// without ever polling would be the exact confusion this command's
@@ -2209,297 +2223,58 @@ func (w *WebCmd) Run() error {
 		return err
 	}
 
-	pipelines, providers, cleanup, err := w.load()
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-
-	if w.Once {
-		return w.runOnce(ctx, pipelines, providers)
-	}
-
-	return w.serve(ctx, pipelines, providers)
+	return w.serve(ctx)
 }
 
-// runOnce polls each served pipeline once, runs whatever that enqueues, and
-// returns — without binding the listen address.
+// serve runs the UI, the set endpoint, and a poller and drainer per served
+// pipeline, until the process is stopped.
 //
-// This is `steps web --once`, which is how steps is driven by something
-// that already owns the schedule: cron, a systemd timer, a CI step. It does
-// NOT serve, deliberately: a port opened for the duration of one poll is a
-// port nothing has time to reach, and a one-shot that left a listener behind
-// would be a daemon with extra steps.
-//
-// Serial across pipelines, like the watcher it replaces. A one-shot has
-// nothing to stay responsive for.
-func (w *WebCmd) runOnce(ctx context.Context, pipelines []*web.Pipeline, providers map[string]workspace.Provider) error {
-	for _, target := range pipelines {
-		w.HistoryFlags.Apply(target.Config())
-
-		provider, ok := providers[target.Slug]
-		if !ok {
-			return fmt.Errorf("web: no workspace provider for pipeline %q", target.Slug)
-		}
-
-		err := trigger.WatchOnce(ctx, target.Config(), provider, target.Store, w.Pin, w.Force)
-
-		// A pipeline with nothing to poll is not this command failing, and
-		// the served path already says so per pipeline. Answering the same
-		// pipeline two different ways depending on one flag is the shape
-		// this consolidation exists to remove — and returning here would
-		// also abandon every pipeline named after it, which is the whole
-		// point of a `steps web --once app.yml infra.yml` cron line.
-		if errors.Is(err, trigger.ErrNoTriggers) {
-			fmt.Printf("steps web: %s has no trigger: true get; nothing to poll\n", target.Slug)
-
-			continue
-		}
-
-		if err != nil {
-			return wrapRunErr(err)
-		}
-	}
-
-	return nil
-}
-
-// serve runs the UI, the poller and the drainer until the process is stopped.
-//
-// One process fills and drains the queue, because there is one daemon: a
+// One process fills and drains every queue, because there is one daemon: a
 // front end that drains a queue nothing fills is a runner that looks alive
 // and notices nothing, and a second `steps web` on the same state database is
 // the deployment mistake the one-process-per-file rule already names.
-func (w *WebCmd) serve(ctx context.Context, pipelines []*web.Pipeline, providers map[string]workspace.Provider) error {
-	// Before either loop below exists, because ResetStaleRunning is only safe
-	// with no concurrent writer — see web.PrepareQueue. This process owns the
-	// queue, which is what makes recovery correct: every `running` row is a
-	// leftover of a process that is gone.
-	//
-	// Then the configuration is ADOPTED through the same function a reload
-	// uses (ConfigWatcher.adopt), rather than through a startup copy of some
-	// of what that function does. The copy is how `steps web --run-history 5`
-	// came to work at startup and stop working a second later: two lists,
-	// only one of them maintained.
-	watchers := make([]*ConfigWatcher, 0, len(pipelines))
-
-	for _, target := range pipelines {
-		web.PrepareQueue(ctx, target)
-
-		// The METHOD, not its result, for the reason trigger.Poll takes one:
-		// the watcher swaps the configuration under this handler, and a
-		// pipeline that names no webhook_token_env: resource today may name
-		// one after the next save. /p/<slug>/check/<resource> is still a 404
-		// while there are none — decided per request now, rather than once.
-		// Mounted HERE, with the daemon's context, because a placed check
-		// resolves its worker through what --worker put on it.
-		target.Webhook = trigger.WebhookHandler(ctx, target.Config, target.Store)
-
-		watcher := NewConfigWatcher(target, w.VarFlags, w.HistoryFlags)
-		watchers = append(watchers, watcher)
-
-		err := watcher.adopt(ctx, target.Config())
-		if err != nil {
-			return fmt.Errorf("web: %s: %w", target.Slug, err)
-		}
-	}
+func (w *WebCmd) serve(ctx context.Context) error {
+	local := web.NewLocalRunner(nil, w.Pin, w.MaxConcurrent, w.Force)
 
 	var runner web.Runner
-
-	local := web.NewLocalRunner(providers, w.Pin, w.MaxConcurrent, w.Force)
 	if !w.ReadOnly {
 		runner = local
 	}
 
-	server, err := web.New(pipelines, runner)
+	server, err := web.New(nil, runner)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	var background sync.WaitGroup
+	state := DaemonStatePath(w.DB)
 
-	// Registered before the loops start, and it cancels rather than relying
-	// on the caller's deferred cancel: Start also returns on its own error,
-	// with the context still live and the loops still running — and both of
-	// them write through stores the caller's cleanup closes.
-	defer func() {
-		cancel()
-		background.Wait()
-	}()
+	held := newDaemon(ctx, server, local, state, w.ExecFlags, w.HistoryFlags, w.Interval)
+	defer held.Close()
 
-	// The drainer runs regardless of --read-only: a row queued before this
-	// process started is still work it can do. What --read-only withholds is
-	// the UI's ability to ADD work.
-	background.Add(1)
+	// NOT withheld by --read-only, which has always been a statement about
+	// the BROWSER's surface: `steps pipeline set` is the deployment path, and
+	// a box that could never be configured is not a deployment. It is also
+	// arbitrary command execution, which is why this binds loopback — see
+	// docs/web.md.
+	server.SetManager(held)
 
-	go func() {
-		defer background.Done()
+	err = held.load(ctx)
+	if err != nil {
+		return err
+	}
 
-		local.Drain(ctx, pipelines)
-	}()
+	fmt.Printf("steps web: http://%s (state: %s)\n", w.Listen, state)
 
-	w.startPolling(ctx, &background, pipelines)
-	w.startWatchingConfig(ctx, &background, watchers)
-
-	fmt.Printf("steps web: http://%s\n", w.Listen)
+	if len(server.Served()) == 0 {
+		fmt.Println("steps web: no pipelines set — upload one with: steps pipeline set -c pipeline.yml")
+	}
 
 	err = server.Start(ctx, w.Listen)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
-	}
-
-	return nil
-}
-
-// startPolling launches one trigger poller per served pipeline, so this
-// process both fills and drains the queue, which is what makes it the whole
-// daemon rather than half of one.
-//
-// Each poller is handed its pipeline's OWN store handle rather than opening a
-// second one; trigger.Poll's doc comment says why, and is the one copy of
-// that reasoning.
-//
-// --read-only does not disable polling, deliberately: it withholds the
-// BROWSER's ability to add work, which is a statement about the HTTP surface,
-// not about what this process does on its own. `--listen 0.0.0.0 --read-only`
-// is a build box that still has to notice new versions.
-func (w *WebCmd) startPolling(ctx context.Context, background *sync.WaitGroup, pipelines []*web.Pipeline) {
-	// One per served pipeline, unconditionally — including the ones with
-	// nothing to poll right now.
-	//
-	// Deciding at startup which pipelines were worth a loop is what made a
-	// `trigger: true` added by an edit go unchecked until a restart: the
-	// decision had been taken once, against a file that has since changed.
-	// The loop itself re-decides per configuration and says which way it went
-	// (see trigger.Poll), which is also where the per-pipeline banner moved
-	// to — it is a statement about what is being polled, and that is now a
-	// thing that changes while the daemon runs.
-	for _, target := range pipelines {
-		fmt.Printf("steps web: watching %s, checking every %s\n", target.Slug, w.Interval)
-
-		background.Add(1)
-
-		go func() {
-			defer background.Done()
-
-			// The METHOD, not its result: the watcher swaps the
-			// configuration under this loop, and a value taken here would
-			// pin it to whatever the file said at startup.
-			err := trigger.Poll(ctx, target.Config, target.Store, w.Interval)
-			if err != nil {
-				slog.Error("web.poll_stopped", "pipeline", target.Slug, "error", err)
-			}
-		}()
-	}
-}
-
-// reloadInterval is how often the daemon re-reads its pipeline files.
-//
-// A constant rather than a flag: it is one read of a small local file, so
-// there is nothing to tune — the number exists only because a save should
-// take effect at human speed, and every value between "immediately" and "a
-// second later" reads the same to whoever pressed save.
-const reloadInterval = time.Second
-
-// startWatchingConfig keeps every served pipeline in step with the file it
-// was loaded from, so an edit no longer needs a restart to take effect.
-//
-// Not gated on --read-only, for the same reason polling is not: that flag
-// withholds the BROWSER's ability to start work. The file on disk is the
-// operator's own statement of what this daemon serves, and a build box that
-// ignored it would be one more thing to remember to restart.
-func (w *WebCmd) startWatchingConfig(ctx context.Context, background *sync.WaitGroup, watchers []*ConfigWatcher) {
-	for _, watcher := range watchers {
-		background.Add(1)
-
-		go func() {
-			defer background.Done()
-
-			watcher.Watch(ctx, reloadInterval)
-		}()
-	}
-}
-
-// load opens every pipeline named on the command line, along with its store,
-// workspace provider, and event bus.
-func (w *WebCmd) load() ([]*web.Pipeline, map[string]workspace.Provider, func(), error) {
-	err := w.checkNamesAreDistinct()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	var (
-		pipelines []*web.Pipeline
-		closers   []func()
-	)
-
-	providers := map[string]workspace.Provider{}
-
-	cleanup := func() {
-		for _, close := range closers {
-			close()
-		}
-	}
-
-	for _, path := range w.Pipeline {
-		// Resolved before the load, not after it: the slug IS the Config's
-		// identity, and computing it four lines later is how the two came to
-		// disagree.
-		slug := resolvePipelineName(path, w.Name)
-
-		cfg, err := w.Load(path, slug)
-		if err != nil {
-			cleanup()
-
-			return nil, nil, nil, err
-		}
-
-		st, provider, closeOne, err := setup(cfg, path, w.StateFlags, w.ExecFlags)
-		if err != nil {
-			cleanup()
-
-			return nil, nil, nil, err
-		}
-
-		bus := events.New(pipeline.StoreSink(st))
-
-		// Bus first, store second: cleanup runs these in order, and the bus
-		// drains its queued events INTO the store. Closing the store first
-		// would throw away the tail of whatever run was in flight.
-		closers = append(closers, bus.Close, closeOne)
-
-		providers[slug] = provider
-		served := web.NewPipeline(slug, path, cfg, st, bus)
-		pipelines = append(pipelines, served)
-	}
-
-	return pipelines, providers, cleanup, nil
-}
-
-// checkNamesAreDistinct refuses two pipelines that would answer to one name.
-//
-// Before any store is opened, deliberately: a name IS a pipeline's identity in
-// the state database, so opening them first would register both against one
-// row and leave the second's path overwriting the first's before the error
-// surfaced. Two app/pipeline.yml and infra/pipeline.yml under one --db is
-// the case, and it is a question only the operator can answer — hence --name
-// rather than a generated suffix, which would be an identity nobody could
-// predict and every rerun would have to rediscover.
-func (w *WebCmd) checkNamesAreDistinct() error {
-	seen := map[string]string{}
-
-	for _, path := range w.Pipeline {
-		name := resolvePipelineName(path, w.Name)
-
-		if other, clash := seen[name]; clash {
-			return fmt.Errorf(
-				"web: %s and %s are both named %q; give one a distinct --name, e.g. --name %s-2=%s",
-				other, path, name, name, path)
-		}
-
-		seen[name] = path
 	}
 
 	return nil
@@ -2517,19 +2292,18 @@ type ApprovalsCmd struct {
 }
 
 // ApprovalsListCmd is the listing itself, and the group's default: bare
-// `steps approvals <pipeline>` still answers "what is waiting on me?".
+// `steps approvals -p <pipeline>` still answers "what is waiting on me?".
 type ApprovalsListCmd struct {
-	StateFlags `embed:""`
-	Pipeline   string `arg:""   help:"path to the pipeline YAML file"`
+	ReadFlags `embed:""`
 }
 
 // Run prints every pending approval.
 func (a *ApprovalsListCmd) Run() error {
-	if nothingRecorded(a.Pipeline, a.StateFlags, "no approvals are waiting") {
+	if nothingRecorded(a.ReadFlags, "no approvals are waiting") {
 		return nil
 	}
 
-	st, cleanup, err := openStore(a.Pipeline, a.StateFlags)
+	st, cleanup, err := openStore(a.ReadFlags)
 	if err != nil {
 		return err
 	}
@@ -2571,33 +2345,31 @@ func (a *ApprovalsListCmd) Run() error {
 // authorization check. Someone will ask "can anyone approve?" the day this
 // ships, and the answer is yes, on purpose, for now.
 type ApproveCmd struct {
-	StateFlags `embed:""`
-	Pipeline   string `arg:""                                       help:"path to the pipeline YAML file"`
-	ID         int64  `arg:""                                       help:"the approval id, from steps approvals"`
-	Reason     string `help:"note to record alongside the decision"`
+	ReadFlags `embed:""`
+	ID        int64  `arg:""                                       help:"the approval id, from steps approvals"`
+	Reason    string `help:"note to record alongside the decision"`
 }
 
 // Run approves the named approval.
 func (a *ApproveCmd) Run() error {
-	return decideApproval(a.Pipeline, a.StateFlags, a.ID, "approved", a.Reason)
+	return decideApproval(a.ReadFlags, a.ID, "approved", a.Reason)
 }
 
 // RejectCmd records a no.
 type RejectCmd struct {
-	StateFlags `embed:""`
-	Pipeline   string `arg:""                                    help:"path to the pipeline YAML file"`
-	ID         int64  `arg:""                                    help:"the approval id, from steps approvals"`
-	Reason     string `help:"why — recorded with the decision"`
+	ReadFlags `embed:""`
+	ID        int64  `arg:""                                    help:"the approval id, from steps approvals"`
+	Reason    string `help:"why — recorded with the decision"`
 }
 
 // Run rejects the named approval.
 func (r *RejectCmd) Run() error {
-	return decideApproval(r.Pipeline, r.StateFlags, r.ID, "rejected", r.Reason)
+	return decideApproval(r.ReadFlags, r.ID, "rejected", r.Reason)
 }
 
 // decideApproval records a decision against a pipeline's store.
-func decideApproval(pipelinePath string, flags StateFlags, id int64, status, reason string) error {
-	st, cleanup, err := openStore(pipelinePath, flags)
+func decideApproval(flags ReadFlags, id int64, status, reason string) error {
+	st, cleanup, err := openStore(flags)
 	if err != nil {
 		return err
 	}
@@ -2628,17 +2400,16 @@ type QuestionsCmd struct {
 
 // QuestionsListCmd is the listing itself, and the group's default.
 type QuestionsListCmd struct {
-	StateFlags `embed:""`
-	Pipeline   string `arg:""   help:"path to the pipeline YAML file"`
+	ReadFlags `embed:""`
 }
 
 // Run prints every question waiting for an answer.
 func (q *QuestionsListCmd) Run() error {
-	if nothingRecorded(q.Pipeline, q.StateFlags, "no questions are waiting") {
+	if nothingRecorded(q.ReadFlags, "no questions are waiting") {
 		return nil
 	}
 
-	st, cleanup, err := openStore(q.Pipeline, q.StateFlags)
+	st, cleanup, err := openStore(q.ReadFlags)
 	if err != nil {
 		return err
 	}
@@ -2685,9 +2456,8 @@ func (q *QuestionsListCmd) Run() error {
 // command can answer. The recorded answerer is the OS user, which is an audit
 // record and not an authorization check.
 type AnswerCmd struct {
-	StateFlags `embed:""`
-	Pipeline   string `arg:""   help:"path to the pipeline YAML file"`
-	ID         int64  `arg:""   help:"the question id, from steps questions"`
+	ReadFlags `embed:""`
+	ID        int64 `arg:""   help:"the question id, from steps questions"`
 	// Variadic so an answer can be written without quoting it, which is what
 	// somebody typing a sentence back at a parked step will do.
 	Answer []string `arg:"" help:"the answer — one of the offered options, or your own words"`
@@ -2695,7 +2465,7 @@ type AnswerCmd struct {
 
 // Run answers the named question.
 func (a *AnswerCmd) Run() error {
-	st, cleanup, err := openStore(a.Pipeline, a.StateFlags)
+	st, cleanup, err := openStore(a.ReadFlags)
 	if err != nil {
 		return err
 	}
@@ -2703,7 +2473,7 @@ func (a *AnswerCmd) Run() error {
 
 	answer := strings.TrimSpace(strings.Join(a.Answer, " "))
 	if answer == "" {
-		return errors.New("an answer is required: steps questions answer <pipeline> <id> <answer>")
+		return errors.New("an answer is required: steps questions answer -p <pipeline> <id> <answer>")
 	}
 
 	err = st.AnswerQuestion(context.Background(), a.ID, answer, currentUser())
@@ -2743,8 +2513,8 @@ func currentUser() string {
 //
 // It also builds no workspace provider, which setup did — a listing that
 // creates and removes a temp root to print three rows.
-func openStore(pipelinePath string, flags StateFlags) (store.Store, func(), error) {
-	return openRecorded(pipelinePath, flags)
+func openStore(flags ReadFlags) (store.Store, func(), error) {
+	return openRecorded(flags)
 }
 
 // applyResume points this invocation at a previous run: which steps it need
@@ -2810,7 +2580,7 @@ func (r *RunsCostCmd) printCostTotals(ctx context.Context, st interface {
 			renderCost(total.CostUSD, total.Unpriced), total.Steps)
 	}
 
-	fmt.Printf("\nbreak one down with: steps runs cost %s <run>%s\n", r.Pipeline, dbNote(r.DB, st))
+	fmt.Printf("\nbreak one down with: steps runs cost -p %s <run>%s\n", r.Pipeline, dbNote(r.DB, st))
 
 	return nil
 }

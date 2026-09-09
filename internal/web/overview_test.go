@@ -14,7 +14,7 @@ import (
 )
 
 // testPipelines builds a server over several pipelines sharing one state
-// file, which is what `steps web app.yml infra.yml --db shared.db`
+// file, which is what one daemon holding several pipelines
 // produces. Each gets one job named after itself, so a page can be checked
 // for having reached the right one.
 func testPipelines(t *testing.T, names ...string) (*Server, []*Pipeline) {
@@ -151,7 +151,7 @@ func TestRootFeedIgnoresUnservedPipelines(t *testing.T) {
 	server, pipelines := testPipelines(t, "app", "infra")
 
 	// A third pipeline writing into the same file, served by nobody here.
-	other, err := sqlite.OpenStore(filepath.Join(filepath.Dir(pipelines[0].Path), ".steps", "shared.db"), "unserved")
+	other, err := sqlite.OpenStore(filepath.Join(filepath.Dir(pipelines[0].Path()), ".steps", "shared.db"), "unserved")
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -469,7 +469,7 @@ func serverFromYAML(t *testing.T, yaml string) (*Server, *Pipeline) {
 	// Interned the way a real load interns it: runs.revision_id is resolved by
 	// looking the sha up in pipeline_revisions, so a run started against a
 	// revision nobody recorded reads back with no config sha at all.
-	err = st.RecordRevision(t.Context(), cfg.Revision.SHA, cfg.Revision.Source)
+	err = st.RecordRevision(t.Context(), cfg.Revision.SHA, cfg.Revision.Source, nil)
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
@@ -820,7 +820,7 @@ func TestSpendPanelWithholdsTheCeilingAfterAnEdit(t *testing.T) {
 	// Interned, so the run genuinely carries the older sha rather than none —
 	// runs.revision_id resolves by lookup, and an unrecorded sha reads back
 	// empty, which is a different state (see agentCeilings).
-	err := pipeline.Store.RecordRevision(ctx, "a-sha-from-an-older-file", "agents: []\n")
+	err := pipeline.Store.RecordRevision(ctx, "a-sha-from-an-older-file", "agents: []\n", nil)
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}

@@ -31,7 +31,7 @@ func (s suite) TestRunsRecordTheRevisionTheyWereGiven(t *testing.T) {
 	st := s.open(t, "test")
 
 	for _, sha := range []string{"sha-one", "sha-two"} {
-		err := st.RecordRevision(ctx, sha, pipelineSource(1))
+		err := st.RecordRevision(ctx, sha, pipelineSource(1), nil)
 		if err != nil {
 			t.Fatalf("RecordRevision(%s): %v", sha, err)
 		}
@@ -78,7 +78,7 @@ func (s suite) TestResumeRecordsTheConfigItResumesUnder(t *testing.T) {
 	st := s.open(t, "test")
 
 	for _, sha := range []string{"sha-broken", "sha-fixed"} {
-		err := st.RecordRevision(ctx, sha, pipelineSource(1))
+		err := st.RecordRevision(ctx, sha, pipelineSource(1), nil)
 		if err != nil {
 			t.Fatalf("RecordRevision(%s): %v", sha, err)
 		}
@@ -145,7 +145,7 @@ func (s suite) TestFindRevisionIsScopedToItsPipeline(t *testing.T) {
 
 	theirs := s.open(t, "other")
 
-	err := theirs.RecordRevision(ctxFor(t), "sha-theirs", pipelineSource(1))
+	err := theirs.RecordRevision(ctxFor(t), "sha-theirs", pipelineSource(1), nil)
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
@@ -161,7 +161,7 @@ func (s suite) TestFindRevisionIsScopedToItsPipeline(t *testing.T) {
 
 	// And its own is still found, so the scoping is a predicate rather than a
 	// lookup that never works.
-	err = mine.RecordRevision(ctxFor(t), "sha-mine", pipelineSource(2))
+	err = mine.RecordRevision(ctxFor(t), "sha-mine", pipelineSource(2), nil)
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
@@ -193,7 +193,7 @@ func (s suite) TestResumeKeepsTheConfigurationItCannotName(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	err := st.RecordRevision(ctx, "sha-recorded", pipelineSource(1))
+	err := st.RecordRevision(ctx, "sha-recorded", pipelineSource(1), nil)
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}

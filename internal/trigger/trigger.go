@@ -72,13 +72,20 @@ func AffectedJobs(cfg *config.Config, resourceName string) []*config.Job {
 }
 
 // PollStore is what polling itself touches: the trigger queue it fills and
-// drains (with the breaker that decides which rows may be claimed), and the
-// resource versions a check compares against. Everything else a build records
-// belongs to the build — the drain hands a full store.Store down to
-// pipeline.RunJob and never reads through it here.
+// drains (with the breaker that decides which rows may be claimed), the
+// resource versions a check compares against, and whether the pipeline is
+// paused at all. Everything else a build records belongs to the build — the
+// drain hands a full store.Store down to pipeline.RunJob and never reads
+// through it here.
+//
+// Control arrives whole because that is the aggregate Paused belongs to, and
+// a consumer names facets rather than methods. Nothing here calls the rest of
+// it: renaming or deleting a pipeline is a `steps pipeline` verb's job, never
+// a poll's.
 type PollStore interface {
 	store.Queue
 	store.Versions
+	store.Control
 }
 
 // prepareWatch runs the checks and state reconciliation a polling process
@@ -334,6 +341,18 @@ type admission struct {
 }
 
 func (a *admission) poll(ctx context.Context, cfg *config.Config, st PollStore) {
+	// The pipeline-level breaker, asked per cycle rather than per configuration: a pause is not an edit, and the whole point of it is that it takes effect without one.
+	stopped, err := st.Paused(ctx)
+	if err != nil {
+		slog.Error("trigger.paused", "pipeline", cfg.Name, "error", err)
+
+		return
+	}
+
+	if stopped {
+		return
+	}
+
 	if cfg != a.decided {
 		a.decided = cfg
 		a.pollable = a.decide(ctx, cfg)
@@ -1239,7 +1258,7 @@ func skipIfPaused(ctx context.Context, st PollStore, jobName string, id int64) (
 		return false, nil
 	}
 
-	printf("trigger: %s is paused (resume with: steps jobs resume <pipeline> %s)\n", jobName, jobName)
+	printf("trigger: %s is paused (resume with: steps jobs resume %s -p <pipeline>)\n", jobName, jobName)
 
 	err = st.CompleteJob(context.WithoutCancel(ctx), id, "skipped", nil)
 	if err != nil {
@@ -1281,14 +1300,14 @@ func recordBreaker(ctx context.Context, st PollStore, job *config.Job, runErr er
 		return
 	}
 
-	printf("trigger: %s PAUSED after %d consecutive failures — resume with: steps jobs resume <pipeline> %s\n",
+	printf("trigger: %s PAUSED after %d consecutive failures — resume with: steps jobs resume %s -p <pipeline>\n",
 		job.Name, consecutive, job.Name)
 
 	slog.Warn("trigger.job_paused",
 		"job", job.Name,
 		"consecutive_failures", consecutive,
 		"max_consecutive_failures", job.MaxConsecutiveFailures,
-		"resume", "steps jobs resume <pipeline> "+job.Name)
+		"resume", "steps jobs resume "+job.Name+" -p <pipeline>")
 }
 
 // leasedChecks scopes one round of checks the way RunJob scopes a job, so a

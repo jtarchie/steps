@@ -285,7 +285,7 @@ func webServerFor(t *testing.T, pipelinePath string) (*web.Server, *web.Pipeline
 
 	st := openStoreFor(t, pipelinePath)
 
-	pipeline := web.NewPipeline(web.Slugify(pipelinePath), pipelinePath, cfg, st, events.New(nil))
+	pipeline := web.NewPipeline(cli.PipelineName(pipelinePath), pipelinePath, cfg, st, events.New(nil))
 
 	server, err := web.New([]*web.Pipeline{pipeline}, nil)
 	if err != nil {

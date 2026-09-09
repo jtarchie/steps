@@ -83,7 +83,7 @@ func TestRunsCostRollsUpByRun(t *testing.T) {
 
 	var err error
 
-	out := captureStdout(t, func() { err = cli.Run([]string{"runs", "cost", path}) })
+	out := captureStdout(t, func() { err = cli.Run(append([]string{"runs", "cost"}, readArgs(path)...)) })
 
 	if err != nil {
 		t.Fatalf("runs cost: %v", err)
@@ -110,7 +110,7 @@ func TestRunsCostNamesARunForTheBreakdown(t *testing.T) {
 
 	var err error
 
-	out := captureStdout(t, func() { err = cli.Run([]string{"runs", "cost", path, "REVIEWRUN"}) })
+	out := captureStdout(t, func() { err = cli.Run(append([]string{"runs", "cost", "REVIEWRUN"}, readArgs(path)...)) })
 
 	if err != nil {
 		t.Fatalf("runs cost <run>: %v", err)
@@ -134,7 +134,7 @@ func TestRunsCostWillNotVouchForARunItDoesNotHave(t *testing.T) {
 
 	var err error
 
-	out := captureStdout(t, func() { err = cli.Run([]string{"runs", "cost", path, "NOSUCHRUN"}) })
+	out := captureStdout(t, func() { err = cli.Run(append([]string{"runs", "cost", "NOSUCHRUN"}, readArgs(path)...)) })
 
 	if err != nil {
 		t.Fatalf("runs cost <unknown run>: %v", err)
@@ -183,7 +183,7 @@ jobs:
 
 	var err error
 
-	out := captureStdout(t, func() { err = cli.Run([]string{"runs", "list", path}) })
+	out := captureStdout(t, func() { err = cli.Run(append([]string{"runs", "list"}, readArgs(path)...)) })
 
 	if err != nil {
 		t.Fatalf("runs list: %v", err)

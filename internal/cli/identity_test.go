@@ -10,85 +10,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store/sqlite"
-	"github.com/jtarchie/steps/internal/web"
 )
-
-// TestLoadedPipelineCarriesTheIdentityTheRestOfTheProcessUses is the seam.
-//
-// The slug and the Config were assigned four lines apart in WebCmd.load and
-// never compared: `w.Load(path)` stamped one identity from the path and
-// `resolvePipelineName(path, w.Name)` computed another from the --name map,
-// and the pieces downstream picked whichever was nearest. The store, the
-// /p/<slug> route and run_events took the slug; the agent pin scope took the
-// Config. So --name moved two of them and not the third, and the pin log
-// lines an operator correlates against a run record named a different string
-// than the record does.
-//
-// Asserted across the boundary rather than on either half, because both
-// halves were correct on their own the whole time.
-func TestLoadedPipelineCarriesTheIdentityTheRestOfTheProcessUses(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	path := flagFixture(t)
-
-	cmd := &WebCmd{ //nolint:exhaustruct // the identity flags are what is under test
-		Pipeline: []string{path},
-		StateFlags: StateFlags{
-			DB: DB(filepath.Join(dir, "shared.db")),
-			// The flag that used to move only some of them.
-			Name: map[string]string{"prod": path},
-		},
-	}
-
-	pipelines, _, cleanup, err := cmd.load()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-
-	t.Cleanup(cleanup)
-
-	if len(pipelines) != 1 {
-		t.Fatalf("loaded %d pipelines, want 1", len(pipelines))
-	}
-
-	loaded := pipelines[0]
-
-	if loaded.Slug != "prod" {
-		t.Fatalf("slug = %q, want the --name override", loaded.Slug)
-	}
-
-	if loaded.Config().Name != loaded.Slug {
-		t.Errorf("the Config calls this pipeline %q while everything else calls it %q — an agent pin scoped by the first cannot be joined to a run record written under the second",
-			loaded.Config().Name, loaded.Slug)
-	}
-}
-
-// TestPipelineIdentityDefaultsToTheSlugWithoutAnOverride pins the other half:
-// the default has to agree too, or --name would be the only way to get one
-// identity and every pipeline without one would still have two.
-func TestPipelineIdentityDefaultsToTheSlugWithoutAnOverride(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	path := flagFixture(t)
-
-	cmd := &WebCmd{ //nolint:exhaustruct // the identity flags are what is under test
-		Pipeline:   []string{path},
-		StateFlags: StateFlags{DB: DB(filepath.Join(dir, "shared.db"))}, //nolint:exhaustruct // no --name is the case under test
-	}
-
-	pipelines, _, cleanup, err := cmd.load()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-
-	t.Cleanup(cleanup)
-
-	if pipelines[0].Config().Name != pipelines[0].Slug {
-		t.Errorf("Config name %q, slug %q", pipelines[0].Config().Name, pipelines[0].Slug)
-	}
-}
 
 // TestSetupRefusesAConfigLoadedUnderADifferentIdentity is the backstop for
 // the next call site.
@@ -129,44 +51,26 @@ func TestSetupRefusesAConfigLoadedUnderADifferentIdentity(t *testing.T) {
 	}
 }
 
-// TestJobsResumeHonoursTheNameOverride is the command the invariant caught,
-// asserted end to end so the fix cannot be reverted quietly.
+// TestJobsResumeAnswersForThePipelineItWasNamed pins what `-p` moved.
 //
-// `jobs resume` writes to a pipeline's state, so it has to agree with the
-// state about which pipeline that is. It loaded the Config under the file
-// name while opening the store under --name, which is precisely the split
-// #94 describes — invisible until something else keyed by the Config's
-// identity (an agent pin) had to be joined to a row written under the
-// store's.
-func TestJobsResumeHonoursTheNameOverride(t *testing.T) {
-	path := flagFixture(t)
-	state := filepath.Join(t.TempDir(), "shared.db")
+// `jobs resume` writes to a pipeline's state and checks the job name against
+// the configuration that pipeline is SET to, so both halves have to agree
+// about which pipeline is meant. It used to derive one identity from a file
+// path and another from --name, which is the split #94 describes; there is no
+// path here any more, and the name it is given is the only answer either half
+// can reach.
+func TestJobsResumeAnswersForThePipelineItWasNamed(t *testing.T) {
+	state := setPipelineInto(t, "prod")
+	pauseJobIn(t, state, "prod", "build")
 
-	st, err := sqlite.OpenStore(state, "prod")
-	if err != nil {
-		t.Fatalf("open state store: %v", err)
-	}
-
-	const limit = 3
-
-	for range limit {
-		_, _, err = st.RecordJobOutcome(t.Context(), "build", false, limit)
-		if err != nil {
-			t.Fatalf("RecordJobOutcome: %v", err)
-		}
-	}
-
-	err = st.Close()
-	if err != nil {
-		t.Fatalf("close state store: %v", err)
-	}
+	var err error
 
 	out := captureStdout(t, func() {
-		err = Run([]string{"jobs", "resume", path, "build", "--db", state, "--name", "prod=" + path})
+		err = Run([]string{"jobs", "resume", "build", "-p", "prod", "--db", state})
 	})
 
 	if err != nil {
-		t.Fatalf("jobs resume under --name: %v", err)
+		t.Fatalf("jobs resume: %v", err)
 	}
 
 	if !strings.Contains(out, "resumed: build") {
@@ -186,71 +90,104 @@ func TestJobsResumeHonoursTheNameOverride(t *testing.T) {
 	}
 
 	if paused {
-		t.Error("the job under the --name identity is still paused, so resume wrote somewhere else")
+		t.Error("the job is still paused, so resume wrote somewhere else")
 	}
 }
 
-// TestWebRefusesTwoPipelinesClaimingOneName is the guarantee that makes the
-// identity safe to be a NAME rather than a path.
-//
-// The pin scope, the store rows and the /p/<slug> route are all keyed by it,
-// so two pipelines answering to one name would share all three — the agent
-// pin collision pinScope was added to prevent, plus a state file where two
-// pipelines' runs interleave under one identity. A path could never collide
-// and a name can, so the check that names are distinct stops being a
-// convenience about URLs and becomes the thing that holds the scope apart.
-// `steps web` is the only mode that serves several pipelines from one
-// process, which is why it is the only place this has to hold.
-func TestWebRefusesTwoPipelinesClaimingOneName(t *testing.T) {
-	t.Parallel()
+// TestJobsResumeRefusesAJobTheServedConfigDoesNotHave: the name is checked
+// against the configuration the daemon is serving, so a typo is a refusal
+// rather than a no-op that reports success.
+func TestJobsResumeRefusesAJobTheServedConfigDoesNotHave(t *testing.T) {
+	state := setPipelineInto(t, "prod")
+	pauseJobIn(t, state, "prod", "build")
 
-	// Two files that are genuinely different pipelines and genuinely share a
-	// base name — the ordinary infra/pipeline.yml and app/pipeline.yml shape,
-	// not a contrived one.
-	first := flagFixture(t)
-	second := flagFixture(t)
-
-	err := Run([]string{"web", first, second, "--listen", "127.0.0.1:1"})
+	err := Run([]string{"jobs", "resume", "buidl", "-p", "prod", "--db", state})
 	if err == nil {
-		t.Fatal("web served two pipelines under one name: their agent pins, their run records and their /p/<slug> routes would all be shared")
+		t.Fatal("resuming a job that is not paused was reported as done")
 	}
 
-	// The refusal an operator can act on, naming both files and the --name
-	// that settles it. A second layer inside the server also rejects a
-	// duplicate slug, so this asserts the ACTIONABLE one rather than merely
-	// that something failed.
-	if !strings.Contains(err.Error(), "both named") || !strings.Contains(err.Error(), "--name") {
-		t.Errorf("error = %v, want the refusal that names both files and how to settle it", err)
-	}
-
-	// And --name is the way out, which is the whole reason the flag exists.
-	err = Run([]string{
-		"web", first, second, "--listen", "127.0.0.1:1",
-		"--name", "app=" + first, "--name", "infra=" + second,
-	})
-	if err == nil || strings.Contains(err.Error(), "both named") {
-		t.Errorf("with --name distinguishing them web still refused on names: %v", err)
+	// Named alongside what IS paused: the mistake this catches is a name that
+	// is nearly right, and the fix is almost always visible in the list.
+	if !strings.Contains(err.Error(), "build") {
+		t.Errorf("the refusal does not say which jobs are paused: %v", err)
 	}
 }
 
-// TestTheTwoSlugifiersAgree covers the arrangement the above rests on.
-//
-// web.Slugify is what the /p/<slug> route is built from and config.Slugify is
-// what a Config defaults its name to; a second, drifting copy is exactly how
-// the identity split in the first place, so web.Slugify delegates. This
-// asserts the RESULTS match rather than that there is one definition — a
-// reintroduced copy that happens to agree passes here, and only stops passing
-// once it drifts, which is the moment that matters.
-func TestTheTwoSlugifiersAgree(t *testing.T) {
+// setPipelineInto records a configuration under name and makes it current,
+// which is what a `steps pipeline set` leaves behind for a local command to
+// read.
+func setPipelineInto(t *testing.T, name string) string {
+	t.Helper()
+
+	path := flagFixture(t)
+	state := filepath.Join(t.TempDir(), "shared.db")
+
+	st, err := sqlite.OpenStore(state, name)
+	if err != nil {
+		t.Fatalf("open state store: %v", err)
+	}
+
+	cfg, err := config.Load(path, name, nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	err = st.RecordRevision(t.Context(), cfg.Revision.SHA, cfg.Revision.Source, cfg.Revision.Includes)
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	err = st.SetCurrentRevision(t.Context(), cfg.Revision.SHA, path)
+	if err != nil {
+		t.Fatalf("SetCurrentRevision: %v", err)
+	}
+
+	err = st.Close()
+	if err != nil {
+		t.Fatalf("close state store: %v", err)
+	}
+
+	return state
+}
+
+// pauseJobIn leaves a job where the circuit breaker would have left it.
+func pauseJobIn(t *testing.T, state, name, job string) {
+	t.Helper()
+
+	st, err := sqlite.OpenStore(state, name)
+	if err != nil {
+		t.Fatalf("open state store: %v", err)
+	}
+
+	const limit = 3
+
+	for range limit {
+		_, _, err = st.RecordJobOutcome(t.Context(), job, false, limit)
+		if err != nil {
+			t.Fatalf("RecordJobOutcome: %v", err)
+		}
+	}
+
+	err = st.Close()
+	if err != nil {
+		t.Fatalf("close state store: %v", err)
+	}
+}
+
+// TestPipelineNameAgreesWithTheConfigsOwn covers the arrangement the identity
+// rests on: `steps run pipeline.yml` derives a default name here while
+// config.Load stamps one on the Config, and a second copy of that is how the
+// identity split the first time.
+func TestPipelineNameAgreesWithTheConfigsOwn(t *testing.T) {
 	t.Parallel()
 
 	for _, path := range []string{
 		"app.yml", "./app.yml", "infra/deploy.yml", "/abs/infra/deploy.yaml",
 		"no-extension", "dotted.name.yml",
 	} {
-		if web.Slugify(path) != config.Slugify(path) {
-			t.Errorf("%q slugifies to %q for the UI and %q for the Config",
-				path, web.Slugify(path), config.Slugify(path))
+		if PipelineName(path) != config.Slugify(path) {
+			t.Errorf("%q names the pipeline %q for the CLI and %q for the Config",
+				path, PipelineName(path), config.Slugify(path))
 		}
 	}
 }

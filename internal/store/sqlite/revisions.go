@@ -25,8 +25,15 @@ import (
 // rewriting a multi-KB column would be a WAL page per load for no change —
 // while loaded_at is what the sweep reads to know which row is the one being
 // served, and a conflict is precisely a re-load.
-func (s *Store) RecordRevision(ctx context.Context, sha, source string) error {
-	_, err := s.db.ExecContext(ctx, `
+func (s *Store) RecordRevision(ctx context.Context, sha, source string, includes map[string]string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("could not record the configuration of pipeline %q: %w", s.pipeline, err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO pipeline_revisions (pipeline_id, sha, source, loaded_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT (pipeline_id, sha) DO UPDATE SET loaded_at = excluded.loaded_at
@@ -35,7 +42,68 @@ func (s *Store) RecordRevision(ctx context.Context, sha, source string) error {
 		return fmt.Errorf("could not record the configuration of pipeline %q: %w", s.pipeline, err)
 	}
 
+	// The sha is over the includes too, so a conflicting row already holds byte-identical ones and INSERT OR IGNORE is exact.
+	for path, content := range includes {
+		_, err = tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO revision_includes (revision_id, path, content)
+			SELECT id, ?, ? FROM pipeline_revisions WHERE pipeline_id = ? AND sha = ?
+		`, path, content, s.pipelineID, sha)
+		if err != nil {
+			return fmt.Errorf("could not record the configuration of pipeline %q: %w", s.pipeline, err)
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("could not record the configuration of pipeline %q: %w", s.pipeline, err)
+	}
+
 	return nil
+}
+
+// SetCurrentRevision refuses a sha nothing recorded rather than pointing at nothing: a daemon restarting against a NULL would silently serve no pipeline.
+func (s *Store) SetCurrentRevision(ctx context.Context, sha, from string) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE pipelines
+		SET current_revision_id = (SELECT id FROM pipeline_revisions WHERE pipeline_id = ? AND sha = ?),
+		    set_from = ?, set_at = ?
+		WHERE id = ? AND EXISTS (SELECT 1 FROM pipeline_revisions WHERE pipeline_id = ? AND sha = ?)
+	`, s.pipelineID, sha, from, nowNano(), s.pipelineID, s.pipelineID, sha)
+	if err != nil {
+		return fmt.Errorf("could not set the configuration of pipeline %q: %w", s.pipeline, err)
+	}
+
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("could not set the configuration of pipeline %q: %w", s.pipeline, err)
+	}
+
+	if changed == 0 {
+		return fmt.Errorf("could not set the configuration of pipeline %q: revision %s was never recorded", s.pipeline, sha)
+	}
+
+	return nil
+}
+
+// CurrentRevision reads the revision a set made current, includes and all.
+func (s *Store) CurrentRevision(ctx context.Context) (store.Revision, bool, error) {
+	var sha sql.NullString
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT r.sha FROM pipelines p
+		JOIN pipeline_revisions r ON r.id = p.current_revision_id
+		WHERE p.id = ?
+	`, s.pipelineID).Scan(&sha)
+
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !sha.Valid) {
+		return store.Revision{}, false, nil
+	}
+
+	if err != nil {
+		return store.Revision{}, false, fmt.Errorf("could not read the configuration of pipeline %q: %w", s.pipeline, err)
+	}
+
+	return s.FindRevision(ctx, sha.String)
 }
 
 // FindRevision returns a configuration this pipeline has run, by its hash.
@@ -45,12 +113,15 @@ func (s *Store) RecordRevision(ctx context.Context, sha, source string) error {
 // answering for another's configuration would be a page showing a file the
 // reader's pipeline never ran.
 func (s *Store) FindRevision(ctx context.Context, sha string) (store.Revision, bool, error) {
-	var rev store.Revision
+	var (
+		rev store.Revision
+		id  int64
+	)
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT sha, source FROM pipeline_revisions
+		SELECT id, sha, source FROM pipeline_revisions
 		WHERE pipeline_id = ? AND sha = ?
-	`, s.pipelineID, sha).Scan(&rev.SHA, &rev.Source)
+	`, s.pipelineID, sha).Scan(&id, &rev.SHA, &rev.Source)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.Revision{}, false, nil
@@ -58,6 +129,26 @@ func (s *Store) FindRevision(ctx context.Context, sha string) (store.Revision, b
 
 	if err != nil {
 		return store.Revision{}, false, fmt.Errorf("could not read configuration %q of pipeline %q: %w", sha, s.pipeline, err)
+	}
+
+	includes, err := collect(ctx, s.db, "included files", `
+		SELECT path, content FROM revision_includes WHERE revision_id = ?
+	`, []any{id}, func(rows *sql.Rows) ([2]string, error) {
+		var pair [2]string
+
+		err := rows.Scan(&pair[0], &pair[1])
+
+		return pair, err //nolint:wrapcheck // collect wraps it with the query's own context
+	})
+	if err != nil {
+		return store.Revision{}, false, err
+	}
+
+	if len(includes) > 0 {
+		rev.Includes = make(map[string]string, len(includes))
+		for _, pair := range includes {
+			rev.Includes[pair[0]] = pair[1]
+		}
 	}
 
 	return rev, true, nil
@@ -120,6 +211,11 @@ func (s *Store) pruneAllRevisions(ctx context.Context) error {
 // history: an unscoped anti-join is only harmless while revision ids happen to
 // be unique across pipelines, and it makes the end of every build consult the
 // runs of pipelines that share the state file.
+//
+// The CURRENT revision — the one a `steps pipeline set` made this pipeline's
+// — is exempt too, and the schema's RESTRICT on pipelines.current_revision_id
+// is what turns forgetting it here into an error rather than a daemon that
+// restarts into nothing.
 func pruneRevisions(ctx context.Context, tx *sql.Tx, pipelineID int64) (bool, error) {
 	result, err := tx.ExecContext(ctx, `
 		DELETE FROM pipeline_revisions
@@ -128,11 +224,12 @@ func pruneRevisions(ctx context.Context, tx *sql.Tx, pipelineID int64) (bool, er
 		      SELECT id FROM pipeline_revisions WHERE pipeline_id = ?
 		      ORDER BY loaded_at DESC, id DESC LIMIT 1
 		  )
+		  AND id IS NOT (SELECT current_revision_id FROM pipelines WHERE id = ?)
 		  AND id NOT IN (
 		      SELECT revision_id FROM runs
 		      WHERE pipeline_id = ? AND revision_id IS NOT NULL
 		  )
-	`, pipelineID, pipelineID, pipelineID)
+	`, pipelineID, pipelineID, pipelineID, pipelineID)
 	if err != nil {
 		return false, fmt.Errorf("could not prune configurations: %w", err)
 	}

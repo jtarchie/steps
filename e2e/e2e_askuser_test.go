@@ -12,6 +12,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // TestEndToEndAgentAskUser proves the ask_user grant end to end: the tool
@@ -276,7 +277,7 @@ jobs:
 	// they were shown.
 	id := awaitPendingQuestion(t, path)
 
-	mustRun(t, "questions", "answer", path, id, "staging")
+	mustRun(t, append([]string{"questions", "answer", id, "staging"}, readArgs(path)...)...)
 
 	err := <-done
 	if err != nil {
@@ -291,6 +292,16 @@ jobs:
 
 // awaitPendingQuestion blocks until the run parks a question, and returns the
 // id `steps questions` would print for it.
+// recordedYet reports a state database that exists AND has its schema.
+//
+// Both halves: HasNothingRecorded answers false for a file that is not there
+// at all, and a writer creates the file before it commits the schema — so a
+// reader between the two finds no `questions` table, which is what this loop
+// used to walk into under load.
+func recordedYet(path string) bool {
+	return fileExists(path) && !sqlite.HasNothingRecorded(path)
+}
+
 func awaitPendingQuestion(t *testing.T, pipelinePath string) string {
 	t.Helper()
 
@@ -300,16 +311,17 @@ func awaitPendingQuestion(t *testing.T, pipelinePath string) string {
 		// Read through the same command a person would run, so a listing that
 		// stopped showing pending questions fails this test rather than only
 		// the ones that read the table directly.
-		err := cli.Run([]string{"questions", pipelinePath})
+		err := cli.Run(append([]string{"questions"}, readArgs(pipelinePath)...))
 		if err != nil {
 			t.Fatalf("steps questions: %v", err)
 		}
 
-		// Only once the run has created it. The listing above no longer
-		// creates a state database just by being asked — it used to, which is
-		// what kept this loop from ever seeing the window between starting
-		// the run and its first write.
-		if !fileExists(cli.StatePath(pipelinePath, "")) {
+		// Only once the run has filled the database in, not merely created
+		// the file. A writer creates the file and commits the schema as two
+		// steps, so a reader arriving between them finds no `questions` table
+		// at all — the same window sqlite.HasNothingRecorded exists to answer,
+		// and which the file check alone walked straight into.
+		if !recordedYet(cli.StatePath(pipelinePath, "")) {
 			time.Sleep(50 * time.Millisecond)
 
 			continue
@@ -345,9 +357,9 @@ jobs:
 
 	// A pipeline nobody has asked anything about still answers the question.
 	mustRun(t, "run", path, "--job", "build")
-	mustRun(t, "questions", path)
+	mustRun(t, append([]string{"questions"}, readArgs(path)...)...)
 
-	err := cli.Run([]string{"questions", "answer", path, "1", "   "})
+	err := cli.Run(append([]string{"questions", "answer", "1", "   "}, readArgs(path)...))
 	if err == nil {
 		t.Fatal("an empty answer was accepted")
 	}
@@ -356,7 +368,7 @@ jobs:
 		t.Errorf("empty answer error = %q, want it to say what is missing", err)
 	}
 
-	err = cli.Run([]string{"questions", "answer", path, "7", "minor"})
+	err = cli.Run(append([]string{"questions", "answer", "7", "minor"}, readArgs(path)...))
 	if err == nil {
 		t.Fatal("an answer to a question that does not exist was accepted")
 	}
@@ -544,7 +556,7 @@ jobs:
 
 	var runErr error
 
-	out := captureStdout(t, func() { runErr = cli.Run([]string{"questions", path}) })
+	out := captureStdout(t, func() { runErr = cli.Run(append([]string{"questions"}, readArgs(path)...)) })
 
 	if runErr != nil {
 		t.Fatalf("steps questions: %v", runErr)

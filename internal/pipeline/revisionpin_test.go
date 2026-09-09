@@ -39,7 +39,7 @@ jobs:
 	defer func() { _ = st.Close() }()
 	defer func() { _ = provider.Close() }()
 
-	err := st.RecordRevision(t.Context(), cfg.Revision.SHA, cfg.Revision.Source)
+	err := st.RecordRevision(t.Context(), cfg.Revision.SHA, cfg.Revision.Source, nil)
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
@@ -47,7 +47,7 @@ jobs:
 	// The reload: a different configuration is now the newest this pipeline
 	// has loaded. The job below is still the one that was queued against the
 	// old one.
-	err = st.RecordRevision(t.Context(), "sha-swapped-in", "jobs: []\n")
+	err = st.RecordRevision(t.Context(), "sha-swapped-in", "jobs: []\n", nil)
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
@@ -97,7 +97,7 @@ jobs:
 
 	// The daemon reloads: a newer configuration is interned, and the sweep
 	// reclaims the one this job is holding because nothing has run under it.
-	err := st.RecordRevision(t.Context(), "sha-swapped-in", "jobs: []\n")
+	err := st.RecordRevision(t.Context(), "sha-swapped-in", "jobs: []\n", nil)
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}

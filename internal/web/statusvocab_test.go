@@ -151,7 +151,7 @@ func TestJobPageSaysPassedNotGreen(t *testing.T) {
 // follows the same contract as approvals: relative time, a job link, and a
 // read-only hint naming the EXACT command. The hint said `steps web`, which
 // on a machine sharing the state file is the forbidden second daemon; the
-// real command is `steps jobs resume <pipeline> <job>`.
+// real command is `steps jobs resume <job> -p <pipeline>`.
 func TestBreakerCardSharesVocabularyAndNamesTheResumeCommand(t *testing.T) {
 	t.Parallel()
 
@@ -182,8 +182,9 @@ func TestBreakerCardSharesVocabularyAndNamesTheResumeCommand(t *testing.T) {
 		t.Error("read-only breaker card does not name the resume command")
 	}
 
-	if !strings.Contains(body, "demo.yml build</code>") {
-		t.Error("resume hint does not name this pipeline's path and the paused job")
+	// The pipeline's NAME rather than a path: a served pipeline no longer has a file on this machine, and the name is what every verb takes.
+	if !strings.Contains(body, "steps jobs resume build -p demo</code>") {
+		t.Error("resume hint does not name the paused job and the pipeline it is in")
 	}
 }
 

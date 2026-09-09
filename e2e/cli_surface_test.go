@@ -34,7 +34,7 @@ func TestTopLevelCommandsAreTheDocumentedSet(t *testing.T) {
 		"Run": true, "Test": true, "Validate": true,
 		"Runs": true, "Plan": true, "MCP": true,
 		"Jobs": true, "Approvals": true, "Questions": true,
-		"Web": true, "Docs": true,
+		"Web": true, "Pipeline": true, "Docs": true,
 	}
 
 	got := map[string]bool{}
@@ -103,7 +103,7 @@ func TestWorkerFlagAppliesWhereverItIsDeclared(t *testing.T) {
 		// fails in a second rather than serving until the test binary's own
 		// timeout — which is how this case behaved when it was first
 		// sabotaged to check it worked.
-		{"web", path, "--listen", "127.0.0.1:1"},
+		{"web", "--listen", "127.0.0.1:1"},
 	} {
 		t.Run(args[0], func(t *testing.T) {
 			err := cli.Run(append(args, "--worker", "gpu=nope://x"))
@@ -133,7 +133,10 @@ func TestVarsFileAppliesWhereverItIsDeclared(t *testing.T) {
 		{"validate", path},
 		{"validate", path, "--live", "--job", "build"},
 		{"plan", path, "--job", "build"},
-		{"web", path},
+		// `steps web` takes no vars: they belong to the pipeline you set, not
+		// to the process. `set` is where they moved, and it reads the file
+		// before it reaches for a daemon.
+		{"pipeline", "set", "-c", path, "-n"},
 	} {
 		t.Run(args[0], func(t *testing.T) {
 			err := cli.Run(append(args, "--vars-file", missing))
@@ -166,9 +169,9 @@ func TestGroupedVerbsKeepTheirBareForm(t *testing.T) {
 		full []string
 		says string
 	}{
-		{[]string{"approvals", path}, []string{"approvals", "list", path}, "no approvals are waiting"},
-		{[]string{"questions", path}, []string{"questions", "list", path}, "no questions are waiting"},
-		{[]string{"jobs", path}, []string{"jobs", "list", path}, "no jobs are paused"},
+		{append([]string{"approvals"}, readArgs(path)...), append([]string{"approvals", "list"}, readArgs(path)...), "no approvals are waiting"},
+		{append([]string{"questions"}, readArgs(path)...), append([]string{"questions", "list"}, readArgs(path)...), "no questions are waiting"},
+		{append([]string{"jobs"}, readArgs(path)...), append([]string{"jobs", "list"}, readArgs(path)...), "no jobs are paused"},
 	} {
 		t.Run(group.bare[0], func(t *testing.T) {
 			for _, args := range [][]string{group.bare, group.full} {
@@ -199,7 +202,7 @@ func TestRetiredVerbsAreGone(t *testing.T) {
 		{"approve", path, "1"},
 		{"reject", path, "1"},
 		{"answer", path, "1", "yes"},
-		{"jobs", path, "--resume", "build"},
+		{"jobs", "--resume", "build", "-p", "x"},
 	} {
 		t.Run(strings.Join(args[:1], " "), func(t *testing.T) {
 			err := cli.Run(args)
@@ -233,7 +236,7 @@ func TestJobsResumeClearsTheBreaker(t *testing.T) {
 	var err error
 
 	out := captureStdout(t, func() {
-		err = cli.Run([]string{"jobs", "resume", path, "build"})
+		err = cli.Run(append([]string{"jobs", "resume", "build"}, readArgs(path)...))
 	})
 
 	if err != nil {
@@ -298,7 +301,7 @@ func jobPaused(t *testing.T, path, job string) bool {
 func TestJobsResumeRefusesAJobThePipelineDoesNotHave(t *testing.T) {
 	t.Parallel()
 
-	err := cli.Run([]string{"jobs", "resume", flagFixture(t), "buidl"})
+	err := cli.Run(append([]string{"jobs", "resume", "buidl"}, readArgs(flagFixture(t))...))
 	if err == nil {
 		t.Fatal("resuming a job the pipeline does not declare was reported as done")
 	}
@@ -315,7 +318,7 @@ func TestRunsCostTakesTheRunAsAnArgument(t *testing.T) {
 
 	path := flagFixture(t)
 
-	err := cli.Run([]string{"runs", "cost", path, "--run", "SOMERUN"})
+	err := cli.Run(append([]string{"runs", "cost", "--run", "SOMERUN"}, readArgs(path)...))
 	if err == nil {
 		t.Fatal("--run still parses; the run id is a positional now")
 	}
@@ -396,7 +399,7 @@ func TestListingsAnswerBeforeAStateFileExists(t *testing.T) {
 		t.Run(probe.verb, func(t *testing.T) {
 			var err error
 
-			out := captureStdout(t, func() { err = cli.Run([]string{probe.verb, path}) })
+			out := captureStdout(t, func() { err = cli.Run(append([]string{probe.verb}, readArgs(path)...)) })
 			if err != nil {
 				t.Fatalf("%s on a fresh checkout: %v", probe.verb, err)
 			}
@@ -441,10 +444,10 @@ func TestReadingADatabaseBeingCreated(t *testing.T) {
 		args []string
 		says string
 	}{
-		{[]string{"runs", "list", path}, "no runs recorded yet"},
-		{[]string{"approvals", path}, "no approvals are waiting"},
-		{[]string{"questions", path}, "no questions are waiting"},
-		{[]string{"jobs", path}, "no jobs are paused"},
+		{append([]string{"runs", "list"}, readArgs(path)...), "no runs recorded yet"},
+		{append([]string{"approvals"}, readArgs(path)...), "no approvals are waiting"},
+		{append([]string{"questions"}, readArgs(path)...), "no questions are waiting"},
+		{append([]string{"jobs"}, readArgs(path)...), "no jobs are paused"},
 		{[]string{"runs", "--db", state}, "no pipelines recorded"},
 	} {
 		t.Run(strings.Join(probe.args[:2], " "), func(t *testing.T) {
@@ -516,33 +519,26 @@ jobs:
 	}
 }
 
-// TestStateNoteOnlyCarriesAFlagThatWasGiven.
+// TestStateNoteNamesTheDatabaseTheReaderIsUsing.
 //
 // The follow-up command a listing prints has to name the same database the
-// listing read, or it sends the reader to the pipeline's default path and
-// tells them nothing is there. The other direction matters too, and is what a
-// mutant walked through: with no --db given, appending an empty flag emits
-// `steps runs cost pipeline.yml <run> --db ` — a command that does not
+// listing read, or it sends the reader to a different file and tells them
+// nothing is there. The other direction matters too, and is what a mutant
+// walked through: appending an empty flag emits a bare `--db` that does not
 // parse.
 //
 // Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
-func TestStateNoteOnlyCarriesAFlagThatWasGiven(t *testing.T) {
+func TestStateNoteNamesTheDatabaseTheReaderIsUsing(t *testing.T) {
 	path := costFixture(t)
+	state := cli.StatePath(path, "")
+	name := cli.PipelineName(path)
 
 	var err error
 
-	out := captureStdout(t, func() { err = cli.Run([]string{"runs", "cost", path}) })
-	if err != nil {
-		t.Fatalf("runs cost: %v", err)
-	}
+	out := captureStdout(t, func() {
+		err = cli.Run([]string{"runs", "cost", "-p", name, "--db", state})
+	})
 
-	if strings.Contains(out, "--db") {
-		t.Errorf("the hint names a --db nobody passed:\n%s", out)
-	}
-
-	state := cli.StatePath(path, "")
-
-	out = captureStdout(t, func() { err = cli.Run([]string{"runs", "cost", path, "--db", state}) })
 	if err != nil {
 		t.Fatalf("runs cost --db: %v", err)
 	}
@@ -551,11 +547,20 @@ func TestStateNoteOnlyCarriesAFlagThatWasGiven(t *testing.T) {
 		t.Errorf("the hint drops the --db the reader is using:\n%s", out)
 	}
 
-	// The hint prints the store's own description, not the flag as typed:
-	// that is the form a driver calls safe to print, and for a network
-	// database the difference is the credentials. For sqlite it is the bare
-	// path, whichever spelling opened it.
-	out = captureStdout(t, func() { err = cli.Run([]string{"runs", "cost", path, "--db", "sqlite://" + state}) })
+	// Never a bare flag: the mutant that dropped the value emitted
+	// `--db` with nothing after it, which is a command that does not parse.
+	if strings.Contains(out, "--db \n") || strings.HasSuffix(strings.TrimRight(out, "\n"), "--db") {
+		t.Errorf("the hint names a --db with no value:\n%s", out)
+	}
+
+	// The store's own description, not the flag as typed: that is the form a
+	// driver calls safe to print, and for a network database the difference is
+	// the credentials. For sqlite it is the bare path, whichever spelling
+	// opened it.
+	out = captureStdout(t, func() {
+		err = cli.Run([]string{"runs", "cost", "-p", name, "--db", "sqlite://" + state})
+	})
+
 	if err != nil {
 		t.Fatalf("runs cost --db sqlite://: %v", err)
 	}

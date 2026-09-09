@@ -1,13 +1,8 @@
 package web
 
-// The served configuration, and the complaint about the one on disk.
-//
-// Both are read by handlers while the daemon's reload writes them, which is
-// why they live behind atomics rather than plain fields — and why the last
-// test here runs readers and a writer at once, where -race is the assertion.
+// The served configuration, which handlers read while a `steps pipeline set` writes it — hence the atomic, and hence a test that runs readers and a writer at once where -race is the assertion.
 
 import (
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -34,36 +29,11 @@ func TestSetConfigSwapsWhatIsServed(t *testing.T) {
 	}
 }
 
-func TestHoldSaysWhyTheFileOnDiskIsNotServed(t *testing.T) {
-	t.Parallel()
-
-	pipeline := NewPipeline("demo", "demo.yml", &config.Config{}, nil, nil)
-
-	if pipeline.Held() != "" {
-		t.Error("a pipeline whose file loaded is complaining about it")
-	}
-
-	pipeline.Hold(errors.New("job \"build\" wants an artifact nothing produces"))
-
-	if pipeline.Held() == "" {
-		t.Fatal("a refused load left nothing for the page to say")
-	}
-
-	// A later save that works clears it: the banner must not outlive the
-	// problem, or every page carries a complaint about a file that has since
-	// been fixed.
-	pipeline.SetConfig(&config.Config{})
-
-	if pipeline.Held() != "" {
-		t.Error("a successful load left the previous complaint standing")
-	}
-}
-
-// TestConfigIsSafeUnderAReload is the reason for the atomics: handlers read
-// the configuration while the reload writes it. Under -race a plain field
-// here fails; without -race this test proves nothing, which is why the suite
-// runs with it.
-func TestConfigIsSafeUnderAReload(t *testing.T) {
+// TestConfigIsSafeUnderASet is the reason for the atomic: handlers read the
+// configuration while a `steps pipeline set` writes it. Under -race a plain
+// field here fails; without -race this test proves nothing, which is why the
+// suite runs with it.
+func TestConfigIsSafeUnderASet(t *testing.T) {
 	t.Parallel()
 
 	pipeline := NewPipeline("demo", "demo.yml", &config.Config{Name: "first"}, nil, nil)
@@ -78,17 +48,12 @@ func TestConfigIsSafeUnderAReload(t *testing.T) {
 
 			for range 200 {
 				_ = pipeline.Config().Name
-				_ = pipeline.Held()
 			}
 		}()
 	}
 
-	for i := range 200 {
-		if i%2 == 0 {
-			pipeline.SetConfig(&config.Config{Name: "reloaded"})
-		} else {
-			pipeline.Hold(errors.New("held"))
-		}
+	for range 200 {
+		pipeline.SetConfig(&config.Config{Name: "reloaded"})
 	}
 
 	readers.Wait()

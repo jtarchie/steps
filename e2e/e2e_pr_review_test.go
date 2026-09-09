@@ -55,7 +55,7 @@ func TestEndToEndPRReviewExample(t *testing.T) {
 	// conversion is not covered by busy_timeout, so a concurrent FIRST open
 	// returns SQLITE_BUSY outright. Opening it once up front (this lists
 	// nothing) leaves both later opens attaching to a migrated file.
-	mustRun(t, "approvals", path)
+	mustRun(t, append([]string{"approvals"}, readArgs(path)...)...)
 
 	// The approval: step parks the plan, so the run has to be answered from
 	// outside it — exactly as a person would, through the same command.
@@ -229,7 +229,7 @@ func approveWhenPending(pipelinePath string, stop <-chan struct{}) error {
 	var last error
 
 	for time.Now().Before(deadline) {
-		last = cli.Run([]string{"approvals", "approve", pipelinePath, "1"})
+		last = cli.Run(append([]string{"approvals", "approve", "1"}, readArgs(pipelinePath)...))
 		if last == nil {
 			return nil
 		}

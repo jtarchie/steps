@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -62,13 +63,10 @@ const readHeaderTimeout = 5 * time.Second
 // --db), but never a store handle: each one is scoped to its own pipeline
 // row, which is what keeps their histories and caches apart.
 type Pipeline struct {
-	// Slug is the URL-safe identity a route carries, and the same string the
-	// state database records as this pipeline's name — one identity, not two
-	// that have to be kept in agreement. It is the YAML's base name without
-	// extension unless --name overrides it, and two pipelines resolving to one
-	// slug is refused at startup (see New).
+	// Slug is the name `steps pipeline set` was given: the route, the store's pipelines.name and the Config's name are ONE identity, not three kept in agreement.
 	Slug string
-	Path string
+	// path names a file on the SENDER's machine, recorded for a reader who finds a configuration nobody remembers sending, and never opened here. Behind an atomic because a later set moves it while handlers read it.
+	path atomic.Pointer[string]
 	// cfg is the configuration currently being served, swapped when the file
 	// on disk changes (see SetConfig). Unexported behind an atomic pointer
 	// because every reader of it runs concurrently with that swap — handlers
@@ -93,12 +91,6 @@ type Pipeline struct {
 	// listener on a second port of the poll loop's own; one daemon means one
 	// address.
 	Webhook http.Handler
-	// held is the error from the most recent configuration that FAILED to
-	// load, cleared by the next one that succeeds. It is what the pages say
-	// when the file on disk is not the file being served: a daemon that held
-	// its old configuration silently is a daemon serving something the
-	// operator's editor disagrees with, and nothing on the page would say so.
-	held atomic.Pointer[string]
 }
 
 // NewPipeline builds a served pipeline around the configuration it starts
@@ -108,11 +100,25 @@ type Pipeline struct {
 // pointer: it is read by handlers, the drain and the poller at once, and a
 // literal would leave it nil for whatever ran before the caller filled it in.
 func NewPipeline(slug, path string, cfg *config.Config, st store.Store, bus *events.Bus) *Pipeline {
-	pipeline := &Pipeline{Slug: slug, Path: path, Store: st, Bus: bus}
+	pipeline := &Pipeline{Slug: slug, Store: st, Bus: bus}
 	pipeline.cfg.Store(cfg)
+	pipeline.path.Store(&path)
 
 	return pipeline
 }
+
+// Path is where the served configuration was set from.
+func (p *Pipeline) Path() string {
+	path := p.path.Load()
+	if path == nil {
+		return ""
+	}
+
+	return *path
+}
+
+// SetPath records where a set that just landed was sent from.
+func (p *Pipeline) SetPath(path string) { p.path.Store(&path) }
 
 // Config is the configuration being served right now.
 //
@@ -122,43 +128,12 @@ func NewPipeline(slug, path string, cfg *config.Config, st store.Store, bus *eve
 // new one.
 func (p *Pipeline) Config() *config.Config { return p.cfg.Load() }
 
-// SetConfig swaps in a newly loaded configuration and clears whatever
-// complaint the last failed load left behind.
-func (p *Pipeline) SetConfig(cfg *config.Config) {
-	p.cfg.Store(cfg)
-	p.held.Store(nil)
-}
+// SetConfig swaps in a configuration a `steps pipeline set` just applied.
+func (p *Pipeline) SetConfig(cfg *config.Config) { p.cfg.Store(cfg) }
 
-// Clear drops the complaint about the file on disk without touching what is
-// served.
-//
-// The unchanged-file case: a load that produced the configuration already
-// running is news only if a previous one had failed. Swapping the identical
-// parse in anyway is not free — the served Config carries decisions made on
-// it in place (the command line's retention limits), and replacing it every
-// tick silently threw them away.
-func (p *Pipeline) Clear() { p.held.Store(nil) }
-
-// Hold records why the file on disk is not being served, leaving the current
-// configuration in place.
-func (p *Pipeline) Hold(err error) {
-	message := err.Error()
-	p.held.Store(&message)
-}
-
-// Held is the complaint about the file on disk, empty when it is the file
-// being served.
-func (p *Pipeline) Held() string {
-	message := p.held.Load()
-	if message == nil {
-		return ""
-	}
-
-	return *message
-}
-
-// Server serves one or more pipelines.
+// Server serves whatever has been set into it. The registry is behind a lock rather than fixed at construction because a handler, the drain and the poll loop all read it while another request writes it.
 type Server struct {
+	mu        sync.RWMutex
 	pipelines []*Pipeline
 	bySlug    map[string]*Pipeline
 	echo      *echo.Echo
@@ -175,7 +150,45 @@ type Server struct {
 	// stream renders one step with the SAME templates the page renders, which
 	// is what keeps a row drawn live and a row drawn on reload identical.
 	renderer *renderer
+	// nil in a read-only server and in a test that only reads pages, where the API refuses rather than pretending to be unimplemented.
+	manager Manager
 }
+
+// Manager applies what a `steps pipeline` verb asks for. An interface for the reason Runner is one: this package serves the surface and chooses neither a store driver nor a workspace provider.
+type Manager interface {
+	// Set applies a configuration under name, creating the pipeline if this
+	// daemon does not hold one. expectSHA is the revision the sender diffed
+	// against: empty means "I did not look", and a mismatch is refused rather
+	// than applied over whatever arrived in between.
+	Set(ctx context.Context, name string, req SetRequest) (SetResult, error)
+	Destroy(ctx context.Context, name string) error
+	Rename(ctx context.Context, from, to string) error
+}
+
+// SetRequest is one upload: the substituted YAML, the files it includes, and the revision the sender believed it was replacing.
+type SetRequest struct {
+	Source string `json:"source"`
+	// A daemon has no sibling filesystem, so an include that does not travel here cannot be resolved at all — see config.Bundle.
+	Includes map[string]string `json:"includes,omitempty"`
+	// ExpectSHA is the compare-and-set. Empty means the sender did not look, which a script may legitimately do.
+	ExpectSHA string `json:"expect_sha,omitempty"`
+	// From is the SENDER's path, recorded for a reader wondering where a served configuration came from, and never opened here.
+	From string `json:"from,omitempty"`
+}
+
+// SetResult is what the daemon did, so the terminal that asked can say so.
+type SetResult struct {
+	SHA string `json:"sha"`
+	// Created, replaced and unchanged are three outcomes a person reads differently, so the answer says which.
+	Created   bool `json:"created"`
+	Unchanged bool `json:"unchanged"`
+}
+
+// ErrRevisionMoved is a compare-and-set the daemon refused: the configuration moved between the sender's diff and its set.
+var ErrRevisionMoved = errors.New("the pipeline's configuration changed since it was read")
+
+// ErrNoSuchPipeline is a verb naming a pipeline this daemon does not hold.
+var ErrNoSuchPipeline = errors.New("no such pipeline")
 
 // Runner is what the web layer needs in order to act rather than only
 // report: enqueue a job for execution, and report what is currently running.
@@ -186,21 +199,15 @@ type Runner interface {
 	Enqueue(ctx context.Context, pipeline *Pipeline, jobName, reason string, force bool) (int64, error)
 }
 
-// New builds a server over already-loaded pipelines. runner may be nil, in
-// which case the UI is read-only and says so.
+// New builds a server over whatever pipelines it is handed, which may be none: a daemon is configured by `steps pipeline set` and by nothing else, so empty is the ordinary starting state rather than an error.
 func New(pipelines []*Pipeline, runner Runner) (*Server, error) {
-	if len(pipelines) == 0 {
-		return nil, errors.New("web: no pipelines to serve")
-	}
-
-	srv := &Server{pipelines: pipelines, bySlug: map[string]*Pipeline{}, runner: runner}
+	srv := &Server{bySlug: map[string]*Pipeline{}, runner: runner}
 
 	for _, pipeline := range pipelines {
-		if _, clash := srv.bySlug[pipeline.Slug]; clash {
-			return nil, fmt.Errorf("web: two pipelines resolve to the same slug %q", pipeline.Slug)
+		err := srv.Add(pipeline)
+		if err != nil {
+			return nil, err
 		}
-
-		srv.bySlug[pipeline.Slug] = pipeline
 	}
 
 	err := srv.routes()
@@ -211,14 +218,69 @@ func New(pipelines []*Pipeline, runner Runner) (*Server, error) {
 	return srv, nil
 }
 
-// Slugify turns a pipeline path into its URL identity.
+// SetManager is separate from New because the manager needs the server it registers into.
+func (s *Server) SetManager(manager Manager) { s.manager = manager }
+
+// Add starts serving a pipeline, refusing a name already held.
+func (s *Server) Add(pipeline *Pipeline) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, clash := s.bySlug[pipeline.Slug]; clash {
+		return fmt.Errorf("web: this daemon already serves a pipeline called %q", pipeline.Slug)
+	}
+
+	s.bySlug[pipeline.Slug] = pipeline
+	s.pipelines = append(s.pipelines, pipeline)
+
+	sort.Slice(s.pipelines, func(i, j int) bool { return s.pipelines[i].Slug < s.pipelines[j].Slug })
+
+	return nil
+}
+
+// Remove hands the pipeline back so the caller can shut down what it started for it, and nil when this daemon was not serving one.
+func (s *Server) Remove(slug string) *Pipeline {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	pipeline, held := s.bySlug[slug]
+	if !held {
+		return nil
+	}
+
+	delete(s.bySlug, slug)
+
+	kept := s.pipelines[:0]
+
+	for _, other := range s.pipelines {
+		if other.Slug != slug {
+			kept = append(kept, other)
+		}
+	}
+
+	s.pipelines = kept
+
+	return pipeline
+}
+
+// Lookup is the pipeline served under slug, nil when this daemon holds none.
 //
-// Delegated rather than computed, because the /p/<slug> route, the store's
-// pipelines.name and the Config's own name are ONE identity: a second copy of
-// this three-line function is how they came apart before, and two copies that
-// agree today are two copies that can stop agreeing.
-func Slugify(path string) string {
-	return config.Slugify(path)
+// One return rather than the comma-ok a map gives, because the two say the
+// same thing and a caller that reads the bool and keeps the pointer is exactly
+// the shape a nil-flow analyzer cannot follow.
+func (s *Server) Lookup(slug string) *Pipeline {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.bySlug[slug]
+}
+
+// Served is what this daemon holds right now, by slug.
+func (s *Server) Served() []*Pipeline {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return append([]*Pipeline(nil), s.pipelines...)
 }
 
 // routes wires the handler table and the middleware every route shares.
@@ -285,6 +347,15 @@ func (s *Server) routes() error {
 	// webhook sender is cross-origin by definition.
 	group.POST("/check/:resource", s.handleWebhook)
 
+	// Outside the /p/ group because a set may CREATE the pipeline it names, and that middleware resolves one that exists.
+	e.GET("/api/pipelines", s.handleAPIList)
+	e.GET("/api/pipelines/:pipeline", s.handleAPIGet)
+	e.PUT("/api/pipelines/:pipeline", s.handleAPISet)
+	e.DELETE("/api/pipelines/:pipeline", s.handleAPIDestroy)
+	e.POST("/api/pipelines/:pipeline/pause", s.handleAPIPause)
+	e.POST("/api/pipelines/:pipeline/unpause", s.handleAPIUnpause)
+	e.POST("/api/pipelines/:pipeline/rename", s.handleAPIRename)
+
 	s.echo = e
 
 	return nil
@@ -324,8 +395,8 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 // pipeline every handler under /p/ works from.
 func (s *Server) resolvePipeline(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		pipeline, ok := s.bySlug[c.Param("pipeline")]
-		if !ok {
+		pipeline := s.Lookup(c.Param("pipeline"))
+		if pipeline == nil {
 			return echo.NewHTTPError(http.StatusNotFound, "no such pipeline")
 		}
 
@@ -390,6 +461,15 @@ func (s *Server) handleError(err error, c echo.Context) {
 		message = fmt.Sprintf("%v", httpErr.Message)
 	}
 
+	// The API answers a terminal, not a browser, and a page of HTML where a
+	// refusal was expected is a `steps pipeline set` that cannot say why it
+	// was refused — which is the one thing this transport exists to do.
+	if strings.HasPrefix(c.Path(), "/api/") {
+		_ = c.JSON(status, map[string]string{"message": message})
+
+		return
+	}
+
 	// globalNav, not nav: most errors fire where no pipeline resolved (a bad
 	// slug, a stray 404), and bare nav leaves Current empty — every tab then
 	// links /p//…, which 404s straight back into this handler.
@@ -427,10 +507,10 @@ func (s *Server) globalNav(c echo.Context) navData {
 func (s *Server) nav(c echo.Context) navData {
 	nav := navData{ReadOnly: s.runner == nil, URL: c.Request().URL.RequestURI()}
 
-	for _, pipeline := range s.pipelines {
+	for _, pipeline := range s.Served() {
 		nav.Pipelines = append(nav.Pipelines, pipelineSummary{
 			Slug: pipeline.Slug,
-			Path: pipeline.Path,
+			Path: pipeline.Path(),
 			Jobs: len(pipeline.Config().Jobs),
 		})
 	}
@@ -445,8 +525,8 @@ func (s *Server) nav(c echo.Context) navData {
 	}
 
 	nav.Current = current.Slug
-	nav.CurrentPath = current.Path
-	nav.Held = current.Held()
+	nav.CurrentPath = current.Path()
+	nav.Paused = paused(c.Request().Context(), current)
 
 	pending, err := current.Store.Approvals(c.Request().Context(), true, 0)
 	if err == nil {
@@ -475,11 +555,19 @@ type navData struct {
 	PendingApprovals int
 	PendingQuestions int
 	ReadOnly         bool
-	// Held is why the file on disk is not the file being served, empty when
-	// they agree. On the nav rather than one page's data because it is a fact
-	// about the whole daemon: every page of this pipeline is rendering a
-	// configuration the operator's editor no longer shows.
-	Held string
+	// On the nav because it is a fact about every page: a board of green jobs that has stopped moving has to say why.
+	Paused bool
+}
+
+// Answers false when the store cannot say: a page that fails to draw is worse than a missing banner.
+func paused(ctx context.Context, target *Pipeline) bool {
+	if target.Store == nil {
+		return false
+	}
+
+	is, err := target.Store.Paused(ctx)
+
+	return err == nil && is
 }
 
 type pipelineSummary struct {

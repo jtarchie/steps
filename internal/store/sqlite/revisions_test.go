@@ -33,7 +33,7 @@ func TestRecordRevisionInternsOneRowPerConfiguration(t *testing.T) {
 	defer func() { _ = st.Close() }()
 
 	for range 5 {
-		err := st.RecordRevision(ctx, "sha-one", pipelineSource(1))
+		err := st.RecordRevision(ctx, "sha-one", pipelineSource(1), nil)
 		if err != nil {
 			t.Fatalf("RecordRevision: %v", err)
 		}
@@ -43,7 +43,7 @@ func TestRecordRevisionInternsOneRowPerConfiguration(t *testing.T) {
 		t.Errorf("one configuration loaded five times recorded %d rows, want 1", rows)
 	}
 
-	err := st.RecordRevision(ctx, "sha-two", pipelineSource(2))
+	err := st.RecordRevision(ctx, "sha-two", pipelineSource(2), nil)
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestTheNewestRevisionSurvivesRetention(t *testing.T) {
 	}
 
 	// The swap: loaded, and referenced by nothing that has run yet.
-	err := st.RecordRevision(ctx, "sha-current", pipelineSource(2))
+	err := st.RecordRevision(ctx, "sha-current", pipelineSource(2), nil)
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestRevisionsAreBoundedWithoutAnyRunsBeingReaped(t *testing.T) {
 	defer func() { _ = st.Close() }()
 
 	for edit := 1; edit <= 50; edit++ {
-		err := st.RecordRevision(ctx, fmt.Sprintf("sha-%03d", edit), pipelineSource(edit))
+		err := st.RecordRevision(ctx, fmt.Sprintf("sha-%03d", edit), pipelineSource(edit), nil)
 		if err != nil {
 			t.Fatalf("RecordRevision: %v", err)
 		}
@@ -190,7 +190,7 @@ func TestRevisionsAreBoundedWhenRunsAreUnlimited(t *testing.T) {
 	defer func() { _ = st.Close() }()
 
 	for edit := 1; edit <= 20; edit++ {
-		err := st.RecordRevision(ctx, fmt.Sprintf("sha-%03d", edit), pipelineSource(edit))
+		err := st.RecordRevision(ctx, fmt.Sprintf("sha-%03d", edit), pipelineSource(edit), nil)
 		if err != nil {
 			t.Fatalf("RecordRevision: %v", err)
 		}
@@ -224,7 +224,7 @@ func TestARevertedConfigurationSurvivesTheSweep(t *testing.T) {
 
 	// The original, and a run under it: without one, the first sweep reclaims
 	// it and the revert mints a fresh id, which is the case that already works.
-	err := st.RecordRevision(ctx, "sha-original", pipelineSource(1))
+	err := st.RecordRevision(ctx, "sha-original", pipelineSource(1), nil)
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestARevertedConfigurationSurvivesTheSweep(t *testing.T) {
 
 	// The edit, then the revert. The daemon is serving sha-original again.
 	for _, sha := range []string{"sha-edited", "sha-original"} {
-		err = st.RecordRevision(ctx, sha, pipelineSource(2))
+		err = st.RecordRevision(ctx, sha, pipelineSource(2), nil)
 		if err != nil {
 			t.Fatalf("RecordRevision(%s): %v", sha, err)
 		}

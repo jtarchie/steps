@@ -188,7 +188,7 @@ func recordRunIdentity(
 	ctx context.Context, st store.Store, resume *resumeState, jobName, workspaceRoot string, revision config.Revision,
 ) error {
 	if revision.Recorded() {
-		err := st.RecordRevision(ctx, revision.SHA, revision.Source)
+		err := st.RecordRevision(ctx, revision.SHA, revision.Source, revision.Includes)
 		if err != nil {
 			return fmt.Errorf("job %q: %w", jobName, err)
 		}

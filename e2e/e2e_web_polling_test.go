@@ -21,24 +21,31 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // webProcess is a backgrounded `steps web` and the address it serves on.
 type webProcess struct {
 	addr string
-	done chan error
+	// state is the database this daemon holds its pipelines in, so a test can
+	// read back what it recorded without deriving a path from a file.
+	state string
+	done  chan error
+	// stopped guards the second stop. A stop SIGNALS THIS PROCESS, so calling
+	// it once nothing is trapping the signal kills the test binary outright —
+	// which is what a deferred cleanup after an explicit stop would do.
+	stopped bool
 }
 
 // startWeb launches the command on a free loopback port and returns once it
 // answers, so a test never signals a process that has not installed its
 // signal handler yet.
-func startWeb(t *testing.T, pipelinePaths []string, args ...string) *webProcess {
+func startWeb(t *testing.T, args ...string) *webProcess {
 	t.Helper()
 
 	served := &webProcess{addr: freeAddr(t), done: make(chan error, 1)}
-	argv := append([]string{"web"}, pipelinePaths...)
-	argv = append(argv, "--listen", served.addr)
-	argv = append(argv, args...)
+	argv := append([]string{"web", "--listen", served.addr}, args...)
 
 	go func() { served.done <- cli.Run(argv) }()
 
@@ -71,10 +78,18 @@ func startWeb(t *testing.T, pipelinePaths []string, args ...string) *webProcess 
 }
 
 // probe is one bounded GET against the served address.
+//
+// Keep-alives off, and that is not tidiness: a pooled connection is one
+// http.Server.Shutdown waits the full grace period for, so every daemon a test
+// stops would cost five seconds — which is most of what the end-to-end suite's
+// wall clock became once a poll was a daemon rather than an invocation.
 func probe(t *testing.T, addr string) (*http.Response, error) {
 	t.Helper()
 
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{
+		Timeout:   2 * time.Second,
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/", nil)
 	if err != nil {
@@ -92,6 +107,17 @@ func probe(t *testing.T, addr string) (*http.Response, error) {
 // The already-exited check is not politeness: signal delivery is untrapped
 // once a command finishes (main.go's withSignalCancel stops it on the way
 // out), so signalling a dead command kills the test binary outright.
+// stopIfRunning is stop for a deferred cleanup that may run after an explicit stop.
+func (w *webProcess) stopIfRunning(t *testing.T) {
+	t.Helper()
+
+	if w.stopped {
+		return
+	}
+
+	w.stop(t)
+}
+
 func (w *webProcess) stop(t *testing.T) {
 	t.Helper()
 
@@ -100,6 +126,8 @@ func (w *webProcess) stop(t *testing.T) {
 		t.Fatalf("web exited on its own before it was stopped: %v", exited)
 	default:
 	}
+
+	w.stopped = true
 
 	err := syscall.Kill(syscall.Getpid(), syscall.SIGINT)
 	if err != nil {
@@ -132,6 +160,210 @@ func freeAddr(t *testing.T) string {
 	return addr
 }
 
+// startWebFor is the ordinary shape of an end-to-end test now: a daemon on its own state database, with one pipeline set into it.
+func startWebFor(t *testing.T, path string, args ...string) *webProcess {
+	t.Helper()
+
+	skip := false
+
+	kept := make([]string, 0, len(args))
+
+	for _, arg := range args {
+		// --skip-set starts the daemon without setting anything, for a test whose subject is the set itself.
+		if arg == "--skip-set" {
+			skip = true
+
+			continue
+		}
+
+		kept = append(kept, arg)
+	}
+
+	state := filepath.Join(filepath.Dir(path), "daemon.db")
+
+	served := startWeb(t, append([]string{"--db", state}, kept...)...)
+	served.state = state
+
+	if !skip {
+		served.set(t, cli.PipelineName(path), path)
+	}
+
+	return served
+}
+
+// settleChecks is how many consecutive quiet reads of the queue count as a
+// poll-and-drain cycle finished. Three, spaced a poll apart: one is a queue
+// that has not been filled yet, and two is a queue between a poll and the
+// claim it caused.
+const settleChecks = 3
+
+// settle is what `steps web --once` returning used to mean: one whole
+// poll-and-drain cycle, finished.
+//
+// Both halves are load-bearing. Waiting only for an idle queue answers
+// immediately — before the poll that would fill it has run — so it first waits
+// for a check to LAND after this call started, which is what proves the daemon
+// has seen whatever the test just wrote. Then it waits for the drain behind
+// that check, several intervals in a row, because a queue between a poll and
+// the claim it caused is momentarily empty too.
+//
+// ONE handle for the whole wait, deliberately: opening a sqlite database is
+// the expensive part of a probe, and at two opens per 60ms tick this put the
+// end-to-end suite past its own timeout under -race.
+func settle(t *testing.T, state, name string, resources ...string) {
+	t.Helper()
+
+	st := waitForStore(t, state, name)
+	defer func() { _ = st.Close() }()
+
+	before := lastCheck(t, st, resources)
+	deadline := time.Now().Add(60 * time.Second)
+	quiet := 0
+
+	for time.Now().Before(deadline) {
+		if lastCheck(t, st, resources).After(before) && queueIsIdle(t, st) {
+			quiet++
+			if quiet >= settleChecks {
+				return
+			}
+		} else {
+			quiet = 0
+		}
+
+		time.Sleep(60 * time.Millisecond)
+	}
+
+	t.Fatalf("the daemon never completed a poll-and-drain cycle for %s", name)
+}
+
+// waitForStore opens the daemon's database once the pipeline set into it is
+// actually there, which a set has to land before.
+func waitForStore(t *testing.T, state, name string) store.Store {
+	t.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+
+	for time.Now().Before(deadline) {
+		st, err := sqlite.OpenExisting(state, name)
+		if err == nil {
+			return st
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatalf("the daemon never recorded a pipeline called %s in %s", name, state)
+
+	return nil
+}
+
+// lastCheck is the newest moment any of these resources was checked, zero
+// until the daemon has checked one.
+func lastCheck(t *testing.T, st store.Store, resources []string) time.Time {
+	t.Helper()
+
+	var newest time.Time
+
+	for _, resource := range resources {
+		checked, found, err := st.LastChecked(t.Context(), resource)
+		if err != nil {
+			t.Fatalf("LastChecked(%s): %v", resource, err)
+		}
+
+		if found && checked.CheckedAt.After(newest) {
+			newest = checked.CheckedAt
+		}
+	}
+
+	return newest
+}
+
+// queueIsIdle reports a pipeline with nothing pending and nothing running.
+func queueIsIdle(t *testing.T, st store.Store) bool {
+	t.Helper()
+
+	rows, err := st.ListTriggerQueue(t.Context(), 50)
+	if err != nil {
+		t.Fatalf("ListTriggerQueue: %v", err)
+	}
+
+	for _, row := range rows {
+		if row.Status == "pending" || row.Status == "running" {
+			return false
+		}
+	}
+
+	return true
+}
+
+// queueHasFailure reports a pipeline any of whose queued jobs failed, which is where a daemon records what an exit code used to say.
+func queueHasFailure(t *testing.T, state, name string) bool {
+	t.Helper()
+
+	st, err := sqlite.OpenExisting(state, name)
+	if err != nil {
+		t.Fatalf("open state store: %v", err)
+	}
+
+	defer func() { _ = st.Close() }()
+
+	rows, err := st.ListTriggerQueue(t.Context(), 50)
+	if err != nil {
+		t.Fatalf("ListTriggerQueue: %v", err)
+	}
+
+	for _, row := range rows {
+		if row.Status == "failed" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// enqueueDirectly puts a row on a pipeline's queue without going through the
+// daemon, which is how a test arranges work that was queued before a pause.
+func enqueueDirectly(t *testing.T, state, name, job string) {
+	t.Helper()
+
+	st, err := sqlite.OpenExisting(state, name)
+	if err != nil {
+		t.Fatalf("open state store: %v", err)
+	}
+
+	defer func() { _ = st.Close() }()
+
+	err = st.EnqueueJob(t.Context(), job, "test")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+}
+
+// queueHasPending reports a row still waiting to be claimed.
+func queueHasPending(t *testing.T, state, name string) bool {
+	t.Helper()
+
+	st, err := sqlite.OpenExisting(state, name)
+	if err != nil {
+		t.Fatalf("open state store: %v", err)
+	}
+
+	defer func() { _ = st.Close() }()
+
+	rows, err := st.ListTriggerQueue(t.Context(), 50)
+	if err != nil {
+		t.Fatalf("ListTriggerQueue: %v", err)
+	}
+
+	for _, row := range rows {
+		if row.Status == "pending" {
+			return true
+		}
+	}
+
+	return false
+}
+
 // waitForDid blocks until the job has processed exactly these versions.
 func waitForDid(t *testing.T, fixture *watchFixture, want ...string) {
 	t.Helper()
@@ -157,7 +389,7 @@ func TestWebPollsTriggerResourcesByDefault(t *testing.T) {
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 1)
 
-	served := startWeb(t, []string{fixture.pipeline}, "--interval", "200ms")
+	served := startWebFor(t, fixture.pipeline, "--interval", "200ms")
 	defer served.stop(t)
 
 	// The first poll is a cold start, which builds the newest version it
@@ -170,8 +402,8 @@ func TestWebPollsTriggerResourcesByDefault(t *testing.T) {
 }
 
 // newWatchFixtureIn writes a fixture into a directory that may already hold
-// another one, which is how pipelines actually sit next to each other —
-// `steps web app.yml infra.yml nightly.yml` is one repo folder, not three.
+// another one, which is how pipelines actually sit next to each other — one
+// daemon serving several is one repo folder, not three.
 func newWatchFixtureIn(t *testing.T, dir, name, pipelineYAML string) *watchFixture {
 	t.Helper()
 
@@ -180,6 +412,9 @@ func newWatchFixtureIn(t *testing.T, dir, name, pipelineYAML string) *watchFixtu
 		pipeline:  filepath.Join(dir, name+".yml"),
 		feed:      filepath.Join(dir, name+"-feed.txt"),
 		processed: filepath.Join(dir, name+"-processed.txt"),
+		db:        filepath.Join(dir, "daemon.db"),
+		name:      name,
+		resources: []string{"items"},
 	}
 
 	body := strings.NewReplacer("FEED", fixture.feed, "PROCESSED", fixture.processed).Replace(pipelineYAML)
@@ -192,10 +427,9 @@ func newWatchFixtureIn(t *testing.T, dir, name, pipelineYAML string) *watchFixtu
 	return fixture
 }
 
-// TestStatePathIsPerPipelineFile pins the DEFAULT every claim about serving
-// several pipelines rests on. Keyed by directory, two pipelines in one folder
-// would share a database by accident of layout rather than because anyone
-// asked — which is what --db is for, and why it is not the default.
+// TestStatePathIsPerPipelineFile pins the DEFAULT the file-driven commands
+// rest on. Keyed by directory, two pipelines in one folder would share a
+// database by accident of layout rather than because anyone asked.
 func TestStatePathIsPerPipelineFile(t *testing.T) {
 	first := cli.StatePath("/srv/pipelines/app.yml", "")
 	second := cli.StatePath("/srv/pipelines/infra.yml", "")
@@ -214,6 +448,19 @@ func TestStatePathIsPerPipelineFile(t *testing.T) {
 	}
 }
 
+// TestDaemonStatePathHasNoFileToDeriveFrom: a daemon is handed pipelines by
+// name, so its database cannot be named after a YAML — and the read commands
+// have to look in the same place or they answer about nothing.
+func TestDaemonStatePathHasNoFileToDeriveFrom(t *testing.T) {
+	if got := cli.DaemonStatePath(""); got != cli.DefaultDaemonState {
+		t.Errorf("the daemon's default state is %q, want %q", got, cli.DefaultDaemonState)
+	}
+
+	if got := cli.DaemonStatePath("/var/lib/steps.db"); got != "/var/lib/steps.db" {
+		t.Errorf("--db was ignored: %q", got)
+	}
+}
+
 // TestWebPollsEveryPipelineItServes is the multi-pipeline case the routing
 // already implies, in the layout people actually use: both pipelines in ONE
 // directory. Each gets its own state.db, its own poller, its own watch lock
@@ -227,8 +474,11 @@ func TestWebPollsEveryPipelineItServes(t *testing.T) {
 	first.items(t, 1)
 	second.items(t, 1)
 
-	served := startWeb(t, []string{first.pipeline, second.pipeline}, "--interval", "200ms")
+	served := startWeb(t, "--db", filepath.Join(dir, "daemon.db"), "--interval", "200ms")
 	defer served.stop(t)
+
+	served.set(t, "app", first.pipeline)
+	served.set(t, "infra", second.pipeline)
 
 	waitForDid(t, first, "1")
 	waitForDid(t, second, "1")
@@ -245,14 +495,12 @@ func TestWebPollsEveryPipelineItServes(t *testing.T) {
 // and notices nothing — the exact confusion this command polls by default to
 // remove.
 func TestWebRejectsANonPositiveInterval(t *testing.T) {
-	fixture := newWatchFixture(t, cursorFeed)
-
 	// Port 1 is unbindable as an ordinary user, so a regression fails in a
 	// second instead of serving forever. Mutation testing is what made this
 	// non-optional: with the guard weakened, --interval 0 was ACCEPTED and
 	// this test blocked until the run's own timeout — one mutant stalled a
 	// seven-hour run for an hour and forty minutes.
-	err := cli.Run([]string{"web", fixture.pipeline, "--listen", "127.0.0.1:1", "--interval", "0"})
+	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--interval", "0"})
 	if err == nil {
 		t.Fatal("--interval 0 was accepted; it silently disables polling")
 	}
@@ -260,4 +508,11 @@ func TestWebRejectsANonPositiveInterval(t *testing.T) {
 	if !strings.Contains(err.Error(), "--interval") {
 		t.Errorf("error %q does not name the flag that is wrong", err)
 	}
+}
+
+// readArgs names the pipeline a file-driven `steps run` recorded, for the read
+// commands — which take a name and a database, because a pipeline set into a
+// daemon has no file here to derive either from.
+func readArgs(path string) []string {
+	return []string{"-p", cli.PipelineName(path), "--db", cli.StatePath(path, "")}
 }

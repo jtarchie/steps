@@ -9,6 +9,12 @@ package sqlite
 //
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
+// 10 made pipelines the thing a daemon HOLDS rather than a name it was handed:
+// current_revision_id, paused_at, set_from and set_at on pipelines, and
+// revision_includes beside pipeline_revisions. An older file lacks the
+// columns every `steps pipeline set` names, and a daemon starting against it
+// would serve nothing and say nothing.
+//
 // 9 dropped job_runs.status, .error and .created_at: the table now holds only
 // green chains, a failure being a DELETE. A failed chain used to be a row
 // too, and a job failing through fresh content each time pushed the green
@@ -43,7 +49,7 @@ package sqlite
 // 4 put pipeline_id into the keys of run_placements and agent_usage. Without
 // it, two pipelines sharing a state file collided on (run_id, node_hash) and
 // one upserted over the other's row.
-const schemaVersion = 9
+const schemaVersion = 10
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -51,19 +57,38 @@ const schema = `
 -- pipeline-scoped table below carries a pipeline_id, and deleting a row here
 -- takes that pipeline's entire history with it.
 --
--- The name is the identity, not the path. It defaults to the YAML's base name
--- and can be set with --name, because two repositories each holding a
--- pipeline.yml are two pipelines and one file name. Renaming is therefore a
--- new identity with new state, which is the honest answer: nothing in a
--- content-addressed cache can tell a rename from a different pipeline.
+-- The name is the identity, chosen by whoever set the pipeline rather than
+-- derived from a file name. Every scoped row reaches this table by id, which
+-- is what lets steps pipeline rename be one UPDATE that keeps history --
+-- unlike a filename-derived identity, where a rename was a different
+-- pipeline because nothing in a content-addressed cache can tell the two
+-- apart.
 --
 -- path is recorded for humans reading the database (steps runs, the web UI's
 -- pipeline list) and is deliberately NOT unique: the same file checked out at
 -- two paths under two names is a legitimate thing to do.
+--
+-- current_revision_id is what makes the daemon HOLD a pipeline: steps
+-- pipeline set records a revision and points this at it, and steps web
+-- serves exactly the rows that have one. NULL for a pipeline that only ever
+-- ran by hand. RESTRICT, so the revision a daemon is serving cannot be reaped
+-- out from under it by retention -- pruneRevisions exempts it, and the
+-- constraint is what makes forgetting that an error rather than a daemon
+-- that restarts into nothing. Delete clears it first, in the same
+-- transaction, which is what lets the pipeline's own cascade proceed.
+--
+-- paused_at is the pipeline-level circuit breaker: set, nothing polls and
+-- nothing is admitted. set_from and set_at say where and when the current
+-- revision was uploaded from, for a reader who finds a pipeline serving a
+-- configuration nobody remembers sending.
 CREATE TABLE IF NOT EXISTS pipelines (
     id   INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
-    path TEXT NOT NULL
+    path TEXT NOT NULL,
+    current_revision_id INTEGER REFERENCES pipeline_revisions(id) ON DELETE RESTRICT,
+    paused_at TEXT,
+    set_from  TEXT NOT NULL DEFAULT '',
+    set_at    TEXT
 );
 
 -- The interned merkle preimage: what each node's hash was computed FROM.
@@ -352,6 +377,22 @@ CREATE TABLE IF NOT EXISTS pipeline_revisions (
     loaded_at   TEXT NOT NULL,
     UNIQUE (pipeline_id, sha)
 );
+
+-- The files a revision folded in — every run_file:, system_file: and
+-- message file — by the path the pipeline names them. A revision's sha covers
+-- these (see config.Revision), so two revisions with one source and
+-- different scripts are two rows above and two sets here.
+--
+-- Stored because a daemon has no sibling filesystem: steps pipeline set
+-- uploads the includes as a bundle, and a restart has to rebuild the served
+-- configuration from this table and nothing else. Cascades off the revision,
+-- which is the only thing that names it.
+CREATE TABLE IF NOT EXISTS revision_includes (
+    revision_id INTEGER NOT NULL REFERENCES pipeline_revisions(id) ON DELETE CASCADE,
+    path        TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    PRIMARY KEY (revision_id, path)
+) WITHOUT ROWID;
 
 -- One row per run invocation, with the steps it got through. It is what
 -- --resume reads: not "has this content succeeded before" (that is the merkle

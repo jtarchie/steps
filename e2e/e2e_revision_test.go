@@ -123,7 +123,7 @@ func TestRunsReportTheConfigTheyRan(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = cli.Run([]string{"runs", pipeline, "--db", state})
+		runErr = cli.Run([]string{"runs", "-p", cli.PipelineName(pipeline), "--db", state})
 	})
 
 	if runErr != nil {
@@ -173,7 +173,7 @@ func TestRunsSeparateConfigsThatDifferOnlyByVars(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = cli.Run([]string{"runs", pipeline, "--db", state})
+		runErr = cli.Run([]string{"runs", "-p", cli.PipelineName(pipeline), "--db", state})
 	})
 
 	if runErr != nil {
@@ -212,7 +212,7 @@ func TestResumeRecordsTheConfigurationThatFixedIt(t *testing.T) {
 	runID := resumeID(t, out)
 
 	broken := configColumn(t, captureStdout(t, func() {
-		err := cli.Run([]string{"runs", path, "--db", state})
+		err := cli.Run([]string{"runs", "-p", cli.PipelineName(path), "--db", state})
 		if err != nil {
 			t.Fatalf("steps runs: %v", err)
 		}
@@ -227,7 +227,7 @@ func TestResumeRecordsTheConfigurationThatFixedIt(t *testing.T) {
 	}
 
 	fixed := configColumn(t, captureStdout(t, func() {
-		err := cli.Run([]string{"runs", path, "--db", state})
+		err := cli.Run([]string{"runs", "-p", cli.PipelineName(path), "--db", state})
 		if err != nil {
 			t.Fatalf("steps runs: %v", err)
 		}

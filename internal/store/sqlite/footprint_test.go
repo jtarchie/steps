@@ -129,7 +129,7 @@ func syntheticRevision(ctx context.Context, t *testing.T, st *Store, build int) 
 
 	sha := fmt.Sprintf("sha-%s-%04d", st.pipeline, build)
 
-	err := st.RecordRevision(ctx, sha, syntheticPipelineSource(build))
+	err := st.RecordRevision(ctx, sha, syntheticPipelineSource(build), nil)
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}

@@ -7,16 +7,9 @@ package cli
 
 import (
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/events"
-	"github.com/jtarchie/steps/internal/store/sqlite"
-	"github.com/jtarchie/steps/internal/web"
 )
 
 // captureStdout runs fn with os.Stdout redirected and returns what it wrote.
@@ -77,70 +70,4 @@ jobs:
 `)
 
 	return path
-}
-
-// webServerFor opens a read-only server over an already-run pipeline, the way
-// `steps web --read-only` would.
-func webServerFor(t *testing.T, pipelinePath string) (*web.Server, *web.Pipeline) {
-	t.Helper()
-
-	cfg, err := config.LoadConfig(pipelinePath)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-
-	st, err := sqlite.OpenStore(StatePath(pipelinePath, ""), PipelineName(pipelinePath))
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-
-	t.Cleanup(func() { _ = st.Close() })
-
-	pipeline := web.NewPipeline(web.Slugify(pipelinePath), pipelinePath, cfg, st, events.New(nil))
-
-	server, err := web.New([]*web.Pipeline{pipeline}, nil)
-	if err != nil {
-		t.Fatalf("web.New: %v", err)
-	}
-
-	return server, pipeline
-}
-
-// webPipelineWithVars is webServerFor's pipeline half, loaded under the vars
-// the daemon was started with — which is what makes a --vars-file part of
-// the configuration a reload compares against.
-func webPipelineWithVars(t *testing.T, pipelinePath string, vars VarFlags) *web.Pipeline {
-	t.Helper()
-
-	slug := web.Slugify(pipelinePath)
-
-	cfg, err := vars.Load(pipelinePath, slug)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	st, err := sqlite.OpenStore(StatePath(pipelinePath, ""), slug)
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-
-	t.Cleanup(func() { _ = st.Close() })
-
-	err = RecordRevision(t.Context(), st, cfg)
-	if err != nil {
-		t.Fatalf("RecordRevision: %v", err)
-	}
-
-	return web.NewPipeline(slug, pipelinePath, cfg, st, events.New(nil))
-}
-
-// webGet performs a GET against the server and returns status and body.
-func webGet(t *testing.T, server *web.Server, target string) (int, string) {
-	t.Helper()
-
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, nil)
-	rec := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, req)
-
-	return rec.Code, rec.Body.String()
 }

@@ -110,7 +110,7 @@ func TestConfigPageLightsTheRunsTab(t *testing.T) {
 
 	const sha = "dddd111122223333"
 
-	err := pipeline.Store.RecordRevision(context.Background(), sha, "jobs: []\n")
+	err := pipeline.Store.RecordRevision(context.Background(), sha, "jobs: []\n", nil)
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}

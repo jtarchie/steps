@@ -1,82 +1,15 @@
 package e2e
 
-// `steps web --once` and the webhook route: the two things `steps web` did
-// that the daemon had to grow before that command could go.
-//
-// --once is the cron form — poll, drain, exit — and its distinguishing
-// property is what it does NOT do: bind the listen address. A one-shot that
-// left a listener behind would be a daemon with extra steps, and a port
-// opened for the duration of one poll is a port nothing has time to reach.
+// The webhook route: an outside system saying "check this resource now", on the one address the daemon serves.
 
 import (
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
 )
-
-// TestWebOnceNeverBinds is the property that makes --once usable from cron.
-//
-// It is asserted by HOLDING the address the command would bind: a --once that
-// tried to serve would fail to listen, and this test would see the error
-// instead of the work.
-func TestWebOnceNeverBinds(t *testing.T) {
-	fixture := newWatchFixture(t, cursorFeed)
-	fixture.items(t, 1)
-
-	var config net.ListenConfig
-
-	listener, err := config.Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer func() { _ = listener.Close() }()
-
-	err = cli.Run([]string{"web", fixture.pipeline, "--once", "--listen", listener.Addr().String()})
-	if err != nil {
-		t.Fatalf("web --once: %v", err)
-	}
-
-	// It polled and it ran: the point of a one-shot is that it does the work,
-	// not merely that it exits.
-	if did := fixture.did(t); strings.Join(did, " ") != "1" {
-		t.Errorf("processed %v, want the one version the feed held", did)
-	}
-}
-
-// TestWebOnceDrainsWhatItEnqueued: one poll can enqueue several jobs, so
-// "once" means one POLL rather than one build. It has to keep draining until
-// the queue is empty, or a cron-driven steps quietly falls behind by however
-// many versions arrived between ticks.
-func TestWebOnceDrainsWhatItEnqueued(t *testing.T) {
-	fixture := newWatchFixture(t, cursorFeed)
-	fixture.items(t, 3)
-
-	// The first poll is a cold start, which answers the newest version and
-	// records the rest as taken — see docs/resources.md. That is what makes
-	// the SECOND poll the interesting one.
-	err := cli.Run([]string{"web", fixture.pipeline, "--once"})
-	if err != nil {
-		t.Fatalf("web --once: %v", err)
-	}
-
-	fixture.items(t, 5)
-
-	err = cli.Run([]string{"web", fixture.pipeline, "--once"})
-	if err != nil {
-		t.Fatalf("web --once: %v", err)
-	}
-
-	// version: every, so both arrivals are separate builds off one poll.
-	if did := fixture.did(t); strings.Join(did, " ") != "3 4 5" {
-		t.Errorf("processed %v, want the cold start plus both versions the second poll found", did)
-	}
-}
 
 // webhookPipeline is a resource with a webhook token, plus the job a check of
 // it triggers.
@@ -119,7 +52,7 @@ func TestWebhookRouteTriggersACheck(t *testing.T) {
 
 	// A long interval, so nothing the poll loop does can be mistaken for the
 	// webhook having worked.
-	served := startWeb(t, []string{fixture.pipeline}, "--interval", "1h")
+	served := startWebFor(t, fixture.pipeline, "--interval", "1h")
 	defer served.stop(t)
 
 	slug := cli.PipelineName(fixture.pipeline)
@@ -141,7 +74,7 @@ func TestWebhookRouteRefusesABadToken(t *testing.T) {
 	fixture := newWatchFixture(t, webhookPipeline)
 	fixture.items(t, 1)
 
-	served := startWeb(t, []string{fixture.pipeline}, "--interval", "1h")
+	served := startWebFor(t, fixture.pipeline, "--interval", "1h")
 	defer served.stop(t)
 
 	slug := cli.PipelineName(fixture.pipeline)
@@ -159,7 +92,7 @@ func TestWebhookRouteIsAbsentWithoutWebhookResources(t *testing.T) {
 	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 1)
 
-	served := startWeb(t, []string{fixture.pipeline}, "--interval", "1h")
+	served := startWebFor(t, fixture.pipeline, "--interval", "1h")
 	defer served.stop(t)
 
 	slug := cli.PipelineName(fixture.pipeline)
@@ -217,7 +150,7 @@ func TestWebhookRouteUnderAPipelineNamedCheck(t *testing.T) {
 	fixture := newWatchFixtureIn(t, t.TempDir(), "check", webhookPipeline)
 	fixture.items(t, 1)
 
-	served := startWeb(t, []string{fixture.pipeline}, "--interval", "1h")
+	served := startWebFor(t, fixture.pipeline, "--interval", "1h")
 	defer served.stop(t)
 
 	slug := cli.PipelineName(fixture.pipeline)
@@ -232,40 +165,6 @@ func TestWebhookRouteUnderAPipelineNamedCheck(t *testing.T) {
 	}
 
 	waitForDid(t, fixture, "1")
-}
-
-// TestWebOnceToleratesAPipelineWithNoTriggers.
-//
-// The served path says so per pipeline ("serving it without polling"); --once
-// returned ErrNoTriggers as fatal, so one verb answered the same pipeline two
-// different ways depending on one flag. Worse, the loop returned on the first
-// offender: a hand-run pipeline added to a `steps web --once app.yml infra.yml`
-// cron line stopped every pipeline named after it from building at all.
-func TestWebOnceToleratesAPipelineWithNoTriggers(t *testing.T) {
-	dir := t.TempDir()
-
-	untriggered := newWatchFixtureIn(t, dir, "manual", `
-jobs:
-- name: build
-  plan:
-  - task: work
-    inputs: []
-    run: echo ran
-`)
-
-	triggered := newWatchFixtureIn(t, dir, "auto", cursorFeed)
-	triggered.items(t, 1)
-
-	// The untriggered one FIRST, which is what makes the second pipeline the
-	// assertion: the bug returned before ever reaching it.
-	err := cli.Run([]string{"web", untriggered.pipeline, triggered.pipeline, "--once"})
-	if err != nil {
-		t.Fatalf("web --once refused a pipeline with nothing to poll: %v", err)
-	}
-
-	if did := triggered.did(t); strings.Join(did, " ") != "1" {
-		t.Errorf("the pipeline that DOES have triggers processed %v, want 1", did)
-	}
 }
 
 // TestWebhookRouteStillWorksUnderReadOnly pins a decision, not an accident.
@@ -286,7 +185,7 @@ func TestWebhookRouteStillWorksUnderReadOnly(t *testing.T) {
 	fixture := newWatchFixture(t, webhookPipeline)
 	fixture.items(t, 1)
 
-	served := startWeb(t, []string{fixture.pipeline}, "--read-only", "--interval", "1h")
+	served := startWebFor(t, fixture.pipeline, "--read-only", "--interval", "1h")
 	defer served.stop(t)
 
 	slug := cli.PipelineName(fixture.pipeline)

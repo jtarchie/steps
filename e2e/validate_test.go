@@ -207,7 +207,7 @@ jobs:
 	}
 
 	out := captureStdout(t, func() {
-		runsErr := cli.Run([]string{"runs", path})
+		runsErr := cli.Run(append([]string{"runs"}, readArgs(path)...))
 		if runsErr != nil {
 			t.Fatalf("runs: %v", runsErr)
 		}
@@ -220,7 +220,7 @@ jobs:
 	}
 
 	steps := captureStdout(t, func() {
-		runsErr := cli.Run([]string{"runs", "steps", path})
+		runsErr := cli.Run(append([]string{"runs", "steps"}, readArgs(path)...))
 		if runsErr != nil {
 			t.Fatalf("runs --steps: %v", runsErr)
 		}
@@ -242,7 +242,7 @@ jobs:
 `)
 
 	out := captureStdout(t, func() {
-		err := cli.Run([]string{"runs", path})
+		err := cli.Run(append([]string{"runs"}, readArgs(path)...))
 		if err != nil {
 			t.Fatalf("runs: %v", err)
 		}
@@ -441,13 +441,25 @@ func TestEveryDocumentedCommandIsReachable(t *testing.T) {
 			// and fails trying to open it — so that error is the signature of
 			// a command that does not exist. (--help would be the obvious
 			// probe, but kong exits the process for it.)
-			runErr := cli.Run([]string{name})
+			runErr := cli.Run(append([]string{name}, probeArgs[name]...))
 			if runErr != nil && strings.Contains(runErr.Error(), "could not load pipeline") {
 				t.Errorf("docs/README.md advertises `steps %s`, but it parsed as the default command with %q as its pipeline: %v",
 					name, name, runErr)
 			}
 		})
 	}
+}
+
+// probeArgs is what a documented command needs in order to REFUSE rather than
+// run, for the ones that need nothing at all.
+//
+// `steps web` takes no arguments now — a daemon is filled by `steps pipeline
+// set` — so the bare probe above would bind a port and serve until the test
+// binary's own timeout, which is exactly what it did once. Port 1 is
+// unbindable as an ordinary user, so the command still has to parse and reach
+// its own body to fail.
+var probeArgs = map[string][]string{ //nolint:gochecknoglobals // a table read by one test
+	"web": {"--listen", "127.0.0.1:1"},
 }
 
 // documentedCommands pulls the command names out of docs/README.md's command

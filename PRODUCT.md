@@ -10,7 +10,7 @@ steps is a Go CLI first: the terminal is where pipelines are authored, run, and 
 
 ## Users
 
-Engineers evaluating or adopting steps as an open-source pipeline runner — people who already think in Concourse-style `get`/`task`/`put` pipelines (or want to) and want an LLM agent invocation to be a first-class step type, not a bolt-on script. They author YAML pipelines, run them locally via `steps run`/`steps test`, and use `steps web` for downstream-trigger automation.
+Engineers evaluating or adopting steps as an open-source pipeline runner — people who already think in Concourse-style `get`/`task`/`put` pipelines (or want to) and want an LLM agent invocation to be a first-class step type, not a bolt-on script. They author YAML pipelines, run them locally via `steps run`/`steps test`, and `steps pipeline set` them into a `steps web` daemon for downstream-trigger automation.
 
 ## Product Purpose
 
@@ -22,12 +22,12 @@ Unlike Concourse or GitHub Actions (no agent-native step type) and unlike LangCh
 
 ## Operating Context
 
-Primarily terminal: `steps run|test|validate|runs|mcp`, plus `steps web` — the daemon that serves a local browser view of the same state, polls trigger: true resources, and runs what they enqueue. Pipelines are authored as YAML; resources are fetched via shell commands or MCP; tasks run on the host shell or in Docker; agent steps call LLM providers (OpenAI-compatible APIs, OpenRouter, local models) with tool-calling. State persists in SQLite (WAL mode). Typical workflows: authoring pipeline YAML, running/testing pipelines locally, running `steps web` for downstream triggers, resource steps backed by `gh`/git, and optionally MCP servers with OAuth.
+Primarily terminal: `steps run|test|validate|runs|mcp`, plus `steps web` — the daemon that holds the pipelines `steps pipeline set` uploads to it, serves a local browser view of the same state, polls trigger: true resources, and runs what they enqueue. Pipelines are authored as YAML; resources are fetched via shell commands or MCP; tasks run on the host shell or in Docker; agent steps call LLM providers (OpenAI-compatible APIs, OpenRouter, local models) with tool-calling. State persists in SQLite (WAL mode). Typical workflows: authoring pipeline YAML, running/testing pipelines locally, setting a pipeline into `steps web` for downstream triggers, resource steps backed by `gh`/git, and optionally MCP servers with OAuth.
 
 ## Capabilities and Constraints
 
 - The primary interface is CLI output (log lines, diagnostics), YAML pipeline syntax, and `--help`/usage text.
-- `steps web` adds a local, single-user browser UI: loopback by default, no authentication (it shares the trust domain of the shell that started it), and no capability the CLI lacks. It never becomes a hosted multi-tenant service without an auth story that does not exist today.
+- `steps web` adds a local, single-user daemon and browser UI: loopback by default, no authentication (it shares the trust domain of the shell that started it), and no capability the CLI lacks. Its `steps pipeline set` endpoint runs arbitrary commands by construction, which is a reason the loopback default is a default rather than a suggestion. It never becomes a hosted multi-tenant service without an auth story that does not exist today.
 - Undecided: whether a richer terminal UI (progress bars, interactive prompts, etc.) is ever in scope, versus staying plain-log output only.
 
 ## Brand Commitments

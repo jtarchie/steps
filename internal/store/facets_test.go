@@ -25,6 +25,7 @@ var facets = map[string]reflect.Type{
 	"Usage":      reflect.TypeOf((*Usage)(nil)).Elem(),
 	"Events":     reflect.TypeOf((*Events)(nil)).Elem(),
 	"Revisions":  reflect.TypeOf((*Revisions)(nil)).Elem(),
+	"Control":    reflect.TypeOf((*Control)(nil)).Elem(),
 	"Pruning":    reflect.TypeOf((*Pruning)(nil)).Elem(),
 }
 

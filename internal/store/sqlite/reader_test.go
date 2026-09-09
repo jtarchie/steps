@@ -14,7 +14,7 @@ import (
 )
 
 // sharedFile opens two pipelines onto one state file, which is what
-// `steps web app.yml infra.yml --db shared.db` produces.
+// one daemon holding several pipelines produces.
 func sharedFile(t *testing.T, names ...string) []*Store {
 	t.Helper()
 

@@ -474,9 +474,12 @@ jobs:
 		t.Fatal(err)
 	}
 
-	mustRun(t, "web", path, "--once")
+	served := startWebFor(t, path, "--interval", "50ms")
+	defer served.stop(t)
 
-	// One, not the backlog: a fresh watcher records what it finds and answers
+	settle(t, served.state, cli.PipelineName(path), "mentions")
+
+	// One, not the backlog: a fresh daemon records what it finds and answers
 	// only the newest of it (docs/conformance.md's cold-start row).
 	postedAfterColdStart := len(workspace.postedMessages())
 	if postedAfterColdStart != 1 {
@@ -490,7 +493,7 @@ jobs:
 
 	before := len(workspace.threadsAsked())
 
-	mustRun(t, "web", path, "--once")
+	settle(t, served.state, cli.PipelineName(path), "mentions")
 
 	// The wider discovery window is not a wider fan-out: a thread whose
 	// latest_reply is behind the cursor has nothing new in it and must cost

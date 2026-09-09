@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -74,102 +75,44 @@ type Config struct {
 	Revision Revision `yaml:"-"`
 }
 
-// Revision is one configuration, as parsed: the substituted source and its
-// hash.
-//
-// The source is carried rather than re-read on demand because only the loader
-// ever holds it — by the time anything asks, the file on disk may be a later
-// revision, which is precisely the situation this exists to answer.
+// Revision is one configuration, as parsed: the substituted source, the include contents it folded in, and the hash over both.
 type Revision struct {
 	SHA    string
 	Source string
-	// Includes are the files whose contents this configuration folded in —
-	// every run_file:, system_file:, message file, task file and agent file it
-	// resolved — named as the pipeline names them, relative to its own
-	// directory. They are part of the hash, and a caller re-checking whether
-	// the configuration has changed has to re-read them; see withIncludes.
-	//
-	// Relative rather than resolved, because the path STRING is hashed: a
-	// resolved one carries how the pipeline was invoked, so the same file
-	// loaded as ci/app.yml and as /repo/ci/app.yml produced two different
-	// configuration hashes and a run page reporting an edit that never
-	// happened.
-	Includes []string
+	// Includes is path→content, the path exactly as the pipeline names it: the string is hashed, so a resolved path made ci/app.yml and /repo/ci/app.yml two configurations of the same bytes.
+	Includes map[string]string
 }
 
-// withIncludes folds the resolved include files into the revision, so an edit
-// to one is an edit to the pipeline. Paths are relative to baseDir, which is
-// the pipeline file's own directory.
-//
-// The digest describes path→content PAIRS rather than a concatenation of
-// bodies. Sorting by path already makes the concatenation order stable, so
-// nothing reachable today distinguishes the two — this is what keeps that
-// true if the ordering ever stops being by path.
-func (r Revision) withIncludes(baseDir string, paths []string) (Revision, error) {
-	if len(paths) == 0 {
-		return r, nil
-	}
-
-	// Sorted and de-duplicated, so the hash describes the SET of includes
-	// rather than the order the resolver happened to walk the config in — a
-	// step moved from one job to another changes that order and nothing else.
-	unique := slices.Clone(paths)
-	slices.Sort(unique)
-	unique = slices.Compact(unique)
-
+// withIncludes hashes path→content PAIRS in sorted path order, so the hash describes the SET of includes rather than the order the resolver walked the config in.
+func (r Revision) withIncludes(includes map[string]string) Revision {
 	sum := sha256.New()
 	sum.Write([]byte(r.Source))
 
-	for _, path := range unique {
-		full := filepath.Join(baseDir, path)
-
-		body, err := os.ReadFile(full) //nolint:gosec // the loader just read this same file to build the config
-		if err != nil {
-			return Revision{}, fmt.Errorf("could not read included file %q: %w", full, err)
+	if len(includes) > 0 {
+		for _, path := range slices.Sorted(maps.Keys(includes)) {
+			sum.Write([]byte("\x00" + path + "\x00"))
+			sum.Write([]byte(includes[path]))
 		}
 
-		sum.Write([]byte("\x00" + path + "\x00"))
-		sum.Write(body)
+		r.Includes = includes
 	}
 
 	r.SHA = hex.EncodeToString(sum.Sum(nil))
-	r.Includes = unique
 
-	return r, nil
+	return r
 }
 
-// Recorded reports whether this Config was loaded from a file (rather than
-// built in a test), which is what makes its revision worth writing down.
+// Recorded reports whether this Config was loaded from a source (rather than built in a test), which is what makes its revision worth writing down.
 func (r Revision) Recorded() bool { return r.SHA != "" }
 
-// FileRevision answers WHICH configuration a file currently is — the
-// substituted bytes and their hash — without parsing them.
-//
-// Split out of Load so a caller that only needs "has this changed?" can pay
-// the reads and a hash for it. `steps web` asks once a second, and asking
-// through Load meant a full parse, every validator and an exec.LookPath per
-// stdio MCP server on every tick — a measured few milliseconds of CPU and a
-// log line per pipeline per second, all of it to conclude that nothing had
-// changed.
-//
-// Load is written on top of this rather than beside it: one definition of the
-// hash is what stops the cheap answer and the parsed one from disagreeing.
-func FileRevision(path string, vars map[string]string, includes []string) (Revision, error) {
+// ReadSource reads the pipeline file at path with ((name)) substitution applied: the bytes a revision is taken over, and what `steps pipeline set` uploads.
+func ReadSource(path string, vars map[string]string) ([]byte, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // path is the pipeline file the user asked to run, not untrusted input
 	if err != nil {
-		return Revision{}, fmt.Errorf("could not read pipeline file %q: %w", path, err)
+		return nil, fmt.Errorf("could not read pipeline file %q: %w", path, err)
 	}
 
-	data = InterpolateVars(data, vars)
-
-	sum := sha256.Sum256(data)
-	revision := Revision{SHA: hex.EncodeToString(sum[:]), Source: string(data)}
-
-	// The includes a caller already knows about, which is the set the
-	// configuration it is holding resolved. An edit that changes WHICH files
-	// are included changes the YAML too, so it is caught by the hash above
-	// before this list is out of date.
-	return revision.withIncludes(filepath.Dir(path), includes)
+	return InterpolateVars(data, vars), nil
 }
 
 // Slugify turns a pipeline path into its identity: the base name without its
@@ -200,92 +143,68 @@ func LoadConfigWithVars(path string, vars map[string]string) (*Config, error) {
 	return Load(path, Slugify(path), vars)
 }
 
-// Load reads and parses the pipeline YAML at path under the identity name,
-// with ((name)) substitution applied to the source before it is parsed.
-//
-// name is a parameter rather than something derived here because the identity
-// is the caller's to decide: `--name prod=infra/deploy.yml` is an operator
-// saying which pipeline this is, and it must reach the store, the /p/<slug>
-// route and the Config as one string. Positional, so a call site cannot
-// quietly skip it — the same reason sqlite.OpenStore takes one.
-//
-// Substituting before the parse is what lets a var appear anywhere a value
-// does — inside a URI, mid-command, as a whole mapping value — without this
-// package enumerating every field that might contain one.
-//
-// ⚠️ A substituted value is ORDINARY CONFIG: it is parsed, hashed, and stored
-// in state.db like anything else written in the file. Vars separate a
-// pipeline's shape from its parameters; they are not a secret store. Keep
-// credentials in the env-var references (api_key_env:) that exist for them.
+// Load is the on-disk form of Parse: substitution happens BEFORE the parse so a var may appear anywhere a value does, and a substituted value is ORDINARY CONFIG, hashed and stored — vars are parameters, never secrets.
 func Load(path string, name string, vars map[string]string) (*Config, error) {
-	slog.Debug("config.load", "path", path)
-
-	// No includes yet — they are not known until the parse below resolves
-	// them, and are folded in there (see withIncludes).
-	revision, err := FileRevision(path, vars, nil)
+	source, err := ReadSource(path, vars)
 	if err != nil {
 		return nil, err
 	}
 
-	data := []byte(revision.Source)
+	return parseSource(source, name, path, DirFS(filepath.Dir(path)))
+}
+
+// Parse builds a Config from already-substituted source with its includes read through fsys, which is what a daemon does with a `steps pipeline set` upload it has no directory for.
+func Parse(source []byte, name string, fsys Files) (*Config, error) {
+	return parseSource(source, name, name, fsys)
+}
+
+// parseSource takes the identity separately from the label because a daemon's errors cite the name it was given and a local load cites the path that was typed.
+func parseSource(source []byte, name string, label string, fsys Files) (*Config, error) {
+	slog.Debug("config.load", "pipeline", label)
 
 	var cfg Config
 
-	err = strictUnmarshal(data, &cfg)
+	err := strictUnmarshal(source, &cfg)
 	if err != nil {
-		return nil, fmt.Errorf("could not parse pipeline YAML %q: %w", path, err)
+		return nil, fmt.Errorf("could not parse pipeline YAML %q: %w", label, err)
 	}
 
-	cfg.stampLines(data)
+	cfg.stampLines(source)
 
 	slog.Info("config.loaded",
-		"path", path,
+		"pipeline", label,
 		"resource_types", len(cfg.ResourceTypes),
 		"resources", len(cfg.Resources),
 		"jobs", len(cfg.Jobs),
 	)
 
-	includes, err := cfg.resolveFileIncludes(filepath.Dir(path))
+	includes, err := cfg.resolveFileIncludes(fsys)
 	if err != nil {
-		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
-	}
-
-	// The revision covers the includes, not just the YAML. A run_file: or a
-	// system_file: decides what a step executes, so a hash over the pipeline
-	// file alone answered "did the pipeline change?" with a confident no for
-	// the edit that changed everything — the CONFIG column stayed put across
-	// runs that ran different code.
-	revision, err = revision.withIncludes(filepath.Dir(path), includes)
-	if err != nil {
-		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
+		return nil, fmt.Errorf("pipeline YAML %q: %w", label, err)
 	}
 
 	cfg.registerBuiltinAgents()
 	cfg.registerBuiltinResourceTypes()
 
-	// After built-in registration, so a bare @builtin/<name> reference picks
-	// up the default model without needing an agents: entry at all.
+	// After built-in registration, so a bare @builtin/<name> reference picks up the default model without an agents: entry.
 	cfg.applyDefaults()
 
 	err = cfg.resolveSubAgentDescriptions()
 	if err != nil {
-		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
+		return nil, fmt.Errorf("pipeline YAML %q: %w", label, err)
 	}
 
-	// Before validate(), so the across: it writes is checked like any
-	// hand-written matrix — see desugarParallelism. Joined rather than
-	// returned first: a rejected step is simply left unrewritten, and hiding
-	// validate()'s independent findings behind a desugar mistake would cost
-	// the extra load the joined-errors contract below exists to save.
+	// Desugar before validate() so the across: it writes is checked like a hand-written matrix; joined so a desugar mistake does not hide validate()'s own findings.
 	err = errors.Join(cfg.desugarParallelism(), cfg.validate())
 	if err != nil {
-		return nil, fmt.Errorf("pipeline YAML %q: %w", path, err)
+		return nil, fmt.Errorf("pipeline YAML %q: %w", label, err)
 	}
 
 	cfg.inheritResourceTags()
 
 	cfg.Name = name
-	cfg.Revision = revision
+	// The revision covers the includes, not just the YAML: a run_file: decides what a step executes, so a hash over the file alone said "unchanged" for the edit that changed everything.
+	cfg.Revision = Revision{Source: string(source)}.withIncludes(includes)
 
 	return &cfg, nil
 }

@@ -163,7 +163,7 @@ Keeping machines out of the pipeline file is what lets the same pipeline run on 
   This is a deliberate divergence from Concourse, which errors the build when a worker vanishes. Two distinctions keep it honest. A command that ran and **chose** a nonzero status still failed — a machine disappearing afterwards does not unsay an answer already given — while a command the shutdown **signalled** is the machine ending it, not the command answering, and counts as infrastructure. And an EC2 *rebalance recommendation* is only advisory: it is reported and the worker is let go once the step finishes, but it never destroys a healthy machine the way a real reclamation does.
 - **A worker that dies mid-step is redialed on the next try.** A crashed machine or a dropped tunnel fails the running command as an *error* (never as the command's own verdict), and the step's next command — an `attempts:` retry, typically — opens a fresh connection and re-sends the step's local tree, which already holds everything earlier commands fetched back. The boundary is the handshake: a connection that died any time after the worker answered its hello — even while the tree was still uploading — is redialed, while a host that could not be reached or never answered stays failed for the whole step, since the first answer is the true one and every re-ask would cost another timeout.
 - **The run record says where each step ran.** A finished placed step carries `tag (address)` — in the web UI's step header and in `run_events` — and a step that ran locally carries nothing, so the rows that left stand out. The address only: `?identity=` and `?hostkey=` describe how to authenticate and are not written to the record. An alias is recorded as the alias, not as whatever `~/.ssh/config` resolved it to that day — the mapping is the stable name for the machine, and the resolution is a connection detail that can differ between the machines running `steps`. Nothing else can answer the question after the fact, since `tags:` is deliberately outside the hash.
-- **And what that machine turned out to be.** `steps runs where <pipeline>` reports, per placed step, the tag, the platform the worker reported (`linux/arm64`), the filesystem its tree landed on and the free space left there, how many bytes had to be pushed to it, and the machine — plus the image, if the step ran in one. Add a run id for a specific run; without one, the newest. All of it comes from the worker's own handshake, because nothing on the orchestrator can see it, and it is the set of answers to *it passes on my laptop and fails on the fleet*. A worker that could not report a filesystem reads as `not reported` rather than as a blank that looks like an ordinary disk.
+- **And what that machine turned out to be.** `steps runs where -p <pipeline>` reports, per placed step, the tag, the platform the worker reported (`linux/arm64`), the filesystem its tree landed on and the free space left there, how many bytes had to be pushed to it, and the machine — plus the image, if the step ran in one. Add a run id for a specific run; without one, the newest. All of it comes from the worker's own handshake, because nothing on the orchestrator can see it, and it is the set of answers to *it passes on my laptop and fails on the fleet*. A worker that could not report a filesystem reads as `not reported` rather than as a blank that looks like an ordinary disk.
 
   The run page draws the same rows on a **machines** panel beside the spend one, with a `tmpfs` workdir marked in warning colour — see [web.md](web.md#the-transcript).
 
@@ -438,7 +438,7 @@ jobs:
 
 ## Downstream triggers (`trigger: true` + `steps web`)
 
-By default `steps` is a one-shot, single-job CLI. `steps web pipeline.yml` adds a long-running mode that polls every resource named by any `get ..., trigger: true` step, across every job in the pipeline, and automatically runs whichever jobs are affected when that resource's latest version changes — including a version produced by another job's own `put`:
+By default `steps` is a one-shot, single-job CLI. `steps web` adds a long-running mode: it holds the pipelines uploaded to it by `steps pipeline set`, polls every resource named by any `get ..., trigger: true` step across every job of each one, and automatically runs whichever jobs are affected when that resource's latest version changes — including a version produced by another job's own `put`:
 
 ```yaml
 resource_types:
@@ -482,7 +482,8 @@ assert:
 ```
 
 ```bash
-steps web pipeline.yml --interval 30s --max-concurrent 1
+steps web --interval 30s --max-concurrent 1
+steps pipeline set -c pipeline.yml
 ```
 
 - **Two independent loops, connected only through a durable store-backed queue**: a **poller** checks every trigger resource on `--interval`, diffs the latest version against what's recorded, and enqueues every affected job; a **worker pool** (`--max-concurrent`, default 1) drains that queue by calling the same job runner `steps run` uses. The durable queue means a crash mid-run doesn't lose pending work.
@@ -550,14 +551,14 @@ jobs:
 ```
 Fri 02:00  nightly-summary failed (1/3 consecutive)
 Sat 02:00  nightly-summary failed (2/3 consecutive)
-Sun 02:00  nightly-summary PAUSED after 3 consecutive failures — resume with: steps jobs resume <pipeline> nightly-summary
+Sun 02:00  nightly-summary PAUSED after 3 consecutive failures — resume with: steps jobs resume nightly-summary -p <pipeline>
 ```
 
 - **It counts triggered RUNS, not the `attempts:` retries inside one** — conflating them would trip the breaker on ordinary flakiness a retry would have absorbed.
 - **Consecutive, not cumulative.** A job that fails, passes, then fails is flaky, not broken. Any success resets the count.
 - **Tripping is loud**: a printed line plus a `trigger.job_paused` log record.
 - **An interrupted run does not count.** Ctrl-C is an operator, not a broken job.
-- **Resume is manual, deliberately** (`steps jobs resume <pipeline> <job>`). Any successful run clears the breaker — including a manual `steps run`, the natural way to confirm a fix. Unattended auto-resume would defeat the safety purpose.
+- **Resume is manual, deliberately** (`steps jobs resume <job> -p <pipeline>`). Any successful run clears the breaker — including a manual `steps run`, the natural way to confirm a fix. Unattended auto-resume would defeat the safety purpose.
 - **Off by default.** A job that declares no ceiling never pauses; the count is still kept, so turning a breaker on later starts from a real number.
 
 ## How much history to keep: `run_history:`
@@ -805,7 +806,7 @@ jobs:
 ```
 
 ```bash
-steps web pipeline.yml --listen 0.0.0.0:8080 --read-only
+steps web --listen 0.0.0.0:8080 --read-only
 curl -X POST 'http://localhost:8080/p/pipeline/check/repo?token=…'   # or: Authorization: Bearer …
 ```
 

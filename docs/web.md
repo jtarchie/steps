@@ -1,23 +1,103 @@
-# The web UI
+# The daemon
 
 ```bash
-steps web pipeline.yml
+steps web                                        # starts empty
+steps pipeline set -c pipeline.yml               # upload one into it
 ```
 
-Serves a browser view of what the runner has done and is doing, at
-`http://127.0.0.1:8088` — and, unless told not to, polls `trigger: true`
-resources while it serves, so one command both notices new versions and builds
-them. Several pipelines at once:
+`steps web` is the long-running mode: it serves the browser UI at
+`http://127.0.0.1:8088`, holds whatever pipelines have been set into it, polls
+their `trigger: true` resources, and runs the jobs both of those enqueue.
 
-```bash
-steps web app.yml infra.yml nightly.yml
-```
+**It takes no pipeline arguments.** A pipeline arrives by `steps pipeline set`
+and by nothing else, which is what makes three things true that were not
+before: vars belong to the pipeline you set rather than to the process,
+a pipeline's identity is a name you chose rather than whatever its file was
+called, and a change happens when somebody asks for it rather than when a file
+moves. Nothing here watches a file.
 
-Each is routed under `/p/<name>/`, where the name is the YAML's base name
-unless `--name` says otherwise. By default each pipeline gets its own
-`.steps/<filename>.db`, so two never share a database — not even two sitting in
-one directory. `--db` is how you ask them to; see
+Each served pipeline is routed under `/p/<name>/`, where the name is the one
+`set` was given. All of them share one state database — `.steps/steps.db`
+unless `--db` says otherwise — and stay strangers inside it; see
 [One database, several pipelines](#one-database-several-pipelines).
+
+## Setting a pipeline
+
+```bash
+steps pipeline set -p app -c app.yml -v repo_uri=https://github.com/acme/app
+```
+
+- **`-p` is the name on the daemon**, defaulting to the YAML's base name. It is
+  the `/p/<name>/` route, the identity every recorded row is scoped by, and
+  what every other verb takes.
+- **`-c` is the file on YOUR machine.** It is read, `((var))`-substituted and
+  parsed locally, then uploaded. The daemon never reads a path of yours.
+- **`-v` / `--vars-file` are per-set.** Substitution happens before the upload,
+  so the daemon holds the substituted text and one file set twice under two var
+  sets is two pipelines. Vars are still not a secret store — see
+  [templating.md](templating.md).
+- **Includes travel with it.** A `run_file:`, `system_file:` or
+  `message_files:` entry is pipeline-relative, and the daemon has no sibling
+  filesystem, so `set` sends `{source, includes}` and the daemon resolves those
+  paths against the upload and nothing else. An include it was not sent is a
+  refusal, never a read of the daemon's own disk.
+- **It diffs, then asks.** `set` fetches what the daemon is serving, prints
+  what would change, and asks. `-n` skips the prompt and is what scripts pass.
+- **It is compare-and-set.** The sha you diffed against is sent with the
+  upload; if the configuration moved in between, the daemon refuses and says
+  so, rather than applying yours over whatever arrived.
+
+**The refusal lands where you asked.** That is the whole reason this is HTTP
+rather than a row written into a database: `set` needs a synchronous answer
+from the machine that will run the pipeline — is `api_key_env:` set *there*, is
+the stdio MCP binary on *its* `PATH`, does `workspace.root:` exist. A
+configuration that fails those is refused, the daemon goes on serving what it
+had, and the terminal that asked prints why:
+
+```
+$ steps pipeline set -c app.yml
+http://127.0.0.1:8088 refused it: app cannot run here:
+  agent "reviewer"  $OPENROUTER_API_KEY is not set (source.api_key_env)
+```
+
+What it does NOT check is the network. A set that passes can still meet a
+revoked key or a server that is down at run time; `steps validate --live` is
+the command that asks.
+
+## The rest of the family
+
+```bash
+steps pipeline list                      # what this daemon holds
+steps pipeline get -p app                # the configuration it is serving
+steps pipeline pause -p app              # stop polling, admitting and triggering
+steps pipeline unpause -p app
+steps pipeline rename -p app --to legacy # keeps the history
+steps pipeline destroy -p app            # forgets it, and everything under it
+```
+
+Every verb takes `--target` (or `STEPS_TARGET`), defaulting to
+`http://127.0.0.1:8088`. There is no `login` and no saved targets, because
+there is nothing to log in to — see [Security](#security).
+
+- **`get` is the only full copy** of a configuration once you have edited the
+  file it came from. It prints the served source and every file it carried.
+- **`pause` is the pipeline-level circuit breaker.** Paused, nothing is
+  polled, nothing is admitted from the queue, a webhook delivery is received
+  and enqueues nothing, and a manual trigger is refused with a message. Every
+  page of that pipeline says so. It is a bigger switch than the per-job breaker
+  `steps jobs` reports, and unrelated to it.
+- **`rename` keeps history**, because every recorded row reaches its pipeline
+  by row id rather than by name. That is new: while a pipeline's identity came
+  from its filename, renaming was a different pipeline with empty state.
+- **`destroy` is not recoverable.** The runs, the resource versions, the queue
+  and the merkle cache go with the row. It asks unless given `-n`.
+
+## What a restart does
+
+Nothing. The daemon loads every pipeline's current configuration from its state
+database at startup and serves it, so a restart picks up where the last process
+left off — including on a machine where the YAML never existed. A daemon that
+holds nothing serves an index saying how to set one.
 
 ## What it shows
 
@@ -160,7 +240,7 @@ the things a scrollback cannot give you:
   and Reserved Instances, a spot instance's paid price is reported by no API,
   and real billing lands up to a day later. That is the opposite call from
   spend above, where the *provider* reports the dollars and steps only records
-  what it was told. `steps runs where <pipeline>` reads the same rows in a
+  what it was told. `steps runs where -p <pipeline>` reads the same rows in a
   terminal.
 - **Every hash is a link** to the node page, and **every step has one too** —
   the `#` beside its name is a URL you can paste at someone, and it opens the
@@ -217,10 +297,11 @@ Four controls, each writing the same rows the CLI writes:
 - **Resume** a job the trigger circuit breaker paused.
 
 `--read-only` withholds all four: the controls disappear from the pages and
-the routes refuse. The queue is still drained, and polling still runs — that
-flag is a statement about the browser's surface, not about what the process
-does on its own. `--listen 0.0.0.0:8088 --read-only` is a build box that still
-has to notice new versions.
+the routes refuse. The queue is still drained, polling still runs, and
+`steps pipeline set` still works — that flag is a statement about the
+browser's surface, not about what the process does on its own or about how it
+is deployed. `--listen 0.0.0.0:8088 --read-only` is a build box that still has
+to notice new versions; read [Security](#security) before you expose one.
 
 **The webhook route is the one exception, deliberately.**
 `POST /p/<slug>/check/<resource>` still works under `--read-only`, and the job
@@ -234,23 +315,22 @@ route is a 404. See [infra.md](infra.md#webhook-triggered-checks).
 
 ## One daemon
 
-`steps web` is the whole long-running mode: it serves the UI, polls every
-`trigger: true` resource, and drains the queue both of those fill. There is no
-separate watcher — a front end that drains a queue nothing fills is a runner
-that looks alive and notices nothing, and two processes against one state
-database claim each other's work.
+`steps web` is the whole long-running mode: it serves the UI, holds the
+pipelines, polls every `trigger: true` resource, and drains the queue all of
+that fills. There is no separate watcher and no one-shot — a front end that
+drains a queue nothing fills is a runner that looks alive and notices nothing,
+and two processes against one state database claim each other's work.
 
 ```bash
-steps web pipeline.yml                      # serve, and poll every 30s
-steps web pipeline.yml --interval 5m        # slower
-steps web pipeline.yml --once               # poll once, run what that triggers, exit
-steps web pipeline.yml --max-concurrent 4   # up to four queued jobs at a time
+steps web                      # serve, and poll every 30s
+steps web --interval 5m        # slower
+steps web --max-concurrent 4   # up to four queued jobs at a time
 ```
 
-`--once` is the cron form: one poll, drain until the queue is empty, exit —
-**without binding the listen address**, because a port opened for the duration
-of one poll is a port nothing has time to reach. It is what a systemd timer or
-a CI step drives when the schedule already belongs to something else.
+**There is no `--once`.** It was the cron form of a runner: load a file, poll
+once, exit, never bind. A process that never binds has nothing to be set into,
+and a server is its own scheduler — run it under systemd as a service rather
+than a timer, and let `--interval` be the schedule.
 
 - **One poller per pipeline.** Within one pipeline the poller is handed the
   store handle its drain already uses rather than opening a second one.
@@ -265,8 +345,7 @@ a CI step drives when the schedule already belongs to something else.
   state file is a deployment mistake, not a supported pairing.
 - **A pipeline with no `trigger: true` get is not an error.** It is noted in
   the log and served anyway, because plenty of pipelines are run by hand and
-  the UI is where you would run them from. Under `--once` it polls nothing and
-  exits.
+  the UI is where you would run them from.
 - **Preflight runs before the first poll**, the same check `steps web` does
   and with the same asymmetry: a problem *waiting cannot fix* — an `mcp:` tool
   the server does not expose — stops that pipeline's polling and says so,
@@ -275,90 +354,54 @@ a CI step drives when the schedule already belongs to something else.
   left to the loop, which retries by its nature. `--no-preflight` skips the
   check entirely. It runs inside the poller, so it never delays serving.
 
-## Reloading the pipeline file
+## Applying a change
 
-`steps web` watches the file it was started with, and every `--vars-file`
-alongside it. Save one, and the daemon picks the change up on its own — no
-restart, and nothing in flight is interrupted:
+Set it again. There is no watcher and no `--watch`:
 
 ```bash
-steps web pipeline.yml       # edit pipeline.yml; the change lands within a second
+steps pipeline set -c pipeline.yml       # edit, set, and it is serving
 ```
 
-The rule for what is watched is *the configuration*, which is everything the
-`CONFIG` hash covers. A `--vars-file` counts because `((var))` substitution
-happens before the parse, so one file under two vars files is two
-configurations. A `run_file:`, `system_file:` or `message_files:` entry counts
-too: its contents decide what a step executes, so editing one is editing the
-pipeline — a new hash, and a swap, exactly as if the YAML itself had moved.
-
-**A save is validated before it is served**, to the same depth `steps validate`
-checks without the network: the file, the references, the field placement,
-every model name resolving, every `api_key_env:` actually set, every stdio
-`mcp_servers:` command on `PATH`. What that does NOT cover is the part that
-needs the network — the per-job preflight still probes the models and MCP
-servers a job actually uses, so a swap can pass here and a job can still fail
-at preflight when a key is present but revoked, or an endpoint is down. Use
-`steps validate --live` for that; no save waits on a model endpoint to answer.
-
-**A save that does not pass is held, and said.** The previous configuration
-keeps serving, and every page of that pipeline carries a banner naming what is
-wrong with the file on disk, because a daemon quietly serving something the
-operator's editor no longer shows is worse than one that will not reload:
-
-```
-the file on disk is not being served — this pipeline is still running the
-configuration it last loaded successfully:
-
-  pipeline YAML "app.yml": job "build": step 2 wants artifact "dist",
-  which nothing before it produces
-```
+**A save-to-apply loop is a one-line wrapper** around this — `watchexec -w
+pipeline.yml -- steps pipeline set -c pipeline.yml -n` — and that is where it
+belongs. A watcher inside the daemon is an implicit set that fires with nobody
+attached, which is exactly why it needed a held-configuration banner nobody was
+looking at: deleting it deletes the banner, the hold state, and the question of
+what a daemon does with a configuration it will not accept. It refuses it, to
+your face.
 
 **A run in flight finishes against the configuration it started under.** The
-swap is immediate for everything that comes after it: the pages, the trigger
-poller, the webhook endpoints, and the next job the queue admits — including
-the `serial:`, `serial_groups:` and `max_in_flight:` a job is admitted under,
-which live in the database and are rewritten from the new file on every swap.
-What the running job is executing does not change underneath it — and the run
-records which configuration that was, which is the `CONFIG` column `steps
-runs` prints and the revision named on the run page, where it links the
-configuration itself. That record comes from the configuration the job was
-handed, not from whatever the daemon has loaded most recently, so a save
-landing while a job is between its first step and its last does not change
-what that run says it ran. A `--resume` is the exception, and deliberately:
-it continues a failed run under the configuration it is resumed *with*, which
-is usually the one that fixed it.
-
-**`--replay` still resolves `--from` against the CURRENT plan**, deliberately:
-the pipeline has almost certainly changed since the run being replayed, which
-is usually why anyone is replaying it. A `--from` naming a step the current
-plan does not have is refused, listing the steps it does have.
+swap is immediate for everything after it: the pages, the trigger poller, the
+webhook endpoints, and the next job the queue admits — including the `serial:`,
+`serial_groups:` and `max_in_flight:` a job is admitted under, which live in the
+database and are rewritten from the new configuration on every set. What the
+running job is executing does not change underneath it, and the run records
+which configuration that was — the `CONFIG` column `steps runs` prints and the
+revision named on the run page, where it links the configuration itself. A
+`--resume` is the exception, and deliberately: it continues a failed run under
+the configuration it is resumed *with*, which is usually the one that fixed it.
 
 **Adding or removing a `trigger: true` get takes effect too.** The poll loop
-re-decides what it can check each time the configuration changes, so a
-resource an edit adds is preflighted and then polled, and one an edit removes
-stops being checked. A pipeline with nothing to poll is a state the loop sits
-in, not a reason it was never started.
+re-decides what it can check each time the configuration changes, so a resource
+a set adds is preflighted and then polled, and one a set removes stops being
+checked. A pipeline with nothing to poll is a state the loop sits in, not a
+reason it was never started.
 
-Two things it does not do:
-
-- **A changed `workspace:` is validated but not adopted.** The provider that
-  materializes build directories is built once, at startup, and handed to
-  every run — so an edit this machine cannot provide is refused (which is the
-  reason it is checked at all), and one it can is served with a line saying a
-  restart is what runs under it.
-- **It does not fetch.** The file still has to arrive on the box the daemon
-  runs on — by `scp`, by a deploy job, by whatever already puts it there.
-  `steps web` reads a path, not a repository.
+**A changed `workspace:` is adopted.** The provider that materializes build
+directories is rebuilt when the block moves, and a run already in flight keeps
+the one it started with until it finishes — so a set never deletes the tree a
+build is working in. One this machine cannot provide is refused like any other
+part of the configuration.
 
 ## One database, several pipelines
 
-`--db` points any command at a specific state database, and several pipelines
-may share one:
+A daemon holds every pipeline set into it in ONE state database — `.steps/steps.db`
+unless `--db` names another:
 
 ```bash
-steps web app.yml infra.yml --db /var/lib/steps/state.db
-steps run app.yml --job deploy --db /var/lib/steps/state.db
+steps web --db /var/lib/steps/state.db
+steps pipeline set -p app -c app.yml
+steps pipeline set -p infra -c infra/pipeline.yml
 ```
 
 A bare path is a sqlite file, and so is `sqlite:///var/lib/steps/state.db`
@@ -373,15 +416,15 @@ Two pipelines each with a job named `build` running an identical task do not
 share a cache entry, and one pipeline's `run_history:` cap never reaps
 another's runs.
 
-Reading one back needs no pipeline argument. `steps runs --db <file>` lists
-what the file holds and interleaves the newest runs of all of it, which is the
-terminal's version of the web root:
+Reading it back needs no pipeline argument. `steps runs` lists what the file
+holds and interleaves the newest runs of all of it, which is the terminal's
+version of the web root:
 
 ```bash
 $ steps runs --db /var/lib/steps/state.db
 
 PIPELINE  PATH
-app       /src/app/pipeline.yml
+app       /src/app/app.yml
 infra     /src/infra/pipeline.yml
 
 WHEN                 PIPELINE  JOB      STATUS     RUN
@@ -389,25 +432,27 @@ WHEN                 PIPELINE  JOB      STATUS     RUN
 2026-08-30 09:12:40  app       build    failed     46UMHVPYRA6YHB7M
 ```
 
-The `RUN` column is the handle for going back to one pipeline: `steps runs
-cost app.yml 46UMHVPYRA6YHB7M --db <file>`. That is also why the other
-views stay scoped — `runs steps`, `runs queue`, `runs cost` and `runs where`
-are questions about one pipeline, and each takes it as its first argument
-rather than being answered for a pipeline nobody picked.
+`PATH` is where the configuration was last set FROM — a file on whoever's
+machine ran `set`, recorded so a reader can tell two checkouts apart, and never
+opened here.
 
-A pipeline's identity in the file is its **name**, which defaults to the YAML's
-base name — `infra/pipeline.yml` is `pipeline`. That is also its `/p/<name>/`
-route. When two files would claim one name, `--name` settles it:
+**The read commands take `-p <name>`, not a path**, because a served pipeline
+has no file on this machine:
 
 ```bash
-steps web app/pipeline.yml infra/pipeline.yml --db shared.db \
-  --name app=app/pipeline.yml --name infra=infra/pipeline.yml
+steps runs -p app                      # what ran
+steps runs steps -p app                # why a step did what it did
+steps runs cost -p app 46UMHVPYRA6YHB7M
+steps approvals -p app
+steps questions -p app
+steps jobs -p app
 ```
 
-The name is the identity, not the path — so a checkout that moves keeps its
-history, and renaming the YAML (or changing `--name`) starts a new pipeline
-with empty state. Nothing in a content-addressed cache can tell a rename from a
-different pipeline, so this is the honest reading rather than a limitation.
+They read the database directly rather than going through the daemon, so they
+work against a stopped one — and they take `--db` when it is not the default.
+`steps run`, `steps test`, `steps validate` and `steps plan` still take a file
+path and still default to `.steps/<filename>.db` beside it: those are the local
+commands, and a local command has a file.
 
 Run ids stay globally unique, but `--resume` and `--replay` still refuse an id
 belonging to a different pipeline in the same file: continuing another
@@ -424,28 +469,49 @@ There is no authentication, because there is nothing to authenticate against:
 this is the local runner's own front end, in the same trust domain as the
 shell that started it. It binds `127.0.0.1` by default.
 
-Mutations are POST-only and require a same-origin `Origin` header when one is
-present, so another page cannot aim a form at your localhost port.
+**`steps pipeline set` is a remote-shell endpoint. Say that plainly: a
+pipeline is arbitrary commands, so anyone who can reach this port can run
+anything they like as the user running the daemon.** No token, no password, no
+allow-list. `--read-only` does not close it either — that flag has always been
+a statement about the *browser's* surface, and the set endpoint is the
+deployment path, not a button on a page.
 
-**Binding to a routable address publishes trigger and approval controls to
-anyone who can reach the port.** `--listen 0.0.0.0:8088` exists for someone
-who has decided that is what they want; pair it with `--read-only` unless you
-mean to hand out the controls too.
+That is the reason for the loopback default, and it is a stronger reason than
+the trigger controls ever were. **Binding to a routable address hands the
+machine to whoever can reach the port.** `--listen 0.0.0.0:8088` exists for
+someone who has decided that is what they want; put it behind something that
+authenticates — an SSH tunnel, a reverse proxy, a network nobody else is on —
+and treat `--read-only` as being about the browser only.
+
+Mutations from a browser are POST-only and require a same-origin `Origin`
+header when one is present, so another page cannot aim a form at your localhost
+port.
 
 ## Flags
+
+`steps web` — facts about the box, all of them:
 
 ```
 --listen         address to serve on (default 127.0.0.1:8088)
 --interval       how often to poll trigger: true resources (default 30s)
---once           poll once, run what that triggers, exit without serving
 --max-concurrent maximum queued jobs running at once, per pipeline (default 1)
 --pin / --force  pin a version field; ignore the cache and re-run every step
 --no-preflight   skip the pre-poll health check of models and MCP servers
 --read-only      serve without trigger, approval, answer, or resume controls
-                 (the pipeline file is still watched — see above)
+                 (steps pipeline set is NOT withheld — see Security)
 --keep-workspace leave build workspaces on disk
 --answer         answer an ask_user question in advance (repeatable)
---db             state database: a sqlite path or sqlite:// url (default .steps/<pipeline>.db per YAML)
---name           name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml
---var / --vars-file   pipeline vars, as everywhere else
+--worker         map a step tag to a machine, e.g. --worker gpu=ssh://jt@box
+--db             state database: a sqlite path or sqlite:// url (default .steps/steps.db)
+```
+
+`steps pipeline <verb>` — facts about one pipeline:
+
+```
+--target         the daemon to talk to (default http://127.0.0.1:8088, $STEPS_TARGET)
+-p / --pipeline  its name on the daemon (set defaults to the YAML's base name)
+-c / --config    the YAML to upload (set only)
+-v / --var, --vars-file   pipeline vars, substituted before the upload (set only)
+-n               do not diff or ask; apply it (set, destroy)
+--to             the new name (rename only)
 ```
