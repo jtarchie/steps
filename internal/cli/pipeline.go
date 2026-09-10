@@ -11,6 +11,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -81,7 +82,7 @@ func (p *PipelineSetCmd) Run() error {
 // namedPipeline refuses a name before it is concatenated into a URL: "#" truncates the path into a fragment nobody sends and "?" into a query, so `-p prod#old` asked the daemon about `prod` — which for destroy is the wrong pipeline, irrecoverably.
 func namedPipeline(name, verb string) (string, error) {
 	if name == "" {
-		return "", fmt.Errorf("steps pipeline %s needs -p <name>", verb)
+		return "", fmt.Errorf("steps %s needs -p <name>", verb)
 	}
 
 	err := config.ValidPipelineName(name)
@@ -275,7 +276,7 @@ type PipelineGetCmd struct {
 
 // Run prints the served source and names the files it carried.
 func (p *PipelineGetCmd) Run() error {
-	name, err := namedPipeline(p.Pipeline, "get")
+	name, err := namedPipeline(p.Pipeline, "pipeline get")
 	if err != nil {
 		return err
 	}
@@ -307,7 +308,7 @@ type PipelineDestroyCmd struct {
 
 // Run destroys the named pipeline.
 func (p *PipelineDestroyCmd) Run() error {
-	name, err := namedPipeline(p.Pipeline, "destroy")
+	name, err := namedPipeline(p.Pipeline, "pipeline destroy")
 	if err != nil {
 		return err
 	}
@@ -349,7 +350,7 @@ type PipelineUnpauseCmd struct {
 func (p *PipelineUnpauseCmd) Run() error { return pauseVerb(p.Target, p.Pipeline, "unpause") }
 
 func pauseVerb(target, pipeline, verb string) error {
-	name, err := namedPipeline(pipeline, verb)
+	name, err := namedPipeline(pipeline, "pipeline "+verb)
 	if err != nil {
 		return err
 	}
@@ -373,7 +374,7 @@ type PipelineRenameCmd struct {
 
 // Run renames the named pipeline.
 func (p *PipelineRenameCmd) Run() error {
-	name, err := namedPipeline(p.Pipeline, "rename")
+	name, err := namedPipeline(p.Pipeline, "pipeline rename")
 	if err != nil {
 		return err
 	}
@@ -473,6 +474,10 @@ func (c *daemonClient) set(name string, req web.SetRequest) (web.SetResult, erro
 		return result, err
 	}
 
+	if status == http.StatusConflict {
+		return result, fmt.Errorf("%w — re-read it with `steps pipeline get` and try again", daemonError(c.target, status, body))
+	}
+
 	if status != http.StatusOK {
 		return result, daemonError(c.target, status, body)
 	}
@@ -499,14 +504,61 @@ func (c *daemonClient) destroy(name string) error {
 }
 
 func (c *daemonClient) pause(name, verb string) error {
-	status, body, err := c.do(http.MethodPost, "/api/pipelines/"+name+"/"+verb, nil)
+	return c.post("/api/pipelines/"+name+"/"+verb, http.StatusNoContent)
+}
+
+// post is a bodiless verb whose only answer worth reading is a refusal.
+func (c *daemonClient) post(path string, want int) error {
+	status, body, err := c.do(http.MethodPost, path, nil)
 	if err != nil {
 		return err
 	}
 
-	if status != http.StatusNoContent {
+	if status != want {
 		return daemonError(c.target, status, body)
 	}
+
+	return nil
+}
+
+// RunsAbortCmd goes over HTTP rather than writing a row, because what it stops is a context inside the daemon's process that no database write can reach.
+type RunsAbortCmd struct {
+	TargetFlags      `embed:""`
+	PipelineNameFlag `embed:""`
+	RunID            string `arg:""                                                      help:"the run to stop" optional:""`
+	Queued           string `help:"instead, drop this job's queued run before it starts" name:"queued"          placeholder:"JOB"`
+}
+
+// Run stops the named run, or drops the job's queued one.
+func (a *RunsAbortCmd) Run() error {
+	name, err := namedPipeline(a.Pipeline, "runs abort")
+	if err != nil {
+		return err
+	}
+
+	if (a.RunID == "") == (a.Queued == "") {
+		return errors.New("steps runs abort needs a run id or --queued <job>, and not both")
+	}
+
+	client := newDaemonClient(a.Target)
+
+	if a.Queued != "" {
+		err = client.post("/api/pipelines/"+name+"/jobs/"+url.PathEscape(a.Queued)+"/queued/abort", http.StatusNoContent)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("aborted: the queued run of %s will not start\n", a.Queued)
+
+		return nil
+	}
+
+	err = client.post("/api/pipelines/"+name+"/runs/"+url.PathEscape(a.RunID)+"/abort", http.StatusAccepted)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("aborting: %s stops once its on_abort and ensure hooks have run\n", a.RunID)
 
 	return nil
 }
@@ -578,10 +630,6 @@ func daemonError(target string, status int, body []byte) error {
 
 	if message == "" {
 		message = http.StatusText(status)
-	}
-
-	if status == http.StatusConflict {
-		return fmt.Errorf("%s refused it: %s — re-read it with `steps pipeline get` and try again", target, message)
 	}
 
 	return fmt.Errorf("%s refused it: %s", target, message)

@@ -200,6 +200,8 @@ var ErrNoSuchPipeline = errors.New("no such pipeline")
 type Runner interface {
 	// Enqueue queues a job for execution, returning the queue row id.
 	Enqueue(ctx context.Context, pipeline *Pipeline, jobName, reason string, force bool) (int64, error)
+	// Abort cancels a run this process is executing, and reports false when it is not running here.
+	Abort(pipeline *Pipeline, runID string) bool
 }
 
 // New builds a server over whatever pipelines it is handed, which may be none: a daemon is configured by `steps pipeline set` and by nothing else, so empty is the ordinary starting state rather than an error.
@@ -356,6 +358,8 @@ func (s *Server) routes() error {
 	group.POST("/approvals/:id", s.handleDecideApproval)
 	group.POST("/questions/:id", s.handleAnswerQuestion)
 	group.POST("/jobs/:job/resume", s.handleResumeBreaker)
+	group.POST("/runs/:run/abort", s.handleAbortRun)
+	group.POST("/jobs/:job/queued/abort", s.handleAbortQueued)
 
 	// Not a UI route: an outside system saying "check this resource now".
 	// It authenticates with the resource's own token, which is why it is
@@ -372,6 +376,8 @@ func (s *Server) routes() error {
 	api.POST("/pipelines/:pipeline/pause", s.handleAPIPause)
 	api.POST("/pipelines/:pipeline/unpause", s.handleAPIUnpause)
 	api.POST("/pipelines/:pipeline/rename", s.handleAPIRename)
+	api.POST("/pipelines/:pipeline/runs/:run/abort", s.handleAPIAbortRun)
+	api.POST("/pipelines/:pipeline/jobs/:job/queued/abort", s.handleAPIAbortQueued)
 
 	s.echo = e
 

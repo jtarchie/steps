@@ -24,8 +24,7 @@ const (
 	// Errored is an infrastructure error: workspace setup, docker, an LLM
 	// transport failure, template rendering, or a store write.
 	Errored Class = "errored"
-	// Aborted means the enclosing (job-level) context was canceled — a
-	// SIGINT/SIGTERM mid-run.
+	// Aborted means the job-level context was canceled: a SIGINT/SIGTERM mid-run, or one run aborted through the daemon.
 	Aborted Class = "aborted"
 )
 

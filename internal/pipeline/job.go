@@ -15,6 +15,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
+	"github.com/jtarchie/steps/internal/outcome"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
@@ -190,7 +191,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		// Keep the workspace on failure rather than destroying it: the files a
 		// step had just written when it failed are the most useful thing to
 		// look at, and they are what a resume continues from.
-		_ = st.FinishRun(context.WithoutCancel(ctx), resume.id, "failed")
+		_ = st.FinishRun(context.WithoutCancel(ctx), resume.id, failedStatus(ctx, finalErr))
 
 		publishJobFinished(ctx, job.Name, jobStarted, finalErr)
 		reportResumable(resume.id, bw)
@@ -209,6 +210,15 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	logFrom(ctx).Info("job.done")
 
 	return nil
+}
+
+// failedStatus is Concourse's split: somebody stopping a build is not the build saying no, and a reader deciding whether to look for a bug has to tell them apart.
+func failedStatus(ctx context.Context, err error) string {
+	if outcome.Classify(ctx, err) == outcome.Aborted {
+		return "aborted"
+	}
+
+	return "failed"
 }
 
 // withRunContext installs the per-invocation switches the runners several

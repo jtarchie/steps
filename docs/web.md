@@ -281,7 +281,7 @@ and pauses while the tab is hidden.
 
 ## Triggering, approving, resuming
 
-Four controls, each writing the same rows the CLI writes:
+Five controls, each doing what a CLI verb does:
 
 - **Trigger** / **Re-run (forced)** enqueue the job into the durable trigger
   queue `steps web` uses — the same queue this process's own polling fills.
@@ -295,8 +295,11 @@ Four controls, each writing the same rows the CLI writes:
   offered option, or your own words — the same row `steps questions answer` writes. See
   [agents.md](agents.md).
 - **Resume** a job the trigger circuit breaker paused.
+- **Abort** a running run from its page, or a queued one from the page a
+  trigger lands on — what `steps runs abort` asks for. See
+  [Aborting a run](#aborting-a-run).
 
-`--read-only` withholds all four: the controls disappear from the pages and
+`--read-only` withholds all five: the controls disappear from the pages and
 the routes refuse. The queue is still drained, polling still runs, and
 `steps pipeline set` still works — that flag is a statement about the
 browser's surface, not about what the process does on its own or about how it
@@ -306,12 +309,46 @@ to notice new versions; read [Security](#security) before you expose one.
 **The webhook route is the one exception, deliberately.**
 `POST /p/<slug>/check/<resource>` still works under `--read-only`, and the job
 it enqueues still runs. It is not a UI control: it carries the resource's own
-token, which is a stronger check than the four above have, and withholding it
+token, which is a stronger check than the five above have, and withholding it
 would mean a read-only box could not be the thing GitHub notifies — which is
 most of why a build box is exposed at all. `--read-only` says a *browser*
 cannot start work here; it does not say nothing can. If that is what you
 want, do not give the pipeline a `webhook_token_env:` resource — with none, the
 route is a 404. See [infra.md](infra.md#webhook-triggered-checks).
+
+## Aborting a run
+
+Stopping one run leaves the daemon and every other run alone:
+
+```bash
+steps runs abort -p app 46UMHVPYRA6YHB7M   # stop a running run
+steps runs abort -p app --queued build     # drop build's queued run before it starts
+```
+
+or **■ Abort** on the run's page. It means what it means in Concourse:
+
+- The run reads **aborted**, not failed — the status a Ctrl-C gives a
+  `steps run` too. Its `on_abort:` and `ensure:` hooks still run, with the
+  60-second grace every abort gets, so the command returns before the run has
+  finished stopping.
+- Nothing it did is cached as done: running the job again runs the aborted
+  step again, and no version is marked as having passed it.
+- A placed step is interrupted on its worker rather than orphaned there, and a
+  machine the run acquired is given back the way any finished run gives it
+  back.
+- Its queue row is finalized **aborted**, so a restart does not run it again,
+  the circuit breaker neither counts nor clears it, and its `serial:` /
+  `max_in_flight` slot frees once the run has actually stopped.
+- An aborted queued run keeps its row, reads aborted, and never starts.
+  `--queued` names a job rather than a run because a queued build has no run
+  id yet, and a job has at most one queued at a time.
+
+It goes through the daemon rather than the database — what it stops is a
+context inside that process — so it needs a running `steps web`, takes
+`--target` like `steps pipeline` does, and is refused under `--read-only`. A
+run this daemon is not executing — one a `steps run` started against the same
+file, or one a crashed daemon left marked running — is refused with a message
+saying so.
 
 ## One daemon
 
@@ -497,7 +534,7 @@ port.
 --max-concurrent maximum queued jobs running at once, per pipeline (default 1)
 --pin / --force  pin a version field; ignore the cache and re-run every step
 --no-preflight   skip the pre-poll health check of models and MCP servers
---read-only      serve without trigger, approval, answer, or resume controls
+--read-only      serve without trigger, approval, answer, resume, or abort controls
                  (steps pipeline set is NOT withheld — see Security)
 --keep-workspace leave build workspaces on disk
 --answer         answer an ask_user question in advance (repeatable)

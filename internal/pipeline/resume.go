@@ -76,6 +76,11 @@ func NewRunID() string {
 	return rand.Text()[:runIDChars]
 }
 
+// WithNewRun fixes the id RunJob gives the run it starts, so a caller can address that run — to abort it — before it exists.
+func WithNewRun(ctx context.Context, id string) context.Context {
+	return withResume(ctx, &resumeState{id: id, done: map[int]string{}})
+}
+
 // runLookup is a run read that can also name the pipeline it read: Meta beside
 // Runs, because a run id is globally unique while the lookup is scoped, so the
 // pipeline is the fact that explains a miss ("no run X in pipeline Y" versus

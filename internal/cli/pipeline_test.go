@@ -4,8 +4,11 @@ package cli
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/web"
 )
 
 // A name is CONCATENATED into the request path, so anything URL-significant in it names a different pipeline than the one that was typed — and for destroy that is somebody else's history.
@@ -26,6 +29,46 @@ func TestAVerbRefusesANameThatWouldAddressAnotherPipeline(t *testing.T) {
 
 	if got != "prod-2.web_a" {
 		t.Errorf("namedPipeline gave %q; want the name it was handed", got)
+	}
+}
+
+// Both or neither is ambiguous about what to stop, so it is refused before anything reaches the daemon — port 1 answers nothing, so a request that went out fails differently.
+func TestRunsAbortNamesExactlyOneThingToStop(t *testing.T) {
+	t.Parallel()
+
+	for _, cmd := range []RunsAbortCmd{
+		{PipelineNameFlag: PipelineNameFlag{Pipeline: "app"}},
+		{PipelineNameFlag: PipelineNameFlag{Pipeline: "app"}, RunID: "RUN", Queued: "build"},
+	} {
+		cmd.Target = "http://127.0.0.1:1"
+
+		err := cmd.Run()
+		if err == nil || !strings.Contains(err.Error(), "not both") {
+			t.Errorf("run %q queued %q = %v, want refused before anything is sent", cmd.RunID, cmd.Queued, err)
+		}
+	}
+}
+
+// The re-read advice is about a set that raced another; on a refused abort it sends somebody to re-read a configuration nothing is wrong with.
+func TestOnlyASetConflictSaysToReRead(t *testing.T) {
+	t.Parallel()
+
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"message":"no"}`))
+	}))
+	t.Cleanup(daemon.Close)
+
+	client := newDaemonClient(daemon.URL)
+
+	_, err := client.set("app", web.SetRequest{Source: "jobs: []"})
+	if err == nil || !strings.Contains(err.Error(), "re-read") {
+		t.Errorf("a refused set = %v, want the advice to re-read", err)
+	}
+
+	err = client.post("/api/pipelines/app/runs/RUN/abort", http.StatusAccepted)
+	if err == nil || strings.Contains(err.Error(), "re-read") {
+		t.Errorf("a refused abort = %v, want no advice to re-read", err)
 	}
 }
 

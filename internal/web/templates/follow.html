@@ -5,6 +5,11 @@
 <div class="waiting">
   <p class="waitline"><span class="cursor">▍</span> <span id="follow-state">queued</span></p>
   <p class="faint" id="follow-hint">This forwards to the run as soon as it starts.</p>
+  {{if not .Nav.ReadOnly}}
+  <form method="post" action="/p/{{.Nav.Current}}/jobs/{{.Job}}/queued/abort">
+    <button class="btn danger" type="submit">■ Abort before it starts</button>
+  </form>
+  {{end}}
   <p><a href="/p/{{.Nav.Current}}/jobs/{{.Job}}">← back to {{.Job}}</a></p>
 </div>
 {{end}}

@@ -117,6 +117,24 @@ func (s *Store) CompleteJob(ctx context.Context, id int64, status string, runErr
 	return nil
 }
 
+// AbortQueuedJob keeps the row rather than deleting it, so the queue still says somebody stopped it.
+func (s *Store) AbortQueuedJob(ctx context.Context, jobName string) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE trigger_queue SET status = 'aborted', finished_at = ?
+		WHERE pipeline_id = ? AND job_name = ? AND status = 'pending'
+	`, now(), s.pipelineID, jobName)
+	if err != nil {
+		return false, fmt.Errorf("could not abort the queued run of %q: %w", jobName, err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("could not abort the queued run of %q: %w", jobName, err)
+	}
+
+	return affected > 0, nil
+}
+
 // ResetStaleRunning flips this pipeline's running rows back to pending —
 // called once at daemon startup so a killed (or gracefully but incompletely
 // shut down) process doesn't strand claimed work forever.

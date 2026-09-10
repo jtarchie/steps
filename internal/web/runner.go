@@ -61,7 +61,15 @@ type LocalRunner struct {
 	// direction.
 	mu     sync.Mutex
 	forced map[string]bool
+	// running is how an abort reaches a run: its cancel, held for exactly as long as RunJob is.
+	running map[runKey]context.CancelCauseFunc
 }
+
+// runKey scopes a run id to its pipeline, so a URL naming one pipeline cannot stop another's run.
+type runKey struct{ slug, runID string }
+
+// errAborted is what separates somebody stopping a run from the daemon going down: both cancel the same context, and only one of them is an outcome.
+var errAborted = errors.New("aborted on request")
 
 // NewLocalRunner builds a runner over per-pipeline workspace providers, keyed
 // by pipeline slug. concurrent below 1 means one job at a time.
@@ -83,6 +91,7 @@ func NewLocalRunner(
 		concurrent: concurrent,
 		force:      force,
 		forced:     map[string]bool{},
+		running:    map[runKey]context.CancelCauseFunc{},
 	}
 }
 
@@ -137,6 +146,19 @@ func (r *LocalRunner) takeForce(slug, jobName string) bool {
 	delete(r.forced, key)
 
 	return forced
+}
+
+// Abort only cancels: the run still unwinds through its on_abort and ensure hooks, and gives back its serial slot when it actually ends.
+func (r *LocalRunner) Abort(target *Pipeline, runID string) bool {
+	r.mu.Lock()
+	cancel, running := r.running[runKey{target.Slug, runID}]
+	r.mu.Unlock()
+
+	if running {
+		cancel(errAborted)
+	}
+
+	return running
 }
 
 // Drain runs each pipeline's queue until ctx is canceled. One goroutine per
@@ -303,7 +325,19 @@ func (r *LocalRunner) runAndFinalize(
 
 	slog.Info("web.job.run", "pipeline", target.Slug, "job", job.Name)
 
-	runErr := r.runJob(ctx, target, cfg, job, force)
+	aborted, runErr := r.runJob(ctx, target, cfg, job, force)
+
+	// Ahead of the interrupted case, which it also is: left running, the next startup re-runs a build somebody stopped. Not the job's own outcome either, so the breaker neither counts nor clears it.
+	if runErr != nil && aborted {
+		slog.Info("web.job.aborted", "pipeline", target.Slug, "job", job.Name)
+
+		err := target.Store.CompleteJob(context.WithoutCancel(ctx), id, "aborted", runErr)
+		if err != nil {
+			slog.Error("web.complete", "pipeline", target.Slug, "job", job.Name, "error", err)
+		}
+
+		return
+	}
 
 	// A run the process's own shutdown cut short is not an outcome. Store's
 	// CompleteJob says so in its doc comment, and the contract is load-bearing
@@ -418,19 +452,35 @@ func (r *LocalRunner) recordBreaker(ctx context.Context, target *Pipeline, job *
 // events reach any browser watching it.
 func (r *LocalRunner) runJob(
 	ctx context.Context, target *Pipeline, cfg *config.Config, job *config.Job, force bool,
-) error {
+) (bool, error) {
 	provider, release, ok := r.providers.take(target.Slug)
 	if !ok {
-		// A pipeline with no provider was never registered, which means the
-		// server was built by hand (a test) rather than by the command. Refuse
-		// rather than inventing a workspace: running a job somewhere the
-		// caller did not choose is worse than not running it.
-		return fmt.Errorf("web: no workspace provider registered for pipeline %q", target.Slug)
+		// Refused rather than inventing a workspace: an unregistered pipeline is a server built by hand, and running somewhere nobody chose is worse than not running.
+		return false, fmt.Errorf("web: no workspace provider registered for pipeline %q", target.Slug)
 	}
 
 	// Held for the life of the run, so a set that swaps the workspace under this pipeline cannot close the tree this build is materializing into.
 	defer release()
 
-	//nolint:wrapcheck // the run error is reported to the queue row verbatim
-	return pipeline.RunJob(events.WithBus(ctx, target.Bus), cfg, job, r.pinned, provider, target.Store, force)
+	// Minted here rather than inside RunJob so the run is addressable before it exists: an abort can land during preflight.
+	runID := pipeline.NewRunID()
+	key := runKey{target.Slug, runID}
+
+	runCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+
+	r.mu.Lock()
+	r.running[key] = cancel
+	r.mu.Unlock()
+
+	defer func() {
+		r.mu.Lock()
+		delete(r.running, key)
+		r.mu.Unlock()
+	}()
+
+	runErr := pipeline.RunJob(
+		events.WithBus(pipeline.WithNewRun(runCtx, runID), target.Bus), cfg, job, r.pinned, provider, target.Store, force)
+
+	return errors.Is(context.Cause(runCtx), errAborted), runErr
 }

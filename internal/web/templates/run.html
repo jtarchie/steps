@@ -13,6 +13,11 @@
   </div>
   {{if not .Nav.ReadOnly}}
   <div class="actions">
+    {{if eq $run.Run.Status "running"}}
+    <form method="post" action="/p/{{.Nav.Current}}/runs/{{$run.Run.ID}}/abort">
+      <button class="btn danger" type="submit">■ Abort</button>
+    </form>
+    {{end}}
     <form method="post" action="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/trigger">
       <input type="hidden" name="force" value="1">
       <button class="btn" type="submit">↻ Re-run</button>

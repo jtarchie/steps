@@ -19,6 +19,8 @@ func (stubRunner) Enqueue(context.Context, *Pipeline, string, string, bool) (int
 	return 1, nil
 }
 
+func (stubRunner) Abort(*Pipeline, string) bool { return false }
+
 // askOne records a pending question against a live run, the way an agent step
 // would.
 func askOne(t *testing.T, pipeline *Pipeline) store.Question {

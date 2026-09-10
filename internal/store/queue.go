@@ -17,6 +17,8 @@ type Queue interface {
 	// max_in_flight, atomically, and reports false when nothing is ready.
 	ClaimNextJob(ctx context.Context) (int64, string, bool, error)
 	CompleteJob(ctx context.Context, id int64, status string, runErr error) error
+	// AbortQueuedJob finalizes the job's pending row as aborted so it is never claimed, reporting false when nothing was pending. A running row is not its to touch: that build is stopped through its context, and holds its serial slot until it actually ends.
+	AbortQueuedJob(ctx context.Context, jobName string) (bool, error)
 	// ResetStaleRunning reclaims every running row as an abandoned leftover.
 	// It is only true when nothing else is alive, which is why steps runs one
 	// daemon per database.

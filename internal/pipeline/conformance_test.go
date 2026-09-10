@@ -324,6 +324,8 @@ jobs:
 		t.Errorf("outcome.Classify(runErr) = %q, want %q", got, outcome.Aborted)
 	}
 
+	assertRunStatus(t, st, "build", "aborted")
+
 	fired, err := os.ReadFile(marker) //nolint:gosec // a t.TempDir()-scoped marker this test wrote itself
 	if err != nil {
 		t.Fatalf("no hook wrote the marker file, so neither hook fired: %v", err)
@@ -332,6 +334,16 @@ jobs:
 	got := strings.TrimSpace(string(fired))
 	if got != "aborted" {
 		t.Errorf("hook marker = %q, want %q — an aborted step must fire on_abort and not on_failure", got, "aborted")
+	}
+}
+
+// A stopped build recorded as failed reads as a bug to chase.
+func assertRunStatus(t *testing.T, st store.Runs, jobName, want string) {
+	t.Helper()
+
+	runs, err := st.ListRuns(context.Background(), jobName, 1)
+	if err != nil || len(runs) != 1 || runs[0].Status != want {
+		t.Errorf("recorded runs = %+v (%v), want one reading %s", runs, err, want)
 	}
 }
 
