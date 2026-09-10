@@ -39,7 +39,7 @@ type webhookHandler struct {
 	// placed check resolves through. A request's own context carries none
 	// of it — the server minted it — so a tagged resource's webhook checked
 	// from nowhere and failed.
-	base context.Context //nolint:containedctx // the values, not the lifetime; see requestContext
+	base context.Context //nolint:containedctx // the values, and the lifetime a check ends with; see deliver
 }
 
 // requestContext is a request's context for cancellation and the daemon's for
@@ -136,8 +136,17 @@ func (h *webhookHandler) deliver(w http.ResponseWriter, r *http.Request, cfg *co
 		return
 	}
 
+	// Ended by the pipeline too: a server's shutdown waits on a request rather than cancelling it, so a check acquiring a machine outlived the registry's Close and left it billing.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	if h.base != nil {
+		stop := context.AfterFunc(h.base, cancel) //nolint:contextcheck // the pipeline's lifetime, joined to the request's
+		defer stop()
+	}
+
 	//nolint:contextcheck // the request's own context, with the daemon's values behind it — see requestContext
-	enqueued, err := h.checkNow(requestContext{Context: r.Context(), base: h.base}, cfg, name)
+	enqueued, err := h.checkNow(requestContext{Context: ctx, base: h.base}, cfg, name)
 	if err != nil {
 		slog.Warn("webhook.check_failed", "resource", name, "error", err)
 		http.Error(w, "check failed", http.StatusInternalServerError)

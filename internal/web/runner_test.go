@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -369,8 +370,10 @@ jobs:
 
 	// Cancelled while the step sleeps, which is what a SIGTERM to the daemon
 	// looks like from inside drainOne.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	time.AfterFunc(2*time.Second, cancel) // cancelled, never timed out: DeadlineExceeded is what a step's own timeout: ends in, which is the job answering
 
 	runner := NewLocalRunner(map[string]workspace.Provider{"demo": provider}, nil, 1, false)
 	runner.drainOne(ctx, target)
@@ -491,4 +494,314 @@ func countLines(t *testing.T, path string) int {
 	}
 
 	return len(strings.Fields(string(body)))
+}
+
+// A step's own timeout: is the job answering, not the daemon going down: read as an interruption the row stayed running, so a serial job admitted nothing after it until a restart, the breaker never counted it, and the restart re-ran a build that had already failed.
+func TestDrainFinalizesAStepTimeoutAsAFailure(t *testing.T) {
+	t.Parallel()
+
+	runner, target, st := drainable(t, t.TempDir(), `
+jobs:
+  - name: build
+    serial: true
+    max_consecutive_failures: 1
+    plan:
+      - task: slow
+        inputs: []
+        timeout: 200ms
+        run: sleep 10
+`)
+	ctx := t.Context()
+
+	runner.drainOne(ctx, target)
+
+	err := st.EnqueueJob(ctx, "build", "next")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+
+	if !runner.drainOne(ctx, target) {
+		t.Fatal("the next build of a serial job could not be claimed: the timed-out build still holds its slot")
+	}
+
+	if got := queueStatuses(t, st); got != "failed skipped" {
+		t.Errorf("queue = %q, want the timed-out build failed and the next one skipped by the breaker it tripped", got)
+	}
+
+	paused, err := st.PausedJobs(ctx)
+	if err != nil || len(paused) != 1 {
+		t.Errorf("paused = %+v (%v), want build: a timeout is a failure the breaker counts", paused, err)
+	}
+}
+
+// The drain decides, not the error chain alone: a cancellation with the drain still live is the job's own answer, and a timeout: expiring while a shutdown waits is still the job failing.
+func TestInterruptedAsksTheDrain(t *testing.T) {
+	t.Parallel()
+
+	if interrupted(t.Context(), fmt.Errorf("step: %w", context.Canceled)) {
+		t.Error("a cancellation with the drain still live read as this process cutting the run short")
+	}
+
+	ended, end := context.WithCancel(t.Context())
+	end()
+
+	if !interrupted(ended, fmt.Errorf("step: %w", context.Canceled)) {
+		t.Error("a run the drain's end cancelled did not read as interrupted")
+	}
+
+	if interrupted(ended, fmt.Errorf("step: %w", context.DeadlineExceeded)) {
+		t.Error("a step's own timeout: read as an interruption because a shutdown happened to be waiting on it")
+	}
+}
+
+// TestConformanceNonInterruptibleBuildSurvivesShutdown: concourse-ci.org/docs/jobs/ — interruptible defaults to false, and only a job that says true is not waited for at shutdown, since a deploy half-applied by a restart is the case the field exists for.
+func TestConformanceNonInterruptibleBuildSurvivesShutdown(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	finished := filepath.Join(dir, "finished")
+
+	runner, target, st := drainable(t, dir, `
+jobs:
+  - name: build
+    plan:
+      - task: deploy
+        inputs: []
+        run: |
+          touch `+started+`
+          sleep 1
+          touch `+finished+`
+`)
+
+	process, shutdown := context.WithCancel(t.Context())
+	defer shutdown()
+
+	runner.StopWith(process)
+
+	drain, stop := context.WithCancel(process)
+	defer stop()
+
+	done := drainInBackground(drain, runner, target)
+
+	waitForFile(t, started)
+	shutdown()
+	waitForDrain(t, done, 20*time.Second)
+
+	if got := queueStatuses(t, st); got != "succeeded" {
+		t.Errorf("queue = %q, want the build finished and recorded: cut off, the next start re-runs a deploy", got)
+	}
+
+	_, err := os.Stat(finished)
+	if err != nil {
+		t.Errorf("the build was cut off by the shutdown: %v", err)
+	}
+}
+
+// What does not wait: a job that said interruptible: true, a drain stopped with the process alive (its pipeline destroyed or renamed, which must not wait out the grace), and a build outlasting the grace — each left running for the next start to re-queue.
+func TestDrainCancelsWhatDoesNotWait(t *testing.T) {
+	t.Parallel()
+
+	for name, scenario := range map[string]struct {
+		interruptible, shutdown bool
+		grace                   time.Duration
+	}{
+		"interruptible at shutdown":     {interruptible: true, shutdown: true},
+		"pipeline destroyed mid-build":  {},
+		"shutdown outlasting the grace": {shutdown: true, grace: 100 * time.Millisecond},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			started := filepath.Join(dir, "started")
+
+			runner, target, st := drainable(t, dir, fmt.Sprintf(`
+jobs:
+  - name: build
+    interruptible: %t
+    plan:
+      - task: deploy
+        inputs: []
+        run: |
+          touch %s
+          sleep 30
+`, scenario.interruptible, started))
+
+			if scenario.grace > 0 {
+				runner.grace = scenario.grace
+			}
+
+			process, shutdown := context.WithCancel(t.Context())
+			defer shutdown()
+
+			runner.StopWith(process)
+
+			drain, stop := context.WithCancel(process)
+			defer stop()
+
+			done := drainInBackground(drain, runner, target)
+
+			waitForFile(t, started)
+
+			if scenario.shutdown {
+				shutdown()
+			} else {
+				stop()
+			}
+
+			waitForDrain(t, done, 10*time.Second)
+
+			if got := queueStatuses(t, st); got != "running" {
+				t.Errorf("queue = %q, want running: cut short by this process, the build is the next start's to re-queue", got)
+			}
+		})
+	}
+}
+
+// A row the breaker skips still spent the force it was claimed with: left behind, the flag forces the job's next ordinary build, re-running from scratch what the cache would have skipped.
+func TestABreakerSkipSpendsTheForce(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tally := filepath.Join(dir, "ran.txt")
+
+	runner, target, st := drainable(t, dir, `
+jobs:
+  - name: build
+    plan:
+      - task: append
+        inputs: []
+        run: echo ran >> `+tally+`
+`)
+	ctx := t.Context()
+
+	runner.drainOne(ctx, target)
+
+	_, _, err := st.RecordJobOutcome(ctx, "build", false, 1)
+	if err != nil {
+		t.Fatalf("RecordJobOutcome: %v", err)
+	}
+
+	_, err = runner.Enqueue(ctx, target, "build", "re-run", true)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	runner.drainOne(ctx, target)
+
+	_, _, err = st.RecordJobOutcome(ctx, "build", true, 1)
+	if err != nil {
+		t.Fatalf("RecordJobOutcome: %v", err)
+	}
+
+	err = st.EnqueueJob(ctx, "build", "poll")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+
+	runner.drainOne(ctx, target)
+
+	if got := queueStatuses(t, st); got != "succeeded skipped succeeded" {
+		t.Fatalf("queue = %q, want the forced row skipped by the breaker between two ordinary builds", got)
+	}
+
+	if lines := countLines(t, tally); lines != 1 {
+		t.Errorf("tally = %d, want 1: the skipped row's force re-ran the next ordinary build from scratch", lines)
+	}
+}
+
+// drainable is one pipeline with one queued build of "build", for a test that drives drainOne itself.
+func drainable(t *testing.T, dir, yaml string) (*LocalRunner, *Pipeline, store.Store) {
+	t.Helper()
+
+	path := filepath.Join(dir, "demo.yml")
+	writeFile(t, path, yaml)
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	t.Cleanup(func() { _ = st.Close() })
+
+	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	t.Cleanup(func() { _ = provider.Close() })
+
+	target := NewPipeline("demo", path, cfg, st, events.New(nil))
+
+	PrepareQueue(t.Context(), target)
+	SyncQueueLimits(t.Context(), target)
+
+	err = st.EnqueueJob(t.Context(), "build", "test")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+
+	return NewLocalRunner(map[string]workspace.Provider{"demo": provider}, nil, 1, false), target, st
+}
+
+// queueStatuses is the queue oldest first.
+func queueStatuses(t *testing.T, st store.Store) string {
+	t.Helper()
+
+	rows, err := st.ListTriggerQueue(t.Context(), 10)
+	if err != nil {
+		t.Fatalf("ListTriggerQueue: %v", err)
+	}
+
+	statuses := make([]string, 0, len(rows))
+	for i := len(rows) - 1; i >= 0; i-- {
+		statuses = append(statuses, rows[i].Status)
+	}
+
+	return strings.Join(statuses, " ")
+}
+
+func drainInBackground(drain context.Context, runner *LocalRunner, target *Pipeline) <-chan struct{} {
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		runner.drainOne(drain, target)
+	}()
+
+	return done
+}
+
+func waitForDrain(t *testing.T, done <-chan struct{}, within time.Duration) {
+	t.Helper()
+
+	select {
+	case <-done:
+	case <-time.After(within):
+		t.Fatalf("drainOne was still running %s later", within)
+	}
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+
+	deadline := time.Now().Add(20 * time.Second)
+
+	for time.Now().Before(deadline) {
+		_, err := os.Stat(path)
+		if err == nil {
+			return
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("%s never appeared", path)
 }

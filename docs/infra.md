@@ -490,7 +490,7 @@ steps pipeline set -c pipeline.yml
 - **At-least-once, never at-most-once**: a resource's recorded version only advances *after* every affected job is durably enqueued. If a check errors or the process crashes mid-poll, the resource stays "dirty" and is retried next poll rather than silently dropped.
 - **Cold start builds the newest, seeds the rest.** A resource checked for the first time records everything it reports, marks everything below the newest as already taken, and triggers once on the newest — so a fresh (or freshly lost) state database can't mass-re-run every job the moment `watch` starts, and can't sit silent forever either. Concourse builds the single version its first check reports; this is the same outcome for a check that reports a window.
 - **Dedup, ordering, and per-job concurrency**: a resource going dirty twice before a worker claims the row enqueues its affected job once — but a job already running can still get a fresh pending row queued behind it, so a version change mid-run isn't dropped. Claiming respects the job's [`max_in_flight:`](#max_in_flight--how-many-builds-of-one-job-at-once) — unlimited when unset, forced to 1 by `serial:`/`serial_groups:`.
-- **Graceful-shutdown carve-out**: a job interrupted by SIGINT/SIGTERM mid-run is *not* marked failed — its row is left "running" and reset to "pending" on the next startup, recovering a hard crash and an interrupted shutdown the same way.
+- **Graceful-shutdown carve-out**: a job interrupted by SIGINT/SIGTERM mid-run — one that is [`interruptible:`](#interruptible--what-a-shutdown-does-to-a-running-build), or that outlasted the shutdown's grace — is *not* marked failed: its row is left "running" and reset to "pending" on the next startup, recovering a hard crash and an interrupted shutdown the same way. A step's own `timeout:` expiring is not an interruption; that build failed.
 
 ## Get renaming (`resource:`)
 
@@ -767,9 +767,10 @@ assert:
   execution: [deploy-prod, nightly-report]
 ```
 
-- **The default is to wait**, matching Concourse. Half-applying a deploy because someone restarted the watcher is the failure this exists to prevent.
-- **The wait is bounded** (10 minutes). A job needing longer should carry its own `timeout:`, which still applies.
-- **`interruptible: true`** shares the watcher's context and is cancelled with it. Its queue row stays `running`, so the next startup re-queues it — nothing is lost, it is just re-run.
+- **The default is to wait**, matching Concourse. Half-applying a deploy because someone restarted the daemon is the failure this exists to prevent.
+- **The wait is bounded** (10 minutes). A job needing longer should carry its own `timeout:`, which still applies. The daemon logs `web.job.shutdown_wait` for each build it is waiting on; one still running when the grace ends is cancelled and re-queued like an interruptible one.
+- **`interruptible: true`** is cancelled the moment the daemon is told to stop. Its queue row stays `running`, so the next startup re-queues it — nothing is lost, it is just re-run.
+- **Only a shutdown waits.** Destroying a pipeline cancels its running build at once, whatever this field says, and so does renaming one — which re-queues the build under the new name.
 - **This affects `steps web` only.** `steps run` is a person at a terminal, and ctrl-C there is always immediate.
 
 ## Webhook-triggered checks

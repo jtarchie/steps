@@ -247,17 +247,23 @@ A question goes to the first channel that can serve it:
 1. **An answer given in advance.** `steps run --answer 'which bump=minor'` (repeatable, also on `test`, `watch` and `web`) answers every question whose text contains that substring, case-insensitively. It is a supported way to run unattended, not only a test seam.
 2. **`answered_by: <agent>`** — a declared `agents:` entry answers, with its own model, dials and tool grant. This is deliberately *not* the same as granting that agent as a sub-agent tool: a sub-agent is delegation the asking model chose, while a responder is an **escalation** a person can still intercept. The recorded row says which one answered. A responder that fails, or answers with nothing, hands the question on rather than resolving it.
 3. **A person, inline.** When `steps run` has a terminal, the question is asked right there.
-4. **A person, parked.** With no terminal — CI, a supervised `steps web` — the run parks and the question waits:
+4. **A person, parked.** With no terminal — CI, a supervised `steps web` — the run parks, prints the command that answers it, and waits:
 
 ```console
-$ steps questions -p pipeline
+question 1: Which bump is this release?
+question 1: options: major | minor | patch
+question 1: waiting up to 5m0s — steps questions answer 1 <answer> -p pipeline --db .steps/pipeline.yml.db
+
+$ steps questions -p pipeline --db .steps/pipeline.yml.db    # another shell, same directory
 ID  JOB           STEP    ASKED                          QUESTION
 1   release-note  writer  2026-08-25T09:14:02.000000000Z Which bump is this release?
                                                          options: major | minor | patch
 
-$ steps questions answer 1 minor -p pipeline
+$ steps questions answer 1 minor -p pipeline --db .steps/pipeline.yml.db
 answered: question 1
 ```
+
+That is a local `steps run`, which keeps its state beside the YAML; under `steps web` the line reads `-p <name>` alone, because the read commands default to the daemon's `.steps/steps.db`.
 
 The row is written **before** any of those are tried, so nothing about the audit trail depends on which channel answered — or on the run still being alive when one does. Every conversation inside a run can ask: a plan step, a sub-agent (on behalf of the same run), a task's `fix:` agent mid-repair, and a hook. Each question is filed under the name of the agent that asked it, not the step that invoked it. The web UI's **questions** page reads the same rows and writes the same answer; `--read-only` withholds that control the way it withholds approve/reject (see [web.md](web.md)).
 

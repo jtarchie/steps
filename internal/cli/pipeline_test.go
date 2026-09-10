@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/web"
 )
@@ -69,6 +70,35 @@ func TestOnlyASetConflictSaysToReRead(t *testing.T) {
 	err = client.post("/api/pipelines/app/runs/RUN/abort", http.StatusAccepted)
 	if err == nil || strings.Contains(err.Error(), "re-read") {
 		t.Errorf("a refused abort = %v, want no advice to re-read", err)
+	}
+}
+
+// A daemon that took the request and has not answered is still working on it — a rename waiting out a cancelled build's ensure hooks, say — and "start one" sends somebody to start a second daemon beside it.
+func TestASlowDaemonIsNotCalledUnreachable(t *testing.T) {
+	t.Parallel()
+
+	answer := make(chan struct{})
+
+	daemon := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		<-answer
+	}))
+
+	t.Cleanup(func() {
+		close(answer)
+		daemon.Close()
+	})
+
+	client := newDaemonClient(daemon.URL)
+	client.http.Timeout = 50 * time.Millisecond
+
+	err := client.rename("app", "renamed")
+	if err == nil || strings.Contains(err.Error(), "start one") || !strings.Contains(err.Error(), "may still be applying") {
+		t.Errorf("a daemon that did not answer in time = %v, want it reported busy rather than down", err)
+	}
+
+	err = newDaemonClient("http://127.0.0.1:1").rename("app", "renamed")
+	if err == nil || !strings.Contains(err.Error(), "start one") {
+		t.Errorf("a daemon nothing answers for = %v, want the advice to start one", err)
 	}
 }
 

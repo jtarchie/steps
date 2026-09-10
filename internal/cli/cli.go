@@ -166,6 +166,8 @@ func (r *RunCmd) Run() error {
 		return err
 	}
 
+	ctx = pipeline.WithAnswerDB(ctx, answerDB(r.Pipeline, r.DB))
+
 	jobName := r.Job
 
 	ctx, jobName, err = r.applyContinuation(ctx, st, provider, jobName)
@@ -235,6 +237,8 @@ func (t *TestCmd) Run() error {
 	if err != nil {
 		return err
 	}
+
+	ctx = pipeline.WithAnswerDB(ctx, answerDB(t.Pipeline, t.DB))
 
 	var (
 		executed []string
@@ -1900,6 +1904,16 @@ func StatePath(pipeline string, db DB) string {
 	return filepath.Join(filepath.Dir(pipeline), ".steps", filepath.Base(pipeline)+".db")
 }
 
+// answerDB is the --db a parked step's printed command needs for a local run's state, and "" when that is the daemon default the read commands open anyway.
+func answerDB(pipelinePath string, db DB) string {
+	state := StatePath(pipelinePath, db)
+	if filepath.Clean(state) == DefaultDaemonState {
+		return ""
+	}
+
+	return state // ponytail: as resolved, so a relative path reaches it only from where the run started; filepath.Abs it if answers come from elsewhere
+}
+
 // PipelineName is a pipeline's identity inside a state database: the YAML's
 // base name without its extension.
 //
@@ -2238,6 +2252,7 @@ func (w *WebCmd) Run() error {
 // the deployment mistake the one-process-per-file rule already names.
 func (w *WebCmd) serve(ctx context.Context) error {
 	local := web.NewLocalRunner(nil, w.Pin, w.MaxConcurrent, w.Force)
+	local.StopWith(ctx)
 
 	var runner web.Runner
 	if !w.ReadOnly {

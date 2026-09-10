@@ -131,6 +131,49 @@ func TestAbortFinalizesTheRunItStopped(t *testing.T) {
 	}
 }
 
+// The force flag is keyed by job, since a queue row has no column for it, so dropping the forced row must drop the flag — or the job's next ordinary build ignores the cache, re-billing an agent for work nobody asked to redo.
+func TestAbortingAForcedQueuedRunDropsItsForce(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tally := filepath.Join(dir, "ran.txt")
+
+	runner, target, st := drainable(t, dir, `
+jobs:
+  - name: build
+    plan:
+      - task: append
+        inputs: []
+        run: echo ran >> `+tally+`
+`)
+
+	server, err := New([]*Pipeline{target}, runner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	runner.drainOne(t.Context(), target)
+
+	if status := post(t, server, "/p/demo/jobs/build/trigger", map[string]string{"force": "1"}); status != http.StatusSeeOther {
+		t.Fatalf("forced trigger = %d, want 303", status)
+	}
+
+	if status := post(t, server, "/api/pipelines/demo/jobs/build/queued/abort", nil); status != http.StatusNoContent {
+		t.Fatalf("queued abort = %d, want 204", status)
+	}
+
+	err = st.EnqueueJob(t.Context(), "build", "poll")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+
+	runner.drainOne(t.Context(), target)
+
+	if lines := countLines(t, tally); lines != 1 {
+		t.Errorf("tally = %d, want 1: the aborted row's force re-ran the next ordinary build from scratch", lines)
+	}
+}
+
 // slowPipeline queues a job that runs until something stops it, with a breaker set to trip on the first failure it counts.
 func slowPipeline(t *testing.T) (*LocalRunner, *Pipeline, store.Store) {
 	t.Helper()

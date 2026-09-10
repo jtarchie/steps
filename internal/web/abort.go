@@ -42,7 +42,7 @@ func (s *Server) abortQueued(ctx context.Context, target *Pipeline, jobName stri
 		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
 	}
 
-	dropped, err := target.Store.AbortQueuedJob(ctx, jobName)
+	dropped, err := s.runner.AbortQueued(ctx, target, jobName)
 	if err != nil {
 		return echoError(err)
 	}

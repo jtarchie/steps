@@ -9,7 +9,7 @@
   <div class="msg">{{.Message}}</div>
   {{if eq .Status "pending"}}
     {{if $.Nav.ReadOnly}}
-    <div class="meta">This server is read-only. Decide with <code>steps approvals approve &lt;pipeline&gt; {{.ID}}</code>.</div>
+    <div class="meta">This server is read-only. Decide with <code>steps approvals approve {{.ID}} -p {{$.Nav.Current}}</code>.</div>
     {{else}}
     <form class="decide" method="post" action="/p/{{$.Nav.Current}}/approvals/{{.ID}}">
       <input type="text" name="reason" placeholder="reason (recorded)" aria-label="Decision reason">

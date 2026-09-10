@@ -171,8 +171,8 @@ type Manager interface {
 // SetRequest is one upload: the substituted YAML, the files it includes, and the revision the sender believed it was replacing.
 type SetRequest struct {
 	Source string `json:"source"`
-	// A daemon has no sibling filesystem, so an include that does not travel here cannot be resolved at all — see config.Bundle.
-	Includes map[string]string `json:"includes,omitempty"`
+	// A daemon has no sibling filesystem, so an include that does not travel here cannot be resolved at all (see config.Bundle); bytes rather than strings because encoding/json replaces each invalid UTF-8 byte of a string with U+FFFD, which ran a Latin-1 run_file: as bytes nobody sent.
+	Includes map[string][]byte `json:"includes,omitempty"`
 	// ExpectSHA is the compare-and-set. Empty means the sender did not look, which a script may legitimately do.
 	ExpectSHA string `json:"expect_sha,omitempty"`
 	// From is the SENDER's path, recorded for a reader wondering where a served configuration came from, and never opened here.
@@ -202,6 +202,8 @@ type Runner interface {
 	Enqueue(ctx context.Context, pipeline *Pipeline, jobName, reason string, force bool) (int64, error)
 	// Abort cancels a run this process is executing, and reports false when it is not running here.
 	Abort(pipeline *Pipeline, runID string) bool
+	// AbortQueued drops a job's queued run before it starts, and reports false when nothing was queued.
+	AbortQueued(ctx context.Context, pipeline *Pipeline, jobName string) (bool, error)
 }
 
 // New builds a server over whatever pipelines it is handed, which may be none: a daemon is configured by `steps pipeline set` and by nothing else, so empty is the ordinary starting state rather than an error.
@@ -325,10 +327,7 @@ func (s *Server) routes() error {
 
 	e.Use(middleware.Recover())
 
-	// Every mutation is a POST whose Origin must match the host serving it.
-	// With no authentication there is no session for a cross-site request to
-	// ride, but a page on another origin can still aim a form at localhost —
-	// and this is the check that costs nothing and closes it.
+	// With no authentication there is no session for a cross-site request to ride, but a page on another origin can still aim a form at localhost — and this is the check that costs nothing and closes it.
 	e.Use(sameOriginMutations)
 
 	e.GET("/", s.handleIndex)
@@ -368,7 +367,7 @@ func (s *Server) routes() error {
 	group.POST("/check/:resource", s.handleWebhook)
 
 	// Outside the /p/ group because a set may CREATE the pipeline it names, and that middleware resolves one that exists.
-	api := e.Group("/api", middleware.BodyLimit(maxUploadSize))
+	api := e.Group("/api", refuseBrowsers, middleware.BodyLimit(maxUploadSize))
 	api.GET("/pipelines", s.handleAPIList)
 	api.GET("/pipelines/:pipeline", s.handleAPIGet)
 	api.PUT("/pipelines/:pipeline", s.handleAPISet)
@@ -464,6 +463,22 @@ func sameOriginMutations(next echo.HandlerFunc) echo.HandlerFunc {
 			return echo.NewHTTPError(http.StatusForbidden, "cross-origin request refused")
 		}
 
+		return next(c)
+	}
+}
+
+// No page here calls /api, and to the origin check a DNS-rebinding page is same-origin (its own name arrives as both Host and Origin) while a set is a remote shell; not a Host check, because a reverse proxy forwards the client's.
+func refuseBrowsers(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		header := c.Request().Header
+		site := header.Get("Sec-Fetch-Site")
+
+		// Origin is the half that holds: every browser sends it on a PUT, POST or DELETE, while Sec-Fetch-Site reaches only https and loopback URLs, which a rebinding page is not.
+		if header.Get("Origin") != "" || (site != "" && site != "none") {
+			return echo.NewHTTPError(http.StatusForbidden, "the /api routes answer the steps CLI, not a browser")
+		}
+
+		// ponytail: a rebinding page's GET carries neither and is answered, showing it nothing the UI's own pages do not; an opt-in Host allow-list would close both.
 		return next(c)
 	}
 }

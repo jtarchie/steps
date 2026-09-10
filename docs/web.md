@@ -520,9 +520,25 @@ someone who has decided that is what they want; put it behind something that
 authenticates — an SSH tunnel, a reverse proxy, a network nobody else is on —
 and treat `--read-only` as being about the browser only.
 
-Mutations from a browser are POST-only and require a same-origin `Origin`
-header when one is present, so another page cannot aim a form at your localhost
-port.
+**Loopback keeps other machines off the port, not other web pages.** A page
+open in a browser on this machine can re-point its own hostname at `127.0.0.1`
+after it loads — DNS rebinding — and from then on its requests reach this port
+carrying that name as both `Host` and `Origin`, which is exactly what a
+same-origin request looks like. So everything under `/api/` — what
+`steps pipeline` and `steps runs abort` talk to — refuses a request carrying a
+header only a browser attaches: an `Origin` of any value, which every browser
+sends on the `PUT`, `POST` and `DELETE` those verbs use, or a `Sec-Fetch-Site`
+saying anything but `none`, which is a URL typed into the address bar. The CLI
+sends neither, and no page in the UI calls `/api/`. `Host` is not checked,
+because a reverse proxy in front of the daemon forwards the name the client
+used.
+
+The browser's own controls — trigger, approve, answer, resume, abort — are
+`POST`s refused when their `Origin` names another host, which stops another
+site aiming a form at your port. A rebinding page is not another host: it can
+read every page, configurations included, and press those controls, unless
+`--read-only` has withheld them. It cannot set, destroy, rename or pause a
+pipeline.
 
 ## Flags
 

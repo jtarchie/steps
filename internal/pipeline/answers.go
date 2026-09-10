@@ -36,3 +36,8 @@ func WithAnswers(ctx context.Context, raw []string) (context.Context, error) {
 
 	return agent.WithAnswerSeeds(ctx, seeds), nil
 }
+
+// WithAnswerDB is agent.WithAnswerDB for main, which reaches agent only through here; approval: reads the same value.
+func WithAnswerDB(ctx context.Context, db string) context.Context {
+	return agent.WithAnswerDB(ctx, db)
+}

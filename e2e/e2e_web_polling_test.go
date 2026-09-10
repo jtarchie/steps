@@ -401,6 +401,43 @@ func TestWebPollsTriggerResourcesByDefault(t *testing.T) {
 	waitForDid(t, fixture, "1", "2")
 }
 
+// SIGINT mid-deploy: a build of a job that did not say interruptible: true finishes rather than being cut off and re-run by the next start — and the daemon's half of that, handing the runner the signal's context, is a seam no package test reaches.
+func TestWebShutdownWaitsForANonInterruptibleBuild(t *testing.T) {
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	finished := filepath.Join(dir, "finished")
+
+	path := writePipeline(t, dir, `
+jobs:
+- name: deploy
+  plan:
+  - task: apply
+    inputs: []
+    run: |
+      touch `+started+`
+      sleep 2
+      touch `+finished+`
+`)
+
+	served := startWebFor(t, path, "--interval", "1h")
+	defer served.stopIfRunning(t)
+
+	name := cli.PipelineName(path)
+
+	served.trigger(t, name, "deploy")
+	waitForFile(t, started)
+
+	served.stop(t)
+
+	if !fileExists(finished) {
+		t.Error("the deploy was cut off by the shutdown: a job that did not opt into interruptible: must be allowed to finish")
+	}
+
+	if got := queueStatuses(t, served.state, name); got != "deploy:succeeded" {
+		t.Errorf("queue = %s, want the build finished and recorded: left running, the next start re-runs a deploy that already happened", got)
+	}
+}
+
 // newWatchFixtureIn writes a fixture into a directory that may already hold
 // another one, which is how pipelines actually sit next to each other — one
 // daemon serving several is one repo folder, not three.

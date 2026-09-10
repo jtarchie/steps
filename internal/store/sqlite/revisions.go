@@ -61,12 +61,12 @@ func (s *Store) RecordRevision(ctx context.Context, sha, source string, includes
 	return nil
 }
 
-// SetCurrentRevision refuses a sha nothing recorded rather than pointing at nothing: a daemon restarting against a NULL would silently serve no pipeline.
+// SetCurrentRevision refuses a sha nothing recorded rather than pointing at nothing: a daemon restarting against a NULL would silently serve no pipeline. The path rides in the same UPDATE, because a second write after it could fail with the switch already made.
 func (s *Store) SetCurrentRevision(ctx context.Context, sha, from string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE pipelines
 		SET current_revision_id = (SELECT id FROM pipeline_revisions WHERE pipeline_id = ? AND sha = ?),
-		    set_from = ?, set_at = ?
+		    path = ?, set_at = ?
 		WHERE id = ? AND EXISTS (SELECT 1 FROM pipeline_revisions WHERE pipeline_id = ? AND sha = ?)
 	`, s.pipelineID, sha, from, nowNano(), s.pipelineID, s.pipelineID, sha)
 	if err != nil {

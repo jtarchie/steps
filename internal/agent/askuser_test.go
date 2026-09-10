@@ -668,3 +668,18 @@ func TestSubAgentCarriesTheAskContext(t *testing.T) {
 		t.Errorf("recorded agent = %q, want the sub-agent that asked", recorded.AgentName)
 	}
 }
+
+// A daemon sets no WithAnswerDB and its hint must still name the pipeline; only a local run's names a file.
+func TestAnswerFlagsNameTheDatabaseOnlyWhenTold(t *testing.T) {
+	t.Parallel()
+
+	got := AnswerFlags(t.Context(), "app")
+	if got != "-p app" {
+		t.Errorf("with no database recorded, AnswerFlags = %q, want %q", got, "-p app")
+	}
+
+	got = AnswerFlags(WithAnswerDB(t.Context(), ".steps/app.yml.db"), "app")
+	if got != "-p app --db .steps/app.yml.db" {
+		t.Errorf("with a local run's database, AnswerFlags = %q, want it named", got)
+	}
+}

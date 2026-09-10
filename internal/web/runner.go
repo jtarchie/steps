@@ -31,6 +31,9 @@ import (
 // a quarter is not.
 const drainIdleBackoff = 250 * time.Millisecond
 
+// Bounded because a job with no timeout: of its own and a hung command would otherwise hold shutdown forever; one needing longer says so with its own timeout:, which still applies.
+const nonInterruptibleGrace = 10 * time.Minute
+
 // LocalRunner drains each pipeline's queue in this process. It is the Runner
 // the `steps web` command installs; a read-only server has none.
 type LocalRunner struct {
@@ -51,9 +54,11 @@ type LocalRunner struct {
 	// separate from `forced` below, which is one browser request asking for
 	// one re-run.
 	force bool
-	// forced remembers which queued rows were requested with force, since the
-	// queue row itself has no such column. Keyed by queue id, consumed once.
-	//
+	// Only the end of process (StopWith) is a shutdown, the one thing a build that is not interruptible: waits out.
+	process context.Context //nolint:containedctx // a lifetime to compare against, never one a call runs under
+	// A field rather than the constant so a test can shorten it.
+	grace time.Duration
+	// forced is keyed by job because the queue row has no force column and EnqueueJob returns no id, so the claim spends it and AbortQueued drops it: a flag outliving its row forces a build nobody asked for.
 	// In memory rather than in the schema because a force is a property of
 	// this request, not of the job: a forced row that outlived a restart and
 	// then re-ran everything would be a surprise nobody asked for. Losing the
@@ -90,10 +95,14 @@ func NewLocalRunner(
 		pinned:     pinned,
 		concurrent: concurrent,
 		force:      force,
+		grace:      nonInterruptibleGrace,
 		forced:     map[string]bool{},
 		running:    map[runKey]context.CancelCauseFunc{},
 	}
 }
+
+// StopWith names the context whose end is the process going down, as opposed to one pipeline's drain being stopped. Call it before draining.
+func (r *LocalRunner) StopWith(process context.Context) { r.process = process }
 
 // SetProvider installs the workspace a pipeline's runs materialize in, retiring whatever it replaces once the runs holding it finish.
 func (r *LocalRunner) SetProvider(slug string, provider workspace.Provider) {
@@ -159,6 +168,20 @@ func (r *LocalRunner) Abort(target *Pipeline, runID string) bool {
 	}
 
 	return running
+}
+
+// AbortQueued drops a job's queued run before it starts, and the force it was queued with.
+func (r *LocalRunner) AbortQueued(ctx context.Context, target *Pipeline, jobName string) (bool, error) {
+	dropped, err := target.Store.AbortQueuedJob(ctx, jobName)
+	if err != nil {
+		return false, fmt.Errorf("web: %w", err)
+	}
+
+	if dropped {
+		r.takeForce(target.Slug, jobName)
+	}
+
+	return dropped, nil
 }
 
 // Drain runs each pipeline's queue until ctx is canceled. One goroutine per
@@ -292,6 +315,9 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 		return false
 	}
 
+	// Before anything can finalize the row without running it (a job the config dropped, one the breaker paused), since the claim is what spends a force.
+	force := r.takeForce(target.Slug, jobName) || r.force
+
 	// One read of the served configuration for the whole claim, threaded from
 	// here. Two reads is two configurations: the watcher swaps this pointer
 	// under the drain, and a job resolved from one while the plan executes
@@ -312,17 +338,15 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 		return true
 	}
 
-	r.runAndFinalize(ctx, target, cfg, job, id)
+	r.runAndFinalize(ctx, target, cfg, job, id, force)
 
 	return true
 }
 
 // runAndFinalize executes one claimed job and records how it went.
 func (r *LocalRunner) runAndFinalize(
-	ctx context.Context, target *Pipeline, cfg *config.Config, job *config.Job, id int64,
+	ctx context.Context, target *Pipeline, cfg *config.Config, job *config.Job, id int64, force bool,
 ) {
-	force := r.takeForce(target.Slug, job.Name) || r.force
-
 	slog.Info("web.job.run", "pipeline", target.Slug, "job", job.Name)
 
 	aborted, runErr := r.runJob(ctx, target, cfg, job, force)
@@ -345,7 +369,7 @@ func (r *LocalRunner) runAndFinalize(
 	// ResetStaleRunning re-queues it (nothing else would — only a new version
 	// change enqueues), and it must not count against the circuit breaker,
 	// because an operator pressing ctrl-C is not the job being broken.
-	if runErr != nil && interrupted(runErr) {
+	if runErr != nil && interrupted(ctx, runErr) {
 		slog.Warn("web.job.interrupted", "pipeline", target.Slug, "job", job.Name)
 
 		return
@@ -383,10 +407,9 @@ func admits(ctx context.Context, target *Pipeline) bool {
 	return !stopped
 }
 
-// interrupted reports a run that stopped because the process is going down,
-// rather than because the job answered.
-func interrupted(runErr error) bool {
-	return errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded)
+// interrupted asks the drain, not only the error: a step's own timeout: ends in DeadlineExceeded with the drain live, which is the job answering, and a drain is only ever cancelled, never timed out.
+func interrupted(drain context.Context, runErr error) bool {
+	return drain.Err() != nil && errors.Is(runErr, context.Canceled)
 }
 
 // skipIfPaused finalizes a queued row for a job the circuit breaker has taken
@@ -466,8 +489,8 @@ func (r *LocalRunner) runJob(
 	runID := pipeline.NewRunID()
 	key := runKey{target.Slug, runID}
 
-	runCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
+	runCtx, cancel, end := r.runContext(ctx, target.Slug, job)
+	defer end()
 
 	r.mu.Lock()
 	r.running[key] = cancel
@@ -483,4 +506,47 @@ func (r *LocalRunner) runJob(
 		events.WithBus(pipeline.WithNewRun(runCtx, runID), target.Bus), cfg, job, r.pinned, provider, target.Store, force)
 
 	return errors.Is(context.Cause(runCtx), errAborted), runErr
+}
+
+// runContext is interruptible: as Concourse means it (see config.Job): only a shutdown waits for a build that did not opt in.
+func (r *LocalRunner) runContext(
+	drain context.Context, slug string, job *config.Job,
+) (context.Context, context.CancelCauseFunc, func()) {
+	if job.Interruptible || r.process == nil {
+		runCtx, cancel := context.WithCancelCause(drain)
+
+		return runCtx, cancel, func() { cancel(nil) }
+	}
+
+	runCtx, cancel := context.WithCancelCause(context.WithoutCancel(drain))
+	exited := make(chan struct{})
+
+	stop := context.AfterFunc(drain, func() {
+		defer close(exited)
+
+		// A drain ending with the process alive is its pipeline destroyed or renamed, which must not wait out the grace; a shutdown is already visible, since a context is marked done before its descendants are cancelled.
+		if r.process.Err() != nil {
+			slog.Warn("web.job.shutdown_wait", "pipeline", slug, "job", job.Name, "grace", r.grace)
+
+			// Armed by the shutdown, not at build start, where it would be the shortest job timeout in the product.
+			timer := time.NewTimer(r.grace)
+			defer timer.Stop()
+
+			select {
+			case <-timer.C:
+			case <-runCtx.Done():
+			}
+		}
+
+		cancel(nil)
+	})
+
+	return runCtx, cancel, func() {
+		cancel(nil)
+
+		// Waited for, so no timer outlives the run it was guarding.
+		if !stop() {
+			<-exited
+		}
+	}
 }

@@ -4,11 +4,64 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 )
+
+// A delivery's check ends with its pipeline as well as its sender: a server's shutdown waits on a request rather than cancelling it, so a check still acquiring a machine outlived the daemon's Close and left the machine billing.
+func TestWebhookCheckEndsWithItsPipeline(t *testing.T) {
+	t.Setenv("STEPS_TEST_HOOK_TOKEN", "s3cret")
+
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+
+	cfg := &config.Config{
+		ResourceTypes: []config.ResourceType{{
+			Name:   "slow",
+			Config: config.ResourceTypeConfig{Check: "touch " + started + "; exec sleep 30", In: "echo fetched"},
+		}},
+		Resources: []config.Resource{{Name: "repo", Type: "slow", WebhookTokenEnv: "STEPS_TEST_HOOK_TOKEN"}},
+	}
+
+	pipeline, destroy := context.WithCancel(context.Background())
+	defer destroy()
+
+	handler := &webhookHandler{current: staticConfig(cfg), st: mustOpenStore(t, dir), base: pipeline}
+	answered := make(chan int, 1)
+
+	go func() { answered <- post(t, handler, "/check/repo?token=s3cret") }()
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for {
+		_, err := os.Stat(started)
+		if err == nil {
+			break
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatal("the check never started")
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	destroy()
+
+	select {
+	case code := <-answered:
+		if code != http.StatusInternalServerError {
+			t.Errorf("status = %d, want the check its pipeline ended reported as failed", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the check outlived its pipeline")
+	}
+}
 
 // webhookFixture builds a pipeline with one webhook-enabled resource and the
 // handler that serves it.

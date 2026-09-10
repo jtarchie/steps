@@ -315,16 +315,33 @@ func (p *isolatingProvider) enableCache(ws *config.WorkspaceConfig) error {
 }
 
 func (p *isolatingProvider) Validate() error {
-	if p.validate != nil {
-		err := p.validate()
-		if err != nil {
-			return err
-		}
+	err := p.probe()
+	if err != nil {
+		return err
 	}
 
 	p.sweepStaleBuilds()
 
 	return nil
+}
+
+func (p *isolatingProvider) probe() error {
+	if p.validate == nil {
+		return nil
+	}
+
+	return p.validate()
+}
+
+// Probe is Validate without the stale-build sweep, for a provider opened on a root this process may already be building under: the sweep takes every build directory there for a crashed process's leftovers.
+func Probe(p Provider) error {
+	isolating, ok := p.(*isolatingProvider)
+	if !ok {
+		// Nothing else sweeps, so its Validate is already only a probe.
+		return p.Validate() //nolint:wrapcheck // the provider's own error names the root and the rule it broke
+	}
+
+	return isolating.probe()
 }
 
 // sweepStaleBuilds removes build directories left behind by an earlier run.

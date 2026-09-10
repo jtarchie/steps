@@ -747,6 +747,47 @@ func TestIsolatingProviderKeepSkipsTheSweep(t *testing.T) {
 	}
 }
 
+// A second provider on a root this process already builds under must not sweep it — the sweep reads a neighbour's build in flight as a crashed process's leftovers — yet must still refuse a root that stopped working.
+func TestProbeChecksTheRootWithoutSweepingIt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	live := filepath.Join(root, "b-deadbeef-1-build")
+
+	err := os.MkdirAll(live, 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider, err := NewProvider(&config.WorkspaceConfig{Strategy: "copy", Root: root}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = provider.Close() }()
+
+	err = Probe(provider)
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+
+	_, err = os.Stat(live)
+	if err != nil {
+		t.Errorf("Probe swept a build directory in flight: %v", err)
+	}
+
+	err = os.Chmod(root, 0o500) //nolint:gosec // read-only is the point: the probe writes, and this root refuses it
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable
+
+	if Probe(provider) == nil {
+		t.Error("Probe accepted a root it cannot write to")
+	}
+}
+
 // TestIsolatingProviderBuildDirsDoNotCollideAcrossInvocations pins the other
 // half. The per-build counter restarts at 1 in every process, so without a
 // per-invocation token two runs sharing a root produce the same

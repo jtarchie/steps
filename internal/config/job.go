@@ -69,21 +69,7 @@ type Job struct {
 	// That is Concourse's own overload, not one invented here, and the two
 	// live on different things: a job field and a step field.
 	MaxInFlight int `yaml:"max_in_flight,omitempty"`
-	// Interruptible decides what a `steps web` SHUTDOWN does to a build of
-	// this job that is already running. Mirrors Concourse's interruptible:
-	// (concourse-ci.org/docs/jobs/), including its default of false.
-	//
-	//   false (default)  shutdown WAITS for the build to finish, bounded by
-	//                    nonInterruptibleGrace. A deploy half-applied because
-	//                    someone restarted the watcher is the case this
-	//                    exists for.
-	//   true             the build is cancelled with everything else, which
-	//                    is what every job did before this field existed.
-	//
-	// Scoped to `steps web` deliberately. `steps run` is a person at a
-	// terminal, and ctrl-C there must always mean now — a foreground run that
-	// ignored an interrupt for ten minutes would be a worse bug than the one
-	// this prevents. See internal/trigger's drainOne.
+	// Concourse's interruptible: and its default of false: a `steps web` shutdown waits (bounded) for this job's running build, because a deploy half-applied by a daemon restart is the case it exists for, while `steps run` is a person at a terminal and ctrl-C there means now (internal/web's LocalRunner.runContext).
 	Interruptible bool `yaml:"interruptible,omitempty"`
 	// Line is the job's source line in the pipeline file, filled in after
 	// decoding (see stampLines). Never written in YAML and never hashed.

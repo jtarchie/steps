@@ -254,7 +254,7 @@ func (s suite) TestDeleteForgetsThePipelineAndItsHistory(t *testing.T) {
 	}
 }
 
-// TestPipelinesReportWhatADaemonWouldServe: the listing carries the current sha and the pause state, so a daemon starting up knows which rows to serve without opening each one.
+// TestPipelinesReportWhatADaemonWouldServe: the listing carries the current sha, where it was set from and the pause state, so a daemon starting up knows which rows to serve without opening each one.
 func (s suite) TestPipelinesReportWhatADaemonWouldServe(t *testing.T) {
 	t.Parallel()
 
@@ -281,6 +281,10 @@ func (s suite) TestPipelinesReportWhatADaemonWouldServe(t *testing.T) {
 
 	if byName["test"].CurrentSHA != "sha-one" || !byName["test"].Paused {
 		t.Errorf("the set, paused pipeline reports %+v", byName["test"])
+	}
+
+	if byName["test"].Path != "/src/app/pipeline.yml" {
+		t.Errorf("the set pipeline reports it was set from %q, want the path SetCurrentRevision was given", byName["test"].Path)
 	}
 
 	if byName["other"].CurrentSHA != "" || byName["other"].Paused {

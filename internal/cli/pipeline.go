@@ -103,7 +103,7 @@ func (p *PipelineSetCmd) upload(name, source string, includes map[string]string)
 		return err
 	}
 
-	if held && current.Source == source && maps.Equal(current.Includes, includes) {
+	if held && current.Source == source && maps.Equal(convertIncludes[string](current.Includes), includes) {
 		fmt.Printf("unchanged: %s is already serving this configuration (%s)\n", name, shortConfig(current.SHA))
 
 		return nil
@@ -121,7 +121,7 @@ func (p *PipelineSetCmd) upload(name, source string, includes map[string]string)
 
 	result, err := client.set(name, web.SetRequest{
 		Source:    source,
-		Includes:  includes,
+		Includes:  convertIncludes[[]byte](includes),
 		ExpectSHA: current.SHA,
 		From:      from,
 	})
@@ -151,7 +151,7 @@ func (p *PipelineSetCmd) confirm(
 		fmt.Printf("%s is new to this daemon; it will be created and start running.\n", name)
 	} else {
 		fmt.Print(diffSource(current.Source, source))
-		fmt.Print(diffIncludes(current.Includes, includes))
+		fmt.Print(diffIncludes(convertIncludes[string](current.Includes), includes))
 	}
 
 	return ask("apply configuration?", "not applied")
@@ -179,6 +179,15 @@ func diffIncludes(before, after map[string]string) string {
 	}
 
 	return out.String()
+}
+
+func convertIncludes[To, From ~string | ~[]byte](includes map[string]From) map[string]To {
+	converted := make(map[string]To, len(includes))
+	for path, content := range includes {
+		converted[path] = To(content)
+	}
+
+	return converted
 }
 
 // ask is the one confirmation both destructive verbs read, so a closed stdin is a no rather than a crash in one of them and a crash in the other.
@@ -602,6 +611,12 @@ func (c *daemonClient) do(method, path string, payload []byte) (int, []byte, err
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		// Sent and not answered is not unreachable: the change may be mid-way, and "start one" sends somebody to start a second daemon on the same state file.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) && urlErr.Timeout() {
+			return 0, nil, fmt.Errorf("the steps daemon at %s did not answer within %s, so the change may still be applying — check with: steps pipeline list: %w", c.target, c.http.Timeout, err)
+		}
+
 		return 0, nil, fmt.Errorf("could not reach the steps daemon at %s: %w (start one with: steps web)", c.target, err)
 	}
 

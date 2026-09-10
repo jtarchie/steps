@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
@@ -49,8 +50,10 @@ func runApprovalStep(ctx context.Context, r stepRunner, i int, step config.Step,
 	// nobody is told about is useless in practice, and this is the last line
 	// anyone sees before the run stops making progress.
 	fmt.Printf("approval %d: %s\n", id, step.Approval.Message)
-	fmt.Printf("approval %d: waiting up to %s — steps approvals approve <pipeline> %d  |  steps approvals reject <pipeline> %d\n",
-		id, timeout, id, id)
+
+	flags := agent.AnswerFlags(ctx, r.cfg.Name)
+	fmt.Printf("approval %d: waiting up to %s — steps approvals approve %d %s  |  steps approvals reject %d %s\n",
+		id, timeout, id, flags, id, flags)
 	slog.Warn("job.approval_pending",
 		"job", r.jobName, "approval", id, "message", step.Approval.Message, "timeout", timeout.String())
 

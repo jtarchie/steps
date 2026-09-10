@@ -2,7 +2,7 @@ package web
 
 // The endpoints `steps pipeline` talks to: outside /p/ because a set may CREATE the pipeline it names, and HTTP because a set needs a synchronous answer from the machine that will run it.
 
-// No authentication, deliberately: a pipeline is arbitrary commands, so anyone who reaches this port runs anything as this user — which is why it binds loopback (docs/web.md).
+// No authentication, deliberately: a pipeline is arbitrary commands, so anyone who reaches this port runs anything as this user. Loopback keeps other machines off it but not a page in this machine's browser, which is why these routes also refuse whatever a browser sends (refuseBrowsers, docs/web.md).
 
 import (
 	"errors"
@@ -23,12 +23,12 @@ type PipelineSummary struct {
 	Paused bool   `json:"paused"`
 }
 
-// PipelineConfig is what get prints and what set diffs against: the source, its includes, and the sha that names both.
+// PipelineConfig is what get prints and what set diffs against: the source, its includes (bytes, for the reason SetRequest's are), and the sha that names both.
 type PipelineConfig struct {
 	Name     string            `json:"name"`
 	SHA      string            `json:"sha"`
 	Source   string            `json:"source"`
-	Includes map[string]string `json:"includes,omitempty"`
+	Includes map[string][]byte `json:"includes,omitempty"`
 	From     string            `json:"from,omitempty"`
 	Paused   bool              `json:"paused"`
 }
@@ -74,12 +74,17 @@ func (s *Server) handleAPIGet(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "this pipeline has no configuration set")
 	}
 
+	includes := make(map[string][]byte, len(revision.Includes))
+	for path, content := range revision.Includes {
+		includes[path] = []byte(content)
+	}
+
 	//nolint:wrapcheck // as above
 	return c.JSON(http.StatusOK, PipelineConfig{
 		Name:     target.Slug,
 		SHA:      revision.SHA,
 		Source:   revision.Source,
-		Includes: revision.Includes,
+		Includes: includes,
 		From:     target.Path(),
 		Paused:   paused(c.Request().Context(), target),
 	})

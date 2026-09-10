@@ -21,6 +21,10 @@ func (stubRunner) Enqueue(context.Context, *Pipeline, string, string, bool) (int
 
 func (stubRunner) Abort(*Pipeline, string) bool { return false }
 
+func (stubRunner) AbortQueued(ctx context.Context, pipeline *Pipeline, jobName string) (bool, error) {
+	return pipeline.Store.AbortQueuedJob(ctx, jobName) //nolint:wrapcheck // a double answering what the store answers
+}
+
 // askOne records a pending question against a live run, the way an agent step
 // would.
 func askOne(t *testing.T, pipeline *Pipeline) store.Question {

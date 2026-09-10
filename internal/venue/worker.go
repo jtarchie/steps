@@ -132,6 +132,16 @@ type Worker struct {
 // has nowhere else to go.
 func (w Worker) Acquirable() bool { return w.needsAcquisition() }
 
+// registryKey keys a parked instance by where it lives, since every mapping of it — a root, a shim or an ?idle= apart — is one machine, and anything else by its text, since a launch rung's machine is born per entry.
+func (w Worker) registryKey() string {
+	if w.Rung != RungStopped {
+		return w.URL
+	}
+
+	// ponytail: an ambient region, project or zone and the same one spelled out are two keys, so two owners again; resolve the ambient location here if mappings ever mix the two.
+	return string(w.Scheme) + "://stopped/" + w.Region + "/" + w.Project + "/" + w.Zone + "/" + w.Instance
+}
+
 // ErrWorker is a worker mapping that cannot be reached as written.
 var ErrWorker = errors.New("invalid worker")
 

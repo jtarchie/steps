@@ -88,6 +88,7 @@ type askGrant struct {
 	defaultAnswer   string
 	optionsRequired bool
 	wait            time.Duration
+	answerFlags     string
 }
 
 // askEnv is what the ask_user impl needs from the RUN rather than from the
@@ -197,6 +198,10 @@ func buildAskUserTool(ctx context.Context, cfg *config.Config, spec config.ToolS
 		defaultAnswer:   spec.Default,
 		optionsRequired: spec.OptionsRequired,
 		wait:            defaultAskUserWait,
+	}
+
+	if cfg != nil {
+		grant.answerFlags = AnswerFlags(ctx, cfg.Name)
 	}
 
 	if spec.Timeout != "" {
@@ -416,7 +421,7 @@ func responderRequest(row store.Question) string {
 func (g askGrant) waitForAnswer(ctx context.Context, env toolEnv, row store.Question) map[string]any {
 	deadline := time.Now().Add(g.wait)
 
-	announceQuestion(row, g.wait)
+	announceQuestion(row, g.wait, g.answerFlags)
 
 	// The terminal channel runs alongside the poll rather than instead of it:
 	// a person at this terminal and a person running `steps questions answer` in another
@@ -588,17 +593,34 @@ func (g askGrant) close(ctx context.Context, env toolEnv, row store.Question, st
 // announceQuestion is the last line anybody sees before the step stops making
 // progress, so it carries the exact command to answer it — the same reasoning
 // as approval:'s.
-func announceQuestion(row store.Question, wait time.Duration) {
+func announceQuestion(row store.Question, wait time.Duration, flags string) {
 	fmt.Printf("question %d: %s\n", row.ID, row.Question)
 
 	if len(row.Options) > 0 {
 		fmt.Printf("question %d: options: %s\n", row.ID, strings.Join(row.Options, " | "))
 	}
 
-	fmt.Printf("question %d: waiting up to %s — steps questions answer <pipeline> %d <answer>\n", row.ID, wait, row.ID)
+	fmt.Printf("question %d: waiting up to %s — steps questions answer %d <answer> %s\n", row.ID, wait, row.ID, flags)
 
 	slog.Warn("agent.question_pending", "question", row.ID, "job", row.JobName,
 		"agent", row.AgentName, "question_text", row.Question, "timeout", wait.String())
+}
+
+type answerDBKey struct{}
+
+// WithAnswerDB carries a local run's own state file to the printed commands, since the read commands default to a daemon's.
+func WithAnswerDB(ctx context.Context, db string) context.Context {
+	return context.WithValue(ctx, answerDBKey{}, db)
+}
+
+// AnswerFlags finish a printed answer command; with no WithAnswerDB, as under a daemon, the read commands' default database is the run's.
+func AnswerFlags(ctx context.Context, pipeline string) string {
+	db, _ := ctx.Value(answerDBKey{}).(string)
+	if db == "" {
+		return "-p " + pipeline
+	}
+
+	return "-p " + pipeline + " --db " + db
 }
 
 // resolvedResult renders a resolved row for the model. answered: is the field

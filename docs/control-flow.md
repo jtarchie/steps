@@ -758,13 +758,20 @@ jobs:
 ```
 
 ```
-$ steps approvals -p pipeline
+$ steps run pipeline.yml
+…
+approval 1: Draft is in draft/summary.md — publish?
+approval 1: waiting up to 24h0m0s — steps approvals approve 1 -p pipeline --db .steps/pipeline.yml.db  |  steps approvals reject 1 -p pipeline --db .steps/pipeline.yml.db
+
+$ steps approvals -p pipeline --db .steps/pipeline.yml.db    # another shell, same directory
 ID  JOB      REQUESTED             MESSAGE
 1   publish  2026-08-05T14:02:11Z  Draft is in draft/summary.md — publish?
 
-$ steps approvals approve 1 -p pipeline
+$ steps approvals approve 1 -p pipeline --db .steps/pipeline.yml.db
 approved: approval 1
 ```
+
+The `--db` is there because a local run keeps its state beside the YAML, in `.steps/pipeline.yml.db`, while the read commands default to a daemon's `.steps/steps.db`; a run under `steps web` prints `-p <name>` alone.
 
 ### Three outcomes, deliberately different
 

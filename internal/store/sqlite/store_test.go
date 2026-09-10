@@ -2,9 +2,13 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -47,6 +51,75 @@ func mustOpenStore(t *testing.T, path string) *Store {
 	}
 
 	return st
+}
+
+// Measured: a destroy that freed a gigabyte held the file's write lock 31s reclaiming it, and a neighbour's queue writes failed SQLITE_BUSY until it let go.
+func TestReleaseLeavesTheReclaimToClose(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "steps.db")
+
+	doomed, err := OpenStore(path, "doomed")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	neighbour, err := OpenStore(path, "neighbour")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	for i := range 16 {
+		err = doomed.RecordRevision(ctx, fmt.Sprintf("sha-%d", i), strconv.Itoa(i)+strings.Repeat("x", 64<<10), nil)
+		if err != nil {
+			t.Fatalf("RecordRevision: %v", err)
+		}
+	}
+
+	err = doomed.Delete(ctx)
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	err = doomed.Release()
+	if err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	if freePages(t, path) == 0 {
+		t.Error("Release reclaimed what the delete freed, under the write lock a neighbour on the file is still writing through")
+	}
+
+	err = neighbour.Close()
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if free := freePages(t, path); free != 0 {
+		t.Errorf("Close left %d freed pages unreclaimed", free)
+	}
+}
+
+// freePages is what deletes freed and no reclaim has handed back yet.
+func freePages(t *testing.T, path string) int {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+
+	defer func() { _ = db.Close() }()
+
+	var free int
+
+	err = db.QueryRowContext(t.Context(), "PRAGMA freelist_count").Scan(&free)
+	if err != nil {
+		t.Fatalf("freelist_count: %v", err)
+	}
+
+	return free
 }
 
 func assertHasSucceeded(t *testing.T, st *Store, jobName, rootHash string, want bool) {

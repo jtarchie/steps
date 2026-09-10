@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"time"
@@ -35,6 +36,8 @@ type daemon struct {
 	// The verbs are serialized because each rebuilds a pipeline's world: interleaved, a destroy closes a store a concurrent set just handed to a poller.
 	mu     sync.Mutex
 	served map[string]*servedPipeline
+	// The durable workspace roots this process has swept; see sweptRoot.
+	swept map[string]bool
 	// releaseWorkers gives back what the shared registry still keeps warm; Close runs it after every loop that could hold a machine is gone.
 	releaseWorkers func()
 }
@@ -47,7 +50,8 @@ type servedPipeline struct {
 	target *web.Pipeline
 	cancel context.CancelFunc
 	loops  *sync.WaitGroup
-	closer func()
+	// Only the process's own exit compacts; see release.
+	closer func(compact bool)
 }
 
 // newDaemon wires the manager into the server it registers pipelines with.
@@ -58,6 +62,11 @@ func newDaemon(
 	// One registry for every job, poll and webhook this daemon starts, so the last of them out gives a machine back rather than the first.
 	base, releaseWorkers := pipeline.WithWorkerRegistry(ctx)
 
+	// A parked step's printed command must name any database but the default, which is all the read commands open without --db.
+	if filepath.Clean(state) != DefaultDaemonState {
+		base = pipeline.WithAnswerDB(base, state)
+	}
+
 	return &daemon{
 		server:         server,
 		runner:         runner,
@@ -67,6 +76,7 @@ func newDaemon(
 		interval:       interval,
 		base:           base,
 		served:         map[string]*servedPipeline{},
+		swept:          map[string]bool{},
 		releaseWorkers: releaseWorkers,
 	}
 }
@@ -119,17 +129,12 @@ func (d *daemon) load(ctx context.Context) error {
 }
 
 // restore serves a pipeline from the database, which after a restart is the only copy of it there is.
+//
+//nolint:contextcheck // opening and closing a store take none, and the placement check deliberately reads the daemon's own context — see accept
 func (d *daemon) restore(ctx context.Context, name, from string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	return d.restoreHeld(ctx, name, from)
-}
-
-// restoreHeld is restore for a caller already holding the lock, so a rename does not drop it between forgetting a name and serving the new one.
-//
-//nolint:contextcheck // opening and closing a store take none, and the placement check deliberately reads the daemon's own context — see accept
-func (d *daemon) restoreHeld(ctx context.Context, name, from string) error {
 	st, err := sqlite.OpenStore(d.state, name)
 	if err != nil {
 		return fmt.Errorf("web: could not open state for %q: %w", name, err)
@@ -156,7 +161,7 @@ func (d *daemon) restoreHeld(ctx context.Context, name, from string) error {
 		return fmt.Errorf("web: %q cannot run here: %w", name, err)
 	}
 
-	provider, err := d.provider(cfg, st, false)
+	provider, err := d.provider(cfg, st)
 	if err != nil {
 		_ = st.Close()
 
@@ -172,12 +177,12 @@ func (d *daemon) restoreHeld(ctx context.Context, name, from string) error {
 
 // Set is the only way a pipeline arrives or changes.
 //
-//nolint:contextcheck // as restoreHeld: the validation reads the daemon's context on purpose, and opening a store takes none
+//nolint:contextcheck // as restore: the validation reads the daemon's context on purpose, and opening a store takes none
 func (d *daemon) Set(ctx context.Context, name string, req web.SetRequest) (web.SetResult, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	cfg, err := d.accept(name, req.Source, req.Includes)
+	cfg, err := d.accept(name, req.Source, convertIncludes[string](req.Includes))
 	if err != nil {
 		return web.SetResult{}, err
 	}
@@ -225,15 +230,11 @@ func (d *daemon) Set(ctx context.Context, name string, req web.SetRequest) (web.
 
 // workspaceFor is the provider this set needs, nil when an unmoved workspace: keeps the one the pipeline already has — so the ordinary set changes no build directory underneath a run.
 func (d *daemon) workspaceFor(cfg *config.Config, st store.Store, existing *servedPipeline) (workspace.Provider, error) {
-	if existing == nil {
-		return d.provider(cfg, st, false)
-	}
-
-	if reflect.DeepEqual(existing.target.Config().Workspace, cfg.Workspace) {
+	if existing != nil && reflect.DeepEqual(existing.target.Config().Workspace, cfg.Workspace) {
 		return nil, nil //nolint:nilnil // "no new provider needed" is the answer, not a missing one
 	}
 
-	return d.provider(cfg, st, true)
+	return d.provider(cfg, st)
 }
 
 func closeProvider(provider workspace.Provider) {
@@ -259,8 +260,20 @@ func (d *daemon) stateFor(name string, existing *servedPipeline) (store.Store, e
 // closeIfNew releases only a handle this set opened, since an already-served pipeline is still using its own.
 func (d *daemon) closeIfNew(st store.Store, serving bool) {
 	if !serving {
-		_ = st.Close()
+		release(st)
 	}
+}
+
+// release lets go of a handle while the process goes on: Close compacts the whole shared file under its write lock, for as long as that takes, which only the process's own exit can afford.
+func release(st store.Store) {
+	handle, ok := st.(*sqlite.Store)
+	if !ok {
+		_ = st.Close()
+
+		return
+	}
+
+	_ = handle.Release()
 }
 
 // accept is everything `steps validate` checks except the network, run HERE because every one of those answers is about this machine — and it is the bar `steps run` enforces, so a set that passes cannot produce a run that dies at preflight.
@@ -316,19 +329,19 @@ func (d *daemon) check(ctx context.Context, st store.Store, cfg *config.Config, 
 
 // record interns the configuration and makes it the one this pipeline serves.
 func (d *daemon) record(ctx context.Context, st store.Store, cfg *config.Config, req web.SetRequest) error {
-	err := RecordRevision(ctx, st, cfg)
+	// Its own context, as Destroy's: all a set can refuse for was asked before this, and a sender hanging up between the writes left one made and not the other.
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), daemonWriteBound)
+	defer cancel()
+
+	err := RecordRevision(writeCtx, st, cfg)
 	if err != nil {
 		return err
 	}
 
-	err = st.SetCurrentRevision(ctx, cfg.Revision.SHA, req.From)
+	// The switch is the last write and carries where it came from, because a write after it can fail with the database already naming a configuration nobody started serving.
+	err = st.SetCurrentRevision(writeCtx, cfg.Revision.SHA, req.From)
 	if err != nil {
 		return fmt.Errorf("could not set the configuration: %w", err)
-	}
-
-	err = st.SetSourcePath(ctx, req.From)
-	if err != nil {
-		return fmt.Errorf("could not record where the configuration was set from: %w", err)
 	}
 
 	return nil
@@ -348,23 +361,28 @@ func (d *daemon) replace(existing *servedPipeline, cfg *config.Config, provider 
 	d.sweep(d.base, existing.target)
 }
 
-// replacing suppresses Validate()'s stale-build sweep for a durable workspace.root:, because that sweep removes EVERY build directory under the root with no ownership check — which at startup clears a crashed process's leftovers and mid-flight deletes the tree of whatever is running.
-func (d *daemon) provider(cfg *config.Config, st store.Store, replacing bool) (workspace.Provider, error) {
-	keep := d.exec.KeepWorkspace
-	if replacing && cfg.Workspace != nil && cfg.Workspace.Root != "" {
-		keep = true
-	}
-
-	provider, err := workspace.NewProvider(cfg.Workspace, keep)
+// provider is the workspace a pipeline's runs materialize in, refused when this machine cannot supply it.
+func (d *daemon) provider(cfg *config.Config, st store.Store) (workspace.Provider, error) {
+	provider, err := workspace.NewProvider(cfg.Workspace, d.exec.KeepWorkspace)
 	if err != nil {
 		return nil, fmt.Errorf("%w: workspace: %w", web.ErrRefused, err)
 	}
 
-	err = provider.Validate()
+	root, swept := d.sweptRoot(cfg.Workspace)
+	if swept {
+		err = workspace.Probe(provider)
+	} else {
+		err = provider.Validate()
+	}
+
 	if err != nil {
 		_ = provider.Close()
 
 		return nil, fmt.Errorf("%w: workspace: %w", web.ErrRefused, err)
+	}
+
+	if root != "" {
+		d.swept[root] = true
 	}
 
 	// The other half of --artifact-store, which the setup() path this replaced did here: without it the flag mirrors nothing and warns about nothing, which reads as configured and binds nothing.
@@ -376,6 +394,21 @@ func (d *daemon) provider(cfg *config.Config, st store.Store, replacing bool) (w
 	}
 
 	return provider, nil
+}
+
+// sweptRoot names a durable workspace.root: and whether this process swept it already, because the sweep removes EVERY build directory under the root with no ownership check: a crashed process's leftovers the first time, another served pipeline's run in flight any time after. A root it cannot name counts as swept, so it never is.
+func (d *daemon) sweptRoot(ws *config.WorkspaceConfig) (string, bool) {
+	if ws == nil || ws.Root == "" {
+		return "", false
+	}
+
+	// ponytail: one directory reached through two symlinked spellings is two roots here, so the second sweeps; key by filepath.EvalSymlinks if roots are ever shared that way.
+	root, err := filepath.Abs(ws.Root)
+	if err != nil {
+		return "", true
+	}
+
+	return root, d.swept[root]
 }
 
 // start launches the two loops a served pipeline is: the drain that runs what the queue holds, and the poll that fills it.
@@ -430,11 +463,18 @@ func (d *daemon) start(
 		target: target,
 		cancel: cancel,
 		loops:  loops,
-		closer: func() {
+		closer: func(compact bool) {
 			// The bus first: it drains queued events INTO the store, so
 			// closing the store first throws away the tail of whatever run
 			// was in flight.
 			bus.Close()
+
+			if !compact {
+				release(st)
+
+				return
+			}
+
 			_ = st.Close()
 		},
 	}
@@ -464,7 +504,7 @@ func (d *daemon) Destroy(ctx context.Context, name string) error {
 
 	err = served.target.Store.Delete(writeCtx)
 
-	served.closer()
+	served.closer(false)
 	d.runner.RemoveProvider(name)
 
 	if err != nil {
@@ -477,6 +517,8 @@ func (d *daemon) Destroy(ctx context.Context, name string) error {
 }
 
 // The handle is rebuilt rather than relabelled: the route, the pipelines row and the scope an agent pin is keyed by are ONE string, so moving only the row leaves two of the three answering to a name nothing else uses.
+//
+//nolint:contextcheck // as restore: the validation reads the daemon's context on purpose, and opening a store takes none
 func (d *daemon) Rename(ctx context.Context, from, to string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -492,32 +534,69 @@ func (d *daemon) Rename(ctx context.Context, from, to string) error {
 
 	// Where it was set from travels with the identity: a rename moves the name, not the file somebody uploaded.
 	setFrom := served.target.Path()
+	current := served.target.Config().Revision
+
+	// Everything that can refuse runs while the old name is still served: refused after letting go, a rename left the pipeline served under NEITHER name while the database, and so the next restart, named the new one.
+	cfg, err := d.accept(to, current.Source, current.Includes)
+	if err != nil {
+		return fmt.Errorf("could not rename %q to %q: %w", from, to, err)
+	}
 
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), daemonWriteBound)
 	defer cancel()
 
 	// The UPDATE first, and every scoped row reaches the pipeline by id so the loops go on working under the old name: the served map is not the whole file, and a name a `steps run` row already holds used to fail the UNIQUE constraint AFTER the source pipeline had been torn down and its handle closed — lost until a restart.
-	err := served.target.Store.Rename(writeCtx, to)
+	err = served.target.Store.Rename(writeCtx, to)
 	if err != nil {
 		return fmt.Errorf("%w: could not rename %q to %q: %w", web.ErrRefused, from, to, err)
 	}
 
-	_, err = d.detach(from)
+	st, provider, err := d.open(to, cfg)
 	if err != nil {
-		return err
+		return d.undoRename(ctx, served, from, to, err)
 	}
 
-	served.closer()
+	// Held since the lookup above, under the lock this still holds, so it cannot miss.
+	_, _ = d.detach(from)
+
+	served.closer(false)
 	d.runner.RemoveProvider(from)
 
-	err = d.restoreHeld(writeCtx, to, setFrom)
-	if err != nil {
-		return err
-	}
+	d.start(to, cfg, st, provider, setFrom)
 
 	fmt.Printf("steps web: %s renamed to %s\n", from, to)
 
 	return nil
+}
+
+// Split from start because all of it can still refuse, which a rename must hear while the old name is still served.
+func (d *daemon) open(name string, cfg *config.Config) (store.Store, workspace.Provider, error) {
+	st, err := sqlite.OpenStore(d.state, name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not open state for %q: %w", name, err)
+	}
+
+	provider, err := d.provider(cfg, st)
+	if err != nil {
+		release(st)
+
+		return nil, nil, err
+	}
+
+	return st, provider, nil
+}
+
+// undoRename puts the row back under the name still being served, whose loops never stopped, so a refused rename is one that did not happen.
+func (d *daemon) undoRename(ctx context.Context, served *servedPipeline, from, to string, cause error) error {
+	undoCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), daemonWriteBound)
+	defer cancel()
+
+	err := served.target.Store.Rename(undoCtx, from)
+	if err != nil {
+		return fmt.Errorf("could not rename %q to %q: %w; nor could the rename be undone, so a restart serves it as %q: %w", from, to, cause, to, err)
+	}
+
+	return fmt.Errorf("could not rename %q to %q: %w", from, to, cause)
 }
 
 // detach waits for the loops before returning, so nothing is still reading a handle its caller is about to close.
@@ -549,7 +628,7 @@ func (d *daemon) Close() {
 
 	for _, served := range d.served {
 		served.loops.Wait()
-		served.closer()
+		served.closer(true)
 	}
 
 	d.served = map[string]*servedPipeline{}

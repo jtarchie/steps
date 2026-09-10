@@ -63,6 +63,8 @@ steps mcp tools|login       inspect or authorize mcp_servers: entries
 steps docs [page]           read these docs in the terminal
 ```
 
+The read commands default to a daemon's `.steps/steps.db`. A local `steps run` or `steps test` keeps its state beside the YAML instead, so reaching it takes `--db` — which a parked `approval:` or question prints for you: `steps approvals approve 1 -p pipeline --db .steps/pipeline.yml.db`.
+
 Two of these answer most "why is it doing that?" questions: `steps plan` explains what the cache would skip, and `steps runs steps` shows what previous runs actually did.
 
 A third answers "did the pipeline change?" — `steps runs` carries a `CONFIG` column, the hash of the configuration each run was started from. Two runs of one file agree; an edit between them does not, and a run whose rows disagree with the last green one is a run that executed something else. The hash covers everything the configuration is made of: the pipeline file after `((var))` substitution — so one file under two `--vars-file`s is two configurations — and every file it includes, so editing a `run_file:` script is editing the pipeline. A run started by something that loaded no file at all shows `-`.

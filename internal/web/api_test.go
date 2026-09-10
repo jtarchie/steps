@@ -218,3 +218,59 @@ func TestAServerWithNoManagerRefusesTheVerbs(t *testing.T) {
 		}
 	}
 }
+
+// TestARebindingPageCannotSetAPipeline: after DNS rebinding the attacker's own name, now resolving here, arrives as both Host and Origin, so an origin check passes it — and a set is a remote shell. The CLI's identical request, with no Origin, must still land, or it was the Host that decided.
+func TestARebindingPageCannotSetAPipeline(t *testing.T) {
+	t.Parallel()
+
+	for _, probe := range []struct {
+		origin string
+		want   int
+		sets   int
+	}{
+		{"http://rebind.attacker.tld:8088", http.StatusForbidden, 0},
+		{"", http.StatusOK, 1},
+	} {
+		server, manager := managedServer(t)
+
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/pipelines/pwn", strings.NewReader(`{"source":"jobs: []"}`))
+		req.Host = "rebind.attacker.tld:8088"
+		req.Header.Set("Content-Type", "application/json")
+
+		if probe.origin != "" {
+			req.Header.Set("Origin", probe.origin)
+		}
+
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != probe.want || len(manager.set) != probe.sets {
+			t.Errorf("a set with Origin %q answered %d and reached the manager %d times, want %d and %d",
+				probe.origin, rec.Code, len(manager.set), probe.want, probe.sets)
+		}
+	}
+}
+
+// TestTheAPIRefusesAPageButNotATypedURL: an /api URL pasted into the address bar arrives as "none" and is a person, not a page; every other value is a page asking.
+func TestTheAPIRefusesAPageButNotATypedURL(t *testing.T) {
+	t.Parallel()
+
+	server, _ := managedServer(t)
+
+	for site, want := range map[string]int{
+		"same-origin": http.StatusForbidden,
+		"same-site":   http.StatusForbidden,
+		"cross-site":  http.StatusForbidden,
+		"none":        http.StatusOK,
+	} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/pipelines", nil)
+		req.Header.Set("Sec-Fetch-Site", site)
+
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != want {
+			t.Errorf("GET /api/pipelines with Sec-Fetch-Site %q answered %d, want %d", site, rec.Code, want)
+		}
+	}
+}

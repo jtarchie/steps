@@ -115,9 +115,13 @@ func TestApprovalCannotBeDecidedTwice(t *testing.T) {
 
 	<-done
 
-	err := cli.Run([]string{"approve", path, "1"})
+	err := cli.Run(append([]string{"approvals", "approve", "1"}, readArgs(path)...))
 	if err == nil {
 		t.Fatal("an already-decided approval was decided again")
+	}
+
+	if !strings.Contains(err.Error(), "is not pending") {
+		t.Fatalf("the second decision failed for the wrong reason: %v", err)
 	}
 }
 

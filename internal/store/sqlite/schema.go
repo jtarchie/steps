@@ -10,7 +10,7 @@ package sqlite
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
 // 10 made pipelines the thing a daemon HOLDS rather than a name it was handed:
-// current_revision_id, paused_at, set_from and set_at on pipelines, and
+// current_revision_id, paused_at and set_at on pipelines, and
 // revision_includes beside pipeline_revisions. An older file lacks the
 // columns every `steps pipeline set` names, and a daemon starting against it
 // would serve nothing and say nothing.
@@ -78,16 +78,15 @@ const schema = `
 -- transaction, which is what lets the pipeline's own cascade proceed.
 --
 -- paused_at is the pipeline-level circuit breaker: set, nothing polls and
--- nothing is admitted. set_from and set_at say where and when the current
--- revision was uploaded from, for a reader who finds a pipeline serving a
--- configuration nobody remembers sending.
+-- nothing is admitted. set_at says when the current revision was set, and
+-- path, written by the same UPDATE, where from: for a reader who finds a
+-- pipeline serving a configuration nobody remembers sending.
 CREATE TABLE IF NOT EXISTS pipelines (
     id   INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     path TEXT NOT NULL,
     current_revision_id INTEGER REFERENCES pipeline_revisions(id) ON DELETE RESTRICT,
     paused_at TEXT,
-    set_from  TEXT NOT NULL DEFAULT '',
     set_at    TEXT
 );
 

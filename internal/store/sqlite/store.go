@@ -385,8 +385,7 @@ func (s *Store) Close() error {
 		return s.db.Close()
 	}
 
-	// Hands freed pages back to the filesystem. Unbounded on purpose: this runs
-	// once, at exit, with no build waiting on it.
+	// Hands freed pages back to the filesystem, unbounded and under the whole file's write lock: fine at a process's own exit, and why a handle let go mid-life, beside neighbours still writing, takes Release instead.
 	_, _ = s.db.ExecContext(ctx, `PRAGMA incremental_vacuum`)
 
 	// Folds the write-ahead log back into the database and truncates it, so the
@@ -394,6 +393,11 @@ func (s *Store) Close() error {
 	// large the log grew during a long watch.
 	_, _ = s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
 
+	return s.Release()
+}
+
+// Release closes the connection without Close's reclaim, which holds the file's write lock as long as it takes: measured 31s after a destroy freed a gigabyte, with other pipelines' writes to the file failing SQLITE_BUSY.
+func (s *Store) Release() error {
 	err := s.db.Close()
 	if err != nil {
 		return fmt.Errorf("could not close state db: %w", err)
