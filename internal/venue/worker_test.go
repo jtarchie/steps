@@ -131,7 +131,6 @@ func TestParseWorkerRefusesOptionsItDoesNotKnow(t *testing.T) {
 		"ssh://box?identiy=/home/jt/.ssh/id",
 		"aws://i-0abc123def456789?identity=/home/jt/.ssh/id", // right key, wrong scheme
 		"ssh://box?region=us-west-2",
-		"aws://launch/lt-0def4567890abcde?idle=5m", // idle describes parking
 		"aws://i-0abc123def456789?idle=5m",
 		"local:?shim=/usr/local/bin/steps",
 	} {

@@ -35,6 +35,8 @@ type daemon struct {
 	// The verbs are serialized because each rebuilds a pipeline's world: interleaved, a destroy closes a store a concurrent set just handed to a poller.
 	mu     sync.Mutex
 	served map[string]*servedPipeline
+	// releaseWorkers gives back what the shared registry still keeps warm; Close runs it after every loop that could hold a machine is gone.
+	releaseWorkers func()
 }
 
 // daemonWriteBound is what a give-back write gets on its own context, since the request's is likeliest to be cancelled exactly when one runs.
@@ -53,15 +55,19 @@ func newDaemon(
 	ctx context.Context, server *web.Server, runner *web.LocalRunner,
 	state string, exec ExecFlags, history HistoryFlags, interval time.Duration,
 ) *daemon {
+	// One registry for every job, poll and webhook this daemon starts, so the last of them out gives a machine back rather than the first.
+	base, releaseWorkers := pipeline.WithWorkerRegistry(ctx)
+
 	return &daemon{
-		server:   server,
-		runner:   runner,
-		state:    state,
-		exec:     exec,
-		history:  history,
-		interval: interval,
-		base:     ctx,
-		served:   map[string]*servedPipeline{},
+		server:         server,
+		runner:         runner,
+		state:          state,
+		exec:           exec,
+		history:        history,
+		interval:       interval,
+		base:           base,
+		served:         map[string]*servedPipeline{},
+		releaseWorkers: releaseWorkers,
 	}
 }
 
@@ -550,4 +556,6 @@ func (d *daemon) Close() {
 
 	// The providers are the runner's, and only their Close removes the temp root each one created — closing the store alone left a steps-* tree behind on every shutdown.
 	d.runner.Close()
+
+	d.releaseWorkers()
 }

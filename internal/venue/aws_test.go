@@ -434,3 +434,53 @@ func awsCLI(ctx context.Context, t *testing.T, args ...string) string {
 
 	return string(out)
 }
+
+// Two users of one parked instance against real EC2 — the one that leaves first must not park it under the other. Leaves the instance running for the other tests.
+func TestRealAWSRegistryParksOnlyAfterTheLastUser(t *testing.T) {
+	fixture := realAWS(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	awsCLI(ctx, t, "ec2", "stop-instances", "--instance-ids", fixture.instance)
+	awsCLI(ctx, t, "ec2", "wait", "instance-stopped", "--instance-ids", fixture.instance)
+
+	worker, err := ParseWorker("aws://stopped/" + fixture.instance + "?" + fixture.options())
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	worker.ArtifactStore = fixture.store()
+
+	registry := NewRegistry()
+	first := registry.Leases(map[string]Worker{"parked": worker})
+	second := registry.Leases(map[string]Worker{"parked": worker})
+
+	for _, leases := range []*Leases{first, second} {
+		_, err = leases.Resolve(ctx, "parked")
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+	}
+
+	err = second.ReleaseAll(ctx)
+	if err != nil {
+		t.Fatalf("the first user leaving: %v", err)
+	}
+
+	state := awsCLI(ctx, t, "ec2", "describe-instances", "--instance-ids", fixture.instance,
+		"--query", "Reservations[0].Instances[0].State.Name", "--output", "text")
+	if strings.TrimSpace(state) != "running" {
+		t.Fatalf("after one of two users left the instance is %q, want running", strings.TrimSpace(state))
+	}
+
+	err = first.ReleaseAll(ctx)
+	if err != nil {
+		t.Fatalf("the last user leaving: %v", err)
+	}
+
+	awsCLI(ctx, t, "ec2", "wait", "instance-stopped", "--instance-ids", fixture.instance)
+
+	awsCLI(ctx, t, "ec2", "start-instances", "--instance-ids", fixture.instance)
+	awsCLI(ctx, t, "ec2", "wait", "instance-running", "--instance-ids", fixture.instance)
+}

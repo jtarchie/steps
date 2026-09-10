@@ -5,6 +5,7 @@ package venue
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -40,9 +41,12 @@ type fakeEC2 struct {
 	// endState, when set, is what the instance goes to instead of running —
 	// an eviction or a hard-TTL shutdown mid-acquisition.
 	endState ec2types.InstanceStateName
-	// fleetEmpty makes CreateFleet return no instance, the shape of an
-	// exhausted spot pool.
+	// fleetEmpty is the shape of an exhausted spot pool: CreateFleet returns no instance.
 	fleetEmpty bool
+	// alreadyRunning is a parked instance somebody else started before steps asked for it.
+	alreadyRunning bool
+	// stopDelay is a slow StopInstances, set before the fake is shared.
+	stopDelay time.Duration
 
 	started    []string
 	stopped    []string
@@ -66,6 +70,8 @@ func (f *fakeEC2) StartInstances(_ context.Context, in *ec2.StartInstancesInput,
 }
 
 func (f *fakeEC2) StopInstances(_ context.Context, in *ec2.StopInstancesInput, _ ...func(*ec2.Options)) (*ec2.StopInstancesOutput, error) {
+	time.Sleep(f.stopDelay)
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -83,7 +89,7 @@ func (f *fakeEC2) TerminateInstances(_ context.Context, in *ec2.TerminateInstanc
 	return &ec2.TerminateInstancesOutput{}, nil
 }
 
-func (f *fakeEC2) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+func (f *fakeEC2) DescribeInstances(_ context.Context, in *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -102,7 +108,12 @@ func (f *fakeEC2) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesI
 	// Before any acquisition action, this is a machine at rest with its park
 	// settled. Not counted against the scripts below — those say what happens
 	// after the start, and a probe that precedes it must not consume a step.
-	if len(f.started) == 0 && len(f.fleets) == 0 {
+	// Per instance, so one test's three parked workers are three machines at rest rather than one that a single start woke.
+	if len(f.fleets) == 0 && !slices.ContainsFunc(in.InstanceIds, func(id string) bool { return slices.Contains(f.started, id) }) {
+		if f.alreadyRunning {
+			return describeOne(ec2types.InstanceStateNameRunning)
+		}
+
 		return describeOne(ec2types.InstanceStateNameStopped)
 	}
 
@@ -656,17 +667,15 @@ func TestLeaseAbandonIsIdentityChecked(t *testing.T) {
 	}
 }
 
-// TestLeaseReleaseAllRunsConcurrently pins that one slow release cannot spend
-// the whole budget the others needed: three parked workers with holds release
-// in one window, not three.
+// One slow release must not spend the budget the others needed: three slow Stops finish in one window, not three.
 func TestLeaseReleaseAllRunsConcurrently(t *testing.T) {
-	fake := &fakeEC2{}
+	fake := &fakeEC2{stopDelay: 300 * time.Millisecond}
 	seamEC2(t, fake)
 
 	workers := map[string]Worker{}
 
 	for _, tag := range []string{"a", "b", "c"} {
-		worker, err := ParseWorker("aws://stopped/i-0abc123def45678" + tag + "?idle=300ms")
+		worker, err := ParseWorker("aws://stopped/i-0abc123def45678" + tag)
 		if err != nil {
 			t.Fatalf("ParseWorker: %v", err)
 		}
@@ -691,7 +700,7 @@ func TestLeaseReleaseAllRunsConcurrently(t *testing.T) {
 	}
 
 	if elapsed := time.Since(started); elapsed > 900*time.Millisecond {
-		t.Errorf("ReleaseAll took %s for three 300ms holds — releases are serialized", elapsed)
+		t.Errorf("ReleaseAll took %s for three 300ms Stops — releases are serialized", elapsed)
 	}
 
 	fake.mu.Lock()
@@ -755,7 +764,7 @@ func TestParkedRungWaitsOutAnUnfinishedStop(t *testing.T) {
 		t.Fatalf("acquire through an unfinished stop: %v", err)
 	}
 
-	_ = release(context.Background(), true)
+	_ = release(context.Background())
 
 	if resolved.Instance != "i-0abc123def456789" {
 		t.Errorf("resolved instance = %q, want the parked one", resolved.Instance)
@@ -1000,25 +1009,17 @@ func TestAbandonedMachineIsStillReleasedAtJobEnd(t *testing.T) {
 	_ = again
 }
 
-// TestRetiredMachineIsReleasedWithoutWaitingOutItsIdleWindow pins which
-// release a reclaimed machine gets.
-//
-// A lease is retired only because AWS said it is taking the machine, so
-// holding it out for its ?idle= window means blocking the job's teardown for
-// that long to keep a machine warm that is being destroyed. That is exactly
-// what the immediate flag exists to skip, and nothing had ever passed it.
+// A machine is retired only because AWS said it is taking it, so keeping it warm for ?idle= would bill for a machine being destroyed — on a SHARED registry, where the window is otherwise honoured.
 func TestRetiredMachineIsReleasedWithoutWaitingOutItsIdleWindow(t *testing.T) {
 	fake := &fakeEC2{}
 	seamEC2(t, fake)
 
-	// Long enough that waiting it out is unmistakable, short enough that a
-	// regression costs the suite seconds rather than minutes.
-	worker, err := ParseWorker("aws://stopped/i-0abc123def456789?idle=5s")
+	worker, err := ParseWorker("aws://stopped/i-0abc123def456789?idle=1h")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
 
-	leases := NewLeases(map[string]Worker{"box": worker})
+	leases := NewRegistry().Leases(map[string]Worker{"box": worker})
 
 	resolved, err := leases.Resolve(context.Background(), "box")
 	if err != nil {

@@ -69,16 +69,6 @@ func refreshOneResource(ctx context.Context, cfg *config.Config, st store.Store,
 		return
 	}
 
-	// A best-effort freshness check must not be what launches a billed
-	// machine: on an acquisition rung the run resolves from the history the
-	// poller and earlier runs recorded, and only a fetch that actually has
-	// to happen pays for the worker.
-	if checkWorkerAcquirable(ctx, cfg, name) {
-		logFrom(ctx).Info("job.refresh.skipped", "resource", name, "reason", "its worker would have to be acquired")
-
-		return
-	}
-
 	ctx, err = PlaceResource(ctx, cfg, name)
 	if err != nil {
 		warnRefreshFailed(name, err)

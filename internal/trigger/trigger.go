@@ -1310,12 +1310,7 @@ func recordBreaker(ctx context.Context, st PollStore, job *config.Job, runErr er
 		"resume", "steps jobs resume "+job.Name+" -p <pipeline>")
 }
 
-// leasedChecks scopes one round of checks the way RunJob scopes a job, so a
-// placed check resolves its worker through the same code a step does. The
-// leases never acquire anything here — ValidatePipelinePlacement refuses an
-// acquisition rung for a polled resource, because a poll and a running job
-// would hold independent leases over one machine with no notion of who owns
-// it — so the release is a formality kept for the day that changes.
+// leasedChecks scopes one round of checks the way RunJob scopes a job, so a placed check resolves its worker through the same registry a job's steps do — which is what lets a poll end without stopping a machine a job is on.
 func leasedChecks(ctx context.Context) (context.Context, func()) {
 	ctx, releaseWorkers := pipeline.WithLeases(ctx)
 

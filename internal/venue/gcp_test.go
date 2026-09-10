@@ -566,7 +566,7 @@ func TestGCPLaunchRungDialsTheMachineItAcquired(t *testing.T) {
 		t.Fatalf("acquire: %v", err)
 	}
 
-	defer func() { _ = release(context.Background(), true) }()
+	defer func() { _ = release(context.Background()) }()
 
 	tunnel, err := dialGCP(context.Background(), resolved)
 	if err != nil {
@@ -804,7 +804,7 @@ func TestGCPLaunchToleratesReplicaLag(t *testing.T) {
 		t.Fatalf("acquire through the lag: %v", err)
 	}
 
-	_ = release(context.Background(), true)
+	_ = release(context.Background())
 
 	if resolved.Rung != RungStatic {
 		t.Errorf("resolved rung = %q, want static", resolved.Rung)
@@ -885,8 +885,7 @@ func TestParseGCPWorkerRefusals(t *testing.T) {
 		"gcp://worker-1?zone=z&identity=/tmp/key":       "identity= does not describe a gcp worker",
 		"gcp://worker-1?zone=z&known_hosts=/tmp/kh":     "known_hosts= does not describe a gcp worker",
 		"gcp://worker-1?zone=z&ssh_config=none":         "ssh_config= does not describe a gcp worker",
-		"gcp://worker-1?zone=z&idle=5m":                 "not on the stopped rung",
-		"gcp://launch/steps-workers?zone=z&idle=5m":     "not on the stopped rung",
+		"gcp://worker-1?zone=z&idle=5m":                 "names one that already exists",
 		"gcp://worker-1?zone=z&hostkey=SHA256:tooshort": "must be an OpenSSH SHA256 fingerprint",
 	}
 
@@ -1056,7 +1055,7 @@ func TestGCPParkedRungWaitsOutAnUnfinishedStop(t *testing.T) {
 		t.Fatalf("acquire through an unfinished stop: %v", err)
 	}
 
-	_ = release(context.Background(), true)
+	_ = release(context.Background())
 
 	if resolved.Instance != "worker-1" {
 		t.Errorf("resolved = %+v, want the parked instance", resolved)

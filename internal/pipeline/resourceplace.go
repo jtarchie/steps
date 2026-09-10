@@ -222,19 +222,6 @@ func stepResourceName(step config.Step) (string, bool) {
 	}
 }
 
-// checkWorkerAcquirable reports whether a resource's check would have to
-// acquire its machine — start or launch it — rather than dial one that exists.
-func checkWorkerAcquirable(ctx context.Context, cfg *config.Config, name string) bool {
-	tag := placementTag(resourceStep(cfg, name))
-	if tag == "" {
-		return false
-	}
-
-	worker, ok := workersFrom(ctx)[tag]
-
-	return ok && worker.Acquirable()
-}
-
 // resourceStep is the step a check outside any plan stands in for: a get of
 // the resource, carrying the resource's tags: as a plan get would have
 // inherited them.
@@ -286,17 +273,7 @@ func runPlacedStage(ctx context.Context, step config.Step, stage func(context.Co
 	})
 }
 
-// ValidatePipelinePlacement refuses a poller whose resources name workers this
-// invocation cannot supply, or would have to acquire.
-//
-// Only the resources the poller checks (names), not every tagged one in the
-// file: a put-only resource's tag is a job's business, validated when that
-// job runs. And an acquisition rung is refused outright: a poll and a running
-// job hold independent leases with no notion of who owns the machine, so a
-// poll giving its machine back would stop the instance a job was mid-step on
-// — and a check that runs once an interval is the wrong thing to launch a
-// billed machine for. A resource checked by the poller needs a worker that
-// already exists.
+// ValidatePipelinePlacement checks only the polled resources, since a put-only tag is its job's business; an acquisition rung passes because a poll shares its machine through the registry and so cannot stop one a job is on.
 func ValidatePipelinePlacement(ctx context.Context, cfg *config.Config, names []string) error {
 	workers := workersFrom(ctx)
 
@@ -310,11 +287,6 @@ func ValidatePipelinePlacement(ctx context.Context, cfg *config.Config, names []
 		if !ok {
 			return fmt.Errorf("resource %q: no worker is registered for tag %s — map it with --worker %s=ssh://user@host, or remove the tag",
 				name, tag, tag)
-		}
-
-		if worker.Acquirable() {
-			return fmt.Errorf("resource %q: --worker %s names a machine steps would have to acquire (%s), and a polled check needs one that already exists — map the tag to ssh://, local:, or a running instance",
-				name, tag, worker.Address())
 		}
 
 		err := worker.PlacementCheck(artifactStoreFrom(ctx) != "")

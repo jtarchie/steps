@@ -80,16 +80,43 @@ func artifactStoreFrom(ctx context.Context) string {
 // leasesKey types the context value carrying one job's venue leases.
 type leasesKey struct{}
 
-// WithLeases installs a job's venue leases and returns the release that has
-// to run when the job ends.
-//
-// Per JOB, not per run and not per step. A worker that has to be acquired —
-// started from stopped, or launched outright — costs 20 to 90 seconds and
-// real money, so the first placed step pays for it, every later step in the
-// job reuses it, and the job's end gives it back. A job with no placed step,
-// or whose placed steps are all cache hits, acquires nothing at all.
+// registryKey types the context value carrying the process's shared machines.
+type registryKey struct{}
+
+// WithWorkerRegistry makes the last of a daemon's jobs, polls and webhooks out give a machine back, rather than the first; its release belongs after every loop that could hold one has stopped.
+func WithWorkerRegistry(ctx context.Context) (context.Context, func()) {
+	return withRegistry(ctx, venue.NewRegistry())
+}
+
+// SharesWorkers is what a daemon has to arrange, and what its test asserts: without it every scope owns its machine outright again.
+func SharesWorkers(ctx context.Context) bool {
+	_, shared := ctx.Value(registryKey{}).(*venue.Registry)
+
+	return shared
+}
+
+func withRegistry(ctx context.Context, registry *venue.Registry) (context.Context, func()) {
+	return context.WithValue(ctx, registryKey{}, registry), func() {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), WorkerReleaseTimeout)
+		defer cancel()
+
+		err := registry.Close(releaseCtx)
+		if err != nil {
+			logFrom(ctx).Error("worker_release_failed", "error", err)
+			fmt.Printf("warning: a worker acquired by this process could not be released: %v\n", err)
+		}
+	}
+}
+
+// WithLeases is per scope (a job, a poll, a webhook), never per step, because acquisition costs 20-90 seconds and real money; with no registry installed, the scope's own end gives everything back.
 func WithLeases(ctx context.Context) (context.Context, func(context.Context)) {
-	leases := venue.NewLeases(workersFrom(ctx))
+	var leases *venue.Leases
+
+	if registry, shared := ctx.Value(registryKey{}).(*venue.Registry); shared {
+		leases = registry.Leases(workersFrom(ctx))
+	} else {
+		leases = venue.NewLeases(workersFrom(ctx))
+	}
 
 	return context.WithValue(ctx, leasesKey{}, leases), func(ctx context.Context) {
 		err := leases.ReleaseAll(ctx)

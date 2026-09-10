@@ -54,16 +54,7 @@ const (
 	CapacityOnDemand Capacity = "od"
 )
 
-// defaultIdle is how long a parked instance is left running after the job
-// that started it.
-//
-// Zero, and the change from the shipped 5m default is deliberate: the release
-// has to be SYNCHRONOUS (a detached parker dies with a one-shot process,
-// leaving the instance running and billing forever), so a nonzero default
-// meant every job that touched a parked worker visibly hung for five minutes
-// after finishing — a surprise nobody asked for. ?idle= remains for the
-// operator who wants back-to-back jobs to skip the cold start and accepts
-// that the job's end waits out the window, which the release now says aloud.
+// defaultIdle is zero because a warm machine is a billed one: ?idle= is the operator choosing to pay to spare the next user a cold start.
 const defaultIdle = 0
 
 // acquireTimeout bounds waiting for a machine to reach a usable state. Cloud
@@ -126,7 +117,7 @@ var errNoCapacity = errors.New("no capacity for the requested worker")
 // worker that names it, plus how to give it back. A scheme switch rather
 // than an if-chain, so the exhaustive linter makes the next scheme decide
 // its acquisition story instead of falling into another cloud's.
-func acquire(ctx context.Context, worker Worker) (Worker, func(context.Context, bool) error, error) {
+func acquire(ctx context.Context, worker Worker) (Worker, func(context.Context) error, error) {
 	switch worker.Scheme {
 	case SchemeAWS:
 		return acquireEC2(ctx, worker)
@@ -141,7 +132,7 @@ func acquire(ctx context.Context, worker Worker) (Worker, func(context.Context, 
 }
 
 // acquireEC2 is acquire for the aws:// rungs.
-func acquireEC2(ctx context.Context, worker Worker) (Worker, func(context.Context, bool) error, error) {
+func acquireEC2(ctx context.Context, worker Worker) (Worker, func(context.Context) error, error) {
 	api, err := ec2For(ctx, worker)
 	if err != nil {
 		return Worker{}, nil, err
@@ -161,15 +152,15 @@ func acquireEC2(ctx context.Context, worker Worker) (Worker, func(context.Contex
 
 // startParked starts a stopped instance and parks it again when the job is
 // done with it.
-func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(context.Context, bool) error, error) {
-	// A previous job's park may still be settling: release returns once
-	// StopInstances is ACCEPTED, and EC2 refuses a start against an instance
-	// that is still `stopping`. Back-to-back serial jobs on one parked worker
-	// hit this window every time, so wait it out first — the same reason
-	// gceStartParked opens with gceAwaitParkComplete.
-	err := awaitParkComplete(ctx, api, worker)
+func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(context.Context) error, error) {
+	// A previous park may still be settling — release returns once StopInstances is ACCEPTED, and EC2 refuses to start a `stopping` instance.
+	state, err := awaitParkComplete(ctx, api, worker)
 	if err != nil {
 		return Worker{}, nil, err
+	}
+
+	if state == ec2types.InstanceStateNameRunning || state == ec2types.InstanceStateNamePending {
+		return adoptRunning(ctx, api, worker)
 	}
 
 	_, err = api.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: []string{worker.Instance}})
@@ -188,12 +179,8 @@ func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(c
 		return Worker{}, nil, err
 	}
 
-	release := func(ctx context.Context, immediate bool) error {
-		holdIdleWindow(ctx, worker, immediate)
-
-		// A context of its own for the Stop itself: the wait above may have
-		// consumed the caller's entire budget, and returning without stopping
-		// would leave the machine running with nothing ever trying again.
+	release := func(ctx context.Context) error {
+		// Its own context: the caller's is likeliest to be spent exactly when this runs, and nothing would ever try the Stop again.
 		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
 
@@ -212,25 +199,17 @@ func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(c
 	return worker.asStatic(worker.Instance), release, nil
 }
 
-// holdIdleWindow waits out a parked worker's ?idle= window before it is
-// stopped — after the window, not immediately: an operator who set ?idle=
-// asked for back-to-back jobs to find the machine warm, at the stated price
-// of the releasing job waiting it out. An immediate release skips it — a
-// machine being reclaimed is not one anybody is waiting to reuse. Shared by
-// every parked rung, because ?idle= is steps' own semantics rather than any
-// one cloud's.
-func holdIdleWindow(ctx context.Context, worker Worker, immediate bool) {
-	if worker.Idle <= 0 || immediate {
-		return
+// adoptRunning gives no release, because a machine steps did not start may be anybody's work in progress — and says so aloud, because an instance nobody stops is one somebody has to find.
+func adoptRunning(ctx context.Context, api ec2API, worker Worker) (Worker, func(context.Context) error, error) {
+	err := waitForRunning(ctx, api, worker, worker.Instance, "")
+	if err != nil {
+		return Worker{}, nil, err
 	}
 
-	fmt.Printf("worker %s: holding %s for %s before parking (?idle=0 parks immediately)\n",
-		worker.URL, worker.Instance, worker.Idle)
+	fmt.Printf("worker %s: %s was already running; using it and leaving it running, since steps did not start it\n",
+		worker.URL, worker.Instance)
 
-	select {
-	case <-time.After(worker.Idle):
-	case <-ctx.Done():
-	}
+	return worker.asStatic(worker.Instance), nil, nil
 }
 
 // cleanupTimeout bounds the API call that gives a machine back on a path
@@ -252,7 +231,7 @@ func stopInstance(api ec2API, worker Worker, instance string) {
 
 // launchInstance creates one instance from a launch template and terminates
 // it when the job ends.
-func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, func(context.Context, bool) error, error) {
+func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, func(context.Context) error, error) {
 	out, err := api.CreateFleet(ctx, fleetRequest(worker))
 	if err != nil {
 		return Worker{}, nil, fmt.Errorf("launching a worker for %q: %w", worker.URL, err)
@@ -277,7 +256,7 @@ func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, fun
 		return Worker{}, nil, err
 	}
 
-	release := func(ctx context.Context, _ bool) error {
+	release := func(ctx context.Context) error {
 		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
 
@@ -449,9 +428,8 @@ func waitForRunning(ctx context.Context, api ec2API, worker Worker, instance str
 	}
 }
 
-// awaitParkComplete waits out an in-flight stop, so StartInstances acts on a
-// machine that has finished parking rather than one still on its way down.
-func awaitParkComplete(ctx context.Context, api ec2API, worker Worker) error {
+// awaitParkComplete reports the settled state because a running one is somebody else's machine, not one to start.
+func awaitParkComplete(ctx context.Context, api ec2API, worker Worker) (ec2types.InstanceStateName, error) {
 	deadline, cancel := context.WithTimeout(ctx, acquireTimeout)
 	defer cancel()
 
@@ -463,24 +441,25 @@ func awaitParkComplete(ctx context.Context, api ec2API, worker Worker) error {
 		if err != nil {
 			err = waitOutInvisible(deadline, ticker, worker, worker.Instance, err)
 			if err != nil {
-				return err
+				return "", err
 			}
 
 			continue
 		}
 
-		switch instanceState(out) {
+		state := instanceState(out)
+
+		switch state {
 		case ec2types.InstanceStateNameStopping, ec2types.InstanceStateNameShuttingDown:
 		case ec2types.InstanceStateNamePending, ec2types.InstanceStateNameRunning,
 			ec2types.InstanceStateNameStopped, ec2types.InstanceStateNameTerminated:
-			// Settled, one way or the other: whether starting it can work is
-			// the next call's answer, not this one's.
-			return nil
+			// Settled either way: whether starting it can work is the next call's answer.
+			return state, nil
 		}
 
 		err = awaitTick(deadline, ticker, worker, worker.Instance)
 		if err != nil {
-			return err
+			return "", err
 		}
 	}
 }

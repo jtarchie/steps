@@ -414,7 +414,7 @@ func isGoogleAPIStatus(err error, status int) bool {
 
 // acquireGCE brings a gcp:// worker's machine into existence, mirroring
 // acquire for the aws:// rungs.
-func acquireGCE(ctx context.Context, worker Worker) (Worker, func(context.Context, bool) error, error) {
+func acquireGCE(ctx context.Context, worker Worker) (Worker, func(context.Context) error, error) {
 	if !worker.needsAcquisition() {
 		return worker, nil, nil
 	}
@@ -444,15 +444,25 @@ func acquireGCE(ctx context.Context, worker Worker) (Worker, func(context.Contex
 // gceStartParked starts a stopped instance and parks it again when the job
 // is done with it. A stopped GCE instance reports TERMINATED — Compute
 // Engine's word for "stopped, disk kept", not for "gone".
-func gceStartParked(ctx context.Context, api gceAPI, worker Worker, project, zone string) (Worker, func(context.Context, bool) error, error) {
-	// A previous job's park may still be settling: release returns once the
-	// stop is ACCEPTED, and starting again while the instance is STOPPING
-	// loses a fingerprint race inside GCE ("the resource fingerprint changed
-	// during the start operation" — observed). Back-to-back serial jobs on
-	// one parked worker hit this window every time, so wait it out first.
-	err := gceAwaitParkComplete(ctx, api, worker, project, zone)
+func gceStartParked(ctx context.Context, api gceAPI, worker Worker, project, zone string) (Worker, func(context.Context) error, error) {
+	// A previous park may still be settling, and starting a STOPPING instance loses a fingerprint race inside GCE (observed).
+	status, err := gceAwaitParkComplete(ctx, api, worker, project, zone)
 	if err != nil {
 		return Worker{}, nil, err
+	}
+
+	// Somebody else's, as on EC2: steps stops only what it started — see adoptRunning.
+	switch status {
+	case "RUNNING", "PROVISIONING", "STAGING":
+		err = gceWaitForRunning(ctx, api, worker, project, zone, worker.Instance, "")
+		if err != nil {
+			return Worker{}, nil, err
+		}
+
+		fmt.Printf("worker %s: %s was already running; using it and leaving it running, since steps did not start it\n",
+			worker.URL, worker.Instance)
+
+		return worker.asStatic(worker.Instance), nil, nil
 	}
 
 	err = api.Start(ctx, project, zone, worker.Instance)
@@ -476,9 +486,7 @@ func gceStartParked(ctx context.Context, api gceAPI, worker Worker, project, zon
 		return Worker{}, nil, err
 	}
 
-	release := func(ctx context.Context, immediate bool) error {
-		holdIdleWindow(ctx, worker, immediate)
-
+	release := func(ctx context.Context) error {
 		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
 
@@ -499,7 +507,7 @@ func gceStartParked(ctx context.Context, api gceAPI, worker Worker, project, zon
 
 // gceAwaitParkComplete waits out an in-flight stop, so Start acts on a
 // machine that has finished parking rather than one still on its way down.
-func gceAwaitParkComplete(ctx context.Context, api gceAPI, worker Worker, project, zone string) error {
+func gceAwaitParkComplete(ctx context.Context, api gceAPI, worker Worker, project, zone string) (string, error) {
 	deadline, cancel := context.WithTimeout(ctx, acquireTimeout)
 	defer cancel()
 
@@ -509,18 +517,18 @@ func gceAwaitParkComplete(ctx context.Context, api gceAPI, worker Worker, projec
 	for {
 		status, err := api.Status(deadline, project, zone, worker.Instance)
 		if err != nil {
-			return fmt.Errorf("asking about %s for %q before starting it: %w", worker.Instance, worker.URL, err)
+			return "", fmt.Errorf("asking about %s for %q before starting it: %w", worker.Instance, worker.URL, err)
 		}
 
 		switch status {
 		case "STOPPING", "PENDING_STOP", "DEPROVISIONING", "SUSPENDING":
 		default:
-			return nil
+			return status, nil
 		}
 
 		err = awaitTick(deadline, ticker, worker, worker.Instance)
 		if err != nil {
-			return err
+			return "", err
 		}
 	}
 }
@@ -539,7 +547,7 @@ func gceStopInstance(api gceAPI, worker Worker, project, zone, name string) {
 
 // gceLaunch creates one instance from an instance template and deletes it
 // when the job ends.
-func gceLaunch(ctx context.Context, api gceAPI, worker Worker, project, zone string) (Worker, func(context.Context, bool) error, error) {
+func gceLaunch(ctx context.Context, api gceAPI, worker Worker, project, zone string) (Worker, func(context.Context) error, error) {
 	name := gceWorkerName()
 
 	// Named BEFORE the money is spent: the name is client-chosen, so a crash
@@ -570,7 +578,7 @@ func gceLaunch(ctx context.Context, api gceAPI, worker Worker, project, zone str
 		return Worker{}, nil, err
 	}
 
-	release := func(ctx context.Context, _ bool) error {
+	release := func(ctx context.Context) error {
 		deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
 

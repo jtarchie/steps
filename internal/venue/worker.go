@@ -94,9 +94,7 @@ type Worker struct {
 	// whole of steps' machine-shape surface — disk, instance type, AMI and
 	// user data all live in a version, which is why there is no ?disk=.
 	Version string
-	// Idle is how long a parked worker stays running after the job that
-	// started it, for an operator who wants back-to-back jobs to skip the
-	// cold start and accepts that the releasing job waits out the window.
+	// Idle is how long an acquired machine is kept after its last user, so the next job, poll or webhook finds it warm.
 	Idle time.Duration
 	// Region overrides the ambient AWS region for an aws:// worker.
 	Region string
@@ -320,15 +318,10 @@ func parseTemplateVersion(worker Worker, query url.Values) (string, error) {
 	}
 }
 
-// parseIdle reads how long a parked worker stays up after its job. The rung
-// refusal lives here, once, rather than per scheme: ?idle= is steps' own
-// semantics, and every scheme that admits the key parks the same way — a
-// scheme-local copy is one a new scheme forgets, and an idle= that parses
-// clean and silently never applies is exactly the mapping-that-LOOKS-
-// configured the grammar exists to refuse.
+// parseIdle refuses here, once, rather than per scheme: an idle= that parses clean and silently never applies is the mapping-that-LOOKS-configured the grammar exists to refuse.
 func parseIdle(worker Worker, query url.Values) (time.Duration, error) {
-	if query.Has("idle") && worker.Rung != RungStopped {
-		return 0, fmt.Errorf("%w %q: idle= describes how long a PARKED machine stays warm, and this worker is not on the stopped rung",
+	if query.Has("idle") && !worker.needsAcquisition() {
+		return 0, fmt.Errorf("%w %q: idle= is how long a machine steps acquired stays warm, and this worker names one that already exists",
 			ErrWorker, worker.URL)
 	}
 
