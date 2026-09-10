@@ -58,6 +58,9 @@ var runEventLimit = 5000
 // them is holding a connection, not making a request.
 const readHeaderTimeout = 5 * time.Second
 
+// maxUploadSize bounds a `steps pipeline set`. It is the only unauthenticated write this server takes, and what it holds is buffered whole and then written into TEXT columns retention cannot reap while they are the current revision — every other free-text column here already declares a cap.
+const maxUploadSize = "8M"
+
 // Pipeline is one loaded pipeline the server serves, with its own config and
 // its own store handle. Two served pipelines may now share a state FILE (see
 // --db), but never a store handle: each one is scoped to its own pipeline
@@ -219,7 +222,20 @@ func New(pipelines []*Pipeline, runner Runner) (*Server, error) {
 }
 
 // SetManager is separate from New because the manager needs the server it registers into.
-func (s *Server) SetManager(manager Manager) { s.manager = manager }
+func (s *Server) SetManager(manager Manager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.manager = manager
+}
+
+// Under the lock its sibling registry fields already take: an interface value read while another goroutine writes it is a torn method table, not a stale pointer.
+func (s *Server) held() Manager {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.manager
+}
 
 // Add starts serving a pipeline, refusing a name already held.
 func (s *Server) Add(pipeline *Pipeline) error {
@@ -348,13 +364,14 @@ func (s *Server) routes() error {
 	group.POST("/check/:resource", s.handleWebhook)
 
 	// Outside the /p/ group because a set may CREATE the pipeline it names, and that middleware resolves one that exists.
-	e.GET("/api/pipelines", s.handleAPIList)
-	e.GET("/api/pipelines/:pipeline", s.handleAPIGet)
-	e.PUT("/api/pipelines/:pipeline", s.handleAPISet)
-	e.DELETE("/api/pipelines/:pipeline", s.handleAPIDestroy)
-	e.POST("/api/pipelines/:pipeline/pause", s.handleAPIPause)
-	e.POST("/api/pipelines/:pipeline/unpause", s.handleAPIUnpause)
-	e.POST("/api/pipelines/:pipeline/rename", s.handleAPIRename)
+	api := e.Group("/api", middleware.BodyLimit(maxUploadSize))
+	api.GET("/pipelines", s.handleAPIList)
+	api.GET("/pipelines/:pipeline", s.handleAPIGet)
+	api.PUT("/pipelines/:pipeline", s.handleAPISet)
+	api.DELETE("/pipelines/:pipeline", s.handleAPIDestroy)
+	api.POST("/pipelines/:pipeline/pause", s.handleAPIPause)
+	api.POST("/pipelines/:pipeline/unpause", s.handleAPIUnpause)
+	api.POST("/pipelines/:pipeline/rename", s.handleAPIRename)
 
 	s.echo = e
 

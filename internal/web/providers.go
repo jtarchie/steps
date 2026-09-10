@@ -15,6 +15,8 @@ import (
 type providers struct {
 	mu     sync.Mutex
 	leases map[string]*providerLease
+	// retiring counts the background closes, so shutdown waits for the ones a set or a destroy already started rather than exiting past them.
+	retiring sync.WaitGroup
 }
 
 // providerLease is one pipeline's current provider and the runs still holding it.
@@ -49,7 +51,7 @@ func (p *providers) set(slug string, provider workspace.Provider) {
 	p.leases[slug] = &providerLease{provider: provider}
 	p.mu.Unlock()
 
-	retire(slug, previous)
+	p.retire(slug, previous)
 }
 
 // remove retires a destroyed pipeline's provider.
@@ -59,23 +61,30 @@ func (p *providers) remove(slug string) {
 	delete(p.leases, slug)
 	p.mu.Unlock()
 
-	retire(slug, previous)
+	p.retire(slug, previous)
 }
 
 // retire closes a provider once the runs holding it have finished, in the background because a set must not block on somebody's twenty-minute build.
-func retire(slug string, lease *providerLease) {
+func (p *providers) retire(slug string, lease *providerLease) {
 	if lease == nil {
 		return
 	}
 
-	go func() {
-		lease.wg.Wait()
+	p.retiring.Add(1)
 
-		err := lease.provider.Close()
-		if err != nil {
-			slog.Warn("web.provider_close", "pipeline", slug, "error", err)
-		}
+	go func() {
+		defer p.retiring.Done()
+
+		lease.wg.Wait()
+		closeLease(slug, lease)
 	}()
+}
+
+func closeLease(slug string, lease *providerLease) {
+	err := lease.provider.Close()
+	if err != nil {
+		slog.Warn("web.provider_close", "pipeline", slug, "error", err)
+	}
 }
 
 // Close retires every provider, waiting for the runs holding them — the daemon's own shutdown, where there is nothing left to be responsive for.
@@ -87,10 +96,8 @@ func (p *providers) Close() {
 
 	for slug, lease := range leases {
 		lease.wg.Wait()
-
-		err := lease.provider.Close()
-		if err != nil {
-			slog.Warn("web.provider_close", "pipeline", slug, "error", err)
-		}
+		closeLease(slug, lease)
 	}
+
+	p.retiring.Wait()
 }

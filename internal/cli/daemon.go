@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"reflect"
 	"sync"
@@ -35,6 +36,9 @@ type daemon struct {
 	mu     sync.Mutex
 	served map[string]*servedPipeline
 }
+
+// daemonWriteBound is what a give-back write gets on its own context, since the request's is likeliest to be cancelled exactly when one runs.
+const daemonWriteBound = 30 * time.Second
 
 // servedPipeline is one pipeline plus what has to be shut down when it goes.
 type servedPipeline struct {
@@ -66,17 +70,19 @@ func newDaemon(
 //nolint:contextcheck // opening a database and closing a handle are not context-taking operations in this driver
 func (d *daemon) load(ctx context.Context) error {
 	reader, err := sqlite.OpenReader(d.state)
-	if errors.Is(err, store.ErrNoState) {
-		return nil
-	}
 
-	// A database that is not there is the ordinary first start; one this build cannot write is not.
+	// A database that is not there, or created but not yet filled in, is the
+	// ordinary first start. Anything else — a corrupt file, a mode this
+	// process cannot read, a schema this build cannot satisfy — is refused,
+	// because the alternative is a daemon that starts clean, prints "no
+	// pipelines set" and quietly stops polling and draining every pipeline
+	// still in the file.
 	if err != nil {
-		if errors.Is(err, store.ErrSchemaVersion) {
-			return fmt.Errorf("web: %w", err)
+		if errors.Is(err, store.ErrNoState) || errors.Is(err, fs.ErrNotExist) {
+			return nil
 		}
 
-		return nil
+		return fmt.Errorf("web: could not read %s: %w", d.state, err)
 	}
 
 	rows, err := reader.Pipelines(ctx)
@@ -144,7 +150,7 @@ func (d *daemon) restoreHeld(ctx context.Context, name, from string) error {
 		return fmt.Errorf("web: %q cannot run here: %w", name, err)
 	}
 
-	provider, err := d.provider(cfg, false)
+	provider, err := d.provider(cfg, st, false)
 	if err != nil {
 		_ = st.Close()
 
@@ -153,7 +159,7 @@ func (d *daemon) restoreHeld(ctx context.Context, name, from string) error {
 
 	fmt.Printf("steps web: serving %s (config %s)\n", name, shortConfig(revision.SHA))
 
-	d.start(ctx, name, cfg, st, provider, from)
+	d.start(name, cfg, st, provider, from)
 
 	return nil
 }
@@ -184,26 +190,50 @@ func (d *daemon) Set(ctx context.Context, name string, req web.SetRequest) (web.
 		return web.SetResult{}, err
 	}
 
-	err = d.record(ctx, st, cfg, req)
+	// Resolved BEFORE the record, because the record is durable and this is the last thing that can refuse: a workspace this machine cannot supply used to leave current_revision_id naming a configuration the next restart refused, and a daemon that refuses to start has no endpoint left to fix it through.
+	provider, err := d.workspaceFor(cfg, st, existing)
 	if err != nil {
 		d.closeIfNew(st, serving)
 
 		return web.SetResult{}, err
 	}
 
-	if serving {
-		err = d.replace(ctx, existing, cfg, req.From)
-	} else {
-		err = d.adopt(ctx, name, cfg, st, req.From)
+	err = d.record(ctx, st, cfg, req)
+	if err != nil {
+		closeProvider(provider)
+		d.closeIfNew(st, serving)
+
+		return web.SetResult{}, err
 	}
 
-	if err != nil {
-		return web.SetResult{}, err
+	if serving {
+		d.replace(existing, cfg, provider, req.From)
+	} else {
+		d.start(name, cfg, st, provider, req.From)
 	}
 
 	fmt.Printf("steps web: %s set to config %s\n", name, shortConfig(cfg.Revision.SHA))
 
 	return result, nil
+}
+
+// workspaceFor is the provider this set needs, nil when an unmoved workspace: keeps the one the pipeline already has — so the ordinary set changes no build directory underneath a run.
+func (d *daemon) workspaceFor(cfg *config.Config, st store.Store, existing *servedPipeline) (workspace.Provider, error) {
+	if existing == nil {
+		return d.provider(cfg, st, false)
+	}
+
+	if reflect.DeepEqual(existing.target.Config().Workspace, cfg.Workspace) {
+		return nil, nil //nolint:nilnil // "no new provider needed" is the answer, not a missing one
+	}
+
+	return d.provider(cfg, st, true)
+}
+
+func closeProvider(provider workspace.Provider) {
+	if provider != nil {
+		_ = provider.Close()
+	}
 }
 
 // stateFor reuses the handle already serving this pipeline: a second one on the same file is a second pool contending for its write lock.
@@ -298,43 +328,22 @@ func (d *daemon) record(ctx context.Context, st store.Store, cfg *config.Config,
 	return nil
 }
 
-// adopt starts serving a pipeline this daemon did not hold.
-func (d *daemon) adopt(ctx context.Context, name string, cfg *config.Config, st store.Store, from string) error {
-	provider, err := d.provider(cfg, false)
-	if err != nil {
-		_ = st.Close()
-
-		return err
-	}
-
-	d.start(ctx, name, cfg, st, provider, from)
-
-	return nil
-}
-
 // replace IS the list of everything re-derived when a configuration changes: the workspace built from it, the admission rules that live in SQL rather than in the Config, and the superseded revision nothing can reach any more.
-func (d *daemon) replace(ctx context.Context, existing *servedPipeline, cfg *config.Config, from string) error {
-	// An unmoved workspace: keeps its provider, so the ordinary set changes no build directory underneath a run.
-	if !reflect.DeepEqual(existing.target.Config().Workspace, cfg.Workspace) {
-		provider, err := d.provider(cfg, true)
-		if err != nil {
-			return err
-		}
-
+func (d *daemon) replace(existing *servedPipeline, cfg *config.Config, provider workspace.Provider, from string) {
+	if provider != nil {
 		d.runner.SetProvider(existing.target.Slug, provider)
 	}
 
 	existing.target.SetConfig(cfg)
 	existing.target.SetPath(from)
 
-	web.SyncQueueLimits(ctx, existing.target)
-	d.sweep(ctx, existing.target)
-
-	return nil
+	// The daemon's context, never the request's: these are what make the queue obey the configuration just applied, and a sender that hung up must not leave serial: unwritten while the drain starts anyway.
+	web.SyncQueueLimits(d.base, existing.target)
+	d.sweep(d.base, existing.target)
 }
 
 // replacing suppresses Validate()'s stale-build sweep for a durable workspace.root:, because that sweep removes EVERY build directory under the root with no ownership check — which at startup clears a crashed process's leftovers and mid-flight deletes the tree of whatever is running.
-func (d *daemon) provider(cfg *config.Config, replacing bool) (workspace.Provider, error) {
+func (d *daemon) provider(cfg *config.Config, st store.Store, replacing bool) (workspace.Provider, error) {
 	keep := d.exec.KeepWorkspace
 	if replacing && cfg.Workspace != nil && cfg.Workspace.Root != "" {
 		keep = true
@@ -352,14 +361,20 @@ func (d *daemon) provider(cfg *config.Config, replacing bool) (workspace.Provide
 		return nil, fmt.Errorf("%w: workspace: %w", web.ErrRefused, err)
 	}
 
+	// The other half of --artifact-store, which the setup() path this replaced did here: without it the flag mirrors nothing and warns about nothing, which reads as configured and binds nothing.
+	err = attachArtifactStore(provider, st, d.exec.ArtifactStore)
+	if err != nil {
+		_ = provider.Close()
+
+		return nil, fmt.Errorf("%w: %w", web.ErrRefused, err)
+	}
+
 	return provider, nil
 }
 
 // start launches the two loops a served pipeline is: the drain that runs what the queue holds, and the poll that fills it.
-//
-//nolint:contextcheck // the loops hang off the DAEMON's lifetime, not the request's — see the comment on loopCtx
 func (d *daemon) start(
-	ctx context.Context, name string, cfg *config.Config, st store.Store,
+	name string, cfg *config.Config, st store.Store,
 	provider workspace.Provider, from string,
 ) {
 	bus := events.New(pipeline.StoreSink(st))
@@ -381,10 +396,10 @@ func (d *daemon) start(
 
 	d.runner.SetProvider(name, provider)
 
-	// Before either loop, because ResetStaleRunning reads every running row as abandoned — true for a pipeline nothing here is running yet, false a moment later.
-	web.PrepareQueue(ctx, target)
-	web.SyncQueueLimits(ctx, target)
-	d.sweep(ctx, target)
+	// Before either loop, because ResetStaleRunning reads every running row as abandoned — true for a pipeline nothing here is running yet, false a moment later. On the loops' own context, since a sender that hung up must not leave the queue admitting jobs the pipeline forbade.
+	web.PrepareQueue(loopCtx, target)
+	web.SyncQueueLimits(loopCtx, target)
+	d.sweep(loopCtx, target)
 
 	loops := &sync.WaitGroup{}
 	loops.Add(2)
@@ -437,7 +452,11 @@ func (d *daemon) Destroy(ctx context.Context, name string) error {
 		return err
 	}
 
-	err = served.target.Store.Delete(ctx)
+	// Its own context: the likeliest reason a destroy is running is that the terminal that asked has already gone, and the request's context aborts the DELETE mid-transaction with the pipeline already torn down.
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), daemonWriteBound)
+	defer cancel()
+
+	err = served.target.Store.Delete(writeCtx)
 
 	served.closer()
 	d.runner.RemoveProvider(name)
@@ -460,25 +479,32 @@ func (d *daemon) Rename(ctx context.Context, from, to string) error {
 		return fmt.Errorf("%w: this daemon already serves a pipeline called %q", web.ErrRefused, to)
 	}
 
-	served, err := d.detach(from)
+	served, held := d.served[from]
+	if !held || served == nil {
+		return fmt.Errorf("%w: %s", web.ErrNoSuchPipeline, from)
+	}
+
+	// Where it was set from travels with the identity: a rename moves the name, not the file somebody uploaded.
+	setFrom := served.target.Path()
+
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), daemonWriteBound)
+	defer cancel()
+
+	// The UPDATE first, and every scoped row reaches the pipeline by id so the loops go on working under the old name: the served map is not the whole file, and a name a `steps run` row already holds used to fail the UNIQUE constraint AFTER the source pipeline had been torn down and its handle closed — lost until a restart.
+	err := served.target.Store.Rename(writeCtx, to)
+	if err != nil {
+		return fmt.Errorf("%w: could not rename %q to %q: %w", web.ErrRefused, from, to, err)
+	}
+
+	_, err = d.detach(from)
 	if err != nil {
 		return err
 	}
 
-	// Where it was set from travels with the identity: a rename moves the
-	// name, not the file somebody uploaded.
-	setFrom := served.target.Path()
-
-	err = served.target.Store.Rename(ctx, to)
-
 	served.closer()
 	d.runner.RemoveProvider(from)
 
-	if err != nil {
-		return fmt.Errorf("could not rename %q: %w", from, err)
-	}
-
-	err = d.restoreHeld(ctx, to, setFrom)
+	err = d.restoreHeld(writeCtx, to, setFrom)
 	if err != nil {
 		return err
 	}
@@ -509,12 +535,19 @@ func (d *daemon) Close() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	// Cancelled in one pass first, so the daemon's stop time is the longest pipeline's wind-down rather than the sum of all of them.
 	for name, served := range d.served {
 		d.server.Remove(name)
 		served.cancel()
+	}
+
+	for _, served := range d.served {
 		served.loops.Wait()
 		served.closer()
 	}
 
 	d.served = map[string]*servedPipeline{}
+
+	// The providers are the runner's, and only their Close removes the temp root each one created — closing the store alone left a steps-* tree behind on every shutdown.
+	d.runner.Close()
 }

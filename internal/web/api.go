@@ -14,8 +14,8 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// pipelineSummaryJSON is one row of `steps pipeline list`.
-type pipelineSummaryJSON struct {
+// PipelineSummary is one row of `steps pipeline list`. Exported and shared with the client for the reason SetRequest is: two copies of a wire struct drift into a silently-dropped field rather than a build error.
+type PipelineSummary struct {
 	Name   string `json:"name"`
 	SHA    string `json:"sha"`
 	From   string `json:"from,omitempty"`
@@ -23,8 +23,8 @@ type pipelineSummaryJSON struct {
 	Paused bool   `json:"paused"`
 }
 
-// pipelineConfigJSON is what get prints and what set diffs against: the source, its includes, and the sha that names both.
-type pipelineConfigJSON struct {
+// PipelineConfig is what get prints and what set diffs against: the source, its includes, and the sha that names both.
+type PipelineConfig struct {
 	Name     string            `json:"name"`
 	SHA      string            `json:"sha"`
 	Source   string            `json:"source"`
@@ -36,10 +36,10 @@ type pipelineConfigJSON struct {
 // handleAPIList answers what this daemon holds.
 func (s *Server) handleAPIList(c echo.Context) error {
 	served := s.Served()
-	rows := make([]pipelineSummaryJSON, 0, len(served))
+	rows := make([]PipelineSummary, 0, len(served))
 
 	for _, target := range served {
-		row := pipelineSummaryJSON{
+		row := PipelineSummary{
 			Name:   target.Slug,
 			From:   target.Path(),
 			Jobs:   len(target.Config().Jobs),
@@ -75,7 +75,7 @@ func (s *Server) handleAPIGet(c echo.Context) error {
 	}
 
 	//nolint:wrapcheck // as above
-	return c.JSON(http.StatusOK, pipelineConfigJSON{
+	return c.JSON(http.StatusOK, PipelineConfig{
 		Name:     target.Slug,
 		SHA:      revision.SHA,
 		Source:   revision.Source,
@@ -87,7 +87,8 @@ func (s *Server) handleAPIGet(c echo.Context) error {
 
 // handleAPISet validates the upload HERE, on the machine that will run it, which is the whole reason a set is not a row-write.
 func (s *Server) handleAPISet(c echo.Context) error {
-	if s.manager == nil {
+	manager := s.held()
+	if manager == nil {
 		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
 	}
 
@@ -110,7 +111,7 @@ func (s *Server) handleAPISet(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "the uploaded configuration is empty")
 	}
 
-	result, err := s.manager.Set(c.Request().Context(), name, req)
+	result, err := manager.Set(c.Request().Context(), name, req)
 	if err != nil {
 		return setError(err)
 	}
@@ -136,11 +137,12 @@ var ErrRefused = errors.New("the pipeline was refused")
 
 // handleAPIDestroy forgets a pipeline and everything recorded under it.
 func (s *Server) handleAPIDestroy(c echo.Context) error {
-	if s.manager == nil {
+	manager := s.held()
+	if manager == nil {
 		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
 	}
 
-	err := s.manager.Destroy(c.Request().Context(), c.Param("pipeline"))
+	err := manager.Destroy(c.Request().Context(), c.Param("pipeline"))
 	if err != nil {
 		return destroyError(err)
 	}
@@ -150,7 +152,8 @@ func (s *Server) handleAPIDestroy(c echo.Context) error {
 
 // handleAPIRename moves a pipeline's identity, keeping its history.
 func (s *Server) handleAPIRename(c echo.Context) error {
-	if s.manager == nil {
+	manager := s.held()
+	if manager == nil {
 		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
 	}
 
@@ -168,7 +171,7 @@ func (s *Server) handleAPIRename(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	err = s.manager.Rename(c.Request().Context(), c.Param("pipeline"), body.To)
+	err = manager.Rename(c.Request().Context(), c.Param("pipeline"), body.To)
 	if err != nil {
 		return destroyError(err)
 	}
@@ -197,7 +200,7 @@ func (s *Server) handleAPIUnpause(c echo.Context) error { return s.setPaused(c, 
 
 // Through the store rather than the manager: it is one column on a row this package already holds a handle to.
 func (s *Server) setPaused(c echo.Context, pause bool) error {
-	if s.manager == nil {
+	if s.held() == nil {
 		return echo.NewHTTPError(http.StatusForbidden, "this server holds no pipelines of its own")
 	}
 

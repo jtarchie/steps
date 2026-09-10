@@ -280,7 +280,7 @@ steps run --artifact-store s3://my-bucket/team-prefix pipeline.yml
 - **What arrives is verified, not trusted**: every fetched tree is re-digested before it is installed, and bytes that do not match their key are refused as an ordinary miss. Every mirror failure — store unreachable, blob expired, index unknown — costs a re-run and nothing else; no mirror failure can fail a build that is otherwise working.
 - **Uploads are skipped when the store already holds the digest** (one `HEAD` per output), so an unchanged output is never re-shipped, whoever produced it first.
 - **Credentials and region** come from the ambient AWS configuration — the same chain every AWS tool reads — with `?region=` as an override. `?endpoint=` points at an S3-compatible server that is not AWS (minio and friends), switching to path-style addressing.
-- Applies to `run`, `watch`, `test`, and `web`. `volatile:` steps are never cached, so they are never mirrored either.
+- Applies to `run`, `test`, and `web`. `volatile:` steps are never cached, so they are never mirrored either.
 
 ## Container network (`network:`)
 

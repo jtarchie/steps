@@ -201,6 +201,65 @@ jobs:
 	}
 }
 
+// TestARefusedSetLeavesNothingForTheNextRestartToChokeOn.
+//
+// The record is DURABLE and the workspace check is the last thing that can
+// refuse, so ordering them the other way round bricked the daemon: the
+// configuration became current, the set was refused, and the next restart
+// read that row, failed the same check, and exited — with no endpoint left to
+// fix it through, because the endpoint is what the daemon was going to serve.
+//
+// A read-only directory is the lever, because `workspace.root:` is probed by
+// actually writing to it.
+func TestARefusedSetLeavesNothingForTheNextRestartToChokeOn(t *testing.T) {
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	root := filepath.Join(dir, "unwritable")
+
+	err := os.Mkdir(root, 0o500)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Restored before the temp dir is reaped, which cannot remove what it
+	// cannot write into.
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable, and this one holds nothing
+
+	writePipelineFile(t, path, `
+workspace:
+  root: `+root+`
+jobs:
+- name: build
+  plan:
+  - task: compile
+    inputs: []
+    run: echo built
+`)
+
+	served := startWebFor(t, path, "--interval", "1h", "--skip-set")
+
+	err = cli.Run([]string{"pipeline", "set", "-p", "app", "-c", path, "-n", "--target", served.target()})
+	if err == nil {
+		t.Fatal("a set whose workspace root this machine cannot write to was accepted")
+	}
+
+	if !strings.Contains(err.Error(), "workspace") {
+		t.Errorf("the refusal does not name the workspace: %v", err)
+	}
+
+	served.stop(t)
+
+	// The proof: a daemon reading what that set left behind still starts, and
+	// still serves nothing rather than refusing to run at all.
+	restarted := startWeb(t, "--db", served.state, "--interval", "1h")
+	defer restarted.stop(t)
+
+	code, body := restarted.get(t, "/")
+	if code != http.StatusOK || !strings.Contains(body, "steps pipeline set") {
+		t.Fatalf("after a refused set the daemon restarted to %d, want the empty index:\n%s", code, body)
+	}
+}
+
 // TestPipelineSetIsCompareAndSet: a set that diffed against a revision that has since moved must be refused, not applied over the newer one.
 func TestPipelineSetIsCompareAndSet(t *testing.T) {
 	path := flagFixture(t)

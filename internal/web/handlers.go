@@ -522,17 +522,6 @@ func (s *Server) handleFollow(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", name))
 	}
 
-	// Refused rather than queued: a pause that let the button enqueue would fill the queue with work nobody intends to run, and say nothing about why nothing happened.
-	stopped, err := pipeline.Store.Paused(c.Request().Context())
-	if err != nil {
-		return fmt.Errorf("web: %w", err)
-	}
-
-	if stopped {
-		return echo.NewHTTPError(http.StatusConflict,
-			"this pipeline is paused; resume it with steps pipeline unpause -p "+pipeline.Slug)
-	}
-
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "follow", map[string]any{
 		"Nav":       s.nav(c),

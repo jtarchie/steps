@@ -129,12 +129,21 @@ func syntheticRevision(ctx context.Context, t *testing.T, st *Store, build int) 
 
 	sha := fmt.Sprintf("sha-%s-%04d", st.pipeline, build)
 
-	err := st.RecordRevision(ctx, sha, syntheticPipelineSource(build), nil)
+	// With its includes, for the reason above: a daemon has no sibling filesystem, so every run_file: body is stored per revision — and a fixture passing nil left revision_includes contributing zero bytes to the same measurement.
+	err := st.RecordRevision(ctx, sha, syntheticPipelineSource(build), map[string]string{
+		"ci/build.sh":  syntheticIncludeBody(build),
+		"ci/deploy.sh": syntheticIncludeBody(build),
+	})
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
 
 	return sha
+}
+
+// syntheticIncludeBody is a task script of the size an ordinary pipeline carries.
+func syntheticIncludeBody(build int) string {
+	return fmt.Sprintf("#!/bin/sh\n# build %d\n%s\n", build, strings.Repeat("echo step; ", 150))
 }
 
 // syntheticPipelineSource is a pipeline of a few kilobytes — what a revision
@@ -837,6 +846,9 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 		{"job_serial_groups", "pipeline_id", "pipelines", "CASCADE"},
 		{"job_breaker", "pipeline_id", "pipelines", "CASCADE"},
 		{"pipeline_revisions", "pipeline_id", "pipelines", "CASCADE"},
+		// RESTRICT, because pruneRevisions' hand-written exemption would otherwise be the only thing between a sweep and a daemon that restarts into nothing.
+		{"pipelines", "current_revision_id", "pipeline_revisions", "RESTRICT"},
+		{"revision_includes", "revision_id", "pipeline_revisions", "CASCADE"},
 	} {
 		if !hasForeignKey(ctx, t, st, want.table, want.column, want.target, want.onDelete) {
 			t.Errorf("%s.%s does not declare REFERENCES %s ... ON DELETE %s",

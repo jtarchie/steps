@@ -94,6 +94,9 @@ func (r *LocalRunner) SetProvider(slug string, provider workspace.Provider) {
 // RemoveProvider retires a destroyed pipeline's workspace, once nothing is running in it.
 func (r *LocalRunner) RemoveProvider(slug string) { r.providers.remove(slug) }
 
+// Close retires every workspace this runner holds. Only a provider's own Close removes the tree it created, so a shutdown that closed the stores alone left a steps-* directory per pipeline behind with nothing to reap it.
+func (r *LocalRunner) Close() { r.providers.Close() }
+
 // Enqueue puts a job on the pipeline's queue.
 func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, reason string, force bool) (int64, error) {
 	err := target.Store.EnqueueJob(ctx, jobName, reason)

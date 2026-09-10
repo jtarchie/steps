@@ -2195,15 +2195,17 @@ func resolveVars(flags map[string]string, varsFile string) (map[string]string, e
 // set endpoint is a remote shell. --listen exists for the person who has
 // decided that is what they want, not as a default.
 type WebCmd struct {
-	StateFlags    `embed:""`
-	ExecFlags     `embed:""`
-	HistoryFlags  `embed:""`
-	Listen        string            `default:"127.0.0.1:8088"                                                  help:"address to serve on"`
-	Interval      time.Duration     `default:"30s"                                                             help:"how often to check trigger: true resources"`
-	MaxConcurrent int               `default:"1"                                                               help:"maximum number of queued jobs running at once, per pipeline"`
-	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                   name:"pin"`
+	ExecFlags    `embed:""`
+	HistoryFlags `embed:""`
+	// Its own --db rather than StateFlags, whose --name binds nothing here: a name is chosen by `steps pipeline set -p`, and a flag that parses and threads nowhere reads as configured.
+	DB            DB                `help:"state database: a sqlite file path or sqlite:// url (default: .steps/steps.db)" name:"db"                                                          placeholder:"URL"`
+	Listen        string            `default:"127.0.0.1:8088"                                                              help:"address to serve on"`
+	Interval      time.Duration     `default:"30s"                                                                         help:"how often to check trigger: true resources"`
+	MaxConcurrent int               `default:"1"                                                                           help:"maximum number of queued jobs running at once, per pipeline"`
+	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                               name:"pin"`
 	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
-	ReadOnly      bool              `help:"serve without trigger, approval, resume or steps pipeline controls" name:"read-only"`
+	// A statement about the BROWSER's surface only; `steps pipeline set` is the deployment path and is deliberately not withheld — see docs/web.md.
+	ReadOnly bool `help:"serve the pages without trigger, approval, answer or resume controls" name:"read-only"`
 }
 
 // Run serves until canceled, holding whatever the state database says was set.
