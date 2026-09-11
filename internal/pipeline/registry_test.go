@@ -4,6 +4,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,6 +27,8 @@ type borrowed struct {
 	mu     sync.Mutex
 	starts int
 	stops  int
+	// deadStops counts give-backs attempted on a context already cancelled. The real EC2 and GCE calls abort before reaching the API on one, so each is a machine left billing.
+	deadStops int
 }
 
 func (b *borrowed) acquire(context.Context, venue.Worker) (venue.Worker, func(context.Context) error, error) {
@@ -33,10 +36,17 @@ func (b *borrowed) acquire(context.Context, venue.Worker) (venue.Worker, func(co
 	b.starts++
 	b.mu.Unlock()
 
-	return venue.Worker{URL: "local:", Scheme: venue.SchemeLocal}, func(context.Context) error {
+	return venue.Worker{URL: "local:", Scheme: venue.SchemeLocal}, func(ctx context.Context) error {
 		b.mu.Lock()
+		defer b.mu.Unlock()
+
+		if ctx.Err() != nil {
+			b.deadStops++
+
+			return ctx.Err()
+		}
+
 		b.stops++
-		b.mu.Unlock()
 
 		return nil
 	}, nil
@@ -148,6 +158,59 @@ jobs:
 
 	if starts, stops := fake.counts(); starts != 1 || stops != 1 {
 		t.Fatalf("after both jobs: %d starts, %d stops — want it given back once, by the last user", starts, stops)
+	}
+}
+
+// The #106/#103 seam: an abort cancels RunJob's context mid-step, exactly as web's LocalRunner.Abort does (a WithCancelCause over the drain, cancelled with a cause), and the borrowed machine must still be given back once. The likeliest reason a give-back runs is that the caller's context was just cancelled, so a release riding it never reaches the API.
+func TestAnAbortedJobGivesBackItsBorrowedMachine(t *testing.T) {
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+
+	ctx, cfg, provider, st, fake := borrowedRun(t, fmt.Sprintf(`
+jobs:
+- name: long
+  plan:
+  - task: hold
+    tags: [box]
+    run: |
+      touch %s
+      while true; do sleep 0.05; done
+`, started))
+
+	runCtx, abort := context.WithCancelCause(ctx)
+	t.Cleanup(func() { abort(nil) })
+
+	done := make(chan error, 1)
+
+	go func() { done <- RunJob(runCtx, cfg, &cfg.Jobs[0], nil, provider, st, false) }()
+
+	awaitFile(t, started)
+
+	if starts, stops := fake.counts(); starts != 1 || stops != 0 {
+		t.Fatalf("mid-step: %d starts, %d stops — want the machine up under the job", starts, stops)
+	}
+
+	abort(errors.New("aborted on request"))
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("RunJob returned nil for a job aborted mid-step")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("RunJob did not return after the abort")
+	}
+
+	fake.mu.Lock()
+	starts, stops, dead := fake.starts, fake.stops, fake.deadStops
+	fake.mu.Unlock()
+
+	if dead != 0 {
+		t.Errorf("%d give-backs ran on the aborted context; a real cloud call would never have reached the API", dead)
+	}
+
+	if starts != 1 || stops != 1 {
+		t.Errorf("after the abort: %d starts, %d stops — want the machine given back exactly once", starts, stops)
 	}
 }
 
