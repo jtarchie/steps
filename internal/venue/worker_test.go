@@ -182,3 +182,22 @@ func TestPlacementCheckRefusesBeforeMoneyIsSpent(t *testing.T) {
 		t.Errorf("an AMI-baked worker needs no store and was refused: %v", err)
 	}
 }
+
+// Address is what the run record and the browser show of an ssh worker: the user is part of which machine it was, and a mapping without one gains no stray @.
+func TestSSHAddressKeepsTheUserOnlyWhenOneWasWritten(t *testing.T) {
+	t.Parallel()
+
+	for raw, want := range map[string]string{
+		"ssh://jt@box/scratch": "ssh://jt@box/scratch",
+		"ssh://box":            "ssh://box",
+	} {
+		worker, err := ParseWorker(raw)
+		if err != nil {
+			t.Fatalf("ParseWorker(%q): %v", raw, err)
+		}
+
+		if got := worker.Address(); got != want {
+			t.Errorf("Address of %q = %q, want %q", raw, got, want)
+		}
+	}
+}

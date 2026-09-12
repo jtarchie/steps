@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -688,5 +690,157 @@ func TestRegistryGivesUpOnAParkThatNeverLands(t *testing.T) {
 
 	if _, starts, _ := fake.state(); starts != 1 {
 		t.Errorf("%d starts, want nothing acquired while the park was in flight", starts)
+	}
+}
+
+// Close that stops waiting while a scope's own give-back is in flight waits on it through the lease: taken out again, the entry was given back twice and its gone channel closed twice.
+func TestRegistryCloseWaitsOnAGiveBackAlreadyInFlight(t *testing.T) {
+	previous := closeWait
+	closeWait = 50 * time.Millisecond
+
+	t.Cleanup(func() { closeWait = previous })
+
+	fake := &parkedFake{}
+	land := holdLanding(t, fake)
+	registry := NewRegistryWith(fake.acquire)
+	job := registry.Leases(boxWorker(t, "aws://stopped/i-0abc123def456789"))
+
+	mustResolve(t, job)
+
+	released := make(chan error, 1)
+
+	go func() { released <- job.ReleaseAll(context.Background()) }()
+
+	within(t, "the job's park was issued", fake.parking)
+
+	closed := make(chan error, 1)
+
+	go func() { closed <- registry.Close(context.Background()) }()
+
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned (%v) while a park was still landing", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	land()
+
+	err := within(t, "Close returned", closed)
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	err = within(t, "the job's release returned", released)
+	if err != nil {
+		t.Fatalf("release: %v", err)
+	}
+
+	if running, _, stops := fake.state(); running || stops != 1 {
+		t.Errorf("running=%v after %d stops — want the machine parked once, by the give-back already in flight", running, stops)
+	}
+}
+
+// parkedIn waits for a goroutine asleep on a mutex inside frame, so two lockers queued on one mutex are woken in the order the test parked them.
+func parkedIn(t *testing.T, frame string) {
+	t.Helper()
+
+	eventually(t, "a goroutine asleep on a mutex in "+frame, func() bool {
+		buf := make([]byte, 1<<20)
+
+		for _, stack := range strings.Split(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
+			if strings.Contains(stack, "[sync.Mutex.Lock") && strings.Contains(stack, frame) {
+				return true
+			}
+		}
+
+		return false
+	})
+}
+
+// A sibling re-resolving between an abandon's retire and its bookkeeping has already moved the dead machine aside; redone, the abandon counted the dead machine twice and lost the replacement, giving one back under another scope and leaking the other.
+func TestRegistryAbandonRacingASiblingsResolveCountsEachMachineOnce(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		acquired int
+		released = map[string]int{}
+	)
+
+	registry := NewRegistryWith(func(_ context.Context, worker Worker) (Worker, func(context.Context) error, error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		acquired++
+		machine := worker.asStatic(fmt.Sprintf("i-%d", acquired))
+
+		return machine, func(context.Context) error {
+			mu.Lock()
+			defer mu.Unlock()
+
+			released[machine.Instance]++
+
+			return nil
+		}, nil
+	})
+
+	workers := boxWorker(t, "aws://launch/lt-0def4567890abcde")
+	job := registry.Leases(workers)
+	other := registry.Leases(workers)
+
+	dead := mustResolve(t, job)
+	mustResolve(t, other)
+
+	registry.mu.Lock()
+
+	abandoned := make(chan struct{})
+
+	go func() {
+		defer close(abandoned)
+		job.Abandon("box", dead.URL)
+	}()
+
+	parkedIn(t, "venue.(*Registry).retire(")
+
+	resolved := make(chan error, 1)
+
+	go func() {
+		_, err := job.Resolve(context.Background(), "box")
+		resolved <- err
+	}()
+
+	parkedIn(t, "venue.(*Registry).isRetired(")
+	registry.mu.Unlock()
+
+	within(t, "the abandon returned", abandoned)
+
+	err := within(t, "the sibling resolved", resolved)
+	if err != nil {
+		t.Fatalf("sibling's resolve: %v", err)
+	}
+
+	mu.Lock()
+	n := acquired
+	mu.Unlock()
+
+	if n != 2 {
+		t.Fatalf("%d acquisitions: the sibling resolved before the abandon retired the machine, which is not the order this test arranges", n)
+	}
+
+	mustRelease(t, job)
+
+	mu.Lock()
+	early, fresh := released[dead.Instance], released["i-2"]
+	mu.Unlock()
+
+	if early != 0 || fresh != 1 {
+		t.Fatalf("after the job ended: the dead machine given back %d times while another scope still held it, the replacement %d times — want 0 and 1", early, fresh)
+	}
+
+	mustRelease(t, other)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if released[dead.Instance] != 1 {
+		t.Errorf("the dead machine given back %d times after its last user, want 1", released[dead.Instance])
 	}
 }
