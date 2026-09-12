@@ -69,18 +69,16 @@ func refreshOneResource(ctx context.Context, cfg *config.Config, st store.Store,
 		return
 	}
 
+	// Recorded under the check's own label, having no node; installed BEFORE PlaceResource, because the placer notes its runner on the context it was resolved under.
+	ctx, placed := withPlacementSink(ctx)
+	defer recordPlacement(ctx, stepRunner{cfg: cfg, jobName: job.Name, st: st}, placed, 0, "check "+name, "check "+name, "")
+
 	ctx, err = PlaceResource(ctx, cfg, name)
 	if err != nil {
 		warnRefreshFailed(name, err)
 
 		return
 	}
-
-	// The machine a placed check ran on is recorded under the check's own
-	// label — like a hook, it has no node — so a run whose only trip to a
-	// worker was this check still says where it went.
-	ctx, placed := withPlacementSink(ctx)
-	defer recordPlacement(ctx, stepRunner{cfg: cfg, jobName: job.Name, st: st}, placed, 0, "check "+name, "check "+name, "")
 
 	versions, err := rsrc.CheckVersions(ctx, cfg, *resourceType, resource.Env, resource.Source, cursor)
 	if err != nil {

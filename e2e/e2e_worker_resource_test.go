@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -140,16 +141,16 @@ func assertRecordedOnWorker(t *testing.T, path string) {
 		t.Errorf("the local task recorded worker %q, want none", worker["note"])
 	}
 
-	placed := 0
+	var placed []string
 
 	for _, row := range runPlacements(t, path) {
 		if row.Tag == "vpc" {
-			placed++
+			placed = append(placed, row.StepName)
 		}
 	}
 
-	if placed != 2 {
-		t.Errorf("run_placements has %d rows for the tag, want the get and the put", placed)
+	if len(placed) != 3 || !slices.Contains(placed, "check repo") {
+		t.Errorf("run_placements for the tag = %q, want the refresh check, the get and the put", placed)
 	}
 }
 
