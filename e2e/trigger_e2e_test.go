@@ -2,7 +2,7 @@ package e2e
 
 // The trigger contract, end to end through the CLI.
 //
-// Every test here drives `steps web --once` against a real pipeline and a
+// Every test here drives a running `steps web` against a real pipeline and a
 // real store, and asserts only on what an operator could see: which versions
 // a job processed, and what the store holds afterwards. Nothing reaches into
 // an unexported function.

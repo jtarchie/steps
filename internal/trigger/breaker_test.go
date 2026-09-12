@@ -2,12 +2,7 @@ package trigger
 
 import (
 	"context"
-	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/store"
-	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // TestBreakerPausesAfterConsecutiveFailures covers the whole point: a job that
@@ -139,78 +134,4 @@ func TestResumeClearsTheBreaker(t *testing.T) {
 	if err != nil || isPaused {
 		t.Fatalf("IsJobPaused = %v, %v; want false after a resume", isPaused, err)
 	}
-}
-
-// TestDrainOneSkipsAPausedJob verifies a paused job is taken out of the
-// rotation rather than merely reported: the queue must not fill with work
-// nobody intends to do.
-func TestDrainOneSkipsAPausedJob(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	st := mustOpenStore(t, dir)
-	ctx := context.Background()
-
-	cfg := &config.Config{Jobs: []config.Job{{
-		Name:                   "nightly",
-		MaxConsecutiveFailures: 1,
-		Plan: []config.Step{{
-			Task: "work", Run: "exit 1", Inputs: config.Inputs(),
-		}},
-	}}}
-
-	err := st.ResetJobFailures(ctx, "nightly")
-	if err != nil {
-		t.Fatalf("ResetJobFailures: %v", err)
-	}
-
-	_, _, err = st.RecordJobOutcome(ctx, "nightly", false, 1)
-	if err != nil {
-		t.Fatalf("RecordJobOutcome: %v", err)
-	}
-
-	err = st.EnqueueJob(ctx, "nightly", "a new version")
-	if err != nil {
-		t.Fatalf("EnqueueJob: %v", err)
-	}
-
-	provider, err := workspace.NewProvider(nil, false)
-	if err != nil {
-		t.Fatalf("NewProvider: %v", err)
-	}
-
-	defer func() { _ = provider.Close() }()
-
-	output := captureStdout(t, func() {
-		_, err = drainOne(ctx, cfg, provider, st)
-	})
-	if err != nil {
-		t.Fatalf("drainOne: %v", err)
-	}
-
-	if !strings.Contains(output, "is paused") {
-		t.Errorf("drainOne did not say the job was paused:\n%s", output)
-	}
-
-	// Nothing pending is left behind.
-	if queued := pendingCount(t, st); queued != 0 {
-		t.Errorf("pending rows = %d, want 0 — a skipped row must be finalized", queued)
-	}
-}
-
-// pendingCount reports how many queue rows are still waiting, by trying to
-// claim one: a claimable row means work is still queued.
-func pendingCount(t *testing.T, st store.Store) int {
-	t.Helper()
-
-	_, _, found, err := st.ClaimNextJob(context.Background())
-	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
-	}
-
-	if !found {
-		return 0
-	}
-
-	return 1
 }

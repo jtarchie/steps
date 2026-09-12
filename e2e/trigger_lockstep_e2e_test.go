@@ -3,7 +3,7 @@ package e2e
 // Multi-`version: every` through the CLI: input sets, observed from outside.
 //
 // Same discipline as trigger_e2e_test.go — every test drives the real CLI
-// (`web --once`, or `run` where a manual trigger is the shape under test)
+// (a running `web`, or `run` where a manual trigger is the shape under test)
 // against a real pipeline and asserts only on what an operator could see.
 // These are separate because they cover behavior that did not exist when that
 // file froze: more than one get fanning out, in lockstep.

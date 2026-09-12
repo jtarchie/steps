@@ -91,7 +91,7 @@ jobs:
 		t.Fatalf("pollOnce: %v", err)
 	}
 
-	drainQueue(ctx, t, cfg, st)
+	runQueued(ctx, t, cfg, st, false)
 
 	data, err := os.ReadFile(deployed) //nolint:gosec // a t.TempDir()-scoped file this test wrote itself
 	if err != nil {
@@ -191,7 +191,7 @@ jobs:
 		t.Fatalf("pollOnce (quiet): %v", err)
 	}
 
-	drainQueue(ctx, t, cfg, st)
+	runQueued(ctx, t, cfg, st, false)
 
 	data, err := os.ReadFile(deployed) //nolint:gosec // a t.TempDir()-scoped file this test wrote itself
 	if err != nil {
@@ -243,30 +243,6 @@ jobs:
     inputs: [repo]
     run: cat repo/ref.txt >> `+deployed+`
 `)
-}
-
-// drainAll drains the queue, tolerating failed jobs — scenarios here make
-// upstream jobs fail on purpose.
-func drainAll(ctx context.Context, t *testing.T, cfg *config.Config, st store.Store) {
-	t.Helper()
-
-	provider, err := workspace.NewProvider(nil, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for range 10 {
-		ran, err := drainOne(ctx, cfg, provider, st)
-		if err != nil {
-			continue // a failing upstream job is part of the scenario
-		}
-
-		if !ran {
-			return
-		}
-	}
-
-	t.Fatal("queue did not drain")
 }
 
 func recordGreen(t *testing.T, st store.Store, jobName, ref, buildID string) {
@@ -324,7 +300,7 @@ func TestPassedBuildsTheVersionThatPassedNotTheNewest(t *testing.T) {
 		t.Fatalf("pollOnce (v3): %v", err)
 	}
 
-	drainAll(ctx, t, cfg, st)
+	runQueued(ctx, t, cfg, st, true)
 
 	data, err := os.ReadFile(deployed) //nolint:gosec // a t.TempDir()-scoped file this test wrote itself
 	if err != nil {
@@ -432,7 +408,7 @@ func TestPassedReleasesDespiteAFailingHead(t *testing.T) {
 		t.Fatalf("enqueued = %v — deploy starved because the head is failing, though v5 passed", enqueued)
 	}
 
-	drainAll(ctx, t, cfg, st)
+	runQueued(ctx, t, cfg, st, true)
 
 	data, err := os.ReadFile(deployed) //nolint:gosec // a t.TempDir()-scoped file this test wrote itself
 	if err != nil {
@@ -563,7 +539,7 @@ jobs:
 		t.Fatalf("pollOnce (release): %v", err)
 	}
 
-	drainQueue(ctx, t, cfg, st)
+	runQueued(ctx, t, cfg, st, false)
 
 	data, err := os.ReadFile(deployed) //nolint:gosec // a t.TempDir()-scoped file this test wrote itself
 	if err != nil {
@@ -605,5 +581,5 @@ func assertQuietPollReleasesNothing(
 		}
 	}
 
-	drainQueue(ctx, t, cfg, st)
+	runQueued(ctx, t, cfg, st, false)
 }

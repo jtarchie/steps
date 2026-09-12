@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -91,7 +92,7 @@ func TestPollHandsItsVersionsToTheJobItEnqueues(t *testing.T) {
 		t.Fatalf("enqueued = %v, want [build]", enqueued)
 	}
 
-	drainQueue(ctx, t, cfg, st)
+	runQueued(ctx, t, cfg, st, false)
 
 	got := processedItems(t, processed)
 	if len(got) != 2 || got[0] != "20" || got[1] != "21" {
@@ -121,7 +122,7 @@ func TestPollVersionsSurviveAReEnqueue(t *testing.T) {
 
 	// The cold start builds the newest (20); drained and forgotten here so
 	// the assertion below stays about the collision this test is named for.
-	drainQueue(ctx, t, cfg, st)
+	runQueued(ctx, t, cfg, st, false)
 	writeVersions(t, processed, "")
 
 	// Two polls land before anything drains the queue.
@@ -139,7 +140,7 @@ func TestPollVersionsSurviveAReEnqueue(t *testing.T) {
 		t.Fatalf("pollOnce (second): %v", err)
 	}
 
-	drainQueue(ctx, t, cfg, st)
+	runQueued(ctx, t, cfg, st, false)
 
 	got := processedItems(t, processed)
 	if len(got) != 2 || got[0] != "21" || got[1] != "22" {
@@ -147,10 +148,8 @@ func TestPollVersionsSurviveAReEnqueue(t *testing.T) {
 	}
 }
 
-// drainQueue runs claimed jobs the way runWorker does, until the queue is
-// empty. Deliberately the real claim path rather than a direct RunJob: what
-// is under test is what survives the round trip through the queue row.
-func drainQueue(ctx context.Context, t *testing.T, cfg *config.Config, st store.Store) {
+// runQueued claims and runs queued jobs the way the daemon's drain does, so what a poll put on a row is what the run gets.
+func runQueued(ctx context.Context, t *testing.T, cfg *config.Config, st store.Store, mayFail bool) {
 	t.Helper()
 
 	provider, err := workspace.NewProvider(nil, false)
@@ -158,14 +157,36 @@ func drainQueue(ctx context.Context, t *testing.T, cfg *config.Config, st store.
 		t.Fatal(err)
 	}
 
+	t.Cleanup(func() { _ = provider.Close() })
+
 	for range 10 {
-		ran, err := drainOne(ctx, cfg, provider, st)
+		id, jobName, found, err := st.ClaimNextJob(ctx)
 		if err != nil {
-			t.Fatalf("drainOne: %v", err)
+			t.Fatalf("ClaimNextJob: %v", err)
 		}
 
-		if !ran {
+		if !found {
 			return
+		}
+
+		job, err := cfg.FindJob(jobName)
+		if err != nil {
+			t.Fatalf("FindJob: %v", err)
+		}
+
+		runErr := pipeline.RunJob(ctx, cfg, job, nil, provider, st, false)
+		if runErr != nil && !mayFail {
+			t.Fatalf("%s: %v", jobName, runErr)
+		}
+
+		status := "succeeded"
+		if runErr != nil {
+			status = "failed"
+		}
+
+		err = st.CompleteJob(ctx, id, status, runErr)
+		if err != nil {
+			t.Fatalf("CompleteJob: %v", err)
 		}
 	}
 
@@ -257,7 +278,7 @@ jobs:
 		t.Fatalf("pollOnce: %v", err)
 	}
 
-	drainQueue(ctx, t, cfg, st)
+	runQueued(ctx, t, cfg, st, false)
 
 	if got := processedItems(t, ran); len(got) != 1 {
 		t.Fatalf("first run processed %v, want one version", got)
@@ -271,7 +292,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	drainQueue(ctx, t, cfg, st)
+	runQueued(ctx, t, cfg, st, false)
 
 	if got := processedItems(t, ran); len(got) != 1 {
 		t.Errorf("after a second identical trigger the task ran %d times, want 1 — plan and run disagreed on the version", len(got))
@@ -362,7 +383,7 @@ jobs:
 		t.Fatalf("pollOnce (recovered): %v", err)
 	}
 
-	drainQueue(ctx, t, cfg, st)
+	runQueued(ctx, t, cfg, st, false)
 
 	// Both, and in order: 21 because a partial poll must not seed away an
 	// arrival, and 20 because the cold start's own build was never lost

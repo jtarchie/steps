@@ -66,9 +66,7 @@ func TestCaptureDoesNotRaceConcurrentOutput(t *testing.T) {
 // only one destination to swap: two captures in flight at once both redirect
 // `out`, the later swap wins, and the earlier test's own line is delivered
 // into the later test's pipe. The earlier test then fails reporting that it
-// never printed something it did print — which is how
-// TestDrainOneSkipsAPausedJob failed under a full-suite run while passing
-// alone every time.
+// never printed something it did print.
 //
 // Both halves are asserted, because losing either is a real regression: each
 // capture must contain its OWN line, and must not be the only place a

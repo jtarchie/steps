@@ -632,11 +632,7 @@ linters:
             # that chooses one.
             - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/workspace"
-        # trigger polls resources with any get/trigger:true step and runs
-        # affected jobs via pipeline.RunJob — the cross-job counterpart to
-        # pipeline's single-job orchestration. It's the only package besides
-        # pipeline itself that main is allowed to route through into
-        # resource/store/workspace territory.
+        # trigger polls get/trigger:true resources and enqueues what they affect for web's runner to drain — the cross-job counterpart to pipeline's single-job orchestration.
         Trigger:
           files:
             - "**/internal/trigger/**"

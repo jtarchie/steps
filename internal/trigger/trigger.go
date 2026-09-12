@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"runtime/debug"
 	"slices"
 	"sort"
 	"strings"
@@ -24,7 +23,6 @@ import (
 	"github.com/jtarchie/steps/internal/pipeline"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/store"
-	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // Resources returns the distinct resource names referenced by any get
@@ -62,17 +60,7 @@ func AffectedJobs(cfg *config.Config, resourceName string) []*config.Job {
 	return jobs
 }
 
-// PollStore is what polling itself touches: the trigger queue it fills and
-// drains (with the breaker that decides which rows may be claimed), the
-// resource versions a check compares against, and whether the pipeline is
-// paused at all. Everything else a build records belongs to the build — the
-// drain hands a full store.Store down to pipeline.RunJob and never reads
-// through it here.
-//
-// Control arrives whole because that is the aggregate Paused belongs to, and
-// a consumer names facets rather than methods. Nothing here calls the rest of
-// it: renaming or deleting a pipeline is a `steps pipeline` verb's job, never
-// a poll's.
+// PollStore is what polling touches: the queue it fills, the versions a check compares against, and whether the pipeline is paused.
 type PollStore interface {
 	store.Queue
 	store.Versions
@@ -448,31 +436,6 @@ func affectedJobs(
 	}
 
 	return reasons, nil
-}
-
-// reportSerialWaits says which pending jobs are held by a serial-group lock,
-// and who holds it.
-//
-// Without this a blocked job is indistinguishable from an idle watcher:
-// nothing is running for that job, nothing is being said, and the operator
-// cannot tell "nobody has picked this up" from "something is holding the
-// lock". Best-effort — a reporting failure must not fail the drain.
-func reportSerialWaits(ctx context.Context, cfg *config.Config, st PollStore) {
-	for i := range cfg.Jobs {
-		job := &cfg.Jobs[i]
-
-		if !job.Serial && len(job.SerialGroups) == 0 {
-			continue
-		}
-
-		holder, err := st.SerialGroupHolder(ctx, job.Name)
-		if err != nil || holder == "" || holder == job.Name {
-			continue
-		}
-
-		printf("trigger: %s waiting: lock held by %s\n", job.Name, holder)
-		slog.Info("trigger.serial_wait", "job", job.Name, "held_by", holder)
-	}
 }
 
 // releaseConstrainedJobs enqueues every passed:-constrained job for which
@@ -903,292 +866,6 @@ func coldStartMark(orders map[string]int64, latest string) int64 {
 	}
 
 	return second
-}
-
-// recoverDrainPanic turns a value recovered from a panic in drainOne into the
-// error it should report, finalizing the claimed job (if any) as "failed" via
-// CompleteJob first — the same outcome as any other failure — so a panic
-// doesn't leave a claimed row stuck running forever with nothing to finalize
-// it. claimed is false when the panic happened before ClaimNextJob returned a
-// row (or ClaimNextJob itself panicked), in which case there's no row to
-// finalize.
-func recoverDrainPanic(ctx context.Context, st PollStore, jobName string, id int64, claimed bool, r any) error {
-	slog.Error("trigger.panic", "job", jobName, "recovered", r, "stack", string(debug.Stack()))
-
-	panicErr := fmt.Errorf("recovered from panic running job %q: %v", jobName, r)
-
-	if !claimed {
-		return panicErr
-	}
-
-	completeErr := st.CompleteJob(context.WithoutCancel(ctx), id, "failed", panicErr)
-	if completeErr != nil {
-		return fmt.Errorf("%w (and could not record failure: %w)", panicErr, completeErr)
-	}
-
-	return panicErr
-}
-
-// finalizeMissingJob records a terminal failure for a queued job whose name
-// no longer resolves in cfg (removed from the pipeline between enqueue and
-// claim), returning the error drainOne should report.
-func finalizeMissingJob(ctx context.Context, st PollStore, jobName string, id int64, findErr error) error {
-	completeErr := st.CompleteJob(context.WithoutCancel(ctx), id, "failed", findErr)
-	if completeErr != nil {
-		return fmt.Errorf("triggered job %q: %w (and could not record failure: %w)", jobName, findErr, completeErr)
-	}
-
-	return fmt.Errorf("triggered job %q: %w", jobName, findErr)
-}
-
-// wasInterruptedByCancellation reports whether runErr stems from ctx being
-// canceled during the command that produced it (internal/shell's
-// wrapIfCanceled/CanceledError ensure such an error's chain wraps ctx.Err()),
-// as opposed to "is ctx canceled right now" — the latter would also be true
-// for a genuine failure that merely happens to coincide with an unrelated
-// cancellation (an operator restarting the daemon at the same moment a task
-// fails on its own), which must still be recorded failed, not silently
-// dropped as if it were the cancellation's doing.
-func wasInterruptedByCancellation(runErr error) bool {
-	return errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded)
-}
-
-// drainOne claims one queued job (if any) and runs it via pipeline.RunJob.
-// ran is false only when the queue was empty. A non-nil err is always
-// worth logging but never a reason for the caller to stop draining — a
-// failing job doesn't block the queue or other workers, it's simply not
-// retried until the next real version change re-enqueues it.
-func drainOne(
-	ctx context.Context,
-	cfg *config.Config,
-	provider workspace.Provider,
-	st store.Store,
-) (ran bool, err error) {
-	var (
-		id      int64
-		jobName string
-		found   bool
-		claimed bool
-	)
-
-	// A panic anywhere below — including three layers deep inside
-	// pipeline.RunJob's resource/task/agent code — must not crash the whole
-	// watch process and silently take every other in-flight worker down with
-	// it. Recover around the entire claim-run-complete sequence, not just the
-	// RunJob call, so a panic in ClaimNextJob/CompleteJob itself is covered
-	// too, and so a panic after a successful claim still gets a best-effort
-	// CompleteJob("failed", ...) — the same outcome as any other failure —
-	// instead of leaving the row claimed but never finalized.
-	defer func() {
-		r := recover()
-		if r == nil {
-			return
-		}
-
-		ran = true
-		err = recoverDrainPanic(ctx, st, jobName, id, claimed, r)
-	}()
-
-	id, jobName, found, err = st.ClaimNextJob(ctx)
-	if err != nil {
-		return false, fmt.Errorf("claim next job: %w", err)
-	}
-
-	if !found {
-		// Nothing claimable. That is usually an empty queue, but it is also
-		// what a serial-group lock looks like — and "queued" and "blocked on
-		// a lock" are different states a reader has to be able to tell apart.
-		reportSerialWaits(ctx, cfg, st)
-
-		return false, nil
-	}
-
-	claimed = true
-
-	job, err := cfg.FindJob(jobName)
-	if err != nil {
-		// A queued job that no longer resolves (removed from config between
-		// enqueue and claim) is a genuine, terminal failure — finalize it with
-		// a detached context so a racing cancellation can't strand the row.
-		return true, finalizeMissingJob(ctx, st, jobName, id, err)
-	}
-
-	skipped, err := skipIfPaused(ctx, st, jobName, id)
-	if skipped || err != nil {
-		return true, err
-	}
-
-	printf("trigger: running %s\n", jobName)
-
-	runCtx, release := buildContext(ctx, job)
-	defer release()
-
-	return true, finalizeRun(ctx, st, job, id, pipeline.RunJob(runCtx, cfg, job, nil, provider, st, false))
-}
-
-// nonInterruptibleGrace bounds how long a shutdown waits for a build that did
-// not opt into interruption.
-//
-// A bound rather than an open-ended wait, because the alternative is a watcher
-// that cannot be stopped: a job with no timeout: of its own and a hung command
-// would hold shutdown forever, and "kill -9 the supervisor" is not a shutdown
-// story. Ten minutes is longer than any deploy this is meant to protect and
-// short enough that an operator waiting on it does not assume the process is
-// wedged. A job that needs longer should say so with its own timeout:, which
-// still applies inside RunJob.
-const nonInterruptibleGrace = 10 * time.Minute
-
-// buildContext gives a triggered build the cancellation behaviour its job
-// asked for, mirroring Concourse's interruptible: — see config.Job.
-//
-// interruptible: true keeps the older behaviour: the build shares the
-// watcher's context and dies with it.
-//
-// The default detaches from cancellation so a SIGTERM during a deploy lets
-// that deploy finish rather than leaving the outside world half-changed.
-// Watch's own WaitGroup then holds shutdown until the worker returns, which is
-// what makes the wait real rather than advisory.
-//
-// The grace is armed BY the shutdown, not at build start. Spelling this as a
-// plain WithTimeout on the detached context would put a 10-minute ceiling on
-// every build of every job that did not opt out — turning a shutdown
-// courtesy into the shortest job timeout in the product, and killing any
-// ordinary 25-minute build that had run fine the day before.
-func buildContext(ctx context.Context, job *config.Job) (context.Context, context.CancelFunc) {
-	if job.Interruptible {
-		return ctx, func() {}
-	}
-
-	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	done := make(chan struct{})
-
-	go func() {
-		select {
-		case <-ctx.Done():
-			// Shutdown reached us. Now the build has a bounded time to
-			// finish, because a watcher that cannot be stopped is not a
-			// shutdown story either.
-			timer := time.NewTimer(nonInterruptibleGrace)
-			defer timer.Stop()
-
-			select {
-			case <-timer.C:
-				cancel()
-			case <-done:
-			}
-		case <-done:
-		}
-	}()
-
-	return runCtx, func() {
-		close(done)
-		cancel()
-	}
-}
-
-// finalizeRun records a completed triggered run: its queue row, its breaker
-// count, and the error the caller reports.
-func finalizeRun(ctx context.Context, st PollStore, job *config.Job, id int64, runErr error) error {
-	// A job interrupted by ctx-cancellation (SIGINT/SIGTERM mid-run) isn't a
-	// real failure: leave its row running so the next watch startup's
-	// ResetStaleRunning re-queues it, rather than marking it failed and
-	// silently dropping it (only a new version change would otherwise ever
-	// re-trigger it). This is specifically the *interrupted* case — see
-	// wasInterruptedByCancellation. A job that reached a terminal state
-	// (below) is finalized even if cancellation is racing it. It is also not
-	// counted against the breaker: an operator pressing ctrl-C is not the job
-	// being broken.
-	if runErr != nil && wasInterruptedByCancellation(runErr) {
-		return fmt.Errorf("triggered job %q: %w", job.Name, runErr)
-	}
-
-	status := "done"
-	if runErr != nil {
-		status = "failed"
-	}
-
-	// Finalize with a context detached from cancellation: the job has reached
-	// a terminal state (done, or a genuine failure with ctx still live), so
-	// recording that outcome must not itself be aborted by a SIGINT arriving
-	// at this instant — which would otherwise strand the row 'running' and
-	// cause a spurious re-run on the next startup.
-	completeErr := st.CompleteJob(context.WithoutCancel(ctx), id, status, runErr)
-	if completeErr != nil {
-		return fmt.Errorf("complete job %q: %w", job.Name, completeErr)
-	}
-
-	recordBreaker(ctx, st, job, runErr)
-
-	if runErr != nil {
-		return fmt.Errorf("triggered job %q: %w", job.Name, runErr)
-	}
-
-	return nil
-}
-
-// skipIfPaused finalizes a queued row for a job the breaker has taken out of
-// the rotation, rather than leaving it pending — the queue would otherwise
-// fill with work nobody intends to do.
-func skipIfPaused(ctx context.Context, st PollStore, jobName string, id int64) (bool, error) {
-	paused, err := st.IsJobPaused(ctx, jobName)
-	if err != nil {
-		return false, fmt.Errorf("triggered job %q: %w", jobName, err)
-	}
-
-	if !paused {
-		return false, nil
-	}
-
-	printf("trigger: %s is paused (resume with: steps jobs resume %s -p <pipeline>)\n", jobName, jobName)
-
-	err = st.CompleteJob(context.WithoutCancel(ctx), id, "skipped", nil)
-	if err != nil {
-		return true, fmt.Errorf("triggered job %q: %w", jobName, err)
-	}
-
-	return true, nil
-}
-
-// recordBreaker advances (or clears) a job's consecutive-failure count and
-// says so loudly when the breaker trips.
-//
-// Loudly is the requirement, not a nicety: a breaker that trips silently
-// defeats its own purpose, since the entire point is that someone should know
-// this stopped. A broken nightly job left alone over a weekend fires four
-// times and nobody finds out until a bill arrives.
-//
-// Best-effort by design: failing to record a breaker count must not turn a
-// successful job into a failed one, or mask the real failure of a failed one.
-func recordBreaker(ctx context.Context, st PollStore, job *config.Job, runErr error) {
-	// Detached: the outcome is already terminal, and a SIGINT arriving here
-	// must not lose the count that a later run reasons about.
-	recCtx := context.WithoutCancel(ctx)
-
-	paused, consecutive, err := st.RecordJobOutcome(recCtx, job.Name, runErr == nil, job.MaxConsecutiveFailures)
-	if err != nil {
-		slog.Warn("trigger.breaker_error", "job", job.Name, "error", err)
-
-		return
-	}
-
-	if runErr == nil || job.MaxConsecutiveFailures <= 0 {
-		return
-	}
-
-	if !paused {
-		printf("trigger: %s failed (%d/%d consecutive)\n", job.Name, consecutive, job.MaxConsecutiveFailures)
-
-		return
-	}
-
-	printf("trigger: %s PAUSED after %d consecutive failures — resume with: steps jobs resume %s -p <pipeline>\n",
-		job.Name, consecutive, job.Name)
-
-	slog.Warn("trigger.job_paused",
-		"job", job.Name,
-		"consecutive_failures", consecutive,
-		"max_consecutive_failures", job.MaxConsecutiveFailures,
-		"resume", "steps jobs resume "+job.Name+" -p <pipeline>")
 }
 
 // leasedChecks scopes one round of checks the way RunJob scopes a job, so a placed check resolves its worker through the same registry a job's steps do — which is what lets a poll end without stopping a machine a job is on.
