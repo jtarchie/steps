@@ -728,6 +728,59 @@ func TestDrainOneRecoversFromPanic(t *testing.T) {
 	}
 }
 
+var errCannotComplete = errors.New("disk full")
+
+type completeFails struct{ PollStore }
+
+func (completeFails) CompleteJob(context.Context, int64, string, error) error {
+	return errCannotComplete
+}
+
+// A panicked job whose failure could not be recorded stays running with nothing to finalize it, so the error must say so, and must not when it was recorded.
+func TestRecoverDrainPanicSaysWhetherTheFailureWasRecorded(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := mustOpenStore(t, t.TempDir())
+
+	err := st.EnqueueJob(ctx, "build", "thing")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+
+	id, _, found, err := st.ClaimNextJob(ctx)
+	if err != nil || !found {
+		t.Fatalf("ClaimNextJob: found=%v err=%v", found, err)
+	}
+
+	recorded := recoverDrainPanic(ctx, st, "build", id, true, "boom")
+	if strings.Contains(recorded.Error(), "could not record failure") {
+		t.Errorf("error = %v, but the failure was recorded", recorded)
+	}
+
+	lost := recoverDrainPanic(ctx, completeFails{st}, "build", id, true, "boom")
+	if !errors.Is(lost, errCannotComplete) {
+		t.Errorf("error = %v, want it to carry the store's refusal to record the failure", lost)
+	}
+}
+
+// The line is the operator's only sign a poll enqueued anything.
+func TestPollAndLogSaysWhatItEnqueued(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	versionsPath := filepath.Join(dir, "versions.json")
+	writeVersions(t, versionsPath, `[{"ref":"v1"}]`)
+
+	cfg := loadConfig(t, dir, dummyPipeline(versionsPath, filepath.Join(dir, "task-counter.txt")))
+	st := mustOpenStore(t, dir)
+
+	printed := captureStdout(t, func() { pollAndLog(context.Background(), cfg, st) })
+	if !strings.Contains(printed, "trigger: enqueued build\n") {
+		t.Errorf("printed %q, want the job the poll enqueued named", printed)
+	}
+}
+
 // TestWatchOnceStillReportsNothingToWatch: the ONE-SHOT keeps the old answer.
 //
 // For a `steps web --once` or a `steps watch` there is no later edit to

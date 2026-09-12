@@ -129,6 +129,81 @@ func TestWebhookTriggersAnImmediateCheck(t *testing.T) {
 	}
 }
 
+// A delivery that enqueues without recording what it checked leaves the next poll a cold start, which builds the same version a second time.
+func TestWebhookRecordsTheVersionItChecked(t *testing.T) {
+	handler := webhookFixture(t)
+
+	t.Setenv("STEPS_TEST_HOOK_TOKEN", "s3cret")
+
+	deliverThenPollQuietly(t, handler, "v1", 1)
+
+	// Past the cold start, where seeding no longer records the checked version on the delivery's behalf.
+	writeVersions(t, handler.current().ResourceTypes[0].Config.Check[len("cat "):], `[{"ref":"v1"},{"ref":"v2"}]`)
+
+	deliverThenPollQuietly(t, handler, "v2", 2)
+}
+
+// History is asserted before the poll because the poll files whatever the delivery failed to.
+func deliverThenPollQuietly(t *testing.T, handler *webhookHandler, wantRef string, wantHistory int) {
+	t.Helper()
+
+	if code := post(t, handler, "/check/repo?token=s3cret"); code != http.StatusOK {
+		t.Fatalf("delivering %s: status = %d, want 200", wantRef, code)
+	}
+
+	ctx := context.Background()
+
+	_, version, found, err := recordedVersion(ctx, handler.st, "repo")
+	if err != nil {
+		t.Fatalf("recordedVersion: %v", err)
+	}
+
+	if !found || version["ref"] != wantRef {
+		t.Fatalf("recorded %v (found=%v), want %s, the version the delivery checked", version, found, wantRef)
+	}
+
+	history, err := handler.st.ResourceVersionsJSON(ctx, "repo")
+	if err != nil {
+		t.Fatalf("ResourceVersionsJSON: %v", err)
+	}
+
+	if len(history) != wantHistory {
+		t.Errorf("history = %v, want %s filed where the build it enqueued resolves versions", history, wantRef)
+	}
+
+	enqueued, err := pollOnce(ctx, handler.current(), handler.st)
+	if err != nil {
+		t.Fatalf("pollOnce: %v", err)
+	}
+
+	if len(enqueued) != 0 {
+		t.Errorf("the poll after delivering %s enqueued %v, want nothing — the delivery already built it", wantRef, enqueued)
+	}
+}
+
+type probeKey struct{}
+
+// A request's context carries none of the daemon's values, so what it cannot answer must come from the daemon's.
+func TestRequestContextFallsBackToTheDaemonsValues(t *testing.T) {
+	t.Parallel()
+
+	base := context.WithValue(context.Background(), probeKey{}, "daemon")
+
+	if got := (requestContext{Context: context.Background(), base: base}).Value(probeKey{}); got != "daemon" {
+		t.Errorf("value = %v, want the daemon's", got)
+	}
+
+	request := context.WithValue(context.Background(), probeKey{}, "request")
+
+	if got := (requestContext{Context: request, base: base}).Value(probeKey{}); got != "request" {
+		t.Errorf("value = %v, want the request's own", got)
+	}
+
+	if got := (requestContext{Context: context.Background()}).Value(probeKey{}); got != nil {
+		t.Errorf("value = %v, want nothing when neither context has it", got)
+	}
+}
+
 // TestWebhookRejectsABadToken covers the obvious one.
 func TestWebhookRejectsABadToken(t *testing.T) {
 	handler := webhookFixture(t)

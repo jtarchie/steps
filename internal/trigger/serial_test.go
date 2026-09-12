@@ -2,6 +2,7 @@ package trigger
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -109,6 +110,39 @@ func TestSerialGroupHolderNamesWhoHasIt(t *testing.T) {
 
 	if holder != "deploy-staging" {
 		t.Errorf("holder = %q, want deploy-staging", holder)
+	}
+}
+
+// serial_groups: without serial: true is still a lock, and a job held by it must say who holds it.
+func TestReportSerialWaitsNamesAGroupHolder(t *testing.T) {
+	t.Parallel()
+
+	st := mustOpenStore(t, t.TempDir())
+	ctx := context.Background()
+
+	cfg := &config.Config{Jobs: []config.Job{
+		{Name: "deploy-staging", SerialGroups: []string{"deploy-lock"}},
+		{Name: "deploy-prod", SerialGroups: []string{"deploy-lock"}},
+	}}
+
+	err := st.SyncJobLimits(ctx, cfg.SerialGroupsByJob(), nil)
+	if err != nil {
+		t.Fatalf("SyncJobLimits: %v", err)
+	}
+
+	err = st.EnqueueJob(ctx, "deploy-staging", "a new version")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+
+	_, _, _, err = st.ClaimNextJob(ctx)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	printed := captureStdout(t, func() { reportSerialWaits(ctx, cfg, st) })
+	if !strings.Contains(printed, "trigger: deploy-prod waiting: lock held by deploy-staging\n") {
+		t.Errorf("printed %q, want deploy-prod told who holds its group's lock", printed)
 	}
 }
 

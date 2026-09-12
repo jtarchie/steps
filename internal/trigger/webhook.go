@@ -216,6 +216,12 @@ func (h *webhookHandler) checkNow(ctx context.Context, cfg *config.Config, name 
 	// the check output may not show yet.
 	obs.dirty = true
 
+	// The build this enqueues resolves its versions from history, and the next poll judges newness by it.
+	_, err = recordHistory(ctx, cfg, h.st, name, obs)
+	if err != nil {
+		return nil, err
+	}
+
 	enqueued, err := enqueueAffected(ctx, cfg, h.st, map[string]observedResource{name: obs})
 	if err != nil {
 		return nil, err
