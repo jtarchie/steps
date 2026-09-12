@@ -87,7 +87,7 @@ func TestWatchRefusesToStartOnAnUnsatisfiableCheck(t *testing.T) {
 	// Asked of the check rather than of the loop. Poll no longer returns this
 	// — a daemon that reloads has to stay alive to see the fix — so the loop
 	// logs it and polls nothing, and what it polled is asserted below.
-	err = watchable(context.Background(), cfg, time.Minute)
+	err = preflightTriggers(context.Background(), cfg, Resources(cfg))
 	if err == nil {
 		t.Fatal("preflight passed a tool call the server would refuse")
 	}
@@ -195,13 +195,13 @@ func TestWatchStartsDespiteATransientOutage(t *testing.T) {
 	// Asked of the check, which is where the transient/terminal distinction
 	// is made: a model that is not answering must not be what stops a daemon
 	// from polling the resources it can reach.
-	err = watchable(context.Background(), cfg, time.Minute)
+	err = preflightTriggers(context.Background(), cfg, Resources(cfg))
 	if err != nil {
 		t.Fatalf("preflight refused a transient outage: %v", err)
 	}
 }
 
-// agentMCPPipeline is a watchable pipeline whose MCP server is reached by an
+// agentMCPPipeline is a pollable pipeline whose MCP server is reached by an
 // AGENT rather than by a resource — the shape that used to slip past watch's
 // startup preflight entirely. The agent is granted a tool the server does
 // not expose, which no interval will grow.
@@ -268,7 +268,7 @@ func TestWatchPreflightsAgentMCPServers(t *testing.T) {
 
 	defer func() { _ = provider.Close() }()
 
-	err = watchable(context.Background(), cfg, time.Minute)
+	err = preflightTriggers(context.Background(), cfg, Resources(cfg))
 	if err == nil {
 		t.Fatal("preflight passed an agent MCP grant naming a tool the server does not expose")
 	}

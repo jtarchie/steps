@@ -27,15 +27,6 @@ import (
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
-// ErrNoTriggers reports a pipeline with no trigger: true get step: there is
-// nothing for a poll loop to check.
-//
-// Exported because it is a fact about the pipeline rather than a failure of
-// the process: `steps web` serves such a pipeline without polling it, and
-// `steps web --once` says so and moves on to the next one. Plenty of
-// pipelines are run by hand, and the UI is where you would run them from.
-var ErrNoTriggers = errors.New("no get step in any job sets trigger: true; there is nothing to poll")
-
 // Resources returns the distinct resource names referenced by any get
 // step with trigger: true, anywhere in any job's plan, in first-seen order.
 // A get step's resource: alias is resolved to the underlying resource name
@@ -88,84 +79,6 @@ type PollStore interface {
 	store.Control
 }
 
-// prepareWatch runs the checks and state reconciliation a polling process
-// needs before anything polls.
-func prepareWatch(ctx context.Context, cfg *config.Config, st PollStore, interval time.Duration) error {
-	err := watchable(ctx, cfg, interval)
-	if err != nil {
-		return err
-	}
-
-	// Recover any row a prior crash (or an interrupted graceful shutdown
-	// mid-run — see drainOne) left stuck "running", so it isn't stranded
-	// forever: only a new version change would otherwise ever re-queue it.
-	err = st.ResetStaleRunning(ctx)
-	if err != nil {
-		return fmt.Errorf("watch: %w", err)
-	}
-
-	// Admission rules live in the database so the claim can stay one atomic
-	// statement (see Store.ClaimNextJob). Synced from the pipeline as it is
-	// right now, so a serial group or a max_in_flight removed from the YAML
-	// stops applying.
-	err = st.SyncJobLimits(ctx, cfg.SerialGroupsByJob(), cfg.MaxInFlightByJob())
-	if err != nil {
-		return fmt.Errorf("watch: %w", err)
-	}
-
-	return nil
-}
-
-// WatchOnce polls every trigger resource exactly once, runs whatever that
-// enqueues until the queue is empty, and returns.
-//
-// One poll, then drain — the cycle `steps web` repeats on an interval, done
-// exactly once. It exists so steps can be driven by something that already
-// owns the schedule — cron, a systemd timer, a CI step — instead of running
-// as a daemon, and so the behavior of a whole poll-to-build cycle can be
-// tested through the CLI rather than only from inside this package.
-//
-// Deliberately serial and listener-free. Concurrency exists to keep a long
-// watch responsive while a slow build runs, which a one-shot has no need of,
-// and a webhook route with nothing serving it would be an endpoint published
-// for the duration of one poll.
-func WatchOnce(
-	ctx context.Context,
-	cfg *config.Config,
-	provider workspace.Provider,
-	st store.Store,
-	pinned map[string]string,
-	force bool,
-) error {
-	// Any positive interval satisfies watchable; nothing here waits.
-	err := prepareWatch(ctx, cfg, st, time.Second)
-	if err != nil {
-		return err
-	}
-
-	pollAndLog(ctx, cfg, st)
-
-	// Drains until the queue is empty rather than for a fixed count: one
-	// poll can enqueue several jobs, and a job's own hooks can enqueue more.
-	//
-	// A canceled context ends the drain without an error. Ctrl-C during a
-	// one-shot is a person stopping it, and the rows it did not reach are
-	// still pending for the next invocation — the same contract the long
-	// watch has on shutdown.
-	for ctx.Err() == nil {
-		ran, err := drainOne(ctx, cfg, provider, st, pinned, force)
-		if err != nil {
-			return fmt.Errorf("watch: %w", err)
-		}
-
-		if !ran {
-			break
-		}
-	}
-
-	return nil
-}
-
 // Poll is the producer half of a watching process: it validates and preflights
 // the pipeline, then checks every trigger: true resource on an interval and
 // enqueues the jobs a version change affects, until ctx is canceled. It never
@@ -175,13 +88,12 @@ func WatchOnce(
 // in-process runner: a second set of workers here would claim rows out from
 // under it, and the two would report each other's runs. It was once paired
 // with a Watch that did both halves in this package; there is one daemon now,
-// so only the producer half remains here, and WatchOnce is the one-shot that
-// still owns both.
+// so only the producer half remains here.
 //
-// Two things stay the caller's, because the answer differs by front end:
+// Three things stay the caller's, because the answer differs by front end:
 //
 //   - startup reconciliation (ResetStaleRunning and the serial-group /
-//     max-in-flight syncs prepareWatch does). Whoever owns the drain owns
+//     max-in-flight syncs). Whoever owns the drain owns
 //     that, since it is the drain's admission it repairs.
 //   - the store handle. Pass the one the drain already uses: a Store is a
 //     single pooled connection (SetMaxOpenConns(1)), so sharing it serializes
@@ -207,35 +119,6 @@ func Poll(ctx context.Context, current ConfigSource, st PollStore, interval time
 // ConfigSource hands out the configuration to poll against, which the daemon
 // swaps under this loop when its pipeline file changes.
 type ConfigSource func() *config.Config
-
-// watchable reports whether there is anything to watch and whether what
-// there is can be checked at all — every reason not to poll, gathered in one
-// place so each caller's own body is the work it exists to do.
-//
-// Used by the ONE-SHOT callers (WatchOnce), for whom "nothing to poll" really
-// is a final answer. The long-running loop asks the same questions per
-// configuration instead, because a reload can change either answer — see
-// admission.
-func watchable(ctx context.Context, cfg *config.Config, interval time.Duration) error {
-	resources := Resources(cfg)
-	if len(resources) == 0 {
-		return ErrNoTriggers
-	}
-
-	if interval <= 0 {
-		return fmt.Errorf("watch: interval must be positive, got %s", interval)
-	}
-
-	// Before the preflight, which may dial an MCP server: a resource that
-	// names a machine this invocation cannot supply is refused with the same
-	// message a job's step gets, and before anything is polled.
-	err := pipeline.ValidatePipelinePlacement(ctx, cfg, resources)
-	if err != nil {
-		return fmt.Errorf("watch: %w", err)
-	}
-
-	return preflightTriggers(ctx, cfg, resources)
-}
 
 // preflightTriggers proves every trigger resource can actually be checked,
 // and every model and MCP server the pipeline's agents need can actually be
@@ -1080,8 +963,6 @@ func drainOne(
 	cfg *config.Config,
 	provider workspace.Provider,
 	st store.Store,
-	pinned map[string]string,
-	force bool,
 ) (ran bool, err error) {
 	var (
 		id      int64
@@ -1142,7 +1023,7 @@ func drainOne(
 	runCtx, release := buildContext(ctx, job)
 	defer release()
 
-	return true, finalizeRun(ctx, st, job, id, pipeline.RunJob(runCtx, cfg, job, pinned, provider, st, force))
+	return true, finalizeRun(ctx, st, job, id, pipeline.RunJob(runCtx, cfg, job, nil, provider, st, false))
 }
 
 // nonInterruptibleGrace bounds how long a shutdown waits for a build that did

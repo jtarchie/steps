@@ -8,8 +8,7 @@ package trigger
 // because they assert the row is FINISHED (nothing claimable) rather than
 // what it finished as; and the circuit breaker's wiring had no test at all at
 // this level — the breaker's own arithmetic is covered in breaker_test.go
-// against the store, but nothing carried a real run's outcome into it. That
-// is the one-shot path (`steps web --once`), which is what a cron line runs.
+// against the store, but nothing carried a real run's outcome into it.
 
 import (
 	"context"
@@ -107,7 +106,7 @@ func TestDrainOneRecordsAFailureAsFailed(t *testing.T) {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	ran, err := drainOne(ctx, cfg, provider, st, nil, false)
+	ran, err := drainOne(ctx, cfg, provider, st)
 	if !ran || err == nil {
 		t.Fatalf("drainOne: ran=%v err=%v, want a failing job to run and report", ran, err)
 	}
@@ -130,7 +129,7 @@ func TestDrainOneRecordsASuccessAsDone(t *testing.T) {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	ran, err := drainOne(ctx, cfg, provider, st, nil, false)
+	ran, err := drainOne(ctx, cfg, provider, st)
 	if !ran || err != nil {
 		t.Fatalf("drainOne: ran=%v err=%v, want a passing job to run cleanly", ran, err)
 	}
@@ -145,9 +144,7 @@ func TestDrainOneRecordsASuccessAsDone(t *testing.T) {
 //
 // breaker_test.go covers the counting itself, against the store. What had no
 // test is the WIRING — that a triggered build's failure is what advances that
-// count — so every mutation of the call and its guard survived. This is the
-// one-shot path a cron line drives, and the feature exists to stop a broken
-// job burning model spend on every new version.
+// count — so every mutation of the call and its guard survived.
 func TestDrainOneAdvancesTheCircuitBreaker(t *testing.T) {
 	t.Parallel()
 
@@ -159,7 +156,7 @@ func TestDrainOneAdvancesTheCircuitBreaker(t *testing.T) {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	_, err = drainOne(ctx, cfg, provider, st, nil, false)
+	_, err = drainOne(ctx, cfg, provider, st)
 	if err == nil {
 		t.Fatal("drainOne: want the failing job to report an error")
 	}
@@ -188,7 +185,7 @@ func TestDrainOneLeavesAPassingJobRunning(t *testing.T) {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	_, err = drainOne(ctx, cfg, provider, st, nil, false)
+	_, err = drainOne(ctx, cfg, provider, st)
 	if err != nil {
 		t.Fatalf("drainOne: %v", err)
 	}
@@ -222,7 +219,7 @@ func TestDrainOneSaysWhenTheBreakerTrips(t *testing.T) {
 	}
 
 	out := captureStdout(t, func() {
-		_, drainErr := drainOne(ctx, cfg, provider, st, nil, false)
+		_, drainErr := drainOne(ctx, cfg, provider, st)
 		if drainErr == nil {
 			t.Error("drainOne: want the failing job to report an error")
 		}
@@ -250,7 +247,7 @@ func TestDrainOneCountsTowardsThePauseOutLoud(t *testing.T) {
 	}
 
 	out := captureStdout(t, func() {
-		_, drainErr := drainOne(ctx, cfg, provider, st, nil, false)
+		_, drainErr := drainOne(ctx, cfg, provider, st)
 		if drainErr == nil {
 			t.Error("drainOne: want the failing job to report an error")
 		}
@@ -280,7 +277,7 @@ func TestDrainOneSaysNothingWhenTheBreakerIsOff(t *testing.T) {
 	}
 
 	out := captureStdout(t, func() {
-		_, drainErr := drainOne(ctx, cfg, provider, st, nil, false)
+		_, drainErr := drainOne(ctx, cfg, provider, st)
 		if drainErr == nil {
 			t.Error("drainOne: want the failing job to report an error")
 		}

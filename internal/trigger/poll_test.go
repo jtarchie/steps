@@ -119,8 +119,7 @@ func TestPollEnqueuesAndLeavesTheRowAlone(t *testing.T) {
 // It used to be an error, and that was right when a configuration lasted as
 // long as the process. Under a daemon that reloads, refusing to start means a
 // `trigger: true` added by an edit is never checked — so the loop stays, and
-// re-decides when the file changes. The one-shot keeps the old answer, where
-// "nothing to poll" really is final; see TestWatchOnceStillReportsNothingToWatch.
+// re-decides when the file changes.
 func TestPollWaitsOutAConfigWithNothingToPoll(t *testing.T) {
 	t.Parallel()
 

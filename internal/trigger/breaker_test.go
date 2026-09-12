@@ -182,7 +182,7 @@ func TestDrainOneSkipsAPausedJob(t *testing.T) {
 	defer func() { _ = provider.Close() }()
 
 	output := captureStdout(t, func() {
-		_, err = drainOne(ctx, cfg, provider, st, nil, false)
+		_, err = drainOne(ctx, cfg, provider, st)
 	})
 	if err != nil {
 		t.Fatalf("drainOne: %v", err)

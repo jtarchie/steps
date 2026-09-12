@@ -256,7 +256,7 @@ func drainAll(ctx context.Context, t *testing.T, cfg *config.Config, st store.St
 	}
 
 	for range 10 {
-		ran, err := drainOne(ctx, cfg, provider, st, nil, false)
+		ran, err := drainOne(ctx, cfg, provider, st)
 		if err != nil {
 			continue // a failing upstream job is part of the scenario
 		}

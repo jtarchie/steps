@@ -641,7 +641,7 @@ func TestDrainOneRunsClaimedJobAndReportsEmptyQueue(t *testing.T) {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	ran, err := drainOne(ctx, cfg, provider, st, nil, false)
+	ran, err := drainOne(ctx, cfg, provider, st)
 	if err != nil {
 		t.Fatalf("drainOne: %v", err)
 	}
@@ -652,7 +652,7 @@ func TestDrainOneRunsClaimedJobAndReportsEmptyQueue(t *testing.T) {
 
 	assertTaskCounter(t, taskCounter, "ran\n")
 
-	ran, err = drainOne(ctx, cfg, provider, st, nil, false)
+	ran, err = drainOne(ctx, cfg, provider, st)
 	if err != nil {
 		t.Fatalf("drainOne (empty queue): %v", err)
 	}
@@ -697,7 +697,7 @@ func TestDrainOneRecoversFromPanic(t *testing.T) {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	ran, err := drainOne(ctx, cfg, panicProvider{}, st, nil, false)
+	ran, err := drainOne(ctx, cfg, panicProvider{}, st)
 	if !ran {
 		t.Fatal("drainOne: expected ran=true after recovering from a panic on a claimed job")
 	}
@@ -722,7 +722,7 @@ func TestDrainOneRecoversFromPanic(t *testing.T) {
 
 	// A second drainOne call must proceed normally — the worker loop isn't
 	// wedged by the earlier panic.
-	ran, err = drainOne(ctx, cfg, panicProvider{}, st, nil, false)
+	ran, err = drainOne(ctx, cfg, panicProvider{}, st)
 	if ran || err != nil {
 		t.Fatalf("drainOne (empty queue after recovery): ran=%v err=%v, want ran=false err=nil", ran, err)
 	}
@@ -778,48 +778,6 @@ func TestPollAndLogSaysWhatItEnqueued(t *testing.T) {
 	printed := captureStdout(t, func() { pollAndLog(context.Background(), cfg, st) })
 	if !strings.Contains(printed, "trigger: enqueued build\n") {
 		t.Errorf("printed %q, want the job the poll enqueued named", printed)
-	}
-}
-
-// TestWatchOnceStillReportsNothingToWatch: the ONE-SHOT keeps the old answer.
-//
-// For a `steps web --once` or a `steps watch` there is no later edit to
-// change the verdict, so "no get step sets trigger: true" is final and worth
-// reporting. The long-running loop cannot say that any more — see
-// TestPollWaitsOutAConfigWithNothingToPoll — which is why this asks the check
-// rather than Poll.
-func TestWatchOnceStillReportsNothingToWatch(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	cfg := loadConfig(t, dir, `
-defaults:
-  preflight:
-    disabled: true
-
-resource_types:
-- name: dummy
-  config: {check: "echo []"}
-resources:
-- name: thing
-  type: dummy
-  source: {}
-jobs:
-- name: build
-  plan:
-  - get: thing
-`)
-
-	provider, err := workspace.NewProvider(cfg.Workspace, false)
-	if err != nil {
-		t.Fatalf("NewProvider: %v", err)
-	}
-
-	defer func() { _ = provider.Close() }()
-
-	err = watchable(context.Background(), cfg, time.Minute)
-	if !errors.Is(err, ErrNoTriggers) {
-		t.Fatalf("watchable = %v, want ErrNoTriggers", err)
 	}
 }
 
@@ -896,7 +854,7 @@ jobs:
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	ran, err := drainOne(ctx, cfg, provider, st, nil, false)
+	ran, err := drainOne(ctx, cfg, provider, st)
 	if !ran || err == nil {
 		t.Fatalf("drainOne: expected ran=true and a non-nil error for a failing task, got ran=%v err=%v", ran, err)
 	}
@@ -969,7 +927,7 @@ jobs:
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	ran, err := drainOne(ctx, cfg, provider, st, nil, false)
+	ran, err := drainOne(ctx, cfg, provider, st)
 	if !ran || err == nil {
 		t.Fatalf("drainOne: expected ran=true and a non-nil error despite the on_failure hook, got ran=%v err=%v", ran, err)
 	}
@@ -1058,7 +1016,7 @@ jobs:
 	shortCtx, cancel := context.WithTimeout(bgCtx, 200*time.Millisecond)
 	defer cancel()
 
-	ran, err := drainOne(shortCtx, cfg, provider, st, nil, false)
+	ran, err := drainOne(shortCtx, cfg, provider, st)
 	if !ran || err == nil {
 		t.Fatalf("drainOne (interrupted mid-run): expected ran=true and a non-nil error, got ran=%v err=%v", ran, err)
 	}
@@ -1073,7 +1031,7 @@ jobs:
 		t.Fatalf("ResetStaleRunning: %v", err)
 	}
 
-	ran, err = drainOne(bgCtx, cfg, provider, st, nil, false)
+	ran, err = drainOne(bgCtx, cfg, provider, st)
 	if err != nil {
 		t.Fatalf("drainOne (after restart): %v", err)
 	}
@@ -1169,7 +1127,7 @@ jobs:
 	shortCtx, cancel := context.WithTimeout(bgCtx, 200*time.Millisecond)
 	defer cancel()
 
-	ran, err := drainOne(shortCtx, cfg, provider, st, nil, false)
+	ran, err := drainOne(shortCtx, cfg, provider, st)
 	if !ran || err == nil {
 		t.Fatalf("drainOne (interrupted mid-run): expected ran=true and a non-nil error, got ran=%v err=%v", ran, err)
 	}
@@ -1288,7 +1246,7 @@ jobs:
 		cancel()
 	}()
 
-	_, err = drainOne(ctx, cfg, provider, st, nil, false)
+	_, err = drainOne(ctx, cfg, provider, st)
 	if err != nil {
 		t.Errorf("drainOne returned %v, want nil — a non-interruptible build must be allowed to finish", err)
 	}
