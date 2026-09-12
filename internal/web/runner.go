@@ -517,6 +517,18 @@ func (r *LocalRunner) runJob(
 		r.mu.Unlock()
 	}()
 
+	// RunJob finishes its run inline, so a panic would leave the run page saying running forever; the re-panic leaves the queue row to finalizePanic.
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+
+		_ = target.Store.FinishRun(context.WithoutCancel(ctx), runID, "failed")
+
+		panic(recovered)
+	}()
+
 	runErr := pipeline.RunJob(
 		events.WithBus(pipeline.WithNewRun(runCtx, runID), target.Bus), cfg, job, r.pinned, provider, target.Store, force)
 
