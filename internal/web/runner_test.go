@@ -778,6 +778,73 @@ func drainable(t *testing.T, dir, yaml string) (*LocalRunner, *Pipeline, store.S
 	return NewLocalRunner(map[string]workspace.Provider{"demo": provider}, nil, 1, false), target, st
 }
 
+// panicsOnce panics on its first build, the way a bug deep inside RunJob reaches the drain.
+type panicsOnce struct {
+	workspace.Provider
+
+	fired bool
+}
+
+func (p *panicsOnce) NewBuild(ctx context.Context, label string) (workspace.BuildWorkspace, error) {
+	if !p.fired {
+		p.fired = true
+
+		panic("workspace exploded")
+	}
+
+	return p.Provider.NewBuild(ctx, label) //nolint:wrapcheck // the wrapped provider's own answer
+}
+
+// A panic inside one run took the daemon down with every pipeline it holds; it is one failed run, and the serial slot it held is given back.
+func TestDrainSurvivesAPanickingRun(t *testing.T) {
+	t.Parallel()
+
+	runner, target, st := drainable(t, t.TempDir(), `
+jobs:
+  - name: build
+    serial: true
+    plan:
+      - task: work
+        inputs: []
+        run: "true"
+`)
+
+	provider, err := workspace.NewProvider(target.Config().Workspace, false)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	t.Cleanup(func() { _ = provider.Close() })
+
+	runner.SetProvider("demo", &panicsOnce{Provider: provider})
+
+	if !runner.drainOne(t.Context(), target) {
+		t.Fatal("nothing was claimed from a queue with a pending row")
+	}
+
+	rows, err := st.ListTriggerQueue(t.Context(), 10)
+	if err != nil {
+		t.Fatalf("ListTriggerQueue: %v", err)
+	}
+
+	if len(rows) != 1 || rows[0].Status != "failed" || !strings.Contains(rows[0].Error, "workspace exploded") {
+		t.Fatalf("queue = %+v, want the panicking run failed with the panic named", rows)
+	}
+
+	err = st.EnqueueJob(t.Context(), "build", "test")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+
+	if !runner.drainOne(t.Context(), target) {
+		t.Fatal("the serial slot the panicking run held was never given back")
+	}
+
+	if got := queueStatuses(t, st); got != "failed succeeded" {
+		t.Errorf("queue = %q, want the next build to run after the panic", got)
+	}
+}
+
 // queueStatuses is the queue oldest first.
 func queueStatuses(t *testing.T, st store.Store) string {
 	t.Helper()

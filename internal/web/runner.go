@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -343,11 +344,30 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 	return true
 }
 
+// finalizePanic makes a panic out of one run cost that run, not the daemon and every pipeline it holds.
+func finalizePanic(ctx context.Context, target *Pipeline, job *config.Job, id int64) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+
+	panicErr := fmt.Errorf("recovered from panic running job %q: %v", job.Name, recovered)
+
+	slog.Error("web.job.panic", "pipeline", target.Slug, "job", job.Name, "recovered", recovered, "stack", string(debug.Stack()))
+
+	err := target.Store.CompleteJob(context.WithoutCancel(ctx), id, "failed", panicErr)
+	if err != nil {
+		slog.Error("web.job.panic_unrecorded", "pipeline", target.Slug, "job", job.Name, "error", err)
+	}
+}
+
 // runAndFinalize executes one claimed job and records how it went.
 func (r *LocalRunner) runAndFinalize(
 	ctx context.Context, target *Pipeline, cfg *config.Config, job *config.Job, id int64, force bool,
 ) {
 	slog.Info("web.job.run", "pipeline", target.Slug, "job", job.Name)
+
+	defer finalizePanic(ctx, target, job, id)
 
 	aborted, runErr := r.runJob(ctx, target, cfg, job, force)
 
@@ -414,11 +434,6 @@ func interrupted(drain context.Context, runErr error) bool {
 
 // skipIfPaused finalizes a queued row for a job the circuit breaker has taken
 // out of the rotation, rather than running it.
-//
-// It lives here as well as in internal/trigger because this is the drainer the
-// daemon actually uses: `max_consecutive_failures:` is documented against
-// `steps web`, and a breaker that only the one-shot honours is a safety
-// feature that is off in the mode it exists for.
 func (r *LocalRunner) skipIfPaused(ctx context.Context, target *Pipeline, jobName string, id int64) bool {
 	paused, err := target.Store.IsJobPaused(ctx, jobName)
 	if err != nil {
