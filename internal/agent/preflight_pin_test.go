@@ -163,6 +163,45 @@ func TestPreflightReturnsToARecoveredPrimary(t *testing.T) {
 	}
 }
 
+// TestPreflightProbesASubAgentsModel: a delegate is reached mid-run, which is exactly the failure preflight exists to move earlier.
+func TestPreflightProbesASubAgentsModel(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	leadURL, _ := togglableProbeEndpoint(t)
+	helperURL, helperUp := togglableProbeEndpoint(t)
+	helperUp.Store(false)
+
+	cfg := pinConfigWithFallbacks(t, "lead", leadURL)
+	cfg.Agents[0].Tools = []config.ToolSpec{{Agent: "helper"}}
+	cfg.Agents = append(cfg.Agents, config.Agent{
+		Name: "helper", Attempts: cfg.Agents[0].Attempts, Source: pinSource("openai/helper", helperURL),
+	})
+
+	problems := Preflight(t.Context(), cfg, []string{"lead"}, &config.Preflight{})
+	if len(problems) != 1 || problems[0].Target != `agent "helper"` {
+		t.Errorf("problems = %+v, want one naming the dead sub-agent", problems)
+	}
+}
+
+// TestPreflightFailsOverToTheSameModelElsewhere: one model name on two endpoints is two answers, and the fallback's must not be the primary's cached one.
+func TestPreflightFailsOverToTheSameModelElsewhere(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	primaryURL, primaryUp := togglableProbeEndpoint(t)
+	fallbackURL, _ := togglableProbeEndpoint(t)
+	primaryUp.Store(false)
+
+	cfg := pinConfigWithFallbacks(t, "mirrored", primaryURL, pinSource("openai/primary", fallbackURL))
+
+	if problems := Preflight(t.Context(), cfg, []string{"mirrored"}, &config.Preflight{}); len(problems) != 0 {
+		t.Fatalf("problems = %+v, want none — the same model answered on the fallback's endpoint", problems)
+	}
+
+	if selection, pinned := selectedSource(testPin("mirrored")); !pinned || selection.source.Endpoint != fallbackURL {
+		t.Errorf("selection = %+v (pinned=%v), want the fallback's endpoint pinned", selection, pinned)
+	}
+}
+
 // TestPreflightKeepsAServingFallback is the property the fix must not break.
 // Returning eagerly is how a flapping primary oscillates an agent between
 // models; while the primary is still down and the fallback is still

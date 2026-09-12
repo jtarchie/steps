@@ -220,6 +220,37 @@ func TestNextViableFallbackSkipsAMissingCredential(t *testing.T) {
 	}
 }
 
+// TestAMidRunFailureResumesOnTheNextSource: a primary that fails transiently, with a live fallback declared, must not fail the step.
+func TestAMidRunFailureResumesOnTheNextSource(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	primaryURL, primaryUp := togglableProbeEndpoint(t)
+	fallbackURL, _ := togglableProbeEndpoint(t)
+	primaryUp.Store(false)
+
+	cfg := pinConfigWithFallbacks(t, "cascader", primaryURL, pinSource("openai/backup", fallbackURL))
+
+	ri, err := cfg.ResolveAgentInvocation(config.Step{Agent: "cascader"})
+	if err != nil {
+		t.Fatalf("ResolveAgentInvocation: %v", err)
+	}
+
+	_, served, err := runPreparedWithFailover(t.Context(), preparedAgentStep{
+		ri:            ri,
+		agent:         &cfg.Agents[0],
+		fallbackIndex: -1,
+		llm:           newAgentLLM(ri, "test-key"),
+		conv:          agentConversation{system: "system", messages: []string{"prompt"}, maxTurns: testMaxTurns},
+	})
+	if err != nil {
+		t.Fatalf("a transient primary failure with a live fallback failed the step: %v", err)
+	}
+
+	if !served.swapped || served.ri.ModelName != "backup" {
+		t.Errorf("served = (model %q, swapped %v), want the fallback to have finished the step", served.ri.ModelName, served.swapped)
+	}
+}
+
 // TestRemainingTurnsSpansTheCascade pins max_turns: as a ceiling on the STEP
 // rather than on each source it is tried on.
 //

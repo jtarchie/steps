@@ -114,6 +114,45 @@ func TestAskUserMemoAnswersTheSecondAsker(t *testing.T) {
 	if second["answer"] != "minor" || second["source"] != "memo" {
 		t.Errorf("the second asker got %v, want the recorded minor from the memo", second)
 	}
+
+	if _, noted := second["note"]; noted {
+		t.Errorf("an answered memo carried the nobody-answered note: %v", second)
+	}
+}
+
+// TestAskUserMemoOfADefaultSaysNobodyAnswered: a memoized default is still a default, and the second asker is told so as the first was.
+func TestAskUserMemoOfADefaultSaysNobodyAnswered(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAskFixture(t)
+	fixture.ask(impatient("patch"), "Which bump?")
+
+	second := fixture.ask(askGrant{wait: time.Minute}, "Which bump?")
+
+	if second["answer"] != "patch" || second["answered"] != false || second["source"] != "memo" {
+		t.Errorf("memo of a default = %v, want the default, unanswered", second)
+	}
+
+	if note, _ := second["note"].(string); !strings.Contains(note, "nobody answered") {
+		t.Errorf("memo of a default note = %q, want it to say nobody answered", note)
+	}
+}
+
+// TestAnnounceQuestionListsTheOptions: the announcement is what a person at the terminal answers from, so a fenced question must show its options.
+func TestAnnounceQuestionListsTheOptions(t *testing.T) {
+	offered := captureStdout(t, func() {
+		announceQuestion(store.Question{ID: 7, Question: "Which environment?", Options: []string{"staging", "prod"}}, time.Minute, "-p app")
+	})
+	if !strings.Contains(offered, "question 7: options: staging | prod") {
+		t.Errorf("announcement = %q, want the offered options listed", offered)
+	}
+
+	open := captureStdout(t, func() {
+		announceQuestion(store.Question{ID: 8, Question: "Which environment?"}, time.Minute, "-p app")
+	})
+	if strings.Contains(open, "options:") {
+		t.Errorf("announcement = %q, want no options line for a question that offered none", open)
+	}
 }
 
 // TestAskUserExpiryUsesTheDeclaredDefaultAndSaysSo: the model is TOLD. An
@@ -380,9 +419,10 @@ func TestAskUserResponderAnswersBeforeAnybodyIsAsked(t *testing.T) {
 	fixture := newAskFixture(t)
 	fixture.env.dir = t.TempDir()
 
-	responder := newTestSubAgent(t, &fakeLLM{responses: []*model.LLMResponse{
+	fake := &fakeLLM{responses: []*model.LLMResponse{
 		{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "  minor  "}}}},
-	}})
+	}}
+	responder := newTestSubAgent(t, fake)
 
 	grant := impatient("patch")
 	grant.answeredBy, grant.responder = "architect", responder.run
@@ -391,6 +431,22 @@ func TestAskUserResponderAnswersBeforeAnybodyIsAsked(t *testing.T) {
 
 	if result["answer"] != "minor" || result["answered"] != true {
 		t.Errorf("responder ask = %v, want the responder's answer", result)
+	}
+
+	if len(fake.requests) == 0 {
+		t.Fatal("the responder was never asked")
+	}
+
+	var asked strings.Builder
+
+	for _, content := range fake.requests[0].Contents {
+		for _, part := range content.Parts {
+			asked.WriteString(part.Text)
+		}
+	}
+
+	if !strings.Contains(asked.String(), "The answers it expects: major, minor, patch") {
+		t.Errorf("the responder was not told the offered options:\n%s", asked.String())
 	}
 
 	// Which channel answered is the thing worth recording: an escalation a
@@ -486,6 +542,35 @@ func TestBuildAskUserToolBindsTheGrantsWait(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("answered_by was accepted with no config to resolve the responder")
+	}
+}
+
+// TestBuildAskUserToolResolvesItsResponder crosses build→ask: answered_by: resolved against a real config answers the question and is named on the row.
+func TestBuildAskUserToolResolvesItsResponder(t *testing.T) {
+	t.Parallel()
+
+	endpoint, _ := togglableProbeEndpoint(t)
+	cfg := &config.Config{Agents: []config.Agent{{
+		Name: "resolved-architect", Source: config.AgentSource{Model: "architect-model", Endpoint: endpoint},
+	}}}
+
+	_, impl, closer, err := buildAskUserTool(t.Context(), cfg, config.ToolSpec{
+		Builtin: config.AskUserBuiltinName, AnsweredBy: "resolved-architect", Timeout: "1s",
+	})
+	if err != nil {
+		t.Fatalf("buildAskUserTool: %v", err)
+	}
+
+	if closer != nil {
+		t.Cleanup(func() { _ = closer.Close() })
+	}
+
+	fixture := newAskFixture(t)
+	fixture.env.dir = t.TempDir()
+
+	result := impl(fixture.ctx, map[string]any{askUserQuestionArg: "Which bump?"}, fixture.env)
+	if result["answer"] != "hi" || result["source"] != "agent:resolved-architect" {
+		t.Errorf("ask = %v, want the resolved responder's answer", result)
 	}
 }
 

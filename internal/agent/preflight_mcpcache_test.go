@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 )
@@ -150,5 +151,17 @@ func TestPreflightProbesEveryGrantOnAServer(t *testing.T) {
 
 	if !strings.Contains(problems[0].Detail, "no_such_tool") {
 		t.Errorf("problem = %q, want it to name the missing tool", problems[0].Detail)
+	}
+}
+
+// TestAServerThatCannotStartSaysWhy: a launch failure reported as a timeout sends the operator to raise a deadline instead of fixing the server.
+func TestAServerThatCannotStartSaysWhy(t *testing.T) {
+	t.Parallel()
+
+	srv := config.MCPServer{Name: "ghost", Command: "/nonexistent/mcp-server"}
+
+	err := probeServer(t.Context(), srv, config.ToolSpec{MCP: "ghost"}, time.Minute)
+	if err == nil || !strings.Contains(err.Error(), "could not start") {
+		t.Errorf("probeServer = %v, want the launch failure itself, not a timeout", err)
 	}
 }
