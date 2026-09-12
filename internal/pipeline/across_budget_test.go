@@ -2,12 +2,33 @@ package pipeline
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
 )
+
+// The usage line appears whenever there is spend to report, this attempt's or an earlier one's, and never for a job that spent nothing.
+func TestJobUsageIsReportedOnlyWhenSomethingWasSpent(t *testing.T) {
+	spentNow := agent.NewRunUsage(0)
+	spentNow.Add(agent.StepUsage{Step: "review", Total: 10})
+
+	for name, c := range map[string]struct {
+		usage *agent.RunUsage
+		want  string
+	}{
+		"nothing spent":          {agent.NewRunUsage(0), ""},
+		"spent this attempt":     {spentNow, "usage: 10 tokens across 1 agent step(s)"},
+		"spent only by an older": {agent.NewResumedRunUsage(0, 50), "(50 from earlier attempts)"},
+	} {
+		out := captureStdout(t, func() { reportJobUsage(context.Background(), c.usage) })
+		if (c.want == "" && out != "") || !strings.Contains(out, c.want) {
+			t.Errorf("%s: printed %q, want %q", name, out, c.want)
+		}
+	}
+}
 
 // TestBlockBudgetUnbindable pins when a block's own ceiling is decorative.
 //

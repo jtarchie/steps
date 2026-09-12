@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/venue"
@@ -29,6 +31,7 @@ type borrowed struct {
 	stops  int
 	// deadStops counts give-backs attempted on a context already cancelled. The real EC2 and GCE calls abort before reaching the API on one, so each is a machine left billing.
 	deadStops int
+	failStops bool
 }
 
 func (b *borrowed) acquire(context.Context, venue.Worker) (venue.Worker, func(context.Context) error, error) {
@@ -44,6 +47,10 @@ func (b *borrowed) acquire(context.Context, venue.Worker) (venue.Worker, func(co
 			b.deadStops++
 
 			return ctx.Err()
+		}
+
+		if b.failStops {
+			return errors.New("the instance refused to stop")
 		}
 
 		b.stops++
@@ -250,9 +257,16 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
+	runID := NewRunID()
+
+	err = RunJob(WithNewRun(ctx, runID), cfg, &cfg.Jobs[0], nil, provider, st, false)
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
+	}
+
+	// The acquisition alone proves nothing: runPlacedStage resolves the worker itself, so only a placement record says the stage ran there rather than here.
+	if tag := placementTags(t, st, runID)["repo"]; tag != "box" {
+		t.Errorf("the fetch was recorded on %q, want box", tag)
 	}
 
 	log, err := os.ReadFile(fetched) //nolint:gosec // a t.TempDir() file this test's pipeline wrote
@@ -289,4 +303,187 @@ func awaitFile(t *testing.T, path string) {
 	}
 
 	t.Fatalf("%s never appeared", path)
+}
+
+// A machine that could not be given back bills until somebody notices, so the job's release and the process's each say so, and only when it happened.
+func TestAWorkerThatCannotBeGivenBackIsReported(t *testing.T) {
+	t.Setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:1")
+
+	for scope, c := range map[string]struct{ worker, warning string }{
+		"job":     {borrowedWorker, "acquired for this job could not be released"},
+		"process": {borrowedWorker + "&idle=1h", "acquired by this process could not be released"},
+	} {
+		for _, failing := range []bool{false, true} {
+			ctx, err := WithWorkers(context.Background(), map[string]string{"box": c.worker})
+			if err != nil {
+				t.Fatalf("WithWorkers: %v", err)
+			}
+
+			fake := &borrowed{failStops: failing}
+			ctx, closeRegistry := withRegistry(ctx, venue.NewRegistryWith(fake.acquire))
+			ctx, release := WithLeases(ctx)
+
+			_, err = leasesFrom(ctx).Resolve(ctx, "box")
+			if err != nil {
+				t.Fatalf("%s: Resolve: %v", scope, err)
+			}
+
+			out := captureStdout(t, func() {
+				release(context.Background())
+				closeRegistry()
+			})
+
+			if warned := strings.Contains(out, c.warning); warned != failing {
+				t.Errorf("%s scope, stop failing=%v: warned=%v:\n%s", scope, failing, warned, out)
+			}
+		}
+	}
+}
+
+func TestAPlacedStepIsRecordedWhereItRan(t *testing.T) {
+	ctx, cfg, provider, st, _ := borrowedRun(t, `
+jobs:
+- name: build
+  plan:
+  - task: here
+    run: "true"
+  - task: there
+    tags: [box]
+    run: "true"
+`)
+
+	runID := NewRunID()
+
+	err := RunJob(WithNewRun(ctx, runID), cfg, &cfg.Jobs[0], nil, provider, st, false)
+	if err != nil {
+		t.Fatalf("RunJob: %v", err)
+	}
+
+	placements, err := st.RunPlacements(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(placements) != 1 || placements[0].StepName != "there" || placements[0].Tag != "box" {
+		t.Fatalf("placements = %+v, want one, for the tagged step on box", placements)
+	}
+
+	if placements[0].InstanceID != nil {
+		t.Errorf("a local: worker has no instance, yet one was recorded: %q", *placements[0].InstanceID)
+	}
+
+	workers := eventWorkers(t, st, runID)
+
+	if slices.ContainsFunc(workers["here"], func(worker string) bool { return worker != "" }) {
+		t.Errorf("the untagged step's events name workers %q", workers["here"])
+	}
+
+	if !slices.ContainsFunc(workers["there"], func(worker string) bool { return strings.HasPrefix(worker, "box (") }) {
+		t.Errorf("no event of the tagged step says it ran on box: %q", workers["there"])
+	}
+}
+
+// eventWorkers is every worker a run's events named, by step.
+func eventWorkers(t *testing.T, st store.Store, runID string) map[string][]string {
+	t.Helper()
+
+	rows, err := st.RunEvents(context.Background(), runID, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	workers := map[string][]string{}
+	for _, row := range rows {
+		workers[row.StepName] = append(workers[row.StepName], row.Worker)
+	}
+
+	return workers
+}
+
+// placementTags is the tag each placed step of a run recorded, by step.
+func placementTags(t *testing.T, st store.Store, runID string) map[string]string {
+	t.Helper()
+
+	placements, err := st.RunPlacements(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tags := map[string]string{}
+	for _, one := range placements {
+		tags[one.StepName] = one.Tag
+	}
+
+	return tags
+}
+
+// evictingRunner is a check's first machine, reclaimed on its first command; only RunCapture, WithLabel and Close are reached.
+type evictingRunner struct {
+	shell.Runner
+
+	calls, closes int
+}
+
+func (e *evictingRunner) RunCapture(context.Context, string) ([]byte, error) {
+	e.calls++
+
+	return nil, errTestEvicted
+}
+
+func (e *evictingRunner) WithLabel(string) shell.Runner { return e }
+
+func (e *evictingRunner) Close() error {
+	e.closes++
+
+	return nil
+}
+
+// The check stage labels its runner, runs one command and closes what it holds; after a re-placement that must be the machine the check ended on, so it is closed and recorded, rather than the dead one a second time.
+func TestACheckReplacedMidCommandHandsTheStageTheMachineItEndedOn(t *testing.T) {
+	ctx, _, _, _, fake := borrowedRun(t, `
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "true"
+`)
+
+	ctx, release := WithLeases(ctx)
+	defer release(context.Background())
+
+	ctx, sink := withPlacementSink(ctx)
+
+	first := &evictingRunner{}
+
+	var stage shell.Runner = &checkRunner{
+		Runner: first,
+		step:   config.Step{Get: "repo", Tags: []string{"box"}},
+		spec:   shell.RunnerSpec{Worker: "local:", WorkerTag: "box"},
+	}
+
+	stage = stage.WithLabel("probe check")
+
+	out, err := stage.RunCapture(ctx, "echo fresh")
+	closeErr := stage.Close()
+
+	if err != nil || closeErr != nil {
+		t.Fatalf("RunCapture: %v; Close: %v", err, closeErr)
+	}
+
+	if got := strings.TrimSpace(string(out)); got != "fresh" {
+		t.Errorf("the check answered %q, want the fresh machine's answer", got)
+	}
+
+	if first.calls != 1 || first.closes != 1 {
+		t.Errorf("the reclaimed machine ran %d commands and was closed %d times, want once each", first.calls, first.closes)
+	}
+
+	placement, ok := sink.taken()
+	if !ok || placement.Tag != "box" {
+		t.Errorf("the machine the check ended on was never closed, so never recorded: %+v", placement)
+	}
+
+	if starts, _ := fake.counts(); starts != 1 {
+		t.Errorf("%d machines acquired, want one replacement", starts)
+	}
 }

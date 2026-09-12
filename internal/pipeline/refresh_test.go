@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -509,6 +510,98 @@ func TestRefreshFailureWarnsAndProceeds(t *testing.T) {
 	data, err := os.ReadFile(posted) //nolint:gosec // a t.TempDir()-scoped file this test wrote itself
 	if err != nil || string(data) != "v1\n" {
 		t.Errorf("built %q (%v), want the recorded v1", data, err)
+	}
+}
+
+// A refresh that worked says nothing: the warning claims the run fell back to recorded history.
+func TestASuccessfulRefreshWarnsOfNothing(t *testing.T) {
+	feed := filepath.Join(t.TempDir(), "feed.json")
+	writeFixture(t, feed, `[{"n":"v1"}]`)
+
+	cfg, st, _ := refreshFixture(t, `"cat `+feed+`"`)
+
+	var err error
+
+	out := captureStdout(t, func() { err = runBuild(context.Background(), t, cfg, st) })
+	if err != nil {
+		t.Fatalf("RunJob: %v", err)
+	}
+
+	if strings.Contains(out, "could not refresh") {
+		t.Errorf("a refresh that recorded its versions warned it had failed:\n%s", out)
+	}
+}
+
+// A resume continues the run it names: it re-opens the version that run took, which the cursor would otherwise hand nobody twice, and skips the steps it already finished.
+func TestAResumedRunContinuesWhereItFailed(t *testing.T) {
+	dir := t.TempDir()
+	expensive := filepath.Join(dir, "expensive.log")
+	attempts := filepath.Join(dir, "attempts.log")
+	fixed := filepath.Join(dir, "fixed")
+
+	cfg, job, st, provider := fixtureFrom(t, fmt.Sprintf(`
+resource_types:
+- name: counter
+  config:
+    check: printf '[{"n":"1"}]'
+    in: echo {{ .version.n | shellquote }} > n.txt
+resources:
+- name: ticks
+  type: counter
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: ticks
+    version: every
+  - task: expensive
+    inputs: []
+    run: echo ran >> %[1]s
+  - task: fragile
+    inputs: []
+    run: |
+      echo attempt >> %[2]s
+      test -f %[3]s
+`, expensive, attempts, fixed))
+
+	defer func() { _ = st.Close() }()
+	defer func() { _ = provider.Close() }()
+
+	runID := NewRunID()
+
+	err := RunJob(WithNewRun(context.Background(), runID), cfg, job, nil, provider, st, false)
+	if err == nil {
+		t.Fatal("the fragile step passed before it was fixed")
+	}
+
+	writeFixture(t, fixed, "")
+
+	ctx, workspaceDir, err := PrepareResume(context.Background(), st, runID)
+	if err != nil {
+		t.Fatalf("PrepareResume: %v", err)
+	}
+
+	resumable, ok := provider.(workspace.Resumable)
+	if !ok {
+		t.Fatal("the default workspace provider cannot resume")
+	}
+
+	resumable.Reuse(workspaceDir)
+
+	out := captureStdout(t, func() { err = RunJob(ctx, cfg, job, nil, provider, st, false) })
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+
+	for path, want := range map[string]int{expensive: 1, attempts: 2} {
+		data, readErr := os.ReadFile(path) //nolint:gosec // a t.TempDir() file this test's pipeline wrote
+		if got := strings.Count(string(data), "\n"); readErr != nil || got != want {
+			t.Errorf("%s ran %d times (%v), want %d", filepath.Base(path), got, readErr, want)
+		}
+	}
+
+	if !strings.Contains(out, "skip: expensive (already succeeded)") {
+		t.Errorf("the resume did not skip what the run already finished:\n%s", out)
 	}
 }
 

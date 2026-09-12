@@ -53,7 +53,7 @@ func WithResourcePlacement(ctx context.Context) context.Context {
 			// task's command gets from withVenueRetry, applied to the one
 			// call a check makes. An in: or out: is retried by its stage.
 			if spec.Cwd == "" {
-				return checkRunner{Runner: runner, step: step, spec: spec}, nil
+				return &checkRunner{Runner: runner, step: step, spec: spec}, nil
 			}
 
 			return runner, nil
@@ -109,7 +109,8 @@ type checkRunner struct {
 	spec shell.RunnerSpec
 }
 
-func (c checkRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
+// A pointer receiver, because the stage closes the runner it holds and a replacement stored on a copy was never closed while the dead machine was closed twice.
+func (c *checkRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
 	var out []byte
 
 	current := c.Runner
@@ -157,8 +158,8 @@ func (c checkRunner) RunCapture(ctx context.Context, command string) ([]byte, er
 	return out, err
 }
 
-func (c checkRunner) WithLabel(label string) shell.Runner {
-	return checkRunner{Runner: c.Runner.WithLabel(label), step: c.step, spec: c.spec}
+func (c *checkRunner) WithLabel(label string) shell.Runner {
+	return &checkRunner{Runner: c.Runner.WithLabel(label), step: c.step, spec: c.spec}
 }
 
 // keepKey types the context value carrying --keep-workspace, for a worker's

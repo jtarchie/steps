@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +49,11 @@ func TestVenueRetryReplacesUpToTheCap(t *testing.T) {
 
 	err := withVenueRetry(evictionCtx(t), taggedStep(), 0, func(context.Context) (string, error) {
 		runs++
+
+		// Bounded, so a cap that never trips fails here rather than spinning until the suite's timeout.
+		if runs > venueRetries+1 {
+			return "", errors.New("re-placed past the cap")
+		}
 
 		return "aws://i-0abc123def456789", errTestEvicted
 	})
@@ -165,6 +172,73 @@ func TestVenueRetryPassesOrdinaryOutcomesThrough(t *testing.T) {
 
 		if runs != 1 {
 			t.Errorf("%s: the work ran %d times, want 1", name, runs)
+		}
+	}
+}
+
+// A get or put dials its resource's tag for the check as well as its own, so both have to be mapped before anything runs.
+func TestAResourceStepDialsItsResourcesTagToo(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{Resources: []config.Resource{{Name: "repo", Tags: []string{"b"}}}}
+
+	for name, c := range map[string]struct {
+		step config.Step
+		want []string
+	}{
+		"its own tag and the resource's": {config.Step{Get: "repo", Tags: []string{"a"}}, []string{"a", "b"}},
+		"the resource's tag as its own":  {config.Step{Put: "repo", Tags: []string{"b"}}, []string{"b"}},
+		"no tag of its own":              {config.Step{Get: "repo"}, []string{"b"}},
+		"a task":                         {config.Step{Task: "work", Tags: []string{"a"}}, []string{"a"}},
+	} {
+		got := stepPlacementTags(cfg, c.step)
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s: dials %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+func TestAPollRefusesOnlyATaggedResourceNobodyMapped(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{Resources: []config.Resource{{Name: "plain"}, {Name: "remote", Tags: []string{"gpu"}}}}
+
+	err := ValidatePipelinePlacement(context.Background(), cfg, []string{"plain"})
+	if err != nil {
+		t.Errorf("an untagged resource was refused: %v", err)
+	}
+
+	err = ValidatePipelinePlacement(context.Background(), cfg, []string{"remote"})
+	if err == nil || !strings.Contains(err.Error(), "tag gpu") {
+		t.Errorf("a resource tagged for an unmapped worker: err = %v, want it refused naming tag gpu", err)
+	}
+}
+
+// ?binary= reaches an aws:// worker only through the artifact store, so whether one is set decides the refusal, for a job and for a poll alike.
+func TestPlacementChecksKnowWhetherAnArtifactStoreIsSet(t *testing.T) {
+	t.Parallel()
+
+	ctx, err := WithWorkers(context.Background(), map[string]string{"gpu": "aws://i-0abc123def456789?binary=/tmp/steps-linux-amd64"})
+	if err != nil {
+		t.Fatalf("WithWorkers: %v", err)
+	}
+
+	cfg := &config.Config{Resources: []config.Resource{{Name: "remote", Tags: []string{"gpu"}}}}
+	job := &config.Job{Name: "build", Plan: []config.Step{{Task: "work", Tags: []string{"gpu"}}}}
+
+	for _, withStore := range []bool{false, true} {
+		checked := ctx
+		if withStore {
+			checked = WithArtifactStore(ctx, "s3://bucket/steps")
+		}
+
+		for check, err := range map[string]error{
+			"poll": ValidatePipelinePlacement(checked, cfg, []string{"remote"}),
+			"job":  ValidateWorkerPlacement(checked, cfg, job),
+		} {
+			if (err == nil) != withStore || (err != nil && !errors.Is(err, venue.ErrWorker)) {
+				t.Errorf("artifact store set=%v, %s: err = %v, want refused=%v by the placement check", withStore, check, err, !withStore)
+			}
 		}
 	}
 }
