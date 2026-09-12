@@ -305,7 +305,7 @@ Caching diverges from `approval:` deliberately. An approval is never cached — 
 
 ## Working directory, inputs, and dir:
 
-An agent step's `dir:` sets its working directory *and* names the artifact it operates in (its first path component — `dir: repo/cmd` names `repo`). That artifact must be one of the step's own declared `inputs:` (or `outputs:`), and it's flow-validated like any input — an agent pointed at a directory nothing fetched ("summarize the repository" with no `get`) fails at plan time, before the model is ever called. See [workspace.md](workspace.md).
+An agent step's `dir:` sets its working directory *and* names the artifact it operates in (its first path component — `dir: repo/cmd` names `repo`). That artifact must be one of the step's own declared `inputs:`, flow-validated like any input — an agent pointed at a directory nothing fetched ("summarize the repository" with no `get`) fails at plan time, before the model is ever called — or one of its own `outputs:`, which starts empty and is what the step produces. See [workspace.md](workspace.md).
 
 ```yaml test=agents-dir
 agents:
@@ -631,7 +631,7 @@ A top-level `tasks:`/`agents:` entry additionally accepts a whole-document `file
 ```yaml test=agents-task-file
 tasks:
 - name: unit
-  file: ci/unit.yml         # supplies run/fix/image/timeout/inputs/outputs
+  file: ci/unit.yml         # supplies any task field but name:
   timeout: 5m               # any field set here overrides the document's
 
 agents:
@@ -655,7 +655,7 @@ jobs:
     outcome: succeeded
 ```
 
-The entry's own inline fields win over the loaded document's, and the loaded document may not itself use `file:`/`run_file:` — includes are resolved one level deep only, which is what makes cycle detection unnecessary.
+The entry's own inline fields win over the loaded document's — except `privileged:`, which is on if either says so, since an inline `false` cannot be told apart from leaving it out — and the loaded document may not itself use `file:`/`run_file:` — includes are resolved one level deep only, which is what makes cycle detection unnecessary.
 
 ### The run-time form: an agent step's `message_files:` from a fetched artifact
 

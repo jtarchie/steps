@@ -278,6 +278,23 @@ func TestOpenReaderRefusesAnOlderSchema(t *testing.T) {
 	}
 }
 
+// TestAnOwnedReaderClosesCleanly: a daemon restarting reads the file through one of these and refuses to start on any error its Close reports.
+func TestAnOwnedReaderClosesCleanly(t *testing.T) {
+	t.Parallel()
+
+	stores := sharedFile(t, "app")
+
+	reader, err := OpenReader(stores[0].Description())
+	if err != nil {
+		t.Fatalf("OpenReader: %v", err)
+	}
+
+	err = reader.Close()
+	if err != nil {
+		t.Fatalf("closing a reader that owns its connection: %v", err)
+	}
+}
+
 // TestBorrowedReaderCloseLeavesTheStoreOpen: Store.Reader() shares the
 // st's connection, so closing the reader must not close the st's handle
 // out from under it — the st outlives it and its own Close is what

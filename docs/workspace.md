@@ -24,7 +24,7 @@ jobs:
 ```
 
 - **`inputs:`/`outputs:` are optional and default to empty.** An absent `inputs:` means the step mounts nothing; a pure-compute step legitimately declares nothing. An agent step's `dir:` also names the artifact it works in (its first path component) and is validated the same way.
-- **Declared inputs are validated against producers.** An `inputs:` (or agent `dir:`) naming an artifact nothing earlier fetched or produced is a plan-time error — "this step reads an artifact nobody produced" fails before any command or model runs.
+- **Declared inputs are validated against producers.** An `inputs:` (or agent `dir:`) naming an artifact nothing earlier fetched or produced is a plan-time error — "this step reads an artifact nobody produced" fails before any command or model runs. The one exception is an agent `dir:` naming one of the step's own `outputs:`, which exists, empty, before the step runs.
 - **`put` steps compose a read view the same way** from their own `inputs:`. There is no implicit "all artifacts so far" view, but `inputs: all` on a put is the explicit escape hatch:
 
 ```yaml

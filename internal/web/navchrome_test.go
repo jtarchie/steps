@@ -144,6 +144,44 @@ func TestErrorPageKeepsNavAlive(t *testing.T) {
 	}
 }
 
+// TestEveryPageSaysThePipelineIsPaused: a board of green jobs that stopped moving looks exactly like a quiet day, so the pause has to be on the page, not only in the CLI.
+func TestEveryPageSaysThePipelineIsPaused(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+
+	const banner = "this pipeline is paused"
+
+	if _, body := get(t, server, "/p/demo"); strings.Contains(body, banner) {
+		t.Fatal("a running pipeline claims to be paused")
+	}
+
+	err := pipeline.Store.Pause(t.Context())
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	if _, body := get(t, server, "/p/demo/runs"); !strings.Contains(body, banner) {
+		t.Error("a paused pipeline's pages do not say so")
+	}
+}
+
+// TestNavCountsPendingApprovals: a gate waiting on a person is invisible unless the tab they would open says something is there.
+func TestNavCountsPendingApprovals(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+
+	_, err := pipeline.Store.RequestApproval(t.Context(), "deploy", "ship it?")
+	if err != nil {
+		t.Fatalf("RequestApproval: %v", err)
+	}
+
+	if _, body := get(t, server, "/p/demo"); !strings.Contains(body, `approvals<span class="badge">●1</span>`) {
+		t.Error("the approvals tab does not count the pending gate")
+	}
+}
+
 // TestBreadcrumbsOnDetailPages: a transcript names its job as a LINK, not as
 // text a reader retypes into the palette.
 func TestBreadcrumbsOnDetailPages(t *testing.T) {

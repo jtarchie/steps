@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
@@ -116,8 +117,38 @@ jobs:
 	assertLineCount(t, p.onSuccess, 0)
 }
 
-// TestStepHooksOnSuccessFailureFailsGreenStep verifies a failing on_success
-// hook turns an otherwise-green step into a failure.
+// A hook agent's dir: fails at load like a plan agent's, not as a missing directory once the hook fires.
+func TestStepHookAgentDirCheckedAtLoad(t *testing.T) {
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+
+	writePipelineFile(t, path, `
+agents:
+- name: reviewer
+  source:
+    model: openai/test-model
+    endpoint: http://127.0.0.1:1
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+jobs:
+- name: build
+  plan:
+  - task: work
+    inputs: []
+    run: "true"
+    on_failure:
+      agent: reviewer
+      dir: nowhere
+      messages:
+        - "why did it fail?"
+`)
+
+	err := cli.Run([]string{"validate", path})
+	if err == nil || !strings.Contains(err.Error(), `on_failure hook agent "reviewer"`) {
+		t.Fatalf("validate: %v, want the hook agent's dir: refused", err)
+	}
+}
+
+// TestStepHooksOnSuccessFailureFailsGreenStep verifies a failing on_success hook turns an otherwise-green step into a failure.
 func TestStepHooksOnSuccessFailureFailsGreenStep(t *testing.T) {
 	dir := t.TempDir()
 	p := newHookPaths(dir)

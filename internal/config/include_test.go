@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -224,6 +225,55 @@ timeout: 30s
 	}
 }
 
+// TestLoadConfigTaskFileDocumentReachesTheStep asserts through ResolveTask, the seam hashing and execution both read, not the merged entry.
+func TestLoadConfigTaskFileDocumentReachesTheStep(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: fixer
+  source: { model: lmstudio/qwen }
+tasks:
+- name: unit
+  file: ci/unit.yml
+jobs:
+- name: build
+  plan:
+  - task: unit
+`)
+	writeSibling(t, path, "ci/unit.yml", `
+run: echo from-document
+image: alpine
+fix: fixer
+inputs: [src]
+outputs: [bin]
+env: [GOPATH]
+network: none
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	resolved, err := cfg.ResolveTask(cfg.Jobs[0].Plan[0])
+	if err != nil {
+		t.Fatalf("ResolveTask: %v", err)
+	}
+
+	for field, ok := range map[string]bool{
+		"fix":     resolved.Fix != nil && resolved.Fix.Agent == "fixer",
+		"inputs":  slices.Equal(resolved.Inputs, []string{"src"}),
+		"outputs": slices.Equal(resolved.Outputs, []string{"bin"}),
+		"env":     slices.Equal(resolved.Env, []string{"GOPATH"}),
+		"network": resolved.Network == "none",
+	} {
+		if !ok {
+			t.Errorf("%s: the document's value did not reach the step: %+v", field, resolved)
+		}
+	}
+}
+
 func TestLoadConfigAgentFileWholeDocument(t *testing.T) {
 	t.Parallel()
 
@@ -244,6 +294,9 @@ jobs:
 source: { model: lmstudio/qwen }
 system: You are terse.
 max_turns: 4
+image: alpine
+env: [GOPATH]
+network: none
 `)
 
 	cfg, err := LoadConfig(path)
@@ -263,6 +316,123 @@ max_turns: 4
 	if got, want := agent.MaxTurns, 20; got == nil || *got != want {
 		t.Errorf("MaxTurns = %v, want %d (the entry's own inline max_turns: must win over the document's)", got, want)
 	}
+
+	ri, err := cfg.ResolveAgentInvocation(cfg.Jobs[0].Plan[0])
+	if err != nil {
+		t.Fatalf("ResolveAgentInvocation: %v", err)
+	}
+
+	if !slices.Equal(ri.Env, []string{"GOPATH"}) || ri.Network != "none" {
+		t.Errorf("the agent's tools run with env %q on network %q, want the document's [GOPATH] on none", ri.Env, ri.Network)
+	}
+}
+
+var documentFieldSkips = map[string]bool{"name": true, "file": true, "run_file": true, "system_file": true}
+
+// TestMergeDocumentCarriesEveryField is the guard for the next field: a Task or Agent field the merge forgets decodes from a file: document and is then silently dropped.
+func TestMergeDocumentCarriesEveryField(t *testing.T) {
+	t.Parallel()
+
+	carries := func(t *testing.T, typ reflect.Type, merge func(doc reflect.Value) reflect.Value) {
+		t.Helper()
+
+		for i := range typ.NumField() {
+			tag, _, _ := strings.Cut(typ.Field(i).Tag.Get("yaml"), ",")
+			if tag == "" || tag == "-" || documentFieldSkips[tag] {
+				continue
+			}
+
+			doc := reflect.New(typ).Elem()
+			doc.Field(i).Set(nonZeroValue(t, typ.Field(i).Type))
+
+			if got := merge(doc).Field(i); !reflect.DeepEqual(got.Interface(), doc.Field(i).Interface()) {
+				t.Errorf("%s.%s: a file: document's value did not reach an entry that set none", typ.Name(), tag)
+			}
+		}
+	}
+
+	carries(t, reflect.TypeFor[Task](), func(doc reflect.Value) reflect.Value {
+		var entry Task
+
+		mergeTaskDocument(&entry, doc.Interface().(Task)) //nolint:forcetypeassert // doc is built from reflect.TypeFor[Task]
+
+		return reflect.ValueOf(entry)
+	})
+
+	carries(t, reflect.TypeFor[Agent](), func(doc reflect.Value) reflect.Value {
+		var entry Agent
+
+		mergeAgentDocument(&entry, doc.Interface().(Agent)) //nolint:forcetypeassert // doc is built from reflect.TypeFor[Agent]
+
+		return reflect.ValueOf(entry)
+	})
+}
+
+func TestMergeDocumentInlineWins(t *testing.T) {
+	t.Parallel()
+
+	one, two := 1, 2
+
+	task := Task{Image: "entry", Fix: &FixSpec{Agent: "entry"}, Outputs: []string{"entry"}}
+	mergeTaskDocument(&task, Task{Image: "doc", Fix: &FixSpec{Agent: "doc"}, Outputs: []string{"doc"}, Privileged: true})
+
+	if task.Image != "entry" || task.Fix.Agent != "entry" || !slices.Equal(task.Outputs, []string{"entry"}) {
+		t.Errorf("the document overrode the task entry's own fields: %+v", task)
+	}
+
+	if !task.Privileged {
+		t.Error("privileged: true in the shared document was loosened by an entry that never mentioned it")
+	}
+
+	agent := Agent{Description: "entry", MaxTurns: &one, Env: []string{"ENTRY"}}
+	mergeAgentDocument(&agent, Agent{Description: "doc", MaxTurns: &two, Env: []string{"DOC"}})
+
+	if agent.Description != "entry" || *agent.MaxTurns != 1 || !slices.Equal(agent.Env, []string{"ENTRY"}) {
+		t.Errorf("the document overrode the agent entry's own fields: %+v", agent)
+	}
+}
+
+// nonZeroValue sets only a struct's first exported field, which is enough to make it non-zero without recursing into self-referential types.
+func nonZeroValue(t *testing.T, typ reflect.Type) reflect.Value {
+	t.Helper()
+
+	value := reflect.New(typ).Elem()
+
+	switch typ.Kind() { //nolint:exhaustive // default fails, naming a kind a new field introduced
+	case reflect.String:
+		value.SetString("x")
+	case reflect.Int, reflect.Int64:
+		value.SetInt(1)
+	case reflect.Float64:
+		value.SetFloat(0.5)
+	case reflect.Bool:
+		value.SetBool(true)
+	case reflect.Pointer:
+		value.Set(reflect.New(typ.Elem()))
+		value.Elem().Set(nonZeroValue(t, typ.Elem()))
+	case reflect.Slice:
+		value.Set(reflect.Append(value, nonZeroValue(t, typ.Elem())))
+	case reflect.Struct:
+		setFirstExportedField(t, value)
+	default:
+		t.Fatalf("nonZeroValue: no value for %s — teach it this kind", typ)
+	}
+
+	return value
+}
+
+func setFirstExportedField(t *testing.T, value reflect.Value) {
+	t.Helper()
+
+	for i := range value.NumField() {
+		if field := value.Type().Field(i); field.IsExported() {
+			value.Field(i).Set(nonZeroValue(t, field.Type))
+
+			return
+		}
+	}
+
+	t.Fatalf("nonZeroValue: %s has no exported field", value.Type())
 }
 
 func TestLoadConfigStepPromptFileScalarInlines(t *testing.T) {
@@ -521,6 +691,38 @@ jobs:
 `,
 			sibling: map[string]string{"prompts/review.md": "file prompt\n"},
 			want:    `messages: and message_files: are mutually exclusive`,
+		},
+		{
+			name: "empty message_files entry rejected",
+			pipeline: `
+agents:
+- name: reviewer
+  source: { model: lmstudio/qwen }
+jobs:
+- name: build
+  plan:
+  - agent: reviewer
+    inputs: []
+    message_files: [prompts/review.md, ""]
+`,
+			sibling: map[string]string{"prompts/review.md": "file prompt\n"},
+			want:    `message_files: entry 2 is empty`,
+		},
+		{
+			name: "message_files mixing both forms rejected",
+			pipeline: `
+agents:
+- name: reviewer
+  source: { model: lmstudio/qwen }
+jobs:
+- name: build
+  plan:
+  - agent: reviewer
+    inputs: []
+    message_files: [prompts/review.md, { artifact: repo, path: review.md }]
+`,
+			sibling: map[string]string{"prompts/review.md": "file prompt\n"},
+			want:    `message_files: mixes file paths with {artifact, path} entries`,
 		},
 		{
 			name: "nested file: in an included task document rejected",
@@ -879,5 +1081,58 @@ max_context_bytes: 5000
 
 	if got, want := agent.MaxContextBytes, 5000; got == nil || *got != want {
 		t.Errorf("MaxContextBytes = %v, want %d (the document's ceiling was dropped)", got, want)
+	}
+}
+
+// TestLoadConfigAgentFileMergesEveryDocumentField: a field the merge forgets is silently dropped, not refused — the document decoded it fine.
+func TestLoadConfigAgentFileMergesEveryDocumentField(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+agents:
+- name: reviewer
+  file: agents/reviewer.yml
+jobs:
+- name: build
+  plan:
+  - agent: reviewer
+    inputs: []
+    messages:
+      - look at it
+`)
+	writeSibling(t, path, "agents/reviewer.yml", `
+source: { model: lmstudio/qwen }
+description: reviews code
+image: alpine
+temperature: 0.2
+top_p: 0.9
+max_tokens: 512
+reasoning_effort: low
+compact_after_tokens: 7000
+timeout: 20m
+attempts: 3
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	agent := cfg.Agents[0]
+
+	for field, ok := range map[string]bool{
+		"description":          agent.Description == "reviews code",
+		"image":                agent.Image == "alpine",
+		"temperature":          agent.Temperature != nil && *agent.Temperature == 0.2,
+		"top_p":                agent.TopP != nil && *agent.TopP == 0.9,
+		"max_tokens":           agent.MaxTokens == 512,
+		"reasoning_effort":     agent.ReasoningEffort == "low",
+		"compact_after_tokens": agent.CompactAfterTokens != nil && *agent.CompactAfterTokens == 7000,
+		"timeout":              agent.Timeout == "20m",
+		"attempts":             agent.Attempts != nil && *agent.Attempts == 3,
+	} {
+		if !ok {
+			t.Errorf("%s: was not taken from the document: %+v", field, agent)
+		}
 	}
 }

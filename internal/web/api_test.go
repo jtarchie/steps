@@ -198,6 +198,26 @@ func TestTheRegistryIsWhatARouteResolves(t *testing.T) {
 	}
 }
 
+// TestRemovingOnePipelineKeepsTheRest: destroying one pipeline must not take its neighbours off the overview, the switcher and `steps pipeline list`.
+func TestRemovingOnePipelineKeepsTheRest(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipelines(t, "app", "infra", "ops")
+
+	server.Remove("infra")
+
+	served := server.Served()
+
+	slugs := make([]string, 0, len(served))
+	for _, pipeline := range served {
+		slugs = append(slugs, pipeline.Slug)
+	}
+
+	if strings.Join(slugs, ",") != "app,ops" {
+		t.Errorf("served after removing infra = %v, want [app ops]", slugs)
+	}
+}
+
 // TestAServerWithNoManagerRefusesTheVerbs: a server built with nothing to apply a set with says so, rather than panicking on a nil call.
 func TestAServerWithNoManagerRefusesTheVerbs(t *testing.T) {
 	t.Parallel()

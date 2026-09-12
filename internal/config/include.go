@@ -244,11 +244,10 @@ func loadTaskDocument(resolver *includeResolver, context, path string) (Task, er
 	return doc, nil
 }
 
-// mergeTaskDocument fills t's unset fields from doc, the document t.File
-// loaded — the same "wins when set" idiom ResolveTask uses between a step and
-// its tasks: entry. t.Name is never touched: the entry, not the document,
-// names the task.
+// mergeTaskDocument is ResolveTask's "wins when set" idiom applied to t.File's document; split in two purely for the linter's complexity budget.
 func mergeTaskDocument(t *Task, doc Task) {
+	mergeTaskContainer(t, doc)
+
 	if t.Run == "" {
 		t.Run = doc.Run
 	}
@@ -271,6 +270,27 @@ func mergeTaskDocument(t *Task, doc Task) {
 
 	if t.Outputs == nil {
 		t.Outputs = doc.Outputs
+	}
+}
+
+func mergeTaskContainer(t *Task, doc Task) {
+	if t.Env == nil {
+		t.Env = doc.Env
+	}
+
+	if t.User == "" {
+		t.User = doc.User
+	}
+
+	if t.Network == "" {
+		t.Network = doc.Network
+	}
+
+	// OR, not set-wins: an inline false cannot be told from unset, and OR never loosens what the shared document asked for.
+	t.Privileged = t.Privileged || doc.Privileged
+
+	if t.Limits == nil {
+		t.Limits = doc.Limits
 	}
 }
 
@@ -314,16 +334,10 @@ func loadAgentDocument(resolver *includeResolver, context, path string) (Agent, 
 	return doc, nil
 }
 
-// mergeAgentDocument fills a's unset fields from doc, the document a.File
-// loaded. Source is treated as one unit (set as a whole from the document
-// only when the entry declares no source: at all) rather than merged
-// field-by-field, since a mix of an inline model: with a document's endpoint:
-// is more likely a mistake than an intended override. a.Name is never
-// touched: the entry, not the document, names the agent. Split into three
-// parts purely to stay under the linter's cyclomatic-complexity budget —
-// there is no grouping significance to the split.
+// mergeAgentDocument takes source: as one unit, since an inline model: over a document's endpoint: is likelier a mistake than an override; split in four purely for the complexity budget.
 func mergeAgentDocument(a *Agent, doc Agent) {
 	mergeAgentIdentity(a, doc)
+	mergeAgentContainer(a, doc)
 	mergeAgentDials(a, doc)
 	mergeAgentLimits(a, doc)
 }
@@ -347,6 +361,39 @@ func mergeAgentIdentity(a *Agent, doc Agent) {
 
 	if len(a.Tools) == 0 {
 		a.Tools = doc.Tools
+	}
+
+	if a.Settings == "" {
+		a.Settings = doc.Settings
+	}
+
+	if a.Fallback == nil {
+		a.Fallback = doc.Fallback
+	}
+
+	if a.Preflight == nil {
+		a.Preflight = doc.Preflight
+	}
+}
+
+func mergeAgentContainer(a *Agent, doc Agent) {
+	if a.Env == nil {
+		a.Env = doc.Env
+	}
+
+	if a.User == "" {
+		a.User = doc.User
+	}
+
+	if a.Network == "" {
+		a.Network = doc.Network
+	}
+
+	// OR, not set-wins: an inline false cannot be told from unset, and OR never loosens what the shared document asked for.
+	a.Privileged = a.Privileged || doc.Privileged
+
+	if a.Limits == nil {
+		a.Limits = doc.Limits
 	}
 }
 
@@ -391,6 +438,18 @@ func mergeAgentLimits(a *Agent, doc Agent) {
 
 	if a.Attempts == nil {
 		a.Attempts = doc.Attempts
+	}
+
+	if a.MaxQuestions == nil {
+		a.MaxQuestions = doc.MaxQuestions
+	}
+
+	if a.Budget == nil {
+		a.Budget = doc.Budget
+	}
+
+	if a.DelegateBudgetPercent == nil {
+		a.DelegateBudgetPercent = doc.DelegateBudgetPercent
 	}
 }
 

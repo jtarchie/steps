@@ -1326,9 +1326,12 @@ func validateAgentArtifactFlow(cfg *config.Config, jobName string, i int, step c
 		return err
 	}
 
-	// dir: names the artifact the step works in (its first path component),
-	// so it must be available too — this is what catches an agent pointed
-	// at a directory nothing fetched.
+	// Ahead of the dir: check: an output exists, empty, before the step runs, so dir: may name one nothing earlier produced (as Concourse's run.dir may).
+	for _, out := range step.Outputs {
+		available[out] = true
+	}
+
+	// dir: names the artifact the step works in, so an agent pointed at a directory nothing fetched fails here.
 	err = checkDirAvailable(jobName, i, "agent", step.Agent, step.Dir, available)
 	if err != nil {
 		return err
@@ -1338,7 +1341,7 @@ func validateAgentArtifactFlow(cfg *config.Config, jobName string, i int, step c
 	// inputs, dir: must also BE one of them (or a declared output) — an
 	// available-but-undeclared artifact would flow-validate here and then be
 	// absent from the materialized space at run time.
-	err = checkDirDeclared(jobName, i, step)
+	err = checkDirDeclared(jobName, i, "agent", step)
 	if err != nil {
 		return err
 	}
@@ -1346,10 +1349,6 @@ func validateAgentArtifactFlow(cfg *config.Config, jobName string, i int, step c
 	err = checkMessageFileArtifactsAvailable(jobName, i, step.Agent, step.MessageFiles, step.InputNames(), available)
 	if err != nil {
 		return err
-	}
-
-	for _, out := range step.Outputs {
-		available[out] = true
 	}
 
 	return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
@@ -1465,7 +1464,7 @@ func validateHookArtifactFlow(cfg *config.Config, jobName string, i int, hookNam
 		}
 	}
 
-	err := checkHookPromptFileArtifactAvailable(jobName, i, hookName, hook, inputs, view)
+	err := checkHookAgentArtifacts(jobName, i, hookName, hook, inputs, view)
 	if err != nil {
 		return err
 	}
@@ -1475,16 +1474,29 @@ func validateHookArtifactFlow(cfg *config.Config, jobName string, i int, hookNam
 	})
 }
 
-// checkHookPromptFileArtifactAvailable is validateHookArtifactFlow's sibling
-// of checkMessageFileArtifactsAvailable: an agent hook's run-time message_files:
-// {artifact, path} needs the same guard the top-level plan walk applies — the
-// artifact must be available to the hook and declared in its own inputs:,
-// since internal/agent reads it out of the hook step's own materialized
-// working directory. Split out of validateHookArtifactFlow purely to stay
-// under the linter's cyclomatic-complexity budget.
-func checkHookPromptFileArtifactAvailable(jobName string, i int, hookName string, hook config.Step, inputs []string, view map[string]bool) error {
+// checkHookAgentArtifacts holds an agent hook to a plan agent's dir: and message_files: rules against the hook's view; split out of validateHookArtifactFlow for the cyclomatic budget.
+func checkHookAgentArtifacts(jobName string, i int, hookName string, hook config.Step, inputs []string, view map[string]bool) error {
 	if hook.Agent == "" {
 		return nil
+	}
+
+	own := map[string]bool{}
+	maps.Copy(own, view)
+
+	for _, out := range hook.Outputs {
+		own[out] = true
+	}
+
+	kind := hookName + " hook agent"
+
+	err := checkDirAvailable(jobName, i, kind, hook.Agent, hook.Dir, own)
+	if err != nil {
+		return err
+	}
+
+	err = checkDirDeclared(jobName, i, kind, hook)
+	if err != nil {
+		return err
 	}
 
 	for _, ref := range hook.MessageFiles {
@@ -1542,7 +1554,7 @@ func checkAcrossFromFileAvailable(jobName string, i int, step config.Step, avail
 // path component) is one of the step's own declared inputs: or outputs: —
 // only declared artifacts are materialized into the step's directory, so an
 // undeclared dir: would be a missing directory at run time.
-func checkDirDeclared(jobName string, i int, step config.Step) error {
+func checkDirDeclared(jobName string, i int, kind string, step config.Step) error {
 	root := firstPathComponent(step.Dir)
 	if root == "" || root == "." {
 		return nil
@@ -1560,8 +1572,8 @@ func checkDirDeclared(jobName string, i int, step config.Step) error {
 		}
 	}
 
-	return fmt.Errorf("job %q step %d (agent %q): dir %q names artifact %q, which the step does not declare in inputs: or outputs: — only declared artifacts are materialized into its working directory",
-		jobName, i, step.Agent, step.Dir, root)
+	return fmt.Errorf("job %q step %d (%s %q): dir %q names artifact %q, which the step does not declare in inputs: or outputs: — only declared artifacts are materialized into its working directory",
+		jobName, i, kind, step.Agent, step.Dir, root)
 }
 
 // checkDirAvailable validates that an agent step's dir:, when set, names an

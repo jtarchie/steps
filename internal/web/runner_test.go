@@ -291,6 +291,34 @@ jobs:
 	assertOneSkippedRow(ctx, t, st)
 }
 
+// TestATrippedBreakerSaysSo: the pause itself is a row nobody is looking at, so the daemon's log is the only thing that tells anybody the job stopped. Serial: the logger is the process's.
+func TestATrippedBreakerSaysSo(t *testing.T) {
+	logs := captureLogs(t)
+
+	runner, target, _ := drainable(t, t.TempDir(), `
+jobs:
+  - name: build
+    max_consecutive_failures: 1
+    plan:
+      - task: fail
+        inputs: []
+        run: "exit 1"
+`)
+
+	runner.drainOne(t.Context(), target)
+
+	if !strings.Contains(logs.String(), "web.job_paused") {
+		t.Errorf("the breaker tripped without a word:\n%s", logs.String())
+	}
+
+	// An error logged for a store call that worked trains an operator to skim past the one that did not.
+	for _, key := range []string{"web.reset_stale", "web.sync_job_limits", "web.complete"} {
+		if strings.Contains(logs.String(), key) {
+			t.Errorf("a clean drain logged %s:\n%s", key, logs.String())
+		}
+	}
+}
+
 // assertOneSkippedRow is the second half of the breaker: a paused job is not
 // claimed and run, it is finalized as skipped so the queue does not fill with
 // work nobody intends to do.

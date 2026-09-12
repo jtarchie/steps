@@ -18,7 +18,7 @@ import (
 type Task struct {
 	Name string `yaml:"name"`
 	Run  string `yaml:"run"`
-	// File loads this task's run/fix/image/timeout/inputs/outputs from a YAML
+	// File loads every field of this task but name: from a YAML
 	// document at a path relative to the pipeline file's directory (see
 	// LoadConfig's resolveFileIncludes), so one task definition can be shared
 	// across pipelines. Any field also set inline on this entry overrides the

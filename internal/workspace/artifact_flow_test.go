@@ -92,8 +92,35 @@ func TestValidateArtifactFlowDir(t *testing.T) {
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
-		if err == nil || !strings.Contains(err.Error(), "dir") {
+		if err == nil || !strings.Contains(err.Error(), "which is not a resource fetched") {
 			t.Fatalf("err = %v, want a dir-not-available error", err)
+		}
+	})
+
+	// As in Concourse's run.dir: an output exists, empty, before the step runs.
+	t.Run("dir naming the step's own fresh output passes", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			{Agent: "r", Dir: "report", Outputs: []string{"report"}},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err != nil {
+			t.Fatalf("err = %v, want nil (report is created empty for the step)", err)
+		}
+	})
+
+	t.Run("dir naming neither an available artifact nor the step's own output errors", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			{Agent: "r", Dir: "report", Outputs: []string{"other"}},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil || !strings.Contains(err.Error(), `dir "report"`) {
+			t.Fatalf("err = %v, want the dir refused", err)
 		}
 	})
 }
@@ -236,6 +263,117 @@ func TestValidateArtifactFlowPromptFileArtifact(t *testing.T) {
 			t.Fatalf("err = %v, want nil (a load-time message_files: names no artifact)", err)
 		}
 	})
+}
+
+// An agent hook reads a run-time message_files: artifact out of its own materialized directory, so it gets the same two checks a plan step does.
+func TestValidateArtifactFlowHookMessageFiles(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{Agents: []config.Agent{{Name: "reviewer"}}}
+
+	hooked := func(hook config.Step) *config.Job {
+		return &config.Job{Name: "j", Plan: []config.Step{
+			{Get: "repo"},
+			{Task: "work", Run: "true", Hooks: config.Hooks{OnFailure: &hook}},
+		}}
+	}
+
+	prompt := func(artifact string) []*config.FileRef {
+		return []*config.FileRef{{Artifact: artifact, Path: "PROMPT.md"}}
+	}
+
+	t.Run("an available artifact declared in the hook's inputs passes", func(t *testing.T) {
+		t.Parallel()
+
+		err := ValidateArtifactFlow(cfg, hooked(config.Step{Agent: "reviewer", Inputs: config.Inputs("repo"), MessageFiles: prompt("repo")}))
+		if err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+	})
+
+	t.Run("an artifact the hook cannot see errors", func(t *testing.T) {
+		t.Parallel()
+
+		err := ValidateArtifactFlow(cfg, hooked(config.Step{Agent: "reviewer", Inputs: config.Inputs(), MessageFiles: prompt("missing")}))
+		if err == nil || !strings.Contains(err.Error(), "is not available to this hook") {
+			t.Fatalf("err = %v, want a message_files-not-available error", err)
+		}
+	})
+
+	t.Run("an available artifact missing from the hook's inputs errors", func(t *testing.T) {
+		t.Parallel()
+
+		err := ValidateArtifactFlow(cfg, hooked(config.Step{Agent: "reviewer", Inputs: config.Inputs(), MessageFiles: prompt("repo")}))
+		if err == nil || !strings.Contains(err.Error(), "must also be declared in this hook's inputs") {
+			t.Fatalf("err = %v, want a must-be-declared error", err)
+		}
+	})
+}
+
+func TestValidateArtifactFlowHookDir(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{Agents: []config.Agent{{Name: "r"}}}
+
+	cases := map[string]struct {
+		hook    config.Step
+		wantErr string
+	}{
+		"an available artifact declared in the hook's inputs passes": {
+			hook: config.Step{Agent: "r", Dir: "repo/cmd", Inputs: config.Inputs("repo")},
+		},
+		"the hook's own fresh output passes": {
+			hook: config.Step{Agent: "r", Dir: "notes", Outputs: []string{"notes"}},
+		},
+		"a dir nothing fetched errors": {
+			hook:    config.Step{Agent: "r", Dir: "nowhere"},
+			wantErr: `(on_failure hook agent "r"): dir "nowhere" names "nowhere", which is not a resource fetched`,
+		},
+		"an available but undeclared artifact errors": {
+			hook:    config.Step{Agent: "r", Dir: "repo"},
+			wantErr: "which the step does not declare",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			job := &config.Job{Name: "j", Plan: []config.Step{
+				{Get: "repo"},
+				{Task: "work", Run: "true", Hooks: config.Hooks{OnFailure: &tc.hook}},
+			}}
+
+			err := ValidateArtifactFlow(cfg, job)
+
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("err = %v, want nil", err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("err = %v, want one containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// The declared name is only what the task sees on disk; availability and publishing go by the MAPPED name.
+func TestValidateArtifactFlowTaskMappings(t *testing.T) {
+	t.Parallel()
+
+	job := &config.Job{Name: "j", Plan: []config.Step{
+		{Get: "repo"},
+		{
+			Task: "build", Run: "true",
+			Inputs: config.Inputs("src"), InputMapping: map[string]string{"src": "repo"},
+			Outputs: []string{"bin"}, OutputMapping: map[string]string{"bin": "release"},
+		},
+		{Task: "ship", Run: "true", Inputs: config.Inputs("release")},
+	}}
+
+	err := ValidateArtifactFlow(&config.Config{}, job)
+	if err != nil {
+		t.Fatalf("err = %v, want nil (src reads repo, bin publishes release)", err)
+	}
 }
 
 func TestFirstPathComponent(t *testing.T) {
@@ -394,8 +532,23 @@ func TestValidateArtifactFlowLoadVar(t *testing.T) {
 		}}
 
 		err := ValidateArtifactFlow(cfg, job)
-		if err == nil {
-			t.Fatal("want an error: nothing but declared artifacts is materialized at the root of a step's directory")
+		if err == nil || !strings.Contains(err.Error(), "is not inside a declared input") {
+			t.Fatalf("err = %v, want the not-inside-a-declared-input error: nothing but declared artifacts is materialized at the root of a step's directory", err)
+		}
+	})
+
+	t.Run("a file in an artifact other than the declared one is refused", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{Name: "j", Plan: []config.Step{
+			producer,
+			{Get: "repo"},
+			{LoadVar: "tag", VarFile: "meta/version.txt", Inputs: config.Inputs("repo")},
+		}}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil || !strings.Contains(err.Error(), `names artifact "meta"`) {
+			t.Fatalf("err = %v, want the error naming the undeclared artifact meta", err)
 		}
 	})
 

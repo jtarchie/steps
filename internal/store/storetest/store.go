@@ -5,6 +5,7 @@ package storetest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -146,6 +147,46 @@ func (s suite) TestStoreRecordNode(t *testing.T) {
 	err = st.RecordNode(ctx, node, "job", "succeeded", map[string]any{"ref": "v1"}, nil)
 	if err != nil {
 		t.Fatalf("RecordNode (upsert): %v", err)
+	}
+}
+
+// TestStoredErrorsAreCappedAtExactlyTheLimit: the cap is a bound, not a threshold to start trimming at, so a message of exactly the limit is kept whole.
+func (s suite) TestStoredErrorsAreCappedAtExactlyTheLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	fits := strings.Repeat("e", store.MaxStoredErrorBytes)
+	over := "head:" + strings.Repeat("e", store.MaxStoredErrorBytes)
+
+	for hash, text := range map[string]string{"fits": fits, "over": over} {
+		err := st.RecordNode(ctx, store.NodeRecord{
+			Hash: hash, Kind: "task", Resource: "step", Content: map[string]any{"hash": hash},
+		}, "job", "failed", nil, errors.New(text))
+		if err != nil {
+			t.Fatalf("RecordNode(%s): %v", hash, err)
+		}
+	}
+
+	rows, err := st.ListNodes(ctx, "job", 0)
+	if err != nil {
+		t.Fatalf("ListNodes: %v", err)
+	}
+
+	stored := map[string]string{}
+	for _, row := range rows {
+		stored[row.Hash] = row.Error
+	}
+
+	if stored["fits"] != fits {
+		t.Errorf("an error of exactly %d bytes came back altered, ending %q, want it whole",
+			len(fits), stored["fits"][max(0, len(stored["fits"])-20):])
+	}
+
+	if len(stored["over"]) > store.MaxStoredErrorBytes || !strings.HasPrefix(stored["over"], "head:") {
+		t.Errorf("an error over the cap was stored as %d bytes starting %.10q, want at most %d keeping its head",
+			len(stored["over"]), stored["over"], store.MaxStoredErrorBytes)
 	}
 }
 

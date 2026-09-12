@@ -3,6 +3,7 @@ package storetest
 // What a `steps pipeline` verb does to the database, as a caller of the contract sees it.
 
 import (
+	"context"
 	"slices"
 	"testing"
 
@@ -89,6 +90,23 @@ func (s suite) TestSettingARevisionNobodyRecordedIsRefused(t *testing.T) {
 
 	if found {
 		t.Error("a refused set left a current configuration behind")
+	}
+}
+
+// TestAnUnreadableCurrentRevisionIsAnError: "nothing set" and "could not look" are different answers, and a daemon restarting on the first quietly serves nothing for a pipeline somebody set.
+func (s suite) TestAnUnreadableCurrentRevisionIsAnError(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+
+	setRevision(t, st, "sha-one", 1, nil)
+
+	ctx, cancel := context.WithCancel(ctxFor(t))
+	cancel()
+
+	_, found, err := st.CurrentRevision(ctx)
+	if err == nil {
+		t.Fatalf("CurrentRevision on a read that could not happen = (found %v, nil), want an error", found)
 	}
 }
 

@@ -464,3 +464,43 @@ jobs:
 		t.Fatalf("run: %v — the captured artifact carries the agent's spill directory", err)
 	}
 }
+
+// As in Concourse's run.dir, a step's own output exists, empty, before the step runs, so an agent may work in one nothing earlier produced.
+func TestAgentDirMayNameItsOwnFreshOutput(t *testing.T) {
+	dir := t.TempDir()
+
+	fake := newFakeLLM(t,
+		callsTool("write_file", map[string]any{"path": "summary.txt", "content": "written in place"}),
+		says("Done."),
+	)
+
+	path := writePipeline(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: writer
+  source:
+    model: openai/test-model
+    endpoint: `+fake.URL+`
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [write_file]
+jobs:
+- name: work
+  plan:
+  - agent: writer
+    outputs: [report]
+    dir: report
+    messages:
+      - write the summary
+  - task: inspect
+    inputs: [report]
+    run: grep -qx 'written in place' report/summary.txt
+`)
+
+	err := cli.Run([]string{path})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}

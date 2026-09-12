@@ -78,6 +78,8 @@ func TestAbortRefusesARunThisDaemonIsNotExecuting(t *testing.T) {
 		}
 	}
 
+	assertAbortRefusalsSayWhy(t, server)
+
 	_, running := get(t, server, "/p/demo/runs/orphaned")
 	if !strings.Contains(running, `action="/p/demo/runs/orphaned/abort"`) {
 		t.Error("a running run's page offers no abort")
@@ -92,6 +94,21 @@ func TestAbortRefusesARunThisDaemonIsNotExecuting(t *testing.T) {
 	_, follow := get(t, server, "/p/demo/jobs/build/follow")
 	if !strings.Contains(follow, `action="/p/demo/jobs/build/queued/abort"`) {
 		t.Error("the page a trigger lands on offers no way to take it back")
+	}
+}
+
+// Both refusals are 409, so only the message tells the operator whether to go find the other process or stop trying.
+func assertAbortRefusalsSayWhy(t *testing.T, server *Server) {
+	t.Helper()
+
+	for id, want := range map[string]string{
+		"orphaned": "not running on this daemon",
+		"finished": "already passed",
+	} {
+		_, body := call(t, server, http.MethodPost, "/api/pipelines/demo/runs/"+id+"/abort", "")
+		if !strings.Contains(body, want) {
+			t.Errorf("aborting %s answered %s, want it to say %q", id, body, want)
+		}
 	}
 }
 

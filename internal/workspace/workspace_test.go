@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -647,6 +648,26 @@ func TestValidateArtifactFlowStepHooks(t *testing.T) {
 			t.Fatal("expected an error: a conditional hook's output must not satisfy a later plan step's input")
 		}
 	})
+
+	t.Run("a hook's own nested hook is checked against the same view", func(t *testing.T) {
+		t.Parallel()
+
+		job := &config.Job{
+			Name: "build",
+			Plan: []config.Step{{
+				Task: "build", Run: "true",
+				Hooks: config.Hooks{OnFailure: &config.Step{
+					Task: "notify", Run: "true",
+					Hooks: config.Hooks{Ensure: &config.Step{Task: "cleanup", Run: "true", Inputs: config.Inputs("missing")}},
+				}},
+			}},
+		}
+
+		err := ValidateArtifactFlow(cfg, job)
+		if err == nil || !strings.Contains(err.Error(), "on_failure.ensure hook") {
+			t.Fatalf("err = %v, want the nested hook's undeclared input reported", err)
+		}
+	})
 }
 
 func TestValidateArtifactFlowNoOpWithoutWorkspace(t *testing.T) {
@@ -827,6 +848,166 @@ func TestIsolatingProviderBuildDirsDoNotCollideAcrossInvocations(t *testing.T) {
 
 	if first == second {
 		t.Errorf("two invocations produced the same build directory %q", first)
+	}
+}
+
+// openOwnedBuild opens a provider on a root it owns (no workspace.root:) and one build under it.
+func openOwnedBuild(t *testing.T) (Provider, string, string, BuildWorkspace) {
+	t.Helper()
+
+	p, err := NewProvider(nil, false)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	isolating, ok := p.(*isolatingProvider)
+	if !ok {
+		t.Fatalf("NewProvider(nil) = %T, want *isolatingProvider", p)
+	}
+
+	t.Cleanup(func() { _ = os.RemoveAll(isolating.root) })
+
+	bw, err := p.NewBuild(ctxT(), "b1")
+	if err != nil {
+		t.Fatalf("NewBuild: %v", err)
+	}
+
+	build, ok := bw.(*isolatingBuild)
+	if !ok {
+		t.Fatalf("NewBuild = %T, want *isolatingBuild", bw)
+	}
+
+	return p, isolating.root, build.root, bw
+}
+
+// The pipeline skips CloseBuild on a failed build so --resume can continue in it; removing the owned root would erase that build.
+func TestIsolatingProviderCloseKeepsAnUnclosedBuild(t *testing.T) {
+	t.Parallel()
+
+	t.Run("every build closed removes the root", func(t *testing.T) {
+		t.Parallel()
+
+		p, root, buildRoot, bw := openOwnedBuild(t)
+
+		err := bw.Close()
+		if err != nil {
+			t.Fatalf("build Close: %v", err)
+		}
+
+		_, err = os.Stat(buildRoot)
+		if !os.IsNotExist(err) {
+			t.Errorf("build dir %q survived its Close: %v", buildRoot, err)
+		}
+
+		err = p.Close()
+		if err != nil {
+			t.Fatalf("provider Close: %v", err)
+		}
+
+		_, err = os.Stat(root)
+		if !os.IsNotExist(err) {
+			t.Errorf("owned root %q survived Close with every build closed: %v", root, err)
+		}
+	})
+
+	t.Run("a build left open keeps the root", func(t *testing.T) {
+		t.Parallel()
+
+		p, _, buildRoot, _ := openOwnedBuild(t)
+
+		err := p.Close()
+		if err != nil {
+			t.Fatalf("provider Close: %v", err)
+		}
+
+		_, err = os.Stat(buildRoot)
+		if err != nil {
+			t.Errorf("Close removed a build a resume would continue in: %v", err)
+		}
+	})
+}
+
+func TestArtifactDigestFollowsACapture(t *testing.T) {
+	t.Parallel()
+
+	p := newTestCopyProvider(t)
+
+	bw, err := p.NewBuild(ctxT(), "b1")
+	if err != nil {
+		t.Fatalf("NewBuild: %v", err)
+	}
+	defer CloseBuild(bw, "b1")
+
+	build, ok := bw.(*isolatingBuild)
+	if !ok {
+		t.Fatalf("NewBuild = %T, want *isolatingBuild", bw)
+	}
+
+	produce := func(content string) string {
+		t.Helper()
+
+		space, err := bw.TaskSpace(ctxT(), "produce", nil, []string{"built"}, nil, nil)
+		if err != nil {
+			t.Fatalf("TaskSpace: %v", err)
+		}
+		defer CloseSpace(space, "produce")
+
+		writeFile(t, filepath.Join(space.Dir(), "built", "out.txt"), content)
+
+		err = space.Capture(ctxT())
+		if err != nil {
+			t.Fatalf("Capture: %v", err)
+		}
+
+		digest, err := build.artifactDigest("built")
+		if err != nil {
+			t.Fatalf("artifactDigest: %v", err)
+		}
+
+		return digest
+	}
+
+	if first, second := produce("one"), produce("two"); first == second {
+		t.Errorf("digest %q survived a capture that replaced the artifact's bytes", first)
+	}
+}
+
+// A walk that started before the artifact was replaced describes bytes that are gone; no step cache key may be built from it.
+func TestRememberDigestDropsAWalkOverReplacedBytes(t *testing.T) {
+	t.Parallel()
+
+	b := &isolatingBuild{}
+
+	_, generation, _ := b.rememberedDigest("built")
+	b.forgetDigests([]string{"built"})
+	b.rememberDigest("built", "stale", generation)
+
+	if digest, _, ok := b.rememberedDigest("built"); ok {
+		t.Errorf("memoized %q from a walk the artifact was replaced under", digest)
+	}
+
+	_, generation, _ = b.rememberedDigest("built")
+	b.rememberDigest("built", "fresh", generation)
+
+	if digest, _, ok := b.rememberedDigest("built"); !ok || digest != "fresh" {
+		t.Errorf("rememberedDigest = %q, %v; want \"fresh\", true", digest, ok)
+	}
+}
+
+func TestCopyProviderRefusesATraversingOutputMapping(t *testing.T) {
+	t.Parallel()
+
+	p := newTestCopyProvider(t)
+
+	bw, err := p.NewBuild(ctxT(), "b1")
+	if err != nil {
+		t.Fatalf("NewBuild: %v", err)
+	}
+	defer CloseBuild(bw, "b1")
+
+	_, err = bw.TaskSpace(ctxT(), "escape", nil, []string{"out"}, nil, map[string]string{"out": "../escape"})
+	if err == nil || !strings.Contains(err.Error(), "mapped to") {
+		t.Fatalf("err = %v, want a mapped output outside the artifact store refused", err)
 	}
 }
 

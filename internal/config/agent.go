@@ -23,7 +23,7 @@ type Agent struct {
 	// sub-agent MUST have a description — either inline on the grant or on the
 	// agent itself — or pipeline load fails with a clear error.
 	Description string `yaml:"description,omitempty"`
-	// File loads this agent's source/image/system/dials/tools from a YAML
+	// File loads every field of this agent but name: from a YAML
 	// document at a path relative to the pipeline file's directory (see
 	// LoadConfig's resolveFileIncludes), so one agent definition can be
 	// shared across pipelines. Any field also set inline on this entry

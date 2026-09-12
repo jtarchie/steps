@@ -30,7 +30,7 @@ func TestValidPipelineNameRefusesWhatBreaksAURL(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"app", "infra-2", "my.pipeline", "A_b", "0"} {
+	for _, name := range []string{"app", "infra-2", "my.pipeline", "A_b", "0", strings.Repeat("a", maxPipelineNameLength)} {
 		err := ValidPipelineName(name)
 		if err != nil {
 			t.Errorf("%q was refused: %v", name, err)

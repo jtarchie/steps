@@ -500,6 +500,11 @@ func TestUnknownPipelineAndRun404(t *testing.T) {
 		if !strings.Contains(body, "<html") {
 			t.Errorf("GET %s did not render an HTML error page", target)
 		}
+
+		// The plain-text message is the fallback for a page that failed to draw, not a postscript to one that drew.
+		if !strings.HasSuffix(strings.TrimSpace(body), "</html>") {
+			t.Errorf("GET %s wrote something after the page: %q", target, body[max(0, len(body)-80):])
+		}
 	}
 }
 
@@ -557,6 +562,116 @@ func TestSearchFindsJobsAndRuns(t *testing.T) {
 	_, filtered := get(t, server, "/p/demo/search?q=zzzznotathing")
 	if strings.Contains(filtered, `"name":"deploy"`) {
 		t.Error("search returned a non-matching job")
+	}
+}
+
+// TestSearchStopsAtTheCap: past a screenful the answer is a better query, not a longer list.
+func TestSearchStopsAtTheCap(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+
+	for i := range searchHitLimit + 5 {
+		err := pipeline.Store.StartRun(t.Context(), fmt.Sprintf("run-%02d", i), "build", t.TempDir(), "")
+		if err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+	}
+
+	_, body := get(t, server, "/p/demo/search?q=")
+
+	var hits []map[string]any
+
+	err := json.Unmarshal([]byte(body), &hits)
+	if err != nil {
+		t.Fatalf("search answered %s: %v", body, err)
+	}
+
+	if len(hits) != searchHitLimit {
+		t.Errorf("search returned %d hits, want the cap of %d", len(hits), searchHitLimit)
+	}
+}
+
+// enqueueRecorder is stubRunner remembering what each trigger asked for.
+type enqueueRecorder struct {
+	stubRunner
+
+	reasons []string
+	forced  []bool
+}
+
+func (r *enqueueRecorder) Enqueue(_ context.Context, _ *Pipeline, _, reason string, force bool) (int64, error) {
+	r.reasons = append(r.reasons, reason)
+	r.forced = append(r.forced, force)
+
+	return 1, nil
+}
+
+// TestTriggerForcesOnlyWhenAsked: a forced build ignores the cache, so a plain click that forced would re-bill every agent for work that did not change.
+func TestTriggerForcesOnlyWhenAsked(t *testing.T) {
+	t.Parallel()
+
+	_, pipeline := testPipeline(t)
+	runner := &enqueueRecorder{}
+
+	server, err := New([]*Pipeline{pipeline}, runner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	post(t, server, "/p/demo/jobs/build/trigger", nil)
+	post(t, server, "/p/demo/jobs/build/trigger", map[string]string{"force": "1"})
+
+	if fmt.Sprint(runner.forced) != "[false true]" {
+		t.Errorf("forced = %v, want [false true]", runner.forced)
+	}
+
+	if strings.Join(runner.reasons, "|") != "manual (web)|manual re-run, forced (web)" {
+		t.Errorf("reasons = %q", runner.reasons)
+	}
+}
+
+// TestRunPageSaysWhenTheConfigurationChanged: a red run whose steps did not move still has a cause, and when the pipeline itself was edited since the last green, that edit is it.
+func TestRunPageSaysWhenTheConfigurationChanged(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	before, after := strings.Repeat("1", 40), strings.Repeat("2", 40)
+
+	for _, sha := range []string{before, after} {
+		err := pipeline.Store.RecordRevision(ctx, sha, "jobs: []", nil)
+		if err != nil {
+			t.Fatalf("RecordRevision: %v", err)
+		}
+	}
+
+	for _, run := range []struct{ id, sha, status string }{
+		{"green", before, "succeeded"},
+		{"red", after, "failed"},
+		{"green-again", after, "succeeded"},
+		{"red-again", after, "failed"},
+	} {
+		err := pipeline.Store.StartRun(ctx, run.id, "build", "", run.sha)
+		if err != nil {
+			t.Fatalf("StartRun %s: %v", run.id, err)
+		}
+
+		err = pipeline.Store.FinishRun(ctx, run.id, run.status)
+		if err != nil {
+			t.Fatalf("FinishRun %s: %v", run.id, err)
+		}
+	}
+
+	_, edited := get(t, server, "/p/demo/runs/red")
+	if !strings.Contains(edited, "/p/demo/config/"+before) {
+		t.Errorf("a run after an edit does not name the configuration the last green ran:\n%s", edited)
+	}
+
+	_, unedited := get(t, server, "/p/demo/runs/red-again")
+	if strings.Contains(unedited, "configuration changed") {
+		t.Error("a run under the same configuration as the last green claims an edit")
 	}
 }
 

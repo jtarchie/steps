@@ -91,6 +91,36 @@ func TestRootListsEveryServedPipeline(t *testing.T) {
 	}
 }
 
+// TestPipelinesAreListedByName: set order is an accident of who typed first, and every list of pipelines — the overview, the switcher, `steps pipeline list` — reads the same way whatever it was.
+func TestPipelinesAreListedByName(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := testPipelines(t, "infra", "app")
+
+	_, page := get(t, server, "/")
+
+	for what, pair := range map[string][2]string{
+		"overview": {`<td><a href="/p/app">app</a>`, `<td><a href="/p/infra">infra</a>`},
+		"switcher": {`href="/p/app">app <span class="hint">`, `href="/p/infra">infra <span class="hint">`},
+	} {
+		first, second := strings.Index(page, pair[0]), strings.Index(page, pair[1])
+		if first < 0 || second < 0 || first > second {
+			t.Errorf("the %s does not list app before infra", what)
+		}
+	}
+
+	_, api := get(t, server, "/api/pipelines")
+
+	first, second := strings.Index(api, `"name":"app"`), strings.Index(api, `"name":"infra"`)
+	if first < 0 || second < 0 || first > second {
+		t.Errorf("the API does not list app before infra: %s", api)
+	}
+
+	if !strings.Contains(api, `"from":"`+pipelines[0].Path()+`"`) || pipelines[0].Path() == "" {
+		t.Errorf("the API does not say where infra was set from: %s", api)
+	}
+}
+
 // TestRootFeedSpansPipelines is the view #85 exists for: one feed, newest
 // first, every row saying which pipeline it belongs to. A row that cannot
 // name its pipeline is a row nobody can follow.
@@ -1316,6 +1346,24 @@ jobs:
         messages: ["go"]
         timeout: "0"
 `)
+}
+
+// TestJobPageCallsAZeroTimeoutUncapped: `timeout: "0"` is the documented way to lift the deadline, and printed as-is it reads as the tightest one possible.
+func TestJobPageCallsAZeroTimeoutUncapped(t *testing.T) {
+	t.Parallel()
+
+	server, _ := timeoutPipeline(t)
+
+	_, body := get(t, server, "/p/demo/jobs/review")
+
+	if got := strings.Count(body, `<td class="dim"><span class="faint">uncapped</span></td>`); got != 1 {
+		t.Errorf("%d deadlines read uncapped, want only the step that set timeout: \"0\":\n%s", got, body)
+	}
+
+	// The unset one is the 30m default, and calling that uncapped is the same misreading in the other direction.
+	if got := strings.Count(body, `<td class="dim"><span class="faint">default</span></td>`); got != 1 {
+		t.Errorf("%d deadlines read default, want the one step that set none:\n%s", got, body)
+	}
 }
 
 // timeoutPipelineSHA loads timeoutPipeline and fails the test outright if it
