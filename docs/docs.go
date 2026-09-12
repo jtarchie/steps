@@ -291,7 +291,7 @@ func Blocks() ([]Block, error) {
 func extract(page, body string) ([]Block, error) {
 	var (
 		blocks  []Block
-		current *Block
+		current Block
 		isYAML  bool
 		inside  bool
 		lines   []string
@@ -306,13 +306,13 @@ func extract(page, body string) ([]Block, error) {
 			info := strings.TrimSpace(strings.TrimPrefix(line, "```"))
 			lang, rest, _ := strings.Cut(info, " ")
 			isYAML = lang == "yaml"
-			current = &Block{Page: page, Line: i + 1, Info: strings.TrimSpace(rest)}
+			current = Block{Page: page, Line: i + 1, Info: strings.TrimSpace(rest)}
 
 			lines = lines[:0]
 		case fence:
 			if isYAML {
 				current.Body = strings.Join(lines, "\n") + "\n"
-				blocks = append(blocks, *current)
+				blocks = append(blocks, current)
 			}
 
 			inside = false

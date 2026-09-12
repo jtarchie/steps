@@ -137,13 +137,8 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (c
 		conv.toolChoiceStringOnly = next.StringOnlyToolChoice
 		conv.compactAfterTokens = next.CompactAfterTokens
 
-		// invocationLLM returns nil only for a CLI source (see its own doc
-		// comment) — never reachable here, since nextHostedFallback already
-		// filtered out any candidate whose .CLI is set. (nilaway flags this
-		// call anyway: its interprocedural analysis doesn't correlate
-		// nextHostedFallback's filter with invocationLLM's nil branch — a
-		// known false-positive shape, triaged, not a live nil risk.)
-		ri, llm, index, swapped = next, invocationLLM(next, apiKey), nextIndex, true
+		// nextHostedFallback never yields a CLI source, so the hosted constructor is the whole of invocationLLM here.
+		ri, llm, index, swapped = next, newAgentLLM(next, apiKey), nextIndex, true
 	}
 }
 
