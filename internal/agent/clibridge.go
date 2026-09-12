@@ -61,7 +61,6 @@ const cliBridgeShutdownTimeout = 5 * time.Second
 // grant produced, plus what it observed the child do with them.
 type cliBridge struct {
 	server    *http.Server
-	listener  net.Listener
 	url       string
 	closeOnce sync.Once
 	// token authenticates the child. Loopback is not a permission boundary:
@@ -167,7 +166,6 @@ func newCLIBridge(ctx context.Context, conv agentConversation, prior []recordedT
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	bridge.listener = listener
 	bridge.url = "http://" + listener.Addr().String()
 	bridge.server = httpServer
 
@@ -357,9 +355,8 @@ func (b *cliBridge) Close(ctx context.Context) error {
 
 		err = b.server.Shutdown(shutdownCtx)
 		if err != nil {
-			// Shutdown gives in-flight requests until the deadline; past it,
-			// take the port back regardless.
-			_ = b.listener.Close()
+			// Shutdown already closed the listener and never drops a connection that has not sent a request yet; Close does.
+			_ = b.server.Close()
 
 			err = fmt.Errorf("cli bridge: shutdown: %w", err)
 		}

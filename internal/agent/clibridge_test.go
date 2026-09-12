@@ -3,12 +3,15 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/genai"
@@ -434,5 +437,48 @@ func TestCLIBridgeAlwaysLoopback(t *testing.T) {
 
 	if !strings.HasPrefix(bridge.url, "http://127.0.0.1:") {
 		t.Errorf("url = %q, want loopback for a host-run cli", bridge.url)
+	}
+}
+
+// TestCLIBridgeCloseDropsAConnectionThatNeverSentARequest: Shutdown waits on such a connection past its deadline, so Close must drop it itself.
+func TestCLIBridgeCloseDropsAConnectionThatNeverSentARequest(t *testing.T) {
+	t.Parallel()
+
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(nil, nil, nil), nil)
+	if err != nil {
+		t.Fatalf("newCLIBridge: %v", err)
+	}
+
+	dial := func() net.Conn {
+		var dialer net.Dialer
+
+		conn, err := dialer.DialContext(t.Context(), "tcp", strings.TrimPrefix(bridge.url, "http://"))
+		if err != nil {
+			t.Fatalf("dialing the bridge: %v", err)
+		}
+
+		t.Cleanup(func() { _ = conn.Close() })
+
+		return conn
+	}
+
+	silent := dial()
+
+	// Accept is FIFO, so a later connection being served proves the silent one was accepted rather than dropped from the backlog by Close.
+	served := dial()
+	_, _ = served.Write([]byte("GET / HTTP/1.1\r\nHost: bridge\r\n\r\n"))
+
+	_, err = served.Read(make([]byte, 1))
+	if err != nil {
+		t.Fatalf("the bridge never answered: %v", err)
+	}
+
+	_ = bridge.Close(t.Context())
+
+	_ = silent.SetReadDeadline(time.Now().Add(time.Second))
+
+	_, err = silent.Read(make([]byte, 1))
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Error("the connection outlived Close — a client holding it open keeps a bridge goroutine alive")
 	}
 }
