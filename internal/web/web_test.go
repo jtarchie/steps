@@ -870,6 +870,129 @@ func TestFollowRedirectAndPolling(t *testing.T) {
 	}
 }
 
+// A job held behind its serial group has no run to forward to; the follow page must read its own queue row as queued, not as nothing happening, and not borrow a neighbour's row.
+func TestFollowSaysAJobHeldByItsSerialGroupIsQueued(t *testing.T) {
+	t.Parallel()
+
+	server, st := serialGroupServer(t)
+
+	if _, got, _ := enqueueAndClaim(t, st, "deploy-staging"); got != "deploy-staging" {
+		t.Fatalf("claimed %q, want deploy-staging to take the lock", got)
+	}
+
+	id, got, _ := enqueueAndClaim(t, st, "lint")
+	if got != "lint" {
+		t.Fatalf("claimed %q, want lint, which shares no group", got)
+	}
+
+	err := st.CompleteJob(t.Context(), id, "succeeded", nil)
+	if err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+
+	if _, got, ok := enqueueAndClaim(t, st, "deploy-prod"); ok {
+		t.Fatalf("claimed %q while deploy-staging holds deploy-lock: nothing here is held, so this test proves nothing", got)
+	}
+
+	since := time.Now().UTC().Add(-time.Minute).UnixMilli()
+
+	for job, want := range map[string]string{
+		"deploy-prod":    "pending",
+		"deploy-staging": "running",
+		"lint":           "waiting",
+	} {
+		answer, body := latestRun(t, server, fmt.Sprintf("/p/demo/jobs/%s/latest-run?since=%d", job, since))
+		if answer.Run != nil || answer.State != want {
+			t.Errorf("%s: latest-run = %s, want no run and state %q", job, body, want)
+		}
+	}
+}
+
+// serialGroupServer serves two jobs sharing one serial group and a third in none, with the group already synced to the queue.
+func serialGroupServer(t *testing.T) (*Server, store.Store) {
+	t.Helper()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "demo.yml")
+
+	writeFile(t, path, `
+jobs:
+  - name: deploy-staging
+    serial_groups: [deploy-lock]
+    plan:
+      - task: ship
+        run: "true"
+  - name: deploy-prod
+    serial_groups: [deploy-lock]
+    plan:
+      - task: ship
+        run: "true"
+  - name: lint
+    plan:
+      - task: vet
+        run: "true"
+`)
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	t.Cleanup(func() { _ = st.Close() })
+
+	pipeline := NewPipeline("demo", path, cfg, st, events.New(nil))
+	SyncQueueLimits(t.Context(), pipeline)
+
+	server, err := New([]*Pipeline{pipeline}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	return server, st
+}
+
+// enqueueAndClaim queues job and makes the claim the drain would, returning whatever the queue admitted.
+func enqueueAndClaim(t *testing.T, st store.Store, job string) (int64, string, bool) {
+	t.Helper()
+
+	err := st.EnqueueJob(t.Context(), job, "test")
+	if err != nil {
+		t.Fatalf("EnqueueJob %s: %v", job, err)
+	}
+
+	id, claimed, ok, err := st.ClaimNextJob(t.Context())
+	if err != nil {
+		t.Fatalf("ClaimNextJob: %v", err)
+	}
+
+	return id, claimed, ok
+}
+
+type latestRunAnswer struct {
+	Run   *string `json:"run"`
+	State string  `json:"state"`
+}
+
+func latestRun(t *testing.T, server *Server, target string) (latestRunAnswer, string) {
+	t.Helper()
+
+	_, body := get(t, server, target)
+
+	var answer latestRunAnswer
+
+	err := json.Unmarshal([]byte(body), &answer)
+	if err != nil {
+		t.Fatalf("decode %q: %v", body, err)
+	}
+
+	return answer, body
+}
+
 // TestRelativeTimesAreMachineReadable pins the contract the ticker depends
 // on: rendered times carry the absolute instant, so a page left open can keep
 // them honest instead of freezing at render time.

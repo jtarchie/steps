@@ -319,6 +319,60 @@ jobs:
 	}
 }
 
+// A pass must clear the count: counted as a failure, or merely left standing, fail-pass-fail trips a limit of two. Forced, or the pass is a chain-skip hit for the last run.
+func TestAPassingRunLeavesTheBreakerAlone(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	pass := filepath.Join(dir, "pass")
+
+	runner, target, st := drainable(t, dir, `
+jobs:
+  - name: build
+    max_consecutive_failures: 2
+    plan:
+      - task: flip
+        inputs: []
+        run: test -f `+pass+`
+`)
+	ctx := t.Context()
+
+	runner.drainOne(ctx, target)
+
+	writeFile(t, pass, "")
+
+	for _, passing := range []bool{true, false} {
+		if !passing {
+			err := os.Remove(pass)
+			if err != nil {
+				t.Fatalf("remove: %v", err)
+			}
+		}
+
+		_, err := runner.Enqueue(ctx, target, "build", "test", true)
+		if err != nil {
+			t.Fatalf("Enqueue: %v", err)
+		}
+
+		if !runner.drainOne(ctx, target) {
+			t.Fatal("nothing was claimed from a queue with a pending row")
+		}
+	}
+
+	if got := queueStatuses(t, st); got != "failed succeeded failed" {
+		t.Fatalf("queue = %q, want failed succeeded failed", got)
+	}
+
+	paused, err := st.PausedJobs(ctx)
+	if err != nil {
+		t.Fatalf("PausedJobs: %v", err)
+	}
+
+	if len(paused) != 0 {
+		t.Errorf("paused jobs = %+v: a passing run between two failures still counted toward max_consecutive_failures: 2", paused)
+	}
+}
+
 // assertOneSkippedRow is the second half of the breaker: a paused job is not
 // claimed and run, it is finalized as skipped so the queue does not fill with
 // work nobody intends to do.
