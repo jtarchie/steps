@@ -128,6 +128,10 @@ func TestARefusedRenameLeavesThePipelineWhereItWas(t *testing.T) {
 		t.Fatalf("a rename whose new name this machine cannot serve = %v, want refused", err)
 	}
 
+	if strings.Contains(err.Error(), "nor could") {
+		t.Errorf("a rename whose undo succeeded says the undo failed: %v", err)
+	}
+
 	if held.server.Lookup("renamed") != nil {
 		t.Error("a refused rename serves the new name")
 	}
@@ -464,4 +468,152 @@ func freePages(t *testing.T, state string) int {
 	}
 
 	return free
+}
+
+// The API's answer is the only place a script learns its set was a no-op, and check derives it rather than the store.
+func TestASetSaysWhetherItChangedAnything(t *testing.T) {
+	t.Parallel()
+
+	held := servingDaemon(t)
+
+	for _, step := range []struct {
+		source             string
+		created, unchanged bool
+	}{
+		{idlePipeline, true, false},
+		{idlePipeline, false, true},
+		{strings.Replace(idlePipeline, `"true"`, `"echo edited"`, 1), false, false},
+	} {
+		result, err := held.Set(t.Context(), "app", web.SetRequest{Source: step.source})
+		if err != nil {
+			t.Fatalf("set: %v", err)
+		}
+
+		if result.Created != step.created || result.Unchanged != step.unchanged {
+			t.Errorf("set = created %t unchanged %t, want created %t unchanged %t",
+				result.Created, result.Unchanged, step.created, step.unchanged)
+		}
+	}
+}
+
+// Only the first provider opened on a root sweeps it, so a root wrongly counted as swept keeps a crashed process's builds — under btrfs, subvolumes nothing else reclaims.
+func TestTheFirstSetOnARootSweepsWhatACrashLeftThere(t *testing.T) {
+	t.Parallel()
+
+	held := servingDaemon(t)
+	root := t.TempDir()
+	stale := filepath.Join(root, "b-crashed")
+
+	err := os.Mkdir(stale, 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	setPipeline(t, held, "app", onRoot(root, "", "true"))
+
+	_, err = os.Stat(stale)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the first set on a root left a crashed build behind: %v", err)
+	}
+}
+
+// A set carries none of the process's flags, so accept is where they meet a pipeline — and each is routinely given without the other.
+func TestAHistoryFlagGivenAloneReachesASetPipeline(t *testing.T) {
+	t.Parallel()
+
+	held := servingDaemon(t)
+
+	for _, flags := range []HistoryFlags{{VersionHistory: 3}, {RunHistory: 4}} {
+		held.history = flags
+
+		cfg, err := held.accept("app", idlePipeline, nil)
+		if err != nil {
+			t.Fatalf("accept: %v", err)
+		}
+
+		var got HistoryFlags
+
+		if cfg.Defaults != nil && cfg.Defaults.VersionHistory != nil {
+			got.VersionHistory = *cfg.Defaults.VersionHistory
+		}
+
+		if cfg.Defaults != nil && cfg.Defaults.RunHistory != nil {
+			got.RunHistory = *cfg.Defaults.RunHistory
+		}
+
+		if got != flags {
+			t.Errorf("flags %+v reached the set pipeline as %+v", flags, got)
+		}
+	}
+}
+
+// fileProblems is the half of validate that needs no machine; a set skipping it serves an expression that can never compile, or a step reading an input nothing makes.
+func TestASetIsRefusedForWhatValidateWouldRefuse(t *testing.T) {
+	t.Parallel()
+
+	held := servingDaemon(t)
+
+	for want, source := range map[string]string{
+		"expr.check": "resource_types:\n- name: api\n  config:\n    expr:\n      check: 'source.items | map('\n" +
+			"resources:\n- name: thing\n  type: api\n  source: {}\njobs:\n- name: build\n  plan:\n  - get: thing\n",
+		`input "ghost"`: "jobs:\n- name: build\n  plan:\n  - task: work\n    inputs: [ghost]\n    run: \"true\"\n",
+	} {
+		_, err := held.Set(t.Context(), "app", web.SetRequest{Source: source})
+		if !errors.Is(err, web.ErrRefused) || !strings.Contains(err.Error(), want) {
+			t.Errorf("a set naming %s = %v, want it refused", want, err)
+		}
+	}
+
+	if held.server.Lookup("app") != nil {
+		t.Error("a refused set is served")
+	}
+}
+
+// Not t.Parallel(), as captureStdout swaps os.Stdout: the read commands open .steps/steps.db unless told otherwise, so a daemon on any other file must name it in a parked step's printed answer command.
+func TestAParkedStepUnderTheDaemonNamesItsDatabase(t *testing.T) {
+	held := servingDaemon(t)
+
+	out := captureStdout(t, func() {
+		setPipeline(t, held, "app", "jobs:\n- name: build\n  plan:\n  - approval:\n      message: ship it?\n")
+		enqueue(t, held, "app")
+
+		st := served(t, held, "app").Store
+		deadline := time.Now().Add(30 * time.Second)
+
+		var pending []store.Approval
+
+		for len(pending) == 0 && time.Now().Before(deadline) {
+			var err error
+
+			pending, err = st.Approvals(t.Context(), true, 0)
+			if err != nil {
+				t.Fatalf("Approvals: %v", err)
+			}
+
+			time.Sleep(20 * time.Millisecond)
+		}
+
+		if len(pending) == 0 {
+			t.Fatal("the approval never parked")
+		}
+
+		err := st.DecideApproval(t.Context(), pending[0].ID, "rejected", "test", "")
+		if err != nil {
+			t.Fatalf("DecideApproval: %v", err)
+		}
+
+		finishedRun(t, held, "app")
+
+		// Destroy waits out the loops but retires the provider in the background, and its Close prints too: the runner's Close waits for that, so nothing still reads os.Stdout when captureStdout puts it back.
+		err = held.Destroy(t.Context(), "app")
+		if err != nil {
+			t.Fatalf("destroy: %v", err)
+		}
+
+		held.runner.Close()
+	})
+
+	if !strings.Contains(out, "--db "+held.state) {
+		t.Errorf("the printed answer command does not name the daemon's database %s:\n%s", held.state, out)
+	}
 }

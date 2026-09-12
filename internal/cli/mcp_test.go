@@ -182,6 +182,10 @@ func TestMCPListProbesEveryServer(t *testing.T) {
 			t.Errorf("mcp list output is missing %q:\n%s", want, out)
 		}
 	}
+
+	if strings.Contains(out, "✓ 1 tools") {
+		t.Errorf("mcp list counts one tool as plural:\n%s", out)
+	}
 }
 
 // A relative cwd: is resolved per agent step, against a build workspace that
@@ -350,6 +354,20 @@ func TestMCPListCellRendering(t *testing.T) {
 	}
 }
 
+// The STATUS cell is tabwriter-aligned, so an elided reason that misses the budget by a rune misaligns every row after it.
+func TestAnElidedReasonFillsItsColumnExactly(t *testing.T) {
+	t.Parallel()
+
+	long := elideMiddle(strings.Repeat("y", 3*maxStatusWidth), maxStatusWidth)
+	if got := len([]rune(long)); got != maxStatusWidth {
+		t.Errorf("an elided reason is %d runes, want the column's %d", got, maxStatusWidth)
+	}
+
+	if fits := strings.Repeat("x", maxStatusWidth); elideMiddle(fits, maxStatusWidth) != fits {
+		t.Error("a reason exactly the column's width lost its middle")
+	}
+}
+
 func TestMCPLoginRejectsNonOAuthServer(t *testing.T) {
 	t.Parallel()
 
@@ -357,7 +375,53 @@ func TestMCPLoginRejectsNonOAuthServer(t *testing.T) {
 	path := mcpCLIPipeline(t, ts.URL) // auth: omitted -> "none", not oauth
 
 	err := Run([]string{"mcp", "login", path, "test"})
-	if err == nil {
-		t.Fatal("Run(mcp login): expected an error for a non-oauth server")
+	if err == nil || !strings.Contains(err.Error(), "nothing to log in to") {
+		t.Fatalf("Run(mcp login) on a non-oauth server = %v, want it refused as having nothing to log in to", err)
+	}
+}
+
+// Not t.Parallel(): captureStdout swaps os.Stdout, and the SIGINT reaches every signal.Notify in the process.
+func TestMCPListInterruptedIsNotAListingOfBrokenServers(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+
+	hang := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(hang.Close)
+	// The SDK's requests outlive the probe's context, so their connections stay open and Close would wait on them forever.
+	t.Cleanup(func() { close(release) })
+
+	path := mcpCLIPipeline(t, hang.URL)
+
+	go func() {
+		select {
+		case <-started:
+		case <-t.Context().Done():
+			return
+		}
+
+		self, err := os.FindProcess(os.Getpid())
+		if err == nil {
+			_ = self.Signal(os.Interrupt)
+		}
+	}()
+
+	var err error
+
+	captureStdout(t, func() {
+		err = Run([]string{"mcp", "list", path})
+	})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("mcp list interrupted mid-probe = %v, want context.Canceled so it exits 130 rather than 0", err)
 	}
 }

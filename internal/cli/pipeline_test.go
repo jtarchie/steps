@@ -73,6 +73,33 @@ func TestOnlyASetConflictSaysToReRead(t *testing.T) {
 	}
 }
 
+// The refusal is decided on the daemon and read at the terminal, so the test that matters crosses the wire: an unbound body, or echo's envelope printed raw, reaches a person as noise instead of what to fix.
+func TestARefusalTravelsBackToTheTerminalThatAsked(t *testing.T) {
+	t.Parallel()
+
+	held := servingDaemon(t)
+	held.server.SetManager(held)
+
+	daemon := httptest.NewServer(held.server.Handler())
+	t.Cleanup(daemon.Close)
+
+	client := newDaemonClient(daemon.URL)
+
+	result, err := client.set("app", web.SetRequest{Source: idlePipeline})
+	if err != nil || !result.Created {
+		t.Fatalf("an acceptable set = %+v, %v; want it created", result, err)
+	}
+
+	_, err = client.set("broken", web.SetRequest{Source: "jobs: [ {name: "})
+	if err == nil {
+		t.Fatal("a set that does not parse was accepted")
+	}
+
+	if msg := err.Error(); !strings.Contains(msg, web.ErrRefused.Error()) || strings.Contains(msg, `"message"`) {
+		t.Errorf("the terminal was told %q; want the daemon's refusal, unwrapped", msg)
+	}
+}
+
 // A daemon that took the request and has not answered is still working on it — a rename waiting out a cancelled build's ensure hooks, say — and "start one" sends somebody to start a second daemon beside it.
 func TestASlowDaemonIsNotCalledUnreachable(t *testing.T) {
 	t.Parallel()

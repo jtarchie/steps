@@ -2,16 +2,11 @@ package cli
 
 import (
 	"log/slog"
+	"os"
 	"testing"
 )
 
-// TestParseLogLevel covers the level-to-slog.Level mapping InitLogging uses,
-// including the fallback for an unrecognized value (reachable only before
-// kong's own enum: validation on CLI.LogLevel runs). Deliberately does not
-// touch slog.Default(): every Run() call elsewhere in this package's test
-// suite also installs a new global default logger, so asserting on shared
-// global state here would race against whichever other test's Run() call
-// happens to finish last.
+// Leaves slog.Default() alone: every Run() elsewhere in this package installs a new global logger, so asserting on it races whichever Run() finished last.
 func TestParseLogLevel(t *testing.T) {
 	t.Parallel()
 
@@ -28,5 +23,46 @@ func TestParseLogLevel(t *testing.T) {
 		if got := parseLogLevel(level); got != want {
 			t.Errorf("parseLogLevel(%q) = %v, want %v", level, got, want)
 		}
+	}
+}
+
+// Not t.Parallel(): it swaps os.Stderr and sets NO_COLOR. /dev/null stands in for a terminal because both are character devices, which is all wantNoColor asks.
+func TestColorIsForATerminalThatDidNotOptOut(t *testing.T) {
+	tty, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	piped, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	orig := os.Stderr
+
+	t.Cleanup(func() {
+		os.Stderr = orig
+		_ = tty.Close()
+		_ = piped.Close()
+	})
+
+	t.Setenv("NO_COLOR", "")
+
+	os.Stderr = tty
+	if wantNoColor() {
+		t.Error("a terminal with NO_COLOR unset got no color")
+	}
+
+	t.Setenv("NO_COLOR", "1")
+
+	if !wantNoColor() {
+		t.Error("NO_COLOR=1 on a terminal still got color")
+	}
+
+	t.Setenv("NO_COLOR", "")
+
+	os.Stderr = piped
+	if !wantNoColor() {
+		t.Error("stderr redirected to a file got color")
 	}
 }

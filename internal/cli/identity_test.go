@@ -191,3 +191,23 @@ func TestPipelineNameAgreesWithTheConfigsOwn(t *testing.T) {
 		}
 	}
 }
+
+// --name is typed with whatever spelling the operator used, usually relative, so both sides are made absolute or a relative override silently falls back to the filename.
+func TestANameOverrideMatchesARelativePath(t *testing.T) {
+	t.Parallel()
+
+	abs, err := filepath.Abs("ci/app.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct{ pipeline, override string }{
+		{"ci/app.yml", "ci/app.yml"},
+		{"ci/app.yml", abs},
+		{abs, "./ci/app.yml"},
+	} {
+		if got := resolvePipelineName(tc.pipeline, map[string]string{"infra": tc.override}); got != "infra" {
+			t.Errorf("--name infra=%s for %s named it %q", tc.override, tc.pipeline, got)
+		}
+	}
+}

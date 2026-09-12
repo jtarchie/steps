@@ -28,11 +28,15 @@ func captureStdout(t *testing.T, fn func()) string {
 	orig := os.Stdout
 	os.Stdout = w
 
-	fn()
+	// Deferred because a t.Fatal inside fn exits through runtime.Goexit, which would leave every later test writing into this pipe.
+	func() {
+		defer func() {
+			_ = w.Close()
+			os.Stdout = orig
+		}()
 
-	_ = w.Close()
-
-	os.Stdout = orig
+		fn()
+	}()
 
 	data, err := io.ReadAll(r)
 	if err != nil {
