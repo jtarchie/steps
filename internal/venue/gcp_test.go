@@ -49,6 +49,7 @@ type fakeGCE struct {
 	attributesDisabled bool
 	insertErr          error
 	startErr           error
+	lastStatus         string
 }
 
 func (f *fakeGCE) InsertFromTemplate(_ context.Context, _, _, name, template string) error {
@@ -67,6 +68,10 @@ func (f *fakeGCE) InsertFromTemplate(_ context.Context, _, _, name, template str
 func (f *fakeGCE) Start(_ context.Context, _, _, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	if f.lastStatus == "STOPPING" {
+		return errors.New("scripted: the start lost a fingerprint race with the unfinished stop")
+	}
 
 	f.starts = append(f.starts, name)
 
@@ -107,6 +112,8 @@ func (f *fakeGCE) Status(_ context.Context, _, _, _ string) (string, error) {
 	if next == "notfound" {
 		return "", fmt.Errorf("%w: scripted", errGCENotFound)
 	}
+
+	f.lastStatus = next
 
 	return next, nil
 }
@@ -683,6 +690,36 @@ func TestGCPParkedRungStartsAndStops(t *testing.T) {
 	if len(fake.starts) != 1 || len(fake.stops) != 1 {
 		t.Errorf("starts = %v, stops = %v — want one of each", fake.starts, fake.stops)
 	}
+}
+
+// A replica still answering TERMINATED after Start succeeded is lag; read as terminal it fails the acquire and parks the machine.
+func TestGCPParkedRungWaitsOutTheTerminatedStateAfterStarting(t *testing.T) {
+	fake := &fakeGCE{statuses: []string{"TERMINATED", "TERMINATED", "RUNNING"}}
+	seamGCP(t, fake, nil)
+
+	worker, err := ParseWorker("gcp://stopped/worker-1?project=test-project&zone=us-central1-a")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	resolved, release, err := acquire(context.Background(), worker)
+	if err != nil {
+		t.Fatalf("acquire through a lagging TERMINATED: %v", err)
+	}
+
+	if resolved.Instance != "worker-1" {
+		t.Errorf("resolved = %+v, want the parked instance", resolved)
+	}
+
+	fake.mu.Lock()
+	stops := len(fake.stops)
+	fake.mu.Unlock()
+
+	if stops != 0 {
+		t.Errorf("%d stops, want the machine it just started left running", stops)
+	}
+
+	_ = release(context.Background())
 }
 
 // TestGCPParkedFailedAcquisitionStopsTheInstance pins the parked rung's

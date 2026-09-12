@@ -63,6 +63,10 @@ func (f *fakeEC2) StartInstances(_ context.Context, in *ec2.StartInstancesInput,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if f.probes <= f.stoppingBefore {
+		return nil, &smithy.GenericAPIError{Code: "IncorrectInstanceState", Message: "The instance is not in a state from which it can be started"}
+	}
+
 	f.started = append(f.started, in.InstanceIds...)
 	f.describes = 0
 
@@ -742,6 +746,10 @@ func TestLeaseWaitsOutTheStoppedStateAfterStarting(t *testing.T) {
 
 	if len(fake.stopped) != 0 {
 		t.Errorf("stopped = %v, want the machine it just started left running", fake.stopped)
+	}
+
+	if fake.describes <= fake.stoppedBefore {
+		t.Errorf("%d describes after the start — the acquisition returned a machine never seen running", fake.describes)
 	}
 }
 

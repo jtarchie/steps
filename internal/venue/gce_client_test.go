@@ -108,6 +108,32 @@ func TestAwaitZoneOperationReadsABareHTTPFailure(t *testing.T) {
 	}
 }
 
+// An error envelope with no entries must fall through to the status check rather than index an empty list.
+func TestZoneOperationOutcomeBoundaries(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		op     compute.Operation
+		failed bool
+	}{
+		"bare 400":                     {compute.Operation{HttpErrorStatusCode: http.StatusBadRequest}, true},
+		"bare 399":                     {compute.Operation{HttpErrorStatusCode: 399}, false},
+		"empty error envelope":         {compute.Operation{Error: &compute.OperationError{}}, false},
+		"empty error envelope and 400": {compute.Operation{Error: &compute.OperationError{}, HttpErrorStatusCode: http.StatusBadRequest}, true},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			err := zoneOperationOutcome(&tc.op)
+			if (err != nil) != tc.failed {
+				t.Errorf("zoneOperationOutcome = %v, want failed=%v", err, tc.failed)
+			}
+		})
+	}
+}
+
 // TestAwaitZoneOperationPacesAnEagerServer pins the pause between waits: the
 // SDK documents Wait as best-effort — under load it "might return after zero
 // seconds" — and a loop with no pause turns that into hammering an already

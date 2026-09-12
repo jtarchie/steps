@@ -242,8 +242,12 @@ func TestGCPParkedRungLeavesAMachineItDidNotStartRunning(t *testing.T) {
 
 	leases := NewLeases(boxWorker(t, "gcp://stopped/worker-1?project=test-project&zone=us-central1-a"))
 
-	mustResolve(t, leases)
+	resolved := mustResolve(t, leases)
 	mustRelease(t, leases)
+
+	if resolved.Instance != "worker-1" || resolved.Rung != RungStatic {
+		t.Errorf("resolved = %+v, want worker-1 as a static worker", resolved)
+	}
 
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
