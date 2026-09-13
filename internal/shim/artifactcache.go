@@ -338,15 +338,7 @@ func copyFile(root *os.Root, src, rel string, info os.FileInfo) error {
 
 // tombstonePrefix names an entry the sweep has taken out of service.
 //
-// Eviction renames before it deletes, and that ordering is the whole of what
-// makes a cache HIT trustworthy. os.RemoveAll is not atomic: interrupted —
-// SIGKILLed by an OOM or a spot reclamation, or simply holding a child it
-// cannot unlink — it leaves part of the tree behind UNDER THE DIGEST. Both
-// readers ask only whether that name exists, and the offer they answer tells
-// the orchestrator to send nothing, so a half-entry is served as whole to
-// every later step asking for that digest, and the re-fetch that would repair
-// it is exactly what the false hit prevents. A content-addressed cache never
-// re-reads what it holds, so it never heals.
+// Eviction renames before it deletes: an interrupted os.RemoveAll (an OOM, a spot reclamation, a child it cannot unlink) leaves part of the tree UNDER THE DIGEST, which placeIfHeld's re-digest catches only by paying a refetch.
 //
 // A rename either happened or it did not. After one, the only name a reader
 // can see is a complete entry, and the mess is under a name only the sweep
@@ -441,6 +433,13 @@ func placeIfHeld(held, name, workdir string) (bool, error) {
 		return false, nil //nolint:nilerr // not holding it is the ordinary answer, not a failure
 	}
 
+	// Evicted, not just skipped: commitArtifact keeps whatever already holds the name, so a damaged entry left in place would discard every refetch and cost one per step forever.
+	if !holdsDigest(held, name) {
+		_ = evictArtifact(held)
+
+		return false, nil
+	}
+
 	err = placeHeldArtifact(held, name, workdir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
@@ -451,6 +450,18 @@ func placeIfHeld(held, name, workdir string) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// holdsDigest re-packs a cache entry and compares it to the digest it is named by, because a temp cleaner deletes files and leaves the directories (steps#119); the codec records only names, modes, sizes and link targets, so an intact entry packs to the stream it arrived as.
+func holdsDigest(held, name string) bool {
+	hasher := sha256.New()
+
+	err := wire.PackPaths(hasher, held, []string{name})
+	if err != nil {
+		return false
+	}
+
+	return hex.EncodeToString(hasher.Sum(nil)) == filepath.Base(held)
 }
 
 // placeHeldArtifact copies one artifact tree into a work directory, and marks
@@ -488,9 +499,7 @@ var errDigestMismatch = errors.New("an artifact does not match the digest it was
 // it, commit arbitrary content under a legitimate digest, and have a later
 // step take that content as an input it never has to transfer — executing it
 // as root while `steps runs where` reports 0 B, as though nothing was
-// needed. The attacker-free half is duller and likelier: a transfer that
-// completed but is wrong poisons this worker permanently, because eviction is
-// by size and nothing ever re-reads what the cache holds.
+// needed. The attacker-free half is duller and likelier: a transfer that completed but is wrong is placed straight from staging into the step it arrived for.
 //
 // Hashed over the UNCOMPRESSED tar stream, which is where the orchestrator
 // takes it (packArtifactToFile tees the hasher off PackPaths, inside the

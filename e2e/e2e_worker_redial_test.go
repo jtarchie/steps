@@ -5,6 +5,8 @@ package e2e
 // pipe the last attempt left behind.
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,11 +23,19 @@ func TestEndToEndWorkerRedialsAfterTheShimDies(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker")
 
+	// kill -9 leaves the shim no chance to remove its scratch, so the test does, by a step name no other test uses since every e2e test shares this pid.
+	t.Cleanup(func() {
+		left, _ := filepath.Glob(filepath.Join(os.TempDir(), "steps-shim", fmt.Sprintf("*-shim-dies-%d-*", os.Getpid())))
+		for _, scratch := range left {
+			_ = os.RemoveAll(scratch)
+		}
+	})
+
 	path := writePipeline(t, dir, `
 jobs:
 - name: build
   plan:
-  - task: flaky
+  - task: shim-dies
     tags: [gpu]
     attempts: 2
     outputs: [out]

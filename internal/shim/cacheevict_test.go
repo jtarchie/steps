@@ -34,18 +34,7 @@ func writeCacheTree(t *testing.T, cache, digest string, files map[string]string)
 	return entry
 }
 
-// TestEvictionNeverLeavesAPartialEntryUnderItsDigest is the poisoning this
-// closes, and it is worth being precise about why it poisons rather than
-// merely losing data.
-//
-// A cache entry is named by the digest of its content, and both readers ask
-// only whether that name EXISTS: placeIfHeld stats it and copies, and the
-// offer it answers tells the orchestrator to send nothing. So an entry that
-// exists but is incomplete is served as whole, to every later step that asks
-// for that digest, and the re-fetch that would repair it is exactly what the
-// false hit prevents. Nothing re-reads a content-addressed cache, so it never
-// heals.
-//
+// TestEvictionNeverLeavesAPartialEntryUnderItsDigest: a half-entry under its digest is caught by placeIfHeld's re-digest only by paying a refetch (steps#119), and renaming first means it never exists at all.
 // RemoveAll is not atomic. Interrupted — a shim SIGKILLed by an OOM or a spot
 // reclamation, or simply a child it cannot unlink — it leaves some of the
 // tree behind under the real name. Renaming the entry out of the way FIRST

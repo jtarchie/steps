@@ -95,8 +95,16 @@ func serveCrashingShim() {
 func TestVenueRedialsAfterTheWorkerDies(t *testing.T) {
 	t.Parallel()
 
-	cwd := t.TempDir()
+	// A name no other test uses: scratchOf globs on it, and every parallel test here shares this pid.
+	cwd := filepath.Join(t.TempDir(), "redial-after-kill")
 	mustMkdir(t, filepath.Join(cwd, "out"))
+
+	// kill -9 leaves the shim no chance to remove its scratch; registered before the runner so it runs after the runner's Close.
+	t.Cleanup(func() {
+		for _, dir := range scratchOf(t, cwd) {
+			_ = os.RemoveAll(dir)
+		}
+	})
 
 	runner := newLocalRunner(t, localWorker(t, cwd, "out"))
 
