@@ -42,6 +42,8 @@ for md in docs/*.md; do
 
   title=$(perl -0777 -ne 'print $1 if m{<h1[^>]*>(.*?)</h1>}s' "$state/main.html" | perl -pe 's/<[^>]+>//g')
   : "${title:=${page%.md}}"
+  # Link previews read <meta name="description">; the page's opening paragraph is the summary every doc already leads with.
+  desc=$(perl -CSDA -0777 -ne 'if (m{<article class="docs">.*?<p>(.*?)</p>}s) { $_ = $1; s/<[^>]+>//g; s/\s+/ /g; s/^ | $//g; s/^(.{0,150})\s.*$/$1\x{2026}/s if length > 160; print }' "$state/main.html")
 
   # Absolute /docs/ links first so the relative rule below cannot double-rewrite them; ../ climbs out of docs/ (schema, examples/) and goes to GitHub. Then chroma's per-token inline styles become classes: a quarter of every page was the same eight attributes repeated.
   perl -pe '
@@ -71,6 +73,7 @@ for md in docs/*.md; do
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>$title · steps docs</title>
+<meta name="description" content="$desc">
 <link rel="stylesheet" href="steps.css">
 <style>.hl{color:#d8d5c9;background-color:#171a16}.c{color:#83887b;font-style:italic}.k{color:#7aa4d9}.p{color:#83887b}.s{color:#84c06d}.n{color:#d9a94a}.w{color:#b98fcc}.f{color:#6fbcb4}.d{color:#e0645a}.b{font-weight:bold}.i{font-style:italic}</style>
 </head>
