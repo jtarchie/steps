@@ -60,7 +60,7 @@ jobs:
 
 Run it twice. The second run fetches nothing and compiles nothing: the commit, the command and the declared inputs hash the same, so every step is replayed from cache.
 
-![Terminal: the first run fetches and compiles; the identical second run prints skip for both steps](docs/images/run-twice.png)
+![Terminal: the first run fetches the repo and compiles; the identical second run prints one skip line, because the whole chain replays from cache](docs/images/run-twice.png)
 
 **3 · An agent, gated by things a model cannot talk its way past.**
 
@@ -92,7 +92,7 @@ jobs:
     assert:
       files: [report/summary.md]    # ...and it must have actually written it
   - task: escalate
-    run: echo paging a human
+    run: echo "the reviewer rejected this change" >&2 && exit 1   # fails the build, so publish never runs
   - task: publish
     inputs: [report]
     run: cat report/summary.md

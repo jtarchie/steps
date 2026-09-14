@@ -8,7 +8,7 @@
 #   steps run examples/release.yml --job snapshot
 #   git tag v0.1.0 && git push origin v0.1.0
 #   steps run examples/release.yml --job release   # parks at the approval
-#   steps approvals -p release --db .steps/release.yml.db    # ...approve <id>
+#   steps approvals -p release --db examples/.steps/release.yml.db   # ...approve <id>
 #   steps web && steps pipeline set -c examples/release.yml  # polls for the next tag
 #
 # Needs: git, task, goreleaser, jq, go, docker (daemon up), gh logged in with

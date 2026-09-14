@@ -9,6 +9,9 @@
 # Needs: git, gh (logged in, `repo` scope), claude on PATH. Label an issue
 # `self-build` to queue it; the branch `issue-<n>` already existing on the
 # remote refuses a rerun before the model spends anything.
+#
+# The label is the trust boundary. The issue body reaches two agents that hold
+# run_shell and your gh token, so anyone who can label an issue can instruct them.
 
 # A durable root is the only switch the step output cache has: with one, a task
 # or agent step is keyed on its own content plus a digest of its inputs, and a
