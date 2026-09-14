@@ -1,0 +1,163 @@
+# yaml-language-server: $schema=../steps.schema.json
+#
+# Release the steps CLI (.goreleaser.yml in the steps repo).
+#
+#   snapshot   main: gate, goreleaser snapshot, run the binary. Publishes nothing.
+#   release    new v* tag: gate, approval, goreleaser release, check the published archive.
+#
+#   steps run examples/release.yml --job snapshot
+#   git tag v0.1.0 && git push origin v0.1.0
+#   steps run examples/release.yml --job release   # parks at the approval
+#   steps approvals -p release --db .steps/release.yml.db    # ...approve <id>
+#   steps web && steps pipeline set -c examples/release.yml  # polls for the next tag
+#
+# Needs: git, task, goreleaser, jq, go, docker (daemon up), gh logged in with
+# `repo` scope. GITHUB_TOKEN comes from `gh auth token`.
+#
+# The tag is the trigger: pushing it is the decision, and this pipeline never
+# writes to the source repo. Built from github.com, not the local clone,
+# because a release must come from what is pushed. The gate is `task` (the
+# repo has no CI); --skip=before stops goreleaser's own `go test` running twice.
+
+resource_types:
+# The built-in git type fetches --no-tags. goreleaser needs the tag checked
+# out and a clean tree.
+- name: git-tag
+  config:
+    # Oldest first. The ref is in the version so a moved tag re-runs — and
+    # goreleaser then refuses the existing release.
+    check: |
+      set -e
+      refs=$(git ls-remote --tags --refs {{ .source.uri | shellquote }} 'refs/tags/v*')
+      if [ -z "$refs" ]; then
+        echo '[]'
+        exit 0
+      fi
+      printf '%s\n' "$refs" \
+        | awk -F'[\t/]' '{ print $NF "\t" $1 }' \
+        | sort -V \
+        | jq -Rn '[inputs | split("\t") | {tag: .[0], ref: .[1]}]'
+    in: |
+      set -e
+      git clone -q {{ .source.uri | shellquote }} .
+      git checkout -q {{ .version.tag | shellquote }}
+      if [ "$(git rev-parse refs/tags/{{ .version.tag | shellquote }})" != {{ .version.ref | shellquote }} ]; then
+        echo "tag {{ .version.tag }} moved since it was checked" >&2
+        exit 1
+      fi
+
+# A put, not a task: a succeeded task is cached and skipped, a publish must not be.
+- name: github-release
+  config:
+    out: |
+      set -e
+      cd repo
+      tag=$(git describe --tags --exact-match)
+      GITHUB_TOKEN=$(gh auth token) goreleaser release --clean --skip=before 1>&2
+      printf '{"tag":"%s"}\n' "$tag"
+
+resources:
+- name: main
+  type: git
+  source:
+    uri: https://github.com/jtarchie/steps.git
+    branch: main
+- name: tag
+  type: git-tag
+  source:
+    uri: https://github.com/jtarchie/steps.git
+- name: release
+  type: github-release
+  source: {}
+
+tasks:
+- name: gate
+  inputs: [repo]
+  env: [DOCKER_HOST, DOCKER_CONTEXT]   # not in the step's baseline env
+  timeout: 25m
+  run: |
+    set -e
+    export PATH="$HOME/go/bin:$PATH"   # govulncheck, nilaway
+    # The docker-backed tests skip silently without a daemon. Refuse instead.
+    if ! docker info >/dev/null 2>&1; then
+      echo "no docker daemon reachable" >&2
+      exit 1
+    fi
+    cd repo
+    task
+
+jobs:
+- name: snapshot
+  timeout: 45m
+  plan:
+  - get: repo
+    resource: main
+  - task: gate
+  - task: build
+    inputs: [repo]
+    outputs: [dist]
+    timeout: 15m
+    run: |
+      set -e
+      cd repo
+      goreleaser release --snapshot --clean --skip=before
+      mv dist/* ../dist/
+  - task: verify
+    inputs: [dist]
+    run: |
+      set -e
+      version=$(jq -r .version dist/metadata.json)
+      archives=$(jq '[.[] | select(.type == "Archive")] | length' dist/artifacts.json)
+      [ "$archives" -eq 4 ] || { echo "expected 4 archives, got $archives" >&2; exit 1; }
+      test -s dist/checksums.txt || { echo "no checksums.txt" >&2; exit 1; }
+      bin=$(jq -r --arg os "$(go env GOOS)" --arg arch "$(go env GOARCH)" \
+        '.[] | select(.type == "Binary" and .goos == $os and .goarch == $arch) | .path' dist/artifacts.json)
+      test -n "$bin" || { echo "no binary for this machine" >&2; exit 1; }
+      got=$("$bin" --version)
+      [ "$got" = "$version" ] || { echo "binary reports '$got', built '$version'" >&2; exit 1; }
+      echo "version stamped: $version"
+    assert:
+      stdout: "version stamped:"
+  assert:
+    outcome: succeeded
+
+- name: release
+  serial: true
+  timeout: 1h
+  plan:
+  - get: repo
+    resource: tag
+    trigger: true
+    version: every
+  - task: gate
+  # Separate artifact: a file in the checkout would dirty the tree for goreleaser.
+  - task: name
+    inputs: [repo]
+    outputs: [meta]
+    run: git -C repo describe --tags --exact-match > meta/tag
+  - load_var: tag
+    inputs: [meta]
+    file: meta/tag
+  - approval:
+      message: "Publish ((tag)) of steps to github.com/jtarchie/steps (release + homebrew cask on main)?"
+      timeout: 24h
+  - put: release
+    inputs: [repo]
+  # Checks what GitHub serves, not the local dist. 4 archives + checksums.txt.
+  - task: verify
+    inputs: [repo]
+    run: |
+      set -e
+      tag=$(git -C repo describe --tags --exact-match)
+      assets=$(gh release view "$tag" --repo jtarchie/steps --json assets --jq '.assets | length')
+      [ "$assets" -eq 5 ] || { echo "release $tag has $assets assets, expected 5" >&2; exit 1; }
+      archive="steps_${tag#v}_$(go env GOOS)_$(go env GOARCH).tar.gz"
+      gh release download "$tag" --repo jtarchie/steps --pattern "$archive" --dir .
+      tar xzf "$archive"
+      got=$(./steps --version)
+      [ "$got" = "${tag#v}" ] || { echo "published binary reports '$got', tag is $tag" >&2; exit 1; }
+      echo "released $tag"
+    assert:
+      stdout: "released v"
+  assert:
+    outcome: succeeded
