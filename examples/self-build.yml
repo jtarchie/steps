@@ -1,0 +1,364 @@
+# yaml-language-server: $schema=../steps.schema.json
+#
+# One draft PR per labeled open issue in a repo you own.
+#
+#   steps validate examples/self-build.yml --var repo=owner/name
+#   steps run      examples/self-build.yml --job implement --var repo=owner/name
+#   steps web && steps pipeline set -c examples/self-build.yml -v repo=owner/name   # picks up newly labeled issues
+#
+# Needs: git, gh (logged in, `repo` scope), claude on PATH. Label an issue
+# `self-build` to queue it; the branch `issue-<n>` already existing on the
+# remote refuses a rerun before the model spends anything.
+
+# A durable root is the only switch the step output cache has: with one, a task
+# or agent step is keyed on its own content plus a digest of its inputs, and a
+# hit restores its outputs instead of re-running it. That is what makes a rerun
+# after a failed late step cost nothing — the phases before it are already
+# bought, and an agent rerun is lossy anyway (a second conversation does not
+# reproduce the tree the first one wrote). `cache.resources` keeps the fetched
+# clone across builds too; both `in:` here are pure fetches, which is the
+# assertion enabling it makes.
+#
+# Nothing is marked `volatile:`. `prep` is the one candidate — it reads the
+# remote — but it also writes a reflog, and a reflog carries a timestamp: rerun
+# it and the `repo` digest changes, so every agent step behind it misses. A
+# cached `prep` skips the remote check only when every input is unchanged, i.e.
+# on a rerun of a build already started, which is exactly when reaching the
+# `put` is the point.
+workspace:
+  root: .steps/workspace
+  cache:
+    resources: true
+
+resource_types:
+- name: github-issues
+  config:
+    # Version = repo + number; edits to the issue must not re-run it. The repo
+    # is in it because history is keyed by pipeline name, and one file run
+    # under two --var repo values is one pipeline: #12 of one repo would
+    # otherwise count as already built for the other.
+    check: |
+      set -e
+      gh issue list --repo {{ .source.repo | shellquote }} --state open \
+        --label {{ .source.label | shellquote }} --limit 100 --json number \
+        | jq --arg repo {{ .source.repo | shellquote }} \
+          'sort_by(.number) | [.[] | {repo: $repo, number: (.number|tostring)}]'
+    in: |
+      set -e
+      gh issue view --repo {{ .source.repo | shellquote }} {{ .version.number | shellquote }} \
+        --json number,title,body,url > issue.json
+      jq -r .number issue.json > number
+      jq -r .title issue.json > title
+      jq -r '"# \(.title) (#\(.number))\n\n\(.url)\n\n\(.body // "(no description)")\n"' issue.json > issue.md
+
+# A put: publishing must never be a cached skip.
+- name: github-pr
+  config:
+    # GIT_CONFIG_GLOBAL=/dev/null, and the remote spelled out rather than
+    # `origin`, because a url.<x>.insteadOf in the operator's own ~/.gitconfig
+    # silently rewrites this https URL to ssh -- which is how a green run ended
+    # at `exit status 128` with every agent already paid for. The pipeline asks
+    # for https and gh's token precisely so it does not depend on whoever ran
+    # it having an ssh agent unlocked; honouring a rewrite would hand that
+    # dependency straight back.
+    out: |
+      set -e
+      number=$(cat issue/number)
+      title=$(cat issue/title)
+      base=$(gh repo view {{ .source.repo | shellquote }} --json defaultBranchRef -q .defaultBranchRef.name)
+      cd repo
+      GIT_CONFIG_GLOBAL=/dev/null git push -q \
+        "https://github.com/{{ .source.repo }}.git" "HEAD:refs/heads/issue-$number"
+      { cat steps-work/pr-body.md; printf '\nCloses #%s\n' "$number"; } > steps-work/pr-final.md
+      url=$(gh pr create --repo {{ .source.repo | shellquote }} --draft --base "$base" \
+        --head "issue-$number" --title "$title" --body-file steps-work/pr-final.md)
+      echo "$url" >&2
+      printf '{"pr":"%s"}\n' "${url##*/}"
+
+resources:
+- name: issue
+  type: github-issues
+  source:
+    repo: ((repo))
+    label: self-build
+- name: repo
+  type: git
+  source:
+    uri: https://github.com/((repo)).git    # default branch
+- name: pr
+  type: github-pr
+  source:
+    repo: ((repo))
+
+# Three roles, not one five-message session. A CLI agent resumes the same
+# session for every message in a step, so one step meant plan, execute, review
+# and PR body all sharing a transcript that only grew: 5.8M tokens, $105, and a
+# SIGKILLed child that left nothing to resume from. Split, each phase starts
+# clean, carries only the file the phase before it wrote, and is separately
+# timed, cached and replayable (`--replay <run> --from implement`).
+#
+# The reviewer routes back to the implementer on `revise`, so the implementer
+# runs more than once -- but each run is still a FRESH session, and that is the
+# design rather than a limitation. What a second pass needs is not the first
+# pass's transcript; it is the first pass's OUTPUT, which is on disk (`git
+# diff`), plus the reason it was not enough, which arrives as the reviewer's
+# note. Resuming the transcript instead would rebuild exactly the single
+# ever-growing conversation the split above exists to avoid, and pay for it
+# three times.
+#
+# No `budget:` on any of them. A `@claude/` agent authenticates from the CLI's
+# own credential store — a subscription, not a metered key — so the dollar
+# figure `steps runs cost` reports is an API-equivalent price nobody is billed.
+# A `usd:` ceiling over it would stop real work partway to enforce a number
+# that was never spent. `timeout:` is the ceiling that means something here.
+#
+# `attempts: 2` on each: a CLI retry rejoins the named session and is told to
+# continue, so it costs the failing invocation over again and not the task. It
+# fires only on infrastructure — a child that failed to start, exited nonzero,
+# or died without reporting — which is precisely what killed the last run.
+agents:
+- name: planner
+  source:
+    model: "@claude/opus"       # nothing downstream recovers a plan that read the issue wrong
+  reasoning_effort: high
+  settings: project
+  # No edit_file, no run_shell: this phase writes a plan, not code. The grant is
+  # what makes that a guarantee rather than a request in the prompt. write_file
+  # stays because plan.md has to come from somewhere, and that hole is not worth
+  # a gate: a planner that overwrote a tracked file lands in the same diff the
+  # reviewer reads anyway.
+  tools: [read_file, list_dir, search_files, write_file]
+  # Unbounded, like the other two. The default cap of 30 is a per-STEP budget,
+  # and this step holds a two-message conversation over a repository it has to
+  # read before it can plan anything -- 30 turns is not a planner that ran away,
+  # it is a planner that read the code. The ceiling that means something here is
+  # timeout:, which bounds the wall clock rather than the thinking.
+  max_turns: 0
+  timeout: 45m
+  attempts: 2
+  system: |
+    You plan the implementation of one GitHub issue in a checkout of the
+    repository, then stop. The issue is in steps-work/issue.md. Read the
+    repository's own conventions and the code the issue touches. Where the
+    issue underspecifies something, state the assumption you will build on
+    rather than asking about it. You do not write code.
+
+- name: implementer
+  source:
+    model: "@claude/sonnet"     # the volume step; every claim is re-derived by the reviewer
+  settings: project
+  tools: [read_file, list_dir, search_files, edit_file, write_file, run_shell]
+  max_turns: 0
+  timeout: 2h
+  attempts: 2
+  system: |
+    You implement an approved plan in a checkout of the repository, then stop.
+    The issue is in steps-work/issue.md and the plan in steps-work/plan.md.
+    Follow the plan and the repository's own conventions. Touch only what the
+    plan calls for. Do not commit, push, or open a pull request; the pipeline
+    does that from your working tree.
+
+    On running the checks, one deliberate exception to the repository's own
+    instruction to run the whole suite after every change: while you are
+    ITERATING, run only the packages you touched plus their dependents, keeping
+    whatever flags the suite uses for them -- the race detector included, since
+    dropping it is what once let a data race ship green. Run the full suite
+    once, unscoped, before you finish, and treat that run as the one that
+    decides whether you are done. A full suite between every edit is most of
+    this step's wall clock and answers a question the scoped run already
+    answered; a full suite you never ran at all is how a change passes locally
+    and breaks a package you did not think you touched.
+
+    You may be asked for a second pass. It arrives with the reviewer's note
+    saying why the first was sent back, and the working tree still holds every
+    change you already made: `git status` and `git diff` are what you did last
+    time, and reading them is how you resume rather than restart. Address what
+    the note faults, keep what it does not, and do not revert the reviewer's
+    own edits.
+
+- name: reviewer
+  source:
+    model: "@claude/opus"       # this phase is the gate
+  reasoning_effort: high
+  settings: project
+  tools: [read_file, list_dir, search_files, edit_file, write_file, run_shell]
+  max_turns: 0
+  timeout: 1h15m
+  attempts: 2
+  system: |
+    You review an uncommitted diff in a checkout of the repository, then stop.
+    The issue is in steps-work/issue.md. You did not write this diff and owe it
+    no loyalty.
+
+    Two questions, in that order. First: does the diff close the issue -- all
+    of it, not the first tractable slice of it? An issue naming a sequence of
+    parts is closed when every part is there, and a diff that stops early is
+    not a small problem with the work, it is the work missing. Second: is what
+    is there correct, secure, and resilient?
+
+    You have two ways to answer, and which one a finding gets is not a matter
+    of taste. Fix what an edit can fix: local defects, missing tests, anything
+    the repository's own checks catch. Send it back for anything an edit
+    cannot -- an implementation that stops short of the issue, a wrong
+    approach, a design that has to be redone. Implementing the missing half
+    yourself is not reviewing it, and it leaves nobody to review what you
+    wrote.
+
+    Do not commit, push, or open a pull request; the pipeline does that from
+    your working tree.
+
+jobs:
+# Every timeout in this file is wall clock for an agent that must run THIS
+# repository's validation before it finishes, and that suite is deliberately
+# expensive: `task test` is ~5.5m because it runs -race with -p 1, and
+# `cover-diff` re-runs coverage on top. Measured, not guessed: the planner took
+# 14m22s of a 20m ceiling, and the implementer spent most of an hour with the
+# suite running inside it. A ceiling a step reaches while doing the right thing
+# is not a safety limit, it is a coin flip.
+#
+# The job ceiling covers the WORST route through the loop, not the shortest:
+# 45m + 2 x (2h + 1h15m) = 7h15m, inside 8h. That arithmetic is why max_visits
+# below is 2 rather than 3 -- a third review does not fit under any ceiling
+# anyone would leave running unattended, and a ceiling that cannot cover the
+# loop it bounds would kill the pipeline mid-lap and lose every lap before it.
+- name: implement
+  timeout: 8h
+  plan:
+  - get: issue
+    trigger: true
+    version: every       # one build, one branch, one PR per issue
+  - get: repo
+
+  # steps-work/ holds the issue and the PR body inside the checkout (the CLI
+  # resolves project scope from its cwd) and is excluded locally, never committed.
+  - task: prep
+    inputs: [repo, issue]
+    outputs: [repo]
+    run: |
+      set -eu
+      number=$(cat issue/number)
+      cd repo
+      # Three outcomes, not two. `if git ls-remote` collapses "the branch is
+      # absent" and "the remote could not be reached at all" into one false,
+      # so a broken credential read as a free branch and the guard waved
+      # through the rerun it exists to refuse. ls-remote exits 2 for no match;
+      # anything else is a failure to ASK, which is not an answer.
+      set +e
+      GIT_CONFIG_GLOBAL=/dev/null git ls-remote --exit-code \
+        "https://github.com/((repo)).git" "refs/heads/issue-$number" >/dev/null 2>&1
+      probe=$?
+      set -e
+      case "$probe" in
+        0) echo "branch issue-$number already exists on origin" >&2; exit 1 ;;
+        2) : ;;
+        *) echo "could not reach the remote to check for issue-$number (git exit $probe)" >&2; exit 1 ;;
+      esac
+      mkdir -p steps-work
+      echo 'steps-work/' >> .git/info/exclude
+      cp ../issue/issue.md steps-work/issue.md
+      git checkout -q -B "issue-$number"
+      echo "on issue-$number"
+
+  - agent: planner
+    inputs: [repo]
+    outputs: [repo]
+    dir: repo
+    context_paths: [steps-work/issue.md]
+    messages:
+    - |
+      Plan the GitHub issue in steps-work/issue.md. Do not write code, and do
+      not ask whether to proceed.
+    - |
+      Review your plan for edge cases you missed in UI/UX, security, and
+      resiliency, then write the corrected plan to steps-work/plan.md: the
+      files to change, what changes in each, and the checks that prove it.
+
+  # `from: reviewer` names a step BELOW this one, which is exactly the loop: the
+  # first pass reads nothing because the reviewer has not run, and every pass
+  # after it is handed the note that sent it back, as a synthetic read_step at
+  # turn zero. Asking for `note` (not `verdict`) is also what makes the note
+  # REQUIRED of the reviewer -- a demand nobody made is one a model may skip,
+  # and afterwards "had nothing to say" and "forgot" look identical.
+  - agent: implementer
+    inputs: [repo]
+    outputs: [repo]
+    dir: repo
+    context_paths: [steps-work/issue.md, steps-work/plan.md]
+    context:
+      from:
+        reviewer: note
+    messages:
+    - |
+      Execute the plan in steps-work/plan.md. If a reviewer note is in your
+      context, this is a second pass: the tree already holds your earlier work,
+      so read `git diff` first and continue from it.
+
+  # An empty diff fails here rather than after the reviewer has been paid to
+  # review nothing. No assert: anywhere in this file — the disposers are the
+  # shell's own exit codes, and every one of them is load-bearing: a planner
+  # that writes nothing fails the implementer at preparation (a missing
+  # context_paths: file is checked before a token is spent), and a reviewer
+  # that writes no pr-body.md fails verify's grep under set -eu.
+  - task: diff-gate
+    inputs: [repo]
+    outputs: [repo]
+    run: |
+      set -eu
+      cd repo
+      test -n "$(git status --porcelain)" || { echo "the implementer changed nothing" >&2; exit 1; }
+      echo "changed $(git status --porcelain | wc -l) files"
+
+  # A fresh session is the point, not an accident: a reviewer that never argued
+  # itself into the diff re-derives it from the code instead of from memory of
+  # writing it. `high`, not `max` — max buys breadth on uncertain findings, and
+  # on one issue's diff that breadth was most of the bill.
+  #
+  # The verdict IS the routing, and `revise` jumps backward — which is why
+  # max_visits: is required here rather than optional. Two visits is two
+  # reviews, so exactly one trip back; a second `revise` exceeds the cap and
+  # fails the job, which is the right end for a diff that a round of concrete
+  # notes could not bring to done. The number is set by the job ceiling above
+  # rather than by taste. No `failure:` entry: a reviewer that errored or never
+  # decided has approved nothing, and there is no honest route for that but to
+  # propagate.
+  - agent: reviewer
+    inputs: [repo]
+    outputs: [repo]
+    dir: repo
+    context_paths: [steps-work/issue.md]
+    max_visits: 2
+    messages:
+    - "/code-review high --fix Please also ensure that this is secure and resilient."
+    - |
+      Now decide, and call the verdict tool.
+
+      If the diff does not close steps-work/issue.md, or is wrong in a way your
+      edits cannot fix, call it with `revise`. Your note is the implementer's
+      entire brief -- it does not get to ask you what you meant -- so name what
+      is missing or wrong and what would close it, concretely and in full.
+      Leave the fixes you did make in the tree.
+
+      Otherwise write steps-work/pr-body.md with exactly three sections:
+      "## What", "## Why", "## Notes" -- no more than 4 sentences each, Notes
+      saying what you verified and what you could not -- and call it with
+      `approve`.
+    verdicts:
+    - approve: next
+    - revise: implementer
+
+  # Deterministic gate: the three sections, one commit.
+  - task: verify
+    inputs: [repo, issue]
+    outputs: [repo]
+    run: |
+      set -eu
+      cd repo
+      for h in What Why Notes; do
+        grep -q "^## $h" steps-work/pr-body.md || { echo "pr-body.md lacks ## $h" >&2; exit 1; }
+      done
+      git add -A
+      git commit -q -m "$(cat ../issue/title)" -m "Closes #$(cat ../issue/number)"
+      echo "committed #$(cat ../issue/number)"
+
+  - put: pr
+    inputs: [repo, issue]
