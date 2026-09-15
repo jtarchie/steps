@@ -101,7 +101,7 @@ var ec2For = func(ctx context.Context, worker Worker) (ec2API, error) {
 		return nil, fmt.Errorf("%w %q: %w", ErrWorker, worker.URL, err)
 	}
 
-	return ec2.NewFromConfig(cfg), nil
+	return newEC2Funcs(ec2.NewFromConfig(cfg)), nil
 }
 
 // needsAcquisition reports whether a worker names a machine that has to be

@@ -222,7 +222,7 @@ func newAgentLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
 		},
 	}
 
-	return genaiopenai.New(cfg)
+	return newLLMFuncs(genaiopenai.New(cfg))
 }
 
 // agentHTTPClient returns the *http.Client an invocation's LLM uses. Its

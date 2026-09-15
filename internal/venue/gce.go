@@ -73,7 +73,7 @@ var gceFor = func(ctx context.Context, worker Worker) (gceAPI, error) {
 	defer gceServiceMu.Unlock()
 
 	if gceService != nil {
-		return &gceClient{service: gceService}, nil
+		return newGCEFuncs(&gceClient{service: gceService}), nil
 	}
 
 	// Not the caller's context, for the reason gcpToken gives: the service
@@ -87,7 +87,7 @@ var gceFor = func(ctx context.Context, worker Worker) (gceAPI, error) {
 
 	gceService = service
 
-	return &gceClient{service: service}, nil
+	return newGCEFuncs(&gceClient{service: service}), nil
 }
 
 // gceService is the process's Compute Engine client, resolved once and cached

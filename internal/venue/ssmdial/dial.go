@@ -42,7 +42,7 @@ type API interface {
 }
 
 // NewAPI builds the real client.
-func NewAPI(cfg aws.Config) API { return ssm.NewFromConfig(cfg) }
+func NewAPI(cfg aws.Config) API { return newAPIFuncs(ssm.NewFromConfig(cfg)) }
 
 // Forward opens a session forwarding to port on the instance, returning it as
 // a byte pipe.
