@@ -15,6 +15,10 @@ steps=${STEPS:-$here/../../steps}
 llm_port=${LLM_PORT:-8377}
 web_port=${WEB_PORT:-8378}
 voice=${VOICE:-Samantha}
+# With ELEVENLABS_API_KEY set, narration is synthesized in this voice; the key is never written anywhere.
+tts_voice=${ELEVENLABS_VOICE_ID:-L7C2G3GqrJ2ZHDu0HreU}
+tts_model=${ELEVENLABS_MODEL:-eleven_multilingual_v2}
+cache=$here/.cache
 # VHS 0.12.0 (Homebrew's current bottle) exits 0 and writes nothing (charmbracelet/vhs#787); 0.11.0 built from source records fine.
 vhs=${VHS:-vhs}
 fps=30
@@ -67,6 +71,17 @@ for script in "$short"/scenes/[0-9][0-9]-*.txt; do
   echo "== $n"
 
   audio=$(find "$short/narration" -name "$n.*" 2>/dev/null | head -1)
+  if [ -z "$audio" ] && [ -n "${ELEVENLABS_API_KEY:-}" ]; then
+    # Keyed by voice, model and text, so a rebuild spends credits only on a line that changed.
+    audio=$cache/$n-$({ echo "$tts_voice $tts_model"; cat "$script"; } | shasum -a 256 | cut -c1-16).mp3
+    if [ ! -s "$audio" ]; then
+      mkdir -p "$cache"
+      body=$(python3 -c 'import json,sys; print(json.dumps({"text": open(sys.argv[1]).read().strip(), "model_id": sys.argv[2]}))' "$script" "$tts_model")
+      curl -sf -o "$audio" -X POST "https://api.elevenlabs.io/v1/text-to-speech/$tts_voice?output_format=mp3_44100_128" \
+        -H "xi-api-key: $ELEVENLABS_API_KEY" -H "Content-Type: application/json" -d "$body" \
+        || { rm -f "$audio"; echo "$n: ElevenLabs refused the request" >&2; exit 1; }
+    fi
+  fi
   if [ -z "$audio" ]; then
     say -v "$voice" -o "$tmp/$n.aiff" -f "$script"
     audio=$tmp/$n.aiff

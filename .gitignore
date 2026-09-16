@@ -37,3 +37,4 @@ steps-shim/
 # hack/shorts: rendered videos and the browser toolchain
 hack/shorts/node_modules/
 hack/shorts/*/out/
+hack/shorts/.cache/
