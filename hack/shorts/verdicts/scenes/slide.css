@@ -3,6 +3,6 @@ body { display: flex; flex-direction: column; justify-content: center; padding: 
 h1 { font-size: 92px; line-height: 1.1; margin: 0 0 40px; letter-spacing: -0.02em; }
 p { font-size: 44px; line-height: 1.35; color: #a9adb8; margin: 0 0 24px; }
 .accent { color: #7ee787; }
-.brand { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: #7ee787; }
-pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 30px; line-height: 1.45; background: #1e2128; border-radius: 20px; padding: 40px; margin: 0; overflow: hidden; }
+.brand { font-family: Menlo, "SF Mono", ui-monospace, monospace; color: #7ee787; }
+pre { font-family: Menlo, "SF Mono", ui-monospace, monospace; font-size: 30px; line-height: 1.45; background: #1e2128; border-radius: 20px; padding: 40px; margin: 0; overflow: hidden; }
 .k { color: #79c0ff; } .s { color: #a5d6ff; } .c { color: #6e7681; } .hl { background: #2d4a2d; display: inline-block; width: 100%; }

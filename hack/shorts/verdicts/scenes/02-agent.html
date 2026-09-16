@@ -1,0 +1,28 @@
+<!doctype html><html><head><link rel="stylesheet" href="slide.css"></head><body>
+<h1 style="font-size:64px">review.yml</h1>
+<pre><span class="hl"><span class="k">agents</span>:</span>
+<span class="hl">- <span class="k">name</span>: reviewer</span>
+<span class="hl">  <span class="k">source</span>: { <span class="k">model</span>: <span class="s">openrouter/qwen/qwen3.7-flash</span> }</span>
+<span class="hl">  <span class="k">tools</span>: [read_file, search_files, write_file]</span>
+<span class="hl">  <span class="c"># no edit_file: it reviews, it cannot change code</span></span>
+
+<span class="k">jobs</span>:
+- <span class="k">name</span>: review
+  <span class="k">plan</span>:
+  - <span class="k">get</span>: repo
+  - <span class="k">agent</span>: reviewer
+    <span class="k">inputs</span>: [repo]
+    <span class="k">outputs</span>: [report]
+    <span class="k">messages</span>:
+      - <span class="s">Write a risk summary to report/summary.md.</span>
+    <span class="k">verdicts</span>:
+      - <span class="k">approve</span>: publish   <span class="c"># the decision picks the step</span>
+      - <span class="k">reject</span>: escalate
+    <span class="k">assert</span>:
+      <span class="k">files</span>: [report/summary.md]  <span class="c"># must exist</span>
+  - <span class="k">task</span>: escalate
+    <span class="k">run</span>: echo paging a human
+  - <span class="k">task</span>: publish
+    <span class="k">inputs</span>: [report]
+    <span class="k">run</span>: cat report/summary.md</pre>
+</body></html>

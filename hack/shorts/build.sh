@@ -15,9 +15,10 @@ steps=${STEPS:-$here/../../steps}
 llm_port=${LLM_PORT:-8377}
 web_port=${WEB_PORT:-8378}
 voice=${VOICE:-Samantha}
-# With ELEVENLABS_API_KEY set, narration is synthesized in this voice; the key is never written anywhere.
+# With ELEVENLABS_API_KEY set, narration is synthesized in this voice; the key is never written anywhere. A script may carry v3
+# audio tags like [excited]; pronounce.json rewrites words as IPA in slashes. Both reach the model only: captions and alignment see plain words.
 tts_voice=${ELEVENLABS_VOICE_ID:-aMSt68OGf4xUZAnLpTU8}
-tts_model=${ELEVENLABS_MODEL:-eleven_multilingual_v2}
+tts_model=${ELEVENLABS_MODEL:-eleven_v3}
 cache=$here/.cache
 # VHS 0.12.0 (Homebrew's current bottle) exits 0 and writes nothing (charmbracelet/vhs#787); 0.11.0 built from source records fine.
 vhs=${VHS:-vhs}
@@ -72,28 +73,36 @@ for script in "$short"/scenes/[0-9][0-9]-*.txt; do
   n=$(basename "${script%.txt}")
   echo "== $n"
 
+  python3 -c 'import re,sys; print(re.sub(r"\s*\[[^\]]*\]", "", open(sys.argv[1]).read()).strip())' "$script" >"$tmp/$n.plain.txt"
+  python3 - "$script" "$here/pronounce.json" "$tts_model" >"$tmp/$n.tts.json" <<'PY'
+import json, re, sys
+text = open(sys.argv[1]).read().strip()
+for word, ipa in json.load(open(sys.argv[2])).items():
+    text = re.sub(r"\b%s\b" % re.escape(word), ipa, text)
+print(json.dumps({"text": text, "model_id": sys.argv[3], "voice_settings": {"stability": 0.5}}))
+PY
+
   audio=$(find "$short/narration" -name "$n.*" 2>/dev/null | head -1)
   if [ -z "$audio" ] && [ -n "${ELEVENLABS_API_KEY:-}" ]; then
-    # Keyed by voice, model and text, so a rebuild spends credits only on a line that changed.
-    audio=$cache/$n-$({ echo "$tts_voice $tts_model"; cat "$script"; } | shasum -a 256 | cut -c1-16).mp3
+    # Keyed by voice and the exact request, so a rebuild spends credits only on a line that changed.
+    audio=$cache/$n-$({ echo "$tts_voice"; cat "$tmp/$n.tts.json"; } | shasum -a 256 | cut -c1-16).mp3
     if [ ! -s "$audio" ]; then
       mkdir -p "$cache"
-      body=$(python3 -c 'import json,sys; print(json.dumps({"text": open(sys.argv[1]).read().strip(), "model_id": sys.argv[2]}))' "$script" "$tts_model")
       curl -sf -o "$audio" -X POST "https://api.elevenlabs.io/v1/text-to-speech/$tts_voice?output_format=mp3_44100_128" \
-        -H "xi-api-key: $ELEVENLABS_API_KEY" -H "Content-Type: application/json" -d "$body" \
+        -H "xi-api-key: $ELEVENLABS_API_KEY" -H "Content-Type: application/json" -d @"$tmp/$n.tts.json" \
         || { rm -f "$audio"; echo "$n: ElevenLabs refused the request" >&2; exit 1; }
     fi
   fi
   if [ -z "$audio" ]; then
-    say -v "$voice" -o "$tmp/$n.aiff" -f "$script"
+    say -v "$voice" -o "$tmp/$n.aiff" -f "$tmp/$n.plain.txt"
     audio=$tmp/$n.aiff
   fi
   "$ffmpeg" -y -loglevel error -i "$audio" -ar 48000 -ac 2 "$tmp/$n.wav"
   adur=$("$ffprobe" -v error -show_entries format=duration -of csv=p=0 "$tmp/$n.wav")
 
   # Forced alignment of the script, not transcription: the captions are your words, timed to your voice. Only the timings are used (captions.py).
-  stable-ts "$tmp/$n.wav" --align "$script" --language en --model base.en -o "$tmp/$n.json" -y >"$tmp/$n.align.log" 2>&1
-  python3 "$here/captions.py" "$script" "$tmp/$n.json" "$tmp/$n.srt" "$adur"
+  stable-ts "$tmp/$n.wav" --align "$tmp/$n.plain.txt" --language en --model base.en -o "$tmp/$n.json" -y >"$tmp/$n.align.log" 2>&1
+  python3 "$here/captions.py" "$tmp/$n.plain.txt" "$tmp/$n.json" "$tmp/$n.srt" "$adur"
 
   # The visual: a still (or stills) held for the narration, or a clip padded out to it.
   stem=$short/scenes/$n

@@ -1,0 +1,1 @@
+One YAML file. The agent reads the repo and writes a review. No edit tool, so it can look, but it cannot touch the code.

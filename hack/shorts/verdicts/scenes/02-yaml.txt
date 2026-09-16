@@ -1,1 +1,0 @@
-One YAML file. The agent reads the repo and writes a review. Then it has to choose: approve or reject, and each choice picks the next step. And assert says the report file must exist. No file, no verdict.
