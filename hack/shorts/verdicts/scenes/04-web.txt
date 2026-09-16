@@ -1,0 +1,1 @@
+The same run in the web UI: every tool call, the verdict, the route it took, and what it cost.

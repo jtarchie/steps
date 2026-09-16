@@ -1,0 +1,1 @@
+Every pipeline runner can run a task. steps can run an agent as a step, and the pipeline decides what its answer is worth.

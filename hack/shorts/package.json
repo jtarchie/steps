@@ -1,0 +1,9 @@
+{
+  "name": "steps-shorts",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "cloakbrowser": "*",
+    "playwright-core": "*"
+  }
+}

@@ -1,0 +1,1 @@
+Run it. The model reads the repo, writes the summary, and calls the verdict tool: approve. The plan jumps to publish. Escalate never runs.

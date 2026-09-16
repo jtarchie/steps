@@ -1,0 +1,34 @@
+# The README's third file, with the model pointed at hack/shorts/fakellm.mjs so the take is reproducible; PORT is filled in by build.sh.
+resources:
+- name: repo
+  type: git
+  source: { uri: https://github.com/jtarchie/steps.git, branch: main }
+
+agents:
+- name: reviewer
+  source: { model: fake-model, endpoint: http://127.0.0.1:__PORT__/v1/, api_key_env: STEPS_DEMO_KEY }
+  system: You review changes. Be terse.
+  tools: [read_file, search_files, write_file]   # no edit_file: it reviews, it cannot change code
+
+defaults:
+  preflight: { disabled: true }
+
+jobs:
+- name: review
+  plan:
+  - get: repo
+  - agent: reviewer
+    inputs: [repo]
+    outputs: [report]
+    messages:
+      - Read repo/ and write a one-paragraph risk summary to report/summary.md.
+    verdicts:
+      - approve: publish            # the decision picks the next step
+      - reject: escalate
+    assert:
+      files: [report/summary.md]    # ...and it must have actually written it
+  - task: escalate
+    run: echo paging a human
+  - task: publish
+    inputs: [report]
+    run: cat report/summary.md

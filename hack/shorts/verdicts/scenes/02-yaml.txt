@@ -1,0 +1,1 @@
+This agent reviews a repo. Verdicts names the choices it may make, and where each one routes. Assert says it must have actually written the report.
