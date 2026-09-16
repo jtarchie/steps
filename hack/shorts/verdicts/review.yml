@@ -1,8 +1,8 @@
-# The README's third file, with the model pointed at hack/shorts/fakellm.mjs so the take is reproducible; PORT is filled in by build.sh.
+# The README's third file, with the model pointed at hack/shorts/fakellm.mjs so the take is reproducible and the repo a local clone so the take is not waiting on GitHub; build.sh fills in __PORT__ and __REPO__.
 resources:
 - name: repo
   type: git
-  source: { uri: https://github.com/jtarchie/steps.git, branch: main }
+  source: { uri: __REPO__, branch: main }
 
 agents:
 - name: reviewer

@@ -1,1 +1,1 @@
-Run it. The model reads the repo, writes the summary, and calls the verdict tool: approve. The plan jumps to publish. Escalate never runs.
+Run it. Clone, read, write, decide. The model says approve, and the plan jumps straight to publish. Escalate never runs. The model proposed. The pipeline disposed.

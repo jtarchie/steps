@@ -16,7 +16,7 @@ llm_port=${LLM_PORT:-8377}
 web_port=${WEB_PORT:-8378}
 voice=${VOICE:-Samantha}
 # With ELEVENLABS_API_KEY set, narration is synthesized in this voice; the key is never written anywhere.
-tts_voice=${ELEVENLABS_VOICE_ID:-L7C2G3GqrJ2ZHDu0HreU}
+tts_voice=${ELEVENLABS_VOICE_ID:-aMSt68OGf4xUZAnLpTU8}
 tts_model=${ELEVENLABS_MODEL:-eleven_multilingual_v2}
 cache=$here/.cache
 # VHS 0.12.0 (Homebrew's current bottle) exits 0 and writes nothing (charmbracelet/vhs#787); 0.11.0 built from source records fine.
@@ -46,7 +46,8 @@ PATH="$(cd "$(dirname "$steps")" && pwd):$PATH"
 export PATH
 
 # One daemon and one scripted model serve every scene, so the terminal take and the browser take show the same run.
-sed "s/__PORT__/$llm_port/" "$short/review.yml" >"$work/review.yml"
+git clone -q --bare "$(cd "$here/../.." && pwd)" "$work/steps.git"
+sed -e "s/__PORT__/$llm_port/" -e "s|__REPO__|$work/steps.git|" "$short/review.yml" >"$work/review.yml"
 node "$here/fakellm.mjs" "$llm_port" "$short/turns.json" &
 llm=$!
 "$steps" web --db "$work/web.db" --listen "127.0.0.1:$web_port" --no-preflight >"$tmp/web.log" 2>&1 &
@@ -61,7 +62,8 @@ done
 
 # Commas inside a filter argument are escaped, or the graph parser reads them as the next filter. Sizes and margins are in the SRT's 288-line PlayRes, so scale by 1920/288.
 captions='FontName=Helvetica Neue\\,FontSize=13\\,Bold=1\\,PrimaryColour=&H00FFFFFF\\,OutlineColour=&H00000000\\,Outline=2\\,Shadow=0\\,MarginV=45\\,Alignment=2'
-fit="scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
+# Top-aligned, so a browser shot shorter than the frame leaves its empty band at the bottom under the captions.
+fit="scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:0"
 
 : >"$tmp/scenes.ffconcat"
 echo "ffconcat version 1.0" >>"$tmp/scenes.ffconcat"

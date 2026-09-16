@@ -3,8 +3,8 @@ import { launch } from "cloakbrowser";
 
 const { STEPS_URL, OUT } = process.env;
 const browser = await launch({ headless: true });
-// A phone's density: 540x960 CSS pixels at 2x is a 1080x1920 frame with text a viewer can read.
-const page = await browser.newPage({ viewport: { width: 540, height: 960 }, deviceScaleFactor: 2 });
+// A phone's density: 540 CSS pixels at 2x is 1080 wide with text a viewer can read. 760 tall leaves the bottom of the frame empty for the captions, which over dense page text read as doubled words.
+const page = await browser.newPage({ viewport: { width: 540, height: 760 }, deviceScaleFactor: 2 });
 await page.goto(`${STEPS_URL}/p/review/jobs/review`);
 await page.getByRole("button", { name: /trigger/i }).first().click();
 await page.waitForURL(/\/runs\/[^/]+$/, { timeout: 60_000 });

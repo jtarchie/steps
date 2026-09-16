@@ -7,7 +7,7 @@ Set FontSize 30
 Set Padding 40
 Set Theme "Catppuccin Mocha"
 Set Framerate 30
-Set TypingSpeed 50ms
+Set TypingSpeed 30ms
 Set WaitTimeout 120s
 Set CursorBlink false
 Hide
