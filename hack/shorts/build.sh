@@ -91,8 +91,9 @@ for script in "$short"/scenes/[0-9][0-9]-*.txt; do
   "$ffmpeg" -y -loglevel error -i "$audio" -ar 48000 -ac 2 "$tmp/$n.wav"
   adur=$("$ffprobe" -v error -show_entries format=duration -of csv=p=0 "$tmp/$n.wav")
 
-  # Forced alignment of the script, not transcription: the captions are your words, timed to your voice.
-  stable-ts "$tmp/$n.wav" --align "$script" --language en --model base.en -o "$tmp/$n.srt" -y >"$tmp/$n.align.log" 2>&1
+  # Forced alignment of the script, not transcription: the captions are your words, timed to your voice. Only the timings are used (captions.py).
+  stable-ts "$tmp/$n.wav" --align "$script" --language en --model base.en -o "$tmp/$n.json" -y >"$tmp/$n.align.log" 2>&1
+  python3 "$here/captions.py" "$script" "$tmp/$n.json" "$tmp/$n.srt" "$adur"
 
   # The visual: a still (or stills) held for the narration, or a clip padded out to it.
   stem=$short/scenes/$n
