@@ -7,4 +7,8 @@
 </div>
 
 <div class="codeblock"><pre class="json code">{{.Body}}</pre></div>
+{{range .Includes}}
+<h2 class="eyebrow">{{.Path}}</h2>
+<div class="codeblock"><pre class="json code">{{.Body}}</pre></div>
+{{end}}
 {{end}}

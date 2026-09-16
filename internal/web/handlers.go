@@ -45,6 +45,7 @@ func (s *Server) handleJobs(c echo.Context) error {
 		"Jobs":  views,
 		"Graph": buildGraph(views),
 		"Queue": pendingQueue(queue),
+		"SHA":   pipeline.Config().Revision.SHA,
 	})
 }
 

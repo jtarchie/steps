@@ -1597,3 +1597,45 @@ func TestFailedRunNamesWhatChangedSinceTheLastGreen(t *testing.T) {
 		t.Error("the diff note does not link the green run it compared against")
 	}
 }
+
+// TestJobsPageLinksTheServedConfiguration: the YAML a daemon holds lives only in the store, so the board is where it has to be reachable from — not just from a run that happened to execute it.
+func TestJobsPageLinksTheServedConfiguration(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	revision := pipeline.Config().Revision
+
+	err := pipeline.Store.RecordRevision(t.Context(), revision.SHA, revision.Source, revision.Includes)
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	_, board := get(t, server, "/p/demo")
+	if !strings.Contains(board, `href="/p/demo/config/`+revision.SHA+`"`) {
+		t.Fatalf("jobs page does not link the served configuration %s:\n%s", revision.SHA, board)
+	}
+
+	_, page := get(t, server, "/p/demo/config/"+revision.SHA)
+	if !strings.Contains(page, "repo") {
+		t.Errorf("config page does not show the served source:\n%s", page)
+	}
+}
+
+// TestConfigPageShowsIncludes: a revision is its source AND the run_file: contents folded into its hash, and a daemon has no other copy of the latter.
+func TestConfigPageShowsIncludes(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+
+	const sha = "eeee111122223333"
+
+	err := pipeline.Store.RecordRevision(t.Context(), sha, "jobs: []\n", map[string]string{"ci/task.yml": "run: include-marker\n"})
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/config/"+sha)
+	if !strings.Contains(body, "ci/task.yml") || !strings.Contains(body, "include-marker") {
+		t.Errorf("config page omits the include:\n%s", body)
+	}
+}

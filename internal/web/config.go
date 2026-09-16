@@ -11,7 +11,9 @@ package web
 import (
 	"fmt"
 	"html/template"
+	"maps"
 	"net/http"
+	"slices"
 
 	"github.com/labstack/echo/v4"
 )
@@ -30,13 +32,24 @@ func (s *Server) handleConfig(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "no configuration with that hash has run here")
 	}
 
+	type include struct {
+		Path string
+		Body template.HTML
+	}
+
+	includes := make([]include, 0, len(revision.Includes))
+	for _, path := range slices.Sorted(maps.Keys(revision.Includes)) {
+		includes = append(includes, include{Path: path, Body: highlightCode(revision.Includes[path], path)})
+	}
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "config", map[string]any{
-		"Nav":    s.nav(c),
-		"SHA":    revision.SHA,
-		"Title":  "config " + shortID(revision.SHA),
-		"Body":   highlightYAML(revision.Source),
-		"Crumbs": []crumb{{Label: "jobs", URL: "/p/" + pipeline.Slug}, {Label: "config " + shortID(revision.SHA)}},
+		"Nav":      s.nav(c),
+		"SHA":      revision.SHA,
+		"Title":    "config " + shortID(revision.SHA),
+		"Body":     highlightYAML(revision.Source),
+		"Includes": includes,
+		"Crumbs":   []crumb{{Label: "jobs", URL: "/p/" + pipeline.Slug}, {Label: "config " + shortID(revision.SHA)}},
 	})
 }
 
