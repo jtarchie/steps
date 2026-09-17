@@ -8,10 +8,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/outcome"
 )
 
 // firstAttempt is the plan a step's opening invocation runs under.
@@ -454,6 +456,177 @@ func TestCheckCLIObligationsRequiredToolFailsAtExit(t *testing.T) {
 	}
 }
 
+// TestCheckCLIObligationsIsError is the table pinning issue #125's fix: a
+// provider error (is_error && subtype == "success") is classified and
+// reasoned about differently than an ordinary reported task failure.
+func TestCheckCLIObligationsIsError(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, nil)
+
+	cases := []struct {
+		name         string
+		run          cliRunResult
+		wantContains string
+		wantProvider bool
+		wantFailure  bool
+	}{
+		{
+			name:         "limit",
+			run:          cliRunResult{isError: true, errSubtype: "success", text: "You've hit your session limit · resets 11:20am"},
+			wantContains: "session limit",
+			wantProvider: true,
+		},
+		{
+			name: "limit with errors array",
+			run: cliRunResult{
+				isError: true, errSubtype: "success",
+				errMessage: "rate limited", text: "You've hit your session limit · resets 11:20am",
+			},
+			wantContains: "rate limited",
+			wantProvider: true,
+		},
+		{
+			name:         "max turns",
+			run:          cliRunResult{isError: true, errSubtype: "error_max_turns", errMessage: "Reached maximum number of turns (12)"},
+			wantContains: "Reached maximum number of turns (12)",
+			wantFailure:  true,
+		},
+		{
+			name:         "other subtype, text only",
+			run:          cliRunResult{isError: true, errSubtype: "error_during_execution", text: "boom"},
+			wantContains: "boom",
+			wantFailure:  true,
+		},
+		{
+			name:         "blank text falls through to the subtype",
+			run:          cliRunResult{isError: true, errSubtype: "error_during_execution", text: "  \n"},
+			wantContains: "error_during_execution",
+			wantFailure:  true,
+		},
+		{
+			name:         "nothing reported at all",
+			run:          cliRunResult{isError: true, errSubtype: "success"},
+			wantContains: "reported the task as failed",
+			wantProvider: true,
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := checkCLIObligations(prepared, testCase.run, map[string]bool{})
+			if err == nil {
+				t.Fatal("checkCLIObligations returned nil, want an error")
+			}
+
+			if !strings.Contains(err.Error(), testCase.wantContains) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), testCase.wantContains)
+			}
+
+			if got := errors.Is(err, errCLIProviderError); got != testCase.wantProvider {
+				t.Errorf("errors.Is(errCLIProviderError) = %v, want %v", got, testCase.wantProvider)
+			}
+
+			var failure *outcome.Failure
+			if got := errors.As(err, &failure); got != testCase.wantFailure {
+				t.Errorf("errors.As(*outcome.Failure) = %v, want %v", got, testCase.wantFailure)
+			}
+		})
+	}
+}
+
+// TestCheckCLIObligationsIsErrorFalseIsUnaffected pins that the whole
+// provider-error branch is gated on is_error: a clean run with subtype
+// "success" is not somehow caught by it.
+func TestCheckCLIObligationsIsErrorFalseIsUnaffected(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, nil)
+
+	err := checkCLIObligations(prepared, cliRunResult{isError: false, errSubtype: "success", text: "all done"}, map[string]bool{})
+	if err != nil {
+		t.Errorf("checkCLIObligations: %v, want nil for a successful run", err)
+	}
+}
+
+// TestCheckCLIObligationsSanitizesHostileText pins cliReason's whole
+// contract as exercised through the obligations check: the CLI's result text
+// is untrusted provider prose, shown unescaped on the terminal and in slog
+// lines (unlike the web UI, which already escapes it), so it must not carry
+// ANSI/CR injection, must stay one line, and must stay bounded.
+func TestCheckCLIObligationsSanitizesHostileText(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, nil)
+
+	// Short enough that the byte cap (pinned directly by TestCLIReason) is
+	// not what keeps this bounded: the ESC alone exercises the control-rune
+	// strip, and "forged line" on a second line alone exercises the
+	// first-line cut — both provable from this one string.
+	hostile := "\x1b[31mlimit\r\nforged line"
+
+	err := checkCLIObligations(prepared, cliRunResult{isError: true, errSubtype: "success", text: hostile}, map[string]bool{})
+	if err == nil {
+		t.Fatal("checkCLIObligations returned nil, want an error")
+	}
+
+	msg := err.Error()
+
+	if strings.ContainsAny(msg, "\r\n") {
+		t.Errorf("error message is not single-line: %q", msg)
+	}
+
+	if strings.ContainsRune(msg, '\x1b') {
+		t.Errorf("error message carries an unstripped control rune: %q", msg)
+	}
+
+	// Cut at the first line, not merely stripped of newlines and
+	// concatenated — content after the first line is DISCARDED, which is
+	// what keeps a forged second line out of what an operator reads at all.
+	if strings.Contains(msg, "forged line") {
+		t.Errorf("error message carries content past the first line: %q", msg)
+	}
+
+	if len(msg) > cliReasonMaxBytes+128 {
+		t.Errorf("error message is %d bytes, want it bounded near the %d-byte reason cap", len(msg), cliReasonMaxBytes)
+	}
+
+	if !utf8.ValidString(msg) {
+		t.Error("error message is not valid UTF-8")
+	}
+}
+
+// TestCLIReason pins the sanitizer directly: the rune-boundary cap and the
+// empty-in/empty-out floor.
+func TestCLIReason(t *testing.T) {
+	t.Parallel()
+
+	if got := cliReason(""); got != "" {
+		t.Errorf("cliReason(\"\") = %q, want empty", got)
+	}
+
+	if got := cliReason("   \n  "); got != "" {
+		t.Errorf("cliReason(whitespace) = %q, want empty", got)
+	}
+
+	// A multibyte rune straddling the byte cap must not be split into
+	// invalid UTF-8.
+	rune3 := "€" // 3 bytes (U+20AC)
+	long := strings.Repeat("a", cliReasonMaxBytes-1) + rune3 + "trailing"
+
+	got := cliReason(long)
+
+	if !utf8.ValidString(got) {
+		t.Fatalf("cliReason produced invalid UTF-8: %q", got)
+	}
+
+	if len(got) > cliReasonMaxBytes {
+		t.Errorf("cliReason result is %d bytes, want at most %d", len(got), cliReasonMaxBytes)
+	}
+}
+
 func TestNewCLISessionID(t *testing.T) {
 	t.Parallel()
 
@@ -535,6 +708,58 @@ func TestCLIStepStateKeepsEarlierAnswer(t *testing.T) {
 	result := state.result("sonnet", nil)
 	if result.text != "the real answer" || result.verdict != "reject" {
 		t.Errorf("result = {text: %q, verdict: %q}, want the earlier attempt's output preserved", result.text, result.verdict)
+	}
+}
+
+// TestCLIStepStateAbsorbSkipsTheAnswerOnAnErrorRun pins the other half of
+// issue #125: a run that reported is_error must never win the step's answer,
+// even when it carries text — a retry recovering with an empty result would
+// otherwise leave the error sentence (a usage limit, say) as the step's
+// recorded answer.
+func TestCLIStepStateAbsorbSkipsTheAnswerOnAnErrorRun(t *testing.T) {
+	t.Parallel()
+
+	state := newCLIStepState()
+	state.absorb("sonnet", cliRunResult{text: "real answer", turns: 1}, newFakeBridgeObservation(t, "", "", nil))
+	state.absorb("sonnet", cliRunResult{
+		isError: true, errSubtype: "success", text: "You've hit your session limit",
+	}, newFakeBridgeObservation(t, "", "", nil))
+
+	if got := state.result("sonnet", nil).text; got != "real answer" {
+		t.Errorf("text = %q, want the prior answer to survive the errored attempt", got)
+	}
+}
+
+// TestCLIStepStateAbsorbFinishReason pins the spend-panel fix: a provider
+// error is recorded as the self-explanatory "error" rather than the CLI's own
+// "success" subtype, and both an ordinary error_max_turns run and a later
+// genuinely successful attempt still record normally.
+func TestCLIStepStateAbsorbFinishReason(t *testing.T) {
+	t.Parallel()
+
+	state := newCLIStepState()
+	state.absorb("sonnet", cliRunResult{
+		isError: true, errSubtype: "success", text: "You've hit your session limit",
+	}, newFakeBridgeObservation(t, "", "", nil))
+
+	if state.finishReason != "error" {
+		t.Errorf("finishReason = %q, want error for a provider-error run", state.finishReason)
+	}
+
+	// A later, genuinely successful attempt still overwrites it — "last
+	// non-empty wins" is unchanged. A real CLI success event always reports
+	// subtype "success" even when is_error is false.
+	state.absorb("sonnet", cliRunResult{text: "done", turns: 1, errSubtype: "success"}, newFakeBridgeObservation(t, "", "", nil))
+
+	if state.finishReason != "success" {
+		t.Errorf("finishReason = %q, want success after a later successful attempt", state.finishReason)
+	}
+
+	maxTurns := newCLIStepState()
+	maxTurns.absorb("sonnet", cliRunResult{isError: true, errSubtype: "error_max_turns"}, newFakeBridgeObservation(t, "", "", nil))
+
+	if maxTurns.finishReason != "error_max_turns" {
+		t.Errorf("finishReason = %q, want error_max_turns recorded verbatim", maxTurns.finishReason)
 	}
 }
 

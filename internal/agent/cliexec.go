@@ -117,7 +117,9 @@ func execCLI(
 	// call every such run an infrastructure error: classified as errored
 	// instead of failed, unroutable by failure:, and retried by attempts:
 	// at full cost for a conclusion the CLI already reached. If it spoke for
-	// itself, believe it — checkCLIObligations reads is_error from here.
+	// itself, believe it — checkCLIObligations reads is_error from here, and
+	// separates a reported TASK failure from a reported PROVIDER error (a
+	// usage limit the model never got a turn to answer) by subtype.
 	case run.sawResult:
 		if waitErr != nil {
 			slog.Debug("agent.cli.exit", "agent", prepared.ri.AgentName, "error", waitErr, "reported_error", run.isError)
