@@ -49,7 +49,7 @@ steps pipeline set -p app -c app.yml -v repo_uri=https://github.com/acme/app
 
 **The refusal lands where you asked.** That is the whole reason this is HTTP
 rather than a row written into a database: `set` needs a synchronous answer
-from the machine that will run the pipeline — is `api_key_env:` set *there*, is
+from the machine that will run the pipeline — is `api_key_env:` (or a resource expression's `env("NAME")`) set *there*, is
 the stdio MCP binary on *its* `PATH`, does `workspace.root:` exist. A
 configuration that fails those is refused, the daemon goes on serving what it
 had, and the terminal that asked prints why:

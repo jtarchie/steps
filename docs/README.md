@@ -73,6 +73,7 @@ A third answers "did the pipeline change?" — `steps runs` carries a `CONFIG` c
 
 - every model name resolves to a known provider (a typo like `opencoder/` for `opencode/` is a load error, not a failed run)
 - every `api_key_env:` the pipeline names is actually set
+- every variable an expr-backed resource the plan uses reads by literal name (`env("LINEAR_API_KEY")`) is actually set: a computed name is a runtime answer and is not checked, and a type's `env:` list alone requires nothing, since it only allows
 - every stdio `mcp_servers:` command is actually on `PATH`
 
 It reports all of them at once, because finding them one run at a time is the problem:

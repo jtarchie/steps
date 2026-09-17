@@ -94,3 +94,45 @@ func TestCheckCLIBinariesPresentReportsNothing(t *testing.T) {
 		t.Errorf("problems = %+v, want none once claude is on PATH", problems)
 	}
 }
+
+// TestCheckResourceCredentials pins that an expr resource reading an unset
+// variable by literal name is refused before a poll, and that a computed name
+// or a merely-allowed one is not.
+func TestCheckResourceCredentials(t *testing.T) {
+	t.Setenv("PREFLIGHT_SET_KEY", "x")
+	t.Setenv("PREFLIGHT_UNSET_KEY", "")
+
+	cfg, err := LoadConfig(writeConfig(t, `
+resource_types:
+- name: api
+  env: [PREFLIGHT_SET_KEY, PREFLIGHT_UNSET_KEY, PREFLIGHT_OPTIONAL]
+  config:
+    expr:
+      check: |
+        [{a: env("PREFLIGHT_SET_KEY"), b: env( "PREFLIGHT_UNSET_KEY" ), c: env("PREFLIGHT_UNSET_KEY")}]
+      in: 'env(source.name ?? "PREFLIGHT_OPTIONAL")'
+resources:
+- name: used
+  type: api
+  source: {}
+- name: unused
+  type: api
+  source: {}
+jobs:
+- name: j
+  plan:
+  - get: used
+`))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	problems := cfg.CheckEnvironment()
+	if len(problems) != 1 {
+		t.Fatalf("problems = %+v, want exactly one (the unset literal, once, for the used resource)", problems)
+	}
+
+	if problems[0].Target != `resource "used"` || !strings.Contains(problems[0].Detail, "$PREFLIGHT_UNSET_KEY is not set") {
+		t.Errorf("problem = %+v, want the used resource and the unset variable", problems[0])
+	}
+}

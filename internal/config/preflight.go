@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"time"
 )
 
@@ -56,6 +57,7 @@ func (p Problem) Error() string { return p.Target + ": " + p.Detail }
 // them one run at a time is the failure mode it exists to end.
 func (c *Config) CheckEnvironment() []Problem {
 	problems := c.checkAgentCredentials()
+	problems = append(problems, c.checkResourceCredentials()...)
 	problems = append(problems, c.checkMCPCommands()...)
 
 	return append(problems, c.checkCLIBinaries()...)
@@ -91,6 +93,80 @@ func (c *Config) checkAgentCredentials() []Problem {
 				Target: fmt.Sprintf("agent %q", name),
 				Detail: fmt.Sprintf("$%s is not set (source.api_key_env)", target.APIKeyEnv),
 			})
+		}
+	}
+
+	return problems
+}
+
+// literalEnvCall matches env("NAME") with a literal name. A computed name
+// (`env(source.token_env ?? "X")`) is skipped: which variable it reads is a
+// runtime answer, and guessing would report a key the resource never asks for.
+var literalEnvCall = regexp.MustCompile(`\benv\(\s*"([A-Za-z_][A-Za-z0-9_]*)"\s*\)`)
+
+// checkResourceCredentials reports expr-backed resources whose expressions
+// read an unset variable by literal name. Without it the first sign is a
+// `steps web` poll failing into the daemon log, every interval, with nothing
+// red in the UI.
+//
+// It reads the env() calls rather than the type's env: list because that list
+// is an allow-list, not a requirement: git's SSH_AUTH_SOCK is optional, and
+// demanding it would refuse every https pipeline. Shell backends are skipped
+// for the same reason: an unset $VAR in a script may be deliberate.
+func (c *Config) checkResourceCredentials() []Problem {
+	var problems []Problem
+
+	seen := map[string]bool{}
+
+	for _, job := range c.Jobs {
+		_ = job.visitSteps(func(_ string, step *Step) error {
+			for _, name := range []string{step.Get, step.Put} {
+				if name == "" || seen[name] {
+					continue
+				}
+
+				seen[name] = true
+				problems = append(problems, c.resourceCredentialProblems(name)...)
+			}
+
+			return nil
+		})
+	}
+
+	return problems
+}
+
+func (c *Config) resourceCredentialProblems(name string) []Problem {
+	resource, err := c.FindResource(name)
+	if err != nil {
+		return nil // an unresolvable resource is already a load error
+	}
+
+	resourceType, err := c.FindResourceType(resource.Type)
+	if err != nil || resourceType.Config.Backend() != BackendExpr {
+		return nil
+	}
+
+	var problems []Problem
+
+	reported := map[string]bool{}
+	expression := resourceType.Config.Expr
+
+	for _, src := range []string{expression.Check, expression.In, expression.Out} {
+		for _, match := range literalEnvCall.FindAllStringSubmatch(src, -1) {
+			variable := match[1]
+			if reported[variable] {
+				continue
+			}
+
+			reported[variable] = true
+
+			if value, ok := os.LookupEnv(variable); !ok || value == "" {
+				problems = append(problems, Problem{
+					Target: fmt.Sprintf("resource %q", name),
+					Detail: fmt.Sprintf("$%s is not set (read by resource_type %q)", variable, resourceType.Name),
+				})
+			}
 		}
 	}
 
