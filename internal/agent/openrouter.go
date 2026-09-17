@@ -185,6 +185,11 @@ func composeSessionID(runID, agentName string) string {
 // `endpoint: https://OpenRouter.ai/api/v1/` would otherwise fail the match and
 // silently disable caching for that agent with nothing to indicate why.
 func isOpenRouterBaseURL(baseURL string) bool {
+	return hostMatches(baseURL, openRouterHost)
+}
+
+// hostMatches reports whether baseURL's host is want or a subdomain of it.
+func hostMatches(baseURL, want string) bool {
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
 		return false
@@ -192,7 +197,7 @@ func isOpenRouterBaseURL(baseURL string) bool {
 
 	host := strings.ToLower(parsed.Hostname())
 
-	return host == openRouterHost || strings.HasSuffix(host, "."+openRouterHost)
+	return host == want || strings.HasSuffix(host, "."+want)
 }
 
 // isAnthropicModel reports whether an OpenRouter model slug routes to
@@ -257,7 +262,7 @@ func (t *openRouterTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		req.Header.Set("x-session-id", sessionID)
 	}
 
-	err := injectCacheControl(req)
+	err := rewriteBody(req, withCacheControl)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter cache_control: %w", err)
 	}
@@ -265,12 +270,8 @@ func (t *openRouterTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	return base.RoundTrip(req) //nolint:wrapcheck // surface the base transport's error verbatim, per the RoundTripper contract
 }
 
-// injectCacheControl rewrites req's body to carry a top-level cache_control
-// marker when the model routes to Anthropic. The body is re-wrapped either
-// way, because reading it to inspect the model consumed the original
-// io.ReadCloser. GetBody is reset alongside it so openai-go's retry path can
-// replay the request.
-func injectCacheControl(req *http.Request) error {
+// rewriteBody re-wraps req's body even when splice changes nothing (reading consumed it), and resets GetBody so openai-go's retry path replays the rewritten bytes.
+func rewriteBody(req *http.Request, splice func([]byte) []byte) error {
 	if req.Body == nil {
 		return nil
 	}
@@ -287,7 +288,7 @@ func injectCacheControl(req *http.Request) error {
 		return fmt.Errorf("close request body: %w", closeErr)
 	}
 
-	body = withCacheControl(body)
+	body = splice(body)
 
 	req.ContentLength = int64(len(body))
 	req.Body = io.NopCloser(bytes.NewReader(body))
@@ -333,6 +334,11 @@ func withCacheControl(body []byte) []byte {
 
 	doc["cache_control"] = ephemeralCacheControl
 
+	return encodeDoc(doc, body)
+}
+
+// encodeDoc re-encodes a spliced request document, or returns fallback when it cannot.
+func encodeDoc(doc map[string]json.RawMessage, fallback []byte) []byte {
 	// json.Marshal would HTML-escape < > & even inside a json.RawMessage (it
 	// compacts a custom marshaler's output with escaping on), which rewrites
 	// every <transition_context> block this codebase sends. An encoder with
@@ -342,9 +348,9 @@ func withCacheControl(body []byte) []byte {
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
 
-	err = encoder.Encode(doc)
+	err := encoder.Encode(doc)
 	if err != nil {
-		return body
+		return fallback
 	}
 
 	// Encode appends a newline; the request body should not carry one.

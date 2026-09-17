@@ -23,7 +23,7 @@ The result is part of the hash so that *productive* repetition never trips the d
 
 The reaction is two-strike. The first time one interaction exceeds 5 copies in the window, the conversation gets a warning message naming the tool and telling the model to change approach — the window is **not** reset, so the warning is the model's only chance. A second detection (i.e. it repeated the same interaction once more) fails the attempt as a task failure (`failed`, not `errored`, for hook dispatch) with "agent stuck in a loop". Unlike crush's window — which only starts counting after 10 full turns — any count over the threshold triggers, so an agent with the default 30 `max_turns` is protected exactly like one with 200. The detector is scoped to the conversation, which now runs exactly once per step.
 
-## OpenRouter prompt caching
+## Gateway prompt caching (OpenRouter, Vercel)
 
 An agent whose `model:` resolves to OpenRouter (the `openrouter/` prefix, or a `source.endpoint:` pointing at `openrouter.ai`) gets two request mutations automatically. Neither is on by default in a stock OpenAI-compatible client, and without them a conversation pays full input price on every turn — exactly where caching is worth the most, since the whole prior history is re-sent each time.
 
@@ -56,7 +56,14 @@ Both mutations are transport-level only:
 
 - **No config surface.** There is nothing to opt into and nothing to set — pointing an agent at OpenRouter is the whole trigger.
 - **No merkle impact.** The session ID and cache marker never enter a step's hashed content, so enabling caching cannot invalidate a cached step, and the same pipeline hashes identically before and after.
-- **No effect on other providers.** A non-OpenRouter base URL gets no custom HTTP client at all, leaving `openai-go` to build its own exactly as it did before this existed.
+- **No effect on other providers.** Any other base URL gets neither mutation.
+
+### Vercel AI Gateway
+
+An agent resolving to Vercel AI Gateway (the `vercel/` prefix, key in `AI_GATEWAY_API_KEY`, or a `source.endpoint:` on `ai-gateway.vercel.sh`) gets the same two levers in Vercel's spelling, with the same per-agent, per-run session:
+
+- **`x-session-affinity`** — the session header, forwarded to providers that support cache locality.
+- **`providerOptions: {gateway: {caching: auto}}`** — Vercel's automatic caching. Unlike OpenRouter's marker it is sent for **every** model: the gateway itself adds `cache_control` breakpoints only for providers that need them (Anthropic, MiniMax, Alibaba) and leaves implicit-caching providers alone. A body that already carries `providerOptions` is left untouched.
 
 Whether caching is landing is visible in `steps runs cost`'s CACHED column — the provider's own reported cache figures, recorded per step (see [agents.md](agents.md#budgets-budgettokens)).
 

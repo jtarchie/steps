@@ -425,6 +425,15 @@ func TestResolveAgentTarget(t *testing.T) {
 			wantStringOnlyToolChoice: false,
 		},
 		{
+			name:                     "vercel prefix with slashed model id",
+			source:                   AgentSource{Model: "vercel/anthropic/claude-sonnet-5"},
+			wantBaseURL:              "https://ai-gateway.vercel.sh/v1/",
+			wantModel:                "anthropic/claude-sonnet-5",
+			wantAPIKeyEnv:            "AI_GATEWAY_API_KEY",
+			wantRequiresKey:          true,
+			wantStringOnlyToolChoice: false,
+		},
+		{
 			name:            "lmstudio prefix requires no key",
 			source:          AgentSource{Model: "lmstudio/qwen2.5-coder"},
 			wantBaseURL:     "http://localhost:1234/v1/",

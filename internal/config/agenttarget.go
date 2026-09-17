@@ -20,6 +20,7 @@ type agentProvider struct {
 var agentProviders = map[string]agentProvider{
 	"openai":     {"https://api.openai.com/v1/", "OPENAI_API_KEY", true},
 	"openrouter": {"https://openrouter.ai/api/v1/", "OPENROUTER_API_KEY", true},
+	"vercel":     {"https://ai-gateway.vercel.sh/v1/", "AI_GATEWAY_API_KEY", true},
 	"groq":       {"https://api.groq.com/openai/v1/", "GROQ_API_KEY", true},
 	"together":   {"https://api.together.xyz/v1/", "TOGETHER_API_KEY", true},
 	"lmstudio":   {"http://localhost:1234/v1/", "", false},
