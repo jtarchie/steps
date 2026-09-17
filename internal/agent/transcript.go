@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"google.golang.org/genai"
 
@@ -52,6 +53,8 @@ type transcriptEvent struct {
 // watched live and the same conversation read back afterwards cannot
 // disagree about what happened.
 type transcriptRecorder struct {
+	// mu guards events: on the CLI path the stream parser appends from the driver goroutine while bridged tool calls — a sub-agent delegation, which nests a whole child transcript — append from the HTTP server's.
+	mu     sync.Mutex
 	events []transcriptEvent
 	// live carries the bus plus the identity every published event needs.
 	// Zero value publishes nowhere, which is what a test or a terminal run
@@ -139,7 +142,7 @@ func (r *transcriptRecorder) text(text string) {
 		return
 	}
 
-	r.events = append(r.events, transcriptEvent{Type: "text", Text: text})
+	r.record(transcriptEvent{Type: "text", Text: text})
 	r.publish(events.TypeAgentText, text, "", "")
 }
 
@@ -160,7 +163,7 @@ func (r *transcriptRecorder) system(text string) {
 
 	text = truncateToolOutputLimit(text, maxRecordedResultBytes)
 
-	r.events = append(r.events, transcriptEvent{Type: "system", Text: text})
+	r.record(transcriptEvent{Type: "system", Text: text})
 	r.publish(events.TypeAgentSystem, text, "", "")
 }
 
@@ -180,7 +183,7 @@ func (r *transcriptRecorder) user(text string) {
 
 	text = truncateToolOutputLimit(text, maxRecordedResultBytes)
 
-	r.events = append(r.events, transcriptEvent{Type: "user", Text: text})
+	r.record(transcriptEvent{Type: "user", Text: text})
 	r.publish(events.TypeAgentUser, text, "", "")
 }
 
@@ -195,6 +198,9 @@ func (r *transcriptRecorder) pendingIndex() int {
 	if r == nil {
 		return 0
 	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	return len(r.events)
 }
@@ -217,13 +223,7 @@ func (r *transcriptRecorder) insertUserAt(at int, text string) {
 
 	text = truncateToolOutputLimit(text, maxRecordedResultBytes)
 
-	if at < 0 || at > len(r.events) {
-		at = len(r.events)
-	}
-
-	r.events = append(r.events, transcriptEvent{})
-	copy(r.events[at+1:], r.events[at:])
-	r.events[at] = transcriptEvent{Type: "user", Text: text}
+	r.insert(at, transcriptEvent{Type: "user", Text: text})
 
 	r.publish(events.TypeAgentUser, text, "", "")
 }
@@ -236,7 +236,7 @@ func (r *transcriptRecorder) call(name string, args map[string]any) {
 	}
 
 	bounded := truncateArgs(args)
-	r.events = append(r.events, transcriptEvent{Type: "call", Name: name, Args: bounded})
+	r.record(transcriptEvent{Type: "call", Name: name, Args: bounded})
 	r.publish(events.TypeAgentCall, "", name, renderArgs(bounded))
 }
 
@@ -289,7 +289,7 @@ func (r *transcriptRecorder) result(name, content string) {
 		return
 	}
 
-	r.events = append(r.events, transcriptEvent{Type: "result", Name: name, Content: content})
+	r.record(transcriptEvent{Type: "result", Name: name, Content: content})
 	r.publish(events.TypeAgentResult, "", name, content)
 }
 
@@ -301,7 +301,32 @@ func (r *transcriptRecorder) recorded() []transcriptEvent {
 		return nil
 	}
 
-	return r.events
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]transcriptEvent(nil), r.events...)
+}
+
+// record appends one event under the lock. Split out because the CLI path has two writers — see transcriptRecorder.mu.
+func (r *transcriptRecorder) record(event transcriptEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.events = append(r.events, event)
+}
+
+// insert places one event at at, clamped, under the same lock record takes.
+func (r *transcriptRecorder) insert(at int, event transcriptEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if at < 0 || at > len(r.events) {
+		at = len(r.events)
+	}
+
+	r.events = append(r.events, transcriptEvent{})
+	copy(r.events[at+1:], r.events[at:])
+	r.events[at] = event
 }
 
 // subagent records one delegation: the parent's request and the child
@@ -313,7 +338,7 @@ func (r *transcriptRecorder) subagent(agent, request string, nested []transcript
 		return
 	}
 
-	r.events = append(r.events, transcriptEvent{Type: "subagent", Agent: agent, Request: request, Events: nested})
+	r.record(transcriptEvent{Type: "subagent", Agent: agent, Request: request, Events: nested})
 	r.publish(events.TypeAgentSubagent, request, agent, "")
 }
 

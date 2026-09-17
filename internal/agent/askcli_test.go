@@ -19,7 +19,7 @@ import (
 
 // TestCLIBridgeEnforcesTheQuestionBudget: max_questions: is a config.Step dial
 // rather than a ToolSpec guard, so it has never gone through the load-time
-// tool-guard check at all (see internal/config's checkCLIAgentTools, which
+// tool-guard check at all (see internal/config's validateCLIAgents, which
 // since issue #100 no longer refuses required:/max_calls:/args: either — the
 // bridge, or the exit check below it, is where all of them bind). The bridge
 // handler is the only place on this path that sees every ask.

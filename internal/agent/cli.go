@@ -87,6 +87,9 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 	// recording none of it.
 	prepared.conv.env.usage = prepared.conv.usage
 
+	// The same publish, for the recorder: a sub-agent nests its child's whole transcript into the PARENT's, and reads the run/job/step identity a delegation's log lines carry, off here. Without it a CLI parent's delegation recorded nothing at all — no subagent event, no child turns, live or persisted — while the hosted path publishes both.
+	prepared.conv.env.transcript = prepared.conv.recorder
+
 	// Minted here, not read from the CLI's own report: a session id we chose
 	// is one we can resume without parsing for it, and one we can clean up
 	// afterwards knowing no other run could own that name.

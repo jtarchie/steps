@@ -548,11 +548,7 @@ func (s *stepUsage) finish() {
 		_ = s.run.Add(spent)
 	}
 
-	// A delegation spends its parent's allowance. Charged once, here, rather
-	// than per response: sub-agent tool calls execute one at a time within a
-	// turn, so the parent's remaining is accurate by the time it decides
-	// whether to delegate again. The run total is untouched — s.run.Add above
-	// already counted these tokens exactly once.
+	// A delegation spends its parent's allowance. Charged once, here, rather than per response: a hosted turn executes its sub-agent calls one at a time, so the parent's remaining is accurate by the time it decides whether to delegate again. A CLI parent's calls arrive on the bridge's own goroutines and CAN overlap, where each in-flight delegation sizes itself against a remaining the others have not been debited from yet — the job ceiling still bounds them (record consults it live), the agent's own is soft under a concurrent fan-out. The run total is untouched — s.run.Add above already counted these tokens exactly once.
 	if parent := s.parentOf(); parent != nil {
 		parent.chargeDelegated(spent.Total)
 	}

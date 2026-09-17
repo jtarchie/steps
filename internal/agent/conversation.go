@@ -388,7 +388,7 @@ func runAgentConversation(ctx context.Context, llm model.LLM, conv agentConversa
 	conv.env.transcript = rec
 
 	res, err := runConversationLoop(ctx, llm, conv)
-	res.transcript = rec.events
+	res.transcript = rec.recorded()
 
 	return res, conv.blameUnmet(err, res.trajectory)
 }

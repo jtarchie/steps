@@ -451,3 +451,30 @@ func TestRecorderResultDoesNotReTruncate(t *testing.T) {
 		t.Errorf("content carries %d truncation markers, want 1: tail %q", n, got[max(0, len(got)-60):])
 	}
 }
+
+// TestTranscriptRecorderInsertClampsOutOfRange pins what insert does with an
+// index outside the events it holds: it appends, rather than panicking on the
+// copy. Unreachable from insertUserAt today — pendingIndex returns a length of
+// a slice that only grows — which is exactly why it is worth a test: the
+// clamp is the contract the next caller of insert will rely on without
+// checking, and a panic here would take down a run mid-conversation.
+func TestTranscriptRecorderInsertClampsOutOfRange(t *testing.T) {
+	t.Parallel()
+
+	rec := &transcriptRecorder{}
+	rec.text("first")
+
+	rec.insertUserAt(99, "past the end")
+	rec.insertUserAt(-1, "before the start")
+
+	got := rec.recorded()
+	if len(got) != 3 {
+		t.Fatalf("recorded %d events, want 3: %+v", len(got), got)
+	}
+
+	for i, want := range []string{"first", "past the end", "before the start"} {
+		if got[i].Text != want {
+			t.Errorf("event %d text = %q, want %q", i, got[i].Text, want)
+		}
+	}
+}

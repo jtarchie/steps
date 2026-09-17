@@ -90,7 +90,7 @@ type cliBridge struct {
 	// counter lives HERE because this is the only place on the CLI path that
 	// sees every call: internal/agent's turn loop enforces max_calls: on the
 	// HTTP path, and a CLI agent does not run one, so this is where max_calls:
-	// binds instead (see internal/config's checkCLIAgentTools, which no
+	// binds instead (see internal/config's validateCLIAgents, which no
 	// longer refuses it for exactly this reason). max_questions: rides the
 	// same machinery — it is denominated in a person's attention, not in tool
 	// calls, so it is enforced here rather than by the turn loop either way.
@@ -156,6 +156,8 @@ func newCLIBridge(ctx context.Context, conv agentConversation, prior []recordedT
 	}
 
 	httpServer := &http.Server{
+		// net/http otherwise roots every request at context.Background(), stripping what the step ran under — the job's token accumulator, the run id ask_user records against, the answer seeds, the caching session id — which left a CLI parent's delegation invisible to a job budget:. WithoutCancel keeps cancellation exactly as it was: net/http still cancels a request when its connection closes.
+		BaseContext: func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
 		// Stateless: the bridge outlives no client. It serves exactly one
 		// child process for the length of one attempt, so per-session state
 		// would only be a way for a crashed child to strand something.

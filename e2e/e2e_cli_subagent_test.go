@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestE2ECLIAgentDelegatesToASubAgentOverTheBridge crosses the seam a CLI
@@ -271,5 +272,142 @@ jobs:
 
 	if got := claude.invocations(t); got != 0 {
 		t.Errorf("the fake claude ran %d times, want 0: preflight failing means nothing ran", got)
+	}
+}
+
+// TestE2ECLIAgentSubAgentRunsUnderTheJobBudget crosses the other half of the
+// accounting seam: whose ledger the child conversation itself is bound by.
+// The bridge serves its tools on the HTTP server's own goroutines, which
+// net/http roots at context.Background() unless told otherwise — so the
+// child's attachUsage found no job accumulator and a `budget: tokens:` the
+// job declared neither counted the delegation nor stopped it. The child here
+// spends fifty times the job's whole allowance and must be refused saying so,
+// which only the job's own accumulator can produce.
+func TestE2ECLIAgentSubAgentRunsUnderTheJobBudget(t *testing.T) {
+	requireCurl(t)
+
+	dir := t.TempDir()
+	captured := filepath.Join(t.TempDir(), "summarizer.json")
+
+	fake := newRepeatingFakeLLM(t, says("condensed").spending(50000))
+
+	writeFakeClaude(t, strings.Join([]string{
+		"echo '" + cliInitEvent("mcp__steps__summarizer") + "'",
+		captureBridgeScript(captured, "summarizer", `{"request":"condense the notes"}`),
+		"echo '" + cliResultEvent("delegated", 1) + "'",
+	}, "\n"))
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: summarizer
+  system: "You summarize."
+  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
+
+- name: lead
+  source:
+    model: "@claude/sonnet"
+  tools:
+  - agent: summarizer
+    description: Condense a file; pass the path in request.
+
+jobs:
+- name: review
+  budget:
+    tokens: 1000
+  plan:
+  - agent: lead
+    inputs: []
+    messages:
+      - Delegate the summary.
+`, fake.URL+"/v1/"))
+
+	mustRun(t, path)
+
+	if got := readFileString(t, captured); !strings.Contains(got, "job budget exceeded") {
+		t.Errorf("the delegation was not bound by the job's token ceiling; bridge answered:\n%s", got)
+	}
+}
+
+// TestE2ECLIAgentSubAgentIsRecorded pins that a CLI parent's delegation is
+// visible afterwards. runAgentConversation publishes its recorder to the
+// tools (conv.env.transcript) and the CLI path does not run it, so the one
+// tool that reads it — a sub-agent, which nests the child's whole transcript
+// into the parent's and publishes the child's turns one level deeper — wrote
+// into a nil recorder: a delegation that happened, spent money, and left no
+// trace in the step's transcript or the live view.
+func TestE2ECLIAgentSubAgentIsRecorded(t *testing.T) {
+	requireCurl(t)
+
+	dir := t.TempDir()
+
+	fake := newFakeLLM(t, says("the outage lasted four minutes"))
+
+	writeFakeClaude(t, strings.Join([]string{
+		"echo '" + cliInitEvent("mcp__steps__summarizer") + "'",
+		callBridgeScript("summarizer", `{"request":"condense the notes"}`),
+		"echo '" + cliResultEvent("delegated", 1) + "'",
+	}, "\n"))
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: summarizer
+  system: "You summarize."
+  source: { model: openai/test-model, endpoint: %[1]s, api_key_env: STEPS_TEST_AGENT_API_KEY }
+
+- name: lead
+  source:
+    model: "@claude/sonnet"
+  tools:
+  - agent: summarizer
+    description: Condense a file; pass the path in request.
+
+jobs:
+- name: review
+  plan:
+  - agent: lead
+    inputs: []
+    messages:
+      - Delegate the summary.
+`, fake.URL+"/v1/"))
+
+	mustRun(t, path)
+
+	rows := agentEventsFor(t, path, "lead")
+
+	delegation := findEvent(rows, "agent_subagent", "summarizer")
+	if delegation == nil {
+		t.Fatalf("no agent_subagent event recorded for the delegation; got %d agent events", len(rows))
+	}
+
+	if delegation.Text != "condense the notes" {
+		t.Errorf("delegation event text = %q, want the request the parent authored", delegation.Text)
+	}
+
+	// The child's own turn, published one level deeper — what makes a
+	// delegation that takes a minute visible while it runs.
+	var childText *store.RunEventRow
+
+	for i, row := range rows {
+		if row.Type == "agent_text" && row.Status == "depth:1" {
+			childText = &rows[i]
+
+			break
+		}
+	}
+
+	if childText == nil {
+		t.Fatal("the child conversation published no events of its own")
+	}
+
+	if !strings.Contains(childText.Text, "the outage lasted four minutes") {
+		t.Errorf("child event text = %q, want the child's reply", childText.Text)
 	}
 }
