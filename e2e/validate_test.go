@@ -133,6 +133,32 @@ func TestValidatePRReviewExample(t *testing.T) {
 	}
 }
 
+// TestValidateSecurityAuditExample is TestValidatePRReviewExample's counterpart
+// for the audit capstone. It can never be executed by the suite — it fetches
+// somebody else's skill repository over the network, shells out to node for
+// that skill's own validators, and runs its hunters in containers — so a
+// static validate is the whole of what CAN be pinned, and it is worth pinning:
+// the file's two matrix widths are decided at run time from files an agent
+// writes, which is exactly the shape where a typo in an artifact name survives
+// review and fails an hour into a real audit.
+func TestValidateSecurityAuditExample(t *testing.T) {
+	for _, key := range []string{"OPENROUTER_API_KEY", "OPENCODE_API_KEY", "ANTHROPIC_API_KEY"} {
+		t.Setenv(key, "test-key-not-used-for-any-call")
+	}
+
+	path := repoFile("examples", "security-audit.yml")
+
+	err := loadSchema(t).Validate(yamlAsJSONValue(t, path))
+	if err != nil {
+		t.Errorf("%s does not match steps.schema.json:\n%v", path, err)
+	}
+
+	err = cli.Run([]string{"validate", path})
+	if err != nil {
+		t.Errorf("validate %s: %v", path, err)
+	}
+}
+
 // A built-in agent referenced with only a source: reaches the model carrying
 // the profile's persona and tool grant. This is the whole point of the
 // @builtin merge: the pipeline supplies the one thing it must (which model),

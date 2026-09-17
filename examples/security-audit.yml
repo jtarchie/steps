@@ -1,0 +1,544 @@
+# yaml-language-server: $schema=../steps.schema.json
+# steps-test: skip -- needs a live LLM (OPENROUTER_API_KEY), `gh` authenticated
+# against a real repo, `node` for the skill's own validators, and a docker
+# daemon for the hunters' sandbox. Its pass/fail depends on what the audit
+# finds, so it can never be a deterministic fixture.
+#
+# ─── Security audit of a pull request ───────────────────────────────────────
+#
+# Runs Cloudflare's security-audit skill (github.com/cloudflare/security-audit-skill,
+# MIT) against the code under review in somebody's pull request. The skill is a
+# methodology written for a coding agent that orchestrates its own sub-agents;
+# here its six phases are PIPELINE STEPS instead, so each phase boundary is an
+# artifact on disk rather than a promise inside one long conversation.
+#
+# That swap is the whole point of running it this way:
+#
+#   - The skill spends a page specifying WRITE ISOLATION (each hunter gets its own
+#     scratch/, may not touch shared files or another agent's directory). Step
+#     isolation already is that, and it is enforced by the runner rather than
+#     by asking a model to respect a directory.
+#   - It requires an OS-ENFORCED SANDBOX before any target-controlled code runs
+#     — no network, resource limits, writes confined. `image:` + `network: none`
+#     + `container_limits:` is that sandbox, declared in the file. Without one
+#     the skill says to keep the lead as needs_validation rather than run it,
+#     so the sandbox is what decides how much of the audit can actually finish.
+#   - Its ledger and findings VALIDATORS are zero-dependency Node scripts. They
+#     are deterministic checks, so they are `task:` steps — cached, and gating
+#     the phase after them — with a `fix:` agent to repair a malformed file
+#     rather than failing the run over a misplaced comma.
+#
+# Run it:
+#
+#   steps validate examples/security-audit.yml
+#   PR_REPO=owner/name steps run examples/security-audit.yml --job audit
+#
+# Needs: `gh` (authenticated, or GH_TOKEN set), `node`, a docker daemon, a model.
+
+workspace:
+  strategy: copy    # the default, stated because the collecting matrices below require it
+
+defaults:
+  # Swap per run without editing this file:
+  #   STEPS_MODEL=opencode/kimi-k3 steps run examples/security-audit.yml --job audit
+  model: opencode/glm-5.2
+
+# ─── what gets audited, and what audits it ──────────────────────────────────
+resource_types:
+- name: github-pr
+  config:
+    # One version per open PR. The ref carries the head SHA, so a new push is
+    # a new version — a new audit, not a cache hit on the PR number.
+    check: |
+      set -e
+      gh pr list --repo {{ .source.repo | shellquote }} --state open \
+        --json number,headRefOid \
+        --jq '[.[] | {ref: ((.number|tostring) + "@" + .headRefOid)}]'
+    # Fetches the diff, the metadata, the base ref, AND the code at the commit
+    # under review. The audit is a SCOPED run in the skill's sense — the diff
+    # between two refs — and a scoped run has to see both the change and the
+    # code it lands in, or "is this reachable" has no answer.
+    in: |
+      set -e
+      ref={{ .version.ref | shellquote }}
+      number="${ref%%@*}"
+      sha="${ref##*@}"
+      gh pr diff --repo {{ .source.repo | shellquote }} "$number" > pr.diff
+      gh pr view --repo {{ .source.repo | shellquote }} "$number" \
+        --json title,body,files,baseRefName > pr.json
+      printf '%s' "$number" > pr.number
+      printf '%s' "$sha" > pr.sha
+
+      # `checkout <sha> -- .` restores the tree without moving HEAD, so the
+      # four files above survive.
+      git init -q .
+      git remote add origin "https://github.com/{{ .source.repo }}.git"
+      git fetch -q --no-tags --depth 1 origin "$sha" 2>/dev/null \
+        || git fetch -q --no-tags origin
+      git checkout -q --force "$sha" -- . 2>/dev/null \
+        || git checkout -q --force FETCH_HEAD -- .
+
+- name: github-comment
+  config:
+    check: 'echo ''[{"ref":"latest"}]'''
+    in: "true"
+    out: |
+      set -e
+      test -s report/REPORT.md || { echo "no report was written" >&2; exit 1; }
+      gh pr comment --repo {{ .source.repo | shellquote }} "$(cat pr/pr.number)" \
+        --body-file report/REPORT.md
+
+resources:
+# The skill itself, fetched rather than vendored: it is somebody else's
+# methodology under their own version control, and the audit should say which
+# revision of it ran. The built-in git type pins the exact commit the plan
+# chose, so a change to the skill is a new version and a new audit.
+- name: skill
+  type: git
+  source:
+    uri: https://github.com/cloudflare/security-audit-skill
+
+- name: pr
+  type: github-pr
+  source:
+    repo: ((pr_repo))
+
+- name: audit-comment
+  type: github-comment
+  source:
+    repo: ((pr_repo))
+
+# ─── the auditors ───────────────────────────────────────────────────────────
+# The skill's prompts are its own files, delivered as context_paths: rather
+# than copied into these personas. What each agent is FOR lives here; what a
+# security audit IS lives in the skill, at the revision the get fetched. That
+# split is why this file does not go stale when the skill is updated.
+agents:
+- name: recon
+  system: |
+    You are the reconnaissance phase of a security audit. You map the target;
+    you do not hunt in it, and you report no vulnerabilities.
+
+    Your output is a deterministic COVERAGE PLAN: what an auditor must look at,
+    split into units, so that spend is countable and gaps are visible. The
+    skill's reconnaissance instructions are already in your context and they
+    define the unit shape and the ledger format. Follow them exactly — a
+    validator checks the ledger you write, and it checks canonical ids, not
+    prose.
+
+    This is a SCOPED run: the subject is the change under review and the code
+    it touches, not the whole repository. Seed units only for in-scope
+    surfaces. Everything else is out_of_scope — never "covered". A scoped run
+    that presents itself as complete coverage is the failure this phase exists
+    to prevent.
+  max_turns: 60
+  timeout: 30m
+  # Raised so a large diff is never silently truncated on the one step whose
+  # whole job is to see the change entire.
+  max_context_bytes: 400000
+  tools: [read_file, list_dir, search_files, write_file]
+
+- name: hunter
+  system: |
+    You are one hunter, assigned ONE coverage unit. You look for a specific
+    boundary failure in the code you were pointed at, and you report candidates
+    — not findings. Something else decides whether a candidate is real.
+
+    The skill's hunting instructions and attack classes are in your context.
+    The rules that matter most, because they are what separates a useful
+    candidate from noise:
+
+      - Name the lower-trust principal, the accepted input, the control that
+        was supposed to stop it, the boundary crossed, and the concrete result.
+        A candidate missing any of those is not a candidate.
+      - A missing best practice is not a vulnerability. If another layer
+        already prevents the attack, the absence of this one is a hardening
+        note, and you say so rather than filing it.
+      - If the decisive fact lives outside the source you can see — a proxy, a
+        deployment setting, an identity policy — you do not guess it in either
+        direction. You record exactly which fact is unresolved.
+
+    ## Your sandbox is real, and it bounds what you may conclude
+
+    Your shell runs in a container with NO NETWORK, a memory and CPU cap, and
+    nothing writable outside your own directory. Bounded local checks belong
+    there: a function harness, an existing unit test, a small parser fixture.
+    Stop at the minimum effect that establishes the defect — a wrong return
+    value, an unauthorized dummy record. Never probe a deployed endpoint, a
+    shared service, or anything with a real principal behind it. If a check
+    cannot run under those controls, the lead stays unresolved with the reason
+    written down; it does not become a confirmed finding on your say-so.
+
+    Write your candidates as structured JSON to the path your prompt names.
+  max_turns: 80
+  timeout: 30m
+  # The skill's own companion files are large, and a hunter gets three of them
+  # plus its brief. Raised so the methodology is never the thing that gets
+  # truncated out of the context.
+  max_context_bytes: 300000
+  # The sandbox the skill demands, spelled where a reader can check it.
+  image: node:22-slim
+  network: none
+  container_limits:
+    cpu: 512
+    memory: 2147483648      # 2 GiB, a hard cap: over it the container is killed
+  tools: [read_file, list_dir, search_files, run_shell, write_file]
+
+- name: verifier
+  system: |
+    You are the adversarial verifier. You are handed ONE candidate and you try
+    to DISPROVE it. You did not find it, and that is the point: the agent that
+    checks a finding is never the agent that found it.
+
+    A candidate is a claim about code, and the code is in front of you. So this
+    is a comparison, not an opinion:
+
+      1. read what the candidate claims the code does
+      2. open the file and read what it ACTUALLY does
+      3. the claim contradicts the code      -> rejected, and say which line
+      4. the claim matches the code          -> then trace reachability from a
+                                                real entry point, and check
+                                                whether something else already
+                                                stops it
+
+    Three verdicts, and they are not degrees of confidence:
+
+      confirmed          a complete source trace AND a bounded observed result
+      needs_validation   a source-grounded hypothesis blocked on ONE exact
+                         unresolved fact — it carries no severity, because it
+                         is not a weak confirmation, it is an open question
+      rejected           you disproved it, and the record says how
+
+    Only a confirmed record gets severity, and severity is likelihood times
+    impact, never distance from a checklist. If you cannot state the concrete
+    damage, it is lower than it feels.
+
+    Write your verdict as structured JSON to the path your prompt names.
+  max_turns: 60
+  timeout: 30m
+  max_context_bytes: 300000
+  image: node:22-slim
+  network: none
+  container_limits:
+    cpu: 512
+    memory: 2147483648
+  tools: [read_file, list_dir, search_files, run_shell, write_file]
+
+- name: recorder
+  system: |
+    You assemble the verified records into the skill's findings.json format.
+    You are a scribe: you do not re-judge a verdict, add a finding nobody
+    verified, or drop one you disagree with.
+
+    The schema is in your context, and a validator will check what you write
+    against it. Every record keeps the verdict it arrived with, and only
+    confirmed records carry severity.
+  max_turns: 40
+  timeout: 20m
+  tools: [read_file, list_dir, write_file]
+
+- name: reporter
+  system: |
+    You write the report a repository owner will read, from the verified
+    records and the coverage ledger.
+
+    Target-neutral: no live-probe instructions, no exploit recipes, no
+    "try this against production". For each confirmed finding give the source
+    evidence, the affected principal, the priority, and the SMALLEST source
+    change that enforces the invariant at the last trusted decision point.
+
+    Two things you must not do, because they are how an audit becomes
+    misleading rather than merely incomplete:
+
+      - Never imply one pass exhausted the target. State the coverage you
+        actually had, including the units nobody reached.
+      - Never let the prose and the records disagree. A finding the verifiers
+        rejected does not reappear in your summary as a concern.
+
+    An audit that found nothing confirmed is a legitimate result, and it is
+    reported as coverage, not as reassurance.
+  max_turns: 40
+  timeout: 20m
+  tools: [read_file, list_dir, write_file]
+
+- name: repairer
+  system: |
+    You repair a JSON file that failed its schema validator. The validator's
+    output names the exact paths that are wrong.
+
+    Fix the STRUCTURE, never the substance: you do not invent a finding, change
+    a verdict, alter a severity, or delete a record to make the file pass. A
+    record you cannot repair without changing what it says is one you leave
+    alone so the validator keeps failing — a green validator over rewritten
+    findings is worse than a red one.
+  max_turns: 30
+  timeout: 15m
+  tools: [read_file, edit_file, write_file]
+
+jobs:
+- name: audit
+  timeout: 4h              # wall-clock ceiling on the whole run
+  budget:
+    tokens: 20000000       # cumulative across every agent step, delegations included
+  plan:
+  # ── phase 0: the target and the method ───────────────────────────────────
+  # Independent fetches, so the skill clone does not wait on the PR checkout.
+  - in_parallel:
+      steps:
+      - get: skill
+      - get: pr
+        trigger: true      # a new push to any open PR starts a new audit
+
+  # ── phase 1: reconnaissance ──────────────────────────────────────────────
+  # Writes the coverage ledger the rest of the run is planned and counted
+  # against, plus one brief per unit. The units/index.json is what decides the
+  # hunting matrix's width, so this step is where "how big is this audit"
+  # actually gets answered.
+  - agent: recon
+    inputs: [skill, pr]
+    outputs: [plan]
+    context_paths:
+    - skill/skills/security-audit/SKILL.md
+    - skill/skills/security-audit/RECONNAISSANCE.md
+    - pr/pr.diff
+    - pr/pr.json
+    messages:
+      - |
+        Map the change under review and produce the coverage plan for it.
+
+        Read the code under pr/ — the diff in your context says what moved, not
+        what it means. Write:
+
+          plan/architecture.md       the trust boundaries and input surfaces
+                                     this change touches
+          plan/coverage-ledger.json  the deterministic coverage units, in the
+                                     format the reconnaissance instructions
+                                     define. Profile: quick. A validator checks
+                                     this file, including canonical ids.
+          plan/units/index.json      a JSON array of SHORT unit ids: kebab-case
+                                     (letters, digits, - _ .), unique, at most
+                                     TEN. Fewer real units beat ten overlapping
+                                     ones.
+          plan/units/<id>.md         per unit: which boundary it covers, which
+                                     repo-relative paths under pr/ to start
+                                     from, and which attack classes apply.
+
+        Every id in index.json must correspond to a unit in the ledger.
+    assert:
+      files: [plan/coverage-ledger.json, plan/units/index.json]
+
+  # ── the ledger is checked by the skill's own validator ───────────────────
+  # A deterministic gate between two agent phases: the hunting matrix takes its
+  # width from a file, so a malformed ledger should stop the run HERE, cheaply,
+  # rather than fanning out ten hunters over a plan nobody validated.
+  #
+  # `plan` is declared both ways (read-modify-write), which is what lets the
+  # fix: agent repair the file in place and have the repair survive into the
+  # steps below.
+  - task: validate-ledger
+    inputs: [skill, plan]
+    outputs: [plan]
+    run: |
+      set -e
+      node skill/skills/security-audit/validate-coverage-ledger.cjs plan/coverage-ledger.json
+    fix:
+      agent: repairer
+      messages:
+        - |
+          The coverage ledger failed the skill's validator. Repair
+          plan/coverage-ledger.json so it passes, changing structure only —
+          never what a unit says it covers.
+
+  # ── phase 2: one hunter per coverage unit, concurrently ──────────────────
+  # `from_file:` takes the width from what recon wrote. Each cell is its own
+  # step: independently hashed, cached, and reported, with its own workspace —
+  # which is the skill's write isolation, enforced rather than requested.
+  #
+  # try:-wrapped so one hunter failing costs its unit, not the audit. A failed
+  # cell contributes no directory, and the ledger still records the unit as
+  # unreached rather than covered.
+  - across:
+    - var: unit
+      from_file: plan/units/index.json
+    max_in_flight: 4        # four containers at a time
+    budget:
+      tokens: 8000000       # when spent, no further cells start; the plan carries on
+      # What admission charges a cell that has not reported yet. Deliberately
+      # more than a quarter of the allowance, so the matrix runs a few wide and
+      # then waits for real numbers instead of committing the purse to cells
+      # nobody has measured.
+      reserve_per_cell: 2500000
+    try:
+      agent: hunter
+      inputs: [skill, pr, plan]
+      outputs: [candidates]
+      context_paths:
+      - skill/skills/security-audit/SKILL.md
+      - skill/skills/security-audit/HUNTING.md
+      - skill/skills/security-audit/ATTACK-CLASSES.md
+      - "plan/units/{{ .vars.unit }}.md"
+      messages:
+        - |
+          Hunt the one coverage unit your brief names. The brief is already in
+          your context: it says which boundary you own and where to start under
+          pr/.
+
+          Your shell has no network and a hard memory cap. Bounded local checks
+          are welcome inside it; anything you cannot establish there stays an
+          open question with the exact missing fact written down.
+
+          Write candidates/report.json: a JSON array of candidate objects in
+          the structure the hunting instructions define. An empty array is a
+          legitimate and common result — do not pad it.
+
+  # ── phase 3: consolidate, so every candidate is verified exactly once ────
+  # The hunters ran independently, so two of them can report the same root
+  # cause from different directions. Deduplicating BEFORE verification is what
+  # keeps the verifier count honest: one fingerprint, one verifier.
+  - agent: recorder
+    inputs: [skill, plan, candidates]
+    outputs: [queue]
+    context_paths:
+    - skill/skills/security-audit/VALIDATION-AND-REPORTING.md
+    messages:
+      - |
+        List candidates/ — each <unit>/report.json in it is one hunter's
+        candidates. Consolidate them by fingerprint, so one root cause appears
+        once however many hunters reached it.
+
+        Write:
+          queue/index.json    a JSON array of SHORT candidate ids, kebab-case,
+                              unique, one per distinct fingerprint
+          queue/<id>.json     that candidate, with every hunter's evidence for
+                              it merged, and the unit ids it came from
+
+        An empty index.json is legitimate: it means the hunters found nothing
+        worth verifying, which the report will state as coverage.
+    assert:
+      files: [queue/index.json]
+
+  # ── phase 4: one fresh verifier per candidate ────────────────────────────
+  # A separate step rather than an instruction in the hunter's prompt: an agent
+  # grading its own work is not a gate. Each cell is a conversation that has
+  # never seen the hunt that produced the claim.
+  - across:
+    - var: candidate
+      from_file: queue/index.json
+    max_in_flight: 4
+    budget:
+      tokens: 6000000
+      reserve_per_cell: 1500000
+    try:
+      agent: verifier
+      inputs: [skill, pr, queue]
+      outputs: [verdicts]
+      context_paths:
+      - skill/skills/security-audit/VALIDATION-AND-REPORTING.md
+      - "queue/{{ .vars.candidate }}.json"
+      messages:
+        - |
+          The candidate in your context is a CLAIM. Try to disprove it against
+          the code under pr/.
+
+          Write verdicts/verdict.json: the record, carrying exactly one of
+          confirmed / needs_validation / rejected, with the evidence that
+          decided it. Severity only if confirmed.
+
+  # ── phase 5: the structured record ───────────────────────────────────────
+  - agent: recorder
+    inputs: [skill, plan, verdicts]
+    outputs: [findings]
+    context_paths:
+    - skill/skills/security-audit/VALIDATION-AND-REPORTING.md
+    - skill/skills/security-audit/report-schema.json
+    messages:
+      - |
+        Assemble every verdict under verdicts/ into findings/findings.json, in
+        the schema in your context. Keep each record's verdict as the verifier
+        decided it.
+
+        Also copy plan/coverage-ledger.json to findings/coverage-ledger.json,
+        updating each unit's status to what actually happened: a unit whose
+        hunter never ran is not covered, and says so.
+    assert:
+      files: [findings/findings.json]
+
+  - task: validate-findings
+    inputs: [skill, findings]
+    outputs: [findings]
+    run: |
+      set -e
+      node skill/skills/security-audit/validate-findings.cjs findings/findings.json
+      node skill/skills/security-audit/validate-coverage-ledger.cjs findings/coverage-ledger.json
+    fix:
+      agent: repairer
+      messages:
+        - |
+          A file failed the skill's validator. Repair the structure it names —
+          never a verdict, a severity, or the substance of a record.
+
+  # ── phase 6: the report ──────────────────────────────────────────────────
+  - agent: reporter
+    inputs: [skill, pr, findings]
+    outputs: [report]
+    context_paths:
+    - skill/skills/security-audit/SKILL.md
+    - findings/findings.json
+    - findings/coverage-ledger.json
+    messages:
+      - |
+        Write the audit report from the verified records and the ledger, both
+        already in your context.
+
+          report/REPORT.md            what a maintainer reads: what was
+                                      audited, at which commit, what was
+                                      found, and — explicitly — what this run
+                                      did NOT reach
+          report/FINDINGS-DETAIL.md   per confirmed finding: the source trace,
+                                      the observed result, the smallest fix
+          report/NEEDS-VALIDATION.md  per blocked lead: the exact unresolved
+                                      fact and a safe way for the owner to
+                                      settle it
+
+        This was a scoped, single-pass, quick-profile audit. Say so in the
+        first section. Do not imply the rest of the repository is fine.
+    assert:
+      # The one assertion a prose answer cannot satisfy: an agent that reports
+      # success without producing anything is otherwise indistinguishable.
+      files: [report/REPORT.md, report/FINDINGS-DETAIL.md, report/NEEDS-VALIDATION.md]
+
+  # A deterministic check that the artifacts exist, before a person is asked
+  # to look at them.
+  - task: check-report
+    inputs: [pr, findings, report]
+    run: |
+      set -e
+      test -s report/REPORT.md          || { echo "no report was written" >&2; exit 1; }
+      test -s findings/findings.json    || { echo "no findings file was written" >&2; exit 1; }
+      test -s pr/pr.number              || { echo "the PR number was never fetched" >&2; exit 1; }
+
+      echo "audit ready for review"
+    assert:
+      stdout: audit ready for review
+
+  # ── a human approves before anything is public ───────────────────────────
+  # An audit comment on somebody's PR is a public claim about their code's
+  # security. It gets read by a person first, always.
+  - approval:
+      message: "Audit drafted in report/REPORT.md — post it to the PR?"
+      timeout: 24h
+
+  - put: audit-comment
+    inputs: [pr, report]
+
+  # Best-effort: a failing notification must not fail an audit that succeeded.
+  on_failure:
+    try:
+      task: notify
+      run: echo "security audit pipeline failed" >&2
+
+  # No assert.execution here, deliberately: both matrix widths are decided at
+  # run time — by what recon planned and by what the hunters found — so the
+  # step names are not knowable when this file is written.
+  assert:
+    outcome: succeeded
