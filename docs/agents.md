@@ -1124,7 +1124,9 @@ A hosted agent that tries to finish without its required verdict gets forced int
 
 ### `attempts:` resumes the conversation
 
-On the hosted path `attempts:` retries one HTTP request underneath a conversation that survives. A CLI agent gets the same guarantee by a different mechanism: the step names a session up front, and every retry **rejoins** it rather than starting the task over. The retried process is told what went wrong and to continue. Only *infrastructure* failures are retried — the process failed to start, exited nonzero, or died without reporting a result. A CLI that ran fine and concluded the task failed is an answer, not an outage.
+On the hosted path `attempts:` retries one HTTP request underneath a conversation that survives. A CLI agent gets the same guarantee by a different mechanism: the step names a session up front, and every retry **rejoins** it rather than starting the task over. The retried process is told what went wrong and to continue. Only *infrastructure* failures are retried — the process failed to start, exited nonzero, died without reporting a result, or reported an error its model did not author, such as a usage limit. A CLI that ran fine and concluded the task failed is an answer, not an outage.
+
+A step that hit a usage limit ends *errored*, not failed: `on_error` fires and a `failure:` route does not catch it, since nothing about the outcome is the model's own answer to route on. A session limit will not clear within the retry backoff, so every attempt fails fast and cheaply rather than waiting for it to reset.
 
 - **The turn budget is per step, not per attempt** — `max_turns` counts across the whole conversation.
 - **The transcript is cleaned up** — steps deletes the step's own session file afterwards.

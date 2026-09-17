@@ -386,6 +386,132 @@ func TestE2ECLIAgentDoesNotRetryTaskFailure(t *testing.T) {
 	}
 }
 
+// TestE2ECLIAgentRetriesProviderError is issue #125's e2e twin of
+// TestE2ECLIAgentDoesNotRetryTaskFailure: a usage limit is a provider error —
+// the CLI's loop ended on its own terms (subtype success) despite is_error,
+// with the limit sentence the model never got to answer — not a reported
+// task failure. It retries under attempts:, ends the step errored rather
+// than failed, and is not routable by failure:.
+func TestE2ECLIAgentRetriesProviderError(t *testing.T) {
+	dir := t.TempDir()
+
+	// The literal message has no apostrophe — it is embedded inside a
+	// single-quoted `echo`, which an apostrophe would terminate early — but
+	// keeps the non-ASCII middle dot from the issue's own example.
+	claude := writeFakeClaude(t,
+		"echo '"+cliInitEvent(cliPipelineGrantedTools()...)+"'\n"+
+			"echo '"+cliProviderErrorResultEvent("You have hit your session limit · resets 11:20am")+"'\nexit 1")
+
+	// attempts: 3 set explicitly (unlike the sibling tests, which lean on
+	// the default) and max_turns: raised so three 27-turn attempts do not
+	// trip the turn budget before the provider error is even reached.
+	yaml := strings.Replace(
+		readFileString(t, cliPipeline(t, dir)),
+		"  max_turns: 12",
+		"  max_turns: 100\n  attempts: 3",
+		1)
+	path := writePipeline(t, dir, yaml)
+
+	err := cli.Run([]string{path})
+	if err == nil {
+		t.Fatal("a claude that reported a usage limit produced a successful run")
+	}
+
+	if !strings.Contains(err.Error(), "session limit") {
+		t.Errorf("error %q does not name the limit", err)
+	}
+
+	if strings.ContainsAny(err.Error(), "\x1b\r") {
+		t.Errorf("error %q carries an unsanitized control character", err)
+	}
+
+	if got := claude.invocations(t); got != 3 {
+		t.Errorf("the claude ran %d times, want 3 — a provider error is retried by attempts:", got)
+	}
+
+	// Not routable by failure: — the job errored rather than reaching the
+	// route that reported failures take.
+	assertNoFile(t, filepath.Join(dir, "escalated.log"))
+
+	agentNode := findNode(t, storeNodes(t, path), "agent", "reviewer")
+	if agentNode.Status != "errored" {
+		t.Errorf("agent node status = %q, want errored", agentNode.Status)
+	}
+
+	if !strings.Contains(agentNode.Error, "session limit") {
+		t.Errorf("recorded error = %q, want it to name the limit", agentNode.Error)
+	}
+
+	// The retry resumed the same session rather than starting the task over.
+	opening := claude.argv(t, 1)
+
+	session := fieldAfter(t, opening, "--session-id")
+	if session == "" {
+		t.Fatalf("the opening invocation named no session:\n%s", opening)
+	}
+
+	if got := fieldAfter(t, claude.argv(t, 2), "--resume"); got != session {
+		t.Errorf("the retry resumed %q, want the opening session %q", got, session)
+	}
+
+	if prompt := claude.prompt(t, 2); !strings.Contains(prompt, "do not start the task over") {
+		t.Errorf("the retry was not told to continue:\n%s", prompt)
+	}
+}
+
+// TestE2ECLIAgentRecoversFromProviderError proves the fix end to end: a
+// usage limit on the first attempt does not poison a step that recovers on
+// the retry — the limit sentence must not linger as the step's recorded
+// answer, and the verdict the retry captures must still route the job.
+func TestE2ECLIAgentRecoversFromProviderError(t *testing.T) {
+	requireCurl(t)
+
+	dir := t.TempDir()
+
+	claude := writeFakeClaude(t, `
+if [ ! -f "$0.attempted" ]; then
+  touch "$0.attempted"
+  `+"echo '"+cliInitEvent(cliPipelineGrantedTools()...)+"'\n  "+
+		"echo '"+cliProviderErrorResultEvent("You have hit your session limit · resets 11:20am")+"'\n  exit 1\nfi\n"+
+		"echo '"+cliInitEvent(cliPipelineGrantedTools()...)+"'\n"+
+		callBridgeScript("verdict", `{"choice":"approve"}`)+
+		"echo '"+cliResultEvent("", 1)+"'")
+
+	// max_turns: raised the same way TestE2ECLIAgentRetriesProviderError
+	// raises it: the limit event's own num_turns (27, matching the issue)
+	// already exceeds the fixture's default 12-turn budget, which
+	// accumulates PER STEP across attempts and would otherwise stop the
+	// retry on a ceiling before the recovery ever got to run.
+	yaml := strings.Replace(
+		readFileString(t, cliPipeline(t, dir)),
+		"  max_turns: 12",
+		"  max_turns: 100\n  attempts: 2",
+		1)
+	path := writePipeline(t, dir, yaml)
+
+	err := cli.Run([]string{path})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if got := claude.invocations(t); got != 2 {
+		t.Errorf("the claude ran %d times, want 2 (one limited attempt, one recovery)", got)
+	}
+
+	if got := readFileString(t, filepath.Join(dir, "approved.log")); !strings.Contains(got, "approved") {
+		t.Error("the retry's verdict did not route")
+	}
+
+	agentNode := findNode(t, storeNodes(t, path), "agent", "reviewer")
+	if agentNode.Status != "succeeded" {
+		t.Errorf("agent node status = %q (%s), want succeeded", agentNode.Status, agentNode.Error)
+	}
+
+	if result := storeNodeResult(t, path, "reviewer"); strings.Contains(result, "session limit") {
+		t.Errorf("recorded result = %q, the limit sentence from the dead attempt must not survive as the step's answer", result)
+	}
+}
+
 // TestE2ECLIAgentsRunConcurrently covers matrix fan-out over a CLI agent,
 // which is where the per-attempt bridge stops being an implementation detail:
 // every cell spawns its own subprocess AND its own MCP server, so a cell

@@ -25,6 +25,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/outcome"
@@ -56,7 +58,10 @@ const cliWaitDelay = 5 * time.Second
 // problem — more of it, since it edits more — so it gets exactly that fix.
 //
 // Only INFRASTRUCTURE failures are retried either way: a CLI that ran and
-// decided the task failed gets its answer respected, not re-rolled.
+// decided the task failed gets its answer respected, not re-rolled —
+// including an error the CLI reports but its model did not write (a usage
+// limit), which retries the same as a crashed process rather than as a
+// verdict.
 func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout time.Duration) (conversationResult, error) {
 	if config.CLIBinary(prepared.ri.CLI) == "" {
 		return conversationResult{}, fmt.Errorf("agent %q: no runtime for cli %q", prepared.ri.AgentName, prepared.ri.CLI)
@@ -646,10 +651,23 @@ func (s *cliStepState) absorb(model string, run cliRunResult, bridge *cliBridge)
 		s.finishReason = run.errSubtype
 	}
 
+	// A provider error reports subtype "success" too (that IS the bug this
+	// guards against), which would otherwise draw "success — step failed" in
+	// the spend panel with a tooltip explaining the wrong thing
+	// (internal/web/model.go's FailedAfter). "error" is self-explanatory
+	// there already. A later, genuinely successful attempt still overwrites
+	// it via the rule above.
+	if cliProviderErrored(run) {
+		s.finishReason = "error"
+	}
+
 	// Last non-empty wins for the answer and the decision: a later attempt
 	// speaks for the conversation, but a crashed one that said nothing must
-	// not erase what an earlier one said.
-	if run.text != "" {
+	// not erase what an earlier one said. An is_error run's text is never
+	// taken as the answer at all — a retry recovering with an empty result
+	// would otherwise report the error sentence (a usage limit, say) as the
+	// step's own answer.
+	if run.text != "" && !run.isError {
 		s.text = run.text
 	}
 
@@ -804,6 +822,72 @@ func runCLIAttempt(
 	return checkCLIObligations(prepared, run, state.satisfied)
 }
 
+// errCLIProviderError is the sentinel a step-level error wraps when the CLI's
+// own subtype says its loop ended on its own terms (success) despite
+// is_error being set — a usage limit, an API error, or an auth failure the
+// model itself never got a turn to answer. Deliberately a plain error rather
+// than outcome.Fail: the attempt closure in runCLIConversation lets anything
+// that is not a *outcome.Failure or errCLIToolSurface through to retry, so
+// wrapping this sentinel is what fires on_error, keeps it out of failure:
+// routing, and resumes the same session on the next attempt — mirroring
+// errCLIToolSurface's own reasoning for staying out of outcome.Fail.
+var errCLIProviderError = errors.New("reported by the cli, not authored by its model")
+
+// cliReasonMaxBytes bounds a sanitized reason so the step's own sentence
+// stays ahead of errCLIProviderError's text within the store's 2 KiB stored
+// error cap (store.MaxStoredErrorBytes).
+const cliReasonMaxBytes = 512
+
+// cliProviderErrored reports whether a terminal is_error result is the
+// provider failing mid-turn rather than the model answering its task.
+// Claude Code uses subtype "success" when its own loop ended on its own
+// terms and error_max_turns (and friends) when steps' own limits stopped
+// it — so is_error together with subtype "success" is a structural signal
+// that the last turn was an error the model did not author, with no
+// matching on the CLI's prose required.
+func cliProviderErrored(run cliRunResult) bool {
+	return run.isError && run.errSubtype == "success"
+}
+
+// cliReason sanitizes a candidate error reason before it reaches an
+// operator. Unlike ordinary tool output, this text is now shown on the
+// terminal and in slog lines — neither sanitizes the way the web UI's
+// html/template does — so it is cut to its first line, stripped of control
+// runes (stops ANSI escape / CR injection), and capped on a rune boundary.
+// Empty input (nothing to sanitize) and whitespace-only input both return
+// "", so a blank candidate falls through to the next one in the caller's
+// fallback chain rather than winning as "the" reason.
+func cliReason(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = s[:i]
+	}
+
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+
+		return r
+	}, s)
+
+	s = strings.TrimSpace(s)
+	if len(s) <= cliReasonMaxBytes {
+		return s
+	}
+
+	cut := cliReasonMaxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+
+	return s[:cut]
+}
+
 // checkCLIObligations turns what the CLI reported, plus what the bridge saw,
 // into the step's outcome.
 //
@@ -814,16 +898,30 @@ func runCLIAttempt(
 // it is what lets `to:` routing mean the same thing either way.
 func checkCLIObligations(prepared preparedAgentStep, run cliRunResult, satisfied map[string]bool) error {
 	if run.isError {
-		// The CLI's own sentence first ("Reached maximum number of turns (1)"),
-		// then its machine-readable subtype, then a generic line. An operator
-		// reading a failed step should not have to look up error_max_turns.
-		reason := run.errMessage
+		// The CLI's own sentence first (errors[0]), then its reported result
+		// text — where a provider error such as a usage limit lands, since
+		// the CLI reports no errors[] entry for one — then its
+		// machine-readable subtype, then a generic line. "success" is
+		// skipped as a subtype fallback: it is the very subtype that marks a
+		// provider error (see cliProviderErrored), and showing it verbatim
+		// as the reason is the original bug this guards against
+		// ("agent \"x\": success"). An operator reading a failed step should
+		// not otherwise have to look up error_max_turns.
+		reason := cliReason(run.errMessage)
 		if reason == "" {
+			reason = cliReason(run.text)
+		}
+
+		if reason == "" && run.errSubtype != "success" {
 			reason = run.errSubtype
 		}
 
 		if reason == "" {
 			reason = "the cli reported the task as failed"
+		}
+
+		if cliProviderErrored(run) {
+			return fmt.Errorf("agent %q: %s: %w", prepared.ri.AgentName, reason, errCLIProviderError)
 		}
 
 		//nolint:wrapcheck // outcome.Fail is the intended failure marker, not an opaque external error

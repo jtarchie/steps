@@ -191,3 +191,20 @@ func cliErrorResultEvent(subtype, message string) string {
 		`{"type":"result","subtype":%q,"result":"","num_turns":8,"is_error":true,"errors":[%q]}`,
 		subtype, message)
 }
+
+// cliProviderErrorResultEvent is the terminal event of a run where the CLI's
+// own loop ended on its own terms (subtype "success") despite is_error being
+// set — a usage limit, with no errors[] entry, the limit sentence carried
+// only in result. The raw event that produced issue #125 was never captured;
+// this shape is the only one that reproduces `agent "x": success`. The fake
+// exits 1, like the real CLI's other is_error results — the driver ignores
+// the exit status once a result has arrived, so either value takes the same
+// path. Callers embedding message in a single-quoted `echo` (writeFakeClaude
+// scripts do) must keep it free of apostrophes, which would terminate the
+// shell string early.
+func cliProviderErrorResultEvent(message string) string {
+	return fmt.Sprintf(
+		`{"type":"result","subtype":"success","is_error":true,"result":%q,"num_turns":27,`+
+			`"total_cost_usd":0.5,"usage":{"input_tokens":100,"output_tokens":20}}`,
+		message)
+}

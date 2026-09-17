@@ -140,6 +140,39 @@ func TestParseCLIStreamTruncated(t *testing.T) {
 	}
 }
 
+// TestParseCLIStreamReportsAProviderErrorAsSuccessSubtype pins the parse half
+// of issue #125: Claude Code's terminal event for a usage limit has
+// is_error true, subtype "success" (its loop ended on its own terms), no
+// errors array, and the limit sentence only in result — the raw event was
+// never captured, so this is the exact shape the transcript's recorded
+// sentence implies.
+func TestParseCLIStreamReportsAProviderErrorAsSuccessSubtype(t *testing.T) {
+	t.Parallel()
+
+	stream := `{"type":"result","subtype":"success","is_error":true,"result":"You've hit your session limit · resets 11:20am"}`
+
+	result, err := parseCLIStream(strings.NewReader(stream), nil, nil)
+	if err != nil {
+		t.Fatalf("parseCLIStream: %v", err)
+	}
+
+	if !result.isError {
+		t.Error("isError = false, want true")
+	}
+
+	if result.errSubtype != "success" {
+		t.Errorf("errSubtype = %q, want success", result.errSubtype)
+	}
+
+	if want := "You've hit your session limit · resets 11:20am"; result.text != want {
+		t.Errorf("text = %q, want %q", result.text, want)
+	}
+
+	if result.errMessage != "" {
+		t.Errorf("errMessage = %q, want empty (no errors array)", result.errMessage)
+	}
+}
+
 func TestParseCLIStreamReportsFailure(t *testing.T) {
 	t.Parallel()
 
