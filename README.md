@@ -102,7 +102,7 @@ jobs:
 OPENROUTER_API_KEY=... steps run review.yml
 ```
 
-Swap the model for yours: any OpenAI-compatible endpoint, OpenRouter, Vercel AI Gateway (`vercel/anthropic/claude-sonnet-5`), a local server that needs no key (`lmstudio/your-model`), or a CLI you already have (`"@claude/sonnet"`). `steps validate review.yml` tells you before a run whether the key is set and the model resolves.
+Swap the model for yours: any OpenAI-compatible endpoint, OpenRouter, a gateway (`vercel/`, `requesty/`, `helicone/`), a local server that needs no key (`lmstudio/your-model`), or a CLI you already have (`"@claude/sonnet"`). `steps validate review.yml` tells you before a run whether the key is set and the model resolves.
 
 ## See it run
 

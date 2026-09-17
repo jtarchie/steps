@@ -433,6 +433,22 @@ func TestResolveAgentTarget(t *testing.T) {
 			wantRequiresKey:          true,
 			wantStringOnlyToolChoice: false,
 		},
+		{ //nolint:gosec // wantAPIKeyEnv values are env-var *names*, not credential values
+			name:            "requesty prefix with slashed model id",
+			source:          AgentSource{Model: "requesty/anthropic/claude-sonnet-5"},
+			wantBaseURL:     "https://router.requesty.ai/v1/",
+			wantModel:       "anthropic/claude-sonnet-5",
+			wantAPIKeyEnv:   "REQUESTY_API_KEY",
+			wantRequiresKey: true,
+		},
+		{ //nolint:gosec // wantAPIKeyEnv values are env-var *names*, not credential values
+			name:            "helicone prefix with a bare model id",
+			source:          AgentSource{Model: "helicone/claude-sonnet-4"},
+			wantBaseURL:     "https://ai-gateway.helicone.ai/v1/",
+			wantModel:       "claude-sonnet-4",
+			wantAPIKeyEnv:   "HELICONE_API_KEY",
+			wantRequiresKey: true,
+		},
 		{
 			name:            "lmstudio prefix requires no key",
 			source:          AgentSource{Model: "lmstudio/qwen2.5-coder"},

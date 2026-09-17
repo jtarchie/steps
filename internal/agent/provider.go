@@ -205,8 +205,8 @@ func lookupAPIKey(envVar string, required bool) (string, error) {
 //
 // Every invocation gets the package's shared HTTP client (see
 // agentHTTPClient): the tool-call argument repair transport applies to all
-// providers, and an OpenRouter or Vercel base URL additionally gets the
-// session/cache transport (see openrouter.go, vercel.go).
+// providers, and an OpenRouter or other caching-gateway base URL additionally
+// gets the session/cache transport (see openrouter.go, gateway.go).
 //
 // It takes the whole ResolvedInvocation rather than loose strings so the
 // mapping from invocation fields to client settings lives in exactly one
@@ -231,7 +231,7 @@ func newAgentLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
 // transport that implements attempts: (see requests.go — innermost, because an
 // individual request is the operation it retries), the tool-call argument
 // repair transport (all providers — see repair.go), and, only for an
-// OpenRouter or Vercel base URL, the session/cache transport. Split
+// OpenRouter or caching-gateway base URL, the session/cache transport. Split
 // out from newAgentLLM so the field mapping it performs — the session is
 // scoped by AgentName, not ModelName — is directly assertable in a test.
 func agentHTTPClient(ri config.ResolvedInvocation) *http.Client {
@@ -244,11 +244,10 @@ func agentHTTPClient(ri config.ResolvedInvocation) *http.Client {
 
 	var transport http.RoundTripper = &repairTransport{base: retrying}
 
-	switch {
-	case isOpenRouterBaseURL(ri.BaseURL):
+	if isOpenRouterBaseURL(ri.BaseURL) {
 		transport = &openRouterTransport{base: transport, agent: ri.AgentName}
-	case isVercelBaseURL(ri.BaseURL):
-		transport = &vercelTransport{base: transport, agent: ri.AgentName}
+	} else if gateway, ok := cachingGatewayFor(ri.BaseURL); ok {
+		transport = &gatewayTransport{base: transport, agent: ri.AgentName, gateway: gateway}
 	}
 
 	return &http.Client{Transport: transport}
