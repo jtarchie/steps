@@ -77,6 +77,16 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 	prepared.conv.usage = attachUsage(ctx, prepared.conv.usage)
 	defer prepared.conv.usage.finish()
 
+	// Publish it to the tools, the same as the hosted path does once
+	// attachUsage has guaranteed a non-nil accumulator. The bridge copies
+	// conv.env per attempt, so this must be set before any of them runs. A
+	// sub-agent tool is the one tool that reads it, and without this a
+	// delegating CLI step's child ran on its own declared budget with its
+	// spend charged to nothing — neither the parent's allowance nor the
+	// job's usage report, which is a delegation spending real money and
+	// recording none of it.
+	prepared.conv.env.usage = prepared.conv.usage
+
 	// Minted here, not read from the CLI's own report: a session id we chose
 	// is one we can resume without parsing for it, and one we can clean up
 	// afterwards knowing no other run could own that name.

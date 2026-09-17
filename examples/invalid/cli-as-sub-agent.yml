@@ -1,6 +1,7 @@
-# The inverse of cli-sub-agent-grant.yml: a cli agent cannot BE a sub-agent
-# either. buildSubAgentTool drives the child over the same turn loop, which a
-# cli source replaces.
+# A cli agent cannot BE a sub-agent. buildSubAgentTool drives the child over
+# steps' own turn loop, which a cli source replaces wholesale. Granting a
+# sub-agent TO a cli agent is the direction that loads: the child is reached
+# over the bridge like any other tool.
 # expect: which has a cli source
 
 agents:

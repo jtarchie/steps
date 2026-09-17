@@ -520,8 +520,10 @@ func TestCLIAgentGenerationDials(t *testing.T) {
 // "the cli owns its own tool loop" — true of the HOSTED turn loop, but every
 // CLI call now reaches the bridge (or the exit check below it), which is
 // exactly where each of these already binds for every other agent kind. A
-// sub-agent grant is the one case left refused: it has no turn loop to nest
-// into on either path.
+// sub-agent grant loads for the same reason: the child is a toolImpl the
+// bridge serves, so the parent having no turn loop of steps' own is beside
+// the point. The CHILD being a CLI agent is what stays refused, by
+// checkNoCLISubAgents — see examples/invalid/cli-as-sub-agent.yml.
 func TestCLIAgentToolGuardsUnrefused(t *testing.T) {
 	t.Parallel()
 
@@ -554,11 +556,10 @@ func TestCLIAgentToolGuardsUnrefused(t *testing.T) {
       repo: jtarchie/ci`,
 		},
 		{
-			name: "sub-agent grant still refused",
+			name: "sub-agent grant loads",
 			tools: `
   - agent: extra
     description: d`,
-			wantErrSubstr: "grants a sub-agent, which is not supported with a cli source",
 		},
 	}
 

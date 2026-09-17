@@ -496,6 +496,7 @@ jobs:
 - No cache node, `job_run`, or execution-log entry is recorded for the child conversation — same no-record contract as `fix:` agents and hook steps.
 - A child failure comes back to the parent as `{"error": ...}`, never a Go error that aborts the parent conversation.
 - A sub-agent is a capability grant like `run_shell`: a step selects a granted one by bare name and cannot introduce one inline.
+- **A CLI-backed agent can grant one** — the child is reached over the same bridge as every other tool, and its conversation runs here. A CLI agent cannot *be* one; see [What a CLI agent cannot do](#what-a-cli-agent-cannot-do).
 - **Load-time graph checks**: a sub-agent tool must set no `builtin`/`name`/`run`, can never be `required:`, and must reference an existing agent. The agent graph is walked for cycles and capped at a nesting depth of 8. A fix agent may not grant sub-agents.
 - **Caching**: a sub-agent tool folds in the child's resolved invocation content (model/endpoint/persona/dials/max_turns/image + its own tools, recursively), so editing a child — or grandchild — busts the parent step's hash.
 
@@ -1142,8 +1143,10 @@ These are load errors, not silent no-ops, because a setting that reads as config
 | `source.string_tool_choice:` | no `tool_choice` on the wire to spell |
 | `compact_after_tokens:`, `context_window:` | the CLI compacts its own conversation |
 | `budget.tokens:` | nothing counts tokens until the subprocess exits (use `budget.usd:`) |
-| sub-agent tools, in either direction | a sub-agent nests inside a turn loop there is none of |
+| a CLI agent as another agent's sub-agent | the child of a delegation is driven by steps' own turn loop, which a CLI source replaces wholesale |
 | a CLI agent as a task's `fix:` agent | same reason |
+
+**Granting a sub-agent is accepted**, and it is the same tool grant a hosted agent gets. It was refused in both directions once, on the reasoning that a delegation nests inside a turn loop a CLI agent does not run — but a sub-agent tool is an ordinary tool implementation, and since `--tools ""` every tool a CLI agent calls reaches it over the bridge. The child's conversation runs in *this* process, under steps' own model, persona, tools and `image:`, and its answer comes back as the tool result. So a CLI parent can delegate to a cheap hosted model on another provider, which the CLI's own subagents cannot do. Two things follow from the child being ours rather than the CLI's: its spend folds into the step's total (so a job `budget:` still bounds the subtree, even though the CLI parent itself meters in dollars), and preflight probes it before the parent process starts, so an unreachable child costs seconds rather than a whole conversation. Only the reverse remains refused, above: the *child* of a delegation cannot itself be a CLI agent.
 
 `required:`, `max_calls:` and `args:` on a tool are accepted, same as a hosted agent's: every call now reaches the bridge (or, for `required:`, is checked at exit against what the bridge observed — see "Verdicts are enforced at exit" above), so there is no longer a turn loop these would promise a constraint nothing applies. `timeout:` on a tool is accepted regardless of whether it names a built-in or a custom/MCP tool, for the same reason: every call now reaches the bridge, so there is no longer a native path a per-call deadline would silently miss. `network: none` together with `image:` is accepted too — see below.
 

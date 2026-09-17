@@ -144,11 +144,6 @@ func (c *Config) validateCLIAgents() error {
 		if err != nil {
 			return err
 		}
-
-		err = c.checkCLIAgentTools(agent)
-		if err != nil {
-			return err
-		}
 	}
 
 	err := c.checkHostedAgentBudgets()
@@ -229,46 +224,19 @@ func checkCLIAgentSettings(agent Agent) error {
 	return nil
 }
 
-// checkCLIAgentTools rejects the one tool grant a CLI agent genuinely cannot
-// run: a sub-agent, which nests a conversation inside internal/agent's own
-// turn loop — a loop a CLI source replaces wholesale, so there is nothing to
-// nest into (see checkNoCLISubAgents for the symmetric case of a CLI agent
-// being the callee).
-//
-// required:/max_calls:/args: used to be refused here too, on the reasoning
-// that they were enforced by internal/agent's turn loop, which a CLI agent
-// does not run. Since issue #100 every tool a CLI agent calls — builtin
-// included — goes through the bridge, and the bridge (or the exit check
-// below it) is exactly where each of those already binds for every OTHER
-// agent kind:
-//   - max_calls: is cliBridge.overBudget, counting every bridged call behind
-//     one mutex — the same machinery max_questions: already rides.
-//   - args: pins merge inside execCustomTool, which the bridge calls
-//     unchanged; the model never sees a pinned key in its schema either way.
-//   - required: is checked at exit by checkCLIObligations against the
-//     bridge's observed calls — stricter than the hosted path's force-one-
-//     more-turn-and-hope, not weaker, so there is no gap to leave refused.
-//
-// So there is no longer a NATIVE builtin the bridge never sees, and refusing
-// these would be a fence with nothing behind it.
-func (c *Config) checkCLIAgentTools(agent Agent) error {
-	for _, spec := range agent.Tools {
-		name := ToolSpecName(spec)
-
-		if spec.Agent != "" {
-			return fmt.Errorf("agent %q: tool %q grants a sub-agent, which is not supported with a cli source (%s...); delegate with a separate agent step instead",
-				agent.Name, name, CLISourcePrefix)
-		}
-	}
-
-	return nil
-}
-
 // checkCLIAgentReferences rejects the two places a CLI agent can be named by
 // something that would have to drive its conversation directly: as another
 // agent's sub-agent tool, and as a task's fix: agent. Both build their
 // conversation on internal/agent's turn loop, which a CLI source replaces
 // wholesale.
+//
+// The other direction — a CLI agent GRANTING a sub-agent — is not refused.
+// It was, on the reasoning that a sub-agent nests inside the parent's turn
+// loop; but since issue #100 a CLI agent's every tool call reaches the
+// bridge, and a sub-agent tool is a toolImpl the bridge serves like any
+// custom tool, running the child's hosted conversation in this process and
+// handing its text back. Nothing about the parent being a subprocess enters
+// into it.
 func (c *Config) checkCLIAgentReferences() error {
 	isCLI := func(name string) bool {
 		agent, err := c.FindAgent(name)
@@ -284,9 +252,10 @@ func (c *Config) checkCLIAgentReferences() error {
 	return c.checkNoCLIFixAgents(isCLI)
 }
 
-// checkNoCLISubAgents rejects a CLI agent named by any sub-agent grant. A
-// sub-agent runs a nested conversation inside the parent's turn loop, and a
-// CLI agent has none to nest into.
+// checkNoCLISubAgents rejects a CLI agent named by any sub-agent grant: the
+// child of a sub-agent call is driven by preparedSubAgent.run on the hosted
+// turn loop, and a CLI agent would need the subprocess runner and a bridge of
+// its own there instead.
 func (c *Config) checkNoCLISubAgents(isCLI func(string) bool) error {
 	for i := range c.Agents {
 		for _, spec := range c.Agents[i].Tools {
