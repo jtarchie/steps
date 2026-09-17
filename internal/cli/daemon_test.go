@@ -569,6 +569,42 @@ func TestASetIsRefusedForWhatValidateWouldRefuse(t *testing.T) {
 	}
 }
 
+// Not t.Parallel(), as it sets the environment: a held pipeline this machine can no longer run used to stop the restarted daemon from serving any of the others.
+func TestARestartSkipsAPipelineThisMachineCannotRunAndServesTheRest(t *testing.T) {
+	held := servingDaemon(t)
+
+	t.Setenv("DAEMON_RESTART_KEY", "x")
+	setPipeline(t, held, "needs-key", "resource_types:\n- name: api\n  env: [DAEMON_RESTART_KEY]\n  config:\n    expr:\n      check: '[{v: env(\"DAEMON_RESTART_KEY\")}]'\n"+
+		"resources:\n- name: thing\n  type: api\n  source: {}\njobs:\n- name: build\n  plan:\n  - get: thing\n")
+	setPipeline(t, held, "plain", idlePipeline)
+	held.Close()
+
+	t.Setenv("DAEMON_RESTART_KEY", "")
+
+	local := web.NewLocalRunner(nil, nil, 1, false)
+
+	server, err := web.New(nil, local)
+	if err != nil {
+		t.Fatalf("web.New: %v", err)
+	}
+
+	restarted := newDaemon(t.Context(), server, local, held.state, ExecFlags{}, HistoryFlags{}, time.Hour)
+	t.Cleanup(restarted.Close)
+
+	err = restarted.load(t.Context())
+	if err != nil {
+		t.Fatalf("load refused the whole daemon over one pipeline's missing key: %v", err)
+	}
+
+	if server.Lookup("plain") == nil {
+		t.Error("the pipeline this machine can run is not served")
+	}
+
+	if server.Lookup("needs-key") != nil {
+		t.Error("the pipeline missing its key is served anyway")
+	}
+}
+
 // Not t.Parallel(), as captureStdout swaps os.Stdout: the read commands open .steps/steps.db unless told otherwise, so a daemon on any other file must name it in a parked step's printed answer command.
 func TestAParkedStepUnderTheDaemonNamesItsDatabase(t *testing.T) {
 	held := servingDaemon(t)

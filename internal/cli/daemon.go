@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -154,6 +155,15 @@ func (d *daemon) restore(ctx context.Context, name, from string) error {
 	}
 
 	cfg, err := d.accept(name, revision.Source, revision.Includes)
+	if errors.Is(err, errCannotRunHere) {
+		_ = st.Close()
+
+		// Skipped, loudly, rather than refused: an unset key is a fact about the shell that started this process, and one pipeline's missing token must not keep every other pipeline from being served.
+		fmt.Fprintf(os.Stderr, "steps web: NOT serving %s; restart with this fixed to serve it again: %v\n", name, err)
+
+		return nil
+	}
+
 	if err != nil {
 		_ = st.Close()
 
@@ -276,6 +286,9 @@ func release(st store.Store) {
 	_ = handle.Release()
 }
 
+// errCannotRunHere marks a refusal about this machine (an unset key, a missing binary) rather than the file, which restore treats differently.
+var errCannotRunHere = errors.New("cannot run here")
+
 // accept is everything `steps validate` checks except the network, run HERE because every one of those answers is about this machine — and it is the bar `steps run` enforces, so a set that passes cannot produce a run that dies at preflight.
 func (d *daemon) accept(name, source string, includes map[string]string) (*config.Config, error) {
 	cfg, err := config.Parse([]byte(source), name, config.Bundle(includes))
@@ -290,7 +303,7 @@ func (d *daemon) accept(name, source string, includes map[string]string) (*confi
 
 	problems := cfg.CheckEnvironment()
 	if len(problems) > 0 {
-		return nil, fmt.Errorf("%w: %s cannot run here:\n%s", web.ErrRefused, name, renderProblems(problems))
+		return nil, fmt.Errorf("%w: %s %w:\n%s", web.ErrRefused, name, errCannotRunHere, renderProblems(problems))
 	}
 
 	// The DAEMON's context, not the request's: --worker was parsed onto the
