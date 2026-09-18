@@ -1,0 +1,12 @@
+{
+  "provenance": "constructed from https://docs.sentry.io/organization/integrations/integration-platform/webhooks/ (hex HMAC-SHA256 of the body)",
+  "secret": "sentry-client-secret",
+  "body": "{\"action\":\"created\",\"data\":{\"issue\":{\"id\":\"1170820242\"}}}",
+  "headers": {
+    "Sentry-Hook-Resource": "issue",
+    "Request-ID": "88c28c2d-bb4d-4ca3-a2c5-a1f0e6a5b6a1",
+    "Sentry-Hook-Signature": "be833a03aad418be735bb91cc0c5eefb5a92d6402929907dd6a2e2c0e1218e7e"
+  },
+  "id": "88c28c2d-bb4d-4ca3-a2c5-a1f0e6a5b6a1",
+  "event": "issue"
+}

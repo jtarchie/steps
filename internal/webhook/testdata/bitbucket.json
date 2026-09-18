@@ -1,0 +1,12 @@
+{
+  "provenance": "constructed from https://support.atlassian.com/bitbucket-cloud/docs/manage-webhooks/ (sha256= hex HMAC of the body)",
+  "secret": "bitbucket-secret",
+  "body": "{\"push\":{\"changes\":[]}}",
+  "headers": {
+    "X-Event-Key": "repo:push",
+    "X-Request-UUID": "d0c6b1e2-4c5a-4f5e-9d2b-0f7c1a2b3c4d",
+    "X-Hub-Signature": "sha256=ecb6f059e4514fb78fde3d6a62a365fb264b51df6de59066bc0733deae871f96"
+  },
+  "id": "d0c6b1e2-4c5a-4f5e-9d2b-0f7c1a2b3c4d",
+  "event": "repo:push"
+}

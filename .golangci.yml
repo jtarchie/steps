@@ -184,6 +184,8 @@ linters:
             - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/web"
+            # schema_test.go holds the webhook provider enum to this table.
+            - "github.com/jtarchie/steps/internal/webhook"
             # schema_test.go validates every shipped example against
             # steps.schema.json (the published editor schema) and asserts its
             # step properties still match config.Step's yaml tags. The schema

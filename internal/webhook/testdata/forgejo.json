@@ -1,0 +1,13 @@
+{
+  "provenance": "constructed from https://forgejo.org/docs/latest/user/webhooks/ (hex HMAC-SHA256 of the body, no prefix)",
+  "secret": "forgejo-secret",
+  "body": "{\"ref\":\"refs/heads/main\",\"after\":\"6113728f27ae82c7b1a177c8d03f9e96e0adf246\"}",
+  "headers": {
+    "X-Forgejo-Event": "push",
+    "X-Forgejo-Delivery": "a2a4a4a2-0000-4000-8000-000000000001",
+    "X-Forgejo-Signature": "76cb8e60d6bd1911f064861133fbab55332ec555ab5de126a3ebe01722f51700",
+    "X-Gitea-Signature": "76cb8e60d6bd1911f064861133fbab55332ec555ab5de126a3ebe01722f51700"
+  },
+  "id": "a2a4a4a2-0000-4000-8000-000000000001",
+  "event": "push"
+}

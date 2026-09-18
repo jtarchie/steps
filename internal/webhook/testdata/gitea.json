@@ -1,0 +1,12 @@
+{
+  "provenance": "constructed from https://docs.gitea.com/usage/webhooks (hex HMAC-SHA256 of the body, no prefix)",
+  "secret": "gitea-secret",
+  "body": "{\"ref\":\"refs/heads/main\",\"after\":\"6113728f27ae82c7b1a177c8d03f9e96e0adf246\"}",
+  "headers": {
+    "X-Gitea-Event": "push",
+    "X-Gitea-Delivery": "f6266f16-1bf3-46a5-9ea4-602e06ead473",
+    "X-Gitea-Signature": "f4f2eb48cb1c72f4d4c951cd98ae5331bb88ec0555126290701d8279b477b09e"
+  },
+  "id": "f6266f16-1bf3-46a5-9ea4-602e06ead473",
+  "event": "push"
+}

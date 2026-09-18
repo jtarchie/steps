@@ -2,8 +2,10 @@ package e2e
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/webhook"
 )
 
 // loadSchema compiles steps.schema.json.
@@ -153,6 +156,7 @@ func schemaDefsByType() map[string]reflect.Type {
 		"assert":             reflect.TypeOf(config.Assert{}),
 		"defaults":           reflect.TypeOf(config.Defaults{}),
 		"workspace":          reflect.TypeOf(config.WorkspaceConfig{}),
+		"webhookSource":      reflect.TypeOf(config.WebhookSource{}),
 	}
 }
 
@@ -244,4 +248,36 @@ func yamlTagNames(structType reflect.Type) map[string]struct{} {
 	}
 
 	return out
+}
+
+// TestWebhookProviderEnumMatchesTheTable: the schema's provider enum is what an editor offers, and a provider missing from it is flagged as an error in a pipeline that loads fine.
+func TestWebhookProviderEnumMatchesTheTable(t *testing.T) {
+	data, err := os.ReadFile(repoFile("steps.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var doc struct {
+		Defs struct {
+			WebhookSource struct {
+				Properties struct {
+					Provider struct {
+						Enum []string `json:"enum"`
+					} `json:"provider"`
+				} `json:"properties"`
+			} `json:"webhookSource"`
+		} `json:"$defs"`
+	}
+
+	err = json.Unmarshal(data, &doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := doc.Defs.WebhookSource.Properties.Provider.Enum
+	slices.Sort(got)
+
+	if want := slices.Sorted(maps.Keys(webhook.Providers)); !slices.Equal(got, want) {
+		t.Errorf("schema provider enum = %v, want the provider table %v", got, want)
+	}
 }

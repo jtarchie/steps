@@ -8,8 +8,10 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
@@ -232,5 +234,31 @@ func TestAPausedHookBuildsOnUnpause(t *testing.T) {
 	enqueued, err = pollOnce(ctx, f.cfg, f.st)
 	if err != nil || len(enqueued) != 0 {
 		t.Errorf("a second poll enqueued %v (err %v), want nothing: the delivery was dispatched once", enqueued, err)
+	}
+}
+
+// TestASlackHandshakeIsAnsweredAndNotRecorded: Slack will not save an Events API URL until the challenge comes back, and the challenge is not an event anything should build.
+func TestASlackHandshakeIsAnsweredAndNotRecorded(t *testing.T) {
+	f := newHookFixture(t, map[string]any{"provider": "slack"})
+	body := []byte(`{"type":"url_verification","challenge":"c4allenge"}`)
+	stamp := strconv.FormatInt(time.Now().Unix(), 10)
+
+	mac := hmac.New(sha256.New, []byte(hookSecret))
+	mac.Write([]byte("v0:" + stamp + ":"))
+	mac.Write(body)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/p/test/hooks/push", bytes.NewReader(body))
+	req.Header.Set("X-Slack-Request-Timestamp", stamp)
+	req.Header.Set("X-Slack-Signature", "v0="+hex.EncodeToString(mac.Sum(nil)))
+
+	rec := httptest.NewRecorder()
+	HookHandler(staticConfig(f.cfg), f.st)(rec, req, "push")
+
+	if rec.Code != http.StatusOK || rec.Body.String() != "c4allenge" {
+		t.Errorf("answered %d %q, want 200 with the challenge", rec.Code, rec.Body.String())
+	}
+
+	if got := f.versions(t); len(got) != 0 {
+		t.Errorf("versions = %v, want the handshake unrecorded", got)
 	}
 }

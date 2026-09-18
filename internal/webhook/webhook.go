@@ -2,9 +2,7 @@
 package webhook
 
 import (
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -42,18 +40,12 @@ type Provider struct {
 	ID func(r Request) string
 	// Event is what the sender says happened, or "".
 	Event func(r Request) string
-	// Signed names the headers that carry the signature, which never reach headers.json.
+	// Handshake, when set, answers a verified delivery that is the sender checking the URL rather than reporting anything.
+	Handshake func(r Request) ([]byte, bool)
+	// Secret, when set, turns the configured secret into the key; a nil Secret uses its bytes.
+	Secret func(raw string) ([]byte, error)
+	// Signed names the headers that carry the credential, which never reach headers.json; the first is the one Verify reads.
 	Signed []string
-}
-
-// Providers is every signature scheme a resource may declare. A provider is declared by the pipeline, never detected from headers the sender controls.
-var Providers = map[string]Provider{
-	"github": {
-		Verify: hmacBody("X-Hub-Signature-256", "sha256=", hex.EncodeToString),
-		ID:     header("X-GitHub-Delivery"),
-		Event:  header("X-GitHub-Event"),
-		Signed: []string{"X-Hub-Signature-256", "X-Hub-Signature"},
-	},
 }
 
 // Input is what an expression sees: the delivery, already verified.
@@ -123,7 +115,18 @@ func (r *Receiver) Verify(header http.Header, body []byte, secret string, now ti
 		return ErrUnauthorized
 	}
 
-	if !provider.Verify(Request{Header: header, Body: body}, []byte(secret), now) {
+	key := []byte(secret)
+
+	if provider.Secret != nil {
+		decoded, err := provider.Secret(secret)
+		if err != nil {
+			return ErrUnauthorized
+		}
+
+		key = decoded
+	}
+
+	if !provider.Verify(Request{Header: header, Body: body}, key, now) {
 		return ErrUnauthorized
 	}
 
@@ -148,6 +151,12 @@ func (r *Receiver) Accept(method string, header http.Header, query url.Values, b
 		Payload:  decodeJSON(body),
 	}
 
+	if provider.Handshake != nil {
+		if reply, ok := provider.Handshake(request); ok {
+			return Result{Handshake: reply}, nil
+		}
+	}
+
 	if r.Filter != nil {
 		keep, err := r.Filter(in)
 		if err != nil {
@@ -164,6 +173,16 @@ func (r *Receiver) Accept(method string, header http.Header, query url.Values, b
 		return Result{}, err
 	}
 
+	version, err := r.version(in, id)
+	if err != nil {
+		return Result{}, err
+	}
+
+	return Result{Delivery: Delivery{Version: version, Body: body, Headers: kept(header, provider.Signed)}}, nil
+}
+
+// version is {id, event, ...what the pipeline projects}; event is left out when the sender names none.
+func (r *Receiver) version(in Input, id string) (map[string]any, error) {
 	version := map[string]any{"id": id}
 	if in.Event != "" {
 		version["event"] = in.Event
@@ -172,13 +191,13 @@ func (r *Receiver) Accept(method string, header http.Header, query url.Values, b
 	for name, project := range r.Version {
 		value, err := project(in)
 		if err != nil {
-			return Result{}, fmt.Errorf("%w: version.%s: %w", ErrExpression, name, err)
+			return nil, fmt.Errorf("%w: version.%s: %w", ErrExpression, name, err)
 		}
 
 		version[name] = value
 	}
 
-	return Result{Delivery: Delivery{Version: version, Body: body, Headers: kept(header, provider.Signed)}}, nil
+	return version, nil
 }
 
 // deliveryID is the pipeline's id: when it has one, the sender's own id when it sends one, and random otherwise — never a hash of the body, which would swallow a legitimate repeat.
@@ -242,23 +261,4 @@ func decodeJSON(body []byte) any {
 	}
 
 	return payload
-}
-
-func header(name string) func(Request) string {
-	return func(r Request) string { return r.Header.Get(name) }
-}
-
-// hmacBody is the scheme most senders use: an HMAC-SHA256 of the raw body, encoded, behind a prefix, in one header.
-func hmacBody(name, prefix string, encode func([]byte) string) func(Request, []byte, time.Time) bool {
-	return func(r Request, secret []byte, _ time.Time) bool {
-		got, found := strings.CutPrefix(r.Header.Get(name), prefix)
-		if !found {
-			return false
-		}
-
-		mac := hmac.New(sha256.New, secret)
-		mac.Write(r.Body)
-
-		return hmac.Equal([]byte(got), []byte(encode(mac.Sum(nil))))
-	}
 }

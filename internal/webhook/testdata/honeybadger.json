@@ -1,0 +1,11 @@
+{
+  "provenance": "constructed from https://docs.honeybadger.io/guides/integrations/webhook/ (the token is presented, not a signature)",
+  "secret": "hb-token",
+  "body": "{\"event\":\"occurred\",\"message\":\"[Honeybadger] RuntimeError\"}",
+  "headers": {
+    "Honeybadger-Token": "hb-token"
+  },
+  "id": "",
+  "event": "occurred",
+  "presents_secret": true
+}

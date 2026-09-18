@@ -281,6 +281,27 @@
         }
       }
     },
+    "webhookSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "secret_env"],
+      "properties": {
+        "provider": {
+          "enum": ["bitbucket", "forgejo", "gitea", "github", "gitlab", "honeybadger", "linear", "pagerduty", "sentry", "slack", "standard-webhooks", "stripe", "token"],
+          "description": "The sender, and so the signature scheme a delivery must pass. Declared, never detected from headers the sender controls."
+        },
+        "secret_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Environment variable holding the shared secret. The variable NAME, never the secret itself; while it is unset or empty every delivery is refused."
+        },
+        "max_body": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Largest body accepted, in bytes; a bigger one is answered 413. Default 1 MiB."
+        }
+      }
+    },
     "resource": {
       "type": "object",
       "additionalProperties": false,
@@ -294,7 +315,7 @@
         },
         "type": {
           "type": "string",
-          "description": "A resource_types: entry, or the built-in `git`."
+          "description": "A resource_types: entry, or a built-in: `git`, or `webhook` (versions are deliveries to POST /p/<pipeline>/hooks/<resource>)."
         },
         "source": {
           "type": "object",
@@ -321,7 +342,13 @@
           },
           "description": "Names the worker this resource's check, in and out run on, for a source only reachable from that machine's network; the invocation maps the name with --worker. A get or put step's own tags: overrides it for that step. Shell-backed types only."
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "webhook" } }, "required": ["type"] },
+          "then": { "properties": { "source": { "$ref": "#/$defs/webhookSource" } } }
+        }
+      ]
     },
     "agent": {
       "type": "object",

@@ -1,0 +1,13 @@
+{
+  "provenance": "constructed from https://docs.gitlab.com/user/project/integrations/webhooks/ (the token is presented, not a signature)",
+  "secret": "gitlab-webhook-token",
+  "body": "{\"object_kind\":\"push\",\"ref\":\"refs/heads/main\"}",
+  "headers": {
+    "X-Gitlab-Event": "Push Hook",
+    "X-Gitlab-Event-UUID": "13792a34-cac6-4fda-95a8-c58e00a3954e",
+    "X-Gitlab-Token": "gitlab-webhook-token"
+  },
+  "id": "13792a34-cac6-4fda-95a8-c58e00a3954e",
+  "event": "Push Hook",
+  "presents_secret": true
+}

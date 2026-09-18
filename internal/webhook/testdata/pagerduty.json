@@ -1,0 +1,10 @@
+{
+  "provenance": "constructed from https://developer.pagerduty.com/docs/webhooks-overview#verifying-signatures (v1= hex, comma-separated during rotation)",
+  "secret": "pd-webhook-secret",
+  "body": "{\"event\":{\"id\":\"01DEN4HPBQAAAG05V5QQYBRZMF\",\"event_type\":\"incident.triggered\"}}",
+  "headers": {
+    "X-PagerDuty-Signature": "v1=00000000000000000000000000000000000000000000000000000000deadbeef,v1=43d302543ea100e347df71c01e28a6854c34cffcc3b8ccd309640f42ed1ea631"
+  },
+  "id": "01DEN4HPBQAAAG05V5QQYBRZMF",
+  "event": "incident.triggered"
+}

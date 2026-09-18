@@ -1,0 +1,11 @@
+{
+  "provenance": "constructed from https://docs.stripe.com/webhooks#verify-manually (t=,v1= over timestamp.body)",
+  "secret": "whsec_stripe_example",
+  "now": 1700000000,
+  "body": "{\"id\":\"evt_1NG8Du2eZvKYlo2CUI79vXWy\",\"object\":\"event\",\"type\":\"payment_intent.succeeded\"}",
+  "headers": {
+    "Stripe-Signature": "t=1700000000,v1=6ce0e6e4fe2271be626480d9adbc590b50b361de6de7122effc544e0b6b640e8"
+  },
+  "id": "evt_1NG8Du2eZvKYlo2CUI79vXWy",
+  "event": "payment_intent.succeeded"
+}

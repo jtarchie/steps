@@ -1,0 +1,13 @@
+{
+  "provenance": "published: https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md (the spec's example)",
+  "secret": "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+  "now": 1614265330,
+  "body": "{\"test\": 2432232314}",
+  "headers": {
+    "Webhook-Id": "msg_p5jXN8AQM9LWM0D4loKWxJek",
+    "Webhook-Timestamp": "1614265330",
+    "Webhook-Signature": "v1,Ceo5qEr07ixe2NLpvHk3FH9bwy/WavXrAFQ/9tdO6mc= v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="
+  },
+  "id": "msg_p5jXN8AQM9LWM0D4loKWxJek",
+  "event": ""
+}

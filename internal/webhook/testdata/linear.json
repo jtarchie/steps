@@ -1,0 +1,12 @@
+{
+  "provenance": "constructed from https://linear.app/developers/webhooks (hex HMAC-SHA256 of the body in Linear-Signature)",
+  "secret": "lin_wh_secret",
+  "body": "{\"action\":\"create\",\"type\":\"Issue\",\"data\":{\"id\":\"2174add1-f7c8-44e3-bbf3-2d60b5ea8bc9\"}}",
+  "headers": {
+    "Linear-Event": "Issue",
+    "Linear-Delivery": "234d1a4e-b617-4388-90fe-adc3633d6b72",
+    "Linear-Signature": "b3036cdd692ff5d0b433cb747876ec3d491c7549ddc13377adbcb1af5d49105b"
+  },
+  "id": "234d1a4e-b617-4388-90fe-adc3633d6b72",
+  "event": "Issue"
+}
