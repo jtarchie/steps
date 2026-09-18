@@ -175,8 +175,14 @@ func deliveryDispatch(r *http.Request, cfg *config.Config, st HookStore, name st
 	return dispatch, nil
 }
 
-// observeDeliveries is a webhook resource's turn in a poll: no check, only whether the newest delivery has been dispatched. A delivery normally dispatches itself as it is recorded, so this finds work only after a pause held one back. It is at-least-once rather than exact: a delivery landing between this read and the poll's write of the current version is dispatched again by the next poll, which the queue's one-pending-row-per-job absorbs.
+// observeDeliveries is a webhook resource's turn in a poll: no check, only whether the newest delivery has been dispatched. A delivery normally dispatches itself as it is recorded, so this finds work only after a pause held one back. It is at-least-once rather than exact: a delivery landing between the two reads is dispatched again by this poll, which the queue's one-pending-row-per-job absorbs while the first dispatch is still pending.
 func observeDeliveries(ctx context.Context, st PollStore, name string) (observedResource, bool, error) {
+	// Checked before versions: a delivery landing between the two reads then looks dirty and is dispatched again (absorbed by the queue), where the other order would read it as the checked version and have the poll rewind past it.
+	previous, found, err := st.LastChecked(ctx, name)
+	if err != nil {
+		return observedResource{}, false, fmt.Errorf("webhook resource %q: %w", name, err)
+	}
+
 	versions, err := st.ResourceVersionsJSON(ctx, name)
 	if err != nil || len(versions) == 0 {
 		return observedResource{}, false, err //nolint:wrapcheck // the store names the resource
@@ -185,11 +191,6 @@ func observeDeliveries(ctx context.Context, st PollStore, name string) (observed
 	latest := versions[len(versions)-1]
 
 	version, err := store.DecodeVersion(latest)
-	if err != nil {
-		return observedResource{}, false, fmt.Errorf("webhook resource %q: %w", name, err)
-	}
-
-	previous, found, err := st.LastChecked(ctx, name)
 	if err != nil {
 		return observedResource{}, false, fmt.Errorf("webhook resource %q: %w", name, err)
 	}
@@ -259,9 +260,13 @@ func DeliverLocally(ctx context.Context, cfg *config.Config, st HookStore, name 
 	accepted := result.Delivery
 	delivery := store.Delivery{Version: accepted.Version, Body: accepted.Body, Headers: accepted.Headers}
 
-	_, err = st.RecordDelivery(ctx, name, delivery, store.Dispatch{}, cfg.VersionHistoryLimit())
+	recorded, err := st.RecordDelivery(ctx, name, delivery, store.Dispatch{}, cfg.VersionHistoryLimit())
 	if err != nil {
 		return fmt.Errorf("--deliver %s: %w", name, err)
+	}
+
+	if !recorded {
+		printf("webhook: %s already has delivery %v; the job builds the newest recorded one, which may not be it\n", name, delivery.Version["id"])
 	}
 
 	return nil

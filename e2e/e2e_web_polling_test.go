@@ -547,6 +547,14 @@ func TestWebRejectsANonPositiveInterval(t *testing.T) {
 	}
 }
 
+// TestWebRejectsDeliver: web embeds the run flags, and a --deliver it parsed and never recorded would read as a delivery made.
+func TestWebRejectsDeliver(t *testing.T) {
+	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--deliver", "push=push.http"})
+	if err == nil || !strings.Contains(err.Error(), "--deliver") {
+		t.Fatalf("err = %v, want --deliver refused", err)
+	}
+}
+
 // readArgs names the pipeline a file-driven `steps run` recorded, for the read
 // commands — which take a name and a database, because a pipeline set into a
 // daemon has no file here to derive either from.

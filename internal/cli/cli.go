@@ -2262,6 +2262,10 @@ func (w *WebCmd) Run() error {
 		return fmt.Errorf("web: --interval must be positive, got %s", w.Interval)
 	}
 
+	if len(w.Deliver) > 0 {
+		return errors.New("web: --deliver is for steps run and steps test; a daemon receives deliveries at POST /p/<pipeline>/hooks/<resource>")
+	}
+
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 

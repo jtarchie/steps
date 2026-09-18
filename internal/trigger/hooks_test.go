@@ -276,3 +276,49 @@ func TestAnExpressionThatFailsIsA500(t *testing.T) {
 		t.Errorf("versions = %v, want nothing recorded", got)
 	}
 }
+
+// racingStore records a second delivery the moment a poll has read the webhook's versions: the window between observing a delivery resource and recording its checked version.
+type racingStore struct {
+	store.Store
+
+	race func()
+}
+
+func (r *racingStore) ResourceVersionsJSON(ctx context.Context, name string) ([]string, error) {
+	versions, err := r.Store.ResourceVersionsJSON(ctx, name)
+
+	if r.race != nil {
+		race := r.race
+		r.race = nil
+		race()
+	}
+
+	return versions, err //nolint:wrapcheck // test passthrough
+}
+
+// TestAPollDoesNotRewindADeliveryItRaced: a delivery recorded mid-poll dispatched itself; a poll that then wrote back the version it read earlier would rewind the checked version, and the next poll would build that delivery a second time.
+func TestAPollDoesNotRewindADeliveryItRaced(t *testing.T) {
+	f := newHookFixture(t, nil)
+	ctx := context.Background()
+
+	body := []byte(`{}`)
+	f.deliver(t, "push", signed(hookSecret, "d1", body), body)
+
+	racing := &racingStore{Store: f.st}
+	racing.race = func() { f.deliver(t, "push", signed(hookSecret, "d2", body), body) }
+
+	_, err := pollOnce(ctx, f.cfg, racing)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, _, err = f.st.ClaimNextJob(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	enqueued, err := pollOnce(ctx, f.cfg, f.st)
+	if err != nil || len(enqueued) != 0 {
+		t.Errorf("the poll after a raced delivery enqueued %v (err %v), want nothing: d2 dispatched itself", enqueued, err)
+	}
+}

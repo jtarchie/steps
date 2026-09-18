@@ -357,6 +357,11 @@ func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, 
 	// resource's recorded version. A failure here returns the jobs already
 	// enqueued and leaves the not-yet-recorded resources dirty for retry.
 	for resourceName, obs := range observed {
+		// A clean webhook resource has nothing to advance, and writing back what observe read would rewind past a delivery that dispatched itself mid-poll, building it again next poll. ponytail: the dirty (post-unpause) case keeps that window; a compare-and-set on the checked version closes it.
+		if !obs.dirty && isWebhook(cfg, resourceName) {
+			continue
+		}
+
 		err := st.RecordCheckedVersion(ctx, resourceName, obs.latest)
 		if err != nil {
 			return enqueued, fmt.Errorf("record version for %q: %w", resourceName, err)
