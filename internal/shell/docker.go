@@ -125,6 +125,8 @@ type dockerSession struct {
 	id       string
 	startOut string
 	startErr error
+	// served records that the container has run at least one command, which is what tells "it never came up" from "it stopped under the step" when a later command finds it gone.
+	served bool
 }
 
 // ensure starts the container if it has not been started yet, returning its
@@ -316,8 +318,45 @@ func (s *dockerSession) checkAlive(ctx context.Context, id string) error {
 		return nil
 	}
 
-	return fmt.Errorf("container for image %q exited immediately with code %d (its command was %q; an image with an ENTRYPOINT receives that as arguments rather than replacing it): %s",
-		s.image, exitCode, keepAliveCommand(), logTailOrNothing(s.client.ContainerLogTail(ctx, id, dockerLogTailLines)))
+	return errors.New(s.postmortem(ctx, s.client, id, exitCode))
+}
+
+// diagnose is what checkAlive's settle window cannot be: independent of timing. The window is a bet on how fast a doomed container dies, and a loaded daemon loses it — the container outlives the window, the session takes it to be up, and the first command gets the daemon's bare "is not running", which names neither the image nor the reason. So when a command could not be run at all, the daemon is asked whether the container is still there, and a dead one gets the same postmortem it would have had at birth.
+//
+// Still a plain error and never an *ExitError, for checkAlive's reason: the container did not run the command and say no. The daemon's own error stays in the chain.
+func (s *dockerSession) diagnose(ctx context.Context, client *dockerapi.Client, id string, execErr error) error {
+	if execErr == nil {
+		s.mu.Lock()
+		s.served = true
+		s.mu.Unlock()
+
+		return nil
+	}
+
+	if ctx.Err() != nil {
+		return execErr
+	}
+
+	running, exitCode, err := client.ContainerState(ctx, id)
+	if err != nil || running {
+		return execErr
+	}
+
+	s.mu.Lock()
+	served := s.served
+	s.mu.Unlock()
+
+	if served {
+		return fmt.Errorf("container for image %q stopped while the step was using it, with code %d: %s: %w",
+			s.image, exitCode, logTailOrNothing(client.ContainerLogTail(ctx, id, dockerLogTailLines)), execErr)
+	}
+
+	return fmt.Errorf("%s: %w", s.postmortem(ctx, client, id, exitCode), execErr)
+}
+
+func (s *dockerSession) postmortem(ctx context.Context, client *dockerapi.Client, id string, exitCode int) string {
+	return fmt.Sprintf("container for image %q exited immediately with code %d (its command was %q; an image with an ENTRYPOINT receives that as arguments rather than replacing it): %s",
+		s.image, exitCode, keepAliveCommand(), logTailOrNothing(client.ContainerLogTail(ctx, id, dockerLogTailLines)))
 }
 
 // dockerSettleBound is how long a container is given to die at birth before
@@ -328,7 +367,9 @@ func (s *dockerSession) checkAlive(ctx context.Context, id string) error {
 // single-digit milliseconds — is reliably caught, since the alternative is
 // every later command reporting a container that does not exist and naming
 // neither the image nor the reason.
-const dockerSettleBound = 300 * time.Millisecond
+//
+// A var only so a test can take the window away and prove diagnose catches what it misses.
+var dockerSettleBound = 300 * time.Millisecond
 
 // dockerLogTailLines is how much of a dead container's output is quoted back.
 // Enough for an image's own error message, short enough to read in a step's
@@ -514,7 +555,7 @@ func (d DockerRunner) dockerExec(
 	flushStdout()
 	flushStderr()
 
-	return outWriter.result(), errWriter.result(), code, execErr
+	return outWriter.result(), errWriter.result(), code, d.session.diagnose(ctx, client, id, execErr)
 }
 
 // Run runs command in the step's container, streaming stdout/stderr live and

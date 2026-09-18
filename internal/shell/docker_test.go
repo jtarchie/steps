@@ -29,6 +29,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/dockerapi"
 )
 
 // TestNewContainerNameIsUnique guards the reason names are random rather than
@@ -463,6 +465,104 @@ func entrypointImage(t *testing.T) string {
 	})
 
 	return name
+}
+
+// awaitExited blocks until the daemon itself says the container is gone, so what follows is not a race with it.
+func awaitExited(t *testing.T, client *dockerapi.Client, id string) {
+	t.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+
+	for time.Now().Before(deadline) {
+		running, _, err := client.ContainerState(t.Context(), id)
+		if err == nil && !running {
+			return
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	t.Fatalf("container %s never exited", id)
+}
+
+// The settle window is a bet on how fast a doomed container dies, and a loaded daemon loses it: the container outlives the window, the session calls it up, and the first command was answered with the daemon's bare "is not running" — naming neither the image nor the reason, which is the whole diagnosis. Reproduced on purpose: no window at all, and the container confirmed dead before the first command is sent.
+func TestDockerRunnerDiagnosesAContainerThatOutlivedTheSettleWindow(t *testing.T) {
+	requireDocker(t)
+
+	previous := dockerSettleBound
+	dockerSettleBound = 0
+
+	t.Cleanup(func() { dockerSettleBound = previous })
+
+	image := entrypointImage(t)
+	runner := newTestRunner(t, RunnerSpec{Image: image, Cwd: mountableTempDir(t)})
+
+	docker, ok := runner.(DockerRunner)
+	if !ok {
+		t.Fatalf("runner is %T, want a DockerRunner", runner)
+	}
+
+	client, id, _, err := docker.session.ensure(t.Context())
+	if err != nil || id == "" {
+		t.Fatalf("with no settle window the session must take the container to be up, got id %q, err %v", id, err)
+	}
+
+	awaitExited(t, client, id)
+
+	_, _, _, err = runner.RunCaptureFull(t.Context(), "anything")
+	if err == nil {
+		t.Fatal("a command sent to a dead container succeeded")
+	}
+
+	for _, want := range []string{image, "exited immediately"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want it to mention %q", err, want)
+		}
+	}
+
+	if IsExitError(err) {
+		t.Errorf("a container that never accepted a command classified as the step saying no: %v", err)
+	}
+}
+
+// The same question asked later has a different answer: a container that ran a command and was then killed (an OOM, an operator, a daemon restart) did not die at birth, and telling its owner about ENTRYPOINTs would send them looking in the wrong place.
+func TestDockerRunnerSaysAContainerKilledMidStepStoppedRatherThanNeverStarted(t *testing.T) {
+	requireDocker(t)
+
+	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+
+	_, _, _, err := runner.RunCaptureFull(t.Context(), "true")
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
+
+	docker, ok := runner.(DockerRunner)
+	if !ok {
+		t.Fatalf("runner is %T, want a DockerRunner", runner)
+	}
+
+	docker.session.mu.Lock()
+	id := docker.session.id
+	docker.session.mu.Unlock()
+
+	//nolint:gosec // the id came from this test's own session
+	out, err := exec.CommandContext(t.Context(), "docker", "kill", id).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker kill: %v\n%s", err, out)
+	}
+
+	_, _, _, err = runner.RunCaptureFull(t.Context(), "true")
+	if err == nil {
+		t.Fatal("a command sent to a killed container succeeded")
+	}
+
+	if !strings.Contains(err.Error(), "stopped while") || strings.Contains(err.Error(), "exited immediately") {
+		t.Errorf("error = %v, want it to say the container stopped mid-step, not that it never started", err)
+	}
+
+	if IsExitError(err) {
+		t.Errorf("a container killed under the step classified as the step saying no: %v", err)
+	}
 }
 
 // TestDockerRunnerDetectsAContainerThatDiedAtBirth is the case starting a

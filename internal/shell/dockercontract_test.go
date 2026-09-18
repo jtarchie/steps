@@ -50,36 +50,30 @@ type daemonView struct {
 	} `json:"HostConfig"`
 }
 
-// inspectOurContainer returns the daemon's view of the one container this
-// process currently owns.
-//
-// Found by the ownership labels rather than by name because the name is minted
-// inside the session and never leaves it — which is the same reason the sweep
-// has to work this way. Fails rather than skips when there is no such
-// container: the caller has just run a command in one.
-func inspectOurContainer(t *testing.T) daemonView {
+// inspectContainerOf is the daemon's view of the container a runner started, asked for by the id the runner's own session holds. It used to list every container labelled with this process's pid and demand exactly one, which assumed the previous test's container was already gone: true on an idle daemon, false under `go test ./...` where every package shares it, and the flake cost a whole validation run. The labels it searched by are still asserted, on the view.
+func inspectContainerOf(t *testing.T, runner Runner) daemonView {
 	t.Helper()
+
+	docker, ok := runner.(DockerRunner)
+	if !ok {
+		t.Fatalf("runner is %T, want a DockerRunner", runner)
+	}
+
+	docker.session.mu.Lock()
+	id := docker.session.id
+	docker.session.mu.Unlock()
+
+	if id == "" {
+		t.Fatal("the runner has started no container")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	//nolint:gosec // fixed argv but for this process's own pid
-	out, err := exec.CommandContext(ctx, "docker", "ps", "--all", "--no-trunc", "--quiet",
-		"--filter", "label="+dockerOwnerLabel+"=steps",
-		"--filter", "label="+dockerPIDLabel+"="+strconv.Itoa(os.Getpid())).Output()
-	if err != nil {
-		t.Fatalf("listing this process's containers: %v", err)
-	}
-
-	ids := strings.Fields(string(out))
-	if len(ids) != 1 {
-		t.Fatalf("found %d containers labelled for this process, want exactly 1", len(ids))
-	}
-
 	//nolint:gosec // the id came from the daemon
-	raw, err := exec.CommandContext(ctx, "docker", "inspect", ids[0]).Output()
+	raw, err := exec.CommandContext(ctx, "docker", "inspect", id).Output()
 	if err != nil {
-		t.Fatalf("inspecting %s: %v", ids[0], err)
+		t.Fatalf("inspecting %s: %v", id, err)
 	}
 
 	var views []daemonView
@@ -94,6 +88,28 @@ func inspectOurContainer(t *testing.T) daemonView {
 	}
 
 	return views[0]
+}
+
+// Two live containers owned by one process is the state the old pid-label lookup could not survive, reproduced on purpose rather than waited for.
+func TestContractInspectionFindsEachRunnersOwnContainer(t *testing.T) {
+	requireDocker(t)
+
+	names := make([]string, 0, 2)
+
+	for range 2 {
+		runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+
+		_, _, _, err := runner.RunCaptureFull(t.Context(), "true")
+		if err != nil {
+			t.Fatalf("RunCaptureFull: %v", err)
+		}
+
+		names = append(names, inspectContainerOf(t, runner).Name)
+	}
+
+	if names[0] == "" || names[0] == names[1] {
+		t.Errorf("inspected %q then %q, want each runner's own container", names[0], names[1])
+	}
 }
 
 // TestContractSessionContainerConfiguration is the whole flag block, asked of
@@ -134,7 +150,7 @@ func TestContractSessionContainerConfiguration(t *testing.T) {
 		t.Fatalf("RunCaptureFull: %v", err)
 	}
 
-	view := inspectOurContainer(t)
+	view := inspectContainerOf(t, runner)
 
 	resolved, err := ResolveMountPath(dir)
 	if err != nil {
