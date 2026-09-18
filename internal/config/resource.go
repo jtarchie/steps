@@ -53,6 +53,8 @@ type ResourceTypeConfig struct {
 	Out   string              `yaml:"out,omitempty"`
 	MCP   *MCPResourceConfig  `yaml:"mcp,omitempty"`
 	Expr  *ExprResourceConfig `yaml:"expr,omitempty"`
+	// Webhook marks the built-in webhook type, which no YAML can declare: its versions arrive as deliveries rather than from a check.
+	Webhook bool `yaml:"-"`
 }
 
 // ResourceBackend is which way a resource type implements its three lifecycle
@@ -74,6 +76,8 @@ const (
 	BackendShell ResourceBackend = "shell"
 	BackendMCP   ResourceBackend = "mcp"
 	BackendExpr  ResourceBackend = "expr"
+	// BackendWebhook has no check and no out: each delivery the daemon receives IS a version, and in writes out what it carried.
+	BackendWebhook ResourceBackend = "webhook"
 )
 
 // Backend reports how this resource type is implemented.
@@ -85,6 +89,8 @@ const (
 // backend meaning "none".
 func (c ResourceTypeConfig) Backend() ResourceBackend {
 	switch {
+	case c.Webhook:
+		return BackendWebhook
 	case c.MCP != nil:
 		return BackendMCP
 	case c.Expr != nil:
@@ -164,6 +170,8 @@ func validateResourcePut(label, put string, resourceType *ResourceType) error {
 		if strings.TrimSpace(resourceType.Config.Out) == "" {
 			return fmt.Errorf("%s: put %q targets resource type %q, which declares no out: command; add one to describe what publishing means for this type", label, put, resourceType.Name)
 		}
+	case BackendWebhook:
+		return fmt.Errorf("%s: put %q targets a webhook resource, which only receives: its versions are deliveries, and there is nothing to publish to", label, put)
 	}
 
 	return nil
@@ -197,6 +205,7 @@ func validateResourceGet(label, get string, resourceType *ResourceType) error {
 		// which names the real problem. The mcp arm above cannot do that —
 		// there is no tool to call at all — which is why the rule exists for
 		// one backend and not the other.
+	case BackendWebhook:
 	}
 
 	return nil

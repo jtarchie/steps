@@ -436,6 +436,7 @@ func (d *daemon) start(
 	loopCtx, cancel := context.WithCancel(d.base)
 
 	target.Webhook = trigger.WebhookHandler(loopCtx, target.Config, st)
+	target.Hooks = trigger.HookHandler(target.Config, st)
 
 	err := d.server.Add(target)
 	// Only reachable if two sets of one name interleaved, which the lock above prevents, so this is the assertion rather than a path.

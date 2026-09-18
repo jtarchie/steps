@@ -830,6 +830,7 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 		// which is the one thing the column exists to deny.
 		{"runs", "revision_id", "pipeline_revisions", "RESTRICT"},
 		{"job_versions", "resource_name", "resource_versions", "CASCADE"},
+		{"webhook_deliveries", "version_json", "resource_versions", "CASCADE"},
 		// Every pipeline-scoped table cascades off the pipelines row, which is
 		// what makes forgetting a pipeline one DELETE rather than fourteen.
 		// The run-scoped tables are absent on purpose: they reach the pipeline

@@ -1,0 +1,16 @@
+# A webhook source: is decoded strictly: a misspelled key is a load error, not
+# a setting nobody applies.
+# expect: field secret not found
+
+resources:
+- name: push
+  type: webhook
+  source:
+    provider: github
+    secret: GITHUB_WEBHOOK_SECRET
+
+jobs:
+- name: build
+  plan:
+  - get: push
+    trigger: true

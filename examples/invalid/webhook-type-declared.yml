@@ -1,0 +1,19 @@
+# webhook is built in. Declaring a type of that name would make `type: webhook`
+# mean two things in one file, so the name is refused rather than shadowed.
+# expect: the name is built in
+
+resource_types:
+- name: webhook
+  config:
+    check: echo '[]'
+
+resources:
+- name: push
+  type: webhook
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: push
+    trigger: true

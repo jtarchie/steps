@@ -5,8 +5,11 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -14,6 +17,7 @@ import (
 	"github.com/jtarchie/steps/internal/merkle"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/retry"
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/venue"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -287,7 +291,7 @@ func (w *planWalk) runTriggeredBuild(
 
 	fetchCtx, placed := withPlacementSink(ctx)
 
-	err = fetchGetStepWithStep(fetchCtx, w.cfg, step, step.Get, resource, resourceType, version, bw)
+	err = fetchGetStepWithStep(fetchCtx, w.cfg, w.st, step, step.Get, resource, resourceType, version, bw)
 
 	// Get-step hooks fire once per triggered build, in that build's own
 	// workspace, observing the fetch outcome. A fetch failure (or a hook that
@@ -474,7 +478,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 
 	ctx, placed := withPlacementSink(ctx)
 
-	err = fetchGetStepWithStep(ctx, w.cfg, step, step.Get, *resource, *resourceType, version, w.bw)
+	err = fetchGetStepWithStep(ctx, w.cfg, w.st, step, step.Get, *resource, *resourceType, version, w.bw)
 
 	// Get-step hooks fire in the same workspace the resource was fetched into.
 	if err == nil && !step.Hooks.Empty() {
@@ -568,7 +572,7 @@ func fetchGetVersions(ctx context.Context, cfg *config.Config, step config.Step,
 // the artifact downstream steps name as an input — is always the get step's
 // artifact name (its get: value), which differs from the resource when the get
 // aliases it via resource:; only the fetched content comes from the resource.
-func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, step config.Step, artifact string, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
+func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, st store.Deliveries, step config.Step, artifact string, resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace) error {
 	// The venue retry wraps the attempts: loop, as a task's does — see
 	// runPlacedStage.
 	err := runPlacedStage(ctx, step, func(ctx context.Context) error {
@@ -576,7 +580,7 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, step config.S
 			fmt.Printf("get: %s (version: %v, attempt %d/%d)\n", artifact, version, attempt, total)
 			logFrom(ctx).Info("job.get.in.attempt", "artifact", artifact, "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
-			err := fetchGetStep(attemptCtx, cfg, artifact, resource, resourceType, version, step.Params, bw)
+			err := fetchGetStep(attemptCtx, cfg, st, artifact, resource, resourceType, version, step.Params, bw)
 
 			// An eviction ends the attempts loop rather than spending it —
 			// the machine is gone, and the venue retry is what re-places.
@@ -594,12 +598,18 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, step config.S
 	return nil
 }
 
-func fetchGetStep(ctx context.Context, cfg *config.Config, artifact string, resource config.Resource, resourceType config.ResourceType, version, params map[string]any, bw workspace.BuildWorkspace) error {
+func fetchGetStep(ctx context.Context, cfg *config.Config, st store.Deliveries, artifact string, resource config.Resource, resourceType config.ResourceType, version, params map[string]any, bw workspace.BuildWorkspace) error {
 	fmt.Printf("get: %s (version: %v)\n", artifact, version)
 
-	err := resourceDir(ctx, cfg, artifact, resourceType, resource.Env, resource.Source, version, params, bw, func(dir string) error {
+	fetch := func(dir string) error {
 		return rsrc.RunIn(ctx, cfg, resourceType, resource.Env, resource.Source, version, params, dir)
-	})
+	}
+
+	if resourceType.Config.Backend() == config.BackendWebhook {
+		fetch = func(dir string) error { return writeDelivery(ctx, st, resource.Name, version, dir) }
+	}
+
+	err := resourceDir(ctx, cfg, artifact, resourceType, resource.Env, resource.Source, version, params, bw, fetch)
 	if err != nil {
 		return fmt.Errorf("could not fetch resource %q: %w", resource.Name, classifyRunError(ctx, err))
 	}
@@ -647,4 +657,37 @@ func resourceDir(
 	_, err = caching.FetchResource(ctx, artifact, key, fetch)
 
 	return err //nolint:wrapcheck // see above: the error is the caller-classified fetch error, passed through deliberately
+}
+
+// writeDelivery is a webhook get: the delivery recorded with this version, as body, headers.json and version.json.
+func writeDelivery(ctx context.Context, st store.Deliveries, name string, version map[string]any, dir string) error {
+	encoded, err := store.EncodeVersion(version)
+	if err != nil {
+		return fmt.Errorf("get %q: %w", name, err)
+	}
+
+	delivery, found, err := st.Delivery(ctx, name, encoded)
+	if err != nil {
+		return fmt.Errorf("get %q: %w", name, err)
+	}
+
+	if !found {
+		return fmt.Errorf("get %q: no delivery is recorded for version %s — version_history: may have pruned it", name, encoded)
+	}
+
+	headers, err := json.MarshalIndent(delivery.Headers, "", "  ")
+	if err != nil {
+		return fmt.Errorf("get %q: %w", name, err)
+	}
+
+	files := map[string][]byte{"body": delivery.Body, "headers.json": headers, "version.json": []byte(encoded)}
+
+	for file, contents := range files {
+		err = os.WriteFile(filepath.Join(dir, file), contents, 0o600)
+		if err != nil {
+			return fmt.Errorf("get %q: %w", name, err)
+		}
+	}
+
+	return nil
 }

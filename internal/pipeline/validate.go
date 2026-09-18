@@ -4,12 +4,15 @@ package pipeline
 // can reach.
 
 import (
+	"errors"
+
 	"github.com/jtarchie/steps/internal/config"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 )
 
 // ValidateExpressions type-checks every expr-backed resource type's
-// expressions without running any of them.
+// expressions, and compiles every webhook resource, without running any of
+// them.
 //
 // It is a pass-through to resource.CompileExprPrograms, and exists only
 // because of who may call whom: main wires up config/store/workspace and
@@ -24,5 +27,5 @@ import (
 // validate-time call; giving it up would cost the shape of the whole
 // dependency graph.
 func ValidateExpressions(cfg *config.Config) error {
-	return rsrc.CompileExprPrograms(cfg) //nolint:wrapcheck // CompileExprPrograms names the resource type and slot
+	return errors.Join(rsrc.CompileExprPrograms(cfg), rsrc.CompileWebhooks(cfg))
 }

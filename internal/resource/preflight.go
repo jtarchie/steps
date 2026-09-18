@@ -158,6 +158,13 @@ func preflightResource(
 		}
 
 		return nil
+	case config.BackendWebhook:
+		_, err := Receiver(*resource)
+		if err != nil {
+			return []config.Problem{{Target: fmt.Sprintf("resource %q", name), Detail: err.Error()}}
+		}
+
+		return nil
 	case config.BackendShell:
 		// Nothing to prove ahead of time: a shell type's tools are whatever
 		// is on PATH when it runs, which preflight cannot know from here.

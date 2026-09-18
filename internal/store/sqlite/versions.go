@@ -19,13 +19,17 @@ import (
 // succeeds — version-checking and build outcomes are tracked separately,
 // mirroring how job_runs only ever records succeeded chains.
 func (s *Store) RecordCheckedVersion(ctx context.Context, resourceName, versionJSON string) error {
-	_, err := s.db.ExecContext(ctx, `
+	return recordCheckedVersion(ctx, s.db, s.pipelineID, resourceName, versionJSON)
+}
+
+func recordCheckedVersion(ctx context.Context, db executor, pipelineID int64, resourceName, versionJSON string) error {
+	_, err := db.ExecContext(ctx, `
 		INSERT INTO resource_checks (pipeline_id, resource_name, version_json, checked_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(pipeline_id, resource_name) DO UPDATE SET
 			version_json = excluded.version_json,
 			checked_at   = excluded.checked_at
-	`, s.pipelineID, resourceName, versionJSON, now())
+	`, pipelineID, resourceName, versionJSON, now())
 	if err != nil {
 		return fmt.Errorf("could not record checked version for %q: %w", resourceName, err)
 	}

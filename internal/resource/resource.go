@@ -61,6 +61,9 @@ func CheckVersions(
 		return mcpCheckVersions(ctx, cfg, rt, source, version)
 	case config.BackendExpr:
 		return exprCheckVersions(ctx, rt, extraEnv, source, version)
+	case config.BackendWebhook:
+		// No check: a webhook resource's versions are the deliveries it was sent, so asking finds nothing new — and a get with none recorded fails as "no versions available", which is the truth.
+		return nil, nil
 	case config.BackendShell:
 	}
 
@@ -278,6 +281,8 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, extr
 		return mcpRunIn(ctx, cfg, rt, source, version, params, destDir)
 	case config.BackendExpr:
 		return exprRunIn(ctx, rt, extraEnv, source, version, params, destDir)
+	case config.BackendWebhook:
+		return errWebhookIn
 	case config.BackendShell:
 	}
 
@@ -330,6 +335,8 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, ext
 		return mcpRunOut(ctx, cfg, rt, source, params, srcDir)
 	case config.BackendExpr:
 		return exprRunOut(ctx, rt, extraEnv, source, params, srcDir)
+	case config.BackendWebhook:
+		return nil, fmt.Errorf("out %q: a webhook resource cannot be put to", rt.Name)
 	case config.BackendShell:
 	}
 

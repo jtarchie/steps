@@ -174,6 +174,11 @@ func ReadBuiltinResourceType(name string) (ResourceType, error) {
 // set of command templates, and half of one command paired with half of
 // another is not a resource type anyone meant to write.
 func (c *Config) registerBuiltinResourceTypes() {
+	// A declared webhook stays, to be refused by validateOneResourceTypeConfig: replacing it silently would make the name mean two things.
+	if c.findResourceTypeIndex(WebhookType) < 0 {
+		c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: WebhookType, Config: ResourceTypeConfig{Webhook: true}})
+	}
+
 	builtinNames, err := ListBuiltinResourceTypeNames()
 	if err != nil {
 		slog.Warn("builtin.resource_types.list", "error", err)
@@ -200,6 +205,9 @@ func (c *Config) registerBuiltinResourceTypes() {
 		slog.Debug("builtin.resource_types.register", "name", name)
 	}
 }
+
+// WebhookType is the built-in type whose versions are deliveries; it is Go rather than YAML because it has no command to run.
+const WebhookType = "webhook"
 
 // findResourceTypeIndex returns the index of the resource type with the given
 // name, or -1.

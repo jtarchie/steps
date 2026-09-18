@@ -83,6 +83,7 @@ type Store interface {
 	Revisions
 	Control
 	Pruning
+	Deliveries
 }
 
 // ErrSchemaVersion is a database some other build of steps wrote.

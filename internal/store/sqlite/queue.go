@@ -25,11 +25,15 @@ import (
 // from resource_versions, so dropping a duplicate enqueue is once again
 // what it looks like: the job is already queued.
 func (s *Store) EnqueueJob(ctx context.Context, jobName, reason string) error {
-	_, err := s.db.ExecContext(ctx, `
+	return enqueueJob(ctx, s.db, s.pipelineID, jobName, reason)
+}
+
+func enqueueJob(ctx context.Context, db executor, pipelineID int64, jobName, reason string) error {
+	_, err := db.ExecContext(ctx, `
 		INSERT INTO trigger_queue (pipeline_id, job_name, reason, status, enqueued_at)
 		VALUES (?, ?, ?, 'pending', ?)
 		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' DO NOTHING
-	`, s.pipelineID, jobName, reason, now())
+	`, pipelineID, jobName, reason, now())
 	if err != nil {
 		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
 	}

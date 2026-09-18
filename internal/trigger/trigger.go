@@ -324,25 +324,14 @@ func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, 
 	observed := map[string]observedResource{}
 
 	for _, name := range Resources(cfg) {
-		obs, hasVersion, err := checkResource(ctx, cfg, st, name)
+		obs, hasVersion, err := observe(ctx, cfg, st, name)
 		if err != nil {
 			return nil, err
 		}
 
-		if !hasVersion {
-			continue
+		if hasVersion {
+			observed[name] = obs
 		}
-
-		grew, err := recordHistory(ctx, cfg, st, name, obs)
-		if err != nil {
-			return nil, err
-		}
-
-		// New versions BELOW the head are still new work: the head comparison
-		// alone would file them into history and trigger nothing.
-		obs.dirty = obs.dirty || grew
-
-		observed[name] = obs
 	}
 
 	enqueued, err := enqueueAffected(ctx, cfg, st, observed)
@@ -377,6 +366,29 @@ func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, 
 	sort.Strings(enqueued)
 
 	return enqueued, nil
+}
+
+// observe is one resource's turn in a poll: a check whose findings are filed into history, or — for a webhook resource, which has no check — what the deliveries already say.
+func observe(ctx context.Context, cfg *config.Config, st PollStore, name string) (observedResource, bool, error) {
+	if isWebhook(cfg, name) {
+		return observeDeliveries(ctx, st, name)
+	}
+
+	obs, hasVersion, err := checkResource(ctx, cfg, st, name)
+	if err != nil || !hasVersion {
+		return obs, hasVersion, err
+	}
+
+	grew, err := recordHistory(ctx, cfg, st, name, obs)
+	if err != nil {
+		return observedResource{}, false, err
+	}
+
+	// New versions BELOW the head are still new work: the head comparison
+	// alone would file them into history and trigger nothing.
+	obs.dirty = obs.dirty || grew
+
+	return obs, true, nil
 }
 
 // enqueueAffected enqueues, once each, every job affected by a dirty resource

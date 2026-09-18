@@ -315,6 +315,21 @@ CREATE TABLE IF NOT EXISTS job_versions (
         REFERENCES resource_versions(pipeline_id, resource_name, version_json) ON DELETE CASCADE
 );
 
+-- The payload of each webhook delivery, beside the version it IS. Keyed to
+-- resource_versions and cascading off it, so version_history: pruning takes
+-- the payload along — the only retention it has, and the only bound on what
+-- it holds, which can be personal data a sender put in the body.
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    pipeline_id   INTEGER NOT NULL,
+    resource_name TEXT NOT NULL,
+    version_json  TEXT NOT NULL,
+    body          BLOB NOT NULL,
+    headers_json  TEXT NOT NULL,
+    PRIMARY KEY (pipeline_id, resource_name, version_json),
+    FOREIGN KEY (pipeline_id, resource_name, version_json)
+        REFERENCES resource_versions(pipeline_id, resource_name, version_json) ON DELETE CASCADE
+);
+
 -- How far a job has FANNED OUT under get: version: every -- the highest
 -- check_order it has taken, per resource.
 --

@@ -277,6 +277,16 @@ linters:
             # goleak is test-only: goleak_test.go's TestMain fails this
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
+        # webhook turns a delivery into a version: signature schemes,
+        # handshakes, and the fields a pipeline projects. A stdlib-only leaf,
+        # and deliberately not an expr importer — expressions reach it
+        # compiled, as plain funcs, so what a pipeline writes can build
+        # strings but never decide that a signature is valid.
+        Webhook:
+          files:
+            - "**/internal/webhook/**"
+          allow:
+            - "$gostd"
         # outcome classifies a step/job error (failed/errored/aborted) for
         # hook dispatch; a leaf with no internal dependencies.
         Outcome:
@@ -362,6 +372,7 @@ linters:
             - "github.com/jtarchie/steps/internal/mcp"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/template"
+            - "github.com/jtarchie/steps/internal/webhook"
         # venue is the orchestrator half of remote execution, and the single
         # decision point one tier ABOVE shell: shell decides host vs container,
         # venue decides this machine vs a worker, and hands straight back to
@@ -655,6 +666,7 @@ linters:
             # the store.Store it was handed — internal/cli is the only package
             # that chooses one.
             - "github.com/jtarchie/steps/internal/store/sqlite"
+            - "github.com/jtarchie/steps/internal/webhook"
             - "github.com/jtarchie/steps/internal/workspace"
         # web serves the UI. Like trigger, it sits above pipeline and reaches
         # execution territory only through pipeline.RunJob — never into

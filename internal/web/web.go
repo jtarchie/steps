@@ -94,6 +94,8 @@ type Pipeline struct {
 	// listener on a second port of the poll loop's own; one daemon means one
 	// address.
 	Webhook http.Handler
+	// Hooks answers POST /p/<slug>/hooks/<resource>, a delivery to a webhook resource; built by the caller (trigger.HookHandler) for the reason Webhook is, and nil only in a test.
+	Hooks func(w http.ResponseWriter, r *http.Request, resource string)
 }
 
 // NewPipeline builds a served pipeline around the configuration it starts
@@ -365,6 +367,7 @@ func (s *Server) routes() error {
 	// exempt from the same-origin check every browser mutation gets — a
 	// webhook sender is cross-origin by definition.
 	group.POST("/check/:resource", s.handleWebhook)
+	group.POST("/hooks/:resource", s.handleHook)
 
 	// Outside the /p/ group because a set may CREATE the pipeline it names, and that middleware resolves one that exists.
 	api := e.Group("/api", refuseBrowsers, middleware.BodyLimit(maxUploadSize))
@@ -450,7 +453,7 @@ func sameOriginMutations(next echo.HandlerFunc) echo.HandlerFunc {
 		// has no reason to share this origin. Exempting it here rather than
 		// mounting it outside the group keeps it under /p/<slug>/, which is
 		// what says which pipeline it checks.
-		if strings.Contains(c.Path(), "/check/:resource") {
+		if strings.Contains(c.Path(), "/check/:resource") || strings.HasSuffix(c.Path(), "/hooks/:resource") {
 			return next(c)
 		}
 

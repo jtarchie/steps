@@ -869,6 +869,18 @@ func (s *Server) addRunHits(ctx context.Context, add func(searchHit), pipeline *
 	}
 }
 
+// handleHook is a delivery to a webhook resource. Like handleWebhook it has no runner guard: it authenticates with the sender's signature, not with this server's absent authentication, so --read-only does not withhold it.
+func (s *Server) handleHook(c echo.Context) error {
+	target := pipelineOf(c)
+	if target.Hooks == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "no webhook resources in this pipeline")
+	}
+
+	target.Hooks(c.Response(), c.Request(), c.Param("resource"))
+
+	return nil
+}
+
 // handleWebhook hands a check request to the pipeline's own webhook handler.
 //
 // A 404 when the pipeline declares no webhook_token_env: resource, which is
