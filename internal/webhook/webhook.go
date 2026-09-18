@@ -26,10 +26,25 @@ var (
 // DefaultMaxBody is the body cap when a resource sets no max_body.
 const DefaultMaxBody = 1 << 20
 
-// Request is what a provider reads: the delivery's headers and its raw body.
+// Request is one delivery as it arrived.
 type Request struct {
+	Method string
 	Header http.Header
+	Query  url.Values
 	Body   []byte
+}
+
+// input is the delivery as an expression sees it.
+func (r Request) input(provider, event string) Input {
+	return Input{
+		Provider: provider,
+		Event:    event,
+		Method:   r.Method,
+		Headers:  flatten(r.Header),
+		Query:    flatten(r.Query),
+		Body:     string(r.Body),
+		Payload:  decodeJSON(r.Body),
+	}
 }
 
 // Provider is one sender's signature scheme and where it says what happened.
@@ -62,6 +77,8 @@ type Input struct {
 // Receiver is one webhook resource, compiled.
 type Receiver struct {
 	Provider string
+	// Scheme is provider: custom's signature, and nil for every other provider.
+	Scheme *Scheme
 	// SecretEnv names the variable holding the secret; the caller reads it, per delivery, so a rotated secret needs no reload.
 	SecretEnv string
 	MaxBody   int64
@@ -108,9 +125,24 @@ func (r *Receiver) ReadBody(w http.ResponseWriter, req *http.Request) ([]byte, e
 	return body, nil
 }
 
-// Verify checks the delivery's signature. An empty secret verifies nothing.
-func (r *Receiver) Verify(header http.Header, body []byte, secret string, now time.Time) error {
+// provider is the table entry, or for custom, one built around the resource's own Scheme.
+func (r *Receiver) provider() (Provider, bool) {
+	if r.Provider == Custom {
+		if r.Scheme == nil {
+			return Provider{}, false
+		}
+
+		return Provider{Verify: r.Scheme.Verify, ID: none, Event: none, Signed: []string{r.Scheme.Header}}, true
+	}
+
 	provider, ok := Providers[r.Provider]
+
+	return provider, ok
+}
+
+// Verify checks the delivery's signature. An empty secret verifies nothing.
+func (r *Receiver) Verify(req Request, secret string, now time.Time) error {
+	provider, ok := r.provider()
 	if !ok || secret == "" {
 		return ErrUnauthorized
 	}
@@ -126,7 +158,7 @@ func (r *Receiver) Verify(header http.Header, body []byte, secret string, now ti
 		key = decoded
 	}
 
-	if !provider.Verify(Request{Header: header, Body: body}, key, now) {
+	if !provider.Verify(req, key, now) {
 		return ErrUnauthorized
 	}
 
@@ -134,22 +166,13 @@ func (r *Receiver) Verify(header http.Header, body []byte, secret string, now ti
 }
 
 // Accept runs a delivery that has already been verified through the pipeline's own expressions, in order: handshake, filter, id, version.
-func (r *Receiver) Accept(method string, header http.Header, query url.Values, body []byte) (Result, error) {
-	provider, ok := Providers[r.Provider]
+func (r *Receiver) Accept(request Request) (Result, error) {
+	provider, ok := r.provider()
 	if !ok {
 		return Result{}, fmt.Errorf("webhook: unknown provider %q", r.Provider)
 	}
 
-	request := Request{Header: header, Body: body}
-	in := Input{
-		Provider: r.Provider,
-		Event:    provider.Event(request),
-		Method:   method,
-		Headers:  flatten(header),
-		Query:    flatten(query),
-		Body:     string(body),
-		Payload:  decodeJSON(body),
-	}
+	in := request.input(r.Provider, provider.Event(request))
 
 	if provider.Handshake != nil {
 		if reply, ok := provider.Handshake(request); ok {
@@ -178,7 +201,7 @@ func (r *Receiver) Accept(method string, header http.Header, query url.Values, b
 		return Result{}, err
 	}
 
-	return Result{Delivery: Delivery{Version: version, Body: body, Headers: kept(header, provider.Signed)}}, nil
+	return Result{Delivery: Delivery{Version: version, Body: request.Body, Headers: kept(request.Header, provider.Signed)}}, nil
 }
 
 // version is {id, event, ...what the pipeline projects}; event is left out when the sender names none.

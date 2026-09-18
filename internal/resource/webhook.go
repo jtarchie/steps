@@ -3,11 +3,12 @@ package resource
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/exprlang"
 	"github.com/jtarchie/steps/internal/webhook"
 )
 
@@ -21,12 +22,109 @@ func Receiver(res config.Resource) (*webhook.Receiver, error) {
 		return nil, err //nolint:wrapcheck // WebhookSource names the resource
 	}
 
-	if _, known := webhook.Providers[source.Provider]; !known {
+	if !slices.Contains(webhook.ProviderNames(), source.Provider) {
 		return nil, fmt.Errorf("resource %q: unknown webhook provider %q (known: %s)",
-			res.Name, source.Provider, strings.Join(slices.Sorted(maps.Keys(webhook.Providers)), ", "))
+			res.Name, source.Provider, strings.Join(webhook.ProviderNames(), ", "))
 	}
 
-	return &webhook.Receiver{Provider: source.Provider, SecretEnv: source.SecretEnv, MaxBody: source.MaxBody}, nil
+	receiver := &webhook.Receiver{Provider: source.Provider, SecretEnv: source.SecretEnv, MaxBody: source.MaxBody}
+	compiler := webhookCompiler{resource: res.Name}
+
+	receiver.Filter = compiler.filter(source.Filter)
+	receiver.ID = compiler.text("id", source.ID)
+	receiver.Scheme = compiler.scheme(source.Signature)
+
+	for name, src := range source.Version {
+		if receiver.Version == nil {
+			receiver.Version = map[string]func(webhook.Input) (string, error){}
+		}
+
+		receiver.Version[name] = compiler.text("version."+name, src)
+	}
+
+	return receiver, errors.Join(compiler.errs...)
+}
+
+// webhookCompiler collects every expression error in one resource, so one set names them all.
+type webhookCompiler struct {
+	resource string
+	errs     []error
+}
+
+func (c *webhookCompiler) compile(field, src string, wantBool bool) func(webhook.Input) (any, error) {
+	run, err := exprlang.Webhook(src, wantBool)
+	if err != nil {
+		c.errs = append(c.errs, fmt.Errorf("resource %q: source.%s: %w", c.resource, field, err))
+
+		return nil
+	}
+
+	return func(in webhook.Input) (any, error) {
+		return run(exprlang.WebhookEnv(in))
+	}
+}
+
+func (c *webhookCompiler) filter(src string) func(webhook.Input) (bool, error) {
+	if src == "" {
+		return nil
+	}
+
+	run := c.compile("filter", src, true)
+
+	return func(in webhook.Input) (bool, error) {
+		result, err := run(in)
+		keep, _ := result.(bool)
+
+		return keep, err
+	}
+}
+
+func (c *webhookCompiler) text(field, src string) func(webhook.Input) (string, error) {
+	if src == "" {
+		return nil
+	}
+
+	run := c.compile(field, src, false)
+
+	return func(in webhook.Input) (string, error) {
+		result, err := run(in)
+		if err != nil {
+			return "", err
+		}
+
+		return webhookString(result)
+	}
+}
+
+func (c *webhookCompiler) scheme(signature *config.WebhookSignature) *webhook.Scheme {
+	if signature == nil {
+		return nil
+	}
+
+	return &webhook.Scheme{
+		Header:    signature.Header,
+		Prefix:    signature.Prefix,
+		Encoding:  signature.Encoding,
+		Algorithm: signature.Algorithm,
+		Signed:    c.text("signature.signed", signature.Signed),
+		Timestamp: c.text("signature.timestamp", signature.Timestamp),
+	}
+}
+
+// webhookString is a version field as a string. A JSON number decodes to float64, and an id like 3370172613 must not come back as 3.370172613e+09.
+func webhookString(value any) (string, error) {
+	switch v := value.(type) {
+	case string:
+		return v, nil
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64), nil
+	case int:
+		return strconv.Itoa(v), nil
+	case bool:
+		return strconv.FormatBool(v), nil
+	default:
+		return "", fmt.Errorf("evaluated to %T, want a string", value)
+	}
 }
 
 // CompileWebhooks is Receiver over every webhook resource, for a caller that wants only the refusal.

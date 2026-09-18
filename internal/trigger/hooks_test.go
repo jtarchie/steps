@@ -262,3 +262,17 @@ func TestASlackHandshakeIsAnsweredAndNotRecorded(t *testing.T) {
 		t.Errorf("versions = %v, want the handshake unrecorded", got)
 	}
 }
+
+// TestAnExpressionThatFailsIsA500: the pipeline's mistake, not the sender's — so the sender logs a failure it can redeliver once the pipeline is fixed, and nothing is recorded meanwhile.
+func TestAnExpressionThatFailsIsA500(t *testing.T) {
+	f := newHookFixture(t, map[string]any{"id": `payload.head.sha`})
+	body := []byte(`{"head":null}`)
+
+	if code := f.deliver(t, "push", signed(hookSecret, "d3", body), body); code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", code)
+	}
+
+	if got := f.versions(t); len(got) != 0 {
+		t.Errorf("versions = %v, want nothing recorded", got)
+	}
+}

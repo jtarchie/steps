@@ -52,7 +52,7 @@ func loadFixture(t *testing.T, name string) (fixture, Request, time.Time) {
 }
 
 func verifies(name string, req Request, secret string, now time.Time) bool {
-	return (&Receiver{Provider: name}).Verify(req.Header, req.Body, secret, now) == nil
+	return (&Receiver{Provider: name}).Verify(req, secret, now) == nil
 }
 
 func flipped(value string) string {
@@ -140,7 +140,7 @@ func TestEveryFixtureNamesAProvider(t *testing.T) {
 func TestSlackAnswersItsURLVerification(t *testing.T) {
 	body := []byte(`{"token":"x","challenge":"3eZbrw1aBm2rZgRNFdxV2595E9CY3gmdALWMmHkvFXO7tYXAYM8P","type":"url_verification"}`)
 
-	result, err := (&Receiver{Provider: "slack"}).Accept(http.MethodPost, http.Header{}, nil, body)
+	result, err := (&Receiver{Provider: "slack"}).Accept(Request{Method: http.MethodPost, Header: http.Header{}, Body: body})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,18 @@
+# Every webhook version already carries id and event. Projecting a field of
+# either name would silently replace them; source.id is the way to choose the id.
+# expect: source.version cannot set id or event
+
+resources:
+- name: push
+  type: webhook
+  source:
+    provider: github
+    secret_env: GITHUB_WEBHOOK_SECRET
+    version:
+      id: payload.after
+
+jobs:
+- name: build
+  plan:
+  - get: push
+    trigger: true

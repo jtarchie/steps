@@ -155,3 +155,70 @@ func TestWebhookDeliveryWorksUnderReadOnly(t *testing.T) {
 
 	waitForFile(t, filepath.Join(out, "headers.json"))
 }
+
+// TestWebhookExpressionsAreThePipelines: filter: keeps only what the pipeline cares about, id: makes the same commit one version however many deliveries carry it, and version: puts what matters where the UI shows it.
+func TestWebhookExpressionsAreThePipelines(t *testing.T) {
+	t.Setenv("STEPS_TEST_GITHUB_SECRET", githubSecret)
+
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out")
+	path := writePipeline(t, dir, `
+resources:
+- name: push
+  type: webhook
+  source:
+    provider: github
+    secret_env: STEPS_TEST_GITHUB_SECRET
+    filter: 'event == "push" && payload.ref == "refs/heads/main"'
+    id: 'payload.after'
+    version:
+      branch: 'trimPrefix(payload.ref, "refs/heads/")'
+jobs:
+- name: build
+  plan:
+  - get: push
+    trigger: true
+  - task: build
+    inputs: [push]
+    run: |
+      mkdir -p `+out+`
+      cp push/version.json `+out+`/
+`)
+
+	served := startWebFor(t, path, "--interval", "1h")
+	defer served.stop(t)
+
+	name := cli.PipelineName(path)
+	url := fmt.Sprintf("http://%s/p/%s/hooks/push", served.addr, name)
+
+	deliveries := []struct {
+		event, id, body string
+	}{
+		{"ping", "d1", `{"zen":"Keep it logically awesome."}`},
+		{"push", "d2", `{"ref":"refs/heads/feature","after":"bbb"}`},
+		{"push", "d3", `{"ref":"refs/heads/main","after":"aaa"}`},
+		{"push", "d4", `{"ref":"refs/heads/main","after":"aaa"}`},
+	}
+
+	for _, d := range deliveries {
+		body := []byte(d.body)
+		if status := postDelivery(t, url, githubDelivery(githubSecret, d.event, d.id, body), body); status != http.StatusOK {
+			t.Fatalf("delivery %s answered %d, want 200: a filtered delivery and a repeat are both the sender doing nothing wrong", d.id, status)
+		}
+	}
+
+	st := waitForStore(t, served.state, name)
+	defer func() { _ = st.Close() }()
+
+	versions, err := st.ResourceVersionsJSON(t.Context(), "push")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := `{"branch":"main","event":"push","id":"aaa"}`
+	if len(versions) != 1 || versions[0] != want {
+		t.Errorf("versions = %v, want only %s: the ping and the feature push filtered out, the second delivery of aaa the same version", versions, want)
+	}
+
+	waitForFile(t, filepath.Join(out, "version.json"))
+}

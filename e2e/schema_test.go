@@ -2,7 +2,6 @@ package e2e
 
 import (
 	"encoding/json"
-	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -157,6 +156,7 @@ func schemaDefsByType() map[string]reflect.Type {
 		"defaults":           reflect.TypeOf(config.Defaults{}),
 		"workspace":          reflect.TypeOf(config.WorkspaceConfig{}),
 		"webhookSource":      reflect.TypeOf(config.WebhookSource{}),
+		"webhookSignature":   reflect.TypeOf(config.WebhookSignature{}),
 	}
 }
 
@@ -277,7 +277,7 @@ func TestWebhookProviderEnumMatchesTheTable(t *testing.T) {
 	got := doc.Defs.WebhookSource.Properties.Provider.Enum
 	slices.Sort(got)
 
-	if want := slices.Sorted(maps.Keys(webhook.Providers)); !slices.Equal(got, want) {
+	if want := webhook.ProviderNames(); !slices.Equal(got, want) {
 		t.Errorf("schema provider enum = %v, want the provider table %v", got, want)
 	}
 }

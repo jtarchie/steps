@@ -125,13 +125,9 @@ func jsonField(path ...string) func(Request) string {
 	}
 }
 
-// hmacBody is the scheme most senders use: a hex HMAC-SHA256 of the raw body behind a prefix in one header.
+// hmacBody is the scheme most senders use: a hex HMAC-SHA256 of the raw body behind a prefix in one header — Scheme at its defaults.
 func hmacBody(name, prefix string) func(Request, []byte, time.Time) bool {
-	return func(r Request, secret []byte, _ time.Time) bool {
-		got, found := strings.CutPrefix(r.Header.Get(name), prefix)
-
-		return found && equalHex(got, sign(secret, r.Body))
-	}
+	return Scheme{Header: name, Prefix: prefix}.Verify
 }
 
 // token is a sender that presents the secret itself rather than a signature.

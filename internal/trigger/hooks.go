@@ -42,7 +42,7 @@ func receive(w http.ResponseWriter, r *http.Request, cfg *config.Config, st Hook
 		return
 	}
 
-	result, err := receiver.Accept(r.Method, r.Header, r.URL.Query(), body)
+	result, err := receiver.Accept(webhook.Request{Method: r.Method, Header: r.Header, Query: r.URL.Query(), Body: body})
 	if err != nil {
 		// A 500 the sender logs as failed, so it can be redelivered once the pipeline is fixed; nothing is recorded meanwhile.
 		slog.Error("webhook.expr_error", "resource", name, "error", err)
@@ -108,7 +108,7 @@ func verified(w http.ResponseWriter, r *http.Request, receiver *webhook.Receiver
 		slog.Warn("webhook.secret_unset", "resource", name, "env", receiver.SecretEnv)
 	}
 
-	err = receiver.Verify(r.Header, body, secret, time.Now())
+	err = receiver.Verify(webhook.Request{Method: r.Method, Header: r.Header, Query: r.URL.Query(), Body: body}, secret, time.Now())
 	if err != nil {
 		slog.Info("webhook.unauthorized", "resource", name)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)

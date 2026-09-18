@@ -287,7 +287,7 @@
       "required": ["provider", "secret_env"],
       "properties": {
         "provider": {
-          "enum": ["bitbucket", "forgejo", "gitea", "github", "gitlab", "honeybadger", "linear", "pagerduty", "sentry", "slack", "standard-webhooks", "stripe", "token"],
+          "enum": ["bitbucket", "custom", "forgejo", "gitea", "github", "gitlab", "honeybadger", "linear", "pagerduty", "sentry", "slack", "standard-webhooks", "stripe", "token"],
           "description": "The sender, and so the signature scheme a delivery must pass. Declared, never detected from headers the sender controls."
         },
         "secret_env": {
@@ -299,7 +299,37 @@
           "type": "integer",
           "minimum": 1,
           "description": "Largest body accepted, in bytes; a bigger one is answered 413. Default 1 MiB."
+        },
+        "filter": {
+          "type": "string",
+          "description": "Boolean expression over the verified delivery (provider, event, method, headers, query, body, payload). A delivery it answers false for is acknowledged and recorded nowhere."
+        },
+        "id": {
+          "type": "string",
+          "description": "Expression replacing the sender's delivery id, so e.g. two deliveries of one commit are one version."
+        },
+        "version": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Extra version fields, each an expression over the delivery. id and event are always there and cannot be set here."
+        },
+        "signature": {
+          "$ref": "#/$defs/webhookSignature",
+          "description": "provider: custom only — how the sender signs."
         }
+      }
+    },
+    "webhookSignature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["header"],
+      "properties": {
+        "header": { "type": "string", "description": "The header the signature arrives in." },
+        "prefix": { "type": "string", "description": "Text before the signature in that header, e.g. sha256=." },
+        "encoding": { "enum": ["hex", "base64"], "description": "How the MAC is written. Default hex." },
+        "algorithm": { "enum": ["sha256", "sha1", "sha512"], "description": "The HMAC's hash. Default sha256." },
+        "signed": { "type": "string", "description": "Expression building the message the sender signed. Default: the raw body." },
+        "timestamp": { "type": "string", "description": "Expression giving the unix time the sender signed; a delivery more than five minutes away is refused. Only protects anything when signed includes it." }
       }
     },
     "resource": {

@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -56,7 +57,25 @@ type WebhookSource struct {
 	Provider  string `yaml:"provider"`
 	SecretEnv string `yaml:"secret_env"`
 	MaxBody   int64  `yaml:"max_body,omitempty"`
+	// Filter, ID and Version are expressions over the verified delivery; see exprlang.Webhook.
+	Filter    string            `yaml:"filter,omitempty"`
+	ID        string            `yaml:"id,omitempty"`
+	Version   map[string]string `yaml:"version,omitempty"`
+	Signature *WebhookSignature `yaml:"signature,omitempty"`
 }
+
+// WebhookSignature is provider: custom — an HMAC in one header, described rather than coded. Signed and Timestamp are expressions that build strings; whether the signature is valid is only ever decided in Go.
+type WebhookSignature struct {
+	Header    string `yaml:"header"`
+	Prefix    string `yaml:"prefix,omitempty"`
+	Encoding  string `yaml:"encoding,omitempty"`
+	Algorithm string `yaml:"algorithm,omitempty"`
+	Signed    string `yaml:"signed,omitempty"`
+	Timestamp string `yaml:"timestamp,omitempty"`
+}
+
+// WebhookCustom is the provider whose scheme is the resource's own signature:.
+const WebhookCustom = "custom"
 
 // WebhookSource decodes this resource's source: strictly, so a misspelled key is a load error rather than a filter nobody applies.
 func (r Resource) WebhookSource() (WebhookSource, error) {
@@ -81,9 +100,30 @@ func (r Resource) WebhookSource() (WebhookSource, error) {
 			r.Name)
 	case source.MaxBody < 0:
 		return source, fmt.Errorf("resource %q: source.max_body must be positive", r.Name)
+	case hasKey(source.Version, "id") || hasKey(source.Version, "event"):
+		return source, fmt.Errorf("resource %q: source.version cannot set id or event — every webhook version already carries both (use source.id to replace the delivery id)", r.Name)
 	}
 
-	return source, nil
+	return source, source.Signature.validate(r.Name, source.Provider)
+}
+
+func (s *WebhookSignature) validate(resource, provider string) error {
+	switch {
+	case provider == WebhookCustom && s == nil:
+		return fmt.Errorf("resource %q: provider: custom needs source.signature to say how the sender signs", resource)
+	case provider != WebhookCustom && s != nil:
+		return fmt.Errorf("resource %q: source.signature describes a custom scheme; provider %q already has one", resource, provider)
+	case s == nil:
+		return nil
+	case s.Header == "":
+		return fmt.Errorf("resource %q: source.signature.header names where the signature arrives, and is required", resource)
+	case !slices.Contains([]string{"", "hex", "base64"}, s.Encoding):
+		return fmt.Errorf("resource %q: source.signature.encoding must be hex or base64, not %q", resource, s.Encoding)
+	case !slices.Contains([]string{"", "sha256", "sha1", "sha512"}, s.Algorithm):
+		return fmt.Errorf("resource %q: source.signature.algorithm must be sha256, sha1 or sha512, not %q", resource, s.Algorithm)
+	}
+
+	return nil
 }
 
 func (c *Config) validateWebhookResources() error {
@@ -105,4 +145,10 @@ func (c *Config) validateWebhookResources() error {
 	}
 
 	return nil
+}
+
+func hasKey(m map[string]string, key string) bool {
+	_, ok := m[key]
+
+	return ok
 }
