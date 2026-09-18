@@ -17,6 +17,10 @@ tasks:
     cmds:
       - go fmt ./...
       - task: tidy
+      # Bracketing the gates, AFTER fmt and tidy have made their edits: the
+      # commit hook (hack/hooks/pre-commit) only accepts the tree this run
+      # validated, and a run is long enough for another session to change it.
+      - go run ./tools/stamp begin
       - task: lint
       - task: kindswitch
       # The two static gates run before the suite: they cost two minutes
@@ -26,6 +30,14 @@ tasks:
       - task: nilaway
       - task: test
       - task: build
+      - task: seal
+
+  seal:
+    desc: Record that the full sequence passed on exactly this tree, and point git at the hook that checks it. Only ever reached through `task fmt` — sealing by hand is forging the stamp. See tools/stamp/CLAUDE.md.
+    internal: true
+    cmds:
+      - go run ./tools/stamp seal
+      - git config core.hooksPath hack/hooks
 
   tidy:
     desc: Keep go.mod/go.sum tidy — a diff here is a real signal, commit it.

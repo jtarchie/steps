@@ -42,6 +42,8 @@ Two advisory targets sit outside the sequence, run on demand when touching code 
 
 All of them always pass clean on a fresh checkout. If any fails, that is a real regression — do not work around it with `--no-verify`-style shortcuts or by skipping a step.
 
+**A commit must be the tree `task` passed on, and git checks.** `task` ends by sealing the hash of the tree it validated; `hack/hooks/pre-commit` refuses a commit of any other tree, naming the files that differ. It compares and never reruns, so it costs nothing — and it means everything the run saw must be staged (a partial commit of a tested tree is refused on purpose, and so is a stray file a sabotage left behind). When it refuses: rerun `task`, stage what it validated, commit. A Claude Code hook (`.claude/settings.json`) denies `--no-verify`, `git commit -n` and any command naming `core.hooksPath`; a human can still bypass and owns that. Mechanics and the reasoning: [tools/stamp/CLAUDE.md](tools/stamp/CLAUDE.md).
+
 **nilaway is a gate, and a false positive costs a sentence.** It was advisory behind `|| true` until 2026-09-18, and advisory-and-ignored is how 17 findings sat in a green tree. Read each finding and decide real bug vs. false positive — the known FP shapes are a nil slice indexed under a `len` guard, a comma-ok map read, and two values an invariant keeps in step. Prefer a guard the analyzer can SEE when one costs nothing (test the pointer about to be dereferenced, not its sibling; hand the checked value across rather than re-deriving it); otherwise suppress where it is reported with `//nolint:nilaway // <why the flow cannot happen>` — on the line, or on the line ABOVE when the line opens a block, which is the one placement the trailing form silently misses. A finding reported inside a callee cannot be suppressed from the caller, which is the analyzer saying the guard belongs in the code. `task nilaway` on its own is the fast way to see just this output.
 
 **Test suite specifics:**
@@ -61,7 +63,7 @@ All of them always pass clean on a fresh checkout. If any fails, that is a real 
 
 **Two front ends, one model.** `internal/web` serves the browser UI and `internal/events` is the stdlib-only leaf carrying run events between them — see [internal/web/CLAUDE.md](internal/web/CLAUDE.md) and [internal/events/CLAUDE.md](internal/events/CLAUDE.md), which load when you work in those packages.
 
-**`tools/`** holds build-time checkers, not shipped code — currently just `tools/kindswitch`, the `go/analysis` pass in the validation sequence above; see [tools/kindswitch/CLAUDE.md](tools/kindswitch/CLAUDE.md).
+**`tools/`** holds build-time checkers, not shipped code: `tools/kindswitch`, the `go/analysis` pass in the validation sequence above ([tools/kindswitch/CLAUDE.md](tools/kindswitch/CLAUDE.md)); `tools/coverdiff`, behind `task cover-diff`; and `tools/stamp`, the commit gate ([tools/stamp/CLAUDE.md](tools/stamp/CLAUDE.md)).
 
 Config files: **`.golangci.yml`** (lint rules, and the `depguard` allow-lists that ARE the dependency graph — read it there rather than from a copy that can drift) — this *is* the pre-check-in validation pipeline, there's no separate CI file.
 

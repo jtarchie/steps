@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PROJECT_DIR}\" && go run ./tools/stamp guard",
+            "timeout": 20,
+            "statusMessage": "Checking the commit gate is not bypassed"
+          }
+        ]
+      }
+    ]
+  }
+}
