@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -238,7 +239,7 @@ func guard(stdin io.Reader, stdout io.Writer) error {
 func bypass(command string) string {
 	var inGit, inCommit bool
 
-	for _, word := range shellWords(command) {
+	for _, word := range shellWords(withoutHeredocs(command)) {
 		switch {
 		case word == "git" || strings.HasSuffix(word, "/git"):
 			inGit, inCommit = true, false
@@ -255,6 +256,34 @@ func bypass(command string) string {
 	}
 
 	return ""
+}
+
+var heredoc = regexp.MustCompile(`(?:^|[^<])<<-?\s*['"]?(\w+)`)
+
+// withoutHeredocs drops heredoc bodies, which are data and not commands: a commit message written through one is the usual way this repo's messages are made, and the first commit through the gate was refused for DESCRIBING the flags it refuses.
+func withoutHeredocs(command string) string {
+	var (
+		kept  []string
+		until string
+	)
+
+	for _, line := range strings.Split(command, "\n") {
+		if until != "" {
+			if strings.TrimSpace(line) == until {
+				until = ""
+			}
+
+			continue
+		}
+
+		kept = append(kept, line)
+
+		if match := heredoc.FindStringSubmatch(line); match != nil {
+			until = match[1]
+		}
+	}
+
+	return strings.Join(kept, "\n")
 }
 
 // shellWords splits on unquoted whitespace and command separators, keeping a quoted span whole — which is what lets a commit MESSAGE say "--no-verify" without being refused for it.

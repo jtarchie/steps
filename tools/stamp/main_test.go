@@ -152,6 +152,8 @@ func TestBypass(t *testing.T) {
 		"git -c core.hooksPath=/dev/null commit -m x",
 		"git config core.hooksPath /dev/null",
 		"/usr/bin/git commit --no-verify",
+		"cat > msg.txt <<EOF\nan innocent message\nEOF\ngit commit --no-verify -F msg.txt",
+		"git commit -F - <<<'message' --no-verify",
 	}
 
 	for _, command := range refused {
@@ -163,6 +165,7 @@ func TestBypass(t *testing.T) {
 	allowed := []string{
 		"git commit -m 'guard refuses --no-verify and -n'",
 		"git commit -m \"$(cat <<'EOF'\nstamp: refuse git commit -n\nEOF\n)\"",
+		"cat > msg.txt <<'EOF'\nsealing points core.hooksPath at hack/hooks; git commit -n is refused\nEOF\ngit add x && git commit -q -F msg.txt",
 		"git push -n",
 		"git log -n 5",
 		"grep -rn -- --no-verify CLAUDE.md",
