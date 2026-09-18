@@ -96,15 +96,83 @@ func TestAnEditAfterTheRunIsRefusedByName(t *testing.T) {
 	}
 }
 
-func TestAFileTheRunSawButTheCommitLeavesOutIsRefused(t *testing.T) {
+// One task run may be committed as a SERIES: the run costs eight minutes, and demanding the whole validated tree in one commit taught exactly one lesson, which was to bundle unrelated changes.
+func TestASliceOfTheValidatedTreeMayBeCommitted(t *testing.T) {
 	repo(t)
-	write(t, "stray.txt", "left by a sabotage")
+	write(t, "second.txt", "validated in the same run, committed later")
 	validate(t)
 	sh(t, "add", "kept.txt")
 
 	err := check(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "stray.txt") {
-		t.Fatalf("error = %v, want a refusal naming stray.txt", err)
+	if err != nil {
+		t.Fatalf("a slice of an untouched validated tree was refused: %v", err)
+	}
+}
+
+func TestASliceIsRefusedOnceAnythingWasEditedAfterTheRun(t *testing.T) {
+	repo(t)
+	write(t, "second.txt", "validated")
+	validate(t)
+	write(t, "second.txt", "edited after the run, and NOT part of this commit")
+	sh(t, "add", "kept.txt")
+
+	err := check(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "second.txt") {
+		t.Fatalf("error = %v, want a refusal naming second.txt: the working tree is no longer what the checks saw", err)
+	}
+}
+
+// commit makes a real commit with the hooks out of the way: what is under test is pushed(), asked directly.
+func commit(t *testing.T, message string) string {
+	t.Helper()
+
+	sh(t, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "-m", message)
+
+	out, err := exec.CommandContext(t.Context(), "git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return strings.TrimSpace(string(out))
+}
+
+const zeroSHA = "0000000000000000000000000000000000000000"
+
+func TestAPushOfTheWholeValidatedTreeIsAllowed(t *testing.T) {
+	repo(t)
+	write(t, "second.txt", "validated")
+	validate(t)
+	sh(t, "add", "kept.txt")
+	commit(t, "first of the series")
+	sh(t, "add", "second.txt")
+	tip := commit(t, "second of the series")
+
+	err := pushed(context.Background(), strings.NewReader("refs/heads/main "+tip+" refs/heads/main "+zeroSHA+"\n"))
+	if err != nil {
+		t.Fatalf("the tip of a complete series was refused: %v", err)
+	}
+}
+
+// This is the refusal the series allowance moved from commit time to push time: a file the tests ran with and nobody added is "works on my machine", and it must not leave the machine.
+func TestAPushThatLeavesAValidatedFileBehindIsRefusedByName(t *testing.T) {
+	repo(t)
+	write(t, "forgotten.txt", "the tests needed this")
+	validate(t)
+	sh(t, "add", "kept.txt")
+	tip := commit(t, "the series, abandoned halfway")
+
+	err := pushed(context.Background(), strings.NewReader("refs/heads/main "+tip+" refs/heads/main "+zeroSHA+"\n"))
+	if err == nil || !strings.Contains(err.Error(), "forgotten.txt") {
+		t.Fatalf("error = %v, want a refusal naming forgotten.txt", err)
+	}
+}
+
+func TestDeletingARemoteBranchPushesNoTreeToJudge(t *testing.T) {
+	repo(t)
+
+	err := pushed(context.Background(), strings.NewReader("(delete) "+zeroSHA+" refs/heads/gone "+zeroSHA+"\n"))
+	if err != nil {
+		t.Fatalf("a branch deletion was refused: %v", err)
 	}
 }
 

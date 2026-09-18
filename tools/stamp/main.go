@@ -1,4 +1,4 @@
-// Command stamp ties a commit to the tree `task` last passed on: the sequence takes eight minutes, so a hook that RAN it would be bypassed by the second day, while one that only COMPARES tree hashes costs nothing and proves more — the tree tested is the tree committed. See tools/stamp/CLAUDE.md.
+// Command stamp ties a commit to the tree `task` last passed on: the sequence takes eight minutes, so a hook that RAN it would be bypassed by the second day, while one that only COMPARES tree hashes costs nothing and proves more — the tree tested is the tree pushed. See tools/stamp/CLAUDE.md.
 package main
 
 import (
@@ -22,7 +22,7 @@ const (
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: stamp begin|seal|check|guard")
+		fmt.Fprintln(os.Stderr, "usage: stamp begin|seal|check|pushed|guard")
 		os.Exit(2)
 	}
 
@@ -41,6 +41,8 @@ func run(ctx context.Context, verb string, stdin io.Reader, stdout io.Writer) er
 		return seal(ctx)
 	case "check":
 		return check(ctx)
+	case "pushed":
+		return pushed(ctx, stdin)
 	case "guard":
 		return guard(stdin, stdout)
 	default:
@@ -87,8 +89,59 @@ func check(ctx context.Context) error {
 		return errors.New("`task` has not passed on this checkout — run it, then commit the tree it validated")
 	}
 
-	if staged != stamped {
-		return fmt.Errorf("this commit is not the tree `task` last passed on. Stage everything that run saw (and nothing since), or rerun `task`. Validated → committing:\n%s", treeDiff(ctx, stamped, staged))
+	if staged == stamped {
+		return nil
+	}
+
+	// A SLICE of the validated tree is fine as long as nothing has been touched since: one run may be committed as a series, and the proof that the series ADDS UP to what was validated is pre-push's, where it lands on what actually leaves the machine.
+	working, err := worktreeTree(ctx)
+	if err != nil {
+		return err
+	}
+
+	if working != stamped {
+		return fmt.Errorf("the working tree is not the one `task` last passed on, so nothing here is vouched for — rerun `task`. Validated → now:\n%s", treeDiff(ctx, stamped, working))
+	}
+
+	return nil
+}
+
+// pushed is pre-push: every tip being sent must be EXACTLY the validated tree. git writes one line per ref on stdin — local ref, local sha, remote ref, remote sha.
+func pushed(ctx context.Context, stdin io.Reader) error {
+	raw, err := io.ReadAll(stdin)
+	if err != nil {
+		return fmt.Errorf("reading the refs being pushed: %w", err)
+	}
+
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 4 || strings.Trim(fields[1], "0") == "" {
+			// Nothing but zeros is a deletion: no tree leaves the machine.
+			continue
+		}
+
+		err = pushedTip(ctx, fields[0], fields[1])
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func pushedTip(ctx context.Context, ref, sha string) error {
+	tree, err := git(ctx, nil, "rev-parse", sha+"^{tree}")
+	if err != nil {
+		return err
+	}
+
+	stamped, err := readGitFile(ctx, stampFile)
+	if err != nil {
+		return errors.New("`task` has not passed on this checkout — run it, then push the tree it validated")
+	}
+
+	if tree != stamped {
+		return fmt.Errorf("%s is not the tree `task` last passed on. A file listed as D was there when the checks ran and was never committed; anything else changed after them. Commit what is missing, or rerun `task`. Validated → pushing:\n%s", ref, treeDiff(ctx, stamped, tree))
 	}
 
 	return nil

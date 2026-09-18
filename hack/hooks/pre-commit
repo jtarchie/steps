@@ -1,5 +1,6 @@
 #!/bin/sh
-# Refuses a commit whose tree is not the one `task` last passed on. It only
-# compares two hashes — see tools/stamp/CLAUDE.md for why it does not run
+# Refuses a commit unless it is the tree `task` last passed on, or a slice of
+# it taken from a working tree nothing has touched since. It only compares
+# hashes — see tools/stamp/CLAUDE.md for why it does not run
 # anything, and for what to do when it says no.
 exec go run ./tools/stamp check

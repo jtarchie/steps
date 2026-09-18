@@ -1,0 +1,5 @@
+#!/bin/sh
+# Refuses a push whose tip is not exactly the tree `task` last passed on. One
+# run may be committed as a series (pre-commit allows a slice); this is where
+# the series has to add up. See tools/stamp/CLAUDE.md.
+exec go run ./tools/stamp pushed
