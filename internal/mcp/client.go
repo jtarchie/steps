@@ -187,7 +187,18 @@ func newTransport(ctx context.Context, srv config.MCPServer) (sdkmcp.Transport, 
 		return nil, err
 	}
 
-	return &sdkmcp.StreamableClientTransport{Endpoint: srv.Endpoint, HTTPClient: httpClient}, nil
+	// No standalone SSE stream: the go-sdk client otherwise opens a long-lived
+	// GET straight after initialize, and a server that serves one request per
+	// session at a time leaves the `notifications/initialized` POST queued
+	// behind a stream that never ends — connect then fails at handshakeTimeout
+	// against a server answering every other client fine (mcp.honeybadger.io).
+	// The stream carries only server-initiated messages, which nothing here
+	// consumes: a session connects, lists tools, calls them, closes.
+	return &sdkmcp.StreamableClientTransport{
+		Endpoint:             srv.Endpoint,
+		HTTPClient:           httpClient,
+		DisableStandaloneSSE: true,
+	}, nil
 }
 
 // authorizedHTTPClient builds the *http.Client Connect's transport uses,
