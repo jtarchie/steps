@@ -227,7 +227,7 @@ func (s *session) pumpDocker(op uint32, conn net.Conn) {
 	// Whoever removes it closes it, so a close racing the peer's own cannot
 	// double-close or leak.
 	if closing, ok := s.docker.remove(op); ok {
-		_ = closing.Close()
+		_ = closing.Close() //nolint:nilaway // ok is the map hit, and add never stores a nil conn
 		_ = s.sendData(wire.FrameDockerClose, op, nil)
 	}
 }
@@ -257,12 +257,12 @@ func (s *session) dockerData(frame wire.Frame) error {
 	// with it every cancel, every goodbye and the orchestrator's own EOF — the
 	// same hazard the store client's own deadline exists for. A stream whose
 	// daemon will not take bytes is ended; the session keeps listening.
-	_ = conn.SetWriteDeadline(time.Now().Add(dockerWriteTimeout))
+	_ = conn.SetWriteDeadline(time.Now().Add(dockerWriteTimeout)) //nolint:nilaway // ok was checked above, and add never stores a nil conn
 
 	_, err := conn.Write(frame.Payload)
 	if err != nil {
 		if closing, removed := s.docker.remove(frame.Op); removed {
-			_ = closing.Close()
+			_ = closing.Close() //nolint:nilaway // removed is the map hit, and add never stores a nil conn
 		}
 
 		if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
@@ -308,7 +308,7 @@ func (s *session) dockerClose(frame wire.Frame) error {
 		// every byte it read after that went onto the one wire an aws://
 		// session has, addressed to a stream nothing was left to receive it.
 		if closing, removed := s.docker.remove(frame.Op); removed {
-			_ = closing.Close()
+			_ = closing.Close() //nolint:nilaway // removed is the map hit, and add never stores a nil conn
 		}
 
 		// Not echoed. The answer below exists to give the orchestrator a round

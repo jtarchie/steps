@@ -804,7 +804,7 @@ func (h HostRunner) runStreamed(ctx context.Context, command string, maxBytes in
 	slog.Debug("shell.run", "command", command, "cwd", h.cwd, "exit_code", exitCodeOf(runErr))
 
 	if outCapture != nil {
-		stdout, stderr = outCapture.result(), errCapture.result()
+		stdout, stderr = outCapture.result(), errCapture.result() //nolint:nilaway // errCapture is assigned in the same branch as outCapture, so one being set means both are
 	}
 
 	if runErr != nil {

@@ -375,7 +375,7 @@ func sparkline(runs []store.RunRow) []sparkBar {
 	// ListRuns is newest-first; walk backwards so the chart reads oldest to
 	// newest.
 	for i := len(runs) - 1; i >= 0; i-- {
-		run := runs[i]
+		run := runs[i] //nolint:nilaway // i starts at len-1, so a nil slice never enters the loop
 		height := 1
 
 		if slowest > 0 {

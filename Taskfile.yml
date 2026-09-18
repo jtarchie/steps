@@ -1,5 +1,16 @@
 version: '3'
 
+vars:
+  # govulncheck, nilaway and gremlins are pinned in go.tool.mod and run through
+  # `go tool`, so a gate's verdict depends on this repo and not on the day
+  # somebody ran `go install ...@latest`, and nothing needs ~/go/bin on PATH.
+  # A modfile of their own, because `tool` directives in go.mod would put their
+  # dependencies into the same version selection as production code: nilaway
+  # wanting a newer golang.org/x/tools would move the one steps ships with.
+  # Never `go mod tidy -modfile=go.tool.mod` — tidy would add every production
+  # dependency to it.
+  GO_TOOL: go tool -modfile=go.tool.mod
+
 tasks:
   fmt:
     desc: The full pre-check-in validation sequence from CLAUDE.md — the "before I commit" command. Run `task` alone for this.
@@ -8,10 +19,13 @@ tasks:
       - task: tidy
       - task: lint
       - task: kindswitch
-      - task: test
-      - task: build
+      # The two static gates run before the suite: they cost two minutes
+      # between them, and a finding that would fail the build anyway should
+      # not take the five and a half the tests need to be heard.
       - task: vuln
       - task: nilaway
+      - task: test
+      - task: build
 
   tidy:
     desc: Keep go.mod/go.sum tidy — a diff here is a real signal, commit it.
@@ -97,7 +111,7 @@ tasks:
   mutate-pkg:
     desc: "Advisory mutation testing over one package: task mutate-pkg PKG=./internal/venue [WORKERS=1]. Mechanizes the sabotage audit — every LIVED mutant is a code change no test notices. Needs gremlins (task install:tools). --integration because package-scoped mode times out spuriously here; go's build cache keeps unaffected packages cheap, but a package with heavy dependents (venue, pipeline) still costs minutes to hours — scope deliberately. WORKERS=1 serializes the run, which is what a package whose tests bind ports, spawn containers or share a docker daemon needs: parallel mutants otherwise fail each other's tests and report as KILLED for the wrong reason."
     cmds:
-      - gremlins unleash --integration --timeout-coefficient 10 --workers {{.WORKERS | default "0"}} {{.PKG}}
+      - '{{.GO_TOOL}} gremlins unleash --integration --timeout-coefficient 10 --workers {{.WORKERS | default "0"}} {{.PKG}}'
 
   build:
     desc: Build ./steps. CGO_ENABLED=0 is a guard, not an optimization — the planned remote-worker shim cross-compiles this binary for any GOOS/GOARCH and pushes it over SFTP, so a transitive dep that pulls in cgo must fail the build here.
@@ -109,20 +123,28 @@ tasks:
   vuln:
     desc: Scan the module for known Go vulnerabilities actually reachable from the build (govulncheck).
     cmds:
-      - govulncheck ./...
+      - '{{.GO_TOOL}} govulncheck ./...'
 
   nilaway:
-    desc: Uber's nil-flow analyzer over production code. Advisory — never gates `task fmt`, but triage every finding rather than skipping it; it has a real false-positive rate, so not every finding needs a code change.
+    desc: "Uber's nil-flow analyzer over production code. A GATE: must report nothing. It was advisory behind `|| true` until 2026-09-18, which is how 17 findings sat in a green tree. A false positive is suppressed where it is reported, with `//nolint:nilaway // <why the flow cannot happen>` — on the line, or on the line above when the line opens a block — so every exception is a sentence somebody can be wrong about. Prefer a guard the analyzer can see over a suppression when one costs nothing."
     cmds:
-      - nilaway -exclude-test-files=true ./... || true
+      # -include-pkgs keeps the analysis to this module. Without it nilaway
+      # infers through the standard library's SOURCE and reports every
+      # `resp, err := client.Do(req)` as a nil response, because net/http's
+      # contract (a nil error means a non-nil response) is prose it cannot read.
+      - '{{.GO_TOOL}} nilaway -exclude-test-files=true -include-pkgs=github.com/jtarchie/steps ./...'
 
   install:tools:
-    desc: Install the Go CLIs `task fmt` needs beyond the standard toolchain (golangci-lint is separate — see CLAUDE.md). Run once after cloning.
+    desc: Build the pinned Go CLIs ahead of time (golangci-lint is separate — see CLAUDE.md). Optional — `go tool` builds each on first use and caches it — but it moves that wait out of the first `task`.
     cmds:
-      - go install golang.org/x/vuln/cmd/govulncheck@latest
-      - go install go.uber.org/nilaway/cmd/nilaway@latest
-      # gremlins backs the advisory `task mutate-pkg`; nothing in `task fmt` needs it.
-      - go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
+      - '{{.GO_TOOL}} -n govulncheck'
+      - '{{.GO_TOOL}} -n nilaway'
+      - '{{.GO_TOOL}} -n gremlins'
+
+  upgrade:tools:
+    desc: Move the pinned CLIs to their latest releases. Deliberate and reviewable — the diff to go.tool.mod IS the upgrade — where `@latest` at install time made a gate that could turn red with no change to this repo.
+    cmds:
+      - go get -modfile=go.tool.mod -tool golang.org/x/vuln/cmd/govulncheck@latest go.uber.org/nilaway/cmd/nilaway@latest github.com/go-gremlins/gremlins/cmd/gremlins@latest
 
   default:
     desc: Alias for `task fmt` — so bare `task` runs the whole validation sequence.

@@ -387,7 +387,7 @@ func (l *Leases) Resolve(ctx context.Context, tag string) (Worker, error) {
 
 	for {
 		held, landing := l.claim(tag, worker)
-		if landing == nil {
+		if held != nil {
 			machine, err := held.resolve(ctx, worker, l.registry.acquire)
 			if err != nil {
 				return Worker{}, err

@@ -392,7 +392,7 @@ func (d *dockerRelay) pump(_ context.Context, op uint32, conn net.Conn) {
 	}
 
 	if closing, ok := d.remove(op); ok {
-		_ = closing.Close()
+		_ = closing.Close() //nolint:nilaway // ok is the map hit, and add never stores a nil conn
 		_ = d.session.writeFrame(wire.Frame{
 			Type: wire.FrameDockerClose, Op: op, Payload: wire.DockerAbortPayload(),
 		})
@@ -585,7 +585,7 @@ func (d *dockerRelay) deliver(frame wire.Frame) {
 	// session keeps its wire.
 	_ = conn.SetWriteDeadline(time.Now().Add(dockerRelayWriteTimeout))
 
-	_, err := conn.Write(frame.Payload)
+	_, err := conn.Write(frame.Payload) //nolint:nilaway // ok was checked above, and add never stores a nil conn
 	if err != nil {
 		if closing, removed := d.remove(frame.Op); removed {
 			_ = closing.Close()

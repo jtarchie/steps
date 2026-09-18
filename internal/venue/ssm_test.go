@@ -339,6 +339,33 @@ func TestSSMWorkerNeedsABinary(t *testing.T) {
 	}
 }
 
+// A ?binary= has nowhere to travel without a store, and reaching the upload with none would dereference a nil store.
+func TestSSMWorkerWithABinaryNeedsAnArtifactStore(t *testing.T) {
+	fake := &fakeSSM{}
+	seamSSM(t, fake)
+
+	binary := filepath.Join(t.TempDir(), "steps-linux-arm64")
+
+	err := os.WriteFile(binary, []byte("not a real shim"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner := newLocalRunner(t, shell.RunnerSpec{
+		Cwd:    t.TempDir(),
+		Worker: "aws://i-0abc123def456789?binary=" + binary,
+	})
+
+	err = runner.Run(context.Background(), "true")
+	if err == nil {
+		t.Fatal("a ?binary= worker with no artifact store was accepted")
+	}
+
+	if !errors.Is(err, ErrWorker) || !strings.Contains(err.Error(), "--artifact-store") {
+		t.Errorf("error = %v, want an ErrWorker naming --artifact-store", err)
+	}
+}
+
 // shrinkRegisterWait makes the agent-registration wait testable.
 //
 // The real bound is minutes, because that is how long amazon-ssm-agent takes

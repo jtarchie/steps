@@ -86,6 +86,7 @@ func buildVerdictTool(verdicts []string, noteRequired bool, expect stepExpectati
 // on the other.
 func verdictTrajectory(env toolEnv, args map[string]any) []recordedToolCall {
 	calls := env.calls()
+	//nolint:nilaway // n > 0 guards the index, and a nil slice has length 0
 	if n := len(calls); n > 0 && calls[n-1].name == verdictToolName {
 		return calls
 	}

@@ -23,6 +23,7 @@ import (
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 
+	"github.com/jtarchie/steps/internal/blobstore"
 	"github.com/jtarchie/steps/internal/venue/ssmdial"
 )
 
@@ -220,7 +221,13 @@ func ssmBinary(ctx context.Context, worker Worker) (remoteBinary, string, error)
 			ErrWorker, worker.URL)
 	}
 
-	if worker.ArtifactStore == "" {
+	//nolint:contextcheck // the constructor reads only local configuration; see artifactStoreFor
+	store, err := artifactStoreFor(worker.ArtifactStore)
+	if err != nil {
+		return remoteBinary{}, "", err
+	}
+
+	if store == nil {
 		return remoteBinary{}, "", fmt.Errorf("%w %q: ?binary= reaches an aws:// worker through the artifact store, so --artifact-store must be set — or name a binary already on the instance with ?shim=",
 			ErrWorker, worker.URL)
 	}
@@ -230,7 +237,7 @@ func ssmBinary(ctx context.Context, worker Worker) (remoteBinary, string, error)
 		return remoteBinary{}, "", fmt.Errorf("worker %q: %w", worker.URL, err)
 	}
 
-	url, err := publishShim(ctx, worker, build)
+	url, err := publishShim(ctx, store, worker, build)
 	if err != nil {
 		return remoteBinary{}, "", err
 	}
@@ -241,13 +248,7 @@ func ssmBinary(ctx context.Context, worker Worker) (remoteBinary, string, error)
 // publishShim puts the operator's binary in the artifact store, unless it is
 // already there, and mints the URL the instance fetches it with. Keyed by the
 // binary's own content hash, so a fleet uploads each build once.
-func publishShim(ctx context.Context, worker Worker, build string) (string, error) {
-	//nolint:contextcheck // the constructor reads only local configuration; see artifactStoreFor
-	store, err := artifactStoreFor(worker.ArtifactStore)
-	if err != nil {
-		return "", err
-	}
-
+func publishShim(ctx context.Context, store *blobstore.Store, worker Worker, build string) (string, error) {
 	key := "bin/" + build
 
 	has, err := store.Has(ctx, key)

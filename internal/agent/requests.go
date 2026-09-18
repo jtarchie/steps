@@ -229,11 +229,12 @@ func (t *requestRetryTransport) retryable(resp *http.Response, err error) bool {
 		return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 	}
 
+	//nolint:nilaway // err is nil here, and a RoundTripper returning a nil error must return a response
 	if resp.Header.Get(shouldRetryHeader) == "false" {
 		return false
 	}
 
-	return retryableStatus(resp.StatusCode)
+	return retryableStatus(resp.StatusCode) //nolint:nilaway // err is nil here, and a RoundTripper returning a nil error must return a response
 }
 
 func (t *requestRetryTransport) logRetry(resp *http.Response, err error, attempt, attempts int) {
@@ -247,7 +248,7 @@ func (t *requestRetryTransport) logRetry(resp *http.Response, err error, attempt
 	if err != nil {
 		fields = append(fields, "error", err)
 	} else {
-		fields = append(fields, "status", resp.StatusCode)
+		fields = append(fields, "status", resp.StatusCode) //nolint:nilaway // the else of err != nil: a RoundTripper returning a nil error must return a response
 	}
 
 	slog.Warn("agent.request_retry", fields...)
