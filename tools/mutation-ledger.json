@@ -1,14 +1,14 @@
 {
   "packages": {
     "./internal/merkle": {
-      "swept_at": "20019b2",
+      "swept_at": "9601ee4",
       "date": "2026-09-18",
-      "killed": 130,
-      "lived": 36,
+      "killed": 161,
+      "lived": 5,
       "timed_out": 0,
       "not_covered": 30,
-      "efficacy": 78.31,
-      "note": "First measurement, package mode, 2m14s. The 36 survivors are NOT yet triaged: merkle is the cache key, which ./e2e exercises heavily and package mode never runs, so most are expected to die there — expected, not shown.",
+      "efficacy": 96.99,
+      "note": "Was 78.31 with 36 survivors. 31 were one class - a field folded into the key only when set, with nothing proving that setting it moves the key or that leaving it unset does not - and keyfields_test.go now kills them. The 5 left are plan-time control flow on three lines (planNonGetNode's across: dispatch, planTaskNode's dynamic flag, acrossNode's error path): NOT triaged. They are the kind ./e2e usually kills and package mode never runs; nobody has applied them and looked.",
       "equivalent": []
     }
   }
