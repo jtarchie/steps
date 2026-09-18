@@ -2,7 +2,7 @@
 # agent's fields are hashed into the merkle content map, which is persisted to
 # state.db -- so accepting a KEY=VALUE literal here would write the secret to
 # disk in cleartext, which is the exact thing the name-not-value convention
-# (api_key_env:, webhook_token_env:) exists to prevent.
+# (api_key_env:, a webhook's secret_env:) exists to prevent.
 # expect: must be a variable NAME, not a KEY=VALUE pair
 
 tasks:

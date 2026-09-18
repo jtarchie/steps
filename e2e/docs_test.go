@@ -142,7 +142,7 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 	path, mcpServer := writeDocBlock(t, dir, block, scenario)
 
 	varFlags := scenarioVarFlags(scenario)
-	runFlags := scenarioFlags(scenario)
+	runFlags := append(scenarioFlags(scenario), deliveryFlags(t, dir, block)...)
 
 	err = cli.Run(append([]string{"validate", "--syntax-only", path}, varFlags...))
 	if err != nil {
@@ -618,17 +618,19 @@ func TestDocsNoexecReasons(t *testing.T) {
 // to nested config types is worth doing; it is not a one-line map entry.
 func docsCoverageTypes() map[string]reflect.Type {
 	return map[string]reflect.Type{
-		"Config":          reflect.TypeOf(config.Config{}),
-		"Job":             reflect.TypeOf(config.Job{}),
-		"Step":            reflect.TypeOf(config.Step{}),
-		"Task":            reflect.TypeOf(config.Task{}),
-		"Agent":           reflect.TypeOf(config.Agent{}),
-		"Resource":        reflect.TypeOf(config.Resource{}),
-		"ResourceType":    reflect.TypeOf(config.ResourceType{}),
-		"MCPServer":       reflect.TypeOf(config.MCPServer{}),
-		"Assert":          reflect.TypeOf(config.Assert{}),
-		"Defaults":        reflect.TypeOf(config.Defaults{}),
-		"WorkspaceConfig": reflect.TypeOf(config.WorkspaceConfig{}),
+		"Config":           reflect.TypeOf(config.Config{}),
+		"Job":              reflect.TypeOf(config.Job{}),
+		"Step":             reflect.TypeOf(config.Step{}),
+		"Task":             reflect.TypeOf(config.Task{}),
+		"Agent":            reflect.TypeOf(config.Agent{}),
+		"Resource":         reflect.TypeOf(config.Resource{}),
+		"ResourceType":     reflect.TypeOf(config.ResourceType{}),
+		"MCPServer":        reflect.TypeOf(config.MCPServer{}),
+		"Assert":           reflect.TypeOf(config.Assert{}),
+		"Defaults":         reflect.TypeOf(config.Defaults{}),
+		"WorkspaceConfig":  reflect.TypeOf(config.WorkspaceConfig{}),
+		"WebhookSource":    reflect.TypeOf(config.WebhookSource{}),
+		"WebhookSignature": reflect.TypeOf(config.WebhookSignature{}),
 	}
 }
 
@@ -723,6 +725,17 @@ func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 	} {
 		eachOf(doc, key, func(entry any) { record(used, typeName, entry) })
 	}
+
+	eachOf(doc, "resources", func(entry any) {
+		resource, _ := entry.(map[string]any)
+		if resource["type"] != config.WebhookType {
+			return
+		}
+
+		source, _ := resource["source"].(map[string]any)
+		record(used, "WebhookSource", source)
+		record(used, "WebhookSignature", source["signature"])
+	})
 
 	eachOf(doc, "jobs", func(entry any) {
 		job, ok := entry.(map[string]any)

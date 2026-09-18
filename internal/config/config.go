@@ -265,7 +265,6 @@ func (c *Config) validate() error {
 		c.validateVersionEvery,
 		c.validateSerial,
 		c.validateVars,
-		c.validateWebhookTokens,
 		c.validateWebhookResources,
 		c.validateApprovals,
 		c.validateCredentialHandling,

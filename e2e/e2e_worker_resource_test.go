@@ -9,8 +9,6 @@ package e2e
 
 import (
 	"context"
-	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -525,42 +523,5 @@ jobs:
 
 	if got := readFileString(t, marker); got != "vpc" {
 		t.Errorf("plan checked from %q, want the worker", got)
-	}
-}
-
-// TestEndToEndWebhookChecksOnTheResourceWorker: a webhook check resolves its
-// worker through what the daemon was started with, not through the request
-// the server minted.
-func TestEndToEndWebhookChecksOnTheResourceWorker(t *testing.T) {
-	t.Setenv("STEPS_TEST_WEBHOOK_TOKEN", "s3cret")
-
-	dir := t.TempDir()
-	path := writePipeline(t, dir, probeType+`
-resources:
-- name: repo
-  type: probe
-  tags: [vpc]
-  source: {}
-  webhook_token_env: STEPS_TEST_WEBHOOK_TOKEN
-
-jobs:
-- name: build
-  plan:
-  - get: repo
-    trigger: true
-`)
-
-	served := startWebFor(t, path, "--interval", "1h", "--worker", "vpc=local:")
-	defer served.stop(t)
-
-	url := fmt.Sprintf("http://%s/p/%s/check/repo?token=s3cret", served.addr, cli.PipelineName(path))
-
-	if status := postWebhook(t, url); status != http.StatusOK {
-		t.Fatalf("webhook answered %d, want 200", status)
-	}
-
-	versions := checkedVersionsIn(t, served.state, cli.PipelineName(path))
-	if len(versions) == 0 || versions[0]["where"] != "vpc" {
-		t.Errorf("the webhook recorded %v, want a version the worker reported", versions)
 	}
 }

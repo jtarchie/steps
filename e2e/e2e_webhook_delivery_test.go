@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/cli"
 )
@@ -54,7 +56,14 @@ func githubDelivery(secret, event, id string, body []byte) http.Header {
 	}
 }
 
-// postDelivery sends one webhook delivery and returns its status; keep-alives off for the reason postWebhook gives.
+// postEmpty POSTs nothing, the way a UI control or a sender with no body does, and returns the status.
+func postEmpty(t *testing.T, url string) int {
+	t.Helper()
+
+	return postDelivery(t, url, http.Header{}, nil)
+}
+
+// postDelivery sends one webhook delivery and returns its status; keep-alives off and the body drained, because a pooled connection is one http.Server.Shutdown waits its whole grace period for.
 func postDelivery(t *testing.T, url string, header http.Header, body []byte) int {
 	t.Helper()
 
@@ -134,7 +143,7 @@ func TestWebhookDeliveryWorksUnderReadOnly(t *testing.T) {
 	name := cli.PipelineName(path)
 
 	trigger := fmt.Sprintf("http://%s/p/%s/jobs/build/trigger", served.addr, name)
-	if status := postWebhook(t, trigger); status != http.StatusForbidden {
+	if status := postEmpty(t, trigger); status != http.StatusForbidden {
 		t.Errorf("the UI trigger answered %d under --read-only, want 403", status)
 	}
 
@@ -220,5 +229,92 @@ jobs:
 		t.Errorf("versions = %v, want only %s: the ping and the feature push filtered out, the second delivery of aaa the same version", versions, want)
 	}
 
+	waitForFile(t, filepath.Join(out, "version.json"))
+}
+
+// TestRunDeliversACapturedRequest: a local command has no daemon to POST to, so --deliver hands it a captured request — through the pipeline's own filter:, id: and version:, with only the signature skipped, which is where a pipeline's mistakes live.
+func TestRunDeliversACapturedRequest(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out")
+	path := writePipeline(t, dir, `
+resources:
+- name: push
+  type: webhook
+  source:
+    provider: github
+    secret_env: STEPS_TEST_UNSET_SECRET
+    filter: 'event == "push"'
+    version:
+      sha: 'payload.after'
+jobs:
+- name: build
+  plan:
+  - get: push
+  - task: build
+    inputs: [push]
+    run: |
+      mkdir -p `+out+`
+      cp push/body push/version.json `+out+`/
+`)
+
+	captured := filepath.Join(dir, "push.http")
+	writeCaptured(t, captured, "POST /p/app/hooks/push HTTP/1.1\nX-GitHub-Event: push\nX-GitHub-Delivery: d1\nContent-Type: application/json\n\n{\"after\":\"aaa\"}\n")
+
+	err := cli.Run([]string{"run", path, "--deliver", "push=" + captured})
+	if err != nil {
+		t.Fatalf("steps run --deliver: %v", err)
+	}
+
+	if got := readFileString(t, filepath.Join(out, "version.json")); got != `{"event":"push","id":"d1","sha":"aaa"}` {
+		t.Errorf("version.json = %s, want the delivery projected by the pipeline's own expressions", got)
+	}
+
+	if got := readFileString(t, filepath.Join(out, "body")); got != "{\"after\":\"aaa\"}\n" {
+		t.Errorf("body = %q, want everything after the blank line", got)
+	}
+
+	ping := filepath.Join(dir, "ping.http")
+	writeCaptured(t, ping, "POST / HTTP/1.1\nX-GitHub-Event: ping\nX-GitHub-Delivery: d2\n\n{}")
+
+	err = cli.Run([]string{"run", path, "--deliver", "push=" + ping})
+	if err == nil || !strings.Contains(err.Error(), "filter") {
+		t.Errorf("err = %v, want the filtered delivery named rather than the last version silently rebuilt", err)
+	}
+}
+
+func writeCaptured(t *testing.T, path, request string) {
+	t.Helper()
+
+	err := os.WriteFile(path, []byte(request), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestWebhookDeliveryWhilePausedBuildsOnUnpause: a paused pipeline records the delivery and queues nothing, and unpausing builds it — answering 200 and dropping it would be a loss the sender could never redeliver, since it believes it succeeded.
+func TestWebhookDeliveryWhilePausedBuildsOnUnpause(t *testing.T) {
+	t.Setenv("STEPS_TEST_GITHUB_SECRET", githubSecret)
+
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out")
+	path := writePipeline(t, dir, deliveryPipeline(out))
+
+	served := startWebFor(t, path, "--interval", "100ms")
+	defer served.stop(t)
+
+	name := cli.PipelineName(path)
+	served.pipeline(t, "pause", "-p", name)
+
+	body := []byte(`{}`)
+	url := fmt.Sprintf("http://%s/p/%s/hooks/push", served.addr, name)
+
+	if status := postDelivery(t, url, githubDelivery(githubSecret, "push", "d1", body), body); status != http.StatusOK {
+		t.Fatalf("delivery to a paused pipeline answered %d, want 200", status)
+	}
+
+	time.Sleep(drainIdleWindow)
+	assertNoFile(t, filepath.Join(out, "version.json"))
+
+	served.pipeline(t, "unpause", "-p", name)
 	waitForFile(t, filepath.Join(out, "version.json"))
 }

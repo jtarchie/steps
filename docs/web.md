@@ -82,8 +82,8 @@ there is nothing to log in to — see [Security](#security).
 - **`get` is the only full copy** of a configuration once you have edited the
   file it came from. It prints the served source and every file it carried.
 - **`pause` is the pipeline-level circuit breaker.** Paused, nothing is
-  polled, nothing is admitted from the queue, a webhook delivery is received
-  and enqueues nothing, and a manual trigger is refused with a message. Every
+  polled, nothing is admitted from the queue, a webhook delivery is recorded
+  and builds on unpause, and a manual trigger is refused with a message. Every
   page of that pipeline says so. It is a bigger switch than the per-job breaker
   `steps jobs` reports, and unrelated to it.
 - **`rename` keeps history**, because every recorded row reaches its pipeline
@@ -307,14 +307,14 @@ is deployed. `--listen 0.0.0.0:8088 --read-only` is a build box that still has
 to notice new versions; read [Security](#security) before you expose one.
 
 **The webhook route is the one exception, deliberately.**
-`POST /p/<slug>/check/<resource>` still works under `--read-only`, and the job
-it enqueues still runs. It is not a UI control: it carries the resource's own
-token, which is a stronger check than the five above have, and withholding it
-would mean a read-only box could not be the thing GitHub notifies — which is
+`POST /p/<slug>/hooks/<resource>` still works under `--read-only`, and the job
+it enqueues still runs. It is not a UI control: it carries the sender's own
+signature, which is a stronger check than the five above have, and withholding
+it would mean a read-only box could not be the thing GitHub notifies — which is
 most of why a build box is exposed at all. `--read-only` says a *browser*
 cannot start work here; it does not say nothing can. If that is what you
-want, do not give the pipeline a `webhook_token_env:` resource — with none, the
-route is a 404. See [infra.md](infra.md#webhook-triggered-checks).
+want, do not give the pipeline a `type: webhook` resource — with none, the
+route is a 404. See [webhooks.md](webhooks.md#receiving-deliveries).
 
 ## Aborting a run
 

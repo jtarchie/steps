@@ -124,16 +124,6 @@ type Resource struct {
 	// shell-backed type; an mcp-backed type authenticates via its
 	// mcp_servers: entry and never consults env: at all.
 	Env []string `yaml:"env,omitempty"`
-	// WebhookTokenEnv names an OS environment variable holding the shared
-	// secret a webhook must present to trigger an immediate check of this
-	// resource (see the webhook route `steps web` serves).
-	//
-	// A REFERENCE, never the token itself — the same rule api_key_env follows,
-	// and for a sharper reason here: a resource's fields are hashed into the
-	// merkle content map, so a literal token would be written to state.db in
-	// cleartext. That is precisely the trust-boundary problem the env-var
-	// indirection exists to prevent.
-	WebhookTokenEnv string `yaml:"webhook_token_env,omitempty"`
 	// Tags names the worker this resource's check, in and out run on, for a
 	// source only reachable from that machine's network. A get or put step's
 	// own tags: overrides it for that step; empty runs them here.

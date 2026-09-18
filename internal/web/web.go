@@ -83,18 +83,7 @@ type Pipeline struct {
 	// this bus, which is why every live view falls back to replaying the
 	// stored events rather than assuming the bus saw everything.
 	Bus *events.Bus
-	// Webhook serves POST /p/<slug>/check/<resource> for the resources this
-	// pipeline gives a webhook_token_env:. Whether there are any is decided per
-	// request, not here, because a reload can add or remove one; nil means only
-	// that nobody attached a handler, which is a Pipeline built in a test.
-	//
-	// Built by the caller (trigger.WebhookHandler) rather than here: this
-	// package serves the surface and does not own the poll loop, the same
-	// division that keeps the runner an interface. It used to be a second
-	// listener on a second port of the poll loop's own; one daemon means one
-	// address.
-	Webhook http.Handler
-	// Hooks answers POST /p/<slug>/hooks/<resource>, a delivery to a webhook resource; built by the caller (trigger.HookHandler) for the reason Webhook is, and nil only in a test.
+	// Hooks answers POST /p/<slug>/hooks/<resource>, a delivery to a webhook resource. Built by the caller (trigger.HookHandler): this package serves the surface and does not own the queue, the division that keeps the runner an interface. Nil only in a test.
 	Hooks func(w http.ResponseWriter, r *http.Request, resource string)
 }
 
@@ -146,10 +135,10 @@ type Server struct {
 	// BROWSER can reach, which is what a read-only deployment gets.
 	//
 	// The webhook route is deliberately not among them: it carries the
-	// resource's own token rather than riding this server's (absent)
+	// sender's own signature rather than riding this server's (absent)
 	// authentication, and a read-only build box that could not be notified is
 	// most of what a read-only build box is for. A pipeline that wants no such
-	// endpoint declares no webhook_token_env: resource, and the route 404s.
+	// endpoint declares no type: webhook resource, and the route 404s.
 	runner Runner
 	// renderer is held rather than only handed to echo because the live
 	// stream renders one step with the SAME templates the page renders, which
@@ -323,8 +312,8 @@ func (s *Server) routes() error {
 	// echo builds a bare http.Server, which has no read timeouts at all. The
 	// webhook listener this address absorbed set one explicitly, for a reason
 	// that survived the merge: a sender that stalls mid-request must not hold
-	// a connection open indefinitely, and this is the address an operator
-	// exposes to receive deliveries from outside.
+	// a connection open indefinitely, and this is the address a tunnel
+	// forwards deliveries to.
 	e.Server.ReadHeaderTimeout = readHeaderTimeout
 
 	e.Use(middleware.Recover())
@@ -362,11 +351,9 @@ func (s *Server) routes() error {
 	group.POST("/runs/:run/abort", s.handleAbortRun)
 	group.POST("/jobs/:job/queued/abort", s.handleAbortQueued)
 
-	// Not a UI route: an outside system saying "check this resource now".
-	// It authenticates with the resource's own token, which is why it is
-	// exempt from the same-origin check every browser mutation gets — a
-	// webhook sender is cross-origin by definition.
-	group.POST("/check/:resource", s.handleWebhook)
+	// Not a UI route: a webhook delivery. It authenticates with the sender's
+	// signature, which is why it is exempt from the same-origin check every
+	// browser mutation gets — a sender is cross-origin by definition.
 	group.POST("/hooks/:resource", s.handleHook)
 
 	// Outside the /p/ group because a set may CREATE the pipeline it names, and that middleware resolves one that exists.
@@ -449,11 +436,11 @@ func sameOriginMutations(next echo.HandlerFunc) echo.HandlerFunc {
 			return next(c)
 		}
 
-		// A webhook is authenticated by its token and sent by a machine that
+		// A webhook is authenticated by its signature and sent by a machine that
 		// has no reason to share this origin. Exempting it here rather than
 		// mounting it outside the group keeps it under /p/<slug>/, which is
 		// what says which pipeline it checks.
-		if strings.Contains(c.Path(), "/check/:resource") || strings.HasSuffix(c.Path(), "/hooks/:resource") {
+		if strings.HasSuffix(c.Path(), "/hooks/:resource") {
 			return next(c)
 		}
 

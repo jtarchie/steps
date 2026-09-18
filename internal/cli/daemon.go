@@ -435,7 +435,6 @@ func (d *daemon) start(
 	// Rooted in the daemon's lifetime rather than the request's: a set is over in milliseconds and what it starts has to outlive it.
 	loopCtx, cancel := context.WithCancel(d.base)
 
-	target.Webhook = trigger.WebhookHandler(loopCtx, target.Config, st)
 	target.Hooks = trigger.HookHandler(target.Config, st)
 
 	err := d.server.Add(target)

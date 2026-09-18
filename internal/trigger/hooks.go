@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -196,6 +197,12 @@ func observeDeliveries(ctx context.Context, st PollStore, name string) (observed
 	return observedResource{version: version, latest: latest, dirty: !found || previous.Version != latest}, true, nil
 }
 
+// ok answers a delivery, echoing nothing back: the path is the sender's to choose, and it already knows what it sent.
+func ok(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, "ok\n")
+}
+
 func isWebhook(cfg *config.Config, name string) bool {
 	for _, res := range cfg.Resources {
 		if res.Name == name {
@@ -214,4 +221,48 @@ func hasWebhookResources(cfg *config.Config) bool {
 	}
 
 	return false
+}
+
+// DeliverLocally records a captured delivery for a local command, which has no daemon to POST to. It runs the pipeline's own filter:, id: and version: and skips only the signature — a local command holds no secret, and the signature schemes are proven by their own fixtures. Nothing is queued: the command runs the job itself.
+func DeliverLocally(ctx context.Context, cfg *config.Config, st HookStore, name string, raw []byte) error {
+	res, err := cfg.FindResource(name)
+	if err != nil {
+		return fmt.Errorf("--deliver %s: %w", name, err)
+	}
+
+	if res.Type != config.WebhookType {
+		return fmt.Errorf("--deliver %s: resource %q is type %q; only a webhook resource takes a delivery", name, name, res.Type)
+	}
+
+	receiver, err := rsrc.Receiver(*res)
+	if err != nil {
+		return fmt.Errorf("--deliver %s: %w", name, err)
+	}
+
+	request, err := webhook.ParseRequest(raw)
+	if err != nil {
+		return fmt.Errorf("--deliver %s: %w", name, err)
+	}
+
+	result, err := receiver.Accept(request)
+	if err != nil {
+		return fmt.Errorf("--deliver %s: %w", name, err)
+	}
+
+	switch {
+	case result.Handshake != nil:
+		return fmt.Errorf("--deliver %s: this is the sender's handshake, not a delivery", name)
+	case result.Filtered:
+		return fmt.Errorf("--deliver %s: the resource's filter: rejected this delivery, so there is nothing to build", name)
+	}
+
+	accepted := result.Delivery
+	delivery := store.Delivery{Version: accepted.Version, Body: accepted.Body, Headers: accepted.Headers}
+
+	_, err = st.RecordDelivery(ctx, name, delivery, store.Dispatch{}, cfg.VersionHistoryLimit())
+	if err != nil {
+		return fmt.Errorf("--deliver %s: %w", name, err)
+	}
+
+	return nil
 }

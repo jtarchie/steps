@@ -48,7 +48,7 @@
 </div>
 
 <main>
-{{if .Nav.Paused}}<div class="held" role="alert"><b>this pipeline is paused</b> — nothing is being polled, nothing will be admitted from the queue, and a webhook delivery enqueues nothing. Resume it with <code>steps pipeline unpause -p {{.Nav.Current}}</code>.</div>{{end}}
+{{if .Nav.Paused}}<div class="held" role="alert"><b>this pipeline is paused</b> — nothing is being polled, nothing will be admitted from the queue, and a webhook delivery is recorded but builds only on unpause. Resume it with <code>steps pipeline unpause -p {{.Nav.Current}}</code>.</div>{{end}}
 {{template "crumbs" .}}
 {{template "page" .}}
 </main>

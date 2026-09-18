@@ -2,6 +2,8 @@
 package webhook
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -284,4 +287,24 @@ func decodeJSON(body []byte) any {
 	}
 
 	return payload
+}
+
+// ParseRequest reads a captured delivery: a request line, headers, a blank line, and the body — everything after the blank line, byte for byte, whatever Content-Length says, since a hand-written capture rarely carries one.
+func ParseRequest(raw []byte) (Request, error) {
+	head, body, found := bytes.Cut(raw, []byte("\r\n\r\n"))
+	if !found {
+		head, body, found = bytes.Cut(raw, []byte("\n\n"))
+	}
+
+	if !found {
+		return Request{}, errors.New("webhook: a captured request needs a blank line between its headers and its body")
+	}
+
+	// Concat, not append: head shares raw's array with body, and appending would write over the body's first bytes.
+	parsed, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(slices.Concat(head, []byte("\r\n\r\n")))))
+	if err != nil {
+		return Request{}, fmt.Errorf("webhook: reading the captured request: %w", err)
+	}
+
+	return Request{Method: parsed.Method, Header: parsed.Header, Query: parsed.URL.Query(), Body: body}, nil
 }

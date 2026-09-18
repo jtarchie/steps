@@ -28,7 +28,7 @@ func (c *Config) validateEnvRules() error {
 //
 // env: is a list of variable NAMES, resolved from the operator's own
 // environment when the command runs — the same name-not-value shape
-// api_key_env: and webhook_token_env: use, and for the same reason: a
+// api_key_env: and a webhook's secret_env: use, and for the same reason: a
 // resource's, task's, and agent's fields are hashed into the merkle content
 // map, so a literal secret written here would be persisted to state.db in
 // cleartext. Accepting "KEY=value" silently would put the value in exactly

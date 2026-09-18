@@ -372,7 +372,7 @@ func detectMutant(t *testing.T, block docs.Block, body string) string {
 	path, _ := writeDocBlock(t, dir, mutated, scenario)
 
 	varFlags := scenarioVarFlags(scenario)
-	runFlags := scenarioFlags(scenario)
+	runFlags := append(scenarioFlags(scenario), deliveryFlags(t, dir, mutated)...)
 
 	if cli.Run(append([]string{"validate", "--syntax-only", path}, varFlags...)) != nil {
 		return "load"

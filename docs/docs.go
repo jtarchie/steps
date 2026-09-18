@@ -56,7 +56,7 @@ func (b Block) Mode() string {
 			return field
 		case field == "noexec" || strings.HasPrefix(field, "noexec="):
 			return "noexec"
-		case strings.HasPrefix(field, "test="), strings.HasPrefix(field, "mcp="):
+		case strings.HasPrefix(field, "test="), strings.HasPrefix(field, "mcp="), strings.HasPrefix(field, "deliver="):
 			return "run"
 		}
 	}
@@ -95,6 +95,17 @@ func (b Block) NoexecReason() string {
 func (b Block) TestID() string {
 	for _, field := range strings.Fields(b.Info) {
 		if id, ok := strings.CutPrefix(field, "test="); ok {
+			return id
+		}
+	}
+
+	return ""
+}
+
+// DeliverID is the captured webhook delivery this block runs with (docs_deliveries_test.go), "" when none.
+func (b Block) DeliverID() string {
+	for _, field := range strings.Fields(b.Info) {
+		if id, ok := strings.CutPrefix(field, "deliver="); ok {
 			return id
 		}
 	}
@@ -176,7 +187,7 @@ type Group struct {
 func Groups() []Group {
 	return []Group{
 		{Title: "Writing pipelines", Pages: []string{
-			"resources.md", "expr.md", "control-flow.md", "agents.md",
+			"resources.md", "webhooks.md", "expr.md", "control-flow.md", "agents.md",
 			"attempts-timeout.md", "workspace.md", "infra.md",
 			"templating.md", "mcp.md", "complete.md",
 		}},

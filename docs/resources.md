@@ -589,7 +589,7 @@ jobs:
     outcome: succeeded
 ```
 
-See [infra.md](infra.md) for the watch loop, webhooks, and cross-job triggering. Gating a get on upstream jobs — Concourse's `passed:` — is there too: [infra.md#passed](infra.md#passed--only-run-against-versions-that-are-green-upstream).
+See [infra.md](infra.md) for the watch loop and cross-job triggering, and [webhooks.md](webhooks.md) for a resource whose versions are webhook deliveries. Gating a get on upstream jobs — Concourse's `passed:` — is there too: [infra.md#passed](infra.md#passed--only-run-against-versions-that-are-green-upstream).
 
 ## MCP-backed types
 

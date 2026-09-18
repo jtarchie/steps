@@ -293,16 +293,14 @@ func TestPipelineSetIsCompareAndSet(t *testing.T) {
 }
 
 // TestPipelinePauseIsTheCircuitBreaker: paused means no polling, no
-// admission, a webhook that enqueues nothing and a refused trigger, until
-// unpause.
+// admission and a refused trigger, until unpause. A webhook delivery to a
+// paused pipeline is TestWebhookDeliveryWhilePausedBuildsOnUnpause's.
 //
 // Every window here is longer than the drainer's own idle backoff, which is
 // what a sabotage pass showed to be load-bearing: a shorter one passes with
 // the admission gate removed, because the drain was merely between naps.
 func TestPipelinePauseIsTheCircuitBreaker(t *testing.T) {
-	t.Setenv("STEPS_TEST_WEBHOOK_TOKEN", "s3cret")
-
-	fixture := newWatchFixture(t, webhookPipeline)
+	fixture := newWatchFixture(t, cursorFeed)
 	fixture.items(t, 1)
 
 	served := startWebFor(t, fixture.pipeline, "--interval", "100ms")
@@ -318,13 +316,8 @@ func TestPipelinePauseIsTheCircuitBreaker(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	fixture.items(t, 2)
 
-	hook := fmt.Sprintf("http://%s/p/%s/check/items?token=s3cret", served.addr, name)
-	if status := postWebhook(t, hook); status != http.StatusOK {
-		t.Errorf("webhook on a paused pipeline answered %d, want 200 (received, not acted on)", status)
-	}
-
 	trigger := fmt.Sprintf("http://%s/p/%s/jobs/build/trigger", served.addr, name)
-	if status := postWebhook(t, trigger); status != http.StatusConflict {
+	if status := postEmpty(t, trigger); status != http.StatusConflict {
 		t.Errorf("manual trigger on a paused pipeline answered %d, want 409", status)
 	}
 

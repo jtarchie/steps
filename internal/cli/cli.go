@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -39,6 +40,7 @@ import (
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
+	"github.com/jtarchie/steps/internal/trigger"
 	"github.com/jtarchie/steps/internal/web"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -161,7 +163,7 @@ func (r *RunCmd) Run() error {
 
 	r.HistoryFlags.Apply(cfg)
 
-	ctx, err = r.ExecFlags.Apply(ctx)
+	ctx, err = r.prepare(ctx, cfg, st)
 	if err != nil {
 		return err
 	}
@@ -233,7 +235,7 @@ func (t *TestCmd) Run() error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	ctx, err = t.Apply(ctx)
+	ctx, err = t.prepare(ctx, cfg, st)
 	if err != nil {
 		return err
 	}
@@ -1815,11 +1817,39 @@ func (v VarFlags) Load(path string, name string) (*config.Config, error) {
 // asked for about this execution — and because Apply is then the single place
 // that threads them, which no embedder can forget without failing to compile.
 type ExecFlags struct {
-	Worker        map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)"                           name:"worker"`
-	ArtifactStore string            `help:"mirror cached step outputs to a content-addressed store, e.g. --artifact-store s3://bucket/prefix" name:"artifact-store"`
-	Answer        []string          `help:"answer an ask_user question in advance, e.g. --answer 'which bump=minor' (repeatable)"             name:"answer"`
-	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                                                               help:"leave the build workspace on disk instead of deleting it"`
-	NoPreflight   bool              `help:"skip the pre-run health check of the models and MCP servers a job needs"                           name:"no-preflight"`
+	Worker        map[string]string `help:"map a step tag to a worker, e.g. --worker gpu=ssh://jt@box (repeatable)"                                   name:"worker"`
+	ArtifactStore string            `help:"mirror cached step outputs to a content-addressed store, e.g. --artifact-store s3://bucket/prefix"         name:"artifact-store"`
+	Answer        []string          `help:"answer an ask_user question in advance, e.g. --answer 'which bump=minor' (repeatable)"                     name:"answer"`
+	KeepWorkspace bool              `env:"STEPS_KEEP_WORKSPACE"                                                                                       help:"leave the build workspace on disk instead of deleting it"`
+	NoPreflight   bool              `help:"skip the pre-run health check of the models and MCP servers a job needs"                                   name:"no-preflight"`
+	Deliver       map[string]string `help:"record a captured request as a delivery to a webhook resource, e.g. --deliver push=push.http (repeatable)" name:"deliver"`
+}
+
+// prepare is Apply plus what needs the loaded pipeline and its store: the --deliver files, recorded before anything runs so the job resolves each as its resource's newest version.
+func (e ExecFlags) prepare(ctx context.Context, cfg *config.Config, st store.Store) (context.Context, error) {
+	ctx, err := e.Apply(ctx)
+	if err != nil {
+		return ctx, err
+	}
+
+	return ctx, e.deliver(ctx, cfg, st)
+}
+
+// deliver records each --deliver file.
+func (e ExecFlags) deliver(ctx context.Context, cfg *config.Config, st store.Store) error {
+	for _, name := range slices.Sorted(maps.Keys(e.Deliver)) {
+		raw, err := os.ReadFile(e.Deliver[name])
+		if err != nil {
+			return fmt.Errorf("--deliver %s: %w", name, err)
+		}
+
+		err = trigger.DeliverLocally(ctx, cfg, st, name, raw)
+		if err != nil {
+			return err //nolint:wrapcheck // DeliverLocally names the flag and the resource
+		}
+	}
+
+	return nil
 }
 
 // Apply folds these flags into the context every step below reads them from.

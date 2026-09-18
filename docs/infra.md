@@ -430,7 +430,7 @@ jobs:
     outcome: succeeded
 ```
 
-- **Names, never values.** `env: [DEPLOY_TOKEN=hunter2]` is rejected at load time, following `api_key_env:`/`webhook_token_env:`. The reason is concrete: these fields are hashed into the merkle content map, which is written to `state.db` — a literal would be persisted in cleartext.
+- **Names, never values.** `env: [DEPLOY_TOKEN=hunter2]` is rejected at load time, following `api_key_env:` and a webhook resource's `secret_env:`. The reason is concrete: these fields are hashed into the merkle content map, which is written to `state.db` — a literal would be persisted in cleartext.
 - **Works on both execution paths.** On the host the named variables are added to the allowlist; in a container their values are sent to the daemon in the request that creates it, so the secret never appears in an argument vector the host's process list would expose.
 - **An unset variable contributes nothing** rather than an empty value, so a command can still tell "not configured" from "configured empty" — with the colon-less shell forms (`${VAR+set}`, as above, or `${VAR-fallback}`); `${VAR:-fallback}` collapses the two.
 - **Step-level override**: a `task`/`agent` step's `env:` replaces the referenced entry's for that step only. Unlike `image:` this is *declared*-wins, not non-empty-wins — an explicit `env: []` means "nothing beyond the baseline", which is a real thing to want. Invalid on `get`/`put` steps (set it on the resource type).
@@ -773,66 +773,6 @@ assert:
 - **Only a shutdown waits.** Destroying a pipeline cancels its running build at once, whatever this field says, and so does renaming one — which re-queues the build under the new name.
 - **This affects `steps web` only.** `steps run` is a person at a terminal, and ctrl-C there is always immediate.
 
-## Webhook-triggered checks
+## Webhooks
 
-`steps web` polls on an interval: short means fast reaction and lots of API calls, long means slow reaction. A webhook removes the tradeoff — react instantly, poll rarely as a safety net:
-
-```yaml
-resource_types:
-- name: commits
-  config:
-    check: |
-      printf '[{"ref": "abc123"}]'
-    in: echo {{ .version.ref | shellquote }} > ref
-
-resources:
-- name: repo
-  type: commits
-  source: {}
-  webhook_token_env: GITHUB_WEBHOOK_TOKEN    # the variable NAME, not the token
-
-jobs:
-- name: build
-  plan:
-  - get: repo
-    trigger: true
-  - task: compile
-    inputs: [repo]
-    run: echo building "$(cat repo/ref)"
-    assert:
-      stdout: building abc123
-  assert:
-    execution: [repo, compile]
-    outcome: succeeded
-```
-
-```bash
-steps web --listen 0.0.0.0:8080 --read-only
-curl -X POST 'http://localhost:8080/p/pipeline/check/repo?token=…'   # or: Authorization: Bearer …
-```
-
-The route lives under the pipeline it checks, on the same address the UI is
-served from. The poll loop used to open a second port of its own, so a
-deployment that wanted both had two addresses and two HTTP surfaces to expose;
-one daemon means one listener. `pipeline` in the path is the pipeline's name —
-the YAML's base name unless `--name` says otherwise, the same string as its
-`/p/<name>/` page.
-
-> **One listener means one exposure.** Reaching this endpoint from outside the
-> machine means binding `--listen` to a routable address, and that address also
-> serves the UI — which has **no authentication at all** (see
-> [web.md](web.md#security)). Anyone who can reach the port can read every run,
-> transcript and log, and — without `--read-only` — trigger any job, decide any
-> approval, and answer any question. Pair the two flags, as above: `--read-only`
-> withholds every browser control while leaving this token-authenticated route
-> working, which is exactly the shape a webhook receiver wants. Put it behind a
-> reverse proxy if the UI needs to be reachable too.
-
-- **The token is a credential, not config.** `webhook_token_env:` names an environment variable, following `api_key_env:`. A literal is rejected at load — a resource's fields are hashed into the merkle content map, so a literal token would be written to `state.db` in cleartext.
-- **An unset token variable accepts nothing.** Reading an empty expectation as "no auth required" would turn a deployment mistake into an open trigger endpoint.
-- **A bad token and an unknown resource are indistinguishable** (both 401) — otherwise the endpoint is a free directory of a pipeline's resource names.
-- **POST only.** A GET would be triggerable by a browser preview or a link scanner.
-- **Exempt from the UI's same-origin check**, and only this route: a webhook sender is cross-origin by definition, and the resource's own token is the stronger check. Every browser mutation still requires a matching `Origin`.
-- **A pipeline that names no `webhook_token_env:` resource has no route at all** — 404 rather than an endpoint that authenticates nothing. That is also the way to turn the endpoint off: `--read-only` does *not* withhold it, deliberately (see [web.md](web.md#triggering-approving-resuming)).
-- **The poll loop keeps running.** A webhook that is never delivered must not mean a change is never noticed.
-- **A webhook treats the version as changed** even when it matches what was last recorded: the sender knows something the check output may not show yet.
+`steps web` polls on an interval. For a service that sends webhooks, a `type: webhook` resource skips the poll entirely: each delivery the daemon receives **is** a version, recorded before the sender is answered, and a job that gets it reads the payload. See [webhooks.md](webhooks.md) for the providers, filtering, and how to expose only the delivery route through a tunnel.
