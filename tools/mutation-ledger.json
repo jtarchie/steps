@@ -1,0 +1,15 @@
+{
+  "packages": {
+    "./internal/merkle": {
+      "swept_at": "20019b2",
+      "date": "2026-09-18",
+      "killed": 130,
+      "lived": 36,
+      "timed_out": 0,
+      "not_covered": 30,
+      "efficacy": 78.31,
+      "note": "First measurement, package mode, 2m14s. The 36 survivors are NOT yet triaged: merkle is the cache key, which ./e2e exercises heavily and package mode never runs, so most are expected to die there — expected, not shown.",
+      "equivalent": []
+    }
+  }
+}

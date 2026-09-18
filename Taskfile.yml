@@ -121,9 +121,34 @@ tasks:
       - rm -f .cover.out
 
   mutate-pkg:
-    desc: "Advisory mutation testing over one package: task mutate-pkg PKG=./internal/venue [WORKERS=1]. Mechanizes the sabotage audit — every LIVED mutant is a code change no test notices. Needs gremlins (task install:tools). --integration because package-scoped mode times out spuriously here; go's build cache keeps unaffected packages cheap, but a package with heavy dependents (venue, pipeline) still costs minutes to hours — scope deliberately. WORKERS=1 serializes the run, which is what a package whose tests bind ports, spawn containers or share a docker daemon needs: parallel mutants otherwise fail each other's tests and report as KILLED for the wrong reason."
+    desc: "Mutation testing over one package: task mutate-pkg PKG=./internal/venue [SINCE=<rev>] [WORKERS=1] [INTEGRATION=1]. Every LIVED mutant is a code change no test notices. The procedure around it — what to sweep, where to run it, how to triage a survivor — is the mutation-sweep skill; this task is only the mechanics, so a human can run them too. Results land in .gremlins/."
+    requires:
+      vars: [PKG]
     cmds:
-      - '{{.GO_TOOL}} gremlins unleash --integration --timeout-coefficient 10 --workers {{.WORKERS | default "0"}} {{.PKG}}'
+      # A cached coverage run gives gremlins a ~1s baseline, and its timeout is
+      # that baseline times the coefficient — so every mutant then "times out",
+      # and TIMED OUT is scored as KILLED. This is the trap that made package
+      # mode look spuriously flaky here and put --integration on this line for
+      # a while; with a clean cache, merkle sweeps in two minutes with zero
+      # timeouts.
+      - go clean -testcache
+      - mkdir -p .gremlins
+      # Package mode by default: a mutant is judged by its own package's tests.
+      # INTEGRATION=1 judges it by `go test ./...` instead — the whole module,
+      # docker e2e included, once PER MUTANT, several at a time. Measured on
+      # merkle: over ten minutes without finishing, against two. It is for a
+      # final answer on a handful of survivors, not for a sweep.
+      #
+      # SINCE scopes the run to files changed since a rev, by excluding the
+      # rest: gremlins' own --diff is broken in package mode (it compares
+      # repo-relative diff paths against package-relative mutant paths and
+      # skips everything).
+      - '{{.GO_TOOL}} gremlins unleash {{if .INTEGRATION}}--integration{{end}} --timeout-coefficient 15 --workers {{.WORKERS | default "0"}} -o .gremlins/{{.PKG | trimPrefix "./" | replace "/" "_"}}.json $(go run ./tools/mutants excludes {{.PKG}} "{{.SINCE}}") {{.PKG}}'
+
+  mutate-stale:
+    desc: Which package most needs a mutation sweep — never-swept first, then by lines changed since the commit tools/mutation-ledger.json says it was last swept at.
+    cmds:
+      - go run ./tools/mutants stale
 
   build:
     desc: Build ./steps. CGO_ENABLED=0 is a guard, not an optimization — the planned remote-worker shim cross-compiles this binary for any GOOS/GOARCH and pushes it over SFTP, so a transitive dep that pulls in cgo must fail the build here.
