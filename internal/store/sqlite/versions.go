@@ -37,6 +37,31 @@ func recordCheckedVersion(ctx context.Context, db executor, pipelineID int64, re
 	return nil
 }
 
+// CompareAndSetCheckedVersion is one statement either way, so nothing lands between the comparison and the write: an UPDATE guarded by the expected value, or an INSERT that does nothing if a row appeared.
+func (s *Store) CompareAndSetCheckedVersion(ctx context.Context, resourceName, expected string, expectedFound bool, next string) (bool, error) {
+	query := `UPDATE resource_checks SET version_json = ?, checked_at = ?
+		WHERE pipeline_id = ? AND resource_name = ? AND version_json = ?`
+	args := []any{next, now(), s.pipelineID, resourceName, expected}
+
+	if !expectedFound {
+		query = `INSERT INTO resource_checks (pipeline_id, resource_name, version_json, checked_at)
+			VALUES (?, ?, ?, ?) ON CONFLICT (pipeline_id, resource_name) DO NOTHING`
+		args = []any{s.pipelineID, resourceName, next, now()}
+	}
+
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return false, fmt.Errorf("could not advance checked version for %q: %w", resourceName, err)
+	}
+
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("could not advance checked version for %q: %w", resourceName, err)
+	}
+
+	return changed > 0, nil
+}
+
 // LastChecked returns one resource's last-checked row, with found=false when
 // nothing has checked it yet — the single-resource counterpart to
 // CheckedResources, for a caller that wants one row rather than every

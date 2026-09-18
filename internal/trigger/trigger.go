@@ -305,6 +305,10 @@ type observedResource struct {
 	// coldStart marks a resource nothing had recorded before this check —
 	// the one moment a backlog is not news. See recordHistory.
 	coldStart bool
+	// delivered marks a webhook resource, whose checked version a delivery may move mid-poll; previous is what it read, for the compare-and-set that advances it.
+	delivered     bool
+	previous      string
+	previousFound bool
 }
 
 // pollOnce checks every trigger resource once and enqueues (deduplicated)
@@ -357,14 +361,9 @@ func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, 
 	// resource's recorded version. A failure here returns the jobs already
 	// enqueued and leaves the not-yet-recorded resources dirty for retry.
 	for resourceName, obs := range observed {
-		// A clean webhook resource has nothing to advance, and writing back what observe read would rewind past a delivery that dispatched itself mid-poll, building it again next poll. ponytail: the dirty (post-unpause) case keeps that window; a compare-and-set on the checked version closes it.
-		if !obs.dirty && isWebhook(cfg, resourceName) {
-			continue
-		}
-
-		err := st.RecordCheckedVersion(ctx, resourceName, obs.latest)
+		err := advance(ctx, st, resourceName, obs)
 		if err != nil {
-			return enqueued, fmt.Errorf("record version for %q: %w", resourceName, err)
+			return enqueued, err
 		}
 	}
 
@@ -394,6 +393,24 @@ func observe(ctx context.Context, cfg *config.Config, st PollStore, name string)
 	obs.dirty = obs.dirty || grew
 
 	return obs, true, nil
+}
+
+// advance records a resource's observed version as checked. A delivery can move a webhook resource's checked version mid-poll, having dispatched itself; writing back what observe read would rewind past it and build it again next poll. So a clean one is left alone, and a dirty one moves only from what was read — a lost compare-and-set is that delivery already in place.
+func advance(ctx context.Context, st PollStore, resourceName string, obs observedResource) error {
+	var err error
+
+	switch {
+	case !obs.delivered:
+		err = st.RecordCheckedVersion(ctx, resourceName, obs.latest)
+	case obs.dirty:
+		_, err = st.CompareAndSetCheckedVersion(ctx, resourceName, obs.previous, obs.previousFound, obs.latest)
+	}
+
+	if err != nil {
+		return fmt.Errorf("record version for %q: %w", resourceName, err)
+	}
+
+	return nil
 }
 
 // enqueueAffected enqueues, once each, every job affected by a dirty resource

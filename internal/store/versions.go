@@ -22,6 +22,8 @@ type Versions interface {
 	RecordVersionOrder(ctx context.Context, resourceName, versionJSON string) (int64, error)
 	GreenVersions(ctx context.Context, resourceName string, upstreamJobs []string) ([]map[string]any, error)
 	RecordCheckedVersion(ctx context.Context, resourceName, versionJSON string) error
+	// CompareAndSetCheckedVersion moves the checked version to next only if it is still expected — or, with expectedFound false, still absent — reporting whether it moved. It is how a poll advances a resource something else may have advanced since the poll read it.
+	CompareAndSetCheckedVersion(ctx context.Context, resourceName, expected string, expectedFound bool, next string) (bool, error)
 	LastChecked(ctx context.Context, resourceName string) (CheckedResource, bool, error)
 	CheckedResources(ctx context.Context) ([]CheckedResource, error)
 	RecordPassedVersion(ctx context.Context, jobName, resourceName, versionJSON, buildID string) error

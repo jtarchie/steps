@@ -194,3 +194,33 @@ func (s suite) TestAHeldDeliveryIsRecordedButNotDispatched(t *testing.T) {
 		t.Error("a held delivery moved the current version; the poll after unpause would see nothing to dispatch")
 	}
 }
+
+// TestTheCheckedVersionMovesOnlyFromWhatWasRead: a compare-and-set that loses leaves the newer version in place, including when the expectation was that none existed.
+func (s suite) TestTheCheckedVersionMovesOnlyFromWhatWasRead(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	for _, step := range []struct {
+		expected string
+		found    bool
+		next     string
+		moves    bool
+	}{
+		{"", false, "a", true},
+		{"", false, "b", false},
+		{"stale", true, "b", false},
+		{"a", true, "b", true},
+	} {
+		moved, err := st.CompareAndSetCheckedVersion(ctx, "push", step.expected, step.found, step.next)
+		if err != nil || moved != step.moves {
+			t.Errorf("from %q (found=%v) to %q: moved=%v err=%v, want moved=%v", step.expected, step.found, step.next, moved, err, step.moves)
+		}
+	}
+
+	checked, _, err := st.LastChecked(ctx, "push")
+	if err != nil || checked.Version != "b" {
+		t.Errorf("checked = %q (err %v), want b", checked.Version, err)
+	}
+}

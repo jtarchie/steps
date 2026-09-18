@@ -322,3 +322,40 @@ func TestAPollDoesNotRewindADeliveryItRaced(t *testing.T) {
 		t.Errorf("the poll after a raced delivery enqueued %v (err %v), want nothing: d2 dispatched itself", enqueued, err)
 	}
 }
+
+// TestAPollAfterUnpauseDoesNotRewindADeliveryItRaced: the poll dispatching a delivery held by a pause must not then overwrite the checked version a delivery recorded mid-poll set — otherwise the next poll dispatches that one again, and once its build has started the queue no longer absorbs it.
+func TestAPollAfterUnpauseDoesNotRewindADeliveryItRaced(t *testing.T) {
+	f := newHookFixture(t, nil)
+	ctx := context.Background()
+	body := []byte(`{}`)
+
+	err := f.st.Pause(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f.deliver(t, "push", signed(hookSecret, "d1", body), body)
+
+	err = f.st.Unpause(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	racing := &racingStore{Store: f.st}
+	racing.race = func() { f.deliver(t, "push", signed(hookSecret, "d2", body), body) }
+
+	enqueued, err := pollOnce(ctx, f.cfg, racing)
+	if err != nil || strings.Join(enqueued, ",") != "build" {
+		t.Fatalf("the poll after unpause enqueued %v (err %v), want build", enqueued, err)
+	}
+
+	_, _, _, err = f.st.ClaimNextJob(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	enqueued, err = pollOnce(ctx, f.cfg, f.st)
+	if err != nil || len(enqueued) != 0 {
+		t.Errorf("the next poll enqueued %v (err %v), want nothing: d2 dispatched itself", enqueued, err)
+	}
+}

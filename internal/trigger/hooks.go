@@ -175,7 +175,7 @@ func deliveryDispatch(r *http.Request, cfg *config.Config, st HookStore, name st
 	return dispatch, nil
 }
 
-// observeDeliveries is a webhook resource's turn in a poll: no check, only whether the newest delivery has been dispatched. A delivery normally dispatches itself as it is recorded, so this finds work only after a pause held one back. It is at-least-once rather than exact: a delivery landing between the two reads is dispatched again by this poll, which the queue's one-pending-row-per-job absorbs while the first dispatch is still pending.
+// observeDeliveries is a webhook resource's turn in a poll: no check, only whether the newest delivery has been dispatched. A delivery normally dispatches itself as it is recorded, so this finds work only after a pause held one back. A delivery landing between the two reads is dispatched again by this poll, which the queue's one-pending-row-per-job absorbs while the first dispatch is still pending; one landing after them is protected by the compare-and-set pollOnce advances with.
 func observeDeliveries(ctx context.Context, st PollStore, name string) (observedResource, bool, error) {
 	// Checked before versions: a delivery landing between the two reads then looks dirty and is dispatched again (absorbed by the queue), where the other order would read it as the checked version and have the poll rewind past it.
 	previous, found, err := st.LastChecked(ctx, name)
@@ -195,7 +195,10 @@ func observeDeliveries(ctx context.Context, st PollStore, name string) (observed
 		return observedResource{}, false, fmt.Errorf("webhook resource %q: %w", name, err)
 	}
 
-	return observedResource{version: version, latest: latest, dirty: !found || previous.Version != latest}, true, nil
+	return observedResource{
+		version: version, latest: latest, dirty: !found || previous.Version != latest,
+		delivered: true, previous: previous.Version, previousFound: found,
+	}, true, nil
 }
 
 // ok answers a delivery, echoing nothing back: the path is the sender's to choose, and it already knows what it sent.
