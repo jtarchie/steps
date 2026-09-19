@@ -31,6 +31,11 @@ tasks:
       - task: test
       - task: build
       - task: seal
+      # After the seal and never a gate: one line when a mutation sweep is due,
+      # nothing at all when none is. There is no CI and no scheduler here, so
+      # this is the only thing that would ever say so.
+      - cmd: go run ./tools/mutants summary
+        ignore_error: true
 
   seal:
     desc: Record that the full sequence passed on exactly this tree, and point git at the hook that checks it. Only ever reached through `task fmt` — sealing by hand is forging the stamp. See tools/stamp/CLAUDE.md.
@@ -144,6 +149,11 @@ tasks:
       # repo-relative diff paths against package-relative mutant paths and
       # skips everything).
       - '{{.GO_TOOL}} gremlins unleash {{if .INTEGRATION}}--integration{{end}} --timeout-coefficient 15 --workers {{.WORKERS | default "0"}} -o .gremlins/{{.PKG | trimPrefix "./" | replace "/" "_"}}.json $(go run ./tools/mutants excludes {{.PKG}} "{{.SINCE}}") {{.PKG}}'
+
+  mutate-all:
+    desc: "MEASURE every package with gremlins and record each in tools/mutation-ledger.json — no triage. Hours of machine time: start it when the machine will sit idle (a loaded machine makes mutants time out, and TIMED OUT scores as KILLED, so the numbers lie). Cheapest packages first and the docker-backed ones last and serially, so an interrupted night leaves the most rows; rerun to resume, a package already measured at this commit is skipped. `task mutate-all -- ./internal/foo ./internal/bar` measures just those. Triage is the mutation-sweep skill, afterwards."
+    cmds:
+      - go run ./tools/mutants all {{.CLI_ARGS}}
 
   mutate-stale:
     desc: Which package most needs a mutation sweep — never-swept first, then by lines changed since the commit tools/mutation-ledger.json says it was last swept at.

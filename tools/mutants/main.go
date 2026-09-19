@@ -11,9 +11,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const ledgerPath = "tools/mutation-ledger.json"
@@ -48,14 +50,29 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
-	switch {
-	case len(args) == 1 && args[0] == "stale":
-		return stale(ctx)
-	case len(args) == 3 && args[0] == "excludes":
-		return excludes(ctx, args[1], args[2])
-	default:
-		return errors.New("usage: mutants stale | mutants excludes <package dir> <since rev, or empty>")
+	usage := errors.New("usage: mutants stale | summary | all [package dir...] | excludes <package dir> <since rev, or empty> | record <package dir> <gremlins json>")
+
+	if len(args) == 0 {
+		return usage
 	}
+
+	verbs := map[string]struct {
+		operands int
+		run      func(operands []string) error
+	}{
+		"stale":    {0, func([]string) error { return stale(ctx) }},
+		"summary":  {0, func([]string) error { return printSummary(ctx) }},
+		"all":      {-1, func(only []string) error { return sweepAll(ctx, only) }},
+		"excludes": {2, func(o []string) error { return excludes(ctx, o[0], o[1]) }},   //nolint:mnd // a package and a rev
+		"record":   {2, func(o []string) error { return recordFile(ctx, o[0], o[1]) }}, //nolint:mnd // a package and a report
+	}
+
+	verb, known := verbs[args[0]]
+	if !known || (verb.operands >= 0 && len(args)-1 != verb.operands) {
+		return usage
+	}
+
+	return verb.run(args[1:])
 }
 
 type staleness struct {
@@ -66,40 +83,10 @@ type staleness struct {
 }
 
 func stale(ctx context.Context) error {
-	book, err := readLedger()
+	rows, err := stalenessOfAll(ctx)
 	if err != nil {
 		return err
 	}
-
-	dirs, err := packageDirs(ctx)
-	if err != nil {
-		return err
-	}
-
-	rows := make([]staleness, 0, len(dirs))
-
-	for _, dir := range dirs {
-		entry, swept := book.Packages[dir]
-		if !swept {
-			lines, err := sourceLines(dir)
-			if err != nil {
-				return err
-			}
-
-			rows = append(rows, staleness{pkg: dir, changed: lines, never: true})
-
-			continue
-		}
-
-		changed, err := linesChangedSince(ctx, dir, entry.SweptAt)
-		if err != nil {
-			return err
-		}
-
-		rows = append(rows, staleness{pkg: dir, swept: entry.SweptAt + " " + entry.Date, changed: changed})
-	}
-
-	rank(rows)
 
 	for _, r := range rows {
 		if r.never {
@@ -112,6 +99,95 @@ func stale(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func stalenessOfAll(ctx context.Context) ([]staleness, error) {
+	book, err := readLedger()
+	if err != nil {
+		return nil, err
+	}
+
+	dirs, err := packageDirs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([]staleness, 0, len(dirs))
+
+	for _, dir := range dirs {
+		entry, swept := book.Packages[dir]
+		if !swept {
+			lines, err := sourceLines(dir)
+			if err != nil {
+				return nil, err
+			}
+
+			rows = append(rows, staleness{pkg: dir, changed: lines, never: true})
+
+			continue
+		}
+
+		changed, err := linesChangedSince(ctx, dir, entry.SweptAt)
+		if err != nil {
+			return nil, err
+		}
+
+		rows = append(rows, staleness{pkg: dir, swept: entry.SweptAt + " " + entry.Date, changed: changed})
+	}
+
+	rank(rows)
+
+	return rows, nil
+}
+
+// printSummary is the line `task` ends on. There is no CI and no scheduler here, so nothing else would ever say that a sweep is due.
+func printSummary(ctx context.Context) error {
+	rows, err := stalenessOfAll(ctx)
+	if err != nil {
+		return err
+	}
+
+	if line := summary(rows); line != "" {
+		fmt.Println(line)
+	}
+
+	return nil
+}
+
+// driftWorthSaying is how many changed lines make a swept package worth naming: below it, a sweep would mostly re-kill the same mutants.
+const driftWorthSaying = 300
+
+// summary is one line, or nothing at all when nothing is due — a nag that speaks on every green run is one nobody reads by the second week.
+func summary(rows []staleness) string {
+	var (
+		never   int
+		drifted []string
+	)
+
+	for _, r := range rows {
+		switch {
+		case r.never:
+			never++
+		case r.changed >= driftWorthSaying:
+			drifted = append(drifted, fmt.Sprintf("%s (%d lines since %s)", r.pkg, r.changed, r.swept))
+		}
+	}
+
+	if never == 0 && len(drifted) == 0 {
+		return ""
+	}
+
+	var parts []string
+
+	if never > 0 {
+		parts = append(parts, fmt.Sprintf("%d packages never swept", never))
+	}
+
+	if len(drifted) > 0 {
+		parts = append(parts, "drifted: "+strings.Join(drifted, ", "))
+	}
+
+	return "mutation testing: " + strings.Join(parts, "; ") + " — `task mutate-stale` ranks them, the mutation-sweep skill sweeps one, `task mutate-all` measures everything overnight"
 }
 
 // rank puts never-swept packages first and the most churn first within each group: an unswept package has unknown efficacy, which is worse than a known one that has drifted.
@@ -305,4 +381,252 @@ func git(ctx context.Context, args ...string) (string, error) {
 	}
 
 	return string(out), nil
+}
+
+// gremlinsResult is the part of `gremlins unleash -o` a ledger row is made from.
+type gremlinsResult struct {
+	Efficacy   float64 `json:"test_efficacy"`
+	Killed     int     `json:"mutants_killed"`
+	Lived      int     `json:"mutants_lived"`
+	NotCovered int     `json:"mutants_not_covered"`
+	Files      []struct {
+		Mutations []struct {
+			Status string `json:"status"`
+		} `json:"mutations"`
+	} `json:"files"`
+}
+
+// record turns one measurement into a ledger row. What triage wrote — the note and the equivalents — is kept, because a re-measurement did not make those decisions and must not unmake them.
+func (book *ledger) record(pkg string, report []byte, commit, date string) error {
+	var result gremlinsResult
+
+	err := json.Unmarshal(report, &result)
+	if err != nil {
+		return fmt.Errorf("reading the gremlins report for %s: %w", pkg, err)
+	}
+
+	before, swept := book.Packages[pkg]
+
+	efficacy := float64(int(result.Efficacy*100+0.5)) / 100 //nolint:mnd // two decimal places, which is what gremlins prints
+
+	if swept && efficacy < before.Efficacy {
+		return fmt.Errorf("%s: efficacy fell from %.2f to %.2f — that is a finding, not a number to overwrite. Triage what now survives; edit the ledger by hand only once the drop is understood", pkg, before.Efficacy, efficacy)
+	}
+
+	timedOut := 0
+
+	for _, file := range result.Files {
+		for _, mutation := range file.Mutations {
+			if mutation.Status == "TIMED OUT" {
+				timedOut++
+			}
+		}
+	}
+
+	after := before
+	after.SweptAt, after.Date = commit, date
+	after.Killed, after.Lived, after.NotCovered, after.TimedOut, after.Efficacy = result.Killed, result.Lived, result.NotCovered, timedOut, efficacy
+
+	if !swept && result.Lived > 0 {
+		after.Note = "Measured only. The survivors are NOT triaged: package mode never runs ./e2e, so some will die there, and nobody has looked."
+	}
+
+	if after.Equivalent == nil {
+		after.Equivalent = []equivalent{}
+	}
+
+	book.Packages[pkg] = after
+
+	return nil
+}
+
+func recordFile(ctx context.Context, pkg, reportPath string) error {
+	report, err := os.ReadFile(reportPath) //nolint:gosec // a results file this tool's own caller just had gremlins write
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", reportPath, err)
+	}
+
+	book, err := readLedger()
+	if err != nil {
+		return err
+	}
+
+	commit, err := git(ctx, "rev-parse", "--short", "HEAD")
+	if err != nil {
+		return err
+	}
+
+	err = book.record(pkg, report, strings.TrimSpace(commit), time.Now().Format(time.DateOnly))
+	if err != nil {
+		return err
+	}
+
+	return writeLedger(book)
+}
+
+func writeLedger(book ledger) error {
+	raw, err := json.MarshalIndent(book, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encoding the ledger: %w", err)
+	}
+
+	err = os.WriteFile(ledgerPath, append(raw, '\n'), 0o600)
+	if err != nil {
+		return fmt.Errorf("writing the ledger: %w", err)
+	}
+
+	return nil
+}
+
+// serialPackages are the ones whose tests bind ports, spawn containers or share the docker daemon: parallel mutants there fail each other's tests and are scored KILLED for the wrong reason. They also take hours, so they go last.
+var serialPackages = map[string]bool{ //nolint:gochecknoglobals // a fixed table
+	"./internal/pipeline": true, "./internal/venue": true, "./internal/shell": true, "./internal/web": true,
+	"./internal/cli": true, "./internal/dockerapi": true, "./internal/shim": true, "./internal/trigger": true,
+}
+
+// sweepOrder is cheapest first, serial packages last: a night that gets interrupted should leave the most rows behind, and should not have spent itself inside the one package that takes hours.
+func sweepOrder(dirs []string, sizes map[string]int) []string {
+	ordered := slices.Clone(dirs)
+
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if serialPackages[ordered[i]] != serialPackages[ordered[j]] {
+			return serialPackages[ordered[j]]
+		}
+
+		return sizes[ordered[i]] < sizes[ordered[j]]
+	})
+
+	return ordered
+}
+
+// childExcludes keeps a parent package's sweep to its own files. gremlins' package mode walks subdirectories, so ./internal/store alone re-sweeps sqlite and storetest and reports their mutants as its own.
+func childExcludes(dir string, all []string) []string {
+	var flags []string
+
+	for _, other := range all {
+		rel, ok := strings.CutPrefix(other, dir+"/")
+		if !ok {
+			continue
+		}
+
+		child, _, _ := strings.Cut(rel, "/")
+		flag := "^" + regexp.QuoteMeta(child) + "/"
+
+		if !slices.Contains(flags, flag) {
+			flags = append(flags, "-E", flag)
+		}
+	}
+
+	return flags
+}
+
+// sweepAll MEASURES every package and triages none. Measuring is machine time and can run unattended; triage is judgment and cannot, so the two are kept apart — this fills the ledger with real floors and a survivor count per package, and the mutation-sweep skill works through them afterwards. Resumable: a package already measured at this commit is skipped.
+func sweepAll(ctx context.Context, only []string) error {
+	dirs, err := packageDirs(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Every package is still needed to know a parent's children; `only` narrows what is swept, not what is known.
+	targets := dirs
+	if len(only) > 0 {
+		targets = only
+	}
+
+	sizes := map[string]int{}
+
+	for _, dir := range targets {
+		sizes[dir], err = sourceLines(dir)
+		if err != nil {
+			return err
+		}
+	}
+
+	head, err := git(ctx, "rev-parse", "--short", "HEAD")
+	if err != nil {
+		return err
+	}
+
+	head = strings.TrimSpace(head)
+
+	var failed []string
+
+	for _, dir := range sweepOrder(targets, sizes) {
+		err = measure(ctx, dir, dirs, head, sizes[dir])
+		if err != nil {
+			// One package failing to measure must not cost the night the rest of them.
+			fmt.Fprintf(os.Stderr, "mutants: %v\n", err)
+
+			failed = append(failed, dir)
+		}
+	}
+
+	if len(failed) > 0 {
+		return fmt.Errorf("not recorded: %s", strings.Join(failed, ", "))
+	}
+
+	return nil
+}
+
+// measure sweeps one package unless the ledger says it was already measured at this commit, which is what makes an interrupted night resumable.
+func measure(ctx context.Context, dir string, all []string, head string, lines int) error {
+	book, err := readLedger()
+	if err != nil {
+		return err
+	}
+
+	if book.Packages[dir].SweptAt == head {
+		fmt.Printf("== %s: already measured at %s\n", dir, head)
+
+		return nil
+	}
+
+	fmt.Printf("== %s (%d lines)\n", dir, lines)
+
+	return sweepOne(ctx, dir, all)
+}
+
+func sweepOne(ctx context.Context, dir string, all []string) error {
+	// A cached coverage run gives gremlins a one-second baseline, its timeout is that baseline times a coefficient, and TIMED OUT scores as KILLED.
+	err := runLoud(ctx, "go", "clean", "-testcache")
+	if err != nil {
+		return err
+	}
+
+	err = os.MkdirAll(".gremlins", 0o750)
+	if err != nil {
+		return fmt.Errorf("creating .gremlins: %w", err)
+	}
+
+	report := filepath.Join(".gremlins", strings.ReplaceAll(strings.TrimPrefix(dir, "./"), "/", "_")+".json")
+
+	workers := "0"
+	if serialPackages[dir] {
+		workers = "1"
+	}
+
+	args := slices.Concat(
+		[]string{"tool", "-modfile=go.tool.mod", "gremlins", "unleash", "--timeout-coefficient", "15", "--workers", workers, "-o", report},
+		childExcludes(dir, all),
+		[]string{dir},
+	)
+
+	err = runLoud(ctx, "go", args...)
+	if err != nil {
+		return err
+	}
+
+	return recordFile(ctx, dir, report)
+}
+
+func runLoud(ctx context.Context, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed commands; the variable arguments are package directories from go list
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+	}
+
+	return nil
 }
