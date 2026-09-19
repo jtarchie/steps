@@ -17,6 +17,9 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
+// streamHangBound is how long a finished run's stream gets to close. It detects a HANG, and nothing else: it was five seconds, which a hundred-child stream already spends half of under -race on an idle machine, so a busy one failed a validation run over a test that asserts bytes and not speed. A hang detector only has to be finite, so it is set where slowness cannot reach it; the price is that a real hang takes this long to say so.
+const streamHangBound = 2 * time.Minute
+
 // streamOf opens the run's event stream and returns the raw SSE body. The run
 // must already be finished, or the stream never closes.
 func streamOf(t *testing.T, server *Server, path string) string {
@@ -39,7 +42,7 @@ func streamOf(t *testing.T, server *Server, path string) string {
 	select {
 	case out := <-body:
 		return out
-	case <-time.After(5 * time.Second):
+	case <-time.After(streamHangBound):
 		t.Fatal("SSE stream did not close for a finished run")
 
 		return ""
@@ -355,7 +358,7 @@ func TestStreamResumesFromLastEventID(t *testing.T) {
 
 	select {
 	case raw = <-body:
-	case <-time.After(5 * time.Second):
+	case <-time.After(streamHangBound):
 		t.Fatal("SSE stream did not close for a finished run")
 	}
 
