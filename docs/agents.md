@@ -190,6 +190,7 @@ The refusal happens before any connection is attempted, so the example above run
 
 Two rules keep a written fence honest, both enforced at load:
 
+- **Caching**: the `allow:` list is part of the step's hash (sorted, since a host list is a set, and value-gated, so a bare grant hashes as it always did). Widening or narrowing the fence re-runs a cached step — a result produced while the agent could reach anywhere is not the result of a step that may only reach one host.
 - **`allow:` belongs on the `agents:` entry that grants the tool.** A step's `tools:` *selects* from the grant, and a selection is resolved by substituting the agent's own spec — so an `allow:` written on a step would read as a fence and bind nothing. Select by bare name (`tools: [web_fetch]`) and the agent's fence comes with it.
 - **Entries are bare hostnames** — no scheme, path, port, or wildcard. A host already covers its subdomains, and a pattern-shaped entry is refused rather than interpreted, because the two backends read the list differently enough that one written fence could otherwise mean two different things (see below).
 
@@ -339,7 +340,7 @@ Every tool path the model uses is relative to `dir:`, which is the point: a mode
 
 ## Custom tools, `required:`, and call guards
 
-A custom tool is a `tools:` entry with `name`/`description`/`run` — a [templated](templating.md) shell command whose parameter schema is inferred from the `{{ .args.* }}` references in its `run:`. It can be marked `required: true`: the step can't complete until that tool has *succeeded*. It may also set `max_calls:` (a per-conversation budget), `args:` (pinned values the model never sees), and `timeout:` (a deadline for one call — see [agents-internals.md](agents-internals.md#bounding-one-tool-call)):
+A custom tool is a `tools:` entry with `name`/`description`/`run` — a [templated](templating.md) shell command whose parameter schema is inferred from the `{{ .args.* }}` references in its `run:`. It can be marked `required: true`: the step can't complete until that tool has *succeeded*. That is a success criterion, so — like `assert:` — it is part of the step's hash: adding it to a tool re-runs a step that was cached without it, rather than reporting green a run the criterion was never applied to. It may also set `max_calls:` (a per-conversation budget), `args:` (pinned values the model never sees), and `timeout:` (a deadline for one call — see [agents-internals.md](agents-internals.md#bounding-one-tool-call)):
 
 ```yaml test=agents-custom-tool
 agents:

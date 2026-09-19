@@ -6,6 +6,7 @@ package e2e
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -223,5 +224,66 @@ func TestStepCacheVolatileAgentAlwaysRuns(t *testing.T) {
 	if got := fake.requestCount(); got != 2*len(stepCacheScript()) {
 		t.Errorf("provider requests across both runs = %d, want %d (volatile: must never be reused)",
 			got, 2*len(stepCacheScript()))
+	}
+}
+
+// rewriteGrant swaps one spelling of the reviewer's grant for another in a pipeline already on disk. Same file, same path, same state database — so the only thing that differs between two runs is the grant.
+func rewriteGrant(t *testing.T, path, from, to string) {
+	t.Helper()
+
+	source := readFileString(t, path)
+	if !strings.Contains(source, from) {
+		t.Fatalf("%s does not contain the grant %q", path, from)
+	}
+
+	err := os.WriteFile(path, []byte(strings.Replace(source, from, to, 1)), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestStepCacheRerunsWhenAGrantsTermsChange is the end-to-end half of internal/merkle's keyfields test, for the two grant fields that were found outside the key: a cached agent step was served as-is after its tool became required:, and after its web_fetch allow-list changed. Each run here is proven cached FIRST, so the re-run that follows can only be the changed term.
+func TestStepCacheRerunsWhenAGrantsTermsChange(t *testing.T) {
+	script := []turn{
+		callsTool("read_file", map[string]any{"path": "repo/NOTES.txt"}),
+		callsTool("write_file", map[string]any{"path": "report/summary.md", "content": "widgetd seeds its catalog from widgets.json."}),
+		callsTool("lint", map[string]any{}),
+		says("Done."),
+	}
+
+	const lint = "  - name: lint\n    description: lints the report\n    run: \"true\"\n"
+
+	for name, grants := range map[string][2]string{
+		"a custom tool becomes required": {
+			"  tools:\n  - read_file\n  - write_file\n" + lint,
+			"  tools:\n  - read_file\n  - write_file\n" + lint + "    required: true\n",
+		},
+		"a web_fetch allow-list widens": {
+			"  tools:\n  - read_file\n  - write_file\n" + lint + "  - builtin: web_fetch\n    allow: [docs.example]\n",
+			"  tools:\n  - read_file\n  - write_file\n" + lint + "  - builtin: web_fetch\n    allow: [docs.example, evil.example]\n",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir, root := t.TempDir(), t.TempDir()
+			fake := newFakeLLM(t, append(append([]turn{}, script...), script...)...)
+
+			path := stepCachePipeline(t, dir, fake.URL, root,
+				filepath.Join(dir, "publish.log"), filepath.Join(dir, "fetch.log"), filepath.Join(dir, "notify.log"), stepCacheNotes)
+
+			rewriteGrant(t, path, "  tools: [read_file, write_file]\n", grants[0])
+			mustRun(t, "test", path)
+			mustRun(t, "test", path)
+
+			if got := fake.requestCount(); got != len(script) {
+				t.Fatalf("provider requests after an unchanged rerun = %d, want %d — the step was not cached, so nothing below proves anything", got, len(script))
+			}
+
+			rewriteGrant(t, path, grants[0], grants[1])
+			mustRun(t, "test", path)
+
+			if got := fake.requestCount(); got != 2*len(script) {
+				t.Errorf("provider requests after the grant changed = %d, want %d — the cached step was served under terms it never ran with", got, 2*len(script))
+			}
+		})
 	}
 }

@@ -250,7 +250,7 @@ func keyProbes() []keyProbe {
 		"ContextWindow":           undocumented + "; it feeds the same compaction budget compact_after_tokens: does, which IS documented as operational",
 		"Preflight":               undocumented + "; it gates a health probe before the run, not the conversation",
 		"Fallback":                undocumented + "; it names the model that answers when the primary is unreachable, so a cached answer may be another model's",
-		"Settings":                undocumented + "; settings: project loads the repo's CLAUDE.md and hooks into a CLI agent, which changes what the model is told",
+		"Settings":                "source: refused at load on a hosted agent (validateCLIAgents), and keyed as cli_settings on a CLI one — the 'Agent/cli' probe holds it to that. This probe's agent is hosted, which is why an earlier reading of it wrongly reported settings: as outside the key",
 		"Source.StringToolChoice": undocumented + "; it picks the wire form of tool_choice, not the tools",
 		"Source.APIKeyEnv":        secretNamed,
 		"File":                    loadedInto, "SystemFile": loadedInto, "Description": loadedInto,
@@ -271,11 +271,7 @@ func keyProbes() []keyProbe {
 	}
 
 	unusedByGrant := func(fields ...string) map[string]string {
-		out := map[string]string{
-			"Timeout":  operational,
-			"Required": undocumented + "; on a custom tool it makes a nonzero exit abort the step, which is a success criterion — the argument assertContent makes for folding assert: in",
-			"Allow":    undocumented + "; it is web_fetch's host allow-list, and appears in no builder at all",
-		}
+		out := map[string]string{"Timeout": operational}
 
 		for _, field := range fields {
 			out[field] = otherForm
@@ -326,13 +322,24 @@ func keyProbes() []keyProbe {
 		grant("builtin", config.ToolSpec{Builtin: "run_shell"}, unusedByGrant("MCPTool", "MCPTools")),
 		grant("custom", config.ToolSpec{Name: "lint", Description: "lints", Run: "golangci-lint run"}, unusedByGrant("MCPTool", "MCPTools")),
 		grant("sub-agent", config.ToolSpec{Agent: "extra", Description: "a helper"}, unusedByGrant(
-			"AnsweredBy", "Args", "Builtin", "Default", "MCP", "MCPTool", "MCPTools", "MaxCalls", "MaxOutputBytes", "Name", "OptionsRequired", "Run")),
-		grant("mcp", config.ToolSpec{MCP: "github"}, unusedByGrant("AnsweredBy", "Args", "Builtin", "Default", "Name", "OptionsRequired", "Run")),
+			"Allow", "AnsweredBy", "Args", "Builtin", "Default", "MCP", "MCPTool", "MCPTools", "MaxCalls", "MaxOutputBytes", "Name", "OptionsRequired", "Required", "Run")),
+		grant("mcp", config.ToolSpec{MCP: "github"}, unusedByGrant("Allow", "AnsweredBy", "Args", "Builtin", "Default", "Name", "OptionsRequired", "Run")),
 		{name: "Agent", want: with(agentSilent, map[string]string{
-			"Tools[0].Timeout": operational, "Tools[0].Required": otherForm, "Tools[0].Allow": otherForm, "Tools[0].MCPTool": otherForm, "Tools[0].MCPTools": otherForm,
+			"Tools[0].Timeout": operational, "Tools[0].MCPTool": otherForm, "Tools[0].MCPTools": otherForm,
 		}), silent: func(t *testing.T) []string {
 			// ask_user is granted so that max_questions:, which is keyed only for an agent that can ask, is probed rather than skipped.
 			agent := config.Agent{Name: "reviewer", Source: source, Tools: []config.ToolSpec{{Builtin: "ask_user"}}}
+
+			return unkeyed(t, agent, func(a config.Agent) (any, error) { return agentContent(a) })
+		}},
+		{name: "Agent/cli", want: func() map[string]string {
+			// Everything a hosted agent leaves out, MINUS settings: — the one field that exists only here, and must move the key.
+			out := with(agentSilent, map[string]string{"MaxQuestions": "source: AgentContentMap keys max_questions: only for an agent that grants ask_user, and this one grants nothing"})
+			delete(out, "Settings")
+
+			return out
+		}(), silent: func(t *testing.T) []string {
+			agent := config.Agent{Name: "reviewer", Source: config.AgentSource{Model: "@claude/sonnet"}}
 
 			return unkeyed(t, agent, func(a config.Agent) (any, error) { return agentContent(a) })
 		}},

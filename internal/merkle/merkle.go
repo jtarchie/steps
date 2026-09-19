@@ -809,12 +809,26 @@ func toolSpecsContent(cfg *config.Config, specs []config.ToolSpec) ([]map[string
 			content["max_output_bytes"] = t.MaxOutputBytes
 		}
 
+		withRequiredContent(t, content)
+
+		// web_fetch's host allow-list decides what the agent can reach at all, so narrowing it must re-run the step that was cached while it was wide. Sorted, because a host list is a set: reordering it changes nothing a fetch can see. Value-gated, and refused at load on every other tool form.
+		if len(t.Allow) != 0 {
+			content["allow"] = config.StableStrings(t.Allow)
+		}
+
 		withAskUserContent(t, content)
 
 		out[i] = content
 	}
 
 	return out, nil
+}
+
+// withRequiredContent folds required: in. It is a success criterion — a required tool's nonzero exit aborts the step instead of being handed to the model as data — and assertContent's argument applies word for word: a step cached BEFORE the line was added would be skipped, and the criterion never evaluated on the run that added it. Value-gated like everything here.
+func withRequiredContent(t config.ToolSpec, content map[string]any) {
+	if t.Required {
+		content["required"] = true
+	}
 }
 
 // mcpToolSpecContent builds the hashed content for one of the three MCP
@@ -838,6 +852,8 @@ func mcpToolSpecContent(cfg *config.Config, t config.ToolSpec) (map[string]any, 
 	if t.MCPTool != "" {
 		content["mcp_tool"] = t.MCPTool
 	}
+
+	withRequiredContent(t, content)
 
 	if len(t.MCPTools) != 0 {
 		sorted := slices.Clone(t.MCPTools)
