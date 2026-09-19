@@ -6,6 +6,7 @@ package venue
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -208,10 +209,10 @@ func TestVenueRedialReusesTheUploadedTree(t *testing.T) {
 		t.Fatalf("the first command failed: %v", err)
 	}
 
-	// Not asserted on: the shim is killed while answering, so under load its
-	// exit frame can win the race and the kill reads as success. The redial
-	// below is what this test is about, and it happens either way.
-	_ = killTheShim(t, runner)
+	err = killTheShim(t, runner)
+	if !errors.Is(err, errWorkerLost) {
+		t.Fatalf("the command whose worker died under it returned %v, want errWorkerLost", err)
+	}
 
 	err = runner.Run(context.Background(), "true")
 	if err != nil {

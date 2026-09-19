@@ -809,9 +809,12 @@ func (s *session) write(frame wire.Frame, payload any) error {
 	err := s.writeRaw(frame, payload)
 	if err != nil {
 		s.broken.Store(true)
+
+		// Named for what it is, exactly as readFrame names it. A worker that died BETWEEN commands is found by the next command's first write, and that used to surface as a bare "broken pipe" — true, and no help to anyone reading a red build.
+		return fmt.Errorf("%w: %w", errWorkerLost, err)
 	}
 
-	return err
+	return nil
 }
 
 // writeRaw is write without the broken marking, for the handshake: a failure
