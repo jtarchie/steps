@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// ResourceType defines a resource kind as a set of shell command templates.
+// ResourceType defines a resource kind as a set of shell command templates. Its Name is never hashed: a step is keyed by what the type DOES — the rendered template, image, env, user, network, limits — so renaming a type re-runs nothing, and two types that do the same thing share a cache entry, which is what content-addressing means.
 type ResourceType struct {
 	Name string `yaml:"name"`
 	// Image, when set, runs check/in/out in a fresh `docker run --rm`

@@ -120,7 +120,7 @@ type Agent struct {
 	// budget is": setting it keeps compactBudgetPercent applying, so an
 	// operator says 200000 rather than computing 160000, and the run's own
 	// compaction log reports a derived window instead of an assumed one.
-	// compact_after_tokens:, when also set, still wins outright.
+	// compact_after_tokens:, when also set, still wins outright. Not hashed, for compact_after_tokens:' own reason: its only consumer is resolveCompactionBudget, so it is the same operational budget reached by another route.
 	ContextWindow int `yaml:"context_window,omitempty"`
 	// MaxContextBytes caps how much of a context_paths: file is handed to the
 	// model at conversation start. Unset takes DefaultMaxContextBytes; an
@@ -141,12 +141,12 @@ type Agent struct {
 	// evidence is carried, not what the step is asking for.
 	MaxContextBytes *int `yaml:"max_context_bytes,omitempty"`
 	// Fallback lists alternate sources to use when the primary is
-	// UNREACHABLE, in order. See AgentFallback.
+	// UNREACHABLE, in order. See AgentFallback. Never hashed: the primary is what the step ASKS for and is what the key names, while this is outage handling — keying it would re-run every cached step because somebody edited what happens when a provider is down.
 	Fallback []AgentFallback `yaml:"fallback,omitempty"`
 	// Preflight opts this agent out of (or into) the pre-run health check.
 	// A pointer so unset inherits defaults.preflight. The case it exists for
 	// is a model expected to be slow to WAKE — a cold local model would fail
-	// a probe that a real conversation would have waited out.
+	// a probe that a real conversation would have waited out. Never hashed: it decides whether a health probe runs BEFORE the step, and nothing about the conversation the step then has.
 	Preflight *bool `yaml:"preflight,omitempty"`
 	// Budget caps what one invocation of this agent may spend (see Budget).
 	// Per invocation, not per job: a job budget is the cumulative ceiling and
@@ -192,7 +192,7 @@ type Agent struct {
 // precise named form; local/no-auth providers like lmstudio/ollama, whose
 // OpenAI-compat servers often don't support the object form, get the
 // fallback) or false for an explicit endpoint: with no recognized provider
-// prefix. A pointer so "unset" is distinguishable from an explicit false.
+// prefix. A pointer so "unset" is distinguishable from an explicit false. Never hashed: it picks how one request is SPELLED for a server that cannot parse the precise form, the same boundary drawn around a CLI's version — steps hashes which thing was asked for, not the wire it was asked over.
 type AgentSource struct {
 	Endpoint         string `yaml:"endpoint,omitempty"`
 	Model            string `yaml:"model"`

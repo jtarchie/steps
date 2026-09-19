@@ -242,16 +242,16 @@ func keyProbes() []keyProbe {
 		}}
 	}
 
-	resourceType := map[string]string{"Name": undocumented + "; the step is keyed by the RESOURCE it names, and the type reaches the key through its templates and isolation", "Config.Check": notThisVerb, "Config.Webhook": derivedFlag}
+	resourceType := map[string]string{"Name": "source: config.ResourceType — a step is keyed by what the type DOES, so a rename re-runs nothing and two types doing the same thing share an entry", "Config.Check": notThisVerb, "Config.Webhook": derivedFlag}
 
 	agentSilent := map[string]string{
 		"Attempts": operational, "Budget": operational, "DelegateBudgetPercent": operational, "Timeout": operational,
 		"CompactAfterTokens": operational, "MaxContextBytes": operational,
-		"ContextWindow":           undocumented + "; it feeds the same compaction budget compact_after_tokens: does, which IS documented as operational",
-		"Preflight":               undocumented + "; it gates a health probe before the run, not the conversation",
-		"Fallback":                undocumented + "; it names the model that answers when the primary is unreachable, so a cached answer may be another model's",
+		"ContextWindow":           "source: config.Agent.ContextWindow — its only consumer is resolveCompactionBudget, the operational budget compact_after_tokens: also sets",
+		"Preflight":               "source: config.Agent.Preflight — it decides whether a health probe runs before the step, nothing about the conversation",
+		"Fallback":                "source: config.Agent.Fallback — the primary is what the step asks for and what the key names; this is outage handling",
 		"Settings":                "source: refused at load on a hosted agent (validateCLIAgents), and keyed as cli_settings on a CLI one — the 'Agent/cli' probe holds it to that. This probe's agent is hosted, which is why an earlier reading of it wrongly reported settings: as outside the key",
-		"Source.StringToolChoice": undocumented + "; it picks the wire form of tool_choice, not the tools",
+		"Source.StringToolChoice": "source: config.AgentSource — how one request is spelled for a server that cannot parse the precise form, not what is asked",
 		"Source.APIKeyEnv":        secretNamed,
 		"File":                    loadedInto, "SystemFile": loadedInto, "Description": loadedInto,
 	}
@@ -291,7 +291,7 @@ func keyProbes() []keyProbe {
 		}},
 		{name: "Assert", want: map[string]string{
 			"Execution": offTheStep, "Outcome": offTheStep,
-			"Nudge": undocumented + "; a nudge only acts on an unmet contract, and a step with an unmet contract failed, so it is never a cache hit",
+			"Nudge": undocumented + ", and it probably should not be: a nudge puts a message into the live conversation and makes the verdict tool refuse, so it turns a run that would have FAILED into one that succeeds — and that success is cached. Removing nudge: to prove a prompt works unaided (the reason its doc gives for it being opt-in) then serves the cached green without asking the model. An earlier reason recorded here said a nudge only acts on a failed step, which is never a cache hit; that was wrong. Reported 2026-09-19 with a recommendation to key it",
 		}, silent: func(t *testing.T) []string {
 			return unkeyed(t, config.Assert{ToolCalls: []config.ExpectedToolCall{{Name: "read_file"}}}, func(a config.Assert) (any, error) {
 				return assertContent(&a), nil
@@ -313,7 +313,7 @@ func keyProbes() []keyProbe {
 			})
 		}},
 		{name: "MCPServer", want: map[string]string{
-			"Auth.CallbackPort": undocumented + "; it pins the loopback port `steps mcp login` listens on, which no step ever sees",
+			"Auth.CallbackPort": "source: config.MCPServerAuth — read only by `steps mcp login`, so no step ever runs with it",
 		}, silent: func(t *testing.T) []string {
 			return unkeyed(t, server, func(srv config.MCPServer) (any, error) {
 				return mcpServerContent(&config.Config{MCPServers: []config.MCPServer{srv}}, "github")

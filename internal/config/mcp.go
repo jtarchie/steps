@@ -160,7 +160,7 @@ func (s MCPServer) IsStdio() bool {
 // enforcing it. Against those, an ephemeral port cannot match whatever
 // redirect URI was registered in a dashboard, so login fails no matter how
 // the client was configured. Setting this makes the redirect URI predictable,
-// so `http://127.0.0.1:<port>/callback` can be registered once.
+// so `http://127.0.0.1:<port>/callback` can be registered once. Never hashed: its only reader is `steps mcp login`, so no step ever runs with it.
 type MCPServerAuth struct {
 	Type            string   `yaml:"type"`
 	APIKeyEnv       string   `yaml:"api_key_env,omitempty"`
