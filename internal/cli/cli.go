@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -2251,6 +2253,22 @@ type WebCmd struct {
 	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
 	// A statement about the BROWSER's surface only; `steps pipeline set` is the deployment path and is deliberately not withheld — see docs/web.md.
 	ReadOnly bool `help:"serve the pages without trigger, approval, answer, resume or abort controls" name:"read-only"`
+	// Both or neither, refused below: half a pair is a daemon somebody believes is protected. Env vars because a password on a command line is in every ps listing and every shell history.
+	BasicAuthUsername string `env:"STEPS_BASIC_AUTH_USERNAME" help:"require this HTTP Basic username on every route but POST /p/<pipeline>/hooks/<resource>" name:"basic-auth-username"`
+	BasicAuthPassword string `env:"STEPS_BASIC_AUTH_PASSWORD" help:"the password that goes with it"                                                          name:"basic-auth-password"`
+}
+
+// authOptions is the server's auth setting, and the refusal when only half of one was given.
+func (w *WebCmd) authOptions() ([]web.Option, error) {
+	if (w.BasicAuthUsername == "") != (w.BasicAuthPassword == "") {
+		return nil, errors.New("web: --basic-auth-username and --basic-auth-password are both or neither — half a pair serves open access to a daemon somebody believes is protected")
+	}
+
+	if w.BasicAuthUsername == "" {
+		return nil, nil
+	}
+
+	return []web.Option{web.WithBasicAuth(w.BasicAuthUsername, w.BasicAuthPassword)}, nil
 }
 
 // Run serves until canceled, holding whatever the state database says was set.
@@ -2266,10 +2284,16 @@ func (w *WebCmd) Run() error {
 		return errors.New("web: --deliver is for steps run and steps test; a daemon receives deliveries at POST /p/<pipeline>/hooks/<resource>")
 	}
 
+	// Before anything is opened or bound, so a half-configured credential pair costs nothing.
+	_, err := w.authOptions()
+	if err != nil {
+		return err
+	}
+
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	ctx, err := w.ExecFlags.Apply(ctx)
+	ctx, err = w.ExecFlags.Apply(ctx)
 	if err != nil {
 		return err
 	}
@@ -2293,7 +2317,12 @@ func (w *WebCmd) serve(ctx context.Context) error {
 		runner = local
 	}
 
-	server, err := web.New(nil, runner)
+	opts, err := w.authOptions()
+	if err != nil {
+		return err
+	}
+
+	server, err := web.New(nil, runner, opts...)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
@@ -2320,6 +2349,11 @@ func (w *WebCmd) serve(ctx context.Context) error {
 
 	fmt.Printf("steps web: http://%s (state: %s)\n", w.Listen, state)
 
+	// A pipeline is arbitrary commands and a set is the endpoint that installs them, so an address anybody can reach with no credentials is worth saying out loud once.
+	if len(opts) == 0 && !loopbackOnly(w.Listen) {
+		fmt.Printf("steps web: WARNING serving %s with no authentication — anyone who can reach it can set a pipeline, which is arbitrary command execution; set --basic-auth-username and --basic-auth-password\n", w.Listen)
+	}
+
 	if len(server.Served()) == 0 {
 		fmt.Println("steps web: no pipelines set — upload one with: steps pipeline set -c pipeline.yml")
 	}
@@ -2330,6 +2364,22 @@ func (w *WebCmd) serve(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// loopbackOnly answers whether this listen address can only be reached from this machine. An unparseable or name-based address answers false: the warning is the safe side of a guess.
+func loopbackOnly(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return false
+	}
+
+	// The empty host of ":8088" is every interface, which net.ParseIP reads as nothing at all.
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return strings.EqualFold(host, "localhost")
+	}
+
+	return addr.IsLoopback()
 }
 
 // ApprovalsCmd lists approval: steps waiting for a decision.

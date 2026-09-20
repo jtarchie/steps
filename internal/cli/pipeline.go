@@ -32,9 +32,9 @@ type PipelineCmd struct {
 	Rename  PipelineRenameCmd  `cmd:"" help:"give a pipeline a new name, keeping its history"`
 }
 
-// TargetFlags is which daemon a verb talks to. No login and no saved targets, because there is nothing to log in to: the daemon has no authentication and binds the loopback this defaults to.
+// TargetFlags is which daemon a verb talks to. No login and no saved targets, because there is nothing to log in to when the daemon binds the loopback this defaults to; a daemon that does ask takes its credentials from this URL's userinfo, which is a string an operator can keep in a password manager and a script can keep in one variable.
 type TargetFlags struct {
-	Target string `default:"http://127.0.0.1:8088" env:"STEPS_TARGET" help:"the steps web daemon to talk to" name:"target"`
+	Target string `default:"http://127.0.0.1:8088" env:"STEPS_TARGET" help:"the steps web daemon to talk to, optionally http://user:password@host" name:"target"`
 }
 
 // PipelineNameFlag is which pipeline on that daemon a verb is about.
@@ -246,13 +246,15 @@ type PipelineListCmd struct {
 
 // Run prints one row per served pipeline.
 func (p *PipelineListCmd) Run() error {
-	rows, err := newDaemonClient(p.Target).list()
+	client := newDaemonClient(p.Target)
+
+	rows, err := client.list()
 	if err != nil {
 		return err
 	}
 
 	if len(rows) == 0 {
-		fmt.Printf("no pipelines set on %s — upload one with: steps pipeline set -c pipeline.yml\n", p.Target)
+		fmt.Printf("no pipelines set on %s — upload one with: steps pipeline set -c pipeline.yml\n", client.target)
 
 		return nil
 	}
@@ -290,13 +292,15 @@ func (p *PipelineGetCmd) Run() error {
 		return err
 	}
 
-	current, held, err := newDaemonClient(p.Target).get(name)
+	client := newDaemonClient(p.Target)
+
+	current, held, err := client.get(name)
 	if err != nil {
 		return err
 	}
 
 	if !held {
-		return fmt.Errorf("%s is not serving a pipeline called %q", p.Target, name)
+		return fmt.Errorf("%s is not serving a pipeline called %q", client.target, name)
 	}
 
 	fmt.Print(current.Source)
@@ -405,16 +409,24 @@ func (p *PipelineRenameCmd) Run() error {
 
 // daemonClient is the HTTP half of every verb above.
 type daemonClient struct {
+	// target is the base URL with any userinfo REMOVED, which makes it both the address requests are built against and the one form of it that is safe to print. Every message below names it, and a password that travelled in a flag would otherwise reach a terminal, a CI log and a bug report.
 	target string
-	http   *http.Client
+	// Empty unless the target carried credentials. Held apart so they go in the Authorization header rather than in a URL a redirect or a proxy would carry them into.
+	username string
+	password string
+	http     *http.Client
 }
 
 // A set runs every validator the daemon has, so it is not instant — and a daemon that stopped answering must say so rather than hang a terminal.
 const daemonTimeout = 30 * time.Second
 
 func newDaemonClient(target string) *daemonClient {
+	base, username, password := splitTargetCredentials(target)
+
 	return &daemonClient{
-		target: strings.TrimSuffix(target, "/"),
+		target:   base,
+		username: username,
+		password: password,
 		// Keep-alives off: a verb makes one or two requests and the process
 		// exits, so a pooled connection buys nothing and leaves the daemon
 		// holding a socket for a terminal that has gone.
@@ -423,6 +435,22 @@ func newDaemonClient(target string) *daemonClient {
 			Transport: &http.Transport{DisableKeepAlives: true},
 		},
 	}
+}
+
+// splitTargetCredentials takes the userinfo off a target URL, returning the address to talk to and the credentials to send. A target that does not parse comes back untouched and credential-free: the request that follows fails with the URL in it, which says more than a parse error here would.
+func splitTargetCredentials(target string) (string, string, string) {
+	trimmed := strings.TrimSuffix(target, "/")
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.User == nil {
+		return trimmed, "", ""
+	}
+
+	username := parsed.User.Username()
+	password, _ := parsed.User.Password()
+	parsed.User = nil
+
+	return strings.TrimSuffix(parsed.String(), "/"), username, password
 }
 
 // held is false for a pipeline the daemon does not hold, which is a set creating one rather than an error.
@@ -609,6 +637,10 @@ func (c *daemonClient) do(method, path string, payload []byte) (int, []byte, err
 		req.Header.Set("Content-Type", "application/json")
 	}
 
+	if c.username != "" || c.password != "" {
+		req.SetBasicAuth(c.username, c.password)
+	}
+
 	resp, err := c.http.Do(req)
 	if err != nil {
 		// Sent and not answered is not unreachable: the change may be mid-way, and "start one" sends somebody to start a second daemon on the same state file.
@@ -632,6 +664,11 @@ func (c *daemonClient) do(method, path string, payload []byte) (int, []byte, err
 
 // The refusal becomes the sentence the terminal that asked prints, which is the whole reason this transport is HTTP rather than a row write.
 func daemonError(target string, status int, body []byte) error {
+	// The body of a 401 is echo's own "Unauthorized", which names neither what is missing nor where it goes.
+	if status == http.StatusUnauthorized {
+		return fmt.Errorf("%s asked for credentials it did not get — put them in the target URL: --target http://user:password@host (or STEPS_TARGET)", target)
+	}
+
 	message := strings.TrimSpace(string(body))
 
 	// echo wraps a refusal as {"message": ...}, and the message is the part a person acts on.
