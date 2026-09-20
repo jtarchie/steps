@@ -62,6 +62,8 @@ steps approvals -p <name>   list approval: steps waiting for a decision
 steps questions -p <name>   list ask_user questions waiting for an answer
                             (steps questions answer <id> <answer> -p <name>)
 steps mcp tools|login       inspect or authorize mcp_servers: entries
+                            (login <server> -c f.yml authorizes this machine;
+                            -p <name> --target <url> authorizes a daemon)
 steps docs [page]           read these docs in the terminal
 ```
 

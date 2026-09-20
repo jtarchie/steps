@@ -25,9 +25,11 @@ Prefer the environment variables in a deployment: a password on a command line i
 
 ## What it covers
 
-Every route: the pages, the static assets, `/docs`, the live-run SSE streams, and the `/api` endpoints `steps pipeline` and `steps runs abort` talk to. A browser gets a `WWW-Authenticate: basic realm="steps"` challenge, so it prompts.
+Every route: the pages, the static assets, `/docs`, the live-run SSE streams, and the `/api` endpoints `steps pipeline`, `steps runs abort` and `steps mcp login -p` talk to. A browser gets a `WWW-Authenticate: basic realm="steps"` challenge, so it prompts.
 
 **One route is exempt: `POST /p/<pipeline>/hooks/<resource>`**, a [webhook](webhooks.md) delivery. A sender has no credentials to give and authenticates with its own signature instead — the same reason that route is exempt from the same-origin check and is not withheld by `--read-only`. A delivery with a bad signature is still refused by the hook, with a 401 of its own.
+
+**A second route is exempt for the same reason: `GET /mcp/callback`**, where an authorization server sends the browser to finish a [`steps mcp login` against this daemon](mcp.md#authorizing-a-daemon). A redirect is a navigation a third party caused and carries no credential of yours; it is authenticated by the single-use `state` its login minted, and anything else is a `404`. Starting that login, and reading the URL that carries the state, both need credentials.
 
 Basic auth does not replace the `/api` browser refusal described in [web.md](web.md#security): a request carrying `Origin` or a browser-shaped `Sec-Fetch-Site` is still refused whatever credentials it has, because a page that talked an operator into typing a password must still not be able to set a pipeline.
 

@@ -406,10 +406,11 @@ jobs:
 A bearer-configured server needs no login step — it reads its token from the environment at run time. An oauth-configured server needs a one-time interactive authorization:
 
 ```bash
-steps mcp login pipeline.yml linear
+steps mcp login linear -c pipeline.yml                                  # authorize THIS machine
+steps mcp login linear -p app --target https://ops:PASSWORD@steps.example.com   # authorize a daemon
 ```
 
-This runs the OAuth 2.1 authorization-code + PKCE flow: discovers the server's metadata, dynamically registers a client, opens your browser, and prints where the token was saved.
+Either one runs the OAuth 2.1 authorization-code + PKCE flow: discovers the server's metadata, dynamically registers a client, opens your browser, and prints where the token was saved. Which machine ends up holding the token is the whole difference, and it is chosen by which pipeline you name — a file here (`-c`), or one a daemon serves (`-p`). See [Authorizing a daemon](#authorizing-a-daemon) for the second.
 
 - **The authorization URL is always printed**, whether or not the browser opened:
 
@@ -423,7 +424,7 @@ This runs the OAuth 2.1 authorization-code + PKCE flow: discovers the server's m
 - **A slightly malformed `WWW-Authenticate` challenge is tolerated.** Some servers separate the challenge's parameters with spaces where the HTTP spec wants commas (Metabase's MCP endpoint does). The header still says exactly one thing, so steps normalizes it and continues rather than failing the login over punctuation.
 - **An unadvertised `iss` is tolerated, a wrong one is not.** RFC 9207 has the authorization server return its own identifier on the redirect, and servers are supposed to declare that in their metadata. Some return it without declaring it (Metabase again). steps checks the value against the issuer it discovered: matching is fine and the login proceeds; an `iss` naming a *different* issuer is the mix-up attack the parameter exists to catch, and fails the login by name.
 - **Per-user, not per-pipeline**: the token lands in `${XDG_CONFIG_HOME:-~/.config}/steps/mcp/<server-name>.json` (`0600`) — deliberately outside any pipeline's `.steps/`. Logging in once authorizes that server for **every** pipeline referencing it by the same name.
-- **Silent refresh, no re-prompting**: `steps run`/`steps web` never run an interactive flow — they load the persisted token and refresh it silently. If it can't be refreshed, the error names the exact `steps mcp login` command to run.
+- **Silent refresh, no re-prompting**: `steps run`/`steps web` never run an interactive flow — they load the persisted token and refresh it silently. If it can't be refreshed, the error names the `steps mcp login` command to run, in both its forms.
 - **The refresh grant is registered, not assumed.** Dynamic registration declares `grant_types: [authorization_code, refresh_token]`, because RFC 7591 defaults an omitted `grant_types` to `authorization_code` *alone* — and a conforming server then issues an access token with no refresh token beside it, exactly as asked. That looks like a successful login and dies at the first expiry, unattended.
 - **A login that can't be renewed is a failed login.** If the authorization server returns no refresh token for a token that *does* expire, `steps mcp login` saves it (it works right now) and exits non-zero saying when it stops working:
 
@@ -437,6 +438,29 @@ This runs the OAuth 2.1 authorization-code + PKCE flow: discovers the server's m
   A token with no expiry at all is fine and reports nothing: there is nothing to renew.
 - **`auth.scopes:` is what gets requested.** Left unset, steps asks for every scope the server's protected-resource metadata advertises, which is the right default for a server the pipeline has no opinion about. Setting it narrows the authorization request to exactly those scopes — worth doing against a server whose scope list includes writes you never intend to make.
 - **Trust boundary**: nothing token-shaped is ever cache-hashed or written to `.steps/state.db` — the same treatment as LLM provider credentials.
+
+### Authorizing a daemon
+
+A token belongs on the machine that spends it, and for a pipeline set into `steps web` that is the daemon — often a machine with no browser, which therefore cannot be the loopback address a redirect comes back to. So the daemon runs the flow, and your terminal plays only the browser's half:
+
+```bash
+steps mcp login linear -p app --target https://ops:PASSWORD@steps.example.com
+```
+
+1. The daemon resolves `linear` from the configuration it is **serving** for `app` — not from a file on your disk — so the token is bound to the endpoint that pipeline will actually dial.
+2. It discovers, registers a client whose redirect URI is `<target>/mcp/callback`, and hands the authorization URL back; the CLI prints it and opens your browser.
+3. The authorization server redirects the browser to the daemon, which exchanges the code and saves the token **on its own disk**. The PKCE verifier and the token never leave it.
+4. The CLI reports the outcome in the flow's own words — including "authorized, but this token cannot be renewed" — and the daemon's next poll or run uses the token. Nothing restarts.
+
+- **The redirect URI is the address you reached the daemon on**, with the credentials taken off first: it is sent to the authorization server and kept there, so a password on it would have been handed to a third party. It is also a *stable* URI, which the loopback flow's ephemeral port never is — a server demanding exact pre-registered redirect URIs gets `https://steps.example.com/mcp/callback`, registered once.
+- **`GET /mcp/callback` asks for no password**, the one route besides a [webhook delivery](authentication.md#what-it-covers) that does not. It cannot: the request is a bare navigation a third party caused. It is authenticated by its `state` — a single-use nonce minted for that one login and seen only by whoever was handed its authorization URL, which takes the daemon's credentials to get. A state nobody is waiting on is a `404`.
+- **Starting a login and reading its URL do need credentials**, like everything else under `/api`.
+- **One login per server name at a time.** A token file is keyed by server name, so a second login for the same name replaces the first rather than racing it. An unfinished one lets go after ten minutes; a daemon restarted mid-login forgets it, and you run the command again.
+- **`auth.client_secret_env:` is read from the daemon's environment**, not yours — the daemon is the client.
+- **Where the token lands** is `os.UserConfigDir()` *for the daemon's user*. In a container that is usually the root filesystem, lost on every deploy: point `XDG_CONFIG_HOME` at a volume.
+- **`$BROWSER`** names the program either login opens the URL with, as it does for `xdg-open` and `gh`.
+
+> **What this means for the daemon.** It now holds refresh tokens for third-party services, on whatever address it listens on. `steps pipeline set` already makes that machine one that runs arbitrary commands, so it was never less than fully trusted — but a token for your issue tracker is a way *off* the box that command execution on it is not. Generated credentials and TLS ([authentication.md](authentication.md)) stop being good practice and become the thing standing in front of those tokens.
 
 ### Servers without dynamic client registration
 
@@ -459,6 +483,9 @@ mcp_servers:
     client_id: "1234567890.9876543210"   # public app identifier
     client_secret_env: SLACK_CLIENT_SECRET
     callback_port: 3118                  # register http://127.0.0.1:3118/callback
+                                         # (and https://<daemon>/mcp/callback, to
+                                         # authorize a daemon — callback_port is
+                                         # the loopback login's alone)
 
 agents:
 - name: responder
