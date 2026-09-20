@@ -30,7 +30,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -74,7 +74,7 @@ var liveIdleTimeout = 5 * time.Minute
 var liveBatch = 500
 
 // handleRunEvents streams a run's events as server-sent events.
-func (s *Server) handleRunEvents(c echo.Context) error {
+func (s *Server) handleRunEvents(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 	runID := c.Param("run")
@@ -180,7 +180,7 @@ func (s *Server) handleRunEvents(c echo.Context) error {
 // the page reloads on, into a 404 it cannot explain. It also keeps seedFold
 // from paging a run this pipeline does not own: RunEvents filters on run_id
 // alone, and FindRunRow is the pipeline-scoped question.
-func requireRun(c echo.Context, runID string) (store.RunRow, error) {
+func requireRun(c *echo.Context, runID string) (store.RunRow, error) {
 	run, ok, err := pipelineOf(c).Store.FindRunRow(c.Request().Context(), runID)
 	if err != nil {
 		return store.RunRow{}, fmt.Errorf("web: %w", err)
@@ -208,7 +208,7 @@ func requireRun(c echo.Context, runID string) (store.RunRow, error) {
 // Not for a reader who left: the request context is cancelled the moment the
 // tab closes, and a store call caught mid-tick reports that as its error.
 // Nothing failed, so nothing is logged.
-func endStream(c echo.Context, runID string, err error) error {
+func endStream(c *echo.Context, runID string, err error) error {
 	if errors.Is(err, context.Canceled) {
 		return nil
 	}
@@ -234,7 +234,7 @@ func waitForMore(ctx context.Context, tick, deadline <-chan time.Time) bool {
 }
 
 // openStream puts the response into server-sent-event mode.
-func openStream(c echo.Context) *echo.Response {
+func openStream(c *echo.Context) http.ResponseWriter {
 	response := c.Response()
 	response.Header().Set(echo.HeaderContentType, "text/event-stream")
 	response.Header().Set("Cache-Control", "no-cache")
@@ -251,7 +251,7 @@ func openStream(c echo.Context) *echo.Response {
 // seedFold folds everything up to seq into the fold, in pages, so a run
 // longer than one read stays whole. Nothing is written to the client: this is
 // the history they already have on the page.
-func (s *Server) seedFold(c echo.Context, runID string, seq int64, folder *runFolder) error {
+func (s *Server) seedFold(c *echo.Context, runID string, seq int64, folder *runFolder) error {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 
@@ -286,7 +286,7 @@ func (s *Server) seedFold(c echo.Context, runID string, seq int64, folder *runFo
 // FIRST connection's answer, stamped into the page by the server that
 // rendered the transcript — without it a reader who opens a run mid-flight
 // would be sent every event again and see each row twice.
-func resumeFrom(c echo.Context) int64 {
+func resumeFrom(c *echo.Context) int64 {
 	if id := c.Request().Header.Get("Last-Event-ID"); id != "" {
 		seq, err := strconv.ParseInt(id, 10, 64)
 		if err == nil {
@@ -311,7 +311,7 @@ func resumeFrom(c echo.Context) int64 {
 // k turns, and a container re-shipped every child on each event under it.
 // See framer.
 func (s *Server) flushEvents(
-	c echo.Context, run store.RunRow, after int64, drawn *sentRows, folder *runFolder,
+	c *echo.Context, run store.RunRow, after int64, drawn *sentRows, folder *runFolder,
 ) (int64, error) {
 	// Drained, not read once: a tick reads a bounded batch, and a run that
 	// recorded more than one batch between ticks — or that had already
@@ -337,7 +337,7 @@ func (s *Server) flushEvents(
 // flushBatch folds and sends one page of events, reporting the new high-water
 // mark and whether the page was full — in which case another may follow.
 func (s *Server) flushBatch(
-	c echo.Context, run store.RunRow, after int64, drawn *sentRows, folder *runFolder,
+	c *echo.Context, run store.RunRow, after int64, drawn *sentRows, folder *runFolder,
 ) (int64, bool, error) {
 	// Only the nodes THIS batch names: a finished agent step's answer and
 	// trajectory live in its node, and the rest of the run's nodes are
@@ -748,7 +748,7 @@ func frameLines(html string) []string {
 // writeFrame emits one HTML fragment as an unnamed SSE message, which is the
 // shape hx-sse swaps. Named messages dispatch a DOM event instead, which is
 // what `done` is for.
-func writeFrame(response *echo.Response, id int64, html string) {
+func writeFrame(response http.ResponseWriter, id int64, html string) {
 	_, _ = fmt.Fprintf(response, "id: %d\n", id)
 
 	// One data: line per line of markup. SSE rejoins them with newlines, so a
@@ -759,18 +759,25 @@ func writeFrame(response *echo.Response, id int64, html string) {
 	}
 
 	_, _ = fmt.Fprint(response, "\n")
-	response.Flush()
+	flush(response)
 }
 
 // writeSSE emits one named event carrying JSON. A marshal failure is skipped
 // rather than killing the stream: one unrenderable event must not end the
 // run's live view.
-func writeSSE(response *echo.Response, name string, payload any) {
+func writeSSE(response http.ResponseWriter, name string, payload any) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return
 	}
 
 	_, _ = fmt.Fprintf(response, "event: %s\ndata: %s\n\n", name, data)
-	response.Flush()
+	flush(response)
+}
+
+// flush pushes a frame to the reader now rather than when the buffer fills, which is the whole of what makes the stream live.
+//
+// A dropped error rather than echo's Response.Flush, which PANICS on a writer that cannot flush: every writer this sees can, and a live view is not worth a 500 if one someday cannot.
+func flush(response http.ResponseWriter) {
+	_ = http.NewResponseController(response).Flush()
 }

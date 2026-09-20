@@ -6,7 +6,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // abortRun is nil when the run was told to stop.
@@ -54,7 +54,7 @@ func (s *Server) abortQueued(ctx context.Context, target *Pipeline, jobName stri
 	return nil
 }
 
-func (s *Server) handleAbortRun(c echo.Context) error {
+func (s *Server) handleAbortRun(c *echo.Context) error {
 	target := pipelineOf(c)
 
 	err := s.abortRun(c.Request().Context(), target, c.Param("run"))
@@ -67,7 +67,7 @@ func (s *Server) handleAbortRun(c echo.Context) error {
 	return c.Redirect(http.StatusSeeOther, "/p/"+target.Slug+"/runs/"+c.Param("run"))
 }
 
-func (s *Server) handleAbortQueued(c echo.Context) error {
+func (s *Server) handleAbortQueued(c *echo.Context) error {
 	target := pipelineOf(c)
 
 	err := s.abortQueued(c.Request().Context(), target, c.Param("job"))
@@ -80,7 +80,7 @@ func (s *Server) handleAbortQueued(c echo.Context) error {
 }
 
 // handleAPIAbortRun answers 202, not 204: the run is still unwinding through its hooks when this returns.
-func (s *Server) handleAPIAbortRun(c echo.Context) error {
+func (s *Server) handleAPIAbortRun(c *echo.Context) error {
 	target := s.Lookup(c.Param("pipeline"))
 	if target == nil {
 		return echo.NewHTTPError(http.StatusNotFound, ErrNoSuchPipeline.Error())
@@ -94,7 +94,7 @@ func (s *Server) handleAPIAbortRun(c echo.Context) error {
 	return c.NoContent(http.StatusAccepted) //nolint:wrapcheck // as above
 }
 
-func (s *Server) handleAPIAbortQueued(c echo.Context) error {
+func (s *Server) handleAPIAbortQueued(c *echo.Context) error {
 	target := s.Lookup(c.Param("pipeline"))
 	if target == nil {
 		return echo.NewHTTPError(http.StatusNotFound, ErrNoSuchPipeline.Error())

@@ -8,7 +8,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
@@ -34,7 +34,7 @@ type PipelineConfig struct {
 }
 
 // handleAPIList answers what this daemon holds.
-func (s *Server) handleAPIList(c echo.Context) error {
+func (s *Server) handleAPIList(c *echo.Context) error {
 	served := s.Served()
 	rows := make([]PipelineSummary, 0, len(served))
 
@@ -59,7 +59,7 @@ func (s *Server) handleAPIList(c echo.Context) error {
 }
 
 // handleAPIGet answers with what is being served, which is what a set diffs against and what compare-and-set then names.
-func (s *Server) handleAPIGet(c echo.Context) error {
+func (s *Server) handleAPIGet(c *echo.Context) error {
 	target := s.Lookup(c.Param("pipeline"))
 	if target == nil {
 		return echo.NewHTTPError(http.StatusNotFound, ErrNoSuchPipeline.Error())
@@ -91,7 +91,7 @@ func (s *Server) handleAPIGet(c echo.Context) error {
 }
 
 // handleAPISet validates the upload HERE, on the machine that will run it, which is the whole reason a set is not a row-write.
-func (s *Server) handleAPISet(c echo.Context) error {
+func (s *Server) handleAPISet(c *echo.Context) error {
 	manager := s.held()
 	if manager == nil {
 		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
@@ -141,7 +141,7 @@ func setError(err error) error {
 var ErrRefused = errors.New("the pipeline was refused")
 
 // handleAPIDestroy forgets a pipeline and everything recorded under it.
-func (s *Server) handleAPIDestroy(c echo.Context) error {
+func (s *Server) handleAPIDestroy(c *echo.Context) error {
 	manager := s.held()
 	if manager == nil {
 		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
@@ -156,7 +156,7 @@ func (s *Server) handleAPIDestroy(c echo.Context) error {
 }
 
 // handleAPIRename moves a pipeline's identity, keeping its history.
-func (s *Server) handleAPIRename(c echo.Context) error {
+func (s *Server) handleAPIRename(c *echo.Context) error {
 	manager := s.held()
 	if manager == nil {
 		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
@@ -198,13 +198,13 @@ func destroyError(err error) error {
 }
 
 // handleAPIPause throws the pipeline-level breaker.
-func (s *Server) handleAPIPause(c echo.Context) error { return s.setPaused(c, true) }
+func (s *Server) handleAPIPause(c *echo.Context) error { return s.setPaused(c, true) }
 
 // handleAPIUnpause releases it.
-func (s *Server) handleAPIUnpause(c echo.Context) error { return s.setPaused(c, false) }
+func (s *Server) handleAPIUnpause(c *echo.Context) error { return s.setPaused(c, false) }
 
 // Through the store rather than the manager: it is one column on a row this package already holds a handle to.
-func (s *Server) setPaused(c echo.Context, pause bool) error {
+func (s *Server) setPaused(c *echo.Context, pause bool) error {
 	if s.held() == nil {
 		return echo.NewHTTPError(http.StatusForbidden, "this server holds no pipelines of its own")
 	}

@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/jtarchie/steps/internal/store"
 )
 
 // handleJobs renders the board: every job, its latest run, the trigger queue.
-func (s *Server) handleJobs(c echo.Context) error {
+func (s *Server) handleJobs(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 
@@ -64,7 +64,7 @@ func pendingQueue(rows []store.QueueRow) []store.QueueRow {
 }
 
 // handleJob renders one job: its dependencies, its runs, its green versions.
-func (s *Server) handleJob(c echo.Context) error {
+func (s *Server) handleJob(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 	name := c.Param("job")
@@ -126,7 +126,7 @@ func (s *Server) handleJob(c echo.Context) error {
 // handleRunHistory renders the pipeline-wide run list, newest first — the
 // cross-job history that otherwise only exists per job, or on the
 // multi-pipeline overview a single-pipeline deployment never sees.
-func (s *Server) handleRunHistory(c echo.Context) error {
+func (s *Server) handleRunHistory(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 
 	runs, err := pipeline.Store.ListRuns(c.Request().Context(), "", historyLimit)
@@ -142,7 +142,7 @@ func (s *Server) handleRunHistory(c echo.Context) error {
 }
 
 // handleRun renders a run transcript.
-func (s *Server) handleRun(c echo.Context) error {
+func (s *Server) handleRun(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 
@@ -186,7 +186,7 @@ func (s *Server) handleRun(c echo.Context) error {
 
 // assembleRun reads a run's events and the nodes they reference, and folds
 // them into the view.
-func (s *Server) assembleRun(c echo.Context, run store.RunRow) (runView, error) {
+func (s *Server) assembleRun(c *echo.Context, run store.RunRow) (runView, error) {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 
@@ -221,7 +221,7 @@ func (s *Server) assembleRun(c echo.Context, run store.RunRow) (runView, error) 
 }
 
 // attachDiff fills in what changed since the last green run of this job.
-func (s *Server) attachDiff(c echo.Context, view *runView) error {
+func (s *Server) attachDiff(c *echo.Context, view *runView) error {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 
@@ -265,7 +265,7 @@ func (s *Server) attachDiff(c echo.Context, view *runView) error {
 // discards every one of them. buildRunView takes nil results for exactly this
 // reason: a hash comes off the event row, and only a step's rendered RESULT
 // needs the node.
-func (s *Server) priorSteps(c echo.Context, run store.RunRow) (runView, error) {
+func (s *Server) priorSteps(c *echo.Context, run store.RunRow) (runView, error) {
 	rows, err := pipelineOf(c).Store.RunEvents(c.Request().Context(), run.ID, 0, runEventLimit)
 	if err != nil {
 		return runView{}, fmt.Errorf("web: %w", err)
@@ -277,7 +277,7 @@ func (s *Server) priorSteps(c echo.Context, run store.RunRow) (runView, error) {
 // handleNode renders one merkle node: what its hash is made of, and which
 // runs have used it. It is the cache's receipt — the answer to "why was this
 // step skipped", which nothing else in the product can show.
-func (s *Server) handleNode(c echo.Context) error {
+func (s *Server) handleNode(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 	hash := c.Param("hash")
@@ -324,7 +324,7 @@ func (s *Server) handleNode(c echo.Context) error {
 }
 
 // handleApprovals lists decisions, pending first.
-func (s *Server) handleApprovals(c echo.Context) error {
+func (s *Server) handleApprovals(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 
 	approvals, err := pipeline.Store.Approvals(c.Request().Context(), false, historyLimit)
@@ -342,7 +342,7 @@ func (s *Server) handleApprovals(c echo.Context) error {
 // handleQuestions lists what agents have asked: everything still waiting
 // first, then the rest newest-first (see Store.Questions for why the order is not
 // simply recency).
-func (s *Server) handleQuestions(c echo.Context) error {
+func (s *Server) handleQuestions(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 
 	questions, err := pipeline.Store.Questions(c.Request().Context(), false, historyLimit)
@@ -359,7 +359,7 @@ func (s *Server) handleQuestions(c echo.Context) error {
 
 // handleResources shows what the watcher has seen, and the breaker state that
 // stops it acting on what it sees.
-func (s *Server) handleResources(c echo.Context) error {
+func (s *Server) handleResources(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 
@@ -385,7 +385,7 @@ func (s *Server) handleResources(c echo.Context) error {
 // handleResource shows one resource's full recorded history — every version
 // a check has reported, not just the latest, which is all handleResources
 // has room for on the collection page.
-func (s *Server) handleResource(c echo.Context) error {
+func (s *Server) handleResource(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 	name := c.Param("resource")
@@ -461,7 +461,7 @@ func checkedByName(rows []store.CheckedResource) map[string]store.CheckedResourc
 // handleTrigger queues a job. force re-runs everything, ignoring the merkle
 // cache — without it a re-run of an unchanged pipeline correctly does almost
 // nothing, which is never what someone pressing "re-run" meant.
-func (s *Server) handleTrigger(c echo.Context) error {
+func (s *Server) handleTrigger(c *echo.Context) error {
 	if s.runner == nil {
 		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
 	}
@@ -514,7 +514,7 @@ func (s *Server) handleTrigger(c echo.Context) error {
 // existing. A queued job has no run id until a worker claims it, so the page
 // reports what the queue is doing and forwards itself the moment the run
 // appears.
-func (s *Server) handleFollow(c echo.Context) error {
+func (s *Server) handleFollow(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 	name := c.Param("job")
 
@@ -540,7 +540,7 @@ func (s *Server) handleFollow(c echo.Context) error {
 
 // handleLatestRun answers the follow page: has a run of this job started
 // since the given millisecond stamp, and what is the queue doing meanwhile.
-func (s *Server) handleLatestRun(c echo.Context) error {
+func (s *Server) handleLatestRun(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 	name := c.Param("job")
@@ -603,7 +603,7 @@ func (s *Server) handleLatestRun(c echo.Context) error {
 
 // handleDecideApproval records a human decision, through the same row the
 // CLI's approve/reject write.
-func (s *Server) handleDecideApproval(c echo.Context) error {
+func (s *Server) handleDecideApproval(c *echo.Context) error {
 	if s.runner == nil {
 		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
 	}
@@ -636,7 +636,7 @@ func (s *Server) handleDecideApproval(c echo.Context) error {
 // handleAnswerQuestion records an answer, through the same row `steps questions answer`
 // writes — including its options fence, which lives in the store precisely so
 // that this handler cannot be the place it is forgotten.
-func (s *Server) handleAnswerQuestion(c echo.Context) error {
+func (s *Server) handleAnswerQuestion(c *echo.Context) error {
 	if s.runner == nil {
 		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
 	}
@@ -683,7 +683,7 @@ func (s *Server) handleAnswerQuestion(c echo.Context) error {
 }
 
 // handleResumeBreaker puts a paused job back in the watch rotation.
-func (s *Server) handleResumeBreaker(c echo.Context) error {
+func (s *Server) handleResumeBreaker(c *echo.Context) error {
 	if s.runner == nil {
 		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
 	}
@@ -734,7 +734,7 @@ const (
 // filtered by substring, across every pipeline this process serves. JSON
 // rather than a page — it is the one place the UI is a control instead of a
 // document.
-func (s *Server) handleSearch(c echo.Context) error {
+func (s *Server) handleSearch(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 	query := strings.ToLower(c.QueryParam("q"))
 
@@ -870,7 +870,7 @@ func (s *Server) addRunHits(ctx context.Context, add func(searchHit), pipeline *
 }
 
 // handleHook is a delivery to a webhook resource. It has no runner guard: it authenticates with the sender's signature, not with this server's absent authentication, so --read-only does not withhold it.
-func (s *Server) handleHook(c echo.Context) error {
+func (s *Server) handleHook(c *echo.Context) error {
 	target := pipelineOf(c)
 	if target.Hooks == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "no webhook resources in this pipeline")

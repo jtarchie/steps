@@ -457,6 +457,29 @@ func TestSafeMethodsSkipTheOriginCheck(t *testing.T) {
 	}
 }
 
+// TestAWebhookDeliveryIsExemptFromTheOriginCheck: a sender is cross-origin by definition and authenticates with its own signature, and the exemption is spelled as the ROUTE pattern — so it holds only while echo reports the pattern rather than the URL that arrived.
+func TestAWebhookDeliveryIsExemptFromTheOriginCheck(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := mutableServer(t)
+
+	delivered := ""
+	pipeline.Hooks = func(w http.ResponseWriter, _ *http.Request, resource string) {
+		delivered = resource
+
+		w.WriteHeader(http.StatusAccepted)
+	}
+
+	code := postWithOrigin(t, server, "/p/demo/hooks/repo", "https://github.example")
+	if code != http.StatusAccepted {
+		t.Errorf("a signed delivery from another origin answered %d, want 202", code)
+	}
+
+	if delivered != "repo" {
+		t.Errorf("the handler was given resource %q, want \"repo\"", delivered)
+	}
+}
+
 // mutableServer is testPipeline's server with a runner attached, so a refusal
 // can only have come from the origin check rather than from --read-only.
 func mutableServer(t *testing.T) (*Server, *Pipeline) {
@@ -496,7 +519,8 @@ func TestUnknownPipelineAndRun404(t *testing.T) {
 
 	server, _ := testPipeline(t)
 
-	for _, target := range []string{"/p/nope", "/p/demo/runs/nosuch", "/p/demo/jobs/nosuch", "/p/demo/resources/nosuch"} {
+	// "/nosuch" is the one whose 404 is echo's own rather than this package's, and echo's carries a status without being the error type every refusal here is built from.
+	for _, target := range []string{"/nosuch", "/p/nope", "/p/demo/runs/nosuch", "/p/demo/jobs/nosuch", "/p/demo/resources/nosuch"} {
 		code, body := get(t, server, target)
 		if code != http.StatusNotFound {
 			t.Errorf("GET %s = %d, want 404", target, code)

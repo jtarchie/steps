@@ -15,11 +15,11 @@ import (
 	"net/http"
 	"slices"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // handleConfig renders one recorded configuration.
-func (s *Server) handleConfig(c echo.Context) error {
+func (s *Server) handleConfig(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 	sha := c.Param("sha")
 

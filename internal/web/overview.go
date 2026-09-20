@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
@@ -56,7 +56,7 @@ type overviewPipeline struct {
 // the overview, because with several there is no defensible pipeline to pick.
 // None renders the empty page: a daemon holds nothing until somebody sets a
 // pipeline into it, and the page that says how is the whole of its UI.
-func (s *Server) handleIndex(c echo.Context) error {
+func (s *Server) handleIndex(c *echo.Context) error {
 	served := s.Served()
 
 	if len(served) == 0 {

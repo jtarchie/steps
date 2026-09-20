@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/alecthomas/chroma/v2"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/yuin/goldmark"
 	highlighting "github.com/yuin/goldmark-highlighting/v2"
 	"github.com/yuin/goldmark/ast"
@@ -92,7 +92,7 @@ func (g *githubIDs) Generate(value []byte, _ ast.NodeKind) []byte {
 func (g *githubIDs) Put(value []byte) { g.seen[string(value)] = 1 }
 
 // handleDocsIndex lands /docs on the index page.
-func (s *Server) handleDocsIndex(c echo.Context) error {
+func (s *Server) handleDocsIndex(c *echo.Context) error {
 	//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
 	return c.Redirect(http.StatusFound, "/docs/README.md")
 }
@@ -106,7 +106,7 @@ type tocEntry struct {
 // handleDocs renders one embedded doc page. The route keeps the .md suffix
 // so the pages' own relative links (`[resources.md](resources.md)`) resolve
 // with no rewriting.
-func (s *Server) handleDocs(c echo.Context) error {
+func (s *Server) handleDocs(c *echo.Context) error {
 	name := c.Param("page")
 
 	body, err := docs.Page(name)

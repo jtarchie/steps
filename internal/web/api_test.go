@@ -294,3 +294,32 @@ func TestTheAPIRefusesAPageButNotATypedURL(t *testing.T) {
 		}
 	}
 }
+
+// TestAnOversizedSetIsRefusedAsOversized: the body limit answers with a status sentinel that carries a code and nothing else — not the *HTTPError every hand-written refusal here is — so the error handler has to resolve it or a `steps pipeline set` is told the daemon broke rather than that its upload is too big.
+func TestAnOversizedSetIsRefusedAsOversized(t *testing.T) {
+	t.Parallel()
+
+	server, manager := managedServer(t)
+
+	oversized := `{"source":"` + strings.Repeat("j", int(maxUploadSize)) + `"}`
+
+	code, body := call(t, server, http.MethodPut, "/api/pipelines/big", oversized)
+	if code != http.StatusRequestEntityTooLarge {
+		t.Errorf("a set of %d bytes answered %d, want 413: %s", len(oversized), code, body)
+	}
+
+	var decoded map[string]string
+
+	err := json.Unmarshal([]byte(body), &decoded)
+	if err != nil {
+		t.Fatalf("the refusal is not the JSON a terminal reads: %v: %s", err, body)
+	}
+
+	if decoded["message"] == "" {
+		t.Errorf("the refusal says nothing about why: %s", body)
+	}
+
+	if len(manager.set) != 0 {
+		t.Errorf("the manager was asked to set %v", manager.set)
+	}
+}

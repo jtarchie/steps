@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -74,7 +74,7 @@ func newRenderer() (*renderer, error) {
 }
 
 // Render executes the named page inside the layout.
-func (r *renderer) Render(w io.Writer, name string, data any, _ echo.Context) error {
+func (r *renderer) Render(_ *echo.Context, w io.Writer, name string, data any) error {
 	tmpl, ok := r.pages[name]
 	if !ok {
 		return fmt.Errorf("web: no template named %q", name)
@@ -131,7 +131,7 @@ func sectionOf(page string) string {
 }
 
 // handleCSS serves the stylesheet from the embedded assets.
-func (s *Server) handleCSS(c echo.Context) error {
+func (s *Server) handleCSS(c *echo.Context) error {
 	return serveAsset(c, "static/app.css", "text/css; charset=utf-8")
 }
 
@@ -144,13 +144,13 @@ func (s *Server) handleCSS(c echo.Context) error {
 // the differences are silent: the events renamed to `htmx:after:swap`,
 // `hx-sync` defaults to `queue first`, and the trigger grammar became HCON —
 // which is what turned `every 2.5s` into a 2-millisecond poll.
-func (s *Server) handleHTMX(c echo.Context) error {
+func (s *Server) handleHTMX(c *echo.Context) error {
 	return serveAsset(c, "static/htmx.min.js", "text/javascript; charset=utf-8")
 }
 
 // handleHTMXSSE serves htmx's server-sent-events extension, which the run
 // page uses to receive the step fragments the stream renders.
-func (s *Server) handleHTMXSSE(c echo.Context) error {
+func (s *Server) handleHTMXSSE(c *echo.Context) error {
 	return serveAsset(c, "static/hx-sse.min.js", "text/javascript; charset=utf-8")
 }
 
@@ -159,7 +159,7 @@ func (s *Server) handleHTMXSSE(c echo.Context) error {
 // stylesheet and library again on every navigation. The tag is the content's
 // own hash, which is what lets `no-cache` be safe: a vendored bump changes
 // the tag, and the next request after it gets the new bytes.
-func serveAsset(c echo.Context, path, contentType string) error {
+func serveAsset(c *echo.Context, path, contentType string) error {
 	data, err := assets.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)

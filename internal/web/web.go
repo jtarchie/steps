@@ -26,8 +26,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
+	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
@@ -59,7 +59,10 @@ var runEventLimit = 5000
 const readHeaderTimeout = 5 * time.Second
 
 // maxUploadSize bounds a `steps pipeline set`. It is the only unauthenticated write this server takes, and what it holds is buffered whole and then written into TEXT columns retention cannot reap while they are the current revision — every other free-text column here already declares a cap.
-const maxUploadSize = "8M"
+const maxUploadSize int64 = 8 << 20
+
+// shutdownGrace is how long a cancelled daemon waits for the requests it is already answering.
+const shutdownGrace = 5 * time.Second
 
 // Pipeline is one loaded pipeline the server serves, with its own config and
 // its own store handle. Two served pipelines may now share a state FILE (see
@@ -297,8 +300,6 @@ func (s *Server) Served() []*Pipeline {
 // routes wires the handler table and the middleware every route shares.
 func (s *Server) routes() error {
 	e := echo.New()
-	e.HideBanner = true
-	e.HidePort = true
 
 	renderer, err := newRenderer()
 	if err != nil {
@@ -308,13 +309,6 @@ func (s *Server) routes() error {
 	s.renderer = renderer
 	e.Renderer = renderer
 	e.HTTPErrorHandler = s.handleError
-
-	// echo builds a bare http.Server, which has no read timeouts at all. The
-	// webhook listener this address absorbed set one explicitly, for a reason
-	// that survived the merge: a sender that stalls mid-request must not hold
-	// a connection open indefinitely, and this is the address a tunnel
-	// forwards deliveries to.
-	e.Server.ReadHeaderTimeout = readHeaderTimeout
 
 	e.Use(middleware.Recover())
 
@@ -378,35 +372,35 @@ func (s *Server) Handler() http.Handler { return s.echo }
 
 // Start serves until ctx is canceled, then shuts down gracefully.
 func (s *Server) Start(ctx context.Context, addr string) error {
-	errs := make(chan error, 1)
+	//nolint:wrapcheck // start and shutdown errors are reported verbatim by the caller
+	return startConfig(addr).Start(ctx, s.echo)
+}
 
-	go func() {
-		err := s.echo.Start(addr)
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errs <- err
+// startConfig is the server this daemon runs, separate from Start so a test can read the timeouts back off it.
+//
+// echo builds the http.Server itself and no longer exposes it as a field, so BeforeServeFunc is the only reach into it.
+func startConfig(addr string) echo.StartConfig {
+	return echo.StartConfig{
+		Address:         addr,
+		HideBanner:      true,
+		HidePort:        true,
+		GracefulTimeout: shutdownGrace,
+		BeforeServeFunc: func(server *http.Server) error {
+			// A sender that stalls mid-request must not hold a connection open indefinitely, and this is the address a tunnel forwards webhook deliveries to.
+			server.ReadHeaderTimeout = readHeaderTimeout
 
-			return
-		}
+			// Explicitly NOT echo's own 30s default, which bounds the whole request: net/http starts a background read on a bodyless GET whose handler is still running, and that read hitting the deadline cancels the REQUEST CONTEXT (connReader.handleReadErrorLocked) — every live stream would drop and reconnect every 30 seconds, with the reader's fold lost each time.
+			server.ReadTimeout = 0
 
-		errs <- nil
-	}()
-
-	select {
-	case err := <-errs:
-		return err
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-
-		//nolint:wrapcheck // shutdown error is reported verbatim by the caller
-		return s.echo.Shutdown(shutdownCtx)
+			return nil
+		},
 	}
 }
 
 // resolvePipeline is the middleware that turns :pipeline into the loaded
 // pipeline every handler under /p/ works from.
 func (s *Server) resolvePipeline(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		pipeline := s.Lookup(c.Param("pipeline"))
 		if pipeline == nil {
 			return echo.NewHTTPError(http.StatusNotFound, "no such pipeline")
@@ -419,7 +413,7 @@ func (s *Server) resolvePipeline(next echo.HandlerFunc) echo.HandlerFunc {
 }
 
 // pipelineOf returns the pipeline resolved for this request.
-func pipelineOf(c echo.Context) *Pipeline {
+func pipelineOf(c *echo.Context) *Pipeline {
 	pipeline, _ := c.Get("pipeline").(*Pipeline)
 
 	return pipeline
@@ -430,7 +424,7 @@ func pipelineOf(c echo.Context) *Pipeline {
 // Origin header at all passes too — that is a curl or a CLI, not a browser
 // being aimed at this port by another page.
 func sameOriginMutations(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		method := c.Request().Method
 		if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
 			return next(c)
@@ -459,7 +453,7 @@ func sameOriginMutations(next echo.HandlerFunc) echo.HandlerFunc {
 
 // No page here calls /api, and to the origin check a DNS-rebinding page is same-origin (its own name arrives as both Host and Origin) while a set is a remote shell; not a Host check, because a reverse proxy forwards the client's.
 func refuseBrowsers(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		header := c.Request().Header
 		site := header.Get("Sec-Fetch-Site")
 
@@ -475,8 +469,8 @@ func refuseBrowsers(next echo.HandlerFunc) echo.HandlerFunc {
 
 // handleError renders a failure as a page rather than echo's JSON default —
 // this server only ever talks to a browser.
-func (s *Server) handleError(err error, c echo.Context) {
-	if c.Response().Committed {
+func (s *Server) handleError(c *echo.Context, err error) {
+	if response, _ := echo.UnwrapResponse(c.Response()); response != nil && response.Committed {
 		return
 	}
 
@@ -486,7 +480,10 @@ func (s *Server) handleError(err error, c echo.Context) {
 	var httpErr *echo.HTTPError
 	if errors.As(err, &httpErr) {
 		status = httpErr.Code
-		message = fmt.Sprintf("%v", httpErr.Message)
+		message = httpErr.Message
+	} else if code := echo.StatusCode(err); code != 0 {
+		// echo's own status sentinels carry a code and nothing else — an oversized `steps pipeline set` returns ErrStatusRequestEntityTooLarge, which errors.As does not see, and a 413 reported as 500 tells the terminal the daemon broke rather than that its upload was too big.
+		status = code
 	}
 
 	// The API answers a terminal, not a browser, and a page of HTML where a
@@ -521,7 +518,7 @@ func (s *Server) handleError(err error, c echo.Context) {
 //
 // Anchoring them to the first pipeline keeps the way back into the app alive.
 // It is a display fallback only: nothing on either page is scoped by it.
-func (s *Server) globalNav(c echo.Context) navData {
+func (s *Server) globalNav(c *echo.Context) navData {
 	nav := s.nav(c)
 
 	if nav.Current == "" && len(nav.Pipelines) > 0 {
@@ -532,7 +529,7 @@ func (s *Server) globalNav(c echo.Context) navData {
 	return nav
 }
 
-func (s *Server) nav(c echo.Context) navData {
+func (s *Server) nav(c *echo.Context) navData {
 	nav := navData{ReadOnly: s.runner == nil, URL: c.Request().URL.RequestURI()}
 
 	for _, pipeline := range s.Served() {

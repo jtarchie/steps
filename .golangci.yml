@@ -683,7 +683,7 @@ linters:
             # goleak is test-only: goleak_test.go's TestMain fails this
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
-            - "github.com/labstack/echo/v4"
+            - "github.com/labstack/echo/v5"
             # goldmark (+ its chroma highlighting extension) renders the
             # embedded docs package at /docs, server-side — the terminal twin
             # (steps docs, via glamour) lives in main. docs itself stays a
