@@ -91,7 +91,7 @@ Skip it if `podman-mac-helper` or the `podman-docker` package already put a sock
 
 - **Short image names resolve to Docker Hub**, as under docker: `image: alpine:3` works. (The `podman` command line may prompt for a registry; its docker-compatible API does not.)
 - **`podman machine` shares macOS's `$TMPDIR`**, so the [`TMPDIR` workaround above](#tmpdir-when-the-daemon-runs-in-a-vm) is not needed there.
-- **Private registries: log in where steps looks.** steps reads credentials from docker's `~/.docker/config.json`; `podman login` writes them somewhere else. Use `podman login --authfile ~/.docker/config.json <registry>`.
+- **Private registries: log in where steps looks.** steps reads credentials from docker's `~/.docker/config.json`; `podman login` writes them somewhere else. Use `podman login --compat-auth-file ~/.docker/config.json <registry>` — and not `--authfile`, which rewrites that file in podman's own format and drops everything else in it, the selected `docker context` and any `credsStore` included. If the file names a `credsStore` (Docker Desktop sets one), steps asks that helper and nothing else, as docker does, so a login written beside it is never read: log in through the helper (`docker login`) instead.
 
 Not verified, and expected to need care:
 
