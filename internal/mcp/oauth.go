@@ -109,7 +109,7 @@ func (t *TokenFile) token() *oauth2.Token {
 // os.UserConfigDir()), never inside a pipeline's own .steps/ directory. An
 // OAuth token is a per-user-per-service credential, not a per-pipeline
 // execution artifact — this is deliberate: it lets `steps mcp login
-// <pipeline> <server>` authorize a server once for every pipeline that
+// <server>` authorize a server once for every pipeline that
 // references it by the same name, and it keeps a pipeline-relative token
 // path from having to be threaded through RunJob/RunStep/CheckVersions/RunIn
 // and merkle's plan-time version resolution, none of which have (or should
@@ -221,11 +221,11 @@ func oauthTokenSource(ctx context.Context, srv config.MCPServer) (oauth2.TokenSo
 
 	tf, err := LoadTokenFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("mcp server %q is not authorized (%w <pipeline> %s): %w", srv.Name, ErrNeedsLogin, srv.Name, err)
+		return nil, fmt.Errorf("mcp server %q is not authorized (%w %s, with -c <pipeline.yml> on this machine or -p <pipeline> --target <url> for a daemon): %w", srv.Name, ErrNeedsLogin, srv.Name, err)
 	}
 
 	if tf.Endpoint != srv.Endpoint {
-		return nil, fmt.Errorf("mcp server %q: authorized for a different endpoint (%w <pipeline> %s again)", srv.Name, ErrNeedsLogin, srv.Name)
+		return nil, fmt.Errorf("mcp server %q: authorized for a different endpoint (%w %s again)", srv.Name, ErrNeedsLogin, srv.Name)
 	}
 
 	// Caught here rather than left to x/oauth2, which answers this exact

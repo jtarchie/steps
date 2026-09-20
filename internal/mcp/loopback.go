@@ -162,6 +162,9 @@ func (cb *loopbackCallback) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Single use. A loopback listener closes moments after this, but a hosted callback stays routable for as long as its login's status is kept, and a settled state that still matched was answered "complete" on every replay.
+	cb.expect("")
+
 	_, _ = fmt.Fprintln(w, "Authorization complete. You can close this window and return to steps.")
 }
 
@@ -190,7 +193,10 @@ func (cb *loopbackCallback) drain() {
 }
 
 func (cb *loopbackCallback) Close() {
-	_ = cb.server.Close()
+	// A hosted callback (see hosted.go) has no listener of its own: the redirect lands on a server somebody else runs.
+	if cb.server != nil {
+		_ = cb.server.Close()
+	}
 }
 
 // fetch returns an auth.AuthorizationCodeFetcher that opens url via open
@@ -200,7 +206,9 @@ func (cb *loopbackCallback) Close() {
 // no-op looks identical to success from here, and the flow then just hangs
 // with nothing on screen to act on. Printing it unconditionally costs one
 // line and makes every one of those recoverable by hand.
-func (cb *loopbackCallback) fetch(open func(string) error, req authRequest) auth.AuthorizationCodeFetcher {
+//
+// The announcement is the caller's, because it is the only half of this file that differs between a login on this machine and one a daemon runs on somebody's behalf: here the URL goes to a terminal and a browser (printAndOpen), there it goes back over HTTP to the CLI that asked.
+func (cb *loopbackCallback) fetch(announce func(authURL string), req authRequest) auth.AuthorizationCodeFetcher {
 	return func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
 		authURL := withScopes(args.URL, req.scopes)
 
@@ -212,19 +220,7 @@ func (cb *loopbackCallback) fetch(open func(string) error, req authRequest) auth
 		cb.expect(stateFromAuthURL(authURL))
 		cb.drain()
 
-		fmt.Printf("\nAuthorize in your browser:\n\n  %s\n\n", authURL)
-
-		// Opened on its own goroutine: cmd.Run waits for the opener to exit,
-		// and xdg-open with no registered handler (or a broken DISPLAY over
-		// SSH) can block indefinitely — which would make ctx.Done below
-		// unreachable and Ctrl-C useless. The URL is printed unconditionally
-		// above, so nothing is lost by not waiting.
-		go func() {
-			err := open(authURL)
-			if err != nil {
-				fmt.Printf("(could not open a browser automatically: %v — open the URL above)\n", err)
-			}
-		}()
+		announce(authURL)
 
 		select {
 		case res := <-cb.result:
@@ -243,3 +239,25 @@ func (cb *loopbackCallback) fetch(open func(string) error, req authRequest) auth
 		}
 	}
 }
+
+// printAndOpen is how a login on THIS machine announces its URL: printed always, opened if it can be. Exported through PrintAndOpen so the CLI's remote login tells a person exactly what the local one does.
+func printAndOpen(open func(string) error) func(authURL string) {
+	return func(authURL string) {
+		fmt.Printf("\nAuthorize in your browser:\n\n  %s\n\n", authURL)
+
+		// Opened on its own goroutine: cmd.Run waits for the opener to exit,
+		// and xdg-open with no registered handler (or a broken DISPLAY over
+		// SSH) can block indefinitely — which would make the caller's
+		// ctx.Done unreachable and Ctrl-C useless. The URL is printed
+		// unconditionally above, so nothing is lost by not waiting.
+		go func() {
+			err := open(authURL)
+			if err != nil {
+				fmt.Printf("(could not open a browser automatically: %v — open the URL above)\n", err)
+			}
+		}()
+	}
+}
+
+// PrintAndOpen announces an authorization URL the way `steps mcp login` always has.
+func PrintAndOpen(open func(string) error, authURL string) { printAndOpen(open)(authURL) }

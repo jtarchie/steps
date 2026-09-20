@@ -21,7 +21,7 @@ import (
 // Login runs the interactive OAuth authorization-code + PKCE flow for an
 // auth: {type: oauth} server and persists the resulting token to its
 // per-user token path (see TokenPath) — the implementation behind `steps
-// mcp login <pipeline> <server>`. open is the browser-launch function
+// mcp login <server>`. open is the browser-launch function
 // (injected so this is testable without a real browser and so this package
 // stays free of an os/exec dependency — see main.go's openBrowser for the
 // production implementation), falling back to printing the URL to stdout
@@ -44,16 +44,23 @@ func Login(ctx context.Context, srv config.MCPServer, open func(url string) erro
 	}
 	defer cb.Close()
 
+	return login(ctx, srv, cb, printAndOpen(open))
+}
+
+// login is the flow both front doors share: everything after "where does the redirect land, and who is told the URL".
+func login(ctx context.Context, srv config.MCPServer, cb *loopbackCallback, announce func(authURL string)) error {
 	asm, reg, err := discoverAndRegister(ctx, srv, cb.redirectURL)
 	if err != nil {
 		return err
 	}
 
-	handler, err := buildAuthorizationHandler(cb, open, reg, authRequest{
+	req := authRequest{
 		scopes:        srv.Auth.Scopes,
 		issuer:        asm.Issuer,
 		issAdvertised: asm.AuthorizationResponseIssParameterSupported,
-	})
+	}
+
+	handler, err := buildAuthorizationHandler(cb.redirectURL, cb.fetch(announce, req), reg, req)
 	if err != nil {
 		return fmt.Errorf("mcp server %q: build authorization handler: %w", srv.Name, err)
 	}
@@ -193,7 +200,7 @@ func preregisteredClient(srv config.MCPServer) (*oauthex.ClientRegistrationRespo
 // performs its own (redundant) dynamic client registration. req carries what
 // this package decides rather than the SDK: the scopes to request, and how
 // to treat the iss that comes back (see fetch).
-func buildAuthorizationHandler(cb *loopbackCallback, open func(string) error, reg *oauthex.ClientRegistrationResponse, req authRequest) (*auth.AuthorizationCodeHandler, error) {
+func buildAuthorizationHandler(redirectURL string, fetcher auth.AuthorizationCodeFetcher, reg *oauthex.ClientRegistrationResponse, req authRequest) (*auth.AuthorizationCodeHandler, error) {
 	preregistered := &oauthex.ClientCredentials{
 		ClientID: reg.ClientID,
 		// Issuer is what binds these credentials to the authorization server
@@ -223,13 +230,13 @@ func buildAuthorizationHandler(cb *loopbackCallback, open func(string) error, re
 
 	handler, err := auth.NewAuthorizationCodeHandler(&auth.AuthorizationCodeHandlerConfig{
 		PreregisteredClient: preregistered,
-		RedirectURL:         cb.redirectURL,
+		RedirectURL:         redirectURL,
 		// SEP-2207: adds offline_access to the requested scopes on an
 		// authorization server that advertises it. The paired half — the
 		// refresh_token grant type — is declared at registration above,
 		// which the SDK's own doc points out it will not do for you.
 		RequestRefreshToken:      true,
-		AuthorizationCodeFetcher: cb.fetch(open, req),
+		AuthorizationCodeFetcher: fetcher,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("new authorization code handler: %w", err)
