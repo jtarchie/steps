@@ -21,13 +21,7 @@ import (
 // locally-BUILT image working — one that exists in no registry is found here,
 // so nothing is pulled and nothing 404s.
 //
-// Two answers mean absent, and the second is easy to miss: an image name the
-// daemon cannot even PARSE ("--privileged", "NOT A REF") is an invalid
-// argument rather than a missing image. Reading that as present pushes the
-// failure into whichever step first needs it, reported as a container that
-// would not start; reading it as absent sends it to the pull, which names the
-// value and fails startup. The docker CLI behaves the same way, because
-// `docker image inspect` exits nonzero for both.
+// Two answers mean absent, and the second is easy to miss: an image name that is not a reference at all ("--privileged", "NOT A REF") is decided HERE, with the daemon's own invalid-argument answer kept only as a backstop for a grammar stricter than this one. Reading that as present pushes the failure into whichever step first needs it, reported as a container that would not start; reading it as absent sends it to the pull, which names the value and fails startup. The docker CLI behaves the same way, because `docker image inspect` exits nonzero for both.
 //
 // Anything else — a daemon that is unreachable or unwell — is reported as
 // present, deliberately. That is a problem the pull would hit too, and the

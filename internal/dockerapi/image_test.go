@@ -254,27 +254,9 @@ func TestReportPullProgressKeepsTransitionsAndDropsBytes(t *testing.T) {
 	}
 }
 
-// TestImagePresentIsFalseForAnUnparseableName pins the answer for a name that
-// is not a reference at all.
-//
-// It is not the same failure as "the daemon does not have it" — the daemon
-// reports an invalid argument, not a missing image — and the difference used
-// to be invisible because the docker CLI failed both the same way. Reported as
-// present, a name like this would be pushed into the first step that needed
-// it and surface there as a container that would not start.
-func TestImagePresentIsFalseForAnUnparseableName(t *testing.T) {
-	client := requireDaemon(t)
-
-	for _, name := range []string{"--privileged", "NOT A REF", "-v"} {
-		if client.ImagePresent(context.Background(), name) {
-			t.Errorf("ImagePresent(%q) said yes for a name that is not a reference", name)
-		}
-	}
-}
-
-// TestImagePresentDoesNotTrustTheDaemonToRejectAName is the same promise held against a daemon that answers an unparseable name with a server error: podman's compat API says 500 where dockerd says 400, and 500 is otherwise read as "unwell, let the pull say so" — which is present.
-func TestImagePresentDoesNotTrustTheDaemonToRejectAName(t *testing.T) {
-	t.Parallel()
+// fakeDaemon answers every request with status and counts the ones that ask about an image, because the two promises below are about what the CLIENT decides and no real daemon can be made to answer a name both ways.
+func fakeDaemon(t *testing.T, status int) (*Client, *atomic.Int32) {
+	t.Helper()
 
 	var inspects atomic.Int32
 
@@ -283,7 +265,7 @@ func TestImagePresentDoesNotTrustTheDaemonToRejectAName(t *testing.T) {
 			inspects.Add(1)
 		}
 
-		http.Error(w, `{"message":"normalizing image: invalid reference format"}`, http.StatusInternalServerError)
+		http.Error(w, `{"message":"normalizing image: invalid reference format"}`, status)
 	}))
 	t.Cleanup(daemon.Close)
 
@@ -293,6 +275,15 @@ func TestImagePresentDoesNotTrustTheDaemonToRejectAName(t *testing.T) {
 	}
 
 	t.Cleanup(func() { _ = client.Close() })
+
+	return client, &inspects
+}
+
+// TestImagePresentDoesNotTrustTheDaemonToRejectAName pins the answer for a name that is not a reference at all, against a daemon that answers it with a server error: podman's compat API says 500 where dockerd says 400, and 500 is otherwise read as "unwell" — which is present, and present pushes the name into the first step that needs it, to surface there as a container that would not start.
+func TestImagePresentDoesNotTrustTheDaemonToRejectAName(t *testing.T) {
+	t.Parallel()
+
+	client, inspects := fakeDaemon(t, http.StatusInternalServerError)
 
 	for _, name := range []string{"--privileged", "NOT A REF", "-v"} {
 		if client.ImagePresent(context.Background(), name) {
@@ -305,6 +296,25 @@ func TestImagePresentDoesNotTrustTheDaemonToRejectAName(t *testing.T) {
 	}
 
 	if !client.ImagePresent(context.Background(), testImage) {
-		t.Errorf("ImagePresent(%q) said no to an unwell daemon; a real reference must still reach it and leave the pull to report", testImage)
+		t.Errorf("ImagePresent(%q) said no to an unwell daemon; a real reference is still the daemon's to answer", testImage)
+	}
+
+	if got := inspects.Load(); got != 1 {
+		t.Errorf("the daemon was asked %d times about %q, want 1: a yes that never reached it is not an answer", got, testImage)
+	}
+}
+
+// TestImagePresentBelievesADaemonThatRejectsAName is the backstop behind the client-side parse: a daemon whose grammar is stricter than this client's says 400 to a name the parse let through, and that is still absent rather than unwell.
+func TestImagePresentBelievesADaemonThatRejectsAName(t *testing.T) {
+	t.Parallel()
+
+	client, inspects := fakeDaemon(t, http.StatusBadRequest)
+
+	if client.ImagePresent(context.Background(), testImage) {
+		t.Errorf("ImagePresent(%q) said yes to a daemon calling the name an invalid argument", testImage)
+	}
+
+	if got := inspects.Load(); got != 1 {
+		t.Errorf("the daemon was asked %d times, want 1", got)
 	}
 }
