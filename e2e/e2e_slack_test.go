@@ -784,11 +784,7 @@ jobs:
 	}
 }
 
-// TestEndToEndBuiltinSlackReaction is the type's happy path and its whole
-// point: one put marks the message, a later one swaps that mark for another.
-// The swap is a single put because a state change is one event — ✅ arriving
-// while 👀 lingers reads as two bots — so this asserts both calls went out,
-// in order, against the ts of the message rather than a thread.
+// TestEndToEndBuiltinSlackReaction is the type's happy path and its whole point: one put marks the message, a later one swaps that mark for another. The swap is a single put because a state change is one event — ✅ arriving while 👀 lingers reads as two bots — so this asserts both of its calls went out after the first put's, against the ts of the message rather than a thread.
 func TestEndToEndBuiltinSlackReaction(t *testing.T) {
 	server, workspace := fakeSlack(t)
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
