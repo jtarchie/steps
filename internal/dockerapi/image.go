@@ -10,6 +10,7 @@ import (
 	"io"
 
 	"github.com/containerd/errdefs"
+	"github.com/distribution/reference"
 	"github.com/moby/moby/client"
 )
 
@@ -32,7 +33,13 @@ import (
 // present, deliberately. That is a problem the pull would hit too, and the
 // pull says so far better than a message synthesised here would.
 func (c *Client) ImagePresent(ctx context.Context, image string) bool {
-	_, err := c.api.ImageInspect(ctx, image)
+	// Parsed here rather than left to the daemon's status code: dockerd calls an unparseable name a 400, podman's compat API calls it a 500, and a 500 is indistinguishable from the unwell daemon the rule below reads as present.
+	_, err := reference.ParseAnyReference(image)
+	if err != nil {
+		return false
+	}
+
+	_, err = c.api.ImageInspect(ctx, image)
 	if err == nil {
 		return true
 	}

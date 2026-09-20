@@ -16,6 +16,7 @@ require (
 	github.com/aws/smithy-go v1.28.1
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/containerd/errdefs v1.0.0
+	github.com/distribution/reference v0.6.0
 	github.com/expr-lang/expr v1.17.8
 	github.com/frioux/leatherman v0.0.0-20260914131314-c31d4054ba55
 	github.com/go-task/slim-sprig/v3 v3.0.0
@@ -76,7 +77,6 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
-	github.com/distribution/reference v0.6.0 // indirect
 	github.com/dlclark/regexp2 v1.12.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.8.0 // indirect
 	github.com/docker/go-connections v0.8.1 // indirect

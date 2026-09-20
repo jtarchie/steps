@@ -230,6 +230,7 @@ linters:
             - "github.com/moby/moby/api"
             - "github.com/moby/moby/client"
             - "github.com/containerd/errdefs"
+            - "github.com/distribution/reference"
             - "go.uber.org/goleak"
         # Leaves: no internal deps, stdlib only apart from the engine client
         # that container execution is now built on.

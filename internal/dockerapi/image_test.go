@@ -4,7 +4,10 @@ package dockerapi
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -266,5 +269,42 @@ func TestImagePresentIsFalseForAnUnparseableName(t *testing.T) {
 		if client.ImagePresent(context.Background(), name) {
 			t.Errorf("ImagePresent(%q) said yes for a name that is not a reference", name)
 		}
+	}
+}
+
+// TestImagePresentDoesNotTrustTheDaemonToRejectAName is the same promise held against a daemon that answers an unparseable name with a server error: podman's compat API says 500 where dockerd says 400, and 500 is otherwise read as "unwell, let the pull say so" — which is present.
+func TestImagePresentDoesNotTrustTheDaemonToRejectAName(t *testing.T) {
+	t.Parallel()
+
+	var inspects atomic.Int32
+
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/images/") {
+			inspects.Add(1)
+		}
+
+		http.Error(w, `{"message":"normalizing image: invalid reference format"}`, http.StatusInternalServerError)
+	}))
+	t.Cleanup(daemon.Close)
+
+	client, err := New("tcp://" + daemon.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	t.Cleanup(func() { _ = client.Close() })
+
+	for _, name := range []string{"--privileged", "NOT A REF", "-v"} {
+		if client.ImagePresent(context.Background(), name) {
+			t.Errorf("ImagePresent(%q) said yes on the strength of a daemon's 500", name)
+		}
+	}
+
+	if got := inspects.Load(); got != 0 {
+		t.Errorf("the daemon was asked %d times about names that are not references", got)
+	}
+
+	if !client.ImagePresent(context.Background(), testImage) {
+		t.Errorf("ImagePresent(%q) said no to an unwell daemon; a real reference must still reach it and leave the pull to report", testImage)
 	}
 }
