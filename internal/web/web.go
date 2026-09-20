@@ -9,10 +9,11 @@
 // `steps web` and `steps approvals approve` use. Nothing here is a parallel
 // execution path.
 //
-// The server is single-user and binds loopback by default: there is no
-// authentication, because the thing it authenticates against does not exist —
-// this is the local runner's own UI, in the same trust domain as the terminal
-// that started it.
+// The server is single-user and binds loopback by default, where it asks for
+// nothing: the thing it would authenticate against does not exist — this is
+// the local runner's own UI, in the same trust domain as the terminal that
+// started it. A deployment that is NOT that turns on HTTP Basic (see auth.go),
+// which is the whole of the authentication here.
 package web
 
 import (
@@ -149,6 +150,8 @@ type Server struct {
 	renderer *renderer
 	// nil in a read-only server and in a test that only reads pages, where the API refuses rather than pretending to be unimplemented.
 	manager Manager
+	// nil is open access, which is what the loopback default is: see auth.go.
+	auth *basicAuth
 }
 
 // Manager applies what a `steps pipeline` verb asks for. An interface for the reason Runner is one: this package serves the surface and chooses neither a store driver nor a workspace provider.
@@ -201,8 +204,13 @@ type Runner interface {
 }
 
 // New builds a server over whatever pipelines it is handed, which may be none: a daemon is configured by `steps pipeline set` and by nothing else, so empty is the ordinary starting state rather than an error.
-func New(pipelines []*Pipeline, runner Runner) (*Server, error) {
+func New(pipelines []*Pipeline, runner Runner, opts ...Option) (*Server, error) {
 	srv := &Server{bySlug: map[string]*Pipeline{}, runner: runner}
+
+	// Before routes(), which is where the middleware table is fixed.
+	for _, opt := range opts {
+		opt(srv)
+	}
 
 	for _, pipeline := range pipelines {
 		err := srv.Add(pipeline)
@@ -311,6 +319,11 @@ func (s *Server) routes() error {
 	e.HTTPErrorHandler = s.handleError
 
 	e.Use(middleware.Recover())
+
+	// Above the origin check, so an unauthenticated cross-origin request is told the one thing it can act on.
+	if s.auth != nil {
+		e.Use(s.auth.middleware())
+	}
 
 	// With no authentication there is no session for a cross-site request to ride, but a page on another origin can still aim a form at localhost — and this is the check that costs nothing and closes it.
 	e.Use(sameOriginMutations)
