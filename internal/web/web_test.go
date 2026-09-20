@@ -29,6 +29,11 @@ func testPipeline(t *testing.T) (*Server, *Pipeline) {
 	path := filepath.Join(dir, "demo.yml")
 
 	writeFile(t, path, `
+resource_types:
+  - name: mock
+    config:
+      check: echo '[]'
+
 resources:
   - name: repo
     type: mock
