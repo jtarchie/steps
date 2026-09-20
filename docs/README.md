@@ -27,6 +27,7 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 | Page | What it covers |
 |---|---|
 | [web.md](web.md) | The daemon: `steps pipeline set`, the browser UI, run transcripts, the dependency graph, live runs, triggering, and one state database for every pipeline it holds |
+| [authentication.md](authentication.md) | HTTP Basic on `steps web`: the two flags, what they cover, the one exempt route, and how the CLI carries credentials |
 | [agents-internals.md](agents-internals.md) | How agent steps work underneath: transport, tool-call repair, compaction, caching |
 | [aws-workers.md](aws-workers.md) | Standing up an `aws://` worker by hand with the AWS CLI: IAM, security group, launch template, instance, bucket — and running a pipeline on it |
 | [gcp-workers.md](gcp-workers.md) | Standing up a `gcp://` worker by hand with gcloud: the IAP firewall rule, instance template, instance — and running a pipeline on it |

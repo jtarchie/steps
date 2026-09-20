@@ -502,9 +502,11 @@ run history and cache and nothing else.
 
 ## Security
 
-There is no authentication, because there is nothing to authenticate against:
-this is the local runner's own front end, in the same trust domain as the
-shell that started it. It binds `127.0.0.1` by default.
+On the loopback address it binds by default there is nothing to authenticate
+against: this is the local runner's own front end, in the same trust domain as
+the shell that started it. A daemon reachable from anywhere else turns on HTTP
+Basic — one username, one password, every route but the webhook one. See
+[authentication.md](authentication.md).
 
 **`steps pipeline set` is a remote-shell endpoint. Say that plainly: a
 pipeline is arbitrary commands, so anyone who can reach this port can run
@@ -516,9 +518,11 @@ deployment path, not a button on a page.
 That is the reason for the loopback default, and it is a stronger reason than
 the trigger controls ever were. **Binding to a routable address hands the
 machine to whoever can reach the port.** `--listen 0.0.0.0:8088` exists for
-someone who has decided that is what they want; put it behind something that
-authenticates — an SSH tunnel, a reverse proxy, a network nobody else is on —
-and treat `--read-only` as being about the browser only.
+someone who has decided that is what they want; put credentials on it
+([authentication.md](authentication.md)) and TLS in front of it, or put it
+behind something else that authenticates — an SSH tunnel, a reverse proxy, a
+network nobody else is on — and treat `--read-only` as being about the browser
+only.
 
 **Loopback keeps other machines off the port, not other web pages.** A page
 open in a browser on this machine can re-point its own hostname at `127.0.0.1`
@@ -552,6 +556,10 @@ pipeline.
 --no-preflight   skip the pre-poll health check of models and MCP servers
 --read-only      serve without trigger, approval, answer, resume, or abort controls
                  (steps pipeline set is NOT withheld — see Security)
+--basic-auth-username / --basic-auth-password
+                 require HTTP Basic on every route but the webhook one; both or
+                 neither, env STEPS_BASIC_AUTH_USERNAME / _PASSWORD
+                 (see authentication.md)
 --keep-workspace leave build workspaces on disk
 --answer         answer an ask_user question in advance (repeatable)
 --worker         map a step tag to a machine, e.g. --worker gpu=ssh://jt@box
