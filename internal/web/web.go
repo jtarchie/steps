@@ -374,6 +374,11 @@ func (s *Server) routes() error {
 	api.POST("/pipelines/:pipeline/rename", s.handleAPIRename)
 	api.POST("/pipelines/:pipeline/runs/:run/abort", s.handleAPIAbortRun)
 	api.POST("/pipelines/:pipeline/jobs/:job/queued/abort", s.handleAPIAbortQueued)
+	api.POST("/pipelines/:pipeline/mcp/:server/login", s.handleAPIStartLogin)
+	api.GET("/pipelines/:pipeline/mcp/:server/login", s.handleAPILoginStatus)
+
+	// Top level rather than under /api, whose refuseBrowsers turns away exactly what this is: a browser, sent here by an authorization server.
+	e.GET(MCPCallbackPath, s.handleMCPCallback)
 
 	s.echo = e
 

@@ -46,7 +46,10 @@ func (a *basicAuth) middleware() echo.MiddlewareFunc {
 	})
 }
 
-// A webhook sender has no credentials to give and authenticates with its own signature, so the delivery route is exempt for exactly the reason it is exempt from the same-origin check and from --read-only.
+// MCPCallbackPath is where an authorization server redirects the browser to finish a login this daemon started; the CLI builds the redirect URI from it, so it is one constant.
+const MCPCallbackPath = "/mcp/callback"
+
+// Two routes carry their own credential instead of this server's: a webhook sender authenticates with its signature — exempt for exactly the reason it is exempt from the same-origin check and from --read-only — and an oauth redirect with the state its login minted (handleMCPCallback). Neither CAN send a password: one is a machine that was never given it, the other a bare navigation a third party caused.
 func skipAuth(c *echo.Context) bool {
-	return strings.HasSuffix(c.Path(), "/hooks/:resource")
+	return strings.HasSuffix(c.Path(), "/hooks/:resource") || c.Path() == MCPCallbackPath
 }
