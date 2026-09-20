@@ -299,7 +299,7 @@ func dialGCP(ctx context.Context, worker Worker) (*transport, error) {
 		return nil, err
 	}
 
-	remote, build, err := pushShim(client, worker)
+	remote, build, err := pushShim(ctx, client, worker)
 	if err != nil {
 		_ = client.Close()
 

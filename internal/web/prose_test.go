@@ -8,12 +8,13 @@ package web
 // rendered into.
 
 import (
+	"iter"
 	"strings"
 	"sync"
 	"testing"
 
-	"github.com/alecthomas/chroma/v2"
-	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v3"
+	"github.com/alecthomas/chroma/v3/lexers"
 )
 
 func TestRenderProseRendersWhatModelsWrite(t *testing.T) {
@@ -196,7 +197,7 @@ type panicLexer struct{}
 
 func (panicLexer) Config() *chroma.Config { return &chroma.Config{Name: "panic-test-lexer"} }
 
-func (panicLexer) Tokenise(*chroma.TokeniseOptions, string) (chroma.Iterator, error) {
+func (panicLexer) Tokenise(*chroma.TokeniseOptions, string) (iter.Seq[chroma.Token], error) {
 	panic("boom")
 }
 

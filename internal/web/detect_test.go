@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v3/lexers"
 )
 
 // TestEntryPointsAreEmptyForEmptyInput matches highlightCode's own "" for ""

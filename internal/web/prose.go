@@ -33,19 +33,20 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"io"
 	"net/url"
 	"strings"
 
-	"github.com/alecthomas/chroma/v2"
-	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
-	"github.com/alecthomas/chroma/v2/lexers"
-	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/extension"
-	"github.com/yuin/goldmark/parser"
-	gmrender "github.com/yuin/goldmark/renderer"
-	"github.com/yuin/goldmark/text"
-	"github.com/yuin/goldmark/util"
+	"github.com/alecthomas/chroma/v3"
+	chromahtml "github.com/alecthomas/chroma/v3/formatters/html"
+	"github.com/alecthomas/chroma/v3/lexers"
+	"github.com/yuin/goldmark/v2/ast"
+	"github.com/yuin/goldmark/v2/extension"
+	"github.com/yuin/goldmark/v2/parser"
+	gmrender "github.com/yuin/goldmark/v2/renderer"
+	"github.com/yuin/goldmark/v2/renderer/html"
+	"github.com/yuin/goldmark/v2/text"
+	"github.com/yuin/goldmark/v2/util"
 )
 
 // codeFormatter is shared across every caller: the page renderer and the
@@ -60,26 +61,37 @@ import (
 // the page.
 var codeFormatter = chromahtml.New(chromahtml.WithClasses(false), chromahtml.PreventSurroundingPre(true))
 
-// agentMarkdown renders untrusted, model-authored prose.
+// agentParser and agentRenderer render untrusted, model-authored prose.
 //
 // GFM for the tables and strikethrough models routinely emit, and the same
 // chroma style docs.go uses so a fenced block in an answer looks like a
 // fenced block anywhere else on the site. No WithUnsafe, and no
 // WithAutoHeadingID — see the file comment for why each is absent.
-var agentMarkdown = goldmark.New(
-	goldmark.WithExtensions(extension.GFM),
-	goldmark.WithParserOptions(parser.WithASTTransformers(
-		util.Prioritized(inertImages{}, 100),
-	)),
-	goldmark.WithRendererOptions(
-		gmrender.WithNodeRenderers(
-			util.Prioritized(safeLinks{}, 100),
-			util.Prioritized(codeFences{}, 100),
-		),
-	),
+//
+// A parser and a renderer rather than one converter, which goldmark no longer has; the subtractions this file exists for are now split across the two, and the renderer half is where every override lives.
+var agentParser = parser.New(
+	parser.WithExtensions(extension.GFMParser),
+	parser.WithASTTransformers(util.Prioritized[parser.ASTTransformer](inertImages{}, 100)),
 )
 
-// codeFences renders every fenced block, in one of two ways.
+var agentRenderer = html.New(
+	html.WithExtensions(extension.GFMHTMLRenderer),
+	// Decorators rather than plain node renderers, which goldmark applies BEFORE every extension's own and which the built-in CommonMark extension therefore silently takes back — link, autolink and code block all rendered as goldmark's defaults, which is to say with none of the subtractions this file exists for. A decorator is applied to whatever won and composes with any other, so the override cannot be undone by adding an extension.
+	html.WithNodeRendererDecorators(map[ast.NodeKind]html.NodeRendererDecorator{
+		ast.KindLink:      instead(renderSafeLink),
+		ast.KindAutoLink:  instead(renderSafeAutoLink),
+		ast.KindCodeBlock: instead(renderCodeBlock),
+	}),
+)
+
+// instead takes a node kind away from whatever registered it.
+func instead(render func(io.Writer, []byte, ast.Node, bool, gmrender.Context) (ast.WalkStatus, error)) html.NodeRendererDecorator {
+	replacement := html.NodeRendererFunc(render)
+
+	return func(_ html.NodeRenderer) html.NodeRenderer { return replacement }
+}
+
+// renderCodeBlock renders every code block, in one of two ways.
 //
 // A ```json fence goes through this package's own JSON renderer, so the JSON
 // in an answer looks identical to the JSON in the tool result one row above
@@ -87,37 +99,27 @@ var agentMarkdown = goldmark.New(
 // language is source text in a language this package has no business
 // knowing, which is what chroma is for.
 //
-// One renderer covering both because goldmark has no fall-through: the
-// highest-priority renderer registered for a node kind owns it outright, so
-// the choice has to be made here rather than by declining.
-type codeFences struct{}
-
-func (c codeFences) RegisterFuncs(reg gmrender.NodeRendererFuncRegisterer) {
-	reg.Register(ast.KindFencedCodeBlock, c.render)
-	reg.Register(ast.KindCodeBlock, c.renderIndented)
-}
-
-func (codeFences) render(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
+// One function covering both because goldmark has no fall-through: the
+// renderer registered for a node kind owns it outright, so the choice has to
+// be made here rather than by declining. A four-space block reaches the same
+// function and reports no language, which goldmark now says with the second
+// return rather than with a separate node kind.
+func renderCodeBlock(w io.Writer, source []byte, node ast.Node, entering bool, _ gmrender.Context) (ast.WalkStatus, error) {
 	if !entering {
 		return ast.WalkContinue, nil
 	}
 
-	fence, _ := node.(*ast.FencedCodeBlock)
-	lang := strings.ToLower(string(fence.Language(source)))
-	body := blockText(fence.Lines(), source)
-
-	writeCodeBlock(w, lang, body)
-
-	return ast.WalkSkipChildren, nil
-}
-
-// renderIndented covers a four-space block, which carries no language.
-func (codeFences) renderIndented(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
-	if !entering {
+	block, ok := node.(*ast.CodeBlock)
+	if !ok {
 		return ast.WalkContinue, nil
 	}
 
-	writeCodeBlock(w, "", blockText(node.Lines(), source))
+	lang := ""
+	if declared, found := block.Language(source); found {
+		lang = strings.ToLower(declared)
+	}
+
+	writeCodeBlock(w, lang, block.Value.Str(source))
 
 	return ast.WalkSkipChildren, nil
 }
@@ -125,30 +127,18 @@ func (codeFences) renderIndented(w util.BufWriter, source []byte, node ast.Node,
 // writeCodeBlock emits one code block, labelled with the language it declared
 // so a reader can tell a proposed yaml from a shell transcript without
 // reading it first.
-func writeCodeBlock(w util.BufWriter, lang, body string) {
-	_, _ = w.WriteString(`<div class="codeblock">`)
+func writeCodeBlock(w io.Writer, lang, body string) {
+	_, _ = io.WriteString(w, `<div class="codeblock">`)
 
 	if lang != "" {
-		_, _ = w.WriteString(`<span class="codelang">`)
-		_, _ = w.WriteString(template.HTMLEscapeString(lang))
-		_, _ = w.WriteString(`</span>`)
+		_, _ = io.WriteString(w, `<span class="codelang">`)
+		_, _ = io.WriteString(w, template.HTMLEscapeString(lang))
+		_, _ = io.WriteString(w, `</span>`)
 	}
 
-	_, _ = w.WriteString(`<pre class="json code">`)
-	_, _ = w.WriteString(string(highlightCode(body, lang)))
-	_, _ = w.WriteString(`</pre></div>`)
-}
-
-// blockText is a code block's source text.
-func blockText(lines *text.Segments, source []byte) string {
-	var body strings.Builder
-
-	for i := range lines.Len() {
-		line := lines.At(i)
-		body.Write(line.Value(source))
-	}
-
-	return body.String()
+	_, _ = io.WriteString(w, `<pre class="json code">`)
+	_, _ = io.WriteString(w, string(highlightCode(body, lang)))
+	_, _ = io.WriteString(w, `</pre></div>`)
 }
 
 // highlightCode colors one block: this package's renderer for a complete JSON
@@ -232,7 +222,9 @@ func renderProse(text string) template.HTML {
 
 	var out bytes.Buffer
 
-	err := agentMarkdown.Convert([]byte(trimmed), &out)
+	source := []byte(trimmed)
+
+	err := agentRenderer.Render(&out, source, agentParser.Parse(source))
 	if err != nil {
 		//nolint:gosec // G203: escaped, no markup added
 		return template.HTML("<p>" + template.HTMLEscapeString(trimmed) + "</p>")
@@ -259,13 +251,15 @@ func (inertImages) Transform(doc *ast.Document, reader text.Reader, _ parser.Con
 	})
 
 	for _, image := range found {
-		// NOT SetCode(true): goldmark writes a "code" string verbatim, and
-		// this one is built from the image's own alt text and host, both
-		// model-authored. Left as an ordinary string it is escaped on the way
-		// out, which is the entire point of replacing the image.
-		replacement := ast.NewString([]byte(imageLabel(image, reader)))
+		// An ordinary text node, which the renderer writes through its
+		// HTML-escaping text writer: the label is built from the image's own
+		// alt text and host, both model-authored, and being escaped on the way
+		// out is the entire point of replacing the image. goldmark's raw
+		// spelling would be a CodeSpanDecoder value, which is exactly what
+		// this must not be.
+		replacement := ast.NewText(text.NewSingleLineValueFromString(imageLabel(image, reader), nil))
 
-		image.Parent().ReplaceChild(image.Parent(), image, replacement)
+		image.Parent().ReplaceChild(image, replacement)
 	}
 }
 
@@ -274,11 +268,11 @@ func (inertImages) Transform(doc *ast.Document, reader text.Reader, _ parser.Con
 // where an exfiltrated payload would ride and reprinting it verbatim puts it
 // back on the page.
 func imageLabel(image *ast.Image, reader text.Reader) string {
-	alt := strings.TrimSpace(string(image.Text(reader.Source()))) //nolint:staticcheck // ast.Image has no non-deprecated text accessor
+	alt := strings.TrimSpace(nodeText(image, reader.Source()))
 
 	host := "an external host"
 
-	parsed, err := url.Parse(string(image.Destination))
+	parsed, err := url.Parse(image.Destination.Value(reader.Source()))
 	if err == nil && parsed.Host != "" {
 		host = parsed.Host
 	}
@@ -290,48 +284,66 @@ func imageLabel(image *ast.Image, reader text.Reader) string {
 	return fmt.Sprintf("[image not loaded · %s · %s]", alt, host)
 }
 
-// safeLinks renders links with the attributes that keep a model-authored one
-// from acting on the page it sits in.
-type safeLinks struct{}
+// nodeText is a node's own text, concatenated from the text nodes under it.
+//
+// Written out here because goldmark dropped Node.Text: an image's alt is child
+// nodes, and the only thing this file wants from them is the words.
+func nodeText(node ast.Node, source []byte) string {
+	var out strings.Builder
 
-func (s safeLinks) RegisterFuncs(reg gmrender.NodeRendererFuncRegisterer) {
-	reg.Register(ast.KindLink, s.render)
-	reg.Register(ast.KindAutoLink, s.renderAuto)
+	_ = ast.Walk(node, func(child ast.Node, entering bool) (ast.WalkStatus, error) {
+		if leaf, ok := child.(*ast.Text); ok && entering {
+			out.WriteString(leaf.Value.Value(source))
+		}
+
+		return ast.WalkContinue, nil
+	})
+
+	return out.String()
 }
 
-func (safeLinks) render(w util.BufWriter, _ []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
+// renderSafeLink and renderSafeAutoLink render links with the attributes that
+// keep a model-authored one from acting on the page it sits in.
+func renderSafeLink(w io.Writer, source []byte, node ast.Node, entering bool, _ gmrender.Context) (ast.WalkStatus, error) {
 	if !entering {
-		_, _ = w.WriteString("</a>")
+		_, _ = io.WriteString(w, "</a>")
 
 		return ast.WalkContinue, nil
 	}
 
-	link, _ := node.(*ast.Link)
-	writeAnchor(w, string(link.Destination))
+	link, ok := node.(*ast.Link)
+	if !ok {
+		return ast.WalkContinue, nil
+	}
+
+	writeAnchor(w, link.Destination.Value(source))
 
 	return ast.WalkContinue, nil
 }
 
-func (safeLinks) renderAuto(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
+func renderSafeAutoLink(w io.Writer, source []byte, node ast.Node, entering bool, _ gmrender.Context) (ast.WalkStatus, error) {
 	if !entering {
 		return ast.WalkContinue, nil
 	}
 
-	link, _ := node.(*ast.AutoLink)
-	target := string(link.URL(source))
+	link, ok := node.(*ast.AutoLink)
+	if !ok {
+		return ast.WalkContinue, nil
+	}
 
-	writeAnchor(w, target)
-	_, _ = w.WriteString(template.HTMLEscapeString(string(link.Label(source))))
-	_, _ = w.WriteString("</a>")
+	// Destination rather than the label for the href: an email autolink carries its mailto: there and only there.
+	writeAnchor(w, link.Destination.Value(source))
+	_, _ = io.WriteString(w, template.HTMLEscapeString(link.Label.Value(source)))
+	_, _ = io.WriteString(w, "</a>")
 
 	return ast.WalkContinue, nil
 }
 
 // writeAnchor opens an anchor whose scheme has been vetted.
-func writeAnchor(w util.BufWriter, destination string) {
-	_, _ = w.WriteString(`<a href="`)
-	_, _ = w.WriteString(template.HTMLEscapeString(safeURL(destination)))
-	_, _ = w.WriteString(`" rel="noopener noreferrer nofollow" target="_blank">`)
+func writeAnchor(w io.Writer, destination string) {
+	_, _ = io.WriteString(w, `<a href="`)
+	_, _ = io.WriteString(w, template.HTMLEscapeString(safeURL(destination)))
+	_, _ = io.WriteString(w, `" rel="noopener noreferrer nofollow" target="_blank">`)
 }
 
 // safeURL passes through the schemes a link may use and blanks everything

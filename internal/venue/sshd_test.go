@@ -27,7 +27,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/pkg/sftp"
+	"github.com/pkg/sftp/v2"
+	"github.com/pkg/sftp/v2/localfs"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -250,16 +251,14 @@ func (s *testSSHD) runExec(channel ssh.Channel, command string) {
 }
 
 func (s *testSSHD) runSFTP(channel ssh.Channel) {
-	server, err := sftp.NewServer(channel)
-	if err != nil {
-		return
-	}
-	defer func() { _ = server.Close() }()
+	// localfs is sftp v2's own local-filesystem handler, which is what v1's NewServer was built around; the server is a struct rather than a constructor now.
+	server := &sftp.Server{Handler: &localfs.ServerHandler{}}
+	defer func() { _ = server.GracefulStop() }()
 
 	// Counting writes rather than opens: the question a test asks is whether
 	// the binary travelled, and a stat that decides it need not is the answer
 	// the cache is supposed to give.
-	_ = server.Serve()
+	_ = server.Serve(channel)
 }
 
 // countingUpload is how runSFTP reports a write. sftp.Server handles the

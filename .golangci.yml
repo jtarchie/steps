@@ -401,7 +401,7 @@ linters:
             - "golang.org/x/crypto/ssh"
             - "golang.org/x/crypto/ssh/agent"
             - "golang.org/x/crypto/ssh/knownhosts"
-            - "github.com/pkg/sftp"
+            - "github.com/pkg/sftp/v2"
             # The ssh_config parser, so a worker can be named by the alias the
             # operator's own ~/.ssh/config already defines. Pure Go for the
             # same reason the two above are.
@@ -688,19 +688,19 @@ linters:
             # embedded docs package at /docs, server-side — the terminal twin
             # (steps docs, via glamour) lives in main. docs itself stays a
             # render-free leaf.
-            - "github.com/yuin/goldmark"
-            - "github.com/yuin/goldmark/ast"
-            - "github.com/yuin/goldmark/extension"
-            - "github.com/yuin/goldmark/parser"
-            - "github.com/yuin/goldmark-highlighting/v2"
+            - "github.com/yuin/goldmark/v2/ast"
+            - "github.com/yuin/goldmark/v2/extension"
+            - "github.com/yuin/goldmark/v2/parser"
+            - "github.com/yuin/goldmark/v2/renderer/html"
+            - "github.com/yuin/goldmark-highlighting/v3"
             # renderer/text/util are goldmark's own extension points, needed
             # by the SECOND converter (prose.go) that renders model-authored
             # prose: an AST transformer that makes images inert, and node
             # renderers for links and fenced code. The docs converter needs
             # none of them because it renders text this repo wrote.
-            - "github.com/yuin/goldmark/renderer"
-            - "github.com/yuin/goldmark/text"
-            - "github.com/yuin/goldmark/util"
+            - "github.com/yuin/goldmark/v2/renderer"
+            - "github.com/yuin/goldmark/v2/text"
+            - "github.com/yuin/goldmark/v2/util"
             # chroma is goldmark-highlighting's engine; imported directly to
             # define the "steps" code style from the UI's own palette, and —
             # lexers/formatters — to reuse that same style for the fenced
@@ -708,9 +708,9 @@ linters:
             # NOT chroma's there: internal/web renders that itself, because
             # unescaping a document nested in a string needs a parser, not a
             # lexer.
-            - "github.com/alecthomas/chroma/v2"
-            - "github.com/alecthomas/chroma/v2/lexers"
-            - "github.com/alecthomas/chroma/v2/formatters/html"
+            - "github.com/alecthomas/chroma/v3"
+            - "github.com/alecthomas/chroma/v3/lexers"
+            - "github.com/alecthomas/chroma/v3/formatters/html"
             - "github.com/jtarchie/steps/docs"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/events"

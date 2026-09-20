@@ -9,6 +9,7 @@ package venue
 // that.
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -20,7 +21,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/pkg/sftp"
+	"github.com/pkg/sftp/v2"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/jtarchie/steps/internal/shim"
@@ -31,9 +32,12 @@ import (
 // or world-executable binary in a shared temp directory is a way in.
 const shimMode = 0o700
 
+// shimDirMode is the directory the pushed binary sits in, under a shared /tmp. The mode is stated rather than left to the server, which sftp v2 requires and v1 decided for us out of the remote umask; the file is what carries the 0700 above, and the directory only has to be traversable.
+const shimDirMode = 0o755
+
 // pushShim puts the binary on the worker if it is not already there, and
 // returns the path to run and the build it is.
-func pushShim(client *ssh.Client, worker Worker) (remote, build string, err error) {
+func pushShim(ctx context.Context, client *ssh.Client, worker Worker) (remote, build string, err error) {
 	local, err := localBinary(worker)
 	if err != nil {
 		return "", "", err
@@ -46,7 +50,7 @@ func pushShim(client *ssh.Client, worker Worker) (remote, build string, err erro
 
 	remote = remoteShimPath(worker, build)
 
-	fs, err := sftp.NewClient(client)
+	fs, err := sftp.NewClient(ctx, client)
 	if err != nil {
 		return "", "", fmt.Errorf("opening sftp (the worker's sshd must offer the sftp subsystem): %w", err)
 	}
@@ -175,7 +179,7 @@ func alreadyPushed(fs *sftp.Client, remote, local string) (bool, error) {
 // the atomic step, and both racers end up correct because they are writing
 // identical bytes to a path named after them.
 func uploadShim(fs *sftp.Client, local, remote string) error {
-	err := fs.MkdirAll(path.Dir(remote))
+	err := fs.MkdirAll(path.Dir(remote), shimDirMode)
 	if err != nil {
 		return fmt.Errorf("making %q on the worker: %w", path.Dir(remote), err)
 	}
@@ -207,17 +211,12 @@ func uploadShim(fs *sftp.Client, local, remote string) error {
 		return fmt.Errorf("making the pushed binary executable: %w", err)
 	}
 
-	err = fs.PosixRename(staging, remote)
-	if err != nil {
-		// Not every server implements the POSIX rename extension; the plain
-		// one is not atomic over an existing file, which is survivable here
-		// because whoever wins wrote the same bytes.
-		err = fs.Rename(staging, remote)
-		if err != nil && !errors.Is(err, fs2ErrExist) {
-			_ = fs.Remove(staging)
+	// One call rather than the POSIX extension with a fallback: sftp v2 sends the atomic posix-rename when the server advertised it and the plain one when it did not, which is the same choice made off the handshake instead of off a failed attempt. Against a server without it the rename is not atomic over an existing file, which is survivable here because whoever wins wrote the same bytes.
+	err = fs.Rename(staging, remote)
+	if err != nil && !errors.Is(err, fs2ErrExist) {
+		_ = fs.Remove(staging)
 
-			return fmt.Errorf("installing the pushed binary: %w", err)
-		}
+		return fmt.Errorf("installing the pushed binary: %w", err)
 	}
 
 	return nil

@@ -70,7 +70,7 @@ func dialSSH(ctx context.Context, worker Worker) (*transport, error) {
 
 	client := ssh.NewClient(sshConn, channels, requests)
 
-	remote, build, err := pushShim(client, worker)
+	remote, build, err := pushShim(ctx, client, worker)
 	if err != nil {
 		_ = client.Close()
 

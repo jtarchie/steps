@@ -12,13 +12,13 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v3"
 	"github.com/labstack/echo/v5"
-	"github.com/yuin/goldmark"
-	highlighting "github.com/yuin/goldmark-highlighting/v2"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/extension"
-	"github.com/yuin/goldmark/parser"
+	highlighting "github.com/yuin/goldmark-highlighting/v3"
+	"github.com/yuin/goldmark/v2/ast"
+	"github.com/yuin/goldmark/v2/extension"
+	"github.com/yuin/goldmark/v2/parser"
+	"github.com/yuin/goldmark/v2/renderer/html"
 
 	"github.com/jtarchie/steps/docs"
 )
@@ -54,42 +54,54 @@ var docsCodeStyle = chroma.MustNewStyle("steps", chroma.StyleEntries{
 	chroma.GenericEmph:     "italic",       // markdown _emph_
 })
 
-// markdown is the shared converter: GFM for the docs' tables, heading ids so
-// the pages' #anchor cross-links resolve, and server-side chroma
-// highlighting in the UI's own style.
-var markdown = goldmark.New(
-	goldmark.WithExtensions(
-		extension.GFM,
-		highlighting.NewHighlighting(highlighting.WithCustomStyle(docsCodeStyle)),
+// docsParser and docsRenderer are the shared converter: GFM for the docs' tables, heading ids so the pages' #anchor cross-links resolve, and server-side chroma highlighting in the UI's own style.
+//
+// Two values rather than one, because goldmark has no combined Markdown type any more — an extension declares its parser half and its renderer half separately.
+//
+// The highlighter has a parser half too and it is deliberately NOT here: all it does is read `{...}` attributes off a fence info line, which no page in the corpus writes, so it would be a walk of every page AST per render that no test could break.
+var docsParser = parser.New(
+	parser.WithExtensions(extension.GFMParser),
+	parser.WithAutoHeadingID(),
+)
+
+var docsRenderer = html.New(
+	html.WithExtensions(
+		extension.GFMHTMLRenderer,
+		highlighting.NewHTMLRenderer(highlighting.WithCustomStyle(docsCodeStyle)),
 	),
-	goldmark.WithParserOptions(parser.WithAutoHeadingID()),
 )
 
 // githubIDs generates heading ids with docs.Slug — GitHub's algorithm —
 // instead of goldmark's default, which folds "_" into "-" and strands every
-// hand-written anchor containing a field name like max_visits. One instance
-// per page render, so duplicate headings dedupe per page.
-type githubIDs struct{ seen map[string]int }
+// hand-written anchor containing a field name like max_visits.
+//
+// Only the BASE id: goldmark's own parser.IDs appends the -1, -2 suffix for a repeated heading, which is what this type used to carry a map to do and is the same numbering either way. Uniqueness is per parse context, so it is per page render — see handleDocs.
+type githubIDs struct{}
 
-func newGithubIDs() *githubIDs { return &githubIDs{seen: map[string]int{}} }
-
-func (g *githubIDs) Generate(value []byte, _ ast.NodeKind) []byte {
+func (githubIDs) Generate(value []byte, _ ast.NodeKind) []byte {
 	slug := docs.Slug(string(value))
 	if slug == "" {
 		slug = "heading"
 	}
 
-	if n, dup := g.seen[slug]; dup {
-		g.seen[slug] = n + 1
-		slug = fmt.Sprintf("%s-%d", slug, n)
-	} else {
-		g.seen[slug] = 1
-	}
-
 	return []byte(slug)
 }
 
-func (g *githubIDs) Put(value []byte) { g.seen[string(value)] = 1 }
+// renderDocsMarkdown converts one page. A function rather than three lines inside the handler because the anchors and the highlighting are the whole contract of this file, and a test that spells the wiring out a second time proves only that goldmark works.
+//
+// A fresh context per render, which is what carries the set of ids already taken: duplicate headings dedupe within the page and never across requests.
+func renderDocsMarkdown(body []byte) (string, error) {
+	var rendered bytes.Buffer
+
+	ctx := parser.NewContext(parser.WithIDGenerator(githubIDs{}))
+
+	err := docsRenderer.Render(&rendered, body, docsParser.Parse(body, parser.WithContext(ctx)))
+	if err != nil {
+		return "", fmt.Errorf("rendering markdown: %w", err)
+	}
+
+	return rendered.String(), nil
+}
 
 // handleDocsIndex lands /docs on the index page.
 func (s *Server) handleDocsIndex(c *echo.Context) error {
@@ -114,13 +126,7 @@ func (s *Server) handleDocs(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "no such doc page — /docs lists them all")
 	}
 
-	var rendered bytes.Buffer
-
-	// A fresh ID generator per render, so duplicate headings dedupe within
-	// the page and never across requests.
-	ctx := parser.NewContext(parser.WithIDs(newGithubIDs()))
-
-	err = markdown.Convert(body, &rendered, parser.WithContext(ctx))
+	rendered, err := renderDocsMarkdown(body)
 	if err != nil {
 		return fmt.Errorf("web: could not render %s: %w", name, err)
 	}
@@ -147,6 +153,6 @@ func (s *Server) handleDocs(c *echo.Context) error {
 		"Name":   name,
 		"TOC":    toc,
 		//nolint:gosec // the HTML is rendered from this repo's own embedded docs, not user input
-		"HTML": template.HTML(rendered.String()),
+		"HTML": template.HTML(rendered),
 	})
 }
