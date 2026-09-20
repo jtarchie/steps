@@ -226,6 +226,7 @@ func (c *Config) validate() error {
 		c.validateTrySteps,
 		c.validateWorkspace,
 		c.validateArtifactDecls,
+		c.validateResourceTypes,
 		c.validateGetResource,
 		c.validateArtifactMappings,
 		c.validateImageRules,

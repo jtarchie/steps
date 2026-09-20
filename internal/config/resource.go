@@ -262,6 +262,28 @@ func (c *Config) validateVersionEvery() error {
 // steps and names an existing resource. The fetched resource is Resource when
 // set, else Get (see Step.Resource); two get steps may alias the same resource
 // under different names.
+// validateResourceTypes refuses a resource whose type names nothing — no
+// resource_types: entry and no built-in. It used to load: FindResourceType is
+// called when a check/in/out actually runs, so the failure arrived mid-build,
+// after a get had already been fetched and a put's work possibly done. The
+// gap has a second shape that a run never shows: a pipeline validated on a
+// machine whose steps binary carries a built-in, then served by one built
+// before that type existed, is refused here instead of at the step.
+//
+// It runs over resources rather than over steps on purpose — an unreferenced
+// resource is still a declaration that cannot work, and saying so at the
+// declaration names the line to fix.
+func (c *Config) validateResourceTypes() error {
+	for _, resource := range c.Resources {
+		_, err := c.FindResourceType(resource.Type)
+		if err != nil {
+			return fmt.Errorf("resource %q: %w", resource.Name, err)
+		}
+	}
+
+	return nil
+}
+
 func (c *Config) validateGetResource() error {
 	for _, job := range c.Jobs {
 		err := job.visitSteps(func(label string, step *Step) error {

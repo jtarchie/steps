@@ -305,3 +305,57 @@ jobs:
 		t.Errorf("env = %v, want SLACK_BOT_TOKEN", resourceType.Env)
 	}
 }
+
+// A resource naming a type that does not exist used to LOAD, and only failed
+// when the step ran — so `steps validate` said ok to a pipeline that could
+// never work, and a config that was fine on the machine that wrote it broke
+// on the one that ran it (a built-in the local binary had and the remote one
+// did not). Validation is where that belongs: nothing about the answer needs
+// the run.
+func TestResourceWithUnknownTypeIsRefused(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+resources:
+- name: nope
+  type: totally-made-up-type
+  source: {}
+jobs:
+- name: j
+  plan: [{ put: nope }]
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig succeeded; a resource naming an unknown type must be refused")
+	}
+
+	if !strings.Contains(err.Error(), "totally-made-up-type") {
+		t.Errorf("error does not name the missing type: %v", err)
+	}
+
+	if !strings.Contains(err.Error(), "nope") {
+		t.Errorf("error does not name the resource that declared it: %v", err)
+	}
+}
+
+// The built-ins are registered before this check runs, so a resource naming
+// one of them with no resource_types: block in sight still loads.
+func TestResourceWithBuiltinTypeStillLoads(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+resources:
+- name: reaction
+  type: slack-reaction
+  source: {}
+jobs:
+- name: j
+  plan: [{ put: reaction, params: { add: eyes } }]
+`)
+
+	_, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+}
