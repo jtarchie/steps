@@ -1,0 +1,116 @@
+# The built-in `slack-reaction` resource type: put an emoji on a message, take
+# one off, or swap one for another in a single publish.
+#
+# Registered automatically as `type: slack-reaction` (see
+# registerBuiltinResourceTypes), so a pipeline that wants to mark a message
+# writes a resource and nothing else:
+#
+#   resources:
+#   - name: reaction
+#     type: slack-reaction
+#     source: {}
+#
+#   - put: reaction
+#     inputs: [target]
+#     params: {add: eyes}
+#
+# It exists because a bot that answers a mention is SILENT until it answers,
+# and an answer can be minutes away. A reaction is the only thing the person
+# who asked can see in between: 👀 when the work starts, ✅ when the reply
+# lands, ❌ when it never will. Without it a question nobody answered and a
+# question nobody read look exactly alike.
+#
+#   thread/…          NOT read here. See the timestamp note below.
+#   target/channel    required — the channel id (the C… in a channel URL)
+#   target/ts         required — the ts of the MESSAGE to mark
+#   params.add        optional — an emoji name, no colons (eyes, not :eyes:)
+#   params.remove     optional — an emoji name to take off
+#
+# The ids come off disk rather than out of params: for the same reason
+# slack-reply's do — file() takes what an upstream step wrote, so nothing is
+# spliced through a shell — while the EMOJI is a param, because one resource
+# then covers every state a pipeline wants to show and the call site says
+# which one it is posting.
+#
+# A SEPARATE ARTIFACT FROM slack-reply's `thread/`, and the difference is the
+# whole subtlety of this type: a reply goes to `thread_ts`, the thread the
+# question lives in, while a reaction goes on `ts`, the one message a person
+# actually wrote. Handed thread_ts, a reaction lands on the parent of the
+# thread instead — right only when the mention was top-level, wrong every time
+# somebody asked inside an existing conversation, which is most of the time.
+# Two artifacts keep a pipeline from passing one where it meant the other.
+#
+# add AND remove in one put because a state CHANGE is one event: ✅ arriving
+# while 👀 still sits there reads as two bots disagreeing. Either may be
+# omitted — {add: eyes} alone is the acknowledgement, {remove: eyes} alone the
+# retraction — and a put with neither is a no-op that publishes nothing.
+#
+# Needs SLACK_BOT_TOKEN (a bot token, xoxb-) in the environment, for an app
+# with reactions:write, installed to the workspace and INVITED to every
+# channel it marks. reactions:write is NOT implied by chat:write: a bot that
+# can post and cannot react fails only here, and only at run time.
+#
+# Posting as a different bot than the one that answers? source.token_env names
+# the env var instead of SLACK_BOT_TOKEN — and, same as the other two Slack
+# types, the resource also needs that name added to its OWN env:
+# (config.Resource.Env), since env() only reads names the type's env: already
+# allows and that list is shared by every slack-reaction resource.
+#
+# There is deliberately no check:/in:, so `get: reaction` against this type is
+# a load error rather than a silent no-op: there is nothing here to detect or
+# fetch, only something to publish.
+#
+# expr:, not check:/in:/out: — this type is a JSON HTTP API and nothing else
+# (docs/expr.md), so it evaluates in-process and can never run in a container:
+# image:/network:/user:/privileged:/container_limits: are load errors alongside
+# expr:, enforced by validateExprNoContainer.
+#
+# source.base_url overrides the API root (default https://slack.com); exists
+# purely so a test can point this at an httptest.Server, since a hardcoded
+# slack.com is otherwise untestable without a live workspace.
+env:
+  - SLACK_BOT_TOKEN
+
+config:
+  expr:
+    # trim() because an upstream task typically writes these ids with a
+    # trailing newline, which would otherwise become part of the id.
+    out: |
+      let base = source.base_url ?? "https://slack.com";
+      let auth = {Authorization: "Bearer " + env(source.token_env ?? "SLACK_BOT_TOKEN")};
+      let channel = trim(file("target/channel"));
+      let ts = trim(file("target/ts"));
+      let add = params.add ?? "";
+      let remove = params.remove ?? "";
+
+      let requests = concat(
+        add != "" ? [{url: base + "/api/reactions.add",
+                      json: {channel: channel, timestamp: ts, name: add}}] : [],
+        remove != "" ? [{url: base + "/api/reactions.remove",
+                         json: {channel: channel, timestamp: ts, name: remove}}] : []);
+
+      // Retried for the same reason the other two retry: a 429 here fails a
+      // put whose work is already done, and a rate limit is the one failure
+      // that says nothing about whether the call was worth making.
+      let results = len(requests) == 0 ? [] :
+        http(requests, {headers: auth, retry: {on: [429, 503], max: 3}});
+
+      // Slack refuses with 200 and ok:false, so without this check a rejected
+      // reaction would look like a put that published nothing — green, having
+      // marked nothing.
+      //
+      // Two of those refusals are not failures. already_reacted means the
+      // emoji this put wanted is already there, and no_reaction means the one
+      // it wanted gone is already gone: both are the API reporting that the
+      // world is in the state being asked for, which is what a put is for.
+      // They arrive whenever a run is replayed, resumed, or racing its own
+      // earlier attempt, and failing there would turn a re-run into a red
+      // build over an emoji. Every OTHER error still fails the put — a missing
+      // reactions:write scope has to be loud once rather than silent forever.
+      let refused = results
+        | filter(!(#.json.ok ?? false))
+        | filter(!((#.json.error ?? "") in ["already_reacted", "no_reaction"]));
+
+      len(refused) == 0
+        ? {channel: channel, ts: ts, add: add, remove: remove}
+        : fail("slack reactions: " + (refused[0].json.error ?? "failed"))

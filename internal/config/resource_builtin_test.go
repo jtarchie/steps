@@ -254,3 +254,54 @@ func TestBuiltinGitBranchIsOptional(t *testing.T) {
 		}
 	}
 }
+
+// `type: slack-reaction` is the third of the Slack trio and the other
+// publish-only one: a get: against it is a load error, and its env: names the
+// same token the other two read.
+func TestBuiltinSlackReactionResourceTypeRegistered(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+resources:
+- name: reaction
+  type: slack-reaction
+  source: {}
+jobs:
+- name: j
+  plan: [{ put: reaction, params: { add: eyes } }]
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	resourceType, err := cfg.FindResourceType("slack-reaction")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resourceType.Config.Backend() != BackendExpr {
+		t.Fatalf("Backend() = %v, want expr", resourceType.Config.Backend())
+	}
+
+	if resourceType.Config.Expr.Out == "" {
+		t.Error("built-in slack-reaction is missing an out expression")
+	}
+
+	if resourceType.Config.Expr.Check != "" || resourceType.Config.Expr.In != "" {
+		t.Errorf("built-in slack-reaction declares expr.check/in, want neither (publish-only)")
+	}
+
+	found := false
+
+	for _, name := range resourceType.Env {
+		if name == "SLACK_BOT_TOKEN" {
+			found = true
+		}
+	}
+
+	if !found {
+		t.Errorf("env = %v, want SLACK_BOT_TOKEN", resourceType.Env)
+	}
+}

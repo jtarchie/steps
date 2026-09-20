@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -65,8 +66,13 @@ type fakeSlackWorkspace struct {
 	mu           sync.Mutex
 	transcript   []slackMsg
 	posted       []map[string]any
+	reacted      []map[string]any
 	rateLimited  map[string]int
 	repliesAsked []string
+	// reactionError, when set for an endpoint path, is the Slack error code
+	// that endpoint answers with instead of ok — 200 with ok:false, the way
+	// the real API refuses.
+	reactionError map[string]string
 }
 
 // fakeSlack serves the default transcript — all most tests need. Read what it
@@ -128,6 +134,15 @@ func (f *fakeSlackWorkspace) postedMessages() []map[string]any {
 	return slices.Clone(f.posted)
 }
 
+// reactions is every reactions.add/remove call, in order, each carrying the
+// endpoint it arrived at under "endpoint" alongside the payload Slack got.
+func (f *fakeSlackWorkspace) reactions() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.Clone(f.reacted)
+}
+
 func (f *fakeSlackWorkspace) serve(w http.ResponseWriter, r *http.Request) {
 	if f.rateLimit(r.URL.Path) {
 		// Retry-After: 0 so the test does not actually wait out a backoff.
@@ -158,6 +173,8 @@ func (f *fakeSlackWorkspace) serve(w http.ResponseWriter, r *http.Request) {
 			"ok":       true,
 			"messages": f.replies(query.Get("channel"), query.Get("ts"), query.Get("oldest")),
 		})
+	case "/api/reactions.add", "/api/reactions.remove":
+		f.react(w, r)
 	case "/api/chat.postMessage":
 		f.post(w, r)
 	default:
@@ -307,6 +324,32 @@ func (f *fakeSlackWorkspace) post(w http.ResponseWriter, r *http.Request) {
 	f.mu.Unlock()
 
 	f.answer(w, map[string]any{"ok": true, "channel": payload["channel"], "ts": "999.999"})
+}
+
+// react records a reactions.add/remove call and answers it. An entry in
+// reactionError makes that endpoint refuse the way Slack does — 200 with
+// ok:false and a code — which is how the tolerated codes are exercised.
+func (f *fakeSlackWorkspace) react(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+
+	var payload map[string]any
+
+	_ = json.Unmarshal(body, &payload)
+
+	payload["endpoint"] = r.URL.Path
+
+	f.mu.Lock()
+	f.reacted = append(f.reacted, payload)
+	code := f.reactionError[r.URL.Path]
+	f.mu.Unlock()
+
+	if code != "" {
+		f.answer(w, map[string]any{"ok": false, "error": code})
+
+		return
+	}
+
+	f.answer(w, map[string]any{"ok": true})
 }
 
 // slackTS parses a Slack ts for comparison. A ts is a string and must be
@@ -738,5 +781,179 @@ jobs:
 	err = cli.Run([]string{"run", path, "--job", "announce"})
 	if err == nil {
 		t.Fatal("run: want an error, SECOND_BOT_TOKEN is not in this resource's env:")
+	}
+}
+
+// TestEndToEndBuiltinSlackReaction is the type's happy path and its whole
+// point: one put marks the message, a later one swaps that mark for another.
+// The swap is a single put because a state change is one event — ✅ arriving
+// while 👀 lingers reads as two bots — so this asserts both calls went out,
+// in order, against the ts of the message rather than a thread.
+func TestEndToEndBuiltinSlackReaction(t *testing.T) {
+	server, workspace := fakeSlack(t)
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+
+	pipelineYAML := `
+resources:
+- name: reaction
+  type: slack-reaction
+  source:
+    base_url: ` + server.URL + `
+
+jobs:
+- name: mark
+  plan:
+  - task: address
+    outputs: [target]
+    run: |
+      set -eu
+      printf '%s' "C1" > target/channel
+      printf '%s' "1700000000.000100" > target/ts
+  - put: reaction
+    inputs: [target]
+    params: {add: eyes}
+  - put: reaction
+    inputs: [target]
+    params: {add: white_check_mark, remove: eyes}
+`
+
+	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, "validate", path)
+	mustRun(t, "run", path, "--job", "mark")
+
+	calls := workspace.reactions()
+	if len(calls) != 3 {
+		t.Fatalf("made %d reaction calls, want 3: %v", len(calls), calls)
+	}
+
+	want := []struct {
+		endpoint string
+		name     string
+	}{
+		{"/api/reactions.add", "eyes"},
+		{"/api/reactions.add", "white_check_mark"},
+		{"/api/reactions.remove", "eyes"},
+	}
+
+	for i, expected := range want {
+		if calls[i]["endpoint"] != expected.endpoint || calls[i]["name"] != expected.name {
+			t.Errorf("call %d = %v, want %s with name %s", i, calls[i], expected.endpoint, expected.name)
+		}
+
+		if calls[i]["channel"] != "C1" || calls[i]["timestamp"] != "1700000000.000100" {
+			t.Errorf("call %d = %v, want channel C1 at the message ts", i, calls[i])
+		}
+	}
+}
+
+// TestEndToEndBuiltinSlackReactionToleratesSettledState pins the two refusals
+// that are not failures. already_reacted and no_reaction both mean the world
+// is already in the state the put asked for, which is what a put is for —
+// and both arrive on any replay, resume, or re-run. Failing there would turn
+// re-running a build into a red one over an emoji.
+func TestEndToEndBuiltinSlackReactionToleratesSettledState(t *testing.T) {
+	server, workspace := fakeSlack(t)
+	workspace.reactionError = map[string]string{
+		"/api/reactions.add":    "already_reacted",
+		"/api/reactions.remove": "no_reaction",
+	}
+
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+
+	pipelineYAML := `
+resources:
+- name: reaction
+  type: slack-reaction
+  source:
+    base_url: ` + server.URL + `
+
+jobs:
+- name: mark
+  plan:
+  - task: address
+    outputs: [target]
+    run: |
+      set -eu
+      printf '%s' "C1" > target/channel
+      printf '%s' "1700000000.000100" > target/ts
+  - put: reaction
+    inputs: [target]
+    params: {add: white_check_mark, remove: eyes}
+  - task: after
+    run: echo the plan carried on
+`
+
+	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, "run", path, "--job", "mark")
+
+	if calls := workspace.reactions(); len(calls) != 2 {
+		t.Fatalf("made %d reaction calls, want 2: %v", len(calls), calls)
+	}
+}
+
+// TestEndToEndBuiltinSlackReactionFailsOnRefusal is the other half: every
+// refusal that is NOT a settled state fails the put. A missing reactions:write
+// scope answers invalid_auth-shaped errors like this one, and a bot that
+// silently stops marking anything is the failure nobody notices.
+func TestEndToEndBuiltinSlackReactionFailsOnRefusal(t *testing.T) {
+	server, workspace := fakeSlack(t)
+	workspace.reactionError = map[string]string{"/api/reactions.add": "missing_scope"}
+
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+
+	pipelineYAML := `
+resources:
+- name: reaction
+  type: slack-reaction
+  source:
+    base_url: ` + server.URL + `
+
+jobs:
+- name: mark
+  plan:
+  - task: address
+    outputs: [target]
+    run: |
+      set -eu
+      printf '%s' "C1" > target/channel
+      printf '%s' "1700000000.000100" > target/ts
+  - put: reaction
+    inputs: [target]
+    params: {add: eyes}
+`
+
+	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = cli.Run([]string{"run", path, "--job", "mark"})
+	if err == nil {
+		t.Fatal("run succeeded, want the put to fail on a refusal that is not a settled state")
+	}
+
+	if !strings.Contains(err.Error(), "missing_scope") {
+		t.Errorf("error does not name the refusal: %v", err)
+	}
+
+	if calls := workspace.reactions(); len(calls) != 1 {
+		t.Errorf("made %d reaction calls, want 1", len(calls))
 	}
 }

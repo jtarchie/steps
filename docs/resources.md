@@ -32,9 +32,9 @@ jobs:
 
 It fetches the exact commit the plan pinned, shallowly, so a branch that moves mid-run still gives you the version that was planned. It has **no `out:`** — `put: repo` against it is a load error, because what "publish" means (which branch, which credentials, force or not) is a decision only you can make. Write your own type for that.
 
-## The built-in `slack-mentions` and `slack-reply` types
+## The built-in `slack-mentions`, `slack-reply` and `slack-reaction` types
 
-Two more built-ins, both [expression-backed](expr.md) — Slack is a JSON HTTP API and nothing else, so there is no container and no `curl`/`jq` dependency to carry. `slack-mentions` is get-only: every unanswered `@mention` of the bot in a channel, plus every message in a 1:1 DM (no `@mention` required there — nobody types one in a 1:1 chat), oldest first, as a `{channel, ts, thread_ts}` version — `ts` is the message that named the bot, `thread_ts` the thread it lives in (the same value, for a top-level message). `slack-reply` is put-only: posts a message, threaded or top-level.
+Three more built-ins, all [expression-backed](expr.md) — Slack is a JSON HTTP API and nothing else, so there is no container and no `curl`/`jq` dependency to carry. `slack-mentions` is get-only: every unanswered `@mention` of the bot in a channel, plus every message in a 1:1 DM (no `@mention` required there — nobody types one in a 1:1 chat), oldest first, as a `{channel, ts, thread_ts}` version — `ts` is the message that named the bot, `thread_ts` the thread it lives in (the same value, for a top-level message). `slack-reply` is put-only: posts a message, threaded or top-level. `slack-reaction` is put-only too: puts an emoji on a message, takes one off, or swaps one for another in a single publish.
 
 Cold start does not mean a backlog: like every resource, the first-ever check of a freshly-deployed `slack-mentions` records everything it finds and answers only the newest of it — see [Version history](#version-history) below. That rule is a `steps web` behavior; `steps run` has no persisted cursor, so every `steps run` check is a first check.
 
@@ -54,6 +54,10 @@ resources:
   type: slack-reply
   source: {}
 
+- name: reaction
+  type: slack-reaction
+  source: {}
+
 # A second bot, in the same pipeline, answering as someone else: env: adds
 # SECOND_BOT_TOKEN to just THIS resource's own allow-list (the type's own
 # env: still only names SLACK_BOT_TOKEN), and source.token_env picks it.
@@ -71,30 +75,42 @@ jobs:
     version: every    # answer every mention found, not just the newest
   - task: address
     inputs: [mentions]
-    outputs: [thread, answer]
+    outputs: [thread, target, answer]
     run: |
       set -eu
       grep -o '"channel": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/channel
       grep -o '"thread_ts": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/ts
+      grep -o '"channel": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > target/channel
+      grep -o '"ts": *"[^"]*"' mentions/version.json | head -1 | cut -d'"' -f4 > target/ts
       echo "got it, working on it" > answer/reply.md
+  - put: reaction              # 👀 — somebody is on it
+    inputs: [target]
+    params: {add: eyes}
   - put: reply
     inputs: [thread, answer]
+  - put: reaction              # ✅, and the 👀 goes away in the same publish
+    inputs: [target]
+    params: {add: white_check_mark, remove: eyes}
 ```
 
-Both need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for an app with `chat:write`, `channels:history`, `channels:read`, `im:history` and `im:read` (plus `groups:history`/`groups:read` for private channels), installed to the workspace and **invited** to every channel it should watch or post to. Membership is what grants both reading history and appearing in `users.conversations`, so `/invite` *is* the subscribe action — `app_mentions:read` is not needed, since this polls rather than using the Events API.
+All three need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for an app with `chat:write`, `reactions:write`, `channels:history`, `channels:read`, `im:history` and `im:read` (plus `groups:history`/`groups:read` for private channels), installed to the workspace and **invited** to every channel it should watch or post to. Membership is what grants both reading history and appearing in `users.conversations`, so `/invite` *is* the subscribe action — `app_mentions:read` is not needed, since this polls rather than using the Events API.
 
 1:1 DMs are always watched too, with no `@mention` required — there is no `source:` field to turn this off. Group DMs (`mpim`) are not watched at all; a group is closer to a channel (several humans, bot is one more party) than a 1:1, so it keeps the explicit-mention rule instead.
 
-| `source:` field (either type) | required | meaning |
+| `source:` field (any of the three) | required | meaning |
 |---|---|---|
 | `channels` (`slack-mentions`) | no | `[]` watches every channel (and 1:1 DM) the bot is in; a list of ids narrows it |
 | `limit` (`slack-mentions`) | no | per-channel messages fetched per check, default `200` |
-| `base_url` (either) | no | overrides `https://slack.com` — for pointing a test at a fake server |
-| `token_env` (either) | no | overrides `SLACK_BOT_TOKEN` as the env var name to read the token from |
+| `base_url` (any) | no | overrides `https://slack.com` — for pointing a test at a fake server |
+| `token_env` (any) | no | overrides `SLACK_BOT_TOKEN` as the env var name to read the token from |
 
-`token_env` alone isn't enough to widen what a resource can read — `env()` only sees names its resource TYPE already declares (both types declare `SLACK_BOT_TOKEN`, shared by every resource of that type), which is what makes it safe for a shared, possibly-external type to hand-in-hand with any expr type at all. A resource naming a different token also needs `env:` *on the resource itself* to add that name to its own allow-list — `env:` and `source:` together, as in `reply-as-support-bot` above. Naming `token_env` without the matching `env:` entry is a run-time error (`env(...): not in this resource type's env:`), not a silent fall-back to `SLACK_BOT_TOKEN`. (`env:` on a resource only means something for an expr- or shell-backed type — an mcp-backed type authenticates via its `mcp_servers:` entry and rejects `env:` at load time.)
+`token_env` alone isn't enough to widen what a resource can read — `env()` only sees names its resource TYPE already declares (all three declare `SLACK_BOT_TOKEN`, shared by every resource of that type), which is what makes it safe for a shared, possibly-external type to hand-in-hand with any expr type at all. A resource naming a different token also needs `env:` *on the resource itself* to add that name to its own allow-list — `env:` and `source:` together, as in `reply-as-support-bot` above. Naming `token_env` without the matching `env:` entry is a run-time error (`env(...): not in this resource type's env:`), not a silent fall-back to `SLACK_BOT_TOKEN`. (`env:` on a resource only means something for an expr- or shell-backed type — an mcp-backed type authenticates via its `mcp_servers:` entry and rejects `env:` at load time.)
 
 **A mention inside a thread arrives with its thread.** `mentions/thread.json` is the whole conversation the mention was written in (Slack's `conversations.replies` payload: parent first, then replies), fetched by `thread_ts` — asking Slack for a *reply's* `ts` answers with that one message and nothing around it, which is an agent being handed a question with no context. Post the answer back with `thread_ts` too, as the example above does: a reply's `ts` is not a thread id.
+
+**A reaction goes on the message; a reply goes to the thread.** `slack-reply` reads `thread/ts` and `slack-reaction` reads `target/ts`, and they are deliberately different artifacts because they want different values out of the same version: `thread_ts` is the conversation to answer in, while `ts` is the one message a person actually wrote. Hand a reaction the thread's id and the emoji lands on the parent of the thread instead — indistinguishable from correct when the mention was top-level, wrong every time somebody asked inside an existing conversation.
+
+**Marking a message twice is not an error.** `already_reacted` (the emoji this put wanted is already there) and `no_reaction` (the one it wanted gone is already gone) are the API saying the world is in the state being asked for, so the put succeeds. They arrive on any replay, resume, or re-run, and failing there would turn re-running a build into a red one over an emoji. Every other refusal fails the put — most usefully `missing_scope`, since `reactions:write` is not implied by `chat:write` and a bot that quietly stops marking anything is a failure nobody notices.
 
 **A mention inside a thread counts**, and `limit:` is what decides whether it can be found. Slack's `conversations.history` returns top-level messages only, and a reply does not change its parent's `ts` — so the window the check reads channel history over is `limit` messages, deliberately *wider* than the cursor, and the cursor decides only what inside that window is new. A thread whose parent carries a `latest_reply` newer than the cursor is read; every other thread costs nothing.
 
