@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -286,5 +287,59 @@ func TestConnectOutlivesTheHandshakeDeadline(t *testing.T) {
 	_, err = client.CallTool(context.Background(), "echo", map[string]any{"text": "still alive"})
 	if err != nil {
 		t.Fatalf("CallTool after the handshake deadline was cancelled: %v", err)
+	}
+}
+
+// TestConnectDoesNotOpenAStandaloneSSEStream pins DisableStandaloneSSE on the
+// HTTP transport. Left off, the go-sdk client opens a long-lived GET right
+// after initialize; a server that handles one request per session at a time
+// then leaves the `notifications/initialized` POST queued behind a stream that
+// never ends, and connecting fails at the handshake deadline having reached a
+// server that is working perfectly. Observed against mcp.honeybadger.io, which
+// answers other clients fine.
+//
+// The assertion is the GET itself rather than that deadlock: a server built to
+// deadlock also deadlocks the SDK's teardown after the failed handshake, so
+// the test hangs for its own timeout instead of failing in milliseconds.
+//
+// Nothing in steps consumes server-initiated messages — a session connects,
+// lists tools, calls them and closes — so the stream costs only this.
+func TestConnectDoesNotOpenAStandaloneSSEStream(t *testing.T) {
+	t.Parallel()
+
+	var gets atomic.Int64
+
+	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return echoServer() }, nil)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			gets.Add(1)
+			// What a server that does not offer the stream answers, so the
+			// client carries on and the failure below is the count alone.
+			w.WriteHeader(http.StatusMethodNotAllowed)
+
+			return
+		}
+
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+
+	client, err := Connect(context.Background(), config.MCPServer{Name: "echo", Endpoint: ts.URL})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	tools, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	if len(tools) != 1 || tools[0].Name != "echo" {
+		t.Fatalf("ListTools = %+v, want one tool named echo", tools)
+	}
+
+	if n := gets.Load(); n != 0 {
+		t.Fatalf("server saw %d GET request(s), want 0: the standalone SSE stream is back", n)
 	}
 }
