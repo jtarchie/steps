@@ -842,6 +842,14 @@ jobs:
 		{"/api/reactions.remove", "eyes"},
 	}
 
+	// The swap's two calls are one http() batch, which is concurrent: the order they ARRIVE in is a race, and only the first put is sequenced against them.
+	slices.SortStableFunc(calls[1:], func(a, b map[string]any) int {
+		left, _ := a["endpoint"].(string)
+		right, _ := b["endpoint"].(string)
+
+		return strings.Compare(left, right)
+	})
+
 	for i, expected := range want {
 		if calls[i]["endpoint"] != expected.endpoint || calls[i]["name"] != expected.name {
 			t.Errorf("call %d = %v, want %s with name %s", i, calls[i], expected.endpoint, expected.name)
