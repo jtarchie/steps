@@ -76,6 +76,28 @@ export TMPDIR="$HOME/.steps-tmp" && mkdir -p "$TMPDIR"
 
 Native Linux is unaffected.
 
+### Podman
+
+steps talks to the daemon over the docker engine API, and podman serves a compatible one — so **podman works with no pipeline changes**. `image:`, `network:`, `user:`, `env:` and the rest mean what they mean under docker. Verified by running the whole docker-backed test suite, end-to-end tests included, against podman 6.1 on a macOS `podman machine`.
+
+The one thing to do is say where the socket is. steps finds a daemon the way `docker` does (`DOCKER_HOST`, then the selected `docker context`), and podman writes neither:
+
+```bash
+export DOCKER_HOST="unix://$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}')"   # macOS
+export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/podman/podman.sock"   # Linux, after: systemctl --user start podman.socket
+```
+
+Skip it if `podman-mac-helper` or the `podman-docker` package already put a socket at `/var/run/docker.sock`. A podman connection that is an `ssh://` URI is refused for the same reason an `ssh://` `DOCKER_HOST` is: the remote side would resolve the bind mount against its own disk.
+
+- **Short image names resolve to Docker Hub**, as under docker: `image: alpine:3` works. (The `podman` command line may prompt for a registry; its docker-compatible API does not.)
+- **`podman machine` shares macOS's `$TMPDIR`**, so the [`TMPDIR` workaround above](#tmpdir-when-the-daemon-runs-in-a-vm) is not needed there.
+- **Private registries: log in where steps looks.** steps reads credentials from docker's `~/.docker/config.json`; `podman login` writes them somewhere else. Use `podman login --authfile ~/.docker/config.json <registry>`.
+
+Not verified, and expected to need care:
+
+- **Rootless podman on a Linux host.** The [Linux default `user:`](#container-user-user) is the uid:gid that started steps. Rootless podman maps the *container's root* to that host user, and any other uid to a range the host user does not own — so the default likely cannot write its own working directory. If a step fails with permission errors on its workspace, set `user: root`: under rootless podman that *is* the host user, and the files come out owned correctly.
+- **SELinux hosts** (Fedora, RHEL) may deny the workspace bind mount; steps does not add a `:z` relabel.
+
 ### CLI agents
 
 For a [CLI-backed agent](agents.md#cli-backed-agents-claudesonnet) (`source.model: "@claude/..."`), `image:` containerizes the step's **tools** — exactly as it does for a hosted agent — never the CLI process itself. The CLI is always a host subprocess of the `steps` process; only the `run_shell`/custom-tool/MCP execution a bridged call performs happens inside the container, through the same `toolEnv.runner` a hosted agent's tools already run through.
