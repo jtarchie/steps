@@ -374,7 +374,7 @@ func TestMCPLoginRejectsNonOAuthServer(t *testing.T) {
 	ts := mcpCLIFixtureServer(t)
 	path := mcpCLIPipeline(t, ts.URL) // auth: omitted -> "none", not oauth
 
-	err := Run([]string{"mcp", "login", path, "test"})
+	err := Run([]string{"mcp", "login", "test", "-c", path})
 	if err == nil || !strings.Contains(err.Error(), "nothing to log in to") {
 		t.Fatalf("Run(mcp login) on a non-oauth server = %v, want it refused as having nothing to log in to", err)
 	}

@@ -544,6 +544,40 @@ func (c *daemonClient) pause(name, verb string) error {
 	return c.post("/api/pipelines/"+name+"/"+verb, http.StatusNoContent)
 }
 
+// startLogin sends c.target as the address to build the redirect from — the field the credentials were already taken off of.
+func (c *daemonClient) startLogin(ctx context.Context, name, server string) (web.LoginStatus, error) {
+	payload, err := json.Marshal(web.LoginRequest{Base: c.target})
+	if err != nil {
+		return web.LoginStatus{}, fmt.Errorf("could not encode the login request: %w", err)
+	}
+
+	return c.login(ctx, http.MethodPost, name, server, payload, http.StatusAccepted)
+}
+
+func (c *daemonClient) loginStatus(ctx context.Context, name, server string) (web.LoginStatus, error) {
+	return c.login(ctx, http.MethodGet, name, server, nil, http.StatusOK)
+}
+
+func (c *daemonClient) login(ctx context.Context, method, name, server string, payload []byte, want int) (web.LoginStatus, error) {
+	var status web.LoginStatus
+
+	code, body, err := c.doContext(ctx, method, "/api/pipelines/"+name+"/mcp/"+url.PathEscape(server)+"/login", payload)
+	if err != nil {
+		return status, err
+	}
+
+	if code != want {
+		return status, daemonError(c.target, code, body)
+	}
+
+	err = json.Unmarshal(body, &status)
+	if err != nil {
+		return status, fmt.Errorf("could not read the daemon's answer: %w", err)
+	}
+
+	return status, nil
+}
+
 // post is a bodiless verb whose only answer worth reading is a refusal.
 func (c *daemonClient) post(path string, want int) error {
 	status, body, err := c.do(http.MethodPost, path, nil)
@@ -620,7 +654,12 @@ func (c *daemonClient) rename(from, to string) error {
 
 // do is one request, with the body read whatever the status.
 func (c *daemonClient) do(method, path string, payload []byte) (int, []byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), daemonTimeout)
+	return c.doContext(context.Background(), method, path, payload)
+}
+
+// doContext is do for a verb that waits on something: a login polls for as long as a person takes, and Ctrl-C has to end the request in flight rather than the one after it.
+func (c *daemonClient) doContext(ctx context.Context, method, path string, payload []byte) (int, []byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, daemonTimeout)
 	defer cancel()
 
 	var body io.Reader

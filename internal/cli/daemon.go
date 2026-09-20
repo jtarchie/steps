@@ -41,6 +41,8 @@ type daemon struct {
 	swept map[string]bool
 	// releaseWorkers gives back what the shared registry still keeps warm; Close runs it after every loop that could hold a machine is gone.
 	releaseWorkers func()
+	// Embedded so the daemon IS a web.Authorizer, which is how the server finds one; see daemon_login.go.
+	*logins
 }
 
 // daemonWriteBound is what a give-back write gets on its own context, since the request's is likeliest to be cancelled exactly when one runs.
@@ -79,6 +81,7 @@ func newDaemon(
 		served:         map[string]*servedPipeline{},
 		swept:          map[string]bool{},
 		releaseWorkers: releaseWorkers,
+		logins:         newLogins(base),
 	}
 }
 
@@ -630,6 +633,9 @@ func (d *daemon) detach(name string) (*servedPipeline, error) {
 
 // Close stops every pipeline's loops and releases what they held.
 func (d *daemon) Close() {
+	// First, and outside the verbs' lock: a login waits on a browser, not on a pipeline, and its goroutine has to be gone before the process is.
+	d.stop()
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 

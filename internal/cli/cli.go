@@ -1419,16 +1419,26 @@ func printMCPTools(tools []*sdkmcp.Tool) {
 // entry — the only command in this CLI that opens a browser or blocks on
 // user interaction outside a pipeline run.
 type MCPLoginCmd struct {
-	Pipeline string `arg:"" help:"path to the pipeline YAML file"`
-	Server   string `arg:"" help:"mcp_servers: entry name to authorize"`
+	TargetFlags      `embed:""`
+	PipelineNameFlag `embed:""`
+	Server           string `arg:""                                                                             help:"mcp_servers: entry name to authorize"`
+	Config           string `help:"authorize on THIS machine, for the server as this pipeline YAML declares it" name:"config"                               short:"c" type:"path"`
 }
 
-// Run resolves the named server (rejecting anything but auth: {type:
-// oauth} — there is nothing to log in to otherwise) and runs the
-// interactive authorization-code + PKCE flow, printing progress a human can
-// follow.
+// Run is one of two logins, chosen by which pipeline was named. -c is a file here, so the login runs here: a loopback listener catches the redirect and the token lands in this user's config dir. -p is a pipeline a DAEMON serves, so the daemon runs it (daemon_login.go) — it is the machine that will spend the token, and one with no browser cannot be the loopback a redirect comes back to.
 func (m *MCPLoginCmd) Run() error {
-	cfg, err := config.LoadConfig(m.Pipeline)
+	if (m.Config == "") == (m.Pipeline == "") {
+		return errors.New("steps mcp login needs -c <pipeline.yml> to authorize this machine, or -p <name> (with --target) to authorize a daemon — and not both")
+	}
+
+	ctx, cancel := withSignalCancel(context.Background())
+	defer cancel()
+
+	if m.Pipeline != "" {
+		return m.remote(ctx)
+	}
+
+	cfg, err := config.LoadConfig(m.Config)
 	if err != nil {
 		return fmt.Errorf("could not load pipeline: %w", err)
 	}
@@ -1441,9 +1451,6 @@ func (m *MCPLoginCmd) Run() error {
 	if srv.Auth.Type != "oauth" {
 		return fmt.Errorf("mcp server %q is not auth: {type: oauth}; nothing to log in to", m.Server)
 	}
-
-	ctx, cancel := withSignalCancel(context.Background())
-	defer cancel()
 
 	fmt.Printf("→ opening browser to authorize %q…\n", m.Server)
 
@@ -1462,6 +1469,55 @@ func (m *MCPLoginCmd) Run() error {
 	return nil
 }
 
+// loginPoll is how often the CLI asks a daemon where its login stands.
+const loginPoll = 500 * time.Millisecond
+
+// remote starts the login on the daemon and plays its browser half here. The daemon is sent the address it was reached on with the credentials ALREADY OFF it (daemonClient.target), because that address becomes the redirect URI the authorization server is given and keeps.
+func (m *MCPLoginCmd) remote(ctx context.Context) error {
+	name, err := namedPipeline(m.Pipeline, "mcp login")
+	if err != nil {
+		return err
+	}
+
+	client := newDaemonClient(m.Target)
+
+	status, err := client.startLogin(ctx, name, m.Server)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("→ %s is authorizing %q…\n", client.target, m.Server)
+
+	announced := false
+
+	for status.State == web.LoginPending {
+		if status.AuthorizeURL != "" && !announced {
+			announced = true
+
+			stepsmcp.PrintAndOpen(openBrowser, status.AuthorizeURL)
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("mcp login: %w", ctx.Err())
+		case <-time.After(loginPoll):
+		}
+
+		status, err = client.loginStatus(ctx, name, m.Server)
+		if err != nil {
+			return err
+		}
+	}
+
+	if status.State != web.LoginAuthorized {
+		return fmt.Errorf("mcp login: %s", status.Message)
+	}
+
+	fmt.Printf("✓ authorized %q on %s (token saved there, at %s)\n", m.Server, client.target, status.TokenPath)
+
+	return nil
+}
+
 // openBrowser launches the OS's default browser at url. Its caller
 // (internal/mcp's loopbackCallback.fetch) prints url to stdout regardless
 // and reports any error this returns alongside it, so this only needs to
@@ -1476,10 +1532,13 @@ func openBrowser(url string) error {
 
 	var cmd *exec.Cmd
 
-	switch runtime.GOOS {
-	case "darwin":
+	switch {
+	// The convention xdg-open, gh and python's webbrowser all honour, and the only way to choose a browser on macOS, where `open` takes no such hint.
+	case os.Getenv("BROWSER") != "":
+		cmd = exec.CommandContext(ctx, os.Getenv("BROWSER"), url) //nolint:gosec // the operator's own choice of browser, and the URL is one steps built or a daemon they authenticated to returned
+	case runtime.GOOS == "darwin":
 		cmd = exec.CommandContext(ctx, "open", url) //nolint:gosec // url is the authorization URL steps itself just built via oauth2.Config.AuthCodeURL, not attacker-influenced input
-	case "linux":
+	case runtime.GOOS == "linux":
 		cmd = exec.CommandContext(ctx, "xdg-open", url) //nolint:gosec // same as above
 	default:
 		return fmt.Errorf("no known browser-open command for GOOS %q", runtime.GOOS)
