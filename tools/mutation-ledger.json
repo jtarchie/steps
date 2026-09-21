@@ -21,6 +21,42 @@
       "efficacy": 100,
       "note": "",
       "equivalent": []
+    },
+    "./internal/agent": {
+      "swept_at": "b7c68ec",
+      "date": "2026-09-21",
+      "killed": 140,
+      "lived": 46,
+      "timed_out": 0,
+      "not_covered": 35,
+      "efficacy": 75.27,
+      "note": "PARTIAL: only the ten files steps#137 added were swept (ere, tree, treecontainer, treehost, treepath, treesearch, treesetup, probe, fatal, runnerfactory). The other 41 files in the package are unmeasured, so this row is not a statement about internal/agent as a whole. An unscoped first attempt reached editfile.go and conversation.go before it was stopped and showed ~35 survivors in editfile.go's edit-matching heuristics alone - unrelated to this change, and the obvious next group to sweep. Was 73.12 with 50 survivors. Four were real gaps and are now tested: the lexical half of the container path confinement (every case in the confinement test resolved to a real path, so rejectLinkEscape answered them all and inverting the string check left the test green - a path that escapes lexically with a nonexistent target was the missing case, and it is the security-relevant one); caseFolds indexing out[1] on a one-rune fold set, which only happens for a case-insensitive pattern holding a caseless character like (?i)v2; a NUL at position 0 slipping the container write guard; and a blind spot in the Go-based differential itself, which claimed ERE was a subset of RE2 - it is not, because RE2 reads a backslash inside a bracket as an escape where POSIX reads it as a literal, so the correct rendering of [a\\\\b] is [a-b\\] which both real greps accept and Go rejects. That case moved to the docker parity test. WORKERS=1 throughout: this package now spawns containers in its own tests.",
+      "equivalent": [
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if len(out) > 1 && out[1] < out[0] {",
+          "why": "the < to <= form is equivalent: out[1] is a case fold of out[0] and a rune is never equal to its own distinct fold, so the branch never sees equality"
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | coversHigh := pairs[len(pairs)-2] <= asciiMax+1 && pairs[len(pairs)-1] == unicodeMax",
+          "why": "differs only for a class whose last low range ends exactly at 0x80, which RE2 produces only for a pattern written at that exact code point; reachable in principle, not by anything a model writes, and rendering stays correct either way for every class in the corpus"
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if pairs[i+1] > asciiMax {",
+          "why": "same edge as coversHigh, one code point down: differs only for a range ending exactly at 0x7F"
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | for lo <= hi && strings.ContainsRune(classSpecials, lo) {",
+          "why": "the <= to < form changes nothing observable for a single-rune range: an unlifted special is still written as a one-rune range and renders to the same bracket body, checked against both greps by the bracket-specials parity case"
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if lo > '\\n' || hi < '\\n' {",
+          "why": "splitAroundNewline's fast path; the boundary forms still split the newline out of every range that contains one, which is the only property that matters - a newline in the rendered pattern is what grep reads as a second pattern"
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if r <= asciiMax && strings.ContainsRune(ereSpecial, r) {",
+          "why": "differs only for U+007F, which is not in ereSpecial, so the second half of the conjunction decides either way"
+        }
+      ]
     }
   }
 }

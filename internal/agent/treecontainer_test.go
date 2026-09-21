@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,6 +89,8 @@ func writeFixture(t *testing.T, dir string) {
 		"lines.txt":              "line1\nline2\nline3\nline4\nline5\n",
 		// The four characters a POSIX bracket expression can only position, in a file a pattern naming them has to find.
 		"brackets.txt": "a]b^c-d 7\n",
+		// A backslash is the fourth character a bracket expression can only position, and the one Go's own regexp cannot be asked about: RE2 reads it as an escape inside brackets where POSIX reads it as a literal, so the rendered class is well-formed to grep and unparseable to Go. Real greps are the only judge available.
+		"backslash.txt": "a\\\\b 7\n",
 	}
 
 	for name, body := range files {
@@ -189,6 +192,8 @@ func parityCases() []parityCase {
 		// A class holding one of the four characters a bracket expression can only POSITION. Spelled as a collating symbol these compile on debian and are refused outright by musl, where grep exits before matching anything and the refusal reads as an empty tree.
 		{"dash in a class", mustOpts(`[a-z-]+ 99`, "", "content")},
 		{"bracket specials in a class", mustOpts(`[\]\^\-]`, "", "content")},
+		{"backslash in a class", mustOpts(`[a\\b]+`, "", "content")},
+		{"negated class", mustOpts(`[^ ]7`, "", "content")},
 		{"word characters and a dash", mustOpts(`[a-zA-Z0-9_-]+`, "", "files_with_matches")},
 		// A filename search applies no size rule on this machine, so it must apply none in the container either: big.txt has to be in both answers.
 		{"glob only over a large file", mustOpts("", "**/*.txt", "files_with_matches")},
@@ -279,7 +284,8 @@ func TestContainerTreeConfinesPaths(t *testing.T) {
 
 	contained := newContainerTree(t, "alpine:3", dir)
 
-	for _, rel := range []string{"escape", "../outside.txt", "/etc/passwd", "sub/../../elsewhere"} {
+	// The last two escape LEXICALLY and resolve to nothing: readlink cannot object to a path whose intermediate directories do not exist, so they are the only cases the string check alone refuses. Without them the symlink check answers every one of these, and a broken lexical check goes unnoticed — which is how it survived mutation.
+	for _, rel := range []string{"escape", "../outside.txt", "/etc/passwd", "sub/../../elsewhere", "../nosuchdir/deeper.txt", "sub/../../nosuchdir/x/y.txt"} {
 		t.Run(rel, func(t *testing.T) {
 			_, err := contained.resolve(t.Context(), rel)
 			if err == nil {
@@ -353,6 +359,31 @@ func TestContainerTreeRoundTripsFiles(t *testing.T) {
 
 	if string(got) != awkward {
 		t.Errorf("content = %q, want %q", got, awkward)
+	}
+}
+
+// TestContainerWriteRefusesNUL covers the byte no argv can carry. The content crosses into the container as one shell word, and a NUL in it is not an error the shell reports — it is where the shell stops reading, so the file would be written silently truncated. A NUL at the very start is the case a length check gets wrong.
+func TestContainerWriteRefusesNUL(t *testing.T) {
+	requireAgentDocker(t)
+
+	dir := daemonVisibleDir(t)
+	contained := newContainerTree(t, "alpine:3", dir)
+
+	for name, content := range map[string][]byte{
+		"leading":  []byte("\x00after the nul\n"),
+		"embedded": []byte("before\x00after\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := contained.writeFile(t.Context(), contained.dir+"/nul-"+name+".txt", content, false)
+			if !errors.Is(err, errNULInContent) {
+				t.Fatalf("writeFile with a %s NUL = %v, want it refused before the shell truncates it", name, err)
+			}
+
+			_, statErr := os.Stat(filepath.Join(dir, "nul-"+name+".txt"))
+			if statErr == nil {
+				t.Error("the file was created anyway, so a truncated write reached the tree")
+			}
+		})
 	}
 }
 
