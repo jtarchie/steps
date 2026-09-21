@@ -299,9 +299,11 @@ Seven controls, each doing what a CLI verb does:
 - **Abort** a running run from its page, or a queued one from the page a
   trigger lands on — what `steps runs abort` asks for. See
   [Aborting a run](#aborting-a-run).
-
-- **Connect** an oauth `mcp_servers:` entry, and **Test** any of them, from the
-  [mcp tab](mcp.md#authorizing-from-the-browser-the-mcp-tab).
+- **Connect** an oauth `mcp_servers:` entry from the
+  [mcp tab](mcp.md#authorizing-from-the-browser-the-mcp-tab), finishing the
+  login in the browser you are already in.
+- **Test** any declared `mcp_servers:` entry from the same tab — the only
+  thing on that page that connects to anything.
 
 `--read-only` withholds all seven: the controls disappear from the pages and
 the routes refuse. The mcp tab keeps its status column — that a server needs a

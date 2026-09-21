@@ -17,19 +17,30 @@ import (
 type probes struct {
 	base    context.Context //nolint:containedctx // a probe outlives the click that started it, and dies with the daemon
 	mu      sync.Mutex
-	results map[string]*web.MCPProbe
+	results map[string]*probeResult
 	// cancels lets shutdown take an in-flight probe with it, keyed the same way, since a probe's whole cost is a connection nobody is waiting on any more.
 	cancels  map[string]context.CancelFunc
 	inflight sync.WaitGroup
 }
 
 func newProbes(base context.Context) *probes {
-	return &probes{base: base, results: map[string]*web.MCPProbe{}, cancels: map[string]context.CancelFunc{}}
+	return &probes{base: base, results: map[string]*probeResult{}, cancels: map[string]context.CancelFunc{}}
 }
 
-// probeKey scopes a result to the pipeline that asked AND to the configuration it asked about. Folding the target and auth in is what invalidates a result when a `steps pipeline set` moves the endpoint: the old answer describes a server this pipeline no longer has, and a stale "✓ 7 tools" against a moved endpoint is worse than no answer. It needs no hook on set, rename or destroy — a changed configuration simply misses.
-func probeKey(pipeline *web.Pipeline, server, fingerprint string) string {
-	return pipeline.Slug + "\x00" + server + "\x00" + fingerprint
+// probeResult is one answer and the configuration it describes. The fingerprint is a FIELD rather than part of the key so this map holds one entry per declared server however often a `steps pipeline set` moves an endpoint under it — keyed by the configuration, it would gain an entry per version ever tested and drop none, which is the leak staleLogins is capped against.
+type probeResult struct {
+	fingerprint string
+	probe       web.MCPProbe
+}
+
+// probeKey scopes a result to the pipeline that asked and the server it asked about.
+func probeKey(pipeline *web.Pipeline, server string) string {
+	return pipeline.Slug + "\x00" + server
+}
+
+// probeFingerprint is the configuration an answer describes, and what invalidates it when a `steps pipeline set` moves the endpoint: the old answer describes a server this pipeline no longer has, and a stale "✓ 7 tools" against a moved endpoint is worse than no answer. It needs no hook on set, rename or destroy — a changed configuration simply misses.
+func probeFingerprint(srv *config.MCPServer) string {
+	return srv.Target() + "\x00" + srv.AuthLabel()
 }
 
 // MCPState reports what the token-holder knows about one server. No request is made: the page calls this on every 2.5s poll, for every declared server.
@@ -51,8 +62,8 @@ func (p *probes) MCPState(pipeline *web.Pipeline, server string) web.MCPState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if held := p.results[probeKey(pipeline, server, srv.Target()+srv.AuthLabel())]; held != nil {
-		probe := *held
+	if held := p.results[probeKey(pipeline, server)]; held != nil && held.fingerprint == probeFingerprint(srv) {
+		probe := held.probe
 		state.Probe = &probe
 	}
 
@@ -70,29 +81,28 @@ func (p *probes) StartProbe(pipeline *web.Pipeline, server string) error {
 		return fmt.Errorf("mcp server %q cannot be probed from here: %s", server, skip)
 	}
 
-	key := probeKey(pipeline, server, srv.Target()+srv.AuthLabel())
+	key := probeKey(pipeline, server)
+	fingerprint := probeFingerprint(srv)
+	timeout := pipeline.Config().PreflightSettings().ProbeTimeout()
 
 	p.mu.Lock()
 
 	// A second click while one is in flight is somebody being impatient, not a second question. Answering it would open a second connection to the same server to learn the same thing.
-	if held := p.results[key]; held != nil && held.Running {
+	if held := p.results[key]; held != nil && held.fingerprint == fingerprint && held.probe.Running {
 		p.mu.Unlock()
 
 		return nil
 	}
 
-	var settings *config.Preflight
-	if cfg := pipeline.Config(); cfg.Defaults != nil {
-		settings = cfg.Defaults.Preflight
-	}
+	ctx, cancel := context.WithTimeout(p.base, timeout)
 
-	ctx, cancel := context.WithTimeout(p.base, settings.ProbeTimeout())
-
+	// A probe of the configuration this one replaces is answering a question nobody is asking any more.
 	if previous := p.cancels[key]; previous != nil {
 		previous()
 	}
 
-	p.results[key] = &web.MCPProbe{Running: true, At: time.Now()}
+	mine := &probeResult{fingerprint: fingerprint, probe: web.MCPProbe{Running: true, At: time.Now()}}
+	p.results[key] = mine
 	p.cancels[key] = cancel
 	p.mu.Unlock()
 
@@ -102,7 +112,7 @@ func (p *probes) StartProbe(pipeline *web.Pipeline, server string) error {
 		defer cancel()
 
 		tools, probeErr := stepsmcp.ListServerTools(ctx, target)
-		result := &web.MCPProbe{At: time.Now()}
+		result := web.MCPProbe{At: time.Now()}
 
 		if probeErr != nil {
 			result.Detail = config.MCPStatusReason(server, probeErr)
@@ -112,8 +122,13 @@ func (p *probes) StartProbe(pipeline *web.Pipeline, server string) error {
 		}
 
 		p.mu.Lock()
-		p.results[key] = result
-		delete(p.cancels, key)
+
+		// Only while this is still the probe the row waits on: a cancelled predecessor unwinds AFTER its replacement has recorded itself, and letting it write would report its own cancellation as the newer question's answer.
+		if p.results[key] == mine {
+			p.results[key] = &probeResult{fingerprint: fingerprint, probe: result}
+			delete(p.cancels, key)
+		}
+
 		p.mu.Unlock()
 	})
 

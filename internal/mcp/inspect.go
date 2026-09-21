@@ -15,8 +15,6 @@ type TokenState struct {
 	Connected bool
 	// Renews is a refresh token in hand, which is what makes a credential survive unattended.
 	Renews bool
-	// Expiry is when the access token dies, zero for one that does not say.
-	Expiry time.Time
 	// Detail is the sentence a person acts on: what is wrong, or that nothing is.
 	Detail string
 	// Path is where the token lives, so an operator can find, inspect or delete it.
@@ -37,7 +35,6 @@ func InspectToken(srv config.MCPServer) TokenState {
 
 	state.Connected = true
 	state.Renews = tf.RefreshToken != ""
-	state.Expiry = tf.Expiry
 
 	switch {
 	case state.Renews:

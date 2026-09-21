@@ -27,6 +27,9 @@ type mcpAuthorizer struct {
 	probed   []string
 	startErr error
 	probeErr error
+	// startedID and statusID differ when a login has been replaced under its server name, which is what a second Connect does.
+	startedID string
+	statusID  string
 }
 
 func (m *mcpAuthorizer) StartLogin(_ *Pipeline, _ string, req LoginRequest) (LoginStatus, error) {
@@ -36,7 +39,7 @@ func (m *mcpAuthorizer) StartLogin(_ *Pipeline, _ string, req LoginRequest) (Log
 
 	m.started = append(m.started, req)
 
-	return LoginStatus{State: LoginPending}, nil
+	return LoginStatus{State: LoginPending, ID: m.startedID}, nil
 }
 
 func (m *mcpAuthorizer) LoginStatus(string) (LoginStatus, bool) {
@@ -48,7 +51,7 @@ func (m *mcpAuthorizer) LoginStatus(string) (LoginStatus, bool) {
 		return LoginStatus{}, false
 	}
 
-	return LoginStatus{State: LoginPending, AuthorizeURL: m.authorizeURL}, true
+	return LoginStatus{State: LoginPending, AuthorizeURL: m.authorizeURL, ID: m.statusID}, true
 }
 
 func (m *mcpAuthorizer) LoginCallback(string) http.Handler { return nil }
@@ -84,6 +87,9 @@ mcp_servers:
   auth: { type: bearer, api_key_env: STEPS_TEST_UNSET_PAT }
 - name: gopls
   command: steps-no-such-mcp-server
+- name: perstep
+  command: sh
+  cwd: repo
 
 agents:
 - name: triager
@@ -151,6 +157,26 @@ func TestMCPTabSaysWhyEachServerIsNotWiredUp(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("the mcp tab never says %q:\n%s", want, body)
 		}
+	}
+}
+
+// A readiness NOTHING on this machine answered is not a pass. The stylesheet draws the glyph from the st-<mark> class alone, so asserting the status text sits immediately after that class pins both halves: the right mark, and no second glyph of the row's own beside the one the CSS already inserts.
+func TestAStatusNobodyAnsweredIsNotDrawnAsAPass(t *testing.T) {
+	t.Parallel()
+
+	server, _, _ := mcpServerPipeline(t, stubRunner{})
+
+	_, body := get(t, server, "/p/demo/mcp")
+	if want := `st-skipped">not probed (cwd: repo resolves per step)`; !strings.Contains(body, want) {
+		t.Errorf("a cwd: that resolves per step is not drawn as unanswered (%s):\n%s", want, body)
+	}
+
+	// The same question with the token-holder gone: nothing here could run a login, which is not the server working.
+	server.SetManager(&fakeManager{})
+
+	_, body = get(t, server, "/p/demo/mcp")
+	if want := `st-skipped">this daemon cannot run an mcp login`; !strings.Contains(body, want) {
+		t.Errorf("a daemon that cannot log in drew the row as a pass (want %s):\n%s", want, body)
 	}
 }
 
@@ -340,6 +366,27 @@ func TestADaemonWithNoAuthorizerSaysSoRatherThanOfferingALogin(t *testing.T) {
 
 	if code := postOriginCode(t, server, "/p/demo/mcp/linear/connect", "http://example.test"); code != http.StatusNotImplemented {
 		t.Errorf("connect against a daemon that cannot log in = %d, want 501", code)
+	}
+}
+
+// A login is tracked by server NAME, so a second Connect on that name takes it over — and two pipelines may declare one name against DIFFERENT endpoints. The reader whose login was replaced must not be handed the replacement's consent screen: they would be authorizing something they never clicked on.
+func TestConnectWillNotFollowALoginThatReplacedItsOwn(t *testing.T) {
+	t.Parallel()
+
+	server, _, authorizer := mcpServerPipeline(t, stubRunner{})
+
+	// What StartLogin handed back, against what the server name answers by the time the URL exists.
+	authorizer.startedID = "the-click-that-got-here-first"
+	authorizer.statusID = "a-later-click-on-the-same-name"
+	authorizer.authorizeURL = "https://as.example/authorize?state=somebody-elses"
+
+	code, location := postOrigin(t, server, "/p/demo/mcp/linear/connect", "http://example.test")
+	if code != http.StatusSeeOther {
+		t.Fatalf("POST connect = %d, want 303", code)
+	}
+
+	if location != "/p/demo/mcp" {
+		t.Errorf("connect followed the login that replaced its own, to %q — the reader is at a consent screen they never asked for", location)
 	}
 }
 

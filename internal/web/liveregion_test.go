@@ -165,20 +165,11 @@ var timeText = regexp.MustCompile(`<time[^>]*>[^<]*</time>`)
 // told from one carrying a fact.
 var markup = regexp.MustCompile(`(?s)<[^>]*>|\s+`)
 
-// mcpTabAuthorizer is the one the staleness probe moves underneath the page. One case uses it, and setup runs before that case's change, so the sharing is within a single subtest.
-var mcpTabAuthorizer *mcpAuthorizer
-
-func mcpTabForStaleness(t *testing.T) (*Server, *Pipeline) {
-	t.Helper()
-
-	server, pipeline, authorizer := mcpServerPipeline(t, stubRunner{})
-	mcpTabAuthorizer = authorizer
-
-	return server, pipeline
-}
-
 func TestNothingThatChangesLivesOutsideALiveRegion(t *testing.T) {
 	t.Parallel()
+
+	// The mcp tab is the one case whose change is made to a collaborator rather than to the store, so setup has to hand it to change. A local, not a package variable: the subtests below run in parallel, and one case's fixture reachable from all of them is a race waiting for the second case to want it.
+	var mcpTab *mcpAuthorizer
 
 	cases := []struct {
 		name   string
@@ -277,14 +268,21 @@ func TestNothingThatChangesLivesOutsideALiveRegion(t *testing.T) {
 		},
 		{
 			// The tab's own changing parts: a login that finishes and a probe that lands, both of which happen after the request that started them and neither of which publishes anything the reader's page would otherwise hear about.
-			name:  "mcp tab",
-			path:  "/p/demo/mcp",
-			setup: mcpTabForStaleness,
+			name: "mcp tab",
+			path: "/p/demo/mcp",
+			setup: func(t *testing.T) (*Server, *Pipeline) {
+				t.Helper()
+
+				server, pipeline, authorizer := mcpServerPipeline(t, stubRunner{})
+				mcpTab = authorizer
+
+				return server, pipeline
+			},
 			change: func(t *testing.T, _ *Pipeline) {
 				t.Helper()
 
-				mcpTabAuthorizer.credential = MCPCredential{Connected: true, Detail: "connected, renews automatically"}
-				mcpTabAuthorizer.probe = &MCPProbe{OK: true, Detail: "7 tools", At: time.Now()}
+				mcpTab.credential = MCPCredential{Connected: true, Detail: "connected, renews automatically"}
+				mcpTab.probe = &MCPProbe{OK: true, Detail: "7 tools", At: time.Now()}
 			},
 		},
 		{

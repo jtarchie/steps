@@ -146,6 +146,24 @@ func TestAProbeResultDoesNotSurviveTheConfigurationItDescribes(t *testing.T) {
 	if got := held.MCPState(held.server.Lookup("app"), "tracker").Probe; got != nil {
 		t.Errorf("a probe result outlived the endpoint it described: %+v", got)
 	}
+
+	// One row per declared server, not one per configuration ever tested: keyed by the configuration, a daemon nobody restarts gains a row per `steps pipeline set` and drops none.
+	moved := held.server.Lookup("app")
+
+	err = held.StartProbe(moved, "tracker")
+	if err != nil {
+		t.Fatalf("StartProbe after the endpoint moved: %v", err)
+	}
+
+	waitForProbe(t, held, moved, "tracker")
+
+	held.probes.mu.Lock()
+	kept := len(held.results)
+	held.probes.mu.Unlock()
+
+	if kept != 1 {
+		t.Errorf("the daemon remembers %d probe answers for one server, want only the configuration it serves now", kept)
+	}
 }
 
 // A probe that fails is the answer, not an error: the tab's whole job is to say what a server does when something actually connects to it, and "nothing is listening" is exactly that.
@@ -265,6 +283,41 @@ func writeTokenFile(t *testing.T, server string, token *stepsmcp.TokenFile) {
 	}
 }
 
+// The map is keyed by server NAME, so the newest login owns the name — which means a request that started one can only find it again if the attempt has an identity of its own. Without it, the browser of whoever clicked first is sent to whichever consent screen the name happens to point at by then.
+func TestEachLoginAttemptIsNamedSoAReplacementCanBeToldApart(t *testing.T) {
+	t.Parallel()
+
+	held := servingDaemon(t)
+	setPipeline(t, held, "app", mcpStatePipeline)
+
+	target := held.server.Lookup("app")
+	base := web.LoginRequest{Base: "https://steps.example.com", Return: "/p/app/mcp"}
+
+	first, err := held.StartLogin(target, "tracker", base)
+	if err != nil {
+		t.Fatalf("StartLogin: %v", err)
+	}
+
+	second, err := held.StartLogin(target, "tracker", base)
+	if err != nil {
+		t.Fatalf("StartLogin (the click that replaces it): %v", err)
+	}
+
+	if first.ID == "" || second.ID == "" {
+		t.Fatalf("a login attempt has no identity: %q then %q", first.ID, second.ID)
+	}
+
+	if first.ID == second.ID {
+		t.Errorf("two attempts on one server name share the id %q, so neither request can tell its own login from the other", first.ID)
+	}
+
+	// The name now belongs to the second, which is exactly what the first one's request has to be able to notice.
+	current, found := held.LoginStatus("tracker")
+	if !found || current.ID != second.ID {
+		t.Errorf("the server name reports id %q, want the login that replaced the first (%q)", current.ID, second.ID)
+	}
+}
+
 // A login's Return travels from a request into a Location header, so anything that could name another host would make this daemon an open redirector — somebody else's login ending on somebody else's page.
 func TestALoginOnlyReturnsToThisDaemon(t *testing.T) {
 	t.Parallel()
@@ -272,6 +325,8 @@ func TestALoginOnlyReturnsToThisDaemon(t *testing.T) {
 	for _, refused := range []string{
 		"https://evil.example/steal",
 		"//evil.example/steal",
+		// A browser folds the backslash into a slash for http(s), so this is an authority and not a path — while url.Parse reads it as a path with no host at all.
+		`/\evil.example/steal`,
 		"http://127.0.0.1/p/app/mcp",
 		"mcp",
 	} {

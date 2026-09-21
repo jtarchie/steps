@@ -50,16 +50,29 @@ type mcpRow struct {
 	UsedBy    string
 	// OAuth marks the rows a login applies to, which is what puts a Connect button on one.
 	OAuth bool
-	// Status is the cell, and Bad is whether it reads as a failure — the glyph and the class both come from it.
+	// Status is the cell, and Mark is how it reads: the st-<mark> class the shared stylesheet draws the glyph and the colour from. THREE marks, not two, because a readiness nothing here answered — an oauth row on a daemon holding no token, a stdio cwd: that resolves per step — is not a pass, and `steps mcp list` prints it as neither.
 	Status string
-	Bad    bool
+	Mark   string
 	// Pending is a login in flight, with the authorization URL once there is one to offer.
 	Pending      bool
 	AuthorizeURL string
 	// Failed is a login that got far enough to fail, which is the outcome the CLI polls for and the page must show too, since the exchange finishes after the browser has already come back.
-	Failed  string
-	Probe   *MCPProbe
-	TokenAt string
+	Failed string
+	Probe  *MCPProbe
+}
+
+// markFor is the stamp one static readiness reads as. MCPUnknown is st-skipped — faint, and not a tick — because the whole of that state is that nothing on this machine answered the question.
+func markFor(readiness config.MCPReadiness) string {
+	switch readiness {
+	case config.MCPMissing:
+		return "failed"
+	case config.MCPReady:
+		return "passed"
+	case config.MCPUnknown:
+		return "skipped"
+	default:
+		return "skipped"
+	}
 }
 
 // handleMCP renders the tab. It makes no request to any declared server: a page that probed on load would connect to every one of them on every 2.5s poll of every open tab, which is a denial of service written against your own vendors.
@@ -96,7 +109,7 @@ func (s *Server) mcpRowFor(pipeline *Pipeline, server config.MCPServer) mcpRow {
 		UsedBy:    pipeline.Config().MCPUsers(server.Name),
 		OAuth:     server.Auth.Type == "oauth",
 		Status:    status.Detail,
-		Bad:       status.Readiness == config.MCPMissing,
+		Mark:      markFor(status.Readiness),
 	}
 
 	authorizer := s.authorizer()
@@ -114,7 +127,11 @@ func (s *Server) mcpRowFor(pipeline *Pipeline, server config.MCPServer) mcpRow {
 
 	if row.OAuth {
 		row.Status = state.Credential.Detail
-		row.Bad = !state.Credential.Connected
+		row.Mark = markFor(config.MCPMissing)
+
+		if state.Credential.Connected {
+			row.Mark = markFor(config.MCPReady)
+		}
 	}
 
 	// A login in flight outranks the token it is about to replace: it is the newest thing that has happened to this server, and the reader is probably the one who started it.
@@ -125,8 +142,6 @@ func (s *Server) mcpRowFor(pipeline *Pipeline, server config.MCPServer) mcpRow {
 		case LoginFailed:
 			row.Failed = login.Message
 		}
-
-		row.TokenAt = login.TokenPath
 	}
 
 	return row
@@ -153,22 +168,24 @@ func (s *Server) handleMCPConnect(c *echo.Context) error {
 	server := c.Param("server")
 	tab := "/p/" + pipeline.Slug + "/mcp"
 
-	_, err = authorizer.StartLogin(pipeline, server, LoginRequest{Base: base, Return: tab})
+	started, err := authorizer.StartLogin(pipeline, server, LoginRequest{Base: base, Return: tab})
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	//nolint:wrapcheck // echo's redirect error is returned verbatim
-	return c.Redirect(http.StatusSeeOther, s.awaitAuthorizeURL(c, authorizer, server, tab))
+	return c.Redirect(http.StatusSeeOther, awaitAuthorizeURL(c, authorizer, server, tab, started))
 }
 
-// awaitAuthorizeURL waits for discovery and registration to produce the URL the reader is to be sent to, and gives up on the tab rather than on an error page. Two ways out other than the bound: the URL arrives, which is the point, and the login FAILS — a provider that does not answer discovery should not cost a reader ten seconds of a spinner before it says so.
-func (s *Server) awaitAuthorizeURL(c *echo.Context, authorizer Authorizer, server, tab string) string {
+// awaitAuthorizeURL waits for discovery and registration to produce the URL the reader is to be sent to, and gives up on the tab rather than on an error page. Three ways out other than the bound: the URL arrives, which is the point; the login FAILS, since a provider that does not answer discovery should not cost a reader ten seconds of a spinner before it says so; and the login is REPLACED, because a login is tracked by server name and somebody else clicking Connect on that name takes the name over.
+//
+// The replacement case is why started is passed in. Asking for "the login called tracker" is the only question the interface can answer, and after a replacement that is somebody else's login — one that may be against a different endpoint entirely, since two pipelines may declare one name. Sending this reader to THAT consent screen asks them to authorize something they never clicked on; the tab, which shows the login that won, is the honest answer.
+func awaitAuthorizeURL(c *echo.Context, authorizer Authorizer, server, tab string, started LoginStatus) string {
 	deadline := time.Now().Add(mcpAuthorizeBound)
 
 	for time.Now().Before(deadline) {
 		status, found := authorizer.LoginStatus(server)
-		if !found || status.State == LoginFailed {
+		if !found || status.State == LoginFailed || status.ID != started.ID {
 			return tab
 		}
 

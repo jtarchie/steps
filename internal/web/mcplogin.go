@@ -19,6 +19,8 @@ const (
 // LoginStatus is where one login stands. Shared with the client for the reason SetRequest is.
 type LoginStatus struct {
 	State string `json:"state"`
+	// ID names THIS attempt, because a login is tracked by server NAME and a second Connect replaces the first under it. Without it a request can only ask "what is the state of the login called tracker", which after a replacement is somebody else's.
+	ID string `json:"id,omitempty"`
 	// AuthorizeURL appears once discovery and registration are done, which is network work the start request does not wait out.
 	AuthorizeURL string `json:"authorize_url,omitempty"`
 	// Message is the refusal, in the flow's own words — including the one that matters most unattended: authorized, but with a token that cannot be renewed.

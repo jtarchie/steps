@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
@@ -27,6 +29,8 @@ type logins struct {
 	// stale is the logins a newer one replaced, newest last, kept only so the browser still at a consent screen can be told what happened; see staleLogins.
 	stale []staleLogin
 	wait  sync.WaitGroup
+	// attempts numbers the logins this daemon has started, which is what tells one attempt from the one that replaced it under the same server name.
+	attempts atomic.Uint64
 }
 
 type pendingLogin struct {
@@ -47,6 +51,11 @@ const staleLogins = 4
 
 func newLogins(base context.Context) *logins {
 	return &logins{base: base, held: map[string]*pendingLogin{}}
+}
+
+// nextID names one ATTEMPT, since the map is keyed by server name and the newest login owns that name. A counter rather than a nonce: it is compared with itself by the request that started the login and never leaves this process as anything a caller could authenticate with.
+func (l *logins) nextID() string {
+	return strconv.FormatUint(l.attempts.Add(1), 10)
 }
 
 func (p *pendingLogin) set(change func(*web.LoginStatus)) {
@@ -85,7 +94,7 @@ func (l *logins) StartLogin(pipeline *web.Pipeline, server string, req web.Login
 	}
 
 	ctx, cancel := context.WithTimeout(l.base, loginBound)
-	pending := &pendingLogin{cancel: cancel, status: web.LoginStatus{State: web.LoginPending}}
+	pending := &pendingLogin{cancel: cancel, status: web.LoginStatus{State: web.LoginPending, ID: l.nextID()}}
 	pending.hosted = stepsmcp.NewHostedCallback(redirect, back, func(authURL string) {
 		pending.set(func(status *web.LoginStatus) { status.AuthorizeURL = authURL })
 	})
@@ -211,7 +220,8 @@ func returnTo(back string) (string, error) {
 		return "", nil
 	}
 
-	if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") {
+	// "//host" and "/\host" are both an AUTHORITY to a browser, never a path: the WHATWG parser folds the backslash into a slash for http(s), so Location: /\evil.example navigates off this daemon — while url.Parse reads it as a path with an empty Host and would wave it through below.
+	if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") || strings.HasPrefix(back, `/\`) {
 		return "", fmt.Errorf("a login returns to a path on this daemon, got %q", back)
 	}
 
