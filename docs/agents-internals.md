@@ -60,13 +60,16 @@ Both mutations are transport-level only:
 
 ### Other gateways
 
-Two more gateways get the same per-agent, per-run treatment, each in its own spelling. Both caching switches are sent for **every** model, unlike OpenRouter's marker: the gateway itself adds `cache_control` breakpoints only for providers that need them (Anthropic and a few others) and leaves implicit-caching providers alone. A body that already carries the field is left untouched.
+Three more gateways get the same per-agent, per-run treatment, each in its own spelling. Where there is a caching switch it is sent for **every** model, unlike OpenRouter's marker: the gateway itself adds `cache_control` breakpoints only for providers that need them (Anthropic and a few others) and leaves implicit-caching providers alone. A body that already carries the field is left untouched, and a gateway with no field has its body passed through unchanged.
 
 | Prefix | Key | Session header | Caching field |
 |---|---|---|---|
 | `vercel/` (`ai-gateway.vercel.sh`) | `AI_GATEWAY_API_KEY` | `x-session-affinity` | `providerOptions: {gateway: {caching: auto}}` |
 | `requesty/` (`requesty.ai`) | `REQUESTY_API_KEY` | none documented | `requesty: {auto_cache: true}` |
+| `opencode/` (`opencode.ai`) | `OPENCODE_API_KEY` | `x-opencode-session` (**required**) | **none** |
 | `helicone/` (`ai-gateway.helicone.ai`) | `HELICONE_API_KEY` | — | **none** |
+
+**opencode is the one whose header is not an optimization.** Its gateway refuses a request that arrives without one — `400 {"type":"MissingSessionID"}` — and routes nothing, so every `opencode/` model failed until steps sent it. It needs no caching field: it routes to providers that cache implicitly and reports `prompt_cache_hit_tokens` back without being asked. It takes bare model names (`opencode/deepseek-v4.1-flash`), not `vendor/model`.
 
 Helicone has no request-wide switch: Anthropic caching there needs a `cache_control` marker placed on individual messages, so an Anthropic model through `helicone/` pays full input price every turn. Models with implicit caching (OpenAI, Gemini, DeepSeek) are unaffected. Helicone takes bare model names (`helicone/claude-sonnet-4`); the others take `vendor/model`.
 

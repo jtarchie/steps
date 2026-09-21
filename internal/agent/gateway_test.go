@@ -65,6 +65,12 @@ func TestGatewayTransportWireMutations(t *testing.T) {
 			},
 		},
 		{
+			// No caching field: opencode's gateway routes to providers that cache implicitly (its own response reports prompt_cache_hit_tokens), so the session header is the whole of what it wants. Without one it answers 400 MissingSessionID and refuses the request outright, which makes this the one gateway here whose header is required rather than an optimization.
+			name:          "opencode",
+			baseURL:       "https://opencode.ai/zen/go/v1/",
+			sessionHeader: "x-opencode-session",
+		},
+		{
 			name:    "requesty",
 			baseURL: "https://router.requesty.ai/v1/",
 			field:   "requesty",
@@ -113,11 +119,20 @@ type gatewayWireCase struct {
 	name          string
 	baseURL       string
 	sessionHeader string
+	// field is the body key this gateway's automatic caching is spelled in, or "" for a gateway that needs no body change at all — where the assertion becomes that the body arrives exactly as written.
 	field         string
 	assertCaching func(t *testing.T, value any)
 }
 
 func assertGatewayWire(t *testing.T, gw gatewayWireCase) {
+	t.Helper()
+
+	assertGatewayStampsAChatCompletion(t, gw)
+	assertGatewayKeepsACallerSuppliedField(t, gw)
+	assertGatewayLeavesANonChatPathAlone(t, gw)
+}
+
+func assertGatewayStampsAChatCompletion(t *testing.T, gw gatewayWireCase) {
 	t.Helper()
 
 	t.Run(gw.name+" stamps session and automatic caching on a chat completion", func(t *testing.T) {
@@ -132,7 +147,7 @@ func assertGatewayWire(t *testing.T, gw gatewayWireCase) {
 			assertSessionShape(t, header.Get(gw.sessionHeader), "job", "reviewer")
 		}
 
-		gw.assertCaching(t, (*body)[gw.field])
+		assertGatewayCaching(t, gw, *body)
 
 		if _, present := (*body)["cache_control"]; present {
 			t.Error("the OpenRouter cache_control marker was sent to a caching gateway")
@@ -142,6 +157,33 @@ func assertGatewayWire(t *testing.T, gw gatewayWireCase) {
 			t.Error("the OpenRouter session header was sent to a caching gateway")
 		}
 	})
+}
+
+// assertGatewayCaching holds the body to what this gateway's spelling asks for — or, for one with no caching field, to arriving exactly as written.
+func assertGatewayCaching(t *testing.T, gw gatewayWireCase, body map[string]any) {
+	t.Helper()
+
+	if gw.field != "" {
+		gw.assertCaching(t, body[gw.field])
+
+		return
+	}
+
+	if len(body) != 2 {
+		t.Errorf("body = %v, want the two fields it was sent with and nothing added", body)
+	}
+
+	if _, present := body[""]; present {
+		t.Error(`the body carries a "" key: an empty caching field was spliced in as one`)
+	}
+}
+
+func assertGatewayKeepsACallerSuppliedField(t *testing.T, gw gatewayWireCase) {
+	t.Helper()
+
+	if gw.field == "" {
+		return // no body field, so there is none for a caller to have supplied
+	}
 
 	t.Run(gw.name+" leaves a caller-supplied field alone", func(t *testing.T) {
 		t.Parallel()
@@ -156,6 +198,10 @@ func assertGatewayWire(t *testing.T, gw gatewayWireCase) {
 			t.Errorf("%s = %v, want the caller's untouched", gw.field, got)
 		}
 	})
+}
+
+func assertGatewayLeavesANonChatPathAlone(t *testing.T, gw gatewayWireCase) {
+	t.Helper()
 
 	t.Run(gw.name+" leaves a non-chat path alone", func(t *testing.T) {
 		t.Parallel()
@@ -168,8 +214,10 @@ func assertGatewayWire(t *testing.T, gw gatewayWireCase) {
 			t.Error("session header was stamped on a non-chat request")
 		}
 
-		if _, present := (*body)[gw.field]; present {
-			t.Errorf("%s was stamped on a non-chat request", gw.field)
+		if gw.field != "" {
+			if _, present := (*body)[gw.field]; present {
+				t.Errorf("%s was stamped on a non-chat request", gw.field)
+			}
 		}
 	})
 }
@@ -178,6 +226,8 @@ func TestCachingGatewayFor(t *testing.T) {
 	t.Parallel()
 
 	for baseURL, want := range map[string]string{
+		"https://opencode.ai/zen/go/v1/":       "opencode",
+		"https://notopencode.ai/zen/go/v1/":    "",
 		"https://ai-gateway.vercel.sh/v1/":     "vercel",
 		"https://AI-Gateway.Vercel.sh/v1/":     "vercel",
 		"https://router.requesty.ai/v1/":       "requesty",
