@@ -155,6 +155,11 @@ func spillPreview(content string) []byte {
 func shellToolResult(ctx context.Context, command string, env toolEnv, limit int) map[string]any {
 	stdout, stderr, exitCode, err := env.runner.RunCaptureFullLimitedStreamed(ctx, command, limit, env.spillDir)
 	if err != nil {
+		// A runner's error is never the command's own answer — a nonzero exit is data — so it is the machine saying there was nothing to run on. For a containerized agent that is the same lost tree the file tools report, and run_shell is the tool most likely to be in flight when a worker goes away, so leaving it out would let the conversation keep calling into it until max_turns.
+		if env.tree != nil {
+			env.lost.note(fmt.Errorf("%w: %w", errNoTreeAccess, err))
+		}
+
 		return map[string]any{"error": err.Error()}
 	}
 

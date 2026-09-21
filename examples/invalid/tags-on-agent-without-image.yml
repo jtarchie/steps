@@ -1,0 +1,16 @@
+# A placed agent's file tools run in its container, through the image's own
+# userland, which is what puts them on the same tree as its run_shell. With no
+# image: there is no container, so only the shell commands would travel and the
+# model would read this machine while writing to the worker.
+# expect: tags: needs image: on an agent
+agents:
+- name: reviewer
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    tags: [gpu]
+    messages:
+      - "Review it."

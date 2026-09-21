@@ -164,7 +164,7 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 
 		return err
 	case config.StepKindAgent:
-		err := agent.RunHook(ctx, scope.cfg, scope.jobName, step, scope.bw, scope.st)
+		err := agent.RunHook(ctx, scope.cfg, scope.jobName, step, scope.bw, scope.st, placedAgentRunner(step))
 		if err != nil {
 			return fmt.Errorf("agent hook: %w", err)
 		}

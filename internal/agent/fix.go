@@ -114,6 +114,14 @@ func RunFix(
 	runner = runner.WithLabel(fix.Agent)
 	defer shell.CloseRunner(runner, fix.Agent)
 
+	// A repair agent follows the same rule a step agent does: with an image:, its file tools go where its shell commands already go. It is the case the ownership mismatch bites hardest, since the task's own command has just written into the tree as the container's user.
+	lost := &lostTree{}
+
+	files, modelDir, contextBlocks, err := prepareStepTree(ctx, runner, ri, dir, tools.decls, lost)
+	if err != nil {
+		return fmt.Errorf("fix agent %q: %w", fix.Agent, err)
+	}
+
 	apiKey, err := lookupAPIKey(ri.APIKeyEnv, ri.RequiresKey)
 	if err != nil {
 		return err
@@ -126,21 +134,16 @@ func RunFix(
 
 	messages := buildFixMessages(fix, rt, failureOutput, spillDir)
 
-	contextBlocks, err := loadContextBlocks(dir, ri.ContextPaths, ri.MaxContextBytes)
-	if err != nil {
-		return fmt.Errorf("fix agent %q: %w", fix.Agent, err)
-	}
-
 	// Computed here, before buildSystemMessage, rather than just before
 	// runOneConversation below (where it used to live): the disclosure needs
 	// the same resolved value the deadline itself will use.
 	timeout := agentTimeout(ri.Timeout)
 
 	conv := agentConversation{
-		system:        buildSystemMessage(ri.Persona, dir, timeout),
+		system:        buildSystemMessage(ri.Persona, modelDir, timeout),
 		messages:      messages,
 		contextBlocks: contextBlocks,
-		env:           toolEnv{dir: dir, runner: runner, spillDir: spillDir, ask: askContext(st, jobName, fix.Agent)},
+		env:           toolEnv{dir: dir, runner: runner, tree: files, lost: lost, spillDir: spillDir, ask: askContext(st, jobName, fix.Agent)},
 		tools:         tools,
 		params: agentGenParams{
 			temperature: ri.Temperature,

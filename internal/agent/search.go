@@ -123,6 +123,9 @@ type searchOpts struct {
 	glob      string         // "" matches every file
 	mode      string
 	headLimit int
+	// pattern and caseInsensitive are the model's own arguments, kept because a container tree cannot hand a compiled *regexp.Regexp to grep — it renders the pattern to POSIX ERE instead, and folding is a grep flag rather than part of the expression.
+	pattern         string
+	caseInsensitive bool
 }
 
 // searchMatch is one matching line in content mode.
@@ -152,7 +155,7 @@ type searchResult struct {
 // are returned as data with a corrective hint, the same posture the other
 // tools take, since a bad regexp or a missing pattern is recoverable on the
 // model's next turn.
-func execSearchFiles(_ context.Context, args map[string]any, env toolEnv) map[string]any {
+func execSearchFiles(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
 	pattern, glob := stringArg(args, "pattern"), stringArg(args, "glob")
 
 	mode, errResult := searchMode(pattern, glob, stringArg(args, "output_mode"))
@@ -170,12 +173,14 @@ func execSearchFiles(_ context.Context, args map[string]any, env toolEnv) map[st
 		rel = "."
 	}
 
-	base, err := resolveAgentPath(env.dir, rel)
+	files := env.files()
+
+	base, err := files.resolve(ctx, rel)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
 
-	result, err := searchWalk(base, opts)
+	result, err := files.search(ctx, base, opts)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -217,7 +222,7 @@ func searchMode(pattern, glob, requested string) (string, map[string]any) {
 // mode's default and ceiling. A non-nil second return is a ready-made error
 // result for the caller.
 func buildSearchOpts(args map[string]any, pattern, glob, mode string) (searchOpts, map[string]any) {
-	opts := searchOpts{glob: glob, mode: mode}
+	opts := searchOpts{glob: glob, mode: mode, pattern: pattern}
 
 	if strings.Contains(glob, "**") && !strings.HasPrefix(glob, "**/") {
 		return opts, map[string]any{"error": fmt.Sprintf(
@@ -228,7 +233,9 @@ func buildSearchOpts(args map[string]any, pattern, glob, mode string) (searchOpt
 
 	if pattern != "" {
 		expr := pattern
-		if caseInsensitive, _ := args["case_insensitive"].(bool); caseInsensitive {
+
+		opts.caseInsensitive, _ = args["case_insensitive"].(bool)
+		if opts.caseInsensitive {
 			expr = "(?i)" + expr
 		}
 

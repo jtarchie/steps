@@ -374,7 +374,7 @@ func dispatchByKind(
 // recorded even when the run failed: a later visit of a revise loop reads the
 // verdict that sent it back, and a failed step simply has no verdict.
 func runAgentStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
-	out, err := agent.RunStep(ctx, r.cfg, r.jobName, i, step, r.bw, r.st, parentHash)
+	out, err := agent.RunStep(ctx, r.cfg, r.jobName, i, step, r.bw, r.st, parentHash, placedAgentRunner(step))
 
 	recordStepOutcome(ctx, step, out)
 

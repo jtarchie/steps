@@ -1,0 +1,23 @@
+# A stdio server is spawned by this process, and a relative cwd: points it at
+# this machine's copy of the step directory. Placed, it would index files the
+# agent's own edits never reach.
+# expect: whose cwd:
+mcp_servers:
+- name: lsp
+  command: gopls
+  cwd: repo
+
+agents:
+- name: reviewer
+  image: alpine:3.20
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  tools:
+    - mcp: lsp
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    tags: [gpu]
+    messages:
+      - "Review it."

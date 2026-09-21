@@ -394,7 +394,7 @@ const maxEditFileBytes = 10 << 20
 // Every error it returns is phrased as a next-turn instruction rather than a
 // bare diagnosis, because the two common failures (a near-miss old_string, an
 // ambiguous one) are both recoverable without leaving the conversation.
-func execEditFile(_ context.Context, args map[string]any, env toolEnv) map[string]any {
+func execEditFile(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
 	rel := stringArg(args, "path")
 	if rel == "" {
 		return map[string]any{"error": `edit_file: missing required argument "path"`}
@@ -416,46 +416,46 @@ func execEditFile(_ context.Context, args map[string]any, env toolEnv) map[strin
 		return map[string]any{"error": "edit_file: old_string and new_string are identical; nothing to do"}
 	}
 
-	resolved, err := resolveWritePath(env.dir, rel)
+	resolved, err := env.files().resolveWrite(ctx, rel)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
 
 	replaceAll, _ := args["replace_all"].(bool)
 
-	return applyEdit(resolved, rel, oldString, newString, replaceAll)
+	return applyEdit(ctx, env.files(), resolved, rel, oldString, newString, replaceAll)
 }
 
 // readEditTarget stats and reads the file edit_file is about to modify,
 // returning its contents and mode. A non-nil third return is the caller's
 // ready-made error result.
-func readEditTarget(resolved, rel string) (string, os.FileMode, map[string]any) {
-	stat, err := os.Stat(resolved)
+func readEditTarget(ctx context.Context, files tree, resolved, rel string) (string, map[string]any) {
+	stat, err := files.stat(ctx, resolved)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", 0, map[string]any{"error": fmt.Sprintf("edit_file: %q does not exist — use write_file to create it", rel)}
+			return "", map[string]any{"error": fmt.Sprintf("edit_file: %q does not exist — use write_file to create it", rel)}
 		}
 
-		return "", 0, map[string]any{"error": err.Error()}
+		return "", map[string]any{"error": err.Error()}
 	}
 
-	if stat.IsDir() {
-		return "", 0, map[string]any{"error": fmt.Sprintf("edit_file: %q is a directory, not a file", rel)}
+	if stat.isDir {
+		return "", map[string]any{"error": fmt.Sprintf("edit_file: %q is a directory, not a file", rel)}
 	}
 
-	if stat.Size() > maxEditFileBytes {
-		return "", 0, map[string]any{"error": fmt.Sprintf(
+	if stat.size > maxEditFileBytes {
+		return "", map[string]any{"error": fmt.Sprintf(
 			"edit_file: %q is %s, over the %s edit limit",
-			rel, shell.FormatBytes(int(stat.Size())), shell.FormatBytes(maxEditFileBytes),
+			rel, shell.FormatBytes(int(stat.size)), shell.FormatBytes(maxEditFileBytes),
 		)}
 	}
 
-	data, err := os.ReadFile(resolved) //nolint:gosec // resolveWritePath rejects paths escaping dir
+	data, err := files.readBytes(ctx, resolved, maxEditFileBytes)
 	if err != nil {
-		return "", 0, map[string]any{"error": err.Error()}
+		return "", map[string]any{"error": err.Error()}
 	}
 
-	return string(data), stat.Mode().Perm(), nil
+	return string(data), nil
 }
 
 // applyEdit performs execEditFile's replacement against an already-resolved
@@ -463,8 +463,8 @@ func readEditTarget(resolved, rel string) (string, os.FileMode, map[string]any) 
 // script doesn't silently strip its executable bit. The strategy that matched
 // is reported back to the model as match_mode, so an inexact edit is visible
 // rather than silent.
-func applyEdit(resolved, rel, oldString, newString string, replaceAll bool) map[string]any {
-	content, mode, errResult := readEditTarget(resolved, rel)
+func applyEdit(ctx context.Context, files tree, resolved, rel, oldString, newString string, replaceAll bool) map[string]any {
+	content, errResult := readEditTarget(ctx, files, resolved, rel)
 	if errResult != nil {
 		return errResult
 	}
@@ -474,7 +474,7 @@ func applyEdit(resolved, rel, oldString, newString string, replaceAll bool) map[
 		return map[string]any{"error": editFailureAdvice(err, rel)}
 	}
 
-	err = os.WriteFile(resolved, []byte(outcome.updated), mode)
+	err = files.writeFile(ctx, resolved, []byte(outcome.updated), false)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}

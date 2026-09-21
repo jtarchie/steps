@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/jtarchie/steps/internal/shell"
@@ -38,13 +37,15 @@ const maxReadFileScanBytes = 10 << 20 // 10 MiB
 // top, capped at maxReadFileBytes) or, when either start_line or end_line is
 // supplied, readFileRange — a line-based slice so a large file (or a spilled
 // tool output) can be paged through instead of only ever showing a prefix.
-func execReadFile(_ context.Context, args map[string]any, env toolEnv) map[string]any {
+func execReadFile(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
 	rel := stringArg(args, "path")
 	if rel == "" {
 		return map[string]any{"error": `read_file: missing required argument "path"`}
 	}
 
-	resolved, err := resolveAgentPath(env.dir, rel)
+	files := env.readTree(rel)
+
+	resolved, err := files.resolve(ctx, rel)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -53,7 +54,7 @@ func execReadFile(_ context.Context, args map[string]any, env toolEnv) map[strin
 	endLine, hasEnd := intArg(args, "end_line")
 
 	if !hasStart && !hasEnd {
-		return readFileFull(resolved)
+		return readFileFull(ctx, files, resolved)
 	}
 
 	if !hasStart {
@@ -68,7 +69,7 @@ func execReadFile(_ context.Context, args map[string]any, env toolEnv) map[strin
 		return map[string]any{"error": "read_file: end_line must be >= start_line"}
 	}
 
-	return readFileRange(resolved, startLine, endLine, hasEnd)
+	return readFileRange(ctx, files, resolved, startLine, endLine, hasEnd)
 }
 
 // readFileFull is read_file with no start_line/end_line. An over-cap file
@@ -76,14 +77,8 @@ func execReadFile(_ context.Context, args map[string]any, env toolEnv) map[strin
 // shell.SpillPointerMessage's tag style (a leading block, not a trailing
 // marker) so the two "output was cut" shapes read the same way, and pointing
 // the model at start_line/end_line — the file's own paging mechanism.
-func readFileFull(resolved string) map[string]any {
-	f, err := os.Open(resolved) //nolint:gosec // resolveAgentPath rejects paths escaping dir, the step's own workspace
-	if err != nil {
-		return map[string]any{"error": err.Error()}
-	}
-	defer func() { _ = f.Close() }()
-
-	stat, err := f.Stat()
+func readFileFull(ctx context.Context, files tree, resolved string) map[string]any {
+	stat, err := files.stat(ctx, resolved)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -93,16 +88,16 @@ func readFileFull(resolved string) map[string]any {
 	// below would have discarded most of it anyway. stat.Size() (not the read
 	// length) drives the message, so the reported byte count matches what it
 	// would have said had it read the whole file.
-	data, err := io.ReadAll(io.LimitReader(f, maxReadFileBytes))
+	data, err := files.readBytes(ctx, resolved, maxReadFileBytes)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
 
 	content := string(data)
-	if stat.Size() > maxReadFileBytes {
+	if stat.size > maxReadFileBytes {
 		content = fmt.Sprintf(
 			"<file_truncated>\nThis file is %s, exceeding the %s inline read limit. Showing the first %s below. Use start_line/end_line to read further into the file.\n</file_truncated>\n\n%s",
-			shell.FormatBytes(int(stat.Size())), shell.FormatBytes(maxReadFileBytes), shell.FormatBytes(len(data)), content,
+			shell.FormatBytes(int(stat.size)), shell.FormatBytes(maxReadFileBytes), shell.FormatBytes(len(data)), content,
 		)
 	}
 
@@ -114,8 +109,13 @@ func readFileFull(resolved string) map[string]any {
 // Still capped at maxReadFileBytes — an unreasonably wide range on a huge
 // file degrades to a truncated=true flag (content here is whole lines, not an
 // arbitrary byte prefix) rather than buffering the whole slice unbounded.
-func readFileRange(resolved string, startLine, endLine int, hasEnd bool) map[string]any {
-	f, err := os.Open(resolved) //nolint:gosec // resolveAgentPath rejects paths escaping dir, the step's own workspace
+func readFileRange(ctx context.Context, files tree, resolved string, startLine, endLine int, hasEnd bool) map[string]any {
+	through := 0
+	if hasEnd {
+		through = endLine
+	}
+
+	f, err := files.openRange(ctx, resolved, through)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -33,6 +34,10 @@ type toolEnv struct {
 	dir      string
 	runner   shell.Runner
 	spillDir string
+	// lost records the first "the container could not be reached" a tool hit, so the loop can end the attempt rather than let the model keep calling into a machine that is gone.
+	lost *lostTree
+	// tree is where the file tools read and write. Nil means this process's own filesystem, which is every agent with no image:; a containerized one carries a tree reaching into its container, so its file tools and its run_shell are on one copy of the step directory instead of two.
+	tree tree
 	// ask is what the ask_user builtin needs from the run rather than from
 	// its grant — where to record a question and who is asking. Zero for
 	// every caller with no run to record against, which that tool reports as
@@ -56,6 +61,40 @@ type toolEnv struct {
 	// The verdict tool reads it to judge a nudge-enabled tool_calls:
 	// contract before it accepts a decision.
 	trajectory func() []recordedToolCall
+}
+
+// files is the tree the file tools work against, defaulting to this process's own filesystem so a zero-value env — every unit test that builds one by hand — behaves as it always did.
+func (env toolEnv) files() tree {
+	if env.tree == nil {
+		return hostTree{dir: env.dir}
+	}
+
+	return env.tree
+}
+
+// readsSpill reports whether rel names something in the step's spill directory, which is the ONE path a containerized agent still reads from this machine.
+//
+// An oversized run_shell output is captured HERE even when the command ran elsewhere (shell.Capture stays on the orchestrator by design), written to a file under spillDir, and the model is handed that absolute path to read back. The file is the orchestrator's own record of the conversation and was never part of the step's tree, so it exists on this machine and nowhere else — a read routed into the container would correctly find nothing.
+//
+// Deliberately the only exception, and deliberately read-only: write_file, edit_file, search_files and list_dir all stay in the container even for a path under spillDir, because anything the model can WRITE has to be somewhere run_shell can see it.
+func (env toolEnv) readsSpill(rel string) bool {
+	if env.spillDir == "" || !filepath.IsAbs(rel) {
+		return false
+	}
+
+	spill := filepath.Clean(env.spillDir)
+	clean := filepath.Clean(rel)
+
+	return clean == spill || strings.HasPrefix(clean, spill+string(filepath.Separator))
+}
+
+// readTree is the tree a read_file call should use: the container's, except for the spill directory above.
+func (env toolEnv) readTree(rel string) tree {
+	if env.readsSpill(rel) {
+		return hostTree{dir: env.dir}
+	}
+
+	return env.files()
 }
 
 // calls is the recorded trajectory so far, or nothing outside a conversation.

@@ -90,6 +90,12 @@ jobs:
     outcome: succeeded
 ```
 
+**Where the file tools run.** With no `image:`, in this process, against the step's directory here. With an `image:`, **inside that container** — the same one `run_shell` execs into — so the two always address one copy of the tree. That is what lets an agent be placed on a worker at all (see [infra.md](infra.md#remote-workers-tags)): `tags:` on an agent requires `image:`, because without a container the file tools would stay here while the shell moved, and the model would read one machine while writing to another with no way to tell.
+
+The one exception is `read_file` on the step's spill directory: an oversized `run_shell` output is captured by this process (even when the command ran on a worker) and written to a file there, so the absolute path the model is handed to read it back names something that exists here and nowhere else. Nothing else is excepted — anything the model can write has to land where `run_shell` can see it.
+
+The container path uses the image's own `find`, `grep`, `sed`, `cat`, `head`, `wc`, `tr`, `mkdir` and `readlink`, so nothing is mounted in and no binary is pushed; an image lacking them fails the step at preparation rather than at the model's first call. Every cap and filter stays here — `search_files` uses `find` to list candidates and `grep` to match lines, and applies the prune list, the glob, `head_limit`, the byte budget, `files_scanned` and the binary-file skip itself. Its pattern is re-rendered as a POSIX ERE first, because `\d` means a digit to busybox grep and the letter *d* to GNU grep; a pattern with no POSIX form (non-greedy `*?`, `\p{...}`) is refused as a tool error naming the construct instead of quietly matching something else.
+
 The built-ins that mutate state or reach beyond the workspace are deliberately not in the default; each is a capability the pipeline must grant explicitly:
 
 | tool | what it does |

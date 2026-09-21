@@ -66,6 +66,29 @@ type preparedAgentStep struct {
 	// that very directory).
 	closers  []io.Closer
 	spillDir string // run_shell/custom tool output spill dir — see toolEnv.spillDir; "" if it couldn't be created
+	// dir is the step's working directory on THIS machine, kept so openTree can ask the container where its own copy is.
+	dir string
+	// runner is the same one conv.env holds, kept because openTree probes through it before the conversation starts.
+	runner shell.Runner
+	// lost is the conversation's record of an unreachable tree, shared with the tree openTree builds.
+	lost *lostTree
+}
+
+// openTree settles where this step's file tools reach and what the model is told its working directory is.
+//
+// Deliberately NOT done in prepareAgentStep, and the reason is the step cache: probing runs a real command in the step's container, so for a placed agent it dials the worker and uploads the tree. RunStep decides a cache hit AFTER preparing, so probing there made every reuse of a containerized agent pay for a container it was about to throw away — and a placed one pay for a session and a tree transfer.
+//
+// Called from runPreparedWithFailover, which is the one place a prepared conversation starts, so no caller can forget it. It answers a SETTLED copy rather than mutating in place, because that is the copy the conversation below actually runs from.
+func (p preparedAgentStep) openTree(ctx context.Context) (preparedAgentStep, error) {
+	files, modelDir, err := resolveStepTree(ctx, p.runner, p.ri.Image, p.dir, p.ri.ToolSpecs, p.lost)
+	if err != nil {
+		return p, fmt.Errorf("agent %q: %w", p.ri.AgentName, err)
+	}
+
+	p.conv.env.tree = files
+	p.conv.system = buildSystemMessage(p.ri.Persona, modelDir, agentTimeout(p.ri.Timeout))
+
+	return p, nil
 }
 
 // close releases everything prepareAgentStep opened for this step: any tool
@@ -149,7 +172,7 @@ func (p preparedAgentStep) spillDirWouldBeCaptured() bool {
 // shared) working directory, and builds the tools/LLM client it'll run
 // with. On error, any workspace.StepSpace already created is closed before
 // returning so the caller never has to.
-func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace) (preparedAgentStep, error) {
+func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step, bw workspace.BuildWorkspace, newRunner RunnerFactory) (preparedAgentStep, error) {
 	primary, ri, agent, fallbackIndex, err := resolveWithFailover(ctx, cfg, step)
 	if err != nil {
 		return preparedAgentStep{}, err
@@ -204,8 +227,11 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
-	runner, err := shell.NewRunner(shell.RunnerSpec{Image: ri.Image, Cwd: dir, Env: ri.Env, User: ri.User, Network: ri.Network,
-		Privileged: ri.Privileged, CPUShares: ri.Limits.CPUShares(), MemoryBytes: ri.Limits.MemoryBytes()})
+	// Cwd is the whole step directory and Subdir is where the model works, even though dir: is the only thing that makes them differ. The step's outputs: are named relative to the SPACE, so a placed agent that sent only its subdirectory would fetch them from a path that does not exist and come home with nothing.
+	runner, err := newRunner.build(ctx, shell.RunnerSpec{Image: ri.Image, Cwd: space.Dir(), Subdir: step.Dir,
+		Env: ri.Env, User: ri.User, Network: ri.Network,
+		Privileged: ri.Privileged, CPUShares: ri.Limits.CPUShares(), MemoryBytes: ri.Limits.MemoryBytes(),
+		Fetch: step.Outputs, Keep: workspace.Kept(space)})
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)
@@ -227,7 +253,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, err
 	}
 
-	spillDir := newToolOutputSpillDir(dir, step.Agent)
+	lost := &lostTree{}
 
 	contextBlocks, err := prepareContextBlocks(dir, ri.ContextPaths, ri.MaxContextBytes, tools.decls)
 	if err != nil {
@@ -237,12 +263,15 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 		return preparedAgentStep{}, fmt.Errorf("agent %q: %w", step.Agent, err)
 	}
 
+	spillDir := newToolOutputSpillDir(dir, step.Agent)
+
 	conv := agentConversation{
+		// Named for THIS machine, and replaced by openTree with the container's own spelling for an agent whose tools run in one. Set here so a step that never opens a tree still carries a system message.
 		system:        buildSystemMessage(ri.Persona, dir, agentTimeout(ri.Timeout)),
 		messages:      step.Messages,
 		contextBlocks: contextBlocks,
 		upstream:      upstreamBlocks(ctx, step),
-		env: toolEnv{dir: dir, runner: runner, spillDir: spillDir, ask: askEnv{
+		env: toolEnv{dir: dir, runner: runner, lost: lost, spillDir: spillDir, ask: askEnv{
 			// The step's own name, not the agent's: an across: cell parks a
 			// question under the identity a reader can find in the plan.
 			agentName: step.DisplayName(),
@@ -265,6 +294,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 	}
 
 	return preparedAgentStep{
+		dir: dir, runner: runner, lost: lost,
 		step: step, ri: ri, primary: primary, fallbackIndex: fallbackIndex, agent: agent,
 		pin:   agentPinScope(cfg, ri.AgentName),
 		space: space, conv: conv, llm: invocationLLM(ri, apiKey),
@@ -463,6 +493,23 @@ func newToolOutputSpillDir(dir, stepLabel string) string {
 	}
 
 	return spillDir
+}
+
+// prepareStepTree is openTree and the context blocks in one, for the fix path, which has no cache lookup to get in front of: a repair agent only runs because a task just failed, so there is no reuse for an early probe to waste.
+//
+// The context blocks are read from THIS machine either way: context_paths: is operator-authored configuration resolved at preparation time, against the tree the workspace has just materialized and before any of it has been sent anywhere.
+func prepareStepTree(ctx context.Context, runner shell.Runner, ri config.ResolvedInvocation, dir string, decls *genai.Tool, lost *lostTree) (tree, string, []contextBlock, error) {
+	files, modelDir, err := resolveStepTree(ctx, runner, ri.Image, dir, ri.ToolSpecs, lost)
+	if err != nil {
+		return nil, "", nil, err
+	}
+
+	blocks, err := prepareContextBlocks(dir, ri.ContextPaths, ri.MaxContextBytes, decls)
+	if err != nil {
+		return nil, "", nil, err
+	}
+
+	return files, modelDir, blocks, nil
 }
 
 // prepareContextBlocks loads context_paths files and validates that read_file

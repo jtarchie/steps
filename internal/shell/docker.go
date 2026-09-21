@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -81,6 +82,8 @@ func (d DockerRunner) Close() error {
 type dockerSession struct {
 	image       string
 	resolvedCwd string
+	// subdir is where commands run below resolvedCwd, which stays the mount — see RunnerSpec.Subdir.
+	subdir string
 	// dockerHost is the daemon this session's containers live on. Empty is
 	// this machine's.
 	dockerHost string
@@ -214,6 +217,15 @@ func (s *dockerSession) ensure(ctx context.Context) (*dockerapi.Client, string, 
 	return s.client, s.id, "", nil
 }
 
+// workingDir is where the container's commands run: the mounted tree, or a directory inside it when the step named one.
+func (s *dockerSession) workingDir() string {
+	if s.subdir == "" || s.resolvedCwd == "" {
+		return s.resolvedCwd
+	}
+
+	return path.Join(s.resolvedCwd, s.subdir)
+}
+
 // dockerDaemonRefusedCode is the status a daemon-side refusal reports. 125 is
 // what `docker run` exits with for one, and the value is load-bearing rather
 // than cosmetic: docs/infra.md documents it, and an agent shown this as a tool
@@ -226,7 +238,8 @@ func (s *dockerSession) start(ctx context.Context, name string) (string, error) 
 		Image:       s.image,
 		Cmd:         []string{"sh", "-c", keepAliveCommand()},
 		Name:        name,
-		WorkingDir:  s.resolvedCwd,
+		WorkingDir:  s.workingDir(),
+		MountDir:    s.resolvedCwd,
 		Env:         s.containerEnv(),
 		Labels:      OwnershipLabels(),
 		User:        s.user,

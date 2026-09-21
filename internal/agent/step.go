@@ -192,8 +192,8 @@ func printAgentResponse(res conversationResult) {
 // skippable) and runs it, retrying the whole conversation up to the
 // resolved attempt count. internal/pipeline routes the plan on the returned
 // StepOutcome.Verdict.
-func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st StepStore, parentHash string) (StepOutcome, error) {
-	prepared, err := prepareAgentStep(ctx, cfg, step, bw)
+func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, step config.Step, bw workspace.BuildWorkspace, st StepStore, parentHash string, newRunner RunnerFactory) (StepOutcome, error) {
+	prepared, err := prepareAgentStep(ctx, cfg, step, bw, newRunner)
 	if err != nil {
 		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
@@ -554,8 +554,8 @@ func runOneConversation(
 // checked and rejected at load like any other. Evaluating it at load and then
 // never running it made that promise a lie — the hook reported success on a
 // mismatch its own assert existed to catch.
-func RunHook(ctx context.Context, cfg *config.Config, jobName string, step config.Step, bw workspace.BuildWorkspace, st StepStore) error {
-	prepared, err := prepareAgentStep(ctx, cfg, step, bw)
+func RunHook(ctx context.Context, cfg *config.Config, jobName string, step config.Step, bw workspace.BuildWorkspace, st StepStore, newRunner RunnerFactory) error {
+	prepared, err := prepareAgentStep(ctx, cfg, step, bw, newRunner)
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", step.Agent, err)
 	}

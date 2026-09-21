@@ -9,6 +9,7 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -25,7 +26,7 @@ func (c *Config) validateTagRules() error {
 		return err
 	}
 
-	err = c.validateTagsRejectAgent()
+	err = c.validateTagsOnAgent()
 	if err != nil {
 		return err
 	}
@@ -103,19 +104,15 @@ func (c *Config) validateTagsRejectTry() error {
 	return nil
 }
 
-// validateTagsRejectAgent refuses tags: on an agent step.
-//
-// An agent step is a conversation the orchestrator holds: the model, the tool
-// calls, the MCP servers and the file tools all live in this process, reading
-// the step's directory here. Only its run_shell would travel, which would put
-// half a step on each machine — a model reading one filesystem and writing to
-// another, with no way to tell. Refused until an agent can be placed whole.
-func (c *Config) validateTagsRejectAgent() error {
+// validateTagsOnAgent holds a placed agent to the one shape in which it is whole: every file tool reaching the same tree its run_shell reaches. The conversation itself always stays here — it is the tool calls that have to agree about which filesystem they are on, and image: is what makes them agree, because a containerized agent's file tools run in that container through the image's own userland. Without it only run_shell would travel, which is a model reading one filesystem and writing to another with no way to tell.
+func (c *Config) validateTagsOnAgent() error {
 	for _, job := range c.Jobs {
 		err := job.visitSteps(func(label string, step *Step) error {
 			if len(step.Tags) > 0 && step.Agent != "" {
-				return fmt.Errorf("%s (agent %q): tags: is not valid on an agent step — its tools and conversation run here, so only its shell commands would move, leaving half the step on each machine",
-					label, step.Agent)
+				err := c.checkPlacedAgent(label, *step)
+				if err != nil {
+					return err
+				}
 			}
 
 			// Same split, reached a different way: a task's fix: builds an
@@ -211,6 +208,57 @@ func (c *Config) rejectNonShellPlacement(label, typeName string) error {
 
 	return fmt.Errorf("%s: tags: is not valid on a resource of type %q — its %s in/out run inside this process, so only their files could move; make the type shell-backed to place it",
 		label, typeName, backend)
+}
+
+// checkPlacedAgent is the four things a tagged agent must be. A resolution failure answers nil rather than inventing a second error for it: whichever validator owns that failure reports it with the context this one lacks.
+func (c *Config) checkPlacedAgent(label string, step Step) error {
+	ri, err := c.ResolveAgentInvocation(step)
+	if err != nil {
+		return nil //nolint:nilerr // reported by the rule that owns agent resolution
+	}
+
+	if ri.Image == "" {
+		return fmt.Errorf("%s (agent %q): tags: needs image: on an agent — a placed agent's file tools run in its container, so without one only its shell commands would move and the model would read this machine while writing to the worker",
+			label, step.Agent)
+	}
+
+	if ri.CLI != "" {
+		return fmt.Errorf("%s (agent %q): tags: is not valid on a CLI agent — the CLI runs as a subprocess of this one with its own working directory, and its tools arrive over the bridge, so placing the step would leave the CLI reading this machine",
+			label, step.Agent)
+	}
+
+	for _, spec := range ri.ToolSpecs {
+		err := c.checkPlacedAgentTool(label, step.Agent, spec)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkPlacedAgentTool refuses the two grants that would open a second tree on a placed agent. A sub-agent builds its own runner, so placing it is a second session and a second copy of the tree on the worker; a stdio MCP server is spawned here against the local directory, so it would index files the agent's own edits never reach. An HTTP server has no working directory and is unaffected.
+func (c *Config) checkPlacedAgentTool(label, agentName string, spec ToolSpec) error {
+	if spec.Agent != "" {
+		return fmt.Errorf("%s (agent %q): tags: is not valid on an agent granting the sub-agent %q — the child runs its own tools in its own container, which on a worker is a second copy of the tree neither of them would see the other edit",
+			label, agentName, spec.Agent)
+	}
+
+	if spec.MCP == "" {
+		return nil
+	}
+
+	server, err := c.FindMCPServer(spec.MCP)
+	if err != nil {
+		return nil //nolint:nilerr // reported by the rule that owns unknown servers
+	}
+
+	if server.Command != "" && server.Cwd != "" && !filepath.IsAbs(server.Cwd) {
+		return fmt.Errorf("%s (agent %q): tags: is not valid alongside the stdio mcp server %q, whose cwd: %q points into this machine's copy of the step directory — the server would index files the placed agent's edits never reach",
+			label, agentName, spec.MCP, server.Cwd)
+	}
+
+	return nil
 }
 
 // resolvedStepFix reports the fix: a task step would actually run with,

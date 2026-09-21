@@ -612,7 +612,8 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 		markTrajectoryResults(state.trajectory[turnStart:], parts)
 		conv.env.transcript.results(parts)
 
-		turnErr := conv.finishToolTurn(req, calls, parts, detector, &state)
+		// The lost-tree check goes first, because the next turn is the cost: a tool that could not reach the step's tree at all has nothing the model can do about it, and letting the conversation continue spends its budget arguing with a machine that is gone.
+		turnErr := firstError(conv.env.lost.taken(), func() error { return conv.finishToolTurn(req, calls, parts, detector, &state) })
 		if turnErr != nil {
 			return result("", turn+1), turnErr
 		}
@@ -1140,6 +1141,15 @@ func markTrajectoryResults(turn []recordedToolCall, parts []*genai.Part) {
 
 		turn[i].ok = requiredCallSucceeded(part.FunctionResponse.Response)
 	}
+}
+
+// firstError answers lost when there is one, and otherwise whatever next says. It is a function rather than a second branch in the turn loop because that loop is already at the cyclomatic budget the linter enforces.
+func firstError(lost error, next func() error) error {
+	if lost != nil {
+		return lost
+	}
+
+	return next()
 }
 
 // toolResponseParts executes each requested tool and packages the results as

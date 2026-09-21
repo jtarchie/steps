@@ -1,0 +1,16 @@
+# image: places a CLI agent's TOOLS, never the CLI process, which is always a
+# subprocess of this one with its own working directory and its tools arriving
+# over the bridge. Placing the step would leave the CLI reading this machine.
+# expect: tags: is not valid on a CLI agent
+agents:
+- name: reviewer
+  image: alpine:3.20
+  source: { model: "@claude/sonnet" }
+
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    tags: [gpu]
+    messages:
+      - "Review it."

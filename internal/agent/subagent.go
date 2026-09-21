@@ -172,6 +172,12 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	runner = runner.WithLabel(c.ri.AgentName)
 	defer shell.CloseRunner(runner, c.ri.AgentName)
 
+	// The child's own image decides where ITS file tools run, not the parent's: a hosted child of a containerized parent reads this machine, and a containerized child of a host parent reads its container. tags: on an agent granting a sub-agent is refused at load, so these are always the same machine and there is one tree either way.
+	childTree, childDir, err := resolveStepTree(ctx, runner, c.ri.Image, env.dir, c.ri.ToolSpecs, env.lost)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+
 	// context_paths is step-level only (not inherited by sub-agents), so
 	// c.ri.ContextPaths is always empty here — loadContextBlocks still
 	// resolves nil/empty safely. A bad path arrives as ordinary tool-result
@@ -189,7 +195,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	timeout := remainingOrNoDeadline(ctx)
 
 	conv := agentConversation{
-		system:        buildSystemMessage(c.ri.Persona, env.dir, timeout),
+		system:        buildSystemMessage(c.ri.Persona, childDir, timeout),
 		messages:      []string{request},
 		contextBlocks: contextBlocks,
 		// The parent's ask context travels down, renamed: a sub-agent granted
@@ -197,7 +203,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		// this it was told there was nobody to ask on a run that manifestly
 		// had somebody. The NAME is the child's, so a parked question says
 		// which agent wants to know rather than which one delegated.
-		env:   toolEnv{dir: env.dir, runner: runner, spillDir: env.spillDir, ask: env.ask.forAgent(c.ri.AgentName)},
+		env:   toolEnv{dir: env.dir, runner: runner, tree: childTree, lost: env.lost, spillDir: env.spillDir, ask: env.ask.forAgent(c.ri.AgentName)},
 		tools: c.tools,
 		params: agentGenParams{
 			temperature: c.ri.Temperature,

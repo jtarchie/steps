@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -187,6 +188,12 @@ type RunnerSpec struct {
 	// only by the venue: on this machine the workspace decides its own fate,
 	// and it is the one that answered this.
 	Keep bool
+	// Subdir is where the command runs, relative to Cwd, for a step whose working directory is below the tree that has to travel. Only a placed agent with dir: sets it: the venue sends and fetches the whole step directory, so the outputs it declares still resolve, while the container works one level down. Empty runs in Cwd itself.
+	Subdir string
+	// NoRedial fails a step whose worker died mid-session instead of dialling a fresh one and re-sending the tree.
+	//
+	// A redial is right for a task: its command re-runs from the top, so a tree restored to the state it was pushed in is exactly what the retry wants. It is wrong for a conversation. An agent's edits outside its outputs: are not re-fetched, its container's installed packages are not reinstated, and the model is told none of it — so the retry would resume against a tree silently rewound to the step's inputs. Read only by the venue; meaningless without a Worker.
+	NoRedial bool
 }
 
 // NewRunner returns a DockerRunner scoped to spec, or a HostRunner when
@@ -202,7 +209,7 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 	// command through the shim, which carries the session's env in the exec
 	// frame instead.
 	if spec.Image == "" {
-		return HostRunner{cwd: spec.Cwd, extraEnv: spec.Env}, nil
+		return HostRunner{cwd: joinSubdir(spec.Cwd, spec.Subdir), extraEnv: spec.Env}, nil
 	}
 
 	var resolvedCwd string
@@ -234,6 +241,7 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 		session: &dockerSession{
 			image:       spec.Image,
 			resolvedCwd: resolvedCwd,
+			subdir:      spec.Subdir,
 			dockerHost:  spec.DockerHost,
 			envNames:    spec.Env,
 			envValues:   spec.EnvValues,
@@ -244,6 +252,15 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 			memoryBytes: spec.MemoryBytes,
 		},
 	}, nil
+}
+
+// joinSubdir is where a step's commands actually run: its directory, or the one below it that dir: named.
+func joinSubdir(cwd, subdir string) string {
+	if cwd == "" || subdir == "" {
+		return cwd
+	}
+
+	return filepath.Join(cwd, subdir)
 }
 
 // captureWriter accumulates one stdout/stderr stream from a running command

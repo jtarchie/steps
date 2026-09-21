@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/jtarchie/steps/internal/compress"
+	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/wire"
 )
 
@@ -150,6 +151,11 @@ func (s *session) sendArtifact(op uint32, staged string) error {
 // if the command had run here.
 func (s *session) fetch(ctx context.Context) error {
 	if s.cwd == "" || (len(s.outputs) == 0 && !s.fetchAll) {
+		return nil
+	}
+
+	// A command that only read the tree left nothing to bring back — see shell.ReadOnly, which an agent's file tools use so a conversation's dozens of reads do not each pay for a transfer of outputs nothing touched.
+	if shell.IsReadOnly(ctx) {
 		return nil
 	}
 

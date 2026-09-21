@@ -103,6 +103,8 @@ type session struct {
 	env map[string]string
 	// keep leaves the worker's scratch behind, following --keep-workspace.
 	keep bool
+	// noRedial makes a transport death final rather than a reason to dial again — see RunnerSpec.NoRedial.
+	noRedial bool
 
 	mu        sync.Mutex
 	attempted bool
@@ -200,6 +202,8 @@ var ErrEvicted = errors.New("the worker was reclaimed while the step was running
 var (
 	// errSessionClosed is a command on a session whose step already finished.
 	errSessionClosed = errors.New("the step's worker session has been closed")
+	// errSessionGone is a session that died after it opened, for a step that cannot be resumed by re-sending its tree — an agent's conversation, which would silently resume against a directory rewound to its inputs.
+	errSessionGone = errors.New("the worker went away mid-step, and this step's tree cannot be re-sent under it")
 	// errNoWorkdir is a shim that answered a hello without naming where it put
 	// the tree, which no shim this repo built can do.
 	errNoWorkdir = errors.New("the worker did not report a work directory")
@@ -265,6 +269,11 @@ func (s *session) ensure(ctx context.Context) error {
 
 	if s.attempted && !s.broken.Load() {
 		return s.startErr
+	}
+
+	// A conversation cannot be handed a tree it did not leave behind, so a session that says so fails where a task's would have dialled again — see RunnerSpec.NoRedial.
+	if s.attempted && s.noRedial {
+		return fmt.Errorf("worker %q: %w", s.worker, errSessionGone)
 	}
 
 	if s.transport != nil {

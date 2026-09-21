@@ -36,6 +36,8 @@ type ContainerSpec struct {
 	// WorkingDir is also the bind mount's path on both sides; empty mounts
 	// nothing and takes the image's own workdir.
 	WorkingDir string
+	// MountDir is the tree to bind when it is not WorkingDir itself, for a step whose commands run in a SUBDIRECTORY of what has to be mounted. A placed agent with dir: is the case: the whole step directory must cross to the worker so its declared outputs resolve, while the model works one level down. Empty keeps WorkingDir as both, which is every other step.
+	MountDir string
 	// Env are already-resolved NAME=value pairs. A variable the caller could
 	// not resolve is simply absent from this, which is what makes naming an
 	// optional variable safe.
@@ -123,12 +125,17 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 // readers of the same tree stay coherent with what a containerized command
 // wrote.
 func (spec ContainerSpec) binds() []string {
-	if spec.WorkingDir == "" {
+	tree := spec.MountDir
+	if tree == "" {
+		tree = spec.WorkingDir
+	}
+
+	if tree == "" {
 		return spec.Mounts
 	}
 
 	binds := make([]string, 0, len(spec.Mounts)+1)
-	binds = append(binds, spec.WorkingDir+":"+spec.WorkingDir)
+	binds = append(binds, tree+":"+tree)
 
 	return append(binds, spec.Mounts...)
 }

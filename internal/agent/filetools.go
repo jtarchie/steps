@@ -5,7 +5,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"os"
 )
 
 // maxListDirEntries caps how many entries list_dir returns inline — a
@@ -19,18 +18,20 @@ import (
 // derived from any hard constraint — tune freely.
 const maxListDirEntries = 1_000
 
-func execListDir(_ context.Context, args map[string]any, env toolEnv) map[string]any {
+func execListDir(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
 	rel := stringArg(args, "path")
 	if rel == "" {
 		rel = "."
 	}
 
-	resolved, err := resolveAgentPath(env.dir, rel)
+	files := env.files()
+
+	resolved, err := files.resolve(ctx, rel)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
 
-	entries, err := os.ReadDir(resolved)
+	entries, err := files.listDir(ctx, resolved)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -45,14 +46,7 @@ func execListDir(_ context.Context, args map[string]any, env toolEnv) map[string
 	items := make([]map[string]any, 0, len(entries))
 
 	for _, e := range entries {
-		size := int64(0)
-
-		info, infoErr := e.Info()
-		if infoErr == nil {
-			size = info.Size()
-		}
-
-		items = append(items, map[string]any{"name": e.Name(), "is_dir": e.IsDir(), "size": size})
+		items = append(items, map[string]any{"name": e.name, "is_dir": e.isDir, "size": e.size})
 	}
 
 	result := map[string]any{"entries": items, "total": total, "truncated": truncated}
@@ -82,7 +76,7 @@ func execRunShell(ctx context.Context, args map[string]any, env toolEnv) map[str
 // a path relative to env.dir. content is required but may legitimately be "";
 // distinguishing "" from "not supplied" is why this checks args["content"]
 // directly rather than going through stringArg.
-func execWriteFile(_ context.Context, args map[string]any, env toolEnv) map[string]any {
+func execWriteFile(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
 	rel := stringArg(args, "path")
 	if rel == "" {
 		return map[string]any{"error": `write_file: missing required argument "path"`}
@@ -93,28 +87,17 @@ func execWriteFile(_ context.Context, args map[string]any, env toolEnv) map[stri
 		return map[string]any{"error": `write_file: missing required argument "content"`}
 	}
 
-	resolved, err := resolveWritePath(env.dir, rel)
+	resolved, err := env.files().resolveWrite(ctx, rel)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
-
-	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 
 	appendArg, _ := args["append"].(bool)
-	if appendArg {
-		flags = os.O_WRONLY | os.O_CREATE | os.O_APPEND
-	}
 
-	f, err := os.OpenFile(resolved, flags, 0o644) //nolint:gosec,mnd // resolveWritePath rejects paths escaping dir; 0644 is an ordinary file, not a secret
-	if err != nil {
-		return map[string]any{"error": err.Error()}
-	}
-	defer func() { _ = f.Close() }()
-
-	n, err := f.WriteString(content)
+	err = env.files().writeFile(ctx, resolved, []byte(content), appendArg)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
 
-	return map[string]any{"bytes_written": n, "path": rel}
+	return map[string]any{"bytes_written": len(content), "path": rel}
 }

@@ -40,6 +40,12 @@ import (
 // than skipping over it — skipping an operator's explicitly ordered entry
 // would be its own kind of surprise.
 func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (conversationResult, servedSource, error) {
+	// Here rather than at preparation, so a cached step never pays for the container its tools would have used — see preparedAgentStep.openTree. prepared is a value, so this settles the copy the conversation below actually runs from.
+	prepared, err := prepared.openTree(ctx)
+	if err != nil {
+		return conversationResult{}, servedSource{ri: prepared.ri, llm: prepared.llm}, err
+	}
+
 	timeout := agentTimeout(prepared.ri.Timeout)
 
 	if prepared.ri.CLI != "" {
