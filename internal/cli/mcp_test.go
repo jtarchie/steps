@@ -236,13 +236,14 @@ func TestMCPProbeReportsCancellation(t *testing.T) {
 
 	// Interrupting a probe run must not read as "every server is broken":
 	// the rows say ✗ context canceled, so the exit status has to say abort.
-	_, err = probeMCPServers(ctx, cfg)
+	err = probeMCPServers(ctx, cfg, staticMCPStatuses(cfg))
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("probeMCPServers on a canceled context returned %v, want context.Canceled", err)
 	}
 }
 
-func TestMCPListOfflineSkipsTheProbe(t *testing.T) {
+// --offline does not mean "say nothing about whether this works". A stdio binary that is not installed and a bearer variable that is not set are knowable with no connection at all, and they are the two most common reasons a server is broken — so the column stays, carrying exactly what can be answered without dialling anything.
+func TestMCPListOfflineStillSaysWhatIsKnowableWithoutDialling(t *testing.T) {
 	// A port nothing is listening on: --offline must not care, and must not
 	// spend the probe timeout finding out.
 	path := mcpListPipeline(t, "http://127.0.0.1:1/mcp")
@@ -257,12 +258,19 @@ func TestMCPListOfflineSkipsTheProbe(t *testing.T) {
 		t.Fatalf("Run(mcp list --offline): %v", err)
 	}
 
-	if !strings.Contains(out, "test") || !strings.Contains(out, "local") {
-		t.Errorf("mcp list --offline did not list both servers:\n%s", out)
+	for _, want := range []string{
+		"test", "local", "STATUS",
+		// The one it CAN answer offline, and the reason the column is worth printing.
+		`✗ command "steps-no-such-mcp-server" not found on PATH`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("mcp list --offline is missing %q:\n%s", want, out)
+		}
 	}
 
-	if strings.Contains(out, "STATUS") {
-		t.Errorf("mcp list --offline reported a STATUS column it never checked:\n%s", out)
+	// The http server is reachable-or-not, which is the question --offline refuses to ask. Its cell must report what is knowable instead of what a connection would have said.
+	if strings.Contains(out, "refused") || strings.Contains(out, "tool") {
+		t.Errorf("mcp list --offline dialled a server:\n%s", out)
 	}
 }
 
@@ -309,48 +317,20 @@ jobs:
 	}
 }
 
-func TestMCPListCellRendering(t *testing.T) {
+// What this command still owns of a status cell: fitting one into a column. The vocabulary itself moved to internal/config, where the web UI can read the same words — see its mcpstatus_test.go.
+func TestMCPListFitsAReasonToItsColumn(t *testing.T) {
 	t.Parallel()
 
-	stdio := config.MCPServer{Name: "gopls", Command: "gopls", Args: []string{"mcp"}, Cwd: "repo"}
-	if got, want := mcpTarget(stdio), "gopls mcp (cwd: repo)"; got != want {
-		t.Errorf("mcpTarget(stdio) = %q, want %q", got, want)
-	}
+	// How it went is the last few words of a dial error, so a reason too long for the column loses its middle, never its tail.
+	long := elideMiddle(config.MCPStatusReason("test", errors.New(
+		`mcp: connect to "test": Post "https://api.githubcopilot.com/mcp/": dial tcp 140.82.113.22:443: connect: connection refused`)))
 
-	if got, want := mcpTarget(config.MCPServer{Endpoint: "https://x/mcp"}), "https://x/mcp"; got != want {
-		t.Errorf("mcpTarget(http) = %q, want %q", got, want)
-	}
-
-	// The env var NAME is what an operator checks; the value is never read here.
-	bearer := config.MCPServer{Auth: config.MCPServerAuth{Type: "bearer", APIKeyEnv: "GITHUB_PAT"}}
-	if got, want := mcpAuth(bearer), "bearer $GITHUB_PAT"; got != want {
-		t.Errorf("mcpAuth(bearer) = %q, want %q", got, want)
-	}
-
-	if got, want := mcpAuth(config.MCPServer{}), "none"; got != want {
-		t.Errorf("mcpAuth(unset) = %q, want %q", got, want)
-	}
-
-	// The name is the row's first column, so the error's copies of it go.
-	reason := mcpStatusReason("linear", errors.New(`mcp server "linear" is not authorized (run `+"`steps mcp login`"+`)`))
-	if want := "is not authorized (run `steps mcp login`)"; reason != want {
-		t.Errorf("mcpStatusReason = %q, want %q", reason, want)
-	}
-
-	if got := mcpStatusReason("test", errors.New(`mcp: connect to "test": dial tcp: refused`)); got != "dial tcp: refused" {
-		t.Errorf("mcpStatusReason(connect) = %q", got)
-	}
-
-	// How it went is the last few words of a dial error, so a reason too long
-	// for the column loses its middle, never its tail.
-	long := mcpStatusReason("test", errors.New(
-		`mcp: connect to "test": Post "https://api.githubcopilot.com/mcp/": dial tcp 140.82.113.22:443: connect: connection refused`))
 	if !strings.HasSuffix(long, "connection refused") {
-		t.Errorf("mcpStatusReason dropped the outcome of a long error: %q", long)
+		t.Errorf("the elided reason dropped the outcome: %q", long)
 	}
 
 	if !strings.HasPrefix(long, `Post "https://api`) {
-		t.Errorf("mcpStatusReason dropped what was attempted: %q", long)
+		t.Errorf("the elided reason dropped what was attempted: %q", long)
 	}
 }
 
@@ -358,12 +338,12 @@ func TestMCPListCellRendering(t *testing.T) {
 func TestAnElidedReasonFillsItsColumnExactly(t *testing.T) {
 	t.Parallel()
 
-	long := elideMiddle(strings.Repeat("y", 3*maxStatusWidth), maxStatusWidth)
+	long := elideMiddle(strings.Repeat("y", 3*maxStatusWidth))
 	if got := len([]rune(long)); got != maxStatusWidth {
 		t.Errorf("an elided reason is %d runes, want the column's %d", got, maxStatusWidth)
 	}
 
-	if fits := strings.Repeat("x", maxStatusWidth); elideMiddle(fits, maxStatusWidth) != fits {
+	if fits := strings.Repeat("x", maxStatusWidth); elideMiddle(fits) != fits {
 		t.Error("a reason exactly the column's width lost its middle")
 	}
 }

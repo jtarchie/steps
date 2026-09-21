@@ -19,7 +19,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"time"
 )
@@ -58,7 +57,7 @@ func (p Problem) Error() string { return p.Target + ": " + p.Detail }
 func (c *Config) CheckEnvironment() []Problem {
 	problems := c.checkAgentCredentials()
 	problems = append(problems, c.checkResourceCredentials()...)
-	problems = append(problems, c.checkMCPCommands()...)
+	problems = append(problems, c.checkMCPServers()...)
 
 	return append(problems, c.checkCLIBinaries()...)
 }
@@ -173,25 +172,22 @@ func (c *Config) resourceCredentialProblems(name string) []Problem {
 	return problems
 }
 
-// checkMCPCommands reports stdio MCP servers whose binary is not on PATH.
-// This is the check that would have caught a `gopls` grant on a machine
-// without gopls installed — discovered, before this existed, at the moment an
-// agent step began, which for a long plan is a long way in.
-func (c *Config) checkMCPCommands() []Problem {
+// checkMCPServers reports every mcp_servers: entry this machine cannot satisfy without a request: a stdio binary that is not on PATH, and a bearer credential whose api_key_env names an unset variable. The first would have caught a `gopls` grant on a machine without gopls installed; the second is the same treatment checkAgentCredentials gives an agent's api_key_env, and it was missing — an unset $GITHUB_PAT was knowable in microseconds and surfaced only as a failed run.
+//
+// An oauth server is deliberately not checked here: its credential is a token file internal/mcp owns, and this package may not import it. It is checked where it is spent, and reported by whoever holds it — see the web UI's mcp tab.
+func (c *Config) checkMCPServers() []Problem {
 	var problems []Problem
 
 	for _, server := range c.MCPServers {
-		if server.Command == "" {
-			continue // an HTTP endpoint; reachability is a live probe, not a PATH lookup
+		status := server.StaticStatus()
+		if status.Readiness != MCPMissing {
+			continue
 		}
 
-		_, err := exec.LookPath(server.Command)
-		if err != nil {
-			problems = append(problems, Problem{
-				Target: fmt.Sprintf("mcp %q", server.Name),
-				Detail: fmt.Sprintf("command %q not found on PATH", server.Command),
-			})
-		}
+		problems = append(problems, Problem{
+			Target: fmt.Sprintf("mcp %q", server.Name),
+			Detail: status.Detail,
+		})
 	}
 
 	return problems

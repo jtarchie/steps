@@ -1146,32 +1146,21 @@ func (m *MCPListCmd) Run() error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	// Sized up front so a row's status cell is indexable whether or not
-	// anything was probed — the offline path prints no STATUS column at all.
-	statuses := make([]string, len(cfg.MCPServers))
+	statuses := staticMCPStatuses(cfg)
 
 	var probeErr error
 
 	if !m.Offline {
-		statuses, probeErr = probeMCPServers(ctx, cfg)
+		probeErr = probeMCPServers(ctx, cfg, statuses)
 	}
 
 	writer := newTabWriter()
 
-	header := "NAME\tTRANSPORT\tTARGET\tAUTH\tUSED BY"
-	if !m.Offline {
-		header += "\tSTATUS"
-	}
-
-	_, _ = fmt.Fprintln(writer, header)
+	_, _ = fmt.Fprintln(writer, "NAME\tTRANSPORT\tTARGET\tAUTH\tUSED BY\tSTATUS")
 
 	for i, srv := range cfg.MCPServers {
-		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s",
-			srv.Name, mcpTransport(srv), mcpTarget(srv), mcpAuth(srv), mcpUsers(cfg, srv.Name))
-
-		if !m.Offline {
-			row += "\t" + statuses[i]
-		}
+		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s",
+			srv.Name, srv.Transport(), srv.Target(), srv.AuthLabel(), cfg.MCPUsers(srv.Name), statuses[i])
 
 		_, _ = fmt.Fprintln(writer, row)
 	}
@@ -1191,6 +1180,26 @@ func (m *MCPListCmd) Run() error {
 	return nil
 }
 
+// staticMCPStatuses is the STATUS column before anything is dialled: a stdio command on PATH, a bearer variable set, an oauth server that needs a login. This is the whole column under --offline, and the starting point for the probe — see config.MCPServer.StaticStatus.
+func staticMCPStatuses(cfg *config.Config) []string {
+	statuses := make([]string, len(cfg.MCPServers))
+
+	for i, srv := range cfg.MCPServers {
+		status := srv.StaticStatus()
+
+		switch status.Readiness {
+		case config.MCPReady:
+			statuses[i] = "✓ " + status.Detail
+		case config.MCPMissing:
+			statuses[i] = "✗ " + elideMiddle(status.Detail)
+		case config.MCPUnknown:
+			statuses[i] = "· " + status.Detail
+		}
+	}
+
+	return statuses
+}
+
 // probeMCPServers connects to every server and reports what it found, one
 // status per server in configuration order, plus the context's own error so an
 // interrupted listing is not mistaken for a listing of broken servers.
@@ -1199,21 +1208,23 @@ func (m *MCPListCmd) Run() error {
 // that does not answer — and doing that serially means the slowest possible
 // listing is the one with the most broken servers in it, each waiting out its
 // own timeout in turn.
-func probeMCPServers(ctx context.Context, cfg *config.Config) ([]string, error) {
+//
+// A server whose static status already FAILED is not dialled: a probe that
+// cannot authenticate reports the missing credential a second time, in the
+// vocabulary of whatever refused it, and one problem in two wordings reads as
+// two problems.
+func probeMCPServers(ctx context.Context, cfg *config.Config, statuses []string) error {
 	var settings *config.Preflight
 	if cfg.Defaults != nil {
 		settings = cfg.Defaults.Preflight
 	}
 
 	timeout := settings.ProbeTimeout()
-	statuses := make([]string, len(cfg.MCPServers))
 
 	var wait sync.WaitGroup
 
 	for i, srv := range cfg.MCPServers {
-		if skip := mcpUnprobable(srv); skip != "" {
-			statuses[i] = skip
-
+		if srv.StaticStatus().Readiness != config.MCPReady {
 			continue
 		}
 
@@ -1227,7 +1238,7 @@ func probeMCPServers(ctx context.Context, cfg *config.Config) ([]string, error) 
 
 			tools, err := stepsmcp.ListServerTools(probeCtx, srv)
 			if err != nil {
-				statuses[i] = "✗ " + mcpStatusReason(srv.Name, err)
+				statuses[i] = "✗ " + elideMiddle(config.MCPStatusReason(srv.Name, err))
 
 				return
 			}
@@ -1238,50 +1249,14 @@ func probeMCPServers(ctx context.Context, cfg *config.Config) ([]string, error) 
 
 	wait.Wait()
 
-	return statuses, ctx.Err() //nolint:wrapcheck // the caller names the command; a bare context.Canceled is what outcome.ExitCode reads
-}
-
-// mcpUnprobable reports the status for a server this command cannot honestly
-// probe, or "" for one it can.
-//
-// A relative cwd: is resolved against the working directory of the agent step
-// whose tools are being built (see config.WithResolvedMCPCwd) — a build
-// workspace that exists only during a run. Spawning it from wherever the
-// operator happens to have run `steps mcp list` would chdir somewhere else
-// entirely, and report a server that works perfectly in a run as broken.
-func mcpUnprobable(srv config.MCPServer) string {
-	if srv.IsStdio() && srv.Cwd != "" && !filepath.IsAbs(srv.Cwd) {
-		return fmt.Sprintf("· not probed (cwd: %s resolves per step)", srv.Cwd)
-	}
-
-	return ""
-}
-
-// mcpStatusReason renders a probe failure as a table cell. It drops the copies
-// of the server's name the error carries — the row's first column is already
-// that name — because the actionable part of these messages ("run `steps mcp
-// login` …", "$TOKEN is not set") is at the END, and is what the column's width
-// budget should be spent on.
-func mcpStatusReason(name string, err error) string {
-	reason, _, _ := strings.Cut(err.Error(), "\n")
-
-	for _, noise := range []string{
-		"mcp: ",
-		fmt.Sprintf("connect to %q: ", name),
-		fmt.Sprintf("mcp server %q: ", name),
-		fmt.Sprintf("mcp server %q ", name),
-	} {
-		reason = strings.TrimPrefix(reason, noise)
-	}
-
-	return elideMiddle(reason, maxStatusWidth)
+	return ctx.Err() //nolint:wrapcheck // the caller names the command; a bare context.Canceled is what outcome.ExitCode reads
 }
 
 // maxStatusWidth is how wide the STATUS cell may get before it is elided —
 // the same budget firstLine spends on the error columns of the other tables.
 const maxStatusWidth = 70
 
-// elideMiddle drops the middle of an over-long reason rather than its tail.
+// elideMiddle drops the middle of an over-long reason rather than its tail, fitting it to the STATUS column.
 //
 // Both ends carry meaning and neither survives the other's loss: a dial
 // failure names what was attempted first ("Post https://…") and how it went
@@ -1289,62 +1264,15 @@ const maxStatusWidth = 70
 // every other column here does, where the head is the whole content — keeps
 // only the URL nobody was asking about. Runes, not bytes: half a rune in a
 // tabwriter cell miscounts the column as well as printing as garbage.
-func elideMiddle(text string, width int) string {
+func elideMiddle(text string) string {
 	runes := []rune(text)
-	if len(runes) <= width {
+	if len(runes) <= maxStatusWidth {
 		return text
 	}
 
-	head := width / 3
+	head := maxStatusWidth / 3
 
-	return string(runes[:head]) + "…" + string(runes[len(runes)-(width-head-1):])
-}
-
-func mcpTransport(srv config.MCPServer) string {
-	if srv.IsStdio() {
-		return "stdio"
-	}
-
-	return "http"
-}
-
-// mcpTarget renders what the server actually is: the endpoint for HTTP, the
-// argv (plus any pinned working directory) for stdio.
-func mcpTarget(srv config.MCPServer) string {
-	if !srv.IsStdio() {
-		return srv.Endpoint
-	}
-
-	target := strings.Join(append([]string{srv.Command}, srv.Args...), " ")
-	if srv.Cwd != "" {
-		target += fmt.Sprintf(" (cwd: %s)", srv.Cwd)
-	}
-
-	return target
-}
-
-// mcpAuth names the auth type and, for bearer, the environment variable the
-// credential is read from — the thing to go check when it is the credential
-// that is missing. Never the value.
-func mcpAuth(srv config.MCPServer) string {
-	if srv.Auth.Type == "" || srv.Auth.Type == "none" {
-		return "none"
-	}
-
-	if srv.Auth.APIKeyEnv != "" {
-		return srv.Auth.Type + " $" + srv.Auth.APIKeyEnv
-	}
-
-	return srv.Auth.Type
-}
-
-func mcpUsers(cfg *config.Config, name string) string {
-	users := cfg.MCPServerUsers(name)
-	if len(users) == 0 {
-		return "(unused)"
-	}
-
-	return strings.Join(users, ", ")
+	return string(runes[:head]) + "…" + string(runes[len(runes)-(maxStatusWidth-head-1):])
 }
 
 // pluralize adds the English plural s, so a count reads as a phrase.
