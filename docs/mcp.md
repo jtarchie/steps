@@ -89,13 +89,14 @@ steps mcp list pipeline.yml
 
 ```
 NAME    TRANSPORT  TARGET                              AUTH                USED BY        STATUS
-github  http       https://api.githubcopilot.com/mcp/  bearer $GITHUB_PAT  agent triager  ✗ environment variable "GITHUB_PAT" (api_key_env) is not set
+github  http       https://api.githubcopilot.com/mcp/  bearer $GITHUB_PAT  agent triager  ✗ $GITHUB_PAT is not set (auth.api_key_env)
 linear  http       https://mcp.linear.app/mcp          oauth               (unused)       ✓ 24 tools
 gopls   stdio      gopls mcp (cwd: repo)               none                agent coder    · not probed (cwd: repo resolves per step)
 ```
 
 - **It connects, by default.** The file says a server exists; only a connection says it works — the binary is on this machine's PATH, the bearer token's env var is set, the oauth token is still good. Each server is probed concurrently, bounded by the same `defaults.preflight.timeout` a run's preflight uses.
-- **`--offline` skips every probe**, printing only what the file declares. Use it when you want the inventory instantly, or on a machine that holds none of the credentials.
+- **A server whose credential is already missing is not dialled.** An unset `api_key_env` or a command that is not on `PATH` is knowable without a connection, and a probe that cannot authenticate would report the same problem a second time in whatever words refused it. One problem in two wordings reads as two problems.
+- **`--offline` skips every probe**, and still prints `STATUS` — with exactly what is knowable from the file plus this machine: a stdio binary found or not found on `PATH`, a bearer variable set or unset, an oauth server that needs a login. Use it when you want the inventory instantly, or on a machine that holds none of the credentials.
 - **A relative `cwd:` is listed but not probed** (`·`). It resolves against the agent step's own working directory, which only exists while a run is happening — spawning it from your shell's directory instead would report a working server as broken.
 - **`USED BY` is the consumers**: the agents whose `tools:` grant the server, the `fix:` blocks whose own `tools:` grant it, and the resource types whose `mcp:` backend calls it. `(unused)` means nothing in this pipeline can reach it.
 - **`AUTH` names the env var, never the value** — `bearer $GITHUB_PAT` is the variable to go check.
@@ -350,6 +351,8 @@ watch: preflight failed, nothing was polled:
 
 `--no-preflight` skips it, as it does for models.
 
+A shallower check runs earlier still, needs no network at all, and cannot be skipped: an `mcp_servers:` entry whose stdio `command:` is not on this machine's `PATH`, or whose `auth.api_key_env` names a variable that is unset or empty, is a **[preflight problem](../internal/config/preflight.go)** — the same treatment an agent's `api_key_env` gets. `steps validate` reports it, and `steps pipeline set` REFUSES a pipeline that has one, so a daemon never serves a pipeline whose tooling is already known to be broken. An `auth: {type: oauth}` server is deliberately not checked this way: its credential is a token file, and refusing the set would leave nothing to log in against.
+
 
 ### Sending a file's contents: `{file: ...}` in `params:`
 
@@ -461,6 +464,27 @@ steps mcp login linear -p app --target https://ops:PASSWORD@steps.example.com
 - **`$BROWSER`** names the program either login opens the URL with, as it does for `xdg-open` and `gh`.
 
 > **What this means for the daemon.** It now holds refresh tokens for third-party services, on whatever address it listens on. `steps pipeline set` already makes that machine one that runs arbitrary commands, so it was never less than fully trusted — but a token for your issue tracker is a way *off* the box that command execution on it is not. Generated credentials and TLS ([authentication.md](authentication.md)) stop being good practice and become the thing standing in front of those tokens.
+
+### Authorizing from the browser: the **mcp** tab
+
+A daemon's web UI has an **mcp** tab for every pipeline that declares `mcp_servers:` — the same inventory `steps mcp list` prints, and, on an oauth server, a **Connect** button that finishes the login in the browser you are already looking at.
+
+It is a strictly shorter path than the CLI rather than a second one. `steps mcp login --target` exists to get an authorization URL out of a daemon and into a browser that can reach that daemon: it starts the login over HTTP, polls until the daemon produces the URL, prints it, and shells out to `$BROWSER`. On the daemon's own page that problem is already solved — you are in a browser, talking to the daemon, authenticated — so what is left is a redirect:
+
+1. **Connect** posts to the daemon, which starts the same login `steps mcp login` starts. The redirect URI is built from your browser's own `Origin`, so a daemon behind a TLS proxy registers the `https://` address you actually reached it on.
+2. The daemon waits out discovery and registration (up to 10 seconds) and answers `303` straight to the provider's consent screen.
+3. The provider redirects back to `GET /mcp/callback`, which saves nothing you can see and sends you back to the tab.
+4. The **token exchange finishes after that redirect**, so the tab is what reports the outcome — including a login that authorized and then failed. The page reads the same status the CLI polls.
+
+The status column answers "is this pipeline's tooling wired up?" without running a job, and it is **never probed on page load**: it comes from the configuration, this machine's environment and `PATH`, and the saved token file. A per-server **Test** button is the only thing that connects to anything, and it runs detached — the click returns at once, the row says `testing…`, and the result arrives on the page's own refresh.
+
+Three things worth knowing:
+
+- **A token is saved per server NAME**, not per pipeline ([TokenPath](#authorizing-an-oauth-server-steps-mcp-login)), so two pipelines naming one server share one login. A token recorded for a different `endpoint:` reads as `authorized for a different endpoint — needs login` rather than as connected, which is the same refusal a run gives.
+- **`--read-only` keeps the page and withholds the buttons.** Connect authorizes and Test dials, which is what that flag is a statement about; `needs login` is precisely the diagnostic a read-only build box should still show, and the row names the CLI command instead.
+- **Two people can click Connect on one server.** The second login replaces the first, because one token file cannot be written by two flows. The first person's consent screen still works: their redirect is recognized and sends them back to the tab, which shows the login that won.
+
+A missing bearer variable or a stdio command that is not installed is refused by `steps pipeline set` before a daemon will serve the pipeline at all (see [Preflight checks this before anything runs](#preflight-checks-this-before-anything-runs)), so on a served pipeline those cells normally read ✓ — they turn ✗ when the machine changes underneath a running daemon.
 
 ### Servers without dynamic client registration
 

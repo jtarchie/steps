@@ -29,14 +29,20 @@ type LoginStatus struct {
 // LoginRequest starts one. Base is the address the CLI reached this daemon on, userinfo already removed: it is proven to work, the browser finishing the flow sits beside that CLI, and it is what the redirect URI is built from — so a password left on it would be handed to the authorization server.
 type LoginRequest struct {
 	Base string `json:"base"`
+	// Return is where the browser is sent once the callback has answered, and it is a path on THIS daemon — refused otherwise (see redirectFor's sibling). Empty is a login a terminal is waiting on, which keeps the callback's plain "you can close this window": the CLI is the thing that reports the outcome there. A page sets it because the exchange finishes after the callback has answered, so the failure that matters most has nowhere else to land.
+	Return string `json:"return,omitempty"`
 }
 
-// Authorizer runs logins. An interface for the reason Manager is one — depguard keeps internal/mcp out of this package — and optional: a manager that is not one answers 501 rather than pretending.
+// Authorizer runs logins and reports what a declared mcp server is worth. An interface for the reason Manager is one — depguard keeps internal/mcp out of this package — and optional: a manager that is not one answers 501 rather than pretending.
 type Authorizer interface {
 	StartLogin(pipeline *Pipeline, server string, req LoginRequest) (LoginStatus, error)
 	LoginStatus(server string) (LoginStatus, bool)
 	// LoginCallback is the handler for the pending login that minted state, nil when none did.
 	LoginCallback(state string) http.Handler
+	// MCPState is what the token-holder knows about one server: its saved credential, and the last probe anybody asked for. Never a request of its own — the page calls this on every poll.
+	MCPState(pipeline *Pipeline, server string) MCPState
+	// StartProbe connects to one server in the background, recording the result for MCPState to report. Refuses what it cannot honestly probe; a probe already in flight is left alone rather than duplicated.
+	StartProbe(pipeline *Pipeline, server string) error
 }
 
 func (s *Server) authorizer() Authorizer {

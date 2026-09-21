@@ -29,6 +29,7 @@
     {{if .Nav.Pipelines}}<a class="tab" {{if eq .Section "jobs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}">jobs</a>
     <a class="tab" {{if eq .Section "runs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/runs">runs</a>
     <a class="tab" {{if eq .Section "resources"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/resources">resources</a>
+    {{if .Nav.HasMCP}}<a class="tab" {{if eq .Section "mcp"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/mcp">mcp</a>{{end}}
     <a class="tab" {{if eq .Section "approvals"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/approvals">approvals{{if .Nav.PendingApprovals}}<span class="badge">●{{.Nav.PendingApprovals}}</span>{{end}}</a>
     <a class="tab" {{if eq .Section "questions"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/questions">questions{{if .Nav.PendingQuestions}}<span class="badge">●{{.Nav.PendingQuestions}}</span>{{end}}</a>
     {{end}}<a class="tab" {{if eq .Section "docs"}}aria-current="page" {{end}}href="/docs">docs</a>

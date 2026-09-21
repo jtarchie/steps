@@ -345,6 +345,7 @@ func (s *Server) routes() error {
 	group.GET("/config/:sha", s.handleConfig)
 	group.GET("/approvals", s.handleApprovals)
 	group.GET("/questions", s.handleQuestions)
+	group.GET("/mcp", s.handleMCP)
 	group.GET("/resources", s.handleResources)
 	group.GET("/resources/:resource", s.handleResource)
 	group.GET("/search", s.handleSearch)
@@ -357,6 +358,9 @@ func (s *Server) routes() error {
 	group.POST("/jobs/:job/resume", s.handleResumeBreaker)
 	group.POST("/runs/:run/abort", s.handleAbortRun)
 	group.POST("/jobs/:job/queued/abort", s.handleAbortQueued)
+	// Browser-reachable on purpose, and the one place this UI starts something outside itself. /api refuses anything browser-shaped, so until now a browser could not begin a login at all; what bounds it is that the pipeline already declares the server (adding one takes `steps pipeline set`, which is remote-shell-grade) and that sameOriginMutations refuses a cross-site POST. See docs/authentication.md.
+	group.POST("/mcp/:server/connect", s.handleMCPConnect)
+	group.POST("/mcp/:server/test", s.handleMCPTest)
 
 	// Not a UI route: a webhook delivery. It authenticates with the sender's
 	// signature, which is why it is exempt from the same-origin check every
@@ -542,9 +546,18 @@ func (s *Server) globalNav(c *echo.Context) navData {
 	if nav.Current == "" && len(nav.Pipelines) > 0 {
 		nav.Current = nav.Pipelines[0].Slug
 		nav.CurrentPath = nav.Pipelines[0].Path
+		// The tabs this shell draws have to be the ones that pipeline HAS, or /docs and the overview offer an mcp tab that 404s on the pipeline they anchor to.
+		nav.HasMCP = s.hasMCP(nav.Current)
 	}
 
 	return nav
+}
+
+// hasMCP answers the tab question for a pipeline that is not the request's own — the shell an overview or a docs page draws is anchored to one it did not resolve.
+func (s *Server) hasMCP(slug string) bool {
+	pipeline := s.Lookup(slug)
+
+	return pipeline != nil && len(pipeline.Config().MCPServers) > 0
 }
 
 func (s *Server) nav(c *echo.Context) navData {
@@ -570,6 +583,8 @@ func (s *Server) nav(c *echo.Context) navData {
 	nav.Current = current.Slug
 	nav.CurrentPath = current.Path()
 	nav.Paused = paused(c.Request().Context(), current)
+	// The tab appears only for a pipeline that declares servers: most do not, and a dead tab on every one of them is nav space spent on a feature they never use.
+	nav.HasMCP = len(current.Config().MCPServers) > 0
 
 	pending, err := current.Store.Approvals(c.Request().Context(), true, 0)
 	if err == nil {
@@ -598,6 +613,8 @@ type navData struct {
 	PendingApprovals int
 	PendingQuestions int
 	ReadOnly         bool
+	// HasMCP is whether the current pipeline declares mcp_servers:, which is the only thing that draws the mcp tab.
+	HasMCP bool
 	// On the nav because it is a fact about every page: a board of green jobs that has stopped moving has to say why.
 	Paused bool
 }

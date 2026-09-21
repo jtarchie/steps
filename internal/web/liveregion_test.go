@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -164,6 +165,18 @@ var timeText = regexp.MustCompile(`<time[^>]*>[^<]*</time>`)
 // told from one carrying a fact.
 var markup = regexp.MustCompile(`(?s)<[^>]*>|\s+`)
 
+// mcpTabAuthorizer is the one the staleness probe moves underneath the page. One case uses it, and setup runs before that case's change, so the sharing is within a single subtest.
+var mcpTabAuthorizer *mcpAuthorizer
+
+func mcpTabForStaleness(t *testing.T) (*Server, *Pipeline) {
+	t.Helper()
+
+	server, pipeline, authorizer := mcpServerPipeline(t, stubRunner{})
+	mcpTabAuthorizer = authorizer
+
+	return server, pipeline
+}
+
 func TestNothingThatChangesLivesOutsideALiveRegion(t *testing.T) {
 	t.Parallel()
 
@@ -260,6 +273,18 @@ func TestNothingThatChangesLivesOutsideALiveRegion(t *testing.T) {
 				if err != nil {
 					t.Fatalf("RecordVersions: %v", err)
 				}
+			},
+		},
+		{
+			// The tab's own changing parts: a login that finishes and a probe that lands, both of which happen after the request that started them and neither of which publishes anything the reader's page would otherwise hear about.
+			name:  "mcp tab",
+			path:  "/p/demo/mcp",
+			setup: mcpTabForStaleness,
+			change: func(t *testing.T, _ *Pipeline) {
+				t.Helper()
+
+				mcpTabAuthorizer.credential = MCPCredential{Connected: true, Detail: "connected, renews automatically"}
+				mcpTabAuthorizer.probe = &MCPProbe{OK: true, Detail: "7 tools", At: time.Now()}
 			},
 		},
 		{
@@ -400,6 +425,8 @@ func TestLiveRegionsAreDrivenByHtmx(t *testing.T) {
 	// redirect into the only one.
 	overview, _ := testPipelines(t, "app", "infra")
 
+	mcpTab, _, _ := mcpServerPipeline(t, stubRunner{})
+
 	for _, page := range []struct {
 		server *Server
 		path   string
@@ -411,6 +438,7 @@ func TestLiveRegionsAreDrivenByHtmx(t *testing.T) {
 		{server, "/p/demo/resources"},
 		{server, "/p/demo/approvals"},
 		{server, "/p/demo/questions"},
+		{mcpTab, "/p/demo/mcp"},
 	} {
 		path := page.path
 

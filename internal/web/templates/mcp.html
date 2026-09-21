@@ -1,0 +1,63 @@
+{{define "page"}}
+<h1 class="prompt"><b>steps mcp</b></h1>
+<div id="mcp-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#mcp-region" hx-swap="outerMorph" hx-select-oob="#nav-tabs:outerMorph">
+{{/* Inside the region: a login finishing and a probe landing both change this
+     count's neighbours, and a metaline left outside would go on describing
+     the table the poll had already replaced. */}}
+<p class="metaline">{{len .Servers}} servers<span class="sep">·</span>status is read from configuration, environment and saved tokens — nothing here is probed until you ask</p>
+
+<div class="tablewrap">
+  <table>
+    <thead><tr><th>Server</th><th>Transport</th><th>Target</th><th>Auth</th><th>Used by</th><th>Status</th></tr></thead>
+    <tbody>
+      {{range .Servers}}
+      <tr>
+        <td>{{.Name}}</td>
+        <td class="dim">{{.Transport}}</td>
+        <td class="dim">{{.Target}}</td>
+        <td class="dim">{{.Auth}}</td>
+        <td class="dim">{{.UsedBy}}</td>
+        <td>
+          {{if .Pending}}
+            <span class="stamp st st-running"><span class="stmark" role="img" aria-label="running">◐</span> login in progress</span>
+            {{if .AuthorizeURL}}<div class="meta"><a href="{{.AuthorizeURL}}" rel="noopener">continue at the provider</a> — or it was replaced by a newer login</div>{{end}}
+          {{else}}
+            <span class="stamp st st-{{if .Bad}}failed{{else}}passed{{end}}"><span class="stmark" role="img" aria-label="{{if .Bad}}failed{{else}}passed{{end}}">{{if .Bad}}✗{{else}}✓{{end}}</span> {{.Status}}</span>
+          {{end}}
+          {{if .Failed}}<div class="meta">last login failed: {{.Failed}}</div>{{end}}
+          {{with .Probe}}
+            {{if .Running}}
+            <div class="meta">testing…</div>
+            {{else}}
+            <div class="meta">tested {{agoTag .At}}: {{if .OK}}✓{{else}}✗{{end}} {{.Detail}}</div>
+            {{end}}
+          {{end}}
+        </td>
+      </tr>
+      {{if or .OAuth (not $.Nav.ReadOnly)}}
+      <tr class="subrow">
+        <td colspan="6">
+          {{if $.Nav.ReadOnly}}
+          <span class="meta">This server is read-only. Authorize with <code>steps mcp login {{.Name}} -p {{$.Nav.Current}} --target &lt;url&gt;</code>.</span>
+          {{else}}
+          <form class="decide" method="post" action="/p/{{$.Nav.Current}}/mcp/{{.Name}}/test">
+            <button class="btn" type="submit">Test</button>
+          </form>
+          {{if .OAuth}}
+          <form class="decide" method="post" action="/p/{{$.Nav.Current}}/mcp/{{.Name}}/connect">
+            <button class="btn primary" type="submit">{{if .Bad}}Connect{{else}}Re-connect{{end}}</button>
+            <span class="meta">sends you to the provider and brings you back here</span>
+          </form>
+          {{end}}
+          {{end}}
+        </td>
+      </tr>
+      {{end}}
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+<p class="faint">A token is saved per server NAME, on this daemon — two pipelines naming one server share one login.</p>
+</div>
+{{end}}

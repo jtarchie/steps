@@ -113,6 +113,7 @@ holds nothing serves an index saying how to set one.
 | `…/approvals` | Pending `approval:` steps, and the decisions already made |
 | `…/questions` | Pending `ask_user` questions, and the answers already given |
 | `…/resources` | Latest checked version per resource, and any job the circuit breaker has paused |
+| `…/mcp` | Every `mcp_servers:` entry, who depends on it, and whether it is wired up — with **Connect** to finish an oauth login in this browser and **Test** to probe one server. Present only for a pipeline that declares servers; see [mcp.md](mcp.md#authorizing-from-the-browser-the-mcp-tab) |
 | `/docs` | These docs, rendered with syntax-highlighted examples — the same pages `steps docs` shows in a terminal |
 
 Press `/` anywhere for a jump palette over pipelines, jobs, and recent runs — across **every** pipeline this process serves, not only the one whose page you are on. The one you are on ranks first, and a hit from anywhere else says which pipeline it belongs to.
@@ -281,7 +282,7 @@ and pauses while the tab is hidden.
 
 ## Triggering, approving, resuming
 
-Five controls, each doing what a CLI verb does:
+Seven controls, each doing what a CLI verb does:
 
 - **Trigger** / **Re-run (forced)** enqueue the job into the durable trigger
   queue `steps web` uses — the same queue this process's own polling fills.
@@ -299,8 +300,13 @@ Five controls, each doing what a CLI verb does:
   trigger lands on — what `steps runs abort` asks for. See
   [Aborting a run](#aborting-a-run).
 
-`--read-only` withholds all five: the controls disappear from the pages and
-the routes refuse. The queue is still drained, polling still runs, and
+- **Connect** an oauth `mcp_servers:` entry, and **Test** any of them, from the
+  [mcp tab](mcp.md#authorizing-from-the-browser-the-mcp-tab).
+
+`--read-only` withholds all seven: the controls disappear from the pages and
+the routes refuse. The mcp tab keeps its status column — that a server needs a
+login is a diagnostic a build box should still show, and the row names the CLI
+command instead. The queue is still drained, polling still runs, and
 `steps pipeline set` still works — that flag is a statement about the
 browser's surface, not about what the process does on its own or about how it
 is deployed. `--listen 0.0.0.0:8088 --read-only` is a build box that still has
@@ -508,6 +514,8 @@ the shell that started it. A daemon reachable from anywhere else turns on HTTP
 Basic — one username, one password, every route but the webhook one. See
 [authentication.md](authentication.md).
 
+**Two browser-reachable routes make the daemon act on the outside world**, and they are the only ones that do: the mcp tab's **Connect** starts an oauth login and **Test** connects to a declared server. Both need the daemon's credentials, both are refused cross-origin, neither can name a server the pipeline does not already declare, and `--read-only` withholds both while keeping the page. The reasoning is in [authentication.md](authentication.md#what-a-browser-may-start).
+
 **`steps pipeline set` is a remote-shell endpoint. Say that plainly: a
 pipeline is arbitrary commands, so anyone who can reach this port can run
 anything they like as the user running the daemon.** No token, no password, no
@@ -554,7 +562,7 @@ pipeline.
 --max-concurrent maximum queued jobs running at once, per pipeline (default 1)
 --pin / --force  pin a version field; ignore the cache and re-run every step
 --no-preflight   skip the pre-poll health check of models and MCP servers
---read-only      serve without trigger, approval, answer, resume, or abort controls
+--read-only      serve without trigger, approval, answer, resume, abort, connect or test controls
                  (steps pipeline set is NOT withheld — see Security)
 --basic-auth-username / --basic-auth-password
                  require HTTP Basic on every route but the webhook one; both or

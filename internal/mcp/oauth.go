@@ -214,28 +214,9 @@ func saveTemp(tmp *os.File, data []byte, tmpPath string) error {
 // different endpoint, surfaces an actionable error naming the login command
 // to run.
 func oauthTokenSource(ctx context.Context, srv config.MCPServer) (oauth2.TokenSource, error) {
-	path, err := TokenPath(srv.Name)
+	tf, path, _, err := checkCredential(srv)
 	if err != nil {
 		return nil, err
-	}
-
-	tf, err := LoadTokenFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("mcp server %q is not authorized (%w %s, with -c <pipeline.yml> on this machine or -p <pipeline> --target <url> for a daemon): %w", srv.Name, ErrNeedsLogin, srv.Name, err)
-	}
-
-	if tf.Endpoint != srv.Endpoint {
-		return nil, fmt.Errorf("mcp server %q: authorized for a different endpoint (%w %s again)", srv.Name, ErrNeedsLogin, srv.Name)
-	}
-
-	// Caught here rather than left to x/oauth2, which answers this exact
-	// state with a bare "token expired and refresh token is not set" — true,
-	// but it names neither the server nor the fix, and it arrives only after
-	// the transport has already been built. The state is knowable from the
-	// file alone, so it is answered from the file alone.
-	err = tf.checkRefreshable()
-	if err != nil {
-		return nil, fmt.Errorf("mcp server %q: %w", srv.Name, err)
 	}
 
 	cfg := &oauth2.Config{

@@ -61,7 +61,8 @@ mcp_servers:
   auth: { type: oauth }
 - name: keyed
   endpoint: http://127.0.0.1:1/other
-  auth: { type: bearer, api_key_env: SOME_KEY }
+  # $PATH because the NAME is all this fixture needs and a set is refused for a bearer server whose variable is unset — see config.checkMCPServers.
+  auth: { type: bearer, api_key_env: PATH }
 jobs:
 - name: build
   plan:

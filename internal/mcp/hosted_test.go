@@ -89,7 +89,7 @@ func hostedOnADaemon(t *testing.T, announce func(string)) (*httptest.Server, *Ho
 	}))
 	t.Cleanup(daemon.Close)
 
-	hosted = NewHostedCallback(daemon.URL+"/mcp/callback", announce)
+	hosted = NewHostedCallback(daemon.URL+"/mcp/callback", "", announce)
 
 	return daemon, hosted
 }

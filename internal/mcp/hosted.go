@@ -15,13 +15,16 @@ type HostedCallback struct {
 	announce func(authURL string)
 }
 
-// NewHostedCallback builds the redirect target for one login. redirectURL is where the provider sends the browser, which the caller must route to ServeHTTP; announce is told the authorization URL, once per attempt, so it can travel to whoever has the browser.
-func NewHostedCallback(redirectURL string, announce func(authURL string)) *HostedCallback {
+// NewHostedCallback builds the redirect target for one login. redirectURL is where the provider sends the browser, which the caller must route to ServeHTTP; returnURL is where the browser is sent afterwards, empty when a terminal rather than a page is waiting; announce is told the authorization URL, once per attempt, so it can travel to whoever has the browser.
+func NewHostedCallback(redirectURL, returnURL string, announce func(authURL string)) *HostedCallback {
 	return &HostedCallback{
-		cb:       &loopbackCallback{redirectURL: redirectURL, result: make(chan callbackResult, 1)},
+		cb:       &loopbackCallback{redirectURL: redirectURL, returnURL: returnURL, result: make(chan callbackResult, 1)},
 		announce: announce,
 	}
 }
+
+// ReturnsTo is where this login sends the browser when it is done, empty for one a terminal started. It is what tells a caller holding a replaced login whether there is a page to send its abandoned browser back to.
+func (h *HostedCallback) ReturnsTo() string { return h.cb.returnURL }
 
 // Matches reports whether state belongs to this login's outstanding request. It is the whole of the route's authentication: a provider's redirect is a bare browser navigation carrying no credential of the daemon's, and the state is a nonce this process minted that only the party holding the authorization URL has seen.
 func (h *HostedCallback) Matches(state string) bool { return h.cb.matches(state) }

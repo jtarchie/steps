@@ -32,7 +32,9 @@ type loopbackCallback struct {
 	listener    net.Listener
 	server      *http.Server
 	redirectURL string
-	result      chan callbackResult
+	// returnURL is where the READER is sent once this callback has answered, empty for a flow a terminal is waiting on. A browser that started the login is looking at a page, and the page is what can report a token exchange that fails AFTER this handler has already answered; a loopback login has nobody there, and keeps the plain text.
+	returnURL string
+	result    chan callbackResult
 
 	// mu guards want, the state of the authorization request currently in
 	// flight. handle runs on the server's goroutine and fetch on the login
@@ -144,7 +146,7 @@ func (cb *loopbackCallback) handle(w http.ResponseWriter, r *http.Request) {
 
 	if errParam := q.Get("error"); errParam != "" {
 		cb.deliver(callbackResult{err: fmt.Errorf("authorization server returned error: %s", errParam)})
-		_, _ = fmt.Fprintln(w, "Authorization failed. You can close this window.")
+		cb.finish(w, r, "Authorization failed. You can close this window.")
 
 		return
 	}
@@ -165,7 +167,18 @@ func (cb *loopbackCallback) handle(w http.ResponseWriter, r *http.Request) {
 	// Single use. A loopback listener closes moments after this, but a hosted callback stays routable for as long as its login's status is kept, and a settled state that still matched was answered "complete" on every replay.
 	cb.expect("")
 
-	_, _ = fmt.Fprintln(w, "Authorization complete. You can close this window and return to steps.")
+	cb.finish(w, r, "Authorization complete. You can close this window and return to steps.")
+}
+
+// finish answers whoever followed the provider's redirect here. A terminal login gets the sentence it has always got; a login a page started gets sent back to that page, which is the only thing that can show an exchange that fails after this handler has answered — and 303 because the provider's redirect is a GET that must not be repeatable as anything else.
+func (cb *loopbackCallback) finish(w http.ResponseWriter, r *http.Request, text string) {
+	if cb.returnURL == "" {
+		_, _ = fmt.Fprintln(w, text)
+
+		return
+	}
+
+	http.Redirect(w, r, cb.returnURL, http.StatusSeeOther)
 }
 
 // stateFromAuthURL pulls the state parameter out of the authorization URL the

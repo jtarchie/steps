@@ -24,7 +24,9 @@ type logins struct {
 	base context.Context //nolint:containedctx // a login outlives the request that started it, and dies with the daemon
 	mu   sync.Mutex
 	held map[string]*pendingLogin
-	wait sync.WaitGroup
+	// stale is the logins a newer one replaced, newest last, kept only so the browser still at a consent screen can be told what happened; see staleLogins.
+	stale []staleLogin
+	wait  sync.WaitGroup
 }
 
 type pendingLogin struct {
@@ -33,6 +35,15 @@ type pendingLogin struct {
 	mu     sync.Mutex
 	status web.LoginStatus
 }
+
+// staleLogin is a replaced login reduced to the two things its abandoned browser still needs: the state its redirect will carry, and the page to put it back on.
+type staleLogin struct {
+	state string
+	back  string
+}
+
+// staleLogins is how many replaced logins stay answerable. A login a PAGE started has somebody at a consent screen: replace it and their redirect matches nothing, so they finish authorizing and land on a bare 404 for a thing that did happen — somebody else started the same login. Keeping the state matchable long enough to say so costs a handful of pointers, and the cap is what stops it being a leak.
+const staleLogins = 4
 
 func newLogins(base context.Context) *logins {
 	return &logins{base: base, held: map[string]*pendingLogin{}}
@@ -68,15 +79,21 @@ func (l *logins) StartLogin(pipeline *web.Pipeline, server string, req web.Login
 		return web.LoginStatus{}, err
 	}
 
+	back, err := returnTo(req.Return)
+	if err != nil {
+		return web.LoginStatus{}, err
+	}
+
 	ctx, cancel := context.WithTimeout(l.base, loginBound)
 	pending := &pendingLogin{cancel: cancel, status: web.LoginStatus{State: web.LoginPending}}
-	pending.hosted = stepsmcp.NewHostedCallback(redirect, func(authURL string) {
+	pending.hosted = stepsmcp.NewHostedCallback(redirect, back, func(authURL string) {
 		pending.set(func(status *web.LoginStatus) { status.AuthorizeURL = authURL })
 	})
 
 	l.mu.Lock()
 	if previous := l.held[server]; previous != nil {
 		previous.cancel()
+		l.keepStale(previous)
 	}
 
 	l.held[server] = pending
@@ -126,6 +143,54 @@ func (l *logins) LoginCallback(state string) http.Handler {
 		}
 	}
 
+	return l.replacedCallback(state)
+}
+
+// keepStale remembers a replaced login, newest last, dropping the oldest past the cap. Called with the lock held.
+//
+// Two logins are deliberately not kept. One a TERMINAL started: its redirect answers to the CLI polling for it, and the 404 is what says the state died with the login. And one replaced before it ever produced an authorization URL: nothing was ever handed to a browser, so there is no consent screen anybody is sitting at.
+func (l *logins) keepStale(previous *pendingLogin) {
+	back := previous.hosted.ReturnsTo()
+
+	state := stateOf(previous.read().AuthorizeURL)
+	if back == "" || state == "" {
+		return
+	}
+
+	l.stale = append(l.stale, staleLogin{state: state, back: back})
+	if len(l.stale) > staleLogins {
+		l.stale = l.stale[len(l.stale)-staleLogins:]
+	}
+}
+
+// stateOf reads the state parameter back out of an authorization URL, which is where the flow put the only thing that identifies its redirect.
+func stateOf(authURL string) string {
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		return ""
+	}
+
+	return parsed.Query().Get("state")
+}
+
+// replacedCallback answers the browser of a login somebody else replaced: back to the page it started from, which reads the status of the login that WON. Called with the lock held. Nothing is consumed and no code is exchanged — this flow is over, and the authorization it is carrying belongs to a login that no longer exists.
+func (l *logins) replacedCallback(state string) http.Handler {
+	if state == "" {
+		return nil
+	}
+
+	for _, previous := range l.stale {
+		if previous.state != state {
+			continue
+		}
+
+		back := previous.back
+
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, back, http.StatusSeeOther)
+		})
+	}
+
 	return nil
 }
 
@@ -138,6 +203,24 @@ func (l *logins) stop() {
 	l.mu.Unlock()
 
 	l.wait.Wait()
+}
+
+// returnTo vets where a finished login may send the browser. A PATH on this daemon and nothing else: the value travels from a request into a Location header, so anything carrying a scheme or a host would make this daemon an open redirector — somebody else's login URL, ending on somebody else's page. Empty is a terminal login, which has no page to return to.
+func returnTo(back string) (string, error) {
+	if back == "" {
+		return "", nil
+	}
+
+	if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") {
+		return "", fmt.Errorf("a login returns to a path on this daemon, got %q", back)
+	}
+
+	parsed, err := url.Parse(back)
+	if err != nil || parsed.Scheme != "" || parsed.Host != "" {
+		return "", fmt.Errorf("a login returns to a path on this daemon, got %q", back)
+	}
+
+	return back, nil
 }
 
 // redirectFor builds the redirect URI from the address the CLI reached this daemon on. Userinfo is REFUSED rather than stripped: the URI is sent to the authorization server and kept by it, so a password on it has already gone somewhere it cannot be taken back from, and a client that sent one has a bug worth hearing about.

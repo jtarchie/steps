@@ -52,6 +52,11 @@ func (f *fakeAuthorizer) LoginCallback(state string) http.Handler {
 	})
 }
 
+// The tab's two questions, which these tests are not about: answered plainly so this fake still IS an Authorizer, since a fake that silently stopped being one would leave every test below asking a nil daemon.
+func (f *fakeAuthorizer) MCPState(*Pipeline, string) MCPState { return MCPState{} }
+
+func (f *fakeAuthorizer) StartProbe(*Pipeline, string) error { return nil }
+
 func loginServer(t *testing.T) (*Server, *fakeAuthorizer) {
 	t.Helper()
 
