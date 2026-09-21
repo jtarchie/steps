@@ -71,6 +71,8 @@ Three more gateways get the same per-agent, per-run treatment, each in its own s
 
 **opencode is the one whose header is not an optimization.** Its gateway refuses a request that arrives without one — `400 {"type":"MissingSessionID"}` — and routes nothing, so every `opencode/` model failed until steps sent it. It needs no caching field: it routes to providers that cache implicitly and reports `prompt_cache_hit_tokens` back without being asked. It takes bare model names (`opencode/deepseek-v4.1-flash`), not `vendor/model`.
 
+That difference decides what happens **outside a job run**. A session is derived from the run id, and a preflight probe — `steps validate --live`, and the check before every job — has none. An optional header is simply left off there, which is right: there is no conversation to keep a cache warm for. A *required* one is synthesized instead (`probe-<random>`), because the alternative is a provider that preflight can never reach, failing every job before its first step. Random rather than fixed, since two concurrent probes sharing one id would ask the gateway to pin them to a single upstream instance — the opposite of what a health check wants.
+
 Helicone has no request-wide switch: Anthropic caching there needs a `cache_control` marker placed on individual messages, so an Anthropic model through `helicone/` pays full input price every turn. Models with implicit caching (OpenAI, Gemini, DeepSeek) are unaffected. Helicone takes bare model names (`helicone/claude-sonnet-4`); the others take `vendor/model`.
 
 Whether caching is landing is visible in `steps runs cost`'s CACHED column — the provider's own reported cache figures, recorded per step (see [agents.md](agents.md#budgets-budgettokens)).

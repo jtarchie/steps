@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,16 +14,34 @@ type cachingGateway struct {
 	name          string
 	host          string
 	sessionHeader string
-	field         string
-	value         json.RawMessage
+	// sessionRequired marks a gateway that REFUSES a request carrying no session rather than merely routing it less well. It decides what happens outside a job run, where there is no run id to derive a session from: an optional header is left off, a required one is synthesized, because the alternative is a provider that cannot be reached at all by `steps validate --live` or by the preflight before every job.
+	sessionRequired bool
+	field           string
+	value           json.RawMessage
 }
 
 //nolint:gochecknoglobals // static, read-only lookup table
 var cachingGateways = []cachingGateway{
-	{"vercel", "ai-gateway.vercel.sh", "x-session-affinity", "providerOptions", json.RawMessage(`{"gateway":{"caching":"auto"}}`)},
-	{"requesty", "requesty.ai", "", "requesty", json.RawMessage(`{"auto_cache":true}`)},
+	{"vercel", "ai-gateway.vercel.sh", "x-session-affinity", false, "providerOptions", json.RawMessage(`{"gateway":{"caching":"auto"}}`)},
+	{"requesty", "requesty.ai", "", false, "requesty", json.RawMessage(`{"auto_cache":true}`)},
 	// The only entry here whose header is REQUIRED rather than an optimization: opencode answers a request without one `400 MissingSessionID` and routes nothing, so every `opencode/` model was unusable until this row existed. No caching field — it routes to providers that cache implicitly, and its own response reports prompt_cache_hit_tokens without being asked.
-	{"opencode", "opencode.ai", "x-opencode-session", "", nil},
+	{"opencode", "opencode.ai", "x-opencode-session", true, "", nil},
+}
+
+// unrunSessionID is a session for a request made outside any job run — a
+// preflight probe. Random rather than fixed: two concurrent probes sharing one
+// id would ask the gateway to pin them to one upstream instance, which is the
+// opposite of what a health check wants.
+func unrunSessionID() string {
+	var raw [8]byte
+
+	_, err := rand.Read(raw[:])
+	if err != nil {
+		// crypto/rand does not fail in practice; a fixed id still satisfies the gateway, which is all this needs.
+		return "probe"
+	}
+
+	return "probe-" + hex.EncodeToString(raw[:])
 }
 
 func cachingGatewayFor(baseURL string) (cachingGateway, bool) {
@@ -59,6 +79,12 @@ func (t *gatewayTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	req = req.Clone(ctx)
 
 	sessionID := composeSessionID(runIDFromContext(ctx), t.agent)
+	if sessionID == "" && t.gateway.sessionRequired {
+		// Outside a run there is nothing to keep a cache warm FOR, so this
+		// identifies the request rather than grouping it: one probe, one id.
+		sessionID = composeSessionID(unrunSessionID(), t.agent)
+	}
+
 	if sessionID != "" && t.gateway.sessionHeader != "" {
 		req.Header.Set(t.gateway.sessionHeader, sessionID)
 	}

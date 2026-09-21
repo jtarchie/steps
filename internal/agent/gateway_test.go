@@ -102,6 +102,22 @@ func TestGatewayTransportWireMutations(t *testing.T) {
 		}
 	})
 
+	// The case every other test in this file missed by running inside a run: a
+	// preflight probe (`steps validate --live`, and the check before every job)
+	// has no run to derive a session from. vercel is right to send nothing then;
+	// opencode REFUSES the request, so a required header has to be synthesized.
+	t.Run("opencode still sends a session header outside a run", func(t *testing.T) {
+		t.Parallel()
+
+		client, base, header, _ := serveGatewayCapturing(t, "https://opencode.ai/zen/go/v1/")
+
+		postJSON(t.Context(), t, client, base+"/v1/chat/completions", `{"model":"m"}`)
+
+		if got := header.Get("x-opencode-session"); got == "" {
+			t.Error("no x-opencode-session outside a run: opencode answers that 400 MissingSessionID, so preflight fails before any job can start")
+		}
+	})
+
 	t.Run("helicone gets no caching layer", func(t *testing.T) {
 		t.Parallel()
 
