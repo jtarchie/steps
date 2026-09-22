@@ -107,7 +107,7 @@ holds nothing serves an index saying how to set one.
 | `/p/:pipeline` | Which jobs exist, how each last run went, and which jobs feed which — as a list, or as a dependency graph laid out from the `passed:` constraints, each node carrying its latest status |
 | `…/runs` | One run history across every job of the pipeline, newest first — the cross-job view the per-job history can't give |
 | `…/jobs/:job` | This job's dependencies in both directions, its run history with a duration trend, the resource versions it has passed against, and the resolved limits each agent step runs under |
-| `…/runs/:run` | **The transcript**: every step in plan order, what it did, and — for agent steps — what the model said and which tools it called |
+| `…/runs/:run` | **The transcript**: every step in plan order, what it did, and — for agent steps — what the model said and which tools it called. A run that died on an mcp server links the server it blames |
 | `…/nodes/:hash` | What a merkle hash is made of, and every run that reused it: the cache's receipt |
 | `…/config/:sha` | The pipeline as the runs pinned to that hash executed it — readable after the file on disk has moved on |
 | `…/approvals` | Pending `approval:` steps, and the decisions already made |

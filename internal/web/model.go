@@ -11,6 +11,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -810,8 +811,20 @@ func FormatBinaryBytes(n int64) string {
 	return fmt.Sprintf("%.1f %s", size, units[exp])
 }
 
-// Running reports a run still in flight, which is what decides whether the
-// page opens a live event stream.
+// mcpBlame finds the mcp server an error names. Two spellings, because internal/mcp writes two: a credential refusal names the server directly, and a dial failure names what it was connecting TO. Anything else is not an mcp failure and must not be decorated as one — a page that offers the same suggestion under every red run is one nobody reads.
+var mcpBlame = regexp.MustCompile(`mcp(?:: connect to| server) "([^"]+)"`)
+
+// MCPBlamed is the mcp server this run died on, or "" for a run that died of anything else. It exists because the reader asking whether a server is wired up arrives from a RED RUN, and until this link the answer lived on a tab they had to already know about.
+func (r runView) MCPBlamed() string {
+	found := mcpBlame.FindStringSubmatch(r.JobError)
+	if found == nil {
+		return ""
+	}
+
+	return found[1]
+}
+
+// Running reports a run still in flight, which is what decides whether the page opens a live event stream.
 func (r runView) Running() bool { return r.Run.Status == "running" }
 
 // HasSkipped reports whether any step replayed from cache. The page explains

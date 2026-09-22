@@ -28,6 +28,13 @@
 
 {{if $run.JobError}}
 <div class="errblock"><span class="lbl">job error:</span> {{$run.JobError}}</div>
+{{/* A SIBLING of the block, not a child: .errblock is pre-wrap, so a nested
+     element renders this template's own indentation as blank lines inside the
+     error. The reader asking whether a server is wired up arrives here, from a
+     red run rather than from the nav bar — and the link is gated on the
+     pipeline still declaring servers, since a tab that no longer exists is a
+     404 at the end of a triage. */}}
+{{if and $run.MCPBlamed .Nav.HasMCP}}<div class="errhint">mcp server <code>{{$run.MCPBlamed}}</code> — <a href="/p/{{.Nav.Current}}/mcp#mcp-{{$run.MCPBlamed}}">is it connected?</a></div>{{end}}
 {{end}}
 
 {{if $run.Run.Replayed}}

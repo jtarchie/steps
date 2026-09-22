@@ -476,6 +476,8 @@ It is a strictly shorter path than the CLI rather than a second one. `steps mcp 
 3. The provider redirects back to `GET /mcp/callback`, which saves nothing you can see and sends you back to the tab.
 4. The **token exchange finishes after that redirect**, so the tab is what reports the outcome — including a login that authorized and then failed. The page reads the same status the CLI polls.
 
+**A red run links here.** A job that died on an mcp server — an unauthorized token, a server that did not answer — carries a line under its job error naming that server and linking straight at its row on this tab. That is the direction the question is actually asked from: nobody opens the mcp tab speculatively, they get a red run and want to know why the agent's tools failed. The line appears only for a failure that names a server, and only while the pipeline still declares one.
+
 The status column answers "is this pipeline's tooling wired up?" without running a job, and it is **never probed on page load**: it comes from the configuration, this machine's environment and `PATH`, and the saved token file. A per-server **Test** button is the only thing that connects to anything, and it runs detached — the click returns at once, the row says `testing…`, and the result arrives on the page's own refresh.
 
 Three things worth knowing:

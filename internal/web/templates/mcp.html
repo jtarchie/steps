@@ -11,7 +11,8 @@
     <thead><tr><th>Server</th><th>Transport</th><th>Target</th><th>Auth</th><th>Used by</th><th>Status</th></tr></thead>
     <tbody>
       {{range .Servers}}
-      <tr>
+      {{/* Named so a red run can link straight at the row it blames. */}}
+      <tr id="mcp-{{.Name}}">
         <td>{{.Name}}</td>
         <td class="dim">{{.Transport}}</td>
         <td class="dim">{{.Target}}</td>
