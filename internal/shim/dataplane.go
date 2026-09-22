@@ -267,7 +267,7 @@ func (s *session) uploadOutputs(ctx context.Context, fetch wire.Fetch) error {
 	}()
 
 	err = compress.Pack(staged, true, func(w io.Writer) error {
-		return wire.PackPaths(w, s.workdir, fetch.Paths)
+		return packFetch(w, s.workdir, fetch)
 	})
 	if err != nil {
 		return fmt.Errorf("%w", err)

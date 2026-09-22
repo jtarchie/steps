@@ -199,7 +199,7 @@ func (s *session) fetchViaStore(ctx context.Context) error {
 
 	op := s.nextOp()
 
-	err = s.write(wire.Frame{Type: wire.FrameFetch, Op: op}, wire.Fetch{Paths: s.outputs, URL: url})
+	err = s.write(wire.Frame{Type: wire.FrameFetch, Op: op}, wire.Fetch{Paths: s.outputs, URL: url, Artifact: s.fetchArtifact()})
 	if err != nil {
 		return err
 	}

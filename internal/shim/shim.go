@@ -106,6 +106,10 @@ type session struct {
 	// dataplane is how tree bytes travel: wire.DataPlaneURLs when negotiated,
 	// empty for the tunnel.
 	dataplane string
+	// fstype is what the workdir sits on, as reported in the hello. Kept
+	// because a tmpfs root turns the artifact cache into memory, and filing a
+	// produced tree there is a cost nobody asked for.
+	fstype string
 
 	// cancels stops each command still in flight, keyed by its operation and
 	// held under mu. A MAP rather than one registration, because the frame
@@ -279,6 +283,7 @@ func (s *session) hello(frame wire.Frame) error {
 	// land on rather than whichever ancestor happened to exist.
 	fstype, free := fsInfo(s.workdir)
 	execbit := execBit(s.workdir)
+	s.fstype = fstype
 
 	return s.send(wire.FrameHelloOK, frame.Op, wire.HelloOK{
 		Protocol:    wire.Protocol,
@@ -466,13 +471,28 @@ func (s *session) fetch(ctx context.Context, frame wire.Frame) error {
 		if err != nil {
 			return fmt.Errorf("shipping the step outputs: %w", err)
 		}
-
-		return s.sendEnd(frame.Op)
+	} else {
+		err = s.packToWire(frame.Op, fetch)
+		if err != nil {
+			return err
+		}
 	}
 
-	writer := s.dataWriter(frame.Op)
+	// Before the End, not after: the End is what lets the orchestrator offer
+	// this tree to the next session, and a --once shim's session close removes
+	// the work directory this copies from.
+	err = s.fileProduced(fetch)
+	if err != nil {
+		return fmt.Errorf("filing the step outputs: %w", err)
+	}
 
-	err = s.pack(writer, fetch.Paths)
+	return s.sendEnd(frame.Op)
+}
+
+func (s *session) packToWire(op uint32, fetch wire.Fetch) error {
+	writer := s.dataWriter(op)
+
+	err := s.pack(writer, fetch)
 	if err != nil {
 		return fmt.Errorf("packing the step outputs: %w", err)
 	}
@@ -482,16 +502,28 @@ func (s *session) fetch(ctx context.Context, frame wire.Frame) error {
 		return fmt.Errorf("%w", err)
 	}
 
-	return s.sendEnd(frame.Op)
+	return nil
 }
 
-// pack writes the named outputs as one tar stream, through the negotiated
-// compression.
-func (s *session) pack(writer io.Writer, paths []string) error {
+// pack writes what a fetch asked for as one tar stream, through the
+// negotiated compression.
+func (s *session) pack(writer io.Writer, fetch wire.Fetch) error {
 	//nolint:wrapcheck // the caller wraps with the operation's own context
 	return compress.Pack(writer, s.compression == wire.CompressionZstd, func(w io.Writer) error {
-		return wire.PackPaths(w, s.workdir, paths) //nolint:wrapcheck // the caller wraps with the operation's own context
+		return packFetch(w, s.workdir, fetch)
 	})
+}
+
+// packFetch is the one tar stream a fetch produces: the named outputs each
+// under its own name, or — a fetch-all with a name — the whole work directory
+// as one artifact called that, so the orchestrator and this end's own cache
+// see the same entry the next step will offer.
+func packFetch(w io.Writer, workdir string, fetch wire.Fetch) error {
+	if len(fetch.Paths) == 0 && fetch.Artifact != "" {
+		return wire.PackTreeAs(w, workdir, fetch.Artifact) //nolint:wrapcheck // the caller wraps with the operation's own context
+	}
+
+	return wire.PackPaths(w, workdir, fetch.Paths) //nolint:wrapcheck // the caller wraps with the operation's own context
 }
 
 // errUnopened is any operation arriving before a hello. It cannot happen with

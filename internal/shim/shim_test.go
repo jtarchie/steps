@@ -552,8 +552,14 @@ func (p *peer) uploadArtifact(src, name string) {
 func (p *peer) fetch(paths []string, dst string) {
 	p.t.Helper()
 
+	p.fetchWith(wire.Fetch{Paths: paths}, dst)
+}
+
+func (p *peer) fetchWith(fetch wire.Fetch, dst string) {
+	p.t.Helper()
+
 	op := p.next()
-	p.send(wire.FrameFetch, op, wire.Fetch{Paths: paths})
+	p.send(wire.FrameFetch, op, fetch)
 
 	reader, writer := io.Pipe()
 

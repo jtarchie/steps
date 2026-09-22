@@ -22,6 +22,11 @@ package wire
 // one cannot be told to; the frame either exists for both ends or it kills a
 // session mid-step with "unknown frame type". So it is a version, and a
 // ?binary=-pinned shim from before it says so at the handshake.
+// 6 has a fetch name the artifact it is fetching, so the shim can file what
+// it packed under the digest the next step's offer will carry. An older shim
+// would ship the tree and keep nothing — a silent cost, not an error — and
+// the number exists so a placement can say which shim it was talking to.
+//
 // 5 gave the tunnel the same artifact grain the store plane got in 4: the
 // orchestrator names one artifact and waits to be told whether to send it.
 // An older shim would read a manifest as a tree and unpack nothing.
@@ -36,7 +41,7 @@ package wire
 // unknown frame type and kills the session mid-step, which is the same reason
 // FrameDraining was a version rather than a negotiation: a frame either
 // exists for both ends or it is a protocol error.
-const Protocol = 5
+const Protocol = 6
 
 // Hello opens a session.
 type Hello struct {
@@ -213,6 +218,13 @@ type Exit struct {
 // a feature that works and one anybody uses.
 type Fetch struct {
 	Paths []string `json:"paths"`
+	// Artifact names the whole work directory when Paths is empty: a fetch-all
+	// is one artifact — a get's resource directory — and this is the name the
+	// next step's offer will carry it under. It lets the shim file what it
+	// packed under the digest that offer names, so the tree it produced is
+	// answered "already here" instead of crossing the wire twice. Empty files
+	// nothing.
+	Artifact string `json:"artifact,omitempty"`
 	// URL, under DataPlaneURLs, is where the shim PUTs the packed outputs —
 	// a presigned write the orchestrator minted for this one fetch. Empty on
 	// the tunnel plane, where the outputs come back as data frames.

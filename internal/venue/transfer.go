@@ -191,7 +191,7 @@ func (s *session) fetch(ctx context.Context) error {
 
 	// Empty Paths asks the shim for the whole tree, which is what fetchAll
 	// means; s.outputs is nil exactly then.
-	err = s.write(wire.Frame{Type: wire.FrameFetch, Op: op}, wire.Fetch{Paths: s.outputs})
+	err = s.write(wire.Frame{Type: wire.FrameFetch, Op: op}, wire.Fetch{Paths: s.outputs, Artifact: s.fetchArtifact()})
 	if err != nil {
 		return err
 	}
@@ -204,6 +204,19 @@ func (s *session) fetch(ctx context.Context) error {
 	return s.swapFetched(staging)
 }
 
+// fetchArtifact names the tree a fetch-all brings home, for the shim to file
+// it under. It is the directory's own name: a get's destination is the
+// artifact directory itself, so its base is what the next step's offer will
+// call the tree. Empty for a fetch of declared outputs, which carry their own
+// names in Paths.
+func (s *session) fetchArtifact() string {
+	if !s.fetchAll {
+		return ""
+	}
+
+	return filepath.Base(s.cwd)
+}
+
 // swapFetched moves each fetched output into place, replacing what was there.
 //
 // Per output rather than all at once: an output the worker sent nothing for is
@@ -212,16 +225,26 @@ func (s *session) fetch(ctx context.Context) error {
 // outputs are checked, not a reason to delete the previous one here.
 func (s *session) swapFetched(staging string) error {
 	names := s.outputs
+	from := staging
 
 	if s.fetchAll {
+		// The tree came back as ONE artifact under the name the next step
+		// will offer it by (wire.PackTreeAs), so the directory itself
+		// arrived — with the mode the worker's copy has, which is applied to
+		// cwd so a later offer of this tree digests to what the worker filed.
+		from = filepath.Join(staging, s.fetchArtifact())
+
+		err := s.adoptFetchedDir(from)
+		if err != nil {
+			return err
+		}
+
 		// Whatever the worker sent — the tree IS the output, so what the
 		// worker no longer has goes too, or a retried in: would leave the
 		// local tree a union of every attempt and the resource cache would
 		// keep it under the version. The staging directory sits inside cwd
 		// and is skipped by name.
-		var err error
-
-		names, err = treeArtifacts(staging)
+		names, err = treeArtifacts(from)
 		if err != nil {
 			return err
 		}
@@ -233,7 +256,7 @@ func (s *session) swapFetched(staging string) error {
 	}
 
 	for _, name := range names {
-		src := filepath.Join(staging, name)
+		src := filepath.Join(from, name)
 
 		_, err := os.Lstat(src)
 		if errors.Is(err, os.ErrNotExist) {
@@ -255,6 +278,29 @@ func (s *session) swapFetched(staging string) error {
 		if err != nil {
 			return fmt.Errorf("replacing %q with what the worker sent: %w", name, err)
 		}
+	}
+
+	return nil
+}
+
+// adoptFetchedDir gives cwd the mode the fetched tree's own directory
+// carries. The mode is part of the artifact's digest (the codec records it,
+// as it does for every directory), and it is the one field of a fetch-all the
+// orchestrator could not otherwise know: the tree's own root is what the
+// worker created, not what this end sent.
+func (s *session) adoptFetchedDir(from string) error {
+	info, err := os.Lstat(from)
+	if err != nil {
+		return fmt.Errorf("the worker sent no %q: %w", s.fetchArtifact(), err)
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("%w: the worker sent %q as a %s, not a directory", wire.ErrProtocol, s.fetchArtifact(), info.Mode().Type())
+	}
+
+	err = os.Chmod(s.cwd, info.Mode().Perm())
+	if err != nil {
+		return fmt.Errorf("adopting the fetched tree's mode: %w", err)
 	}
 
 	return nil

@@ -102,6 +102,36 @@ func PackPaths(w io.Writer, root string, names []string) error {
 	return nil
 }
 
+// PackTreeAs writes dir to w as ONE artifact called name: the directory
+// itself as the entry `name/`, mode and all, then its contents under it.
+//
+// It is how a fetch-all travels once the tree is one artifact rather than a
+// bag of top-level entries. A get's resource directory is exactly that — the
+// next step names the whole of it — and carrying the directory as an entry is
+// what lets the worker file it under the same digest that step's offer will
+// name: PackPaths over a copy of this tree, placed under name, produces this
+// stream byte for byte.
+func PackTreeAs(w io.Writer, dir, name string) error {
+	err := packName(".", name)
+	if err != nil {
+		return fmt.Errorf("packing %q: %w", dir, err)
+	}
+
+	writer := tar.NewWriter(w)
+
+	err = packWalkAs(writer, dir, name)
+	if err != nil {
+		return fmt.Errorf("packing %q: %w", dir, err)
+	}
+
+	err = writer.Close()
+	if err != nil {
+		return fmt.Errorf("packing %q: %w", dir, err)
+	}
+
+	return nil
+}
+
 // packName refuses a name that would pack a tree from outside root.
 //
 // unpackName's twin, and needed for the same reason on the other side: these
@@ -214,6 +244,33 @@ func packWalk(writer *tar.Writer, root, from string) error {
 		}
 
 		return packEntry(writer, path, filepath.ToSlash(rel), entry)
+	})
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	return nil
+}
+
+// packWalkAs is packWalk with the tree's own root written as an entry named
+// as, and everything under it prefixed the same way.
+func packWalkAs(writer *tar.Writer, dir, as string) error {
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return fmt.Errorf("%w", err)
+		}
+
+		name := as
+		if rel != "." {
+			name = as + "/" + filepath.ToSlash(rel)
+		}
+
+		return packEntry(writer, path, name, entry)
 	})
 	if err != nil {
 		return fmt.Errorf("%w", err)
