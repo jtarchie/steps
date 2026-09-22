@@ -43,6 +43,43 @@ func probeFingerprint(srv *config.MCPServer) string {
 	return srv.Target() + "\x00" + srv.AuthLabel()
 }
 
+// probeWorthMaking resolves the server a Test names and refuses the two kinds this daemon will not dial: one it cannot honestly reach from here, and one there is nothing to connect with.
+func probeWorthMaking(pipeline *web.Pipeline, server string) (*config.MCPServer, error) {
+	srv, err := pipeline.Config().FindMCPServer(server)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	if skip := srv.NotProbableHere(); skip != "" {
+		return nil, fmt.Errorf("mcp server %q cannot be probed from here: %s", server, skip)
+	}
+
+	// The same rule `steps mcp list` follows before it dials anything: a server whose credential is already missing answers a probe with the problem the status cell has just stated, in the words of whatever refused it — one problem reported twice, in two vocabularies, the second of them long enough to set the width of a page.
+	if reason := notConnectable(*srv); reason != "" {
+		return nil, fmt.Errorf("mcp server %q has nothing to connect with: %s", server, reason)
+	}
+
+	return srv, nil
+}
+
+// notConnectable reports why a probe could not succeed whatever the server does, or "" for one worth dialling. The oauth half is the reason this is not just StaticStatus: a token file is the credential, and only the holder can look at it.
+func notConnectable(srv config.MCPServer) string {
+	if srv.Auth.Type == "oauth" {
+		token := stepsmcp.InspectToken(srv)
+		if !token.Connected {
+			return token.Detail
+		}
+
+		return ""
+	}
+
+	if status := srv.StaticStatus(); status.Readiness != config.MCPReady {
+		return status.Detail
+	}
+
+	return ""
+}
+
 // MCPState reports what the token-holder knows about one server. No request is made: the page calls this on every 2.5s poll, for every declared server.
 func (p *probes) MCPState(pipeline *web.Pipeline, server string) web.MCPState {
 	state := web.MCPState{}
@@ -72,13 +109,9 @@ func (p *probes) MCPState(pipeline *web.Pipeline, server string) web.MCPState {
 
 // StartProbe connects to one server in the background. Detached rather than inline because a preflight timeout is thirty seconds by default and a page is never otherwise slow: the click comes straight back, the row says it is testing, and the poll that already drives the page swaps in the answer.
 func (p *probes) StartProbe(pipeline *web.Pipeline, server string) error {
-	srv, err := pipeline.Config().FindMCPServer(server)
+	srv, err := probeWorthMaking(pipeline, server)
 	if err != nil {
-		return fmt.Errorf("%w", err)
-	}
-
-	if skip := srv.NotProbableHere(); skip != "" {
-		return fmt.Errorf("mcp server %q cannot be probed from here: %s", server, skip)
+		return err
 	}
 
 	key := probeKey(pipeline, server)
@@ -119,6 +152,11 @@ func (p *probes) StartProbe(pipeline *web.Pipeline, server string) error {
 		} else {
 			result.OK = true
 			result.Detail = fmt.Sprintf("%d %s", len(tools), pluralize(len(tools), "tool"))
+
+			// The names, not just the count: a grant names one tool, and whether that name still exists is the question a reader is actually asking.
+			for _, tool := range tools {
+				result.Tools = append(result.Tools, tool.Name)
+			}
 		}
 
 		p.mu.Lock()

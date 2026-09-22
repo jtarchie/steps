@@ -118,6 +118,56 @@ func TestStartProbeRefusesWhatItCannotHonestlyProbe(t *testing.T) {
 	}
 }
 
+// Hiding the button is not enforcing the rule: the route is reachable by anyone who can reach the daemon, and a probe of a server with no credential answers with the problem the page has already stated, in whatever words refused it. `steps mcp list` skips those before it dials; so does this.
+//
+// Not t.Parallel(): the token directory is process environment.
+func TestStartProbeRefusesAServerWithNothingToConnectWith(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("HOME", dir)
+	t.Setenv("STEPS_TEST_PROBE_UNSET", "")
+
+	held := servingDaemon(t)
+	setPipeline(t, held, "app", `
+mcp_servers:
+- name: tracker
+  endpoint: https://tracker.example/mcp
+  auth: { type: oauth }
+jobs:
+- name: build
+  plan:
+  - task: work
+    run: "true"
+`)
+
+	target := held.server.Lookup("app")
+
+	err := held.StartProbe(target, "tracker")
+	if err == nil || !strings.Contains(err.Error(), "nothing to connect with") {
+		t.Fatalf("probing an oauth server with no token = %v, want it refused", err)
+	}
+
+	// And the refusal carries the reason, which is the same sentence the status cell shows.
+	if !strings.Contains(err.Error(), "needs login") {
+		t.Errorf("the refusal does not say what is missing: %v", err)
+	}
+
+	// Nothing was recorded, so the row does not grow a probe result for a probe that never ran.
+	if probe := held.MCPState(target, "tracker").Probe; probe != nil {
+		t.Errorf("a refused probe recorded a result: %+v", probe)
+	}
+
+	// Once the credential is there, the same call is allowed through.
+	writeTokenFile(t, "tracker", &stepsmcp.TokenFile{
+		Endpoint: "https://tracker.example/mcp", AccessToken: secretToken, RefreshToken: "r",
+	})
+
+	err = held.StartProbe(target, "tracker")
+	if err != nil {
+		t.Errorf("probing an authorized server = %v, want it allowed", err)
+	}
+}
+
 // The result is remembered against the configuration it describes, so a `steps pipeline set` that moves an endpoint does not leave a green cell describing a server this pipeline no longer has.
 func TestAProbeResultDoesNotSurviveTheConfigurationItDescribes(t *testing.T) {
 	t.Parallel()

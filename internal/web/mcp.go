@@ -32,6 +32,8 @@ type MCPProbe struct {
 	OK      bool
 	Detail  string
 	At      time.Time
+	// Tools is what the server answered with, which is the question behind the question: a grant names a tool, and whether that name still exists is what a reader is really checking.
+	Tools []string
 }
 
 // MCPState is everything the token-holder knows about one declared server. internal/web cannot import internal/mcp (depguard), and should not: a token file is not this package's business, and the interface is what keeps it that way.
@@ -43,11 +45,10 @@ type MCPState struct {
 
 // mcpRow is one line of the table.
 type mcpRow struct {
-	Name      string
-	Transport string
-	Target    string
-	Auth      string
-	UsedBy    string
+	Name   string
+	UsedBy string
+	// Target is the endpoint or argv in full, carried for the title attribute because Meta shows a URL without its scheme.
+	Target string
 	// OAuth marks the rows a login applies to, which is what puts a Connect button on one.
 	OAuth bool
 	// Status is the cell, and Mark is how it reads: the st-<mark> class the shared stylesheet draws the glyph and the colour from. THREE marks, not two, because a readiness nothing here answered — an oauth row on a daemon holding no token, a stdio cwd: that resolves per step — is not a pass, and `steps mcp list` prints it as neither.
@@ -59,6 +60,12 @@ type mcpRow struct {
 	// Failed is a login that got far enough to fail, which is the outcome the CLI polls for and the page must show too, since the exchange finishes after the browser has already come back.
 	Failed string
 	Probe  *MCPProbe
+	// Meta is what the server IS, on one dimmed line: three columns of transport, target and auth were most of the page's width for facts a reader checks once. Nothing is dropped, only demoted.
+	Meta string
+	// CanTest is whether a connection could even be attempted. A server whose credential is already missing would answer a probe with the thing the status cell just said, in the words of whatever refused it — one problem in two wordings, and the longest string on the page. `steps mcp list` skips those for the same reason.
+	CanTest bool
+	// NeedsAttention is a server that cannot be used right now, or has a login in flight. It is what the page leads with, because the reader is triaging.
+	NeedsAttention bool
 }
 
 // markFor is the stamp one static readiness reads as. MCPUnknown is st-skipped — faint, and not a tick — because the whole of that state is that nothing on this machine answered the question.
@@ -75,6 +82,39 @@ func markFor(readiness config.MCPReadiness) string {
 	}
 }
 
+// mcpMetaLine is transport, credential and target on one line — everything the three columns before it said, in the order a reader asks it: what kind of server, what it authenticates with, and where it is. An auth of "none" is left out rather than printed, since "none" is the absence of a fact and reads as one.
+func mcpMetaLine(server config.MCPServer) string {
+	parts := []string{server.Transport()}
+
+	if auth := server.AuthLabel(); auth != "none" {
+		parts = append(parts, auth)
+	}
+
+	return strings.Join(append(parts, compactTarget(server)), " · ")
+}
+
+// compactTarget drops the scheme from an endpoint, which is the one part of a URL that is the same on every row and never what somebody is checking. The whole target stays on the element's title, so nothing is actually hidden.
+func compactTarget(server config.MCPServer) string {
+	target := server.Target()
+	if server.IsStdio() {
+		return target
+	}
+
+	for _, scheme := range []string{"https://", "http://"} {
+		if after, found := strings.CutPrefix(target, scheme); found {
+			return after
+		}
+	}
+
+	return target
+}
+
+// mcpCtx is what the row template is invoked with: the page it is being drawn on, and the server to draw. The same shape stepCtx has, for the same reason — inside a {{define}}, $ is that template's own argument, so a sub-template needing the pipeline slug has to be handed it.
+type mcpCtx struct {
+	Page map[string]any
+	Row  mcpRow
+}
+
 // handleMCP renders the tab. It makes no request to any declared server: a page that probed on load would connect to every one of them on every 2.5s poll of every open tab, which is a denial of service written against your own vendors.
 func (s *Server) handleMCP(c *echo.Context) error {
 	pipeline := pipelineOf(c)
@@ -84,16 +124,27 @@ func (s *Server) handleMCP(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "this pipeline declares no mcp_servers:")
 	}
 
-	rows := make([]mcpRow, 0, len(servers))
+	// Two groups, each keeping the file's own order inside it: what cannot be used leads, because that is the question somebody opened this page with, and a server declared tenth is no less broken for it.
+	var attention, rest []mcpRow
+
 	for _, server := range servers {
-		rows = append(rows, s.mcpRowFor(pipeline, server))
+		row := s.mcpRowFor(pipeline, server)
+		if row.NeedsAttention {
+			attention = append(attention, row)
+
+			continue
+		}
+
+		rest = append(rest, row)
 	}
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "mcp", map[string]any{
-		"Nav":     s.nav(c),
-		"Servers": rows,
-		"Title":   "mcp",
+		"Nav":       s.nav(c),
+		"Attention": attention,
+		"Rest":      rest,
+		"Total":     len(servers),
+		"Title":     "mcp",
 	})
 }
 
@@ -102,14 +153,13 @@ func (s *Server) mcpRowFor(pipeline *Pipeline, server config.MCPServer) mcpRow {
 	status := server.StaticStatus()
 
 	row := mcpRow{
-		Name:      server.Name,
-		Transport: server.Transport(),
-		Target:    server.Target(),
-		Auth:      server.AuthLabel(),
-		UsedBy:    pipeline.Config().MCPUsers(server.Name),
-		OAuth:     server.Auth.Type == "oauth",
-		Status:    status.Detail,
-		Mark:      markFor(status.Readiness),
+		Name:   server.Name,
+		UsedBy: pipeline.Config().MCPUsers(server.Name),
+		OAuth:  server.Auth.Type == "oauth",
+		Status: status.Detail,
+		Mark:   markFor(status.Readiness),
+		Meta:   mcpMetaLine(server),
+		Target: server.Target(),
 	}
 
 	authorizer := s.authorizer()
@@ -144,7 +194,29 @@ func (s *Server) mcpRowFor(pipeline *Pipeline, server config.MCPServer) mcpRow {
 		}
 	}
 
+	row.settle()
+
 	return row
+}
+
+// settle decides the two things the row's shape depends on, from everything else already on it.
+func (r *mcpRow) settle() {
+	// Only a server that could actually connect is worth dialling; the daemon refuses the rest anyway (probes.StartProbe), so offering the button would be offering a 400.
+	r.CanTest = r.Mark == markFor(config.MCPReady)
+
+	// A probe that failed is a working credential in front of a server that is not answering — which no static check can see, and which nobody would otherwise know to look for.
+	probeFailed := r.Probe != nil && !r.Probe.Running && !r.Probe.OK
+
+	// It also OUTRANKS the static answer, which is the older and weaker one: a
+	// credential being present says a request could be made, and the probe is
+	// the request. Leaving the tick up would put a green "no credential needed"
+	// beside a red "did not answer" on one row, which is the same lie a
+	// readiness nobody answered told when it rendered as a pass.
+	if probeFailed {
+		r.Mark, r.Status = markFor(config.MCPMissing), "did not answer"
+	}
+
+	r.NeedsAttention = r.Mark == markFor(config.MCPMissing) || r.Pending || r.Failed != ""
 }
 
 // handleMCPConnect starts a login and sends the browser to the provider — the whole of what `steps mcp login` does, minus the two halves that exist only because a terminal is not a browser: printing the authorization URL and polling for the result.

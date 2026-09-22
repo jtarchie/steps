@@ -1,64 +1,76 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps mcp</b></h1>
 <div id="mcp-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#mcp-region" hx-swap="outerMorph" hx-select-oob="#pause-banner:outerMorph,#nav-tabs:outerMorph">
-{{/* Inside the region: a login finishing and a probe landing both change this
-     count's neighbours, and a metaline left outside would go on describing
-     the table the poll had already replaced. */}}
-<p class="metaline">{{len .Servers}} servers<span class="sep">·</span>status is read from configuration, environment and saved tokens — nothing here is probed until you ask</p>
+{{/* Inside the region: a login finishing and a probe landing both move these
+     counts, and a metaline left outside would go on describing the table the
+     poll had already replaced. */}}
+<p class="metaline">{{.Total}} servers{{if .Attention}}<span class="sep">·</span>{{len .Attention}} need attention{{end}}</p>
 
 <div class="tablewrap">
-  <table>
-    <thead><tr><th>Server</th><th>Transport</th><th>Target</th><th>Auth</th><th>Used by</th><th>Status</th></tr></thead>
+  <table class="mcp">
+    <thead><tr><th>Status</th><th>Server</th><th>Used by</th><th class="acts">Action</th></tr></thead>
+    {{/* Two bodies rather than two tables: the columns have to line up across
+         the groups, or the split costs the reader the comparison it was meant
+         to make easier. */}}
+    {{with .Attention}}
     <tbody>
-      {{range .Servers}}
-      {{/* Named so a red run can link straight at the row it blames. */}}
-      <tr id="mcp-{{.Name}}">
-        <td>{{.Name}}</td>
-        <td class="dim">{{.Transport}}</td>
-        <td class="dim">{{.Target}}</td>
-        <td class="dim">{{.Auth}}</td>
-        <td class="dim">{{.UsedBy}}</td>
-        <td>
-          {{if .Pending}}
-            <span class="stamp st st-running">login in progress</span>
-            {{if .AuthorizeURL}}<div class="meta"><a href="{{.AuthorizeURL}}" rel="noopener">continue at the provider</a> — or it was replaced by a newer login</div>{{end}}
-          {{else}}
-            <span class="stamp st st-{{.Mark}}">{{.Status}}</span>
-          {{end}}
-          {{if .Failed}}<div class="meta">last login failed: {{.Failed}}</div>{{end}}
-          {{with .Probe}}
-            {{if .Running}}
-            <div class="meta">testing…</div>
-            {{else}}
-            <div class="meta">tested {{agoTag .At}}: {{if .OK}}✓{{else}}✗{{end}} {{.Detail}}</div>
-            {{end}}
-          {{end}}
-        </td>
-      </tr>
-      {{if or .OAuth (not $.Nav.ReadOnly)}}
-      <tr class="subrow">
-        <td colspan="6">
-          {{if $.Nav.ReadOnly}}
-          <span class="meta">This daemon is read-only. Authorize with <code>steps mcp login {{.Name}} -p {{$.Nav.Current}} --target &lt;url&gt;</code>.</span>
-          {{else}}
-          <form class="decide" method="post" action="/p/{{$.Nav.Current}}/mcp/{{.Name}}/test">
-            <button class="btn" type="submit">Test</button>
-          </form>
-          {{if .OAuth}}
-          <form class="decide" method="post" action="/p/{{$.Nav.Current}}/mcp/{{.Name}}/connect">
-            <button class="btn primary" type="submit">{{if eq .Mark "passed"}}Re-connect{{else}}Connect{{end}}</button>
-            <span class="meta">sends you to the provider and brings you back here</span>
-          </form>
-          {{end}}
-          {{end}}
-        </td>
-      </tr>
-      {{end}}
-      {{end}}
+      <tr class="grouprow"><td colspan="4"><span class="eyebrow">needs attention <span class="unbold">{{len .}}</span></span></td></tr>
+      {{range .}}{{template "mcprow" (mcpctx $ .)}}{{end}}
     </tbody>
+    {{end}}
+    {{with .Rest}}
+    <tbody>
+      {{if $.Attention}}<tr class="grouprow"><td colspan="4"><span class="eyebrow">nothing to do <span class="unbold">{{len .}}</span></span></td></tr>{{end}}
+      {{range .}}{{template "mcprow" (mcpctx $ .)}}{{end}}
+    </tbody>
+    {{end}}
   </table>
 </div>
 
-<p class="faint">A token is saved per server NAME, on this daemon — two pipelines naming one server share one login.</p>
+<p class="faint mcp-note">Status is read from configuration, this machine and saved tokens — nothing is connected to until you ask. A token is saved per server NAME, on this daemon, so two pipelines naming one server share one login.</p>
 </div>
 {{end}}
+
+{{/* One server, one row. Every server used to cost a second full-width row
+     carrying only its buttons, so six servers read as twelve lines and the
+     columns stopped lining up with the headings above them. */}}
+{{define "mcprow"}}{{$nav := .Page.Nav}}{{with .Row}}
+<tr id="mcp-{{.Name}}">
+  <td class="stat">
+    {{if .Pending}}<span class="stamp st st-running">login in progress</span>
+    {{else}}<span class="stamp st st-{{.Mark}}">{{.Status}}</span>{{end}}
+  </td>
+  <td class="who">
+    <div class="name">{{.Name}}</div>
+    {{/* What the server IS, on one dimmed line: transport, target and auth were
+         three columns holding facts a reader checks once, and between them they
+         took the width the status needed. */}}
+    <div class="mcp-meta" title="{{.Target}}">{{.Meta}}</div>
+    {{if .AuthorizeURL}}<div class="mcp-meta"><a href="{{.AuthorizeURL}}" rel="noopener">continue at the provider</a> — or a newer login replaced this one</div>{{end}}
+    {{if .Failed}}<div class="mcp-meta err">last login failed: {{.Failed}}</div>{{end}}
+    {{with .Probe}}
+      {{if .Running}}
+      <div class="mcp-meta">testing…</div>
+      {{else}}
+      {{/* Under the name and free to wrap, rather than in the status cell: a
+           dial failure is a sentence, and a sentence in a status column sets
+           the width of the whole table. */}}
+      <div class="mcp-meta{{if not .OK}} err{{end}}">tested {{agoTag .At}} · {{if and .OK .Tools}}<details class="jsonbox"><summary>{{.Detail}}</summary> <span class="toollist">{{range .Tools}}<code>{{.}}</code> {{end}}</span></details>{{else}}{{.Detail}}{{end}}</div>
+      {{end}}
+    {{end}}
+  </td>
+  <td class="dim uses">{{.UsedBy}}</td>
+  <td class="acts">
+    {{if $nav.ReadOnly}}
+      {{if .OAuth}}<span class="meta">read-only — <code>steps mcp login {{.Name}} -p {{$nav.Current}} --target &lt;url&gt;</code></span>{{end}}
+    {{else}}
+      {{if .OAuth}}<form class="inline" method="post" action="/p/{{$nav.Current}}/mcp/{{.Name}}/connect"><button class="btn{{if not .CanTest}} primary{{end}}" type="submit">{{if .CanTest}}Re-connect{{else}}Connect{{end}}</button></form>{{end}}
+      {{/* Only where a connection could actually succeed. On a server whose
+           credential is missing, a probe answers with the problem the status
+           cell has just stated, in whatever words refused it — the same
+           sentence twice, the second time long enough to widen the page. */}}
+      {{if .CanTest}}<form class="inline" method="post" action="/p/{{$nav.Current}}/mcp/{{.Name}}/test"><button class="btn" type="submit">Test</button></form>{{end}}
+    {{end}}
+  </td>
+</tr>
+{{end}}{{end}}

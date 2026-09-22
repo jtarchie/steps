@@ -409,6 +409,23 @@ func TestConnectAndTestReportWhatTheTokenHolderRefused(t *testing.T) {
 	}
 }
 
+// mcpRowMarkup is one server's row and nothing else, so an assertion about a row cannot accidentally pass on the row below it.
+func mcpRowMarkup(t *testing.T, body, server string) string {
+	t.Helper()
+
+	at := strings.Index(body, `id="mcp-`+server+`"`)
+	if at < 0 {
+		t.Fatalf("the tab has no row for %q:\n%s", server, body)
+	}
+
+	row := body[at:]
+	if next := strings.Index(row, "</tr>"); next > 0 {
+		row = row[:next]
+	}
+
+	return row
+}
+
 // postOrigin submits a form the way a browser does — with the Origin header sameOriginMutations checks and the handler reads — and returns where it was sent.
 func postOrigin(t *testing.T, server *Server, target, origin string) (int, string) {
 	t.Helper()
@@ -429,4 +446,120 @@ func postOriginCode(t *testing.T, server *Server, target, origin string) int {
 	code, _ := postOrigin(t, server, target, origin)
 
 	return code
+}
+
+// The page is read while triaging, so it leads with what cannot be used. Declaration order is the file's order, and the one broken server in a list of twenty can sit anywhere in it.
+func TestTheMCPTabPutsWhatNeedsYouFirst(t *testing.T) {
+	t.Parallel()
+
+	server, _, authorizer := mcpServerPipeline(t, stubRunner{})
+
+	// linear is the only one that is fine: github's variable is unset and gopls is not installed.
+	authorizer.credential = MCPCredential{Connected: true, Detail: "connected, renews automatically"}
+
+	_, body := get(t, server, "/p/demo/mcp")
+
+	broken, working := strings.Index(body, `id="mcp-github"`), strings.Index(body, `id="mcp-linear"`)
+	if broken < 0 || working < 0 {
+		t.Fatalf("the tab is missing a server row:\n%s", body)
+	}
+
+	if broken > working {
+		t.Error("a server that works is listed above two that cannot be used at all")
+	}
+
+	// A count, so the answer to "is anything wrong" needs no counting.
+	if !strings.Contains(body, "needs attention") {
+		t.Errorf("the tab never names the group that needs attention:\n%s", body)
+	}
+}
+
+// One server, one row. Every server used to cost a second full-width row carrying nothing but its buttons, so six servers read as twelve lines and the table's own columns stopped lining up.
+func TestEachServerIsASingleRow(t *testing.T) {
+	t.Parallel()
+
+	server, _, _ := mcpServerPipeline(t, stubRunner{})
+
+	_, body := get(t, server, "/p/demo/mcp")
+
+	if strings.Contains(body, "subrow") {
+		t.Errorf("a server still spends a second row on its own buttons:\n%s", body)
+	}
+
+	// The action belongs to the row it acts on: between this server's row and the next one.
+	row := mcpRowMarkup(t, body, "linear")
+	if !strings.Contains(row, "/mcp/linear/connect") {
+		t.Errorf("linear's Connect button is not in linear's row:\n%s", row)
+	}
+}
+
+// A probe result that does not say WHEN is a tick a reader cannot trust, and one that does not say WHAT it found makes them open a terminal to check the grant they wrote is still valid.
+func TestAProbeSaysWhenItRanAndWhatItFound(t *testing.T) {
+	t.Parallel()
+
+	server, _, authorizer := mcpServerPipeline(t, stubRunner{})
+	authorizer.probe = &MCPProbe{
+		OK:     true,
+		Detail: "2 tools",
+		At:     time.Now().Add(-4 * time.Minute),
+		Tools:  []string{"list_issues", "create_issue"},
+	}
+
+	_, body := get(t, server, "/p/demo/mcp")
+
+	if !strings.Contains(body, "<time data-ago=") {
+		t.Errorf("a probe result does not say when it ran:\n%s", body)
+	}
+
+	for _, want := range []string{"2 tools", "list_issues", "create_issue"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the probe result does not name %q:\n%s", want, body)
+		}
+	}
+}
+
+// A probe is a REQUEST, and the static check only ever said a request could be made. When the request came back refused, the row must not go on showing the tick that meant "nothing is obviously missing" — a green status beside a red failure is the same contradiction an unanswered readiness told when it rendered as a pass.
+func TestAServerThatDidNotAnswerLosesItsTick(t *testing.T) {
+	t.Parallel()
+
+	server, _, authorizer := mcpServerPipeline(t, stubRunner{})
+	authorizer.credential = MCPCredential{Connected: true, Detail: "connected, renews automatically"}
+	authorizer.probe = &MCPProbe{Detail: `dial tcp: lookup mcp.linear.app: no such host`, At: time.Now()}
+
+	_, body := get(t, server, "/p/demo/mcp")
+
+	row := mcpRowMarkup(t, body, "linear")
+	if strings.Contains(row, "st-passed") {
+		t.Errorf("a server that did not answer still shows a passing tick:\n%s", row)
+	}
+
+	if !strings.Contains(row, "did not answer") {
+		t.Errorf("the status does not say the server failed to answer:\n%s", row)
+	}
+
+	// And the reason stays out of the status column, where one long sentence sets the width of the whole table.
+	if !strings.Contains(row, "no such host") {
+		t.Errorf("the probe's reason is not reported at all:\n%s", row)
+	}
+}
+
+// Test is offered only where a connection could actually succeed. On a server whose credential is missing, a probe answers with the problem the status cell has just stated, in whatever words refused it — the same sentence twice, and the second one long enough to set the width of the table. `steps mcp list` skips those for the same reason, and the daemon refuses them outright, so the button would be offering a 400.
+func TestTestIsOfferedOnlyWhereAConnectionCouldSucceed(t *testing.T) {
+	t.Parallel()
+
+	server, _, _ := mcpServerPipeline(t, stubRunner{})
+
+	_, body := get(t, server, "/p/demo/mcp")
+
+	// linear has no token and github's variable is unset: neither can be dialled.
+	for _, server := range []string{"linear", "github"} {
+		if strings.Contains(body, "/mcp/"+server+"/test") {
+			t.Errorf("Test is offered on %q, which has nothing to connect with:\n%s", server, body)
+		}
+	}
+
+	// A login is still offered, because that is the thing that would fix it.
+	if !strings.Contains(body, "/mcp/linear/connect") {
+		t.Errorf("a server that needs a login is not offered one:\n%s", body)
+	}
 }

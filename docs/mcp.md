@@ -478,7 +478,11 @@ It is a strictly shorter path than the CLI rather than a second one. `steps mcp 
 
 **A red run links here.** A job that died on an mcp server — an unauthorized token, a server that did not answer — carries a line under its job error naming that server and linking straight at its row on this tab. That is the direction the question is actually asked from: nobody opens the mcp tab speculatively, they get a red run and want to know why the agent's tools failed. The line appears only for a failure that names a server, and only while the pipeline still declares one.
 
-The status column answers "is this pipeline's tooling wired up?" without running a job, and it is **never probed on page load**: it comes from the configuration, this machine's environment and `PATH`, and the saved token file. A per-server **Test** button is the only thing that connects to anything, and it runs detached — the click returns at once, the row says `testing…`, and the result arrives on the page's own refresh.
+The tab leads with what cannot be used. Servers needing attention — a missing credential, a login in flight, a server that did not answer — sort above the rest with a count, each keeping the file's own order inside its group. One server is one row: status first, what the server IS on a dimmed second line (`http · oauth · mcp.linear.app/mcp`, full endpoint on hover), and the action in the row it acts on.
+
+The status column answers "is this pipeline's tooling wired up?" without running a job, and it is **never probed on page load**: it comes from the configuration, this machine's environment and `PATH`, and the saved token file. A per-server **Test** button is the only thing that connects to anything, and it runs detached — the click returns at once, the row says `testing…`, and the result arrives on the page's own refresh, carrying the tool names the server answered with.
+
+**Test is offered only where a connection could succeed**, and the daemon refuses one that could not, the same way `steps mcp list` declines to dial a server whose credential is already missing. A probe of an unauthorized server answers with the problem the status cell has just stated, in the words of whatever refused it — one problem in two vocabularies, the second long enough to set the width of the page. **A probe that fails outranks the static answer**: the static check only ever said a request *could* be made, and the probe is the request, so the row reads `✗ did not answer` rather than keeping a tick beside a red failure.
 
 Three things worth knowing:
 

@@ -223,6 +223,9 @@ func templateFuncs() template.FuncMap {
 		"stepctx": func(page map[string]any, step *stepView) stepCtx {
 			return stepCtx{Page: page, Step: step}
 		},
+		"mcpctx": func(page map[string]any, row mcpRow) mcpCtx {
+			return mcpCtx{Page: page, Row: row}
+		},
 	}
 }
 
