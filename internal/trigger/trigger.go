@@ -379,6 +379,9 @@ func observe(ctx context.Context, cfg *config.Config, st PollStore, name string)
 	}
 
 	obs, hasVersion, err := checkResource(ctx, cfg, st, name)
+
+	recordCheckOutcome(ctx, st, name, err)
+
 	if err != nil || !hasVersion {
 		return obs, hasVersion, err
 	}
@@ -393,6 +396,38 @@ func observe(ctx context.Context, cfg *config.Config, st PollStore, name string)
 	obs.dirty = obs.dirty || grew
 
 	return obs, true, nil
+}
+
+// recordCheckOutcome files why a check failed, or clears what a previous one
+// filed.
+//
+// It exists because the poll ABORTS on the first resource that errors: the
+// recorded version stays exactly where it was, nothing further is checked,
+// and the only trace is a log line on whichever machine runs the daemon. A
+// reader looking at the UI saw a resource whose last-checked time was merely
+// getting older, which is indistinguishable from a quiet one.
+//
+// Its own failure is logged rather than returned: this is a diagnostic about
+// a poll, and losing the real error to report a bookkeeping one would trade a
+// reason somebody can act on for one nobody can.
+//
+// It writes under the CALLER's context, which is the opposite of what a
+// cleanup path does here and is deliberate. Shutting the daemon down cancels
+// every check in flight; a WithoutCancel would file what those return, and
+// the next start would report "context canceled" against half the pipeline's
+// resources — an alarm about the operator's own Ctrl-C, raised on a surface
+// whose entire value is being quiet when nothing is wrong. Cancelled, the
+// write simply fails and is logged, which is the right amount of fuss.
+func recordCheckOutcome(ctx context.Context, st PollStore, resourceName string, checkErr error) {
+	var message string
+	if checkErr != nil {
+		message = checkErr.Error()
+	}
+
+	err := st.RecordCheckError(ctx, resourceName, message)
+	if err != nil {
+		slog.Error("trigger.check_error_record", "resource", resourceName, "error", err)
+	}
 }
 
 // advance records a resource's observed version as checked. A delivery can move a webhook resource's checked version mid-poll, having dispatched itself; writing back what observe read would rewind past it and build it again next poll. So a clean one is left alone, and a dirty one moves only from what was read — a lost compare-and-set is that delivery already in place.
