@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -1439,4 +1440,108 @@ func TestRunPageOmitsTheCountdownOnceAStepHasFinished(t *testing.T) {
 	if strings.Contains(body, "data-deadline=") {
 		t.Errorf("a finished step must not show a countdown: %s", body)
 	}
+}
+
+// TestTheOverviewSaysWhatEachPipelineIsDoing: this table named a pipeline,
+// counted its jobs and printed its file — none of which changes when
+// everything stops. A paused pipeline read exactly like a quiet one on the
+// first page an operator opens, and the state that answers "is it moving, and
+// if not, why" was a click away on each pipeline's own board.
+func TestTheOverviewSaysWhatEachPipelineIsDoing(t *testing.T) {
+	t.Parallel()
+
+	_, pipelines := testPipelines(t, "app", "infra")
+
+	server, err := New(pipelines, stubRunner{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	pausedWithHistory(t, pipelines[0])
+
+	code, page := get(t, server, "/")
+	if code != http.StatusOK {
+		t.Fatalf("GET / = %d, want 200", code)
+	}
+
+	app := pipelineRow(t, page, "app")
+
+	for _, want := range []string{"paused", "passed", `action="/p/app/unpause"`} {
+		if !strings.Contains(app, want) {
+			t.Errorf("the overview's row for a paused pipeline with one passed run and a queued job lacks %q:\n\t%s", want, app)
+		}
+	}
+
+	// One job and one queued row, drawn identically: the count is what says
+	// the queue is not being drained, and nothing else on this page does.
+	if got := strings.Count(app, `<td class="num dim">1</td>`); got != 2 {
+		t.Errorf("the row shows %d numeric cells reading 1, want jobs AND queued:\n\t%s", got, app)
+	}
+
+	infra := pipelineRow(t, page, "infra")
+
+	for _, want := range []string{"never ran", `action="/p/infra/pause"`} {
+		if !strings.Contains(infra, want) {
+			t.Errorf("the overview's row for an untouched pipeline lacks %q:\n\t%s", want, infra)
+		}
+	}
+
+	if strings.Contains(infra, "paused") {
+		t.Errorf("a running pipeline's row claims to be paused:\n\t%s", infra)
+	}
+}
+
+// pausedWithHistory is a pipeline in every state the overview's row reports at once: stopped, having run, and owing the queue a job the pause is holding back.
+func pausedWithHistory(t *testing.T, pipeline *Pipeline) {
+	t.Helper()
+
+	ctx := context.Background()
+
+	err := pipeline.Store.Pause(ctx)
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	err = pipeline.Store.StartRun(ctx, "run-1", "app-job", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	err = pipeline.Store.FinishRun(ctx, "run-1", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	err = pipeline.Store.EnqueueJob(ctx, "app-job", "new version")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+}
+
+// pipelineRow slices one row of the overview's pipeline table. Scoped to that
+// table: the run feed underneath links every pipeline too, so a page-wide
+// search would let one pipeline's state answer for another's.
+func pipelineRow(t *testing.T, page, slug string) string {
+	t.Helper()
+
+	table := strings.Index(page, `id="pipelines-table"`)
+	if table < 0 {
+		t.Fatalf("the overview has no pipeline table:\n%s", page)
+	}
+
+	rest := page[table:]
+
+	mark := strings.Index(rest, `href="/p/`+slug+`"`)
+	if mark < 0 {
+		t.Fatalf("the overview's pipeline table has no row for %q:\n%s", slug, page)
+	}
+
+	open := strings.LastIndex(rest[:mark], "<tr")
+
+	shut := strings.Index(rest[mark:], "</tr>")
+	if open < 0 || shut < 0 {
+		t.Fatalf("the overview's row for %q is not a table row:\n%s", slug, page)
+	}
+
+	return rest[open : mark+shut]
 }

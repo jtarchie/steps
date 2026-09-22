@@ -356,6 +356,9 @@ func (s *Server) routes() error {
 	group.POST("/approvals/:id", s.handleDecideApproval)
 	group.POST("/questions/:id", s.handleAnswerQuestion)
 	group.POST("/jobs/:job/resume", s.handleResumeBreaker)
+	// The pipeline-level breaker, reachable from a browser at last: /api holds the same two verbs and refuses a page by design, so the UI could say a pipeline was paused and not offer to release it. See docs/web.md.
+	group.POST("/pause", s.handlePause)
+	group.POST("/unpause", s.handleUnpause)
 	group.POST("/runs/:run/abort", s.handleAbortRun)
 	group.POST("/jobs/:job/queued/abort", s.handleAbortQueued)
 	// Browser-reachable on purpose, and the one place this UI starts something outside itself. /api refuses anything browser-shaped, so until now a browser could not begin a login at all; what bounds it is that the pipeline already declares the server (adding one takes `steps pipeline set`, which is remote-shell-grade) and that sameOriginMutations refuses a cross-site POST. See docs/authentication.md.

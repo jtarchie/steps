@@ -84,8 +84,8 @@ there is nothing to log in to — see [Security](#security).
 - **`pause` is the pipeline-level circuit breaker.** Paused, nothing is
   polled, nothing is admitted from the queue, a webhook delivery is recorded
   and builds on unpause, and a manual trigger is refused with a message. Every
-  page of that pipeline says so. It is a bigger switch than the per-job breaker
-  `steps jobs` reports, and unrelated to it.
+  page of that pipeline says so, and offers to release it. It is a bigger
+  switch than the per-job breaker `steps jobs` reports, and unrelated to it.
 - **`rename` keeps history**, because every recorded row reaches its pipeline
   by row id rather than by name. That is new: while a pipeline's identity came
   from its filename, renaming was a different pipeline with empty state.
@@ -103,7 +103,7 @@ holds nothing serves an index saying how to set one.
 
 | Route | Answers |
 |---|---|
-| `/` | With several pipelines served: what this process holds, and one run feed across all of them, newest first. With one, it redirects straight through |
+| `/` | With several pipelines served: what this process holds — each with its last run, what its queue still owes, whether it is paused, and a button to pause or resume it — and one run feed across all of them, newest first. With one, it redirects straight through |
 | `/p/:pipeline` | Which jobs exist, how each last run went, and which jobs feed which — as a list, or as a dependency graph laid out from the `passed:` constraints, each node carrying its latest status |
 | `…/runs` | One run history across every job of the pipeline, newest first — the cross-job view the per-job history can't give |
 | `…/jobs/:job` | This job's dependencies in both directions, its run history with a duration trend, the resource versions it has passed against, and the resolved limits each agent step runs under |
@@ -282,7 +282,7 @@ and pauses while the tab is hidden.
 
 ## Triggering, approving, resuming
 
-Seven controls, each doing what a CLI verb does:
+Eight controls, each doing what a CLI verb does:
 
 - **Trigger** / **Re-run (forced)** enqueue the job into the durable trigger
   queue `steps web` uses — the same queue this process's own polling fills.
@@ -296,6 +296,10 @@ Seven controls, each doing what a CLI verb does:
   offered option, or your own words — the same row `steps questions answer` writes. See
   [agents.md](agents.md).
 - **Resume** a job the trigger circuit breaker paused.
+- **Pause / Unpause** the whole pipeline — what `steps pipeline pause` throws.
+  The board carries the pause, the banner on every page of a paused pipeline
+  carries the release, and the root lists both for every pipeline at once. Each
+  puts you back on the page you pressed it from.
 - **Abort** a running run from its page, or a queued one from the page a
   trigger lands on — what `steps runs abort` asks for. See
   [Aborting a run](#aborting-a-run).
@@ -305,7 +309,7 @@ Seven controls, each doing what a CLI verb does:
 - **Test** any declared `mcp_servers:` entry from the same tab — the only
   thing on that page that connects to anything.
 
-`--read-only` withholds all seven: the controls disappear from the pages and
+`--read-only` withholds all eight: the controls disappear from the pages and
 the routes refuse. The mcp tab keeps its status column — that a server needs a
 login is a diagnostic a build box should still show, and the row names the CLI
 command instead. The queue is still drained, polling still runs, and
@@ -547,12 +551,19 @@ sends neither, and no page in the UI calls `/api/`. `Host` is not checked,
 because a reverse proxy in front of the daemon forwards the name the client
 used.
 
-The browser's own controls — trigger, approve, answer, resume, abort — are
-`POST`s refused when their `Origin` names another host, which stops another
+The browser's own controls — trigger, approve, answer, resume, pause, abort —
+are `POST`s refused when their `Origin` names another host, which stops another
 site aiming a form at your port. A rebinding page is not another host: it can
 read every page, configurations included, and press those controls, unless
-`--read-only` has withheld them. It cannot set, destroy, rename or pause a
-pipeline.
+`--read-only` has withheld them. It cannot set, destroy or rename a pipeline:
+those verbs live under `/api`, which refuses anything browser-shaped.
+
+**Pause and unpause are on the browser's side of that line, deliberately.**
+They are the one pair a page can reach that `/api` also serves, and the reason
+is that the envelope does not grow: a page that can press **Trigger** already
+runs arbitrary commands as this user, so unpausing grants it nothing it did not
+have, and pausing is a smaller stop than **Abort** next to it. What is *not*
+on this side is everything that changes what a pipeline IS.
 
 ## Flags
 
@@ -564,7 +575,8 @@ pipeline.
 --max-concurrent maximum queued jobs running at once, per pipeline (default 1)
 --pin / --force  pin a version field; ignore the cache and re-run every step
 --no-preflight   skip the pre-poll health check of models and MCP servers
---read-only      serve without trigger, approval, answer, resume, abort, connect or test controls
+--read-only      serve without trigger, approval, answer, resume, pause, abort,
+                 connect or test controls
                  (steps pipeline set is NOT withheld — see Security)
 --basic-auth-username / --basic-auth-password
                  require HTTP Basic on every route but the webhook one; both or

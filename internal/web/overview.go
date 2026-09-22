@@ -42,10 +42,22 @@ type overviewRun struct {
 
 // overviewPipeline is one served pipeline, with what the state file records
 // about it alongside what this process knows.
+//
+// The last three fields are the answer to "is it moving, and if not, why" —
+// the question this table could not answer at all. A paused pipeline's board
+// says so on every one of its own pages, but the root is where an operator
+// looks first, and there it read as a quiet one.
 type overviewPipeline struct {
-	Slug string
-	Path string
-	Jobs int
+	Slug   string
+	Path   string
+	Jobs   int
+	Paused bool
+	// Latest is the pipeline's newest run across every job, zero when it has never run.
+	Latest store.RunRow
+	HasRun bool
+	// Queued is what the trigger queue still owes, which is the difference
+	// between a pipeline with nothing to do and one that is not being drained.
+	Queued int
 }
 
 // handleIndex answers the bare root, and its answer depends on how many
@@ -77,22 +89,42 @@ func (s *Server) handleIndex(c *echo.Context) error {
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "overview", map[string]any{
 		"Nav":       s.globalNav(c),
-		"Pipelines": s.overviewPipelines(),
+		"Pipelines": s.overviewPipelines(c.Request().Context()),
 		"Runs":      runs,
 	})
 }
 
 // overviewPipelines describes what this process serves, sorted by slug.
-func (s *Server) overviewPipelines() []overviewPipeline {
+//
+// Three reads per pipeline rather than one cross-pipeline query: a daemon
+// holds a handful, they need not share a database, and a Reader can only
+// answer what it can name. A read that fails leaves its field zero rather
+// than failing the page — a root that will not render says less about a
+// pipeline than a row missing one column.
+func (s *Server) overviewPipelines(ctx context.Context) []overviewPipeline {
 	served := s.Served()
 
 	out := make([]overviewPipeline, 0, len(served))
+
 	for _, pipeline := range served {
-		out = append(out, overviewPipeline{
-			Slug: pipeline.Slug,
-			Path: pipeline.Path(),
-			Jobs: len(pipeline.Config().Jobs),
-		})
+		row := overviewPipeline{
+			Slug:   pipeline.Slug,
+			Path:   pipeline.Path(),
+			Jobs:   len(pipeline.Config().Jobs),
+			Paused: paused(ctx, pipeline),
+		}
+
+		runs, err := pipeline.Store.ListRuns(ctx, "", 1)
+		if err == nil && len(runs) > 0 {
+			row.Latest, row.HasRun = runs[0], true
+		}
+
+		queue, err := pipeline.Store.ListTriggerQueue(ctx, overviewLimit)
+		if err == nil {
+			row.Queued = len(pendingQueue(queue))
+		}
+
+		out = append(out, row)
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })

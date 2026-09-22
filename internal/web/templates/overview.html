@@ -3,16 +3,27 @@
 <div id="overview-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#overview-region" hx-swap="outerMorph" hx-select-oob="#nav-tabs:outerMorph">
 <p class="metaline">{{len .Pipelines}} pipelines<span class="sep">·</span>{{len .Runs}} recent runs</p>
 
-<div class="tablewrap">
+<div class="tablewrap" id="pipelines-table">
   <table>
     <thead>
-      <tr><th>Pipeline</th><th class="num">Jobs</th><th>File</th></tr>
+      <tr><th>Pipeline</th><th class="num">Jobs</th><th>Last run</th><th class="num">Queued</th><th>State</th><th>File</th></tr>
     </thead>
     <tbody>
       {{range .Pipelines}}
       <tr>
         <td><a href="/p/{{.Slug}}">{{.Slug}}</a></td>
         <td class="num dim">{{.Jobs}}</td>
+        <td>
+          {{if .HasRun}}<a class="st st-{{statusWord .Latest.Status}}" href="/p/{{.Slug}}/runs/{{.Latest.ID}}">{{statusWord .Latest.Status}}</a> <span class="dim">{{agoTag .Latest.StartedAt}}</span>
+          {{else}}<span class="faint">never ran</span>{{end}}
+        </td>
+        <td class="num dim">{{if .Queued}}{{.Queued}}{{else}}<span class="faint">—</span>{{end}}</td>
+        <td>
+          {{if .Paused}}<span class="st st-failed">paused</span>{{else}}<span class="dim">running</span>{{end}}
+          {{if not $.Nav.ReadOnly}}
+          <form class="inline" method="post" action="/p/{{.Slug}}/{{if .Paused}}unpause{{else}}pause{{end}}"><input type="hidden" name="return" value="/"><button class="btn{{if .Paused}} primary{{end}}" type="submit">{{if .Paused}}Unpause{{else}}Pause{{end}}</button></form>
+          {{end}}
+        </td>
         <td class="dim">{{.Path}}</td>
       </tr>
       {{end}}

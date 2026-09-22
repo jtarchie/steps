@@ -350,6 +350,103 @@ func TestPipelinePauseIsTheCircuitBreaker(t *testing.T) {
 // than because the worker was asleep.
 const drainIdleWindow = 2 * time.Second
 
+// TestTheOverviewSaysWhatStateAPipelineIsInAndReleasesIt: the root of a daemon
+// holding several pipelines is the first page an operator opens, and a paused
+// pipeline there looked exactly like a quiet one — the table said name, jobs
+// and file, none of which changes when everything stops. The remedy has to be
+// on the same page: pause lived only on /api, which refuses a browser on
+// purpose (docs/web.md, Security), so the UI could report a state it had no
+// way to change and told the reader to go find a terminal.
+func TestTheOverviewSaysWhatStateAPipelineIsInAndReleasesIt(t *testing.T) {
+	fixture := newWatchFixture(t, cursorFeed)
+	fixture.items(t, 1)
+
+	served := startWebFor(t, fixture.pipeline, "--interval", "100ms")
+	defer served.stop(t)
+
+	name := cli.PipelineName(fixture.pipeline)
+
+	// A second pipeline, because / redirects straight through to the board when a daemon holds exactly one.
+	served.set(t, "quiet", flagFixture(t))
+
+	waitForDid(t, fixture, "1")
+
+	served.pipeline(t, "pause", "-p", name)
+
+	code, page := served.get(t, "/")
+	if code != http.StatusOK {
+		t.Fatalf("GET / = %d, want 200:\n%s", code, page)
+	}
+
+	row := overviewRow(t, page, name)
+
+	if !strings.Contains(row, "paused") {
+		t.Errorf("the overview's row for a paused pipeline does not say so:\n\t%s", row)
+	}
+
+	if !strings.Contains(row, "passed") {
+		t.Errorf("the overview's row does not say how the pipeline last ran:\n\t%s", row)
+	}
+
+	if quiet := overviewRow(t, page, "quiet"); strings.Contains(quiet, "paused") {
+		t.Errorf("a running pipeline's row claims to be paused:\n\t%s", quiet)
+	}
+
+	// Paused is paused: a version that arrives now builds on unpause and not before.
+	time.Sleep(300 * time.Millisecond)
+	fixture.items(t, 2)
+
+	time.Sleep(drainIdleWindow)
+
+	if did := fixture.did(t); strings.Join(did, " ") != "1" {
+		t.Fatalf("a paused pipeline built %v, want nothing after 1", did)
+	}
+
+	if status := served.post(t, "/p/"+name+"/unpause"); status != http.StatusSeeOther {
+		t.Fatalf("the browser's unpause answered %d, want 303", status)
+	}
+
+	waitForDid(t, fixture, "1", "2")
+
+	// And back, because a control that only releases is one an operator cannot use twice.
+	if status := served.post(t, "/p/"+name+"/pause"); status != http.StatusSeeOther {
+		t.Fatalf("the browser's pause answered %d, want 303", status)
+	}
+
+	if _, page := served.get(t, "/"); !strings.Contains(overviewRow(t, page, name), "paused") {
+		t.Error("a pipeline paused from the browser does not read as paused")
+	}
+}
+
+// overviewRow slices the row the overview's pipeline table draws for one
+// slug. Scoped to that table rather than to the page: the run feed below it
+// links every pipeline too, so a page-wide search would let one pipeline's
+// state satisfy an assertion about another's.
+func overviewRow(t *testing.T, page, slug string) string {
+	t.Helper()
+
+	table := strings.Index(page, `id="pipelines-table"`)
+	if table < 0 {
+		t.Fatalf("the overview has no pipeline table:\n%s", page)
+	}
+
+	rest := page[table:]
+
+	mark := strings.Index(rest, `href="/p/`+slug+`"`)
+	if mark < 0 {
+		t.Fatalf("the overview's pipeline table has no row for %q:\n%s", slug, page)
+	}
+
+	open := strings.LastIndex(rest[:mark], "<tr")
+
+	shut := strings.Index(rest[mark:], "</tr>")
+	if open < 0 || shut < 0 {
+		t.Fatalf("the overview's row for %q is not a table row:\n%s", slug, page)
+	}
+
+	return rest[open : mark+shut]
+}
+
 // TestPipelineDestroyForgetsEverything: destroy is one DELETE, so the route, the rows and the history all go.
 func TestPipelineDestroyForgetsEverything(t *testing.T) {
 	path := flagFixture(t)

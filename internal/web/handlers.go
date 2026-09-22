@@ -699,6 +699,60 @@ func (s *Server) handleResumeBreaker(c *echo.Context) error {
 	return c.Redirect(http.StatusSeeOther, "/p/"+pipeline.Slug+"/resources")
 }
 
+// handlePause throws the pipeline-level breaker from the browser.
+func (s *Server) handlePause(c *echo.Context) error { return s.setPausedFromPage(c, true) }
+
+// handleUnpause releases it.
+func (s *Server) handleUnpause(c *echo.Context) error { return s.setPausedFromPage(c, false) }
+
+// The browser's half of `steps pipeline pause`, refused under --read-only
+// like every other control and same-origin-checked like every other POST.
+//
+// It is a second route rather than a call into /api because that group
+// refuses anything browser-shaped on purpose — a rebinding page must not
+// reach the verbs that set, destroy or rename. Pause is not in that class:
+// this UI already offers Trigger, which runs arbitrary commands, so a page
+// that can press this one gains nothing it did not already have.
+func (s *Server) setPausedFromPage(c *echo.Context, pause bool) error {
+	if s.runner == nil {
+		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
+	}
+
+	pipeline := pipelineOf(c)
+	ctx := c.Request().Context()
+
+	var err error
+
+	if pause {
+		err = pipeline.Store.Pause(ctx)
+	} else {
+		err = pipeline.Store.Unpause(ctx)
+	}
+
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	//nolint:wrapcheck // echo's redirect error is returned verbatim
+	return c.Redirect(http.StatusSeeOther, returnTo(c, "/p/"+pipeline.Slug))
+}
+
+// returnTo is where a control sends the reader back to.
+//
+// The banner carrying these buttons is on EVERY page of a pipeline and on the
+// overview above them, so a fixed destination would move somebody off the run
+// they were reading to unpause it. The form says where it came from, and this
+// is the one thing that value may be: a path on this server. A value starting
+// "//" is a URL with a host (browsers read //evil.tld as absolute) and so is one starting "/\", since a browser folds that backslash to a slash before it reads the authority — which is how a redirect to a page's own referrer becomes a redirect off it.
+func returnTo(c *echo.Context, fallback string) string {
+	to := c.FormValue("return")
+	if strings.HasPrefix(to, "/") && !strings.HasPrefix(to, "//") && !strings.HasPrefix(to, `/\`) {
+		return to
+	}
+
+	return fallback
+}
+
 // searchHit is one palette entry. Hint is where the answer to "which one?"
 // goes: a status for a run, and the pipeline for anything that lives outside
 // the one being searched from.

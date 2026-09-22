@@ -286,6 +286,23 @@ func TestNothingThatChangesLivesOutsideALiveRegion(t *testing.T) {
 			},
 		},
 		{
+			// The banner, which is chrome rather than page content: it is
+			// drawn by the layout for every pipeline page, so unless each one
+			// names it out of band, a pipeline paused from a terminal
+			// announces itself only to whoever reloads.
+			name:  "paused banner",
+			path:  "/p/demo/runs",
+			setup: testPipeline,
+			change: func(t *testing.T, pipeline *Pipeline) {
+				t.Helper()
+
+				err := pipeline.Store.Pause(context.Background())
+				if err != nil {
+					t.Fatalf("Pause: %v", err)
+				}
+			},
+		},
+		{
 			name: "overview",
 			path: "/",
 			setup: func(t *testing.T) (*Server, *Pipeline) {

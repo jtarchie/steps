@@ -49,7 +49,14 @@
 </div>
 
 <main>
-{{if .Nav.Paused}}<div class="held" role="alert"><b>this pipeline is paused</b> — nothing is being polled, nothing will be admitted from the queue, and a webhook delivery is recorded but builds only on unpause. Resume it with <code>steps pipeline unpause -p {{.Nav.Current}}</code>.</div>{{end}}
+{{/* Always rendered, even empty: it is swapped out of band by every page
+     that polls, and an out-of-band swap at an id the page does not have is
+     dropped — so a pipeline paused from a terminal while somebody has a board
+     open would announce itself only on reload, which is the one thing this
+     banner exists to prevent. */}}
+<div id="pause-banner">{{if .Nav.Paused}}<div class="held" role="alert"><b>this pipeline is paused</b> — nothing is being polled, nothing will be admitted from the queue, and a webhook delivery is recorded but builds only on unpause.
+  {{if .Nav.ReadOnly}}Resume it with <code>steps pipeline unpause -p {{.Nav.Current}}</code>.{{else}}<form class="decide" method="post" action="/p/{{.Nav.Current}}/unpause"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn primary" type="submit">Unpause</button><span class="meta">or <code>steps pipeline unpause -p {{.Nav.Current}}</code></span></form>{{end}}
+</div>{{end}}</div>
 {{template "crumbs" .}}
 {{template "page" .}}
 </main>
