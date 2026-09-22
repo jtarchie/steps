@@ -35,6 +35,14 @@ func (s *session) upload(ctx context.Context) error {
 		return s.uploadViaStore(ctx)
 	}
 
+	// The tunnel carries bytes from THIS machine, and a remote input's are
+	// not here. The caller only names one when a store is configured, and
+	// the plane is the store's — so this is a shim that did not accept the
+	// plane, which the handshake would have refused first.
+	if len(s.remoteInputs) > 0 {
+		return fmt.Errorf("%w: %d inputs live on other workers and the tunnel cannot carry them", wire.ErrProtocol, len(s.remoteInputs))
+	}
+
 	names, err := treeArtifacts(s.cwd)
 	if err != nil {
 		return err
@@ -541,7 +549,7 @@ func (s *session) pump(op uint32, w io.Writer) error {
 		case wire.FrameHello, wire.FrameHelloOK, wire.FrameUpload, wire.FrameExec,
 			wire.FrameStdout, wire.FrameStderr, wire.FrameExit, wire.FrameFetch,
 			wire.FrameCancel, wire.FrameError, wire.FrameBye, wire.FrameDraining,
-			wire.FrameDockerOpen, wire.FrameDockerData, wire.FrameDockerClose, wire.FrameNeed, wire.FrameGet:
+			wire.FrameDockerOpen, wire.FrameDockerData, wire.FrameDockerClose, wire.FrameNeed, wire.FrameGet, wire.FramePush:
 			return fmt.Errorf("%w: a type %d frame interrupted a transfer", wire.ErrProtocol, frame.Type)
 		}
 	}

@@ -56,6 +56,49 @@ func Pull(ctx context.Context, spec shell.RunnerSpec, name, digest, dst string) 
 	return s.receivedArtifactBytes.Load(), nil
 }
 
+// Push asks the worker spec names to put the tree it holds under digest, filed
+// as name, at url — a presigned PUT the caller minted. The bytes go from
+// that worker to the store and never through this machine.
+func Push(ctx context.Context, spec shell.RunnerSpec, name, digest, url string) error {
+	worker, err := ParseWorker(spec.Worker)
+	if err != nil {
+		return err
+	}
+
+	//nolint:contextcheck // opening the artifact store reads only local config
+	blobs, err := artifactStoreFor(spec.ArtifactStore)
+	if err != nil {
+		return err
+	}
+
+	s := &session{worker: worker, blobs: blobs, tag: spec.WorkerTag, noRedial: true}
+
+	//nolint:contextcheck // close runs under its own bound, deliberately not the caller's context
+	defer func() { _ = s.close() }()
+
+	err = s.ensure(ctx)
+	if err != nil {
+		return err
+	}
+
+	stop := s.watchTransfer(ctx)
+	defer stop()
+
+	op := s.nextOp()
+
+	err = s.write(wire.Frame{Type: wire.FramePush, Op: op}, wire.Push{Name: name, Digest: digest, URL: url})
+	if err != nil {
+		return err
+	}
+
+	err = s.awaitEnd(op, "confirming the artifact reached the store")
+	if err != nil {
+		return fmt.Errorf("worker %q: %w", spec.Worker, err)
+	}
+
+	return nil
+}
+
 // pullInto asks for one held tree and lands it in dst, an existing empty
 // directory.
 func (s *session) pullInto(name, digest, dst string) error {

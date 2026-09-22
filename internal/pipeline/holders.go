@@ -61,6 +61,68 @@ func holdRemoteOutputs(ctx context.Context, bw workspace.BuildWorkspace, outputs
 	return nil
 }
 
+// placedTaskSpace is the step space for a task, leaving inputs on their
+// holders when the step is placed and a store can carry them; otherwise the
+// ordinary space, which pulls what it needs here.
+func placedTaskSpace(ctx context.Context, bw workspace.BuildWorkspace, step config.Step, rt config.ResolvedTask, outputMapping map[string]string) (workspace.StepSpace, map[string]shell.RemoteInput, error) {
+	placed, ok := bw.(workspace.PlacedSpaces)
+	if !ok || placementTag(step) == "" || artifactStoreFrom(ctx) == "" {
+		space, err := bw.TaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, outputMapping)
+
+		return space, nil, err //nolint:wrapcheck // the caller names the task
+	}
+
+	space, remote, err := placed.PlacedTaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, outputMapping)
+
+	return space, remoteInputs(remote), err
+}
+
+// placedPutSpace is placedTaskSpace for a put.
+func placedPutSpace(ctx context.Context, bw workspace.BuildWorkspace, step config.Step) (workspace.StepSpace, map[string]shell.RemoteInput, error) {
+	placed, ok := bw.(workspace.PlacedSpaces)
+	if !ok || placementTag(step) == "" || artifactStoreFrom(ctx) == "" {
+		space, err := bw.PutSpace(ctx, step.Put, step.InputNames(), step.InputsAll())
+
+		return space, nil, err //nolint:wrapcheck // the caller names the put
+	}
+
+	space, remote, err := placed.PlacedPutSpace(ctx, step.Put, step.InputNames(), step.InputsAll())
+
+	return space, remoteInputs(remote), err
+}
+
+func remoteInputs(remote map[string]workspace.RemoteArtifact) map[string]shell.RemoteInput {
+	if len(remote) == 0 {
+		return nil
+	}
+
+	inputs := make(map[string]shell.RemoteInput, len(remote))
+	for name, held := range remote {
+		inputs[name] = shell.RemoteInput{Digest: held.Digest, Holder: held.Holder}
+	}
+
+	return inputs
+}
+
+type remoteInputsKey struct{}
+
+// withRemoteInputs carries a put's remote inputs to the placer that builds
+// its runner, which is the one place the spec is assembled for a resource
+// stage.
+func withRemoteInputs(ctx context.Context, inputs map[string]shell.RemoteInput) context.Context {
+	if len(inputs) == 0 {
+		return ctx
+	}
+
+	return context.WithValue(ctx, remoteInputsKey{}, inputs)
+}
+
+func remoteInputsFrom(ctx context.Context) map[string]shell.RemoteInput {
+	inputs, _ := ctx.Value(remoteInputsKey{}).(map[string]shell.RemoteInput)
+
+	return inputs
+}
+
 type heldSinkKey struct{}
 
 // heldSink carries what a stage's runner kept out of the stage that closed

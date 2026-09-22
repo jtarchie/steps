@@ -273,6 +273,55 @@ func (s *session) uploadOutputs(ctx context.Context, fetch wire.Fetch) error {
 		return fmt.Errorf("%w", err)
 	}
 
+	return putStaged(ctx, fetch.URL, staged, "shipping the step outputs")
+}
+
+// push puts one held tree in the store, for a worker that is not this one.
+func (s *session) push(ctx context.Context, frame wire.Frame) error {
+	var push wire.Push
+
+	err := wire.DecodeJSON(frame, &push)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	if push.URL == "" {
+		return errNoURL
+	}
+
+	held, err := s.heldEntry(push.Name, push.Digest)
+	if err != nil {
+		return err
+	}
+
+	// Beside the workdir, for uploadOutputs' reasons.
+	staged, err := os.CreateTemp(filepath.Dir(s.workdir), "steps-push-*")
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	defer func() {
+		_ = staged.Close()
+		_ = os.Remove(staged.Name())
+	}()
+
+	err = compress.Pack(staged, true, func(w io.Writer) error {
+		return wire.PackPaths(w, held, []string{push.Name})
+	})
+	if err != nil {
+		return fmt.Errorf("packing the held %q: %w", push.Name, err)
+	}
+
+	err = putStaged(ctx, push.URL, staged, "pushing a held artifact")
+	if err != nil {
+		return err
+	}
+
+	return s.sendEnd(frame.Op)
+}
+
+// putStaged PUTs a packed file to a presigned URL, replayable.
+func putStaged(ctx context.Context, url string, staged *os.File, what string) error {
 	size, err := staged.Seek(0, io.SeekEnd)
 	if err != nil {
 		return fmt.Errorf("%w", err)
@@ -283,11 +332,11 @@ func (s *session) uploadOutputs(ctx context.Context, fetch wire.Fetch) error {
 		return fmt.Errorf("%w", err)
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodPut, fetch.URL, staged)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut, url, staged)
 	if err != nil {
 		// Through the redactor like every other store failure: a *url.Error
 		// from the parse carries the RAW url, signature and all.
-		return storeError("shipping the step outputs", err)
+		return storeError(what, err)
 	}
 
 	request.ContentLength = size
@@ -313,7 +362,7 @@ func (s *session) uploadOutputs(ctx context.Context, fetch wire.Fetch) error {
 
 	response, err := storeClient.Do(request)
 	if err != nil {
-		return storeError("shipping the step outputs", err)
+		return storeError(what, err)
 	}
 
 	defer func() { _ = response.Body.Close() }()

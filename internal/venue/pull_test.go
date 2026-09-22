@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/shell"
 )
 
 // deferredProducer runs a placed command whose output stays on the worker,
@@ -118,5 +120,69 @@ func TestUnkeptIsWhatStillHasToComeHome(t *testing.T) {
 	paths, artifact = unkept(nil, "src", map[string]string{})
 	if len(paths) != 0 || artifact != "src" {
 		t.Errorf("unkept of an unkept tree = %v, %q; want the tree", paths, artifact)
+	}
+}
+
+// TestARemoteInputReachesTheWorkerThroughTheStore crosses the rung 3 seam:
+// worker a keeps a tree, a session on worker b names it as a remote input,
+// and b reads it — a pushed it to the store, this end put nothing.
+func TestARemoteInputReachesTheWorkerThroughTheStore(t *testing.T) {
+	fake, storeURL := newCountingS3(t)
+
+	// Two roots, so a and b are two caches; the store is the only thing they
+	// share.
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	producerCwd := t.TempDir()
+	mustMkdir(t, filepath.Join(producerCwd, "out"))
+
+	producer := newLocalRunner(t, shell.RunnerSpec{
+		Cwd: producerCwd, Worker: "local:" + rootA + "?binary=" + self, Fetch: []string{"out"},
+		DeferFetch: true, ArtifactStore: storeURL,
+	})
+
+	err = producer.Run(context.Background(), "head -c 1048576 /dev/urandom > out/blob.bin")
+	if err != nil {
+		t.Fatalf("producer: %v", err)
+	}
+
+	held, holder, ok := HeldOf(producer)
+	if !ok {
+		t.Fatal("the producer's worker kept nothing")
+	}
+
+	consumerCwd := t.TempDir()
+	mustMkdir(t, filepath.Join(consumerCwd, "result"))
+
+	consumer := newLocalRunner(t, shell.RunnerSpec{
+		Cwd: consumerCwd, Worker: "local:" + rootB + "?binary=" + self, Fetch: []string{"result"},
+		ArtifactStore: storeURL,
+		RemoteInputs:  map[string]shell.RemoteInput{"out": {Digest: held["out"], Holder: holder}},
+	})
+
+	err = consumer.Run(context.Background(), "wc -c < out/blob.bin | tr -d ' ' > result/n")
+	if err != nil {
+		t.Fatalf("consumer: %v", err)
+	}
+
+	if got := strings.TrimSpace(mustRead(t, filepath.Join(consumerCwd, "result", "n"))); got != "1048576" {
+		t.Errorf("the consumer read %q of the remote input", got)
+	}
+
+	if sent := sentBytes(t, consumer); sent > 1<<19 {
+		t.Errorf("this end put %d bytes for an input it never held", sent)
+	}
+
+	// Three, and which three is the point: the producer's empty output
+	// directory going out, the megabyte a pushed, and the consumer's empty
+	// output directory — never the megabyte from this end.
+	if fake.treePuts != 3 {
+		t.Errorf("the store took %d tree puts, want 3", fake.treePuts)
 	}
 }

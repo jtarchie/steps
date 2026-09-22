@@ -121,7 +121,7 @@ func executeTask(
 	// ordinary step passes its mapping through unchanged.
 	outputMapping := config.CollectedOutputMapping(rt.Outputs, rt.OutputMapping, step.OutputSubdir)
 
-	space, err := bw.TaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, outputMapping)
+	space, remote, err := placedTaskSpace(ctx, bw, step, rt, outputMapping)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
@@ -166,7 +166,7 @@ func executeTask(
 		// last attempt wrote outside its declared outputs. A task that marks
 		// progress on disk to skip work it has already done would then pass
 		// here and loop forever on a worker.
-		dialed, runner, runnerErr := taskRunner(ctx, step, rt, space)
+		dialed, runner, runnerErr := taskRunner(ctx, step, rt, space, remote)
 		if runnerErr != nil {
 			return dialed, runnerErr
 		}
@@ -244,7 +244,7 @@ func stepBudget(step config.Step, timeout string) (time.Duration, error) {
 
 // taskRunner builds the runner a task's attempts share, reporting which
 // machine it dials so an eviction can name what to forget.
-func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, space workspace.StepSpace) (string, shell.Runner, error) {
+func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, space workspace.StepSpace, remote map[string]shell.RemoteInput) (string, shell.Runner, error) {
 	workspaceDir := space.Dir()
 
 	// Fetch is the step's declared outputs: what a worker sends back after
@@ -261,6 +261,7 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes(),
 		Worker: worker, WorkerTag: placementTag(step), Fetch: rt.Outputs,
 		DeferFetch:    deferrable(rt),
+		RemoteInputs:  remote,
 		ArtifactStore: artifactStoreFrom(ctx),
 		// The same postmortem, on the machine that actually ran the step: a
 		// worker's scratch is the remote half of the step directory, and a

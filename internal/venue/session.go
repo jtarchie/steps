@@ -105,6 +105,9 @@ type session struct {
 	deferFetch bool
 	heldMu     sync.Mutex
 	held       map[string]string
+	// remoteInputs are the step's inputs that live on other workers, offered
+	// by digest and served from the store — see shell.RunnerSpec.RemoteInputs.
+	remoteInputs map[string]shell.RemoteInput
 	// env carries the values the pipeline's env: opted into, resolved here.
 	env map[string]string
 	// keep leaves the worker's scratch behind, following --keep-workspace.

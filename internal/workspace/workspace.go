@@ -763,6 +763,14 @@ func (b *isolatingBuild) allArtifacts() ([]string, error) {
 }
 
 func (b *isolatingBuild) newSpace(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string) (StepSpace, error) {
+	return b.newSpaceLeaving(ctx, label, inputs, outputs, inputMapping, outputMapping, nil)
+}
+
+// newSpaceLeaving is newSpace with some inputs left on the workers that hold
+// them (PlacedSpaces): those are neither pulled nor materialized, and an
+// output of the same name is not created empty over the tree the worker
+// will place.
+func (b *isolatingBuild) newSpaceLeaving(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string, leaving map[string]RemoteArtifact) (StepSpace, error) {
 	// The build-global counter (not the plan index) numbers the directory, so
 	// uniqueness never depends on the caller passing a distinct label.
 	n := b.stepCounter.Add(1)
@@ -773,7 +781,7 @@ func (b *isolatingBuild) newSpace(ctx context.Context, label string, inputs, out
 		return nil, fmt.Errorf("could not create step workspace %q: %w", dir, err)
 	}
 
-	err = b.materializeSpace(ctx, dir, inputs, outputs, inputMapping, outputMapping)
+	err = b.materializeSpace(ctx, dir, inputs, outputs, inputMapping, outputMapping, leaving)
 	if err != nil {
 		// Tear down whatever was already materialized under dir, so a
 		// mid-loop failure doesn't leak input copies/subvolumes until the
@@ -802,11 +810,15 @@ func (b *isolatingBuild) newSpace(ctx context.Context, label string, inputs, out
 // declared name (what the task's run: expects), while the artifact copied in /
 // captured out uses the mapped name. On any error the caller (newSpace)
 // removes dir.
-func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, inputs, outputs []string, inputMapping, outputMapping map[string]string) error {
+func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, inputs, outputs []string, inputMapping, outputMapping map[string]string, leaving map[string]RemoteArtifact) error {
 	for _, in := range inputs {
 		err := config.ValidateArtifactName(in)
 		if err != nil {
 			return fmt.Errorf("input %q: %w", in, err)
+		}
+
+		if _, left := leaving[in]; left {
+			continue
 		}
 
 		artifact := mappedName(in, inputMapping)

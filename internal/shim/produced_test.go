@@ -4,7 +4,10 @@ package shim
 // packs is filed under the digest the next step's offer will name.
 
 import (
+	"bytes"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -243,4 +246,90 @@ func (p *peer) get(name, digest, dst string) {
 	_ = writer.Close()
 
 	wg.Wait()
+}
+
+// TestPushPutsAHeldTreeInTheStore: a FramePush uploads the held entry, packed
+// exactly as a Get would stream it, to the URL it was handed.
+func TestPushPutsAHeldTreeInTheStore(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		body []byte
+	)
+
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ := io.ReadAll(r.Body)
+
+		mu.Lock()
+		body = got
+		mu.Unlock()
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(store.Close)
+
+	root := t.TempDir()
+
+	producer := newPeer(t, Options{Build: "test", Root: root})
+	producer.hello()
+	producer.exec("mkdir out && echo made > out/made.txt", nil)
+
+	op := producer.next()
+	producer.send(wire.FrameFetch, op, wire.Fetch{Paths: []string{"out"}, Defer: true})
+
+	var done wire.FetchDone
+
+	_ = wire.DecodeJSON(producer.read(), &done)
+
+	op = producer.next()
+	producer.send(wire.FramePush, op, wire.Push{Name: "out", Digest: done.Artifacts["out"], URL: store.URL + "/wire/" + done.Artifacts["out"]})
+
+	if frame := producer.read(); frame.Type != wire.FrameEnd || frame.Op != op {
+		t.Fatalf("push answered a type %d frame for op %d, want the End", frame.Type, frame.Op)
+	}
+
+	producer.goodbye()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(body) == 0 {
+		t.Fatal("nothing reached the store")
+	}
+
+	// What arrived is the artifact under the digest it was pushed as.
+	home := t.TempDir()
+
+	err := unpackVerified(bytes.NewReader(body), home, done.Artifacts["out"], true)
+	if err != nil {
+		t.Fatalf("what the worker pushed does not verify against its digest: %v", err)
+	}
+
+	if got := mustRead(t, filepath.Join(home, "out", "made.txt")); got != "made\n" {
+		t.Errorf("pushed tree holds %q", got)
+	}
+}
+
+// TestPushRefusesWhatItDoesNotHold mirrors the Get: no tree, no upload, an
+// error naming the artifact.
+func TestPushRefusesWhatItDoesNotHold(t *testing.T) {
+	peer := newPeer(t, Options{Build: "test", Root: t.TempDir()})
+	peer.hello()
+
+	op := peer.next()
+	peer.send(wire.FramePush, op, wire.Push{Name: "out", Digest: strings.Repeat("ab", 32), URL: "http://127.0.0.1:1/never"})
+
+	frame := peer.readAny()
+	if frame.Type != wire.FrameError {
+		t.Fatalf("got a type %d frame, want a refusal", frame.Type)
+	}
+
+	var refusal wire.Error
+
+	_ = wire.DecodeJSON(frame, &refusal)
+
+	if !strings.Contains(refusal.Message, `"out"`) {
+		t.Errorf("the refusal %q does not name the artifact", refusal.Message)
+	}
+
+	peer.goodbye()
 }

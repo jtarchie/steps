@@ -202,6 +202,21 @@ type RunnerSpec struct {
 	// itself — an assert: files:, a fix: agent's file tools — so the caller
 	// sets it only when nothing does. Read only by the venue.
 	DeferFetch bool
+	// RemoteInputs are inputs whose bytes are NOT under Cwd: a worker holds
+	// each, under the digest given, and the venue offers it to the step's
+	// worker by that digest — served from the artifact store, which the
+	// holder is asked to push to if the store does not already have it. So
+	// a tree moves worker → store → worker and never through this machine.
+	// Only meaningful with a Worker and an ArtifactStore; the caller leaves
+	// this empty otherwise and materializes the input under Cwd instead.
+	RemoteInputs map[string]RemoteInput
+}
+
+// RemoteInput is where an input's bytes are when they are on a worker.
+type RemoteInput struct {
+	Digest string
+	// Holder is the worker URL, as the mapping was written.
+	Holder string
 }
 
 // NewRunner returns a DockerRunner scoped to spec, or a HostRunner when

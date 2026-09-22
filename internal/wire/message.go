@@ -22,6 +22,11 @@ package wire
 // one cannot be told to; the frame either exists for both ends or it kills a
 // session mid-step with "unknown frame type". So it is a version, and a
 // ?binary=-pinned shim from before it says so at the handshake.
+// 8 adds FramePush: a worker holding a tree is asked to put it in the store
+// under a URL the orchestrator minted, so a consumer on another worker can
+// pull it without the bytes ever passing through the orchestrator. An older
+// shim would kill the session on it.
+//
 // 7 lets a fetch be DEFERRED — the shim files what it packed and answers
 // with the digests instead of the bytes — and adds FrameGet, which asks a
 // worker for a tree it holds by digest. An older shim would read a deferred
@@ -47,7 +52,7 @@ package wire
 // unknown frame type and kills the session mid-step, which is the same reason
 // FrameDraining was a version rather than a negotiation: a frame either
 // exists for both ends or it is a protocol error.
-const Protocol = 7
+const Protocol = 8
 
 // Hello opens a session.
 type Hello struct {
@@ -256,6 +261,16 @@ type FetchDone struct {
 type Get struct {
 	Name   string `json:"name"`
 	Digest string `json:"digest"`
+}
+
+// Push asks the worker to PUT one tree it holds — packed under Name, zstd,
+// exactly as it would answer a Get — to a presigned URL. Answered with an
+// End once the store has it, or a FrameError when the worker no longer holds
+// it.
+type Push struct {
+	Name   string `json:"name"`
+	Digest string `json:"digest"`
+	URL    string `json:"url"`
 }
 
 // Draining is a worker announcing its own end: an eviction notice or a

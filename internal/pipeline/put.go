@@ -93,11 +93,13 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 		return nil, fmt.Errorf("put %q: %w", step.Put, err)
 	}
 
-	space, err := bw.PutSpace(ctx, step.Put, step.InputNames(), step.InputsAll())
+	space, remote, err := placedPutSpace(ctx, bw, step)
 	if err != nil {
 		return nil, fmt.Errorf("put %q: %w", step.Put, err)
 	}
 	defer workspace.CloseSpace(space, step.Put)
+
+	ctx = withRemoteInputs(ctx, remote)
 
 	var result map[string]any
 

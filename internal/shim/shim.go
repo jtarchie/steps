@@ -186,6 +186,8 @@ func (s *session) handle(ctx context.Context, frame wire.Frame) (bool, error) {
 		return false, s.fetch(ctx, frame)
 	case wire.FrameGet:
 		return false, s.get(frame)
+	case wire.FramePush:
+		return false, s.push(ctx, frame)
 	case wire.FrameDockerOpen, wire.FrameDockerData, wire.FrameDockerClose:
 		return false, s.handleDocker(ctx, frame)
 	case wire.FrameCancel:
@@ -510,10 +512,6 @@ func (s *session) fetch(ctx context.Context, frame wire.Frame) error {
 // an entry a temp cleaner hollowed is not the tree its name claims, and the
 // orchestrator re-digests nothing on this path.
 func (s *session) get(frame wire.Frame) error {
-	if s.workdir == "" {
-		return errUnopened
-	}
-
 	var get wire.Get
 
 	err := wire.DecodeJSON(frame, &get)
@@ -521,17 +519,9 @@ func (s *session) get(frame wire.Frame) error {
 		return fmt.Errorf("%w", err)
 	}
 
-	err = checkArtifact(wire.UploadArtifact{Name: get.Name, Digest: get.Digest})
+	held, err := s.heldEntry(get.Name, get.Digest)
 	if err != nil {
 		return err
-	}
-
-	held := filepath.Join(s.artifactCacheDir(), get.Digest)
-
-	if !holdsDigest(held, get.Name) {
-		_ = evictArtifact(held)
-
-		return fmt.Errorf("%w: %q (%s)", errNotHeld, get.Name, get.Digest)
 	}
 
 	writer := s.dataWriter(frame.Op)
@@ -551,9 +541,32 @@ func (s *session) get(frame wire.Frame) error {
 	return s.sendEnd(frame.Op)
 }
 
-// errNotHeld is a FrameGet for a tree this worker does not have: evicted,
-// swept, or never filed. The orchestrator decides what that costs.
+// errNotHeld is a FrameGet or FramePush for a tree this worker does not have:
+// evicted, swept, or never filed. The orchestrator decides what that costs.
 var errNotHeld = errors.New("this worker does not hold the artifact")
+
+// heldEntry is the cache entry a Get or Push names, verified — or evicted,
+// when it is not the tree its name claims.
+func (s *session) heldEntry(name, digest string) (string, error) {
+	if s.workdir == "" {
+		return "", errUnopened
+	}
+
+	err := checkArtifact(wire.UploadArtifact{Name: name, Digest: digest})
+	if err != nil {
+		return "", err
+	}
+
+	held := filepath.Join(s.artifactCacheDir(), digest)
+
+	if !holdsDigest(held, name) {
+		_ = evictArtifact(held)
+
+		return "", fmt.Errorf("%w: %q (%s)", errNotHeld, name, digest)
+	}
+
+	return held, nil
+}
 
 func (s *session) packToWire(op uint32, fetch wire.Fetch) error {
 	writer := s.dataWriter(op)

@@ -83,9 +83,14 @@ const (
 	// digest: the pull half of a deferred fetch, and how a tree a worker kept
 	// comes home once something here needs it.
 	//
+	FrameGet
+	// FramePush is the orchestrator asking the worker to put a tree it holds
+	// in the store: how a tree reaches another worker without passing
+	// through this machine.
+	//
 	// Last deliberately: the decoder's range check ends here, so a new frame
 	// type goes after this one or the check moves with it.
-	FrameGet
+	FramePush
 )
 
 // DrainOp is the operation id an unsolicited frame carries. Zero is never
@@ -238,7 +243,7 @@ func (d *Decoder) Read() (Frame, error) {
 	}
 
 	frameType := FrameType(d.header[0])
-	if frameType < FrameHello || frameType > FrameGet {
+	if frameType < FrameHello || frameType > FramePush {
 		return Frame{}, fmt.Errorf("%w: unknown frame type %d", ErrProtocol, frameType)
 	}
 

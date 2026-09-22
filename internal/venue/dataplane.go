@@ -13,10 +13,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"sync/atomic"
 	"time"
 
 	"github.com/jtarchie/steps/internal/compress"
+	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/wire"
 )
 
@@ -40,12 +42,21 @@ func (s *session) uploadViaStore(ctx context.Context) error {
 		return err
 	}
 
-	artifacts := make([]wire.UploadArtifact, 0, len(names))
+	artifacts := make([]wire.UploadArtifact, 0, len(names)+len(s.remoteInputs))
 
 	for _, name := range names {
 		artifact, uploadErr := s.uploadArtifact(ctx, name)
 		if uploadErr != nil {
 			return uploadErr
+		}
+
+		artifacts = append(artifacts, artifact)
+	}
+
+	for _, name := range sortedNames(s.remoteInputs) {
+		artifact, offerErr := s.offerRemoteArtifact(ctx, name, s.remoteInputs[name])
+		if offerErr != nil {
+			return offerErr
 		}
 
 		artifacts = append(artifacts, artifact)
@@ -131,6 +142,49 @@ func (s *session) uploadArtifact(ctx context.Context, name string) (wire.UploadA
 	}
 
 	return wire.UploadArtifact{Name: name, Digest: digest, URL: url}, nil
+}
+
+// offerRemoteArtifact names an input another worker holds: in the store
+// already, or pushed there by its holder on request. Nothing is read or
+// written on this machine, which is the whole point — the orchestrator mints
+// the URLs and knows who holds what, as Concourse's web node does.
+func (s *session) offerRemoteArtifact(ctx context.Context, name string, input shell.RemoteInput) (wire.UploadArtifact, error) {
+	key := "wire/" + input.Digest
+
+	has, err := s.blobs.Has(ctx, key)
+	if err != nil {
+		return wire.UploadArtifact{}, fmt.Errorf("%w", err)
+	}
+
+	if !has {
+		put, presignErr := s.blobs.PresignPut(ctx, key, wireTTL)
+		if presignErr != nil {
+			return wire.UploadArtifact{}, fmt.Errorf("%w", presignErr)
+		}
+
+		err = Push(ctx, shell.RunnerSpec{Worker: input.Holder, ArtifactStore: s.worker.ArtifactStore}, name, input.Digest, put)
+		if err != nil {
+			return wire.UploadArtifact{}, fmt.Errorf("input %q is held by worker %s and could not reach the store: %w", name, input.Holder, err)
+		}
+	}
+
+	url, err := s.blobs.PresignGet(ctx, key, wireTTL)
+	if err != nil {
+		return wire.UploadArtifact{}, fmt.Errorf("%w", err)
+	}
+
+	return wire.UploadArtifact{Name: name, Digest: input.Digest, URL: url}, nil
+}
+
+func sortedNames(inputs map[string]shell.RemoteInput) []string {
+	names := make([]string, 0, len(inputs))
+	for name := range inputs {
+		names = append(names, name)
+	}
+
+	sort.Strings(names)
+
+	return names
 }
 
 // stagedSize is how big the blob this end just pushed was, or zero if the

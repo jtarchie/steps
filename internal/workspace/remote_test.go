@@ -12,9 +12,9 @@ import (
 	"testing"
 )
 
-// heldTree records an artifact as held elsewhere, with a pull that writes
-// content into dst and counts how often it was asked.
-func heldTree(t *testing.T, bw BuildWorkspace, name, content string) *int {
+// heldTree records src as held elsewhere, with a pull that writes one file
+// into dst and counts how often it was asked.
+func heldTree(t *testing.T, bw BuildWorkspace) *int {
 	t.Helper()
 
 	holder, ok := bw.(RemoteHolder)
@@ -24,13 +24,13 @@ func heldTree(t *testing.T, bw BuildWorkspace, name, content string) *int {
 
 	pulls := 0
 
-	err := holder.HoldRemote(name, RemoteArtifact{
+	err := holder.HoldRemote("src", RemoteArtifact{
 		Digest: strings.Repeat("ab", 32),
 		Holder: "local:/somewhere",
 		Pull: func(_ context.Context, dst string) error {
 			pulls++
 
-			return os.WriteFile(filepath.Join(dst, "f.txt"), []byte(content), 0o600)
+			return os.WriteFile(filepath.Join(dst, "f.txt"), []byte("held\n"), 0o600)
 		},
 	})
 	if err != nil {
@@ -61,7 +61,7 @@ func TestAHeldArtifactIsPulledOnceForItsFirstReader(t *testing.T) {
 	t.Parallel()
 
 	bw := newBuild(t)
-	pulls := heldTree(t, bw, "src", "held\n")
+	pulls := heldTree(t, bw)
 
 	for i := range 2 {
 		space, err := bw.TaskSpace(context.Background(), "reader", []string{"src"}, nil, nil, nil)
@@ -118,7 +118,7 @@ func TestAHeldArtifactCountsAsPresentWithoutBeingPulled(t *testing.T) {
 	t.Parallel()
 
 	bw := newBuild(t)
-	pulls := heldTree(t, bw, "src", "held\n")
+	pulls := heldTree(t, bw)
 
 	build, _ := bw.(*isolatingBuild)
 
@@ -210,5 +210,95 @@ func TestHoldRemoteRefusesAnUnsafeName(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "escape") {
 		t.Errorf("error %v does not name the offending name", err)
+	}
+}
+
+// TestAPlacedSpaceLeavesAHeldInputOnItsHolder: nothing is pulled, the input
+// is reported with its holder, and the step directory has no copy of it.
+func TestAPlacedSpaceLeavesAHeldInputOnItsHolder(t *testing.T) {
+	t.Parallel()
+
+	bw := newBuild(t)
+	pulls := heldTree(t, bw)
+
+	placed, ok := bw.(PlacedSpaces)
+	if !ok {
+		t.Fatal("an isolating build should implement PlacedSpaces")
+	}
+
+	space, remote, err := placed.PlacedTaskSpace(context.Background(), "consumer", []string{"src"}, []string{"out"}, nil, nil)
+	if err != nil {
+		t.Fatalf("PlacedTaskSpace: %v", err)
+	}
+
+	defer func() { _ = space.Close() }()
+
+	if remote["src"].Holder != "local:/somewhere" {
+		t.Errorf("remote = %v, want src on its holder", remote)
+	}
+
+	if *pulls != 0 {
+		t.Errorf("pulled %d times for a placed step, want never", *pulls)
+	}
+
+	_, err = os.Stat(filepath.Join(space.Dir(), "src"))
+	if err == nil {
+		t.Error("the step directory holds a copy of an input left on its holder")
+	}
+}
+
+// TestAPlacedSpacePullsAMappedInput: a renamed input hashes under the wrong
+// name for the holder's entry, so it comes here and is materialized under
+// its declared name as always.
+func TestAPlacedSpacePullsAMappedInput(t *testing.T) {
+	t.Parallel()
+
+	bw := newBuild(t)
+	pulls := heldTree(t, bw)
+
+	placed, _ := bw.(PlacedSpaces)
+
+	space, remote, err := placed.PlacedTaskSpace(context.Background(), "consumer", []string{"code"}, nil, map[string]string{"code": "src"}, nil)
+	if err != nil {
+		t.Fatalf("PlacedTaskSpace: %v", err)
+	}
+
+	defer func() { _ = space.Close() }()
+
+	if len(remote) != 0 {
+		t.Errorf("remote = %v, want a mapped input pulled rather than left", remote)
+	}
+
+	if *pulls != 1 {
+		t.Errorf("pulled %d times, want once", *pulls)
+	}
+
+	content, err := os.ReadFile(filepath.Join(space.Dir(), "code", "f.txt"))
+	if err != nil || string(content) != "held\n" {
+		t.Errorf("the mapped input reads %q, %v", content, err)
+	}
+}
+
+// TestAPlacedSpaceDoesNotClobberAHeldInputItAlsoOutputs: read-modify-write
+// over a held artifact leaves no empty output directory where the worker
+// will place the input.
+func TestAPlacedSpaceDoesNotClobberAHeldInputItAlsoOutputs(t *testing.T) {
+	t.Parallel()
+
+	bw := newBuild(t)
+	_ = heldTree(t, bw)
+
+	placed, _ := bw.(PlacedSpaces)
+
+	space, _, err := placed.PlacedTaskSpace(context.Background(), "editor", []string{"src"}, []string{"src"}, nil, nil)
+	if err != nil {
+		t.Fatalf("PlacedTaskSpace: %v", err)
+	}
+
+	defer func() { _ = space.Close() }()
+
+	_, err = os.Stat(filepath.Join(space.Dir(), "src"))
+	if err == nil {
+		t.Error("an empty output directory was created over an input the worker will place")
 	}
 }
