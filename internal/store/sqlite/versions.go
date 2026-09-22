@@ -111,6 +111,58 @@ func (s *Store) CheckedResources(ctx context.Context) ([]store.CheckedResource, 
 		})
 }
 
+// RecordCheckError files why a check failed, or clears the filing when the
+// message is empty.
+//
+// The clear is guarded by EXISTS rather than issued unconditionally: it runs
+// once per resource per poll for the whole life of a healthy pipeline, and a
+// DELETE that matches nothing still takes a write lock on a WAL the live
+// stream is reading.
+func (s *Store) RecordCheckError(ctx context.Context, resourceName, message string) error {
+	if message == "" {
+		_, err := s.db.ExecContext(ctx,
+			`DELETE FROM resource_check_errors WHERE pipeline_id = ? AND resource_name = ?
+			 AND EXISTS (SELECT 1 FROM resource_check_errors WHERE pipeline_id = ? AND resource_name = ?)`,
+			s.pipelineID, resourceName, s.pipelineID, resourceName,
+		)
+		if err != nil {
+			return fmt.Errorf("could not clear the check error for %q: %w", resourceName, err)
+		}
+
+		return nil
+	}
+
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO resource_check_errors (pipeline_id, resource_name, message, failed_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT (pipeline_id, resource_name) DO UPDATE SET message = excluded.message, failed_at = excluded.failed_at`,
+		s.pipelineID, resourceName, boundedError(message), now(),
+	)
+	if err != nil {
+		return fmt.Errorf("could not record the check error for %q: %w", resourceName, err)
+	}
+
+	return nil
+}
+
+// CheckErrors is every resource this pipeline cannot currently check.
+func (s *Store) CheckErrors(ctx context.Context) ([]store.CheckError, error) {
+	return collect(ctx, s.db, "resource check errors",
+		`SELECT resource_name, message, failed_at FROM resource_check_errors
+		 WHERE pipeline_id = ? ORDER BY resource_name`,
+		[]any{s.pipelineID}, func(rows *sql.Rows) (store.CheckError, error) {
+			var (
+				row      store.CheckError
+				failedAt string
+			)
+
+			err := rows.Scan(&row.Name, &row.Message, &failedAt)
+			row.FailedAt = parseTimestamp(failedAt)
+
+			return row, err //nolint:wrapcheck // collect wraps with the thing being read
+		})
+}
+
 // RecordPassedVersion records that jobName completed successfully against this
 // exact version of a resource. It is what a downstream job's passed: reads.
 func (s *Store) RecordPassedVersion(ctx context.Context, jobName, resourceName, versionJSON, buildID string) error {

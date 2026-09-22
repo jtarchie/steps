@@ -9,6 +9,11 @@ package sqlite
 //
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
+// 12 added resource_check_errors. An older file's INSERT names a table it
+// lacks, and the poller records a check failure best-effort — so a pipeline
+// that had stopped triggering would go on looking merely quiet, which is the
+// exact silence the table was added to end.
+//
 // 10 made pipelines the thing a daemon HOLDS rather than a name it was handed:
 // current_revision_id, paused_at and set_at on pipelines, and
 // revision_includes beside pipeline_revisions. An older file lacks the
@@ -53,7 +58,7 @@ package sqlite
 // 4 put pipeline_id into the keys of run_placements and agent_usage. Without
 // it, two pipelines sharing a state file collided on (run_id, node_hash) and
 // one upserted over the other's row.
-const schemaVersion = 11
+const schemaVersion = 12
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -228,6 +233,19 @@ CREATE TABLE IF NOT EXISTS resource_checks (
     resource_name TEXT NOT NULL,
     version_json  TEXT NOT NULL,
     checked_at    TEXT NOT NULL,
+    PRIMARY KEY (pipeline_id, resource_name)
+);
+
+-- Why a resource's last check failed. Apart from resource_checks rather than
+-- columns on it: that row is the check CURSOR and exists only once a check has
+-- succeeded, while the interesting failure is usually the one on a resource
+-- that has never succeeded at all. A cleared error is a DELETE, so the table
+-- holds only what is currently broken.
+CREATE TABLE IF NOT EXISTS resource_check_errors (
+    pipeline_id   INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    resource_name TEXT NOT NULL,
+    message       TEXT NOT NULL,
+    failed_at     TEXT NOT NULL,
     PRIMARY KEY (pipeline_id, resource_name)
 );
 

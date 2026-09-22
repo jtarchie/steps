@@ -26,6 +26,16 @@ type Versions interface {
 	CompareAndSetCheckedVersion(ctx context.Context, resourceName, expected string, expectedFound bool, next string) (bool, error)
 	LastChecked(ctx context.Context, resourceName string) (CheckedResource, bool, error)
 	CheckedResources(ctx context.Context) ([]CheckedResource, error)
+	// RecordCheckError files why a resource's check failed; an empty message
+	// clears what was filed. A check that errors leaves the recorded version
+	// exactly where it was — which is correct, and which is why a failing
+	// resource is otherwise indistinguishable from a quiet one.
+	RecordCheckError(ctx context.Context, resourceName, message string) error
+	// CheckErrors is every resource whose last check failed, by name. It is
+	// kept apart from CheckedResources because the two answer different
+	// questions about different rows: a resource that has never checked
+	// successfully has an error and no version at all.
+	CheckErrors(ctx context.Context) ([]CheckError, error)
 	RecordPassedVersion(ctx context.Context, jobName, resourceName, versionJSON, buildID string) error
 	PassedVersions(ctx context.Context, jobName string, limit int) ([]PassedVersion, error)
 	HasPassedVersionSet(ctx context.Context, jobName string, want map[string]string) (bool, error)
@@ -40,6 +50,17 @@ type CheckedResource struct {
 	Name      string
 	Version   string
 	CheckedAt time.Time
+}
+
+// CheckError is a resource whose last check failed, and what it said.
+//
+// Recorded because a failing check is otherwise SILENT: the poll aborts on
+// the first resource that errors, the recorded version stays where it was,
+// and the only trace is a log line on the machine running the daemon.
+type CheckError struct {
+	Name     string
+	Message  string
+	FailedAt time.Time
 }
 
 // PassedVersion is one resource version a job succeeded against.

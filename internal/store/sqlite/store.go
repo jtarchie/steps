@@ -453,14 +453,19 @@ func errText(err error) any {
 		return nil
 	}
 
-	text := err.Error()
-	if len(text) > store.MaxStoredErrorBytes {
-		const notice = "… [truncated]"
+	return boundedError(err.Error())
+}
 
-		text = text[:store.MaxStoredErrorBytes-len(notice)] + notice
+// boundedError caps a message at MaxStoredErrorBytes, keeping the head for the
+// reason errText gives.
+func boundedError(text string) string {
+	if len(text) <= store.MaxStoredErrorBytes {
+		return text
 	}
 
-	return text
+	const notice = "… [truncated]"
+
+	return truncateUTF8(text, store.MaxStoredErrorBytes-len(notice)) + notice
 }
 
 // parseTimestamp turns a stored RFC3339 string into a Time, yielding the zero
