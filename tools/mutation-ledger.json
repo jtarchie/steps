@@ -57,6 +57,140 @@
           "why": "differs only for U+007F, which is not in ereSpecial, so the second half of the conjunction decides either way"
         }
       ]
+    },
+    "./internal/pipeline": {
+      "swept_at": "6645ad0",
+      "date": "2026-09-22",
+      "killed": 125,
+      "lived": 35,
+      "timed_out": 0,
+      "not_covered": 32,
+      "efficacy": 78.13,
+      "note": "First sweep, scoped SINCE=9ea6941 (get.go, task.go, put.go, venue.go, resourceplace.go, holders.go). PARTIAL TRIAGE: the 10 survivors in holders.go (the file steps#138 added) were worked through \u2014 2 real gaps now pinned by holders_test.go, 4 killed by ./e2e when applied by hand (the placedTaskSpace/placedPutSpace tag-and-store guards, the empty-held guard, withRemoteInputs' empty guard), 4 equivalent. The other 25 are PRE-EXISTING lines in files this work happened to touch (get.go 11, task.go 9, venue.go 2, put.go 1, resourceplace.go 1) and are NOT triaged; they belong to a pipeline sweep of its own. Efficacy below counts them all.",
+      "equivalent": [
+        {
+          "mutant": "holders.go | CONDITIONALS_NEGATION | if err != nil { (after HoldRemote)",
+          "why": "HoldRemote fails only on an artifact name the plan already validated or a digest the venue always sets; no pipeline can reach it"
+        },
+        {
+          "mutant": "holders.go | CONDITIONALS_NEGATION | if sink == nil { (heldFrom)",
+          "why": "a defensive guard: every caller runs under the sink runPlacedStage installs"
+        },
+        {
+          "mutant": "holders.go | CONDITIONALS_NEGATION | if sink == nil { (noteHeld)",
+          "why": "same guard, other side"
+        },
+        {
+          "mutant": "venue.go | CONDITIONALS_NEGATION | if err != nil { (RecordPlacement)",
+          "why": "only a log line reads the error; a bookkeeping write must never fail a step that did its work"
+        }
+      ]
+    },
+    "./internal/shim": {
+      "swept_at": "6645ad0",
+      "date": "2026-09-22",
+      "killed": 84,
+      "lived": 0,
+      "timed_out": 23,
+      "not_covered": 9,
+      "efficacy": 100,
+      "note": "First sweep, scoped SINCE=9ea6941 (shim.go, dataplane.go, produced.go). No survivors. 23 TIMED OUT, every one an err-check negation in the frame loop or the store PUT: the peer harness then waits for a frame that never comes, which is a real kill; spot-checked by hand after the sweep, see the report.",
+      "equivalent": []
+    },
+    "./internal/store/sqlite": {
+      "swept_at": "6645ad0",
+      "date": "2026-09-22",
+      "killed": 7,
+      "lived": 0,
+      "timed_out": 1,
+      "not_covered": 0,
+      "efficacy": 100,
+      "note": "First sweep, scoped SINCE=9ea6941 (placement.go only). The one TIMED OUT (RunPlacements' err check negated) was applied by hand: it hangs the conformance suite, a real kill.",
+      "equivalent": []
+    },
+    "./internal/venue": {
+      "swept_at": "6645ad0",
+      "date": "2026-09-22",
+      "killed": 60,
+      "lived": 6,
+      "timed_out": 5,
+      "not_covered": 3,
+      "efficacy": 90.91,
+      "note": "PARTIAL: scoped SINCE=9ea6941 and stopped after 74 mutants (dataplane.go, exec.go, placement.go, pull.go, and session.go up to short()); transfer.go, venue.go, worker.go and the rest of session.go are unswept. Serialized (WORKERS=1) at ~50s a mutant, and every negated handshake err-check hangs the peer for the full 12-minute timeout, so the rest is a day of machine time: do it file-group by file-group. Of the 6 survivors, 2 were real and are pinned (TestPushWaitsForTheStoreToHaveIt, TestStoreUploadsLeaveNoPackedCopyBehind); 4 equivalent. The 5 TIMED OUT are handshake and command-loop err-negations: a hung peer, a real kill.",
+      "equivalent": [
+        {
+          "mutant": "dataplane.go | ARITHMETIC_BASE | artifacts := make([]wire.UploadArtifact, 0, len(names)+len(s.remoteInputs))",
+          "why": "a capacity hint"
+        },
+        {
+          "mutant": "dataplane.go | CONDITIONALS_NEGATION | if err != nil { (after swapFetched in fetchViaStore)",
+          "why": "swapFetched fails only on a local remove or rename nothing can induce without pulling the tree out from under the session; the staging MkdirTemp fails first"
+        },
+        {
+          "mutant": "session.go | CONDITIONALS_BOUNDARY | if len(build) > 12 {",
+          "why": "short() only trims a hash in an error message"
+        },
+        {
+          "mutant": "session.go | CONDITIONALS_NEGATION | if len(build) > 12 {",
+          "why": "short() only trims a hash in an error message"
+        }
+      ]
+    },
+    "./internal/wire": {
+      "swept_at": "6645ad0",
+      "date": "2026-09-22",
+      "killed": 65,
+      "lived": 7,
+      "timed_out": 0,
+      "not_covered": 11,
+      "efficacy": 90.28,
+      "note": "First sweep, scoped SINCE=9ea6941 (frame.go, tar.go, message.go). 7 survivors: 5 boundary checks now pinned by TestFrameLimitsAcceptTheValueItself and TestFrameLimitsRefuseOnePast, the withinRoot climb by TestPackPathsRefusesASymlinkedName's esc/never case; 1 equivalent.",
+      "equivalent": [
+        {
+          "mutant": "tar.go | CONDITIONALS_NEGATION | if err == nil && closeErr != nil {",
+          "why": "Close of a file opened for reading does not fail on any filesystem a test can arrange; the branch guards a kernel error nobody can induce"
+        }
+      ]
+    },
+    "./internal/workspace": {
+      "swept_at": "6645ad0",
+      "date": "2026-09-22",
+      "killed": 129,
+      "lived": 9,
+      "timed_out": 0,
+      "not_covered": 25,
+      "efficacy": 93.48,
+      "note": "First sweep, scoped SINCE=9ea6941 (workspace.go, stepcache.go, remote.go, placed.go, cache.go). 9 survivors: validateCachedNames' mapped-path check and discardStaged's committed skip now pinned by stepcache_sweep_test.go; 7 equivalent.",
+      "equivalent": [
+        {
+          "mutant": "stepcache.go | CONDITIONALS_NEGATION | if err != nil { (StoreStep best-effort, SaveStepCache)",
+          "why": "only a log line reads the error"
+        },
+        {
+          "mutant": "stepcache.go | CONDITIONALS_NEGATION | if err != nil { (discardStaged remove)",
+          "why": "only a log line reads the error"
+        },
+        {
+          "mutant": "workspace.go | CONDITIONALS_NEGATION | if err != nil { (CloseBuild)",
+          "why": "only a log line reads the error"
+        },
+        {
+          "mutant": "workspace.go | CONDITIONALS_NEGATION | if err != nil { (CloseSpace)",
+          "why": "only a log line reads the error"
+        },
+        {
+          "mutant": "workspace.go | CONDITIONALS_NEGATION | if removeErr != nil { (sweep)",
+          "why": "only a log line reads the error"
+        },
+        {
+          "mutant": "workspace.go | CONDITIONALS_NEGATION | if removeErr != nil { (newSpaceLeaving cleanup)",
+          "why": "only a log line reads the error"
+        },
+        {
+          "mutant": "workspace.go | INCREMENT_DECREMENT | b.generations[name]++",
+          "why": "rememberDigest compares generations for equality, so any change of the counter invalidates a walk in flight"
+        }
+      ]
     }
   }
 }

@@ -295,7 +295,10 @@ func TestPackPathsRefusesASymlinkedName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, name := range []string{"esc/private", "esc"} {
+	// esc/never: a child that does not exist under a link that does. The
+	// climb to the nearest existing ancestor has to stop at the link and
+	// refuse it, not treat "not there" as "not a problem".
+	for _, name := range []string{"esc/private", "esc", "esc/never"} {
 		buf := new(bytes.Buffer)
 
 		packErr := PackPaths(buf, root, []string{name})

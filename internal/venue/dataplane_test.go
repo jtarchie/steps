@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // countingS3 is the store's remote half, counting operations per key class so
@@ -31,6 +32,9 @@ type countingS3 struct {
 	// are the wrong measure there: a step that re-fetches a 64MB input it
 	// already has is one GET and a real cost.
 	treeBytesOut int
+	// putDelay slows every PUT, so a caller that returns before the store
+	// has the object can be caught in the act.
+	putDelay time.Duration
 }
 
 func newCountingS3(t *testing.T) (*countingS3, string) {
@@ -73,6 +77,8 @@ func (f *countingS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodPut:
+		time.Sleep(f.putDelay)
+
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)

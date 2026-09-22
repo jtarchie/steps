@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/shell"
 )
@@ -239,5 +240,72 @@ func TestARemoteInputOnTheStepsOwnWorkerIsNotPushed(t *testing.T) {
 	// left the worker that made it.
 	if fake.treePuts != 2 {
 		t.Errorf("the store took %d tree puts, want 2 — the holder was asked to push a tree its own next step already had", fake.treePuts)
+	}
+}
+
+// TestPushWaitsForTheStoreToHaveIt: Push returns only once the worker's PUT
+// has landed, or the consumer handed a URL a moment later reads a 404. The
+// store answers slowly so a Push that returns on the frame going out, rather
+// than on the End coming back, is caught.
+func TestPushWaitsForTheStoreToHaveIt(t *testing.T) {
+	fake, storeURL := newCountingS3(t)
+	fake.putDelay = 500 * time.Millisecond
+
+	// holder is the mapping as written, binary and all — what a Push dials.
+	held, holder := deferredProducer(t)
+
+	client, err := artifactStoreFor(storeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	key := "wire/" + held["out"]
+
+	url, err := client.PresignPut(context.Background(), key, wireTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = Push(context.Background(), shell.RunnerSpec{Worker: holder, ArtifactStore: storeURL}, "out", held["out"], url)
+	if err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	has, err := client.Has(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !has {
+		t.Error("Push returned before the store held the object")
+	}
+}
+
+// TestStoreUploadsLeaveNoPackedCopyBehind: the packed copy of each artifact
+// is staged in the temp directory and must go once the store has it — a
+// leak of one tarball per artifact per step fills a disk.
+func TestStoreUploadsLeaveNoPackedCopyBehind(t *testing.T) {
+	_, storeURL := newCountingS3(t)
+
+	cwd := t.TempDir()
+	mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), "seed\n")
+	mustMkdir(t, filepath.Join(cwd, "out"))
+
+	spec := localWorker(t, cwd, "out")
+	spec.ArtifactStore = storeURL
+	placed := newLocalRunner(t, spec)
+
+	err := placed.Run(context.Background(), "cp data/seed.txt out/copy.txt")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	leftovers, err := filepath.Glob(filepath.Join(os.TempDir(), "steps-wire-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(leftovers) != 0 {
+		t.Errorf("%d packed copies left in the temp directory: %v", len(leftovers), leftovers)
 	}
 }
