@@ -402,9 +402,15 @@ func applyScheme(worker Worker, parsed *url.URL) (Worker, error) {
 		// local://something is a mapping that looks like it names a machine
 		// and does not. Refusing beats running it here and letting the author
 		// believe otherwise.
-		if parsed.Host != "" || parsed.Path != "" {
-			return Worker{}, fmt.Errorf("%w %q: local: takes no host — it means this machine", ErrWorker, worker.URL)
+		if parsed.Host != "" || parsed.Opaque != "" {
+			return Worker{}, fmt.Errorf("%w %q: local: takes no host — it means this machine; local:/path names the disk", ErrWorker, worker.URL)
 		}
+
+		// The path chooses the disk, exactly as ssh://box/mnt/fast does, and it
+		// is what gives two local: workers separate scratch and separate
+		// artifact caches — without it both shims file under one temp
+		// directory and any test of "the other worker is cold" proves nothing.
+		worker.Root = parsed.Path
 
 		return worker, nil
 	default:
@@ -423,7 +429,7 @@ func (w Worker) String() string { return w.URL }
 // user, the host, and the disk a step was told to use.
 func (w Worker) Address() string {
 	if w.Scheme == SchemeLocal {
-		return "local:"
+		return "local:" + w.Root
 	}
 
 	if w.Scheme == SchemeAWS || w.Scheme == SchemeGCP {

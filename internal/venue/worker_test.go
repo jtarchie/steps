@@ -28,6 +28,8 @@ func TestParseWorkerForms(t *testing.T) {
 		{name: "ssh with root", raw: "ssh://jt@box/srv/steps", scheme: SchemeSSH, user: "jt", host: "box", root: "/srv/steps"},
 		{name: "ssh without host", raw: "ssh://", wantErr: true},
 		{name: "local naming a host", raw: "local://box", wantErr: true},
+		{name: "local with root", raw: "local:/srv/steps", scheme: SchemeLocal, root: "/srv/steps"},
+		{name: "local with a relative root", raw: "local:srv/steps", wantErr: true},
 		{name: "unknown scheme", raw: "http://box", wantErr: true},
 		{name: "empty", raw: "", wantErr: true},
 	} {
