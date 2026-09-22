@@ -58,6 +58,11 @@ type overviewPipeline struct {
 	// Queued is what the trigger queue still owes, which is the difference
 	// between a pipeline with nothing to do and one that is not being drained.
 	Queued int
+	// Attention is what that pipeline is waiting on a person for. The root is
+	// where an operator looks first and the one page that can rank several
+	// pipelines against each other, so the question the header answers for
+	// one of them is a column here.
+	Attention int
 }
 
 // handleIndex answers the bare root, and its answer depends on how many
@@ -86,10 +91,15 @@ func (s *Server) handleIndex(c *echo.Context) error {
 		return err
 	}
 
+	// The shell gathered every served pipeline's attention already, to mark
+	// the switcher; handing those counts to the table is what stops the root
+	// asking the same six questions of the same databases twice per render.
+	nav := s.globalNav(c)
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "overview", map[string]any{
-		"Nav":       s.globalNav(c),
-		"Pipelines": s.overviewPipelines(c.Request().Context()),
+		"Nav":       nav,
+		"Pipelines": s.overviewPipelines(c.Request().Context(), nav),
 		"Runs":      runs,
 	})
 }
@@ -101,17 +111,23 @@ func (s *Server) handleIndex(c *echo.Context) error {
 // answer what it can name. A read that fails leaves its field zero rather
 // than failing the page — a root that will not render says less about a
 // pipeline than a row missing one column.
-func (s *Server) overviewPipelines(ctx context.Context) []overviewPipeline {
+func (s *Server) overviewPipelines(ctx context.Context, nav navData) []overviewPipeline {
 	served := s.Served()
+
+	waiting := make(map[string]int, len(nav.Pipelines))
+	for _, summary := range nav.Pipelines {
+		waiting[summary.Slug] = summary.Attention
+	}
 
 	out := make([]overviewPipeline, 0, len(served))
 
 	for _, pipeline := range served {
 		row := overviewPipeline{
-			Slug:   pipeline.Slug,
-			Path:   pipeline.Path(),
-			Jobs:   len(pipeline.Config().Jobs),
-			Paused: paused(ctx, pipeline),
+			Slug:      pipeline.Slug,
+			Path:      pipeline.Path(),
+			Jobs:      len(pipeline.Config().Jobs),
+			Paused:    paused(ctx, pipeline),
+			Attention: waiting[pipeline.Slug],
 		}
 
 		runs, err := pipeline.Store.ListRuns(ctx, "", 1)

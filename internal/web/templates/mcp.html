@@ -1,6 +1,6 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps mcp</b></h1>
-<div id="mcp-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#mcp-region" hx-swap="outerMorph" hx-select-oob="#pause-banner:outerMorph,#nav-tabs:outerMorph">
+<div id="mcp-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#mcp-region" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#statusline:outerMorph">
 {{/* Inside the region: a login finishing and a probe landing both move these
      counts, and a metaline left outside would go on describing the table the
      poll had already replaced. */}}

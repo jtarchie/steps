@@ -80,7 +80,66 @@ code { font-family: var(--mono); color: var(--fg); }
 }
 .tab:hover { color: var(--fg); text-decoration: none; }
 .tab[aria-current="page"] { color: var(--fg); background: var(--bg); box-shadow: inset 0 2px 0 var(--green); }
-.tab .badge { color: var(--yellow); margin-left: 6px; }
+/* A count of work waiting on a person. Yellow because that is already what
+   this palette means by "you" — the read-only chip and the focus ring are the
+   same hue — and because red is spoken for by things that FAILED. A badge
+   says stuck, not broken. The dot is decorative: it gives the number an edge
+   against the tab label at 12px, where a bare digit reads as part of the
+   word. */
+.badge { color: var(--yellow); margin-left: 6px; font-variant-numeric: tabular-nums; }
+
+/* Needs-attention list: the sentence behind each badge, and the only home for
+   an item no tab owns. Yellow-edged rather than red — .held above is red
+   because it reports that the page is out of date with the operator's editor,
+   which is a fault; this is a queue of things working exactly as designed and
+   waiting on a person.
+
+   No empty state, deliberately. The server renders the <ul> only when there
+   is something in it, so the surface occupies no space at rest — its presence
+   is the whole signal, and a bar that is always there is one nobody reads
+   when it fills. */
+.attention {
+  list-style: none;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  border: 1px solid #4a3d20;
+  border-left: 3px solid var(--yellow);
+  margin: 0 0 14px;
+  padding: 0;
+}
+.atitem { padding: 8px 12px; border-top: 1px solid var(--line); }
+.atitem:first-child { border-top: 0; }
+/* The item that is not a link to somewhere else: it is fixed by the button it
+   carries, so it gets the room a form needs. */
+.at-paused { color: var(--fg); }
+.at-paused b { color: var(--yellow); font-weight: 600; }
+.attention a { color: var(--fg); }
+.attention a:hover { color: var(--yellow); }
+.attention .decide { margin-top: 6px; }
+.attention .meta { color: var(--faint); }
+
+/* A switcher row's mark: the same badge, about a pipeline you are not looking
+   at. */
+.pipemenu .badge { float: right; }
+
+/* Why a resource stopped checking. Red rather than the attention yellow: by
+   the time a reader is on this page the question is no longer "does something
+   want me" but "what broke", and the message below it is the same kind of
+   thing a failed step's output is. */
+.checkfail { font-family: var(--sans); font-size: 12.5px; }
+.checkfail b { color: var(--red); font-weight: 600; }
+.checkfail pre {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--dim);
+  background: var(--code-bg);
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+tr.checkfail td { border-top: 0; padding-top: 0; }
+tr.checkfail pre { margin: 0 0 4px; }
 .statusline .right {
   margin-left: auto;
   padding: 8px 14px;

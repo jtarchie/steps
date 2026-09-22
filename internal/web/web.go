@@ -549,6 +549,8 @@ func (s *Server) globalNav(c *echo.Context) navData {
 	if nav.Current == "" && len(nav.Pipelines) > 0 {
 		nav.Current = nav.Pipelines[0].Slug
 		nav.CurrentPath = nav.Pipelines[0].Path
+		// The shell's badges have to belong to the pipeline its tabs point at, or /docs reports a clean pipeline's counts on links into a different one.
+		nav.Attention = s.attention(c.Request().Context(), s.Lookup(nav.Current))
 		// The tabs this shell draws have to be the ones that pipeline HAS, or /docs and the overview offer an mcp tab that 404s on the pipeline they anchor to.
 		nav.HasMCP = s.hasMCP(nav.Current)
 	}
@@ -564,13 +566,29 @@ func (s *Server) hasMCP(slug string) bool {
 }
 
 func (s *Server) nav(c *echo.Context) navData {
+	ctx := c.Request().Context()
 	nav := navData{ReadOnly: s.runner == nil, URL: c.Request().URL.RequestURI()}
 
-	for _, pipeline := range s.Served() {
+	// Every served pipeline, not only the request's own: a reader looking at a
+	// clean pipeline has no other way to learn that one of the daemon's others
+	// has stopped, short of opening it.
+	//
+	// ponytail: recomputed per request, so a daemon holding many pipelines
+	// pays for all of them on every 2.5s self-poll of every open tab. The
+	// reads are small and indexed; give this a short TTL if it ever shows up
+	// in a profile.
+	served := s.Served()
+	gathered := make(map[string][]attentionItem, len(served))
+
+	for _, pipeline := range served {
+		items := s.attention(ctx, pipeline)
+		gathered[pipeline.Slug] = items
+
 		nav.Pipelines = append(nav.Pipelines, pipelineSummary{
-			Slug: pipeline.Slug,
-			Path: pipeline.Path(),
-			Jobs: len(pipeline.Config().Jobs),
+			Slug:      pipeline.Slug,
+			Path:      pipeline.Path(),
+			Jobs:      len(pipeline.Config().Jobs),
+			Attention: attentionTotal(items),
 		})
 	}
 
@@ -585,19 +603,9 @@ func (s *Server) nav(c *echo.Context) navData {
 
 	nav.Current = current.Slug
 	nav.CurrentPath = current.Path()
-	nav.Paused = paused(c.Request().Context(), current)
+	nav.Attention = gathered[current.Slug]
 	// The tab appears only for a pipeline that declares servers: most do not, and a dead tab on every one of them is nav space spent on a feature they never use.
 	nav.HasMCP = len(current.Config().MCPServers) > 0
-
-	pending, err := current.Store.Approvals(c.Request().Context(), true, 0)
-	if err == nil {
-		nav.PendingApprovals = len(pending)
-	}
-
-	questions, err := current.Store.Questions(c.Request().Context(), true, 0)
-	if err == nil {
-		nav.PendingQuestions = len(questions)
-	}
 
 	return nav
 }
@@ -612,14 +620,26 @@ type navData struct {
 	// itself is the one thing that reliably knows its own. Query included —
 	// the poll has to reproduce the page, and the day one of these pages
 	// takes a filter, a path-only re-fetch would reset it every 2.5s.
-	URL              string
-	PendingApprovals int
-	PendingQuestions int
-	ReadOnly         bool
+	URL string
+	// Attention is what this pipeline is waiting on a person for, most
+	// blocking first — see attention.go for what is allowed in it.
+	Attention []attentionItem
+	ReadOnly  bool
 	// HasMCP is whether the current pipeline declares mcp_servers:, which is the only thing that draws the mcp tab.
 	HasMCP bool
-	// On the nav because it is a fact about every page: a board of green jobs that has stopped moving has to say why.
-	Paused bool
+}
+
+// Paused reports whether the current pipeline is paused, which two pages ask
+// about for reasons the banner does not cover: the jobs board offers a Pause
+// button only when there is something to pause.
+func (n navData) Paused() bool {
+	for _, item := range n.Attention {
+		if item.Kind == "paused" {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Answers false when the store cannot say: a page that fails to draw is worse than a missing banner.
@@ -637,4 +657,6 @@ type pipelineSummary struct {
 	Slug string
 	Path string
 	Jobs int
+	// Attention is everything that pipeline is waiting on, summed — a switcher row has space for a number, not for six sentences.
+	Attention int
 }

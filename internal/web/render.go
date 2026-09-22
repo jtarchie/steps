@@ -211,12 +211,15 @@ func templateFuncs() template.FuncMap {
 		// from a 16-high baseline. Arithmetic in the template rather than
 		// pre-baked coordinates in the model, so the chart stays a
 		// presentation detail.
-		"mul2":    func(n int) int { return n * 8 },
-		"sub16":   func(n int) int { return 16 - n },
-		"slug":    slugify,
-		"mark":    statusMark,
-		"favicon": faviconFor,
-		"rfc3339": func(t time.Time) string { return t.UTC().Format(time.RFC3339) },
+		"mul2":  func(n int) int { return n * 8 },
+		"sub16": func(n int) int { return 16 - n },
+		"slug":  slugify,
+		"mark":  statusMark,
+		// The tab badges: one lookup into the list nav() already gathered,
+		// rather than six count fields that could each be stale differently.
+		"attentionOn": attentionOn,
+		"favicon":     faviconFor,
+		"rfc3339":     func(t time.Time) string { return t.UTC().Format(time.RFC3339) },
 		// The recursive step template needs both the page (for
 		// pipeline-scoped links) and the step it is drawing; a Go template
 		// passes exactly one argument, so they are paired here.

@@ -237,6 +237,23 @@ func TestNothingThatChangesLivesOutsideALiveRegion(t *testing.T) {
 			},
 		},
 		{
+			// The attention surface changes under a reader who is not on the
+			// page that owns the change: a check starts failing while they are
+			// looking at the runs page, and the banner and the badge are the
+			// only things that can tell them.
+			name:  "runs page while a check starts failing",
+			path:  "/p/demo/runs",
+			setup: testPipeline,
+			change: func(t *testing.T, pipeline *Pipeline) {
+				t.Helper()
+
+				err := pipeline.Store.RecordCheckError(context.Background(), "repo", "dial tcp: connection refused")
+				if err != nil {
+					t.Fatalf("RecordCheckError: %v", err)
+				}
+			},
+		},
+		{
 			name:  "resources page",
 			path:  "/p/demo/resources",
 			setup: testPipeline,

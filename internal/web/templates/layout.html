@@ -1,3 +1,9 @@
+{{/* A badge is a count on the tab that FIXES the thing counted — a number
+     anywhere else costs the reader the click it was meant to save. The ● is
+     decorative and hidden from a screen reader, which reads "approvals 3";
+     the sentence behind the number is in the attention list below. */}}
+{{define "attbadge"}}{{with .}}<span class="badge" title="{{.Detail}}"><span aria-hidden="true">●</span>{{.Count}}</span>{{end}}{{end}}
+
 {{define "layout"}}<!doctype html>
 <html lang="en">
 <head>
@@ -20,18 +26,21 @@
 </head>
 <body>
 
-<div class="statusline">
+{{/* Everything in here counts work waiting on a person, so all of it goes
+     stale on a page that is left open — which is every page, since they poll
+     themselves. The whole bar carries one id and every polling page names
+     #statusline in its hx-select-oob; it used to be the <nav> alone, and the
+     switcher's marks (which are about pipelines you are NOT looking at) were
+     the half that never refreshed. */}}
+<div class="statusline" id="statusline">
   <a class="brand" href="/"><b>steps</b> web</a>
-  {{/* The badges count work waiting on a person, so they go stale on every
-       page that is left open. Each page that polls names #nav-tabs in its
-       hx-select-oob, which is why this carries an id. */}}
-  <nav class="tabs" id="nav-tabs" aria-label="Sections">
-    {{if .Nav.Pipelines}}<a class="tab" {{if eq .Section "jobs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}">jobs</a>
+  <nav class="tabs" aria-label="Sections">
+    {{if .Nav.Pipelines}}<a class="tab" {{if eq .Section "jobs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}">jobs{{template "attbadge" (attentionOn .Nav "jobs")}}</a>
     <a class="tab" {{if eq .Section "runs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/runs">runs</a>
-    <a class="tab" {{if eq .Section "resources"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/resources">resources</a>
-    {{if .Nav.HasMCP}}<a class="tab" {{if eq .Section "mcp"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/mcp">mcp</a>{{end}}
-    <a class="tab" {{if eq .Section "approvals"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/approvals">approvals{{if .Nav.PendingApprovals}}<span class="badge">●{{.Nav.PendingApprovals}}</span>{{end}}</a>
-    <a class="tab" {{if eq .Section "questions"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/questions">questions{{if .Nav.PendingQuestions}}<span class="badge">●{{.Nav.PendingQuestions}}</span>{{end}}</a>
+    <a class="tab" {{if eq .Section "resources"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/resources">resources{{template "attbadge" (attentionOn .Nav "resources")}}</a>
+    {{if .Nav.HasMCP}}<a class="tab" {{if eq .Section "mcp"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/mcp">mcp{{template "attbadge" (attentionOn .Nav "mcp")}}</a>{{end}}
+    <a class="tab" {{if eq .Section "approvals"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/approvals">approvals{{template "attbadge" (attentionOn .Nav "approvals")}}</a>
+    <a class="tab" {{if eq .Section "questions"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/questions">questions{{template "attbadge" (attentionOn .Nav "questions")}}</a>
     {{end}}<a class="tab" {{if eq .Section "docs"}}aria-current="page" {{end}}href="/docs">docs</a>
   </nav>
   <div class="right">
@@ -39,7 +48,7 @@
       <button class="pipebtn" id="pipebtn" aria-haspopup="listbox" aria-expanded="false">{{.Nav.Current}} ▾</button>
       <div class="pipemenu" id="pipemenu" role="listbox">
         {{range .Nav.Pipelines}}
-        <a role="option" {{if eq .Slug $.Nav.Current}}aria-selected="true"{{end}} href="/p/{{.Slug}}">{{.Slug}} <span class="hint">{{.Jobs}} jobs</span></a>
+        <a role="option" {{if eq .Slug $.Nav.Current}}aria-selected="true"{{end}} href="/p/{{.Slug}}">{{.Slug}} <span class="hint">{{.Jobs}} jobs</span>{{if .Attention}}<span class="badge" title="{{.Attention}} waiting on you"><span aria-hidden="true">●</span>{{.Attention}}</span>{{end}}</a>
         {{end}}
       </div>
     </span>{{end}}
@@ -49,14 +58,22 @@
 </div>
 
 <main>
-{{/* Always rendered, even empty: it is swapped out of band by every page
-     that polls, and an out-of-band swap at an id the page does not have is
-     dropped — so a pipeline paused from a terminal while somebody has a board
-     open would announce itself only on reload, which is the one thing this
-     banner exists to prevent. */}}
-<div id="pause-banner">{{if .Nav.Paused}}<div class="held" role="alert"><b>this pipeline is paused</b> — nothing is being polled, nothing will be admitted from the queue, and a webhook delivery is recorded but builds only on unpause.
-  {{if .Nav.ReadOnly}}Resume it with <code>steps pipeline unpause -p {{.Nav.Current}}</code>.{{else}}<form class="decide" method="post" action="/p/{{.Nav.Current}}/unpause"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn primary" type="submit">Unpause</button><span class="meta">or <code>steps pipeline unpause -p {{.Nav.Current}}</code></span></form>{{end}}
-</div>{{end}}</div>
+{{/* The sentence behind each badge, and the only place an item no tab owns —
+     a paused pipeline — can appear at all.
+
+     The wrapper is always rendered, even empty: it is swapped out of band by
+     every page that polls, and an out-of-band swap at an id the page does not
+     have is dropped, so a pipeline paused from a terminal while somebody has
+     a board open would announce itself only on reload. The LIST inside it is
+     not: an empty attention surface must occupy no space, because its
+     presence is the entire signal. */}}
+<div id="attention">{{if .Nav.Attention}}<ul class="attention" role="status" aria-label="Needs attention">
+  {{range .Nav.Attention}}<li class="atitem at-{{.Kind}}">
+    {{if eq .Kind "paused"}}<b>this pipeline is paused</b> — nothing is being polled, nothing will be admitted from the queue, and a webhook delivery is recorded but builds only on unpause.
+    {{if $.Nav.ReadOnly}}Resume it with <code>steps pipeline unpause -p {{$.Nav.Current}}</code>.{{else}}<form class="decide" method="post" action="/p/{{$.Nav.Current}}/unpause"><input type="hidden" name="return" value="{{$.Nav.URL}}"><button class="btn primary" type="submit">Unpause</button><span class="meta">or <code>steps pipeline unpause -p {{$.Nav.Current}}</code></span></form>{{end}}
+    {{else}}<a href="{{.URL}}">{{.Detail}}</a>{{end}}
+  </li>{{end}}
+</ul>{{end}}</div>
 {{template "crumbs" .}}
 {{template "page" .}}
 </main>
@@ -69,17 +86,29 @@
 
 <script>
 (function () {
-  // Absent on a daemon holding no pipelines, where a switcher would offer nothing to switch to.
-  var pipebtn = document.getElementById('pipebtn');
-  var pipemenu = document.getElementById('pipemenu');
-  if (pipebtn && pipemenu) {
-    pipebtn.addEventListener('click', function (e) {
-      e.stopPropagation();
-      var open = pipemenu.classList.toggle('open');
-      pipebtn.setAttribute('aria-expanded', String(open));
-    });
-    document.addEventListener('click', function () { pipemenu.classList.remove('open'); });
+  // The switcher is inside #statusline, which every polling page now morphs
+  // out of band so the attention marks on the OTHER pipelines stay live. That
+  // makes an open menu reader state the server does not know about — like a
+  // fold on the run page — so it is recorded here and re-applied after a
+  // swap, or a reader who opened it watches it shut itself 2.5s later.
+  //
+  // Delegated rather than bound, for the same reason the step toggles are:
+  // the morph replaces these elements, and a listener bound to the copy that
+  // was on the page at load is a listener on a node nothing can click.
+  var switcherOpen = false;
+
+  function paintSwitcher() {
+    var pipebtn = document.getElementById('pipebtn');
+    var pipemenu = document.getElementById('pipemenu');
+    if (!pipebtn || !pipemenu) return;
+    pipemenu.classList.toggle('open', switcherOpen);
+    pipebtn.setAttribute('aria-expanded', String(switcherOpen));
   }
+
+  document.addEventListener('click', function (e) {
+    switcherOpen = e.target.closest('#pipebtn') ? !switcherOpen : false;
+    paintSwitcher();
+  });
 
   // What the reader has folded or unfolded, and which row they are on, are
   // the two pieces of state the SERVER cannot know — and a swap reconciles
@@ -130,6 +159,8 @@
   }
 
   document.addEventListener('htmx:after:swap', function () {
+    paintSwitcher();
+
     folds.forEach(function (open, key) {
       var step = document.querySelector('[data-step="' + CSS.escape(key) + '"]');
       if (step) step.classList.toggle('open', open);

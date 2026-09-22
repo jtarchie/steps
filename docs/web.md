@@ -112,9 +112,35 @@ holds nothing serves an index saying how to set one.
 | `…/config/:sha` | The pipeline as the runs pinned to that hash executed it — readable after the file on disk has moved on |
 | `…/approvals` | Pending `approval:` steps, and the decisions already made |
 | `…/questions` | Pending `ask_user` questions, and the answers already given |
-| `…/resources` | Latest checked version per resource, and any job the circuit breaker has paused |
+| `…/resources` | Latest checked version per resource, why any of them is failing its check, and any job the circuit breaker has paused |
 | `…/mcp` | Every `mcp_servers:` entry, who depends on it, and whether it is wired up — with **Connect** to finish an oauth login in this browser and **Test** to probe one server. Present only for a pipeline that declares servers; see [mcp.md](mcp.md#authorizing-from-the-browser-the-mcp-tab) |
 | `/docs` | These docs, rendered with syntax-highlighted examples — the same pages `steps docs` shows in a terminal |
+
+### What needs you
+
+The header counts work that is **stuck and waiting on a person**, on the tab
+that fixes it, and spells each one out in a list under the header. It is
+absent when nothing is waiting — the presence of the list is the signal, so it
+has no resting state.
+
+| Shown as | Means | Fixed by |
+|---|---|---|
+| the list's first line | the pipeline is paused: nothing polled, nothing admitted, deliveries recorded but not built | **Unpause**, right there |
+| `jobs ●N` | N jobs the circuit breaker took out of rotation after repeated failures | resuming them on the jobs board |
+| `resources ●N` | N resources whose `check` is erroring. A poll stops at the first one, so ONE broken check stops the pipeline triggering | the resources page, which shows what the check said |
+| `mcp ●N` | N declared `mcp_servers:` that cannot be used — a login expired, a command missing, a variable unset | **Connect**, or the thing the status names |
+| `approvals ●N` | N `approval:` steps parked on a decision | approving or rejecting |
+| `questions ●N` | N `ask_user` questions parked on an answer | answering |
+
+The pipeline switcher marks the pipelines you are *not* looking at with the
+same count, and the root lists it per pipeline — a daemon holding several
+otherwise hides every one but the open tab.
+
+Three things deliberately do **not** appear here, because a signal that is
+never quiet is one nobody reads: how many runs are in flight, how many
+resources exist, and how many runs have failed. The first two are activity
+rather than attention; the third is what the jobs board is for, and a count
+that only clears when somebody fixes the world would be permanent.
 
 Press `/` anywhere for a jump palette over pipelines, jobs, and recent runs — across **every** pipeline this process serves, not only the one whose page you are on. The one you are on ranks first, and a hit from anywhere else says which pipeline it belongs to.
 

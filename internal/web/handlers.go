@@ -373,11 +373,20 @@ func (s *Server) handleResources(c *echo.Context) error {
 		return fmt.Errorf("web: %w", err)
 	}
 
+	// The header's "N resources are failing their checks" links HERE, so this
+	// is the page that owes the reader the reason. Without it the banner sends
+	// somebody to a table of timestamps that looks fine.
+	failing, err := pipeline.Store.CheckErrors(ctx)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "resources", map[string]any{
 		"Nav":       s.nav(c),
 		"Resources": pipeline.Config().Resources,
 		"Checked":   checkedByName(checked),
+		"Failing":   failingByName(failing),
 		"Paused":    paused,
 	})
 }
@@ -417,6 +426,11 @@ func (s *Server) handleResource(c *echo.Context) error {
 		return fmt.Errorf("web: %w", err)
 	}
 
+	failing, err := pipeline.Store.CheckErrors(ctx)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "resource", map[string]any{
 		"Nav":      s.nav(c),
@@ -425,6 +439,7 @@ func (s *Server) handleResource(c *echo.Context) error {
 		"Resource": res,
 		"Versions": lines,
 		"Checked":  checked,
+		"Failing":  failingByName(failing)[res.Name],
 	})
 }
 
@@ -451,6 +466,17 @@ func hashesOf(rows []store.RunEventRow) []string {
 
 func checkedByName(rows []store.CheckedResource) map[string]store.CheckedResource {
 	byName := map[string]store.CheckedResource{}
+	for _, row := range rows {
+		byName[row.Name] = row
+	}
+
+	return byName
+}
+
+// failingByName indexes check errors the way the templates ask for them: by
+// resource, so a row can look up its own without walking the slice.
+func failingByName(rows []store.CheckError) map[string]store.CheckError {
+	byName := map[string]store.CheckError{}
 	for _, row := range rows {
 		byName[row.Name] = row
 	}

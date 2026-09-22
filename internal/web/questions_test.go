@@ -179,7 +179,7 @@ func TestQuestionsBadgeCountsOnlyWhatIsWaiting(t *testing.T) {
 	question := askOne(t, pipeline)
 
 	_, body := get(t, server, "/p/demo/questions")
-	if !strings.Contains(body, `questions<span class="badge">●1`) {
+	if !strings.Contains(body, `questions<span class="badge" title="1 question is waiting for an answer">`) {
 		t.Error("a pending question did not raise the nav badge")
 	}
 
@@ -189,7 +189,7 @@ func TestQuestionsBadgeCountsOnlyWhatIsWaiting(t *testing.T) {
 	}
 
 	_, answered := get(t, server, "/p/demo/questions")
-	if strings.Contains(answered, `questions<span class="badge">`) {
+	if strings.Contains(answered, `questions<span class="badge"`) {
 		t.Error("an answered question is still counted as waiting")
 	}
 }

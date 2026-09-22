@@ -1,17 +1,18 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps</b></h1>
-<div id="overview-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#overview-region" hx-swap="outerMorph" hx-select-oob="#nav-tabs:outerMorph">
+<div id="overview-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#overview-region" hx-swap="outerMorph" hx-select-oob="#statusline:outerMorph">
 <p class="metaline">{{len .Pipelines}} pipelines<span class="sep">·</span>{{len .Runs}} recent runs</p>
 
 <div class="tablewrap" id="pipelines-table">
   <table>
     <thead>
-      <tr><th>Pipeline</th><th class="num">Jobs</th><th>Last run</th><th class="num">Queued</th><th>State</th><th>File</th></tr>
+      <tr><th>Pipeline</th><th class="num">Waiting</th><th class="num">Jobs</th><th>Last run</th><th class="num">Queued</th><th>State</th><th>File</th></tr>
     </thead>
     <tbody>
       {{range .Pipelines}}
       <tr>
         <td><a href="/p/{{.Slug}}">{{.Slug}}</a></td>
+        <td class="num">{{if .Attention}}<a class="badge" href="/p/{{.Slug}}"><span aria-hidden="true">●</span>{{.Attention}}</a>{{else}}<span class="faint">—</span>{{end}}</td>
         <td class="num dim">{{.Jobs}}</td>
         <td>
           {{if .HasRun}}<a class="st st-{{statusWord .Latest.Status}}" href="/p/{{.Slug}}/runs/{{.Latest.ID}}">{{statusWord .Latest.Status}}</a> <span class="dim">{{agoTag .Latest.StartedAt}}</span>

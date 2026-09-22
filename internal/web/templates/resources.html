@@ -1,6 +1,6 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps resources</b></h1>
-<div id="resources-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#resources-region" hx-swap="outerMorph" hx-select-oob="#pause-banner:outerMorph,#nav-tabs:outerMorph">
+<div id="resources-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#resources-region" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#statusline:outerMorph">
 {{/* Inside the region, not above it: the count changes with the config a
      reload swaps in, and left outside it would keep reporting the old number
      over a table the poll had already refreshed. */}}
@@ -12,12 +12,17 @@
     <tbody>
       {{range .Resources}}
       {{$seen := index $.Checked .Name}}
+      {{$broken := index $.Failing .Name}}
       <tr>
         <td><a href="/p/{{$.Nav.Current}}/resources/{{.Name}}">{{.Name}}</a></td>
         <td class="dim">{{.Type}}</td>
         <td class="dim">{{if $seen.Name}}{{jsonLine $seen.Version}}{{else}}<span class="faint">never checked</span>{{end}}</td>
-        <td class="dim">{{if $seen.Name}}{{ago $seen.CheckedAt}}{{else}}—{{end}}</td>
+        {{/* The recorded version is what the last SUCCESSFUL check saw, and a
+             failing check leaves it exactly where it was — so this cell says
+             when it last worked, and the row below says it has stopped. */}}
+        <td class="dim">{{if $broken.Name}}<span class="st st-failed">failing</span> {{agoTag $broken.FailedAt}}{{else if $seen.Name}}{{ago $seen.CheckedAt}}{{else}}—{{end}}</td>
       </tr>
+      {{if $broken.Name}}<tr class="checkfail"><td colspan="4"><pre>{{$broken.Message}}</pre></td></tr>{{end}}
       {{end}}
     </tbody>
   </table>

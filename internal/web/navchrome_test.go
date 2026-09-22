@@ -177,7 +177,7 @@ func TestNavCountsPendingApprovals(t *testing.T) {
 		t.Fatalf("RequestApproval: %v", err)
 	}
 
-	if _, body := get(t, server, "/p/demo"); !strings.Contains(body, `approvals<span class="badge">●1</span>`) {
+	if _, body := get(t, server, "/p/demo"); !strings.Contains(body, `approvals<span class="badge" title="1 approval is waiting for a decision">`) {
 		t.Error("the approvals tab does not count the pending gate")
 	}
 }
