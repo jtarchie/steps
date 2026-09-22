@@ -99,6 +99,12 @@ type session struct {
 	// back everything instead, for a command whose output is the tree.
 	outputs  []string
 	fetchAll bool
+	// deferFetch asks the worker to keep what it produced rather than send
+	// it, and held is what it kept — by name, the digest it is filed under —
+	// after the latest command. See shell.RunnerSpec.DeferFetch.
+	deferFetch bool
+	heldMu     sync.Mutex
+	held       map[string]string
 	// env carries the values the pipeline's env: opted into, resolved here.
 	env map[string]string
 	// keep leaves the worker's scratch behind, following --keep-workspace.

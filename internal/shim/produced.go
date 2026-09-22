@@ -33,9 +33,9 @@ import (
 // walk. One tar stream for every output cannot be hashed per artifact, and
 // the copy is the same one placing an entry already pays; a reflink where the
 // filesystem has one is the upgrade, and it is a measurement away.
-func (s *session) fileProduced(fetch wire.Fetch) error {
+func (s *session) fileProduced(fetch wire.Fetch) (map[string]string, error) {
 	if volatileFS(s.fstype) {
-		return nil
+		return map[string]string{}, nil
 	}
 
 	trees := map[string]string{}
@@ -48,19 +48,24 @@ func (s *session) fileProduced(fetch wire.Fetch) error {
 	case fetch.Artifact != "":
 		trees[fetch.Artifact] = s.workdir
 	default:
-		return nil
+		return map[string]string{}, nil
 	}
 
 	cache := s.artifactCacheDir()
+	filed := make(map[string]string, len(trees))
 
 	for name, src := range trees {
-		err := fileTree(cache, src, name)
+		digest, err := fileTree(cache, src, name)
 		if err != nil {
-			return err
+			return nil, err
+		}
+
+		if digest != "" {
+			filed[name] = digest
 		}
 	}
 
-	return sweepArtifactCache(cache)
+	return filed, sweepArtifactCache(cache)
 }
 
 // volatileFS is a filesystem that is memory: filing a tree there spends RAM
@@ -71,27 +76,29 @@ func volatileFS(fstype string) bool {
 }
 
 // fileTree copies one tree into the cache under its name, and commits the
-// copy under the digest it packs to.
-func fileTree(cache, src, name string) error {
+// copy under the digest it packs to, reporting that digest. An absent tree —
+// a declared output the step never produced — files nothing and reports an
+// empty digest.
+func fileTree(cache, src, name string) (string, error) {
 	_, err := os.Lstat(src)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+		return "", nil
 	}
 
 	if err != nil {
-		return fmt.Errorf("reading the produced %q: %w", name, err)
+		return "", fmt.Errorf("reading the produced %q: %w", name, err)
 	}
 
 	staging, err := stageArtifact(cache)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	root, err := os.OpenRoot(staging)
 	if err != nil {
 		_ = os.RemoveAll(staging)
 
-		return fmt.Errorf("opening the staging directory: %w", err)
+		return "", fmt.Errorf("opening the staging directory: %w", err)
 	}
 
 	err = copyTree(root, src, name)
@@ -101,7 +108,7 @@ func fileTree(cache, src, name string) error {
 	if err != nil {
 		_ = os.RemoveAll(staging)
 
-		return err
+		return "", err
 	}
 
 	hasher := sha256.New()
@@ -110,10 +117,11 @@ func fileTree(cache, src, name string) error {
 	if err != nil {
 		_ = os.RemoveAll(staging)
 
-		return fmt.Errorf("digesting the produced %q: %w", name, err)
+		return "", fmt.Errorf("digesting the produced %q: %w", name, err)
 	}
 
-	held := filepath.Join(cache, hex.EncodeToString(hasher.Sum(nil)))
+	digest := hex.EncodeToString(hasher.Sum(nil))
+	held := filepath.Join(cache, digest)
 
 	// Already held — by an earlier step, or by the upload that brought this
 	// tree in unchanged — is the cache working. What is there is verified on
@@ -123,11 +131,16 @@ func fileTree(cache, src, name string) error {
 	if err == nil {
 		err = os.RemoveAll(staging)
 		if err != nil {
-			return fmt.Errorf("discarding a copy the cache already holds: %w", err)
+			return "", fmt.Errorf("discarding a copy the cache already holds: %w", err)
 		}
 
-		return nil
+		return digest, nil
 	}
 
-	return commitArtifact(staging, held)
+	err = commitArtifact(staging, held)
+	if err != nil {
+		return "", err
+	}
+
+	return digest, nil
 }

@@ -163,6 +163,7 @@ jobs:
 - **Requires `root:`.** The cache has to outlive the run that filled it; a cache under a temp directory the provider deletes would be a slower way to fetch once. Rejected at load time.
 - **Keyed on content, not plan position** — a hash of the `in:` command, source, version, and execution settings (`image:`/`env:`/`user:`/`network:`), deliberately *not* the get node's merkle hash, so two jobs fetching the same version share one entry.
 - **A hit costs a snapshot** (free on btrfs; a copy under `copy` — but still no fetch). **A failed fetch is never cached.** **A cache failure never fails a build** — anything wrong falls back to fetching. The startup sweep spares it.
+- **The cache is a reader on this disk.** A `get` placed on a worker (`tags:`) leaves its tree there until something here reads it — and with the cache on, the cache is that something: the tree comes home to be filed. See [infra.md](infra.md#resources-on-workers).
 
 ## Step output cache (`volatile:`)
 
@@ -198,6 +199,7 @@ jobs:
 - **`volatile:` is only valid on task and agent steps**, and never on a hook — anywhere else it would read as configured while binding nothing, so it is a load error.
 - **Requires `root:`.** Same reason the resource cache does: an entry has to outlive the run that wrote it. Without one, nothing is cached and nothing is stored.
 - **A hit costs a snapshot** (free on btrfs, a copy under `copy`), never a model call. **A failed step is never cached**, and **a cache failure never fails a build** — anything wrong falls back to running the step. Entries are evicted least-recently-used.
+- **The cache is a reader on this disk.** A placed step's outputs stay on its worker until something here reads them; with a durable `root:` the step cache is that something, and the outputs come home to be filed.
 
 ## Resuming a failed run
 

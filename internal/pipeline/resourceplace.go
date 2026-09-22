@@ -65,6 +65,10 @@ func WithResourcePlacement(ctx context.Context) context.Context {
 // machine said about itself on the way out — the same two facts a task
 // defers, at the same moment — since the stage closes the runner itself.
 func placedRunner(ctx context.Context, step config.Step, spec shell.RunnerSpec) (shell.Runner, error) {
+	// An in: fills a directory nothing here reads until a later step does,
+	// so the tree stays on the worker. An out: fetches nothing.
+	spec.DeferFetch = spec.FetchAll
+
 	//nolint:contextcheck // NewRunner takes no context; opening the artifact store reads only local config
 	runner, err := venue.NewRunner(spec)
 	if err != nil {
@@ -74,6 +78,7 @@ func placedRunner(ctx context.Context, step config.Step, spec shell.RunnerSpec) 
 	return closingRunner{Runner: runner, onClose: func(r shell.Runner) {
 		releaseIfReclaimed(ctx, step, r, spec.Worker)
 		notePlacement(ctx, r)
+		noteHeld(ctx, r)
 	}}, nil
 }
 
@@ -264,6 +269,10 @@ func runPlacedStage(ctx context.Context, step config.Step, stage func(context.Co
 		if err != nil {
 			return "", err
 		}
+
+		// Before Place, so the placer the stage dials through leaves what
+		// the worker kept where the stage can read it back (heldFrom).
+		ctx, _ = withHeldSink(ctx)
 
 		ctx, err = rsrc.Place(ctx, step)
 		if err != nil {

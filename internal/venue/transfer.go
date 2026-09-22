@@ -163,10 +163,115 @@ func (s *session) fetch(ctx context.Context) error {
 	stop := s.watchTransfer(ctx)
 	defer stop()
 
-	if s.dataplane == wire.DataPlaneURLs {
-		return s.fetchViaStore(ctx)
+	paths, artifact := s.outputs, s.fetchArtifact()
+
+	if s.deferFetch {
+		kept, err := s.fetchDeferred(paths, artifact)
+		if err != nil {
+			return err
+		}
+
+		paths, artifact = unkept(paths, artifact, kept)
+		if len(paths) == 0 && artifact == "" {
+			return nil
+		}
 	}
 
+	if s.dataplane == wire.DataPlaneURLs {
+		return s.fetchViaStore(ctx, paths, artifact)
+	}
+
+	return s.fetchOnTunnel(paths, artifact)
+}
+
+// fetchDeferred asks the worker to keep the outputs, and records what it
+// kept. What it could not keep — a tree it could not file, on a memory-backed
+// root — is not in the answer, and the caller fetches it the ordinary way.
+func (s *session) fetchDeferred(paths []string, artifact string) (map[string]string, error) {
+	op := s.nextOp()
+
+	err := s.write(wire.Frame{Type: wire.FrameFetch, Op: op}, wire.Fetch{Paths: paths, Artifact: artifact, Defer: true})
+	if err != nil {
+		return nil, err
+	}
+
+	frame, err := s.awaitOperationFrame()
+	if err != nil {
+		return nil, err
+	}
+
+	if frame.Type != wire.FrameEnd || frame.Op != op {
+		return nil, s.desync("the worker answered a type %d frame for operation %d instead of what it kept", frame.Type, frame.Op)
+	}
+
+	var done wire.FetchDone
+
+	if len(frame.Payload) > 0 {
+		err = decode(frame, &done)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	s.heldMu.Lock()
+	s.held = done.Artifacts
+	s.heldMu.Unlock()
+
+	return done.Artifacts, nil
+}
+
+// unkept is what a deferred fetch still has to bring home: the declared
+// outputs the worker did not keep, or the whole tree when that is what was
+// asked for and it was not kept.
+func unkept(paths []string, artifact string, kept map[string]string) ([]string, string) {
+	if artifact != "" {
+		if _, ok := kept[artifact]; ok {
+			return nil, ""
+		}
+
+		return nil, artifact
+	}
+
+	remaining := make([]string, 0, len(paths))
+
+	for _, name := range paths {
+		if _, ok := kept[name]; !ok {
+			remaining = append(remaining, name)
+		}
+	}
+
+	return remaining, ""
+}
+
+// HeldOf reports what a placed runner's worker kept of the step's outputs
+// after its last command — each by the name the worker filed it under and its
+// digest — and the worker URL that holds them, as the mapping was written, so
+// a later Pull can dial the same machine. False for a runner that is not
+// placed, or whose worker kept nothing.
+func HeldOf(r shell.Runner) (map[string]string, string, bool) {
+	placed, ok := r.(runner)
+	if !ok {
+		return nil, "", false
+	}
+
+	placed.session.heldMu.Lock()
+	defer placed.session.heldMu.Unlock()
+
+	if len(placed.session.held) == 0 {
+		return nil, "", false
+	}
+
+	held := make(map[string]string, len(placed.session.held))
+	for name, digest := range placed.session.held {
+		held[name] = digest
+	}
+
+	return held, placed.session.worker.URL, true
+}
+
+// fetchOnTunnel brings the named outputs — or the whole tree, as artifact —
+// home as data frames.
+func (s *session) fetchOnTunnel(paths []string, artifact string) error {
 	// Staged, then swapped. Removing the destinations first and unpacking over
 	// them would destroy the step's outputs the moment a transfer died — a
 	// dropped connection, a truncated stream — and the retry that follows
@@ -191,8 +296,8 @@ func (s *session) fetch(ctx context.Context) error {
 	op := s.nextOp()
 
 	// Empty Paths asks the shim for the whole tree, which is what fetchAll
-	// means; s.outputs is nil exactly then.
-	err = s.write(wire.Frame{Type: wire.FrameFetch, Op: op}, wire.Fetch{Paths: s.outputs, Artifact: s.fetchArtifact()})
+	// means; paths is nil exactly then and artifact names it.
+	err = s.write(wire.Frame{Type: wire.FrameFetch, Op: op}, wire.Fetch{Paths: paths, Artifact: artifact})
 	if err != nil {
 		return err
 	}
@@ -202,7 +307,7 @@ func (s *session) fetch(ctx context.Context) error {
 		return err
 	}
 
-	return s.swapFetched(staging)
+	return s.swapFetched(staging, paths, artifact)
 }
 
 // fetchArtifact names the tree a fetch-all brings home, for the shim to file
@@ -224,18 +329,17 @@ func (s *session) fetchArtifact() string {
 // left alone rather than emptied, which is what a step that declared an output
 // and produced nothing already means everywhere else — a fact reported where
 // outputs are checked, not a reason to delete the previous one here.
-func (s *session) swapFetched(staging string) error {
-	names := s.outputs
+func (s *session) swapFetched(staging string, names []string, artifact string) error {
 	from := staging
 
-	if s.fetchAll {
+	if artifact != "" {
 		// The tree came back as ONE artifact under the name the next step
 		// will offer it by (wire.PackTreeAs), so the directory itself
 		// arrived — with the mode the worker's copy has, which is applied to
 		// cwd so a later offer of this tree digests to what the worker filed.
-		from = filepath.Join(staging, s.fetchArtifact())
+		from = filepath.Join(staging, artifact)
 
-		err := s.adoptFetchedDir(from)
+		err := adoptFetchedDir(from, s.cwd, artifact)
 		if err != nil {
 			return err
 		}
@@ -289,17 +393,17 @@ func (s *session) swapFetched(staging string) error {
 // as it does for every directory), and it is the one field of a fetch-all the
 // orchestrator could not otherwise know: the tree's own root is what the
 // worker created, not what this end sent.
-func (s *session) adoptFetchedDir(from string) error {
+func adoptFetchedDir(from, into, artifact string) error {
 	info, err := os.Lstat(from)
 	if err != nil {
-		return fmt.Errorf("the worker sent no %q: %w", s.fetchArtifact(), err)
+		return fmt.Errorf("the worker sent no %q: %w", artifact, err)
 	}
 
 	if !info.IsDir() {
-		return fmt.Errorf("%w: the worker sent %q as a %s, not a directory", wire.ErrProtocol, s.fetchArtifact(), info.Mode().Type())
+		return fmt.Errorf("%w: the worker sent %q as a %s, not a directory", wire.ErrProtocol, artifact, info.Mode().Type())
 	}
 
-	err = os.Chmod(s.cwd, info.Mode().Perm())
+	err = os.Chmod(into, info.Mode().Perm())
 	if err != nil {
 		return fmt.Errorf("adopting the fetched tree's mode: %w", err)
 	}
@@ -437,7 +541,7 @@ func (s *session) pump(op uint32, w io.Writer) error {
 		case wire.FrameHello, wire.FrameHelloOK, wire.FrameUpload, wire.FrameExec,
 			wire.FrameStdout, wire.FrameStderr, wire.FrameExit, wire.FrameFetch,
 			wire.FrameCancel, wire.FrameError, wire.FrameBye, wire.FrameDraining,
-			wire.FrameDockerOpen, wire.FrameDockerData, wire.FrameDockerClose, wire.FrameNeed:
+			wire.FrameDockerOpen, wire.FrameDockerData, wire.FrameDockerClose, wire.FrameNeed, wire.FrameGet:
 			return fmt.Errorf("%w: a type %d frame interrupted a transfer", wire.ErrProtocol, frame.Type)
 		}
 	}

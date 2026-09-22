@@ -27,15 +27,15 @@ import (
 // full transfer from an empty output directory without a margin argument.
 const payloadBytes = 1 << 20
 
-// holderPipeline is a placed producer, a placed consumer, and a local step
-// that publishes what the consumer saw. producerTag and consumerTag choose the
-// machines; get chooses whether the producer is a get or a task.
-func holderPipeline(t *testing.T, dir, producerTag, consumerTag string, get bool) string {
+// holderPipeline is a placed producer on a, a placed consumer on consumerTag,
+// and a local step that publishes what the consumer saw. get chooses whether
+// the producer is a get or a task.
+func holderPipeline(t *testing.T, dir, consumerTag string, get bool) string {
 	t.Helper()
 
 	producer := `
   - task: seed
-    tags: [` + producerTag + `]
+    tags: [a]
     outputs: [src]
     run: |
       head -c ` + strconv.Itoa(payloadBytes) + ` /dev/urandom > src/blob.bin
@@ -56,7 +56,7 @@ resource_types:
 resources:
 - name: repo
   type: blob
-  tags: [` + producerTag + `]
+  tags: [a]
   source: {}
 `
 		producer = `
@@ -134,15 +134,17 @@ func cacheHoldsPayload(t *testing.T, root string) bool {
 	return held
 }
 
-func assertPublished(t *testing.T, dir, wantWhere string) {
+// assertPublished checks the local step saw the producer's tree: the payload
+// whole, and written on a.
+func assertPublished(t *testing.T, dir string) {
 	t.Helper()
 
 	if got := readFileString(t, filepath.Join(dir, "size.txt")); got != strconv.Itoa(payloadBytes)+"\n" {
 		t.Errorf("size.txt = %q, want the payload's size", got)
 	}
 
-	if got := readFileString(t, filepath.Join(dir, "where.txt")); got != wantWhere {
-		t.Errorf("where.txt = %q, want %q — the tree the consumer read is not the one the producer wrote", got, wantWhere)
+	if got := readFileString(t, filepath.Join(dir, "where.txt")); got != "a" {
+		t.Errorf("where.txt = %q, want %q — the tree the consumer read is not the one the producer wrote", got, "a")
 	}
 }
 
@@ -152,11 +154,11 @@ func assertPublished(t *testing.T, dir, wantWhere string) {
 func TestEndToEndPlacedGetFeedsThePlacedTaskWithoutResending(t *testing.T) {
 	dir := t.TempDir()
 	rootA, _, workers := twoWorkers(t)
-	path := holderPipeline(t, dir, "a", "a", true)
+	path := holderPipeline(t, dir, "a", true)
 
 	mustRun(t, append([]string{path}, workers...)...)
 
-	assertPublished(t, dir, "a")
+	assertPublished(t, dir)
 
 	consume := placementNamed(t, runPlacements(t, path), "consume")
 	if consume.BytesSent >= payloadBytes {
@@ -174,11 +176,11 @@ func TestEndToEndPlacedGetFeedsThePlacedTaskWithoutResending(t *testing.T) {
 func TestEndToEndPlacedTaskOutputFeedsTheNextPlacedTask(t *testing.T) {
 	dir := t.TempDir()
 	rootA, _, workers := twoWorkers(t)
-	path := holderPipeline(t, dir, "a", "a", false)
+	path := holderPipeline(t, dir, "a", false)
 
 	mustRun(t, append([]string{path}, workers...)...)
 
-	assertPublished(t, dir, "a")
+	assertPublished(t, dir)
 
 	consume := placementNamed(t, runPlacements(t, path), "consume")
 	if consume.BytesSent >= payloadBytes {
@@ -196,11 +198,11 @@ func TestEndToEndPlacedTaskOutputFeedsTheNextPlacedTask(t *testing.T) {
 func TestEndToEndAnotherWorkerIsStillCold(t *testing.T) {
 	dir := t.TempDir()
 	rootA, rootB, workers := twoWorkers(t)
-	path := holderPipeline(t, dir, "a", "b", false)
+	path := holderPipeline(t, dir, "b", false)
 
 	mustRun(t, append([]string{path}, workers...)...)
 
-	assertPublished(t, dir, "a")
+	assertPublished(t, dir)
 
 	placements := runPlacements(t, path)
 
@@ -209,15 +211,13 @@ func TestEndToEndAnotherWorkerIsStillCold(t *testing.T) {
 		t.Errorf("consume sent %d bytes to a worker that never had them; want the whole payload", consume.BytesSent)
 	}
 
-	// The other half of the ledger: the producer's output came home, and the
-	// consumer's tiny one did too.
-	seed := placementNamed(t, placements, "seed")
-	if seed.BytesReceived < payloadBytes {
-		t.Errorf("seed brought %d bytes home, want the whole payload it produced", seed.BytesReceived)
-	}
-
-	if consume.BytesReceived >= payloadBytes {
-		t.Errorf("consume brought %d bytes home for an output holding two short lines", consume.BytesReceived)
+	// The other half of the ledger: neither step brought its output home at
+	// the time it finished. The consumer on b was fed by a pull from a, and
+	// the local publish by a pull from b — neither is a placement's own.
+	for _, name := range []string{"seed", "consume"} {
+		if got := placementNamed(t, placements, name).BytesReceived; got != 0 {
+			t.Errorf("%s brought %d bytes home at the time it finished, want 0", name, got)
+		}
 	}
 
 	if !cacheHoldsPayload(t, rootA) {

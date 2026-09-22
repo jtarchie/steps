@@ -526,6 +526,11 @@ type isolatingBuild struct {
 	digestMu    sync.Mutex
 	digests     map[string]string
 	generations map[string]uint64
+
+	// remote is every artifact a worker holds on this build's behalf, by
+	// name — see remote.go.
+	remoteMu sync.Mutex
+	remote   map[string]RemoteArtifact
 }
 
 // artifactDigest is the content hash of one artifact in the build store, for
@@ -539,6 +544,15 @@ func (b *isolatingBuild) artifactDigest(name string) (string, error) {
 	digest, generation, ok := b.rememberedDigest(name)
 	if ok {
 		return digest, nil
+	}
+
+	// A tree a worker holds is identified by the digest it is filed under
+	// rather than pulled to be walked: a cache key is a question about
+	// identity, not a reader of the bytes, and the two names for one tree
+	// cost at most a miss when the same input is met local one build and
+	// remote the next.
+	if remote, held := b.remoteArtifact(name); held {
+		return remote.Digest, nil
 	}
 
 	// Outside the lock: walking a large checkout is the expensive part, and
@@ -628,7 +642,16 @@ func (b *isolatingBuild) FetchResource(ctx context.Context, name, cacheKey strin
 		return dir, fetch(dir)
 	}
 
-	return dir, b.cache.Fetch(ctx, cacheKey, dir, func() error { return fetch(dir) })
+	// The cache lives on this disk, so it is a local reader: a tree a placed
+	// in: left on its worker comes home to be filed.
+	return dir, b.cache.Fetch(ctx, cacheKey, dir, func() error {
+		err := fetch(dir)
+		if err != nil {
+			return err
+		}
+
+		return b.ensureLocal(ctx, name)
+	})
 }
 
 func (b *isolatingBuild) ResourceDir(ctx context.Context, name string) (string, error) {
@@ -683,7 +706,9 @@ func (b *isolatingBuild) GuardSpace(ctx context.Context, label string, inputs []
 
 		_, err := os.Lstat(filepath.Join(b.artifacts, artifact))
 		if os.IsNotExist(err) {
-			continue
+			if _, held := b.remoteArtifact(artifact); !held {
+				continue
+			}
 		}
 
 		// Anything else — an unreadable directory, a symlinked artifact — is
@@ -723,6 +748,12 @@ func (b *isolatingBuild) allArtifacts() ([]string, error) {
 	for _, entry := range entries {
 		if entry.IsDir() {
 			names = append(names, entry.Name())
+		}
+	}
+
+	for _, name := range b.remoteNames() {
+		if !slices.Contains(names, name) {
+			names = append(names, name)
 		}
 	}
 
@@ -779,6 +810,11 @@ func (b *isolatingBuild) materializeSpace(ctx context.Context, dir string, input
 		}
 
 		artifact := mappedName(in, inputMapping)
+
+		err = b.ensureLocal(ctx, artifact)
+		if err != nil {
+			return fmt.Errorf("input %q: %w", in, err)
+		}
 
 		src := filepath.Join(b.artifacts, artifact)
 
@@ -877,6 +913,7 @@ func (b *isolatingBuild) ResetArtifact(ctx context.Context, name string) error {
 		return fmt.Errorf("resetting artifact %q: %w", name, err)
 	}
 
+	b.forgetRemote([]string{name})
 	b.forgetDigests([]string{name})
 
 	return nil

@@ -22,6 +22,12 @@ package wire
 // one cannot be told to; the frame either exists for both ends or it kills a
 // session mid-step with "unknown frame type". So it is a version, and a
 // ?binary=-pinned shim from before it says so at the handshake.
+// 7 lets a fetch be DEFERRED — the shim files what it packed and answers
+// with the digests instead of the bytes — and adds FrameGet, which asks a
+// worker for a tree it holds by digest. An older shim would read a deferred
+// fetch as an ordinary one and ship the tree, and would kill the session on
+// a FrameGet.
+//
 // 6 has a fetch name the artifact it is fetching, so the shim can file what
 // it packed under the digest the next step's offer will carry. An older shim
 // would ship the tree and keep nothing — a silent cost, not an error — and
@@ -41,7 +47,7 @@ package wire
 // unknown frame type and kills the session mid-step, which is the same reason
 // FrameDraining was a version rather than a negotiation: a frame either
 // exists for both ends or it is a protocol error.
-const Protocol = 6
+const Protocol = 7
 
 // Hello opens a session.
 type Hello struct {
@@ -229,6 +235,27 @@ type Fetch struct {
 	// a presigned write the orchestrator minted for this one fetch. Empty on
 	// the tunnel plane, where the outputs come back as data frames.
 	URL string `json:"url,omitempty"`
+	// Defer asks the shim to KEEP the outputs rather than send them: file
+	// each under its digest and answer the End with a FetchDone naming them.
+	// The orchestrator then knows where the bytes are without holding them,
+	// and asks for them (FrameGet) only if something on its side reads them.
+	// A tree the shim could not file — a tmpfs root — is left out of the
+	// answer, and the orchestrator fetches it the ordinary way.
+	Defer bool `json:"defer,omitempty"`
+}
+
+// FetchDone is the End payload of a deferred fetch: what the shim filed, by
+// the name the next offer will carry and the digest it is held under.
+type FetchDone struct {
+	Artifacts map[string]string `json:"artifacts,omitempty"`
+}
+
+// Get asks the worker for one tree it holds, by digest. The answer is the
+// tree as data frames — packed under Name, exactly as an offer of it would
+// digest — or a FrameError when the worker no longer holds it.
+type Get struct {
+	Name   string `json:"name"`
+	Digest string `json:"digest"`
 }
 
 // Draining is a worker announcing its own end: an eviction notice or a

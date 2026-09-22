@@ -602,7 +602,17 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, st store.Deliveries, 
 	fmt.Printf("get: %s (version: %v)\n", artifact, version)
 
 	fetch := func(dir string) error {
-		return rsrc.RunIn(ctx, cfg, resourceType, resource.Env, resource.Source, version, params, dir)
+		err := rsrc.RunIn(ctx, cfg, resourceType, resource.Env, resource.Source, version, params, dir)
+		if err != nil {
+			return err //nolint:wrapcheck // the caller classifies and names the resource
+		}
+
+		// The stage closed its own runner, so what the worker kept comes out
+		// through the sink runPlacedStage installed; recorded inside the
+		// fetch, before the resource cache looks at the directory it filled.
+		held, holder := heldFrom(ctx)
+
+		return holdRemoteOutputs(ctx, bw, []string{artifact}, nil, held, holder)
 	}
 
 	if resourceType.Config.Backend() == config.BackendWebhook {

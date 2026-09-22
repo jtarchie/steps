@@ -194,6 +194,14 @@ type RunnerSpec struct {
 	//
 	// A redial is right for a task: its command re-runs from the top, so a tree restored to the state it was pushed in is exactly what the retry wants. It is wrong for a conversation. An agent's edits outside its outputs: are not re-fetched, its container's installed packages are not reinstated, and the model is told none of it — so the retry would resume against a tree silently rewound to the step's inputs. Read only by the venue; meaningless without a Worker.
 	NoRedial bool
+	// DeferFetch keeps the declared outputs (or, with FetchAll, the whole
+	// tree) ON the worker after each command instead of bringing them home:
+	// the worker files them under their digests and reports the digests, and
+	// the bytes come home only when something on this machine reads them.
+	// Wrong for a step whose outputs are read here as part of the step
+	// itself — an assert: files:, a fix: agent's file tools — so the caller
+	// sets it only when nothing does. Read only by the venue.
+	DeferFetch bool
 }
 
 // NewRunner returns a DockerRunner scoped to spec, or a HostRunner when

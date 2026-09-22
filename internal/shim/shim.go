@@ -173,6 +173,7 @@ func (s *session) run(ctx context.Context) error {
 	}
 }
 
+//nolint:cyclop // one case per frame type: the switch is the protocol, and splitting it would hide a type nobody answers
 func (s *session) handle(ctx context.Context, frame wire.Frame) (bool, error) {
 	switch frame.Type {
 	case wire.FrameHello:
@@ -183,6 +184,8 @@ func (s *session) handle(ctx context.Context, frame wire.Frame) (bool, error) {
 		return false, s.startExec(ctx, frame)
 	case wire.FrameFetch:
 		return false, s.fetch(ctx, frame)
+	case wire.FrameGet:
+		return false, s.get(frame)
 	case wire.FrameDockerOpen, wire.FrameDockerData, wire.FrameDockerClose:
 		return false, s.handleDocker(ctx, frame)
 	case wire.FrameCancel:
@@ -466,6 +469,18 @@ func (s *session) fetch(ctx context.Context, frame wire.Frame) error {
 		return fmt.Errorf("%w", err)
 	}
 
+	if fetch.Defer {
+		// Kept, not sent: the answer is what was filed and where. What could
+		// not be filed is simply absent from it, and the orchestrator fetches
+		// that the ordinary way.
+		filed, err := s.fileProduced(fetch)
+		if err != nil {
+			return fmt.Errorf("filing the step outputs: %w", err)
+		}
+
+		return s.send(wire.FrameEnd, frame.Op, wire.FetchDone{Artifacts: filed})
+	}
+
 	if s.dataplane == wire.DataPlaneURLs {
 		err = s.uploadOutputs(ctx, fetch)
 		if err != nil {
@@ -481,13 +496,64 @@ func (s *session) fetch(ctx context.Context, frame wire.Frame) error {
 	// Before the End, not after: the End is what lets the orchestrator offer
 	// this tree to the next session, and a --once shim's session close removes
 	// the work directory this copies from.
-	err = s.fileProduced(fetch)
+	_, err = s.fileProduced(fetch)
 	if err != nil {
 		return fmt.Errorf("filing the step outputs: %w", err)
 	}
 
 	return s.sendEnd(frame.Op)
 }
+
+// get streams one held tree back, packed under the name it was filed as.
+//
+// Verified before it is sent, the way placeIfHeld verifies before it places:
+// an entry a temp cleaner hollowed is not the tree its name claims, and the
+// orchestrator re-digests nothing on this path.
+func (s *session) get(frame wire.Frame) error {
+	if s.workdir == "" {
+		return errUnopened
+	}
+
+	var get wire.Get
+
+	err := wire.DecodeJSON(frame, &get)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	err = checkArtifact(wire.UploadArtifact{Name: get.Name, Digest: get.Digest})
+	if err != nil {
+		return err
+	}
+
+	held := filepath.Join(s.artifactCacheDir(), get.Digest)
+
+	if !holdsDigest(held, get.Name) {
+		_ = evictArtifact(held)
+
+		return fmt.Errorf("%w: %q (%s)", errNotHeld, get.Name, get.Digest)
+	}
+
+	writer := s.dataWriter(frame.Op)
+
+	err = compress.Pack(writer, s.compression == wire.CompressionZstd, func(w io.Writer) error {
+		return wire.PackPaths(w, held, []string{get.Name})
+	})
+	if err != nil {
+		return fmt.Errorf("packing the held %q: %w", get.Name, err)
+	}
+
+	err = writer.Flush()
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	return s.sendEnd(frame.Op)
+}
+
+// errNotHeld is a FrameGet for a tree this worker does not have: evicted,
+// swept, or never filed. The orchestrator decides what that costs.
+var errNotHeld = errors.New("this worker does not hold the artifact")
 
 func (s *session) packToWire(op uint32, fetch wire.Fetch) error {
 	writer := s.dataWriter(op)

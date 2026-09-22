@@ -78,9 +78,14 @@ const (
 	// answer too — a FrameEnd instead means the worker already holds it and
 	// nothing needs to cross.
 	//
+	FrameNeed
+	// FrameGet is the orchestrator asking for a tree the worker holds, by
+	// digest: the pull half of a deferred fetch, and how a tree a worker kept
+	// comes home once something here needs it.
+	//
 	// Last deliberately: the decoder's range check ends here, so a new frame
 	// type goes after this one or the check moves with it.
-	FrameNeed
+	FrameGet
 )
 
 // DrainOp is the operation id an unsolicited frame carries. Zero is never
@@ -233,7 +238,7 @@ func (d *Decoder) Read() (Frame, error) {
 	}
 
 	frameType := FrameType(d.header[0])
-	if frameType < FrameHello || frameType > FrameNeed {
+	if frameType < FrameHello || frameType > FrameGet {
 		return Frame{}, fmt.Errorf("%w: unknown frame type %d", ErrProtocol, frameType)
 	}
 

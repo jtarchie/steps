@@ -403,6 +403,11 @@ func (b *isolatingBuild) RestoreStep(ctx context.Context, req StepCacheRequest) 
 
 	hit := b.stepCache.restore(ctx, key, path, b.artifacts, req)
 
+	if hit {
+		// The restored outputs are here now, whatever a worker still holds.
+		b.forgetRemote(artifactNames(req.Outputs, req.OutputMapping))
+	}
+
 	// Unconditionally, not only on a hit: a restore that failed PART WAY has
 	// still replaced some artifacts, and a digest remembered for one of those
 	// would describe bytes that are gone — which is precisely how a later
@@ -426,6 +431,15 @@ func (b *isolatingBuild) StoreStep(ctx context.Context, key string, req StepCach
 	path, ok := b.stepCache.entries.path(key)
 	if !ok {
 		return fmt.Errorf("unusable step cache key %q", key)
+	}
+
+	// The entry lives on this disk, so the cache is a local reader: outputs
+	// a placed step left on its worker come home to be filed.
+	for _, out := range req.Outputs {
+		err = b.ensureLocal(ctx, mappedName(out, req.OutputMapping))
+		if err != nil {
+			return err
+		}
 	}
 
 	return b.stepCache.store(ctx, key, path, b.artifacts, b.artifactDigest, req)

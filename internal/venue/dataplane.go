@@ -187,7 +187,7 @@ func (s *session) packArtifactToFile(name string, zstd bool) (digest, staged str
 // fetchViaStore brings the declared outputs back through the store: the shim
 // PUTs to a URL minted for this one fetch, and this end reads the object,
 // stages, and swaps exactly as the tunnel path does.
-func (s *session) fetchViaStore(ctx context.Context) error {
+func (s *session) fetchViaStore(ctx context.Context, paths []string, artifact string) error {
 	key, err := fetchKey()
 	if err != nil {
 		return err
@@ -200,7 +200,7 @@ func (s *session) fetchViaStore(ctx context.Context) error {
 
 	op := s.nextOp()
 
-	err = s.write(wire.Frame{Type: wire.FrameFetch, Op: op}, wire.Fetch{Paths: s.outputs, URL: url, Artifact: s.fetchArtifact()})
+	err = s.write(wire.Frame{Type: wire.FrameFetch, Op: op}, wire.Fetch{Paths: paths, URL: url, Artifact: artifact})
 	if err != nil {
 		return err
 	}
@@ -232,7 +232,7 @@ func (s *session) fetchViaStore(ctx context.Context) error {
 		return fmt.Errorf("unpacking what the worker shipped: %w", err)
 	}
 
-	err = s.swapFetched(staging)
+	err = s.swapFetched(staging, paths, artifact)
 	if err != nil {
 		return err
 	}

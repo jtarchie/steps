@@ -149,6 +149,14 @@ func executeTask(
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
+	// What the worker kept of the outputs, read off the runner that finished
+	// the step and recorded before Capture, so the local copy is never
+	// mistaken for the artifact.
+	var (
+		held   map[string]string
+		holder string
+	)
+
 	err = withVenueRetry(ctx, step, budget, func(ctx context.Context) (string, error) {
 		// One runner for every attempt, not one per attempt. A retry is a
 		// second go at the SAME workspace: locally that falls out of the
@@ -176,7 +184,7 @@ func executeTask(
 		// are only whole once the step is finished with it.
 		defer notePlacement(ctx, runner)
 
-		return dialed, retryWithTimeout(ctx, step.Attempts, rt.Timeout, func(attempt, total int) {
+		runErr := retryWithTimeout(ctx, step.Attempts, rt.Timeout, func(attempt, total int) {
 			fmt.Printf("task: %s (attempt %d/%d)\n", executedStepName(step), attempt, total)
 			logFrom(ctx).Info("job.task.attempt", "task", executedStepName(step), "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
@@ -193,7 +201,19 @@ func executeTask(
 
 			return err
 		})
+		if runErr != nil {
+			return dialed, runErr
+		}
+
+		held, holder, _ = venue.HeldOf(runner)
+
+		return dialed, nil
 	})
+	if err != nil {
+		return fmt.Errorf("task %q: %w", rt.Name, err)
+	}
+
+	err = holdRemoteOutputs(ctx, bw, rt.Outputs, outputMapping, held, holder)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
@@ -240,6 +260,7 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 	runner, err := venue.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env, User: rt.User, Network: rt.Network,
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes(),
 		Worker: worker, WorkerTag: placementTag(step), Fetch: rt.Outputs,
+		DeferFetch:    deferrable(rt),
 		ArtifactStore: artifactStoreFrom(ctx),
 		// The same postmortem, on the machine that actually ran the step: a
 		// worker's scratch is the remote half of the step directory, and a
