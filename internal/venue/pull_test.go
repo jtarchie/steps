@@ -186,3 +186,58 @@ func TestARemoteInputReachesTheWorkerThroughTheStore(t *testing.T) {
 		t.Errorf("the store took %d tree puts, want 3", fake.treePuts)
 	}
 }
+
+// TestARemoteInputOnTheStepsOwnWorkerIsNotPushed: the holder IS the step's
+// worker, so the offer is answered from its cache and nothing is asked to
+// cross to the store.
+func TestARemoteInputOnTheStepsOwnWorkerIsNotPushed(t *testing.T) {
+	fake, storeURL := newCountingS3(t)
+	root := t.TempDir()
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	producerCwd := t.TempDir()
+	mustMkdir(t, filepath.Join(producerCwd, "out"))
+
+	producer := newLocalRunner(t, shell.RunnerSpec{
+		Cwd: producerCwd, Worker: "local:" + root + "?binary=" + self, Fetch: []string{"out"},
+		DeferFetch: true, ArtifactStore: storeURL,
+	})
+
+	err = producer.Run(context.Background(), "head -c 1048576 /dev/urandom > out/blob.bin")
+	if err != nil {
+		t.Fatalf("producer: %v", err)
+	}
+
+	held, holder, ok := HeldOf(producer)
+	if !ok {
+		t.Fatal("the producer's worker kept nothing")
+	}
+
+	consumerCwd := t.TempDir()
+	mustMkdir(t, filepath.Join(consumerCwd, "result"))
+
+	consumer := newLocalRunner(t, shell.RunnerSpec{
+		Cwd: consumerCwd, Worker: holder, Fetch: []string{"result"},
+		ArtifactStore: storeURL,
+		RemoteInputs:  map[string]shell.RemoteInput{"out": {Digest: held["out"], Holder: holder}},
+	})
+
+	err = consumer.Run(context.Background(), "wc -c < out/blob.bin | tr -d ' ' > result/n")
+	if err != nil {
+		t.Fatalf("consumer: %v", err)
+	}
+
+	if got := strings.TrimSpace(mustRead(t, filepath.Join(consumerCwd, "result", "n"))); got != "1048576" {
+		t.Errorf("the consumer read %q of its own worker's tree", got)
+	}
+
+	// The two empty output directories and nothing else: the megabyte never
+	// left the worker that made it.
+	if fake.treePuts != 2 {
+		t.Errorf("the store took %d tree puts, want 2 — the holder was asked to push a tree its own next step already had", fake.treePuts)
+	}
+}

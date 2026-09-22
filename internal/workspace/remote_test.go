@@ -302,3 +302,169 @@ func TestAPlacedSpaceDoesNotClobberAHeldInputItAlsoOutputs(t *testing.T) {
 		t.Error("an empty output directory was created over an input the worker will place")
 	}
 }
+
+// TestACaptureSupersedesAHeldArtifact: a step that produces src HERE after a
+// worker held an earlier src leaves the local copy as the artifact — the
+// stale record must not pull the old tree over it.
+func TestACaptureSupersedesAHeldArtifact(t *testing.T) {
+	t.Parallel()
+
+	bw := newBuild(t)
+	pulls := heldTree(t, bw)
+
+	space, err := bw.TaskSpace(context.Background(), "producer", nil, []string{"src"}, nil, nil)
+	if err != nil {
+		t.Fatalf("TaskSpace: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(space.Dir(), "src", "f.txt"), []byte("local\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = space.Capture(context.Background())
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+
+	_ = space.Close()
+
+	reader, err := bw.TaskSpace(context.Background(), "reader", []string{"src"}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("reader TaskSpace: %v", err)
+	}
+
+	defer func() { _ = reader.Close() }()
+
+	content, err := os.ReadFile(filepath.Join(reader.Dir(), "src", "f.txt"))
+	if err != nil || string(content) != "local\n" {
+		t.Errorf("the reader saw %q, %v; want what was captured here", content, err)
+	}
+
+	if *pulls != 0 {
+		t.Errorf("pulled %d times after a local capture, want never", *pulls)
+	}
+}
+
+// TestAResourceDirSupersedesAHeldArtifact is the get's shape of the same
+// rule: a fresh resource directory replaces whatever a worker held under it.
+func TestAResourceDirSupersedesAHeldArtifact(t *testing.T) {
+	t.Parallel()
+
+	bw := newBuild(t)
+	pulls := heldTree(t, bw)
+
+	dir, err := bw.ResourceDir(context.Background(), "src")
+	if err != nil {
+		t.Fatalf("ResourceDir: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(dir, "f.txt"), []byte("fetched here\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := bw.TaskSpace(context.Background(), "reader", []string{"src"}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("reader TaskSpace: %v", err)
+	}
+
+	defer func() { _ = reader.Close() }()
+
+	content, err := os.ReadFile(filepath.Join(reader.Dir(), "src", "f.txt"))
+	if err != nil || string(content) != "fetched here\n" {
+		t.Errorf("the reader saw %q, %v; want the local fetch", content, err)
+	}
+
+	if *pulls != 0 {
+		t.Errorf("pulled %d times after a local fetch, want never", *pulls)
+	}
+}
+
+// TestAPlacedSpaceCapturesAnOutputItsWorkerKept: read-modify-write over a
+// held input, where the worker keeps the result too — the step directory
+// never had the tree, and Capture must not fail the step over that.
+func TestAPlacedSpaceCapturesAnOutputItsWorkerKept(t *testing.T) {
+	t.Parallel()
+
+	bw := newBuild(t)
+	_ = heldTree(t, bw)
+
+	placed, _ := bw.(PlacedSpaces)
+
+	space, _, err := placed.PlacedTaskSpace(context.Background(), "editor", []string{"src"}, []string{"src"}, nil, nil)
+	if err != nil {
+		t.Fatalf("PlacedTaskSpace: %v", err)
+	}
+
+	defer func() { _ = space.Close() }()
+
+	err = space.Capture(context.Background())
+	if err != nil {
+		t.Fatalf("Capture of an output the worker kept: %v", err)
+	}
+
+	holder, _ := bw.(RemoteHolder)
+
+	err = holder.HoldRemote("src", RemoteArtifact{
+		Digest: strings.Repeat("ef", 32),
+		Holder: "local:/somewhere",
+		Pull:   func(context.Context, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("HoldRemote after the capture: %v", err)
+	}
+
+	build, _ := bw.(*isolatingBuild)
+	if _, held := build.remoteArtifact("src"); !held {
+		t.Error("the edited tree is not recorded on its worker")
+	}
+}
+
+// TestAPlacedSpacePullsAnInputTheHolderFiledUnderAnotherName: a producer's
+// output_mapping files the tree as `out` and captures it as `x`; the digest
+// binds the filed name, so x cannot be offered by digest and comes here.
+func TestAPlacedSpacePullsAnInputTheHolderFiledUnderAnotherName(t *testing.T) {
+	t.Parallel()
+
+	bw := newBuild(t)
+
+	holder, _ := bw.(RemoteHolder)
+	pulls := 0
+
+	err := holder.HoldRemote("x", RemoteArtifact{
+		Name:   "out",
+		Digest: strings.Repeat("ab", 32),
+		Holder: "local:/somewhere",
+		Pull: func(_ context.Context, dst string) error {
+			pulls++
+
+			return os.WriteFile(filepath.Join(dst, "f.txt"), []byte("held\n"), 0o600)
+		},
+	})
+	if err != nil {
+		t.Fatalf("HoldRemote: %v", err)
+	}
+
+	placed, _ := bw.(PlacedSpaces)
+
+	space, remote, err := placed.PlacedTaskSpace(context.Background(), "consumer", []string{"x"}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("PlacedTaskSpace: %v", err)
+	}
+
+	defer func() { _ = space.Close() }()
+
+	if len(remote) != 0 {
+		t.Errorf("remote = %v, want an input filed under another name pulled rather than left", remote)
+	}
+
+	if pulls != 1 {
+		t.Errorf("pulled %d times, want once", pulls)
+	}
+
+	content, err := os.ReadFile(filepath.Join(space.Dir(), "x", "f.txt"))
+	if err != nil || string(content) != "held\n" {
+		t.Errorf("the input reads %q, %v", content, err)
+	}
+}

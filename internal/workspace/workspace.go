@@ -607,6 +607,15 @@ func (b *isolatingBuild) rememberDigest(name, digest string, generation uint64) 
 	b.digests[name] = digest
 }
 
+// superseded is what a capture or a fresh fetch says about an artifact: the
+// bytes are HERE now, whatever a worker still holds and whatever digest was
+// remembered. Both records or neither — a stale hold pulls the old tree over
+// a new capture on the next read, which is data loss with nothing red.
+func (b *isolatingBuild) superseded(names []string) {
+	b.forgetRemote(names)
+	b.forgetDigests(names)
+}
+
 // forgetDigests drops memoized digests for artifacts whose bytes just changed,
 // and bumps their generation so a walk already in flight over the old content
 // cannot install its answer afterwards.
@@ -667,7 +676,7 @@ func (b *isolatingBuild) ResourceDir(ctx context.Context, name string) (string, 
 		return "", fmt.Errorf("could not create resource dir %q: %w", dir, err)
 	}
 
-	b.forgetDigests([]string{name})
+	b.superseded([]string{name})
 
 	return dir, nil
 }
@@ -798,7 +807,7 @@ func (b *isolatingBuild) newSpaceLeaving(ctx context.Context, label string, inpu
 	return &isolatingSpace{
 		backend: b.backend, artifacts: b.artifacts, dir: dir,
 		outputs: outputs, outputMapping: outputMapping, keep: b.keep,
-		captured: b.forgetDigests,
+		captured: b.superseded, left: leaving,
 	}, nil
 }
 
@@ -980,6 +989,10 @@ type isolatingSpace struct {
 	// digest remembered for one of them is not served to the next step's cache
 	// key after the bytes behind it changed.
 	captured func(names []string)
+	// left are the inputs this space left on their holders (PlacedSpaces). One
+	// that is also an output has no directory here when the worker kept the
+	// result: the record of the hold IS the capture.
+	left map[string]RemoteArtifact
 }
 
 func (s *isolatingSpace) Dir() string { return s.dir }
@@ -1016,6 +1029,13 @@ func (s *isolatingSpace) Capture(ctx context.Context) error {
 
 	for _, out := range s.outputs {
 		src := filepath.Join(s.dir, out)
+
+		if _, left := s.left[out]; left {
+			_, statErr := os.Lstat(src)
+			if errors.Is(statErr, fs.ErrNotExist) {
+				continue
+			}
+		}
 
 		err := rejectSymlinkSrc(src)
 		if err != nil {

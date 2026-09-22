@@ -559,6 +559,14 @@ func (s *session) heldEntry(name, digest string) (string, error) {
 
 	held := filepath.Join(s.artifactCacheDir(), digest)
 
+	// Refused without evicting: the entry may be whole under the name it was
+	// filed as, and a peer naming it wrongly must not cost the peer that names
+	// it rightly.
+	_, err = os.Lstat(filepath.Join(held, name))
+	if err != nil {
+		return "", fmt.Errorf("%w: %q (%s)", errNotHeld, name, digest)
+	}
+
 	if !holdsDigest(held, name) {
 		_ = evictArtifact(held)
 

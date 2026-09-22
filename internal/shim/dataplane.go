@@ -172,7 +172,7 @@ func (s *session) placeArtifact(ctx context.Context, cache string, artifact wire
 
 	staging, err := fetchArtifact(ctx, artifact.URL, held, artifact.Digest)
 	if err != nil {
-		return err
+		return fmt.Errorf("%q: %w", artifact.Name, err)
 	}
 
 	defer func() { _ = os.RemoveAll(staging) }()

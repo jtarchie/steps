@@ -58,7 +58,7 @@ func (b *isolatingBuild) PlacedPutSpace(ctx context.Context, label string, input
 }
 
 // leaveRemote picks the inputs that can stay on their holders: held
-// elsewhere, and declared under the artifact's own name.
+// elsewhere, declared under the artifact's own name, and filed under it.
 func (b *isolatingBuild) leaveRemote(inputs []string, inputMapping map[string]string) map[string]RemoteArtifact {
 	remote := map[string]RemoteArtifact{}
 
@@ -67,7 +67,7 @@ func (b *isolatingBuild) leaveRemote(inputs []string, inputMapping map[string]st
 			continue
 		}
 
-		if held, ok := b.remoteArtifact(in); ok {
+		if held, ok := b.remoteArtifact(in); ok && (held.Name == "" || held.Name == in) {
 			remote[in] = held
 		}
 	}

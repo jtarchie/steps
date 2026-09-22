@@ -333,3 +333,36 @@ func TestPushRefusesWhatItDoesNotHold(t *testing.T) {
 
 	peer.goodbye()
 }
+
+// TestGetUnderAnotherNameDoesNotEvict: an entry asked for under a name it was
+// not filed as is refused, and the entry survives for the name that is right.
+func TestGetUnderAnotherNameDoesNotEvict(t *testing.T) {
+	root := t.TempDir()
+
+	producer := newPeer(t, Options{Build: "test", Root: root})
+	producer.hello()
+	producer.exec("mkdir out && echo made > out/made.txt", nil)
+
+	op := producer.next()
+	producer.send(wire.FrameFetch, op, wire.Fetch{Paths: []string{"out"}, Defer: true})
+
+	var done wire.FetchDone
+
+	_ = wire.DecodeJSON(producer.read(), &done)
+
+	op = producer.next()
+	producer.send(wire.FrameGet, op, wire.Get{Name: "other", Digest: done.Artifacts["out"]})
+
+	if frame := producer.readAny(); frame.Type != wire.FrameError {
+		t.Fatalf("a get under the wrong name answered a type %d frame, want a refusal", frame.Type)
+	}
+
+	home := t.TempDir()
+	producer.get("out", done.Artifacts["out"], home)
+
+	if got := mustRead(t, filepath.Join(home, "out", "made.txt")); got != "made\n" {
+		t.Errorf("after a wrong-name get the right one reads %q — the entry was evicted", got)
+	}
+
+	producer.goodbye()
+}

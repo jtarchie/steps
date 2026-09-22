@@ -12,8 +12,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"maps"
 	"os"
-	"sort"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -53,7 +54,7 @@ func (s *session) uploadViaStore(ctx context.Context) error {
 		artifacts = append(artifacts, artifact)
 	}
 
-	for _, name := range sortedNames(s.remoteInputs) {
+	for _, name := range slices.Sorted(maps.Keys(s.remoteInputs)) {
 		artifact, offerErr := s.offerRemoteArtifact(ctx, name, s.remoteInputs[name])
 		if offerErr != nil {
 			return offerErr
@@ -151,6 +152,14 @@ func (s *session) uploadArtifact(ctx context.Context, name string) (wire.UploadA
 func (s *session) offerRemoteArtifact(ctx context.Context, name string, input shell.RemoteInput) (wire.UploadArtifact, error) {
 	key := "wire/" + input.Digest
 
+	// The holder is this step's own worker: the offer is answered from its
+	// cache, and asking it to push first would move the tree to the store for
+	// nobody. The URL is minted regardless, so a worker that lost the tree
+	// fails the fetch rather than the protocol.
+	if input.Holder == s.worker.URL {
+		return s.presignRemoteArtifact(ctx, name, input, key)
+	}
+
 	has, err := s.blobs.Has(ctx, key)
 	if err != nil {
 		return wire.UploadArtifact{}, fmt.Errorf("%w", err)
@@ -168,23 +177,16 @@ func (s *session) offerRemoteArtifact(ctx context.Context, name string, input sh
 		}
 	}
 
+	return s.presignRemoteArtifact(ctx, name, input, key)
+}
+
+func (s *session) presignRemoteArtifact(ctx context.Context, name string, input shell.RemoteInput, key string) (wire.UploadArtifact, error) {
 	url, err := s.blobs.PresignGet(ctx, key, wireTTL)
 	if err != nil {
 		return wire.UploadArtifact{}, fmt.Errorf("%w", err)
 	}
 
 	return wire.UploadArtifact{Name: name, Digest: input.Digest, URL: url}, nil
-}
-
-func sortedNames(inputs map[string]shell.RemoteInput) []string {
-	names := make([]string, 0, len(inputs))
-	for name := range inputs {
-		names = append(names, name)
-	}
-
-	sort.Strings(names)
-
-	return names
 }
 
 // stagedSize is how big the blob this end just pushed was, or zero if the

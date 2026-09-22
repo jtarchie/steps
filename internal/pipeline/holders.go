@@ -12,10 +12,12 @@ import (
 )
 
 // deferrable reports whether a task's outputs can stay on its worker: nothing
-// in the step itself reads them here. An assert: files: reads them, and a
-// fix: agent's file tools do.
-func deferrable(rt config.ResolvedTask) bool {
-	if rt.Fix != nil {
+// in the step itself reads them here. An assert: files: reads them, a fix:
+// agent's file tools do, and a collecting cell's are composed here under
+// its coordinates (findings/alpha) — a consumer of findings never resolves a
+// tree held under that path.
+func deferrable(step config.Step, rt config.ResolvedTask) bool {
+	if rt.Fix != nil || step.OutputSubdir != "" {
 		return false
 	}
 
@@ -45,6 +47,7 @@ func holdRemoteOutputs(ctx context.Context, bw workspace.BuildWorkspace, outputs
 		}
 
 		err := holding.HoldRemote(name, workspace.RemoteArtifact{
+			Name:   out,
 			Digest: digest,
 			Holder: holder,
 			Pull: func(ctx context.Context, dst string) error {

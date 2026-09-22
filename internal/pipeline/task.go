@@ -150,8 +150,8 @@ func executeTask(
 	}
 
 	// What the worker kept of the outputs, read off the runner that finished
-	// the step and recorded before Capture, so the local copy is never
-	// mistaken for the artifact.
+	// the step and recorded AFTER Capture: a capture supersedes any record a
+	// worker held under the name, and the hold then replaces the local copy.
 	var (
 		held   map[string]string
 		holder string
@@ -213,12 +213,12 @@ func executeTask(
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
-	err = holdRemoteOutputs(ctx, bw, rt.Outputs, outputMapping, held, holder)
+	err = space.Capture(ctx)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
-	err = space.Capture(ctx)
+	err = holdRemoteOutputs(ctx, bw, rt.Outputs, outputMapping, held, holder)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
@@ -260,7 +260,7 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 	runner, err := venue.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env, User: rt.User, Network: rt.Network,
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes(),
 		Worker: worker, WorkerTag: placementTag(step), Fetch: rt.Outputs,
-		DeferFetch:    deferrable(rt),
+		DeferFetch:    deferrable(step, rt),
 		RemoteInputs:  remote,
 		ArtifactStore: artifactStoreFrom(ctx),
 		// The same postmortem, on the machine that actually ran the step: a

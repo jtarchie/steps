@@ -18,6 +18,12 @@ import (
 
 // RemoteArtifact is where an artifact's bytes are when they are not here.
 type RemoteArtifact struct {
+	// Name is what the holder filed the tree under, which the digest binds:
+	// PackPaths over `name/` is what it hashed. Empty means the artifact's
+	// own name. A tree captured as x through an output_mapping was filed as
+	// the step's declared output, and can only be offered by digest under
+	// THAT name.
+	Name string
 	// Digest names the tree as the holder filed it — the wire digest, which
 	// the holder proves before handing it back.
 	Digest string
@@ -38,10 +44,10 @@ type RemoteHolder interface {
 }
 
 // HoldRemote implements RemoteHolder: whatever this build held locally under
-// name is superseded by what the worker holds. A Capture that follows still
-// files the step's local directory — empty, for a deferred output — and the
-// first reader replaces it with the pull, so nothing here has to know which
-// outputs were kept.
+// name is superseded by what the worker holds. Called AFTER the step's
+// Capture, which files the local directory — empty, for a deferred output —
+// and drops any older hold; this replaces that copy, and the first reader
+// pulls, so nothing here has to know which outputs were kept.
 func (b *isolatingBuild) HoldRemote(name string, remote RemoteArtifact) error {
 	err := config.ValidateArtifactPath(name)
 	if err != nil {
