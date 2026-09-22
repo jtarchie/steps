@@ -137,3 +137,38 @@ func TestTunnelDoesNotResendAFetchedResource(t *testing.T) {
 		t.Errorf("the consumer sent %d bytes for a resource the worker itself fetched, want almost none", sent)
 	}
 }
+
+// TestSessionCountsWhatItBringsHome is the other column of the ledger: what
+// the worker produced and this end read back, on both planes.
+func TestSessionCountsWhatItBringsHome(t *testing.T) {
+	for _, plane := range []struct {
+		name  string
+		store func(t *testing.T) string
+	}{
+		{name: "tunnel", store: func(t *testing.T) string { t.Helper(); t.Setenv("TMPDIR", t.TempDir()); return "" }},
+		{name: "store", store: func(t *testing.T) string { t.Helper(); _, url := newCountingS3(t); return url }},
+	} {
+		t.Run(plane.name, func(t *testing.T) {
+			cwd := t.TempDir()
+			mustMkdir(t, filepath.Join(cwd, "out"))
+
+			spec := localWorker(t, cwd, "out")
+			spec.ArtifactStore = plane.store(t)
+			placed := newLocalRunner(t, spec)
+
+			err := placed.Run(context.Background(), "head -c 1048576 /dev/urandom > out/blob.bin")
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			placement, ok := PlacementOf(placed)
+			if !ok {
+				t.Fatal("no placement for a runner that ran")
+			}
+
+			if placement.BytesReceived < 1<<20 {
+				t.Errorf("BytesReceived = %d, want at least the megabyte the worker produced", placement.BytesReceived)
+			}
+		})
+	}
+}

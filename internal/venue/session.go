@@ -156,6 +156,11 @@ type session struct {
 	// exists to reduce, and there is no other vantage point: the tunnel is a
 	// pipe to a process, so a test cannot weigh it from outside.
 	sentArtifactBytes atomic.Int64
+	// receivedArtifactBytes is what came back the other way: the bytes of
+	// tree this session read off the tunnel, or out of the store, for what
+	// the worker produced. The other half of what a placement cost, and the
+	// number that says whether a produced tree had to come home at all.
+	receivedArtifactBytes atomic.Int64
 	// compression is what the handshake negotiated for tree transfers: the
 	// token the shim echoed back, or empty for raw against an older shim.
 	compression string

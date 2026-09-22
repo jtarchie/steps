@@ -530,11 +530,12 @@ func recordPlacement(ctx context.Context, runner stepRunner, sink *placementSink
 		Workdir:    placement.Workdir,
 		FSType:     placement.FSType,
 		//nolint:gosec // a filesystem's free bytes does not reach 2^63
-		FSFree:    int64(placement.FSFree),
-		UID:       placement.UID,
-		GID:       placement.GID,
-		Image:     placement.Image,
-		BytesSent: placement.BytesSent,
+		FSFree:        int64(placement.FSFree),
+		UID:           placement.UID,
+		GID:           placement.GID,
+		Image:         placement.Image,
+		BytesSent:     placement.BytesSent,
+		BytesReceived: placement.BytesReceived,
 	})
 	if err != nil {
 		logFrom(ctx).Warn("job.placement_unrecorded", "job", runner.jobName, "step", name, "error", err)

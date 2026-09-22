@@ -48,4 +48,9 @@ type Placement struct {
 	GID        *int
 	Image      string
 	BytesSent  int64
+	// BytesReceived is the tree that came back from that machine. Together
+	// with BytesSent it is the whole cost of the placement in bytes, and
+	// the pair is what says whether a produced tree ever had to leave the
+	// worker at all.
+	BytesReceived int64
 }

@@ -35,6 +35,10 @@ type Placement struct {
 	// the number the artifact grain exists to reduce, and no vantage point
 	// outside the session can weigh it — the tunnel is a pipe to a process.
 	BytesSent int64
+	// BytesReceived is what came back: the produced tree, read off the wire
+	// or out of the store. Zero is honest here too — a step that produced
+	// nothing, or one whose outputs never had to come home.
+	BytesReceived int64
 }
 
 // PlacementOf describes the machine a runner used, once it has described
@@ -74,17 +78,18 @@ func (s *session) placement() (Placement, bool) {
 	}
 
 	return Placement{
-		Tag:       s.tag,
-		Address:   s.worker.Address(),
-		Instance:  s.worker.Instance,
-		GOOS:      s.goos,
-		GOARCH:    s.goarch,
-		Workdir:   s.workdir,
-		FSType:    s.fstype,
-		FSFree:    s.fsfree,
-		UID:       s.uid,
-		GID:       s.gid,
-		Image:     s.container.Image,
-		BytesSent: s.sentArtifactBytes.Load(),
+		Tag:           s.tag,
+		Address:       s.worker.Address(),
+		Instance:      s.worker.Instance,
+		GOOS:          s.goos,
+		GOARCH:        s.goarch,
+		Workdir:       s.workdir,
+		FSType:        s.fstype,
+		FSFree:        s.fsfree,
+		UID:           s.uid,
+		GID:           s.gid,
+		Image:         s.container.Image,
+		BytesSent:     s.sentArtifactBytes.Load(),
+		BytesReceived: s.receivedArtifactBytes.Load(),
 	}, true
 }

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/jtarchie/steps/internal/compress"
@@ -224,7 +225,7 @@ func (s *session) fetchViaStore(ctx context.Context) error {
 
 	defer func() { _ = os.RemoveAll(staging) }()
 
-	err = compress.Unpack(body, true, func(r io.Reader) error {
+	err = compress.Unpack(&tallyReader{r: body, n: &s.receivedArtifactBytes}, true, func(r io.Reader) error {
 		return wire.UnpackFetchedTree(r, staging)
 	})
 	if err != nil {
@@ -241,6 +242,20 @@ func (s *session) fetchViaStore(ctx context.Context) error {
 	_ = s.blobs.Delete(ctx, key)
 
 	return nil
+}
+
+// tallyReader is countingWriter for the store plane, where the outputs
+// arrive as a response body rather than as frames.
+type tallyReader struct {
+	r io.Reader
+	n *atomic.Int64
+}
+
+func (c *tallyReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n.Add(int64(n))
+
+	return n, err //nolint:wrapcheck // a pass-through; the caller owns the context
 }
 
 // fetchKey names one fetch's transient object. Random rather than

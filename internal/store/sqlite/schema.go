@@ -29,6 +29,10 @@ package sqlite
 // INSERT naming it failed — recorded best-effort, so silent, and the silence
 // would restore exactly the false green the table exists to remove.
 //
+// 11 added run_placements.bytes_received. An older file's INSERT names a
+// column it lacks, and a placement is recorded best-effort — so every placed
+// step would have gone unrecorded, silently.
+//
 // 7 added pipeline_revisions and runs.revision_id. An older database opened
 // without the table and every INSERT naming it failed — and StartRun's error
 // aborts the run, so this one is loud rather than silent, which is the
@@ -49,7 +53,7 @@ package sqlite
 // 4 put pipeline_id into the keys of run_placements and agent_usage. Without
 // it, two pipelines sharing a state file collided on (run_id, node_hash) and
 // one upserted over the other's row.
-const schemaVersion = 10
+const schemaVersion = 11
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -747,6 +751,7 @@ CREATE TABLE IF NOT EXISTS run_placements (
     gid           INTEGER,
     image         TEXT NOT NULL,
     bytes_sent    INTEGER NOT NULL,
+    bytes_received INTEGER NOT NULL,
     created_at    TEXT NOT NULL,
     PRIMARY KEY (pipeline_id, run_id, slot),
     FOREIGN KEY (pipeline_id, node_hash) REFERENCES nodes(pipeline_id, hash) ON DELETE CASCADE

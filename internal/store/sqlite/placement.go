@@ -16,7 +16,7 @@ import (
 const placementColumns = `run_id, step_index, step_name, job_name, slot, node_hash,
 	tag, address, instance_id,
 	goos, goarch, workdir, fstype, fs_free, uid, gid,
-	image, bytes_sent`
+	image, bytes_sent, bytes_received`
 
 // RecordPlacement stores where one placed step ran.
 //
@@ -27,7 +27,7 @@ const placementColumns = `run_id, step_index, step_name, job_name, slot, node_ha
 func (s *Store) RecordPlacement(ctx context.Context, placement store.Placement) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_placements (`+placementColumns+`, pipeline_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(pipeline_id, run_id, slot) DO UPDATE SET
 			step_index = excluded.step_index,
 			node_hash  = excluded.node_hash,
@@ -45,13 +45,14 @@ func (s *Store) RecordPlacement(ctx context.Context, placement store.Placement) 
 			gid = excluded.gid,
 			image      = excluded.image,
 			bytes_sent = excluded.bytes_sent,
+			bytes_received = excluded.bytes_received,
 			created_at = excluded.created_at`,
 		placement.RunID, placement.StepIndex, placement.StepName, placement.JobName,
 		placement.Slot, nullableHash(placement.NodeHash),
 		placement.Tag, placement.Address, placement.InstanceID,
 		placement.GOOS, placement.GOARCH, placement.Workdir, placement.FSType, placement.FSFree,
 		placement.UID, placement.GID,
-		placement.Image, placement.BytesSent,
+		placement.Image, placement.BytesSent, placement.BytesReceived,
 		s.pipelineID, now())
 	if err != nil {
 		return fmt.Errorf("recording a placement: %w", err)
@@ -91,7 +92,7 @@ func collectPlacements(rows *sql.Rows) ([]store.Placement, error) {
 			&placement.Tag, &placement.Address, &placement.InstanceID,
 			&placement.GOOS, &placement.GOARCH, &placement.Workdir, &placement.FSType, &placement.FSFree,
 			&placement.UID, &placement.GID,
-			&placement.Image, &placement.BytesSent)
+			&placement.Image, &placement.BytesSent, &placement.BytesReceived)
 		if err != nil {
 			return nil, fmt.Errorf("reading a placement: %w", err)
 		}

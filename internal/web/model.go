@@ -751,6 +751,11 @@ func (p PlacementView) Volatile() bool { return p.FSType == "tmpfs" || p.FSType 
 // receives, so a step whose inputs were already there honestly reads 0 B.
 func (p PlacementView) Sent() string { return FormatBinaryBytes(p.BytesSent) }
 
+// Received is what came back from it: the tree the step produced there. A
+// worker keeps what it produces too, so this is the cost of a LOCAL reader
+// wanting the bytes, not of the step having made them.
+func (p PlacementView) Received() string { return FormatBinaryBytes(p.BytesReceived) }
+
 // Identity is who the step ran as, blank when the shim did not say — never an
 // invented 0, which would read as root.
 func (p PlacementView) Identity() string {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jtarchie/steps/internal/compress"
 	"github.com/jtarchie/steps/internal/shell"
@@ -353,7 +354,7 @@ func (s *session) receive(op uint32, into string) error {
 		_ = reader.CloseWithError(unpackErr)
 	}()
 
-	readErr := s.pump(op, writer)
+	readErr := s.pump(op, &tallyWriter{w: writer, n: &s.receivedArtifactBytes})
 
 	_ = writer.Close()
 
@@ -368,6 +369,19 @@ func (s *session) receive(op uint32, into string) error {
 	}
 
 	return nil
+}
+
+// tallyWriter adds what passes through it to a session counter.
+type tallyWriter struct {
+	w io.Writer
+	n *atomic.Int64
+}
+
+func (c *tallyWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n.Add(int64(n))
+
+	return n, err //nolint:wrapcheck // a pass-through; the caller owns the context
 }
 
 // unpackTree reads one tar stream into a directory, through the negotiated

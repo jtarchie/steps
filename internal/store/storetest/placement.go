@@ -59,7 +59,7 @@ func (s suite) TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 		NodeHash: hashOf(1), Tag: "aws", Address: "aws://" + instance,
 		InstanceID: &instance, GOOS: "linux", GOARCH: "arm64",
 		Workdir: "/var/tmp/steps/work", FSType: "btrfs", FSFree: 1 << 35,
-		UID: &root, GID: &root, Image: "golang:1.25", BytesSent: 4096,
+		UID: &root, GID: &root, Image: "golang:1.25", BytesSent: 4096, BytesReceived: 8192,
 	})
 
 	// A machine steps did not acquire, run by a user the shim did not name.
@@ -217,7 +217,7 @@ func (s suite) TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T)
 		NodeHash: hashOf(1), Slot: hashOf(1),
 		Tag: "spot", Address: "aws://" + replaced, InstanceID: &replaced,
 		GOOS: "linux", GOARCH: "arm64", Workdir: "/var/tmp/b", FSType: "ext4",
-		FSFree: 2 << 30, Image: "golang:1.25", BytesSent: 2_000,
+		FSFree: 2 << 30, Image: "golang:1.25", BytesSent: 2_000, BytesReceived: 3_000,
 	})
 	if err != nil {
 		t.Fatalf("RecordPlacement of the re-placement: %v", err)
@@ -236,9 +236,9 @@ func (s suite) TestPlacementRePlacementKeepsTheMachineThatFinished(t *testing.T)
 
 	// The whole description has to move together, or the row reports a machine
 	// that never existed: B's address with A's filesystem.
-	if got.Workdir != "/var/tmp/b" || got.FSType != "ext4" || got.FSFree != 2<<30 || got.BytesSent != 2_000 {
-		t.Errorf("workdir/fstype/fs_free/bytes_sent = %q/%q/%d/%d, want /var/tmp/b/ext4/%d/2000",
-			got.Workdir, got.FSType, got.FSFree, got.BytesSent, 2<<30)
+	if got.Workdir != "/var/tmp/b" || got.FSType != "ext4" || got.FSFree != 2<<30 || got.BytesSent != 2_000 || got.BytesReceived != 3_000 {
+		t.Errorf("workdir/fstype/fs_free/bytes_sent/bytes_received = %q/%q/%d/%d/%d, want /var/tmp/b/ext4/%d/2000/3000",
+			got.Workdir, got.FSType, got.FSFree, got.BytesSent, got.BytesReceived, 2<<30)
 	}
 }
 

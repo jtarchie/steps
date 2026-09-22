@@ -2765,8 +2765,8 @@ func (r *RunsWhereCmd) printPlacements(ctx context.Context, st placementReader) 
 		return nil
 	}
 
-	fmt.Printf("%-24s  %-12s  %-13s  %-28s  %9s  %s\n",
-		"STEP", "TAG", "PLATFORM", "FILESYSTEM", "SENT", "MACHINE")
+	fmt.Printf("%-24s  %-12s  %-13s  %-28s  %9s  %9s  %s\n",
+		"STEP", "TAG", "PLATFORM", "FILESYSTEM", "SENT", "RECEIVED", "MACHINE")
 
 	memory := false
 
@@ -2779,9 +2779,9 @@ func (r *RunsWhereCmd) printPlacements(ctx context.Context, st placementReader) 
 			memory = true
 		}
 
-		fmt.Printf("%-24s  %-12s  %-13s  %-28s  %9s  %s\n",
+		fmt.Printf("%-24s  %-12s  %-13s  %-28s  %9s  %9s  %s\n",
 			truncateName(placed.StepName, 24), truncateName(placed.Tag, 12),
-			view.Platform(), filesystem, view.Sent(), view.Machine())
+			view.Platform(), filesystem, view.Sent(), view.Received(), view.Machine())
 	}
 
 	if memory {

@@ -202,9 +202,22 @@ func TestEndToEndAnotherWorkerIsStillCold(t *testing.T) {
 
 	assertPublished(t, dir, "a")
 
-	consume := placementNamed(t, runPlacements(t, path), "consume")
+	placements := runPlacements(t, path)
+
+	consume := placementNamed(t, placements, "consume")
 	if consume.BytesSent < payloadBytes {
 		t.Errorf("consume sent %d bytes to a worker that never had them; want the whole payload", consume.BytesSent)
+	}
+
+	// The other half of the ledger: the producer's output came home, and the
+	// consumer's tiny one did too.
+	seed := placementNamed(t, placements, "seed")
+	if seed.BytesReceived < payloadBytes {
+		t.Errorf("seed brought %d bytes home, want the whole payload it produced", seed.BytesReceived)
+	}
+
+	if consume.BytesReceived >= payloadBytes {
+		t.Errorf("consume brought %d bytes home for an output holding two short lines", consume.BytesReceived)
 	}
 
 	if !cacheHoldsPayload(t, rootA) {

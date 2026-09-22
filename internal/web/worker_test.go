@@ -106,7 +106,7 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 		NodeHash: hash, Slot: hash, Tag: "gpu", Address: "aws://" + instance, InstanceID: &instance,
 		GOOS: "linux", GOARCH: "arm64",
 		Workdir: "/var/tmp/steps/work", FSType: "btrfs", FSFree: 41_083_355_136,
-		UID: &root, GID: &root, Image: "golang:1.25", BytesSent: 67_108_864,
+		UID: &root, GID: &root, Image: "golang:1.25", BytesSent: 67_108_864, BytesReceived: 1_048_576,
 	})
 	if err != nil {
 		t.Fatalf("RecordPlacement: %v", err)
@@ -127,7 +127,7 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 	// contain one — so the loose form passed with the cell deleted, and the
 	// uid-0-is-root-not-silence contract went unproven on those days.
 	for _, want := range []string{
-		"gpu", "linux/arm64", "btrfs (38.3 GiB free)", "64.0 MiB",
+		"gpu", "linux/arm64", "btrfs (38.3 GiB free)", "64.0 MiB", "1.0 MiB",
 		">0:0<", "aws://" + instance + " in golang:1.25",
 	} {
 		if !strings.Contains(body, want) {

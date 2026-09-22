@@ -228,7 +228,8 @@ the things a scrollback cannot give you:
 - **Which machines the run used**, on a `machines` panel beside the spend one,
   for a run that placed any step: the tag, the platform the worker reported,
   the filesystem the tree landed on and the space left there, how many bytes
-  had to be pushed to it, the identity it ran as, and the machine — plus the
+  had to be pushed to it and how many came back, the identity it ran as, and
+  the machine — plus the
   image if the step ran in a container on it. A `tmpfs` workdir is marked in
   warning colour, because it is *memory* and the reader is scanning for
   exactly that. A worker that could not report a filesystem reads `not
