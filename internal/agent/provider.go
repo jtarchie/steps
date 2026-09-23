@@ -217,6 +217,7 @@ func newAgentLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
 		APIKey:    apiKey,
 		BaseURL:   ri.BaseURL,
 		ModelName: ri.ModelName,
+		Dialect:   dialectFor(ri.ModelName),
 		HTTPOptions: genaiopenai.HTTPOptions{
 			Client: agentHTTPClient(ri),
 		},
