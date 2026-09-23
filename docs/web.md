@@ -315,8 +315,12 @@ Eight controls, each doing what a CLI verb does:
   queue `steps web` uses — the same queue this process's own polling fills.
   `steps web` drains it in-process by calling `pipeline.RunJob` — there is no
   second execution path, so a job run from a browser gets the same caching,
-  hooks, serial groups, and recording as any other. Forced re-run skips the merkle cache; an unforced one does not,
-  which on an unchanged pipeline correctly does almost nothing.
+  hooks, serial groups, and recording as any other. Forced re-run skips the merkle cache AND re-takes versions already
+  consumed ([resources.md](resources.md#every-takes-each-version-once)); an
+  unforced one does neither, which on an unchanged pipeline correctly does
+  almost nothing. A run page offers only the ordinary trigger, as a new run of
+  its job; re-running a run's own versions is `steps run --resume`, not a web
+  control.
 - **Approve / Reject** on an `approval:` step, with the reason recorded — the
   same row `steps approvals approve` writes.
 - **Answer** an `ask_user` question a step is parked on — one click for an
