@@ -823,8 +823,9 @@ func maybeWarnTimeout(req *model.LLMRequest, transcript *transcriptRecorder, has
 }
 
 // maybeWarnBudget is maybeWarnTimeout for the token ceiling (steps#158). A
-// warning rather than a wrap-up after the breach: the budget caps spend, and a
-// tools-withheld request past it would spend beyond the cap it exists to hold.
+// warning rather than a wrap-up request after the breach: a tools-withheld
+// request past the cap would spend beyond it, where an answer the model gives
+// on its own is one generateWithinBudget already keeps.
 func maybeWarnBudget(req *model.LLMRequest, transcript *transcriptRecorder, usage *stepUsage, warned *bool) {
 	if *warned {
 		return
@@ -835,7 +836,7 @@ func maybeWarnBudget(req *model.LLMRequest, transcript *transcriptRecorder, usag
 		return
 	}
 
-	text := fmt.Sprintf("Your token budget is nearly spent: %d of %d tokens used. Wrap up now and answer from what you have: a request that crosses the budget fails the step with no chance to respond.", spent, budget)
+	text := fmt.Sprintf("Your token budget is nearly spent: %d of %d tokens used. Wrap up now and answer from what you have: a tool call that crosses the budget fails the step, while a final answer is kept.", spent, budget)
 	req.Contents = append(req.Contents, &genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{{Text: text}}})
 	transcript.user(text)
 	*warned = true
@@ -980,6 +981,19 @@ func (conv agentConversation) generateWithinBudget(ctx context.Context, llm mode
 	}
 
 	if conv.usage.record(resp) {
+		// A response that asks for no tools is the answer, and the last thing
+		// this conversation spends on: its tokens are gone whether or not the
+		// step fails, so failing it saves nothing and deletes the work. One
+		// that asks for tools would spend more and act on the world — it stops.
+		// So does one that crosses the JOB's ceiling: the step is done spending
+		// but the job is not, and nothing between steps checks it again.
+		if calls, _ := collectParts(resp.Content); len(calls) == 0 && !conv.usage.jobExceeded() {
+			slog.Warn("agent.budget_overshot", "error", conv.usage.exceededError(),
+				"detail", "the final answer crossed the ceiling; kept, since nothing after it would spend")
+
+			return resp, nil
+		}
+
 		return nil, conv.usage.exceededError()
 	}
 

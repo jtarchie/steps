@@ -439,6 +439,15 @@ func (s *stepUsage) remaining() int {
 	return max(s.budget-(s.total+s.delegated), 0)
 }
 
+// jobExceeded reports whether the JOB's ceiling, not this step's own, is what
+// the spend so far breaches.
+func (s *stepUsage) jobExceeded() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.run != nil && s.run.wouldExceed(s.total)
+}
+
 // budgetWarningFraction mirrors timeoutWarningFraction: warn once a fifth of
 // the allowance is left.
 const budgetWarningFraction = 5

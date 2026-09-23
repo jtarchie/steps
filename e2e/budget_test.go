@@ -11,10 +11,9 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// budgetPipeline renders a one-agent pipeline with an optional agent budget,
-// an optional job budget, and hooks on both paths so a test can prove which
-// one fired.
-func budgetPipeline(t *testing.T, dir, endpoint, agentBudget, jobBudget string) string {
+// budgetPipeline renders a one-agent pipeline with an optional agent budget
+// and hooks on both paths so a test can prove which one fired.
+func budgetPipeline(t *testing.T, dir, endpoint, agentBudget string) string {
 	t.Helper()
 
 	return writePipeline(t, dir, fmt.Sprintf(`
@@ -33,7 +32,6 @@ agents:
 
 jobs:
 - name: publish
-%[3]s
   plan:
   - agent: writer
     inputs: []
@@ -42,12 +40,12 @@ jobs:
     on_failure:
       task: on-failure
       inputs: []
-      run: echo fired >> %[4]s
+      run: echo fired >> %[3]s
     on_error:
       task: on-error
       inputs: []
-      run: echo fired >> %[5]s
-`, endpoint, agentBudget, jobBudget,
+      run: echo fired >> %[4]s
+`, endpoint, agentBudget,
 		filepath.Join(dir, "on_failure.log"), filepath.Join(dir, "on_error.log")))
 }
 
@@ -67,7 +65,7 @@ func TestAgentBudgetStopsTheStep(t *testing.T) {
 		says("done").spending(60),
 	)
 
-	path := budgetPipeline(t, dir, fake.URL, "  budget:\n    tokens: 100", "")
+	path := budgetPipeline(t, dir, fake.URL, "  budget:\n    tokens: 100")
 
 	logs := captureStderr(t)
 
@@ -97,6 +95,37 @@ func TestAgentBudgetStopsTheStep(t *testing.T) {
 	}
 }
 
+// TestAgentBudgetKeepsAFinalAnswerThatCrossesIt: the closing response of a
+// conversation costs a whole turn and spends nothing after itself, so failing
+// the step over it saves no tokens and deletes the answer (slack-bot run
+// WZEQGPY4UK25Z2US: reply written, step red). A crossing response that asks
+// for more tools still fails — TestAgentBudgetStopsTheStep above.
+func TestAgentBudgetKeepsAFinalAnswerThatCrossesIt(t *testing.T) {
+	dir := t.TempDir()
+
+	fake := newFakeLLM(t,
+		callsTool("run_shell", map[string]any{"command": "true"}).spending(60),
+		says("done").spending(60),
+	)
+
+	path := budgetPipeline(t, dir, fake.URL, "  budget:\n    tokens: 100")
+
+	logs := captureStderr(t)
+
+	err := cli.Run([]string{"run", path, "--job", "publish"})
+	stderr := logs()
+
+	if err != nil {
+		t.Fatalf("the answer was the last thing the step would spend on, and it failed anyway: %v", err)
+	}
+
+	assertNoFile(t, filepath.Join(dir, "on_error.log"))
+
+	if !strings.Contains(stderr, "budget_overshot") {
+		t.Errorf("the overshoot was not logged:\n%s", stderr)
+	}
+}
+
 // TestAgentBudgetWarnsBeforeItRunsOut: a model that can see its token budget
 // coming can answer from what it has, where one that cannot spends past it and
 // loses the whole step (steps#158). Two 300-token turns leave 400 of 1000 —
@@ -113,7 +142,7 @@ func TestAgentBudgetWarnsBeforeItRunsOut(t *testing.T) {
 		says("answered from what I had").spending(100),
 	)
 
-	path := budgetPipeline(t, dir, fake.URL, "  budget:\n    tokens: 1000", "")
+	path := budgetPipeline(t, dir, fake.URL, "  budget:\n    tokens: 1000")
 
 	err := cli.Run([]string{"run", path, "--job", "publish"})
 	if err != nil {
@@ -226,7 +255,7 @@ func TestAgentUsageIsPersisted(t *testing.T) {
 		says("done").spending(40),
 	)
 
-	path := budgetPipeline(t, dir, fake.URL, "", "")
+	path := budgetPipeline(t, dir, fake.URL, "")
 
 	err := cli.Run([]string{"run", path, "--job", "publish"})
 	if err != nil {
