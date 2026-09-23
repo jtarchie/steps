@@ -43,6 +43,63 @@ func TestStepUsageEnforcesItsOwnCeiling(t *testing.T) {
 	}
 }
 
+// TestBudgetWarningDue pins both arms separately (steps#158): the fifth-left
+// floor for a conversation of small turns, and the two-turn look-ahead for one
+// whose last turn alone would eat most of what remains.
+func TestBudgetWarningDue(t *testing.T) {
+	t.Parallel()
+
+	due := func(u *stepUsage) bool {
+		_, _, d := u.budgetWarningDue()
+
+		return d
+	}
+
+	uncapped := &stepUsage{}
+	uncapped.record(response(1_000_000, 0))
+
+	if due(uncapped) {
+		t.Error("warned with no budget to run out of")
+	}
+
+	small := &stepUsage{budget: 1000}
+	for range 7 {
+		small.record(response(100, 0))
+	}
+
+	if due(small) {
+		t.Error("warned at 300 left with 100-token turns")
+	}
+
+	small.record(response(100, 0))
+
+	if !due(small) {
+		t.Error("no warning at a fifth left (200 of 1000)")
+	}
+
+	fits := &stepUsage{budget: 1000}
+	fits.record(response(330, 0))
+
+	if due(fits) {
+		t.Error("warned at 670 left when two more 330-token turns still fit")
+	}
+
+	big := &stepUsage{budget: 1000}
+	big.record(response(350, 0))
+
+	if !due(big) {
+		t.Error("no warning at 650 left when two more 350-token turns do not fit")
+	}
+
+	delegating := &stepUsage{budget: 1000}
+	delegating.record(response(10, 0))
+	delegating.chargeDelegated(800)
+
+	if !due(delegating) {
+		t.Error("sub-agent spend did not count toward the warning")
+	}
+}
+
 // TestStepUsageIgnoresUnreportedUsage is the rule that keeps a budget honest: a
 // provider that reports nothing contributes nothing. Substituting an estimate
 // would make a ceiling trip on a number nobody reported, which is the one

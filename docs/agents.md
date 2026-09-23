@@ -935,6 +935,8 @@ jobs:
     outcome: succeeded
 ```
 
+**A hosted model is warned before its own ceiling, once.** When a fifth of the agent's allowance is left, or less than two more turns the size of the last one, the next request carries a message saying how much is spent and asking it to answer from what it has. Tools stay granted, like the `timeout:` warning. There is no tools-withheld wrap-up after a breach the way there is for a spent `max_turns:`: one more request would spend past the cap the budget exists to hold. The job's ceiling does not warn, and a CLI agent's `usd` is enforced inside its own process, out of reach.
+
 An agent's ceiling covers **the agent and everything it delegates to**. A sub-agent draws on its parent's remaining allowance rather than adding to it, so `budget.tokens` bounds the whole delegation subtree instead of one conversation in it — otherwise a capped agent could delegate its way past its own ceiling without ever exceeding it.
 
 - **Each call takes a share of what's LEFT**, 10% by default. A fraction of the remainder rather than of the original means delegation can never drain a parent outright: successive helpers take a tenth of a shrinking number, and the parent keeps something to finish its own work with.

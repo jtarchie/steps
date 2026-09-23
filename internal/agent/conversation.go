@@ -566,11 +566,13 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	}
 
 	timeoutWarned := false
+	budgetWarned := false
 
 	for ; budget == unlimitedTurns || turn < budget; turn++ {
 		state.summary, state.stalled = maybeCompact(ctx, llm, req, conv, state.summary, state.stalled)
 
 		maybeWarnTimeout(req, conv.env.transcript, hasTimeout, timeoutDeadline, budgetAtEntry, &timeoutWarned)
+		maybeWarnBudget(req, conv.env.transcript, conv.usage, &budgetWarned)
 
 		// The budget is checked before the turn's tool calls run: a step that
 		// has already blown its ceiling must not go on to have side effects.
@@ -817,6 +819,25 @@ func maybeWarnTimeout(req *model.LLMRequest, transcript *transcriptRecorder, has
 
 	req.Contents = append(req.Contents, timeoutWarningContent())
 	transcript.user(timeoutWarningText)
+	*warned = true
+}
+
+// maybeWarnBudget is maybeWarnTimeout for the token ceiling (steps#158). A
+// warning rather than a wrap-up after the breach: the budget caps spend, and a
+// tools-withheld request past it would spend beyond the cap it exists to hold.
+func maybeWarnBudget(req *model.LLMRequest, transcript *transcriptRecorder, usage *stepUsage, warned *bool) {
+	if *warned {
+		return
+	}
+
+	spent, budget, due := usage.budgetWarningDue()
+	if !due {
+		return
+	}
+
+	text := fmt.Sprintf("Your token budget is nearly spent: %d of %d tokens used. Wrap up now and answer from what you have: a request that crosses the budget fails the step with no chance to respond.", spent, budget)
+	req.Contents = append(req.Contents, &genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{{Text: text}}})
+	transcript.user(text)
 	*warned = true
 }
 

@@ -97,6 +97,57 @@ func TestAgentBudgetStopsTheStep(t *testing.T) {
 	}
 }
 
+// TestAgentBudgetWarnsBeforeItRunsOut: a model that can see its token budget
+// coming can answer from what it has, where one that cannot spends past it and
+// loses the whole step (steps#158). Two 300-token turns leave 400 of 1000 —
+// under two more turns that size — so the third request carries the warning
+// with the tools still granted. The third turn leaves 100, due again, and the
+// fourth request must still carry only the one warning.
+func TestAgentBudgetWarnsBeforeItRunsOut(t *testing.T) {
+	dir := t.TempDir()
+
+	fake := newFakeLLM(t,
+		callsTool("run_shell", map[string]any{"command": "true"}).spending(300),
+		callsTool("run_shell", map[string]any{"command": "true"}).spending(300),
+		callsTool("run_shell", map[string]any{"command": "true"}).spending(300),
+		says("answered from what I had").spending(100),
+	)
+
+	path := budgetPipeline(t, dir, fake.URL, "  budget:\n    tokens: 1000", "")
+
+	err := cli.Run([]string{"run", path, "--job", "publish"})
+	if err != nil {
+		t.Fatalf("job failed: a warned model that answered in budget must pass: %v", err)
+	}
+
+	const warning = "token budget is nearly spent"
+
+	if fake.request(2).userMessageContains(warning) {
+		t.Error("warned with 700 of 1000 tokens left — two more turns still fit")
+	}
+
+	third := fake.request(3)
+	if !third.userMessageContains(warning) {
+		t.Error("the request after the allowance dropped under two turns carries no budget warning")
+	}
+
+	if len(third.toolNames()) == 0 {
+		t.Error("tools were withdrawn: the warning is a notice, not a wrap-up")
+	}
+
+	warnings := 0
+
+	for _, msg := range fake.request(4).Messages {
+		if msg.Role == "user" && strings.Contains(msg.Content, warning) {
+			warnings++
+		}
+	}
+
+	if warnings != 1 {
+		t.Errorf("the conversation carries %d budget warnings, want exactly 1", warnings)
+	}
+}
+
 // TestJobBudgetReportsTheRunningTotal covers the attribution decision: a job
 // breach is cumulative, so naming only the step that crossed the line would be
 // misleading — the step that trips it is rarely the one that cost the most.

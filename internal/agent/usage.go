@@ -285,7 +285,10 @@ type stepUsage struct {
 	// spent. It counts against this step's own ceiling — a delegation draws
 	// on the parent's allowance — but is NOT rolled into the run total here,
 	// because each sub-agent's own stepUsage already does that exactly once.
-	delegated    int
+	delegated int
+	// last is the most recent response's total, the best estimate of what the
+	// next one costs: a conversation re-sends its whole context every turn.
+	last         int
 	prompt       int
 	completion   int
 	total        int
@@ -314,6 +317,7 @@ func (s *stepUsage) record(resp *model.LLMResponse) (exceeded bool) {
 	s.prompt += int(resp.UsageMetadata.PromptTokenCount)
 	s.completion += int(resp.UsageMetadata.CandidatesTokenCount)
 	s.total += int(resp.UsageMetadata.TotalTokenCount)
+	s.last = int(resp.UsageMetadata.TotalTokenCount)
 	s.cached += int(resp.UsageMetadata.CachedContentTokenCount)
 	s.reasoning += int(resp.UsageMetadata.ThoughtsTokenCount)
 
@@ -433,6 +437,31 @@ func (s *stepUsage) remaining() int {
 	}
 
 	return max(s.budget-(s.total+s.delegated), 0)
+}
+
+// budgetWarningFraction mirrors timeoutWarningFraction: warn once a fifth of
+// the allowance is left.
+const budgetWarningFraction = 5
+
+// budgetWarningDue reports whether this invocation's own ceiling is close
+// enough that the model should be told: a fifth of it left, or less than two
+// more turns the size of the last one. The second arm is what binds in
+// practice — turns grow with the context, so one late turn can cost more than
+// the whole fifth, and the warning itself rides on the turn after it.
+//
+// ponytail: the job ceiling (s.run) is not consulted; walk RunUsage's parent chain like wouldExceed if a job budget should warn too.
+func (s *stepUsage) budgetWarningDue() (spent, budget int, due bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.budget <= 0 {
+		return 0, 0, false
+	}
+
+	spent = s.total + s.delegated
+	left := s.budget - spent
+
+	return spent, s.budget, left <= s.budget/budgetWarningFraction || left < 2*s.last
 }
 
 // chargeDelegated books a finished sub-agent's spend against this step and
