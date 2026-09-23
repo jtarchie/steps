@@ -565,14 +565,13 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 		budgetAtEntry = time.Until(timeoutDeadline)
 	}
 
-	timeoutWarned := false
-	budgetWarned := false
+	clock := wrapUpClock{has: hasTimeout, deadline: timeoutDeadline, atEntry: budgetAtEntry}
+	wrapUpWarned := false
 
 	for ; budget == unlimitedTurns || turn < budget; turn++ {
 		state.summary, state.stalled = maybeCompact(ctx, llm, req, conv, state.summary, state.stalled)
 
-		maybeWarnTimeout(req, conv.env.transcript, hasTimeout, timeoutDeadline, budgetAtEntry, &timeoutWarned)
-		maybeWarnBudget(req, conv.env.transcript, conv.usage, &budgetWarned)
+		conv.maybeWarnWrapUp(req, clock, turn, budget, &wrapUpWarned)
 
 		// The budget is checked before the turn's tool calls run: a step that
 		// has already blown its ceiling must not go on to have side effects.
@@ -790,55 +789,54 @@ func timeoutWarningDue(budgetAtEntry, remaining time.Duration) bool {
 	return remaining <= budgetAtEntry/timeoutWarningFraction
 }
 
-// timeoutWarningContent is the synthetic user turn timeoutWarningDue
-// injects — same append shape as answerWithoutTools' turn-budget nudge, but
-// added mid-loop rather than in place of the model's next real turn.
-func timeoutWarningContent() *genai.Content {
-	return &genai.Content{
-		Role:  genai.RoleUser,
-		Parts: []*genai.Part{{Text: timeoutWarningText}},
-	}
+// wrapUpClock is what the timeout arm of the wrap-up nudge measures against.
+type wrapUpClock struct {
+	has      bool
+	deadline time.Time
+	atEntry  time.Duration
 }
 
-// maybeWarnTimeout appends the proactive timeout warning to req exactly
-// once, when hasTimeout and timeoutWarningDue agree it is due, and records it
-// on transcript the same way every other synthetic user turn in this file
-// does (buildAgentRequest's opening, advance's later messages:) — without
-// this, node_transcripts and the live run page showed the model's reaction
-// to the warning with no turn explaining what prompted it. Extracted from
-// runConversationLoop to keep its cyclomatic complexity under the linter
-// budget.
-func maybeWarnTimeout(req *model.LLMRequest, transcript *transcriptRecorder, hasTimeout bool, deadline time.Time, budgetAtEntry time.Duration, warned *bool) {
-	if !hasTimeout || *warned {
-		return
+// turnsWarningDue reports whether the turn cap is close enough to nudge: a fifth of this attempt's turns left, but never fewer than two, since the model needs one turn to write what it owes and one to say it is done.
+func turnsWarningDue(budget, turn int) (left int, due bool) {
+	if budget == unlimitedTurns || turn == 0 {
+		return 0, false
 	}
 
-	if !timeoutWarningDue(budgetAtEntry, time.Until(deadline)) {
-		return
-	}
+	left = budget - turn
 
-	req.Contents = append(req.Contents, timeoutWarningContent())
-	transcript.user(timeoutWarningText)
-	*warned = true
+	return left, left <= max(budget/timeoutWarningFraction, 2)
 }
 
-// maybeWarnBudget is maybeWarnTimeout for the token ceiling (steps#158). A
-// warning rather than a wrap-up request after the breach: a tools-withheld
-// request past the cap would spend beyond it, where an answer the model gives
-// on its own is one generateWithinBudget already keeps.
-func maybeWarnBudget(req *model.LLMRequest, transcript *transcriptRecorder, usage *stepUsage, warned *bool) {
+// wrapUpWarning is the nudge for whichever limit runs low first, or "" when none has. One nudge per attempt, whatever its cause: a second says nothing the first did not.
+func (conv agentConversation) wrapUpWarning(clock wrapUpClock, turn, budget int) string {
+	if clock.has && timeoutWarningDue(clock.atEntry, time.Until(clock.deadline)) {
+		return timeoutWarningText
+	}
+
+	if left, due := turnsWarningDue(budget, turn); due {
+		return fmt.Sprintf("Wrap up: %d turn(s) left, then your tools are taken away and only a plain answer is possible. Write any file you owe now, with what you have.", left)
+	}
+
+	if spent, ceiling, due := conv.usage.budgetWarningDue(); due {
+		return fmt.Sprintf("Your token budget is nearly spent: %d of %d tokens used. Wrap up now and answer from what you have: a tool call that crosses the budget fails the step, while a final answer is kept.", spent, ceiling)
+	}
+
+	return ""
+}
+
+// maybeWarnWrapUp appends the wrap-up nudge once, with the tools still granted, and records it on the transcript so a reader sees what prompted the model to wrap up.
+func (conv agentConversation) maybeWarnWrapUp(req *model.LLMRequest, clock wrapUpClock, turn, budget int, warned *bool) {
 	if *warned {
 		return
 	}
 
-	spent, budget, due := usage.budgetWarningDue()
-	if !due {
+	text := conv.wrapUpWarning(clock, turn, budget)
+	if text == "" {
 		return
 	}
 
-	text := fmt.Sprintf("Your token budget is nearly spent: %d of %d tokens used. Wrap up now and answer from what you have: a tool call that crosses the budget fails the step, while a final answer is kept.", spent, budget)
 	req.Contents = append(req.Contents, &genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{{Text: text}}})
-	transcript.user(text)
+	conv.env.transcript.user(text)
 	*warned = true
 }
 

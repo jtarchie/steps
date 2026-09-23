@@ -246,6 +246,63 @@ func TestTimeoutWarningDue(t *testing.T) {
 	}
 }
 
+func TestTurnsWarningDue(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		budget, turn int
+		want         bool
+	}{
+		{unlimitedTurns, 99, false},
+		{5, 0, false}, // the first request: nothing done yet to wrap up
+		{5, 2, false},
+		{5, 3, true}, // two left: the floor
+		{50, 39, false},
+		{50, 40, true}, // a fifth left
+		{2, 0, false},  // a tiny cap still is not nudged before any work
+		{2, 1, true},
+	} {
+		if _, got := turnsWarningDue(tc.budget, tc.turn); got != tc.want {
+			t.Errorf("turnsWarningDue(%d, %d) = %v, want %v", tc.budget, tc.turn, got, tc.want)
+		}
+	}
+}
+
+// Two limits running low together still produce one nudge; a second tells the model nothing the first did not.
+func TestWrapUpNudgesOnceAcrossLimits(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	fake := &fakeLLM{responses: []*model.LLMResponse{
+		{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "c1", Name: "run_shell", Args: map[string]any{"command": "true"}}}}}},
+		{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "c2", Name: "run_shell", Args: map[string]any{"command": "true"}}}}}},
+		{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "done"}}}},
+	}, delay: 40 * time.Millisecond}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	conv := newTestConversation(t, "do the thing", dir)
+	conv.maxTurns = 3
+
+	res, err := runAgentConversation(ctx, fake, conv)
+	if err != nil {
+		t.Fatalf("runAgentConversation: %v", err)
+	}
+
+	nudges := 0
+
+	for _, ev := range res.transcript {
+		if ev.Type == "user" && ev.Text != "do the thing" {
+			nudges++
+		}
+	}
+
+	if nudges != 1 {
+		t.Errorf("got %d wrap-up nudges with the deadline and the turn cap both low, want 1: %+v", nudges, res.transcript)
+	}
+}
+
 // warningTextIn reports whether any content across requests carries
 // timeoutWarningText.
 func warningTextIn(requests []*model.LLMRequest) bool {
