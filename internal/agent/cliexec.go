@@ -64,7 +64,7 @@ func execCLI(
 
 	cmd := exec.CommandContext(runCtx, binary, args...) //nolint:gosec // binary comes from the static cliProviders table
 	cmd.Dir = prepared.conv.env.dir
-	cmd.Env = cliEnv(prepared.ri)
+	cmd.Env = cliEnv(ctx, prepared.ri)
 	cmd.Stdin = strings.NewReader(plan.prompt)
 	cmd.Stderr = &cliStderrLogger{agent: prepared.ri.AgentName}
 	cmd.WaitDelay = cliWaitDelay
@@ -280,8 +280,12 @@ func renderCLIPrompt(conv agentConversation) string {
 // every shell tool gets — which carries HOME, so the CLI finds its own
 // credentials and a subscription login works with no api_key_env at all —
 // plus an explicitly configured key when the pipeline named one.
-func cliEnv(ri config.ResolvedInvocation) []string {
+func cliEnv(ctx context.Context, ri config.ResolvedInvocation) []string {
 	env := append(shell.HostEnv(), cliToolTimeoutEnv(ri)...)
+
+	for name, value := range shell.BuildEnv(ctx) {
+		env = append(env, name+"="+value)
+	}
 
 	if ri.APIKeyEnv == "" {
 		return env

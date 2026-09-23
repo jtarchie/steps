@@ -41,3 +41,16 @@ func WithAnswers(ctx context.Context, raw []string) (context.Context, error) {
 func WithAnswerDB(ctx context.Context, db string) context.Context {
 	return agent.WithAnswerDB(ctx, db)
 }
+
+type externalURLKey struct{}
+
+// WithExternalURL carries the daemon's address to RunJob, which publishes it to every step as STEPS_URL.
+func WithExternalURL(ctx context.Context, url string) context.Context {
+	return context.WithValue(ctx, externalURLKey{}, url)
+}
+
+func externalURL(ctx context.Context) string {
+	url, _ := ctx.Value(externalURLKey{}).(string)
+
+	return url
+}

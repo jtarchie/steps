@@ -598,6 +598,9 @@ on this side is everything that changes what a pipeline IS.
 
 ```
 --listen         address to serve on (default 127.0.0.1:8088)
+--external-url   the URL published to every step as STEPS_URL (default http://<listen>;
+                 unset for a wildcard listen address). http(s) only, no credentials,
+                 query or fragment: credentials would land in every step's environment
 --interval       how often to poll trigger: true resources (default 30s)
 --max-concurrent maximum queued jobs running at once, per pipeline (default 1)
 --pin / --force  pin a version field; ignore the cache and re-run every step

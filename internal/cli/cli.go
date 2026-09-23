@@ -18,6 +18,7 @@ import (
 	"maps"
 	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -2243,6 +2244,41 @@ type WebCmd struct {
 	// Both or neither, refused below: half a pair is a daemon somebody believes is protected. Env vars because a password on a command line is in every ps listing and every shell history.
 	BasicAuthUsername string `env:"STEPS_BASIC_AUTH_USERNAME" help:"require this HTTP Basic username on every route but POST /p/<pipeline>/hooks/<resource>" name:"basic-auth-username"`
 	BasicAuthPassword string `env:"STEPS_BASIC_AUTH_PASSWORD" help:"the password that goes with it"                                                          name:"basic-auth-password"`
+	// No env: binding: a STEPS_*-shaped name invites confusion with the variable this one sets.
+	ExternalURL string `help:"the URL steps publish to every step as STEPS_URL (default http://<listen>)" name:"external-url"`
+}
+
+// externalURL is the STEPS_URL a daemon publishes: the flag, validated, or http://<listen>. Empty means unset — a wildcard listen address is no address a link could use.
+func externalURL(listen, flag string) (string, error) {
+	if flag != "" {
+		return validExternalURL(flag)
+	}
+
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "", fmt.Errorf("web: --listen %q: %w", listen, err)
+	}
+
+	addr, err := netip.ParseAddr(host)
+	if host == "" || (err == nil && addr.IsUnspecified()) {
+		return "", nil
+	}
+
+	return "http://" + listen, nil
+}
+
+func validExternalURL(flag string) (string, error) {
+	u, err := url.Parse(flag)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("web: --external-url %q must be an absolute http or https URL", flag)
+	}
+
+	// Userinfo would put credentials in every step's environment, every agent's env and every placed worker.
+	if u.User != nil || strings.ContainsAny(flag, "?#") {
+		return "", fmt.Errorf("web: --external-url %q must not carry credentials, a query or a fragment", flag)
+	}
+
+	return strings.TrimRight(flag, "/"), nil
 }
 
 // authOptions is the server's auth setting, and the refusal when only half of one was given.
@@ -2277,6 +2313,11 @@ func (w *WebCmd) Run() error {
 		return err
 	}
 
+	_, err = externalURL(w.Listen, w.ExternalURL)
+	if err != nil {
+		return err
+	}
+
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
@@ -2305,6 +2346,11 @@ func (w *WebCmd) serve(ctx context.Context) error {
 	}
 
 	opts, err := w.authOptions()
+	if err != nil {
+		return err
+	}
+
+	ctx, err = w.withExternalURL(ctx)
 	if err != nil {
 		return err
 	}
@@ -2351,6 +2397,20 @@ func (w *WebCmd) serve(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// withExternalURL carries STEPS_URL to every run this daemon starts: each drain loop derives from newDaemon's base, so browser-, webhook- and trigger-started runs all see it.
+func (w *WebCmd) withExternalURL(ctx context.Context) (context.Context, error) {
+	published, err := externalURL(w.Listen, w.ExternalURL)
+	if err != nil {
+		return ctx, err
+	}
+
+	if published == "" {
+		fmt.Printf("steps web: %s is a wildcard address, so STEPS_URL is unset for steps; set --external-url\n", w.Listen)
+	}
+
+	return pipeline.WithExternalURL(ctx, published), nil
 }
 
 // loopbackOnly answers whether this listen address can only be reached from this machine. An unparseable or name-based address answers false: the warning is the safe side of a guess.

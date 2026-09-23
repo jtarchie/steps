@@ -235,12 +235,13 @@ const dockerDaemonRefusedCode = 125
 // start creates and starts the session's container.
 func (s *dockerSession) start(ctx context.Context, name string) (string, error) {
 	spec := dockerapi.ContainerSpec{
-		Image:       s.image,
-		Cmd:         []string{"sh", "-c", keepAliveCommand()},
-		Name:        name,
-		WorkingDir:  s.workingDir(),
-		MountDir:    s.resolvedCwd,
-		Env:         s.containerEnv(),
+		Image:      s.image,
+		Cmd:        []string{"sh", "-c", keepAliveCommand()},
+		Name:       name,
+		WorkingDir: s.workingDir(),
+		MountDir:   s.resolvedCwd,
+		// The container is per runner and a runner lives within one step of one run, so fixing the metadata here is correct.
+		Env:         s.containerEnv(BuildEnv(ctx)),
 		Labels:      OwnershipLabels(),
 		User:        s.user,
 		Network:     s.network,
@@ -703,8 +704,14 @@ func (d DockerRunner) runCaptureFull(ctx context.Context, command string, maxByt
 // Caller-supplied values WIN over this process's own. A venue's STEPS_WORKER
 // is the case: the pipeline's env: is the authority on the orchestrator, and
 // the variable names a fact about the worker that nothing here has set.
-func (s *dockerSession) containerEnv() []string {
+func (s *dockerSession) containerEnv(extra map[string]string) []string {
 	names := slices.Clone(s.envNames)
+
+	for name := range extra {
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
 
 	for name := range s.envValues {
 		if !slices.Contains(names, name) {
@@ -717,6 +724,12 @@ func (s *dockerSession) containerEnv() []string {
 	env := make([]string, 0, len(names))
 
 	for _, name := range names {
+		if value, ok := extra[name]; ok {
+			env = append(env, name+"="+value)
+
+			continue
+		}
+
 		if value, ok := s.envValues[name]; ok {
 			env = append(env, name+"="+value)
 

@@ -212,3 +212,35 @@ func TestResolveAgentInvocationEnvOverride(t *testing.T) {
 		t.Errorf("Env = %v, want [FROM_STEP]", ri.Env)
 	}
 }
+
+func TestValidateEnvValuesRejectsBuildMetadataNames(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		cfg  *Config
+	}{
+		{"resource_type", &Config{ResourceTypes: []ResourceType{{Name: "git", Env: []string{"STEPS_RUN_ID"}}}}},
+		{"resource", &Config{Resources: []Resource{{Name: "repo", Type: "git", Env: []string{"STEPS_JOB_NAME"}}}}},
+		{"agent", &Config{Agents: []Agent{{Name: "reviewer", Env: []string{"STEPS_PIPELINE_NAME"}}}}},
+		{"task", &Config{Tasks: []Task{{Name: "build", Env: []string{"STEPS_PIPELINE_REVISION"}}}}},
+		{"step", &Config{Jobs: []Job{{Name: "j", Plan: []Step{{Task: "build", Run: "true", Env: []string{"STEPS_URL"}}}}}}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tc.cfg.validateEnvValues()
+			if err == nil || !strings.Contains(err.Error(), "build metadata") {
+				t.Fatalf("error = %v, want the metadata name refused", err)
+			}
+		})
+	}
+
+	ok := &Config{Tasks: []Task{{Name: "build", Env: []string{"STEPS_WORKER"}}}}
+	err := ok.validateEnvValues()
+	if err != nil {
+		t.Errorf("STEPS_WORKER is out of scope and must stay accepted: %v", err)
+	}
+}

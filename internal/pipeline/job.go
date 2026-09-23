@@ -57,6 +57,10 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	// conversation turn with the run it belongs to.
 	ctx = events.WithRunID(ctx, resume.id)
 
+	ctx = shell.WithBuildMetadata(ctx, shell.BuildMetadata{
+		RunID: resume.id, JobName: job.Name, PipelineName: cfg.Name, PipelineRevision: cfg.Revision.SHA, URL: externalURL(ctx),
+	})
+
 	ctx = withRunLogger(ctx, resume.id, job.Name)
 
 	logFrom(ctx).Info("job.run", "steps", len(job.Plan))

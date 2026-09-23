@@ -52,7 +52,7 @@ jobs:
 ```
 
 - **Step-level override**: a `task`/`agent` step's own `image:` overrides the referenced `tasks:`/`agents:` entry's image for that step only. It's inherit-only — a non-empty step `image:` always wins, and there's no way to force host execution from a step when the task/agent sets one. `image:` is invalid on `get`/`put` steps (a put's image comes from its resource type).
-- **Container shape**: the step starts one `docker run -d --rm` container, then runs each command as `docker exec`. The working directory is bind-mounted at its own resolved host path, so host-side readers of the same directory — an agent's `read_file`/`list_dir`, workspace capture — see exactly what a containerized command wrote. No host environment variables are passed in; the container starts from the image's own env only.
+- **Container shape**: the step starts one `docker run -d --rm` container, then runs each command as `docker exec`. The working directory is bind-mounted at its own resolved host path, so host-side readers of the same directory — an agent's `read_file`/`list_dir`, workspace capture — see exactly what a containerized command wrote. No host environment variables are passed in; the container starts from the image's own env plus steps' [build metadata](#build-metadata-steps_run_id-).
 - **State persists across a step's commands.** An agent that installs a package, exports a variable, or `cd`s in one `run_shell` call sees it in the next — the calls share one container. As a fresh container per command, the two-call pattern every model reaches for (`pip install x` then `python y`) simply did not work. State does *not* carry across steps.
 - **Nothing is left running.** The container is named at start, so teardown is a `docker rm -f` of a known name — on the failure and cancellation paths too. If the steps process is killed outright, the container's own keepalive expires (24h) and `--rm` reaps it.
 - **Lazy**: a step whose command is skipped, or that fails before running anything, never starts a container.
@@ -434,7 +434,7 @@ jobs:
 
 ## Passing environment through (`env:`)
 
-Commands run with a deliberately narrow environment: a host command sees a fixed allowlist (`PATH`, `HOME`, locale, proxy settings — not the operator's credentials, and not `SSH_AUTH_SOCK`, which a pipeline that needs git-over-ssh opts back in by name), and a containerized command sees only its image's own environment. That default is the trust boundary: an agent directing `run_shell` should not get read access to everything the operator happened to export.
+Commands run with a deliberately narrow environment: a host command sees a fixed allowlist (`PATH`, `HOME`, locale, proxy settings — not the operator's credentials, and not `SSH_AUTH_SOCK`, which a pipeline that needs git-over-ssh opts back in by name), and a containerized command sees only its image's own environment (plus steps' [build metadata](#build-metadata-steps_run_id-)). That default is the trust boundary: an agent directing `run_shell` should not get read access to everything the operator happened to export.
 
 `env:` opts specific variables back in, by **name**:
 
@@ -465,6 +465,44 @@ jobs:
 - **An unset variable contributes nothing** rather than an empty value, so a command can still tell "not configured" from "configured empty" — with the colon-less shell forms (`${VAR+set}`, as above, or `${VAR-fallback}`); `${VAR:-fallback}` collapses the two.
 - **Step-level override**: a `task`/`agent` step's `env:` replaces the referenced entry's for that step only. Unlike `image:` this is *declared*-wins, not non-empty-wins — an explicit `env: []` means "nothing beyond the baseline", which is a real thing to want. Invalid on `get`/`put` steps (set it on the resource type).
 - **Caching**: the variable **names** fold into the node's hash. The values do not — a value changing is the operator's environment moving under the pipeline, which steps has never claimed to hash.
+
+## Build metadata (`STEPS_RUN_ID` …)
+
+Every command inside a run — tasks, `when:` guards, hooks, `in:`/`out:`, an agent's `run_shell` and custom tools, and a CLI agent's process — gets a few variables saying which build it is part of, as Concourse's `BUILD_*` variables do. A `put` can write "built by run X, pipeline revision Y" into a PR body.
+
+| variable | holds | Concourse |
+|---|---|---|
+| `STEPS_RUN_ID` | the run: the id `steps runs` and the web UI show (16 characters of `A-Z2-7`) | `BUILD_ID` |
+| `STEPS_JOB_NAME` | the job | `BUILD_JOB_NAME` |
+| `STEPS_PIPELINE_NAME` | the pipeline's name (`steps pipeline set -p`, or `--name`/the file's base name for `steps run`) | `BUILD_PIPELINE_NAME` |
+| `STEPS_PIPELINE_REVISION` | the full SHA of the pipeline revision the run was built from — the value `steps runs` abbreviates in its CONFIG column. There is no revision *number* | — |
+| `STEPS_URL` | the daemon's address, from `steps web --external-url` | `ATC_EXTERNAL_URL` |
+
+```yaml
+jobs:
+- name: release
+  plan:
+  - task: stamp
+    run: |
+      printf '%s' "$STEPS_RUN_ID" | grep -Eq '^[A-Z2-7]{16}$' || exit 1
+      [ "$STEPS_JOB_NAME" = release ] || exit 1
+      [ -n "$STEPS_PIPELINE_NAME" ] || exit 1
+      [ ${#STEPS_PIPELINE_REVISION} -eq 64 ] || exit 1
+      [ "${STEPS_URL+set}" != set ] || exit 1
+      echo "built by run $STEPS_RUN_ID"
+    assert:
+      stdout: built by run
+  assert:
+    execution: [stamp]
+    outcome: succeeded
+```
+
+- **Unset, never empty.** A variable with nothing to say is absent, so test with `${VAR+set}`. `STEPS_URL` is unset under `steps run`/`steps test`, and under `steps web` when `--listen` is a wildcard address (`0.0.0.0`, `::`, `:8088`) with no `--external-url`.
+- **A run link** is `$STEPS_URL/p/$STEPS_PIPELINE_NAME/runs/$STEPS_RUN_ID`.
+- **Never hashed.** A run id changes every run; keying on it would mean a cached step never hits.
+- **A cached task or get replays the first run's output**, so an artifact embedding the run id keeps the id of the run that built it. Read the variables in the `put` or hook that publishes: puts are never cached.
+- **Not set for**: `check:` — including a `get`'s version check — because a check is not part of a build and a run id in a version would mint a new version every run; stdio MCP servers, which have no run and outlive commands; and expr/MCP-backed resources, which have no child process.
+- **Not nameable in `env:`.** Listing any of the five names is a load error, rather than steps quietly replacing the operator's value. (`STEPS_WORKER`, the placement fact, is separate.)
 
 ## Downstream triggers (`trigger: true` + `steps web`)
 
