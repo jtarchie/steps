@@ -114,16 +114,16 @@ func (s *Store) CheckedResources(ctx context.Context) ([]store.CheckedResource, 
 // RecordCheckError files why a check failed, or clears the filing when the
 // message is empty.
 //
-// The clear is guarded by EXISTS rather than issued unconditionally: it runs
-// once per resource per poll for the whole life of a healthy pipeline, and a
-// DELETE that matches nothing still takes a write lock on a WAL the live
-// stream is reading.
+// The clear runs once per resource per poll for the whole life of a healthy
+// pipeline and matches nothing almost every time, which is cheap: a DELETE
+// opens a write transaction either way — an EXISTS guard in front of it would
+// not change that — and one that dirties no page commits without appending a
+// WAL frame the live stream has to read.
 func (s *Store) RecordCheckError(ctx context.Context, resourceName, message string) error {
 	if message == "" {
 		_, err := s.db.ExecContext(ctx,
-			`DELETE FROM resource_check_errors WHERE pipeline_id = ? AND resource_name = ?
-			 AND EXISTS (SELECT 1 FROM resource_check_errors WHERE pipeline_id = ? AND resource_name = ?)`,
-			s.pipelineID, resourceName, s.pipelineID, resourceName,
+			`DELETE FROM resource_check_errors WHERE pipeline_id = ? AND resource_name = ?`,
+			s.pipelineID, resourceName,
 		)
 		if err != nil {
 			return fmt.Errorf("could not clear the check error for %q: %w", resourceName, err)

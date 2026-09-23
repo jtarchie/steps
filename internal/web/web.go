@@ -544,13 +544,13 @@ func (s *Server) handleError(c *echo.Context, err error) {
 // Anchoring them to the first pipeline keeps the way back into the app alive.
 // It is a display fallback only: nothing on either page is scoped by it.
 func (s *Server) globalNav(c *echo.Context) navData {
-	nav := s.nav(c)
+	nav, gathered := s.navGathered(c)
 
 	if nav.Current == "" && len(nav.Pipelines) > 0 {
 		nav.Current = nav.Pipelines[0].Slug
 		nav.CurrentPath = nav.Pipelines[0].Path
-		// The shell's badges have to belong to the pipeline its tabs point at, or /docs reports a clean pipeline's counts on links into a different one.
-		nav.Attention = s.attention(c.Request().Context(), s.Lookup(nav.Current))
+		// The shell's badges have to belong to the pipeline its tabs point at, or /docs reports a clean pipeline's counts on links into a different one. Anchored stays false: the badges are chrome pointing into that pipeline, while the LIST says "this pipeline", which on a page listing several would name none of them.
+		nav.Attention = gathered[nav.Current]
 		// The tabs this shell draws have to be the ones that pipeline HAS, or /docs and the overview offer an mcp tab that 404s on the pipeline they anchor to.
 		nav.HasMCP = s.hasMCP(nav.Current)
 	}
@@ -566,6 +566,15 @@ func (s *Server) hasMCP(slug string) bool {
 }
 
 func (s *Server) nav(c *echo.Context) navData {
+	nav, _ := s.navGathered(c)
+
+	return nav
+}
+
+// navGathered is nav plus the per-pipeline items it read on the way, so the
+// pages that anchor themselves to a pipeline they did not resolve do not ask
+// the same databases the same questions twice in one render.
+func (s *Server) navGathered(c *echo.Context) (navData, map[string][]attentionItem) {
 	ctx := c.Request().Context()
 	nav := navData{ReadOnly: s.runner == nil, URL: c.Request().URL.RequestURI()}
 
@@ -598,16 +607,17 @@ func (s *Server) nav(c *echo.Context) navData {
 
 	current := pipelineOf(c)
 	if current == nil {
-		return nav
+		return nav, gathered
 	}
 
 	nav.Current = current.Slug
 	nav.CurrentPath = current.Path()
+	nav.Anchored = true
 	nav.Attention = gathered[current.Slug]
 	// The tab appears only for a pipeline that declares servers: most do not, and a dead tab on every one of them is nav space spent on a feature they never use.
 	nav.HasMCP = len(current.Config().MCPServers) > 0
 
-	return nav
+	return nav, gathered
 }
 
 // navData is the top-bar model.
@@ -624,7 +634,13 @@ type navData struct {
 	// Attention is what this pipeline is waiting on a person for, most
 	// blocking first — see attention.go for what is allowed in it.
 	Attention []attentionItem
-	ReadOnly  bool
+	// Anchored is whether Current is the pipeline this request actually
+	// resolved, rather than the first one a page above /p/:pipeline borrowed
+	// to keep its links alive. The attention LIST says "this pipeline" and
+	// carries that pipeline's Unpause button, so the root and /docs — which
+	// sit over several — draw it only when it is theirs to draw.
+	Anchored bool
+	ReadOnly bool
 	// HasMCP is whether the current pipeline declares mcp_servers:, which is the only thing that draws the mcp tab.
 	HasMCP bool
 }

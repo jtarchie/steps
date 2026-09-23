@@ -322,3 +322,57 @@ func TestTheOverviewRanksPipelinesByWhatTheyWant(t *testing.T) {
 		t.Error("the overview marks a clean pipeline as waiting")
 	}
 }
+
+// TestAResourceTheConfigDroppedStopsCounting: clearing a check error is the
+// POLLER's job, and nothing polls a resource a `steps pipeline set` removed —
+// so its row outlives it. Counted, that is a badge nobody can turn off,
+// pointing at a page that lists no such resource.
+func TestAResourceTheConfigDroppedStopsCounting(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+
+	err := pipeline.Store.RecordCheckError(t.Context(), "retired", "exit status 128")
+	if err != nil {
+		t.Fatalf("RecordCheckError: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo")
+
+	if strings.Contains(body, "failing its check") {
+		t.Errorf("a resource the pipeline no longer declares still raises the header:\n%s", body)
+	}
+
+	if strings.Contains(body, `class="badge"`) {
+		t.Error("a resource the pipeline no longer declares still badges the resources tab")
+	}
+}
+
+// TestTheRootDoesNotSpeakForOnePipelineOfSeveral: the shell above
+// /p/:pipeline anchors its tabs to the first pipeline so the links stay
+// alive, but the LIST says "this pipeline" and carries that pipeline's
+// Unpause — which on a page listing several names none of them, and which the
+// overview does not refresh out of band either.
+func TestTheRootDoesNotSpeakForOnePipelineOfSeveral(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := testPipelines(t, "alpha", "beta")
+
+	err := pipelines[0].Store.Pause(t.Context())
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	for _, page := range []string{"/", "/docs"} {
+		_, body := get(t, server, page)
+
+		if strings.Contains(body, `<ul class="attention"`) {
+			t.Errorf("%s draws one pipeline's attention list over several:\n%s", page, body)
+		}
+	}
+
+	// The badge is chrome pointing INTO that pipeline, and still belongs.
+	if _, body := get(t, server, "/p/alpha"); !strings.Contains(body, "this pipeline is paused") {
+		t.Error("the pipeline's own page lost the paused item")
+	}
+}

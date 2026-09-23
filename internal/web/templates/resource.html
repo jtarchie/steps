@@ -9,7 +9,7 @@
 {{/* Above the versions, because the list below it is what the check used to
      return and a reader who does not know it has stopped will read the top of
      it as current. */}}
-{{if .Failing.Name}}<div class="checkfail"><b>this resource is failing its check</b> <span class="meta">{{agoTag .Failing.FailedAt}}</span><pre>{{.Failing.Message}}</pre></div>{{end}}
+{{if .Failing.Name}}<div class="checkfail"><b>this resource is failing its check</b> <span class="meta">last tried {{agoTag .Failing.FailedAt}}</span><pre>{{.Failing.Message}}</pre></div>{{end}}
 <h2 class="eyebrow">Versions <span class="unbold">— newest first, capped by <code>version_history:</code></span></h2>
 <div class="tablewrap">
   <table>

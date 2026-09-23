@@ -132,9 +132,9 @@ has no resting state.
 | `approvals ●N` | N `approval:` steps parked on a decision | approving or rejecting |
 | `questions ●N` | N `ask_user` questions parked on an answer | answering |
 
-The pipeline switcher marks the pipelines you are *not* looking at with the
-same count, and the root lists it per pipeline — a daemon holding several
-otherwise hides every one but the open tab.
+The pipeline switcher carries the same count for every pipeline this daemon
+holds, and the root lists it per pipeline — otherwise a daemon holding
+several hides every one but the open tab.
 
 Three things deliberately do **not** appear here, because a signal that is
 never quiet is one nobody reads: how many runs are in flight, how many

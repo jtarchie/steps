@@ -19,8 +19,10 @@
         <td class="dim">{{if $seen.Name}}{{jsonLine $seen.Version}}{{else}}<span class="faint">never checked</span>{{end}}</td>
         {{/* The recorded version is what the last SUCCESSFUL check saw, and a
              failing check leaves it exactly where it was — so this cell says
-             when it last worked, and the row below says it has stopped. */}}
-        <td class="dim">{{if $broken.Name}}<span class="st st-failed">failing</span> {{agoTag $broken.FailedAt}}{{else if $seen.Name}}{{ago $seen.CheckedAt}}{{else}}—{{end}}</td>
+             when it last worked, and the row below says it has stopped. Not
+             the failure time: every failing poll rewrites that, so a resource
+             down since Tuesday would read "4s ago" forever. */}}
+        <td class="dim">{{if $broken.Name}}<span class="st st-failed">failing</span> {{if $seen.Name}}{{ago $seen.CheckedAt}}{{else}}<span class="faint">never worked</span>{{end}}{{else if $seen.Name}}{{ago $seen.CheckedAt}}{{else}}—{{end}}</td>
       </tr>
       {{if $broken.Name}}<tr class="checkfail"><td colspan="4"><pre>{{$broken.Message}}</pre></td></tr>{{end}}
       {{end}}

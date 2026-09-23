@@ -105,17 +105,39 @@ func pausedJobsItem(ctx context.Context, target *Pipeline, base string) *attenti
 // triggering at all — which is the part a reader could not have guessed.
 func failingChecksItem(ctx context.Context, target *Pipeline, base string) *attentionItem {
 	failing, err := target.Store.CheckErrors(ctx)
-	if err != nil || len(failing) == 0 {
+	if err != nil {
+		return nil
+	}
+
+	// Only what the pipeline still declares. A cleared error is a DELETE by
+	// the POLLER, and nothing polls a resource a `steps pipeline set` removed
+	// — so its row outlives it, and an unfiltered count would be a badge
+	// nobody can ever turn off pointing at a page that lists no such
+	// resource. The count has to equal what the page it links to shows.
+	declared := make(map[string]bool, len(target.Config().Resources))
+	for _, resource := range target.Config().Resources {
+		declared[resource.Name] = true
+	}
+
+	count := 0
+
+	for _, row := range failing {
+		if declared[row.Name] {
+			count++
+		}
+	}
+
+	if count == 0 {
 		return nil
 	}
 
 	detail := "1 resource is failing its check — nothing is polled until it succeeds"
-	if len(failing) > 1 {
-		detail = fmt.Sprintf("%d resources are failing their checks — nothing is polled until they succeed", len(failing))
+	if count > 1 {
+		detail = fmt.Sprintf("%d resources are failing their checks — nothing is polled until they succeed", count)
 	}
 
 	return &attentionItem{
-		Kind: "checks", Tab: "resources", Count: len(failing), URL: base + "/resources", Detail: detail,
+		Kind: "checks", Tab: "resources", Count: count, URL: base + "/resources", Detail: detail,
 	}
 }
 

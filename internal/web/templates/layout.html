@@ -66,8 +66,16 @@
      have is dropped, so a pipeline paused from a terminal while somebody has
      a board open would announce itself only on reload. The LIST inside it is
      not: an empty attention surface must occupy no space, because its
-     presence is the entire signal. */}}
-<div id="attention">{{if .Nav.Attention}}<ul class="attention" role="status" aria-label="Needs attention">
+     presence is the entire signal.
+
+     role="status" belongs on the WRAPPER, not the list: a live region has to
+     be in the document before its content arrives, or a screen reader has
+     nothing to watch and the first thing to go wrong is announced to nobody.
+
+     Anchored, because the list says "this pipeline" and carries that
+     pipeline's Unpause: the root and /docs anchor their tabs to a pipeline
+     they did not resolve, and an unnamed one of several is worse than none. */}}
+<div id="attention" role="status" aria-label="Needs attention">{{if and .Nav.Anchored .Nav.Attention}}<ul class="attention">
   {{range .Nav.Attention}}<li class="atitem at-{{.Kind}}">
     {{if eq .Kind "paused"}}<b>this pipeline is paused</b> — nothing is being polled, nothing will be admitted from the queue, and a webhook delivery is recorded but builds only on unpause.
     {{if $.Nav.ReadOnly}}Resume it with <code>steps pipeline unpause -p {{$.Nav.Current}}</code>.{{else}}<form class="decide" method="post" action="/p/{{$.Nav.Current}}/unpause"><input type="hidden" name="return" value="{{$.Nav.URL}}"><button class="btn primary" type="submit">Unpause</button><span class="meta">or <code>steps pipeline unpause -p {{$.Nav.Current}}</code></span></form>{{end}}
