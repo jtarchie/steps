@@ -167,6 +167,24 @@ func forced(ctx context.Context) bool {
 	return force
 }
 
+// reopenTakenKey types the context value carrying "re-open taken versions".
+type reopenTakenKey struct{}
+
+// WithTakenVersionsReopened makes a run's `version: every` cursor stop
+// filtering, so versions an earlier run already took are fanned out again.
+// Only `steps test` asks: its execution assertions must hold on every rerun
+// against one state file. --force does not imply it (#145) — replaying a
+// resource's history repeats effects the cache never skips.
+func WithTakenVersionsReopened(ctx context.Context) context.Context {
+	return context.WithValue(ctx, reopenTakenKey{}, true)
+}
+
+func takenVersionsReopened(ctx context.Context) bool {
+	reopened, _ := ctx.Value(reopenTakenKey{}).(bool)
+
+	return reopened
+}
+
 // recordRunIdentity writes the row every event, history entry and resume of
 // this run keys on — minting it, or putting an existing one back in flight.
 //

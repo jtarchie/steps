@@ -337,7 +337,7 @@ jobs:
   A missing file or an empty one fails the assert. Two shapes are load errors instead, because neither could ever pass: a path naming no declared output, and a bare artifact name like `answer` — that is the output *directory*, and a directory is never a non-empty file. Name a file inside it.
 
 - **`assert.nudge`**, on an agent step only: with `nudge: true`, an unmet `files:` or `tool_calls:` entry is put back to the model *before* the step fails. A model that tries to finish while a declared file is missing or a declared call has not been made is told what it still owes, at the moment it tries to stop, and gets to act — up to five times, after which the step fails exactly as it would have. Opt-in, because a nudge is automatic recovery rather than detection, and a fixture whose model is always put back cannot prove its prompt asked for the file at all. It is a load error beside `stdout:` or `verdict:`, which name the conclusion rather than an obligation. See [agents.md](agents.md#delivering-files-the-pipeline-will-read) for what the model is told and why.
-- **`steps test <pipeline.yml>`** runs every job in declaration order (forced, so the execution log is deterministic), prints per-job PASS/FAIL, and checks the pipeline-level `assert.execution`. It is how every example in these docs is verified.
+- **`steps test <pipeline.yml>`** runs every job in declaration order (forced, and with taken `version: every` versions re-opened, so the execution log is deterministic across reruns), prints per-job PASS/FAIL, and checks the pipeline-level `assert.execution`. It is how every example in these docs is verified.
 
 ## `do:` — several steps as one
 

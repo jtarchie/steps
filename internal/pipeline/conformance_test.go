@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
@@ -116,14 +117,14 @@ jobs:
 	// build_resource_config_version_inputs — the versions a build was CREATED
 	// with — and applies no filter on build status anywhere, so a version
 	// consumed by a failed build is consumed. Re-running one is deliberate and
-	// manual there (concourse/concourse#413) as it is here: --force, --resume,
+	// manual there (concourse/concourse#413) as it is here: --resume, --pin,
 	// or a new version.
 	_ = RunJob(ctx, cfg, job, nil, provider, st, false)
 	assertConformanceLineCount(t, taskCounter, 3)
 
-	// And --force is that manual act: it re-runs all three.
+	// --force skips the cache only; it does not re-open spent versions (#145).
 	_ = RunJob(ctx, cfg, job, nil, provider, st, true)
-	assertConformanceLineCount(t, taskCounter, 6)
+	assertConformanceLineCount(t, taskCounter, 3)
 }
 
 func assertConformanceLineCount(t *testing.T, path string, want int) {
@@ -537,26 +538,22 @@ func TestConformanceGetVersionEveryTakesEachVersionOnce(t *testing.T) {
 		t.Errorf("Explain lists %d step(s) with every version already taken: %+v", len(rows), rows)
 	}
 
-	// --force is the documented way back: it ignores the cursor along with
-	// every other piece of persisted state, so both versions run again.
+	// --force skips the step cache, not the cursor (#145): nothing re-posts.
 	mustRunEvery(ctx, t, cfg, job, st, true)
-	assertConformanceLineCount(t, posted, 4)
+	assertConformanceLineCount(t, posted, 2)
 
-	// ...and having re-run them, it has TAKEN them. A forced run performs the
-	// effects like any other, so the ordinary run after it must post nothing.
 	mustRunEvery(ctx, t, cfg, job, st, false)
-	assertConformanceLineCount(t, posted, 4)
+	assertConformanceLineCount(t, posted, 2)
 }
 
 // TestGetVersionEveryForceRecordsWhatItTook pins the half of --force the test
 // above cannot see: a version FIRST encountered by a forced run.
 //
-// --force switches the cursor's suppression off, not its recording. When it
-// skipped recording too, a forced run performed every effect and remembered
-// none, so the next ordinary run performed them all again — the Slack bot
-// answering twice, reintroduced by the flag documented as the way to recover
-// from it. The versions already recorded before the force hid this, which is
-// why it needs a version the force is the first to see.
+// A forced run still records what it takes. When it did not, a forced run
+// performed every effect and remembered none, so the next ordinary run
+// performed them all again — the Slack bot answering twice. The versions
+// already recorded before the force hid this, which is why it needs a version
+// the force is the first to see.
 func TestGetVersionEveryForceRecordsWhatItTook(t *testing.T) {
 	dir := t.TempDir()
 	posted := filepath.Join(dir, "posted.txt")
@@ -570,15 +567,14 @@ func TestGetVersionEveryForceRecordsWhatItTook(t *testing.T) {
 	mustRunEvery(ctx, t, cfg, job, st, false)
 	assertConformanceLineCount(t, posted, 1)
 
-	// v2 arrives and the operator forces: v1 re-posts (the accepted cost of
-	// --force) and v2 posts for the first time.
+	// v2 arrives and the operator forces: only v2 posts, for the first time.
 	writeEveryVersions(t, versionsFile, `[{"ref":"v1"},{"ref":"v2"}]`)
 	mustRunEvery(ctx, t, cfg, job, st, true)
-	assertConformanceLineCount(t, posted, 3)
+	assertConformanceLineCount(t, posted, 2)
 
 	// v2 was taken by the forced run, so nothing is left to do.
 	mustRunEvery(ctx, t, cfg, job, st, false)
-	assertConformanceLineCount(t, posted, 3)
+	assertConformanceLineCount(t, posted, 2)
 }
 
 // everyVersionFixture builds the pipeline the test above runs: a get with
@@ -651,5 +647,50 @@ func mustRunEvery(ctx context.Context, t *testing.T, cfg *config.Config, job *co
 	err = RunJob(ctx, cfg, job, nil, provider, st, force)
 	if err != nil {
 		t.Fatalf("RunJob(force=%v): %v", force, err)
+	}
+}
+
+// TestAForcedIdleEveryRunSaysWhyOnTheRunPage: an idle every-get publishes a
+// skip event (the run page renders run_events, not stdout), and only a forced
+// one adds the note that --force does not re-open taken versions (#145).
+func TestAForcedIdleEveryRunSaysWhyOnTheRunPage(t *testing.T) {
+	dir := t.TempDir()
+	posted := filepath.Join(dir, "posted.txt")
+	versionsFile := filepath.Join(dir, "versions.json")
+
+	cfg, st := everyVersionFixture(t, dir, posted, versionsFile)
+	ctx := context.Background()
+	job := &cfg.Jobs[0]
+
+	writeEveryVersions(t, versionsFile, `[{"ref":"v1"}]`)
+	mustRunEvery(ctx, t, cfg, job, st, false)
+
+	idleSkips := func(force bool) []string {
+		var texts []string
+
+		bus := events.New(func(e events.Event) {
+			if e.Type == events.TypeStepSkipped && e.StepKind == "get" {
+				texts = append(texts, e.Text)
+			}
+		})
+
+		mustRunEvery(events.WithBus(ctx, bus), t, cfg, job, st, force)
+		bus.Close()
+
+		return texts
+	}
+
+	forcedTexts := idleSkips(true)
+	if len(forcedTexts) != 1 ||
+		!strings.Contains(forcedTexts[0], "already taken") ||
+		!strings.Contains(forcedTexts[0], "--force skips the step cache") {
+		t.Errorf("forced idle run skip events = %q", forcedTexts)
+	}
+
+	plainTexts := idleSkips(false)
+	if len(plainTexts) != 1 ||
+		!strings.Contains(plainTexts[0], "already taken") ||
+		strings.Contains(plainTexts[0], "--force") {
+		t.Errorf("ordinary idle run skip events = %q", plainTexts)
 	}
 }

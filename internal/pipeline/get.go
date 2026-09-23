@@ -127,7 +127,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 		// table of the versions a build was CREATED with, with no filter on
 		// build status: a version consumed by a failed build is consumed, and
 		// the cursor moves on. Re-running one is an explicit act there
-		// (concourse/concourse#413), which here is --force or --resume.
+		// (concourse/concourse#413), which here is --resume (that build) or --pin (that version).
 		//
 		// The tempting alternative — take it only on success, so a failure is
 		// retried — was tried and reverted. It makes a version that fails
@@ -172,8 +172,14 @@ func (w *planWalk) reportNoVersions(ctx context.Context, step config.Step, resou
 	}
 
 	if taken := w.cache.Suppressed(step); taken > 0 {
-		fmt.Printf("get: %s has no new versions; all %d already taken\n", resourceName, taken)
-		logFrom(ctx).Info("job.get.no_new_versions", "resource", resourceName, "already_taken", taken)
+		reason := fmt.Sprintf("no new versions; all %d already taken", taken)
+		if forced(ctx) {
+			reason += " — --force skips the step cache, not versions this job already took; to redo one, resume the run that took it or pin the version"
+		}
+
+		fmt.Printf("get: %s has %s\n", resourceName, reason)
+		logFrom(ctx).Info("job.get.no_new_versions", "resource", resourceName, "already_taken", taken, "forced", forced(ctx))
+		publishStepSkipped(ctx, w.jobName, w.index, step, markStep(ctx), "", reason)
 
 		return
 	}
