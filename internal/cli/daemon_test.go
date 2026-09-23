@@ -319,7 +319,7 @@ func serveOn(t *testing.T, held *daemon, name string, st store.Store, source str
 const idlePipeline = "jobs:\n- name: build\n  plan:\n  - task: work\n    inputs: []\n    run: \"true\"\n"
 
 // servingDaemon is the daemon `steps web` builds, over a state file of the test's own.
-func servingDaemon(t *testing.T) *daemon {
+func servingDaemon(t testing.TB) *daemon {
 	t.Helper()
 
 	local := web.NewLocalRunner(nil, nil, 1, false)
@@ -335,7 +335,7 @@ func servingDaemon(t *testing.T) *daemon {
 	return held
 }
 
-func setPipeline(t *testing.T, held *daemon, name, source string) {
+func setPipeline(t testing.TB, held *daemon, name, source string) {
 	t.Helper()
 
 	_, err := held.Set(t.Context(), name, web.SetRequest{Source: source, From: "/src/" + name + ".yml"})

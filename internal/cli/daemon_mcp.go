@@ -21,10 +21,16 @@ type probes struct {
 	// cancels lets shutdown take an in-flight probe with it, keyed the same way, since a probe's whole cost is a connection nobody is waiting on any more.
 	cancels  map[string]context.CancelFunc
 	inflight sync.WaitGroup
+	creds    *credentials
 }
 
 func newProbes(base context.Context) *probes {
-	return &probes{base: base, results: map[string]*probeResult{}, cancels: map[string]context.CancelFunc{}}
+	return &probes{
+		base:    base,
+		results: map[string]*probeResult{},
+		cancels: map[string]context.CancelFunc{},
+		creds:   newCredentials(),
+	}
 }
 
 // probeResult is one answer and the configuration it describes. The fingerprint is a FIELD rather than part of the key so this map holds one entry per declared server however often a `steps pipeline set` moves an endpoint under it — keyed by the configuration, it would gain an entry per version ever tested and drop none, which is the leak staleLogins is capped against.
@@ -92,8 +98,7 @@ func (p *probes) MCPState(pipeline *web.Pipeline, server string) web.MCPState {
 	}
 
 	if srv.Auth.Type == "oauth" {
-		token := stepsmcp.InspectToken(*srv)
-		state.Credential = web.MCPCredential{Connected: token.Connected, Detail: token.Detail}
+		state.Credential = p.creds.of(*srv)
 	}
 
 	p.mu.Lock()

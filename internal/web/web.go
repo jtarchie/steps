@@ -584,8 +584,10 @@ func (s *Server) navGathered(c *echo.Context) (navData, map[string][]attentionIt
 	//
 	// ponytail: recomputed per request, so a daemon holding many pipelines
 	// pays for all of them on every 2.5s self-poll of every open tab. The
-	// reads are small and indexed; give this a short TTL if it ever shows up
-	// in a profile.
+	// store reads are small and indexed, and the one that was NOT — what a
+	// saved oauth token is worth, which is a file — is cached against that
+	// file by whoever holds it (internal/cli's credentials). Give this a
+	// short TTL if it ever shows up in a profile.
 	served := s.Served()
 	gathered := make(map[string][]attentionItem, len(served))
 

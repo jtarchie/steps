@@ -83,7 +83,7 @@ func TestMCPStateReportsWhatASavedTokenIsWorth(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			writeTokenFile(t, "tracker", test.token)
+			writeTokenFile(t, test.token)
 
 			got := held.MCPState(target, "tracker").Credential
 			if got.Connected != test.connected || !strings.Contains(got.Detail, test.detail) {
@@ -158,7 +158,7 @@ jobs:
 	}
 
 	// Once the credential is there, the same call is allowed through.
-	writeTokenFile(t, "tracker", &stepsmcp.TokenFile{
+	writeTokenFile(t, &stepsmcp.TokenFile{
 		Endpoint: "https://tracker.example/mcp", AccessToken: secretToken, RefreshToken: "r",
 	})
 
@@ -299,11 +299,14 @@ func waitForProbe(t *testing.T, held *daemon, target *web.Pipeline, server strin
 	return web.MCPProbe{}
 }
 
+// tokenFixtureServer is the one oauth server every fixture in this package declares, so writeTokenFile names it rather than taking it.
+const tokenFixtureServer = "tracker"
+
 // writeTokenFile puts one saved credential where a login would have left it, or removes it for nil.
-func writeTokenFile(t *testing.T, server string, token *stepsmcp.TokenFile) {
+func writeTokenFile(t testing.TB, token *stepsmcp.TokenFile) {
 	t.Helper()
 
-	path, err := stepsmcp.TokenPath(server)
+	path, err := stepsmcp.TokenPath(tokenFixtureServer)
 	if err != nil {
 		t.Fatal(err)
 	}
