@@ -52,7 +52,10 @@ func (c containerTree) execute(ctx context.Context, script string) (stdout, stde
 	out, errOut, code, err := c.runner.RunCaptureFullLimited(ctx, script, maxScriptOutputBytes, "")
 	if err != nil {
 		lost := fmt.Errorf("%w: %w", errNoTreeAccess, err)
-		c.lost.note(lost)
+		// See shellToolResult: a command ctx cut off is not evidence the container is gone.
+		if ctx.Err() == nil {
+			c.lost.note(lost)
+		}
 
 		return "", "", 0, lost
 	}
