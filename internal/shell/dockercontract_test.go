@@ -494,7 +494,7 @@ func startLabelledContainer(t *testing.T, pid string) string {
 		t.Fatalf("starting a labelled container: %v\n%s", err, out)
 	}
 
-	t.Cleanup(func() { RemoveContainer(context.Background(), name) })
+	t.Cleanup(func() { _ = RemoveContainer(context.Background(), "", name) })
 
 	return name
 }

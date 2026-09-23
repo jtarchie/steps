@@ -409,32 +409,24 @@ func removalContext(ctx context.Context) context.Context {
 	return context.WithoutCancel(ctx)
 }
 
-// RemoveContainer deletes a container by name, best-effort, against the
-// default daemon.
-//
-// It was exported for internal/agent to reclaim the one-shot container behind
-// its containerized CLI run — a run with no session to Close, where nothing
-// this end does stops a container, so the caller owned teardown. Issue #100
-// deleted that path (the CLI is always a host subprocess now), leaving the
-// name reachable for a caller outside this package that has a container name
-// and no session; every caller inside it holds a daemon and uses
-// removeContainerOn.
-func RemoveContainer(ctx context.Context, name string) {
-	removeContainerOn(ctx, "", name)
-}
-
-// removeContainerOn is RemoveContainer against a named daemon.
-func removeContainerOn(ctx context.Context, host, name string) {
-	client, err := dockerapi.New(host)
+// RemoveContainer deletes a container by name on the daemon dockerHost names (empty is this machine's), for a caller holding a name and no session: internal/venue reclaiming a placed step's container over a fresh connection when the step's own one broke.
+func RemoveContainer(ctx context.Context, dockerHost, name string) error {
+	client, err := dockerapi.New(dockerHost)
 	if err != nil {
-		slog.Warn("shell.docker.remove_failed", "container", name, "error", err)
-
-		return
+		return fmt.Errorf("removing container %s: %w", name, err)
 	}
 
 	defer func() { _ = client.Close() }()
 
-	reclaim(ctx, client, name)
+	return client.RemoveContainer(ctx, name) //nolint:wrapcheck // dockerapi already names the container
+}
+
+// Container is the name of this runner's container, or empty before its first command started one.
+func (d DockerRunner) Container() string {
+	d.session.mu.Lock()
+	defer d.session.mu.Unlock()
+
+	return d.session.name
 }
 
 // reclaim removes a container, best effort.

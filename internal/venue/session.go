@@ -762,8 +762,13 @@ func (s *session) close() error {
 // and a container still bind-mounting the old one is a step that runs with
 // none of its inputs and reports success.
 func (s *session) teardownContainer() {
+	var stranded shell.Runner
+
 	if s.inner != nil {
-		s.releaseContainer()
+		if !s.releaseContainer() {
+			stranded = s.inner
+		}
+
 		s.inner = nil
 	}
 
@@ -773,24 +778,62 @@ func (s *session) teardownContainer() {
 	}
 
 	s.relay.Store(nil)
+
+	if stranded != nil {
+		s.reclaimStranded(stranded)
+	}
 }
 
-// releaseContainer removes the worker's container, or says which one it is
-// leaving behind.
-//
-// A broken conversation cannot carry the removal. `docker rm -f` travels the
-// forwarded socket like every other docker call, so a wire that answers
-// nothing — or that a stalled router still owns — turns the attempt into a
-// second reader on one decoder waiting out a reply nobody will bring. The
-// worker is named rather than the container id, which lives inside shell's
-// session: it is what an operator needs to go and look, and no local sweep
-// ever asks that machine's daemon.
-func (s *session) releaseContainer() {
-	if s.broken.Load() {
+// reclaimStranded removes a container this conversation could no longer reach, over a fresh one to the same worker: a broken wire is usually this end's own cancel desyncing it, not a dead worker, and a long-lived daemon's pid never dies, so the orphan sweep would never take it.
+func (s *session) reclaimStranded(inner shell.Runner) {
+	// Never inner.Close: its removal would go over the conversation that just died (see TestTeardownDoesNotRouteOverADeadConversation), and its connections already went with the socket.
+	named, ok := inner.(interface{ Container() string })
+	if !ok || named.Container() == "" {
+		return
+	}
+
+	name := named.Container()
+
+	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+	defer cancel()
+
+	rescue := &session{worker: s.worker, blobs: s.blobs, tag: s.tag, noRedial: true}
+	defer func() { _ = rescue.close() }()
+
+	err := rescue.removeContainer(ctx, name)
+	if err != nil {
 		slog.Warn("venue.container.abandoned",
-			"worker", s.worker.String(), "image", s.container.Image, "workdir", s.workdir)
+			"worker", s.worker.String(), "container", name, "image", s.container.Image, "error", err)
 
 		return
+	}
+
+	slog.Info("venue.container.reclaimed", "worker", s.worker.String(), "container", name)
+}
+
+// removeContainer asks this session's worker to remove a container by name.
+func (s *session) removeContainer(ctx context.Context, name string) error {
+	err := s.ensure(ctx)
+	if err != nil {
+		return err
+	}
+
+	socket, stop, err := s.openDockerSocket(ctx, false)
+	if err != nil {
+		return err
+	}
+
+	defer stop()
+
+	return s.withDockerRouting(ctx, func() error {
+		return shell.RemoveContainer(ctx, "unix://"+socket, name)
+	})
+}
+
+// releaseContainer removes the worker's container over this conversation, reporting false when a broken one cannot carry the removal: `docker rm -f` travels the forwarded socket, and a wire a stalled router still owns would make it a second reader on one decoder waiting for a reply nobody brings — see reclaimStranded.
+func (s *session) releaseContainer() bool {
+	if s.broken.Load() {
+		return false
 	}
 
 	// Its own context, and deliberately not a caller's: the likeliest reason
@@ -807,6 +850,8 @@ func (s *session) releaseContainer() {
 		slog.Warn("venue.container.teardown_failed",
 			"worker", s.worker.String(), "image", s.container.Image, "error", err)
 	}
+
+	return true
 }
 
 func (s *session) nextOp() uint32 {
