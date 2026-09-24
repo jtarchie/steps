@@ -79,7 +79,8 @@ jobs:
 	theRedirectWentThroughTheProvider(t, chain, fixture.server.URL)
 
 	// The token exchange happens after the callback answers, so the tab is what reports the outcome — the same LoginStatus the CLI polls.
-	body := theTabEventuallySays(t, browser, tab, "connected")
+	// The saved credential's own words: a bare "connected" is already on the page before the exchange lands, which let the probe below race the token it needs.
+	body := theTabEventuallySays(t, browser, tab, "renews automatically")
 	if strings.Contains(body, "needs login") {
 		t.Errorf("the tab still asks for a login after one finished:\n%s", body)
 	}
