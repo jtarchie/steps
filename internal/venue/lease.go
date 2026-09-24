@@ -44,6 +44,8 @@ type entry struct {
 	refs   int
 	// window is the longest ?idle= any spelling of the machine asked for, since honoring a shorter one silently ignores what an operator wrote down.
 	window time.Duration
+	// windowBy is the spelling that asked for window, so the note keeping the machine names the ?idle= it honors rather than whichever spelling came first.
+	windowBy string
 	// retired is a machine somebody watched die: nothing new may take it, and its last user gives it back without an idle window.
 	retired bool
 	idle    *time.Timer
@@ -82,13 +84,16 @@ func (r *Registry) hold(worker Worker) (*entry, <-chan struct{}) {
 	}
 
 	if !ok {
-		held = &entry{source: worker, key: key}
+		held = &entry{source: worker, key: key, windowBy: worker.URL}
 		r.current[key] = held
 		r.live[held] = struct{}{}
 	}
 
 	held.refs++
-	held.window = max(held.window, worker.Idle)
+
+	if worker.Idle > held.window {
+		held.window, held.windowBy = worker.Idle, worker.URL
+	}
 	r.stopIdle(held)
 
 	return held, nil
@@ -130,7 +135,7 @@ func (r *Registry) drop(ctx context.Context, held *entry, immediate bool) error 
 	held.idle = time.AfterFunc(held.window, func() { r.expire(held, gen) })
 	r.mu.Unlock()
 
-	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: nothing is using it; keeping it for %s (?idle=)", held.source.URL, held.window))
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: nothing is using it; keeping it for %s (?idle=)", held.windowBy, held.window))
 
 	return nil
 }
@@ -388,7 +393,11 @@ func (l *Leases) Resolve(ctx context.Context, tag string) (Worker, error) {
 	}
 
 	for {
-		held, landing := l.claim(tag, worker)
+		held, landing, joined := l.claim(tag, worker)
+		if joined != "" {
+			events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: sharing the machine already acquired for %s", worker.URL, joined))
+		}
+
 		if held != nil {
 			machine, err := held.resolve(ctx, worker, l.registry.acquire)
 			if err != nil {
@@ -405,8 +414,8 @@ func (l *Leases) Resolve(ctx context.Context, tag string) (Worker, error) {
 	}
 }
 
-// claim is this scope's entry for a tag, counted toward the registry's if it has none yet — or, while that machine's last park is landing, what to wait on first, outside every lock.
-func (l *Leases) claim(tag string, worker Worker) (*entry, <-chan struct{}) {
+// claim is this scope's entry for a tag, counted toward the registry's if it has none yet — or, while that machine's last park is landing, what to wait on first, outside every lock. joined names the spelling the entry was acquired under when this claim counted toward one written differently, since the operator otherwise has no sign two mappings now share one box.
+func (l *Leases) claim(tag string, worker Worker) (*entry, <-chan struct{}, string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -421,15 +430,22 @@ func (l *Leases) claim(tag string, worker Worker) (*entry, <-chan struct{}) {
 	}
 
 	if held != nil {
-		return held, nil
+		return held, nil, ""
 	}
 
 	held, landing := l.registry.hold(worker)
-	if held != nil {
-		l.held[tag] = held
+	if held == nil {
+		return nil, landing, ""
 	}
 
-	return held, landing
+	l.held[tag] = held
+
+	// source is written once, under r.mu, before the hold that just returned it.
+	if held.source.URL != worker.URL {
+		return held, nil, held.source.URL
+	}
+
+	return held, nil, ""
 }
 
 func awaitLanded(ctx context.Context, landing <-chan struct{}, worker Worker) error {
@@ -446,13 +462,26 @@ func awaitLanded(ctx context.Context, landing <-chan struct{}, worker Worker) er
 	}
 }
 
-// dialOf is the machine an entry holds as this spelling reaches it: every mapping of one parked instance shares its entry, and each connects its own way — its root, its shim.
+// dialOf is the machine an entry holds as this spelling reaches it: every mapping of one parked instance or one launched template shares its entry, and each connects its own way — its root, its shim, its binary, its host key — rather than the way of whichever spelling acquired it.
 func dialOf(spelling, machine Worker) Worker {
-	if spelling.Rung != RungStopped || machine.Instance != spelling.Instance {
+	switch spelling.Rung {
+	case RungStopped:
+		if machine.Instance != spelling.Instance {
+			return machine
+		}
+
+		return spelling.asStatic(spelling.Instance)
+	case RungLaunch:
+		if machine.Instance == "" {
+			return machine
+		}
+
+		return spelling.asStatic(machine.Instance)
+	case RungStatic:
+		return machine
+	default:
 		return machine
 	}
-
-	return spelling.asStatic(spelling.Instance)
 }
 
 // Abandon is identity-checked so a stale notice cannot orphan the fresh machine a sibling re-acquired under the same tag, retires the machine so no other scope is handed it, and does not release it: a parallel sibling may still be inside the grace the notice promised, and a spot stop or hibernate leaves a live instance only the last user's release will ever end.
