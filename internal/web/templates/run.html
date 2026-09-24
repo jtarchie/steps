@@ -37,6 +37,7 @@
      404 at the end of a triage. */}}
 {{if and $run.MCPBlamed .Nav.HasMCP}}<div class="errhint">mcp server <code>{{$run.MCPBlamed}}</code> — <a href="/p/{{.Nav.Current}}/mcp#mcp-{{$run.MCPBlamed}}">is it connected?</a></div>{{end}}
 {{end}}
+{{if $run.Notes}}<div class="runnotes">{{range $run.Notes}}{{template "notice" .}}{{end}}</div>{{end}}
 
 {{if $run.Run.Replayed}}
 <p class="diffnote">replayed from <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.Run.ParentRunID}}">{{short $run.Run.ParentRunID}}</a>
@@ -229,6 +230,7 @@
   {{if $step.HasBody $run.JobError}}<div class="stepbody" id="{{$anchor}}_body">
     {{with $step.DistinctError $run.JobError}}<div class="log"><span class="err">{{.}}</span></div>{{end}}
     {{if $step.Reason}}<div class="log">{{$step.Reason}}{{if $step.Hash}} · content hash {{short $step.Hash}}{{end}}</div>{{end}}
+    {{range $step.Notes}}{{template "notice" .}}{{end}}
     {{range $step.Outputs}}<pre class="log output">{{jsonPre .}}</pre>{{end}}
 
     {{range $step.Conversation}}{{template "turn" .}}{{end}}
@@ -314,3 +316,6 @@
       </div>
     </div>
 {{end}}
+
+{{/* One note a step's machinery left. A warning says so in words, not only in colour. */}}
+{{define "notice"}}<div class="log notice{{if .Warn}} warn{{end}}">{{if .Warn}}warning: {{end}}{{.Text}}</div>{{end}}

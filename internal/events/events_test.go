@@ -206,3 +206,102 @@ func TestPublishDuringCloseIsSafe(t *testing.T) {
 		bus.Publish(Event{Type: TypeStepFinished})
 	}
 }
+
+// TestObserverSeesEveryEventInOrder is the observer's whole reason to exist:
+// a subscriber may be dropped from, and a terminal that drops a line has lost
+// it for good. Concurrent publishers and a slow observer still deliver every
+// event, in sequence order.
+func TestObserverSeesEveryEventInOrder(t *testing.T) {
+	t.Parallel()
+
+	bus := New(nil)
+
+	var seen []int64
+
+	cancel := bus.Observe(func(event Event) {
+		if len(seen)%97 == 0 {
+			time.Sleep(time.Millisecond)
+		}
+
+		seen = append(seen, event.Seq)
+	})
+	defer cancel()
+
+	const publishers, each = 8, 100
+
+	var wg sync.WaitGroup
+
+	for range publishers {
+		wg.Go(func() {
+			for range each {
+				bus.Publish(Event{Type: TypeStepNote})
+			}
+		})
+	}
+
+	wg.Wait()
+
+	if len(seen) != publishers*each {
+		t.Fatalf("observer saw %d events, want %d — it must never be dropped from", len(seen), publishers*each)
+	}
+
+	for i := 1; i < len(seen); i++ {
+		if seen[i] <= seen[i-1] {
+			t.Fatalf("observer saw seq %d after %d, want sequence order", seen[i], seen[i-1])
+		}
+	}
+}
+
+// TestObserverCancelStopsDelivery checks a cancelled observer is called no
+// more, and that a nil bus hands out a usable cancel.
+func TestObserverCancelStopsDelivery(t *testing.T) {
+	t.Parallel()
+
+	bus := New(nil)
+
+	calls := 0
+	cancel := bus.Observe(func(Event) { calls++ })
+
+	bus.Publish(Event{})
+	cancel()
+	bus.Publish(Event{})
+
+	if calls != 1 {
+		t.Errorf("observer called %d times, want 1", calls)
+	}
+
+	var none *Bus
+
+	none.Observe(func(Event) { t.Error("a nil bus called its observer") })()
+}
+
+// TestNoteStampsTheRunAndStep covers the seam every package without a step
+// identity of its own publishes a note through: the run and the step come
+// off the context, so a note lands under the step that was running.
+func TestNoteStampsTheRunAndStep(t *testing.T) {
+	t.Parallel()
+
+	bus := New(nil)
+
+	var got []Event
+
+	defer bus.Observe(func(event Event) { got = append(got, event) })()
+
+	ctx := WithRunID(WithBus(context.Background(), bus), "run-7")
+	Note(WithStepID(ctx, 3), NoteWarn, "pulling image alpine")
+	Note(ctx, NoteInfo, "job-level")
+
+	if len(got) != 2 {
+		t.Fatalf("got %d events, want 2", len(got))
+	}
+
+	step := got[0]
+	if step.Type != TypeStepNote || step.RunID != "run-7" || step.StepID != 3 ||
+		step.Status != NoteWarn || step.Text != "pulling image alpine" {
+		t.Errorf("step note = %+v", step)
+	}
+
+	if job := got[1]; job.StepID != 0 || job.StepIndex != -1 || job.Status != NoteInfo {
+		t.Errorf("job note = %+v, want no step and StepIndex -1", job)
+	}
+}

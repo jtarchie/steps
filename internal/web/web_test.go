@@ -1103,6 +1103,45 @@ func TestTranscriptShowsTaskOutput(t *testing.T) {
 	}
 }
 
+// TestTranscriptShowsNotes covers what used to reach only the terminal that ran the job: a step's notes render under it, a warning is marked as one in words, and a note that belongs to no step still appears on the run.
+func TestTranscriptShowsNotes(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	err := pipeline.Store.StartRun(ctx, "noted", "build", "", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "noted", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepNote, StepIndex: -1, StepID: 1, Status: events.NoteWarn, Text: "image pull took 40s"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1, Status: "succeeded"},
+		{Type: events.TypeStepNote, StepIndex: -1, Status: events.NoteInfo, Text: "tokens: 1200 total"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "noted", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/noted")
+
+	if !strings.Contains(body, "warning: image pull took 40s") {
+		t.Error("the step's warning note is missing, or marked only by colour")
+	}
+
+	if !strings.Contains(openingTag(t, body, "step-1-compile"), "data-toggle") {
+		t.Error("a step whose only body is a note is not expandable")
+	}
+
+	if !strings.Contains(body, "tokens: 1200 total") {
+		t.Error("a job-level note is missing from the run page")
+	}
+}
+
 // openingTag returns just the opening tag of the element with the given id.
 // Scoped deliberately: a looser search runs on into the page's own scripts,
 // which mention the very attributes being asserted on.

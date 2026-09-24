@@ -99,3 +99,43 @@ func TestAnswerIsNotPrintedTwice(t *testing.T) {
 		t.Error("a non-matching response dropped a turn anyway")
 	}
 }
+
+// TestNotesHangOnTheirStep covers where a note lands: under the step whose id
+// it carries, or on the run itself when it names no step the fold knows —
+// never dropped, because a note is the only record of what it says.
+func TestNotesHangOnTheirStep(t *testing.T) {
+	t.Parallel()
+
+	rows := []store.RunEventRow{
+		{Seq: 1, Type: events.TypeStepStarted, StepName: "build", StepID: 1},
+		{Seq: 2, Type: events.TypeStepNote, StepID: 1, Status: events.NoteInfo, Text: "pulled alpine"},
+		{Seq: 3, Type: events.TypeStepNote, StepIndex: -1, Status: events.NoteWarn, Text: "budget at 90%"},
+		{Seq: 4, Type: events.TypeStepNote, StepID: 9, Status: events.NoteInfo, Text: "orphan"},
+		{Seq: 5, Type: events.TypeStepFinished, StepName: "build", StepID: 1, Status: "succeeded"},
+	}
+
+	folder := NewFolder()
+	changes := folder.Add(rows, nil)
+	view := folder.View(store.RunRow{ID: "R"})
+
+	if len(view.Steps) != 1 {
+		t.Fatalf("a note opened a step: %d steps", len(view.Steps))
+	}
+
+	build := view.Steps[0]
+	if len(build.Notes) != 1 || build.Notes[0].Text != "pulled alpine" || build.Notes[0].Level != events.NoteInfo {
+		t.Errorf("build notes = %+v, want the one note it carried", build.Notes)
+	}
+
+	if !build.HasBody("") {
+		t.Error("a step whose only content is a note has no body, so the page cannot show it")
+	}
+
+	if len(view.Notes) != 2 || view.Notes[0].Text != "budget at 90%" || view.Notes[1].Text != "orphan" {
+		t.Errorf("run notes = %+v, want the job-level and the unknown-step note in order", view.Notes)
+	}
+
+	if !changes[build.Key()].Other {
+		t.Error("a note did not mark its row changed, so the live stream would not redraw it")
+	}
+}

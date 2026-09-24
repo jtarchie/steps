@@ -40,6 +40,8 @@ const (
 	// output, and one bounded event per step costs a row instead of
 	// thousands.
 	TypeStepOutput = "step_output"
+	// TypeStepNote is what a step's machinery said about it, not its own output — an image pulled, a worker acquired; Status is the level, Text the message. These were fmt.Printf lines once, told to the terminal alone.
+	TypeStepNote = "step_note"
 	// Agent conversation traffic, mirroring the persisted transcript's own
 	// event vocabulary (see internal/agent/transcript.go) so a live view and
 	// a stored transcript render through the same code path.
@@ -49,6 +51,12 @@ const (
 	TypeAgentCall     = "agent_call"
 	TypeAgentResult   = "agent_result"
 	TypeAgentSubagent = "agent_subagent"
+)
+
+// Note levels, carried in Status of a TypeStepNote event.
+const (
+	NoteInfo = "info"
+	NoteWarn = "warn"
 )
 
 // Event is one thing that happened during a run.
@@ -135,6 +143,11 @@ type Bus struct {
 	nextID int64
 	seq    atomic.Int64
 
+	// observeMu serializes publishing, which is what hands an observer every event in sequence order. Taken before mu.
+	observeMu    sync.Mutex
+	observers    map[int64]func(Event)
+	nextObserver int64
+
 	sink     chan Event
 	sinkDone chan struct{}
 	// closed guards against publishing to a sink Close has already closed.
@@ -146,7 +159,7 @@ type Bus struct {
 // event, in order, on a single goroutine — the caller does not need its own
 // locking. Close stops that goroutine.
 func New(sink func(Event)) *Bus {
-	bus := &Bus{subs: map[int64]chan Event{}}
+	bus := &Bus{subs: map[int64]chan Event{}, observers: map[int64]func(Event){}}
 
 	if sink != nil {
 		// The goroutine ranges over its OWN copy of the channel, never over
@@ -169,13 +182,14 @@ func New(sink func(Event)) *Bus {
 	return bus
 }
 
-// Publish stamps an event and delivers it to every subscriber and the sink.
-// It never blocks: a subscriber whose buffer is full misses the event rather
-// than holding up the run.
+// Publish stamps an event and delivers it to every observer, subscriber and the sink. Only an observer can hold it up: a subscriber whose buffer is full misses the event rather than stalling the run.
 func (b *Bus) Publish(event Event) {
 	if b == nil {
 		return
 	}
+
+	b.observeMu.Lock()
+	defer b.observeMu.Unlock()
 
 	event.Seq = b.seq.Add(1)
 
@@ -183,11 +197,22 @@ func (b *Bus) Publish(event Event) {
 		event.At = time.Now().UTC()
 	}
 
+	if !b.fanOut(event) {
+		return
+	}
+
+	for _, observe := range b.observers {
+		observe(event)
+	}
+}
+
+// fanOut hands event to the subscribers and the sink, reporting false once the bus is closed.
+func (b *Bus) fanOut(event Event) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	if b.closed {
-		return
+		return false
 	}
 
 	for _, ch := range b.subs {
@@ -206,6 +231,27 @@ func (b *Bus) Publish(event Event) {
 		case b.sink <- event:
 		default: // sink backed up: the live view still got it
 		}
+	}
+
+	return true
+}
+
+// Observe calls fn for every later event, synchronously and in sequence order — what a terminal needs, where a dropped event is a line never seen. A slow fn slows the run, as the fmt.Printf it replaces did; fn must not Publish or cancel itself.
+func (b *Bus) Observe(fn func(Event)) (cancel func()) {
+	if b == nil {
+		return func() {}
+	}
+
+	b.observeMu.Lock()
+	id := b.nextObserver
+	b.nextObserver++
+	b.observers[id] = fn
+	b.observeMu.Unlock()
+
+	return func() {
+		b.observeMu.Lock()
+		delete(b.observers, id)
+		b.observeMu.Unlock()
 	}
 }
 
@@ -293,6 +339,16 @@ func FromContext(ctx context.Context) *Bus {
 // execution packages use: one call, no nil checks, no-op off the web path.
 func Publish(ctx context.Context, event Event) {
 	FromContext(ctx).Publish(event)
+}
+
+// Note publishes a TypeStepNote under the run and step ctx names, or the job (StepIndex -1) outside a step. A context with no bus drops it, so a caller with no run to tell uses slog.
+func Note(ctx context.Context, level, text string) {
+	event := Event{Type: TypeStepNote, RunID: RunID(ctx), StepID: StepID(ctx), Status: level, Text: text}
+	if event.StepID == 0 {
+		event.StepIndex = -1
+	}
+
+	Publish(ctx, event)
 }
 
 // runIDKey is the context key for the current run's id.

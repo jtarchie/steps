@@ -32,6 +32,8 @@ type Transcript struct {
 	// Roots are the steps at the top of the plan, each holding its subtree.
 	Roots    []*Step
 	JobError string
+	// Notes are the run's notes that belong to no step it recorded: said at the job level, or by a step whose start never reached the log.
+	Notes []Note
 	// LastSeq is the highest event sequence this view already renders, and it
 	// is what the live stream must resume AFTER.
 	//
@@ -89,9 +91,7 @@ type Step struct {
 	Duration time.Duration
 	Started  time.Time
 	// Deadline is when a running agent step's resolved timeout: expires —
-	// Started plus the ceiling. Never set by the fold: the event log does not
-	// know it, so the caller holding the configuration fills it in (web's
-	// attachStepDeadlines).
+	// Started plus the ceiling. Never set by the fold: the caller holding the configuration fills it in (web's attachStepDeadlines).
 	// Zero (HasDeadline false) for a finished or non-agent step, an
 	// unlimited timeout, or a run whose configuration no longer matches
 	// what is loaded — the same "unknowable, not uncapped" reasoning
@@ -110,7 +110,19 @@ type Step struct {
 	// a single overwritten string, the page a reader watched three attempts on
 	// would silently drop two of them at the closing reload.
 	Outputs []string
+	// Notes is what the step's machinery said about it, in order.
+	Notes []Note
 }
+
+// Note is one TypeStepNote, as a reader sees it.
+type Note struct {
+	Level string
+	Text  string
+	At    time.Time
+}
+
+// Warn reports a note worth a reader's attention, not only their record.
+func (n Note) Warn() bool { return n.Level == events.NoteWarn }
 
 // Running reports a step that started and has not reported an end.
 func (s Step) Running() bool { return s.Status == "" || s.Status == "running" }
@@ -237,6 +249,7 @@ func (s Step) HasBody(jobError string) bool {
 	return len(s.Turns) > 0 ||
 		len(s.Trajectory()) > 0 ||
 		len(s.Outputs) > 0 ||
+		len(s.Notes) > 0 ||
 		s.DistinctError(jobError) != "" ||
 		s.Response() != "" ||
 		s.Note() != "" ||
@@ -572,15 +585,10 @@ func (f *Folder) fold(row store.RunEventRow, results map[string]store.NodeRow) (
 		attachOutput(&f.run, f.index, row)
 
 		return f.index[stepKey(row)], Change{Other: true}
+	case events.TypeStepNote:
+		return attachNote(&f.run, f.index, row)
 	default:
-		// Agent conversation traffic; anything unrecognized is ignored
-		// rather than rendered, so an event type added later cannot break
-		// an older reader.
-		if isAgentTraffic(row.Type) {
-			if position, hung := attachTurn(&f.run, f.index, row); hung {
-				return position, Change{Turns: 1}
-			}
-		}
+		return hangTurn(&f.run, f.index, row)
 	}
 
 	return 0, Change{}
@@ -612,6 +620,35 @@ func attachOutput(view *Transcript, index map[string]int, row store.RunEventRow)
 	}
 
 	view.Steps[position].Outputs = append(view.Steps[position].Outputs, row.Text)
+}
+
+// attachNote hangs a note on the step it names, or on the run when it names none the fold has seen, reporting the row it changed.
+func attachNote(view *Transcript, index map[string]int, row store.RunEventRow) (int, Change) {
+	note := Note{Level: row.Status, Text: row.Text, At: row.At}
+
+	// Only by id: a note carries no name, so the (index, name) fallback would file every one under whatever step held index 0.
+	if position, seen := index[stepKey(row)]; seen && row.StepID != 0 {
+		view.Steps[position].Notes = append(view.Steps[position].Notes, note)
+
+		return position, Change{Other: true}
+	}
+
+	view.Notes = append(view.Notes, note)
+
+	return 0, Change{}
+}
+
+// hangTurn folds agent conversation traffic in; anything unrecognized is ignored rather than rendered, so an event type added later cannot break an older reader.
+func hangTurn(view *Transcript, index map[string]int, row store.RunEventRow) (int, Change) {
+	if !isAgentTraffic(row.Type) {
+		return 0, Change{}
+	}
+
+	if position, hung := attachTurn(view, index, row); hung {
+		return position, Change{Turns: 1}
+	}
+
+	return 0, Change{}
 }
 
 // isAgentTraffic reports conversation events, which hang under a step rather

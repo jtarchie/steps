@@ -521,6 +521,8 @@ svg.dag { display: block; }
   white-space: pre-wrap;
 }
 .log .err { color: var(--red); }
+.log.notice.warn { color: var(--yellow); }
+.runnotes { margin: 8px 0; }
 
 .turn { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--line-soft); }
 .turn:last-of-type { border-bottom: 0; }
