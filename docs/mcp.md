@@ -140,13 +140,56 @@ jobs:
       - "Triage today's crash reports."
 ```
 
-- **Single tool** (`tool:`): the only form that may also set `description:` (overriding the server's own), `required:`, or `max_calls:` — the same semantics as a custom tool (see [agents.md](agents.md)). Its model-facing function name is `<server>__<tool>` (double underscore — a dot is rejected by OpenAI's function-name charset).
-- **Named subset** (`tools:`): a list of tool names, each exposed under its own `<server>__<tool>` name. `description:`/`required:`/`max_calls:` are load-time errors here — they're single-tool concepts.
+- **Single tool** (`tool:`): the only form that may also set `description:` (overriding the server's own), `required:`, `max_calls:`, or `args:` (see [Pinning arguments](#pinning-arguments-args) below) — the same semantics as a custom tool (see [agents.md](agents.md)). Its model-facing function name is `<server>__<tool>` (double underscore — a dot is rejected by OpenAI's function-name charset).
+- **Named subset** (`tools:`): a list of tool names, each exposed under its own `<server>__<tool>` name. `description:`/`required:`/`max_calls:`/`args:` are load-time errors here — they're single-tool concepts.
 - **Bare form** (`- mcp: github`, neither set): every tool the server currently exposes.
-- **`args:` is invalid on every MCP form** — an MCP tool's arguments are schema-shaped by the remote server, so there's nothing to pin the way a custom tool's `run:` template arguments can be.
 - **Grant, not inline**: like a sub-agent tool, an MCP grant must live on the `agents:` entry (or a `fix:`'s own `tools:` override) and be selected by bare name (`tools: [github]`) on a step — a step cannot introduce `{mcp: ..., tool: ...}` inline.
 - **Cache hashing**: a server's endpoint/auth type/`api_key_env` name (never a value) — or, for a stdio server, its `command`/`args`/`cwd` — and the granted tool name(s) fold into the step's hash. The bare "all tools" form hashes as a static marker, since plan-time hashing has no live connection to enumerate the server's tools; use the explicit `tools: [...]` form if you want the server's tool list changing to bust the cache.
 - **Tool results**: translated to the same map shape every other tool returns — a transport failure or a result with `isError: true` becomes `{"error": ...}`; a successful call becomes `{"structured_content": ..., "content": ...}`.
+
+### Pinning arguments: `args:`
+
+Which tools exist is one lever; which project, database or repo they reach is the other. Written into a prompt ("project 307, never another"), that scope is a request the model is free to ignore. `args:` on a single-tool grant makes it a boundary:
+
+```yaml test=mcp-pinned-args mcp=mcp-pinned-args
+mcp_servers:
+- name: honeybadger
+  endpoint: https://mcp.honeybadger.io/mcp
+  auth: { type: oauth }
+
+agents:
+- name: oncall
+  source: { model: openrouter/qwen/qwen3.7-flash }
+  tools:
+  - mcp: honeybadger
+    tool: list_faults
+    args:
+      project_id: 307        # removed from the schema the model sees, and
+                             # sent as 307 whatever the model asks for
+
+jobs:
+- name: triage
+  plan:
+  - agent: oncall
+    messages:
+      - "What is failing right now?"
+    assert:
+      tool_calls:
+      - name: honeybadger__list_faults
+        args: { q: timeout }  # only model-authored args are assertable —
+                              # naming the pinned project_id is a load error
+  assert:
+    execution: [oncall]
+    outcome: succeeded
+```
+
+- **The model can neither see nor set a pinned key.** It is removed from the tool's advertised `properties` and `required` before the schema reaches the model, and merged **over** whatever the model sends before the call goes over the wire. A model that sends one anyway — or a case variant of one, like `Project_ID`, which a Go server's case-insensitive JSON decoding could bind instead — has it overwritten or dropped, and the run's transcript gets a warning naming the key (never the value it tried). A case variant the tool really does declare under that exact spelling is left alone.
+- **A pin must bind, or the step is refused.** Each key must be a top-level property the tool's input schema declares; a pin the server does not declare, or on a schema with no `properties` at all, fails with the list of what it does declare. `$ref`/`allOf` schemas and nested paths are not resolved, so a pin into one is refused rather than guessed at. Preflight checks this before any job starts (and `steps validate --live` reports it); every step checks it again when it connects, so a server that changed its schema since is caught too. Plain `steps validate` has no connection and checks only the shape.
+- **Values are sent as the declared type.** `integer`, `number` and `boolean` properties get the pinned string parsed (`307` arrives as the number 307), including through a nullable `type: [integer, "null"]` or a single non-null `anyOf`/`oneOf` branch; an `object`, `array` or `null` property cannot be pinned from a string and is refused; anything else is sent as the string. A value that does not parse is refused the same way an undeclared key is. Quoting in YAML is optional.
+- **Single-tool form only**, like `description:`/`required:`/`max_calls:` — a pin is per-tool by nature.
+- **A pin binds the grant it is written on, and nothing else.** Another grant of the same server in the same `tools:` list that also offers the tool — the bare form, a `tools:` subset naming it, the same `tool:` again — would hand the model the same function unpinned, so it is a load error. A sub-agent's or a `fix:`'s own grant of the same server is a separate capability you chose; pin it there too if it needs the same scope.
+- **Aliases are invisible.** A server that accepts the same parameter under two names (`project_id` and `projectId`) will take the unpinned one; pin or withhold both.
+- **Not for secrets.** Pinned values fold into the step's hash and land in the state database, exactly as a custom tool's `args:` do, and a changed pin re-runs the step. Credentials belong in the server's `auth:`.
 
 ## Backing a resource type with MCP
 

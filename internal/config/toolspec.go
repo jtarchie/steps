@@ -32,15 +32,13 @@ type ToolSpec struct {
 	// MCP, when set, makes this a passthrough to one or more tools on a
 	// configured mcp_servers: entry (MCP names the server). Three forms:
 	//   - MCPTool set ({mcp, tool} in YAML): grants that one remote tool;
-	//     only this form may also set Description/Required/MaxCalls.
+	//     only this form may also set Description/Required/MaxCalls/Args.
 	//   - MCPTools set ({mcp, tools: [...]} in YAML): grants that named
 	//     subset, each keeping its own server-advertised description.
 	//   - neither set ({mcp} alone): grants every tool the server exposes.
 	// Like a sub-agent tool, an MCP grant must live on the agents: entry
 	// (or a fix:'s own tools:), never introduced inline on a step
-	// (enforced by validateMCPToolGrants/resolveEffectiveTools), and Args
-	// is invalid on any form — arguments are schema-shaped by the remote
-	// server, not a flat string template.
+	// (enforced by validateMCPToolGrants/resolveEffectiveTools).
 	MCP      string
 	MCPTool  string
 	MCPTools []string
@@ -57,12 +55,15 @@ type ToolSpec struct {
 	// attempts: restart (a fresh conversation is a fresh budget). Invalid on
 	// builtins and sub-agent tools.
 	MaxCalls int
-	// Args pins argument values a custom tool's run: template may reference:
-	// merged OVER the model's own arguments at call time (pinned always
-	// wins), and excluded from the parameter schema shown to the model, so
-	// the model can neither see nor override them — "the model chooses when,
-	// the machine chooses where." Values are plain strings; not templated.
-	// Invalid on builtins and sub-agent tools.
+	// Args pins argument values: merged OVER the model's own arguments at
+	// call time (pinned always wins), and excluded from the parameter schema
+	// shown to the model, so the model can neither see nor override them —
+	// "the model chooses when, the machine chooses where." Values are plain
+	// strings; not templated. On a custom tool they are keys its run:
+	// template may reference. On a single-tool MCP grant each must be a
+	// top-level property the server's input schema declares, and is sent as
+	// that property's scalar type (internal/agent pinMCPArgs). Invalid on
+	// builtins, sub-agent tools, and the tools:/bare MCP forms.
 	Args map[string]string
 	// Allow narrows the web_fetch builtin to the named hosts: an entry
 	// matches its exact hostname and any subdomain of it, and every hop of a
@@ -153,7 +154,7 @@ type ToolSpec struct {
 // UnmarshalYAML decodes a ToolSpec from either a scalar (builtin name) or a
 // mapping YAML node: {name, description, run, required, max_calls, args} for
 // a custom tool, {agent, description} for a sub-agent tool, {mcp, tool,
-// description, required, max_calls} / {mcp, tools: [...]} / {mcp} for an MCP
+// description, required, max_calls, args} / {mcp, tools: [...]} / {mcp} for an MCP
 // tool grant (see ToolSpec.MCP), or {builtin, description} to reference a
 // builtin by mapping instead of a bare scalar — the only reason to do so is
 // to hit a validation error like max_calls/args on a builtin explicitly

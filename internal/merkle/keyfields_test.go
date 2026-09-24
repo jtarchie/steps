@@ -323,7 +323,7 @@ func keyProbes() []keyProbe {
 		grant("custom", config.ToolSpec{Name: "lint", Description: "lints", Run: "golangci-lint run"}, unusedByGrant("MCPTool", "MCPTools")),
 		grant("sub-agent", config.ToolSpec{Agent: "extra", Description: "a helper"}, unusedByGrant(
 			"Allow", "AnsweredBy", "Args", "Builtin", "Default", "MCP", "MCPTool", "MCPTools", "MaxCalls", "MaxOutputBytes", "Name", "OptionsRequired", "Required", "Run")),
-		grant("mcp", config.ToolSpec{MCP: "github"}, unusedByGrant("Allow", "AnsweredBy", "Args", "Builtin", "Default", "Name", "OptionsRequired", "Run")),
+		grant("mcp", config.ToolSpec{MCP: "github"}, unusedByGrant("Allow", "AnsweredBy", "Builtin", "Default", "Name", "OptionsRequired", "Run")),
 		{name: "Agent", want: with(agentSilent, map[string]string{
 			"Tools[0].Timeout": operational, "Tools[0].MCPTool": otherForm, "Tools[0].MCPTools": otherForm,
 		}), silent: func(t *testing.T) []string {

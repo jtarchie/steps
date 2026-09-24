@@ -848,8 +848,9 @@ func withRequiredContent(t config.ToolSpec, content map[string]any) {
 // this package depends on config/resource only (never internal/mcp), so it
 // cannot list a live server's tools at plan time, and the bare form's hash
 // is therefore a static marker that a server's own tool list changing does
-// not, by itself, bust. description/max_calls fold in only when set, the
-// same value-gating every other tool kind here uses.
+// not, by itself, bust. description/max_calls/args fold in only when set, the
+// same value-gating every other tool kind here uses — args because a pin is
+// the boundary the grant draws, so moving it must re-run the step.
 func mcpToolSpecContent(cfg *config.Config, t config.ToolSpec) (map[string]any, error) {
 	server, err := mcpServerContent(cfg, t.MCP)
 	if err != nil {
@@ -876,6 +877,10 @@ func mcpToolSpecContent(cfg *config.Config, t config.ToolSpec) (map[string]any, 
 
 	if t.MaxCalls != 0 {
 		content["max_calls"] = t.MaxCalls
+	}
+
+	if len(t.Args) != 0 {
+		content["args"] = t.Args
 	}
 
 	if t.MaxOutputBytes != 0 {
