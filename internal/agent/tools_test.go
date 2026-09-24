@@ -1674,3 +1674,22 @@ func TestExecCustomToolHonoursMaxOutputBytes(t *testing.T) {
 		t.Errorf("stdout is %d bytes, want the narrowed grant to have kept it small", len(stdout))
 	}
 }
+
+// TestBuiltinToolDescriptionsAreTheGoContract pins the descriptions the model
+// sees to the Go constants that document each tool's contract. An embedded
+// tools/<name>.md used to win over them, and a shorter one silently dropped
+// edit_file's recovery rules and named a read_file source that no longer exists.
+func TestBuiltinToolDescriptionsAreTheGoContract(t *testing.T) {
+	t.Parallel()
+
+	tools := builtinAgentTools("")
+	for name, want := range map[string]string{
+		"read_file":  readFileDescription,
+		"write_file": writeFileDescription,
+		"edit_file":  editFileDescription,
+	} {
+		if got := tools[name].decl.Description; got != want {
+			t.Errorf("%s description = %q, want the Go constant %q", name, got, want)
+		}
+	}
+}
