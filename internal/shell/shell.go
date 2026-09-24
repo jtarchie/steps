@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // Runner runs pipeline-defined commands, either on the host or inside a
@@ -831,8 +833,8 @@ func (h HostRunner) runStreamed(ctx context.Context, command string, maxBytes in
 	cmd.Env = h.environ(ctx)
 	cmd.Stdin = os.Stdin
 
-	stdoutW, flushStdout := prefixedStream(h.label, os.Stdout)
-	stderrW, flushStderr := prefixedStream(h.label, os.Stderr)
+	stdoutW, flushStdout := prefixedStream(h.label, events.Stdout(ctx))
+	stderrW, flushStderr := prefixedStream(h.label, events.Stderr(ctx))
 	cmd.Stdout = stdoutW
 	cmd.Stderr = stderrW
 
@@ -880,7 +882,7 @@ func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, err
 
 	var outBuf, errBuf bytes.Buffer
 
-	stderrW, flushStderr := prefixedStream(h.label, os.Stderr)
+	stderrW, flushStderr := prefixedStream(h.label, events.Stderr(ctx))
 	cmd.Stdout = &outBuf
 	cmd.Stderr = io.MultiWriter(stderrW, &errBuf)
 
@@ -936,7 +938,7 @@ func (h HostRunner) RunCaptureFullLimitedStreamed(ctx context.Context, command s
 // 0, meaning unbounded — byte-identical to before RunCaptureFullLimited
 // existed), RunCaptureFullLimited (maxBytes > 0), and
 // RunCaptureFullLimitedStreamed (stream true, tees both captured streams to
-// os.Stdout/os.Stderr live).
+// the context's output live — see events.Stdout).
 func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes int, spillDir string, stream bool) (stdout, stderr string, exitCode int, err error) {
 	slog.Debug("shell.capture_full", "command", command, "cwd", h.cwd)
 
@@ -954,8 +956,8 @@ func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes
 	if stream {
 		var stdoutW, stderrW io.Writer
 
-		stdoutW, flushStdout = prefixedStream(h.label, os.Stdout)
-		stderrW, flushStderr = prefixedStream(h.label, os.Stderr)
+		stdoutW, flushStdout = prefixedStream(h.label, events.Stdout(ctx))
+		stderrW, flushStderr = prefixedStream(h.label, events.Stderr(ctx))
 		cmd.Stdout = io.MultiWriter(stdoutW, outWriter)
 		cmd.Stderr = io.MultiWriter(stderrW, errWriter)
 	} else {

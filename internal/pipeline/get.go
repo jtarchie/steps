@@ -91,7 +91,6 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 		}
 
 		if w.skippable[hash] {
-			fmt.Printf("skip: %s (version: %v)\n", resource.Name, version)
 			logFrom(getCtx).Info("job.skip", "resource", resource.Name, "reason", "cached", "hash", hash)
 			publishStepSkipped(getCtx, w.jobName, i, step, markStep(getCtx), hash, skipReason(stepChainSkipped))
 
@@ -165,7 +164,7 @@ func (w *planWalk) reportNoVersions(ctx context.Context, step config.Step, resou
 	// idle when the real story is a resource that has never had a version at
 	// all.
 	if blocked := w.resolution.blockingReport(); blocked != "" {
-		fmt.Printf("get: %s cannot build; no versions exist for: %s\n", resourceName, blocked)
+		warnf(ctx, "get: %s cannot build; no versions exist for: %s", resourceName, blocked)
 		logFrom(ctx).Warn("job.get.blocked", "resource", resourceName, "blocking", blocked)
 
 		return
@@ -177,14 +176,13 @@ func (w *planWalk) reportNoVersions(ctx context.Context, step config.Step, resou
 			reason += " — --force skips the step cache, not versions this job already took; to redo one, resume the run that took it or pin the version"
 		}
 
-		fmt.Printf("get: %s has %s\n", resourceName, reason)
 		logFrom(ctx).Info("job.get.no_new_versions", "resource", resourceName, "already_taken", taken, "forced", forced(ctx))
 		publishStepSkipped(ctx, w.jobName, w.index, step, markStep(ctx), "", reason)
 
 		return
 	}
 
-	fmt.Printf("get: %s returned no versions; the %d step(s) after it did not run\n", resourceName, remaining)
+	warnf(ctx, "get: %s returned no versions; the %d step(s) after it did not run", resourceName, remaining)
 	logFrom(ctx).Warn("job.get.no_versions", "resource", resourceName, "skipped_steps", remaining)
 }
 
@@ -426,7 +424,7 @@ func (w *planWalk) resolveInPlaceVersion(
 	// materialize, so a later step fails on a missing input instead of on the
 	// empty check that caused it. Name the cause here, where it is known.
 	if len(versions) == 0 {
-		fmt.Printf("get: %s returned no versions; nothing was fetched\n", step.Get)
+		warnf(ctx, "get: %s returned no versions; nothing was fetched", step.Get)
 		logFrom(ctx).Warn("job.get.no_versions", "resource", step.Get)
 
 		return resource, resourceType, nil, nil
@@ -464,7 +462,6 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	}
 
 	if w.skippable[hash] {
-		fmt.Printf("skip: %s (version: %v)\n", resource.Name, version)
 		logFrom(ctx).Info("job.skip", "resource", resource.Name, "reason", "cached", "hash", hash)
 
 		// A skip means this exact chain already succeeded once — the version
@@ -550,7 +547,7 @@ func fetchGetVersions(ctx context.Context, cfg *config.Config, step config.Step,
 	)
 
 	err := retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
-		fmt.Printf("get: %s (attempt %d/%d)\n", step.Get, attempt, total)
+		notef(ctx, "get: %s (attempt %d/%d)", step.Get, attempt, total)
 		logFrom(ctx).Info("job.get.attempt", "get", step.Get, "attempt", attempt, "total_attempts", total)
 	}, func(attemptCtx context.Context) error {
 		res, resType, vers, fetchErr := cache.ResolveVersionsCached(attemptCtx, cfg, step, pinned)
@@ -586,7 +583,7 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, st store.Deli
 	// runPlacedStage.
 	err := runPlacedStage(ctx, step, func(ctx context.Context) error {
 		return retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
-			fmt.Printf("get: %s (version: %v, attempt %d/%d)\n", artifact, version, attempt, total)
+			notef(ctx, "get: %s (version: %v, attempt %d/%d)", artifact, version, attempt, total)
 			logFrom(ctx).Info("job.get.in.attempt", "artifact", artifact, "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
 			err := fetchGetStep(attemptCtx, cfg, st, artifact, resource, resourceType, version, step.Params, bw)
@@ -608,7 +605,7 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, st store.Deli
 }
 
 func fetchGetStep(ctx context.Context, cfg *config.Config, st store.Deliveries, artifact string, resource config.Resource, resourceType config.ResourceType, version, params map[string]any, bw workspace.BuildWorkspace) error {
-	fmt.Printf("get: %s (version: %v)\n", artifact, version)
+	notef(ctx, "version: %v", version)
 
 	fetch := func(dir string) error {
 		err := rsrc.RunIn(ctx, cfg, resourceType, resource.Env, resource.Source, version, params, dir)

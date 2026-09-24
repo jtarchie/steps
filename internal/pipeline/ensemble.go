@@ -41,7 +41,6 @@ func runEnsembleStep(ctx context.Context, r stepRunner, i int, step config.Step,
 		return stepResult{}, fmt.Errorf("step %d (ensemble): %w", i, err)
 	}
 
-	fmt.Printf("ensemble: %d agents, decide %s\n", len(step.Ensemble.Agents), step.Ensemble.Decide)
 	slog.Debug("job.step", "job", r.jobName, "index", i, "kind", "ensemble", "members", len(step.Ensemble.Agents))
 
 	votes := runEnsembleMembers(ctx, r, i, step, hash)
@@ -63,7 +62,7 @@ func runEnsembleStep(ctx context.Context, r stepRunner, i int, step config.Step,
 		return stepResult{}, err
 	}
 
-	fmt.Printf("ensemble decide: %s → %s\n", step.Ensemble.Decide, verdict)
+	notef(ctx, "ensemble decide: %s → %s", step.Ensemble.Decide, verdict)
 
 	return stepResult{hash: hash, verdict: verdict}, nil
 }

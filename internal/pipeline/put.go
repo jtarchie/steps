@@ -61,7 +61,9 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 
 	logFrom(ctx).Debug("job.step", "step", step.Put, "resource", step.PutResourceName())
 
-	fmt.Printf("put: %s\n", putLabel(step))
+	if step.PutResourceName() != step.Put {
+		notef(ctx, "put: %s", putLabel(step))
+	}
 
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindPut, StepIndex: i, Resource: step.DisplayName(), Content: content}
 
@@ -120,7 +122,7 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 	// runPlacedStage.
 	retryErr := runPlacedStage(ctx, step, func(ctx context.Context) error {
 		return retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
-			fmt.Printf("put: %s (attempt %d/%d)\n", putLabel(step), attempt, total)
+			notef(ctx, "put: %s (attempt %d/%d)", putLabel(step), attempt, total)
 			logFrom(ctx).Info("job.put.attempt", "put", step.Put, "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
 			runResult, runErr := rsrc.RunOut(attemptCtx, cfg, *resourceType, resource.Env, resource.Source, step.Params, space.Dir())

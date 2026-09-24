@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/blobstore"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/wire"
 )
@@ -320,7 +321,7 @@ func (s *session) connect(ctx context.Context) error {
 	s.transport = transport
 	s.adoptCodec(transport.in, transport.out)
 
-	err = s.greet()
+	err = s.greet(ctx)
 	if err != nil {
 		// The transport is already up, so tearing it down here is what keeps a
 		// failed handshake from stranding a child process or an SSH channel.
@@ -381,7 +382,7 @@ func (s *session) abandon() {
 	s.transport = nil
 }
 
-func (s *session) greet() error {
+func (s *session) greet(ctx context.Context) error {
 	build := s.transport.build
 
 	// The session name has to be unique across every session that could ever
@@ -442,7 +443,7 @@ func (s *session) greet() error {
 
 	notice := volatileWorkdirNotice(s.worker, ok)
 	if notice != "" {
-		fmt.Println(notice)
+		events.Note(ctx, events.NoteWarn, notice)
 	}
 
 	return nil
@@ -985,7 +986,8 @@ func (s *session) noteDrain(frame wire.Frame) {
 		when = " (expected gone by " + notice.Deadline + ")"
 	}
 
-	fmt.Printf("worker %s %s: %s%s\n", s.worker.Address(), kind, reason, when)
+	// ponytail: a drain arrives on the session's read loop, which holds no step's context, so it is said to the process; thread the step's context through the reader if a live view should place it under a step.
+	events.Announce(events.NoteWarn, fmt.Sprintf("worker %s %s: %s%s", s.worker.Address(), kind, reason, when))
 }
 
 // read is readFrame, marking the conversation broken on a transport failure so

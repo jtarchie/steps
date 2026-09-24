@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -54,35 +54,11 @@ func TestRemainingOrNoDeadline(t *testing.T) {
 	})
 }
 
-// captureStdout runs fn with os.Stdout redirected to a pipe, returning
-// everything fn wrote via fmt.Printf and friends. Not safe alongside other
-// tests running in parallel that also touch os.Stdout — callers must not use
-// t.Parallel(). Duplicated from internal/trigger/trigger_test.go rather than
-// exported cross-package, matching this repo's convention of small
-// duplicated test helpers over new cross-package edges.
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
+// captured is a context whose human-facing output — streamed text, and the notes a context with no bus writes — lands in the returned builder, so a test reads what a person would have seen without touching the process's stdout.
+func captured() (context.Context, *strings.Builder) {
+	var out strings.Builder
 
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-
-	orig := os.Stdout
-	os.Stdout = w
-
-	fn()
-
-	_ = w.Close()
-
-	os.Stdout = orig
-
-	data, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("read captured stdout: %v", err)
-	}
-
-	return string(data)
+	return events.WithOutput(context.Background(), events.Output{Stdout: &out}), &out
 }
 
 func TestNewToolOutputSpillDir(t *testing.T) {
@@ -254,7 +230,8 @@ func TestPreparedAgentStepCloseToleratesEmptySpillDir(t *testing.T) {
 }
 
 func TestPrintAgentResponse(t *testing.T) {
-	// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		res  conversationResult
@@ -289,8 +266,12 @@ func TestPrintAgentResponse(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := captureStdout(t, func() { printAgentResponse(tc.res) })
-			if got != tc.want {
+			t.Parallel()
+
+			ctx, out := captured()
+			printAgentResponse(ctx, tc.res)
+
+			if got := out.String(); got != tc.want {
 				t.Errorf("printAgentResponse(%+v) printed %q, want %q", tc.res, got, tc.want)
 			}
 		})

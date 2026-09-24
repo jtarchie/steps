@@ -134,7 +134,7 @@ func reportRoute(ctx context.Context, steps []config.Step, i int, step config.St
 		progress = fmt.Sprintf("visit %d/%d", visits[i], step.MaxVisits)
 	}
 
-	fmt.Printf("route: %s --%s--> %s (%s)\n", from, key, to, progress)
+	notef(ctx, "route: %s --%s--> %s (%s)", from, key, to, progress)
 	logFrom(ctx).Info("job.route", "from", from, "key", key, "to", to, "visit", visits[i], "max_visits", step.MaxVisits)
 }
 
@@ -204,7 +204,7 @@ func foldStepUnskippable(ctx context.Context, cfg *config.Config, step config.St
 
 		name := executedStepName(step)
 
-		fmt.Printf("note: %s makes this chain uncacheable (%s)\n", name, reason)
+		notef(ctx, "note: %s makes this chain uncacheable (%s)", name, reason)
 		logFrom(ctx).Debug("job.uncacheable", "step", name, "reason", reason)
 	}
 

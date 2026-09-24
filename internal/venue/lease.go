@@ -9,6 +9,8 @@ import (
 	"maps"
 	"sync"
 	"time"
+
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // Acquirer brings a worker's machine into existence and says how to give it back; a nil release means there is nothing of steps' to give back.
@@ -128,7 +130,7 @@ func (r *Registry) drop(ctx context.Context, held *entry, immediate bool) error 
 	held.idle = time.AfterFunc(held.window, func() { r.expire(held, gen) })
 	r.mu.Unlock()
 
-	fmt.Printf("worker %s: nothing is using it; keeping it for %s (?idle=)\n", held.source.URL, held.window)
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: nothing is using it; keeping it for %s (?idle=)", held.source.URL, held.window))
 
 	return nil
 }
@@ -151,7 +153,7 @@ func (r *Registry) expire(held *entry, gen int) {
 	// Nothing that could cancel this is still around, and the release bounds its own calls.
 	err := r.giveBack(context.Background(), held)
 	if err != nil {
-		fmt.Printf("warning: worker %s could not be given back after its idle window: %v\n", held.source.URL, err)
+		events.Announce(events.NoteWarn, fmt.Sprintf("worker %s could not be given back after its idle window: %v", held.source.URL, err))
 	}
 }
 
@@ -269,7 +271,7 @@ func (r *Registry) giveBackHeld(ctx context.Context) error {
 	r.mu.Unlock()
 
 	for _, one := range held {
-		fmt.Printf("warning: worker %s is still in use as this process stops; giving it back anyway\n", one.source.URL)
+		events.Note(ctx, events.NoteWarn, fmt.Sprintf("worker %s is still in use as this process stops; giving it back anyway", one.source.URL))
 	}
 
 	err := r.giveAll(ctx, held)

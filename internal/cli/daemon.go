@@ -17,6 +17,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
+	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/trigger"
@@ -435,6 +436,9 @@ func (d *daemon) start(
 	provider workspace.Provider, from string,
 ) {
 	bus := events.New(pipeline.StoreSink(st))
+	// The daemon's stdout reads as a terminal run always has; RunJob prints only on a bus it attached itself, and this one is ours.
+	bus.Observe(runview.Plain(os.Stdout))
+
 	target := web.NewPipeline(name, from, cfg, st, bus)
 
 	// Rooted in the daemon's lifetime rather than the request's: a set is over in milliseconds and what it starts has to outlive it.

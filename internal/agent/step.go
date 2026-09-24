@@ -173,18 +173,20 @@ type StepOutcome struct {
 // failed one, since runPrepared populates res either way (see runPrepared's
 // own doc comment) and a failed attempt's partial text/note is exactly what
 // a human needs to see to know what to do next.
-func printAgentResponse(res conversationResult) {
+func printAgentResponse(ctx context.Context, res conversationResult) {
+	out := events.Stdout(ctx)
+
 	text := strings.TrimSpace(res.text)
 	if text != "" {
-		fmt.Println(text)
+		_, _ = fmt.Fprintln(out, text)
 	}
 
 	if res.verdict != "" {
-		fmt.Printf("verdict: %s\n", res.verdict)
+		_, _ = fmt.Fprintf(out, "verdict: %s\n", res.verdict)
 	}
 
 	if res.note != "" {
-		fmt.Printf("note: %s\n", res.note)
+		_, _ = fmt.Fprintf(out, "note: %s\n", res.note)
 	}
 }
 
@@ -234,7 +236,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		return out, nil
 	}
 
-	fmt.Printf("agent: %s%s\n", name, fallbackBanner(prepared))
+	noteFallback(ctx, name, prepared)
 
 	// Give the conversation its live identity, so every turn it takes is
 	// publishable as belonging to this run, job, and step. Set here rather
@@ -284,7 +286,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 
 	res, err := runAndAnnounceFailover(ctx, name, &prepared)
 
-	printAgentResponse(res)
+	printAgentResponse(ctx, res)
 
 	// Before the error branches below, so a step that FAILED still records
 	// what it spent. A failed agent step is often the expensive one, and
@@ -404,7 +406,6 @@ func lookupStepCache(
 
 	res := workspace.LookupStepCache(ctx, bw, req)
 	if res.Hit {
-		fmt.Printf("skip: %s (reused)\n", name)
 		slog.Info("job.skip", "job", jobName, "step", name, "reason", "reused", "key", res.Key)
 	}
 
@@ -561,7 +562,7 @@ func RunHook(ctx context.Context, cfg *config.Config, jobName string, step confi
 	}
 	defer prepared.close(step.Agent)
 
-	fmt.Printf("agent: %s%s\n", step.Agent, fallbackBanner(prepared))
+	events.Note(ctx, events.NoteInfo, "agent: "+step.Agent+fallbackBanner(prepared))
 
 	// Give the conversation its live identity, matching RunStep (see its own
 	// comment above): a hook's conversation is nested inside a job that DOES
@@ -577,7 +578,7 @@ func RunHook(ctx context.Context, cfg *config.Config, jobName string, step confi
 
 	res, err := runAndAnnounceFailover(ctx, step.Agent, &prepared)
 
-	printAgentResponse(res)
+	printAgentResponse(ctx, res)
 
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", step.Agent, err)
@@ -607,6 +608,13 @@ func RunHook(ctx context.Context, cfg *config.Config, jobName string, step confi
 // Visibility is the requirement, not a nicety: a fallback can produce
 // meaningfully different output, and a quality dip caused by an outage that
 // looks identical to a normal run is one nobody investigates.
+// noteFallback warns when a step is served by a fallback model; the step's start line already names the agent.
+func noteFallback(ctx context.Context, name string, prepared preparedAgentStep) {
+	if banner := fallbackBanner(prepared); banner != "" {
+		events.Note(ctx, events.NoteWarn, "agent: "+name+banner)
+	}
+}
+
 func fallbackBanner(prepared preparedAgentStep) string {
 	model := fallbackModel(prepared)
 	if model == "" {
@@ -663,7 +671,7 @@ func runAndAnnounceFailover(ctx context.Context, name string, prepared *prepared
 	// and endpoint, and comparing names would go silent on exactly that
 	// configuration while agent.failover still logged the swap.
 	if served.swapped {
-		fmt.Printf("agent: %s failed over mid-run to %s\n", name, served.ri.ModelName)
+		events.Note(ctx, events.NoteWarn, "agent: "+name+" failed over mid-run to "+served.ri.ModelName)
 	}
 
 	return res, err

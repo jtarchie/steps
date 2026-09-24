@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/smithy-go"
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // Rung is how much has to happen before a worker can be dialed.
@@ -189,12 +190,12 @@ func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(c
 			return fmt.Errorf("stopping %s for %q: %w", worker.Instance, worker.URL, stopErr)
 		}
 
-		fmt.Printf("worker %s: parked %s\n", worker.URL, worker.Instance)
+		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: parked %s", worker.URL, worker.Instance))
 
 		return nil
 	}
 
-	fmt.Printf("worker %s: started %s\n", worker.URL, worker.Instance)
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: started %s", worker.URL, worker.Instance))
 
 	return worker.asStatic(worker.Instance), release, nil
 }
@@ -206,8 +207,7 @@ func adoptRunning(ctx context.Context, api ec2API, worker Worker) (Worker, func(
 		return Worker{}, nil, err
 	}
 
-	fmt.Printf("worker %s: %s was already running; using it and leaving it running, since steps did not start it\n",
-		worker.URL, worker.Instance)
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: %s was already running; using it and leaving it running, since steps did not start it", worker.URL, worker.Instance))
 
 	return worker.asStatic(worker.Instance), nil, nil
 }
@@ -225,7 +225,7 @@ func stopInstance(api ec2API, worker Worker, instance string) {
 
 	_, err := api.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{instance}})
 	if err != nil {
-		fmt.Printf("warning: could not stop %s after a failed acquisition for %q: %v\n", instance, worker.URL, err)
+		events.Announce(events.NoteWarn, fmt.Sprintf("could not stop %s after a failed acquisition for %q: %v", instance, worker.URL, err))
 	}
 }
 
@@ -265,12 +265,12 @@ func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, fun
 			return fmt.Errorf("terminating %s for %q: %w", instance, worker.URL, stopErr)
 		}
 
-		fmt.Printf("worker %s: terminated %s\n", worker.URL, instance)
+		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: terminated %s", worker.URL, instance))
 
 		return nil
 	}
 
-	fmt.Printf("worker %s: launched %s\n", worker.URL, instance)
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: launched %s", worker.URL, instance))
 
 	return worker.asStatic(instance), release, nil
 }
@@ -283,7 +283,7 @@ func terminateInstance(api ec2API, worker Worker, instance string) {
 
 	_, err := api.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{instance}})
 	if err != nil {
-		fmt.Printf("warning: could not terminate %s after a failed acquisition for %q: %v\n", instance, worker.URL, err)
+		events.Announce(events.NoteWarn, fmt.Sprintf("could not terminate %s after a failed acquisition for %q: %v", instance, worker.URL, err))
 	}
 }
 

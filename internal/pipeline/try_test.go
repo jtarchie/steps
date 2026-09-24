@@ -44,7 +44,7 @@ func TestTolerateTryFailureClassifies(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := tolerateTryFailure(testCase.ctx, "job", testCase.step, testCase.err)
+			got := tolerateTryFailure(testCase.ctx, "job", testCase.step, 0, testCase.err)
 			if (got == nil) != testCase.tolerated {
 				t.Errorf("tolerateTryFailure(%v) = %v, tolerated=%v", testCase.err, got, testCase.tolerated)
 			}

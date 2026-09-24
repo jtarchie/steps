@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jtarchie/steps/internal/events"
 	"google.golang.org/api/compute/v1"
 	"google.golang.org/api/googleapi"
 )
@@ -459,8 +460,7 @@ func gceStartParked(ctx context.Context, api gceAPI, worker Worker, project, zon
 			return Worker{}, nil, err
 		}
 
-		fmt.Printf("worker %s: %s was already running; using it and leaving it running, since steps did not start it\n",
-			worker.URL, worker.Instance)
+		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: %s was already running; using it and leaving it running, since steps did not start it", worker.URL, worker.Instance))
 
 		return worker.asStatic(worker.Instance), nil, nil
 	}
@@ -495,12 +495,12 @@ func gceStartParked(ctx context.Context, api gceAPI, worker Worker, project, zon
 			return fmt.Errorf("stopping %s for %q: %w", worker.Instance, worker.URL, stopErr)
 		}
 
-		fmt.Printf("worker %s: parked %s\n", worker.URL, worker.Instance)
+		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: parked %s", worker.URL, worker.Instance))
 
 		return nil
 	}
 
-	fmt.Printf("worker %s: started %s\n", worker.URL, worker.Instance)
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: started %s", worker.URL, worker.Instance))
 
 	return worker.asStatic(worker.Instance), release, nil
 }
@@ -541,7 +541,7 @@ func gceStopInstance(api gceAPI, worker Worker, project, zone, name string) {
 
 	err := api.Stop(ctx, project, zone, name)
 	if err != nil {
-		fmt.Printf("warning: could not stop %s after a failed acquisition for %q: %v\n", name, worker.URL, err)
+		events.Announce(events.NoteWarn, fmt.Sprintf("could not stop %s after a failed acquisition for %q: %v", name, worker.URL, err))
 	}
 }
 
@@ -553,7 +553,7 @@ func gceLaunch(ctx context.Context, api gceAPI, worker Worker, project, zone str
 	// Named BEFORE the money is spent: the name is client-chosen, so a crash
 	// anywhere past the insert leaves a findable trace rather than an
 	// anonymous billing machine.
-	fmt.Printf("worker %s: creating %s from template %s\n", worker.URL, name, worker.Template)
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: creating %s from template %s", worker.URL, name, worker.Template))
 
 	err := api.InsertFromTemplate(ctx, project, zone, name, worker.Template)
 	if err != nil {
@@ -587,12 +587,12 @@ func gceLaunch(ctx context.Context, api gceAPI, worker Worker, project, zone str
 			return fmt.Errorf("deleting %s for %q: %w", name, worker.URL, deleteErr)
 		}
 
-		fmt.Printf("worker %s: deleted %s\n", worker.URL, name)
+		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: deleted %s", worker.URL, name))
 
 		return nil
 	}
 
-	fmt.Printf("worker %s: launched %s\n", worker.URL, name)
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: launched %s", worker.URL, name))
 
 	return worker.asStatic(name), release, nil
 }
@@ -605,7 +605,7 @@ func gceDeleteInstance(api gceAPI, worker Worker, project, zone, name string) {
 
 	err := api.Delete(ctx, project, zone, name)
 	if err != nil {
-		fmt.Printf("warning: could not delete %s after a failed acquisition for %q: %v\n", name, worker.URL, err)
+		events.Announce(events.NoteWarn, fmt.Sprintf("could not delete %s after a failed acquisition for %q: %v", name, worker.URL, err))
 	}
 }
 

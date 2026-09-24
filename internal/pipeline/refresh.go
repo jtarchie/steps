@@ -64,7 +64,7 @@ func refreshOneResource(ctx context.Context, cfg *config.Config, st store.Store,
 
 	cursor, err := checkCursorFor(ctx, st, name)
 	if err != nil {
-		warnRefreshFailed(name, err)
+		warnRefreshFailed(ctx, name, err)
 
 		return
 	}
@@ -73,16 +73,18 @@ func refreshOneResource(ctx context.Context, cfg *config.Config, st store.Store,
 	ctx, placed := withPlacementSink(ctx)
 	defer recordPlacement(ctx, stepRunner{cfg: cfg, jobName: job.Name, st: st}, placed, 0, "check "+name, "check "+name, "")
 
-	ctx, err = PlaceResource(ctx, cfg, name)
+	placedCtx, err := PlaceResource(ctx, cfg, name)
 	if err != nil {
-		warnRefreshFailed(name, err)
+		warnRefreshFailed(ctx, name, err)
 
 		return
 	}
 
+	ctx = placedCtx
+
 	versions, err := rsrc.CheckVersions(ctx, cfg, *resourceType, resource.Env, resource.Source, cursor)
 	if err != nil {
-		warnRefreshFailed(name, err)
+		warnRefreshFailed(ctx, name, err)
 
 		return
 	}
@@ -93,7 +95,7 @@ func refreshOneResource(ctx context.Context, cfg *config.Config, st store.Store,
 
 	_, err = st.RecordVersions(ctx, name, versions, cfg.VersionHistoryLimit())
 	if err != nil {
-		warnRefreshFailed(name, err)
+		warnRefreshFailed(ctx, name, err)
 	}
 }
 
@@ -119,7 +121,7 @@ func checkCursorFor(ctx context.Context, st store.Store, name string) (map[strin
 	return cursor, nil
 }
 
-func warnRefreshFailed(name string, err error) {
-	fmt.Printf("warning: could not refresh %s; building from recorded history: %v\n", name, err)
+func warnRefreshFailed(ctx context.Context, name string, err error) {
+	warnf(ctx, "could not refresh %s; building from recorded history: %v", name, err)
 	slog.Warn("job.refresh_failed", "resource", name, "error", err)
 }

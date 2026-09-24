@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -254,9 +255,9 @@ func (cb *loopbackCallback) fetch(announce func(authURL string), req authRequest
 }
 
 // printAndOpen is how a login on THIS machine announces its URL: printed always, opened if it can be. Exported through PrintAndOpen so the CLI's remote login tells a person exactly what the local one does.
-func printAndOpen(open func(string) error) func(authURL string) {
+func printAndOpen(w io.Writer, open func(string) error) func(authURL string) {
 	return func(authURL string) {
-		fmt.Printf("\nAuthorize in your browser:\n\n  %s\n\n", authURL)
+		_, _ = fmt.Fprintf(w, "\nAuthorize in your browser:\n\n  %s\n\n", authURL)
 
 		// Opened on its own goroutine: cmd.Run waits for the opener to exit,
 		// and xdg-open with no registered handler (or a broken DISPLAY over
@@ -266,11 +267,13 @@ func printAndOpen(open func(string) error) func(authURL string) {
 		go func() {
 			err := open(authURL)
 			if err != nil {
-				fmt.Printf("(could not open a browser automatically: %v — open the URL above)\n", err)
+				_, _ = fmt.Fprintf(w, "(could not open a browser automatically: %v — open the URL above)\n", err)
 			}
 		}()
 	}
 }
 
 // PrintAndOpen announces an authorization URL the way `steps mcp login` always has.
-func PrintAndOpen(open func(string) error, authURL string) { printAndOpen(open)(authURL) }
+func PrintAndOpen(w io.Writer, open func(string) error, authURL string) {
+	printAndOpen(w, open)(authURL)
+}

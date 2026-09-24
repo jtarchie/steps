@@ -16,6 +16,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // Login runs the interactive OAuth authorization-code + PKCE flow for an
@@ -44,7 +45,7 @@ func Login(ctx context.Context, srv config.MCPServer, open func(url string) erro
 	}
 	defer cb.Close()
 
-	return login(ctx, srv, cb, printAndOpen(open))
+	return login(ctx, srv, cb, printAndOpen(events.Stdout(ctx), open))
 }
 
 // login is the flow both front doors share: everything after "where does the redirect land, and who is told the URL".

@@ -2,6 +2,8 @@ package events
 
 import (
 	"context"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -303,5 +305,40 @@ func TestNoteStampsTheRunAndStep(t *testing.T) {
 
 	if job := got[1]; job.StepID != 0 || job.StepIndex != -1 || job.Status != NoteInfo {
 		t.Errorf("job note = %+v, want no step and StepIndex -1", job)
+	}
+}
+
+// TestOutputDefaultsToTheProcessStreams covers the seam every package writes human-facing bytes through: the process's own streams unless a renderer installed its writers.
+func TestOutputDefaultsToTheProcessStreams(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	if Stdout(ctx) != os.Stdout || Stderr(ctx) != os.Stderr {
+		t.Error("a bare context does not write to the process's streams")
+	}
+
+	var out, errs strings.Builder
+
+	ctx = WithOutput(ctx, Output{Stdout: &out, Stderr: &errs})
+	_, _ = Stdout(ctx).Write([]byte("o"))
+	_, _ = Stderr(ctx).Write([]byte("e"))
+
+	if out.String() != "o" || errs.String() != "e" {
+		t.Errorf("installed writers got %q/%q", out.String(), errs.String())
+	}
+}
+
+// TestNoteWithNoBusIsStillSaid covers the code that runs outside any run — a worker given back at shutdown, a replay being forked — where a published note would reach nobody.
+func TestNoteWithNoBusIsStillSaid(t *testing.T) {
+	t.Parallel()
+
+	var out strings.Builder
+
+	ctx := WithOutput(context.Background(), Output{Stdout: &out})
+	Note(ctx, NoteInfo, "worker parked")
+	Note(ctx, NoteWarn, "could not give it back")
+
+	if want := "worker parked\nwarning: could not give it back\n"; out.String() != want {
+		t.Errorf("printed %q, want %q", out.String(), want)
 	}
 }

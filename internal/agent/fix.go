@@ -179,7 +179,7 @@ func RunFix(
 	// already printed "task %q failed ...; invoking fix agent %q" before this
 	// call, so this only needs the response body, not another "agent:" banner.
 	result, err := runOneConversation(ctx, ri, llm, conv, timeout)
-	printAgentResponse(result)
+	printAgentResponse(ctx, result)
 
 	if err != nil {
 		return fmt.Errorf("fix agent conversation: %w", err)

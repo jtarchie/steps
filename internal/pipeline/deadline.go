@@ -108,7 +108,7 @@ func deadlineStopsFanOut(ctx context.Context, jobName, kind, unit string, ran, t
 		return false
 	}
 
-	fmt.Printf("timeout: %s stopped after %d of %d %s (the job's deadline passed)\n", kind, ran, total, unit)
+	notef(ctx, "timeout: %s stopped after %d of %d %s (the job's deadline passed)", kind, ran, total, unit)
 	slog.Warn("fanout.deadline.passed",
 		"job", jobName, "kind", kind, "ran", ran, "total", total)
 

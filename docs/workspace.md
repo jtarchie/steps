@@ -172,7 +172,8 @@ The resource cache above keeps what a `get` fetched. This one keeps what a **tas
 It turns on by itself as soon as `workspace.root:` names a durable directory — there is no second switch. A step is looked up before it runs, and on a hit its declared `outputs:` are restored into the artifact store and the plan carries on with the next step:
 
 ```
-skip: reviewer (reused)
+agent: reviewer
+skip: reviewer (same inputs as an earlier run — outputs reused)
 ```
 
 Opt a single step out with `volatile:`:

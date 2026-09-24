@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/dockerapi"
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // errSessionClosed is returned when a command is issued through a runner
@@ -295,7 +296,7 @@ func (s *dockerSession) start(ctx context.Context, name string) (string, error) 
 func (s *dockerSession) pullAndCreate(ctx context.Context, spec dockerapi.ContainerSpec) (string, error) {
 	slog.Debug("shell.docker.session_pull", "image", s.image, "host", s.dockerHost)
 
-	err := s.client.Pull(ctx, s.image, os.Stdout)
+	err := s.client.Pull(ctx, s.image, events.Stdout(ctx))
 	if err != nil {
 		return "", fmt.Errorf("%w", err)
 	}
@@ -505,7 +506,7 @@ func NewContainerName() (string, error) {
 // both stdout and stderr — even for Run, which never exposes them, trading a
 // little memory for one less code path to keep in sync across five
 // near-identical methods — additionally streaming either live (to
-// os.Stdout/os.Stderr, prefixed when WithLabel was used) when
+// the context's output, prefixed when WithLabel was used) when
 // streamStdout/streamStderr is set. stdin wires the host's stdin through
 // only when set; otherwise cmd.Stdin stays nil (/dev/null), matching
 // RunCaptureFull's non-interactive semantics for model-generated commands.
@@ -533,14 +534,14 @@ func (d DockerRunner) dockerExec(
 	if streamStdout {
 		var live io.Writer
 
-		live, flushStdout = prefixedStream(d.label, os.Stdout)
+		live, flushStdout = prefixedStream(d.label, events.Stdout(ctx))
 		outTarget = io.MultiWriter(live, outWriter)
 	}
 
 	if streamStderr {
 		var live io.Writer
 
-		live, flushStderr = prefixedStream(d.label, os.Stderr)
+		live, flushStderr = prefixedStream(d.label, events.Stderr(ctx))
 		errTarget = io.MultiWriter(live, errWriter)
 	}
 

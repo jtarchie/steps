@@ -1425,7 +1425,7 @@ func (m *MCPLoginCmd) remote(ctx context.Context) error {
 		if status.AuthorizeURL != "" && !announced {
 			announced = true
 
-			stepsmcp.PrintAndOpen(openBrowser, status.AuthorizeURL)
+			stepsmcp.PrintAndOpen(os.Stdout, openBrowser, status.AuthorizeURL)
 		}
 
 		select {

@@ -103,7 +103,7 @@ func withRegistry(ctx context.Context, registry *venue.Registry) (context.Contex
 		err := registry.Close(releaseCtx)
 		if err != nil {
 			logFrom(ctx).Error("worker_release_failed", "error", err)
-			fmt.Printf("warning: a worker acquired by this process could not be released: %v\n", err)
+			warnf(ctx, "a worker acquired by this process could not be released: %v", err)
 		}
 	}
 }
@@ -126,7 +126,7 @@ func WithLeases(ctx context.Context) (context.Context, func(context.Context)) {
 			// problem rather than a wrong answer. It is loud because it
 			// costs money for as long as nobody notices.
 			logFrom(ctx).Error("job.worker_release_failed", "error", err)
-			fmt.Printf("warning: a worker acquired for this job could not be released: %v\n", err)
+			warnf(ctx, "a worker acquired for this job could not be released: %v", err)
 		}
 	}
 }
@@ -232,7 +232,7 @@ func withVenueRetry(ctx context.Context, step config.Step, budget time.Duration,
 			leases.Abandon(tag, dialed)
 		}
 
-		fmt.Printf("worker for tag %s was reclaimed; re-placing the step\n", tag)
+		notef(ctx, "worker for tag %s was reclaimed; re-placing the step", tag)
 		logFrom(ctx).Info("job.worker_evicted", "tag", tag, "attempt", attempt+1, "error", err)
 	}
 }
@@ -289,7 +289,7 @@ func releaseIfReclaimed(ctx context.Context, step config.Step, runner shell.Runn
 		return
 	}
 
-	fmt.Printf("worker for tag %s finished the step and is being reclaimed; letting it go\n", tag)
+	notef(ctx, "worker for tag %s finished the step and is being reclaimed; letting it go", tag)
 	logFrom(ctx).Info("job.worker_abandoned_after_drain", "tag", tag, "reason", reason)
 
 	// Forgotten, never destroyed — AWS owns this machine's end, and a

@@ -133,7 +133,6 @@ func runLoadVarStep(ctx context.Context, r stepRunner, i int, step config.Step, 
 		vars.set(step.LoadVar, value)
 	}
 
-	fmt.Printf("load_var: %s\n", step.LoadVar)
 	slog.Info("job.load_var", "job", r.jobName, "var", step.LoadVar, "bytes", len(value))
 
 	content := map[string]any{"load_var": step.LoadVar, "file": step.VarFile, "value": value}

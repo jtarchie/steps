@@ -8,6 +8,7 @@ import (
 	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
 )
@@ -36,7 +37,6 @@ func runTryStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 	inner := *step.Try
 	name := executedStepName(inner)
 
-	fmt.Printf("try: %s\n", name)
 	slog.Debug("job.step", "job", r.jobName, "index", i, "kind", "try", "inner", name)
 
 	// The inner step chains under the try node's hash. No caching (nil
@@ -78,15 +78,21 @@ func toleratedByTry(ctx context.Context, err error) bool {
 // inner step's failure or infrastructure error into a nil error so the walk
 // continues, and says so on the transcript. It runs AFTER applyRouting, so a
 // wrapper that routed on the failure has already consumed the error and prints
-// nothing extra here. Any non-try step, and an abort, passes through.
-func tolerateTryFailure(ctx context.Context, jobName string, step config.Step, err error) error {
+// nothing extra here. Any non-try step, and an abort, passes through. stepID
+// is the try's own, so the note hangs under it; 0 (a hook body, which is no
+// step) keeps whatever ctx names.
+func tolerateTryFailure(ctx context.Context, jobName string, step config.Step, stepID int64, err error) error {
 	if err == nil || step.Try == nil || !toleratedByTry(ctx, err) {
 		return err
 	}
 
+	if stepID != 0 {
+		ctx = events.WithStepID(ctx, stepID)
+	}
+
 	name := executedStepName(step)
 
-	fmt.Printf("try: %s %s (tried, continuing)\n", name, outcome.Classify(ctx, err))
+	notef(ctx, "try: %s %s (tried, continuing)", name, outcome.Classify(ctx, err))
 	slog.Info("job.try", "job", jobName, "step", name, "outcome", "tolerated", "error", err.Error())
 
 	return nil

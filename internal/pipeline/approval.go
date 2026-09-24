@@ -49,10 +49,10 @@ func runApprovalStep(ctx context.Context, r stepRunner, i int, step config.Step,
 	// Loud, and with the exact command to answer it. A parked approval that
 	// nobody is told about is useless in practice, and this is the last line
 	// anyone sees before the run stops making progress.
-	fmt.Printf("approval %d: %s\n", id, step.Approval.Message)
+	notef(ctx, "approval %d: %s", id, step.Approval.Message)
 
 	flags := agent.AnswerFlags(ctx, r.cfg.Name)
-	fmt.Printf("approval %d: waiting up to %s — steps approvals approve %d %s  |  steps approvals reject %d %s\n",
+	notef(ctx, "approval %d: waiting up to %s — steps approvals approve %d %s  |  steps approvals reject %d %s",
 		id, timeout, id, flags, id, flags)
 	slog.Warn("job.approval_pending",
 		"job", r.jobName, "approval", id, "message", step.Approval.Message, "timeout", timeout.String())
@@ -82,7 +82,7 @@ func runApprovalStep(ctx context.Context, r stepRunner, i int, step config.Step,
 		return stepResult{}, err
 	}
 
-	fmt.Printf("approval %d: approved by %s\n", id, decision.DecidedBy)
+	notef(ctx, "approval %d: approved by %s", id, decision.DecidedBy)
 
 	return ran(hash), nil
 }

@@ -4,7 +4,6 @@ package pipeline
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 
@@ -263,12 +262,12 @@ func (b *blockBudget) settle() {
 // block with NO reservation source at a width covering every cell — there,
 // nothing reports before the last cell is admitted and the ceiling sees a
 // running total of ~0 for every decision it makes.
-func (b *blockBudget) warnIfUnbindable(jobName string, maxInFlight, cells int) {
+func (b *blockBudget) warnIfUnbindable(ctx context.Context, jobName string, maxInFlight, cells int) {
 	if !b.unbindable(maxInFlight, cells) {
 		return
 	}
 
-	fmt.Printf("budget: warning — max_in_flight (%d) covers all %d cells and nothing is reserved per cell, so this block's budget of %s tokens cannot stop anything\n",
+	warnf(ctx, "budget: max_in_flight (%d) covers all %d cells and nothing is reserved per cell, so this block's budget of %s tokens cannot stop anything",
 		maxInFlight, cells, humanCount(b.ceiling))
 
 	slog.Warn("across.budget.unbindable",
@@ -308,10 +307,10 @@ func (b *blockBudget) spent() int {
 // consumed the allowance are typically still running and have reported
 // nothing, so "spent 0 of 3,600,000" would name the one number that had no
 // part in the decision and read like a stop that never should have happened.
-func (b *blockBudget) report(jobName string, ran, total int) {
+func (b *blockBudget) report(ctx context.Context, jobName string, ran, total int) {
 	spent, reserved := b.committed()
 
-	fmt.Printf("budget: across stopped after %d of %d cells (%s of %s tokens committed: %s spent, %s reserved by cells still running)\n",
+	notef(ctx, "budget: across stopped after %d of %d cells (%s of %s tokens committed: %s spent, %s reserved by cells still running)",
 		ran, total, humanCount(spent+reserved), humanCount(b.ceiling), humanCount(spent), humanCount(reserved))
 
 	slog.Warn("across.budget.exhausted",
@@ -345,7 +344,7 @@ func stopAdmitting(ctx context.Context, jobName string, spend *blockBudget, ran,
 	}
 
 	if !spend.admit() {
-		spend.report(jobName, ran, total)
+		spend.report(ctx, jobName, ran, total)
 
 		return true
 	}

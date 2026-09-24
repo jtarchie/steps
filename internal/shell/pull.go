@@ -6,10 +6,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/jtarchie/steps/internal/dockerapi"
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // dockerPullTimeout bounds one image pull. Generous: a large image on a slow
@@ -70,10 +70,10 @@ func pullImage(ctx context.Context, client *dockerapi.Client, image string) erro
 	ctx, cancel := context.WithTimeout(ctx, dockerPullTimeout)
 	defer cancel()
 
-	fmt.Printf("pulling image: %s\n", image)
+	events.Note(ctx, events.NoteInfo, "pulling image: "+image)
 	slog.Debug("shell.docker.image_pull", "image", image)
 
-	err := client.Pull(ctx, image, os.Stdout)
+	err := client.Pull(ctx, image, events.Stdout(ctx))
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}

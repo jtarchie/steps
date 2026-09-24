@@ -25,7 +25,7 @@ import (
 //nolint:gochecknoglobals // one process-wide destination for one process's own output
 var (
 	outMu sync.RWMutex
-	out   io.Writer = os.Stdout
+	out   io.Writer = os.Stdout //nolint:forbidigo // a watch's poll lines belong to the daemon process, not to any run
 )
 
 // printf writes one line to wherever this package's output currently goes.

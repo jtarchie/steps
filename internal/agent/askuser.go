@@ -425,7 +425,7 @@ func responderRequest(row store.Question) string {
 func (g askGrant) waitForAnswer(ctx context.Context, env toolEnv, row store.Question) map[string]any {
 	deadline := time.Now().Add(g.wait)
 
-	announceQuestion(row, g.wait, g.answerFlags)
+	announceQuestion(ctx, row, g.wait, g.answerFlags)
 
 	// The terminal channel runs alongside the poll rather than instead of it:
 	// a person at this terminal and a person running `steps questions answer` in another
@@ -486,7 +486,7 @@ func (g askGrant) recordTerminal(ctx context.Context, env toolEnv, row store.Que
 		return nil, false
 	}
 
-	fmt.Printf("question %d: %s\n", row.ID, err)
+	events.Note(ctx, events.NoteWarn, fmt.Sprintf("question %d: %s", row.ID, err))
 
 	return nil, false
 }
@@ -580,7 +580,7 @@ func (g askGrant) poll(ctx context.Context, env toolEnv, row store.Question, dea
 	}
 
 	if current.Status != "pending" {
-		fmt.Printf("question %d: answered by %s\n", current.ID, current.AnsweredBy)
+		events.Note(ctx, events.NoteInfo, fmt.Sprintf("question %d: answered by %s", current.ID, current.AnsweredBy))
 
 		return resolvedResult(current, answerSource(current))
 	}
@@ -618,14 +618,14 @@ func (g askGrant) close(ctx context.Context, env toolEnv, row store.Question, st
 // announceQuestion is the last line anybody sees before the step stops making
 // progress, so it carries the exact command to answer it — the same reasoning
 // as approval:'s.
-func announceQuestion(row store.Question, wait time.Duration, flags string) {
-	fmt.Printf("question %d: %s\n", row.ID, row.Question)
+func announceQuestion(ctx context.Context, row store.Question, wait time.Duration, flags string) {
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("question %d: %s", row.ID, row.Question))
 
 	if len(row.Options) > 0 {
-		fmt.Printf("question %d: options: %s\n", row.ID, strings.Join(row.Options, " | "))
+		events.Note(ctx, events.NoteInfo, fmt.Sprintf("question %d: options: %s", row.ID, strings.Join(row.Options, " | ")))
 	}
 
-	fmt.Printf("question %d: waiting up to %s — steps questions answer %d <answer> %s\n", row.ID, wait, row.ID, flags)
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("question %d: waiting up to %s — steps questions answer %d <answer> %s", row.ID, wait, row.ID, flags))
 
 	slog.Warn("agent.question_pending", "question", row.ID, "job", row.JobName,
 		"agent", row.AgentName, "question_text", row.Question, "timeout", wait.String())

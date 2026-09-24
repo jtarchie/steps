@@ -141,7 +141,7 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 
 	// Last, so a try: wrapper's to: has already routed on the real outcome and
 	// the wrapper's hooks have already observed it.
-	err = tolerateTryFailure(ctx, w.jobName, step, err)
+	err = tolerateTryFailure(ctx, w.jobName, step, res.stepID, err)
 	if err != nil {
 		return true, err
 	}
@@ -176,7 +176,7 @@ func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) bool {
 		return false
 	}
 
-	fmt.Printf("skip: %s (already succeeded)\n", name)
+	notef(ctx, "skip: %s (already succeeded)", name)
 	logFrom(ctx).Info("job.skip", "index", w.index, "reason", "resume", "step", name)
 	recordExecution(ctx, name)
 
@@ -185,7 +185,7 @@ func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) bool {
 	// a direct put: is detected, not one nested in a skipped block. Upgrade:
 	// a run_outputs table (DDL + schemaVersion bump) read here.
 	if step.Put != "" {
-		fmt.Printf("resume: put %s ran in an earlier attempt; its version is not recorded as passed for %s\n", step.Put, w.jobName)
+		warnf(ctx, "resume: put %s ran in an earlier attempt; its version is not recorded as passed for %s", step.Put, w.jobName)
 		logFrom(ctx).Warn("job.resume_put_unrecorded", "put", step.Put, "job", w.jobName)
 	}
 
@@ -210,7 +210,6 @@ func reportChainSkipped(ctx context.Context, jobName string, firstIndex int, ste
 			continue
 		}
 
-		fmt.Printf("skip: %s (chain)\n", name)
 		logFrom(ctx).Info("job.skip", "index", firstIndex+offset, "step", name, "reason", "chain")
 		publishStepSkipped(ctx, jobName, firstIndex+offset, step, markStep(ctx), "", skipReason(stepChainSkipped))
 	}
@@ -298,6 +297,8 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 		publishStepSkipped(ctx, r.jobName, i, step, mark, res.hash, skipReason(res.disposition))
 	}
 
+	res.stepID = mark.id
+
 	// Neither kind of skip fires hooks: the step did not run, so it has no
 	// outcome for its observers to react to.
 	if res.disposition != stepRan || step.Hooks.Empty() {
@@ -308,7 +309,7 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 	if err == nil && final != nil {
 		_ = r.st.ForgetChain(context.WithoutCancel(ctx), r.jobName, res.hash)
 
-		return stepResult{verdict: res.verdict, note: res.note}, final
+		return stepResult{verdict: res.verdict, note: res.note, stepID: mark.id}, final
 	}
 
 	return res, final
@@ -327,7 +328,6 @@ func dispatchNonGetStep(ctx context.Context, r stepRunner, i int, step config.St
 	}
 
 	if !shouldRun {
-		fmt.Printf("skip: %s (when)\n", executedStepName(step))
 		logFrom(ctx).Info("job.skip", "reason", "when", "step", executedStepName(step))
 
 		return stepResult{hash: parentHash, disposition: stepGuardSkipped}, nil

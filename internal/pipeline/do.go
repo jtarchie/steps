@@ -36,8 +36,6 @@ func runDoStep(ctx context.Context, r stepRunner, i int, step config.Step, paren
 		return stepResult{}, fmt.Errorf("step %d (do): %w", i, err)
 	}
 
-	fmt.Printf("do: %d steps\n", len(step.Do))
-
 	// Children are dispatched against the BLOCK's hash as their parent, so the
 	// chain reads do -> child -> child rather than every child hanging off the
 	// step before the block. That keeps a child's identity dependent on the
@@ -68,7 +66,7 @@ func runDoStep(ctx context.Context, r stepRunner, i int, step config.Step, paren
 		// one goes. Without it the same wrapper would be tolerated in a plain
 		// plan and propagate inside a do:, which is the case try: is most
 		// often reached for.
-		childErr = tolerateTryFailure(ctx, r.jobName, child, childErr)
+		childErr = tolerateTryFailure(ctx, r.jobName, child, childRes.stepID, childErr)
 		if childErr != nil {
 			return ran(hash), childErr
 		}

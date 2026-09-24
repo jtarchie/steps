@@ -63,8 +63,18 @@ linters:
     - gosec         # Go security checker; respects existing //nolint:gosec markers
     # Architecture
     - depguard      # enforce the internal import-direction (no upward dep on the CLI layer)
+    # Output
+    - forbidigo     # a run's human-facing output goes through internal/events, never the process's streams
 
   settings:
+    # A line printed straight to the process's stdout reaches one terminal and no transcript, and tears any renderer that owns the screen (#124). A step's machinery says things with events.Note; bytes a person must see (a command's output, a prompt) go to events.Stdout(ctx)/Stderr(ctx), which a renderer can take over.
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^fmt\.Print(f|ln)?$
+          msg: "say it with events.Note(ctx, ...), or write to events.Stdout(ctx)"
+        - pattern: ^os\.(Stdout|Stderr)$
+          msg: "write to events.Stdout(ctx)/Stderr(ctx), which a renderer can take over"
     gosec:
       excludes:
         # G706 (log injection) flags any slog call whose attribute value came
@@ -160,6 +170,7 @@ linters:
             # loaded pipelines, exactly as it does trigger.Watch. events is the
             # leaf both need in order to wire a bus to a store sink.
             - "github.com/jtarchie/steps/internal/events"
+            - "github.com/jtarchie/steps/internal/runview"
             - "github.com/jtarchie/steps/internal/web"
             - "github.com/jtarchie/steps/internal/workspace"
         # e2e is the end-to-end suite: nothing but _test.go files, driving the
@@ -239,6 +250,8 @@ linters:
             - "**/internal/shell/**"
           allow:
             - "$gostd"
+            # events: a step's machinery tells the run what it did (a note), and writes human-facing bytes where the renderer says (Stdout/Stderr).
+            - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/dockerapi"
         Template:
           files:
@@ -405,6 +418,8 @@ linters:
             - "!**/internal/venue/iapdial/**"
           allow:
             - "$gostd"
+            # events: a step's machinery tells the run what it did (a note), and writes human-facing bytes where the renderer says (Stdout/Stderr).
+            - "github.com/jtarchie/steps/internal/events"
             # The SSH client and its sftp subsystem: the whole remote contract
             # is sshd plus a pushed binary, so these are what implement it.
             # Both are pure Go, which is what keeps CGO_ENABLED=0 true and so
@@ -545,6 +560,8 @@ linters:
             - "**/internal/workspace/**"
           allow:
             - "$gostd"
+            # events: a step's machinery tells the run what it did (a note), and writes human-facing bytes where the renderer says (Stdout/Stderr).
+            - "github.com/jtarchie/steps/internal/events"
             - "golang.org/x/sys/unix"
             - "github.com/jtarchie/steps/internal/config"
             # wire and compress are reached from tests only, and deliberately:
@@ -563,6 +580,8 @@ linters:
             - "**/internal/mcp/**"
           allow:
             - "$gostd"
+            # events: a step's machinery tells the run what it did (a note), and writes human-facing bytes where the renderer says (Stdout/Stderr).
+            - "github.com/jtarchie/steps/internal/events"
             - "github.com/modelcontextprotocol/go-sdk/auth"
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             - "github.com/modelcontextprotocol/go-sdk/oauthex"
@@ -645,6 +664,7 @@ linters:
             - "github.com/jtarchie/steps/internal/agent"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/events"
+            - "github.com/jtarchie/steps/internal/runview"
             - "github.com/jtarchie/steps/internal/merkle"
             - "github.com/jtarchie/steps/internal/outcome"
             - "github.com/jtarchie/steps/internal/resource"
@@ -734,3 +754,10 @@ linters:
             # that chooses one.
             - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/workspace"
+
+  exclusions:
+    rules:
+      # The CLI owns the process's streams — it is what chooses a renderer — and events is where the default lives. Tests, build tools and the process boundary are not a run's output.
+      - path: (^|/)(internal/cli/|internal/events/events\.go$|main\.go$|tools/|e2e/|docs/|hack/)|_test\.go$
+        linters:
+          - forbidigo

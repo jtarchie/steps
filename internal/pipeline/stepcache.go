@@ -63,10 +63,6 @@ func lookupStepCache(
 
 	res := workspace.LookupStepCache(ctx, r.bw, req)
 	if res.Hit {
-		// Named "reused" rather than "cached": the chain skip already prints
-		// "(cached)", means something different by it, and the two land in the
-		// same transcript.
-		fmt.Printf("skip: %s (reused)\n", name)
 		logFrom(ctx).Info("job.skip", "step", name, "reason", "reused", "key", res.Key)
 	}
 

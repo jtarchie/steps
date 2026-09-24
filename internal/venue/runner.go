@@ -13,8 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/wire"
 )
@@ -169,7 +169,7 @@ func (r runner) exchange(ctx context.Context, command string, p plan) (outText, 
 		return r.exchangeContained(ctx, command, p)
 	}
 
-	stdout, stderr, sinks := r.sinks(p)
+	stdout, stderr, sinks := r.sinks(ctx, p)
 
 	exit, err := r.session.run(ctx, command, sinks)
 
@@ -305,9 +305,9 @@ func (r runner) exchangeContained(ctx context.Context, command string, p plan) (
 }
 
 // sinks builds the two streams a plan asks for.
-func (r runner) sinks(p plan) (stdout, stderr stream, out outputSinks) {
-	stdout = r.stream(p.streamStdout, p.capture, p.maxBytes, p.spillDir, os.Stdout)
-	stderr = r.stream(p.streamStderr, p.capture, p.maxBytes, p.spillDir, os.Stderr)
+func (r runner) sinks(ctx context.Context, p plan) (stdout, stderr stream, out outputSinks) {
+	stdout = r.stream(p.streamStdout, p.capture, p.maxBytes, p.spillDir, events.Stdout(ctx))
+	stderr = r.stream(p.streamStderr, p.capture, p.maxBytes, p.spillDir, events.Stderr(ctx))
 
 	return stdout, stderr, outputSinks{stdout: stdout.writer, stderr: stderr.writer, flushes: []func(){stdout.flush, stderr.flush}}
 }

@@ -49,7 +49,6 @@ func runParallelStep(ctx context.Context, r stepRunner, i int, step config.Step,
 
 	branches := step.InParallel.Steps
 
-	fmt.Printf("in_parallel: %d branches%s\n", len(branches), limitSuffix(step.InParallel.Limit))
 	slog.Debug("job.step", "job", r.jobName, "index", i, "kind", "in_parallel", "branches", len(branches))
 
 	results := runBranches(ctx, r, i, step, hash)
@@ -137,7 +136,7 @@ func runBranches(ctx context.Context, r stepRunner, i int, step config.Step, blo
 			runCtx, branchLog := forkExecLog(branchCtx)
 			logs[index] = branchLog
 
-			_, err := runNonGetStep(runCtx, r, i, branch, nil, blockHash)
+			branchRes, err := runNonGetStep(runCtx, r, i, branch, nil, blockHash)
 
 			// A try: branch tolerates its own failure HERE, because the plan
 			// walk never sees a branch — executeNonGetStep is where every
@@ -149,7 +148,7 @@ func runBranches(ctx context.Context, r stepRunner, i int, step config.Step, blo
 			//
 			// Before the fail_fast check, so a tolerated failure does not
 			// cancel its siblings either. It is not a failure any more.
-			err = tolerateTryFailure(runCtx, r.jobName, branch, err)
+			err = tolerateTryFailure(runCtx, r.jobName, branch, branchRes.stepID, err)
 
 			results[index].err = err
 
@@ -234,14 +233,6 @@ func (l *limiter) release() {
 	}
 }
 
-func limitSuffix(limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-
-	return fmt.Sprintf(" (limit %d)", limit)
-}
-
 // runRaceStep runs a race: block's branches concurrently and keeps whichever
 // completes successfully first, cancelling the rest.
 //
@@ -266,7 +257,6 @@ func runRaceStep(ctx context.Context, r stepRunner, i int, step config.Step, par
 
 	branches := step.Race.Steps
 
-	fmt.Printf("race: %d branches\n", len(branches))
 	slog.Debug("job.step", "job", r.jobName, "index", i, "kind", "race", "branches", len(branches))
 
 	winner, results := raceBranches(ctx, r, i, branches, hash)

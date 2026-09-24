@@ -133,11 +133,11 @@ func ResumeJobName(ctx context.Context, st runLookup, runID string) (string, err
 // Both halves matter. Without the id there is nothing to resume; without the
 // directory an operator cannot see the work that survived — and the files a
 // step had just written when it failed are the most useful thing to look at.
-func reportResumable(runID string, bw workspace.BuildWorkspace) {
-	fmt.Printf("run: %s  (resume with: steps run <pipeline> --resume %s)\n", runID, runID)
+func reportResumable(ctx context.Context, runID string, bw workspace.BuildWorkspace) {
+	notef(ctx, "run: %s  (resume with: steps run <pipeline> --resume %s)", runID, runID)
 
 	if rooted, ok := bw.(workspace.RootedBuild); ok {
-		fmt.Printf("run: %s  workspace kept at %s\n", runID, rooted.Root())
+		notef(ctx, "run: %s  workspace kept at %s", runID, rooted.Root())
 	}
 }
 

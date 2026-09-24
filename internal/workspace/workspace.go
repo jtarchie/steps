@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // Provider is built once per CLI invocation from cfg.Workspace (nil
@@ -162,7 +163,7 @@ func keepWorkspace(keep bool, root string) bool {
 		return false
 	}
 
-	fmt.Printf("workspace kept: %s\n", root)
+	events.Announce(events.NoteInfo, "workspace kept: "+root)
 	slog.Debug("workspace.kept", "dir", root)
 
 	return true
@@ -493,7 +494,7 @@ func (p *isolatingProvider) Close() error {
 	// no-op; this brings the two to the same behaviour rather than giving
 	// isolation a special case.
 	if p.retainedBuild() != "" {
-		fmt.Printf("workspace kept: %s\n", p.root)
+		events.Announce(events.NoteInfo, "workspace kept: "+p.root)
 		slog.Debug("workspace.kept_for_resume", "dir", p.root)
 
 		return nil

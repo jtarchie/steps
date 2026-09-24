@@ -66,6 +66,8 @@ type stepResult struct {
 	disposition stepDisposition
 	verdict     string
 	note        string
+	// stepID is the display-tree id the step ran under, for a caller that says something about it after it returned (a tolerated try:).
+	stepID int64
 }
 
 // ran is the ordinary outcome: the step executed and produced hash.

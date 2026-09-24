@@ -22,7 +22,9 @@ package events
 
 import (
 	"context"
+	"io"
 	"log/slog"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -341,14 +343,34 @@ func Publish(ctx context.Context, event Event) {
 	FromContext(ctx).Publish(event)
 }
 
-// Note publishes a TypeStepNote under the run and step ctx names, or the job (StepIndex -1) outside a step. A context with no bus drops it, so a caller with no run to tell uses slog.
+// Note publishes a TypeStepNote under the run and step ctx names, or the job (StepIndex -1) outside a step. With no bus to tell it writes the line to Stdout(ctx) instead, because a note is often the only record of what it says.
 func Note(ctx context.Context, level, text string) {
+	bus := FromContext(ctx)
+	if bus == nil {
+		say(Stdout(ctx), level, text)
+
+		return
+	}
+
 	event := Event{Type: TypeStepNote, RunID: RunID(ctx), StepID: StepID(ctx), Status: level, Text: text}
 	if event.StepID == 0 {
 		event.StepIndex = -1
 	}
 
-	Publish(ctx, event)
+	bus.Publish(event)
+}
+
+// Announce says something to the process rather than to a run: for code with no step's context to say it under — a worker's teardown, a drain arriving on a session's read loop.
+func Announce(level, text string) {
+	say(os.Stdout, level, text)
+}
+
+func say(w io.Writer, level, text string) {
+	if level == NoteWarn {
+		text = "warning: " + text
+	}
+
+	_, _ = io.WriteString(w, text+"\n")
 }
 
 // runIDKey is the context key for the current run's id.
@@ -419,4 +441,35 @@ func Logger(ctx context.Context) *slog.Logger {
 	}
 
 	return logger
+}
+
+// Output is where a run's human-facing bytes go: a command's streamed output, an agent's answer, a prompt a person must see.
+type Output struct {
+	Stdout io.Writer
+	Stderr io.Writer
+}
+
+type outputKey struct{}
+
+// WithOutput installs a renderer's writers, so nothing below it writes to the process's streams behind the renderer's back.
+func WithOutput(ctx context.Context, out Output) context.Context {
+	return context.WithValue(ctx, outputKey{}, out)
+}
+
+// Stdout is where ctx's human-facing output goes, the process's own stdout when no renderer installed one.
+func Stdout(ctx context.Context) io.Writer {
+	if out, ok := ctx.Value(outputKey{}).(Output); ok && out.Stdout != nil {
+		return out.Stdout
+	}
+
+	return os.Stdout
+}
+
+// Stderr is Stdout's twin for the error stream.
+func Stderr(ctx context.Context) io.Writer {
+	if out, ok := ctx.Value(outputKey{}).(Output); ok && out.Stderr != nil {
+		return out.Stderr
+	}
+
+	return os.Stderr
 }

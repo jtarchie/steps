@@ -6,7 +6,6 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"sync"
 
@@ -88,7 +87,7 @@ func versionRecordable(ctx context.Context, resource string, version map[string]
 	}
 
 	if len(encoded) > maxRecordedVersionBytes {
-		fmt.Printf("warning: version of %s is over %d bytes and is not recorded\n", resource, maxRecordedVersionBytes)
+		warnf(ctx, "version of %s is over %d bytes and is not recorded", resource, maxRecordedVersionBytes)
 		logFrom(ctx).Warn("job.version_too_large", "resource", resource, "bytes", len(encoded))
 
 		return "", false

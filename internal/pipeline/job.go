@@ -198,7 +198,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		_ = st.FinishRun(context.WithoutCancel(ctx), resume.id, failedStatus(ctx, finalErr))
 
 		publishJobFinished(ctx, job.Name, jobStarted, finalErr)
-		reportResumable(resume.id, bw)
+		reportResumable(ctx, resume.id, bw)
 
 		return finalErr
 	}
@@ -477,16 +477,20 @@ func reportJobUsage(ctx context.Context, usage *agent.RunUsage) {
 	// The per-step lines below are THIS attempt's, so a resumed run says what
 	// the earlier attempts contributed rather than printing a total the
 	// listed steps do not add up to.
+	var report strings.Builder
+
 	if prior > 0 {
-		fmt.Printf("usage: %s tokens across %d agent step(s) this attempt, %s total for the run (%s from earlier attempts)\n",
+		fmt.Fprintf(&report, "usage: %s tokens across %d agent step(s) this attempt, %s total for the run (%s from earlier attempts)",
 			humanCount(total-prior), len(steps), humanCount(total), humanCount(prior))
 	} else {
-		fmt.Printf("usage: %s tokens across %d agent step(s)\n", humanCount(total), len(steps))
+		fmt.Fprintf(&report, "usage: %s tokens across %d agent step(s)", humanCount(total), len(steps))
 	}
 
 	for _, step := range steps {
-		fmt.Printf("  %-16s %s\n", step.Step, humanCount(step.Total))
+		fmt.Fprintf(&report, "\n  %-16s %s", step.Step, humanCount(step.Total))
 	}
+
+	notef(ctx, "%s", report.String())
 
 	fields := []any{"total_tokens", total, "agent_steps", len(steps)}
 	if prior > 0 {

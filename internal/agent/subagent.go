@@ -12,6 +12,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -240,7 +241,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	// reaches the job total.
 	defer conv.usage.finish()
 
-	fmt.Printf("agent: %s (sub-agent)\n", c.ri.AgentName)
+	events.Note(ctx, events.NoteInfo, "agent: "+c.ri.AgentName+" (sub-agent)")
 
 	// Which run/job/step this delegation belongs to and how deep it nests —
 	// read from the PARENT's live context (conv.recorder is the child's own,
@@ -259,7 +260,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	// repeated calls with the identical prompt keep a warm cache (see
 	// composeSessionID).
 	res, runErr := runAgentConversation(withRequestCounter(ctx, &requestCounter{}), c.llm, conv)
-	printAgentResponse(res)
+	printAgentResponse(ctx, res)
 
 	slog.Info("agent.subagent_finish", "run", live.runID, "job", live.job, "step", live.stepName, "index", live.stepIndex,
 		"depth", live.depth+1, "agent", c.ri.AgentName, "duration", time.Since(started), "error", runErr)

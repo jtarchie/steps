@@ -96,7 +96,7 @@ func runMatchedHook(ctx context.Context, scope hookScope, name string, step *con
 		defer cancel()
 	}
 
-	fmt.Printf("%s: %s hook\n", scope.label, name)
+	notef(ctx, "%s: %s hook", scope.label, name)
 
 	// Everything the hook body runs logs as the HOOK's, not as the step it
 	// hangs off — a hook has no plan position of its own, and filing its
@@ -183,7 +183,7 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 		// plan. Without the toleration a `ensure: {try: {put: notify}}` — the
 		// use docs/control-flow.md advertises — still turned a green build red
 		// via runHooks' promotion of a failed on_success/ensure hook.
-		return tolerateTryFailure(ctx, scope.jobName, step, runHookStep(ctx, scope, *step.Try))
+		return tolerateTryFailure(ctx, scope.jobName, step, 0, runHookStep(ctx, scope, *step.Try))
 	default: // config.StepKindGet — not a valid hook body
 		return errors.New("unrecognized hook step (must be task, put, or agent)")
 	}

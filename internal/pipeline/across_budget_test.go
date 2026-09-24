@@ -23,7 +23,10 @@ func TestJobUsageIsReportedOnlyWhenSomethingWasSpent(t *testing.T) {
 		"spent this attempt":     {spentNow, "usage: 10 tokens across 1 agent step(s)"},
 		"spent only by an older": {agent.NewResumedRunUsage(0, 50), "(50 from earlier attempts)"},
 	} {
-		out := captureStdout(t, func() { reportJobUsage(context.Background(), c.usage) })
+		ctx, printed := plainOutput(t)
+		reportJobUsage(ctx, c.usage)
+
+		out := printed()
 		if (c.want == "" && out != "") || !strings.Contains(out, c.want) {
 			t.Errorf("%s: printed %q, want %q", name, out, c.want)
 		}

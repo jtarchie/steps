@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -50,28 +49,15 @@ func TestStepKindNameSpeaksTheAuthorsWord(t *testing.T) {
 	}
 }
 
-// TestReportCellCountSpeaksTheAuthorsWord crosses the seam the helper tests
-// above cannot: the line the run report actually prints. Not parallel — it
-// swaps os.Stdout.
-func TestReportCellCountSpeaksTheAuthorsWord(t *testing.T) { //nolint:paralleltest // swaps os.Stdout
-	read, write, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
+// TestReportCellCountSpeaksTheAuthorsWord crosses the seam the helper tests above cannot: the line the run report actually prints.
+func TestReportCellCountSpeaksTheAuthorsWord(t *testing.T) {
+	t.Parallel()
 
-	orig := os.Stdout
-	os.Stdout = write
+	ctx, printed := plainOutput(t)
 
-	reportCellCount("j", 0, shardStep(2), 2)
+	reportCellCount(ctx, "j", 0, shardStep(2), 2)
 
-	os.Stdout = orig
-
-	_ = write.Close()
-
-	buf := make([]byte, 4096)
-	n, _ := read.Read(buf)
-
-	if got := string(buf[:n]); !strings.Contains(got, "parallelism: 2 cells") {
+	if got := printed(); !strings.Contains(got, "parallelism: 2 cells") {
 		t.Errorf("run report printed %q, want it to contain %q", got, "parallelism: 2 cells")
 	}
 }

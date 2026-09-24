@@ -140,17 +140,19 @@ func TestAskUserMemoOfADefaultSaysNobodyAnswered(t *testing.T) {
 
 // TestAnnounceQuestionListsTheOptions: the announcement is what a person at the terminal answers from, so a fenced question must show its options.
 func TestAnnounceQuestionListsTheOptions(t *testing.T) {
-	offered := captureStdout(t, func() {
-		announceQuestion(store.Question{ID: 7, Question: "Which environment?", Options: []string{"staging", "prod"}}, time.Minute, "-p app")
-	})
-	if !strings.Contains(offered, "question 7: options: staging | prod") {
+	t.Parallel()
+
+	ctx, out := captured()
+	announceQuestion(ctx, store.Question{ID: 7, Question: "Which environment?", Options: []string{"staging", "prod"}}, time.Minute, "-p app")
+
+	if offered := out.String(); !strings.Contains(offered, "question 7: options: staging | prod") {
 		t.Errorf("announcement = %q, want the offered options listed", offered)
 	}
 
-	open := captureStdout(t, func() {
-		announceQuestion(store.Question{ID: 8, Question: "Which environment?"}, time.Minute, "-p app")
-	})
-	if strings.Contains(open, "options:") {
+	ctx, out = captured()
+	announceQuestion(ctx, store.Question{ID: 8, Question: "Which environment?"}, time.Minute, "-p app")
+
+	if open := out.String(); strings.Contains(open, "options:") {
 		t.Errorf("announcement = %q, want no options line for a question that offered none", open)
 	}
 }

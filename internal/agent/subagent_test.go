@@ -87,10 +87,10 @@ func TestSubAgentRunNestsChildSystemAndUser(t *testing.T) {
 // TestSubAgentRunPrintsResponse: a sub-agent's own final text must reach the
 // terminal (labeled as a sub-agent), not just come back as an opaque tool
 // result the parent model consumes — previously the child conversation's
-// output was never echoed anywhere a human could see it directly. Not
-// t.Parallel(): captureStdout (internal/agent/step_test.go) swaps the
-// package-global os.Stdout.
+// output was never echoed anywhere a human could see it directly.
 func TestSubAgentRunPrintsResponse(t *testing.T) {
+	t.Parallel()
+
 	fake := &fakeLLM{responses: []*model.LLMResponse{
 		{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "the gist"}}}},
 	}}
@@ -98,9 +98,10 @@ func TestSubAgentRunPrintsResponse(t *testing.T) {
 	child := newTestSubAgent(t, fake)
 	env := toolEnv{dir: t.TempDir()}
 
-	output := captureStdout(t, func() {
-		child.run(context.Background(), map[string]any{"request": "summarize this"}, env)
-	})
+	ctx, out := captured()
+	child.run(ctx, map[string]any{"request": "summarize this"}, env)
+
+	output := out.String()
 
 	if !strings.Contains(output, "agent: extra (sub-agent)") {
 		t.Errorf("stdout = %q, want it to contain %q", output, "agent: extra (sub-agent)")

@@ -49,7 +49,7 @@ func runAcrossStep(ctx context.Context, r stepRunner, i int, step config.Step, p
 		return stepResult{}, fmt.Errorf("step %d (across): %w", i, err)
 	}
 
-	reportCellCount(r.jobName, i, step, len(cells))
+	reportCellCount(ctx, r.jobName, i, step, len(cells))
 
 	// A collecting block owns its artifact wholesale: reset it to an empty
 	// directory before any cell captures. That is what keeps a stale
@@ -118,17 +118,17 @@ func resetCollectedArtifacts(ctx context.Context, label string, step config.Step
 // block whose cells all passed are otherwise the same silence. An author who
 // wants an empty list to fail asserts it where the file is written, which is
 // the step that knows what empty means.
-func reportCellCount(jobName string, i int, step config.Step, cells int) {
+func reportCellCount(ctx context.Context, jobName string, i int, step config.Step, cells int) {
 	kind := cellBlockKind(step)
 
 	if cells > 0 {
-		fmt.Printf("%s: %d cells\n", kind, cells)
+		notef(ctx, "%s: %d cells", kind, cells)
 		slog.Debug("job.step", "job", jobName, "index", i, "kind", kind, "cells", cells)
 
 		return
 	}
 
-	fmt.Printf("across: 0 cells (%s is empty); nothing to run\n", emptyAxisSource(step))
+	notef(ctx, "across: 0 cells (%s is empty); nothing to run", emptyAxisSource(step))
 	slog.Warn("across.empty", "job", jobName, "index", i, "source", emptyAxisSource(step))
 }
 
@@ -198,7 +198,7 @@ func runAcrossCells(
 		}
 
 		if skipped {
-			fmt.Printf("skip: %s (unchanged)\n", executedStepName(cell))
+			notef(ctx, "skip: %s (unchanged)", executedStepName(cell))
 		}
 	}
 
@@ -230,7 +230,7 @@ func runAcrossCellsConcurrently(
 	}
 
 	cellCtx, spend := newBlockBudget(ctx, r.cfg, step, cells)
-	spend.warnIfUnbindable(r.jobName, step.MaxInFlight, len(cells))
+	spend.warnIfUnbindable(ctx, r.jobName, step.MaxInFlight, len(cells))
 
 	for index := range cells {
 		// Checked in the PARENT, before a slot is taken, so the block stops
@@ -290,7 +290,7 @@ func runAcrossCellsConcurrently(
 		case result.err != nil:
 			failures = append(failures, fmt.Errorf("cell %q: %w", result.name, result.err))
 		case skips[result.index]:
-			fmt.Printf("skip: %s (unchanged)\n", result.name)
+			notef(ctx, "skip: %s (unchanged)", result.name)
 		}
 	}
 

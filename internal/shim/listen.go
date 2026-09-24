@@ -71,7 +71,7 @@ func serveConn(ctx context.Context, conn net.Conn, opts Options) {
 		// Stderr, the same place stdio-mode diagnostics go: stdout is
 		// protocol there and merely unused here, and consistency is what lets
 		// an operator find either.
-		fmt.Fprintf(os.Stderr, "shim: session ended badly: %v\n", err)
+		fmt.Fprintf(os.Stderr, "shim: session ended badly: %v\n", err) //nolint:forbidigo // the shim is its own process on the worker; its stderr is the only place this can go
 	}
 }
 

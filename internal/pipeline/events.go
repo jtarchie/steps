@@ -8,6 +8,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/outcome"
+	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -52,8 +54,9 @@ func StoreSink(st store.Events) func(events.Event) {
 
 // attachEventBus makes sure the run publishes somewhere. A caller that
 // already installed a bus (the web server, which also fans events out to live
-// viewers) keeps theirs; everyone else gets a recording-only bus, so the run
-// is readable afterwards regardless of how it was started.
+// viewers) keeps theirs, and prints what it chooses to; everyone else gets a
+// bus that records the run and prints it plainly, so it is readable both while
+// it happens and afterwards, regardless of how it was started.
 //
 // The returned func must be called when the run ends: it drains the sink so
 // the last events land before the process moves on.
@@ -63,8 +66,22 @@ func attachEventBus(ctx context.Context, st store.Store) (context.Context, func(
 	}
 
 	bus := events.New(StoreSink(st))
+	stopPrinting := bus.Observe(runview.Plain(events.Stdout(ctx)))
 
-	return events.WithBus(ctx, bus), bus.Close
+	return events.WithBus(ctx, bus), func() {
+		stopPrinting()
+		bus.Close()
+	}
+}
+
+// notef tells the run something about the step ctx names, as a step_note — which the terminal prints and the transcript keeps.
+func notef(ctx context.Context, format string, args ...any) {
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf(format, args...))
+}
+
+// warnf is notef for something the reader should act on.
+func warnf(ctx context.Context, format string, args ...any) {
+	events.Note(ctx, events.NoteWarn, fmt.Sprintf(format, args...))
 }
 
 // runIDFrom returns the current run's id, or "" when there is no resume state

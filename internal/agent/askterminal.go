@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -120,7 +121,7 @@ func promptOnTerminal(ctx context.Context, question store.Question) (string, boo
 		return "", false
 	}
 
-	fmt.Printf("question %d> ", question.ID)
+	_, _ = fmt.Fprintf(events.Stdout(ctx), "question %d> ", question.ID)
 
 	select {
 	case answer := <-lines:

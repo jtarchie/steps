@@ -74,7 +74,7 @@ func dialLocal(worker Worker) (*transport, error) {
 	// The shim's stderr is diagnostics, never protocol, so it goes where every
 	// other diagnostic goes. This is also the only place a shim that failed to
 	// start — a wrong architecture, a missing interpreter — gets to say so.
-	command.Stderr = os.Stderr
+	command.Stderr = os.Stderr //nolint:forbidigo // the shim outlives any one step, so its diagnostics belong to the process, not a step's output
 
 	err = command.Start()
 	if err != nil {

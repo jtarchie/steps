@@ -6,12 +6,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 	"time"
 
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/retry"
@@ -40,9 +41,6 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 	}
 
 	if skippable[hash] {
-		// Every skip line names its reason — (chain), (when), (version: ...) —
-		// and this one is the cache hit that triggers the (chain) lines below.
-		fmt.Printf("skip: %s (cached)\n", rt.Name)
 		logFrom(ctx).Info("job.skip", "task", rt.Name, "reason", "cached", "hash", hash)
 
 		return stepResult{hash: parentHash, disposition: stepChainSkipped}, nil
@@ -71,8 +69,6 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 
 		return stepResult{hash: hash, disposition: stepCacheHit}, nil
 	}
-
-	fmt.Printf("task: %s\n", name)
 
 	// Where the step ran is answered by the machine itself, several frames
 	// below here and only once the step is done with it, so it comes back
@@ -185,7 +181,7 @@ func executeTask(
 		defer notePlacement(ctx, runner)
 
 		runErr := retryWithTimeout(ctx, step.Attempts, rt.Timeout, func(attempt, total int) {
-			fmt.Printf("task: %s (attempt %d/%d)\n", executedStepName(step), attempt, total)
+			notef(ctx, "task: %s (attempt %d/%d)", executedStepName(step), attempt, total)
 			logFrom(ctx).Info("job.task.attempt", "task", executedStepName(step), "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
 			err := runTaskCommand(attemptCtx, cfg, runner, rt, space.Dir(), st)
@@ -356,7 +352,7 @@ func runFixTask(
 		return finishTask(ctx, rt, stdout, stderr, exitCode, workspaceDir, "")
 	}
 
-	fmt.Printf("task %q failed (%s); invoking fix agent %q\n", rt.Name, failure, rt.Fix.Agent)
+	notef(ctx, "task %q failed (%s); invoking fix agent %q", rt.Name, failure, rt.Fix.Agent)
 
 	// The fix agent is a dispatch point like any other, so it records — without
 	// this a job's assert.execution reads [check] whether the fix ran or the
@@ -459,11 +455,11 @@ func runCaptured(ctx context.Context, runner shell.Runner, rt config.ResolvedTas
 	}
 
 	if stdout != "" {
-		fmt.Print(shell.PrefixLines(rt.Name, stdout))
+		_, _ = io.WriteString(events.Stdout(ctx), shell.PrefixLines(rt.Name, stdout))
 	}
 
 	if stderr != "" {
-		fmt.Fprint(os.Stderr, shell.PrefixLines(rt.Name, stderr))
+		_, _ = io.WriteString(events.Stderr(ctx), shell.PrefixLines(rt.Name, stderr))
 	}
 
 	return stdout, stderr, exitCode, nil
