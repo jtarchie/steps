@@ -53,6 +53,9 @@ const (
 	TypeAgentCall     = "agent_call"
 	TypeAgentResult   = "agent_result"
 	TypeAgentSubagent = "agent_subagent"
+	// TypeAgentCompaction marks where older turns were replaced by a
+	// summary; Name is the label, Text the summary the model worked from.
+	TypeAgentCompaction = "agent_compaction"
 )
 
 // Note levels, carried in Status of a TypeStepNote event.

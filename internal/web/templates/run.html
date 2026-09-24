@@ -280,6 +280,8 @@
     {{if $step.Reason}}<span class="note">{{$step.Reason}}</span>{{end}}
     {{if $step.Verdict}}<span class="note">verdict: {{$step.Verdict}}</span>{{end}}
     {{if $step.WrappedUp}}<span class="note spendwarn" title="The turn budget ran out; this answer was written from what the model had already gathered">stopped early</span>{{end}}
+    {{with $step.Compactions}}<span class="note" title="Older turns were summarized to fit the context budget; the model worked from the summary after that point">compacted ×{{.}}</span>{{end}}
+    {{if $step.CompactionStalled}}<span class="note spendwarn" title="The most recent turns alone outgrew compact_after_tokens, so compaction stopped for the rest of this conversation">compaction stalled</span>{{end}}
     <span class="headmeta">
       {{with $step.Rollup}}{{if not .Empty}}<span class="rollup">
         <span>{{.Cells}} step{{if ne .Cells 1}}s{{end}}</span>
@@ -303,6 +305,10 @@
      APPENDS turns to a running step's body one at a time — the row is not
      re-sent for each — and the page draws them through the same one. */}}
 {{define "turn"}}
+    {{if .IsCompaction}}<div class="turn compaction{{if .Nested}} nested{{end}}">
+      <span class="who">compacted</span>
+      <div class="what"><details><summary>{{.Name}}</summary><div class="prose">{{template "prosebody" .Text}}</div></details></div>
+    </div>{{else}}
     <div class="turn {{if eq .Type "agent_text"}}model{{else if eq .Type "agent_system"}}system{{else if eq .Type "agent_user"}}user{{else}}tool{{end}}{{if .Nested}} nested{{end}}">
       <span class="who">{{if eq .Type "agent_text"}}model{{else if eq .Type "agent_system"}}system{{else if eq .Type "agent_user"}}user{{else if eq .Type "agent_call"}}tool{{else if eq .Type "agent_result"}}result{{else}}delegate{{end}}</span>
       <div class="what">
@@ -314,7 +320,7 @@
         {{end}}
         {{if .Detail}}{{template "jsonvalue" (jsonValue .Detail)}}{{end}}
       </div>
-    </div>
+    </div>{{end}}
 {{end}}
 
 {{/* One note a step's machinery left. A warning says so in words, not only in colour. */}}

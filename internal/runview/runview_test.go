@@ -139,3 +139,49 @@ func TestNotesHangOnTheirStep(t *testing.T) {
 		t.Error("a note did not mark its row changed, so the live stream would not redraw it")
 	}
 }
+
+// TestCompactionHangsOnItsStep covers the compaction marker and badge: an
+// agent_compaction row folds in as a turn (an unlisted type is silently
+// dropped), and the count reads from a stored result's float64 as well as an
+// in-process int.
+func TestCompactionHangsOnItsStep(t *testing.T) {
+	t.Parallel()
+
+	rows := []store.RunEventRow{
+		{Seq: 1, Type: events.TypeStepStarted, StepName: "review", StepID: 1, StepKind: "agent"},
+		{Seq: 2, Type: events.TypeAgentCompaction, StepName: "review", StepID: 1, Name: "compacted: 3 messages summarized", Text: "the summary"},
+	}
+
+	folder := NewFolder()
+	changes := folder.Add(rows, nil)
+	view := folder.View(store.RunRow{ID: "R"})
+
+	turns := view.Steps[0].Turns
+	if len(turns) != 1 || !turns[0].IsCompaction() || turns[0].Text != "the summary" {
+		t.Fatalf("turns = %+v, want the compaction marker carrying its summary", turns)
+	}
+
+	if changes[view.Steps[0].Key()].Turns != 1 {
+		t.Errorf("change = %+v, want one turn", changes[view.Steps[0].Key()])
+	}
+
+	for _, tc := range []struct {
+		result  map[string]any
+		want    int
+		stalled bool
+	}{
+		{result: map[string]any{"compactions": float64(2), "compaction_stalled": true}, want: 2, stalled: true},
+		{result: map[string]any{"compactions": 3}, want: 3},
+		{result: map[string]any{"response": "ok"}},
+		{},
+	} {
+		step := Step{Result: tc.result}
+		if got := step.Compactions(); got != tc.want {
+			t.Errorf("Compactions(%v) = %d, want %d", tc.result, got, tc.want)
+		}
+
+		if got := step.CompactionStalled(); got != tc.stalled {
+			t.Errorf("CompactionStalled(%v) = %v, want %v", tc.result, got, tc.stalled)
+		}
+	}
+}

@@ -192,3 +192,29 @@ func TestRunUsageWithoutABudgetNeverTrips(t *testing.T) {
 		t.Errorf("Steps() = %d entries, want 1", len(run.Steps()))
 	}
 }
+
+// TestRecordSummaryCountsAndTripsBothCeilings: a compaction summary is spend
+// like any response, and a nil counter (a unit test's bare conversation)
+// counts nothing rather than panicking.
+func TestRecordSummaryCountsAndTripsBothCeilings(t *testing.T) {
+	t.Parallel()
+
+	var none *stepUsage
+	if none.recordSummary(response(1, 1)) {
+		t.Error("a nil counter reported a breach")
+	}
+
+	own := &stepUsage{name: "writer", budget: 100}
+	if !own.recordSummary(response(90, 20)) {
+		t.Error("110 of a 100-token agent budget did not trip the ceiling")
+	}
+
+	if own.last != 0 {
+		t.Errorf("last = %d, want 0 — a summary is not the conversation's latest turn", own.last)
+	}
+
+	job := &stepUsage{name: "writer", run: NewRunUsage(100)}
+	if !job.recordSummary(response(90, 20)) {
+		t.Error("110 of a 100-token job budget did not trip the ceiling")
+	}
+}

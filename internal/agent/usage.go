@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
@@ -314,12 +315,7 @@ func (s *stepUsage) record(resp *model.LLMResponse) (exceeded bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.prompt += int(resp.UsageMetadata.PromptTokenCount)
-	s.completion += int(resp.UsageMetadata.CandidatesTokenCount)
-	s.total += int(resp.UsageMetadata.TotalTokenCount)
 	s.last = int(resp.UsageMetadata.TotalTokenCount)
-	s.cached += int(resp.UsageMetadata.CachedContentTokenCount)
-	s.reasoning += int(resp.UsageMetadata.ThoughtsTokenCount)
 
 	// Last response wins for these two rather than accumulating: they describe
 	// the response that just arrived, and it is the LAST one that says how the
@@ -340,6 +336,34 @@ func (s *stepUsage) record(resp *model.LLMResponse) (exceeded bool) {
 	if err == nil {
 		s.raw = string(encoded)
 	}
+
+	return s.countLocked(resp.UsageMetadata)
+}
+
+// recordSummary folds in a compaction summary's usage: counted and checked
+// against both ceilings like any response, but leaving the last-response
+// fields alone. Those describe the conversation's own latest turn — a
+// summary's total is roughly the whole old history, so as last it would fire
+// a spurious wrap-up nudge, and its finish reason is not how the step ended.
+func (s *stepUsage) recordSummary(resp *model.LLMResponse) (exceeded bool) {
+	if s == nil || resp == nil || resp.UsageMetadata == nil {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.countLocked(resp.UsageMetadata)
+}
+
+// countLocked adds one response's counts and reports whether a ceiling is
+// now exceeded. The caller holds s.mu.
+func (s *stepUsage) countLocked(meta *genai.GenerateContentResponseUsageMetadata) bool {
+	s.prompt += int(meta.PromptTokenCount)
+	s.completion += int(meta.CandidatesTokenCount)
+	s.total += int(meta.TotalTokenCount)
+	s.cached += int(meta.CachedContentTokenCount)
+	s.reasoning += int(meta.ThoughtsTokenCount)
 
 	// delegated counts here: a step that handed most of its allowance to
 	// sub-agents has that much less for itself, or the ceiling would bound

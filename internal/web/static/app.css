@@ -549,6 +549,10 @@ svg.dag { display: block; }
    reader is here to read. */
 .turn.model .what .say { color: var(--fg); }
 .turn.system .what .say, .turn.user .what .say { color: var(--fg); }
+.turn.compaction { border-top: 1px dashed var(--line); }
+.turn.compaction .who { color: var(--faint); }
+.turn.compaction summary { cursor: pointer; }
+.turn.compaction .prose { color: var(--fg); }
 .turn.nested { opacity: 0.85; }
 .turn.nested .who::before { content: "└ "; color: var(--faint); }
 
