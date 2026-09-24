@@ -1059,26 +1059,6 @@ func TestRelativeTimesAreMachineReadable(t *testing.T) {
 	}
 }
 
-// TestSlugify covers the anchor-name rules directly, including the shapes
-// across: cells and hook labels actually produce.
-func TestSlugify(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range []struct{ in, want string }{
-		{"compile", "compile"},
-		{"review[security]", "review-security"},
-		{"Deploy To Prod", "deploy-to-prod"},
-		{"unit-tests", "unit-tests"},
-		{"a//b", "a-b"},
-		{"...", ""},
-		{"", ""},
-	} {
-		if got := slugify(tc.in); got != tc.want {
-			t.Errorf("slugify(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
 // TestTranscriptShowsTaskOutput covers the question a reader asks right after
 // "did it pass": what did it print. A succeeding step used to expand onto
 // nothing.
@@ -1297,50 +1277,6 @@ func TestEveryOutputEventSurvives(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("transcript dropped an output event: %q missing", want)
 		}
-	}
-}
-
-// TestAnswerIsNotPrintedTwice covers the dedup between the last model text and
-// the labeled answer — including the shape that used to slip through, where the
-// model emitted text AND a tool call in one message, so the text is not the
-// trailing turn.
-func TestAnswerIsNotPrintedTwice(t *testing.T) {
-	t.Parallel()
-
-	const answer = "Two SKUs need restocking."
-
-	step := stepView{
-		Result: map[string]any{"response": answer},
-		Turns: []turnView{
-			{Type: events.TypeAgentText, Text: "Reading the inventory first."},
-			{Type: events.TypeAgentText, Text: answer},
-			// Recorded after the answer: the same assistant message carried a
-			// tool call, so the result lands last.
-			{Type: events.TypeAgentCall, Name: "read_file"},
-			{Type: events.TypeAgentResult, Name: "read_file"},
-		},
-	}
-
-	kept := step.Conversation()
-	if len(kept) != 3 {
-		t.Fatalf("Conversation kept %d turns, want 3: %+v", len(kept), kept)
-	}
-
-	for _, turn := range kept {
-		if turn.Text == answer {
-			t.Error("the answer is still in the conversation as well as under `answer`")
-		}
-	}
-
-	// The mid-conversation commentary is not the answer and must survive.
-	if kept[0].Text != "Reading the inventory first." {
-		t.Errorf("dropped the wrong turn: %+v", kept)
-	}
-
-	// A response the model never said as text leaves every turn alone.
-	other := stepView{Result: map[string]any{"response": "different"}, Turns: step.Turns}
-	if len(other.Conversation()) != len(step.Turns) {
-		t.Error("a non-matching response dropped a turn anyway")
 	}
 }
 

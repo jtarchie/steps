@@ -18,6 +18,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 
+	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -213,7 +214,7 @@ func templateFuncs() template.FuncMap {
 		// presentation detail.
 		"mul2":  func(n int) int { return n * 8 },
 		"sub16": func(n int) int { return 16 - n },
-		"slug":  slugify,
+		"slug":  runview.Slug,
 		"mark":  statusMark,
 		// The tab badges: one lookup into the list nav() already gathered,
 		// rather than six count fields that could each be stale differently.
@@ -489,34 +490,6 @@ func faviconFor(marker string) template.URL {
 
 	//nolint:gosec // G203: the value is one of four constants built above, never input
 	return template.URL(icon)
-}
-
-// slugify renders a step name as a URL fragment: lowercase, with every run of
-// non-alphanumerics collapsed to a single dash. An across: cell named
-// review[security] becomes review-security, so a step is linkable by name
-// rather than by position alone.
-func slugify(name string) string {
-	var out strings.Builder
-
-	dashed := false
-
-	for _, r := range strings.ToLower(name) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			out.WriteRune(r)
-
-			dashed = false
-
-			continue
-		}
-
-		if !dashed && out.Len() > 0 {
-			out.WriteByte('-')
-
-			dashed = true
-		}
-	}
-
-	return strings.TrimSuffix(out.String(), "-")
 }
 
 // agoTag renders a relative timestamp as a <time> element carrying the

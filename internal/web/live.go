@@ -32,6 +32,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 
+	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -97,7 +98,7 @@ func (s *Server) handleRunEvents(c *echo.Context) error {
 	// touched step in its truncated view, so it wrote nothing at all while
 	// holding the socket open and re-arming the idle deadline. A reader
 	// watched a frozen transcript on a live connection, with nothing logged.
-	folder := newRunFolder()
+	folder := runview.NewFolder()
 
 	// Catch the fold up to what the reader is already looking at, without
 	// sending any of it: their page was rendered from exactly these events,
@@ -109,7 +110,7 @@ func (s *Server) handleRunEvents(c *echo.Context) error {
 		return fmt.Errorf("web: %w", err)
 	}
 
-	drawn.seed(folder.run.Steps)
+	drawn.seed(folder.Steps())
 
 	response := openStream(c)
 
@@ -271,7 +272,7 @@ func (s *Server) seedFold(c *echo.Context, runID string, seq int64, folder *runF
 			return nil
 		}
 
-		folder.add(rows, nodes)
+		folder.Add(rows, nodes)
 
 		at = rows[len(rows)-1].Seq
 	}
@@ -355,11 +356,11 @@ func (s *Server) flushBatch(
 
 	// The fold says what it touched, rather than this reading it off the rows:
 	// the two disagree for a sub-agent's turns, which name a step no row ever
-	// opened. See runFolder.add.
-	changes := folder.add(rows, nodes)
+	// opened. See runview.Folder.Add.
+	changes := folder.Add(rows, nodes)
 	after = rows[len(rows)-1].Seq
 
-	view := folder.view(run)
+	view := runView{Transcript: folder.View(run)}
 
 	// The same decoration assembleRun gives a full-page render (handlers.go)
 	// — a running agent step's countdown is drawn inside the per-step row,

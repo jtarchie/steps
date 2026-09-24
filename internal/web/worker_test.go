@@ -12,35 +12,6 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// TestRunViewCarriesTheWorker pins that the post-hoc view says where a placed
-// step ran, and says nothing for one that ran here.
-func TestRunViewCarriesTheWorker(t *testing.T) {
-	t.Parallel()
-
-	rows := []store.RunEventRow{
-		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "here", StepID: 1},
-		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "here", StepID: 1, Status: "succeeded"},
-		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "there", StepID: 2},
-		{Type: events.TypeStepFinished, StepIndex: 1, StepName: "there", StepID: 2, Status: "failed",
-			Worker: "gpu (ssh://jt@box)"},
-	}
-
-	view := buildRunView(store.RunRow{ID: "R1"}, rows, nil)
-
-	byName := map[string]*stepView{}
-	for _, step := range view.Steps {
-		byName[step.Name] = step
-	}
-
-	if got := byName["there"].Worker; got != "gpu (ssh://jt@box)" {
-		t.Errorf("placed step worker = %q, want the machine it ran on", got)
-	}
-
-	if got := byName["here"].Worker; got != "" {
-		t.Errorf("local step worker = %q, want nothing — naming every local step would bury the ones that left", got)
-	}
-}
-
 // TestLiveStreamDrawsTheWorkerToo is this package's standing rule: anything
 // the server draws for a finished step, the stream has to draw too, or a
 // reader watching live and one who reloaded see different rows. It holds now

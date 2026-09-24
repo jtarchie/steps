@@ -280,6 +280,17 @@ linters:
             # goleak is test-only: goleak_test.go's TestMain fails this
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
+        # runview folds recorded run events into the step tree a reader sees.
+        # Shared by both front ends (web, and the terminal renderer in cli) so
+        # the two cannot drift; it reads rows and renders nothing, which is
+        # why it needs the store's row types and the event names and no more.
+        Runview:
+          files:
+            - "**/internal/runview/**"
+          allow:
+            - "$gostd"
+            - "github.com/jtarchie/steps/internal/events"
+            - "github.com/jtarchie/steps/internal/store"
         # webhook turns a delivery into a version: signature schemes,
         # handshakes, and the fields a pipeline projects. A stdlib-only leaf,
         # and deliberately not an expr importer — expressions reach it
@@ -715,6 +726,7 @@ linters:
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/pipeline"
+            - "github.com/jtarchie/steps/internal/runview"
             - "github.com/jtarchie/steps/internal/store"
             # store/sqlite is test-only here: a test needs a concrete driver
             # to open a database with. Production code in this package takes

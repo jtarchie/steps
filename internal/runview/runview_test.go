@@ -1,0 +1,101 @@
+package runview
+
+import (
+	"testing"
+
+	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/store"
+)
+
+// TestSlugify covers the anchor-name rules directly, including the shapes
+// across: cells and hook labels actually produce.
+func TestSlugify(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ in, want string }{
+		{"compile", "compile"},
+		{"review[security]", "review-security"},
+		{"Deploy To Prod", "deploy-to-prod"},
+		{"unit-tests", "unit-tests"},
+		{"a//b", "a-b"},
+		{"...", ""},
+		{"", ""},
+	} {
+		if got := Slug(tc.in); got != tc.want {
+			t.Errorf("Slug(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestRunViewCarriesTheWorker pins that the post-hoc view says where a placed
+// step ran, and says nothing for one that ran here.
+func TestRunViewCarriesTheWorker(t *testing.T) {
+	t.Parallel()
+
+	rows := []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "here", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "here", StepID: 1, Status: "succeeded"},
+		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "there", StepID: 2},
+		{Type: events.TypeStepFinished, StepIndex: 1, StepName: "there", StepID: 2, Status: "failed",
+			Worker: "gpu (ssh://jt@box)"},
+	}
+
+	view := Build(store.RunRow{ID: "R1"}, rows, nil)
+
+	byName := map[string]*Step{}
+	for _, step := range view.Steps {
+		byName[step.Name] = step
+	}
+
+	if got := byName["there"].Worker; got != "gpu (ssh://jt@box)" {
+		t.Errorf("placed step worker = %q, want the machine it ran on", got)
+	}
+
+	if got := byName["here"].Worker; got != "" {
+		t.Errorf("local step worker = %q, want nothing — naming every local step would bury the ones that left", got)
+	}
+}
+
+// TestAnswerIsNotPrintedTwice covers the dedup between the last model text and
+// the labeled answer — including the shape that used to slip through, where the
+// model emitted text AND a tool call in one message, so the text is not the
+// trailing turn.
+func TestAnswerIsNotPrintedTwice(t *testing.T) {
+	t.Parallel()
+
+	const answer = "Two SKUs need restocking."
+
+	step := Step{
+		Result: map[string]any{"response": answer},
+		Turns: []Turn{
+			{Type: events.TypeAgentText, Text: "Reading the inventory first."},
+			{Type: events.TypeAgentText, Text: answer},
+			// Recorded after the answer: the same assistant message carried a
+			// tool call, so the result lands last.
+			{Type: events.TypeAgentCall, Name: "read_file"},
+			{Type: events.TypeAgentResult, Name: "read_file"},
+		},
+	}
+
+	kept := step.Conversation()
+	if len(kept) != 3 {
+		t.Fatalf("Conversation kept %d turns, want 3: %+v", len(kept), kept)
+	}
+
+	for _, turn := range kept {
+		if turn.Text == answer {
+			t.Error("the answer is still in the conversation as well as under `answer`")
+		}
+	}
+
+	// The mid-conversation commentary is not the answer and must survive.
+	if kept[0].Text != "Reading the inventory first." {
+		t.Errorf("dropped the wrong turn: %+v", kept)
+	}
+
+	// A response the model never said as text leaves every turn alone.
+	other := Step{Result: map[string]any{"response": "different"}, Turns: step.Turns}
+	if len(other.Conversation()) != len(step.Turns) {
+		t.Error("a non-matching response dropped a turn anyway")
+	}
+}
