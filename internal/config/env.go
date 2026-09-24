@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -112,5 +113,19 @@ func checkEnvName(context, name string) error {
 		return fmt.Errorf("%s: env entry %q must be a variable NAME, not a KEY=VALUE pair — the value is read from the environment at run time (a literal would be hashed into state.db in cleartext)", context, name)
 	}
 
+	if slices.Contains(reservedEnvNames, name) {
+		return fmt.Errorf("%s: env entry %q is set by steps for every step (build metadata) — drop it from the env list", context, name)
+	}
+
 	return nil
+}
+
+// reservedEnvNames are set by steps for every step; keep in step with shell.BuildEnvNames (config cannot import shell).
+//
+//nolint:gochecknoglobals // static, read-only
+var reservedEnvNames = []string{"STEPS_RUN_ID", "STEPS_JOB_NAME", "STEPS_PIPELINE_NAME", "STEPS_PIPELINE_REVISION", "STEPS_URL"}
+
+// ReservedEnvNames lists the variable names env: refuses.
+func ReservedEnvNames() []string {
+	return slices.Clone(reservedEnvNames)
 }

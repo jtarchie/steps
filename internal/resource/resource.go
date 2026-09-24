@@ -85,7 +85,8 @@ func CheckVersions(
 	runner = runner.WithLabel(rt.Name + " check")
 	defer shell.CloseRunner(runner, rt.Name+" check")
 
-	out, err := runner.RunCapture(ctx, command)
+	// A check is not part of a build, and a run id in a version would mint one per run.
+	out, err := runner.RunCapture(shell.WithBuildMetadata(ctx, shell.BuildMetadata{}), command)
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}

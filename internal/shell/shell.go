@@ -627,7 +627,8 @@ func (HostRunner) Close() error { return nil }
 //
 // A host-executed command that relies on any other exported variable —
 // including SSH_AUTH_SOCK for git-over-ssh — opts it back in by name via
-// the pipeline's env: (see hostEnvWith). SSH_AUTH_SOCK is deliberately not
+// the pipeline's env: (see hostEnvWith). Build metadata (see BuildMetadata) is
+// added on top of this baseline. SSH_AUTH_SOCK is deliberately not
 // in the baseline: the socket grants signing with every key the operator's
 // agent holds, which is a credential capability, not plumbing.
 //
@@ -710,6 +711,13 @@ func hostEnvWith(extra []string) []string {
 	}
 
 	return allowed
+}
+
+// environ is the host baseline plus the pipeline's env: names, then the build
+// metadata last. os/exec keeps the last duplicate, a backstop only: config
+// refuses the metadata names in env:.
+func (h HostRunner) environ(ctx context.Context) []string {
+	return append(hostEnvWith(h.extraEnv), buildEnvPairs(ctx)...)
 }
 
 // wrapIfCanceled ensures err's chain satisfies errors.Is(_, ctx.Err()) when
@@ -820,7 +828,7 @@ func (h HostRunner) runStreamed(ctx context.Context, command string, maxBytes in
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.WaitDelay = cancelWaitDelay
 	cmd.Dir = h.cwd
-	cmd.Env = hostEnvWith(h.extraEnv)
+	cmd.Env = h.environ(ctx)
 	cmd.Stdin = os.Stdin
 
 	stdoutW, flushStdout := prefixedStream(h.label, os.Stdout)
@@ -867,7 +875,7 @@ func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, err
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.WaitDelay = cancelWaitDelay
 	cmd.Dir = h.cwd
-	cmd.Env = hostEnvWith(h.extraEnv)
+	cmd.Env = h.environ(ctx)
 	cmd.Stdin = os.Stdin
 
 	var outBuf, errBuf bytes.Buffer
@@ -935,7 +943,7 @@ func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.WaitDelay = cancelWaitDelay
 	cmd.Dir = h.cwd
-	cmd.Env = hostEnvWith(h.extraEnv)
+	cmd.Env = h.environ(ctx)
 	cmd.Stdin = nil
 
 	outWriter := newCaptureWriter(maxBytes, spillDir)

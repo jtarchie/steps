@@ -7,11 +7,28 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"time"
 
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/wire"
 )
+
+// execEnv is the session's env plus this command's build metadata, read per
+// exec so a worker kept warm across jobs never sends a stale run id. s.env is
+// shared by WithLabel copies, so it is copied rather than written.
+func (s *session) execEnv(ctx context.Context) map[string]string {
+	extra := shell.BuildEnv(ctx)
+	if len(extra) == 0 {
+		return s.env
+	}
+
+	env := make(map[string]string, len(s.env)+len(extra))
+	maps.Copy(env, s.env)
+	maps.Copy(env, extra)
+
+	return env
+}
 
 // run asks the worker for one command and pumps its output until it exits.
 //
@@ -23,7 +40,7 @@ import (
 func (s *session) run(ctx context.Context, command string, sinks outputSinks) (wire.Exit, error) {
 	op := s.nextOp()
 
-	err := s.write(wire.Frame{Type: wire.FrameExec, Op: op}, wire.Exec{Command: command, Env: s.env})
+	err := s.write(wire.Frame{Type: wire.FrameExec, Op: op}, wire.Exec{Command: command, Env: s.execEnv(ctx)})
 	if err != nil {
 		return wire.Exit{}, err
 	}
