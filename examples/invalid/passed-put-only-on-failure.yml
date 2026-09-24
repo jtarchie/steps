@@ -1,0 +1,23 @@
+# A put in a job-level on_failure hook runs only when the build is not green,
+# so it can never mark a version passed: the constraint would block forever.
+# expect: neither gets nor puts resource
+
+resources:
+- name: image
+  type: git
+  source:
+    uri: https://example.com/image.git
+
+jobs:
+- name: build
+  on_failure:
+    put: image
+  plan:
+  - task: work
+    inputs: []
+    run: "true"
+
+- name: use
+  plan:
+  - get: image
+    passed: [build]

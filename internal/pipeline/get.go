@@ -238,7 +238,8 @@ func (w *planWalk) runTriggeredBuild(
 	// one build was green against a combination — so a job-wide record would
 	// both correlate versions that never ran together and, being keyed per
 	// resource, keep only the last set's. See recordPassedVersions.
-	ctx, fetched := withFetchedVersions(ctx)
+	runCtx := ctx
+	ctx, fetched := withBuildVersions(ctx)
 
 	bw, err := w.provider.NewBuild(ctx, resource.Name)
 	if err != nil {
@@ -287,7 +288,7 @@ func (w *planWalk) runTriggeredBuild(
 	// a passed: gate downstream of such a job could never open. Latent while
 	// the gate was checked only at trigger time against hand-me-down state;
 	// loud the moment resolution started reading job_versions for real.
-	recordFetchedVersion(ctx, resource.Name, version)
+	recordBuildVersion(ctx, resource.Name, version)
 
 	fetchCtx, placed := withPlacementSink(ctx)
 
@@ -336,7 +337,9 @@ func (w *planWalk) runTriggeredBuild(
 	// job instead lost every set but the last, and stranded all of them when
 	// any one set failed: taken at build start, never green, never retried.
 	if buildOK {
-		recordPassedVersions(ctx, w.st, w.jobName, buildIDForSet(ctx, setIndex), fetched)
+		buildID := buildIDForSet(ctx, setIndex)
+		recordPassedVersions(ctx, w.st, w.jobName, buildID, fetched)
+		noteGreenBuild(runCtx, buildID)
 	}
 
 	return err
@@ -442,7 +445,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 		return ran(w.parentHash), nil
 	}
 
-	recordFetchedVersion(ctx, resource.Name, version)
+	recordBuildVersion(ctx, resource.Name, version)
 
 	content, err := merkle.GetNodeContent(w.cfg, step, *resourceType, resource.Env, resource.Source, version)
 	if err != nil {

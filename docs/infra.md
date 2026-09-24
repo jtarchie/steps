@@ -714,7 +714,7 @@ commit def456 → unit    ok
 commit def456 → deploy  ok
 ```
 
-- **A job records the versions it fetched only when the whole job succeeds.** `passed:` means "that job ran green against this exact version"; a job that failed after its `get` proves nothing about what it fetched.
+- **A job records the versions it fetched or put only when the whole job succeeds.** `passed:` means "that job ran green against this exact version"; a job that failed after its `get` proves nothing about what it fetched.
 - **Per version, not per job.** A job green on `v1` does not release `v2` — "the tests passed at some point" is exactly the claim that lets a bad commit deploy.
 - **`passed: [a, b]` means both**, not either.
 - **Versions must have passed TOGETHER.** When a job constrains two resources on the same upstream job, the versions it runs with must have been green in the *same* upstream build — two versions that passed in different builds have never been proven to work together:
@@ -729,7 +729,61 @@ commit def456 → deploy  ok
   ```
 
 - **A held-back job is not a lost trigger.** The version stays current, so the next poll after the upstream job goes green enqueues it.
-- **Load-time checks.** `passed:` is get-only, may not name its own job, and may not name a job that never gets the same resource — that last one would be a deadlock spelled as a typo.
+- **Load-time checks.** `passed:` is get-only, may not name its own job, and may not name a job that neither gets nor puts the same resource — that last one would be a deadlock spelled as a typo. A `put:` only in a job-level `on_failure`/`on_error`/`on_abort` hook does not count: those run only when the build is not green, so nothing they publish can pass.
+
+### A version a job put counts as having passed it
+
+A `put:` records the version it prints against the build, exactly as a `get:` does, so a later job can consume what an upstream job published. The check never has to report that version:
+
+```yaml
+defaults:
+  preflight:
+    disabled: true
+
+resource_types:
+- name: registry
+  config:
+    check: |
+      echo '[{"digest":"from-check"}]'
+    in: echo {{ .version.digest | shellquote }} > digest.txt
+    out: |
+      echo '{"digest":"sha-1"}'
+
+resources:
+- name: toolchain-image
+  type: registry
+  source: {}
+
+jobs:
+- name: build-toolchain
+  plan:
+  - put: toolchain-image
+  assert:
+    execution: [toolchain-image]
+    outcome: succeeded
+
+- name: implement
+  plan:
+  - get: toolchain-image
+    passed: [build-toolchain]      # the digest build-toolchain published
+  - task: use
+    inputs: [toolchain-image]
+    run: cat toolchain-image/digest.txt
+    assert:
+      stdout: sha-1
+  assert:
+    execution: [toolchain-image, use]
+    outcome: succeeded
+
+assert:
+  execution: [build-toolchain, implement]
+```
+
+- A put's version counts from the moment the build is green, even if the check never reports it. A build that put and then failed passes nothing.
+- Every version a build fetched or put counts, several per resource allowed; the last one put is the newest.
+- Nothing printed (or printing that is not a JSON object) records nothing, and a version over 4 KiB is printed with a warning and not recorded, so the gate stays shut.
+- A `--resume`d run does not re-record a put an earlier attempt ran: the run prints a line saying so, and the gate stays shut rather than opening on a guess.
+- A gated `get` with nothing green yet fails with `no version of <resource> has passed [<jobs>] yet`.
 
 ## `max_in_flight:` — how many builds of one job at once
 

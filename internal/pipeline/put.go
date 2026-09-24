@@ -84,13 +84,16 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 	// After the node, never before: run_placements references it.
 	recordPlacement(ctx, r, placed, i, step.Put, hash, hash)
 
+	recordPutOrder(ctx, r.st, resource.Name, result)
+	recordBuildVersion(ctx, resource.Name, result)
+
 	return ran(hash), nil
 }
 
 // executePut materializes a put step's input view, runs its resource's out:
 // command with retries and timeout, and returns the produced version — with
-// no merkle/store recording. Shared by runPutStep (which records) and hook
-// execution (which does not; a put hook's result version is discarded). A
+// no merkle/store recording. Shared by runPutStep and hook execution, which each record
+// the version it returns. A
 // nonzero out: exit is marked as a task-level failure so hook dispatch
 // classifies it as failed; a resource lookup or workspace error stays
 // unmarked → errored.

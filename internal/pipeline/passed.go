@@ -6,6 +6,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -13,43 +14,126 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// fetchedVersions is what a job run actually fetched, per resource. A job that
-// succeeds records these as "passed", which is the fact a downstream job's
-// passed: constraint reads.
-type fetchedVersions struct {
+// buildVersions is what a job run fetched AND published, per resource: a
+// build's inputs and outputs, which is what Concourse's
+// successful_build_outputs holds. A job that succeeds records these as
+// "passed", which is the fact a downstream job's passed: constraint reads.
+// A resource can have several (a get and a put, or repeated puts), so each
+// maps to a set.
+type buildVersions struct {
 	mu sync.Mutex
-	by map[string]string
+	by map[string]map[string]bool
+	// lastGreen is the id of the last triggered build that went green inside
+	// this run. What the run itself records (a job hook's put, a put before
+	// the first get) goes under it: recorded under the bare run id, it shared
+	// no build with the gets and a downstream fan-in over both never opened.
+	// One build, not all: job_versions holds one build per version.
+	lastGreen string
 }
 
-type fetchedVersionsKey struct{}
+type buildVersionsKey struct{}
 
-func withFetchedVersions(ctx context.Context) (context.Context, *fetchedVersions) {
-	fetched := &fetchedVersions{by: map[string]string{}}
-
-	return context.WithValue(ctx, fetchedVersionsKey{}, fetched), fetched
-}
-
-// recordFetchedVersion notes the version a get step resolved to. Best-effort:
-// a version that cannot be rendered as JSON is skipped rather than failing the
-// step, since this is bookkeeping for a downstream constraint and not the work
-// the step was asked to do.
-func recordFetchedVersion(ctx context.Context, resource string, version map[string]any) {
-	fetched, ok := ctx.Value(fetchedVersionsKey{}).(*fetchedVersions)
+// noteGreenBuild tells the run's record, if ctx carries one, that a build
+// inside it went green.
+func noteGreenBuild(ctx context.Context, buildID string) {
+	run, ok := ctx.Value(buildVersionsKey{}).(*buildVersions)
 	if !ok {
 		return
 	}
 
-	encoded, err := json.Marshal(version)
+	run.mu.Lock()
+	defer run.mu.Unlock()
+
+	run.lastGreen = buildID
+}
+
+// runBuildID is the build a run's own versions are recorded under.
+func (b *buildVersions) runBuildID(runID string) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.lastGreen != "" {
+		return b.lastGreen
+	}
+
+	return runID
+}
+
+// maxRecordedVersionBytes caps a put's version. Put stdout usually echoes a
+// remote API response, and a version becomes a key in three tables and is
+// rendered into downstream commands.
+//
+// ponytail: a check has no equivalent cap; upgrade is one shared store limit.
+const maxRecordedVersionBytes = 4 << 10
+
+func withBuildVersions(ctx context.Context) (context.Context, *buildVersions) {
+	versions := &buildVersions{by: map[string]map[string]bool{}}
+
+	return context.WithValue(ctx, buildVersionsKey{}, versions), versions
+}
+
+// versionRecordable encodes version for recording, or reports false: nothing
+// printed records nothing, and an oversized version is printed and warned
+// about rather than stored, which keeps the gate shut.
+func versionRecordable(ctx context.Context, resource string, version map[string]any) (string, bool) {
+	if len(version) == 0 {
+		return "", false
+	}
+
+	encoded, err := store.EncodeVersion(version)
 	if err != nil {
 		slog.Warn("job.version_unrecordable", "resource", resource, "error", err)
 
+		return "", false
+	}
+
+	if len(encoded) > maxRecordedVersionBytes {
+		fmt.Printf("warning: version of %s is over %d bytes and is not recorded\n", resource, maxRecordedVersionBytes)
+		logFrom(ctx).Warn("job.version_too_large", "resource", resource, "bytes", len(encoded))
+
+		return "", false
+	}
+
+	return encoded, true
+}
+
+// recordBuildVersion notes a version this build fetched or put. Best-effort:
+// this is bookkeeping for a downstream constraint and not the work the step
+// was asked to do.
+func recordBuildVersion(ctx context.Context, resource string, version map[string]any) {
+	versions, ok := ctx.Value(buildVersionsKey{}).(*buildVersions)
+	if !ok {
 		return
 	}
 
-	fetched.mu.Lock()
-	defer fetched.mu.Unlock()
+	encoded, ok := versionRecordable(ctx, resource, version)
+	if !ok {
+		return
+	}
 
-	fetched.by[resource] = string(encoded)
+	versions.mu.Lock()
+	defer versions.mu.Unlock()
+
+	if versions.by[resource] == nil {
+		versions.by[resource] = map[string]bool{}
+	}
+
+	versions.by[resource][encoded] = true
+}
+
+// recordPutOrder fixes a put's version in the resource's history when the put
+// runs, so its order follows publish time rather than the random order the
+// build-end recording would give. It is not a green claim.
+func recordPutOrder(ctx context.Context, st store.Versions, resource string, version map[string]any) {
+	encoded, ok := versionRecordable(ctx, resource, version)
+	if !ok {
+		return
+	}
+
+	_, err := st.RecordVersionOrder(context.WithoutCancel(ctx), resource, encoded)
+	if err != nil {
+		logFrom(ctx).Warn("job.put_order_unrecorded", "resource", resource, "error", err)
+	}
 }
 
 // recordResolvedVersion mirrors a get step's fetched version into
@@ -71,7 +155,7 @@ func recordFetchedVersion(ctx context.Context, resource string, version map[stri
 // the next refresh's cursor (checkCursorFor, internal/pipeline/refresh.go)
 // would re-walk ground it already covered.
 //
-// Best-effort, same posture as recordFetchedVersion: this is bookkeeping for
+// Best-effort, same posture as recordBuildVersion: this is bookkeeping for
 // a page, not the work the step was asked to do.
 func recordResolvedVersion(ctx context.Context, st store.Store, cfg *config.Config, resourceName string, version map[string]any, pinned bool) {
 	if pinned || cfg.ResourceIsPolled(resourceName) {
@@ -91,8 +175,8 @@ func recordResolvedVersion(ctx context.Context, st store.Store, cfg *config.Conf
 	}
 }
 
-// recordPassedVersions marks every version a successful BUILD fetched as
-// green for its job.
+// recordPassedVersions marks every version a successful BUILD fetched or
+// put as green for its job.
 //
 // Per build, not per step: passed: means "that job ran green against this
 // exact version", and a build that failed after its get proves nothing about
@@ -108,16 +192,18 @@ func recordResolvedVersion(ctx context.Context, st store.Store, cfg *config.Conf
 // to a downstream gate forever. They could not be recovered later either: an
 // exhausted input holds at its NEWEST covered version, so a version
 // superseded within one run is never bound again.
-func recordPassedVersions(ctx context.Context, st store.Store, jobName, buildID string, fetched *fetchedVersions) {
+func recordPassedVersions(ctx context.Context, st store.Store, jobName, buildID string, fetched *buildVersions) {
 	fetched.mu.Lock()
 	defer fetched.mu.Unlock()
 
 	recCtx := context.WithoutCancel(ctx)
 
-	for resource, version := range fetched.by {
-		err := st.RecordPassedVersion(recCtx, jobName, resource, version, buildID)
-		if err != nil {
-			slog.Warn("job.passed_unrecorded", "job", jobName, "resource", resource, "error", err)
+	for resource, versions := range fetched.by {
+		for version := range versions {
+			err := st.RecordPassedVersion(recCtx, jobName, resource, version, buildID)
+			if err != nil {
+				slog.Warn("job.passed_unrecorded", "job", jobName, "resource", resource, "error", err)
+			}
 		}
 	}
 }
