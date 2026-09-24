@@ -48,10 +48,12 @@ resource_types:
     in: |
       set -e
       gh issue view --repo {{ .source.repo | shellquote }} {{ .version.number | shellquote }} \
-        --json number,title,body,url > issue.json
+        --json number,title,body,url,comments > issue.json
       jq -r .number issue.json > number
       jq -r .title issue.json > title
-      jq -r '"# \(.title) (#\(.number))\n\n\(.url)\n\n\(.body // "(no description)")\n"' issue.json > issue.md
+      # Comments ride along because a decision recorded on the issue after it was filed lands there, and a plan built from the body alone builds the option the decision rejected.
+      jq -r '"# \(.title) (#\(.number))\n\n\(.url)\n\n\(.body // "(no description)")\n"
+        + ([.comments[] | "\n## Comment by \(.author.login), \(.createdAt)\n\n\(.body)\n"] | join(""))' issue.json > issue.md
 
 # A put: publishing must never be a cached skip.
 - name: github-pr
