@@ -320,6 +320,96 @@ func TestAskUserAbandonsItsQuestionWhenTheStepEnds(t *testing.T) {
 	}
 }
 
+// questionStore renames the facet so embedding it does not shadow its own
+// Questions method with the field of the same name.
+type questionStore = store.Questions
+
+// cancelOnStatus is a question store whose status read is where the step
+// ends: it cancels the step's context and fails the read the way a query
+// interrupted by that cancel does.
+type cancelOnStatus struct {
+	questionStore
+
+	cancel context.CancelFunc
+}
+
+func (c cancelOnStatus) QuestionStatus(_ context.Context, _ int64) (store.Question, error) {
+	c.cancel()
+
+	return store.Question{}, context.Canceled
+}
+
+// TestAskUserAbandonsItsQuestionWhenTheStepEndsMidRead: the cancel can land
+// inside the poll's own status read rather than in the select after it, and
+// that read's error must not skip the close — it did, and left the row
+// pending forever under load.
+func TestAskUserAbandonsItsQuestionWhenTheStepEndsMidRead(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAskFixture(t)
+
+	ctx, cancel := context.WithCancel(fixture.ctx)
+	fixture.ctx = ctx
+	fixture.env.ask.st = cancelOnStatus{questionStore: fixture.store, cancel: cancel}
+
+	result := fixture.ask(askGrant{wait: time.Minute}, "Which bump?")
+
+	if _, isError := result["error"]; !isError {
+		t.Errorf("an abandoned question returned %v, want an error result", result)
+	}
+
+	pending, err := fixture.store.Questions(context.Background(), true, 0)
+	if err != nil {
+		t.Fatalf("Questions: %v", err)
+	}
+
+	if len(pending) != 0 {
+		t.Errorf("the abandoned question is still listed as answerable: %+v", pending)
+	}
+}
+
+// cancelOnAnswer is a question store whose answer write is where the step
+// ends, the same shape as cancelOnStatus one rung earlier.
+type cancelOnAnswer struct {
+	questionStore
+
+	cancel context.CancelFunc
+}
+
+func (c cancelOnAnswer) AnswerQuestion(_ context.Context, _ int64, _, _ string) error {
+	c.cancel()
+
+	return context.Canceled
+}
+
+// TestAskUserAbandonsItsQuestionWhenTheStepEndsMidAnswer: a seeded answer
+// whose write is cut off by the step ending must close the row, not leave it
+// pending with nobody left to answer it.
+func TestAskUserAbandonsItsQuestionWhenTheStepEndsMidAnswer(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAskFixture(t)
+
+	ctx, cancel := context.WithCancel(WithAnswerSeeds(fixture.ctx, []AnswerSeed{{Match: "bump", Answer: "minor"}}))
+	fixture.ctx = ctx
+	fixture.env.ask.st = cancelOnAnswer{questionStore: fixture.store, cancel: cancel}
+
+	result := fixture.ask(askGrant{wait: time.Minute}, "Which bump?")
+
+	if _, isError := result["error"]; !isError {
+		t.Errorf("an abandoned question returned %v, want an error result", result)
+	}
+
+	pending, err := fixture.store.Questions(context.Background(), true, 0)
+	if err != nil {
+		t.Fatalf("Questions: %v", err)
+	}
+
+	if len(pending) != 0 {
+		t.Errorf("the abandoned question is still listed as answerable: %+v", pending)
+	}
+}
+
 // TestAskUserWithoutARunSaysSo: a hook conversation holds no store, and a
 // question nothing could ever surface must be reported as data rather than
 // parked against a row that does not exist.

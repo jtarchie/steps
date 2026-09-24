@@ -368,6 +368,10 @@ func (g askGrant) record(ctx context.Context, env toolEnv, row store.Question, a
 		return resolvedResult(row, source)
 	}
 
+	if ctx.Err() != nil {
+		return g.abandon(ctx, env, row)
+	}
+
 	if !errors.Is(err, store.ErrQuestionNotPending) {
 		return errorResult(fmt.Sprintf("ask_user: %s", err))
 	}
@@ -437,30 +441,13 @@ func (g askGrant) waitForAnswer(ctx context.Context, env toolEnv, row store.Ques
 	terminal := g.promptTerminal(promptCtx, env, row)
 
 	for {
-		current, err := env.ask.st.QuestionStatus(ctx, row.ID)
-		if err != nil {
-			return errorResult("ask_user: " + err.Error())
-		}
-
-		if current.Status != "pending" {
-			fmt.Printf("question %d: answered by %s\n", current.ID, current.AnsweredBy)
-
-			return resolvedResult(current, answerSource(current))
-		}
-
-		if time.Now().After(deadline) {
-			return g.expire(ctx, env, row)
+		if done := g.poll(ctx, env, row, deadline); done != nil {
+			return done
 		}
 
 		select {
 		case <-ctx.Done():
-			// The step is ending — its own timeout, or a Ctrl-C. Mark the row
-			// so it stops showing up as something somebody could still
-			// answer; an unanswerable question sitting pending forever is the
-			// same class of lie as a defaulted answer presented as a person's.
-			g.close(ctx, env, row, "aborted", "", "step")
-
-			return errorResult(fmt.Sprintf("ask_user: question %d was abandoned when the step ended", row.ID))
+			return g.abandon(ctx, env, row)
 		case answer := <-terminal:
 			// A refused answer (one the options fence rejected) leaves the
 			// question OPEN rather than ending the wait with an error: the
@@ -575,6 +562,44 @@ func (g askGrant) expire(ctx context.Context, env toolEnv, row store.Question) m
 		"note": fmt.Sprintf("nobody answered within %s; the declared default was used. Say in your final answer that you proceeded on a default.",
 			g.wait),
 	}
+}
+
+// poll reads the row once and returns the tool result when the wait is over:
+// somebody answered, the deadline passed, or the read failed. nil means keep
+// waiting.
+func (g askGrant) poll(ctx context.Context, env toolEnv, row store.Question, deadline time.Time) map[string]any {
+	current, err := env.ask.st.QuestionStatus(ctx, row.ID)
+	if err != nil {
+		// The step can end inside this read, and then the read's error is the
+		// only sign of it — returning it bare left the row pending.
+		if ctx.Err() != nil {
+			return g.abandon(ctx, env, row)
+		}
+
+		return errorResult("ask_user: " + err.Error())
+	}
+
+	if current.Status != "pending" {
+		fmt.Printf("question %d: answered by %s\n", current.ID, current.AnsweredBy)
+
+		return resolvedResult(current, answerSource(current))
+	}
+
+	if time.Now().After(deadline) {
+		return g.expire(ctx, env, row)
+	}
+
+	return nil
+}
+
+// abandon closes a question whose step is ending — its own timeout, or a
+// Ctrl-C — so it stops showing up as something somebody could still answer;
+// an unanswerable question sitting pending forever is the same class of lie
+// as a defaulted answer presented as a person's.
+func (g askGrant) abandon(ctx context.Context, env toolEnv, row store.Question) map[string]any {
+	g.close(ctx, env, row, "aborted", "", "step")
+
+	return errorResult(fmt.Sprintf("ask_user: question %d was abandoned when the step ended", row.ID))
 }
 
 // close resolves a row on a path where nobody is left to report a failure to.
