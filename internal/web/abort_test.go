@@ -171,7 +171,7 @@ jobs:
 
 	runner.drainOne(t.Context(), target)
 
-	if status := post(t, server, "/p/demo/jobs/build/trigger", map[string]string{"force": "1"}); status != http.StatusSeeOther {
+	if status := post(t, server, "/p/demo/jobs/build/trigger", map[string]string{"force": "all"}); status != http.StatusSeeOther {
 		t.Fatalf("forced trigger = %d, want 303", status)
 	}
 

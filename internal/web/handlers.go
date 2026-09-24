@@ -170,12 +170,16 @@ func (s *Server) handleRun(c *echo.Context) error {
 		}
 	}
 
+	// A later pipeline set may have dropped the job; its trigger would be a 404.
+	_, jobErr := pipeline.Config().FindJob(view.Run.JobName)
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "run", map[string]any{
-		"Nav":       s.nav(c),
-		"Run":       view,
-		"Title":     view.Run.JobName + " #" + shortID(view.Run.ID),
-		"TitleMark": statusMark(view.Run.Status),
+		"Nav":         s.nav(c),
+		"Run":         view,
+		"JobDeclared": jobErr == nil,
+		"Title":       view.Run.JobName + " #" + shortID(view.Run.ID),
+		"TitleMark":   statusMark(view.Run.Status),
 		"Crumbs": []crumb{
 			{Label: "jobs", URL: "/p/" + pipeline.Slug},
 			{Label: view.Run.JobName, URL: "/p/" + pipeline.Slug + "/jobs/" + view.Run.JobName},
@@ -484,9 +488,15 @@ func failingByName(rows []store.CheckError) map[string]store.CheckError {
 	return byName
 }
 
-// handleTrigger queues a job. force re-runs everything, ignoring the merkle
-// cache — without it a re-run of an unchanged pipeline correctly does almost
-// nothing, which is never what someone pressing "re-run" meant.
+// forceAll is the one value of the trigger form's force field that forces.
+// Run pages rendered before #147 posted force=1 from a button that read
+// "Re-run", and a tab left open through the deploy must not keep forcing.
+const forceAll = "all"
+
+// handleTrigger queues a job. force skips the merkle cache AND re-takes
+// versions the job's cursor already consumed: a `version: every` get replays
+// every recorded version, effects included. It still records what it took.
+// Only the job page offers it, labelled; everywhere else is an ordinary trigger.
 func (s *Server) handleTrigger(c *echo.Context) error {
 	if s.runner == nil {
 		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
@@ -511,7 +521,7 @@ func (s *Server) handleTrigger(c *echo.Context) error {
 			"this pipeline is paused; resume it with steps pipeline unpause -p "+pipeline.Slug)
 	}
 
-	force := c.FormValue("force") != ""
+	force := c.FormValue("force") == forceAll
 
 	reason := "manual (web)"
 	if force {

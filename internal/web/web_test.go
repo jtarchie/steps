@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -649,13 +650,14 @@ func TestTriggerForcesOnlyWhenAsked(t *testing.T) {
 	}
 
 	post(t, server, "/p/demo/jobs/build/trigger", nil)
-	post(t, server, "/p/demo/jobs/build/trigger", map[string]string{"force": "1"})
+	post(t, server, "/p/demo/jobs/build/trigger", map[string]string{"force": "1"}) // what a pre-#147 run page sent
+	post(t, server, "/p/demo/jobs/build/trigger", map[string]string{"force": "all"})
 
-	if fmt.Sprint(runner.forced) != "[false true]" {
-		t.Errorf("forced = %v, want [false true]", runner.forced)
+	if fmt.Sprint(runner.forced) != "[false false true]" {
+		t.Errorf("forced = %v, want [false false true]", runner.forced)
 	}
 
-	if strings.Join(runner.reasons, "|") != "manual (web)|manual re-run, forced (web)" {
+	if strings.Join(runner.reasons, "|") != "manual (web)|manual (web)|manual re-run, forced (web)" {
 		t.Errorf("reasons = %q", runner.reasons)
 	}
 }
@@ -1666,5 +1668,116 @@ func TestConfigPageShowsIncludes(t *testing.T) {
 	_, body := get(t, server, "/p/demo/config/"+sha)
 	if !strings.Contains(body, "ci/task.yml") || !strings.Contains(body, "include-marker") {
 		t.Errorf("config page omits the include:\n%s", body)
+	}
+}
+
+// formFields returns the hidden name/value pairs of the form on page posting to action.
+func formFields(t *testing.T, page, action string) map[string]string {
+	t.Helper()
+
+	form := regexp.MustCompile(`(?s)<form[^>]*action="` + regexp.QuoteMeta(action) + `"[^>]*>(.*?)</form>`).FindStringSubmatch(page)
+	if form == nil {
+		t.Fatalf("no form posting to %s:\n%s", action, page)
+	}
+
+	fields := map[string]string{}
+	for _, m := range regexp.MustCompile(`<input type="hidden" name="([^"]*)" value="([^"]*)"`).FindAllStringSubmatch(form[1], -1) {
+		fields[m[1]] = m[2]
+	}
+
+	return fields
+}
+
+// TestRunPageTriggerIsNotForced: the run page's button submitted as rendered is an ordinary trigger (#147).
+func TestRunPageTriggerIsNotForced(t *testing.T) {
+	t.Parallel()
+
+	_, pipeline := testPipeline(t)
+	runner := &enqueueRecorder{}
+
+	server, err := New([]*Pipeline{pipeline}, runner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	err = pipeline.Store.StartRun(t.Context(), "r1", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	_, page := get(t, server, "/p/demo/runs/r1")
+	if strings.Contains(page, "↻ Re-run") {
+		t.Error("run page still offers a Re-run")
+	}
+
+	action := "/p/demo/jobs/build/trigger"
+	post(t, server, action, formFields(t, page, action))
+
+	if fmt.Sprint(runner.forced) != "[false]" || strings.Join(runner.reasons, "|") != "manual (web)" {
+		t.Errorf("forced = %v reasons = %q, want an ordinary trigger", runner.forced, runner.reasons)
+	}
+}
+
+// TestJobPageForcedFormForces: the job page's forced button, submitted as rendered, still forces.
+func TestJobPageForcedFormForces(t *testing.T) {
+	t.Parallel()
+
+	_, pipeline := testPipeline(t)
+	runner := &enqueueRecorder{}
+
+	server, err := New([]*Pipeline{pipeline}, runner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	action := "/p/demo/jobs/build/trigger"
+	_, page := get(t, server, "/p/demo/jobs/build")
+
+	post(t, server, action, formFields(t, page, action)) // first form on the page: ordinary
+	post(t, server, action, map[string]string{"force": formForced(t, page)})
+
+	if fmt.Sprint(runner.forced) != "[false true]" {
+		t.Errorf("forced = %v, want [false true]", runner.forced)
+	}
+}
+
+// formForced is the value of the force field the job page renders.
+func formForced(t *testing.T, page string) string {
+	t.Helper()
+
+	m := regexp.MustCompile(`name="force" value="([^"]*)"`).FindStringSubmatch(page)
+	if m == nil {
+		t.Fatalf("job page has no forced form:\n%s", page)
+	}
+
+	return m[1]
+}
+
+// TestRunPageOffersNoTriggerForAJobThePipelineDropped: the click would be a 404.
+func TestRunPageOffersNoTriggerForAJobThePipelineDropped(t *testing.T) {
+	t.Parallel()
+
+	_, pipeline := testPipeline(t)
+
+	server, err := New([]*Pipeline{pipeline}, &enqueueRecorder{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for _, job := range []string{"build", "gone"} {
+		err := pipeline.Store.StartRun(t.Context(), "run-"+job, job, "/tmp/ws", "")
+		if err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+	}
+
+	_, kept := get(t, server, "/p/demo/runs/run-build")
+	if !strings.Contains(kept, "/jobs/build/trigger") {
+		t.Error("control: a declared job's run page lost its trigger")
+	}
+
+	_, dropped := get(t, server, "/p/demo/runs/run-gone")
+	if strings.Contains(dropped, "/jobs/gone/trigger") {
+		t.Error("run page offers a trigger for a job the pipeline no longer has")
 	}
 }
