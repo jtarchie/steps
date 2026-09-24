@@ -17,9 +17,9 @@ import (
 // is that a build failing halfway leaves its version consumed, so the ordinary
 // "run it again" finds nothing to do. pipeline/get.go names the way out in as
 // many words: "Re-running one is an explicit act there
-// (concourse/concourse#413), which here is --force or --resume."
+// (concourse/concourse#413), which here is --resume or --pin."
 //
-// --force was true. --resume was not, and the shape of the miss is what makes
+// --resume selected nothing, and the shape of the miss is what makes
 // it worth a test rather than a one-line change: the resumed run did not fail
 // saying it could not reach the version, it selected NOTHING, ran zero steps,
 // and exited GREEN — a resume of a failed run reporting success having
@@ -88,8 +88,8 @@ jobs:
 // above, and the reason the re-opening is keyed by RUN rather than simply
 // switched off.
 //
-// The blunt repair was to let a resume ignore the cursor the way --force does.
-// It passes the test above and is wrong: --force re-opens every version any
+// The blunt repair was to let a resume ignore the cursor wholesale.
+// It passes the test above and is wrong: that re-opens every version any
 // run ever took, so resuming one failed build would rebuild the history behind
 // it -- re-running an agent, re-pushing a branch, re-opening a pull request
 // for work that was finished and green. Concourse keeps these apart for the

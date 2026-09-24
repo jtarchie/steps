@@ -565,6 +565,89 @@ jobs:
 	}
 }
 
+// TestProcessWideForceDoesNotReplayTakenVersions: `steps web --force` skips the
+// cache but a version: every get keeps its cursor (#145), so a forced drain over
+// versions the job already took runs nothing.
+func TestProcessWideForceDoesNotReplayTakenVersions(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "demo.yml")
+	tally := filepath.Join(dir, "ran.txt")
+
+	writeFile(t, path, `
+resource_types:
+  - name: ticker
+    config:
+      check: printf '[{"n":"1"},{"n":"2"}]'
+      in: 'true'
+
+resources:
+  - name: ticks
+    type: ticker
+    source: {}
+
+jobs:
+  - name: build
+    plan:
+      - get: ticks
+        version: every
+      - task: append
+        run: echo ran >> `+tally+`
+`)
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	t.Cleanup(func() { _ = st.Close() })
+
+	provider, err := workspace.NewProvider(cfg.Workspace, false)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	t.Cleanup(func() { _ = provider.Close() })
+
+	ctx := t.Context()
+	target := NewPipeline("demo", path, cfg, st, events.New(nil))
+
+	PrepareQueue(ctx, target)
+
+	drain := func(force bool) {
+		t.Helper()
+
+		runner := NewLocalRunner(map[string]workspace.Provider{"demo": provider}, nil, 1, force)
+
+		enqueueErr := st.EnqueueJob(ctx, "build", "test")
+		if enqueueErr != nil {
+			t.Fatalf("EnqueueJob: %v", enqueueErr)
+		}
+
+		if !runner.drainOne(ctx, target) {
+			t.Fatal("nothing was claimed from a queue with a pending row")
+		}
+	}
+
+	drain(false)
+
+	if lines := countLines(t, tally); lines != 2 {
+		t.Fatalf("tally = %d lines after the first run, want 2 (one per version)", lines)
+	}
+
+	drain(true)
+
+	if lines := countLines(t, tally); lines != 2 {
+		t.Errorf("tally = %d lines, want 2: a forced drain re-took versions already taken", lines)
+	}
+}
+
 // countLines is the tally a forced re-run grows and a cached one does not.
 func countLines(t *testing.T, path string) int {
 	t.Helper()

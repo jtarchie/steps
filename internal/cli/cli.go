@@ -86,13 +86,13 @@ type RunCmd struct {
 	VarFlags     `embed:""`
 	ExecFlags    `embed:""`
 	HistoryFlags `embed:""`
-	Pipeline     string            `arg:""                                                                 help:"path to the pipeline YAML file"`
+	Pipeline     string            `arg:""                                                                                                                         help:"path to the pipeline YAML file"`
 	Job          string            `help:"job name to run (defaults to the pipeline's only job)"`
-	Pin          map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                name:"pin"`
-	Force        bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
-	Resume       string            `help:"continue a failed run from the step that failed"                 name:"resume"`
-	Replay       string            `help:"fork a recorded run and re-run it from --from onward"            name:"replay"`
-	From         string            `help:"with --replay, the step name to re-run from"                     name:"from"`
+	Pin          map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                                                        name:"pin"`
+	Force        bool              `help:"ignore the step cache and re-run every step, even if unchanged (version: every still takes only versions not yet built)"`
+	Resume       string            `help:"continue a failed run from the step that failed"                                                                         name:"resume"`
+	Replay       string            `help:"fork a recorded run and re-run it from --from onward"                                                                    name:"replay"`
+	From         string            `help:"with --replay, the step name to re-run from"                                                                             name:"from"`
 }
 
 // applyContinuation handles the flags that point this invocation at a previous
@@ -207,7 +207,8 @@ func (r *RunCmd) Run() error {
 }
 
 // TestCmd runs every job in the pipeline (force, so nothing is skipped and the
-// recorded execution order is deterministic) and verifies its assert:
+// recorded execution order is deterministic, and versions an every-get already took
+// are re-opened so a rerun is too) and verifies its assert:
 // directives — each job's own assert.execution is checked inside RunJob, and a
 // top-level assert.execution of job names is checked here. It's the entry
 // point for a self-verifying fixture — every runnable example in docs/*.md
@@ -244,6 +245,7 @@ func (t *TestCmd) Run() error {
 	}
 
 	ctx = pipeline.WithAnswerDB(ctx, answerDB(t.Pipeline, t.DB))
+	ctx = pipeline.WithTakenVersionsReopened(ctx)
 
 	var (
 		executed []string
@@ -2233,12 +2235,12 @@ type WebCmd struct {
 	ExecFlags    `embed:""`
 	HistoryFlags `embed:""`
 	// Its own --db rather than StateFlags, whose --name binds nothing here: a name is chosen by `steps pipeline set -p`, and a flag that parses and threads nowhere reads as configured.
-	DB            DB                `help:"state database: a sqlite file path or sqlite:// url (default: .steps/steps.db)" name:"db"                                                          placeholder:"URL"`
-	Listen        string            `default:"127.0.0.1:8088"                                                              help:"address to serve on"`
-	Interval      time.Duration     `default:"30s"                                                                         help:"how often to check trigger: true resources"`
-	MaxConcurrent int               `default:"1"                                                                           help:"maximum number of queued jobs running at once, per pipeline"`
-	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                               name:"pin"`
-	Force         bool              `help:"ignore persisted state and re-run every step, even if unchanged"`
+	DB            DB                `help:"state database: a sqlite file path or sqlite:// url (default: .steps/steps.db)"                                          name:"db"                                                          placeholder:"URL"`
+	Listen        string            `default:"127.0.0.1:8088"                                                                                                       help:"address to serve on"`
+	Interval      time.Duration     `default:"30s"                                                                                                                  help:"how often to check trigger: true resources"`
+	MaxConcurrent int               `default:"1"                                                                                                                    help:"maximum number of queued jobs running at once, per pipeline"`
+	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                                                        name:"pin"`
+	Force         bool              `help:"ignore the step cache and re-run every step, even if unchanged (version: every still takes only versions not yet built)"`
 	// A statement about the BROWSER's surface only; `steps pipeline set` is the deployment path and is deliberately not withheld — see docs/web.md.
 	ReadOnly bool `help:"serve the pages without trigger, approval, answer, resume or abort controls" name:"read-only"`
 	// Both or neither, refused below: half a pair is a daemon somebody believes is protected. Env vars because a password on a command line is in every ps listing and every shell history.

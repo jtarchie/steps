@@ -493,9 +493,11 @@ func failingByName(rows []store.CheckError) map[string]store.CheckError {
 // "Re-run", and a tab left open through the deploy must not keep forcing.
 const forceAll = "all"
 
-// handleTrigger queues a job. force skips the merkle cache AND re-takes
-// versions the job's cursor already consumed: a `version: every` get replays
-// every recorded version, effects included. It still records what it took.
+// handleTrigger queues a job. force re-runs every step, ignoring the merkle
+// cache — without it a re-run of an unchanged pipeline correctly does almost
+// nothing, which is never what someone pressing "re-run" meant. It does not
+// re-take versions a `version: every` get already built (#145): those are
+// effects, and replaying a resource's history is not what "re-run" means.
 // Only the job page offers it, labelled; everywhere else is an ordinary trigger.
 func (s *Server) handleTrigger(c *echo.Context) error {
 	if s.runner == nil {

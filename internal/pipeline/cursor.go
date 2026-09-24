@@ -44,20 +44,16 @@ type versionCursor struct {
 	// recorded, so it sits above every mark and is still to do.
 	orders map[string]map[string]int64
 
-	// suppress is false under --force, which re-runs everything the cursor
-	// would otherwise filter out. It gates only `has`: the run still RECORDS
-	// what it took, because a forced run performs the effects just like any
-	// other, and a version it completed must not be taken a third time by the
-	// next ordinary run. Forcing is "ignore what was taken", not "forget what
-	// this run is doing".
+	// suppress is false only when a caller asked for taken versions to be
+	// reopened (`steps test`), never under --force (#145). It gates only
+	// `has`: the run still RECORDS what it took.
 	suppress bool
 
 	// reopen names the versions a resumed run already took, as resource ->
 	// canonical version JSON. Those alone escape suppression, which is what
-	// separates --resume from --force: forcing re-opens every version any run
-	// ever took and rebuilds history with it, where resuming re-opens exactly
-	// the versions THIS run was created with and leaves every other job's
-	// progress where it is. Empty for an ordinary run.
+	// makes --resume the only operator verb that re-opens: exactly the
+	// versions THIS run was created with, leaving every other job's progress
+	// where it is. Empty for an ordinary run.
 	reopen map[string]map[string]bool
 }
 
@@ -69,9 +65,8 @@ type versionCursor struct {
 // consumed" would re-run every visible version — the exact behaviour this
 // exists to stop — and guessing the opposite would silently skip real work.
 //
-// suppress is false under --force. The cursor is still built and still
-// records, so the versions a forced run completes are marked taken; only the
-// filtering is switched off. reopen is --resume's narrower version of the same
+// suppress is false only for `steps test`. The cursor is still built and still
+// records; only the filtering is switched off. reopen is --resume's narrower
 // exemption, naming the versions of one run rather than lifting the filter.
 func loadVersionCursor(
 	ctx context.Context, st store.Store, job *config.Job, suppress bool, reopen map[string]map[string]bool,
@@ -228,7 +223,7 @@ func fansOutOverEveryVersion(step config.Step) bool {
 
 // has reports whether this job has already taken the version. A nil cursor
 // (no version: every in the plan) has taken nothing, and neither has one
-// under --force, which re-runs everything by design.
+// whose suppression is off (`steps test`).
 func (c *versionCursor) has(resourceName string, version map[string]any) bool {
 	if c == nil || !c.suppress {
 		return false

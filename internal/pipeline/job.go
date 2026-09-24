@@ -296,11 +296,8 @@ func runJobPlan(
 	// Which versions this job has already fanned out over, read ONCE before
 	// planning so the planner and the executor judge the same set.
 	//
-	// --force (skipCache) stops the cursor SUPPRESSING versions — "re-run
-	// every step" has to include the ones a previous run took, or the flag
-	// cannot recover from a bad build — but the cursor is still built and
-	// still records. Skipping the recording too would mean a forced run
-	// performed every effect and remembered none of them.
+	// --force (skipCache) skips the cache only; the cursor keeps filtering
+	// and recording (#145).
 	// Whatever triggered this run, its resources are re-checked first — see
 	// refreshResourceHistory. Best-effort by design: the resolution below
 	// builds from recorded history either way.
@@ -310,14 +307,14 @@ func runJobPlan(
 	// and nothing else. This is fly rerun-build: Concourse re-runs a build
 	// against build_resource_config_version_inputs — the versions that build
 	// began with — rather than against whatever is newest, and it does not
-	// disturb any other build's progress. --force is the other verb, and
-	// deliberately blunter.
+	// disturb any other build's progress. --force only skips the
+	// cache; it never re-opens a taken version.
 	reopen, err := resumedRunInputs(ctx, r.st)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
-	cursor, err := loadVersionCursor(ctx, r.st, job, !skipCache, reopen)
+	cursor, err := loadVersionCursor(ctx, r.st, job, !takenVersionsReopened(ctx), reopen)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
