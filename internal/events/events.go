@@ -447,6 +447,10 @@ func Logger(ctx context.Context) *slog.Logger {
 type Output struct {
 	Stdout io.Writer
 	Stderr io.Writer
+	// Step, when set, is the writer for one step's bytes, so a renderer that draws per step knows whose they are. It wins over Stdout/Stderr.
+	Step func(stepID int64, stderr bool) io.Writer
+	// Hold, when set, stops the renderer drawing and hands back the raw terminal until release is called — for a prompt a person has to read and answer.
+	Hold func() (w io.Writer, release func())
 }
 
 type outputKey struct{}
@@ -458,18 +462,50 @@ func WithOutput(ctx context.Context, out Output) context.Context {
 
 // Stdout is where ctx's human-facing output goes, the process's own stdout when no renderer installed one.
 func Stdout(ctx context.Context) io.Writer {
-	if out, ok := ctx.Value(outputKey{}).(Output); ok && out.Stdout != nil {
-		return out.Stdout
-	}
-
-	return os.Stdout
+	return stream(ctx, false)
 }
 
 // Stderr is Stdout's twin for the error stream.
 func Stderr(ctx context.Context) io.Writer {
-	if out, ok := ctx.Value(outputKey{}).(Output); ok && out.Stderr != nil {
+	return stream(ctx, true)
+}
+
+func stream(ctx context.Context, stderr bool) io.Writer {
+	out, _ := ctx.Value(outputKey{}).(Output)
+
+	switch {
+	case out.Step != nil:
+		return out.Step(StepID(ctx), stderr)
+	case stderr && out.Stderr != nil:
 		return out.Stderr
+	case stderr:
+		return os.Stderr
+	case out.Stdout != nil:
+		return out.Stdout
+	default:
+		return os.Stdout
+	}
+}
+
+// Hold takes the terminal for a prompt: the returned writer reaches the person directly, and nothing else draws until release. With no renderer to pause it is Stdout.
+func Hold(ctx context.Context) (io.Writer, func()) {
+	if out, _ := ctx.Value(outputKey{}).(Output); out.Hold != nil {
+		return out.Hold()
 	}
 
-	return os.Stderr
+	return Stdout(ctx), func() {}
+}
+
+type rendererKey struct{}
+
+// WithRenderer names what should draw a run started under ctx: the observer a bus the runner attaches will call, in place of its plain lines.
+func WithRenderer(ctx context.Context, render func(Event)) context.Context {
+	return context.WithValue(ctx, rendererKey{}, render)
+}
+
+// Renderer is the observer WithRenderer named, or nil.
+func Renderer(ctx context.Context) func(Event) {
+	render, _ := ctx.Value(rendererKey{}).(func(Event))
+
+	return render
 }

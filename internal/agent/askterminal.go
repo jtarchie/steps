@@ -121,7 +121,11 @@ func promptOnTerminal(ctx context.Context, question store.Question) (string, boo
 		return "", false
 	}
 
-	_, _ = fmt.Fprintf(events.Stdout(ctx), "question %d> ", question.ID)
+	// Held for as long as the person is being asked: a live view redrawing under a half-typed answer would erase it.
+	prompt, release := events.Hold(ctx)
+	defer release()
+
+	_, _ = fmt.Fprintf(prompt, "question %d> ", question.ID)
 
 	select {
 	case answer := <-lines:

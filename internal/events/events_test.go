@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -340,5 +341,60 @@ func TestNoteWithNoBusIsStillSaid(t *testing.T) {
 
 	if want := "worker parked\nwarning: could not give it back\n"; out.String() != want {
 		t.Errorf("printed %q, want %q", out.String(), want)
+	}
+}
+
+// TestOutputRoutesByStepAndHolds covers the two hooks a live renderer needs: it is told whose bytes it is writing, and a prompt can take the terminal from it until the person has answered.
+func TestOutputRoutesByStepAndHolds(t *testing.T) {
+	t.Parallel()
+
+	var raw strings.Builder
+
+	steps := map[int64]*strings.Builder{}
+	held := 0
+
+	ctx := WithOutput(context.Background(), Output{
+		Step: func(id int64, _ bool) io.Writer {
+			if steps[id] == nil {
+				steps[id] = &strings.Builder{}
+			}
+
+			return steps[id]
+		},
+		Hold: func() (io.Writer, func()) {
+			held++
+
+			return &raw, func() { held-- }
+		},
+	})
+
+	_, _ = Stdout(WithStepID(ctx, 4)).Write([]byte("four"))
+	_, _ = Stderr(WithStepID(ctx, 5)).Write([]byte("five"))
+
+	if steps[4].String() != "four" || steps[5].String() != "five" {
+		t.Errorf("step writers got %q/%q", steps[4], steps[5])
+	}
+
+	w, release := Hold(ctx)
+	_, _ = w.Write([]byte("question 1> "))
+
+	if held != 1 || raw.String() != "question 1> " {
+		t.Errorf("hold = %d, raw = %q", held, raw.String())
+	}
+
+	release()
+
+	if held != 0 {
+		t.Error("release did not give the terminal back")
+	}
+
+	var plain strings.Builder
+
+	w, release = Hold(WithOutput(context.Background(), Output{Stdout: &plain}))
+	_, _ = w.Write([]byte("x"))
+	release()
+
+	if plain.String() != "x" {
+		t.Error("with no renderer to hold, Hold is just Stdout")
 	}
 }

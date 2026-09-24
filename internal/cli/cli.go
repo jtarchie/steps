@@ -82,17 +82,18 @@ var BuildVersion = "dev"
 
 // RunCmd runs a single job's plan once, exactly as steps has always done.
 type RunCmd struct {
-	StateFlags   `embed:""`
-	VarFlags     `embed:""`
-	ExecFlags    `embed:""`
-	HistoryFlags `embed:""`
-	Pipeline     string            `arg:""                                                                                                                         help:"path to the pipeline YAML file"`
-	Job          string            `help:"job name to run (defaults to the pipeline's only job)"`
-	Pin          map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                                                        name:"pin"`
-	Force        bool              `help:"ignore the step cache and re-run every step, even if unchanged (version: every still takes only versions not yet built)"`
-	Resume       string            `help:"continue a failed run from the step that failed"                                                                         name:"resume"`
-	Replay       string            `help:"fork a recorded run and re-run it from --from onward"                                                                    name:"replay"`
-	From         string            `help:"with --replay, the step name to re-run from"                                                                             name:"from"`
+	StateFlags    `embed:""`
+	VarFlags      `embed:""`
+	ExecFlags     `embed:""`
+	HistoryFlags  `embed:""`
+	ProgressFlags `embed:""`
+	Pipeline      string            `arg:""                                                                                                                         help:"path to the pipeline YAML file"`
+	Job           string            `help:"job name to run (defaults to the pipeline's only job)"`
+	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                                                        name:"pin"`
+	Force         bool              `help:"ignore the step cache and re-run every step, even if unchanged (version: every still takes only versions not yet built)"`
+	Resume        string            `help:"continue a failed run from the step that failed"                                                                         name:"resume"`
+	Replay        string            `help:"fork a recorded run and re-run it from --from onward"                                                                    name:"replay"`
+	From          string            `help:"with --replay, the step name to re-run from"                                                                             name:"from"`
 }
 
 // applyContinuation handles the flags that point this invocation at a previous
@@ -192,7 +193,10 @@ func (r *RunCmd) Run() error {
 
 	slog.Info("pipeline.run", "pipeline", r.Pipeline, "job", job.Name)
 
+	ctx, undraw := r.draw(ctx, st)
 	runErr := pipeline.RunJob(ctx, cfg, job, r.Pin, provider, st, r.Force)
+
+	undraw()
 
 	slog.Info("pipeline.done", "pipeline", r.Pipeline, "job", job.Name, "error", runErr)
 
@@ -214,10 +218,11 @@ func (r *RunCmd) Run() error {
 // point for a self-verifying fixture — every runnable example in docs/*.md
 // is one (see docs_test.go).
 type TestCmd struct {
-	StateFlags `embed:""`
-	VarFlags   `embed:""`
-	ExecFlags  `embed:""`
-	Pipeline   string `arg:""   help:"path to the pipeline YAML file"`
+	StateFlags    `embed:""`
+	VarFlags      `embed:""`
+	ExecFlags     `embed:""`
+	ProgressFlags `embed:""`
+	Pipeline      string `arg:""   help:"path to the pipeline YAML file"`
 }
 
 // Run loads the pipeline, runs every job (force), and reports pass/fail per
@@ -253,6 +258,9 @@ func (t *TestCmd) Run() error {
 	)
 
 	slog.Info("pipeline.test", "pipeline", t.Pipeline, "jobs", len(cfg.Jobs))
+
+	ctx, undraw := t.draw(ctx, st)
+	defer undraw()
 
 	for i := range cfg.Jobs {
 		job := &cfg.Jobs[i]

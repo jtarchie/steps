@@ -39,6 +39,7 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 steps run <pipeline>        run one job (--resume <id> continues a failed one,
                             --replay <id> --from <step> re-runs one step of one)
                             --worker <tag>=<url> places tags: steps on a machine
+                            --progress tty|plain|auto draws it live or as lines
 steps test <pipeline>       run every job and check assert: directives
 steps validate <pipeline>   check the file, and that this machine can run it
 steps plan <pipeline>       show what a run would execute vs skip
@@ -68,6 +69,8 @@ steps docs [page]           read these docs in the terminal
 ```
 
 The read commands default to a daemon's `.steps/steps.db`. A local `steps run` or `steps test` keeps its state beside the YAML instead, so reaching it takes `--db` — which a parked `approval:` or question prints for you: `steps approvals approve 1 -p pipeline --db .steps/pipeline.yml.db`.
+
+**How a run looks while it runs.** On a terminal, `steps run` and `steps test` draw a live view: a region at the bottom shows each running step with its clock, the last lines it printed and an agent's tool calls, and each step that finishes leaves one line above it in your scrollback. A failed run ends with the failed step's full output under the summary. Anywhere else — a pipe, a file, CI (`CI` set), `TERM=dumb`, or an agent calling `steps` — it prints one plain line per event instead, which `--progress plain` forces and `--progress tty` overrides. Both are drawn from the same events the [web transcript](web.md) is, so the notes a run prints (a worker started, an image pulled, a try: tolerated) are on its run page too.
 
 Two of these answer most "why is it doing that?" questions: `steps plan` explains what the cache would skip, and `steps runs steps` shows what previous runs actually did.
 

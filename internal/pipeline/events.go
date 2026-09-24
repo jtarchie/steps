@@ -65,8 +65,13 @@ func attachEventBus(ctx context.Context, st store.Store) (context.Context, func(
 		return ctx, func() {}
 	}
 
+	render := events.Renderer(ctx)
+	if render == nil {
+		render = runview.Plain(events.Stdout(ctx))
+	}
+
 	bus := events.New(StoreSink(st))
-	stopPrinting := bus.Observe(runview.Plain(events.Stdout(ctx)))
+	stopPrinting := bus.Observe(render)
 
 	return events.WithBus(ctx, bus), func() {
 		stopPrinting()

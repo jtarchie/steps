@@ -28,7 +28,7 @@ Primarily terminal: `steps run|test|validate|runs|mcp`, plus `steps web` — the
 
 - The primary interface is CLI output (log lines, diagnostics), YAML pipeline syntax, and `--help`/usage text.
 - `steps web` adds a local, single-user daemon and browser UI: loopback by default, no authentication (it shares the trust domain of the shell that started it), and no capability the CLI lacks. Its `steps pipeline set` endpoint runs arbitrary commands by construction, which is a reason the loopback default is a default rather than a suggestion. It never becomes a hosted multi-tenant service without an auth story that does not exist today.
-- Undecided: whether a richer terminal UI (progress bars, interactive prompts, etc.) is ever in scope, versus staying plain-log output only.
+- Decided (#124): on a terminal, `steps run`/`test` draw a live inline view — a redrawn region of running steps above which finished steps scroll away, buildx-style, display-only with no key handling. Everywhere else (pipe, CI, `TERM=dumb`, agents calling `steps`) output stays plain lines, and `--progress` forces either. A full-screen TUI is out of scope: it would be a second `steps web`, which adds no capability.
 
 ## Brand Commitments
 
