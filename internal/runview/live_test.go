@@ -197,3 +197,103 @@ func TestClipNeverOverrunsTheTerminal(t *testing.T) {
 		t.Errorf("clip = %q", got)
 	}
 }
+
+// TestLiveLetsARunEndForGood: the resume hint and the usage report are said after job_finished, and a run brought back by them would sit on screen as a header nobody takes down — under which `steps test` prints its next PASS/FAIL, for the next redraw to erase.
+func TestLiveLetsARunEndForGood(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+
+	var out strings.Builder
+
+	live := liveAt(&out, &now)
+
+	for _, e := range []events.Event{
+		{Type: events.TypeStepStarted, StepKind: "task", StepName: "lint", StepID: 1},
+		{Type: events.TypeStepFinished, StepKind: "task", StepName: "lint", StepID: 1, Status: "failed", DurationMS: 300},
+		{Type: events.TypeJobFinished, StepIndex: -1, Status: "failed", DurationMS: 400},
+		{Type: events.TypeStepNote, StepIndex: -1, Status: events.NoteInfo, Text: "run: R  (resume with: steps run <pipeline> --resume R)"},
+	} {
+		e.RunID, e.At = "R", now
+		live.Event(e)
+	}
+
+	_, _ = out.WriteString("FAIL build: exit 1\n")
+
+	live.Stop()
+
+	got := screen(t, out.String())
+	if last := got[len(got)-1]; last != "FAIL build: exit 1" {
+		t.Errorf("the line printed after the run is gone; the screen reads:\n%s", strings.Join(got, "\n"))
+	}
+
+	for _, row := range got {
+		if strings.HasPrefix(row, "[+]") {
+			t.Errorf("a finished run was drawn again:\n%s", strings.Join(got, "\n"))
+		}
+	}
+}
+
+// TestLiveScrollsWhatNoRunningStepOwns: a tail is drawn only under a running step, so bytes for any other — a job-level hook, an image pull before the first step, a hook that runs after its step finished — go to scrollback, or nobody sees them.
+func TestLiveScrollsWhatNoRunningStepOwns(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+
+	var out strings.Builder
+
+	live := liveAt(&out, &now)
+
+	_, _ = live.Stream(0, false).Write([]byte("pulling image: alpine\npartial"))
+	_, _ = live.Stream(0, false).Write([]byte(" line\n"))
+
+	live.Event(events.Event{Type: events.TypeStepStarted, RunID: "R", Job: "build", StepKind: "task", StepName: "unit", StepID: 1, At: now})
+	live.Event(events.Event{Type: events.TypeStepFinished, RunID: "R", Job: "build", StepKind: "task", StepName: "unit", StepID: 1, Status: "succeeded", At: now})
+
+	_, _ = live.Stream(1, false).Write([]byte("[notify] sent\n"))
+
+	live.Stop()
+
+	got := strings.Join(screen(t, out.String()), "\n")
+	for _, want := range []string{"pulling image: alpine", "partial line", "[notify] sent"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("screen lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestTailReadsLikeATerminal: CRLF is a line ending, a bare CR starts the line over even across writes, and only the runner's own "[step] " label is taken off.
+func TestTailReadsLikeATerminal(t *testing.T) {
+	t.Parallel()
+
+	var tl tail
+
+	tl.write([]byte("one\r\ntwo\r"))
+	tl.write([]byte("\n[INFO] three\n[unit] four\n10%\r"))
+	tl.write([]byte("90%"))
+
+	got := strings.Join(tl.last("unit"), "|")
+	if want := "one|two|[INFO] three|four|90%"; got != want {
+		t.Errorf("tail = %q, want %q", got, want)
+	}
+}
+
+// TestLiveRegionFitsTheScreen: a region taller than the terminal cannot be moved back over, and every redraw would leave a copy of it in scrollback.
+func TestLiveRegionFitsTheScreen(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+
+	var out strings.Builder
+
+	live := liveAt(&out, &now)
+	live.Height = func() int { return 4 }
+
+	for id := int64(1); id <= 6; id++ {
+		live.Event(events.Event{Type: events.TypeStepStarted, RunID: "R", Job: "build", StepKind: "task", StepName: "t", StepID: id, At: now})
+	}
+
+	if live.drawn != 3 {
+		t.Errorf("region drew %d rows on a 4-row terminal, want 3", live.drawn)
+	}
+}

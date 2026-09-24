@@ -601,13 +601,6 @@ func RunHook(ctx context.Context, cfg *config.Config, jobName string, step confi
 	return nil
 }
 
-// fallbackBanner annotates a step's own output line when it is running on a
-// fallback model, so the difference is visible where the run is being read
-// rather than only in a log line that scrolled past at startup.
-//
-// Visibility is the requirement, not a nicety: a fallback can produce
-// meaningfully different output, and a quality dip caused by an outage that
-// looks identical to a normal run is one nobody investigates.
 // noteFallback warns when a step is served by a fallback model; the step's start line already names the agent.
 func noteFallback(ctx context.Context, name string, prepared preparedAgentStep) {
 	if banner := fallbackBanner(prepared); banner != "" {
@@ -615,6 +608,13 @@ func noteFallback(ctx context.Context, name string, prepared preparedAgentStep) 
 	}
 }
 
+// fallbackBanner annotates a step's own output line when it is running on a
+// fallback model, so the difference is visible where the run is being read
+// rather than only in a log line that scrolled past at startup.
+//
+// Visibility is the requirement, not a nicety: a fallback can produce
+// meaningfully different output, and a quality dip caused by an outage that
+// looks identical to a normal run is one nobody investigates.
 func fallbackBanner(prepared preparedAgentStep) string {
 	model := fallbackModel(prepared)
 	if model == "" {

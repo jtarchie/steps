@@ -186,8 +186,13 @@ func New(sink func(Event)) *Bus {
 
 // Publish stamps an event and delivers it to every observer, subscriber and the sink. Only an observer can hold it up: a subscriber whose buffer is full misses the event rather than stalling the run.
 func (b *Bus) Publish(event Event) {
+	b.publish(event)
+}
+
+// publish is Publish, reporting false when the bus was already closed and nothing received the event.
+func (b *Bus) publish(event Event) bool {
 	if b == nil {
-		return
+		return false
 	}
 
 	b.observeMu.Lock()
@@ -200,12 +205,14 @@ func (b *Bus) Publish(event Event) {
 	}
 
 	if !b.fanOut(event) {
-		return
+		return false
 	}
 
 	for _, observe := range b.observers {
 		observe(event)
 	}
+
+	return true
 }
 
 // fanOut hands event to the subscribers and the sink, reporting false once the bus is closed.
@@ -343,21 +350,16 @@ func Publish(ctx context.Context, event Event) {
 	FromContext(ctx).Publish(event)
 }
 
-// Note publishes a TypeStepNote under the run and step ctx names, or the job (StepIndex -1) outside a step. With no bus to tell it writes the line to Stdout(ctx) instead, because a note is often the only record of what it says.
+// Note publishes a TypeStepNote under the run and step ctx names, or the job (StepIndex -1) outside a step. With no bus to tell — none installed, or one already closed, which is where a job's deferred worker release speaks — it writes the line to Stdout(ctx) instead, because a note is often the only record of what it says.
 func Note(ctx context.Context, level, text string) {
-	bus := FromContext(ctx)
-	if bus == nil {
-		say(Stdout(ctx), level, text)
-
-		return
-	}
-
 	event := Event{Type: TypeStepNote, RunID: RunID(ctx), StepID: StepID(ctx), Status: level, Text: text}
 	if event.StepID == 0 {
 		event.StepIndex = -1
 	}
 
-	bus.Publish(event)
+	if !FromContext(ctx).publish(event) {
+		say(Stdout(ctx), level, text)
+	}
 }
 
 // Announce says something to the process rather than to a run: for code with no step's context to say it under — a worker's teardown, a drain arriving on a session's read loop.

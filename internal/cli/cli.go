@@ -269,7 +269,7 @@ func (t *TestCmd) Run() error {
 
 		jobErr := pipeline.RunJob(ctx, cfg, job, nil, provider, st, true)
 		if jobErr != nil {
-			fmt.Printf("FAIL %s: %v\n", job.Name, jobErr)
+			_, _ = fmt.Fprintf(events.Stdout(ctx), "FAIL %s: %v\n", job.Name, jobErr)
 
 			// The REASON, not just the name. This error is what a caller
 			// sees — a script, a CI step, or the mutation suite asking
@@ -280,7 +280,7 @@ func (t *TestCmd) Run() error {
 			continue
 		}
 
-		fmt.Printf("PASS %s\n", job.Name)
+		_, _ = fmt.Fprintf(events.Stdout(ctx), "PASS %s\n", job.Name)
 	}
 
 	slog.Info("pipeline.test.done", "pipeline", t.Pipeline, "jobs", len(executed), "failed", len(failures))

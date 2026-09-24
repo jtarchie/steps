@@ -38,7 +38,8 @@ func (p ProgressFlags) draw(ctx context.Context, st store.Usage) (context.Contex
 	}
 
 	live := runview.NewLive(os.Stdout)
-	live.Width = terminalWidth
+	live.Width = func() int { return terminalSize(80, func(size *unix.Winsize) uint16 { return size.Col }) }
+	live.Height = func() int { return terminalSize(24, func(size *unix.Winsize) uint16 { return size.Row }) }
 	live.Color = os.Getenv("NO_COLOR") == ""
 	live.Spend = func(runID string) string { return runSpend(ctx, st, runID) }
 
@@ -71,13 +72,14 @@ func levelOf(handler slog.Handler) slog.Level {
 	return slog.LevelError
 }
 
-func terminalWidth() int {
+// terminalSize is one dimension of stdout's window, or fallback when the terminal will not say.
+func terminalSize(fallback int, dimension func(*unix.Winsize) uint16) int {
 	size, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ)
-	if err != nil || size.Col == 0 {
-		return 80
+	if err != nil || dimension(size) == 0 {
+		return fallback
 	}
 
-	return int(size.Col)
+	return int(dimension(size))
 }
 
 // runSpend is the header's cost: tokens always, dollars when something reported a price.

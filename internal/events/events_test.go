@@ -398,3 +398,20 @@ func TestOutputRoutesByStepAndHolds(t *testing.T) {
 		t.Error("with no renderer to hold, Hold is just Stdout")
 	}
 }
+
+// TestNoteOnAClosedBusIsStillSaid: a job's worker release is deferred past the close of the bus it attached, and "terminated i-…" is the line that makes a leaked machine findable.
+func TestNoteOnAClosedBusIsStillSaid(t *testing.T) {
+	t.Parallel()
+
+	bus := New(nil)
+	bus.Close()
+
+	var out strings.Builder
+
+	ctx := WithBus(WithOutput(context.Background(), Output{Stdout: &out}), bus)
+	Note(ctx, NoteInfo, "worker w: terminated i-1")
+
+	if want := "worker w: terminated i-1\n"; out.String() != want {
+		t.Errorf("printed %q, want %q", out.String(), want)
+	}
+}

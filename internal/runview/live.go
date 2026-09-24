@@ -21,6 +21,8 @@ const tailLines = 6
 type Live struct {
 	// Width is the terminal's width in columns, asked on every draw so a resize needs no signal handler.
 	Width func() int
+	// Height, when set, is the terminal's height in rows: a region taller than the screen cannot be moved back over, and every redraw would leave a copy of it in scrollback.
+	Height func() int
 	// Color allows SGR styling; cursor movement is used either way, since the region cannot be redrawn without it.
 	Color bool
 	// Spend, when set, is what a run has cost so far, for the header; asked when an agent step finishes, which is when spend is recorded.
@@ -31,6 +33,9 @@ type Live struct {
 	runs  map[string]*liveRun
 	order []string
 	tails map[int64]*tail
+	// open is the steps running now, whose bytes go to a tail; anything else written — a job-level hook, a get, an image pull before the first step — goes to scrollback, where no tail would ever show it.
+	open  map[int64]bool
+	loose strings.Builder
 	drawn int
 	held  bool
 	now   func() time.Time
@@ -58,6 +63,7 @@ func NewLive(term io.Writer) *Live {
 		term:  term,
 		runs:  map[string]*liveRun{},
 		tails: map[int64]*tail{},
+		open:  map[int64]bool{},
 		now:   time.Now,
 	}
 }
@@ -98,6 +104,11 @@ func (l *Live) Stop() {
 	defer l.mu.Unlock()
 
 	l.clear()
+
+	if l.loose.Len() > 0 {
+		_, _ = io.WriteString(l.term, l.loose.String()+"\n")
+		l.loose.Reset()
+	}
 }
 
 // Event is the bus observer.
@@ -105,14 +116,31 @@ func (l *Live) Event(event events.Event) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	// A note is a line, not part of the tree, and one can arrive after its run finished (the resume hint, the usage report): folding it would bring the run back as a region nobody takes down.
+	if event.Type == events.TypeStepNote {
+		l.scroll(l.noteLine(event))
+
+		return
+	}
+
+	l.scroll(l.apply(event)...)
+}
+
+// apply folds one event into its run, returning the lines it leaves in scrollback.
+func (l *Live) apply(event events.Event) []string {
 	run := l.run(event)
 	run.folder.Add([]store.RunEventRow{rowOf(event)}, nil)
 
 	var lines []string
 
 	switch event.Type {
+	case events.TypeStepStarted:
+		if event.StepID != 0 {
+			l.open[event.StepID] = true
+		}
 	case events.TypeStepFinished, events.TypeStepSkipped:
 		delete(l.tails, event.StepID)
+		delete(l.open, event.StepID)
 
 		if step := run.step(event.StepID); step != nil {
 			lines = append(lines, l.finishedLine(step))
@@ -121,8 +149,6 @@ func (l *Live) Event(event events.Event) {
 		if event.StepKind == "agent" && l.Spend != nil {
 			run.spend = l.Spend(event.RunID)
 		}
-	case events.TypeStepNote:
-		lines = append(lines, l.noteLine(event))
 	case events.TypeAgentCall:
 		activity := run.agents[event.StepID]
 		if activity == nil {
@@ -137,7 +163,7 @@ func (l *Live) Event(event events.Event) {
 		l.forget(event.RunID)
 	}
 
-	l.scroll(lines...)
+	return lines
 }
 
 // Stream is where one step's bytes go: into its tail, shown while it runs. Installed as events.Output.Step.
@@ -246,6 +272,13 @@ func (l *Live) redraw() {
 		}
 	}
 
+	if l.Height != nil {
+		// One row spare: the cursor sits on the line below the region.
+		if rows := max(l.Height()-1, 1); len(region) > rows {
+			region = region[:rows]
+		}
+	}
+
 	for _, row := range region {
 		_, _ = io.WriteString(l.term, l.style(row.sgr, clip(row.text, width-1))+"\n")
 	}
@@ -292,7 +325,7 @@ func (l *Live) rows(region []line, run *liveRun, step *Step, depth int) []line {
 	region = append(region, line{text: text})
 
 	if tail := l.tails[step.ID]; tail != nil && !step.Container() {
-		for _, printed := range tail.last() {
+		for _, printed := range tail.last(step.Name) {
 			region = append(region, line{sgr: "2", text: indent + "  │ " + printed})
 		}
 	}
@@ -411,10 +444,18 @@ func rowOf(event events.Event) store.RunEventRow {
 type tail struct {
 	lines   []string
 	partial strings.Builder
+	// cr is a carriage return not yet acted on: before a newline it is a CRLF line ending, before anything else the line starting over.
+	cr bool
 }
 
 func (t *tail) write(p []byte) {
 	for _, b := range p {
+		if t.cr && b != '\n' {
+			t.partial.Reset()
+		}
+
+		t.cr = false
+
 		switch b {
 		case '\n':
 			t.lines = append(t.lines, t.partial.String())
@@ -424,14 +465,15 @@ func (t *tail) write(p []byte) {
 				t.lines = t.lines[len(t.lines)-tailLines:]
 			}
 		case '\r':
-			t.partial.Reset()
+			t.cr = true
 		default:
 			t.partial.WriteByte(b)
 		}
 	}
 }
 
-func (t *tail) last() []string {
+// last is what the region shows of the tail, without the "[label] " the runner put on each line when label is the step's own name, which the row above already says.
+func (t *tail) last(label string) []string {
 	shown := append([]string(nil), t.lines...)
 	if t.partial.Len() > 0 {
 		shown = append(shown, t.partial.String())
@@ -445,14 +487,7 @@ func (t *tail) last() []string {
 		// A command's own colours would be cut through by clip, and bleed into every row below.
 		text = escapes.ReplaceAllString(text, "")
 
-		// The runner prefixes each line with the step's label, which the row above already names.
-		if strings.HasPrefix(text, "[") {
-			if end := strings.Index(text, "] "); end > 0 {
-				text = text[end+2:]
-			}
-		}
-
-		shown[i] = text
+		shown[i] = strings.TrimPrefix(text, "["+label+"] ")
 	}
 
 	return shown
@@ -467,6 +502,12 @@ func (w tailWriter) Write(p []byte) (int, error) {
 	w.live.mu.Lock()
 	defer w.live.mu.Unlock()
 
+	if !w.live.open[w.id] {
+		w.live.scrollLoose(p)
+
+		return len(p), nil
+	}
+
 	t := w.live.tails[w.id]
 	if t == nil {
 		t = &tail{}
@@ -476,6 +517,22 @@ func (w tailWriter) Write(p []byte) (int, error) {
 	t.write(p)
 
 	return len(p), nil
+}
+
+// scrollLoose puts the whole lines of p into scrollback, keeping a partial one until its newline arrives so the region is never redrawn onto half a line.
+func (l *Live) scrollLoose(p []byte) {
+	l.loose.Write(p)
+
+	text := l.loose.String()
+
+	end := strings.LastIndexByte(text, '\n')
+	if end < 0 {
+		return
+	}
+
+	l.loose.Reset()
+	l.loose.WriteString(text[end+1:])
+	l.scroll(strings.Split(text[:end], "\n")...)
 }
 
 type logWriter struct{ live *Live }
