@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -165,7 +164,7 @@ func (d *daemon) restore(ctx context.Context, name, from string) error {
 		_ = st.Close()
 
 		// Skipped, loudly, rather than refused: an unset key is a fact about the shell that started this process, and one pipeline's missing token must not keep every other pipeline from being served.
-		fmt.Fprintf(os.Stderr, "steps web: NOT serving %s; restart with this fixed to serve it again: %v\n", name, err)
+		_, _ = fmt.Fprintf(events.Stderr(d.base), "steps web: NOT serving %s; restart with this fixed to serve it again: %v\n", name, err)
 
 		return nil
 	}
@@ -437,7 +436,7 @@ func (d *daemon) start(
 ) {
 	bus := events.New(pipeline.StoreSink(st))
 	// The daemon's stdout reads as a terminal run always has; RunJob prints only on a bus it attached itself, and this one is ours.
-	bus.Observe(runview.Plain(os.Stdout))
+	bus.Observe(runview.Plain(events.Stdout(d.base)))
 
 	target := web.NewPipeline(name, from, cfg, st, bus)
 

@@ -39,6 +39,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/blobstore"
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
@@ -2330,6 +2331,9 @@ func (w *WebCmd) Run() error {
 
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
+
+	// Read once, before anything is spawned: every build and poll the daemon runs writes where it was started, rather than reading the process's streams from a goroutine while something else reassigns them.
+	ctx = events.WithOutput(ctx, events.Output{Stdout: os.Stdout, Stderr: os.Stderr})
 
 	ctx, err = w.ExecFlags.Apply(ctx)
 	if err != nil {
