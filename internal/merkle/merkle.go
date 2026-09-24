@@ -449,7 +449,7 @@ func hookContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 
 		return TaskNodeContent(cfg, step, rt)
 	case config.StepKindPut:
-		res, err := cfg.FindResource(step.Put)
+		res, err := cfg.FindResource(step.PutResourceName())
 		if err != nil {
 			return nil, fmt.Errorf("resolve put: %w", err)
 		}
@@ -510,7 +510,7 @@ func stepContentMap(cfg *config.Config, step config.Step) (map[string]any, error
 
 		return TaskNodeContent(cfg, step, rt)
 	case config.StepKindPut:
-		res, err := cfg.FindResource(step.Put)
+		res, err := cfg.FindResource(step.PutResourceName())
 		if err != nil {
 			return nil, fmt.Errorf("resolve put: %w", err)
 		}
@@ -708,6 +708,15 @@ func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 		"out_template": resourceType.Config.Out,
 		"source":       source,
 		"params":       params,
+	}
+
+	// A put renamed away from its resource folds the name in, because nodes
+	// are keyed by hash: two sibling puts differing only in name would
+	// otherwise share one row and one name would vanish from `runs steps`.
+	// Gated on the name differing, so a redundant resource: hashes like an
+	// unaliased put.
+	if step.PutResourceName() != step.Put {
+		content["step"] = step.Put
 	}
 
 	if inputsAll {
@@ -1734,7 +1743,7 @@ func taskNode(cfg *config.Config, step config.Step, rt config.ResolvedTask, i in
 }
 
 func putNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, error) {
-	res, err := cfg.FindResource(step.Put)
+	res, err := cfg.FindResource(step.PutResourceName())
 	if err != nil {
 		return Node{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
@@ -1754,7 +1763,7 @@ func putNode(cfg *config.Config, step config.Step, i int, parentHash string) (No
 		return Node{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
 
-	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindPut, StepIndex: i, Resource: res.Name, Content: content}, nil
+	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindPut, StepIndex: i, Resource: step.DisplayName(), Content: content}, nil
 }
 
 func agentNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, error) {

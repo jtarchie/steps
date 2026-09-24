@@ -50,6 +50,36 @@ func TestGetNodeContentAliasValueGated(t *testing.T) {
 	}
 }
 
+// TestPutNodeContentNameValueGated: two puts to one resource differing only in
+// name hash distinctly (nodes are keyed by hash, so otherwise they share a
+// row), while a resource: naming the put's own resource hashes exactly as an
+// unaliased put.
+func TestPutNodeContentNameValueGated(t *testing.T) {
+	t.Parallel()
+
+	rtype := config.ResourceType{Config: config.ResourceTypeConfig{Out: "true"}}
+	source := map[string]any{"channel": "x"}
+
+	hashOf := func(step config.Step) string {
+		content, err := PutNodeContent(&config.Config{}, step, rtype, nil, source, nil, nil, false)
+
+		return hashOrFail(t, NodeKindPut, content, err)
+	}
+
+	plain := hashOf(config.Step{Put: "reaction"})
+
+	if redundant := hashOf(config.Step{Put: "reaction", Resource: "reaction"}); redundant != plain {
+		t.Error("resource: naming the put's own resource changed the hash")
+	}
+
+	acknowledge := hashOf(config.Step{Put: "acknowledge", Resource: "reaction"})
+	answered := hashOf(config.Step{Put: "answered", Resource: "reaction"})
+
+	if acknowledge == answered {
+		t.Error("two renamed puts to one resource hashed identically; the step name must distinguish them")
+	}
+}
+
 // TestPutInputsAllSentinel confirms inputs: all folds a distinct sentinel
 // into the hash — a view of everything-so-far and a view of nothing are
 // different views.

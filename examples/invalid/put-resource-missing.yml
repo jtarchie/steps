@@ -1,0 +1,19 @@
+# expect: no resource named "nope"
+# A put's resource: names the resource it publishes to, checked at load the
+# same as a get's: a typo there is refused before any step runs.
+resource_types:
+- name: emoji
+  config:
+    check: echo '[]'
+    out: echo '{}'
+
+resources:
+- name: reaction
+  type: emoji
+  source: {}
+
+jobs:
+- name: triage
+  plan:
+  - put: acknowledge
+    resource: nope

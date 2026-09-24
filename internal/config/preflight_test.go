@@ -136,3 +136,38 @@ jobs:
 		t.Errorf("problem = %+v, want the used resource and the unset variable", problems[0])
 	}
 }
+
+// TestCheckResourceCredentialsFollowsResourceAlias: a get or put renamed with
+// resource: is checked against the resource it names, not its step name.
+func TestCheckResourceCredentialsFollowsResourceAlias(t *testing.T) {
+	t.Setenv("PREFLIGHT_ALIAS_KEY", "")
+
+	for _, step := range []string{"get: src\n    resource: aliased", "put: publish\n    resource: aliased"} {
+		cfg, err := LoadConfig(writeConfig(t, `
+resource_types:
+- name: api
+  env: [PREFLIGHT_ALIAS_KEY]
+  config:
+    expr:
+      check: '[{a: env("PREFLIGHT_ALIAS_KEY")}]'
+      in: '{}'
+      out: '{}'
+resources:
+- name: aliased
+  type: api
+  source: {}
+jobs:
+- name: j
+  plan:
+  - `+step+`
+`))
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+
+		problems := cfg.CheckEnvironment()
+		if len(problems) != 1 || problems[0].Target != `resource "aliased"` {
+			t.Errorf("%s: problems = %+v, want the aliased resource's unset variable", step, problems)
+		}
+	}
+}

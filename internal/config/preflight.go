@@ -119,14 +119,13 @@ func (c *Config) checkResourceCredentials() []Problem {
 
 	for _, job := range c.Jobs {
 		_ = job.visitSteps(func(_ string, step *Step) error {
-			for _, name := range []string{step.Get, step.Put} {
-				if name == "" || seen[name] {
-					continue
-				}
-
-				seen[name] = true
-				problems = append(problems, c.resourceCredentialProblems(name)...)
+			name, ok := step.resourceName()
+			if !ok || seen[name] {
+				return nil
 			}
+
+			seen[name] = true
+			problems = append(problems, c.resourceCredentialProblems(name)...)
 
 			return nil
 		})

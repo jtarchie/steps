@@ -189,7 +189,7 @@ func (s Step) resourceName() (string, bool) {
 	case s.Get != "":
 		return s.GetResourceName(), true
 	case s.Put != "":
-		return s.Put, true
+		return s.PutResourceName(), true
 	default:
 		return "", false
 	}

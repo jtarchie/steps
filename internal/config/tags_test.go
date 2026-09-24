@@ -69,6 +69,18 @@ jobs:
   - get: repo
     tags: [vpc]
 `, `job "build" step 0 (line 22): tags: is not valid on a resource of type "remote"`},
+		{"mcp-backed renamed put", `
+resources:
+- name: repo
+  type: remote
+  source: {}
+jobs:
+- name: build
+  plan:
+  - put: publish
+    resource: repo
+    tags: [vpc]
+`, `job "build" step 0 (line 22): tags: is not valid on a resource of type "remote"`},
 		{"try wrapper", `
 resources:
 - name: repo
@@ -128,6 +140,8 @@ jobs:
     tags: [edge]
   - try:
       put: repo
+  - put: publish
+    resource: repo
   on_failure:
     put: repo
 `))
@@ -145,6 +159,10 @@ jobs:
 
 	if got := strings.Join(plan[3].Try.Tags, ","); got != "vpc" {
 		t.Errorf("the put inside try: has tags %q, want the resource's", got)
+	}
+
+	if got := strings.Join(plan[4].Tags, ","); got != "vpc" {
+		t.Errorf("the renamed put has tags %q, want its resource's", got)
 	}
 
 	if got := strings.Join(cfg.Jobs[0].Hooks.OnFailure.Tags, ","); got != "vpc" {

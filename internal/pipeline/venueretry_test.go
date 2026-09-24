@@ -189,6 +189,7 @@ func TestAResourceStepDialsItsResourcesTagToo(t *testing.T) {
 		"its own tag and the resource's": {config.Step{Get: "repo", Tags: []string{"a"}}, []string{"a", "b"}},
 		"the resource's tag as its own":  {config.Step{Put: "repo", Tags: []string{"b"}}, []string{"b"}},
 		"no tag of its own":              {config.Step{Get: "repo"}, []string{"b"}},
+		"a put renamed with resource:":   {config.Step{Put: "publish", Resource: "repo", Tags: []string{"a"}}, []string{"a", "b"}},
 		"a task":                         {config.Step{Task: "work", Tags: []string{"a"}}, []string{"a"}},
 	} {
 		got := stepPlacementTags(cfg, c.step)

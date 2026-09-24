@@ -168,7 +168,7 @@ func resolveStepRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec,
 	case config.StepKindTry:
 		return resolveStepRuntime(cfg, *step.Try)
 	case config.StepKindPut:
-		resource, err := cfg.FindResource(step.Put)
+		resource, err := cfg.FindResource(step.PutResourceName())
 		if err != nil {
 			return shell.RunnerSpec{}, guardInputs{}, fmt.Errorf("resolve put: %w", err)
 		}

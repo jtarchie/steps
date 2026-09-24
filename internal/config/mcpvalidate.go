@@ -461,7 +461,7 @@ func (c *Config) validateMCPResourcePuts() error {
 				return nil
 			}
 
-			resource, err := c.FindResource(step.Put)
+			resource, err := c.FindResource(step.PutResourceName())
 			if err != nil {
 				return nil //nolint:nilerr // unresolvable put target is caught elsewhere at run time
 			}

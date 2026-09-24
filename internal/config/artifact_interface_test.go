@@ -118,7 +118,7 @@ jobs:
     run: "true"
     inputs: []
     resource: repo
-`), "resource: is only valid on get steps")
+`), "resource: is only valid on get and put steps")
 	})
 
 	t.Run("resource: naming a missing resource errors", func(t *testing.T) {
@@ -139,6 +139,112 @@ jobs:
 		step := Step{Get: "repo"}
 		if step.GetResourceName() != "repo" {
 			t.Errorf("GetResourceName() = %q, want repo", step.GetResourceName())
+		}
+	})
+}
+
+const reactionResource = `
+resource_types:
+- name: dummy
+  config:
+    check: echo '[]'
+    out: echo '{}'
+resources:
+- name: reaction
+  type: dummy
+  source: {}
+`
+
+// TestPutResourceAlias pins resource: on a put: the step is named by put:,
+// the publish goes to resource:, and every reader that looks the resource up
+// follows the target rather than the name.
+func TestPutResourceAlias(t *testing.T) {
+	t.Parallel()
+
+	t.Run("resource: names the published resource", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := loadOK(t, reactionResource+`
+jobs:
+- name: j
+  plan:
+  - put: acknowledge
+    resource: reaction
+`)
+
+		job := cfg.Jobs[0]
+
+		step := job.Plan[0]
+		if step.Put != "acknowledge" || step.PutResourceName() != "reaction" {
+			t.Errorf("put=%q resource=%q, want put=acknowledge resource=reaction", step.Put, step.PutResourceName())
+		}
+
+		if got := job.PutSteps("reaction"); len(got) != 1 || got[0].Put != "acknowledge" {
+			t.Errorf("PutSteps(reaction) = %+v, want the renamed put", got)
+		}
+
+		if got := job.PutSteps("acknowledge"); len(got) != 0 {
+			t.Errorf("PutSteps(acknowledge) = %+v, want none: it is not a resource", got)
+		}
+
+		if got := job.ResourceNames(); len(got) != 1 || got[0] != "reaction" {
+			t.Errorf("ResourceNames() = %q, want [reaction]", got)
+		}
+	})
+
+	t.Run("resource: naming a missing resource errors", func(t *testing.T) {
+		t.Parallel()
+
+		wantLoadError(t, writeConfig(t, reactionResource+`
+jobs:
+- name: j
+  plan:
+  - put: acknowledge
+    resource: nope
+`), `(put "acknowledge"): no resource named "nope"`)
+	})
+
+	t.Run("an unknown put: without resource: hints at it", func(t *testing.T) {
+		t.Parallel()
+
+		wantLoadError(t, writeConfig(t, reactionResource+`
+jobs:
+- name: j
+  plan:
+  - put: acknowledge
+`), "set resource: to the resource it publishes to")
+	})
+
+	t.Run("renamed puts are distinct to: targets", func(t *testing.T) {
+		t.Parallel()
+
+		loadOK(t, reactionResource+`
+jobs:
+- name: j
+  plan:
+  - put: acknowledge
+    resource: reaction
+    to: { success: answered }
+  - put: answered
+    resource: reaction
+`)
+
+		wantLoadError(t, writeConfig(t, reactionResource+`
+jobs:
+- name: j
+  plan:
+  - put: reaction
+    to: { success: reaction }
+  - put: reaction
+`), "duplicated within a to:-using segment")
+	})
+
+	t.Run("PutResourceName falls back to Put when unaliased", func(t *testing.T) {
+		t.Parallel()
+
+		step := Step{Put: "reaction"}
+		if step.PutResourceName() != "reaction" {
+			t.Errorf("PutResourceName() = %q, want reaction", step.PutResourceName())
 		}
 	})
 }
