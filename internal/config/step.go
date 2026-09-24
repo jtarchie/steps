@@ -414,17 +414,21 @@ type Step struct {
 	// directory. Absent/empty leaves names unmapped.
 	InputMapping  map[string]string `yaml:"input_mapping,omitempty"`
 	OutputMapping map[string]string `yaml:"output_mapping,omitempty"`
-	// Resource, on a get step, names the resource to fetch when it differs from
-	// the step's own name: the fetched artifact (and the directory, step name,
-	// and to: target) is Get, while the resource whose check/in runs is
-	// Resource — mirroring Concourse's get.resource, including that two
-	// aliased get steps for the same underlying resource share one version
-	// history rather than tracking separately (see docs/conformance.md;
+	// Resource, on a get or put step, names the resource to fetch or publish
+	// to when it differs from the step's own name. On a get the fetched
+	// artifact (and the directory, step name, and to: target) is Get, while the
+	// resource whose check/in runs is Resource — mirroring Concourse's
+	// get.resource, including that two aliased get steps for the same
+	// underlying resource share one version history rather than tracking
+	// separately (see docs/conformance.md;
 	// TestResourcesAndAffectedJobsResolveGetAlias in
 	// internal/trigger/trigger_test.go; Concourse doc: concourse-ci.org/docs/
-	// steps/get/). This lets one resource appear under a task-friendly name,
-	// or twice in a plan under two names. Empty (the default) means the
-	// resource name equals Get. Get steps only.
+	// steps/get/). On a put the step name, to: target and execution entry are
+	// Put, while the resource whose out: runs is Resource — Concourse's
+	// put.resource (concourse-ci.org/docs/steps/put/). This lets one resource
+	// appear under a task-friendly name, or several times in a plan under
+	// several names. Empty (the default) means the resource name equals Get or
+	// Put.
 	Resource string `yaml:"resource,omitempty"`
 	// Line is the step's source line in the pipeline file, filled in after
 	// decoding (see stampLines) so a validation error can point at a place in
@@ -548,6 +552,18 @@ func (s Step) GetResourceName() string {
 	}
 
 	return s.Get
+}
+
+// PutResourceName is the name of the resource a put step publishes to:
+// Resource when set, else Put itself. The step's name, to: target and
+// execution entry are always Put; only the resource whose out: runs is
+// PutResourceName.
+func (s Step) PutResourceName() string {
+	if s.Resource != "" {
+		return s.Resource
+	}
+
+	return s.Put
 }
 
 // FileRef is an agent step's message_files: — the text of the model's prompt

@@ -990,7 +990,7 @@
         },
         "resource": {
           "type": "string",
-          "description": "get only: the resource to fetch when it differs from the step's name."
+          "description": "get/put: the resource to fetch or publish to when it differs from the step's name."
         },
         "task": {
           "type": "string"

@@ -8,7 +8,7 @@ import (
 )
 
 // resolveGetReference resolves a get step's resource, unless it aliases one —
-// an alias is validateGetResource's to check.
+// an alias is validateStepResource's to check.
 func (c *Config) resolveGetReference(step *Step) error {
 	if step.Resource != "" {
 		return nil
@@ -17,6 +17,22 @@ func (c *Config) resolveGetReference(step *Step) error {
 	_, err := c.FindResource(step.Get)
 
 	return err
+}
+
+// resolvePutReference resolves a put step's resource, unless it names one
+// with resource: — validateStepResource's to check. A miss hints at
+// resource:, which is how an author renaming a put gets past it.
+func (c *Config) resolvePutReference(step *Step) error {
+	if step.Resource != "" {
+		return nil
+	}
+
+	_, err := c.FindResource(step.Put)
+	if err != nil {
+		return fmt.Errorf("%w; to give the step its own name, set resource: to the resource it publishes to", err)
+	}
+
+	return nil
 }
 
 // resolveBranchReferences resolves every branch of an in_parallel: block. A
@@ -81,7 +97,7 @@ func (c *Config) resolveStepReference(step *Step) error {
 	case StepKindGet:
 		return c.resolveGetReference(step)
 	case StepKindPut:
-		_, err = c.FindResource(step.Put)
+		return c.resolvePutReference(step)
 	case StepKindAgent:
 		_, err = c.FindAgent(step.Agent)
 	case StepKindTry:

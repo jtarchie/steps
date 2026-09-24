@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
@@ -150,6 +152,138 @@ jobs:
 	// any node in it is a put, not just the put node itself.
 	assertLineCount(t, getCounter, 2)
 	assertLineCount(t, putCounter, 2)
+}
+
+// TestRunJobPutResourceAlias: a put renamed with resource: publishes to the
+// named resource and records under its own name, so two publishes to one
+// resource are two rows a reader can tell apart. The second name carries a
+// path separator and a traversal to pin that a put name, now free text,
+// still lands inside the build's steps directory.
+func TestRunJobPutResourceAlias(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "reaction.log")
+	dirs := filepath.Join(dir, "dirs.log")
+	path := pipelinePath(t, dir)
+
+	pipeline := fmt.Sprintf(`
+resource_types:
+- name: dummy
+  config:
+    check: echo '[]'
+    out: |
+      echo {{ .params.add }} >> {{ .source.log }}
+      pwd -P >> {{ .source.dirs }}
+      echo '{}'
+
+resources:
+- name: reaction
+  type: dummy
+  source:
+    log: %s
+    dirs: %s
+
+jobs:
+- name: build
+  plan:
+  - put: acknowledge
+    resource: reaction
+    params: {add: eyes}
+    on_success:
+      put: done
+      resource: reaction
+      params: {add: done}
+  - put: ../escape
+    resource: reaction
+    params: {add: check}
+  - try:
+      put: retried
+      resource: reaction
+      params: {add: try}
+`, log, dirs)
+
+	err := os.WriteFile(path, []byte(pipeline), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() { mustRun(t, "run", path, "--job", "build") })
+
+	if !strings.Contains(out, "put: acknowledge (resource: reaction)\n") {
+		t.Errorf("the terminal line does not name the put's target:\n%s", out)
+	}
+
+	if got := readFileString(t, log); got != "eyes\ndone\ncheck\ntry\n" {
+		t.Errorf("reaction's out: saw %q, want every publish in order", got)
+	}
+
+	var names []string
+
+	for _, node := range storeNodes(t, path) {
+		if node.Kind == "put" {
+			names = append(names, node.Resource)
+		}
+	}
+
+	if !slices.Equal(names, []string{"acknowledge", "../escape", "retried"}) {
+		t.Errorf("put nodes recorded as %q, want each under its step name", names)
+	}
+
+	for _, stepDir := range strings.Fields(readFileString(t, dirs)) {
+		if filepath.Base(filepath.Dir(stepDir)) != "steps" {
+			t.Errorf("put ran in %s, outside the build's steps directory", stepDir)
+		}
+	}
+}
+
+// TestRunJobAcrossPutCellsRecordTheirLabels: a renamed put fanned by across:
+// records each cell under its own coordinates, not the resource's name N
+// times — the same names the execution log uses.
+func TestRunJobAcrossPutCellsRecordTheirLabels(t *testing.T) {
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+
+	pipeline := `
+resource_types:
+- name: dummy
+  config:
+    check: echo '[]'
+    out: echo '{}'
+
+resources:
+- name: reaction
+  type: dummy
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - across:
+    - var: env
+      values: [a, b]
+    put: notify
+    resource: reaction
+`
+
+	err := os.WriteFile(path, []byte(pipeline), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, "run", path, "--job", "build")
+
+	var names []string
+
+	for _, node := range storeNodes(t, path) {
+		if node.Kind == "put" {
+			names = append(names, node.Resource)
+		}
+	}
+
+	slices.Sort(names)
+
+	if !slices.Equal(names, []string{"notify [env=a]", "notify [env=b]"}) {
+		t.Errorf("put cells recorded as %q, want one per cell label", names)
+	}
 }
 
 // TestRunJobCheckCommandRunsOnceNotTwice: a get step's check: command must

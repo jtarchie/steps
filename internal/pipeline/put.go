@@ -32,9 +32,19 @@ func findPutTarget(cfg *config.Config, name string) (*config.Resource, *config.R
 	return resource, resourceType, nil
 }
 
+// putLabel is a put's terminal line: its name, and the resource it publishes
+// to when resource: renamed it, so a failed publish names its target.
+func putLabel(step config.Step) string {
+	if target := step.PutResourceName(); target != step.Put {
+		return fmt.Sprintf("%s (resource: %s)", step.Put, target)
+	}
+
+	return step.Put
+}
+
 // runPutStep hashes and always runs step (put steps are never skipped).
 func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
-	resource, resourceType, err := findPutTarget(r.cfg, step.Put)
+	resource, resourceType, err := findPutTarget(r.cfg, step.PutResourceName())
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
@@ -49,11 +59,11 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 		return stepResult{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
 
-	logFrom(ctx).Debug("job.step", "resource", step.Put)
+	logFrom(ctx).Debug("job.step", "step", step.Put, "resource", step.PutResourceName())
 
-	fmt.Printf("put: %s\n", step.Put)
+	fmt.Printf("put: %s\n", putLabel(step))
 
-	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindPut, StepIndex: i, Resource: resource.Name, Content: content}
+	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindPut, StepIndex: i, Resource: step.DisplayName(), Content: content}
 
 	ctx, placed := withPlacementSink(ctx)
 
@@ -88,7 +98,7 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 	// Named here, not left to the caller: runHookStep's put branch adds no
 	// context of its own, so an unwrapped lookup failure reaches a reader as a
 	// bare "no resource type named x" with nothing saying it came from a put.
-	resource, resourceType, err := findPutTarget(cfg, step.Put)
+	resource, resourceType, err := findPutTarget(cfg, step.PutResourceName())
 	if err != nil {
 		return nil, fmt.Errorf("put %q: %w", step.Put, err)
 	}
@@ -107,7 +117,7 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 	// runPlacedStage.
 	retryErr := runPlacedStage(ctx, step, func(ctx context.Context) error {
 		return retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
-			fmt.Printf("put: %s (attempt %d/%d)\n", step.Put, attempt, total)
+			fmt.Printf("put: %s (attempt %d/%d)\n", putLabel(step), attempt, total)
 			logFrom(ctx).Info("job.put.attempt", "put", step.Put, "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
 			runResult, runErr := rsrc.RunOut(attemptCtx, cfg, *resourceType, resource.Env, resource.Source, step.Params, space.Dir())

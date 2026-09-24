@@ -226,6 +226,19 @@ jobs:
 `,
 			want: `which declares no out: command`,
 		},
+		{
+			name: "renamed put checks the resource it names",
+			pipeline: `
+resources:
+- name: repo
+  type: git
+  source: { uri: https://example.com/repo.git }
+jobs:
+- name: j
+  plan: [{ put: publish, resource: repo }]
+`,
+			want: `put "publish" targets resource type "git", which declares no out: command`,
+		},
 	}
 
 	for _, test := range tests {

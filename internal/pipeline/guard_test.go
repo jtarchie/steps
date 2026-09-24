@@ -226,6 +226,7 @@ func TestResolveStepImage(t *testing.T) {
 		{name: "step image overrides the task's", step: config.Step{Task: "built", Image: "alpine"}, want: "alpine"},
 		{name: "agent image", step: config.Step{Agent: "a", Messages: []string{"x"}}, want: "python:3.12"},
 		{name: "put takes its resource type's image", step: config.Step{Put: "r"}, want: "alpine/git"},
+		{name: "renamed put takes its target's image", step: config.Step{Put: "publish", Resource: "r"}, want: "alpine/git"},
 	}
 
 	for _, tc := range cases {

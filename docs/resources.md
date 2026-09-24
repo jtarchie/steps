@@ -83,12 +83,14 @@ jobs:
       grep -o '"channel": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > target/channel
       grep -o '"ts": *"[^"]*"' mentions/version.json | head -1 | cut -d'"' -f4 > target/ts
       echo "got it, working on it" > answer/reply.md
-  - put: reaction              # 👀 — somebody is on it
+  - put: acknowledge           # 👀 — somebody is on it
+    resource: reaction
     inputs: [target]
     params: {add: eyes}
   - put: reply
     inputs: [thread, answer]
-  - put: reaction              # ✅, and the 👀 goes away in the same publish
+  - put: answered              # ✅, and the 👀 goes away in the same publish
+    resource: reaction
     inputs: [target]
     params: {add: white_check_mark, remove: eyes}
 ```

@@ -223,7 +223,7 @@ func stepResourceName(step config.Step) (string, bool) {
 	case step.Get != "":
 		return step.GetResourceName(), true
 	case step.Put != "":
-		return step.Put, true
+		return step.PutResourceName(), true
 	default:
 		return "", false
 	}

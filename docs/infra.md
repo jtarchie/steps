@@ -522,7 +522,7 @@ steps pipeline set -c pipeline.yml
 - **Dedup, ordering, and per-job concurrency**: a resource going dirty twice before a worker claims the row enqueues its affected job once — but a job already running can still get a fresh pending row queued behind it, so a version change mid-run isn't dropped. Claiming respects the job's [`max_in_flight:`](#max_in_flight--how-many-builds-of-one-job-at-once) — unlimited when unset, forced to 1 by `serial:`/`serial_groups:`.
 - **Graceful-shutdown carve-out**: a job interrupted by SIGINT/SIGTERM mid-run — one that is [`interruptible:`](#interruptible--what-a-shutdown-does-to-a-running-build), or that outlasted the shutdown's grace — is *not* marked failed: its row is left "running" and reset to "pending" on the next startup, recovering a hard crash and an interrupted shutdown the same way. A step's own `timeout:` expiring is not an interruption; that build failed.
 
-## Get renaming (`resource:`)
+## Step renaming (`resource:`)
 
 A `get` step's `resource:` names the resource to fetch when it should differ from the step's own name — mirroring Concourse's `get.resource`:
 
@@ -556,9 +556,42 @@ jobs:
 
 The **artifact name is the `get:` value**; the **resource fetched is `resource:`**, defaulting to the `get:` value when omitted. This lets one resource appear under a task-friendly name, or twice in a plan under two names. Pair it with a task's `input_mapping:` (see [workspace.md](workspace.md)) to feed a reusable task's pinned input name from an aliased get.
 
+A `put` step takes the same field, mirroring Concourse's `put.resource`: the **step name is the `put:` value** — what the terminal, `steps runs steps`, `assert.execution` and a `to:`/`verdicts:` target call it — and the **resource published to is `resource:`**. One resource published several times for different reasons gets a name per reason instead of one word repeated:
+
+```yaml
+resource_types:
+- name: emoji
+  config:
+    check: echo '[]'
+    out: |
+      echo {{ .params.add | shellquote }}
+      echo '{}'
+
+resources:
+- name: reaction
+  type: emoji
+  source: {}
+
+jobs:
+- name: triage
+  plan:
+  - put: acknowledge     # the step is "acknowledge"...
+    resource: reaction   # ...the out: that runs is "reaction"'s
+    params: {add: eyes}
+  - put: answered
+    resource: reaction
+    params: {add: white_check_mark}
+  assert:
+    execution: [acknowledge, answered]   # recorded under the STEP name
+    outcome: succeeded
+```
+
+The terminal line names both when they differ (`put: acknowledge (resource: reaction)`).
+
 - **Triggers resolve by the underlying resource**: `steps web` polls the *resolved* resource once no matter how many aliases reference it.
-- **Load-time**: `resource:` is valid only on `get` steps and must name an existing resource.
-- **Caching**: an unaliased `get` hashes byte-identically to before this feature; an aliased `get` folds the artifact name into its hash.
+- **Load-time**: `resource:` is valid only on `get` and `put` steps and must name an existing resource. A `put:` naming no resource, with no `resource:`, says so and points at `resource:`.
+- **Recording differs by kind**: an aliased `get` is recorded under the resource name (`execution: [repo, show]` above), a renamed `put` under its step name. A put records no resource version either way; what it publishes is the resource's `out:` result.
+- **Caching**: an unaliased `get` or `put` hashes byte-identically to before this feature; an aliased `get` folds the artifact name into its hash, and a `put` whose name differs from its resource folds the name, so two otherwise-identical puts are two rows.
 
 ## Circuit breaker: `max_consecutive_failures:`
 

@@ -258,10 +258,6 @@ func (c *Config) validateVersionEvery() error {
 	return nil
 }
 
-// validateGetResource enforces that a step's resource: is only set on get
-// steps and names an existing resource. The fetched resource is Resource when
-// set, else Get (see Step.Resource); two get steps may alias the same resource
-// under different names.
 // validateResourceTypes refuses a resource whose type names nothing — no
 // resource_types: entry and no built-in. It used to load: FindResourceType is
 // called when a check/in/out actually runs, so the failure arrived mid-build,
@@ -284,20 +280,29 @@ func (c *Config) validateResourceTypes() error {
 	return nil
 }
 
-func (c *Config) validateGetResource() error {
+// validateStepResource enforces that a step's resource: is only set on get or
+// put steps and names an existing resource. The fetched or published resource
+// is Resource when set, else Get/Put (see Step.Resource); two steps may alias
+// the same resource under different names.
+func (c *Config) validateStepResource() error {
 	for _, job := range c.Jobs {
 		err := job.visitSteps(func(label string, step *Step) error {
 			if step.Resource == "" {
 				return nil
 			}
 
-			if step.Get == "" {
-				return fmt.Errorf("%s: resource: is only valid on get steps", label)
+			kind, name := "get", step.Get
+			if step.Put != "" {
+				kind, name = "put", step.Put
+			}
+
+			if name == "" {
+				return fmt.Errorf("%s: resource: is only valid on get and put steps", label)
 			}
 
 			_, err := c.FindResource(step.Resource)
 			if err != nil {
-				return fmt.Errorf("%s (get %q): %w", label, step.Get, err)
+				return fmt.Errorf("%s (%s %q): %w", label, kind, name, err)
 			}
 
 			return nil
@@ -326,8 +331,8 @@ func (c *Config) FindResource(name string) (*Resource, error) {
 }
 
 // ResourceNames lists every resource this job's plan touches — the resource
-// a get fetches (GetResourceName, so an aliased get names the real one) and
-// the resource a put publishes to — across plan steps and hooks alike, in
+// a get fetches and the resource a put publishes to (resolving resource:, so
+// an aliased step names the real one) — across plan steps and hooks alike, in
 // plan order, deduplicated.
 //
 // The mirror of AgentNames, and it exists for the same reason: preflight
@@ -348,8 +353,8 @@ func (j Job) ResourceNames() []string {
 	}
 
 	_ = j.visitSteps(func(_ string, step *Step) error {
-		add(step.GetResourceName())
-		add(step.Put)
+		name, _ := step.resourceName()
+		add(name)
 
 		return nil
 	})
@@ -451,7 +456,7 @@ func (j Job) PutSteps(resource string) []Step {
 	var steps []Step
 
 	_ = j.visitSteps(func(_ string, step *Step) error {
-		if step.Put == resource {
+		if step.Put != "" && step.PutResourceName() == resource {
 			steps = append(steps, *step)
 		}
 
