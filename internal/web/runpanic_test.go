@@ -10,7 +10,7 @@ import (
 // panicsOnStep panics recording a finished step, which only happens once the run row exists — past where panicsOnce fires.
 type panicsOnStep struct{ store.Store }
 
-func (panicsOnStep) RecordRunStep(context.Context, string, int, string) error {
+func (panicsOnStep) RecordRunStep(context.Context, string, string, int, string) error {
 	panic("step bookkeeping exploded")
 }
 

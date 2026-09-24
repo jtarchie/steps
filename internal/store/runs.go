@@ -16,9 +16,12 @@ type Runs interface {
 	// otherwise.
 	ResumeRun(ctx context.Context, id, workspaceDir, configSHA string) error
 	FinishRun(ctx context.Context, id, status string) error
-	RecordRunStep(ctx context.Context, runID string, index int, name string) error
+	// RecordRunStep marks a step of one build of a run done. buildID is
+	// "<run>#<set>" inside a triggered build and the bare run id outside one.
+	RecordRunStep(ctx context.Context, runID, buildID string, index int, name string) error
 	RecordRunParent(ctx context.Context, runID, parentID string) error
-	CompletedRunSteps(ctx context.Context, runID string) (map[int]string, error)
+	// CompletedRunSteps returns what a run finished, in completion order.
+	CompletedRunSteps(ctx context.Context, runID string) ([]RunStep, error)
 	// ListRuns returns a job's runs newest first. Zero means no limit, the
 	// convention everywhere here.
 	ListRuns(ctx context.Context, jobName string, limit int) ([]RunRow, error)
@@ -26,6 +29,15 @@ type Runs interface {
 	RunsUsingNode(ctx context.Context, hash string, limit int) ([]RunRow, error)
 	FindRunRow(ctx context.Context, id string) (RunRow, bool, error)
 	FirstRunSince(ctx context.Context, jobName string, since time.Time) (RunRow, bool, error)
+}
+
+// RunStep is one step a run finished. Index is relative to the walk it ran
+// in — a build's remainder counts from zero — so it names a step only
+// together with BuildID.
+type RunStep struct {
+	BuildID string
+	Index   int
+	Name    string
 }
 
 // RunRow is one run invocation as the history views read it: the resume

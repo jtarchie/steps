@@ -224,5 +224,7 @@ put: repo
 - **A failed run keeps its workspace**, and says where — the files a step had just written when it failed are what the resumed steps continue from.
 - **The job name comes from the run id.** `--resume <id>` alone is enough.
 - **Steps are recorded as done on success only.** A failed step is exactly the one a resume must run again.
+- **Steps are recorded per build.** A `version: every` get runs the rest of the plan once per version, and a resume continues each build from where *that* build stopped: a build that finished green skips its steps, a sibling that failed runs its own again. A skip inside a build says which one — `skip: fragile (already succeeded) [build #0]`. `steps runs steps -p <pipeline> <run>` lists what a resume will skip, build by build.
+- **A resume refuses when history moved under a `version: every` run.** A build is known by its position, so if `version_history:` pruned a version the run took, or a check reordered history, the builds no longer line up with their records and the resume says which build and which versions rather than skip a step on another version's behalf. Start a new run, with `--pin` to build the one version.
 
 See also [infra.md](infra.md) for `image:`, which composes with workspace isolation — a containerized step still only sees its declared inputs/outputs.

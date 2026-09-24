@@ -630,14 +630,23 @@ func (r *RunsListCmd) Run() error {
 }
 
 // RunsStepsCmd is the per-step detail: what previous runs actually did.
+//
+// The run id is a positional for the reason RunsCostCmd's is: naming a run is
+// asking for the deeper view — what that run completed, per build.
 type RunsStepsCmd struct {
 	ReadFlags `embed:""`
+	RunID     string `arg:""                             help:"what this run completed, per build — the steps a --resume skips"   optional:""`
 	Job       string `help:"only show steps of this job"`
-	Limit     int    `default:"20"                       help:"maximum number of rows to show"`
+	Limit     int    `default:"20"                       help:"maximum number of rows to show in the listing"`
 }
 
-// Run prints recorded steps, newest first.
+// Run prints recorded steps, newest first, or what one run completed.
 func (r *RunsStepsCmd) Run() error {
+	// Refused rather than ignored: a run already names its job.
+	if r.RunID != "" && r.Job != "" {
+		return errors.New("--job does not apply to a named run; a run belongs to one job already")
+	}
+
 	if nothingRecorded(r.ReadFlags, noRunsYet(r.Pipeline)) {
 		return nil
 	}
@@ -647,6 +656,10 @@ func (r *RunsStepsCmd) Run() error {
 		return err
 	}
 	defer done()
+
+	if r.RunID != "" {
+		return r.printRunSteps(context.Background(), st)
+	}
 
 	return r.printSteps(context.Background(), st)
 }
@@ -1043,6 +1056,53 @@ func (r *RunsStepsCmd) printSteps(ctx context.Context, st store.Cache) error {
 	for _, row := range rows {
 		_, _ = fmt.Fprintf(writer, "%s\t%s\t%s %s\t%s\t%s\n",
 			formatWhen(row.CreatedAt), row.JobName, row.Kind, row.Resource, row.Status, firstLine(row.Error))
+	}
+
+	return flush(writer)
+}
+
+// printRunSteps lists what one run completed, build by build.
+//
+// No index column: a build's remainder counts from 0, so an index would read
+// as a plan position it is not. Checked with FindRunRow first, which is
+// scoped, so another pipeline's run — or a typo — is an error rather than an
+// empty table that reads as "completed nothing".
+func (r *RunsStepsCmd) printRunSteps(ctx context.Context, st interface {
+	store.Meta
+	store.Runs
+}) error {
+	run, ok, err := st.FindRunRow(ctx, r.RunID)
+	if err != nil {
+		return fmt.Errorf("could not read run %q: %w", r.RunID, err)
+	}
+
+	if !ok {
+		return fmt.Errorf("no run %q was recorded for pipeline %q", r.RunID, st.Pipeline())
+	}
+
+	steps, err := st.CompletedRunSteps(ctx, r.RunID)
+	if err != nil {
+		return fmt.Errorf("could not read steps: %w", err)
+	}
+
+	if len(steps) == 0 {
+		fmt.Printf("run %s completed no steps\n", run.ID)
+
+		return nil
+	}
+
+	fmt.Printf("run %s  %s  %s: steps a --resume skips\n", run.ID, run.JobName, run.Status)
+
+	writer := newTabWriter()
+	_, _ = fmt.Fprintln(writer, "BUILD\tSTEP")
+
+	for _, step := range steps {
+		build := strings.TrimPrefix(step.BuildID, run.ID)
+		if build == "" {
+			build = "-"
+		}
+
+		_, _ = fmt.Fprintf(writer, "%s\t%s\n", build, step.Name)
 	}
 
 	return flush(writer)

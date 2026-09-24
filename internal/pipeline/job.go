@@ -48,7 +48,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	// run somebody may want to trace.
 	resume := resumeFrom(ctx)
 	if resume == nil {
-		resume = &resumeState{id: NewRunID(), done: map[int]string{}}
+		resume = &resumeState{id: NewRunID(), done: map[doneKey]string{}}
 		ctx = withResume(ctx, resume)
 	}
 
@@ -309,7 +309,7 @@ func runJobPlan(
 	// began with — rather than against whatever is newest, and it does not
 	// disturb any other build's progress. --force only skips the
 	// cache; it never re-opens a taken version.
-	reopen, err := resumedRunInputs(ctx, r.st)
+	reopen, recordedBuilds, err := resumedRunInputs(ctx, r.st)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
@@ -343,6 +343,18 @@ func runJobPlan(
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
+	// Before anything runs: a build whose record no longer matches its
+	// versions must not be let skip a single step.
+	err = checkResumedBuilds(ctx, resolution, recordedBuilds)
+	if err != nil {
+		return fmt.Errorf("job %q: %w", job.Name, err)
+	}
+
+	runBuild := ""
+	if resume := resumeFrom(ctx); resume != nil {
+		runBuild = resume.id
+	}
+
 	skippable := map[string]bool{}
 
 	if !skipCache {
@@ -366,6 +378,7 @@ func runJobPlan(
 		cursor:          cursor,
 		resolution:      resolution,
 		allowGetTrigger: true,
+		build:           runBuild,
 	}, job.Plan)
 }
 

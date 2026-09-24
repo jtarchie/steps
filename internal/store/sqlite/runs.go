@@ -162,14 +162,15 @@ func (s *Store) FinishRun(ctx context.Context, id, status string) error {
 	return nil
 }
 
-// RecordRunStep marks one step of a run as done, so a resume skips it.
-func (s *Store) RecordRunStep(ctx context.Context, runID string, index int, name string) error {
+// RecordRunStep marks one step of one build of a run as done, so a resume
+// skips it.
+func (s *Store) RecordRunStep(ctx context.Context, runID, buildID string, index int, name string) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO run_steps (run_id, step_index, step_name) VALUES (?, ?, ?)
-		ON CONFLICT (run_id, step_index) DO NOTHING
-	`, runID, index, name)
+		INSERT INTO run_steps (run_id, build_id, step_index, step_name) VALUES (?, ?, ?, ?)
+		ON CONFLICT (run_id, build_id, step_index) DO NOTHING
+	`, runID, buildID, index, name)
 	if err != nil {
-		return fmt.Errorf("could not record step %d of run %q: %w", index, runID, err)
+		return fmt.Errorf("could not record step %d of build %q: %w", index, buildID, err)
 	}
 
 	return nil
@@ -191,37 +192,24 @@ func (s *Store) RecordRunParent(ctx context.Context, runID, parentID string) err
 	return nil
 }
 
-// CompletedRunSteps returns the step indexes a run already finished.
-func (s *Store) CompletedRunSteps(ctx context.Context, runID string) (map[int]string, error) {
-	type step struct {
-		index int
-		name  string
-	}
-
+// CompletedRunSteps returns the steps a run already finished, in the order
+// they finished — by rowid, since the build id as text sorts #10 before #2.
+func (s *Store) CompletedRunSteps(ctx context.Context, runID string) ([]store.RunStep, error) {
 	// Joined to runs for the pipeline, which run_steps has no column of its
 	// own for. StartRun refuses an id another pipeline holds, so this is
 	// defense in depth — but the rule is categorical, and an unscoped read
 	// here would hand one run another's completed steps and --resume would
 	// skip work it never did.
-	steps, err := collect(ctx, s.db, "the steps of run "+runID,
-		`SELECT s.step_index, s.step_name FROM run_steps s
+	return collect(ctx, s.db, "the steps of run "+runID,
+		`SELECT s.build_id, s.step_index, s.step_name FROM run_steps s
 		 JOIN runs r ON r.id = s.run_id
-		 WHERE s.run_id = ? AND r.pipeline_id = ?`,
-		[]any{runID, s.pipelineID}, func(rows *sql.Rows) (step, error) {
-			var one step
+		 WHERE s.run_id = ? AND r.pipeline_id = ?
+		 ORDER BY s.rowid`,
+		[]any{runID, s.pipelineID}, func(rows *sql.Rows) (store.RunStep, error) {
+			var one store.RunStep
 
-			return one, rows.Scan(&one.index, &one.name)
+			return one, rows.Scan(&one.BuildID, &one.Index, &one.Name)
 		})
-	if err != nil {
-		return nil, err
-	}
-
-	done := make(map[int]string, len(steps))
-	for _, one := range steps {
-		done[one.index] = one.name
-	}
-
-	return done, nil
 }
 
 // ListRuns returns run invocations, newest first. An empty jobName covers

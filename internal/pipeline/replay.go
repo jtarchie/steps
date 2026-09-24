@@ -70,12 +70,17 @@ func PrepareReplay(
 		return ctx, "", err
 	}
 
-	done, err := replayDoneSteps(ctx, st, sourceRunID, job, from)
+	err = refuseReplayAcrossGet(job, from, fromStep)
 	if err != nil {
 		return ctx, "", err
 	}
 
 	replayID := NewRunID()
+
+	done, err := replayDoneSteps(ctx, st, sourceRunID, replayID, job, from)
+	if err != nil {
+		return ctx, "", err
+	}
 
 	dir, err := forkWorkspace(ctx, provider, source.Workspace, replayID)
 	if err != nil {
@@ -121,6 +126,24 @@ func replayIndex(job *config.Job, fromStep string) (int, error) {
 		job.Name, fromStep, strings.Join(names, ", "))
 }
 
+// refuseReplayAcrossGet refuses a --from that sits after a get: every step
+// behind a get runs inside one build per version, and a replay has no way to
+// say which build it means.
+//
+// ponytail: refused rather than chosen. Upgrade: a --build N that forks that
+// build's steps.
+func refuseReplayAcrossGet(job *config.Job, from int, fromStep string) error {
+	for i := range from {
+		if get := job.Plan[i].Get; get != "" {
+			return fmt.Errorf(
+				"cannot replay from %q: it runs after step %d (get %q), which builds once per version, and a replay cannot choose one of those builds",
+				fromStep, i, get)
+		}
+	}
+
+	return nil
+}
+
 // replayDoneSteps marks every step before the replay point as already
 // finished, so the plan walker skips straight to it.
 //
@@ -129,27 +152,39 @@ func replayIndex(job *config.Job, fromStep string) (int, error) {
 // workspace — so replaying past it would run the target step against state
 // that never existed. Refusing names the step rather than producing a
 // confidently wrong run.
+//
+// Only the source's run-level steps count — refuseReplayAcrossGet keeps every
+// step before --from outside any build — and they are filed under the
+// replay's own id, which is the build its walk asks about.
 func replayDoneSteps(
-	ctx context.Context, st store.Store, sourceRunID string, job *config.Job, from int,
-) (map[int]string, error) {
-	recorded, err := st.CompletedRunSteps(ctx, sourceRunID)
+	ctx context.Context, st store.Store, sourceRunID, replayID string, job *config.Job, from int,
+) (map[doneKey]string, error) {
+	steps, err := st.CompletedRunSteps(ctx, sourceRunID)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // CompletedRunSteps already names the run
 	}
 
-	done := make(map[int]string, from)
+	recorded := map[int]bool{}
+
+	for _, step := range steps {
+		if step.BuildID == sourceRunID {
+			recorded[step.Index] = true
+		}
+	}
+
+	done := make(map[doneKey]string, from)
 
 	for i := range from {
 		name := executedStepName(job.Plan[i])
 
-		_, ok := recorded[i]
+		ok := recorded[i]
 		if !ok {
 			return nil, fmt.Errorf(
 				"run %q never completed step %d (%q), so a replay from a later step would run against state that run never reached",
 				sourceRunID, i, name)
 		}
 
-		done[i] = name
+		done[doneKey{replayID, i}] = name
 	}
 
 	return done, nil

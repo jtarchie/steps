@@ -9,6 +9,12 @@ package sqlite
 //
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
+// 13 put build_id into the keys of run_steps and run_inputs. Every build of a
+// version: every fan-out walks its remainder from index 0, so (run, index)
+// kept only the first build's steps and a resume skipped the rest's. An older
+// file's INSERT names a column it lacks, and both writes are best-effort — so
+// the resume record would vanish silently.
+//
 // 12 added resource_check_errors. An older file's INSERT names a table it
 // lacks, and the poller records a check failure best-effort — so a pipeline
 // that had stopped triggering would go on looking merely quiet, which is the
@@ -58,7 +64,7 @@ package sqlite
 // 4 put pipeline_id into the keys of run_placements and agent_usage. Without
 // it, two pipelines sharing a state file collided on (run_id, node_hash) and
 // one upserted over the other's row.
-const schemaVersion = 12
+const schemaVersion = 13
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -477,9 +483,13 @@ CREATE INDEX IF NOT EXISTS idx_runs_revision ON runs(revision_id);
 
 CREATE TABLE IF NOT EXISTS run_steps (
     run_id     TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    -- "<run>#<set>" for a step inside a triggered build, the bare run id for
+    -- one outside any. The index alone collided: each build's remainder, and
+    -- the walk after a get, counts from 0 again.
+    build_id   TEXT NOT NULL,
     step_index INTEGER NOT NULL,
     step_name  TEXT NOT NULL,
-    PRIMARY KEY (run_id, step_index)
+    PRIMARY KEY (run_id, build_id, step_index)
 );
 
 -- Human decisions on approval: steps. The row IS the audit trail; it must not
@@ -707,11 +717,14 @@ CREATE INDEX IF NOT EXISTS idx_agent_usage_node ON agent_usage(pipeline_id, node
 -- row that fails to record costs a resume, never a running build.
 CREATE TABLE IF NOT EXISTS run_inputs (
     run_id        TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    -- Which build, so a resume can check each build still binds what it was
+    -- created with before trusting that build's run_steps.
+    build_id      TEXT NOT NULL,
     resource_name TEXT NOT NULL,
     -- Canonical JSON, the same encoding the cursor keys on, so a version
     -- recorded here compares equal to one a later check returns.
     version_json  TEXT NOT NULL,
-    PRIMARY KEY (run_id, resource_name, version_json)
+    PRIMARY KEY (run_id, build_id, resource_name, version_json)
 ) WITHOUT ROWID;
 
 -- Where a placed step actually ran, and what it cost in bytes rather than in
