@@ -382,7 +382,7 @@ Runs when a `put` step executes. Optional: a type with no `out:` is read-only, a
 
 - **Sees**: `{{ .source }}` and `{{ .params }}` (the put step's `params:`).
 - **Working directory** is the put step's read view, composed from its `inputs:`.
-- **May print** a single JSON **object** — the version it produced. Printing nothing is fine and not an error.
+- **May print** a single JSON **object** — the version it produced. Printing nothing is fine and not an error. The object is stored as a version, shown on the job page, and rendered into downstream `in:` commands, so print identifiers, not credentials or whole API responses, and quote it with `shellquote`. Over 4 KiB it is not recorded.
 
 ### A put publishes; it does not fetch
 
@@ -425,7 +425,7 @@ jobs:
     outcome: succeeded
 ```
 
-The explicit get fetches the version `check` reported **when the plan was built** — check runs once, before any step, so the version the put publishes mid-run is not what the same run's get fetches (the example above pins exactly that: `out:` prints `v1.4.2`, the get still fetches `v1.4.1`). The version a put prints is recorded with the run; it reaches gets in *later* runs, once a check has reported it — a downstream job triggered on the resource is the plan shape that consumes what a put published. A put whose output nothing reads simply has no get after it.
+The explicit get fetches the version `check` reported **when the plan was built** — check runs once, before any step, so the version the put publishes mid-run is not what the same run's get fetches (the example above pins exactly that: `out:` prints `v1.4.2`, the get still fetches `v1.4.1`). The version a put prints is recorded with the run; it reaches a `passed:`-gated get in a later run whether or not a check ever reports it (see [`passed:`](infra.md#a-version-a-job-put-counts-as-having-passed-it)); an ungated get still needs the check to report it. A put whose output nothing reads simply has no get after it.
 
 ## Shell safety
 

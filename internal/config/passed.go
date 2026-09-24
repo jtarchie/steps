@@ -5,7 +5,7 @@ package config
 import "fmt"
 
 // validatePassed enforces that passed: is a get-step field naming real jobs
-// that actually fetch the same resource.
+// that actually get or put the same resource.
 //
 // This is a correctness gap rather than a convenience: without it, `steps
 // watch` can trigger `deploy` on a commit that the `test` job already FAILED
@@ -59,8 +59,8 @@ func (c *Config) validatePassedStep(label, jobName string, step *Step) error {
 		// An upstream job that never fetches this resource can never mark a
 		// version of it green, so the constraint would block forever — a
 		// deadlock spelled as a typo.
-		if !jobFetches(*upstreamJob, resource) {
-			return fmt.Errorf("%s: passed names job %q, which never gets resource %q, so no version of it could ever pass there",
+		if !jobUses(*upstreamJob, resource) {
+			return fmt.Errorf("%s: passed names job %q, which neither gets nor puts resource %q, so no version of it could ever pass there",
 				label, upstream, resource)
 		}
 	}
@@ -68,19 +68,22 @@ func (c *Config) validatePassedStep(label, jobName string, step *Step) error {
 	return nil
 }
 
-// jobFetches reports whether a job's plan gets the named resource, under its
-// own name or as an alias.
-func jobFetches(job Job, resource string) bool {
+// jobUses reports whether a job's plan gets the named resource (under its own
+// name or as an alias) or puts it: both record a version against a green
+// build. A put has no alias. Job-level on_failure/on_error/on_abort hooks run
+// only when the build is not green, so a put there can never pass and is not
+// counted; step-level failure hooks are, since under try: their build can be
+// green.
+func jobUses(job Job, resource string) bool {
 	found := false
 
-	_ = job.visitSteps(func(_ string, step *Step) error {
-		if step.Get == "" {
-			return nil
-		}
-
-		name := step.Get
-		if step.Resource != "" {
-			name = step.Resource
+	check := func(_ string, step *Step) error {
+		name := step.Put
+		if step.Get != "" {
+			name = step.Get
+			if step.Resource != "" {
+				name = step.Resource
+			}
 		}
 
 		if name == resource {
@@ -88,7 +91,17 @@ func jobFetches(job Job, resource string) bool {
 		}
 
 		return nil
-	})
+	}
+
+	for i := range job.Plan {
+		_ = visitStepTree("", &job.Plan[i], check)
+	}
+
+	for _, hook := range []*Step{job.Hooks.OnSuccess, job.Hooks.Ensure} {
+		if hook != nil {
+			_ = visitStepTree("", hook, check)
+		}
+	}
 
 	return found
 }

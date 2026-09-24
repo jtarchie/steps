@@ -118,7 +118,7 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 	// Recorded from there, one succeeding branch marked the whole block done,
 	// and a resume skipped the block including the branch that had failed,
 	// exiting 0 having re-attempted nothing.
-	if w.skipCompleted(ctx) {
+	if w.skipCompleted(ctx, step) {
 		return false, nil
 	}
 
@@ -170,7 +170,7 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 
 // skipCompleted skips a plan step a previous attempt of this run already
 // finished, advancing the index. It reports whether it skipped.
-func (w *planWalk) skipCompleted(ctx context.Context) bool {
+func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) bool {
 	name, done := resumeFrom(ctx).alreadyDone(w.index)
 	if !done {
 		return false
@@ -179,6 +179,15 @@ func (w *planWalk) skipCompleted(ctx context.Context) bool {
 	fmt.Printf("skip: %s (already succeeded)\n", name)
 	logFrom(ctx).Info("job.skip", "index", w.index, "reason", "resume", "step", name)
 	recordExecution(ctx, name)
+
+	// ponytail: nothing links a run to a put's output, so a resumed run cannot
+	// re-record it; the gate stays shut rather than opening on a guess. Only
+	// a direct put: is detected, not one nested in a skipped block. Upgrade:
+	// a run_outputs table (DDL + schemaVersion bump) read here.
+	if step.Put != "" {
+		fmt.Printf("resume: put %s ran in an earlier attempt; its version is not recorded as passed for %s\n", step.Put, w.jobName)
+		logFrom(ctx).Warn("job.resume_put_unrecorded", "put", step.Put, "job", w.jobName)
+	}
 
 	w.index++
 

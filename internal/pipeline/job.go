@@ -151,12 +151,12 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 
 	ctx = withRunContext(ctx, job, skipCache)
 
-	// Remember which versions this run fetched, so a successful job can mark
-	// them green for any downstream job's passed: constraint. Every fetch
-	// happens inside a triggered build, which installs its own record over
-	// this one (runTriggeredBuild) — this is the outer fallback, and normally
-	// stays empty.
-	ctx, fetched := withFetchedVersions(ctx)
+	// Remember which versions this run fetched or put, so a successful job
+	// can mark them green for any downstream job's passed: constraint. A
+	// fetch happens inside a triggered build, which installs its own record
+	// over this one (runTriggeredBuild); this outer one collects what a
+	// put-only job publishes.
+	ctx, fetched := withBuildVersions(ctx)
 
 	// Account for what this job's agent steps spend, and enforce the job's
 	// cumulative ceiling if it set one. Installed here, not per step, because
@@ -205,7 +205,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 
 	publishJobFinished(ctx, job.Name, jobStarted, nil)
 
-	recordPassedVersions(ctx, st, job.Name, resume.id, fetched)
+	recordPassedVersions(ctx, st, job.Name, fetched.runBuildID(resume.id), fetched)
 
 	logFrom(ctx).Info("job.done")
 

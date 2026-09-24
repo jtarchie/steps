@@ -3,6 +3,7 @@
 package resource
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -362,9 +363,7 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, ext
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
 
-	var result map[string]any
-
-	unmarshalErr := json.Unmarshal(out, &result)
+	result, unmarshalErr := decodeOutVersion(out)
 	if unmarshalErr != nil {
 		slog.Debug("resource.out", "resource_type", rt.Name, "output", string(out), "parse_error", unmarshalErr)
 
@@ -372,6 +371,27 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, ext
 	}
 
 	events.Logger(ctx).Info("resource.put", "resource_type", rt.Name, "src_dir", srcDir, "result", result)
+
+	return result, nil
+}
+
+// decodeOutVersion parses an out: command's stdout with exact digits, as
+// ParseVersionJSON does for a check, so one version encodes one way wherever
+// it came from. Trailing data is refused, as json.Unmarshal did.
+func decodeOutVersion(out []byte) (map[string]any, error) {
+	var result map[string]any
+
+	decoder := json.NewDecoder(bytes.NewReader(out))
+	decoder.UseNumber()
+
+	err := decoder.Decode(&result)
+	if err != nil {
+		return nil, fmt.Errorf("decoding out: output: %w", err)
+	}
+
+	if decoder.More() {
+		return nil, errors.New("trailing data after version")
+	}
 
 	return result, nil
 }
@@ -433,6 +453,12 @@ func ResolveVersions(
 
 	version, err := SelectVersion(versions, pin)
 	if err != nil {
+		// Named because a passed: gate holding every version back reads as a
+		// broken check otherwise, and it is the first thing anyone hits.
+		if len(step.Passed) > 0 && len(versions) == 0 {
+			return nil, nil, nil, fmt.Errorf("get %q: no version of %s has passed %v yet: %w", step.Get, res.Name, step.Passed, err)
+		}
+
 		return nil, nil, nil, fmt.Errorf("get %q: %w", step.Get, err)
 	}
 

@@ -2,6 +2,7 @@ package resource
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"testing"
@@ -242,5 +243,32 @@ func TestParseVersionJSON(t *testing.T) {
 	_, err = ParseVersionJSON("not json")
 	if err == nil {
 		t.Error("ParseVersionJSON(not json): want an error")
+	}
+}
+
+// TestRunOutKeepsExactDigits: a put's version must encode the way a check's
+// does, or one version is filed as two rows and a gate keys to the wrong one.
+func TestRunOutKeepsExactDigits(t *testing.T) {
+	t.Parallel()
+
+	run := func(out string) map[string]any {
+		t.Helper()
+
+		rt := config.ResourceType{Name: "dummy", Config: config.ResourceTypeConfig{Out: "echo '" + out + "'"}}
+
+		result, err := RunOut(context.Background(), nil, rt, nil, map[string]any{}, map[string]any{}, t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return result
+	}
+
+	if got := run(`{"ts": 1699887654.001200}`)["ts"]; got != json.Number("1699887654.001200") {
+		t.Errorf("ts = %#v, want json.Number(1699887654.001200)", got)
+	}
+
+	if got := run(`{"a":"1"} trailing`); got != nil {
+		t.Errorf("trailing data parsed as %v, want nil", got)
 	}
 }

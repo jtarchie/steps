@@ -1,6 +1,6 @@
 # An upstream job that never gets this resource can never mark a version of it
 # green, so the constraint would block forever — a deadlock spelled as a typo.
-# expect: never gets resource
+# expect: neither gets nor puts resource
 
 resources:
 - name: repo
