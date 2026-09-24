@@ -10,9 +10,19 @@ import (
 // TestANoteReachesTheTerminalAndTheTranscript crosses the whole seam a step_note travels: the engine says something about a step, the terminal prints it, and the run's own record keeps it — so the web transcript shows what used to reach only the shell that ran the job. Not parallel: captureStdout swaps os.Stdout.
 func TestANoteReachesTheTerminalAndTheTranscript(t *testing.T) {
 	path := writePipeline(t, t.TempDir(), `
+resource_types:
+- name: listing
+  config:
+    check: "echo '[{\"ref\":\"abc\"}]'"
+    in: "true"
+resources:
+- name: repo
+  type: listing
+  source: {}
 jobs:
 - name: build
   plan:
+  - get: repo
   - try:
       task: flaky
       run: "exit 3"
@@ -26,6 +36,11 @@ jobs:
 
 	if !strings.Contains(out, said+"\n") {
 		t.Errorf("the terminal did not print the note %q:\n%s", said, out)
+	}
+
+	// Which get a fetched version belongs to: a job with several gets is otherwise a list of versions with no names.
+	if fetched := "get: repo (version: map[ref:abc])\n"; !strings.Contains(out, fetched) {
+		t.Errorf("the terminal did not name the get it fetched, want %q:\n%s", fetched, out)
 	}
 
 	st := openStoreFor(t, path)

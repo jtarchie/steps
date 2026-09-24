@@ -605,7 +605,7 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, st store.Deli
 }
 
 func fetchGetStep(ctx context.Context, cfg *config.Config, st store.Deliveries, artifact string, resource config.Resource, resourceType config.ResourceType, version, params map[string]any, bw workspace.BuildWorkspace) error {
-	notef(ctx, "version: %v", version)
+	notef(ctx, "get: %s (version: %v)", artifact, version)
 
 	fetch := func(dir string) error {
 		err := rsrc.RunIn(ctx, cfg, resourceType, resource.Env, resource.Source, version, params, dir)
