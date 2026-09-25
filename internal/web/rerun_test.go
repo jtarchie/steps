@@ -53,8 +53,8 @@ func TestRetryIsRefusedWhereATriggerIs(t *testing.T) {
 	}
 }
 
-// TestAFanOutRunOffersRetryOnEachBuild: a version: every run holds a build per version, and Retry re-runs ONE build (fly rerun-build), so the bar cannot offer it — each build's own row does, naming its build.
-func TestAFanOutRunOffersRetryOnEachBuild(t *testing.T) {
+// TestAFanOutRunOffersOneRetry: Retry is this run again with the same inputs, every build of it; a button per build read as something else.
+func TestAFanOutRunOffersOneRetry(t *testing.T) {
 	t.Parallel()
 
 	server, pipeline := writableServerWithPipeline(t)
@@ -86,14 +86,11 @@ func TestAFanOutRunOffersRetryOnEachBuild(t *testing.T) {
 
 	_, page := get(t, server, "/p/demo/runs/fan")
 
-	if strings.Contains(actionBar(t, page), "Retry") {
-		t.Error("the bar offers Retry for a run of several builds, which one would it re-run?")
+	if !strings.Contains(actionBar(t, page), `action="/p/demo/runs/fan/rerun"`) {
+		t.Error("the bar offers no Retry for a run of several builds")
 	}
 
-	for build := range 2 {
-		want := fmt.Sprintf(`<input type="hidden" name="build" value="%d"><button class="btn" type="submit" title="run build #%d again, with the same inputs">⟲ Retry</button>`, build, build)
-		if !strings.Contains(page, want) {
-			t.Errorf("build #%d's row offers no Retry of itself", build)
-		}
+	if n := strings.Count(page, "⟲ Retry"); n != 1 {
+		t.Errorf("the page offers %d Retry buttons, want the bar's one", n)
 	}
 }

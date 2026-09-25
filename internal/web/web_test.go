@@ -1792,41 +1792,6 @@ func TestRunPageTriggerIsNotForced(t *testing.T) {
 	}
 }
 
-// TestJobPageForcedFormForces: the job page's forced button, submitted as rendered, still forces.
-func TestJobPageForcedFormForces(t *testing.T) {
-	t.Parallel()
-
-	_, pipeline := testPipeline(t)
-	runner := &enqueueRecorder{}
-
-	server, err := New([]*Pipeline{pipeline}, runner)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	action := "/p/demo/jobs/build/trigger"
-	_, page := get(t, server, "/p/demo/jobs/build/detail")
-
-	post(t, server, action, formFields(t, page, action)) // first form on the page: ordinary
-	post(t, server, action, map[string]string{"force": formForced(t, page)})
-
-	if fmt.Sprint(runner.forced) != "[false true]" {
-		t.Errorf("forced = %v, want [false true]", runner.forced)
-	}
-}
-
-// formForced is the value of the force field the job page renders.
-func formForced(t *testing.T, page string) string {
-	t.Helper()
-
-	m := regexp.MustCompile(`name="force" value="([^"]*)"`).FindStringSubmatch(page)
-	if m == nil {
-		t.Fatalf("job page has no forced form:\n%s", page)
-	}
-
-	return m[1]
-}
-
 // TestRunPageOffersNoTriggerForAJobThePipelineDropped: the click would be a 404.
 func TestRunPageOffersNoTriggerForAJobThePipelineDropped(t *testing.T) {
 	t.Parallel()

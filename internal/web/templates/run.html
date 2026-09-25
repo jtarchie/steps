@@ -302,7 +302,6 @@
     {{with $step.Compactions}}<span class="note" title="Older turns were summarized to fit the context budget; the model worked from the summary after that point">compacted ×{{.}}</span>{{end}}
     {{if $step.CompactionStalled}}<span class="note spendwarn" title="The most recent turns alone outgrew compact_after_tokens, so compaction stopped for the rest of this conversation">compaction stalled</span>{{end}}
     <span class="headmeta">
-      {{if not $page.Nav.ReadOnly}}{{with index $page "BuildRetry"}}{{with index . $step.ID}}<form class="inline rowretry" method="post" action="/p/{{$page.Nav.Current}}/runs/{{$page.Run.Run.ID}}/rerun"><input type="hidden" name="build" value="{{.}}"><button class="btn" type="submit"{{if $page.Nav.Paused}} disabled title="the pipeline is paused"{{else}} title="run build #{{.}} again, with the same inputs"{{end}}>⟲ Retry</button></form>{{end}}{{end}}{{end}}
       {{with $step.Rollup}}{{if not .Empty}}<span class="rollup">
         <span>{{.Cells}} step{{if ne .Cells 1}}s{{end}}</span>
         {{if .Passed}}<span class="r-sep">·</span><b class="r-pass">{{.Passed}} passed</b>{{end}}

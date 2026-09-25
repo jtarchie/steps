@@ -77,15 +77,14 @@ func TestTheJobPagesBarTriggersTheJob(t *testing.T) {
 	for _, want := range []string{
 		`action="/p/demo/jobs/build/trigger"`,
 		`title="a new run of build, with the newest versions">↻ Trigger</button>`,
-		`name="force" value="all"`,
 	} {
 		if !strings.Contains(bar, want) {
 			t.Errorf("job page bar is missing %q:\n%s", want, bar)
 		}
 	}
 
-	if strings.Contains(page, "Re-run") {
-		t.Error("the job page says re-run, which is Retry's word")
+	if strings.Contains(page, "Re-run") || strings.Contains(bar, "no cache") {
+		t.Error("the job page says re-run, which is Retry's word, or still offers a trigger without the cache")
 	}
 }
 

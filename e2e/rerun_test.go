@@ -9,7 +9,7 @@ import (
 	"github.com/jtarchie/steps/internal/cli"
 )
 
-// TestRerunRebuildsABuildAgainstTheVersionsItWasCreatedWith is fly rerun-build (#146): a new run, the whole plan from the top, against exactly the versions the named build began with — not whatever the check reports now — recording which build it re-ran. Concourse has no cache, so every step of a rerun executes; here the rerun skips the cache to mean the same thing.
+// TestRerunRebuildsABuildAgainstTheVersionsItWasCreatedWith is fly rerun-build (#146): a new run, the whole plan from the top, against exactly the versions the run's builds began with — not whatever the check reports now — recording which build it re-ran. Concourse has no cache, so every step of a rerun executes; here the rerun skips the cache to mean the same thing.
 func TestRerunRebuildsABuildAgainstTheVersionsItWasCreatedWith(t *testing.T) {
 	dir := t.TempDir()
 
@@ -61,8 +61,8 @@ jobs:
 		t.Fatalf("FindRunRow(%s) = %v, %v", second, ok, err)
 	}
 
-	if second == first || run.RerunOf != first || run.RerunOfBuild != 0 {
-		t.Errorf("rerun %s records rerun of %q build %d, want %q build 0", second, run.RerunOf, run.RerunOfBuild, first)
+	if second == first || run.RerunOf != first || run.RerunOfBuild != -1 {
+		t.Errorf("rerun %s records rerun of %q build %d, want all of %q (-1)", second, run.RerunOf, run.RerunOfBuild, first)
 	}
 
 	// Rerunning a rerun reruns the original, as Concourse's RerunBuild does.
@@ -229,5 +229,49 @@ jobs:
 
 	if got := strings.TrimSpace(readFileString(t, deployed)); got != "2" {
 		t.Errorf("deploy shipped %q, want 2: a rerun of the build of 1 jumped the queue", got)
+	}
+}
+
+// TestRerunOfAFanOutRunRebuildsEveryBuild: a version: every run holds a build per version, and Retry is "this run again, with the same inputs" — every build, each against its own version, nothing that arrived since. <run>#<n> narrows it to one build, which is Concourse's rerun of one build.
+func TestRerunOfAFanOutRunRebuildsEveryBuild(t *testing.T) {
+	dir := t.TempDir()
+
+	versions := filepath.Join(dir, "versions.json")
+	ran := filepath.Join(dir, "ran.log")
+
+	writePipelineFile(t, versions, `[{"n":"1"},{"n":"2"}]`)
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+resource_types:
+- name: counter
+  config:
+    check: cat %[1]s
+    in: echo {{ .version.n | shellquote }} > n.txt
+
+resources:
+- name: ticks
+  type: counter
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: ticks
+    version: every
+  - task: note
+    inputs: [ticks]
+    run: cat ticks/n.txt >> %[2]s
+`, versions, ran))
+
+	mustRun(t, "run", path, "--job", "build")
+	first := latestRunID(t, path)
+
+	writePipelineFile(t, versions, `[{"n":"1"},{"n":"2"},{"n":"3"}]`)
+
+	mustRun(t, "run", path, "--rerun", first)
+	mustRun(t, "run", path, "--rerun", first+"#1")
+
+	if got := strings.Join(strings.Fields(readFileString(t, ran)), " "); got != "1 2 1 2 2" {
+		t.Errorf("builds read %q, want %q: the whole run again, then its second build alone, and never 3", got, "1 2 1 2 2")
 	}
 }

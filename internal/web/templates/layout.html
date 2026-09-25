@@ -180,14 +180,13 @@
   });
 
   document.addEventListener('click', function (e) {
-    if (e.target.closest('a, button, form')) return;
+    if (e.target.closest('a')) return;
     var step = toggleFrom(e.target);
     if (step) fold(step);
   });
 
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' && e.key !== ' ') return;
-    if (e.target.closest('button, form')) return;
     var step = toggleFrom(e.target);
     if (!step) return;
     e.preventDefault();
@@ -426,7 +425,7 @@
 {{define "actionbar"}}{{if .Nav.Anchored}}<div class="actionbar{{if .Nav.Paused}} paused{{end}}" role="toolbar" aria-label="Actions"><div class="group">{{if .Nav.ReadOnly}}{{if .Nav.Paused}}<span class="st st-paused">paused</span> <span class="dim">unpause with <code>steps pipeline unpause -p {{.Nav.Current}}</code></span>{{end}}{{else}}<form method="post" action="/p/{{.Nav.Current}}/{{if .Nav.Paused}}unpause{{else}}pause{{end}}"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="{{if .Nav.Paused}}resume polling and starting runs{{else}}stop polling and starting runs until unpaused{{end}}" aria-pressed="{{.Nav.Paused}}">{{if .Nav.Paused}}▶ Unpause{{else}}⏸ Pause{{end}}</button></form>{{end}}</div>{{with .Bar}}{{if not $.Nav.ReadOnly}}<div class="group">
     {{if .Held}}<form method="post" action="/p/{{$.Nav.Current}}/jobs/{{.Job}}/release"><button class="btn" type="submit" title="let new versions trigger {{.Job}} again">Release</button></form>{{end}}
     {{if .Job}}<form method="post" action="/p/{{$.Nav.Current}}/jobs/{{.Job}}/trigger"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="the pipeline is paused"{{else}} title="a new run of {{.Job}}, with the newest versions"{{end}}>↻ Trigger</button></form>
-    {{if .NoCache}}<form method="post" action="/p/{{$.Nav.Current}}/jobs/{{.Job}}/trigger"><input type="hidden" name="force" value="all"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="the pipeline is paused"{{else}} title="a new run of {{.Job}} that runs every step, even unchanged ones"{{end}}>↻ Trigger, no cache</button></form>{{end}}{{end}}
+    {{end}}
     {{if .Retry}}<form method="post" action="/p/{{$.Nav.Current}}/runs/{{.RunID}}/rerun"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="the pipeline is paused"{{else}} title="run this build again, with the same inputs"{{end}}>⟲ Retry</button></form>{{end}}
     {{if .Abort}}<form method="post" action="{{.Abort}}"><button class="btn danger" type="submit" title="stop it">■ Abort</button></form>{{end}}
   </div>{{end}}{{end}}</div>{{end}}{{end}}

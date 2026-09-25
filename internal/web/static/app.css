@@ -164,7 +164,6 @@ tr.checkfail pre { margin: 0 0 4px; }
 .actionbar .btn { padding: 3px 10px; font-size: 12px; white-space: nowrap; }
 .actionbar.paused { background: color-mix(in srgb, var(--blue) 16%, var(--panel)); border-top-color: var(--blue); }
 .actionbar.paused .btn[aria-pressed="true"] { color: var(--blue); border-color: var(--blue); }
-.rowretry .btn { padding: 1px 8px; font-size: 11px; }
 .statusline kbd {
   font-family: var(--mono);
   font-size: 11px;

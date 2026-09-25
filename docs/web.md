@@ -355,8 +355,8 @@ buttons that would start something are disabled, and say why when hovered.
 
 | Page | Right-hand buttons |
 |---|---|
-| a job | **↻ Trigger**, **↻ Trigger, no cache**, and **Release** when the breaker holds it |
-| a run, finished | **↻ Trigger** (a new run of its job) and **⟲ Retry** (this build again) |
+| a job | **↻ Trigger**, and **Release** when the breaker holds it |
+| a run, finished | **↻ Trigger** (a new run of its job) and **⟲ Retry** (this run again) |
 | a run, live | **↻ Trigger** and **■ Abort** |
 | the follow page | **■ Abort** the queued run |
 
@@ -364,13 +364,13 @@ buttons that would start something are disabled, and say why when hovered.
 
 Nine controls, each doing what a CLI verb does:
 
-- **Trigger** / **Trigger, no cache** enqueue the job into the durable trigger
+- **Trigger** enqueues the job into the durable trigger
   queue `steps web` uses — the same queue this process's own polling fills.
   `steps web` drains it in-process by calling `pipeline.RunJob` — there is no
   second execution path, so a job run from a browser gets the same caching,
-  hooks, serial groups, and recording as any other. A trigger builds the newest versions the job has not built. No cache skips the merkle cache; it does not re-take versions a `version: every` get already built. The ordinary one honors the cache,
-  which on an unchanged pipeline correctly does almost nothing. A job the breaker holds is still triggered, since the breaker stops only automatic triggers.
-- **Retry** is `fly rerun-build`: a new run of ONE build, the whole plan from the top, against exactly the versions that build was created with — what `steps run --rerun <run>[#<build>]` does. Nothing that arrived since joins it, `passed:` is not asked again, and it takes no version, so it disturbs no other build. It skips the step cache, since a retry of a build that passed would otherwise do nothing. A run of a `version: every` fan-out holds a build per version, so Retry sits on each build's row there rather than in the bar. The new run links the build it retried, and a retry of an old build does not become its job's status — only a retry of the job's latest run does, as in Concourse. See [conformance.md](conformance.md).
+  hooks, serial groups, and recording as any other. A trigger builds the newest versions the job has not built, and honors the cache,
+  which on an unchanged pipeline correctly does almost nothing; Retry, or `steps run --force` from a terminal, is how to run unchanged steps again. A job the breaker holds is still triggered, since the breaker stops only automatic triggers.
+- **Retry** is `fly rerun-build`: a new run, the whole plan from the top, against exactly the versions the run was created with — what `steps run --rerun <run>` does. A run of a `version: every` fan-out holds a build per version, and Retry re-runs every one, each against its own version; `--rerun <run>#<build>` narrows it to one. Nothing that arrived since joins it, `passed:` is not asked again, and it takes no version, so it disturbs no other build. It skips the step cache, since a retry of a run that passed would otherwise do nothing. The new run links the run it retried, and a retry of an old run does not become its job's status — only a retry of the job's latest run does, as in Concourse. See [conformance.md](conformance.md).
 - **Approve / Reject** on an `approval:` step, with the reason recorded — the
   same row `steps approvals approve` writes.
 - **Answer** an `ask_user` question a step is parked on — one click for an

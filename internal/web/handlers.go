@@ -153,7 +153,7 @@ func (s *Server) handleJobDetail(c *echo.Context) error {
 		"Title":    job.Name,
 		"Crumbs":   []crumb{{Label: "jobs", URL: "/p/" + pipeline.Slug}, {Label: job.Name, URL: "/p/" + pipeline.Slug + "/jobs/" + job.Name}, {Label: "detail"}},
 		"Job":      view,
-		"Bar":      barView{Job: job.Name, NoCache: true, Held: view.Held},
+		"Bar":      barView{Job: job.Name, Held: view.Held},
 		"Runs":     runs,
 		"Versions": versions,
 		"Spark":    sparkline(runs),
@@ -234,8 +234,7 @@ func (s *Server) handleRun(c *echo.Context) error {
 		"Strip":       strip,
 		"Job":         job,
 		"JobDeclared": jobErr == nil,
-		"Bar":         runBar(ctx, pipeline, view.Run, jobErr == nil),
-		"BuildRetry":  buildRetries(ctx, pipeline, view, jobErr == nil),
+		"Bar":         runBar(pipeline, view.Run, jobErr == nil),
 		"Title":       view.Run.JobName + " #" + shortID(view.Run.ID),
 		"TitleMark":   statusMark(view.Run.Status),
 		"Crumbs": []crumb{
@@ -601,8 +600,9 @@ func (s *Server) handleTrigger(c *echo.Context) error {
 		pipeline.Slug, name, since.UnixMilli()))
 }
 
-// handleRerun is Retry: fly rerun-build (#146), one build of a recorded run
-// against the versions it was created with, as a new run. Refused where a
+// handleRerun is Retry: fly rerun-build (#146), a recorded run — every build of
+// it unless the form names one — against the versions it was created with, as
+// a new run. Refused where a
 // trigger is — a read-only server, a paused pipeline, a job the config dropped
 // — and for a run still going, which the page offers Abort for instead.
 func (s *Server) handleRerun(c *echo.Context) error {
@@ -627,7 +627,7 @@ func (s *Server) handleRerun(c *echo.Context) error {
 		return err
 	}
 
-	build := 0
+	build := -1
 
 	if raw := c.FormValue("build"); raw != "" {
 		build, err = strconv.Atoi(raw)

@@ -152,7 +152,7 @@ func (s suite) TestARerunIsQueuedBesideAnOrdinaryTrigger(t *testing.T) {
 	mustEnqueueJob(t, st, "build", "a new version")
 
 	for range 2 {
-		err = st.EnqueueRerunJob(ctxFor(t), "build", "retry (web)", "ORIGINAL", 1)
+		err = st.EnqueueRerunJob(ctxFor(t), "build", "retry (web)", "ORIGINAL", -1)
 		if err != nil {
 			t.Fatalf("EnqueueRerunJob: %v", err)
 		}
@@ -171,8 +171,8 @@ func (s suite) TestARerunIsQueuedBesideAnOrdinaryTrigger(t *testing.T) {
 		}
 	}
 
-	if len(reruns) != 1 || reruns[0] != (store.QueuedTrigger{Manual: true, RerunOf: "ORIGINAL", RerunBuild: 1}) {
-		t.Errorf("claimed reruns = %+v, want one manual rerun of ORIGINAL build 1", reruns)
+	if len(reruns) != 1 || reruns[0] != (store.QueuedTrigger{Manual: true, RerunOf: "ORIGINAL", RerunBuild: -1}) {
+		t.Errorf("claimed reruns = %+v, want one manual rerun of all of ORIGINAL", reruns)
 	}
 }
 
