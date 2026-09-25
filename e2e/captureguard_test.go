@@ -122,6 +122,17 @@ func (p testPackage) parallelRedirectors() []string {
 
 // parseTestPackages reads every _test.go file in the module, grouped by
 // directory.
+// skipsDir is the directories `go test ./...` skips: without it the walk parsed every checkout a kept .steps/workspace held (9.9G, 65k test files) and timed out the package.
+func skipsDir(path string, entry fs.DirEntry, walkErr error) bool {
+	if walkErr != nil || !entry.IsDir() || path == repoRoot {
+		return false
+	}
+
+	name := entry.Name()
+
+	return strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") || name == "testdata"
+}
+
 func parseTestPackages(t *testing.T) []testPackage {
 	t.Helper()
 
@@ -129,6 +140,10 @@ func parseTestPackages(t *testing.T) []testPackage {
 	fset := token.NewFileSet()
 
 	err := filepath.WalkDir(repoRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if skipsDir(path, entry, walkErr) {
+			return filepath.SkipDir
+		}
+
 		if walkErr != nil || entry.IsDir() || !strings.HasSuffix(path, "_test.go") {
 			return nil //nolint:nilerr // an unreadable path is not this test's business
 		}

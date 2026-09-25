@@ -568,8 +568,11 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	clock := wrapUpClock{has: hasTimeout, deadline: timeoutDeadline, atEntry: budgetAtEntry}
 	wrapUpWarned := false
 
+	// Not carried in resumeCheckpoint: a fallback source tokenizes differently, so it starts from the estimate until it reports for itself.
+	var size reportedSize
+
 	for ; budget == unlimitedTurns || turn < budget; turn++ {
-		state.summary, state.stalled = maybeCompact(ctx, llm, req, conv, state.summary, state.stalled)
+		state.summary, state.stalled = maybeCompact(ctx, llm, req, conv, &size, state.summary, state.stalled)
 
 		conv.maybeWarnWrapUp(req, clock, turn, budget, &wrapUpWarned)
 
@@ -581,6 +584,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 		}
 
 		req.Contents = append(req.Contents, resp.Content)
+		size.observe(resp, len(req.Contents))
 
 		calls, text := collectParts(resp.Content)
 		conv.env.transcript.text(text)

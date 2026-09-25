@@ -309,7 +309,7 @@ func TestMaybeCompactNoOpUnderBudget(t *testing.T) {
 	conv := agentConversation{messages: []string{"short prompt"}, compactAfterTokens: 1000}
 	fake := &fakeLLM{} // no responses configured -- a call here fails the test via "no more responses"
 
-	gotSummary, gotStalled := maybeCompact(context.Background(), fake, req, conv, "", false)
+	gotSummary, gotStalled := maybeCompact(context.Background(), fake, req, conv, &reportedSize{}, "", false)
 
 	if gotSummary != "" || gotStalled {
 		t.Errorf("maybeCompact = (%q, %v), want (\"\", false) when under budget", gotSummary, gotStalled)
@@ -334,7 +334,7 @@ func TestMaybeCompactAlreadyStalledIsANoOp(t *testing.T) {
 	conv := agentConversation{compactAfterTokens: 10}
 	fake := &fakeLLM{}
 
-	gotSummary, gotStalled := maybeCompact(context.Background(), fake, req, conv, "carried summary", true)
+	gotSummary, gotStalled := maybeCompact(context.Background(), fake, req, conv, &reportedSize{}, "carried summary", true)
 
 	if gotSummary != "carried summary" || !gotStalled {
 		t.Errorf("maybeCompact = (%q, %v), want the summary/stalled passed in returned unchanged", gotSummary, gotStalled)
@@ -356,7 +356,7 @@ func TestMaybeCompactSkipsWhenNothingOldEnough(t *testing.T) {
 	conv := agentConversation{compactAfterTokens: 10}
 	fake := &fakeLLM{}
 
-	gotSummary, gotStalled := maybeCompact(context.Background(), fake, req, conv, "", false)
+	gotSummary, gotStalled := maybeCompact(context.Background(), fake, req, conv, &reportedSize{}, "", false)
 
 	if gotSummary != "" || gotStalled {
 		t.Errorf("maybeCompact = (%q, %v), want (\"\", false) -- nothing old enough yet, not a permanent stall", gotSummary, gotStalled)
@@ -379,7 +379,7 @@ func TestMaybeCompactFiresAndReplacesContents(t *testing.T) {
 	conv := agentConversation{messages: []string{"the original request"}, compactAfterTokens: 150}
 	fake := &fakeLLM{responses: []*model.LLMResponse{textResponse("Summary: discussed a and b.")}}
 
-	gotSummary, gotStalled := maybeCompact(context.Background(), fake, req, conv, "", false)
+	gotSummary, gotStalled := maybeCompact(context.Background(), fake, req, conv, &reportedSize{}, "", false)
 
 	if gotSummary == "" {
 		t.Error("maybeCompact returned an empty summary after a successful pass")
@@ -421,7 +421,7 @@ func TestMaybeCompactStallsWhenRecentAloneExceedsBudget(t *testing.T) {
 	conv := agentConversation{messages: []string{"the original request"}, compactAfterTokens: 150}
 	fake := &fakeLLM{responses: []*model.LLMResponse{textResponse("Summary: discussed a and b.")}}
 
-	gotSummary, gotStalled := maybeCompact(context.Background(), fake, req, conv, "", false)
+	gotSummary, gotStalled := maybeCompact(context.Background(), fake, req, conv, &reportedSize{}, "", false)
 
 	if !gotStalled {
 		t.Fatal("maybeCompact did not stall despite the recent window alone exceeding the budget")
@@ -432,12 +432,69 @@ func TestMaybeCompactStallsWhenRecentAloneExceedsBudget(t *testing.T) {
 	}
 
 	// A second call, now stalled=true, must not make another LLM call.
-	_, stillStalled := maybeCompact(context.Background(), fake, req, conv, gotSummary, gotStalled)
+	_, stillStalled := maybeCompact(context.Background(), fake, req, conv, &reportedSize{}, gotSummary, gotStalled)
 	if !stillStalled {
 		t.Error("stalled did not stay true across a repeated call")
 	}
 
 	if len(fake.requests) != 1 {
 		t.Errorf("made %d LLM calls across two maybeCompact calls, want exactly 1", len(fake.requests))
+	}
+}
+
+func TestReportedSizeAddsTheEstimatedTailToTheReport(t *testing.T) {
+	t.Parallel()
+
+	contents := []*genai.Content{
+		textContent(genai.RoleUser, strings.Repeat("a", 4000)),
+		textContent(genai.RoleModel, "ok"),
+		textContent(genai.RoleUser, strings.Repeat("b", 400)),
+	}
+
+	var size reportedSize
+
+	if got, want := size.of(contents), estimateContentTokens(contents); got != want {
+		t.Errorf("unreported size = %d, want the estimate %d", got, want)
+	}
+
+	size.observe(&model.LLMResponse{UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+		PromptTokenCount: 2900, CandidatesTokenCount: 100, ThoughtsTokenCount: 5000, TotalTokenCount: 8000,
+	}}, 2)
+
+	if got := size.of(contents); got != 3000+100 {
+		t.Errorf("size = %d, want 3100 (prompt+candidates, not thoughts, plus the estimated tail)", got)
+	}
+
+	size.observe(&model.LLMResponse{}, 3)
+
+	if got := size.of(contents); got != 3100 {
+		t.Errorf("a response without usage moved the size to %d, want the previous report kept at 3100", got)
+	}
+
+	if got, want := size.of(contents[:1]), estimateContentTokens(contents[:1]); got != want {
+		t.Errorf("size of a history shorter than the report = %d, want the estimate %d", got, want)
+	}
+}
+
+func TestMaybeCompactUsesTheReportAndClearsIt(t *testing.T) {
+	t.Parallel()
+
+	req := &model.LLMRequest{Contents: []*genai.Content{
+		textContent(genai.RoleUser, "the original request"),
+		textContent(genai.RoleModel, strings.Repeat("a", 1200)),
+		textContent(genai.RoleUser, "go on"),
+	}}
+	conv := agentConversation{messages: []string{"the original request"}, compactAfterTokens: 1000}
+	fake := &fakeLLM{responses: []*model.LLMResponse{textResponse("Summary.")}}
+	size := reportedSize{tokens: 5000, upTo: 2}
+
+	maybeCompact(context.Background(), fake, req, conv, &size, "", false)
+
+	if len(fake.requests) != 1 {
+		t.Fatalf("made %d LLM calls, want 1: the reported 5000 is over a budget the estimate is not", len(fake.requests))
+	}
+
+	if size != (reportedSize{}) {
+		t.Errorf("size after compaction = %+v, want cleared: it described the history just replaced", size)
 	}
 }

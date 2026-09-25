@@ -6,7 +6,6 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 )
 
@@ -36,44 +35,20 @@ func (s *Store) ForgetChain(ctx context.Context, jobName, rootHash string) error
 	return nil
 }
 
-// hasSucceededBatchChunkSize bounds how many root hashes go into a single
-// IN (...) query, well under sqlite's compiled-in bind-variable limit
-// regardless of how many chains a version: every fanout produces.
-const hasSucceededBatchChunkSize = 500
-
 // HasSucceededBatch reports which of rootHashes have a prior succeeded run
-// recorded for jobName, in one (or a few chunked) round trip instead of one
-// query per hash.
+// recorded for jobName, in one round trip instead of one query per hash.
 func (s *Store) HasSucceededBatch(ctx context.Context, jobName string, rootHashes []string) (map[string]bool, error) {
-	result := make(map[string]bool, len(rootHashes))
+	found, err := collect(ctx, s.db, "job_runs",
+		`SELECT root_hash FROM job_runs
+		 WHERE pipeline_id = ? AND job_name = ? AND root_hash IN (SELECT value FROM json_each(?))`,
+		[]any{s.pipelineID, jobName, jsonList(rootHashes)}, scanString)
+	if err != nil {
+		return nil, err
+	}
 
-	for start := 0; start < len(rootHashes); start += hasSucceededBatchChunkSize {
-		end := min(start+hasSucceededBatchChunkSize, len(rootHashes))
-
-		chunk := rootHashes[start:end]
-
-		args := make([]any, 0, len(chunk)+2)
-		args = append(args, s.pipelineID, jobName)
-
-		for _, hash := range chunk {
-			args = append(args, hash)
-		}
-
-		found, err := collect(ctx, s.db, "job_runs",
-			`SELECT root_hash FROM job_runs WHERE pipeline_id = ? AND job_name = ? AND root_hash IN (`+
-				placeholders(len(chunk))+`)`,
-			args, func(rows *sql.Rows) (string, error) {
-				var hash string
-
-				return hash, rows.Scan(&hash)
-			})
-		if err != nil {
-			return nil, err
-		}
-
-		for _, hash := range found {
-			result[hash] = true
-		}
+	result := make(map[string]bool, len(found))
+	for _, hash := range found {
+		result[hash] = true
 	}
 
 	return result, nil
