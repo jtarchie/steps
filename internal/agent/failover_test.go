@@ -295,14 +295,15 @@ func TestSeedResumeStateCarriesTheWholeCheckpoint(t *testing.T) {
 
 	conv := agentConversation{ //nolint:exhaustruct // the checkpoint is what is under test
 		resume: &resumeCheckpoint{
-			satisfied:  map[string]bool{"post_review": true},
-			callCounts: map[string]int{"post_review": 1},
-			trajectory: []recordedToolCall{{name: "post_review"}},
-			verdict:    "approve",
-			note:       "looks right",
-			turnsSpent: 7,
-			summary:    "the story so far",
-			stalled:    true,
+			satisfied:   map[string]bool{"post_review": true},
+			callCounts:  map[string]int{"post_review": 1},
+			trajectory:  []recordedToolCall{{name: "post_review"}},
+			verdict:     "approve",
+			note:        "looks right",
+			turnsSpent:  7,
+			summary:     "the story so far",
+			stalled:     true,
+			compactions: 2,
 		},
 	}
 
@@ -330,6 +331,10 @@ func TestSeedResumeStateCarriesTheWholeCheckpoint(t *testing.T) {
 
 	if state.summary != "the story so far" || !state.stalled {
 		t.Errorf("compaction state = %q/%v, want it carried so the fallback does not summarize a summary", state.summary, state.stalled)
+	}
+
+	if state.compactions != 2 {
+		t.Errorf("compactions = %d, want 2 — the step's badge counts every source's passes", state.compactions)
 	}
 }
 

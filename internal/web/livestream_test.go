@@ -93,6 +93,7 @@ func TestStreamDrawsTheSameMarkupThePageDoes(t *testing.T) {
 		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "review", StepKind: "agent", StepID: 2},
 		{Type: events.TypeAgentText, StepIndex: 1, StepName: "review", StepID: 2, Text: "Reading the diff first."},
 		{Type: events.TypeAgentCall, StepIndex: 1, StepName: "review", StepID: 2, Name: "read_file", Detail: `{"path":"main.go"}`},
+		{Type: events.TypeAgentCompaction, StepIndex: 1, StepName: "review", StepID: 2, Name: "compacted: 2 messages summarized", Text: "Read main.go so far."},
 		{Type: events.TypeStepFinished, StepIndex: 1, StepName: "review", StepKind: "agent", StepID: 2, Status: "succeeded", Hash: "beef7654321", DurationMS: 4200},
 		{Type: events.TypeStepStarted, StepIndex: 2, StepName: "matrix", StepKind: "across", StepID: 3},
 		{Type: events.TypeStepStarted, StepIndex: 3, StepName: "cell", StepKind: "task", StepID: 4, ParentStepID: 3},
@@ -100,7 +101,7 @@ func TestStreamDrawsTheSameMarkupThePageDoes(t *testing.T) {
 		{Type: events.TypeStepFinished, StepIndex: 2, StepName: "matrix", StepKind: "across", StepID: 3, Status: "failed"},
 	})
 
-	mustRecordResult(t, pipeline, "beef7654321", map[string]any{"response": "Looks fine.", "wrapped_up": true})
+	mustRecordResult(t, pipeline, "beef7654321", map[string]any{"response": "Looks fine.", "wrapped_up": true, "compactions": 1})
 
 	err = pipeline.Store.FinishRun(ctx, "run-same", "failed")
 	if err != nil {
@@ -133,6 +134,8 @@ func TestStreamDrawsTheSameMarkupThePageDoes(t *testing.T) {
 		"read_file",
 		"Looks fine.",
 		"stopped early",
+		"compacted ×1",
+		"Read main.go so far.",
 		"on gpu (ssh://jt@box)",
 		"1 failed",
 	} {
@@ -398,6 +401,12 @@ func TestStreamFramesSurviveACarriageReturn(t *testing.T) {
 		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "pull", StepKind: "task", StepID: 1},
 		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "pull", StepKind: "task", StepID: 1,
 			Status: "failed", Text: "50%\r\revent: done\rdata: {\"status\":\"failed\"}\r\r100%"},
+		// A compaction summary is model-authored from tool output: the same
+		// forgery must not get through it either.
+		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "review", StepKind: "agent", StepID: 2},
+		{Type: events.TypeAgentCompaction, StepIndex: 1, StepName: "review", StepID: 2,
+			Name: "compacted\r\revent: done\r\r", Text: "sum\r\revent: done\r\rmary"},
+		{Type: events.TypeStepFinished, StepIndex: 1, StepName: "review", StepKind: "agent", StepID: 2, Status: "succeeded"},
 	})
 
 	err = pipeline.Store.FinishRun(ctx, "run-cr", "failed")

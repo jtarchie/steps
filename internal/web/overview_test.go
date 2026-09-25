@@ -1545,3 +1545,82 @@ func pipelineRow(t *testing.T, page, slug string) string {
 
 	return rest[open : mark+shut]
 }
+
+// TestRunPageMarksACompactedStep: compaction changes what the model worked
+// from, so the step says it happened — and a step that never compacted says
+// nothing.
+func TestRunPageMarksACompactedStep(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	for _, run := range []struct {
+		id     string
+		result map[string]any
+	}{
+		{id: "run-compacted", result: map[string]any{"response": "ok", "compactions": 2, "compaction_stalled": true}},
+		{id: "run-plain", result: map[string]any{"response": "ok"}},
+	} {
+		err := pipeline.Store.StartRun(ctx, run.id, "build", t.TempDir(), "")
+		if err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+
+		appendEvents(t, pipeline.Store, run.id, []store.RunEventRow{
+			{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1},
+			{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1, Status: "succeeded", Hash: run.id + "-hash"},
+		})
+
+		mustRecordResult(t, pipeline, run.id+"-hash", run.result)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-compacted")
+	for _, want := range []string{"compacted ×2", "compaction stalled"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the run page does not say %q: %s", want, body)
+		}
+	}
+
+	_, body = get(t, server, "/p/demo/runs/run-plain")
+	for _, unwanted := range []string{"compacted ×", "compaction stalled"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("a step that never compacted says %q", unwanted)
+		}
+	}
+}
+
+// TestLiveStreamCarriesCompacted: what the page draws for a finished step,
+// the stream draws too.
+func TestLiveStreamCarriesCompacted(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-live-compact", "build", "", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-live-compact", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1},
+		{Type: events.TypeAgentCompaction, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1,
+			Name: "compacted: 4 messages summarized", Text: "SUMMARY-MARKER"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1, Status: "succeeded", Hash: "live-compact-hash"},
+	})
+
+	mustRecordResult(t, pipeline, "live-compact-hash", map[string]any{"response": "ok", "compactions": 1})
+
+	err = pipeline.Store.FinishRun(ctx, "run-live-compact", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	stream := sseHTML(streamOf(t, server, "/p/demo/runs/run-live-compact/events"))
+	for _, want := range []string{"compacted ×1", `class="turn compaction`, "SUMMARY-MARKER"} {
+		if !strings.Contains(stream, want) {
+			t.Errorf("the stream does not carry %q: %q", want, stream)
+		}
+	}
+}

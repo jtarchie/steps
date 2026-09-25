@@ -949,6 +949,92 @@ func TestRunAgentConversationCompactsWhenOverBudget(t *testing.T) {
 	if hasFunctionCallWithArgContaining(finalReq.Contents, "command", "xxxx") {
 		t.Error("the post-compaction request still contains the original padded tool call -- compaction did not shrink it")
 	}
+
+	record := agentResultRecord(res)
+	if record["compactions"] != 1 {
+		t.Errorf("recorded compactions = %v, want 1", record["compactions"])
+	}
+
+	if _, ok := record["compaction_stalled"]; ok {
+		t.Error("recorded compaction_stalled for a pass that did not stall")
+	}
+}
+
+// TestAgentResultRecordOmitsCompactionWhenNone is the byte-identity promise:
+// a step that never compacts records exactly what it always did.
+func TestAgentResultRecordOmitsCompactionWhenNone(t *testing.T) {
+	t.Parallel()
+
+	record := agentResultRecord(conversationResult{text: "done", turns: 1})
+
+	for _, key := range []string{"compactions", "compaction_stalled"} {
+		if _, ok := record[key]; ok {
+			t.Errorf("record carries %q for a step that never compacted", key)
+		}
+	}
+
+	record = agentResultRecord(conversationResult{compactions: 2, compactionStalled: true})
+	if record["compactions"] != 2 || record["compaction_stalled"] != true {
+		t.Errorf("record = %v, want compactions 2 and compaction_stalled", record)
+	}
+}
+
+// TestRunAgentConversationStopsWhenTheSummaryCrossesABudget: a summary always
+// has another request behind it, so crossing either ceiling stops the step
+// as an errored (not failed) budget breach, with nothing requested after it.
+func TestRunAgentConversationStopsWhenTheSummaryCrossesABudget(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		budget int
+		job    int
+	}{
+		{name: "agent ceiling", budget: 500},
+		{name: "job ceiling", job: 500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			turn := paddedShellCall("call1", 4000)
+			turn.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{TotalTokenCount: 10}
+			summary := textResponse("Summary.")
+			summary.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{TotalTokenCount: 1000}
+
+			fake := &fakeLLM{responses: []*model.LLMResponse{turn, summary, textResponse("done")}}
+
+			conv := newTestConversation(t, "read some things", t.TempDir())
+			conv.compactAfterTokens = 500
+			conv.usage = &stepUsage{name: "writer", budget: tc.budget}
+
+			ctx := context.Background()
+			if tc.job > 0 {
+				ctx = WithRunUsage(ctx, NewRunUsage(tc.job))
+			}
+
+			res, err := runAgentConversation(ctx, fake, conv)
+			if err == nil || !strings.Contains(err.Error(), "budget exceeded") {
+				t.Fatalf("err = %v, want a budget breach", err)
+			}
+
+			var failure *outcome.Failure
+			if errors.As(err, &failure) {
+				t.Error("a budget breach was marked failed; it is an operational limit and classifies as errored")
+			}
+
+			if len(fake.requests) != 2 {
+				t.Errorf("made %d requests, want 2 — nothing after the summary that crossed the budget", len(fake.requests))
+			}
+
+			if res.compactions != 0 {
+				t.Errorf("compactions = %d, want 0 — the breached summary was never applied", res.compactions)
+			}
+
+			if spent := conv.usage.snapshot().Total; spent != 1010 {
+				t.Errorf("usage = %d, want 1010", spent)
+			}
+		})
+	}
 }
 
 // TestRunAgentConversationCompactionPreservesToolPairBoundary drives three

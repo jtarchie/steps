@@ -31,7 +31,7 @@ const maxRecordedResultBytes = 16_384
 // it lives in its own node_transcripts row precisely so nodes.result stays
 // small for the readers that load it on every run.
 type transcriptEvent struct {
-	Type    string            `json:"type"` // "system" | "user" | "text" | "call" | "result" | "subagent"
+	Type    string            `json:"type"` // "system" | "user" | "text" | "call" | "result" | "subagent" | "compaction"
 	Text    string            `json:"text,omitempty"`
 	Name    string            `json:"name,omitempty"`
 	Args    map[string]any    `json:"args,omitempty"`
@@ -185,6 +185,21 @@ func (r *transcriptRecorder) user(text string) {
 
 	r.record(transcriptEvent{Type: "user", Text: text})
 	r.publish(events.TypeAgentUser, text, "", "")
+}
+
+// compaction records the point older turns were replaced by summary. Its own
+// type rather than a user event, so a reader draws a boundary instead of
+// something somebody said — and from here on the summary is what the model
+// had, so the transcript must carry it.
+func (r *transcriptRecorder) compaction(label, summary string) {
+	if r == nil {
+		return
+	}
+
+	summary = truncateToolOutputLimit(summary, maxRecordedResultBytes)
+
+	r.record(transcriptEvent{Type: "compaction", Name: label, Text: summary})
+	r.publish(events.TypeAgentCompaction, summary, label, "")
 }
 
 // pendingIndex reports how many events are recorded so far — for a caller

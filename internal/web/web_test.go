@@ -1443,6 +1443,10 @@ func TestRunAndNodePagesDrawTheSameConversation(t *testing.T) {
 	systemText := "resources:\n  - name: repo\n    type: git\n"
 	userText := "Review this diff for bugs."
 	modelText := "## Verdict\n\nLooks fine."
+	// Model-authored and derived from tool output, so it is rendered as
+	// untrusted prose on both pages: inert however hostile it is.
+	summaryText := "SUMMARY-MARKER <script>alert(1)</script> [x](javascript:alert(1)) ![](http://beacon.example/p.gif)"
+	compactLabel := "compacted: 3 older messages summarized, last 2 kept verbatim"
 
 	err := pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws", "")
 	if err != nil {
@@ -1454,6 +1458,7 @@ func TestRunAndNodePagesDrawTheSameConversation(t *testing.T) {
 		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent"},
 		{Type: events.TypeAgentSystem, StepIndex: 0, StepName: "review", Text: systemText},
 		{Type: events.TypeAgentUser, StepIndex: 0, StepName: "review", Text: userText},
+		{Type: events.TypeAgentCompaction, StepIndex: 0, StepName: "review", Name: compactLabel, Text: summaryText},
 		{Type: events.TypeAgentText, StepIndex: 0, StepName: "review", Text: modelText},
 		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "review", StepKind: "agent", Status: "succeeded", Hash: "beef333", DurationMS: 100},
 	})
@@ -1479,6 +1484,7 @@ func TestRunAndNodePagesDrawTheSameConversation(t *testing.T) {
 	transcript, err := json.Marshal([]map[string]string{
 		{"type": "system", "text": systemText},
 		{"type": "user", "text": userText},
+		{"type": "compaction", "name": compactLabel, "text": summaryText},
 		{"type": "text", "text": modelText},
 	})
 	if err != nil {
@@ -1493,12 +1499,33 @@ func TestRunAndNodePagesDrawTheSameConversation(t *testing.T) {
 	_, runBody := get(t, server, "/p/demo/runs/run-1")
 	_, nodeBody := get(t, server, "/p/demo/nodes/"+record.Hash)
 
-	for _, class := range []string{"turn system", "turn user", "turn model"} {
+	for _, class := range []string{"turn system", "turn user", "turn compaction", "turn model"} {
 		runTurn := normalizeMarkup(extractDiv(t, runBody, class))
 		nodeTurn := normalizeMarkup(extractDiv(t, nodeBody, class))
 
 		if runTurn != nodeTurn {
 			t.Errorf("%s turn drifted between pages:\n run:  %s\n node: %s", class, runTurn, nodeTurn)
+		}
+	}
+
+	assertCompactionMarker(t, compactLabel, runBody, nodeBody)
+}
+
+// assertCompactionMarker holds each page's compaction marker to carrying its
+// label over an expandable summary, drawn inert however hostile it is.
+func assertCompactionMarker(t *testing.T, label string, bodies ...string) {
+	t.Helper()
+
+	for _, body := range bodies {
+		compaction := extractDiv(t, body, "turn compaction")
+		if !strings.Contains(compaction, "<details><summary>"+label+"</summary>") || !strings.Contains(compaction, "SUMMARY-MARKER") {
+			t.Errorf("the compaction marker does not carry its label and an expandable summary: %s", compaction)
+		}
+
+		for _, live := range []string{"<script>alert", `href="javascript:`, `src="http://beacon`} {
+			if strings.Contains(body, live) {
+				t.Errorf("a hostile compaction summary rendered live markup %q", live)
+			}
 		}
 	}
 }

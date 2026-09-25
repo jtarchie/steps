@@ -395,6 +395,28 @@ func (s Step) WrappedUp() bool {
 	return wrapped
 }
 
+// Compactions is how many times the step's conversation had its older turns
+// summarized away, 0 when it never did. A result decoded from the store
+// carries JSON's float64; one built in process carries an int.
+func (s Step) Compactions() int {
+	switch n := s.Result["compactions"].(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	default:
+		return 0
+	}
+}
+
+// CompactionStalled reports a conversation whose recent turns alone
+// outgrew the compaction budget, so compaction gave up for the rest of it.
+func (s Step) CompactionStalled() bool {
+	stalled, _ := s.Result["compaction_stalled"].(bool)
+
+	return stalled
+}
+
 // Response pulls the agent's final answer.
 func (s Step) Response() string { return s.resultString("response") }
 
@@ -463,6 +485,10 @@ func (t Turn) Nested() bool { return t.Depth > 0 }
 func (t Turn) IsMessage() bool {
 	return t.Type == events.TypeAgentSystem || t.Type == events.TypeAgentUser
 }
+
+// IsCompaction reports the point older turns were replaced by a summary —
+// drawn as a boundary, since from there on the summary is what the model had.
+func (t Turn) IsCompaction() bool { return t.Type == events.TypeAgentCompaction }
 
 // IsModelText reports the model's own running commentary or final answer.
 func (t Turn) IsModelText() bool { return t.Type == events.TypeAgentText }
@@ -656,7 +682,8 @@ func hangTurn(view *Transcript, index map[string]int, row store.RunEventRow) (in
 func isAgentTraffic(eventType string) bool {
 	switch eventType {
 	case events.TypeAgentSystem, events.TypeAgentUser,
-		events.TypeAgentText, events.TypeAgentCall, events.TypeAgentResult, events.TypeAgentSubagent:
+		events.TypeAgentText, events.TypeAgentCall, events.TypeAgentResult, events.TypeAgentSubagent,
+		events.TypeAgentCompaction:
 		return true
 	default:
 		return false

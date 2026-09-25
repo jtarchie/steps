@@ -427,6 +427,16 @@ func agentResultRecord(res conversationResult) map[string]any {
 		result["wrapped_up"] = true
 	}
 
+	// Written only when set, like wrapped_up, so a step that never compacts
+	// records the bytes it always did.
+	if res.compactions > 0 {
+		result["compactions"] = res.compactions
+	}
+
+	if res.compactionStalled {
+		result["compaction_stalled"] = true
+	}
+
 	if res.model != "" {
 		// Recorded only when a fallback served the run: a run's output has to
 		// carry which model produced it, or an outage-driven quality dip is
