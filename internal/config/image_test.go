@@ -197,3 +197,46 @@ func TestImagesSkipsAResourceTypeOnlyPlacedResourcesUse(t *testing.T) {
 		t.Errorf("Images() = %v, want the type's image, pulled for the un-placed resource", got)
 	}
 }
+
+// TestImagesSkipsATaskEntryAJobTagPlaces: a job's tags: place its steps as
+// surely as their own, so a tasks: entry only such steps use is never pulled
+// here — and one also used by an untagged job still is.
+func TestImagesSkipsATaskEntryAJobTagPlaces(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		other string
+		want  string
+	}{
+		{"placed only", "", ""},
+		{"also local", `
+- name: here
+  plan:
+  - task: build
+`, "alpine:3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := LoadConfig(writeConfig(t, `
+tasks:
+- name: build
+  image: alpine:3
+  run: "true"
+jobs:
+- name: there
+  tags: [box]
+  plan:
+  - task: build
+`+tc.other))
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+
+			if got := strings.Join(cfg.Images(), ","); got != tc.want {
+				t.Errorf("Images() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

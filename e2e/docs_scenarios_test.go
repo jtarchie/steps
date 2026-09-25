@@ -83,6 +83,9 @@ var docScenarios = map[string]docScenario{
 	"infra-resource-worker": {
 		workers: map[string]string{"vpc": "local:", "edge": "local:"},
 	},
+	"infra-job-tags": {
+		workers: map[string]string{"gpu": "local:", "big-disk": "local:"},
+	},
 
 	// The full worked pipeline (complete.md): read, write the report, approve
 	// — which routes past escalate to the put.
