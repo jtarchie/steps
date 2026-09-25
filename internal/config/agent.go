@@ -100,7 +100,7 @@ type Agent struct {
 	// default; 0 is a load error, not "unlimited" — see dials.go. Never
 	// hashed.
 	Attempts *int `yaml:"attempts,omitempty"`
-	// CompactAfterTokens caps how large a conversation's estimated token
+	// CompactAfterTokens caps how large a conversation's token
 	// count grows before older turns are summarized away and replaced by a
 	// running summary (see internal/agent/compaction.go and docs/agents.md's
 	// "Compacting long conversations" section). A pointer, not a plain int,

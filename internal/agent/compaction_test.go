@@ -318,7 +318,7 @@ func TestMaybeCompactNoOpUnderBudget(t *testing.T) {
 	fake := &fakeLLM{} // no responses configured -- a call here fails the test via "no more responses"
 	state := &resumeCheckpoint{}
 
-	err := maybeCompact(context.Background(), fake, req, conv, state)
+	err := maybeCompact(context.Background(), fake, req, conv, &reportedSize{}, state)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +347,7 @@ func TestMaybeCompactAlreadyStalledIsANoOp(t *testing.T) {
 	fake := &fakeLLM{}
 	state := &resumeCheckpoint{summary: "carried summary", stalled: true}
 
-	err := maybeCompact(context.Background(), fake, req, conv, state)
+	err := maybeCompact(context.Background(), fake, req, conv, &reportedSize{}, state)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func TestMaybeCompactSkipsWhenNothingOldEnough(t *testing.T) {
 	fake := &fakeLLM{}
 	state := &resumeCheckpoint{}
 
-	err := maybeCompact(context.Background(), fake, req, conv, state)
+	err := maybeCompact(context.Background(), fake, req, conv, &reportedSize{}, state)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +406,7 @@ func TestMaybeCompactFiresAndReplacesContents(t *testing.T) {
 	fake := &fakeLLM{responses: []*model.LLMResponse{textResponse("Summary: discussed a and b.")}}
 	state := &resumeCheckpoint{}
 
-	err := maybeCompact(context.Background(), fake, req, conv, state)
+	err := maybeCompact(context.Background(), fake, req, conv, &reportedSize{}, state)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +446,7 @@ func TestMaybeCompactMarksTheTranscript(t *testing.T) {
 	conv.env.transcript = rec
 	fake := &fakeLLM{responses: []*model.LLMResponse{textResponse("Summary: discussed a and b.")}}
 
-	err := maybeCompact(context.Background(), fake, compactableRequest(), conv, &resumeCheckpoint{})
+	err := maybeCompact(context.Background(), fake, compactableRequest(), conv, &reportedSize{}, &resumeCheckpoint{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -497,7 +497,7 @@ func TestMaybeCompactCountsTheSummaryRequest(t *testing.T) {
 	conv := agentConversation{messages: []string{"the original request"}, compactAfterTokens: 150, usage: usage}
 	fake := &fakeLLM{responses: []*model.LLMResponse{summary}}
 
-	err := maybeCompact(context.Background(), fake, compactableRequest(), conv, &resumeCheckpoint{})
+	err := maybeCompact(context.Background(), fake, compactableRequest(), conv, &reportedSize{}, &resumeCheckpoint{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -535,7 +535,7 @@ func TestMaybeCompactStopsWhenTheSummaryCrossesTheBudget(t *testing.T) {
 	req := compactableRequest()
 	state := &resumeCheckpoint{}
 
-	err := maybeCompact(context.Background(), fake, req, conv, state)
+	err := maybeCompact(context.Background(), fake, req, conv, &reportedSize{}, state)
 	if err == nil || !strings.Contains(err.Error(), "budget exceeded") {
 		t.Fatalf("err = %v, want a budget breach", err)
 	}
@@ -565,7 +565,7 @@ func TestMaybeCompactTransportErrorCountsNothing(t *testing.T) {
 	req := compactableRequest()
 	state := &resumeCheckpoint{}
 
-	err := maybeCompact(context.Background(), fake, req, conv, state)
+	err := maybeCompact(context.Background(), fake, req, conv, &reportedSize{}, state)
 	if err != nil {
 		t.Fatalf("err = %v, want a failed summary passed through", err)
 	}
@@ -617,7 +617,7 @@ func TestMaybeCompactStallsWhenRecentAloneExceedsBudget(t *testing.T) {
 
 	ctx := events.WithOutput(context.Background(), events.Output{Stdout: &out})
 
-	err := maybeCompact(ctx, fake, req, conv, state)
+	err := maybeCompact(ctx, fake, req, conv, &reportedSize{}, state)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -631,7 +631,7 @@ func TestMaybeCompactStallsWhenRecentAloneExceedsBudget(t *testing.T) {
 	}
 
 	// A second call, now stalled=true, must not make another LLM call.
-	err = maybeCompact(ctx, fake, req, conv, state)
+	err = maybeCompact(ctx, fake, req, conv, &reportedSize{}, state)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,5 +646,65 @@ func TestMaybeCompactStallsWhenRecentAloneExceedsBudget(t *testing.T) {
 
 	if n := strings.Count(out.String(), "warning: compaction stalled"); n != 1 || !strings.Contains(out.String(), "compact_after_tokens") {
 		t.Errorf("notes = %q, want exactly one stall warning naming compact_after_tokens", out.String())
+	}
+}
+
+func TestReportedSizeAddsTheEstimatedTailToTheReport(t *testing.T) {
+	t.Parallel()
+
+	contents := []*genai.Content{
+		textContent(genai.RoleUser, strings.Repeat("a", 4000)),
+		textContent(genai.RoleModel, "ok"),
+		textContent(genai.RoleUser, strings.Repeat("b", 400)),
+	}
+
+	var size reportedSize
+
+	if got, want := size.of(contents), estimateContentTokens(contents); got != want {
+		t.Errorf("unreported size = %d, want the estimate %d", got, want)
+	}
+
+	size.observe(&model.LLMResponse{UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+		PromptTokenCount: 2900, CandidatesTokenCount: 100, ThoughtsTokenCount: 5000, TotalTokenCount: 8000,
+	}}, 2)
+
+	if got := size.of(contents); got != 3000+100 {
+		t.Errorf("size = %d, want 3100 (prompt+candidates, not thoughts, plus the estimated tail)", got)
+	}
+
+	size.observe(&model.LLMResponse{}, 3)
+
+	if got := size.of(contents); got != 3100 {
+		t.Errorf("a response without usage moved the size to %d, want the previous report kept at 3100", got)
+	}
+
+	if got, want := size.of(contents[:1]), estimateContentTokens(contents[:1]); got != want {
+		t.Errorf("size of a history shorter than the report = %d, want the estimate %d", got, want)
+	}
+}
+
+func TestMaybeCompactUsesTheReportAndClearsIt(t *testing.T) {
+	t.Parallel()
+
+	req := &model.LLMRequest{Contents: []*genai.Content{
+		textContent(genai.RoleUser, "the original request"),
+		textContent(genai.RoleModel, strings.Repeat("a", 1200)),
+		textContent(genai.RoleUser, "go on"),
+	}}
+	conv := agentConversation{messages: []string{"the original request"}, compactAfterTokens: 1000}
+	fake := &fakeLLM{responses: []*model.LLMResponse{textResponse("Summary.")}}
+	size := reportedSize{tokens: 5000, upTo: 2}
+
+	err := maybeCompact(context.Background(), fake, req, conv, &size, &resumeCheckpoint{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(fake.requests) != 1 {
+		t.Fatalf("made %d LLM calls, want 1: the reported 5000 is over a budget the estimate is not", len(fake.requests))
+	}
+
+	if size != (reportedSize{}) {
+		t.Errorf("size after compaction = %+v, want cleared: it described the history just replaced", size)
 	}
 }

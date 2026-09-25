@@ -61,7 +61,7 @@ Be specific. Don't write "continue with the task" — write exactly what should 
 Tone: write as if briefing a colleague taking over mid-conversation.`
 
 // maybeCompact is runAgentConversation's per-turn compaction check (see
-// conversation.go). It estimates req.Contents' size in tokens and, once that
+// conversation.go). It sizes req.Contents in tokens (reportedSize) and, once that
 // exceeds conv.compactAfterTokens, summarizes everything older than a recent
 // window (compactionRecentRatio% of the budget) via the agent's own model,
 // replacing the older turns with the summary. state.summary carries forward
@@ -96,9 +96,10 @@ Tone: write as if briefing a colleague taking over mid-conversation.`
 // rule that a tool failure is data the model reacts to, never a reason to
 // abort the attempt. It stays log-only because a failed pass is not stalled
 // and retries every turn, where a step note would repeat on each.
-// maybeCompact only ever reads/mutates req.Contents and state's compaction
-// fields; it never touches turn counting, trajectory, or verdict tracking.
-func maybeCompact(ctx context.Context, llm model.LLM, req *model.LLMRequest, conv agentConversation, state *resumeCheckpoint) error {
+// maybeCompact only ever reads/mutates req.Contents, size and state's
+// compaction fields; it never touches turn counting, trajectory, or verdict
+// tracking.
+func maybeCompact(ctx context.Context, llm model.LLM, req *model.LLMRequest, conv agentConversation, size *reportedSize, state *resumeCheckpoint) error {
 	// compactAfterTokens == 0 is compaction switched off outright (an explicit
 	// compact_after_tokens: 0 — resolution never produces it from an unset
 	// field). The guard lives here rather than at the call site so the turn
@@ -107,7 +108,7 @@ func maybeCompact(ctx context.Context, llm model.LLM, req *model.LLMRequest, con
 		return nil
 	}
 
-	if estimateContentTokens(req.Contents) <= conv.compactAfterTokens {
+	if size.of(req.Contents) <= conv.compactAfterTokens {
 		return nil
 	}
 
@@ -137,6 +138,8 @@ func maybeCompact(ctx context.Context, llm model.LLM, req *model.LLMRequest, con
 	}
 
 	replaceSummary(req, summarized, recentContents)
+	// The reported count described the history just replaced; until the next response reports again, the estimate is the only honest size.
+	*size = reportedSize{}
 	// The FIRST message, not whichever one is being answered: compaction
 	// summarizes the OLD turns and keeps the recent ones, so a later message is
 	// still verbatim in the history. The opening task is the one at risk of
@@ -537,8 +540,7 @@ func injectContinuation(req *model.LLMRequest, prompt string) {
 
 // estimatePartTokens returns a rough token count for a single Part, using
 // the same ~4-chars-per-token heuristic the rest of this feature is built
-// on — see maybeCompact's doc comment and docs/agents.md's compaction
-// section for why this is a local estimate, never real provider usage data.
+// on. It is the whole count only when the provider reports no usage; otherwise it covers what was appended since the last report (reportedSize).
 // Covers only the Part kinds steps' own conversation loop ever produces
 // (Text, FunctionCall, FunctionResponse); the adk-utils-go reference also
 // accounts for InlineData/ToolCall/ToolResponse/PartMetadata, none of which
@@ -571,12 +573,34 @@ func estimatePartTokens(part *genai.Part) int {
 	return total
 }
 
-// estimateContentTokens sums estimatePartTokens across contents. This is the
-// trigger check maybeCompact runs every turn; it deliberately counts
-// req.Contents only, not the system prompt or tool schemas also sent with
-// every request (see defaultCompactAfterTokens' doc comment in
-// internal/config/config.go for why the default budget itself is set well
-// under a typical context window to compensate).
+// reportedSize is what the provider last said the conversation cost: the prompt it read plus the completion now appended to it, covering req.Contents[:upTo]. It counts the system prompt and tool schemas with the provider's own tokenizer, which the len/4 estimate cannot; the estimate only covers what was appended since. Zero tokens means nothing was reported.
+type reportedSize struct {
+	tokens int
+	upTo   int
+}
+
+// observe keeps the previous report when a response carries none: its upTo still marks a prefix of the history, and the estimate covers the rest.
+func (r *reportedSize) observe(resp *model.LLMResponse, contents int) {
+	if resp == nil || resp.UsageMetadata == nil || resp.UsageMetadata.PromptTokenCount <= 0 {
+		return
+	}
+
+	// Candidates, not Total: Total includes thinking tokens, which are not resent.
+	*r = reportedSize{
+		tokens: int(resp.UsageMetadata.PromptTokenCount) + int(resp.UsageMetadata.CandidatesTokenCount),
+		upTo:   contents,
+	}
+}
+
+func (r *reportedSize) of(contents []*genai.Content) int {
+	if r.tokens <= 0 || r.upTo > len(contents) {
+		return estimateContentTokens(contents)
+	}
+
+	return r.tokens + estimateContentTokens(contents[r.upTo:])
+}
+
+// estimateContentTokens sums estimatePartTokens across contents. It sees req.Contents only, never the system prompt or tool schemas, which is why reportedSize prefers the provider's count when there is one.
 func estimateContentTokens(contents []*genai.Content) int {
 	total := 0
 

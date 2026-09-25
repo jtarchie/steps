@@ -269,6 +269,15 @@ var docScenarios = map[string]docScenario{
 		},
 	},
 
+	// A pinned MCP argument: the model tries project 999, the server gets
+	// 307 (docs_mcp_test.go's check), and the answer follows the result.
+	"mcp-pinned-args": {
+		fake: scripted(
+			callsTool("honeybadger__list_faults", map[string]any{"project_id": "999", "q": "timeout"}),
+			says("One open timeout fault in project 307."),
+		),
+	},
+
 	// required: enforced on the wire: the model first tries to stop, the
 	// loop forces post_review via tool_choice (the router calls it only when
 	// forced), and the answer comes after the tool result lands. repo is

@@ -873,7 +873,7 @@ func probeAgentServers(ctx context.Context, cfg *config.Config, ri config.Resolv
 			continue
 		}
 
-		key := spec.MCP + "|" + spec.MCPTool + "|" + strings.Join(spec.MCPTools, ",")
+		key := spec.MCP + "|" + spec.MCPTool + "|" + strings.Join(spec.MCPTools, ",") + "|" + pinsKey(spec)
 		if seen[key] {
 			continue
 		}
@@ -1061,7 +1061,7 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 
 	key := strings.Join(append(
 		[]string{"mcp", srv.Name, srv.Endpoint, srv.Command, srv.Cwd},
-		append(append([]string{}, srv.Args...), spec.MCPTool, strings.Join(spec.MCPTools, ","))...,
+		append(append([]string{}, srv.Args...), spec.MCPTool, strings.Join(spec.MCPTools, ","), pinsKey(spec))...,
 	), "|")
 	now := time.Now()
 
@@ -1111,12 +1111,31 @@ func probeServer(ctx context.Context, srv config.MCPServer, spec config.ToolSpec
 		return transient(fmt.Errorf("could not start: %w", err))
 	}
 
-	_, err = selectMCPTools(spec, tools)
+	selected, err := selectMCPTools(spec, tools)
 	if err != nil {
 		// selectMCPTools already names the missing tool and lists what the
 		// server does offer.
 		return err
 	}
 
-	return nil
+	// A pin that cannot bind is a config error, not a fact about this
+	// minute, so it stays unmarked: a watcher refuses rather than retries.
+	if spec.MCPTool != "" {
+		_, _, err = pinMCPArgs(spec, selected[0])
+	}
+
+	return err
+}
+
+// pinsKey folds a grant's args: pins into a probe key. The verdict on a pin
+// is per grant, so without it one agent's good pin vouched for another's bad
+// one on the same tool — the same hole the MCPTool comment in
+// probeServerCached describes.
+func pinsKey(spec config.ToolSpec) string {
+	pairs := make([]string, 0, len(spec.Args))
+	for _, key := range sortedKeys(spec.Args) {
+		pairs = append(pairs, key+"="+spec.Args[key])
+	}
+
+	return strings.Join(pairs, ",")
 }

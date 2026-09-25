@@ -227,39 +227,33 @@ func (s *Store) CompletedRunSteps(ctx context.Context, runID string) (map[int]st
 // ListRuns returns run invocations, newest first. An empty jobName covers
 // every job.
 func (s *Store) ListRuns(ctx context.Context, jobName string, limit int) ([]store.RunRow, error) {
+	filter, args := byJob(jobName, []any{s.pipelineID})
+
 	return collect(ctx, s.db, "runs", `
 		SELECT `+runColumns+`
 		FROM runs
-		WHERE pipeline_id = ? AND (? = '' OR job_name = ?)
+		WHERE pipeline_id = ?`+filter+`
 		ORDER BY started_at DESC, rowid DESC
 		LIMIT ?
-	`, []any{s.pipelineID, jobName, jobName, rowLimit(limit)}, scanRunRowFrom)
+	`, append(args, rowLimit(limit)), scanRunRowFrom)
 }
 
 // LatestRunByJob returns the most recent run for every job that has one,
 // keyed by job name — one query for a jobs board rather than one per job.
 func (s *Store) LatestRunByJob(ctx context.Context) (map[string]store.RunRow, error) {
+	// Ties broken by rowid, as ListRuns breaks them, so the jobs board and a job's history agree on which run is latest.
 	rows, err := collect(ctx, s.db, "latest runs", `
-		SELECT `+runColumnsR+`
-		FROM runs r
-		JOIN (SELECT job_name, MAX(started_at) AS latest FROM runs
-		      WHERE pipeline_id = ? GROUP BY job_name) m
-		  ON m.job_name = r.job_name AND m.latest = r.started_at
-		WHERE r.pipeline_id = ?
-	`, []any{s.pipelineID, s.pipelineID}, scanRunRowFrom)
+		SELECT `+runColumns+` FROM (
+		    SELECT *, ROW_NUMBER() OVER (PARTITION BY job_name ORDER BY started_at DESC, rowid DESC) AS recency
+		    FROM runs WHERE pipeline_id = ?
+		) WHERE recency = 1
+	`, []any{s.pipelineID}, scanRunRowFrom)
 	if err != nil {
 		return nil, err
 	}
 
-	latest := map[string]store.RunRow{}
-
+	latest := make(map[string]store.RunRow, len(rows))
 	for _, row := range rows {
-		// Two runs of one job can share a started_at second, so the join can
-		// yield both; keep whichever sorts later by id for a stable answer.
-		if prior, ok := latest[row.JobName]; ok && prior.ID > row.ID {
-			continue
-		}
-
 		latest[row.JobName] = row
 	}
 

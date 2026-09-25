@@ -578,8 +578,11 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	clock := wrapUpClock{has: hasTimeout, deadline: timeoutDeadline, atEntry: budgetAtEntry}
 	wrapUpWarned := false
 
+	// Not carried in resumeCheckpoint: a fallback source tokenizes differently, so it starts from the estimate until it reports for itself.
+	var size reportedSize
+
 	for ; budget == unlimitedTurns || turn < budget; turn++ {
-		resp, err := conv.nextResponse(ctx, llm, req, &state, func() {
+		resp, err := conv.nextResponse(ctx, llm, req, &size, &state, func() {
 			conv.maybeWarnWrapUp(req, clock, turn, budget, &wrapUpWarned)
 		})
 		if err != nil {
@@ -587,6 +590,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 		}
 
 		req.Contents = append(req.Contents, resp.Content)
+		size.observe(resp, len(req.Contents))
 
 		calls, text := collectParts(resp.Content)
 		conv.env.transcript.text(text)
@@ -1009,9 +1013,9 @@ func (conv agentConversation) generateWithinBudget(ctx context.Context, llm mode
 // budget; both errors end the attempt through the caller's result(), so the
 // transcript and checkpoint still travel with the failure.
 func (conv agentConversation) nextResponse(
-	ctx context.Context, llm model.LLM, req *model.LLMRequest, state *resumeCheckpoint, warn func(),
+	ctx context.Context, llm model.LLM, req *model.LLMRequest, size *reportedSize, state *resumeCheckpoint, warn func(),
 ) (*model.LLMResponse, error) {
-	err := maybeCompact(ctx, llm, req, conv, state)
+	err := maybeCompact(ctx, llm, req, conv, size, state)
 	if err != nil {
 		return nil, err
 	}

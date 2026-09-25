@@ -48,7 +48,7 @@ func (s *Store) RecordPlacement(ctx context.Context, placement store.Placement) 
 			bytes_received = excluded.bytes_received,
 			created_at = excluded.created_at`,
 		placement.RunID, placement.StepIndex, placement.StepName, placement.JobName,
-		placement.Slot, nullableHash(placement.NodeHash),
+		placement.Slot, nullable(placement.NodeHash),
 		placement.Tag, placement.Address, placement.InstanceID,
 		placement.GOOS, placement.GOARCH, placement.Workdir, placement.FSType, placement.FSFree,
 		placement.UID, placement.GID,
@@ -63,24 +63,11 @@ func (s *Store) RecordPlacement(ctx context.Context, placement store.Placement) 
 
 // RunPlacements returns where every placed step of one run ran, in plan order.
 func (s *Store) RunPlacements(ctx context.Context, runID string) ([]store.Placement, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return collect(ctx, s.db, "placements", `
 		SELECT `+placementColumns+`
 		FROM run_placements
 		WHERE run_id = ? AND pipeline_id = ?
-		ORDER BY step_index`, runID, s.pipelineID)
-	if err != nil {
-		return nil, fmt.Errorf("reading placements: %w", err)
-	}
-
-	defer func() { _ = rows.Close() }()
-
-	return collectPlacements(rows)
-}
-
-func collectPlacements(rows *sql.Rows) ([]store.Placement, error) {
-	var placements []store.Placement
-
-	for rows.Next() {
+		ORDER BY step_index`, []any{runID, s.pipelineID}, func(rows *sql.Rows) (store.Placement, error) {
 		var (
 			placement store.Placement
 			nodeHash  sql.NullString
@@ -93,19 +80,8 @@ func collectPlacements(rows *sql.Rows) ([]store.Placement, error) {
 			&placement.GOOS, &placement.GOARCH, &placement.Workdir, &placement.FSType, &placement.FSFree,
 			&placement.UID, &placement.GID,
 			&placement.Image, &placement.BytesSent, &placement.BytesReceived)
-		if err != nil {
-			return nil, fmt.Errorf("reading a placement: %w", err)
-		}
-
 		placement.NodeHash = nodeHash.String
 
-		placements = append(placements, placement)
-	}
-
-	err := rows.Err()
-	if err != nil {
-		return nil, fmt.Errorf("reading placements: %w", err)
-	}
-
-	return placements, nil
+		return placement, err //nolint:wrapcheck // collect wraps with the thing being read
+	})
 }

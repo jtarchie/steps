@@ -9,10 +9,10 @@ import (
 	"github.com/jtarchie/steps/internal/cli"
 )
 
-// compactionPipeline renders one agent whose first tool result (a ~2KB file)
+// compactedReviewPipeline renders one agent whose first tool result (a ~2KB file)
 // pushes the conversation past a tiny compact_after_tokens:, so the next turn
 // opens with a summary request.
-func compactionPipeline(t *testing.T, dir, endpoint, extra string) string {
+func compactedReviewPipeline(t *testing.T, dir, endpoint, extra string) string {
 	t.Helper()
 
 	return writePipeline(t, dir, fmt.Sprintf(`
@@ -59,7 +59,7 @@ func TestCompactionIsVisibleAndCounted(t *testing.T) {
 		says("Done.").spending(100),
 	)
 
-	path := compactionPipeline(t, dir, fake.URL, "")
+	path := compactedReviewPipeline(t, dir, fake.URL, "")
 
 	err := cli.Run([]string{"run", path, "--job", "review"})
 	if err != nil {
@@ -101,7 +101,7 @@ func TestCompactionSummaryCrossingTheBudgetStopsTheStep(t *testing.T) {
 		says("Done.").spending(100),
 	)
 
-	path := compactionPipeline(t, dir, fake.URL, "  budget:\n    tokens: 500")
+	path := compactedReviewPipeline(t, dir, fake.URL, "  budget:\n    tokens: 500")
 
 	err := cli.Run([]string{"run", path, "--job", "review"})
 	if err == nil || !strings.Contains(err.Error(), "budget exceeded") {

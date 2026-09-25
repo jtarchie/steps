@@ -353,36 +353,25 @@ func (s *Store) RecordRunInput(ctx context.Context, runID, resourceName, version
 // Joined to runs for the pipeline, which run_inputs has no column of its own
 // for — the same shape as CompletedRunSteps, and for the same reason.
 func (s *Store) RunInputs(ctx context.Context, runID string) (map[string]map[string]bool, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	pairs, err := collect(ctx, s.db, fmt.Sprintf("the inputs of run %q", runID), `
 		SELECT i.resource_name, i.version_json FROM run_inputs i
 		JOIN runs r ON r.id = i.run_id
 		WHERE i.run_id = ? AND r.pipeline_id = ?
-	`, runID, s.pipelineID)
+	`, []any{runID, s.pipelineID}, scanPair)
 	if err != nil {
-		return nil, fmt.Errorf("could not read the inputs of run %q: %w", runID, err)
+		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
 
 	inputs := map[string]map[string]bool{}
 
-	for rows.Next() {
-		var resourceName, versionJSON string
-
-		err = rows.Scan(&resourceName, &versionJSON)
-		if err != nil {
-			return nil, fmt.Errorf("could not read the inputs of run %q: %w", runID, err)
+	for _, pair := range pairs {
+		versions, ok := inputs[pair[0]]
+		if !ok {
+			versions = map[string]bool{}
+			inputs[pair[0]] = versions
 		}
 
-		if inputs[resourceName] == nil {
-			inputs[resourceName] = map[string]bool{}
-		}
-
-		inputs[resourceName][versionJSON] = true
-	}
-
-	err = rows.Err()
-	if err != nil {
-		return nil, fmt.Errorf("could not read the inputs of run %q: %w", runID, err)
+		versions[pair[1]] = true
 	}
 
 	return inputs, nil

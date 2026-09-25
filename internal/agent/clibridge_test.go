@@ -15,6 +15,8 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/genai"
+
+	"github.com/jtarchie/steps/internal/config"
 )
 
 // bridgeAuth attaches the bridge's bearer token to every request, standing in
@@ -480,5 +482,51 @@ func TestCLIBridgeCloseDropsAConnectionThatNeverSentARequest(t *testing.T) {
 	_, err = silent.Read(make([]byte, 1))
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Error("the connection outlived Close — a client holding it open keeps a bridge goroutine alive")
+	}
+}
+
+// TestCLIBridgeCarriesMCPPins proves a CLI agent gets a pinned MCP grant the
+// same way a hosted one does: the bridge re-exports the stripped schema, and a
+// call through it reaches the server with the pin merged over the model's
+// value — no bridge code of its own, which is what this holds it to.
+func TestCLIBridgeCarriesMCPPins(t *testing.T) {
+	t.Parallel()
+
+	srv := newCountingMCPServer(t)
+	cfg := &config.Config{MCPServers: []config.MCPServer{srv.server()}}
+
+	built, closer, err := buildAgentTools(t.Context(), cfg,
+		[]config.ToolSpec{{MCP: "test", MCPTool: "search_issues", Args: map[string]string{"query": "pinned"}}}, "")
+	if err != nil {
+		t.Fatalf("buildAgentTools: %v", err)
+	}
+	defer closeAll(closer)
+
+	bridge, err := newCLIBridge(t.Context(), bridgeConversation(built.decls.FunctionDeclarations, built.registry, nil), nil)
+	if err != nil {
+		t.Fatalf("newCLIBridge: %v", err)
+	}
+
+	t.Cleanup(func() { _ = bridge.Close(t.Context()) })
+
+	session := dialBridge(t, bridge)
+
+	listed, err := session.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	schema := mustMarshal(t, listed.Tools[0].InputSchema)
+	if strings.Contains(schema, "query") {
+		t.Errorf("bridged schema = %s, want the pinned query stripped", schema)
+	}
+
+	_, err = session.CallTool(t.Context(), &sdkmcp.CallToolParams{Name: "test__search_issues", Arguments: map[string]any{"query": "model"}})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	if calls := *srv.echoCalled; len(calls) != 1 || calls[0]["query"] != "pinned" {
+		t.Errorf("server received %v, want query=pinned", calls)
 	}
 }

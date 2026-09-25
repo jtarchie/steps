@@ -104,7 +104,7 @@ func TestMergePinnedArgs(t *testing.T) {
 
 		args := map[string]any{"a": "1"}
 
-		got := mergePinnedArgs(args, nil)
+		got := mergePinnedArgs[string](args, nil)
 		if len(got) != 1 || got["a"] != "1" {
 			t.Errorf("got %#v, want args unchanged", got)
 		}
