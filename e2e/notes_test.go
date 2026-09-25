@@ -168,3 +168,53 @@ jobs:
 		}
 	}
 }
+
+// TestAPutVersionIsSaidOnItsPutsRow: Concourse shows the version a put produced on the put step, and a put here has no implicit get to show it instead — so what out: answered is said on the put's own row, and so is its answering nothing.
+func TestAPutVersionIsSaidOnItsPutsRow(t *testing.T) {
+	path := writePipeline(t, t.TempDir(), `
+resource_types:
+- name: publishes
+  config:
+    check: "echo '[]'"
+    in: "true"
+    out: "echo '{\"ref\":\"xyz\"}'"
+- name: silent
+  config:
+    check: "echo '[]'"
+    in: "true"
+    out: "true"
+resources:
+- name: repo
+  type: publishes
+  source: {}
+- name: void
+  type: silent
+  source: {}
+jobs:
+- name: build
+  plan:
+  - put: repo
+  - put: void
+`)
+
+	mustRun(t, "run", path, "--job", "build")
+
+	puts := map[string]int64{}
+	noted := map[string]int64{}
+
+	for _, row := range latestRunEvents(t, path) {
+		if row.Type == events.TypeStepStarted && row.StepKind == "put" {
+			puts[row.StepName] = row.StepID
+		}
+
+		if row.Type == events.TypeStepNote {
+			noted[row.Text] = row.StepID
+		}
+	}
+
+	for text, name := range map[string]string{`put: repo (version: {"ref":"xyz"})`: "repo", "put: void (no version)": "void"} {
+		if noted[text] == 0 || noted[text] != puts[name] {
+			t.Errorf("note %q is recorded against step %d, want put %s's row %d; notes: %v", text, noted[text], name, puts[name], noted)
+		}
+	}
+}

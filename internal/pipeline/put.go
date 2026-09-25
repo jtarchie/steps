@@ -147,5 +147,11 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 		return nil, fmt.Errorf("put %q: %w", step.Put, retryErr)
 	}
 
+	if result == nil {
+		notef(ctx, "put: %s (no version)", putLabel(step))
+	} else {
+		notef(ctx, "put: %s (version: %s)", putLabel(step), versionText(result))
+	}
+
 	return result, nil
 }
