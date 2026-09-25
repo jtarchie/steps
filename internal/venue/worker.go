@@ -14,6 +14,7 @@
 package venue
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net/url"
@@ -132,14 +133,25 @@ type Worker struct {
 // has nowhere else to go.
 func (w Worker) Acquirable() bool { return w.needsAcquisition() }
 
-// registryKey keys a parked instance by where it lives, since every mapping of it — a root, a shim or an ?idle= apart — is one machine, and anything else by its text, since a launch rung's machine is born per entry.
+// registryKey keys a machine on what decides it — a parked instance by where it lives, a launched one by the template, version, capacity and location it is born from — so every mapping of it, a root, a shim, an ?idle= or a parameter order apart, is one machine rather than one each.
+//
+// ponytail: an ambient region, project or zone and the same one spelled out are two keys, so two machines again; resolve the ambient location here, and carry it into each spelling's dial, if mappings ever mix the two.
 func (w Worker) registryKey() string {
-	if w.Rung != RungStopped {
+	location := string(w.Scheme) + "://" + string(w.Rung) + "/" + w.Region + "/" + w.Project + "/" + w.Zone + "/"
+
+	switch w.Rung {
+	case RungStopped:
+		return location + w.Instance
+	case RungLaunch:
+		// An absent capacity is on-demand, the same fleet request fleetRequest builds for od.
+		capacity := cmp.Or(w.Capacity, CapacityOnDemand)
+
+		return location + w.Template + "?version=" + w.Version + "&capacity=" + string(capacity)
+	case RungStatic:
+		return w.URL
+	default:
 		return w.URL
 	}
-
-	// ponytail: an ambient region, project or zone and the same one spelled out are two keys, so two owners again; resolve the ambient location here if mappings ever mix the two.
-	return string(w.Scheme) + "://stopped/" + w.Region + "/" + w.Project + "/" + w.Zone + "/" + w.Instance
 }
 
 // ErrWorker is a worker mapping that cannot be reached as written.
