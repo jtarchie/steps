@@ -207,11 +207,22 @@ func (s *Server) handleRun(c *echo.Context) error {
 	}
 
 	// A later pipeline set may have dropped the job; its trigger would be a 404.
-	_, jobErr := pipeline.Config().FindJob(view.Run.JobName)
+	cfg := pipeline.Config()
+	_, jobErr := cfg.FindJob(view.Run.JobName)
 
 	strip, err := s.runStrip(ctx, pipeline, view.Run.JobName)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
+	}
+
+	// The job's neighbours, from the configuration alone: the board's view
+	// of the same edges, without the board's two store reads.
+	var job jobView
+
+	for _, candidate := range buildJobViews(cfg, nil, nil) {
+		if candidate.Name == view.Run.JobName {
+			job = candidate
+		}
 	}
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
@@ -219,6 +230,7 @@ func (s *Server) handleRun(c *echo.Context) error {
 		"Nav":         s.nav(c),
 		"Run":         view,
 		"Strip":       strip,
+		"Job":         job,
 		"JobDeclared": jobErr == nil,
 		"Title":       view.Run.JobName + " #" + shortID(view.Run.ID),
 		"TitleMark":   statusMark(view.Run.Status),

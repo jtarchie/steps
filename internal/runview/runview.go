@@ -168,6 +168,33 @@ func (s Step) Failed() bool {
 // Container reports a step that ran other steps inside it.
 func (s Step) Container() bool { return len(s.Children) > 0 }
 
+// InnermostFailure is the step that actually broke: the first failed step,
+// in plan order, with no failed step inside it. Every failed ancestor is
+// red only because of it, which is why the page's f key and its header
+// both point here rather than at the outermost block. Nil on a run with no
+// failure.
+func (r Transcript) InnermostFailure() *Step {
+	var walk func(steps []*Step) *Step
+
+	walk = func(steps []*Step) *Step {
+		for _, step := range steps {
+			if !step.Failed() {
+				continue
+			}
+
+			if inner := walk(step.Children); inner != nil {
+				return inner
+			}
+
+			return step
+		}
+
+		return nil
+	}
+
+	return walk(r.Roots)
+}
+
 // Active reports a step still running, or holding something that is.
 //
 // It is what lights the rail down the branch the work is actually on, so a
