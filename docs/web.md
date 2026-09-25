@@ -181,6 +181,12 @@ the things a scrollback cannot give you:
   who has folded half the page still knows where to look. A failed branch is
   not marked the same way — the counts above already carry the failure up every
   ancestor.
+- **The job's other runs are one click away, on the page.** A strip under
+  the header lists this job's recent runs, newest first, as status-colored
+  chips — the one you are on is marked, a trigger that has not become a run
+  yet leads with a `queued` chip to its follow page, and `all runs` opens the
+  job's detail page. It refreshes on its own, so an older run of a job says
+  when a newer one starts.
 - **Keyboard**: <kbd>j</kbd>/<kbd>k</kbd> walk the tree, <kbd>e</kbd>/<kbd>c</kbd>
   expand and collapse everything, <kbd>enter</kbd> toggles, and <kbd>f</kbd>
   jumps to the innermost failure — the step that actually broke, rather than

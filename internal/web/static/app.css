@@ -294,6 +294,16 @@ td.faint, .faint { color: var(--faint); }
 .hash::before { content: "["; color: var(--faint); }
 .hash::after { content: "]"; color: var(--faint); }
 
+/* ---- run strip ----
+   This job's recent runs on the run page. Chips are anchors carrying the
+   status vocabulary above; the current one is the only bright thing, with
+   its id shown because a hover title is unreachable on touch. */
+.runstrip { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: -8px 0 18px; font-size: 12px; line-height: 24px; }
+.runstrip a { color: var(--dim); text-decoration: none; }
+.runstrip a:hover { color: var(--fg); text-decoration: underline; }
+.runstrip a[aria-current] { color: var(--fg); border-bottom: 1px solid var(--fg); }
+.runstrip .stripmore { color: var(--faint); margin-left: auto; }
+
 /* ---- controls ---- */
 .btn {
   font: inherit;

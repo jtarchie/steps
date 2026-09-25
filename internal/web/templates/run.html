@@ -27,6 +27,16 @@
   {{end}}
 </div>
 
+{{/* This job's recent runs, newest first, so hopping between them never
+     leaves the transcript. A live region of its own: the SSE stream draws
+     nothing outside the transcript, and its closing reload fires only when
+     THIS run ends, so a sibling run appearing needs the poll. */}}
+<nav class="runstrip" id="run-strip" aria-label="Runs of {{$run.Run.JobName}}" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#run-strip" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#statusline:outerMorph">
+  {{if .Strip.Queued}}<a class="st st-pending" id="strip-queued" href="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/follow?since={{.Strip.QueuedSince}}">queued</a>{{end}}
+  {{range .Strip.Runs}}<a class="st st-{{statusWord .Status}}" id="strip-{{short .ID}}" href="/p/{{$.Nav.Current}}/runs/{{.ID}}"{{if eq .ID $run.Run.ID}} aria-current="page"{{end}} title="[{{short .ID}}] · {{.Duration}}">{{if eq .ID $run.Run.ID}}<span class="hash">{{short .ID}}</span> {{end}}{{agoTag .StartedAt}}</a>
+  {{end}}<a class="stripmore" href="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/detail">all runs</a>
+</nav>
+
 {{if $run.JobError}}
 <div class="errblock"><span class="lbl">job error:</span> {{$run.JobError}}</div>
 {{/* A SIBLING of the block, not a child: .errblock is pre-wrap, so a nested

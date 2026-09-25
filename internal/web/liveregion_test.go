@@ -189,6 +189,25 @@ func TestNothingThatChangesLivesOutsideALiveRegion(t *testing.T) {
 			},
 		},
 		{
+			// The strip on a run: a sibling run started while a reader is on
+			// this one has to appear without a reload, or "is it done" from
+			// an older run of the job means reloading until it is.
+			name: "run strip",
+			path: "/p/demo/runs/run-0",
+			setup: func(t *testing.T) (*Server, *Pipeline) {
+				t.Helper()
+
+				server, pipeline := testPipeline(t)
+				startFinishedRun(t, pipeline, "run-0", "build", "succeeded")
+
+				return server, pipeline
+			},
+			change: func(t *testing.T, pipeline *Pipeline) {
+				t.Helper()
+				startRunningBuild(t, pipeline)
+			},
+		},
+		{
 			name:  "jobs board",
 			path:  "/p/demo",
 			setup: testPipeline,
@@ -451,7 +470,8 @@ func startRunningBuild(t *testing.T, pipeline *Pipeline) {
 func TestLiveRegionsAreDrivenByHtmx(t *testing.T) {
 	t.Parallel()
 
-	server, _ := testPipeline(t)
+	server, pipeline := testPipeline(t)
+	startFinishedRun(t, pipeline, "run-live", "build", "succeeded")
 
 	// `/` needs more than one pipeline to be the overview rather than a
 	// redirect into the only one.
@@ -467,6 +487,7 @@ func TestLiveRegionsAreDrivenByHtmx(t *testing.T) {
 		{server, "/p/demo"},
 		{server, "/p/demo/runs"},
 		{server, "/p/demo/jobs/build/detail"},
+		{server, "/p/demo/runs/run-live"},
 		{server, "/p/demo/resources"},
 		{server, "/p/demo/approvals"},
 		{server, "/p/demo/questions"},

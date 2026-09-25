@@ -80,28 +80,19 @@ func (s *Server) handleJobRedirect(c *echo.Context) error {
 
 	base := "/p/" + pipeline.Slug + "/jobs/" + name
 
-	runs, err := pipeline.Store.ListRuns(ctx, name, 1)
+	strip, err := s.runStrip(ctx, pipeline, name)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
-	if len(runs) > 0 {
+	if len(strip.Runs) > 0 {
 		//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
-		return c.Redirect(http.StatusFound, "/p/"+pipeline.Slug+"/runs/"+runs[0].ID)
+		return c.Redirect(http.StatusFound, "/p/"+pipeline.Slug+"/runs/"+strip.Runs[0].ID)
 	}
 
-	queue, err := pipeline.Store.ListTriggerQueue(ctx, 25)
-	if err != nil {
-		return fmt.Errorf("web: %w", err)
-	}
-
-	// A claimed row whose run has not started is "running" to the queue and
-	// still nothing to a reader, so it waits on the follow page too.
-	for _, row := range queue {
-		if row.JobName == name && (row.Status == "pending" || row.Status == "running") {
-			//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
-			return c.Redirect(http.StatusFound, fmt.Sprintf("%s/follow?since=%d", base, row.EnqueuedAt.UnixMilli()))
-		}
+	if strip.Queued {
+		//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
+		return c.Redirect(http.StatusFound, fmt.Sprintf("%s/follow?since=%d", base, strip.QueuedSince))
 	}
 
 	//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
@@ -218,10 +209,16 @@ func (s *Server) handleRun(c *echo.Context) error {
 	// A later pipeline set may have dropped the job; its trigger would be a 404.
 	_, jobErr := pipeline.Config().FindJob(view.Run.JobName)
 
+	strip, err := s.runStrip(ctx, pipeline, view.Run.JobName)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "run", map[string]any{
 		"Nav":         s.nav(c),
 		"Run":         view,
+		"Strip":       strip,
 		"JobDeclared": jobErr == nil,
 		"Title":       view.Run.JobName + " #" + shortID(view.Run.ID),
 		"TitleMark":   statusMark(view.Run.Status),
@@ -1016,4 +1013,54 @@ func (s *Server) handleHook(c *echo.Context) error {
 	target.Hooks(c.Response(), c.Request(), c.Param("resource"))
 
 	return nil
+}
+
+// stripLimit bounds the run strip. Enough to see a job's recent shape;
+// the detail page carries the history proper.
+const stripLimit = 20
+
+// stripChip is one run on the strip: the row, plus the duration as text
+// because a title attribute cannot hold the ticking <time> elapsedTag draws.
+type stripChip struct {
+	store.RunRow
+	Duration string
+}
+
+// runStripView is a job's recent runs, newest first, with the trigger that
+// has not become a run yet ahead of them — the newest thing about the job.
+type runStripView struct {
+	Runs        []stripChip
+	QueuedSince int64
+	Queued      bool
+}
+
+// runStrip reads what the strip shows. A claimed row whose run has not
+// started is "running" to the queue and still nothing to a reader, so it
+// counts as queued too — the follow page is what turns it into a run.
+func (s *Server) runStrip(ctx context.Context, pipeline *Pipeline, jobName string) (runStripView, error) {
+	runs, err := pipeline.Store.ListRuns(ctx, jobName, stripLimit)
+	if err != nil {
+		return runStripView{}, err //nolint:wrapcheck // the caller wraps with its own context
+	}
+
+	view := runStripView{Runs: make([]stripChip, 0, len(runs))}
+	for _, run := range runs {
+		view.Runs = append(view.Runs, stripChip{RunRow: run, Duration: formatDuration(run.Duration())})
+	}
+
+	queue, err := pipeline.Store.ListTriggerQueue(ctx, 25)
+	if err != nil {
+		return runStripView{}, err //nolint:wrapcheck // the caller wraps with its own context
+	}
+
+	for _, row := range queue {
+		if row.JobName == jobName && (row.Status == "pending" || row.Status == "running") {
+			view.Queued = true
+			view.QueuedSince = row.EnqueuedAt.UnixMilli()
+
+			break
+		}
+	}
+
+	return view, nil
 }
