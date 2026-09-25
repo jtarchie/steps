@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -136,4 +137,34 @@ func latestRunEvents(t *testing.T, path string) []store.RunEventRow {
 	}
 
 	return rows
+}
+
+// TestHowToResumeIsSaidToTheTerminalOnly: "resume with: steps run …" and "workspace kept at …" are directions for the shell that ran the job; the web page has Retry for the first and no filesystem for the second, and drew both as panels above the transcript.
+func TestHowToResumeIsSaidToTheTerminalOnly(t *testing.T) {
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: build
+  plan:
+  - task: fails
+    run: "exit 1"
+`)
+
+	out := captureStdout(t, func() {
+		err := cli.Run([]string{"run", path, "--job", "build"})
+		if err == nil {
+			t.Fatal("expected the run to fail")
+		}
+	})
+
+	for _, said := range []string{"resume with: steps run", "workspace kept at"} {
+		if !strings.Contains(out, said) {
+			t.Errorf("the terminal was not told %q:\n%s", said, out)
+		}
+
+		for _, row := range latestRunEvents(t, path) {
+			if strings.Contains(row.Text, said) {
+				t.Errorf("the run's record, which the web page draws, holds %q", said)
+			}
+		}
+	}
 }

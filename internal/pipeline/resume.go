@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -155,11 +156,17 @@ func ResumeJobName(ctx context.Context, st runLookup, runID string) (string, err
 // Both halves matter. Without the id there is nothing to resume; without the
 // directory an operator cannot see the work that survived — and the files a
 // step had just written when it failed are the most useful thing to look at.
+//
+// To the terminal and not the run's record: both are directions for the shell
+// that ran the job, and the web page — which draws the record — has Retry for
+// the first and no filesystem for the second.
 func reportResumable(ctx context.Context, runID string, bw workspace.BuildWorkspace) {
-	notef(ctx, "run: %s  (resume with: steps run <pipeline> --resume %s)", runID, runID)
+	out := events.Stdout(ctx)
+
+	_, _ = fmt.Fprintf(out, "run: %s  (resume with: steps run <pipeline> --resume %s)\n", runID, runID)
 
 	if rooted, ok := bw.(workspace.RootedBuild); ok {
-		notef(ctx, "run: %s  workspace kept at %s", runID, rooted.Root())
+		_, _ = fmt.Fprintf(out, "run: %s  workspace kept at %s\n", runID, rooted.Root())
 	}
 }
 
