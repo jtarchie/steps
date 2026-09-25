@@ -9,6 +9,7 @@
 #     source:
 #       uri: https://github.com/jtarchie/steps.git
 #       branch: main          # optional; omitted follows the remote's HEAD
+#       fetch: true           # optional; local uri only — refresh it first
 #
 # Requires the `git` binary. Set image: on your own copy of this type to run
 # it in a container instead.
@@ -30,8 +31,33 @@ config:
   # ls-remote is the cheapest possible "what is the head?" — no clone, no
   # working tree. An unknown branch prints nothing, which would otherwise be
   # an empty version list (read as "no versions yet"), so it fails loudly.
+  #
+  # fetch: names the refspec rather than trusting the clone's configured one:
+  # a --single-branch clone never updates refs/remotes/<r>/<b> otherwise, and
+  # the check would read that ref forever. The flags keep the fetch to that
+  # one ref (no FETCH_HEAD, tags or background gc in a developer's clone), and
+  # the prompt/ssh settings keep a poll with no terminal from hanging on one —
+  # the ssh ones only when the operator chose no ssh command of their own.
   check: |
     set -e
+    {{- if index .source "fetch" }}
+    uri={{ .source.uri | shellquote }}
+    branch={{ index .source "branch" | shellquote }}
+    remote=$(git -C "$uri" config --get "branch.$branch.remote" || echo origin)
+    if [ -z "${GIT_SSH_COMMAND:-}${GIT_SSH:-}$(git -C "$uri" config --get core.sshCommand || true)" ]; then
+      GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4'
+      export GIT_SSH_COMMAND
+    fi
+    GIT_TERMINAL_PROMPT=0 git -C "$uri" -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 \
+      fetch --quiet --no-tags --no-write-fetch-head --no-auto-gc \
+      -- "$remote" "+refs/heads/$branch:refs/remotes/$remote/$branch" || {
+      printf 'git: could not fetch %s from remote %s in %s\n' "$branch" "$remote" "$uri" >&2
+      exit 1
+    }
+    want="refs/remotes/$remote/$branch"
+    refs=$(git ls-remote "$uri" "$want")
+    ref=$(printf '%s\n' "$refs" | awk -v want="$want" '$2 == want { print $1; exit }')
+    {{- else }}
     refs=$(git ls-remote {{ .source.uri | shellquote }} {{ index .source "branch" | default "HEAD" | shellquote }})
     # ls-remote takes a PATTERN, not a name, and prints one line per match.
     # Against a local clone `HEAD` also matches refs/remotes/origin/HEAD and
@@ -43,6 +69,7 @@ config:
     ref=$(printf '%s\n' "$refs" | awk -v want={{ index .source "branch" | default "HEAD" | shellquote }} '
       $2 == want || $2 == "refs/heads/" want { print $1; exit }')
     [ -n "$ref" ] || ref=$(printf '%s\n' "$refs" | awk 'NR == 1 { print $1 }')
+    {{- end }}
     if [ -z "$ref" ]; then
       # shellquote here too, via printf's arguments rather than an echo of one
       # interpolated double-quoted string: unquoted, a branch: or uri:
