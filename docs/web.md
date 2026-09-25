@@ -459,7 +459,9 @@ steps web --max-concurrent 4   # up to four queued jobs at a time
 **There is no `--once`.** It was the cron form of a runner: load a file, poll
 once, exit, never bind. A process that never binds has nothing to be set into,
 and a server is its own scheduler — run it under systemd as a service rather
-than a timer, and let `--interval` be the schedule.
+than a timer, and let `--interval` be the schedule. A job that should run at a
+time of day gets a [`cron` resource](resources.md#the-built-in-cron-type); the
+interval is only how often that clock is read.
 
 - **One poller per pipeline.** Within one pipeline the poller is handed the
   store handle its drain already uses rather than opening a second one.

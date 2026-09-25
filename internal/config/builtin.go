@@ -179,6 +179,10 @@ func (c *Config) registerBuiltinResourceTypes() {
 		c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: WebhookType, Config: ResourceTypeConfig{Webhook: true}})
 	}
 
+	if c.findResourceTypeIndex(CronType) < 0 {
+		c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: CronType, Config: ResourceTypeConfig{Cron: true}})
+	}
+
 	builtinNames, err := ListBuiltinResourceTypeNames()
 	if err != nil {
 		slog.Warn("builtin.resource_types.list", "error", err)
@@ -206,7 +210,7 @@ func (c *Config) registerBuiltinResourceTypes() {
 	}
 }
 
-// WebhookType is the built-in type whose versions are deliveries; it is Go rather than YAML because it has no command to run.
+// WebhookType is the built-in type whose versions are deliveries; it is Go rather than YAML because it has no command to run. CronType (cron.go) is the other.
 const WebhookType = "webhook"
 
 // findResourceTypeIndex returns the index of the resource type with the given

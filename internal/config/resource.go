@@ -55,6 +55,8 @@ type ResourceTypeConfig struct {
 	Expr  *ExprResourceConfig `yaml:"expr,omitempty"`
 	// Webhook marks the built-in webhook type, which no YAML can declare: its versions arrive as deliveries rather than from a check.
 	Webhook bool `yaml:"-"`
+	// Cron marks the built-in cron type, which no YAML can declare either: its check reads a clock against an expression, and runs nothing.
+	Cron bool `yaml:"-"`
 }
 
 // ResourceBackend is which way a resource type implements its three lifecycle
@@ -78,6 +80,8 @@ const (
 	BackendExpr  ResourceBackend = "expr"
 	// BackendWebhook has no check and no out: each delivery the daemon receives IS a version, and in writes out what it carried.
 	BackendWebhook ResourceBackend = "webhook"
+	// BackendCron has a check that reads the clock and no out: a version is a moment its expression named.
+	BackendCron ResourceBackend = "cron"
 )
 
 // Backend reports how this resource type is implemented.
@@ -91,6 +95,8 @@ func (c ResourceTypeConfig) Backend() ResourceBackend {
 	switch {
 	case c.Webhook:
 		return BackendWebhook
+	case c.Cron:
+		return BackendCron
 	case c.MCP != nil:
 		return BackendMCP
 	case c.Expr != nil:
@@ -162,6 +168,8 @@ func validateResourcePut(label, put string, resourceType *ResourceType) error {
 		}
 	case BackendWebhook:
 		return fmt.Errorf("%s: put %q targets a webhook resource, which only receives: its versions are deliveries, and there is nothing to publish to", label, put)
+	case BackendCron:
+		return fmt.Errorf("%s: put %q targets a cron resource, which only tells time: there is nothing to publish to", label, put)
 	}
 
 	return nil
@@ -195,7 +203,7 @@ func validateResourceGet(label, get string, resourceType *ResourceType) error {
 		// which names the real problem. The mcp arm above cannot do that —
 		// there is no tool to call at all — which is why the rule exists for
 		// one backend and not the other.
-	case BackendWebhook:
+	case BackendWebhook, BackendCron:
 	}
 
 	return nil

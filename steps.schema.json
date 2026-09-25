@@ -281,6 +281,26 @@
         }
       }
     },
+    "cronSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expression"],
+      "properties": {
+        "expression": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A crontab: five fields (minute hour day-of-month month day-of-week), six with seconds in front, or a descriptor such as @hourly. A version is minted by the first poll after a slot passes."
+        },
+        "location": {
+          "type": "string",
+          "description": "The zone the expression is read in, an IANA name such as America/New_York; UTC when unset."
+        },
+        "fire_immediately": {
+          "type": "boolean",
+          "description": "The first-ever check mints a version at once, instead of only when a slot fell in the last hour."
+        }
+      }
+    },
     "webhookSource": {
       "type": "object",
       "additionalProperties": false,
@@ -345,7 +365,7 @@
         },
         "type": {
           "type": "string",
-          "description": "A resource_types: entry, or a built-in: `git`, or `webhook` (versions are deliveries to POST /p/<pipeline>/hooks/<resource>)."
+          "description": "A resource_types: entry, or a built-in: `git`, `cron` (versions are the slots of a crontab expression, as they pass), or `webhook` (versions are deliveries to POST /p/<pipeline>/hooks/<resource>)."
         },
         "source": {
           "type": "object",
@@ -373,6 +393,10 @@
         {
           "if": { "properties": { "type": { "const": "webhook" } }, "required": ["type"] },
           "then": { "properties": { "source": { "$ref": "#/$defs/webhookSource" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "cron" } }, "required": ["type"] },
+          "then": { "properties": { "source": { "$ref": "#/$defs/cronSource" } } }
         }
       ]
     },

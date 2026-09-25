@@ -158,8 +158,8 @@ func preflightResource(
 		}
 
 		return nil
-	case config.BackendWebhook:
-		_, err := Receiver(*resource)
+	case config.BackendWebhook, config.BackendCron:
+		err := compileBuiltin(resourceType.Config.Backend(), *resource)
 		if err != nil {
 			return []config.Problem{{Target: fmt.Sprintf("resource %q", name), Detail: err.Error()}}
 		}
@@ -192,6 +192,25 @@ func preflightResource(
 	}
 
 	return resourceStageProblems(cfg, job, name, mcp, resource.Source, tools)
+}
+
+// compileBuiltin is all preflight can prove for a type that runs inside this
+// process: that its source: parses. Neither makes a call, so neither is
+// transient.
+func compileBuiltin(backend config.ResourceBackend, resource config.Resource) error {
+	switch backend {
+	case config.BackendWebhook:
+		_, err := Receiver(resource)
+
+		return err
+	case config.BackendCron:
+		_, err := Cron(resource)
+
+		return err
+	case config.BackendMCP, config.BackendExpr, config.BackendShell:
+	}
+
+	return nil
 }
 
 // resourceStageProblems checks the resource's lifecycle stages against the

@@ -1882,8 +1882,8 @@ func (d *DB) UnmarshalText(text []byte) error {
 }
 
 // path is the sqlite file a DB names, or "" for the default.
-func (d DB) path() string {
-	path, _ := strings.CutPrefix(string(d), "sqlite://")
+func (d *DB) path() string {
+	path, _ := strings.CutPrefix(string(*d), "sqlite://")
 
 	return path
 }

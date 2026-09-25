@@ -76,6 +76,7 @@ func NoexecReasons() []string {
 		"credentials", // needs real credentials for a live third-party service
 		"docker",      // needs a docker daemon and a pullable image
 		"network",     // reaches a real host over the network
+		"schedule",    // fires on a slot of a clock that is not due while the test runs
 		"stdio-mcp",   // needs an MCP server binary on PATH
 	}
 }

@@ -11,8 +11,8 @@ import (
 )
 
 // ValidateExpressions type-checks every expr-backed resource type's
-// expressions, and compiles every webhook resource, without running any of
-// them.
+// expressions, and compiles every webhook and cron resource, without running
+// any of them.
 //
 // It is a pass-through to resource.CompileExprPrograms, and exists only
 // because of who may call whom: main wires up config/store/workspace and
@@ -27,5 +27,5 @@ import (
 // validate-time call; giving it up would cost the shape of the whole
 // dependency graph.
 func ValidateExpressions(cfg *config.Config) error {
-	return errors.Join(rsrc.CompileExprPrograms(cfg), rsrc.CompileWebhooks(cfg))
+	return errors.Join(rsrc.CompileExprPrograms(cfg), rsrc.CompileWebhooks(cfg), rsrc.CompileCrons(cfg))
 }

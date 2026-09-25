@@ -157,6 +157,7 @@ func schemaDefsByType() map[string]reflect.Type {
 		"workspace":          reflect.TypeOf(config.WorkspaceConfig{}),
 		"webhookSource":      reflect.TypeOf(config.WebhookSource{}),
 		"webhookSignature":   reflect.TypeOf(config.WebhookSignature{}),
+		"cronSource":         reflect.TypeOf(config.CronSource{}),
 	}
 }
 

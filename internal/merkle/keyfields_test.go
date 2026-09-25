@@ -198,7 +198,7 @@ func deepCopy[T any](t *testing.T, value T) T {
 const (
 	offTheStep   = "source: valid only on a job's or the pipeline's assert (requireExecutionOnly), never on the step this builder hashes"
 	notThisVerb  = "source: a template this verb never renders, so it cannot change what the step does"
-	derivedFlag  = "source: yaml:\"-\" — set by the loader for the built-in webhook type, which no pipeline can write"
+	derivedFlag  = "source: yaml:\"-\" — set by the loader for a built-in Go-backed type (webhook, cron), which no pipeline can write"
 	operational  = "source: the field's own doc says never hashed — a deadline, retry, budget or history-size knob is not part of what a step asks for"
 	secretNamed  = "source: AgentContentMap — nothing secret-adjacent belongs in hashed content"
 	loadedInto   = "source: resolved at load into a field that IS keyed (system_file: into system:, file: into every field it supplies, an agent's description onto the grant that names it) — a Config built by hand, as here, skips the loader"
@@ -242,7 +242,7 @@ func keyProbes() []keyProbe {
 		}}
 	}
 
-	resourceType := map[string]string{"Name": "source: config.ResourceType — a step is keyed by what the type DOES, so a rename re-runs nothing and two types doing the same thing share an entry", "Config.Check": notThisVerb, "Config.Webhook": derivedFlag}
+	resourceType := map[string]string{"Name": "source: config.ResourceType — a step is keyed by what the type DOES, so a rename re-runs nothing and two types doing the same thing share an entry", "Config.Check": notThisVerb, "Config.Webhook": derivedFlag, "Config.Cron": derivedFlag}
 
 	agentSilent := map[string]string{
 		"Attempts": operational, "Budget": operational, "DelegateBudgetPercent": operational, "Timeout": operational,

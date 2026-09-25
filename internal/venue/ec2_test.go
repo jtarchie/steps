@@ -106,7 +106,7 @@ func (f *fakeEC2) DescribeInstances(_ context.Context, in *ec2.DescribeInstances
 	// first describe, so skipping the wait is VISIBLE rather than merely
 	// unscripted.
 	if f.probes <= f.stoppingBefore {
-		return describeOne(ec2types.InstanceStateNameStopping)
+		return describeOne(ec2types.InstanceStateNameStopping), nil
 	}
 
 	// Before any acquisition action, this is a machine at rest with its park
@@ -115,10 +115,10 @@ func (f *fakeEC2) DescribeInstances(_ context.Context, in *ec2.DescribeInstances
 	// Per instance, so one test's three parked workers are three machines at rest rather than one that a single start woke.
 	if len(f.fleets) == 0 && !slices.ContainsFunc(in.InstanceIds, func(id string) bool { return slices.Contains(f.started, id) }) {
 		if f.alreadyRunning {
-			return describeOne(ec2types.InstanceStateNameRunning)
+			return describeOne(ec2types.InstanceStateNameRunning), nil
 		}
 
-		return describeOne(ec2types.InstanceStateNameStopped)
+		return describeOne(ec2types.InstanceStateNameStopped), nil
 	}
 
 	if f.describes <= f.notFoundBefore {
@@ -141,16 +141,16 @@ func (f *fakeEC2) DescribeInstances(_ context.Context, in *ec2.DescribeInstances
 		state = f.endState
 	}
 
-	return describeOne(state)
+	return describeOne(state), nil
 }
 
 // describeOne is a describe response naming one instance in one state.
-func describeOne(state ec2types.InstanceStateName) (*ec2.DescribeInstancesOutput, error) {
+func describeOne(state ec2types.InstanceStateName) *ec2.DescribeInstancesOutput {
 	return &ec2.DescribeInstancesOutput{
 		Reservations: []ec2types.Reservation{{
 			Instances: []ec2types.Instance{{State: &ec2types.InstanceState{Name: state}}},
 		}},
-	}, nil
+	}
 }
 
 func (f *fakeEC2) CreateFleet(_ context.Context, in *ec2.CreateFleetInput, _ ...func(*ec2.Options)) (*ec2.CreateFleetOutput, error) {

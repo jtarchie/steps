@@ -631,6 +631,7 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"WorkspaceConfig":  reflect.TypeOf(config.WorkspaceConfig{}),
 		"WebhookSource":    reflect.TypeOf(config.WebhookSource{}),
 		"WebhookSignature": reflect.TypeOf(config.WebhookSignature{}),
+		"CronSource":       reflect.TypeOf(config.CronSource{}),
 	}
 }
 
@@ -728,13 +729,15 @@ func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 
 	eachOf(doc, "resources", func(entry any) {
 		resource, _ := entry.(map[string]any)
-		if resource["type"] != config.WebhookType {
-			return
-		}
-
 		source, _ := resource["source"].(map[string]any)
-		record(used, "WebhookSource", source)
-		record(used, "WebhookSignature", source["signature"])
+
+		switch resource["type"] {
+		case config.WebhookType:
+			record(used, "WebhookSource", source)
+			record(used, "WebhookSignature", source["signature"])
+		case config.CronType:
+			record(used, "CronSource", source)
+		}
 	})
 
 	eachOf(doc, "jobs", func(entry any) {
