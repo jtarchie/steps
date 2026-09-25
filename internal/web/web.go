@@ -199,6 +199,8 @@ var ErrNoSuchPipeline = errors.New("no such pipeline")
 type Runner interface {
 	// Enqueue queues a person's trigger of a job, returning the queue row id.
 	Enqueue(ctx context.Context, pipeline *Pipeline, jobName, reason string, force bool) (int64, error)
+	// EnqueueRerun queues a retry of one build of a recorded run.
+	EnqueueRerun(ctx context.Context, pipeline *Pipeline, jobName, runID string, build int) error
 	// Abort cancels a run this process is executing, and reports false when it is not running here.
 	Abort(pipeline *Pipeline, runID string) bool
 	// AbortQueued drops a job's queued run before it starts, and reports false when nothing was queued.
@@ -356,6 +358,7 @@ func (s *Server) routes() error {
 	group.GET("/jobs/:job/latest-run", s.handleLatestRun)
 
 	group.POST("/jobs/:job/trigger", s.handleTrigger)
+	group.POST("/runs/:run/rerun", s.handleRerun)
 	group.POST("/approvals/:id", s.handleDecideApproval)
 	group.POST("/questions/:id", s.handleAnswerQuestion)
 	group.POST("/jobs/:job/release", s.handleRelease)
@@ -618,6 +621,7 @@ func (s *Server) navGathered(c *echo.Context) (navData, map[string][]attentionIt
 	nav.Current = current.Slug
 	nav.CurrentPath = current.Path()
 	nav.Anchored = true
+	nav.Paused = paused(ctx, current)
 	nav.Attention = gathered[current.Slug]
 	// The tab appears only for a pipeline that declares servers: most do not, and a dead tab on every one of them is nav space spent on a feature they never use.
 	nav.HasMCP = len(current.Config().MCPServers) > 0
@@ -648,19 +652,8 @@ type navData struct {
 	ReadOnly bool
 	// HasMCP is whether the current pipeline declares mcp_servers:, which is the only thing that draws the mcp tab.
 	HasMCP bool
-}
-
-// Paused reports whether the current pipeline is paused, which two pages ask
-// about for reasons the banner does not cover: the jobs board offers a Pause
-// button only when there is something to pause.
-func (n navData) Paused() bool {
-	for _, item := range n.Attention {
-		if item.Kind == "paused" {
-			return true
-		}
-	}
-
-	return false
+	// Paused is whether the current pipeline is paused, which the action bar says on every page.
+	Paused bool
 }
 
 // Answers false when the store cannot say: a page that fails to draw is worse than a missing banner.

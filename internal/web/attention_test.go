@@ -7,21 +7,6 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// writablePipeline is testPipeline with a runner, so the controls a read-only
-// daemon withholds are on the page.
-func writablePipeline(t *testing.T) (*Server, *Pipeline) {
-	t.Helper()
-
-	_, pipeline := testPipeline(t)
-
-	server, err := New([]*Pipeline{pipeline}, stubRunner{})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	return server, pipeline
-}
-
 // TestTheHeaderSaysWhenSomethingIsWaitingOnYou is the whole feature in one
 // page load: four unrelated things are stuck, and a reader who opened the
 // jobs board and nothing else has to be able to see all four and reach the
@@ -134,54 +119,6 @@ func TestNothingWaitingDrawsNothing(t *testing.T) {
 	if strings.Contains(body, `class="attention"`) {
 		t.Error("a clean pipeline draws the attention list")
 	}
-}
-
-// TestAPausedPipelineIsTheFirstThingInTheList: it outranks everything else on
-// the page because it is the reason none of the rest will resolve on its own,
-// and it keeps the inline unpause it had as a banner of its own.
-func TestAPausedPipelineIsTheFirstThingInTheList(t *testing.T) {
-	t.Parallel()
-
-	server, pipeline := writablePipeline(t)
-	ctx := t.Context()
-
-	_, err := pipeline.Store.RequestApproval(ctx, "deploy", "ship it?")
-	if err != nil {
-		t.Fatalf("RequestApproval: %v", err)
-	}
-
-	err = pipeline.Store.Pause(ctx)
-	if err != nil {
-		t.Fatalf("Pause: %v", err)
-	}
-
-	_, body := get(t, server, "/p/demo")
-	list := attentionList(t, body)
-
-	paused := strings.Index(list, `<span class="st st-paused">paused</span> · no polling, no new runs; webhook deliveries wait until unpaused`)
-	approval := strings.Index(list, "1 approval is waiting")
-
-	if paused < 0 || approval < 0 {
-		t.Fatalf("attention list is missing an item:\n%s", list)
-	}
-
-	if paused > approval {
-		t.Error("a paused pipeline is listed below a waiting approval")
-	}
-
-	if !strings.Contains(list, `action="/p/demo/unpause"`) {
-		t.Error("the paused item lost its inline unpause")
-	}
-}
-
-// attentionList is the <ul> and nothing else. The sentences also travel as
-// the tab badges' title attributes, which sit ABOVE the list in the document
-// — so an unscoped search finds the header's copy and answers an ordering
-// question with the order of the tabs.
-func attentionList(t *testing.T, body string) string {
-	t.Helper()
-
-	return between(t, body, `<ul class="attention"`, "</ul>")
 }
 
 // between is the markup from one marker up to the next, failing the test when
@@ -371,8 +308,8 @@ func TestTheRootDoesNotSpeakForOnePipelineOfSeveral(t *testing.T) {
 		}
 	}
 
-	// The badge is chrome pointing INTO that pipeline, and still belongs.
-	if _, body := get(t, server, "/p/alpha"); !strings.Contains(body, `<span class="st st-paused">paused</span> · no polling, no new runs; webhook deliveries wait until unpaused`) {
-		t.Error("the pipeline's own page lost the paused item")
+	// The pipeline's own page still says it, in its action bar.
+	if _, body := get(t, server, "/p/alpha"); !strings.Contains(body, `class="actionbar paused"`) {
+		t.Error("the pipeline's own page lost its paused state")
 	}
 }

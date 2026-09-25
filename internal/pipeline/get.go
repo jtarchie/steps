@@ -211,7 +211,7 @@ func (w *planWalk) takeSet(ctx context.Context, pinnedRun bool, set merkle.Input
 		w.recordRunInput(ctx, buildID, input, w.resolution.resources[input], version)
 	}
 
-	if pinnedRun {
+	if pinnedRun || w.resolution.rerun {
 		return
 	}
 
@@ -315,6 +315,9 @@ func (w *planWalk) runTriggeredBuild(
 
 	fetchCtx, placed := withPlacementSink(ctx)
 
+	// Notes about the fetch are the get's, and the context here is its CHILDREN'S (ctx holds the get as their parent), so name the get itself: recorded against no step, the version it fetched was drawn apart from its row.
+	fetchCtx = events.WithStepID(fetchCtx, parentStepFrom(ctx))
+
 	err = fetchGetStepWithStep(fetchCtx, w.cfg, w.st, step, step.Get, resource, resourceType, version, bw)
 
 	// Get-step hooks fire once per triggered build, in that build's own
@@ -398,7 +401,7 @@ func (w *planWalk) fetchInPlace(ctx context.Context, step config.Step, steps []c
 
 	mark := publishStepStarted(ctx, w.jobName, w.index, step)
 
-	res, err := w.fetchGetStepInPlace(ctx, step)
+	res, err := w.fetchGetStepInPlace(events.WithStepID(ctx, mark.id), step)
 	if err != nil {
 		publishStepFinished(ctx, w.jobName, w.index, step, mark, res.hash, started, err)
 
@@ -604,7 +607,7 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, st store.Deli
 	// runPlacedStage.
 	err := runPlacedStage(ctx, step, func(ctx context.Context) error {
 		return retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
-			notef(ctx, "get: %s (version: %v, attempt %d/%d)", artifact, version, attempt, total)
+			notef(ctx, "get: %s (version: %s, attempt %d/%d)", artifact, versionText(version), attempt, total)
 			logFrom(ctx).Info("job.get.in.attempt", "artifact", artifact, "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
 			err := fetchGetStep(attemptCtx, cfg, st, artifact, resource, resourceType, version, step.Params, bw)
@@ -626,7 +629,7 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, st store.Deli
 }
 
 func fetchGetStep(ctx context.Context, cfg *config.Config, st store.Deliveries, artifact string, resource config.Resource, resourceType config.ResourceType, version, params map[string]any, bw workspace.BuildWorkspace) error {
-	notef(ctx, "get: %s (version: %v)", artifact, version)
+	notef(ctx, "get: %s (version: %s)", artifact, versionText(version))
 
 	fetch := func(dir string) error {
 		err := rsrc.RunIn(ctx, cfg, resourceType, resource.Env, resource.Source, version, params, dir)
@@ -727,4 +730,13 @@ func writeDelivery(ctx context.Context, st store.Deliveries, name string, versio
 	}
 
 	return nil
+}
+
+// versionText is a version as a reader sees it everywhere else — the JSON a check emits — rather than Go's map[k:v].
+func versionText(version map[string]any) string {
+	if key, ok := encodeVersion(version); ok {
+		return key
+	}
+
+	return fmt.Sprint(version)
 }

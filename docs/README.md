@@ -37,6 +37,7 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 
 ```
 steps run <pipeline>        run one job (--resume <id> continues a failed one,
+                            --rerun <id> runs it again against its own versions,
                             --replay <id> --from <step> re-runs one step of one)
                             --worker <tag>=<url> places tags: steps on a machine
                             --progress tty|plain|auto draws it live or as lines

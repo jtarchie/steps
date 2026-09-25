@@ -32,7 +32,7 @@ func enqueueJob(ctx context.Context, db executor, pipelineID int64, jobName, rea
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO trigger_queue (pipeline_id, job_name, reason, status, enqueued_at)
 		VALUES (?, ?, ?, 'pending', ?)
-		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' DO NOTHING
+		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL DO NOTHING
 	`, pipelineID, jobName, reason, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
@@ -46,7 +46,7 @@ func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason string) er
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO trigger_queue (pipeline_id, job_name, reason, manual, status, enqueued_at)
 		VALUES (?, ?, ?, 1, 'pending', ?)
-		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' DO UPDATE SET manual = 1, reason = excluded.reason
+		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL DO UPDATE SET manual = 1, reason = excluded.reason
 	`, s.pipelineID, jobName, reason, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
@@ -55,18 +55,38 @@ func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason string) er
 	return nil
 }
 
-// QueuedManually reads the mark EnqueueManualJob left on a row.
-func (s *Store) QueuedManually(ctx context.Context, id int64) (bool, error) {
-	var manual bool
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT manual FROM trigger_queue WHERE id = ? AND pipeline_id = ?
-	`, id, s.pipelineID).Scan(&manual)
+// EnqueueRerunJob keeps the row even when the job has an ordinary one pending: they build different versions.
+func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID string, build int) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO trigger_queue (pipeline_id, job_name, reason, manual, rerun_of, rerun_build, status, enqueued_at)
+		VALUES (?, ?, ?, 1, ?, ?, 'pending', ?)
+		ON CONFLICT (pipeline_id, rerun_of, rerun_build) WHERE status = 'pending' AND rerun_of IS NOT NULL DO NOTHING
+	`, s.pipelineID, jobName, reason, runID, build, nowNano())
 	if err != nil {
-		return false, fmt.Errorf("could not read queue row %d: %w", id, err)
+		return fmt.Errorf("could not queue a rerun of %q: %w", runID, err)
 	}
 
-	return manual, nil
+	return nil
+}
+
+// QueuedTrigger reads what EnqueueManualJob and EnqueueRerunJob left on a row.
+func (s *Store) QueuedTrigger(ctx context.Context, id int64) (store.QueuedTrigger, error) {
+	var (
+		trigger store.QueuedTrigger
+		rerun   sql.NullString
+		build   sql.NullInt64
+	)
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT manual, rerun_of, rerun_build FROM trigger_queue WHERE id = ? AND pipeline_id = ?
+	`, id, s.pipelineID).Scan(&trigger.Manual, &rerun, &build)
+	if err != nil {
+		return store.QueuedTrigger{}, fmt.Errorf("could not read queue row %d: %w", id, err)
+	}
+
+	trigger.RerunOf, trigger.RerunBuild = rerun.String, int(build.Int64)
+
+	return trigger, nil
 }
 
 // ClaimNextJob atomically transitions the oldest claimable pending row to
@@ -207,6 +227,7 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 		      SELECT 1 FROM trigger_queue AS p
 		      WHERE p.pipeline_id = trigger_queue.pipeline_id
 		        AND p.job_name = trigger_queue.job_name AND p.status = 'pending'
+		        AND p.rerun_of IS trigger_queue.rerun_of AND p.rerun_build IS trigger_queue.rerun_build
 		  )
 	`, s.pipelineID)
 	if err != nil {
@@ -215,13 +236,13 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 
 	// Whatever is left goes back to pending so it is claimed again. Several
 	// builds of one job may have been in flight (max_in_flight), and only one
-	// pending row per job is allowed, so they collapse into one — which is
-	// right: the job needs to run, not to run N times.
+	// pending row per job — and per retried build — is allowed, so they
+	// collapse into one — which is right: the job needs to run, not to run N times.
 	_, err = s.db.ExecContext(ctx, `
 		DELETE FROM trigger_queue
 		WHERE pipeline_id = ? AND status = 'running' AND rowid NOT IN (
 			SELECT MIN(rowid) FROM trigger_queue
-			WHERE pipeline_id = ? AND status = 'running' GROUP BY job_name
+			WHERE pipeline_id = ? AND status = 'running' GROUP BY job_name, rerun_of, rerun_build
 		)
 	`, s.pipelineID, s.pipelineID)
 	if err != nil {

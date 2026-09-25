@@ -126,14 +126,74 @@ func (s suite) TestAManualEnqueueIsMarkedWhicheverArrivesFirst(t *testing.T) {
 				t.Fatalf("ClaimNextJob = %v, %v", claimed, err)
 			}
 
-			got, err := st.QueuedManually(ctxFor(t), id)
+			got, err := st.QueuedTrigger(ctxFor(t), id)
 			if err != nil {
-				t.Fatalf("QueuedManually: %v", err)
+				t.Fatalf("QueuedTrigger: %v", err)
 			}
 
-			if got != tc.want {
-				t.Errorf("QueuedManually = %v, want %v", got, tc.want)
+			if got.Manual != tc.want {
+				t.Errorf("QueuedTrigger = %+v, want manual %v", got, tc.want)
 			}
 		})
 	}
+}
+
+// TestARerunIsQueuedBesideAnOrdinaryTrigger: a retry of one build and a trigger of the job are two requests, as they are two pending builds in Concourse, so the one-pending-row dedup must not merge them; the same retry asked twice is still one row.
+func (s suite) TestARerunIsQueuedBesideAnOrdinaryTrigger(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+
+	err := st.StartRun(ctxFor(t), "ORIGINAL", "build", "/tmp/o", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	mustEnqueueJob(t, st, "build", "a new version")
+
+	for range 2 {
+		err = st.EnqueueRerunJob(ctxFor(t), "build", "retry (web)", "ORIGINAL", -1)
+		if err != nil {
+			t.Fatalf("EnqueueRerunJob: %v", err)
+		}
+	}
+
+	rows, err := st.ListTriggerQueue(ctxFor(t), 10)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("queue = %+v (%v), want the trigger and one retry", rows, err)
+	}
+
+	var reruns []store.QueuedTrigger
+
+	for range 2 {
+		if trigger := claimAndComplete(t, st); trigger.RerunOf != "" {
+			reruns = append(reruns, trigger)
+		}
+	}
+
+	if len(reruns) != 1 || reruns[0] != (store.QueuedTrigger{Manual: true, RerunOf: "ORIGINAL", RerunBuild: -1}) {
+		t.Errorf("claimed reruns = %+v, want one manual rerun of all of ORIGINAL", reruns)
+	}
+}
+
+// claimAndComplete claims the next row, reads what it asks for, and finishes it, so the job's one in-flight slot frees for the next claim.
+func claimAndComplete(t *testing.T, st store.Queue) store.QueuedTrigger {
+	t.Helper()
+
+	id, _, claimed, err := st.ClaimNextJob(ctxFor(t))
+	if err != nil || !claimed {
+		t.Fatalf("ClaimNextJob = %v, %v", claimed, err)
+	}
+
+	trigger, err := st.QueuedTrigger(ctxFor(t), id)
+	if err != nil {
+		t.Fatalf("QueuedTrigger: %v", err)
+	}
+
+	err = st.CompleteJob(ctxFor(t), id, "succeeded", nil)
+	if err != nil {
+		t.Fatalf("CompleteJob: %v", err)
+	}
+
+	return trigger
 }

@@ -4,31 +4,9 @@
     <h1 class="prompt"><b>steps job {{.Job.Name}}</b></h1>
     <p class="metaline" id="job-meta">
       {{len .Runs}} runs recorded
-      {{if .Job.Held}}<span class="sep">·</span><span class="st st-held">held</span> after {{.Job.Failures}} failure{{if ne .Job.Failures 1}}s{{end}}<span class="sep">·</span>will not trigger on new versions{{end}}
+      {{if .Job.Held}}<span class="sep">·</span><span class="st st-held">held</span> after {{.Job.Failures}} failure{{if ne .Job.Failures 1}}s{{end}}<span class="sep">·</span>will not trigger on new versions{{if .Nav.ReadOnly}}<span class="sep">·</span>release with <code>steps jobs release {{.Job.Name}} -p {{.Nav.Current}}</code>{{end}}{{end}}
     </p>
   </div>
-  {{if .Nav.ReadOnly}}
-  <div class="actions"><span class="rohint">This server is read-only; runs start only from its triggers.{{if .Job.Held}} Release it with <code>steps jobs release {{.Job.Name}} -p {{.Nav.Current}}</code>.{{end}}</span></div>
-  {{else}}
-  <div class="actions stacked">
-    {{if .Job.Held}}
-    <form class="decide" method="post" action="/p/{{.Nav.Current}}/jobs/{{.Job.Name}}/release">
-      <button class="btn primary" type="submit">Release</button>
-      <span class="meta">resets the failure count; new versions trigger it again</span>
-    </form>
-    {{end}}
-    <form class="decide" method="post" action="/p/{{.Nav.Current}}/jobs/{{.Job.Name}}/trigger">
-      <button class="btn{{if not .Job.Held}} primary{{end}}" type="submit"{{if .Nav.Paused}} disabled aria-describedby="trigger-why"{{end}}>▶ Trigger new run</button>
-      {{if not .Nav.Paused}}<span class="meta">{{if .Job.Held}}runs now; held only stops automatic triggers{{else}}builds the newest versions it has not built; unchanged steps are skipped{{end}}</span>{{end}}
-    </form>
-    <form class="decide" method="post" action="/p/{{.Nav.Current}}/jobs/{{.Job.Name}}/trigger">
-      <input type="hidden" name="force" value="all">
-      <button class="btn" type="submit"{{if .Nav.Paused}} disabled aria-describedby="trigger-why"{{end}}>▶ Trigger new run without cache</button>
-      {{if not .Nav.Paused}}<span class="meta">runs every step even if unchanged; still only versions not yet built</span>{{end}}
-    </form>
-    {{template "triggerwhy" .}}
-  </div>
-  {{end}}
 </div>
 
 {{if .Job.Upstream}}

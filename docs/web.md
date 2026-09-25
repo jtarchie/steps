@@ -130,7 +130,6 @@ has no resting state.
 
 | Shown as | Means | Fixed by |
 |---|---|---|
-| the list's first line | the pipeline is paused: nothing polled, nothing admitted, deliveries recorded but not built | **Unpause**, right there |
 | `jobs ●N` | N jobs the circuit breaker is holding after repeated failures | **Release** on the job's page |
 | `resources ●N` | N resources whose `check` is erroring. A poll stops at the first one, so ONE broken check stops the pipeline triggering | the resources page, which shows what the check said |
 | `mcp ●N` | N declared `mcp_servers:` that cannot be used — a login expired, a command missing, a variable unset | **Connect**, or the thing the status names |
@@ -346,18 +345,32 @@ The jobs board refreshes itself every couple of seconds, in place — it keeps
 your list/graph choice and scroll position rather than reloading the page —
 and pauses while the tab is hidden.
 
-## Triggering, approving, releasing
+## The action bar
 
-Eight controls, each doing what a CLI verb does:
+Every action on a pipeline's pages lives in one bar under the nav, in the same
+place on every page: the pipeline's **Pause** at the left, what this page's job
+or run can have done to it at the right. Each button's tooltip says what it
+does. A paused pipeline turns the bar blue and its button reads **Unpause**;
+buttons that would start something are disabled, and say why when hovered.
 
-- **Trigger new run** / **Trigger new run without cache** enqueue the job into the durable trigger
+| Page | Right-hand buttons |
+|---|---|
+| a job | **↻ Trigger**, and **Release** when the breaker holds it |
+| a run, finished | **↻ Trigger** (a new run of its job) and **⟲ Retry** (this run again) |
+| a run, live | **↻ Trigger** and **■ Abort** |
+| the follow page | **■ Abort** the queued run |
+
+## Triggering, retrying, approving, releasing
+
+Nine controls, each doing what a CLI verb does:
+
+- **Trigger** enqueues the job into the durable trigger
   queue `steps web` uses — the same queue this process's own polling fills.
   `steps web` drains it in-process by calling `pipeline.RunJob` — there is no
   second execution path, so a job run from a browser gets the same caching,
-  hooks, serial groups, and recording as any other. Each button says what it does beside it, not in a tooltip. Without cache skips the merkle cache; it does not re-take versions a `version: every` get already built. The ordinary one honors the cache,
-  which on an unchanged pipeline correctly does almost nothing. A run page
-  offers only the ordinary one, named for its job and saying it builds the newest versions, not that run's; re-running a run with its
-  own versions is `steps run --resume`, not a web control — "re-run" is kept for that ([#146](https://github.com/jtarchie/steps/issues/146)). In a paused pipeline both are disabled and say why; a job the breaker holds is still triggered, since the breaker stops only automatic triggers.
+  hooks, serial groups, and recording as any other. A trigger builds the newest versions the job has not built, and honors the cache,
+  which on an unchanged pipeline correctly does almost nothing; Retry, or `steps run --force` from a terminal, is how to run unchanged steps again. A job the breaker holds is still triggered, since the breaker stops only automatic triggers.
+- **Retry** is `fly rerun-build`: a new run, the whole plan from the top, against exactly the versions the run was created with — what `steps run --rerun <run>` does. A run of a `version: every` fan-out holds a build per version, and Retry re-runs every one, each against its own version; `--rerun <run>#<build>` narrows it to one. Nothing that arrived since joins it, `passed:` is not asked again, and it takes no version, so it disturbs no other build. It skips the step cache, since a retry of a run that passed would otherwise do nothing. The new run links the run it retried, and a retry of an old run does not become its job's status — only a retry of the job's latest run does, as in Concourse. See [conformance.md](conformance.md).
 - **Approve / Reject** on an `approval:` step, with the reason recorded — the
   same row `steps approvals approve` writes.
 - **Answer** an `ask_user` question a step is parked on — one click for an
@@ -365,10 +378,10 @@ Eight controls, each doing what a CLI verb does:
   [agents.md](agents.md).
 - **Release** a job the circuit breaker is holding — what `steps jobs release` does.
 - **Pause / Unpause** the whole pipeline — what `steps pipeline pause` throws.
-  The board carries the pause, the banner on every page of a paused pipeline
-  carries the release, and the root lists both for every pipeline at once. Each
-  puts you back on the page you pressed it from.
-- **Abort** a running run from its page, or a queued one from the page a
+  The action bar carries it on every page of the pipeline, and the root lists
+  it for every pipeline at once. Each puts you back on the page you pressed it
+  from.
+- **Abort** a running run from its page's bar, or a queued one from the page a
   trigger lands on — what `steps runs abort` asks for. See
   [Aborting a run](#aborting-a-run).
 - **Connect** an oauth `mcp_servers:` entry from the

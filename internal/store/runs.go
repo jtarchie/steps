@@ -20,6 +20,8 @@ type Runs interface {
 	// "<run>#<set>" inside a triggered build and the bare run id outside one.
 	RecordRunStep(ctx context.Context, runID, buildID string, index int, name string) error
 	RecordRunParent(ctx context.Context, runID, parentID string) error
+	// RecordRunRerun marks a run as a rerun of one build of another (fly rerun-build).
+	RecordRunRerun(ctx context.Context, runID, originalID string, build int) error
 	// CompletedRunSteps returns what a run finished, in completion order.
 	CompletedRunSteps(ctx context.Context, runID string) ([]RunStep, error)
 	// ListRuns returns a job's runs newest first. Zero means no limit, the
@@ -63,7 +65,13 @@ type RunRow struct {
 	// started by a caller that loaded no pipeline file. Selected by every
 	// RunRow query for the same reason ParentRunID is.
 	ConfigSHA string
+	// RerunOf is the run whose build RerunOfBuild this one re-ran against the versions it was created with, empty for any other run. Selected by every RunRow query for the same reason ParentRunID is.
+	RerunOf      string
+	RerunOfBuild int
 }
+
+// Rerun reports a run made by retrying one build of another.
+func (r RunRow) Rerun() bool { return r.RerunOf != "" }
 
 // Replayed reports a run forked from another by --replay.
 func (r RunRow) Replayed() bool { return r.ParentRunID != "" }

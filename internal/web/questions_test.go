@@ -21,6 +21,10 @@ func (stubRunner) Enqueue(context.Context, *Pipeline, string, string, bool) (int
 
 func (stubRunner) Abort(*Pipeline, string) bool { return false }
 
+func (stubRunner) EnqueueRerun(ctx context.Context, pipeline *Pipeline, jobName, runID string, build int) error {
+	return pipeline.Store.EnqueueRerunJob(ctx, jobName, "retry (web)", runID, build) //nolint:wrapcheck // a double answering what the store answers
+}
+
 func (stubRunner) AbortQueued(ctx context.Context, pipeline *Pipeline, jobName string) (bool, error) {
 	return pipeline.Store.AbortQueuedJob(ctx, jobName) //nolint:wrapcheck // a double answering what the store answers
 }
@@ -291,7 +295,9 @@ func TestQuestionsFormPutsFreeTextFirst(t *testing.T) {
 
 	_, body := get(t, server, "/p/demo/questions")
 
-	_, form, found := strings.Cut(body, "<form")
+	_, main, _ := strings.Cut(body, "<main")
+
+	_, form, found := strings.Cut(main, "<form")
 	if !found {
 		t.Fatalf("no answer form on the page: %s", body)
 	}
