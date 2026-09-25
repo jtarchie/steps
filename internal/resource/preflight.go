@@ -467,6 +467,16 @@ func listToolsCached(ctx context.Context, cfg *config.Config, server string, set
 		return tools, err
 	}
 
+	// The same exemption internal/agent's probeCache makes, for the same
+	// reason: an oauth token that needs a login is fixed out of band, by a
+	// human, seconds later — and a cached "not authorized" outlives the fix,
+	// leaving a daemon that refuses work it is now perfectly able to do. It
+	// is decided by reading a file rather than by a round trip, so it is the
+	// one failure here worth re-deriving every time.
+	if errors.Is(err, stepsmcp.ErrNeedsLogin) {
+		return tools, err
+	}
+
 	toolsCache.store(key, toolListEntry{at: now, tools: tools, err: err})
 
 	return tools, err

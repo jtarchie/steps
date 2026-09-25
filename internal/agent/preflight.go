@@ -1084,6 +1084,30 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 		return err
 	}
 
+	// A missing, mis-endpointed or unrenewable oauth token is fixed OUT OF
+	// BAND, seconds later, by the one actor this process cannot observe: a
+	// human running `steps mcp login`, or clicking Connect on the daemon's
+	// own mcp tab. Remembering that verdict makes the daemon disbelieve work
+	// that has already been done — the login succeeds, the tab says
+	// authorized, the token file is on disk, and every poll for the rest of
+	// the window still fails quoting a stat that stopped being true. Nothing
+	// else clears it either: ResetProbeCache has no caller outside tests, so
+	// the only cure was restarting the daemon.
+	//
+	// It is also the cheapest failure here to re-establish. checkCredential
+	// answers it by reading one file, before a connection is opened, so
+	// declining to cache it costs a stat per poll and nothing else — unlike
+	// the server-did-not-answer failures below it, which cost a round trip.
+	//
+	// Deliberately NOT the same question as transient(), which leaves this
+	// class terminal so a watcher refuses the run rather than polling a dead
+	// credential forever. Whether to RUN and whether to REMEMBER are
+	// different: the run should still be refused now, and the refusal should
+	// still be re-derived next time.
+	if errors.Is(err, stepsmcp.ErrNeedsLogin) {
+		return err
+	}
+
 	probeCache.store(key, err, now)
 
 	return err
