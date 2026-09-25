@@ -165,24 +165,77 @@ func (s Step) Failed() bool {
 	return s.Status == "failed" || s.Status == "errored" || s.Status == "aborted"
 }
 
-// Container reports a step that ran other steps inside it.
+// Container reports a step that ran other steps inside it, hooks included:
+// it is what draws a subtree at all.
 func (s Step) Container() bool { return len(s.Children) > 0 }
+
+// Hook reports a hook's own row — an on_failure/ensure/… that ran after the
+// step or job it guards, rather than a step of the plan.
+func (s Step) Hook() bool { return s.Kind == "hook" }
+
+// Block reports a step that contains plan steps, as distinct from a step
+// whose only children are its hooks: a task with an ensure: is still a task,
+// and the questions a block answers (open it, roll it up, leave its output to
+// the steps inside) are wrong for it.
+func (s Step) Block() bool {
+	for _, child := range s.Children {
+		if !child.Hook() {
+			return true
+		}
+	}
+
+	return false
+}
+
+// OpenByDefault reports a row the page draws expanded. A running hook does
+// not open its step: the row would fold shut under the reader the moment the
+// hook passed.
+func (s Step) OpenByDefault() bool {
+	if s.Failed() || len(s.Turns) > 0 || s.Block() {
+		return true
+	}
+
+	for _, child := range s.Children {
+		if child.Hook() && child.Failed() {
+			return true
+		}
+	}
+
+	return false
+}
 
 // InnermostFailure is the step that actually broke: the first failed step,
 // in plan order, with no failed step inside it. Every failed ancestor is
 // red only because of it, which is why the page's f key and its header
 // both point here rather than at the outermost block. Nil on a run with no
 // failure.
+//
+// Hooks bend that in two directions. A failed step's hooks only reacted to
+// its failure, so a hook that broke too is not the cause. A green step whose
+// on_success or ensure failed was turned red by that hook, while its own row
+// stays green: there, the hook IS the cause.
 func (r Transcript) InnermostFailure() *Step {
-	var walk func(steps []*Step) *Step
+	var walk func(steps []*Step, hooks bool) *Step
 
-	walk = func(steps []*Step) *Step {
+	walk = func(steps []*Step, hooks bool) *Step {
 		for _, step := range steps {
-			if !step.Failed() {
+			if hooks && !step.Hook() {
 				continue
 			}
 
-			if inner := walk(step.Children); inner != nil {
+			if !step.Failed() {
+				if step.Hook() {
+					continue
+				}
+
+				if hook := walk(step.Children, true); hook != nil {
+					return hook
+				}
+
+				continue
+			}
+
+			if inner := walk(plainChildren(step), false); inner != nil {
 				return inner
 			}
 
@@ -192,7 +245,20 @@ func (r Transcript) InnermostFailure() *Step {
 		return nil
 	}
 
-	return walk(r.Roots)
+	return walk(r.Roots, false)
+}
+
+// plainChildren is a step's children without its hooks.
+func plainChildren(step *Step) []*Step {
+	var out []*Step
+
+	for _, child := range step.Children {
+		if !child.Hook() {
+			out = append(out, child)
+		}
+	}
+
+	return out
 }
 
 // Active reports a step still running, or holding something that is.
@@ -201,16 +267,9 @@ func (r Transcript) InnermostFailure() *Step {
 // reader who has folded half the page still knows where to look. Recursive
 // rather than a flag set at fold time, because a container's own status stays
 // running until every child has finished — the two answers agree, and this
-// one needs no second pass to maintain.
+// one needs no second pass to maintain. The children are asked first because
+// a step's hooks run after it has finished.
 func (s Step) Active() bool {
-	if !s.Running() {
-		return false
-	}
-
-	if !s.Container() {
-		return true
-	}
-
 	for _, child := range s.Children {
 		if child.Active() {
 			return true
@@ -220,7 +279,7 @@ func (s Step) Active() bool {
 	// A container whose children have all finished while it has not is
 	// between its last child and its own finish event. Nothing is running
 	// inside it, so nothing about it should read as running.
-	return false
+	return s.Running() && !s.Container()
 }
 
 // Tally counts how a container's subtree came out, for the row itself. A
@@ -249,6 +308,10 @@ func (s Step) Rollup() Tally {
 	var out Tally
 
 	for _, child := range s.Children {
+		if child.Hook() {
+			continue
+		}
+
 		out.Cells++
 
 		switch {
@@ -759,8 +822,8 @@ func closeStep(
 // attachTurn hangs one conversation event on the step it belongs to, and
 // reports which step that was — which is not always the one the row names. A
 // turn whose step is not in the transcript is dropped rather than inventing a
-// step for it — that only happens for a hook or fix conversation, which by
-// design records no plan step.
+// step for it — that only happens for a fix conversation, which by design
+// has no row of its own.
 func attachTurn(view *Transcript, index map[string]int, row store.RunEventRow) (int, bool) {
 	position, seen := index[stepKey(row)]
 	if !seen {

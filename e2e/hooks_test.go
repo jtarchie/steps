@@ -271,3 +271,42 @@ jobs:
 	assertLineCount(t, p.task, 2)
 	assertLineCount(t, p.onSuccess, 2)
 }
+
+// A hook announces itself as a row of its own on the terminal, named after
+// what it ran, before what it prints — and only once: the old "job ...:
+// on_failure hook" note said the same thing again.
+//
+// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+func TestHookAnnouncesItsOwnRow(t *testing.T) {
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+
+	writePipelineFile(t, path, `
+jobs:
+  - name: build
+    plan:
+      - task: build
+        run: exit 1
+    on_failure:
+      task: explain-failure
+      run: echo see steps runs
+`)
+
+	var err error
+
+	out := captureStdout(t, func() { err = cli.Run([]string{path}) })
+	if err == nil {
+		t.Fatal("cli.Run succeeded, want a failure")
+	}
+
+	announced := strings.Index(out, "hook: on_failure · task explain-failure")
+	printed := strings.Index(out, "see steps runs")
+
+	if announced < 0 || printed < 0 || announced > printed {
+		t.Errorf("want the hook announced, then its output:\n%s", out)
+	}
+
+	if strings.Contains(out, "on_failure hook") {
+		t.Errorf("the old hook note is still printed:\n%s", out)
+	}
+}

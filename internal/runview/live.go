@@ -307,7 +307,13 @@ func (l *Live) header(run *liveRun, view Transcript) line {
 }
 
 func (l *Live) rows(region []line, run *liveRun, step *Step, depth int) []line {
+	// A finished step draws nothing, but its hooks run after it finishes, and
+	// a running one belongs in the region in its place.
 	if !step.Running() {
+		for _, child := range step.Children {
+			region = l.rows(region, run, child, depth)
+		}
+
 		return region
 	}
 
@@ -364,6 +370,8 @@ func (l *Live) noteLine(event events.Event) string {
 }
 
 // summary is what the run leaves behind: how it came out, then — because the tail that showed it has gone — every failed step's output in full.
+// On a run that did not succeed, every hook's output too: an on_failure that
+// prints is there to explain the failure.
 func (l *Live) summary(run *liveRun, event events.Event) []string {
 	view := run.folder.View(store.RunRow{})
 	took := time.Duration(event.DurationMS) * time.Millisecond
@@ -381,7 +389,8 @@ func (l *Live) summary(run *liveRun, event events.Event) []string {
 	}
 
 	for _, step := range view.Steps {
-		if !step.Failed() || step.Container() || len(step.Outputs) == 0 {
+		explains := step.Failed() || (step.Hook() && event.Status != "succeeded")
+		if !explains || step.Block() || len(step.Outputs) == 0 {
 			continue
 		}
 

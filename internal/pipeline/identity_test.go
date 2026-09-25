@@ -109,7 +109,7 @@ func TestJobHookKeepsItsJobAndDropsTheStepIndex(t *testing.T) {
 	t.Parallel()
 
 	// A job-level hook: nothing has tagged the context at all.
-	jobName, index := currentStepRef(withHookIdentity(context.Background(), "deploy"))
+	jobName, index := currentStepRef(withHookIdentity(context.Background(), "deploy", "on_failure"))
 	if jobName != "deploy" {
 		t.Errorf("job = %q, want deploy — a job-level hook knows its job even with no plan position", jobName)
 	}
@@ -122,7 +122,7 @@ func TestJobHookKeepsItsJobAndDropsTheStepIndex(t *testing.T) {
 	// must not keep that index.
 	stepCtx := withStepIdentity(context.Background(), "deploy", 3, config.Step{Task: "build"})
 
-	jobName, index = currentStepRef(withHookIdentity(stepCtx, "deploy"))
+	jobName, index = currentStepRef(withHookIdentity(stepCtx, "deploy", "on_failure"))
 	if jobName != "deploy" || index != -1 {
 		t.Errorf("step-level hook reported (%q, %d), want (deploy, -1) — it inherited the step's plan position", jobName, index)
 	}

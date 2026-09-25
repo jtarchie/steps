@@ -8,6 +8,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/outcome"
 )
 
@@ -96,17 +97,26 @@ func runMatchedHook(ctx context.Context, scope hookScope, name string, step *con
 		defer cancel()
 	}
 
-	notef(ctx, "%s: %s hook", scope.label, name)
+	// A hook gets a row of its own in the run's transcript: its own step id,
+	// parented on the step or job it guards, with its output, notes and any
+	// agent turns hung there. Without one, a step hook's output read as the
+	// step printing it, and a job hook's opened a nameless row nothing ever
+	// closed. The identity is re-tagged for the same reason the logger is:
+	// without it a hook inherits the enclosing step's plan position (or, on a
+	// job-level hook, no job at all) and publishes a fix agent's conversation
+	// there. The row lives only in the event log — no node, no job_run.
+	rowName := hookRowName(name, *step)
 
-	// Everything the hook body runs logs as the HOOK's, not as the step it
-	// hangs off — a hook has no plan position of its own, and filing its
-	// output under the step's index would read as the step doing it. The
-	// identity is re-tagged for the same reason the logger is: without it a
-	// hook inherits the enclosing step's plan position (or, on a job-level
-	// hook, no job at all) and publishes a fix agent's conversation there.
 	hookCtx = withHookLogger(hookCtx, scope.label, name)
-	hookCtx = withHookIdentity(hookCtx, scope.jobName)
+	hookCtx = withHookIdentity(hookCtx, scope.jobName, rowName)
 	logFrom(hookCtx).Debug("job.hook")
+
+	started := time.Now()
+	mark := publishHookStarted(hookCtx, scope.jobName, rowName)
+
+	// The step id is set even when it is 0, so the enclosing step's is never
+	// inherited.
+	hookCtx = events.WithStepID(withChildrenOf(hookCtx, mark), mark.id)
 
 	// Built BEFORE the body runs, and handed to it. The label is the identity
 	// a placement is recorded under, and a hook has no node hash to be keyed
@@ -117,6 +127,8 @@ func runMatchedHook(ctx context.Context, scope hookScope, name string, step *con
 	nested := scope.scope(fmt.Sprintf("%s (%s hook)", scope.label, name))
 
 	hookErr := runHookStep(hookCtx, nested, *step)
+
+	publishHookFinished(hookCtx, scope.jobName, rowName, *step, mark, started, hookErr)
 
 	return runHooks(hookCtx, nested, step.Hooks, hookErr)
 }

@@ -36,9 +36,8 @@ type parentStepKey struct{}
 // markStep mints the next id for this run and pairs it with whatever
 // container the context is currently inside.
 //
-// Outside a run — a hook or a fix conversation, which have no plan and no
-// resume state — there is nothing to mint from, and the zero mark is
-// correct: those publish no tree because they are not in one.
+// Outside a run — no resume state on the context — there is nothing to mint
+// from, and the zero mark is correct: nothing there publishes a tree.
 func markStep(ctx context.Context) stepMark {
 	mark := stepMark{parent: parentStepFrom(ctx)}
 

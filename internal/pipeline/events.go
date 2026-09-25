@@ -90,7 +90,7 @@ func warnf(ctx context.Context, format string, args ...any) {
 }
 
 // runIDFrom returns the current run's id, or "" when there is no resume state
-// (a hook or fix conversation running outside a plan walk).
+// (a run started without one, such as a unit test driving a runner directly).
 func runIDFrom(ctx context.Context) string {
 	resume := resumeFrom(ctx)
 	if resume == nil {
@@ -104,6 +104,10 @@ func runIDFrom(ctx context.Context) string {
 // the mark identifying it — which its finish event reports again, and which a
 // container hands to what it runs (see steptree.go).
 func publishStepStarted(ctx context.Context, jobName string, i int, step config.Step) stepMark {
+	return publishStarted(ctx, jobName, i, eventStepName(step), stepKindName(step))
+}
+
+func publishStarted(ctx context.Context, jobName string, i int, name, kind string) stepMark {
 	mark := markStep(ctx)
 
 	events.Publish(ctx, events.Event{
@@ -111,8 +115,8 @@ func publishStepStarted(ctx context.Context, jobName string, i int, step config.
 		RunID:        runIDFrom(ctx),
 		Job:          jobName,
 		StepIndex:    i,
-		StepName:     eventStepName(step),
-		StepKind:     stepKindName(step),
+		StepName:     name,
+		StepKind:     kind,
 		StepID:       mark.id,
 		ParentStepID: mark.parent,
 	})
@@ -131,6 +135,13 @@ func publishStepFinished(
 	ctx context.Context, jobName string, i int, step config.Step, mark stepMark,
 	hash string, started time.Time, err error,
 ) {
+	publishFinished(ctx, jobName, i, eventStepName(step), stepKindName(step), placementOf(ctx, step), mark, hash, started, err)
+}
+
+func publishFinished(
+	ctx context.Context, jobName string, i int, name, kind, worker string, mark stepMark,
+	hash string, started time.Time, err error,
+) {
 	status := "succeeded"
 	text := ""
 
@@ -146,16 +157,46 @@ func publishStepFinished(
 		RunID:        runIDFrom(ctx),
 		Job:          jobName,
 		StepIndex:    i,
-		StepName:     eventStepName(step),
-		StepKind:     stepKindName(step),
+		StepName:     name,
+		StepKind:     kind,
 		StepID:       mark.id,
 		ParentStepID: mark.parent,
 		Status:       status,
 		Hash:         hash,
 		Text:         text,
 		DurationMS:   time.Since(started).Milliseconds(),
-		Worker:       placementOf(ctx, step),
+		Worker:       worker,
 	})
+}
+
+// hookKind is the kind a hook's row is published under.
+const hookKind = "hook"
+
+// publishHookStarted opens a hook's own row, under whatever container ctx
+// names: the step it guards, or nothing for a job hook, which then reads as a
+// root after the plan. It has no plan position, hence index -1.
+func publishHookStarted(ctx context.Context, jobName, label string) stepMark {
+	return publishStarted(ctx, jobName, -1, label, hookKind)
+}
+
+// publishHookFinished closes the row publishHookStarted opened. No hash: a
+// hook records no node.
+func publishHookFinished(
+	ctx context.Context, jobName, label string, body config.Step, mark stepMark, started time.Time, err error,
+) {
+	publishFinished(ctx, jobName, -1, label, hookKind, placementOf(ctx, body), mark, "", started, err)
+}
+
+// hookRowName is a hook's row label: which hook fired, then what it ran —
+// "on_failure · task explain-failure". One slot for the name, so both halves
+// share it; the first is what a reader scans for.
+func hookRowName(hook string, body config.Step) string {
+	name := eventStepName(body)
+	if name == "" {
+		return hook
+	}
+
+	return fmt.Sprintf("%s · %s %s", hook, stepKindName(body), name)
 }
 
 // publishStepSkipped announces a step that did not execute, carrying WHY —
@@ -199,6 +240,9 @@ type stepIdentity struct {
 	job   string
 	index int
 	step  config.Step
+	// label is a hook's row name, set only by withHookIdentity: a hook's
+	// output is published under the hook's row, not a plan step.
+	label string
 }
 
 // withStepIdentity tags ctx with the step about to run. Set per dispatch, so
@@ -207,8 +251,8 @@ func withStepIdentity(ctx context.Context, jobName string, i int, step config.St
 	return context.WithValue(ctx, stepIdentityKey{}, stepIdentity{job: jobName, index: i, step: step})
 }
 
-// withHookIdentity tags ctx for a hook body: the job it belongs to, but no
-// plan position.
+// withHookIdentity tags ctx for a hook body: the job it belongs to, the
+// hook's row label, but no plan position.
 //
 // Both halves matter, and each was previously wrong in a different
 // direction. A hook inherited whatever stepIdentity its enclosing step had
@@ -217,8 +261,8 @@ func withStepIdentity(ctx context.Context, jobName string, i int, step config.St
 // claim. And a JOB-level hook inherited nothing at all, so its fix agent
 // published under an empty job name, filing a real conversation under no job
 // in the browser.
-func withHookIdentity(ctx context.Context, jobName string) context.Context {
-	return context.WithValue(ctx, stepIdentityKey{}, stepIdentity{job: jobName, index: -1})
+func withHookIdentity(ctx context.Context, jobName, label string) context.Context {
+	return context.WithValue(ctx, stepIdentityKey{}, stepIdentity{job: jobName, index: -1, label: label})
 }
 
 // currentStepRef is which plan step is executing, for the frames that must
@@ -241,22 +285,21 @@ func currentStepRef(ctx context.Context) (jobName string, index int) {
 
 // publishOutputForCurrentStep publishes a command's output against whichever
 // step the context says is running, and does nothing at all when no run put
-// an identity on the context.
-//
-// It does NOT currently skip a hook, though currentStepRef's contract says a
-// hook holds no plan position: withHookIdentity installs an identity with
-// index -1 and a zero Step, so a hook task's output publishes with an empty
-// name and kind and the run view files it under the enclosing step (or under
-// a nameless one). Pre-dates the fix:/assert: work and affects the plain task
-// path identically; fixing it means deciding whether a hook gets a step
-// identity of its own or publishes nothing, which is a DSL call.
+// an identity on the context. A hook body's output goes to the hook's own
+// row, named and kinded like the row runMatchedHook opened.
 func publishOutputForCurrentStep(ctx context.Context, stdout, stderr string) {
 	identity, ok := ctx.Value(stepIdentityKey{}).(stepIdentity)
 	if !ok {
 		return
 	}
 
-	publishStepOutput(ctx, identity.job, identity.index, identity.step, stdout, stderr)
+	if identity.label != "" {
+		publishStepOutput(ctx, identity.job, identity.index, identity.label, hookKind, stdout, stderr)
+
+		return
+	}
+
+	publishStepOutput(ctx, identity.job, identity.index, eventStepName(identity.step), stepKindName(identity.step), stdout, stderr)
 }
 
 // maxPublishedOutputBytes bounds what one step contributes to a run's event
@@ -285,7 +328,7 @@ const maxPublishedOutputBytes = 32_000
 // rows are bounded only by store.MaxEventTextBytes. A cap applied here cannot
 // fix that without also clipping the marker off an already-compliant stream —
 // the budget belongs in runCaptured, which is where the capture happens.
-func publishStepOutput(ctx context.Context, jobName string, i int, step config.Step, stdout, stderr string) {
+func publishStepOutput(ctx context.Context, jobName string, i int, name, kind, stdout, stderr string) {
 	combined := strings.TrimRight(stdout, "\n")
 
 	if trimmed := strings.TrimRight(stderr, "\n"); trimmed != "" {
@@ -305,8 +348,8 @@ func publishStepOutput(ctx context.Context, jobName string, i int, step config.S
 		RunID:     runIDFrom(ctx),
 		Job:       jobName,
 		StepIndex: i,
-		StepName:  eventStepName(step),
-		StepKind:  stepKindName(step),
+		StepName:  name,
+		StepKind:  kind,
 		StepID:    events.StepID(ctx),
 		Text:      combined,
 	})
