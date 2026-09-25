@@ -71,23 +71,23 @@
   — the steps before the replay point were restored from that run, not re-executed</p>
 {{end}}
 
-{{if $run.ComparedConfig}}
-<p class="diffnote">the <b>configuration changed</b> since last passed
-  <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.ComparedTo}}">{{short $run.ComparedTo}}</a>,
-  which ran <a class="hash" href="/p/{{.Nav.Current}}/config/{{$run.ComparedConfig}}">{{short $run.ComparedConfig}}</a>
-  {{if $run.Changed}}— the steps below moved because the pipeline did{{else}}— no step's content moved with it{{end}}</p>
-{{end}}
-
-{{if $run.Changed}}
+{{/* One line for everything that moved since the last green: the edit and
+     the steps it moved are two halves of "what is different this time". */}}
+{{if or $run.ComparedConfig $run.Changed}}
 <p class="diffnote">vs last passed <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.ComparedTo}}">{{short $run.ComparedTo}}</a>:
-  {{range $run.Changed}}<span class="chg">{{.}}</span> {{end}}changed content — everything else replayed from cache</p>
+  {{if $run.ComparedConfig}}the <b>configuration changed</b> — it ran <a class="hash" href="/p/{{.Nav.Current}}/config/{{$run.ComparedConfig}}">{{short $run.ComparedConfig}}</a>{{if $run.Changed}} ·{{else}}, and no step's content moved with it{{end}}{{end}}
+  {{if $run.Changed}}{{range $run.Changed}}<span class="chg">{{.}}</span> {{end}}changed content — everything else replayed from cache{{end}}</p>
 {{end}}
 
-<div class="keyhint" aria-hidden="true">
-  <span><kbd>j</kbd>/<kbd>k</kbd> move</span>
-  <span><kbd>e</kbd>/<kbd>c</kbd> expand / collapse all</span>
-  <span><kbd>f</kbd> first failure</span>
-  <span><kbd>enter</kbd> toggle</span>
+{{/* On the transcript's top edge, at the right: the keys drive the rows
+     below, and a row of their own cost the first step a line. */}}
+<div class="transcripthead">
+  <div class="keyhint" aria-hidden="true">
+    <span><kbd>j</kbd>/<kbd>k</kbd> move</span>
+    <span><kbd>e</kbd>/<kbd>c</kbd> expand / collapse all</span>
+    <span><kbd>f</kbd> first failure</span>
+    <span><kbd>enter</kbd> toggle</span>
+  </div>
 </div>
 
 {{/* The placeholder hides itself rather than being removed, because the

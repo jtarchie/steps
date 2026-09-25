@@ -479,6 +479,7 @@ svg.dag { display: block; }
 
 /* ---- keyboard ---- */
 .step.sel > .stephead { background: var(--panel2); box-shadow: inset 0 0 0 1px var(--line); }
+.transcripthead { display: flex; justify-content: flex-end; }
 .keyhint {
   font-family: var(--sans);
   font-size: 11px;
