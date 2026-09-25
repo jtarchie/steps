@@ -63,8 +63,53 @@ func pendingQueue(rows []store.QueueRow) []store.QueueRow {
 	return out
 }
 
-// handleJob renders one job: its dependencies, its runs, its green versions.
-func (s *Server) handleJob(c *echo.Context) error {
+// handleJobRedirect sends a job's address to what a reader came for: its
+// latest run; failing that, the follow page for the trigger it is waiting
+// on, so the reader lands on exactly that trigger's run; failing that, the
+// detail page. 302 and never 301: a browser may cache a permanent redirect,
+// and "latest" changes with every run.
+func (s *Server) handleJobRedirect(c *echo.Context) error {
+	pipeline := pipelineOf(c)
+	ctx := c.Request().Context()
+	name := c.Param("job")
+
+	_, err := pipeline.Config().FindJob(name)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", name))
+	}
+
+	base := "/p/" + pipeline.Slug + "/jobs/" + name
+
+	runs, err := pipeline.Store.ListRuns(ctx, name, 1)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	if len(runs) > 0 {
+		//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
+		return c.Redirect(http.StatusFound, "/p/"+pipeline.Slug+"/runs/"+runs[0].ID)
+	}
+
+	queue, err := pipeline.Store.ListTriggerQueue(ctx, 25)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	// A claimed row whose run has not started is "running" to the queue and
+	// still nothing to a reader, so it waits on the follow page too.
+	for _, row := range queue {
+		if row.JobName == name && (row.Status == "pending" || row.Status == "running") {
+			//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
+			return c.Redirect(http.StatusFound, fmt.Sprintf("%s/follow?since=%d", base, row.EnqueuedAt.UnixMilli()))
+		}
+	}
+
+	//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
+	return c.Redirect(http.StatusFound, base+"/detail")
+}
+
+// handleJobDetail renders one job: its dependencies, its runs, its green versions.
+func (s *Server) handleJobDetail(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
 	name := c.Param("job")
@@ -114,7 +159,7 @@ func (s *Server) handleJob(c *echo.Context) error {
 	return c.Render(http.StatusOK, "job", map[string]any{
 		"Nav":      s.nav(c),
 		"Title":    job.Name,
-		"Crumbs":   []crumb{{Label: "jobs", URL: "/p/" + pipeline.Slug}, {Label: job.Name}},
+		"Crumbs":   []crumb{{Label: "jobs", URL: "/p/" + pipeline.Slug}, {Label: job.Name, URL: "/p/" + pipeline.Slug + "/jobs/" + job.Name}, {Label: "detail"}},
 		"Job":      view,
 		"Runs":     runs,
 		"Versions": versions,
@@ -182,7 +227,7 @@ func (s *Server) handleRun(c *echo.Context) error {
 		"TitleMark":   statusMark(view.Run.Status),
 		"Crumbs": []crumb{
 			{Label: "jobs", URL: "/p/" + pipeline.Slug},
-			{Label: view.Run.JobName, URL: "/p/" + pipeline.Slug + "/jobs/" + view.Run.JobName},
+			{Label: view.Run.JobName, URL: "/p/" + pipeline.Slug + "/jobs/" + view.Run.JobName + "/detail"},
 			{Label: "#" + shortID(view.Run.ID)},
 		},
 	})
@@ -310,7 +355,7 @@ func (s *Server) handleNode(c *echo.Context) error {
 	// from — so the trail goes up through the job when there is one.
 	crumbs := []crumb{{Label: "jobs", URL: "/p/" + pipeline.Slug}}
 	if node.JobName != "" {
-		crumbs = append(crumbs, crumb{Label: node.JobName, URL: "/p/" + pipeline.Slug + "/jobs/" + node.JobName})
+		crumbs = append(crumbs, crumb{Label: node.JobName, URL: "/p/" + pipeline.Slug + "/jobs/" + node.JobName + "/detail"})
 	}
 
 	crumbs = append(crumbs, crumb{Label: "node " + shortID(hash)})
@@ -568,7 +613,7 @@ func (s *Server) handleFollow(c *echo.Context) error {
 		"TitleMark": statusMark("running"),
 		"Crumbs": []crumb{
 			{Label: "jobs", URL: "/p/" + pipeline.Slug},
-			{Label: name, URL: "/p/" + pipeline.Slug + "/jobs/" + name},
+			{Label: name, URL: "/p/" + pipeline.Slug + "/jobs/" + name + "/detail"},
 			{Label: "trigger"},
 		},
 		"Job":   name,

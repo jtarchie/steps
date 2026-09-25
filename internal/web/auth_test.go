@@ -101,6 +101,7 @@ func TestBasicAuthCoversEveryRouteAndPromptsTheBrowser(t *testing.T) {
 		{http.MethodGet, "/docs"},
 		{http.MethodGet, "/p/demo"},
 		{http.MethodGet, "/p/demo/jobs/build"},
+		{http.MethodGet, "/p/demo/jobs/build/detail"},
 		{http.MethodGet, "/p/demo/runs"},
 		{http.MethodGet, "/p/demo/runs/whatever/events"},
 		{http.MethodPost, "/p/demo/jobs/build/trigger"},

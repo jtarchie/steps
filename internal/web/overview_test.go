@@ -525,7 +525,7 @@ func TestJobPageShowsResolvedAgentDials(t *testing.T) {
 
 	server := agentJobPipeline(t)
 
-	code, body := get(t, server, "/p/demo/jobs/review")
+	code, body := get(t, server, "/p/demo/jobs/review/detail")
 	if code != http.StatusOK {
 		t.Fatalf("job page = %d", code)
 	}
@@ -567,7 +567,7 @@ func TestJobPageShowsTheBudgetEachStepRunsUnder(t *testing.T) {
 
 	server := agentJobPipeline(t)
 
-	code, body := get(t, server, "/p/demo/jobs/review")
+	code, body := get(t, server, "/p/demo/jobs/review/detail")
 	if code != http.StatusOK {
 		t.Fatalf("job page = %d", code)
 	}
@@ -610,7 +610,7 @@ func TestJobPageSaysWhatATurnIs(t *testing.T) {
 
 	server := agentJobPipeline(t)
 
-	_, body := get(t, server, "/p/demo/jobs/review")
+	_, body := get(t, server, "/p/demo/jobs/review/detail")
 
 	if !strings.Contains(body, "tool round") {
 		t.Errorf("the Turns column does not say a cli counts turns differently: %s", body)
@@ -894,7 +894,7 @@ func TestJobPageOmitsDialsWithoutAgents(t *testing.T) {
 
 	server, _ := testPipeline(t)
 
-	_, body := get(t, server, "/p/demo/jobs/build")
+	_, body := get(t, server, "/p/demo/jobs/build/detail")
 	if strings.Contains(body, "Agent dials") {
 		t.Error("a job with no agent steps renders the dials section")
 	}
@@ -1207,7 +1207,7 @@ jobs:
         messages: ["look at {{.vars.dim}}"]
 `)
 
-	code, body := get(t, server, "/p/demo/jobs/sweep")
+	code, body := get(t, server, "/p/demo/jobs/sweep/detail")
 	if code != http.StatusOK {
 		t.Fatalf("job page = %d", code)
 	}
@@ -1266,7 +1266,7 @@ func TestJobPageListsTheEnsembleJudge(t *testing.T) {
 
 	server, _ := ensembleJudgePipeline(t)
 
-	code, body := get(t, server, "/p/demo/jobs/gate")
+	code, body := get(t, server, "/p/demo/jobs/gate/detail")
 	if code != http.StatusOK {
 		t.Fatalf("job page = %d", code)
 	}
@@ -1355,7 +1355,7 @@ func TestJobPageCallsAZeroTimeoutUncapped(t *testing.T) {
 
 	server, _ := timeoutPipeline(t)
 
-	_, body := get(t, server, "/p/demo/jobs/review")
+	_, body := get(t, server, "/p/demo/jobs/review/detail")
 
 	if got := strings.Count(body, `<td class="dim"><span class="faint">uncapped</span></td>`); got != 1 {
 		t.Errorf("%d deadlines read uncapped, want only the step that set timeout: \"0\":\n%s", got, body)

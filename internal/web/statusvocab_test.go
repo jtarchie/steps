@@ -136,7 +136,7 @@ func TestJobPageSaysPassedNotGreen(t *testing.T) {
 
 	server, _ := testPipeline(t)
 
-	_, body := get(t, server, "/p/demo/jobs/deploy")
+	_, body := get(t, server, "/p/demo/jobs/deploy/detail")
 
 	if strings.Contains(body, "green") {
 		t.Error(`job page still says "green" for a passed state`)

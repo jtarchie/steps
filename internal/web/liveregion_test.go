@@ -181,7 +181,7 @@ func TestNothingThatChangesLivesOutsideALiveRegion(t *testing.T) {
 			// The reported bug: a run triggered while this page is open has to
 			// show up in the history without a reload.
 			name:  "job page",
-			path:  "/p/demo/jobs/build",
+			path:  "/p/demo/jobs/build/detail",
 			setup: testPipeline,
 			change: func(t *testing.T, pipeline *Pipeline) {
 				t.Helper()
@@ -466,7 +466,7 @@ func TestLiveRegionsAreDrivenByHtmx(t *testing.T) {
 		{overview, "/"},
 		{server, "/p/demo"},
 		{server, "/p/demo/runs"},
-		{server, "/p/demo/jobs/build"},
+		{server, "/p/demo/jobs/build/detail"},
 		{server, "/p/demo/resources"},
 		{server, "/p/demo/approvals"},
 		{server, "/p/demo/questions"},

@@ -53,7 +53,7 @@ func TestActiveTabFollowsSection(t *testing.T) {
 
 	cases := []struct{ page, currentTab string }{
 		{"/p/demo", `href="/p/demo">jobs`},
-		{"/p/demo/jobs/build", `href="/p/demo">jobs`},
+		{"/p/demo/jobs/build/detail", `href="/p/demo">jobs`},
 		{"/p/demo/jobs/build/follow", `href="/p/demo">jobs`},
 		{"/p/demo/runs", `href="/p/demo/runs">runs`},
 		{"/p/demo/runs/run-1", `href="/p/demo/runs">runs`},
@@ -195,11 +195,11 @@ func TestBreadcrumbsOnDetailPages(t *testing.T) {
 		t.Error("run page has no breadcrumbs")
 	}
 
-	if !strings.Contains(runBody, `href="/p/demo/jobs/build"`) {
-		t.Error("run page breadcrumbs do not link the job")
+	if !strings.Contains(runBody, `href="/p/demo/jobs/build/detail"`) {
+		t.Error("run page breadcrumbs do not link the job's detail page")
 	}
 
-	_, jobBody := get(t, server, "/p/demo/jobs/build")
+	_, jobBody := get(t, server, "/p/demo/jobs/build/detail")
 	if !strings.Contains(jobBody, `class="crumbs"`) {
 		t.Error("job page has no breadcrumbs")
 	}
@@ -214,7 +214,7 @@ func TestDistinctHeadings(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	startFinishedRun(t, pipeline, "run-1", "build", "succeeded")
 
-	_, jobBody := get(t, server, "/p/demo/jobs/build")
+	_, jobBody := get(t, server, "/p/demo/jobs/build/detail")
 	if !strings.Contains(jobBody, "steps job build") {
 		t.Error("job page H1 is not 'steps job <name>'")
 	}

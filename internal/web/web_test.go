@@ -115,12 +115,12 @@ func TestJobsBoardShowsDependencyEdges(t *testing.T) {
 		}
 	}
 
-	_, deployBody := get(t, server, "/p/demo/jobs/deploy")
+	_, deployBody := get(t, server, "/p/demo/jobs/deploy/detail")
 	if !strings.Contains(deployBody, "must have passed for") {
 		t.Error("deploy page does not show its upstream constraint")
 	}
 
-	_, buildBody := get(t, server, "/p/demo/jobs/build")
+	_, buildBody := get(t, server, "/p/demo/jobs/build/detail")
 	if !strings.Contains(buildBody, "waits on") {
 		t.Error("build page does not show what it feeds")
 	}
@@ -378,7 +378,7 @@ func TestReadOnlyServerRefusesMutations(t *testing.T) {
 
 	server, _ := testPipeline(t)
 
-	_, body := get(t, server, "/p/demo/jobs/build")
+	_, body := get(t, server, "/p/demo/jobs/build/detail")
 	if strings.Contains(body, "▶ Trigger") {
 		t.Error("read-only server offers a trigger control")
 	}
@@ -1038,7 +1038,7 @@ func TestRelativeTimesAreMachineReadable(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	_, body := get(t, server, "/p/demo/jobs/build")
+	_, body := get(t, server, "/p/demo/jobs/build/detail")
 	if !strings.Contains(body, "<time data-ago=") {
 		t.Error("run history has no machine-readable timestamps")
 	}
@@ -1053,7 +1053,7 @@ func TestRelativeTimesAreMachineReadable(t *testing.T) {
 		t.Fatalf("FinishRun: %v", err)
 	}
 
-	_, done := get(t, server, "/p/demo/jobs/build")
+	_, done := get(t, server, "/p/demo/jobs/build/detail")
 	if strings.Contains(done, "data-elapsed-since=") {
 		t.Error("a finished run is still counting up")
 	}
@@ -1733,7 +1733,7 @@ func TestJobPageForcedFormForces(t *testing.T) {
 	}
 
 	action := "/p/demo/jobs/build/trigger"
-	_, page := get(t, server, "/p/demo/jobs/build")
+	_, page := get(t, server, "/p/demo/jobs/build/detail")
 
 	post(t, server, action, formFields(t, page, action)) // first form on the page: ordinary
 	post(t, server, action, map[string]string{"force": formForced(t, page)})

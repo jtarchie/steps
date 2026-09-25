@@ -133,7 +133,7 @@ func TestJobPageExplainsReadOnly(t *testing.T) {
 	// testPipeline passes runner == nil, which IS the read-only deployment.
 	server, _ := testPipeline(t)
 
-	_, body := get(t, server, "/p/demo/jobs/build")
+	_, body := get(t, server, "/p/demo/jobs/build/detail")
 
 	if !strings.Contains(body, "This server is read-only. Trigger with") {
 		t.Error("read-only job page does not explain how to trigger from the CLI")
