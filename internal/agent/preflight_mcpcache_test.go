@@ -165,3 +165,33 @@ func TestAServerThatCannotStartSaysWhy(t *testing.T) {
 		t.Errorf("probeServer = %v, want the launch failure itself, not a timeout", err)
 	}
 }
+
+// TestPreflightJudgesEachGrantsPins: two grants of one tool that differ only in
+// their args: pins get separate verdicts, in both the dedupe and the cache, and
+// an undeclared pin is terminal rather than something a watcher retries.
+func TestPreflightJudgesEachGrantsPins(t *testing.T) {
+	ResetProbeCache()
+
+	mcp := newCountingMCPServer(t)
+	cfg := &config.Config{MCPServers: []config.MCPServer{mcp.server()}}
+	settings := &config.Preflight{}
+
+	good := config.ResolvedInvocation{ToolSpecs: []config.ToolSpec{{MCP: "test", MCPTool: "search_issues", Args: map[string]string{"query": "x"}}}}
+	bad := config.ResolvedInvocation{ToolSpecs: []config.ToolSpec{{MCP: "test", MCPTool: "search_issues", Args: map[string]string{"zzz": "x"}}}}
+
+	seen := map[string]bool{}
+	problems := probeAgentServers(context.Background(), cfg, good, settings, seen)
+	problems = append(problems, probeAgentServers(context.Background(), cfg, bad, settings, seen)...)
+
+	if len(problems) != 1 {
+		t.Fatalf("got %d problems, want 1 naming zzz: %+v", len(problems), problems)
+	}
+
+	if !strings.Contains(problems[0].Detail, `pins "zzz"`) {
+		t.Errorf("problem = %q, want it to name the undeclared pin", problems[0].Detail)
+	}
+
+	if problems[0].Transient {
+		t.Error("an undeclared pin was marked transient; a watcher would retry a config error forever")
+	}
+}

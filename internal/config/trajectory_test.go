@@ -143,6 +143,35 @@ jobs:
 `,
 			want: "can never match",
 		},
+		{
+			name: "asserting on a pinned mcp arg",
+			pipeline: `
+mcp_servers:
+- name: hb
+  command: hb-mcp
+agents:
+- name: reviewer
+  source: { model: lmstudio/qwen }
+  tools:
+  - mcp: hb
+    tool: list_faults
+    args:
+      project_id: "307"
+jobs:
+- name: j
+  plan:
+  - agent: reviewer
+    inputs: []
+    messages:
+      - x
+    assert:
+      tool_calls:
+      - name: hb__list_faults
+        args:
+          project_id: "307"
+`,
+			want: "can never match",
+		},
 	}
 
 	for _, tc := range cases {

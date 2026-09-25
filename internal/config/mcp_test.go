@@ -525,9 +525,29 @@ func TestMCPToolGrantValidationErrors(t *testing.T) {
 			want:  "only valid when tool: selects a single remote tool",
 		},
 		{
-			name:  "args on a single-tool grant",
-			grant: "  - mcp: github\n    tool: x\n    args: { a: b }\n",
-			want:  "args is not valid on mcp tools",
+			name:  "args on a subset grant",
+			grant: "  - mcp: github\n    tools: [x]\n    args: { a: b }\n",
+			want:  "description/required/max_calls/args are only valid when tool: selects a single remote tool",
+		},
+		{
+			name:  "args on the all-tools grant",
+			grant: "  - mcp: github\n    args: { a: b }\n",
+			want:  "description/required/max_calls/args are only valid when tool: selects a single remote tool",
+		},
+		{
+			name:  "pin shadowed by the all-tools grant",
+			grant: "  - mcp: github\n    tool: x\n    args: { a: b }\n  - mcp: github\n",
+			want:  `mcp tool "github__x" pins args, but another grant of mcp server "github" (every tool) offers the same tool unpinned`,
+		},
+		{
+			name:  "pin shadowed by a subset naming the tool",
+			grant: "  - mcp: github\n    tools: [y, x]\n  - mcp: github\n    tool: x\n    args: { a: b }\n",
+			want:  "(tools: [y, x]) offers the same tool unpinned",
+		},
+		{
+			name:  "pin shadowed by the same tool granted again",
+			grant: "  - mcp: github\n    tool: x\n    args: { a: b }\n  - mcp: github\n    tool: x\n",
+			want:  "(tool: x) offers the same tool unpinned",
 		},
 		{
 			name:  "mixed with run",
@@ -548,6 +568,95 @@ func TestMCPToolGrantValidationErrors(t *testing.T) {
 			path := writeConfig(t, mcpAgentPipeline(tc.grant))
 			wantLoadError(t, path, tc.want)
 		})
+	}
+}
+
+func TestMCPToolGrantPinnedArgs(t *testing.T) {
+	t.Parallel()
+
+	// Unquoted scalars decode into the string map: a pin written as
+	// `project_id: 307` must not be a load error, since pinMCPArgs converts
+	// by the server's declared type anyway.
+	path := writeConfig(t, mcpAgentPipeline(`  - mcp: github
+    tool: list_faults
+    args: { project_id: 307, open: true }
+  - mcp: github
+    tools: [get_issue]
+`))
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	got := cfg.Agents[0].Tools[0].Args
+	if got["project_id"] != "307" || got["open"] != "true" {
+		t.Fatalf("Args = %v, want project_id=307 open=true as strings", got)
+	}
+}
+
+func TestMCPToolGrantPinnedArgsOnFix(t *testing.T) {
+	t.Parallel()
+
+	pipeline := mcpServerBlock + `
+agents:
+- name: fixer
+  source: { model: lmstudio/qwen }
+tasks:
+- name: unit
+  run: "true"
+  fix:
+    agent: fixer
+    tools:
+    - mcp: github
+      tool: x
+      args: { a: b }
+    - mcp: github
+jobs:
+- name: j
+  plan: [{ task: unit, inputs: [] }]
+`
+	path := writeConfig(t, pipeline)
+	wantLoadError(t, path, `task "unit" fix: mcp tool "github__x" pins args`)
+}
+
+// TestMCPToolGrantPinnedArgsStepSelection proves a step selecting a pinned
+// grant by its bare name runs the AGENT's spec — pins intact — rather than an
+// unpinned copy.
+func TestMCPToolGrantPinnedArgsStepSelection(t *testing.T) {
+	t.Parallel()
+
+	pipeline := mcpServerBlock + `
+agents:
+- name: triager
+  source: { model: lmstudio/qwen }
+  tools:
+  - mcp: github
+    tool: list_faults
+    args: { project_id: "307" }
+jobs:
+- name: j
+  plan:
+  - agent: triager
+    inputs: []
+    messages:
+      - x
+    tools: [github__list_faults]
+`
+	path := writeConfig(t, pipeline)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	ri, err := cfg.ResolveAgentInvocation(cfg.Jobs[0].Plan[0])
+	if err != nil {
+		t.Fatalf("ResolveAgentInvocation: %v", err)
+	}
+
+	if len(ri.ToolSpecs) != 1 || ri.ToolSpecs[0].Args["project_id"] != "307" {
+		t.Fatalf("bare-name selection resolved to %+v, want the pinned grant", ri.ToolSpecs)
 	}
 }
 

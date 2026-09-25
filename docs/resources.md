@@ -29,6 +29,9 @@ jobs:
 |---|---|---|
 | `uri` | yes | anything `git` can clone — https, ssh, or a local path |
 | `branch` | no | omitted follows the remote's `HEAD` |
+| `fetch` | no | `true` refreshes a local-path `uri` before each check; default `false` |
+
+A local-path `uri` costs no network clone — the right call for a large repository — but the check reads that clone's refs as they are, so the version is whatever the clone last fetched, however long ago that was. `fetch: true` fixes that: each check first fetches `branch` from the clone's remote (`branch.<name>.remote`, else `origin`) into `refs/remotes/<remote>/<branch>` and reports that ref, so the version is the remote's head. It moves exactly that one ref — never the working tree, a local branch, tags or `FETCH_HEAD` — so a developer's own `main` sitting behind changes nothing. It needs an absolute path and a `branch:` (both checked at load; a remote `uri` is refused, being fresh already), git 2.29 or newer, a clone owned by the user running steps, and auth that never prompts (an ssh agent, a credential helper) — a poll has no terminal, so a prompt fails the fetch instead of waiting. A failed fetch fails the check, so `steps web` reports no version rather than a stale one; like any failing check, it stops that pipeline's poll until the next interval. Turning `fetch:` on changes which commit is reported, and `source:` is part of the cache key, so expect one fresh build. The built-in type refuses any other `source:` key, so a misspelled `fecth:` is a load error rather than a flag nobody reads.
 
 It fetches the exact commit the plan pinned, shallowly, so a branch that moves mid-run still gives you the version that was planned. It has **no `out:`** — `put: repo` against it is a load error, because what "publish" means (which branch, which credentials, force or not) is a decision only you can make. Write your own type for that.
 

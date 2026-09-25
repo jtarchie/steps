@@ -267,6 +267,7 @@ func (c *Config) validate() error {
 		c.validateSerial,
 		c.validateVars,
 		c.validateWebhookResources,
+		c.validateGitResources,
 		c.validateApprovals,
 		c.validateCredentialHandling,
 	}

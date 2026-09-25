@@ -33,21 +33,23 @@ func (s *Store) RecordRevision(ctx context.Context, sha, source string, includes
 
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = tx.ExecContext(ctx, `
+	var revisionID int64
+
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO pipeline_revisions (pipeline_id, sha, source, loaded_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT (pipeline_id, sha) DO UPDATE SET loaded_at = excluded.loaded_at
-	`, s.pipelineID, sha, source, nowNano())
+		RETURNING id
+	`, s.pipelineID, sha, source, nowNano()).Scan(&revisionID)
 	if err != nil {
 		return fmt.Errorf("could not record the configuration of pipeline %q: %w", s.pipeline, err)
 	}
 
 	// The sha is over the includes too, so a conflicting row already holds byte-identical ones and INSERT OR IGNORE is exact.
 	for path, content := range includes {
-		_, err = tx.ExecContext(ctx, `
-			INSERT OR IGNORE INTO revision_includes (revision_id, path, content)
-			SELECT id, ?, ? FROM pipeline_revisions WHERE pipeline_id = ? AND sha = ?
-		`, path, content, s.pipelineID, sha)
+		_, err = tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO revision_includes (revision_id, path, content) VALUES (?, ?, ?)`,
+			revisionID, path, content)
 		if err != nil {
 			return fmt.Errorf("could not record the configuration of pipeline %q: %w", s.pipeline, err)
 		}

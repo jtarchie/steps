@@ -491,7 +491,7 @@
         },
         "context_window": {
           "type": "integer",
-          "description": "This model's context window, for a model steps does not recognize or a host that serves a smaller one. Compaction fires at 80% of it."
+          "description": "This model's context window, for a model steps does not recognize or a host that serves a smaller one. Compaction fires at 97% of it."
         },
         "tools": {
           "type": "array",
@@ -687,6 +687,17 @@
             },
             "max_output_bytes": {
               "type": "integer"
+            },
+            "args": {
+              "type": "object",
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "description": "Pinned arguments the model can neither see nor set. Single-tool form only; each key must be a property the tool declares."
             },
             "timeout": {
               "type": "string",

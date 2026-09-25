@@ -7,7 +7,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -45,6 +44,11 @@ func (s *Store) RecordVersions(ctx context.Context, resourceName string, version
 		limit = store.DefaultResourceVersionCap
 	}
 
+	encoded, err := encodeVersions(versions)
+	if err != nil {
+		return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
@@ -52,7 +56,7 @@ func (s *Store) RecordVersions(ctx context.Context, resourceName string, version
 
 	defer func() { _ = tx.Rollback() }()
 
-	added, err := insertNewVersions(ctx, tx, s.pipelineID, resourceName, versions)
+	added, err := insertNewVersions(ctx, tx, s.pipelineID, resourceName, encoded)
 	if err != nil {
 		return 0, err
 	}
@@ -65,7 +69,7 @@ func (s *Store) RecordVersions(ctx context.Context, resourceName string, version
 	// cascading away consumed marks so jobs re-fan-out each cycle. The cap
 	// therefore bounds what has scrolled AWAY, and a window larger than the
 	// cap is simply kept whole.
-	floor, err := minReportedOrder(ctx, tx, s.pipelineID, resourceName, versions)
+	floor, err := minReportedOrder(ctx, tx, s.pipelineID, resourceName, encoded)
 	if err != nil {
 		return 0, err
 	}
@@ -85,6 +89,22 @@ func (s *Store) RecordVersions(ctx context.Context, resourceName string, version
 	return added, nil
 }
 
+// encodeVersions encodes once for both the upsert and the floor query, which each used to encode every version again.
+func encodeVersions(versions []map[string]any) ([]string, error) {
+	encoded := make([]string, 0, len(versions))
+
+	for _, version := range versions {
+		one, err := store.EncodeVersion(version)
+		if err != nil {
+			return nil, err //nolint:wrapcheck // the caller names the resource
+		}
+
+		encoded = append(encoded, one)
+	}
+
+	return encoded, nil
+}
+
 // insertNewVersions files the versions check-history does not hold, each
 // taking the next check_order, and reports how many that was.
 //
@@ -94,28 +114,31 @@ func (s *Store) RecordVersions(ctx context.Context, resourceName string, version
 // only a run had filed matches both, taking a fresh order (see
 // RecordVersions).
 func insertNewVersions(
-	ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, versions []map[string]any,
+	ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, encoded []string,
 ) (int, error) {
 	next, err := nextCheckOrder(ctx, tx, pipelineID, resourceName)
 	if err != nil {
 		return 0, err
 	}
 
+	// Prepared once, because the driver otherwise re-prepares per row, and a check re-reporting a 1000-version window paid that 1000 times under the write lock: measured 11.9ms a poll against 2.8ms.
+	upsert, err := tx.PrepareContext(ctx, `
+		INSERT INTO resource_versions (pipeline_id, resource_name, version_json, check_order, from_check)
+		VALUES (?, ?, ?, ?, 1)
+		ON CONFLICT (pipeline_id, resource_name, version_json)
+		DO UPDATE SET from_check = 1, check_order = excluded.check_order
+		WHERE resource_versions.from_check = 0
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
+	}
+
+	defer func() { _ = upsert.Close() }()
+
 	added := 0
 
-	for _, version := range versions {
-		encoded, err := store.EncodeVersion(version)
-		if err != nil {
-			return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
-		}
-
-		result, err := tx.ExecContext(ctx, `
-			INSERT INTO resource_versions (pipeline_id, resource_name, version_json, check_order, from_check)
-			VALUES (?, ?, ?, ?, 1)
-			ON CONFLICT (pipeline_id, resource_name, version_json)
-			DO UPDATE SET from_check = 1, check_order = excluded.check_order
-			WHERE resource_versions.from_check = 0
-		`, pipelineID, resourceName, encoded, next)
+	for _, version := range encoded {
+		result, err := upsert.ExecContext(ctx, pipelineID, resourceName, version, next)
 		if err != nil {
 			return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
 		}
@@ -133,43 +156,23 @@ func insertNewVersions(
 // minReportedOrder is the lowest check_order among the versions a check just
 // reported — the floor below which pruning is safe.
 func minReportedOrder(
-	ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, versions []map[string]any,
+	ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, encoded []string,
 ) (int64, error) {
-	const chunk = 500
+	var lowest sql.NullInt64
 
-	var floor int64 = 1<<62 - 1
-
-	for start := 0; start < len(versions); start += chunk {
-		end := min(start+chunk, len(versions))
-
-		args := make([]any, 0, end-start+2)
-		args = append(args, pipelineID, resourceName)
-
-		for _, version := range versions[start:end] {
-			encoded, err := store.EncodeVersion(version)
-			if err != nil {
-				return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
-			}
-
-			args = append(args, encoded)
-		}
-
-		var lowest sql.NullInt64
-
-		err := tx.QueryRowContext(ctx,
-			`SELECT MIN(check_order) FROM resource_versions
-			 WHERE pipeline_id = ? AND resource_name = ? AND version_json IN (`+
-				placeholders(end-start)+`)`, args...).Scan(&lowest)
-		if err != nil {
-			return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
-		}
-
-		if lowest.Valid && lowest.Int64 < floor {
-			floor = lowest.Int64
-		}
+	err := tx.QueryRowContext(ctx,
+		`SELECT MIN(check_order) FROM resource_versions
+		 WHERE pipeline_id = ? AND resource_name = ? AND version_json IN (SELECT value FROM json_each(?))`,
+		pipelineID, resourceName, jsonList(encoded)).Scan(&lowest)
+	if err != nil {
+		return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
 	}
 
-	return floor, nil
+	if !lowest.Valid {
+		return 1<<62 - 1, nil
+	}
+
+	return lowest.Int64, nil
 }
 
 // nextCheckOrder is the order to give the next newly-seen version.
@@ -258,34 +261,25 @@ func (s *Store) ResourceVersionsJSON(ctx context.Context, resourceName string) (
 // them or its cursor could never advance past them — a `steps run` against an
 // unpolled resource would repeat its whole fan-out every time.
 func (s *Store) VersionOrders(ctx context.Context, resourceName string) (map[string]int64, error) {
-	rows, err := s.db.QueryContext(ctx,
+	type ordered struct {
+		encoded string
+		order   int64
+	}
+
+	rows, err := collect(ctx, s.db, "the version order of "+resourceName,
 		`SELECT version_json, check_order FROM resource_versions WHERE pipeline_id = ? AND resource_name = ?`,
-		s.pipelineID, resourceName)
+		[]any{s.pipelineID, resourceName}, func(rows *sql.Rows) (ordered, error) {
+			var row ordered
+
+			return row, rows.Scan(&row.encoded, &row.order)
+		})
 	if err != nil {
-		return nil, fmt.Errorf("could not read version order for %q: %w", resourceName, err)
+		return nil, err
 	}
 
-	defer func() { _ = rows.Close() }()
-
-	orders := map[string]int64{}
-
-	for rows.Next() {
-		var (
-			encoded string
-			order   int64
-		)
-
-		err = rows.Scan(&encoded, &order)
-		if err != nil {
-			return nil, fmt.Errorf("could not read version order for %q: %w", resourceName, err)
-		}
-
-		orders[encoded] = order
-	}
-
-	err = rows.Err()
-	if err != nil {
-		return nil, fmt.Errorf("could not read version order for %q: %w", resourceName, err)
+	orders := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		orders[row.encoded] = row.order
 	}
 
 	return orders, nil
@@ -370,42 +364,28 @@ func ensureVersion(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceNa
 // listing. Concourse's model, and the reason a job whose head keeps failing
 // upstream still deploys the newest version that DID pass.
 func (s *Store) GreenVersions(ctx context.Context, resourceName string, upstreamJobs []string) ([]map[string]any, error) {
-	orders, err := s.VersionOrders(ctx, resourceName)
+	// Every version for which no named upstream lacks a green record: relational division, answered off job_versions' primary key.
+	encoded, err := collect(ctx, s.db, "green versions of "+resourceName, `
+		SELECT rv.version_json FROM resource_versions rv
+		WHERE rv.pipeline_id = ? AND rv.resource_name = ?
+		  AND NOT EXISTS (
+		      SELECT 1 FROM json_each(?) upstream
+		      WHERE NOT EXISTS (
+		          SELECT 1 FROM job_versions jv
+		          WHERE jv.pipeline_id = rv.pipeline_id AND jv.job_name = upstream.value
+		            AND jv.resource_name = rv.resource_name AND jv.version_json = rv.version_json
+		      )
+		  )
+		ORDER BY rv.check_order
+	`, []any{s.pipelineID, resourceName, jsonList(upstreamJobs)}, scanString)
 	if err != nil {
 		return nil, err
 	}
 
-	green := make(map[string]bool, len(orders))
-	for encoded := range orders {
-		green[encoded] = true
-	}
+	versions := make([]map[string]any, 0, len(encoded))
 
-	for _, upstream := range upstreamJobs {
-		passed, err := s.passedVersionSet(ctx, upstream, resourceName)
-		if err != nil {
-			return nil, err
-		}
-
-		for encoded := range green {
-			if !passed[encoded] {
-				delete(green, encoded)
-			}
-		}
-	}
-
-	encodedVersions := make([]string, 0, len(green))
-	for encoded := range green {
-		encodedVersions = append(encodedVersions, encoded)
-	}
-
-	sort.Slice(encodedVersions, func(i, j int) bool {
-		return orders[encodedVersions[i]] < orders[encodedVersions[j]]
-	})
-
-	versions := make([]map[string]any, 0, len(encodedVersions))
-
-	for _, encoded := range encodedVersions {
-		version, err := store.DecodeVersion(encoded)
+	for _, one := range encoded {
+		version, err := store.DecodeVersion(one)
 		if err != nil {
 			return nil, fmt.Errorf("could not read green versions for %q: %w", resourceName, err)
 		}
@@ -414,37 +394,4 @@ func (s *Store) GreenVersions(ctx context.Context, resourceName string, upstream
 	}
 
 	return versions, nil
-}
-
-// passedVersionSet is every version_json jobName has recorded green for a
-// resource — the raw material GreenVersions intersects.
-func (s *Store) passedVersionSet(ctx context.Context, jobName, resourceName string) (map[string]bool, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT version_json FROM job_versions WHERE pipeline_id = ? AND job_name = ? AND resource_name = ?`,
-		s.pipelineID, jobName, resourceName)
-	if err != nil {
-		return nil, fmt.Errorf("could not read passed versions for job %q: %w", jobName, err)
-	}
-
-	defer func() { _ = rows.Close() }()
-
-	passed := map[string]bool{}
-
-	for rows.Next() {
-		var encoded string
-
-		err = rows.Scan(&encoded)
-		if err != nil {
-			return nil, fmt.Errorf("could not read passed versions for job %q: %w", jobName, err)
-		}
-
-		passed[encoded] = true
-	}
-
-	err = rows.Err()
-	if err != nil {
-		return nil, fmt.Errorf("could not read passed versions for job %q: %w", jobName, err)
-	}
-
-	return passed, nil
 }

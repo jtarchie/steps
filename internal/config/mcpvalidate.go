@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -179,16 +180,22 @@ func validateMCPServerStdioAuth(srv MCPServer) error {
 func (c *Config) validateMCPToolGrants() error {
 	for i := range c.Agents {
 		agent := c.Agents[i]
+		context := fmt.Sprintf("agent %q", agent.Name)
 
 		for _, tool := range agent.Tools {
 			if tool.MCP == "" {
 				continue
 			}
 
-			err := c.validateMCPToolShape(fmt.Sprintf("agent %q", agent.Name), tool)
+			err := c.validateMCPToolShape(context, tool)
 			if err != nil {
 				return err
 			}
+		}
+
+		err := validateMCPPinShadowing(context, agent.Tools)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -229,16 +236,68 @@ func (c *Config) checkFixMCPToolShapes(context string, fix *FixSpec) error {
 		}
 	}
 
+	return validateMCPPinShadowing(context, fix.Tools)
+}
+
+// validateMCPPinShadowing refuses a pinned single-tool grant that another MCP
+// grant in the same tool list also offers — the bare form of that server, a
+// tools: subset naming the tool, or the same tool: again. The model would be
+// handed the same function unpinned, so the pin would bind nothing. Step
+// preparation would refuse it anyway, as a duplicate tool name; this says why
+// and says it at load.
+//
+// Scoped to one list on purpose: a sub-agent's or fix:'s own grant of the
+// same server is a separate capability its author chose.
+func validateMCPPinShadowing(context string, specs []ToolSpec) error {
+	for i, pinned := range specs {
+		if pinned.MCP == "" || pinned.MCPTool == "" || len(pinned.Args) == 0 {
+			continue
+		}
+
+		for j, other := range specs {
+			if i == j || other.MCP != pinned.MCP {
+				continue
+			}
+
+			if offersMCPTool(other, pinned.MCPTool) {
+				return fmt.Errorf(
+					"%s: mcp tool %q pins args, but another grant of mcp server %q (%s) offers the same tool unpinned — "+
+						"narrow that grant so it no longer offers %q, or the pin binds nothing",
+					context, ToolSpecName(pinned), pinned.MCP, describeMCPGrant(other), pinned.MCPTool)
+			}
+		}
+	}
+
 	return nil
+}
+
+// offersMCPTool reports whether an MCP grant hands the model tool.
+func offersMCPTool(spec ToolSpec, tool string) bool {
+	if spec.MCPTool != "" {
+		return spec.MCPTool == tool
+	}
+
+	return len(spec.MCPTools) == 0 || slices.Contains(spec.MCPTools, tool)
+}
+
+// describeMCPGrant names an MCP grant's form the way a reader wrote it.
+func describeMCPGrant(spec ToolSpec) string {
+	switch {
+	case spec.MCPTool != "":
+		return "tool: " + spec.MCPTool
+	case len(spec.MCPTools) > 0:
+		return "tools: [" + strings.Join(spec.MCPTools, ", ") + "]"
+	default:
+		return "every tool"
+	}
 }
 
 // validateMCPToolShape checks one MCP tool grant entry: it must set no
 // custom-tool/sub-agent fields, must reference a configured mcp_servers:
-// entry, must not set both tool: and tools:, must not set args: (an MCP
-// tool's arguments are schema-shaped by the remote server, not a flat
-// string template), and may only set description:/required:/max_calls:
-// (single-tool concepts) when tool: selects exactly one remote tool — not
-// on the named-subset (tools:) or bare "grant everything" form.
+// entry, must not set both tool: and tools:, and may only set
+// description:/required:/max_calls:/args: (single-tool concepts) when tool:
+// selects exactly one remote tool — not on the named-subset (tools:) or bare
+// "grant everything" form.
 func (c *Config) validateMCPToolShape(context string, tool ToolSpec) error {
 	err := validateMCPToolFields(context, tool)
 	if err != nil {
@@ -272,20 +331,17 @@ func validateMCPToolFields(context string, tool ToolSpec) error {
 		return fmt.Errorf("%s: mcp tool %q: tool and tools are mutually exclusive", context, tool.MCP)
 	}
 
-	if tool.MCPTool == "" && (tool.Description != "" || tool.Required || tool.MaxCalls != 0) {
-		return fmt.Errorf("%s: mcp tool %q: description/required/max_calls are only valid when tool: selects a single remote tool", context, tool.MCP)
+	if tool.MCPTool == "" && (tool.Description != "" || tool.Required || tool.MaxCalls != 0 || tool.Args != nil) {
+		return fmt.Errorf("%s: mcp tool %q: description/required/max_calls/args are only valid when tool: selects a single remote tool", context, tool.MCP)
 	}
 
 	return validateMCPToolGuards(context, tool)
 }
 
-// validateMCPToolGuards checks the args:/max_calls: guard fields — split out
-// of validateMCPToolFields to keep its branch count down (cyclop).
+// validateMCPToolGuards checks the max_calls:/max_output_bytes: guard
+// fields — split out of validateMCPToolFields to keep its branch count down
+// (cyclop).
 func validateMCPToolGuards(context string, tool ToolSpec) error {
-	if tool.Args != nil {
-		return fmt.Errorf("%s: mcp tool %q: args is not valid on mcp tools (arguments are schema-shaped by the remote server)", context, tool.MCP)
-	}
-
 	if tool.MaxCalls < 0 {
 		return fmt.Errorf("%s: mcp tool %q: max_calls must be >= 0", context, tool.MCP)
 	}
