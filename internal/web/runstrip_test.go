@@ -100,3 +100,40 @@ func TestRunPageStripShowsAQueuedTriggerAsItsFollowLink(t *testing.T) {
 		t.Error("the queued chip is not the newest thing on the strip")
 	}
 }
+
+// TestRunPageStripDropsTheQueuedChipOnceItsRunStarts: a claimed queue row
+// stays "running" for the whole build, so reading the queue alone would show
+// a queued chip beside the run it became. The chip means "no run yet", and
+// only a run started since the row was enqueued can say otherwise.
+func TestRunPageStripDropsTheQueuedChipOnceItsRunStarts(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	startFinishedRun(t, pipeline, "run-1", "build", "succeeded")
+
+	_, _, ok := enqueueAndClaim(t, pipeline.Store, "build")
+	if !ok {
+		t.Fatal("the queued build was not claimed")
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-1")
+	if !strings.Contains(stripOf(t, body), "queued</a>") {
+		t.Fatal("a claimed row with no run yet is not shown as queued")
+	}
+
+	err := pipeline.Store.StartRun(context.Background(), "run-2", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	_, body = get(t, server, "/p/demo/runs/run-1")
+	strip := stripOf(t, body)
+
+	if strings.Contains(strip, "queued</a>") {
+		t.Errorf("the queued chip outlived the run it became: %s", strip)
+	}
+
+	if !strings.Contains(strip, `href="/p/demo/runs/run-2"`) {
+		t.Error("the run the row became is not on the strip")
+	}
+}

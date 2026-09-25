@@ -1046,9 +1046,10 @@ type runStripView struct {
 	Queued      bool
 }
 
-// runStrip reads what the strip shows. A claimed row whose run has not
-// started is "running" to the queue and still nothing to a reader, so it
-// counts as queued too — the follow page is what turns it into a run.
+// runStrip reads what the strip shows. A claimed row is "running" to the
+// queue for the whole build, and a pending one may already have been
+// overtaken — so a row counts as queued only while no run has started since
+// it was enqueued, which is the same question the follow page asks.
 func (s *Server) runStrip(ctx context.Context, pipeline *Pipeline, jobName string) (runStripView, error) {
 	runs, err := pipeline.Store.ListRuns(ctx, jobName, stripLimit)
 	if err != nil {
@@ -1066,12 +1067,21 @@ func (s *Server) runStrip(ctx context.Context, pipeline *Pipeline, jobName strin
 	}
 
 	for _, row := range queue {
-		if row.JobName == jobName && (row.Status == "pending" || row.Status == "running") {
+		if row.JobName != jobName || (row.Status != "pending" && row.Status != "running") {
+			continue
+		}
+
+		_, served, err := pipeline.Store.FirstRunSince(ctx, jobName, row.EnqueuedAt)
+		if err != nil {
+			return runStripView{}, err //nolint:wrapcheck // the caller wraps with its own context
+		}
+
+		if !served {
 			view.Queued = true
 			view.QueuedSince = row.EnqueuedAt.UnixMilli()
-
-			break
 		}
+
+		break
 	}
 
 	return view, nil

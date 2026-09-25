@@ -33,7 +33,7 @@ func enqueueJob(ctx context.Context, db executor, pipelineID int64, jobName, rea
 		INSERT INTO trigger_queue (pipeline_id, job_name, reason, status, enqueued_at)
 		VALUES (?, ?, ?, 'pending', ?)
 		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' DO NOTHING
-	`, pipelineID, jobName, reason, now())
+	`, pipelineID, jobName, reason, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
 	}
@@ -91,7 +91,7 @@ func (s *Store) ClaimNextJob(ctx context.Context) (int64, string, bool, error) {
 			ORDER BY tq.id LIMIT 1
 		)
 		RETURNING id, job_name
-	`, now(), s.pipelineID).Scan(&id, &jobName)
+	`, nowNano(), s.pipelineID).Scan(&id, &jobName)
 	if err == sql.ErrNoRows {
 		return 0, "", false, nil
 	}
@@ -113,7 +113,7 @@ func (s *Store) CompleteJob(ctx context.Context, id int64, status string, runErr
 		UPDATE trigger_queue
 		SET status = ?, finished_at = ?, error = ?
 		WHERE id = ? AND pipeline_id = ?
-	`, status, now(), errText(runErr), id, s.pipelineID)
+	`, status, nowNano(), errText(runErr), id, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not complete job (id %d): %w", id, err)
 	}
@@ -126,7 +126,7 @@ func (s *Store) AbortQueuedJob(ctx context.Context, jobName string) (bool, error
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE trigger_queue SET status = 'aborted', finished_at = ?
 		WHERE pipeline_id = ? AND job_name = ? AND status = 'pending'
-	`, now(), s.pipelineID, jobName)
+	`, nowNano(), s.pipelineID, jobName)
 	if err != nil {
 		return false, fmt.Errorf("could not abort the queued run of %q: %w", jobName, err)
 	}
