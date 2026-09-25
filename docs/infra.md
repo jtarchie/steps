@@ -652,14 +652,14 @@ jobs:
 ```
 Fri 02:00  nightly-summary failed (1/3 consecutive)
 Sat 02:00  nightly-summary failed (2/3 consecutive)
-Sun 02:00  nightly-summary PAUSED after 3 consecutive failures — resume with: steps jobs resume nightly-summary -p <pipeline>
+Sun 02:00  nightly-summary HELD after 3 consecutive failures — release with: steps jobs release nightly-summary -p <pipeline>
 ```
 
 - **It counts triggered RUNS, not the `attempts:` retries inside one** — conflating them would trip the breaker on ordinary flakiness a retry would have absorbed.
 - **Consecutive, not cumulative.** A job that fails, passes, then fails is flaky, not broken. Any success resets the count.
-- **Tripping is loud**: a printed line plus a `trigger.job_paused` log record.
+- **Tripping is loud**: a `web.job_held` log record, and the job reads `⊘ held` on the jobs board and its own page.
 - **An interrupted run does not count.** Ctrl-C is an operator, not a broken job.
-- **Resume is manual, deliberately** (`steps jobs resume <job> -p <pipeline>`). Any successful run clears the breaker — including a manual `steps run`, the natural way to confirm a fix.
+- **Release is manual, deliberately** (`steps jobs release <job> -p <pipeline>`, or **Release** on the job's page). Not *resume*: that word is `--resume <run>`'s, continuing a failed run. Any successful run clears the breaker — including a manual `steps run`, the natural way to confirm a fix.
 - **It holds back automatic triggers only.** A new version or a webhook delivery is skipped while the job is held; a person pressing Trigger in the web UI gets a run, since that is how somebody tries a fix from there. Unattended auto-resume would defeat the safety purpose.
 - **Off by default.** A job that declares no ceiling never pauses; the count is still kept, so turning a breaker on later starts from a real number.
 

@@ -16,7 +16,7 @@ import (
 // the next call site.
 //
 // Four commands load a pipeline and open its state, and each has to resolve
-// the identity the same way. `jobs resume` did not: it loaded with the file
+// the identity the same way. `jobs release` did not: it loaded with the file
 // name default while opening the store under the --name override, so the
 // Config and the store disagreed on a command whose whole job is to write to
 // that store. Making it a checked invariant means a fifth command that
@@ -51,30 +51,30 @@ func TestSetupRefusesAConfigLoadedUnderADifferentIdentity(t *testing.T) {
 	}
 }
 
-// TestJobsResumeAnswersForThePipelineItWasNamed pins what `-p` moved.
+// TestJobsReleaseAnswersForThePipelineItWasNamed pins what `-p` moved.
 //
-// `jobs resume` writes to a pipeline's state and checks the job name against
+// `jobs release` writes to a pipeline's state and checks the job name against
 // the configuration that pipeline is SET to, so both halves have to agree
 // about which pipeline is meant. It used to derive one identity from a file
 // path and another from --name, which is the split #94 describes; there is no
 // path here any more, and the name it is given is the only answer either half
 // can reach.
-func TestJobsResumeAnswersForThePipelineItWasNamed(t *testing.T) {
+func TestJobsReleaseAnswersForThePipelineItWasNamed(t *testing.T) {
 	state := setPipelineInto(t, "prod")
 	pauseJobIn(t, state, "prod", "build")
 
 	var err error
 
 	out := captureStdout(t, func() {
-		err = Run([]string{"jobs", "resume", "build", "-p", "prod", "--db", state})
+		err = Run([]string{"jobs", "release", "build", "-p", "prod", "--db", state})
 	})
 
 	if err != nil {
-		t.Fatalf("jobs resume: %v", err)
+		t.Fatalf("jobs release: %v", err)
 	}
 
-	if !strings.Contains(out, "resumed: build") {
-		t.Errorf("output does not say what was resumed:\n%s", out)
+	if !strings.Contains(out, "released: build") {
+		t.Errorf("output does not say what was released:\n%s", out)
 	}
 
 	reopened, err := sqlite.OpenStore(state, "prod")
@@ -90,18 +90,18 @@ func TestJobsResumeAnswersForThePipelineItWasNamed(t *testing.T) {
 	}
 
 	if paused {
-		t.Error("the job is still paused, so resume wrote somewhere else")
+		t.Error("the job is still paused, so release wrote somewhere else")
 	}
 }
 
-// TestJobsResumeRefusesAJobTheServedConfigDoesNotHave: the name is checked
+// TestJobsReleaseRefusesAJobTheServedConfigDoesNotHave: the name is checked
 // against the configuration the daemon is serving, so a typo is a refusal
 // rather than a no-op that reports success.
-func TestJobsResumeRefusesAJobTheServedConfigDoesNotHave(t *testing.T) {
+func TestJobsReleaseRefusesAJobTheServedConfigDoesNotHave(t *testing.T) {
 	state := setPipelineInto(t, "prod")
 	pauseJobIn(t, state, "prod", "build")
 
-	err := Run([]string{"jobs", "resume", "buidl", "-p", "prod", "--db", state})
+	err := Run([]string{"jobs", "release", "buidl", "-p", "prod", "--db", state})
 	if err == nil {
 		t.Fatal("resuming a job that is not paused was reported as done")
 	}

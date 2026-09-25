@@ -956,7 +956,7 @@
         "max_consecutive_failures": {
           "type": "integer",
           "minimum": 0,
-          "description": "Pause this job under steps web after this many consecutive failed triggered runs. Resume with: steps jobs resume <pipeline> <job>. Omit (or 0) for no circuit breaker."
+          "description": "Hold this job's automatic triggers under steps web after this many consecutive failed triggered runs. Release with: steps jobs release <job> -p <pipeline>. Omit (or 0) for no circuit breaker."
         },
         "on_success": {
           "$ref": "#/$defs/step"

@@ -48,8 +48,8 @@ type Job struct {
 	// a group never run at the same time, which is what stops two different
 	// deploy jobs mutating one target concurrently.
 	SerialGroups []string `yaml:"serial_groups,omitempty"`
-	// MaxConsecutiveFailures pauses this job under `steps web` once it has
-	// failed this many triggered RUNS in a row, until someone resumes it.
+	// MaxConsecutiveFailures holds this job's automatic triggers under `steps web` once it has
+	// failed this many triggered RUNS in a row, until someone releases it or a run passes.
 	//
 	// It counts runs, not the attempts: retries inside one — conflating them
 	// would trip the breaker on ordinary flakiness a retry would have

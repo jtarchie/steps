@@ -57,8 +57,8 @@ steps runs -p <name>        what ran, newest first, each row naming the
                             for the other four views; runs steps says why,
                             runs steps <run> what a --resume of it skips)
 steps runs                  with no -p: every pipeline in the state file
-steps jobs -p <name>        list jobs the circuit breaker paused
-                            (steps jobs resume <job> -p <name> clears one)
+steps jobs -p <name>        list jobs the circuit breaker is holding
+                            (steps jobs release <job> -p <name> clears one)
 steps approvals -p <name>   list approval: steps waiting for a decision
                             (steps approvals approve|reject <id> -p <name>)
 steps questions -p <name>   list ask_user questions waiting for an answer

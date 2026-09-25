@@ -171,7 +171,7 @@ func TestGroupedVerbsKeepTheirBareForm(t *testing.T) {
 	}{
 		{append([]string{"approvals"}, readArgs(path)...), append([]string{"approvals", "list"}, readArgs(path)...), "no approvals are waiting"},
 		{append([]string{"questions"}, readArgs(path)...), append([]string{"questions", "list"}, readArgs(path)...), "no questions are waiting"},
-		{append([]string{"jobs"}, readArgs(path)...), append([]string{"jobs", "list"}, readArgs(path)...), "no jobs are paused"},
+		{append([]string{"jobs"}, readArgs(path)...), append([]string{"jobs", "list"}, readArgs(path)...), "no jobs are held"},
 	} {
 		t.Run(group.bare[0], func(t *testing.T) {
 			for _, args := range [][]string{group.bare, group.full} {
@@ -220,15 +220,15 @@ func TestRetiredVerbsAreGone(t *testing.T) {
 	}
 }
 
-// TestJobsResumeClearsTheBreaker.
+// TestJobsReleaseClearsTheBreaker.
 //
-// `jobs --resume <name>` was a listing command that wrote when you passed it
+// `jobs --release <name>` was a listing command that wrote when you passed it
 // a flag. The subcommand does the same work; this is the proof it does it —
 // which the flag form never had, so the mutation was covered by nothing at
 // the CLI level at all.
 //
 // Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
-func TestJobsResumeClearsTheBreaker(t *testing.T) {
+func TestJobsReleaseClearsTheBreaker(t *testing.T) {
 	path := flagFixture(t)
 
 	pauseJob(t, path, "build")
@@ -236,19 +236,19 @@ func TestJobsResumeClearsTheBreaker(t *testing.T) {
 	var err error
 
 	out := captureStdout(t, func() {
-		err = cli.Run(append([]string{"jobs", "resume", "build"}, readArgs(path)...))
+		err = cli.Run(append([]string{"jobs", "release", "build"}, readArgs(path)...))
 	})
 
 	if err != nil {
-		t.Fatalf("jobs resume: %v", err)
+		t.Fatalf("jobs release: %v", err)
 	}
 
-	if !strings.Contains(out, "resumed: build") {
-		t.Errorf("output does not say what was resumed:\n%s", out)
+	if !strings.Contains(out, "released: build") {
+		t.Errorf("output does not say what was released:\n%s", out)
 	}
 
 	if jobPaused(t, path, "build") {
-		t.Error("the job is still paused, so resume resumed nothing")
+		t.Error("the job is still paused, so release released nothing")
 	}
 }
 
@@ -295,13 +295,13 @@ func jobPaused(t *testing.T, path, job string) bool {
 	return paused
 }
 
-// TestJobsResumeRefusesAJobThePipelineDoesNotHave: the name is checked
+// TestJobsReleaseRefusesAJobThePipelineDoesNotHave: the name is checked
 // against the pipeline, so a typo is a refusal rather than a no-op that
 // reports success.
-func TestJobsResumeRefusesAJobThePipelineDoesNotHave(t *testing.T) {
+func TestJobsReleaseRefusesAJobThePipelineDoesNotHave(t *testing.T) {
 	t.Parallel()
 
-	err := cli.Run(append([]string{"jobs", "resume", "buidl"}, readArgs(flagFixture(t))...))
+	err := cli.Run(append([]string{"jobs", "release", "buidl"}, readArgs(flagFixture(t))...))
 	if err == nil {
 		t.Fatal("resuming a job the pipeline does not declare was reported as done")
 	}
@@ -394,7 +394,7 @@ func TestListingsAnswerBeforeAStateFileExists(t *testing.T) {
 	}{
 		{"approvals", "no approvals are waiting"},
 		{"questions", "no questions are waiting"},
-		{"jobs", "no jobs are paused"},
+		{"jobs", "no jobs are held"},
 	} {
 		t.Run(probe.verb, func(t *testing.T) {
 			var err error
@@ -447,7 +447,7 @@ func TestReadingADatabaseBeingCreated(t *testing.T) {
 		{append([]string{"runs", "list"}, readArgs(path)...), "no runs recorded yet"},
 		{append([]string{"approvals"}, readArgs(path)...), "no approvals are waiting"},
 		{append([]string{"questions"}, readArgs(path)...), "no questions are waiting"},
-		{append([]string{"jobs"}, readArgs(path)...), "no jobs are paused"},
+		{append([]string{"jobs"}, readArgs(path)...), "no jobs are held"},
 		{[]string{"runs", "--db", state}, "no pipelines recorded"},
 	} {
 		t.Run(strings.Join(probe.args[:2], " "), func(t *testing.T) {
