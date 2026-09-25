@@ -42,15 +42,18 @@
   {{end}}<a class="stripmore" href="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/detail">all runs</a>
 </nav>
 
-{{if $run.JobError}}
-<div class="errblock"><span class="lbl">job error:</span> {{$run.JobError}}</div>
+{{/* Only an error no step holds: a failing step's error is what the job error
+     IS (the plan wraps it), and it is read on the step, once — the head names
+     that step in the outcome line and links to it. */}}
+{{with $run.HeadError}}
+<div class="errblock"><span class="lbl">job error:</span> {{.}}</div>
 {{/* A SIBLING of the block, not a child: .errblock is pre-wrap, so a nested
      element renders this template's own indentation as blank lines inside the
      error. The reader asking whether a server is wired up arrives here, from a
      red run rather than from the nav bar — and the link is gated on the
      pipeline still declaring servers, since a tab that no longer exists is a
      404 at the end of a triage. */}}
-{{if and $run.MCPBlamed .Nav.HasMCP}}<div class="errhint">mcp server <code>{{$run.MCPBlamed}}</code> — <a href="/p/{{.Nav.Current}}/mcp#mcp-{{$run.MCPBlamed}}">is it connected?</a></div>{{end}}
+{{template "mcphint" $}}
 {{end}}
 {{if $run.Notes}}<div class="runnotes">{{range $run.Notes}}{{template "notice" .}}{{end}}</div>{{end}}
 
@@ -242,8 +245,9 @@
 {{$anchor := $step.Anchor}}
 <div id="{{$anchor}}"{{if .OOB}} hx-swap-oob="outerMorph"{{end}}{{template "stepattrs" .}}>
   {{template "stephead" (stepctx $page $step)}}
-  {{if $step.HasBody $run.JobError}}<div class="stepbody" id="{{$anchor}}_body">
-    {{with $step.DistinctError $run.JobError}}<div class="log"><span class="err">{{.}}</span></div>{{end}}
+  {{if $step.HasBody}}<div class="stepbody" id="{{$anchor}}_body">
+    {{with $step.Error}}<div class="log"><span class="err">{{.}}</span></div>{{end}}
+    {{if $run.MCPBlamedOn $step}}{{template "mcphint" $page}}{{end}}
     {{if $step.Reason}}<div class="log">{{$step.Reason}}{{if $step.Hash}} · content hash {{short $step.Hash}}{{end}}</div>{{end}}
     {{range $step.Notes}}{{template "notice" .}}{{end}}
     {{range $step.Outputs}}<pre class="log output">{{jsonPre .}}</pre>{{end}}
@@ -275,7 +279,7 @@
      the row, and the shell the stream sends when only these moved — a
      container whose child finished changes class and rollup and nothing
      under it. Rendered INSIDE the opening tag, so it starts with a space. */}}
-{{define "stepattrs"}}{{$step := .Step}}{{$detail := $step.HasDetail .Page.Run.JobError}} class="step{{if $step.Skipped}} skipped{{else if $step.Failed}} failed{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail (or $step.Failed $step.Turns $step.Container)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}"{{end}}
+{{define "stepattrs"}}{{$step := .Step}}{{$detail := $step.HasDetail}} class="step{{if $step.Skipped}} skipped{{else if $step.Failed}} failed{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail (or $step.Failed $step.Turns $step.Container)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}"{{end}}
 
 {{/* The shell: a row's attributes and head, and nothing it holds. The
      attribute-only morph is what hx-morph-skip-children buys — htmx syncs the
@@ -286,7 +290,7 @@
 {{define "stepshell"}}<div id="{{.Step.Anchor}}" hx-swap-oob="outerMorph" hx-morph-skip-children{{template "stepattrs" .}}></div>
 {{template "stephead" .}}{{end}}
 
-{{define "stephead"}}{{$page := .Page}}{{$step := .Step}}{{$detail := $step.HasDetail .Page.Run.JobError}}<div class="stephead" id="{{$step.Anchor}}_head"{{if .OOB}} hx-swap-oob="outerMorph"{{end}}{{if $detail}} role="button" tabindex="0"{{end}}>
+{{define "stephead"}}{{$page := .Page}}{{$step := .Step}}{{$detail := $step.HasDetail}}<div class="stephead" id="{{$step.Anchor}}_head"{{if .OOB}} hx-swap-oob="outerMorph"{{end}}{{if $detail}} role="button" tabindex="0"{{end}}>
     <span class="chev{{if $detail}} chev-icon{{end}}"></span>
     {{if $step.Skipped}}<span class="stmark" role="img" aria-label="skipped">–</span>{{else if $step.Failed}}<span class="stmark" role="img" aria-label="failed">✗</span>{{else if $step.Running}}<span class="stmark" role="img" aria-label="running">◐</span>{{else}}<span class="stmark" role="img" aria-label="passed">✓</span>{{end}}
     <span class="kind">{{$step.Kind}}</span>
@@ -337,6 +341,9 @@
       </div>
     </div>{{end}}
 {{end}}
+
+{{/* The way to the server a run died on, wherever its error is drawn. Takes the page. */}}
+{{define "mcphint"}}{{if and .Run.MCPBlamed .Nav.HasMCP}}<div class="errhint">mcp server <code>{{.Run.MCPBlamed}}</code> — <a href="/p/{{.Nav.Current}}/mcp#mcp-{{.Run.MCPBlamed}}">is it connected?</a></div>{{end}}{{end}}
 
 {{/* One note a step's machinery left. A warning says so in words, not only in colour. */}}
 {{define "notice"}}<div class="log notice{{if .Warn}} warn{{end}}">{{if .Warn}}warning: {{end}}{{.Text}}</div>{{end}}

@@ -272,12 +272,12 @@ func (s Step) Rollup() Tally {
 // The two are separate because the body is rendered at all only when there is
 // one: an empty .stepbody still carries its padding, which on a container
 // opened a visible gap between the block and the first step inside it.
-func (s Step) HasBody(jobError string) bool {
+func (s Step) HasBody() bool {
 	return len(s.Turns) > 0 ||
 		len(s.Trajectory()) > 0 ||
 		len(s.Outputs) > 0 ||
 		len(s.Notes) > 0 ||
-		s.DistinctError(jobError) != "" ||
+		s.Error != "" ||
 		s.Response() != "" ||
 		s.Note() != "" ||
 		s.Reason != ""
@@ -287,20 +287,8 @@ func (s Step) HasBody(jobError string) bool {
 // A step with no body must not be foldable: an expandable row that opens onto
 // nothing reads as a broken page, and a chevron that promises detail there
 // isn't is worse than no chevron.
-func (s Step) HasDetail(jobError string) bool {
-	return s.Container() || s.HasBody(jobError)
-}
-
-// DistinctError is the step's error, or "" when it is the same text the run
-// already leads with. A failing step's error is usually what the job error IS
-// (the plan wraps it and returns it), and printing one long message twice on
-// the page a reader reaches while triaging is exactly where noise costs most.
-func (s Step) DistinctError(jobError string) string {
-	if s.Error == "" || strings.Contains(jobError, s.Error) {
-		return ""
-	}
-
-	return s.Error
+func (s Step) HasDetail() bool {
+	return s.Container() || s.HasBody()
 }
 
 // Anchor is the step's own id in the page, and the target of the # link
@@ -599,19 +587,6 @@ func (f *Folder) Add(rows []store.RunEventRow, results map[string]store.NodeRow)
 		if position, change := f.fold(row, results); change.Any() {
 			key := f.run.Steps[position].Key()
 			touched[key] = touched[key].Merge(change)
-		}
-
-		// The job's error is read by every row, not one: a step's own error
-		// line is dropped once the job's error quotes it (DistinctError), and
-		// with it, for a step that printed nothing else, the body and the
-		// toggle. Those rows are re-drawn, or the reader keeps an error line a
-		// reload no longer shows.
-		if row.Type == events.TypeJobFinished && row.Text != "" {
-			for _, step := range f.run.Steps {
-				if step.Error != "" && strings.Contains(row.Text, step.Error) {
-					touched[step.Key()] = touched[step.Key()].Merge(Change{Other: true})
-				}
-			}
 		}
 	}
 

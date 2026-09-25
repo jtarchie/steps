@@ -195,11 +195,14 @@ the things a scrollback cannot give you:
   cache`. The steps a chain-skip swallowed are shown too, for the same reason:
   a transcript that stops at the cache hit reads as a truncated run rather
   than a cheap one.
-- **A failed run leads with the error**: its header names the innermost
+- **A failed run leads with where it broke**: its header names the innermost
   failing step — the one that actually broke, which <kbd>f</kbd> also jumps
-  to — as a link, and says what changed since the last
-  passed run of that job — computed by comparing content hashes, so it names
-  the steps whose inputs, command, or prompt actually moved.
+  to — as a link, and the error is read on that step, once. The head carries
+  an error only when no step holds it: a run that died on an image pull, a
+  placement or a resource check before any step failed. The header also says
+  what changed since the last passed run of that job — computed by comparing
+  content hashes, so it names the steps whose inputs, command, or prompt
+  actually moved.
 - **Every run names the configuration it executed**, linking the pipeline as
   it was when that run started — which the file on disk no longer holds once
   anyone edits it. When a failed run's configuration differs from the last

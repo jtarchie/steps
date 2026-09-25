@@ -34,7 +34,7 @@ import (
 // under a container that opened after it (retracted, then re-appended
 // nested) — both when the container is APPENDED and when the reader already
 // has it and it is morphed whole — and a job error that quotes a step's own,
-// which changes what that step's row shows without an event on the step.
+// which must change nothing: the step is that error's home.
 //
 // Serial, because liveBatch is a package global: every batch size is tried,
 // and one event per flush is the hardest case — every unit stands alone.
@@ -168,9 +168,7 @@ func eventsAfterThePage() []store.RunEventRow {
 		{Type: events.TypeStepSkipped, StepIndex: 8, StepName: "inner", StepKind: "task", StepID: 22, ParentStepID: 21, Status: "skipped", Text: "cached"},
 		{Type: events.TypeStepSkipped, StepIndex: 8, StepName: "wrap", StepKind: "try", StepID: 21, ParentStepID: 20, Status: "skipped", Text: "cached"},
 		{Type: events.TypeStepFinished, StepIndex: 7, StepName: "block", StepKind: "do", StepID: 20, Status: "succeeded"},
-		// Names no step, yet changes a row: cell-a's own error line is dropped
-		// once the job's error quotes it, so the flush that reads this has to
-		// re-send cell-a and nothing else.
+		// Names no step and changes no row: cell-a keeps its own error line, and the head defers to it.
 		{Type: events.TypeJobFinished, Status: "failed", Text: "step 2 (task cell-a): exit 1"},
 	}
 }

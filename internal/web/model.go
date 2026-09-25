@@ -420,6 +420,28 @@ func (r runView) MCPBlamed() string {
 	return found[1]
 }
 
+// HeadError is the run's error when no failed step holds it: a failing step's error is what the job error IS (the plan wraps it and returns it), so it is read on the step and the head only names that step — but a run that died before any step failed (a pull, a placement, a resource check) has no row to carry it.
+func (r runView) HeadError() string {
+	for _, step := range r.Steps {
+		if step.Error != "" && strings.Contains(r.JobError, step.Error) {
+			return ""
+		}
+	}
+
+	return r.JobError
+}
+
+// MCPBlamedOn reports whether the mcp hint belongs under this step's error: the innermost failure, when it is the error the run died of.
+func (r runView) MCPBlamedOn(step *stepView) bool {
+	if r.MCPBlamed() == "" || step.Error == "" || !strings.Contains(r.JobError, step.Error) {
+		return false
+	}
+
+	inner := r.InnermostFailure()
+
+	return inner != nil && inner.Key() == step.Key()
+}
+
 // buildRunView folds a run's ordered events into steps. See runview.Build.
 func buildRunView(run store.RunRow, rows []store.RunEventRow, results map[string]store.NodeRow) runView {
 	return runView{Transcript: runview.Build(run, rows, results)}

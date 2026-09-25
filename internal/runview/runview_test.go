@@ -127,7 +127,7 @@ func TestNotesHangOnTheirStep(t *testing.T) {
 		t.Errorf("build notes = %+v, want the one note it carried", build.Notes)
 	}
 
-	if !build.HasBody("") {
+	if !build.HasBody() {
 		t.Error("a step whose only content is a note has no body, so the page cannot show it")
 	}
 

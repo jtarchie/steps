@@ -246,22 +246,18 @@ jobs:
 
 	_, body := webGet(t, server, "/p/"+pipeline.Slug+"/runs/"+runs[0].ID)
 
-	if !strings.Contains(body, "errblock") {
-		t.Error("failed run does not lead with the job error")
-	}
-
 	if !strings.Contains(body, `class="step failed`) {
 		t.Error("failed run does not mark the failing step")
 	}
 
-	if !strings.Contains(body, "exit status 3") {
-		t.Error("failed run does not show what the failing command reported")
+	// The plan wraps a step's error and returns it as the job's, so the two are the same text; it is read on the step that raised it, once, because a red block above the strip repeating it pushed the transcript below the fold on the page a reader reaches while triaging.
+	failing := strings.Index(body, `class="name">boom</span>`)
+	errText := strings.Index(body, "exit status 3")
+
+	if failing < 0 || errText < failing {
+		t.Errorf("the failing step's error is not shown under the step (step at %d, error at %d)", failing, errText)
 	}
 
-	// The plan wraps a step's error and returns it as the job's, so the two
-	// are the same text. It appears once, as the headline — printing it again
-	// under the step it names is noise on the page a reader reaches while
-	// triaging.
 	if strings.Count(body, "exit status 3") != 1 {
 		t.Errorf("the failure text appears %d times, want once", strings.Count(body, "exit status 3"))
 	}
