@@ -266,29 +266,26 @@ func pruneRunRows(
 func pruneNodes(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName string, keep int) (bool, error) {
 	result, err := tx.ExecContext(ctx, `
 		DELETE FROM nodes
-		WHERE pipeline_id = ? AND job_name = ?
-		  AND hash NOT IN (
-		      SELECT e.hash FROM run_events e
-		      JOIN runs r ON r.id = e.run_id
-		      WHERE e.hash <> '' AND r.pipeline_id = ?
-		  )
-		  -- node_hash IS NOT NULL is load-bearing, not tidiness. It is
-		  -- nullable because a tagged HOOK records a machine without having a
-		  -- node, and SQL answers a NOT IN whose subquery yields one NULL with
-		  -- UNKNOWN — never TRUE. Without this, a single hook placement
-		  -- anywhere in the pipeline's history makes this whole clause match
-		  -- nothing and the node cache stops being pruned at all.
-		  AND hash NOT IN (
-		      SELECT node_hash FROM run_placements
-		      WHERE pipeline_id = ? AND node_hash IS NOT NULL
-		  )
-		  AND hash NOT IN (SELECT node_hash FROM agent_usage WHERE pipeline_id = ?)
-		  AND rowid NOT IN (
+		WHERE rowid IN (
 		      SELECT rowid FROM nodes WHERE pipeline_id = ? AND job_name = ?
 		      ORDER BY rowid DESC
-		      LIMIT ?
+		      LIMIT -1 OFFSET ?
 		  )
-	`, pipelineID, jobName, pipelineID, pipelineID, pipelineID, pipelineID, jobName, keep)
+		  -- NOT EXISTS, never NOT IN: run_placements.node_hash is NULL for a hook placement, and one NULL in a NOT IN list would make the clause match nothing and stop this pruning entirely.
+		  AND NOT EXISTS (
+		      SELECT 1 FROM run_events e
+		      JOIN runs r ON r.id = e.run_id
+		      WHERE e.hash = nodes.hash AND r.pipeline_id = nodes.pipeline_id
+		  )
+		  AND NOT EXISTS (
+		      SELECT 1 FROM run_placements p
+		      WHERE p.pipeline_id = nodes.pipeline_id AND p.node_hash = nodes.hash
+		  )
+		  AND NOT EXISTS (
+		      SELECT 1 FROM agent_usage u
+		      WHERE u.pipeline_id = nodes.pipeline_id AND u.node_hash = nodes.hash
+		  )
+	`, pipelineID, jobName, keep)
 	if err != nil {
 		return false, fmt.Errorf("could not prune the nodes of %q: %w", jobName, err)
 	}

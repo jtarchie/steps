@@ -49,7 +49,7 @@ func (s *Store) AskQuestion(ctx context.Context, question store.Question) (store
 		WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND pipeline_id = ?)
 		ON CONFLICT (run_id, memo_key) DO NOTHING
 	`, question.RunID, question.JobName, question.AgentName, question.Question, options,
-		question.OptionsRequired, nullableText(question.Default), question.MemoKey(), nowNano(),
+		question.OptionsRequired, nullable(question.Default), question.MemoKey(), nowNano(),
 		question.RunID, s.pipelineID)
 	if err != nil {
 		return store.Question{}, false, fmt.Errorf("could not record question for job %q: %w", question.JobName, err)
@@ -123,7 +123,7 @@ func (s *Store) closeQuestion(ctx context.Context, id int64, status, answer, by 
 		UPDATE questions SET status = ?, answered_at = ?, answered_by = ?, answer = ?
 		WHERE id = ? AND status = 'pending'
 		  AND run_id IN (SELECT id FROM runs WHERE pipeline_id = ?)
-	`, status, nowNano(), by, nullableText(answer), id, s.pipelineID)
+	`, status, nowNano(), by, nullable(answer), id, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not resolve question %d: %w", id, err)
 	}
@@ -249,15 +249,4 @@ func decodeOptions(encoded string) ([]string, error) {
 	}
 
 	return options, nil
-}
-
-// nullableText keeps "not declared" out of the answer columns as NULL rather
-// than as an empty string, so a question answered with deliberate silence
-// stays tellable apart from one nobody reached.
-func nullableText(value string) any {
-	if value == "" {
-		return nil
-	}
-
-	return value
 }

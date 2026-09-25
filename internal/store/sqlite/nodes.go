@@ -73,7 +73,7 @@ func (s *Store) RecordNode(ctx context.Context, node store.NodeRecord, jobName, 
 			error        = excluded.error,
 			created_at   = excluded.created_at
 	`,
-		s.pipelineID, node.Hash, nullableHash(node.ParentHash), node.Kind, jobName, node.Resource, node.StepIndex,
+		s.pipelineID, node.Hash, nullable(node.ParentHash), node.Kind, jobName, node.Resource, node.StepIndex,
 		contentHash, nullableString(resultJSON), status, errText(execErr), now(),
 	)
 	if err != nil {
@@ -99,15 +99,13 @@ func contentKey(content []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// nullableHash renders a chain-root's absent parent as NULL. The sentinel used
-// to be an empty string, which a foreign key reads as a node whose hash is ""
-// and demands exist, so it had to become the value sqlite exempts instead.
-func nullableHash(hash string) any {
-	if hash == "" {
+// nullable stores an empty string as NULL. A chain root's absent parent needs it because a foreign key reads "" as a node that must exist and exempts only NULL; a question's answer columns need it so deliberate silence stays tellable apart from one nobody reached.
+func nullable(value string) any {
+	if value == "" {
 		return nil
 	}
 
-	return hash
+	return value
 }
 
 // HasNodeSucceeded reports whether a node with this exact hash has already
@@ -134,13 +132,15 @@ func (s *Store) HasNodeSucceeded(ctx context.Context, jobName, hash string) (boo
 // ListNodes returns the most recently recorded steps, newest first. An empty
 // jobName covers every job.
 func (s *Store) ListNodes(ctx context.Context, jobName string, limit int) ([]store.NodeRow, error) {
+	filter, args := byJob(jobName, []any{s.pipelineID})
+
 	return collect(ctx, s.db, "nodes", `
 		SELECT hash, kind, job_name, resource, step_index, status, error, result, created_at
 		FROM nodes
-		WHERE pipeline_id = ? AND (? = '' OR job_name = ?)
+		WHERE pipeline_id = ?`+filter+`
 		ORDER BY created_at DESC, rowid DESC
 		LIMIT ?
-	`, []any{s.pipelineID, jobName, jobName, rowLimit(limit)}, func(rows *sql.Rows) (store.NodeRow, error) {
+	`, append(args, rowLimit(limit)), func(rows *sql.Rows) (store.NodeRow, error) {
 		var (
 			row            store.NodeRow
 			errCol, result sql.NullString
@@ -165,18 +165,6 @@ func (s *Store) NodesByHash(ctx context.Context, hashes []string) (map[string]st
 		return found, nil
 	}
 
-	args := make([]any, 0, len(hashes)+1)
-	args = append(args, s.pipelineID)
-
-	for _, hash := range hashes {
-		args = append(args, hash)
-	}
-
-	// The only thing concatenated is the placeholder list itself — a run of
-	// "?," generated from len(hashes). Every hash travels as a bound argument,
-	// so no caller-supplied text reaches the SQL. sqlite has no array-binding
-	// form, which is why the placeholder count must be built rather than
-	// parameterized.
 	// The join is what interning costs on the read side, and this is the only
 	// read that pays it: content is display-only (the node-detail page), while
 	// the list queries and every cache lookup never select it.
@@ -185,21 +173,22 @@ func (s *Store) NodesByHash(ctx context.Context, hashes []string) (map[string]st
 		       n.created_at, c.content, COALESCE(n.parent_hash, '')
 		FROM nodes n
 		JOIN node_content c ON c.content_hash = n.content_hash
-		WHERE n.pipeline_id = ? AND n.hash IN (`+placeholders(len(hashes))+`)`, args, func(rows *sql.Rows) (store.NodeRow, error) {
-		var (
-			row            store.NodeRow
-			errCol, result sql.NullString
-			createdAt      string
-		)
+		WHERE n.pipeline_id = ? AND n.hash IN (SELECT value FROM json_each(?))`,
+		[]any{s.pipelineID, jsonList(hashes)}, func(rows *sql.Rows) (store.NodeRow, error) {
+			var (
+				row            store.NodeRow
+				errCol, result sql.NullString
+				createdAt      string
+			)
 
-		err := rows.Scan(&row.Hash, &row.Kind, &row.JobName, &row.Resource, &row.StepIndex,
-			&row.Status, &errCol, &result, &createdAt, &row.Content, &row.ParentHash)
+			err := rows.Scan(&row.Hash, &row.Kind, &row.JobName, &row.Resource, &row.StepIndex,
+				&row.Status, &errCol, &result, &createdAt, &row.Content, &row.ParentHash)
 
-		row.Error, row.Result = errCol.String, result.String
-		row.CreatedAt = parseTimestamp(createdAt)
+			row.Error, row.Result = errCol.String, result.String
+			row.CreatedAt = parseTimestamp(createdAt)
 
-		return row, err //nolint:wrapcheck // collect wraps with the thing being read
-	})
+			return row, err //nolint:wrapcheck // collect wraps with the thing being read
+		})
 	if err != nil {
 		return nil, err
 	}
@@ -209,12 +198,6 @@ func (s *Store) NodesByHash(ctx context.Context, hashes []string) (map[string]st
 	}
 
 	return found, nil
-}
-
-// placeholders builds the "?,?,?" list for an IN (...) clause of n bound
-// arguments. sqlite has no array binding, so the count has to be generated.
-func placeholders(n int) string {
-	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
 
 // truncationEvent is appended in place of the entries dropped at the cap, so a

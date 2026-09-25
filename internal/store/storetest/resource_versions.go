@@ -537,3 +537,55 @@ func (s suite) TestVersionHistoryZeroMeansNoLimit(t *testing.T) {
 			len(orders), filed, store.DefaultResourceVersionCap)
 	}
 }
+
+// TestGreenVersionsIsTheIntersection: a passed: get chooses among the versions EVERY named upstream built green, in discovery order — not the union, not one upstream's list, and never another pipeline's record of a job with the same name.
+func (s suite) TestGreenVersionsIsTheIntersection(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+	other := s.open(t, "other")
+	ctx := context.Background()
+
+	recordN(t, st, "items", "1", "2", "3", "4")
+	recordN(t, other, "items", "1", "2", "3", "4")
+
+	pass := func(st store.Store, job string, names ...string) {
+		t.Helper()
+
+		for _, name := range names {
+			encoded, err := store.EncodeVersion(map[string]any{"n": name})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = st.RecordPassedVersion(ctx, job, "items", encoded, "b")
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	pass(st, "a", "3", "1", "2")
+	pass(st, "b", "2", "3", "4")
+	pass(other, "a", "4")
+
+	for _, tc := range []struct {
+		upstream []string
+		want     string
+	}{
+		{[]string{"a", "b"}, "[2 3]"},
+		{[]string{"a"}, "[1 2 3]"},
+		{[]string{"a", "a"}, "[1 2 3]"},
+		{[]string{"a", "b", "never-ran"}, "[]"},
+		{nil, "[1 2 3 4]"},
+	} {
+		green, err := st.GreenVersions(ctx, "items", tc.upstream)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if got := fmt.Sprint(versionNames(t, green)); got != tc.want {
+			t.Errorf("GreenVersions(%q) = %s, want %s", tc.upstream, got, tc.want)
+		}
+	}
+}

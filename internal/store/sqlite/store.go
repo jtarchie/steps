@@ -13,6 +13,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -385,6 +386,10 @@ func (s *Store) Close() error {
 		return s.db.Close()
 	}
 
+	// Nothing else ever gives the planner table statistics. SQLite's own advice for a closing connection; bounded by an analysis limit, and a no-op when the tables have not changed much.
+	// ponytail: a daemon only gets fresh statistics at exit; run `PRAGMA optimize` on a timer if a long-lived plan is ever seen going stale.
+	_, _ = s.db.ExecContext(ctx, `PRAGMA optimize`)
+
 	// Hands freed pages back to the filesystem, unbounded and under the whole file's write lock: fine at a process's own exit, and why a handle let go mid-life, beside neighbours still writing, takes Release instead.
 	_, _ = s.db.ExecContext(ctx, `PRAGMA incremental_vacuum`)
 
@@ -489,6 +494,39 @@ func rowLimit(limit int) int {
 	}
 
 	return limit
+}
+
+// byJob narrows a listing to one job, or leaves it whole for an empty name. Spliced in rather than written `(? = ” OR job_name = ?)`, which no index can serve: every call sorted the pipeline's whole history to return twenty rows.
+func byJob(jobName string, args []any) (string, []any) {
+	if jobName == "" {
+		return "", args
+	}
+
+	return " AND job_name = ?", append(args, jobName)
+}
+
+// jsonList binds a list as ONE argument, read back with `IN (SELECT value FROM json_each(?))`. sqlite has no array binding, and the alternative — a generated "?,?,?" list — needed chunking under the bind-variable limit at every call site.
+func jsonList(values []string) string {
+	if values == nil {
+		// json_each('null') yields one NULL row rather than none, so an empty list must be an empty array.
+		return "[]"
+	}
+
+	encoded, _ := json.Marshal(values) //nolint:errchkjson // a []string cannot fail to marshal
+
+	return string(encoded)
+}
+
+func scanString(rows *sql.Rows) (string, error) {
+	var value string
+
+	return value, rows.Scan(&value) //nolint:wrapcheck // collect wraps with the thing being read
+}
+
+func scanPair(rows *sql.Rows) ([2]string, error) {
+	var pair [2]string
+
+	return pair, rows.Scan(&pair[0], &pair[1]) //nolint:wrapcheck // collect wraps with the thing being read
 }
 
 // collect runs a query and decodes every row through scan.
