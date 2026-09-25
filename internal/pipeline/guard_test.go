@@ -244,3 +244,101 @@ func TestResolveStepImage(t *testing.T) {
 		})
 	}
 }
+
+// TestEvaluateStepGuardSeesItsOwnInputs covers when.inputs: an artifact the
+// step never declares reaches the guard, one the build never produced reads
+// false rather than failing, and both sit beside a mapped step input.
+func TestEvaluateStepGuardSeesItsOwnInputs(t *testing.T) {
+	t.Parallel()
+
+	bw, dir := guardTestBuild(t)
+
+	err := os.WriteFile(filepath.Join(dir, "risk.txt"), []byte("high\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		step config.Step
+		want bool
+	}{
+		{
+			name: "an artifact the step does not declare",
+			step: config.Step{Task: "t", Run: "true", Inputs: config.Inputs(),
+				When: &config.WhenSpec{Run: "grep -q high facts/risk.txt", Inputs: []string{"facts"}}},
+			want: true,
+		},
+		{
+			name: "an artifact the build never produced",
+			step: config.Step{Task: "t", Run: "true",
+				When: &config.WhenSpec{Run: "test -d answer", Inputs: []string{"answer"}}},
+			want: false,
+		},
+		{
+			name: "a load_var's own inputs",
+			step: config.Step{LoadVar: "v", VarFile: "facts/risk.txt", Inputs: config.Inputs("facts"),
+				When: &config.WhenSpec{Run: "grep -q high facts/risk.txt"}},
+			want: true,
+		},
+		{
+			name: "beside an input_mapping rename",
+			step: config.Step{Task: "t", Run: "true",
+				Inputs:       config.Inputs("evidence"),
+				InputMapping: map[string]string{"evidence": "facts"},
+				When: &config.WhenSpec{
+					Run:    "grep -q high evidence/risk.txt && grep -q high facts/risk.txt",
+					Inputs: []string{"facts"},
+				}},
+			want: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := evaluateStepGuard(context.Background(), &config.Config{}, tc.step, bw)
+			if err != nil {
+				t.Fatalf("evaluateStepGuard: %v", err)
+			}
+
+			if got != tc.want {
+				t.Errorf("guard = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEvaluateStepGuardLeavesTheStepsInputsAlone pins the clone: the step's
+// input list is the loaded config's, shared by every evaluation and every
+// across: cell, so appending the guard's inputs into its spare capacity would
+// leak them into the next evaluation — and race a concurrent one under -race.
+func TestEvaluateStepGuardLeavesTheStepsInputsAlone(t *testing.T) {
+	t.Parallel()
+
+	bw, _ := guardTestBuild(t)
+
+	names := make([]string, 1, 4)
+	names[0] = "facts"
+
+	for _, extra := range []string{"alpha", "beta"} {
+		t.Run(extra, func(t *testing.T) {
+			t.Parallel()
+
+			step := config.Step{Task: "t", Run: "true", Inputs: &config.InputSpec{Names: names},
+				When: &config.WhenSpec{Run: "true", Inputs: []string{extra}}}
+
+			_, err := evaluateStepGuard(context.Background(), &config.Config{}, step, bw)
+			if err != nil {
+				t.Fatalf("evaluateStepGuard: %v", err)
+			}
+		})
+	}
+
+	t.Cleanup(func() {
+		if spare := names[:2][1]; spare != "" {
+			t.Errorf("the guard wrote %q into the step's input list", spare)
+		}
+	})
+}

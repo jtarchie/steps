@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/shell"
@@ -24,8 +25,9 @@ import (
 //
 // The guard runs in the same view the step itself gets: under the step's
 // resolved image, in a directory materialized from the step's declared
-// inputs, closed WITHOUT Capture so a guard can never publish artifacts — a
-// discarded copy is the price of a guard that can read what the step reads.
+// inputs plus the guard's own when.inputs (which the step never sees), closed
+// WITHOUT Capture so a guard can never publish artifacts — a discarded copy
+// is the price of a guard that can read what the step reads.
 //
 // GuardSpace, not TaskSpace, because the two views differ in exactly one
 // respect: an input the build never produced is absent here rather than an
@@ -36,7 +38,7 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 		return true, nil
 	}
 
-	spec, view, err := resolveStepRuntime(cfg, step)
+	spec, view, err := resolveGuardRuntime(cfg, step)
 	if err != nil {
 		return false, err
 	}
@@ -110,12 +112,32 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 	slog.Debug("step.when",
 		"step", executedStepName(step),
 		"command", step.When.Run,
+		"inputs", view.inputs,
 		"exit_code", exitCode,
 		"stdout", stdout,
 		"stderr", stderr,
 	)
 
 	return exitCode == 0, nil
+}
+
+// resolveGuardRuntime is resolveStepRuntime plus the guard's own when.inputs,
+// which the step never sees. With inputs: all there is nothing to add, and
+// the loader refuses guard inputs beside it.
+func resolveGuardRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec, guardInputs, error) {
+	spec, view, err := resolveStepRuntime(cfg, step)
+	if err != nil {
+		return spec, view, err
+	}
+
+	// Cloned: view.inputs can share the loaded config's backing array, and an
+	// append into it would leak one evaluation's names into the next, or race
+	// a sibling across: cell.
+	if !view.all && step.When != nil {
+		view.inputs = append(slices.Clone(view.inputs), step.When.Inputs...)
+	}
+
+	return spec, view, nil
 }
 
 // guardInputs is the read half of the view a guard runs in, resolved the same
@@ -137,9 +159,9 @@ type guardInputs struct {
 // has, or a credential only env: passes through, must find it. Each step kind
 // resolves the same way its runner does: a task through ResolveTask (step
 // values overriding the tasks: entry), an agent through
-// ResolveAgentInvocation, and a put from its resource type (a put step may set
-// none of them itself). Cwd is left to the caller, which is the only part a
-// guard supplies for itself.
+// ResolveAgentInvocation, a put from its resource type (a put step may set
+// none of them itself), and a load_var from its inputs alone. Cwd is left to
+// the caller, which is the only part a guard supplies for itself.
 func resolveStepRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec, guardInputs, error) {
 	kind, _ := step.Kind()
 
@@ -168,19 +190,31 @@ func resolveStepRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec,
 	case config.StepKindTry:
 		return resolveStepRuntime(cfg, *step.Try)
 	case config.StepKindPut:
-		resource, err := cfg.FindResource(step.PutResourceName())
-		if err != nil {
-			return shell.RunnerSpec{}, guardInputs{}, fmt.Errorf("resolve put: %w", err)
-		}
-
-		resourceType, err := cfg.FindResourceType(resource.Type)
-		if err != nil {
-			return shell.RunnerSpec{}, guardInputs{}, fmt.Errorf("resolve put: %w", err)
-		}
-
-		return shell.RunnerSpec{Image: resourceType.Image, Env: resourceType.Env, User: resourceType.User, Network: resourceType.Network},
-			guardInputs{inputs: step.InputNames(), all: step.InputsAll()}, nil
+		return resolvePutRuntime(cfg, step)
+	case config.StepKindLoadVar:
+		// A load_var reads its file on this machine with no image, so the
+		// inputs are the whole of its view. Without this case its guard ran
+		// over an empty directory while the loader refused when.inputs
+		// repeating them as already visible.
+		return shell.RunnerSpec{}, guardInputs{inputs: step.InputNames()}, nil
 	default: // config.StepKindGet, or a malformed step — nothing to resolve here
 		return shell.RunnerSpec{}, guardInputs{}, nil
 	}
+}
+
+// resolvePutRuntime is resolveStepRuntime's put arm, split out for the
+// cyclomatic budget.
+func resolvePutRuntime(cfg *config.Config, step config.Step) (shell.RunnerSpec, guardInputs, error) {
+	resource, err := cfg.FindResource(step.PutResourceName())
+	if err != nil {
+		return shell.RunnerSpec{}, guardInputs{}, fmt.Errorf("resolve put: %w", err)
+	}
+
+	resourceType, err := cfg.FindResourceType(resource.Type)
+	if err != nil {
+		return shell.RunnerSpec{}, guardInputs{}, fmt.Errorf("resolve put: %w", err)
+	}
+
+	return shell.RunnerSpec{Image: resourceType.Image, Env: resourceType.Env, User: resourceType.User, Network: resourceType.Network},
+		guardInputs{inputs: step.InputNames(), all: step.InputsAll()}, nil
 }

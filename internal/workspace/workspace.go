@@ -1121,9 +1121,9 @@ func newIsolatingRoot(configuredRoot string) (root string, ownsRoot bool, err er
 }
 
 // ValidateArtifactFlow statically checks that every task/agent/put step's
-// declared inputs name an artifact available by that point in the plan (a
-// resource an earlier get fetches, or an output an earlier task/agent
-// produces), plus an agent step's dir: (which names the artifact it works in).
+// declared inputs, and every guard's when.inputs, name an artifact available
+// by that point in the plan (a resource an earlier get fetches, or an output
+// an earlier task/agent produces), plus an agent step's dir: (which names the artifact it works in).
 // It runs for every job, isolated or not: without a workspace: block
 // declarations don't change what a step physically sees, but they remain a
 // validated contract, so a step that declares inputs: [x] where nothing
@@ -1167,6 +1167,12 @@ func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step co
 	// and here rather than at the top-level walk, so a matrix nested in a try:,
 	// a do:, or a branch is reached by the same recursion everything else is.
 	err := checkAcrossFromFileAvailable(jobName, i, step, available)
+	if err != nil {
+		return err
+	}
+
+	// Before the kind dispatch adds the step's outputs: the guard runs first.
+	err = checkGuardInputsAvailable(jobName, i, step, available)
 	if err != nil {
 		return err
 	}
@@ -1498,6 +1504,17 @@ func validateStepHooks(cfg *config.Config, jobName string, i int, step config.St
 // view available to it, then recurses into the hook's own nested hooks (which
 // see the same view). Hook outputs are intentionally not folded into the view.
 func validateHookArtifactFlow(cfg *config.Config, jobName string, i int, hookName string, hook config.Step, view map[string]bool) error {
+	err := checkHookGuardInputs(jobName, i, hookName, hook, view)
+	if err != nil {
+		return err
+	}
+
+	return validateHookBodyArtifactFlow(cfg, jobName, i, hookName, hook, view)
+}
+
+// validateHookBodyArtifactFlow is validateHookArtifactFlow past the guard,
+// split out for the cyclomatic budget.
+func validateHookBodyArtifactFlow(cfg *config.Config, jobName string, i int, hookName string, hook config.Step, view map[string]bool) error {
 	var (
 		inputs     []string
 		kind, name string
@@ -1593,6 +1610,39 @@ func checkInputsAvailable(jobName string, i int, kind, name string, inputs []str
 		if !available[in] {
 			return fmt.Errorf("job %q step %d (%s %q): input %q is not a resource fetched or an output produced earlier in the plan",
 				jobName, i, kind, name, in)
+		}
+	}
+
+	return nil
+}
+
+// checkGuardInputsAvailable holds a when: guard's own inputs to the same rule
+// as the step's: each must be fetched or produced earlier in the plan.
+func checkGuardInputsAvailable(jobName string, i int, step config.Step, available map[string]bool) error {
+	if step.When == nil {
+		return nil
+	}
+
+	for _, in := range step.When.Inputs {
+		if !available[in] {
+			return fmt.Errorf("job %q step %d: when input %q is not a resource fetched or an output produced earlier in the plan",
+				jobName, i, in)
+		}
+	}
+
+	return nil
+}
+
+// checkHookGuardInputs is checkGuardInputsAvailable against a hook's view.
+func checkHookGuardInputs(jobName string, i int, hookName string, hook config.Step, view map[string]bool) error {
+	if hook.When == nil {
+		return nil
+	}
+
+	for _, in := range hook.When.Inputs {
+		if !view[in] {
+			return fmt.Errorf("job %q step %d %s hook: when input %q is not available to this hook",
+				jobName, i, hookName, in)
 		}
 	}
 

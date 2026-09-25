@@ -281,6 +281,11 @@ func keyProbes() []keyProbe {
 	}
 
 	return []keyProbe{
+		{name: "WhenSpec", want: map[string]string{}, silent: func(t *testing.T) []string {
+			return unkeyed(t, config.WhenSpec{Run: "true", Inputs: []string{"a"}}, func(w config.WhenSpec) (any, error) {
+				return withWhen(config.Step{When: &w}, map[string]any{}), nil
+			})
+		}},
 		{name: "ContainerLimits", want: map[string]string{}, silent: func(t *testing.T) []string {
 			return unkeyed(t, config.ContainerLimits{}, func(l config.ContainerLimits) (any, error) {
 				content := map[string]any{}
@@ -420,6 +425,7 @@ func TestUnsetFieldsLeaveTheKeyExactlyAsItWas(t *testing.T) {
 		want string
 	}{
 		"container limits": {limits, `{}`},
+		"when":             {withWhen(config.Step{When: &config.WhenSpec{Run: "true"}}, map[string]any{}), `{"when":"true"}`},
 		"assert":           {assertContent(&config.Assert{ToolCalls: []config.ExpectedToolCall{{Name: "read_file"}}}), `{"tool_calls":[{"name":"read_file"}]}`},
 		"get":              {get, `{"in_template":"","source":null,"version":null}`},
 		"put":              {put, `{"inputs":[],"out_template":"","params":null,"source":null}`},

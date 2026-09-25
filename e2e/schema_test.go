@@ -118,6 +118,14 @@ func TestSchemaRejectsInvalidPipelines(t *testing.T) {
 			name:     "inputs scalar that is not all",
 			pipeline: "jobs: [{name: j, plan: [{task: t, run: 'true', inputs: repo}]}]\n",
 		},
+		{
+			name:     "when inputs that are not a list",
+			pipeline: "jobs: [{name: j, plan: [{task: t, run: 'true', when: {run: 'true', inputs: all}}]}]\n",
+		},
+		{
+			name:     "when inputs with no run",
+			pipeline: "jobs: [{name: j, plan: [{task: t, run: 'true', when: {inputs: [a]}}]}]\n",
+		},
 	}
 
 	for _, test := range tests {

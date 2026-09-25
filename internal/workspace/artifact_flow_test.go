@@ -579,3 +579,82 @@ func TestValidateArtifactFlowLoadVar(t *testing.T) {
 		}
 	})
 }
+
+// TestValidateArtifactFlowGuardInputs holds a when: guard's own inputs to the
+// rule the step's inputs follow, walked by the same recursion — before the
+// step's own outputs join the view, since the guard runs first.
+func TestValidateArtifactFlowGuardInputs(t *testing.T) {
+	t.Parallel()
+
+	guard := func(names ...string) *config.WhenSpec {
+		return &config.WhenSpec{Run: "true", Inputs: names}
+	}
+
+	cases := []struct {
+		name    string
+		plan    []config.Step
+		wantErr string
+	}{
+		{
+			name:    "an input nothing produces",
+			plan:    []config.Step{{Task: "t", Run: "true", When: guard("answer")}},
+			wantErr: `job "j" step 0: when input "answer" is not a resource fetched or an output produced earlier in the plan`,
+		},
+		{
+			name: "produced earlier",
+			plan: []config.Step{
+				{Task: "draft", Run: "true", Outputs: []string{"answer"}},
+				{Task: "t", Run: "true", When: guard("answer")},
+			},
+		},
+		{
+			name:    "the step's own output, not produced earlier",
+			plan:    []config.Step{{Task: "t", Run: "true", Outputs: []string{"answer"}, When: guard("answer")}},
+			wantErr: `when input "answer"`,
+		},
+		{
+			name: "a sibling in_parallel branch's output",
+			plan: []config.Step{{InParallel: &config.InParallel{Steps: []config.Step{
+				{Task: "draft", Run: "true", Outputs: []string{"answer"}},
+				{Task: "t", Run: "true", When: guard("answer")},
+			}}}},
+			wantErr: `when input "answer"`,
+		},
+		{
+			name:    "a try: wrapper's guard",
+			plan:    []config.Step{{Try: &config.Step{Task: "t", Run: "true"}, When: guard("answer")}},
+			wantErr: `when input "answer"`,
+		},
+		{
+			name: "an on_failure hook naming the step's output",
+			plan: []config.Step{{Task: "t", Run: "true", Outputs: []string{"answer"},
+				Hooks: config.Hooks{OnFailure: &config.Step{Task: "h", Run: "true", When: guard("answer")}}}},
+			wantErr: `on_failure hook: when input "answer" is not available to this hook`,
+		},
+		{
+			name: "an on_success hook naming the step's output",
+			plan: []config.Step{{Task: "t", Run: "true", Outputs: []string{"answer"},
+				Hooks: config.Hooks{OnSuccess: &config.Step{Task: "h", Run: "true", When: guard("answer")}}}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := ValidateArtifactFlow(&config.Config{}, &config.Job{Name: "j", Plan: tc.plan})
+
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("err = %v, want nil", err)
+				}
+
+				return
+			}
+
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}

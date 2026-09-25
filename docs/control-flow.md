@@ -89,12 +89,39 @@ jobs:
     outcome: succeeded
 ```
 
+A guard that reads a file the step itself never touches names it under `when: { inputs: [...] }`. Only the guard sees those artifacts:
+
+```yaml
+jobs:
+- name: guard-inputs
+  plan:
+  - task: draft
+    outputs: [answer, notes]
+    run: echo ship it > answer/reply.md
+  - task: react                        # runs: only the guard sees answer/
+    inputs: [notes]
+    when:
+      inputs: [answer]
+      run: test -s answer/reply.md
+    run: test ! -e answer && echo reacted
+    assert:
+      stdout: reacted
+  - task: nag                          # skipped: the file the guard tests is missing
+    when:
+      inputs: [answer]
+      run: test -s answer/missing.md
+    run: echo nagging
+  assert:
+    execution: [draft, react]
+    outcome: succeeded
+```
+
 - **The exit code is the whole contract.** A nonzero exit is a legitimate *false* (`grep -q` matching nothing, `test -f` on a missing file) and never a failure. Only a runner-level error — the command couldn't even be started (bad cwd, bad image, dead docker daemon) — fails the step. Note a shell "command not found" is exit 127, i.e. a false guard, not an error.
 - **A guard-skipped step skips only itself; the plan continues.** This is different from a cache hit, which stops the whole remaining chain.
 - A skipped step fires no hooks and records no cache node, `job_run`, or execution-log entry — the same contract as a cached skip. That's what lets `assert.execution` prove a step was skipped.
-- The guard runs under the step's own resolved image, over the same inputs the step itself would get — including ones it inherits from a `tasks:` entry, an `input_mapping:` rename, and a put's `inputs: all` — but closed without capturing outputs, so a guard can never publish artifacts. A guard that reads a file has to declare the artifact holding it, exactly as the step does.
-- **An input an earlier guarded step never produced is simply absent to the guard**, not an error: `when: test -s answer/reply.md` on a step whose `answer` was written by a step that itself got skipped reads false and skips, which is the point of writing it. The step's own run still requires every declared input, so a misspelled name is still an error — just at the moment the step actually runs.
-- The guard command is folded into the step's content hash, but its *outcome* is a run-time fact the planner can't know, so any chain containing a `when:` step is unskippable — never recorded as a reusable "this whole chain succeeded" hash.
+- The guard runs under the step's own resolved image, over the same inputs the step itself would get — including ones it inherits from a `tasks:` entry, an `input_mapping:` rename, and a put's `inputs: all` — but closed without capturing outputs, so a guard can never publish artifacts. A guard that reads a file has to declare the artifact holding it: in the step's `inputs:` if the step reads it too, in `when: { inputs: [...] }` if only the guard does. A guard input may not repeat one of the step's own, `inputs: all` leaves nothing to add, and naming the step's own output (as produced by an earlier step) is how a guard asks "is this already done?". On a `tags:` step the guard runs on the same worker, so its inputs travel there too.
+- **An input an earlier guarded step never produced is simply absent to the guard**, not an error: `when: test -s answer/reply.md` on a step whose `answer` was written by a step that itself got skipped reads false and skips, which is the point of writing it. The step's own run still requires every declared input, so a misspelled name is still an error — just at the moment the step actually runs. The same holds for a guard's own inputs.
+- The guard command and its input names are folded into the step's content hash — never their contents — but the guard's *outcome* is a run-time fact the planner can't know, so any chain containing a `when:` step is unskippable — never recorded as a reusable "this whole chain succeeded" hash.
 - Invalid on `get` steps (a get fans the remainder of the plan out per version, so a conditional get has no coherent meaning).
 - This is how an agent decides routing without typed outputs: an `agent` step writes a verdict into a declared output artifact, and the next step's `when:` tests that file. The model proposes; a deterministic command disposes; both are visible in the YAML.
 

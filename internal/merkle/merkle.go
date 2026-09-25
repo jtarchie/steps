@@ -315,12 +315,17 @@ func normalizeMapKeys(value any) any {
 // step carries one — so a step without a guard hashes byte-identically to
 // before this field existed (the same value-gating as image:). The guard
 // decides whether the step executes at all, so changing it must invalidate the
-// cache. Only the command is hashed: its *outcome* is a run-time fact the
-// planner cannot know, and a cached node was by definition produced by a run
-// the guard already allowed.
+// cache. Only the command and its input NAMES are hashed: its *outcome* is a
+// run-time fact the planner cannot know, and a cached node was by definition
+// produced by a run the guard already allowed — so the bytes the guard read
+// have nothing left to decide.
 func withWhen(step config.Step, content map[string]any) map[string]any {
 	if step.When != nil && step.When.Run != "" {
 		content["when"] = step.When.Run
+	}
+
+	if step.When != nil && len(step.When.Inputs) > 0 {
+		content["when_inputs"] = config.StableStrings(step.When.Inputs)
 	}
 
 	return content

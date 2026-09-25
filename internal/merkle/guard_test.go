@@ -116,3 +116,76 @@ func TestWhenHashedOnEveryStepKind(t *testing.T) {
 		}
 	})
 }
+
+// TestWhenInputsKeyedByName proves guard inputs move the key on every step
+// kind, and that a guard without them keys exactly as before they existed.
+func TestWhenInputsKeyedByName(t *testing.T) {
+	t.Parallel()
+
+	plain := &config.WhenSpec{Run: "test -f gate"}
+	named := &config.WhenSpec{Run: "test -f gate", Inputs: []string{"answer"}}
+
+	if taskHashWithWhen(t, plain) == taskHashWithWhen(t, named) {
+		t.Error("adding guard inputs should change a task's hash")
+	}
+
+	if taskHashWithWhen(t, named) == taskHashWithWhen(t, &config.WhenSpec{Run: "test -f gate", Inputs: []string{"other"}}) {
+		t.Error("renaming a guard input should change a task's hash")
+	}
+
+	t.Run("put", func(t *testing.T) {
+		t.Parallel()
+
+		content := func(when *config.WhenSpec) any {
+			got, err := PutNodeContent(&config.Config{}, config.Step{Put: "r", When: when}, config.ResourceType{Name: "rt"}, nil, nil, nil, nil, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			return got["when_inputs"]
+		}
+
+		if content(plain) != nil || content(named) == nil {
+			t.Error("guard inputs should fold into a put's content only when set")
+		}
+	})
+
+	t.Run("agent", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := agentCfg([]config.ToolSpec{{Builtin: "read_file"}}, "")
+
+		content := func(when *config.WhenSpec) any {
+			step := config.Step{Agent: "reviewer", Messages: []string{"x"}, When: when}
+
+			ri, err := cfg.ResolveAgentInvocation(step)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := AgentContentMap(cfg, step, ri)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			return got["when_inputs"]
+		}
+
+		if content(plain) != nil || content(named) == nil {
+			t.Error("guard inputs should fold into an agent's content only when set")
+		}
+	})
+}
+
+// TestWhenInputsOmittedWhenEmpty is the value-gating half: nil and [] alike
+// leave a guarded step's key as it was before guard inputs existed.
+func TestWhenInputsOmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	for _, when := range []*config.WhenSpec{{Run: "test -f gate"}, {Run: "test -f gate", Inputs: []string{}}} {
+		content := withWhen(config.Step{When: when}, map[string]any{})
+		if _, present := content["when_inputs"]; present {
+			t.Errorf("guard inputs %#v must not appear in the hashed content", when.Inputs)
+		}
+	}
+}

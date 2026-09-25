@@ -1378,7 +1378,7 @@
       }
     },
     "whenSpec": {
-      "description": "A guard command. Exit 0 runs the step, non-zero skips it.",
+      "description": "A guard command. Exit 0 runs the step, non-zero skips it. A string, or {run, inputs}.",
       "oneOf": [
         {
           "type": "string"
@@ -1392,6 +1392,10 @@
           "properties": {
             "run": {
               "type": "string"
+            },
+            "inputs": {
+              "$ref": "#/$defs/inputSpecNames",
+              "description": "Artifacts only the guard reads, on top of the step's own inputs. The step never sees them."
             }
           }
         }
