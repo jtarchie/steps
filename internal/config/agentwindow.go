@@ -6,16 +6,16 @@ import (
 	"strings"
 )
 
-// defaultCompactAfterTokens is the conversation-size budget an agent that sets no compact_after_tokens: gets: 80% of a 128K context window, the common size for current models. The size is the provider's last reported prompt+completion plus an estimate of what was appended since (reportedSize in internal/agent/compaction.go).
+// defaultCompactAfterTokens is the conversation-size budget an agent that sets no compact_after_tokens: gets: 97% of a 128K context window, the common size for current models. The size is the provider's last reported prompt+completion plus an estimate of what was appended since (reportedSize in internal/agent/compaction.go).
 //
-// The 20% headroom is load-bearing, not padding: it is room for the reply the model still has to write, for the tool results appended since the last report, and for providers that report no usage at all, where the estimate counts the conversation alone and never the system prompt or tool schemas.
+// The 3% headroom is thin on purpose: the size is the provider's own count, so it only has to cover the tool results appended since the last report. It is thinnest where the estimate stands alone (no usage reported, the first turn, the turn after a compaction), which misses the system prompt and tool schemas.
 //
 // It is only the fallback for a model whose window this package does not
 // recognize (see contextWindowFor) and whose agent declared no
 // context_window:. A small local model (32K and under) overflows well before
 // this and must state its context_window: (or set compact_after_tokens:
 // lower); compact_after_tokens: 0 disables compaction entirely.
-const defaultCompactAfterTokens = defaultContextWindow * compactBudgetPercent / 100 // 102,400
+const defaultCompactAfterTokens = defaultContextWindow * compactBudgetPercent / 100 // 124,160
 
 // defaultContextWindow is the window assumed for an unrecognized model: the
 // common size for current models, and conservative for anything larger.
@@ -23,7 +23,7 @@ const defaultContextWindow = 128_000
 
 // compactBudgetPercent is how much of a model's context window compaction is
 // allowed to fill before it fires.
-const compactBudgetPercent = 80
+const compactBudgetPercent = 97
 
 // contextWindows maps a fragment of a model name to that model's context
 // window, most specific first. Matching is on a substring of the NORMALIZED
@@ -34,7 +34,7 @@ const compactBudgetPercent = 80
 // in the dashed form, never the dotted one.
 //
 // The point of the table is that a default budget must not be a guess about
-// somebody else's model. Compaction defaults ON at 80% of the window, so an
+// somebody else's model. Compaction defaults ON at 97% of the window, so an
 // assumed 128K applied to a 1M-context model compacts at roughly a tenth of
 // capacity — silently, forever, paying for a summarization call that buys
 // nothing and losing conversation fidelity for no reason.

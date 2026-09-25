@@ -211,7 +211,7 @@ agents:
 - name: coder
   source: { model: openrouter/qwen/qwen3.7-flash }
   max_turns: 60
-  compact_after_tokens: 40000    # smaller than the 102,400 default -- see below
+  compact_after_tokens: 40000    # smaller than the 124,160 default -- see below
 
 jobs:
 - name: build
@@ -228,11 +228,11 @@ jobs:
 
 Once a conversation's size crosses the budget, the agent's own model is asked to summarize everything older than a recent window (roughly the most recent 30% of the budget), and the conversation continues from `[summary] + [recent turns]` instead of the full history. This can happen more than once in a very long conversation — each pass folds the previous summary into the new one. A summarization failure is logged and the turn proceeds uncompacted; it never aborts the attempt, the same failure-is-data treatment a tool failure gets.
 
-**On by default, at 80% of the model's context window — unlike every other feature on this page.** An agent that sets no `compact_after_tokens:` still gets compaction; `compact_after_tokens: 0` is what disables it. This is a deliberate exception to this codebase's usual value-gating contract for opt-in features ("absent, its behavior ... byte-identical to before it existed") — merkle hashes are unaffected either way (see below), but the conversation's *behavior* differs for any pipeline whose agent crosses the budget.
+**On by default, at 97% of the model's context window — unlike every other feature on this page.** An agent that sets no `compact_after_tokens:` still gets compaction; `compact_after_tokens: 0` is what disables it. This is a deliberate exception to this codebase's usual value-gating contract for opt-in features ("absent, its behavior ... byte-identical to before it existed") — merkle hashes are unaffected either way (see below), but the conversation's *behavior* differs for any pipeline whose agent crosses the budget.
 
-The 20% headroom is load-bearing, not padding: it is room for the reply the model has yet to write, for tool results appended since the provider last reported, and for providers that report no usage at all (see below).
+The 3% headroom is thin on purpose: the size is the provider's own count (see below), so the headroom only has to cover tool results appended since the provider last reported. Where there is no report to use (a provider that reports none, the first turn, the turn after a compaction), the size is an estimate that misses the system prompt and tool schemas, and 3% may not be enough — set `compact_after_tokens:` lower for such a provider.
 
-**The window comes from the model.** `internal/config/agent.go`'s `contextWindows` table maps a model-name fragment to that model's window, so a 1M-context model compacts at 800,000 rather than at a tenth of its capacity. A model the table does not recognize keeps the conservative 102,400 (80% of an assumed 128K) — the safe direction to be wrong in, and no behavior change for anything that was already correct.
+**The window comes from the model.** `internal/config/agent.go`'s `contextWindows` table maps a model-name fragment to that model's window, so a 1M-context model compacts at 970,000 rather than at an eighth of its capacity. A model the table does not recognize keeps the conservative 124,160 (97% of an assumed 128K) — the safe direction to be wrong in, and no behavior change for anything that was already correct.
 
 Matching is on a *normalized* name — lowercased, with `.` folded to `-` — because the same model arrives spelled `claude-sonnet-4-5` from Anthropic and opencode but `claude-sonnet-4.5` from OpenRouter. Table fragments are therefore always written in the dashed form. Entries are ordered most-specific-first, since some families split: `gpt-5.4` is ~1M but its own `-mini`/`-nano` stayed at 400K.
 
@@ -241,11 +241,11 @@ The numbers come from [models.dev](https://models.dev/api.json) (`.<provider>.mo
 That default used to be unconditional, and being wrong by 10x for a frontier model was invisible: nothing logged the budget in force, so the first symptom was a stall warning that read like a bug in the agent loop. Every agent step now states it:
 
 ```
-INF agent.compaction_budget agent=coder model=google/gemini-2.5-pro compact_after_tokens=800000 context_window=1000000
-INF agent.compaction_budget agent=coder model=some-local-build compact_after_tokens=102400 context_window=unknown assumed_window="128000 (set context_window: if your model differs)"
+INF agent.compaction_budget agent=coder model=google/gemini-2.5-pro compact_after_tokens=970000 context_window=1000000
+INF agent.compaction_budget agent=coder model=some-local-build compact_after_tokens=124160 context_window=unknown assumed_window="128000 (set context_window: if your model differs)"
 ```
 
-**`context_window:` is the escape hatch, and usually the right one.** No table keyed on a model name can express a *host* that serves a known model with a smaller window than it has natively, and none of them will have heard of a local build or a release newer than they are. Stating the window keeps the 80% arithmetic applying and makes the log line above report a derived window instead of an assumed one:
+**`context_window:` is the escape hatch, and usually the right one.** No table keyed on a model name can express a *host* that serves a known model with a smaller window than it has natively, and none of them will have heard of a local build or a release newer than they are. Stating the window keeps the 97% arithmetic applying and makes the log line above report a derived window instead of an assumed one:
 
 ```yaml test=internals-context-window
 agents:
@@ -267,9 +267,9 @@ jobs:
     outcome: succeeded
 ```
 
-`compact_after_tokens:` still outranks it, and overrides the budget outright rather than describing the model. Prefer `context_window:` unless you specifically want a budget that is not 80% of the window. Neither is available on a `@cli/` agent, which resolves its own window and compacts its own conversation.
+`compact_after_tokens:` still outranks it, and overrides the budget outright rather than describing the model. Prefer `context_window:` unless you specifically want a budget that is not 97% of the window. Neither is available on a `@cli/` agent, which resolves its own window and compacts its own conversation.
 
-**Small-context and local models must set one of the two.** A local build's name tells the table nothing, so it gets the 102,400 default — close to an entire typical context window, and a 32K-token local model (LM Studio, Ollama) will overflow long before that ever triggers.
+**Small-context and local models must set one of the two.** A local build's name tells the table nothing, so it gets the 124,160 default — close to an entire typical context window, and a 32K-token local model (LM Studio, Ollama) will overflow long before that ever triggers.
 
 **The count is the provider's own, topped up by an estimate.** After each response, the provider's reported prompt tokens plus completion tokens become the conversation's size: that already counts the system prompt and tool schemas, in the model's own tokenizer. Only what was appended since — the tool results about to be sent — is estimated, with a `len(text)/4` heuristic. Reasoning ("thinking") tokens are left out, because they are not sent back on the next turn. Three cases fall back to estimating the whole conversation, which misses the system prompt and tool schemas: a provider that reports no usage, the first turn, and the turn right after compaction (the last report described the history that was just replaced). A fallback model mid-conversation starts from the estimate too, since it tokenizes differently.
 
