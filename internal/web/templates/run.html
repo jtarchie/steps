@@ -18,7 +18,7 @@
          hides the one that lands first. */}}
     <p class="metaline provenance">
       {{if $run.Run.ConfigSHA}}<span class="sep">·</span>config <a class="hash" href="/p/{{.Nav.Current}}/config/{{$run.Run.ConfigSHA}}">{{short $run.Run.ConfigSHA}}</a>{{end}}
-      {{if $run.Run.Workspace}}<span class="sep">·</span><span class="faint">{{$run.Run.Workspace}}</span>{{end}}
+      {{if $run.Run.Workspace}}<span class="sep">·</span>{{$run.Run.Workspace}}{{end}}
       {{if .Job.Upstream}}<span class="sep">·</span>after {{range .Job.Upstream}}<a href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a> <span class="res">[{{.Resource}}]</span> {{end}}{{end}}
       {{if .Job.Downstream}}<span class="sep">·</span>feeds {{range .Job.Downstream}}<a href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a> <span class="res">[{{.Resource}}]</span> {{end}}{{end}}
       {{if $run.HasSpend}}{{$spend := $run.Spend}}<span class="sep">·</span>spend {{thousands $spend.Tokens}} tokens · {{$spend.CachePercent}}% cached · {{if $spend.Priced}}{{$spend.Cost}}{{else}}<span class="unpriced">unpriced</span>{{end}}{{if $spend.Truncated}} · <span class="spendwarn">{{$spend.Truncated}} truncated</span>{{end}}{{if $run.Running}} so far{{end}} <a href="#spend">→ #spend</a>{{end}}

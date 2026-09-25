@@ -230,10 +230,12 @@ main { max-width: 1000px; margin: 0 auto; padding: 26px 20px 80px; }
 /* A workspace path is one unbreakable token tens of characters long, and this
    line carries one. Without a break opportunity it sets the page's min-content
    width and drags the whole document sideways on a phone. */
-.metaline { color: var(--faint); font-size: 12px; margin-bottom: 22px; overflow-wrap: anywhere; }
+/* --dim, not --faint: at 12px on --bg, --faint measures 2.68:1 and --dim 5.13:1,
+   and this line carries links. */
+.metaline { color: var(--dim); font-size: 12px; margin-bottom: 22px; overflow-wrap: anywhere; }
 .metaline .sep { margin: 0 8px; color: var(--line); }
-/* The run head's two lines: the outcome is read, the provenance is scanned. */
-.metaline.outcome { color: var(--dim); }
+/* The run head's second line is scanned, not read: one size down, same ink. */
+.metaline.provenance { font-size: 11px; }
 .metaline.provenance > .sep:first-child { display: none; }
 
 .eyebrow {
