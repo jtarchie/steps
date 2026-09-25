@@ -3,17 +3,26 @@
 <div class="pagehead">
   <div>
     <h1 class="prompt"><b>steps run {{$run.Run.JobName}} #{{short $run.Run.ID}}</b></h1>
-    <p class="metaline">
+    {{/* Two lines, read in order: what happened and where, then what it ran
+         against and what it cost. A reader triaging reads the first and
+         stops; the second is the index of everything below the transcript. */}}
+    <p class="metaline outcome">
       <span class="st st-{{statusWord $run.Run.Status}}">{{statusWord $run.Run.Status}}</span>
       {{/* The step that actually broke, first: the same row the f key finds,
            for a reader who does not know the key. */}}
       {{with $run.InnermostFailure}}<span class="sep">·</span>failed at <a href="#{{.Anchor}}">{{.Name}}</a>{{end}}<span class="sep">·</span>
-      {{stamp $run.Run.StartedAt}}<span class="sep">·</span>
-      <span id="run-duration">{{elapsedTag $run.Run}}</span>
+      <span id="run-duration">{{elapsedTag $run.Run}}</span><span class="sep">·</span>
+      {{stamp $run.Run.StartedAt}}
+    </p>
+    {{/* Every entry is conditional, so each leads with its separator and CSS
+         hides the one that lands first. */}}
+    <p class="metaline provenance">
       {{if $run.Run.ConfigSHA}}<span class="sep">·</span>config <a class="hash" href="/p/{{.Nav.Current}}/config/{{$run.Run.ConfigSHA}}">{{short $run.Run.ConfigSHA}}</a>{{end}}
       {{if $run.Run.Workspace}}<span class="sep">·</span><span class="faint">{{$run.Run.Workspace}}</span>{{end}}
       {{if .Job.Upstream}}<span class="sep">·</span>after {{range .Job.Upstream}}<a href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a> <span class="res">[{{.Resource}}]</span> {{end}}{{end}}
       {{if .Job.Downstream}}<span class="sep">·</span>feeds {{range .Job.Downstream}}<a href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a> <span class="res">[{{.Resource}}]</span> {{end}}{{end}}
+      {{if $run.HasSpend}}{{$spend := $run.Spend}}<span class="sep">·</span>spend {{thousands $spend.Tokens}} tokens · {{$spend.CachePercent}}% cached · {{if $spend.Priced}}{{$spend.Cost}}{{else}}<span class="unpriced">unpriced</span>{{end}}{{if $spend.Truncated}} · <span class="spendwarn">{{$spend.Truncated}} truncated</span>{{end}}{{if $run.Running}} so far{{end}} <a href="#spend">→ #spend</a>{{end}}
+      {{if $run.HasPlacements}}<span class="sep">·</span>{{len $run.Placements}} placed <a href="#machines">→ #machines</a>{{end}}
     </p>
   </div>
   {{if not .Nav.ReadOnly}}
@@ -74,11 +83,32 @@
   {{range $run.Changed}}<span class="chg">{{.}}</span> {{end}}changed content — everything else replayed from cache</p>
 {{end}}
 
+<div class="keyhint" aria-hidden="true">
+  <span><kbd>j</kbd>/<kbd>k</kbd> move</span>
+  <span><kbd>e</kbd>/<kbd>c</kbd> expand / collapse all</span>
+  <span><kbd>f</kbd> first failure</span>
+  <span><kbd>enter</kbd> toggle</span>
+</div>
+
+{{/* The placeholder hides itself rather than being removed, because the
+     stream APPENDS the first step beside it: :only-child is true exactly
+     while the transcript is empty, so no fragment has to know it exists. */}}
+<div class="transcript" id="transcript">
+  {{range $run.Roots}}{{template "step" (stepctx $ .)}}{{end}}
+  <div class="step" id="run-empty"><div class="stephead"><span class="faint">{{if $run.Running}}Waiting for the first step…{{else}}This run recorded no steps.{{end}}</span></div></div>
+</div>
+
+{{if $run.HasSkipped}}
+<p class="callout"><b>Folded = cached.</b> A step whose content hash was unchanged replays from the merkle store and never re-executes — so this page shows exactly what this run paid for.</p>
+{{end}}
+
+{{/* Below the transcript, where the audit reader scrolls to and the head
+     links down to: a table is never above the first step. */}}
 {{if $run.HasSpend}}
 {{$spend := $run.Spend}}
-<section class="spend">
+<section class="spend" id="spend" aria-labelledby="spend-lbl">
   <div class="spendhead">
-    <span class="lbl">spend</span>
+    <span class="lbl" id="spend-lbl">spend</span>
     <span class="spendtotal">{{thousands $spend.Tokens}} tokens</span>
     <span class="spendmeta">{{$spend.CachePercent}}% cached</span>
     <span class="spendmeta">{{$spend.Steps}} agent step(s)</span>
@@ -105,9 +135,9 @@
 {{end}}
 
 {{if $run.HasPlacements}}
-<section class="spend placement">
+<section class="spend placement" id="machines" aria-labelledby="machines-lbl">
   <div class="spendhead">
-    <span class="lbl">machines</span>
+    <span class="lbl" id="machines-lbl">machines</span>
     <span class="spendmeta">{{len $run.Placements}} placed step(s)</span>
     <span class="spendmeta" title="What an instance-hour cost is not knowable from inside a run — list prices ignore Savings Plans, a spot instance's paid price is reported by no API, and real billing lands a day later. These are the facts; price them against your own rate card.">facts, not a price</span>
   </div>
@@ -129,25 +159,6 @@
   </table>
   </div>
 </section>
-{{end}}
-
-<div class="keyhint" aria-hidden="true">
-  <span><kbd>j</kbd>/<kbd>k</kbd> move</span>
-  <span><kbd>e</kbd>/<kbd>c</kbd> expand / collapse all</span>
-  <span><kbd>f</kbd> first failure</span>
-  <span><kbd>enter</kbd> toggle</span>
-</div>
-
-{{/* The placeholder hides itself rather than being removed, because the
-     stream APPENDS the first step beside it: :only-child is true exactly
-     while the transcript is empty, so no fragment has to know it exists. */}}
-<div class="transcript" id="transcript">
-  {{range $run.Roots}}{{template "step" (stepctx $ .)}}{{end}}
-  <div class="step" id="run-empty"><div class="stephead"><span class="faint">{{if $run.Running}}Waiting for the first step…{{else}}This run recorded no steps.{{end}}</span></div></div>
-</div>
-
-{{if $run.HasSkipped}}
-<p class="callout"><b>Folded = cached.</b> A step whose content hash was unchanged replays from the merkle store and never re-executes — so this page shows exactly what this run paid for.</p>
 {{end}}
 {{end}}
 

@@ -232,6 +232,9 @@ main { max-width: 1000px; margin: 0 auto; padding: 26px 20px 80px; }
    width and drags the whole document sideways on a phone. */
 .metaline { color: var(--faint); font-size: 12px; margin-bottom: 22px; overflow-wrap: anywhere; }
 .metaline .sep { margin: 0 8px; color: var(--line); }
+/* The run head's two lines: the outcome is read, the provenance is scanned. */
+.metaline.outcome { color: var(--dim); }
+.metaline.provenance > .sep:first-child { display: none; }
 
 .eyebrow {
   font-family: var(--sans);
@@ -957,10 +960,12 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
 .log.output { color: var(--fg); }
 
 /* Spend: what a run's agent steps cost.
-   Sits above the transcript because "what did this cost" is a question asked
-   of the whole run, not of one step -- and because the cache percentage is
-   the only place prompt caching reports whether it did anything. */
-.spend { margin: 1rem 0; border: 1px solid var(--line); border-radius: 4px; }
+   Sits below the transcript, linked from the head: "what did this cost" is a
+   question asked of the whole run, not of one step, and asked after "did it
+   pass" -- and the cache percentage is the only place prompt caching reports
+   whether it did anything. */
+.spend { margin: 1rem 0; border: 1px solid var(--line); border-radius: 4px; scroll-margin-top: 3.2rem; }
+.spend:target { border-color: var(--dim); box-shadow: inset 0 0 0 1px var(--line); }
 .spendhead { display: flex; flex-wrap: wrap; gap: .75rem; align-items: baseline;
              padding: .5rem .75rem; border-bottom: 1px solid var(--line); }
 .spendtotal { font-weight: 600; }

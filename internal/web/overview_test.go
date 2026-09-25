@@ -1176,8 +1176,14 @@ func TestSpendPanelDoesNotBlameASiblingMember(t *testing.T) {
 	}
 
 	// The right one: the row for the node the surviving member finished with
-	// is the one left alone.
-	if at := strings.Index(body, "— step failed"); at >= 0 && strings.LastIndex(body[:at], "hash-for") > strings.LastIndex(body[:at], "hash-against") {
+	// is the one left alone. Read within the spend table, which sits below
+	// the transcript, where the surviving member's row links its hash.
+	_, table, found := strings.Cut(body, `id="spend"`)
+	if !found {
+		t.Fatalf("the run recorded no spend panel to assert about: %s", body)
+	}
+
+	if at := strings.Index(table, "— step failed"); at >= 0 && strings.LastIndex(table[:at], "hash-for") > strings.LastIndex(table[:at], "hash-against") {
 		t.Errorf("the member that succeeded is the one blamed: %s", body)
 	}
 }
