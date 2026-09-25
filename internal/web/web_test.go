@@ -1688,13 +1688,13 @@ func TestFailedRunNamesWhatChangedSinceTheLastGreen(t *testing.T) {
 		t.Fatalf("GET run = %d: %s", code, body)
 	}
 
-	if !strings.Contains(body, `class="chg">compile</span>`) {
-		t.Errorf("the failed run does not name the step whose content moved:\n%s", body)
+	if !strings.Contains(stepHead(t, body, "compile"), `class="note chg"`) {
+		t.Errorf("the failed run does not mark the step whose content moved:\n%s", body)
 	}
 
-	// The step both runs share is what makes the note worth reading: naming
-	// everything is the same as naming nothing.
-	if strings.Contains(body, `class="chg">repo</span>`) {
+	// The step both runs share is what makes the mark worth reading: marking
+	// everything is the same as marking nothing.
+	if strings.Contains(stepHead(t, body, "repo"), `class="note chg"`) {
 		t.Error("the diff names a step whose hash did not move")
 	}
 
@@ -1819,4 +1819,18 @@ func TestRunPageOffersNoTriggerForAJobThePipelineDropped(t *testing.T) {
 	if strings.Contains(dropped, "/jobs/gone/trigger") {
 		t.Error("run page offers a trigger for a job the pipeline no longer has")
 	}
+}
+
+// stepHead is the header of the step named name: where a mark about that step belongs.
+func stepHead(t *testing.T, body, name string) string {
+	t.Helper()
+
+	_, head, found := strings.Cut(body, `<span class="name">`+name+`</span>`)
+	if !found {
+		t.Fatalf("no step named %s:\n%s", name, body)
+	}
+
+	head, _, _ = strings.Cut(head, "</div>")
+
+	return head
 }

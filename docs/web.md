@@ -206,10 +206,11 @@ what it spent and where it ran on its own row.
   failing step — the one that actually broke, which <kbd>f</kbd> also jumps
   to — as a link, and the error is read on that step, once. The head carries
   an error only when no step holds it: a run that died on an image pull, a
-  placement or a resource check before any step failed. The header also says
+  placement or a resource check before any step failed. The page also says
   what changed since the last passed run of that job — computed by comparing
-  content hashes, so it names the steps whose inputs, command, or prompt
-  actually moved.
+  content hashes, so each step whose inputs, command, or prompt actually moved
+  carries a `changed` mark on its own row (`new` for a step that run did not
+  have), and the line under the header counts them.
 - **Every run names the configuration it executed**, linking the pipeline as
   it was when that run started — which the file on disk no longer holds once
   anyone edits it. When a failed run's configuration differs from the last

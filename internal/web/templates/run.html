@@ -57,11 +57,12 @@
 {{end}}
 
 {{/* One line for everything that moved since the last green: the edit and
-     the steps it moved are two halves of "what is different this time". */}}
+     how many steps it moved are two halves of "what is different this time".
+     Which steps is marked on each one's row. */}}
 {{if or $run.ComparedConfig $run.Changed}}
 <p class="diffnote">vs last passed <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.ComparedTo}}">{{short $run.ComparedTo}}</a>:
   {{if $run.ComparedConfig}}the <b>configuration changed</b> — it ran <a class="hash" href="/p/{{.Nav.Current}}/config/{{$run.ComparedConfig}}">{{short $run.ComparedConfig}}</a>{{if $run.Changed}} ·{{else}}, and no step's content moved with it{{end}}{{end}}
-  {{if $run.Changed}}{{range $run.Changed}}<span class="chg">{{.}}</span> {{end}}changed content — everything else replayed from cache{{end}}</p>
+  {{with len $run.Changed}}{{.}} step{{if ne . 1}}s{{end}} changed content — everything else replayed from cache{{end}}</p>
 {{end}}
 
 {{/* On the transcript's top edge, at the right: the keys drive the rows
@@ -239,6 +240,7 @@
     <span class="name">{{$step.Name}}</span>
     <a class="anchor" href="#{{$step.Anchor}}" title="Link to this step" aria-label="Link to this step">#</a>
     {{if $step.Reason}}<span class="note">{{$step.Reason}}</span>{{end}}
+    {{with index $run.Changed $step.Name}}<span class="note chg" title="{{if eq . "new"}}not in the last passed run{{else}}its content hash moved since the last passed run{{end}}">{{.}}</span>{{end}}
     {{if $step.Verdict}}<span class="note">verdict: {{$step.Verdict}}</span>{{end}}
     {{if $step.WrappedUp}}<span class="note spendwarn" title="The turn budget ran out; this answer was written from what the model had already gathered">stopped early</span>{{end}}
     {{with $step.Compactions}}<span class="note" title="Older turns were summarized to fit the context budget; the model worked from the summary after that point">compacted ×{{.}}</span>{{end}}

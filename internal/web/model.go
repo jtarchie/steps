@@ -26,11 +26,11 @@ type (
 // runView is a whole run, assembled.
 type runView struct {
 	runview.Transcript
-	// Changed names the steps whose content hash differs from the last
-	// successful run of the same job — the "what is different this time"
-	// answer a failed run opens with. Empty when there is no prior success
-	// to compare against.
-	Changed []string
+	// Changed marks, by step name, the steps whose content hash differs from
+	// the last successful run of the same job — "changed", or "new" for a step
+	// that run did not have — drawn on each step's own row. Empty when there
+	// is no prior success to compare against.
+	Changed map[string]string
 	// ComparedTo is the run Changed was computed against.
 	ComparedTo string
 	// ComparedConfig is the configuration THAT run executed, when it is not
@@ -444,24 +444,24 @@ func buildRunView(run store.RunRow, rows []store.RunEventRow, results map[string
 // and a prior one. It is the merkle store answering "what is different about
 // this run" directly: identical hashes mean identical content, so a step
 // whose hash moved is a step whose inputs, command, or prompt moved.
-func diffAgainst(current, prior runView) []string {
+func diffAgainst(current, prior runView) map[string]string {
 	priorHashes := map[string]string{}
 	for _, step := range prior.Steps {
 		priorHashes[step.Name] = step.Hash
 	}
 
-	var changed []string
+	changed := map[string]string{}
 
 	for _, step := range current.Steps {
 		before, existed := priorHashes[step.Name]
 		if !existed {
-			changed = append(changed, step.Name+" (new)")
+			changed[step.Name] = "new"
 
 			continue
 		}
 
 		if before != step.Hash && step.Hash != "" && before != "" {
-			changed = append(changed, step.Name)
+			changed[step.Name] = "changed"
 		}
 	}
 
