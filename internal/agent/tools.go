@@ -573,8 +573,10 @@ func execCustomTool(spec config.ToolSpec, params []string) toolImpl {
 // OVER any model-supplied value at the same key — pinned always wins, and
 // (per visibleParams) the model never even sees a pinned key in its schema,
 // so this only ever overrides a value the model couldn't have legitimately
-// supplied. A nil/empty pinned map returns args unchanged (no copy).
-func mergePinnedArgs(args map[string]any, pinned map[string]string) map[string]any {
+// supplied. A nil/empty pinned map returns args unchanged (no copy). Generic
+// over the pinned value so an MCP grant can pin the typed values pinMCPArgs
+// converted.
+func mergePinnedArgs[V any](args map[string]any, pinned map[string]V) map[string]any {
 	if len(pinned) == 0 {
 		return args
 	}

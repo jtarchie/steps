@@ -53,12 +53,15 @@ func (s *docMCPServer) lastCall(t *testing.T, tool string) map[string]any {
 }
 
 // docMCPTool is one tool a fixture exposes: the argument names its schema
-// declares required — what preflight verifies a stage will send — and the
-// text content it answers with, built from the decoded arguments.
+// declares required — what preflight verifies a stage will send — any
+// further properties it declares (name → JSON type, overriding a required
+// name's default "string"), and the text content it answers with, built from
+// the decoded arguments.
 type docMCPTool struct {
-	name     string
-	required []string
-	reply    func(args map[string]any) string
+	name       string
+	required   []string
+	properties map[string]string
+	reply      func(args map[string]any) string
 }
 
 // startDocMCPServer starts an in-process streamable-HTTP MCP server exposing
@@ -72,13 +75,20 @@ func startDocMCPServer(t *testing.T, tools ...docMCPTool) *docMCPServer {
 	for _, tool := range tools {
 		schema := map[string]any{"type": "object"}
 
-		if len(tool.required) > 0 {
+		if len(tool.required) > 0 || len(tool.properties) > 0 {
 			properties := map[string]any{}
 			for _, name := range tool.required {
 				properties[name] = map[string]any{"type": "string"}
 			}
 
+			for name, kind := range tool.properties {
+				properties[name] = map[string]any{"type": kind}
+			}
+
 			schema["properties"] = properties
+		}
+
+		if len(tool.required) > 0 {
 			schema["required"] = tool.required
 		}
 
@@ -204,6 +214,27 @@ var docMCPFixtures = map[string]docMCPFixture{
 			expectDocMCPCall(t, srv, "create_issue", map[string]any{
 				"title": "Retry loop spins", "description": "the retry loop never backs off",
 			})
+		},
+	},
+
+	// "Pinning arguments: args:": the scripted model asks for project 999;
+	// the server must see the pinned 307, as the integer its schema declares.
+	"mcp-pinned-args": {
+		start: func(t *testing.T) *docMCPServer {
+			t.Helper()
+
+			return startDocMCPServer(t,
+				docMCPTool{
+					name: "list_faults", required: []string{"project_id"},
+					properties: map[string]string{"project_id": "integer", "q": "string"},
+					reply:      func(map[string]any) string { return `[{"id":1,"message":"timeout"}]` },
+				},
+			)
+		},
+		check: func(t *testing.T, srv *docMCPServer) {
+			t.Helper()
+
+			expectDocMCPCall(t, srv, "list_faults", map[string]any{"project_id": float64(307), "q": "timeout"})
 		},
 	},
 }

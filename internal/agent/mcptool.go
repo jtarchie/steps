@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
 
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
 	"github.com/jtarchie/steps/internal/shell"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -65,13 +70,23 @@ func buildMCPTools(ctx context.Context, cfg *config.Config, spec config.ToolSpec
 			return nil, nil, nil, err
 		}
 
+		// ponytail: checked against the schema listed at preparation; a server
+		// that changes its tool list mid-step is not re-checked until the next
+		// step. Re-validate on the list-changed notification if one ever does.
+		schema, pins, err := pinMCPArgs(spec, tool)
+		if err != nil {
+			_ = client.Close()
+
+			return nil, nil, nil, err
+		}
+
 		decls = append(decls, &genai.FunctionDeclaration{
 			Name:                 name,
 			Description:          mcpToolDescription(spec, tool),
-			ParametersJsonSchema: tool.InputSchema,
+			ParametersJsonSchema: schema,
 		})
 
-		registry[name] = mcpToolImpl(client, tool.Name, outputLimit(spec.MaxOutputBytes))
+		registry[name] = mcpToolImpl(client, tool.Name, outputLimit(spec.MaxOutputBytes), pins)
 	}
 
 	return decls, registry, client, nil
@@ -181,8 +196,25 @@ func selectMCPTools(spec config.ToolSpec, tools []*sdkmcp.Tool) ([]*sdkmcp.Tool,
 // {"structured_content": ..., "content": ...} — both keys always present
 // (nil/empty when absent) so the shape stays predictable for the model and
 // for assert.tool_calls matching.
-func mcpToolImpl(client stepsmcp.Client, name string, limit int) toolImpl {
+//
+// pins, when non-nil, are merged over the model's arguments before the call
+// goes over the wire (see mcpPins.apply).
+func mcpToolImpl(client stepsmcp.Client, name string, limit int, pins *mcpPins) toolImpl {
 	return func(ctx context.Context, args map[string]any, env toolEnv) map[string]any {
+		if pins != nil {
+			merged, overridden := pins.apply(args)
+			if len(overridden) > 0 {
+				// Key names only: the model's value may be injected text, and
+				// this note is persisted and drawn in the web transcript.
+				// ponytail: custom tools override silently; share this note
+				// with execCustomTool when someone asks.
+				events.Note(ctx, events.NoteWarn, fmt.Sprintf(
+					"%s: model supplied pinned argument(s) %s; pinned values used", pins.tool, quoteJoin(overridden)))
+			}
+
+			args = merged
+		}
+
 		result, err := client.CallTool(ctx, name, args)
 		if err != nil {
 			return map[string]any{"error": err.Error()}
@@ -203,6 +235,236 @@ func mcpToolImpl(client stepsmcp.Client, name string, limit int) toolImpl {
 			"content":            spillOrTruncateLimit(text, limit, env.spillDir),
 		}
 	}
+}
+
+// mcpPins is what pinMCPArgs resolved for one pinned grant: the typed values
+// to send, and every property the tool declares, which is what tells a
+// case-variant of a pinned key apart from a real parameter.
+type mcpPins struct {
+	tool     string
+	values   map[string]any
+	declared map[string]bool
+}
+
+// apply merges the pins over args and reports, sorted, every model-supplied
+// key it overrode or dropped.
+//
+// A key that case-folds to a pinned one and is NOT a property the tool
+// declares under that exact spelling is dropped: Go's encoding/json matches
+// struct fields case-insensitively, so `Project_ID: 999` next to the pinned
+// `project_id: 307` would let key order decide what a Go server binds.
+func (p *mcpPins) apply(args map[string]any) (map[string]any, []string) {
+	kept := make(map[string]any, len(args))
+
+	var overridden []string
+
+	for key, value := range args {
+		if p.shadows(key) {
+			overridden = append(overridden, key)
+
+			continue
+		}
+
+		kept[key] = value
+	}
+
+	sort.Strings(overridden)
+
+	return mergePinnedArgs(kept, p.values), overridden
+}
+
+// shadows reports whether a model-supplied key would compete with a pin.
+func (p *mcpPins) shadows(key string) bool {
+	if _, pinned := p.values[key]; pinned {
+		return true
+	}
+
+	if p.declared[key] {
+		return false
+	}
+
+	for pinned := range p.values {
+		if strings.EqualFold(key, pinned) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// pinMCPArgs checks spec's args: pins against tool's advertised input schema
+// and returns the schema the model is shown — a copy with every pinned key
+// removed from properties and required — plus the pins to merge at call
+// time. With no pins it returns the schema untouched and nil pins.
+//
+// A pin that cannot bind is refused rather than sent: one the schema does not
+// declare, or a value that does not convert to the declared type. Messages
+// name the key and type, never the value — they travel over HTTP, reach the
+// web UI and are persisted.
+//
+// ponytail: only top-level properties are understood. $ref/allOf schemas and
+// nested paths are refused rather than resolved; resolve them when a real
+// server needs it. An alias the server accepts under another name
+// (project_id and projectId) cannot be seen from here at all.
+func pinMCPArgs(spec config.ToolSpec, tool *sdkmcp.Tool) (any, *mcpPins, error) {
+	if len(spec.Args) == 0 {
+		return tool.InputSchema, nil, nil
+	}
+
+	name := spec.MCP + config.MCPToolNameSep + tool.Name
+
+	schema, props := copySchema(tool.InputSchema)
+	if schema == nil || len(props) == 0 {
+		return nil, nil, fmt.Errorf("mcp tool %q: args: pins %s, but the server's input schema declares no properties to pin",
+			name, quoteJoin(sortedKeys(spec.Args)))
+	}
+
+	pins := &mcpPins{tool: name, values: make(map[string]any, len(spec.Args)), declared: make(map[string]bool, len(props))}
+	for key := range props {
+		pins.declared[key] = true
+	}
+
+	for _, key := range sortedKeys(spec.Args) {
+		prop, ok := props[key]
+		if !ok {
+			return nil, nil, fmt.Errorf("mcp tool %q: args: pins %q, which the server does not declare (it declares: %s). Run: steps mcp tools <pipeline> %s",
+				name, key, strings.Join(sortedKeys(pins.declared), ", "), spec.MCP)
+		}
+
+		kind := pinType(prop)
+
+		value, ok := convertPin(kind, spec.Args[key])
+		if !ok {
+			return nil, nil, fmt.Errorf("mcp tool %q: args: pins %q as %s, but the pinned value is not %s %s",
+				name, key, kind, article(kind), kind)
+		}
+
+		pins.values[key] = value
+
+		delete(props, key)
+	}
+
+	if required, ok := schema["required"].([]any); ok {
+		schema["required"] = slices.DeleteFunc(required, func(entry any) bool {
+			key, isString := entry.(string)
+			_, pinned := pins.values[key]
+
+			return isString && pinned
+		})
+	}
+
+	return schema, pins, nil
+}
+
+// copySchema deep-copies an input schema by JSON round trip — whatever
+// concrete type the SDK decoded into — so the original is never mutated, and
+// returns the copy's properties map. An unreadable schema has no properties.
+func copySchema(src any) (map[string]any, map[string]any) {
+	var schema map[string]any
+
+	data, err := json.Marshal(src)
+	if err != nil || json.Unmarshal(data, &schema) != nil {
+		return nil, nil
+	}
+
+	props, _ := schema["properties"].(map[string]any)
+
+	return schema, props
+}
+
+// pinType resolves a property's scalar JSON type: a single type, the one
+// non-null entry of a type array, or the one non-null branch of anyOf/oneOf
+// (pydantic's Optional[int], a nullable zod schema). Anything else is "" and
+// the pin is sent as a string.
+func pinType(prop any) string {
+	schema, _ := prop.(map[string]any)
+
+	switch kind := schema["type"].(type) {
+	case string:
+		return kind
+	case []any:
+		var nonNull []any
+
+		for _, entry := range kind {
+			if entry != "null" {
+				nonNull = append(nonNull, entry)
+			}
+		}
+
+		if len(nonNull) == 1 {
+			single, _ := nonNull[0].(string)
+
+			return single
+		}
+
+		return ""
+	}
+
+	for _, combinator := range []string{"anyOf", "oneOf"} {
+		branches, _ := schema[combinator].([]any)
+
+		var nonNull []any
+
+		for _, branch := range branches {
+			if pinType(branch) != "null" {
+				nonNull = append(nonNull, branch)
+			}
+		}
+
+		if len(nonNull) == 1 {
+			return pinType(nonNull[0])
+		}
+	}
+
+	return ""
+}
+
+// convertPin turns a pinned string into kind. ok is false when it does not
+// parse, or when kind is one no string can satisfy; any other kind is sent as
+// the string itself.
+func convertPin(kind, raw string) (any, bool) {
+	switch kind {
+	case "object", "array", "null":
+		return nil, false
+	case "integer":
+		n, err := strconv.ParseInt(raw, 10, 64)
+
+		return n, err == nil
+	case "number":
+		f, err := strconv.ParseFloat(raw, 64)
+
+		return f, err == nil && !math.IsInf(f, 0) && !math.IsNaN(f)
+	case "boolean":
+		switch raw {
+		case "true":
+			return true, true
+		case "false":
+			return false, true
+		}
+
+		return nil, false
+	default:
+		return raw, true
+	}
+}
+
+func article(kind string) string {
+	if kind == "integer" || kind == "object" || kind == "array" {
+		return "an"
+	}
+
+	return "a"
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+
+	return keys
 }
 
 // boundedStructuredContent caps a tool result's structured content at limit

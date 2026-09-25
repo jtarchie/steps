@@ -688,6 +688,17 @@
             "max_output_bytes": {
               "type": "integer"
             },
+            "args": {
+              "type": "object",
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "description": "Pinned arguments the model can neither see nor set. Single-tool form only; each key must be a property the tool declares."
+            },
             "timeout": {
               "type": "string",
               "description": "Bounds ONE call of this tool (e.g. 30s, 5m); the step's own deadline still holds. An expired call is reported to the model as an error it can react to, not an aborted step. Only where the tool is granted, except on an inline custom tool."

@@ -200,7 +200,8 @@ type capturedMessage struct {
 }
 
 type capturedToolFunction struct {
-	Name string `json:"name"`
+	Name       string          `json:"name"`
+	Parameters json.RawMessage `json:"parameters"`
 }
 
 type capturedTool struct {

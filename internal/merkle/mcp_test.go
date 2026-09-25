@@ -62,6 +62,24 @@ func TestMCPToolNameChangeBustsHash(t *testing.T) {
 	}
 }
 
+func TestMCPPinnedArgsBustHash(t *testing.T) {
+	t.Parallel()
+
+	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
+	endpoint := "https://api.github.com/mcp/"
+	hash := func(args map[string]string) string {
+		return mustAgentHash(t, mcpAgentCfg([]config.ToolSpec{{MCP: "github", MCPTool: "list_faults", Args: args}}, endpoint), step)
+	}
+
+	if hash(map[string]string{"project_id": "307"}) == hash(map[string]string{"project_id": "308"}) {
+		t.Error("changing a pinned mcp argument should bust the hash, but hashes matched")
+	}
+
+	if hash(nil) != hash(map[string]string{}) {
+		t.Error("an empty args: map should hash the same as none")
+	}
+}
+
 // TestMCPSubsetGrantHashOrderIndependent proves the named-subset form
 // (tools: [...]) hashes identically regardless of declaration order — the
 // sorted-copy handling in mcpToolSpecContent.
