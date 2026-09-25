@@ -107,7 +107,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 			// a set this job is done with. All of the set's bindings advance,
 			// not just this get's — consecutive sets can share a HELD first
 			// get's hash, and each skip must still move the other cursors.
-			w.takeSet(ctx, pinnedRun, set)
+			w.takeSet(ctx, pinnedRun, set, setIndex)
 
 			continue
 		}
@@ -132,7 +132,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 		// retried — was tried and reverted. It makes a version that fails
 		// forever re-run forever, on every trigger, with an agent's bill
 		// attached, and it means "every version, once" quietly is not true.
-		w.takeSet(ctx, pinnedRun, set)
+		w.takeSet(ctx, pinnedRun, set, setIndex)
 
 		// The get is the container of everything the version it selected goes
 		// on to build — which is what it already IS, since runTriggeredBuild
@@ -190,15 +190,17 @@ func (w *planWalk) reportNoVersions(ctx context.Context, step config.Step, resou
 // — a set is consumed as a unit, whatever its first get's fate. The binding is
 // looked up by GET name and recorded against the RESOURCE, which is where the
 // cursor lives. Re-taking a held version is a MAX no-op.
-func (w *planWalk) takeSet(ctx context.Context, pinnedRun bool, set merkle.InputSet) {
+func (w *planWalk) takeSet(ctx context.Context, pinnedRun bool, set merkle.InputSet, setIndex int) {
 	if pinnedRun {
 		return
 	}
 
+	buildID := buildIDForSet(ctx, setIndex)
+
 	for _, every := range w.resolution.everyInputs {
 		if version := set[every.input]; version != nil {
 			w.cursor.take(ctx, w.st, w.jobName, every.resource, version)
-			w.recordRunInput(ctx, every.resource, version)
+			w.recordRunInput(ctx, buildID, every.resource, version)
 		}
 	}
 }
@@ -212,13 +214,13 @@ func (w *planWalk) takeSet(ctx context.Context, pinnedRun bool, set merkle.Input
 // way must not fail over bookkeeping, and the cost of a lost row is a resume
 // that cannot re-open one version — which is where this path started, so it is
 // no worse than not recording at all.
-func (w *planWalk) recordRunInput(ctx context.Context, resourceName string, version map[string]any) {
+func (w *planWalk) recordRunInput(ctx context.Context, buildID, resourceName string, version map[string]any) {
 	key, ok := encodeVersion(version)
 	if !ok {
 		return
 	}
 
-	err := w.st.RecordRunInput(context.WithoutCancel(ctx), events.RunID(ctx), resourceName, key)
+	err := w.st.RecordRunInput(context.WithoutCancel(ctx), events.RunID(ctx), buildID, resourceName, key)
 	if err != nil {
 		logFrom(ctx).Warn("job.run_input_unrecorded", "resource", resourceName, "error", err)
 	}
@@ -324,8 +326,11 @@ func (w *planWalk) runTriggeredBuild(
 	// After the node, never before: run_placements references it.
 	recordPlacement(ctx, build, placed, w.index, step.Get, node.Hash, node.Hash)
 
+	buildID := buildIDForSet(ctx, setIndex)
+
 	remainderWalk := *w
 	remainderWalk.stepRunner = build
+	remainderWalk.build = buildID
 	remainderWalk.parentHash = node.Hash
 	remainderWalk.allowGetTrigger = false
 	// Every get in the remainder binds this build's set — see
@@ -341,7 +346,6 @@ func (w *planWalk) runTriggeredBuild(
 	// job instead lost every set but the last, and stranded all of them when
 	// any one set failed: taken at build start, never green, never retried.
 	if buildOK {
-		buildID := buildIDForSet(ctx, setIndex)
 		recordPassedVersions(ctx, w.st, w.jobName, buildID, fetched)
 		noteGreenBuild(runCtx, buildID)
 	}

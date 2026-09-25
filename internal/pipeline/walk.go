@@ -5,6 +5,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jtarchie/steps/internal/agent"
@@ -40,6 +41,11 @@ type planWalk struct {
 	// allowGetTrigger is false inside a triggered build's remainder, where a
 	// get fetches into the existing workspace instead of fanning out again.
 	allowGetTrigger bool
+
+	// build names the build this walk's steps belong to, for the resume
+	// record: "<run>#<set>" inside a triggered build, the bare run id before
+	// the first get.
+	build string
 
 	index            int
 	parentHash       string
@@ -132,7 +138,7 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 		w.visits[w.index]++
 	}
 
-	recordCompletedStep(ctx, w.st, w.index, step, err)
+	recordCompletedStep(ctx, w.st, w.build, w.index, step, err)
 
 	nextIndex, _, err, exhaustedErr := applyRouting(ctx, steps, w.index, step, res.disposition, res.verdict, err, w.visits)
 	if exhaustedErr != nil {
@@ -171,13 +177,22 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 // skipCompleted skips a plan step a previous attempt of this run already
 // finished, advancing the index. It reports whether it skipped.
 func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) bool {
-	name, done := resumeFrom(ctx).alreadyDone(w.index)
-	if !done {
+	resume := resumeFrom(ctx)
+
+	name, done := resume.alreadyDone(w.build, w.index)
+	if !done || resume == nil {
 		return false
 	}
 
-	notef(ctx, "skip: %s (already succeeded)", name)
-	logFrom(ctx).Info("job.skip", "index", w.index, "reason", "resume", "step", name)
+	// Named only inside a triggered build: two builds of a fan-out skip steps
+	// of the same name, and the run-level line is matched as-is elsewhere.
+	suffix := ""
+	if set := strings.TrimPrefix(w.build, resume.id); set != "" {
+		suffix = " [build " + set + "]"
+	}
+
+	notef(ctx, "skip: %s (already succeeded)%s", name, suffix)
+	logFrom(ctx).Info("job.skip", "index", w.index, "build", w.build, "reason", "resume", "step", name)
 	recordExecution(ctx, name)
 
 	// ponytail: nothing links a run to a put's output, so a resumed run cannot
@@ -231,7 +246,7 @@ func recordStepOutcome(ctx context.Context, step config.Step, out agent.StepOutc
 // And on PLAN steps only — the concurrent block runners call runNonGetStep
 // with the enclosing block's index, so recording from there marked a whole
 // block done the moment any one branch succeeded.
-func recordCompletedStep(ctx context.Context, st store.Store, i int, step config.Step, err error) {
+func recordCompletedStep(ctx context.Context, st store.Store, build string, i int, step config.Step, err error) {
 	if err != nil {
 		return
 	}
@@ -241,7 +256,7 @@ func recordCompletedStep(ctx context.Context, st store.Store, i int, step config
 		return
 	}
 
-	_ = st.RecordRunStep(context.WithoutCancel(ctx), resume.id, i, executedStepName(step))
+	_ = st.RecordRunStep(context.WithoutCancel(ctx), resume.id, build, i, executedStepName(step))
 }
 
 // runNonGetStep runs a task/put/agent step and dispatches its hooks around the

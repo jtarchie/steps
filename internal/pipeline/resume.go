@@ -20,9 +20,9 @@ import (
 type resumeState struct {
 	// id identifies this run, printed on failure so it can be resumed.
 	id string
-	// done maps a step index to the name it ran under, for the steps a
-	// previous attempt of this run already completed.
-	done map[int]string
+	// done names the steps a previous attempt of this run already
+	// completed, by the build they ran in and their index within it.
+	done map[doneKey]string
 	// resuming is true when this run continues a previous one.
 	resuming bool
 	// nextStepID mints display-tree ids for this run (see steptree.go).
@@ -31,6 +31,24 @@ type resumeState struct {
 }
 
 type resumeKey struct{}
+
+// doneKey is a step's position: an index is relative to the walk it ran in,
+// and every triggered build's remainder counts from 0, so it names a step only
+// together with its build.
+type doneKey struct {
+	build string
+	index int
+}
+
+// foldRunSteps indexes a run's recorded steps for alreadyDone.
+func foldRunSteps(steps []store.RunStep) map[doneKey]string {
+	done := make(map[doneKey]string, len(steps))
+	for _, step := range steps {
+		done[doneKey{step.BuildID, step.Index}] = step.Name
+	}
+
+	return done
+}
 
 func withResume(ctx context.Context, state *resumeState) context.Context {
 	return context.WithValue(ctx, resumeKey{}, state)
@@ -42,13 +60,14 @@ func resumeFrom(ctx context.Context) *resumeState {
 	return state
 }
 
-// alreadyDone reports whether a previous attempt of this run finished a step.
-func (r *resumeState) alreadyDone(index int) (string, bool) {
+// alreadyDone reports whether a previous attempt of this run finished a step
+// of one build.
+func (r *resumeState) alreadyDone(build string, index int) (string, bool) {
 	if r == nil || !r.resuming {
 		return "", false
 	}
 
-	name, ok := r.done[index]
+	name, ok := r.done[doneKey{build, index}]
 
 	return name, ok
 }
@@ -78,7 +97,7 @@ func NewRunID() string {
 
 // WithNewRun fixes the id RunJob gives the run it starts, so a caller can address that run — to abort it — before it exists.
 func WithNewRun(ctx context.Context, id string) context.Context {
-	return withResume(ctx, &resumeState{id: id, done: map[int]string{}})
+	return withResume(ctx, &resumeState{id: id, done: map[doneKey]string{}})
 }
 
 // runLookup is a run read that can also name the pipeline it read: Meta beside
@@ -113,7 +132,7 @@ func PrepareResume(ctx context.Context, st runLookup, runID string) (context.Con
 
 	slog.Info("run.resume", "run", runID, "job", run.JobName, "completed_steps", len(done))
 
-	return withResume(ctx, &resumeState{id: runID, done: done, resuming: true}), run.Workspace, nil
+	return withResume(ctx, &resumeState{id: runID, done: foldRunSteps(done), resuming: true}), run.Workspace, nil
 }
 
 // ResumeJobName is the job a recorded run belongs to, so `--resume` alone
@@ -235,26 +254,101 @@ func recordRunIdentity(
 }
 
 // resumedRunInputs reports the versions the run being resumed was created
-// with, so the cursor can re-open them. Nil for an ordinary run, which is
-// every run that is not a resume.
+// with: merged across builds, so the cursor can re-open them, and per build,
+// so checkResumedBuilds can hold each build to its own. Both nil for an
+// ordinary run, which is every run that is not a resume.
 //
 // The read is NOT best-effort, unlike the write that fills the table: a resume
 // that cannot tell which versions it is continuing would silently select the
 // wrong ones — or none, which is the false green this whole path exists to
 // remove.
-func resumedRunInputs(ctx context.Context, st store.Store) (map[string]map[string]bool, error) {
+func resumedRunInputs(ctx context.Context, st store.Store) (map[string]map[string]bool, map[string]map[string]string, error) {
 	state := resumeFrom(ctx)
 	if state == nil || !state.resuming {
-		return nil, nil //nolint:nilnil // "not a resume" is the common case, and a nil map is the right answer
+		return nil, nil, nil
 	}
 
 	inputs, err := st.RunInputs(ctx, state.id)
 	if err != nil {
-		return nil, fmt.Errorf("could not read what run %q was created with: %w", state.id, err)
+		return nil, nil, fmt.Errorf("could not read what run %q was created with: %w", state.id, err)
 	}
 
-	return inputs, nil
+	reopen := map[string]map[string]bool{}
+	builds := map[string]map[string]string{}
+
+	for _, input := range inputs {
+		if reopen[input.Resource] == nil {
+			reopen[input.Resource] = map[string]bool{}
+		}
+
+		reopen[input.Resource][input.Version] = true
+
+		if builds[input.BuildID] == nil {
+			builds[input.BuildID] = map[string]string{}
+		}
+
+		builds[input.BuildID][input.Resource] = input.Version
+	}
+
+	return reopen, builds, nil
 }
+
+// checkResumedBuilds refuses a resume whose builds no longer line up with the
+// ones the run was created with.
+//
+// A build's completed steps are filed under its POSITION, "<run>#<set>", so
+// they are only that build's if the resume resolves the same versions into
+// the same positions. version_history: pruning a version the run took, or a
+// check reordering history, shifts every later set down one — and build #n's
+// record would skip build #n+1's task and put, green, having published
+// nothing. Only every-inputs are compared: they are what makes positions, a
+// plan without one having exactly one set. New versions sorting after the
+// recorded ones only add builds at the end, which is allowed.
+//
+// ponytail: a build with no recorded inputs (a lost best-effort write, or a
+// plan whose gets are all fixed or --pin, which takeSet never records) goes
+// unchecked, so a fixed get that moved between attempts is not caught.
+// Upgrade: record every binding in takeSet and refuse when a build has
+// completed steps but no inputs — which also refuses a resume after a
+// re-pushed branch, so it is a decision rather than a fix.
+func checkResumedBuilds(ctx context.Context, resolution setResolution, recorded map[string]map[string]string) error {
+	state := resumeFrom(ctx)
+	if state == nil || len(recorded) == 0 {
+		return nil
+	}
+
+	for setIndex, set := range resolution.sets {
+		buildID := buildIDForSet(ctx, setIndex)
+
+		for _, every := range resolution.everyInputs {
+			want, ok := recorded[buildID][every.resource]
+			if !ok {
+				continue
+			}
+
+			got, _ := encodeVersion(set[every.input])
+			if got != want {
+				return fmt.Errorf(
+					"cannot resume run %q: build #%d was created with %s %s, but it now resolves to %s — %s",
+					state.id, setIndex, every.resource, want, got, buildsMovedHint)
+			}
+		}
+	}
+
+	missing := len(resolution.sets)
+	if bindings, ok := recorded[buildIDForSet(ctx, missing)]; ok {
+		return fmt.Errorf("cannot resume run %q: build #%d was created with %v, but only %d build(s) resolve now — %s",
+			state.id, missing, bindings, missing, buildsMovedHint)
+	}
+
+	return nil
+}
+
+// buildsMovedHint is the way out of a refused resume: its builds' records
+// cannot be trusted, but a fresh run can be pointed at one version — one the
+// check still reports, since --pin resolves against a live check and never
+// against the run's recorded history.
+const buildsMovedHint = "the resource's history changed under the run; start a new run, with --pin to build a version the check still reports"
 
 // findRun reads the run a --resume or --replay names, turning "this pipeline
 // does not have it" into the error the operator needs to see.

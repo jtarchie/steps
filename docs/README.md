@@ -54,7 +54,8 @@ steps pipeline set -c f.yml upload a pipeline into a daemon — the only way a
 
 steps runs -p <name>        what ran, newest first, each row naming the
                             configuration it executed (steps|queue|cost|where
-                            for the other four views; runs steps says why)
+                            for the other four views; runs steps says why,
+                            runs steps <run> what a --resume of it skips)
 steps runs                  with no -p: every pipeline in the state file
 steps jobs -p <name>        list jobs the circuit breaker paused
                             (steps jobs resume <job> -p <name> clears one)
@@ -144,4 +145,5 @@ That forks the recorded run and executes from `synthesizer` onward. It does **no
 - **It forks, never mutates.** The source run stays exactly as it was, so the thing you are comparing against still exists — two prompt variants become two runs you can read side by side. `steps runs cost` prices both.
 - **`--from` names a step**, matched against the *current* plan. The pipeline has almost certainly changed since the source run; that is why you are replaying.
 - **A source run that never completed an earlier step is refused**, naming it.
+- **A `get:` before `--from` is refused.** Every step after a get runs once per version, in a build of its own, and a replay has no way to say which of those builds it means.
 - **It needs the source workspace**, so the run being replayed must have been kept (`--keep-workspace`). A reaped tree is a clear error, not a silent full re-run.

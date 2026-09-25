@@ -328,18 +328,16 @@ func (s *Store) RecordConsumedMark(ctx context.Context, jobName, resourceName st
 	return nil
 }
 
-// RecordRunInput remembers that a run's build was created with this version of
-// this resource — the record --resume needs to reach a version the cursor has
-// already taken. See the run_inputs DDL for why the cursor cannot answer it.
-//
-// The run is the scope rather than the build: --resume continues a run, and a
-// version any of its builds took is one it may have to reach again.
-func (s *Store) RecordRunInput(ctx context.Context, runID, resourceName, versionJSON string) error {
+// RecordRunInput remembers that one build of a run was created with this
+// version of this resource — the record --resume needs to reach a version the
+// cursor has already taken, and to check the build still lines up. See the
+// run_inputs DDL for why the cursor cannot answer it.
+func (s *Store) RecordRunInput(ctx context.Context, runID, buildID, resourceName, versionJSON string) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO run_inputs (run_id, resource_name, version_json)
-		VALUES (?, ?, ?)
-		ON CONFLICT (run_id, resource_name, version_json) DO NOTHING
-	`, runID, resourceName, versionJSON)
+		INSERT INTO run_inputs (run_id, build_id, resource_name, version_json)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (run_id, build_id, resource_name, version_json) DO NOTHING
+	`, runID, buildID, resourceName, versionJSON)
 	if err != nil {
 		return fmt.Errorf("could not record the inputs of run %q: %w", runID, err)
 	}
@@ -347,32 +345,18 @@ func (s *Store) RecordRunInput(ctx context.Context, runID, resourceName, version
 	return nil
 }
 
-// RunInputs reports the versions a run's builds were created with, as
-// resource name -> the canonical JSON of each version.
+// RunInputs reports the versions a run's builds were created with.
 //
 // Joined to runs for the pipeline, which run_inputs has no column of its own
 // for — the same shape as CompletedRunSteps, and for the same reason.
-func (s *Store) RunInputs(ctx context.Context, runID string) (map[string]map[string]bool, error) {
-	pairs, err := collect(ctx, s.db, fmt.Sprintf("the inputs of run %q", runID), `
-		SELECT i.resource_name, i.version_json FROM run_inputs i
+func (s *Store) RunInputs(ctx context.Context, runID string) ([]store.RunInput, error) {
+	return collect(ctx, s.db, "the inputs of run "+runID, `
+		SELECT i.build_id, i.resource_name, i.version_json FROM run_inputs i
 		JOIN runs r ON r.id = i.run_id
 		WHERE i.run_id = ? AND r.pipeline_id = ?
-	`, []any{runID, s.pipelineID}, scanPair)
-	if err != nil {
-		return nil, err
-	}
+	`, []any{runID, s.pipelineID}, func(rows *sql.Rows) (store.RunInput, error) {
+		var one store.RunInput
 
-	inputs := map[string]map[string]bool{}
-
-	for _, pair := range pairs {
-		versions, ok := inputs[pair[0]]
-		if !ok {
-			versions = map[string]bool{}
-			inputs[pair[0]] = versions
-		}
-
-		versions[pair[1]] = true
-	}
-
-	return inputs, nil
+		return one, rows.Scan(&one.BuildID, &one.Resource, &one.Version)
+	})
 }

@@ -190,6 +190,49 @@ jobs:
 	}
 }
 
+// TestReplayRefusesAcrossAFanningGet: every step after a get runs inside one
+// build per version, and replay has no way to say which build it means — so a
+// done-set keyed by plan index would mark "fragile" done in every build and
+// skip exactly the step asked for. Refused, naming the get.
+func TestReplayRefusesAcrossAFanningGet(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran.log")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+resource_types:
+- name: counter
+  config:
+    check: printf '[{"n":"1"}]'
+    in: echo {{ .version.n | shellquote }} > n.txt
+
+resources:
+- name: ticks
+  type: counter
+  source: {}
+
+jobs:
+- name: publish
+  plan:
+  - get: ticks
+  - task: fragile
+    run: echo ran >> %s
+`, marker))
+
+	err := cli.Run([]string{"run", path, "--job", "publish", "--keep-workspace"})
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	err = cli.Run([]string{"run", path, "--job", "publish", "--replay", runIDFromStore(t, path), "--from", "fragile"})
+	if err == nil {
+		t.Fatal("a replay across a get was accepted")
+	}
+
+	if !strings.Contains(err.Error(), "ticks") {
+		t.Errorf("the refusal does not name the get: %v", err)
+	}
+}
+
 // runIDFromStore returns the most recent run's id for a pipeline. Read from
 // the store rather than scraped from stdout: a successful run prints no id,
 // and it is successful runs a replay forks.

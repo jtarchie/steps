@@ -81,7 +81,7 @@ func syntheticStepRecords(
 ) {
 	t.Helper()
 
-	err := st.RecordRunStep(ctx, runID, index, step.name)
+	err := st.RecordRunStep(ctx, runID, runID+"#0", index, step.name)
 	if err != nil {
 		t.Fatalf("RecordRunStep: %v", err)
 	}

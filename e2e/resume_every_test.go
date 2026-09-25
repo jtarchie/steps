@@ -3,6 +3,7 @@ package e2e
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -178,4 +179,247 @@ jobs:
 	// resume behaving like --force and re-publishing a version that was
 	// already green.
 	assertLineCount(t, published, 2)
+}
+
+// fanOutPipeline is a two-version fan-out whose second build fails until flag
+// exists. The put: is what keeps the chain unskippable, so a green build can
+// only be passed over on a resume by the run's own step record — never by the
+// merkle cache — and a build wrongly passed over publishes nothing.
+func fanOutPipeline(versions, ran, published, flag, defaults string) string {
+	return fmt.Sprintf(`
+%[5]s
+resource_types:
+- name: counter
+  config:
+    check: cat %[1]s
+    in: echo {{ .version.n | shellquote }} > n.txt
+- name: recorder
+  config:
+    out: |
+      cat ticks/n.txt >> %[3]s
+      printf '{"published":"yes"}\n'
+
+resources:
+- name: ticks
+  type: counter
+  source: {}
+- name: publication
+  type: recorder
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: ticks
+    version: every
+  - task: fragile
+    inputs: [ticks]
+    run: |
+      cat ticks/n.txt >> %[2]s
+      test "$(cat ticks/n.txt)" != two || test -f %[4]s
+  - put: publication
+    inputs: [ticks]
+`, versions, ran, published, flag, defaults)
+}
+
+// TestResumeRerunsTheBuildThatFailedNotItsSibling is #144: run_steps was keyed
+// by (run, index), and every build of a version: every fan-out walks its
+// remainder from index 0 — so build #1's steps collided with build #0's, and a
+// resume asked build #1 whether index 0 was done and heard build #0's yes.
+// It skipped the failed task AND the put, and exited green having retried
+// nothing.
+func TestResumeRerunsTheBuildThatFailedNotItsSibling(t *testing.T) {
+	dir := t.TempDir()
+
+	versions := filepath.Join(dir, "versions.json")
+	ran := filepath.Join(dir, "ran.log")
+	published := filepath.Join(dir, "published.log")
+	flag := filepath.Join(dir, "fixed")
+
+	writePipelineFile(t, versions, `[{"n":"one"},{"n":"two"}]`)
+
+	path := writePipeline(t, dir, fanOutPipeline(versions, ran, published, flag, ""))
+
+	out := captureStdout(t, func() {
+		err := cli.Run([]string{"run", path, "--job", "build"})
+		if err == nil {
+			t.Fatal("expected build #1 to fail")
+		}
+	})
+
+	runID := resumeID(t, out)
+
+	// Two, or the fan-out never happened and everything below is vacuous.
+	assertLineCount(t, ran, 2)
+	assertLineCount(t, published, 1)
+
+	writePipelineFile(t, flag, "")
+
+	out = captureStdout(t, func() {
+		err := cli.Run([]string{"run", path, "--resume", runID})
+		if err != nil {
+			t.Fatalf("resume failed: %v", err)
+		}
+	})
+
+	assertLineCount(t, published, 2)
+	assertLineCount(t, ran, 3)
+
+	lines := strings.Fields(readFileString(t, ran))
+	if lines[len(lines)-1] != "two" || strings.Count(readFileString(t, ran), "one") != 1 {
+		t.Errorf("the resume re-ran the wrong build: ran.log = %q", lines)
+	}
+
+	if !strings.Contains(out, "skip: fragile (already succeeded) [build #0]") {
+		t.Errorf("the resume did not say which build's step it skipped:\n%s", out)
+	}
+
+	assertRunStepsPerBuild(t, path, runID)
+}
+
+// assertRunStepsPerBuild holds `runs steps <run>` to naming every build's
+// steps, and to refusing a run the pipeline never recorded rather than
+// printing an empty table.
+func assertRunStepsPerBuild(t *testing.T, path, runID string) {
+	t.Helper()
+
+	listing := captureStdout(t, func() {
+		err := cli.Run(append([]string{"runs", "steps", runID}, readArgs(path)...))
+		if err != nil {
+			t.Fatalf("runs steps %s: %v", runID, err)
+		}
+	})
+
+	for _, want := range []string{
+		`#0\s+fragile`, `#0\s+publication`, `#1\s+fragile`, `#1\s+publication`,
+	} {
+		if !regexp.MustCompile(want).MatchString(listing) {
+			t.Errorf("runs steps did not list %q:\n%s", want, listing)
+		}
+	}
+
+	limited := captureStdout(t, func() {
+		err := cli.Run(append([]string{"runs", "steps", runID, "--limit", "1"}, readArgs(path)...))
+		if err != nil {
+			t.Fatalf("runs steps %s --limit 1: %v", runID, err)
+		}
+	})
+
+	if !regexp.MustCompile(`#0\s+fragile`).MatchString(limited) || strings.Contains(limited, "publication") {
+		t.Errorf("runs steps --limit 1 did not stop after the first row:\n%s", limited)
+	}
+
+	err := cli.Run(append([]string{"runs", "steps", "NOSUCHRUN"}, readArgs(path)...))
+	if err == nil || !strings.Contains(err.Error(), "no run") {
+		t.Errorf("runs steps with an unknown run id: want a \"no run\" error, got %v", err)
+	}
+}
+
+// TestResumeDoesNotMistakeAStepBeforeTheGetForOneAfterIt is the same collision
+// without any fan-out: the outer walk records prep at index 0, and the
+// remainder after the get numbers fragile 0 too. One version, one build, and
+// still a resume that skipped the step it was meant to retry.
+func TestResumeDoesNotMistakeAStepBeforeTheGetForOneAfterIt(t *testing.T) {
+	dir := t.TempDir()
+
+	prep := filepath.Join(dir, "prep.log")
+	fragile := filepath.Join(dir, "fragile.log")
+	flag := filepath.Join(dir, "fixed")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+resource_types:
+- name: counter
+  config:
+    check: printf '[{"n":"1"}]'
+    in: echo {{ .version.n | shellquote }} > n.txt
+
+resources:
+- name: ticks
+  type: counter
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - task: prep
+    run: echo ran >> %[1]s
+  - get: ticks
+  - task: fragile
+    run: |
+      echo attempt >> %[2]s
+      test -f %[3]s
+`, prep, fragile, flag))
+
+	out := captureStdout(t, func() {
+		err := cli.Run([]string{"run", path, "--job", "build"})
+		if err == nil {
+			t.Fatal("expected the fragile step to fail")
+		}
+	})
+
+	runID := resumeID(t, out)
+
+	writePipelineFile(t, flag, "")
+
+	err := cli.Run([]string{"run", path, "--resume", runID})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+
+	assertLineCount(t, prep, 1)
+	assertLineCount(t, fragile, 2)
+}
+
+// TestResumeRefusesWhenTheRunsBuildsNoLongerLineUp is the hazard the per-build
+// key brings with it. Build #n's record is only build #n's if the resume lines
+// the same versions up in the same positions; when version_history: prunes a
+// version the run took, every later set moves down one, and build #0's record
+// would land on build #1's version — skipping its task and put, green, having
+// published nothing. So the resume refuses rather than guess.
+func TestResumeRefusesWhenTheRunsBuildsNoLongerLineUp(t *testing.T) {
+	dir := t.TempDir()
+
+	versions := filepath.Join(dir, "versions.json")
+	ran := filepath.Join(dir, "ran.log")
+	published := filepath.Join(dir, "published.log")
+	flag := filepath.Join(dir, "fixed")
+
+	writePipelineFile(t, versions, `[{"n":"one"},{"n":"two"}]`)
+
+	path := writePipeline(t, dir, fanOutPipeline(versions, ran, published, flag, "defaults:\n  version_history: 2"))
+
+	out := captureStdout(t, func() {
+		err := cli.Run([]string{"run", path, "--job", "build"})
+		if err == nil {
+			t.Fatal("expected build #1 to fail")
+		}
+	})
+
+	runID := resumeID(t, out)
+
+	assertLineCount(t, ran, 2)
+	assertLineCount(t, published, 1)
+
+	// The refresh at the start of the resume records "three" and, capped at
+	// two, prunes "one" — so the resume resolves [two, three].
+	writePipelineFile(t, versions, `[{"n":"three"}]`)
+	writePipelineFile(t, flag, "")
+
+	var err error
+
+	out = captureStdout(t, func() {
+		err = cli.Run([]string{"run", path, "--resume", runID})
+	})
+
+	if err == nil {
+		t.Fatalf("the resume ran against builds that no longer line up:\n%s", out)
+	}
+
+	for _, want := range []string{"#0", "one", "two"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+
+	assertLineCount(t, published, 1)
 }
