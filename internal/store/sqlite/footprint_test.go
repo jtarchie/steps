@@ -1432,3 +1432,57 @@ func assertRunSurvives(t *testing.T, st *Store, runID, what string) {
 		t.Fatal(what)
 	}
 }
+
+// TestPruneNodesKeepsTheNewestAndWhatAnEventNames pins both halves of the node cap: the newest entries up to the cap survive, the older ones go, and an entry older than the cap survives anyway while a retained run's events name it.
+func TestPruneNodesKeepsTheNewestAndWhatAnEventNames(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = st.Close() }()
+
+	const (
+		runID   = "NAMED001"
+		jobName = "build"
+		keep    = 1
+		fill    = keep*nodesPerRetainedRun + 5
+	)
+
+	err := st.StartRun(ctx, runID, jobName, "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	named := hashOf(900_001)
+
+	err = st.RecordNode(ctx, store.NodeRecord{
+		Hash: named, Kind: "task", Resource: "named", Content: map[string]any{"body": "named"},
+	}, jobName, "succeeded", nil, nil)
+	if err != nil {
+		t.Fatalf("RecordNode: %v", err)
+	}
+
+	syntheticStepRecords(ctx, t, st, runID, 0, syntheticStep{kind: "task", name: "named"}, named)
+	fillNodeCache(ctx, t, st, jobName, fill)
+
+	err = st.Prune(ctx, store.Retention{JobName: jobName, Runs: keep}, runID)
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+
+	if got, want := countNodes(ctx, t, st, jobName), keep*nodesPerRetainedRun+1; got != want {
+		t.Errorf("%d nodes after the prune, want %d: the newest %d plus the one the run's events name", got, want, keep*nodesPerRetainedRun)
+	}
+
+	found, err := st.NodesByHash(ctx, []string{named, hashOf(1), hashOf(fill)})
+	if err != nil {
+		t.Fatalf("NodesByHash: %v", err)
+	}
+
+	for hash, want := range map[string]bool{named: true, hashOf(1): false, hashOf(fill): true} {
+		if _, ok := found[hash]; ok != want {
+			t.Errorf("node %s… survived = %v, want %v", hash[len(hash)-8:], ok, want)
+		}
+	}
+}

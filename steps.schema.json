@@ -491,7 +491,7 @@
         },
         "context_window": {
           "type": "integer",
-          "description": "This model's context window, for a model steps does not recognize or a host that serves a smaller one. Compaction fires at 80% of it."
+          "description": "This model's context window, for a model steps does not recognize or a host that serves a smaller one. Compaction fires at 97% of it."
         },
         "tools": {
           "type": "array",

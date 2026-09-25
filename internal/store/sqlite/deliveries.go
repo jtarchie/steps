@@ -31,7 +31,7 @@ func (s *Store) RecordDelivery(ctx context.Context, resourceName string, deliver
 
 	defer func() { _ = tx.Rollback() }()
 
-	added, err := insertNewVersions(ctx, tx, s.pipelineID, resourceName, []map[string]any{delivery.Version})
+	added, err := insertNewVersions(ctx, tx, s.pipelineID, resourceName, []string{encoded})
 	if err != nil || added == 0 {
 		return false, err
 	}
@@ -49,7 +49,7 @@ func (s *Store) RecordDelivery(ctx context.Context, resourceName string, deliver
 		return false, err
 	}
 
-	err = s.pruneAfterDelivery(ctx, tx, resourceName, delivery.Version, limit)
+	err = s.pruneAfterDelivery(ctx, tx, resourceName, encoded, limit)
 	if err != nil {
 		return false, err
 	}
@@ -83,7 +83,7 @@ func (s *Store) dispatchDelivery(ctx context.Context, tx *sql.Tx, resourceName, 
 }
 
 // pruneAfterDelivery is RecordVersions' cap, with the delivery as the whole report: everything older than the newest limit goes, payloads with it.
-func (s *Store) pruneAfterDelivery(ctx context.Context, tx *sql.Tx, resourceName string, version map[string]any, limit int) error {
+func (s *Store) pruneAfterDelivery(ctx context.Context, tx *sql.Tx, resourceName, encoded string, limit int) error {
 	if limit < 0 {
 		limit = store.DefaultResourceVersionCap
 	}
@@ -92,7 +92,7 @@ func (s *Store) pruneAfterDelivery(ctx context.Context, tx *sql.Tx, resourceName
 		return nil
 	}
 
-	floor, err := minReportedOrder(ctx, tx, s.pipelineID, resourceName, []map[string]any{version})
+	floor, err := minReportedOrder(ctx, tx, s.pipelineID, resourceName, []string{encoded})
 	if err != nil {
 		return err
 	}

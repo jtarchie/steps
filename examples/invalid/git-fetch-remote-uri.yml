@@ -1,0 +1,16 @@
+# fetch: refreshes a LOCAL clone before the check reads it. A remote uri is
+# fetched fresh by every check already, so asking for it is a mistake.
+# expect: a remote uri is already fetched fresh by every check
+
+resources:
+- name: repo
+  type: git
+  source:
+    uri: https://github.com/jtarchie/steps.git
+    branch: main
+    fetch: true
+
+jobs:
+- name: build
+  plan:
+  - get: repo

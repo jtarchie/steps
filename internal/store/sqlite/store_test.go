@@ -275,3 +275,39 @@ func TestStoreCompleteJob(t *testing.T) {
 		t.Errorf("error = %v, want %q", errText, "boom")
 	}
 }
+
+// Run ids are random, so ordering a tie by id picked a winner nothing else agreed with: the jobs board could name a different latest run than the top of that job's own history.
+func TestLatestRunByJobBreaksATieAsListRunsDoes(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = st.Close() }()
+
+	for _, id := range []string{"run-z", "run-a"} {
+		err := st.StartRun(ctx, id, "job", "/tmp/ws", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := st.db.ExecContext(ctx, `UPDATE runs SET started_at = '2026-01-01T00:00:00.000000000Z'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listed, err := st.ListRuns(ctx, "job", 1)
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("ListRuns = %v, %v", listed, err)
+	}
+
+	latest, err := st.LatestRunByJob(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if latest["job"].ID != listed[0].ID {
+		t.Errorf("LatestRunByJob picked %q, ListRuns tops with %q", latest["job"].ID, listed[0].ID)
+	}
+}

@@ -69,7 +69,8 @@ jobs:
 		t.Errorf("hooks fired = %q, want exactly on_abort", got)
 	}
 
-	if got := queueStatuses(t, served.state, name); got != "slow:aborted" {
+	// The run reads aborted before the runner finalizes the queue row, so the row is waited for rather than read once.
+	if got := waitForQueueStatuses(t, served.state, name, "slow:aborted"); got != "slow:aborted" {
 		t.Errorf("queue = %s, want the row finalized aborted — left running, the next restart re-runs a build somebody stopped", got)
 	}
 
@@ -305,6 +306,22 @@ func waitForRunStatus(t *testing.T, state, name, runID, want string) {
 }
 
 // queueStatuses is the queue oldest first, as job:status pairs.
+// waitForQueueStatuses returns the last statuses seen, so a caller that times out reports what the queue actually said.
+func waitForQueueStatuses(t *testing.T, state, name, want string) string {
+	t.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+
+	for {
+		got := queueStatuses(t, state, name)
+		if got == want || time.Now().After(deadline) {
+			return got
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func queueStatuses(t *testing.T, state, name string) string {
 	t.Helper()
 
