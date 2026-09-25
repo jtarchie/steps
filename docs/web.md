@@ -159,9 +159,13 @@ It covers the agents a *step* names. A task's `fix:` agent and a step's sub-agen
 
 The run page is the point of the whole thing. It renders a run the way the
 terminal does — steps in order, prefixed by kind, colored by outcome — with
-the things a scrollback cannot give you:
+the things a scrollback cannot give you. Its head is two lines: what happened
+and where (status, the step that broke, duration, when), then what it ran
+against and what it cost (configuration, workspace, neighbours, a spend
+summary and a placement count that link down to their tables). The steps
+follow within the first screen; the tables sit below them.
 
-- **Spend is shown against the ceiling it was spent under**, in an `of` column beside the cost, so a row reads `500,000` under `tokens` against `2,000,000 tokens` under `of` — or `$3.00` for a CLI agent, which is metered in dollars — which answers a question `500,000` alone does not. The ceiling is the agent's per-invocation one (an `across:` block's shared `budget:` is on the job page instead). It comes from the configuration currently loaded, so it is shown only for a run whose recorded config sha still matches it — a run started before an edit says `config changed` instead. That is deliberate and not a limitation to route around: a recorded revision stores its source but not its include files, so a run older than the last edit cannot be reconstructed, and "what was this capped at when it failed" is exactly the question a stale number would answer wrongly.
+- **Spend is shown against the ceiling it was spent under**, on a `spend` panel below the transcript that the head's spend summary links to (`#spend`), in an `of` column beside the cost, so a row reads `500,000` under `tokens` against `2,000,000 tokens` under `of` — or `$3.00` for a CLI agent, which is metered in dollars — which answers a question `500,000` alone does not. The ceiling is the agent's per-invocation one (an `across:` block's shared `budget:` is on the job page instead). It comes from the configuration currently loaded, so it is shown only for a run whose recorded config sha still matches it — a run started before an edit says `config changed` instead. That is deliberate and not a limitation to route around: a recorded revision stores its source but not its include files, so a run older than the last edit cannot be reconstructed, and "what was this capped at when it failed" is exactly the question a stale number would answer wrongly.
 
   The column distinguishes `uncapped` from `unknown`, and the difference is load-bearing. A ceiling belongs to the **agent**, while spend is recorded against the **step** — the same string for an ordinary step, and not for an `across:` cell, which renames itself. `uncapped` means the loaded configuration says that agent has no ceiling; `unknown` means the step's name resolved to no agent here. Reading a miss as `uncapped` would state the opposite of the truth for a step that had a ceiling, on the run where the ceiling is why it died.
 - **A finish reason that outlived its step says so.** `finish` on the spend panel is the *provider's* word about the last request that completed — for a CLI agent, the last invocation's. A step whose first message finished cleanly and then ran out of a pooled `max_turns:` or `budget: usd` before the next message was asked records `success` on a step that failed, so that cell reads `success — step failed`. The provider's word is annotated, never overwritten: it is the only record of how the model itself stopped.
@@ -263,7 +267,8 @@ the things a scrollback cannot give you:
   `unpriced` rather than `$0.00`, which would read as free, and a run where
   only some steps did says `$0.42+3?` — a bill for three of six steps
   presented as the whole one is the same lie in the other direction.
-- **Which machines the run used**, on a `machines` panel beside the spend one,
+- **Which machines the run used**, on a `machines` panel beside the spend one
+  below the transcript, linked from the head's placement count (`#machines`),
   for a run that placed any step: the tag, the platform the worker reported,
   the filesystem the tree landed on and the space left there, how many bytes
   had to be pushed to it and how many came back, the identity it ran as, and
