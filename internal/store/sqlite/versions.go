@@ -329,15 +329,16 @@ func (s *Store) RecordConsumedMark(ctx context.Context, jobName, resourceName st
 }
 
 // RecordRunInput remembers that one build of a run was created with this
-// version of this resource — the record --resume needs to reach a version the
-// cursor has already taken, and to check the build still lines up. See the
-// run_inputs DDL for why the cursor cannot answer it.
-func (s *Store) RecordRunInput(ctx context.Context, runID, buildID, resourceName, versionJSON string) error {
+// version, bound under this get — every get of the build, which is what a
+// resume rebuilds it against. See the run_inputs DDL for why the cursor
+// cannot answer it. A build is created once, so a second record of the same
+// get is the same row.
+func (s *Store) RecordRunInput(ctx context.Context, runID, buildID, inputName, resourceName, versionJSON string) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO run_inputs (run_id, build_id, resource_name, version_json)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT (run_id, build_id, resource_name, version_json) DO NOTHING
-	`, runID, buildID, resourceName, versionJSON)
+		INSERT INTO run_inputs (run_id, build_id, input_name, resource_name, version_json)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (run_id, build_id, input_name) DO NOTHING
+	`, runID, buildID, inputName, resourceName, versionJSON)
 	if err != nil {
 		return fmt.Errorf("could not record the inputs of run %q: %w", runID, err)
 	}
@@ -351,12 +352,12 @@ func (s *Store) RecordRunInput(ctx context.Context, runID, buildID, resourceName
 // for — the same shape as CompletedRunSteps, and for the same reason.
 func (s *Store) RunInputs(ctx context.Context, runID string) ([]store.RunInput, error) {
 	return collect(ctx, s.db, "the inputs of run "+runID, `
-		SELECT i.build_id, i.resource_name, i.version_json FROM run_inputs i
+		SELECT i.build_id, i.input_name, i.resource_name, i.version_json FROM run_inputs i
 		JOIN runs r ON r.id = i.run_id
 		WHERE i.run_id = ? AND r.pipeline_id = ?
 	`, []any{runID, s.pipelineID}, func(rows *sql.Rows) (store.RunInput, error) {
 		var one store.RunInput
 
-		return one, rows.Scan(&one.BuildID, &one.Resource, &one.Version)
+		return one, rows.Scan(&one.BuildID, &one.Input, &one.Resource, &one.Version)
 	})
 }

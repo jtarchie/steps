@@ -370,13 +370,13 @@ jobs:
 	assertLineCount(t, fragile, 2)
 }
 
-// TestResumeRefusesWhenTheRunsBuildsNoLongerLineUp is the hazard the per-build
-// key brings with it. Build #n's record is only build #n's if the resume lines
-// the same versions up in the same positions; when version_history: prunes a
-// version the run took, every later set moves down one, and build #0's record
-// would land on build #1's version — skipping its task and put, green, having
-// published nothing. So the resume refuses rather than guess.
-func TestResumeRefusesWhenTheRunsBuildsNoLongerLineUp(t *testing.T) {
+// TestResumeRefusesABuildWhoseVersionIsGone: a resume rebuilds each build
+// against the versions it was created with, so a version version_history:
+// has since pruned leaves that build with nothing to rebuild. Concourse
+// aborts the rerun ("chosen version of input X not available") rather than
+// choose another; so does this, naming the build and the version, and it
+// runs nothing — not even the builds whose versions survive.
+func TestResumeRefusesABuildWhoseVersionIsGone(t *testing.T) {
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -401,7 +401,7 @@ func TestResumeRefusesWhenTheRunsBuildsNoLongerLineUp(t *testing.T) {
 	assertLineCount(t, published, 1)
 
 	// The refresh at the start of the resume records "three" and, capped at
-	// two, prunes "one" — so the resume resolves [two, three].
+	// two, prunes "one" — build #0's version.
 	writePipelineFile(t, versions, `[{"n":"three"}]`)
 	writePipelineFile(t, flag, "")
 
@@ -412,14 +412,15 @@ func TestResumeRefusesWhenTheRunsBuildsNoLongerLineUp(t *testing.T) {
 	})
 
 	if err == nil {
-		t.Fatalf("the resume ran against builds that no longer line up:\n%s", out)
+		t.Fatalf("the resume ran a build whose version is gone:\n%s", out)
 	}
 
-	for _, want := range []string{"#0", "one", "two"} {
+	for _, want := range []string{"#0", `"one"`, "no longer"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not name %q: %v", want, err)
 		}
 	}
 
+	assertLineCount(t, ran, 2)
 	assertLineCount(t, published, 1)
 }

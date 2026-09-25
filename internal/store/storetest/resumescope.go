@@ -77,7 +77,7 @@ func (s suite) TestRunEventsAreScopedToTheirPipeline(t *testing.T) {
 		t.Fatalf("AppendRunEvent web: %v", err)
 	}
 
-	err = web.RecordRunInput(ctx, shared, shared+"#0", "repo", `{"ref":"abc"}`)
+	err = web.RecordRunInput(ctx, shared, shared+"#0", "repo", "repo", `{"ref":"abc"}`)
 	if err != nil {
 		t.Fatalf("RecordRunInput web: %v", err)
 	}
@@ -162,9 +162,12 @@ func (s suite) TestRunStepsAreKeptPerBuild(t *testing.T) {
 	}
 }
 
-// TestRunInputsAreKeptPerBuild: two builds created with the same version are
-// two records, because a resume checks each build's bindings on its own.
-func (s suite) TestRunInputsAreKeptPerBuild(t *testing.T) {
+// TestRunInputsAreKeptPerBuildAndGet: two builds created with the same
+// version are two records, because a resume rebuilds each build from its
+// own; two gets of one resource in a build are two as well, each under its
+// own name; and a build is created once, so recording a get again is the
+// same row.
+func (s suite) TestRunInputsAreKeptPerBuildAndGet(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -177,10 +180,15 @@ func (s suite) TestRunInputsAreKeptPerBuild(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	for _, build := range []string{run + "#0", run + "#1", run + "#1"} {
-		err = st.RecordRunInput(ctx, run, build, "repo", `{"ref":"abc"}`)
+	for _, input := range []store.RunInput{
+		{BuildID: run + "#0", Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
+		{BuildID: run + "#0", Input: "baseline", Resource: "repo", Version: `{"ref":"v1"}`},
+		{BuildID: run + "#1", Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
+		{BuildID: run + "#1", Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
+	} {
+		err = st.RecordRunInput(ctx, run, input.BuildID, input.Input, input.Resource, input.Version)
 		if err != nil {
-			t.Fatalf("RecordRunInput %s: %v", build, err)
+			t.Fatalf("RecordRunInput %+v: %v", input, err)
 		}
 	}
 
@@ -189,12 +197,24 @@ func (s suite) TestRunInputsAreKeptPerBuild(t *testing.T) {
 		t.Fatalf("RunInputs: %v", err)
 	}
 
-	builds := map[string]bool{}
+	got := map[store.RunInput]bool{}
 	for _, input := range inputs {
-		builds[input.BuildID] = true
+		got[input] = true
 	}
 
-	if len(inputs) != 2 || !builds[run+"#0"] || !builds[run+"#1"] {
-		t.Fatalf("RunInputs = %+v, want one row per build", inputs)
+	want := []store.RunInput{
+		{BuildID: run + "#0", Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
+		{BuildID: run + "#0", Input: "baseline", Resource: "repo", Version: `{"ref":"v1"}`},
+		{BuildID: run + "#1", Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
+	}
+
+	if len(inputs) != len(want) {
+		t.Fatalf("RunInputs = %+v, want one row per build and get", inputs)
+	}
+
+	for _, input := range want {
+		if !got[input] {
+			t.Errorf("RunInputs = %+v, missing %+v", inputs, input)
+		}
 	}
 }

@@ -187,20 +187,37 @@ func (w *planWalk) reportNoVersions(ctx context.Context, step config.Step, resou
 }
 
 // takeSet advances the cursor of every fanning get to its binding in this set
-// — a set is consumed as a unit, whatever its first get's fate. The binding is
-// looked up by GET name and recorded against the RESOURCE, which is where the
-// cursor lives. Re-taking a held version is a MAX no-op.
+// — a set is consumed as a unit, whatever its first get's fate — and records
+// what the build was created with: EVERY get's version, fixed gets and pins
+// included, which is what a resume rebuilds it against (fly rerun-build's
+// build_resource_config_version_inputs). The binding is looked up by GET name
+// and the cursor advanced by RESOURCE, which is where it lives.
+//
+// A resumed build records nothing and takes nothing: the run it continues did
+// both when it created the build. A pinned run records and does not take —
+// naming a version is an instruction outside the every-flow (the consumed
+// filter already exempts pinned runs, Cache.unconsumed), and the cursor is a
+// high-water mark over discovery order, so a pin resolved outside history is
+// minted at the TOP order and taking it would leap the mark over every
+// unbuilt version below it. Re-taking a held version is a MAX no-op.
 func (w *planWalk) takeSet(ctx context.Context, pinnedRun bool, set merkle.InputSet, setIndex int) {
-	if pinnedRun {
+	if w.resolution.recorded {
 		return
 	}
 
 	buildID := buildIDForSet(ctx, setIndex)
 
+	for input, version := range set {
+		w.recordRunInput(ctx, buildID, input, w.resolution.resources[input], version)
+	}
+
+	if pinnedRun {
+		return
+	}
+
 	for _, every := range w.resolution.everyInputs {
 		if version := set[every.input]; version != nil {
 			w.cursor.take(ctx, w.st, w.jobName, every.resource, version)
-			w.recordRunInput(ctx, buildID, every.resource, version)
 		}
 	}
 }
@@ -214,15 +231,15 @@ func (w *planWalk) takeSet(ctx context.Context, pinnedRun bool, set merkle.Input
 // way must not fail over bookkeeping, and the cost of a lost row is a resume
 // that cannot re-open one version — which is where this path started, so it is
 // no worse than not recording at all.
-func (w *planWalk) recordRunInput(ctx context.Context, buildID, resourceName string, version map[string]any) {
+func (w *planWalk) recordRunInput(ctx context.Context, buildID, inputName, resourceName string, version map[string]any) {
 	key, ok := encodeVersion(version)
 	if !ok {
 		return
 	}
 
-	err := w.st.RecordRunInput(context.WithoutCancel(ctx), events.RunID(ctx), buildID, resourceName, key)
+	err := w.st.RecordRunInput(context.WithoutCancel(ctx), events.RunID(ctx), buildID, inputName, resourceName, key)
 	if err != nil {
-		logFrom(ctx).Warn("job.run_input_unrecorded", "resource", resourceName, "error", err)
+		logFrom(ctx).Warn("job.run_input_unrecorded", "get", inputName, "resource", resourceName, "error", err)
 	}
 }
 

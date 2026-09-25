@@ -303,18 +303,7 @@ func runJobPlan(
 	// builds from recorded history either way.
 	refreshResourceHistory(ctx, r.cfg, r.st, job)
 
-	// A resume re-opens the versions the run it continues was created with,
-	// and nothing else. This is fly rerun-build: Concourse re-runs a build
-	// against build_resource_config_version_inputs — the versions that build
-	// began with — rather than against whatever is newest, and it does not
-	// disturb any other build's progress. --force only skips the
-	// cache; it never re-opens a taken version.
-	reopen, recordedBuilds, err := resumedRunInputs(ctx, r.st)
-	if err != nil {
-		return fmt.Errorf("job %q: %w", job.Name, err)
-	}
-
-	cursor, err := loadVersionCursor(ctx, r.st, job, !takenVersionsReopened(ctx), reopen)
+	cursor, err := loadVersionCursor(ctx, r.st, job, !takenVersionsReopened(ctx))
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
@@ -343,9 +332,13 @@ func runJobPlan(
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
-	// Before anything runs: a build whose record no longer matches its
-	// versions must not be let skip a single step.
-	err = checkResumedBuilds(ctx, resolution, recordedBuilds)
+	// A resume rebuilds the builds the run it continues was created with,
+	// and nothing else. This is fly rerun-build: Concourse re-runs a build
+	// against build_resource_config_version_inputs — every version that
+	// build began with — rather than against whatever is newest, and it does
+	// not disturb any other build's progress. --force only skips the cache;
+	// it never re-opens a taken version.
+	resolution, err = resumeInputSets(ctx, r.st, resolution, history)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}

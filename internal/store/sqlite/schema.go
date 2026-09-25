@@ -9,6 +9,12 @@ package sqlite
 //
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
+// 14 keyed run_inputs by the GET a version was bound under, and records every
+// get's binding rather than only a version: every one, so a resume rebuilds
+// each build against all of what it was created with. An older file's INSERT
+// names a column it lacks, and the write is best-effort — so every build
+// would resume unrecorded, which the resume now refuses.
+//
 // 13 put build_id into the keys of run_steps and run_inputs. Every build of a
 // version: every fan-out walks its remainder from index 0, so (run, index)
 // kept only the first build's steps and a resume skipped the rest's. An older
@@ -64,7 +70,7 @@ package sqlite
 // 4 put pipeline_id into the keys of run_placements and agent_usage. Without
 // it, two pipelines sharing a state file collided on (run_id, node_hash) and
 // one upserted over the other's row.
-const schemaVersion = 13
+const schemaVersion = 14
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -725,14 +731,18 @@ CREATE INDEX IF NOT EXISTS idx_agent_usage_node ON agent_usage(pipeline_id, node
 -- row that fails to record costs a resume, never a running build.
 CREATE TABLE IF NOT EXISTS run_inputs (
     run_id        TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    -- Which build, so a resume can check each build still binds what it was
-    -- created with before trusting that build's run_steps.
+    -- Which build, so a resume rebuilds each build against exactly what it
+    -- was created with before trusting that build's run_steps.
     build_id      TEXT NOT NULL,
+    -- The get the version was bound under, as Concourse keys
+    -- build_resource_config_version_inputs by input name: two gets of one
+    -- resource in a build each keep their own version.
+    input_name    TEXT NOT NULL,
     resource_name TEXT NOT NULL,
     -- Canonical JSON, the same encoding the cursor keys on, so a version
     -- recorded here compares equal to one a later check returns.
     version_json  TEXT NOT NULL,
-    PRIMARY KEY (run_id, build_id, resource_name, version_json)
+    PRIMARY KEY (run_id, build_id, input_name)
 ) WITHOUT ROWID;
 
 -- Where a placed step actually ran, and what it cost in bytes rather than in

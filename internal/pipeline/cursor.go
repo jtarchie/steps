@@ -46,15 +46,10 @@ type versionCursor struct {
 
 	// suppress is false only when a caller asked for taken versions to be
 	// reopened (`steps test`), never under --force (#145). It gates only
-	// `has`: the run still RECORDS what it took.
+	// `has`: the run still RECORDS what it took. A resume does not lift it
+	// either: its builds come from the run's own record (resumeInputSets),
+	// never from this filter.
 	suppress bool
-
-	// reopen names the versions a resumed run already took, as resource ->
-	// canonical version JSON. Those alone escape suppression, which is what
-	// makes --resume the only operator verb that re-opens: exactly the
-	// versions THIS run was created with, leaving every other job's progress
-	// where it is. Empty for an ordinary run.
-	reopen map[string]map[string]bool
 }
 
 // loadVersionCursor reads the consumed set for every resource this job fans
@@ -66,11 +61,8 @@ type versionCursor struct {
 // exists to stop — and guessing the opposite would silently skip real work.
 //
 // suppress is false only for `steps test`. The cursor is still built and still
-// records; only the filtering is switched off. reopen is --resume's narrower
-// exemption, naming the versions of one run rather than lifting the filter.
-func loadVersionCursor(
-	ctx context.Context, st store.Store, job *config.Job, suppress bool, reopen map[string]map[string]bool,
-) (*versionCursor, error) {
+// records; only the filtering is switched off.
+func loadVersionCursor(ctx context.Context, st store.Store, job *config.Job, suppress bool) (*versionCursor, error) {
 	var resources []string
 
 	seen := map[string]bool{}
@@ -98,7 +90,6 @@ func loadVersionCursor(
 		marks:    make(map[string]int64, len(resources)),
 		orders:   make(map[string]map[string]int64, len(resources)),
 		suppress: suppress,
-		reopen:   reopen,
 	}
 
 	for _, name := range resources {
@@ -213,6 +204,20 @@ func (h *resourceHistory) get(resourceName string) []map[string]any {
 	return versions
 }
 
+// holds reports whether the resource's recorded history still carries a
+// version, by the canonical encoding the record was made in. A resource with
+// no history holds nothing: the refresh that precedes resolution polled it
+// and found nothing, so there is nothing a build could be rebuilt from.
+func (h *resourceHistory) holds(resourceName, encoded string) bool {
+	for _, version := range h.get(resourceName) {
+		if key, ok := encodeVersion(version); ok && key == encoded {
+			return true
+		}
+	}
+
+	return false
+}
+
 // fansOutOverEveryVersion reports whether a get step uses version: every —
 // the only mode that runs the rest of the plan once per version.
 func fansOutOverEveryVersion(step config.Step) bool {
@@ -234,13 +239,6 @@ func (c *versionCursor) has(resourceName string, version map[string]any) bool {
 		// An unencodable version cannot be placed in the order, so it cannot
 		// be suppressed either. Running it again is the recoverable failure;
 		// skipping work that was never recorded is not.
-		return false
-	}
-
-	// A version the resumed run was created with is never treated as taken:
-	// the run being continued is the one that took it, and refusing it here is
-	// how a resume came to select nothing, run nothing, and report success.
-	if c.reopen[resourceName][key] {
 		return false
 	}
 

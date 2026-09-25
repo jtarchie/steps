@@ -8,9 +8,12 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -253,102 +256,135 @@ func recordRunIdentity(
 	return nil
 }
 
-// resumedRunInputs reports the versions the run being resumed was created
-// with: merged across builds, so the cursor can re-open them, and per build,
-// so checkResumedBuilds can hold each build to its own. Both nil for an
-// ordinary run, which is every run that is not a resume.
+// resumeInputSets replaces a resume's freshly resolved sets with the builds
+// the run was created with, each binding every get to the version its record
+// holds — fixed gets and pins included. This is fly rerun-build's
+// AdoptRerunInputsAndPipes: a rerun copies every row of the original build's
+// build_resource_config_version_inputs and starts from them, never from what
+// the check reports now. It is also what makes a build's completed steps
+// trustworthy — they are filed under "<run>#<set>", and are that build's only
+// if set n binds what build n was created with.
+//
+// A recorded version no longer in the resource's history — version_history:
+// pruned it — leaves that build with nothing to rebuild; Concourse marks the
+// rerun aborted ("chosen version of input X not available") rather than
+// choose another, and so does this, before anything runs. A build that
+// completed steps but recorded no inputs is refused the same way: its record
+// cannot be placed, so nothing may be skipped on its behalf. A run that
+// failed before it created any build has no record and resolves as a new run
+// would, taking and recording as it goes.
 //
 // The read is NOT best-effort, unlike the write that fills the table: a resume
 // that cannot tell which versions it is continuing would silently select the
 // wrong ones — or none, which is the false green this whole path exists to
 // remove.
-func resumedRunInputs(ctx context.Context, st store.Store) (map[string]map[string]bool, map[string]map[string]string, error) {
+func resumeInputSets(ctx context.Context, st store.Versions, resolution setResolution, history *resourceHistory) (setResolution, error) {
 	state := resumeFrom(ctx)
 	if state == nil || !state.resuming {
-		return nil, nil, nil
+		return resolution, nil
 	}
 
 	inputs, err := st.RunInputs(ctx, state.id)
 	if err != nil {
-		return nil, nil, fmt.Errorf("could not read what run %q was created with: %w", state.id, err)
+		return setResolution{}, fmt.Errorf("could not read what run %q was created with: %w", state.id, err)
 	}
 
-	reopen := map[string]map[string]bool{}
-	builds := map[string]map[string]string{}
-
-	for _, input := range inputs {
-		if reopen[input.Resource] == nil {
-			reopen[input.Resource] = map[string]bool{}
-		}
-
-		reopen[input.Resource][input.Version] = true
-
-		if builds[input.BuildID] == nil {
-			builds[input.BuildID] = map[string]string{}
-		}
-
-		builds[input.BuildID][input.Resource] = input.Version
+	sets, err := recordedInputSets(ctx, state.id, inputs, history)
+	if err != nil {
+		return setResolution{}, err
 	}
 
-	return reopen, builds, nil
+	err = refuseUnrecordedBuilds(state, len(sets))
+	if err != nil {
+		return setResolution{}, err
+	}
+
+	if len(sets) == 0 {
+		return resolution, nil
+	}
+
+	resolution.sets = sets
+	resolution.recorded = true
+
+	return resolution, nil
 }
 
-// checkResumedBuilds refuses a resume whose builds no longer line up with the
-// ones the run was created with.
-//
-// A build's completed steps are filed under its POSITION, "<run>#<set>", so
-// they are only that build's if the resume resolves the same versions into
-// the same positions. version_history: pruning a version the run took, or a
-// check reordering history, shifts every later set down one — and build #n's
-// record would skip build #n+1's task and put, green, having published
-// nothing. Only every-inputs are compared: they are what makes positions, a
-// plan without one having exactly one set. New versions sorting after the
-// recorded ones only add builds at the end, which is allowed.
-//
-// ponytail: a build with no recorded inputs (a lost best-effort write, or a
-// plan whose gets are all fixed or --pin, which takeSet never records) goes
-// unchecked, so a fixed get that moved between attempts is not caught.
-// Upgrade: record every binding in takeSet and refuse when a build has
-// completed steps but no inputs — which also refuses a resume after a
-// re-pushed branch, so it is a decision rather than a fix.
-func checkResumedBuilds(ctx context.Context, resolution setResolution, recorded map[string]map[string]string) error {
-	state := resumeFrom(ctx)
-	if state == nil || len(recorded) == 0 {
-		return nil
+// recordedInputSets rebuilds the run's builds from their records, in build
+// order, stopping at the first index nothing recorded.
+func recordedInputSets(ctx context.Context, runID string, inputs []store.RunInput, history *resourceHistory) ([]merkle.InputSet, error) {
+	recorded := map[string][]store.RunInput{}
+	for _, input := range inputs {
+		recorded[input.BuildID] = append(recorded[input.BuildID], input)
 	}
 
-	for setIndex, set := range resolution.sets {
-		buildID := buildIDForSet(ctx, setIndex)
+	var sets []merkle.InputSet
 
-		for _, every := range resolution.everyInputs {
-			want, ok := recorded[buildID][every.resource]
-			if !ok {
-				continue
-			}
-
-			got, _ := encodeVersion(set[every.input])
-			if got != want {
-				return fmt.Errorf(
-					"cannot resume run %q: build #%d was created with %s %s, but it now resolves to %s — %s",
-					state.id, setIndex, every.resource, want, got, buildsMovedHint)
-			}
+	for i := 0; ; i++ {
+		bindings, ok := recorded[buildIDForSet(ctx, i)]
+		if !ok {
+			return sets, nil
 		}
-	}
 
-	missing := len(resolution.sets)
-	if bindings, ok := recorded[buildIDForSet(ctx, missing)]; ok {
-		return fmt.Errorf("cannot resume run %q: build #%d was created with %v, but only %d build(s) resolve now — %s",
-			state.id, missing, bindings, missing, buildsMovedHint)
+		set, err := recordedInputSet(runID, i, bindings, history)
+		if err != nil {
+			return nil, err
+		}
+
+		sets = append(sets, set)
+	}
+}
+
+// refuseUnrecordedBuilds refuses a resume when a build completed steps that no
+// rebuilt set could place — the steps before the first get are the bare run
+// id's and bind nothing, so they are not the question.
+func refuseUnrecordedBuilds(state *resumeState, rebuilt int) error {
+	for key := range state.done {
+		if n, ok := buildIndex(state.id, key.build); ok && n >= rebuilt {
+			return fmt.Errorf(
+				"cannot resume run %q: build #%d completed steps but what it was created with was not recorded — start a new run",
+				state.id, n)
+		}
 	}
 
 	return nil
 }
 
-// buildsMovedHint is the way out of a refused resume: its builds' records
-// cannot be trusted, but a fresh run can be pointed at one version — one the
-// check still reports, since --pin resolves against a live check and never
-// against the run's recorded history.
-const buildsMovedHint = "the resource's history changed under the run; start a new run, with --pin to build a version the check still reports"
+// recordedInputSet rebuilds one build's set from its record, refusing a
+// version the resource's history no longer holds.
+func recordedInputSet(runID string, index int, bindings []store.RunInput, history *resourceHistory) (merkle.InputSet, error) {
+	set := merkle.InputSet{}
+
+	for _, binding := range bindings {
+		if !history.holds(binding.Resource, binding.Version) {
+			return nil, fmt.Errorf(
+				"cannot resume run %q: build #%d was created with %s %s, which is no longer in the resource's history — start a new run",
+				runID, index, binding.Resource, binding.Version)
+		}
+
+		version, err := store.DecodeVersion(binding.Version)
+		if err != nil {
+			return nil, fmt.Errorf("cannot resume run %q: build #%d's recorded %s version: %w", runID, index, binding.Resource, err)
+		}
+
+		set[binding.Input] = version
+	}
+
+	return set, nil
+}
+
+// buildIndex reads the set index out of a build id buildIDForSet named, and
+// reports false for the bare run id — the steps before the first get, which
+// bind no version and belong to no set.
+func buildIndex(runID, buildID string) (int, bool) {
+	rest, ok := strings.CutPrefix(buildID, runID+"#")
+	if !ok {
+		return 0, false
+	}
+
+	n, err := strconv.Atoi(rest)
+
+	return n, err == nil
+}
 
 // findRun reads the run a --resume or --replay names, turning "this pipeline
 // does not have it" into the error the operator needs to see.

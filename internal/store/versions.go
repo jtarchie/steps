@@ -41,13 +41,16 @@ type Versions interface {
 	HasPassedVersionSet(ctx context.Context, jobName string, want map[string]string) (bool, error)
 	ConsumedMark(ctx context.Context, jobName, resourceName string) (int64, error)
 	RecordConsumedMark(ctx context.Context, jobName, resourceName string, order int64) error
-	RecordRunInput(ctx context.Context, runID, buildID, resourceName, versionJSON string) error
+	RecordRunInput(ctx context.Context, runID, buildID, inputName, resourceName, versionJSON string) error
 	RunInputs(ctx context.Context, runID string) ([]RunInput, error)
 }
 
-// RunInput is a version one build of a run was created with.
+// RunInput is a version one build of a run was created with, keyed by the
+// get it was bound under: two gets of one resource in a build each keep
+// their own.
 type RunInput struct {
 	BuildID  string
+	Input    string
 	Resource string
 	Version  string
 }

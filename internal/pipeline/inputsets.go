@@ -23,6 +23,13 @@ type setResolution struct {
 	// everyInputs names the gets that fan out, so the executor knows whose
 	// cursor each set advances.
 	everyInputs []everyInput
+	// resources names the resource behind every get, fixed or fanning, so a
+	// build's record can say which resource each binding is a version of.
+	resources map[string]string
+	// recorded is true when the sets are the builds a resumed run was
+	// created with (resumeInputSets), which the run already took and recorded
+	// when it created them.
+	recorded bool
 	// blocking names resources that could bind nothing at all — no
 	// unconsumed version, no held version — which is what stops sets being
 	// built and what the "no versions" report should say.
@@ -111,6 +118,12 @@ func gatherOneInput(
 	if err != nil {
 		return err //nolint:wrapcheck // ResolveVersions names the get
 	}
+
+	if resolution.resources == nil {
+		resolution.resources = map[string]string{}
+	}
+
+	resolution.resources[step.Get] = res.Name
 
 	// A CLI pin collapses every-mode to a single named version (see
 	// resource.ResolveVersions), so a pinned run builds exactly one set and —
