@@ -1,6 +1,8 @@
 package exprlang
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -79,6 +81,88 @@ func fileFunc(dir string) func(...any) (any, error) {
 
 		return string(data), nil
 	}
+}
+
+// versionFunc builds version(name) / version(): the version a get called name
+// fetched in this build, or, with no name, the one fetched input's version
+// (nil when there is none, so a type can fall back to reading files).
+//
+// Only the put's inputs are visible — the same boundary as file(), so a put
+// cannot read what a get fetched for an artifact it did not declare.
+func versionFunc(inputs []string, versions map[string]map[string]any) func(...any) (any, error) {
+	return func(params ...any) (any, error) {
+		if len(params) == 0 {
+			return onlyFetchedVersion(inputs, versions)
+		}
+
+		if len(params) > 1 {
+			return nil, fmt.Errorf("version() takes a get's name or nothing, got %d arguments", len(params))
+		}
+
+		name, ok := params[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("version(): first argument is %T, want a string", params[0])
+		}
+
+		if !slices.Contains(inputs, name) {
+			if len(inputs) == 0 {
+				return nil, fmt.Errorf("version(%q): this put has no inputs, so it can read no version", name)
+			}
+
+			return nil, fmt.Errorf("version(%q): not an input of this put; its inputs are [%s]", name, strings.Join(inputs, " "))
+		}
+
+		version, fetched := versions[name]
+		if !fetched {
+			return nil, fmt.Errorf("version(%q): input %q was not fetched by a get in this build, so it has no version", name, name)
+		}
+
+		return copyVersion(version)
+	}
+}
+
+func onlyFetchedVersion(inputs []string, versions map[string]map[string]any) (any, error) {
+	var fetched []string
+
+	for _, name := range inputs {
+		if _, ok := versions[name]; ok {
+			fetched = append(fetched, name)
+		}
+	}
+
+	switch len(fetched) {
+	case 0:
+		return nil, nil //nolint:nilnil // no fetched input is the answer that lets a type fall back to files
+	case 1:
+		return copyVersion(versions[fetched[0]])
+	default:
+		return nil, fmt.Errorf("version(): this put has %d fetched inputs [%s]; name one, e.g. version(%q)",
+			len(fetched), strings.Join(fetched, " "), fetched[0])
+	}
+}
+
+// copyVersion hands the expression its own copy. The map is shared with the
+// build's input set and resolution cache, and normalizing it in place would
+// turn json.Number("1.50") into 1.5 — a different encoding, so a different
+// stored identity. Numbers are normalized on the copy so they compare the way
+// http()'s do.
+func copyVersion(version map[string]any) (any, error) {
+	encoded, err := json.Marshal(version)
+	if err != nil {
+		return nil, fmt.Errorf("version(): %w", err)
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+
+	var copied map[string]any
+
+	err = decoder.Decode(&copied)
+	if err != nil {
+		return nil, fmt.Errorf("version(): %w", err)
+	}
+
+	return normalizeNumbers(orEmpty(copied)), nil
 }
 
 // failFunc builds fail(message), the only way an expression can refuse.

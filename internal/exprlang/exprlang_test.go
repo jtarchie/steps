@@ -2,6 +2,7 @@ package exprlang
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,10 +128,12 @@ func TestSlotScopeIsEnforced(t *testing.T) {
 		slot Slot
 		src  string
 	}{
-		"check has no params": {SlotCheck, `[{a: params.x}]`},
-		"out has no version":  {SlotOut, `{a: version.x}`},
-		"check has no file()": {SlotCheck, `[{a: file("x")}]`},
-		"in has no file()":    {SlotIn, `{"a": file("x")}`},
+		"check has no params":    {SlotCheck, `[{a: params.x}]`},
+		"out has no version":     {SlotOut, `{a: version.x}`},
+		"check has no version()": {SlotCheck, `[version("x")]`},
+		"in has no version()":    {SlotIn, `{"a": version("x").id}`},
+		"check has no file()":    {SlotCheck, `[{a: file("x")}]`},
+		"in has no file()":       {SlotIn, `{"a": file("x")}`},
 	}
 
 	for name, test := range tests {
@@ -327,5 +330,101 @@ func TestFailFunc(t *testing.T) {
 	_, err = RunCheck(context.Background(), `fail("nope")`, Input{})
 	if err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Fatalf("err = %v, want the failure", err)
+	}
+}
+
+// TestVersionFunc covers version(): what it answers, and each refusal.
+func TestVersionFunc(t *testing.T) {
+	t.Parallel()
+
+	in := Input{
+		Inputs: []string{"a", "b", "notes"},
+		Versions: map[string]map[string]any{
+			"a": {"id": "1", "n": json.Number("2")},
+			"b": {"id": "2"},
+		},
+	}
+
+	version, err := RunOut(context.Background(), `{id: version("a").id, n: version("a").n + 1}`, in)
+	if err != nil {
+		t.Fatalf("RunOut: %v", err)
+	}
+
+	if version["id"] != "1" || version["n"] != 3 {
+		t.Errorf("version = %#v, want id 1 and n 3", version)
+	}
+
+	refusals := map[string]struct {
+		src  string
+		in   Input
+		want string
+	}{
+		"not an input": {`version("nope")`, in, `version("nope"): not an input of this put; its inputs are [a b notes]`},
+		"no inputs":    {`version("a")`, Input{}, `version("a"): this put has no inputs, so it can read no version`},
+		"not fetched":  {`version("notes")`, in, `version("notes"): input "notes" was not fetched by a get in this build, so it has no version`},
+		"two fetched":  {`version()`, in, `version(): this put has 2 fetched inputs [a b]; name one, e.g. version("a")`},
+		"non-string":   {`version(1)`, in, `version(): first argument is int, want a string`},
+		"two args":     {`version("a", "b")`, in, `version() takes a get's name or nothing, got 2 arguments`},
+	}
+
+	for name, test := range refusals {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := RunOut(context.Background(), `{v: `+test.src+`}`, test.in)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("err = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+// TestVersionFuncConvention: version() with no name is the one fetched
+// input's version, or nil with none — the nil is what lets a type fall back.
+func TestVersionFuncConvention(t *testing.T) {
+	t.Parallel()
+
+	one := Input{Inputs: []string{"a", "notes"}, Versions: map[string]map[string]any{"a": {"id": "1"}}}
+
+	version, err := RunOut(context.Background(), `version()`, one)
+	if err != nil {
+		t.Fatalf("RunOut: %v", err)
+	}
+
+	if version["id"] != "1" {
+		t.Errorf("version() = %#v, want the one fetched input's", version)
+	}
+
+	version, err = RunOut(context.Background(), `version() == nil ? {none: true} : {none: false}`, Input{Inputs: []string{"notes"}})
+	if err != nil {
+		t.Fatalf("RunOut: %v", err)
+	}
+
+	if version["none"] != true {
+		t.Errorf("version() with nothing fetched = %#v, want nil", version)
+	}
+}
+
+// TestVersionFuncCopies: the map version() reads is shared with the build's
+// input set and resolution cache, where json.Number("1.50") is part of the
+// version's identity. Normalizing it in place would re-key the version.
+func TestVersionFuncCopies(t *testing.T) {
+	t.Parallel()
+
+	shared := map[string]any{"n": json.Number("1.50"), "nested": map[string]any{"m": json.Number("7")}}
+	in := Input{Inputs: []string{"a"}, Versions: map[string]map[string]any{"a": shared}}
+
+	_, err := RunOut(context.Background(), `{n: version("a").n * 2, m: version("a").nested.m + 1}`, in)
+	if err != nil {
+		t.Fatalf("RunOut: %v", err)
+	}
+
+	if shared["n"] != json.Number("1.50") {
+		t.Errorf("shared n = %#v, want json.Number(\"1.50\") untouched", shared["n"])
+	}
+
+	nested, _ := shared["nested"].(map[string]any)
+	if nested["m"] != json.Number("7") {
+		t.Errorf("shared nested m = %#v, want json.Number(\"7\") untouched", nested["m"])
 	}
 }

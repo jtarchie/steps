@@ -76,25 +76,23 @@ jobs:
   - get: mentions
     trigger: true
     version: every    # answer every mention found, not just the newest
-  - task: address
-    inputs: [mentions]
-    outputs: [thread, target, answer]
-    run: |
-      set -eu
-      grep -o '"channel": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/channel
-      grep -o '"thread_ts": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/ts
-      grep -o '"channel": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > target/channel
-      grep -o '"ts": *"[^"]*"' mentions/version.json | head -1 | cut -d'"' -f4 > target/ts
-      echo "got it, working on it" > answer/reply.md
   - put: acknowledge           # 👀 — somebody is on it
     resource: reaction
-    inputs: [target]
+    inputs: [mentions]         # the reaction type picks the mention's ts
     params: {add: eyes}
+  - task: compose
+    outputs: [answer]
+    run: echo "got it, working on it" > answer/reply.md
+    on_failure:                # ❌, and the 👀 goes away
+      put: failed
+      resource: reaction
+      inputs: [mentions]
+      params: {add: x, remove: eyes}
   - put: reply
-    inputs: [thread, answer]
+    inputs: [mentions, answer] # the reply type picks the mention's thread_ts
   - put: answered              # ✅, and the 👀 goes away in the same publish
     resource: reaction
-    inputs: [target]
+    inputs: [mentions]
     params: {add: white_check_mark, remove: eyes}
 ```
 
@@ -111,9 +109,9 @@ All three need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for 
 
 `token_env` alone isn't enough to widen what a resource can read — `env()` only sees names its resource TYPE already declares (all three declare `SLACK_BOT_TOKEN`, shared by every resource of that type), which is what makes it safe for a shared, possibly-external type to hand-in-hand with any expr type at all. A resource naming a different token also needs `env:` *on the resource itself* to add that name to its own allow-list — `env:` and `source:` together, as in `reply-as-support-bot` above. Naming `token_env` without the matching `env:` entry is a run-time error (`env(...): not in this resource type's env:`), not a silent fall-back to `SLACK_BOT_TOKEN`. (`env:` on a resource only means something for an expr- or shell-backed type — an mcp-backed type authenticates via its `mcp_servers:` entry and rejects `env:` at load time.)
 
-**A mention inside a thread arrives with its thread.** `mentions/thread.json` is the whole conversation the mention was written in (Slack's `conversations.replies` payload: parent first, then replies), fetched by `thread_ts` — asking Slack for a *reply's* `ts` answers with that one message and nothing around it, which is an agent being handed a question with no context. Post the answer back with `thread_ts` too, as the example above does: a reply's `ts` is not a thread id.
+**A mention inside a thread arrives with its thread.** `mentions/thread.json` is the whole conversation the mention was written in (Slack's `conversations.replies` payload: parent first, then replies), fetched by `thread_ts` — asking Slack for a *reply's* `ts` answers with that one message and nothing around it, which is an agent being handed a question with no context. `slack-reply` posts the answer back with `thread_ts` too: a reply's `ts` is not a thread id.
 
-**A reaction goes on the message; a reply goes to the thread.** `slack-reply` reads `thread/ts` and `slack-reaction` reads `target/ts`, and they are deliberately different artifacts because they want different values out of the same version: `thread_ts` is the conversation to answer in, while `ts` is the one message a person actually wrote. Hand a reaction the thread's id and the emoji lands on the parent of the thread instead — indistinguishable from correct when the mention was top-level, wrong every time somebody asked inside an existing conversation.
+**A reaction goes on the message; a reply goes to the thread — and the types choose.** Both read the mention off the put's `slack-mentions` input with [`version()`](expr.md#versionname--version): `slack-reply` posts to its `thread_ts`, `slack-reaction` marks its `ts`, because they want different values out of the same version — `thread_ts` is the conversation to answer in, while `ts` is the one message a person actually wrote. Hand a reaction the thread's id and the emoji lands on the parent of the thread instead — indistinguishable from correct when the mention was top-level, wrong every time somebody asked inside an existing conversation. That choice is made once, in each type, rather than in every pipeline. With more than one fetched input (`inputs: all`, or a second get), `params: {from: mentions}` names the one to answer; without it the put fails naming them.
 
 **Marking a message twice is not an error.** `already_reacted` (the emoji this put wanted is already there) and `no_reaction` (the one it wanted gone is already gone) are the API saying the world is in the state being asked for, so the put succeeds. They arrive on any replay, resume, or re-run, and failing there would turn re-running a build into a red one over an emoji. Every other refusal fails the put — most usefully `missing_scope`, since `reactions:write` is not implied by `chat:write` and a bot that quietly stops marking anything is a failure nobody notices.
 
@@ -125,13 +123,15 @@ All three need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for 
 - `mentions/thread.json` is truncated at its *newest* end for a thread longer than 1000 messages — Slack returns a thread oldest-first — so the mention itself can be missing from a very long thread.
 - More than `limit` new top-level messages in one channel between two checks lose the overflow *permanently*, not just delayed — the cursor advances to the newest `ts` seen anywhere, so whatever `limit` cut off now sits below the new cursor and is never asked for again.
 
-`slack-reply`'s `put:` reads its message from files an upstream step writes, not `params:` — `file()` takes what `inputs:` put on disk directly, so a reply containing backticks or `$(…)` is data, never something a shell might run:
+Where each put type aims comes from a fetched `slack-mentions` input (or the one `params.from` names). With no fetched input — a top-level post to a fixed channel, or a message that did not come from a mention — it reads files an upstream step wrote instead. Job-level hooks take no `inputs:` and run outside any one build, so a ❌ belongs on a step's `on_failure:`, as above. The text is always a file: `file()` takes what `inputs:` put on disk directly, so a reply containing backticks or `$(…)` is data, never something a shell might run.
 
-| file | required | meaning |
-|---|---|---|
-| `thread/channel` | yes | the channel id to post to |
-| `thread/ts` | no | a parent message's `ts` — posts as a reply in that thread; omit to post a new top-level message |
-| `answer/reply.md` | yes | the message text |
+| file | read by | required | meaning |
+|---|---|---|---|
+| `answer/reply.md` | `slack-reply` | yes | the message text |
+| `thread/channel` | `slack-reply` | without a fetched input | the channel id to post to |
+| `thread/ts` | `slack-reply` | no | a parent message's `ts` — posts as a reply in that thread; omit to post a new top-level message |
+| `target/channel` | `slack-reaction` | without a fetched input | the channel id of the message to mark |
+| `target/ts` | `slack-reaction` | without a fetched input | the `ts` of the message to mark |
 
 There is deliberately no `check:`/`in:` on `slack-reply` and no `out:` on `slack-mentions` — `get: reply` or `put: mentions` are both load errors, the same rule `git`'s missing `out:` follows.
 
