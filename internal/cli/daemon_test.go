@@ -496,6 +496,27 @@ func TestASetSaysWhetherItChangedAnything(t *testing.T) {
 	}
 }
 
+// A pause that arrives as its own request after the set is a race with the new pipeline's first poll, so --pause has to be on the row before anything starts.
+func TestASetCanArrivePaused(t *testing.T) {
+	t.Parallel()
+
+	held := servingDaemon(t)
+
+	_, err := held.Set(t.Context(), "app", web.SetRequest{Source: idlePipeline, Pause: true})
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	paused, err := held.served["app"].target.Store.Paused(t.Context())
+	if err != nil {
+		t.Fatalf("paused: %v", err)
+	}
+
+	if !paused {
+		t.Error("a set with Pause left the pipeline running")
+	}
+}
+
 // Only the first provider opened on a root sweeps it, so a root wrongly counted as swept keeps a crashed process's builds — under btrfs, subvolumes nothing else reclaims.
 func TestTheFirstSetOnARootSweepsWhatACrashLeftThere(t *testing.T) {
 	t.Parallel()

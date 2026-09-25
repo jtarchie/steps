@@ -174,6 +174,8 @@ type SetRequest struct {
 	ExpectSHA string `json:"expect_sha,omitempty"`
 	// From is the SENDER's path, recorded for a reader wondering where a served configuration came from, and never opened here.
 	From string `json:"from,omitempty"`
+	// Pause is written with the revision, before the pipeline is started: a pause sent after the set is a second request, and the first poll — and whatever it triggers — can land between the two.
+	Pause bool `json:"pause,omitempty"`
 }
 
 // SetResult is what the daemon did, so the terminal that asked can say so.

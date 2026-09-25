@@ -49,7 +49,8 @@ type PipelineSetCmd struct {
 	VarFlags         `embed:""`
 	Config           string `help:"the pipeline YAML to upload" name:"config" required:"" short:"c" type:"path"`
 	// The prompt exists because a set is a deploy, and a deploy nobody looked at is the file watcher this command replaced.
-	NonInteractive bool `help:"do not show a diff or ask; apply it" name:"non-interactive" short:"n"`
+	NonInteractive bool `help:"do not show a diff or ask; apply it"                                        name:"non-interactive" short:"n"`
+	Pause          bool `help:"pause the pipeline as part of the set, so it serves nothing until unpaused" name:"pause"`
 }
 
 // Run substitutes, bundles, diffs, asks, and uploads.
@@ -106,6 +107,11 @@ func (p *PipelineSetCmd) upload(name, source string, includes map[string]string)
 	if held && current.Source == source && maps.Equal(convertIncludes[string](current.Includes), includes) {
 		fmt.Printf("unchanged: %s is already serving this configuration (%s)\n", name, shortConfig(current.SHA))
 
+		// Separately and after, because the pipeline already exists: the window --pause closes is a new pipeline's first poll.
+		if p.Pause {
+			return client.pause(name, "pause")
+		}
+
 		return nil
 	}
 
@@ -124,6 +130,7 @@ func (p *PipelineSetCmd) upload(name, source string, includes map[string]string)
 		Includes:  convertIncludes[[]byte](includes),
 		ExpectSHA: current.SHA,
 		From:      from,
+		Pause:     p.Pause,
 	})
 	if err != nil {
 		return err
@@ -147,9 +154,12 @@ func (p *PipelineSetCmd) confirm(
 		return nil
 	}
 
-	if !held {
+	switch {
+	case !held && p.Pause:
+		fmt.Printf("%s is new to this daemon; it will be created paused.\n", name)
+	case !held:
 		fmt.Printf("%s is new to this daemon; it will be created and start running.\n", name)
-	} else {
+	default:
 		fmt.Print(diffSource(current.Source, source))
 		fmt.Print(diffIncludes(convertIncludes[string](current.Includes), includes))
 	}

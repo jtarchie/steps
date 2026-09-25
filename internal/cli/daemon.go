@@ -356,6 +356,13 @@ func (d *daemon) record(ctx context.Context, st store.Store, cfg *config.Config,
 		return err
 	}
 
+	if req.Pause {
+		err = st.Pause(writeCtx)
+		if err != nil {
+			return fmt.Errorf("could not pause: %w", err)
+		}
+	}
+
 	// The switch is the last write and carries where it came from, because a write after it can fail with the database already naming a configuration nobody started serving.
 	err = st.SetCurrentRevision(writeCtx, cfg.Revision.SHA, req.From)
 	if err != nil {

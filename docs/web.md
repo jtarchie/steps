@@ -43,6 +43,10 @@ steps pipeline set -p app -c app.yml -v repo_uri=https://github.com/acme/app
   refusal, never a read of the daemon's own disk.
 - **It diffs, then asks.** `set` fetches what the daemon is serving, prints
   what would change, and asks. `-n` skips the prompt and is what scripts pass.
+- **`--pause` sets it paused.** The pause is written with the configuration,
+  before the pipeline starts, so a new pipeline never gets its first poll. A
+  `set` followed by a separate `pause` leaves a gap where that poll, and any
+  build it starts, can slip in.
 - **It is compare-and-set.** The sha you diffed against is sent with the
   upload; if the configuration moved in between, the daemon refuses and says
   so, rather than applying yours over whatever arrived.
