@@ -939,7 +939,7 @@ func TestRegistryLaunchesOneMachineForEverySpellingOfATemplate(t *testing.T) {
 		t.Errorf("the second spelling dials %q, want the shared machine reached its own way", onSecond.URL)
 	}
 
-	joined := "worker aws://launch/lt-0def4567890abcde/var/tmp/steps?idle=10m&version=1: sharing the machine already acquired for aws://launch/lt-0def4567890abcde?version=1&idle=5m"
+	joined := "worker aws://launch/lt-0def4567890abcde/var/tmp/steps?idle=10m&version=1: sharing aws://launch/lt-0def4567890abcde?version=1&idle=5m's machine"
 	if !strings.Contains(notes.String(), joined) {
 		t.Errorf("notes = %q, want the join named", notes.String())
 	}
@@ -1092,5 +1092,44 @@ func TestRegistryCountsOneMachineUnderTwoTagsOfOneScope(t *testing.T) {
 
 	if _, released := fake.counts(); released["i-1"] != 1 || released["i-2"] != 1 {
 		t.Errorf("given back %v, want each machine once", released)
+	}
+}
+
+// A releaser's idle note and a joiner's longer ?idle= are two goroutines under steps web, and the note used to read what the joiner writes after letting go of the registry's lock. The joiner sleeps rather than waiting on the release: a sync would order the two and hide the race from -race, and the wall-clock gap is only what makes the write land after the read.
+func TestRegistryNamesTheIdleWindowWithoutRacingAJoiner(t *testing.T) {
+	fake := &countingAcquirer{}
+	registry := NewRegistryWith(fake.acquire)
+	short := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde?idle=5m"))
+	long := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde?idle=10m"))
+
+	mustResolve(t, short)
+
+	errs := make(chan error, 2)
+
+	go func() { errs <- short.ReleaseAll(context.Background()) }()
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+
+		_, err := long.Resolve(context.Background(), "box")
+		errs <- err
+	}()
+
+	for range 2 {
+		err := <-errs
+		if err != nil {
+			t.Fatalf("release or join: %v", err)
+		}
+	}
+
+	mustRelease(t, long)
+
+	err := registry.Close(context.Background())
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if acquired, released := fake.counts(); acquired != 1 || released["i-1"] != 1 {
+		t.Errorf("%d acquisitions, given back %v — want one machine, given back once", acquired, released)
 	}
 }

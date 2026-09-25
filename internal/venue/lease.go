@@ -133,9 +133,11 @@ func (r *Registry) drop(ctx context.Context, held *entry, immediate bool) error 
 	r.expiring.Add(1)
 	//nolint:contextcheck // the window outlives every caller's context, and the release bounds its own calls
 	held.idle = time.AfterFunc(held.window, func() { r.expire(held, gen) })
+	// Read under the lock: a joiner with a longer ?idle= rewrites both from its own goroutine.
+	window, windowBy := held.window, held.windowBy
 	r.mu.Unlock()
 
-	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: nothing is using it; keeping it for %s (?idle=)", held.windowBy, held.window))
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: nothing is using it; keeping it for %s (?idle=)", windowBy, window))
 
 	return nil
 }
@@ -395,7 +397,7 @@ func (l *Leases) Resolve(ctx context.Context, tag string) (Worker, error) {
 	for {
 		held, landing, joined := l.claim(tag, worker)
 		if joined != "" {
-			events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: sharing the machine already acquired for %s", worker.URL, joined))
+			events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: sharing %s's machine", worker.URL, joined))
 		}
 
 		if held != nil {
@@ -414,7 +416,7 @@ func (l *Leases) Resolve(ctx context.Context, tag string) (Worker, error) {
 	}
 }
 
-// claim is this scope's entry for a tag, counted toward the registry's if it has none yet — or, while that machine's last park is landing, what to wait on first, outside every lock. joined names the spelling the entry was acquired under when this claim counted toward one written differently, since the operator otherwise has no sign two mappings now share one box.
+// claim is this scope's entry for a tag, counted toward the registry's if it has none yet — or, while that machine's last park is landing, what to wait on first, outside every lock. joined names the spelling the entry belongs to when this claim counted toward one written differently, since the operator otherwise has no sign two mappings now share one box; that spelling's acquisition may still be in flight, or have failed, so the note does not say the machine exists.
 func (l *Leases) claim(tag string, worker Worker) (*entry, <-chan struct{}, string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
