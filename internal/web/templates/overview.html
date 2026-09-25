@@ -6,14 +6,16 @@
 <div class="tablewrap" id="pipelines-table">
   <table>
     <thead>
-      <tr><th>Pipeline</th><th class="num">Waiting</th><th class="num">Jobs</th><th>Last run</th><th class="num">Queued</th><th>State</th><th>File</th></tr>
+      <tr><th>Pipeline</th><th class="num">Waiting</th><th>Jobs</th><th>Last run</th><th class="num">Queued</th><th>State</th><th>File</th></tr>
     </thead>
     <tbody>
       {{range .Pipelines}}
       <tr>
         <td><a href="/p/{{.Slug}}">{{.Slug}}</a></td>
         <td class="num">{{if .Attention}}<a class="badge" href="/p/{{.Slug}}"><span aria-hidden="true">●</span>{{.Attention}}</a>{{else}}<span class="faint">—</span>{{end}}</td>
-        <td class="num dim">{{.Jobs}}</td>
+        {{/* Every job, colored by its latest run: which one is red, from
+             the root, and the link is the transcript. */}}
+        <td class="jobchips" title="{{.Jobs}} jobs">{{$slug := .Slug}}{{range .Chips}}<a class="st {{.Class}}" href="/p/{{$slug}}/jobs/{{.Name}}">{{.Name}}</a>{{end}}</td>
         <td>
           {{if .HasRun}}<a class="st st-{{statusWord .Latest.Status}}" href="/p/{{.Slug}}/runs/{{.Latest.ID}}">{{statusWord .Latest.Status}}</a> <span class="dim">{{agoTag .Latest.StartedAt}}</span>
           {{else}}<span class="faint">never ran</span>{{end}}

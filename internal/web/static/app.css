@@ -284,6 +284,7 @@ td.faint, .faint { color: var(--faint); }
 .st-running { color: var(--yellow); }
 .st-pending { color: var(--yellow); }
 .st-skipped { color: var(--faint); }
+.st-none { color: var(--faint); }
 .st.st-passed::before, .st.st-succeeded::before { content: "✓ "; }
 .st.st-failed::before, .st.st-errored::before, .st.st-aborted::before { content: "✗ "; }
 .st.st-running::before { content: "◐ "; }
@@ -293,6 +294,11 @@ td.faint, .faint { color: var(--faint); }
 .hash { color: var(--blue); }
 .hash::before { content: "["; color: var(--faint); }
 .hash::after { content: "]"; color: var(--faint); }
+
+/* ---- overview job chips ---- */
+.jobchips { white-space: normal; }
+.jobchips a { display: inline-block; margin-right: 10px; line-height: 22px; text-decoration: none; }
+.jobchips a:hover { text-decoration: underline; }
 
 /* ---- run strip ----
    This job's recent runs on the run page. Chips are anchors carrying the

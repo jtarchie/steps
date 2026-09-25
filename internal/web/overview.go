@@ -63,6 +63,36 @@ type overviewPipeline struct {
 	// pipelines against each other, so the question the header answers for
 	// one of them is a column here.
 	Attention int
+	// Chips are the pipeline's jobs in its own order, each colored by its
+	// latest run — the answer to "which job is red" that a last-run column
+	// cannot give, and each the link to that job's transcript.
+	Chips []jobChip
+}
+
+// jobChip is one job on an overview row: its name and the st-* class the
+// graph gives the same job.
+type jobChip struct {
+	Name  string
+	Class string
+}
+
+// jobChips reads a pipeline's jobs through the board's own view of them, so
+// the root and the graph cannot color one job two ways.
+func jobChips(ctx context.Context, pipeline *Pipeline) []jobChip {
+	latest, err := pipeline.Store.LatestRunByJob(ctx)
+	if err != nil {
+		latest = nil
+	}
+
+	jobs := pipeline.Config().Jobs
+	chips := make([]jobChip, 0, len(jobs))
+
+	for _, job := range jobs {
+		_, _, class := nodeStatus(buildJobView(job, latest, nil))
+		chips = append(chips, jobChip{Name: job.Name, Class: class})
+	}
+
+	return chips
 }
 
 // handleIndex answers the bare root, and its answer depends on how many
@@ -128,6 +158,7 @@ func (s *Server) overviewPipelines(ctx context.Context, nav navData) []overviewP
 			Jobs:      len(pipeline.Config().Jobs),
 			Paused:    paused(ctx, pipeline),
 			Attention: waiting[pipeline.Slug],
+			Chips:     jobChips(ctx, pipeline),
 		}
 
 		runs, err := pipeline.Store.ListRuns(ctx, "", 1)

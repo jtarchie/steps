@@ -103,7 +103,7 @@ holds nothing serves an index saying how to set one.
 
 | Route | Answers |
 |---|---|
-| `/` | With several pipelines served: what this process holds — each with its last run, what its queue still owes, whether it is paused, and a button to pause or resume it — and one run feed across all of them, newest first. With one, it redirects straight through |
+| `/` | With several pipelines served: what this process holds — each with its jobs colored by their latest run (a red one is one click from its transcript), its last run, what its queue still owes, whether it is paused, and a button to pause or resume it — and one run feed across all of them, newest first. With one, it redirects straight through |
 | `/p/:pipeline` | Which jobs exist, how each last run went, and which jobs feed which — as a list, or as a dependency graph laid out from the `passed:` constraints, each node carrying its latest status |
 | `…/runs` | One run history across every job of the pipeline, newest first — the cross-job view the per-job history can't give |
 | `…/jobs/:job` | Where the job stands, without another click: it forwards to the job's **latest run**, running included; with no run but a trigger queued, to the [follow page](#following-a-run-you-started) for that trigger; with neither, to the detail page. Every link that names a job goes here, so a job is one click from its transcript from anywhere. It is a temporary redirect on purpose — a bookmark to it re-resolves on every visit |

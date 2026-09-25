@@ -1472,10 +1472,15 @@ func TestTheOverviewSaysWhatEachPipelineIsDoing(t *testing.T) {
 		}
 	}
 
-	// One job and one queued row, drawn identically: the count is what says
-	// the queue is not being drained, and nothing else on this page does.
-	if got := strings.Count(app, `<td class="num dim">1</td>`); got != 2 {
-		t.Errorf("the row shows %d numeric cells reading 1, want jobs AND queued:\n\t%s", got, app)
+	// One queued row, as a number: the count is what says the queue is not
+	// being drained, and nothing else on this page does. The job count rides
+	// on the chips cell, which names the job rather than counting it.
+	if got := strings.Count(app, `<td class="num dim">1</td>`); got != 1 {
+		t.Errorf("the row shows %d numeric cells reading 1, want exactly the queued count:\n\t%s", got, app)
+	}
+
+	if !strings.Contains(app, `title="1 jobs"`) {
+		t.Errorf("the chips cell does not carry the job count:\n\t%s", app)
 	}
 
 	infra := pipelineRow(t, page, "infra")
@@ -1621,6 +1626,29 @@ func TestLiveStreamCarriesCompacted(t *testing.T) {
 	for _, want := range []string{"compacted ×1", `class="turn compaction`, "SUMMARY-MARKER"} {
 		if !strings.Contains(stream, want) {
 			t.Errorf("the stream does not carry %q: %q", want, stream)
+		}
+	}
+}
+
+// TestRootShowsEachPipelinesJobsAsChips: the root is where an operator looks
+// first, and the one page that can rank pipelines — so each row names its
+// jobs colored by their latest run, and a red one is the link to its
+// transcript. A job that never ran is faint, not absent: the row must say
+// what the pipeline holds, not only what has happened to it.
+func TestRootShowsEachPipelinesJobsAsChips(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := testPipelines(t, "app", "infra")
+	startFinishedRun(t, pipelines[0], "run-1", "app-job", "failed")
+
+	_, body := get(t, server, "/")
+
+	for chip, cost := range map[string]string{
+		`<a class="st st-failed" href="/p/app/jobs/app-job">app-job</a>`:     "a failed job is not a red chip",
+		`<a class="st st-none" href="/p/infra/jobs/infra-job">infra-job</a>`: "a job that never ran is not a faint chip",
+	} {
+		if !strings.Contains(body, chip) {
+			t.Errorf("%s: missing %s in %s", cost, chip, body)
 		}
 	}
 }
