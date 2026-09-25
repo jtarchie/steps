@@ -824,8 +824,8 @@ jobs:
 	}
 }
 
-// A row the breaker skips still spent the force it was claimed with: left behind, the flag forces the job's next ordinary build, re-running from scratch what the cache would have skipped.
-func TestABreakerSkipSpendsTheForce(t *testing.T) {
+// A person's trigger gets past the breaker an automatic one is held by, and the force it carried is spent by that run: left behind, the flag forces the job's next ordinary build, re-running from scratch what the cache would have skipped.
+func TestAHeldJobsManualTriggerRunsAndSpendsItsForce(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -848,17 +848,12 @@ jobs:
 		t.Fatalf("RecordJobOutcome: %v", err)
 	}
 
-	_, err = runner.Enqueue(ctx, target, "build", "re-run", true)
+	_, err = runner.Enqueue(ctx, target, "build", "trigger, no cache (web)", true)
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
 	runner.drainOne(ctx, target)
-
-	_, _, err = st.RecordJobOutcome(ctx, "build", true, 1)
-	if err != nil {
-		t.Fatalf("RecordJobOutcome: %v", err)
-	}
 
 	err = st.EnqueueJob(ctx, "build", "poll")
 	if err != nil {
@@ -867,12 +862,12 @@ jobs:
 
 	runner.drainOne(ctx, target)
 
-	if got := queueStatuses(t, st); got != "succeeded skipped succeeded" {
-		t.Fatalf("queue = %q, want the forced row skipped by the breaker between two ordinary builds", got)
+	if got := queueStatuses(t, st); got != "succeeded succeeded succeeded" {
+		t.Fatalf("queue = %q, want the held job's manual row run, and the poll after it run once the pass cleared the breaker", got)
 	}
 
-	if lines := countLines(t, tally); lines != 1 {
-		t.Errorf("tally = %d, want 1: the skipped row's force re-ran the next ordinary build from scratch", lines)
+	if lines := countLines(t, tally); lines != 2 {
+		t.Errorf("tally = %d, want 2: the forced run re-ran the step, and the ordinary one after it hit the cache", lines)
 	}
 }
 

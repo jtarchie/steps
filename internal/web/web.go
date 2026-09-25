@@ -197,7 +197,7 @@ var ErrNoSuchPipeline = errors.New("no such pipeline")
 // Implemented by the in-process drainer (see runner.go); an interface so the
 // HTTP layer can be tested without starting real jobs.
 type Runner interface {
-	// Enqueue queues a job for execution, returning the queue row id.
+	// Enqueue queues a person's trigger of a job, returning the queue row id.
 	Enqueue(ctx context.Context, pipeline *Pipeline, jobName, reason string, force bool) (int64, error)
 	// Abort cancels a run this process is executing, and reports false when it is not running here.
 	Abort(pipeline *Pipeline, runID string) bool

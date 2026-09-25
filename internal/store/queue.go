@@ -13,6 +13,10 @@ import (
 // them would give a consumer the queue without the rule that governs it.
 type Queue interface {
 	EnqueueJob(ctx context.Context, jobName, reason string) error
+	// EnqueueManualJob is EnqueueJob for a person's trigger: the row is marked manual, and a pending row it merges into becomes manual too, because the breaker holds back only what was triggered automatically.
+	EnqueueManualJob(ctx context.Context, jobName, reason string) error
+	// QueuedManually reports whether a claimed row carries a person's trigger.
+	QueuedManually(ctx context.Context, id int64) (bool, error)
 	// ClaimNextJob takes the oldest pending row admitted by serial: and
 	// max_in_flight, atomically, and reports false when nothing is ready.
 	ClaimNextJob(ctx context.Context) (int64, string, bool, error)

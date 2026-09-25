@@ -116,9 +116,9 @@ func (r *LocalRunner) RemoveProvider(slug string) { r.providers.remove(slug) }
 // Close retires every workspace this runner holds. Only a provider's own Close removes the tree it created, so a shutdown that closed the stores alone left a steps-* directory per pipeline behind with nothing to reap it.
 func (r *LocalRunner) Close() { r.providers.Close() }
 
-// Enqueue puts a job on the pipeline's queue.
+// Enqueue puts a person's trigger on the pipeline's queue.
 func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, reason string, force bool) (int64, error) {
-	err := target.Store.EnqueueJob(ctx, jobName, reason)
+	err := target.Store.EnqueueManualJob(ctx, jobName, reason)
 	if err != nil {
 		return 0, fmt.Errorf("web: %w", err)
 	}
@@ -433,7 +433,7 @@ func interrupted(drain context.Context, runErr error) bool {
 }
 
 // skipIfPaused finalizes a queued row for a job the circuit breaker has taken
-// out of the rotation, rather than running it.
+// out of the rotation, rather than running it — unless a person triggered it: the breaker stops automatic triggers, and a click on a held job is how somebody tries a fix.
 func (r *LocalRunner) skipIfPaused(ctx context.Context, target *Pipeline, jobName string, id int64) bool {
 	paused, err := target.Store.IsJobPaused(ctx, jobName)
 	if err != nil {
@@ -443,6 +443,15 @@ func (r *LocalRunner) skipIfPaused(ctx context.Context, target *Pipeline, jobNam
 	}
 
 	if !paused {
+		return false
+	}
+
+	manual, err := target.Store.QueuedManually(ctx, id)
+	if err != nil {
+		slog.Warn("web.breaker_error", "pipeline", target.Slug, "job", jobName, "error", err)
+	}
+
+	if manual {
 		return false
 	}
 

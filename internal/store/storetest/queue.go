@@ -88,3 +88,52 @@ func mustClaimNext(t *testing.T, st store.Queue) bool {
 
 	return claimed
 }
+
+// TestAManualEnqueueIsMarkedWhicheverArrivesFirst: the breaker holds back only automatic triggers, so the claim must know a person asked — and the one-pending-row dedup must not swallow that, in either order.
+func (s suite) TestAManualEnqueueIsMarkedWhicheverArrivesFirst(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		manual []bool
+		want   bool
+	}{
+		{"automatic only", []bool{false}, false},
+		{"manual only", []bool{true}, true},
+		{"automatic, then manual", []bool{false, true}, true},
+		{"manual, then automatic", []bool{true, false}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			st := s.open(t, "test")
+
+			for _, manual := range tc.manual {
+				var err error
+				if manual {
+					err = st.EnqueueManualJob(ctxFor(t), "build", "trigger (web)")
+				} else {
+					err = st.EnqueueJob(ctxFor(t), "build", "a new version")
+				}
+
+				if err != nil {
+					t.Fatalf("enqueue: %v", err)
+				}
+			}
+
+			id, _, claimed, err := st.ClaimNextJob(ctxFor(t))
+			if err != nil || !claimed {
+				t.Fatalf("ClaimNextJob = %v, %v", claimed, err)
+			}
+
+			got, err := st.QueuedManually(ctxFor(t), id)
+			if err != nil {
+				t.Fatalf("QueuedManually: %v", err)
+			}
+
+			if got != tc.want {
+				t.Errorf("QueuedManually = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

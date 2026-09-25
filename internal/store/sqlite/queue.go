@@ -41,6 +41,34 @@ func enqueueJob(ctx context.Context, db executor, pipelineID int64, jobName, rea
 	return nil
 }
 
+// EnqueueManualJob upserts rather than deduplicates: a pending row an automatic trigger left must still become manual, or the person's click is merged into a row the breaker then skips.
+func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO trigger_queue (pipeline_id, job_name, reason, manual, status, enqueued_at)
+		VALUES (?, ?, ?, 1, 'pending', ?)
+		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' DO UPDATE SET manual = 1, reason = excluded.reason
+	`, s.pipelineID, jobName, reason, nowNano())
+	if err != nil {
+		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
+	}
+
+	return nil
+}
+
+// QueuedManually reads the mark EnqueueManualJob left on a row.
+func (s *Store) QueuedManually(ctx context.Context, id int64) (bool, error) {
+	var manual bool
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT manual FROM trigger_queue WHERE id = ? AND pipeline_id = ?
+	`, id, s.pipelineID).Scan(&manual)
+	if err != nil {
+		return false, fmt.Errorf("could not read queue row %d: %w", id, err)
+	}
+
+	return manual, nil
+}
+
 // ClaimNextJob atomically transitions the oldest claimable pending row to
 // running and returns its id/jobName; found=false when nothing is claimable.
 //

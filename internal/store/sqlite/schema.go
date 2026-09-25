@@ -70,7 +70,8 @@ package sqlite
 // 4 put pipeline_id into the keys of run_placements and agent_usage. Without
 // it, two pipelines sharing a state file collided on (run_id, node_hash) and
 // one upserted over the other's row.
-const schemaVersion = 14
+// 15 added trigger_queue.manual, which is how a person's trigger gets past the breaker an automatic one is held by.
+const schemaVersion = 15
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -266,6 +267,7 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
     pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
     job_name    TEXT NOT NULL,
     reason      TEXT NOT NULL,
+    manual      INTEGER NOT NULL DEFAULT 0,
     status      TEXT NOT NULL,
     enqueued_at TEXT NOT NULL,
     started_at  TEXT,
