@@ -1,0 +1,22 @@
+# The bare grant offers list_faults too, unpinned, so the pin would bind
+# nothing the model could not route around.
+# expect: pins args, but another grant of mcp server "honeybadger" (every tool) offers the same tool unpinned
+
+mcp_servers:
+- name: honeybadger
+  endpoint: https://mcp.honeybadger.io/mcp
+
+agents:
+- name: oncall
+  source: { model: openrouter/qwen/qwen3.7-flash }
+  tools:
+  - mcp: honeybadger
+    tool: list_faults
+    args: { project_id: "307" }
+  - mcp: honeybadger
+
+jobs:
+- name: triage
+  plan:
+  - agent: oncall
+    messages: ["What is failing?"]

@@ -305,8 +305,12 @@ func resumedRunInputs(ctx context.Context, st store.Store) (map[string]map[strin
 // plan without one having exactly one set. New versions sorting after the
 // recorded ones only add builds at the end, which is allowed.
 //
-// ponytail: a build with no recorded inputs (a lost best-effort write) goes
-// unchecked. Upgrade: refuse when a build has completed steps but no inputs.
+// ponytail: a build with no recorded inputs (a lost best-effort write, or a
+// plan whose gets are all fixed or --pin, which takeSet never records) goes
+// unchecked, so a fixed get that moved between attempts is not caught.
+// Upgrade: record every binding in takeSet and refuse when a build has
+// completed steps but no inputs — which also refuses a resume after a
+// re-pushed branch, so it is a decision rather than a fix.
 func checkResumedBuilds(ctx context.Context, resolution setResolution, recorded map[string]map[string]string) error {
 	state := resumeFrom(ctx)
 	if state == nil || len(recorded) == 0 {
@@ -341,8 +345,10 @@ func checkResumedBuilds(ctx context.Context, resolution setResolution, recorded 
 }
 
 // buildsMovedHint is the way out of a refused resume: its builds' records
-// cannot be trusted, but a fresh run can be pointed at the one version.
-const buildsMovedHint = "the resource's history changed under the run; start a new run, with --pin to build that version"
+// cannot be trusted, but a fresh run can be pointed at one version — one the
+// check still reports, since --pin resolves against a live check and never
+// against the run's recorded history.
+const buildsMovedHint = "the resource's history changed under the run; start a new run, with --pin to build a version the check still reports"
 
 // findRun reads the run a --resume or --replay names, turning "this pipeline
 // does not have it" into the error the operator needs to see.

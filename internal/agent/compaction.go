@@ -10,6 +10,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 )
 
 const (
@@ -60,13 +61,15 @@ Be specific. Don't write "continue with the task" — write exactly what should 
 Tone: write as if briefing a colleague taking over mid-conversation.`
 
 // maybeCompact is runAgentConversation's per-turn compaction check (see
-// conversation.go). It estimates req.Contents' size in tokens and, once that
+// conversation.go). It sizes req.Contents in tokens (reportedSize) and, once that
 // exceeds conv.compactAfterTokens, summarizes everything older than a recent
 // window (compactionRecentRatio% of the budget) via the agent's own model,
-// replacing the older turns with the summary. summary carries forward the
-// running summary from a prior pass (folded into the next one, so multiple
-// passes across a long conversation stay coherent); stalled, once true,
-// suppresses all further attempts for the rest of this conversation.
+// replacing the older turns with the summary. state.summary carries forward
+// the running summary from a prior pass (folded into the next one, so
+// multiple passes across a long conversation stay coherent); state.stalled,
+// once true, suppresses all further attempts for the rest of this
+// conversation; state.compactions counts the passes that took effect, which
+// the step's recorded result reports.
 //
 // stalled exists for one specific case: a single recent turn (e.g. one huge
 // tool result) that by itself exceeds the whole budget. Summarizing again
@@ -81,22 +84,32 @@ Tone: write as if briefing a colleague taking over mid-conversation.`
 // should lower compact_after_tokens or a tool's own output budget, not rely
 // on an automatic retry to eventually work around it.
 //
-// A summarization failure (a transport error, an empty/malformed response)
+// The summary request is a real model call, so its reported usage counts
+// toward the step's spend and both ceilings. A summary that crosses one
+// stops the step (the only error returned): unlike a final answer, which is
+// kept because nothing is spent after it, a summary always has another
+// request behind it. The breached summary is not applied — the model never
+// worked from it — so no marker is recorded either.
+//
+// Any other summarization failure (a transport error, a cancelled context)
 // is logged and passed through unchanged — matching the codebase's existing
 // rule that a tool failure is data the model reacts to, never a reason to
-// abort the attempt. maybeCompact only ever reads/mutates req.Contents; it
-// never touches turn counting, trajectory, or verdict tracking.
-func maybeCompact(ctx context.Context, llm model.LLM, req *model.LLMRequest, conv agentConversation, summary string, stalled bool) (newSummary string, newStalled bool) {
+// abort the attempt. It stays log-only because a failed pass is not stalled
+// and retries every turn, where a step note would repeat on each.
+// maybeCompact only ever reads/mutates req.Contents, size and state's
+// compaction fields; it never touches turn counting, trajectory, or verdict
+// tracking.
+func maybeCompact(ctx context.Context, llm model.LLM, req *model.LLMRequest, conv agentConversation, size *reportedSize, state *resumeCheckpoint) error {
 	// compactAfterTokens == 0 is compaction switched off outright (an explicit
 	// compact_after_tokens: 0 — resolution never produces it from an unset
 	// field). The guard lives here rather than at the call site so the turn
 	// loop states its own business once.
-	if stalled || conv.compactAfterTokens <= 0 {
-		return summary, stalled
+	if state.stalled || conv.compactAfterTokens <= 0 {
+		return nil
 	}
 
-	if estimateContentTokens(req.Contents) <= conv.compactAfterTokens {
-		return summary, stalled
+	if size.of(req.Contents) <= conv.compactAfterTokens {
+		return nil
 	}
 
 	recentBudget := conv.compactAfterTokens * compactionRecentRatio / 100
@@ -110,23 +123,34 @@ func maybeCompact(ctx context.Context, llm model.LLM, req *model.LLMRequest, con
 		// short conversation whose few turns already fit the recent window).
 		// Not stalled: as soon as another turn is appended, req.Contents
 		// grows and this is re-evaluated fresh.
-		return summary, stalled
+		return nil
 	}
 
-	summarized, err := summarizeConversation(ctx, llm, oldContents, summary)
+	summarized, overBudget, err := summarizeConversation(ctx, llm, conv.usage, oldContents, state.summary)
 	if err != nil {
 		slog.Warn("agent.compaction_failed", "error", err)
 
-		return summary, stalled
+		return nil
+	}
+
+	if overBudget {
+		return conv.usage.exceededError()
 	}
 
 	replaceSummary(req, summarized, recentContents)
+	// The reported count described the history just replaced; until the next response reports again, the estimate is the only honest size.
+	*size = reportedSize{}
 	// The FIRST message, not whichever one is being answered: compaction
 	// summarizes the OLD turns and keeps the recent ones, so a later message is
 	// still verbatim in the history. The opening task is the one at risk of
 	// being summarized into a paraphrase, and it is the one the model must not
 	// lose.
 	injectContinuation(req, conv.opening())
+
+	state.summary = summarized
+	state.compactions++
+
+	conv.env.transcript.compaction(compactionLabel(len(oldContents), len(recentContents)), summarized)
 
 	slog.Info("agent.compaction", "summarized_turns", len(oldContents), "recent_turns", len(recentContents))
 
@@ -136,16 +160,29 @@ func maybeCompact(ctx context.Context, llm model.LLM, req *model.LLMRequest, con
 		// and nothing else, so the first symptom of a budget set 10x too low
 		// for the model read like a bug in the agent loop rather than a
 		// setting anyone could fix.
-		slog.Warn("agent.compaction_stalled",
-			"reason", "the recent window alone exceeds the budget, so summarizing again cannot help; compaction is off for the rest of this conversation",
-			"compact_after_tokens", conv.compactAfterTokens,
-			"recent_window_tokens", recent,
-			"fix", "raise compact_after_tokens: on this agent (or lower a tool's own output budget, if one result is oversized)")
+		events.Note(ctx, events.NoteWarn, fmt.Sprintf(
+			"compaction stalled: the most recent turns alone (~%d tokens) exceed compact_after_tokens: %d, so summarizing again cannot help; "+
+				"compaction is off for the rest of this conversation. Raise compact_after_tokens: on this agent "+
+				"(or lower a tool's own output budget, if one result is oversized)",
+			recent, conv.compactAfterTokens))
 
-		return summarized, true
+		state.stalled = true
 	}
 
-	return summarized, false
+	return nil
+}
+
+// compactionLabel says what a compaction did. The marker lands after every
+// turn so far, but the recent window was KEPT, not summarized — a label naming
+// only the summarized count would repeat the very lie the marker exists to
+// fix. "messages", not turns: these are genai contents, including a previous
+// pass's summary and continuation message.
+func compactionLabel(summarized, kept int) string {
+	if kept == 0 {
+		return fmt.Sprintf("compacted: %d messages summarized", summarized)
+	}
+
+	return fmt.Sprintf("compacted: %d older messages summarized, last %d kept verbatim", summarized, kept)
 }
 
 // findSplitIndex walks contents backward, accumulating estimated tokens,
@@ -323,7 +360,13 @@ func contentHasFunctionResponse(c *genai.Content) bool {
 // providers return no text for an unusual request shape) falls back to
 // buildFallbackSummary rather than losing the turns being compacted away
 // entirely.
-func summarizeConversation(ctx context.Context, llm model.LLM, oldContents []*genai.Content, previousSummary string) (string, error) {
+//
+// The response's usage is recorded before its text is looked at, so an empty
+// answer that falls back is still counted; overBudget reports that it
+// crossed a ceiling.
+func summarizeConversation(
+	ctx context.Context, llm model.LLM, usage *stepUsage, oldContents []*genai.Content, previousSummary string,
+) (summary string, overBudget bool, err error) {
 	req := &model.LLMRequest{
 		Contents: []*genai.Content{
 			{Role: genai.RoleUser, Parts: []*genai.Part{{Text: buildSummarizePrompt(oldContents, previousSummary)}}},
@@ -335,15 +378,17 @@ func summarizeConversation(ctx context.Context, llm model.LLM, oldContents []*ge
 
 	resp, err := generateOnce(ctx, llm, req)
 	if err != nil {
-		return "", fmt.Errorf("agent: summarize conversation: %w", err)
+		return "", false, fmt.Errorf("agent: summarize conversation: %w", err)
 	}
+
+	overBudget = usage.recordSummary(resp)
 
 	_, text := collectParts(resp.Content)
 	if text == "" {
-		return buildFallbackSummary(oldContents, previousSummary), nil
+		return buildFallbackSummary(oldContents, previousSummary), overBudget, nil
 	}
 
-	return text, nil
+	return text, overBudget, nil
 }
 
 // buildSummarizePrompt renders oldContents as a transcript for the
@@ -495,8 +540,7 @@ func injectContinuation(req *model.LLMRequest, prompt string) {
 
 // estimatePartTokens returns a rough token count for a single Part, using
 // the same ~4-chars-per-token heuristic the rest of this feature is built
-// on — see maybeCompact's doc comment and docs/agents.md's compaction
-// section for why this is a local estimate, never real provider usage data.
+// on. It is the whole count only when the provider reports no usage; otherwise it covers what was appended since the last report (reportedSize).
 // Covers only the Part kinds steps' own conversation loop ever produces
 // (Text, FunctionCall, FunctionResponse); the adk-utils-go reference also
 // accounts for InlineData/ToolCall/ToolResponse/PartMetadata, none of which
@@ -529,12 +573,34 @@ func estimatePartTokens(part *genai.Part) int {
 	return total
 }
 
-// estimateContentTokens sums estimatePartTokens across contents. This is the
-// trigger check maybeCompact runs every turn; it deliberately counts
-// req.Contents only, not the system prompt or tool schemas also sent with
-// every request (see defaultCompactAfterTokens' doc comment in
-// internal/config/config.go for why the default budget itself is set well
-// under a typical context window to compensate).
+// reportedSize is what the provider last said the conversation cost: the prompt it read plus the completion now appended to it, covering req.Contents[:upTo]. It counts the system prompt and tool schemas with the provider's own tokenizer, which the len/4 estimate cannot; the estimate only covers what was appended since. Zero tokens means nothing was reported.
+type reportedSize struct {
+	tokens int
+	upTo   int
+}
+
+// observe keeps the previous report when a response carries none: its upTo still marks a prefix of the history, and the estimate covers the rest.
+func (r *reportedSize) observe(resp *model.LLMResponse, contents int) {
+	if resp == nil || resp.UsageMetadata == nil || resp.UsageMetadata.PromptTokenCount <= 0 {
+		return
+	}
+
+	// Candidates, not Total: Total includes thinking tokens, which are not resent.
+	*r = reportedSize{
+		tokens: int(resp.UsageMetadata.PromptTokenCount) + int(resp.UsageMetadata.CandidatesTokenCount),
+		upTo:   contents,
+	}
+}
+
+func (r *reportedSize) of(contents []*genai.Content) int {
+	if r.tokens <= 0 || r.upTo > len(contents) {
+		return estimateContentTokens(contents)
+	}
+
+	return r.tokens + estimateContentTokens(contents[r.upTo:])
+}
+
+// estimateContentTokens sums estimatePartTokens across contents. It sees req.Contents only, never the system prompt or tool schemas, which is why reportedSize prefers the provider's count when there is one.
 func estimateContentTokens(contents []*genai.Content) int {
 	total := 0
 

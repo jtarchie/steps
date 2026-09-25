@@ -62,6 +62,8 @@
   <div class="turn tool"><span class="who">tool</span><div class="what"><code>{{.Name}}</code>{{template "jsonvalue" (jsonValue .ArgsJSON)}}</div></div>
   {{else if eq .Type "result"}}
   <div class="turn tool"><span class="who">result</span><div class="what"><code>{{.Name}}</code>{{template "jsonvalue" (jsonValue .Content)}}</div></div>
+  {{else if eq .Type "compaction"}}
+  <div class="turn compaction"><span class="who">compacted</span><div class="what"><details><summary>{{.Name}}</summary><div class="prose">{{template "prosebody" .Text}}</div></details></div></div>
   {{else if eq .Type "subagent"}}
   <div class="turn tool"><span class="who">delegate</span><div class="what"><code>{{.Agent}}</code><span class="say">{{.Request}}</span></div></div>
   <div class="subtrace">{{template "turns" .Events}}</div>

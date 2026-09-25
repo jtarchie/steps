@@ -298,6 +298,17 @@ func assertRunStepsPerBuild(t *testing.T, path, runID string) {
 		}
 	}
 
+	limited := captureStdout(t, func() {
+		err := cli.Run(append([]string{"runs", "steps", runID, "--limit", "1"}, readArgs(path)...))
+		if err != nil {
+			t.Fatalf("runs steps %s --limit 1: %v", runID, err)
+		}
+	})
+
+	if !regexp.MustCompile(`#0\s+fragile`).MatchString(limited) || strings.Contains(limited, "publication") {
+		t.Errorf("runs steps --limit 1 did not stop after the first row:\n%s", limited)
+	}
+
 	err := cli.Run(append([]string{"runs", "steps", "NOSUCHRUN"}, readArgs(path)...))
 	if err == nil || !strings.Contains(err.Error(), "no run") {
 		t.Errorf("runs steps with an unknown run id: want a \"no run\" error, got %v", err)

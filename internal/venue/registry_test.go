@@ -3,15 +3,19 @@ package venue
 // Scopes sharing one Registry, against the fake clouds.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/events"
 )
 
 func boxWorker(t *testing.T, raw string) map[string]Worker {
@@ -39,7 +43,13 @@ func mustResolve(t *testing.T, leases *Leases) Worker {
 func mustRelease(t *testing.T, leases *Leases) {
 	t.Helper()
 
-	err := leases.ReleaseAll(context.Background())
+	mustReleaseWith(context.Background(), t, leases)
+}
+
+func mustReleaseWith(ctx context.Context, t *testing.T, leases *Leases) {
+	t.Helper()
+
+	err := leases.ReleaseAll(ctx)
 	if err != nil {
 		t.Fatalf("ReleaseAll: %v", err)
 	}
@@ -842,5 +852,284 @@ func TestRegistryAbandonRacingASiblingsResolveCountsEachMachineOnce(t *testing.T
 
 	if released[dead.Instance] != 1 {
 		t.Errorf("the dead machine given back %d times after its last user, want 1", released[dead.Instance])
+	}
+}
+
+// countingAcquirer numbers each machine it launches and counts every give-back, per machine.
+type countingAcquirer struct {
+	mu       sync.Mutex
+	acquired int
+	released map[string]int
+}
+
+func (c *countingAcquirer) acquire(_ context.Context, worker Worker) (Worker, func(context.Context) error, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.acquired++
+	machine := worker.asStatic(fmt.Sprintf("i-%d", c.acquired))
+
+	return machine, func(context.Context) error {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		if c.released == nil {
+			c.released = map[string]int{}
+		}
+
+		c.released[machine.Instance]++
+
+		return nil
+	}, nil
+}
+
+func mustResolveTag(ctx context.Context, t *testing.T, leases *Leases, tag string) Worker {
+	t.Helper()
+
+	worker, err := leases.Resolve(ctx, tag)
+	if err != nil {
+		t.Fatalf("Resolve(%q): %v", tag, err)
+	}
+
+	return worker
+}
+
+func mustParse(t *testing.T, raw string) Worker {
+	t.Helper()
+
+	worker, err := ParseWorker(raw)
+	if err != nil {
+		t.Fatalf("ParseWorker(%q): %v", raw, err)
+	}
+
+	return worker
+}
+
+func (c *countingAcquirer) counts() (int, map[string]int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.acquired, maps.Clone(c.released)
+}
+
+// Two pipelines set with their own vars spelling one worker slightly differently is ordinary, and each extra spelling was an extra spot instance billing for the same work.
+func TestRegistryLaunchesOneMachineForEverySpellingOfATemplate(t *testing.T) {
+	fake := &countingAcquirer{}
+	registry := NewRegistryWith(fake.acquire)
+	first := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde?version=1&idle=5m"))
+	second := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde/var/tmp/steps?idle=10m&version=1"))
+	third := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde?version=1&idle=1m&capacity=od"))
+
+	var notes bytes.Buffer
+
+	ctx := events.WithOutput(context.Background(), events.Output{Stdout: &notes})
+
+	onFirst := mustResolve(t, first)
+
+	onSecond := mustResolveTag(ctx, t, second, "box")
+
+	mustResolve(t, third)
+
+	if acquired, _ := fake.counts(); acquired != 1 {
+		t.Fatalf("%d acquisitions, want every spelling on one machine", acquired)
+	}
+
+	// The URL is what a runner re-parses, so it carries both the shared instance and this spelling's root.
+	if onSecond.URL != onFirst.URL+"/var/tmp/steps" {
+		t.Errorf("the second spelling dials %q, want the shared machine reached its own way", onSecond.URL)
+	}
+
+	joined := "worker aws://launch/lt-0def4567890abcde/var/tmp/steps?idle=10m&version=1: sharing aws://launch/lt-0def4567890abcde?version=1&idle=5m's machine"
+	if !strings.Contains(notes.String(), joined) {
+		t.Errorf("notes = %q, want the join named", notes.String())
+	}
+
+	mustRelease(t, first)
+	mustRelease(t, third)
+	notes.Reset()
+
+	mustReleaseWith(ctx, t, second)
+
+	if _, released := fake.counts(); len(released) != 0 {
+		t.Fatalf("given back %v inside the idle window", released)
+	}
+
+	kept := "worker aws://launch/lt-0def4567890abcde/var/tmp/steps?idle=10m&version=1: nothing is using it; keeping it for 10m0s"
+	if !strings.Contains(notes.String(), kept) {
+		t.Errorf("notes = %q, want the spelling whose ?idle= is honored named with its window", notes.String())
+	}
+
+	err := registry.Close(context.Background())
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if _, released := fake.counts(); released["i-1"] != 1 || len(released) != 1 {
+		t.Errorf("given back %v after Close, want the one machine once", released)
+	}
+}
+
+func TestRegistryKeysALaunchedMachineOnWhatDecidesIt(t *testing.T) {
+	const lt = "aws://launch/lt-0def4567890abcde"
+
+	cases := []struct {
+		name  string
+		one   string
+		other string
+		want  int
+	}{
+		{"parameter order", lt + "?version=1&capacity=spot", lt + "?capacity=spot&version=1", 1},
+		{"on-demand spelled out", lt + "?capacity=od", lt, 1},
+		{"default version spelled out", lt + "?version=default", lt, 1},
+		{"default version in EC2's spelling", lt + "?version=$Default", lt, 1},
+		{"another shim", lt + "?shim=/opt/steps", lt + "?shim=/usr/local/bin/steps", 1},
+		{"another binary", lt + "?binary=/tmp/a", lt + "?binary=/tmp/b", 1},
+		{"gcp idle", "gcp://launch/tpl-1?project=p&zone=us-central1-a&idle=5m", "gcp://launch/tpl-1?zone=us-central1-a&project=p", 1},
+		{"another version", lt + "?version=1", lt + "?version=2", 2},
+		{"latest is not a number", lt + "?version=$Latest", lt + "?version=1", 2},
+		{"another capacity", lt + "?capacity=spot", lt + "?capacity=od", 2},
+		{"another region", lt + "?region=us-east-1", lt + "?region=us-west-2", 2},
+		{"another template", lt, "aws://launch/lt-0aaa4567890abcde", 2},
+		{"gcp zone", "gcp://launch/tpl-1?project=p&zone=us-central1-a", "gcp://launch/tpl-1?project=p&zone=us-central1-b", 2},
+		{"gcp project", "gcp://launch/tpl-1?project=p&zone=us-central1-a", "gcp://launch/tpl-1?project=q&zone=us-central1-a", 2},
+		// The ponytail on registryKey: an ambient location is not resolved before keying.
+		{"gcp ambient zone", "gcp://launch/tpl-1?project=p", "gcp://launch/tpl-1?project=p&zone=us-central1-a", 2},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &countingAcquirer{}
+			registry := NewRegistryWith(fake.acquire)
+
+			for _, raw := range []string{tc.one, tc.other} {
+				leases := registry.Leases(boxWorker(t, raw))
+				mustResolve(t, leases)
+				t.Cleanup(func() { mustRelease(t, leases) })
+			}
+
+			if acquired, _ := fake.counts(); acquired != tc.want {
+				t.Errorf("%q and %q: %d acquisitions, want %d", tc.one, tc.other, acquired, tc.want)
+			}
+		})
+	}
+}
+
+// Two spellings never shared an entry before, so whoever watches the shared machine die has to retire it for the other spelling too — including when the machine was acquired under the other's spelling.
+func TestRegistryRetiresASharedLaunchForEverySpelling(t *testing.T) {
+	fake := &countingAcquirer{}
+	registry := NewRegistryWith(fake.acquire)
+	plain := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde?version=1"))
+	rooted := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde/var/tmp/steps?version=1"))
+
+	mustResolve(t, plain)
+
+	dead := mustResolve(t, rooted)
+
+	// Not the machine as plain dials it, so not plain's notice to act on.
+	plain.Abandon("box", dead.URL)
+
+	if again := mustResolve(t, rooted); again.Instance != "i-1" {
+		t.Fatalf("a notice in another spelling retired the machine: rooted resolved %q", again.URL)
+	}
+
+	rooted.Abandon("box", dead.URL)
+
+	fresh := mustResolve(t, plain)
+	if fresh.Instance != "i-2" || fresh.Root != "" {
+		t.Fatalf("plain resolved to %q, want a fresh machine reached its own way", fresh.URL)
+	}
+
+	if onRooted := mustResolve(t, rooted); onRooted.Instance != "i-2" || onRooted.Root != "/var/tmp/steps" {
+		t.Fatalf("rooted resolved to %q, want the replacement reached its own way", onRooted.URL)
+	}
+
+	mustRelease(t, plain)
+
+	if _, released := fake.counts(); len(released) != 0 {
+		t.Fatalf("given back %v while rooted still counted toward both machines", released)
+	}
+
+	mustRelease(t, rooted)
+
+	if acquired, released := fake.counts(); acquired != 2 || released["i-1"] != 1 || released["i-2"] != 1 {
+		t.Errorf("%d acquisitions, given back %v — want each of two machines given back once", acquired, released)
+	}
+}
+
+// One scope mapping two tags to one template holds the entry twice, and has to let go of it exactly that often.
+func TestRegistryCountsOneMachineUnderTwoTagsOfOneScope(t *testing.T) {
+	a := mustParse(t, "aws://launch/lt-0def4567890abcde/mnt/a")
+	b := mustParse(t, "aws://launch/lt-0def4567890abcde/mnt/b")
+	ctx := context.Background()
+
+	fake := &countingAcquirer{}
+	registry := NewRegistryWith(fake.acquire)
+	job := registry.Leases(map[string]Worker{"a": a, "b": b})
+	other := registry.Leases(map[string]Worker{"a": a})
+
+	onA := mustResolveTag(ctx, t, job, "a")
+	onB := mustResolveTag(ctx, t, job, "b")
+
+	if acquired, _ := fake.counts(); acquired != 1 || onA.Root != "/mnt/a" || onB.Root != "/mnt/b" {
+		t.Fatalf("%d acquisitions, roots %q and %q — want one machine, each tag on its own root", acquired, onA.Root, onB.Root)
+	}
+
+	mustResolveTag(ctx, t, other, "a")
+
+	job.Abandon("a", onA.URL)
+
+	if onB = mustResolveTag(ctx, t, job, "b"); onB.Instance != "i-2" {
+		t.Fatalf("tag b resolved to %q after tag a watched the machine die, want a fresh one", onB.URL)
+	}
+
+	mustRelease(t, job)
+
+	if _, released := fake.counts(); released["i-1"] != 0 || released["i-2"] != 1 {
+		t.Fatalf("given back %v while another scope still held the dead machine, want only the replacement", released)
+	}
+
+	mustRelease(t, other)
+
+	if _, released := fake.counts(); released["i-1"] != 1 || released["i-2"] != 1 {
+		t.Errorf("given back %v, want each machine once", released)
+	}
+}
+
+// A releaser's idle note and a joiner's longer ?idle= are two goroutines under steps web, and the note used to read what the joiner writes after letting go of the registry's lock. The joiner sleeps rather than waiting on the release: a sync would order the two and hide the race from -race, and the wall-clock gap is only what makes the write land after the read.
+func TestRegistryNamesTheIdleWindowWithoutRacingAJoiner(t *testing.T) {
+	fake := &countingAcquirer{}
+	registry := NewRegistryWith(fake.acquire)
+	short := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde?idle=5m"))
+	long := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde?idle=10m"))
+
+	mustResolve(t, short)
+
+	errs := make(chan error, 2)
+
+	go func() { errs <- short.ReleaseAll(context.Background()) }()
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+
+		_, err := long.Resolve(context.Background(), "box")
+		errs <- err
+	}()
+
+	for range 2 {
+		err := <-errs
+		if err != nil {
+			t.Fatalf("release or join: %v", err)
+		}
+	}
+
+	mustRelease(t, long)
+
+	err := registry.Close(context.Background())
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if acquired, released := fake.counts(); acquired != 1 || released["i-1"] != 1 {
+		t.Errorf("%d acquisitions, given back %v — want one machine, given back once", acquired, released)
 	}
 }

@@ -236,12 +236,7 @@ func (r *Reader) RecentRuns(ctx context.Context, pipelines []string, limit int) 
 		return nil, nil
 	}
 
-	args := make([]any, 0, len(pipelines)+1)
-	for _, name := range pipelines {
-		args = append(args, name)
-	}
-
-	args = append(args, rowLimit(limit))
+	args := []any{jsonList(pipelines), rowLimit(limit)}
 
 	// One ordering pass over the joined rows rather than a query per pipeline
 	// merged afterwards: a merge would have to fetch `limit` from each to be
@@ -250,7 +245,7 @@ func (r *Reader) RecentRuns(ctx context.Context, pipelines []string, limit int) 
 		SELECT p.name, ` + runColumnsR + `
 		FROM runs r
 		JOIN pipelines p ON p.id = r.pipeline_id
-		WHERE p.name IN (` + placeholders(len(pipelines)) + `)
+		WHERE p.name IN (SELECT value FROM json_each(?))
 		ORDER BY r.started_at DESC, r.rowid DESC
 		LIMIT ?
 	`

@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS pipelines (
     paused_at TEXT,
     set_at    TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_pipelines_revision ON pipelines(current_revision_id);
 
 -- The interned merkle preimage: what each node's hash was computed FROM.
 --
@@ -173,7 +174,6 @@ CREATE TABLE IF NOT EXISTS nodes (
     created_at  TEXT NOT NULL,
     PRIMARY KEY (pipeline_id, hash)
 );
-CREATE INDEX IF NOT EXISTS idx_nodes_parent_hash ON nodes(pipeline_id, parent_hash);
 -- Retention scans nodes by job (ordering by rowid, not created_at — see
 -- pruneNodes) and sweeps node_content by what nodes still point at; both are
 -- full scans without these.
@@ -270,6 +270,8 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
 -- so a version change mid-run still enqueues a fresh pending row for after.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_job
     ON trigger_queue(pipeline_id, job_name) WHERE status = 'pending';
+-- ClaimNextJob counts a job's running rows once per pending row, and a held-back job retries that claim every drain tick; unindexed, each count scanned every pipeline's history. The partial index above cannot serve it, nor the pipeline cascade.
+CREATE INDEX IF NOT EXISTS idx_trigger_queue_job_status ON trigger_queue(pipeline_id, job_name, status);
 
 -- Every version steps has ever seen of a resource. The thing whose absence
 -- was, until now, the one STRUCTURAL divergence from Concourse: without it a
@@ -342,6 +344,8 @@ CREATE TABLE IF NOT EXISTS job_versions (
     FOREIGN KEY (pipeline_id, resource_name, version_json)
         REFERENCES resource_versions(pipeline_id, resource_name, version_json) ON DELETE CASCADE
 );
+-- The cascade's child key, which the primary key cannot serve because it leads with job_name: without it every version pruneVersions reaps scans the whole table.
+CREATE INDEX IF NOT EXISTS idx_job_versions_version ON job_versions(pipeline_id, resource_name, version_json);
 
 -- The payload of each webhook delivery, beside the version it IS. Keyed to
 -- resource_versions and cascading off it, so version_history: pruning takes
@@ -476,6 +480,9 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 -- Retention orders a job's runs by recency to find the ones past the cap.
 CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(pipeline_id, job_name, started_at);
+-- Every job's runs newest first, the listing the overview and RecentRuns read; idx_runs_job_started cannot give that order across jobs.
+CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(pipeline_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_runs_parent ON runs(parent_run_id);
 -- The RESTRICT child key. Without an index here sqlite proves a revision
 -- unreferenced by scanning every run, once per revision deleted, inside the
 -- write transaction at the end of a build.
@@ -505,6 +512,7 @@ CREATE TABLE IF NOT EXISTS approvals (
     decided_by   TEXT,
     reason       TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_approvals_pipeline ON approvals(pipeline_id);
 
 -- Questions an agent step asked its end user, and what came back.
 --

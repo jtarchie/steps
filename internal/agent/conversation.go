@@ -108,6 +108,11 @@ type conversationResult struct {
 	// with the verdict it accompanied — a step that declared context: {
 	// from: { <this step>: note|full } } is handed it (see upstream.go).
 	note string
+	// compactions and compactionStalled are what the step's recorded result
+	// says about compaction (see maybeCompact), copied out of the checkpoint
+	// because the checkpoint is not what a step records.
+	compactions       int
+	compactionStalled bool
 	// transcript is the full ordered exchange — model text, tool calls,
 	// results, nested sub-agent traces — attached on every exit path.
 	// Persisted to node_transcripts (see saveAgentTranscript), never into
@@ -183,6 +188,9 @@ type resumeCheckpoint struct {
 	// summarization the primary already proved impossible.
 	summary string
 	stalled bool
+	// compactions is how many passes took effect, so the recorded result
+	// counts the step's compactions rather than only the last source's.
+	compactions int
 }
 
 // agentConversation is one runnable attempt's inputs.
@@ -369,7 +377,8 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 // bound or overflow the model's real context window. A summarization failure
 // is logged and the turn proceeds with req.Contents unchanged — the same
 // failure-is-data treatment every other tool/transport failure in this loop
-// gets, never a reason to abort the attempt. compactAfterTokens == 0 skips
+// gets — except a summary that crosses a token budget, which stops the step
+// like a tool call crossing it would. compactAfterTokens == 0 skips
 // this entirely — an agent reaches that only via an explicit
 // compact_after_tokens: 0, since config.ResolveAgentInvocation otherwise
 // resolves an unset field to a nonzero default (see
@@ -525,7 +534,8 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 		state.turnsSpent = turnsBefore + spentThisSource
 
 		return conversationResult{text: text, turns: state.turnsSpent, trajectory: state.trajectory,
-			verdict: state.verdict, note: state.note, checkpoint: state}
+			verdict: state.verdict, note: state.note, compactions: state.compactions,
+			compactionStalled: state.stalled, checkpoint: state}
 	}
 
 	// detector is per-attempt: it watches for the model repeating one
@@ -568,19 +578,19 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	clock := wrapUpClock{has: hasTimeout, deadline: timeoutDeadline, atEntry: budgetAtEntry}
 	wrapUpWarned := false
 
+	// Not carried in resumeCheckpoint: a fallback source tokenizes differently, so it starts from the estimate until it reports for itself.
+	var size reportedSize
+
 	for ; budget == unlimitedTurns || turn < budget; turn++ {
-		state.summary, state.stalled = maybeCompact(ctx, llm, req, conv, state.summary, state.stalled)
-
-		conv.maybeWarnWrapUp(req, clock, turn, budget, &wrapUpWarned)
-
-		// The budget is checked before the turn's tool calls run: a step that
-		// has already blown its ceiling must not go on to have side effects.
-		resp, err := conv.generateWithinBudget(ctx, llm, req)
+		resp, err := conv.nextResponse(ctx, llm, req, &size, &state, func() {
+			conv.maybeWarnWrapUp(req, clock, turn, budget, &wrapUpWarned)
+		})
 		if err != nil {
 			return result("", turn), err
 		}
 
 		req.Contents = append(req.Contents, resp.Content)
+		size.observe(resp, len(req.Contents))
 
 		calls, text := collectParts(resp.Content)
 		conv.env.transcript.text(text)
@@ -996,6 +1006,25 @@ func (conv agentConversation) generateWithinBudget(ctx context.Context, llm mode
 	}
 
 	return resp, nil
+}
+
+// nextResponse compacts the conversation if it is due, lets warn add its
+// nudge, and asks for the turn's response. Either request can cross a token
+// budget; both errors end the attempt through the caller's result(), so the
+// transcript and checkpoint still travel with the failure.
+func (conv agentConversation) nextResponse(
+	ctx context.Context, llm model.LLM, req *model.LLMRequest, size *reportedSize, state *resumeCheckpoint, warn func(),
+) (*model.LLMResponse, error) {
+	err := maybeCompact(ctx, llm, req, conv, size, state)
+	if err != nil {
+		return nil, err
+	}
+
+	warn()
+
+	// The budget is checked before the turn's tool calls run: a step that
+	// has already blown its ceiling must not go on to have side effects.
+	return conv.generateWithinBudget(ctx, llm, req)
 }
 
 // attachUsage binds a conversation's token accounting to the job it runs in.

@@ -287,8 +287,12 @@ jobs:
         2) : ;;
         *) echo "could not reach the remote to check for issue-$number (git exit $probe)" >&2; exit 1 ;;
       esac
+      # The git type fetches one commit, and `task` ends by diffing against the mutation ledger's recorded commits, which a depth-1 clone does not have.
+      GIT_CONFIG_GLOBAL=/dev/null git fetch -q --unshallow "https://github.com/((repo)).git" HEAD
       mkdir -p steps-work
       echo 'steps-work/' >> .git/info/exclude
+      # An agent step spills oversized tool output here and deletes it when the step ends: seen by the agent's own `task`, it sealed a tree the commit then no longer matched, and the pre-commit hook refused it.
+      echo '.steps-agent-out/' >> .git/info/exclude
       cp ../issue/issue.md steps-work/issue.md
       git checkout -q -B "issue-$number"
       echo "on issue-$number"

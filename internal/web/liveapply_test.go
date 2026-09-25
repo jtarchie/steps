@@ -63,7 +63,7 @@ func TestStreamAppliedToThePageIsTheReloadedPage(t *testing.T) {
 			drawnUpTo, _ := strconv.ParseInt(after[1], 10, 64)
 
 			appendEvents(t, pipeline.Store, runID, eventsAfterThePage())
-			mustRecordResult(t, pipeline, "beef7654321", map[string]any{"response": "Looks fine.", "wrapped_up": true})
+			mustRecordResult(t, pipeline, "beef7654321", map[string]any{"response": "Looks fine.", "wrapped_up": true, "compactions": 1})
 
 			err = pipeline.Store.FinishRun(ctx, runID, "failed")
 			if err != nil {
@@ -128,6 +128,7 @@ func eventsBeforeThePage() []store.RunEventRow {
 func eventsAfterThePage() []store.RunEventRow {
 	return []store.RunEventRow{
 		{Type: events.TypeAgentResult, StepIndex: 0, StepName: "review", StepID: 1, Name: "read_file", Detail: `{"ok":true}`},
+		{Type: events.TypeAgentCompaction, StepIndex: 0, StepName: "review", StepID: 1, Name: "compacted: 4 messages summarized", Text: "## Summary\n\nRead **main.go**."},
 		{Type: events.TypeAgentText, StepIndex: 0, StepName: "helper", Status: "depth:1", Text: "the sub-agent said this"},
 		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "matrix", StepKind: "across", StepID: 2},
 		{Type: events.TypeStepStarted, StepIndex: 2, StepName: "cell-a", StepKind: "task", StepID: 3, ParentStepID: 2},

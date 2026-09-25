@@ -1700,7 +1700,7 @@ func TestResolveAgentInvocationDerivesCompactionBudget(t *testing.T) {
 		{
 			name:       "a 1M model compacts against a 1M window",
 			model:      "openrouter/google/gemini-2.5-pro",
-			wantBudget: 800_000,
+			wantBudget: 970_000,
 			wantWindow: 1_000_000,
 		},
 		{
@@ -1708,7 +1708,7 @@ func TestResolveAgentInvocationDerivesCompactionBudget(t *testing.T) {
 			// only opus-4-5, haiku-4-5, opus-4-1 and 3-5-haiku are still 200K.
 			name:       "a 200K model compacts against a 200K window",
 			model:      "anthropic/claude-opus-4-5",
-			wantBudget: 160_000,
+			wantBudget: 194_000,
 			wantWindow: 200_000,
 		},
 		{
@@ -1717,7 +1717,7 @@ func TestResolveAgentInvocationDerivesCompactionBudget(t *testing.T) {
 			// compacted them at a fifth of capacity.
 			name:       "a 1M claude beats the 200K family entry",
 			model:      "anthropic/claude-sonnet-4-5",
-			wantBudget: 800_000,
+			wantBudget: 970_000,
 			wantWindow: 1_000_000,
 		},
 		{
@@ -1726,7 +1726,7 @@ func TestResolveAgentInvocationDerivesCompactionBudget(t *testing.T) {
 			// every table entry and silently takes the 128K assumption.
 			name:       "a dotted model id resolves like its dashed spelling",
 			model:      "openrouter/anthropic/claude-sonnet-4.5",
-			wantBudget: 800_000,
+			wantBudget: 970_000,
 			wantWindow: 1_000_000,
 		},
 		{
@@ -1734,7 +1734,7 @@ func TestResolveAgentInvocationDerivesCompactionBudget(t *testing.T) {
 			// 102,400 — a tenth of capacity — against a 1M window.
 			name:       "an opencode zen model resolves",
 			model:      "opencode/glm-5.2",
-			wantBudget: 800_000,
+			wantBudget: 970_000,
 			wantWindow: 1_000_000,
 		},
 		{
@@ -1742,7 +1742,7 @@ func TestResolveAgentInvocationDerivesCompactionBudget(t *testing.T) {
 			// and glm-5.1 are ~200K, not glm-5.2's 1M.
 			name:       "a family entry catches its smaller siblings",
 			model:      "opencode/glm-5.1",
-			wantBudget: 160_000,
+			wantBudget: 194_000,
 			wantWindow: 200_000,
 		},
 		{
@@ -1750,13 +1750,13 @@ func TestResolveAgentInvocationDerivesCompactionBudget(t *testing.T) {
 			// specific entries must be consulted before the family one.
 			name:       "a family split resolves most-specific-first",
 			model:      "openai/gpt-5.4-mini",
-			wantBudget: 320_000,
+			wantBudget: 388_000,
 			wantWindow: 400_000,
 		},
 		{
 			name:       "a suffixed 1M variant beats its own family entry",
 			model:      "anthropic/claude-opus-5[1m]",
-			wantBudget: 800_000,
+			wantBudget: 970_000,
 			wantWindow: 1_000_000,
 		},
 		{
@@ -1766,7 +1766,7 @@ func TestResolveAgentInvocationDerivesCompactionBudget(t *testing.T) {
 			name:           "an explicit context_window is used as the window",
 			model:          "lmstudio/some-local-build-nobody-has-heard-of",
 			explicitWindow: 64_000,
-			wantBudget:     51_200,
+			wantBudget:     62_080,
 			wantWindow:     64_000,
 		},
 		{

@@ -1091,6 +1091,10 @@ func (r *RunsStepsCmd) printRunSteps(ctx context.Context, st interface {
 		return nil
 	}
 
+	if r.Limit > 0 && len(steps) > r.Limit {
+		steps = steps[:r.Limit]
+	}
+
 	fmt.Printf("run %s  %s  %s: steps a --resume skips\n", run.ID, run.JobName, run.Status)
 
 	writer := newTabWriter()
