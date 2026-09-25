@@ -226,11 +226,11 @@ jobs:
     outcome: succeeded
 ```
 
-Once a conversation's estimated size crosses the budget, the agent's own model is asked to summarize everything older than a recent window (roughly the most recent 30% of the budget), and the conversation continues from `[summary] + [recent turns]` instead of the full history. This can happen more than once in a very long conversation — each pass folds the previous summary into the new one. A summarization failure is logged and the turn proceeds uncompacted; it never aborts the attempt, the same failure-is-data treatment a tool failure gets.
+Once a conversation's size crosses the budget, the agent's own model is asked to summarize everything older than a recent window (roughly the most recent 30% of the budget), and the conversation continues from `[summary] + [recent turns]` instead of the full history. This can happen more than once in a very long conversation — each pass folds the previous summary into the new one. A summarization failure is logged and the turn proceeds uncompacted; it never aborts the attempt, the same failure-is-data treatment a tool failure gets.
 
 **On by default, at 80% of the model's context window — unlike every other feature on this page.** An agent that sets no `compact_after_tokens:` still gets compaction; `compact_after_tokens: 0` is what disables it. This is a deliberate exception to this codebase's usual value-gating contract for opt-in features ("absent, its behavior ... byte-identical to before it existed") — merkle hashes are unaffected either way (see below), but the conversation's *behavior* differs for any pipeline whose agent crosses the budget.
 
-The 20% headroom is load-bearing, not padding: the size estimate covers the conversation alone, never the system prompt or the tool schemas resent with every request, so a budget set at the full window would only ever fire after a request had already overflowed.
+The 20% headroom is load-bearing, not padding: it is room for the reply the model has yet to write, for tool results appended since the provider last reported, and for providers that report no usage at all (see below).
 
 **The window comes from the model.** `internal/config/agent.go`'s `contextWindows` table maps a model-name fragment to that model's window, so a 1M-context model compacts at 800,000 rather than at a tenth of its capacity. A model the table does not recognize keeps the conservative 102,400 (80% of an assumed 128K) — the safe direction to be wrong in, and no behavior change for anything that was already correct.
 
@@ -271,7 +271,7 @@ jobs:
 
 **Small-context and local models must set one of the two.** A local build's name tells the table nothing, so it gets the 102,400 default — close to an entire typical context window, and a 32K-token local model (LM Studio, Ollama) will overflow long before that ever triggers.
 
-**The count is a local estimate, not accounting.** It's the same `len(text)/4` heuristic used elsewhere, applied to the conversation's own content — never the provider's real token-usage data. "`steps` tracks no token usage anywhere" (see the OpenRouter section above) still holds; this is a size heuristic that decides *when to compact*, not a usage figure anything reports.
+**The count is the provider's own, topped up by an estimate.** After each response, the provider's reported prompt tokens plus completion tokens become the conversation's size: that already counts the system prompt and tool schemas, in the model's own tokenizer. Only what was appended since — the tool results about to be sent — is estimated, with a `len(text)/4` heuristic. Reasoning ("thinking") tokens are left out, because they are not sent back on the next turn. Three cases fall back to estimating the whole conversation, which misses the system prompt and tool schemas: a provider that reports no usage, the first turn, and the turn right after compaction (the last report described the history that was just replaced). A fallback model mid-conversation starts from the estimate too, since it tokenizes differently.
 
 ### Tuning one tool's inline budget
 

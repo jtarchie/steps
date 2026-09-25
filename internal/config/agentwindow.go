@@ -6,16 +6,9 @@ import (
 	"strings"
 )
 
-// defaultCompactAfterTokens is the conversation-size budget (in estimated
-// tokens — see estimateContentTokens in internal/agent/compaction.go) an
-// agent that sets no compact_after_tokens: gets: 80% of a 128K context
-// window, the common size for current models.
+// defaultCompactAfterTokens is the conversation-size budget an agent that sets no compact_after_tokens: gets: 80% of a 128K context window, the common size for current models. The size is the provider's last reported prompt+completion plus an estimate of what was appended since (reportedSize in internal/agent/compaction.go).
 //
-// The 20% headroom is load-bearing, not padding. estimateContentTokens
-// measures req.Contents alone — it never counts the system prompt, the tool
-// schemas re-sent on every request, or the output the model still has to
-// fit. A budget set at the full window would only ever fire after the
-// request had already overflowed.
+// The 20% headroom is load-bearing, not padding: it is room for the reply the model still has to write, for the tool results appended since the last report, and for providers that report no usage at all, where the estimate counts the conversation alone and never the system prompt or tool schemas.
 //
 // It is only the fallback for a model whose window this package does not
 // recognize (see contextWindowFor) and whose agent declared no
