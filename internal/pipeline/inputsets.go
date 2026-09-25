@@ -30,6 +30,10 @@ type setResolution struct {
 	// created with (resumeInputSets), which the run already took and recorded
 	// when it created them.
 	recorded bool
+	// rerun is true when the one set is a build being re-run (rerunInputSets):
+	// recorded under the new run, like any build, but taking nothing, since
+	// the original took these versions when it was created.
+	rerun bool
 	// blocking names resources that could bind nothing at all — no
 	// unconsumed version, no held version — which is what stops sets being
 	// built and what the "no versions" report should say.

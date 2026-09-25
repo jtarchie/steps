@@ -211,7 +211,7 @@ func (w *planWalk) takeSet(ctx context.Context, pinnedRun bool, set merkle.Input
 		w.recordRunInput(ctx, buildID, input, w.resolution.resources[input], version)
 	}
 
-	if pinnedRun {
+	if pinnedRun || w.resolution.rerun {
 		return
 	}
 

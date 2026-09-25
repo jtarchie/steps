@@ -153,6 +153,7 @@ func (s *Server) handleJobDetail(c *echo.Context) error {
 		"Title":    job.Name,
 		"Crumbs":   []crumb{{Label: "jobs", URL: "/p/" + pipeline.Slug}, {Label: job.Name, URL: "/p/" + pipeline.Slug + "/jobs/" + job.Name}, {Label: "detail"}},
 		"Job":      view,
+		"Bar":      barView{Job: job.Name, NoCache: true, Held: view.Held},
 		"Runs":     runs,
 		"Versions": versions,
 		"Spark":    sparkline(runs),
@@ -233,6 +234,8 @@ func (s *Server) handleRun(c *echo.Context) error {
 		"Strip":       strip,
 		"Job":         job,
 		"JobDeclared": jobErr == nil,
+		"Bar":         runBar(ctx, pipeline, view.Run, jobErr == nil),
+		"BuildRetry":  buildRetries(ctx, pipeline, view, jobErr == nil),
 		"Title":       view.Run.JobName + " #" + shortID(view.Run.ID),
 		"TitleMark":   statusMark(view.Run.Status),
 		"Crumbs": []crumb{
@@ -598,6 +601,77 @@ func (s *Server) handleTrigger(c *echo.Context) error {
 		pipeline.Slug, name, since.UnixMilli()))
 }
 
+// handleRerun is Retry: fly rerun-build (#146), one build of a recorded run
+// against the versions it was created with, as a new run. Refused where a
+// trigger is — a read-only server, a paused pipeline, a job the config dropped
+// — and for a run still going, which the page offers Abort for instead.
+func (s *Server) handleRerun(c *echo.Context) error {
+	if s.runner == nil {
+		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
+	}
+
+	pipeline := pipelineOf(c)
+	ctx := c.Request().Context()
+
+	run, ok, err := pipeline.Store.FindRunRow(ctx, c.Param("run"))
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	if !ok {
+		return echo.NewHTTPError(http.StatusNotFound, "no such run")
+	}
+
+	err = refuseRerun(ctx, pipeline, run)
+	if err != nil {
+		return err
+	}
+
+	build := 0
+
+	if raw := c.FormValue("build"); raw != "" {
+		build, err = strconv.Atoi(raw)
+		if err != nil || build < 0 {
+			return echo.NewHTTPError(http.StatusBadRequest, "build must be a number")
+		}
+	}
+
+	since := time.Now().UTC()
+
+	err = s.runner.EnqueueRerun(ctx, pipeline, run.JobName, run.ID, build)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	//nolint:wrapcheck // echo's redirect error is returned verbatim
+	return c.Redirect(http.StatusSeeOther, fmt.Sprintf("/p/%s/jobs/%s/follow?since=%d",
+		pipeline.Slug, run.JobName, since.UnixMilli()))
+}
+
+// refuseRerun is why a run cannot be retried right now, if it cannot.
+func refuseRerun(ctx context.Context, pipeline *Pipeline, run store.RunRow) error {
+	_, err := pipeline.Config().FindJob(run.JobName)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", run.JobName))
+	}
+
+	if run.Status == "running" {
+		return echo.NewHTTPError(http.StatusConflict, "this run is still running; abort it first")
+	}
+
+	stopped, err := pipeline.Store.Paused(ctx)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	if stopped {
+		return echo.NewHTTPError(http.StatusConflict,
+			"this pipeline is paused; unpause it with steps pipeline unpause -p "+pipeline.Slug)
+	}
+
+	return nil
+}
+
 // handleFollow is the waiting room between enqueueing a job and its run
 // existing. A queued job has no run id until a worker claims it, so the page
 // reports what the queue is doing and forwards itself the moment the run
@@ -622,6 +696,7 @@ func (s *Server) handleFollow(c *echo.Context) error {
 			{Label: "queued"},
 		},
 		"Job":   name,
+		"Bar":   barView{Abort: "/p/" + pipeline.Slug + "/jobs/" + name + "/queued/abort"},
 		"Since": c.QueryParam("since"),
 	})
 }

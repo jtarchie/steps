@@ -45,7 +45,7 @@
   </nav>
   <div class="right">
     {{if .Nav.Pipelines}}<span class="pipeswitch">
-      <button class="pipebtn{{if .Nav.Paused}} paused{{end}}" id="pipebtn" aria-haspopup="listbox" aria-expanded="false">{{.Nav.Current}} ▾</button>
+      <button class="pipebtn" id="pipebtn" aria-haspopup="listbox" aria-expanded="false">{{.Nav.Current}} ▾</button>
       <div class="pipemenu" id="pipemenu" role="listbox">
         {{range .Nav.Pipelines}}
         <a role="option" {{if eq .Slug $.Nav.Current}}aria-selected="true"{{end}} href="/p/{{.Slug}}">{{.Slug}} <span class="hint">{{.Jobs}} jobs</span>{{if .Attention}}<span class="badge" title="{{.Attention}} waiting on you"><span aria-hidden="true">●</span>{{.Attention}}</span>{{end}}</a>
@@ -55,6 +55,7 @@
     {{if .Nav.ReadOnly}}<span class="ro">read-only</span>{{end}}
     <span><kbd>/</kbd> jump</span>
   </div>
+  {{template "actionbar" .}}
 </div>
 
 <main>
@@ -77,9 +78,7 @@
      they did not resolve, and an unnamed one of several is worse than none. */}}
 <div id="attention" role="status" aria-label="Needs attention">{{if and .Nav.Anchored .Nav.Attention}}<ul class="attention">
   {{range .Nav.Attention}}<li class="atitem at-{{.Kind}}">
-    {{if eq .Kind "paused"}}<span class="st st-paused">paused</span> · no polling, no new runs; webhook deliveries wait until unpaused
-    {{if $.Nav.ReadOnly}}Unpause it with <code>steps pipeline unpause -p {{$.Nav.Current}}</code>.{{else}}<form class="decide" method="post" action="/p/{{$.Nav.Current}}/unpause"><input type="hidden" name="return" value="{{$.Nav.URL}}"><button class="btn primary" type="submit">Unpause</button><span class="meta">or <code>steps pipeline unpause -p {{$.Nav.Current}}</code></span></form>{{end}}
-    {{else}}<a href="{{.URL}}">{{.Detail}}</a>{{end}}
+    <a href="{{.URL}}">{{.Detail}}</a>
   </li>{{end}}
 </ul>{{end}}</div>
 {{template "crumbs" .}}
@@ -181,13 +180,14 @@
   });
 
   document.addEventListener('click', function (e) {
-    if (e.target.closest('a')) return;
+    if (e.target.closest('a, button, form')) return;
     var step = toggleFrom(e.target);
     if (step) fold(step);
   });
 
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' && e.key !== ' ') return;
+    if (e.target.closest('button, form')) return;
     var step = toggleFrom(e.target);
     if (!step) return;
     e.preventDefault();
@@ -417,5 +417,16 @@
      write. See prose.go for what the renderer refuses to do with it. */}}
 {{define "prosebody"}}<div class="md">{{prose .}}</div>{{end}}
 
-{{/* One sentence for every disabled trigger on the page, which each points at: a paused pipeline refuses the POST, and a button that looks live and then answers 409 is the failure this replaces. */}}
-{{define "triggerwhy"}}{{if .Nav.Paused}}<span class="meta" id="trigger-why">the pipeline is paused; unpause it to trigger</span>{{end}}{{end}}
+{{/* Every action a page offers, in one place under the nav: the pipeline's
+     pause on the left, this page's job or run on the right. Inside
+     #statusline so the oob swap every polling page already sends keeps it
+     live. A paused pipeline turns the bar blue and says nothing more, as
+     Concourse's top bar does; a disabled button says why in its tooltip.
+     The groups close back to back: a test finds the bar's end that way. */}}
+{{define "actionbar"}}{{if .Nav.Anchored}}<div class="actionbar{{if .Nav.Paused}} paused{{end}}" role="toolbar" aria-label="Actions"><div class="group">{{if .Nav.ReadOnly}}{{if .Nav.Paused}}<span class="st st-paused">paused</span> <span class="dim">unpause with <code>steps pipeline unpause -p {{.Nav.Current}}</code></span>{{end}}{{else}}<form method="post" action="/p/{{.Nav.Current}}/{{if .Nav.Paused}}unpause{{else}}pause{{end}}"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit" title="{{if .Nav.Paused}}resume polling and starting runs{{else}}stop polling and starting runs until unpaused{{end}}" aria-pressed="{{.Nav.Paused}}">{{if .Nav.Paused}}▶ Unpause{{else}}⏸ Pause{{end}}</button></form>{{end}}</div>{{with .Bar}}{{if not $.Nav.ReadOnly}}<div class="group">
+    {{if .Held}}<form method="post" action="/p/{{$.Nav.Current}}/jobs/{{.Job}}/release"><button class="btn" type="submit" title="let new versions trigger {{.Job}} again">Release</button></form>{{end}}
+    {{if .Job}}<form method="post" action="/p/{{$.Nav.Current}}/jobs/{{.Job}}/trigger"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="the pipeline is paused"{{else}} title="a new run of {{.Job}}, with the newest versions"{{end}}>↻ Trigger</button></form>
+    {{if .NoCache}}<form method="post" action="/p/{{$.Nav.Current}}/jobs/{{.Job}}/trigger"><input type="hidden" name="force" value="all"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="the pipeline is paused"{{else}} title="a new run of {{.Job}} that runs every step, even unchanged ones"{{end}}>↻ Trigger, no cache</button></form>{{end}}{{end}}
+    {{if .Retry}}<form method="post" action="/p/{{$.Nav.Current}}/runs/{{.RunID}}/rerun"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="the pipeline is paused"{{else}} title="run this build again, with the same inputs"{{end}}>⟲ Retry</button></form>{{end}}
+    {{if .Abort}}<form method="post" action="{{.Abort}}"><button class="btn danger" type="submit" title="stop it">■ Abort</button></form>{{end}}
+  </div>{{end}}{{end}}</div>{{end}}{{end}}

@@ -52,6 +52,8 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		ctx = withResume(ctx, resume)
 	}
 
+	skipCache = rerunSkipsCache(ctx, skipCache)
+
 	// Publish the run's identity where packages that cannot import this one
 	// can still stamp it on their events — internal/agent, tagging every
 	// conversation turn with the run it belongs to.
@@ -339,6 +341,11 @@ func runJobPlan(
 	// not disturb any other build's progress. --force only skips the cache;
 	// it never re-opens a taken version.
 	resolution, err = resumeInputSets(ctx, r.st, resolution, history)
+	if err != nil {
+		return fmt.Errorf("job %q: %w", job.Name, err)
+	}
+
+	resolution, err = rerunInputSets(ctx, r.st, resolution, history)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}

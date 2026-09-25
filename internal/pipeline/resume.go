@@ -253,6 +253,13 @@ func recordRunIdentity(
 		return fmt.Errorf("job %q: %w", jobName, err)
 	}
 
+	if rerun := rerunFrom(ctx); rerun != nil {
+		err = st.RecordRunRerun(ctx, resume.id, rerun.of, rerun.build)
+		if err != nil {
+			return fmt.Errorf("job %q: %w", jobName, err)
+		}
+	}
+
 	return nil
 }
 

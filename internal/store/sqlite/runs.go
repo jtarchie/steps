@@ -32,8 +32,8 @@ const revisionBySHA = `(SELECT id FROM pipeline_revisions WHERE pipeline_id = ? 
 // is the same list for a query that aliases runs as r). scanRunRow decodes
 // exactly this order.
 const (
-	runColumns  = `id, job_name, workspace, status, started_at, COALESCE(finished_at, ''), COALESCE(parent_run_id, ''), ` + configSHA
-	runColumnsR = `r.id, r.job_name, r.workspace, r.status, r.started_at, COALESCE(r.finished_at, ''), COALESCE(r.parent_run_id, ''), ` + configSHAR
+	runColumns  = `id, job_name, workspace, status, started_at, COALESCE(finished_at, ''), COALESCE(parent_run_id, ''), ` + configSHA + `, COALESCE(rerun_of, ''), COALESCE(rerun_of_build, 0)`
+	runColumnsR = `r.id, r.job_name, r.workspace, r.status, r.started_at, COALESCE(r.finished_at, ''), COALESCE(r.parent_run_id, ''), ` + configSHAR + `, COALESCE(r.rerun_of, ''), COALESCE(r.rerun_of_build, 0)`
 	// A subselect rather than a join, so adding the column changed no query's
 	// shape: several of the reads above already join, group and alias, and a
 	// second join would have had to be threaded correctly through each one
@@ -52,7 +52,7 @@ func scanRunRow(sc rowScanner) (store.RunRow, error) {
 		startedAt, finishedAt string
 	)
 
-	err := sc.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt, &row.ParentRunID, &row.ConfigSHA)
+	err := sc.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt, &row.ParentRunID, &row.ConfigSHA, &row.RerunOf, &row.RerunOfBuild)
 
 	row.StartedAt = parseTimestamp(startedAt)
 	row.FinishedAt = parseTimestamp(finishedAt)
@@ -192,6 +192,17 @@ func (s *Store) RecordRunParent(ctx context.Context, runID, parentID string) err
 	return nil
 }
 
+// RecordRunRerun is RecordRunParent's twin, and a statement of its own for the same reason.
+func (s *Store) RecordRunRerun(ctx context.Context, runID, originalID string, build int) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE runs SET rerun_of = ?, rerun_of_build = ? WHERE id = ? AND pipeline_id = ?`, originalID, build, runID, s.pipelineID)
+	if err != nil {
+		return fmt.Errorf("could not record what run %q reran: %w", runID, err)
+	}
+
+	return nil
+}
+
 // CompletedRunSteps returns the steps a run already finished, in the order
 // they finished — by rowid, since the build id as text sorts #10 before #2.
 func (s *Store) CompletedRunSteps(ctx context.Context, runID string) ([]store.RunStep, error) {
@@ -228,14 +239,25 @@ func (s *Store) ListRuns(ctx context.Context, jobName string, limit int) ([]stor
 
 // LatestRunByJob returns the most recent run for every job that has one,
 // keyed by job name — one query for a jobs board rather than one per job.
+//
+// A rerun counts only when it reruns the job's latest other run, which is
+// Concourse's rule (updateLatestCompletedBuildForJob): a green retry of an old
+// build must not turn a job that is red today green.
 func (s *Store) LatestRunByJob(ctx context.Context) (map[string]store.RunRow, error) {
 	// Ties broken by rowid, as ListRuns breaks them, so the jobs board and a job's history agree on which run is latest.
 	rows, err := collect(ctx, s.db, "latest runs", `
 		SELECT `+runColumns+` FROM (
 		    SELECT *, ROW_NUMBER() OVER (PARTITION BY job_name ORDER BY started_at DESC, rowid DESC) AS recency
-		    FROM runs WHERE pipeline_id = ?
+		    FROM runs
+		    WHERE pipeline_id = ?
+		      AND (rerun_of IS NULL OR rerun_of IN (
+		          SELECT id FROM (
+		              SELECT id, ROW_NUMBER() OVER (PARTITION BY job_name ORDER BY started_at DESC, rowid DESC) AS recency
+		              FROM runs WHERE pipeline_id = ? AND rerun_of IS NULL
+		          ) WHERE recency = 1
+		      ))
 		) WHERE recency = 1
-	`, []any{s.pipelineID}, scanRunRowFrom)
+	`, []any{s.pipelineID, s.pipelineID}, scanRunRowFrom)
 	if err != nil {
 		return nil, err
 	}

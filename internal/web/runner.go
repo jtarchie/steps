@@ -20,6 +20,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -108,6 +109,16 @@ func (r *LocalRunner) StopWith(process context.Context) { r.process = process }
 // SetProvider installs the workspace a pipeline's runs materialize in, retiring whatever it replaces once the runs holding it finish.
 func (r *LocalRunner) SetProvider(slug string, provider workspace.Provider) {
 	r.providers.set(slug, provider)
+}
+
+// EnqueueRerun puts a person's retry of one build on the pipeline's queue.
+func (r *LocalRunner) EnqueueRerun(ctx context.Context, target *Pipeline, jobName, runID string, build int) error {
+	err := target.Store.EnqueueRerunJob(ctx, jobName, "retry (web)", runID, build)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	return nil
 }
 
 // RemoveProvider retires a destroyed pipeline's workspace, once nothing is running in it.
@@ -316,8 +327,16 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 		return false
 	}
 
-	// Before anything can finalize the row without running it (a job the config dropped, one the breaker paused), since the claim is what spends a force.
-	force := r.takeForce(target.Slug, jobName) || r.force
+	trigger, err := target.Store.QueuedTrigger(ctx, id)
+	if err != nil {
+		slog.Warn("web.queue_row", "pipeline", target.Slug, "job", jobName, "error", err)
+	}
+
+	// Before anything can finalize the row without running it (a job the config dropped, one the breaker paused), since the claim is what spends a force. A rerun spends none: it skips the cache anyway, and the flag belongs to the job's ordinary row.
+	force := r.force
+	if trigger.RerunOf == "" {
+		force = r.takeForce(target.Slug, jobName) || force
+	}
 
 	// One read of the served configuration for the whole claim, threaded from
 	// here. Two reads is two configurations: the watcher swaps this pointer
@@ -335,11 +354,11 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 		return true
 	}
 
-	if r.skipIfPaused(ctx, target, job.Name, id) {
+	if r.skipIfPaused(ctx, target, job.Name, id, trigger.Manual) {
 		return true
 	}
 
-	r.runAndFinalize(ctx, target, cfg, job, id, force)
+	r.runAndFinalize(ctx, target, cfg, job, id, force, trigger)
 
 	return true
 }
@@ -363,13 +382,13 @@ func finalizePanic(ctx context.Context, target *Pipeline, job *config.Job, id in
 
 // runAndFinalize executes one claimed job and records how it went.
 func (r *LocalRunner) runAndFinalize(
-	ctx context.Context, target *Pipeline, cfg *config.Config, job *config.Job, id int64, force bool,
+	ctx context.Context, target *Pipeline, cfg *config.Config, job *config.Job, id int64, force bool, trigger store.QueuedTrigger,
 ) {
 	slog.Info("web.job.run", "pipeline", target.Slug, "job", job.Name)
 
 	defer finalizePanic(ctx, target, job, id)
 
-	aborted, runErr := r.runJob(ctx, target, cfg, job, force)
+	aborted, runErr := r.runJob(ctx, target, cfg, job, force, trigger)
 
 	// Ahead of the interrupted case, which it also is: left running, the next startup re-runs a build somebody stopped. Not the job's own outcome either, so the breaker neither counts nor clears it.
 	if runErr != nil && aborted {
@@ -434,7 +453,7 @@ func interrupted(drain context.Context, runErr error) bool {
 
 // skipIfPaused finalizes a queued row for a job the circuit breaker has taken
 // out of the rotation, rather than running it — unless a person triggered it: the breaker stops automatic triggers, and a click on a held job is how somebody tries a fix.
-func (r *LocalRunner) skipIfPaused(ctx context.Context, target *Pipeline, jobName string, id int64) bool {
+func (r *LocalRunner) skipIfPaused(ctx context.Context, target *Pipeline, jobName string, id int64, manual bool) bool {
 	paused, err := target.Store.IsJobPaused(ctx, jobName)
 	if err != nil {
 		slog.Warn("web.breaker_error", "pipeline", target.Slug, "job", jobName, "error", err)
@@ -444,11 +463,6 @@ func (r *LocalRunner) skipIfPaused(ctx context.Context, target *Pipeline, jobNam
 
 	if !paused {
 		return false
-	}
-
-	manual, err := target.Store.QueuedManually(ctx, id)
-	if err != nil {
-		slog.Warn("web.breaker_error", "pipeline", target.Slug, "job", jobName, "error", err)
 	}
 
 	if manual {
@@ -498,7 +512,7 @@ func (r *LocalRunner) recordBreaker(ctx context.Context, target *Pipeline, job *
 // runJob executes one job with this pipeline's bus attached, so the run's
 // events reach any browser watching it.
 func (r *LocalRunner) runJob(
-	ctx context.Context, target *Pipeline, cfg *config.Config, job *config.Job, force bool,
+	ctx context.Context, target *Pipeline, cfg *config.Config, job *config.Job, force bool, trigger store.QueuedTrigger,
 ) (bool, error) {
 	provider, release, ok := r.providers.take(target.Slug)
 	if !ok {
@@ -538,8 +552,19 @@ func (r *LocalRunner) runJob(
 		panic(recovered)
 	}()
 
+	runCtx = pipeline.WithNewRun(runCtx, runID)
+
+	if trigger.RerunOf != "" {
+		var err error
+
+		runCtx, _, err = pipeline.PrepareRerun(runCtx, target.Store, trigger.RerunOf, trigger.RerunBuild)
+		if err != nil {
+			return false, fmt.Errorf("web: %w", err)
+		}
+	}
+
 	runErr := pipeline.RunJob(
-		events.WithBus(pipeline.WithNewRun(runCtx, runID), target.Bus), cfg, job, r.pinned, provider, target.Store, force)
+		events.WithBus(runCtx, target.Bus), cfg, job, r.pinned, provider, target.Store, force)
 
 	return errors.Is(context.Cause(runCtx), errAborted), runErr
 }

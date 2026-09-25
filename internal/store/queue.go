@@ -15,8 +15,10 @@ type Queue interface {
 	EnqueueJob(ctx context.Context, jobName, reason string) error
 	// EnqueueManualJob is EnqueueJob for a person's trigger: the row is marked manual, and a pending row it merges into becomes manual too, because the breaker holds back only what was triggered automatically.
 	EnqueueManualJob(ctx context.Context, jobName, reason string) error
-	// QueuedManually reports whether a claimed row carries a person's trigger.
-	QueuedManually(ctx context.Context, id int64) (bool, error)
+	// EnqueueRerunJob queues a retry of one build of a recorded run. It is a person's request, so it is manual; it is not merged into the job's ordinary pending row, since it builds different versions.
+	EnqueueRerunJob(ctx context.Context, jobName, reason, runID string, build int) error
+	// QueuedTrigger reads what a claimed row asks for.
+	QueuedTrigger(ctx context.Context, id int64) (QueuedTrigger, error)
 	// ClaimNextJob takes the oldest pending row admitted by serial: and
 	// max_in_flight, atomically, and reports false when nothing is ready.
 	ClaimNextJob(ctx context.Context) (int64, string, bool, error)
@@ -39,6 +41,13 @@ type Queue interface {
 	ResetJobFailures(ctx context.Context, jobName string) error
 	IsJobPaused(ctx context.Context, jobName string) (bool, error)
 	PausedJobs(ctx context.Context) ([]PausedJob, error)
+}
+
+// QueuedTrigger is what a claimed queue row asks for beyond its job: whether a person asked, and whether it retries one build of a recorded run.
+type QueuedTrigger struct {
+	Manual     bool
+	RerunOf    string
+	RerunBuild int
 }
 
 // QueueRow is one entry in the downstream-trigger queue.

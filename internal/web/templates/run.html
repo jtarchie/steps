@@ -25,23 +25,6 @@
       {{if $run.HasPlacements}}<span class="sep">·</span>{{len $run.Placements}} placed <a href="#machines">→ #machines</a>{{end}}
     </p>
   </div>
-  {{if not .Nav.ReadOnly}}
-  <div class="actions stacked">
-    {{if eq $run.Run.Status "running"}}
-    <form method="post" action="/p/{{.Nav.Current}}/runs/{{$run.Run.ID}}/abort">
-      <button class="btn danger" type="submit">■ Abort</button>
-    </form>
-    {{end}}
-    {{/* The first slot is Abort while running, as on Concourse's build page; #146's re-run with the same inputs takes it otherwise. */}}
-    {{if .JobDeclared}}
-    <form class="decide" method="post" action="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/trigger">
-      <button class="btn" type="submit"{{if .Nav.Paused}} disabled aria-describedby="trigger-why"{{end}}>▶ Trigger new run of {{$run.Run.JobName}}</button>
-      {{if not .Nav.Paused}}<span class="meta">newest versions, not this run's</span>{{end}}
-    </form>
-    {{template "triggerwhy" .}}
-    {{end}}
-  </div>
-  {{end}}
 </div>
 
 {{/* This job's recent runs, newest first, so hopping between them never
@@ -319,6 +302,7 @@
     {{with $step.Compactions}}<span class="note" title="Older turns were summarized to fit the context budget; the model worked from the summary after that point">compacted ×{{.}}</span>{{end}}
     {{if $step.CompactionStalled}}<span class="note spendwarn" title="The most recent turns alone outgrew compact_after_tokens, so compaction stopped for the rest of this conversation">compaction stalled</span>{{end}}
     <span class="headmeta">
+      {{if not $page.Nav.ReadOnly}}{{with index $page "BuildRetry"}}{{with index . $step.ID}}<form class="inline rowretry" method="post" action="/p/{{$page.Nav.Current}}/runs/{{$page.Run.Run.ID}}/rerun"><input type="hidden" name="build" value="{{.}}"><button class="btn" type="submit"{{if $page.Nav.Paused}} disabled title="the pipeline is paused"{{else}} title="run build #{{.}} again, with the same inputs"{{end}}>⟲ Retry</button></form>{{end}}{{end}}{{end}}
       {{with $step.Rollup}}{{if not .Empty}}<span class="rollup">
         <span>{{.Cells}} step{{if ne .Cells 1}}s{{end}}</span>
         {{if .Passed}}<span class="r-sep">·</span><b class="r-pass">{{.Passed}} passed</b>{{end}}

@@ -6,11 +6,6 @@
   {{/* What the drain checks before it claims, filled by the poll below; the first blocking line is the answer to "why hasn't it started?". */}}
   <ul class="followchecks" id="follow-checks" aria-live="polite"></ul>
   <p class="faint" id="follow-hint">This forwards to the run as soon as it starts.</p>
-  {{if not .Nav.ReadOnly}}
-  <form method="post" action="/p/{{.Nav.Current}}/jobs/{{.Job}}/queued/abort">
-    <button class="btn danger" type="submit">■ Abort before it starts</button>
-  </form>
-  {{end}}
   <p><a href="/p/{{.Nav.Current}}/jobs/{{.Job}}">← back to {{.Job}}</a></p>
 </div>
 {{end}}

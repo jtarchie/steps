@@ -155,6 +155,16 @@ tr.checkfail pre { margin: 0 0 4px; }
   white-space: nowrap;
 }
 .statusline .ro { color: var(--yellow); }
+/* One home for every action: the pipeline's pause at the left, the page's
+   job or run at the right. Paused turns the whole bar blue, as Concourse's
+   top bar does, rather than adding a banner. */
+.actionbar { flex-basis: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 14px; border-top: 1px solid var(--line-soft); }
+.actionbar .group { display: flex; flex-wrap: wrap; gap: 6px; }
+.actionbar form { margin: 0; }
+.actionbar .btn { padding: 3px 10px; font-size: 12px; white-space: nowrap; }
+.actionbar.paused { background: color-mix(in srgb, var(--blue) 16%, var(--panel)); border-top-color: var(--blue); }
+.actionbar.paused .btn[aria-pressed="true"] { color: var(--blue); border-color: var(--blue); }
+.rowretry .btn { padding: 1px 8px; font-size: 11px; }
 .statusline kbd {
   font-family: var(--mono);
   font-size: 11px;
@@ -168,7 +178,6 @@ tr.checkfail pre { margin: 0 0 4px; }
 .pipeswitch { position: relative; }
 .pipebtn { font: inherit; font-size: 12px; color: var(--dim); background: none; border: 0; cursor: pointer; padding: 0; }
 .pipebtn:hover { color: var(--fg); }
-.pipebtn.paused { color: var(--blue); }
 .pipemenu {
   display: none;
   position: absolute;
@@ -242,10 +251,6 @@ main { max-width: 1000px; margin: 0 auto; padding: 26px 20px 80px; }
 .pagehead .actions form { margin: 0; }
 /* Buttons that carry their consequence: one row per button, the sentence
    beside it, wrapping under it when narrow — never hidden in a tooltip. */
-.pagehead .actions.stacked { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 6px 10px; max-width: 560px; }
-.pagehead .actions.stacked .decide { display: contents; }
-.pagehead .actions.stacked > .meta { grid-column: 1 / -1; }
-.pagehead .actions .meta { font-family: var(--sans); font-size: 12px; color: var(--dim); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn:disabled:hover { border-color: var(--line); }
 
@@ -908,11 +913,6 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
   .mcp td.acts, .mcp th.acts { text-align: left; white-space: normal; }
   .mcp td.acts .inline { margin-left: 0; margin-right: 6px; }
   .mcp .mcp-meta, .mcp td.uses { max-width: none; }
-
-  /* The head's actions drop under the heading, left-aligned, each consequence
-     wrapping under its own button. */
-  .pagehead .actions { margin-left: 0; }
-  .pagehead .actions.stacked { max-width: none; grid-template-columns: minmax(0, 1fr); justify-items: start; }
 
   .stepbody { padding-left: 14px; }
   .subtrace { margin-left: 12px; }

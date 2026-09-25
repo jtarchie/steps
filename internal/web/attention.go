@@ -28,9 +28,7 @@ import (
 
 // attentionItem is one thing waiting on a person.
 type attentionItem struct {
-	// Kind is what it is, which the template needs because one item — the
-	// paused pipeline — is fixed by a button here rather than by a page
-	// somewhere else.
+	// Kind is what it is, for the item's class.
 	Kind string
 	// Tab is the nav tab whose badge carries this count, empty for an item no
 	// tab owns. A count is only worth showing where it is also a route.
@@ -42,9 +40,9 @@ type attentionItem struct {
 
 // attention gathers one pipeline's items, most-blocking first.
 //
-// The order is by blast radius rather than recency: a paused pipeline is the
-// reason none of the rest will resolve on its own, so it leads, and the two
-// items that are one person away bring up the rear.
+// The order is by blast radius rather than recency: the two items that are one
+// person away bring up the rear. A paused pipeline is not an item: the action
+// bar says it, and carries Unpause, on every page.
 //
 // Every probe answers nil rather than an error, and a read that fails answers
 // nil too. This runs on every render of every page, including the 2.5s
@@ -57,7 +55,6 @@ func (s *Server) attention(ctx context.Context, target *Pipeline) []attentionIte
 	base := "/p/" + target.Slug
 
 	found := []*attentionItem{
-		pausedItem(ctx, target),
 		pausedJobsItem(ctx, target, base),
 		failingChecksItem(ctx, target, base),
 		s.mcpItem(target, base),
@@ -74,16 +71,6 @@ func (s *Server) attention(ctx context.Context, target *Pipeline) []attentionIte
 	}
 
 	return items
-}
-
-// pausedItem is the one item no tab owns, and the only one fixed by a button
-// on the page reporting it.
-func pausedItem(ctx context.Context, target *Pipeline) *attentionItem {
-	if !paused(ctx, target) {
-		return nil
-	}
-
-	return &attentionItem{Kind: "paused", Count: 1, Detail: "this pipeline is paused"}
 }
 
 // pausedJobsItem: the breaker took these out of rotation on their own, and
