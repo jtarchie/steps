@@ -135,6 +135,72 @@ All three need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for 
 
 There is deliberately no `check:`/`in:` on `slack-reply` and no `out:` on `slack-mentions` — `get: reply` or `put: mentions` are both load errors, the same rule `git`'s missing `out:` follows.
 
+## The built-in `cron` type
+
+`type: cron` mints a version when a slot of a crontab expression passes — the trigger for a nightly report, an hourly sweep, a job that should run whether or not anything else changed. Nothing is fetched: the artifact is the moment itself. A port of [govuk-pay/cron-resource](https://github.com/govuk-pay/cron-resource), kept to its rules.
+
+```yaml
+resources:
+- name: tick
+  type: cron
+  source:
+    expression: "*/15 * * * *"     # every quarter hour
+    location: America/New_York     # optional; the zone the expression is read in, UTC otherwise
+    fire_immediately: true         # optional; the first-ever check mints a version instead of waiting
+
+jobs:
+- name: sweep
+  plan:
+  - get: tick
+    trigger: true
+  - task: show
+    inputs: [tick]
+    run: test -s tick/epoch && test -s tick/timestamp && grep -c '"time"' tick/version.json
+    assert:
+      stdout: "1"          # one line holds the version; the two files before it are non-empty
+  assert:
+    execution: [tick, show]
+    outcome: succeeded
+```
+
+| `source:` field | required | meaning |
+|---|---|---|
+| `expression` | yes | a crontab: five fields (`minute hour day-of-month month day-of-week`), six with seconds in front (`*/30 * * * * *`), or a descriptor (`@hourly`, `@daily`, `@weekly`) |
+| `location` | no | the zone the expression is read in, an IANA name such as `Europe/London`; UTC when unset |
+| `fire_immediately` | no | the first-ever check mints a version at once, instead of only when a slot fell in the last hour |
+
+**A poll is what wakes it.** There is no timer inside the resource: `steps web` reads the clock on every `--interval` (30s unless said otherwise), and the first poll after a slot passes mints the version. So a slot fires within one poll of its time, and a seconds field is honored in the expression but cannot fire faster than the poll — `*/5 * * * * *` under a 30s interval is a version every 30s. One version per poll at most: several slots between two polls fire once, and a daemon that was stopped over the nightly slot does not run it when it comes back.
+
+**The version is `{time}`**, the moment the check ran (RFC3339, UTC) rather than the slot it answered — `02:00:17Z` for a `0 2 * * *` polled at seventeen seconds past. That is what `epoch` means: when the job was released. A get writes three files:
+
+| file | what it holds |
+|---|---|
+| `version.json` | the version, `{"time": "2026-09-25T02:00:17Z"}` |
+| `timestamp` | the same moment in the resource's `location`, RFC3339 — `2026-09-24T22:00:17-04:00` |
+| `epoch` | seconds since the Unix epoch, an integer |
+
+**A first check is careful.** With nothing recorded there is no "since", so the check fires only if a slot fell in the **last hour** — a nightly pipeline set at three in the afternoon waits for two in the morning, and an every-ten-minutes one starts within its first poll. `fire_immediately: true` fires at once instead. This is a `steps web` behavior: `steps run` and `steps test` have no cursor, so every run of theirs is a first check — a get of a resource with no slot in the last hour fails as `no versions available`, which is the truth, and `fire_immediately` is how a one-shot run asks for the time regardless.
+
+```yaml noexec=schedule
+resources:
+- name: nightly
+  type: cron
+  source:
+    expression: "0 2 * * 1-5"      # two in the morning, Monday to Friday
+    location: America/New_York
+
+jobs:
+- name: report
+  plan:
+  - get: nightly
+    trigger: true
+  - task: summarize
+    inputs: [nightly]
+    run: echo "report for $(cat nightly/timestamp)"
+```
+
+There is deliberately no `out:` — `put: tick` is a load error, as it is for `git`. A step that wants the current time has `date`; a version whose only meaning is "now" is not something to publish. `tags:` is refused too, as for every type that runs inside this process: there is nothing to place.
+
 ## Writing a resource type
 
 A resource type is three shell commands. (For a resource that is a JSON HTTP API and nothing else, there is a second way to write them — see [expression resource types](expr.md), which trades containers and binary artifacts for concurrent HTTP and no dependency on `curl`/`jq`.) Each is a [template](templating.md) and each runs `sh -c`. This one is self-contained, so it runs anywhere:

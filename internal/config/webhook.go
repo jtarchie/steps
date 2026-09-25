@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
-
-	"gopkg.in/yaml.v3"
 )
 
 // envVarPattern is what a plausible environment variable name looks like.
@@ -42,14 +40,9 @@ const WebhookCustom = "custom"
 func (r Resource) WebhookSource() (WebhookSource, error) {
 	var source WebhookSource
 
-	raw, err := yaml.Marshal(r.Source)
+	err := decodeSource(r.Source, &source)
 	if err != nil {
 		return source, fmt.Errorf("resource %q: %w", r.Name, err)
-	}
-
-	err = strictUnmarshal(raw, &source)
-	if err != nil {
-		return source, fmt.Errorf("resource %q: source: %w", r.Name, err)
 	}
 
 	switch {

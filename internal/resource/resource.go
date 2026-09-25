@@ -65,9 +65,15 @@ func CheckVersions(
 	case config.BackendWebhook:
 		// No check: a webhook resource's versions are the deliveries it was sent, so asking finds nothing new — and a get with none recorded fails as "no versions available", which is the truth.
 		return nil, nil
+	case config.BackendCron:
+		return cronCheckVersions(ctx, rt, source, version)
 	case config.BackendShell:
 	}
 
+	return shellCheckVersions(ctx, rt, extraEnv, source, version)
+}
+
+func shellCheckVersions(ctx context.Context, rt config.ResourceType, extraEnv []string, source, version map[string]any) ([]map[string]any, error) {
 	events.Logger(ctx).Debug("resource.check", "resource_type", rt.Name, "source", source, "version", version)
 
 	command, err := template.Render(rt.Config.Check, map[string]any{"source": source, "version": version})
@@ -285,6 +291,8 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, extr
 		return exprRunIn(ctx, rt, extraEnv, source, version, params, destDir)
 	case config.BackendWebhook:
 		return errWebhookIn
+	case config.BackendCron:
+		return cronRunIn(rt, source, version, destDir)
 	case config.BackendShell:
 	}
 
@@ -339,6 +347,8 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, ext
 		return exprRunOut(ctx, rt, extraEnv, source, params, srcDir)
 	case config.BackendWebhook:
 		return nil, fmt.Errorf("out %q: a webhook resource cannot be put to", rt.Name)
+	case config.BackendCron:
+		return nil, fmt.Errorf("out %q: %w", rt.Name, errCronOut)
 	case config.BackendShell:
 	}
 
