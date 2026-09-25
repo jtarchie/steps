@@ -83,11 +83,11 @@ func checkCredential(srv config.MCPServer) (*TokenFile, string, credentialFault,
 
 	tf, err := LoadTokenFile(path)
 	if err != nil {
-		return nil, path, faultNoToken, fmt.Errorf("mcp server %q is not authorized (%w %s, with -c <pipeline.yml> on this machine or -p <pipeline> --target <url> for a daemon): %w", srv.Name, ErrNeedsLogin, srv.Name, err)
+		return nil, path, faultNoToken, fmt.Errorf("mcp server %q is not authorized (%w for %s, with -c <pipeline.yml> on this machine or -p <pipeline> --target <url> for a daemon): %w", srv.Name, ErrNeedsLogin, srv.Name, err)
 	}
 
 	if tf.Endpoint != srv.Endpoint {
-		return nil, path, faultWrongEndpoint, fmt.Errorf("mcp server %q: authorized for a different endpoint (%w %s again)", srv.Name, ErrNeedsLogin, srv.Name)
+		return nil, path, faultWrongEndpoint, fmt.Errorf("mcp server %q: authorized for a different endpoint (%w for %s again)", srv.Name, ErrNeedsLogin, srv.Name)
 	}
 
 	// Caught here rather than left to x/oauth2, which answers this exact state with a bare "token expired and refresh token is not set" — true, but it names neither the server nor the fix, and it arrives only after the transport has already been built. The state is knowable from the file alone, so it is answered from the file alone.
