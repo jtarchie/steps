@@ -48,7 +48,7 @@ func (p agentGenParams) applyTo(cfg *genai.GenerateContentConfig) {
 
 	if p.maxTokens > 0 {
 		tokens := min(p.maxTokens, math.MaxInt32)
-		cfg.MaxOutputTokens = int32(tokens)
+		cfg.MaxOutputTokens = int32(tokens) //nolint:gosec // bounded by the min above
 	}
 
 	if level, ok := reasoningLevels[p.reasoning]; ok {
