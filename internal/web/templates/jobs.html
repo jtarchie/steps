@@ -11,7 +11,7 @@
      above carries Unpause. Here rather than in the chrome because pausing a
      pipeline is a deliberate act and the board is where one is deliberating;
      a button on every page is one to hit by accident. */}}
-<div id="pause-control">{{if and (not .Nav.Paused) (not .Nav.ReadOnly)}}<form class="decide" method="post" action="/p/{{.Nav.Current}}/pause"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit">Pause pipeline</button><span class="meta">stops polling, admission and triggering until resumed</span></form>{{end}}</div>
+<div id="pause-control">{{if and (not .Nav.Paused) (not .Nav.ReadOnly)}}<form class="decide" method="post" action="/p/{{.Nav.Current}}/pause"><input type="hidden" name="return" value="{{.Nav.URL}}"><button class="btn" type="submit">Pause pipeline</button><span class="meta">stops polling, admission and triggering until unpaused</span></form>{{end}}</div>
 
 <div class="dagwrap" id="jobs-graph">
   {{/* role=group, not img: an image's children are presentational, which
@@ -31,7 +31,7 @@
 <div class="tablewrap" id="jobs-list" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#jobs-list" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#pause-control:outerMorph,#jobs-meta:outerMorph,#jobs-graph:outerMorph,#queue-region:outerMorph,#statusline:outerMorph">
   <table>
     <thead>
-      <tr><th>Job</th><th>Latest run</th><th>Started</th><th class="num">Duration</th><th>Depends on</th><th>Breaker</th></tr>
+      <tr><th>Job</th><th>Latest run</th><th>Started</th><th class="num">Duration</th><th>Depends on</th><th>State</th></tr>
     </thead>
     <tbody>
       {{range .Jobs}}
@@ -46,7 +46,7 @@
         <td class="dim">
           {{range .Upstream}}<a href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a> <span class="res">[{{.Resource}}]</span> {{else}}<span class="faint">—</span>{{end}}
         </td>
-        <td>{{if .Paused}}<span class="st-failed">{{.Failures}} consecutive</span>{{else}}<span class="faint">—</span>{{end}}</td>
+        <td>{{if .Held}}<span class="st st-held">held</span> <span class="dim">after {{.Failures}} failure{{if ne .Failures 1}}s{{end}} · {{agoText .HeldAt}}</span>{{else}}<span class="faint">—</span>{{end}}</td>
       </tr>
       {{end}}
     </tbody>

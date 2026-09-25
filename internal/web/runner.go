@@ -53,7 +53,7 @@ type LocalRunner struct {
 	// force is --force: every job this process drains ignores the cache,
 	// however it was enqueued. A property of the process like pinned, and
 	// separate from `forced` below, which is one browser request asking for
-	// one re-run.
+	// one run without the cache.
 	force bool
 	// Only the end of process (StopWith) is a shutdown, the one thing a build that is not interruptible: waits out.
 	process context.Context //nolint:containedctx // a lifetime to compare against, never one a call runs under
@@ -127,10 +127,10 @@ func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, re
 		return 0, nil
 	}
 
-	// The row id is not returned by EnqueueJob, so mark the job itself: the
+	// The row id is not returned by EnqueueManualJob, so mark the job itself: the
 	// next claim of this job consumes the flag. Two forced requests for one
 	// job collapse into one forced run, which is what a person double-clicking
-	// "re-run" meant anyway.
+	// the button meant anyway.
 	r.mu.Lock()
 	r.forced[jobKey(target.Slug, jobName)] = true
 	r.mu.Unlock()
@@ -455,8 +455,8 @@ func (r *LocalRunner) skipIfPaused(ctx context.Context, target *Pipeline, jobNam
 		return false
 	}
 
-	slog.Warn("web.job.paused", "pipeline", target.Slug, "job", jobName,
-		"resume", "steps jobs resume "+jobName+" -p <pipeline>")
+	slog.Warn("web.job.held", "pipeline", target.Slug, "job", jobName,
+		"release", "steps jobs release "+jobName+" -p <pipeline>")
 
 	err = target.Store.CompleteJob(context.WithoutCancel(ctx), id, "skipped", nil)
 	if err != nil {
@@ -487,12 +487,12 @@ func (r *LocalRunner) recordBreaker(ctx context.Context, target *Pipeline, job *
 		return
 	}
 
-	slog.Warn("web.job_paused",
+	slog.Warn("web.job_held",
 		"pipeline", target.Slug,
 		"job", job.Name,
 		"consecutive_failures", consecutive,
 		"max_consecutive_failures", job.MaxConsecutiveFailures,
-		"resume", "steps jobs resume "+job.Name+" -p <pipeline>")
+		"release", "steps jobs release "+job.Name+" -p <pipeline>")
 }
 
 // runJob executes one job with this pipeline's bus attached, so the run's

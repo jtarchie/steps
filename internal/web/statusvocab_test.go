@@ -147,44 +147,35 @@ func TestJobPageSaysPassedNotGreen(t *testing.T) {
 	}
 }
 
-// TestBreakerCardSharesVocabularyAndNamesTheResumeCommand — the breaker card
-// follows the same contract as approvals: relative time, a job link, and a
-// read-only hint naming the EXACT command. The hint said `steps web`, which
-// on a machine sharing the state file is the forbidden second daemon; the
-// real command is `steps jobs resume <job> -p <pipeline>`.
-func TestBreakerCardSharesVocabularyAndNamesTheResumeCommand(t *testing.T) {
+// TestAHeldJobIsSaidOnTheJobsBoardAndItsPage: held is a job's state, so it lives with the job — it used to be a card on the resources page, where nobody looks for a job. The read-only hint names the EXACT command: it once said `steps web`, which on a machine sharing the state file is the forbidden second daemon.
+func TestAHeldJobIsSaidOnTheJobsBoardAndItsPage(t *testing.T) {
 	t.Parallel()
 
 	// testPipeline passes runner == nil, which IS the read-only deployment.
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	paused, _, err := pipeline.Store.RecordJobOutcome(ctx, "build", false, 1)
-	if err != nil {
-		t.Fatalf("RecordJobOutcome: %v", err)
+	held, _, err := pipeline.Store.RecordJobOutcome(ctx, "build", false, 1)
+	if err != nil || !held {
+		t.Fatalf("RecordJobOutcome = %v, %v: the job was not held", held, err)
 	}
 
-	if !paused {
-		t.Fatal("job did not pause")
+	_, board := get(t, server, "/p/demo")
+
+	if !strings.Contains(board, `<span class="st st-held">held</span> <span class="dim">after 1 failure · <time data-ago=`) {
+		t.Error("the jobs board does not say the job is held, since when")
 	}
 
-	_, body := get(t, server, "/p/demo/resources")
-
-	if !strings.Contains(body, `<time data-ago=`) {
-		t.Error("breaker card shows a raw timestamp, not relative time")
+	_, resources := get(t, server, "/p/demo/resources")
+	if strings.Contains(resources, "Circuit breaker") {
+		t.Error("the resources page still carries the job breaker")
 	}
 
-	if !strings.Contains(body, `href="/p/demo/jobs/build"`) {
-		t.Error("breaker card does not link its job")
-	}
-
-	if !strings.Contains(body, "steps jobs resume ") {
-		t.Error("read-only breaker card does not name the resume command")
-	}
+	_, page := get(t, server, "/p/demo/jobs/build/detail")
 
 	// The pipeline's NAME rather than a path: a served pipeline no longer has a file on this machine, and the name is what every verb takes.
-	if !strings.Contains(body, "steps jobs resume build -p demo</code>") {
-		t.Error("resume hint does not name the paused job and the pipeline it is in")
+	if !strings.Contains(page, "<code>steps jobs release build -p demo</code>") {
+		t.Error("read-only job page does not name the release command for the held job and its pipeline")
 	}
 }
 
@@ -204,4 +195,79 @@ func TestJobsBoardSaysNeverRanInBothViews(t *testing.T) {
 	if strings.Count(body, "never ran") < 2 {
 		t.Error("expected both the list and the graph to say \"never ran\"")
 	}
+}
+
+// TestEveryStateHasOneWordGlyphAndColour: one vocabulary across every page (.design/run-actions-and-states). A human stop is not a failure, so aborted and a paused pipeline are not drawn red with ✗; queued is not a verdict, so it is not coloured like running; errored is the machinery breaking, so it does not share failed's glyph.
+func TestEveryStateHasOneWordGlyphAndColour(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+	_, css := get(t, server, "/static/app.css")
+
+	for _, tc := range []struct{ stored, word, glyph, colour string }{
+		{"pending", "queued", "○", "--faint"},
+		{"running", "running", "◐", "--yellow"},
+		{"succeeded", "passed", "✓", "--green"},
+		{"failed", "failed", "✗", "--red"},
+		{"errored", "errored", "!", "--red"},
+		{"aborted", "aborted", "■", "--dim"},
+		{"paused", "paused", "⏸", "--blue"},
+		{"held", "held", "⊘", "--red"},
+	} {
+		if got := statusWord(tc.stored); got != tc.word {
+			t.Errorf("statusWord(%q) = %q, want %q", tc.stored, got, tc.word)
+		}
+
+		if !cssRule(css, ".st.st-"+tc.word+"::before", `content: "`+tc.glyph+` "`) {
+			t.Errorf("%s: no .st::before rule drawing %q", tc.word, tc.glyph)
+		}
+
+		if !cssRule(css, ".st-"+tc.word, "color: var("+tc.colour+")") {
+			t.Errorf("%s: not coloured %s", tc.word, tc.colour)
+		}
+	}
+}
+
+// TestTheOverviewSaysPausedInBlueAndActiveOtherwise: "running" beside a pipeline read as a run in progress, and a paused one was drawn as a failure.
+func TestTheOverviewSaysPausedInBlueAndActiveOtherwise(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := testPipelines(t, "held", "live")
+
+	err := pipelines[0].Store.Pause(t.Context())
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	_, body := get(t, server, "/")
+
+	if !strings.Contains(body, `<span class="st st-paused">paused</span>`) {
+		t.Error("a paused pipeline is not drawn with the paused chip")
+	}
+
+	if !strings.Contains(body, `<span class="dim">active</span>`) {
+		t.Error("an unpaused pipeline does not read active")
+	}
+
+	if strings.Contains(body, `<span class="dim">running</span>`) {
+		t.Error("an unpaused pipeline still reads running, the word a run in progress uses")
+	}
+}
+
+// cssRule reports whether some rule whose selector list names selector declares decl.
+func cssRule(css, selector, decl string) bool {
+	for _, rule := range strings.Split(css, "}") {
+		head, body, ok := strings.Cut(rule, "{")
+		if !ok || !strings.Contains(body, decl) {
+			continue
+		}
+
+		for _, sel := range strings.Split(head, ",") {
+			if strings.TrimSpace(sel[strings.LastIndex(sel, "\n")+1:]) == selector {
+				return true
+			}
+		}
+	}
+
+	return false
 }

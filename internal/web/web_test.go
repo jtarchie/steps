@@ -657,7 +657,7 @@ func TestTriggerForcesOnlyWhenAsked(t *testing.T) {
 		t.Errorf("forced = %v, want [false false true]", runner.forced)
 	}
 
-	if strings.Join(runner.reasons, "|") != "manual (web)|manual (web)|manual re-run, forced (web)" {
+	if strings.Join(runner.reasons, "|") != "trigger (web)|trigger (web)|trigger, no cache (web)" {
 		t.Errorf("reasons = %q", runner.reasons)
 	}
 }
@@ -939,6 +939,77 @@ func TestFollowSaysAJobHeldByItsSerialGroupIsQueued(t *testing.T) {
 	}
 }
 
+// TestFollowSaysWhatAQueuedRunIsWaitingOn: after two minutes the page used to guess "Is a runner draining this queue?". It can say which of the drain's own checks is blocking, as Concourse's "preparing build" does — and only checks the drain actually makes.
+func TestFollowSaysWhatAQueuedRunIsWaitingOn(t *testing.T) {
+	t.Parallel()
+
+	server, st := serialGroupServer(t)
+
+	enqueueAndClaim(t, st, "deploy-staging")
+
+	if _, got, ok := enqueueAndClaim(t, st, "deploy-prod"); ok {
+		t.Fatalf("claimed %q while deploy-staging holds deploy-lock", got)
+	}
+
+	err := st.Pause(t.Context())
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	since := time.Now().UTC().Add(-time.Minute).UnixMilli()
+
+	for job, want := range map[string][]followCheck{
+		"deploy-prod": {
+			{Text: "the pipeline is paused", Clear: false},
+			{Text: "deploy-staging holds its serial group", Clear: false},
+			{Text: "its max_in_flight (1) has room", Clear: true},
+			{Text: "no worker has claimed it yet", Clear: false},
+		},
+		"deploy-staging": {
+			{Text: "the pipeline is paused", Clear: false},
+			{Text: "a worker has claimed it", Clear: true},
+		},
+	} {
+		answer, body := latestRun(t, server, fmt.Sprintf("/p/demo/jobs/%s/latest-run?since=%d", job, since))
+		if fmt.Sprint(answer.Checks) != fmt.Sprint(want) {
+			t.Errorf("%s: checks = %s, want %v", job, body, want)
+		}
+	}
+
+	err = st.Unpause(t.Context())
+	if err != nil {
+		t.Fatalf("Unpause: %v", err)
+	}
+
+	answer, body := latestRun(t, server, fmt.Sprintf("/p/demo/jobs/deploy-prod/latest-run?since=%d", since))
+	if len(answer.Checks) == 0 || answer.Checks[0] != (followCheck{Text: "the pipeline is not paused", Clear: true}) {
+		t.Errorf("deploy-prod: checks = %s, want the pause check clear once unpaused", body)
+	}
+
+	// lint has nothing queued: a checklist there would blame a worker for a run nobody asked for.
+	if answer, body := latestRun(t, server, fmt.Sprintf("/p/demo/jobs/lint/latest-run?since=%d", since)); len(answer.Checks) != 0 {
+		t.Errorf("lint: checks = %s, want none with nothing queued", body)
+	}
+}
+
+// TestFollowPageSpeaksTheRunPagesLanguage: its heading was `steps trigger <job>`, a command that does not exist.
+func TestFollowPageSpeaksTheRunPagesLanguage(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+	_, body := get(t, server, "/p/demo/jobs/build/follow?since=0")
+
+	for _, want := range []string{`<b>steps run build</b> <span class="st st-queued">queued</span></h1>`, `<span class="here">queued</span>`, `id="follow-checks"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("follow page is missing %q", want)
+		}
+	}
+
+	if strings.Contains(body, "steps trigger") || strings.Contains(body, "Is a runner draining") {
+		t.Error("follow page still names a command that does not exist, or guesses")
+	}
+}
+
 // serialGroupServer serves two jobs sharing one serial group and a third in none, with the group already synced to the queue.
 func serialGroupServer(t *testing.T) (*Server, store.Store) {
 	t.Helper()
@@ -1005,8 +1076,9 @@ func enqueueAndClaim(t *testing.T, st store.Store, job string) (int64, string, b
 }
 
 type latestRunAnswer struct {
-	Run   *string `json:"run"`
-	State string  `json:"state"`
+	Run    *string       `json:"run"`
+	State  string        `json:"state"`
+	Checks []followCheck `json:"checks"`
 }
 
 func latestRun(t *testing.T, server *Server, target string) (latestRunAnswer, string) {
@@ -1715,7 +1787,7 @@ func TestRunPageTriggerIsNotForced(t *testing.T) {
 	action := "/p/demo/jobs/build/trigger"
 	post(t, server, action, formFields(t, page, action))
 
-	if fmt.Sprint(runner.forced) != "[false]" || strings.Join(runner.reasons, "|") != "manual (web)" {
+	if fmt.Sprint(runner.forced) != "[false]" || strings.Join(runner.reasons, "|") != "trigger (web)" {
 		t.Errorf("forced = %v reasons = %q, want an ordinary trigger", runner.forced, runner.reasons)
 	}
 }

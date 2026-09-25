@@ -125,21 +125,6 @@ func TestResourcesPageLinksItsVersionHistory(t *testing.T) {
 	}
 }
 
-// TestJobPageExplainsReadOnly: a read-only server HIDES the trigger buttons;
-// it has to say why, the way approvals already do.
-func TestJobPageExplainsReadOnly(t *testing.T) {
-	t.Parallel()
-
-	// testPipeline passes runner == nil, which IS the read-only deployment.
-	server, _ := testPipeline(t)
-
-	_, body := get(t, server, "/p/demo/jobs/build/detail")
-
-	if !strings.Contains(body, "This server is read-only. Trigger with") {
-		t.Error("read-only job page does not explain how to trigger from the CLI")
-	}
-}
-
 // A reader arrives at a broken mcp server from a RED RUN, not from the nav bar: the question "why are this agent's tools failing" is asked on the page where the failure is, and until this link existed the answer was on a tab you had to know about. The run page is also the only place that can carry it, since the job error is drawn there and nowhere the live stream reaches.
 func TestARunThatFailedOnAnMCPServerLinksTheMCPTab(t *testing.T) {
 	t.Parallel()

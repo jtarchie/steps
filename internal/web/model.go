@@ -477,11 +477,13 @@ func diffAgainst(current, prior runView) []string {
 
 // jobView is a job as the board and the job page show it.
 type jobView struct {
-	Name     string
-	Latest   store.RunRow
-	HasRun   bool
-	Paused   bool
+	Name   string
+	Latest store.RunRow
+	HasRun bool
+	// Held is the circuit breaker's state (max_consecutive_failures), never a person's pause.
+	Held     bool
 	Failures int
+	HeldAt   string
 	// Upstream and Downstream are the passed: constraint graph, per resource.
 	Upstream   []edgeView
 	Downstream []edgeView
@@ -523,7 +525,7 @@ func buildJobView(job config.Job, latest map[string]store.RunRow, pausedBy map[s
 	}
 
 	if breaker, ok := pausedBy[job.Name]; ok {
-		view.Paused, view.Failures = true, breaker.Consecutive
+		view.Held, view.Failures, view.HeldAt = true, breaker.Consecutive, breaker.PausedAt
 	}
 
 	for resource, upstream := range job.PassedConstraints() {

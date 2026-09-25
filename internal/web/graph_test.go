@@ -108,7 +108,7 @@ func TestGraphNodesCarryStatusWord(t *testing.T) {
 		"b": {"never ran", "○"},
 		"c": {"failed", "✗"},
 		"d": {"running", "◐"},
-		"e": {"pending", "○"},
+		"e": {"queued", "○"},
 	}
 
 	for name, expect := range want {

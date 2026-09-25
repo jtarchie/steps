@@ -315,6 +315,8 @@ func statusWord(status string) string {
 	switch status {
 	case "succeeded", "done":
 		return "passed"
+	case "pending":
+		return "queued"
 	case "":
 		return "running"
 	default:
@@ -453,10 +455,16 @@ func statusMark(status string) string {
 	switch statusWord(status) {
 	case "passed":
 		return "✓"
-	case "failed", "errored", "aborted":
+	case "failed":
 		return "✗"
+	case "errored":
+		return "!"
+	case "aborted":
+		return "■"
 	case "running":
 		return "◐"
+	case "queued":
+		return "○"
 	default:
 		return ""
 	}
@@ -469,6 +477,9 @@ func statusMark(status string) string {
 var faviconDots = map[string]string{
 	"✓": faviconSVG("%2384c06d"),
 	"✗": faviconSVG("%23e0645a"),
+	"!": faviconSVG("%23e0645a"),
+	"■": faviconSVG("%2383887b"),
+	"○": faviconSVG("%23565b50"),
 	"◐": faviconSVG("%23d9a94a"),
 	"":  faviconSVG("%2383887b"),
 }

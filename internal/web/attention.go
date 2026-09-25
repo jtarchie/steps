@@ -96,7 +96,7 @@ func pausedJobsItem(ctx context.Context, target *Pipeline, base string) *attenti
 
 	return &attentionItem{
 		Kind: "jobs", Tab: "jobs", Count: len(jobs), URL: base,
-		Detail: countOf(len(jobs), "job", "jobs") + " paused after repeated failures",
+		Detail: countOf(len(jobs), "job", "jobs") + " held by the breaker after repeated failures",
 	}
 }
 

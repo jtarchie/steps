@@ -14,6 +14,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -426,11 +427,6 @@ func (s *Server) handleResources(c *echo.Context) error {
 		return fmt.Errorf("web: %w", err)
 	}
 
-	paused, err := pipeline.Store.PausedJobs(ctx)
-	if err != nil {
-		return fmt.Errorf("web: %w", err)
-	}
-
 	// The header's "N resources are failing their checks" links HERE, so this
 	// is the page that owes the reader the reason. Without it the banner sends
 	// somebody to a table of timestamps that looks fine.
@@ -445,7 +441,6 @@ func (s *Server) handleResources(c *echo.Context) error {
 		"Resources": pipeline.Config().Resources,
 		"Checked":   checkedByName(checked),
 		"Failing":   failingByName(failing),
-		"Paused":    paused,
 	})
 }
 
@@ -547,12 +542,13 @@ func failingByName(rows []store.CheckError) map[string]store.CheckError {
 // "Re-run", and a tab left open through the deploy must not keep forcing.
 const forceAll = "all"
 
-// handleTrigger queues a job. force re-runs every step, ignoring the merkle
-// cache — without it a re-run of an unchanged pipeline correctly does almost
-// nothing, which is never what someone pressing "re-run" meant. It does not
-// re-take versions a `version: every` get already built (#145): those are
-// effects, and replaying a resource's history is not what "re-run" means.
-// Only the job page offers it, labelled; everywhere else is an ordinary trigger.
+// handleTrigger queues a person's trigger of a job. force ignores the merkle
+// cache — without it an unchanged pipeline correctly does almost nothing, which
+// is not always what the person pressing it wanted. It does not re-take
+// versions a `version: every` get already built (#145): those are effects, and
+// replaying a resource's history is not what anyone asked for. Only the job page
+// offers it, as "Trigger new run without cache"; "re-run" is kept for #146,
+// re-running a run with its own inputs.
 func (s *Server) handleTrigger(c *echo.Context) error {
 	if s.runner == nil {
 		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
@@ -574,14 +570,14 @@ func (s *Server) handleTrigger(c *echo.Context) error {
 
 	if stopped {
 		return echo.NewHTTPError(http.StatusConflict,
-			"this pipeline is paused; resume it with steps pipeline unpause -p "+pipeline.Slug)
+			"this pipeline is paused; unpause it with steps pipeline unpause -p "+pipeline.Slug)
 	}
 
 	force := c.FormValue("force") == forceAll
 
-	reason := "manual (web)"
+	reason := "trigger (web)"
 	if force {
-		reason = "manual re-run, forced (web)"
+		reason = "trigger, no cache (web)"
 	}
 
 	// Stamped BEFORE enqueueing: the run this click causes must start at or
@@ -623,7 +619,7 @@ func (s *Server) handleFollow(c *echo.Context) error {
 		"Crumbs": []crumb{
 			{Label: "jobs", URL: "/p/" + pipeline.Slug},
 			{Label: name, URL: "/p/" + pipeline.Slug + "/jobs/" + name + "/detail"},
-			{Label: "trigger"},
+			{Label: "queued"},
 		},
 		"Job":   name,
 		"Since": c.QueryParam("since"),
@@ -679,18 +675,95 @@ func (s *Server) handleLatestRun(c *echo.Context) error {
 		return fmt.Errorf("web: %w", queueErr)
 	}
 
-	state := "waiting"
+	state, inFlight := queuedState(queue, name)
 
-	for _, row := range queue {
-		if row.JobName == name && (row.Status == "pending" || row.Status == "running") {
-			state = row.Status
+	// With no row of this job left in the queue there is nothing waiting to explain.
+	var checks []followCheck
 
-			break
+	if state != "waiting" {
+		checks, err = followChecks(ctx, pipeline, name, state == "running", inFlight)
+		if err != nil {
+			return err
 		}
 	}
 
 	//nolint:wrapcheck // echo's JSON error is returned verbatim
-	return c.JSON(http.StatusOK, map[string]any{"run": nil, "state": state})
+	return c.JSON(http.StatusOK, map[string]any{"run": nil, "state": state, "checks": checks})
+}
+
+// queuedState is where a job's newest queue row stands, and how many of its builds are running.
+func queuedState(queue []store.QueueRow, name string) (string, int) {
+	state := "waiting"
+	inFlight := 0
+
+	for _, row := range queue {
+		if row.JobName != name {
+			continue
+		}
+
+		if row.Status == "running" {
+			inFlight++
+		}
+
+		if state == "waiting" && (row.Status == "pending" || row.Status == "running") {
+			state = row.Status
+		}
+	}
+
+	return state, inFlight
+}
+
+// followCheck is one line of what a queued run waits on, as Concourse's "preparing build" lists them.
+type followCheck struct {
+	Text  string `json:"text"`
+	Clear bool   `json:"clear"`
+}
+
+// followChecks asks only what the drain itself asks (admits, then ClaimNextJob's limits), so a line never blames something that is not holding the run back. The limits stop mattering once a worker has claimed it.
+func followChecks(ctx context.Context, pipeline *Pipeline, name string, claimed bool, inFlight int) ([]followCheck, error) {
+	paused, err := pipeline.Store.Paused(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("web: %w", err)
+	}
+
+	checks := []followCheck{{Text: "the pipeline is not paused", Clear: true}}
+	if paused {
+		checks[0] = followCheck{Text: "the pipeline is paused"}
+	}
+
+	if claimed {
+		return append(checks, followCheck{Text: "a worker has claimed it", Clear: true}), nil
+	}
+
+	job, err := pipeline.Config().FindJob(name)
+	if err != nil {
+		return nil, echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", name))
+	}
+
+	if len(job.SerialGroups) > 0 {
+		holder, err := pipeline.Store.SerialGroupHolder(ctx, name)
+		if err != nil {
+			return nil, fmt.Errorf("web: %w", err)
+		}
+
+		check := followCheck{Text: "its serial group is free", Clear: true}
+		if holder != "" {
+			check = followCheck{Text: holder + " holds its serial group"}
+		}
+
+		checks = append(checks, check)
+	}
+
+	if limit := job.EffectiveMaxInFlight(); limit != config.UnlimitedInFlight {
+		check := followCheck{Text: fmt.Sprintf("its max_in_flight (%d) has room", limit), Clear: true}
+		if inFlight >= limit {
+			check = followCheck{Text: fmt.Sprintf("its max_in_flight (%d) is full", limit)}
+		}
+
+		checks = append(checks, check)
+	}
+
+	return append(checks, followCheck{Text: "no worker has claimed it yet"}), nil
 }
 
 // handleDecideApproval records a human decision, through the same row the
@@ -774,21 +847,23 @@ func (s *Server) handleAnswerQuestion(c *echo.Context) error {
 	return c.Redirect(http.StatusSeeOther, "/p/"+pipeline.Slug+"/questions")
 }
 
-// handleResumeBreaker puts a paused job back in the watch rotation.
-func (s *Server) handleResumeBreaker(c *echo.Context) error {
+// handleRelease clears the breaker holding a job, so new versions trigger it again.
+func (s *Server) handleRelease(c *echo.Context) error {
 	if s.runner == nil {
 		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
 	}
 
 	pipeline := pipelineOf(c)
 
-	err := pipeline.Store.ResetJobFailures(c.Request().Context(), c.Param("job"))
+	name := c.Param("job")
+
+	err := pipeline.Store.ResetJobFailures(c.Request().Context(), name)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
 	//nolint:wrapcheck // echo's redirect error is returned verbatim
-	return c.Redirect(http.StatusSeeOther, "/p/"+pipeline.Slug+"/resources")
+	return c.Redirect(http.StatusSeeOther, "/p/"+pipeline.Slug+"/jobs/"+name+"/detail")
 }
 
 // handlePause throws the pipeline-level breaker from the browser.

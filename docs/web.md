@@ -107,7 +107,7 @@ holds nothing serves an index saying how to set one.
 
 | Route | Answers |
 |---|---|
-| `/` | With several pipelines served: what this process holds — each with its jobs colored by their latest run (a red one is one click from its transcript), its last run, what its queue still owes, whether it is paused, and a button to pause or resume it — and one run feed across all of them, newest first. With one, it redirects straight through |
+| `/` | With several pipelines served: what this process holds — each with its jobs colored by their latest run (a red one is one click from its transcript), its last run, what its queue still owes, whether it is paused, and a button to pause or unpause it — and one run feed across all of them, newest first. With one, it redirects straight through |
 | `/p/:pipeline` | Which jobs exist, how each last run went, and which jobs feed which — as a list, or as a dependency graph laid out from the `passed:` constraints, each node carrying its latest status |
 | `…/runs` | One run history across every job of the pipeline, newest first — the cross-job view the per-job history can't give |
 | `…/jobs/:job` | Where the job stands, without another click: it forwards to the job's **latest run**, running included; with no run but a trigger queued, to the [follow page](#following-a-run-you-started) for that trigger; with neither, to the detail page. Every link that names a job goes here, so a job is one click from its transcript from anywhere. It is a temporary redirect on purpose — a bookmark to it re-resolves on every visit |
@@ -117,7 +117,7 @@ holds nothing serves an index saying how to set one.
 | `…/config/:sha` | The pipeline as the runs pinned to that hash executed it — readable after the file on disk has moved on |
 | `…/approvals` | Pending `approval:` steps, and the decisions already made |
 | `…/questions` | Pending `ask_user` questions, and the answers already given |
-| `…/resources` | Latest checked version per resource, why any of them is failing its check, and any job the circuit breaker has paused |
+| `…/resources` | Latest checked version per resource, and why any of them is failing its check |
 | `…/mcp` | Every `mcp_servers:` entry, who depends on it, and whether it is wired up — with **Connect** to finish an oauth login in this browser and **Test** to probe one server. Present only for a pipeline that declares servers; see [mcp.md](mcp.md#authorizing-from-the-browser-the-mcp-tab) |
 | `/docs` | These docs, rendered with syntax-highlighted examples — the same pages `steps docs` shows in a terminal |
 
@@ -131,7 +131,7 @@ has no resting state.
 | Shown as | Means | Fixed by |
 |---|---|---|
 | the list's first line | the pipeline is paused: nothing polled, nothing admitted, deliveries recorded but not built | **Unpause**, right there |
-| `jobs ●N` | N jobs the circuit breaker took out of rotation after repeated failures | resuming them on the jobs board |
+| `jobs ●N` | N jobs the circuit breaker is holding after repeated failures | **Release** on the job's page |
 | `resources ●N` | N resources whose `check` is erroring. A poll stops at the first one, so ONE broken check stops the pipeline triggering | the resources page, which shows what the check said |
 | `mcp ●N` | N declared `mcp_servers:` that cannot be used — a login expired, a command missing, a variable unset | **Connect**, or the thing the status names |
 | `approvals ●N` | N `approval:` steps parked on a decision | approving or rejecting |
@@ -317,10 +317,28 @@ Triggering does not drop you back on a list to refresh. A trigger lands on a
 short waiting page that reports what the queue is doing and forwards itself to
 the live transcript the moment a worker picks the job up — a queued job has no
 run id until then, which is why there is a waiting room rather than a
-redirect.
+redirect. While it waits it lists what the drain checks before claiming, each
+line `✓` clear or `⟳` blocking — the pipeline is not paused, its serial group
+is free, its `max_in_flight` has room, a worker has claimed it — so the first
+blocking line answers why it has not started, as Concourse's "preparing build"
+does. It lists only checks the drain makes: a held job is not one, because a
+person's trigger runs a held job.
 
-While a run is live, the browser tab carries its status: `◐` running, `✓`
-passed, `✗` failed, with a matching favicon dot. The title updates the instant
+Every status is one word, one glyph and one colour, on every page:
+
+| State | Of | Drawn | Meaning |
+|---|---|---|---|
+| queued | run | `○` faint | triggered, not yet claimed by a worker |
+| running | run | `◐` yellow | in progress |
+| passed | run | `✓` green | every step succeeded |
+| failed | run | `✗` red | a step said no |
+| errored | run | `!` red | the machinery broke: an image, a daemon, a provider |
+| aborted | run | `■` dim | a person stopped it; not a failure |
+| paused | pipeline | `⏸` blue | a person paused it; an unpaused pipeline reads *active* |
+| held | job | `⊘` red | the [circuit breaker](infra.md#circuit-breaker-max_consecutive_failures) stopped its automatic triggers |
+
+While a run is live, the browser tab carries its status glyph, with a matching
+favicon dot. The title updates the instant
 the run ends, so a run left in a background tab reports its outcome without
 being reopened.
 
@@ -328,24 +346,24 @@ The jobs board refreshes itself every couple of seconds, in place — it keeps
 your list/graph choice and scroll position rather than reloading the page —
 and pauses while the tab is hidden.
 
-## Triggering, approving, resuming
+## Triggering, approving, releasing
 
 Eight controls, each doing what a CLI verb does:
 
-- **Trigger** / **Re-run (forced)** enqueue the job into the durable trigger
+- **Trigger new run** / **Trigger new run without cache** enqueue the job into the durable trigger
   queue `steps web` uses — the same queue this process's own polling fills.
   `steps web` drains it in-process by calling `pipeline.RunJob` — there is no
   second execution path, so a job run from a browser gets the same caching,
-  hooks, serial groups, and recording as any other. Forced re-run skips the merkle cache; it does not re-take versions a `version: every` get already built, and says so on the run page. An unforced one honors the cache,
+  hooks, serial groups, and recording as any other. Each button says what it does beside it, not in a tooltip. Without cache skips the merkle cache; it does not re-take versions a `version: every` get already built. The ordinary one honors the cache,
   which on an unchanged pipeline correctly does almost nothing. A run page
-  offers only the ordinary trigger, as a new run of its job; re-running a run's
-  own versions is `steps run --resume`, not a web control.
+  offers only the ordinary one, named for its job and saying it builds the newest versions, not that run's; re-running a run with its
+  own versions is `steps run --resume`, not a web control — "re-run" is kept for that ([#146](https://github.com/jtarchie/steps/issues/146)). In a paused pipeline both are disabled and say why; a job the breaker holds is still triggered, since the breaker stops only automatic triggers.
 - **Approve / Reject** on an `approval:` step, with the reason recorded — the
   same row `steps approvals approve` writes.
 - **Answer** an `ask_user` question a step is parked on — one click for an
   offered option, or your own words — the same row `steps questions answer` writes. See
   [agents.md](agents.md).
-- **Resume** a job the trigger circuit breaker paused.
+- **Release** a job the circuit breaker is holding — what `steps jobs release` does.
 - **Pause / Unpause** the whole pipeline — what `steps pipeline pause` throws.
   The board carries the pause, the banner on every page of a paused pipeline
   carries the release, and the root lists both for every pipeline at once. Each

@@ -1,9 +1,10 @@
 {{define "page"}}
-<h1 class="prompt"><b>steps trigger {{.Job}}</b></h1>
-<p class="metaline">queued<span class="sep">·</span>waiting for a worker to claim it</p>
+<h1 class="prompt"><b>steps run {{.Job}}</b> <span class="st st-queued">queued</span></h1>
 
 <div class="waiting">
-  <p class="waitline"><span class="cursor">▍</span> <span id="follow-state">queued</span></p>
+  <p class="waitline"><span class="cursor" aria-hidden="true">▍</span> <span id="follow-state">queued</span></p>
+  {{/* What the drain checks before it claims, filled by the poll below; the first blocking line is the answer to "why hasn't it started?". */}}
+  <ul class="followchecks" id="follow-checks" aria-live="polite"></ul>
   <p class="faint" id="follow-hint">This forwards to the run as soon as it starts.</p>
   {{if not .Nav.ReadOnly}}
   <form method="post" action="/p/{{.Nav.Current}}/jobs/{{.Job}}/queued/abort">
@@ -22,22 +23,38 @@
   var state = document.getElementById('follow-state');
   var hint = document.getElementById('follow-hint');
 
-  // Give up after two minutes rather than spinning forever: past that, either
-  // nothing is draining the queue or the job is held behind something the
-  // page cannot see, and the job page says more than a spinner does.
+  // Stop after two minutes rather than polling forever from a forgotten tab;
+  // the checklist already says what is holding the run back.
   var deadline = Date.now() + 120000;
+  var checks = document.getElementById('follow-checks');
 
   var words = { pending: 'queued', running: 'starting', waiting: 'waiting for the queue' };
+
+  function drawChecks(list) {
+    checks.replaceChildren();
+    (list || []).forEach(function (check) {
+      var li = document.createElement('li');
+      li.className = check.clear ? 'clear' : 'blocking';
+      var mark = document.createElement('span');
+      mark.setAttribute('aria-hidden', 'true');
+      mark.textContent = check.clear ? '✓ ' : '⟳ ';
+      var state = document.createElement('span');
+      state.className = 'visually-hidden';
+      state.textContent = check.clear ? 'clear: ' : 'blocking: ';
+      li.append(mark, state, check.text);
+      checks.append(li);
+    });
+  }
 
   function poll() {
     fetch(url).then(function (r) { return r.json(); }).then(function (data) {
       if (data.run) { window.location.replace(data.url); return; }
 
       state.textContent = words[data.state] || 'queued';
+      drawChecks(data.checks);
 
       if (Date.now() > deadline) {
-        state.textContent = 'still queued';
-        hint.textContent = 'Nothing has claimed it yet. Is a runner draining this queue?';
+        hint.textContent = 'Stopped checking. Reload to look again.';
         return;
       }
 

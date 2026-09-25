@@ -22,7 +22,7 @@
         </td>
         <td class="num dim">{{if .Queued}}{{.Queued}}{{else}}<span class="faint">—</span>{{end}}</td>
         <td>
-          {{if .Paused}}<span class="st st-failed">paused</span>{{else}}<span class="dim">running</span>{{end}}
+          {{if .Paused}}<span class="st st-paused">paused</span>{{else}}<span class="dim">active</span>{{end}}
           {{if not $.Nav.ReadOnly}}
           <form class="inline" method="post" action="/p/{{.Slug}}/{{if .Paused}}unpause{{else}}pause{{end}}"><input type="hidden" name="return" value="/"><button class="btn{{if .Paused}} primary{{end}}" type="submit">{{if .Paused}}Unpause{{else}}Pause{{end}}</button></form>
           {{end}}

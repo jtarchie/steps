@@ -26,16 +26,19 @@
     </p>
   </div>
   {{if not .Nav.ReadOnly}}
-  <div class="actions">
+  <div class="actions stacked">
     {{if eq $run.Run.Status "running"}}
     <form method="post" action="/p/{{.Nav.Current}}/runs/{{$run.Run.ID}}/abort">
       <button class="btn danger" type="submit">■ Abort</button>
     </form>
     {{end}}
+    {{/* The first slot is Abort while running, as on Concourse's build page; #146's re-run with the same inputs takes it otherwise. */}}
     {{if .JobDeclared}}
-    <form method="post" action="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/trigger">
-      <button class="btn" type="submit">▶ Trigger new run</button>
+    <form class="decide" method="post" action="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/trigger">
+      <button class="btn" type="submit"{{if .Nav.Paused}} disabled aria-describedby="trigger-why"{{end}}>▶ Trigger new run of {{$run.Run.JobName}}</button>
+      {{if not .Nav.Paused}}<span class="meta">newest versions, not this run's</span>{{end}}
     </form>
+    {{template "triggerwhy" .}}
     {{end}}
   </div>
   {{end}}
@@ -46,7 +49,7 @@
      nothing outside the transcript, and its closing reload fires only when
      THIS run ends, so a sibling run appearing needs the poll. */}}
 <nav class="runstrip" id="run-strip" aria-label="Runs of {{$run.Run.JobName}}" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#run-strip" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#statusline:outerMorph">
-  {{if .Strip.Queued}}<a class="st st-pending" id="strip-queued" href="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/follow?since={{.Strip.QueuedSince}}">queued</a>{{end}}
+  {{if .Strip.Queued}}<a class="st st-queued" id="strip-queued" href="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/follow?since={{.Strip.QueuedSince}}">queued</a>{{end}}
   {{range .Strip.Runs}}<a class="st st-{{statusWord .Status}}" id="strip-{{short .ID}}" href="/p/{{$.Nav.Current}}/runs/{{.ID}}"{{if eq .ID $run.Run.ID}} aria-current="page"{{end}} title="[{{short .ID}}] · {{.Duration}}">{{if eq .ID $run.Run.ID}}<span class="hash">{{short .ID}}</span> {{end}}{{agoTag .StartedAt}}</a>
   {{end}}<a class="stripmore" href="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/detail">all runs</a>
 </nav>
@@ -208,10 +211,13 @@
     // 'gone' is the run reaped by retention mid-watch: not an outcome, and
     // the reload below is what shows the reader what happened instead.
     if (status && status !== 'gone') {
-      var mark = status === 'succeeded' ? '✓' : status === 'running' ? '◐' : '✗';
-      document.title = mark + ' ' + document.title.replace(/^[✓✗◐]\s*/, '');
+      // statusMark and faviconDots in render.go, which this must agree with.
+      var marks = { succeeded: ['✓', '%2384c06d'], running: ['◐', '%23d9a94a'], errored: ['!', '%23e0645a'], aborted: ['■', '%2383887b'] };
+      var pick = marks[status] || ['✗', '%23e0645a'];
+      var mark = pick[0];
+      document.title = mark + ' ' + document.title.replace(/^[✓✗◐!■○]\s*/, '');
 
-      var dot = mark === '✓' ? '%2384c06d' : mark === '◐' ? '%23d9a94a' : '%23e0645a';
+      var dot = pick[1];
       var icon = document.getElementById('favicon');
       if (icon) {
         icon.href = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E" +

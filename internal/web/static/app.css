@@ -89,10 +89,8 @@ code { font-family: var(--mono); color: var(--fg); }
 .badge { color: var(--yellow); margin-left: 6px; font-variant-numeric: tabular-nums; }
 
 /* Needs-attention list: the sentence behind each badge, and the only home for
-   an item no tab owns. Yellow-edged rather than red — .held above is red
-   because it reports that the page is out of date with the operator's editor,
-   which is a fault; this is a queue of things working exactly as designed and
-   waiting on a person.
+   an item no tab owns. Yellow-edged rather than red: this is a queue of
+   things working exactly as designed and waiting on a person.
 
    No empty state, deliberately. The server renders the <ul> only when there
    is something in it, so the surface occupies no space at rest — its presence
@@ -170,6 +168,7 @@ tr.checkfail pre { margin: 0 0 4px; }
 .pipeswitch { position: relative; }
 .pipebtn { font: inherit; font-size: 12px; color: var(--dim); background: none; border: 0; cursor: pointer; padding: 0; }
 .pipebtn:hover { color: var(--fg); }
+.pipebtn.paused { color: var(--blue); }
 .pipemenu {
   display: none;
   position: absolute;
@@ -201,21 +200,6 @@ main { max-width: 1000px; margin: 0 auto; padding: 26px 20px 80px; }
 /* What a hidden action says instead of vanishing on a read-only server. */
 .rohint { font-family: var(--sans); font-size: 12px; color: var(--dim); max-width: 340px; text-align: right; }
 
-/* The reload banner: the file on disk failed to load and the daemon is still
-   serving the last configuration that worked. Red-edged rather than a tint,
-   because it is not a status of anything on the page — it is a statement that
-   the page is out of date with the operator's editor. */
-.held {
-  font-family: var(--sans);
-  font-size: 12.5px;
-  color: var(--fg);
-  border: 1px solid #4a2c29;
-  border-left: 3px solid var(--red);
-  padding: 10px 12px;
-  margin: 0 0 14px;
-}
-.held b { color: var(--red); font-weight: 600; }
-.held pre { font-family: var(--mono); font-size: 12px; color: var(--dim); margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* Breadcrumbs: the way back up from a detail page. */
 .crumbs { font-size: 12px; color: var(--faint); margin: 0 0 12px; overflow-wrap: anywhere; }
@@ -256,6 +240,14 @@ main { max-width: 1000px; margin: 0 auto; padding: 26px 20px 80px; }
 .pagehead .metaline { margin-bottom: 0; }
 .pagehead .actions { margin-left: auto; display: flex; gap: 8px; padding-top: 2px; }
 .pagehead .actions form { margin: 0; }
+/* Buttons that carry their consequence: one row per button, the sentence
+   beside it, wrapping under it when narrow — never hidden in a tooltip. */
+.pagehead .actions.stacked { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 6px 10px; max-width: 560px; }
+.pagehead .actions.stacked .decide { display: contents; }
+.pagehead .actions.stacked > .meta { grid-column: 1 / -1; }
+.pagehead .actions .meta { font-family: var(--sans); font-size: 12px; color: var(--dim); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn:disabled:hover { border-color: var(--line); }
 
 /* ---- tables ---- */
 .tablewrap { overflow-x: auto; border: 1px solid var(--line); background: var(--panel); }
@@ -284,16 +276,26 @@ td.faint, .faint { color: var(--faint); }
    (a breaker count, a DAG node) does not sprout a second marker. */
 .st { white-space: nowrap; }
 .st::before { content: "● "; }
+/* A person stopping something is not a failure: aborted is dim and a paused
+   pipeline blue, as Concourse draws them. held is the breaker, which failures
+   caused. Concourse's errored is amber, but amber is running here, so errored
+   keeps red and differs from failed by its glyph. */
 .st-passed, .st-succeeded { color: var(--green); }
-.st-failed, .st-errored, .st-aborted { color: var(--red); }
+.st-failed, .st-errored, .st-held { color: var(--red); }
+.st-aborted { color: var(--dim); }
+.st-paused { color: var(--blue); }
 .st-running { color: var(--yellow); }
-.st-pending { color: var(--yellow); }
+.st-queued { color: var(--faint); }
 .st-skipped { color: var(--faint); }
 .st-none { color: var(--faint); }
 .st.st-passed::before, .st.st-succeeded::before { content: "✓ "; }
-.st.st-failed::before, .st.st-errored::before, .st.st-aborted::before { content: "✗ "; }
+.st.st-failed::before { content: "✗ "; }
+.st.st-errored::before { content: "! "; }
+.st.st-aborted::before { content: "■ "; }
+.st.st-paused::before { content: "⏸ "; }
+.st.st-held::before { content: "⊘ "; }
 .st.st-running::before { content: "◐ "; }
-.st.st-pending::before { content: "○ "; }
+.st.st-queued::before { content: "○ "; }
 .st.st-skipped::before { content: "– "; }
 
 .hash { color: var(--blue); }
@@ -372,10 +374,12 @@ svg.dag { display: block; }
 .dagnode .dagstatus { font-size: 11px; fill: var(--dim); }
 .dagnode.st-passed rect { stroke: var(--green); }
 .dagnode.st-passed .dagstatus { fill: var(--green); }
-.dagnode.st-failed rect, .dagnode.st-errored rect, .dagnode.st-aborted rect { stroke: var(--red); }
-.dagnode.st-failed .dagstatus, .dagnode.st-errored .dagstatus, .dagnode.st-aborted .dagstatus { fill: var(--red); }
-.dagnode.st-running rect, .dagnode.st-pending rect { stroke: var(--yellow); }
-.dagnode.st-running .dagstatus, .dagnode.st-pending .dagstatus { fill: var(--yellow); }
+.dagnode.st-failed rect, .dagnode.st-errored rect { stroke: var(--red); }
+.dagnode.st-failed .dagstatus, .dagnode.st-errored .dagstatus { fill: var(--red); }
+.dagnode.st-aborted .dagstatus { fill: var(--dim); }
+.dagnode.st-running rect { stroke: var(--yellow); }
+.dagnode.st-running .dagstatus { fill: var(--yellow); }
+.dagnode.st-queued .dagstatus { fill: var(--faint); }
 .dagnode.st-none .dagstatus { fill: var(--faint); }
 .dagnode.running rect { animation: dagpulse 1.6s ease-in-out infinite; }
 @keyframes dagpulse { 50% { stroke-opacity: 0.35; } }
@@ -905,6 +909,11 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
   .mcp td.acts .inline { margin-left: 0; margin-right: 6px; }
   .mcp .mcp-meta, .mcp td.uses { max-width: none; }
 
+  /* The head's actions drop under the heading, left-aligned, each consequence
+     wrapping under its own button. */
+  .pagehead .actions { margin-left: 0; }
+  .pagehead .actions.stacked { max-width: none; grid-template-columns: minmax(0, 1fr); justify-items: start; }
+
   .stepbody { padding-left: 14px; }
   .subtrace { margin-left: 12px; }
   .substeps { margin-left: 9px; }
@@ -955,6 +964,11 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
   padding: 18px 20px;
 }
 .waitline { margin: 0 0 6px; color: var(--fg); }
+.followchecks { list-style: none; margin: 0 0 10px; padding: 0; font-size: 12.5px; }
+.followchecks .clear { color: var(--dim); }
+.followchecks .blocking { color: var(--fg); }
+.followchecks .blocking span[aria-hidden] { color: var(--yellow); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .waiting p:last-child { margin-bottom: 0; }
 
 /* A step's own output, as it came out. Slightly brighter than the log block

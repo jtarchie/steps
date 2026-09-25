@@ -358,7 +358,7 @@ func (s *Server) routes() error {
 	group.POST("/jobs/:job/trigger", s.handleTrigger)
 	group.POST("/approvals/:id", s.handleDecideApproval)
 	group.POST("/questions/:id", s.handleAnswerQuestion)
-	group.POST("/jobs/:job/resume", s.handleResumeBreaker)
+	group.POST("/jobs/:job/release", s.handleRelease)
 	// The pipeline-level breaker, reachable from a browser at last: /api holds the same two verbs and refuses a page by design, so the UI could say a pipeline was paused and not offer to release it. See docs/web.md.
 	group.POST("/pause", s.handlePause)
 	group.POST("/unpause", s.handleUnpause)

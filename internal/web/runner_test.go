@@ -307,7 +307,7 @@ jobs:
 
 	runner.drainOne(t.Context(), target)
 
-	if !strings.Contains(logs.String(), "web.job_paused") {
+	if !strings.Contains(logs.String(), "web.job_held") {
 		t.Errorf("the breaker tripped without a word:\n%s", logs.String())
 	}
 
@@ -487,7 +487,7 @@ jobs:
 //
 // `steps web --force` is the daemon form of a flag that already worked under
 // `--once`, and it was declared on WebCmd while reaching nothing: the runner
-// took its force only from the browser's "Re-run (forced)" button, so an
+// took its force only from the browser's forced trigger button, so an
 // operator who restarted the daemon with --force to escape a bad cache got
 // every step skipped as cached and a green build that executed nothing.
 //

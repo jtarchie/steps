@@ -150,7 +150,7 @@ func TestEveryPageSaysThePipelineIsPaused(t *testing.T) {
 
 	server, pipeline := testPipeline(t)
 
-	const banner = "this pipeline is paused"
+	const banner = `<span class="st st-paused">paused</span> · no polling, no new runs; webhook deliveries wait until unpaused`
 
 	if _, body := get(t, server, "/p/demo"); strings.Contains(body, banner) {
 		t.Fatal("a running pipeline claims to be paused")
@@ -161,8 +161,14 @@ func TestEveryPageSaysThePipelineIsPaused(t *testing.T) {
 		t.Fatalf("Pause: %v", err)
 	}
 
-	if _, body := get(t, server, "/p/demo/runs"); !strings.Contains(body, banner) {
+	_, body := get(t, server, "/p/demo/runs")
+	if !strings.Contains(body, banner) {
 		t.Error("a paused pipeline's pages do not say so")
+	}
+
+	// The switcher names the pipeline on every page, so it carries the state too, as Concourse's top bar turns blue.
+	if !strings.Contains(body, `class="pipebtn paused"`) {
+		t.Error("the pipeline switcher does not show the pipeline is paused")
 	}
 }
 
@@ -225,7 +231,7 @@ func TestDistinctHeadings(t *testing.T) {
 	}
 
 	_, followBody := get(t, server, "/p/demo/jobs/build/follow")
-	if !strings.Contains(followBody, "steps trigger build") {
-		t.Error("follow page H1 is not 'steps trigger <name>'")
+	if !strings.Contains(followBody, `<b>steps run build</b> <span class="st st-queued">queued</span></h1>`) {
+		t.Error("follow page H1 is not 'steps run <name>' marked queued")
 	}
 }

@@ -65,7 +65,7 @@ func TestTheHeaderSaysWhenSomethingIsWaitingOnYou(t *testing.T) {
 
 	for _, want := range []string{
 		`id="attention"`,
-		"2 jobs paused after repeated failures",
+		"2 jobs held by the breaker after repeated failures",
 		"1 resource is failing its check",
 		"1 approval is waiting for a decision",
 		"1 question is waiting for an answer",
@@ -158,7 +158,7 @@ func TestAPausedPipelineIsTheFirstThingInTheList(t *testing.T) {
 	_, body := get(t, server, "/p/demo")
 	list := attentionList(t, body)
 
-	paused := strings.Index(list, "this pipeline is paused")
+	paused := strings.Index(list, `<span class="st st-paused">paused</span> · no polling, no new runs; webhook deliveries wait until unpaused`)
 	approval := strings.Index(list, "1 approval is waiting")
 
 	if paused < 0 || approval < 0 {
@@ -372,7 +372,7 @@ func TestTheRootDoesNotSpeakForOnePipelineOfSeveral(t *testing.T) {
 	}
 
 	// The badge is chrome pointing INTO that pipeline, and still belongs.
-	if _, body := get(t, server, "/p/alpha"); !strings.Contains(body, "this pipeline is paused") {
+	if _, body := get(t, server, "/p/alpha"); !strings.Contains(body, `<span class="st st-paused">paused</span> · no polling, no new runs; webhook deliveries wait until unpaused`) {
 		t.Error("the pipeline's own page lost the paused item")
 	}
 }
