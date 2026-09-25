@@ -279,7 +279,7 @@
      the row, and the shell the stream sends when only these moved — a
      container whose child finished changes class and rollup and nothing
      under it. Rendered INSIDE the opening tag, so it starts with a space. */}}
-{{define "stepattrs"}}{{$step := .Step}}{{$detail := $step.HasDetail}} class="step{{if $step.Skipped}} skipped{{else if $step.Failed}} failed{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail (or $step.Failed $step.Turns $step.Container)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}"{{end}}
+{{define "stepattrs"}}{{$step := .Step}}{{$detail := $step.HasDetail}} class="step{{if $step.Skipped}} skipped{{else if $step.Failed}} failed{{else if $step.Unreported}} unreported{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail (or $step.Failed $step.Unreported $step.Turns $step.Container)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}"{{end}}
 
 {{/* The shell: a row's attributes and head, and nothing it holds. The
      attribute-only morph is what hx-morph-skip-children buys — htmx syncs the
@@ -292,11 +292,12 @@
 
 {{define "stephead"}}{{$page := .Page}}{{$step := .Step}}{{$detail := $step.HasDetail}}<div class="stephead" id="{{$step.Anchor}}_head"{{if .OOB}} hx-swap-oob="outerMorph"{{end}}{{if $detail}} role="button" tabindex="0"{{end}}>
     <span class="chev{{if $detail}} chev-icon{{end}}"></span>
-    {{if $step.Skipped}}<span class="stmark" role="img" aria-label="skipped">–</span>{{else if $step.Failed}}<span class="stmark" role="img" aria-label="failed">✗</span>{{else if $step.Running}}<span class="stmark" role="img" aria-label="running">◐</span>{{else}}<span class="stmark" role="img" aria-label="passed">✓</span>{{end}}
+    {{if $step.Skipped}}<span class="stmark" role="img" aria-label="skipped">–</span>{{else if $step.Failed}}<span class="stmark" role="img" aria-label="failed">✗</span>{{else if $step.Unreported}}<span class="stmark" role="img" aria-label="unreported">?</span>{{else if $step.Running}}<span class="stmark" role="img" aria-label="running">◐</span>{{else}}<span class="stmark" role="img" aria-label="passed">✓</span>{{end}}
     <span class="kind">{{$step.Kind}}</span>
     <span class="name">{{$step.Name}}</span>
     <a class="anchor" href="#{{$step.Anchor}}" title="Link to this step" aria-label="Link to this step">#</a>
     {{if $step.Reason}}<span class="note">{{$step.Reason}}</span>{{end}}
+    {{if $step.Unreported}}<span class="note">did not report an end</span>{{end}}
     {{if $step.Verdict}}<span class="note">verdict: {{$step.Verdict}}</span>{{end}}
     {{if $step.WrappedUp}}<span class="note spendwarn" title="The turn budget ran out; this answer was written from what the model had already gathered">stopped early</span>{{end}}
     {{with $step.Compactions}}<span class="note" title="Older turns were summarized to fit the context budget; the model worked from the summary after that point">compacted ×{{.}}</span>{{end}}
@@ -308,6 +309,7 @@
         {{if .Failed}}<span class="r-sep">·</span><b class="r-fail">{{.Failed}} failed</b>{{end}}
         {{if .Running}}<span class="r-sep">·</span><b class="r-run">{{.Running}} running</b>{{end}}
         {{if .Skipped}}<span class="r-sep">·</span><b class="r-skip">{{.Skipped}} skipped</b>{{end}}
+        {{if .Unreported}}<span class="r-sep">·</span><b class="r-skip">{{.Unreported}} unreported</b>{{end}}
       </span>{{end}}{{end}}
       {{if $step.Worker}}<span class="note worker">on {{$step.Worker}}</span>{{end}}
       <span class="dur">

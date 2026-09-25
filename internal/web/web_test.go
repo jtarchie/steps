@@ -769,6 +769,80 @@ func TestGuardSkippedStepDoesNotStayRunning(t *testing.T) {
 	}
 }
 
+// orphanRun records a run holding one row nothing closed — hook output with
+// no start (#169) — finished with status, or left running when it is empty.
+func orphanRun(t *testing.T, status string) string {
+	t.Helper()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	err := pipeline.Store.StartRun(ctx, "run-orphan", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-orphan", []store.RunEventRow{
+		{Type: events.TypeStepOutput, StepID: 1, StepIndex: 0, StepName: "hook", StepKind: "task", Text: "hook said"},
+	})
+
+	if status != "" {
+		err = pipeline.Store.FinishRun(ctx, "run-orphan", status)
+		if err != nil {
+			t.Fatalf("FinishRun: %v", err)
+		}
+	}
+
+	code, body := get(t, server, "/p/demo/runs/run-orphan")
+	if code != http.StatusOK {
+		t.Fatalf("GET run = %d: %s", code, body)
+	}
+
+	return body
+}
+
+// TestAFinishedRunShowsNothingRunning covers a row the fold opened and
+// nothing closed (#169): once the run has ended it reads as unreported, open,
+// with its words visible and no ticking clock.
+func TestAFinishedRunShowsNothingRunning(t *testing.T) {
+	t.Parallel()
+
+	body := orphanRun(t, "failed")
+
+	if strings.Contains(body, "data-elapsed-since=") || strings.Contains(body, `class="cursor"`) {
+		t.Error("a finished run still carries a live clock")
+	}
+
+	tag := openingTag(t, body, "step-1-hook")
+	if !strings.Contains(tag, " unreported") || !strings.Contains(tag, " open") {
+		t.Errorf("orphan row = %s, want it unreported and open", tag)
+	}
+
+	if strings.Contains(tag, " running") || strings.Contains(tag, " active") {
+		t.Errorf("orphan row = %s, still running on a finished run", tag)
+	}
+
+	if !strings.Contains(body, `aria-label="unreported"`) || !strings.Contains(body, "did not report an end") {
+		t.Error("the unreported row carries neither its mark nor the words for it")
+	}
+
+	if strings.Contains(body, `aria-label="running"`) {
+		t.Error("a finished run draws a running mark")
+	}
+}
+
+// TestALiveRunKeepsAnUnclosedStepRunning is the guard's other half: the same
+// row on a run still in flight keeps its clock.
+func TestALiveRunKeepsAnUnclosedStepRunning(t *testing.T) {
+	t.Parallel()
+
+	body := orphanRun(t, "")
+
+	if !strings.Contains(body, "data-elapsed-since=") || !strings.Contains(openingTag(t, body, "step-1-hook"), " running") {
+		t.Error("the guard stopped a step on a run still in flight")
+	}
+}
+
 // writeFileRaw is os.WriteFile with the test's permissions, kept apart so the
 // helper above reads as one line.
 func writeFileRaw(path, body string) error {
