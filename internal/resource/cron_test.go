@@ -233,7 +233,7 @@ func TestCronInWritesTheMomentThreeWays(t *testing.T) {
 func TestCronCannotBePutTo(t *testing.T) {
 	t.Parallel()
 
-	_, err := RunOut(context.Background(), nil, cronType(), nil, map[string]any{"expression": "@hourly"}, nil, t.TempDir())
+	_, err := RunOut(context.Background(), nil, cronType(), nil, map[string]any{"expression": "@hourly"}, nil, PutInputs{}, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "only tells time") {
 		t.Errorf("err = %v, want the put refused", err)
 	}
