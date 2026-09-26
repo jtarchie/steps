@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -395,6 +396,54 @@ func TestAskUserAbandonsItsQuestionWhenTheStepEndsMidAnswer(t *testing.T) {
 	ctx, cancel := context.WithCancel(WithAnswerSeeds(fixture.ctx, []AnswerSeed{{Match: "bump", Answer: "minor"}}))
 	fixture.ctx = ctx
 	fixture.env.ask.st = cancelOnAnswer{questionStore: fixture.store, cancel: cancel}
+
+	result := fixture.ask(askGrant{wait: time.Minute}, "Which bump?")
+
+	if _, isError := result["error"]; !isError {
+		t.Errorf("an abandoned question returned %v, want an error result", result)
+	}
+
+	pending, err := fixture.store.Questions(context.Background(), true, 0)
+	if err != nil {
+		t.Fatalf("Questions: %v", err)
+	}
+
+	if len(pending) != 0 {
+		t.Errorf("the abandoned question is still listed as answerable: %+v", pending)
+	}
+}
+
+// cancelAfterInsert is a question store whose ask is where the step ends: the INSERT commits, then the cancel cuts off the read-back, the way sqlite's two-statement AskQuestion loses it.
+type cancelAfterInsert struct {
+	questionStore
+
+	cancel context.CancelFunc
+}
+
+func (c cancelAfterInsert) AskQuestion(ctx context.Context, question store.Question) (store.Question, bool, error) {
+	row, existing, err := c.questionStore.AskQuestion(context.WithoutCancel(ctx), question)
+	c.cancel()
+
+	if err != nil {
+		return store.Question{}, false, fmt.Errorf("ask: %w", err)
+	}
+
+	if ctx.Err() != nil {
+		return store.Question{}, false, context.Canceled
+	}
+
+	return row, existing, nil
+}
+
+// TestAskUserAbandonsItsQuestionWhenTheStepEndsMidAsk: a cancel between the insert and its read-back left a committed row nobody held the id of, pending forever; it flaked the plain abandon test under load.
+func TestAskUserAbandonsItsQuestionWhenTheStepEndsMidAsk(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAskFixture(t)
+
+	ctx, cancel := context.WithCancel(fixture.ctx)
+	fixture.ctx = ctx
+	fixture.env.ask.st = cancelAfterInsert{questionStore: fixture.store, cancel: cancel}
 
 	result := fixture.ask(askGrant{wait: time.Minute}, "Which bump?")
 

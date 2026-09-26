@@ -76,25 +76,23 @@ jobs:
   - get: mentions
     trigger: true
     version: every    # answer every mention found, not just the newest
-  - task: address
-    inputs: [mentions]
-    outputs: [thread, target, answer]
-    run: |
-      set -eu
-      grep -o '"channel": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/channel
-      grep -o '"thread_ts": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/ts
-      grep -o '"channel": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > target/channel
-      grep -o '"ts": *"[^"]*"' mentions/version.json | head -1 | cut -d'"' -f4 > target/ts
-      echo "got it, working on it" > answer/reply.md
   - put: acknowledge           # 👀 — somebody is on it
     resource: reaction
-    inputs: [target]
+    inputs: [mentions]         # the reaction type picks the mention's ts
     params: {add: eyes}
+  - task: compose
+    outputs: [answer]
+    run: echo "got it, working on it" > answer/reply.md
+    on_failure:                # ❌, and the 👀 goes away
+      put: failed
+      resource: reaction
+      inputs: [mentions]
+      params: {add: x, remove: eyes}
   - put: reply
-    inputs: [thread, answer]
+    inputs: [mentions, answer] # the reply type picks the mention's thread_ts
   - put: answered              # ✅, and the 👀 goes away in the same publish
     resource: reaction
-    inputs: [target]
+    inputs: [mentions]
     params: {add: white_check_mark, remove: eyes}
 ```
 
@@ -111,9 +109,9 @@ All three need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for 
 
 `token_env` alone isn't enough to widen what a resource can read — `env()` only sees names its resource TYPE already declares (all three declare `SLACK_BOT_TOKEN`, shared by every resource of that type), which is what makes it safe for a shared, possibly-external type to hand-in-hand with any expr type at all. A resource naming a different token also needs `env:` *on the resource itself* to add that name to its own allow-list — `env:` and `source:` together, as in `reply-as-support-bot` above. Naming `token_env` without the matching `env:` entry is a run-time error (`env(...): not in this resource type's env:`), not a silent fall-back to `SLACK_BOT_TOKEN`. (`env:` on a resource only means something for an expr- or shell-backed type — an mcp-backed type authenticates via its `mcp_servers:` entry and rejects `env:` at load time.)
 
-**A mention inside a thread arrives with its thread.** `mentions/thread.json` is the whole conversation the mention was written in (Slack's `conversations.replies` payload: parent first, then replies), fetched by `thread_ts` — asking Slack for a *reply's* `ts` answers with that one message and nothing around it, which is an agent being handed a question with no context. Post the answer back with `thread_ts` too, as the example above does: a reply's `ts` is not a thread id.
+**A mention inside a thread arrives with its thread.** `mentions/thread.json` is the whole conversation the mention was written in (Slack's `conversations.replies` payload: parent first, then replies), fetched by `thread_ts` — asking Slack for a *reply's* `ts` answers with that one message and nothing around it, which is an agent being handed a question with no context. `slack-reply` posts the answer back with `thread_ts` too: a reply's `ts` is not a thread id.
 
-**A reaction goes on the message; a reply goes to the thread.** `slack-reply` reads `thread/ts` and `slack-reaction` reads `target/ts`, and they are deliberately different artifacts because they want different values out of the same version: `thread_ts` is the conversation to answer in, while `ts` is the one message a person actually wrote. Hand a reaction the thread's id and the emoji lands on the parent of the thread instead — indistinguishable from correct when the mention was top-level, wrong every time somebody asked inside an existing conversation.
+**A reaction goes on the message; a reply goes to the thread — and the types choose.** Both read the mention off the put's `slack-mentions` input with [`version()`](expr.md#versionname--version): `slack-reply` posts to its `thread_ts`, `slack-reaction` marks its `ts`, because they want different values out of the same version — `thread_ts` is the conversation to answer in, while `ts` is the one message a person actually wrote. Hand a reaction the thread's id and the emoji lands on the parent of the thread instead — indistinguishable from correct when the mention was top-level, wrong every time somebody asked inside an existing conversation. That choice is made once, in each type, rather than in every pipeline. With more than one fetched input (`inputs: all`, or a second get), `params: {from: mentions}` names the one to answer; without it the put fails naming them.
 
 **Marking a message twice is not an error.** `already_reacted` (the emoji this put wanted is already there) and `no_reaction` (the one it wanted gone is already gone) are the API saying the world is in the state being asked for, so the put succeeds. They arrive on any replay, resume, or re-run, and failing there would turn re-running a build into a red one over an emoji. Every other refusal fails the put — most usefully `missing_scope`, since `reactions:write` is not implied by `chat:write` and a bot that quietly stops marking anything is a failure nobody notices.
 
@@ -125,15 +123,83 @@ All three need `SLACK_BOT_TOKEN` (a bot token, `xoxb-`) in the environment, for 
 - `mentions/thread.json` is truncated at its *newest* end for a thread longer than 1000 messages — Slack returns a thread oldest-first — so the mention itself can be missing from a very long thread.
 - More than `limit` new top-level messages in one channel between two checks lose the overflow *permanently*, not just delayed — the cursor advances to the newest `ts` seen anywhere, so whatever `limit` cut off now sits below the new cursor and is never asked for again.
 
-`slack-reply`'s `put:` reads its message from files an upstream step writes, not `params:` — `file()` takes what `inputs:` put on disk directly, so a reply containing backticks or `$(…)` is data, never something a shell might run:
+Where each put type aims comes from a fetched `slack-mentions` input (or the one `params.from` names). With no fetched input — a top-level post to a fixed channel, or a message that did not come from a mention — it reads files an upstream step wrote instead. Job-level hooks take no `inputs:` and run outside any one build, so a ❌ belongs on a step's `on_failure:`, as above. The text is always a file: `file()` takes what `inputs:` put on disk directly, so a reply containing backticks or `$(…)` is data, never something a shell might run.
 
-| file | required | meaning |
-|---|---|---|
-| `thread/channel` | yes | the channel id to post to |
-| `thread/ts` | no | a parent message's `ts` — posts as a reply in that thread; omit to post a new top-level message |
-| `answer/reply.md` | yes | the message text |
+| file | read by | required | meaning |
+|---|---|---|---|
+| `answer/reply.md` | `slack-reply` | yes | the message text |
+| `thread/channel` | `slack-reply` | without a fetched input | the channel id to post to |
+| `thread/ts` | `slack-reply` | no | a parent message's `ts` — posts as a reply in that thread; omit to post a new top-level message |
+| `target/channel` | `slack-reaction` | without a fetched input | the channel id of the message to mark |
+| `target/ts` | `slack-reaction` | without a fetched input | the `ts` of the message to mark |
 
 There is deliberately no `check:`/`in:` on `slack-reply` and no `out:` on `slack-mentions` — `get: reply` or `put: mentions` are both load errors, the same rule `git`'s missing `out:` follows.
+
+## The built-in `cron` type
+
+`type: cron` mints a version when a slot of a crontab expression passes — the trigger for a nightly report, an hourly sweep, a job that should run whether or not anything else changed. Nothing is fetched: the artifact is the moment itself. A port of [govuk-pay/cron-resource](https://github.com/govuk-pay/cron-resource), kept to its rules.
+
+```yaml
+resources:
+- name: tick
+  type: cron
+  source:
+    expression: "*/15 * * * *"     # every quarter hour
+    location: America/New_York     # optional; the zone the expression is read in, UTC otherwise
+    fire_immediately: true         # optional; the first-ever check mints a version instead of waiting
+
+jobs:
+- name: sweep
+  plan:
+  - get: tick
+    trigger: true
+  - task: show
+    inputs: [tick]
+    run: test -s tick/epoch && test -s tick/timestamp && grep -c '"time"' tick/version.json
+    assert:
+      stdout: "1"          # one line holds the version; the two files before it are non-empty
+  assert:
+    execution: [tick, show]
+    outcome: succeeded
+```
+
+| `source:` field | required | meaning |
+|---|---|---|
+| `expression` | yes | a crontab: five fields (`minute hour day-of-month month day-of-week`), six with seconds in front (`*/30 * * * * *`), or a descriptor (`@hourly`, `@daily`, `@weekly`) |
+| `location` | no | the zone the expression is read in, an IANA name such as `Europe/London`; UTC when unset |
+| `fire_immediately` | no | the first-ever check mints a version at once, instead of only when a slot fell in the last hour |
+
+**A poll is what wakes it.** There is no timer inside the resource: `steps web` reads the clock on every `--interval` (30s unless said otherwise), and the first poll after a slot passes mints the version. So a slot fires within one poll of its time, and a seconds field is honored in the expression but cannot fire faster than the poll — `*/5 * * * * *` under a 30s interval is a version every 30s. One version per poll at most: several slots between two polls fire once, and a daemon that was stopped over the nightly slot does not run it when it comes back.
+
+**The version is `{time}`**, the moment the check ran (RFC3339, UTC) rather than the slot it answered — `02:00:17Z` for a `0 2 * * *` polled at seventeen seconds past. That is what `epoch` means: when the job was released. A get writes three files:
+
+| file | what it holds |
+|---|---|
+| `version.json` | the version, `{"time": "2026-09-25T02:00:17Z"}` |
+| `timestamp` | the same moment in the resource's `location`, RFC3339 — `2026-09-24T22:00:17-04:00` |
+| `epoch` | seconds since the Unix epoch, an integer |
+
+**A first check is careful.** With nothing recorded there is no "since", so the check fires only if a slot fell in the **last hour** — a nightly pipeline set at three in the afternoon waits for two in the morning, and an every-ten-minutes one starts within its first poll. `fire_immediately: true` fires at once instead. This is a `steps web` behavior: `steps run` and `steps test` have no cursor, so every run of theirs is a first check — a get of a resource with no slot in the last hour fails as `no versions available`, which is the truth, and `fire_immediately` is how a one-shot run asks for the time regardless.
+
+```yaml noexec=schedule
+resources:
+- name: nightly
+  type: cron
+  source:
+    expression: "0 2 * * 1-5"      # two in the morning, Monday to Friday
+    location: America/New_York
+
+jobs:
+- name: report
+  plan:
+  - get: nightly
+    trigger: true
+  - task: summarize
+    inputs: [nightly]
+    run: echo "report for $(cat nightly/timestamp)"
+```
+
+There is deliberately no `out:` — `put: tick` is a load error, as it is for `git`. A step that wants the current time has `date`; a version whose only meaning is "now" is not something to publish. `tags:` is refused too, as for every type that runs inside this process: there is nothing to place.
 
 ## Writing a resource type
 

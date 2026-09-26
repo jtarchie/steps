@@ -69,6 +69,11 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 		t.Fatalf("RecordNode: %v", err)
 	}
 
+	appendEvents(t, pipeline.Store, "placed", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1, Status: "succeeded", Hash: hash},
+	})
+
 	instance := "i-0abc123def4567890"
 	root := 0
 
@@ -104,32 +109,6 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("the run page does not show %q", want)
 		}
-	}
-}
-
-// TestRunPageKeepsTheMachinesPanelOffAnUnplacedRun: a pipeline that names no
-// worker is the ordinary case, and an empty panel on every one of those pages
-// reads as a broken record rather than as nothing to report.
-func TestRunPageKeepsTheMachinesPanelOffAnUnplacedRun(t *testing.T) {
-	t.Parallel()
-
-	server, pipeline := testPipeline(t)
-	ctx := context.Background()
-
-	err := pipeline.Store.StartRun(ctx, "local", "build", "", "")
-	if err != nil {
-		t.Fatalf("StartRun: %v", err)
-	}
-
-	err = pipeline.Store.FinishRun(ctx, "local", "succeeded")
-	if err != nil {
-		t.Fatalf("FinishRun: %v", err)
-	}
-
-	_, body := get(t, server, "/p/demo/runs/local")
-
-	if strings.Contains(body, "placed step(s)") {
-		t.Error("an unplaced run draws the machines panel")
 	}
 }
 

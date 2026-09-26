@@ -57,7 +57,7 @@ func realAWS(t *testing.T) awsFixture {
 		t.Skip("no AWS fixture — run hack/aws-fixture.sh up and export what it prints")
 	}
 
-	_, err := os.Stat(fixture.binary)
+	_, err := os.Stat(fixture.binary) //nolint:gosec,nolintlint // the fixture's own binary, named by an opt-in env var; nolintlint because only newer gosec builds flag it
 	if err != nil {
 		t.Fatalf("the worker binary %s is missing: %v", fixture.binary, err)
 	}

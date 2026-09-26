@@ -57,8 +57,8 @@ func startAuditedRun(t *testing.T, pipeline *Pipeline, runID string) {
 
 var inPageLink = regexp.MustCompile(`href="#([^"]+)"`)
 
-// The head is an index of what sits below the transcript, and an index entry that names nothing is worse than none: a click that scrolls to the top silently. So every in-page link on the page names an id the page draws, and the sections it points at come AFTER the transcript, which is what puts the first step on the first screen.
-func TestTheHeadPointsAtTheSectionsBelowTheTranscript(t *testing.T) {
+// What a step spent and where it ran are facts about that step, so they are read on its row: a table below the transcript made the reader find the step twice. Every in-page link still names an id the page draws, and the head keeps the run's total, which is a question about the run.
+func TestAStepCarriesWhatItSpentAndWhereItRan(t *testing.T) {
 	t.Parallel()
 
 	server, pipeline := testPipeline(t)
@@ -75,36 +75,27 @@ func TestTheHeadPointsAtTheSectionsBelowTheTranscript(t *testing.T) {
 		}
 	}
 
-	transcript := strings.Index(body, `id="transcript"`)
-	spend := strings.Index(body, `id="spend"`)
-	machines := strings.Index(body, `id="machines"`)
+	_, transcript, found := strings.Cut(body, `id="transcript"`)
+	transcript, _, _ = strings.Cut(transcript, `id="run-empty"`)
 
-	if transcript < 0 || spend < transcript || machines < spend {
-		t.Errorf("sections are not below the transcript in order (transcript %d, spend %d, machines %d)", transcript, spend, machines)
+	if !found {
+		t.Fatalf("no transcript:\n%s", body)
 	}
 
-	if !strings.Contains(body, `spend 412,000 tokens · 60% cached · $1.20 <a href="#spend">→ #spend</a>`) {
-		t.Errorf("the head does not summarise the spend and point at the table:\n%s", body)
-	}
-
-	if !strings.Contains(body, `1 placed <a href="#machines">→ #machines</a>`) {
-		t.Errorf("the head does not count the placements and point at the table:\n%s", body)
-	}
-}
-
-// A run that called no model and left this machine has nothing to point at, and the head must not promise a section that is not there.
-func TestTheHeadPointsAtNothingARunDoesNotHave(t *testing.T) {
-	t.Parallel()
-
-	server, pipeline := testPipeline(t)
-	startFinishedRun(t, pipeline, "run-plain", "build", "succeeded")
-
-	_, body := get(t, server, "/p/demo/runs/run-plain")
-
-	for _, absent := range []string{`href="#spend"`, `id="spend"`, `href="#machines"`, `id="machines"`} {
-		if strings.Contains(body, absent) {
-			t.Errorf("a run with no spend or placements still carries %s", absent)
+	for _, said := range []string{"opus", "412,000 tokens", "60% cached", FormatUSD(1.2), "end_turn", "ssh://jt@box", "linux/arm64", "ext4"} {
+		if !strings.Contains(transcript, said) {
+			t.Errorf("the step row does not say %q:\n%s", said, transcript)
 		}
+	}
+
+	for _, gone := range []string{`id="spend"`, `id="machines"`, `href="#spend"`, `href="#machines"`} {
+		if strings.Contains(body, gone) {
+			t.Errorf("the page still carries %s", gone)
+		}
+	}
+
+	if !strings.Contains(body, `spend 412,000 tokens · 60% cached · $1.20`) {
+		t.Errorf("the head does not total the run's spend:\n%s", body)
 	}
 }
 

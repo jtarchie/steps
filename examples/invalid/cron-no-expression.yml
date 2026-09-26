@@ -1,0 +1,14 @@
+# A cron resource with nothing to say when: the expression IS the schedule, so
+# there is no default to fall back on.
+# expect: needs source.expression
+
+resources:
+- name: tick
+  type: cron
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: tick
+    trigger: true

@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -241,5 +243,43 @@ func TestPlacementChecksKnowWhetherAnArtifactStoreIsSet(t *testing.T) {
 				t.Errorf("artifact store set=%v, %s: err = %v, want refused=%v by the placement check", withStore, check, err, !withStore)
 			}
 		}
+	}
+}
+
+// TestABlockTagEveryChildOverridesNeedsNoWorker: a do:'s tags: are handed to
+// its children at load and cleared from the block, which runs nothing — so a
+// block tag no child ends up using demands no --worker mapping.
+func TestABlockTagEveryChildOverridesNeedsNoWorker(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "pipe.yml")
+
+	err := os.WriteFile(path, []byte(`
+jobs:
+- name: build
+  plan:
+  - tags: [unused]
+    do:
+    - task: work
+      tags: [box]
+      run: "true"
+`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	ctx, err := WithWorkers(t.Context(), map[string]string{"box": "local:"})
+	if err != nil {
+		t.Fatalf("WithWorkers: %v", err)
+	}
+
+	err = ValidateWorkerPlacement(ctx, cfg, &cfg.Jobs[0])
+	if err != nil {
+		t.Errorf("a block tag every child overrides was demanded: %v", err)
 	}
 }

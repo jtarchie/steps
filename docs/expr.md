@@ -69,7 +69,7 @@ jobs:
 |---|---|---|
 | `check` | `source`, `version` | an array of version objects, oldest first |
 | `in` | `source`, `version`, `params` | an object of relative path → file contents |
-| `out` | `source`, `params`, and `file()` | the version it published, or `nil` |
+| `out` | `source`, `params`, `file()` and `version()` | the version it published, or `nil` |
 
 `check`'s `version` is the [check cursor](resources.md#the-check-cursor): the last version `steps web` recorded, so a poll can ask for what it has not seen. It is an **empty map** on the first-ever poll — and under `steps run`/`steps test`, which never receive a cursor — which is what makes `version.ts ?? "0"` both the natural spelling and the correct one rather than an incantation.
 
@@ -90,6 +90,57 @@ An allowed-but-unset variable is an **error**, not an empty string — an unset 
 ### `file(path)` / `file(path, default)`
 
 `out` only. Reads from the put's inputs — the same directory a shell `out:` gets as its cwd. Relative paths only. Files usually end in a newline, so `trim(file("thread/ts"))` is the common spelling.
+
+### `version(name)` / `version()`
+
+`out` only. The version a get in this build fetched, by the **get's** name — the artifact, so `get: thing, resource: api` is `version("thing")`. It is the version steps resolved, held in memory, not `<artifact>/version.json`: an `in:` need not write that file, a task may overwrite it, and a put placed on another machine reads the same value.
+
+```yaml
+resource_types:
+- name: counters
+  config:
+    expr:
+      check: |
+        1..source.count | map((
+          {n: string(#)}
+        ))
+      in: |
+        {"n.txt": version.n}
+- name: ledger
+  config:
+    expr:
+      # No file read and no version.json anywhere: the fetched version
+      # comes from the build.
+      out: |
+        version("ticker").n == "3"
+          ? {recorded: version("ticker").n}
+          : fail("expected the third tick, got " + version("ticker").n)
+
+resources:
+- name: ticker
+  type: counters
+  source:
+    count: 3
+- name: record
+  type: ledger
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: ticker
+  - put: record
+    inputs: [ticker]
+  assert:
+    execution: [ticker, record]
+    outcome: succeeded
+```
+
+- **Only the put's inputs are visible** — the same boundary as `file()`. `inputs: [a, b]` answers for those names; `inputs: all` for every get fetched so far; no `inputs:`, nothing. A name that is not an input is an error listing the ones that are, and so is an input a task produced rather than a get fetched.
+- **`version()` with no name** is the one fetched input's version, `nil` when no input was fetched, and an error naming them when several were. The `nil` is what lets a type fall back to reading files — the built-in [Slack put types](resources.md#the-built-in-slack-mentions-slack-reply-and-slack-reaction-types) use exactly that.
+- **It is what the get fetched**, even if a later task outputs an artifact of the same name.
+- **Numbers compare as numbers.** A version from the state database carries exact decimal text; `version()` hands the expression a copy with numbers normalized the way `http()`'s are, so `version("x").n + 1` works and the stored version is untouched.
+- **Job-level hooks cannot use it.** They take no `inputs:`, and run outside any one build. Attach the put to a step's hook instead.
 
 ### `fail(message)`
 
@@ -151,6 +202,7 @@ These are the ones that will bite you first. They are properties of expr itself,
 - **Comments are `//` and `/* */`.** A `#` starts a *pointer*, not a comment, so a `#`-commented line is a syntax error in the middle of your program.
 - **`concat(a, b)` joins two lists.** `+` is arithmetic and refuses them.
 - **Nested predicates shadow `#`.** Capture the outer value with `let` first — `let ch = #.request.query.channel; …` — which the spec requires and is not stylistic.
+- **In `out`, `version` is a function; in `check` and `in` it is the variable.** `version.ts` copied from an `in:` into an `out:` fails `steps validate`; write `version("mentions").ts`.
 - **`not in` is not a thing.** Write `!("subtype" in #)`.
 - **`toJSON` indents.** Valid JSON, just not compact.
 - **There is no `try`/`catch`, and no way to add one.** Deferring an expression means compiling it separately, and a separately compiled program cannot see `let` bindings or `#` — both live on the VM's stack. So tolerance lives where the errors are born instead: `tolerate_errors` on `http()`, and the optional second argument to `env()` and `file()`.

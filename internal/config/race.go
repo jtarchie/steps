@@ -61,7 +61,25 @@ func (c *Config) validateRaceBlock(label string, step *Step) error {
 		}
 	}
 
+	err := rejectBlockTags(label, step, "a race")
+	if err != nil {
+		return err
+	}
+
 	return c.rejectOperationFields(label, step, "a race")
+}
+
+// rejectBlockTags refuses tags: on a block that cannot declare them. Only do:
+// and in_parallel: do, as in Concourse (concourse#9606); race: and ensemble:
+// pass an inherited tag through to what they hold. Allowing one later is
+// additive, taking it away would not be.
+func rejectBlockTags(label string, step *Step, kind string) error {
+	if len(step.Tags) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf("%s: tags is not valid on %s step; set it on the step inside the block that it describes, or wrap the block in a do: that declares them",
+		label, kind)
 }
 
 // rejectOperationFields rejects the fields that describe an operation, on a
@@ -79,7 +97,6 @@ func (c *Config) rejectOperationFields(label string, step *Step, kind string) er
 		{"inputs", step.InputsDeclared()},
 		{"outputs", step.Outputs != nil},
 		{"image", step.Image != ""},
-		{"tags", len(step.Tags) > 0},
 		{"run", step.Run != ""},
 		{"messages", len(step.Messages) > 0},
 		{"message_files", len(step.MessageFiles) > 0},

@@ -26,11 +26,11 @@ type (
 // runView is a whole run, assembled.
 type runView struct {
 	runview.Transcript
-	// Changed names the steps whose content hash differs from the last
-	// successful run of the same job — the "what is different this time"
-	// answer a failed run opens with. Empty when there is no prior success
-	// to compare against.
-	Changed []string
+	// Changed marks, by step name, the steps whose content hash differs from
+	// the last successful run of the same job — "changed", or "new" for a step
+	// that run did not have — drawn on each step's own row. Empty when there
+	// is no prior success to compare against.
+	Changed map[string]string
 	// ComparedTo is the run Changed was computed against.
 	ComparedTo string
 	// ComparedConfig is the configuration THAT run executed, when it is not
@@ -62,13 +62,11 @@ type runView struct {
 	// ConfigDrifted is why Ceilings is empty: this run opened against a
 	// configuration that is no longer loaded.
 	ConfigDrifted bool
-	// Usage is what this run's agent steps spent, in step order. Empty for a
-	// run with no agent steps, which is what keeps the panel off a page that
-	// has nothing to say about spend.
+	// Usage is what this run's agent steps spent, in step order, each row drawn on the step it joins to (StepUsage).
 	Usage []store.AgentUsage
-	// Placements is what the machines this run's placed steps ran on said
-	// about themselves. Empty for a run with no placed steps, which keeps
-	// the panel off every page of every pipeline that names no worker.
+	// Placements is what the machines this run's placed steps ran on said about themselves, each drawn on the step it joins to (StepPlacements).
+	//
+	// ponytail: a usage or placement row that joins to no step in the transcript is not drawn anywhere. Every step publishes its start before it can be placed, so none is expected; if one turns up, draw the leftovers beside the run's own notes.
 	Placements []store.Placement
 }
 
@@ -143,7 +141,7 @@ func (r runView) Spend() spendSummary {
 	return summary
 }
 
-// HasSpend keeps the panel off a run that never called a model.
+// HasSpend keeps the head's spend total off a run that never called a model.
 func (r runView) HasSpend() bool { return len(r.Usage) > 0 }
 
 // truncatedFinish reports a response cut off by the model's output limit
@@ -181,7 +179,7 @@ type usageView struct {
 // and for a cli agent it is the last INVOCATION's. A step whose first message
 // finished cleanly and then died against a pooled ceiling — max_turns: and
 // budget: usd do not reset at a message boundary — records "success" on a step
-// that failed, and the panel drew it verbatim beside a failed run.
+// that failed, and the page drew it verbatim beside a failed run.
 //
 // Annotated rather than overwritten. The reason is a fact about a request;
 // replacing it with steps' verdict on the step would put two vocabularies in
@@ -214,54 +212,62 @@ func (u usageView) CachePercent() int {
 	return u.Cached * 100 / u.Total
 }
 
-// UsageRows wraps the raw rows for the template.
-func (r runView) UsageRows() []usageView {
-	// Keyed by index AND name, because a plan index is not a step: every cell
-	// of an across: and every member of an ensemble: is handed the block's own
-	// index (internal/pipeline/across.go's runAcrossCell, ensemble.go's
-	// runEnsembleMembers), so keying on it alone marked every sibling's spend
-	// row failed when one cell failed. The name tells them apart — both sides
-	// of this join spell it the same way, agent_usage from step.DisplayName()
-	// and the event from eventStepName(), and both prefer a cell's Label.
-	// The pair is still not a step: every member of an ensemble:, every
-	// branch of an in_parallel: or race:, and the step a try: wraps are all
-	// handed the block's index, and two of them may name the same agent. What
-	// tells those apart is the node — a usage row always records its hash,
-	// and a step that ENDED WELL publishes the same hash on its finish, while
-	// a failed one publishes none. So a row whose node some step under this
-	// key finished with is provably not the one that failed, and only the
-	// rest are blamed.
-	failed := make(map[string]bool, len(r.Steps))
-	succeeded := make(map[string]bool, len(r.Steps))
+// StepUsage is what this step spent, drawn on its own row.
+func (r runView) StepUsage(step *stepView) []usageView {
+	var rows []usageView
 
-	for _, step := range r.Steps {
-		if step.Failed() {
-			failed[usageKey(step.Index, step.Name)] = true
-		} else if step.Hash != "" {
-			succeeded[step.Hash] = true
+	for _, spent := range r.Usage {
+		if !r.owns(step, spent.StepIndex, spent.StepName, spent.NodeHash) {
+			continue
 		}
-	}
 
-	rows := make([]usageView, 0, len(r.Usage))
-
-	for _, step := range r.Usage {
-		ceiling, known := r.ceilingFor(step.StepName)
-		rows = append(rows, usageView{
-			AgentUsage:   step,
-			StepFailed:   failed[usageKey(step.StepIndex, step.StepName)] && !succeeded[step.NodeHash],
-			Ceiling:      ceiling,
-			CeilingKnown: known,
-		})
+		ceiling, known := r.ceilingFor(spent.StepName)
+		rows = append(rows, usageView{AgentUsage: spent, StepFailed: step.Failed(), Ceiling: ceiling, CeilingKnown: known})
 	}
 
 	return rows
 }
 
-// usageKey identifies one executed step across the two tables that describe
-// it. Not stepKey: agent_usage records no step id, so the pair is all there
-// is to join on.
-func usageKey(index int, name string) string {
-	return strconv.Itoa(index) + "/" + name
+// StepPlacements is the machine this step ran on, drawn on its own row.
+func (r runView) StepPlacements(step *stepView) []PlacementView {
+	var rows []PlacementView
+
+	for _, placed := range r.Placements {
+		if r.owns(step, placed.StepIndex, placed.StepName, placed.NodeHash) {
+			rows = append(rows, PlacementView{Placement: placed})
+		}
+	}
+
+	return rows
+}
+
+// owns joins an agent_usage or run_placements row to the step it describes. Neither table records a step id, and (index, name) is not a step: every cell of an across:, member of an ensemble:, branch of an in_parallel: or race:, and the step a try: wraps is handed its block's index, and two may share a name. The node is what tells them apart — a step that ENDED WELL publishes the hash its row recorded — so a hashed step owns exactly its node's rows, and a step with no hash (it failed, or it is a hook, which is never hashed) owns the rows under its index and name that no hashed step claimed.
+func (r runView) owns(step *stepView, index int, name, nodeHash string) bool {
+	if step.Hash != "" {
+		return nodeHash == step.Hash
+	}
+
+	if step.Skipped() || step.Index != index || step.Name != name {
+		return false
+	}
+
+	for _, other := range r.Steps {
+		if other.Hash != "" && other.Hash == nodeHash {
+			return false
+		}
+	}
+
+	return true
+}
+
+// StepHasBody is runview's answer plus what this page joins onto the row: a placed step with no output still has its machine to show.
+func (r runView) StepHasBody(step *stepView) bool {
+	return step.HasBody() || len(r.StepUsage(step)) > 0 || len(r.StepPlacements(step)) > 0
+}
+
+// StepHasDetail is runview's HasDetail over StepHasBody.
+func (r runView) StepHasDetail(step *stepView) bool {
+	return step.Container() || r.StepHasBody(step)
 }
 
 // ceilingFor is the spend ceiling of the step this spend row belongs to, and
@@ -366,19 +372,6 @@ func (p PlacementView) Machine() string {
 	return p.Address + " in " + p.Image
 }
 
-// HasPlacements keeps the panel off a run that never left this machine.
-func (r runView) HasPlacements() bool { return len(r.Placements) > 0 }
-
-// PlacementRows wraps the raw rows for the template.
-func (r runView) PlacementRows() []PlacementView {
-	rows := make([]PlacementView, 0, len(r.Placements))
-	for _, placed := range r.Placements {
-		rows = append(rows, PlacementView{Placement: placed})
-	}
-
-	return rows
-}
-
 // FormatBinaryBytes renders a disk or transfer size in BINARY units,
 // deliberately unlike formatBytes.
 //
@@ -451,24 +444,24 @@ func buildRunView(run store.RunRow, rows []store.RunEventRow, results map[string
 // and a prior one. It is the merkle store answering "what is different about
 // this run" directly: identical hashes mean identical content, so a step
 // whose hash moved is a step whose inputs, command, or prompt moved.
-func diffAgainst(current, prior runView) []string {
+func diffAgainst(current, prior runView) map[string]string {
 	priorHashes := map[string]string{}
 	for _, step := range prior.Steps {
 		priorHashes[step.Name] = step.Hash
 	}
 
-	var changed []string
+	changed := map[string]string{}
 
 	for _, step := range current.Steps {
 		before, existed := priorHashes[step.Name]
 		if !existed {
-			changed = append(changed, step.Name+" (new)")
+			changed[step.Name] = "new"
 
 			continue
 		}
 
 		if before != step.Hash && step.Hash != "" && before != "" {
-			changed = append(changed, step.Name)
+			changed[step.Name] = "changed"
 		}
 	}
 

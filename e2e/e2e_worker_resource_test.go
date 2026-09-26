@@ -418,6 +418,9 @@ jobs:
 // infrastructure, not the step saying no — on_error, never on_failure. The
 // shim reports the reclaimed command as a signalled exit, which used to
 // classify as the step failing.
+//
+// The hooks sit on an untagged do: around the step: on the step itself they
+// would inherit its tag and be sent to the reclaimed worker too.
 func TestEndToEndEvictionIsNotAFailure(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(drainingWorkerEnv, filepath.Join(dir, "execs"))
@@ -426,9 +429,10 @@ func TestEndToEndEvictionIsNotAFailure(t *testing.T) {
 jobs:
 - name: build
   plan:
-  - task: doomed
-    tags: [gpu]
-    run: echo never-finishes
+  - do:
+    - task: doomed
+      tags: [gpu]
+      run: echo never-finishes
     on_failure:
       task: note
       run: echo failed > `+filepath.Join(dir, "on-failure.txt")+`

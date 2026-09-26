@@ -5,7 +5,7 @@
     <h1 class="prompt"><b>steps run {{$run.Run.JobName}} #{{short $run.Run.ID}}</b></h1>
     {{/* Two lines, read in order: what happened and where, then what it ran
          against and what it cost. A reader triaging reads the first and
-         stops; the second is the index of everything below the transcript. */}}
+         stops. */}}
     <p class="metaline outcome">
       <span class="st st-{{statusWord $run.Run.Status}}">{{statusWord $run.Run.Status}}</span>
       {{/* The step that actually broke, first: the same row the f key finds,
@@ -21,8 +21,7 @@
       {{if $run.Run.Workspace}}<span class="sep">·</span>{{$run.Run.Workspace}}{{end}}
       {{if .Job.Upstream}}<span class="sep">·</span>after {{range .Job.Upstream}}<a href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a> <span class="res">[{{.Resource}}]</span> {{end}}{{end}}
       {{if .Job.Downstream}}<span class="sep">·</span>feeds {{range .Job.Downstream}}<a href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a> <span class="res">[{{.Resource}}]</span> {{end}}{{end}}
-      {{if $run.HasSpend}}{{$spend := $run.Spend}}<span class="sep">·</span>spend {{thousands $spend.Tokens}} tokens · {{$spend.CachePercent}}% cached · {{if $spend.Priced}}{{$spend.Cost}}{{else}}<span class="unpriced">unpriced</span>{{end}}{{if $spend.Truncated}} · <span class="spendwarn">{{$spend.Truncated}} truncated</span>{{end}}{{if $run.Running}} so far{{end}} <a href="#spend">→ #spend</a>{{end}}
-      {{if $run.HasPlacements}}<span class="sep">·</span>{{len $run.Placements}} placed <a href="#machines">→ #machines</a>{{end}}
+      {{if $run.HasSpend}}{{$spend := $run.Spend}}<span class="sep">·</span>spend {{thousands $spend.Tokens}} tokens · {{$spend.CachePercent}}% cached · {{if $spend.Priced}}{{$spend.Cost}}{{else}}<span class="unpriced">unpriced</span>{{end}}{{if $spend.Truncated}} · <span class="spendwarn">{{$spend.Truncated}} truncated</span>{{end}}{{if $run.Running}} so far{{end}}{{end}}
     </p>
   </div>
 </div>
@@ -58,11 +57,12 @@
 {{end}}
 
 {{/* One line for everything that moved since the last green: the edit and
-     the steps it moved are two halves of "what is different this time". */}}
+     how many steps it moved are two halves of "what is different this time".
+     Which steps is marked on each one's row. */}}
 {{if or $run.ComparedConfig $run.Changed}}
 <p class="diffnote">vs last passed <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.ComparedTo}}">{{short $run.ComparedTo}}</a>:
   {{if $run.ComparedConfig}}the <b>configuration changed</b> — it ran <a class="hash" href="/p/{{.Nav.Current}}/config/{{$run.ComparedConfig}}">{{short $run.ComparedConfig}}</a>{{if $run.Changed}} ·{{else}}, and no step's content moved with it{{end}}{{end}}
-  {{if $run.Changed}}{{range $run.Changed}}<span class="chg">{{.}}</span> {{end}}changed content — everything else replayed from cache{{end}}</p>
+  {{with len $run.Changed}}{{.}} step{{if ne . 1}}s{{end}} changed content — everything else replayed from cache{{end}}</p>
 {{end}}
 
 {{/* On the transcript's top edge, at the right: the keys drive the rows
@@ -86,65 +86,6 @@
 
 {{if $run.HasSkipped}}
 <p class="callout"><b>Folded = cached.</b> A step whose content hash was unchanged replays from the merkle store and never re-executes — so this page shows exactly what this run paid for.</p>
-{{end}}
-
-{{/* Below the transcript, where the audit reader scrolls to and the head
-     links down to: a table is never above the first step. */}}
-{{if $run.HasSpend}}
-{{$spend := $run.Spend}}
-<section class="spend" id="spend" aria-labelledby="spend-lbl">
-  <div class="spendhead">
-    <span class="lbl" id="spend-lbl">spend</span>
-    <span class="spendtotal">{{thousands $spend.Tokens}} tokens</span>
-    <span class="spendmeta">{{$spend.CachePercent}}% cached</span>
-    <span class="spendmeta">{{$spend.Steps}} agent step(s)</span>
-    {{if $spend.Priced}}<span class="spendtotal">{{$spend.Cost}}</span>{{else}}<span class="spendmeta unpriced" title="No provider on this run reported a dollar figure, so this is deliberately not shown as $0.00">unpriced</span>{{end}}
-    {{if $spend.Truncated}}<span class="spendwarn">{{$spend.Truncated}} response(s) truncated</span>{{end}}
-  </div>
-  <div class="spendscroll">
-  <table class="spendtable">
-    <tr><th>step</th><th class="num">tokens</th><th class="num">cached</th><th>model served</th><th class="num">cost</th><th class="num">of</th><th>finish</th></tr>
-    {{range $run.UsageRows}}
-    <tr>
-      <td>{{.StepName}}</td>
-      <td class="num">{{thousands .Total}}</td>
-      <td class="num">{{.CachePercent}}%</td>
-      <td class="model">{{if .ModelServed}}{{.ModelServed}}{{else}}{{.ModelReq}}{{end}}</td>
-      <td class="num">{{.Cost}}</td>
-      <td class="num">{{if .Ceiling}}<span class="dim">{{.Ceiling}}</span>{{else if $run.ConfigDrifted}}<span class="faint" title="This run opened against a configuration that is no longer loaded. Its ceilings are not reconstructable from the recorded revision, so showing today's would be wrong for exactly this run.">config changed</span>{{else if .CeilingKnown}}<span class="faint">uncapped</span>{{else}}<span class="faint" title="This step's name does not resolve to an agent in the loaded configuration, so what it was allowed to spend is not knowable here. Not the same as uncapped.">unknown</span>{{end}}</td>
-      <td>{{if .Truncated}}<span class="spendwarn">{{lower .FinishReason}} — truncated</span>{{else if .FailedAfter}}<span class="spendwarn" title="The provider's word about the last request that completed. The step failed after it — a cli agent's pooled max_turns: or budget: usd can run out between messages, leaving the last invocation's success as the final word.">{{lower .FinishReason}} — step failed</span>{{else}}<span class="dim">{{lower .FinishReason}}</span>{{end}}</td>
-    </tr>
-    {{end}}
-  </table>
-  </div>
-</section>
-{{end}}
-
-{{if $run.HasPlacements}}
-<section class="spend placement" id="machines" aria-labelledby="machines-lbl">
-  <div class="spendhead">
-    <span class="lbl" id="machines-lbl">machines</span>
-    <span class="spendmeta">{{len $run.Placements}} placed step(s)</span>
-    <span class="spendmeta" title="What an instance-hour cost is not knowable from inside a run — list prices ignore Savings Plans, a spot instance's paid price is reported by no API, and real billing lands a day later. These are the facts; price them against your own rate card.">facts, not a price</span>
-  </div>
-  <div class="spendscroll">
-  <table class="spendtable">
-    <tr><th>step</th><th>tag</th><th>platform</th><th>filesystem</th><th class="num">sent</th><th class="num">received</th><th>user</th><th>machine</th></tr>
-    {{range $run.PlacementRows}}
-    <tr>
-      <td>{{.StepName}}</td>
-      <td>{{.Tag}}</td>
-      <td class="model">{{.Platform}}</td>
-      <td>{{if .Volatile}}<span class="spendwarn" title="This is memory, not disk: the pushed binary and the step's tree spend it, and a reboot loses both. Name a path on a real disk in the worker URL.">{{.Filesystem}}</span>{{else}}<span class="dim">{{.Filesystem}}</span>{{end}}</td>
-      <td class="num">{{.Sent}}</td>
-      <td class="num">{{.Received}}</td>
-      <td class="model">{{.Identity}}</td>
-      <td class="model">{{.Machine}}</td>
-    </tr>
-    {{end}}
-  </table>
-  </div>
-</section>
 {{end}}
 {{end}}
 
@@ -182,7 +123,7 @@
   // reload indefinitely, and reporting the outcome unwatched is the point.
   //
   // The reload is what draws everything the transcript is not — the run's own
-  // status, its duration, the spend and placement tables — and it is also the
+  // status, its duration, what each step spent — and it is also the
   // backstop for a fragment a dropped connection lost.
   window.runFinished = function (event) {
     var status = '';
@@ -245,7 +186,7 @@
 {{$anchor := $step.Anchor}}
 <div id="{{$anchor}}"{{if .OOB}} hx-swap-oob="outerMorph"{{end}}{{template "stepattrs" .}}>
   {{template "stephead" (stepctx $page $step)}}
-  {{if $step.HasBody}}<div class="stepbody" id="{{$anchor}}_body">
+  {{if $run.StepHasBody $step}}<div class="stepbody" id="{{$anchor}}_body">
     {{with $step.Error}}<div class="log"><span class="err">{{.}}</span></div>{{end}}
     {{if $run.MCPBlamedOn $step}}{{template "mcphint" $page}}{{end}}
     {{if $step.Reason}}<div class="log">{{$step.Reason}}{{if $step.Hash}} · content hash {{short $step.Hash}}{{end}}</div>{{end}}
@@ -268,6 +209,8 @@
     </div>
     {{end}}
     {{if $step.Note}}<div class="agentmeta">note: {{$step.Note}}</div>{{end}}
+    {{range $run.StepUsage $step}}<div class="agentmeta">model {{if .ModelServed}}{{.ModelServed}}{{if ne .ModelServed .ModelReq}} (asked for {{.ModelReq}}){{end}}{{else}}{{.ModelReq}}{{end}} · {{thousands .Prompt}} prompt · {{thousands .Completion}} completion · {{thousands .Cached}} cached{{if .Reasoning}} · {{thousands .Reasoning}} reasoning{{end}} · {{with .Cost}}{{.}}{{else}}<span class="unpriced">unpriced</span>{{end}}{{if .Ceiling}} of {{.Ceiling}}{{else if $run.ConfigDrifted}} · ceiling <span title="This run opened against a configuration that is no longer loaded. Its ceilings are not reconstructable from the recorded revision, so showing today's would be wrong for exactly this run.">config changed</span>{{else if .CeilingKnown}} · uncapped{{else}} · ceiling <span title="This step's name does not resolve to an agent in the loaded configuration, so what it was allowed to spend is not knowable here. Not the same as uncapped.">unknown</span>{{end}}{{with .FinishReason}} · finish {{end}}{{if .Truncated}}<span class="spendwarn">{{lower .FinishReason}} — truncated</span>{{else if .FailedAfter}}<span class="spendwarn" title="The provider's word about the last request that completed. The step failed after it — a cli agent's pooled max_turns: or budget: usd can run out between messages, leaving the last invocation's success as the final word.">{{lower .FinishReason}} — step failed</span>{{else}}{{lower .FinishReason}}{{end}}</div>{{end}}
+    {{range $run.StepPlacements $step}}<div class="agentmeta">placed on {{.Tag}} · {{.Machine}} · {{.Platform}} · {{if .Volatile}}<span class="spendwarn" title="This is memory, not disk: the pushed binary and the step's tree spend it, and a reboot loses both. Name a path on a real disk in the worker URL.">{{.Filesystem}}</span>{{else}}{{.Filesystem}}{{end}} · {{.Sent}} sent · {{.Received}} received{{with .Identity}} · as <span class="ident">{{.}}</span>{{end}}</div>{{end}}
   </div>{{end}}
   {{if $step.Container}}<div class="substeps" id="{{$anchor}}_substeps">
     {{range $step.Children}}{{template "step" (stepctx $page .)}}{{end}}
@@ -279,7 +222,7 @@
      the row, and the shell the stream sends when only these moved — a
      container whose child finished changes class and rollup and nothing
      under it. Rendered INSIDE the opening tag, so it starts with a space. */}}
-{{define "stepattrs"}}{{$step := .Step}}{{$detail := $step.HasDetail}} class="step{{if $step.Skipped}} skipped{{else if $step.Failed}} failed{{else if $step.Unreported}} unreported{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail (or $step.Failed $step.Unreported $step.Turns $step.Container)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}"{{end}}
+{{define "stepattrs"}}{{$step := .Step}}{{$detail := .Page.Run.StepHasDetail $step}} class="step{{if $step.Skipped}} skipped{{else if $step.Failed}} failed{{else if $step.Unreported}} unreported{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail (or $step.Failed $step.Unreported $step.Turns $step.Container (eq $step.Kind "put"))}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}"{{end}}
 
 {{/* The shell: a row's attributes and head, and nothing it holds. The
      attribute-only morph is what hx-morph-skip-children buys — htmx syncs the
@@ -290,7 +233,7 @@
 {{define "stepshell"}}<div id="{{.Step.Anchor}}" hx-swap-oob="outerMorph" hx-morph-skip-children{{template "stepattrs" .}}></div>
 {{template "stephead" .}}{{end}}
 
-{{define "stephead"}}{{$page := .Page}}{{$step := .Step}}{{$detail := $step.HasDetail}}<div class="stephead" id="{{$step.Anchor}}_head"{{if .OOB}} hx-swap-oob="outerMorph"{{end}}{{if $detail}} role="button" tabindex="0"{{end}}>
+{{define "stephead"}}{{$page := .Page}}{{$step := .Step}}{{$run := .Page.Run}}{{$detail := $run.StepHasDetail $step}}<div class="stephead" id="{{$step.Anchor}}_head"{{if .OOB}} hx-swap-oob="outerMorph"{{end}}{{if $detail}} role="button" tabindex="0"{{end}}>
     <span class="chev{{if $detail}} chev-icon{{end}}"></span>
     {{if $step.Skipped}}<span class="stmark" role="img" aria-label="skipped">–</span>{{else if $step.Failed}}<span class="stmark" role="img" aria-label="failed">✗</span>{{else if $step.Unreported}}<span class="stmark" role="img" aria-label="unreported">?</span>{{else if $step.Running}}<span class="stmark" role="img" aria-label="running">◐</span>{{else}}<span class="stmark" role="img" aria-label="passed">✓</span>{{end}}
     <span class="kind">{{$step.Kind}}</span>
@@ -298,11 +241,15 @@
     <a class="anchor" href="#{{$step.Anchor}}" title="Link to this step" aria-label="Link to this step">#</a>
     {{if $step.Reason}}<span class="note">{{$step.Reason}}</span>{{end}}
     {{if $step.Unreported}}<span class="note">did not report an end</span>{{end}}
+    {{with index $run.Changed $step.Name}}<span class="note chg" title="{{if eq . "new"}}not in the last passed run{{else}}its content hash moved since the last passed run{{end}}">{{.}}</span>{{end}}
     {{if $step.Verdict}}<span class="note">verdict: {{$step.Verdict}}</span>{{end}}
     {{if $step.WrappedUp}}<span class="note spendwarn" title="The turn budget ran out; this answer was written from what the model had already gathered">stopped early</span>{{end}}
     {{with $step.Compactions}}<span class="note" title="Older turns were summarized to fit the context budget; the model worked from the summary after that point">compacted ×{{.}}</span>{{end}}
     {{if $step.CompactionStalled}}<span class="note spendwarn" title="The most recent turns alone outgrew compact_after_tokens, so compaction stopped for the rest of this conversation">compaction stalled</span>{{end}}
+    {{$usage := $run.StepUsage $step}}{{range $usage}}{{if .Truncated}}<span class="note spendwarn" title="The model's output limit cut the last response off; a short answer and a truncated one look alike otherwise">truncated</span>{{end}}{{end}}
+    {{range $run.StepPlacements $step}}{{if .Volatile}}<span class="note spendwarn" title="This step's workdir is memory, not disk">{{.FSType}} workdir</span>{{end}}{{end}}
     <span class="headmeta">
+      {{range $usage}}<span class="note usage">{{if .ModelServed}}{{.ModelServed}}{{else}}{{.ModelReq}}{{end}} · {{thousands .Total}} tokens · {{.CachePercent}}% cached{{with .Cost}} · {{.}}{{end}}</span>{{end}}
       {{with $step.Rollup}}{{if not .Empty}}<span class="rollup">
         <span>{{.Cells}} step{{if ne .Cells 1}}s{{end}}</span>
         {{if .Passed}}<span class="r-sep">·</span><b class="r-pass">{{.Passed}} passed</b>{{end}}

@@ -432,7 +432,7 @@ func (c *Config) validateOneResourceTypeConfig(rt ResourceType) error {
 		return c.validateMCPResourceConfig(rt.Name, rt.Config.MCP)
 	case BackendExpr:
 		return validateExprResourceConfig(rt)
-	case BackendShell, BackendWebhook:
+	case BackendShell, BackendWebhook, BackendCron:
 	}
 
 	return nil

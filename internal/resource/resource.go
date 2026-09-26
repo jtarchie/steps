@@ -65,9 +65,15 @@ func CheckVersions(
 	case config.BackendWebhook:
 		// No check: a webhook resource's versions are the deliveries it was sent, so asking finds nothing new — and a get with none recorded fails as "no versions available", which is the truth.
 		return nil, nil
+	case config.BackendCron:
+		return cronCheckVersions(ctx, rt, source, version)
 	case config.BackendShell:
 	}
 
+	return shellCheckVersions(ctx, rt, extraEnv, source, version)
+}
+
+func shellCheckVersions(ctx context.Context, rt config.ResourceType, extraEnv []string, source, version map[string]any) ([]map[string]any, error) {
 	events.Logger(ctx).Debug("resource.check", "resource_type", rt.Name, "source", source, "version", version)
 
 	command, err := template.Render(rt.Config.Check, map[string]any{"source": source, "version": version})
@@ -285,6 +291,8 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, extr
 		return exprRunIn(ctx, rt, extraEnv, source, version, params, destDir)
 	case config.BackendWebhook:
 		return errWebhookIn
+	case config.BackendCron:
+		return cronRunIn(rt, source, version, destDir)
 	case config.BackendShell:
 	}
 
@@ -316,6 +324,14 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, extr
 	return nil
 }
 
+// PutInputs is what a put's expr out: may read of its build through
+// version(): its input names, and the versions this build's gets fetched for
+// them, by get name. The shell and mcp backends ignore it.
+type PutInputs struct {
+	Names    []string
+	Versions map[string]map[string]any
+}
+
 // RunOut renders rt.Config.Out against {"source": source, "params": params}
 // and executes it with cwd = srcDir. If stdout parses as a JSON object it's
 // returned as result (loosely mirroring check's convention of emitting the
@@ -331,14 +347,16 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, extr
 // is itself optional (see validateMCPResourcePuts, which rejects a put step
 // targeting an mcp-backed type with no out: at load time), so this is only
 // ever reached with it set.
-func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, extraEnv []string, source, params map[string]any, srcDir string) (map[string]any, error) {
+func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, extraEnv []string, source, params map[string]any, inputs PutInputs, srcDir string) (map[string]any, error) {
 	switch rt.Config.Backend() {
 	case config.BackendMCP:
 		return mcpRunOut(ctx, cfg, rt, source, params, srcDir)
 	case config.BackendExpr:
-		return exprRunOut(ctx, rt, extraEnv, source, params, srcDir)
+		return exprRunOut(ctx, rt, extraEnv, source, params, inputs, srcDir)
 	case config.BackendWebhook:
 		return nil, fmt.Errorf("out %q: a webhook resource cannot be put to", rt.Name)
+	case config.BackendCron:
+		return nil, fmt.Errorf("out %q: %w", rt.Name, errCronOut)
 	case config.BackendShell:
 	}
 

@@ -1762,13 +1762,13 @@ func TestFailedRunNamesWhatChangedSinceTheLastGreen(t *testing.T) {
 		t.Fatalf("GET run = %d: %s", code, body)
 	}
 
-	if !strings.Contains(body, `class="chg">compile</span>`) {
-		t.Errorf("the failed run does not name the step whose content moved:\n%s", body)
+	if !strings.Contains(stepHead(t, body, "compile"), `class="note chg"`) {
+		t.Errorf("the failed run does not mark the step whose content moved:\n%s", body)
 	}
 
-	// The step both runs share is what makes the note worth reading: naming
-	// everything is the same as naming nothing.
-	if strings.Contains(body, `class="chg">repo</span>`) {
+	// The step both runs share is what makes the mark worth reading: marking
+	// everything is the same as marking nothing.
+	if strings.Contains(stepHead(t, body, "repo"), `class="note chg"`) {
 		t.Error("the diff names a step whose hash did not move")
 	}
 
@@ -1892,5 +1892,56 @@ func TestRunPageOffersNoTriggerForAJobThePipelineDropped(t *testing.T) {
 	_, dropped := get(t, server, "/p/demo/runs/run-gone")
 	if strings.Contains(dropped, "/jobs/gone/trigger") {
 		t.Error("run page offers a trigger for a job the pipeline no longer has")
+	}
+}
+
+// stepHead is the header of the step named name: where a mark about that step belongs.
+func stepHead(t *testing.T, body, name string) string {
+	t.Helper()
+
+	_, head, found := strings.Cut(body, `<span class="name">`+name+`</span>`)
+	if !found {
+		t.Fatalf("no step named %s:\n%s", name, body)
+	}
+
+	head, _, _ = strings.Cut(head, "</div>")
+
+	return head
+}
+
+// A put opens by default, as a get's row does: the version it produced is the one thing a reader opens it for, and a passed row folded shut hid it behind a click the get never asked for.
+func TestAPutsRowOpensOnWhatItProduced(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-put", "build", "", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-put", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepNote, StepID: 1, Text: "built"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1, Status: "succeeded"},
+		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "image", StepKind: "put", StepID: 2},
+		{Type: events.TypeStepNote, StepID: 2, Text: `put: image (version: {"tag":"v1"})`},
+		{Type: events.TypeStepFinished, StepIndex: 1, StepName: "image", StepKind: "put", StepID: 2, Status: "succeeded"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-put", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-put")
+
+	if !regexp.MustCompile(`class="step passed open"[^>]*data-step="#2"`).MatchString(body) {
+		t.Errorf("the put's row is folded shut:\n%s", body)
+	}
+
+	if regexp.MustCompile(`class="step passed open"[^>]*data-step="#1"`).MatchString(body) {
+		t.Error("a passed task opens too, which folds nothing")
 	}
 }

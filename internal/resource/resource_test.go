@@ -124,7 +124,7 @@ func TestConformanceRunOutUnparsableStdoutIsNilNotError(t *testing.T) {
 		Config: config.ResourceTypeConfig{Out: "echo not-json"},
 	}
 
-	result, err := RunOut(context.Background(), nil, rt, nil, map[string]any{}, map[string]any{}, t.TempDir())
+	result, err := RunOut(context.Background(), nil, rt, nil, map[string]any{}, map[string]any{}, PutInputs{}, t.TempDir())
 	if err != nil {
 		t.Fatalf("RunOut: %v, want nil error for unparsable stdout", err)
 	}
@@ -256,7 +256,7 @@ func TestRunOutKeepsExactDigits(t *testing.T) {
 
 		rt := config.ResourceType{Name: "dummy", Config: config.ResourceTypeConfig{Out: "echo '" + out + "'"}}
 
-		result, err := RunOut(context.Background(), nil, rt, nil, map[string]any{}, map[string]any{}, t.TempDir())
+		result, err := RunOut(context.Background(), nil, rt, nil, map[string]any{}, map[string]any{}, PutInputs{}, t.TempDir())
 		if err != nil {
 			t.Fatal(err)
 		}

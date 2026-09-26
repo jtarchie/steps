@@ -10,6 +10,7 @@ package config
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -45,7 +46,12 @@ func (c *Config) validateTagValues() error {
 	}
 
 	for _, job := range c.Jobs {
-		err := job.visitSteps(func(label string, step *Step) error {
+		err := validateTagList(job.label()+job.at(), job.Tags)
+		if err != nil {
+			return err
+		}
+
+		err = job.visitSteps(func(label string, step *Step) error {
 			return validateTagList(label, step.Tags)
 		})
 		if err != nil {
@@ -106,38 +112,37 @@ func (c *Config) validateTagsRejectTry() error {
 
 // validateTagsOnAgent holds a placed agent to the one shape in which it is whole: every file tool reaching the same tree its run_shell reaches. The conversation itself always stays here — it is the tool calls that have to agree about which filesystem they are on, and image: is what makes them agree, because a containerized agent's file tools run in that container through the image's own userland. Without it only run_shell would travel, which is a model reading one filesystem and writing to another with no way to tell.
 func (c *Config) validateTagsOnAgent() error {
-	for _, job := range c.Jobs {
-		err := job.visitSteps(func(label string, step *Step) error {
-			if len(step.Tags) > 0 && step.Agent != "" {
-				err := c.checkPlacedAgent(label, *step)
-				if err != nil {
-					return err
-				}
-			}
-
-			// Same split, reached a different way: a task's fix: builds an
-			// agent from THIS step, with its file tools on the local directory
-			// and its run_shell on the runner the task uses. The agent rule
-			// above does not see it, because the step is a task.
-			//
-			// The RESOLVED fix:, for the same reason the agent rule above reads
-			// a resolved step: a step that names a tasks: entry inherits
-			// that entry's fix: (see ResolveTask), so checking only the step's
-			// own let exactly this split through — the command ran on the
-			// worker while the repair agent read the local workspace.
-			if len(step.Tags) > 0 && c.resolvedStepFix(*step) != nil {
-				return fmt.Errorf("%s: tags: is not valid on a task with fix: — the repair agent reads this machine's copy of the step while its commands would run on the worker",
-					label)
-			}
-
+	return c.visitPlacements(func(label string, step *Step, placed placement) error {
+		if len(placed.tags) == 0 {
 			return nil
-		})
-		if err != nil {
-			return err
 		}
-	}
 
-	return nil
+		where := placed.describe(label)
+
+		if step.Agent != "" {
+			err := c.checkPlacedAgent(where, *step)
+			if err != nil {
+				return placed.hint(err)
+			}
+		}
+
+		// Same split, reached a different way: a task's fix: builds an
+		// agent from THIS step, with its file tools on the local directory
+		// and its run_shell on the runner the task uses. The agent rule
+		// above does not see it, because the step is a task.
+		//
+		// The RESOLVED fix:, for the same reason the agent rule above reads
+		// a resolved step: a step that names a tasks: entry inherits
+		// that entry's fix: (see ResolveTask), so checking only the step's
+		// own let exactly this split through — the command ran on the
+		// worker while the repair agent read the local workspace.
+		if c.resolvedStepFix(*step) != nil {
+			return placed.hint(fmt.Errorf("%s: tags: is not valid on a task with fix: — the repair agent reads this machine's copy of the step while its commands would run on the worker",
+				where))
+		}
+
+		return nil
+	})
 }
 
 // validateTagsRejectNonShell refuses placing a resource whose type is not
@@ -159,26 +164,19 @@ func (c *Config) validateTagsRejectNonShell() error {
 		}
 	}
 
-	for _, job := range c.Jobs {
-		err := job.visitSteps(func(label string, step *Step) error {
-			name, ok := step.resourceName()
-			if !ok || len(step.Tags) == 0 {
-				return nil
-			}
-
-			resource, err := c.FindResource(name)
-			if err != nil {
-				return nil //nolint:nilerr // reported by the rule that owns unknown resources
-			}
-
-			return c.rejectNonShellPlacement(label, resource.Type)
-		})
-		if err != nil {
-			return err
+	return c.visitPlacements(func(label string, step *Step, placed placement) error {
+		name, ok := step.resourceName()
+		if !ok || len(placed.tags) == 0 {
+			return nil
 		}
-	}
 
-	return nil
+		resource, err := c.FindResource(name)
+		if err != nil {
+			return nil //nolint:nilerr // reported by the rule that owns unknown resources
+		}
+
+		return placed.hint(c.rejectNonShellPlacement(placed.describe(label), resource.Type))
+	})
 }
 
 // resourceName is the resource a get or put step names, and false for every
@@ -282,8 +280,137 @@ func (c *Config) resolvedStepFix(step Step) *FixSpec {
 	return task.Fix
 }
 
-// inheritResourceTags gives every untagged get and put its resource's tags:,
-// after validation, so everything downstream reads one field.
+// placement is the tags: a step runs under and, when it did not say so
+// itself, where they came from.
+type placement struct {
+	tags []string
+	// from labels the job or block the tags were inherited from; empty when
+	// the step or its resource declared them.
+	from string
+}
+
+// describe is label, plus where an inherited tag came from — the one thing a
+// refusal of a step that never wrote tags: has to say for anyone to find it.
+func (p placement) describe(label string) string {
+	if p.from == "" {
+		return label
+	}
+
+	return fmt.Sprintf("%s (tags: [%s] inherited from %s)", label, strings.Join(p.tags, ", "), p.from)
+}
+
+// hint appends the fix to a refusal of an inherited tag. There is no opt-out
+// from one (tags: [] is refused, and left free to mean that later), so the fix
+// is to scope the tag rather than to cancel it.
+func (p placement) hint(err error) error {
+	if err == nil || p.from == "" {
+		return err
+	}
+
+	return fmt.Errorf("%w; give the step what it needs, or move tags: onto a do: around only the steps that belong on the worker", err)
+}
+
+// visitPlacements calls fn for every step with the tags it runs under: its
+// own, else its resource's (a get or put), else the nearest enclosing do: or
+// in_parallel:, else the job's. Override, never union.
+//
+// A step's hooks inherit what that step resolved to, as in Concourse
+// (concourse#9606): a tagged step's untagged on_failure:/ensure: runs on the
+// step's worker, a get's on its resource's, a declaring block's on the
+// block's. There is no opt-out (tags: [] is refused), so a hook that must run
+// elsewhere is restructured out from under the tag: moved onto an untagged
+// do: around the step, whose hooks take what the do: resolved to.
+func (c *Config) visitPlacements(fn func(label string, step *Step, placed placement) error) error {
+	for _, job := range c.Jobs {
+		var start placement
+		if len(job.Tags) > 0 {
+			start = placement{tags: job.Tags, from: job.label()}
+		}
+
+		err := walkJob(job, start, c.handDownPlacement, func(label string, step *Step, received placement) error {
+			return fn(label, step, c.effectivePlacement(step, received))
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// handDownPlacement is what a step's children and its hooks inherit. Children
+// take a declaring block's tags:, else whatever the step itself inherited;
+// hooks take what the step resolved to, and name the step as the origin when
+// the step or its resource declared the tag, so a refused hook still says
+// where its tag came from.
+func (c *Config) handDownPlacement(label string, step *Step, received placement) (placement, placement) {
+	kind, ok := step.Kind()
+	if !ok {
+		return received, received
+	}
+
+	switch kind {
+	case StepKindDo, StepKindInParallel:
+		if len(step.Tags) > 0 {
+			declared := placement{tags: step.Tags, from: label}
+
+			return declared, declared
+		}
+
+		return received, received
+	case StepKindGet, StepKindTask, StepKindPut, StepKindAgent:
+		resolved := c.effectivePlacement(step, received)
+		if resolved.from == "" && len(resolved.tags) > 0 {
+			resolved.from = label
+		}
+
+		return received, resolved
+	case StepKindTry, StepKindRace, StepKindEnsemble, StepKindLoadVar, StepKindApproval:
+		return received, received
+	}
+
+	return received, received
+}
+
+// effectivePlacement is the tags a step runs under. Only a step that runs
+// commands inherits; the rest keep their own, which for a block is what its
+// children inherit instead (handDownPlacement).
+//
+// A resource's tags: beat an inherited one — the one order Concourse cannot
+// have an opinion on, its resource tags placing only the check. A resource tag
+// states a network fact (the source is reachable only from there); a job or
+// block tag is a default, and letting the default win would move a fetch onto
+// a machine that cannot reach the source.
+func (c *Config) effectivePlacement(step *Step, received placement) placement {
+	own := placement{tags: step.Tags}
+
+	kind, ok := step.Kind()
+	if !ok || len(step.Tags) > 0 {
+		return own
+	}
+
+	switch kind {
+	case StepKindGet, StepKindPut:
+		name, _ := step.resourceName()
+
+		resource, err := c.FindResource(name)
+		if err == nil && len(resource.Tags) > 0 {
+			return placement{tags: resource.Tags}
+		}
+
+		return received
+	case StepKindTask, StepKindAgent:
+		return received
+	case StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble,
+		StepKindLoadVar, StepKindApproval, StepKindDo:
+		return own
+	}
+
+	return own
+}
+
+// resolveTags writes every step's effective tags (visitPlacements) onto the
+// step, after validation, so everything downstream reads one field.
 //
 // Resolved at load rather than at each reader, the way ResolveTask merges a
 // step over its tasks: entry: the readers are many (which machine to dial,
@@ -291,20 +418,22 @@ func (c *Config) resolvedStepFix(step Step) *FixSpec {
 // can be placed at all) and a fallback missed in one of them is a step
 // quietly running on the wrong machine. Tags are not hashed, so this changes
 // nothing about what a step produces.
-func (c *Config) inheritResourceTags() {
-	for _, job := range c.Jobs {
-		_ = job.visitSteps(func(_ string, step *Step) error {
-			name, ok := step.resourceName()
-			if !ok || len(step.Tags) > 0 {
-				return nil
-			}
-
-			resource, err := c.FindResource(name)
-			if err == nil && len(resource.Tags) > 0 {
-				step.Tags = append([]string(nil), resource.Tags...)
-			}
+//
+// A declaring block's own tags: are cleared once handed down: kept, they would
+// demand a --worker mapping for a tag every child overrides, and stamp a
+// worker on the block's own row, which runs nothing.
+func (c *Config) resolveTags() {
+	_ = c.visitPlacements(func(_ string, step *Step, placed placement) error {
+		if step.Do != nil || step.InParallel != nil {
+			step.Tags = nil
 
 			return nil
-		})
-	}
+		}
+
+		if len(step.Tags) == 0 && len(placed.tags) > 0 {
+			step.Tags = slices.Clone(placed.tags)
+		}
+
+		return nil
+	})
 }

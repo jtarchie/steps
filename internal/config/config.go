@@ -200,7 +200,7 @@ func parseSource(source []byte, name string, label string, fsys Files) (*Config,
 		return nil, fmt.Errorf("pipeline YAML %q: %w", label, err)
 	}
 
-	cfg.inheritResourceTags()
+	cfg.resolveTags()
 
 	cfg.Name = name
 	// The revision covers the includes, not just the YAML: a run_file: decides what a step executes, so a hash over the file alone said "unchanged" for the edit that changed everything.
@@ -267,6 +267,7 @@ func (c *Config) validate() error {
 		c.validateSerial,
 		c.validateVars,
 		c.validateWebhookResources,
+		c.validateCronResources,
 		c.validateGitResources,
 		c.validateApprovals,
 		c.validateCredentialHandling,
