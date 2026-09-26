@@ -34,22 +34,29 @@ type fakeLLM struct {
 	calls     int
 	requests  []*model.LLMRequest
 	// delay, when set, sleeps for real before yielding a response — used only
-	// by the proactive timeout-warning tests (TestRunConversationLoopTimeoutWarning)
-	// to force real wall-clock time to pass between turns without depending on
-	// scheduler jitter for the outcome: the test picks a ctx deadline far
-	// shorter than delay, so the margin swamps any timer imprecision.
-	delay time.Duration
+	// by the proactive wrap-up tests (TestTimeoutWarning*, TestWrapUp*) to
+	// force real wall-clock time to pass between turns; each picks margins
+	// wide enough to swamp timer imprecision. delays[i], when present,
+	// overrides delay for the i-th call.
+	delay  time.Duration
+	delays []time.Duration
 }
 
 func (f *fakeLLM) Name() string { return "fake" }
 
 func (f *fakeLLM) GenerateContent(_ context.Context, req *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		if f.delay > 0 {
-			time.Sleep(f.delay)
+		i := f.calls
+
+		delay := f.delay
+		if i < len(f.delays) {
+			delay = f.delays[i]
 		}
 
-		i := f.calls
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+
 		f.calls++
 		// runAgentConversation reuses and mutates the same *LLMRequest across
 		// turns (e.g. Config.ToolConfig is set then cleared) — record a
@@ -225,22 +232,28 @@ func TestTimeoutWarningDue(t *testing.T) {
 		name          string
 		budgetAtEntry time.Duration
 		remaining     time.Duration
+		slowest       time.Duration
 		want          bool
 	}{
-		{"comfortably within budget", time.Minute, 50 * time.Second, false},
-		{"exactly at the threshold fires", time.Minute, 12 * time.Second, true},
-		{"just above the threshold does not", time.Minute, 13 * time.Second, false},
-		{"already past the deadline fires", time.Minute, -5 * time.Second, true},
-		{"no deadline (zero budget) never fires", 0, -5 * time.Second, false},
-		{"a deadline already passed at entry never fires", -time.Minute, -2 * time.Minute, false},
+		{"comfortably within budget", time.Minute, 50 * time.Second, 0, false},
+		{"exactly at the threshold fires", time.Minute, 12 * time.Second, 0, true},
+		{"just above the threshold does not", time.Minute, 13 * time.Second, 0, false},
+		{"already past the deadline fires", time.Minute, -5 * time.Second, 0, true},
+		{"no deadline (zero budget) never fires", 0, -5 * time.Second, 0, false},
+		{"a deadline already passed at entry never fires", -time.Minute, -2 * time.Minute, 0, false},
+		{"#172: a 132s request with 141s left fires", 10 * time.Minute, 141 * time.Second, 132 * time.Second, true},
+		{"quick requests leave the fifth in charge", 10 * time.Minute, 141 * time.Second, 24 * time.Second, false},
+		{"exactly twice the slowest fires", 10 * time.Minute, 200 * time.Second, 100 * time.Second, true},
+		{"the fifth stays the floor", 10 * time.Minute, 121 * time.Second, time.Second, false},
+		{"no deadline never fires however slow", 0, -5 * time.Second, time.Hour, false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := timeoutWarningDue(tc.budgetAtEntry, tc.remaining); got != tc.want {
-				t.Errorf("timeoutWarningDue(%v, %v) = %v, want %v", tc.budgetAtEntry, tc.remaining, got, tc.want)
+			if got := timeoutWarningDue(tc.budgetAtEntry, tc.remaining, tc.slowest); got != tc.want {
+				t.Errorf("timeoutWarningDue(%v, %v, %v) = %v, want %v", tc.budgetAtEntry, tc.remaining, tc.slowest, got, tc.want)
 			}
 		})
 	}
@@ -397,6 +410,138 @@ func assertTimeoutWarningRecorded(t *testing.T, transcript []transcriptEvent) {
 
 	if got[1].Text != timeoutWarningText {
 		t.Errorf("second user event text = %q, want the timeout warning %q", got[1].Text, timeoutWarningText)
+	}
+}
+
+// A request slower than the fifth could hold is warned about with two of it
+// still left (#172). At the turn-2 check ~600ms remain: over the fifth
+// (200ms), under twice the 400ms request (800ms), ~400ms of margin each way.
+func TestTimeoutWarningAccountsForASlowRequest(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	fake := &fakeLLM{responses: timeoutWarningTestResponses(), delay: 400 * time.Millisecond}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := runAgentConversation(ctx, fake, newTestConversation(t, "do the thing", dir))
+	if err != nil {
+		t.Fatalf("runAgentConversation: %v", err)
+	}
+
+	if len(fake.requests) != 2 {
+		t.Fatalf("got %d requests, want 2", len(fake.requests))
+	}
+
+	if warningTextIn(fake.requests[:1]) {
+		t.Error("the warning must not appear in the first request — no request had been timed yet")
+	}
+
+	if !warningTextIn(fake.requests[1:]) {
+		t.Error("expected the timeout warning once less than two of the slowest request remained")
+	}
+
+	if fake.requests[1].Config.Tools == nil {
+		t.Error("tools must stay granted after the warning")
+	}
+}
+
+// A compaction pass is its own model request, not part of the turn it precedes:
+// folding a slow summary into the turn's duration would pull the nudge forward
+// on a model whose turns are quick. The summary takes 450ms; at the turn-2
+// check ~550ms remain — over the fifth (200ms), under the 900ms a merged
+// timing would set.
+func TestTheSlowestRequestExcludesCompaction(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeLLM{
+		responses: []*model.LLMResponse{
+			paddedShellCall("call1", 4000),
+			nil,
+			paddedShellCall("call2", 10),
+			nil,
+			textResponse("done"),
+		},
+		errs:   []error{nil, errors.New("summarizer unavailable"), nil, errors.New("summarizer unavailable")},
+		delays: []time.Duration{0, 450 * time.Millisecond},
+	}
+
+	conv := newTestConversation(t, "read some things", t.TempDir())
+	conv.compactAfterTokens = 500
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := runAgentConversation(ctx, fake, conv)
+	if err != nil {
+		t.Fatalf("runAgentConversation: %v", err)
+	}
+
+	if len(fake.requests) != 5 {
+		t.Fatalf("got %d LLM calls, want 5 (two turns each preceded by a failed summary, then the answer)", len(fake.requests))
+	}
+
+	if warningTextIn(fake.requests) {
+		t.Error("the timeout warning fired: the slow summary was counted as a slow turn")
+	}
+}
+
+// warningCount counts timeoutWarningText across req's contents.
+func warningCount(req *model.LLMRequest) int {
+	n := 0
+
+	for _, c := range req.Contents {
+		for _, p := range c.Parts {
+			if p.Text == timeoutWarningText {
+				n++
+			}
+		}
+	}
+
+	return n
+}
+
+// A cascade attempt is a different model: the slowest request the previous
+// attempt saw must not pull the next one's nudge forward. B enters with
+// ~550ms left — its own fifth is ~110ms, while A's 400ms carried over would
+// make the bar 800ms and warn.
+func TestTheSlowestRequestIsPerAttempt(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	slow := &fakeLLM{
+		responses: timeoutWarningTestResponses()[:1],
+		errs:      []error{nil, errors.New("boom")},
+		delays:    []time.Duration{400 * time.Millisecond, 0},
+	}
+
+	resA, err := runAgentConversation(ctx, slow, newTestConversation(t, "do the thing", t.TempDir()))
+	if err == nil {
+		t.Fatal("attempt A: expected the second request to fail")
+	}
+
+	if !warningTextIn(slow.requests[1:]) {
+		t.Fatal("attempt A: expected the warning before its second request, after a 400ms one")
+	}
+
+	fast := &fakeLLM{responses: []*model.LLMResponse{
+		{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "call2", Name: "run_shell", Args: map[string]any{"command": "true"}}}}}},
+		textResponse("done"),
+	}}
+
+	conv := newTestConversation(t, "do the thing", t.TempDir())
+	conv.resume = &resA.checkpoint
+
+	_, err = runAgentConversation(ctx, fast, conv)
+	if err != nil {
+		t.Fatalf("attempt B: %v", err)
+	}
+
+	if got := warningCount(fast.requests[len(fast.requests)-1]); got != 1 {
+		t.Errorf("attempt B's last request carries %d timeout warnings, want 1 (A's, resumed)", got)
 	}
 }
 
