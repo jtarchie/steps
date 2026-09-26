@@ -11,7 +11,7 @@
 #     source: {}
 #
 #   - put: reaction
-#     inputs: [target]
+#     inputs: [mentions]
 #     params: {add: eyes}
 #
 # It exists because a bot that answers a mention is SILENT until it answers,
@@ -20,25 +20,29 @@
 # lands, ❌ when it never will. Without it a question nobody answered and a
 # question nobody read look exactly alike.
 #
-#   thread/…          NOT read here. See the timestamp note below.
-#   target/channel    required — the channel id (the C… in a channel URL)
-#   target/ts         required — the ts of the MESSAGE to mark
+# The message comes from the slack-mentions get among its inputs, read with
+# version() — params.from names it when several inputs were fetched. With no
+# fetched input (a job-level hook, or a message that did not come from a
+# mention) it reads files instead:
+#
+#   target/channel    the channel id (the C… in a channel URL)
+#   target/ts         the ts of the MESSAGE to mark
 #   params.add        optional — an emoji name, no colons (eyes, not :eyes:)
 #   params.remove     optional — an emoji name to take off
+#   params.from       optional — which fetched input is the message
 #
-# The ids come off disk rather than out of params: for the same reason
-# slack-reply's do — file() takes what an upstream step wrote, so nothing is
-# spliced through a shell — while the EMOJI is a param, because one resource
-# then covers every state a pipeline wants to show and the call site says
-# which one it is posting.
+# The EMOJI is a param, because one resource then covers every state a
+# pipeline wants to show and the call site says which one it is posting.
 #
-# A SEPARATE ARTIFACT FROM slack-reply's `thread/`, and the difference is the
-# whole subtlety of this type: a reply goes to `thread_ts`, the thread the
-# question lives in, while a reaction goes on `ts`, the one message a person
-# actually wrote. Handed thread_ts, a reaction lands on the parent of the
-# thread instead — right only when the mention was top-level, wrong every time
-# somebody asked inside an existing conversation, which is most of the time.
-# Two artifacts keep a pipeline from passing one where it meant the other.
+# The whole subtlety of this type is which timestamp: a reply goes to
+# `thread_ts`, the thread the question lives in, while a reaction goes on
+# `ts`, the one message a person actually wrote. Handed thread_ts, a reaction
+# lands on the parent of the thread instead — right only when the mention was
+# top-level, wrong every time somebody asked inside an existing conversation,
+# which is most of the time. So this type reads `ts` and never `thread_ts`,
+# and slack-reply makes the opposite choice, each once. The file fallback
+# keeps `target/` a separate artifact from slack-reply's `thread/` for the
+# same reason.
 #
 # add AND remove in one put because a state CHANGE is one event: ✅ arriving
 # while 👀 still sits there reads as two bots disagreeing. Either may be
@@ -73,13 +77,19 @@ env:
 
 config:
   expr:
-    # trim() because an upstream task typically writes these ids with a
-    # trailing newline, which would otherwise become part of the id.
+    # version() returns nil when no input was fetched, which is what drops
+    # this to the files. trim() because an upstream task typically writes
+    # those ids with a trailing newline, which would otherwise become part of
+    # the id.
     out: |
       let base = source.base_url ?? "https://slack.com";
+      let v = params.from != nil ? version(params.from) : version();
+      let channel = v != nil ? string(v.channel ?? "") : trim(file("target/channel", ""));
+      let ts = v != nil ? string(v.ts ?? "") : trim(file("target/ts", ""));
+
+      channel == "" || ts == "" ? fail("slack-reaction: no message — give this put its slack-mentions get as an input (inputs: [mentions], or params.from), or write target/channel and target/ts") :
+
       let auth = {Authorization: "Bearer " + env(source.token_env ?? "SLACK_BOT_TOKEN")};
-      let channel = trim(file("target/channel"));
-      let ts = trim(file("target/ts"));
       let add = params.add ?? "";
       let remove = params.remove ?? "";
 

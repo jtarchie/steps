@@ -199,3 +199,122 @@ jobs:
 		t.Fatal("validate --syntax-only: want the same error")
 	}
 }
+
+// versionReadingPipeline is a pipeline whose put reads the versions its
+// build fetched through version(). Neither get's in: writes a version.json,
+// so a value that arrives came from the build, not from disk. n is a JSON
+// number, which the store hands back as a json.Number — out:'s arithmetic on
+// it is what proves version() normalizes numbers.
+func versionReadingPipeline(url, out, putInputs string) string {
+	return `
+resource_types:
+- name: counter
+  config:
+    check: echo '[{"id":"{{ .source.id }}","n":2}]'
+    in: test ! -e version.json
+- name: publisher
+  config:
+    expr:
+      out: |
+        ` + out + `
+
+resources:
+- name: api
+  type: counter
+  source: {id: a-1}
+- name: other
+  type: counter
+  source: {id: o-1}
+- name: published
+  type: publisher
+  source:
+    url: ` + url + `
+
+jobs:
+- name: build
+  plan:
+  - get: thing
+    resource: api
+  - get: other
+  - task: note
+    outputs: [notes]
+    run: echo shipped > notes/note.txt
+  - put: published
+` + putInputs
+}
+
+// TestEndToEndExprOutReadsFetchedVersion: a put's out: reads what the build's
+// gets fetched, by the get's name — the aliased first get (fetched as its own
+// build) and an in-place second one alike.
+func TestEndToEndExprOutReadsFetchedVersion(t *testing.T) {
+	var posted atomic.Value
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		posted.Store(string(body))
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(server.Close)
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+
+	out := `let sent = http({url: source.url, json: {id: version("thing").id, other: version("other").id, n: version("thing").n + 1}});
+        {sent: "yes"}`
+
+	err := os.WriteFile(path, []byte(versionReadingPipeline(server.URL, out, "    inputs: [thing, other, notes]\n")), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, "validate", path)
+	mustRun(t, "run", path, "--job", "build")
+
+	body, _ := posted.Load().(string)
+
+	var payload map[string]any
+
+	err = json.Unmarshal([]byte(body), &payload)
+	if err != nil {
+		t.Fatalf("published body %q: %v", body, err)
+	}
+
+	if payload["id"] != "a-1" || payload["other"] != "o-1" {
+		t.Errorf("published %v, want both gets' fetched id", payload)
+	}
+
+	if payload["n"] != float64(3) {
+		t.Errorf("published n = %v (%T), want 3: the fetched n read as a number", payload["n"], payload["n"])
+	}
+}
+
+// TestEndToEndExprOutVersionErrors: version() answers only for the put's
+// inputs, and each way of asking for something else says what was wrong.
+func TestEndToEndExprOutVersionErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name, out, inputs, want string
+	}{
+		{"not an input", `version("nope")`, "    inputs: [thing, other, notes]\n", `not an input of this put; its inputs are [notes other thing]`},
+		{"not fetched", `version("notes")`, "    inputs: [thing, other, notes]\n", `input "notes" was not fetched by a get`},
+		{"no inputs", `version("thing")`, "", `this put has no inputs`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := pipelinePath(t, dir)
+
+			err := os.WriteFile(path, []byte(versionReadingPipeline("http://127.0.0.1:1", tc.out, tc.inputs)), 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = cli.Run([]string{"run", path, "--job", "build"})
+			if err == nil {
+				t.Fatal("run succeeded, want version() to refuse")
+			}
+
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}

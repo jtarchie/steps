@@ -346,7 +346,7 @@ func TestRunOutMCP(t *testing.T) {
 	rt := mcpResourceType("list_issues")
 	rt.Config.MCP.Out = &config.MCPToolCall{Tool: "create_issue"}
 
-	result, err := RunOut(context.Background(), cfg, rt, nil, map[string]any{"team": "ENG"}, map[string]any{"title": "Triage needed"}, t.TempDir())
+	result, err := RunOut(context.Background(), cfg, rt, nil, map[string]any{"team": "ENG"}, map[string]any{"title": "Triage needed"}, PutInputs{}, t.TempDir())
 	if err != nil {
 		t.Fatalf("RunOut: %v", err)
 	}
@@ -568,7 +568,7 @@ func TestRunOutMCPArgsTemplate(t *testing.T) {
 
 	result, err := RunOut(context.Background(), cfg, rt,
 		nil,
-		map[string]any{"team": "ENG"}, map[string]any{"text": "Triage needed"}, t.TempDir())
+		map[string]any{"team": "ENG"}, map[string]any{"text": "Triage needed"}, PutInputs{}, t.TempDir())
 	if err != nil {
 		t.Fatalf("RunOut: %v", err)
 	}
@@ -585,7 +585,7 @@ func TestRunOutMCPUnparsableResultIsNilNotError(t *testing.T) {
 	rt := mcpResourceType("list_issues")
 	rt.Config.MCP.Out = &config.MCPToolCall{Tool: "create_issue_unparsable"}
 
-	result, err := RunOut(context.Background(), cfg, rt, nil, map[string]any{}, map[string]any{}, t.TempDir())
+	result, err := RunOut(context.Background(), cfg, rt, nil, map[string]any{}, map[string]any{}, PutInputs{}, t.TempDir())
 	if err != nil {
 		t.Fatalf("RunOut: %v, want a nil result instead of an error (mirrors the shell backend's own convention)", err)
 	}
@@ -654,6 +654,7 @@ func TestRunOutMCPResolvesParamFile(t *testing.T) {
 		nil,
 		map[string]any{"team": "ENG"},
 		map[string]any{"title": map[string]any{"file": "answer/reply.md"}},
+		PutInputs{},
 		srcDir)
 	if err != nil {
 		t.Fatalf("RunOut: %v", err)
@@ -681,6 +682,7 @@ func TestRunOutMCPLeavesMultiKeyObjectAlone(t *testing.T) {
 		nil,
 		map[string]any{},
 		map[string]any{"title": map[string]any{"file": "report.pdf", "label": "Q3"}},
+		PutInputs{},
 		t.TempDir())
 	if err != nil {
 		t.Fatalf("RunOut: %v", err)

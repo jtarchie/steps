@@ -177,7 +177,7 @@ func TestExprRunOutReadsThePutsInputs(t *testing.T) {
 	`)
 
 	version, err := RunOut(context.Background(), nil, rt, nil,
-		map[string]any{"url": server.URL}, nil, dir)
+		map[string]any{"url": server.URL}, nil, PutInputs{}, dir)
 	if err != nil {
 		t.Fatalf("RunOut: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestExprRunOutNilVersionTolerated(t *testing.T) {
 	t.Parallel()
 
 	version, err := RunOut(context.Background(), nil, exprType("", "", `nil`), nil,
-		nil, nil, t.TempDir())
+		nil, nil, PutInputs{}, t.TempDir())
 	if err != nil {
 		t.Fatalf("RunOut: %v", err)
 	}

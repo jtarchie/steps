@@ -399,16 +399,13 @@ jobs:
   - get: mentions
     trigger: true
     version: every
-  - task: address
+  - task: compose
     inputs: [mentions]
-    outputs: [thread, answer]
+    outputs: [answer]
     run: |
-      set -eu
-      grep -o '"channel": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/channel
-      grep -o '"thread_ts": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/ts
       printf 'read %s messages' "$(grep -c '"ts":' mentions/thread.json)" > answer/reply.md
   - put: reply
-    inputs: [thread, answer]
+    inputs: [mentions, answer]
 `
 
 	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
@@ -500,16 +497,11 @@ jobs:
   - get: mentions
     trigger: true
     version: every
-  - task: address
-    inputs: [mentions]
-    outputs: [thread, answer]
-    run: |
-      set -eu
-      grep -o '"channel": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/channel
-      grep -o '"thread_ts": *"[^"]*"' mentions/version.json | cut -d'"' -f4 > thread/ts
-      printf '%s' "answered" > answer/reply.md
+  - task: compose
+    outputs: [answer]
+    run: printf '%s' "answered" > answer/reply.md
   - put: reply
-    inputs: [thread, answer]
+    inputs: [mentions, answer]
 `
 
 	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
@@ -959,5 +951,209 @@ jobs:
 
 	if calls := workspace.reactions(); len(calls) != 1 {
 		t.Errorf("made %d reaction calls, want 1", len(calls))
+	}
+}
+
+// TestEndToEndBuiltinSlackReactionOnMention is the reaction read straight off
+// the mention's version: the type picks ts — the message a person wrote —
+// never thread_ts, so the mention buried in a thread is marked at 101.500
+// rather than on its parent 101.000. The ❌ comes from a step's on_failure
+// hook, which is the failure path a pipeline actually wires this way.
+func TestEndToEndBuiltinSlackReactionOnMention(t *testing.T) {
+	server, workspace := fakeSlack(t)
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+
+	pipelineYAML := `
+resources:
+- name: mentions
+  type: slack-mentions
+  source:
+    base_url: ` + server.URL + `
+- name: reaction
+  type: slack-reaction
+  source:
+    base_url: ` + server.URL + `
+
+jobs:
+- name: answer
+  plan:
+  - get: mentions
+    trigger: true
+    version: every
+  - put: reaction
+    inputs: [mentions]
+    params: {add: eyes}
+  - task: work
+    run: exit 1
+    on_failure:
+      put: failed
+      resource: reaction
+      inputs: [mentions]
+      params: {add: x, remove: eyes}
+`
+
+	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, "validate", path)
+
+	err = cli.Run([]string{"run", path, "--job", "answer"})
+	if err == nil {
+		t.Fatal("run succeeded, want the failing task to fail it")
+	}
+
+	marked := map[string]int{}
+
+	for _, call := range workspace.reactions() {
+		channel, _ := call["channel"].(string)
+		ts, _ := call["timestamp"].(string)
+		name, _ := call["name"].(string)
+		endpoint, _ := call["endpoint"].(string)
+
+		marked[endpoint+" "+name+" "+channel+"/"+ts]++
+	}
+
+	for _, message := range []string{"C1/100.000", "C1/101.500", "D1/50.000"} {
+		for _, call := range []string{"/api/reactions.add eyes", "/api/reactions.add x", "/api/reactions.remove eyes"} {
+			if marked[call+" "+message] != 1 {
+				t.Errorf("%s on %s: %d calls, want 1 (all calls: %v)", call, message, marked[call+" "+message], marked)
+			}
+		}
+	}
+
+	if len(marked) != 9 {
+		t.Errorf("reaction calls = %v, want exactly three per mention — and none on the thread parent C1/101.000", marked)
+	}
+}
+
+// TestEndToEndBuiltinSlackReplyNamesItsInput: with two fetched inputs the
+// convention cannot pick, params.from does, and without it the put fails
+// naming both rather than guessing.
+func TestEndToEndBuiltinSlackReplyNamesItsInput(t *testing.T) {
+	server, workspace := fakeSlack(t)
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+
+	pipeline := func(from string) string {
+		return `
+resources:
+- name: mentions
+  type: slack-mentions
+  source:
+    base_url: ` + server.URL + `
+- name: reply
+  type: slack-reply
+  source:
+    base_url: ` + server.URL + `
+- name: other
+  type: counters
+  source: {}
+
+resource_types:
+- name: counters
+  config:
+    check: echo '[{"n":"1"}]'
+    in: "true"
+
+jobs:
+- name: answer
+  plan:
+  - get: mentions
+    trigger: true
+  - get: other
+  - task: compose
+    outputs: [answer]
+    run: printf '%s' "answered" > answer/reply.md
+  - put: reply
+    inputs: all
+` + from
+	}
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+
+	err := os.WriteFile(path, []byte(pipeline("    params: {from: mentions}\n")), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, "run", path, "--job", "answer")
+
+	posted := workspace.postedMessages()
+	if len(posted) != 1 || posted[0]["channel"] == nil || posted[0]["thread_ts"] == nil {
+		t.Fatalf("posted %v, want one threaded reply to the mention params.from named", posted)
+	}
+
+	dir = t.TempDir()
+	path = pipelinePath(t, dir)
+
+	err = os.WriteFile(path, []byte(pipeline("")), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = cli.Run([]string{"run", path, "--job", "answer"})
+	if err == nil {
+		t.Fatal("run succeeded, want version() to refuse to pick between two fetched inputs")
+	}
+
+	if !strings.Contains(err.Error(), "[mentions other]") {
+		t.Errorf("error does not name both fetched inputs: %v", err)
+	}
+}
+
+// TestEndToEndBuiltinSlackReplyWithNoInputGuides: the likeliest mistake with
+// the version route is forgetting inputs: [mentions], which drops the type to
+// its file fallback. The failure has to name the route, not a missing file.
+func TestEndToEndBuiltinSlackReplyWithNoInputGuides(t *testing.T) {
+	server, workspace := fakeSlack(t)
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+
+	pipelineYAML := `
+resources:
+- name: mentions
+  type: slack-mentions
+  source:
+    base_url: ` + server.URL + `
+- name: reply
+  type: slack-reply
+  source:
+    base_url: ` + server.URL + `
+
+jobs:
+- name: answer
+  plan:
+  - get: mentions
+    trigger: true
+  - task: compose
+    outputs: [answer]
+    run: printf '%s' "answered" > answer/reply.md
+  - put: reply
+    inputs: [answer]
+`
+
+	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = cli.Run([]string{"run", path, "--job", "answer"})
+	if err == nil {
+		t.Fatal("run succeeded, want the put to fail with no channel")
+	}
+
+	if !strings.Contains(err.Error(), "inputs: [mentions]") {
+		t.Errorf("error does not say how to give the put its mention: %v", err)
+	}
+
+	if posted := workspace.postedMessages(); len(posted) != 0 {
+		t.Errorf("posted %v, want nothing", posted)
 	}
 }

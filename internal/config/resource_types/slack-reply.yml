@@ -11,18 +11,29 @@
 #     source: {}
 #
 #   - put: reply
-#     inputs: [thread, answer]
+#     inputs: [mentions, answer]
 #
-# Reads its inputs as files rather than params:, the way the built-in `git`
-# type reads its config from source: — file() takes what a put's inputs:
-# wrote to disk directly, so a reply containing backticks or $(…) is data,
-# never something a shell might run:
+# WHERE to post comes from the slack-mentions get among its inputs, read
+# with version(): the reply goes to the mention's thread_ts (its ts when it
+# was top-level), chosen here once rather than in every pipeline. With
+# several fetched inputs, params.from names the one to answer:
 #
-#   thread/channel   required — the channel id (the C… in a channel URL)
+#   - put: reply
+#     inputs: [mentions, docs, answer]
+#     params: {from: mentions}
+#
+# With no fetched input — a top-level post to a fixed channel, or a job-level
+# hook, which runs outside any one build — it reads files instead:
+#
+#   thread/channel   the channel id (the C… in a channel URL)
 #   thread/ts        optional — a parent message's ts; when present this
 #                     posts as a reply in that thread, when absent (or the
 #                     file does not exist) this posts a new top-level
 #                     message in the channel
+#
+# The text is always a file, so a reply containing backticks or $(…) is
+# data, never something a shell might run:
+#
 #   answer/reply.md  required — the message text
 #
 # Needs SLACK_BOT_TOKEN (a bot token, xoxb-) in the environment, for an app
@@ -58,19 +69,24 @@ env:
 
 config:
   expr:
-    # file() reads the put's inputs directly. trim() because an upstream
-    # task typically writes these ids with a trailing newline, which would
-    # otherwise become part of the channel or ts.
+    # version() returns nil when no input was fetched, which is what drops
+    # this to the files. trim() because an upstream task typically writes
+    # those ids with a trailing newline, which would otherwise become part of
+    # the channel or ts.
     #
-    # thread_ts is included only when thread/ts is present and non-empty —
-    # that is what picks reply-in-thread vs. new-top-level-message. file()'s
-    # optional second argument is the "file may not exist" escape hatch: a
-    # missing thread/ts is not an error here, since a top-level post
-    # legitimately has none.
+    # thread_ts is included only when there is a ts — that is what picks
+    # reply-in-thread vs. new-top-level-message. A missing thread/ts is not an
+    # error, since a top-level post legitimately has none; a missing channel
+    # is, and says both ways to supply one, because the likeliest cause is a
+    # put that forgot inputs: [mentions].
     out: |
       let base = source.base_url ?? "https://slack.com";
-      let channel = trim(file("thread/channel"));
-      let ts = trim(file("thread/ts", ""));
+      let v = params.from != nil ? version(params.from) : version();
+      let channel = v != nil ? string(v.channel ?? "") : trim(file("thread/channel", ""));
+      let ts = v != nil ? string(v.thread_ts ?? v.ts ?? "") : trim(file("thread/ts", ""));
+
+      channel == "" ? fail("slack-reply: no channel — give this put its slack-mentions get as an input (inputs: [mentions], or params.from), or write thread/channel") :
+
       let text = file("answer/reply.md");
 
       let payload = ts != "" ?

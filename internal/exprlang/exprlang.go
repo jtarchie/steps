@@ -60,6 +60,12 @@ type Input struct {
 	// Dir is the put's read view, the only directory file() may read from.
 	// Out slot only.
 	Dir string
+	// Inputs are the put's input names, sorted: the complete set version()
+	// will answer for. Out slot only.
+	Inputs []string
+	// Versions are what this build's gets fetched, by get name, restricted
+	// to Inputs. Out slot only.
+	Versions map[string]map[string]any
 }
 
 // Compile parses and type-checks one slot's expression without running it, so
@@ -135,8 +141,8 @@ func orEmpty(m map[string]any) map[string]any {
 	return m
 }
 
-// slotFuncs returns the functions a slot may call. file() is out-only,
-// because it reads the put's read view and no other slot has one.
+// slotFuncs returns the functions a slot may call. file() and version() are
+// out-only: they read the put's inputs, and no other slot has a build.
 func slotFuncs(ctx context.Context, slot Slot, in Input) []expr.Option {
 	funcs := []expr.Option{
 		expr.Function("env", envFunc(in.EnvAllow)),
@@ -145,7 +151,10 @@ func slotFuncs(ctx context.Context, slot Slot, in Input) []expr.Option {
 	}
 
 	if slot == SlotOut {
-		funcs = append(funcs, expr.Function("file", fileFunc(in.Dir)))
+		funcs = append(funcs,
+			expr.Function("file", fileFunc(in.Dir)),
+			expr.Function("version", versionFunc(in.Inputs, in.Versions)),
+		)
 	}
 
 	return funcs
