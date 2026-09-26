@@ -150,7 +150,7 @@ Keeping machines out of the pipeline file is what lets the same pipeline run on 
 - **One tag.** Concourse intersects a step's tags against a pool of workers advertising theirs; there is no pool here, so a second tag would name a second machine and the step would have no home.
 - **An unmapped tag is an error before the run starts**, not a fall back to local execution. A step that says it needs a GPU box, quietly running on a laptop, is the same broken promise `network:` without `image:` is refused for.
 - **`local:`** runs the step through a shim in a child process on this machine — for trying a tagged pipeline out without a worker, and for debugging the shim itself: `--worker gpu=local:`. A path names the disk, as it does for every other scheme: `--worker gpu=local:/mnt/fast` keeps that worker's scratch and artifact cache there, so two `local:` mappings with different paths behave as two machines that share nothing.
-- Valid on **task, get and put steps**, on an **agent step that also names an `image:`** (below), and on a **resource** (below). Invalid on a task with `fix:` — the repair agent reads this machine's copy of the step while its commands would run on the worker — and, for the same reason, on a get or put whose resource type is `mcp:`- or `expr:`-backed, whose in and out do their file writing inside this process.
+- Valid on **task, get and put steps**, on an **agent step that also names an `image:`** (below), on a **resource** (below), and on a **job** or a **`do:`/`in_parallel:` block**, whose steps inherit it (below). Invalid on a task with `fix:` — the repair agent reads this machine's copy of the step while its commands would run on the worker — and, for the same reason, on a get or put whose resource type is `mcp:`- or `expr:`-backed, whose in and out do their file writing inside this process.
 - **`image:` composes with `tags:`**: the step's tree is sent to the worker as usual and its command runs in a container **on that worker**, against the worker's own docker daemon. steps drives that daemon with its own client through a socket forwarded over the session's existing connection — no second port, and the worker needs no steps-specific container logic. The bind mount names the copy of the tree the worker holds, because a daemon resolves `-v` against its own filesystem. Two consequences worth knowing:
   - **The daemon that must exist is the worker's**, so the up-front `docker info` check cannot cover it: a machine acquired for the job does not exist when planning happens. A worker with no daemon fails the first placed step that names an image, in the daemon's own words, rather than at load time.
   - **`user:` is resolved on the worker.** An explicit `user:` crosses verbatim, as it does for a local container — it is a name the far end resolves, which is also how Concourse treats it. What changes is the *default*: unset takes the identity the **shim** runs as on a Linux worker, because the tree the container writes into lives there, so the ownership mismatch the default exists to prevent happens there too. Taking the orchestrator's own uid would answer about a different machine — a Linux orchestrator against a root shim asks for `--user 1000:1000` over a root-owned directory it cannot read. A worker that cannot report an identity, or one that is not Linux, defers to the image.
@@ -202,6 +202,49 @@ Keeping machines out of the pipeline file is what lets the same pipeline run on 
   **Facts, never a price.** There is no cost column, deliberately: what an instance-hour actually cost is not knowable from inside a run — list prices ignore Savings Plans and Reserved Instances, a spot instance's paid price is reported by no API, and real billing lands up to a day later. A confident wrong number under `COST` is worse than no column, and anyone holding their own rate card can price these rows. This is the opposite call from `steps runs cost`, where the *provider* reports the dollars and steps only records what it was told (and shows nothing when it was told nothing).
 
 - **Caching**: `tags:` does **not** fold into the node's hash. Placement decides where a step runs, not what it produces, and a tree that crossed the wire digests identically to one that never left — so retagging a step, or repointing a tag at a new machine, does not re-run work that already succeeded.
+
+### A whole job, or a block, on one worker
+
+A job that belongs on one machine says so once. `tags:` on the **job** places every step in it and every job-level hook; `tags:` on a `do:` or `in_parallel:` places the steps inside that block instead:
+
+```yaml test=infra-job-tags
+jobs:
+- name: train
+  tags: [gpu]
+  assert:
+    execution: [prepare, package, report]
+    outcome: succeeded
+  plan:
+  - task: prepare
+    run: 'echo "worker: ${STEPS_WORKER:-none}"'
+    assert:
+      stdout: "worker: gpu"
+  - tags: [big-disk]
+    do:
+    - task: package
+      run: 'echo "worker: ${STEPS_WORKER:-none}"'
+      assert:
+        stdout: "worker: big-disk"
+  ensure:
+    task: report
+    run: 'echo "worker: ${STEPS_WORKER:-none}"'
+    assert:
+      stdout: "worker: gpu"
+```
+
+```console
+steps run --worker gpu=ssh://jt@gpu-box --worker big-disk=ssh://jt@storage pipeline.yml
+```
+
+- **The nearest tag wins, and tags never combine.** A step's own `tags:`, then — for a `get` or `put` — its resource's, then the nearest enclosing `do:`/`in_parallel:`, then the job's. Override, never union, so every step still has exactly one home. This is Concourse's rule ([concourse#9606](https://github.com/concourse/concourse/pull/9606), v8.3.0), with the resource slotted in where Concourse has no opinion.
+- **A resource's tag beats an inherited one.** A resource tag states a network fact — the source is only reachable from there — while a job or block tag is a default. Letting the default win would move a fetch onto a machine that cannot reach the source.
+- **Only `do:` and `in_parallel:` declare.** `race:`, `ensemble:` and `across:` pass an inherited tag through to what they hold but cannot declare one — wrap the block in a `do:` with `tags:` instead. The block itself runs nothing, so its row in the run record carries no worker; its steps do.
+- **A step's hooks go where the step went.** The job's `tags:` reach its job-level hooks, as above, and a step's own `on_failure:`/`ensure:`/… inherit what that step resolved to: a tagged step's untagged hook runs on the step's worker, a `get`'s or `put`'s on its resource's, a tagged `do:`'s on the `do:`'s. This is Concourse's rule. It includes `on_error:`/`on_abort:`, which fire most often *because* that worker died — so a hook that must run here instead cannot opt out (see below) and is restructured: move it onto an untagged `do:` around the tagged step, whose hooks take what the `do:` resolved to, or up to the job when the job carries no tag.
+- **A step that cannot be placed whole is refused, inherited tag or not** — an agent without `image:`, a CLI agent, a task with `fix:`, a get or put of an `mcp:`/`expr:`/`webhook` type. The error names where the tag came from (`inherited from job "train"`); give the step what it needs, or move the tag off the job onto a `do:` around only the steps that belong on the worker. Running it here instead would be a step silently somewhere the pipeline never said. Steps that run no command — `approval:`, `load_var:` — are not placed and ignore an inherited tag.
+- **There is no opt-out yet.** `tags: []` is still refused rather than meaning "run here"; restructure with a `do:` instead. Concourse left it out on purpose too.
+- **A job tag moves what its steps carry.** Every untagged `put`'s rendered `source:` and `params:`, and every task's `env:` values, reach the worker without the step saying so. Tag the resource of a deploy `put` that must stay here with nothing — or better, scope the job's tag to a `do:` around the build steps only. An agent's model credentials never move: the conversation stays on this machine and only its tools are placed. `steps runs where` and each step's row in the run record say where it went.
+- **The poller is not placed by a job tag.** A resource's check runs where the **resource's** `tags:` say, whichever job reads it; state reachability on the resource.
+- **The whole job needs its mapping.** An unmapped job tag is refused before anything runs, even for a job whose every step is a cache hit — the same rule as a step's own tag. Caching is unaffected: tags are outside the hash, so moving a job onto a worker this way re-runs nothing that already succeeded.
 
 ### Resources on workers
 

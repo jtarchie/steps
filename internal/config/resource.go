@@ -132,7 +132,8 @@ type Resource struct {
 	Env []string `yaml:"env,omitempty"`
 	// Tags names the worker this resource's check, in and out run on, for a
 	// source only reachable from that machine's network. A get or put step's
-	// own tags: overrides it for that step; empty runs them here.
+	// own tags: overrides it for that step, and it overrides a tag the step
+	// would inherit from a job or block; empty runs them here.
 	//
 	// A deliberate divergence from Concourse, whose resource tags place only
 	// the check and must be repeated on every get and put: a get's own
