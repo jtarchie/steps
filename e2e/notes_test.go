@@ -212,7 +212,8 @@ jobs:
 		}
 	}
 
-	for text, name := range map[string]string{`put: repo (version: {"ref":"xyz"})`: "repo", "put: void (no version)": "void"} {
+	// The uncacheable note too: it is about the put that made the chain uncacheable, and recorded against no step it sat above the whole transcript.
+	for text, name := range map[string]string{`put: repo (version: {"ref":"xyz"})`: "repo", "put: void (no version)": "void", "note: repo makes this chain uncacheable (put step)": "repo"} {
 		if noted[text] == 0 || noted[text] != puts[name] {
 			t.Errorf("note %q is recorded against step %d, want put %s's row %d; notes: %v", text, noted[text], name, puts[name], noted)
 		}
