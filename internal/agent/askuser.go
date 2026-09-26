@@ -286,7 +286,8 @@ func (g askGrant) ask(ctx context.Context, args map[string]any, env toolEnv) map
 		return errorResult("ask_user: this step is not running inside a recorded run, so there is nobody to ask")
 	}
 
-	row, existing, err := env.ask.st.AskQuestion(ctx, store.Question{
+	// Not the step's context: a cancel between the store's INSERT and its read-back committed a row nobody held the id of, left pending forever; once the row is ours, the cancel checks below abandon it.
+	row, existing, err := env.ask.st.AskQuestion(context.WithoutCancel(ctx), store.Question{
 		RunID: runID, JobName: env.ask.jobName, AgentName: env.ask.agentName,
 		Question: question, Options: options,
 		OptionsRequired: g.optionsRequired, Default: g.defaultAnswer,
