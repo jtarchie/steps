@@ -401,7 +401,7 @@ func (w *planWalk) fetchInPlace(ctx context.Context, step config.Step, steps []c
 
 	mark := publishStepStarted(ctx, w.jobName, w.index, step)
 
-	res, err := w.fetchGetStepInPlace(events.WithStepID(ctx, mark.id), step)
+	res, err := w.fetchGetStepInPlace(withChildrenOf(events.WithStepID(ctx, mark.id), mark), step)
 	if err != nil {
 		publishStepFinished(ctx, w.jobName, w.index, step, mark, res.hash, started, err)
 

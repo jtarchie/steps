@@ -429,6 +429,7 @@ svg.dag { display: block; }
 .step.failed  > .stephead::before { background: var(--red); }
 .step.running > .stephead::before { background: var(--yellow); }
 .step.skipped > .stephead::before { background: var(--line); }
+.step.unreported > .stephead::before { background: var(--line); }
 
 /* The rail tick's readable twin: same outcome as a glyph, so a row's status
    survives colorblindness and screen readers. */
@@ -437,6 +438,7 @@ svg.dag { display: block; }
 .step.failed  > .stephead > .stmark { color: var(--red); }
 .step.running > .stephead > .stmark { color: var(--yellow); }
 .step.skipped > .stephead > .stmark { color: var(--faint); }
+.step.unreported > .stephead > .stmark { color: var(--dim); }
 
 /* ---- depth ----
  *

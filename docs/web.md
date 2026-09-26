@@ -339,6 +339,7 @@ Every status is one word, one glyph and one colour, on every page:
 | aborted | run | `■` dim | a person stopped it; not a failure |
 | paused | pipeline | `⏸` blue | a person paused it; an unpaused pipeline reads *active* |
 | held | job | `⊘` red | the [circuit breaker](infra.md#circuit-breaker-max_consecutive_failures) stopped its automatic triggers |
+| unreported | step | `?` dim | the run ended before this step reported how it did |
 
 While a run is live, the browser tab carries its status glyph, with a matching
 favicon dot. The title updates the instant

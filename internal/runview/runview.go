@@ -47,6 +47,19 @@ type Transcript struct {
 // Running reports a run still in flight, which is what decides whether the page opens a live event stream.
 func (r Transcript) Running() bool { return r.Run.Status == "running" }
 
+// ended reports a run whose status is one FinishRun writes. An allow-list,
+// not !Running: the terminal live view folds against a ZERO RunRow while the
+// run is in flight, and an unknown status must keep a live step live — a
+// stuck clock is the lesser wrong than a running step drawn as dead.
+func (r Transcript) ended() bool {
+	switch r.Run.Status {
+	case "succeeded", "failed", "errored", "aborted":
+		return true
+	default:
+		return false
+	}
+}
+
 // HasSkipped reports whether any step replayed from cache. The page explains
 // folding only when there is something folded — an explanation of a mechanism
 // the reader cannot see on the page is noise.
@@ -112,6 +125,8 @@ type Step struct {
 	Outputs []string
 	// Notes is what the step's machinery said about it, in order.
 	Notes []Note
+	// unreported is set by settle, never by the fold: see Unreported.
+	unreported bool
 }
 
 // Note is one TypeStepNote, as a reader sees it.
@@ -124,8 +139,19 @@ type Note struct {
 // Warn reports a note worth a reader's attention, not only their record.
 func (n Note) Warn() bool { return n.Level == events.NoteWarn }
 
-// Running reports a step that started and has not reported an end.
-func (s Step) Running() bool { return s.Status == "" || s.Status == "running" }
+// Running reports a step that started and has not reported an end, on a run
+// that has not ended either.
+func (s Step) Running() bool { return s.open() && !s.unreported }
+
+// Unreported reports a step the run ended without hearing the end of. Neither
+// running nor the run's outcome: it never said how it did, and claiming
+// "failed" for it would be as much a guess as the clock that kept ticking.
+func (s Step) Unreported() bool { return s.unreported }
+
+// open is Running as the events alone answer it. The fold asks this rather
+// than Running, so what it decides never depends on the row the last View
+// happened to be handed.
+func (s Step) open() bool { return s.Status == "" || s.Status == "running" }
 
 // Elapsed is how long a running step has been running, for the row's own
 // clock. The page's timer script keeps it counting; this is what it reads
@@ -165,24 +191,77 @@ func (s Step) Failed() bool {
 	return s.Status == "failed" || s.Status == "errored" || s.Status == "aborted"
 }
 
-// Container reports a step that ran other steps inside it.
+// Container reports a step that ran other steps inside it, hooks included:
+// it is what draws a subtree at all.
 func (s Step) Container() bool { return len(s.Children) > 0 }
+
+// Hook reports a hook's own row — an on_failure/ensure/… that ran after the
+// step or job it guards, rather than a step of the plan.
+func (s Step) Hook() bool { return s.Kind == "hook" }
+
+// Block reports a step that contains plan steps, as distinct from a step
+// whose only children are its hooks: a task with an ensure: is still a task,
+// and the questions a block answers (open it, roll it up, leave its output to
+// the steps inside) are wrong for it.
+func (s Step) Block() bool {
+	for _, child := range s.Children {
+		if !child.Hook() {
+			return true
+		}
+	}
+
+	return false
+}
+
+// OpenByDefault reports a row the page draws expanded. A running hook does
+// not open its step: the row would fold shut under the reader the moment the
+// hook passed. A put opens on the version it produced.
+func (s Step) OpenByDefault() bool {
+	if s.Failed() || s.Unreported() || len(s.Turns) > 0 || s.Block() || s.Kind == "put" {
+		return true
+	}
+
+	for _, child := range s.Children {
+		if child.Hook() && child.Failed() {
+			return true
+		}
+	}
+
+	return false
+}
 
 // InnermostFailure is the step that actually broke: the first failed step,
 // in plan order, with no failed step inside it. Every failed ancestor is
 // red only because of it, which is why the page's f key and its header
 // both point here rather than at the outermost block. Nil on a run with no
 // failure.
+//
+// Hooks bend that in two directions. A failed step's hooks only reacted to
+// its failure, so a hook that broke too is not the cause. A green step whose
+// on_success or ensure failed was turned red by that hook, while its own row
+// stays green: there, the hook IS the cause.
 func (r Transcript) InnermostFailure() *Step {
-	var walk func(steps []*Step) *Step
+	var walk func(steps []*Step, hooks bool) *Step
 
-	walk = func(steps []*Step) *Step {
+	walk = func(steps []*Step, hooks bool) *Step {
 		for _, step := range steps {
-			if !step.Failed() {
+			if hooks && !step.Hook() {
 				continue
 			}
 
-			if inner := walk(step.Children); inner != nil {
+			if !step.Failed() {
+				if step.Hook() {
+					continue
+				}
+
+				if hook := walk(step.Children, true); hook != nil {
+					return hook
+				}
+
+				continue
+			}
+
+			if inner := walk(plainChildren(step), false); inner != nil {
 				return inner
 			}
 
@@ -192,7 +271,20 @@ func (r Transcript) InnermostFailure() *Step {
 		return nil
 	}
 
-	return walk(r.Roots)
+	return walk(r.Roots, false)
+}
+
+// plainChildren is a step's children without its hooks.
+func plainChildren(step *Step) []*Step {
+	var out []*Step
+
+	for _, child := range step.Children {
+		if !child.Hook() {
+			out = append(out, child)
+		}
+	}
+
+	return out
 }
 
 // Active reports a step still running, or holding something that is.
@@ -201,16 +293,9 @@ func (r Transcript) InnermostFailure() *Step {
 // reader who has folded half the page still knows where to look. Recursive
 // rather than a flag set at fold time, because a container's own status stays
 // running until every child has finished — the two answers agree, and this
-// one needs no second pass to maintain.
+// one needs no second pass to maintain. The children are asked first because
+// a step's hooks run after it has finished.
 func (s Step) Active() bool {
-	if !s.Running() {
-		return false
-	}
-
-	if !s.Container() {
-		return true
-	}
-
 	for _, child := range s.Children {
 		if child.Active() {
 			return true
@@ -220,18 +305,19 @@ func (s Step) Active() bool {
 	// A container whose children have all finished while it has not is
 	// between its last child and its own finish event. Nothing is running
 	// inside it, so nothing about it should read as running.
-	return false
+	return s.Running() && !s.Container()
 }
 
 // Tally counts how a container's subtree came out, for the row itself. A
 // folded block still has to answer "where does this stand", and the rows that
 // would otherwise answer are folded away with it.
 type Tally struct {
-	Cells   int
-	Passed  int
-	Failed  int
-	Running int
-	Skipped int
+	Cells      int
+	Passed     int
+	Failed     int
+	Running    int
+	Skipped    int
+	Unreported int
 }
 
 // Empty reports a Tally with nothing to say, which is not rendered.
@@ -249,6 +335,10 @@ func (s Step) Rollup() Tally {
 	var out Tally
 
 	for _, child := range s.Children {
+		if child.Hook() {
+			continue
+		}
+
 		out.Cells++
 
 		switch {
@@ -256,6 +346,8 @@ func (s Step) Rollup() Tally {
 			out.Skipped++
 		case child.Failed():
 			out.Failed++
+		case child.Unreported():
+			out.Unreported++
 		case child.Running():
 			out.Running++
 		default:
@@ -629,10 +721,13 @@ func (f *Folder) Steps() []*Step { return f.run.Steps }
 // View is what has been folded so far, with the tree hung and the run row as
 // it stands — the row keeps changing under a live fold, and it is read for
 // the job error the step template asks each row about. Safe to call after
-// every batch: linkTree rebuilds the parent links rather than adding to them.
+// every batch: linkTree rebuilds the parent links rather than adding to them,
+// and settle recomputes which steps went unreported, so a close that lands
+// after the run row went terminal still wins on the next call.
 func (f *Folder) View(run store.RunRow) Transcript {
 	f.run.Run = run
 	linkTree(&f.run)
+	settle(&f.run)
 
 	return f.run
 }
@@ -759,8 +854,8 @@ func closeStep(
 // attachTurn hangs one conversation event on the step it belongs to, and
 // reports which step that was — which is not always the one the row names. A
 // turn whose step is not in the transcript is dropped rather than inventing a
-// step for it — that only happens for a hook or fix conversation, which by
-// design records no plan step.
+// step for it — that only happens for a fix conversation, which by design
+// has no row of its own.
 func attachTurn(view *Transcript, index map[string]int, row store.RunEventRow) (int, bool) {
 	position, seen := index[stepKey(row)]
 	if !seen {
@@ -787,7 +882,7 @@ func attachTurn(view *Transcript, index map[string]int, row store.RunEventRow) (
 // lastRunningAgent finds the newest agent step that has not finished.
 func lastRunningAgent(view *Transcript) (int, bool) {
 	for i := len(view.Steps) - 1; i >= 0; i-- {
-		if view.Steps[i].Kind == "agent" && view.Steps[i].Running() {
+		if view.Steps[i].Kind == "agent" && view.Steps[i].open() {
 			return i, true
 		}
 	}
@@ -865,6 +960,30 @@ func linkTree(view *Transcript) {
 		}
 
 		parent.Children = append(parent.Children, step)
+	}
+}
+
+// settle marks every step still open on an ended run as unreported, giving it
+// the time from its start to the run's finish. The status is left alone —
+// only a close event writes that. Duration falls to 0 (drawn as —) when
+// either end is unknown or skewed: the run's finish is the store's clock and
+// the start is the event's, which a placed step need not share.
+func settle(view *Transcript) {
+	ended := view.ended()
+
+	for _, step := range view.Steps {
+		// Cleared as well as set: a step closed since the last View keeps
+		// the flag otherwise, and a late close would lose to the guard.
+		step.unreported = ended && step.open()
+		if !step.open() {
+			continue
+		}
+
+		step.Duration = 0
+
+		if step.unreported && !step.Started.IsZero() && !view.Run.FinishedAt.IsZero() {
+			step.Duration = max(view.Run.FinishedAt.Sub(step.Started), 0)
+		}
 	}
 }
 

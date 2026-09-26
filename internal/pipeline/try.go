@@ -79,8 +79,8 @@ func toleratedByTry(ctx context.Context, err error) bool {
 // continues, and says so on the transcript. It runs AFTER applyRouting, so a
 // wrapper that routed on the failure has already consumed the error and prints
 // nothing extra here. Any non-try step, and an abort, passes through. stepID
-// is the try's own, so the note hangs under it; 0 (a hook body, which is no
-// step) keeps whatever ctx names.
+// is the try's own, so the note hangs under it; 0 keeps whatever ctx names,
+// which for a hook body is the hook's own row.
 func tolerateTryFailure(ctx context.Context, jobName string, step config.Step, stepID int64, err error) error {
 	if err == nil || step.Try == nil || !toleratedByTry(ctx, err) {
 		return err

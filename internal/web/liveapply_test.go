@@ -33,7 +33,8 @@ import (
 // the page drops), an output on a step already drawn, a step re-parented
 // under a container that opened after it (retracted, then re-appended
 // nested) — both when the container is APPENDED and when the reader already
-// has it and it is morphed whole — and a job error that quotes a step's own,
+// has it and it is morphed whole — a hook, a child that opens under a step
+// that has already finished — and a job error that quotes a step's own,
 // which must change nothing: the step is that error's home.
 //
 // Serial, because liveBatch is a package global: every batch size is tried,
@@ -84,7 +85,7 @@ func TestStreamAppliedToThePageIsTheReloadedPage(t *testing.T) {
 
 			// The comparison is only worth anything if the stream sent
 			// something a plain reload would not have drawn already.
-			for _, want := range []string{"the sub-agent said this", "second attempt", "1eaf1eaf1eaf", "unchanged — replayed", `id="step-22-inner"`} {
+			for _, want := range []string{"the sub-agent said this", "second attempt", "1eaf1eaf1eaf", "unchanged — replayed", `id="step-22-inner"`, "paged the on-call"} {
 				if !strings.Contains(watched, want) {
 					t.Errorf("the watched page never shows %q", want)
 				}
@@ -161,6 +162,13 @@ func eventsAfterThePage() []store.RunEventRow {
 		{Type: events.TypeAgentText, StepIndex: 6, StepName: "assist", StepID: 10, Text: "Starting."},
 		{Type: events.TypeAgentText, StepIndex: 6, StepName: "assist", StepID: 10, Text: "Still going."},
 		{Type: events.TypeStepFinished, StepIndex: 6, StepName: "assist", StepKind: "agent", StepID: 10, Status: "succeeded"},
+		// A hook: a child that opens under a step already finished, prints,
+		// and finishes.
+		{Type: events.TypeStepStarted, StepIndex: 9, StepName: "deploy", StepKind: "task", StepID: 30},
+		{Type: events.TypeStepFinished, StepIndex: 9, StepName: "deploy", StepKind: "task", StepID: 30, Status: "failed", Text: "exit 1"},
+		{Type: events.TypeStepStarted, StepIndex: -1, StepName: "on_failure · task page", StepKind: "hook", StepID: 31, ParentStepID: 30},
+		{Type: events.TypeStepOutput, StepIndex: -1, StepName: "on_failure · task page", StepKind: "hook", StepID: 31, Text: "paged the on-call\n"},
+		{Type: events.TypeStepFinished, StepIndex: -1, StepName: "on_failure · task page", StepKind: "hook", StepID: 31, ParentStepID: 30, Status: "succeeded"},
 		// The reader HAS `block`; its grandchild lands first, as a root, and
 		// the wrapper that hangs it under the block arrives after. Sending the
 		// block whole again — a morph, since they have it — has to retract
@@ -199,7 +207,13 @@ func replayAtEveryFlush(
 			frames = frames[1:]
 		}
 
-		drawn := transcriptOf(t, renderTranscript(t, server, buildRunView(run, recorded[:at+1], nodes)))
+		// As the run stood when these were its latest events: in flight. The
+		// ended row settles what the stream never closed, and that is the
+		// closing reload's to draw, compared below.
+		inFlight := run
+		inFlight.Status = "running"
+
+		drawn := transcriptOf(t, renderTranscript(t, server, buildRunView(inFlight, recorded[:at+1], nodes)))
 		if got := transcriptOf(t, page); got != drawn {
 			t.Fatalf("after sequence %d (%s), a reader who watched the stream is not looking at what the page draws from the same events.\nwatched:\n%s\n\ndrawn:\n%s",
 				row.Seq, row.Type, got, drawn)
