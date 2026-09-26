@@ -217,6 +217,10 @@ what it spent and where it ran on its own row.
   passed one's, the page says so above the step diff and links both, because
   "the steps moved because the pipeline did" and "the steps moved on their
   own" are different problems and the step diff alone cannot tell them apart.
+- **A put opens on the version it produced**, `put: image (version: {...})`,
+  as a get's row opens on the version it fetched — or says `(no version)`
+  when its `out:` printed none. The note that the put made the rest of the
+  chain uncacheable sits on the same row.
 - **A task step expands into what it printed.** Output is captured while it
   still streams to the terminal and bounded at 16KB per step. Recorded
   whichever way the step ended, and especially when it failed: the error a

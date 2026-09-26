@@ -222,7 +222,7 @@
      the row, and the shell the stream sends when only these moved — a
      container whose child finished changes class and rollup and nothing
      under it. Rendered INSIDE the opening tag, so it starts with a space. */}}
-{{define "stepattrs"}}{{$step := .Step}}{{$detail := .Page.Run.StepHasDetail $step}} class="step{{if $step.Skipped}} skipped{{else if $step.Failed}} failed{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail (or $step.Failed $step.Turns $step.Container)}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}"{{end}}
+{{define "stepattrs"}}{{$step := .Step}}{{$detail := .Page.Run.StepHasDetail $step}} class="step{{if $step.Skipped}} skipped{{else if $step.Failed}} failed{{else if $step.Running}} running{{else}} passed{{end}}{{if $step.Container}} container{{end}}{{if $step.Active}} active{{end}}{{if and $detail (or $step.Failed $step.Turns $step.Container (eq $step.Kind "put"))}} open{{end}}"{{if $detail}} data-toggle{{end}} data-step="{{$step.Key}}"{{end}}
 
 {{/* The shell: a row's attributes and head, and nothing it holds. The
      attribute-only morph is what hx-morph-skip-children buys — htmx syncs the
