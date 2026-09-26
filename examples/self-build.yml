@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../steps.schema.json
 #
-# One draft PR per labeled open issue in a repo you own.
+# One PR per labeled open issue in a repo you own: a draft once implemented, marked ready once reviewed.
 #
 #   steps validate examples/self-build.yml --var repo=owner/name --var label=self-build
 #   steps run      examples/self-build.yml --job implement --var repo=owner/name --var label=self-build
@@ -55,7 +55,7 @@ resource_types:
       jq -r '"# \(.title) (#\(.number))\n\n\(.url)\n\n\(.body // "(no description)")\n"
         + ([.comments[] | "\n## Comment by \(.author.login), \(.createdAt)\n\n\(.body)\n"] | join(""))' issue.json > issue.md
 
-# A put: publishing must never be a cached skip.
+# A put: publishing must never be a cached skip. `draft: true` opens a draft PR from the implementer's snapshot so the work is visible during review; without it, the reviewed HEAD is pushed and the PR marked ready (created first if the draft put never managed to).
 - name: github-pr
   config:
     # GIT_CONFIG_GLOBAL=/dev/null, and the remote spelled out rather than
@@ -71,6 +71,19 @@ resource_types:
       title=$(cat issue/title)
       base=$(gh repo view {{ .source.repo | shellquote }} --json defaultBranchRef -q .defaultBranchRef.name)
       cd repo
+      pr=$(gh pr list --repo {{ .source.repo | shellquote }} --head "issue-$number" --state open --json number -q '.[0].number')
+      {{- if index .params "draft" }}
+      GIT_CONFIG_GLOBAL=/dev/null git push -q \
+        "https://github.com/{{ .source.repo }}.git" "refs/steps/draft:refs/heads/issue-$number"
+      if [ -z "$pr" ]; then
+        { printf 'Draft: implemented, review in progress. It is marked ready when the reviewer approves.\n\n<details><summary>Plan</summary>\n\n'
+          cat steps-work/plan.md
+          printf '\n</details>\n\nCloses #%s\n' "$number"; } > steps-work/pr-draft.md
+        url=$(gh pr create --repo {{ .source.repo | shellquote }} --draft --base "$base" \
+          --head "issue-$number" --title "$title" --body-file steps-work/pr-draft.md)
+        pr=${url##*/}
+      fi
+      {{- else }}
       GIT_CONFIG_GLOBAL=/dev/null git push -q \
         "https://github.com/{{ .source.repo }}.git" "HEAD:refs/heads/issue-$number"
       # Screenshots ride an orphan branch, never the PR's (a PNG in the diff lands on main at merge), pushed from a throwaway repo because the checkout's pre-push hook admits only the tree `task` validated.
@@ -92,10 +105,17 @@ resource_types:
           done; } > steps-work/shots.md
       fi
       { cat steps-work/pr-body.md steps-work/shots.md; printf '\nCloses #%s\n' "$number"; } > steps-work/pr-final.md
-      url=$(gh pr create --repo {{ .source.repo | shellquote }} --draft --base "$base" \
-        --head "issue-$number" --title "$title" --body-file steps-work/pr-final.md)
-      echo "$url" >&2
-      printf '{"pr":"%s"}\n' "${url##*/}"
+      if [ -z "$pr" ]; then
+        url=$(gh pr create --repo {{ .source.repo | shellquote }} --draft --base "$base" \
+          --head "issue-$number" --title "$title" --body-file steps-work/pr-final.md)
+        pr=${url##*/}
+      else
+        gh pr edit "$pr" --repo {{ .source.repo | shellquote }} --body-file steps-work/pr-final.md >/dev/null
+      fi
+      gh pr ready "$pr" --repo {{ .source.repo | shellquote }}
+      {{- end }}
+      echo "https://github.com/{{ .source.repo }}/pull/$pr" >&2
+      printf '{"pr":"%s"}\n' "$pr"
 
 resources:
 - name: issue
@@ -346,6 +366,30 @@ jobs:
       test -n "$(git status --porcelain)" || { echo "the implementer changed nothing" >&2; exit 1; }
       echo "changed $(git status --porcelain | wc -l) files"
 
+  # A scratch index, so HEAD and the real index stay put and the reviewer's `/code-review` still sees one uncommitted diff; a second pass parents on the first snapshot, so the draft branch only fast-forwards.
+  - task: snapshot
+    inputs: [repo, issue]
+    outputs: [repo]
+    run: |
+      set -eu
+      cd repo
+      idx=$(mktemp)
+      cp "$(git rev-parse --git-path index)" "$idx"
+      GIT_INDEX_FILE=$idx git add -A
+      tree=$(GIT_INDEX_FILE=$idx git write-tree)
+      rm -f "$idx"
+      parent=$(git rev-parse -q --verify refs/steps/draft || git rev-parse HEAD)
+      commit=$(git commit-tree "$tree" -p "$parent" -m "$(cat ../issue/title)" -m "Implementation, before review.")
+      git update-ref refs/steps/draft "$commit"
+      echo "snapshot $commit"
+
+  # Best effort: the pre-push hook admits only the tree `task` last sealed, so an implementer that edited after its final run gets no draft, and the final put still opens the PR.
+  - try:
+      put: draft-pr
+      resource: pr
+      inputs: [repo, issue]
+      params: {draft: true}
+
   # A fresh session is the point, not an accident: a reviewer that never argued
   # itself into the diff re-derives it from the code instead of from memory of
   # writing it. `high`, not `max` — max buys breadth on uncertain findings, and
@@ -365,8 +409,10 @@ jobs:
     dir: repo
     context_paths: [steps-work/issue.md]
     max_visits: 2
+    # The CLI expands a skill only when the prompt opens with `/`, and steps prepends context_paths: to the first message alone, so `/code-review` needs a message of its own after it.
     messages:
-    - "/code-review high --fix Please also ensure that this is secure and resilient."
+    - "The issue this diff must close is above. Reply ready and wait; the review instructions follow."
+    - "/code-review high --fix Don't use sub agents. Please also ensure that this is secure and resilient."
     - |
       Now decide, and call the verdict tool.
 
@@ -395,7 +441,7 @@ jobs:
     - approve: next
     - revise: implementer
 
-  # Deterministic gate: the three sections, one commit.
+  # Deterministic gate: the three sections, then the reviewer's edits committed on the last snapshot (none if it changed nothing) so the final push fast-forwards the draft branch.
   - task: verify
     inputs: [repo, issue]
     outputs: [repo]
@@ -405,9 +451,14 @@ jobs:
       for h in What Why Notes; do
         grep -q "^## $h" steps-work/pr-body.md || { echo "pr-body.md lacks ## $h" >&2; exit 1; }
       done
+      git reset -q --soft refs/steps/draft
       git add -A
-      git commit -q -m "$(cat ../issue/title)" -m "Closes #$(cat ../issue/number)"
-      echo "committed #$(cat ../issue/number)"
+      if git diff --cached --quiet; then
+        echo "reviewer changed nothing; the snapshot is the commit"
+      else
+        git commit -q -m "$(cat ../issue/title): review fixes" -m "Closes #$(cat ../issue/number)"
+        echo "committed review fixes for #$(cat ../issue/number)"
+      fi
 
   - put: pr
     inputs: [repo, issue]
