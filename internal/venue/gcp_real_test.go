@@ -57,7 +57,7 @@ func realGCP(t *testing.T) gcpFixture {
 		t.Skip("no GCP fixture — run hack/gcp-fixture.sh up and export what it prints")
 	}
 
-	_, err := os.Stat(fixture.binary) //nolint:gosec // the fixture's own binary, named by an opt-in env var
+	_, err := os.Stat(fixture.binary) //nolint:gosec,nolintlint // the fixture's own binary, named by an opt-in env var; nolintlint because only newer gosec builds flag it
 	if err != nil {
 		t.Fatalf("the worker binary %s is missing: %v", fixture.binary, err)
 	}
