@@ -1,0 +1,14 @@
+# A cron resource only tells time. A put against it would be a version whose
+# whole meaning is "now", which nothing downstream could fetch or build on.
+# expect: only tells time
+
+resources:
+- name: tick
+  type: cron
+  source:
+    expression: "@hourly"
+
+jobs:
+- name: build
+  plan:
+  - put: tick

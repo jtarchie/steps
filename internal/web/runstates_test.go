@@ -37,7 +37,7 @@ func TestALiveRunsSpendSaysSoFar(t *testing.T) {
 	}
 
 	_, live := get(t, server, "/p/demo/runs/run-live")
-	if !strings.Contains(live, `unpriced</span> so far <a href="#spend">`) {
+	if !strings.Contains(live, `unpriced</span> so far`) {
 		t.Errorf("a live run's spend entry does not say it is a running total:\n%s", live)
 	}
 

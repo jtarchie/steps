@@ -116,6 +116,10 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 
 	ctx = withRemoteInputs(ctx, remote)
 
+	// Once, outside the retries: every attempt and re-placement reads the
+	// same versions, and none of them needs anything on disk to do it.
+	inputs := putInputs(ctx, step)
+
 	var result map[string]any
 
 	// The venue retry wraps the attempts: loop, as a task's does — see
@@ -125,7 +129,7 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 			notef(ctx, "put: %s (attempt %d/%d)", putLabel(step), attempt, total)
 			logFrom(ctx).Info("job.put.attempt", "put", step.Put, "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
-			runResult, runErr := rsrc.RunOut(attemptCtx, cfg, *resourceType, resource.Env, resource.Source, step.Params, space.Dir())
+			runResult, runErr := rsrc.RunOut(attemptCtx, cfg, *resourceType, resource.Env, resource.Source, step.Params, inputs, space.Dir())
 			if runErr != nil {
 				// An eviction ends the attempts loop rather than spending
 				// it — the machine is gone, and the venue retry re-places.
@@ -145,6 +149,12 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 	})
 	if retryErr != nil {
 		return nil, fmt.Errorf("put %q: %w", step.Put, retryErr)
+	}
+
+	if result == nil {
+		notef(ctx, "put: %s (no version)", putLabel(step))
+	} else {
+		notef(ctx, "put: %s (version: %s)", putLabel(step), versionText(result))
 	}
 
 	return result, nil

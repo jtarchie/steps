@@ -286,9 +286,16 @@ type Step struct {
 	// not invalidate work that already succeeded.
 	//
 	// On a get or put it overrides the resource's own tags: (Resource.Tags)
-	// for that step. Invalid on try: steps, on agent steps and on a task with
-	// fix: (both would leave half a step on each machine), and on a get or
-	// put whose type is not shell-backed.
+	// for that step. On a do: or in_parallel: block it places the steps
+	// inside instead, the way Job.Tags places a whole plan: a step with none
+	// takes its own, else its resource's, else the nearest enclosing block's,
+	// else the job's — override, never union. A step's hooks inherit what
+	// the step resolved to (see visitPlacements).
+	//
+	// Invalid on try:, race: and ensemble: steps, on an agent without image:
+	// or a CLI agent, on a task with fix: (each would leave half a step on
+	// each machine), and on a get or put whose type is not shell-backed —
+	// inherited or not.
 	Tags []string `yaml:"tags,omitempty"`
 	// Privileged, on a task or agent step, overrides the referenced task's/
 	// agent's Privileged for this step only. True-wins, like Image's

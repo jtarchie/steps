@@ -451,7 +451,7 @@ jobs:
 }
 
 // agentSpendPipeline is a pipeline whose agent step has a budget, LOADED from
-// disk so the config carries a real revision — the spend panel's ceiling is
+// disk so the config carries a real revision — the step's ceiling is
 // gated on the run's sha matching it, and a hand-built Config has none.
 func agentSpendPipeline(t *testing.T) (*Server, *Pipeline) {
 	t.Helper()
@@ -617,7 +617,7 @@ func TestJobPageSaysWhatATurnIs(t *testing.T) {
 	}
 }
 
-// TestSpendRowMarksAStepThatFailedAfterItsLastAnswer keeps the spend panel
+// TestSpendRowMarksAStepThatFailedAfterItsLastAnswer keeps a step's spend
 // from contradicting the run beside it.
 //
 // finish_reason is the PROVIDER's word about the last request that completed,
@@ -666,15 +666,15 @@ func TestSpendRowMarksAStepThatFailedAfterItsLastAnswer(t *testing.T) {
 	// The premise, asserted rather than assumed: without the spend row there
 	// is no column for either signal to be wrong in, and the test would pass
 	// against a page that rendered neither.
-	if !strings.Contains(body, "spendtable") {
-		t.Fatalf("the run recorded no spend panel to assert about: %s", body)
+	if !strings.Contains(body, `class="note usage"`) {
+		t.Fatalf("the step row carries no spend to assert about: %s", body)
 	}
 
 	// The whole cell, not either word alone: "failed" appears on the step row
 	// as a CSS class and "success" is the reason being annotated, so matching
 	// either separately passes against a page that draws neither signal.
 	if !strings.Contains(body, "success \u2014 step failed") {
-		t.Errorf("the spend panel reports success on a step that failed, with nothing saying otherwise: %s", body)
+		t.Errorf("the step's spend reports success on a step that failed, with nothing saying otherwise: %s", body)
 	}
 }
 
@@ -763,7 +763,7 @@ func TestSpendPanelShowsTheCeilingWhenTheConfigStillMatches(t *testing.T) {
 	_, body := get(t, server, "/p/demo/runs/run-cap")
 
 	if !strings.Contains(body, "2,000,000") {
-		t.Errorf("the spend panel does not show the ceiling the step ran under: %s", body)
+		t.Errorf("the step's spend does not show the ceiling the step ran under: %s", body)
 	}
 }
 
@@ -879,11 +879,11 @@ func TestSpendPanelWithholdsTheCeilingAfterAnEdit(t *testing.T) {
 	_, body := get(t, server, "/p/demo/runs/run-old")
 
 	if strings.Contains(body, "2,000,000") {
-		t.Errorf("the spend panel shows a ceiling from a config this run never opened against: %s", body)
+		t.Errorf("the step's spend shows a ceiling from a config this run never opened against: %s", body)
 	}
 
 	if !strings.Contains(body, "config changed") {
-		t.Errorf("the spend panel withholds the ceiling without saying why: %s", body)
+		t.Errorf("the step's spend withholds the ceiling without saying why: %s", body)
 	}
 }
 
@@ -1175,15 +1175,8 @@ func TestSpendPanelDoesNotBlameASiblingMember(t *testing.T) {
 		t.Errorf("one member failed and %d spend rows say so: %s", marked, body)
 	}
 
-	// The right one: the row for the node the surviving member finished with
-	// is the one left alone. Read within the spend table, which sits below
-	// the transcript, where the surviving member's row links its hash.
-	_, table, found := strings.Cut(body, `id="spend"`)
-	if !found {
-		t.Fatalf("the run recorded no spend panel to assert about: %s", body)
-	}
-
-	if at := strings.Index(table, "— step failed"); at >= 0 && strings.LastIndex(table[:at], "hash-for") > strings.LastIndex(table[:at], "hash-against") {
+	// The right one: the mark sits on the row of the member that failed, which is the row holding its error.
+	if at := strings.Index(body, "— step failed"); at >= 0 && !strings.Contains(body[strings.LastIndex(body[:at], "data-step="):at], "the model gave up") {
 		t.Errorf("the member that succeeded is the one blamed: %s", body)
 	}
 }
@@ -1323,7 +1316,7 @@ func TestSpendPanelKnowsTheEnsembleJudgesCeiling(t *testing.T) {
 	_, body := get(t, server, "/p/demo/runs/run-judge")
 
 	if !strings.Contains(body, "123,456 tokens") {
-		t.Errorf("the spend panel does not show the judge's ceiling: %s", body)
+		t.Errorf("the step's spend does not show the judge's ceiling: %s", body)
 	}
 
 	if strings.Contains(body, ">unknown<") {

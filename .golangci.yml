@@ -400,6 +400,9 @@ linters:
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/template"
             - "github.com/jtarchie/steps/internal/webhook"
+            # The crontab parser behind the built-in cron type: parsing only,
+            # no scheduler — a poll is what wakes a check here.
+            - "github.com/robfig/cron/v3"
         # venue is the orchestrator half of remote execution, and the single
         # decision point one tier ABOVE shell: shell decides host vs container,
         # venue decides this machine vs a worker, and hands straight back to

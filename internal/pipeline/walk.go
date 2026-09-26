@@ -158,7 +158,8 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 		return true, nil
 	}
 
-	unskippable, err := foldStepUnskippable(ctx, w.cfg, step, w.chainUnskippable)
+	// The note says which step made the chain uncacheable, so it is that step's: said from this context, it named no step and sat above the transcript.
+	unskippable, err := foldStepUnskippable(events.WithStepID(ctx, res.stepID), w.cfg, step, w.chainUnskippable)
 	if err != nil {
 		return true, err
 	}

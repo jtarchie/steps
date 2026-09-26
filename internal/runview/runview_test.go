@@ -2,6 +2,7 @@ package runview
 
 import (
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
@@ -183,5 +184,141 @@ func TestCompactionHangsOnItsStep(t *testing.T) {
 		if got := step.CompactionStalled(); got != tc.stalled {
 			t.Errorf("CompactionStalled(%v) = %v, want %v", tc.result, got, tc.stalled)
 		}
+	}
+}
+
+// unclosed is a transcript with rows nothing closed: an orphan output (1), a
+// container (2) holding a started child (3), and one step that finished (4).
+func unclosed(t0 time.Time) []store.RunEventRow {
+	return []store.RunEventRow{
+		{Seq: 1, Type: events.TypeStepOutput, StepID: 1, StepName: "hook", StepKind: "task", Text: "hook said", At: t0},
+		{Seq: 2, Type: events.TypeStepStarted, StepID: 2, StepIndex: 1, StepName: "block", StepKind: "do", At: t0},
+		{Seq: 3, Type: events.TypeStepStarted, StepID: 3, ParentStepID: 2, StepIndex: 2, StepName: "inner", StepKind: "task", At: t0},
+		{Seq: 4, Type: events.TypeStepStarted, StepID: 4, StepIndex: 3, StepName: "done", StepKind: "task", At: t0},
+		{Seq: 5, Type: events.TypeStepFinished, StepID: 4, StepIndex: 3, StepName: "done", StepKind: "task", Status: "succeeded", DurationMS: 5},
+	}
+}
+
+func stepsByID(view Transcript) map[int64]*Step {
+	out := map[int64]*Step{}
+	for _, step := range view.Steps {
+		out[step.ID] = step
+	}
+
+	return out
+}
+
+// TestAStepThatNeverReportedStopsRunningWhenTheRunEnds covers the guard for a
+// row the fold opened and nothing closed (#169): on an ended run it is
+// unreported, never running and never the run's outcome.
+func TestAStepThatNeverReportedStopsRunningWhenTheRunEnds(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []string{"succeeded", "failed", "errored", "aborted"} {
+		assertSettled(t, status, stepsByID(Build(store.RunRow{Status: status}, unclosed(time.Now()), nil)))
+	}
+}
+
+func assertSettled(t *testing.T, status string, steps map[int64]*Step) {
+	t.Helper()
+
+	for id, step := range steps {
+		// Step 4 is the one that finished; every other row never closed.
+		closed := id == 4
+		if step.Running() || step.Active() || step.Unreported() == closed || step.Failed() {
+			t.Errorf("%s run: step %d = %+v, want unreported %v and neither running nor failed", status, id, step, !closed)
+		}
+	}
+
+	if steps[4].Status != "succeeded" {
+		t.Errorf("%s run: a finished step was touched: %+v", status, steps[4])
+	}
+
+	if tally := steps[2].Rollup(); tally.Unreported != 1 || tally.Passed != 0 || tally.Running != 0 {
+		t.Errorf("%s run: rollup = %+v, want the one child unreported", status, tally)
+	}
+}
+
+// TestAStepThatNeverReportedKeepsRunningMidRun is the live half: "" is the
+// terminal live view's zero RunRow, and pending stands for any status not
+// known to be final — both must keep an open step running.
+func TestAStepThatNeverReportedKeepsRunningMidRun(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []string{"running", "", "pending"} {
+		steps := stepsByID(Build(store.RunRow{Status: status}, unclosed(time.Now()), nil))
+
+		for _, id := range []int64{1, 3} {
+			if !steps[id].Running() || !steps[id].Active() {
+				t.Errorf("%q run: step %d stopped running mid-run", status, id)
+			}
+		}
+
+		for id, step := range steps {
+			if step.Unreported() {
+				t.Errorf("%q run: step %d unreported mid-run", status, id)
+			}
+		}
+	}
+}
+
+// TestAnUnreportedStepLastsUntilTheRunEnded pins the duration, including the
+// two cases where one end is unknown or the clocks disagree.
+func TestAnUnreportedStepLastsUntilTheRunEnded(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct {
+		name     string
+		finished time.Time
+		want     time.Duration
+	}{
+		{"finish known", t0.Add(90 * time.Second), 90 * time.Second},
+		{"finish unknown", time.Time{}, 0},
+		{"finish before start", t0.Add(-time.Second), 0},
+	} {
+		steps := stepsByID(Build(store.RunRow{Status: "failed", FinishedAt: tc.finished}, unclosed(t0), nil))
+		if got := steps[1].Duration; got != tc.want {
+			t.Errorf("%s: duration = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestALateCloseBeatsTheGuard covers the event sink draining after the run
+// row went terminal: the flag is recomputed per View, so the real outcome
+// wins on the next one.
+func TestALateCloseBeatsTheGuard(t *testing.T) {
+	t.Parallel()
+
+	folder := NewFolder()
+	folder.Add(unclosed(time.Now()), nil)
+	folder.View(store.RunRow{Status: "failed"})
+	folder.Add([]store.RunEventRow{
+		{Seq: 6, Type: events.TypeStepFinished, StepID: 1, StepName: "hook", StepKind: "task", Status: "succeeded"},
+	}, nil)
+
+	if late := stepsByID(folder.View(store.RunRow{Status: "failed"}))[1]; late.Unreported() || late.Status != "succeeded" {
+		t.Errorf("a close landing after the run ended lost to the guard: %+v", late)
+	}
+}
+
+// TestTheFoldDoesNotReadTheLastView pins that routing a sub-agent's turn to
+// its step is a function of the events alone: a Folder once Viewed against
+// an ended row must still hang the turn on the open agent step.
+func TestTheFoldDoesNotReadTheLastView(t *testing.T) {
+	t.Parallel()
+
+	folder := NewFolder()
+	folder.Add([]store.RunEventRow{
+		{Seq: 1, Type: events.TypeStepStarted, StepID: 1, StepName: "review", StepKind: "agent"},
+	}, nil)
+	folder.View(store.RunRow{Status: "failed"})
+	folder.Add([]store.RunEventRow{
+		{Seq: 2, Type: events.TypeAgentText, StepName: "sub-agent", Text: "looking"},
+	}, nil)
+
+	if turns := folder.Steps()[0].Turns; len(turns) != 1 {
+		t.Errorf("sub-agent turn hung on %d turns, want 1 on the open agent step", len(turns))
 	}
 }

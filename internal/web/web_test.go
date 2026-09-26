@@ -769,6 +769,80 @@ func TestGuardSkippedStepDoesNotStayRunning(t *testing.T) {
 	}
 }
 
+// orphanRun records a run holding one row nothing closed — hook output with
+// no start (#169) — finished with status, or left running when it is empty.
+func orphanRun(t *testing.T, status string) string {
+	t.Helper()
+
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	err := pipeline.Store.StartRun(ctx, "run-orphan", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-orphan", []store.RunEventRow{
+		{Type: events.TypeStepOutput, StepID: 1, StepIndex: 0, StepName: "hook", StepKind: "task", Text: "hook said"},
+	})
+
+	if status != "" {
+		err = pipeline.Store.FinishRun(ctx, "run-orphan", status)
+		if err != nil {
+			t.Fatalf("FinishRun: %v", err)
+		}
+	}
+
+	code, body := get(t, server, "/p/demo/runs/run-orphan")
+	if code != http.StatusOK {
+		t.Fatalf("GET run = %d: %s", code, body)
+	}
+
+	return body
+}
+
+// TestAFinishedRunShowsNothingRunning covers a row the fold opened and
+// nothing closed (#169): once the run has ended it reads as unreported, open,
+// with its words visible and no ticking clock.
+func TestAFinishedRunShowsNothingRunning(t *testing.T) {
+	t.Parallel()
+
+	body := orphanRun(t, "failed")
+
+	if strings.Contains(body, "data-elapsed-since=") || strings.Contains(body, `class="cursor"`) {
+		t.Error("a finished run still carries a live clock")
+	}
+
+	tag := openingTag(t, body, "step-1-hook")
+	if !strings.Contains(tag, " unreported") || !strings.Contains(tag, " open") {
+		t.Errorf("orphan row = %s, want it unreported and open", tag)
+	}
+
+	if strings.Contains(tag, " running") || strings.Contains(tag, " active") {
+		t.Errorf("orphan row = %s, still running on a finished run", tag)
+	}
+
+	if !strings.Contains(body, `aria-label="unreported"`) || !strings.Contains(body, "did not report an end") {
+		t.Error("the unreported row carries neither its mark nor the words for it")
+	}
+
+	if strings.Contains(body, `aria-label="running"`) {
+		t.Error("a finished run draws a running mark")
+	}
+}
+
+// TestALiveRunKeepsAnUnclosedStepRunning is the guard's other half: the same
+// row on a run still in flight keeps its clock.
+func TestALiveRunKeepsAnUnclosedStepRunning(t *testing.T) {
+	t.Parallel()
+
+	body := orphanRun(t, "")
+
+	if !strings.Contains(body, "data-elapsed-since=") || !strings.Contains(openingTag(t, body, "step-1-hook"), " running") {
+		t.Error("the guard stopped a step on a run still in flight")
+	}
+}
+
 // writeFileRaw is os.WriteFile with the test's permissions, kept apart so the
 // helper above reads as one line.
 func writeFileRaw(path, body string) error {
@@ -1688,13 +1762,13 @@ func TestFailedRunNamesWhatChangedSinceTheLastGreen(t *testing.T) {
 		t.Fatalf("GET run = %d: %s", code, body)
 	}
 
-	if !strings.Contains(body, `class="chg">compile</span>`) {
-		t.Errorf("the failed run does not name the step whose content moved:\n%s", body)
+	if !strings.Contains(stepHead(t, body, "compile"), `class="note chg"`) {
+		t.Errorf("the failed run does not mark the step whose content moved:\n%s", body)
 	}
 
-	// The step both runs share is what makes the note worth reading: naming
-	// everything is the same as naming nothing.
-	if strings.Contains(body, `class="chg">repo</span>`) {
+	// The step both runs share is what makes the mark worth reading: marking
+	// everything is the same as marking nothing.
+	if strings.Contains(stepHead(t, body, "repo"), `class="note chg"`) {
 		t.Error("the diff names a step whose hash did not move")
 	}
 
@@ -1818,5 +1892,56 @@ func TestRunPageOffersNoTriggerForAJobThePipelineDropped(t *testing.T) {
 	_, dropped := get(t, server, "/p/demo/runs/run-gone")
 	if strings.Contains(dropped, "/jobs/gone/trigger") {
 		t.Error("run page offers a trigger for a job the pipeline no longer has")
+	}
+}
+
+// stepHead is the header of the step named name: where a mark about that step belongs.
+func stepHead(t *testing.T, body, name string) string {
+	t.Helper()
+
+	_, head, found := strings.Cut(body, `<span class="name">`+name+`</span>`)
+	if !found {
+		t.Fatalf("no step named %s:\n%s", name, body)
+	}
+
+	head, _, _ = strings.Cut(head, "</div>")
+
+	return head
+}
+
+// A put opens by default, as a get's row does: the version it produced is the one thing a reader opens it for, and a passed row folded shut hid it behind a click the get never asked for.
+func TestAPutsRowOpensOnWhatItProduced(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-put", "build", "", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-put", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepNote, StepID: 1, Text: "built"},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1, Status: "succeeded"},
+		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "image", StepKind: "put", StepID: 2},
+		{Type: events.TypeStepNote, StepID: 2, Text: `put: image (version: {"tag":"v1"})`},
+		{Type: events.TypeStepFinished, StepIndex: 1, StepName: "image", StepKind: "put", StepID: 2, Status: "succeeded"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-put", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-put")
+
+	if !regexp.MustCompile(`class="step passed open"[^>]*data-step="#2"`).MatchString(body) {
+		t.Errorf("the put's row is folded shut:\n%s", body)
+	}
+
+	if regexp.MustCompile(`class="step passed open"[^>]*data-step="#1"`).MatchString(body) {
+		t.Error("a passed task opens too, which folds nothing")
 	}
 }

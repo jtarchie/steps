@@ -34,6 +34,21 @@ func strictUnmarshal(data []byte, out any) error {
 	return nil
 }
 
+// decodeSource types a resource's source: map strictly, so a misspelled key is a load error rather than a setting nobody reads. The built-in Go-backed types (webhook, cron) each have a typed source; this is the one door they decode through.
+func decodeSource(raw map[string]any, out any) error {
+	data, err := yaml.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("source: %w", err)
+	}
+
+	err = strictUnmarshal(data, out)
+	if err != nil {
+		return fmt.Errorf("source: %w", err)
+	}
+
+	return nil
+}
+
 // rejectUnknownKeys fails when node, a mapping, carries a key outside allowed.
 //
 // It exists because KnownFields does not reach through a custom

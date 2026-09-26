@@ -67,7 +67,14 @@ tasks:
       # Retry only the lock, and only by its message: exit 3 also means a real
       # internal error, and swallowing that would turn a broken linter into a
       # silent pass. Anything else is reported immediately.
+      #
+      # The directory has to exist first: golangci-lint cannot create its lock
+      # in a TMPDIR that is not there, and reports THAT as "parallel
+      # golangci-lint is running" — so a fresh checkout looped on the retry
+      # above for ninety seconds and failed with nothing wrong.
       - |
+        mkdir -p "$TMPDIR"
+
         for attempt in 1 2 3 4 5 6; do
           # Status captured from the command, NOT after the if: an if whose
           # condition is false and which has no else exits 0 by POSIX, so

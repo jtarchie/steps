@@ -47,6 +47,19 @@ type Transcript struct {
 // Running reports a run still in flight, which is what decides whether the page opens a live event stream.
 func (r Transcript) Running() bool { return r.Run.Status == "running" }
 
+// ended reports a run whose status is one FinishRun writes. An allow-list,
+// not !Running: the terminal live view folds against a ZERO RunRow while the
+// run is in flight, and an unknown status must keep a live step live — a
+// stuck clock is the lesser wrong than a running step drawn as dead.
+func (r Transcript) ended() bool {
+	switch r.Run.Status {
+	case "succeeded", "failed", "errored", "aborted":
+		return true
+	default:
+		return false
+	}
+}
+
 // HasSkipped reports whether any step replayed from cache. The page explains
 // folding only when there is something folded — an explanation of a mechanism
 // the reader cannot see on the page is noise.
@@ -112,6 +125,8 @@ type Step struct {
 	Outputs []string
 	// Notes is what the step's machinery said about it, in order.
 	Notes []Note
+	// unreported is set by settle, never by the fold: see Unreported.
+	unreported bool
 }
 
 // Note is one TypeStepNote, as a reader sees it.
@@ -124,8 +139,19 @@ type Note struct {
 // Warn reports a note worth a reader's attention, not only their record.
 func (n Note) Warn() bool { return n.Level == events.NoteWarn }
 
-// Running reports a step that started and has not reported an end.
-func (s Step) Running() bool { return s.Status == "" || s.Status == "running" }
+// Running reports a step that started and has not reported an end, on a run
+// that has not ended either.
+func (s Step) Running() bool { return s.open() && !s.unreported }
+
+// Unreported reports a step the run ended without hearing the end of. Neither
+// running nor the run's outcome: it never said how it did, and claiming
+// "failed" for it would be as much a guess as the clock that kept ticking.
+func (s Step) Unreported() bool { return s.unreported }
+
+// open is Running as the events alone answer it. The fold asks this rather
+// than Running, so what it decides never depends on the row the last View
+// happened to be handed.
+func (s Step) open() bool { return s.Status == "" || s.Status == "running" }
 
 // Elapsed is how long a running step has been running, for the row's own
 // clock. The page's timer script keeps it counting; this is what it reads
@@ -189,9 +215,9 @@ func (s Step) Block() bool {
 
 // OpenByDefault reports a row the page draws expanded. A running hook does
 // not open its step: the row would fold shut under the reader the moment the
-// hook passed.
+// hook passed. A put opens on the version it produced.
 func (s Step) OpenByDefault() bool {
-	if s.Failed() || len(s.Turns) > 0 || s.Block() {
+	if s.Failed() || s.Unreported() || len(s.Turns) > 0 || s.Block() || s.Kind == "put" {
 		return true
 	}
 
@@ -286,11 +312,12 @@ func (s Step) Active() bool {
 // folded block still has to answer "where does this stand", and the rows that
 // would otherwise answer are folded away with it.
 type Tally struct {
-	Cells   int
-	Passed  int
-	Failed  int
-	Running int
-	Skipped int
+	Cells      int
+	Passed     int
+	Failed     int
+	Running    int
+	Skipped    int
+	Unreported int
 }
 
 // Empty reports a Tally with nothing to say, which is not rendered.
@@ -319,6 +346,8 @@ func (s Step) Rollup() Tally {
 			out.Skipped++
 		case child.Failed():
 			out.Failed++
+		case child.Unreported():
+			out.Unreported++
 		case child.Running():
 			out.Running++
 		default:
@@ -692,10 +721,13 @@ func (f *Folder) Steps() []*Step { return f.run.Steps }
 // View is what has been folded so far, with the tree hung and the run row as
 // it stands — the row keeps changing under a live fold, and it is read for
 // the job error the step template asks each row about. Safe to call after
-// every batch: linkTree rebuilds the parent links rather than adding to them.
+// every batch: linkTree rebuilds the parent links rather than adding to them,
+// and settle recomputes which steps went unreported, so a close that lands
+// after the run row went terminal still wins on the next call.
 func (f *Folder) View(run store.RunRow) Transcript {
 	f.run.Run = run
 	linkTree(&f.run)
+	settle(&f.run)
 
 	return f.run
 }
@@ -850,7 +882,7 @@ func attachTurn(view *Transcript, index map[string]int, row store.RunEventRow) (
 // lastRunningAgent finds the newest agent step that has not finished.
 func lastRunningAgent(view *Transcript) (int, bool) {
 	for i := len(view.Steps) - 1; i >= 0; i-- {
-		if view.Steps[i].Kind == "agent" && view.Steps[i].Running() {
+		if view.Steps[i].Kind == "agent" && view.Steps[i].open() {
 			return i, true
 		}
 	}
@@ -928,6 +960,30 @@ func linkTree(view *Transcript) {
 		}
 
 		parent.Children = append(parent.Children, step)
+	}
+}
+
+// settle marks every step still open on an ended run as unreported, giving it
+// the time from its start to the run's finish. The status is left alone —
+// only a close event writes that. Duration falls to 0 (drawn as —) when
+// either end is unknown or skewed: the run's finish is the store's clock and
+// the start is the event's, which a placed step need not share.
+func settle(view *Transcript) {
+	ended := view.ended()
+
+	for _, step := range view.Steps {
+		// Cleared as well as set: a step closed since the last View keeps
+		// the flag otherwise, and a late close would lose to the guard.
+		step.unreported = ended && step.open()
+		if !step.open() {
+			continue
+		}
+
+		step.Duration = 0
+
+		if step.unreported && !step.Started.IsZero() && !view.Run.FinishedAt.IsZero() {
+			step.Duration = max(view.Run.FinishedAt.Sub(step.Started), 0)
+		}
 	}
 }
 

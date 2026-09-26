@@ -7,9 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"maps"
+	"slices"
 	"sync"
 
 	"github.com/jtarchie/steps/internal/config"
+	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -28,6 +31,10 @@ type buildVersions struct {
 	// no build with the gets and a downstream fan-in over both never opened.
 	// One build, not all: job_versions holds one build per version.
 	lastGreen string
+	// fetched is what this build's gets fetched, by GET name (the artifact),
+	// for a put's version(). Unlike by, never size- or empty-gated: those
+	// caps are about what is stored, and a get that fetched {} still fetched.
+	fetched map[string]map[string]any
 }
 
 type buildVersionsKey struct{}
@@ -66,7 +73,7 @@ func (b *buildVersions) runBuildID(runID string) string {
 const maxRecordedVersionBytes = 4 << 10
 
 func withBuildVersions(ctx context.Context) (context.Context, *buildVersions) {
-	versions := &buildVersions{by: map[string]map[string]bool{}}
+	versions := &buildVersions{by: map[string]map[string]bool{}, fetched: map[string]map[string]any{}}
 
 	return context.WithValue(ctx, buildVersionsKey{}, versions), versions
 }
@@ -118,6 +125,56 @@ func recordBuildVersion(ctx context.Context, resource string, version map[string
 	}
 
 	versions.by[resource][encoded] = true
+}
+
+// recordFetched notes the version a get fetched, under the get's name, for a
+// later put's version() in the same build.
+func recordFetched(ctx context.Context, get string, version map[string]any) {
+	versions, ok := ctx.Value(buildVersionsKey{}).(*buildVersions)
+	if !ok {
+		return
+	}
+
+	versions.mu.Lock()
+	defer versions.mu.Unlock()
+
+	versions.fetched[get] = version
+}
+
+// putInputs snapshots what a put's version() may read: its declared inputs
+// (every get fetched so far, for inputs: all) and their fetched versions. A
+// snapshot, not the live map, because in_parallel branches and across: cells
+// keep recording while the put runs.
+func putInputs(ctx context.Context, step config.Step) rsrc.PutInputs {
+	versions, ok := ctx.Value(buildVersionsKey{}).(*buildVersions)
+	if !ok {
+		return rsrc.PutInputs{Names: sortedNames(step.InputNames())}
+	}
+
+	versions.mu.Lock()
+	defer versions.mu.Unlock()
+
+	names := sortedNames(step.InputNames())
+	if step.InputsAll() {
+		names = slices.Sorted(maps.Keys(versions.fetched))
+	}
+
+	snapshot := make(map[string]map[string]any, len(names))
+
+	for _, name := range names {
+		if version, fetched := versions.fetched[name]; fetched {
+			snapshot[name] = version
+		}
+	}
+
+	return rsrc.PutInputs{Names: names, Versions: snapshot}
+}
+
+func sortedNames(names []string) []string {
+	sorted := slices.Clone(names)
+	slices.Sort(sorted)
+
+	return sorted
 }
 
 // recordPutOrder fixes a put's version in the resource's history when the put

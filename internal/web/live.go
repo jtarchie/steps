@@ -360,7 +360,15 @@ func (s *Server) flushBatch(
 	changes := folder.Add(rows, nodes)
 	after = rows[len(rows)-1].Seq
 
-	view := runView{Transcript: folder.View(run)}
+	// Drawn as in flight even once the row has ended: a stream catching up
+	// after the run finished would otherwise draw every row still waiting
+	// for its close as unreported, then flip it back when the close arrives
+	// later in the same drain. The done that ends the stream reloads the
+	// page, and the reload is what settles a row nothing closed.
+	inFlight := run
+	inFlight.Status = "running"
+
+	view := runView{Transcript: folder.View(inFlight)}
 
 	// The same decoration assembleRun gives a full-page render (handlers.go)
 	// — a running agent step's countdown is drawn inside the per-step row,

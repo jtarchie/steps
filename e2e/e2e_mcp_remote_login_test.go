@@ -247,15 +247,20 @@ func theDaemonHoldsTheToken(t *testing.T, fixture *oauthFixture, addr, dir strin
 func thePipelineSpendsTheToken(t *testing.T, fixture *oauthFixture, ran string) {
 	t.Helper()
 
+	// Waits on the content, not the file: the job's shell creates ran.log before it writes to it, and a read in between saw an empty file under load.
+	var body []byte
+
 	deadline := time.Now().Add(30 * time.Second)
-	for !fileExists(ran) && time.Now().Before(deadline) {
+	for time.Now().Before(deadline) {
+		body, _ = os.ReadFile(ran) //nolint:gosec // a path this test made
+		if strings.Contains(string(body), "ITEM-1") {
+			return
+		}
+
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	body, _ := os.ReadFile(ran) //nolint:gosec // a path this test made
-	if !strings.Contains(string(body), "ITEM-1") {
-		t.Fatalf("the pipeline never used the token the login obtained (ran.log = %q, authorized requests = %d)", body, fixture.authorized.Load())
-	}
+	t.Fatalf("the pipeline never used the token the login obtained (ran.log = %q, authorized requests = %d)", body, fixture.authorized.Load())
 }
 
 // startLoginOverHTTP starts a login the way the CLI does and returns the state of the authorization URL it was given, playing no browser: the login is left waiting.

@@ -12,6 +12,12 @@ type Job struct {
 	Name  string `yaml:"name"`
 	Plan  []Step `yaml:"plan"`
 	Hooks Hooks  `yaml:",inline"`
+	// Tags places every step in the plan and every job-level hook on one
+	// worker, the way a step's own tags: places that step (see Step.Tags). A
+	// do: or in_parallel: block's tags:, a get/put's resource tags:, or the
+	// step's own override it — never union with it. Resolved onto each step at
+	// load (resolveTags). Never hashed: placement, not content, see Step.Tags.
+	Tags []string `yaml:"tags,omitempty"`
 	// Assert, on a job, names the ordered set of task/agent/hook names the
 	// job's run must have produced (see Assert). A match clears the plan's
 	// failure; a mismatch fails the job. Never hashed.
@@ -112,18 +118,28 @@ func (j Job) VisitSteps(fn func(label string, step *Step) error) error {
 // points at the exact step. Used to give hook steps identical treatment to
 // plan steps in the image/artifact/fix validators below.
 func (j Job) visitSteps(fn func(label string, step *Step) error) error {
-	jobLabel := fmt.Sprintf("job %q", j.Name)
+	return walkJob(j, struct{}{}, carryNothing, dropCarried(fn))
+}
+
+// walkJob is visitSteps carrying a value down each step tree (see
+// walkStepTree). Plan steps and job-level hooks all start from carried.
+func walkJob[T any](j Job, carried T, pass func(string, *Step, T) (T, T), fn func(string, *Step, T) error) error {
+	jobLabel := j.label()
 
 	for i := range j.Plan {
-		err := visitStepTree(fmt.Sprintf("%s step %d%s", jobLabel, i, j.Plan[i].at()), &j.Plan[i], fn)
+		err := walkStepTree(fmt.Sprintf("%s step %d%s", jobLabel, i, j.Plan[i].at()), &j.Plan[i], carried, pass, fn)
 		if err != nil {
 			return err
 		}
 	}
 
 	return j.Hooks.Each(func(name string, step *Step) error {
-		return visitStepTree(fmt.Sprintf("%s %s hook", jobLabel, name), step, fn)
+		return walkStepTree(fmt.Sprintf("%s %s hook", jobLabel, name), step, carried, pass, fn)
 	})
+}
+
+func (j Job) label() string {
+	return fmt.Sprintf("job %q", j.Name)
 }
 
 // FindJob returns the job with the given name, or an error if not found.

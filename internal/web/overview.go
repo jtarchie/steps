@@ -493,7 +493,7 @@ func timeoutForStep(timeouts map[string]time.Duration, stepName string) (time.Du
 // persistent, incrementally-folded view — because the countdown is drawn
 // inside the per-step row, which is exactly the part of the page the two
 // paths share (see internal/web/CLAUDE.md, "the live view and the post-hoc
-// view are the SAME rendering"). A run's own status and spend tables are the
+// view are the SAME rendering"). A run's own status and spend total are the
 // only things the stream is documented not to draw; this isn't one of them.
 //
 // That second call site is why every branch below explicitly ZEROES Deadline

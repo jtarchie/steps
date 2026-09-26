@@ -23,9 +23,9 @@ func TestDriftSinceTheLastPassIsOneLine(t *testing.T) {
 		want      []string
 		absent    []string
 	}{
-		{"config and content", after, "hash-new", 1, []string{"configuration changed", "/p/demo/config/" + before, `<span class="chg">build</span>`, "changed content"}, []string{"no step's content moved"}},
-		{"config only", after, "hash-old", 1, []string{"configuration changed", "no step's content moved"}, []string{`class="chg"`}},
-		{"content only", before, "hash-new", 1, []string{`<span class="chg">build</span>`, "changed content"}, []string{"configuration changed"}},
+		{"config and content", after, "hash-new", 1, []string{"configuration changed", "/p/demo/config/" + before, "1 step changed content"}, []string{"no step's content moved"}},
+		{"config only", after, "hash-old", 1, []string{"configuration changed", "no step's content moved"}, []string{`class="note chg"`}},
+		{"content only", before, "hash-new", 1, []string{"1 step changed content"}, []string{"configuration changed"}},
 		{"neither", before, "hash-old", 0, nil, []string{"configuration changed", "changed content"}},
 	}
 

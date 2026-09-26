@@ -207,7 +207,13 @@ func replayAtEveryFlush(
 			frames = frames[1:]
 		}
 
-		drawn := transcriptOf(t, renderTranscript(t, server, buildRunView(run, recorded[:at+1], nodes)))
+		// As the run stood when these were its latest events: in flight. The
+		// ended row settles what the stream never closed, and that is the
+		// closing reload's to draw, compared below.
+		inFlight := run
+		inFlight.Status = "running"
+
+		drawn := transcriptOf(t, renderTranscript(t, server, buildRunView(inFlight, recorded[:at+1], nodes)))
 		if got := transcriptOf(t, page); got != drawn {
 			t.Fatalf("after sequence %d (%s), a reader who watched the stream is not looking at what the page draws from the same events.\nwatched:\n%s\n\ndrawn:\n%s",
 				row.Seq, row.Type, got, drawn)

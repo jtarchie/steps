@@ -164,15 +164,15 @@ The run page is the point of the whole thing. It renders a run the way the
 terminal does — steps in order, prefixed by kind, colored by outcome — with
 the things a scrollback cannot give you. Its head is two lines: what happened
 and where (status, the step that broke, duration, when), then what it ran
-against and what it cost (configuration, workspace, neighbours, a spend
-summary and a placement count that link down to their tables). The steps
-follow within the first screen; the tables sit below them.
+against and what it cost (configuration, workspace, neighbours, the run's
+total spend). The steps follow within the first screen, and each step carries
+what it spent and where it ran on its own row.
 
-- **Spend is shown against the ceiling it was spent under**, on a `spend` panel below the transcript that the head's spend summary links to (`#spend`), in an `of` column beside the cost, so a row reads `500,000` under `tokens` against `2,000,000 tokens` under `of` — or `$3.00` for a CLI agent, which is metered in dollars — which answers a question `500,000` alone does not. The ceiling is the agent's per-invocation one (an `across:` block's shared `budget:` is on the job page instead). It comes from the configuration currently loaded, so it is shown only for a run whose recorded config sha still matches it — a run started before an edit says `config changed` instead. That is deliberate and not a limitation to route around: a recorded revision stores its source but not its include files, so a run older than the last edit cannot be reconstructed, and "what was this capped at when it failed" is exactly the question a stale number would answer wrongly.
+- **Spend is shown against the ceiling it was spent under**, on the agent step's own row: its header names the model and totals the tokens, cache hits and cost, and its body breaks them down and ends `of <ceiling>`, so it reads `$0.42 of 2,000,000 tokens` — or `$3.00` for a CLI agent, which is metered in dollars — which answers a question `500,000` alone does not. The ceiling is the agent's per-invocation one (an `across:` block's shared `budget:` is on the job page instead). It comes from the configuration currently loaded, so it is shown only for a run whose recorded config sha still matches it — a run started before an edit says `config changed` instead. That is deliberate and not a limitation to route around: a recorded revision stores its source but not its include files, so a run older than the last edit cannot be reconstructed, and "what was this capped at when it failed" is exactly the question a stale number would answer wrongly.
 
-  The column distinguishes `uncapped` from `unknown`, and the difference is load-bearing. A ceiling belongs to the **agent**, while spend is recorded against the **step** — the same string for an ordinary step, and not for an `across:` cell, which renames itself. `uncapped` means the loaded configuration says that agent has no ceiling; `unknown` means the step's name resolved to no agent here. Reading a miss as `uncapped` would state the opposite of the truth for a step that had a ceiling, on the run where the ceiling is why it died.
-- **A finish reason that outlived its step says so.** `finish` on the spend panel is the *provider's* word about the last request that completed — for a CLI agent, the last invocation's. A step whose first message finished cleanly and then ran out of a pooled `max_turns:` or `budget: usd` before the next message was asked records `success` on a step that failed, so that cell reads `success — step failed`. The provider's word is annotated, never overwritten: it is the only record of how the model itself stopped.
-- **A step that stopped early says so.** An agent whose turn budget ran out is asked to answer from what it already gathered, and the answer is *degraded* — afterwards it is indistinguishable from a confident one unless the record says otherwise. It carries a `stopped early` badge, live and on reload alike. Its neighbour on the spend panel answers the other half: a response cut off mid-sentence by the model's own output limit.
+  The ceiling distinguishes `uncapped` from `unknown`, and the difference is load-bearing. A ceiling belongs to the **agent**, while spend is recorded against the **step** — the same string for an ordinary step, and not for an `across:` cell, which renames itself. `uncapped` means the loaded configuration says that agent has no ceiling; `unknown` means the step's name resolved to no agent here. Reading a miss as `uncapped` would state the opposite of the truth for a step that had a ceiling, on the run where the ceiling is why it died.
+- **A finish reason that outlived its step says so.** `finish` on an agent step is the *provider's* word about the last request that completed — for a CLI agent, the last invocation's. A step whose first message finished cleanly and then ran out of a pooled `max_turns:` or `budget: usd` before the next message was asked records `success` on a step that failed, so it reads `success — step failed`. The provider's word is annotated, never overwritten: it is the only record of how the model itself stopped.
+- **A step that stopped early says so.** An agent whose turn budget ran out is asked to answer from what it already gathered, and the answer is *degraded* — afterwards it is indistinguishable from a confident one unless the record says otherwise. It carries a `stopped early` badge, live and on reload alike. A `truncated` badge answers the other half: a response cut off mid-sentence by the model's own output limit.
 - **A plan is a tree, and it renders as one.** A block step (`across:`,
   `in_parallel:`, `race:`, `ensemble:`, `do:`, `try:`) holds the steps that ran
   inside it, indented under a guide rail, and folding the block folds its whole
@@ -206,16 +206,21 @@ follow within the first screen; the tables sit below them.
   failing step — the one that actually broke, which <kbd>f</kbd> also jumps
   to — as a link, and the error is read on that step, once. The head carries
   an error only when no step holds it: a run that died on an image pull, a
-  placement or a resource check before any step failed. The header also says
+  placement or a resource check before any step failed. The page also says
   what changed since the last passed run of that job — computed by comparing
-  content hashes, so it names the steps whose inputs, command, or prompt
-  actually moved.
+  content hashes, so each step whose inputs, command, or prompt actually moved
+  carries a `changed` mark on its own row (`new` for a step that run did not
+  have), and the line under the header counts them.
 - **Every run names the configuration it executed**, linking the pipeline as
   it was when that run started — which the file on disk no longer holds once
   anyone edits it. When a failed run's configuration differs from the last
   passed one's, the page says so above the step diff and links both, because
   "the steps moved because the pipeline did" and "the steps moved on their
   own" are different problems and the step diff alone cannot tell them apart.
+- **A put opens on the version it produced**, `put: image (version: {...})`,
+  as a get's row opens on the version it fetched — or says `(no version)`
+  when its `out:` printed none. The note that the put made the rest of the
+  chain uncacheable sits on the same row.
 - **A task step expands into what it printed.** Output is captured while it
   still streams to the terminal and bounded at 16KB per step. Recorded
   whichever way the step ended, and especially when it failed: the error a
@@ -270,17 +275,16 @@ follow within the first screen; the tables sit below them.
   `unpriced` rather than `$0.00`, which would read as free, and a run where
   only some steps did says `$0.42+3?` — a bill for three of six steps
   presented as the whole one is the same lie in the other direction.
-- **Which machines the run used**, on a `machines` panel beside the spend one
-  below the transcript, linked from the head's placement count (`#machines`),
-  for a run that placed any step: the tag, the platform the worker reported,
+- **Which machine a step ran on**, on that step's own row, for a step that was
+  placed: the tag, the platform the worker reported,
   the filesystem the tree landed on and the space left there, how many bytes
   had to be pushed to it and how many came back, the identity it ran as, and
   the machine — plus the
   image if the step ran in a container on it. A `tmpfs` workdir is marked in
-  warning colour, because it is *memory* and the reader is scanning for
+  warning colour, on the step's header too, because it is *memory* and the reader is scanning for
   exactly that. A worker that could not report a filesystem reads `not
   reported` rather than a blank that looks like an ordinary disk, and a shim
-  that named no identity leaves the cell empty rather than inventing `0:0`,
+  that named no identity leaves it out rather than inventing `0:0`,
   which would read as root.
 
   There is deliberately **no cost column**: what an instance-hour actually
@@ -335,6 +339,7 @@ Every status is one word, one glyph and one colour, on every page:
 | aborted | run | `■` dim | a person stopped it; not a failure |
 | paused | pipeline | `⏸` blue | a person paused it; an unpaused pipeline reads *active* |
 | held | job | `⊘` red | the [circuit breaker](infra.md#circuit-breaker-max_consecutive_failures) stopped its automatic triggers |
+| unreported | step | `?` dim | the run ended before this step reported how it did |
 
 While a run is live, the browser tab carries its status glyph, with a matching
 favicon dot. The title updates the instant
@@ -460,7 +465,9 @@ steps web --max-concurrent 4   # up to four queued jobs at a time
 **There is no `--once`.** It was the cron form of a runner: load a file, poll
 once, exit, never bind. A process that never binds has nothing to be set into,
 and a server is its own scheduler — run it under systemd as a service rather
-than a timer, and let `--interval` be the schedule.
+than a timer, and let `--interval` be the schedule. A job that should run at a
+time of day gets a [`cron` resource](resources.md#the-built-in-cron-type); the
+interval is only how often that clock is read.
 
 - **One poller per pipeline.** Within one pipeline the poller is handed the
   store handle its drain already uses rather than opening a second one.

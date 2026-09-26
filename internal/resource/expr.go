@@ -110,9 +110,10 @@ func writeArtifactFiles(destDir string, files map[string]string) error {
 }
 
 // exprRunOut evaluates expr.out, with file() scoped to srcDir — the put's
-// read view, the same directory a shell out: gets as its cwd.
+// read view, the same directory a shell out: gets as its cwd — and version()
+// to the put's inputs.
 func exprRunOut(
-	ctx context.Context, rt config.ResourceType, extraEnv []string, source, params map[string]any, srcDir string,
+	ctx context.Context, rt config.ResourceType, extraEnv []string, source, params map[string]any, inputs PutInputs, srcDir string,
 ) (map[string]any, error) {
 	if rt.Config.Expr.Out == "" {
 		return nil, fmt.Errorf("out %q: this resource type sets no expr.out", rt.Name)
@@ -121,7 +122,11 @@ func exprRunOut(
 	slog.Debug("resource.out", "resource_type", rt.Name, "source", source, "params", params,
 		"src_dir", srcDir, "backend", "expr")
 
-	version, err := exprlang.RunOut(ctx, rt.Config.Expr.Out, exprInput(rt, extraEnv, source, nil, params, srcDir))
+	in := exprInput(rt, extraEnv, source, nil, params, srcDir)
+	in.Inputs = inputs.Names
+	in.Versions = inputs.Versions
+
+	version, err := exprlang.RunOut(ctx, rt.Config.Expr.Out, in)
 	if err != nil {
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}

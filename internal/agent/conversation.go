@@ -48,7 +48,7 @@ func (p agentGenParams) applyTo(cfg *genai.GenerateContentConfig) {
 
 	if p.maxTokens > 0 {
 		tokens := min(p.maxTokens, math.MaxInt32)
-		cfg.MaxOutputTokens = int32(tokens)
+		cfg.MaxOutputTokens = int32(tokens) //nolint:gosec,nolintlint // bounded by the min above; nolintlint because only newer gosec builds flag it
 	}
 
 	if level, ok := reasoningLevels[p.reasoning]; ok {
@@ -565,9 +565,10 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	// cascade attempt) rather than carried in resumeCheckpoint: a source that
 	// picks up a conversation close to the step's shared deadline (see
 	// failover.go) is judged against what it actually has left, not what the
-	// very first source started with. timeoutWarned is likewise loop-local —
+	// very first source started with. wrapUpWarned is likewise loop-local —
 	// a swap re-arming it is a harmless, rare duplicate notice, not a
-	// correctness issue.
+	// correctness issue. clock.slowest is per attempt for the same reason: a
+	// fallback source is a different model, with its own request times.
 	timeoutDeadline, hasTimeout := ctx.Deadline()
 
 	var budgetAtEntry time.Duration
@@ -582,7 +583,7 @@ func runConversationLoop(ctx context.Context, llm model.LLM, conv agentConversat
 	var size reportedSize
 
 	for ; budget == unlimitedTurns || turn < budget; turn++ {
-		resp, err := conv.nextResponse(ctx, llm, req, &size, &state, func() {
+		resp, err := conv.nextResponse(ctx, llm, req, &size, &state, &clock.slowest, func() {
 			conv.maybeWarnWrapUp(req, clock, turn, budget, &wrapUpWarned)
 		})
 		if err != nil {
@@ -783,20 +784,25 @@ const timeoutWarningText = "Your wall-clock deadline is approaching. Wrap up soo
 
 // timeoutWarningFraction is the share of an attempt's starting budget that
 // must remain before timeoutWarningDue stops firing — the warning goes out
-// once remaining time drops to (at most) a fifth of what this attempt had
-// when it began.
+// once remaining time drops to a fifth of what this attempt had when it
+// began, or earlier when its requests are slow (see timeoutWarningDue).
 const timeoutWarningFraction = 5
 
 // timeoutWarningDue reports whether remaining has dropped to or below
-// budgetAtEntry/timeoutWarningFraction. budgetAtEntry <= 0 — no deadline
-// applies, or one had already passed by the time this attempt started —
-// never warns: there is no proactive notice left to give.
-func timeoutWarningDue(budgetAtEntry, remaining time.Duration) bool {
+// budgetAtEntry/timeoutWarningFraction, or to twice the slowest model request
+// this attempt has made, whichever is larger. The second bar is #172: a
+// reasoning model spent 132s on one request against a 120s window, so a
+// fifth alone nudged after the last request that could finish. Two, because
+// the model needs one request to write what it owes and one to say it is
+// done. budgetAtEntry <= 0 — no deadline applies, or one had already passed
+// by the time this attempt started — never warns: there is no proactive
+// notice left to give.
+func timeoutWarningDue(budgetAtEntry, remaining, slowest time.Duration) bool {
 	if budgetAtEntry <= 0 {
 		return false
 	}
 
-	return remaining <= budgetAtEntry/timeoutWarningFraction
+	return remaining <= max(budgetAtEntry/timeoutWarningFraction, 2*slowest)
 }
 
 // wrapUpClock is what the timeout arm of the wrap-up nudge measures against.
@@ -804,6 +810,7 @@ type wrapUpClock struct {
 	has      bool
 	deadline time.Time
 	atEntry  time.Duration
+	slowest  time.Duration
 }
 
 // turnsWarningDue reports whether the turn cap is close enough to nudge: a fifth of this attempt's turns left, but never fewer than two, since the model needs one turn to write what it owes and one to say it is done.
@@ -819,7 +826,7 @@ func turnsWarningDue(budget, turn int) (left int, due bool) {
 
 // wrapUpWarning is the nudge for whichever limit runs low first, or "" when none has. One nudge per attempt, whatever its cause: a second says nothing the first did not.
 func (conv agentConversation) wrapUpWarning(clock wrapUpClock, turn, budget int) string {
-	if clock.has && timeoutWarningDue(clock.atEntry, time.Until(clock.deadline)) {
+	if clock.has && timeoutWarningDue(clock.atEntry, time.Until(clock.deadline), clock.slowest) {
 		return timeoutWarningText
 	}
 
@@ -1009,11 +1016,13 @@ func (conv agentConversation) generateWithinBudget(ctx context.Context, llm mode
 }
 
 // nextResponse compacts the conversation if it is due, lets warn add its
-// nudge, and asks for the turn's response. Either request can cross a token
-// budget; both errors end the attempt through the caller's result(), so the
-// transcript and checkpoint still travel with the failure.
+// nudge, and asks for the turn's response, raising slowest to that request's
+// duration. Either request can cross a token budget; both errors end the
+// attempt through the caller's result(), so the transcript and checkpoint
+// still travel with the failure.
 func (conv agentConversation) nextResponse(
-	ctx context.Context, llm model.LLM, req *model.LLMRequest, size *reportedSize, state *resumeCheckpoint, warn func(),
+	ctx context.Context, llm model.LLM, req *model.LLMRequest, size *reportedSize, state *resumeCheckpoint,
+	slowest *time.Duration, warn func(),
 ) (*model.LLMResponse, error) {
 	err := maybeCompact(ctx, llm, req, conv, size, state)
 	if err != nil {
@@ -1022,9 +1031,16 @@ func (conv agentConversation) nextResponse(
 
 	warn()
 
+	// Timed after compaction: a summary is its own request, and folding it in
+	// would read a slow summarizer as a slow turn and nudge early.
+	started := time.Now()
+
 	// The budget is checked before the turn's tool calls run: a step that
 	// has already blown its ceiling must not go on to have side effects.
-	return conv.generateWithinBudget(ctx, llm, req)
+	resp, err := conv.generateWithinBudget(ctx, llm, req)
+	*slowest = max(*slowest, time.Since(started))
+
+	return resp, err
 }
 
 // attachUsage binds a conversation's token accounting to the job it runs in.

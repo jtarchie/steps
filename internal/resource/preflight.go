@@ -158,8 +158,8 @@ func preflightResource(
 		}
 
 		return nil
-	case config.BackendWebhook:
-		_, err := Receiver(*resource)
+	case config.BackendWebhook, config.BackendCron:
+		err := compileBuiltin(resourceType.Config.Backend(), *resource)
 		if err != nil {
 			return []config.Problem{{Target: fmt.Sprintf("resource %q", name), Detail: err.Error()}}
 		}
@@ -192,6 +192,25 @@ func preflightResource(
 	}
 
 	return resourceStageProblems(cfg, job, name, mcp, resource.Source, tools)
+}
+
+// compileBuiltin is all preflight can prove for a type that runs inside this
+// process: that its source: parses. Neither makes a call, so neither is
+// transient.
+func compileBuiltin(backend config.ResourceBackend, resource config.Resource) error {
+	switch backend {
+	case config.BackendWebhook:
+		_, err := Receiver(resource)
+
+		return err
+	case config.BackendCron:
+		_, err := Cron(resource)
+
+		return err
+	case config.BackendMCP, config.BackendExpr, config.BackendShell:
+	}
+
+	return nil
 }
 
 // resourceStageProblems checks the resource's lifecycle stages against the
@@ -464,6 +483,16 @@ func listToolsCached(ctx context.Context, cfg *config.Config, server string, set
 	// other job touching this server fail with "context canceled" for the rest
 	// of the cache window, with a healthy server the whole time.
 	if err != nil && ctx.Err() != nil {
+		return tools, err
+	}
+
+	// The same exemption internal/agent's probeCache makes, for the same
+	// reason: an oauth token that needs a login is fixed out of band, by a
+	// human, seconds later — and a cached "not authorized" outlives the fix,
+	// leaving a daemon that refuses work it is now perfectly able to do. It
+	// is decided by reading a file rather than by a round trip, so it is the
+	// one failure here worth re-deriving every time.
+	if errors.Is(err, stepsmcp.ErrNeedsLogin) {
 		return tools, err
 	}
 

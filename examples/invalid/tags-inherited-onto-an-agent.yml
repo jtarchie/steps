@@ -1,0 +1,19 @@
+# A job's tags: reach every step in it, and an agent without image: cannot be
+# placed whole — its file tools would read this machine while its shell wrote
+# to the worker. Inheriting the tag does not excuse it: the step would run
+# somewhere the pipeline never said, so the load refuses and names where the
+# tag came from.
+# expect: inherited from job "build"
+agents:
+- name: reviewer
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+
+jobs:
+- name: build
+  tags: [gpu]
+  plan:
+  - task: compile
+    run: make
+  - agent: reviewer
+    messages:
+      - "Review it."

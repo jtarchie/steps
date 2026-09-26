@@ -29,6 +29,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/openai/openai-go/v3 v3.64.0
 	github.com/pkg/sftp/v2 v2.0.0-alpha2
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/yuin/goldmark-highlighting/v3 v3.1.0
 	github.com/yuin/goldmark/v2 v2.1.5

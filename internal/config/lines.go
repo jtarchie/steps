@@ -74,9 +74,18 @@ func mappingValue(node *yaml.Node, key string) *yaml.Node {
 // ` (line 42)` — or "" when the line is unknown (a step built in Go rather
 // than decoded, as tests and any future config synthesis do).
 func (s Step) at() string {
-	if s.Line <= 0 {
+	return lineSuffix(s.Line)
+}
+
+// at is Step.at for a job's own fields.
+func (j Job) at() string {
+	return lineSuffix(j.Line)
+}
+
+func lineSuffix(line int) string {
+	if line <= 0 {
 		return ""
 	}
 
-	return fmt.Sprintf(" (line %d)", s.Line)
+	return fmt.Sprintf(" (line %d)", line)
 }

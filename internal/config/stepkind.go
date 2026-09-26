@@ -159,13 +159,30 @@ func branchesOf(step *Step) map[string][]Step {
 // try: wraps, a concurrent block's branches, a do: block's children, and every
 // hook — each labelled with where it sits.
 func visitStepTree(label string, step *Step, fn func(label string, step *Step) error) error {
-	err := fn(label, step)
+	return walkStepTree(label, step, struct{}{}, carryNothing, dropCarried(fn))
+}
+
+func carryNothing(string, *Step, struct{}) (struct{}, struct{}) { return struct{}{}, struct{}{} }
+
+func dropCarried(fn func(label string, step *Step) error) func(string, *Step, struct{}) error {
+	return func(label string, step *Step, _ struct{}) error { return fn(label, step) }
+}
+
+// walkStepTree is visitStepTree carrying a value down the tree — the one
+// recursion both share, so a container kind cannot be walked by one and missed
+// by the other. fn sees what the step received; pass decides what the step's
+// CHILDREN (a try: body, branches, do: steps) receive and what its HOOKS
+// receive, and is asked before fn so fn may rewrite the step.
+func walkStepTree[T any](label string, step *Step, carried T, pass func(string, *Step, T) (T, T), fn func(string, *Step, T) error) error {
+	inner, hooks := pass(label, step, carried)
+
+	err := fn(label, step, carried)
 	if err != nil {
 		return err
 	}
 
 	if step.Try != nil {
-		err = visitStepTree(label+" (try)", step.Try, fn)
+		err = walkStepTree(label+" (try)", step.Try, inner, pass, fn)
 		if err != nil {
 			return err
 		}
@@ -176,7 +193,7 @@ func visitStepTree(label string, step *Step, fn func(label string, step *Step) e
 	// branch could carry anything at all.
 	for kind, branches := range branchesOf(step) {
 		for i := range branches {
-			err = visitStepTree(fmt.Sprintf("%s (%s branch %d)", label, kind, i), &branches[i], fn)
+			err = walkStepTree(fmt.Sprintf("%s (%s branch %d)", label, kind, i), &branches[i], inner, pass, fn)
 			if err != nil {
 				return err
 			}
@@ -190,14 +207,14 @@ func visitStepTree(label string, step *Step, fn func(label string, step *Step) e
 	// so its children behave like ordinary consecutive plan steps — which is
 	// the entire reason those semantics must not reach them.
 	for i := range step.Do {
-		err = visitStepTree(fmt.Sprintf("%s (do step %d)", label, i), &step.Do[i], fn)
+		err = walkStepTree(fmt.Sprintf("%s (do step %d)", label, i), &step.Do[i], inner, pass, fn)
 		if err != nil {
 			return err
 		}
 	}
 
 	return step.Hooks.Each(func(name string, hook *Step) error {
-		return visitStepTree(fmt.Sprintf("%s (%s hook)", label, name), hook, fn)
+		return walkStepTree(fmt.Sprintf("%s (%s hook)", label, name), hook, hooks, pass, fn)
 	})
 }
 
