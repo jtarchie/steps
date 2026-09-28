@@ -161,7 +161,7 @@ func (w *WebCmd) serve(ctx context.Context) error {
 		return err
 	}
 
-	server, err := web.New(nil, runner, opts...)
+	server, err := web.New(nil, runner, append(opts, web.WithVersion(BuildVersion))...)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}

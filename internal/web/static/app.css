@@ -47,6 +47,10 @@ body {
   font-size: 13px;
   line-height: 1.55;
   min-height: 100vh;
+  /* A column, so a short page's footer sits at the bottom rather than under
+     the last table. */
+  display: flex;
+  flex-direction: column;
 }
 
 a { color: var(--blue); text-decoration: none; }
@@ -55,7 +59,12 @@ a:hover { text-decoration: underline; }
 
 code { font-family: var(--mono); color: var(--fg); }
 
-/* ---- top status line ---- */
+/* ---- top status line ----
+ *
+ * The bar is a path — steps / <pipeline> / <section> — so the pipeline sits
+ * BEFORE the tabs it scopes, drawn in the foreground weight the tabs get only
+ * when current. Each segment is a cell with a hairline on its right, the way
+ * a prompt separates its parts. */
 .statusline {
   display: flex;
   align-items: stretch;
@@ -73,6 +82,8 @@ code { font-family: var(--mono); color: var(--fg); }
 .statusline .brand:hover b { color: var(--green); }
 .tabs { display: flex; }
 .tab {
+  display: inline-flex;
+  align-items: center;
   padding: 8px 14px;
   color: var(--dim);
   border-right: 1px solid var(--line-soft);
@@ -147,10 +158,10 @@ tr.checkfail td { border-top: 0; padding-top: 0; }
 tr.checkfail pre { margin: 0 0 4px; }
 .statusline .right {
   margin-left: auto;
-  padding: 8px 14px;
+  padding: 4px 10px;
   color: var(--faint);
   display: flex;
-  gap: 16px;
+  gap: 12px;
   align-items: center;
   white-space: nowrap;
 }
@@ -172,19 +183,54 @@ tr.checkfail pre { margin: 0 0 4px; }
   border-radius: 3px;
   padding: 0 5px;
 }
+/* The way into the palette. A key is a hint, not a control: a reader with no
+   keyboard needs something to press. */
+.jumpbtn {
+  font: inherit;
+  font-size: 12px;
+  color: var(--dim);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 4px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.jumpbtn span[aria-hidden] { font-size: 15px; line-height: 1; }
+.jumpbtn:hover { color: var(--fg); border-color: var(--line); }
+@media (hover: none) { .jumpbtn kbd { display: none; } }
 
-/* pipeline switcher */
-.pipeswitch { position: relative; }
-.pipebtn { font: inherit; font-size: 12px; color: var(--dim); background: none; border: 0; cursor: pointer; padding: 0; }
-.pipebtn:hover { color: var(--fg); }
+/* pipeline switcher: the path's middle segment */
+.pipeswitch { position: relative; display: flex; align-items: stretch; border-right: 1px solid var(--line); }
+.pipebtn {
+  font: inherit;
+  font-size: 12px;
+  color: var(--dim);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 8px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.pipebtn b { color: var(--fg); font-weight: 600; }
+.pipebtn:hover, .pipebtn[aria-expanded="true"] { color: var(--fg); background: var(--panel2); }
+.pipebtn .caret { color: var(--faint); font-size: 10px; }
+.pipebtn:hover .caret { color: var(--fg); }
 .pipemenu {
   display: none;
   position: absolute;
-  right: 0;
-  top: calc(100% + 8px);
+  left: 0;
+  top: 100%;
   background: var(--panel);
   border: 1px solid var(--line);
+  border-top: 0;
   min-width: 240px;
+  max-width: calc(100vw - 16px);
   z-index: 30;
 }
 .pipemenu.open { display: block; }
@@ -202,8 +248,68 @@ tr.checkfail pre { margin: 0 0 4px; }
 .pipemenu a[aria-selected="true"]::before { content: "› "; color: var(--green); }
 .pipemenu .hint { margin-left: auto; color: var(--faint); font-size: 11px; }
 
+/* A finger needs more than 30px of row. Every control in the bar grows to the
+   platform minimum where the pointer is coarse; the bar's own height follows. */
+@media (pointer: coarse) {
+  .statusline .brand, .tab, .pipebtn { min-height: 44px; }
+  /* A flex box drops the space between the two words, so the gap restores it. */
+  .statusline .brand { display: inline-flex; align-items: center; gap: 0.4em; }
+  .jumpbtn { min-height: 40px; padding: 4px 12px; }
+  .actionbar .btn { min-height: 36px; }
+}
+
+/* On a phone the path and the tabs are two rows: brand and switcher first,
+   the jump control at their right, then the tabs as one strip that scrolls
+   sideways behind a fade — nothing is folded into a menu, because the
+   badges on those tabs are the whole reason to look at the bar. */
+@media (max-width: 640px) {
+  .statusline .right { order: 2; padding-right: 6px; }
+  .tabs {
+    order: 3;
+    flex-basis: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+    border-top: 1px solid var(--line-soft);
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab:last-child { border-right: 0; padding-right: 28px; }
+  .actionbar { order: 4; }
+  .pipeswitch { min-width: 0; }
+  .pipebtn b { overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
+}
+
 /* ---- page frame ---- */
-main { max-width: 1000px; margin: 0 auto; padding: 26px 20px 80px; }
+main { width: 100%; max-width: 1000px; margin: 0 auto; padding: 26px 20px 48px; flex: 1 0 auto; }
+@media (max-width: 640px) { main { padding: 18px 16px 40px; } }
+
+/* ---- footer ----
+ * The reference shelf: the version (data, so mono), the docs and the source,
+ * and the copyright. Hairline above, faint below the page's own voice, and
+ * clear of a phone's home indicator. */
+.foot {
+  max-width: 1000px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 14px 20px max(14px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 18px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--faint);
+}
+.foot .ver { font-family: var(--mono); color: var(--dim); }
+.foot .ver b { color: var(--fg); font-weight: 600; }
+.foot nav { display: flex; gap: 14px; }
+.foot a { color: var(--dim); }
+.foot a:hover { color: var(--fg); }
+.foot a[aria-current="page"] { color: var(--green); }
+.foot .copy { margin-left: auto; }
+@media (max-width: 640px) { .foot { padding-left: 16px; padding-right: 16px; } .foot .copy { margin-left: 0; flex-basis: 100%; } }
 
 /* What a hidden action says instead of vanishing on a read-only server. */
 .rohint { font-family: var(--sans); font-size: 12px; color: var(--dim); max-width: 340px; text-align: right; }

@@ -121,6 +121,20 @@ holds nothing serves an index saying how to set one.
 | `…/mcp` | Every `mcp_servers:` entry, who depends on it, and whether it is wired up — with **Connect** to finish an oauth login in this browser and **Test** to probe one server. Present only for a pipeline that declares servers; see [mcp.md](mcp.md#authorizing-from-the-browser-the-mcp-tab) |
 | `/docs` | These docs, rendered with syntax-highlighted examples — the same pages `steps docs` shows in a terminal |
 
+### Finding your way
+
+The header is a path: **steps / *pipeline* / *section***. The pipeline comes
+first because every tab after it — jobs, runs, resources, approvals,
+questions, and mcp when the pipeline declares servers — is about that one
+pipeline; click its name to switch to another the daemon holds. The root,
+the docs and an error page sit above any pipeline, so they offer only the
+switcher and no tabs. On a phone the tabs become one strip that scrolls
+sideways, with the current one brought into view. **jump** (or `/`) opens a
+palette that searches jobs, runs and pipelines across everything served.
+
+The footer carries the docs, the source and the version this daemon was built
+from — the thing to quote in a bug report.
+
 ### What needs you
 
 The header counts work that is **stuck and waiting on a person**, on the tab
