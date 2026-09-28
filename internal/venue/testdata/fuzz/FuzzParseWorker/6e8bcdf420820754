@@ -1,0 +1,2 @@
+go test fuzz v1
+string("Aws://launch/lt-000000000?version=latest&capac%0X00&shim=0")

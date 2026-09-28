@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // stagedDirMode is what a directory is created with while a tree is being
@@ -422,10 +423,12 @@ func unpackTree(r io.Reader, root string, fetched bool) error {
 	// the other way round.
 	dirModes := map[string]fs.FileMode{}
 
+	var links []string
+
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
-			return applyDirModes(dir, dirModes)
+			return finishTree(dir, root, links, dirModes)
 		}
 
 		if err != nil {
@@ -445,7 +448,20 @@ func unpackTree(r io.Reader, root string, fetched bool) error {
 		if header.Typeflag == tar.TypeDir {
 			dirModes[name] = fs.FileMode(header.Mode).Perm() //nolint:gosec // a mode this codec wrote
 		}
+
+		if fetched && header.Typeflag == tar.TypeSymlink {
+			links = append(links, name)
+		}
 	}
+}
+
+func finishTree(dir *os.Root, root string, links []string, dirModes map[string]fs.FileMode) error {
+	err := checkLandings(dir, links)
+	if err != nil {
+		return fmt.Errorf("unpacking into %q: %w", root, err)
+	}
+
+	return applyDirModes(dir, dirModes)
 }
 
 // applyDirModes restores recorded directory modes, deepest first so a
@@ -475,7 +491,9 @@ var ErrUnsafePath = errors.New("archive entry names a path outside the tree")
 
 func unpackName(name string) (string, error) {
 	clean := strings.TrimSuffix(name, "/")
-	if clean == "" || filepath.IsAbs(clean) || strings.HasPrefix(clean, "../") || clean == ".." {
+	lexical := filepath.ToSlash(filepath.Clean(filepath.FromSlash(clean)))
+
+	if clean == "" || filepath.IsAbs(clean) || strings.HasPrefix(lexical, "../") || lexical == ".." {
 		return "", fmt.Errorf("%w: %q", ErrUnsafePath, name)
 	}
 
@@ -497,6 +515,22 @@ func checkLinkTarget(name, target string) error {
 	resolved := filepath.Clean(filepath.Join(filepath.Dir(filepath.FromSlash(name)), filepath.FromSlash(target)))
 	if resolved == ".." || strings.HasPrefix(resolved, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("%w: %q -> %q", ErrUnsafeLink, name, target)
+	}
+
+	return nil
+}
+
+// checkLandings refuses a fetched tree any of whose symlinks resolves outside it once the whole tree exists. checkLinkTarget alone is lexical, and links chain: `a/b -> ..` makes a later `a/b/c` land at the root where its `../x` climbs out, and `b/../outside` climbs out whenever b is itself a link to the root. os.Root resolves the way the kernel does and refuses the escape; a target that merely does not exist, or stops at a file or a loop, cannot be reached through and is left alone.
+func checkLandings(dir *os.Root, links []string) error {
+	for _, name := range links {
+		_, err := dir.Stat(name)
+		if err == nil || errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP) {
+			continue
+		}
+
+		target, _ := dir.Readlink(name)
+
+		return fmt.Errorf("%w: %q -> %q: %w", ErrUnsafeLink, name, target, err)
 	}
 
 	return nil

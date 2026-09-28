@@ -95,11 +95,26 @@ func readAcrossFile(ctx context.Context, axis config.AcrossVar, bw workspace.Bui
 // a model, so a wrong shape here is the most likely failure and the one whose
 // message has to say what was found rather than what a decoder expected.
 func decodeAcrossItems(name string, data []byte) ([]string, error) {
-	var items []string
+	// Pointers, because encoding/json decodes a null into a string as "" and a top-level null into a slice as nil: both would run as values nobody wrote.
+	var decoded []*string
 
-	err := json.Unmarshal(data, &items)
+	err := json.Unmarshal(data, &decoded)
 	if err != nil {
 		return nil, fmt.Errorf("%s must hold a JSON array of strings: %w", name, err)
+	}
+
+	if decoded == nil {
+		return nil, fmt.Errorf("%s must hold a JSON array of strings, not null", name)
+	}
+
+	items := make([]string, 0, len(decoded))
+
+	for i, item := range decoded {
+		if item == nil {
+			return nil, fmt.Errorf("%s must hold a JSON array of strings: item %d is null", name, i)
+		}
+
+		items = append(items, *item)
 	}
 
 	if len(items) > config.MaxAcrossItems {

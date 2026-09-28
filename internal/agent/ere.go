@@ -33,6 +33,10 @@ func patternToERE(pattern string) (string, error) {
 		return "", fmt.Errorf("%w %q: %w", errUnportablePattern, pattern, err)
 	}
 
+	if strings.IndexByte(out.String(), 0) >= 0 {
+		return "", fmt.Errorf("%w %q: %w", errUnportablePattern, pattern, errNULPattern)
+	}
+
 	return out.String(), nil
 }
 
@@ -99,6 +103,8 @@ var (
 	// errMultilinePattern is a pattern that can only match across a line break, which a line-oriented grep can never do.
 	errMultilinePattern = errors.New("the pattern contains a newline, and search is line-oriented")
 	errUnsupportedOp    = errors.New("unsupported expression")
+	// errNULPattern is a pattern naming the NUL byte, which no shell argument can carry: the script is cut off at it, grep never runs, and the search came back as finding nothing.
+	errNULPattern = errors.New("the pattern contains a NUL byte, which cannot cross into a container as a shell argument")
 )
 
 // renderLiteral writes a run of literal runes, expanding a case-folded one into the bracket expression that spells both cases. A fold survives RE2's parse as a flag on the literal, so this is the only place `(?i)` has to be understood.

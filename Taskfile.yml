@@ -162,6 +162,19 @@ tasks:
     cmds:
       - go run ./tools/mutants all {{.CLI_ARGS}}
 
+  fuzz:
+    desc: "Advisory: run every Fuzz target for FUZZTIME each (default 30s). `task fuzz PKG=./internal/wire` narrows to one package. Never a gate — the seed corpus and every crasher under testdata/fuzz already run in `task test`; this is the search for new ones. A failure writes its input to testdata/fuzz/<Target>/: fix the bug and commit that file as the regression test."
+    cmds:
+      # go test -fuzz accepts exactly one target per package per run, hence the loop.
+      - |
+        set -e
+        for pkg in $(go list {{.PKG | default "./..."}}); do
+          for fn in $(go test -list '^Fuzz' "$pkg" | grep '^Fuzz' || true); do
+            echo "== $pkg $fn"
+            go test "$pkg" -run '^$' -fuzz "^${fn}\$" -fuzztime {{.FUZZTIME | default "30s"}}
+          done
+        done
+
   mutate-stale:
     desc: Which package most needs a mutation sweep — never-swept first, then by lines changed since the commit tools/mutation-ledger.json says it was last swept at.
     cmds:

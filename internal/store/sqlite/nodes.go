@@ -272,8 +272,9 @@ func truncateUTF8(s string, limit int) string {
 		return s
 	}
 
+	// Only the rune straddling the cut is examined: validating the whole prefix walked back to any earlier invalid byte, so one stray byte at the start of a command's output stored an empty string, in O(limit²).
 	cut := limit
-	for cut > 0 && !utf8.ValidString(s[:cut]) {
+	for cut > 0 && cut > limit-(utf8.UTFMax-1) && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
 

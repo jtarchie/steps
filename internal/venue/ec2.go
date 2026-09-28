@@ -556,7 +556,8 @@ func (w Worker) asStatic(instance string) Worker {
 // staticURL names a running instance the way ParseWorker reads one, keeping
 // every connection option and dropping the acquisition ones.
 func staticURL(scheme Scheme, instance, root, rawQuery string) string {
-	address := string(scheme) + "://" + instance + root
+	// Escaped, because root is the DECODED path: a %3F in the mapping comes back as a ? that would start the query.
+	address := string(scheme) + "://" + instance + (&url.URL{Path: root}).EscapedPath()
 
 	query, err := url.ParseQuery(rawQuery)
 	if err != nil {
