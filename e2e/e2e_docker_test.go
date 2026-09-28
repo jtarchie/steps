@@ -291,13 +291,16 @@ func TestEndToEndAgentContainerLeavesNothingRunning(t *testing.T) {
 // runningStepsContainers lists containers this tool would have created. It
 // compares before/after rather than asserting emptiness, so a developer with
 // unrelated containers around doesn't get a spurious failure.
+//
+// Scoped to this process's steps.pid label: the suite runs as several processes against one daemon, and another shard's container coming or going mid-run is not a leak of this one.
 func runningStepsContainers(t *testing.T) []string {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, "docker", "ps", "-aq", "--filter", "name=steps-").Output()
+	//nolint:gosec // fixed argv but for this process's own pid
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-aq", "--filter", "name=steps-", "--filter", fmt.Sprintf("label=steps.pid=%d", os.Getpid())).Output()
 	if err != nil {
 		t.Fatalf("docker ps: %v", err)
 	}

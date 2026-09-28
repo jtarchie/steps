@@ -70,9 +70,6 @@ func (b *borrowed) counts() (int, int) {
 func borrowedRun(t *testing.T, yaml string) (context.Context, *config.Config, workspace.Provider, store.Store, *borrowed) {
 	t.Helper()
 
-	// A registry bypassed by mistake acquires through the real EC2 client, and that must fail here rather than reach whatever account the shell has.
-	t.Setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:1")
-
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pipeline.yml")
 
@@ -307,8 +304,6 @@ func awaitFile(t *testing.T, path string) {
 
 // A machine that could not be given back bills until somebody notices, so the job's release and the process's each say so, and only when it happened.
 func TestAWorkerThatCannotBeGivenBackIsReported(t *testing.T) {
-	t.Setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:1")
-
 	for scope, c := range map[string]struct{ worker, warning string }{
 		"job":     {borrowedWorker, "acquired for this job could not be released"},
 		"process": {borrowedWorker + "&idle=1h", "acquired by this process could not be released"},
@@ -385,6 +380,8 @@ jobs:
 
 // A placement row can only exist once its node does (run_placements references it), so one per case also proves the node-then-placement order on both outcomes.
 func TestEveryPlacedLeafStepIsRecordedWhereItRanPassOrFail(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name, plan, step string
 		fails            bool
@@ -401,6 +398,8 @@ func TestEveryPlacedLeafStepIsRecordedWhereItRanPassOrFail(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			ctx, cfg, provider, st, _ := borrowedRun(t, `
 resource_types:
 - name: probe

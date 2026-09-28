@@ -238,12 +238,10 @@ jobs:
 // A matrix could therefore launch max_in_flight cells before the budget meant
 // anything.
 //
-// Six cells at 400 tokens each against a 700-token allowance, two at a time.
-// The first two start blind, which is unavoidable: no spend exists yet. What
-// must not happen is all six running.
+// Six cells at 800 tokens each against a 700-token allowance, two at a time: the first two start blind (no spend exists yet), and either alone exhausts the allowance, so the count is exactly two whatever the scheduler does — at 400 a third was rightly admitted whenever one finished before the other's usage landed, a flake on a loaded machine. Checked before the slot, a third is admitted blind.
 func TestAcrossBudgetBindsUnderConcurrency(t *testing.T) {
 	dir := t.TempDir()
-	fake := newRepeatingFakeLLM(t, says("reviewed").spending(400))
+	fake := newRepeatingFakeLLM(t, says("reviewed").spending(800))
 
 	path := writePipeline(t, dir, fmt.Sprintf(`
 workspace:
@@ -275,7 +273,7 @@ jobs:
 	mustRun(t, path)
 
 	if got := fake.requestCount(); got != 2 {
-		t.Errorf("cells run = %d, want exactly 2 (a 700 allowance covers two 400-token cells)", got)
+		t.Errorf("cells run = %d, want exactly 2 (either 800-token cell alone exhausts the 700 allowance)", got)
 	}
 }
 
