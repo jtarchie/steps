@@ -22,8 +22,8 @@ type TokenState struct {
 }
 
 // InspectToken reports the state of srv's saved credential from the file alone: no request, no refresh, nothing spent. The checks and their order are checkCredential's, which is what a run goes through, so the page and the run cannot disagree — but the WORDING is not, because a run's error names the login command to go and type and a page has a button for that.
-func InspectToken(srv config.MCPServer) TokenState {
-	tf, path, fault, _ := checkCredential(srv)
+func InspectToken(pipeline string, srv config.MCPServer) TokenState {
+	tf, path, fault, _ := checkCredential(pipeline, srv)
 	state := TokenState{Path: path}
 
 	// The absent token file IS the unusable state, so this is the guard rather than the fault being one: a fault and a token that agree only by invariant are two values nothing checks.
@@ -63,7 +63,6 @@ const (
 func faultDetail(fault credentialFault) string {
 	switch fault {
 	case faultWrongEndpoint:
-		// The token file is keyed by server NAME alone, so another pipeline's `tracker` can leave one here that was issued for a different endpoint entirely — which a run refuses, and which reads as "connected" to anybody not told otherwise.
 		return "authorized for a different endpoint — needs login"
 	case faultExpired:
 		return "expired, with no refresh token — needs login"
@@ -75,19 +74,19 @@ func faultDetail(fault credentialFault) string {
 }
 
 // checkCredential loads srv's token file and refuses the three states that make it unusable, in the order a run meets them: no file, a file authorized for a different endpoint, and an access token that expired with nothing to renew it.
-func checkCredential(srv config.MCPServer) (*TokenFile, string, credentialFault, error) {
-	path, err := TokenPath(srv.Name)
+func checkCredential(pipeline string, srv config.MCPServer) (*TokenFile, string, credentialFault, error) {
+	path, err := TokenPath(pipeline, srv.Name)
 	if err != nil {
 		return nil, "", faultNoToken, err
 	}
 
 	tf, err := LoadTokenFile(path)
 	if err != nil {
-		return nil, path, faultNoToken, fmt.Errorf("mcp server %q is not authorized (%w for %s, with -c <pipeline.yml> on this machine or -p <pipeline> --target <url> for a daemon): %w", srv.Name, ErrNeedsLogin, srv.Name, err)
+		return nil, path, faultNoToken, fmt.Errorf("mcp server %q is not authorized for pipeline %q (%w %s with -p %s --target <url> for a daemon, or -c <pipeline.yml> here, adding --name %s=<pipeline.yml> if that is not its file name): %w", srv.Name, pipeline, ErrNeedsLogin, srv.Name, pipeline, pipeline, err)
 	}
 
 	if tf.Endpoint != srv.Endpoint {
-		return nil, path, faultWrongEndpoint, fmt.Errorf("mcp server %q: authorized for a different endpoint (%w for %s again)", srv.Name, ErrNeedsLogin, srv.Name)
+		return nil, path, faultWrongEndpoint, fmt.Errorf("mcp server %q in pipeline %q: authorized for a different endpoint (%w %s with -p %s again)", srv.Name, pipeline, ErrNeedsLogin, srv.Name, pipeline)
 	}
 
 	// Caught here rather than left to x/oauth2, which answers this exact state with a bare "token expired and refresh token is not set" — true, but it names neither the server nor the fix, and it arrives only after the transport has already been built. The state is knowable from the file alone, so it is answered from the file alone.

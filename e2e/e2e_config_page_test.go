@@ -8,8 +8,12 @@ package e2e
 // version. These drive the pages that answer it.
 
 import (
+	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -201,6 +205,145 @@ func TestRunPageIsQuietWhenTheConfigDidNotChange(t *testing.T) {
 	if strings.Contains(page, "configuration changed") {
 		t.Errorf("two runs of one configuration are being reported as a change:\n%s", page)
 	}
+
+	// A flake: the step that failed is the step that passed, so its hash
+	// matches and it earns no mark.
+	if strings.Contains(page, `class="note chg"`) || strings.Contains(page, "changed content") {
+		t.Errorf("a step that failed with unchanged content is marked as changed:\n%s", page)
+	}
+}
+
+// TestRunPageMarksTheStepThatBrokeAsChanged: the most common red run is "I
+// edited it and it broke", and the mark has to land on the step that broke —
+// which, as the one that failed, used to publish no hash and so was never
+// compared, leaving the drift line to claim nothing had moved. The last
+// passed run here is a replay, as it is for any job run twice unchanged: a
+// replay's steps past the skip point used to publish no hash either.
+func TestRunPageMarksTheStepThatBrokeAsChanged(t *testing.T) {
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+
+	prepAndCompile(t, path, "echo one")
+	mustRun(t, "run", path, "--job", "build")
+	mustRun(t, "run", path, "--job", "build")
+
+	prepAndCompile(t, path, "echo one && exit 1")
+
+	err := cli.Run([]string{"run", path, "--job", "build"})
+	if err == nil {
+		t.Fatal("the edited pipeline was supposed to fail")
+	}
+
+	page, _ := failedRunPages(t, path)
+
+	// prep did not change, so a mark anywhere on the page is compile's.
+	if strings.Count(page, `class="note chg"`) != 1 || !strings.Contains(page, "1 step changed content") {
+		t.Errorf("the step that was edited and broke is not the one marked as changed:\n%s", page)
+	}
+
+	if strings.Contains(page, "no step's content moved") {
+		t.Errorf("the drift line says nothing moved, on the run whose only edited step broke:\n%s", page)
+	}
+}
+
+// TestRunPageDoesNotMarkAFlakeAfterAReplay: the same shape, where compile
+// fails with its content untouched. Comparing against a replay must still
+// find compile's hash equal, not new or changed.
+func TestRunPageDoesNotMarkAFlakeAfterAReplay(t *testing.T) {
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	marker := filepath.Join(dir, "marker")
+
+	prepAndCompile(t, path, "test -e "+marker+" && exit 1 || true")
+	mustRun(t, "run", path, "--job", "build")
+	mustRun(t, "run", path, "--job", "build")
+
+	err := os.WriteFile(marker, nil, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = cli.Run([]string{"run", path, "--job", "build", "--force"})
+	if err == nil {
+		t.Fatal("the flaking run was supposed to fail")
+	}
+
+	page, passed := failedRunPages(t, path)
+
+	if strings.Contains(page, `class="note chg"`) || strings.Contains(page, "changed content") {
+		t.Errorf("a step that failed with unchanged content is marked:\n%s", page)
+	}
+
+	// No mark is also what a step with no hash on either side gets, so the
+	// quiet page proves nothing unless both runs named the same two nodes:
+	// the replay its skipped compile's, the failure its failed one's.
+	failedNodes, passedNodes := nodeLinks(page), nodeLinks(passed)
+	if len(failedNodes) != 2 || !slices.Equal(failedNodes, passedNodes) {
+		t.Errorf("the failed run names nodes %v and the replay it is compared against %v, want the same two", failedNodes, passedNodes)
+	}
+}
+
+var nodeLink = regexp.MustCompile(`/nodes/([0-9a-f]{64})`)
+
+// nodeLinks is every distinct node hash a page links, sorted.
+func nodeLinks(page string) []string {
+	matches := nodeLink.FindAllStringSubmatch(page, -1)
+	hashes := make([]string, 0, len(matches))
+
+	for _, match := range matches {
+		hashes = append(hashes, match[1])
+	}
+
+	slices.Sort(hashes)
+
+	return slices.Compact(hashes)
+}
+
+// prepAndCompile writes a two-step job whose second step runs compile.
+func prepAndCompile(t *testing.T, path, compile string) {
+	t.Helper()
+
+	writePipelineFile(t, path, fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: prep
+    inputs: []
+    run: echo prep
+  - task: compile
+    inputs: []
+    run: %s
+`, compile))
+}
+
+// failedRunPages is the run page of the job's latest run, which must be a
+// failure after two passes, and the page of the pass before it.
+func failedRunPages(t *testing.T, path string) (string, string) {
+	t.Helper()
+
+	server, target := webServerFor(t, path)
+
+	runs, err := target.Store.ListRuns(t.Context(), "build", 10)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+
+	if len(runs) != 3 || runs[0].Status != "failed" || runs[1].Status != "succeeded" {
+		t.Fatalf("got runs %+v, want a failure after two passes", runs)
+	}
+
+	pages := make([]string, 2)
+
+	for i := range pages {
+		code, page := webGet(t, server, "/p/"+target.Slug+"/runs/"+runs[i].ID)
+		if code != http.StatusOK {
+			t.Fatalf("run page %s = %d", runs[i].ID, code)
+		}
+
+		pages[i] = page
+	}
+
+	return pages[0], pages[1]
 }
 
 // TestConfigPageRefusesAnUnknownRevision: a sha this pipeline never ran is a

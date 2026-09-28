@@ -47,7 +47,7 @@
   </table>
 </div>
 
-<p class="callout"><b>Why was this skipped?</b> This page is the cache's receipt: the content above produced the hash, and every run listed reused it instead of executing again.</p>
+{{if eq .Node.Status "succeeded"}}<p class="callout"><b>Why was this skipped?</b> This page is the cache's receipt: the content above produced the hash, and every run listed reused it instead of executing again.</p>{{end}}
 {{end}}
 
 {{define "turns"}}

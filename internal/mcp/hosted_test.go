@@ -30,7 +30,7 @@ func TestLoginHostedEndToEnd(t *testing.T) {
 
 	done := make(chan error, 1)
 
-	go func() { done <- LoginHosted(ctx, srv, hosted) }()
+	go func() { done <- LoginHosted(ctx, testPipeline, srv, hosted) }()
 
 	var authURL string
 
@@ -97,7 +97,7 @@ func hostedOnADaemon(t *testing.T, announce func(string)) (*httptest.Server, *Ho
 func assertHostedLoginPersisted(t *testing.T, ctx context.Context, srv config.MCPServer, want string) { //nolint:revive // t before ctx matches this package's other test-helper signatures
 	t.Helper()
 
-	path, err := TokenPath(srv.Name)
+	path, err := TokenPath(testPipeline, srv.Name)
 	if err != nil {
 		t.Fatal(err)
 	}

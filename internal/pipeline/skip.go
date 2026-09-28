@@ -5,6 +5,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/store"
@@ -37,6 +38,55 @@ func computeChainSkippable(ctx context.Context, st store.Store, jobName string, 
 	}
 
 	return chainSkippable, nil
+}
+
+// replayedHashes is the node each of the count plan steps after skipped holds
+// in the chains through it. A chain has one node per plan step, so position
+// maps to position. A step is "" where the chains through skipped disagree —
+// a later get fanning out binds a different version in each — so a row never
+// names a node another build ran.
+func replayedHashes(chains [][]string, skipped string, count int) []string {
+	hashes := make([]string, count)
+	if skipped == "" {
+		return hashes
+	}
+
+	seen := false
+
+	for _, chain := range chains {
+		at := slices.Index(chain, skipped)
+		if at < 0 || len(chain)-at-1 != count {
+			continue
+		}
+
+		for offset, hash := range chain[at+1:] {
+			switch {
+			case !seen:
+				hashes[offset] = hash
+			case hashes[offset] != hash:
+				hashes[offset] = ""
+			}
+		}
+
+		seen = true
+	}
+
+	return hashes
+}
+
+// chainHashes keeps only the node hashes of chains: the walk holds them for
+// its whole life, and a node's content map is dead weight there.
+func chainHashes(chains []merkle.Chain) [][]string {
+	out := make([][]string, len(chains))
+
+	for i, chain := range chains {
+		out[i] = make([]string, len(chain.Nodes))
+		for j, node := range chain.Nodes {
+			out[i][j] = node.Hash
+		}
+	}
+
+	return out
 }
 
 // buildSkippableIndex returns, for every node hash reachable across chains,

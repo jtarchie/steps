@@ -33,6 +33,11 @@ type runView struct {
 	Changed map[string]string
 	// ComparedTo is the run Changed was computed against.
 	ComparedTo string
+	// Uncompared is a step that ran with no hash to compare on one side — a
+	// failure before its node, a step the passing run chain-skipped, a run
+	// recorded before failures published hashes. The drift line must not
+	// claim no step's content moved when it could not look.
+	Uncompared bool
 	// ComparedConfig is the configuration THAT run executed, when it is not
 	// the one this run executed. Empty when the two agree, because a line
 	// saying the configuration changed after every run says nothing — the
@@ -241,7 +246,7 @@ func (r runView) StepPlacements(step *stepView) []PlacementView {
 	return rows
 }
 
-// owns joins an agent_usage or run_placements row to the step it describes. Neither table records a step id, and (index, name) is not a step: every cell of an across:, member of an ensemble:, branch of an in_parallel: or race:, and the step a try: wraps is handed its block's index, and two may share a name. The node is what tells them apart — a step that ENDED WELL publishes the hash its row recorded — so a hashed step owns exactly its node's rows, and a step with no hash (it failed, or it is a hook, which is never hashed) owns the rows under its index and name that no hashed step claimed.
+// owns joins an agent_usage or run_placements row to the step it describes. Neither table records a step id, and (index, name) is not a step: every cell of an across:, member of an ensemble:, branch of an in_parallel: or race:, and the step a try: wraps is handed its block's index, and two may share a name. The node is what tells them apart — a step publishes the hash its rows were recorded under, a failed one included — so a hashed step owns exactly its node's rows, and a step with no hash (a hook, which is never hashed, or a failure that came before any node) owns the rows under its index and name that no hashed step claimed.
 func (r runView) owns(step *stepView, index int, name, nodeHash string) bool {
 	if step.Hash != "" {
 		return nodeHash == step.Hash
@@ -444,15 +449,22 @@ func buildRunView(run store.RunRow, rows []store.RunEventRow, results map[string
 // and a prior one. It is the merkle store answering "what is different about
 // this run" directly: identical hashes mean identical content, so a step
 // whose hash moved is a step whose inputs, command, or prompt moved.
-func diffAgainst(current, prior runView) map[string]string {
-	priorHashes := map[string]string{}
-	for _, step := range prior.Steps {
-		priorHashes[step.Name] = step.Hash
-	}
-
+//
+// A name holds every hash the prior run showed under it, because ensemble
+// members and in_parallel: branches can share one. Hooks are left out on both
+// sides: they record no node, and an on_failure: hook is never in a green run.
+// uncompared reports a row that ran without being compared — either side had
+// no hash — so the page does not claim nothing moved having never looked.
+func diffAgainst(current, prior runView) (map[string]string, bool) {
+	priorHashes := hashesByName(prior)
 	changed := map[string]string{}
+	uncompared := false
 
 	for _, step := range current.Steps {
+		if step.Hook() || (step.Skipped() && step.Hash == "") {
+			continue
+		}
+
 		before, existed := priorHashes[step.Name]
 		if !existed {
 			changed[step.Name] = "new"
@@ -460,12 +472,40 @@ func diffAgainst(current, prior runView) map[string]string {
 			continue
 		}
 
-		if before != step.Hash && step.Hash != "" && before != "" {
+		if step.Hash == "" || len(before) == 0 {
+			uncompared = true
+
+			continue
+		}
+
+		if !before[step.Hash] {
 			changed[step.Name] = "changed"
 		}
 	}
 
-	return changed
+	return changed, uncompared
+}
+
+// hashesByName is every non-empty hash each non-hook step name showed in run,
+// with a name present even when none of its rows had one.
+func hashesByName(run runView) map[string]map[string]bool {
+	hashes := map[string]map[string]bool{}
+
+	for _, step := range run.Steps {
+		if step.Hook() {
+			continue
+		}
+
+		if hashes[step.Name] == nil {
+			hashes[step.Name] = map[string]bool{}
+		}
+
+		if step.Hash != "" {
+			hashes[step.Name][step.Hash] = true
+		}
+	}
+
+	return hashes
 }
 
 // jobView is a job as the board and the job page show it.
@@ -568,6 +608,20 @@ func sortEdges(edges []edgeView) {
 
 		return edges[i].Job < edges[j].Job
 	})
+}
+
+// turnCtx is what the turn template is invoked with: the turn, and whether
+// its request was slow for its step — a question only the step can answer,
+// asked here so a streamed turn and a drawn one ask it the same way.
+type turnCtx struct {
+	runview.Turn
+	Slow bool
+	// Pending marks the synthetic turn for a request the step ended waiting on.
+	Pending bool
+}
+
+func newTurnCtx(step *stepView, turn runview.Turn) turnCtx {
+	return turnCtx{Turn: turn, Slow: step.Slow(turn.Took)}
 }
 
 // stepCtx is what the recursive step template is invoked with: the page it is

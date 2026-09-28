@@ -716,7 +716,9 @@ func appendEvents(t *testing.T, st store.Store, runID string, rows []store.RunEv
 
 	for i, row := range rows {
 		row.RunID = runID
-		row.At = at.Add(time.Duration(i) * time.Millisecond)
+		if row.At.IsZero() {
+			row.At = at.Add(time.Duration(i) * time.Millisecond)
+		}
 
 		err := st.AppendRunEvent(context.Background(), row)
 		if err != nil {
@@ -1600,14 +1602,18 @@ func TestRunAndNodePagesDrawTheSameConversation(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 
+	// One instant for every event: node transcripts carry no timestamps, so
+	// the run page's request times are the one thing the two cannot share.
+	at := time.Now().UTC()
+
 	appendEvents(t, pipeline.Store, "run-1", []store.RunEventRow{
-		{Type: events.TypeJobStarted, StepIndex: -1},
-		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent"},
-		{Type: events.TypeAgentSystem, StepIndex: 0, StepName: "review", Text: systemText},
-		{Type: events.TypeAgentUser, StepIndex: 0, StepName: "review", Text: userText},
-		{Type: events.TypeAgentCompaction, StepIndex: 0, StepName: "review", Name: compactLabel, Text: summaryText},
-		{Type: events.TypeAgentText, StepIndex: 0, StepName: "review", Text: modelText},
-		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "review", StepKind: "agent", Status: "succeeded", Hash: "beef333", DurationMS: 100},
+		{Type: events.TypeJobStarted, StepIndex: -1, At: at},
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent", At: at},
+		{Type: events.TypeAgentSystem, StepIndex: 0, StepName: "review", Text: systemText, At: at},
+		{Type: events.TypeAgentUser, StepIndex: 0, StepName: "review", Text: userText, At: at},
+		{Type: events.TypeAgentCompaction, StepIndex: 0, StepName: "review", Name: compactLabel, Text: summaryText, At: at},
+		{Type: events.TypeAgentText, StepIndex: 0, StepName: "review", Text: modelText, At: at},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "review", StepKind: "agent", Status: "succeeded", Hash: "beef333", DurationMS: 100, At: at},
 	})
 
 	err = pipeline.Store.FinishRun(ctx, "run-1", "succeeded")

@@ -112,7 +112,7 @@ func TestOAuthTokenSourceRefreshesAndPersists(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir) // covers both darwin ($HOME-based) and linux (XDG-based) os.UserConfigDir()
-	path, err := TokenPath("linear")
+	path, err := TokenPath(testPipeline, "linear")
 	if err != nil {
 		t.Fatalf("TokenPath: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestOAuthTokenSourceRefreshesAndPersists(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	source, err := oauthTokenSource(context.Background(), srv)
+	source, err := oauthTokenSource(context.Background(), testPipeline, srv)
 	if err != nil {
 		t.Fatalf("oauthTokenSource: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestOAuthTokenSourceRefreshesAndPersists(t *testing.T) {
 	// would construct) must pick up the rotated refresh_token from disk, not
 	// the original stale one — proving persistence survives across
 	// "process restarts" (a fresh source here stands in for that).
-	source2, err := oauthTokenSource(context.Background(), srv)
+	source2, err := oauthTokenSource(context.Background(), testPipeline, srv)
 	if err != nil {
 		t.Fatalf("oauthTokenSource (2nd): %v", err)
 	}
@@ -208,7 +208,7 @@ func TestOAuthTokenSourceMissingFile(t *testing.T) {
 
 	srv := config.MCPServer{Name: "ghost-server", Endpoint: "https://example.com/mcp", Auth: config.MCPServerAuth{Type: "oauth"}}
 
-	_, err := oauthTokenSource(context.Background(), srv)
+	_, err := oauthTokenSource(context.Background(), testPipeline, srv)
 	if err == nil {
 		t.Fatal("oauthTokenSource: expected an error when no token file exists")
 	}
@@ -222,7 +222,7 @@ func TestOAuthTokenSourceEndpointMismatch(t *testing.T) {
 
 	srv := config.MCPServer{Name: "linear", Endpoint: "https://mcp.linear.app/mcp", Auth: config.MCPServerAuth{Type: "oauth"}}
 
-	path, err := TokenPath(srv.Name)
+	path, err := TokenPath(testPipeline, srv.Name)
 	if err != nil {
 		t.Fatalf("TokenPath: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestOAuthTokenSourceEndpointMismatch(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	_, err = oauthTokenSource(context.Background(), srv)
+	_, err = oauthTokenSource(context.Background(), testPipeline, srv)
 	if err == nil {
 		t.Fatal("oauthTokenSource: expected an error for a persisted-endpoint mismatch")
 	}
@@ -254,7 +254,7 @@ func TestOAuthTokenSourceNeedsLoginWhenExpiredWithNoRefreshToken(t *testing.T) {
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	path, err := TokenPath("metabase")
+	path, err := TokenPath(testPipeline, "metabase")
 	if err != nil {
 		t.Fatalf("TokenPath: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestOAuthTokenSourceNeedsLoginWhenExpiredWithNoRefreshToken(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	_, err = oauthTokenSource(context.Background(), srv)
+	_, err = oauthTokenSource(context.Background(), testPipeline, srv)
 	if err == nil {
 		t.Fatal("oauthTokenSource: want an error for an expired, unrefreshable token")
 	}
@@ -298,7 +298,7 @@ func TestOAuthTokenSourceUnexpiredWithNoRefreshTokenStillWorks(t *testing.T) {
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	path, err := TokenPath("metabase")
+	path, err := TokenPath(testPipeline, "metabase")
 	if err != nil {
 		t.Fatalf("TokenPath: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestOAuthTokenSourceUnexpiredWithNoRefreshTokenStillWorks(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	source, err := oauthTokenSource(context.Background(), srv)
+	source, err := oauthTokenSource(context.Background(), testPipeline, srv)
 	if err != nil {
 		t.Fatalf("oauthTokenSource: %v", err)
 	}
@@ -397,7 +397,7 @@ func TestOAuthTokenSourceNeedsLoginWhenRefreshRejected(t *testing.T) {
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	path, err := TokenPath("linear")
+	path, err := TokenPath(testPipeline, "linear")
 	if err != nil {
 		t.Fatalf("TokenPath: %v", err)
 	}
@@ -418,7 +418,7 @@ func TestOAuthTokenSourceNeedsLoginWhenRefreshRejected(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	source, err := oauthTokenSource(context.Background(), srv)
+	source, err := oauthTokenSource(context.Background(), testPipeline, srv)
 	if err != nil {
 		t.Fatalf("oauthTokenSource: %v", err)
 	}
@@ -444,7 +444,7 @@ func TestOAuthTokenSourceKeepsNetworkFailureWaitable(t *testing.T) {
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	path, err := TokenPath("linear")
+	path, err := TokenPath(testPipeline, "linear")
 	if err != nil {
 		t.Fatalf("TokenPath: %v", err)
 	}
@@ -465,7 +465,7 @@ func TestOAuthTokenSourceKeepsNetworkFailureWaitable(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	source, err := oauthTokenSource(context.Background(), srv)
+	source, err := oauthTokenSource(context.Background(), testPipeline, srv)
 	if err != nil {
 		t.Fatalf("oauthTokenSource: %v", err)
 	}
@@ -515,7 +515,7 @@ func TestOAuthTokenSourceKeepsServerErrorWaitable(t *testing.T) {
 			t.Setenv("HOME", dir)
 			t.Setenv("XDG_CONFIG_HOME", dir)
 
-			path, err := TokenPath("linear")
+			path, err := TokenPath(testPipeline, "linear")
 			if err != nil {
 				t.Fatalf("TokenPath: %v", err)
 			}
@@ -536,7 +536,7 @@ func TestOAuthTokenSourceKeepsServerErrorWaitable(t *testing.T) {
 				t.Fatalf("Save: %v", err)
 			}
 
-			source, err := oauthTokenSource(context.Background(), srv)
+			source, err := oauthTokenSource(context.Background(), testPipeline, srv)
 			if err != nil {
 				t.Fatalf("oauthTokenSource: %v", err)
 			}
@@ -572,7 +572,7 @@ func TestOAuthTokenSourceNeedsLoginOnEmptyBodiedRefusal(t *testing.T) {
 			t.Setenv("HOME", dir)
 			t.Setenv("XDG_CONFIG_HOME", dir)
 
-			path, err := TokenPath("linear")
+			path, err := TokenPath(testPipeline, "linear")
 			if err != nil {
 				t.Fatalf("TokenPath: %v", err)
 			}
@@ -593,7 +593,7 @@ func TestOAuthTokenSourceNeedsLoginOnEmptyBodiedRefusal(t *testing.T) {
 				t.Fatalf("Save: %v", err)
 			}
 
-			source, err := oauthTokenSource(context.Background(), srv)
+			source, err := oauthTokenSource(context.Background(), testPipeline, srv)
 			if err != nil {
 				t.Fatalf("oauthTokenSource: %v", err)
 			}

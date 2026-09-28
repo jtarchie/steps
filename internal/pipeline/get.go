@@ -92,7 +92,14 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 
 		if w.skippable[hash] {
 			logFrom(getCtx).Info("job.skip", "resource", resource.Name, "reason", "cached", "hash", hash)
-			publishStepSkipped(getCtx, w.jobName, i, step, markStep(getCtx), hash, skipReason(stepChainSkipped))
+
+			skipMark := markStep(getCtx)
+			publishStepSkipped(getCtx, w.jobName, i, step, skipMark, hash, skipReason(stepChainSkipped))
+
+			// Nested and numbered as this set's triggered build would have
+			// published them, so the most common fully-cached run — one whose
+			// plan opens with a get — still names every step it replayed.
+			w.reportChainSkipped(withChildrenOf(ctx, skipMark), hash, 0, remainder)
 
 			// A skip means this exact chain already succeeded once — the version
 			// was genuinely fetched, just not by this run. Mirrors
@@ -403,19 +410,19 @@ func (w *planWalk) fetchInPlace(ctx context.Context, step config.Step, steps []c
 
 	res, err := w.fetchGetStepInPlace(withChildrenOf(events.WithStepID(ctx, mark.id), mark), step)
 	if err != nil {
-		publishStepFinished(ctx, w.jobName, w.index, step, mark, res.hash, started, err)
+		publishStepFinished(ctx, w.jobName, w.index, step, mark, res.published(), started, err)
 
 		return true, err
 	}
 
 	if res.disposition == stepChainSkipped {
-		publishStepSkipped(ctx, w.jobName, w.index, step, mark, res.hash, skipReason(res.disposition))
-		reportChainSkipped(ctx, w.jobName, w.index+1, steps[w.index+1:])
+		publishStepSkipped(ctx, w.jobName, w.index, step, mark, res.published(), skipReason(res.disposition))
+		w.reportChainSkipped(ctx, res.nodeHash, w.index+1, steps[w.index+1:])
 
 		return true, nil
 	}
 
-	publishStepFinished(ctx, w.jobName, w.index, step, mark, res.hash, started, nil)
+	publishStepFinished(ctx, w.jobName, w.index, step, mark, res.published(), started, nil)
 
 	if res.hash != "" {
 		w.parentHash = res.hash
@@ -470,7 +477,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	}
 
 	if version == nil {
-		return ran(w.parentHash), nil
+		return stepResult{hash: w.parentHash}, nil
 	}
 
 	recordBuildVersion(ctx, resource.Name, version)
@@ -492,7 +499,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 		// was genuinely fetched, just not by this run.
 		recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
 
-		return stepResult{hash: w.parentHash, disposition: stepChainSkipped}, nil
+		return stepResult{hash: w.parentHash, nodeHash: hash, disposition: stepChainSkipped}, nil
 	}
 
 	node := merkle.Node{Hash: hash, ParentHash: w.parentHash, Kind: merkle.NodeKindGet, StepIndex: i, Resource: resource.Name, Content: content}
@@ -519,7 +526,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 		recordStepFailure(ctx, w.stepRunner, node, err)
 		recordPlacement(ctx, w.stepRunner, placed, i, step.Get, hash, hash)
 
-		return stepResult{}, err
+		return failedAt(hash), err
 	}
 
 	// Only now that the fetch (and its hooks) actually succeeded: recording

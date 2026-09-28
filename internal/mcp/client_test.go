@@ -67,7 +67,7 @@ func TestConnectListToolsCallTool(t *testing.T) {
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
-	client, err := Connect(context.Background(), config.MCPServer{Name: "echo", Endpoint: ts.URL})
+	client, err := Connect(context.Background(), testPipeline, config.MCPServer{Name: "echo", Endpoint: ts.URL})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestConnectBearerAuth(t *testing.T) {
 		Auth:     config.MCPServerAuth{Type: "bearer", APIKeyEnv: "TEST_MCP_TOKEN"}, //nolint:gosec // env-var *name*, not a credential value
 	}
 
-	client, err := Connect(context.Background(), srv)
+	client, err := Connect(context.Background(), testPipeline, srv)
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestConnectBearerAuthWrongToken(t *testing.T) {
 		Auth:     config.MCPServerAuth{Type: "bearer", APIKeyEnv: "TEST_MCP_TOKEN"}, //nolint:gosec // env-var *name*, not a credential value
 	}
 
-	_, err := Connect(context.Background(), srv)
+	_, err := Connect(context.Background(), testPipeline, srv)
 	if err == nil {
 		t.Fatal("Connect: expected an error with the wrong bearer token")
 	}
@@ -152,7 +152,7 @@ func TestConnectBearerAuthMissingEnv(t *testing.T) {
 		Auth:     config.MCPServerAuth{Type: "bearer", APIKeyEnv: "STEPS_TEST_MCP_TOKEN_UNSET"}, //nolint:gosec // env-var *name*, not a credential value
 	}
 
-	_, err := Connect(context.Background(), srv)
+	_, err := Connect(context.Background(), testPipeline, srv)
 	if err == nil {
 		t.Fatal("Connect: expected an error when api_key_env is unset")
 	}
@@ -165,7 +165,7 @@ func TestListServerTools(t *testing.T) {
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
-	tools, err := ListServerTools(context.Background(), config.MCPServer{Name: "echo", Endpoint: ts.URL})
+	tools, err := ListServerTools(context.Background(), testPipeline, config.MCPServer{Name: "echo", Endpoint: ts.URL})
 	if err != nil {
 		t.Fatalf("ListServerTools: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestListToolsStopsOnAnEndlessCursor(t *testing.T) {
 			ts := httptest.NewServer(handler)
 			t.Cleanup(ts.Close)
 
-			client, err := Connect(context.Background(), config.MCPServer{Name: "endless", Endpoint: ts.URL})
+			client, err := Connect(context.Background(), testPipeline, config.MCPServer{Name: "endless", Endpoint: ts.URL})
 			if err != nil {
 				t.Fatalf("Connect: %v", err)
 			}
@@ -276,7 +276,7 @@ func TestConnectOutlivesTheHandshakeDeadline(t *testing.T) {
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
-	client, err := Connect(context.Background(), config.MCPServer{Name: "echo", Endpoint: ts.URL})
+	client, err := Connect(context.Background(), testPipeline, config.MCPServer{Name: "echo", Endpoint: ts.URL})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestConnectDoesNotOpenAStandaloneSSEStream(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	client, err := Connect(context.Background(), config.MCPServer{Name: "echo", Endpoint: ts.URL})
+	client, err := Connect(context.Background(), testPipeline, config.MCPServer{Name: "echo", Endpoint: ts.URL})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}

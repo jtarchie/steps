@@ -19,7 +19,7 @@ const (
 // LoginStatus is where one login stands. Shared with the client for the reason SetRequest is.
 type LoginStatus struct {
 	State string `json:"state"`
-	// ID names THIS attempt, because a login is tracked by server NAME and a second Connect replaces the first under it. Without it a request can only ask "what is the state of the login called tracker", which after a replacement is somebody else's.
+	// ID names THIS attempt, because a login is tracked per pipeline and server and a second Connect replaces the first under that pair. Without it a request can only ask "what is the state of this pipeline's login called tracker", which after a replacement is somebody else's.
 	ID string `json:"id,omitempty"`
 	// AuthorizeURL appears once discovery and registration are done, which is network work the start request does not wait out.
 	AuthorizeURL string `json:"authorize_url,omitempty"`
@@ -38,7 +38,7 @@ type LoginRequest struct {
 // Authorizer runs logins and reports what a declared mcp server is worth. An interface for the reason Manager is one — depguard keeps internal/mcp out of this package — and optional: a manager that is not one answers 501 rather than pretending.
 type Authorizer interface {
 	StartLogin(pipeline *Pipeline, server string, req LoginRequest) (LoginStatus, error)
-	LoginStatus(server string) (LoginStatus, bool)
+	LoginStatus(pipeline *Pipeline, server string) (LoginStatus, bool)
 	// LoginCallback is the handler for the pending login that minted state, nil when none did.
 	LoginCallback(state string) http.Handler
 	// MCPState is what the token-holder knows about one server: its saved credential, and the last probe anybody asked for. Never a request of its own — the page calls this on every poll.
@@ -81,12 +81,17 @@ func (s *Server) handleAPIStartLogin(c *echo.Context) error {
 }
 
 func (s *Server) handleAPILoginStatus(c *echo.Context) error {
+	target := s.Lookup(c.Param("pipeline"))
+	if target == nil {
+		return echo.NewHTTPError(http.StatusNotFound, ErrNoSuchPipeline.Error())
+	}
+
 	authorizer := s.authorizer()
 	if authorizer == nil {
 		return echo.NewHTTPError(http.StatusNotImplemented, "this daemon cannot run an mcp login")
 	}
 
-	status, found := authorizer.LoginStatus(c.Param("server"))
+	status, found := authorizer.LoginStatus(target, c.Param("server"))
 	if !found {
 		return echo.NewHTTPError(http.StatusNotFound, "no login has been started for this server")
 	}

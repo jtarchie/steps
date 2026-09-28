@@ -44,10 +44,10 @@ func countingDaemon(t *testing.T) (*daemon, *int) {
 
 	reads := 0
 	inner := held.creds.inspect
-	held.creds.inspect = func(srv config.MCPServer) stepsmcp.TokenState {
+	held.creds.inspect = func(pipeline string, srv config.MCPServer) stepsmcp.TokenState {
 		reads++
 
-		return inner(srv)
+		return inner(pipeline, srv)
 	}
 
 	return held, &reads
@@ -133,7 +133,7 @@ func TestATokenGoingAwayIsVisibleImmediately(t *testing.T) {
 	}
 }
 
-// TestMovingTheEndpointRereadsTheToken: the token file is keyed by NAME, so a
+// TestMovingTheEndpointRereadsTheToken: the token file is keyed by name, so a
 // `steps pipeline set` that moves the endpoint turns a connected server into
 // an "authorized for a different endpoint" one without touching the file. A
 // cache keyed on the file alone would keep calling it connected.
@@ -162,14 +162,38 @@ func TestACachedCredentialDoesNotOutliveItsBound(t *testing.T) {
 	credentialOf(t, held)
 
 	held.creds.mu.Lock()
-	aged := held.creds.entries["tracker"]
+	aged := held.creds.entries[loginKey("app", "tracker")]
 	aged.readAt = time.Now().Add(-credentialMaxAge - time.Second)
-	held.creds.entries["tracker"] = aged
+	held.creds.entries[loginKey("app", "tracker")] = aged
 	held.creds.mu.Unlock()
 
 	credentialOf(t, held)
 
 	if *reads != 2 {
 		t.Errorf("read the token file %d times, want the aged entry to have been re-read", *reads)
+	}
+}
+
+// TestOnePipelinesLoginDoesNotConnectAnother: two pipelines declaring one
+// server, only one logged in. Each pipeline's answer is its own, and each is
+// cached as its own: keyed by server name alone, the two evict each other and
+// every render of either page re-reads the file.
+func TestOnePipelinesLoginDoesNotConnectAnother(t *testing.T) {
+	held, reads := countingDaemon(t)
+	setPipeline(t, held, "other", strings.Replace(oauthServerPipeline, "ENDPOINT", trackerEndpoint, 1))
+	writeTokenFile(t, liveToken())
+
+	for range 3 {
+		if got := credentialOf(t, held); !got.Connected {
+			t.Fatalf("app's credential = %+v, want connected", got)
+		}
+
+		if got := held.MCPState(held.server.Lookup("other"), "tracker").Credential; got.Connected {
+			t.Fatalf("other's credential = %+v with only app logged in, want not connected", got)
+		}
+	}
+
+	if *reads != 2 {
+		t.Errorf("read the token files %d times for 3 renders of two pipelines, want 2", *reads)
 	}
 }
