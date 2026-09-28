@@ -28,6 +28,7 @@ package cli
 
 import (
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -115,6 +116,18 @@ func (c *credentials) of(pipeline string, srv config.MCPServer) web.MCPCredentia
 	c.entries[key] = entry
 
 	return entry.state
+}
+
+// drop forgets every entry whose key starts with prefix, so a destroyed or renamed pipeline's entries do not accumulate.
+func (c *credentials) drop(prefix string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for key := range c.entries {
+		if strings.HasPrefix(key, prefix) {
+			delete(c.entries, key)
+		}
+	}
 }
 
 // describes reports whether this entry still answers for the configuration and

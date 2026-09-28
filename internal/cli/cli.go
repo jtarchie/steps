@@ -362,7 +362,7 @@ type ValidateCmd struct {
 	Live bool   `help:"also probe the models and MCP servers, live"                                    name:"live"`
 	Job  string `help:"with --live, probe only this job's models and MCP servers (default: every job)"`
 	// Name is here because --live dials oauth servers with the pipeline's own login, which is filed under this name.
-	Name map[string]string `help:"name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
+	Name map[string]string `help:"name the pipeline a file's mcp logins are filed under, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
 }
 
 // Run loads the pipeline (which runs every config-level validator) and then
@@ -1243,9 +1243,9 @@ type MCPCmd struct {
 // It reports rather than gates — a server that does not answer is a row with
 // an ✗, not a non-zero exit. `steps validate --live` is the command that fails.
 type MCPListCmd struct {
-	Pipeline string            `arg:""                                                                                        help:"path to the pipeline YAML file"`
-	Offline  bool              `help:"list what the file declares without connecting to anything"                             name:"offline"`
-	Name     map[string]string `help:"name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
+	Pipeline string            `arg:""                                                                                                          help:"path to the pipeline YAML file"`
+	Offline  bool              `help:"list what the file declares without connecting to anything"                                               name:"offline"`
+	Name     map[string]string `help:"name the pipeline a file's mcp logins are filed under, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
 }
 
 // Run prints one row per configured server.
@@ -1404,9 +1404,9 @@ func pluralize(count int, noun string) string {
 
 // MCPToolsCmd lists the tools a configured mcp_servers: entry exposes.
 type MCPToolsCmd struct {
-	Pipeline string            `arg:""                                                                                        help:"path to the pipeline YAML file"`
-	Server   string            `arg:""                                                                                        help:"mcp_servers: entry name"`
-	Name     map[string]string `help:"name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
+	Pipeline string            `arg:""                                                                                                          help:"path to the pipeline YAML file"`
+	Server   string            `arg:""                                                                                                          help:"mcp_servers: entry name"`
+	Name     map[string]string `help:"name the pipeline a file's mcp logins are filed under, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
 }
 
 // Run loads the pipeline, resolves the named server, connects (per its
@@ -1471,7 +1471,7 @@ type MCPLoginCmd struct {
 	Server           string `arg:""                                                                             help:"mcp_servers: entry name to authorize"`
 	Config           string `help:"authorize on THIS machine, for the server as this pipeline YAML declares it" name:"config"                               short:"c" type:"path"`
 	// Name is which pipeline a -c login is filed under, the same name `steps run --name` gives its state.
-	Name map[string]string `help:"name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
+	Name map[string]string `help:"name the pipeline a file's mcp logins are filed under, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
 }
 
 // Run is one of two logins, chosen by which pipeline was named. -c is a file here, so the login runs here: a loopback listener catches the redirect and the token lands in this user's config dir. -p is a pipeline a DAEMON serves, so the daemon runs it (daemon_login.go) — it is the machine that will spend the token, and one with no browser cannot be the loopback a redirect comes back to.
@@ -1484,6 +1484,11 @@ func (m *MCPLoginCmd) Run() error {
 	defer cancel()
 
 	if m.Pipeline != "" {
+		// -p already names the pipeline the login is filed under; a --name beside it would be silently ignored.
+		if len(m.Name) > 0 {
+			return errors.New("steps mcp login: --name names a -c file's pipeline; with -p the pipeline is already named")
+		}
+
 		return m.remote(ctx)
 	}
 

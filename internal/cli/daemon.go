@@ -543,6 +543,7 @@ func (d *daemon) Destroy(ctx context.Context, name string) error {
 
 	loginsOf := served.target.Config().Name
 	d.forget(loginsOf)
+	d.dropProbes(name)
 
 	err = stepsmcp.ForgetLogins(loginsOf)
 	if err != nil {
@@ -611,6 +612,7 @@ func (d *daemon) Rename(ctx context.Context, from, to string) error {
 	// ponytail: a crash between the Store.Rename above and this move leaves the logins under the old name. Upgrade: sweep for login directories no pipeline row names on restart.
 	oldLogins := served.target.Config().Name
 	d.forget(oldLogins)
+	d.dropProbes(from)
 	moveErr := stepsmcp.MoveLogins(oldLogins, cfg.Name)
 
 	d.start(to, cfg, st, provider, setFrom)

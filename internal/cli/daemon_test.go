@@ -110,8 +110,10 @@ func TestAChangedWorkspaceBlockStillRemovesItsBuilds(t *testing.T) {
 }
 
 // A rename is one UPDATE and what serves the new name is built after it, so a refusal there used to leave the pipeline served under neither name while the database — and so the next restart — named the new one.
+//
+// Not t.Parallel(): the rename consults mcp logins, which live in process environment, and a real user's login directory for the new name would refuse it for the wrong reason.
 func TestARefusedRenameLeavesThePipelineWhereItWas(t *testing.T) {
-	t.Parallel()
+	isolateLogins(t)
 
 	held := servingDaemon(t)
 	root := t.TempDir()
@@ -322,7 +324,6 @@ func serveOn(t *testing.T, held *daemon, name string, st store.Store, source str
 
 const idlePipeline = "jobs:\n- name: build\n  plan:\n  - task: work\n    inputs: []\n    run: \"true\"\n"
 
-// servingDaemon is the daemon `steps web` builds, over a state file of the test's own.
 // isolateLogins points the mcp login directory at a temp dir, since a destroy removes and a rename moves the real user's logins for a pipeline of the same name.
 func isolateLogins(t testing.TB) string {
 	t.Helper()
@@ -339,6 +340,7 @@ func isolateLogins(t testing.TB) string {
 	return filepath.Join(root, "steps", "mcp")
 }
 
+// servingDaemon is the daemon `steps web` builds, over a state file of the test's own.
 func servingDaemon(t testing.TB) *daemon {
 	t.Helper()
 

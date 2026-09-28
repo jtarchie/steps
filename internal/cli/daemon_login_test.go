@@ -391,3 +391,51 @@ func TestARenameOntoExistingLoginsIsRefused(t *testing.T) {
 		t.Errorf("the logins did not follow the rename: %v", err)
 	}
 }
+
+// A replaced login was cancelled but may still be persisting the token it had already obtained, and Save recreates the directory a destroy just removed — so forget waits for it as it does for the held one.
+func TestForgetWaitsOutAReplacedLogin(t *testing.T) {
+	t.Parallel()
+
+	l := newLogins(t.Context())
+	done := make(chan struct{})
+	replaced := &pendingLogin{pipeline: "app", done: done, cancel: func() {
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			close(done)
+		}()
+	}}
+	otherDone := make(chan struct{})
+	other := &pendingLogin{pipeline: "other", done: otherDone, cancel: func() { close(otherDone) }}
+
+	l.mu.Lock()
+	l.live[replaced] = struct{}{}
+	l.live[other] = struct{}{}
+	l.mu.Unlock()
+
+	l.forget("app")
+
+	select {
+	case <-done:
+	default:
+		t.Error("forget returned while a replaced login of the pipeline was still running")
+	}
+
+	select {
+	case <-otherDone:
+		t.Error("forget cancelled another pipeline's login")
+	default:
+	}
+}
+
+// -p names the pipeline a daemon login is filed under, so a --name beside it could only be ignored.
+func TestMCPLoginRefusesNameWithDashP(t *testing.T) {
+	t.Parallel()
+
+	cmd := &MCPLoginCmd{PipelineNameFlag: PipelineNameFlag{Pipeline: "app"}, Server: "tracker", Name: map[string]string{"x": "x.yml"}}
+	cmd.Target = "http://127.0.0.1:1"
+
+	err := cmd.Run()
+	if err == nil || !strings.Contains(err.Error(), "--name") {
+		t.Fatalf("mcp login -p with --name = %v, want refused naming --name", err)
+	}
+}

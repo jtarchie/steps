@@ -26,6 +26,8 @@ type logins struct {
 	base context.Context //nolint:containedctx // a login outlives the request that started it, and dies with the daemon
 	mu   sync.Mutex
 	held map[string]*pendingLogin
+	// live is every login whose goroutine has not returned, held or not: a replaced login is cancelled but may already be persisting the token it obtained, and forget must wait that out too.
+	live map[*pendingLogin]struct{}
 	// stale is the logins a newer one replaced, newest last, kept only so the browser still at a consent screen can be told what happened; see staleLogins.
 	stale []staleLogin
 	wait  sync.WaitGroup
@@ -58,7 +60,7 @@ type staleLogin struct {
 const staleLogins = 4
 
 func newLogins(base context.Context) *logins {
-	return &logins{base: base, held: map[string]*pendingLogin{}}
+	return &logins{base: base, held: map[string]*pendingLogin{}, live: map[*pendingLogin]struct{}{}}
 }
 
 // nextID names one ATTEMPT, since the newest login for a pipeline and server owns that key. A counter rather than a nonce: it is compared with itself by the request that started the login and never leaves this process as anything a caller could authenticate with.
@@ -123,10 +125,16 @@ func (l *logins) StartLogin(pipeline *web.Pipeline, server string, req web.Login
 	}
 
 	l.held[key] = pending
+	l.live[pending] = struct{}{}
 	l.mu.Unlock()
 
 	l.wait.Go(func() {
-		defer close(pending.done)
+		defer func() {
+			l.mu.Lock()
+			delete(l.live, pending)
+			l.mu.Unlock()
+			close(pending.done)
+		}()
 		defer cancel()
 
 		loginErr := stepsmcp.LoginHosted(ctx, name, *srv, pending.hosted)
@@ -238,12 +246,17 @@ func (l *logins) forget(pipeline string) {
 
 	l.mu.Lock()
 	for key, pending := range l.held {
+		if pending.pipeline == pipeline {
+			delete(l.held, key)
+		}
+	}
+
+	for pending := range l.live {
 		if pending.pipeline != pipeline {
 			continue
 		}
 
 		pending.cancel()
-		delete(l.held, key)
 
 		gone = append(gone, pending)
 	}

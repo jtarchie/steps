@@ -406,8 +406,8 @@ func TestAnMCPLoginBelongsToOnePipeline(t *testing.T) {
 	browser := newBrowser(t, served.addr, user, pass)
 	theTabEventuallySays(t, browser, "/p/app/mcp", "renews automatically")
 
-	if body := browser.get(t, "/p/other/mcp"); !strings.Contains(body, "needs login") {
-		t.Errorf("other's mcp tab after a login for app:\n%s", body)
+	if body := browser.get(t, "/p/other/mcp"); !strings.Contains(body, "needs login") || !strings.Contains(body, "saved per pipeline") {
+		t.Errorf("other's mcp tab after a login for app, want needs login and the note saying why:\n%s", body)
 	}
 
 	theLoginFollowsARename(t, fixture, browser, target)

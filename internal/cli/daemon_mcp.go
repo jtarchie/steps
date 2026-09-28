@@ -5,6 +5,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,9 +20,17 @@ type probes struct {
 	mu      sync.Mutex
 	results map[string]*probeResult
 	// cancels lets shutdown take an in-flight probe with it, keyed the same way, since a probe's whole cost is a connection nobody is waiting on any more.
-	cancels  map[string]context.CancelFunc
+	cancels map[string]context.CancelFunc
+	// running is every probe whose goroutine has not returned, including one a newer probe cancelled, so dropProbes can wait out a token refresh still writing under the pipeline's login.
+	running  map[*probeRun]struct{}
 	inflight sync.WaitGroup
 	creds    *credentials
+}
+
+type probeRun struct {
+	slug   string
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 func newProbes(base context.Context) *probes {
@@ -29,7 +38,38 @@ func newProbes(base context.Context) *probes {
 		base:    base,
 		results: map[string]*probeResult{},
 		cancels: map[string]context.CancelFunc{},
+		running: map[*probeRun]struct{}{},
 		creds:   newCredentials(),
+	}
+}
+
+// dropProbes cancels and waits out every probe of slug and forgets what they and the credential cache said, for a destroy or rename that is about to move or remove the pipeline's logins: an in-flight probe's refresh would otherwise write a rotated token into the directory being removed, and a pipeline later set under the name would show this one's answers.
+func (p *probes) dropProbes(slug string) {
+	prefix := slug + "\x00"
+
+	var gone []*probeRun
+
+	p.mu.Lock()
+	for key := range p.results {
+		if strings.HasPrefix(key, prefix) {
+			delete(p.results, key)
+			delete(p.cancels, key)
+		}
+	}
+
+	for run := range p.running {
+		if run.slug == slug {
+			run.cancel()
+
+			gone = append(gone, run)
+		}
+	}
+	p.mu.Unlock()
+
+	p.creds.drop(prefix)
+
+	for _, run := range gone {
+		<-run.done
 	}
 }
 
@@ -142,12 +182,20 @@ func (p *probes) StartProbe(pipeline *web.Pipeline, server string) error {
 	mine := &probeResult{fingerprint: fingerprint, probe: web.MCPProbe{Running: true, At: time.Now()}}
 	p.results[key] = mine
 	p.cancels[key] = cancel
+	run := &probeRun{slug: pipeline.Slug, cancel: cancel, done: make(chan struct{})}
+	p.running[run] = struct{}{}
 	p.mu.Unlock()
 
 	target := *srv
 	name := pipeline.Config().Name
 
 	p.inflight.Go(func() {
+		defer func() {
+			p.mu.Lock()
+			delete(p.running, run)
+			p.mu.Unlock()
+			close(run.done)
+		}()
 		defer cancel()
 
 		tools, probeErr := stepsmcp.ListServerTools(ctx, name, target)

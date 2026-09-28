@@ -164,8 +164,11 @@ var verbatimSegment = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 // kept as written so the directory stays recognizable; anything else is
 // lowercased, sanitized and suffixed with `~` and a hash of the original,
 // and `~` never appears in the verbatim form, so the two cannot collide.
+// A name ending `.json` is hashed too: kept verbatim it would be the path of
+// a pre-pipeline login file (mcp/<server>.json), a file where a directory
+// is expected.
 func segment(name string) string {
-	if len(name) <= 200 && verbatimSegment.MatchString(name) {
+	if len(name) <= 200 && verbatimSegment.MatchString(name) && !strings.HasSuffix(name, ".json") {
 		return name
 	}
 
@@ -188,7 +191,9 @@ func safeRune(r rune) rune {
 }
 
 // LoginsExist reports whether pipeline already has a login directory, and
-// where, so a rename can refuse before anything has moved.
+// where, so a rename can refuse before anything has moved. A directory that
+// cannot be looked at counts as existing: the rename it guards would
+// otherwise go ahead over whatever is there.
 func LoginsExist(pipeline string) (string, bool) {
 	dir, err := loginsDir(pipeline)
 	if err != nil {
@@ -197,7 +202,7 @@ func LoginsExist(pipeline string) (string, bool) {
 
 	_, err = os.Lstat(dir)
 
-	return dir, err == nil
+	return dir, !errors.Is(err, fs.ErrNotExist)
 }
 
 // MoveLogins carries from's logins to to, for a pipeline rename, which keeps
@@ -220,9 +225,17 @@ func MoveLogins(from, to string) error {
 		return nil
 	}
 
+	if err != nil {
+		return fmt.Errorf("mcp: move logins: %w", err)
+	}
+
 	_, err = os.Lstat(dst)
 	if err == nil {
 		return fmt.Errorf("%w at %s", ErrLoginsExist, dst)
+	}
+
+	if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("mcp: move logins: %w", err)
 	}
 
 	err = os.Rename(src, dst)

@@ -497,3 +497,59 @@ func pendingFor(t *testing.T, held *logins, back string) string {
 
 	return state
 }
+
+// A destroy or rename moves the pipeline's logins, so a probe still refreshing a token under them is waited out first — including one a newer probe already cancelled — and nothing it or the credential cache said survives for a pipeline later set under the name.
+func TestDropProbesWaitsOutAndForgetsOnlyItsPipeline(t *testing.T) {
+	t.Parallel()
+
+	p := newProbes(t.Context())
+	done := make(chan struct{})
+	replaced := &probeRun{slug: "app", done: done, cancel: func() {
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			close(done)
+		}()
+	}}
+	otherDone := make(chan struct{})
+	other := &probeRun{slug: "other", done: otherDone, cancel: func() { close(otherDone) }}
+
+	p.mu.Lock()
+	p.running[replaced] = struct{}{}
+	p.running[other] = struct{}{}
+	p.results["app\x00tracker"] = &probeResult{probe: web.MCPProbe{OK: true}}
+	p.results["other\x00tracker"] = &probeResult{probe: web.MCPProbe{OK: true}}
+	p.mu.Unlock()
+
+	p.creds.entries[loginKey("app", "tracker")] = credentialEntry{}
+	p.creds.entries[loginKey("other", "tracker")] = credentialEntry{}
+
+	p.dropProbes("app")
+
+	select {
+	case <-done:
+	default:
+		t.Error("dropProbes returned while a probe of the pipeline was still running")
+	}
+
+	select {
+	case <-otherDone:
+		t.Error("dropProbes cancelled another pipeline's probe")
+	default:
+	}
+
+	if _, found := p.results["app\x00tracker"]; found {
+		t.Error("the dropped pipeline's probe result survived")
+	}
+
+	if _, found := p.results["other\x00tracker"]; !found {
+		t.Error("another pipeline's probe result went with it")
+	}
+
+	if _, found := p.creds.entries[loginKey("app", "tracker")]; found {
+		t.Error("the dropped pipeline's credential entry survived")
+	}
+
+	if _, found := p.creds.entries[loginKey("other", "tracker")]; !found {
+		t.Error("another pipeline's credential entry went with it")
+	}
+}

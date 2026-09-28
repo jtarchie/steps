@@ -234,3 +234,42 @@ func writeLogin(t *testing.T, pipeline, server string) {
 		t.Fatalf("Save: %v", err)
 	}
 }
+
+// Kept verbatim, a pipeline called `tracker.json` would be the pre-pipeline login FILE for server tracker, where a directory is expected.
+func TestAPipelineNamedLikeAFlatLoginGetsItsOwnDirectory(t *testing.T) {
+	root := useConfigDir(t)
+
+	got, err := TokenPath("tracker.json", "tracker")
+	if err != nil {
+		t.Fatalf("TokenPath: %v", err)
+	}
+
+	if dir := filepath.Dir(got); dir == filepath.Join(root, "tracker.json") {
+		t.Fatalf("TokenPath(tracker.json) = %q, the path of a pre-pipeline login file", got)
+	}
+}
+
+// A login directory that cannot be looked at is not known to be absent, and a rename onto it must not go ahead as though it were.
+func TestLoginsExistWhenItCannotLook(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads through a mode-000 directory")
+	}
+
+	root := useConfigDir(t)
+
+	err := os.MkdirAll(root, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.Chmod(root, 0o000)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable
+
+	if dir, found := LoginsExist("app"); !found {
+		t.Errorf("LoginsExist(%s) behind an unreadable directory = absent, want treated as present", dir)
+	}
+}
