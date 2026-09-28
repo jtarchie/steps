@@ -63,10 +63,12 @@ const (
 // is the right answer on every error path.
 type stepResult struct {
 	hash string
-	// nodeHash is the node this row names when that is not the node the next
-	// step chains under — the failure it recorded, or the node a chain skip
-	// matched. Published, never chained on: a failure routed with to: carries
-	// the walk on under the parent it failed beneath.
+	// nodeHash is the step's OWN node, the only hash its row is published
+	// under. It differs from hash wherever the walk chains on something else:
+	// a failure (nothing — a to: route carries on under the parent), a chain
+	// skip or a get that fetched nothing (the parent), a guard skip (the
+	// parent, and no node at all). Kept apart so no path can publish a
+	// parent's node as a step's own.
 	nodeHash    string
 	disposition stepDisposition
 	verdict     string
@@ -77,7 +79,7 @@ type stepResult struct {
 
 // ran is the ordinary outcome: the step executed and produced hash.
 func ran(hash string) stepResult {
-	return stepResult{hash: hash}
+	return stepResult{hash: hash, nodeHash: hash}
 }
 
 // failedAt is a step that failed after recording its node under hash.
@@ -96,19 +98,11 @@ func settled(hash string, err error) stepResult {
 	return ran(hash)
 }
 
-// published is the hash a step's row is shown under: its own node, never the
-// parent a guard skip passes through, which would compare the row against a
-// different step.
+// published is the hash a step's row is shown under: its own node, never a
+// parent it passed through, which would compare the row against a different
+// step and hand it that step's spend and machine.
 func (r stepResult) published() string {
-	if r.nodeHash != "" {
-		return r.nodeHash
-	}
-
-	if r.disposition == stepGuardSkipped {
-		return ""
-	}
-
-	return r.hash
+	return r.nodeHash
 }
 
 // nodeRecord converts a plan merkle.Node into the shape store.RecordNode

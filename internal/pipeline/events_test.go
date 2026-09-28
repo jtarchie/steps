@@ -813,6 +813,50 @@ jobs:
 	}
 }
 
+// TestChainReplayAtTheFirstGetPublishesTheRest: a plan that opens with a get
+// is skipped at that get, on the fan-out path — the commonest fully-cached
+// run. Publishing only the get left every later step absent, so a failed run
+// compared against it marked each one "new".
+func TestChainReplayAtTheFirstGetPublishesTheRest(t *testing.T) {
+	t.Parallel()
+
+	run := fixtureRunner(t, `
+resource_types:
+- name: counter
+  config:
+    check: printf '[{"n":"1"}]'
+    in: "true"
+resources:
+- name: ticks
+  type: counter
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: ticks
+  - task: compile
+    run: "true"
+`)
+
+	ran, replayed := run(), run()
+
+	finished := findStepEvent(ran, events.TypeStepFinished, "task", "compile")
+	skipped := findStepEvent(replayed, events.TypeStepSkipped, "task", "compile")
+
+	if finished == nil || skipped == nil {
+		t.Fatalf("compile: finished=%v skipped=%v, want a run then a replay", finished, skipped)
+	}
+
+	if finished.Hash == "" || skipped.Hash != finished.Hash {
+		t.Errorf("compile replayed as %q, want the node it ran as %q", skipped.Hash, finished.Hash)
+	}
+
+	get := findStepEvent(replayed, events.TypeStepSkipped, "get", "ticks")
+	if get == nil || skipped.ParentStepID != get.StepID {
+		t.Errorf("compile replayed outside the get that skipped it: get=%v compile parent=%d", get, skipped.ParentStepID)
+	}
+}
+
 // fixtureRunner loads yaml's build job over one store and returns what runs
 // it — green, or the test fails — handing back everything that run published.
 func fixtureRunner(t *testing.T, yaml string) func() []events.Event {

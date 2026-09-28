@@ -23,11 +23,11 @@ func TestReplayedHashesNameNoOtherBuildsNode(t *testing.T) {
 		return merkle.Chain{Nodes: nodes}
 	}
 
-	chains := []merkle.Chain{
+	chains := chainHashes([]merkle.Chain{
 		chain("prep", "get-v1", "test"),
 		chain("prep", "get-v2", "test"),
 		chain("other", "unrelated"),
-	}
+	})
 
 	got := replayedHashes(chains, "prep", 2)
 	if want := []string{"", "test"}; !slices.Equal(got, want) {

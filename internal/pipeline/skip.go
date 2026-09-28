@@ -45,21 +45,25 @@ func computeChainSkippable(ctx context.Context, st store.Store, jobName string, 
 // maps to position. A step is "" where the chains through skipped disagree —
 // a later get fanning out binds a different version in each — so a row never
 // names a node another build ran.
-func replayedHashes(chains []merkle.Chain, skipped string, count int) []string {
+func replayedHashes(chains [][]string, skipped string, count int) []string {
 	hashes := make([]string, count)
+	if skipped == "" {
+		return hashes
+	}
+
 	seen := false
 
 	for _, chain := range chains {
-		at := slices.IndexFunc(chain.Nodes, func(node merkle.Node) bool { return node.Hash == skipped })
-		if skipped == "" || at < 0 || len(chain.Nodes)-at-1 != count {
+		at := slices.Index(chain, skipped)
+		if at < 0 || len(chain)-at-1 != count {
 			continue
 		}
 
-		for offset, node := range chain.Nodes[at+1:] {
+		for offset, hash := range chain[at+1:] {
 			switch {
 			case !seen:
-				hashes[offset] = node.Hash
-			case hashes[offset] != node.Hash:
+				hashes[offset] = hash
+			case hashes[offset] != hash:
 				hashes[offset] = ""
 			}
 		}
@@ -68,6 +72,21 @@ func replayedHashes(chains []merkle.Chain, skipped string, count int) []string {
 	}
 
 	return hashes
+}
+
+// chainHashes keeps only the node hashes of chains: the walk holds them for
+// its whole life, and a node's content map is dead weight there.
+func chainHashes(chains []merkle.Chain) [][]string {
+	out := make([][]string, len(chains))
+
+	for i, chain := range chains {
+		out[i] = make([]string, len(chain.Nodes))
+		for j, node := range chain.Nodes {
+			out[i][j] = node.Hash
+		}
+	}
+
+	return out
 }
 
 // buildSkippableIndex returns, for every node hash reachable across chains,

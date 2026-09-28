@@ -27,9 +27,9 @@ type planWalk struct {
 	pinned    map[string]string
 	provider  workspace.Provider
 	skippable map[string]bool
-	// chains is what skippable was built from, kept to name the node each
-	// step a chain skip swallows would have run under.
-	chains []merkle.Chain
+	// chains is the node hashes of what skippable was built from, kept to
+	// name the node each step a chain skip swallows would have run under.
+	chains [][]string
 	cache  *rsrc.Cache
 	cursor *versionCursor
 
@@ -414,9 +414,9 @@ func runAgentStep(ctx context.Context, r stepRunner, i int, step config.Step, pa
 
 	recordStepOutcome(ctx, step, out)
 
-	res := stepResult{hash: out.Hash, verdict: out.Verdict, note: out.Note}
+	res := stepResult{hash: out.Hash, nodeHash: out.Hash, verdict: out.Verdict, note: out.Note}
 	if err != nil {
-		res.hash, res.nodeHash = "", out.Hash
+		res.hash = ""
 
 		return res, fmt.Errorf("agent step: %w", err)
 	}

@@ -92,7 +92,14 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 
 		if w.skippable[hash] {
 			logFrom(getCtx).Info("job.skip", "resource", resource.Name, "reason", "cached", "hash", hash)
-			publishStepSkipped(getCtx, w.jobName, i, step, markStep(getCtx), hash, skipReason(stepChainSkipped))
+
+			skipMark := markStep(getCtx)
+			publishStepSkipped(getCtx, w.jobName, i, step, skipMark, hash, skipReason(stepChainSkipped))
+
+			// Nested and numbered as this set's triggered build would have
+			// published them, so the most common fully-cached run — one whose
+			// plan opens with a get — still names every step it replayed.
+			w.reportChainSkipped(withChildrenOf(ctx, skipMark), hash, 0, remainder)
 
 			// A skip means this exact chain already succeeded once — the version
 			// was genuinely fetched, just not by this run. Mirrors
@@ -470,7 +477,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	}
 
 	if version == nil {
-		return ran(w.parentHash), nil
+		return stepResult{hash: w.parentHash}, nil
 	}
 
 	recordBuildVersion(ctx, resource.Name, version)

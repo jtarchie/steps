@@ -67,7 +67,7 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 			return stepResult{}, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 		}
 
-		return stepResult{hash: hash, disposition: stepCacheHit}, nil
+		return stepResult{hash: hash, nodeHash: hash, disposition: stepCacheHit}, nil
 	}
 
 	// Where the step ran is answered by the machine itself, several frames

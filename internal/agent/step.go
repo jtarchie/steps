@@ -333,7 +333,12 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 
 	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", agentResultRecord(res), nil)
 	if err != nil {
-		return StepOutcome{Hash: hash, Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		wrapped := fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		// Detached, so the node the row is published under does not stay
+		// "running" when a cancelled ctx is why the success write failed.
+		recordAgentFailure(ctx, st, node, jobName, res, wrapped)
+
+		return StepOutcome{Hash: hash, Response: res.text}, wrapped
 	}
 
 	// After the node is recorded, so a run that could not record its own

@@ -64,7 +64,7 @@ func runEnsembleStep(ctx context.Context, r stepRunner, i int, step config.Step,
 
 	notef(ctx, "ensemble decide: %s → %s", step.Ensemble.Decide, verdict)
 
-	return stepResult{hash: hash, verdict: verdict}, nil
+	return stepResult{hash: hash, nodeHash: hash, verdict: verdict}, nil
 }
 
 // runEnsembleMembers runs every member concurrently and collects its vote.
