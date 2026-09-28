@@ -192,6 +192,7 @@ func GetNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 	withIsolation(resourceType.Privileged, resourceType.Limits, content)
 
 	withExprResourceStage(resourceType, "in", content)
+	withGitHubKind(resourceType, content)
 
 	err := withMCPResourceStage(cfg, resourceType, "in", content)
 	if err != nil {
@@ -275,6 +276,17 @@ func withExprResourceStage(resourceType config.ResourceType, stage string, conte
 		content["expr_in"] = resourceType.Config.Expr.In
 	case "out":
 		content["expr_out"] = resourceType.Config.Expr.Out
+	}
+}
+
+// withGitHubKind folds which github-* type a resource is into its node. The
+// four share one backend and two share a source: shape, so without it a
+// github-prs get and a github-comments get of the same repo would differ
+// only by version, and a version that happened to match would serve one
+// type's tree as the other's. Value-gated: every other type hashes as before.
+func withGitHubKind(resourceType config.ResourceType, content map[string]any) {
+	if resourceType.Config.GitHub != "" {
+		content["github"] = resourceType.Config.GitHub
 	}
 }
 
@@ -745,6 +757,7 @@ func PutNodeContent(cfg *config.Config, step config.Step, resourceType config.Re
 	withIsolation(resourceType.Privileged, resourceType.Limits, content)
 
 	withExprResourceStage(resourceType, "out", content)
+	withGitHubKind(resourceType, content)
 
 	err := withMCPResourceStage(cfg, resourceType, "out", content)
 	if err != nil {
@@ -1885,6 +1898,7 @@ func ResourceCacheKey(
 	withIsolation(resourceType.Privileged, resourceType.Limits, content)
 
 	withExprResourceStage(resourceType, "in", content)
+	withGitHubKind(resourceType, content)
 
 	err := withMCPResourceStage(cfg, resourceType, "in", content)
 	if err != nil {

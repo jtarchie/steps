@@ -139,7 +139,7 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 	}
 
 	dir := t.TempDir()
-	path, mcpServer := writeDocBlock(t, dir, block, scenario)
+	path, servers := writeDocBlock(t, dir, block, scenario)
 
 	varFlags := scenarioVarFlags(scenario)
 	runFlags := append(scenarioFlags(scenario), deliveryFlags(t, dir, block)...)
@@ -154,13 +154,28 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 	}
 
 	executeDocBlock(t, block, scenario, dir, path, varFlags, runFlags)
+	checkDocFixtures(t, block, servers)
+}
 
-	// The MCP twin of scenario.check: assertions against what the fixture
-	// server RECEIVED, which no YAML assert can see (an out: tool's
-	// arguments never land in the workspace).
+// checkDocFixtures is the fixture twin of scenario.check: assertions against
+// what a fixture server RECEIVED, which no YAML assert can see — an out:
+// tool's arguments, a comment a put posted to GitHub.
+func checkDocFixtures(t *testing.T, block docs.Block, servers docServers) {
+	t.Helper()
+
 	if fixture, ok := docMCPFixtures[block.MCPID()]; ok && fixture.check != nil {
-		fixture.check(t, mcpServer)
+		fixture.check(t, servers.mcp)
 	}
+
+	if fixture, ok := docGitHubFixtures[block.GitHubID()]; ok && fixture.check != nil {
+		fixture.check(t, servers.github)
+	}
+}
+
+// docServers are the in-process fixtures one block's execution was pointed at.
+type docServers struct {
+	mcp    *docMCPServer
+	github *fakeGitHub
 }
 
 // executeDocBlock is the run-mode half: full validate of the block's ORIGINAL
@@ -203,7 +218,7 @@ func executeDocBlock(t *testing.T, block docs.Block, scenario docScenario, dir, 
 // writeDocBlock materializes a block into dir: any files the scenario
 // declares, plus the pipeline itself — with every agent pointed at the fake
 // provider when the scenario scripts one.
-func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScenario) (string, *docMCPServer) {
+func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScenario) (string, docServers) {
 	t.Helper()
 
 	for name, body := range scenario.files {
@@ -221,6 +236,7 @@ func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScena
 	}
 
 	body, mcpServer := injectDocMCPFixture(t, block, block.Body)
+	body, githubServer := injectDocGitHubFixture(t, block, body)
 
 	if usesAgents(t, body) {
 		if block.Mode() == "run" && scenario.fake == nil {
@@ -245,7 +261,7 @@ func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScena
 		t.Fatal(err)
 	}
 
-	return path, mcpServer
+	return path, docServers{mcp: mcpServer, github: githubServer}
 }
 
 // pipelinePath is where a test's pipeline goes: inside dir, under a file name
@@ -632,6 +648,13 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"WebhookSource":    reflect.TypeOf(config.WebhookSource{}),
 		"WebhookSignature": reflect.TypeOf(config.WebhookSignature{}),
 		"CronSource":       reflect.TypeOf(config.CronSource{}),
+		// A put's params: to a github-* type, which no other walk sees: the
+		// shape depends on the TYPE of the resource the put names.
+		"GitHubPRsSource":      reflect.TypeOf(config.GitHubPRsSource{}),
+		"GitHubCommentsSource": reflect.TypeOf(config.GitHubCommentsSource{}),
+		"GitHubPostSource":     reflect.TypeOf(config.GitHubPostSource{}),
+		"GitHubPostParams":     reflect.TypeOf(config.GitHubPostParams{}),
+		"GitHubReviewParams":   reflect.TypeOf(config.GitHubReviewParams{}),
 	}
 }
 
@@ -737,8 +760,16 @@ func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 			record(used, "WebhookSignature", source["signature"])
 		case config.CronType:
 			record(used, "CronSource", source)
+		case config.GitHubPRsType:
+			record(used, "GitHubPRsSource", source)
+		case config.GitHubCommentsType:
+			record(used, "GitHubCommentsSource", source)
+		case config.GitHubPRCommentType, config.GitHubPRReviewType:
+			record(used, "GitHubPostSource", source)
 		}
 	})
+
+	collectGitHubParamKeys(doc, used)
 
 	eachOf(doc, "jobs", func(entry any) {
 		job, ok := entry.(map[string]any)
@@ -751,6 +782,56 @@ func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 
 		plan, _ := job["plan"].([]any)
 		collectStepKeys(plan, used)
+	})
+}
+
+// collectGitHubParamKeys records the params: of every put to a github-*
+// publishing type, which only the resource's type gives a shape to.
+func collectGitHubParamKeys(doc map[string]any, used map[string]map[string]bool) {
+	types := map[string]any{}
+
+	eachOf(doc, "resources", func(entry any) {
+		resource, _ := entry.(map[string]any)
+		if name, ok := resource["name"].(string); ok {
+			types[name] = resource["type"]
+		}
+	})
+
+	var walk func(steps []any)
+
+	walk = func(steps []any) {
+		for _, entry := range steps {
+			step, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			name, _ := step["resource"].(string)
+			if name == "" {
+				name, _ = step["put"].(string)
+			}
+
+			if _, isPut := step["put"]; !isPut {
+				name = ""
+			}
+
+			switch types[name] {
+			case config.GitHubPRCommentType:
+				record(used, "GitHubPostParams", step["params"])
+			case config.GitHubPRReviewType:
+				record(used, "GitHubReviewParams", step["params"])
+			}
+
+			for _, group := range nestedStepGroups(step) {
+				walk(group.steps)
+			}
+		}
+	}
+
+	eachOf(doc, "jobs", func(entry any) {
+		job, _ := entry.(map[string]any)
+		plan, _ := job["plan"].([]any)
+		walk(plan)
 	})
 }
 

@@ -57,6 +57,8 @@ type ResourceTypeConfig struct {
 	Webhook bool `yaml:"-"`
 	// Cron marks the built-in cron type, which no YAML can declare either: its check reads a clock against an expression, and runs nothing.
 	Cron bool `yaml:"-"`
+	// GitHub names which built-in github-* type this is (see github.go), which no YAML can declare: steps calls the API itself. Keyed, unlike Cron and Webhook, because two of the four share a source: shape and fetch different trees from it.
+	GitHub string `yaml:"-"`
 }
 
 // ResourceBackend is which way a resource type implements its three lifecycle
@@ -82,6 +84,8 @@ const (
 	BackendWebhook ResourceBackend = "webhook"
 	// BackendCron has a check that reads the clock and no out: a version is a moment its expression named.
 	BackendCron ResourceBackend = "cron"
+	// BackendGitHub calls GitHub's API from this process: two of its types find work and have no out, two publish and have no check (see github.go).
+	BackendGitHub ResourceBackend = "github"
 )
 
 // Backend reports how this resource type is implemented.
@@ -97,6 +101,8 @@ func (c ResourceTypeConfig) Backend() ResourceBackend {
 		return BackendWebhook
 	case c.Cron:
 		return BackendCron
+	case c.GitHub != "":
+		return BackendGitHub
 	case c.MCP != nil:
 		return BackendMCP
 	case c.Expr != nil:
@@ -171,6 +177,8 @@ func validateResourcePut(label, put string, resourceType *ResourceType) error {
 		return fmt.Errorf("%s: put %q targets a webhook resource, which only receives: its versions are deliveries, and there is nothing to publish to", label, put)
 	case BackendCron:
 		return fmt.Errorf("%s: put %q targets a cron resource, which only tells time: there is nothing to publish to", label, put)
+	case BackendGitHub:
+		return githubPutRefusal(label, put, resourceType.Config.GitHub)
 	}
 
 	return nil
@@ -204,6 +212,11 @@ func validateResourceGet(label, get string, resourceType *ResourceType) error {
 		// which names the real problem. The mcp arm above cannot do that —
 		// there is no tool to call at all — which is why the rule exists for
 		// one backend and not the other.
+	case BackendGitHub:
+		if !GitHubFinds(resourceType.Config.GitHub) {
+			return fmt.Errorf("%s: get %q targets a %s resource, which only publishes; find the pull request with a %s or %s resource instead",
+				label, get, resourceType.Config.GitHub, GitHubPRsType, GitHubCommentsType)
+		}
 	case BackendWebhook, BackendCron:
 	}
 

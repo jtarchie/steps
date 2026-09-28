@@ -158,7 +158,7 @@ func preflightResource(
 		}
 
 		return nil
-	case config.BackendWebhook, config.BackendCron:
+	case config.BackendWebhook, config.BackendCron, config.BackendGitHub:
 		err := compileBuiltin(resourceType.Config.Backend(), *resource)
 		if err != nil {
 			return []config.Problem{{Target: fmt.Sprintf("resource %q", name), Detail: err.Error()}}
@@ -207,6 +207,10 @@ func compileBuiltin(backend config.ResourceBackend, resource config.Resource) er
 		_, err := Cron(resource)
 
 		return err
+	case config.BackendGitHub:
+		// The load rules already parsed the source:; what is left to know —
+		// that the token works, that the repository exists — takes a request,
+		// and the run's own first call answers it as fast.
 	case config.BackendMCP, config.BackendExpr, config.BackendShell:
 	}
 

@@ -183,6 +183,12 @@ func (c *Config) registerBuiltinResourceTypes() {
 		c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: CronType, Config: ResourceTypeConfig{Cron: true}})
 	}
 
+	for _, name := range GitHubTypes() {
+		if c.findResourceTypeIndex(name) < 0 {
+			c.ResourceTypes = append(c.ResourceTypes, ResourceType{Name: name, Config: ResourceTypeConfig{GitHub: name}})
+		}
+	}
+
 	builtinNames, err := ListBuiltinResourceTypeNames()
 	if err != nil {
 		slog.Warn("builtin.resource_types.list", "error", err)

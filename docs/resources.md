@@ -21,7 +21,7 @@ jobs:
     run: cd repo && go build ./...
 ```
 
-`git` ships with steps, so that pipeline needs no `resource_types:` block. For anything else, you write the type yourself.
+`git` ships with steps, so that pipeline needs no `resource_types:` block, as do [the GitHub types](#the-built-in-github-types), Slack's and `cron`. For anything else, you write the type yourself.
 
 ## The built-in `git` type
 
@@ -134,6 +134,223 @@ Where each put type aims comes from a fetched `slack-mentions` input (or the one
 | `target/ts` | `slack-reaction` | without a fetched input | the `ts` of the message to mark |
 
 There is deliberately no `check:`/`in:` on `slack-reply` and no `out:` on `slack-mentions` — `get: reply` or `put: mentions` are both load errors, the same rule `git`'s missing `out:` follows.
+
+## The built-in GitHub types
+
+Four built-ins, split by what they do, the way the Slack ones are. `github-prs` and `github-comments` **find work**: they have a check and an in, and no out. `github-pr-comment` and `github-pr-review` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
+
+steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under [`image:`](infra.md#container-execution-image) or [`tags:`](infra.md#remote-workers-tags) reads it the way it reads any other. That also means none of the four can be placed with `tags:` themselves, as for every type that runs inside this process.
+
+All four read a token from `GH_TOKEN`, the variable `gh` reads first, so `export GH_TOKEN=$(gh auth token)` is the whole setup on a machine where `gh` is logged in. `source.token_env` names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. `steps validate` refuses a pipeline whose token variable is unset, before anything runs.
+
+### `github-prs`: open pull requests
+
+```yaml github=review
+resources:
+- name: pr
+  type: github-prs
+  source:
+    repo: acme/app
+    review_requested: "@me"      # quoted: @ cannot start a plain YAML value
+    base: main
+    labels: [ready-for-review]
+    draft: false
+
+- name: summary
+  type: github-pr-comment
+  source:
+    repo: acme/app
+
+jobs:
+- name: review
+  plan:
+  - get: pr
+    trigger: true
+    version: every               # one build per pull request, and per push to it
+  - task: read
+    inputs: [pr]
+    outputs: [notes]
+    run: |
+      echo "#$(cat pr/pr.number) changes $(grep -c '^diff --git' pr/pr.diff) file(s) since $(cut -c1-7 pr/pr.mergebase)" | tee notes/body.md
+      test -x pr/bin/test.sh
+    assert:
+      stdout: "#42 changes 2 file(s) since 1a2b3c4"
+  - put: summary
+    inputs: [pr, notes]
+    params:
+      body_file: notes/body.md
+      from: pr                   # optional here: pr is the only input naming a pull request
+  assert:
+    execution: [pr, read, summary]
+    outcome: succeeded
+```
+
+A version is `{number, sha}`: the pull request and its head commit, so a push is a new build and a wording change to the title is not. The check reports them by number, oldest first. Every filter narrows, and a pull request is a version only while it is open and matches all of them:
+
+| `source:` field | required | meaning |
+|---|---|---|
+| `repo` | yes | `owner/name` |
+| `author` | no | who opened it |
+| `assignee` | no | someone it is assigned to |
+| `review_requested` | no | someone whose review it directly requests; GitHub clears the request once they submit one, so the trigger empties itself |
+| `labels` | no | labels that must all be on it |
+| `base` | no | the branch it would merge into |
+| `draft` | no | `true` keeps only drafts, `false` only ready ones; both when unset |
+| `checkout` | no | `false` skips the tree and writes only the metadata files; default `true` |
+| `token_env` | no | the variable holding the token; default `GH_TOKEN` |
+| `endpoint` | no | the REST API base; default `https://api.github.com`, and `https://<host>/api/v3` for GitHub Enterprise Server |
+
+`@me` in any of the three login fields is the token's own user. A get writes the tree at the version's commit, then these beside it:
+
+| file | what it holds |
+|---|---|
+| `pr.json` | the pull request, as GitHub's API describes it |
+| `pr.diff` | the change as of the version's commit, against where it branched from `base` |
+| `pr.number`, `pr.sha` | the version |
+| `pr.mergebase` | the commit it branched from, for a step that wants to stage the change onto it |
+| `pr.url` | its page |
+
+The diff and the merge base are computed against the version's commit rather than read from the pull request, whose own diff is always of its *current* head, so a pinned or replayed version sees the change as it was. A repository that has a file of one of those names at its root is refused by name rather than overwritten; set `checkout: false` and fetch the tree with a `git` resource there.
+
+**Being assigned is a trigger.** An assignment brings a pull request into the filtered set, which makes it a version the resource has never seen:
+
+```yaml github=assigned
+resources:
+- name: assigned
+  type: github-prs
+  source:
+    repo: acme/app
+    assignee: "@me"
+    author: alice
+    checkout: false                    # metadata only
+    token_env: GH_TOKEN                # the default, shown; name another variable to act as someone else
+    endpoint: https://api.github.com   # the default
+
+jobs:
+- name: pick-up
+  plan:
+  - get: assigned
+    trigger: true
+    version: every
+  - task: announce
+    inputs: [assigned]
+    run: echo "picking up $(cat assigned/pr.url)"
+    assert:
+      stdout: "picking up https://github.example/acme/app/pull/42"
+  assert:
+    execution: [assigned, announce]
+    outcome: succeeded
+```
+
+The check is one GraphQL search per poll, because the filters a pipeline asks about are search qualifiers and nothing else: GitHub's pull request listing filters on none of them.
+
+### `github-comments`: a comment as a trigger
+
+```yaml github=comment-command
+resources:
+- name: command
+  type: github-comments
+  source:
+    repo: acme/app
+    author: alice
+    body: '^/steps\s+review\b'
+    kinds: [conversation, review]    # the default; add issue for comments on issues
+    checkout: true                   # the default: the pull request's tree comes with it
+    token_env: GH_TOKEN              # the default
+    endpoint: https://api.github.com # the default
+
+- name: answer
+  type: github-pr-review
+  source:
+    repo: acme/app
+
+jobs:
+- name: act
+  plan:
+  - get: command
+    trigger: true
+    version: every
+  - task: respond
+    inputs: [command]
+    outputs: [reply]
+    run: |
+      echo "asked by $(cat command/comment.author) on #$(cat command/pr.number): $(cat command/comment.body)" | tee reply/body.md
+      test -f command/README.md
+    assert:
+      stdout: "asked by alice on #42: /steps review please"
+  - put: answer
+    inputs: [command, reply]
+    params:
+      body_file: reply/body.md
+      from: command                  # the input whose version names the pull request
+      event: pending                 # a draft only you can see, until you submit it
+  assert:
+    execution: [command, respond, answer]
+    outcome: succeeded
+```
+
+| `source:` field | required | meaning |
+|---|---|---|
+| `repo` | yes | `owner/name` |
+| `author` | no | who wrote it, compared without regard to case as GitHub compares logins; `@me` is the token's own user |
+| `body` | no | an [RE2](https://github.com/google/re2/wiki/Syntax) pattern the text must contain a match for; `^` anchors it to the start |
+| `kinds` | no | `conversation` (a pull request's timeline), `review` (inline, on a line of its diff), `issue` (an issue's timeline); default the first two |
+| `checkout` | no | `false` skips the pull request's tree; default `true`. An issue has no tree |
+| `token_env`, `endpoint` | no | as for `github-prs` |
+
+A get writes `comment.json`, `comment.body`, `comment.id`, `comment.kind`, `comment.author` and `comment.url`. A comment on a pull request brings the pull request with it, every `pr.*` file above plus the tree at its current head, because a get cannot be told which pull request to fetch by another get's output. A comment on an issue writes `issue.json` and `issue.number` instead.
+
+**The version is `{id, kind, number, updated}`**, and `updated` is there on purpose, against the usual rule that a version carries identity only. The text is the payload here, so a comment edited from one instruction to another is new work, and an edit that stops matching `body` is not. It is also the [cursor](#the-check-cursor): each check asks GitHub only for comments written since the newest version it last reported, newest first, one page when there is no cursor yet. Every page is a conditional request, and GitHub answers an unchanged listing without charging the rate limit, so a quiet repository costs nothing to poll. Review summaries, the text a reviewer writes when submitting, are not watched: GitHub has no listing of them across a repository.
+
+A pipeline that comments as the same user it watches must make sure what it posts cannot match `body`, or its own reply is the next build.
+
+### `github-pr-comment` and `github-pr-review`: publishing
+
+Both take `repo`, `token_env` and `endpoint` in `source:` and nothing else, and find which pull request a put is about in its inputs: the one input whose version names a pull request, which every `github-prs` and `github-comments` get's does. `params.from` picks one when several do, and `params.number` names one outright for a put with none:
+
+```yaml github=post-fixed
+resources:
+- name: tracking
+  type: github-pr-comment
+  source:
+    repo: acme/app
+    token_env: GH_TOKEN                # the default; name another variable to post as someone else
+    endpoint: https://api.github.com   # the default
+- name: verdict
+  type: github-pr-review
+  source:
+    repo: acme/app
+
+jobs:
+- name: report
+  plan:
+  - task: summarize
+    outputs: [report]
+    run: echo "all green" > report/body.md
+  - put: tracking
+    inputs: [report]
+    params:
+      body_file: report/body.md
+      number: "42"
+  - put: verdict
+    inputs: [report]
+    params:
+      body_file: report/body.md
+      number: "42"
+      event: approve
+  assert:
+    execution: [summarize, tracking, verdict]
+    outcome: succeeded
+```
+
+| `params:` field | put | meaning |
+|---|---|---|
+| `body_file` | both | the text to post, a path inside the put's inputs; an empty file is refused, since posting nothing is how a step that wrote nothing would otherwise look |
+| `from` | both | the input whose version names the pull request, when more than one does |
+| `number` | both | the pull request, when no input names it |
+| `event` | `github-pr-review` | `comment` (the default), `approve`, `request_changes`, or `pending` |
+
+`github-pr-comment` posts to the pull request's conversation. `github-pr-review` posts a review on the commit its input fetched when the input is a `github-prs` get, so a push after the fetch does not move the review onto code nobody read. **`event: pending` drafts a review only the token's user can see** until they submit it, and replaces that user's own earlier draft, since GitHub allows one per user per pull request, so a new push's draft takes the old one's place. Nobody else's draft is touched. GitHub refuses an approval or a change request from a pull request's own author; post a comment there instead.
 
 ## The built-in `cron` type
 
