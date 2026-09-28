@@ -107,7 +107,30 @@ func TestOpenByDefault(t *testing.T) {
 				started(2, 1, "task", "compile"), finished(2, 1, "task", "compile", "aborted"),
 				finished(1, 0, "do", "build", "aborted"),
 			),
-			want: map[string]bool{"build": true, "compile": false},
+			want: map[string]bool{"build": true, "compile": true},
+		},
+		{
+			// Nothing else failed: the abort IS the failure.
+			name: "a flat plan a user aborted",
+			view: foldEnded(
+				started(1, 0, "task", "fetch"), finished(1, 0, "task", "fetch", "succeeded"),
+				started(2, 0, "task", "compile"), finished(2, 0, "task", "compile", "aborted"),
+			),
+			want: map[string]bool{"fetch": false, "compile": true},
+		},
+		{
+			name: "fail_fast aborts a sibling block",
+			view: foldEvents(
+				started(1, 0, "in_parallel", "reviews"),
+				started(2, 1, "do", "security"),
+				started(3, 2, "task", "scan"), finished(3, 2, "task", "scan", "failed"),
+				finished(2, 1, "do", "security", "failed"),
+				started(4, 1, "do", "style"),
+				started(5, 4, "agent", "reviewer"), turn(5), finished(5, 4, "agent", "reviewer", "aborted"),
+				finished(4, 1, "do", "style", "aborted"),
+				finished(1, 0, "in_parallel", "reviews", "failed"),
+			),
+			want: map[string]bool{"reviews": true, "security": true, "scan": true, "style": false},
 		},
 		{
 			name: "a dropped finish under a finished block",
@@ -117,6 +140,17 @@ func TestOpenByDefault(t *testing.T) {
 				finished(1, 0, "do", "build", "succeeded"),
 			),
 			want: map[string]bool{"build": true},
+		},
+		{
+			// The same dropped finish once the run has ended: the child is
+			// unreported now, not running, and must not be folded away.
+			name: "a dropped finish under a finished block on an ended run",
+			view: foldEnded(
+				started(1, 0, "do", "build"),
+				started(2, 1, "task", "compile"),
+				finished(1, 0, "do", "build", "succeeded"),
+			),
+			want: map[string]bool{"build": true, "compile": true},
 		},
 		{
 			name: "an unreported step",

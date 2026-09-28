@@ -139,10 +139,24 @@
   } catch (err) {}
 
   // Storage throws in private mode, when disabled and when full; the Map
-  // still carries the folds for this page's life.
+  // still carries the folds for this page's life. Full is the one worth a
+  // retry: every run this tab visited keeps a key, and those are what gets
+  // dropped so the run on screen still survives its closing reload.
+  function persist() {
+    var value = JSON.stringify(Array.from(folds));
+    try { window.sessionStorage.setItem(foldsKey, value); return; } catch (err) {}
+    try {
+      for (var i = window.sessionStorage.length - 1; i >= 0; i--) {
+        var key = window.sessionStorage.key(i);
+        if (key && key !== foldsKey && key.indexOf('steps.folds:') === 0) window.sessionStorage.removeItem(key);
+      }
+      window.sessionStorage.setItem(foldsKey, value);
+    } catch (err) {}
+  }
+
   function remember(key, open) {
     folds.set(key, open);
-    try { window.sessionStorage.setItem(foldsKey, JSON.stringify(Array.from(folds))); } catch (err) {}
+    persist();
   }
 
   function applyFolds() {
@@ -262,7 +276,11 @@
   function step(by) {
     var all = steps().filter(function (node) { return !node.parentElement.closest('.step.container:not(.open)'); });
     if (!all.length) return;
-    var at = all.indexOf(selected());
+    // A selection folded out of sight moves from the block that hid it,
+    // rather than jumping back to the top.
+    var from = selected();
+    while (from && all.indexOf(from) < 0) from = from.parentElement && from.parentElement.closest('.step');
+    var at = all.indexOf(from);
     select(all[Math.min(Math.max(at + by, 0), all.length - 1)]);
   }
 
@@ -270,8 +288,11 @@
     steps().forEach(function (node) {
       if (!node.hasAttribute('data-toggle')) return;
       node.classList.toggle('open', open);
-      if (node.dataset.step) remember(node.dataset.step, open);
+      if (node.dataset.step) folds.set(node.dataset.step, open);
     });
+    // Once, not per row: each write serializes every fold, so per row was
+    // quadratic on a large transcript.
+    persist();
   }
 
   // The INNERMOST failure: a failed step inside a failed container is the one
@@ -286,8 +307,9 @@
     for (var at = node; at; at = at.parentElement) {
       if (!at.classList || !at.classList.contains('step')) continue;
       at.classList.add('open');
-      if (at.dataset.step) remember(at.dataset.step, true);
+      if (at.dataset.step) folds.set(at.dataset.step, true);
     }
+    persist();
   }
 
   document.addEventListener('keydown', function (e) {

@@ -184,9 +184,10 @@ what it spent and where it ran on its own row.
   step carries no count unless that step failed: one child says nothing its own
   row does not.
 - **Only the path to a failure or to live work opens by default.** A reader
-  opening a finished run came for what broke, so a failed or errored step
-  opens, and so does every block holding one; while a run is live, so does a
-  running block and the agent whose conversation is streaming in. A put opens
+  opening a finished run came for what broke, so a failed, errored or
+  aborted step opens, and so does every block holding one; while a run is
+  live, so does a running block and the agent whose conversation is
+  streaming in. A put opens
   on the version it produced, and a step the run never heard the end of opens
   too. Everything else — a passed agent's transcript, a passed block, a
   failure a `try:` tolerated, a sibling `fail_fast:` aborted — is one click
