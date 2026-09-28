@@ -12,6 +12,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -194,9 +195,13 @@ func templateFuncs() template.FuncMap {
 		// jsonview.go. jsonValue folds a bulky payload behind a summary for a
 		// transcript row; jsonPre is the same rendering for a page that gives
 		// it a <pre> of its own.
-		"jsonValue": jsonValue,
-		"jsonPre":   jsonPre,
-		"jsonLine":  jsonLine,
+		"jsonValue":   jsonValue,
+		"resultValue": resultValue,
+		// hx-get is a plain attribute to html/template: HTML-escaped, never
+		// URL-encoded, so a name's `#` or `?` would end the path early.
+		"pathseg":  url.PathEscape,
+		"jsonPre":  jsonPre,
+		"jsonLine": jsonLine,
 		// prose resolves to the hybrid (detect.go) rather than to
 		// renderProse directly: renderProse remains the fallback for text
 		// that detection has nothing to say about, but "prosebody" — the one
@@ -229,7 +234,7 @@ func templateFuncs() template.FuncMap {
 		},
 		"turnctx": newTurnCtx,
 		"pendingctx": func(step *stepView) turnCtx {
-			pending := newTurnCtx(step, step.Unanswered())
+			pending := newTurnCtx(nil, step, step.Unanswered())
 			pending.Pending = true
 
 			return pending

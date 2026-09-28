@@ -1338,14 +1338,16 @@ func TestRunTranscriptHighlightsToolJSON(t *testing.T) {
 		t.Fatalf("FinishRun: %v", err)
 	}
 
-	code, body := get(t, server, "/p/demo/runs/run-json")
+	code, page := get(t, server, "/p/demo/runs/run-json")
 	if code != http.StatusOK {
 		t.Fatalf("GET run = %d", code)
 	}
 
+	body := resultBodyOf(t, server, page)
+
 	checks := []struct {
 		what string
-		// present is markup the page must carry; absent is markup that proves
+		// present is markup the body must carry; absent is markup that proves
 		// the payload was printed rather than parsed.
 		present []string
 		absent  []string
@@ -1363,12 +1365,6 @@ func TestRunTranscriptHighlightsToolJSON(t *testing.T) {
 			what:    "embedded document parsed out of its string",
 			present: []string{`<span class="j-key">&#34;warehouse&#34;</span>`},
 			absent:  []string{`\&#34;warehouse\&#34;`, `\"warehouse\"`},
-		},
-		{
-			// A short args map stays on its row; a bulky result folds behind a
-			// disclosure naming what is inside it.
-			what:    "bulk folded, small inline",
-			present: []string{`<details class="jsonbox"`, "notes/inventory.json"},
 		},
 	}
 
@@ -1390,6 +1386,37 @@ func TestRunTranscriptHighlightsToolJSON(t *testing.T) {
 	if strings.Index(body, "on_hand") > strings.Index(body, `j-key">&#34;ok&#34;`) {
 		t.Error("JSON keys were re-sorted rather than kept in source order")
 	}
+}
+
+// resultBodyOf asserts the run page folds its one bulky result without
+// drawing it, and returns the body the box's URL serves — the seam between
+// the page and the fragment route.
+func resultBodyOf(t *testing.T, server *Server, page string) string {
+	t.Helper()
+
+	// A short args map stays on its row; a bulky result folds behind a
+	// disclosure naming what is inside it, and its body is not on the page.
+	for _, want := range []string{`<details class="jsonbox"`, "notes/inventory.json"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("bulk folded, small inline: missing %s", want)
+		}
+	}
+
+	if strings.Contains(page, `j-key">&#34;warehouse`) {
+		t.Error("the result's body is drawn on the page rather than fetched on open")
+	}
+
+	srcs := resultSrcs(page)
+	if len(srcs) != 1 {
+		t.Fatalf("page carries %d result URLs, want 1: %v", len(srcs), srcs)
+	}
+
+	code, body := getHX(t, server, srcs[0])
+	if code != http.StatusOK {
+		t.Fatalf("GET %s = %d: %s", srcs[0], code, body)
+	}
+
+	return body
 }
 
 // TestLiveViewResumesAfterWhatItRendered pins the contract that keeps a

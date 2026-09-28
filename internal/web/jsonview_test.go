@@ -380,3 +380,69 @@ func TestThousandsMatchesTheCLI(t *testing.T) {
 		}
 	}
 }
+
+// TestResultValueAgreesWithJSONValue: the run page decides a result's fold and
+// summary from a shallow parse, which unwraps no nested document. That is
+// only sound if it reaches jsonValue's answer on every shape — the short
+// string holding a document is the one the shallow parse alone gets wrong.
+func TestResultValueAgreesWithJSONValue(t *testing.T) {
+	t.Parallel()
+
+	nested := `{"n":0}`
+	for range jsonDepthLimit + 3 {
+		wrapped, err := json.Marshal(nested)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+
+		nested = `{"content":` + string(wrapped) + `}`
+	}
+
+	for _, raw := range []string{
+		`{"path":"notes/inventory.json"}`,
+		`{}`,
+		`3`,
+		"widgets ship on tuesday",
+		`{"stdout":"3\n"}`,
+		`{"base":"` + strings.Repeat("a/", 60) + `"}`,
+		"line one\nline two",
+		`{"content":"{\"a\":1}"}`,
+		`{"a":"[1]"}`,
+		`{"content":"{\"warehouse\":\"sea-1\",\"on_hand\":12}"}`,
+		`["a","b","c"]`,
+		`{"a":1,"b":2,"c":3,"d":4,"e":5,"f":` + strings.Repeat("6", 120) + `}`,
+		strings.Repeat("line\n", 4),
+		strings.Repeat("x", 200),
+		strings.Repeat("x", jsonInlineWidth),
+		strings.Repeat("x", jsonInlineWidth+1),
+		`{"a":1}{"b":2}`,
+		nested,
+		"  ",
+	} {
+		assertResultValueAgrees(t, raw)
+	}
+}
+
+func assertResultValueAgrees(t *testing.T, raw string) {
+	t.Helper()
+
+	want, got := jsonValue(raw), resultValue("/src", 7, raw)
+
+	if got.Summary != want.Summary || got.Inline != want.Inline || got.Empty != want.Empty {
+		t.Errorf("resultValue(%.40q) = {%q inline=%v empty=%v}, jsonValue says {%q inline=%v empty=%v}",
+			raw, got.Summary, got.Inline, got.Empty, want.Summary, want.Inline, want.Empty)
+	}
+
+	if got.Inline {
+		if got.HTML != want.HTML || got.Src != "" {
+			t.Errorf("resultValue(%.40q) drew an inline result differently: %q, src %q", raw, got.HTML, got.Src)
+		}
+
+		return
+	}
+
+	if got.HTML != "" || got.Src != "/src" || got.Target != "result-7" {
+		t.Errorf("resultValue(%.40q) folded without deferring its body: html %d bytes, src %q, target %q",
+			raw, len(got.HTML), got.Src, got.Target)
+	}
+}

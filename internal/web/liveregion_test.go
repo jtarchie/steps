@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -540,6 +541,43 @@ func TestLiveRegionsAreDrivenByHtmx(t *testing.T) {
 	_, ext := get(t, server, "/static/hx-sse.min.js")
 	if !strings.Contains(ext, "hx-sse:connect") {
 		t.Error("the served extension does not know hx-sse:connect, which the live transcript depends on")
+	}
+}
+
+// TestResultBoxFetchesItsBodyOnEveryOpen pins the spelling of a lazy result
+// box, for the same reason as the poll's above: HCON has broken a trigger in
+// this repo before, and presence is not parsing. No `once`: a row re-sent by
+// the stream morphs a CLOSED box back to its placeholder, so a box fetched
+// once would reopen empty — and reopening is also the retry after a failed
+// fetch. The target is the <pre> by id, never the <details>: replacing the
+// <summary> drops a keyboard reader's focus to <body>.
+func TestResultBoxFetchesItsBodyOnEveryOpen(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-box", "build", "", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-box", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent"},
+		{Type: events.TypeAgentResult, StepIndex: 0, StepName: "review", Name: "read_file", Detail: bulkyResult},
+	})
+
+	_, body := get(t, server, "/p/demo/runs/run-box")
+	box := elementAt(t, body, `class="jsonbox" hx-get=`)
+
+	for _, want := range []string{`hx-trigger="toggle[this.open]"`, `hx-target="#result-`, `hx-swap="innerHTML"`, `<pre class="json" id="result-`} {
+		if !strings.Contains(box, want) {
+			t.Errorf("the result box is missing %s:\n%s", want, box)
+		}
+	}
+
+	if strings.Contains(box, "once") {
+		t.Errorf("the result box fetches only once, so a morphed box reopens empty:\n%s", box)
 	}
 }
 

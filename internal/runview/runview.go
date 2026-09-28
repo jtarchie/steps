@@ -743,6 +743,9 @@ func (s Step) answerIndex() (int, bool) {
 
 // Turn is one piece of agent conversation traffic.
 type Turn struct {
+	// Seq is the event this turn was folded from, which is how the run page
+	// fetches a result's body only when a reader opens it.
+	Seq    int64
 	Type   string
 	Text   string
 	Name   string
@@ -774,6 +777,9 @@ func (t Turn) IsMessage() bool {
 // IsCompaction reports the point older turns were replaced by a summary —
 // drawn as a boundary, since from there on the summary is what the model had.
 func (t Turn) IsCompaction() bool { return t.Type == events.TypeAgentCompaction }
+
+// IsResult reports a tool's answer, the turn the run page draws lazily.
+func (t Turn) IsResult() bool { return t.Type == events.TypeAgentResult }
 
 // IsModelText reports the model's own running commentary or final answer.
 func (t Turn) IsModelText() bool { return t.Type == events.TypeAgentText }
@@ -1049,6 +1055,7 @@ func attachTurn(view *Transcript, index map[string]int, row store.RunEventRow) (
 	}
 
 	turn := Turn{
+		Seq:    row.Seq,
 		Type:   row.Type,
 		Text:   row.Text,
 		Name:   row.Name,

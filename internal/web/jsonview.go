@@ -484,6 +484,50 @@ type jsonView struct {
 	// Empty reports nothing to render at all, so a caller can omit the
 	// element rather than render an empty one.
 	Empty bool
+	// Src is where a folded payload's body is fetched from when it is
+	// opened; set, HTML is empty and Target names the element it lands in.
+	Src    string
+	Target string
+}
+
+// resultValue is jsonValue for a tool result, whose folded body is fetched
+// from src only when a reader opens it: results are nearly all of a long
+// agent run's page, and nearly none of them are ever opened. Summary and
+// Inline match jsonValue's; the block rendering and highlighting are skipped.
+func resultValue(src string, seq int64, raw string) jsonView {
+	lazy := func(summary string) jsonView {
+		return jsonView{Summary: summary, Src: src, Target: fmt.Sprintf("result-%d", seq)}
+	}
+
+	if strings.TrimSpace(raw) == "" {
+		return jsonValue(raw)
+	}
+
+	// At the depth limit no nested document is unwrapped, and unwrapping only
+	// ADDS blocks — so a shallow "not inline" is the full parse's answer too,
+	// and the top-level keys the summary names are the same either way.
+	node, ok := parseJSONDocument(raw, jsonDepthLimit)
+	if !ok {
+		text := strings.TrimRight(raw, "\n")
+		if !strings.Contains(text, "\n") && len(text) <= jsonInlineWidth {
+			return plainView(raw)
+		}
+
+		return lazy(plainSummary(text, raw))
+	}
+
+	if !node.inlineable() {
+		return lazy(jsonSummary(node, raw))
+	}
+
+	// Shallow says inline, but a short string may hold a document the full
+	// parse unfolds into a block.
+	view := jsonValue(raw)
+	if !view.Inline {
+		return lazy(view.Summary)
+	}
+
+	return view
 }
 
 // jsonValue renders a payload for a transcript row: inline when it is small,

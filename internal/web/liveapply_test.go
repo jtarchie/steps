@@ -129,6 +129,9 @@ func eventsBeforeThePage() []store.RunEventRow {
 func eventsAfterThePage() []store.RunEventRow {
 	return []store.RunEventRow{
 		{Type: events.TypeAgentResult, StepIndex: 0, StepName: "review", StepID: 1, Name: "read_file", Detail: `{"ok":true}`},
+		// Bulky, so it is drawn lazily: the stream has to point at the same
+		// fragment URL the reload does.
+		{Type: events.TypeAgentResult, StepIndex: 0, StepName: "review", StepID: 1, Name: "read_file", Detail: bulkyResult},
 		{Type: events.TypeAgentCompaction, StepIndex: 0, StepName: "review", StepID: 1, Name: "compacted: 4 messages summarized", Text: "## Summary\n\nRead **main.go**."},
 		{Type: events.TypeAgentText, StepIndex: 0, StepName: "helper", Status: "depth:1", Text: "the sub-agent said this"},
 		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "matrix", StepKind: "across", StepID: 2},
