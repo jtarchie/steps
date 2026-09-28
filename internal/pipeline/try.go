@@ -55,7 +55,9 @@ func runTryStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindTry, StepIndex: i, Resource: name, Content: content}
 	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, nil, innerErr)
 
-	res.hash = hash
+	// The wrapper's row names the try node, not the failure its inner step
+	// recorded — and keeps naming it when the inner step's guard skipped it.
+	res.hash, res.nodeHash = hash, hash
 
 	return res, innerErr
 }

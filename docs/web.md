@@ -210,7 +210,9 @@ what it spent and where it ran on its own row.
   what changed since the last passed run of that job — computed by comparing
   content hashes, so each step whose inputs, command, or prompt actually moved
   carries a `changed` mark on its own row (`new` for a step that run did not
-  have), and the line under the header counts them.
+  have), and the line under the header counts them. A step that broke
+  because its content moved carries `changed`; one that failed with the same
+  content as before does not; hooks are never compared.
 - **Every run names the configuration it executed**, linking the pipeline as
   it was when that run started — which the file on disk no longer holds once
   anyone edits it. When a failed run's configuration differs from the last

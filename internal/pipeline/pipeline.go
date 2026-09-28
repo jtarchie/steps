@@ -59,10 +59,15 @@ const (
 
 // stepResult is what running one step produced: the node hash the next step
 // chains under, what happened to it, and — for an agent step — the verdict
-// applyRouting keys on plus its note. The zero value ("nothing ran, no
-// verdict") is the right answer on every error path.
+// applyRouting keys on plus its note. A zero hash ("nothing to chain under")
+// is the right answer on every error path.
 type stepResult struct {
-	hash        string
+	hash string
+	// nodeHash is the node this row names when that is not the node the next
+	// step chains under — the failure it recorded, or the node a chain skip
+	// matched. Published, never chained on: a failure routed with to: carries
+	// the walk on under the parent it failed beneath.
+	nodeHash    string
 	disposition stepDisposition
 	verdict     string
 	note        string
@@ -73,6 +78,26 @@ type stepResult struct {
 // ran is the ordinary outcome: the step executed and produced hash.
 func ran(hash string) stepResult {
 	return stepResult{hash: hash}
+}
+
+// failedAt is a step that failed after recording its node under hash.
+func failedAt(hash string) stepResult {
+	return stepResult{nodeHash: hash}
+}
+
+// published is the hash a step's row is shown under: its own node, never the
+// parent a guard skip passes through, which would compare the row against a
+// different step.
+func (r stepResult) published() string {
+	if r.nodeHash != "" {
+		return r.nodeHash
+	}
+
+	if r.disposition == stepGuardSkipped {
+		return ""
+	}
+
+	return r.hash
 }
 
 // nodeRecord converts a plan merkle.Node into the shape store.RecordNode

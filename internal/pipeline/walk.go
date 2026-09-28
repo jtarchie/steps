@@ -308,9 +308,9 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 	// whole point of the transcript is that a replayed step is visibly
 	// distinct from a step that paid to execute.
 	if res.disposition == stepRan {
-		publishStepFinished(ctx, r.jobName, i, step, mark, res.hash, started, err)
+		publishStepFinished(ctx, r.jobName, i, step, mark, res.published(), started, err)
 	} else {
-		publishStepSkipped(ctx, r.jobName, i, step, mark, res.hash, skipReason(res.disposition))
+		publishStepSkipped(ctx, r.jobName, i, step, mark, res.published(), skipReason(res.disposition))
 	}
 
 	res.stepID = mark.id
@@ -405,7 +405,7 @@ func runAgentStep(ctx context.Context, r stepRunner, i int, step config.Step, pa
 
 	res := stepResult{hash: out.Hash, verdict: out.Verdict, note: out.Note}
 	if err != nil {
-		res.hash = ""
+		res.hash, res.nodeHash = "", out.Hash
 
 		return res, fmt.Errorf("agent step: %w", err)
 	}

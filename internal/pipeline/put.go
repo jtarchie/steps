@@ -75,7 +75,7 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 		recordStepFailure(ctx, r, node, wrapped)
 		recordPlacement(ctx, r, placed, i, step.Put, hash, hash)
 
-		return stepResult{}, wrapped
+		return failedAt(hash), wrapped
 	}
 
 	err = r.st.RecordNode(ctx, nodeRecord(node), r.jobName, "succeeded", result, nil)
