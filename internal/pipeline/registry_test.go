@@ -383,6 +383,61 @@ jobs:
 	}
 }
 
+// A placement row can only exist once its node does (run_placements references it), so one per case also proves the node-then-placement order on both outcomes.
+func TestEveryPlacedLeafStepIsRecordedWhereItRanPassOrFail(t *testing.T) {
+	cases := []struct {
+		name, plan, step string
+		fails            bool
+	}{
+		{name: "task passes", plan: "- {task: work, tags: [box], run: \"true\"}", step: "work"},
+		{name: "task fails", plan: "- {task: work, tags: [box], run: \"false\"}", step: "work", fails: true},
+		{name: "first get passes", plan: "- get: good", step: "good"},
+		{name: "first get fails", plan: "- get: bad", step: "bad", fails: true},
+		{name: "second get passes", plan: "- {get: seed, resource: good}\n  - get: good", step: "good"},
+		{name: "second get fails", plan: "- {get: seed, resource: good}\n  - get: bad", step: "bad", fails: true},
+		{name: "put passes", plan: "- put: good", step: "good"},
+		{name: "put fails", plan: "- put: bad", step: "bad", fails: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cfg, provider, st, _ := borrowedRun(t, `
+resource_types:
+- name: probe
+  config:
+    check: printf '[{"ref":"v1"}]'
+    in: "true"
+    out: printf '{"ref":"v2"}'
+- name: broken
+  config:
+    check: printf '[{"ref":"v1"}]'
+    in: "false"
+    out: "false"
+
+resources:
+- {name: good, type: probe, tags: [box], source: {}}
+- {name: bad, type: broken, tags: [box], source: {}}
+
+jobs:
+- name: build
+  plan:
+  `+tc.plan+`
+`)
+
+			runID := NewRunID()
+
+			err := RunJob(WithNewRun(ctx, runID), cfg, &cfg.Jobs[0], nil, provider, st, false)
+			if (err != nil) != tc.fails {
+				t.Fatalf("RunJob error = %v, want failure %v", err, tc.fails)
+			}
+
+			if tag, ok := placementTags(t, st, runID)[tc.step]; !ok || tag != "box" {
+				t.Fatalf("placements = %v, want %q recorded on box", placementTags(t, st, runID), tc.step)
+			}
+		})
+	}
+}
+
 // eventWorkers is every worker a run's events named, by step.
 func eventWorkers(t *testing.T, st store.Store, runID string) map[string][]string {
 	t.Helper()

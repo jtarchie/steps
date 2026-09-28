@@ -5,6 +5,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
@@ -130,4 +131,35 @@ func recordStepFailure(ctx context.Context, r stepRunner, node merkle.Node, err 
 	recCtx := context.WithoutCancel(ctx)
 	_ = r.st.RecordNode(recCtx, nodeRecord(node), r.jobName, status, nil, err)
 	_ = r.st.ForgetChain(recCtx, r.jobName, node.Hash)
+}
+
+// runPlaced owns a leaf step's recording order: the node, then where it ran — run_placements references the node, and a step that FAILED on a worker is the one whose machine somebody wants named.
+func runPlaced(
+	ctx context.Context, r stepRunner, node merkle.Node, placedAs string, work func(context.Context) (map[string]any, error),
+) (stepResult, error) {
+	ctx, placed := withPlacementSink(ctx)
+
+	result, err := work(ctx)
+	if err != nil {
+		recordStepFailure(ctx, r, node, err)
+		recordPlacement(ctx, r, placed, node.StepIndex, placedAs, node.Hash, node.Hash)
+
+		return failedAt(node.Hash), err
+	}
+
+	err = r.st.RecordNode(ctx, nodeRecord(node), r.jobName, "succeeded", result, nil)
+	if err != nil {
+		return stepResult{}, fmt.Errorf("step %d (%s %q): could not record node %q: %w", node.StepIndex, node.Kind, placedAs, node.Hash, err)
+	}
+
+	recordPlacement(ctx, r, placed, node.StepIndex, placedAs, node.Hash, node.Hash)
+
+	return ran(node.Hash), nil
+}
+
+// noResult adapts a step whose node records no result to runPlaced.
+func noResult(work func(context.Context) error) func(context.Context) (map[string]any, error) {
+	return func(ctx context.Context) (map[string]any, error) {
+		return nil, work(ctx)
+	}
 }

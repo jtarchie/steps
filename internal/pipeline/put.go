@@ -67,29 +67,26 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindPut, StepIndex: i, Resource: step.DisplayName(), Content: content}
 
-	ctx, placed := withPlacementSink(ctx)
+	var result map[string]any
 
-	result, err := executePut(ctx, r.cfg, step, r.bw)
+	res, err := runPlaced(ctx, r, node, step.Put, func(ctx context.Context) (map[string]any, error) {
+		var putErr error
+
+		result, putErr = executePut(ctx, r.cfg, step, r.bw)
+		if putErr != nil {
+			return nil, fmt.Errorf("step %d (put %q): %w", i, step.Put, putErr)
+		}
+
+		return result, nil
+	})
 	if err != nil {
-		wrapped := fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
-		recordStepFailure(ctx, r, node, wrapped)
-		recordPlacement(ctx, r, placed, i, step.Put, hash, hash)
-
-		return failedAt(hash), wrapped
+		return res, err
 	}
-
-	err = r.st.RecordNode(ctx, nodeRecord(node), r.jobName, "succeeded", result, nil)
-	if err != nil {
-		return stepResult{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
-	}
-
-	// After the node, never before: run_placements references it.
-	recordPlacement(ctx, r, placed, i, step.Put, hash, hash)
 
 	recordPutOrder(ctx, r.st, resource.Name, result)
 	recordBuildVersion(ctx, resource.Name, result)
 
-	return ran(hash), nil
+	return res, nil
 }
 
 // executePut materializes a put step's input view, runs its resource's out:
