@@ -409,8 +409,10 @@
 {{/* One JSON payload, wherever it appears: inline on the row when it is
      small, and otherwise folded behind a summary naming what is inside it.
      A <details> rather than a scripted toggle, so the fold survives with
-     JavaScript off and behaves identically on the live-stream path. */}}
-{{define "jsonvalue"}}{{if not .Empty}}{{if .Inline}}<span class="jsonline">{{.HTML}}</span>{{else}}<details class="jsonbox"><summary>{{.Summary}}</summary><pre class="json">{{.HTML}}</pre></details>{{end}}{{end}}{{end}}
+     JavaScript off and behaves identically on the live-stream path. A box
+     with a Src has no body until it is opened: htmx fetches it into the
+     <pre> on every open, and with JavaScript off the link opens it. */}}
+{{define "jsonvalue"}}{{if not .Empty}}{{if .Inline}}<span class="jsonline">{{.HTML}}</span>{{else if .Src}}<details class="jsonbox" hx-get="{{.Src}}" hx-trigger="toggle[this.open]" hx-target="#{{.Target}}" hx-swap="innerHTML"><summary>{{.Summary}}</summary><pre class="json" id="{{.Target}}"><a href="{{.Src}}">open result</a></pre></details>{{else}}<details class="jsonbox"><summary>{{.Summary}}</summary><pre class="json">{{.HTML}}</pre></details>{{end}}{{end}}{{end}}
 
 {{/* An agent's recorded response, rendered as the markdown models actually
      write. See prose.go for what the renderer refuses to do with it. */}}

@@ -194,9 +194,10 @@ func templateFuncs() template.FuncMap {
 		// jsonview.go. jsonValue folds a bulky payload behind a summary for a
 		// transcript row; jsonPre is the same rendering for a page that gives
 		// it a <pre> of its own.
-		"jsonValue": jsonValue,
-		"jsonPre":   jsonPre,
-		"jsonLine":  jsonLine,
+		"jsonValue":   jsonValue,
+		"resultValue": resultValue,
+		"jsonPre":     jsonPre,
+		"jsonLine":    jsonLine,
 		// prose resolves to the hybrid (detect.go) rather than to
 		// renderProse directly: renderProse remains the fallback for text
 		// that detection has nothing to say about, but "prosebody" — the one
@@ -229,6 +230,9 @@ func templateFuncs() template.FuncMap {
 		},
 		"mcpctx": func(page map[string]any, row mcpRow) mcpCtx {
 			return mcpCtx{Page: page, Row: row}
+		},
+		"turnctx": func(page map[string]any, turn runview.Turn) turnCtx {
+			return turnCtx{Page: page, Turn: turn}
 		},
 	}
 }

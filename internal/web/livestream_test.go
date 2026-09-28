@@ -93,6 +93,7 @@ func TestStreamDrawsTheSameMarkupThePageDoes(t *testing.T) {
 		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "review", StepKind: "agent", StepID: 2},
 		{Type: events.TypeAgentText, StepIndex: 1, StepName: "review", StepID: 2, Text: "Reading the diff first."},
 		{Type: events.TypeAgentCall, StepIndex: 1, StepName: "review", StepID: 2, Name: "read_file", Detail: `{"path":"main.go"}`},
+		{Type: events.TypeAgentResult, StepIndex: 1, StepName: "review", StepID: 2, Name: "read_file", Detail: bulkyResult},
 		{Type: events.TypeAgentCompaction, StepIndex: 1, StepName: "review", StepID: 2, Name: "compacted: 2 messages summarized", Text: "Read main.go so far."},
 		{Type: events.TypeStepFinished, StepIndex: 1, StepName: "review", StepKind: "agent", StepID: 2, Status: "succeeded", Hash: "beef7654321", DurationMS: 4200},
 		{Type: events.TypeStepStarted, StepIndex: 2, StepName: "matrix", StepKind: "across", StepID: 3},

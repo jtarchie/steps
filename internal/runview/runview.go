@@ -572,6 +572,9 @@ func (s Step) Conversation() []Turn {
 
 // Turn is one piece of agent conversation traffic.
 type Turn struct {
+	// Seq is the event this turn was folded from, which is how the run page
+	// fetches a result's body only when a reader opens it.
+	Seq    int64
 	Type   string
 	Text   string
 	Name   string
@@ -868,6 +871,7 @@ func attachTurn(view *Transcript, index map[string]int, row store.RunEventRow) (
 	}
 
 	view.Steps[position].Turns = append(view.Steps[position].Turns, Turn{
+		Seq:    row.Seq,
 		Type:   row.Type,
 		Text:   row.Text,
 		Name:   row.Name,

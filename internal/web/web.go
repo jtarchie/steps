@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html/template"
 	"net/http"
 	"sort"
 	"strings"
@@ -346,6 +347,7 @@ func (s *Server) routes() error {
 	group.GET("/runs", s.handleRunHistory)
 	group.GET("/runs/:run", s.handleRun)
 	group.GET("/runs/:run/events", s.handleRunEvents)
+	group.GET(strings.TrimPrefix(turnRoute, "/p/:pipeline"), s.handleTurn)
 	group.GET("/nodes/:hash", s.handleNode)
 	group.GET("/config/:sha", s.handleConfig)
 	group.GET("/approvals", s.handleApprovals)
@@ -522,6 +524,14 @@ func (s *Server) handleError(c *echo.Context, err error) {
 	// was refused — which is the one thing this transport exists to do.
 	if strings.HasPrefix(c.Path(), "/api/") {
 		_ = c.JSON(status, map[string]string{"message": message})
+
+		return
+	}
+
+	// A result's body is swapped into its box, and htmx swaps an error too:
+	// a whole page there would nest the nav and its scripts in a <pre>.
+	if c.Path() == turnRoute {
+		_ = c.HTML(status, template.HTMLEscapeString(message))
 
 		return
 	}

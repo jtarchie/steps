@@ -570,6 +570,13 @@ func sortEdges(edges []edgeView) {
 	})
 }
 
+// turnCtx is what the turn template is invoked with: a result's body is
+// fetched from a URL scoped by the page's pipeline and run.
+type turnCtx struct {
+	Page map[string]any
+	Turn runview.Turn
+}
+
 // stepCtx is what the recursive step template is invoked with: the page it is
 // being drawn on, and the step to draw.
 type stepCtx struct {
