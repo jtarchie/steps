@@ -220,9 +220,13 @@ func checkScheme(worker Worker) error {
 // applyQuery reads a mapping's options, refusing what the grammar does not
 // know.
 func applyQuery(worker Worker, parsed *url.URL) (Worker, error) {
-	query := parsed.Query()
+	// Not parsed.Query(), which drops a pair it cannot decode: a mistyped key would then dodge the unknown-option refusal, and staticURL would later drop every option along with it.
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return Worker{}, fmt.Errorf("%w %q: %w", ErrWorker, worker.URL, err)
+	}
 
-	err := checkQueryKeys(worker, query)
+	err = checkQueryKeys(worker, query)
 	if err != nil {
 		return Worker{}, err
 	}

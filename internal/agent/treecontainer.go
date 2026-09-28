@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jtarchie/steps/internal/shell"
 )
@@ -195,7 +196,7 @@ func chunkQuoted(content string) []string {
 	)
 
 	for i, r := range content {
-		cost := 1
+		cost := utf8.RuneLen(r)
 		if r == '\'' {
 			cost = 4
 		}

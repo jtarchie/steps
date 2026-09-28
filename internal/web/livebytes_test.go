@@ -4,6 +4,7 @@ package web
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/events"
@@ -116,6 +117,77 @@ func TestStreamBytesGrowLinearlyWithChildren(t *testing.T) {
 	for _, pair := range []struct{ small, big int }{{at25, at50}, {at50, at100}} {
 		if ratio := float64(pair.big) / float64(pair.small); ratio > 2.5 {
 			t.Errorf("doubling the children multiplied the bytes by %.2f: the stream is re-shipping the container", ratio)
+		}
+	}
+}
+
+// resultRun records one agent step that got `results` tool results of about
+// `size` bytes each, every one carrying a marker of its own, and returns the
+// page and the stream a watcher who connected after the first event gets.
+func resultRun(t *testing.T, results, size int) (string, string) {
+	t.Helper()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+	runID := fmt.Sprintf("run-results-%d", size)
+
+	err := pipeline.Store.StartRun(ctx, runID, "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	rows := make([]store.RunEventRow, 0, 1+results)
+	rows = append(rows, store.RunEventRow{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent", StepID: 1})
+
+	line := strings.Repeat("x", 63) + `\n`
+	for i := range results {
+		rows = append(rows, store.RunEventRow{
+			Type: events.TypeAgentResult, StepIndex: 0, StepName: "review", StepID: 1, Name: "read_file",
+			Detail: fmt.Sprintf(`{"content":"RESULT-MARKER-%d\n%s"}`, i, strings.Repeat(line, size/len(line))),
+		})
+	}
+
+	appendEvents(t, pipeline.Store, runID, rows)
+
+	err = pipeline.Store.FinishRun(ctx, runID, "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	_, page := get(t, server, "/p/demo/runs/"+runID)
+
+	return page, sseHTML(streamOf(t, server, "/p/demo/runs/"+runID+"/events?after=1"))
+}
+
+// TestRunPageBytesDoNotGrowWithResultSize is #171: every tool result's body
+// was drawn up front, collapsed, so a long review's page was megabytes of
+// markup nobody opened. The page and the stream now carry a summary and a URL
+// per result, and a result sixteen times bigger costs them nothing.
+func TestRunPageBytesDoNotGrowWithResultSize(t *testing.T) {
+	shrinkRunEventLimit(t, 5000, 1)
+
+	const results = 50
+
+	smallPage, smallStream := resultRun(t, results, 1000)
+	bigPage, bigStream := resultRun(t, results, 16000)
+
+	for _, drawn := range []struct {
+		what       string
+		small, big string
+	}{{"page", smallPage, bigPage}, {"stream", smallStream, bigStream}} {
+		t.Logf("%s: 1 kB results=%d bytes, 16 kB results=%d bytes", drawn.what, len(drawn.small), len(drawn.big))
+
+		if strings.Contains(drawn.big, "RESULT-MARKER-") {
+			t.Errorf("the %s carries a result's body", drawn.what)
+		}
+
+		// Drawing no box at all would pass the ratio too.
+		if got := len(resultSrcs(drawn.big)); got != results {
+			t.Errorf("the %s points %d boxes at a body, want %d", drawn.what, got, results)
+		}
+
+		if ratio := float64(len(drawn.big)) / float64(len(drawn.small)); ratio > 1.02 {
+			t.Errorf("results 16x bigger made the %s %.2fx bigger", drawn.what, ratio)
 		}
 	}
 }

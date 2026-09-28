@@ -321,38 +321,32 @@ func (w *planWalk) runTriggeredBuild(
 	// loud the moment resolution started reading job_versions for real.
 	recordBuildVersion(ctx, resource.Name, version)
 
-	fetchCtx, placed := withPlacementSink(ctx)
+	_, err = runPlaced(ctx, build, node, step.Get, noResult(func(placedCtx context.Context) error {
+		// Notes and log lines about the fetch are the get's, and the context here is its CHILDREN'S (ctx holds the get as their parent), so name the get itself: recorded against no step, the version it fetched was drawn apart from its row.
+		fetchCtx := withStepLogger(events.WithStepID(placedCtx, parentStepFrom(ctx)), w.index, step)
 
-	// Notes and log lines about the fetch are the get's, and the context here is its CHILDREN'S (ctx holds the get as their parent), so name the get itself: recorded against no step, the version it fetched was drawn apart from its row.
-	fetchCtx = withStepLogger(events.WithStepID(fetchCtx, parentStepFrom(ctx)), w.index, step)
+		err := fetchGetStepWithStep(fetchCtx, w.cfg, w.st, step, step.Get, resource, resourceType, version, bw)
 
-	err = fetchGetStepWithStep(fetchCtx, w.cfg, w.st, step, step.Get, resource, resourceType, version, bw)
+		// Get-step hooks fire once per triggered build, in that build's own
+		// workspace, observing the fetch outcome. A fetch failure (or a hook that
+		// fails an otherwise-green fetch) fails this build.
+		if !step.Hooks.Empty() {
+			err = runHooks(ctx, build.scope(stepLabel(w.index, step)), step.Hooks, err)
+		}
 
-	// Get-step hooks fire once per triggered build, in that build's own
-	// workspace, observing the fetch outcome. A fetch failure (or a hook that
-	// fails an otherwise-green fetch) fails this build.
-	if !step.Hooks.Empty() {
-		err = runHooks(ctx, build.scope(stepLabel(w.index, step)), step.Hooks, err)
-	}
+		if err != nil {
+			return err
+		}
 
+		// Only now that the fetch (and its hooks) actually succeeded: recording
+		// it earlier would show resource_checks a version nothing ever fetched.
+		recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
+
+		return nil
+	}))
 	if err != nil {
-		recordStepFailure(ctx, build, node, err)
-		recordPlacement(ctx, build, placed, w.index, step.Get, node.Hash, node.Hash)
-
 		return err
 	}
-
-	// Only now that the fetch (and its hooks) actually succeeded: recording
-	// it earlier would show resource_checks a version nothing ever fetched.
-	recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
-
-	err = w.st.RecordNode(ctx, nodeRecord(node), w.jobName, "succeeded", nil, nil)
-	if err != nil {
-		return fmt.Errorf("could not record node %q: %w", node.Hash, err)
-	}
-
-	// After the node, never before: run_placements references it.
-	recordPlacement(ctx, build, placed, w.index, step.Get, node.Hash, node.Hash)
 
 	buildID := buildIDForSet(ctx, setIndex)
 
@@ -514,35 +508,24 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	// step kind keeps, and hid a get whose fetch failed.
 	recordExecution(ctx, resource.Name)
 
-	ctx, placed := withPlacementSink(ctx)
+	return runPlaced(ctx, w.stepRunner, node, step.Get, noResult(func(ctx context.Context) error {
+		err := fetchGetStepWithStep(ctx, w.cfg, w.st, step, step.Get, *resource, *resourceType, version, w.bw)
 
-	err = fetchGetStepWithStep(ctx, w.cfg, w.st, step, step.Get, *resource, *resourceType, version, w.bw)
+		// Get-step hooks fire in the same workspace the resource was fetched into.
+		if err == nil && !step.Hooks.Empty() {
+			err = runHooks(ctx, w.scope(stepLabel(i, step)), step.Hooks, err)
+		}
 
-	// Get-step hooks fire in the same workspace the resource was fetched into.
-	if err == nil && !step.Hooks.Empty() {
-		err = runHooks(ctx, w.scope(stepLabel(i, step)), step.Hooks, err)
-	}
+		if err != nil {
+			return err
+		}
 
-	if err != nil {
-		recordStepFailure(ctx, w.stepRunner, node, err)
-		recordPlacement(ctx, w.stepRunner, placed, i, step.Get, hash, hash)
+		// Only now that the fetch (and its hooks) actually succeeded: recording
+		// it earlier would show resource_checks a version nothing ever fetched.
+		recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
 
-		return failedAt(hash), err
-	}
-
-	// Only now that the fetch (and its hooks) actually succeeded: recording
-	// it earlier would show resource_checks a version nothing ever fetched.
-	recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
-
-	err = w.st.RecordNode(ctx, nodeRecord(node), w.jobName, "succeeded", nil, nil)
-	if err != nil {
-		return stepResult{}, fmt.Errorf("could not record node %q: %w", node.Hash, err)
-	}
-
-	// After the node, never before: run_placements references it.
-	recordPlacement(ctx, w.stepRunner, placed, i, step.Get, hash, hash)
-
-	return ran(hash), nil
+		return nil
+	}))
 }
 
 // bindAssigned returns the build's input-set binding for a get, as the single

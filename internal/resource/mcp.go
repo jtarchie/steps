@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"mime"
 	"os"
@@ -646,7 +647,15 @@ func readParamFile(declared, srcDir string) (string, error) {
 		return "", fmt.Errorf("params file %q names no artifact; the first path component is the artifact holding the file, as in answer/reply.md", declared)
 	}
 
-	data, err := os.ReadFile(filepath.Join(srcDir, filepath.FromSlash(cleaned))) //nolint:gosec // confined above, joined under the put's own read view
+	// OpenInRoot, not a join: the checks above are lexical, and a symlink inside an artifact would otherwise read any file this process can.
+	file, err := os.OpenInRoot(srcDir, filepath.FromSlash(cleaned))
+	if err != nil {
+		return "", fmt.Errorf("params file %q: %w (is its artifact in the put's inputs:?)", declared, err)
+	}
+
+	defer func() { _ = file.Close() }()
+
+	data, err := io.ReadAll(file)
 	if err != nil {
 		return "", fmt.Errorf("params file %q: %w (is its artifact in the put's inputs:?)", declared, err)
 	}

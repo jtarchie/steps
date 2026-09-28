@@ -15,6 +15,7 @@ import (
 	"github.com/labstack/echo/v5"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -177,6 +178,44 @@ func (s *Server) handleRunHistory(c *echo.Context) error {
 		"Nav":  s.nav(c),
 		"Runs": runs,
 	})
+}
+
+// turnRoute is the pattern handleTurn is registered under; handleError keys
+// on it to answer with a line of text rather than a page.
+const turnRoute = "/p/:pipeline/runs/:run/turns/:seq"
+
+// handleTurn renders one tool result's body, which the run page draws only as
+// a summary until it is opened (resultValue). htmx gets the <pre>'s inner
+// HTML; the link a reader follows with JavaScript off gets a styled page.
+func (s *Server) handleTurn(c *echo.Context) error {
+	// One URL, two bodies: a cache must not hand the link the fragment.
+	c.Response().Header().Add("Vary", "HX-Request")
+
+	gone := echo.NewHTTPError(http.StatusNotFound, "this result is no longer recorded")
+
+	seq, err := strconv.ParseInt(c.Param("seq"), 10, 64)
+	if err != nil || seq < 1 {
+		return gone
+	}
+
+	rows, err := pipelineOf(c).Store.RunEvents(c.Request().Context(), c.Param("run"), seq-1, 1)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
+	// Seq is global, so the next row of THIS run may be a later one; and only
+	// a result is drawn lazily, so nothing else is served here.
+	if len(rows) == 0 || rows[0].Seq != seq || rows[0].Type != events.TypeAgentResult {
+		return gone
+	}
+
+	body := string(jsonValue(rows[0].Detail).HTML)
+
+	if c.Request().Header.Get("HX-Request") == "" {
+		body = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/static/app.css"><pre class="json">` + body + `</pre>`
+	}
+
+	return c.HTML(http.StatusOK, body) //nolint:wrapcheck // a write error surfaces through the shared error handler
 }
 
 // handleRun renders a run transcript.

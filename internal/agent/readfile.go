@@ -182,7 +182,7 @@ func accumulateLineRange(scanner *bufio.Scanner, startLine, endLine int, hasEnd 
 			break
 		}
 
-		included, stop, cut := appendRangeLine(&buf, scanner.Bytes())
+		included, stop, cut := appendRangeLine(&buf, scanner.Bytes(), lastLine == 0)
 		if cut {
 			truncated = true
 		}
@@ -206,8 +206,9 @@ func accumulateLineRange(scanner *bufio.Scanner, startLine, endLine int, hasEnd 
 // prefix rather than nothing, so a single-long-line file (a common shape for
 // spilled command output) is still partially readable; an over-budget later
 // line is dropped whole, leaving the last full line as the paging cursor.
-func appendRangeLine(buf *strings.Builder, text []byte) (included, stop, cut bool) {
-	if buf.Len() == 0 {
+// first is asked of the caller rather than read off buf: an empty first line leaves buf empty, and the line after it would then be written with no newline between them.
+func appendRangeLine(buf *strings.Builder, text []byte, first bool) (included, stop, cut bool) {
+	if first {
 		if len(text) > maxReadFileBytes {
 			buf.Write(text[:maxReadFileBytes])
 

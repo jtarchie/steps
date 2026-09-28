@@ -70,9 +70,6 @@ func (b *borrowed) counts() (int, int) {
 func borrowedRun(t *testing.T, yaml string) (context.Context, *config.Config, workspace.Provider, store.Store, *borrowed) {
 	t.Helper()
 
-	// A registry bypassed by mistake acquires through the real EC2 client, and that must fail here rather than reach whatever account the shell has.
-	t.Setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:1")
-
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pipeline.yml")
 
@@ -307,8 +304,6 @@ func awaitFile(t *testing.T, path string) {
 
 // A machine that could not be given back bills until somebody notices, so the job's release and the process's each say so, and only when it happened.
 func TestAWorkerThatCannotBeGivenBackIsReported(t *testing.T) {
-	t.Setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:1")
-
 	for scope, c := range map[string]struct{ worker, warning string }{
 		"job":     {borrowedWorker, "acquired for this job could not be released"},
 		"process": {borrowedWorker + "&idle=1h", "acquired by this process could not be released"},
@@ -380,6 +375,65 @@ jobs:
 
 	if !slices.ContainsFunc(workers["there"], func(worker string) bool { return strings.HasPrefix(worker, "box (") }) {
 		t.Errorf("no event of the tagged step says it ran on box: %q", workers["there"])
+	}
+}
+
+// A placement row can only exist once its node does (run_placements references it), so one per case also proves the node-then-placement order on both outcomes.
+func TestEveryPlacedLeafStepIsRecordedWhereItRanPassOrFail(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name, plan, step string
+		fails            bool
+	}{
+		{name: "task passes", plan: "- {task: work, tags: [box], run: \"true\"}", step: "work"},
+		{name: "task fails", plan: "- {task: work, tags: [box], run: \"false\"}", step: "work", fails: true},
+		{name: "first get passes", plan: "- get: good", step: "good"},
+		{name: "first get fails", plan: "- get: bad", step: "bad", fails: true},
+		{name: "second get passes", plan: "- {get: seed, resource: good}\n  - get: good", step: "good"},
+		{name: "second get fails", plan: "- {get: seed, resource: good}\n  - get: bad", step: "bad", fails: true},
+		{name: "put passes", plan: "- put: good", step: "good"},
+		{name: "put fails", plan: "- put: bad", step: "bad", fails: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cfg, provider, st, _ := borrowedRun(t, `
+resource_types:
+- name: probe
+  config:
+    check: printf '[{"ref":"v1"}]'
+    in: "true"
+    out: printf '{"ref":"v2"}'
+- name: broken
+  config:
+    check: printf '[{"ref":"v1"}]'
+    in: "false"
+    out: "false"
+
+resources:
+- {name: good, type: probe, tags: [box], source: {}}
+- {name: bad, type: broken, tags: [box], source: {}}
+
+jobs:
+- name: build
+  plan:
+  `+tc.plan+`
+`)
+
+			runID := NewRunID()
+
+			err := RunJob(WithNewRun(ctx, runID), cfg, &cfg.Jobs[0], nil, provider, st, false)
+			if (err != nil) != tc.fails {
+				t.Fatalf("RunJob error = %v, want failure %v", err, tc.fails)
+			}
+
+			if tag, ok := placementTags(t, st, runID)[tc.step]; !ok || tag != "box" {
+				t.Fatalf("placements = %v, want %q recorded on box", placementTags(t, st, runID), tc.step)
+			}
+		})
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html/template"
 	"net/http"
 	"sort"
 	"strings"
@@ -152,6 +153,14 @@ type Server struct {
 	manager Manager
 	// nil is open access, which is what the loopback default is: see auth.go.
 	auth *basicAuth
+	// version is what the footer prints, so a bug report can name the build.
+	version string
+}
+
+// WithVersion is the build version the footer prints; "dev" when unset, the
+// same default steps --version has.
+func WithVersion(version string) Option {
+	return func(s *Server) { s.version = version }
 }
 
 // Manager applies what a `steps pipeline` verb asks for. An interface for the reason Runner is one: this package serves the surface and chooses neither a store driver nor a workspace provider.
@@ -313,7 +322,7 @@ func (s *Server) Served() []*Pipeline {
 func (s *Server) routes() error {
 	e := echo.New()
 
-	renderer, err := newRenderer()
+	renderer, err := newRenderer(s.version)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
@@ -346,6 +355,7 @@ func (s *Server) routes() error {
 	group.GET("/runs", s.handleRunHistory)
 	group.GET("/runs/:run", s.handleRun)
 	group.GET("/runs/:run/events", s.handleRunEvents)
+	group.GET(strings.TrimPrefix(turnRoute, "/p/:pipeline"), s.handleTurn)
 	group.GET("/nodes/:hash", s.handleNode)
 	group.GET("/config/:sha", s.handleConfig)
 	group.GET("/approvals", s.handleApprovals)
@@ -526,6 +536,14 @@ func (s *Server) handleError(c *echo.Context, err error) {
 		return
 	}
 
+	// A result's body is swapped into its box, and htmx swaps an error too:
+	// a whole page there would nest the nav and its scripts in a <pre>.
+	if c.Path() == turnRoute {
+		_ = c.HTML(status, template.HTMLEscapeString(message))
+
+		return
+	}
+
 	// globalNav, not nav: most errors fire where no pipeline resolved (a bad
 	// slug, a stray 404), and bare nav leaves Current empty — every tab then
 	// links /p//…, which 404s straight back into this handler.
@@ -539,48 +557,31 @@ func (s *Server) handleError(c *echo.Context, err error) {
 	}
 }
 
-// nav is the shell every page renders inside: which pipelines exist, which
-// one is current, and the counts the top bar reports.
-// globalNav is nav() for a page that has no current pipeline: the overview
-// and /docs both sit above `/p/:pipeline`, so pipelineOf is nil there and the
-// shell's tabs, switcher and jump palette would render dead "/p//" links —
-// which 404, and which the palette's own error handling then swallows, so it
-// simply shows nothing.
+// globalNav is nav() for a page that has no current pipeline: the overview,
+// /docs and an error page all sit above `/p/:pipeline`, so pipelineOf is nil
+// there. The shell draws no section tabs for such a page — tabs borrowed from
+// the first pipeline looked like the root's own sections, and "jobs" clicked
+// from / landed on a pipeline nobody chose — but the error page's way back
+// and the jump palette's search URL still need a pipeline to point at, and
+// rendered raw they emit "/p//" links that 404.
 //
-// Anchoring them to the first pipeline keeps the way back into the app alive.
-// It is a display fallback only: nothing on either page is scoped by it.
+// Anchored stays false: the switcher reads as a picker, the attention list
+// (which says "this pipeline") is not drawn, and nothing on the page is
+// scoped by the borrowed name.
 func (s *Server) globalNav(c *echo.Context) navData {
-	nav, gathered := s.navGathered(c)
+	nav := s.nav(c)
 
 	if nav.Current == "" && len(nav.Pipelines) > 0 {
 		nav.Current = nav.Pipelines[0].Slug
 		nav.CurrentPath = nav.Pipelines[0].Path
-		// The shell's badges have to belong to the pipeline its tabs point at, or /docs reports a clean pipeline's counts on links into a different one. Anchored stays false: the badges are chrome pointing into that pipeline, while the LIST says "this pipeline", which on a page listing several would name none of them.
-		nav.Attention = gathered[nav.Current]
-		// The tabs this shell draws have to be the ones that pipeline HAS, or /docs and the overview offer an mcp tab that 404s on the pipeline they anchor to.
-		nav.HasMCP = s.hasMCP(nav.Current)
 	}
 
 	return nav
 }
 
-// hasMCP answers the tab question for a pipeline that is not the request's own — the shell an overview or a docs page draws is anchored to one it did not resolve.
-func (s *Server) hasMCP(slug string) bool {
-	pipeline := s.Lookup(slug)
-
-	return pipeline != nil && len(pipeline.Config().MCPServers) > 0
-}
-
+// nav is the shell every page renders inside: which pipelines exist, which
+// one is current, and the counts the top bar reports.
 func (s *Server) nav(c *echo.Context) navData {
-	nav, _ := s.navGathered(c)
-
-	return nav
-}
-
-// navGathered is nav plus the per-pipeline items it read on the way, so the
-// pages that anchor themselves to a pipeline they did not resolve do not ask
-// the same databases the same questions twice in one render.
-func (s *Server) navGathered(c *echo.Context) (navData, map[string][]attentionItem) {
 	ctx := c.Request().Context()
 	nav := navData{ReadOnly: s.runner == nil, URL: c.Request().URL.RequestURI()}
 
@@ -615,7 +616,7 @@ func (s *Server) navGathered(c *echo.Context) (navData, map[string][]attentionIt
 
 	current := pipelineOf(c)
 	if current == nil {
-		return nav, gathered
+		return nav
 	}
 
 	nav.Current = current.Slug
@@ -626,7 +627,7 @@ func (s *Server) navGathered(c *echo.Context) (navData, map[string][]attentionIt
 	// The tab appears only for a pipeline that declares servers: most do not, and a dead tab on every one of them is nav space spent on a feature they never use.
 	nav.HasMCP = len(current.Config().MCPServers) > 0
 
-	return nav, gathered
+	return nav
 }
 
 // navData is the top-bar model.

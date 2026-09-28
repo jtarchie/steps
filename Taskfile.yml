@@ -25,7 +25,7 @@ tasks:
       - task: kindswitch
       # The two static gates run before the suite: they cost two minutes
       # between them, and a finding that would fail the build anyway should
-      # not take the five and a half the tests need to be heard.
+      # not take the two the tests need to be heard.
       - task: vuln
       - task: nilaway
       - task: test
@@ -35,6 +35,13 @@ tasks:
       # nothing at all when none is. There is no CI and no scheduler here, so
       # this is the only thing that would ever say so.
       - cmd: go run ./tools/mutants summary
+        ignore_error: true
+      # Same bargain for the e2e race sweep task test no longer runs.
+      - cmd: |
+          last=$(cat .testshard/race-swept 2>/dev/null || true)
+          behind=10
+          if [ -n "$last" ]; then behind=$(git rev-list --count "$last..HEAD" 2>/dev/null || echo 10); fi
+          if [ "$behind" -ge 10 ]; then echo "e2e race sweep: not passed in the last 10 commits — task test:race"; fi
         ignore_error: true
 
   seal:
@@ -109,16 +116,49 @@ tasks:
       - go run ./tools/kindswitch ./...
 
   test:
-    desc: Run the test suite under the race detector. Every goroutine-spawning package's goleak TestMain fails if a test leaves one running.
+    desc: Run the test suite — every package but ./e2e under the race detector, ./e2e as several processes without it (task test:race is its race sweep). Every goroutine-spawning package's goleak TestMain fails if a test leaves one running.
+    env:
+      # The race runtime sleeps a second at exit so a goroutine still running
+      # can report; goleak already fails any package that leaves one running,
+      # so the second buys nothing, and testshard pays it once per process.
+      GORACE: atexit_sleep_ms=0
     cmds:
-      # -race, and it is worth the wall clock (~2.5m to ~5.5m). A data race in
-      # the SSM data channel's retransmit path shipped green through this
-      # whole sequence, because a race is invisible to every other check here:
-      # the code compiles, the linters see nothing, and the test passes until
-      # the day two goroutines happen to interleave on a machine nobody can
-      # attach a debugger to. This is the only check that can see that class
-      # at all, and every venue transport is concurrent by construction.
-      - go test -race ./...
+      # -race on every package but ./e2e. A data race in the SSM data
+      # channel's retransmit path shipped green through this whole sequence,
+      # because a race is invisible to every other check here: the code
+      # compiles, the linters see nothing, and the test passes until the day
+      # two goroutines happen to interleave on a machine nobody can attach a
+      # debugger to. Every venue transport is concurrent by construction.
+      #
+      # ./e2e runs WITHOUT it, in shards, concurrently with the rest: under
+      # -race the suite needs ~1,100 CPU-seconds, which ten cores cannot fit
+      # in two minutes however it is split, and ./e2e is ~700 of them (pure-Go
+      # sqlite under the detector is ~15x). Without it ./e2e is ~190. The race
+      # coverage it gave moved to task test:race, which `task` nags for — it
+      # has earned its keep once (8b7d6bb, a daemon race only e2e reached).
+      #
+      # Packages whose serial tests alone outlast the rest (package-level seams
+      # keep them serial) run as shards too, still under -race; each process
+      # has its own globals, so they stay correct. Not internal/shell: its
+      # serial tests are docker timing, and four of them against one daemon
+      # turned timing into flakes.
+      - |
+        sharded="./internal/venue ./internal/web"
+        go test -race $(go list ./... | grep -v -x -F "$(go list ./e2e $sharded)") & unit=$!
+        go run ./tools/testshard -race -shards 4 $sharded & heavy=$!
+        go run ./tools/testshard ./e2e & e2e=$!
+        unit_status=0; wait $unit || unit_status=$?
+        heavy_status=0; wait $heavy || heavy_status=$?
+        e2e_status=0; wait $e2e || e2e_status=$?
+        [ $unit_status -eq 0 ] && [ $heavy_status -eq 0 ] && [ $e2e_status -eq 0 ]
+
+  test:race:
+    desc: "./e2e under the race detector, as shards — the race coverage task test leaves out for speed. ~3 minutes on a quiet machine; `task` prints a line when it has not passed in 10 commits."
+    env:
+      GORACE: atexit_sleep_ms=0
+    cmds:
+      - go run ./tools/testshard -race ./e2e
+      - mkdir -p .testshard && git rev-parse HEAD > .testshard/race-swept
 
   mutate:
     desc: Just the mutation suites — break each doc-corpus assertion in turn and require the build to notice. Part of `task test`; this is the fast way to iterate on them alone.
@@ -161,6 +201,19 @@ tasks:
     desc: "MEASURE every package with gremlins and record each in tools/mutation-ledger.json — no triage. Hours of machine time: start it when the machine will sit idle (a loaded machine makes mutants time out, and TIMED OUT scores as KILLED, so the numbers lie). Cheapest packages first and the docker-backed ones last and serially, so an interrupted night leaves the most rows; rerun to resume, a package already measured at this commit is skipped. `task mutate-all -- ./internal/foo ./internal/bar` measures just those. Triage is the mutation-sweep skill, afterwards."
     cmds:
       - go run ./tools/mutants all {{.CLI_ARGS}}
+
+  fuzz:
+    desc: "Advisory: run every Fuzz target for FUZZTIME each (default 30s). `task fuzz PKG=./internal/wire` narrows to one package. Never a gate — the seed corpus and every crasher under testdata/fuzz already run in `task test`; this is the search for new ones. A failure writes its input to testdata/fuzz/<Target>/: fix the bug and commit that file as the regression test."
+    cmds:
+      # go test -fuzz accepts exactly one target per package per run, hence the loop.
+      - |
+        set -e
+        for pkg in $(go list {{.PKG | default "./..."}}); do
+          for fn in $(go test -list '^Fuzz' "$pkg" | grep '^Fuzz' || true); do
+            echo "== $pkg $fn"
+            go test "$pkg" -run '^$' -fuzz "^${fn}\$" -fuzztime {{.FUZZTIME | default "30s"}}
+          done
+        done
 
   mutate-stale:
     desc: Which package most needs a mutation sweep — never-swept first, then by lines changed since the commit tools/mutation-ledger.json says it was last swept at.

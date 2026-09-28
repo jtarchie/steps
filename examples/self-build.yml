@@ -76,9 +76,8 @@ resource_types:
       GIT_CONFIG_GLOBAL=/dev/null git push -q \
         "https://github.com/{{ .source.repo }}.git" "refs/steps/draft:refs/heads/issue-$number"
       if [ -z "$pr" ]; then
-        { printf 'Draft: implemented, review in progress. It is marked ready when the reviewer approves.\n\n<details><summary>Plan</summary>\n\n'
-          cat steps-work/plan.md
-          printf '\n</details>\n\nCloses #%s\n' "$number"; } > steps-work/pr-draft.md
+        # No plan in the body: a reader reads the code, and a pasted plan is two thousand words of a machine describing it.
+        printf 'Draft: implemented, review in progress. The reviewer replaces this description when it approves.\n\nCloses #%s\n' "$number" > steps-work/pr-draft.md
         url=$(gh pr create --repo {{ .source.repo | shellquote }} --draft --base "$base" \
           --head "issue-$number" --title "$title" --body-file steps-work/pr-draft.md)
         pr=${url##*/}
@@ -261,6 +260,30 @@ agents:
     "task" matches you and ends the step. Run long checks in the foreground;
     if you must background one, keep its PID (`$!`) and kill only that.
 
+- name: code-reviewer
+  source:
+    model: "@claude/opus"
+  reasoning_effort: high
+  settings: project
+  tools: [read_file, list_dir, search_files, edit_file, write_file, run_shell]
+  max_turns: 0
+  # Measured: a 73-file diff on a loaded machine spent the whole of 1h in the review and was killed there, and a killed review is one nobody can use.
+  timeout: 2h
+  attempts: 2
+  system: |
+    You review an uncommitted diff in a checkout of the repository and fix
+    what an edit can fix, then stop. The issue is in steps-work/issue.md. You
+    did not write this diff and owe it no loyalty. You do not decide whether
+    it ships; a later step does, from what you leave in the tree and in
+    steps-work/review.md.
+
+    Do not commit, push, or open a pull request.
+
+    Never stop a process by pattern (`pkill -f`, `killall`): your own
+    process's command line carries this prompt, so a pattern as plain as
+    "task" matches you and ends the step. Run long checks in the foreground;
+    if you must background one, keep its PID (`$!`) and kill only that.
+
 jobs:
 # Every timeout in this file is wall clock for an agent that must run THIS
 # repository's validation before it finishes, and that suite is deliberately
@@ -271,12 +294,12 @@ jobs:
 # is not a safety limit, it is a coin flip.
 #
 # The job ceiling covers the WORST route through the loop, not the shortest:
-# 45m + 2 x (2h + 1h15m) = 7h15m, inside 8h. That arithmetic is why max_visits
+# 45m + 2 x (2h + 2h + 1h15m) = 11h15m, inside 12h. That arithmetic is why max_visits
 # below is 2 rather than 3 -- a third review does not fit under any ceiling
 # anyone would leave running unattended, and a ceiling that cannot cover the
 # loop it bounds would kill the pipeline mid-lap and lose every lap before it.
 - name: implement
-  timeout: 8h
+  timeout: 12h
   plan:
   - get: issue
     trigger: true
@@ -337,7 +360,8 @@ jobs:
   # turn zero. Asking for `note` (not `verdict`) is also what makes the note
   # REQUIRED of the reviewer -- a demand nobody made is one a model may skip,
   # and afterwards "had nothing to say" and "forgot" look identical.
-  - agent: implementer
+  - &implementer
+    agent: implementer
     inputs: [repo]
     outputs: [repo]
     dir: repo
@@ -367,7 +391,8 @@ jobs:
       echo "changed $(git status --porcelain | wc -l) files"
 
   # A scratch index, so HEAD and the real index stay put and the reviewer's `/code-review` still sees one uncommitted diff; a second pass parents on the first snapshot, so the draft branch only fast-forwards.
-  - task: snapshot
+  - &snapshot
+    task: snapshot
     inputs: [repo, issue]
     outputs: [repo]
     run: |
@@ -384,7 +409,8 @@ jobs:
       echo "snapshot $commit"
 
   # Best effort: the pre-push hook admits only the tree `task` last sealed, so an implementer that edited after its final run gets no draft, and the final put still opens the PR.
-  - try:
+  - &draft_pr
+    try:
       put: draft-pr
       resource: pr
       inputs: [repo, issue]
@@ -403,18 +429,36 @@ jobs:
   # rather than by taste. No `failure:` entry: a reviewer that errored or never
   # decided has approved nothing, and there is no honest route for that but to
   # propagate.
-  - agent: reviewer
+  # Review and decision are two steps because every message of a verdicts: step must call the verdict tool (docs/agents.md), and the /code-review skill ends its turn in its own report, never in a tool call it was not written to make. So the skill runs where no verdict is owed, and hands the decider the one thing its session would otherwise lose: what it found and left unfixed.
+  - &code_review
+    agent: code-reviewer
     inputs: [repo]
     outputs: [repo]
     dir: repo
     context_paths: [steps-work/issue.md]
-    max_visits: 2
     # The CLI expands a skill only when the prompt opens with `/`, and steps prepends context_paths: to the first message alone, so `/code-review` needs a message of its own after it.
     messages:
     - "The issue this diff must close is above. Reply ready and wait; the review instructions follow."
     - "/code-review high --fix Don't use sub agents. Please also ensure that this is secure and resilient."
     - |
-      Now decide, and call the verdict tool.
+      Write steps-work/review.md: every finding you did NOT fix, each with
+      why and what would fix it, and whether the diff closes all of
+      steps-work/issue.md or stops short (name the missing part). Write
+      "nothing left" if that is the truth. Leave your fixes in the tree.
+
+  - &reviewer
+    agent: reviewer
+    inputs: [repo]
+    outputs: [repo]
+    dir: repo
+    context_paths: [steps-work/issue.md, steps-work/review.md]
+    max_visits: 2
+    messages:
+    - |
+      The issue is above, and so is steps-work/review.md: a code review of
+      this diff already ran and left its fixes in the tree (`git diff`).
+      Check the diff against the issue and that review, then decide, and
+      call the verdict tool.
 
       If the diff does not close steps-work/issue.md, or is wrong in a way your
       edits cannot fix, call it with `revise`. Your note is the implementer's
@@ -422,10 +466,14 @@ jobs:
       is missing or wrong and what would close it, concretely and in full.
       Leave the fixes you did make in the tree.
 
-      Otherwise write steps-work/pr-body.md with exactly three sections:
-      "## What", "## Why", "## Notes" -- no more than 4 sentences each, Notes
-      saying what you verified and what you could not -- and call it with
-      `approve`.
+      Otherwise write steps-work/pr-body.md and call it with `approve`. It
+      has exactly three sections, the repository's issue format: "## What"
+      (what changes for someone using steps, in plain words), "## Why" (the
+      problem it fixes), "## Notes" (what you verified, what you could not,
+      and any decision a reviewer should check). A person reads the code for
+      the details, so do not describe the diff: no file-by-file walkthrough,
+      no function names unless one is the point, no restating the issue.
+      Under 150 words in all. No "Closes #n" line: the pipeline adds it.
 
       Before approving a diff that changes anything a person SEES in the web
       UI, screenshot it: build the binary outside the checkout, start `steps
@@ -442,7 +490,8 @@ jobs:
     - revise: implementer
 
   # Deterministic gate: the three sections, then the reviewer's edits committed on the last snapshot (none if it changed nothing) so the final push fast-forwards the draft branch.
-  - task: verify
+  - &verify
+    task: verify
     inputs: [repo, issue]
     outputs: [repo]
     run: |
@@ -460,5 +509,51 @@ jobs:
         echo "committed review fixes for #$(cat ../issue/number)"
       fi
 
+  - put: pr
+    inputs: [repo, issue]
+
+# Continue, run by hand, over an issue whose draft branch already exists: `implement` died after its draft PR, or its reviewer sent the work back and the note should get another lap. `implement` refuses that branch on purpose, and `--resume` cannot continue the run, because a resume re-runs `get: repo` and that replaces the checkout its skipped steps had changed. So this job rebuilds the starting point from the branch itself: the draft's commits become one uncommitted diff over their merge-base with the default branch, and refs/steps/draft points at the branch head, so every snapshot, the draft push and the final push fast-forward it. A person steers it by commenting on the issue: comments ride into issue.md, which is how a reviewer's note from an earlier run reaches the first pass here.
+#
+#   steps run examples/self-build.yml --job continue --var repo=owner/name --var label=self-build
+- name: continue
+  timeout: 11h
+  plan:
+  - get: issue
+    version: every
+  - get: repo
+  - task: prep-continue
+    inputs: [repo, issue]
+    outputs: [repo]
+    run: |
+      set -eu
+      number=$(cat issue/number)
+      cd repo
+      GIT_CONFIG_GLOBAL=/dev/null git fetch -q --unshallow "https://github.com/((repo)).git" HEAD
+      base=$(git rev-parse HEAD)
+      GIT_CONFIG_GLOBAL=/dev/null git fetch -q "https://github.com/((repo)).git" "refs/heads/issue-$number" \
+        || { echo "no branch issue-$number on origin: nothing to continue, run the implement job" >&2; exit 1; }
+      git update-ref refs/steps/draft FETCH_HEAD
+      git checkout -q -B "issue-$number" FETCH_HEAD
+      git reset -q "$(git merge-base "$base" FETCH_HEAD)"
+      test -n "$(git status --porcelain)" || { echo "issue-$number has no changes over the default branch" >&2; exit 1; }
+      mkdir -p steps-work
+      echo 'steps-work/' >> .git/info/exclude
+      echo '.steps-agent-out/' >> .git/info/exclude
+      cp ../issue/issue.md steps-work/issue.md
+      printf '# No new plan\n\nThe uncommitted diff is the implementation so far, from an earlier run. Its gaps are named in the issue comments (a reviewer note, or a person steering) and, on a later pass, in the reviewer note in your context.\n' > steps-work/plan.md
+      echo "continuing issue-$number: $(git status --porcelain | wc -l) files over $(git rev-parse --short HEAD)"
+  - <<: *implementer
+    messages:
+    - |
+      The tree already holds a draft implementation of steps-work/issue.md as
+      an uncommitted diff: read `git diff` first. Address the most recent
+      review note, whether it is in your context or the last comment on the
+      issue, and anything else the issue asks that the diff still lacks.
+      Keep what works.
+  - *snapshot
+  - *draft_pr
+  - *code_review
+  - *reviewer
+  - *verify
   - put: pr
     inputs: [repo, issue]

@@ -102,8 +102,16 @@ func resolveWritePath(dir, rel string) (string, error) {
 		return "", err
 	}
 
-	_, err = os.Lstat(resolved)
+	info, err := os.Lstat(resolved)
 	if err == nil {
+		// A dangling link passed resolveAgentPath (nothing to leak on a read), but O_CREATE follows it and makes its target wherever it points.
+		if info.Mode()&os.ModeSymlink != 0 {
+			_, evalErr := filepath.EvalSymlinks(resolved)
+			if evalErr != nil {
+				return "", fmt.Errorf("write_file: %q is a symlink to a path that does not exist, and writing through it could create a file outside the working directory", rel)
+			}
+		}
+
 		return resolved, nil // target exists; resolveAgentPath already covered it
 	}
 

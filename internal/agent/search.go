@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // search_files exists because the alternative — letting a model reach for a
@@ -448,7 +449,12 @@ func truncateSearchLine(s string) string {
 		return s
 	}
 
-	return s[:maxSearchLineBytes] + " …[line truncated]"
+	cut := maxSearchLineBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+
+	return s[:cut] + " …[line truncated]"
 }
 
 // matchGlob reports whether a file's path relative to the search base

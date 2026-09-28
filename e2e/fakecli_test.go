@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A stand-in for the `claude` binary, so the CLI-agent path can be exercised
@@ -66,9 +67,11 @@ cat > %[1]q/prompt-$$
 }
 
 // records returns the contents of every file matching prefix, one per
-// invocation, sorted by name so a sequential test reads them in a stable
-// order. Concurrent invocations have no meaningful order, so tests over those
-// must assert on the SET rather than on positions.
+// invocation, in the order they were written so a sequential test reads them
+// in a stable order. Concurrent invocations have no meaningful order, so tests
+// over those must assert on the SET rather than on positions.
+//
+// By write time, not by name: a record is named for its pid, and pids are not ordered — a busy machine wraps them, and "argv-100123" sorts before "argv-99247".
 func (c fakeCLI) records(t *testing.T, prefix string) []string {
 	t.Helper()
 
@@ -77,7 +80,18 @@ func (c fakeCLI) records(t *testing.T, prefix string) []string {
 		t.Fatalf("globbing %s records: %v", prefix, err)
 	}
 
-	sort.Strings(paths)
+	written := make(map[string]time.Time, len(paths))
+
+	for _, path := range paths {
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			t.Fatalf("stat %s: %v", path, statErr)
+		}
+
+		written[path] = info.ModTime()
+	}
+
+	sort.SliceStable(paths, func(i, j int) bool { return written[paths[i]].Before(written[paths[j]]) })
 
 	out := make([]string, 0, len(paths))
 	for _, path := range paths {
