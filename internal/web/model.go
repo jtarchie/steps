@@ -570,6 +570,20 @@ func sortEdges(edges []edgeView) {
 	})
 }
 
+// turnCtx is what the turn template is invoked with: the turn, and whether
+// its request was slow for its step — a question only the step can answer,
+// asked here so a streamed turn and a drawn one ask it the same way.
+type turnCtx struct {
+	runview.Turn
+	Slow bool
+	// Pending marks the synthetic turn for a request the step ended waiting on.
+	Pending bool
+}
+
+func newTurnCtx(step *stepView, turn runview.Turn) turnCtx {
+	return turnCtx{Turn: turn, Slow: step.Slow(turn.Took)}
+}
+
 // stepCtx is what the recursive step template is invoked with: the page it is
 // being drawn on, and the step to draw.
 type stepCtx struct {

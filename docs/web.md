@@ -230,7 +230,12 @@ what it spent and where it ran on its own row.
   that is not there.
 - **An agent step expands into its conversation**: the model's text each turn,
   every tool call, and any sub-agent delegation nested underneath, closing with
-  the step's `answer`.
+  the step's `answer`. Each model reply carries how long the request behind it
+  took, measured from when that request was sent (hover it for both times, in
+  UTC); a reply that took more than a tenth of the step's `timeout:` is flagged,
+  so the slow ones stand out on a folded page. A step that failed while waiting
+  on the model says how long that last request had been in flight — for a
+  timed-out step, usually the answer to where the time went.
 - **Every payload is rendered as JSON, not printed.** A call's arguments, a
   tool result, a node's content map, a resource version: parsed and
   highlighted, in the order they were recorded. A document that arrived escaped

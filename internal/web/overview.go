@@ -504,23 +504,30 @@ func timeoutForStep(timeouts map[string]time.Duration, stepName string) (time.Du
 // while running must have it cleared once it finishes, or its row still
 // carries a stale "timeout in ..." the next time something else about it
 // changes and the row is re-sent.
+//
+// Timeout, unlike Deadline, survives the step finishing: it is what a turn's
+// request time is judged slow against, and a finished step is where someone
+// reads those.
 func attachStepDeadlines(view *runView, cfg *config.Config, jobName, runSHA string) {
 	timeouts, drifted := agentTimeouts(cfg, jobName, runSHA)
 
 	for _, step := range view.Steps {
-		if drifted || step.Kind != "agent" || !step.Running() || step.Started.IsZero() {
-			step.Deadline = time.Time{}
+		step.Timeout = 0
+		step.Deadline = time.Time{}
 
+		if drifted || step.Kind != "agent" {
 			continue
 		}
 
 		timeout, known := timeoutForStep(timeouts, step.Name)
 		if !known || timeout == 0 {
-			step.Deadline = time.Time{}
-
 			continue
 		}
 
-		step.Deadline = step.Started.Add(timeout)
+		step.Timeout = timeout
+
+		if step.Running() && !step.Started.IsZero() {
+			step.Deadline = step.Started.Add(timeout)
+		}
 	}
 }
