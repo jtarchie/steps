@@ -12,6 +12,9 @@
 //	                       the in-process fake MCP fixture named <id>
 //	                       (docs_mcp_test.go) — required for mcp examples
 //	                       that run
+//	```yaml github=<id>    executed with every github-* resource's endpoint
+//	                       pointed at the in-process fake GitHub fixture
+//	                       named <id> (docs_github_test.go)
 //	```yaml noexec=<why>   schema-validated and loaded, not executed, because
 //	                       this host cannot run it — the reason is mandatory
 //	                       and drawn from a fixed vocabulary (see NoexecReason)
@@ -56,7 +59,7 @@ func (b Block) Mode() string {
 			return field
 		case field == "noexec" || strings.HasPrefix(field, "noexec="):
 			return "noexec"
-		case strings.HasPrefix(field, "test="), strings.HasPrefix(field, "mcp="), strings.HasPrefix(field, "deliver="):
+		case strings.HasPrefix(field, "test="), strings.HasPrefix(field, "mcp="), strings.HasPrefix(field, "deliver="), strings.HasPrefix(field, "github="):
 			return "run"
 		}
 	}
@@ -126,6 +129,18 @@ func (b Block) MCPID() string {
 	return ""
 }
 
+// GitHubID is the fake GitHub fixture this block's github-* resources are
+// pointed at during execution (docs_github_test.go), "" when none.
+func (b Block) GitHubID() string {
+	for _, field := range strings.Fields(b.Info) {
+		if id, ok := strings.CutPrefix(field, "github="); ok {
+			return id
+		}
+	}
+
+	return ""
+}
+
 // Name identifies the block in test output: page, line, and scenario or MCP
 // fixture if any.
 func (b Block) Name() string {
@@ -134,6 +149,10 @@ func (b Block) Name() string {
 	}
 
 	if id := b.MCPID(); id != "" {
+		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
+	}
+
+	if id := b.GitHubID(); id != "" {
 		return fmt.Sprintf("%s:%d(%s)", b.Page, b.Line, id)
 	}
 

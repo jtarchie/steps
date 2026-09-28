@@ -301,6 +301,119 @@
         }
       }
     },
+    "githubPrsSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo"],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
+          "description": "The repository, owner/name."
+        },
+        "token_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Environment variable holding the token, GH_TOKEN when unset. The variable NAME, never the token; `steps validate` refuses the pipeline while it is unset."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "The REST API base, https://api.github.com when unset; https://<host>/api/v3 for GitHub Enterprise Server."
+        },
+        "author": {
+          "type": "string",
+          "pattern": "^(@me|[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\\[bot\\])?)$",
+          "description": "Who opened it; @me is the token's own user."
+        },
+        "assignee": {
+          "type": "string",
+          "pattern": "^(@me|[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\\[bot\\])?)$",
+          "description": "Someone it is assigned to; @me is the token's own user."
+        },
+        "review_requested": {
+          "type": "string",
+          "pattern": "^(@me|[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\\[bot\\])?)$",
+          "description": "Someone whose review it directly requests; GitHub clears the request once they submit one. @me is the token's own user."
+        },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Labels that must all be on it."
+        },
+        "base": {
+          "type": "string",
+          "description": "The branch it would merge into."
+        },
+        "draft": {
+          "type": "boolean",
+          "description": "Only drafts (true) or only ready pull requests (false); both when unset."
+        },
+        "checkout": {
+          "type": "boolean",
+          "description": "Lay the tree at the version's commit into the artifact beside the metadata files. True unless set false."
+        }
+      }
+    },
+    "githubCommentsSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo"],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
+          "description": "The repository, owner/name."
+        },
+        "token_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Environment variable holding the token, GH_TOKEN when unset. The variable NAME, never the token; `steps validate` refuses the pipeline while it is unset."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "The REST API base, https://api.github.com when unset; https://<host>/api/v3 for GitHub Enterprise Server."
+        },
+        "author": {
+          "type": "string",
+          "pattern": "^(@me|[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\\[bot\\])?)$",
+          "description": "Who wrote the comment, compared without regard to case; @me is the token's own user."
+        },
+        "body": {
+          "type": "string",
+          "description": "An RE2 pattern the comment's text must contain a match for; anchor it with ^ to mean starts-with."
+        },
+        "kinds": {
+          "type": "array",
+          "items": { "enum": ["conversation", "review", "issue"] },
+          "description": "Which comments to watch: conversation (a pull request's timeline), review (inline, on its diff), issue (an issue's timeline). Conversation and review when unset."
+        },
+        "checkout": {
+          "type": "boolean",
+          "description": "Lay the tree of the pull request a comment sits on into the artifact. True unless set false; an issue has no tree."
+        }
+      }
+    },
+    "githubPostSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo"],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
+          "description": "The repository, owner/name."
+        },
+        "token_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Environment variable holding the token, GH_TOKEN when unset. The variable NAME, never the token; `steps validate` refuses the pipeline while it is unset."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "The REST API base, https://api.github.com when unset; https://<host>/api/v3 for GitHub Enterprise Server."
+        }
+      }
+    },
     "webhookSource": {
       "type": "object",
       "additionalProperties": false,
@@ -397,6 +510,18 @@
         {
           "if": { "properties": { "type": { "const": "cron" } }, "required": ["type"] },
           "then": { "properties": { "source": { "$ref": "#/$defs/cronSource" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "github-prs" } }, "required": ["type"] },
+          "then": { "properties": { "source": { "$ref": "#/$defs/githubPrsSource" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "github-comments" } }, "required": ["type"] },
+          "then": { "properties": { "source": { "$ref": "#/$defs/githubCommentsSource" } } }
+        },
+        {
+          "if": { "properties": { "type": { "enum": ["github-pr-comment", "github-pr-review"] } }, "required": ["type"] },
+          "then": { "properties": { "source": { "$ref": "#/$defs/githubPostSource" } } }
         }
       ]
     },

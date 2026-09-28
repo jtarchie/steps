@@ -65,6 +65,9 @@ func TestMain(m *testing.M) {
 		"OPENROUTER_API_KEY":       "test-key-not-used-for-any-call",
 		"OPENCODE_API_KEY":         "test-key-not-used-for-any-call",
 		"ANTHROPIC_API_KEY":        "test-key-not-used-for-any-call",
+		// The fake GitHub answers to exactly this token, so a doc example and an
+		// e2e test reach it without a t.Setenv each.
+		"GH_TOKEN": fakeGitHubToken,
 	} {
 		err := os.Setenv(key, value)
 		if err != nil {

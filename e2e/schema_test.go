@@ -151,13 +151,16 @@ func schemaDefsByType() map[string]reflect.Type {
 		// with plain yaml tags and so CAN be compared by reflection — the
 		// unlisted defs are the ones whose members go through hand-written
 		// UnmarshalYAML.
-		"exprResourceConfig": reflect.TypeOf(config.ExprResourceConfig{}),
-		"assert":             reflect.TypeOf(config.Assert{}),
-		"defaults":           reflect.TypeOf(config.Defaults{}),
-		"workspace":          reflect.TypeOf(config.WorkspaceConfig{}),
-		"webhookSource":      reflect.TypeOf(config.WebhookSource{}),
-		"webhookSignature":   reflect.TypeOf(config.WebhookSignature{}),
-		"cronSource":         reflect.TypeOf(config.CronSource{}),
+		"exprResourceConfig":   reflect.TypeOf(config.ExprResourceConfig{}),
+		"assert":               reflect.TypeOf(config.Assert{}),
+		"defaults":             reflect.TypeOf(config.Defaults{}),
+		"workspace":            reflect.TypeOf(config.WorkspaceConfig{}),
+		"webhookSource":        reflect.TypeOf(config.WebhookSource{}),
+		"webhookSignature":     reflect.TypeOf(config.WebhookSignature{}),
+		"cronSource":           reflect.TypeOf(config.CronSource{}),
+		"githubPrsSource":      reflect.TypeOf(config.GitHubPRsSource{}),
+		"githubCommentsSource": reflect.TypeOf(config.GitHubCommentsSource{}),
+		"githubPostSource":     reflect.TypeOf(config.GitHubPostSource{}),
 	}
 }
 

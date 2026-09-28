@@ -141,7 +141,15 @@ func (c *Config) resourceCredentialProblems(name string) []Problem {
 	}
 
 	resourceType, err := c.FindResourceType(resource.Type)
-	if err != nil || resourceType.Config.Backend() != BackendExpr {
+	if err != nil {
+		return nil
+	}
+
+	if resourceType.Config.Backend() == BackendGitHub {
+		return githubCredentialProblems(name, resource.Source)
+	}
+
+	if resourceType.Config.Backend() != BackendExpr {
 		return nil
 	}
 
@@ -169,6 +177,24 @@ func (c *Config) resourceCredentialProblems(name string) []Problem {
 	}
 
 	return problems
+}
+
+// githubCredentialProblems is the one variable a github-* resource reads. It
+// is a requirement rather than an allow-list, unlike a type's env:, because
+// the type cannot do anything at all without it: GitHub answers an
+// unauthenticated poller with a limit it spends in minutes, and a put cannot
+// post as nobody.
+func githubCredentialProblems(name string, source map[string]any) []Problem {
+	variable := GitHubConnectionOf(source).Token()
+
+	if value, ok := os.LookupEnv(variable); ok && value != "" {
+		return nil
+	}
+
+	return []Problem{{
+		Target: fmt.Sprintf("resource %q", name),
+		Detail: fmt.Sprintf("$%s is not set (source.token_env) — export GH_TOKEN=$(gh auth token) is one way to set it", variable),
+	}}
 }
 
 // checkMCPServers reports every mcp_servers: entry this machine cannot satisfy without a request: a stdio binary that is not on PATH, and a bearer credential whose api_key_env names an unset variable. The first would have caught a `gopls` grant on a machine without gopls installed; the second is the same treatment checkAgentCredentials gives an agent's api_key_env, and it was missing — an unset $GITHUB_PAT was knowable in microseconds and surfaced only as a failed run.

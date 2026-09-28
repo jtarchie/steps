@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1976,5 +1977,119 @@ func TestAPutsRowOpensOnWhatItProduced(t *testing.T) {
 
 	if regexp.MustCompile(`class="step passed open"[^>]*data-step="#1"`).MatchString(body) {
 		t.Error("a passed task opens too, which folds nothing")
+	}
+}
+
+// A reader opening a finished run came for what broke: only the path to it
+// opens, and every passed transcript, passed block, tolerated failure and
+// collateral abort stays one click away.
+func TestARunPageOpensOnlyThePathToAFailure(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-path", "build", "", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	start := func(id, parent int64, kind, name string) store.RunEventRow {
+		return store.RunEventRow{Type: events.TypeStepStarted, StepID: id, ParentStepID: parent, StepName: name, StepKind: kind}
+	}
+	finish := func(id, parent int64, kind, name, status string) store.RunEventRow {
+		return store.RunEventRow{Type: events.TypeStepFinished, StepID: id, ParentStepID: parent, StepName: name, StepKind: kind, Status: status}
+	}
+	output := func(id int64, text string) store.RunEventRow {
+		return store.RunEventRow{Type: events.TypeStepOutput, StepID: id, Text: text}
+	}
+	turn := func(id int64, text string) store.RunEventRow {
+		return store.RunEventRow{Type: events.TypeAgentText, StepID: id, Text: text}
+	}
+
+	appendEvents(t, pipeline.Store, "run-path", []store.RunEventRow{
+		start(1, 0, "agent", "review"), turn(1, "looks fine"), finish(1, 0, "agent", "review", "succeeded"),
+		start(2, 0, "in_parallel", "checks"),
+		start(3, 2, "task", "lint"), output(3, "lint ok"), finish(3, 2, "task", "lint", "succeeded"),
+		start(4, 2, "task", "vet"), output(4, "vet ok"), finish(4, 2, "task", "vet", "succeeded"),
+		finish(2, 0, "in_parallel", "checks", "succeeded"),
+		start(5, 0, "try", "maybe"),
+		start(6, 5, "task", "flaky"), output(6, "flaked"), finish(6, 5, "task", "flaky", "failed"),
+		finish(5, 0, "try", "maybe", "succeeded"),
+		start(7, 0, "across", "matrix"),
+		start(8, 7, "task", "cell-a"), output(8, "boom"), finish(8, 7, "task", "cell-a", "failed"),
+		start(9, 7, "agent", "cell-b"), turn(9, "half way"), finish(9, 7, "agent", "cell-b", "aborted"),
+		finish(7, 0, "across", "matrix", "failed"),
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-path", "failed")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/runs/run-path")
+
+	isOpen := func(anchor string) bool {
+		tag := openingTag(t, body, anchor)
+
+		// open is gated on the row having a body; without one, "closed"
+		// would pass whatever the rule said.
+		if !strings.Contains(tag, " data-toggle") {
+			t.Fatalf("%s has nothing to fold, so its open class proves nothing: %s", anchor, tag)
+		}
+
+		class := regexp.MustCompile(`class="([^"]*)"`).FindStringSubmatch(tag)
+		if class == nil {
+			t.Fatalf("%s has no class: %s", anchor, tag)
+		}
+
+		return slices.Contains(strings.Fields(class[1]), "open")
+	}
+
+	for anchor, want := range map[string]bool{
+		"step-1-review": false,
+		"step-2-checks": false,
+		"step-5-maybe":  false,
+		"step-7-matrix": true,
+		"step-8-cell-a": true,
+		"step-9-cell-b": false,
+	} {
+		if got := isOpen(anchor); got != want {
+			t.Errorf("%s open = %v, want %v", anchor, got, want)
+		}
+	}
+}
+
+// With passed blocks drawn closed, the fold script has to keep what the
+// reader opened visible. No JS runs here: these catch a deletion, not a
+// logic bug.
+func TestRunPageKeepsWhatTheReaderOpened(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-folds", "build", "", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	err = pipeline.Store.FinishRun(ctx, "run-folds", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	_, page := get(t, server, "/p/demo/runs/run-folds")
+
+	for want, why := range map[string]string{
+		`'steps.folds:'`:                         "folds are not kept across the reload that ends a live run",
+		`window.sessionStorage.setItem(foldsKey`: "folds are not kept across the reload that ends a live run",
+		`reveal(target);`:                        "a link to a row inside a closed block lands on a hidden row",
+		`addEventListener('focusin'`:             "a focused row vanishes when the block around it passes",
+		`closest('.step.container:not(.open)')`:  "j/k walks into rows inside closed blocks",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the page lacks %s: %s", want, why)
+		}
 	}
 }

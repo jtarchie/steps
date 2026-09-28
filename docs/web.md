@@ -183,6 +183,16 @@ what it spent and where it ran on its own row.
   would otherwise answer are folded away with it. A block wrapping a single
   step carries no count unless that step failed: one child says nothing its own
   row does not.
+- **Only the path to a failure or to live work opens by default.** A reader
+  opening a finished run came for what broke, so a failed, errored or
+  aborted step opens, and so does every block holding one; while a run is
+  live, so does a running block and the agent whose conversation is
+  streaming in. A put opens
+  on the version it produced, and a step the run never heard the end of opens
+  too. Everything else — a passed agent's transcript, a passed block, a
+  failure a `try:` tolerated, a sibling `fail_fast:` aborted — is one click
+  or <kbd>e</kbd> away. A row you open, close or focus stays the way you left
+  it, including across the reload when the run ends.
 - **The rail lights along the branch that is working.** While a run is in
   flight, every block holding something still running is marked, so a reader
   who has folded half the page still knows where to look. A failed branch is

@@ -67,6 +67,8 @@ func CheckVersions(
 		return nil, nil
 	case config.BackendCron:
 		return cronCheckVersions(ctx, rt, source, version)
+	case config.BackendGitHub:
+		return githubCheckVersions(ctx, rt, source, version)
 	case config.BackendShell:
 	}
 
@@ -293,6 +295,8 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, extr
 		return errWebhookIn
 	case config.BackendCron:
 		return cronRunIn(rt, source, version, destDir)
+	case config.BackendGitHub:
+		return githubRunIn(ctx, rt, source, version, destDir)
 	case config.BackendShell:
 	}
 
@@ -353,10 +357,8 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, ext
 		return mcpRunOut(ctx, cfg, rt, source, params, srcDir)
 	case config.BackendExpr:
 		return exprRunOut(ctx, rt, extraEnv, source, params, inputs, srcDir)
-	case config.BackendWebhook:
-		return nil, fmt.Errorf("out %q: a webhook resource cannot be put to", rt.Name)
-	case config.BackendCron:
-		return nil, fmt.Errorf("out %q: %w", rt.Name, errCronOut)
+	case config.BackendWebhook, config.BackendCron, config.BackendGitHub:
+		return builtinRunOut(ctx, rt, source, params, inputs, srcDir)
 	case config.BackendShell:
 	}
 
@@ -392,6 +394,21 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, ext
 	events.Logger(ctx).Info("resource.put", "resource_type", rt.Name, "src_dir", srcDir, "result", result)
 
 	return result, nil
+}
+
+// builtinRunOut is RunOut for the types written in Go.
+func builtinRunOut(ctx context.Context, rt config.ResourceType, source, params map[string]any, inputs PutInputs, srcDir string) (map[string]any, error) {
+	switch rt.Config.Backend() {
+	case config.BackendWebhook:
+		return nil, fmt.Errorf("out %q: a webhook resource cannot be put to", rt.Name)
+	case config.BackendCron:
+		return nil, fmt.Errorf("out %q: %w", rt.Name, errCronOut)
+	case config.BackendGitHub:
+		return githubRunOut(ctx, rt, source, params, inputs, srcDir)
+	case config.BackendMCP, config.BackendExpr, config.BackendShell:
+	}
+
+	return nil, fmt.Errorf("out %q: not a built-in type", rt.Name)
 }
 
 // decodeOutVersion parses an out: command's stdout with exact digits, as
