@@ -267,3 +267,65 @@ func TestTookDoesNotDependOnHowTheFoldWasBatched(t *testing.T) {
 		t.Errorf("batched Took = %v, split Took = %v", a, b)
 	}
 }
+
+// TestADeadSubAgentIsNotBlamedForItsParentsEnd: a sub-agent that failed
+// mid-request never answers it, and once the parent has spoken again that
+// request is over — a step then timed out in a tool was not waiting on it.
+func TestADeadSubAgentIsNotBlamedForItsParentsEnd(t *testing.T) {
+	t.Parallel()
+
+	step := foldTurns(t, []store.RunEventRow{
+		conversationRow(1, events.TypeAgentUser, 0, 0),
+		conversationRow(2, events.TypeAgentCall, time.Second, 0),
+		conversationRow(3, events.TypeAgentUser, 2*time.Second, 1),
+		conversationRow(4, events.TypeAgentResult, 30*time.Second, 0),
+		conversationRow(5, events.TypeAgentCall, 40*time.Second, 0),
+		{
+			Seq: 6, Type: events.TypeStepFinished, StepID: 1, StepName: "review", StepKind: "agent",
+			Status: "failed", At: tookT0.Add(10 * time.Minute),
+		},
+	})
+
+	if got := step.Unanswered(); got != (Turn{}) {
+		t.Errorf("Unanswered = %+v, want nothing: the step ended in a tool, not on the dead sub-agent", got)
+	}
+}
+
+// TestUnansweredDoesNotDependOnMapOrder: a request sent at the instant the
+// step ended is the newest, and it was in flight for nothing — never a
+// coin-flip with the older one beside it.
+func TestUnansweredDoesNotDependOnMapOrder(t *testing.T) {
+	t.Parallel()
+
+	step := Step{
+		Status:  "failed",
+		Ended:   tookT0.Add(10 * time.Minute),
+		pending: map[int]time.Time{0: tookT0, 1: tookT0.Add(10 * time.Minute)},
+	}
+
+	for range 64 {
+		if got := step.Unanswered(); got != (Turn{}) {
+			t.Fatalf("Unanswered = %+v, want nothing: the newest request was sent as the step ended", got)
+		}
+	}
+}
+
+// TestAnUntimedBoundaryIsNotTimedFromTheOneBeforeIt: a message with no
+// timestamp is still what the request went out after, so the reply is
+// untimed rather than billed from the boundary before it.
+func TestAnUntimedBoundaryIsNotTimedFromTheOneBeforeIt(t *testing.T) {
+	t.Parallel()
+
+	user := conversationRow(2, events.TypeAgentUser, 0, 0)
+	user.At = time.Time{}
+
+	step := foldTurns(t, []store.RunEventRow{
+		conversationRow(1, events.TypeAgentSystem, 0, 0),
+		user,
+		conversationRow(3, events.TypeAgentText, 30*time.Second, 0),
+	})
+
+	if got := step.Turns[2].Took; got != 0 {
+		t.Errorf("Took = %v, want nothing: the request's send time is unknown", got)
+	}
+}

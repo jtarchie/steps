@@ -159,6 +159,19 @@ func (s Step) Slow(took time.Duration) bool {
 // time multiplied.
 func observe(s *Step, turn *Turn) {
 	switch turn.Type {
+	case events.TypeAgentSystem, events.TypeAgentUser, events.TypeAgentResult,
+		events.TypeAgentText, events.TypeAgentCall, events.TypeAgentCompaction:
+		// A depth speaking again means every conversation below it is over:
+		// a sub-agent that died mid-request never answers, and its slot
+		// would otherwise be what Unanswered blames for the parent's end.
+		for depth := range s.pending {
+			if depth > turn.Depth {
+				delete(s.pending, depth)
+			}
+		}
+	}
+
+	switch turn.Type {
 	case events.TypeAgentText, events.TypeAgentCall, events.TypeAgentCompaction:
 		if sent, ok := s.pending[turn.Depth]; ok {
 			if !turn.At.IsZero() {
@@ -174,7 +187,10 @@ func observe(s *Step, turn *Turn) {
 	// one is sent after it: counting from before it would bill the summary
 	// to the request that follows.
 	case events.TypeAgentSystem, events.TypeAgentUser, events.TypeAgentResult, events.TypeAgentCompaction:
+		// Cleared, not kept: the old boundary is not when this request went out.
 		if turn.At.IsZero() {
+			delete(s.pending, turn.Depth)
+
 			return
 		}
 
@@ -190,27 +206,38 @@ func observe(s *Step, turn *Turn) {
 // Took is how long it had been in flight — the number a timed-out step is
 // read for, which no recorded turn carries because the reply never came. The
 // zero Turn when the step did not fail, or was not waiting on the model.
-// Failed only: a step that passed was not cut off, and one whose loop ended
-// on a tool result is not waiting on anything.
+// Failed only: a step that passed was not cut off.
+//
+// ponytail: a tool result is taken as the next request going out, so a
+// step failed by what the loop decided right after one (loop detection, a
+// required tool never satisfied, an expired question) is drawn as waiting on
+// a request never sent. The events carry no "request sent" marker; the agent
+// already times each request in nextResponse, and publishing that is the fix.
 func (s Step) Unanswered() Turn {
 	if !s.Failed() || s.Ended.IsZero() {
 		return Turn{}
 	}
 
-	var out Turn
+	var (
+		newest time.Time
+		depth  int
+		found  bool
+	)
 
-	// The newest, because that is the request the end interrupted.
-	for depth, sent := range s.pending {
-		if out.Took == 0 || sent.After(out.Sent()) || (sent.Equal(out.Sent()) && depth > out.Depth) {
-			out = Turn{Depth: depth, At: s.Ended, Took: s.Ended.Sub(sent)}
+	// The newest, because that is the request the end interrupted; the
+	// deeper on a tie, because a delegation's request goes out after its
+	// parent's. Chosen before Took is judged, so map order cannot decide it.
+	for d, sent := range s.pending {
+		if !found || sent.After(newest) || (sent.Equal(newest) && d > depth) {
+			newest, depth, found = sent, d, true
 		}
 	}
 
-	if out.Took <= 0 {
+	if !found || !s.Ended.After(newest) {
 		return Turn{}
 	}
 
-	return out
+	return Turn{Depth: depth, At: s.Ended, Took: s.Ended.Sub(newest)}
 }
 
 // Note is one TypeStepNote, as a reader sees it.
