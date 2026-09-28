@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -315,6 +316,67 @@ func TestLiveStreamClearsTheCountdownOnceAStepFinishes(t *testing.T) {
 	if strings.Contains(closedRow, "data-deadline=") {
 		t.Errorf("the step's row re-sent after it finished still carries a countdown:\n%s", closedRow)
 	}
+}
+
+// A watcher sees a running agent's conversation stream in, and the row folds
+// once it passes: the stream re-sends the row with the same rule the page
+// draws it by, so a live run does not end as a wall of open transcripts.
+func TestStreamClosesAnAgentWhenItPasses(t *testing.T) {
+	// Not parallel: each event must be its own flush, or the running state
+	// is never drawn at all.
+	shrinkRunEventLimit(t, 5000, 1)
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-live-open", "build", t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-live-open", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepName: "reviews", StepKind: "do", StepID: 1},
+		{Type: events.TypeStepStarted, StepName: "reviewer", StepKind: "agent", StepID: 2, ParentStepID: 1},
+		{Type: events.TypeAgentText, StepID: 2, Text: "reading the diff"},
+		{Type: events.TypeStepFinished, StepName: "reviewer", StepKind: "agent", StepID: 2, ParentStepID: 1, Status: "succeeded"},
+		{Type: events.TypeStepFinished, StepName: "reviews", StepKind: "do", StepID: 1, Status: "succeeded"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-live-open", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	stream := sseHTML(streamOf(t, server, "/p/demo/runs/run-live-open/events?after=0"))
+
+	for _, anchor := range []string{"step-2-reviewer", "step-1-reviews"} {
+		opens := openClasses(stream, anchor)
+		if len(opens) < 2 {
+			t.Fatalf("%s is sent %d times, want it re-sent as it moves:\n%s", anchor, len(opens), stream)
+		}
+
+		if !slices.Contains(opens, true) {
+			t.Errorf("%s is never sent open while the agent runs: %v", anchor, opens)
+		}
+
+		if opens[len(opens)-1] {
+			t.Errorf("%s is still open once it passed: %v", anchor, opens)
+		}
+	}
+}
+
+// openClasses reports, for each time the stream sends the row, whether its
+// class carries open.
+func openClasses(stream, anchor string) []bool {
+	tag := regexp.MustCompile(`id="` + regexp.QuoteMeta(anchor) + `"[^>]*class="([^"]*)"`)
+	matches := tag.FindAllStringSubmatch(stream, -1)
+	out := make([]bool, 0, len(matches))
+
+	for _, match := range matches {
+		out = append(out, slices.Contains(strings.Fields(match[1]), "open"))
+	}
+
+	return out
 }
 
 // TestStreamResumesFromLastEventID: the header a browser resends on a

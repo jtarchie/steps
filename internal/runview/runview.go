@@ -213,16 +213,38 @@ func (s Step) Block() bool {
 	return false
 }
 
-// OpenByDefault reports a row the page draws expanded. A running hook does
-// not open its step: the row would fold shut under the reader the moment the
-// hook passed. A put opens on the version it produced.
+// OpenByDefault reports a row the page draws expanded: only the path to a
+// failure or to live work, because a reader opening a finished run came for
+// what broke, and every passed transcript drawn open buries it. Everything
+// else is one click (or e) away.
+//
+// An aborted LEAF does not open: fail_fast and race: abort their siblings,
+// and opening each would rebuild the wall around the one real failure. An
+// aborted block does, so a user abort still shows where it stopped. A passed
+// block never opens for what is inside it — a failure under one was
+// tolerated by design (a try:, a race: loser), the rollup still says so, and
+// f still finds it. A running hook does not open its step: the row would
+// fold shut under the reader the moment the hook passed. A put opens on the
+// version it produced.
 func (s Step) OpenByDefault() bool {
-	if s.Failed() || s.Unreported() || len(s.Turns) > 0 || s.Block() || s.Kind == "put" {
+	switch {
+	case s.Failed() && (s.Status != "aborted" || s.Block()),
+		s.Unreported(),
+		s.Kind == "put",
+		s.Running() && (len(s.Turns) > 0 || s.Block()):
 		return true
 	}
 
+	return s.openedByChild()
+}
+
+// openedByChild reports a child that opens its parent: a failed hook, or a
+// plan step still at work. The second covers a finish the store sink dropped,
+// which leaves a running child under a finished block; the live work must not
+// be folded away.
+func (s Step) openedByChild() bool {
 	for _, child := range s.Children {
-		if child.Hook() && child.Failed() {
+		if child.Hook() && child.Failed() || !child.Hook() && child.Active() {
 			return true
 		}
 	}
