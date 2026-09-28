@@ -85,6 +85,17 @@ func failedAt(hash string) stepResult {
 	return stepResult{nodeHash: hash}
 }
 
+// settled is a block that recorded its node under hash, then ended with err:
+// a failed block names its node but chains nothing, so a to: route carries
+// the walk on under the block's parent.
+func settled(hash string, err error) stepResult {
+	if err != nil {
+		return failedAt(hash)
+	}
+
+	return ran(hash)
+}
+
 // published is the hash a step's row is shown under: its own node, never the
 // parent a guard skip passes through, which would compare the row against a
 // different step.

@@ -410,7 +410,7 @@ func (w *planWalk) fetchInPlace(ctx context.Context, step config.Step, steps []c
 
 	if res.disposition == stepChainSkipped {
 		publishStepSkipped(ctx, w.jobName, w.index, step, mark, res.published(), skipReason(res.disposition))
-		reportChainSkipped(ctx, w.jobName, w.index+1, steps[w.index+1:])
+		w.reportChainSkipped(ctx, res.nodeHash, w.index+1, steps[w.index+1:])
 
 		return true, nil
 	}

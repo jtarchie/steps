@@ -27,8 +27,11 @@ type planWalk struct {
 	pinned    map[string]string
 	provider  workspace.Provider
 	skippable map[string]bool
-	cache     *rsrc.Cache
-	cursor    *versionCursor
+	// chains is what skippable was built from, kept to name the node each
+	// step a chain skip swallows would have run under.
+	chains []merkle.Chain
+	cache  *rsrc.Cache
+	cursor *versionCursor
 
 	// resolution is the run's input sets — computed once, before planning,
 	// and the only thing fanOutGet fans out over.
@@ -153,7 +156,7 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 	}
 
 	if res.disposition == stepChainSkipped {
-		reportChainSkipped(ctx, w.jobName, w.index+1, steps[w.index+1:])
+		w.reportChainSkipped(ctx, res.nodeHash, w.index+1, steps[w.index+1:])
 
 		return true, nil
 	}
@@ -219,7 +222,15 @@ func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) bool {
 // steps from their config — it never resolves a get step's version or does any
 // of the work runSteps is skipping, so it can't reintroduce the resource
 // checks caching exists to avoid.
-func reportChainSkipped(ctx context.Context, jobName string, firstIndex int, steps []config.Step) {
+//
+// Each carries the node it replayed, so a later failed run compared against
+// this one still has a hash to compare — without it, running an unchanged job
+// twice left every step past the skip point unmarkable. No step here sits
+// behind a when: — a guard makes its chain unskippable — and hooks are never
+// published from here, so a hash always names a step's own node.
+func (w *planWalk) reportChainSkipped(ctx context.Context, skipped string, firstIndex int, steps []config.Step) {
+	hashes := replayedHashes(w.chains, skipped, len(steps))
+
 	for offset, step := range steps {
 		name := eventStepName(step)
 		if name == "" {
@@ -227,7 +238,7 @@ func reportChainSkipped(ctx context.Context, jobName string, firstIndex int, ste
 		}
 
 		logFrom(ctx).Info("job.skip", "index", firstIndex+offset, "step", name, "reason", "chain")
-		publishStepSkipped(ctx, jobName, firstIndex+offset, step, markStep(ctx), "", skipReason(stepChainSkipped))
+		publishStepSkipped(ctx, w.jobName, firstIndex+offset, step, markStep(ctx), hashes[offset], skipReason(stepChainSkipped))
 	}
 }
 

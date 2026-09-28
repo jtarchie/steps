@@ -333,7 +333,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 
 	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", agentResultRecord(res), nil)
 	if err != nil {
-		return StepOutcome{Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return StepOutcome{Hash: hash, Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
 	// After the node is recorded, so a run that could not record its own

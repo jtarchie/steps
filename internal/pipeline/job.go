@@ -357,8 +357,12 @@ func runJobPlan(
 
 	skippable := map[string]bool{}
 
+	var chains []merkle.Chain
+
 	if !skipCache {
-		chains, planErr := merkle.PlanChains(ctx, r.cfg, job.Name, job.Plan, pinned, cache, resolution.sets)
+		var planErr error
+
+		chains, planErr = merkle.PlanChains(ctx, r.cfg, job.Name, job.Plan, pinned, cache, resolution.sets)
 		if planErr != nil {
 			return fmt.Errorf("job %q: planning: %w", job.Name, planErr)
 		}
@@ -374,6 +378,7 @@ func runJobPlan(
 		pinned:          pinned,
 		provider:        provider,
 		skippable:       skippable,
+		chains:          chains,
 		cache:           cache,
 		cursor:          cursor,
 		resolution:      resolution,

@@ -599,43 +599,84 @@ func findStepEvent(collected []events.Event, eventType, stepKind, name string) *
 // TestRoutedFailureChainsUnderItsParent is why a failure's hash is published
 // from its own field: a failure a to: route consumes carries the walk on, and
 // the step it routes to must hash under the parent the failed step ran
-// beneath — chaining under the failure would move every later cache key.
+// beneath — chaining under the failure would move every later cache key. A
+// block is the same: its row names the node it recorded as failed, and
+// nothing chains under it.
 func TestRoutedFailureChainsUnderItsParent(t *testing.T) {
 	t.Parallel()
 
-	collected, st := runFixtureBeside(t, `
+	cases := []struct {
+		name, kind, failed, yaml string
+	}{
+		{name: "task", kind: "task", failed: "boom", yaml: `
+  - task: boom
+    run: exit 1
+    to: {failure: recover}
+`},
+		{name: "do block", kind: "do", yaml: `
+  - do:
+    - task: boom
+      run: exit 1
+    to: {failure: recover}
+`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			collected, st := runFixtureBeside(t, `
 jobs:
 - name: build
   plan:
   - task: first
     run: "true"
-  - task: boom
-    run: exit 1
-    to: {failure: recover}
-  - task: recover
+`+tc.yaml+`  - task: recover
     run: "true"
 `, false, nil)
 
-	first := findStepEvent(collected, events.TypeStepFinished, "task", "first")
-	boom := findStepEvent(collected, events.TypeStepFinished, "task", "boom")
-	recovered := findStepEvent(collected, events.TypeStepFinished, "task", "recover")
+			first := findStepEvent(collected, events.TypeStepFinished, "task", "first")
+			failed := findKindEvent(collected, events.TypeStepFinished, tc.kind, tc.failed)
+			recovered := findStepEvent(collected, events.TypeStepFinished, "task", "recover")
 
-	if first == nil || boom == nil || recovered == nil {
-		t.Fatalf("missing step_finished: first=%v boom=%v recover=%v", first, boom, recovered)
+			if first == nil || failed == nil || recovered == nil {
+				t.Fatalf("missing step_finished: first=%v failed=%v recover=%v", first, failed, recovered)
+			}
+
+			if failed.Hash == "" {
+				t.Fatal("the routed failure published no hash; this test guards nothing")
+			}
+
+			nodes, err := st.NodesByHash(context.Background(), []string{recovered.Hash, failed.Hash})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got := nodes[recovered.Hash].ParentHash; got != first.Hash {
+				t.Errorf("recover chained under %q, want %q (the step before the failure)", got, first.Hash)
+			}
+
+			if node, ok := nodes[failed.Hash]; !ok || node.Status != "failed" {
+				t.Errorf("the failure's row names %+v (recorded=%v), want the node it recorded as failed", node, ok)
+			}
+		})
+	}
+}
+
+// findKindEvent is findStepEvent for a step that may publish under a name the
+// fixture does not spell: an empty name matches the first of its kind.
+func findKindEvent(collected []events.Event, eventType, stepKind, name string) *events.Event {
+	if name != "" {
+		return findStepEvent(collected, eventType, stepKind, name)
 	}
 
-	if boom.Hash == "" {
-		t.Fatal("the routed failure published no hash; this test guards nothing")
+	for i := range collected {
+		if collected[i].Type == eventType && collected[i].StepKind == stepKind {
+			return &collected[i]
+		}
 	}
 
-	nodes, err := st.NodesByHash(context.Background(), []string{recovered.Hash})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if got := nodes[recovered.Hash].ParentHash; got != first.Hash {
-		t.Errorf("recover chained under %q, want %q (the step before the failure)", got, first.Hash)
-	}
+	return nil
 }
 
 // TestGuardSkipPublishesNoHash: a skip row is compared against the last
@@ -734,4 +775,94 @@ func taskHash(t *testing.T, cfg *config.Config, step config.Step, parent string)
 	}
 
 	return hash
+}
+
+// TestChainReplayPublishesEachStepsOwnNode: a failed run is compared against
+// the last passed one, and running an unchanged job twice makes that a replay
+// whose steps past the skip point are published without running. Each must
+// carry the node it replayed — not the skip point's, not "" — or the step that
+// later breaks has nothing to be compared with.
+func TestChainReplayPublishesEachStepsOwnNode(t *testing.T) {
+	t.Parallel()
+
+	run := fixtureRunner(t, `
+jobs:
+- name: build
+  plan:
+  - task: prep
+    run: "true"
+  - task: compile
+    run: "true"
+  - task: package
+    run: "true"
+`)
+
+	ran, replayed := run(), run()
+
+	for _, name := range []string{"prep", "compile", "package"} {
+		finished := findStepEvent(ran, events.TypeStepFinished, "task", name)
+		skipped := findStepEvent(replayed, events.TypeStepSkipped, "task", name)
+
+		if finished == nil || skipped == nil {
+			t.Fatalf("%s: finished=%v skipped=%v, want a run then a replay", name, finished, skipped)
+		}
+
+		if finished.Hash == "" || skipped.Hash != finished.Hash {
+			t.Errorf("%s replayed as %q, want the node it ran as %q", name, skipped.Hash, finished.Hash)
+		}
+	}
+}
+
+// fixtureRunner loads yaml's build job over one store and returns what runs
+// it — green, or the test fails — handing back everything that run published.
+func fixtureRunner(t *testing.T, yaml string) func() []events.Event {
+	t.Helper()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fixture.yml")
+
+	err := os.WriteFile(path, []byte(yaml), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	job, err := cfg.FindJob("build")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	t.Cleanup(func() { _ = st.Close() })
+
+	provider, err := workspace.NewProvider(nil, false)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	t.Cleanup(func() { _ = provider.Close() })
+
+	return func() []events.Event {
+		var collected []events.Event
+
+		bus := events.New(func(e events.Event) { collected = append(collected, e) })
+
+		runErr := RunJob(events.WithBus(context.Background(), bus), cfg, job, nil, provider, st, false)
+
+		bus.Close()
+
+		if runErr != nil {
+			t.Fatalf("RunJob: %v", runErr)
+		}
+
+		return collected
+	}
 }

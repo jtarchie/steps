@@ -80,7 +80,7 @@ func runAcrossStep(ctx context.Context, r stepRunner, i int, step config.Step, p
 	}
 	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, nil, cellErr)
 
-	return ran(hash), cellErr
+	return settled(hash, cellErr), cellErr
 }
 
 // resetCollectedArtifacts replaces each artifact a collecting matrix captures

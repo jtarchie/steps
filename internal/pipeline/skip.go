@@ -5,6 +5,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/store"
@@ -37,6 +38,36 @@ func computeChainSkippable(ctx context.Context, st store.Store, jobName string, 
 	}
 
 	return chainSkippable, nil
+}
+
+// replayedHashes is the node each of the count plan steps after skipped holds
+// in the chains through it. A chain has one node per plan step, so position
+// maps to position. A step is "" where the chains through skipped disagree —
+// a later get fanning out binds a different version in each — so a row never
+// names a node another build ran.
+func replayedHashes(chains []merkle.Chain, skipped string, count int) []string {
+	hashes := make([]string, count)
+	seen := false
+
+	for _, chain := range chains {
+		at := slices.IndexFunc(chain.Nodes, func(node merkle.Node) bool { return node.Hash == skipped })
+		if skipped == "" || at < 0 || len(chain.Nodes)-at-1 != count {
+			continue
+		}
+
+		for offset, node := range chain.Nodes[at+1:] {
+			switch {
+			case !seen:
+				hashes[offset] = node.Hash
+			case hashes[offset] != node.Hash:
+				hashes[offset] = ""
+			}
+		}
+
+		seen = true
+	}
+
+	return hashes
 }
 
 // buildSkippableIndex returns, for every node hash reachable across chains,

@@ -65,7 +65,7 @@ func runParallelStep(ctx context.Context, r stepRunner, i int, step config.Step,
 	}
 	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, nil, blockErr)
 
-	return ran(hash), blockErr
+	return settled(hash, blockErr), blockErr
 }
 
 // runBranches executes every branch, bounded by limit, and collects one result
@@ -273,7 +273,7 @@ func runRaceStep(ctx context.Context, r stepRunner, i int, step config.Step, par
 	}
 	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, nil, raceErr)
 
-	return ran(hash), raceErr
+	return settled(hash, raceErr), raceErr
 }
 
 // raceBranches starts every branch and returns the index of the first to
