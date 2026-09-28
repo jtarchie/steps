@@ -191,21 +191,26 @@ func startWebFor(t *testing.T, path string, args ...string) *webProcess {
 	return served
 }
 
-// settleChecks is how many consecutive quiet reads of the queue count as a
-// poll-and-drain cycle finished. Three, spaced a poll apart: one is a queue
-// that has not been filled yet, and two is a queue between a poll and the
-// claim it caused.
-const settleChecks = 3
+// settlePolls is how many whole polls must land after settle starts before an
+// idle queue counts. A poll counts once EVERY resource has been checked since
+// the last one counted: the poller runs one poll at a time, checking each
+// resource and then enqueueing, so a full set of newer checks means every
+// earlier poll has finished enqueueing. Two, because the first is the poll that
+// saw what the test wrote, and only the one after it proves its enqueue landed.
+const settlePolls = 2
 
 // settle is what `steps web --once` returning used to mean: one whole
 // poll-and-drain cycle, finished.
 //
 // Both halves are load-bearing. Waiting only for an idle queue answers
-// immediately — before the poll that would fill it has run — so it first waits
-// for a check to LAND after this call started, which is what proves the daemon
-// has seen whatever the test just wrote. Then it waits for the drain behind
-// that check, several intervals in a row, because a queue between a poll and
-// the claim it caused is momentarily empty too.
+// immediately — before the poll that would fill it has run — so it waits for
+// checks to LAND after this call started, which is what proves the daemon has
+// seen whatever the test just wrote. Then it waits for the drain behind them.
+//
+// Counted per whole poll, never per check or per tick: a poll records its
+// checks BEFORE it enqueues, so a queue read between the two is empty, and
+// counting ticks let a loaded machine stretch that gap past the quiet window —
+// the cold-start build then landed after the test had cleared its output.
 //
 // ONE handle for the whole wait, deliberately: opening a sqlite database is
 // the expensive part of a probe, and at two opens per 60ms tick this put the
@@ -216,18 +221,18 @@ func settle(t *testing.T, state, name string, resources ...string) {
 	st := waitForStore(t, state, name)
 	defer func() { _ = st.Close() }()
 
-	before := lastCheck(t, st, resources)
+	seen := lastCheck(t, st, resources)
 	deadline := time.Now().Add(60 * time.Second)
-	quiet := 0
+	polls := 0
 
 	for time.Now().Before(deadline) {
-		if lastCheck(t, st, resources).After(before) && queueIsIdle(t, st) {
-			quiet++
-			if quiet >= settleChecks {
-				return
-			}
-		} else {
-			quiet = 0
+		if oldestCheck(t, st, resources).After(seen) {
+			polls++
+			seen = lastCheck(t, st, resources)
+		}
+
+		if polls >= settlePolls && queueIsIdle(t, st) {
+			return
 		}
 
 		time.Sleep(60 * time.Millisecond)
@@ -276,6 +281,30 @@ func lastCheck(t *testing.T, st store.Store, resources []string) time.Time {
 	}
 
 	return newest
+}
+
+// oldestCheck is when the least recently checked of resources was last checked; zero while any never has been.
+func oldestCheck(t *testing.T, st store.Store, resources []string) time.Time {
+	t.Helper()
+
+	var oldest time.Time
+
+	for i, resource := range resources {
+		checked, found, err := st.LastChecked(t.Context(), resource)
+		if err != nil {
+			t.Fatalf("LastChecked(%s): %v", resource, err)
+		}
+
+		if !found {
+			return time.Time{}
+		}
+
+		if i == 0 || checked.CheckedAt.Before(oldest) {
+			oldest = checked.CheckedAt
+		}
+	}
+
+	return oldest
 }
 
 // queueIsIdle reports a pipeline with nothing pending and nothing running.
