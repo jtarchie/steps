@@ -72,7 +72,7 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (c
 	defer cancel()
 
 	prepared.conv.usage = attachUsage(ctx, prepared.conv.usage)
-	defer prepared.conv.usage.finish()
+	defer prepared.conv.usage.finish(ctx)
 
 	agent := prepared.agent
 	ri := prepared.ri

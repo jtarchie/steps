@@ -75,7 +75,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 	// there: invisible to a job budget: and missing from the run's usage
 	// report.
 	prepared.conv.usage = attachUsage(ctx, prepared.conv.usage)
-	defer prepared.conv.usage.finish()
+	defer prepared.conv.usage.finish(ctx)
 
 	// Publish it to the tools, the same as the hosted path does once
 	// attachUsage has guaranteed a non-nil accumulator. The bridge copies
@@ -300,7 +300,7 @@ func runCLIRounds(
 		// Files are owed by the STEP, so a message with another after it is
 		// not the moment to ask for them: the question that produces the file
 		// may be the one still unasked.
-		if err != nil || !last || !nudgeCLIForOwed(prepared, state, *nudges) {
+		if err != nil || !last || !nudgeCLIForOwed(ctx, prepared, state, *nudges) {
 			//nolint:wrapcheck // the attempt already wrapped and classified its own failure
 			return err
 		}
@@ -481,7 +481,7 @@ func pendingCLIMessage(prepared preparedAgentStep, sent int, state *cliStepState
 // has no turns left to spend on another round — after which
 // assertAgentResponse reports the mismatch exactly as it would have anyway.
 // The nudge buys the model chances; it never changes the verdict on them.
-func nudgeCLIForOwed(prepared preparedAgentStep, state *cliStepState, nudges int) bool {
+func nudgeCLIForOwed(ctx context.Context, prepared preparedAgentStep, state *cliStepState, nudges int) bool {
 	unmet, _ := prepared.conv.expect.owed(state.trajectory)
 	if len(unmet) == 0 || nudges >= maxNudges {
 		return false
@@ -491,7 +491,7 @@ func nudgeCLIForOwed(prepared preparedAgentStep, state *cliStepState, nudges int
 		return false
 	}
 
-	slog.Info("agent.cli.nudge",
+	slog.InfoContext(ctx, "agent.cli.nudge",
 		"agent", prepared.ri.AgentName,
 		"cli", prepared.ri.CLI,
 		"round", nudges+1,

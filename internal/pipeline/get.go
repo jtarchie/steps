@@ -323,8 +323,8 @@ func (w *planWalk) runTriggeredBuild(
 
 	fetchCtx, placed := withPlacementSink(ctx)
 
-	// Notes about the fetch are the get's, and the context here is its CHILDREN'S (ctx holds the get as their parent), so name the get itself: recorded against no step, the version it fetched was drawn apart from its row.
-	fetchCtx = events.WithStepID(fetchCtx, parentStepFrom(ctx))
+	// Notes and log lines about the fetch are the get's, and the context here is its CHILDREN'S (ctx holds the get as their parent), so name the get itself: recorded against no step, the version it fetched was drawn apart from its row.
+	fetchCtx = withStepLogger(events.WithStepID(fetchCtx, parentStepFrom(ctx)), w.index, step)
 
 	err = fetchGetStepWithStep(fetchCtx, w.cfg, w.st, step, step.Get, resource, resourceType, version, bw)
 

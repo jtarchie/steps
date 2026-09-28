@@ -44,16 +44,7 @@ func withRunLogger(ctx context.Context, cfg *config.Config, runID, jobName strin
 // Set per dispatch, so the concurrent branches of an in_parallel or an
 // across: each carry their own identity rather than sharing the block's.
 func withStepLogger(ctx context.Context, i int, step config.Step) context.Context {
-	var resource string
-
-	kind, _ := step.Kind()
-
-	switch kind { //nolint:exhaustive // only a get and a put concern a resource; every other kind clears it
-	case config.StepKindGet:
-		resource = step.GetResourceName()
-	case config.StepKindPut:
-		resource = step.PutResourceName()
-	}
+	resource, _ := stepResourceName(step)
 
 	return events.WithLogAttrs(ctx, "index", i, "step", eventStepName(step), "kind", stepKindName(step), "resource", resource)
 }
@@ -61,7 +52,9 @@ func withStepLogger(ctx context.Context, i int, step config.Step) context.Contex
 // withHookLogger marks what a hook body produces as the hook's rather than
 // the step's it hangs off. A hook holds no plan position, so it carries its
 // scope label instead of an index — inventing one would file its output under
-// an unrelated step.
-func withHookLogger(ctx context.Context, scope, hook string) context.Context {
-	return events.WithLogAttrs(ctx, "hook", hook, "scope", scope)
+// an unrelated step. The body is stamped over the guarded step's identity,
+// which the hook's context inherits: left alone, a task hook on a get logged
+// as that get, resource and all.
+func withHookLogger(ctx context.Context, scope, hook string, body config.Step) context.Context {
+	return events.WithLogAttrs(withStepLogger(ctx, 0, body), "index", "", "hook", hook, "scope", scope)
 }

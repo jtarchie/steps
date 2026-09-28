@@ -461,16 +461,20 @@ func WithLogAttrs(ctx context.Context, args ...any) context.Context {
 
 // LogHandler wraps inner so every record written with a context carries that
 // context's WithLogAttrs attributes, ahead of the call site's own — identity
-// first, where the eye scans for it. A key the call site passed wins over the
-// context's, so no key is printed twice, and wrapping twice writes each
-// attribute once for the same reason. Attributes land inside any group the
-// logger has open; nothing here opens one.
+// first, where the eye scans for it. A key the call site passed, or a
+// Logger.With in the same group added, wins over the context's, so no key is
+// printed twice, and wrapping twice writes each attribute once for the same
+// reason. Attributes land inside any group the logger has open; nothing here
+// opens one.
 func LogHandler(inner slog.Handler) slog.Handler {
 	return ctxHandler{inner: inner}
 }
 
 type ctxHandler struct {
 	inner slog.Handler
+	// preset is the keys WithAttrs already gave inner in the innermost open
+	// group, which is where a context attribute would land beside them.
+	preset []string
 }
 
 func (h ctxHandler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -487,20 +491,12 @@ func (h ctxHandler) Handle(ctx context.Context, r slog.Record) error {
 		return h.inner.Handle(ctx, r) //nolint:wrapcheck // a pass-through: the wrapped handler's error is the answer
 	}
 
-	own := make(map[string]bool, r.NumAttrs())
-
-	r.Attrs(func(a slog.Attr) bool {
-		own[a.Key] = true
-
-		return true
-	})
-
 	// A new record rather than r.AddAttrs, which only appends; PC carried so
 	// AddSource still names the call site.
 	out := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
 
 	for _, a := range attrs {
-		if !own[a.Key] && !a.Value.Equal(slog.StringValue("")) {
+		if !a.Value.Equal(slog.StringValue("")) && !slices.Contains(h.preset, a.Key) && !recordHas(r, a.Key) {
 			out.AddAttrs(a)
 		}
 	}
@@ -514,11 +510,34 @@ func (h ctxHandler) Handle(ctx context.Context, r slog.Record) error {
 	return h.inner.Handle(ctx, out) //nolint:wrapcheck // a pass-through: the wrapped handler's error is the answer
 }
 
+// recordHas scans rather than indexing into a map: a line carries a handful
+// of attributes, and this runs for every one written.
+func recordHas(r slog.Record, key string) bool {
+	found := false
+
+	r.Attrs(func(a slog.Attr) bool {
+		found = a.Key == key
+
+		return !found
+	})
+
+	return found
+}
+
 func (h ctxHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return ctxHandler{inner: h.inner.WithAttrs(attrs)}
+	preset := slices.Clip(h.preset)
+	for _, a := range attrs {
+		preset = append(preset, a.Key)
+	}
+
+	return ctxHandler{inner: h.inner.WithAttrs(attrs), preset: preset}
 }
 
 func (h ctxHandler) WithGroup(name string) slog.Handler {
+	if name == "" {
+		return h
+	}
+
 	return ctxHandler{inner: h.inner.WithGroup(name)}
 }
 

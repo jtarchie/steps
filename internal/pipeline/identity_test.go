@@ -144,17 +144,68 @@ jobs:
         resource: alpha
 `)
 
+	// resource.fetched too: a first get fetches inside the build it fans out
+	// into, whose context deliberately does not carry the get's identity.
+	for _, msg := range []string{"msg=job.step.finished", "msg=resource.fetched"} {
+		line := ""
+
+		for candidate := range strings.SplitSeq(out, "\n") {
+			if strings.Contains(candidate, msg+" ") {
+				line = candidate
+
+				break
+			}
+		}
+
+		if logField(line, "step") != "src" || logField(line, "resource") != "alpha" {
+			t.Errorf("%s logged step=%q resource=%q, want src/alpha: %q", msg, logField(line, "step"), logField(line, "resource"), line)
+		}
+	}
+}
+
+// TestAHookBodyLogsAsItselfNotItsStep: a hook runs under the context of the
+// step it guards, and a task hook on a get used to log as that get — its
+// index, kind and resource — the same misfiling withHookIdentity undoes for
+// events.
+func TestAHookBodyLogsAsItselfNotItsStep(t *testing.T) {
+	// Not t.Parallel(): mutates slog's default logger.
+	out := captureRun(t, `
+resource_types:
+  - name: dummy
+    config:
+      check: 'echo ''[{"ref":"v1"}]'''
+      in: "true"
+
+resources:
+  - name: alpha
+    type: dummy
+    source: {key: a}
+  - name: beta
+    type: dummy
+    source: {key: b}
+
+jobs:
+  - name: build
+    plan:
+      - get: alpha
+      - get: beta
+        on_success:
+          task: tell
+          run: echo fetched
+`)
+
 	for line := range strings.SplitSeq(out, "\n") {
-		if strings.Contains(line, "job.step.finished") && logField(line, "kind") == "get" {
-			if logField(line, "step") != "src" || logField(line, "resource") != "alpha" {
-				t.Errorf("aliased get logged step=%q resource=%q, want src/alpha: %s", logField(line, "step"), logField(line, "resource"), line)
+		if strings.Contains(line, "job.step.finished") && logField(line, "hook") == "on_success" {
+			if logField(line, "step") != "tell" || logField(line, "kind") != "task" ||
+				logField(line, "resource") != "" || logField(line, "index") != "" {
+				t.Errorf("hook body logged as its enclosing step: %s", line)
 			}
 
 			return
 		}
 	}
 
-	t.Fatalf("no get finished:\n%s", out)
+	t.Fatalf("no hook finished:\n%s", out)
 }
 
 // TestJobHookKeepsItsJobAndDropsTheStepIndex pins what a hook body hands to

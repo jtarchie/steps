@@ -601,10 +601,10 @@ func agentBudgetLabel(step string, delegated int) string {
 // per conversation, however it ended: a step that failed still spent what it
 // spent, and leaving that out of the job total would under-report exactly the
 // runs worth investigating.
-func (s *stepUsage) finish() {
+func (s *stepUsage) finish(ctx context.Context) {
 	spent := s.snapshot()
 
-	logStepUsage(spent, s.budget)
+	logStepUsage(ctx, spent, s.budget)
 
 	if s.run != nil {
 		_ = s.run.Add(spent)
@@ -667,11 +667,11 @@ func budgetExceededError(label string, spent, budget int) error {
 // logStepUsage reports what one agent step spent. It runs whether or not a
 // ceiling is configured — being able to see the number is the half of this
 // that carries no risk and tells you which ceilings are worth setting.
-func logStepUsage(usage StepUsage, budget int) {
+func logStepUsage(ctx context.Context, usage StepUsage, budget int) {
 	if usage.Total == 0 {
 		// The provider reported nothing. Say so at debug rather than logging
 		// a confident zero, which reads as "this step was free".
-		slog.Debug("agent.usage", "agent", usage.Step, "reported", false)
+		slog.DebugContext(ctx, "agent.usage", "agent", usage.Step, "reported", false)
 
 		return
 	}
@@ -687,7 +687,7 @@ func logStepUsage(usage StepUsage, budget int) {
 		fields = append(fields, "budget_tokens", budget)
 	}
 
-	slog.Info("agent.usage", fields...)
+	slog.InfoContext(ctx, "agent.usage", fields...)
 }
 
 // saveUsageArgs is what a recorded agent step's spend needs beyond the tokens

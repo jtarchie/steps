@@ -195,7 +195,7 @@ func (t *requestRetryTransport) retryLoop(req *http.Request) (*http.Response, er
 			return resp, err
 		}
 
-		t.logRetry(resp, err, attempt, attempts)
+		t.logRetry(req.Context(), resp, err, attempt, attempts)
 		discard(resp)
 
 		select {
@@ -237,7 +237,7 @@ func (t *requestRetryTransport) retryable(resp *http.Response, err error) bool {
 	return retryableStatus(resp.StatusCode) //nolint:nilaway // err is nil here, and a RoundTripper returning a nil error must return a response
 }
 
-func (t *requestRetryTransport) logRetry(resp *http.Response, err error, attempt, attempts int) {
+func (t *requestRetryTransport) logRetry(ctx context.Context, resp *http.Response, err error, attempt, attempts int) {
 	fields := []any{
 		"agent", t.agent,
 		"model", t.model,
@@ -251,7 +251,7 @@ func (t *requestRetryTransport) logRetry(resp *http.Response, err error, attempt
 		fields = append(fields, "status", resp.StatusCode) //nolint:nilaway // the else of err != nil: a RoundTripper returning a nil error must return a response
 	}
 
-	slog.Warn("agent.request_retry", fields...)
+	slog.WarnContext(ctx, "agent.request_retry", fields...)
 }
 
 // isClientRetry reports whether the SDK is reissuing a request it already sent

@@ -458,7 +458,7 @@ func (d *daemon) start(
 	// Only reachable if two sets of one name interleaved, which the lock above prevents, so this is the assertion rather than a path.
 	if err != nil {
 		cancel()
-		slog.Error("web.register", "pipeline", name, "error", err)
+		slog.ErrorContext(loopCtx, "web.register", "error", err)
 
 		return
 	}

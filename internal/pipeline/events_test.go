@@ -910,3 +910,26 @@ func fixtureRunner(t *testing.T, yaml string) func() []events.Event {
 		return collected
 	}
 }
+
+type refusingEvents struct{ store.Events }
+
+func (refusingEvents) AppendRunEvent(context.Context, store.RunEventRow) error {
+	return os.ErrPermission
+}
+
+// TestAnUnpersistedEventNamesItsRun: the sink runs off the run's context, so
+// the one line saying a transcript lost an event carries the run itself — a
+// daemon's several pipelines share the log.
+func TestAnUnpersistedEventNamesItsRun(t *testing.T) {
+	var buf bytes.Buffer
+
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	StoreSink(refusingEvents{})(events.Event{RunID: "r-42", Type: events.TypeStepFinished})
+
+	if !strings.Contains(buf.String(), "run=r-42") {
+		t.Fatalf("line = %q", buf.String())
+	}
+}

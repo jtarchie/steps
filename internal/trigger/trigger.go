@@ -373,7 +373,7 @@ func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, 
 	for resourceName, obs := range observed {
 		err := advance(ctx, st, resourceName, obs)
 		if err != nil {
-			return enqueued, err
+			return enqueued, checkFailure{resource: resourceName, err: err}
 		}
 	}
 
@@ -382,7 +382,7 @@ func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, 
 	return enqueued, nil
 }
 
-// checkFailure is a resource's turn in a poll failing, carrying which resource so the line reporting it can say so. Its text is the underlying error's, which already names the resource.
+// checkFailure is a resource's turn in a poll failing — its check or its advance — carrying which resource so the line reporting it can say so. Its text is the underlying error's, which already names the resource.
 type checkFailure struct {
 	resource string
 	err      error

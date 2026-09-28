@@ -34,13 +34,15 @@ func HookHandler(current ConfigSource, st HookStore) func(w http.ResponseWriter,
 
 // receive runs a delivery in the order that keeps an unverified one from reaching anything the pipeline wrote: verify, then the pipeline's expressions, then one transaction.
 func receive(w http.ResponseWriter, r *http.Request, cfg *config.Config, st HookStore, name string) {
-	receiver, found := receiverFor(w, r, cfg, name)
+	ctx := events.WithLogAttrs(r.Context(), "pipeline", cfg.Name, "revision", cfg.Revision.SHA)
+
+	receiver, found := receiverFor(ctx, w, cfg, name)
 	if !found {
 		return
 	}
 
 	// Only after receiverFor resolved it: the path segment is the sender's, and a guessed name must never become a line's identity.
-	ctx := events.WithLogAttrs(r.Context(), "pipeline", cfg.Name, "revision", cfg.Revision.SHA, "resource", name)
+	ctx = events.WithLogAttrs(ctx, "resource", name)
 
 	body, valid := verified(ctx, w, r, receiver, name)
 	if !valid {
@@ -64,11 +66,11 @@ func receive(w http.ResponseWriter, r *http.Request, cfg *config.Config, st Hook
 		printf("webhook: %s filtered out a delivery\n", name)
 		ok(w)
 	default:
-		record(ctx, w, r, cfg, st, name, result.Delivery)
+		record(ctx, w, cfg, st, name, result.Delivery)
 	}
 }
 
-func receiverFor(w http.ResponseWriter, r *http.Request, cfg *config.Config, name string) (*webhook.Receiver, bool) {
+func receiverFor(ctx context.Context, w http.ResponseWriter, cfg *config.Config, name string) (*webhook.Receiver, bool) {
 	if !hasWebhookResources(cfg) {
 		http.Error(w, "no webhook resources in this pipeline", http.StatusNotFound)
 
@@ -85,7 +87,7 @@ func receiverFor(w http.ResponseWriter, r *http.Request, cfg *config.Config, nam
 
 	receiver, err := rsrc.Receiver(*res)
 	if err != nil {
-		slog.ErrorContext(r.Context(), "webhook.config", "pipeline", cfg.Name, "resource", name, "error", err)
+		slog.ErrorContext(ctx, "webhook.config", "resource", name, "error", err)
 		http.Error(w, "webhook misconfigured", http.StatusInternalServerError)
 
 		return nil, false
@@ -124,8 +126,8 @@ func verified(ctx context.Context, w http.ResponseWriter, r *http.Request, recei
 	return body, true
 }
 
-func record(ctx context.Context, w http.ResponseWriter, r *http.Request, cfg *config.Config, st HookStore, name string, accepted webhook.Delivery) {
-	dispatch, err := deliveryDispatch(r, cfg, st, name)
+func record(ctx context.Context, w http.ResponseWriter, cfg *config.Config, st HookStore, name string, accepted webhook.Delivery) {
+	dispatch, err := deliveryDispatch(ctx, cfg, st, name)
 	if err != nil {
 		slog.ErrorContext(ctx, "webhook.enqueue", "resource", name, "error", err)
 		http.Error(w, "could not record the delivery", http.StatusInternalServerError)
@@ -157,8 +159,8 @@ func record(ctx context.Context, w http.ResponseWriter, r *http.Request, cfg *co
 }
 
 // deliveryDispatch is what a delivery queues: every trigger: true job whose passed: constraints hold — or, while the pipeline is paused, nothing yet.
-func deliveryDispatch(r *http.Request, cfg *config.Config, st HookStore, name string) (store.Dispatch, error) {
-	paused, err := st.Paused(r.Context())
+func deliveryDispatch(ctx context.Context, cfg *config.Config, st HookStore, name string) (store.Dispatch, error) {
+	paused, err := st.Paused(ctx)
 	if err != nil || paused {
 		return store.Dispatch{Held: paused}, err //nolint:wrapcheck // logged with the resource by the caller
 	}
@@ -166,7 +168,7 @@ func deliveryDispatch(r *http.Request, cfg *config.Config, st HookStore, name st
 	var dispatch store.Dispatch
 
 	for _, job := range AffectedJobs(cfg, name) {
-		ready, err := jobReadyFor(r.Context(), st, job)
+		ready, err := jobReadyFor(ctx, st, job)
 		if err != nil {
 			return dispatch, err
 		}

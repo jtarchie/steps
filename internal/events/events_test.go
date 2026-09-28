@@ -490,6 +490,19 @@ func TestLogAttrsSurviveLoggerWith(t *testing.T) {
 	}
 }
 
+func TestLogAttrsYieldToLoggerWith(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	ctx := WithLogAttrs(t.Context(), "job", "ctx", "run", "7")
+	slog.New(LogHandler(slog.NewTextHandler(&buf, nil))).With("job", "with").InfoContext(ctx, "msg")
+
+	if line := buf.String(); strings.Count(line, "job=") != 1 || !strings.Contains(line, "job=with") || !strings.Contains(line, "run=7") {
+		t.Fatalf("line = %q", line)
+	}
+}
+
 func TestLogHandlerKeepsTheSource(t *testing.T) {
 	t.Parallel()
 

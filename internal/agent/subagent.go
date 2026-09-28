@@ -239,7 +239,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	// Without this, chargeDelegated never fires: the parent's budget is never
 	// debited for what this delegation spent, and the child's own spend never
 	// reaches the job total.
-	defer conv.usage.finish()
+	defer conv.usage.finish(ctx)
 
 	events.Note(ctx, events.NoteInfo, "agent: "+c.ri.AgentName+" (sub-agent)")
 

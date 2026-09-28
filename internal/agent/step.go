@@ -541,7 +541,7 @@ func runOneConversation(
 	convCtx, cancel := withAgentDeadline(ctx, timeout)
 	defer cancel()
 
-	logCompactionBudget(ri)
+	logCompactionBudget(ctx, ri)
 
 	requests := &requestCounter{}
 

@@ -108,7 +108,7 @@ func runMatchedHook(ctx context.Context, scope hookScope, name string, step *con
 	// there. The row lives only in the event log — no node, no job_run.
 	rowName := hookRowName(name, *step)
 
-	hookCtx = withHookLogger(hookCtx, scope.label, name)
+	hookCtx = withHookLogger(hookCtx, scope.label, name, *step)
 	hookCtx = withHookIdentity(hookCtx, scope.jobName, rowName)
 	slog.DebugContext(hookCtx, "job.hook")
 
