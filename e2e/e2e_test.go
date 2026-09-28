@@ -1151,6 +1151,12 @@ jobs:
 	for _, msg := range []string{"pipeline.run", "pipeline.done"} {
 		findLogLine(t, out, msg)
 	}
+
+	// No daemon stamps these under `steps run`: RunJob is their only source.
+	done := findLogLine(t, out, "job.done")
+	if logField(done, "pipeline") == "" || len(logField(done, "revision")) != 64 {
+		t.Errorf("job.done lacks pipeline= or a full revision=: %s", done)
+	}
 }
 
 // findLogLine returns the first line in out whose message is msg, failing

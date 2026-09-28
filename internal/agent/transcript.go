@@ -428,13 +428,13 @@ func saveAgentTranscript(ctx context.Context, st store.Cache, hash, jobName stri
 
 	data, err := json.Marshal(res.transcript)
 	if err != nil {
-		slog.Warn("agent.transcript_marshal", "job", jobName, "hash", hash, "error", err)
+		slog.WarnContext(ctx, "agent.transcript_marshal", "job", jobName, "hash", hash, "error", err)
 
 		return
 	}
 
 	err = st.SaveNodeTranscript(context.WithoutCancel(ctx), hash, string(data))
 	if err != nil {
-		slog.Warn("agent.transcript_save", "job", jobName, "hash", hash, "error", err)
+		slog.WarnContext(ctx, "agent.transcript_save", "job", jobName, "hash", hash, "error", err)
 	}
 }

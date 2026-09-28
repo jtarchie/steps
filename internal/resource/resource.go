@@ -12,7 +12,6 @@ import (
 	"slices"
 
 	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/template"
 )
@@ -76,7 +75,7 @@ func CheckVersions(
 }
 
 func shellCheckVersions(ctx context.Context, rt config.ResourceType, extraEnv []string, source, version map[string]any) ([]map[string]any, error) {
-	events.Logger(ctx).Debug("resource.check", "resource_type", rt.Name, "source", source, "version", version)
+	slog.DebugContext(ctx, "resource.check", "resource_type", rt.Name, "source", source, "version", version)
 
 	command, err := template.Render(rt.Config.Check, map[string]any{"source": source, "version": version})
 	if err != nil {
@@ -110,12 +109,12 @@ func shellCheckVersions(ctx context.Context, rt config.ResourceType, extraEnv []
 	// A version is an identity, and this is the path that mints one.
 	versions, err := decodeVersionArray(out)
 	if err != nil {
-		events.Logger(ctx).Debug("resource.check", "resource_type", rt.Name, "output", string(out))
+		slog.DebugContext(ctx, "resource.check", "resource_type", rt.Name, "output", string(out))
 
 		return nil, fmt.Errorf("check %q: could not parse JSON output: %w", rt.Name, err)
 	}
 
-	events.Logger(ctx).Info("resource.checked", "resource_type", rt.Name, "versions", len(versions))
+	slog.InfoContext(ctx, "resource.checked", "resource_type", rt.Name, "versions", len(versions))
 
 	return versions, nil
 }
@@ -204,7 +203,7 @@ func versionsFor(
 		// nil means nobody supplied any; a non-nil empty slice means the
 		// caller resolved none, and is honored rather than re-derived.
 		if versions := supplied(res.Name); versions != nil {
-			slog.Debug("resource.versions_supplied", "resource", res.Name, "versions", len(versions))
+			slog.DebugContext(ctx, "resource.versions_supplied", "resource", res.Name, "versions", len(versions))
 
 			return versions, nil
 		}
@@ -300,7 +299,7 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, extr
 	case config.BackendShell:
 	}
 
-	events.Logger(ctx).Debug("resource.in", "resource_type", rt.Name, "source", source, "version", version, "params", params, "dest_dir", destDir)
+	slog.DebugContext(ctx, "resource.in", "resource_type", rt.Name, "source", source, "version", version, "params", params, "dest_dir", destDir)
 
 	command, err := template.Render(rt.Config.In, map[string]any{"source": source, "version": version, "params": params})
 	if err != nil {
@@ -323,7 +322,7 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, extr
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
-	events.Logger(ctx).Info("resource.fetched", "resource_type", rt.Name, "dest_dir", destDir)
+	slog.InfoContext(ctx, "resource.fetched", "resource_type", rt.Name, "dest_dir", destDir)
 
 	return nil
 }
@@ -362,7 +361,7 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, ext
 	case config.BackendShell:
 	}
 
-	events.Logger(ctx).Debug("resource.out", "resource_type", rt.Name, "source", source, "params", params, "src_dir", srcDir)
+	slog.DebugContext(ctx, "resource.out", "resource_type", rt.Name, "source", source, "params", params, "src_dir", srcDir)
 
 	command, err := template.Render(rt.Config.Out, map[string]any{"source": source, "params": params})
 	if err != nil {
@@ -386,12 +385,12 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, ext
 
 	result, unmarshalErr := decodeOutVersion(out)
 	if unmarshalErr != nil {
-		slog.Debug("resource.out", "resource_type", rt.Name, "output", string(out), "parse_error", unmarshalErr)
+		slog.DebugContext(ctx, "resource.out", "resource_type", rt.Name, "output", string(out), "parse_error", unmarshalErr)
 
 		return nil, nil //nolint:nilnil // unparsable/empty stdout is not an error; nil result means "no version produced"
 	}
 
-	events.Logger(ctx).Info("resource.put", "resource_type", rt.Name, "src_dir", srcDir, "result", result)
+	slog.InfoContext(ctx, "resource.put", "resource_type", rt.Name, "src_dir", srcDir, "result", result)
 
 	return result, nil
 }
@@ -478,7 +477,7 @@ func ResolveVersions(
 	pin := cliPinned
 	if len(pin) == 0 {
 		mode, stepPinned := VersionMode(step)
-		slog.Debug("resource.version_mode", "resource", res.Name, "mode", mode)
+		slog.DebugContext(ctx, "resource.version_mode", "resource", res.Name, "mode", mode)
 
 		if mode == "every" {
 			return res, resourceType, versions, nil

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -32,7 +33,7 @@ func TestGetStepLogsSayWhichGet(t *testing.T) {
 	var buf bytes.Buffer
 
 	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(events.LogHandler(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	err := RunJob(context.Background(), cfg, job, nil, provider, st, false)
@@ -78,7 +79,7 @@ func TestGetStepIdentityStopsAtTheGet(t *testing.T) {
 	var buf bytes.Buffer
 
 	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(events.LogHandler(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	err := RunJob(context.Background(), cfg, job, nil, provider, st, false)
@@ -95,6 +96,116 @@ func TestGetStepIdentityStopsAtTheGet(t *testing.T) {
 			t.Errorf("the task after a get reported kind=%q, want task — it inherited the get's identity: %s", got, line)
 		}
 	}
+}
+
+// captureRun runs the fixture's job with slog's default captured the way the
+// CLI installs it, and returns what it logged.
+func captureRun(t *testing.T, pipeline string) string {
+	t.Helper()
+
+	cfg, job, st, provider := fixtureFrom(t, pipeline)
+	defer func() { _ = st.Close() }()
+	defer func() { _ = provider.Close() }()
+
+	var buf bytes.Buffer
+
+	prev := slog.Default()
+	slog.SetDefault(slog.New(events.LogHandler(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	err := RunJob(context.Background(), cfg, job, nil, provider, st, false)
+	if err != nil {
+		t.Fatalf("RunJob: %v", err)
+	}
+
+	return buf.String()
+}
+
+// TestAnAliasedGetNamesItsResource: a get: whose resource: differs logs both,
+// since the step name alone does not say which resource's check ran.
+func TestAnAliasedGetNamesItsResource(t *testing.T) {
+	// Not t.Parallel(): mutates slog's default logger.
+	out := captureRun(t, `
+resource_types:
+  - name: dummy
+    config:
+      check: 'echo ''[{"ref":"v1"}]'''
+      in: "true"
+
+resources:
+  - name: alpha
+    type: dummy
+    source: {key: a}
+
+jobs:
+  - name: build
+    plan:
+      - get: src
+        resource: alpha
+`)
+
+	// resource.fetched too: a first get fetches inside the build it fans out
+	// into, whose context deliberately does not carry the get's identity.
+	for _, msg := range []string{"msg=job.step.finished", "msg=resource.fetched"} {
+		line := ""
+
+		for candidate := range strings.SplitSeq(out, "\n") {
+			if strings.Contains(candidate, msg+" ") {
+				line = candidate
+
+				break
+			}
+		}
+
+		if logField(line, "step") != "src" || logField(line, "resource") != "alpha" {
+			t.Errorf("%s logged step=%q resource=%q, want src/alpha: %q", msg, logField(line, "step"), logField(line, "resource"), line)
+		}
+	}
+}
+
+// TestAHookBodyLogsAsItselfNotItsStep: a hook runs under the context of the
+// step it guards, and a task hook on a get used to log as that get — its
+// index, kind and resource — the same misfiling withHookIdentity undoes for
+// events.
+func TestAHookBodyLogsAsItselfNotItsStep(t *testing.T) {
+	// Not t.Parallel(): mutates slog's default logger.
+	out := captureRun(t, `
+resource_types:
+  - name: dummy
+    config:
+      check: 'echo ''[{"ref":"v1"}]'''
+      in: "true"
+
+resources:
+  - name: alpha
+    type: dummy
+    source: {key: a}
+  - name: beta
+    type: dummy
+    source: {key: b}
+
+jobs:
+  - name: build
+    plan:
+      - get: alpha
+      - get: beta
+        on_success:
+          task: tell
+          run: echo fetched
+`)
+
+	for line := range strings.SplitSeq(out, "\n") {
+		if strings.Contains(line, "job.step.finished") && logField(line, "hook") == "on_success" {
+			if logField(line, "step") != "tell" || logField(line, "kind") != "task" ||
+				logField(line, "resource") != "" || logField(line, "index") != "" {
+				t.Errorf("hook body logged as its enclosing step: %s", line)
+			}
+
+			return
+		}
+	}
+
+	t.Fatalf("no hook finished:\n%s", out)
 }
 
 // TestJobHookKeepsItsJobAndDropsTheStepIndex pins what a hook body hands to

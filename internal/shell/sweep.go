@@ -96,7 +96,7 @@ func SweepOrphanedContainers(ctx context.Context, dockerHost string) {
 
 	client, err := dockerapi.New(dockerHost)
 	if err != nil {
-		slog.Debug("shell.docker.sweep_unavailable", "error", err)
+		slog.DebugContext(ctx, "shell.docker.sweep_unavailable", "error", err)
 
 		return
 	}
@@ -109,11 +109,11 @@ func SweepOrphanedContainers(ctx context.Context, dockerHost string) {
 	}
 
 	for _, id := range orphans {
-		slog.Info("shell.docker.sweep_orphan", "container", id)
+		slog.InfoContext(ctx, "shell.docker.sweep_orphan", "container", id)
 
 		err := client.RemoveContainer(ctx, id)
 		if err != nil {
-			slog.Warn("shell.docker.sweep_failed", "container", id, "error", err)
+			slog.WarnContext(ctx, "shell.docker.sweep_failed", "container", id, "error", err)
 		}
 	}
 }
@@ -126,7 +126,7 @@ func listOrphanedContainers(ctx context.Context, client *dockerapi.Client) []str
 		dockerHostLabel:  ownerHostname(),
 	})
 	if err != nil {
-		slog.Debug("shell.docker.sweep_list_failed", "error", err)
+		slog.DebugContext(ctx, "shell.docker.sweep_list_failed", "error", err)
 
 		return nil
 	}

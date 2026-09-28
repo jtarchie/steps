@@ -270,7 +270,7 @@ func (b *blockBudget) warnIfUnbindable(ctx context.Context, jobName string, maxI
 	warnf(ctx, "budget: max_in_flight (%d) covers all %d cells and nothing is reserved per cell, so this block's budget of %s tokens cannot stop anything",
 		maxInFlight, cells, humanCount(b.ceiling))
 
-	slog.Warn("across.budget.unbindable",
+	slog.WarnContext(ctx, "across.budget.unbindable",
 		"job", jobName, "max_in_flight", maxInFlight, "cells", cells,
 		"budget_tokens", b.ceiling, "reserve_per_cell", b.reserve,
 		"detail", "every cell is admitted before any has reported usage; set budget.reserve_per_cell (or a budget.tokens on the cell's agent) so admission pauses for real numbers, lower max_in_flight, or rely on the job budget as the backstop")
@@ -313,7 +313,7 @@ func (b *blockBudget) report(ctx context.Context, jobName string, ran, total int
 	notef(ctx, "budget: across stopped after %d of %d cells (%s of %s tokens committed: %s spent, %s reserved by cells still running)",
 		ran, total, humanCount(spent+reserved), humanCount(b.ceiling), humanCount(spent), humanCount(reserved))
 
-	slog.Warn("across.budget.exhausted",
+	slog.WarnContext(ctx, "across.budget.exhausted",
 		"job", jobName, "cells_run", ran, "cells_total", total,
 		"spent_tokens", spent, "reserved_tokens", reserved, "budget_tokens", b.ceiling)
 }

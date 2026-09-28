@@ -123,5 +123,5 @@ func checkCursorFor(ctx context.Context, st store.Store, name string) (map[strin
 
 func warnRefreshFailed(ctx context.Context, name string, err error) {
 	warnf(ctx, "could not refresh %s; building from recorded history: %v", name, err)
-	slog.Warn("job.refresh_failed", "resource", name, "error", err)
+	slog.WarnContext(ctx, "job.refresh_failed", "resource", name, "error", err)
 }

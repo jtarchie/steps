@@ -47,7 +47,7 @@ func StoreSink(st store.Events) func(events.Event) {
 			At:           event.At,
 		})
 		if err != nil {
-			slog.Warn("run.event_persist", "type", event.Type, "error", err)
+			slog.Warn("run.event_persist", "run", event.RunID, "type", event.Type, "error", err)
 		}
 	}
 }
@@ -150,7 +150,7 @@ func publishFinished(
 		text = err.Error()
 	}
 
-	logFrom(ctx).Info("job.step.finished", "status", status, "duration", time.Since(started))
+	slog.InfoContext(ctx, "job.step.finished", "status", status, "duration", time.Since(started))
 
 	events.Publish(ctx, events.Event{
 		Type:         events.TypeStepFinished,

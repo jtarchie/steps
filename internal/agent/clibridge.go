@@ -177,7 +177,7 @@ func newCLIBridge(ctx context.Context, conv agentConversation, prior []recordedT
 	go func() {
 		err := httpServer.Serve(listener)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Debug("agent.cli.bridge.serve", "error", err)
+			slog.DebugContext(ctx, "agent.cli.bridge.serve", "error", err)
 		}
 	}()
 
@@ -198,7 +198,7 @@ func (b *cliBridge) handler(name string, impl toolImpl, env toolEnv) sdkmcp.Tool
 			}
 		}
 
-		slog.Debug("agent.cli.bridge.call", "tool", name, "args", args)
+		slog.DebugContext(ctx, "agent.cli.bridge.call", "tool", name, "args", args)
 
 		// Rejected before the impl runs, never after: the point of a budget is
 		// bounding the side effect, which for ask_user is interrupting
@@ -287,7 +287,7 @@ func (b *cliBridge) authenticated(next http.Handler) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), expected) != 1 {
-			slog.Debug("agent.cli.bridge.unauthorized", "remote", r.RemoteAddr)
+			slog.DebugContext(r.Context(), "agent.cli.bridge.unauthorized", "remote", r.RemoteAddr)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 
 			return

@@ -450,6 +450,7 @@ func (d *daemon) start(
 
 	// Rooted in the daemon's lifetime rather than the request's: a set is over in milliseconds and what it starts has to outlive it.
 	loopCtx, cancel := context.WithCancel(d.base)
+	loopCtx = events.WithLogAttrs(loopCtx, "pipeline", name)
 
 	target.Hooks = trigger.HookHandler(target.Config, st)
 
@@ -457,7 +458,7 @@ func (d *daemon) start(
 	// Only reachable if two sets of one name interleaved, which the lock above prevents, so this is the assertion rather than a path.
 	if err != nil {
 		cancel()
-		slog.Error("web.register", "pipeline", name, "error", err)
+		slog.ErrorContext(loopCtx, "web.register", "error", err)
 
 		return
 	}
@@ -484,7 +485,7 @@ func (d *daemon) start(
 		// The METHOD, not its result: a later set swaps the configuration under this loop, and a value would pin it to whatever was set first.
 		pollErr := trigger.Poll(loopCtx, target.Config, st, d.interval)
 		if pollErr != nil {
-			slog.Error("web.poll_stopped", "pipeline", name, "error", pollErr)
+			slog.ErrorContext(loopCtx, "web.poll_stopped", "pipeline", name, "error", pollErr)
 		}
 	}()
 
@@ -513,7 +514,7 @@ func (d *daemon) start(
 func (d *daemon) sweep(ctx context.Context, target *web.Pipeline) {
 	err := target.Store.Prune(ctx, store.Retention{}, "")
 	if err != nil {
-		slog.Warn("web.prune_failed", "pipeline", target.Slug, "error", err)
+		slog.WarnContext(ctx, "web.prune_failed", "pipeline", target.Slug, "error", err)
 	}
 }
 

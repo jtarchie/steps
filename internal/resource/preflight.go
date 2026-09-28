@@ -471,7 +471,7 @@ func listToolsCached(ctx context.Context, cfg *config.Config, server string, set
 
 	entry, found := toolsCache.lookup(key, settings.CacheWindow(), now)
 	if found {
-		slog.Debug("preflight.cached", "mcp_server", server)
+		slog.DebugContext(ctx, "preflight.cached", "mcp_server", server)
 
 		return entry.tools, entry.err
 	}

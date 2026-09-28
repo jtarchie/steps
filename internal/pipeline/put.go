@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
@@ -59,7 +60,7 @@ func runPutStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 		return stepResult{}, fmt.Errorf("step %d (put %q): %w", i, step.Put, err)
 	}
 
-	logFrom(ctx).Debug("job.step", "step", step.Put, "resource", step.PutResourceName())
+	slog.DebugContext(ctx, "job.step", "step", step.Put, "resource", step.PutResourceName())
 
 	if step.PutResourceName() != step.Put {
 		notef(ctx, "put: %s", putLabel(step))
@@ -124,7 +125,7 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 	retryErr := runPlacedStage(ctx, step, func(ctx context.Context) error {
 		return retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
 			notef(ctx, "put: %s (attempt %d/%d)", putLabel(step), attempt, total)
-			logFrom(ctx).Info("job.put.attempt", "put", step.Put, "attempt", attempt, "total_attempts", total)
+			slog.InfoContext(ctx, "job.put.attempt", "put", step.Put, "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
 			runResult, runErr := rsrc.RunOut(attemptCtx, cfg, *resourceType, resource.Env, resource.Source, step.Params, inputs, space.Dir())
 			if runErr != nil {

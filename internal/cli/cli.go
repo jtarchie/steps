@@ -23,6 +23,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/blobstore"
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -143,11 +144,11 @@ func parseLogLevel(level string) slog.Level {
 // CLI.LogLevel) makes that opt-in, via --log-level debug or
 // STEPS_LOG_LEVEL=debug, rather than the permanent default.
 func InitLogging(level string) {
-	slog.SetDefault(slog.New(tint.NewTextHandler(os.Stderr, &tint.Options{
+	slog.SetDefault(slog.New(events.LogHandler(tint.NewTextHandler(os.Stderr, &tint.Options{
 		Level:     parseLogLevel(level),
 		AddSource: true,
 		NoColor:   wantNoColor(),
-	})))
+	}))))
 }
 
 // wantNoColor reports whether log output should skip ANSI color: either
@@ -354,7 +355,7 @@ func withSignalCancel(parent context.Context) (context.Context, context.CancelFu
 	go func() {
 		select {
 		case sig := <-sigs:
-			slog.Warn("signal.received", "signal", sig.String())
+			slog.WarnContext(ctx, "signal.received", "signal", sig.String())
 			cancel()
 		case <-ctx.Done():
 		}

@@ -107,7 +107,7 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 		return false, fmt.Errorf("guard command %q: %w", step.When.Run, cancelErr)
 	}
 
-	slog.Debug("step.when",
+	slog.DebugContext(ctx, "step.when",
 		"step", executedStepName(step),
 		"command", step.When.Run,
 		"exit_code", exitCode,

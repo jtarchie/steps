@@ -1183,7 +1183,7 @@ func addJobHits(add func(searchHit), pipeline *Pipeline, elsewhere bool) {
 func (s *Server) addRunHits(ctx context.Context, add func(searchHit), pipeline *Pipeline, elsewhere bool) {
 	runs, err := pipeline.Store.ListRuns(ctx, "", searchRunDepth)
 	if err != nil {
-		slog.Warn("web.search.runs_unavailable", "pipeline", pipeline.Slug, "error", err)
+		slog.WarnContext(ctx, "web.search.runs_unavailable", "pipeline", pipeline.Slug, "error", err)
 
 		return
 	}

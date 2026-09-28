@@ -167,7 +167,7 @@ func RunFix(
 	// failover.go's doc comment on the scope boundary), so it owns
 	// conv.usage's whole lifetime itself — runConversationLoop no longer
 	// calls finish() on a caller's behalf.
-	defer conv.usage.finish()
+	defer conv.usage.finish(ctx)
 
 	llm := newAgentLLM(ri, apiKey)
 

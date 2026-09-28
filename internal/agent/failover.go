@@ -72,7 +72,7 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (c
 	defer cancel()
 
 	prepared.conv.usage = attachUsage(ctx, prepared.conv.usage)
-	defer prepared.conv.usage.finish()
+	defer prepared.conv.usage.finish(ctx)
 
 	agent := prepared.agent
 	ri := prepared.ri
@@ -119,7 +119,7 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (c
 		// models and nothing about which job, step, or run hit the cascade.
 		live := prepared.conv.recorder.liveIdentity()
 
-		slog.Warn("agent.failover",
+		slog.WarnContext(ctx, "agent.failover",
 			"run", live.runID,
 			"job", live.job,
 			"step", live.stepName,

@@ -79,7 +79,7 @@ func (c *stepCache) rehydrate(ctx context.Context, key, path string, missing []s
 
 	digests, err := c.index.StepBlobs(ctx, key)
 	if err != nil {
-		slog.Warn("workspace.blob_index_lookup_failed", "key", key, "error", err)
+		slog.WarnContext(ctx, "workspace.blob_index_lookup_failed", "key", key, "error", err)
 
 		return false
 	}
@@ -99,7 +99,7 @@ func (c *stepCache) rehydrate(ctx context.Context, key, path string, missing []s
 		}
 	}
 
-	slog.Debug("workspace.blob_rehydrated", "entry", path, "outputs", len(missing))
+	slog.DebugContext(ctx, "workspace.blob_rehydrated", "entry", path, "outputs", len(missing))
 
 	return true
 }
@@ -114,7 +114,7 @@ func (c *stepCache) rehydrate(ctx context.Context, key, path string, missing []s
 func (c *stepCache) fetchOutput(ctx context.Context, path, out, digest string) bool {
 	err := os.MkdirAll(path, 0o750)
 	if err != nil {
-		slog.Warn("workspace.blob_fetch_failed", "output", out, "error", err)
+		slog.WarnContext(ctx, "workspace.blob_fetch_failed", "output", out, "error", err)
 
 		return false
 	}
@@ -124,7 +124,7 @@ func (c *stepCache) fetchOutput(ctx context.Context, path, out, digest string) b
 	cleanup := func() {
 		removeErr := c.backend.remove(tmp)
 		if removeErr != nil {
-			slog.Warn("workspace.blob_staging_cleanup", "dir", tmp, "error", removeErr)
+			slog.WarnContext(ctx, "workspace.blob_staging_cleanup", "dir", tmp, "error", removeErr)
 		}
 	}
 
@@ -136,7 +136,7 @@ func (c *stepCache) fetchOutput(ctx context.Context, path, out, digest string) b
 	}
 
 	if err != nil {
-		slog.Warn("workspace.blob_fetch_failed", "output", out, "digest", digest, "error", err)
+		slog.WarnContext(ctx, "workspace.blob_fetch_failed", "output", out, "digest", digest, "error", err)
 		cleanup()
 
 		return false
@@ -144,7 +144,7 @@ func (c *stepCache) fetchOutput(ctx context.Context, path, out, digest string) b
 
 	got, err := digestTree(tmp)
 	if err != nil || got != digest {
-		slog.Warn("workspace.blob_digest_mismatch", "output", out, "want", digest, "got", got, "error", err)
+		slog.WarnContext(ctx, "workspace.blob_digest_mismatch", "output", out, "want", digest, "got", got, "error", err)
 		cleanup()
 
 		return false
@@ -152,7 +152,7 @@ func (c *stepCache) fetchOutput(ctx context.Context, path, out, digest string) b
 
 	err = os.Rename(tmp, filepath.Join(path, out))
 	if err != nil {
-		slog.Warn("workspace.blob_fetch_failed", "output", out, "error", err)
+		slog.WarnContext(ctx, "workspace.blob_fetch_failed", "output", out, "error", err)
 		cleanup()
 
 		return false
@@ -176,14 +176,14 @@ func (c *stepCache) publish(ctx context.Context, key, path string, digests func(
 	for _, out := range req.Outputs {
 		digest, err := digests(mappedName(out, req.OutputMapping))
 		if err != nil || digest == "" {
-			slog.Warn("workspace.blob_publish_failed", "output", out, "error", err)
+			slog.WarnContext(ctx, "workspace.blob_publish_failed", "output", out, "error", err)
 
 			return
 		}
 
 		err = c.putIfAbsent(ctx, digest, filepath.Join(path, out))
 		if err != nil {
-			slog.Warn("workspace.blob_publish_failed", "output", out, "digest", digest, "error", err)
+			slog.WarnContext(ctx, "workspace.blob_publish_failed", "output", out, "digest", digest, "error", err)
 
 			return
 		}
@@ -193,7 +193,7 @@ func (c *stepCache) publish(ctx context.Context, key, path string, digests func(
 
 	err := c.index.RecordStepBlobs(ctx, key, outputs)
 	if err != nil {
-		slog.Warn("workspace.blob_index_record_failed", "key", key, "error", err)
+		slog.WarnContext(ctx, "workspace.blob_index_record_failed", "key", key, "error", err)
 	}
 }
 

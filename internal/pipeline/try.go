@@ -37,7 +37,7 @@ func runTryStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 	inner := *step.Try
 	name := executedStepName(inner)
 
-	slog.Debug("job.step", "job", r.jobName, "index", i, "kind", "try", "inner", name)
+	slog.DebugContext(ctx, "job.step", "job", r.jobName, "index", i, "kind", "try", "inner", name)
 
 	// The inner step chains under the try node's hash. No caching (nil
 	// skippable): try is always unskippable, so the inner step always runs.
@@ -95,7 +95,7 @@ func tolerateTryFailure(ctx context.Context, jobName string, step config.Step, s
 	name := executedStepName(step)
 
 	notef(ctx, "try: %s %s (tried, continuing)", name, outcome.Classify(ctx, err))
-	slog.Info("job.try", "job", jobName, "step", name, "outcome", "tolerated", "error", err.Error())
+	slog.InfoContext(ctx, "job.try", "job", jobName, "step", name, "outcome", "tolerated", "error", err.Error())
 
 	return nil
 }

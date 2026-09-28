@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/outcome"
@@ -135,7 +136,7 @@ func reportRoute(ctx context.Context, steps []config.Step, i int, step config.St
 	}
 
 	notef(ctx, "route: %s --%s--> %s (%s)", from, key, to, progress)
-	logFrom(ctx).Info("job.route", "from", from, "key", key, "to", to, "visit", visits[i], "max_visits", step.MaxVisits)
+	slog.InfoContext(ctx, "job.route", "from", from, "key", key, "to", to, "visit", visits[i], "max_visits", step.MaxVisits)
 }
 
 // stepForcesUnskippable reports whether a step makes its chain unskippable: a
@@ -205,7 +206,7 @@ func foldStepUnskippable(ctx context.Context, cfg *config.Config, step config.St
 		name := executedStepName(step)
 
 		notef(ctx, "note: %s makes this chain uncacheable (%s)", name, reason)
-		logFrom(ctx).Debug("job.uncacheable", "step", name, "reason", reason)
+		slog.DebugContext(ctx, "job.uncacheable", "step", name, "reason", reason)
 	}
 
 	return chainUnskippable || unskippable, nil

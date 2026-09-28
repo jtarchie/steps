@@ -223,7 +223,7 @@ func mcpCheckVersions(
 		return nil, fmt.Errorf("check %q: this resource type sets no mcp.check.tool, so it can only be published to", rt.Name)
 	}
 
-	slog.Debug("resource.check", "resource_type", rt.Name, "source", source, "version", version,
+	slog.DebugContext(ctx, "resource.check", "resource_type", rt.Name, "source", source, "version", version,
 		"mcp_tool", rt.Config.MCP.Check.Tool)
 
 	args, err := mcpCallArgs(*rt.Config.MCP.Check, map[string]any{"source": source, "version": version}, source)
@@ -241,7 +241,7 @@ func mcpCheckVersions(
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
-	slog.Info("resource.checked", "resource_type", rt.Name, "versions", len(versions))
+	slog.InfoContext(ctx, "resource.checked", "resource_type", rt.Name, "versions", len(versions))
 
 	return versions, nil
 }
@@ -358,7 +358,7 @@ func firstTextContent(content []sdkmcp.Content) string {
 // arbitrary shell script an MCP result is a small fixed set of content
 // blocks, not a tree the tool itself writes.
 func mcpRunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, source, version, params map[string]any, destDir string) error {
-	slog.Debug("resource.in", "resource_type", rt.Name, "source", source, "version", version, "params", params, "dest_dir", destDir)
+	slog.DebugContext(ctx, "resource.in", "resource_type", rt.Name, "source", source, "version", version, "params", params, "dest_dir", destDir)
 
 	err := writeJSONFile(filepath.Join(destDir, "version.json"), version)
 	if err != nil {
@@ -366,7 +366,7 @@ func mcpRunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, s
 	}
 
 	if rt.Config.MCP.In == nil {
-		slog.Info("resource.fetched", "resource_type", rt.Name, "dest_dir", destDir)
+		slog.InfoContext(ctx, "resource.fetched", "resource_type", rt.Name, "dest_dir", destDir)
 
 		return nil
 	}
@@ -394,7 +394,7 @@ func mcpRunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, s
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
-	slog.Info("resource.fetched", "resource_type", rt.Name, "dest_dir", destDir)
+	slog.InfoContext(ctx, "resource.fetched", "resource_type", rt.Name, "dest_dir", destDir)
 
 	return nil
 }
@@ -499,7 +499,7 @@ func mcpRunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, 
 		return nil, fmt.Errorf("out %q: this resource type sets no mcp.out.tool, so it cannot be published to", rt.Name)
 	}
 
-	slog.Debug("resource.out", "resource_type", rt.Name, "source", source, "params", params, "mcp_tool", rt.Config.MCP.Out.Tool, "src_dir", srcDir)
+	slog.DebugContext(ctx, "resource.out", "resource_type", rt.Name, "source", source, "params", params, "mcp_tool", rt.Config.MCP.Out.Tool, "src_dir", srcDir)
 
 	resolved, err := resolveParamFiles(params, srcDir)
 	if err != nil {
@@ -526,7 +526,7 @@ func mcpRunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, 
 
 	version := parseVersionObject(result)
 
-	slog.Info("resource.put", "resource_type", rt.Name, "result", version)
+	slog.InfoContext(ctx, "resource.put", "resource_type", rt.Name, "result", version)
 
 	return version, nil
 }

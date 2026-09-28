@@ -1,8 +1,10 @@
 package events
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -413,5 +415,131 @@ func TestNoteOnAClosedBusIsStillSaid(t *testing.T) {
 
 	if want := "worker w: terminated i-1\n"; out.String() != want {
 		t.Errorf("printed %q, want %q", out.String(), want)
+	}
+}
+
+// logLine writes one Info line through a LogHandler-wrapped text handler.
+func logLine(ctx context.Context, wrap func(slog.Handler) slog.Handler, args ...any) string {
+	var buf bytes.Buffer
+
+	slog.New(wrap(slog.NewTextHandler(&buf, nil))).InfoContext(ctx, "msg", args...)
+
+	return buf.String()
+}
+
+func TestLogAttrsComeFirstAndTheCallSiteWins(t *testing.T) {
+	t.Parallel()
+
+	ctx := WithLogAttrs(t.Context(), "pipeline", "app", "job", "build")
+	line := logLine(ctx, LogHandler, "job", "other", "n", 1)
+
+	if !strings.Contains(line, "msg=msg pipeline=app job=other n=1") {
+		t.Fatalf("line = %q", line)
+	}
+
+	if strings.Count(line, "job=") != 1 {
+		t.Fatalf("job printed twice: %q", line)
+	}
+}
+
+func TestLogAttrsReplaceAndEmptyClears(t *testing.T) {
+	t.Parallel()
+
+	ctx := WithLogAttrs(t.Context(), "step", "build", "index", 0)
+	ctx = WithLogAttrs(ctx, "index", 2, "step", "")
+	line := logLine(ctx, LogHandler)
+
+	if strings.Contains(line, "step=") || !strings.Contains(line, "index=2") || strings.Count(line, "index=") != 1 {
+		t.Fatalf("line = %q", line)
+	}
+}
+
+func TestLogAttrsSiblingsDoNotShare(t *testing.T) {
+	t.Parallel()
+
+	parent := WithLogAttrs(t.Context(), "run", "1", "job", "j", "step", "p")
+
+	var wg sync.WaitGroup
+
+	lines := make([]string, 2)
+
+	for i, step := range []string{"a", "b"} {
+		wg.Go(func() {
+			lines[i] = logLine(WithLogAttrs(parent, "step", step), LogHandler)
+		})
+	}
+
+	wg.Wait()
+
+	if !strings.Contains(lines[0], "step=a") || strings.Contains(lines[0], "step=b") ||
+		!strings.Contains(lines[1], "step=b") || strings.Contains(lines[1], "step=a") {
+		t.Fatalf("lines = %q", lines)
+	}
+}
+
+func TestLogAttrsSurviveLoggerWith(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	ctx := WithLogAttrs(t.Context(), "run", "7")
+	slog.New(LogHandler(slog.NewTextHandler(&buf, nil))).With("x", 1).InfoContext(ctx, "msg")
+
+	if !strings.Contains(buf.String(), "run=7") {
+		t.Fatalf("line = %q", buf.String())
+	}
+}
+
+func TestLogAttrsYieldToLoggerWith(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	ctx := WithLogAttrs(t.Context(), "job", "ctx", "run", "7")
+	slog.New(LogHandler(slog.NewTextHandler(&buf, nil))).With("job", "with").InfoContext(ctx, "msg")
+
+	if line := buf.String(); strings.Count(line, "job=") != 1 || !strings.Contains(line, "job=with") || !strings.Contains(line, "run=7") {
+		t.Fatalf("line = %q", line)
+	}
+}
+
+func TestLogHandlerKeepsTheSource(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	ctx := WithLogAttrs(t.Context(), "run", "7")
+	slog.New(LogHandler(slog.NewTextHandler(&buf, &slog.HandlerOptions{AddSource: true}))).InfoContext(ctx, "msg")
+
+	if !strings.Contains(buf.String(), "events_test.go:") {
+		t.Fatalf("line = %q", buf.String())
+	}
+}
+
+func TestLogHandlerWrappedTwiceWritesOnce(t *testing.T) {
+	t.Parallel()
+
+	ctx := WithLogAttrs(t.Context(), "run", "7")
+	line := logLine(ctx, func(h slog.Handler) slog.Handler { return LogHandler(LogHandler(h)) })
+
+	if strings.Count(line, "run=7") != 1 {
+		t.Fatalf("line = %q", line)
+	}
+}
+
+func TestLogHandlerToleratesANilContext(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	r := slog.NewRecord(time.Now(), slog.LevelInfo, "msg", 0)
+	//nolint:staticcheck // the nil context is the case under test
+	err := LogHandler(slog.NewTextHandler(&buf, nil)).Handle(nil, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(buf.String(), "msg=msg") {
+		t.Fatalf("line = %q", buf.String())
 	}
 }

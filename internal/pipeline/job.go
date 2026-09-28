@@ -63,9 +63,9 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 		RunID: resume.id, JobName: job.Name, PipelineName: cfg.Name, PipelineRevision: cfg.Revision.SHA, URL: externalURL(ctx),
 	})
 
-	ctx = withRunLogger(ctx, resume.id, job.Name)
+	ctx = withRunLogger(ctx, cfg, resume.id, job.Name)
 
-	logFrom(ctx).Info("job.run", "steps", len(job.Plan))
+	slog.InfoContext(ctx, "job.run", "steps", len(job.Plan))
 
 	// Before anything runs, beside the artifact-flow check and for the same
 	// reason: a plan that cannot be carried out should say so instead of
@@ -213,7 +213,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 
 	recordPassedVersions(ctx, st, job.Name, fetched.runBuildID(resume.id), fetched)
 
-	logFrom(ctx).Info("job.done")
+	slog.InfoContext(ctx, "job.done")
 
 	return nil
 }
@@ -408,7 +408,7 @@ func pruneHistory(ctx context.Context, st store.Store, cfg *config.Config, jobNa
 		TriggerQueue: store.DefaultTriggerQueueHistory,
 	}, keepRunID)
 	if err != nil {
-		logFrom(ctx).Warn("store.prune", "job", jobName, "error", err)
+		slog.WarnContext(ctx, "store.prune", "job", jobName, "error", err)
 	}
 }
 
@@ -464,14 +464,14 @@ func priorSpend(ctx context.Context, st store.Store, resume *resumeState) int {
 
 	spent, err := st.RunTokensSpent(ctx, resume.id)
 	if err != nil {
-		slog.Warn("run.resume.prior_spend_unavailable", "run", resume.id, "error", err,
+		slog.WarnContext(ctx, "run.resume.prior_spend_unavailable", "run", resume.id, "error", err,
 			"detail", "the job budget will start from zero for this attempt")
 
 		return 0
 	}
 
 	if spent > 0 {
-		slog.Info("run.resume.prior_spend", "run", resume.id, "tokens", spent)
+		slog.InfoContext(ctx, "run.resume.prior_spend", "run", resume.id, "tokens", spent)
 	}
 
 	return spent
@@ -519,7 +519,7 @@ func reportJobUsage(ctx context.Context, usage *agent.RunUsage) {
 		fields = append(fields, "budget_tokens", budget)
 	}
 
-	logFrom(ctx).Info("job.usage", fields...)
+	slog.InfoContext(ctx, "job.usage", fields...)
 }
 
 // humanCount renders a token count with thousands separators, since the

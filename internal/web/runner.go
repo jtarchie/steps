@@ -225,7 +225,7 @@ func (r *LocalRunner) Drain(ctx context.Context, pipelines []*Pipeline) {
 // max_in_flight, so extra workers find nothing to claim rather than running
 // what the pipeline forbade.
 func (r *LocalRunner) DrainPipeline(ctx context.Context, target *Pipeline) {
-	slog.Info("web.pipeline.drain_start", "pipeline", target.Slug, "workers", r.concurrent)
+	slog.InfoContext(ctx, "web.pipeline.drain_start", "pipeline", target.Slug, "workers", r.concurrent)
 
 	var wg sync.WaitGroup
 
@@ -285,7 +285,7 @@ func (r *LocalRunner) drainWorker(ctx context.Context, target *Pipeline) {
 func PrepareQueue(ctx context.Context, target *Pipeline) {
 	err := target.Store.ResetStaleRunning(ctx)
 	if err != nil {
-		slog.Error("web.reset_stale", "pipeline", target.Slug, "error", err)
+		slog.ErrorContext(ctx, "web.reset_stale", "pipeline", target.Slug, "error", err)
 	}
 }
 
@@ -305,7 +305,7 @@ func SyncQueueLimits(ctx context.Context, target *Pipeline) {
 
 	err := target.Store.SyncJobLimits(ctx, cfg.SerialGroupsByJob(), cfg.MaxInFlightByJob())
 	if err != nil {
-		slog.Error("web.sync_job_limits", "pipeline", target.Slug, "error", err)
+		slog.ErrorContext(ctx, "web.sync_job_limits", "pipeline", target.Slug, "error", err)
 	}
 }
 
@@ -318,7 +318,7 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 
 	id, jobName, claimed, err := target.Store.ClaimNextJob(ctx)
 	if err != nil {
-		slog.Error("web.claim", "pipeline", target.Slug, "error", err)
+		slog.ErrorContext(ctx, "web.claim", "pipeline", target.Slug, "error", err)
 
 		return false
 	}
@@ -329,7 +329,7 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 
 	trigger, err := target.Store.QueuedTrigger(ctx, id)
 	if err != nil {
-		slog.Warn("web.queue_row", "pipeline", target.Slug, "job", jobName, "error", err)
+		slog.WarnContext(ctx, "web.queue_row", "pipeline", target.Slug, "job", jobName, "error", err)
 	}
 
 	// Before anything can finalize the row without running it (a job the config dropped, one the breaker paused), since the claim is what spends a force. A rerun spends none: it skips the cache anyway, and the flag belongs to the job's ordinary row.
@@ -343,6 +343,8 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 	// under the drain, and a job resolved from one while the plan executes
 	// against another is a combination that existed in no file on disk.
 	cfg := target.Config()
+	// This claim's own ctx: the revision it runs, not the one most recently set.
+	ctx = events.WithLogAttrs(ctx, "revision", cfg.Revision.SHA)
 
 	job, err := cfg.FindJob(jobName)
 	if err != nil {
@@ -372,11 +374,11 @@ func finalizePanic(ctx context.Context, target *Pipeline, job *config.Job, id in
 
 	panicErr := fmt.Errorf("recovered from panic running job %q: %v", job.Name, recovered)
 
-	slog.Error("web.job.panic", "pipeline", target.Slug, "job", job.Name, "recovered", recovered, "stack", string(debug.Stack()))
+	slog.ErrorContext(ctx, "web.job.panic", "pipeline", target.Slug, "job", job.Name, "recovered", recovered, "stack", string(debug.Stack()))
 
 	err := target.Store.CompleteJob(context.WithoutCancel(ctx), id, "failed", panicErr)
 	if err != nil {
-		slog.Error("web.job.panic_unrecorded", "pipeline", target.Slug, "job", job.Name, "error", err)
+		slog.ErrorContext(ctx, "web.job.panic_unrecorded", "pipeline", target.Slug, "job", job.Name, "error", err)
 	}
 }
 
@@ -384,7 +386,7 @@ func finalizePanic(ctx context.Context, target *Pipeline, job *config.Job, id in
 func (r *LocalRunner) runAndFinalize(
 	ctx context.Context, target *Pipeline, cfg *config.Config, job *config.Job, id int64, force bool, trigger store.QueuedTrigger,
 ) {
-	slog.Info("web.job.run", "pipeline", target.Slug, "job", job.Name)
+	slog.InfoContext(ctx, "web.job.run", "pipeline", target.Slug, "job", job.Name)
 
 	defer finalizePanic(ctx, target, job, id)
 
@@ -392,11 +394,11 @@ func (r *LocalRunner) runAndFinalize(
 
 	// Ahead of the interrupted case, which it also is: left running, the next startup re-runs a build somebody stopped. Not the job's own outcome either, so the breaker neither counts nor clears it.
 	if runErr != nil && aborted {
-		slog.Info("web.job.aborted", "pipeline", target.Slug, "job", job.Name)
+		slog.InfoContext(ctx, "web.job.aborted", "pipeline", target.Slug, "job", job.Name)
 
 		err := target.Store.CompleteJob(context.WithoutCancel(ctx), id, "aborted", runErr)
 		if err != nil {
-			slog.Error("web.complete", "pipeline", target.Slug, "job", job.Name, "error", err)
+			slog.ErrorContext(ctx, "web.complete", "pipeline", target.Slug, "job", job.Name, "error", err)
 		}
 
 		return
@@ -409,7 +411,7 @@ func (r *LocalRunner) runAndFinalize(
 	// change enqueues), and it must not count against the circuit breaker,
 	// because an operator pressing ctrl-C is not the job being broken.
 	if runErr != nil && interrupted(ctx, runErr) {
-		slog.Warn("web.job.interrupted", "pipeline", target.Slug, "job", job.Name)
+		slog.WarnContext(ctx, "web.job.interrupted", "pipeline", target.Slug, "job", job.Name)
 
 		return
 	}
@@ -418,14 +420,14 @@ func (r *LocalRunner) runAndFinalize(
 	if runErr != nil {
 		status = "failed"
 
-		slog.Error("web.run", "pipeline", target.Slug, "job", job.Name, "error", runErr)
+		slog.ErrorContext(ctx, "web.run", "pipeline", target.Slug, "job", job.Name, "error", runErr)
 	}
 
-	slog.Info("web.job.done", "pipeline", target.Slug, "job", job.Name, "status", status)
+	slog.InfoContext(ctx, "web.job.done", "pipeline", target.Slug, "job", job.Name, "status", status)
 
 	err := target.Store.CompleteJob(context.WithoutCancel(ctx), id, status, runErr)
 	if err != nil {
-		slog.Error("web.complete", "pipeline", target.Slug, "job", job.Name, "error", err)
+		slog.ErrorContext(ctx, "web.complete", "pipeline", target.Slug, "job", job.Name, "error", err)
 	}
 
 	r.recordBreaker(ctx, target, job, runErr)
@@ -438,7 +440,7 @@ func (r *LocalRunner) runAndFinalize(
 func admits(ctx context.Context, target *Pipeline) bool {
 	stopped, err := target.Store.Paused(ctx)
 	if err != nil {
-		slog.Error("web.paused", "pipeline", target.Slug, "error", err)
+		slog.ErrorContext(ctx, "web.paused", "pipeline", target.Slug, "error", err)
 
 		return false
 	}
@@ -456,7 +458,7 @@ func interrupted(drain context.Context, runErr error) bool {
 func (r *LocalRunner) skipIfPaused(ctx context.Context, target *Pipeline, jobName string, id int64, manual bool) bool {
 	paused, err := target.Store.IsJobPaused(ctx, jobName)
 	if err != nil {
-		slog.Warn("web.breaker_error", "pipeline", target.Slug, "job", jobName, "error", err)
+		slog.WarnContext(ctx, "web.breaker_error", "pipeline", target.Slug, "job", jobName, "error", err)
 
 		return false
 	}
@@ -469,12 +471,12 @@ func (r *LocalRunner) skipIfPaused(ctx context.Context, target *Pipeline, jobNam
 		return false
 	}
 
-	slog.Warn("web.job.held", "pipeline", target.Slug, "job", jobName,
+	slog.WarnContext(ctx, "web.job.held", "pipeline", target.Slug, "job", jobName,
 		"release", "steps jobs release "+jobName+" -p <pipeline>")
 
 	err = target.Store.CompleteJob(context.WithoutCancel(ctx), id, "skipped", nil)
 	if err != nil {
-		slog.Error("web.complete", "pipeline", target.Slug, "job", jobName, "error", err)
+		slog.ErrorContext(ctx, "web.complete", "pipeline", target.Slug, "job", jobName, "error", err)
 	}
 
 	return true
@@ -492,7 +494,7 @@ func (r *LocalRunner) recordBreaker(ctx context.Context, target *Pipeline, job *
 	paused, consecutive, err := target.Store.RecordJobOutcome(
 		context.WithoutCancel(ctx), job.Name, runErr == nil, job.MaxConsecutiveFailures)
 	if err != nil {
-		slog.Warn("web.breaker_error", "pipeline", target.Slug, "job", job.Name, "error", err)
+		slog.WarnContext(ctx, "web.breaker_error", "pipeline", target.Slug, "job", job.Name, "error", err)
 
 		return
 	}
@@ -501,7 +503,7 @@ func (r *LocalRunner) recordBreaker(ctx context.Context, target *Pipeline, job *
 		return
 	}
 
-	slog.Warn("web.job_held",
+	slog.WarnContext(ctx, "web.job_held",
 		"pipeline", target.Slug,
 		"job", job.Name,
 		"consecutive_failures", consecutive,
@@ -587,7 +589,7 @@ func (r *LocalRunner) runContext(
 
 		// A drain ending with the process alive is its pipeline destroyed or renamed, which must not wait out the grace; a shutdown is already visible, since a context is marked done before its descendants are cancelled.
 		if r.process.Err() != nil {
-			slog.Warn("web.job.shutdown_wait", "pipeline", slug, "job", job.Name, "grace", r.grace)
+			slog.WarnContext(drain, "web.job.shutdown_wait", "pipeline", slug, "job", job.Name, "grace", r.grace)
 
 			// Armed by the shutdown, not at build start, where it would be the shortest job timeout in the product.
 			timer := time.NewTimer(r.grace)

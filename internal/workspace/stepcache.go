@@ -107,7 +107,7 @@ func LookupStepCache(ctx context.Context, bw BuildWorkspace, req StepCacheReques
 	if err != nil {
 		// A cache that cannot be read must never fail a build — the step
 		// simply runs, which is what it would have done anyway.
-		slog.Warn("workspace.step_cache_lookup_failed", "error", err)
+		slog.WarnContext(ctx, "workspace.step_cache_lookup_failed", "error", err)
 
 		return StepCacheResult{}
 	}
@@ -133,7 +133,7 @@ func SaveStepCache(ctx context.Context, bw BuildWorkspace, key string, req StepC
 		// Best-effort in the same way the resource cache is: failing to
 		// RECORD work that already succeeded must not fail the run that did
 		// it.
-		slog.Warn("workspace.step_cache_store_failed", "key", key, "error", err)
+		slog.WarnContext(ctx, "workspace.step_cache_store_failed", "key", key, "error", err)
 	}
 }
 
@@ -248,7 +248,7 @@ func (c *stepCache) restore(ctx context.Context, key, path, artifacts string, re
 	defer c.discardStaged(staged)
 
 	if err != nil {
-		slog.Warn("workspace.step_cache_restore_failed", "entry", path, "error", err)
+		slog.WarnContext(ctx, "workspace.step_cache_restore_failed", "entry", path, "error", err)
 
 		return false
 	}
@@ -259,14 +259,14 @@ func (c *stepCache) restore(ctx context.Context, key, path, artifacts string, re
 		// not. Reporting a miss is still right — the step runs and rewrites
 		// its own outputs — but the caller must forget every digest it
 		// remembered for them, which RestoreStep does unconditionally.
-		slog.Warn("workspace.step_cache_commit_failed", "entry", path, "error", err)
+		slog.WarnContext(ctx, "workspace.step_cache_commit_failed", "entry", path, "error", err)
 
 		return false
 	}
 
 	c.entries.touch(path)
 
-	slog.Debug("workspace.step_cache_hit", "entry", path)
+	slog.DebugContext(ctx, "workspace.step_cache_hit", "entry", path)
 
 	return true
 }
@@ -375,7 +375,7 @@ func (c *stepCache) store(ctx context.Context, key, path, artifacts string, dige
 	c.entries.prune()
 	c.publish(ctx, key, path, digests, req)
 
-	slog.Debug("workspace.step_cache_store", "entry", path)
+	slog.DebugContext(ctx, "workspace.step_cache_store", "entry", path)
 
 	return nil
 }

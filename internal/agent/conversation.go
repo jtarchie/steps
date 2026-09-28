@@ -755,13 +755,13 @@ func (conv agentConversation) outOfTurns(
 	// through to) reported a provider outage as a task-level failure, and threw
 	// away the cause with it.
 	if err != nil {
-		slog.Warn("agent.turns_exhausted_wrapup_failed", "max_turns", conv.maxTurns, "error", err)
+		slog.WarnContext(ctx, "agent.turns_exhausted_wrapup_failed", "max_turns", conv.maxTurns, "error", err)
 
 		return exhausted, fmt.Errorf("agent exceeded %d turns, and the request asking it to answer from what it had failed: %w", conv.maxTurns, err)
 	}
 
 	if strings.TrimSpace(text) != "" {
-		slog.Warn("agent.turns_exhausted_answered", "max_turns", conv.maxTurns,
+		slog.WarnContext(ctx, "agent.turns_exhausted_answered", "max_turns", conv.maxTurns,
 			"detail", "the turn budget ran out; the model answered from what it had rather than finishing on its own")
 
 		exhausted.text = text
@@ -1003,7 +1003,7 @@ func (conv agentConversation) generateWithinBudget(ctx context.Context, llm mode
 		// So does one that crosses the JOB's ceiling: the step is done spending
 		// but the job is not, and nothing between steps checks it again.
 		if calls, _ := collectParts(resp.Content); len(calls) == 0 && !conv.usage.jobExceeded() {
-			slog.Warn("agent.budget_overshot", "error", conv.usage.exceededError(),
+			slog.WarnContext(ctx, "agent.budget_overshot", "error", conv.usage.exceededError(),
 				"detail", "the final answer crossed the ceiling; kept, since nothing after it would spend")
 
 			return resp, nil
@@ -1277,7 +1277,7 @@ func executeBudgetedTool(ctx context.Context, call *genai.FunctionCall, env tool
 	// parameters. Zero-valued outside a conversation (tests, direct calls).
 	live := env.transcript.liveIdentity()
 
-	slog.Debug("agent.tool_call", "tool", call.Name, "id", call.ID,
+	slog.DebugContext(ctx, "agent.tool_call", "tool", call.Name, "id", call.ID,
 		"run", live.runID, "job", live.job, "step", live.stepName, "index", live.stepIndex, "depth", live.depth,
 		"args", call.Args)
 
@@ -1292,7 +1292,7 @@ func executeBudgetedTool(ctx context.Context, call *genai.FunctionCall, env tool
 		callCounts[call.Name]++
 	}
 
-	slog.Debug("agent.tool_result", "tool", call.Name, "id", call.ID,
+	slog.DebugContext(ctx, "agent.tool_result", "tool", call.Name, "id", call.ID,
 		"run", live.runID, "job", live.job, "step", live.stepName, "index", live.stepIndex, "depth", live.depth,
 		"duration", time.Since(start), "error", response["error"], "exit_code", response["exit_code"],
 		"result", lazyToolResultPreview{response: response})

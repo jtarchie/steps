@@ -424,7 +424,7 @@ func (p *isolatingProvider) NewBuild(ctx context.Context, label string) (BuildWo
 		// The tree already has its artifacts/ and steps/ from the run being
 		// continued; per-step directories under steps/ are rebuilt per step
 		// anyway, which is what makes an isolating strategy resumable at all.
-		slog.Debug("workspace.reuse", "dir", p.reuse, "backend", "isolating")
+		slog.DebugContext(ctx, "workspace.reuse", "dir", p.reuse, "backend", "isolating")
 
 		return &isolatingBuild{
 			backend: p.backend, root: p.reuse,
@@ -465,7 +465,7 @@ func (p *isolatingProvider) NewBuild(ctx context.Context, label string) (BuildWo
 		return nil, fmt.Errorf("could not create step directory %q: %w", steps, err)
 	}
 
-	slog.Debug("workspace.create", "dir", root, "backend", "isolating")
+	slog.DebugContext(ctx, "workspace.create", "dir", root, "backend", "isolating")
 
 	_ = ctx // no subprocess work happens at this layer; ctx kept for interface symmetry
 
@@ -799,7 +799,7 @@ func (b *isolatingBuild) newSpaceLeaving(ctx context.Context, label string, inpu
 		// Close on this path).
 		removeErr := b.backend.removeTree(dir)
 		if removeErr != nil {
-			slog.Error("workspace.space_cleanup", "dir", dir, "error", removeErr)
+			slog.ErrorContext(ctx, "workspace.space_cleanup", "dir", dir, "error", removeErr)
 		}
 
 		return nil, err

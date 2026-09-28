@@ -41,7 +41,7 @@ func runEnsembleStep(ctx context.Context, r stepRunner, i int, step config.Step,
 		return stepResult{}, fmt.Errorf("step %d (ensemble): %w", i, err)
 	}
 
-	slog.Debug("job.step", "job", r.jobName, "index", i, "kind", "ensemble", "members", len(step.Ensemble.Agents))
+	slog.DebugContext(ctx, "job.step", "job", r.jobName, "index", i, "kind", "ensemble", "members", len(step.Ensemble.Agents))
 
 	votes := runEnsembleMembers(ctx, r, i, step, hash)
 

@@ -128,7 +128,7 @@ func maybeCompact(ctx context.Context, llm model.LLM, req *model.LLMRequest, con
 
 	summarized, overBudget, err := summarizeConversation(ctx, llm, conv.usage, oldContents, state.summary)
 	if err != nil {
-		slog.Warn("agent.compaction_failed", "error", err)
+		slog.WarnContext(ctx, "agent.compaction_failed", "error", err)
 
 		return nil
 	}
@@ -152,7 +152,7 @@ func maybeCompact(ctx context.Context, llm model.LLM, req *model.LLMRequest, con
 
 	conv.env.transcript.compaction(compactionLabel(len(oldContents), len(recentContents)), summarized)
 
-	slog.Info("agent.compaction", "summarized_turns", len(oldContents), "recent_turns", len(recentContents))
+	slog.InfoContext(ctx, "agent.compaction", "summarized_turns", len(oldContents), "recent_turns", len(recentContents))
 
 	if recent := estimateContentTokens(recentContents); recent > conv.compactAfterTokens {
 		// Name the budget and the field that changes it. The message used to
@@ -625,9 +625,9 @@ func estimateContentTokens(contents []*genai.Content) int {
 // model compacted at 102,400 tokens — a tenth of capacity — silently and
 // forever, paying for a summarization call each time that bought nothing. The
 // first visible symptom was a stall warning that read like an agent-loop bug.
-func logCompactionBudget(ri config.ResolvedInvocation) {
+func logCompactionBudget(ctx context.Context, ri config.ResolvedInvocation) {
 	if ri.CompactAfterTokens <= 0 {
-		slog.Debug("agent.compaction_budget", "agent", ri.AgentName, "model", ri.ModelName, "compaction", "disabled")
+		slog.DebugContext(ctx, "agent.compaction_budget", "agent", ri.AgentName, "model", ri.ModelName, "compaction", "disabled")
 
 		return
 	}
@@ -647,7 +647,7 @@ func logCompactionBudget(ri config.ResolvedInvocation) {
 		fields = append(fields, "context_window", "unknown", "assumed_window", defaultContextWindowNote)
 	}
 
-	slog.Info("agent.compaction_budget", fields...)
+	slog.InfoContext(ctx, "agent.compaction_budget", fields...)
 }
 
 // defaultContextWindowNote describes the fallback in the one place a log line

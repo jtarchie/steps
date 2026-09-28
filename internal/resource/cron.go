@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,7 +20,6 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/events"
 )
 
 // cronVersionField is the one key of a cron version: the moment it was minted, RFC3339 in UTC.
@@ -148,7 +148,7 @@ func cronCheckVersions(ctx context.Context, rt config.ResourceType, source, vers
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
-	events.Logger(ctx).Info("resource.checked", "resource_type", rt.Name, "versions", len(versions))
+	slog.InfoContext(ctx, "resource.checked", "resource_type", rt.Name, "versions", len(versions))
 
 	return versions, nil
 }

@@ -56,7 +56,7 @@ func execCLI(
 	binary := config.CLIBinary(prepared.ri.CLI)
 	args := cliArgs(prepared, mcpConfig, plan)
 
-	slog.Debug("agent.cli.exec", "agent", prepared.ri.AgentName, "binary", binary, "args", args,
+	slog.DebugContext(ctx, "agent.cli.exec", "agent", prepared.ri.AgentName, "binary", binary, "args", args,
 		"dir", prepared.conv.env.dir)
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -122,7 +122,7 @@ func execCLI(
 	// usage limit the model never got a turn to answer) by subtype.
 	case run.sawResult:
 		if waitErr != nil {
-			slog.Debug("agent.cli.exit", "agent", prepared.ri.AgentName, "error", waitErr, "reported_error", run.isError)
+			slog.DebugContext(ctx, "agent.cli.exit", "agent", prepared.ri.AgentName, "error", waitErr, "reported_error", run.isError)
 		}
 
 		return run, nil

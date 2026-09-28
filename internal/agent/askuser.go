@@ -392,13 +392,13 @@ func (g askGrant) record(ctx context.Context, env toolEnv, row store.Question, a
 // question — it falls through to a person, which is the whole point of an
 // escalation being a ladder rather than a substitution.
 func (g askGrant) askResponder(ctx context.Context, env toolEnv, row store.Question) (string, bool) {
-	slog.Info("agent.question_escalated", "question", row.ID, "job", row.JobName, "agent", row.AgentName, "responder", g.answeredBy)
+	slog.InfoContext(ctx, "agent.question_escalated", "question", row.ID, "job", row.JobName, "agent", row.AgentName, "responder", g.answeredBy)
 
 	result := g.responder(ctx, map[string]any{subAgentRequestParam: responderRequest(row)}, env)
 
 	answer, ok := result["result"].(string)
 	if !ok || strings.TrimSpace(answer) == "" {
-		slog.Warn("agent.question_unescalated", "question", row.ID, "responder", g.answeredBy, "error", result["error"])
+		slog.WarnContext(ctx, "agent.question_unescalated", "question", row.ID, "responder", g.answeredBy, "error", result["error"])
 
 		return "", false
 	}
@@ -540,7 +540,7 @@ func (g askGrant) expire(ctx context.Context, env toolEnv, row store.Question) m
 		return resolvedResult(current, answerSource(current))
 	}
 
-	slog.Warn("agent.question_expired", "question", row.ID, "job", row.JobName,
+	slog.WarnContext(ctx, "agent.question_expired", "question", row.ID, "job", row.JobName,
 		"agent", row.AgentName, "timeout", g.wait.String(), "default", g.defaultAnswer)
 
 	if g.defaultAnswer == "" {
@@ -612,7 +612,7 @@ func (g askGrant) abandon(ctx context.Context, env toolEnv, row store.Question) 
 func (g askGrant) close(ctx context.Context, env toolEnv, row store.Question, status, answer, by string) {
 	err := env.ask.st.CloseQuestion(context.WithoutCancel(ctx), row.ID, status, answer, by)
 	if err != nil && !errors.Is(err, store.ErrQuestionNotPending) {
-		slog.Warn("agent.question_unresolved", "question", row.ID, "status", status, "error", err)
+		slog.WarnContext(ctx, "agent.question_unresolved", "question", row.ID, "status", status, "error", err)
 	}
 }
 
@@ -628,7 +628,7 @@ func announceQuestion(ctx context.Context, row store.Question, wait time.Duratio
 
 	events.Note(ctx, events.NoteInfo, fmt.Sprintf("question %d: waiting up to %s — steps questions answer %d <answer> %s", row.ID, wait, row.ID, flags))
 
-	slog.Warn("agent.question_pending", "question", row.ID, "job", row.JobName,
+	slog.WarnContext(ctx, "agent.question_pending", "question", row.ID, "job", row.JobName,
 		"agent", row.AgentName, "question_text", row.Question, "timeout", wait.String())
 }
 

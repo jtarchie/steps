@@ -39,14 +39,14 @@ func exprCheckVersions(
 		return nil, fmt.Errorf("check %q: this resource type sets no expr.check, so it can only be published to", rt.Name)
 	}
 
-	slog.Debug("resource.check", "resource_type", rt.Name, "source", source, "version", version, "backend", "expr")
+	slog.DebugContext(ctx, "resource.check", "resource_type", rt.Name, "source", source, "version", version, "backend", "expr")
 
 	versions, err := exprlang.RunCheck(ctx, rt.Config.Expr.Check, exprInput(rt, extraEnv, source, version, nil, ""))
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
-	slog.Info("resource.checked", "resource_type", rt.Name, "versions", len(versions))
+	slog.InfoContext(ctx, "resource.checked", "resource_type", rt.Name, "versions", len(versions))
 
 	return versions, nil
 }
@@ -63,7 +63,7 @@ func exprRunIn(
 		return writeJSONFile(filepath.Join(destDir, "version.json"), version)
 	}
 
-	slog.Debug("resource.in", "resource_type", rt.Name, "source", source, "version", version,
+	slog.DebugContext(ctx, "resource.in", "resource_type", rt.Name, "source", source, "version", version,
 		"params", params, "dest_dir", destDir, "backend", "expr")
 
 	files, err := exprlang.RunIn(ctx, rt.Config.Expr.In, exprInput(rt, extraEnv, source, version, params, ""))
@@ -76,7 +76,7 @@ func exprRunIn(
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
-	slog.Info("resource.fetched", "resource_type", rt.Name, "dest_dir", destDir, "files", len(files))
+	slog.InfoContext(ctx, "resource.fetched", "resource_type", rt.Name, "dest_dir", destDir, "files", len(files))
 
 	return nil
 }
@@ -119,7 +119,7 @@ func exprRunOut(
 		return nil, fmt.Errorf("out %q: this resource type sets no expr.out", rt.Name)
 	}
 
-	slog.Debug("resource.out", "resource_type", rt.Name, "source", source, "params", params,
+	slog.DebugContext(ctx, "resource.out", "resource_type", rt.Name, "source", source, "params", params,
 		"src_dir", srcDir, "backend", "expr")
 
 	in := exprInput(rt, extraEnv, source, nil, params, srcDir)
@@ -131,7 +131,7 @@ func exprRunOut(
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
 
-	slog.Info("resource.put", "resource_type", rt.Name, "src_dir", srcDir, "result", version)
+	slog.InfoContext(ctx, "resource.put", "resource_type", rt.Name, "src_dir", srcDir, "result", version)
 
 	return version, nil
 }

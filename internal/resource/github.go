@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,7 +19,6 @@ import (
 	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/events"
 )
 
 const (
@@ -62,7 +62,7 @@ func githubCheckVersions(ctx context.Context, rt config.ResourceType, source, ve
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
-	events.Logger(ctx).Info("resource.checked", "resource_type", rt.Name, "versions", len(versions))
+	slog.InfoContext(ctx, "resource.checked", "resource_type", rt.Name, "versions", len(versions))
 
 	return versions, nil
 }
@@ -83,7 +83,7 @@ func githubRunIn(ctx context.Context, rt config.ResourceType, source, version ma
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
-	events.Logger(ctx).Info("resource.fetched", "resource_type", rt.Name, "dest_dir", destDir)
+	slog.InfoContext(ctx, "resource.fetched", "resource_type", rt.Name, "dest_dir", destDir)
 
 	return nil
 }
@@ -107,7 +107,7 @@ func githubRunOut(ctx context.Context, rt config.ResourceType, source, params ma
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
 
-	events.Logger(ctx).Info("resource.put", "resource_type", rt.Name, "src_dir", srcDir, "result", version)
+	slog.InfoContext(ctx, "resource.put", "resource_type", rt.Name, "src_dir", srcDir, "result", version)
 
 	return version, nil
 }
@@ -547,7 +547,7 @@ func (w commentWatch) scan(ctx context.Context, client *githubClient, listing st
 		}
 	}
 
-	events.Logger(ctx).Warn("resource.github.comments.truncated", "listing", listing, "since", w.since, "pages", githubPageLimit)
+	slog.WarnContext(ctx, "resource.github.comments.truncated", "listing", listing, "since", w.since, "pages", githubPageLimit)
 
 	return versions, nil
 }
