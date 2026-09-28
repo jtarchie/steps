@@ -110,6 +110,13 @@ type Step struct {
 	// what is loaded — the same "unknowable, not uncapped" reasoning
 	// web's runView.Ceilings documents.
 	Deadline time.Time
+	// Timeout is the agent step's resolved per-attempt timeout:, finished or
+	// not — what Slow measures a request against. Never set by the fold: the
+	// caller holding the configuration fills it in (web's
+	// attachStepDeadlines). Zero for unlimited, unknowable or non-agent.
+	Timeout time.Duration
+	// Ended is when the step's end event was recorded, zero while it runs.
+	Ended time.Time
 	// Turns is agent conversation traffic that arrived while this step was
 	// the one running. Empty for every other kind.
 	Turns []Turn
@@ -127,6 +134,83 @@ type Step struct {
 	Notes []Note
 	// unreported is set by settle, never by the fold: see Unreported.
 	unreported bool
+	// pending is when each conversation depth last sent the model a request
+	// still unanswered. On the step rather than rebuilt per View because the
+	// live Folder folds in batches and a request can straddle two.
+	//
+	// ponytail: two sub-agents running concurrently at one depth share a
+	// slot and can misattribute; key it by delegation if that shows up.
+	pending map[int]time.Time
+}
+
+// slowShare is the fraction of a step's timeout (1/slowShare) above which one
+// model request is flagged: a handful of those is the whole budget.
+const slowShare = 10
+
+// Slow reports a request that took more than a tenth of the step's timeout.
+// Never with no known timeout — unknowable, not uncapped, as for Deadline.
+func (s Step) Slow(took time.Duration) bool {
+	return s.Timeout > 0 && took*slowShare > s.Timeout
+}
+
+// observe times a turn against the request that produced it. Only the first
+// model turn after a request is sent carries the time: the text and calls of
+// one response share a request, and repeating the number would read as the
+// time multiplied.
+func observe(s *Step, turn *Turn) {
+	switch turn.Type {
+	case events.TypeAgentText, events.TypeAgentCall, events.TypeAgentCompaction:
+		if sent, ok := s.pending[turn.Depth]; ok {
+			if !turn.At.IsZero() {
+				turn.Took = max(turn.At.Sub(sent), 0)
+			}
+
+			delete(s.pending, turn.Depth)
+		}
+	}
+
+	switch turn.Type {
+	// A compaction is a request of its own (the summary call), and the next
+	// one is sent after it: counting from before it would bill the summary
+	// to the request that follows.
+	case events.TypeAgentSystem, events.TypeAgentUser, events.TypeAgentResult, events.TypeAgentCompaction:
+		if turn.At.IsZero() {
+			return
+		}
+
+		if s.pending == nil {
+			s.pending = map[int]time.Time{}
+		}
+
+		s.pending[turn.Depth] = turn.At
+	}
+}
+
+// Unanswered is the request a failed step ended waiting on, as a turn whose
+// Took is how long it had been in flight — the number a timed-out step is
+// read for, which no recorded turn carries because the reply never came. The
+// zero Turn when the step did not fail, or was not waiting on the model.
+// Failed only: a step that passed was not cut off, and one whose loop ended
+// on a tool result is not waiting on anything.
+func (s Step) Unanswered() Turn {
+	if !s.Failed() || s.Ended.IsZero() {
+		return Turn{}
+	}
+
+	var out Turn
+
+	// The newest, because that is the request the end interrupted.
+	for depth, sent := range s.pending {
+		if out.Took == 0 || sent.After(out.Sent()) || (sent.Equal(out.Sent()) && depth > out.Depth) {
+			out = Turn{Depth: depth, At: s.Ended, Took: s.Ended.Sub(sent)}
+		}
+	}
+
+	if out.Took <= 0 {
+		return Turn{}
+	}
+
+	return out
 }
 
 // Note is one TypeStepNote, as a reader sees it.
@@ -547,27 +631,45 @@ func (s Step) resultString(key string) string {
 // text turn (a wrapped-up conversation, a verdict-only step) still has to
 // appear.
 func (s Step) Conversation() []Turn {
-	response := strings.TrimSpace(s.Response())
-	if response == "" || len(s.Turns) == 0 {
+	i, dropped := s.answerIndex()
+	if !dropped {
 		return s.Turns
+	}
+
+	return append(s.Turns[:i:i], s.Turns[i+1:]...)
+}
+
+// AnswerTurn is the turn Conversation dropped for duplicating the Response,
+// so the answer block can still say how long its request took — often the
+// longest of the step. The zero Turn when nothing was dropped.
+func (s Step) AnswerTurn() Turn {
+	i, dropped := s.answerIndex()
+	if !dropped {
+		return Turn{}
+	}
+
+	return s.Turns[i]
+}
+
+// answerIndex finds the model's last text when it is the Response verbatim.
+func (s Step) answerIndex() (int, bool) {
+	response := strings.TrimSpace(s.Response())
+	if response == "" {
+		return 0, false
 	}
 
 	// The last text, not the last turn: a model that emits text AND a tool call
 	// in one message records the result after the text, so keying on the
 	// trailing turn let the answer through twice.
 	for i := len(s.Turns) - 1; i >= 0; i-- {
-		if s.Turns[i].Type != "agent_text" {
+		if s.Turns[i].Type != events.TypeAgentText {
 			continue
 		}
 
-		if strings.TrimSpace(s.Turns[i].Text) != response {
-			return s.Turns
-		}
-
-		return append(s.Turns[:i:i], s.Turns[i+1:]...)
+		return i, strings.TrimSpace(s.Turns[i].Text) == response
 	}
 
-	return s.Turns
+	return 0, false
 }
 
 // Turn is one piece of agent conversation traffic.
@@ -578,7 +680,14 @@ type Turn struct {
 	Detail string
 	Depth  int
 	At     time.Time
+	// Took is how long the model request this turn answered was in flight,
+	// set by the fold on the first model turn after the request was sent;
+	// zero on every other turn and whenever a timestamp is missing.
+	Took time.Duration
 }
+
+// Sent is when the request this turn answered went out.
+func (t Turn) Sent() time.Time { return t.At.Add(-t.Took) }
 
 // Nested reports a turn belonging to a delegated sub-agent rather than the
 // step's own conversation.
@@ -831,6 +940,7 @@ func closeStep(
 	step.Status = row.Status
 	step.Hash = row.Hash
 	step.Duration = time.Duration(row.DurationMS) * time.Millisecond
+	step.Ended = row.At
 
 	// Only when set: a finished step's row carries it, and the events that
 	// precede it do not, so an unconditional assignment would blank it.
@@ -867,14 +977,16 @@ func attachTurn(view *Transcript, index map[string]int, row store.RunEventRow) (
 		}
 	}
 
-	view.Steps[position].Turns = append(view.Steps[position].Turns, Turn{
+	turn := Turn{
 		Type:   row.Type,
 		Text:   row.Text,
 		Name:   row.Name,
 		Detail: row.Detail,
 		Depth:  parseDepth(row.Status),
 		At:     row.At,
-	})
+	}
+	observe(view.Steps[position], &turn)
+	view.Steps[position].Turns = append(view.Steps[position].Turns, turn)
 
 	return position, true
 }

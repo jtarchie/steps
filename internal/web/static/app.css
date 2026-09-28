@@ -587,6 +587,9 @@ svg.dag { display: block; }
 .turn.compaction .prose { color: var(--fg); }
 .turn.nested { opacity: 0.85; }
 .turn.nested .who::before { content: "└ "; color: var(--faint); }
+.turn .dur { margin-left: auto; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.turn .dur.warn { color: var(--yellow); }
+.turn.pending .who, .turn.pending .say { color: var(--faint); }
 
 .subtrace { margin: 4px 0 4px 84px; padding: 6px 12px; border-left: 1px solid var(--line); }
 
