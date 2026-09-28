@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -236,6 +237,76 @@ func TestStreamedResultArrivesAsASummary(t *testing.T) {
 	_, body := getHX(t, server, srcs[0])
 	if !strings.Contains(body, marker) {
 		t.Errorf("GET %s does not serve the streamed result:\n%s", srcs[0], body)
+	}
+}
+
+// TestResultURLEscapesThePipelineName: hx-get is a plain attribute to
+// html/template, which HTML-escapes it and never URL-encodes it, so a `#` in
+// a pipeline's name cut the fetch short at /p/<prefix> — another route's page,
+// swapped into the box.
+func TestResultURLEscapesThePipelineName(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := testPipelines(t, "rev#2")
+	pipeline := pipelines[0]
+
+	err := pipeline.Store.StartRun(t.Context(), "run-escaped", "rev#2-job", "", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-escaped", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent"},
+		{Type: events.TypeAgentResult, StepIndex: 0, StepName: "review", Name: "read_file", Detail: bulkyResult},
+	})
+
+	_, page := get(t, server, "/p/rev%232/runs/run-escaped")
+
+	srcs := resultSrcs(page)
+	if len(srcs) != 1 {
+		t.Fatalf("page carries %d result URLs, want 1: %v", len(srcs), srcs)
+	}
+
+	// A browser splits the URL before it asks; httptest does not.
+	src, err := url.Parse(srcs[0])
+	if err != nil {
+		t.Fatalf("url.Parse(%q): %v", srcs[0], err)
+	}
+
+	if src.Fragment != "" || src.RawQuery != "" {
+		t.Fatalf("a browser reads %q as path %q", srcs[0], src.Path)
+	}
+
+	code, body := getHX(t, server, src.EscapedPath())
+	if code != http.StatusOK || body != string(jsonValue(bulkyResult).HTML) {
+		t.Errorf("GET %s = %d, not the result's body:\n%s", srcs[0], code, body)
+	}
+}
+
+// TestTurnFragmentVariesOnHTMX: one URL answers htmx with a fragment and a
+// followed link with a page, so a cache that is not told so can hand either
+// one the other's bytes.
+func TestTurnFragmentVariesOnHTMX(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+
+	err := pipeline.Store.StartRun(t.Context(), "run-vary", "build", "", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-vary", []store.RunEventRow{
+		{Type: events.TypeAgentResult, StepIndex: 0, StepName: "review", Name: "read_file", Detail: bulkyResult},
+	})
+
+	seq := seqsOf(t, pipeline.Store, "run-vary")[events.TypeAgentResult][0]
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("/p/demo/runs/run-vary/turns/%d", seq), nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Vary"), "HX-Request") {
+		t.Errorf("GET = %d, Vary %q: want 200 varying on HX-Request", rec.Code, rec.Header().Get("Vary"))
 	}
 }
 

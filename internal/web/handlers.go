@@ -188,6 +188,9 @@ const turnRoute = "/p/:pipeline/runs/:run/turns/:seq"
 // a summary until it is opened (resultValue). htmx gets the <pre>'s inner
 // HTML; the link a reader follows with JavaScript off gets a styled page.
 func (s *Server) handleTurn(c *echo.Context) error {
+	// One URL, two bodies: a cache must not hand the link the fragment.
+	c.Response().Header().Add("Vary", "HX-Request")
+
 	gone := echo.NewHTTPError(http.StatusNotFound, "this result is no longer recorded")
 
 	seq, err := strconv.ParseInt(c.Param("seq"), 10, 64)

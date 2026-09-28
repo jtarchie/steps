@@ -12,6 +12,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -196,8 +197,11 @@ func templateFuncs() template.FuncMap {
 		// it a <pre> of its own.
 		"jsonValue":   jsonValue,
 		"resultValue": resultValue,
-		"jsonPre":     jsonPre,
-		"jsonLine":    jsonLine,
+		// hx-get is a plain attribute to html/template: HTML-escaped, never
+		// URL-encoded, so a name's `#` or `?` would end the path early.
+		"pathseg":  url.PathEscape,
+		"jsonPre":  jsonPre,
+		"jsonLine": jsonLine,
 		// prose resolves to the hybrid (detect.go) rather than to
 		// renderProse directly: renderProse remains the fallback for text
 		// that detection has nothing to say about, but "prosebody" — the one

@@ -288,7 +288,7 @@
           {{else if .IsModelText}}<div class="prose">{{template "prosebody" .Text}}</div>
           {{else}}<span class="say">{{.Text}}</span>{{end}}
         {{end}}
-        {{if .Detail}}{{if eq .Type "agent_result"}}{{template "jsonvalue" (resultValue (printf "/p/%s/runs/%s/turns/%d" $page.Nav.Current $page.Run.Run.ID .Seq) .Seq .Detail)}}{{else}}{{template "jsonvalue" (jsonValue .Detail)}}{{end}}{{end}}
+        {{if .Detail}}{{if .IsResult}}{{template "jsonvalue" (resultValue (printf "/p/%s/runs/%s/turns/%d" (pathseg $page.Nav.Current) (pathseg $page.Run.Run.ID) .Seq) .Seq .Detail)}}{{else}}{{template "jsonvalue" (jsonValue .Detail)}}{{end}}{{end}}
       </div>
     </div>{{end}}{{end}}
 {{end}}
