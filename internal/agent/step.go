@@ -218,7 +218,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
-	slog.Debug("job.step", "job", jobName, "index", i, "kind", "agent", "agent", step.Agent)
+	slog.DebugContext(ctx, "job.step", "job", jobName, "index", i, "kind", "agent", "agent", step.Agent)
 
 	// The name this step is KNOWN by: an across: cell reports and records under
 	// its labelled identity rather than the agent it resolves through, so two
@@ -413,7 +413,7 @@ func lookupStepCache(
 
 	res := workspace.LookupStepCache(ctx, bw, req)
 	if res.Hit {
-		slog.Info("job.skip", "job", jobName, "step", name, "reason", "reused", "key", res.Key)
+		slog.InfoContext(ctx, "job.skip", "job", jobName, "step", name, "reason", "reused", "key", res.Key)
 	}
 
 	return stepCacheLookup{StepCacheResult: res, request: req}, nil
@@ -547,7 +547,7 @@ func runOneConversation(
 
 	result, err := runAgentConversation(withRequestCounter(convCtx, requests), llm, conv)
 	if err != nil {
-		slog.Warn("agent.conversation_failed",
+		slog.WarnContext(ctx, "agent.conversation_failed",
 			"agent", ri.AgentName,
 			"provider_requests", requests.Total(),
 			"error", err)

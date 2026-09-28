@@ -134,7 +134,7 @@ func PrepareResume(ctx context.Context, st runLookup, runID string) (context.Con
 		return ctx, "", err //nolint:wrapcheck // CompletedRunSteps already names the run
 	}
 
-	slog.Info("run.resume", "run", runID, "job", run.JobName, "completed_steps", len(done))
+	slog.InfoContext(ctx, "run.resume", "run", runID, "job", run.JobName, "completed_steps", len(done))
 
 	return withResume(ctx, &resumeState{id: runID, done: foldRunSteps(done), resuming: true}), run.Workspace, nil
 }

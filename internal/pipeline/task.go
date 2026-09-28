@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -41,12 +42,12 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 	}
 
 	if skippable[hash] {
-		logFrom(ctx).Info("job.skip", "task", rt.Name, "reason", "cached", "hash", hash)
+		slog.InfoContext(ctx, "job.skip", "task", rt.Name, "reason", "cached", "hash", hash)
 
 		return stepResult{hash: parentHash, nodeHash: hash, disposition: stepChainSkipped}, nil
 	}
 
-	logFrom(ctx).Debug("job.step", "task", rt.Name, "command", rt.Run)
+	slog.DebugContext(ctx, "job.step", "task", rt.Name, "command", rt.Run)
 
 	// The name the step is KNOWN by, which for an across: cell is its labelled
 	// identity rather than the task it resolves through — so the run line, the
@@ -182,7 +183,7 @@ func executeTask(
 
 		runErr := retryWithTimeout(ctx, step.Attempts, rt.Timeout, func(attempt, total int) {
 			notef(ctx, "task: %s (attempt %d/%d)", executedStepName(step), attempt, total)
-			logFrom(ctx).Info("job.task.attempt", "task", executedStepName(step), "attempt", attempt, "total_attempts", total)
+			slog.InfoContext(ctx, "job.task.attempt", "task", executedStepName(step), "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
 			err := runTaskCommand(attemptCtx, cfg, runner, rt, space.Dir(), st)
 

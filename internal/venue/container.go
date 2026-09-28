@@ -86,7 +86,7 @@ func (s *session) containerRunner(ctx context.Context) (shell.Runner, error) {
 		// Logged rather than returned: a worker whose daemon cannot be asked
 		// what it is already running is still a worker that can run this step,
 		// and the reply is the only place this attempt is visible.
-		slog.Warn("venue.container.sweep_failed",
+		slog.WarnContext(ctx, "venue.container.sweep_failed",
 			"worker", s.worker.String(), "error", sweepErr)
 	}
 

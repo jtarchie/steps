@@ -133,7 +133,7 @@ func runLoadVarStep(ctx context.Context, r stepRunner, i int, step config.Step, 
 		vars.set(step.LoadVar, value)
 	}
 
-	slog.Info("job.load_var", "job", r.jobName, "var", step.LoadVar, "bytes", len(value))
+	slog.InfoContext(ctx, "job.load_var", "job", r.jobName, "var", step.LoadVar, "bytes", len(value))
 
 	content := map[string]any{"load_var": step.LoadVar, "file": step.VarFile, "value": value}
 

@@ -88,14 +88,14 @@ func versionRecordable(ctx context.Context, resource string, version map[string]
 
 	encoded, err := store.EncodeVersion(version)
 	if err != nil {
-		slog.Warn("job.version_unrecordable", "resource", resource, "error", err)
+		slog.WarnContext(ctx, "job.version_unrecordable", "resource", resource, "error", err)
 
 		return "", false
 	}
 
 	if len(encoded) > maxRecordedVersionBytes {
 		warnf(ctx, "version of %s is over %d bytes and is not recorded", resource, maxRecordedVersionBytes)
-		logFrom(ctx).Warn("job.version_too_large", "resource", resource, "bytes", len(encoded))
+		slog.WarnContext(ctx, "job.version_too_large", "resource", resource, "bytes", len(encoded))
 
 		return "", false
 	}
@@ -188,7 +188,7 @@ func recordPutOrder(ctx context.Context, st store.Versions, resource string, ver
 
 	_, err := st.RecordVersionOrder(context.WithoutCancel(ctx), resource, encoded)
 	if err != nil {
-		logFrom(ctx).Warn("job.put_order_unrecorded", "resource", resource, "error", err)
+		slog.WarnContext(ctx, "job.put_order_unrecorded", "resource", resource, "error", err)
 	}
 }
 
@@ -220,14 +220,14 @@ func recordResolvedVersion(ctx context.Context, st store.Store, cfg *config.Conf
 
 	encoded, err := store.EncodeVersion(version)
 	if err != nil {
-		slog.Warn("job.resolved_version_unrecordable", "resource", resourceName, "error", err)
+		slog.WarnContext(ctx, "job.resolved_version_unrecordable", "resource", resourceName, "error", err)
 
 		return
 	}
 
 	err = st.RecordCheckedVersion(ctx, resourceName, encoded)
 	if err != nil {
-		slog.Warn("job.resolved_version_unrecorded", "resource", resourceName, "error", err)
+		slog.WarnContext(ctx, "job.resolved_version_unrecorded", "resource", resourceName, "error", err)
 	}
 }
 
@@ -258,7 +258,7 @@ func recordPassedVersions(ctx context.Context, st store.Store, jobName, buildID 
 		for version := range versions {
 			err := st.RecordPassedVersion(recCtx, jobName, resource, version, buildID)
 			if err != nil {
-				slog.Warn("job.passed_unrecorded", "job", jobName, "resource", resource, "error", err)
+				slog.WarnContext(ctx, "job.passed_unrecorded", "job", jobName, "resource", resource, "error", err)
 			}
 		}
 	}

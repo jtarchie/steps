@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/store"
@@ -150,7 +151,7 @@ func preflightTriggers(ctx context.Context, cfg *config.Config, resources []stri
 	for _, problem := range problems {
 		if problem.Transient {
 			printf("trigger preflight: %s: %s (transient — polling anyway)\n", problem.Target, problem.Detail)
-			slog.Warn("watch.preflight_transient", "target", problem.Target, "detail", problem.Detail)
+			slog.WarnContext(ctx, "watch.preflight_transient", "target", problem.Target, "detail", problem.Detail)
 
 			continue
 		}
@@ -212,10 +213,13 @@ type admission struct {
 }
 
 func (a *admission) poll(ctx context.Context, cfg *config.Config, st PollStore) {
+	// Per cycle, on this call's own ctx: the loop's would grow by one layer a tick for the life of the daemon.
+	ctx = events.WithLogAttrs(ctx, "revision", cfg.Revision.SHA)
+
 	// The pipeline-level breaker, asked per cycle rather than per configuration: a pause is not an edit, and the whole point of it is that it takes effect without one.
 	stopped, err := st.Paused(ctx)
 	if err != nil {
-		slog.Error("trigger.paused", "pipeline", cfg.Name, "error", err)
+		slog.ErrorContext(ctx, "trigger.paused", "pipeline", cfg.Name, "error", err)
 
 		return
 	}
@@ -257,14 +261,14 @@ func (a *admission) decide(ctx context.Context, cfg *config.Config) bool {
 
 	err := pipeline.ValidatePipelinePlacement(ctx, cfg, resources)
 	if err != nil {
-		slog.Error("trigger.unpollable", "pipeline", name, "error", err)
+		slog.ErrorContext(ctx, "trigger.unpollable", "pipeline", name, "error", err)
 
 		return false
 	}
 
 	err = preflightTriggers(ctx, cfg, resources)
 	if err != nil {
-		slog.Error("trigger.unpollable", "pipeline", name, "error", err)
+		slog.ErrorContext(ctx, "trigger.unpollable", "pipeline", name, "error", err)
 
 		return false
 	}
@@ -280,7 +284,13 @@ func pollAndLog(ctx context.Context, cfg *config.Config, st PollStore) {
 
 	enqueued, err := pollOnce(ctx, cfg, st)
 	if err != nil {
-		slog.Error("trigger.poll", "error", err)
+		// The failure surfaces here, outside the resource's scope, so it carries its resource back.
+		var failure checkFailure
+		if errors.As(err, &failure) {
+			ctx = events.WithLogAttrs(ctx, "resource", failure.resource)
+		}
+
+		slog.ErrorContext(ctx, "trigger.poll", "error", err)
 
 		return
 	}
@@ -328,9 +338,9 @@ func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, 
 	observed := map[string]observedResource{}
 
 	for _, name := range Resources(cfg) {
-		obs, hasVersion, err := observe(ctx, cfg, st, name)
+		obs, hasVersion, err := observe(events.WithLogAttrs(ctx, "resource", name), cfg, st, name)
 		if err != nil {
-			return nil, err
+			return nil, checkFailure{resource: name, err: err}
 		}
 
 		if hasVersion {
@@ -371,6 +381,16 @@ func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, 
 
 	return enqueued, nil
 }
+
+// checkFailure is a resource's turn in a poll failing, carrying which resource so the line reporting it can say so. Its text is the underlying error's, which already names the resource.
+type checkFailure struct {
+	resource string
+	err      error
+}
+
+func (f checkFailure) Error() string { return f.err.Error() }
+
+func (f checkFailure) Unwrap() error { return f.err }
 
 // observe is one resource's turn in a poll: a check whose findings are filed into history, or — for a webhook resource, which has no check — what the deliveries already say.
 func observe(ctx context.Context, cfg *config.Config, st PollStore, name string) (observedResource, bool, error) {
@@ -426,7 +446,7 @@ func recordCheckOutcome(ctx context.Context, st PollStore, resourceName string, 
 
 	err := st.RecordCheckError(ctx, resourceName, message)
 	if err != nil {
-		slog.Error("trigger.check_error_record", "resource", resourceName, "error", err)
+		slog.ErrorContext(ctx, "trigger.check_error_record", "resource", resourceName, "error", err)
 	}
 }
 
@@ -638,7 +658,7 @@ func jobReadyFor(ctx context.Context, st PollStore, job *config.Job) (bool, erro
 			names := slices.Sorted(maps.Keys(want))
 
 			printf("trigger: %s waiting — %s has not gone green against this combination of %v yet\n", job.Name, upstreamJob, names)
-			slog.Info("trigger.waiting_on_passed", "job", job.Name, "upstream", upstreamJob, "resources", names)
+			slog.InfoContext(ctx, "trigger.waiting_on_passed", "job", job.Name, "upstream", upstreamJob, "resources", names)
 
 			return false, nil
 		}
@@ -858,7 +878,7 @@ func recordHistory(
 	// pending triggers to anyone who doesn't know the cold-start rule — and
 	// a first watch after deleting the state db is exactly when someone is
 	// staring at the log deciding whether to ^C.
-	slog.Info("trigger.cold_start", "resource", resourceName, "versions_recorded", len(obs.versions),
+	slog.InfoContext(ctx, "trigger.cold_start", "resource", resourceName, "versions_recorded", len(obs.versions),
 		"note", "first-ever check: everything below the newest recorded as already taken; the newest triggers once")
 
 	// The newest version IS news, which is what Concourse does with the

@@ -91,12 +91,12 @@ func Do(ctx context.Context, attempts int, fn func(attempt int) error) error {
 
 		var stop *stopError
 		if errors.As(lastErr, &stop) {
-			slog.Warn("retry.not_retryable", "attempt", attempt+1, "attempts", attempts, "error", stop.Err)
+			slog.WarnContext(ctx, "retry.not_retryable", "attempt", attempt+1, "attempts", attempts, "error", stop.Err)
 
 			return stop.Err
 		}
 
-		slog.Warn("retry.attempt_failed", "attempt", attempt+1, "attempts", attempts, "error", lastErr)
+		slog.WarnContext(ctx, "retry.attempt_failed", "attempt", attempt+1, "attempts", attempts, "error", lastErr)
 	}
 
 	return lastErr

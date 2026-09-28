@@ -251,7 +251,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	live := env.transcript.liveIdentity()
 	started := time.Now()
 
-	slog.Info("agent.subagent_start", "run", live.runID, "job", live.job, "step", live.stepName, "index", live.stepIndex,
+	slog.InfoContext(ctx, "agent.subagent_start", "run", live.runID, "job", live.job, "step", live.stepName, "index", live.stepIndex,
 		"depth", live.depth+1, "agent", c.ri.AgentName)
 
 	// The child gets its own request counter so its provider requests are
@@ -262,7 +262,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	res, runErr := runAgentConversation(withRequestCounter(ctx, &requestCounter{}), c.llm, conv)
 	printAgentResponse(ctx, res)
 
-	slog.Info("agent.subagent_finish", "run", live.runID, "job", live.job, "step", live.stepName, "index", live.stepIndex,
+	slog.InfoContext(ctx, "agent.subagent_finish", "run", live.runID, "job", live.job, "step", live.stepName, "index", live.stepIndex,
 		"depth", live.depth+1, "agent", c.ri.AgentName, "duration", time.Since(started), "error", runErr)
 
 	// Nest the child's transcript into the PARENT's recorder (env.transcript

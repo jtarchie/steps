@@ -33,7 +33,7 @@ func TestRunJobLogsCarryTheRunID(t *testing.T) {
 	var buf bytes.Buffer
 
 	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(events.LogHandler(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	err := RunJob(context.Background(), cfg, job, nil, provider, st, false)

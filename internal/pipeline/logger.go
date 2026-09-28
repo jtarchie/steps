@@ -11,25 +11,30 @@ package pipeline
 // had to invent a sentinel index for "not a plan step", and a package that
 // wanted only a run id had to grow a dependency to read one.
 //
-// Stamping inverts that: RunJob names the run and job once, each dispatch
-// names its own step, and every line below inherits both without a single
-// call site knowing they exist. The logger itself rides on internal/events,
-// the leaf packages that cannot import this one already share — so a resource
+// Stamping inverts that: RunJob names the pipeline, revision, run and job
+// once, each dispatch names its own step, and every line below inherits them
+// without a single call site knowing they exist. The attributes ride on
+// internal/events, the leaf packages that cannot import this one already
+// share, and events.LogHandler writes them onto each line — so a resource
 // fetch several frames down logs under the same step as the walk that asked
-// for it.
+// for it, as long as it logs with slog's *Context variants (sloglint's
+// context: scope refuses one that does not).
+//
+// step, kind and resource are stamped even when empty: "" clears the key, so a
+// step with no name or no resource never reports one inherited from the step
+// enclosing it.
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 )
 
-// withRunLogger stamps the run and job every line under it belongs to. Called
-// once per RunJob, before anything can log.
-func withRunLogger(ctx context.Context, runID, jobName string) context.Context {
-	return events.WithLogger(ctx, events.Logger(ctx).With("run", runID, "job", jobName))
+// withRunLogger stamps the pipeline, revision, run and job every line under it
+// belongs to. Called once per RunJob, before anything can log.
+func withRunLogger(ctx context.Context, cfg *config.Config, runID, jobName string) context.Context {
+	return events.WithLogAttrs(ctx, "pipeline", cfg.Name, "revision", cfg.Revision.SHA, "run", runID, "job", jobName)
 }
 
 // withStepLogger stamps the plan step about to execute, so everything it
@@ -39,17 +44,18 @@ func withRunLogger(ctx context.Context, runID, jobName string) context.Context {
 // Set per dispatch, so the concurrent branches of an in_parallel or an
 // across: each carry their own identity rather than sharing the block's.
 func withStepLogger(ctx context.Context, i int, step config.Step) context.Context {
-	logger := events.Logger(ctx).With("index", i)
+	var resource string
 
-	if name := eventStepName(step); name != "" {
-		logger = logger.With("step", name)
+	kind, _ := step.Kind()
+
+	switch kind { //nolint:exhaustive // only a get and a put concern a resource; every other kind clears it
+	case config.StepKindGet:
+		resource = step.GetResourceName()
+	case config.StepKindPut:
+		resource = step.PutResourceName()
 	}
 
-	if kind := stepKindName(step); kind != "" {
-		logger = logger.With("kind", kind)
-	}
-
-	return events.WithLogger(ctx, logger)
+	return events.WithLogAttrs(ctx, "index", i, "step", eventStepName(step), "kind", stepKindName(step), "resource", resource)
 }
 
 // withHookLogger marks what a hook body produces as the hook's rather than
@@ -57,10 +63,5 @@ func withStepLogger(ctx context.Context, i int, step config.Step) context.Contex
 // scope label instead of an index — inventing one would file its output under
 // an unrelated step.
 func withHookLogger(ctx context.Context, scope, hook string) context.Context {
-	return events.WithLogger(ctx, events.Logger(ctx).With("hook", hook, "scope", scope))
-}
-
-// logFrom is the logger every line in this package goes through.
-func logFrom(ctx context.Context) *slog.Logger {
-	return events.Logger(ctx)
+	return events.WithLogAttrs(ctx, "hook", hook, "scope", scope)
 }

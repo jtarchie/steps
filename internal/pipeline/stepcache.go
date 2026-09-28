@@ -6,6 +6,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
@@ -63,7 +64,7 @@ func lookupStepCache(
 
 	res := workspace.LookupStepCache(ctx, r.bw, req)
 	if res.Hit {
-		logFrom(ctx).Info("job.skip", "step", name, "reason", "reused", "key", res.Key)
+		slog.InfoContext(ctx, "job.skip", "step", name, "reason", "reused", "key", res.Key)
 	}
 
 	return res

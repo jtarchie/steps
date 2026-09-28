@@ -49,7 +49,7 @@ func runParallelStep(ctx context.Context, r stepRunner, i int, step config.Step,
 
 	branches := step.InParallel.Steps
 
-	slog.Debug("job.step", "job", r.jobName, "index", i, "kind", "in_parallel", "branches", len(branches))
+	slog.DebugContext(ctx, "job.step", "job", r.jobName, "index", i, "kind", "in_parallel", "branches", len(branches))
 
 	results := runBranches(ctx, r, i, step, hash)
 	blockErr := combineBranchErrors(ctx, results)
@@ -257,7 +257,7 @@ func runRaceStep(ctx context.Context, r stepRunner, i int, step config.Step, par
 
 	branches := step.Race.Steps
 
-	slog.Debug("job.step", "job", r.jobName, "index", i, "kind", "race", "branches", len(branches))
+	slog.DebugContext(ctx, "job.step", "job", r.jobName, "index", i, "kind", "race", "branches", len(branches))
 
 	winner, results := raceBranches(ctx, r, i, branches, hash)
 	raceErr := raceOutcome(ctx, winner, results)

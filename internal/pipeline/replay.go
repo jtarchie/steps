@@ -98,7 +98,7 @@ func PrepareReplay(
 	}
 
 	notef(ctx, "replay: %s from %q (forked from %s, %d step(s) restored)", replayID, fromStep, sourceRunID, len(done))
-	slog.Info("run.replay", "run", replayID, "parent", sourceRunID, "job", job.Name, "from", fromStep, "restored_steps", len(done))
+	slog.InfoContext(ctx, "run.replay", "run", replayID, "parent", sourceRunID, "job", job.Name, "from", fromStep, "restored_steps", len(done))
 
 	return withResume(ctx, &resumeState{id: replayID, done: done, resuming: true}), dir, nil
 }

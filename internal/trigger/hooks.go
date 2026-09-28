@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/webhook"
@@ -33,12 +34,15 @@ func HookHandler(current ConfigSource, st HookStore) func(w http.ResponseWriter,
 
 // receive runs a delivery in the order that keeps an unverified one from reaching anything the pipeline wrote: verify, then the pipeline's expressions, then one transaction.
 func receive(w http.ResponseWriter, r *http.Request, cfg *config.Config, st HookStore, name string) {
-	receiver, found := receiverFor(w, cfg, name)
+	receiver, found := receiverFor(w, r, cfg, name)
 	if !found {
 		return
 	}
 
-	body, valid := verified(w, r, receiver, name)
+	// Only after receiverFor resolved it: the path segment is the sender's, and a guessed name must never become a line's identity.
+	ctx := events.WithLogAttrs(r.Context(), "pipeline", cfg.Name, "revision", cfg.Revision.SHA, "resource", name)
+
+	body, valid := verified(ctx, w, r, receiver, name)
 	if !valid {
 		return
 	}
@@ -46,7 +50,7 @@ func receive(w http.ResponseWriter, r *http.Request, cfg *config.Config, st Hook
 	result, err := receiver.Accept(webhook.Request{Method: r.Method, Header: r.Header, Query: r.URL.Query(), Body: body})
 	if err != nil {
 		// A 500 the sender logs as failed, so it can be redelivered once the pipeline is fixed; nothing is recorded meanwhile.
-		slog.Error("webhook.expr_error", "resource", name, "error", err)
+		slog.ErrorContext(ctx, "webhook.expr_error", "resource", name, "error", err)
 		http.Error(w, "the pipeline could not evaluate this delivery", http.StatusInternalServerError)
 
 		return
@@ -60,11 +64,11 @@ func receive(w http.ResponseWriter, r *http.Request, cfg *config.Config, st Hook
 		printf("webhook: %s filtered out a delivery\n", name)
 		ok(w)
 	default:
-		record(w, r, cfg, st, name, result.Delivery)
+		record(ctx, w, r, cfg, st, name, result.Delivery)
 	}
 }
 
-func receiverFor(w http.ResponseWriter, cfg *config.Config, name string) (*webhook.Receiver, bool) {
+func receiverFor(w http.ResponseWriter, r *http.Request, cfg *config.Config, name string) (*webhook.Receiver, bool) {
 	if !hasWebhookResources(cfg) {
 		http.Error(w, "no webhook resources in this pipeline", http.StatusNotFound)
 
@@ -81,7 +85,7 @@ func receiverFor(w http.ResponseWriter, cfg *config.Config, name string) (*webho
 
 	receiver, err := rsrc.Receiver(*res)
 	if err != nil {
-		slog.Error("webhook.config", "resource", name, "error", err)
+		slog.ErrorContext(r.Context(), "webhook.config", "pipeline", cfg.Name, "resource", name, "error", err)
 		http.Error(w, "webhook misconfigured", http.StatusInternalServerError)
 
 		return nil, false
@@ -90,7 +94,7 @@ func receiverFor(w http.ResponseWriter, cfg *config.Config, name string) (*webho
 	return receiver, true
 }
 
-func verified(w http.ResponseWriter, r *http.Request, receiver *webhook.Receiver, name string) ([]byte, bool) {
+func verified(ctx context.Context, w http.ResponseWriter, r *http.Request, receiver *webhook.Receiver, name string) ([]byte, bool) {
 	body, err := receiver.ReadBody(w, r)
 	if errors.Is(err, webhook.ErrTooLarge) {
 		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
@@ -106,12 +110,12 @@ func verified(w http.ResponseWriter, r *http.Request, receiver *webhook.Receiver
 
 	secret := os.Getenv(receiver.SecretEnv)
 	if secret == "" {
-		slog.Warn("webhook.secret_unset", "resource", name, "env", receiver.SecretEnv)
+		slog.WarnContext(ctx, "webhook.secret_unset", "resource", name, "env", receiver.SecretEnv)
 	}
 
 	err = receiver.Verify(webhook.Request{Method: r.Method, Header: r.Header, Query: r.URL.Query(), Body: body}, secret, time.Now())
 	if err != nil {
-		slog.Info("webhook.unauthorized", "resource", name)
+		slog.InfoContext(ctx, "webhook.unauthorized", "resource", name)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 
 		return nil, false
@@ -120,10 +124,10 @@ func verified(w http.ResponseWriter, r *http.Request, receiver *webhook.Receiver
 	return body, true
 }
 
-func record(w http.ResponseWriter, r *http.Request, cfg *config.Config, st HookStore, name string, accepted webhook.Delivery) {
+func record(ctx context.Context, w http.ResponseWriter, r *http.Request, cfg *config.Config, st HookStore, name string, accepted webhook.Delivery) {
 	dispatch, err := deliveryDispatch(r, cfg, st, name)
 	if err != nil {
-		slog.Error("webhook.enqueue", "resource", name, "error", err)
+		slog.ErrorContext(ctx, "webhook.enqueue", "resource", name, "error", err)
 		http.Error(w, "could not record the delivery", http.StatusInternalServerError)
 
 		return
@@ -131,10 +135,10 @@ func record(w http.ResponseWriter, r *http.Request, cfg *config.Config, st HookS
 
 	delivery := store.Delivery{Version: accepted.Version, Body: accepted.Body, Headers: accepted.Headers}
 
-	recorded, err := st.RecordDelivery(r.Context(), name, delivery, dispatch, cfg.VersionHistoryLimit())
+	recorded, err := st.RecordDelivery(ctx, name, delivery, dispatch, cfg.VersionHistoryLimit())
 	if err != nil {
 		// Not a 2xx: the sender retries, rather than an event being lost to a write that failed.
-		slog.Error("webhook.record", "resource", name, "error", err)
+		slog.ErrorContext(ctx, "webhook.record", "resource", name, "error", err)
 		http.Error(w, "could not record the delivery", http.StatusInternalServerError)
 
 		return

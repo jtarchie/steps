@@ -123,13 +123,13 @@ func reportCellCount(ctx context.Context, jobName string, i int, step config.Ste
 
 	if cells > 0 {
 		notef(ctx, "%s: %d cells", kind, cells)
-		slog.Debug("job.step", "job", jobName, "index", i, "kind", kind, "cells", cells)
+		slog.DebugContext(ctx, "job.step", "job", jobName, "index", i, "kind", kind, "cells", cells)
 
 		return
 	}
 
 	notef(ctx, "across: 0 cells (%s is empty); nothing to run", emptyAxisSource(step))
-	slog.Warn("across.empty", "job", jobName, "index", i, "source", emptyAxisSource(step))
+	slog.WarnContext(ctx, "across.empty", "job", jobName, "index", i, "source", emptyAxisSource(step))
 }
 
 // cellBlockKind names a matrix block the way its author wrote it: the

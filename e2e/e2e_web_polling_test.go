@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -441,7 +442,7 @@ jobs:
 // newWatchFixtureIn writes a fixture into a directory that may already hold
 // another one, which is how pipelines actually sit next to each other — one
 // daemon serving several is one repo folder, not three.
-func newWatchFixtureIn(t *testing.T, dir, name, pipelineYAML string) *watchFixture {
+func newWatchFixtureIn(t *testing.T, dir, name string) *watchFixture {
 	t.Helper()
 
 	fixture := &watchFixture{
@@ -454,7 +455,7 @@ func newWatchFixtureIn(t *testing.T, dir, name, pipelineYAML string) *watchFixtu
 		resources: []string{"items"},
 	}
 
-	body := strings.NewReplacer("FEED", fixture.feed, "PROCESSED", fixture.processed).Replace(pipelineYAML)
+	body := strings.NewReplacer("FEED", fixture.feed, "PROCESSED", fixture.processed).Replace(cursorFeed)
 
 	err := os.WriteFile(fixture.pipeline, []byte(body), 0o600)
 	if err != nil {
@@ -505,8 +506,8 @@ func TestDaemonStatePathHasNoFileToDeriveFrom(t *testing.T) {
 // pipeline's job, and not the other's.
 func TestWebPollsEveryPipelineItServes(t *testing.T) {
 	dir := t.TempDir()
-	first := newWatchFixtureIn(t, dir, "app", cursorFeed)
-	second := newWatchFixtureIn(t, dir, "infra", cursorFeed)
+	first := newWatchFixtureIn(t, dir, "app")
+	second := newWatchFixtureIn(t, dir, "infra")
 
 	first.items(t, 1)
 	second.items(t, 1)
@@ -560,4 +561,140 @@ func TestWebRejectsDeliver(t *testing.T) {
 // daemon has no file here to derive either from.
 func readArgs(path string) []string {
 	return []string{"-p", cli.PipelineName(path), "--db", cli.StatePath(path, "")}
+}
+
+// contextLogKeys are the attributes events.LogHandler stamps from the context.
+var contextLogKeys = []string{"pipeline", "revision", "run", "job", "step", "resource", "index", "kind"}
+
+// TestDaemonLogLinesNameTheirPipeline: a daemon serving two pipelines logs
+// each line with the pipeline, revision, and job/resource/run it concerns.
+// Two pipelines are what make the attribution provable rather than
+// coincidental — with one, every line naming it would be a guess that
+// happened to be right.
+func TestDaemonLogLinesNameTheirPipeline(t *testing.T) {
+	dir := t.TempDir()
+	fixtures := []*watchFixture{newWatchFixtureIn(t, dir, "app"), newWatchFixtureIn(t, dir, "infra")}
+
+	logs := captureStderr(t)
+	state := filepath.Join(dir, "daemon.db")
+	served := startWeb(t, "--db", state, "--interval", "200ms")
+	served.state = state
+
+	defer served.stopIfRunning(t)
+
+	for _, fixture := range fixtures {
+		fixture.items(t, 1)
+		served.set(t, fixture.name, fixture.pipeline)
+	}
+
+	shas := map[string]string{}
+
+	for _, fixture := range fixtures {
+		waitForDid(t, fixture, "1")
+
+		st := waitForStore(t, state, fixture.name)
+
+		revision, found, err := st.CurrentRevision(t.Context())
+		_ = st.Close()
+
+		if err != nil || !found || revision.SHA == "" {
+			t.Fatalf("%s: current revision %q found=%v err=%v", fixture.name, revision.SHA, found, err)
+		}
+
+		shas[fixture.name] = revision.SHA
+	}
+
+	for name := range shas {
+		// The drain logs web.job.done after the task that wrote processed.txt returns.
+		waitForLogLine(t, logs, "web.job.done", "pipeline", name)
+	}
+
+	served.stop(t)
+
+	out := logs()
+
+	for name, sha := range shas {
+		assertDaemonLines(t, out, name, sha)
+	}
+
+	assertNoDuplicateKeys(t, out)
+}
+
+// assertNoDuplicateKeys: a key the call site passed beats the context's, so
+// no line says the same thing twice.
+func assertNoDuplicateKeys(t *testing.T, out string) {
+	t.Helper()
+
+	for line := range strings.SplitSeq(out, "\n") {
+		for _, key := range contextLogKeys {
+			if strings.Count(" "+line, " "+key+"=") > 1 {
+				t.Errorf("%s= appears twice: %s", key, line)
+			}
+		}
+	}
+}
+
+// assertDaemonLines checks one pipeline's poll and build lines name it, its
+// revision, and the resource/job/run they concern.
+func assertDaemonLines(t *testing.T, out, name, sha string) {
+	t.Helper()
+
+	// A check with no run= is the poll's, not a get inside a build — which gets its pipeline from RunJob instead.
+	checked := findLogLineWith(t, out, "resource.checked", func(line string) bool {
+		return logField(line, "pipeline") == name && logField(line, "run") == ""
+	})
+	if logField(checked, "resource") != "items" || logField(checked, "revision") != sha {
+		t.Errorf("%s: poll's resource.checked lacks resource=items revision=%s: %s", name, sha, checked)
+	}
+
+	done := findLogLineWith(t, out, "job.done", func(line string) bool { return logField(line, "pipeline") == name })
+	if logField(done, "job") != "build" || logField(done, "run") == "" || logField(done, "revision") != sha {
+		t.Errorf("%s: job.done lacks job=build, run= or revision=%s: %s", name, sha, done)
+	}
+
+	webDone := findLogLineWith(t, out, "web.job.done", func(line string) bool { return logField(line, "pipeline") == name })
+	if logField(webDone, "revision") != sha {
+		t.Errorf("%s: web.job.done lacks revision=%s: %s", name, sha, webDone)
+	}
+
+	// Identity first, ahead of what the call site said.
+	run := findLogLineWith(t, out, "job.run", func(line string) bool { return logField(line, "pipeline") == name })
+	if strings.Index(run, "pipeline=") > strings.Index(run, "steps=") {
+		t.Errorf("%s: job.run puts its own attributes before pipeline=: %s", name, run)
+	}
+}
+
+// findLogLineWith is findLogLine for the first line with this message that
+// also satisfies match.
+func findLogLineWith(t *testing.T, out, msg string, match func(string) bool) string {
+	t.Helper()
+
+	for line := range strings.SplitSeq(out, "\n") {
+		if slices.Contains(strings.Fields(line), msg) && match(line) {
+			return line
+		}
+	}
+
+	t.Fatalf("no %q log line matched in: %s", msg, out)
+
+	return ""
+}
+
+// waitForLogLine blocks until a line with this message carries key=value.
+func waitForLogLine(t *testing.T, logs func() string, msg, key, value string) {
+	t.Helper()
+
+	deadline := time.Now().Add(20 * time.Second)
+
+	for time.Now().Before(deadline) {
+		for line := range strings.SplitSeq(logs(), "\n") {
+			if slices.Contains(strings.Fields(line), msg) && logField(line, key) == value {
+				return
+			}
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatalf("no %s line with %s=%s: %s", msg, key, value, logs())
 }

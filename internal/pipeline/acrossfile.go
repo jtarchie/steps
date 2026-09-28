@@ -43,7 +43,7 @@ func resolveFileAxes(ctx context.Context, label string, step config.Step, bw wor
 			return nil, fmt.Errorf("%s: across var %q: %w", label, axis.Var, err)
 		}
 
-		slog.Debug("across.from_file", "var", axis.Var, "file", axis.FromFile, "items", len(items))
+		slog.DebugContext(ctx, "across.from_file", "var", axis.Var, "file", axis.FromFile, "items", len(items))
 
 		values[axis.Var] = items
 	}

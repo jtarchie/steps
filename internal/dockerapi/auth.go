@@ -138,7 +138,7 @@ func runCredentialHelper(ctx context.Context, name, registry string) (authConfig
 
 	out, err := cmd.Output()
 	if err != nil {
-		slog.Debug("dockerapi.credential_helper_declined", "helper", name, "registry", registry, "error", err)
+		slog.DebugContext(ctx, "dockerapi.credential_helper_declined", "helper", name, "registry", registry, "error", err)
 
 		return authConfig{}, false
 	}
@@ -150,7 +150,7 @@ func runCredentialHelper(ctx context.Context, name, registry string) (authConfig
 
 	err = json.Unmarshal(out, &answer)
 	if err != nil {
-		slog.Debug("dockerapi.credential_helper_unreadable", "helper", name, "registry", registry, "error", err)
+		slog.DebugContext(ctx, "dockerapi.credential_helper_unreadable", "helper", name, "registry", registry, "error", err)
 
 		return authConfig{}, false
 	}

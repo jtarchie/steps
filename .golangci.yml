@@ -67,6 +67,9 @@ linters:
     - forbidigo     # a run's human-facing output goes through internal/events, never the process's streams
 
   settings:
+    # A ctx in scope carries the line's pipeline/revision/run/job (events.LogHandler), so a slog call that ignores it loses them (#121).
+    sloglint:
+      context: scope
     # A line printed straight to the process's stdout reaches one terminal and no transcript, and tears any renderer that owns the screen (#124). A step's machinery says things with events.Note; bytes a person must see (a command's output, a prompt) go to events.Stdout(ctx)/Stderr(ctx), which a renderer can take over.
     forbidigo:
       analyze-types: true
@@ -695,6 +698,9 @@ linters:
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/config"
+            # events carries a line's identity: poll and webhook lines add the
+            # revision and resource they concern (events.WithLogAttrs).
+            - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/pipeline"
             - "github.com/jtarchie/steps/internal/resource"
             - "github.com/jtarchie/steps/internal/store"

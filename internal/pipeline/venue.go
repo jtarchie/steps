@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -102,7 +103,7 @@ func withRegistry(ctx context.Context, registry *venue.Registry) (context.Contex
 
 		err := registry.Close(releaseCtx)
 		if err != nil {
-			logFrom(ctx).Error("worker_release_failed", "error", err)
+			slog.ErrorContext(ctx, "worker_release_failed", "error", err)
 			warnf(ctx, "a worker acquired by this process could not be released: %v", err)
 		}
 	}
@@ -125,7 +126,7 @@ func WithLeases(ctx context.Context) (context.Context, func(context.Context)) {
 			// a machine that could not be given back is an operational
 			// problem rather than a wrong answer. It is loud because it
 			// costs money for as long as nobody notices.
-			logFrom(ctx).Error("job.worker_release_failed", "error", err)
+			slog.ErrorContext(ctx, "job.worker_release_failed", "error", err)
 			warnf(ctx, "a worker acquired for this job could not be released: %v", err)
 		}
 	}
@@ -233,7 +234,7 @@ func withVenueRetry(ctx context.Context, step config.Step, budget time.Duration,
 		}
 
 		notef(ctx, "worker for tag %s was reclaimed; re-placing the step", tag)
-		logFrom(ctx).Info("job.worker_evicted", "tag", tag, "attempt", attempt+1, "error", err)
+		slog.InfoContext(ctx, "job.worker_evicted", "tag", tag, "attempt", attempt+1, "error", err)
 	}
 }
 
@@ -290,7 +291,7 @@ func releaseIfReclaimed(ctx context.Context, step config.Step, runner shell.Runn
 	}
 
 	notef(ctx, "worker for tag %s finished the step and is being reclaimed; letting it go", tag)
-	logFrom(ctx).Info("job.worker_abandoned_after_drain", "tag", tag, "reason", reason)
+	slog.InfoContext(ctx, "job.worker_abandoned_after_drain", "tag", tag, "reason", reason)
 
 	// Forgotten, never destroyed — AWS owns this machine's end, and a
 	// sibling step may still be using its remaining grace. See Abandon.
@@ -538,6 +539,6 @@ func recordPlacement(ctx context.Context, runner stepRunner, sink *placementSink
 		BytesReceived: placement.BytesReceived,
 	})
 	if err != nil {
-		logFrom(ctx).Warn("job.placement_unrecorded", "job", runner.jobName, "step", name, "error", err)
+		slog.WarnContext(ctx, "job.placement_unrecorded", "job", runner.jobName, "step", name, "error", err)
 	}
 }

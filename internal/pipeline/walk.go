@@ -5,6 +5,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -196,7 +197,7 @@ func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) bool {
 	}
 
 	notef(ctx, "skip: %s (already succeeded)%s", name, suffix)
-	logFrom(ctx).Info("job.skip", "index", w.index, "build", w.build, "reason", "resume", "step", name)
+	slog.InfoContext(ctx, "job.skip", "index", w.index, "build", w.build, "reason", "resume", "step", name)
 	recordExecution(ctx, name)
 
 	// ponytail: nothing links a run to a put's output, so a resumed run cannot
@@ -205,7 +206,7 @@ func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) bool {
 	// a run_outputs table (DDL + schemaVersion bump) read here.
 	if step.Put != "" {
 		warnf(ctx, "resume: put %s ran in an earlier attempt; its version is not recorded as passed for %s", step.Put, w.jobName)
-		logFrom(ctx).Warn("job.resume_put_unrecorded", "put", step.Put, "job", w.jobName)
+		slog.WarnContext(ctx, "job.resume_put_unrecorded", "put", step.Put, "job", w.jobName)
 	}
 
 	w.index++
@@ -237,7 +238,7 @@ func (w *planWalk) reportChainSkipped(ctx context.Context, skipped string, first
 			continue
 		}
 
-		logFrom(ctx).Info("job.skip", "index", firstIndex+offset, "step", name, "reason", "chain")
+		slog.InfoContext(ctx, "job.skip", "index", firstIndex+offset, "step", name, "reason", "chain")
 		publishStepSkipped(ctx, w.jobName, firstIndex+offset, step, markStep(ctx), hashes[offset], skipReason(stepChainSkipped))
 	}
 }
@@ -355,7 +356,7 @@ func dispatchNonGetStep(ctx context.Context, r stepRunner, i int, step config.St
 	}
 
 	if !shouldRun {
-		logFrom(ctx).Info("job.skip", "reason", "when", "step", executedStepName(step))
+		slog.InfoContext(ctx, "job.skip", "reason", "when", "step", executedStepName(step))
 
 		return stepResult{hash: parentHash, disposition: stepGuardSkipped}, nil
 	}

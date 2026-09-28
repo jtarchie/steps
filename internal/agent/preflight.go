@@ -298,7 +298,7 @@ func failOver(ctx context.Context, scope pinScope, agent *config.Agent, primary 
 
 		_, probeErr := probeModelCached(ctx, candidate, settings)
 		if probeErr != nil {
-			slog.Warn("agent.fallback_unavailable",
+			slog.WarnContext(ctx, "agent.fallback_unavailable",
 				"pipeline", scope.pipeline,
 				"agent", agent.Name, "fallback", i, "model", candidate.ModelName, "error", probeErr)
 
@@ -314,7 +314,7 @@ func failOver(ctx context.Context, scope pinScope, agent *config.Agent, primary 
 		// place them, and one process can be serving several pipelines that
 		// each declare a `reviewer`. An operator watching for a change in
 		// model quality cannot act on a line that does not say whose.
-		slog.Warn("agent.failover",
+		slog.WarnContext(ctx, "agent.failover",
 			"pipeline", scope.pipeline,
 			"agent", agent.Name,
 			"from", primary.ModelName,
@@ -387,7 +387,7 @@ func reconsiderPin(
 		// reporting it through the health path below would blame a probe that
 		// was never sent and name the model it left as "".
 		if clearSourceIf(scope, selection) == clearedPin {
-			slog.Warn("agent.failover.pin_lost",
+			slog.WarnContext(ctx, "agent.failover.pin_lost",
 				"pipeline", scope.pipeline,
 				"agent", agent.Name,
 				"error", err,
@@ -950,7 +950,7 @@ func probeModelCached(ctx context.Context, ri config.ResolvedInvocation, setting
 
 	entry, found := probeCache.lookup(key, settings.CacheWindow(), now)
 	if found {
-		slog.Debug("preflight.cached", "target", key)
+		slog.DebugContext(ctx, "preflight.cached", "target", key)
 
 		return entry.at, entry.err
 	}
@@ -1012,7 +1012,7 @@ func probeModel(ctx context.Context, ri config.ResolvedInvocation, timeout time.
 			return transient(describeProbeError(probeCtx, respErr, timeout))
 		}
 
-		slog.Debug("preflight.model_ok", "model", ri.ModelName, "elapsed", time.Since(started))
+		slog.DebugContext(ctx, "preflight.model_ok", "model", ri.ModelName, "elapsed", time.Since(started))
 
 		return nil
 	}
@@ -1075,7 +1075,7 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 
 	entry, found := probeCache.lookup(key, settings.CacheWindow(), now)
 	if found {
-		slog.Debug("preflight.cached", "target", key)
+		slog.DebugContext(ctx, "preflight.cached", "target", key)
 
 		return entry.err
 	}

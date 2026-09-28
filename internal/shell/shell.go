@@ -825,7 +825,7 @@ func (h HostRunner) RunStreamedCapture(ctx context.Context, command string, maxB
 // sibling — no buffering, no allocation, for the callers that never wanted
 // the output back.
 func (h HostRunner) runStreamed(ctx context.Context, command string, maxBytes int) (stdout, stderr string, err error) {
-	slog.Debug("shell.run", "command", command, "cwd", h.cwd)
+	slog.DebugContext(ctx, "shell.run", "command", command, "cwd", h.cwd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.WaitDelay = cancelWaitDelay
@@ -851,7 +851,7 @@ func (h HostRunner) runStreamed(ctx context.Context, command string, maxBytes in
 	flushStdout()
 	flushStderr()
 
-	slog.Debug("shell.run", "command", command, "cwd", h.cwd, "exit_code", exitCodeOf(runErr))
+	slog.DebugContext(ctx, "shell.run", "command", command, "cwd", h.cwd, "exit_code", exitCodeOf(runErr))
 
 	if outCapture != nil {
 		stdout, stderr = outCapture.result(), errCapture.result() //nolint:nilaway // errCapture is assigned in the same branch as outCapture, so one being set means both are
@@ -872,7 +872,7 @@ func (h HostRunner) runStreamed(ctx context.Context, command string, maxBytes in
 // the moment the command exited nonzero, leaving only the terse "exit status
 // N" from the wrapped error.
 func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
-	slog.Debug("shell.capture", "command", command, "cwd", h.cwd)
+	slog.DebugContext(ctx, "shell.capture", "command", command, "cwd", h.cwd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.WaitDelay = cancelWaitDelay
@@ -889,7 +889,7 @@ func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, err
 	err := cmd.Run()
 	flushStderr()
 
-	slog.Debug("shell.capture", "command", command, "cwd", h.cwd, "exit_code", exitCodeOf(err),
+	slog.DebugContext(ctx, "shell.capture", "command", command, "cwd", h.cwd, "exit_code", exitCodeOf(err),
 		"output_bytes", outBuf.Len(), "output", outBuf.String(), "stderr", errBuf.String())
 
 	if err != nil {
@@ -940,7 +940,7 @@ func (h HostRunner) RunCaptureFullLimitedStreamed(ctx context.Context, command s
 // RunCaptureFullLimitedStreamed (stream true, tees both captured streams to
 // the context's output live — see events.Stdout).
 func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes int, spillDir string, stream bool) (stdout, stderr string, exitCode int, err error) {
-	slog.Debug("shell.capture_full", "command", command, "cwd", h.cwd)
+	slog.DebugContext(ctx, "shell.capture_full", "command", command, "cwd", h.cwd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.WaitDelay = cancelWaitDelay
@@ -975,7 +975,7 @@ func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes
 
 	code := exitCodeOf(runErr)
 
-	slog.Debug("shell.capture_full", "command", command, "cwd", h.cwd, "exit_code", code)
+	slog.DebugContext(ctx, "shell.capture_full", "command", command, "cwd", h.cwd, "exit_code", code)
 
 	return outWriter.result(), errWriter.result(), code, nil
 }

@@ -48,11 +48,11 @@ func (p ProgressFlags) draw(ctx context.Context, st store.Usage) (context.Contex
 
 	// Log records go above the region too, or the first warning a step logs tears it.
 	previous := slog.Default()
-	slog.SetDefault(slog.New(tint.NewTextHandler(live.Log(), &tint.Options{
+	slog.SetDefault(slog.New(events.LogHandler(tint.NewTextHandler(live.Log(), &tint.Options{
 		Level:     levelOf(previous.Handler()),
 		AddSource: true,
 		NoColor:   !live.Color,
-	})))
+	}))))
 
 	live.Start()
 

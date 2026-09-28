@@ -119,7 +119,7 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (c
 		// models and nothing about which job, step, or run hit the cascade.
 		live := prepared.conv.recorder.liveIdentity()
 
-		slog.Warn("agent.failover",
+		slog.WarnContext(ctx, "agent.failover",
 			"run", live.runID,
 			"job", live.job,
 			"step", live.stepName,

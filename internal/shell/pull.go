@@ -52,7 +52,7 @@ func PrepareImages(ctx context.Context, images []string) error {
 
 	for _, image := range images {
 		if client.ImagePresent(ctx, image) {
-			slog.Debug("shell.docker.image_present", "image", image)
+			slog.DebugContext(ctx, "shell.docker.image_present", "image", image)
 
 			continue
 		}
@@ -71,7 +71,7 @@ func pullImage(ctx context.Context, client *dockerapi.Client, image string) erro
 	defer cancel()
 
 	events.Note(ctx, events.NoteInfo, "pulling image: "+image)
-	slog.Debug("shell.docker.image_pull", "image", image)
+	slog.DebugContext(ctx, "shell.docker.image_pull", "image", image)
 
 	err := client.Pull(ctx, image, events.Stdout(ctx))
 	if err != nil {

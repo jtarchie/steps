@@ -284,14 +284,14 @@ func (c *versionCursor) take(
 	// repeat on the next run.
 	order, err := st.RecordVersionOrder(detached, resourceName, key)
 	if err != nil {
-		slog.Warn("job.cursor_unrecorded", "job", jobName, "resource", resourceName, "error", err)
+		slog.WarnContext(ctx, "job.cursor_unrecorded", "job", jobName, "resource", resourceName, "error", err)
 
 		return
 	}
 
 	err = st.RecordConsumedMark(detached, jobName, resourceName, order)
 	if err != nil {
-		slog.Warn("job.cursor_unrecorded", "job", jobName, "resource", resourceName, "error", err)
+		slog.WarnContext(ctx, "job.cursor_unrecorded", "job", jobName, "resource", resourceName, "error", err)
 
 		return
 	}

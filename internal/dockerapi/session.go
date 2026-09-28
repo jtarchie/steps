@@ -113,7 +113,7 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 	}
 
 	for _, warning := range created.Warnings {
-		slog.Warn("dockerapi.container_create_warning", "image", spec.Image, "warning", warning)
+		slog.WarnContext(ctx, "dockerapi.container_create_warning", "image", spec.Image, "warning", warning)
 	}
 
 	return created.ID, nil

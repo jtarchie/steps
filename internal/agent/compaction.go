@@ -128,7 +128,7 @@ func maybeCompact(ctx context.Context, llm model.LLM, req *model.LLMRequest, con
 
 	summarized, overBudget, err := summarizeConversation(ctx, llm, conv.usage, oldContents, state.summary)
 	if err != nil {
-		slog.Warn("agent.compaction_failed", "error", err)
+		slog.WarnContext(ctx, "agent.compaction_failed", "error", err)
 
 		return nil
 	}
@@ -152,7 +152,7 @@ func maybeCompact(ctx context.Context, llm model.LLM, req *model.LLMRequest, con
 
 	conv.env.transcript.compaction(compactionLabel(len(oldContents), len(recentContents)), summarized)
 
-	slog.Info("agent.compaction", "summarized_turns", len(oldContents), "recent_turns", len(recentContents))
+	slog.InfoContext(ctx, "agent.compaction", "summarized_turns", len(oldContents), "recent_turns", len(recentContents))
 
 	if recent := estimateContentTokens(recentContents); recent > conv.compactAfterTokens {
 		// Name the budget and the field that changes it. The message used to

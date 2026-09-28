@@ -1168,7 +1168,7 @@ func PlanChains(
 	ctx context.Context, cfg *config.Config, jobName string, steps []config.Step,
 	pinned map[string]string, cache *rsrc.Cache, sets []InputSet,
 ) ([]Chain, error) {
-	slog.Debug("job.plan", "job", jobName, "steps", len(steps), "sets", len(sets))
+	slog.DebugContext(ctx, "job.plan", "job", jobName, "steps", len(steps), "sets", len(sets))
 
 	if sets != nil {
 		chains := make([]Chain, 0, len(sets))
@@ -1182,7 +1182,7 @@ func PlanChains(
 			chains = append(chains, chain)
 		}
 
-		slog.Debug("job.planned", "job", jobName, "chains", len(chains))
+		slog.DebugContext(ctx, "job.planned", "job", jobName, "chains", len(chains))
 
 		return chains, nil
 	}
@@ -1192,7 +1192,7 @@ func PlanChains(
 		return nil, err
 	}
 
-	slog.Debug("job.planned", "job", jobName, "chains", len(chains))
+	slog.DebugContext(ctx, "job.planned", "job", jobName, "chains", len(chains))
 
 	return chains, nil
 }

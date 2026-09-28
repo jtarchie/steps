@@ -190,7 +190,7 @@ func runCLIConversation(ctx context.Context, prepared preparedAgentStep, timeout
 		recordCLIMessageDelivery(prepared, plan, attemptErr, pendingAt)
 
 		if attemptErr != nil {
-			slog.Warn("agent.cli.attempt_failed",
+			slog.WarnContext(ctx, "agent.cli.attempt_failed",
 				"agent", prepared.ri.AgentName,
 				"cli", prepared.ri.CLI,
 				"attempt", attempt+1,

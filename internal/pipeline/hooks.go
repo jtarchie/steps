@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jtarchie/steps/internal/agent"
@@ -109,7 +110,7 @@ func runMatchedHook(ctx context.Context, scope hookScope, name string, step *con
 
 	hookCtx = withHookLogger(hookCtx, scope.label, name)
 	hookCtx = withHookIdentity(hookCtx, scope.jobName, rowName)
-	logFrom(hookCtx).Debug("job.hook")
+	slog.DebugContext(hookCtx, "job.hook")
 
 	started := time.Now()
 	mark := publishHookStarted(hookCtx, scope.jobName, rowName)
@@ -203,7 +204,7 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 
 func logIfHookFailed(ctx context.Context, scope hookScope, name string, err error) {
 	if err != nil {
-		logFrom(ctx).Warn("job.hook.failed", "scope", scope.label, "hook", name, "error", err.Error())
+		slog.WarnContext(ctx, "job.hook.failed", "scope", scope.label, "hook", name, "error", err.Error())
 	}
 }
 

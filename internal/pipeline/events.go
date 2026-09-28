@@ -150,7 +150,7 @@ func publishFinished(
 		text = err.Error()
 	}
 
-	logFrom(ctx).Info("job.step.finished", "status", status, "duration", time.Since(started))
+	slog.InfoContext(ctx, "job.step.finished", "status", status, "duration", time.Since(started))
 
 	events.Publish(ctx, events.Event{
 		Type:         events.TypeStepFinished,

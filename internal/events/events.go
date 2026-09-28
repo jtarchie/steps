@@ -25,6 +25,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -417,35 +418,108 @@ func StepID(ctx context.Context) int64 {
 	return id
 }
 
-// loggerKey is the context key for the run-scoped logger.
-type loggerKey struct{}
+// logAttrsKey is the context key for the attributes every log line under ctx
+// carries.
+type logAttrsKey struct{}
 
-// WithLogger returns a context carrying logger, so every package executing a
-// step logs under the run/job/step it belongs to without that identity being
-// threaded through its signatures.
+// WithLogAttrs returns a context whose log lines carry args — key/value pairs
+// read the way slog reads them — so every package executing a step logs under
+// the pipeline/run/job/step it belongs to without that identity being threaded
+// through its signatures. A key ctx already carries is replaced, not repeated.
 //
 // It lives beside WithRunID, and for the same reason: which run a line
 // belongs to is known by the package that owns the plan walk, and needed by
 // packages that must not import it. A stdlib-only leaf both already depend on
 // is the one place they can meet — and this stays stdlib-only, since log/slog
-// is stdlib.
+// is stdlib. Only attributes travel, not a *slog.Logger: a logger captured
+// here would pin whatever slog.Default() was at the time, while LogHandler
+// reads them when each line is written, through whichever handler is current.
+//
+// An empty string value is kept, and means absent: LogHandler never writes
+// it, so adding a key with "" clears what a parent context set — how a
+// nameless nested step stops reporting its parent's step=.
 //
 // The alternative — a jobName/index parameter pair on every function that
 // might log — makes a diagnostic concern dictate the shape of everything it
 // touches, and spreads exactly as far as the logging does.
-func WithLogger(ctx context.Context, logger *slog.Logger) context.Context {
-	return context.WithValue(ctx, loggerKey{}, logger)
-}
+func WithLogAttrs(ctx context.Context, args ...any) context.Context {
+	parent, _ := ctx.Value(logAttrsKey{}).([]slog.Attr)
+	// Cloned, never appended in place: in_parallel and across branches add
+	// to one parent concurrently, and a shared backing array would race.
+	attrs := slices.Clone(parent)
 
-// Logger returns the logger ctx carries, or slog's default. Never nil, so a
-// call site reads Logger(ctx).Info(...) with no check of its own.
-func Logger(ctx context.Context) *slog.Logger {
-	logger, ok := ctx.Value(loggerKey{}).(*slog.Logger)
-	if !ok {
-		return slog.Default()
+	for _, attr := range slog.Group("", args...).Value.Group() {
+		if i := slices.IndexFunc(attrs, func(a slog.Attr) bool { return a.Key == attr.Key }); i >= 0 {
+			attrs[i] = attr
+		} else {
+			attrs = append(attrs, attr)
+		}
 	}
 
-	return logger
+	return context.WithValue(ctx, logAttrsKey{}, attrs)
+}
+
+// LogHandler wraps inner so every record written with a context carries that
+// context's WithLogAttrs attributes, ahead of the call site's own — identity
+// first, where the eye scans for it. A key the call site passed wins over the
+// context's, so no key is printed twice, and wrapping twice writes each
+// attribute once for the same reason. Attributes land inside any group the
+// logger has open; nothing here opens one.
+func LogHandler(inner slog.Handler) slog.Handler {
+	return ctxHandler{inner: inner}
+}
+
+type ctxHandler struct {
+	inner slog.Handler
+}
+
+func (h ctxHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.inner.Enabled(ctx, level)
+}
+
+func (h ctxHandler) Handle(ctx context.Context, r slog.Record) error {
+	if ctx == nil {
+		return h.inner.Handle(ctx, r) //nolint:wrapcheck // a pass-through: the wrapped handler's error is the answer
+	}
+
+	attrs, _ := ctx.Value(logAttrsKey{}).([]slog.Attr)
+	if len(attrs) == 0 {
+		return h.inner.Handle(ctx, r) //nolint:wrapcheck // a pass-through: the wrapped handler's error is the answer
+	}
+
+	own := make(map[string]bool, r.NumAttrs())
+
+	r.Attrs(func(a slog.Attr) bool {
+		own[a.Key] = true
+
+		return true
+	})
+
+	// A new record rather than r.AddAttrs, which only appends; PC carried so
+	// AddSource still names the call site.
+	out := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+
+	for _, a := range attrs {
+		if !own[a.Key] && !a.Value.Equal(slog.StringValue("")) {
+			out.AddAttrs(a)
+		}
+	}
+
+	r.Attrs(func(a slog.Attr) bool {
+		out.AddAttrs(a)
+
+		return true
+	})
+
+	return h.inner.Handle(ctx, out) //nolint:wrapcheck // a pass-through: the wrapped handler's error is the answer
+}
+
+func (h ctxHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return ctxHandler{inner: h.inner.WithAttrs(attrs)}
+}
+
+func (h ctxHandler) WithGroup(name string) slog.Handler {
+	return ctxHandler{inner: h.inner.WithGroup(name)}
 }
 
 // Output is where a run's human-facing bytes go: a command's streamed output, an agent's answer, a prompt a person must see.

@@ -54,7 +54,7 @@ func runApprovalStep(ctx context.Context, r stepRunner, i int, step config.Step,
 	flags := agent.AnswerFlags(ctx, r.cfg.Name)
 	notef(ctx, "approval %d: waiting up to %s — steps approvals approve %d %s  |  steps approvals reject %d %s",
 		id, timeout, id, flags, id, flags)
-	slog.Warn("job.approval_pending",
+	slog.WarnContext(ctx, "job.approval_pending",
 		"job", r.jobName, "approval", id, "message", step.Approval.Message, "timeout", timeout.String())
 
 	decision, err := awaitApproval(ctx, r.st, id, timeout)
@@ -112,7 +112,7 @@ func awaitApproval(ctx context.Context, st store.Store, id int64, timeout time.D
 			_ = st.DecideApproval(context.WithoutCancel(ctx), id, "expired", "", "nobody answered within "+timeout.String())
 
 			// Aborted, not failed: nobody decided anything.
-			slog.Warn("job.approval_expired", "approval", id, "timeout", timeout.String())
+			slog.WarnContext(ctx, "job.approval_expired", "approval", id, "timeout", timeout.String())
 
 			return approval, fmt.Errorf("approval %d expired unanswered after %s", id, timeout)
 		}

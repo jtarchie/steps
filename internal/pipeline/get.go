@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -51,7 +52,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 
 	sets := w.resolution.sets
 
-	logFrom(getCtx).Debug("job.step", "resource", step.Get, "sets", len(sets))
+	slog.DebugContext(getCtx, "job.step", "resource", step.GetResourceName(), "sets", len(sets))
 
 	if len(sets) == 0 {
 		w.reportNoVersions(getCtx, step, resource.Name, len(remainder))
@@ -91,7 +92,7 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 		}
 
 		if w.skippable[hash] {
-			logFrom(getCtx).Info("job.skip", "resource", resource.Name, "reason", "cached", "hash", hash)
+			slog.InfoContext(getCtx, "job.skip", "resource", resource.Name, "reason", "cached", "hash", hash)
 
 			skipMark := markStep(getCtx)
 			publishStepSkipped(getCtx, w.jobName, i, step, skipMark, hash, skipReason(stepChainSkipped))
@@ -172,7 +173,7 @@ func (w *planWalk) reportNoVersions(ctx context.Context, step config.Step, resou
 	// all.
 	if blocked := w.resolution.blockingReport(); blocked != "" {
 		warnf(ctx, "get: %s cannot build; no versions exist for: %s", resourceName, blocked)
-		logFrom(ctx).Warn("job.get.blocked", "resource", resourceName, "blocking", blocked)
+		slog.WarnContext(ctx, "job.get.blocked", "resource", resourceName, "blocking", blocked)
 
 		return
 	}
@@ -183,14 +184,14 @@ func (w *planWalk) reportNoVersions(ctx context.Context, step config.Step, resou
 			reason += " — --force skips the step cache, not versions this job already took; to redo one, resume the run that took it or pin the version"
 		}
 
-		logFrom(ctx).Info("job.get.no_new_versions", "resource", resourceName, "already_taken", taken, "forced", forced(ctx))
+		slog.InfoContext(ctx, "job.get.no_new_versions", "resource", resourceName, "already_taken", taken, "forced", forced(ctx))
 		publishStepSkipped(ctx, w.jobName, w.index, step, markStep(ctx), "", reason)
 
 		return
 	}
 
 	warnf(ctx, "get: %s returned no versions; the %d step(s) after it did not run", resourceName, remaining)
-	logFrom(ctx).Warn("job.get.no_versions", "resource", resourceName, "skipped_steps", remaining)
+	slog.WarnContext(ctx, "job.get.no_versions", "resource", resourceName, "skipped_steps", remaining)
 }
 
 // takeSet advances the cursor of every fanning get to its binding in this set
@@ -246,7 +247,7 @@ func (w *planWalk) recordRunInput(ctx context.Context, buildID, inputName, resou
 
 	err := w.st.RecordRunInput(context.WithoutCancel(ctx), events.RunID(ctx), buildID, inputName, resourceName, key)
 	if err != nil {
-		logFrom(ctx).Warn("job.run_input_unrecorded", "get", inputName, "resource", resourceName, "error", err)
+		slog.WarnContext(ctx, "job.run_input_unrecorded", "get", inputName, "resource", resourceName, "error", err)
 	}
 }
 
@@ -305,7 +306,7 @@ func (w *planWalk) runTriggeredBuild(
 				// so this cannot fail for a reason the get can act on, and a
 				// version fetched is not made wrong by a workspace column that
 				// still names the job-level build.
-				logFrom(ctx).Warn("job.run_workspace_unrecorded", "run", resume.id, "error", err)
+				slog.WarnContext(ctx, "job.run_workspace_unrecorded", "run", resume.id, "error", err)
 			}
 		}
 	}
@@ -456,7 +457,7 @@ func (w *planWalk) resolveInPlaceVersion(
 	// empty check that caused it. Name the cause here, where it is known.
 	if len(versions) == 0 {
 		warnf(ctx, "get: %s returned no versions; nothing was fetched", step.Get)
-		logFrom(ctx).Warn("job.get.no_versions", "resource", step.Get)
+		slog.WarnContext(ctx, "job.get.no_versions", "resource", step.GetResourceName())
 
 		return resource, resourceType, nil, nil
 	}
@@ -493,7 +494,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	}
 
 	if w.skippable[hash] {
-		logFrom(ctx).Info("job.skip", "resource", resource.Name, "reason", "cached", "hash", hash)
+		slog.InfoContext(ctx, "job.skip", "resource", resource.Name, "reason", "cached", "hash", hash)
 
 		// A skip means this exact chain already succeeded once — the version
 		// was genuinely fetched, just not by this run.
@@ -579,7 +580,7 @@ func fetchGetVersions(ctx context.Context, cfg *config.Config, step config.Step,
 
 	err := retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
 		notef(ctx, "get: %s (attempt %d/%d)", step.Get, attempt, total)
-		logFrom(ctx).Info("job.get.attempt", "get", step.Get, "attempt", attempt, "total_attempts", total)
+		slog.InfoContext(ctx, "job.get.attempt", "get", step.Get, "attempt", attempt, "total_attempts", total)
 	}, func(attemptCtx context.Context) error {
 		res, resType, vers, fetchErr := cache.ResolveVersionsCached(attemptCtx, cfg, step, pinned)
 		if fetchErr != nil {
@@ -615,7 +616,7 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, st store.Deli
 	err := runPlacedStage(ctx, step, func(ctx context.Context) error {
 		return retryWithTimeout(ctx, step.Attempts, step.Timeout, func(attempt, total int) {
 			notef(ctx, "get: %s (version: %s, attempt %d/%d)", artifact, versionText(version), attempt, total)
-			logFrom(ctx).Info("job.get.in.attempt", "artifact", artifact, "attempt", attempt, "total_attempts", total)
+			slog.InfoContext(ctx, "job.get.in.attempt", "artifact", artifact, "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
 			err := fetchGetStep(attemptCtx, cfg, st, artifact, resource, resourceType, version, step.Params, bw)
 
@@ -696,7 +697,7 @@ func resourceDir(
 	// an empty key simply means "do not cache this one".
 	key, err := merkle.ResourceCacheKey(cfg, resourceType, extraEnv, source, version, params)
 	if err != nil {
-		logFrom(ctx).Debug("job.get.cache_key_failed", "artifact", artifact, "error", err)
+		slog.DebugContext(ctx, "job.get.cache_key_failed", "artifact", artifact, "error", err)
 
 		key = ""
 	}

@@ -745,6 +745,6 @@ func saveAgentUsage(ctx context.Context, st store.Usage, args saveUsageArgs) {
 		RawMeta:      args.usage.Raw,
 	})
 	if err != nil {
-		slog.Warn("agent.usage_unrecorded", "job", args.jobName, "step", args.stepName, "error", err)
+		slog.WarnContext(ctx, "agent.usage_unrecorded", "job", args.jobName, "step", args.stepName, "error", err)
 	}
 }
