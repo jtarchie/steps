@@ -361,6 +361,8 @@ type ValidateCmd struct {
 	// from this one was how far it looked.
 	Live bool   `help:"also probe the models and MCP servers, live"                                    name:"live"`
 	Job  string `help:"with --live, probe only this job's models and MCP servers (default: every job)"`
+	// Name is here because --live dials oauth servers with the pipeline's own login, which is filed under this name.
+	Name map[string]string `help:"name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
 }
 
 // Run loads the pipeline (which runs every config-level validator) and then
@@ -372,7 +374,7 @@ func (v *ValidateCmd) Run() error {
 		return err
 	}
 
-	cfg, err := v.Load(v.Pipeline, PipelineName(v.Pipeline))
+	cfg, err := v.Load(v.Pipeline, resolvePipelineName(v.Pipeline, v.Name))
 	if err != nil {
 		return err
 	}
@@ -1241,13 +1243,14 @@ type MCPCmd struct {
 // It reports rather than gates — a server that does not answer is a row with
 // an ✗, not a non-zero exit. `steps validate --live` is the command that fails.
 type MCPListCmd struct {
-	Pipeline string `arg:""                                                            help:"path to the pipeline YAML file"`
-	Offline  bool   `help:"list what the file declares without connecting to anything" name:"offline"`
+	Pipeline string            `arg:""                                                                                        help:"path to the pipeline YAML file"`
+	Offline  bool              `help:"list what the file declares without connecting to anything"                             name:"offline"`
+	Name     map[string]string `help:"name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
 }
 
 // Run prints one row per configured server.
 func (m *MCPListCmd) Run() error {
-	cfg, err := config.LoadConfig(m.Pipeline)
+	cfg, err := config.Load(m.Pipeline, resolvePipelineName(m.Pipeline, m.Name), nil)
 	if err != nil {
 		return fmt.Errorf("could not load pipeline: %w", err)
 	}
@@ -1351,7 +1354,7 @@ func probeMCPServers(ctx context.Context, cfg *config.Config, statuses []string)
 			probeCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 
-			tools, err := stepsmcp.ListServerTools(probeCtx, srv)
+			tools, err := stepsmcp.ListServerTools(probeCtx, cfg.Name, srv)
 			if err != nil {
 				statuses[i] = "✗ " + elideMiddle(config.MCPStatusReason(srv.Name, err))
 
@@ -1401,8 +1404,9 @@ func pluralize(count int, noun string) string {
 
 // MCPToolsCmd lists the tools a configured mcp_servers: entry exposes.
 type MCPToolsCmd struct {
-	Pipeline string `arg:"" help:"path to the pipeline YAML file"`
-	Server   string `arg:"" help:"mcp_servers: entry name"`
+	Pipeline string            `arg:""                                                                                        help:"path to the pipeline YAML file"`
+	Server   string            `arg:""                                                                                        help:"mcp_servers: entry name"`
+	Name     map[string]string `help:"name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
 }
 
 // Run loads the pipeline, resolves the named server, connects (per its
@@ -1410,7 +1414,7 @@ type MCPToolsCmd struct {
 // argument schema. An unauthorized oauth server surfaces
 // oauthTokenSource's own actionable "run steps mcp login" error, unchanged.
 func (m *MCPToolsCmd) Run() error {
-	cfg, err := config.LoadConfig(m.Pipeline)
+	cfg, err := config.Load(m.Pipeline, resolvePipelineName(m.Pipeline, m.Name), nil)
 	if err != nil {
 		return fmt.Errorf("could not load pipeline: %w", err)
 	}
@@ -1423,7 +1427,7 @@ func (m *MCPToolsCmd) Run() error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	tools, err := stepsmcp.ListServerTools(ctx, *srv)
+	tools, err := stepsmcp.ListServerTools(ctx, cfg.Name, *srv)
 	if err != nil {
 		return fmt.Errorf("could not list tools: %w", err)
 	}
@@ -1466,6 +1470,8 @@ type MCPLoginCmd struct {
 	PipelineNameFlag `embed:""`
 	Server           string `arg:""                                                                             help:"mcp_servers: entry name to authorize"`
 	Config           string `help:"authorize on THIS machine, for the server as this pipeline YAML declares it" name:"config"                               short:"c" type:"path"`
+	// Name is which pipeline a -c login is filed under, the same name `steps run --name` gives its state.
+	Name map[string]string `help:"name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml (repeatable)" name:"name"`
 }
 
 // Run is one of two logins, chosen by which pipeline was named. -c is a file here, so the login runs here: a loopback listener catches the redirect and the token lands in this user's config dir. -p is a pipeline a DAEMON serves, so the daemon runs it (daemon_login.go) — it is the machine that will spend the token, and one with no browser cannot be the loopback a redirect comes back to.
@@ -1481,7 +1487,7 @@ func (m *MCPLoginCmd) Run() error {
 		return m.remote(ctx)
 	}
 
-	cfg, err := config.LoadConfig(m.Config)
+	cfg, err := config.Load(m.Config, resolvePipelineName(m.Config, m.Name), nil)
 	if err != nil {
 		return fmt.Errorf("could not load pipeline: %w", err)
 	}
@@ -1497,17 +1503,17 @@ func (m *MCPLoginCmd) Run() error {
 
 	fmt.Printf("→ opening browser to authorize %q…\n", m.Server)
 
-	err = stepsmcp.Login(ctx, *srv, openBrowser)
+	err = stepsmcp.Login(ctx, cfg.Name, *srv, openBrowser)
 	if err != nil {
 		return fmt.Errorf("mcp login: %w", err)
 	}
 
-	path, err := stepsmcp.TokenPath(m.Server)
+	path, err := stepsmcp.TokenPath(cfg.Name, m.Server)
 	if err != nil {
 		return fmt.Errorf("mcp login: %w", err)
 	}
 
-	fmt.Printf("✓ authorized %q (token saved to %s)\n", m.Server, path)
+	fmt.Printf("✓ authorized %q for pipeline %q (token saved to %s)\n", m.Server, cfg.Name, path)
 
 	return nil
 }

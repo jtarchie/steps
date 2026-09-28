@@ -75,8 +75,8 @@ steps pipeline list                      # what this daemon holds
 steps pipeline get -p app                # the configuration it is serving
 steps pipeline pause -p app              # stop polling, admitting and triggering
 steps pipeline unpause -p app
-steps pipeline rename -p app --to legacy # keeps the history
-steps pipeline destroy -p app            # forgets it, and everything under it
+steps pipeline rename -p app --to legacy # keeps the history and its mcp logins
+steps pipeline destroy -p app            # forgets it, everything under it, and its mcp logins
 ```
 
 Every verb takes `--target` (or `STEPS_TARGET`), defaulting to

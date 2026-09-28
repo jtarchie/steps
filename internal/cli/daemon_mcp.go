@@ -61,7 +61,7 @@ func probeWorthMaking(pipeline *web.Pipeline, server string) (*config.MCPServer,
 	}
 
 	// The same rule `steps mcp list` follows before it dials anything: a server whose credential is already missing answers a probe with the problem the status cell has just stated, in the words of whatever refused it — one problem reported twice, in two vocabularies, the second of them long enough to set the width of a page.
-	if reason := notConnectable(*srv); reason != "" {
+	if reason := notConnectable(pipeline.Config().Name, *srv); reason != "" {
 		return nil, fmt.Errorf("mcp server %q has nothing to connect with: %s", server, reason)
 	}
 
@@ -69,9 +69,9 @@ func probeWorthMaking(pipeline *web.Pipeline, server string) (*config.MCPServer,
 }
 
 // notConnectable reports why a probe could not succeed whatever the server does, or "" for one worth dialling. The oauth half is the reason this is not just StaticStatus: a token file is the credential, and only the holder can look at it.
-func notConnectable(srv config.MCPServer) string {
+func notConnectable(pipeline string, srv config.MCPServer) string {
 	if srv.Auth.Type == "oauth" {
-		token := stepsmcp.InspectToken(srv)
+		token := stepsmcp.InspectToken(pipeline, srv)
 		if !token.Connected {
 			return token.Detail
 		}
@@ -98,7 +98,7 @@ func (p *probes) MCPState(pipeline *web.Pipeline, server string) web.MCPState {
 	}
 
 	if srv.Auth.Type == "oauth" {
-		state.Credential = p.creds.of(*srv)
+		state.Credential = p.creds.of(pipeline.Config().Name, *srv)
 	}
 
 	p.mu.Lock()
@@ -145,11 +145,12 @@ func (p *probes) StartProbe(pipeline *web.Pipeline, server string) error {
 	p.mu.Unlock()
 
 	target := *srv
+	name := pipeline.Config().Name
 
 	p.inflight.Go(func() {
 		defer cancel()
 
-		tools, probeErr := stepsmcp.ListServerTools(ctx, target)
+		tools, probeErr := stepsmcp.ListServerTools(ctx, name, target)
 		result := web.MCPProbe{At: time.Now()}
 
 		if probeErr != nil {

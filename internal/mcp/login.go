@@ -21,7 +21,7 @@ import (
 
 // Login runs the interactive OAuth authorization-code + PKCE flow for an
 // auth: {type: oauth} server and persists the resulting token to its
-// per-user token path (see TokenPath) — the implementation behind `steps
+// per-pipeline token path (see TokenPath) — the implementation behind `steps
 // mcp login <server>`. open is the browser-launch function
 // (injected so this is testable without a real browser and so this package
 // stays free of an os/exec dependency — see main.go's openBrowser for the
@@ -38,18 +38,18 @@ import (
 // without repeating discovery or registering a new client every time (see
 // oauthTokenSource in oauth.go, which is what run/watch actually use — this
 // function is never called from there, only from the CLI's login command).
-func Login(ctx context.Context, srv config.MCPServer, open func(url string) error) error {
+func Login(ctx context.Context, pipeline string, srv config.MCPServer, open func(url string) error) error {
 	cb, err := newLoopbackCallback(ctx, srv.Auth.CallbackPort)
 	if err != nil {
 		return err
 	}
 	defer cb.Close()
 
-	return login(ctx, srv, cb, printAndOpen(events.Stdout(ctx), open))
+	return login(ctx, pipeline, srv, cb, printAndOpen(events.Stdout(ctx), open))
 }
 
 // login is the flow both front doors share: everything after "where does the redirect land, and who is told the URL".
-func login(ctx context.Context, srv config.MCPServer, cb *loopbackCallback, announce func(authURL string)) error {
+func login(ctx context.Context, pipeline string, srv config.MCPServer, cb *loopbackCallback, announce func(authURL string)) error {
 	asm, reg, err := discoverAndRegister(ctx, srv, cb.redirectURL)
 	if err != nil {
 		return err
@@ -75,7 +75,7 @@ func login(ctx context.Context, srv config.MCPServer, cb *loopbackCallback, anno
 	// and a login that throws away a working credential because it will not
 	// last is worse than one that keeps it and says so — `steps run` right
 	// now works either way.
-	err = persistLoginResult(srv, asm, reg, tok)
+	err = persistLoginResult(pipeline, srv, asm, reg, tok)
 	if err != nil {
 		return err
 	}
@@ -450,7 +450,7 @@ func withScopes(authURL string, scopes []string) string {
 }
 
 // persistLoginResult writes the completed login's token and the client
-// credentials/endpoint used to obtain it to srv's per-user token file.
+// credentials/endpoint used to obtain it to srv's token file for pipeline.
 //
 // One thing it will not do is replace a renewable credential with a
 // disposable one. Login persists before it judges (see its comment), which is
@@ -459,8 +459,8 @@ func withScopes(authURL string, scopes []string) string {
 // token would otherwise overwrite a working, renewable token with one that
 // dies at expiry, report the failure, and leave no way back to what was there
 // a moment ago.
-func persistLoginResult(srv config.MCPServer, asm *oauthex.AuthServerMeta, reg *oauthex.ClientRegistrationResponse, tok *oauth2.Token) error {
-	path, err := TokenPath(srv.Name)
+func persistLoginResult(pipeline string, srv config.MCPServer, asm *oauthex.AuthServerMeta, reg *oauthex.ClientRegistrationResponse, tok *oauth2.Token) error {
+	path, err := TokenPath(pipeline, srv.Name)
 	if err != nil {
 		return err
 	}

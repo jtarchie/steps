@@ -32,6 +32,7 @@ func TestListToolsDoesNotCacheAServerThatNeedsALogin(t *testing.T) {
 	endpoint := mcpFixtureServer(t).URL
 
 	cfg := &config.Config{
+		Name: "a",
 		MCPServers: []config.MCPServer{{
 			Name:     "test",
 			Endpoint: endpoint,
@@ -50,7 +51,7 @@ func TestListToolsDoesNotCacheAServerThatNeedsALogin(t *testing.T) {
 		t.Fatalf("listing tools on an unauthorized server: %v, want an ErrNeedsLogin", err)
 	}
 
-	authorizeFixture(t, endpoint)
+	authorizeFixture(t, "a", endpoint)
 
 	tools, err := listToolsCached(context.Background(), cfg, "test", settings)
 	if err != nil {
@@ -62,13 +63,41 @@ func TestListToolsDoesNotCacheAServerThatNeedsALogin(t *testing.T) {
 	}
 }
 
+// TestListToolsDoesNotLetOnePipelinesLoginVouchForAnother is internal/agent's
+// test of the same name, for this cache: two pipelines declaring one oauth
+// server, only one logged in, must not share a verdict.
+func TestListToolsDoesNotLetOnePipelinesLoginVouchForAnother(t *testing.T) {
+	// Not t.Parallel(): t.Setenv, and toolsCache is process-wide state.
+	ResetPreflightCache()
+
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	endpoint := mcpFixtureServer(t).URL
+	authorizeFixture(t, "a", endpoint)
+
+	servers := []config.MCPServer{{Name: "test", Endpoint: endpoint, Auth: config.MCPServerAuth{Type: "oauth"}}}
+	settings := &config.Preflight{}
+
+	_, err := listToolsCached(context.Background(), &config.Config{Name: "a", MCPServers: servers}, "test", settings)
+	if err != nil {
+		t.Fatalf("the logged-in pipeline: %v", err)
+	}
+
+	_, err = listToolsCached(context.Background(), &config.Config{Name: "b", MCPServers: servers}, "test", settings)
+	if !errors.Is(err, stepsmcp.ErrNeedsLogin) {
+		t.Fatalf("a pipeline with no login of its own: %v, want an ErrNeedsLogin", err)
+	}
+}
+
 // authorizeFixture writes the token file a finished `steps mcp login` leaves
 // behind: the endpoint it was issued for (checkCredential refuses a file
 // belonging to a different one) and an access token with room left on it.
-func authorizeFixture(t *testing.T, endpoint string) {
+func authorizeFixture(t *testing.T, pipeline, endpoint string) {
 	t.Helper()
 
-	path, err := stepsmcp.TokenPath("test")
+	path, err := stepsmcp.TokenPath(pipeline, "test")
 	if err != nil {
 		t.Fatal(err)
 	}

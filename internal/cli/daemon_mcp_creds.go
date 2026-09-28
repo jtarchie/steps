@@ -42,17 +42,16 @@ import (
 // reported by the file changing, immediately.
 const credentialMaxAge = 30 * time.Second
 
-// credentials caches one answer per server name.
+// credentials caches one answer per pipeline and server name.
 //
-// Keyed by NAME with the endpoint kept as a FIELD, for the reason probeResult
-// gives: the token file is keyed by name alone, and folding the endpoint into
-// the key would add an entry per version a `steps pipeline set` ever
-// configured and drop none.
+// Keyed by what the token file is keyed by (mcp.TokenPath), with the endpoint
+// kept as a FIELD: folding the endpoint into the key would add an entry per
+// version a `steps pipeline set` ever configured and drop none.
 type credentials struct {
 	mu      sync.Mutex
 	entries map[string]credentialEntry
 	// inspect is the seam a test counts calls on; nothing else replaces it.
-	inspect func(config.MCPServer) stepsmcp.TokenState
+	inspect func(string, config.MCPServer) stepsmcp.TokenState
 }
 
 // credentialEntry is one answer and the file it was read from. A file that is
@@ -73,13 +72,13 @@ func newCredentials() *credentials {
 }
 
 // of is what the page renders for one oauth server.
-func (c *credentials) of(srv config.MCPServer) web.MCPCredential {
-	path, err := stepsmcp.TokenPath(srv.Name)
+func (c *credentials) of(pipeline string, srv config.MCPServer) web.MCPCredential {
+	path, err := stepsmcp.TokenPath(pipeline, srv.Name)
 	if err != nil {
 		// Without a path there is nothing to key an entry on, so this one is
 		// answered fresh every time. It is also a machine with no config
 		// directory, where nothing else works either.
-		token := c.inspect(srv)
+		token := c.inspect(pipeline, srv)
 
 		return web.MCPCredential{Connected: token.Connected, Detail: token.Detail}
 	}
@@ -96,11 +95,12 @@ func (c *credentials) of(srv config.MCPServer) web.MCPCredential {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if held, found := c.entries[srv.Name]; found && held.describes(srv, info) {
+	key := loginKey(pipeline, srv.Name)
+	if held, found := c.entries[key]; found && held.describes(srv, info) {
 		return held.state
 	}
 
-	token := c.inspect(srv)
+	token := c.inspect(pipeline, srv)
 	entry := credentialEntry{
 		endpoint: srv.Endpoint,
 		missing:  info == nil,
@@ -112,7 +112,7 @@ func (c *credentials) of(srv config.MCPServer) web.MCPCredential {
 		entry.modTime, entry.size = info.ModTime(), info.Size()
 	}
 
-	c.entries[srv.Name] = entry
+	c.entries[key] = entry
 
 	return entry.state
 }

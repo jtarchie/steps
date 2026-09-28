@@ -12,8 +12,8 @@ import (
 // ListServerTools connects to srv, lists its tools, and closes the
 // connection — the discovery path `steps mcp tools <pipeline> <server>`
 // calls, and a smoke test of connectivity/auth for any auth type.
-func ListServerTools(ctx context.Context, srv config.MCPServer) ([]*sdkmcp.Tool, error) {
-	client, err := Connect(ctx, srv)
+func ListServerTools(ctx context.Context, pipeline string, srv config.MCPServer) ([]*sdkmcp.Tool, error) {
+	client, err := Connect(ctx, pipeline, srv)
 	if err != nil {
 		return nil, err
 	}

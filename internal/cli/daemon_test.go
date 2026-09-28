@@ -34,8 +34,10 @@ func TestTheDaemonSharesAcquiredMachinesAcrossItsLoops(t *testing.T) {
 }
 
 // The stale-build sweep removes every b-* directory under a workspace.root: with no ownership check, so a neighbour set, or renamed, onto the same root deleted the build in flight there.
+//
+// Not t.Parallel(): a rename moves mcp logins, which live in process environment.
 func TestANeighbourOnTheSameRootLeavesABuildInFlightAlone(t *testing.T) {
-	t.Parallel()
+	isolateLogins(t)
 
 	held := servingDaemon(t)
 	root := t.TempDir()
@@ -153,8 +155,10 @@ func TestARefusedRenameLeavesThePipelineWhereItWas(t *testing.T) {
 }
 
 // Every mid-life close lets go of one pipeline's handle while its neighbours keep writing to the same file, and Close's reclaim holds the file's write lock as long as it takes — 31s measured after a destroy freed a gigabyte, the neighbours' queue writes failing SQLITE_BUSY meanwhile.
+//
+// Not t.Parallel(): a destroy and a rename touch mcp logins, which live in process environment.
 func TestOnlyTheDaemonsExitCompactsTheFile(t *testing.T) {
-	t.Parallel()
+	isolateLogins(t)
 
 	held := servingDaemon(t)
 
@@ -319,6 +323,22 @@ func serveOn(t *testing.T, held *daemon, name string, st store.Store, source str
 const idlePipeline = "jobs:\n- name: build\n  plan:\n  - task: work\n    inputs: []\n    run: \"true\"\n"
 
 // servingDaemon is the daemon `steps web` builds, over a state file of the test's own.
+// isolateLogins points the mcp login directory at a temp dir, since a destroy removes and a rename moves the real user's logins for a pipeline of the same name.
+func isolateLogins(t testing.TB) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("HOME", dir)
+
+	root, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return filepath.Join(root, "steps", "mcp")
+}
+
 func servingDaemon(t testing.TB) *daemon {
 	t.Helper()
 
@@ -628,6 +648,8 @@ func TestARestartSkipsAPipelineThisMachineCannotRunAndServesTheRest(t *testing.T
 
 // Not t.Parallel(), as captureStdout swaps os.Stdout: the read commands open .steps/steps.db unless told otherwise, so a daemon on any other file must name it in a parked step's printed answer command.
 func TestAParkedStepUnderTheDaemonNamesItsDatabase(t *testing.T) {
+	isolateLogins(t)
+
 	held := servingDaemon(t)
 
 	out := captureStdout(t, func() {

@@ -185,7 +185,7 @@ func (s *Server) mcpRowFor(pipeline *Pipeline, server config.MCPServer) mcpRow {
 	}
 
 	// A login in flight outranks the token it is about to replace: it is the newest thing that has happened to this server, and the reader is probably the one who started it.
-	if login, found := authorizer.LoginStatus(server.Name); found && row.OAuth {
+	if login, found := authorizer.LoginStatus(pipeline, server.Name); found && row.OAuth {
 		switch login.State {
 		case LoginPending:
 			row.Pending, row.AuthorizeURL = true, login.AuthorizeURL
@@ -246,17 +246,17 @@ func (s *Server) handleMCPConnect(c *echo.Context) error {
 	}
 
 	//nolint:wrapcheck // echo's redirect error is returned verbatim
-	return c.Redirect(http.StatusSeeOther, awaitAuthorizeURL(c, authorizer, server, tab, started))
+	return c.Redirect(http.StatusSeeOther, awaitAuthorizeURL(c, authorizer, pipeline, server, tab, started))
 }
 
-// awaitAuthorizeURL waits for discovery and registration to produce the URL the reader is to be sent to, and gives up on the tab rather than on an error page. Three ways out other than the bound: the URL arrives, which is the point; the login FAILS, since a provider that does not answer discovery should not cost a reader ten seconds of a spinner before it says so; and the login is REPLACED, because a login is tracked by server name and somebody else clicking Connect on that name takes the name over.
+// awaitAuthorizeURL waits for discovery and registration to produce the URL the reader is to be sent to, and gives up on the tab rather than on an error page. Three ways out other than the bound: the URL arrives, which is the point; the login FAILS, since a provider that does not answer discovery should not cost a reader ten seconds of a spinner before it says so; and the login is REPLACED, because a login is tracked per pipeline and server and somebody else clicking Connect on this pipeline's server takes it over.
 //
-// The replacement case is why started is passed in. Asking for "the login called tracker" is the only question the interface can answer, and after a replacement that is somebody else's login — one that may be against a different endpoint entirely, since two pipelines may declare one name. Sending this reader to THAT consent screen asks them to authorize something they never clicked on; the tab, which shows the login that won, is the honest answer.
-func awaitAuthorizeURL(c *echo.Context, authorizer Authorizer, server, tab string, started LoginStatus) string {
+// The replacement case is why started is passed in. Asking for "this pipeline's login called tracker" is the only question the interface can answer, and after a replacement that is somebody else's login — possibly against a different endpoint, if a `steps pipeline set` moved it in between. Sending this reader to THAT consent screen asks them to authorize something they never clicked on; the tab, which shows the login that won, is the honest answer.
+func awaitAuthorizeURL(c *echo.Context, authorizer Authorizer, pipeline *Pipeline, server, tab string, started LoginStatus) string {
 	deadline := time.Now().Add(mcpAuthorizeBound)
 
 	for time.Now().Before(deadline) {
-		status, found := authorizer.LoginStatus(server)
+		status, found := authorizer.LoginStatus(pipeline, server)
 		if !found || status.State == LoginFailed || status.ID != started.ID {
 			return tab
 		}

@@ -2,13 +2,18 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -104,23 +109,152 @@ func (t *TokenFile) token() *oauth2.Token {
 	}
 }
 
-// TokenPath returns the per-user path an oauth-configured server's token is
-// persisted to: ${XDG_CONFIG_HOME:-~/.config}/steps/mcp/<name>.json (via
-// os.UserConfigDir()), never inside a pipeline's own .steps/ directory. An
-// OAuth token is a per-user-per-service credential, not a per-pipeline
-// execution artifact — this is deliberate: it lets `steps mcp login
-// <server>` authorize a server once for every pipeline that
-// references it by the same name, and it keeps a pipeline-relative token
-// path from having to be threaded through RunJob/RunStep/CheckVersions/RunIn
-// and merkle's plan-time version resolution, none of which have (or should
-// gain) a reason to know about OAuth tokens.
-func TokenPath(name string) (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("mcp: resolve user config dir: %w", err)
+// ErrLoginsExist is MoveLogins refusing a destination that already holds
+// logins: merging would hand one pipeline another's accounts unnoticed, and
+// overwriting would destroy them.
+var ErrLoginsExist = errors.New("mcp logins already exist")
+
+// errNoConfigDir is a machine with no user config directory, where no login
+// can exist, so moving or removing one has nothing to do.
+var errNoConfigDir = errors.New("mcp: resolve user config dir")
+
+// TokenPath returns where pipeline's login for server lives:
+// ${XDG_CONFIG_HOME:-~/.config}/steps/mcp/<pipeline>/<server>.json (via
+// os.UserConfigDir()), never inside a pipeline's .steps/ directory and never
+// in the state database. It is per pipeline because a daemon holds several,
+// and a login keyed by server name alone let a login done for one pipeline
+// change which account another acted as. Every caller already holds the
+// pipeline's config, so the name is passed rather than stamped onto
+// config.MCPServer, where it would duplicate cfg.Name and move the cache key.
+func TokenPath(pipeline, server string) (string, error) {
+	if server == "" {
+		return "", errors.New("mcp: token path needs a server name")
 	}
 
-	return filepath.Join(dir, "steps", "mcp", name+".json"), nil
+	dir, err := loginsDir(pipeline)
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(dir, segment(server)+".json"), nil
+}
+
+// loginsDir is the one directory holding pipeline's logins. An empty name is
+// refused because it would resolve to the parent of every pipeline's logins,
+// which ForgetLogins would then remove whole.
+func loginsDir(pipeline string) (string, error) {
+	if pipeline == "" {
+		return "", errors.New("mcp: token path needs a pipeline name")
+	}
+
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errNoConfigDir, err)
+	}
+
+	return filepath.Join(dir, "steps", "mcp", segment(pipeline)), nil
+}
+
+var verbatimSegment = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// segment makes name one path segment that cannot traverse and cannot fold
+// into another name's segment on a case-insensitive filesystem (APFS's
+// default): `App` and `app` sharing one directory is the cross-pipeline
+// sharing TokenPath exists to remove. A name already in the safe alphabet is
+// kept as written so the directory stays recognizable; anything else is
+// lowercased, sanitized and suffixed with `~` and a hash of the original,
+// and `~` never appears in the verbatim form, so the two cannot collide.
+func segment(name string) string {
+	if len(name) <= 200 && verbatimSegment.MatchString(name) {
+		return name
+	}
+
+	safe := []byte(strings.Map(safeRune, strings.ToLower(name)))
+	if len(safe) > 64 {
+		safe = safe[:64]
+	}
+
+	sum := sha256.Sum256([]byte(name))
+
+	return string(safe) + "~" + hex.EncodeToString(sum[:])[:12]
+}
+
+func safeRune(r rune) rune {
+	if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-' {
+		return r
+	}
+
+	return '-'
+}
+
+// LoginsExist reports whether pipeline already has a login directory, and
+// where, so a rename can refuse before anything has moved.
+func LoginsExist(pipeline string) (string, bool) {
+	dir, err := loginsDir(pipeline)
+	if err != nil {
+		return "", false
+	}
+
+	_, err = os.Lstat(dir)
+
+	return dir, err == nil
+}
+
+// MoveLogins carries from's logins to to, for a pipeline rename, which keeps
+// history and so keeps its logins. A pipeline with no logins is a no-op; a
+// destination that exists, even empty, is ErrLoginsExist, checked here
+// because os.Rename silently replaces an empty directory on Linux.
+func MoveLogins(from, to string) error {
+	src, err := loginsDir(from)
+	if err != nil {
+		return ignoreNoConfigDir(err)
+	}
+
+	dst, err := loginsDir(to)
+	if err != nil {
+		return ignoreNoConfigDir(err)
+	}
+
+	_, err = os.Lstat(src)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+
+	_, err = os.Lstat(dst)
+	if err == nil {
+		return fmt.Errorf("%w at %s", ErrLoginsExist, dst)
+	}
+
+	err = os.Rename(src, dst)
+	if err != nil {
+		return fmt.Errorf("mcp: move logins: %w", err)
+	}
+
+	return nil
+}
+
+func ignoreNoConfigDir(err error) error {
+	if errors.Is(err, errNoConfigDir) {
+		return nil
+	}
+
+	return err
+}
+
+// ForgetLogins removes every login pipeline has, for a destroy, so a later
+// pipeline given the same name does not silently inherit them.
+func ForgetLogins(pipeline string) error {
+	dir, err := loginsDir(pipeline)
+	if err != nil {
+		return ignoreNoConfigDir(err)
+	}
+
+	err = os.RemoveAll(dir)
+	if err != nil {
+		return fmt.Errorf("mcp: remove logins: %w", err)
+	}
+
+	return nil
 }
 
 // LoadTokenFile reads and parses the token file at path.
@@ -144,6 +278,8 @@ func LoadTokenFile(path string) (*TokenFile, error) {
 // rename), so a concurrent reader — e.g. another `steps web
 // --max-concurrent` worker refreshing the same server's token — never
 // observes a half-written file. File permissions are 0600 (dir 0700).
+// Only a login calls it: it is the one writer allowed to create the
+// pipeline's directory.
 func (t *TokenFile) Save(path string) error {
 	dir := filepath.Dir(path)
 
@@ -152,7 +288,16 @@ func (t *TokenFile) Save(path string) error {
 		return fmt.Errorf("mkdir %q: %w", dir, err)
 	}
 
-	data, err := json.MarshalIndent(t, "", "  ") //nolint:gosec // deliberate: this whole file's job is persisting these secrets to a 0600, non-merkle-hashed, per-user token file — see TokenFile's doc comment
+	return t.replace(path)
+}
+
+// replace is Save without creating the directory, for a refresh write-back:
+// after a rename or destroy moved the directory away, recreating it would
+// leave a live refresh token under a name a later pipeline inherits.
+func (t *TokenFile) replace(path string) error {
+	dir := filepath.Dir(path)
+
+	data, err := json.MarshalIndent(t, "", "  ") //nolint:gosec // deliberate: this whole file's job is persisting these secrets to a 0600, non-merkle-hashed, per-pipeline token file — see TokenFile's doc comment
 	if err != nil {
 		return fmt.Errorf("marshal token file: %w", err)
 	}
@@ -213,8 +358,8 @@ func saveTemp(tmp *os.File, data []byte, tmpPath string) error {
 // `steps mcp login`). A missing token file, or one persisted for a
 // different endpoint, surfaces an actionable error naming the login command
 // to run.
-func oauthTokenSource(ctx context.Context, srv config.MCPServer) (oauth2.TokenSource, error) {
-	tf, path, _, err := checkCredential(srv)
+func oauthTokenSource(ctx context.Context, pipeline string, srv config.MCPServer) (oauth2.TokenSource, error) {
+	tf, path, _, err := checkCredential(pipeline, srv)
 	if err != nil {
 		return nil, err
 	}
@@ -316,9 +461,10 @@ func (p *persistingTokenSource) persist(tok *oauth2.Token) {
 		updated.RefreshToken = tok.RefreshToken
 	}
 
-	err := updated.Save(p.path)
+	err := updated.replace(p.path)
 	if err != nil {
-		slog.Warn("mcp.oauth.persist_failed", "path", p.path, "error", err)
+		slog.Warn("mcp.oauth.persist_failed", "path", p.path, "error", err,
+			"hint", "if the pipeline's login was moved or removed, the rotated token is not saved and it needs a login again")
 
 		return
 	}

@@ -145,16 +145,16 @@ func (c *sessionClient) Close() error {
 // its configured auth (see config.MCPServerAuth): "bearer" reads a static
 // token from the named env var (mirroring internal/agent's lookupAPIKey
 // exactly); "oauth" loads a persisted, self-refreshing token from the
-// per-user token store (see oauth.go) — never an interactive flow here,
+// per-pipeline token store (see oauth.go) — never an interactive flow here,
 // that's `steps mcp login` (login.go) alone. "" / "none" connects
 // unauthenticated. A stdio server is always unauthenticated by construction
 // (config.validateMCPServerTransport rejects any other auth.type at load
 // time), since there is no HTTP request to attach a token to.
-func Connect(ctx context.Context, srv config.MCPServer) (Client, error) {
+func Connect(ctx context.Context, pipeline string, srv config.MCPServer) (Client, error) {
 	// The OUTER ctx, deliberately: for a stdio server this is what binds the
 	// subprocess lifetime, and for an oauth one it is what the token source
 	// refreshes against. Both have to outlive the handshake below.
-	transport, err := newTransport(ctx, srv)
+	transport, err := newTransport(ctx, pipeline, srv)
 	if err != nil {
 		return nil, err
 	}
@@ -177,12 +177,12 @@ func Connect(ctx context.Context, srv config.MCPServer) (Client, error) {
 // Command/Endpoint is set, so the stdio branch (stdio.go) is the whole
 // stdio case; the fallthrough is the original Streamable HTTP path,
 // unchanged.
-func newTransport(ctx context.Context, srv config.MCPServer) (sdkmcp.Transport, error) {
+func newTransport(ctx context.Context, pipeline string, srv config.MCPServer) (sdkmcp.Transport, error) {
 	if srv.IsStdio() {
 		return commandTransport(ctx, srv), nil
 	}
 
-	httpClient, err := authorizedHTTPClient(ctx, srv)
+	httpClient, err := authorizedHTTPClient(ctx, pipeline, srv)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +203,7 @@ func newTransport(ctx context.Context, srv config.MCPServer) (sdkmcp.Transport, 
 
 // authorizedHTTPClient builds the *http.Client Connect's transport uses,
 // per srv.Auth.Type.
-func authorizedHTTPClient(ctx context.Context, srv config.MCPServer) (*http.Client, error) {
+func authorizedHTTPClient(ctx context.Context, pipeline string, srv config.MCPServer) (*http.Client, error) {
 	switch srv.Auth.Type {
 	case "", "none":
 		return http.DefaultClient, nil
@@ -215,7 +215,7 @@ func authorizedHTTPClient(ctx context.Context, srv config.MCPServer) (*http.Clie
 
 		return oauth2.NewClient(ctx, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})), nil
 	case "oauth":
-		ts, err := oauthTokenSource(ctx, srv)
+		ts, err := oauthTokenSource(ctx, pipeline, srv)
 		if err != nil {
 			return nil, err
 		}

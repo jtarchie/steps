@@ -184,7 +184,7 @@ jobs:
 		t.Fatal("the job ran before anybody logged in")
 	}
 
-	// Somebody starts a login and walks away. The one that follows must REPLACE it — a token file is keyed by server name, so two would race to write one — and the abandoned state must stop being worth anything.
+	// Somebody starts a login and walks away. The one that follows must REPLACE it — a token file is keyed by pipeline and server name, so two would race to write one — and the abandoned state must stop being worth anything.
 	abandoned := startLoginOverHTTP(t, served.addr, name, user, pass)
 
 	out := captureStdout(t, func() {
@@ -311,4 +311,239 @@ func startLoginOverHTTP(t *testing.T, addr, pipeline, user, pass string) string 
 	t.Fatal("the daemon never produced an authorization URL")
 
 	return ""
+}
+
+// trackerPipeline is one oauth server feeding a job that appends what it read to ran, so each pipeline's runs are visible on their own.
+func trackerPipeline(endpoint, ran string) string {
+	return `
+defaults:
+  preflight:
+    disabled: true
+mcp_servers:
+- name: tracker
+  endpoint: ` + endpoint + `/mcp
+  auth: { type: oauth }
+resource_types:
+- name: tracker-items
+  config:
+    mcp:
+      server: tracker
+      check:
+        tool: list_items
+resources:
+- name: items
+  type: tracker-items
+  source: {}
+jobs:
+- name: react
+  plan:
+  - get: items
+    trigger: true
+  - task: record
+    inputs: [items]
+    run: cat items/version.json >> ` + ran + `
+`
+}
+
+// mcpLogins is where this process's logins live, per os.UserConfigDir under the environment the test set.
+func mcpLogins(t *testing.T) string {
+	t.Helper()
+
+	root, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return filepath.Join(root, "steps", "mcp")
+}
+
+// Two pipelines on one daemon declare the same server. A login for one must leave the other's page, status route and runs exactly as they were, and the login must follow its pipeline through a rename and go with it on a destroy.
+//
+// Not t.Parallel(): startWeb backgrounds cli.Run in this process, and the token directory and $BROWSER are process environment.
+func TestAnMCPLoginBelongsToOnePipeline(t *testing.T) {
+	const (
+		user = "ops"
+		pass = "correct-horse-battery"
+	)
+
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("HOME", dir)
+	fakeBrowser(t)
+
+	fixture := newOAuthFixture(t)
+	logs := map[string]string{"app": filepath.Join(dir, "app.log"), "other": filepath.Join(dir, "other.log")}
+
+	served := startWeb(t, "--db", filepath.Join(dir, "daemon.db"), "--interval", "100ms",
+		"--basic-auth-username", user, "--basic-auth-password", pass)
+	defer served.stopIfRunning(t)
+
+	target := authTarget(served.addr, user, pass)
+
+	for name, ran := range logs {
+		path := filepath.Join(dir, name+".yml")
+		writePipelineFile(t, path, trackerPipeline(fixture.server.URL, ran))
+
+		err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", target})
+		if err != nil {
+			t.Fatalf("set %s: %v", name, err)
+		}
+	}
+
+	out := captureStdout(t, func() {
+		err := cli.Run([]string{"mcp", "login", "tracker", "-p", "app", "--target", target})
+		if err != nil {
+			t.Errorf("mcp login for app: %v", err)
+		}
+	})
+	if t.Failed() {
+		t.Fatal(out)
+	}
+
+	thePipelineSpendsTheToken(t, fixture, logs["app"])
+	onlyAppIsLoggedIn(t, served.addr, user, pass, logs["other"])
+
+	browser := newBrowser(t, served.addr, user, pass)
+	theTabEventuallySays(t, browser, "/p/app/mcp", "renews automatically")
+
+	if body := browser.get(t, "/p/other/mcp"); !strings.Contains(body, "needs login") {
+		t.Errorf("other's mcp tab after a login for app:\n%s", body)
+	}
+
+	theLoginFollowsARename(t, fixture, browser, target)
+	aRenameOntoLoginsIsRefusedAndADestroyRemovesOnlyItsOwn(t, served.addr, user, pass, target)
+}
+
+// A rename keeps history, so it keeps the login, and the pipeline goes on spending it.
+func theLoginFollowsARename(t *testing.T, fixture *oauthFixture, browser *browserClient, target string) {
+	t.Helper()
+
+	err := cli.Run([]string{"pipeline", "rename", "-p", "app", "--to", "app2", "--target", target})
+	if err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	if !fileExists(filepath.Join(mcpLogins(t), "app2", "tracker.json")) {
+		t.Error("the login did not follow the rename")
+	}
+
+	theTabEventuallySays(t, browser, "/p/app2/mcp", "renews automatically")
+
+	spent := fixture.authorized.Load()
+	for deadline := time.Now().Add(10 * time.Second); fixture.authorized.Load() == spent; {
+		if time.Now().After(deadline) {
+			t.Fatal("the renamed pipeline never spent its login again")
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// Renaming onto somebody's logins would inherit or destroy them; destroying a pipeline takes its own and nobody else's.
+func aRenameOntoLoginsIsRefusedAndADestroyRemovesOnlyItsOwn(t *testing.T, addr, user, pass, target string) {
+	t.Helper()
+
+	seeded := filepath.Join(mcpLogins(t), "taken", "tracker.json")
+
+	err := os.MkdirAll(filepath.Dir(seeded), 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writePipelineFile(t, seeded, "{}")
+
+	err = cli.Run([]string{"pipeline", "rename", "-p", "app2", "--to", "taken", "--target", target})
+	if err == nil || !strings.Contains(err.Error(), "mcp logins") {
+		t.Errorf("rename onto existing logins = %v, want refused naming them", err)
+	}
+
+	if code, _ := authGet(t, addr, "/p/app2", user, pass); code != http.StatusOK {
+		t.Errorf("/p/app2 = %d after a refused rename, want it still served", code)
+	}
+
+	err = cli.Run([]string{"pipeline", "destroy", "-p", "app2", "-n", "--target", target})
+	if err != nil {
+		t.Fatalf("destroy: %v", err)
+	}
+
+	_, err = os.Stat(filepath.Join(mcpLogins(t), "app2"))
+	if !os.IsNotExist(err) {
+		t.Errorf("app2's logins survived its destroy: %v", err)
+	}
+
+	if !fileExists(seeded) {
+		t.Error("a destroy removed another name's logins")
+	}
+}
+
+func onlyAppIsLoggedIn(t *testing.T, addr, user, pass, otherLog string) {
+	t.Helper()
+
+	time.Sleep(500 * time.Millisecond)
+
+	if fileExists(otherLog) {
+		t.Error("other ran on app's login")
+	}
+
+	if code, _ := authGet(t, addr, "/api/pipelines/other/mcp/tracker/login", user, pass); code != http.StatusNotFound {
+		t.Errorf("other's login status = %d, want 404: the login was app's", code)
+	}
+
+	var saved []string
+
+	_ = filepath.WalkDir(mcpLogins(t), func(found string, _ os.DirEntry, _ error) error {
+		if filepath.Base(found) == "tracker.json" {
+			saved = append(saved, filepath.Base(filepath.Dir(found)))
+		}
+
+		return nil
+	})
+
+	if len(saved) != 1 || saved[0] != "app" {
+		t.Errorf("tracker.json saved under %v, want exactly [app]", saved)
+	}
+}
+
+// A local login is filed under the name --name gives the file, the same one a run with that --name uses — and a run under any other name is not logged in, and says for which pipeline.
+//
+// Not t.Parallel(): the token directory and $BROWSER are process environment.
+func TestALocalLoginFollowsDashName(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("HOME", dir)
+	fakeBrowser(t)
+
+	fixture := newOAuthFixture(t)
+	path := filepath.Join(dir, "p.yml")
+	writePipelineFile(t, path, strings.Replace(trackerPipeline(fixture.server.URL, filepath.Join(dir, "ran.log")),
+		"defaults:\n  preflight:\n    disabled: true\n", "", 1))
+
+	out := captureStdout(t, func() {
+		err := cli.Run([]string{"mcp", "login", "tracker", "-c", path, "--name", "infra=" + path})
+		if err != nil {
+			t.Errorf("local mcp login: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, `for pipeline "infra"`) {
+		t.Errorf("the login did not say which pipeline it saved for:\n%s", out)
+	}
+
+	if !fileExists(filepath.Join(mcpLogins(t), "infra", "tracker.json")) {
+		t.Fatal("the login was not saved under --name's pipeline")
+	}
+
+	captureStdout(t, func() {
+		err := cli.Run([]string{"validate", "--live", path, "--name", "infra=" + path})
+		if err != nil {
+			t.Errorf("validate --live under the logged-in name: %v", err)
+		}
+	})
+
+	captureStdout(t, func() {
+		err := cli.Run([]string{"test", path, "--db", filepath.Join(dir, "p.db")})
+		if err == nil || !strings.Contains(err.Error(), `not authorized for pipeline "p"`) {
+			t.Errorf("a run under the file's own name = %v, want it not authorized for pipeline p", err)
+		}
+	})
 }

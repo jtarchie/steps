@@ -449,6 +449,11 @@ func overviewRow(t *testing.T, page, slug string) string {
 
 // TestPipelineDestroyForgetsEverything: destroy is one DELETE, so the route, the rows and the history all go.
 func TestPipelineDestroyForgetsEverything(t *testing.T) {
+	// A destroy or rename acts on the mcp logins filed under the pipeline's name, so not the real user's.
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("HOME", dir)
+
 	path := flagFixture(t)
 
 	served := startWebFor(t, path, "--interval", "1h")
@@ -493,6 +498,11 @@ func TestPipelineDestroyForgetsEverything(t *testing.T) {
 
 // TestPipelineRenameKeepsHistory: a rename is one UPDATE, so the old name's runs become the new name's.
 func TestPipelineRenameKeepsHistory(t *testing.T) {
+	// A destroy or rename acts on the mcp logins filed under the pipeline's name, so not the real user's.
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("HOME", dir)
+
 	path := flagFixture(t)
 
 	served := startWebFor(t, path, "--interval", "1h")
