@@ -41,3 +41,6 @@ steps-shim/
 hack/shorts/node_modules/
 hack/shorts/*/out/
 hack/shorts/.cache/
+
+# tools/testshard: per-test wall clock from the last run, which balances the next one
+/.testshard/

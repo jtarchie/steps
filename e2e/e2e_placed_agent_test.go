@@ -165,7 +165,7 @@ func TestPlacedAgentUnderNetworkNoneStillReadsItsTree(t *testing.T) {
 
 	fake := newFakeLLM(t,
 		// The note is written by the SHELL, at the tree root rather than under outputs:, so it exists on the worker and is never fetched home. A search that finds it can only have run in the container.
-		callsTool("run_shell", map[string]any{"command": "echo fenced-note > NOTE.txt; wget -q -T2 -O- http://example.com || echo no-egress"}),
+		callsTool("run_shell", map[string]any{"command": "echo fenced-note > NOTE.txt; wget -q -T2 -O- http://1.1.1.1 || echo no-egress"}),
 		callsTool("search_files", map[string]any{"pattern": `fenc\w+`, "output_mode": "content"}),
 		says("read the tree without a network"),
 	)

@@ -354,12 +354,14 @@ func TestTimeoutWarningFiresBeforeDeadline(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	fake := &fakeLLM{responses: timeoutWarningTestResponses(), delay: 40 * time.Millisecond}
+	// The deadline is a fifth of the window from warning, so the first request must land within 80ms of entry and the second after it: margins a race-instrumented, loaded machine keeps, where 10ms against a 40ms reply spent the whole window building the conversation.
+	fake := &fakeLLM{responses: timeoutWarningTestResponses(), delay: 200 * time.Millisecond}
+	conv := newTestConversation(t, "do the thing", dir)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	res, err := runAgentConversation(ctx, fake, newTestConversation(t, "do the thing", dir))
+	res, err := runAgentConversation(ctx, fake, conv)
 	if err != nil {
 		t.Fatalf("runAgentConversation: %v", err)
 	}
@@ -464,13 +466,14 @@ func TestTheSlowestRequestExcludesCompaction(t *testing.T) {
 			textResponse("done"),
 		},
 		errs:   []error{nil, errors.New("summarizer unavailable"), nil, errors.New("summarizer unavailable")},
-		delays: []time.Duration{0, 450 * time.Millisecond},
+		delays: []time.Duration{0, 600 * time.Millisecond},
 	}
 
 	conv := newTestConversation(t, "read some things", t.TempDir())
 	conv.compactAfterTokens = 500
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	// Three times the slow summary: counted as a turn, it puts twice itself (1.2s) above what is left after it, so the warning always fires; excluded, only a fifth (360ms) counts, leaving ~840ms for everything else a loaded machine does — at 1s against 450ms that slack was 350ms.
+	ctx, cancel := context.WithTimeout(context.Background(), 1800*time.Millisecond)
 	defer cancel()
 
 	_, err := runAgentConversation(ctx, fake, conv)

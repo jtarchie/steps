@@ -112,6 +112,9 @@ jobs:
 		t.Fatalf("ListRuns: %v", err)
 	}
 
+	// The task's line lands before the run is recorded finished, and a run still running refuses a retry.
+	waitForRunStatus(t, served.state, name, runs[0].ID, "succeeded")
+
 	writePipelineFile(t, versions, `[{"n":"one"},{"n":"two"}]`)
 
 	if status := postEmpty(t, "http://"+served.addr+"/p/"+name+"/runs/"+runs[0].ID+"/rerun"); status != http.StatusOK {

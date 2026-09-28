@@ -70,36 +70,23 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 		return stepResult{hash: hash, nodeHash: hash, disposition: stepCacheHit}, nil
 	}
 
-	// Where the step ran is answered by the machine itself, several frames
-	// below here and only once the step is done with it, so it comes back
-	// through a sink rather than a return value.
-	ctx, placed := withPlacementSink(ctx)
+	res, err := runPlaced(ctx, r, node, name, noResult(func(ctx context.Context) error {
+		err := executeTask(ctx, r.cfg, step, rt, r.bw, r.st)
+		if err != nil {
+			return fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
+		}
 
-	err = executeTask(ctx, r.cfg, step, rt, r.bw, r.st)
+		return nil
+	}))
 	if err != nil {
-		wrapped := fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
-		recordStepFailure(ctx, r, node, wrapped)
-		// A step that FAILED on a worker is the one whose machine somebody
-		// wants named — an architecture, a filesystem, a stale image. Same
-		// reasoning as recording a failed agent step's spend.
-		recordPlacement(ctx, r, placed, i, name, hash, hash)
-
-		return failedAt(hash), wrapped
+		return res, err
 	}
-
-	err = r.st.RecordNode(ctx, nodeRecord(node), r.jobName, "succeeded", nil, nil)
-	if err != nil {
-		return stepResult{}, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
-	}
-
-	// After the node, never before: run_placements references it.
-	recordPlacement(ctx, r, placed, i, name, hash, hash)
 
 	// After the node is recorded, so a run that could not record its own
 	// outcome does not leave behind an entry claiming the work is done.
 	workspace.SaveStepCache(ctx, r.bw, cached.Key, req)
 
-	return ran(hash), nil
+	return res, nil
 }
 
 // executeTask materializes a task's (isolated or shared) working directory,

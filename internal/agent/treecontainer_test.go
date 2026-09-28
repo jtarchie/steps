@@ -121,6 +121,7 @@ func writeFixture(t *testing.T, dir string) {
 
 // TestContainerTreeMatchesHostTree is the guarantee the shell-out puts at risk. The same fixture, the same call, the same answer — from Go walking this filesystem and from find and grep walking the container's. Anything that differs here is a pipeline whose results depend on where its agent ran, which is the one thing placement must not change.
 func TestContainerTreeMatchesHostTree(t *testing.T) {
+	t.Parallel()
 	requireAgentDocker(t)
 
 	dir := daemonVisibleDir(t)
@@ -130,6 +131,8 @@ func TestContainerTreeMatchesHostTree(t *testing.T) {
 
 	for _, image := range probeImages {
 		t.Run(image, func(t *testing.T) {
+			t.Parallel()
+
 			contained := newContainerTree(t, image, dir)
 
 			for _, tc := range parityCases() {
@@ -272,6 +275,7 @@ func compareStringSets(t *testing.T, label string, want, got []string) {
 
 // TestContainerTreeConfinesPaths is the security half. A container's root holds a real /etc/passwd, so a symlink planted in the tree resolves to something — and the answer has to be the same refusal the host gives, not a file.
 func TestContainerTreeConfinesPaths(t *testing.T) {
+	t.Parallel()
 	requireAgentDocker(t)
 
 	dir := daemonVisibleDir(t)
@@ -307,6 +311,7 @@ func TestContainerTreeConfinesPaths(t *testing.T) {
 
 // TestContainerTreeRoundTripsFiles covers the write half in both directions, including the mode an edit must not strip: a rename would have replaced the inode and quietly dropped the executable bit off a checked-in script.
 func TestContainerTreeRoundTripsFiles(t *testing.T) {
+	t.Parallel()
 	requireAgentDocker(t)
 
 	dir := daemonVisibleDir(t)
@@ -364,6 +369,7 @@ func TestContainerTreeRoundTripsFiles(t *testing.T) {
 
 // TestContainerWriteRefusesNUL covers the byte no argv can carry. The content crosses into the container as one shell word, and a NUL in it is not an error the shell reports — it is where the shell stops reading, so the file would be written silently truncated. A NUL at the very start is the case a length check gets wrong.
 func TestContainerWriteRefusesNUL(t *testing.T) {
+	t.Parallel()
 	requireAgentDocker(t)
 
 	dir := daemonVisibleDir(t)
@@ -389,6 +395,7 @@ func TestContainerWriteRefusesNUL(t *testing.T) {
 
 // TestProbeRefusesAnImageWithoutTheFileUtilities is why the probe runs at preparation. An image too thin to answer a read_file has to say so before a token is spent, naming itself and what it lacks, rather than failing the model's first call with whatever the shell said.
 func TestProbeRefusesAnImageWithoutTheFileUtilities(t *testing.T) {
+	t.Parallel()
 	requireAgentDocker(t)
 
 	dir := daemonVisibleDir(t)
