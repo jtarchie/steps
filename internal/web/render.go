@@ -33,9 +33,12 @@ var assets embed.FS
 // templates can only invoke a name known at parse time, so a single shared
 // set would leave every page fighting over that one name and the last file
 // parsed would win — silently, and identically on every route.
-type renderer struct{ pages map[string]*template.Template }
+type renderer struct {
+	pages   map[string]*template.Template
+	version string
+}
 
-func newRenderer() (*renderer, error) {
+func newRenderer(version string) (*renderer, error) {
 	layout, err := assets.ReadFile("templates/layout.html")
 	if err != nil {
 		return nil, fmt.Errorf("web: could not read layout: %w", err)
@@ -72,7 +75,11 @@ func newRenderer() (*renderer, error) {
 		pages[name] = tmpl
 	}
 
-	return &renderer{pages: pages}, nil
+	if version == "" {
+		version = "dev"
+	}
+
+	return &renderer{pages: pages, version: version}, nil
 }
 
 // Render executes the named page inside the layout.
@@ -89,6 +96,7 @@ func (r *renderer) Render(_ *echo.Context, w io.Writer, name string, data any) e
 
 	values["Page"] = name
 	values["Section"] = sectionOf(name)
+	values["Version"] = r.version
 
 	// Title and TitleMark are optional per page, but the layout always reads
 	// them — and `favicon` takes a string, so a missing key would reach it as
@@ -191,6 +199,9 @@ func templateFuncs() template.FuncMap {
 		"stamp":      formatStamp,
 		"short":      shortID,
 		"statusWord": statusWord,
+		// The footer's copyright year, read at render so a daemon left running
+		// over new year's eve does not print last year.
+		"year": func() int { return time.Now().Year() },
 		// JSON is parsed and highlighted rather than re-indented — see
 		// jsonview.go. jsonValue folds a bulky payload behind a summary for a
 		// transcript row; jsonPre is the same rendering for a page that gives

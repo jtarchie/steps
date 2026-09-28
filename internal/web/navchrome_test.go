@@ -3,8 +3,10 @@ package web
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -123,8 +125,8 @@ func TestConfigPageLightsTheRunsTab(t *testing.T) {
 }
 
 // TestErrorPageKeepsNavAlive: an error outside any pipeline (a bad slug, a
-// stray 404) still renders the layout's tab bar — anchored to a real
-// pipeline, not to /p//… links that 404 into the same error page again.
+// stray 404) still renders the shell — the switcher offers a real pipeline,
+// and nothing on it is a /p//… link that 404s into the same error page again.
 func TestErrorPageKeepsNavAlive(t *testing.T) {
 	t.Parallel()
 
@@ -139,8 +141,124 @@ func TestErrorPageKeepsNavAlive(t *testing.T) {
 		t.Error("error page renders dead /p//… links")
 	}
 
-	if !strings.Contains(body, `href="/p/demo/runs"`) {
-		t.Error("error page tabs are not anchored to a served pipeline")
+	menu := between(t, body, `id="pipemenu"`, "</div>")
+	if !strings.Contains(menu, `href="/p/demo"`) {
+		t.Error("error page switcher does not offer a served pipeline")
+	}
+}
+
+// TestThePipelineIsNamedBeforeItsTabs: every tab is relative to ONE pipeline,
+// so the pipeline's name has to come first in reading order — it sat at the
+// far right of the bar, dim, after six tabs that never said whose they were,
+// and a reader clicking "jobs" from / landed on a pipeline they never chose.
+// The bar reads as a path now: steps / <pipeline> / jobs.
+func TestThePipelineIsNamedBeforeItsTabs(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipelines(t, "alpha", "beta")
+
+	_, body := get(t, server, "/p/beta/runs")
+
+	switcher := strings.Index(body, `id="pipebtn"`)
+	firstTab := strings.Index(body, `class="tab"`)
+
+	if switcher < 0 || firstTab < 0 {
+		t.Fatalf("switcher at %d, first tab at %d", switcher, firstTab)
+	}
+
+	if switcher > firstTab {
+		t.Error("the pipeline switcher comes after the tabs it scopes")
+	}
+
+	button := between(t, body, `id="pipebtn"`, "</button>")
+	if !strings.Contains(button, ">beta<") {
+		t.Errorf("the switcher does not name the current pipeline:\n%s", button)
+	}
+}
+
+// TestPagesAboveAPipelineDrawNoTabs: the root, /docs and an error page sit
+// over several pipelines, and tabs borrowed from the first one were the
+// confusion — they looked like the root's own sections. Above a pipeline the
+// bar offers the switcher and nothing that pretends to be scoped.
+func TestPagesAboveAPipelineDrawNoTabs(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipelines(t, "alpha", "beta")
+
+	for _, page := range []string{"/", "/docs/README.md", "/p/no-such-pipeline"} {
+		_, body := get(t, server, page)
+
+		if strings.Contains(body, `class="tab"`) {
+			t.Errorf("%s draws section tabs for a pipeline it did not resolve", page)
+		}
+
+		button := between(t, body, `id="pipebtn"`, "</button>")
+		if !strings.Contains(button, "pipelines") {
+			t.Errorf("%s switcher does not read as a picker:\n%s", page, button)
+		}
+
+		menu := between(t, body, `id="pipemenu"`, "</div>")
+		if strings.Contains(menu, `aria-selected="true"`) {
+			t.Errorf("%s switcher marks a pipeline as current on a page above all of them", page)
+		}
+	}
+
+	_, body := get(t, server, "/p/alpha")
+	if !strings.Contains(body, `class="tab"`) {
+		t.Error("a pipeline's own page lost its tabs")
+	}
+}
+
+// TestDocsAndTheVersionLiveInTheFooter: docs are not a section of a pipeline
+// and did not belong among its tabs; the footer is where a reference link,
+// the source and the running version sit on every page, so a bug report can
+// name the build.
+func TestDocsAndTheVersionLiveInTheFooter(t *testing.T) {
+	t.Parallel()
+
+	server, err := New(nil, nil, WithVersion("v9.9.9-test"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for _, page := range []string{"/", "/docs/README.md"} {
+		_, body := get(t, server, page)
+
+		footer := between(t, body, "<footer", "</footer>")
+
+		for _, want := range []string{`href="/docs"`, `href="https://github.com/jtarchie/steps"`, "© " + strconv.Itoa(time.Now().Year()) + " JT Archie", "v9.9.9-test"} {
+			if !strings.Contains(footer, want) {
+				t.Errorf("%s footer lacks %q:\n%s", page, want, footer)
+			}
+		}
+
+		if head, _, _ := strings.Cut(body, "<main>"); strings.Contains(head, `href="/docs"`) {
+			t.Errorf("%s still offers docs in the header", page)
+		}
+	}
+
+	_, docs := get(t, server, "/docs/README.md")
+	if !strings.Contains(between(t, docs, "<footer", "</footer>"), `aria-current="page" href="/docs"`) {
+		t.Error("the docs page does not light its own footer link")
+	}
+}
+
+// TestTheJumpPaletteHasAButton: the palette opened on "/" and nothing else,
+// which on a phone is no way in at all. The button is the way in; the key
+// stays as the hint beside it.
+func TestTheJumpPaletteHasAButton(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+
+	_, body := get(t, server, "/p/demo")
+
+	if !strings.Contains(body, `<button class="jumpbtn" id="jumpbtn" type="button"`) {
+		t.Error("no button opens the jump palette")
+	}
+
+	if !strings.Contains(body, `<kbd>/</kbd>`) {
+		t.Error("the / hint is gone")
 	}
 }
 

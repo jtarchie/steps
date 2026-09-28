@@ -34,26 +34,34 @@
      the half that never refreshed. */}}
 <div class="statusline" id="statusline">
   <a class="brand" href="/"><b>steps</b> web</a>
-  <nav class="tabs" aria-label="Sections">
-    {{if .Nav.Pipelines}}<a class="tab" {{if eq .Section "jobs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}">jobs{{template "attbadge" (attentionOn .Nav "jobs")}}</a>
+  {{/* The bar is a PATH: steps / <pipeline> / <section>. The pipeline comes
+       before the tabs because every tab is relative to it — at the far right
+       it was the last thing read, and "jobs" clicked from / landed on a
+       pipeline the reader never chose. Above a pipeline (the root, /docs, an
+       error) the switcher reads as a picker and no tabs are drawn: tabs
+       borrowed from the first pipeline looked like the root's own. */}}
+  {{if .Nav.Pipelines}}<div class="pipeswitch">
+    <button class="pipebtn" id="pipebtn" type="button" aria-haspopup="listbox" aria-expanded="false">{{if .Nav.Anchored}}<span class="visually-hidden">pipeline </span><b>{{.Nav.Current}}</b>{{else}}pipelines{{end}} <span class="caret" aria-hidden="true">▾</span></button>
+    <div class="pipemenu" id="pipemenu" role="listbox" aria-label="Pipelines">
+      {{range .Nav.Pipelines}}
+      <a role="option" {{if and $.Nav.Anchored (eq .Slug $.Nav.Current)}}aria-selected="true"{{end}} href="/p/{{.Slug}}">{{.Slug}} <span class="hint">{{.Jobs}} jobs</span>{{if .Attention}}<span class="badge" title="{{.Attention}} waiting on you"><span aria-hidden="true">●</span>{{.Attention}}</span>{{end}}</a>
+      {{end}}
+    </div>
+  </div>
+  {{if .Nav.Anchored}}<nav class="tabs" aria-label="Sections">
+    <a class="tab" {{if eq .Section "jobs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}">jobs{{template "attbadge" (attentionOn .Nav "jobs")}}</a>
     <a class="tab" {{if eq .Section "runs"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/runs">runs</a>
     <a class="tab" {{if eq .Section "resources"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/resources">resources{{template "attbadge" (attentionOn .Nav "resources")}}</a>
     {{if .Nav.HasMCP}}<a class="tab" {{if eq .Section "mcp"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/mcp">mcp{{template "attbadge" (attentionOn .Nav "mcp")}}</a>{{end}}
     <a class="tab" {{if eq .Section "approvals"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/approvals">approvals{{template "attbadge" (attentionOn .Nav "approvals")}}</a>
     <a class="tab" {{if eq .Section "questions"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/questions">questions{{template "attbadge" (attentionOn .Nav "questions")}}</a>
-    {{end}}<a class="tab" {{if eq .Section "docs"}}aria-current="page" {{end}}href="/docs">docs</a>
-  </nav>
+  </nav>{{end}}{{end}}
   <div class="right">
-    {{if .Nav.Pipelines}}<span class="pipeswitch">
-      <button class="pipebtn" id="pipebtn" aria-haspopup="listbox" aria-expanded="false">{{.Nav.Current}} ▾</button>
-      <div class="pipemenu" id="pipemenu" role="listbox">
-        {{range .Nav.Pipelines}}
-        <a role="option" {{if eq .Slug $.Nav.Current}}aria-selected="true"{{end}} href="/p/{{.Slug}}">{{.Slug}} <span class="hint">{{.Jobs}} jobs</span>{{if .Attention}}<span class="badge" title="{{.Attention}} waiting on you"><span aria-hidden="true">●</span>{{.Attention}}</span>{{end}}</a>
-        {{end}}
-      </div>
-    </span>{{end}}
     {{if .Nav.ReadOnly}}<span class="ro">read-only</span>{{end}}
-    <span><kbd>/</kbd> jump</span>
+    {{/* A button, not only a key: on a phone "/" is nowhere to be pressed,
+         and the palette was unreachable there. The kbd is the hint for a
+         reader with a keyboard and is hidden where there is none. */}}
+    {{if .Nav.Pipelines}}<button class="jumpbtn" id="jumpbtn" type="button" title="jump to a job, run or pipeline"><span aria-hidden="true">⌕</span> jump <kbd>/</kbd></button>{{end}}
   </div>
   {{template "actionbar" .}}
 </div>
@@ -84,6 +92,15 @@
 {{template "crumbs" .}}
 {{template "page" .}}
 </main>
+
+{{/* Docs are not a section of a pipeline and did not belong among its tabs.
+     The footer is the reference shelf on every page: the docs, the source,
+     and the version — so a bug report can name the build. */}}
+<footer class="foot">
+  <span class="ver"><b>steps</b> {{.Version}}</span>
+  <nav aria-label="About"><a {{if eq .Section "docs"}}aria-current="page" {{end}}href="/docs">docs</a><a href="https://github.com/jtarchie/steps" rel="noopener">source</a></nav>
+  <span class="copy">© {{year}} JT Archie</span>
+</footer>
 
 <div class="palette-backdrop" id="palette-backdrop"></div>
 <div class="palette" id="palette" role="dialog" aria-label="Jump to">
@@ -414,6 +431,22 @@
       e.preventDefault(); open();
     }
   });
+  // Delegated, like the switcher: the button lives in #statusline, which
+  // every polling page morphs, and a listener bound at load is bound to a
+  // node the morph may have replaced.
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('#jumpbtn')) open();
+  });
+})();
+
+// On a phone the tabs are a strip that scrolls sideways, and the current one
+// can start off the right edge — the one tab a reader most needs to see is
+// the one telling them where they are. block:'nearest' keeps this from also
+// scrolling the page. Once, at load: after that the strip is theirs.
+(function () {
+  var current = document.querySelector('.tabs .tab[aria-current="page"]');
+  var strip = current && current.parentElement;
+  if (strip && strip.scrollWidth > strip.clientWidth) current.scrollIntoView({inline: 'center', block: 'nearest'});
 })();
 
 // Keep relative times honest. The server renders the text once; a page left
