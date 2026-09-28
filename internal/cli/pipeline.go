@@ -338,7 +338,7 @@ func (p *PipelineDestroyCmd) Run() error {
 
 	// Asked because it is not recoverable: history, versions and the merkle cache go with the row, and nothing here is a soft delete.
 	if !p.NonInteractive {
-		err = ask("destroy "+name+" and everything recorded under it?", "not destroyed")
+		err = ask("destroy "+name+", everything recorded under it, and its mcp logins?", "not destroyed")
 		if err != nil {
 			return err
 		}

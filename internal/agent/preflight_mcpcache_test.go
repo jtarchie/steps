@@ -160,7 +160,7 @@ func TestAServerThatCannotStartSaysWhy(t *testing.T) {
 
 	srv := config.MCPServer{Name: "ghost", Command: "/nonexistent/mcp-server"}
 
-	err := probeServer(t.Context(), srv, config.ToolSpec{MCP: "ghost"}, time.Minute)
+	err := probeServer(t.Context(), "test", srv, config.ToolSpec{MCP: "ghost"}, time.Minute)
 	if err == nil || !strings.Contains(err.Error(), "could not start") {
 		t.Errorf("probeServer = %v, want the launch failure itself, not a timeout", err)
 	}

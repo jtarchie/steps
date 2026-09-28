@@ -33,6 +33,6 @@ func (h *HostedCallback) Matches(state string) bool { return h.cb.matches(state)
 func (h *HostedCallback) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.cb.handle(w, r) }
 
 // LoginHosted is Login for a redirect that arrives through hosted, blocking until it does, ctx ends, or the flow fails. The token lands where Login puts it: on THIS machine, which is the one that will spend it.
-func LoginHosted(ctx context.Context, srv config.MCPServer, hosted *HostedCallback) error {
-	return login(ctx, srv, hosted.cb, hosted.announce)
+func LoginHosted(ctx context.Context, pipeline string, srv config.MCPServer, hosted *HostedCallback) error {
+	return login(ctx, pipeline, srv, hosted.cb, hosted.announce)
 }

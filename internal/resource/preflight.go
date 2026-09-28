@@ -454,8 +454,15 @@ func listToolsCached(ctx context.Context, cfg *config.Config, server string, set
 	// configured under: two pipelines (or two tests) can each call their
 	// server "slack" while pointing at different endpoints. A stdio server's
 	// identity is its whole invocation, so args/cwd are in the key too —
-	// `npx server --repo a` and `--repo b` expose different tools.
-	key := strings.Join(append([]string{srv.Name, srv.Endpoint, srv.Command, srv.Cwd}, srv.Args...), "|")
+	// `npx server --repo a` and `--repo b` expose different tools. An oauth
+	// server adds the pipeline, whose login is the credential it connects
+	// with (mcp.TokenPath): one pipeline's login must not vouch for another's.
+	identity := []string{srv.Name, srv.Endpoint, srv.Command, srv.Cwd}
+	if srv.Auth.Type == "oauth" {
+		identity = append(identity, cfg.Name)
+	}
+
+	key := strings.Join(append(identity, srv.Args...), "|")
 	now := time.Now()
 
 	entry, found := toolsCache.lookup(key, settings.CacheWindow(), now)
@@ -468,7 +475,7 @@ func listToolsCached(ctx context.Context, cfg *config.Config, server string, set
 	probeCtx, cancel := context.WithTimeout(ctx, settings.ProbeTimeout())
 	defer cancel()
 
-	tools, err := stepsmcp.ListServerTools(probeCtx, *srv)
+	tools, err := stepsmcp.ListServerTools(probeCtx, cfg.Name, *srv)
 
 	// Only OUR deadline is a timeout. When the caller's own context is the
 	// one that ended, the run is being torn down (Ctrl-C, a canceled job) and

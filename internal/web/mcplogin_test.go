@@ -14,15 +14,17 @@ import (
 type fakeAuthorizer struct {
 	fakeManager
 
-	state    string
-	started  []string
-	bases    []string
-	startErr error
-	served   int
+	state     string
+	started   []string
+	startedIn []string
+	bases     []string
+	startErr  error
+	served    int
 }
 
-func (f *fakeAuthorizer) StartLogin(_ *Pipeline, server string, req LoginRequest) (LoginStatus, error) {
+func (f *fakeAuthorizer) StartLogin(pipeline *Pipeline, server string, req LoginRequest) (LoginStatus, error) {
 	f.started = append(f.started, server)
+	f.startedIn = append(f.startedIn, pipeline.Slug)
 	f.bases = append(f.bases, req.Base)
 
 	if f.startErr != nil {
@@ -32,8 +34,8 @@ func (f *fakeAuthorizer) StartLogin(_ *Pipeline, server string, req LoginRequest
 	return LoginStatus{State: LoginPending}, nil
 }
 
-func (f *fakeAuthorizer) LoginStatus(server string) (LoginStatus, bool) {
-	if len(f.started) == 0 || f.started[0] != server {
+func (f *fakeAuthorizer) LoginStatus(pipeline *Pipeline, server string) (LoginStatus, bool) {
+	if len(f.started) == 0 || f.started[0] != server || f.startedIn[0] != pipeline.Slug {
 		return LoginStatus{}, false
 	}
 
@@ -148,6 +150,15 @@ func TestLoginRouteRefusals(t *testing.T) {
 
 	if code, _ := postLogin(t, server, "/api/pipelines/nosuch/mcp/tracker/login", `{}`); code != http.StatusNotFound {
 		t.Errorf("start against an unserved pipeline = %d, want 404", code)
+	}
+
+	// A login is one pipeline's: another pipeline's URL must not read its authorization URL.
+	if code, _ := postLogin(t, server, "/api/pipelines/demo/mcp/tracker/login", `{}`); code != http.StatusAccepted {
+		t.Fatalf("start = %d, want 202", code)
+	}
+
+	if code, _, body := authCall(t, server, http.MethodGet, "/api/pipelines/nosuch/mcp/tracker/login", authUser, authPass, nil); code != http.StatusNotFound || strings.Contains(body, "authorize") {
+		t.Errorf("status through an unserved pipeline = %d %s, want 404", code, body)
 	}
 
 	// A refusal is the sentence the terminal prints, so it travels as one.

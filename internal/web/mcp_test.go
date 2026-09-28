@@ -42,7 +42,7 @@ func (m *mcpAuthorizer) StartLogin(_ *Pipeline, _ string, req LoginRequest) (Log
 	return LoginStatus{State: LoginPending, ID: m.startedID}, nil
 }
 
-func (m *mcpAuthorizer) LoginStatus(string) (LoginStatus, bool) {
+func (m *mcpAuthorizer) LoginStatus(*Pipeline, string) (LoginStatus, bool) {
 	if m.login != nil {
 		return *m.login, true
 	}
@@ -369,7 +369,7 @@ func TestADaemonWithNoAuthorizerSaysSoRatherThanOfferingALogin(t *testing.T) {
 	}
 }
 
-// A login is tracked by server NAME, so a second Connect on that name takes it over — and two pipelines may declare one name against DIFFERENT endpoints. The reader whose login was replaced must not be handed the replacement's consent screen: they would be authorizing something they never clicked on.
+// A login is tracked per pipeline and server, so a second Connect on that server takes it over — and a `steps pipeline set` in between may have moved it to a DIFFERENT endpoint. The reader whose login was replaced must not be handed the replacement's consent screen: they would be authorizing something they never clicked on.
 func TestConnectWillNotFollowALoginThatReplacedItsOwn(t *testing.T) {
 	t.Parallel()
 

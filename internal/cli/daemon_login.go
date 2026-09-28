@@ -21,23 +21,33 @@ import (
 // loginBound is how long a started login waits for its browser. A person reading a consent screen is slow; a login nobody finishes must still let go of its goroutine.
 const loginBound = 10 * time.Minute
 
-// logins is every oauth login this daemon has started, by SERVER name: that is what a token file is keyed by (mcp.TokenPath), so two logins for one name would be racing to write one file, and the second replaces the first instead.
+// logins is every oauth login this daemon has started, by pipeline and server name (loginKey): that is what a token file is keyed by (mcp.TokenPath), so two logins for one pair would be racing to write one file, and the second replaces the first instead.
 type logins struct {
 	base context.Context //nolint:containedctx // a login outlives the request that started it, and dies with the daemon
 	mu   sync.Mutex
 	held map[string]*pendingLogin
+	// live is every login whose goroutine has not returned, held or not: a replaced login is cancelled but may already be persisting the token it obtained, and forget must wait that out too.
+	live map[*pendingLogin]struct{}
 	// stale is the logins a newer one replaced, newest last, kept only so the browser still at a consent screen can be told what happened; see staleLogins.
 	stale []staleLogin
 	wait  sync.WaitGroup
-	// attempts numbers the logins this daemon has started, which is what tells one attempt from the one that replaced it under the same server name.
+	// attempts numbers the logins this daemon has started, which is what tells one attempt from the one that replaced it under the same pipeline and server.
 	attempts atomic.Uint64
 }
 
 type pendingLogin struct {
-	hosted *stepsmcp.HostedCallback
-	cancel context.CancelFunc
+	hosted   *stepsmcp.HostedCallback
+	cancel   context.CancelFunc
+	pipeline string
+	// done closes when the login's goroutine has returned, so forget can know nothing will write under the pipeline's name again.
+	done   chan struct{}
 	mu     sync.Mutex
 	status web.LoginStatus
+}
+
+// loginKey is the pair a login and a token file are both keyed by.
+func loginKey(pipeline, server string) string {
+	return pipeline + "\x00" + server
 }
 
 // staleLogin is a replaced login reduced to the two things its abandoned browser still needs: the state its redirect will carry, and the page to put it back on.
@@ -50,10 +60,10 @@ type staleLogin struct {
 const staleLogins = 4
 
 func newLogins(base context.Context) *logins {
-	return &logins{base: base, held: map[string]*pendingLogin{}}
+	return &logins{base: base, held: map[string]*pendingLogin{}, live: map[*pendingLogin]struct{}{}}
 }
 
-// nextID names one ATTEMPT, since the map is keyed by server name and the newest login owns that name. A counter rather than a nonce: it is compared with itself by the request that started the login and never leaves this process as anything a caller could authenticate with.
+// nextID names one ATTEMPT, since the newest login for a pipeline and server owns that key. A counter rather than a nonce: it is compared with itself by the request that started the login and never leaves this process as anything a caller could authenticate with.
 func (l *logins) nextID() string {
 	return strconv.FormatUint(l.attempts.Add(1), 10)
 }
@@ -93,29 +103,45 @@ func (l *logins) StartLogin(pipeline *web.Pipeline, server string, req web.Login
 		return web.LoginStatus{}, err
 	}
 
+	name := pipeline.Config().Name
+	key := loginKey(name, server)
+
 	ctx, cancel := context.WithTimeout(l.base, loginBound)
-	pending := &pendingLogin{cancel: cancel, status: web.LoginStatus{State: web.LoginPending, ID: l.nextID()}}
+	pending := &pendingLogin{
+		cancel:   cancel,
+		pipeline: name,
+		done:     make(chan struct{}),
+		status:   web.LoginStatus{State: web.LoginPending, ID: l.nextID()},
+	}
 	pending.hosted = stepsmcp.NewHostedCallback(redirect, back, func(authURL string) {
 		pending.set(func(status *web.LoginStatus) { status.AuthorizeURL = authURL })
 	})
 
+	// ponytail: a StartLogin that resolved its pipeline just before detach removed it can still start a login after forget ran, writing under a name that is gone. Upgrade: record forgotten *web.Pipeline pointers and refuse them here under l.mu.
 	l.mu.Lock()
-	if previous := l.held[server]; previous != nil {
+	if previous := l.held[key]; previous != nil {
 		previous.cancel()
 		l.keepStale(previous)
 	}
 
-	l.held[server] = pending
+	l.held[key] = pending
+	l.live[pending] = struct{}{}
 	l.mu.Unlock()
 
 	l.wait.Go(func() {
+		defer func() {
+			l.mu.Lock()
+			delete(l.live, pending)
+			l.mu.Unlock()
+			close(pending.done)
+		}()
 		defer cancel()
 
-		loginErr := stepsmcp.LoginHosted(ctx, *srv, pending.hosted)
+		loginErr := stepsmcp.LoginHosted(ctx, name, *srv, pending.hosted)
 
 		pending.set(func(status *web.LoginStatus) {
 			// The path even on failure: a login that authorized and then refused itself (no refresh token) DID save what it got, and says so.
-			status.TokenPath, _ = stepsmcp.TokenPath(server)
+			status.TokenPath, _ = stepsmcp.TokenPath(name, server)
 
 			if loginErr != nil {
 				status.State, status.Message = web.LoginFailed, loginErr.Error()
@@ -130,9 +156,9 @@ func (l *logins) StartLogin(pipeline *web.Pipeline, server string, req web.Login
 	return pending.read(), nil
 }
 
-func (l *logins) LoginStatus(server string) (web.LoginStatus, bool) {
+func (l *logins) LoginStatus(pipeline *web.Pipeline, server string) (web.LoginStatus, bool) {
 	l.mu.Lock()
-	pending := l.held[server]
+	pending := l.held[loginKey(pipeline.Config().Name, server)]
 	l.mu.Unlock()
 
 	if pending == nil {
@@ -212,6 +238,33 @@ func (l *logins) stop() {
 	l.mu.Unlock()
 
 	l.wait.Wait()
+}
+
+// forget cancels every login pipeline has in flight and waits for each to return, so a destroy or rename that moves the pipeline's login directory afterwards is not raced by a login landing its token under the old name. Their pages are gone with the pipeline, so nothing is kept for a late redirect.
+func (l *logins) forget(pipeline string) {
+	var gone []*pendingLogin
+
+	l.mu.Lock()
+	for key, pending := range l.held {
+		if pending.pipeline == pipeline {
+			delete(l.held, key)
+		}
+	}
+
+	for pending := range l.live {
+		if pending.pipeline != pipeline {
+			continue
+		}
+
+		pending.cancel()
+
+		gone = append(gone, pending)
+	}
+	l.mu.Unlock()
+
+	for _, pending := range gone {
+		<-pending.done
+	}
 }
 
 // returnTo vets where a finished login may send the browser. A PATH on this daemon and nothing else: the value travels from a request into a Location header, so anything carrying a scheme or a host would make this daemon an open redirector — somebody else's login URL, ending on somebody else's page. Empty is a terminal login, which has no page to return to.

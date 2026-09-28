@@ -181,12 +181,12 @@ func TestLoginEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := Login(ctx, srv, fakeBrowserOpen(t))
+	err := Login(ctx, testPipeline, srv, fakeBrowserOpen(t))
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 
-	path, err := TokenPath(srv.Name)
+	path, err := TokenPath(testPipeline, srv.Name)
 	if err != nil {
 		t.Fatalf("TokenPath: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestLoginRegistersRefreshGrant(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := Login(ctx, srv, fakeBrowserOpen(t))
+	err := Login(ctx, testPipeline, srv, fakeBrowserOpen(t))
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestLoginRegistersRefreshGrant(t *testing.T) {
 		t.Fatalf("registered grant_types = %v, want both authorization_code and refresh_token", got)
 	}
 
-	path, err := TokenPath(srv.Name)
+	path, err := TokenPath(testPipeline, srv.Name)
 	if err != nil {
 		t.Fatalf("TokenPath: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestLoginRequestsConfiguredScopes(t *testing.T) {
 
 	var asked url.Values
 
-	err := Login(ctx, srv, capturingBrowserOpen(t, &asked))
+	err := Login(ctx, testPipeline, srv, capturingBrowserOpen(t, &asked))
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestLoginWithoutConfiguredScopesAsksForWhatIsOffered(t *testing.T) {
 
 	var asked url.Values
 
-	err := Login(ctx, srv, capturingBrowserOpen(t, &asked))
+	err := Login(ctx, testPipeline, srv, capturingBrowserOpen(t, &asked))
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestLoginFailsWhenNoRefreshTokenIssued(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := Login(ctx, srv, fakeBrowserOpen(t))
+	err := Login(ctx, testPipeline, srv, fakeBrowserOpen(t))
 	if err == nil {
 		t.Fatal("Login reported success for a credential that cannot be renewed")
 	}
@@ -380,7 +380,7 @@ func TestLoginFailsWhenNoRefreshTokenIssued(t *testing.T) {
 		t.Fatalf("Login error does not name the cause: %v", err)
 	}
 
-	path, err := TokenPath(srv.Name)
+	path, err := TokenPath(testPipeline, srv.Name)
 	if err != nil {
 		t.Fatalf("TokenPath: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestLoginKeepsARenewableTokenOverADisposableOne(t *testing.T) {
 		Auth:     config.MCPServerAuth{Type: "oauth"},
 	}
 
-	path, err := TokenPath(srv.Name)
+	path, err := TokenPath(testPipeline, srv.Name)
 	if err != nil {
 		t.Fatalf("TokenPath: %v", err)
 	}
@@ -442,7 +442,7 @@ func TestLoginKeepsARenewableTokenOverADisposableOne(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err = Login(ctx, srv, fakeBrowserOpen(t))
+	err = Login(ctx, testPipeline, srv, fakeBrowserOpen(t))
 	if err == nil {
 		t.Fatal("Login replaced a renewable credential with one that cannot be renewed, and reported success")
 	}
@@ -484,7 +484,7 @@ func assertLoginPersisted(t *testing.T, tf *TokenFile, srv config.MCPServer, wan
 func assertPersistedTokenWorks(t *testing.T, ctx context.Context, srv config.MCPServer) { //nolint:revive // t before ctx matches this file's other test-helper signatures
 	t.Helper()
 
-	client, err := Connect(ctx, srv)
+	client, err := Connect(ctx, testPipeline, srv)
 	if err != nil {
 		t.Fatalf("Connect after Login: %v", err)
 	}
@@ -525,12 +525,12 @@ func TestLoginSpaceSeparatedChallenge(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := Login(ctx, srv, fakeBrowserOpen(t))
+	err := Login(ctx, testPipeline, srv, fakeBrowserOpen(t))
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 
-	path, err := TokenPath(srv.Name)
+	path, err := TokenPath(testPipeline, srv.Name)
 	if err != nil {
 		t.Fatalf("TokenPath: %v", err)
 	}
@@ -572,12 +572,12 @@ func TestLoginPreregisteredClientWithoutDCR(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := Login(ctx, srv, fakeBrowserOpen(t))
+	err := Login(ctx, testPipeline, srv, fakeBrowserOpen(t))
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 
-	path, err := TokenPath(srv.Name)
+	path, err := TokenPath(testPipeline, srv.Name)
 	if err != nil {
 		t.Fatalf("TokenPath: %v", err)
 	}
@@ -624,7 +624,7 @@ func TestLoginWithoutDCRNorClientIDNamesTheFix(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := Login(ctx, srv, fakeBrowserOpen(t))
+	err := Login(ctx, testPipeline, srv, fakeBrowserOpen(t))
 	if err == nil {
 		t.Fatal("Login succeeded against a server with no registration endpoint")
 	}
@@ -659,7 +659,7 @@ func TestLoginPreregisteredSecretEnvUnset(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := Login(ctx, srv, func(string) error {
+	err := Login(ctx, testPipeline, srv, func(string) error {
 		t.Error("browser opened despite an unset client secret")
 
 		return nil
@@ -724,7 +724,7 @@ func TestLoginAcceptsAnUnadvertisedIss(t *testing.T) {
 
 	// The fake's metadata advertises no iss support, and its issuer is its
 	// own base URL — exactly Metabase's shape.
-	err := Login(ctx, srv, issBrowserOpen(t, fake.server.URL))
+	err := Login(ctx, testPipeline, srv, issBrowserOpen(t, fake.server.URL))
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -754,7 +754,7 @@ func TestLoginRejectsAMismatchedIss(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := Login(ctx, srv, issBrowserOpen(t, "https://attacker.example.com"))
+	err := Login(ctx, testPipeline, srv, issBrowserOpen(t, "https://attacker.example.com"))
 	if err == nil {
 		t.Fatal("Login: exchanged a code against an issuer it never started a flow with")
 	}
@@ -804,7 +804,7 @@ func TestLoginHonoursCallbackPort(t *testing.T) {
 
 	var query url.Values
 
-	err = Login(ctx, srv, capturingBrowserOpen(t, &query))
+	err = Login(ctx, testPipeline, srv, capturingBrowserOpen(t, &query))
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
