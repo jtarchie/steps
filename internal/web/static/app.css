@@ -252,7 +252,8 @@ tr.checkfail pre { margin: 0 0 4px; }
    platform minimum where the pointer is coarse; the bar's own height follows. */
 @media (pointer: coarse) {
   .statusline .brand, .tab, .pipebtn { min-height: 44px; }
-  .statusline .brand { display: inline-flex; align-items: center; }
+  /* A flex box drops the space between the two words, so the gap restores it. */
+  .statusline .brand { display: inline-flex; align-items: center; gap: 0.4em; }
   .jumpbtn { min-height: 40px; padding: 4px 12px; }
   .actionbar .btn { min-height: 36px; }
 }
