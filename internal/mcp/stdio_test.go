@@ -62,7 +62,7 @@ func stdioEchoServer(t *testing.T) config.MCPServer {
 func TestConnectStdio(t *testing.T) {
 	t.Parallel()
 
-	client, err := Connect(context.Background(), stdioEchoServer(t))
+	client, err := Connect(context.Background(), testPipeline, stdioEchoServer(t))
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestConnectStdioMissingBinary(t *testing.T) {
 
 	srv := config.MCPServer{Name: "ghost", Command: "steps-test-no-such-binary-xyz"}
 
-	_, err := Connect(context.Background(), srv)
+	_, err := Connect(context.Background(), testPipeline, srv)
 	if err == nil {
 		t.Fatal("Connect: expected an error for a nonexistent command")
 	}

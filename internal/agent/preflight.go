@@ -1052,6 +1052,9 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 	// than naming the pipeline: it also separates two revisions of one
 	// pipeline. internal/resource/preflight.go keys its sibling cache the
 	// same way and was immune to both.
+	// Except for oauth: the definition no longer identifies that connection,
+	// because the credential it sends is the PIPELINE's (mcp.TokenPath), so
+	// one pipeline's login must not vouch for another's missing one.
 	srv, err := cfg.FindMCPServer(spec.MCP)
 	if err != nil {
 		// A name no server answers to is a config error, identical on every
@@ -1059,8 +1062,13 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 		return err //nolint:wrapcheck // FindMCPServer already names the server and lists the alternatives
 	}
 
+	identity := []string{"mcp", srv.Name, srv.Endpoint, srv.Command, srv.Cwd}
+	if srv.Auth.Type == "oauth" {
+		identity = append(identity, cfg.Name)
+	}
+
 	key := strings.Join(append(
-		[]string{"mcp", srv.Name, srv.Endpoint, srv.Command, srv.Cwd},
+		identity,
 		append(append([]string{}, srv.Args...), spec.MCPTool, strings.Join(spec.MCPTools, ","), pinsKey(spec))...,
 	), "|")
 	now := time.Now()
@@ -1072,7 +1080,7 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 		return entry.err
 	}
 
-	err = probeServer(ctx, *srv, spec, settings.ProbeTimeout())
+	err = probeServer(ctx, cfg.Name, *srv, spec, settings.ProbeTimeout())
 
 	// A probe the CALLER abandoned learned nothing about the target. The
 	// probe's own deadline firing IS a fact about the target and is cached;
@@ -1118,11 +1126,11 @@ func probeServerCached(ctx context.Context, cfg *config.Config, spec config.Tool
 // much as the first: a server that starts but no longer exposes
 // `go_symbol_references` fails the step just as surely as one that never
 // started, and just as late.
-func probeServer(ctx context.Context, srv config.MCPServer, spec config.ToolSpec, timeout time.Duration) error {
+func probeServer(ctx context.Context, pipeline string, srv config.MCPServer, spec config.ToolSpec, timeout time.Duration) error {
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	tools, err := stepsmcp.ListServerTools(probeCtx, srv)
+	tools, err := stepsmcp.ListServerTools(probeCtx, pipeline, srv)
 	if err != nil {
 		if probeCtx.Err() != nil {
 			return transient(fmt.Errorf("did not start within %s", timeout))

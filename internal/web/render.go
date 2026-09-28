@@ -232,11 +232,15 @@ func templateFuncs() template.FuncMap {
 		"stepctx": func(page map[string]any, step *stepView) stepCtx {
 			return stepCtx{Page: page, Step: step}
 		},
+		"turnctx": newTurnCtx,
+		"pendingctx": func(step *stepView) turnCtx {
+			pending := newTurnCtx(nil, step, step.Unanswered())
+			pending.Pending = true
+
+			return pending
+		},
 		"mcpctx": func(page map[string]any, row mcpRow) mcpCtx {
 			return mcpCtx{Page: page, Row: row}
-		},
-		"turnctx": func(page map[string]any, turn runview.Turn) turnCtx {
-			return turnCtx{Page: page, Turn: turn}
 		},
 	}
 }

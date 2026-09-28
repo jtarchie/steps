@@ -5,6 +5,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,9 +20,17 @@ type probes struct {
 	mu      sync.Mutex
 	results map[string]*probeResult
 	// cancels lets shutdown take an in-flight probe with it, keyed the same way, since a probe's whole cost is a connection nobody is waiting on any more.
-	cancels  map[string]context.CancelFunc
+	cancels map[string]context.CancelFunc
+	// running is every probe whose goroutine has not returned, including one a newer probe cancelled, so dropProbes can wait out a token refresh still writing under the pipeline's login.
+	running  map[*probeRun]struct{}
 	inflight sync.WaitGroup
 	creds    *credentials
+}
+
+type probeRun struct {
+	slug   string
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 func newProbes(base context.Context) *probes {
@@ -29,7 +38,38 @@ func newProbes(base context.Context) *probes {
 		base:    base,
 		results: map[string]*probeResult{},
 		cancels: map[string]context.CancelFunc{},
+		running: map[*probeRun]struct{}{},
 		creds:   newCredentials(),
+	}
+}
+
+// dropProbes cancels and waits out every probe of slug and forgets what they and the credential cache said, for a destroy or rename that is about to move or remove the pipeline's logins: an in-flight probe's refresh would otherwise write a rotated token into the directory being removed, and a pipeline later set under the name would show this one's answers.
+func (p *probes) dropProbes(slug string) {
+	prefix := slug + "\x00"
+
+	var gone []*probeRun
+
+	p.mu.Lock()
+	for key := range p.results {
+		if strings.HasPrefix(key, prefix) {
+			delete(p.results, key)
+			delete(p.cancels, key)
+		}
+	}
+
+	for run := range p.running {
+		if run.slug == slug {
+			run.cancel()
+
+			gone = append(gone, run)
+		}
+	}
+	p.mu.Unlock()
+
+	p.creds.drop(prefix)
+
+	for _, run := range gone {
+		<-run.done
 	}
 }
 
@@ -61,7 +101,7 @@ func probeWorthMaking(pipeline *web.Pipeline, server string) (*config.MCPServer,
 	}
 
 	// The same rule `steps mcp list` follows before it dials anything: a server whose credential is already missing answers a probe with the problem the status cell has just stated, in the words of whatever refused it — one problem reported twice, in two vocabularies, the second of them long enough to set the width of a page.
-	if reason := notConnectable(*srv); reason != "" {
+	if reason := notConnectable(pipeline.Config().Name, *srv); reason != "" {
 		return nil, fmt.Errorf("mcp server %q has nothing to connect with: %s", server, reason)
 	}
 
@@ -69,9 +109,9 @@ func probeWorthMaking(pipeline *web.Pipeline, server string) (*config.MCPServer,
 }
 
 // notConnectable reports why a probe could not succeed whatever the server does, or "" for one worth dialling. The oauth half is the reason this is not just StaticStatus: a token file is the credential, and only the holder can look at it.
-func notConnectable(srv config.MCPServer) string {
+func notConnectable(pipeline string, srv config.MCPServer) string {
 	if srv.Auth.Type == "oauth" {
-		token := stepsmcp.InspectToken(srv)
+		token := stepsmcp.InspectToken(pipeline, srv)
 		if !token.Connected {
 			return token.Detail
 		}
@@ -98,7 +138,7 @@ func (p *probes) MCPState(pipeline *web.Pipeline, server string) web.MCPState {
 	}
 
 	if srv.Auth.Type == "oauth" {
-		state.Credential = p.creds.of(*srv)
+		state.Credential = p.creds.of(pipeline.Config().Name, *srv)
 	}
 
 	p.mu.Lock()
@@ -142,14 +182,23 @@ func (p *probes) StartProbe(pipeline *web.Pipeline, server string) error {
 	mine := &probeResult{fingerprint: fingerprint, probe: web.MCPProbe{Running: true, At: time.Now()}}
 	p.results[key] = mine
 	p.cancels[key] = cancel
+	run := &probeRun{slug: pipeline.Slug, cancel: cancel, done: make(chan struct{})}
+	p.running[run] = struct{}{}
 	p.mu.Unlock()
 
 	target := *srv
+	name := pipeline.Config().Name
 
 	p.inflight.Go(func() {
+		defer func() {
+			p.mu.Lock()
+			delete(p.running, run)
+			p.mu.Unlock()
+			close(run.done)
+		}()
 		defer cancel()
 
-		tools, probeErr := stepsmcp.ListServerTools(ctx, target)
+		tools, probeErr := stepsmcp.ListServerTools(ctx, name, target)
 		result := web.MCPProbe{At: time.Now()}
 
 		if probeErr != nil {

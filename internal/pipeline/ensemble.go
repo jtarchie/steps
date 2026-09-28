@@ -59,12 +59,12 @@ func runEnsembleStep(ctx context.Context, r stepRunner, i int, step config.Step,
 	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, ensembleRecord(votes, verdict), err)
 
 	if err != nil {
-		return stepResult{}, err
+		return failedAt(hash), err
 	}
 
 	notef(ctx, "ensemble decide: %s → %s", step.Ensemble.Decide, verdict)
 
-	return stepResult{hash: hash, verdict: verdict}, nil
+	return stepResult{hash: hash, nodeHash: hash, verdict: verdict}, nil
 }
 
 // runEnsembleMembers runs every member concurrently and collects its vote.

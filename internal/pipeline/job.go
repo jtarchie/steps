@@ -357,6 +357,8 @@ func runJobPlan(
 
 	skippable := map[string]bool{}
 
+	var replay [][]string
+
 	if !skipCache {
 		chains, planErr := merkle.PlanChains(ctx, r.cfg, job.Name, job.Plan, pinned, cache, resolution.sets)
 		if planErr != nil {
@@ -367,6 +369,8 @@ func runJobPlan(
 		if err != nil {
 			return fmt.Errorf("job %q: %w", job.Name, err)
 		}
+
+		replay = chainHashes(chains)
 	}
 
 	return runSteps(ctx, planWalk{
@@ -374,6 +378,7 @@ func runJobPlan(
 		pinned:          pinned,
 		provider:        provider,
 		skippable:       skippable,
+		chains:          replay,
 		cache:           cache,
 		cursor:          cursor,
 		resolution:      resolution,

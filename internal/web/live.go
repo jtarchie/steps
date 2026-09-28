@@ -583,7 +583,7 @@ func (f *framer) appendTurns(step *stepView) error {
 	fmt.Fprintf(&f.out, `<div hx-swap-oob="beforeend:#%s_body">`, step.Anchor())
 
 	for _, turn := range step.Turns[shown:] {
-		err := f.render("turn", turnCtx{Page: f.page, Turn: turn})
+		err := f.render("turn", newTurnCtx(f.page, step, turn))
 		if err != nil {
 			return err
 		}

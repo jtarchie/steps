@@ -38,7 +38,7 @@ func buildMCPTools(ctx context.Context, cfg *config.Config, spec config.ToolSpec
 		return nil, nil, nil, fmt.Errorf("mcp tool %q: %w", spec.MCP, err)
 	}
 
-	client, err := stepsmcp.Connect(ctx, *srv)
+	client, err := stepsmcp.Connect(ctx, cfg.Name, *srv)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("mcp server %q: %w", spec.MCP, err)
 	}

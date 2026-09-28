@@ -43,7 +43,7 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 	if skippable[hash] {
 		logFrom(ctx).Info("job.skip", "task", rt.Name, "reason", "cached", "hash", hash)
 
-		return stepResult{hash: parentHash, disposition: stepChainSkipped}, nil
+		return stepResult{hash: parentHash, nodeHash: hash, disposition: stepChainSkipped}, nil
 	}
 
 	logFrom(ctx).Debug("job.step", "task", rt.Name, "command", rt.Run)
@@ -67,7 +67,7 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 			return stepResult{}, fmt.Errorf("step %d (task %q): %w", i, rt.Name, err)
 		}
 
-		return stepResult{hash: hash, disposition: stepCacheHit}, nil
+		return stepResult{hash: hash, nodeHash: hash, disposition: stepCacheHit}, nil
 	}
 
 	// Where the step ran is answered by the machine itself, several frames
@@ -84,7 +84,7 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 		// reasoning as recording a failed agent step's spend.
 		recordPlacement(ctx, r, placed, i, name, hash, hash)
 
-		return stepResult{}, wrapped
+		return failedAt(hash), wrapped
 	}
 
 	err = r.st.RecordNode(ctx, nodeRecord(node), r.jobName, "succeeded", nil, nil)

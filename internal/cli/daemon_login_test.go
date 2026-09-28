@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -95,7 +96,7 @@ func TestStartLoginRefusesWhatItCannotAuthorize(t *testing.T) {
 		t.Error("a login with no usable base was started")
 	}
 
-	if _, found := held.LoginStatus("tracker"); found {
+	if _, found := held.LoginStatus(target, "tracker"); found {
 		t.Error("a refused start left a login behind")
 	}
 }
@@ -115,7 +116,7 @@ func TestAFailedLoginReportsWhyAndLetsGo(t *testing.T) {
 	deadline := time.Now().Add(20 * time.Second)
 
 	for time.Now().Before(deadline) {
-		status, _ = held.LoginStatus("tracker")
+		status, _ = held.LoginStatus(held.server.Lookup("app"), "tracker")
 		if status.State != web.LoginPending {
 			break
 		}
@@ -213,16 +214,16 @@ func waitingAuthServer(t *testing.T) string {
 }
 
 // startWaitingLogin starts a login and returns it once it is waiting on a browser nobody will bring.
-func startWaitingLogin(t *testing.T, held *daemon) *pendingLogin {
+func startWaitingLogin(t *testing.T, held *daemon, pipeline string) *pendingLogin {
 	t.Helper()
 
-	_, err := held.StartLogin(held.server.Lookup("app"), "tracker", web.LoginRequest{Base: "https://steps.example.com"})
+	_, err := held.StartLogin(held.server.Lookup(pipeline), "tracker", web.LoginRequest{Base: "https://steps.example.com"})
 	if err != nil {
 		t.Fatalf("StartLogin: %v", err)
 	}
 
 	held.logins.mu.Lock()
-	pending := held.held["tracker"]
+	pending := held.held[loginKey(pipeline, "tracker")]
 	held.logins.mu.Unlock()
 
 	deadline := time.Now().Add(20 * time.Second)
@@ -249,8 +250,8 @@ func TestASecondLoginStopsTheFirst(t *testing.T) {
 	held := servingDaemon(t)
 	setPipeline(t, held, "app", waitingPipeline(waitingAuthServer(t)))
 
-	first := startWaitingLogin(t, held)
-	second := startWaitingLogin(t, held)
+	first := startWaitingLogin(t, held, "app")
+	second := startWaitingLogin(t, held, "app")
 
 	deadline := time.Now().Add(10 * time.Second)
 
@@ -281,11 +282,160 @@ func TestCloseTakesAWaitingLoginDownWithIt(t *testing.T) {
 	held := newDaemon(context.Background(), server, local, filepath.Join(t.TempDir(), "steps.db"), ExecFlags{}, HistoryFlags{}, time.Hour)
 	setPipeline(t, held, "app", waitingPipeline(waitingAuthServer(t)))
 
-	pending := startWaitingLogin(t, held)
+	pending := startWaitingLogin(t, held, "app")
 
 	held.Close()
 
 	if state := pending.read().State; state != web.LoginFailed {
 		t.Errorf("after Close the login is %q, want it ended: Close returned while a login was still running", state)
+	}
+}
+
+// A login is one pipeline's: another pipeline declaring the same server has no login in flight, and its page must not offer this one's consent screen.
+func TestALoginBelongsToItsPipeline(t *testing.T) {
+	t.Parallel()
+
+	held := servingDaemon(t)
+	source := waitingPipeline(waitingAuthServer(t))
+	setPipeline(t, held, "app", source)
+	setPipeline(t, held, "other", source)
+
+	startWaitingLogin(t, held, "other")
+
+	if status, found := held.LoginStatus(held.server.Lookup("app"), "tracker"); found {
+		t.Errorf("app reports other's login: %+v", status)
+	}
+
+	if _, found := held.LoginStatus(held.server.Lookup("other"), "tracker"); !found {
+		t.Error("other lost its own login")
+	}
+}
+
+// A destroy removes the pipeline's logins, and a login still waiting on a browser would write its token after that removal — so the destroy waits it out first.
+//
+// Not t.Parallel(): the login directory is process environment.
+func TestDestroyEndsItsLoginsAndRemovesOnlyItsOwn(t *testing.T) {
+	root := isolateLogins(t)
+
+	held := servingDaemon(t)
+	source := waitingPipeline(waitingAuthServer(t))
+	setPipeline(t, held, "app", source)
+	setPipeline(t, held, "other", source)
+
+	for _, name := range []string{"app", "other"} {
+		err := os.MkdirAll(filepath.Join(root, name), 0o700)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pending := startWaitingLogin(t, held, "app")
+
+	err := held.Destroy(t.Context(), "app")
+	if err != nil {
+		t.Fatalf("destroy: %v", err)
+	}
+
+	select {
+	case <-pending.done:
+	default:
+		t.Error("destroy returned with the pipeline's login still running")
+	}
+
+	_, err = os.Stat(filepath.Join(root, "app"))
+	if !os.IsNotExist(err) {
+		t.Errorf("app's logins survived its destroy: %v", err)
+	}
+
+	_, err = os.Stat(filepath.Join(root, "other"))
+	if err != nil {
+		t.Errorf("other's logins went with app's destroy: %v", err)
+	}
+}
+
+// Renaming onto a name that already has logins would either hand this pipeline somebody's accounts or destroy them, so it is refused while the old name is still served.
+//
+// Not t.Parallel(): the login directory is process environment.
+func TestARenameOntoExistingLoginsIsRefused(t *testing.T) {
+	root := isolateLogins(t)
+
+	held := servingDaemon(t)
+	setPipeline(t, held, "app", loginPipeline)
+
+	err := os.MkdirAll(filepath.Join(root, "taken"), 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = held.Rename(t.Context(), "app", "taken")
+	if !errors.Is(err, web.ErrRefused) || !strings.Contains(err.Error(), "mcp logins") {
+		t.Fatalf("rename onto existing logins = %v, want refused naming them", err)
+	}
+
+	if held.server.Lookup("app") == nil {
+		t.Error("a refused rename stopped serving the pipeline")
+	}
+
+	err = os.MkdirAll(filepath.Join(root, "app"), 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = held.Rename(t.Context(), "app", "moved")
+	if err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	_, err = os.Stat(filepath.Join(root, "moved"))
+	if err != nil {
+		t.Errorf("the logins did not follow the rename: %v", err)
+	}
+}
+
+// A replaced login was cancelled but may still be persisting the token it had already obtained, and Save recreates the directory a destroy just removed — so forget waits for it as it does for the held one.
+func TestForgetWaitsOutAReplacedLogin(t *testing.T) {
+	t.Parallel()
+
+	l := newLogins(t.Context())
+	done := make(chan struct{})
+	replaced := &pendingLogin{pipeline: "app", done: done, cancel: func() {
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			close(done)
+		}()
+	}}
+	otherDone := make(chan struct{})
+	other := &pendingLogin{pipeline: "other", done: otherDone, cancel: func() { close(otherDone) }}
+
+	l.mu.Lock()
+	l.live[replaced] = struct{}{}
+	l.live[other] = struct{}{}
+	l.mu.Unlock()
+
+	l.forget("app")
+
+	select {
+	case <-done:
+	default:
+		t.Error("forget returned while a replaced login of the pipeline was still running")
+	}
+
+	select {
+	case <-otherDone:
+		t.Error("forget cancelled another pipeline's login")
+	default:
+	}
+}
+
+// -p names the pipeline a daemon login is filed under, so a --name beside it could only be ignored.
+func TestMCPLoginRefusesNameWithDashP(t *testing.T) {
+	t.Parallel()
+
+	cmd := &MCPLoginCmd{PipelineNameFlag: PipelineNameFlag{Pipeline: "app"}, Server: "tracker", Name: map[string]string{"x": "x.yml"}}
+	cmd.Target = "http://127.0.0.1:1"
+
+	err := cmd.Run()
+	if err == nil || !strings.Contains(err.Error(), "--name") {
+		t.Fatalf("mcp login -p with --name = %v, want refused naming --name", err)
 	}
 }

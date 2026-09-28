@@ -68,7 +68,7 @@ func TestInspectTokenReadsTheFileAndNothingElse(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			saveTokenFile(t, srv.Name, test.token)
 
-			got := InspectToken(srv)
+			got := InspectToken(testPipeline, srv)
 			if got.Connected != test.connected || got.Renews != test.renews {
 				t.Errorf("%+v, want connected=%v renews=%v", got, test.connected, test.renews)
 			}
@@ -94,7 +94,7 @@ func TestInspectTokenReadsTheFileAndNothingElse(t *testing.T) {
 func saveTokenFile(t *testing.T, server string, token *TokenFile) {
 	t.Helper()
 
-	path, err := TokenPath(server)
+	path, err := TokenPath(testPipeline, server)
 	if err != nil {
 		t.Fatal(err)
 	}

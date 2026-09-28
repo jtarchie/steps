@@ -35,7 +35,7 @@ func callMCPResourceTool(ctx context.Context, cfg *config.Config, serverName, to
 		return nil, err //nolint:wrapcheck // caller (mcpCheckVersions/mcpRunIn/mcpRunOut) wraps with resource-type context
 	}
 
-	client, err := stepsmcp.Connect(ctx, *srv)
+	client, err := stepsmcp.Connect(ctx, cfg.Name, *srv)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // caller wraps with resource-type context
 	}

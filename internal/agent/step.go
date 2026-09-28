@@ -146,7 +146,9 @@ func recordAgentFailure(ctx context.Context, st store.Cache, node merkle.Node, j
 }
 
 // StepOutcome is what RunStep reports about a completed agent step, beyond
-// any error: the merkle hash to use as the next step's parentHash, the
+// any error: the merkle hash to use as the next step's parentHash (on an
+// error, the node the failure was recorded under — the caller must not chain
+// on it, and it stays "" when the failure preceded any node), the
 // verdict (if any) internal/pipeline routes on, that verdict's note, and the
 // model's final response text — recorded under this step's own name for a
 // later step that declared context: { from: { <this step>: full } } to read
@@ -309,14 +311,14 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 
 		// A failed run emitted no clean verdict; the pipeline routes it via
 		// to["failure"] (or fails the job).
-		return StepOutcome{Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return StepOutcome{Hash: hash, Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
 	err = assertAgentResponse(step.Assert, res, prepared.space.Dir())
 	if err != nil {
 		recordAgentFailure(ctx, st, node, jobName, res, err)
 
-		return StepOutcome{Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		return StepOutcome{Hash: hash, Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
 
 	prepared.removeSpillDirIfCaptured()
@@ -326,12 +328,17 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 		wrapped := fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 		recordAgentFailure(ctx, st, node, jobName, res, wrapped)
 
-		return StepOutcome{Response: res.text}, wrapped
+		return StepOutcome{Hash: hash, Response: res.text}, wrapped
 	}
 
 	err = st.RecordNode(ctx, nodeRecord(node), jobName, "succeeded", agentResultRecord(res), nil)
 	if err != nil {
-		return StepOutcome{Response: res.text}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		wrapped := fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
+		// Detached, so the node the row is published under does not stay
+		// "running" when a cancelled ctx is why the success write failed.
+		recordAgentFailure(ctx, st, node, jobName, res, wrapped)
+
+		return StepOutcome{Hash: hash, Response: res.text}, wrapped
 	}
 
 	// After the node is recorded, so a run that could not record its own

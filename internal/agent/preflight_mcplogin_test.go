@@ -39,6 +39,7 @@ func TestPreflightDoesNotCacheAServerThatNeedsALogin(t *testing.T) {
 	endpoint := mcp.ts.URL + "/mcp"
 
 	cfg := &config.Config{
+		Name: "a",
 		MCPServers: []config.MCPServer{{
 			Name:     "test",
 			Endpoint: endpoint,
@@ -58,7 +59,7 @@ func TestPreflightDoesNotCacheAServerThatNeedsALogin(t *testing.T) {
 		t.Fatalf("probing an unauthorized server: %v, want an ErrNeedsLogin", err)
 	}
 
-	authorize(t, endpoint)
+	authorize(t, "a", endpoint)
 
 	// Immediately, well inside the cache window: this is the poll that used
 	// to replay the stale verdict.
@@ -84,9 +85,10 @@ func TestPreflightStillCachesAnAuthorizedServer(t *testing.T) {
 	mcp := newCountingMCPServer(t)
 	endpoint := mcp.ts.URL + "/mcp"
 
-	authorize(t, endpoint)
+	authorize(t, "a", endpoint)
 
 	cfg := &config.Config{
+		Name: "a",
 		MCPServers: []config.MCPServer{{
 			Name:     "test",
 			Endpoint: endpoint,
@@ -109,14 +111,47 @@ func TestPreflightStillCachesAnAuthorizedServer(t *testing.T) {
 	}
 }
 
+// TestPreflightDoesNotLetOnePipelinesLoginVouchForAnother is two pipelines
+// declaring the same oauth server, only one of them logged in. The cache is
+// process-wide and keyed by the server's definition, which both share, so
+// without the pipeline in the key the logged-in one's pass answered for the
+// other, and the other's run then failed later, inside the step.
+func TestPreflightDoesNotLetOnePipelinesLoginVouchForAnother(t *testing.T) {
+	// Not t.Parallel(): t.Setenv, and probeCache is process-wide state.
+	ResetProbeCache()
+
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	mcp := newCountingMCPServer(t)
+	endpoint := mcp.ts.URL + "/mcp"
+
+	authorize(t, "a", endpoint)
+
+	servers := []config.MCPServer{{Name: "test", Endpoint: endpoint, Auth: config.MCPServerAuth{Type: "oauth"}}}
+	spec := config.ToolSpec{MCP: "test", MCPTool: "search_issues"}
+	settings := &config.Preflight{}
+
+	err := probeServerCached(context.Background(), &config.Config{Name: "a", MCPServers: servers}, spec, settings)
+	if err != nil {
+		t.Fatalf("the logged-in pipeline: %v", err)
+	}
+
+	err = probeServerCached(context.Background(), &config.Config{Name: "b", MCPServers: servers}, spec, settings)
+	if !errors.Is(err, stepsmcp.ErrNeedsLogin) {
+		t.Fatalf("a pipeline with no login of its own: %v, want an ErrNeedsLogin", err)
+	}
+}
+
 // authorize writes the token file a finished `steps mcp login` leaves behind,
 // which is the whole of what the browser half of that flow contributes here:
 // the endpoint it was issued for (checkCredential refuses a file belonging to
 // a different one) and an access token with room left on it.
-func authorize(t *testing.T, endpoint string) {
+func authorize(t *testing.T, pipeline, endpoint string) {
 	t.Helper()
 
-	path, err := stepsmcp.TokenPath("test")
+	path, err := stepsmcp.TokenPath(pipeline, "test")
 	if err != nil {
 		t.Fatal(err)
 	}

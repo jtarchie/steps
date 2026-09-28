@@ -75,8 +75,8 @@ steps pipeline list                      # what this daemon holds
 steps pipeline get -p app                # the configuration it is serving
 steps pipeline pause -p app              # stop polling, admitting and triggering
 steps pipeline unpause -p app
-steps pipeline rename -p app --to legacy # keeps the history
-steps pipeline destroy -p app            # forgets it, and everything under it
+steps pipeline rename -p app --to legacy # keeps the history and its mcp logins
+steps pipeline destroy -p app            # forgets it, everything under it, and its mcp logins
 ```
 
 Every verb takes `--target` (or `STEPS_TARGET`), defaulting to
@@ -210,7 +210,9 @@ what it spent and where it ran on its own row.
   what changed since the last passed run of that job — computed by comparing
   content hashes, so each step whose inputs, command, or prompt actually moved
   carries a `changed` mark on its own row (`new` for a step that run did not
-  have), and the line under the header counts them.
+  have), and the line under the header counts them. A step that broke
+  because its content moved carries `changed`; one that failed with the same
+  content as before does not; hooks are never compared.
 - **Every run names the configuration it executed**, linking the pipeline as
   it was when that run started — which the file on disk no longer holds once
   anyone edits it. When a failed run's configuration differs from the last
@@ -230,7 +232,12 @@ what it spent and where it ran on its own row.
   that is not there.
 - **An agent step expands into its conversation**: the model's text each turn,
   every tool call, and any sub-agent delegation nested underneath, closing with
-  the step's `answer`.
+  the step's `answer`. Each model reply carries how long the request behind it
+  took, measured from when that request was sent (hover it for both times, in
+  UTC); a reply that took more than a tenth of the step's `timeout:` is flagged,
+  so the slow ones stand out on a folded page. A step that failed while waiting
+  on the model says how long that last request had been in flight — for a
+  timed-out step, usually the answer to where the time went.
 - **Every payload is rendered as JSON, not printed.** A call's arguments, a
   tool result, a node's content map, a resource version: parsed and
   highlighted, in the order they were recorded. A document that arrived escaped

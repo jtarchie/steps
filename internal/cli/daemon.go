@@ -15,6 +15,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
+	stepsmcp "github.com/jtarchie/steps/internal/mcp"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
@@ -516,7 +517,7 @@ func (d *daemon) sweep(ctx context.Context, target *web.Pipeline) {
 	}
 }
 
-// Destroy forgets a pipeline: its loops, its handle, and everything recorded under it.
+// Destroy forgets a pipeline: its loops, its handle, everything recorded under it, and its mcp logins, so a later pipeline given the name does not silently act as the accounts this one logged in with.
 func (d *daemon) Destroy(ctx context.Context, name string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -535,8 +536,20 @@ func (d *daemon) Destroy(ctx context.Context, name string) error {
 	served.closer(false)
 	d.runner.RemoveProvider(name)
 
+	// The logins stay when the rows did: a restart serves the pipeline again, and it would then need them.
 	if err != nil {
 		return fmt.Errorf("could not destroy %q: %w", name, err)
+	}
+
+	loginsOf := served.target.Config().Name
+	d.forget(loginsOf)
+	d.dropProbes(name)
+
+	err = stepsmcp.ForgetLogins(loginsOf)
+	if err != nil {
+		dir, _ := stepsmcp.LoginsExist(loginsOf)
+
+		return fmt.Errorf("%q destroyed, but its mcp logins at %s were not removed: %w", name, dir, err)
 	}
 
 	fmt.Printf("steps web: %s destroyed\n", name)
@@ -570,6 +583,11 @@ func (d *daemon) Rename(ctx context.Context, from, to string) error {
 		return fmt.Errorf("could not rename %q to %q: %w", from, to, err)
 	}
 
+	// Merging would hand this pipeline somebody else's accounts unnoticed, and replacing would destroy them.
+	if dir, found := stepsmcp.LoginsExist(cfg.Name); found {
+		return fmt.Errorf("%w: mcp logins for %q already exist at %s; remove that directory to rename onto this name", web.ErrRefused, to, dir)
+	}
+
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), daemonWriteBound)
 	defer cancel()
 
@@ -590,7 +608,21 @@ func (d *daemon) Rename(ctx context.Context, from, to string) error {
 	served.closer(false)
 	d.runner.RemoveProvider(from)
 
+	// A rename keeps history, so it keeps the logins. Started regardless of the move: the database already names the new one.
+	// ponytail: a crash between the Store.Rename above and this move leaves the logins under the old name. Upgrade: sweep for login directories no pipeline row names on restart.
+	oldLogins := served.target.Config().Name
+	d.forget(oldLogins)
+	d.dropProbes(from)
+	moveErr := stepsmcp.MoveLogins(oldLogins, cfg.Name)
+
 	d.start(to, cfg, st, provider, setFrom)
+
+	if moveErr != nil {
+		stay, _ := stepsmcp.LoginsExist(oldLogins)
+		dest, _ := stepsmcp.LoginsExist(cfg.Name)
+
+		return fmt.Errorf("renamed %q to %q, but its mcp logins stay at %s: %w; move them to %s or log in again", from, to, stay, moveErr, dest)
+	}
 
 	fmt.Printf("steps web: %s renamed to %s\n", from, to)
 

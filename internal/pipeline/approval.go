@@ -79,7 +79,7 @@ func runApprovalStep(ctx context.Context, r stepRunner, i int, step config.Step,
 	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, approvalRecord(decision), err)
 
 	if err != nil {
-		return stepResult{}, err
+		return failedAt(hash), err
 	}
 
 	notef(ctx, "approval %d: approved by %s", id, decision.DecidedBy)

@@ -61,8 +61,8 @@
      Which steps is marked on each one's row. */}}
 {{if or $run.ComparedConfig $run.Changed}}
 <p class="diffnote">vs last passed <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.ComparedTo}}">{{short $run.ComparedTo}}</a>:
-  {{if $run.ComparedConfig}}the <b>configuration changed</b> — it ran <a class="hash" href="/p/{{.Nav.Current}}/config/{{$run.ComparedConfig}}">{{short $run.ComparedConfig}}</a>{{if $run.Changed}} ·{{else}}, and no step's content moved with it{{end}}{{end}}
-  {{with len $run.Changed}}{{.}} step{{if ne . 1}}s{{end}} changed content — everything else replayed from cache{{end}}</p>
+  {{if $run.ComparedConfig}}the <b>configuration changed</b> — it ran <a class="hash" href="/p/{{.Nav.Current}}/config/{{$run.ComparedConfig}}">{{short $run.ComparedConfig}}</a>{{if $run.Changed}} ·{{else if not $run.Uncompared}}, and no step's content moved with it{{end}}{{end}}
+  {{with len $run.Changed}}{{.}} step{{if ne . 1}}s{{end}} changed content{{end}}</p>
 {{end}}
 
 {{/* On the transcript's top edge, at the right: the keys drive the rows
@@ -193,7 +193,12 @@
     {{range $step.Notes}}{{template "notice" .}}{{end}}
     {{range $step.Outputs}}<pre class="log output">{{jsonPre .}}</pre>{{end}}
 
-    {{range $step.Conversation}}{{template "turn" (turnctx $page .)}}{{end}}
+    {{range $step.Conversation}}{{template "turn" (turnctx $page $step .)}}{{end}}
+    {{with pendingctx $step}}{{if .Took}}<div class="turn pending{{if .Nested}} nested{{end}}">
+      <span class="who">model</span>
+      <div class="what"><span class="say">no reply — the step ended while this request was in flight</span></div>
+      {{template "took" .}}
+    </div>{{end}}{{end}}
 
     {{range $step.Trajectory}}
     <div class="turn tool">
@@ -206,6 +211,7 @@
     <div class="turn answer">
       <span class="who">answer</span>
       <div class="response">{{template "prosebody" $step.Response}}</div>
+      {{template "took" (turnctx $page $step $step.AnswerTurn)}}
     </div>
     {{end}}
     {{if $step.Note}}<div class="agentmeta">note: {{$step.Note}}</div>{{end}}
@@ -274,10 +280,11 @@
      re-sent for each — and the page draws them through the same one. Takes a
      turnctx: a result's body is fetched from a URL scoped by the page's
      pipeline and run. */}}
-{{define "turn"}}{{$page := .Page}}{{with .Turn}}
+{{define "turn"}}{{$page := .Page}}
     {{if .IsCompaction}}<div class="turn compaction{{if .Nested}} nested{{end}}">
       <span class="who">compacted</span>
       <div class="what"><details><summary>{{.Name}}</summary><div class="prose">{{template "prosebody" .Text}}</div></details></div>
+      {{template "took" .}}
     </div>{{else}}
     <div class="turn {{if eq .Type "agent_text"}}model{{else if eq .Type "agent_system"}}system{{else if eq .Type "agent_user"}}user{{else}}tool{{end}}{{if .Nested}} nested{{end}}">
       <span class="who">{{if eq .Type "agent_text"}}model{{else if eq .Type "agent_system"}}system{{else if eq .Type "agent_user"}}user{{else if eq .Type "agent_call"}}tool{{else if eq .Type "agent_result"}}result{{else}}delegate{{end}}</span>
@@ -290,8 +297,15 @@
         {{end}}
         {{if .Detail}}{{if .IsResult}}{{template "jsonvalue" (resultValue (printf "/p/%s/runs/%s/turns/%d" (pathseg $page.Nav.Current) (pathseg $page.Run.Run.ID) .Seq) .Seq .Detail)}}{{else}}{{template "jsonvalue" (jsonValue .Detail)}}{{end}}{{end}}
       </div>
-    </div>{{end}}{{end}}
+      {{template "took" .}}
+    </div>{{end}}
 {{end}}
+
+{{/* How long the request a turn answered was in flight, from a turnctx.
+     Drawn on the first model turn of a response only (the fold decides), so
+     results and messages draw nothing. The title is UTC because the logs it
+     is lined up against are a daemon's, not the reader's. */}}
+{{define "took"}}{{if .Took}}<span class="dur{{if .Slow}} warn{{end}}" title="sent {{rfc3339 .Sent}} · {{if .Pending}}step ended{{else}}answered{{end}} {{rfc3339 .At}}{{if .Slow}} · over a tenth of this step's timeout{{end}}">{{duration .Took}}{{if .Slow}}<span class="visually-hidden"> — slow request</span>{{end}}</span>{{end}}{{end}}
 
 {{/* The way to the server a run died on, wherever its error is drawn. Takes the page. */}}
 {{define "mcphint"}}{{if and .Run.MCPBlamed .Nav.HasMCP}}<div class="errhint">mcp server <code>{{.Run.MCPBlamed}}</code> — <a href="/p/{{.Nav.Current}}/mcp#mcp-{{.Run.MCPBlamed}}">is it connected?</a></div>{{end}}{{end}}
