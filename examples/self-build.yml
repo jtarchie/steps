@@ -267,7 +267,8 @@ agents:
   settings: project
   tools: [read_file, list_dir, search_files, edit_file, write_file, run_shell]
   max_turns: 0
-  timeout: 1h
+  # Measured: a 73-file diff on a loaded machine spent the whole of 1h in the review and was killed there, and a killed review is one nobody can use.
+  timeout: 2h
   attempts: 2
   system: |
     You review an uncommitted diff in a checkout of the repository and fix
@@ -293,12 +294,12 @@ jobs:
 # is not a safety limit, it is a coin flip.
 #
 # The job ceiling covers the WORST route through the loop, not the shortest:
-# 45m + 2 x (2h + 1h + 1h15m) = 9h15m, inside 10h. That arithmetic is why max_visits
+# 45m + 2 x (2h + 2h + 1h15m) = 11h15m, inside 12h. That arithmetic is why max_visits
 # below is 2 rather than 3 -- a third review does not fit under any ceiling
 # anyone would leave running unattended, and a ceiling that cannot cover the
 # loop it bounds would kill the pipeline mid-lap and lose every lap before it.
 - name: implement
-  timeout: 10h
+  timeout: 12h
   plan:
   - get: issue
     trigger: true
@@ -515,7 +516,7 @@ jobs:
 #
 #   steps run examples/self-build.yml --job continue --var repo=owner/name --var label=self-build
 - name: continue
-  timeout: 9h
+  timeout: 11h
   plan:
   - get: issue
     version: every
