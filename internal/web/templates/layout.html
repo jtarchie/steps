@@ -122,7 +122,49 @@
   // the row to what the server drew, so both are lost the moment a step
   // changes. Recorded as the reader makes them and re-applied after every
   // swap, which is what keeps a live transcript readable while it grows.
+  //
+  // Kept in sessionStorage per run as well, because the page reloads itself
+  // when a run ends — the moment the server folds every row the reader did
+  // not touch — and a Map alone forgets exactly the rows they did.
   var folds = new Map();
+  var foldsKey = 'steps.folds:' + window.location.pathname;
+
+  try {
+    var stored = JSON.parse(window.sessionStorage.getItem(foldsKey) || '[]');
+    if (Array.isArray(stored)) {
+      stored.forEach(function (pair) {
+        if (Array.isArray(pair) && typeof pair[0] === 'string' && typeof pair[1] === 'boolean') folds.set(pair[0], pair[1]);
+      });
+    }
+  } catch (err) {}
+
+  // Storage throws in private mode, when disabled and when full; the Map
+  // still carries the folds for this page's life. Full is the one worth a
+  // retry: every run this tab visited keeps a key, and those are what gets
+  // dropped so the run on screen still survives its closing reload.
+  function persist() {
+    var value = JSON.stringify(Array.from(folds));
+    try { window.sessionStorage.setItem(foldsKey, value); return; } catch (err) {}
+    try {
+      for (var i = window.sessionStorage.length - 1; i >= 0; i--) {
+        var key = window.sessionStorage.key(i);
+        if (key && key !== foldsKey && key.indexOf('steps.folds:') === 0) window.sessionStorage.removeItem(key);
+      }
+      window.sessionStorage.setItem(foldsKey, value);
+    } catch (err) {}
+  }
+
+  function remember(key, open) {
+    folds.set(key, open);
+    persist();
+  }
+
+  function applyFolds() {
+    folds.forEach(function (open, key) {
+      var step = document.querySelector('[data-step="' + CSS.escape(key) + '"]');
+      if (step) step.classList.toggle('open', open);
+    });
+  }
 
   // A shared link names a step; open it so the reader lands on the content
   // rather than on a collapsed row they still have to click. Here rather than
@@ -139,11 +181,14 @@
     var target = null;
     try { target = document.querySelector(window.location.hash); } catch (err) { return; }
     if (!target || !target.classList.contains('step')) return;
-    target.classList.add('open');
-    // Recorded like any other fold, or the next swap of a live run closes it.
-    if (target.dataset.step) folds.set(target.dataset.step, true);
+    // Its containers too: a passed block is drawn closed, and a row inside
+    // one is hidden however open it is. Recorded like any other fold, or the
+    // next swap of a live run closes it.
+    reveal(target);
   }
 
+  // Before the hash, so a shared link wins over a remembered fold.
+  applyFolds();
   openHashTarget();
   window.addEventListener('hashchange', openHashTarget);
 
@@ -162,16 +207,12 @@
 
   function fold(step) {
     step.classList.toggle('open');
-    if (step.dataset.step) folds.set(step.dataset.step, step.classList.contains('open'));
+    if (step.dataset.step) remember(step.dataset.step, step.classList.contains('open'));
   }
 
   document.addEventListener('htmx:after:swap', function () {
     paintSwitcher();
-
-    folds.forEach(function (open, key) {
-      var step = document.querySelector('[data-step="' + CSS.escape(key) + '"]');
-      if (step) step.classList.toggle('open', open);
-    });
+    applyFolds();
 
     if (chosen) {
       var step = document.querySelector('[data-step="' + CSS.escape(chosen) + '"]');
@@ -183,6 +224,14 @@
     if (e.target.closest('a')) return;
     var step = toggleFrom(e.target);
     if (step) fold(step);
+  });
+
+  // The server folds a block shut under the reader once it passes; a row
+  // they are on keeps its containers open, or it vanishes and focus falls to
+  // the body.
+  document.addEventListener('focusin', function (e) {
+    var head = e.target.closest && e.target.closest('.stephead');
+    if (head && head.parentElement && head.parentElement.parentElement) reveal(head.parentElement.parentElement);
   });
 
   document.addEventListener('keydown', function (e) {
@@ -222,10 +271,16 @@
 
   function selected() { return transcript ? transcript.querySelector('.step.sel') : null; }
 
+  // Visible rows only: a row inside a closed block is display:none, and
+  // selecting it loses the reader. f and e still see every row.
   function step(by) {
-    var all = steps();
+    var all = steps().filter(function (node) { return !node.parentElement.closest('.step.container:not(.open)'); });
     if (!all.length) return;
-    var at = all.indexOf(selected());
+    // A selection folded out of sight moves from the block that hid it,
+    // rather than jumping back to the top.
+    var from = selected();
+    while (from && all.indexOf(from) < 0) from = from.parentElement && from.parentElement.closest('.step');
+    var at = all.indexOf(from);
     select(all[Math.min(Math.max(at + by, 0), all.length - 1)]);
   }
 
@@ -235,6 +290,9 @@
       node.classList.toggle('open', open);
       if (node.dataset.step) folds.set(node.dataset.step, open);
     });
+    // Once, not per row: each write serializes every fold, so per row was
+    // quadratic on a large transcript.
+    persist();
   }
 
   // The INNERMOST failure: a failed step inside a failed container is the one
@@ -251,6 +309,7 @@
       at.classList.add('open');
       if (at.dataset.step) folds.set(at.dataset.step, true);
     }
+    persist();
   }
 
   document.addEventListener('keydown', function (e) {

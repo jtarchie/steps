@@ -134,6 +134,9 @@ type Step struct {
 	Notes []Note
 	// unreported is set by settle, never by the fold: see Unreported.
 	unreported bool
+	// collateral is set by settle: an abort beside a sibling that really
+	// failed, which is what fail_fast does to the rest of its branches.
+	collateral bool
 	// pending is when each conversation depth last sent the model a request
 	// still unanswered. On the step rather than rebuilt per View because the
 	// live Folder folds in batches and a request can straddle two.
@@ -324,16 +327,55 @@ func (s Step) Block() bool {
 	return false
 }
 
-// OpenByDefault reports a row the page draws expanded. A running hook does
-// not open its step: the row would fold shut under the reader the moment the
-// hook passed. A put opens on the version it produced.
+// OpenByDefault reports a row the page draws expanded: only the path to a
+// failure or to live work, because a reader opening a finished run came for
+// what broke, and every passed transcript drawn open buries it. Everything
+// else is one click (or e) away.
+//
+// An abort beside a sibling that really failed does not open: fail_fast
+// aborts the rest of its branches, and opening each would rebuild the wall
+// around the one real failure. Any other abort does — a timeout or a user
+// abort is the failure, and its output is why the run stopped. A passed
+// block never opens for what is inside it — a failure under one was
+// tolerated by design (a try:, a race: loser), the rollup still says so, and
+// f still finds it. A running hook does not open its step: the row would
+// fold shut under the reader the moment the hook passed. A put opens on the
+// version it produced.
 func (s Step) OpenByDefault() bool {
-	if s.Failed() || s.Unreported() || len(s.Turns) > 0 || s.Block() || s.Kind == "put" {
+	switch {
+	case s.Failed() && !s.collateral,
+		s.Unreported(),
+		s.Kind == "put",
+		s.Running() && (len(s.Turns) > 0 || s.Block()):
+		return true
+	}
+
+	return s.openedByChild()
+}
+
+// openedByChild reports a child that opens its parent: a failed hook, or a
+// plan step still at work or never heard from again. The second covers a
+// finish the store sink dropped, which leaves a running child under a
+// finished block — unreported once the run ends — and neither may be folded
+// away under a passed block.
+func (s Step) openedByChild() bool {
+	for _, child := range s.Children {
+		if child.Hook() && child.Failed() || !child.Hook() && (child.Active() || child.stalled()) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// stalled reports an unreported step at or under s.
+func (s Step) stalled() bool {
+	if s.Unreported() {
 		return true
 	}
 
 	for _, child := range s.Children {
-		if child.Hook() && child.Failed() {
+		if child.stalled() {
 			return true
 		}
 	}
@@ -1125,6 +1167,26 @@ func settle(view *Transcript) {
 		if step.unreported && !step.Started.IsZero() && !view.Run.FinishedAt.IsZero() {
 			step.Duration = max(view.Run.FinishedAt.Sub(step.Started), 0)
 		}
+	}
+
+	markCollateral(view.Roots)
+}
+
+// markCollateral marks each aborted step among siblings one of which failed
+// on its own, all the way down. Siblings rather than the whole run: a
+// failure in one branch says nothing about an abort in another.
+func markCollateral(siblings []*Step) {
+	failed := false
+
+	for _, step := range siblings {
+		if !step.Hook() && step.Failed() && step.Status != "aborted" {
+			failed = true
+		}
+	}
+
+	for _, step := range siblings {
+		step.collateral = failed && step.Status == "aborted"
+		markCollateral(step.Children)
 	}
 }
 
