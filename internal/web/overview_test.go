@@ -1135,8 +1135,10 @@ func TestSpendPanelSaysNothingWithoutAFinishReason(t *testing.T) {
 // an in_parallel:) is handed the block's index, and two of them may name the
 // SAME agent — so the pair a spend row is joined on is shared, and one
 // member's failure was drawn beside the one that succeeded. The node tells
-// them apart: a usage row always records its hash, and a step that ended well
-// publishes the same hash on its finish, where a failed one publishes none.
+// them apart: a usage row always records its hash, and a step publishes the
+// same hash on its finish, failed or not. A step with no hash — a failure
+// before its node, or a run recorded before failures published one — falls
+// back to its (index, name) for the rows no hashed step claimed.
 func TestSpendPanelDoesNotBlameASiblingMember(t *testing.T) {
 	t.Parallel()
 
@@ -1154,8 +1156,21 @@ func TestSpendPanelDoesNotBlameASiblingMember(t *testing.T) {
 		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 1,
 			Status: "succeeded", Hash: "hash-for"},
 		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "reviewer", StepKind: "agent", StepID: 2,
-			Status: "failed", Text: "the model gave up"},
+			Status: "failed", Hash: "hash-against", Text: "the model gave up"},
+		{Type: events.TypeStepStarted, StepIndex: 1, StepName: "fixer", StepKind: "agent", StepID: 3},
+		{Type: events.TypeStepFinished, StepIndex: 1, StepName: "fixer", StepKind: "agent", StepID: 3,
+			Status: "failed", Text: "the fixer gave up"},
 	})
+
+	mustRecordResult(t, pipeline, "hash-orphan", map[string]any{"response": "done"})
+
+	err = pipeline.Store.RecordAgentUsage(ctx, store.AgentUsage{
+		RunID: "run-members", StepIndex: 1, StepName: "fixer", JobName: "review",
+		NodeHash: "hash-orphan", ModelReq: "haiku", Total: 10,
+	})
+	if err != nil {
+		t.Fatalf("RecordAgentUsage: %v", err)
+	}
 
 	for _, hash := range []string{"hash-for", "hash-against"} {
 		mustRecordResult(t, pipeline, hash, map[string]any{"response": "done"})
@@ -1179,6 +1194,28 @@ func TestSpendPanelDoesNotBlameASiblingMember(t *testing.T) {
 	if at := strings.Index(body, "— step failed"); at >= 0 && !strings.Contains(body[strings.LastIndex(body[:at], "data-step="):at], "the model gave up") {
 		t.Errorf("the member that succeeded is the one blamed: %s", body)
 	}
+
+	// The hashless failure still owns the spend recorded under its index and name.
+	if row := stepRowHolding(t, body, "the fixer gave up"); !strings.Contains(row, "haiku") {
+		t.Errorf("the hashless step lost the spend only it could own: %s", row)
+	}
+}
+
+// stepRowHolding is the markup of the one step row whose body contains text.
+func stepRowHolding(t *testing.T, body, text string) string {
+	t.Helper()
+
+	at := strings.Index(body, text)
+	if at < 0 {
+		t.Fatalf("%q is not on the page: %s", text, body)
+	}
+
+	row := body[strings.LastIndex(body[:at], "data-step="):]
+	if next := strings.Index(row[1:], "data-step="); next >= 0 {
+		row = row[:next+1]
+	}
+
+	return row
 }
 
 // TestJobPageShowsTheMatrixBudgetBesideThePerCellOne: an across: block's own

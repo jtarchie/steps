@@ -981,7 +981,9 @@ func closeStep(
 		step.Error = row.Text
 	}
 
-	if node, ok := results[row.Hash]; ok && node.Result != "" {
+	// Not for a failure: nodes is last-write-wins per hash, so a failed row
+	// whose content a green run shares would draw that run's result.
+	if node, ok := results[row.Hash]; ok && node.Result != "" && !step.Failed() {
 		step.Result = decodeResult(node.Result)
 	}
 

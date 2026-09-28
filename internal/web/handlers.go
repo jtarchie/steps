@@ -301,7 +301,7 @@ func (s *Server) attachDiff(c *echo.Context, view *runView) error {
 			return fmt.Errorf("web: %w", err)
 		}
 
-		view.Changed = diffAgainst(*view, prior)
+		view.Changed, view.Uncompared = diffAgainst(*view, prior)
 		view.ComparedTo = candidate.ID
 
 		// Only when they differ, and only when both are known: a run

@@ -43,6 +43,26 @@ func runDoStep(ctx context.Context, r stepRunner, i int, step config.Step, paren
 	// a real change rather than an invisible one.
 	childParent := hash
 
+	blockErr := runDoChildren(ctx, r, i, step, childParent)
+
+	status := "succeeded"
+	if blockErr != nil {
+		status = "failed"
+	}
+
+	// Recorded like every other block's, so the row's hash names a node.
+	node := merkle.Node{
+		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindDo,
+		StepIndex: i, Resource: executedStepName(step), Content: content,
+	}
+	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, nil, blockErr)
+
+	return settled(hash, blockErr), blockErr
+}
+
+// runDoChildren runs a do: block's steps in order under childParent, stopping
+// at the first that fails.
+func runDoChildren(ctx context.Context, r stepRunner, i int, step config.Step, childParent string) error {
 	for childIndex := range step.Do {
 		child := step.Do[childIndex]
 
@@ -68,7 +88,7 @@ func runDoStep(ctx context.Context, r stepRunner, i int, step config.Step, paren
 		// often reached for.
 		childErr = tolerateTryFailure(ctx, r.jobName, child, childRes.stepID, childErr)
 		if childErr != nil {
-			return ran(hash), childErr
+			return childErr
 		}
 
 		if childRes.hash != "" {
@@ -76,5 +96,5 @@ func runDoStep(ctx context.Context, r stepRunner, i int, step config.Step, paren
 		}
 	}
 
-	return ran(hash), nil
+	return nil
 }

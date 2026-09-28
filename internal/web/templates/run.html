@@ -61,8 +61,8 @@
      Which steps is marked on each one's row. */}}
 {{if or $run.ComparedConfig $run.Changed}}
 <p class="diffnote">vs last passed <a class="hash" href="/p/{{.Nav.Current}}/runs/{{$run.ComparedTo}}">{{short $run.ComparedTo}}</a>:
-  {{if $run.ComparedConfig}}the <b>configuration changed</b> — it ran <a class="hash" href="/p/{{.Nav.Current}}/config/{{$run.ComparedConfig}}">{{short $run.ComparedConfig}}</a>{{if $run.Changed}} ·{{else}}, and no step's content moved with it{{end}}{{end}}
-  {{with len $run.Changed}}{{.}} step{{if ne . 1}}s{{end}} changed content — everything else replayed from cache{{end}}</p>
+  {{if $run.ComparedConfig}}the <b>configuration changed</b> — it ran <a class="hash" href="/p/{{.Nav.Current}}/config/{{$run.ComparedConfig}}">{{short $run.ComparedConfig}}</a>{{if $run.Changed}} ·{{else if not $run.Uncompared}}, and no step's content moved with it{{end}}{{end}}
+  {{with len $run.Changed}}{{.}} step{{if ne . 1}}s{{end}} changed content{{end}}</p>
 {{end}}
 
 {{/* On the transcript's top edge, at the right: the keys drive the rows
