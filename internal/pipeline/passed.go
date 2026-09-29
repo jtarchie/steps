@@ -35,6 +35,9 @@ type buildVersions struct {
 	// for a put's version(). Unlike by, never size- or empty-gated: those
 	// caps are about what is stored, and a get that fetched {} still fetched.
 	fetched map[string]map[string]any
+	// sources is each get's resource source, beside fetched, for an image:
+	// naming that get (see resolveStepImage).
+	sources map[string]map[string]any
 }
 
 type buildVersionsKey struct{}
@@ -73,7 +76,7 @@ func (b *buildVersions) runBuildID(runID string) string {
 const maxRecordedVersionBytes = 4 << 10
 
 func withBuildVersions(ctx context.Context) (context.Context, *buildVersions) {
-	versions := &buildVersions{by: map[string]map[string]bool{}, fetched: map[string]map[string]any{}}
+	versions := &buildVersions{by: map[string]map[string]bool{}, fetched: map[string]map[string]any{}, sources: map[string]map[string]any{}}
 
 	return context.WithValue(ctx, buildVersionsKey{}, versions), versions
 }
@@ -127,9 +130,10 @@ func recordBuildVersion(ctx context.Context, resource string, version map[string
 	versions.by[resource][encoded] = true
 }
 
-// recordFetched notes the version a get fetched, under the get's name, for a
-// later put's version() in the same build.
-func recordFetched(ctx context.Context, get string, version map[string]any) {
+// recordFetched notes the version a get fetched, and its resource's source,
+// under the get's name, for a later put's version() or image: in the same
+// build.
+func recordFetched(ctx context.Context, get string, source, version map[string]any) {
 	versions, ok := ctx.Value(buildVersionsKey{}).(*buildVersions)
 	if !ok {
 		return
@@ -139,6 +143,7 @@ func recordFetched(ctx context.Context, get string, version map[string]any) {
 	defer versions.mu.Unlock()
 
 	versions.fetched[get] = version
+	versions.sources[get] = source
 }
 
 // putInputs snapshots what a put's version() may read: its declared inputs

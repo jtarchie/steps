@@ -350,6 +350,11 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 // step. stepChainSkipped is only ever returned for a cache-matched task step;
 // put/agent steps are never chain-skippable.
 func dispatchNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, skippable map[string]bool, parentHash string) (stepResult, error) {
+	step, err := resolveStepImage(ctx, r.cfg, r.jobName, step)
+	if err != nil {
+		return stepResult{}, fmt.Errorf("step %d: %w", i, err)
+	}
+
 	shouldRun, err := evaluateStepGuard(ctx, r.cfg, step, r.bw)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d (when): %w", i, err)
@@ -364,6 +369,11 @@ func dispatchNonGetStep(ctx context.Context, r stepRunner, i int, step config.St
 	// A captured load_var: value changes what a step runs, so substitute
 	// before anything hashes or executes it.
 	step = renderStepVars(ctx, step)
+
+	err = refuseRenderedArtifactImage(r.cfg, r.jobName, step)
+	if err != nil {
+		return stepResult{}, fmt.Errorf("step %d: %w", i, err)
+	}
 
 	switch {
 	case step.LoadVar != "":

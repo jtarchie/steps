@@ -59,8 +59,44 @@ jobs:
 - **Exit codes pass through unchanged**, including docker-level failures (125 daemon-side, 126/127 unrunnable/missing command). A bad image surfaces to an agent as ordinary tool-result data, not a crash; the failure is reported once and remembered, so it isn't re-attempted on every command in a conversation.
 - **Fix agents run under the failing task's image**, not the fix agent's own `image:` — they must reproduce the exact environment that produced the failure. A fix agent's own `image:` can never take effect, so it's rejected at load time instead of silently ignored.
 - **Fail-fast validation**: if any `image:` is set anywhere in the config, `RunJob` validates docker (on `PATH`, `docker info` succeeds) before planning or executing anything.
-- **Images are pulled up front**, right after that check, rather than implicitly on first use — an implicit pull's progress lands in the first command's output and its download counts against that step's `timeout:`. Images already on the daemon are skipped via a local inspect, so a warm run costs milliseconds; an image that can't be pulled fails the run before any step starts.
+- **Images are pulled up front**, right after that check, rather than implicitly on first use — an implicit pull's progress lands in the first command's output and its download counts against that step's `timeout:`. Images already on the daemon are skipped via a local inspect, so a warm run costs milliseconds; an image that can't be pulled fails the run before any step starts. The one exception is an [image a `get` fetched](#an-image-a-get-fetched), which has no reference until its get runs.
 - **Cache hashing**: `image` folds into the relevant node content whenever it's non-empty — an image change alters what a command actually executes against.
+
+### An image a `get` fetched
+
+A step's own `image:` may name an artifact an earlier `get` in the same plan fetched, instead of an image. The step then runs in exactly the image that version names, so moving a pipeline onto a new toolchain is a new version upstream rather than an edit to the pipeline.
+
+```yaml noexec=docker
+resource_types:
+- name: registry-image
+  config:
+    check: |
+      digest=$(crane digest {{ .source.repository | shellquote }})
+      echo "[{\"digest\": \"$digest\"}]"
+    in: echo {{ .version.digest | shellquote }} > digest   # metadata only
+
+resources:
+- name: toolchain-image
+  type: registry-image                 # version = {digest}
+  source: {repository: ghcr.io/me/toolchain}
+
+jobs:
+- name: implement
+  plan:
+  - get: toolchain-image
+  - task: build
+    image: toolchain-image             # runs ghcr.io/me/toolchain@<the digest fetched>
+    run: go version
+```
+
+- **The reference is `source.repository` + `@` + `version.digest`**, registry-image's shape; a resource of any type that follows it works. The repository is read only from `source:`, never from the version: a check, a webhook or a `--pin` can choose which content of the author's repository runs, never which repository. The digest must be `sha256:<64 hex>` or `sha512:<128 hex>`; anything else (a tag such as `latest`) fails the step, naming the get.
+- **A digest, not a tag, is the point.** steps pulls an image only when the daemon does not already have it, so a moving tag keeps whatever copy a worker already holds. A digest cannot move.
+- **The get must come earlier in the plan**, checked by `steps validate` and `steps pipeline set` like an input. It need not also be in the step's `inputs:` (as in Concourse): the daemon pulls the image, so the artifact's files are never read — an `in:` that writes only metadata is enough.
+- **The name is an artifact if it is a resource's name or a get's name in the job.** Artifact names cannot contain `:`, `/` or `@`, so only a bare image name such as `alpine` can collide; the error for a resource no earlier get fetches says to rename the resource if the image was meant.
+- **Pulled at step start**, for a step running on this machine: after its get, before its `when:` guard (which runs in the same image), and outside its `timeout:` and `attempts:`. A warm daemon costs a local inspect. A placed step's worker pulls it as it would any image. The transcript notes which reference the step resolved to.
+- **Cache**: the resolved reference is what the step hashes, so a new digest runs the step again rather than skipping or reusing it.
+- **Credentials are the operator's docker credentials**, never the resource's `source:` (Concourse would use the resource's).
+- **Only a step's own `image:`** (including an agent step's override of its `agents:` entry, and a step hook's). A `tasks:`, `agents:` or `resource_types:` entry naming a resource, and an artifact image in a job-level hook, are load errors: none of them can see a build's gets. An image produced by a task's `outputs:` is not supported, nor is an artifact name arriving through a `load_var:`.
 
 ### `TMPDIR` when the daemon runs in a VM
 

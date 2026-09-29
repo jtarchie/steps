@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -1170,11 +1171,13 @@ func PlanChains(
 ) ([]Chain, error) {
 	slog.DebugContext(ctx, "job.plan", "job", jobName, "steps", len(steps), "sets", len(sets))
 
+	images := imagePlan{artifacts: cfg.ImageArtifacts(jobName)}
+
 	if sets != nil {
 		chains := make([]Chain, 0, len(sets))
 
 		for _, set := range sets {
-			chain, err := planChainForSet(ctx, cfg, steps, pinned, cache, set)
+			chain, err := planChainForSet(ctx, cfg, steps, pinned, cache, set, images)
 			if err != nil {
 				return nil, err
 			}
@@ -1187,7 +1190,7 @@ func PlanChains(
 		return chains, nil
 	}
 
-	chains, err := planSteps(ctx, cfg, steps, pinned, nil, "", false, cache)
+	chains, err := planSteps(ctx, cfg, steps, pinned, nil, "", false, cache, images)
 	if err != nil {
 		return nil, err
 	}
@@ -1202,7 +1205,7 @@ func PlanChains(
 // sets were made.
 func planChainForSet(
 	ctx context.Context, cfg *config.Config, steps []config.Step,
-	pinned map[string]string, cache *rsrc.Cache, set InputSet,
+	pinned map[string]string, cache *rsrc.Cache, set InputSet, images imagePlan,
 ) (Chain, error) {
 	var (
 		prefix      []Node
@@ -1226,10 +1229,13 @@ func planChainForSet(
 		index := i - base
 
 		if step.Get != "" {
-			node, err = planBoundGetNode(ctx, cfg, step, index, pinned, cache, set, parentHash)
+			var fetched config.Fetched
+
+			node, fetched, err = planBoundGetNode(ctx, cfg, step, index, pinned, cache, set, parentHash)
+			images = images.with(step.Get, fetched)
 			base = i + 1
 		} else {
-			node, stepUnskippable, err = planNonGetNode(cfg, step, index, parentHash)
+			node, stepUnskippable, err = images.planNonGetNode(cfg, step, index, parentHash)
 		}
 
 		if err != nil {
@@ -1256,40 +1262,42 @@ func planChainForSet(
 func planBoundGetNode(
 	ctx context.Context, cfg *config.Config, step config.Step, i int,
 	pinned map[string]string, cache *rsrc.Cache, set InputSet, parentHash string,
-) (Node, error) {
+) (Node, config.Fetched, error) {
 	res, resourceType, _, err := cache.ResolveVersionsCached(ctx, cfg, step, pinned)
 	if err != nil {
-		return Node{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+		return Node{}, config.Fetched{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 	}
 
 	version := set[step.Get]
 	if version == nil {
-		return Node{}, fmt.Errorf("step %d (get %q): the input set binds no version for it", i, step.Get)
+		return Node{}, config.Fetched{}, fmt.Errorf("step %d (get %q): the input set binds no version for it", i, step.Get)
 	}
 
 	content, err := GetNodeContent(cfg, step, *resourceType, res.Env, res.Source, version)
 	if err != nil {
-		return Node{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+		return Node{}, config.Fetched{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 	}
 
 	hash, err := HashNode(NodeKindGet, content, parentHash)
 	if err != nil {
-		return Node{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+		return Node{}, config.Fetched{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 	}
 
-	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindGet, StepIndex: i, Resource: res.Name, Content: content}, nil
+	node := Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindGet, StepIndex: i, Resource: res.Name, Content: content}
+
+	return node, config.Fetched{Source: res.Source, Version: version}, nil
 }
 
 func planSteps(
 	ctx context.Context, cfg *config.Config, steps []config.Step, pinned map[string]string,
-	prefix []Node, parentHash string, unskippable bool, cache *rsrc.Cache,
+	prefix []Node, parentHash string, unskippable bool, cache *rsrc.Cache, images imagePlan,
 ) ([]Chain, error) {
 	for i, step := range steps {
 		if step.Get != "" {
-			return planGetStep(ctx, cfg, steps, i, step, pinned, prefix, parentHash, unskippable, cache)
+			return planGetStep(ctx, cfg, steps, i, step, pinned, prefix, parentHash, unskippable, cache, images)
 		}
 
-		node, stepUnskippable, err := planNonGetNode(cfg, step, i, parentHash)
+		node, stepUnskippable, err := images.planNonGetNode(cfg, step, i, parentHash)
 		if err != nil {
 			return nil, err
 		}
@@ -1300,6 +1308,44 @@ func planSteps(
 	}
 
 	return []Chain{{Nodes: prefix, RootHash: parentHash, Unskippable: unskippable}}, nil
+}
+
+// imagePlan is what the planner knows about artifact images at one point in a
+// chain: which names are artifacts in the job, and what each get bound so far
+// fetched. Copied, never shared, so one version's branch cannot see
+// another's digest.
+type imagePlan struct {
+	artifacts map[string]bool
+	fetched   map[string]config.Fetched
+}
+
+func (p imagePlan) with(get string, fetched config.Fetched) imagePlan {
+	p.fetched = maps.Clone(p.fetched)
+	if p.fetched == nil {
+		p.fetched = map[string]config.Fetched{}
+	}
+
+	p.fetched[get] = fetched
+
+	return p
+}
+
+// planNonGetNode hashes step under the image the executor will resolve for
+// it (config.ResolveArtifactImage, shared by both sides).
+//
+// A step whose image cannot be resolved here is planned under its literal
+// image and made unskippable rather than failing the plan: the executor
+// reports the real error in the step's own place, and a chain it cannot run
+// is never recorded as done.
+func (p imagePlan) planNonGetNode(cfg *config.Config, step config.Step, i int, parentHash string) (Node, bool, error) {
+	resolved, _, err := config.ResolveArtifactImage(step, p.artifacts, p.fetched)
+	if err != nil {
+		node, _, planErr := planNonGetNode(cfg, step, i, parentHash)
+
+		return node, true, planErr
+	}
+
+	return planNonGetNode(cfg, resolved, i, parentHash)
 }
 
 // planNonGetNode builds the plan node for a task/put/agent step and reports
@@ -1713,7 +1759,7 @@ func ensembleNode(cfg *config.Config, step config.Step, i int, parentHash string
 // runGetStep control flow.
 func planGetStep(
 	ctx context.Context, cfg *config.Config, steps []config.Step, i int, step config.Step, pinned map[string]string,
-	prefix []Node, parentHash string, unskippable bool, cache *rsrc.Cache,
+	prefix []Node, parentHash string, unskippable bool, cache *rsrc.Cache, images imagePlan,
 ) ([]Chain, error) {
 	res, resourceType, versions, err := cache.ResolveVersionsCached(ctx, cfg, step, pinned)
 	if err != nil {
@@ -1735,7 +1781,9 @@ func planGetStep(
 
 		node := Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindGet, StepIndex: i, Resource: res.Name, Content: content}
 
-		sub, err := planSteps(ctx, cfg, steps[i+1:], pinned, append(append([]Node{}, prefix...), node), hash, unskippable, cache)
+		branch := images.with(step.Get, config.Fetched{Source: res.Source, Version: version})
+
+		sub, err := planSteps(ctx, cfg, steps[i+1:], pinned, append(append([]Node{}, prefix...), node), hash, unskippable, cache, branch)
 		if err != nil {
 			return nil, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
 		}

@@ -240,3 +240,242 @@ jobs:
 		})
 	}
 }
+
+func TestImageReference(t *testing.T) {
+	t.Parallel()
+
+	sha256 := "sha256:" + strings.Repeat("a", 64)
+	sha512 := "sha512:" + strings.Repeat("b", 128)
+	source := map[string]any{"repository": "ghcr.io/me/toolchain", "password": "s3cret"}
+
+	cases := map[string]struct {
+		source, version map[string]any
+		want, err       string
+	}{
+		"sha256":               {source, map[string]any{"digest": sha256}, "ghcr.io/me/toolchain@" + sha256, ""},
+		"sha512":               {source, map[string]any{"digest": sha512}, "ghcr.io/me/toolchain@" + sha512, ""},
+		"no repository":        {map[string]any{"password": "s3cret"}, map[string]any{"digest": sha256}, "", "no repository"},
+		"repository not text":  {map[string]any{"repository": 7}, map[string]any{"digest": sha256}, "", "no repository"},
+		"no digest":            {source, map[string]any{"ref": "v1"}, "", "no digest"},
+		"digest not text":      {source, map[string]any{"digest": 42}, "", "not a string"},
+		"a tag":                {source, map[string]any{"digest": "latest"}, "", "sha256:<64 hex>"},
+		"uppercase hex":        {source, map[string]any{"digest": "sha256:" + strings.Repeat("A", 64)}, "", "sha256:<64 hex>"},
+		"short hex":            {source, map[string]any{"digest": "sha256:" + strings.Repeat("a", 63)}, "", "sha256:<64 hex>"},
+		"trailing text":        {source, map[string]any{"digest": sha256 + " --privileged"}, "", "sha256:<64 hex>"},
+		"flag repository":      {map[string]any{"repository": "--privileged"}, map[string]any{"digest": sha256}, "", "must not start with '-'"},
+		"spaced repository":    {map[string]any{"repository": "alpine x"}, map[string]any{"digest": sha256}, "", "whitespace"},
+		"control repository":   {map[string]any{"repository": "alpine\x00"}, map[string]any{"digest": sha256}, "", "control"},
+		"repository with at":   {map[string]any{"repository": "alpine@sha256:x"}, map[string]any{"digest": sha256}, "", "'@'"},
+		"repository from ver.": {map[string]any{}, map[string]any{"digest": sha256, "repository": "evil.io/x"}, "", "no repository"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ImageReference(tc.source, tc.version)
+			if tc.err == "" {
+				if err != nil || got != tc.want {
+					t.Fatalf("ImageReference = %q, %v; want %q", got, err, tc.want)
+				}
+
+				return
+			}
+
+			if err == nil || !strings.Contains(err.Error(), tc.err) {
+				t.Fatalf("ImageReference err = %v, want one containing %q", err, tc.err)
+			}
+
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Errorf("error %q quotes the source's password", err)
+			}
+		})
+	}
+}
+
+// resolveFixture is one fetched artifact, "toolchain", and the reference it
+// resolves to.
+func resolveFixture() (map[string]bool, map[string]Fetched, string) {
+	digest := "sha256:" + strings.Repeat("c", 64)
+	fetched := map[string]Fetched{"toolchain": {
+		Source:  map[string]any{"repository": "ghcr.io/me/toolchain"},
+		Version: map[string]any{"digest": digest},
+	}}
+
+	return map[string]bool{"toolchain": true}, fetched, "ghcr.io/me/toolchain@" + digest
+}
+
+func TestResolveArtifactImagePassesALiteralThrough(t *testing.T) {
+	t.Parallel()
+
+	artifacts, fetched, _ := resolveFixture()
+
+	got, ok, err := ResolveArtifactImage(Step{Task: "t", Image: "alpine:3"}, artifacts, fetched)
+	if err != nil || ok || got.Image != "alpine:3" {
+		t.Fatalf("got %q, %v, %v; want the literal untouched", got.Image, ok, err)
+	}
+}
+
+// TestResolveArtifactImageIsIdempotent matters because across: cells and a
+// try:'s body pass through resolution again.
+func TestResolveArtifactImageIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	artifacts, fetched, ref := resolveFixture()
+
+	got, ok, err := ResolveArtifactImage(Step{Task: "t", Image: "toolchain"}, artifacts, fetched)
+	if err != nil || !ok || got.Image != ref {
+		t.Fatalf("got %q, %v, %v; want %q", got.Image, ok, err, ref)
+	}
+
+	again, ok, err := ResolveArtifactImage(got, artifacts, fetched)
+	if err != nil || ok || again.Image != ref {
+		t.Fatalf("second pass got %q, %v, %v; want %q unchanged", again.Image, ok, err, ref)
+	}
+}
+
+func TestResolveArtifactImageRefusesAnUnfetchedArtifact(t *testing.T) {
+	t.Parallel()
+
+	artifacts, _, _ := resolveFixture()
+
+	_, _, err := ResolveArtifactImage(Step{Task: "t", Image: "toolchain"}, artifacts, nil)
+	if err == nil || !strings.Contains(err.Error(), "rename the resource") {
+		t.Fatalf("err = %v, want the unfetched-artifact error", err)
+	}
+}
+
+func TestResolveArtifactImageResolvesATryBodyOnACopy(t *testing.T) {
+	t.Parallel()
+
+	artifacts, fetched, ref := resolveFixture()
+	inner := &Step{Task: "t", Image: "toolchain"}
+	step := Step{Try: &Step{Try: inner}}
+
+	got, ok, err := ResolveArtifactImage(step, artifacts, fetched)
+	if err != nil || !ok || got.Unwrap().Image != ref {
+		t.Fatalf("got %q, %v, %v; want %q", got.Unwrap().Image, ok, err, ref)
+	}
+
+	if inner.Image != "toolchain" || step.Try.Try != inner {
+		t.Errorf("the original step was written through: inner image %q", inner.Image)
+	}
+}
+
+func TestImagesSkipsAnArtifactImage(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Resources: []Resource{{Name: "toolchain"}},
+		Jobs: []Job{{Name: "j", Plan: []Step{
+			{Get: "toolchain"},
+			{Task: "t", Run: "true", Image: "toolchain"},
+		}}},
+	}
+
+	if got := cfg.Images(); len(got) != 0 {
+		t.Errorf("Images() = %v; an artifact name is not an image to pull", got)
+	}
+
+	if !cfg.UsesImages() {
+		t.Error("UsesImages() = false for a local step running in an artifact image")
+	}
+
+	cfg.Jobs[0].Plan[1].Tags = []string{"gpu"}
+
+	if cfg.UsesImages() {
+		t.Error("UsesImages() = true when the only artifact image is placed")
+	}
+}
+
+func TestArtifactImageRefusedWhereNoGetReaches(t *testing.T) {
+	t.Parallel()
+
+	const resources = `
+resource_types:
+- name: fake-image
+  config:
+    check: echo '[]'
+    in: "true"
+resources:
+- name: toolchain
+  type: fake-image
+  source: {repository: alpine}
+`
+
+	cases := map[string]struct{ pipeline, want string }{
+		"a tasks: entry": {`
+tasks:
+- name: build
+  image: toolchain
+  run: "true"
+jobs:
+- name: j
+  plan:
+  - get: toolchain
+  - task: build
+`, `task "build": image "toolchain" names resource "toolchain"`},
+		"an agents: entry": {`
+agents:
+- name: a
+  image: toolchain
+  source: { model: lmstudio/qwen }
+jobs:
+- name: j
+  plan:
+  - get: toolchain
+`, `agent "a": image "toolchain" names resource "toolchain"`},
+		"a job hook": {`
+jobs:
+- name: j
+  plan:
+  - get: toolchain
+  ensure:
+    task: note
+    image: toolchain
+    run: "true"
+`, "job-level hook"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			wantLoadError(t, writeConfig(t, resources+tc.pipeline), tc.want)
+		})
+	}
+}
+
+func TestResolveArtifactImagePassesATryWrappedLiteralThrough(t *testing.T) {
+	t.Parallel()
+
+	artifacts, fetched, _ := resolveFixture()
+	step := Step{Try: &Step{Task: "t", Image: "alpine:3"}}
+
+	got, ok, err := ResolveArtifactImage(step, artifacts, fetched)
+	if err != nil || ok || got.Try != step.Try {
+		t.Fatalf("got %+v, %v, %v; want the wrapper untouched", got.Try, ok, err)
+	}
+}
+
+// TestImageArtifactsNamesResourcesAndTheJobsGets: a get alias is an artifact
+// only in the job that declares it; a resource is one everywhere.
+func TestImageArtifactsNamesResourcesAndTheJobsGets(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Resources: []Resource{{Name: "toolchain"}},
+		Jobs: []Job{
+			{Name: "a", Plan: []Step{{Get: "tools", Resource: "toolchain"}}},
+			{Name: "b"},
+		},
+	}
+
+	if got := cfg.ImageArtifacts("a"); !got["toolchain"] || !got["tools"] {
+		t.Errorf("ImageArtifacts(a) = %v, want the resource and the alias", got)
+	}
+
+	if got := cfg.ImageArtifacts("b"); !got["toolchain"] || got["tools"] {
+		t.Errorf("ImageArtifacts(b) = %v, want the resource and not job a's alias", got)
+	}
+}

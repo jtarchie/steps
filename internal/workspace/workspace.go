@@ -1396,6 +1396,11 @@ func validateAgentArtifactFlow(cfg *config.Config, jobName string, i int, step c
 		return err
 	}
 
+	err = checkImageAvailable(cfg, jobName, i, "agent", step.Agent, step.Image, available)
+	if err != nil {
+		return err
+	}
+
 	// Ahead of the dir: check: an output exists, empty, before the step runs, so dir: may name one nothing earlier produced (as Concourse's run.dir may).
 	for _, out := range step.Outputs {
 		available[out] = true
@@ -1470,6 +1475,11 @@ func validateTaskArtifactFlow(cfg *config.Config, jobName string, i int, step co
 		return err
 	}
 
+	err = checkImageAvailable(cfg, jobName, i, "task", rt.Name, step.Image, available)
+	if err != nil {
+		return err
+	}
+
 	for _, out := range mapArtifacts(rt.Outputs, rt.OutputMapping) {
 		available[out] = true
 	}
@@ -1527,14 +1537,12 @@ func validateHookArtifactFlow(cfg *config.Config, jobName string, i int, hookNam
 		}
 	}
 
-	for _, in := range inputs {
-		if !view[in] {
-			return fmt.Errorf("job %q step %d %s hook (%s %q): input %q is not available to this hook",
-				jobName, i, hookName, kind, name, in)
-		}
+	err := checkHookInputsAvailable(cfg, jobName, i, hookName, kind, name, inputs, hook.Image, view)
+	if err != nil {
+		return err
 	}
 
-	err := checkHookAgentArtifacts(jobName, i, hookName, hook, inputs, view)
+	err = checkHookAgentArtifacts(jobName, i, hookName, hook, inputs, view)
 	if err != nil {
 		return err
 	}
@@ -1542,6 +1550,19 @@ func validateHookArtifactFlow(cfg *config.Config, jobName string, i int, hookNam
 	return hook.Hooks.Each(func(nestedName string, nested *config.Step) error { //nolint:wrapcheck // callback errors carry full job/step/hook context
 		return validateHookArtifactFlow(cfg, jobName, i, hookName+"."+nestedName, *nested, view)
 	})
+}
+
+// checkHookInputsAvailable holds a hook's inputs and artifact image to its
+// view; split out of validateHookArtifactFlow for the cyclomatic budget.
+func checkHookInputsAvailable(cfg *config.Config, jobName string, i int, hookName, kind, name string, inputs []string, image string, view map[string]bool) error {
+	for _, in := range inputs {
+		if !view[in] {
+			return fmt.Errorf("job %q step %d %s hook (%s %q): input %q is not available to this hook",
+				jobName, i, hookName, kind, name, in)
+		}
+	}
+
+	return checkImageAvailable(cfg, jobName, i, hookName+" hook "+kind, name, image, view)
 }
 
 // checkHookAgentArtifacts holds an agent hook to a plan agent's dir: and message_files: rules against the hook's view; split out of validateHookArtifactFlow for the cyclomatic budget.
@@ -1586,6 +1607,19 @@ func checkHookAgentArtifacts(jobName string, i int, hookName string, hook config
 	}
 
 	return nil
+}
+
+// checkImageAvailable holds an image: naming an artifact to the same rule an
+// input is held to: something earlier in the plan must have fetched it. The
+// image need not ALSO be an input, as in Concourse — the daemon pulls it, so
+// the artifact's files are never read.
+func checkImageAvailable(cfg *config.Config, jobName string, i int, kind, name, image string, available map[string]bool) error {
+	if available[image] || !cfg.ImageArtifacts(jobName)[image] {
+		return nil
+	}
+
+	return fmt.Errorf("job %q step %d (%s %q): image %q names an artifact no earlier get in the plan fetches: get it first, or rename the resource if you meant the image %s",
+		jobName, i, kind, name, image, image)
 }
 
 func checkInputsAvailable(jobName string, i int, kind, name string, inputs []string, available map[string]bool) error {

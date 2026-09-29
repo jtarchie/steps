@@ -617,7 +617,7 @@ func fetchGetStepWithStep(ctx context.Context, cfg *config.Config, st store.Deli
 	}
 
 	// Before the get's hooks run, so on_success can read what it fetched.
-	recordFetched(ctx, artifact, version)
+	recordFetched(ctx, artifact, resource.Source, version)
 
 	return nil
 }

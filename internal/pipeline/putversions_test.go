@@ -140,9 +140,9 @@ func TestPutInputsSnapshot(t *testing.T) {
 
 	big := map[string]any{"blob": strings.Repeat("x", 5<<10)}
 
-	recordFetched(ctx, "b", map[string]any{"id": "2"})
-	recordFetched(ctx, "a", map[string]any{})
-	recordFetched(ctx, "c", big)
+	recordFetched(ctx, "b", nil, map[string]any{"id": "2"})
+	recordFetched(ctx, "a", nil, map[string]any{})
+	recordFetched(ctx, "c", nil, big)
 
 	all := putInputs(ctx, config.Step{Put: "p", Inputs: &config.InputSpec{All: true}})
 	if !slices.Equal(all.Names, []string{"a", "b", "c"}) {
@@ -164,7 +164,7 @@ func TestPutInputsSnapshot(t *testing.T) {
 		t.Errorf("named inputs = %+v, want [b notes] with only b's version", named)
 	}
 
-	recordFetched(ctx, "d", map[string]any{"id": "4"})
+	recordFetched(ctx, "d", nil, map[string]any{"id": "4"})
 
 	if _, ok := all.Versions["d"]; ok {
 		t.Error("a get recorded after the snapshot leaked into it")

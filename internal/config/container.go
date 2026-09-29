@@ -29,6 +29,9 @@ type containerSettings struct {
 	// called "build" reads there as the task called "build", and a rule that
 	// keys on the name alone silently answers about the wrong entry.
 	Entry entryRef
+	// Artifact marks a step image: that names a get's artifact rather than
+	// an image (see ResolveArtifactImage).
+	Artifact bool
 }
 
 // entryRef names one tasks:, agents: or resource_types: entry. The kind is
@@ -95,8 +98,11 @@ func (c *Config) visitContainerSettings(fn func(context string, settings contain
 	}
 
 	for _, job := range c.Jobs {
+		artifacts := c.jobImageArtifacts(job)
+
 		err := job.visitSteps(func(label string, step *Step) error {
 			settings := step.containerSettings()
+			settings.Artifact = artifacts[step.Image]
 			// A step's own image: is usually empty even when it runs
 			// containerized, because the image comes from the tasks:/agents:
 			// entry it references. Resolving it here means every rule reads
