@@ -332,7 +332,7 @@ func TestAHolderThatDiesMidPipeFailsTheConsumerByName(t *testing.T) {
 		t.Fatalf("the pipe hung until the deadline: %v", err)
 	}
 
-	for _, want := range []string{`"out"`, holder, "could not be piped"} {
+	for _, want := range []string{`"out"`, "local:" + rootA, "could not be piped"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not name %s", err, want)
 		}
@@ -376,6 +376,20 @@ func TestAConsumerThatDiesMidPipeStopsReadingTheHolder(t *testing.T) {
 	}
 }
 
+// TestRemoteInputsWithNoWorkerAreRefused: a local runner cannot fetch an
+// input another worker holds, so running would read a tree missing it.
+func TestRemoteInputsWithNoWorkerAreRefused(t *testing.T) {
+	t.Parallel()
+
+	runner, err := NewRunner(shell.RunnerSpec{
+		Cwd: t.TempDir(), RemoteInputs: map[string]shell.RemoteInput{"out": {Digest: "d", Holder: "local:elsewhere"}},
+	})
+	if !errors.Is(err, errRemoteInputsHere) {
+		shell.CloseRunner(runner, "local")
+		t.Fatalf("NewRunner = %v; want the remote inputs refused", err)
+	}
+}
+
 // TestPipeRefusesMismatchedCompression: the bytes are relayed as they are,
 // so ends that agreed different encodings would hand one the other's.
 func TestPipeRefusesMismatchedCompression(t *testing.T) {
@@ -389,5 +403,31 @@ func TestPipeRefusesMismatchedCompression(t *testing.T) {
 
 	if !errors.Is(holdErr, wire.ErrProtocol) || sendErr != nil {
 		t.Errorf("relayFromHolder = %v, %v; want a protocol refusal before anything moved", holdErr, sendErr)
+	}
+}
+
+// TestAPipeErrorNamesTheHolderByAddressOnly: the pipe's own framing names
+// both machines as its note does, without ?identity=, which docs/infra.md
+// keeps out of the run record.
+//
+// ponytail: the dial error it wraps still quotes the whole URL, as every
+// session error in this package does; the upgrade is Address() in session's
+// "worker %q" wraps, asserted here on the whole error.
+func TestAPipeErrorNamesTheHolderByAddressOnly(t *testing.T) {
+	const holder = "ssh://nobody@127.0.0.1:1/srv?identity=/nonexistent/secret-key"
+
+	consumer, _ := consumerOn(t, t.TempDir(), map[string]shell.RemoteInput{"out": {Digest: strings.Repeat("a", 64), Holder: holder}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	err := consumer.Run(ctx, "true")
+	if err == nil {
+		t.Fatal("the consumer ran with an unreachable holder")
+	}
+
+	const want = `input "out" is held by worker ssh://nobody@127.0.0.1:1/srv and could not be piped to worker local:`
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q does not say %s", err, want)
 	}
 }

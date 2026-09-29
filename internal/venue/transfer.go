@@ -91,34 +91,43 @@ func (s *session) uploadArtifactOnTunnel(name string) error {
 		return err
 	}
 
+	op, need, err := s.offerOnTunnel(wire.UploadArtifact{Name: name, Digest: digest})
+	if err != nil || !need {
+		return err
+	}
+
+	return s.sendArtifact(op, staged)
+}
+
+// offerOnTunnel offers one artifact and reports whether the worker asked for
+// its bytes; false means it already held them, which is the whole point.
+func (s *session) offerOnTunnel(artifact wire.UploadArtifact) (uint32, bool, error) {
 	op := s.nextOp()
 
-	err = s.write(wire.Frame{Type: wire.FrameUpload, Op: op},
-		wire.Upload{Artifacts: []wire.UploadArtifact{{Name: name, Digest: digest}}})
+	err := s.write(wire.Frame{Type: wire.FrameUpload, Op: op}, wire.Upload{Artifacts: []wire.UploadArtifact{artifact}})
 	if err != nil {
-		return err
+		return op, false, err
 	}
 
 	answer, err := s.awaitOperationFrame()
 	if err != nil {
-		return err
+		return op, false, err
 	}
 
 	if answer.Op != op {
-		return s.desync("a type %d frame for operation %d answered an upload offer for %d",
+		return op, false, s.desync("a type %d frame for operation %d answered an upload offer for %d",
 			answer.Type, answer.Op, op)
 	}
 
-	// Already held: nothing crosses, which is the whole point.
 	if answer.Type == wire.FrameEnd {
-		return nil
+		return op, false, nil
 	}
 
 	if answer.Type != wire.FrameNeed {
-		return s.desync("the worker answered a type %d frame to an upload offer", answer.Type)
+		return op, false, s.desync("the worker answered a type %d frame to an upload offer", answer.Type)
 	}
 
-	return s.sendArtifact(op, staged)
+	return op, true, nil
 }
 
 // sendArtifact streams one staged artifact and waits for the acknowledgement.

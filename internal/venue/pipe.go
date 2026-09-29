@@ -33,32 +33,11 @@ import (
 // reader after a piped consumer pulls it again. The upgrade is a list of
 // holders in workspace.RemoteArtifact.
 func (s *session) pipeRemoteArtifact(ctx context.Context, name string, input shell.RemoteInput, holders map[string]*session) error {
-	op := s.nextOp()
-
-	err := s.write(wire.Frame{Type: wire.FrameUpload, Op: op},
-		wire.Upload{Artifacts: []wire.UploadArtifact{{Name: name, Digest: input.Digest, Foreign: true}}})
-	if err != nil {
-		return err
-	}
-
-	answer, err := s.awaitOperationFrame()
-	if err != nil {
-		return err
-	}
-
-	if answer.Op != op {
-		return s.desync("a type %d frame for operation %d answered an upload offer for %d",
-			answer.Type, answer.Op, op)
-	}
-
 	// Already held — its own output, or an earlier pipe's: nothing crosses,
 	// and the holder is never dialled.
-	if answer.Type == wire.FrameEnd {
-		return nil
-	}
-
-	if answer.Type != wire.FrameNeed {
-		return s.desync("the worker answered a type %d frame to an upload offer", answer.Type)
+	op, need, err := s.offerOnTunnel(wire.UploadArtifact{Name: name, Digest: input.Digest, Foreign: true})
+	if err != nil || !need {
+		return err
 	}
 
 	// Said, because the whole transfer runs before the step's first command
@@ -67,7 +46,7 @@ func (s *session) pipeRemoteArtifact(ctx context.Context, name string, input she
 
 	holdErr, sendErr := s.relayFromHolder(ctx, name, input, holders, op)
 	if sendErr != nil {
-		return fmt.Errorf("worker %s stopped receiving input %q from worker %s: %w", s.worker.URL, name, input.Holder, sendErr)
+		return fmt.Errorf("worker %s stopped receiving input %q from worker %s: %w", s.worker.Address(), name, holderAddress(input.Holder), sendErr)
 	}
 
 	// Ended whatever the holder did: the consumer is committed and reading,
@@ -80,11 +59,11 @@ func (s *session) pipeRemoteArtifact(ctx context.Context, name string, input she
 	}
 
 	if holdErr != nil {
-		return fmt.Errorf("input %q is held by worker %s and could not be piped to worker %s: %w", name, input.Holder, s.worker.URL, holdErr)
+		return fmt.Errorf("input %q is held by worker %s and could not be piped to worker %s: %w", name, holderAddress(input.Holder), s.worker.Address(), holdErr)
 	}
 
 	if endErr != nil {
-		return fmt.Errorf("worker %s refused input %q piped from worker %s: %w", s.worker.URL, name, input.Holder, endErr)
+		return fmt.Errorf("worker %s refused input %q piped from worker %s: %w", s.worker.Address(), name, holderAddress(input.Holder), endErr)
 	}
 
 	return nil
@@ -150,8 +129,8 @@ func (s *session) holderFor(ctx context.Context, holder string, holders map[stri
 	return open, nil
 }
 
-// holderAddress is a holder URL without its credentials, for a note that
-// lands in the run record; as written if it does not parse, which dialling it
+// holderAddress is a holder URL without its credentials, for a note or an
+// error that lands in the run record; as written if it does not parse, which dialling it
 // will then say.
 func holderAddress(holder string) string {
 	worker, err := ParseWorker(holder)

@@ -22,6 +22,7 @@ package wire
 // one cannot be told to; the frame either exists for both ends or it kills a
 // session mid-step with "unknown frame type". So it is a version, and a
 // ?binary=-pinned shim from before it says so at the handshake.
+//
 // 9 marks an offered artifact FOREIGN — produced on another worker — so the
 // shim refuses a symlink leaving it; an older shim would ignore the flag and
 // place the link.
