@@ -6,6 +6,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -427,7 +428,7 @@ func ResolveArtifactImage(step Step, artifacts map[string]bool, fetched map[stri
 
 	reference, err := ImageReference(got.Source, got.Version)
 	if err != nil {
-		return step, false, fmt.Errorf("image %q (get %q): %w", step.Image, step.Image, err)
+		return step, false, fmt.Errorf("image %q: %w", step.Image, err)
 	}
 
 	step.Image = reference
@@ -439,16 +440,23 @@ func ResolveArtifactImage(step Step, artifacts map[string]bool, fetched map[stri
 // reach it. A tasks:, agents: or resource_types: entry is shared and sees no
 // job's gets (and a resource type's check runs before any job), and a
 // job-level hook runs outside every triggered build.
+//
+// An entry may be named from any job, so a get alias in any job counts: a
+// step naming it there would read the alias as an artifact, and the entry
+// would silently pull a Docker Hub image of that name.
 func (c *Config) validateArtifactImageEntries() error {
-	resources := c.jobImageArtifacts(Job{})
+	artifacts := c.jobImageArtifacts(Job{})
+	for _, job := range c.Jobs {
+		maps.Copy(artifacts, c.jobImageArtifacts(job))
+	}
 
 	err := c.visitContainerSettings(func(context string, settings containerSettings) error {
-		if settings.Entry.Kind == "" || !resources[settings.Image] {
+		if settings.Entry.Kind == "" || !artifacts[settings.Image] {
 			return nil
 		}
 
-		return fmt.Errorf("%s: image %q names resource %q, but only a step's own image: can name an artifact; set image: on the step, or rename the resource if you meant the image %s",
-			context, settings.Image, settings.Image, settings.Image)
+		return fmt.Errorf("%s: image %q names a resource or get, but only a step's own image: can name an artifact; set image: on the step, or rename the resource or get if you meant the image %s",
+			context, settings.Image, settings.Image)
 	})
 	if err != nil {
 		return err

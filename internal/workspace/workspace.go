@@ -1186,6 +1186,7 @@ func validateStepKindArtifactFlow(cfg *config.Config, jobName string, i int, ste
 		// their pre view is empty.
 		pre := map[string]bool{}
 		available[step.Get] = true
+		available[fetchedByGet(step.Get)] = true
 
 		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
 	case step.Put != "":
@@ -1612,14 +1613,22 @@ func checkHookAgentArtifacts(jobName string, i int, hookName string, hook config
 // checkImageAvailable holds an image: naming an artifact to the same rule an
 // input is held to: something earlier in the plan must have fetched it. The
 // image need not ALSO be an input, as in Concourse — the daemon pulls it, so
-// the artifact's files are never read.
+// the artifact's files are never read. An earlier task's output of the same
+// name does not count: only a get's version names an image.
 func checkImageAvailable(cfg *config.Config, jobName string, i int, kind, name, image string, available map[string]bool) error {
-	if available[image] || !cfg.ImageArtifacts(jobName)[image] {
+	if image == "" || available[fetchedByGet(image)] || !cfg.ImageArtifacts(jobName)[image] {
 		return nil
 	}
 
 	return fmt.Errorf("job %q step %d (%s %q): image %q names an artifact no earlier get in the plan fetches: get it first, or rename the resource if you meant the image %s",
 		jobName, i, kind, name, image, image)
+}
+
+// fetchedByGet is the key the flow walk marks a get's own name under, beside
+// the artifact name an output may also claim. ':' is outside the artifact
+// name pattern, so no input or output can collide with it.
+func fetchedByGet(name string) string {
+	return "get:" + name
 }
 
 func checkInputsAvailable(jobName string, i int, kind, name string, inputs []string, available map[string]bool) error {

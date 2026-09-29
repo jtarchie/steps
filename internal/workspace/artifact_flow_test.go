@@ -614,6 +614,20 @@ func TestValidateArtifactFlowArtifactImage(t *testing.T) {
 			}}},
 			want: `image "toolchain"`,
 		},
+		"an earlier task's output of the same name": {
+			plan: []config.Step{
+				{Task: "make", Run: "true", Outputs: []string{"toolchain"}},
+				{Task: "build", Run: "true", Image: "toolchain"},
+			},
+			want: `image "toolchain"`,
+		},
+		"an output shadowing a get": {
+			plan: []config.Step{
+				{Get: "toolchain"},
+				{Task: "make", Run: "true", Outputs: []string{"toolchain"}},
+				{Task: "build", Run: "true", Image: "toolchain"},
+			},
+		},
 		"a resource never fetched": {
 			plan: []config.Step{{Task: "build", Run: "true", Image: "toolchain"}},
 			want: "rename the resource",

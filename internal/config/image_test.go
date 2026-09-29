@@ -414,7 +414,7 @@ jobs:
   plan:
   - get: toolchain
   - task: build
-`, `task "build": image "toolchain" names resource "toolchain"`},
+`, `task "build": image "toolchain" names a resource or get`},
 		"an agents: entry": {`
 agents:
 - name: a
@@ -424,7 +424,19 @@ jobs:
 - name: j
   plan:
   - get: toolchain
-`, `agent "a": image "toolchain" names resource "toolchain"`},
+`, `agent "a": image "toolchain" names a resource or get`},
+		"a tasks: entry named after a get alias": {`
+tasks:
+- name: build
+  image: tools
+  run: "true"
+jobs:
+- name: j
+  plan:
+  - get: tools
+    resource: toolchain
+  - task: build
+`, `task "build": image "tools" names a resource or get`},
 		"a job hook": {`
 jobs:
 - name: j

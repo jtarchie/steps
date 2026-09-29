@@ -129,6 +129,56 @@ func TestImageArtifactRunsInTheFetchedDigest(t *testing.T) {
 	}
 }
 
+// TestImageArtifactAgentToolsRunInTheFetchedDigest: an agent step's image:
+// override of its agents: entry may name the get too, and the agent's shell
+// tool runs in that reference.
+func TestImageArtifactAgentToolsRunInTheFetchedDigest(t *testing.T) {
+	requireDockerE2E(t)
+
+	digest := alpineDigest(t)
+	ref := "alpine@" + digest
+	path := pipelinePath(t, t.TempDir())
+
+	fake := newFakeLLM(t,
+		callsTool("run_shell", map[string]any{"command": "cat /etc/alpine-release"}),
+		says("done"),
+	)
+
+	imageArtifactPipeline(t, path, "alpine", digest, "", fmt.Sprintf(`  - agent: inspector
+    image: toolchain
+    messages: [Say which release this is.]
+
+agents:
+- name: inspector
+  source:
+    endpoint: %s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [run_shell]
+
+defaults:
+  preflight:
+    disabled: true
+`, fake.URL))
+
+	out := captureStdout(t, func() { mustRun(t, path) })
+
+	// The host has no /etc/alpine-release, so a release proves the container.
+	if result := lastToolResult(t, fake.request(2)); !strings.Contains(result, `"exit_code":0`) || !strings.Contains(result, "3.") {
+		t.Errorf("run_shell result = %q, want alpine's release from the container", result)
+	}
+
+	if !strings.Contains(out, "image: toolchain → "+ref) {
+		t.Errorf("output does not name the resolved reference %q:\n%s", ref, out)
+	}
+
+	if !nodeContentContains(t, path, `"image":"`+ref+`"`) {
+		t.Errorf("no recorded node carries image %q", ref)
+	}
+
+	assertNoCanary(t, path, out)
+}
+
 func TestImageArtifactGuardRunsInTheFetchedDigest(t *testing.T) {
 	requireDockerE2E(t)
 
@@ -203,6 +253,18 @@ func TestImageArtifactValidateRefusesAnUnfetchedImage(t *testing.T) {
       - task: probe
         image: toolchain
         run: "true"
+`,
+			want: `image "toolchain"`,
+		},
+		"a task output of the same name": {
+			plan: `- name: output
+  plan:
+  - task: make
+    outputs: [toolchain]
+    run: "true"
+  - task: probe
+    image: toolchain
+    run: "true"
 `,
 			want: `image "toolchain"`,
 		},

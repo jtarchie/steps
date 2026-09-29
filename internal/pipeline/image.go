@@ -23,7 +23,15 @@ import (
 // worker pulls on create. A pull failure is an infrastructure error, never
 // the step saying no.
 func resolveStepImage(ctx context.Context, cfg *config.Config, jobName string, step config.Step) (config.Step, error) {
-	resolved, ok, err := config.ResolveArtifactImage(step, cfg.ImageArtifacts(jobName), fetchedImages(ctx))
+	// Every non-get dispatch lands here — across: cells, block children,
+	// hooks — so the build's fetched map is only snapshotted for a step that
+	// names an artifact.
+	artifacts := cfg.ImageArtifacts(jobName)
+	if !artifacts[step.Unwrap().Image] {
+		return step, nil
+	}
+
+	resolved, ok, err := config.ResolveArtifactImage(step, artifacts, fetchedImages(ctx))
 	if err != nil {
 		return step, fmt.Errorf("job %q: %w", jobName, err)
 	}
@@ -70,7 +78,7 @@ func fetchedImages(ctx context.Context) map[string]config.Fetched {
 // — it must, the guard runs in the image — so the name would otherwise be
 // pulled from Docker Hub as it stands.
 func refuseRenderedArtifactImage(cfg *config.Config, jobName string, step config.Step) error {
-	if !cfg.ImageArtifacts(jobName)[step.Image] {
+	if step.Image == "" || !cfg.ImageArtifacts(jobName)[step.Image] {
 		return nil
 	}
 

@@ -96,7 +96,7 @@ jobs:
 - **Pulled at step start**, for a step running on this machine: after its get, before its `when:` guard (which runs in the same image), and outside its `timeout:` and `attempts:`. A warm daemon costs a local inspect. A placed step's worker pulls it as it would any image. The transcript notes which reference the step resolved to.
 - **Cache**: the resolved reference is what the step hashes, so a new digest runs the step again rather than skipping or reusing it.
 - **Credentials are the operator's docker credentials**, never the resource's `source:` (Concourse would use the resource's).
-- **Only a step's own `image:`** (including an agent step's override of its `agents:` entry, and a step hook's). A `tasks:`, `agents:` or `resource_types:` entry naming a resource, and an artifact image in a job-level hook, are load errors: none of them can see a build's gets. An image produced by a task's `outputs:` is not supported, nor is an artifact name arriving through a `load_var:`.
+- **Only a step's own `image:`** (including an agent step's override of its `agents:` entry, and a step hook's). A `tasks:`, `agents:` or `resource_types:` entry naming a resource or any job's get, and an artifact image in a job-level hook, are load errors: none of them can see a build's gets. A task's `outputs:` cannot be an image — only an earlier get of the name satisfies `steps validate` — and an artifact name arriving through a `load_var:` fails the step.
 
 ### `TMPDIR` when the daemon runs in a VM
 
