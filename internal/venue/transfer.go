@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -35,14 +37,6 @@ func (s *session) upload(ctx context.Context) error {
 		return s.uploadViaStore(ctx)
 	}
 
-	// The tunnel carries bytes from THIS machine, and a remote input's are
-	// not here. The caller only names one when a store is configured, and
-	// the plane is the store's — so this is a shim that did not accept the
-	// plane, which the handshake would have refused first.
-	if len(s.remoteInputs) > 0 {
-		return fmt.Errorf("%w: %d inputs live on other workers and the tunnel cannot carry them", wire.ErrProtocol, len(s.remoteInputs))
-	}
-
 	names, err := treeArtifacts(s.cwd)
 	if err != nil {
 		return err
@@ -50,6 +44,22 @@ func (s *session) upload(ctx context.Context) error {
 
 	for _, name := range names {
 		err = s.uploadArtifactOnTunnel(name)
+		if err != nil {
+			return err
+		}
+	}
+
+	holders := map[string]*session{}
+
+	//nolint:contextcheck // close runs under its own bound, deliberately not the caller's context
+	defer func() {
+		for _, holder := range holders {
+			_ = holder.close()
+		}
+	}()
+
+	for _, name := range slices.Sorted(maps.Keys(s.remoteInputs)) {
+		err = s.pipeRemoteArtifact(ctx, name, s.remoteInputs[name], holders)
 		if err != nil {
 			return err
 		}

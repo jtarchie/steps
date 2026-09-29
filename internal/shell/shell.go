@@ -206,11 +206,11 @@ type RunnerSpec struct {
 	DeferFetch bool
 	// RemoteInputs are inputs whose bytes are NOT under Cwd: a worker holds
 	// each, under the digest given, and the venue offers it to the step's
-	// worker by that digest — served from the artifact store, which the
-	// holder is asked to push to if the store does not already have it. So
-	// a tree moves worker → store → worker and never through this machine.
-	// Only meaningful with a Worker and an ArtifactStore; the caller leaves
-	// this empty otherwise and materializes the input under Cwd instead.
+	// worker by that digest. With an ArtifactStore it is served from the
+	// store, which the holder is asked to push to if the store does not
+	// already have it; without one it is piped through this machine from the
+	// holder, never landing here. Only meaningful with a Worker; the caller
+	// leaves this empty otherwise and materializes the input under Cwd.
 	RemoteInputs map[string]RemoteInput
 }
 

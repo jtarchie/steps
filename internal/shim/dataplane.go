@@ -170,7 +170,7 @@ func (s *session) placeArtifact(ctx context.Context, cache string, artifact wire
 		return errNoURL
 	}
 
-	staging, err := fetchArtifact(ctx, artifact.URL, held, artifact.Digest)
+	staging, err := fetchArtifact(ctx, artifact.URL, held, artifact.Digest, artifact.Foreign)
 	if err != nil {
 		return fmt.Errorf("%q: %w", artifact.Name, err)
 	}
@@ -195,7 +195,7 @@ func (s *session) placeArtifact(ctx context.Context, cache string, artifact wire
 // a partial tree under a digest that claims to be complete — the next step
 // would find it, skip the download, and run against half its input. The caller
 // places from what this returns and commits it afterwards.
-func fetchArtifact(ctx context.Context, url, held, digest string) (staging string, err error) {
+func fetchArtifact(ctx context.Context, url, held, digest string, foreign bool) (staging string, err error) {
 	staging, err = stageArtifact(filepath.Dir(held))
 	if err != nil {
 		return "", err
@@ -232,7 +232,7 @@ func fetchArtifact(ctx context.Context, url, held, digest string) (staging strin
 	// Always zstd on this plane, and verified against the digest the URL was
 	// minted for: a store object is fetched over the network from a place this
 	// process does not control.
-	err = unpackVerified(response.Body, staging, digest, true)
+	err = unpackVerified(response.Body, staging, digest, true, foreign)
 	if err != nil {
 		return staging, err
 	}
