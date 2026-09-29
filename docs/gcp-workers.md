@@ -152,7 +152,7 @@ gcloud compute disks list --filter="-users:*"
 
 The second one matters on its own: a disk that outlives its instance keeps billing with nothing pointing at it — which is exactly what `--instance-termination-action=DELETE` in the template exists to prevent.
 
-Every machine the launch rung creates is labelled at creation with `steps-worker` (a short hash naming the machine — template, project, zone — and never any part of the worker URL), `steps-host` and `steps-pid` (the process that launched it: a `steps web` daemon or a one-shot `steps run`/`test`). One the process never gave back — it was killed, it ran out of memory, its host died — is listed by the label:
+Every machine the launch rung creates is labelled at creation with `steps-worker` (a short hash naming the machine — template, project and zone as written in the worker mapping, so ones left to the environment are not part of it — and never any part of the worker URL), `steps-host` and `steps-pid` (the process that launched it: a `steps web` daemon or a one-shot `steps run`/`test`). One the process never gave back — it was killed, it ran out of memory, its host died — is listed by the label:
 
 ```bash
 gcloud compute instances list --filter="labels.steps-worker:*" \

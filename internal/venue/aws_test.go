@@ -411,8 +411,6 @@ func accountID(ctx context.Context, t *testing.T) string {
 	return strings.TrimSpace(awsCLI(ctx, t, "sts", "get-caller-identity", "--query", "Account", "--output", "text"))
 }
 
-// forbidden reports an authorization refusal — an SCP or a missing IAM
-// grant — as distinct from the operation genuinely failing.
 // assertLaunchTags checks the launched instance carries steps' labels AND the
 // template's own tag: whether EC2 merges request tags with a launch
 // template's, rather than replacing them, is something only a real account
@@ -451,6 +449,8 @@ func assertLaunchTags(ctx context.Context, t *testing.T, worker Worker, instance
 	}
 }
 
+// forbidden reports an authorization refusal — an SCP or a missing IAM
+// grant — as distinct from the operation genuinely failing.
 func forbidden(err error) bool {
 	text := err.Error()
 

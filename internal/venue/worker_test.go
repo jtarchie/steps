@@ -220,7 +220,11 @@ func TestLaunchLabelNamesTheMachineNotTheSpelling(t *testing.T) {
 			t.Fatalf("ParseWorker(%q): %v", raw, err)
 		}
 
-		for _, value := range worker.launchLabels() {
+		labels := worker.launchLabels()
+		// The host label is this machine's name, which a runner may legitimately spell "tmpl-…".
+		delete(labels, labelHost)
+
+		for _, value := range labels {
 			if strings.Contains(value, "lt-0def") || strings.Contains(value, "tmpl") || strings.Contains(value, "secret") {
 				t.Errorf("label value %q carries part of %q", value, raw)
 			}

@@ -230,7 +230,7 @@ aws ec2 describe-volumes --filters "Name=status,Values=available" --query 'Volum
 
 The second one matters on its own: a volume that outlives its instance keeps billing with nothing pointing at it.
 
-Every machine the launch rung creates is tagged at creation with `steps-worker` (a short hash naming the machine — template, version, capacity, region — and never any part of the worker URL), `steps-host` and `steps-pid` (the process that launched it: a `steps web` daemon or a one-shot `steps run`/`test`). One the process never gave back — it was killed, it ran out of memory, its host died — is listed by the tag, per region, so run it with each worker mapping's `?region=`:
+Every machine the launch rung creates is tagged at creation with `steps-worker` (a short hash naming the machine — template, version, capacity and region as written in the worker mapping, so a region left to the environment is not part of it — and never any part of the worker URL), `steps-host` and `steps-pid` (the process that launched it: a `steps web` daemon or a one-shot `steps run`/`test`). One the process never gave back — it was killed, it ran out of memory, its host died — is listed by the tag, per region, so run it with each worker mapping's `?region=`:
 
 ```bash
 aws ec2 describe-instances \

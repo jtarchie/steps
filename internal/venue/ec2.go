@@ -234,11 +234,13 @@ func stopInstance(api ec2API, worker Worker, instance string) {
 // launchInstance creates one instance from a launch template and terminates
 // it when the job ends.
 func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, func(context.Context) error, error) {
+	labels := worker.launchLabels()
+
 	// Said BEFORE the money is spent, as gceLaunch does: EC2 chooses the id, so a crash past CreateFleet leaves this label as the transcript's only way to the machine.
 	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: launching from template %s (%s=%s)",
-		worker.URL, worker.Template, labelWorker, worker.launchLabels()[labelWorker]))
+		worker.URL, worker.Template, labelWorker, labels[labelWorker]))
 
-	out, err := api.CreateFleet(ctx, fleetRequest(worker))
+	out, err := api.CreateFleet(ctx, fleetRequest(worker, labels))
 	if err != nil {
 		return Worker{}, nil, fmt.Errorf("launching a worker for %q: %w", worker.URL, err)
 	}
@@ -303,8 +305,7 @@ func terminateInstance(api ec2API, worker Worker, instance string) {
 // The labels ride IN the request, never a CreateTags after it: a separate call
 // leaves a window where a crash strands an untagged, billing machine — the
 // case the labels exist for — while a refused tag here refuses the launch.
-func fleetRequest(worker Worker) *ec2.CreateFleetInput {
-	labels := worker.launchLabels()
+func fleetRequest(worker Worker, labels map[string]string) *ec2.CreateFleetInput {
 	tags := make([]ec2types.Tag, 0, len(labels))
 
 	for _, key := range slices.Sorted(maps.Keys(labels)) {
