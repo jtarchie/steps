@@ -166,6 +166,16 @@ func (r *RunCmd) Run() error {
 		return err
 	}
 
+	// Here rather than inside RunJob: a refusal there would already have put
+	// the run back in flight and fired the job's on_failure over a command
+	// that was turned away.
+	if r.Resume != "" {
+		err = pipeline.CheckResumable(ctx, st, r.Resume, job)
+		if err != nil {
+			return fmt.Errorf("could not resume: %w", err)
+		}
+	}
+
 	slog.Info("pipeline.run", "pipeline", r.Pipeline, "job", job.Name)
 
 	ctx, undraw := r.draw(ctx, st)

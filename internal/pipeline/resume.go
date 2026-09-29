@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log/slog"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -74,6 +75,190 @@ func (r *resumeState) alreadyDone(build string, index int) (string, bool) {
 	name, ok := r.done[doneKey{build, index}]
 
 	return name, ok
+}
+
+// progressedPast reports whether a previous attempt of this run completed a
+// step of build after index — which a get at index needs no more: that step
+// proves the fetch succeeded, and it may have changed what was fetched.
+func (r *resumeState) progressedPast(build string, index int) bool {
+	if r == nil || !r.resuming {
+		return false
+	}
+
+	for key := range r.done {
+		if key.build == build && key.index > index {
+			return true
+		}
+	}
+
+	return false
+}
+
+// resumeFacets is what CheckResumable reads: the run, its steps, and the
+// builds it was created with.
+type resumeFacets interface {
+	runLookup
+	store.Versions
+}
+
+// CheckResumable refuses, before anything runs, a resume the one tree it
+// continues in cannot serve.
+//
+// A run keeps ONE tree: every build of a fan-out re-points the run at its
+// own, the fan-out is sequential, so the row names the last build's — and a
+// resume hands that tree to every build it continues. A build that got
+// partway keeps its gets' artifacts rather than fetching again (the steps it
+// skips changed them), so two such builds, or one plus an earlier build that
+// would fetch into the tree ahead of it, would each run on bytes that are not
+// theirs. What is allowed: builds that finished plus one unfinished last
+// build, or builds none of which got anywhere.
+//
+// It can refuse falsely, loudly: a to: jump or a tolerated try: failure
+// leaves a step unrecorded, so a finished build reads as unfinished.
+//
+// ponytail: one tree per run. Upgrade: record each build's root (a run_builds
+// row, a schemaVersion bump) and have Reuse map build id to tree, which
+// retires this check.
+func CheckResumable(ctx context.Context, st resumeFacets, runID string, job *config.Job) error {
+	run, err := findRun(ctx, st, runID)
+	if err != nil {
+		return err
+	}
+
+	steps, err := st.CompletedRunSteps(ctx, runID)
+	if err != nil {
+		return err //nolint:wrapcheck // CompletedRunSteps already names the run
+	}
+
+	inputs, err := st.RunInputs(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("could not read what run %q was created with: %w", runID, err)
+	}
+
+	recorded := map[string]bool{}
+	for _, input := range inputs {
+		recorded[input.BuildID] = true
+	}
+
+	builds := 0
+	for recorded[fmt.Sprintf("%s#%d", runID, builds)] {
+		builds++
+	}
+
+	done := foldRunSteps(steps)
+
+	err = refuseSharedWorkspace(runID, done, builds, remainderSteps(job))
+	if err != nil {
+		return err
+	}
+
+	return refuseMissingWorkspace(runID, run.Workspace, done, builds)
+}
+
+// remainderSteps is the indices a triggered build records, relative to the
+// remainder after the plan's first get, that finish it: every step but the
+// gets, which record nothing.
+func remainderSteps(job *config.Job) []int {
+	for first, step := range job.Plan {
+		if step.Get == "" {
+			continue
+		}
+
+		var needed []int
+
+		for i, rest := range job.Plan[first+1:] {
+			if rest.Get == "" {
+				needed = append(needed, i)
+			}
+		}
+
+		return needed
+	}
+
+	return nil
+}
+
+// runRecord is one run's completed steps, read per build: a progressed build
+// has a recorded step, a finished one has every needed step recorded.
+type runRecord struct {
+	runID  string
+	done   map[doneKey]string
+	needed []int
+}
+
+func (r runRecord) progressed(n int) bool {
+	build := fmt.Sprintf("%s#%d", r.runID, n)
+	for key := range r.done {
+		if key.build == build {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (r runRecord) finished(n int) bool {
+	build := fmt.Sprintf("%s#%d", r.runID, n)
+	for _, i := range r.needed {
+		if _, ok := r.done[doneKey{build, i}]; !ok {
+			return false
+		}
+	}
+
+	return true
+}
+
+// refuseSharedWorkspace is CheckResumable's rule over one run's record.
+func refuseSharedWorkspace(runID string, done map[doneKey]string, builds int, needed []int) error {
+	record := runRecord{runID: runID, done: done, needed: needed}
+	last := builds - 1
+
+	for n := range last {
+		if record.progressed(n) && !record.finished(n) {
+			return fmt.Errorf(
+				"cannot resume run %q: build #%d stopped partway, and a run keeps only its last build's workspace — start a new run with --pin <field>=<value> to rebuild that version",
+				runID, n)
+		}
+	}
+
+	if last < 0 || !record.progressed(last) || record.finished(last) {
+		return nil
+	}
+
+	for n := range last {
+		if !record.finished(n) {
+			return fmt.Errorf(
+				"cannot resume run %q: build #%d stopped partway and build #%d has not run, and both would continue in the one workspace a run keeps — start a new run with --pin <field>=<value> to rebuild those versions",
+				runID, last, n)
+		}
+	}
+
+	return nil
+}
+
+// refuseMissingWorkspace refuses a resume that would keep artifacts from a
+// tree that is no longer there.
+func refuseMissingWorkspace(runID, root string, done map[doneKey]string, builds int) error {
+	kept := false
+
+	for key := range done {
+		if n, ok := buildIndex(runID, key.build); ok && n < builds {
+			kept = true
+
+			break
+		}
+	}
+
+	if !kept || root == "" {
+		return nil
+	}
+
+	_, err := os.Stat(root)
+	if err != nil {
+		return fmt.Errorf("cannot resume run %q: its workspace %s is gone — start a new run with --pin <resource> to rebuild that version: %w", runID, root, err)
+	}
+
+	return nil
 }
 
 // runIDChars is how much of a crypto/rand base32 string a run id keeps.

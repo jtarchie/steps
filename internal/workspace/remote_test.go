@@ -468,3 +468,36 @@ func TestAPlacedSpacePullsAnInputTheHolderFiledUnderAnotherName(t *testing.T) {
 		t.Errorf("the input reads %q, %v", content, err)
 	}
 }
+
+// TestHasArtifactSeesTheStoreAndWhatAWorkerHolds: a resume that keeps a get's
+// artifact asks this before continuing, so a held one must count without a
+// pull, and a missing one must not count.
+func TestHasArtifactSeesTheStoreAndWhatAWorkerHolds(t *testing.T) {
+	t.Parallel()
+
+	bw := newBuild(t)
+
+	checker, ok := bw.(ArtifactChecker)
+	if !ok {
+		t.Fatal("an isolating build should implement ArtifactChecker")
+	}
+
+	if checker.HasArtifact("repo") {
+		t.Error("an artifact nothing produced counts as present")
+	}
+
+	_, err := bw.ResourceDir(context.Background(), "repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !checker.HasArtifact("repo") {
+		t.Error("an artifact in the store counts as missing")
+	}
+
+	pulls := heldTree(t, bw)
+
+	if !checker.HasArtifact("src") || *pulls != 0 {
+		t.Errorf("a held artifact: present = %v after %d pulls, want present without one", checker.HasArtifact("src"), *pulls)
+	}
+}

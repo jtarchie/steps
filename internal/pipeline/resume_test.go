@@ -96,3 +96,79 @@ func TestResumeInputSetsRefusesAPrunedVersion(t *testing.T) {
 		t.Errorf("want a refusal naming build #0 and the version, got %v", err)
 	}
 }
+
+func TestProgressedPast(t *testing.T) {
+	t.Parallel()
+
+	done := map[doneKey]string{{"R#0", 2}: "change"}
+
+	for name, tc := range map[string]struct {
+		state *resumeState
+		build string
+		index int
+		want  bool
+	}{
+		"no state":          {nil, "R#0", -1, false},
+		"not resuming":      {&resumeState{id: "R", done: done}, "R#0", -1, false},
+		"another build":     {&resumeState{id: "R", done: done, resuming: true}, "R#1", -1, false},
+		"the step itself":   {&resumeState{id: "R", done: done, resuming: true}, "R#0", 2, false},
+		"a step after it":   {&resumeState{id: "R", done: done, resuming: true}, "R#0", 1, true},
+		"a fan-out's build": {&resumeState{id: "R", done: done, resuming: true}, "R#0", -1, true},
+	} {
+		if got := tc.state.progressedPast(tc.build, tc.index); got != tc.want {
+			t.Errorf("%s: progressedPast(%s, %d) = %v, want %v", name, tc.build, tc.index, got, tc.want)
+		}
+	}
+}
+
+// TestRefuseSharedWorkspace holds the one-tree rule: builds that finished
+// plus one unfinished LAST build continue, and anything else that got
+// partway is refused, naming the build.
+func TestRefuseSharedWorkspace(t *testing.T) {
+	t.Parallel()
+
+	// A remainder of get, change, fragile: indices 1 and 2 finish a build.
+	needed := []int{1, 2}
+
+	finished := func(n string) map[doneKey]string {
+		return map[doneKey]string{{"R#" + n, 1}: "change", {"R#" + n, 2}: "fragile"}
+	}
+	partway := func(n string) map[doneKey]string { return map[doneKey]string{{"R#" + n, 1}: "change"} }
+	merge := func(maps ...map[doneKey]string) map[doneKey]string {
+		all := map[doneKey]string{}
+		for _, m := range maps {
+			for k, v := range m {
+				all[k] = v
+			}
+		}
+
+		return all
+	}
+
+	for name, tc := range map[string]struct {
+		done   map[doneKey]string
+		builds int
+		refuse string
+	}{
+		"no builds":                          {nil, 0, ""},
+		"one build partway":                  {partway("0"), 1, ""},
+		"one build untouched":                {nil, 1, ""},
+		"finished then partway last":         {merge(finished("0"), partway("1")), 2, ""},
+		"none progressed":                    {map[doneKey]string{{"R", 0}: "prep"}, 3, ""},
+		"all finished":                       {merge(finished("0"), finished("1")), 2, ""},
+		"finished then untouched last":       {finished("0"), 2, ""},
+		"an earlier build partway":           {merge(partway("0"), partway("1")), 2, "#0"},
+		"an earlier build partway alone":     {partway("0"), 2, "#0"},
+		"a partway last behind an untouched": {partway("1"), 2, "#1"},
+		"a partway last behind one of two":   {merge(finished("0"), partway("2")), 3, "#1"},
+	} {
+		err := refuseSharedWorkspace("R", tc.done, tc.builds, needed)
+
+		switch {
+		case tc.refuse == "" && err != nil:
+			t.Errorf("%s: refused: %v", name, err)
+		case tc.refuse != "" && (err == nil || !strings.Contains(err.Error(), tc.refuse) || !strings.Contains(err.Error(), "--pin")):
+			t.Errorf("%s: want a refusal naming %s and --pin, got %v", name, tc.refuse, err)
+		}
+	}
+}

@@ -56,6 +56,10 @@ const (
 	// advances to the step's node exactly as if it had run, because as far as
 	// everything downstream can observe, it did.
 	stepCacheHit
+	// stepResumeKept: a resumed get whose build already got past it, so the
+	// artifact is kept as the skipped steps left it. The plan continues
+	// under the get's node, as if it had fetched.
+	stepResumeKept
 )
 
 // stepResult is what running one step produced: the node hash the next step

@@ -396,6 +396,8 @@ func skipReason(disposition stepDisposition) string {
 		return "same inputs as an earlier run — outputs reused"
 	case stepGuardSkipped:
 		return "when: guard was false"
+	case stepResumeKept:
+		return "already fetched — kept from the earlier attempt"
 	case stepRan:
 		return ""
 	}
