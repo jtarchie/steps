@@ -5,6 +5,7 @@ package cli
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -172,5 +173,54 @@ func TestTheDiffShownBeforeApplyingNamesAChangedInclude(t *testing.T) {
 
 	if diffIncludes(map[string]string{"a": "1"}, map[string]string{"a": "1"}) != "" {
 		t.Error("an unchanged include was reported as a change")
+	}
+}
+
+// A broken pipeline is part of what the daemon holds, so the list says so and why — as a report that succeeds, since /api/pipelines is what a script reads.
+//
+// Not t.Parallel(): captureStdout swaps os.Stdout.
+func TestPipelineListShowsABrokenPipelineAndWhy(t *testing.T) {
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"name":"gone","sha":"0123456789abcdef","jobs":0,"broken":"workspace: root is not writable"}]`))
+	}))
+	t.Cleanup(daemon.Close)
+
+	var err error
+
+	out := captureStdout(t, func() { err = (&PipelineListCmd{TargetFlags{Target: daemon.URL}}).Run() })
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	if !strings.Contains(out, "broken") || !strings.Contains(out, "gone is not being served: workspace: root is not writable") {
+		t.Errorf("list printed:\n%s\nwant the broken state and its reason", out)
+	}
+}
+
+// The set that repairs a broken pipeline is usually the same YAML again, and "is new to this daemon; it will be created" is wrong on both counts.
+//
+// Not t.Parallel(): it swaps os.Stdin and os.Stdout.
+func TestSetConfirmsARepairAsARepair(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = writer.Close()
+
+	stdin := os.Stdin
+	os.Stdin = reader
+
+	t.Cleanup(func() {
+		os.Stdin = stdin
+		_ = reader.Close()
+	})
+
+	out := captureStdout(t, func() {
+		_ = (&PipelineSetCmd{}).confirm("app", web.PipelineConfig{}, false, "workspace: root is not writable", idlePipeline, nil)
+	})
+
+	if !strings.Contains(out, "app is not being served (workspace: root is not writable); this set will repair it") || strings.Contains(out, "new to this daemon") {
+		t.Errorf("confirm printed:\n%s\nwant it called a repair", out)
 	}
 }

@@ -68,11 +68,11 @@ func NewRegistryWith(acquirer Acquirer) *Registry {
 
 // Leases opens one scope over the registry.
 func (r *Registry) Leases(workers map[string]Worker) *Leases {
-	return &Leases{registry: r, held: map[string]*entry{}, source: maps.Clone(workers)}
+	return &Leases{registry: r, held: map[string]*entry{}, source: maps.Clone(workers), warm: map[string]*entry{}}
 }
 
-// hold counts one more user of the machine a worker names, or answers what to wait on while that machine's last park is still landing.
-func (r *Registry) hold(worker Worker) (*entry, <-chan struct{}) {
+// hold counts one more user of the machine a worker names, or answers what to wait on while that machine's last park is still landing. warm is a machine only an idle timer was holding: nobody has used it since its last user left, so nothing says it is still alive.
+func (r *Registry) hold(worker Worker) (*entry, <-chan struct{}, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -80,8 +80,10 @@ func (r *Registry) hold(worker Worker) (*entry, <-chan struct{}) {
 
 	held, ok := r.current[key]
 	if ok && held.gone != nil {
-		return nil, held.gone
+		return nil, held.gone, false
 	}
+
+	warm := held != nil && held.refs == 0
 
 	if !ok {
 		held = &entry{source: worker, key: key, windowBy: worker.URL}
@@ -96,7 +98,7 @@ func (r *Registry) hold(worker Worker) (*entry, <-chan struct{}) {
 	}
 	r.stopIdle(held)
 
-	return held, nil
+	return held, nil, warm
 }
 
 // stopIdle leaves a timer that already fired to find the entry held again and stand down on its own.
@@ -316,6 +318,8 @@ type Leases struct {
 	// retired are machines this scope stopped using but still counts toward, so its end still gives them back — see Abandon.
 	retired []*entry
 	source  map[string]Worker
+	// warm are the machines this scope took from an idle window, by tag, until one is abandoned: see ReusedWarm.
+	warm map[string]*entry
 }
 
 // lease is a mutex rather than a sync.Once because a release has to WAIT for an acquisition in flight: a Once orders completion only against callers of Do, so a release reading its fields would race, and a live instance's release closure could be dropped while it bills.
@@ -336,7 +340,12 @@ func (l *lease) resolve(ctx context.Context, worker Worker, acquirer Acquirer) (
 		return l.worker, l.err
 	}
 
-	machine, release, err := acquirer(ctx, worker)
+	acquireCtx := ctx
+	if l.release != nil {
+		acquireCtx = withOwned(ctx)
+	}
+
+	machine, release, err := acquirer(acquireCtx, worker)
 	// A parked machine re-acquired after an eviction still owes the park its first start promised, however this acquisition found it.
 	if release != nil {
 		l.release = release
@@ -435,12 +444,16 @@ func (l *Leases) claim(tag string, worker Worker) (*entry, <-chan struct{}, stri
 		return held, nil, ""
 	}
 
-	held, landing := l.registry.hold(worker)
+	held, landing, warm := l.registry.hold(worker)
 	if held == nil {
 		return nil, landing, ""
 	}
 
 	l.held[tag] = held
+
+	if warm {
+		l.warm[tag] = held
+	}
 
 	// source is written once, under r.mu, before the hold that just returned it.
 	if held.source.URL != worker.URL {
@@ -492,7 +505,16 @@ func (l *Leases) Abandon(tag, dialURL string) {
 	held, ok := l.held[tag]
 	l.mu.Unlock()
 
-	if !ok || !held.abandonIf(dialURL, l.source[tag]) || held.parked() {
+	if !ok || !held.abandonIf(dialURL, l.source[tag]) {
+		return
+	}
+
+	// Once: a parked machine's replacement is this same entry, and a second dead dial on it is no longer a warm machine's first.
+	l.mu.Lock()
+	delete(l.warm, tag)
+	l.mu.Unlock()
+
+	if held.parked() {
 		return
 	}
 
@@ -524,6 +546,16 @@ func (l *lease) abandonIf(dialURL string, spelling Worker) bool {
 	return true
 }
 
+// ReusedWarm is a tag whose machine this scope took from an idle window rather than acquired or joined in use: nothing has proved it alive since its last user left, so a first connection it refuses is a machine that died while kept, not a step failing.
+func (l *Leases) ReusedWarm(tag string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	warm := l.warm[tag]
+
+	return warm != nil && warm == l.held[tag]
+}
+
 // ReleaseAll is exhaustive and joins its errors, because one failure must not strand the others while they bill.
 func (l *Leases) ReleaseAll(ctx context.Context) error {
 	l.mu.Lock()
@@ -537,6 +569,7 @@ func (l *Leases) ReleaseAll(ctx context.Context) error {
 
 	l.held = map[string]*entry{}
 	l.retired = nil
+	l.warm = map[string]*entry{}
 	l.mu.Unlock()
 
 	failures := make([]error, len(held))

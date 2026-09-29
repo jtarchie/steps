@@ -69,6 +69,8 @@ func placedRunner(ctx context.Context, step config.Step, spec shell.RunnerSpec) 
 	// An in: fills a directory nothing here reads until a later step does,
 	// so the tree stays on the worker. An out: fetches nothing.
 	spec.DeferFetch = spec.FetchAll
+	// Recomputed rather than inherited: a check's re-placement copies the spec of the machine that just died.
+	spec.ReusedWarm = reusedWarm(ctx, step)
 
 	//nolint:contextcheck // NewRunner takes no context; opening the artifact store reads only local config
 	runner, err := venue.NewRunner(spec)
