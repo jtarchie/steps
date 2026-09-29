@@ -408,14 +408,20 @@ func TestScrubLeavesOnlyText(t *testing.T) {
 		"trail\x1b":                                    "trail",
 		"a\x1b]0;never ends":                           "a",
 		"b\x1b[31":                                     "b",
+		"stray\x1b[\nERROR kept":                       "stray\nERROR kept",
+		"osc\x1b]0;unterminated\nFAIL kept":            "osc\nFAIL kept",
 	} {
 		if got := scrubText(input); got != want {
 			t.Errorf("scrubText(%q) = %q, want %q", input, got, want)
 		}
 	}
 
-	event := scrub(events.Event{Text: "\x1b]0;t\x07x", Name: "\x1b[1mn", Detail: "d\x00", StepName: "s\x1b[K", Worker: "w\x07"})
-	if event.Text != "x" || event.Name != "n" || event.Detail != "d" || event.StepName != "s" || event.Worker != "w" {
+	event := scrub(events.Event{
+		Text: "\x1b]0;t\x07x", Name: "\x1b[1mn", Detail: "d\x00", StepName: "s\x1b[K", Worker: "w\x07",
+		Job: "j\x1b]52;c;ZXZpbA==\x07", StepKind: "k\x1b[2J", Status: "f\x07",
+	})
+	want := events.Event{Text: "x", Name: "n", Detail: "d", StepName: "s", Worker: "w", Job: "j", StepKind: "k", Status: "f"}
+	if event != want {
 		t.Errorf("scrub left escapes in a field: %+v", event)
 	}
 }

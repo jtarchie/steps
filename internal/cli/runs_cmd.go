@@ -188,12 +188,20 @@ func (r *RunsWhereCmd) Run() error {
 // exactly what a sixth `runs` subcommand written by copying the other five
 // would forget.
 func nothingRecorded(flags ReadFlags, answer string) bool {
+	if !stateEmpty(flags) {
+		return false
+	}
+
+	fmt.Println(answer)
+
+	return true
+}
+
+func stateEmpty(flags ReadFlags) bool {
 	path := flags.state()
 
 	_, err := os.Stat(path)
 	if err != nil {
-		fmt.Println(answer)
-
 		return true
 	}
 
@@ -201,13 +209,7 @@ func nothingRecorded(flags ReadFlags, answer string) bool {
 	// creates the database before it fills it in, so a reader arriving in
 	// that window must not report the operator's brand new database as one
 	// written by a different version of steps.
-	if sqlite.HasNothingRecorded(path) {
-		fmt.Println(answer)
-
-		return true
-	}
-
-	return false
+	return sqlite.HasNothingRecorded(path)
 }
 
 // noRunsYet is the sentence every `steps runs` view says when the pipeline has

@@ -162,9 +162,9 @@ func TestRunsFollowRefusals(t *testing.T) {
 
 	var err error
 
-	out := captureStdout(t, func() { err = cli.Run(append([]string{"runs", "follow"}, readArgs(path)...)) })
-	if err != nil || !strings.Contains(out, "no runs recorded yet") {
-		t.Errorf("before any run: err = %v, out = %q", err, out)
+	_ = captureStdout(t, func() { err = cli.Run(append([]string{"runs", "follow"}, readArgs(path)...)) })
+	if outcome.ExitCode(err) != outcome.ExitErrored || !strings.Contains(err.Error(), "no runs recorded yet") {
+		t.Errorf("before any run: err = %v, want nothing to follow refused", err)
 	}
 
 	_, statErr := os.Stat(filepath.Join(dir, ".steps"))
@@ -177,6 +177,11 @@ func TestRunsFollowRefusals(t *testing.T) {
 	_ = captureStdout(t, func() { err = cli.Run(append([]string{"runs", "follow", "nope"}, readArgs(path)...)) })
 	if err == nil || !strings.Contains(err.Error(), cli.PipelineName(path)) {
 		t.Errorf("unknown run: err = %v, want the pipeline named", err)
+	}
+
+	_ = captureStdout(t, func() { err = cli.Run(append([]string{"runs", "follow", "--job", "deploi"}, readArgs(path)...)) })
+	if outcome.ExitCode(err) != outcome.ExitErrored || !strings.Contains(err.Error(), `"deploi"`) {
+		t.Errorf("a job with no runs: err = %v, want refused naming the job", err)
 	}
 
 	err = cli.Run(append([]string{"runs", "follow", "nope", "--job", "build"}, readArgs(path)...))

@@ -45,8 +45,9 @@ func (r *RunsFollowCmd) Run() error {
 		return errors.New("--job does not apply to a named run; a run belongs to one job already")
 	}
 
-	if nothingRecorded(r.ReadFlags, noRunsYet(r.Pipeline)) {
-		return nil
+	// An error, not the list views' empty answer: follow's exit status is the run's, and `follow --job deploi && promote` must not promote.
+	if stateEmpty(r.ReadFlags) {
+		return fmt.Errorf("nothing to follow: %s in %s", noRunsYet(r.Pipeline), r.state())
 	}
 
 	st, done, err := openRecorded(r.ReadFlags)
@@ -58,15 +59,15 @@ func (r *RunsFollowCmd) Run() error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	run, ok, err := r.target(ctx, st)
-	if err != nil || !ok {
+	run, err := r.target(ctx, st)
+	if err != nil {
 		return err
 	}
 
-	fmt.Printf("following %s · %s · %s\n", run.ID, run.JobName, run.Status)
+	fmt.Printf("following %s · %s · %s\n", run.ID, scrubText(run.JobName), scrubText(run.Status))
 
 	if run.Status != "running" {
-		fmt.Printf("run %s already %s, replaying\n", run.ID, run.Status)
+		fmt.Printf("run %s already %s, replaying\n", run.ID, scrubText(run.Status))
 	}
 
 	render, stop := r.renderer(ctx, st)
@@ -112,32 +113,34 @@ func (r *RunsFollowCmd) target(ctx context.Context, st interface {
 	store.Runs
 	store.Meta
 },
-) (store.RunRow, bool, error) {
+) (store.RunRow, error) {
 	if r.RunID != "" {
 		run, ok, err := st.FindRunRow(ctx, r.RunID)
 		if err != nil {
-			return store.RunRow{}, false, fmt.Errorf("could not read run %q: %w", r.RunID, err)
+			return store.RunRow{}, fmt.Errorf("could not read run %q: %w", r.RunID, err)
 		}
 
 		if !ok {
-			return store.RunRow{}, false, fmt.Errorf("no run %q was recorded for pipeline %q", r.RunID, st.Pipeline())
+			return store.RunRow{}, fmt.Errorf("no run %q was recorded for pipeline %q", r.RunID, st.Pipeline())
 		}
 
-		return run, true, nil
+		return run, nil
 	}
 
 	runs, err := st.ListRuns(ctx, r.Job, 1)
 	if err != nil {
-		return store.RunRow{}, false, fmt.Errorf("could not read runs: %w", err)
+		return store.RunRow{}, fmt.Errorf("could not read runs: %w", err)
 	}
 
 	if len(runs) == 0 {
-		fmt.Println("no runs recorded")
+		if r.Job != "" {
+			return store.RunRow{}, fmt.Errorf("nothing to follow: no runs of job %q recorded for pipeline %q", r.Job, st.Pipeline())
+		}
 
-		return store.RunRow{}, false, nil
+		return store.RunRow{}, fmt.Errorf("nothing to follow: no runs recorded for pipeline %q", st.Pipeline())
 	}
 
-	return runs[0], true, nil
+	return runs[0], nil
 }
 
 // followedOutcome is the error `steps run` would have returned, so a script wrapping both reads one set of exit codes. runs.status never records "errored", so an errored run exits as failed.
@@ -316,7 +319,12 @@ func followPlain(w io.Writer) func(events.Event) {
 }
 
 // scrub makes a recorded event safe to print to somebody else's terminal: its text can come from untrusted input — a PR under review — and an OSC sequence in it writes the viewer's clipboard or retitles their window.
+//
+// Every printed field, not only the free-text ones: a job name is unvalidated YAML, and the pipeline can come from the same untrusted branch.
 func scrub(event events.Event) events.Event {
+	event.Job = scrubText(event.Job)
+	event.StepKind = scrubText(event.StepKind)
+	event.Status = scrubText(event.Status)
 	event.Text = scrubText(event.Text)
 	event.Name = scrubText(event.Name)
 	event.Detail = scrubText(event.Detail)
@@ -367,22 +375,29 @@ func skipEscape(text string, i int) int {
 	}
 }
 
-// skipCSI passes parameters and intermediates, then one final byte.
+// skipCSI passes parameters and intermediates, then one final byte. A byte no CSI can hold ends it unconsumed, so a stray "ESC [" cannot eat the lines after it.
 func skipCSI(text string, i int) int {
 	for ; i < len(text); i++ {
-		if text[i] >= 0x40 && text[i] <= 0x7e {
+		switch c := text[i]; {
+		case c >= 0x40 && c <= 0x7e:
 			return i + 1
+		case c < 0x20 || c > 0x7e:
+			return i
 		}
 	}
 
 	return i
 }
 
-// skipString passes an OSC or one of the other string sequences, which run to BEL or ST.
+// skipString passes an OSC or one of the other string sequences, which run to BEL or ST — or, here, a newline, so an unterminated one hides one line rather than every line after it.
 func skipString(text string, i int) int {
 	for ; i < len(text); i++ {
 		if text[i] == 0x07 {
 			return i + 1
+		}
+
+		if text[i] == '\n' {
+			return i
 		}
 
 		if text[i] == 0x1b && i+1 < len(text) && text[i+1] == '\\' {
