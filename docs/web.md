@@ -610,6 +610,7 @@ has no file on this machine:
 ```bash
 steps runs -p app                      # what ran
 steps runs steps -p app                # why a step did what it did
+steps runs follow -p app               # watch the newest run to its end
 steps runs cost -p app 46UMHVPYRA6YHB7M
 steps approvals -p app
 steps questions -p app
