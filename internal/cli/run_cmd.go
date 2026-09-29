@@ -166,14 +166,9 @@ func (r *RunCmd) Run() error {
 		return err
 	}
 
-	// Here rather than inside RunJob: a refusal there would already have put
-	// the run back in flight and fired the job's on_failure over a command
-	// that was turned away.
-	if r.Resume != "" {
-		err = pipeline.CheckResumable(ctx, st, r.Resume, job)
-		if err != nil {
-			return fmt.Errorf("could not resume: %w", err)
-		}
+	err = r.checkResume(ctx, st, provider, job)
+	if err != nil {
+		return err
 	}
 
 	slog.Info("pipeline.run", "pipeline", r.Pipeline, "job", job.Name)
@@ -193,6 +188,28 @@ func (r *RunCmd) Run() error {
 	}
 
 	return wrapRunErr(runErr)
+}
+
+// checkResume refuses a resume here rather than inside RunJob: a refusal there
+// would already have put the run back in flight and fired the job's
+// on_failure over a command that was turned away.
+func (r *RunCmd) checkResume(ctx context.Context, st store.Store, provider workspace.Provider, job *config.Job) error {
+	if r.Resume == "" {
+		return nil
+	}
+
+	fresh, err := pipeline.CheckResumable(ctx, st, r.Resume, job)
+	if err != nil {
+		return fmt.Errorf("could not resume: %w", err)
+	}
+
+	// The row names a green build's removed tree; reusing that path
+	// recreated it outside any cleanup, and btrfs cannot recreate it.
+	if resumable, ok := provider.(workspace.Resumable); ok && fresh {
+		resumable.Reuse("")
+	}
+
+	return nil
 }
 
 // TestCmd runs every job in the pipeline (force, so nothing is skipped and the

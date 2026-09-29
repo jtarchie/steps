@@ -228,7 +228,7 @@ func TestResumeRerunsAJobHookAfterEveryBuildFinished(t *testing.T) {
 
 	path := writePipeline(t, dir, artifactResumePipeline(dir, versions, "  - get: repo\n    resource: ticks", hook))
 
-	runID, _ := failThenCapture(t, path)
+	runID, root := failThenCapture(t, path)
 	assertLineCount(t, filepath.Join(dir, "hook.log"), 1)
 
 	writePipelineFile(t, filepath.Join(dir, "fixed"), "")
@@ -253,6 +253,43 @@ func TestResumeRerunsAJobHookAfterEveryBuildFinished(t *testing.T) {
 
 	if strings.Contains(out, "skip: repo") {
 		t.Errorf("a get with nothing to keep was reported kept:\n%s", out)
+	}
+
+	// The row still names the green build's removed tree; a fresh tree is
+	// one the provider creates and cleans, not that path brought back.
+	_, err := os.Stat(root)
+	if err == nil {
+		t.Errorf("the resume recreated the removed tree %s rather than fetching into a fresh one", root)
+	}
+}
+
+// TestResumeDoesNotFailAFinishedBuildOverAGetItsTreeLacks: the kept tree is
+// the last unfinished build's, which stopped before its second get, so that
+// get's artifact is not in it. A finished build keeping that get runs nothing
+// that reads it, and must not fail the resume over it.
+func TestResumeDoesNotFailAFinishedBuildOverAGetItsTreeLacks(t *testing.T) {
+	dir := t.TempDir()
+
+	versions := filepath.Join(dir, "versions.json")
+	writePipelineFile(t, versions, `[{"n":"one"},{"n":"two"}]`)
+
+	path := writePipeline(t, dir, artifactResumePipeline(dir, versions,
+		"  - get: repo\n    resource: ticks\n    version: every",
+		"  - get: other\n    resource: ticks\n  - put: publication\n    inputs: [repo]"))
+
+	runID, _ := failThenCapture(t, path)
+
+	writePipelineFile(t, filepath.Join(dir, "fixed"), "")
+
+	out := captureStdout(t, func() {
+		err := cli.Run([]string{"run", path, "--resume", runID})
+		if err != nil {
+			t.Errorf("resume failed: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "skip: other (already fetched) [build #0]\n") {
+		t.Errorf("build #0 did not keep its second get:\n%s", out)
 	}
 }
 

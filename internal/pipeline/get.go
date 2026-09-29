@@ -454,7 +454,11 @@ func (w *planWalk) keepInPlace(
 func (w *planWalk) keepFetched(
 	ctx context.Context, runID, build string, step config.Step, resourceName string, version map[string]any, bw workspace.BuildWorkspace,
 ) error {
-	if checker, ok := bw.(workspace.ArtifactChecker); ok && !checker.HasArtifact(step.Get) {
+	// A finished build is exempt: the kept tree is the last unfinished build's,
+	// which need not hold a get it never reached, and nothing of a finished
+	// build runs to read it.
+	checker, ok := bw.(workspace.ArtifactChecker)
+	if ok && !checker.HasArtifact(step.Get) && !resumeFrom(ctx).buildFinished(build) {
 		root := ""
 		if rooted, ok := bw.(workspace.RootedBuild); ok {
 			root = rooted.Root()

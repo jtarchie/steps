@@ -34,6 +34,10 @@ type resumeState struct {
 	// only the job's own steps failed: no get keeps its artifact then (see
 	// CheckResumable).
 	refetch bool
+	// finished names the builds CheckResumable found complete: nothing of
+	// theirs runs again, so an artifact missing from the kept tree is no
+	// reason to fail one.
+	finished map[string]bool
 	// nextStepID mints display-tree ids for this run (see steptree.go).
 	// Atomic because a fan-out block starts its cells concurrently.
 	nextStepID atomic.Int64
@@ -98,6 +102,10 @@ func (r *resumeState) progressedPast(build string, index int) bool {
 	return false
 }
 
+func (r *resumeState) buildFinished(build string) bool {
+	return r != nil && r.finished[build]
+}
+
 // resumeFacets is what CheckResumable reads: the run, its steps, and the
 // builds it was created with.
 type resumeFacets interface {
@@ -106,8 +114,9 @@ type resumeFacets interface {
 }
 
 // CheckResumable refuses, before anything runs, a resume the one tree it
-// continues in cannot serve, and tells the resume on ctx when every build
-// finished, so its gets fetch again rather than keep.
+// continues in cannot serve, and tells the resume on ctx which builds
+// finished. It reports fresh when every build did: the gets fetch again rather
+// than keep, into a new tree rather than the removed one the row still names.
 //
 // A run keeps ONE tree: every build of a fan-out re-points the run at its
 // own, the fan-out is sequential, and a green build's tree is removed and the
@@ -127,53 +136,51 @@ type resumeFacets interface {
 // ponytail: one tree per run. Upgrade: record each build's root (a run_builds
 // row, a schemaVersion bump) and have Reuse map build id to tree, which
 // retires this check.
-func CheckResumable(ctx context.Context, st resumeFacets, runID string, job *config.Job) error {
+func CheckResumable(ctx context.Context, st resumeFacets, runID string, job *config.Job) (bool, error) {
 	run, err := findRun(ctx, st, runID)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	steps, err := st.CompletedRunSteps(ctx, runID)
 	if err != nil {
-		return err //nolint:wrapcheck // CompletedRunSteps already names the run
+		return false, err //nolint:wrapcheck // CompletedRunSteps already names the run
 	}
 
 	inputs, err := st.RunInputs(ctx, runID)
 	if err != nil {
-		return fmt.Errorf("could not read what run %q was created with: %w", runID, err)
+		return false, fmt.Errorf("could not read what run %q was created with: %w", runID, err)
 	}
 
-	recorded := map[string]bool{}
-	for _, input := range inputs {
-		recorded[input.BuildID] = true
-	}
-
-	builds := 0
-	for recorded[fmt.Sprintf("%s#%d", runID, builds)] {
-		builds++
-	}
-
+	builds := countBuilds(runID, inputs)
 	done := foldRunSteps(steps)
 	needed := remainderSteps(job)
 
 	err = refuseSharedWorkspace(runID, done, builds, needed)
 	if err != nil {
-		return err
+		return false, err
+	}
+
+	record := runRecord{runID: runID, done: done, needed: needed}
+	state := resumeFrom(ctx)
+
+	if state != nil {
+		state.finished = record.finishedBuilds(builds)
 	}
 
 	// Every build finished, so what failed was the job's own — a hook, an
 	// assertion. A green build's tree is removed, so there is nothing to keep
 	// and nothing to refuse over: the gets fetch again, no step runs on what
 	// they fetch, and the job's hooks see real artifacts.
-	if (runRecord{runID: runID, done: done, needed: needed}).allFinished(builds) {
-		if state := resumeFrom(ctx); state != nil {
+	if record.allFinished(builds) {
+		if state != nil {
 			state.refetch = true
 		}
 
-		return nil
+		return true, nil
 	}
 
-	return refuseMissingWorkspace(runID, run.Workspace, done, builds)
+	return false, refuseMissingWorkspace(runID, run.Workspace, done, builds)
 }
 
 // remainderSteps is the indices a triggered build records, relative to the
@@ -227,6 +234,34 @@ func (r runRecord) finished(n int) bool {
 	}
 
 	return true
+}
+
+func (r runRecord) finishedBuilds(builds int) map[string]bool {
+	finished := map[string]bool{}
+
+	for n := range builds {
+		if r.finished(n) {
+			finished[fmt.Sprintf("%s#%d", r.runID, n)] = true
+		}
+	}
+
+	return finished
+}
+
+// countBuilds is how many builds the run created, counted as
+// recordedInputSets rebuilds them: from #0 to the first one with no inputs.
+func countBuilds(runID string, inputs []store.RunInput) int {
+	recorded := map[string]bool{}
+	for _, input := range inputs {
+		recorded[input.BuildID] = true
+	}
+
+	builds := 0
+	for recorded[fmt.Sprintf("%s#%d", runID, builds)] {
+		builds++
+	}
+
+	return builds
 }
 
 // allFinished is false for a run with no builds: one that failed before its
