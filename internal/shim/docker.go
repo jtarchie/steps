@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jtarchie/steps/internal/dockerapi"
+	"github.com/jtarchie/steps/internal/dockerhost"
 	"github.com/jtarchie/steps/internal/wire"
 )
 
@@ -45,7 +45,7 @@ func dockerSocketPath(configured string) string {
 		return configured
 	}
 
-	host, err := dockerapi.ResolveHost()
+	host, err := dockerhost.Resolve()
 	if err != nil {
 		return defaultDockerSocket
 	}

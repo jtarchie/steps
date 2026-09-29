@@ -81,10 +81,13 @@ type transport struct {
 	// process ending.
 	exited <-chan struct{}
 	// build is the content hash of the binary this transport actually
-	// started. Not SelfBuild(): a worker reached with ?binary= runs a binary
-	// the operator built, whose hash is not this process's, and greet compares
-	// what came back against what went out.
+	// started: an embedded shim's, the file ?binary= names, or this
+	// process's — and "" for a ?shim= nothing was pushed for, which leaves
+	// greet nothing to compare against. Never assumed to be SelfBuild().
 	build string
+	// source is where that binary came from, which decides what a shim that
+	// did not start is blamed on.
+	source shimKind
 }
 
 // session owns the conversation. Runners hold it BY POINTER so a WithLabel
@@ -543,9 +546,9 @@ func (s *session) checkFilesystem(ok wire.HelloOK) error {
 // Split out of greet because the three are one list of the same shape, while
 // greet's own job is the exchange around them.
 func (s *session) checkHello(ok wire.HelloOK, build string) error {
-	if ok.Protocol != wire.Protocol {
-		return fmt.Errorf("%w: this steps speaks protocol %d and the worker's shim speaks %d — the binary on the worker is not this one",
-			wire.ErrProtocol, wire.Protocol, ok.Protocol)
+	err := s.checkProtocol(ok)
+	if err != nil {
+		return err
 	}
 
 	// The check wire.Hello.Build has always described and nobody performed.
@@ -559,7 +562,7 @@ func (s *session) checkHello(ok wire.HelloOK, build string) error {
 			errWrongBuild, short(ok.Build), short(build), remoteShimPath(s.worker, build))
 	}
 
-	err := s.checkFilesystem(ok)
+	err = s.checkFilesystem(ok)
 	if err != nil {
 		return err
 	}
@@ -580,6 +583,23 @@ func (s *session) checkHello(ok wire.HelloOK, build string) error {
 	}
 
 	return nil
+}
+
+// checkProtocol refuses a shim that speaks another protocol, naming the
+// ?shim= path when there is one: nothing was pushed, so the path the operator
+// wrote is the only thing that can be wrong.
+func (s *session) checkProtocol(ok wire.HelloOK) error {
+	if ok.Protocol == wire.Protocol {
+		return nil
+	}
+
+	if s.worker.Shim != "" {
+		return fmt.Errorf("%w: ?shim=%s speaks protocol %d, this steps speaks %d",
+			wire.ErrProtocol, s.worker.Shim, ok.Protocol, wire.Protocol)
+	}
+
+	return fmt.Errorf("%w: this steps speaks protocol %d and the worker's shim speaks %d — the binary on the worker is not this one",
+		wire.ErrProtocol, wire.Protocol, ok.Protocol)
 }
 
 // readHello reads the handshake under a deadline, so a shim that never got as
@@ -657,8 +677,29 @@ func (s *session) startupError(cause error) error {
 
 	// The worker's own words first: "cannot execute binary file" says more
 	// than any wrapper this end could write.
-	return fmt.Errorf("%w: %w (worker said: %s) — build a binary for that machine and name it with ?binary=",
-		errShimDidNotStart, cause, note)
+	return fmt.Errorf("%w: %w (worker said: %s) — %s",
+		errShimDidNotStart, cause, note, s.startupHint())
+}
+
+// startupHint is the likeliest fix for a shim that would not start, which
+// depends on who chose the binary.
+func (s *session) startupHint() string {
+	source := kindGuess
+	if s.transport != nil {
+		source = s.transport.source
+	}
+
+	switch source {
+	case kindShim:
+		return fmt.Sprintf("?shim=%s is not a runnable steps shim on the worker", s.worker.Shim)
+	case kindEmbedded, kindSelf:
+		// Picked for the platform the worker reported, so the binary is
+		// right; the filesystem it landed on is what is left.
+		return "the root may be mounted noexec — name a root on an exec-capable filesystem in the worker URL"
+	case kindGuess, kindBinary:
+	}
+
+	return "build a binary for that machine and name it with ?binary="
 }
 
 // close tears the session down, letting the shim remove its own scratch.

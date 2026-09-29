@@ -198,7 +198,7 @@ steps run \
 The invocation names the **machines**. Three parts of that worker URL matter:
 
 - **`/var/tmp/steps`** — the path picks a disk on the worker. Leave it off and you get the worker's temp directory, which on Amazon Linux 2023 is **tmpfs: memory, capped near half the machine's RAM, and cleared on reboot**. steps warns when it detects this, because a build tree competing with the build for RAM is a confusing way to fail.
-- **`?binary=`** — pushes your cross-compiled binary, keyed by its content hash so it uploads once. This **requires `--artifact-store`**, checked before the run starts rather than after a machine has been acquired. Use `?shim=/usr/local/bin/steps` instead if your AMI already bakes one in.
+- **`?binary=`** — pushes your cross-compiled binary, keyed by its content hash so it uploads once. A `steps-shim` (`CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./cmd/steps-shim`) is a few megabytes where a whole `steps` is a hundred; either answers the bootstrap. This **requires `--artifact-store`**, checked before the run starts rather than after a machine has been acquired. Use `?shim=/usr/local/bin/steps` instead if your AMI already bakes one in.
 - **`aws://launch/…?version=1`** — acquires a machine from that template version for the job and terminates it at the end. The path is the template **id** (`lt-…`, captured as `$LT` in step 3); a name is refused before the run starts. Acquisition is **per job, not per step**: the first placed step pays for the machine and the rest reuse it.
 
 ## 7. Tear it down

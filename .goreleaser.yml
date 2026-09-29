@@ -6,6 +6,9 @@ version: 2
 before:
   hooks:
     - go test ./...
+    # The shims every released steps embeds, built for exactly the matrix
+    # below, so a release pushes a small shim to any platform it ships on.
+    - task shims
 
 builds:
   - id: steps

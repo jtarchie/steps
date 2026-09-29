@@ -36,6 +36,10 @@
 
 # scratch a shim writes if it is ever handed a relative root
 steps-shim/
+!/cmd/steps-shim/
+
+# task shims: the cross-compiled shims ./steps embeds
+/internal/venue/shims/steps-shim-*
 
 # hack/shorts: rendered videos and the browser toolchain
 hack/shorts/node_modules/

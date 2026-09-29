@@ -232,3 +232,17 @@ func TestCheckHelloAcceptsAWorkerThatNamesNoOS(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckHelloNamesTheShimThatSpeaksAnotherProtocol pins that a ?shim= of
+// the wrong version is named: nothing was pushed, so the path the operator
+// wrote is the only thing that can be wrong.
+func TestCheckHelloNamesTheShimThatSpeaksAnotherProtocol(t *testing.T) {
+	t.Parallel()
+
+	session := &session{worker: Worker{URL: "ssh://box?shim=/opt/steps/shim", Shim: "/opt/steps/shim"}} //nolint:exhaustruct // checkHello reads the worker and nothing else
+
+	err := session.checkHello(wire.HelloOK{Protocol: wire.Protocol + 1}, "") //nolint:exhaustruct // the protocol is the field under test
+	if !errors.Is(err, wire.ErrProtocol) || !strings.Contains(err.Error(), "?shim=/opt/steps/shim") {
+		t.Errorf("checkHello = %v, want a protocol error naming the ?shim= path", err)
+	}
+}

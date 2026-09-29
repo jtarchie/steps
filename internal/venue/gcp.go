@@ -105,10 +105,16 @@ func checkGCP(worker Worker) error {
 
 // gcpPlacementCheck refuses a mapping whose dial is certain to fail, before
 // an acquisition rung bills a machine finding out. A GCE instance runs
-// Linux, so an orchestrator on any other OS can never push its own binary.
+// Linux, so an orchestrator on any other OS needs an embedded Linux shim —
+// for BOTH arches, since which one an instance template yields is unknown
+// until the machine exists.
 func (w Worker) gcpPlacementCheck() error {
-	if runtime.GOOS != "linux" && w.Binary == "" {
-		return fmt.Errorf("%w %q: a gcp:// worker runs Linux and this machine's own binary is %s — build one with CGO_ENABLED=0 GOOS=linux and name it with ?binary=",
+	if runtime.GOOS == "linux" || w.Binary != "" {
+		return nil
+	}
+
+	if embeddedShim("linux", "amd64") == nil || embeddedShim("linux", "arm64") == nil {
+		return fmt.Errorf("%w %q: a gcp:// worker runs Linux, this machine is %s, and this steps does not embed shims for both linux/amd64 and linux/arm64 — build steps with `task build`, or build one with CGO_ENABLED=0 GOOS=linux go build ./cmd/steps-shim and name it with ?binary=",
 			ErrWorker, w.URL, runtime.GOOS)
 	}
 
@@ -299,14 +305,14 @@ func dialGCP(ctx context.Context, worker Worker) (*transport, error) {
 		return nil, err
 	}
 
-	remote, build, err := pushShim(ctx, client, worker)
+	pushed, err := pushShim(ctx, client, worker)
 	if err != nil {
 		_ = client.Close()
 
 		return nil, err
 	}
 
-	return startShim(client, remote, build)
+	return startShim(client, pushed)
 }
 
 // gcpConnect opens the tunnel and completes the SSH handshake, retrying an

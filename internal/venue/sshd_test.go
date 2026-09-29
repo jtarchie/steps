@@ -57,6 +57,13 @@ type testSSHD struct {
 	// shipped a step's environment that way would work here and fail in
 	// production.
 	EnvRequests atomic.Int64
+	// Subsystems counts sftp sessions opened: zero is a dial that never
+	// considered pushing anything.
+	Subsystems atomic.Int64
+
+	// rewrite, when set, replaces an exec's command — how a test stands in
+	// for a worker whose shell answers something else.
+	rewrite atomic.Pointer[func(string) string]
 
 	listener net.Listener
 	conns    sync.WaitGroup
@@ -186,7 +193,13 @@ func (s *testSSHD) session(channel ssh.Channel, requests <-chan *ssh.Request) {
 			s.Execs.Add(1)
 
 			_ = request.Reply(true, nil)
-			s.runExec(channel, commandOf(request.Payload))
+
+			command := commandOf(request.Payload)
+			if rewrite := s.rewrite.Load(); rewrite != nil {
+				command = (*rewrite)(command)
+			}
+
+			s.runExec(channel, command)
 
 			return
 		case "subsystem":
@@ -195,6 +208,8 @@ func (s *testSSHD) session(channel ssh.Channel, requests <-chan *ssh.Request) {
 
 				continue
 			}
+
+			s.Subsystems.Add(1)
 
 			_ = request.Reply(true, nil)
 			s.runSFTP(channel)
@@ -260,6 +275,9 @@ func (s *testSSHD) runSFTP(channel ssh.Channel) {
 	// the cache is supposed to give.
 	_ = server.Serve(channel)
 }
+
+// RewriteExec makes every later exec run rewrite(command) instead.
+func (s *testSSHD) RewriteExec(rewrite func(string) string) { s.rewrite.Store(&rewrite) }
 
 // countingUpload is how runSFTP reports a write. sftp.Server handles the
 // protocol itself, so the count comes from watching the filesystem instead:

@@ -225,3 +225,17 @@ func decodeAuth(t *testing.T, encoded string) authConfig {
 
 	return config
 }
+
+func writeJSON(t *testing.T, path string, value any) {
+	t.Helper()
+
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("encoding %s: %v", path, err)
+	}
+
+	err = os.WriteFile(path, encoded, 0o600)
+	if err != nil {
+		t.Fatalf("writing %s: %v", path, err)
+	}
+}

@@ -1,14 +1,20 @@
 package venue
 
-// Getting a steps binary onto a worker.
+// Getting a shim onto a worker.
 //
 // Keyed by the binary's own content hash, not by its version string: the
 // version is set at link time and is identical across every development build,
 // so a cache keyed on it would keep executing a stale shim while somebody
 // changed the code and wondered why nothing moved. A content hash cannot do
 // that.
+//
+// What is pushed is, in order: nothing, when ?shim= names one already there; the
+// file ?binary= names; the shim embedded for the platform the worker reports;
+// this process, when the worker is this machine's platform or would not say.
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -16,14 +22,19 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/pkg/sftp/v2"
+	sshfx "github.com/pkg/sftp/v2/encoding/ssh/filexfer"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shim"
 )
 
@@ -35,42 +46,334 @@ const shimMode = 0o700
 // shimDirMode is the directory the pushed binary sits in, under a shared /tmp. The mode is stated rather than left to the server, which sftp v2 requires and v1 decided for us out of the remote umask; the file is what carries the 0700 above, and the directory only has to be traversable.
 const shimDirMode = 0o755
 
-// pushShim puts the binary on the worker if it is not already there, and
-// returns the path to run and the build it is.
-func pushShim(ctx context.Context, client *ssh.Client, worker Worker) (remote, build string, err error) {
-	local, err := localBinary(worker)
-	if err != nil {
-		return "", "", err
+// shimKind is where the shim a transport started came from, which decides
+// what to tell an operator when it does not start.
+type shimKind int
+
+const (
+	// kindGuess is this process's own executable, sent to a worker that
+	// would not say its platform. The zero value, so a transport that never
+	// said where its binary came from gets the ?binary= hint.
+	kindGuess shimKind = iota
+	// kindSelf is this process's own executable, on a worker that reported
+	// this machine's platform.
+	kindSelf
+	// kindBinary is the file ?binary= names.
+	kindBinary
+	// kindEmbedded is a shim this steps carries for the worker's platform.
+	kindEmbedded
+	// kindShim is one ?shim= names, already on the worker.
+	kindShim
+)
+
+// shimSource is a shim this end is about to push.
+type shimSource struct {
+	kind shimKind
+	// name is what an error calls it: a path, or the embedded file's name.
+	name  string
+	build string
+	size  int64
+	open  func() (io.ReadCloser, error)
+	// platform is the worker's goos/goarch, or "" when it would not say.
+	platform string
+}
+
+// pushedShim is a shim on the worker, ready to exec.
+type pushedShim struct {
+	path  string
+	build string
+	kind  shimKind
+}
+
+// pushShim puts a shim on the worker if it is not already there, and returns
+// the path to run and the build it is.
+func pushShim(ctx context.Context, client *ssh.Client, worker Worker) (pushedShim, error) {
+	// No probe and no sftp: the operator said it is there, and the hello's
+	// protocol check is what finds out whether they were right.
+	if worker.Shim != "" {
+		return pushedShim{path: worker.Shim, kind: kindShim}, nil
 	}
 
-	build, err = buildOf(worker)
+	probe := probeWorker(ctx, client)
+
+	source, err := resolveShim(worker, probe)
 	if err != nil {
-		return "", "", err
+		return pushedShim{}, err
 	}
 
-	remote = remoteShimPath(worker, build)
+	remote := remoteShimPath(worker, source.build)
 
 	fs, err := sftp.NewClient(ctx, client)
 	if err != nil {
-		return "", "", fmt.Errorf("opening sftp (the worker's sshd must offer the sftp subsystem): %w", err)
+		return pushedShim{}, fmt.Errorf("opening sftp (the worker's sshd must offer the sftp subsystem): %w", err)
 	}
 	defer func() { _ = fs.Close() }()
 
-	present, err := alreadyPushed(fs, remote, local)
+	err = secureShimDirs(fs, remote, probe.uid)
 	if err != nil {
-		return "", "", err
+		return pushedShim{}, err
 	}
 
-	if present {
-		return remote, build, nil
-	}
-
-	err = uploadShim(fs, local, remote)
+	present, err := alreadyPushed(fs, remote, source.size, probe.uid)
 	if err != nil {
-		return "", "", err
+		return pushedShim{}, err
 	}
 
-	return remote, build, nil
+	if !present {
+		// Said only when bytes move: a first push over a slow link is tens of
+		// seconds that otherwise read as a hang.
+		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: pushing shim %s for %s (%.1f MB), once per build",
+			worker.Address(), path.Base(source.name), cmp.Or(source.platform, "a platform it would not name"), float64(source.size)/(1<<20)))
+
+		err = uploadShim(fs, source, remote)
+		if err != nil {
+			return pushedShim{}, err
+		}
+	}
+
+	return pushedShim{path: remote, build: source.build, kind: source.kind}, nil
+}
+
+// probeCommand asks the worker the two things the push needs before it has
+// anything of its own running there: which binary it can exec, and who it
+// is logged in as.
+const probeCommand = "uname -sm; id -u"
+
+// workerProbe is what the worker said about itself. Every field may be
+// unknown: a worker with no uname or id (Windows OpenSSH, a ForceCommand) is
+// pushed what it would have been pushed before the probe existed.
+type workerProbe struct {
+	goos, goarch string
+	known        bool
+	// uid is the login's numeric uid, or -1 when the worker did not say.
+	uid int
+}
+
+// probeWorker runs probeCommand in its own exec channel, closed before the
+// shim's opens so the two never count together against MaxSessions.
+func probeWorker(ctx context.Context, client *ssh.Client) workerProbe {
+	probe := workerProbe{uid: -1}
+
+	output, err := runProbe(ctx, client)
+	if err != nil {
+		slog.DebugContext(ctx, "venue.probe.failed", "error", err)
+
+		return probe
+	}
+
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+
+	// Scanning rather than taking fixed lines: a login shell's rc files may
+	// print before the answer, and a missing id leaves only one line of it.
+	for _, line := range lines {
+		goos, goarch, ok := parsePlatform(line)
+		if ok {
+			probe.goos, probe.goarch, probe.known = goos, goarch, true
+		}
+	}
+
+	uid, err := strconv.Atoi(strings.TrimSpace(lines[len(lines)-1]))
+	if err == nil && uid >= 0 {
+		probe.uid = uid
+	}
+
+	if !probe.known {
+		slog.DebugContext(ctx, "venue.probe.unknown_platform", "output", output)
+	}
+
+	return probe
+}
+
+// runProbe runs probeCommand, bounded as reaching the worker is, and returns
+// what it printed, capped: the output is the worker's to choose.
+func runProbe(ctx context.Context, client *ssh.Client) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
+	defer cancel()
+
+	session, err := client.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("opening a session: %w", err)
+	}
+
+	output := &diagnosticBuffer{left: diagnosticBytes}
+	session.Stdout = output
+
+	done := make(chan error, 1)
+
+	go func() { done <- session.Run(probeCommand) }()
+
+	select {
+	case err = <-done:
+	case <-ctx.Done():
+		// Closing the channel is what ends a Run waiting on a worker that
+		// never answers; waiting for it keeps the goroutine from outliving
+		// this call.
+		_ = session.Close()
+		<-done
+
+		return "", fmt.Errorf("probing the worker: %w", ctx.Err())
+	}
+
+	_ = session.Close()
+
+	if err != nil {
+		return "", fmt.Errorf("probing the worker: %w", err)
+	}
+
+	return output.String(), nil
+}
+
+// errNoShimForPlatform is a worker of a platform this steps has no shim for.
+var errNoShimForPlatform = errors.New("no shim for the worker's platform")
+
+// resolveShim picks what to push, given what the worker said about itself.
+func resolveShim(worker Worker, probe workerProbe) (shimSource, error) {
+	platform := ""
+	if probe.known {
+		platform = probe.goos + "/" + probe.goarch
+	}
+
+	if worker.Binary != "" {
+		return fileSource(kindBinary, worker.Binary, platform, func() (string, error) { return buildOf(worker) })
+	}
+
+	if probe.known {
+		if binary := embeddedShim(probe.goos, probe.goarch); binary != nil {
+			return shimSource{
+				kind:     kindEmbedded,
+				name:     shimName(probe.goos, probe.goarch),
+				build:    shim.BuildOfBytes(binary),
+				size:     int64(len(binary)),
+				open:     func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(binary)), nil },
+				platform: platform,
+			}, nil
+		}
+	}
+
+	if !probe.known || (probe.goos == runtime.GOOS && probe.goarch == runtime.GOARCH) {
+		self, err := os.Executable()
+		if err != nil {
+			return shimSource{}, fmt.Errorf("%w: %w", errNoBinary, err)
+		}
+
+		// This binary's platform, whatever the worker said: it is what the
+		// upload error has to name when the worker cannot run it.
+		kind := kindSelf
+		if !probe.known {
+			kind = kindGuess
+		}
+
+		return fileSource(kind, self, runtime.GOOS+"/"+runtime.GOARCH, func() (string, error) { return buildOf(Worker{}) })
+	}
+
+	return shimSource{}, noShimError(probe)
+}
+
+// noShimError says why nothing can be pushed, and the ways out.
+func noShimError(probe workerProbe) error {
+	build := fmt.Sprintf("CGO_ENABLED=0 GOOS=%s GOARCH=%s go build ./cmd/steps-shim", probe.goos, probe.goarch)
+
+	embedded := embeddedPlatforms()
+	if len(embedded) == 0 {
+		return fmt.Errorf("%w: the worker is %s/%s and this steps was built without embedded shims (plain `go build`) — build steps with `task build`, or build a shim with `%s` and name it with ?binary=, or name one already on the worker with ?shim=",
+			errNoShimForPlatform, probe.goos, probe.goarch, build)
+	}
+
+	return fmt.Errorf("%w: the worker is %s/%s and this steps embeds shims for %s — build one with `%s` and name it with ?binary=, or name one already on the worker with ?shim=",
+		errNoShimForPlatform, probe.goos, probe.goarch, strings.Join(embedded, ", "), build)
+}
+
+// fileSource is a shim that is a file on this machine.
+func fileSource(kind shimKind, name, platform string, build func() (string, error)) (shimSource, error) {
+	info, err := os.Stat(name)
+	if err != nil {
+		return shimSource{}, fmt.Errorf("%w", err)
+	}
+
+	hash, err := build()
+	if err != nil {
+		return shimSource{}, err
+	}
+
+	return shimSource{
+		kind:     kind,
+		name:     name,
+		build:    hash,
+		size:     info.Size(),
+		open:     func() (io.ReadCloser, error) { return os.Open(name) }, //nolint:gosec // the binary this process is running, or one the operator named
+		platform: platform,
+	}, nil
+}
+
+// errShimNotPrivate is a pushed-shim path somebody other than the login
+// could have written.
+var errShimNotPrivate = errors.New("the shim's path on the worker is not private to this login")
+
+// checkPrivate refuses a path the login does not own, or that anyone else can
+// write, or that is a symlink.
+//
+// The pushed binary sits at a path anyone can compute — reproducible shims
+// make every build's hash public — under a root that defaults to the shared
+// /tmp. A user who creates that path first would have their binary exec'd as
+// the operator's login, and could have it report whatever build the hello
+// asks for. Refused rather than overwritten, because a directory somebody else
+// owns is one this login cannot make safe.
+func checkPrivate(info fs.FileInfo, name string, uid int) error {
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("%w: %s is a symlink — name a private root in the worker URL, as in ssh://host/var/tmp/steps-$USER", errShimNotPrivate, name)
+	}
+
+	attrs, ok := info.Sys().(*sshfx.Attributes)
+	if ok && attrs.HasUserGroup() && int64(attrs.UID) != int64(uid) {
+		return fmt.Errorf("%w: %s is owned by uid %d and this login is uid %d — name a private root in the worker URL, as in ssh://host/var/tmp/steps-$USER",
+			errShimNotPrivate, name, attrs.UID, uid)
+	}
+
+	if info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("%w: %s is writable by others (%s) — remove it on the worker, or name a private root in the worker URL, as in ssh://host/var/tmp/steps-$USER",
+			errShimNotPrivate, name, info.Mode().Perm())
+	}
+
+	return nil
+}
+
+// secureShimDirs makes the two directories above a pushed shim, and refuses
+// them when they are not private to this login. One this call made is
+// tightened first, so a worker whose umask is 002 does not refuse its own.
+// An unknown uid (the worker would not say) checks nothing, as before the
+// probe existed.
+func secureShimDirs(fs *sftp.Client, remote string, uid int) error {
+	build := path.Dir(remote)
+
+	for _, dir := range []string{path.Dir(build), build} {
+		_, err := fs.LStat(dir)
+		created := errors.Is(err, os.ErrNotExist)
+
+		err = fs.MkdirAll(dir, shimDirMode)
+		if err != nil {
+			return fmt.Errorf("making %q on the worker: %w", dir, err)
+		}
+
+		if uid < 0 {
+			continue
+		}
+
+		if created {
+			_ = fs.Chmod(dir, shimDirMode)
+		}
+
+		info, err := fs.LStat(dir)
+		if err != nil {
+			return fmt.Errorf("checking %q on the worker: %w", dir, err)
+		}
+
+		err = checkPrivate(info, dir, uid)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // localBuilds remembers the content hash of each operator-named binary, keyed
@@ -125,25 +428,6 @@ func buildOf(worker Worker) (string, error) {
 	return cached.(string), nil //nolint:forcetypeassert // as above
 }
 
-// localBinary is the binary to push: this process, or one the operator built
-// for a worker whose platform this machine cannot produce.
-//
-// There is no cross-compilation here, deliberately. steps has no Go toolchain
-// in the field, so a mismatched worker is an operator supplying a binary they
-// built — which the CGO_ENABLED=0 build guard is what makes possible.
-func localBinary(worker Worker) (string, error) {
-	if worker.Binary != "" {
-		return worker.Binary, nil
-	}
-
-	self, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", errNoBinary, err)
-	}
-
-	return self, nil
-}
-
 // alreadyPushed reports whether this exact build is on the worker.
 //
 // Size as well as presence: an upload interrupted partway leaves a file at the
@@ -153,9 +437,11 @@ func localBinary(worker Worker) (string, error) {
 // Size is a guess, not proof -- hashing the far side means running something
 // on it, which is the thing this function exists to decide whether to do. The
 // proof comes one step later: the shim reports its own build in the handshake
-// and greet refuses a session whose answer is not what was pushed.
-func alreadyPushed(fs *sftp.Client, remote, local string) (bool, error) {
-	remoteInfo, err := fs.Stat(remote)
+// and greet refuses a session whose answer is not what was pushed. Ownership
+// is checked here rather than trusted to that proof, because a planted binary
+// can report whatever build it is asked for.
+func alreadyPushed(fs *sftp.Client, remote string, size int64, uid int) (bool, error) {
+	remoteInfo, err := fs.LStat(remote)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
@@ -164,12 +450,14 @@ func alreadyPushed(fs *sftp.Client, remote, local string) (bool, error) {
 		return false, fmt.Errorf("checking for a pushed binary at %q: %w", remote, err)
 	}
 
-	localInfo, err := os.Stat(local)
-	if err != nil {
-		return false, fmt.Errorf("%w", err)
+	if uid >= 0 {
+		err = checkPrivate(remoteInfo, remote, uid)
+		if err != nil {
+			return false, err
+		}
 	}
 
-	return remoteInfo.Size() == localInfo.Size(), nil
+	return remoteInfo.Size() == size, nil
 }
 
 // uploadShim writes the binary to a temporary name and renames it into place.
@@ -178,22 +466,17 @@ func alreadyPushed(fs *sftp.Client, remote, local string) (bool, error) {
 // once, and a step must not exec a binary another is still writing. Rename is
 // the atomic step, and both racers end up correct because they are writing
 // identical bytes to a path named after them.
-func uploadShim(fs *sftp.Client, local, remote string) error {
-	err := fs.MkdirAll(path.Dir(remote), shimDirMode)
-	if err != nil {
-		return fmt.Errorf("making %q on the worker: %w", path.Dir(remote), err)
-	}
-
+func uploadShim(fs *sftp.Client, source shimSource, remote string) error {
 	suffix := make([]byte, 8)
 
-	_, err = rand.Read(suffix)
+	_, err := rand.Read(suffix)
 	if err != nil {
 		return fmt.Errorf("naming a temporary upload: %w", err)
 	}
 
 	staging := remote + "." + hex.EncodeToString(suffix) + ".part"
 
-	err = writeRemote(fs, local, staging)
+	err = writeRemote(fs, source, staging)
 	if err != nil {
 		// Best effort: a partial upload left behind is noise, but failing the
 		// step over the cleanup would replace the real error with a worse one.
@@ -226,23 +509,23 @@ func uploadShim(fs *sftp.Client, local, remote string) error {
 // orchestrator installed the same build first, which is a race with no loser.
 var fs2ErrExist = fs.ErrExist
 
-func writeRemote(fs *sftp.Client, local, remote string) error {
-	source, err := os.Open(local) //nolint:gosec // the binary this process is running, or one the operator named
+func writeRemote(fs *sftp.Client, source shimSource, remote string) error {
+	reader, err := source.open()
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
-	defer func() { _ = source.Close() }()
+	defer func() { _ = reader.Close() }()
 
 	dest, err := fs.Create(remote)
 	if err != nil {
 		return fmt.Errorf("creating %q on the worker: %w", remote, err)
 	}
 
-	_, err = io.Copy(dest, source)
+	_, err = io.Copy(dest, reader)
 	if err != nil {
 		_ = dest.Close()
 
-		return fmt.Errorf("uploading the steps binary (%s/%s): %w", runtime.GOOS, runtime.GOARCH, err)
+		return fmt.Errorf("uploading the shim %s (%s): %w", source.name, cmp.Or(source.platform, "platform unknown"), err)
 	}
 
 	err = dest.Close()

@@ -70,18 +70,18 @@ func dialSSH(ctx context.Context, worker Worker) (*transport, error) {
 
 	client := ssh.NewClient(sshConn, channels, requests)
 
-	remote, build, err := pushShim(ctx, client, worker)
+	pushed, err := pushShim(ctx, client, worker)
 	if err != nil {
 		_ = client.Close()
 
 		return nil, err
 	}
 
-	return startShim(client, remote, build)
+	return startShim(client, pushed)
 }
 
 // startShim execs the pushed binary and hands back its stdio as the transport.
-func startShim(client *ssh.Client, remote, build string) (*transport, error) {
+func startShim(client *ssh.Client, pushed pushedShim) (*transport, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		_ = client.Close()
@@ -117,7 +117,7 @@ func startShim(client *ssh.Client, remote, build string) (*transport, error) {
 	// space in its name would otherwise become two arguments. Everything else
 	// the shim needs arrives in the hello frame rather than as an argument,
 	// which is one fewer thing to quote in a dialect this end cannot see.
-	err = session.Start(shellQuote(remote) + " _shim")
+	err = session.Start(shellQuote(pushed.path) + " _shim")
 	if err != nil {
 		_ = session.Close()
 		_ = client.Close()
@@ -148,7 +148,8 @@ func startShim(client *ssh.Client, remote, build string) (*transport, error) {
 		out:         stdin,
 		diagnostics: diagnostics.String,
 		exited:      exit.done,
-		build:       build,
+		build:       pushed.build,
+		source:      pushed.kind,
 		// The session, not the pipes: stdout here is a plain Reader whose
 		// NopCloser close enforces nothing, and a blocked write needs the
 		// channel itself torn down. Closing the SSH session errors both

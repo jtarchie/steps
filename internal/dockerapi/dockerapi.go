@@ -23,6 +23,8 @@ import (
 	"strings"
 
 	"github.com/moby/moby/client"
+
+	"github.com/jtarchie/steps/internal/dockerhost"
 )
 
 // Client is a connection to one docker daemon.
@@ -45,9 +47,9 @@ var errSSHHost = errors.New("an ssh:// docker host is not supported")
 // than on anything about the request.
 func New(host string) (*Client, error) {
 	if host == "" {
-		resolved, err := ResolveHost()
+		resolved, err := dockerhost.Resolve()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w", err)
 		}
 
 		host = resolved

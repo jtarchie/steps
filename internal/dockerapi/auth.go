@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jtarchie/steps/internal/dockerhost"
 )
 
 // dockerHubAuthKey is where a Docker Hub login is filed. Not a hostname:
@@ -170,7 +172,7 @@ func runCredentialHelper(ctx context.Context, name, registry string) (authConfig
 
 // readDockerConfig loads config.json, reporting whether there was one.
 func readDockerConfig() (dockerConfig, bool) {
-	raw, err := os.ReadFile(filepath.Join(configDir(), "config.json"))
+	raw, err := os.ReadFile(filepath.Join(dockerhost.ConfigDir(), "config.json"))
 	if err != nil {
 		return dockerConfig{}, false
 	}

@@ -50,5 +50,18 @@ func BuildOf(path string) (string, error) {
 		return "", fmt.Errorf("hashing %q: %w", path, err)
 	}
 
-	return hex.EncodeToString(sum.Sum(nil))[:buildKeyBytes*2], nil
+	return buildKey(sum.Sum(nil)), nil
+}
+
+// BuildOfBytes is BuildOf for a binary in memory — an embedded shim the
+// orchestrator pushes — and must agree with what that shim's own SelfBuild
+// reports once it is a file on the worker.
+func BuildOfBytes(binary []byte) string {
+	sum := sha256.Sum256(binary)
+
+	return buildKey(sum[:])
+}
+
+func buildKey(sum []byte) string {
+	return hex.EncodeToString(sum)[:buildKeyBytes*2]
 }

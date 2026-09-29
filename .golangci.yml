@@ -108,6 +108,7 @@ linters:
             - "!**/tools/**"
             - "!**/docs/**"
             - "!**/e2e/**"
+            - "!**/cmd/**"
           allow:
             - "$gostd"
             - "github.com/jtarchie/steps/internal/cli"
@@ -241,6 +242,7 @@ linters:
             - "**/internal/dockerapi/**"
           allow:
             - "$gostd"
+            - "github.com/jtarchie/steps/internal/dockerhost"
             - "github.com/moby/moby/api"
             - "github.com/moby/moby/client"
             - "github.com/containerd/errdefs"
@@ -256,6 +258,31 @@ linters:
             # events: a step's machinery tells the run what it did (a note), and writes human-facing bytes where the renderer says (Stdout/Stderr).
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/dockerapi"
+            - "github.com/jtarchie/steps/internal/hostenv"
+        # dockerhost answers which daemon (DOCKER_HOST, then DOCKER_CONTEXT,
+        # then the context store) with the stdlib alone, split out of
+        # dockerapi so the shim can ask without linking the engine client.
+        Dockerhost:
+          files:
+            - "**/internal/dockerhost/**"
+          allow:
+            - "$gostd"
+        # hostenv is the env allowlist and cancellation bound a host-executed
+        # command runs under, split out of shell so the shim applies the same
+        # trust boundary without linking shell's engine client.
+        Hostenv:
+          files:
+            - "**/internal/hostenv/**"
+          allow:
+            - "$gostd"
+        # cmd/steps-shim is the binary pushed to workers: a main over
+        # shim.Main and nothing else, so its import graph is the shim's.
+        ShimMain:
+          files:
+            - "**/cmd/steps-shim/**"
+          allow:
+            - "$gostd"
+            - "github.com/jtarchie/steps/internal/shim"
         Template:
           files:
             - "**/internal/template/**"
@@ -470,10 +497,12 @@ linters:
         # knows nothing about pipelines — no config, no store, no workspace,
         # no merkle. That ignorance IS the contract: a worker runs a binary and
         # a command in a directory, and every decision about what the command
-        # means stays where the pipeline is. It reaches shell for one reason
+        # means stays where the pipeline is. It reaches hostenv for one reason
         # only: a command placed on a worker has to run the way HostRunner runs
         # one, same env allowlist and same cancellation bound, or placement
-        # would quietly change what a step inherits.
+        # would quietly change what a step inherits. Never shell or dockerapi:
+        # both carry the docker engine client, and this package is what gets
+        # pushed to every worker (cmd/steps-shim), so its size is a push cost.
         Shim:
           files:
             - "**/internal/shim/**"
@@ -481,13 +510,13 @@ linters:
             - "$gostd"
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/compress"
-            # dockerapi for ONE question — which daemon this machine talks
+            # dockerhost for ONE question — which daemon this machine talks
             # to — answered the way docker answers it (DOCKER_HOST, then the
             # context store). An ssh session has no shell profile, so
             # DOCKER_HOST alone found nothing on a machine whose `docker`
             # works, and the forwarded socket answered EOF.
-            - "github.com/jtarchie/steps/internal/dockerapi"
-            - "github.com/jtarchie/steps/internal/shell"
+            - "github.com/jtarchie/steps/internal/dockerhost"
+            - "github.com/jtarchie/steps/internal/hostenv"
             - "github.com/jtarchie/steps/internal/wire"
         # wire is the framed protocol and tree codec the orchestrator and a
         # pushed shim speak across a venue. A stdlib-only leaf on purpose: it

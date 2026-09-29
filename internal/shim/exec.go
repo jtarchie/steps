@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/hostenv"
 	"github.com/jtarchie/steps/internal/wire"
 )
 
@@ -82,14 +82,14 @@ func (s *session) runCommand(ctx context.Context, op uint32, request wire.Exec) 
 	// machine hardest to debug on.
 	command := exec.CommandContext(ctx, "sh", "-c", request.Command) //nolint:gosec // running the pipeline's command is the whole job
 	command.Dir = s.workdir
-	command.Env = shell.HostEnvWithValues(request.Env)
+	command.Env = hostenv.WithValues(request.Env)
 	command.Stdout = streamWriter{session: s, op: op, frameType: wire.FrameStdout}
 	command.Stderr = streamWriter{session: s, op: op, frameType: wire.FrameStderr}
 
 	// Same bound and the same reason as HostRunner's: killing `sh -c "sleep 5;
 	// echo done"` kills the shell, not the sleep it forked, and a surviving
 	// grandchild still holds the output pipe.
-	command.WaitDelay = shell.CancelWaitDelay
+	command.WaitDelay = hostenv.CancelWaitDelay
 
 	err := command.Run()
 	if err == nil {

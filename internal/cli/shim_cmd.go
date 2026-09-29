@@ -2,12 +2,10 @@ package cli
 
 import (
 	"context"
-	"fmt"
-	"net"
 	"os"
+	"time"
 
 	"github.com/jtarchie/steps/internal/shim"
-	"time"
 )
 
 // ShimCmd is the remote half of a step placed on a worker.
@@ -45,50 +43,14 @@ type ShimCmd struct {
 
 // Run serves one session as the pushed-to worker's half of the wire.
 func (s *ShimCmd) Run() error {
-	// Build is the content hash of this binary, which the orchestrator uses to
-	// prove the shim it reached is the one it pushed. Resolving it here rather
-	// than accepting it as a flag means a shim cannot be talked into claiming
-	// to be a binary it is not.
-	build, err := shim.SelfBuild()
-	if err != nil {
-		return fmt.Errorf("identifying this binary: %w", err)
+	cmd := shim.Command{Listen: s.Listen, Once: s.Once, Root: s.Root, Linger: s.Linger}
+
+	if s.Listen == "" {
+		return shim.Run(context.Background(), cmd, os.Stdin, os.Stdout) //nolint:wrapcheck // shim.Run already names itself
 	}
 
-	if s.Listen != "" {
-		return s.listen(build)
-	}
-
-	err = shim.Serve(context.Background(), os.Stdin, os.Stdout, shim.Options{Build: build})
-	if err != nil {
-		return fmt.Errorf("shim: %w", err)
-	}
-
-	return nil
-}
-
-// listen serves sessions on a TCP address until the process is told to stop.
-func (s *ShimCmd) listen(build string) error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", s.Listen)
-	if err != nil {
-		return fmt.Errorf("shim: %w", err)
-	}
-
-	// The bound address, for whoever started this — a bootstrap script
-	// grepping for the port, or a person checking it came up. Stdout is free
-	// in this mode: the protocol lives on the connections.
-	fmt.Printf("listening on %s\n", listener.Addr())
-
-	err = shim.ServeListener(ctx, listener, shim.ListenOptions{
-		Options: shim.Options{Build: build, Root: s.Root},
-		Once:    s.Once,
-		Linger:  s.Linger,
-	})
-	if err != nil {
-		return fmt.Errorf("shim: %w", err)
-	}
-
-	return nil
+	return shim.Run(ctx, cmd, os.Stdin, os.Stdout) //nolint:wrapcheck // as above
 }

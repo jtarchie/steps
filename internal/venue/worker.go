@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
 	"time"
@@ -35,7 +36,7 @@ const (
 	// without a network — which also happens to make it the thing the docs
 	// corpus can execute.
 	SchemeLocal Scheme = "local"
-	// SchemeSSH reaches a worker over SSH, pushing this binary to it first.
+	// SchemeSSH reaches a worker over SSH, pushing a shim to it first.
 	SchemeSSH Scheme = "ssh"
 	// SchemeAWS reaches an EC2 instance through SSM: no inbound port, no
 	// sshd, no host key. The instance dials the control plane outward, which
@@ -63,10 +64,9 @@ type Worker struct {
 	// home instead -- a machine with a fast disk mounted at /mnt would take
 	// the mapping, put nothing there, and fill the root filesystem.
 	Root string
-	// Binary is a locally-built shim to push instead of this process's own,
-	// for a worker whose platform this machine cannot produce a binary for.
-	// steps has no Go toolchain in the field, so a mismatched worker is an
-	// operator supplying a binary they built rather than a cross-compile.
+	// Binary is a locally-built steps or steps-shim to push instead of the
+	// one resolveShim would pick, for a worker of a platform this steps
+	// embeds no shim for.
 	Binary string
 	// Identity is a private key file to authenticate with, on top of whatever
 	// an SSH agent offers. An encrypted key has to go through the agent.
@@ -107,8 +107,10 @@ type Worker struct {
 	// exactly one, and unlike the project there is no credentials file to
 	// fall back to — only ?zone= or CLOUDSDK_COMPUTE_ZONE can answer.
 	Zone string
-	// Shim is an absolute path to a steps binary ALREADY on the instance —
-	// one baked into an AMI — so nothing is transferred to start a session.
+	// Shim is an absolute path to a steps or steps-shim binary ALREADY on the
+	// worker — one baked into an image — so nothing is transferred to start a
+	// session. The hello's protocol check still applies; the build check does
+	// not, since nothing was pushed to compare against.
 	Shim string
 	// ArtifactStore is the --artifact-store URL, which an aws:// worker
 	// reaches its binary through. Filled in from the spec rather than the
@@ -207,14 +209,43 @@ func ParseWorker(raw string) (Worker, error) {
 func checkScheme(worker Worker) error {
 	switch worker.Scheme {
 	case SchemeAWS:
+		err := checkShim(worker)
+		if err != nil {
+			return err
+		}
+
 		return checkAWS(worker)
+	case SchemeSSH:
+		return checkShim(worker)
 	case SchemeGCP:
 		return checkGCP(worker)
-	case SchemeLocal, SchemeSSH:
+	case SchemeLocal:
 		return nil
 	default:
 		return nil
 	}
+}
+
+// checkShim refuses a ?shim= that cannot mean what it says.
+//
+// Absolute, because the remote login shell runs it: a bare name becomes a
+// PATH lookup on the worker, which finds whatever that login's profile puts
+// first rather than the file the mapping names.
+func checkShim(worker Worker) error {
+	if worker.Shim == "" {
+		return nil
+	}
+
+	if worker.Binary != "" {
+		return fmt.Errorf("%w %q: ?binary= and ?shim= are two answers to the same question — push a local binary, or name one already on the worker",
+			ErrWorker, worker.URL)
+	}
+
+	if !path.IsAbs(worker.Shim) {
+		return fmt.Errorf("%w %q: ?shim= must be an absolute path on the worker, as in ?shim=/usr/local/bin/steps-shim", ErrWorker, worker.URL)
+	}
+
+	return nil
 }
 
 // applyQuery reads a mapping's options, refusing what the grammar does not
@@ -269,7 +300,7 @@ var queryKeys = map[string][]Scheme{
 	"hostkey":     {SchemeSSH, SchemeGCP},
 	"ssh_config":  {SchemeSSH},
 	"region":      {SchemeAWS},
-	"shim":        {SchemeAWS},
+	"shim":        {SchemeAWS, SchemeSSH},
 	"capacity":    {SchemeAWS},
 	"idle":        {SchemeAWS, SchemeGCP},
 	"version":     {SchemeAWS},

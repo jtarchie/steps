@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"go.uber.org/goleak"
@@ -33,6 +34,10 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "_shim" {
 		serveShim()
 	}
+
+	// No test depends on whether `task shims` ran: one that wants a shim
+	// embedded installs it (withShims).
+	embeddedShims = fstest.MapFS{}
 
 	goleak.VerifyTestMain(m, sdkPoolIgnores()...)
 }

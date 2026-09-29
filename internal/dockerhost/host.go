@@ -1,4 +1,7 @@
-package dockerapi
+// Package dockerhost answers which docker daemon this process means, the way
+// the docker CLI would. Stdlib only, split out of dockerapi so the shim can ask
+// the question without linking the engine client it never uses.
+package dockerhost
 
 // Which daemon.
 //
@@ -37,10 +40,10 @@ const defaultContextName = "default"
 // a store.
 var errNoDockerEndpoint = errors.New("names no docker endpoint")
 
-// ResolveHost answers which daemon this process should talk to, in the order
+// Resolve answers which daemon this process should talk to, in the order
 // a docker CLI would: DOCKER_HOST, then DOCKER_CONTEXT, then the current
 // context in the configuration directory, then the platform default.
-func ResolveHost() (string, error) {
+func Resolve() (string, error) {
 	if host := os.Getenv("DOCKER_HOST"); host != "" {
 		return host, nil
 	}
@@ -65,7 +68,7 @@ func selectedContext() string {
 		return name
 	}
 
-	raw, err := os.ReadFile(filepath.Join(configDir(), "config.json"))
+	raw, err := os.ReadFile(filepath.Join(ConfigDir(), "config.json"))
 	if err != nil {
 		return ""
 	}
@@ -92,7 +95,7 @@ func contextEndpoint(name string) (string, error) {
 	// The hex sha256 of the name is docker's own layout for the store, not a
 	// choice this package gets to make.
 	digest := sha256.Sum256([]byte(name))
-	path := filepath.Join(configDir(), "contexts", "meta", hex.EncodeToString(digest[:]), "meta.json")
+	path := filepath.Join(ConfigDir(), "contexts", "meta", hex.EncodeToString(digest[:]), "meta.json")
 
 	raw, err := os.ReadFile(path) //nolint:gosec // path is docker's own layout: a digest of the context name under the config directory
 	if err != nil {
@@ -118,8 +121,8 @@ func contextEndpoint(name string) (string, error) {
 	return endpoint.Host, nil
 }
 
-// configDir is where docker keeps config.json and the context store.
-func configDir() string {
+// ConfigDir is where docker keeps config.json and the context store.
+func ConfigDir() string {
 	if dir := os.Getenv("DOCKER_CONFIG"); dir != "" {
 		return dir
 	}

@@ -8,15 +8,20 @@ package venue
 // os/exec helper-process pattern, so nothing about the transport is stubbed.
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/shim"
 )
 
 func sshSpec(t *testing.T, server *testSSHD, cwd string, outputs ...string) shell.RunnerSpec {
@@ -323,4 +328,194 @@ func stripQuery(worker string) string {
 	base, _, _ := strings.Cut(worker, "?")
 
 	return base
+}
+
+// TestSSHWorkerRunsANamedShimWithoutPushing is ?shim= on ssh://: a shim
+// already on the worker, so nothing is transferred — not even an sftp
+// session opened to decide whether to.
+func TestSSHWorkerRunsANamedShimWithoutPushing(t *testing.T) {
+	t.Parallel()
+
+	server := newTestSSHD(t)
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locating the test binary: %v", err)
+	}
+
+	runner, err := NewRunner(shell.RunnerSpec{
+		Cwd:       t.TempDir(),
+		Worker:    server.URL + "&shim=" + url.QueryEscape(self),
+		WorkerTag: "baked",
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	err = runner.Run(context.Background(), "true")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	err = runner.Close()
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if pushed := uploadsUnder(t, server.Root); pushed != 0 {
+		t.Errorf("%d binaries pushed, want none — ?shim= names one already there", pushed)
+	}
+
+	if opened := server.Subsystems.Load(); opened != 0 {
+		t.Errorf("%d sftp sessions, want none", opened)
+	}
+}
+
+// TestSSHWorkerBlamesAMissingShimOnTheMapping pins the hint: a ?shim= that
+// does not run is the path the operator wrote, not a binary to rebuild.
+func TestSSHWorkerBlamesAMissingShimOnTheMapping(t *testing.T) {
+	t.Parallel()
+
+	server := newTestSSHD(t)
+
+	runner, err := NewRunner(shell.RunnerSpec{
+		Cwd:       t.TempDir(),
+		Worker:    server.URL + "&shim=/nonexistent",
+		WorkerTag: "baked",
+		NoRedial:  true,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	t.Cleanup(func() { _ = runner.Close() })
+
+	err = runner.Run(context.Background(), "true")
+	if !errors.Is(err, errShimDidNotStart) {
+		t.Fatalf("Run = %v, want errShimDidNotStart", err)
+	}
+
+	if !strings.Contains(err.Error(), "?shim=/nonexistent") || strings.Contains(err.Error(), "?binary=") {
+		t.Errorf("Run = %v, want the ?shim= path blamed and no ?binary= advice", err)
+	}
+}
+
+// TestSSHWorkerPushesTheEmbeddedShim is the pick crossing into the push: the
+// worker reports this machine's platform, a shim is embedded for it, and
+// that — not this process — is what travels, once, with the push said once.
+// Not parallel: it installs embedded shims.
+func TestSSHWorkerPushesTheEmbeddedShim(t *testing.T) {
+	server := newTestSSHD(t)
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locating the test binary: %v", err)
+	}
+
+	binary, err := os.ReadFile(self) //nolint:gosec // the test binary, standing in for a shim built for this platform
+	if err != nil {
+		t.Fatalf("reading the test binary: %v", err)
+	}
+
+	name := shimName(runtime.GOOS, runtime.GOARCH)
+	withShims(t, map[string][]byte{name: binary})
+
+	var notes bytes.Buffer
+
+	runOnce(t, server.URL, &notes)
+	runOnce(t, server.URL, &notes)
+
+	if pushed := uploadsUnder(t, server.Root); pushed != 1 {
+		t.Errorf("%d binaries on the worker, want exactly 1", pushed)
+	}
+
+	info, err := os.Stat(filepath.Join(server.Root, "steps-shim", shim.BuildOfBytes(binary), "steps")) //nolint:gosec // a path under this test's own worker root
+	if err != nil || info.Size() != int64(len(binary)) {
+		t.Errorf("pushed shim = %v, %v, want the embedded bytes filed under their own hash", info, err)
+	}
+
+	if said := strings.Count(notes.String(), "pushing shim "+name); said != 1 {
+		t.Errorf("notes = %q, want the embedded shim's push said exactly once", notes.String())
+	}
+}
+
+// TestSSHWorkerRefusesAPlantedShim pins the planting defence: a same-size
+// file at the content-keyed path, under a directory anyone could write, is
+// refused by name and never executed.
+func TestSSHWorkerRefusesAPlantedShim(t *testing.T) {
+	t.Parallel()
+
+	server := newTestSSHD(t)
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locating the test binary: %v", err)
+	}
+
+	info, err := os.Stat(self)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+
+	build, err := shim.SelfBuild()
+	if err != nil {
+		t.Fatalf("SelfBuild: %v", err)
+	}
+
+	dir := filepath.Join(server.Root, "steps-shim", build)
+	mustMkdir(t, dir)
+
+	err = os.Chmod(dir, 0o777) //nolint:gosec // the point: a directory another login could have written
+	if err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	marker := filepath.Join(t.TempDir(), "ran")
+	planted := "#!/bin/sh\ntouch " + marker + "\n"
+	planted += strings.Repeat("#", int(info.Size())-len(planted))
+
+	err = os.WriteFile(filepath.Join(dir, "steps"), []byte(planted), 0o700) //nolint:gosec // an executable, as a planted shim would be
+	if err != nil {
+		t.Fatalf("planting: %v", err)
+	}
+
+	runner, err := NewRunner(shell.RunnerSpec{Cwd: t.TempDir(), Worker: server.URL, WorkerTag: "gpu", NoRedial: true})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	t.Cleanup(func() { _ = runner.Close() })
+
+	err = runner.Run(context.Background(), "true")
+	if !errors.Is(err, errShimNotPrivate) || !strings.Contains(err.Error(), dir) {
+		t.Errorf("Run = %v, want the planted path refused by name", err)
+	}
+
+	_, err = os.Stat(marker)
+	if err == nil {
+		t.Error("the planted shim ran")
+	}
+}
+
+// runOnce runs one trivial step on a fresh session to worker, with the
+// run's notes printed to notes.
+func runOnce(t *testing.T, worker string, notes io.Writer) {
+	t.Helper()
+
+	ctx := events.WithOutput(context.Background(), events.Output{Stdout: notes})
+
+	runner, err := NewRunner(shell.RunnerSpec{Cwd: t.TempDir(), Worker: worker, WorkerTag: "gpu"})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	err = runner.Run(ctx, "true")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	err = runner.Close()
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 }

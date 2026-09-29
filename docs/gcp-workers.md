@@ -130,7 +130,7 @@ The invocation names the **machines**. The parts of that worker URL that matter:
 
 - **`/var/tmp/steps`** — the path picks a disk on the worker, exactly as on every other scheme. Leave it off and you get the worker's temp directory, with the same tmpfs hazard the aws page describes.
 - **`?project=` / `?zone=`** — where the instance lives. Omittable when `GOOGLE_CLOUD_PROJECT`/`CLOUDSDK_COMPUTE_ZONE` (or the ADC credentials' own project) already say.
-- **`?binary=`** — pushed over sftp inside the tunnel, cached on the worker by its content hash. No artifact store needed. An orchestrator that is not itself Linux **must** supply one, checked before the run starts.
+- **`?binary=`** — pushed over sftp inside the tunnel, cached on the worker by its content hash. No artifact store needed. Optional for a `steps` built with `task build`, which embeds a Linux shim for both amd64 and arm64 and pushes the one the instance needs; a non-Linux orchestrator built without them (plain `go build`) **must** supply one, checked before the run starts.
 - **`gcp://launch/…`** — acquires an instance from that template for the job and deletes it at the end. Acquisition is **per job, not per step**; a job whose placed steps are all cache hits acquires nothing. `gcp://stopped/$NAME` is the middle rung: start a parked instance, use it, stop it again (`?idle=` holds it warm between back-to-back jobs).
 
 There is deliberately **no `?capacity=`**: the template decides its own provisioning model, so a spot job names a spot template.

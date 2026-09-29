@@ -1,4 +1,4 @@
-package dockerapi
+package dockerhost
 
 import (
 	"crypto/sha256"
@@ -77,13 +77,13 @@ func TestResolveHostPrefersDockerHost(t *testing.T) {
 	writeContextStore(t, "ctx", map[string]string{"ctx": "unix:///from/the/context.sock"})
 	t.Setenv("DOCKER_HOST", "tcp://from-the-env:2375")
 
-	got, err := ResolveHost()
+	got, err := Resolve()
 	if err != nil {
-		t.Fatalf("ResolveHost: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
 
 	if got != "tcp://from-the-env:2375" {
-		t.Errorf("ResolveHost() = %q, want the environment to outrank the context store", got)
+		t.Errorf("Resolve() = %q, want the environment to outrank the context store", got)
 	}
 }
 
@@ -98,13 +98,13 @@ func TestResolveHostPrefersDockerContextOverTheStore(t *testing.T) {
 	})
 	t.Setenv("DOCKER_CONTEXT", "named")
 
-	got, err := ResolveHost()
+	got, err := Resolve()
 	if err != nil {
-		t.Fatalf("ResolveHost: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
 
 	if got != "unix:///named.sock" {
-		t.Errorf("ResolveHost() = %q, want the explicitly named context", got)
+		t.Errorf("Resolve() = %q, want the explicitly named context", got)
 	}
 }
 
@@ -112,13 +112,13 @@ func TestResolveHostReadsTheCurrentContext(t *testing.T) {
 	clearDockerEnv(t)
 	writeContextStore(t, "colima", map[string]string{"colima": "unix:///home/someone/.colima/docker.sock"})
 
-	got, err := ResolveHost()
+	got, err := Resolve()
 	if err != nil {
-		t.Fatalf("ResolveHost: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
 
 	if got != "unix:///home/someone/.colima/docker.sock" {
-		t.Errorf("ResolveHost() = %q, want the endpoint of the current context", got)
+		t.Errorf("Resolve() = %q, want the endpoint of the current context", got)
 	}
 }
 
@@ -133,13 +133,13 @@ func TestResolveHostDefaultContextIsThePlatformSocket(t *testing.T) {
 	clearDockerEnv(t)
 	writeContextStore(t, "default", nil)
 
-	got, err := ResolveHost()
+	got, err := Resolve()
 	if err != nil {
-		t.Fatalf("ResolveHost: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
 
 	if got != DefaultHost {
-		t.Errorf("ResolveHost() = %q, want the platform default %q", got, DefaultHost)
+		t.Errorf("Resolve() = %q, want the platform default %q", got, DefaultHost)
 	}
 }
 
@@ -147,13 +147,13 @@ func TestResolveHostNoConfigIsThePlatformSocket(t *testing.T) {
 	clearDockerEnv(t)
 	writeContextStore(t, "", nil)
 
-	got, err := ResolveHost()
+	got, err := Resolve()
 	if err != nil {
-		t.Fatalf("ResolveHost: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
 
 	if got != DefaultHost {
-		t.Errorf("ResolveHost() = %q, want the platform default %q", got, DefaultHost)
+		t.Errorf("Resolve() = %q, want the platform default %q", got, DefaultHost)
 	}
 }
 
@@ -167,9 +167,9 @@ func TestResolveHostReportsAMissingContext(t *testing.T) {
 	clearDockerEnv(t)
 	writeContextStore(t, "vanished", nil)
 
-	_, err := ResolveHost()
+	_, err := Resolve()
 	if err == nil {
-		t.Fatal("ResolveHost succeeded for a context that is not in the store")
+		t.Fatal("Resolve succeeded for a context that is not in the store")
 	}
 
 	if !strings.Contains(err.Error(), "vanished") {
@@ -197,8 +197,8 @@ func TestResolveHostIgnoresAContextWithoutADockerEndpoint(t *testing.T) {
 		"Endpoints": map[string]any{"kubernetes": map[string]any{"Host": "https://cluster"}},
 	})
 
-	_, err = ResolveHost()
+	_, err = Resolve()
 	if err == nil {
-		t.Fatal("ResolveHost succeeded for a context that names no docker endpoint")
+		t.Fatal("Resolve succeeded for a context that names no docker endpoint")
 	}
 }

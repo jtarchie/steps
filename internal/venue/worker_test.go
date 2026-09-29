@@ -203,3 +203,25 @@ func TestSSHAddressKeepsTheUserOnlyWhenOneWasWritten(t *testing.T) {
 		}
 	}
 }
+
+// TestParseWorkerShimOption pins ?shim= for the schemes that take it: ssh://
+// as well as aws://, never alongside ?binary=, and only as an absolute path —
+// a bare name would be a PATH lookup in the worker's login shell.
+func TestParseWorkerShimOption(t *testing.T) {
+	t.Parallel()
+
+	for raw, ok := range map[string]bool{
+		"ssh://box?shim=/opt/steps/shim":                         true,
+		"aws://i-0abc123def456789?shim=/opt/steps/shim":          true,
+		"ssh://box?shim=/x&binary=/y":                            false,
+		"aws://i-0abc123def456789?shim=/x&binary=/y":             false,
+		"ssh://box?shim=steps":                                   false,
+		"aws://i-0abc123def456789?shim=bin/steps":                false,
+		"gcp://worker-1?zone=us-central1-a&shim=/opt/steps/shim": false,
+	} {
+		_, err := ParseWorker(raw)
+		if (err == nil) != ok {
+			t.Errorf("ParseWorker(%q) = %v, want accepted=%v", raw, err, ok)
+		}
+	}
+}

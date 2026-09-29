@@ -115,9 +115,10 @@ func dialSSM(ctx context.Context, worker Worker) (*transport, error) {
 	}
 
 	return &transport{
-		in:    channel,
-		out:   channel,
-		build: build,
+		in:     channel,
+		out:    channel,
+		build:  build,
+		source: binary.kind(),
 		// Closing the channel unblocks its reads via the stop signal and
 		// errors its writes on the dead websocket.
 		interrupt: func() { _ = channel.Close() },
@@ -198,6 +199,15 @@ type remoteBinary struct {
 	// build keys where the fetched binary is cached on the instance, and is
 	// what the handshake compares against.
 	build string
+}
+
+// kind is where the shim came from, for a startup error's hint.
+func (b remoteBinary) kind() shimKind {
+	if b.path != "" {
+		return kindShim
+	}
+
+	return kindBinary
 }
 
 // ssmBinary decides how the instance gets a shim.
@@ -457,11 +467,6 @@ func checkAWS(worker Worker) error {
 	err := checkAWSTarget(worker)
 	if err != nil {
 		return err
-	}
-
-	if worker.Shim != "" && worker.Binary != "" {
-		return fmt.Errorf("%w %q: ?binary= and ?shim= are two answers to the same question — push a local binary, or name one already on the instance",
-			ErrWorker, worker.URL)
 	}
 
 	switch worker.Capacity {

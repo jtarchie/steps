@@ -221,11 +221,33 @@ tasks:
       - go run ./tools/mutants stale
 
   build:
-    desc: Build ./steps. CGO_ENABLED=0 is a guard, not an optimization — the planned remote-worker shim cross-compiles this binary for any GOOS/GOARCH and pushes it over SFTP, so a transitive dep that pulls in cgo must fail the build here.
+    desc: Build ./steps with the shims embedded. CGO_ENABLED=0 is a guard, not an optimization — a worker of another platform runs a cross-compiled binary (an embedded shim, or one named with ?binary=), so a transitive dep that pulls in cgo must fail the build here.
+    deps: [shims]
     env:
       CGO_ENABLED: "0"
     cmds:
       - go build -v
+
+  shims:
+    desc: Cross-compile cmd/steps-shim for every platform steps ships on, into internal/venue/shims/ where ./steps embeds them. All four on every build, not only the host's — a dev Mac placing a step on a linux worker is the common case, and the build cache makes the steady state a relink each. -buildvcs=false keeps a shim byte-identical across rebuilds that did not touch it, so a worker is not re-pushed an unchanged shim. The size gate is the push budget from issue 101.
+    env:
+      CGO_ENABLED: "0"
+    vars:
+      SHIM_PLATFORMS: '{{.SHIM_PLATFORMS | default "linux/amd64 linux/arm64 darwin/amd64 darwin/arm64"}}'
+    cmds:
+      - |
+        set -e
+        for platform in {{.SHIM_PLATFORMS}}; do
+          os="${platform%/*}"
+          arch="${platform#*/}"
+          out="internal/venue/shims/steps-shim-$os-$arch"
+          GOOS="$os" GOARCH="$arch" go build -trimpath -buildvcs=false -ldflags='-s -w' -o "$out" ./cmd/steps-shim
+          size=$(wc -c < "$out" | tr -d ' ')
+          if [ "$size" -eq 0 ] || [ "$size" -gt 10485760 ]; then
+            echo "$out is $size bytes; a shim must be non-empty and at most 10485760" >&2
+            exit 1
+          fi
+        done
 
   vuln:
     desc: Scan the module for known Go vulnerabilities actually reachable from the build (govulncheck).

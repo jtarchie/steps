@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/shim"
 )
 
 // linuxWorker is a running container reachable as root over ssh.
@@ -254,19 +255,20 @@ EXPOSE 22
 CMD ["sh", "-c", "/usr/sbin/sshd -e && exec dockerd-entrypoint.sh dockerd --host=unix:///var/run/docker.sock"]
 `
 
-// buildLinuxShim cross-compiles the steps binary the worker will run.
+// buildLinuxShim cross-compiles the shim the worker will run: cmd/steps-shim,
+// the binary `task shims` embeds, so these workers exercise what is actually
+// shipped to them — docker-socket forwarding included.
 //
-// steps has no Go toolchain in the field, which is why ?binary= exists at all;
-// here the toolchain is the one running the tests. CGO_ENABLED=0 is what makes
-// the result pushable, and is the same guard `task build` keeps.
+// CGO_ENABLED=0 is what makes the result pushable, and is the same guard
+// `task shims` keeps.
 func buildLinuxShim(t *testing.T, dir string) string {
 	t.Helper()
 
-	binary := filepath.Join(dir, "steps-linux")
+	binary := filepath.Join(dir, "steps-shim-linux")
 
 	//nolint:gosec // binary is a path under this test's own TempDir
-	cmd := exec.CommandContext(t.Context(), "go", "build", "-o", binary, ".")
-	// The repo root, where the main package is: this file is two levels down.
+	cmd := exec.CommandContext(t.Context(), "go", "build", "-o", binary, "./cmd/steps-shim")
+	// The repo root, where the module is: this file is two levels down.
 	cmd.Dir = filepath.Join("..", "..")
 	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+runtime.GOARCH, "CGO_ENABLED=0")
 
@@ -617,4 +619,54 @@ func TestLinuxRootWorkerPullsAPlacedImage(t *testing.T) {
 	if report := mustRead(t, filepath.Join(cwd, "out", "report.txt")); report != "seed\n" {
 		t.Errorf("report = %q, want the step to have run in the pulled image", report)
 	}
+}
+
+// TestLinuxWorkerIsPushedTheEmbeddedShimForItsPlatform is the issue's
+// acceptance across the real seam: a worker named with no ?binary= is asked
+// its platform, sent the embedded shim for it, and runs it — on an
+// orchestrator whose own binary could not run there when it is a Mac.
+//
+// linux/<this machine's arch> rather than linux/amd64 always: an amd64
+// container on an arm64 host needs emulation. That x86_64 reads as amd64 is
+// TestParsePlatform's to prove. Not parallel: it installs embedded shims.
+func TestLinuxWorkerIsPushedTheEmbeddedShimForItsPlatform(t *testing.T) {
+	worker := startLinuxWorker(t)
+
+	binary, err := os.ReadFile(worker.binary)
+	if err != nil {
+		t.Fatalf("reading the cross-compiled shim: %v", err)
+	}
+
+	withShims(t, map[string][]byte{shimName("linux", runtime.GOARCH): binary})
+
+	parsed, err := url.Parse(worker.url)
+	if err != nil {
+		t.Fatalf("parsing the worker URL: %v", err)
+	}
+
+	query := parsed.Query()
+	query.Del("binary")
+	parsed.RawQuery = query.Encode()
+
+	runner, err := NewRunner(shell.RunnerSpec{Cwd: t.TempDir(), Worker: parsed.String(), WorkerTag: "linux"})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	t.Cleanup(func() { _ = runner.Close() })
+
+	err = runner.Run(context.Background(), "true")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	placement, ok := PlacementOf(runner)
+	if !ok || placement.GOOS != "linux" {
+		t.Errorf("placement = %+v, want the worker's linux", placement)
+	}
+
+	// The hello's build check already held the worker to these bytes; the
+	// path is what makes the next dial reuse them.
+	remote := workerScratchRoot + "/steps-shim/" + shim.BuildOfBytes(binary) + "/steps"
+	run(t, t.TempDir(), "docker", "exec", worker.container, "test", "-x", remote)
 }

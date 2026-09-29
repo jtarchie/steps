@@ -1017,10 +1017,9 @@ func TestGCPProjectFallbackChain(t *testing.T) {
 }
 
 // TestGCPPlacementCheck pins the pre-run refusal of a dial that can never
-// work: a non-Linux orchestrator's own binary cannot run on a GCE instance.
+// work: a non-Linux orchestrator with no Linux shim for whichever arch the
+// instance turns out to be. Not parallel: it installs embedded shims.
 func TestGCPPlacementCheck(t *testing.T) {
-	t.Parallel()
-
 	bare, err := ParseWorker("gcp://worker-1?zone=us-central1-a")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
@@ -1036,15 +1035,32 @@ func TestGCPPlacementCheck(t *testing.T) {
 		t.Errorf("PlacementCheck with ?binary= = %v, want accepted", err)
 	}
 
+	shim := []byte("shim")
+
 	// The refusal is a fact about the orchestrator's own OS, so the test
 	// asserts whichever side of it this machine is on.
-	err = bare.PlacementCheck(false)
-	if runtime.GOOS == "linux" {
-		if err != nil {
-			t.Errorf("PlacementCheck on linux = %v, want this binary accepted", err)
+	for _, test := range []struct {
+		name    string
+		shims   map[string][]byte
+		refused bool
+	}{
+		{"nothing embedded", map[string][]byte{}, true},
+		{"only amd64", map[string][]byte{shimName("linux", "amd64"): shim}, true},
+		{"only arm64", map[string][]byte{shimName("linux", "arm64"): shim}, true},
+		{"both linux arches", map[string][]byte{shimName("linux", "amd64"): shim, shimName("linux", "arm64"): shim}, false},
+	} {
+		withShims(t, test.shims)
+
+		err = bare.PlacementCheck(false)
+
+		refused := test.refused && runtime.GOOS != "linux"
+		if (err != nil) != refused {
+			t.Errorf("%s: PlacementCheck = %v, want refused=%v", test.name, err, refused)
 		}
-	} else if err == nil || !strings.Contains(err.Error(), "?binary=") {
-		t.Errorf("PlacementCheck off linux = %v, want the fix named", err)
+
+		if err != nil && (!strings.Contains(err.Error(), "task build") || !strings.Contains(err.Error(), "?binary=")) {
+			t.Errorf("%s: PlacementCheck = %v, want `task build` and ?binary= named", test.name, err)
+		}
 	}
 }
 
