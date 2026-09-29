@@ -33,7 +33,7 @@
 # else's organization cannot be freed at all; it needs one outside any org.
 #
 # Where an action is refused outright the matching test SKIPS rather than fails — a policy saying
-# no is not the code being wrong — so `ec2:CreateFleet` or FIS being denied
+# no is not the code being wrong — so `ec2:CreateFleet`/`ec2:CreateTags` or FIS being denied
 # costs you the launch-rung and spot-eviction coverage and nothing else.
 #
 # Cost, which is the reason for the shape: t4g.small is free through

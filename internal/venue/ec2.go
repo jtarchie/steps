@@ -19,7 +19,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -232,6 +234,10 @@ func stopInstance(api ec2API, worker Worker, instance string) {
 // launchInstance creates one instance from a launch template and terminates
 // it when the job ends.
 func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, func(context.Context) error, error) {
+	// Said BEFORE the money is spent, as gceLaunch does: EC2 chooses the id, so a crash past CreateFleet leaves this label as the transcript's only way to the machine.
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: launching from template %s (%s=%s)",
+		worker.URL, worker.Template, labelWorker, worker.launchLabels()[labelWorker]))
+
 	out, err := api.CreateFleet(ctx, fleetRequest(worker))
 	if err != nil {
 		return Worker{}, nil, fmt.Errorf("launching a worker for %q: %w", worker.URL, err)
@@ -293,9 +299,24 @@ func terminateInstance(api ec2API, worker Worker, instance string) {
 // only call that can ask for spot with an on-demand fallback and instance
 // type diversification in ONE request — which is what makes a spot worker
 // something a job can rely on rather than a gamble.
+//
+// The labels ride IN the request, never a CreateTags after it: a separate call
+// leaves a window where a crash strands an untagged, billing machine — the
+// case the labels exist for — while a refused tag here refuses the launch.
 func fleetRequest(worker Worker) *ec2.CreateFleetInput {
+	labels := worker.launchLabels()
+	tags := make([]ec2types.Tag, 0, len(labels))
+
+	for _, key := range slices.Sorted(maps.Keys(labels)) {
+		tags = append(tags, ec2types.Tag{Key: aws.String(key), Value: aws.String(labels[key])})
+	}
+
 	request := &ec2.CreateFleetInput{
 		Type: ec2types.FleetTypeInstant,
+		TagSpecifications: []ec2types.TagSpecification{{
+			ResourceType: ec2types.ResourceTypeInstance,
+			Tags:         tags,
+		}},
 		LaunchTemplateConfigs: []ec2types.FleetLaunchTemplateConfigRequest{{
 			LaunchTemplateSpecification: &ec2types.FleetLaunchTemplateSpecificationRequest{
 				LaunchTemplateId: aws.String(worker.Template),

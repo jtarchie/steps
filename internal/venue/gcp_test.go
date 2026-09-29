@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -42,6 +43,7 @@ type fakeGCE struct {
 	stops    []string
 	deletes  []string
 	sshKeys  []string
+	labels   []map[string]string
 
 	hostKeys           map[string]string
 	attributesDelay    int
@@ -52,7 +54,7 @@ type fakeGCE struct {
 	lastStatus         string
 }
 
-func (f *fakeGCE) InsertFromTemplate(_ context.Context, _, _, name, template string) error {
+func (f *fakeGCE) InsertFromTemplate(_ context.Context, _, _, name, template string, labels map[string]string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -61,6 +63,7 @@ func (f *fakeGCE) InsertFromTemplate(_ context.Context, _, _, name, template str
 	}
 
 	f.inserts = append(f.inserts, template+"->"+name)
+	f.labels = append(f.labels, labels)
 
 	return nil
 }
@@ -1483,5 +1486,50 @@ func TestMergeSSHKeyPrunesExpiredEntries(t *testing.T) {
 
 	if *metadata2.Items[0].Value != "steps:key-new" {
 		t.Fatalf("ssh-keys = %q, want only the live entry", *metadata2.Items[0].Value)
+	}
+}
+
+// TestGCELaunchLabelsTheInstanceItCreates pins the labels on the insert, and
+// holds every one to GCE's own key and value rules: one that breaks them
+// refuses the whole insert, so this is the launch working at all.
+func TestGCELaunchLabelsTheInstanceItCreates(t *testing.T) {
+	fake := &fakeGCE{}
+	seamGCP(t, fake, nil)
+
+	worker, err := ParseWorker("gcp://launch/steps-workers?project=test-project&zone=us-central1-a")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	leases := NewLeases(map[string]Worker{"gpu": worker})
+
+	_, err = leases.Resolve(context.Background(), "gpu")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	t.Cleanup(func() { _ = leases.ReleaseAll(context.Background()) })
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.labels) != 1 {
+		t.Fatalf("labels = %v, want one insert's", fake.labels)
+	}
+
+	labels := fake.labels[0]
+	for _, key := range []string{labelWorker, labelHost, labelPid} {
+		if labels[key] == "" {
+			t.Errorf("labels = %v, want %s set", labels, key)
+		}
+	}
+
+	gceKey := regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
+	gceValue := regexp.MustCompile(`^[a-z0-9_-]{0,63}$`)
+
+	for key, value := range labels {
+		if !gceKey.MatchString(key) || !gceValue.MatchString(value) {
+			t.Errorf("label %s=%s breaks GCE's rules, which refuse the whole insert", key, value)
+		}
 	}
 }

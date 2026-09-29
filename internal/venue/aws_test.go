@@ -28,6 +28,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -208,7 +210,7 @@ func TestRealAWSLaunchRungAcquiresAndTerminates(t *testing.T) {
 		// this test asks, and that is not the code being wrong — said as a
 		// skip so a restricted environment reads differently from a bug.
 		if forbidden(err) {
-			t.Skipf("this account forbids ec2:CreateFleet, so the launch rung cannot be verified here: %v", err)
+			t.Skipf("this account forbids ec2:CreateFleet or ec2:CreateTags, so the launch rung cannot be verified here: %v", err)
 		}
 
 		t.Fatalf("acquiring a launched worker: %v", err)
@@ -219,6 +221,8 @@ func TestRealAWSLaunchRungAcquiresAndTerminates(t *testing.T) {
 	}
 
 	t.Logf("launched %s", resolved.Instance)
+
+	assertLaunchTags(ctx, t, worker, resolved.Instance)
 
 	// The URL a runner re-parses has to dial the machine that was launched —
 	// the break no reviewer caught, worth proving against reality.
@@ -409,6 +413,44 @@ func accountID(ctx context.Context, t *testing.T) string {
 
 // forbidden reports an authorization refusal — an SCP or a missing IAM
 // grant — as distinct from the operation genuinely failing.
+// assertLaunchTags checks the launched instance carries steps' labels AND the
+// template's own tag: whether EC2 merges request tags with a launch
+// template's, rather than replacing them, is something only a real account
+// answers — and the fixture's down, like an operator's cleanup, finds leaks
+// by the template's tag.
+func assertLaunchTags(ctx context.Context, t *testing.T, worker Worker, instance string) {
+	t.Helper()
+
+	api, err := ec2For(ctx, worker)
+	if err != nil {
+		t.Fatalf("ec2For: %v", err)
+	}
+
+	out, err := api.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{instance}})
+	if err != nil {
+		t.Fatalf("describing %s: %v", instance, err)
+	}
+
+	tags := map[string]string{}
+
+	for _, reservation := range out.Reservations {
+		for _, described := range reservation.Instances {
+			for _, tag := range described.Tags {
+				tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+			}
+		}
+	}
+
+	want := worker.launchLabels()
+	want["steps-test-fixture"] = "1"
+
+	for key, value := range want {
+		if tags[key] != value {
+			t.Errorf("%s tags = %v, want %s=%s", instance, tags, key, value)
+		}
+	}
+}
+
 func forbidden(err error) bool {
 	text := err.Error()
 

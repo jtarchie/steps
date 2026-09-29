@@ -3,6 +3,7 @@ package venue
 import (
 	"errors"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -200,6 +201,87 @@ func TestSSHAddressKeepsTheUserOnlyWhenOneWasWritten(t *testing.T) {
 
 		if got := worker.Address(); got != want {
 			t.Errorf("Address of %q = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+// TestLaunchLabelNamesTheMachineNotTheSpelling pins that steps-worker follows
+// registryKey — every spelling of one machine carries one label, and anything
+// that makes a different machine a different one — and that nothing of the
+// URL, which can carry ?hostkey= and ?binary= paths, reaches a label.
+func TestLaunchLabelNamesTheMachineNotTheSpelling(t *testing.T) {
+	t.Parallel()
+
+	label := func(raw string) string {
+		t.Helper()
+
+		worker, err := ParseWorker(raw)
+		if err != nil {
+			t.Fatalf("ParseWorker(%q): %v", raw, err)
+		}
+
+		for _, value := range worker.launchLabels() {
+			if strings.Contains(value, "lt-0def") || strings.Contains(value, "tmpl") || strings.Contains(value, "secret") {
+				t.Errorf("label value %q carries part of %q", value, raw)
+			}
+		}
+
+		return worker.launchLabels()[labelWorker]
+	}
+
+	assertDistinct := func(base string, others ...string) {
+		t.Helper()
+
+		for _, different := range others {
+			if got := label(different); got == base {
+				t.Errorf("%q labels %q, the same as a different machine", different, got)
+			}
+		}
+	}
+
+	awsBase := label("aws://launch/lt-0def4567890abcde?version=1&capacity=spot&region=us-east-1")
+	for _, same := range []string{
+		"aws://launch/lt-0def4567890abcde/var/tmp?capacity=spot&version=1&region=us-east-1",
+		"aws://launch/lt-0def4567890abcde?version=1&capacity=spot&region=us-east-1&idle=5m",
+		"aws://launch/lt-0def4567890abcde?version=1&capacity=spot&region=us-east-1&binary=/secret/steps",
+	} {
+		if got := label(same); got != awsBase {
+			t.Errorf("%q labels %q, want the same machine as %q", same, got, awsBase)
+		}
+	}
+
+	assertDistinct(awsBase,
+		"aws://launch/lt-0def4567890abcdf?version=1&capacity=spot&region=us-east-1",
+		"aws://launch/lt-0def4567890abcde?version=2&capacity=spot&region=us-east-1",
+		"aws://launch/lt-0def4567890abcde?version=1&capacity=od&region=us-east-1",
+		"aws://launch/lt-0def4567890abcde?version=1&capacity=spot&region=us-west-2",
+	)
+
+	assertDistinct(label("gcp://launch/tmpl?project=p&zone=z"),
+		"gcp://launch/tmpl?project=q&zone=z",
+		"gcp://launch/tmpl?project=p&zone=y",
+	)
+}
+
+func TestLabelValue(t *testing.T) {
+	t.Parallel()
+
+	gceValue := regexp.MustCompile(`^[a-z0-9_-]{1,63}$`)
+
+	for _, tc := range []struct{ in, want string }{
+		{"Foo.Local", "foo-local"},
+		{strings.Repeat("a", 100), strings.Repeat("a", 63)},
+		{"", "unknown"},
+		{"héllo", "h-llo"},
+		{"box_1-a", "box_1-a"},
+	} {
+		got := labelValue(tc.in)
+		if got != tc.want {
+			t.Errorf("labelValue(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+
+		if !gceValue.MatchString(got) {
+			t.Errorf("labelValue(%q) = %q, which GCE refuses", tc.in, got)
 		}
 	}
 }
