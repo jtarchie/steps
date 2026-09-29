@@ -157,27 +157,27 @@ func (d *daemon) restore(ctx context.Context, name, from string) error {
 
 	revision, found, err := st.CurrentRevision(ctx)
 	if err != nil {
-		_ = st.Close()
+		release(st)
 
 		return fmt.Errorf("web: could not read the configuration of %q: %w", name, err)
 	}
 
 	if !found {
-		_ = st.Close()
+		release(st)
 
 		return fmt.Errorf("web: %q has no configuration set", name)
 	}
 
 	cfg, err := d.accept(name, revision.Source, revision.Includes)
 	if err != nil {
-		_ = st.Close()
+		release(st)
 
 		return fmt.Errorf("web: %q cannot run here: %w", name, err)
 	}
 
 	provider, err := d.provider(cfg, st)
 	if err != nil {
-		_ = st.Close()
+		release(st)
 
 		return fmt.Errorf("web: %q cannot run here: %w", name, err)
 	}
@@ -628,7 +628,7 @@ func (d *daemon) Rename(ctx context.Context, from, to string) error {
 		return fmt.Errorf("%w: mcp logins for %q already exist at %s; remove that directory to rename onto this name", web.ErrRefused, to, dir)
 	}
 
-	// Again, as the last thing before anything durable: the drain may have claimed a build while the checks above ran.
+	// The last thing before anything durable, so a build the drain claimed while the checks above ran is still seen.
 	// ponytail: a build the drain claims between this check and detach is still cancelled; upgrade: stop the pipeline's drain claiming while the rename holds d.mu.
 	err = d.refuseWhileRunning(from)
 	if err != nil {
@@ -695,7 +695,7 @@ func (d *daemon) renamable(from, to string) (*servedPipeline, error) {
 		return nil, fmt.Errorf("%w: %s", web.ErrNoSuchPipeline, from)
 	}
 
-	return served, d.refuseWhileRunning(from)
+	return served, nil
 }
 
 // runningListed caps how many runs a refusal names, so a pipeline with a wide in_parallel of jobs still gets a readable one.

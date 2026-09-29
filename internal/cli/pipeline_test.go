@@ -224,3 +224,38 @@ func TestSetConfirmsARepairAsARepair(t *testing.T) {
 		t.Errorf("confirm printed:\n%s\nwant it called a repair", out)
 	}
 }
+
+// A repair is a set like any other, so it is compare-and-set against what the daemon holds: another set landing between this one's read and its upload is refused rather than silently overwritten.
+//
+// Not t.Parallel(): brokenOnRestart's restart runs with the environment as the test left it.
+func TestARepairIsCompareAndSet(t *testing.T) {
+	isolateLogins(t)
+
+	restarted, root := brokenOnRestart(t)
+	restarted.server.SetManager(restarted)
+
+	daemon := httptest.NewServer(restarted.server.Handler())
+	t.Cleanup(daemon.Close)
+
+	client := newDaemonClient(daemon.URL)
+
+	current, _, broken, err := client.get("app")
+	if err != nil || broken == "" {
+		t.Fatalf("get = %q, %v; want app held broken", broken, err)
+	}
+
+	err = os.Chmod(root, 0o700) //nolint:gosec // the root is the test's own
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = restarted.Set(t.Context(), "app", web.SetRequest{Source: onRoot(root, "", "echo theirs")})
+	if err != nil {
+		t.Fatalf("the other repair: %v", err)
+	}
+
+	_, err = client.set("app", web.SetRequest{Source: onRoot(root, "", "echo mine"), ExpectSHA: current.SHA})
+	if err == nil {
+		t.Error("a repair read before another set overwrote it, uncompared")
+	}
+}

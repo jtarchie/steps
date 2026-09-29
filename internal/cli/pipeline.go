@@ -503,9 +503,13 @@ func (c *daemonClient) get(name string) (web.PipelineConfig, bool, string, error
 	if status == http.StatusNotFound {
 		var missing struct {
 			Broken string `json:"broken"`
+			SHA    string `json:"sha"`
 		}
 
 		_ = json.Unmarshal(body, &missing)
+
+		// The held sha, so a repair is compare-and-set against what the daemon holds rather than a blind overwrite of it.
+		current.SHA = missing.SHA
 
 		return current, false, missing.Broken, nil
 	}

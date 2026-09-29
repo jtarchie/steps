@@ -773,3 +773,67 @@ func warmJob(t *testing.T) (*config.Config, workspace.Provider, store.Store) {
 
 	return cfg, provider, st
 }
+
+// A warm reuse is presumed dead only until it answers: once a step's session has shaken hands with it, a later step's refused dial on the same machine is that step's failure, and reading it as an eviction would launch a replacement and move every sharer off a live machine.
+func TestAWarmMachineThatAnsweredIsNoLongerPresumedDead(t *testing.T) {
+	fake := &sequenced{machines: []string{"local:"}}
+	ctx, release := WithLeases(warmRegistry(t, warmRungs["launch"], fake, true))
+	t.Cleanup(func() { release(context.WithoutCancel(ctx)) })
+
+	step := config.Step{Task: "work", Tags: []string{"box"}}
+
+	worker, err := workerFor(ctx, step)
+	if err != nil {
+		t.Fatalf("workerFor: %v", err)
+	}
+
+	if !reusedWarm(ctx, step) {
+		t.Fatal("the fixture's machine is not a warm reuse, so this proves nothing")
+	}
+
+	runner, err := venue.NewRunner(shell.RunnerSpec{Cwd: t.TempDir(), Worker: worker, WorkerTag: "box", ReusedWarm: true})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	err = runner.Run(ctx, "true")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	releaseIfReclaimed(ctx, step, runner, worker)
+	_ = runner.Close()
+
+	if reusedWarm(ctx, step) {
+		t.Error("a warm machine that answered is still presumed dead, so the next step's failed dial would re-place it")
+	}
+}
+
+// Abandon is identity-checked against the machine a failed attempt dialled, so a check re-placed onto a machine that then fails too must name THAT machine: naming the one its stage was built on matched nothing, and every remaining re-placement redialled the same dead host.
+func TestARePlacedCheckAbandonsTheMachineItActuallyDialled(t *testing.T) {
+	fake := &sequenced{machines: []string{deadWorker, "local:"}}
+	ctx, release := WithLeases(warmRegistry(t, warmRungs["launch"], fake, true))
+	t.Cleanup(func() { release(context.WithoutCancel(ctx)) })
+
+	ctx, _ = withPlacementSink(ctx)
+
+	stage := &checkRunner{
+		step: config.Step{Get: "repo", Tags: []string{"box"}},
+		spec: shell.RunnerSpec{Worker: "local:?binary=/the/machine/the/stage/was/built/on", WorkerTag: "box"},
+	}
+
+	out, err := stage.RunCapture(ctx, "echo fresh")
+	if err != nil {
+		t.Fatalf("RunCapture: %v", err)
+	}
+
+	_ = stage.Close()
+
+	if got := strings.TrimSpace(string(out)); got != "fresh" {
+		t.Errorf("the check answered %q, want the fresh machine's answer", got)
+	}
+
+	if starts, _ := fake.counts(); starts != 2 {
+		t.Errorf("%d acquisitions, want the dead warm machine and one replacement", starts)
+	}
+}

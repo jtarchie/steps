@@ -370,12 +370,18 @@ func (s *Server) Broken() []BrokenPipeline {
 
 // BrokenReason is why a pipeline is held and not served, and false when it is not broken.
 func (s *Server) BrokenReason(name string) (string, bool) {
+	broken, ok := s.brokenOf(name)
+
+	return broken.Reason, ok
+}
+
+func (s *Server) brokenOf(name string) (BrokenPipeline, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	broken, ok := s.broken[name]
 
-	return broken.Reason, ok
+	return broken, ok
 }
 
 // notServed is the 404 for a name this daemon does not serve, which says why when the name is one it holds broken.
@@ -513,7 +519,7 @@ func (s *Server) resolvePipeline(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		pipeline := s.Lookup(c.Param("pipeline"))
 		// A webhook sender never passed this server's credentials, so it is not told why.
-		if pipeline == nil && strings.HasSuffix(c.Path(), "/hooks/:resource") {
+		if pipeline == nil && isHookRoute(c) {
 			return echo.NewHTTPError(http.StatusNotFound, ErrNoSuchPipeline.Error())
 		}
 
@@ -549,7 +555,7 @@ func sameOriginMutations(next echo.HandlerFunc) echo.HandlerFunc {
 		// has no reason to share this origin. Exempting it here rather than
 		// mounting it outside the group keeps it under /p/<slug>/, which is
 		// what says which pipeline it checks.
-		if strings.HasSuffix(c.Path(), "/hooks/:resource") {
+		if isHookRoute(c) {
 			return next(c)
 		}
 
@@ -647,7 +653,7 @@ func (s *Server) globalNav(c *echo.Context) navData {
 
 	for _, first := range nav.Pipelines {
 		// A broken pipeline has no pages to borrow links from.
-		if nav.Current != "" || first.Broken != "" {
+		if nav.Current != "" || first.Broken {
 			continue
 		}
 
@@ -690,7 +696,7 @@ func (s *Server) nav(c *echo.Context) navData {
 	}
 
 	for _, broken := range s.Broken() {
-		nav.Pipelines = append(nav.Pipelines, pipelineSummary{Slug: broken.Name, Path: broken.From, Broken: broken.Reason})
+		nav.Pipelines = append(nav.Pipelines, pipelineSummary{Slug: broken.Name, Path: broken.From, Broken: true})
 	}
 
 	sort.Slice(nav.Pipelines, func(i, j int) bool {
@@ -757,6 +763,6 @@ type pipelineSummary struct {
 	Jobs int
 	// Attention is everything that pipeline is waiting on, summed — a switcher row has space for a number, not for six sentences.
 	Attention int
-	// Broken is why a pipeline the daemon holds is not being served, and empty for one that is.
-	Broken string
+	// Broken is a pipeline the daemon holds and does not serve. Not its reason: this shell also draws the error page a webhook sender gets, and that sender never passed this server's credentials.
+	Broken bool
 }

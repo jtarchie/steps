@@ -122,6 +122,8 @@ func (c *checkRunner) RunCapture(ctx context.Context, command string) ([]byte, e
 	var out []byte
 
 	current := c.Runner
+	// The machine current dials, handed to the retry because Abandon is identity-checked: after a re-placement it is no longer the spec's.
+	dialed := c.spec.Worker
 
 	err := withVenueRetry(ctx, c.step, 0, func(retryCtx context.Context) (string, error) {
 		if current == nil {
@@ -129,6 +131,8 @@ func (c *checkRunner) RunCapture(ctx context.Context, command string) ([]byte, e
 			if err != nil {
 				return "", err
 			}
+
+			dialed = worker
 
 			spec := c.spec
 			spec.Worker = worker
@@ -152,10 +156,10 @@ func (c *checkRunner) RunCapture(ctx context.Context, command string) ([]byte, e
 		out = captured
 
 		if err != nil {
-			return c.spec.Worker, fmt.Errorf("%w", err)
+			return dialed, fmt.Errorf("%w", err)
 		}
 
-		return c.spec.Worker, nil
+		return dialed, nil
 	})
 
 	// The stage closes what it was handed; hand it whatever survived.

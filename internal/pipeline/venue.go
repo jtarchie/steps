@@ -282,18 +282,20 @@ func acquiredOnDemand(ctx context.Context, tag string) bool {
 // session against a host that dies at the handshake — which sticks, is not an
 // eviction, and fails the build on a machine steps already knew was dying.
 func releaseIfReclaimed(ctx context.Context, step config.Step, runner shell.Runner, dialed string) {
-	reason, reclaimed := venue.ReclaimedBy(runner)
-	if !reclaimed {
-		return
-	}
-
 	tag := placementTag(step)
-	if tag == "" {
-		return
-	}
 
 	leases := leasesFrom(ctx)
-	if leases == nil {
+	if tag == "" || leases == nil {
+		return
+	}
+
+	// A warm reuse is presumed dead only until it answers; after that, a later step's refused dial is its own failure, not a machine that died while kept.
+	if _, answered := venue.PlacementOf(runner); answered {
+		leases.Answered(tag)
+	}
+
+	reason, reclaimed := venue.ReclaimedBy(runner)
+	if !reclaimed {
 		return
 	}
 

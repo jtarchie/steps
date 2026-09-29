@@ -318,7 +318,7 @@ type Leases struct {
 	// retired are machines this scope stopped using but still counts toward, so its end still gives them back — see Abandon.
 	retired []*entry
 	source  map[string]Worker
-	// warm are the machines this scope took from an idle window, by tag, until one is abandoned: see ReusedWarm.
+	// warm are the machines this scope took from an idle window, by tag, until one answers or is abandoned: see ReusedWarm.
 	warm map[string]*entry
 }
 
@@ -554,6 +554,14 @@ func (l *Leases) ReusedWarm(tag string) bool {
 	warm := l.warm[tag]
 
 	return warm != nil && warm == l.held[tag]
+}
+
+// Answered forgets a warm reuse once a session on it has finished a handshake: the machine is proven alive, so a later step's refusal is that step's failure, not a machine that died while kept.
+func (l *Leases) Answered(tag string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	delete(l.warm, tag)
 }
 
 // ReleaseAll is exhaustive and joins its errors, because one failure must not strand the others while they bill.

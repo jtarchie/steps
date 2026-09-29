@@ -74,10 +74,10 @@ func (s *Server) handleAPIGet(c *echo.Context) error {
 
 	target := s.Lookup(name)
 	if target == nil {
-		// Its own body rather than notServed's, so a set can tell a pipeline it would repair from one it would create.
-		if reason, broken := s.BrokenReason(name); broken {
+		// Its own body rather than notServed's, so a set can tell a pipeline it would repair from one it would create, and names the sha it would replace so the repair is compare-and-set like any other.
+		if broken, held := s.brokenOf(name); held {
 			//nolint:wrapcheck // as below
-			return c.JSON(http.StatusNotFound, map[string]string{"message": name + " is not being served: " + reason, "broken": reason})
+			return c.JSON(http.StatusNotFound, map[string]string{"message": name + " is not being served: " + broken.Reason, "broken": broken.Reason, "sha": broken.SHA})
 		}
 
 		return echo.NewHTTPError(http.StatusNotFound, ErrNoSuchPipeline.Error())

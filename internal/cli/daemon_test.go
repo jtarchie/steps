@@ -728,6 +728,68 @@ func brokenOnRestart(t *testing.T) (*daemon, string) {
 	return restarted, root
 }
 
+// A restore that fails lets go of its handle beside pipelines already restored and writing to the same file, so it must not compact it.
+//
+// Not t.Parallel(): a restart reads mcp logins, which live in process environment.
+func TestAFailedRestoreDoesNotCompactTheFile(t *testing.T) {
+	isolateLogins(t)
+
+	held := servingDaemon(t)
+	root := t.TempDir()
+
+	setPipeline(t, held, "kept", idlePipeline)
+	setPipeline(t, held, "app", onRoot(root, "", "true"))
+	held.Close()
+
+	// Freed after the exit's own compaction, so only a compaction during the restart can reclaim them.
+	scratch, err := sqlite.OpenStore(held.state, "scratch")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	for i := range 16 {
+		err = scratch.RecordRevision(t.Context(), fmt.Sprintf("big-%d", i), strconv.Itoa(i)+strings.Repeat("x", 64<<10), nil)
+		if err != nil {
+			t.Fatalf("RecordRevision: %v", err)
+		}
+	}
+
+	err = scratch.Delete(t.Context())
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	_ = scratch.Release()
+
+	err = os.Chmod(root, 0o500) //nolint:gosec // read-only is the point: the workspace probe writes, and this root refuses it
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable
+
+	local := web.NewLocalRunner(nil, nil, 1, false)
+
+	server, err := web.New(nil, local)
+	if err != nil {
+		t.Fatalf("web.New: %v", err)
+	}
+
+	restarted := newDaemon(t.Context(), server, local, held.state, ExecFlags{}, HistoryFlags{}, time.Hour)
+	t.Cleanup(restarted.Close)
+
+	err = restarted.load(t.Context())
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if _, broken := server.BrokenReason("app"); !broken {
+		t.Fatal("app is not held broken, so this proves nothing")
+	}
+
+	assertUncompacted(t, held.state, "a restore that failed")
+}
+
 // A root gone for good fails every repairing set the way it failed the restore, so destroy is the only way to stop listing it.
 //
 // Not t.Parallel(): a destroy removes mcp logins, which live in process environment.
