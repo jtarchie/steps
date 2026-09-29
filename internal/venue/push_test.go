@@ -3,15 +3,18 @@ package venue
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"github.com/pkg/sftp/v2"
 	sshfx "github.com/pkg/sftp/v2/encoding/ssh/filexfer"
 	"golang.org/x/crypto/ssh"
 
@@ -31,8 +34,12 @@ func withShims(t *testing.T, shims map[string][]byte) {
 
 	previous := embeddedShims
 	embeddedShims = files
+	embeddedBuilds.Clear()
 
-	t.Cleanup(func() { embeddedShims = previous })
+	t.Cleanup(func() {
+		embeddedShims = previous
+		embeddedBuilds.Clear()
+	})
 }
 
 // foreignPlatform is a platform steps ships on that is not this machine's.
@@ -198,6 +205,74 @@ func TestCheckPrivateRefusesWhatAnotherLoginCouldHavePlanted(t *testing.T) {
 		if err != nil && !errors.Is(err, errShimNotPrivate) {
 			t.Errorf("%s: %v, want errShimNotPrivate", test.name, err)
 		}
+	}
+}
+
+// TestCheckRootRefusesARootAnotherLoginCanRearrange pins the parent of
+// steps-shim/: whoever can write it can rename the checked directory away and
+// put their own in its place, so a shared root must be sticky, and owned by
+// this login or root.
+func TestCheckRootRefusesARootAnotherLoginCanRearrange(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		info fs.FileInfo
+		ok   bool
+	}{
+		{"/tmp: root-owned, sticky, world-writable", statAnswer(0, fs.ModeDir|fs.ModeSticky|0o777), true},
+		{"own private root", statAnswer(1000, fs.ModeDir|0o700), true},
+		{"root-owned 0755", statAnswer(0, fs.ModeDir|0o755), true},
+		{"world-writable without sticky", statAnswer(0, fs.ModeDir|0o777), false},
+		{"group-writable without sticky", statAnswer(1000, fs.ModeDir|0o775), false},
+		{"another login's root", statAnswer(1001, fs.ModeDir|0o755), false},
+	} {
+		err := checkRoot(test.info, "/var/tmp/shared", 1000)
+		if (err == nil) != test.ok {
+			t.Errorf("%s: checkRoot = %v, want ok=%v", test.name, err, test.ok)
+		}
+
+		if err != nil && !errors.Is(err, errShimNotPrivate) {
+			t.Errorf("%s: %v, want errShimNotPrivate", test.name, err)
+		}
+	}
+}
+
+// TestWriteRemoteStagesOwnerOnly pins the staging file's mode from the moment
+// it exists, and that a name already taken is refused rather than reused: the
+// later chmod cannot revoke a descriptor another login opened in between.
+func TestWriteRemoteStagesOwnerOnly(t *testing.T) {
+	t.Parallel()
+
+	server := newTestSSHD(t)
+
+	client, err := sftp.NewClient(t.Context(), dialTestSSHD(t, server))
+	if err != nil {
+		t.Fatalf("sftp: %v", err)
+	}
+
+	t.Cleanup(func() { _ = client.Close() })
+
+	source := shimSource{ //nolint:exhaustruct // writeRemote reads the bytes and the name
+		name: "shim",
+		open: func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("shim bytes")), nil },
+	}
+
+	staging := filepath.Join(server.Root, "steps.part")
+
+	err = writeRemote(client, source, staging)
+	if err != nil {
+		t.Fatalf("writeRemote: %v", err)
+	}
+
+	info, err := os.Stat(staging)
+	if err != nil || info.Mode().Perm() != shimMode {
+		t.Errorf("staging = %v, %v, want mode %o before any chmod", info, err, shimMode)
+	}
+
+	err = writeRemote(client, source, staging)
+	if err == nil {
+		t.Error("writeRemote reused a staging name that already existed")
 	}
 }
 

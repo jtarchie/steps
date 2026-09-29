@@ -13,7 +13,6 @@ package venue
 // this process, when the worker is this machine's platform or would not say.
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"crypto/rand"
@@ -238,15 +237,8 @@ func resolveShim(worker Worker, probe workerProbe) (shimSource, error) {
 	}
 
 	if probe.known {
-		if binary := embeddedShim(probe.goos, probe.goarch); binary != nil {
-			return shimSource{
-				kind:     kindEmbedded,
-				name:     shimName(probe.goos, probe.goarch),
-				build:    shim.BuildOfBytes(binary),
-				size:     int64(len(binary)),
-				open:     func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(binary)), nil },
-				platform: platform,
-			}, nil
+		if source, ok := embeddedSource(probe.goos, probe.goarch, platform); ok {
+			return source, nil
 		}
 	}
 
@@ -373,6 +365,37 @@ func secureShimDirs(fs *sftp.Client, remote string, uid int) error {
 		}
 	}
 
+	if uid < 0 {
+		return nil
+	}
+
+	// Followed rather than LStat'd: macOS's /tmp is itself a symlink.
+	root := path.Dir(path.Dir(build))
+
+	info, err := fs.Stat(root)
+	if err != nil {
+		return fmt.Errorf("checking %q on the worker: %w", root, err)
+	}
+
+	return checkRoot(info, root, uid)
+}
+
+// checkRoot refuses a root another login could rename steps-shim/ out of and
+// replace: the checks on the directories below it hold only while their
+// parent keeps them where they are. Writable by others is fine when sticky
+// (/tmp, /var/tmp); an owner other than this login or root is not.
+func checkRoot(info fs.FileInfo, name string, uid int) error {
+	attrs, ok := info.Sys().(*sshfx.Attributes)
+	if ok && attrs.HasUserGroup() && attrs.UID != 0 && int64(attrs.UID) != int64(uid) {
+		return fmt.Errorf("%w: the root %s is owned by uid %d and this login is uid %d — name a private root in the worker URL, as in ssh://host/var/tmp/steps-$USER",
+			errShimNotPrivate, name, attrs.UID, uid)
+	}
+
+	if info.Mode().Perm()&0o022 != 0 && info.Mode()&fs.ModeSticky == 0 {
+		return fmt.Errorf("%w: the root %s is writable by others (%s) without the sticky bit — name a private root in the worker URL, as in ssh://host/var/tmp/steps-$USER",
+			errShimNotPrivate, name, info.Mode().Perm())
+	}
+
 	return nil
 }
 
@@ -496,10 +519,12 @@ func uploadShim(fs *sftp.Client, source shimSource, remote string) error {
 
 	// One call rather than the POSIX extension with a fallback: sftp v2 sends the atomic posix-rename when the server advertised it and the plain one when it did not, which is the same choice made off the handshake instead of off a failed attempt. Against a server without it the rename is not atomic over an existing file, which is survivable here because whoever wins wrote the same bytes.
 	err = fs.Rename(staging, remote)
-	if err != nil && !errors.Is(err, fs2ErrExist) {
+	if err != nil {
 		_ = fs.Remove(staging)
 
-		return fmt.Errorf("installing the pushed binary: %w", err)
+		if !errors.Is(err, fs2ErrExist) {
+			return fmt.Errorf("installing the pushed binary: %w", err)
+		}
 	}
 
 	return nil
@@ -516,7 +541,11 @@ func writeRemote(fs *sftp.Client, source shimSource, remote string) error {
 	}
 	defer func() { _ = reader.Close() }()
 
-	dest, err := fs.Create(remote)
+	// Owner-only from creation and exclusive, not Create's 0666: on a worker
+	// whose umask is permissive, another login could open the staging file
+	// mid-upload, and the chmod below does not revoke a descriptor already
+	// open for writing.
+	dest, err := fs.OpenFile(remote, sftp.OpenFlagReadWrite|sftp.OpenFlagCreate|sftp.OpenFlagExclusive, shimMode)
 	if err != nil {
 		return fmt.Errorf("creating %q on the worker: %w", remote, err)
 	}

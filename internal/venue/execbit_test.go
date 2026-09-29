@@ -246,3 +246,17 @@ func TestCheckHelloNamesTheShimThatSpeaksAnotherProtocol(t *testing.T) {
 		t.Errorf("checkHello = %v, want a protocol error naming the ?shim= path", err)
 	}
 }
+
+// TestCheckHelloBlamesAStaleEmbeddedShim pins the other half: an embedded
+// shim of another protocol is a stale build of this steps, fixed here rather
+// than on the worker.
+func TestCheckHelloBlamesAStaleEmbeddedShim(t *testing.T) {
+	t.Parallel()
+
+	session := &session{transport: &transport{source: kindEmbedded}} //nolint:exhaustruct // checkHello reads the transport's source and nothing else
+
+	err := session.checkHello(wire.HelloOK{Protocol: wire.Protocol + 1}, "") //nolint:exhaustruct // the protocol is the field under test
+	if !errors.Is(err, wire.ErrProtocol) || !strings.Contains(err.Error(), "task build") {
+		t.Errorf("checkHello = %v, want a protocol error naming `task build`", err)
+	}
+}

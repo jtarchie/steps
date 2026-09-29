@@ -9,9 +9,13 @@ package venue
 
 import (
 	"embed"
+	"io"
 	"io/fs"
 	"slices"
 	"strings"
+	"sync"
+
+	"github.com/jtarchie/steps/internal/shim"
 )
 
 //go:embed all:shims
@@ -30,16 +34,55 @@ func shimName(goos, goarch string) string {
 	return "steps-shim-" + goos + "-" + goarch
 }
 
-// embeddedShim is the shim for a platform, or nil when none is embedded. An
-// empty file — a build interrupted mid-write — counts as none: pushing it
-// would put a zero-byte "binary" on the worker.
-func embeddedShim(goos, goarch string) []byte {
-	binary, err := fs.ReadFile(embeddedShims, shimsDir+"/"+shimName(goos, goarch))
-	if err != nil || len(binary) == 0 {
-		return nil
+// embeddedSize is the size of the shim for a platform, or 0 when none is
+// embedded. An empty file — a build interrupted mid-write — counts as none:
+// pushing it would put a zero-byte "binary" on the worker. A stat, not a
+// read: embed.FS hands out a copy, megabytes each.
+func embeddedSize(goos, goarch string) int64 {
+	info, err := fs.Stat(embeddedShims, shimsDir+"/"+shimName(goos, goarch))
+	if err != nil {
+		return 0
 	}
 
-	return binary
+	return info.Size()
+}
+
+// embeddedBuilds memoizes each embedded shim's content hash by name, for the
+// same reason localBuilds does: a session is dialled per step. withShims
+// clears it along with the seam.
+//
+//nolint:gochecknoglobals // a cache over immutable embedded files
+var embeddedBuilds sync.Map
+
+// embeddedSource is the shim for a platform as a push source, or false when
+// none is embedded.
+func embeddedSource(goos, goarch, platform string) (shimSource, bool) {
+	size := embeddedSize(goos, goarch)
+	if size == 0 {
+		return shimSource{}, false
+	}
+
+	name := shimName(goos, goarch)
+	file := shimsDir + "/" + name
+
+	build, ok := embeddedBuilds.Load(name)
+	if !ok {
+		binary, err := fs.ReadFile(embeddedShims, file)
+		if err != nil {
+			return shimSource{}, false
+		}
+
+		build, _ = embeddedBuilds.LoadOrStore(name, shim.BuildOfBytes(binary))
+	}
+
+	return shimSource{
+		kind:     kindEmbedded,
+		name:     name,
+		build:    build.(string), //nolint:forcetypeassert // this map holds one type
+		size:     size,
+		open:     func() (io.ReadCloser, error) { return embeddedShims.Open(file) },
+		platform: platform,
+	}, true
 }
 
 // embeddedPlatforms lists the platforms a shim is embedded for, as goos/goarch.
@@ -58,7 +101,7 @@ func embeddedPlatforms() []string {
 		}
 
 		goos, goarch, ok := strings.Cut(rest, "-")
-		if ok && embeddedShim(goos, goarch) != nil {
+		if ok && embeddedSize(goos, goarch) > 0 {
 			platforms = append(platforms, goos+"/"+goarch)
 		}
 	}

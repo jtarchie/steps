@@ -497,6 +497,36 @@ func TestSSHWorkerRefusesAPlantedShim(t *testing.T) {
 	}
 }
 
+// TestSSHWorkerRefusesARootOthersCanWrite carries checkRoot across into the
+// push: a root anyone can write, without the sticky bit, lets another login
+// swap steps-shim/ out from under the checks made on it.
+func TestSSHWorkerRefusesARootOthersCanWrite(t *testing.T) {
+	t.Parallel()
+
+	server := newTestSSHD(t)
+
+	err := os.Chmod(server.Root, 0o777) //nolint:gosec // the point: a root another login could write
+	if err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	runner, err := NewRunner(shell.RunnerSpec{Cwd: t.TempDir(), Worker: server.URL, WorkerTag: "gpu", NoRedial: true})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	t.Cleanup(func() { _ = runner.Close() })
+
+	err = runner.Run(context.Background(), "true")
+	if !errors.Is(err, errShimNotPrivate) || !strings.Contains(err.Error(), server.Root) {
+		t.Errorf("Run = %v, want the root refused by name", err)
+	}
+
+	if pushed := uploadsUnder(t, server.Root); pushed != 0 {
+		t.Errorf("%d binaries pushed under a refused root, want none", pushed)
+	}
+}
+
 // runOnce runs one trivial step on a fresh session to worker, with the
 // run's notes printed to notes.
 func runOnce(t *testing.T, worker string, notes io.Writer) {

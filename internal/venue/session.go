@@ -598,6 +598,13 @@ func (s *session) checkProtocol(ok wire.HelloOK) error {
 			wire.ErrProtocol, s.worker.Shim, ok.Protocol, wire.Protocol)
 	}
 
+	// A plain `go build` embeds whatever internal/venue/shims last held, so a
+	// stale shim is the likeliest cause, and the fix is on this machine.
+	if s.transport != nil && s.transport.source == kindEmbedded {
+		return fmt.Errorf("%w: this steps speaks protocol %d and the shim it embeds speaks %d — the embedded shims are stale; rebuild steps with `task build`",
+			wire.ErrProtocol, wire.Protocol, ok.Protocol)
+	}
+
 	return fmt.Errorf("%w: this steps speaks protocol %d and the worker's shim speaks %d — the binary on the worker is not this one",
 		wire.ErrProtocol, wire.Protocol, ok.Protocol)
 }

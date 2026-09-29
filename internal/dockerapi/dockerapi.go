@@ -49,7 +49,7 @@ func New(host string) (*Client, error) {
 	if host == "" {
 		resolved, err := dockerhost.Resolve()
 		if err != nil {
-			return nil, fmt.Errorf("%w", err)
+			return nil, fmt.Errorf("resolving the docker host: %w", err)
 		}
 
 		host = resolved

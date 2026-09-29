@@ -113,7 +113,7 @@ func (w Worker) gcpPlacementCheck() error {
 		return nil
 	}
 
-	if embeddedShim("linux", "amd64") == nil || embeddedShim("linux", "arm64") == nil {
+	if embeddedSize("linux", "amd64") == 0 || embeddedSize("linux", "arm64") == 0 {
 		return fmt.Errorf("%w %q: a gcp:// worker runs Linux, this machine is %s, and this steps does not embed shims for both linux/amd64 and linux/arm64 — build steps with `task build`, or build one with CGO_ENABLED=0 GOOS=linux go build ./cmd/steps-shim and name it with ?binary=",
 			ErrWorker, w.URL, runtime.GOOS)
 	}
