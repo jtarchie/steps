@@ -161,6 +161,9 @@ func TestRefuseSharedWorkspace(t *testing.T) {
 		"an earlier build partway alone":     {partway("0"), 2, "#0"},
 		"a partway last behind an untouched": {partway("1"), 2, "#1"},
 		"a partway last behind one of two":   {merge(finished("0"), partway("2")), 3, "#1"},
+		"partway then finished":              {merge(partway("0"), finished("1")), 2, ""},
+		"partway, untouched, finished":       {merge(partway("0"), finished("2")), 3, "#0"},
+		"untouched, partway, finished":       {merge(partway("1"), finished("2")), 3, "#0"},
 	} {
 		err := refuseSharedWorkspace("R", tc.done, tc.builds, needed)
 
@@ -169,6 +172,27 @@ func TestRefuseSharedWorkspace(t *testing.T) {
 			t.Errorf("%s: refused: %v", name, err)
 		case tc.refuse != "" && (err == nil || !strings.Contains(err.Error(), tc.refuse) || !strings.Contains(err.Error(), "--pin")):
 			t.Errorf("%s: want a refusal naming %s and --pin, got %v", name, tc.refuse, err)
+		}
+	}
+}
+
+func TestAllFinished(t *testing.T) {
+	t.Parallel()
+
+	done := map[doneKey]string{{"R#0", 1}: "change", {"R#1", 1}: "change", {"R#1", 2}: "fragile"}
+
+	for name, tc := range map[string]struct {
+		builds int
+		needed []int
+		want   bool
+	}{
+		"no builds":               {0, []int{1}, false},
+		"one finished build":      {1, []int{1}, true},
+		"every build finished":    {2, []int{1}, true},
+		"a build left unfinished": {2, []int{1, 2}, false},
+	} {
+		if got := (runRecord{runID: "R", done: done, needed: tc.needed}).allFinished(tc.builds); got != tc.want {
+			t.Errorf("%s: allFinished = %v, want %v", name, got, tc.want)
 		}
 	}
 }

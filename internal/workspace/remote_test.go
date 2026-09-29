@@ -495,6 +495,12 @@ func TestHasArtifactSeesTheStoreAndWhatAWorkerHolds(t *testing.T) {
 		t.Error("an artifact in the store counts as missing")
 	}
 
+	// The build root itself exists, so a name that climbs out of the store
+	// must not read as present.
+	if checker.HasArtifact("..") {
+		t.Error("a name escaping the artifact store counts as present")
+	}
+
 	pulls := heldTree(t, bw)
 
 	if !checker.HasArtifact("src") || *pulls != 0 {

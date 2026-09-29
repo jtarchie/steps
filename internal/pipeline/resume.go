@@ -30,6 +30,10 @@ type resumeState struct {
 	done map[doneKey]string
 	// resuming is true when this run continues a previous one.
 	resuming bool
+	// refetch is set when every build of the run being resumed finished, so
+	// only the job's own steps failed: no get keeps its artifact then (see
+	// CheckResumable).
+	refetch bool
 	// nextStepID mints display-tree ids for this run (see steptree.go).
 	// Atomic because a fan-out block starts its cells concurrently.
 	nextStepID atomic.Int64
@@ -102,19 +106,23 @@ type resumeFacets interface {
 }
 
 // CheckResumable refuses, before anything runs, a resume the one tree it
-// continues in cannot serve.
+// continues in cannot serve, and tells the resume on ctx when every build
+// finished, so its gets fetch again rather than keep.
 //
 // A run keeps ONE tree: every build of a fan-out re-points the run at its
-// own, the fan-out is sequential, so the row names the last build's — and a
-// resume hands that tree to every build it continues. A build that got
-// partway keeps its gets' artifacts rather than fetching again (the steps it
-// skips changed them), so two such builds, or one plus an earlier build that
-// would fetch into the tree ahead of it, would each run on bytes that are not
-// theirs. What is allowed: builds that finished plus one unfinished last
-// build, or builds none of which got anywhere.
+// own, the fan-out is sequential, and a green build's tree is removed and the
+// row pointed back at the last one that failed — so the row names the last
+// unfinished build's, and a resume hands that tree to every build it
+// continues. A build that got partway keeps its gets' artifacts rather than
+// fetching again (the steps it skips changed them), so two such builds, or one
+// plus an earlier build that would fetch into the tree ahead of it, would each
+// run on bytes that are not theirs. What is allowed: finished builds around
+// one unfinished build that is the last unfinished, or builds none of which
+// got anywhere.
 //
-// It can refuse falsely, loudly: a to: jump or a tolerated try: failure
-// leaves a step unrecorded, so a finished build reads as unfinished.
+// It can refuse falsely, loudly: a to: jump, a tolerated try: failure or a
+// chain skip (a cache hit records only the step it hit on) leaves a step
+// unrecorded, so a finished build reads as unfinished.
 //
 // ponytail: one tree per run. Upgrade: record each build's root (a run_builds
 // row, a schemaVersion bump) and have Reuse map build id to tree, which
@@ -146,10 +154,23 @@ func CheckResumable(ctx context.Context, st resumeFacets, runID string, job *con
 	}
 
 	done := foldRunSteps(steps)
+	needed := remainderSteps(job)
 
-	err = refuseSharedWorkspace(runID, done, builds, remainderSteps(job))
+	err = refuseSharedWorkspace(runID, done, builds, needed)
 	if err != nil {
 		return err
+	}
+
+	// Every build finished, so what failed was the job's own — a hook, an
+	// assertion. A green build's tree is removed, so there is nothing to keep
+	// and nothing to refuse over: the gets fetch again, no step runs on what
+	// they fetch, and the job's hooks see real artifacts.
+	if (runRecord{runID: runID, done: done, needed: needed}).allFinished(builds) {
+		if state := resumeFrom(ctx); state != nil {
+			state.refetch = true
+		}
+
+		return nil
 	}
 
 	return refuseMissingWorkspace(runID, run.Workspace, done, builds)
@@ -208,20 +229,38 @@ func (r runRecord) finished(n int) bool {
 	return true
 }
 
-// refuseSharedWorkspace is CheckResumable's rule over one run's record.
+// allFinished is false for a run with no builds: one that failed before its
+// first get has no tree to keep either way.
+func (r runRecord) allFinished(builds int) bool {
+	for n := range builds {
+		if !r.finished(n) {
+			return false
+		}
+	}
+
+	return builds > 0
+}
+
+// refuseSharedWorkspace is CheckResumable's rule over one run's record. The
+// tree it continues in is the last unfinished build's: finished builds after
+// it had theirs removed.
 func refuseSharedWorkspace(runID string, done map[doneKey]string, builds int, needed []int) error {
 	record := runRecord{runID: runID, done: done, needed: needed}
+
 	last := builds - 1
+	for last >= 0 && record.finished(last) {
+		last--
+	}
 
 	for n := range last {
 		if record.progressed(n) && !record.finished(n) {
 			return fmt.Errorf(
-				"cannot resume run %q: build #%d stopped partway, and a run keeps only its last build's workspace — start a new run with --pin <field>=<value> to rebuild that version",
+				"cannot resume run %q: build #%d stopped partway, and a run keeps only its last unfinished build's workspace — start a new run with --pin <field>=<value> to rebuild that version",
 				runID, n)
 		}
 	}
 
-	if last < 0 || !record.progressed(last) || record.finished(last) {
+	if last < 0 || !record.progressed(last) {
 		return nil
 	}
 
@@ -255,7 +294,7 @@ func refuseMissingWorkspace(runID, root string, done map[doneKey]string, builds 
 
 	_, err := os.Stat(root)
 	if err != nil {
-		return fmt.Errorf("cannot resume run %q: its workspace %s is gone — start a new run with --pin <resource> to rebuild that version: %w", runID, root, err)
+		return fmt.Errorf("cannot resume run %q: its workspace %s is gone — start a new run with --pin <field>=<value> to rebuild that version: %w", runID, root, err)
 	}
 
 	return nil

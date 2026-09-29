@@ -196,6 +196,10 @@ func (b *isolatingBuild) Root() string { return b.root }
 // HasArtifact reports whether name is in the build store here, or held by a
 // worker on this build's behalf.
 func (b *isolatingBuild) HasArtifact(name string) bool {
+	if config.ValidateArtifactName(name) != nil {
+		return false
+	}
+
 	if _, held := b.remoteArtifact(name); held {
 		return true
 	}

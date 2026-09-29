@@ -133,8 +133,8 @@ func TestResumeContinuesFromTheArtifactTheSkippedStepsChanged(t *testing.T) {
 				t.Errorf("the retried step did not see the change the skipped step made: seen.log = %q", got)
 			}
 
-			if n := strings.Count(out, "skip: repo (already fetched"); n != 1 {
-				t.Errorf("the kept get was reported %d times, want once:\n%s", n, out)
+			if n := strings.Count(out, "skip: repo (already fetched) [build #0]\n"); n != 1 {
+				t.Errorf("the kept get was reported %d times in the documented form, want once:\n%s", n, out)
 			}
 		})
 	}
@@ -172,6 +172,87 @@ func TestResumeKeepsTheLastBuildsArtifactWhenEarlierBuildsFinished(t *testing.T)
 	lines := strings.Split(strings.TrimSpace(readFileString(t, filepath.Join(dir, "seen.log"))), "\n")
 	if last := lines[len(lines)-1]; last != "changed two" {
 		t.Errorf("build #1 continued from %q, want its own changed artifact; seen.log = %q", last, lines)
+	}
+}
+
+// TestResumeContinuesAnEarlierBuildALaterGreenOneFollowed: a green build's
+// tree is removed, so the run has to name the failed build's tree again, or a
+// resume of the failure has nothing to continue from.
+func TestResumeContinuesAnEarlierBuildALaterGreenOneFollowed(t *testing.T) {
+	dir := t.TempDir()
+
+	versions := filepath.Join(dir, "versions.json")
+	writePipelineFile(t, versions, `[{"n":"two"},{"n":"one"}]`)
+
+	path := writePipeline(t, dir, artifactResumePipeline(dir, versions, "  - get: repo\n    resource: ticks\n    version: every", ""))
+
+	runID, root := failThenCapture(t, path)
+	assertLineCount(t, filepath.Join(dir, "fetches.log"), 2)
+
+	_, err := os.Stat(filepath.Join(root, "artifacts", "repo", "changed.txt"))
+	if err != nil {
+		t.Fatalf("the run names a tree without the failed build's change: %v", err)
+	}
+
+	writePipelineFile(t, filepath.Join(dir, "fixed"), "")
+
+	err = cli.Run([]string{"run", path, "--resume", runID})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+
+	assertLineCount(t, filepath.Join(dir, "fetches.log"), 2)
+	assertLineCount(t, filepath.Join(dir, "change.log"), 2)
+
+	lines := strings.Split(strings.TrimSpace(readFileString(t, filepath.Join(dir, "seen.log"))), "\n")
+	if last := lines[len(lines)-1]; last != "changed two" {
+		t.Errorf("build #0 continued from %q, want its own changed artifact; seen.log = %q", last, lines)
+	}
+}
+
+// TestResumeRerunsAJobHookAfterEveryBuildFinished: every build went green and
+// only the job's on_success failed, so each build's tree was removed. Nothing
+// is left to keep, so the resume fetches into a fresh tree, skips every plan
+// step, and runs the hook again — rather than refusing over a missing tree.
+// The resumed get says nothing of a skip: it did fetch.
+func TestResumeRerunsAJobHookAfterEveryBuildFinished(t *testing.T) {
+	dir := t.TempDir()
+
+	versions := filepath.Join(dir, "versions.json")
+	writePipelineFile(t, versions, `[{"n":"one"}]`)
+
+	// The put keeps the chain out of the step cache, which would otherwise
+	// skip the build whole and never reach its get.
+	hook := fmt.Sprintf("  - put: publication\n    inputs: [repo]\n  on_success:\n    task: announce\n    run: echo announce >> %s && test -f %s",
+		filepath.Join(dir, "hook.log"), filepath.Join(dir, "fixed"))
+
+	path := writePipeline(t, dir, artifactResumePipeline(dir, versions, "  - get: repo\n    resource: ticks", hook))
+
+	runID, _ := failThenCapture(t, path)
+	assertLineCount(t, filepath.Join(dir, "hook.log"), 1)
+
+	writePipelineFile(t, filepath.Join(dir, "fixed"), "")
+
+	out := captureStdout(t, func() {
+		err := cli.Run([]string{"run", path, "--resume", runID})
+		if err != nil {
+			t.Fatalf("resume failed: %v", err)
+		}
+	})
+
+	assertLineCount(t, filepath.Join(dir, "hook.log"), 2)
+	assertLineCount(t, filepath.Join(dir, "change.log"), 1)
+	assertLineCount(t, filepath.Join(dir, "seen.log"), 1)
+	assertLineCount(t, filepath.Join(dir, "fetches.log"), 2)
+
+	for _, want := range []string{"skip: change (already succeeded) [build #0]\n", "skip: fragile (already succeeded) [build #0]\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the resume did not say %q:\n%s", want, out)
+		}
+	}
+
+	if strings.Contains(out, "skip: repo") {
+		t.Errorf("a get with nothing to keep was reported kept:\n%s", out)
 	}
 }
 

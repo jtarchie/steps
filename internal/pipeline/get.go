@@ -296,20 +296,12 @@ func (w *planWalk) runTriggeredBuild(
 	// every subsequent step live — the job-level build recorded at RunJob
 	// holds none of it. An UPDATE of the row RunJob already wrote, never a
 	// mint: this is the same run with a better answer about where it lives.
+	root := ""
 	if rooted, ok := bw.(workspace.RootedBuild); ok {
-		if resume := resumeFrom(ctx); resume != nil {
-			// The same configuration the run is already recorded under: this
-			// is a workspace correction, not a change of what is executing.
-			err := w.st.ResumeRun(ctx, resume.id, rooted.Root(), w.cfg.Revision.SHA)
-			if err != nil {
-				// Logged, not returned: the row exists by the time a get runs,
-				// so this cannot fail for a reason the get can act on, and a
-				// version fetched is not made wrong by a workspace column that
-				// still names the job-level build.
-				slog.WarnContext(ctx, "job.run_workspace_unrecorded", "run", resume.id, "error", err)
-			}
-		}
+		root = rooted.Root()
 	}
+
+	w.pointRunAt(ctx, root)
 
 	recordExecution(ctx, resource.Name)
 
@@ -324,14 +316,12 @@ func (w *planWalk) runTriggeredBuild(
 	buildID := buildIDForSet(ctx, setIndex)
 
 	if runID, kept := keptFetch(ctx, buildID, -1); kept {
-		err = w.keepFetched(ctx, runID, step, resource.Name, version, bw)
+		// The get stays the container of its build, so it keeps its
+		// started/finished pair and says why it fetched nothing on its row.
+		err = w.keepFetched(events.WithStepID(ctx, parentStepFrom(ctx)), runID, buildID, step, resource.Name, version, bw)
 		if err != nil {
 			return err
 		}
-
-		// The get stays the container of its build, so it keeps its
-		// started/finished pair and says why it fetched nothing on its row.
-		notef(events.WithStepID(ctx, parentStepFrom(ctx)), "skip: %s (already fetched) [build #%d]", step.Get, setIndex)
 	} else {
 		err = w.fetchTriggered(ctx, build, bw, step, resource, resourceType, version, node)
 		if err != nil {
@@ -351,6 +341,15 @@ func (w *planWalk) runTriggeredBuild(
 	err = runSteps(ctx, remainderWalk, remainder)
 	buildOK = err == nil
 
+	// A green build's tree is removed as this returns, so the row goes back
+	// to the last build that failed: left naming the deleted tree, a resume
+	// of an earlier failure behind a later success had nothing to continue.
+	if buildOK {
+		w.pointRunAt(context.WithoutCancel(ctx), w.failedRoot)
+	} else {
+		w.failedRoot = root
+	}
+
 	// Green is per BUILD, recorded when that build succeeds — Concourse
 	// records a build's inputs against the build, and a later set failing
 	// says nothing about an earlier one that passed. Waiting for the whole
@@ -362,6 +361,24 @@ func (w *planWalk) runTriggeredBuild(
 	}
 
 	return err
+}
+
+// pointRunAt re-points the run's row at a build's tree; "" leaves it alone.
+func (w *planWalk) pointRunAt(ctx context.Context, root string) {
+	resume := resumeFrom(ctx)
+	if resume == nil || root == "" {
+		return
+	}
+
+	// The same configuration the run is already recorded under: this is a
+	// workspace correction, not a change of what is executing.
+	err := w.st.ResumeRun(ctx, resume.id, root, w.cfg.Revision.SHA)
+	if err != nil {
+		// Logged, not returned: the row exists by the time a get runs, so
+		// this cannot fail for a reason the get can act on, and a version
+		// fetched is not made wrong by a stale workspace column.
+		slog.WarnContext(ctx, "job.run_workspace_unrecorded", "run", resume.id, "error", err)
+	}
 }
 
 // fetchTriggered fetches a triggered build's first get into its workspace,
@@ -403,7 +420,7 @@ func (w *planWalk) fetchTriggered(
 // would replace the work the resume is about to skip.
 func keptFetch(ctx context.Context, build string, index int) (string, bool) {
 	resume := resumeFrom(ctx)
-	if resume == nil || !resume.progressedPast(build, index) {
+	if resume == nil || resume.refetch || !resume.progressedPast(build, index) {
 		return "", false
 	}
 
@@ -420,21 +437,22 @@ func (w *planWalk) keepInPlace(
 		return stepResult{}, false, nil
 	}
 
-	err := w.keepFetched(ctx, runID, step, resourceName, version, w.bw)
+	err := w.keepFetched(ctx, runID, w.build, step, resourceName, version, w.bw)
 	if err != nil {
 		return stepResult{}, true, err
 	}
 
-	return stepResult{hash: hash, nodeHash: hash, disposition: stepResumeKept}, true, nil
+	return stepResult{hash: hash, nodeHash: hash}, true, nil
 }
 
 // keepFetched stands in for a fetch keptFetch ruled out: it records what the
 // fetch would have, so a put's version() and resource_checks read the same,
 // and refuses a tree that lost the artifact rather than fetching over the
 // steps' work or continuing without it. No node is recorded (the earlier
-// attempt did) and no hooks fire, as for any skip.
+// attempt did) and no hooks fire, as for any skip. ctx names the get's own
+// step, which the skip line is said on.
 func (w *planWalk) keepFetched(
-	ctx context.Context, runID string, step config.Step, resourceName string, version map[string]any, bw workspace.BuildWorkspace,
+	ctx context.Context, runID, build string, step config.Step, resourceName string, version map[string]any, bw workspace.BuildWorkspace,
 ) error {
 	if checker, ok := bw.(workspace.ArtifactChecker); ok && !checker.HasArtifact(step.Get) {
 		root := ""
@@ -447,6 +465,7 @@ func (w *planWalk) keepFetched(
 			runID, step.Get, step.Get, root)
 	}
 
+	notef(ctx, "skip: %s (already fetched)%s", step.Get, buildSuffix(runID, build))
 	slog.InfoContext(ctx, "job.skip", "get", step.Get, "reason", "resume")
 
 	recordFetched(ctx, step.Get, version)
@@ -497,13 +516,7 @@ func (w *planWalk) fetchInPlace(ctx context.Context, step config.Step, steps []c
 		return true, nil
 	}
 
-	// Published as a skip, and only that: runview prints the skip line from
-	// the event, so a note beside it would say it twice.
-	if res.disposition == stepResumeKept {
-		publishStepSkipped(ctx, w.jobName, w.index, step, mark, res.published(), skipReason(res.disposition))
-	} else {
-		publishStepFinished(ctx, w.jobName, w.index, step, mark, res.published(), started, nil)
-	}
+	publishStepFinished(ctx, w.jobName, w.index, step, mark, res.published(), started, nil)
 
 	if res.hash != "" {
 		w.parentHash = res.hash
