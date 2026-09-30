@@ -91,5 +91,12 @@ func TestMain(m *testing.M) {
 			goleak.IgnoreAnyFunction("internal/poll.runtime_pollWait"))
 	}
 
+	// The shard's test postgres, if a test started one. goleak.Cleanup
+	// replaces the exit, so it exits.
+	options = append(options, goleak.Cleanup(func(code int) {
+		stopPostgresE2E()
+		os.Exit(code)
+	}))
+
 	goleak.VerifyTestMain(m, options...)
 }

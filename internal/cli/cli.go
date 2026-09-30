@@ -25,7 +25,6 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
-	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -221,7 +220,7 @@ func setup(
 			cfg.Name, name)
 	}
 
-	st, err := sqlite.OpenStore(StatePath(pipelinePath, flags.DB), name)
+	st, err := openState(StatePath(pipelinePath, flags.DB), name)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("could not open state store: %w", err)
 	}

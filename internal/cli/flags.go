@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +16,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/postgres"
 	"github.com/jtarchie/steps/internal/trigger"
 )
 
@@ -24,8 +26,8 @@ import (
 // Embedded rather than repeated because they always travel together — a
 // --db naming a shared file is exactly when --name starts to matter.
 type StateFlags struct {
-	DB   DB                `help:"state database: a sqlite file path or sqlite:// url (default: .steps/<pipeline>.db beside the YAML)" name:"db"   placeholder:"URL"`
-	Name map[string]string `help:"name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml (repeatable)"              name:"name"`
+	DB   DB                `help:"state database: a sqlite file path, sqlite:// or postgres:// url (default: .steps/<pipeline>.db beside the YAML)" name:"db"   placeholder:"URL"`
+	Name map[string]string `help:"name a pipeline inside the state db, e.g. --name infra=infra/pipeline.yml (repeatable)"                           name:"name"`
 }
 
 // ReadFlags is what a command that only READS a daemon's database needs: which database, and which pipeline in it.
@@ -35,47 +37,42 @@ type StateFlags struct {
 // the /p/<slug> route and every row it wrote agree on. The database defaults
 // to the daemon's own for the same reason: there is no YAML to derive one from.
 type ReadFlags struct {
-	DB       DB     `help:"state database: a sqlite file path or sqlite:// url (default: .steps/steps.db)" name:"db"       placeholder:"URL"`
-	Pipeline string `help:"the pipeline's name in the state database"                                      name:"pipeline" short:"p"`
+	DB       DB     `help:"state database: a sqlite file path, sqlite:// or postgres:// url (default: .steps/steps.db)" name:"db"       placeholder:"URL"`
+	Pipeline string `help:"the pipeline's name in the state database"                                                   name:"pipeline" short:"p"`
 }
 
 // state is the database these flags name.
-func (r ReadFlags) state() string { return DaemonStatePath(r.DB) }
+func (r ReadFlags) state() State { return DaemonStatePath(r.DB) }
 
 // DB is the --db value: the state database as a bare sqlite path or as a url
 // whose scheme picks the driver, the way --worker's ssh:// and aws:// pick a
-// transport. sqlite:// is the only scheme until a second driver lands (#117),
-// and the switch is here in the CLI rather than in internal/store because the
-// contract package cannot import its own drivers.
+// transport — sqlite:// or postgres:// (postgresql:// too). The switch is here
+// in the CLI rather than in internal/store because the contract package
+// cannot import its own drivers; db.go is where it is made.
 //
 // Checked while the flag is parsed, so an unknown scheme is a usage error
-// before any command runs: opened as a file, `postgres://…` would have been a
+// before any command runs: opened as a file, `mysql://…` would have been a
 // freshly created sqlite database of that name, and a job recorded into it.
+//
+// No refusal here repeats the value: a network url carries credentials, and a
+// usage error lands in shell history and CI logs.
 type DB string
 
 // UnmarshalText is kong's parse hook for the flag.
 func (d *DB) UnmarshalText(text []byte) error {
 	raw := string(text)
 
-	scheme, rest, isURL := strings.Cut(raw, "://")
+	scheme, _, _ := strings.Cut(raw, ":")
 
-	switch {
-	case isURL && scheme != "sqlite":
-		// The scheme alone, never the url: a network url carries credentials,
-		// and a usage error lands in shell history and CI logs.
-		return fmt.Errorf("no driver for %s:// (only a sqlite file path, or sqlite://<path>, until a second driver lands)", scheme)
-	case isURL && rest == "":
-		// Stripped to "", the bare scheme would read as the flag not given
-		// and quietly open the per-pipeline default instead.
-		return errors.New("sqlite:// names no file: write sqlite://<path>")
-	case !isURL && strings.HasPrefix(raw, "sqlite:"):
-		return errors.New("sqlite: needs //: write sqlite://<path>")
-	case strings.Contains(raw, "?"):
-		// The driver splits its DSN at the first '?', so a query string here
-		// swallows the pragmas steps sets after the file name (busy_timeout
-		// first) with no error — and the read commands stat a file of that
-		// whole name and report nothing recorded.
-		return errors.New("--db takes a sqlite file path or sqlite://<path>, with no query string")
+	var err error
+	if postgresScheme(scheme) {
+		err = checkPostgresURL(raw)
+	} else {
+		err = checkSQLiteDB(raw)
+	}
+
+	if err != nil {
+		return err
 	}
 
 	*d = DB(raw)
@@ -83,11 +80,85 @@ func (d *DB) UnmarshalText(text []byte) error {
 	return nil
 }
 
-// path is the sqlite file a DB names, or "" for the default.
-func (d *DB) path() string {
+// checkPostgresURL refuses a url that will not parse — by url.Parse's
+// standard rather than pgx's, and without url.Parse's own error, which quotes
+// the url — and warns about a password in it.
+func checkPostgresURL(raw string) error {
+	if !strings.Contains(raw, "://") {
+		// Otherwise a sqlite FILE of that name, created beside the YAML.
+		return errors.New("postgres: needs //: write postgres://… (a unix socket is postgres:///<db>?host=/var/run/postgresql)")
+	}
+
+	_, err := url.Parse(raw)
+	if err != nil {
+		return errors.New("--db: the postgres url does not parse; check its syntax (not repeated here, as it may carry a password)")
+	}
+
+	warnPasswordInURL(raw)
+
+	return nil
+}
+
+// checkSQLiteDB refuses what is neither a sqlite file nor a url a driver
+// opens.
+func checkSQLiteDB(raw string) error {
+	scheme, rest, isURL := strings.Cut(raw, "://")
+
+	switch {
+	case isURL && scheme != "sqlite":
+		return fmt.Errorf("no driver for %s:// (a sqlite file path, sqlite://<path>, or postgres://…)", scheme)
+	case isURL && rest == "":
+		// Stripped to "", the bare scheme would read as the flag not given
+		// and quietly open the per-pipeline default instead.
+		return errors.New("sqlite:// names no file: write sqlite://<path>")
+	case !isURL && strings.HasPrefix(raw, "sqlite:"):
+		return errors.New("sqlite: needs //: write sqlite://<path>")
+	case strings.Contains(raw, "?"):
+		// The sqlite driver splits its DSN at the first '?', so a query
+		// string here swallows the pragmas steps sets after the file name
+		// (busy_timeout first) with no error — and the read commands stat a
+		// file of that whole name and report nothing recorded.
+		return errors.New("--db takes a sqlite file path or sqlite://<path> with no query string, or a postgres:// url")
+	}
+
+	return nil
+}
+
+// location is the database a DB names — a sqlite file, or a postgres url
+// as given — or "" for the default.
+func (d *DB) location() State {
+	if State(*d).postgres() {
+		return State(*d)
+	}
+
 	path, _ := strings.CutPrefix(string(*d), "sqlite://")
 
-	return path
+	return State(path)
+}
+
+func postgresScheme(scheme string) bool { return scheme == "postgres" || scheme == "postgresql" }
+
+// State is a resolved state database: a sqlite file path, or a postgres url.
+//
+// A type rather than a string so that printing one is safe by default: a url
+// may carry a password, and String — what %s and %v call — never shows it.
+// Opening one goes through db.go, which is the one place that reads the raw
+// value.
+type State string
+
+// String is the state database as it may be printed.
+func (s State) String() string {
+	if s.postgres() {
+		return postgres.Redact(string(s))
+	}
+
+	return string(s)
+}
+
+func (s State) postgres() bool {
+	scheme, _, isURL := strings.Cut(string(s), "://")
+
+	return isURL && postgresScheme(scheme)
 }
 
 // VarFlags carry ((name)) substitutions into a pipeline load.
@@ -210,9 +281,9 @@ func (h HistoryFlags) Apply(cfg *config.Config) {
 const DefaultDaemonState = ".steps/steps.db"
 
 // DaemonStatePath is the state database `steps web` and the read commands use.
-func DaemonStatePath(db DB) string {
-	if path := db.path(); path != "" {
-		return path
+func DaemonStatePath(db DB) State {
+	if location := db.location(); location != "" {
+		return location
 	}
 
 	return DefaultDaemonState
@@ -232,22 +303,29 @@ func DaemonStatePath(db DB) string {
 //
 // There is no migration, per this repo's no-migration rule: a database from an
 // older schema is refused rather than upgraded.
-func StatePath(pipeline string, db DB) string {
-	if path := db.path(); path != "" {
-		return path
+func StatePath(pipeline string, db DB) State {
+	if location := db.location(); location != "" {
+		return location
 	}
 
-	return filepath.Join(filepath.Dir(pipeline), ".steps", filepath.Base(pipeline)+".db")
+	return State(filepath.Join(filepath.Dir(pipeline), ".steps", filepath.Base(pipeline)+".db"))
 }
 
-// answerDB is the --db a parked step's printed command needs for a local run's state, and "" when that is the daemon default the read commands open anyway.
+// answerDB is the --db a parked step's printed command needs for a local run's state, and "" when that is the daemon default the read commands open anyway. Quoted for a shell, since the command is printed to be pasted.
 func answerDB(pipelinePath string, db DB) string {
 	state := StatePath(pipelinePath, db)
-	if filepath.Clean(state) == DefaultDaemonState {
+	if state.isDefaultDaemonState() {
 		return ""
 	}
 
-	return state // ponytail: as resolved, so a relative path reaches it only from where the run started; filepath.Abs it if answers come from elsewhere
+	return shellArg(state.String()) // ponytail: as resolved, so a relative path reaches it only from where the run started; filepath.Abs it if answers come from elsewhere
+}
+
+// isDefaultDaemonState reports the database the read commands open with no
+// --db. A url is never it, and never goes near filepath, which would fold
+// postgres:// into postgres:/.
+func (s State) isDefaultDaemonState() bool {
+	return !s.postgres() && filepath.Clean(string(s)) == DefaultDaemonState
 }
 
 // PipelineName is a pipeline's identity inside a state database: the YAML's

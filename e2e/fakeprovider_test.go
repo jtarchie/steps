@@ -541,7 +541,7 @@ type jobRunRow struct {
 func openStateDB(t *testing.T, pipelinePath string) *sql.DB {
 	t.Helper()
 
-	dbPath := cli.StatePath(pipelinePath, "")
+	dbPath := string(cli.StatePath(pipelinePath, ""))
 
 	_, err := os.Stat(dbPath)
 	if err != nil {

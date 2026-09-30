@@ -23,3 +23,18 @@ func TestAnswerDBNamesEveryStateFileButTheDefault(t *testing.T) {
 		}
 	}
 }
+
+// The hint is printed to be pasted: a url's ? and & would glob and background the command unquoted, and a password in it would be printed to a terminal and a log.
+func TestAnswerDBQuotesAURLAndDropsItsPassword(t *testing.T) {
+	t.Parallel()
+
+	got := answerDB("app.yml", "postgres://ci:hunter22@db:5432/steps?sslmode=verify-full&application_name=x")
+
+	if want := "'postgres://ci@db:5432/steps?sslmode=verify-full&application_name=x'"; got != want {
+		t.Errorf("answerDB = %s, want %s", got, want)
+	}
+
+	if got := answerDB("app.yml", "my state.db"); got != "'my state.db'" {
+		t.Errorf("answerDB = %s, want the path quoted", got)
+	}
+}

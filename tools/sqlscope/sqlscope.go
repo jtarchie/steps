@@ -1,4 +1,4 @@
-// Package sqlscope finds SQL statements that touch a pipeline-scoped table without naming pipeline_id. It lives in tools/ because it reads source, and its test is what holds internal/store/sqlite to the rule CLAUDE.md states in prose.
+// Package sqlscope finds SQL statements that touch a pipeline-scoped table without naming pipeline_id. It lives in tools/ because it reads source, and its test is what holds each driver in internal/store to the rule CLAUDE.md states in prose.
 package sqlscope
 
 import (

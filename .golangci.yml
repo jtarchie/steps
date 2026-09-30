@@ -165,9 +165,10 @@ linters:
             - "github.com/jtarchie/steps/internal/shim"
             - "github.com/jtarchie/steps/internal/store"
             # cli is where a driver is CHOSEN: it turns the state flag into an
-            # open sqlite database and hands the store.Store down. Nothing
-            # below it names a driver.
+            # open sqlite or postgres database (db.go) and hands the
+            # store.Store down. Nothing below it names a driver.
             - "github.com/jtarchie/steps/internal/store/sqlite"
+            - "github.com/jtarchie/steps/internal/store/postgres"
             - "github.com/jtarchie/steps/internal/trigger"
             # web is the UI front end: the CLI constructs it and hands it
             # loaded pipelines, exactly as it does trigger.Watch. events is the
@@ -200,6 +201,11 @@ linters:
             # the suite reads state databases back to check what a run
             # recorded, so it opens the driver the CLI it drives would have.
             - "github.com/jtarchie/steps/internal/store/sqlite"
+            - "github.com/jtarchie/steps/internal/store/postgres"
+            # dockerapi is test-only: e2e_postgres_test.go starts the server
+            # a --db postgres:// run is pointed at, the way the driver's own
+            # tests do.
+            - "github.com/jtarchie/steps/internal/dockerapi"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/web"
             # outcome.ExitCode is the exit status main would give an error, which
@@ -339,6 +345,7 @@ linters:
           files:
             - "**/internal/store/**"
             - "!**/internal/store/sqlite/**"
+            - "!**/internal/store/postgres/**"
             - "!**/internal/store/storetest/**"
           allow:
             - "$gostd"
@@ -370,6 +377,24 @@ linters:
             # goleak is test-only: goleak_test.go's TestMain fails a package's
             # tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
+        # store/postgres is the postgres driver, the sqlite driver's sibling:
+        # its own schema and SQL behind the same contract, through pgx.
+        StorePostgres:
+          files:
+            - "**/internal/store/postgres/**"
+          allow:
+            - "$gostd"
+            - "github.com/jackc/pgx/v5"
+            - "github.com/jtarchie/steps/internal/store"
+            # storetest is test-only: conformance_test.go runs the shared suite
+            # against this driver.
+            - "github.com/jtarchie/steps/internal/store/storetest"
+            # dockerapi is test-only: TestMain starts the server the suite runs
+            # against, published on loopback.
+            - "github.com/jtarchie/steps/internal/dockerapi"
+            # goleak is test-only: TestMain fails the package's tests if any
+            # leaves a pool's goroutine running.
+            - "go.uber.org/goleak"
         # The driver is test-only everywhere but internal/cli: a test needs a
         # concrete driver to open a database with, so the allow-lists above
         # admit store/sqlite where tests use it, but production code takes the
@@ -384,8 +409,11 @@ linters:
             - "!$test"
             - "!**/internal/cli/**"
             - "!**/internal/store/sqlite/**"
+            - "!**/internal/store/postgres/**"
           deny:
             - pkg: "github.com/jtarchie/steps/internal/store/sqlite"
+              desc: "test-only outside internal/cli: production code takes the store.Store it was handed"
+            - pkg: "github.com/jtarchie/steps/internal/store/postgres"
               desc: "test-only outside internal/cli: production code takes the store.Store it was handed"
         # config is the shared data-model root: it must not depend on any
         # other internal package (see CLAUDE.md's package-seam plan).

@@ -46,7 +46,7 @@ func (r *RunsFollowCmd) Run() error {
 	}
 
 	// An error, not the list views' empty answer: follow's exit status is the run's, and `follow --job deploi && promote` must not promote.
-	if stateEmpty(r.ReadFlags) {
+	if stateIsEmpty(r.state()) {
 		return fmt.Errorf("nothing to follow: %s in %s", noRunsYet(r.Pipeline), r.state())
 	}
 

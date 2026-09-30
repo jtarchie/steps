@@ -30,7 +30,7 @@ import (
 type daemon struct {
 	server   *web.Server
 	runner   *web.LocalRunner
-	state    string
+	state    State
 	exec     ExecFlags
 	history  HistoryFlags
 	interval time.Duration
@@ -63,14 +63,14 @@ type servedPipeline struct {
 // newDaemon wires the manager into the server it registers pipelines with.
 func newDaemon(
 	ctx context.Context, server *web.Server, runner *web.LocalRunner,
-	state string, exec ExecFlags, history HistoryFlags, interval time.Duration,
+	state State, exec ExecFlags, history HistoryFlags, interval time.Duration,
 ) *daemon {
 	// One registry for every job, poll and webhook this daemon starts, so the last of them out gives a machine back rather than the first.
 	base, releaseWorkers := pipeline.WithWorkerRegistry(ctx)
 
 	// A parked step's printed command must name any database but the default, which is all the read commands open without --db.
-	if filepath.Clean(state) != DefaultDaemonState {
-		base = pipeline.WithAnswerDB(base, state)
+	if !state.isDefaultDaemonState() {
+		base = pipeline.WithAnswerDB(base, shellArg(state.String()))
 	}
 
 	return &daemon{
@@ -93,7 +93,7 @@ func newDaemon(
 //
 //nolint:contextcheck // opening a database and closing a handle are not context-taking operations in this driver
 func (d *daemon) load(ctx context.Context) error {
-	reader, err := sqlite.OpenReader(d.state)
+	reader, err := openStateReader(d.state)
 
 	// A database that is not there, or created but not yet filled in, is the
 	// ordinary first start. Anything else — a corrupt file, a mode this
@@ -150,7 +150,7 @@ func (d *daemon) restore(ctx context.Context, name, from string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	st, err := sqlite.OpenStore(d.state, name)
+	st, err := openState(d.state, name)
 	if err != nil {
 		return fmt.Errorf("web: could not open state for %q: %w", name, err)
 	}
@@ -267,7 +267,7 @@ func (d *daemon) stateFor(name string, existing *servedPipeline) (store.Store, e
 		return existing.target.Store, nil
 	}
 
-	st, err := sqlite.OpenStore(d.state, name)
+	st, err := openState(d.state, name)
 	if err != nil {
 		return nil, fmt.Errorf("could not open state for %q: %w", name, err)
 	}
@@ -568,7 +568,7 @@ func (d *daemon) Destroy(ctx context.Context, name string) error {
 //
 //nolint:contextcheck // opening a store takes none
 func (d *daemon) destroyBroken(ctx context.Context, name string) error {
-	st, err := sqlite.OpenStore(d.state, name)
+	st, err := openState(d.state, name)
 	if err != nil {
 		return fmt.Errorf("could not destroy %q: %w", name, err)
 	}
@@ -723,7 +723,7 @@ func (d *daemon) refuseWhileRunning(name string) error {
 
 // Split from start because all of it can still refuse, which a rename must hear while the old name is still served.
 func (d *daemon) open(name string, cfg *config.Config) (store.Store, workspace.Provider, error) {
-	st, err := sqlite.OpenStore(d.state, name)
+	st, err := openState(d.state, name)
 	if err != nil {
 		return nil, nil, fmt.Errorf("could not open state for %q: %w", name, err)
 	}

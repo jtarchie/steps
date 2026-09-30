@@ -498,8 +498,8 @@ func newWatchFixtureIn(t *testing.T, dir, name string) *watchFixture {
 // rest on. Keyed by directory, two pipelines in one folder would share a
 // database by accident of layout rather than because anyone asked.
 func TestStatePathIsPerPipelineFile(t *testing.T) {
-	first := cli.StatePath("/srv/pipelines/app.yml", "")
-	second := cli.StatePath("/srv/pipelines/infra.yml", "")
+	first := string(cli.StatePath("/srv/pipelines/app.yml", ""))
+	second := string(cli.StatePath("/srv/pipelines/infra.yml", ""))
 
 	if first == second {
 		t.Fatalf("app.yml and infra.yml share %q", first)
@@ -510,7 +510,7 @@ func TestStatePathIsPerPipelineFile(t *testing.T) {
 	}
 
 	// --db overrides both, which is the whole feature.
-	if got := cli.StatePath("/srv/pipelines/app.yml", "/var/lib/steps.db"); got != "/var/lib/steps.db" {
+	if got := string(cli.StatePath("/srv/pipelines/app.yml", "/var/lib/steps.db")); got != "/var/lib/steps.db" {
 		t.Errorf("--db was ignored: %q", got)
 	}
 }
@@ -519,11 +519,11 @@ func TestStatePathIsPerPipelineFile(t *testing.T) {
 // name, so its database cannot be named after a YAML — and the read commands
 // have to look in the same place or they answer about nothing.
 func TestDaemonStatePathHasNoFileToDeriveFrom(t *testing.T) {
-	if got := cli.DaemonStatePath(""); got != cli.DefaultDaemonState {
+	if got := string(cli.DaemonStatePath("")); got != cli.DefaultDaemonState {
 		t.Errorf("the daemon's default state is %q, want %q", got, cli.DefaultDaemonState)
 	}
 
-	if got := cli.DaemonStatePath("/var/lib/steps.db"); got != "/var/lib/steps.db" {
+	if got := string(cli.DaemonStatePath("/var/lib/steps.db")); got != "/var/lib/steps.db" {
 		t.Errorf("--db was ignored: %q", got)
 	}
 }
@@ -589,7 +589,7 @@ func TestWebRejectsDeliver(t *testing.T) {
 // commands — which take a name and a database, because a pipeline set into a
 // daemon has no file here to derive either from.
 func readArgs(path string) []string {
-	return []string{"-p", cli.PipelineName(path), "--db", cli.StatePath(path, "")}
+	return []string{"-p", cli.PipelineName(path), "--db", string(cli.StatePath(path, ""))}
 }
 
 // contextLogKeys are the attributes events.LogHandler stamps from the context.

@@ -78,7 +78,7 @@ jobs:
 func lastRunID(t *testing.T, path string) string {
 	t.Helper()
 
-	st, err := sqlite.OpenExisting(cli.StatePath(path, ""), cli.PipelineName(path))
+	st, err := sqlite.OpenExisting(string(cli.StatePath(path, "")), cli.PipelineName(path))
 	if err != nil {
 		t.Fatal(err)
 	}

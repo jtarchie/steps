@@ -279,7 +279,7 @@ func TestCloseTakesAWaitingLoginDownWithIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	held := newDaemon(context.Background(), server, local, filepath.Join(t.TempDir(), "steps.db"), ExecFlags{}, HistoryFlags{}, time.Hour)
+	held := newDaemon(context.Background(), server, local, State(filepath.Join(t.TempDir(), "steps.db")), ExecFlags{}, HistoryFlags{}, time.Hour)
 	setPipeline(t, held, "app", waitingPipeline(waitingAuthServer(t)))
 
 	pending := startWaitingLogin(t, held, "app")

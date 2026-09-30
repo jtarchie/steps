@@ -261,7 +261,7 @@ func agentUsageFor(t *testing.T, path string) store.AgentUsage {
 func openStoreFor(t *testing.T, path string) store.Store {
 	t.Helper()
 
-	st, err := sqlite.OpenStore(cli.StatePath(path, ""), cli.PipelineName(path))
+	st, err := sqlite.OpenStore(string(cli.StatePath(path, "")), cli.PipelineName(path))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

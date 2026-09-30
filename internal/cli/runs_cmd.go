@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/store"
-	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -188,28 +187,13 @@ func (r *RunsWhereCmd) Run() error {
 // exactly what a sixth `runs` subcommand written by copying the other five
 // would forget.
 func nothingRecorded(flags ReadFlags, answer string) bool {
-	if !stateEmpty(flags) {
-		return false
-	}
+	if stateIsEmpty(flags.state()) {
+		fmt.Println(answer)
 
-	fmt.Println(answer)
-
-	return true
-}
-
-func stateEmpty(flags ReadFlags) bool {
-	path := flags.state()
-
-	_, err := os.Stat(path)
-	if err != nil {
 		return true
 	}
 
-	// A file with no schema in it is the same answer as no file: a writer
-	// creates the database before it fills it in, so a reader arriving in
-	// that window must not report the operator's brand new database as one
-	// written by a different version of steps.
-	return sqlite.HasNothingRecorded(path)
+	return false
 }
 
 // noRunsYet is the sentence every `steps runs` view says when the pipeline has
@@ -232,7 +216,7 @@ func openRecorded(flags ReadFlags) (store.Store, func(), error) {
 		return nil, nil, errors.New("which pipeline? pass -p <name> — `steps pipeline list` says what a daemon holds")
 	}
 
-	st, err := sqlite.OpenExisting(flags.state(), flags.Pipeline)
+	st, err := openExistingState(flags.state(), flags.Pipeline)
 	if err != nil {
 		return nil, nil, fmt.Errorf("could not open state store: %w", err)
 	}
@@ -260,19 +244,21 @@ func (r *RunsListCmd) runAcross() error {
 	// pipelines and does not filter by job, and two pipelines calling a job
 	// `build` are not one job. Refused rather than silently ignored.
 	if r.Job != "" {
-		return fmt.Errorf("--job asks about one pipeline: run `steps runs list -p <name> --job %s --db %s`", r.Job, path)
+		return fmt.Errorf("--job asks about one pipeline: run `steps runs list -p <name> --job %s --db %s`", r.Job, shellArg(path.String()))
 	}
 
 	// Stat first, for the same reason the scoped path does: asking about
 	// history must not create the database it is asking about.
-	_, err := os.Stat(path)
-	if err != nil {
-		fmt.Printf("no state database at %s\n", path)
+	if !path.postgres() {
+		_, err := os.Stat(string(path))
+		if err != nil {
+			fmt.Printf("no state database at %s\n", path)
 
-		return nil
+			return nil
+		}
 	}
 
-	reader, err := sqlite.OpenReader(path)
+	reader, err := openStateReader(path)
 	if errors.Is(err, store.ErrNoState) {
 		// Created but not yet filled in — a writer is mid-first-open. Nothing
 		// is recorded, which is an answer, not a file to delete.
@@ -350,7 +336,7 @@ func printPipelines(pipelines []store.PipelineRow) error {
 // timestamp means "last time this content ran" rather than "a build
 // happened". Across pipelines the useful row is a real run with an id, which
 // is the handle for going and asking that pipeline about it.
-func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader store.Reader, pipelines []store.PipelineRow, path string) error {
+func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader store.Reader, pipelines []store.PipelineRow, path State) error {
 	names := make([]string, 0, len(pipelines))
 	for _, pipeline := range pipelines {
 		names = append(names, pipeline.Name)
@@ -380,9 +366,9 @@ func (r *RunsListCmd) printRunsAcross(ctx context.Context, reader store.Reader, 
 		return err
 	}
 
-	// The path rather than a Description: a Reader has no pipeline and no
-	// handle, and this view only opens sqlite files (see runAcross).
-	fmt.Printf("\nbreak one down with: steps runs cost -p <pipeline> <run> --db %s\n", path)
+	// The flag rather than a Description, which a Reader has no handle to
+	// give: as printable, so a url's password stays out of the hint.
+	fmt.Printf("\nbreak one down with: steps runs cost -p <pipeline> <run> --db %s\n", shellArg(path.String()))
 
 	return nil
 }
@@ -574,15 +560,20 @@ func (r *RunsCostCmd) printCostTotals(ctx context.Context, st interface {
 // copies the line after `steps runs cost app.yml --db shared.db` is sent to
 // `.steps/app.yml.db` and told there is nothing there.
 //
-// The store's Description rather than the flag as typed: it is the form the
-// driver calls safe to print, which for a network database means without its
-// credentials.
+// A file is the store's Description, the path it resolved. A url is the flag
+// as typed less its password: Description rebuilds a url from the resolved
+// config, which drops sslmode and sslrootcert, and the pasted hint would then
+// connect on libpq's prefer.
 func dbNote(typed DB, st store.Meta) string {
 	if typed == "" {
 		return ""
 	}
 
-	return " --db " + st.Description()
+	if location := typed.location(); location.postgres() {
+		return " --db " + shellArg(location.String())
+	}
+
+	return " --db " + shellArg(st.Description())
 }
 
 // printRunCost breaks one run down per agent step.

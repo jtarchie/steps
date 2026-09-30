@@ -270,7 +270,7 @@ func TestARestartServesTheRestAndShowsTheBrokenOne(t *testing.T) {
 		t.Fatalf("/p/healthy = %d after a restart with a broken neighbour, want it served", code)
 	}
 
-	if reason := restarted.brokenReason(t, "onroot"); !strings.Contains(reason, "workspace") {
+	if reason := restarted.onrootBrokenReason(t); !strings.Contains(reason, "workspace") {
 		t.Errorf("/api/pipelines lists onroot broken with %q, want the workspace named", reason)
 	}
 
@@ -303,7 +303,7 @@ func assertASetRepairs(t *testing.T, restarted *webProcess, root, path string) {
 		t.Errorf("the repairing set said %q, want it called a repair", out)
 	}
 
-	if reason := restarted.brokenReason(t, "onroot"); reason != "" {
+	if reason := restarted.onrootBrokenReason(t); reason != "" {
 		t.Errorf("/api/pipelines still lists onroot broken after the repair: %s", reason)
 	}
 
@@ -314,6 +314,13 @@ func assertASetRepairs(t *testing.T, restarted *webProcess, root, path string) {
 
 // restartWithABrokenPipeline sets healthy and onroot, stops, makes onroot's workspace root read-only — the workspace probe writes — and restarts, returning the root and onroot's pipeline file.
 func restartWithABrokenPipeline(t *testing.T) (*webProcess, string, string) {
+	t.Helper()
+
+	return restartWithABrokenPipelineOn(t, filepath.Join(t.TempDir(), "state.db"))
+}
+
+// restartWithABrokenPipelineOn is restartWithABrokenPipeline against a state database the caller names.
+func restartWithABrokenPipelineOn(t *testing.T, state string) (*webProcess, string, string) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -341,8 +348,6 @@ jobs:
 	healthy := filepath.Join(dir, "healthy.yml")
 	writePipelineFile(t, healthy, "jobs:\n- name: build\n  plan:\n  - task: compile\n    inputs: []\n    run: echo built\n")
 
-	state := filepath.Join(dir, "state.db")
-
 	served := startWeb(t, "--db", state, "--interval", "1h")
 	served.set(t, "healthy", healthy)
 	served.set(t, "onroot", path)
@@ -356,8 +361,8 @@ jobs:
 	return startWeb(t, "--db", state, "--interval", "1h"), root, path
 }
 
-// brokenReason is why /api/pipelines lists name as held and not served, empty when it does not.
-func (w *webProcess) brokenReason(t *testing.T, name string) string {
+// onrootBrokenReason is why /api/pipelines lists onroot as held and not served, empty when it does not.
+func (w *webProcess) onrootBrokenReason(t *testing.T) string {
 	t.Helper()
 
 	_, body := w.get(t, "/api/pipelines")
@@ -372,7 +377,7 @@ func (w *webProcess) brokenReason(t *testing.T, name string) string {
 	reason := ""
 
 	for _, row := range rows {
-		if row.Name == name && row.Broken != "" {
+		if row.Name == "onroot" && row.Broken != "" {
 			reason = row.Broken
 		}
 	}

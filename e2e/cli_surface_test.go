@@ -410,7 +410,7 @@ func TestListingsAnswerBeforeAStateFileExists(t *testing.T) {
 		})
 	}
 
-	if fileExists(cli.StatePath(path, "")) {
+	if fileExists(string(cli.StatePath(path, ""))) {
 		t.Error("a listing created the state database it was asked about")
 	}
 }
@@ -427,7 +427,7 @@ func TestListingsAnswerBeforeAStateFileExists(t *testing.T) {
 // Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestReadingADatabaseBeingCreated(t *testing.T) {
 	path := flagFixture(t)
-	state := cli.StatePath(path, "")
+	state := string(cli.StatePath(path, ""))
 
 	err := os.MkdirAll(filepath.Dir(state), 0o750)
 	if err != nil {
@@ -530,7 +530,7 @@ jobs:
 // Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
 func TestStateNoteNamesTheDatabaseTheReaderIsUsing(t *testing.T) {
 	path := costFixture(t)
-	state := cli.StatePath(path, "")
+	state := string(cli.StatePath(path, ""))
 	name := cli.PipelineName(path)
 
 	var err error
