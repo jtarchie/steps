@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -126,9 +127,16 @@ func (d *daemon) load(ctx context.Context) error {
 			continue
 		}
 
+		// Served or shown broken, never dropped and never the reason the rest go unserved: one pipeline's disk problem is not another team's outage, and a daemon that silently skipped one would look healthy while missing it.
 		err = d.restore(ctx, row.Name, row.Path)
 		if err != nil {
-			return err
+			hint := "`steps pipeline set -p " + row.Name + "` repairs it"
+			if errors.Is(err, errCannotRunHere) {
+				hint = "restart the daemon with this fixed, or set a configuration that does not need it"
+			}
+
+			d.server.MarkBroken(web.BrokenPipeline{Name: row.Name, SHA: row.CurrentSHA, From: row.Path, Reason: err.Error() + "\n" + hint})
+			_, _ = fmt.Fprintf(events.Stderr(d.base), "steps web: NOT serving %s: %v; %s\n", row.Name, err, hint)
 		}
 	}
 
@@ -149,37 +157,27 @@ func (d *daemon) restore(ctx context.Context, name, from string) error {
 
 	revision, found, err := st.CurrentRevision(ctx)
 	if err != nil {
-		_ = st.Close()
+		release(st)
 
 		return fmt.Errorf("web: could not read the configuration of %q: %w", name, err)
 	}
 
 	if !found {
-		_ = st.Close()
+		release(st)
 
 		return fmt.Errorf("web: %q has no configuration set", name)
 	}
 
 	cfg, err := d.accept(name, revision.Source, revision.Includes)
-	if errors.Is(err, errCannotRunHere) {
-		_ = st.Close()
-
-		// Skipped, loudly, rather than refused: an unset key is a fact about the shell that started this process, and one pipeline's missing token must not keep every other pipeline from being served.
-		_, _ = fmt.Fprintf(events.Stderr(d.base), "steps web: NOT serving %s; restart with this fixed to serve it again: %v\n", name, err)
-
-		return nil
-	}
-
 	if err != nil {
-		_ = st.Close()
+		release(st)
 
-		// Refused rather than skipped: serving the rest while silently dropping one is a daemon that looks healthy and is missing a pipeline.
 		return fmt.Errorf("web: %q cannot run here: %w", name, err)
 	}
 
 	provider, err := d.provider(cfg, st)
 	if err != nil {
-		_ = st.Close()
+		release(st)
 
 		return fmt.Errorf("web: %q cannot run here: %w", name, err)
 	}
@@ -202,6 +200,8 @@ func (d *daemon) Set(ctx context.Context, name string, req web.SetRequest) (web.
 	if err != nil {
 		return web.SetResult{}, err
 	}
+
+	_, repairing := d.server.BrokenReason(name)
 
 	existing, serving := d.served[name]
 
@@ -240,6 +240,8 @@ func (d *daemon) Set(ctx context.Context, name string, req web.SetRequest) (web.
 	}
 
 	fmt.Printf("steps web: %s set to config %s\n", name, shortConfig(cfg.Revision.SHA))
+
+	result.Repaired = repairing
 
 	return result, nil
 }
@@ -523,6 +525,10 @@ func (d *daemon) Destroy(ctx context.Context, name string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if _, broken := d.server.BrokenReason(name); broken {
+		return d.destroyBroken(ctx, name)
+	}
+
 	served, err := d.detach(name)
 	if err != nil {
 		return err
@@ -558,20 +564,53 @@ func (d *daemon) Destroy(ctx context.Context, name string) error {
 	return nil
 }
 
-// The handle is rebuilt rather than relabelled: the route, the pipelines row and the scope an agent pin is keyed by are ONE string, so moving only the row leaves two of the three answering to a name nothing else uses.
+// destroyBroken forgets a pipeline nothing is serving, which is the only way out for one whose repair fails the check its restore did — a workspace root gone for good.
+//
+//nolint:contextcheck // opening a store takes none
+func (d *daemon) destroyBroken(ctx context.Context, name string) error {
+	st, err := sqlite.OpenStore(d.state, name)
+	if err != nil {
+		return fmt.Errorf("could not destroy %q: %w", name, err)
+	}
+
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), daemonWriteBound)
+	defer cancel()
+
+	err = st.Delete(writeCtx)
+
+	release(st)
+
+	if err != nil {
+		return fmt.Errorf("could not destroy %q: %w", name, err)
+	}
+
+	d.server.ClearBroken(name)
+	d.forget(name)
+	d.dropProbes(name)
+
+	// The slug is the name a served pipeline's Config().Name would have been.
+	err = stepsmcp.ForgetLogins(name)
+	if err != nil {
+		dir, _ := stepsmcp.LoginsExist(name)
+
+		return fmt.Errorf("%q destroyed, but its mcp logins at %s were not removed: %w", name, dir, err)
+	}
+
+	fmt.Printf("steps web: %s destroyed\n", name)
+
+	return nil
+}
+
+// The handle is rebuilt rather than relabelled: the route, the pipelines row and the scope an agent pin is keyed by are ONE string, so moving only the row leaves two of the three answering to a name nothing else uses. Rebuilding cancels whatever the drain is running, so a rename is refused while a build of the pipeline runs; queued builds are rows keyed by the pipeline's id, and run under the new name.
 //
 //nolint:contextcheck // as restore: the validation reads the daemon's context on purpose, and opening a store takes none
 func (d *daemon) Rename(ctx context.Context, from, to string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if _, taken := d.served[to]; taken {
-		return fmt.Errorf("%w: this daemon already serves a pipeline called %q", web.ErrRefused, to)
-	}
-
-	served, held := d.served[from]
-	if !held || served == nil {
-		return fmt.Errorf("%w: %s", web.ErrNoSuchPipeline, from)
+	served, err := d.renamable(from, to)
+	if err != nil {
+		return err
 	}
 
 	// Where it was set from travels with the identity: a rename moves the name, not the file somebody uploaded.
@@ -587,6 +626,13 @@ func (d *daemon) Rename(ctx context.Context, from, to string) error {
 	// Merging would hand this pipeline somebody else's accounts unnoticed, and replacing would destroy them.
 	if dir, found := stepsmcp.LoginsExist(cfg.Name); found {
 		return fmt.Errorf("%w: mcp logins for %q already exist at %s; remove that directory to rename onto this name", web.ErrRefused, to, dir)
+	}
+
+	// The last thing before anything durable, so a build the drain claimed while the checks above ran is still seen.
+	// ponytail: a build the drain claims between this check and detach is still cancelled; upgrade: stop the pipeline's drain claiming while the rename holds d.mu.
+	err = d.refuseWhileRunning(from)
+	if err != nil {
+		return err
 	}
 
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), daemonWriteBound)
@@ -628,6 +674,51 @@ func (d *daemon) Rename(ctx context.Context, from, to string) error {
 	fmt.Printf("steps web: %s renamed to %s\n", from, to)
 
 	return nil
+}
+
+// renamable is the served pipeline a rename may move. A broken pipeline is refused either way round: onto one the rename hits the name's UNIQUE row, and from one there is no served pipeline to move.
+func (d *daemon) renamable(from, to string) (*servedPipeline, error) {
+	if _, taken := d.served[to]; taken {
+		return nil, fmt.Errorf("%w: this daemon already serves a pipeline called %q", web.ErrRefused, to)
+	}
+
+	if _, broken := d.server.BrokenReason(to); broken {
+		return nil, fmt.Errorf("%w: a pipeline this daemon could not restore is already called %q; destroy or repair it first", web.ErrRefused, to)
+	}
+
+	if reason, broken := d.server.BrokenReason(from); broken {
+		return nil, fmt.Errorf("%w: %q is not being served (%s); repair it with steps pipeline set first", web.ErrRefused, from, reason)
+	}
+
+	served, held := d.served[from]
+	if !held || served == nil {
+		return nil, fmt.Errorf("%w: %s", web.ErrNoSuchPipeline, from)
+	}
+
+	return served, nil
+}
+
+// runningListed caps how many runs a refusal names, so a pipeline with a wide in_parallel of jobs still gets a readable one.
+const runningListed = 5
+
+func (d *daemon) refuseWhileRunning(name string) error {
+	builds := d.runner.Running(name)
+	if len(builds) == 0 {
+		return nil
+	}
+
+	listed := make([]string, 0, runningListed)
+	for _, build := range builds[:min(len(builds), runningListed)] {
+		listed = append(listed, build.JobName+"/"+build.RunID)
+	}
+
+	more := ""
+	if len(builds) > runningListed {
+		more = fmt.Sprintf(" (and %d more)", len(builds)-runningListed)
+	}
+
+	return fmt.Errorf("%w: %q has builds running: %s%s; wait for them to finish, or stop them with: steps runs abort -p %s <run-id>",
+		web.ErrRefused, name, strings.Join(listed, ", "), more, name)
 }
 
 // Split from start because all of it can still refuse, which a rename must hear while the old name is still served.

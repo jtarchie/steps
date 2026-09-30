@@ -299,7 +299,7 @@ func TestPushPutsAHeldTreeInTheStore(t *testing.T) {
 	// What arrived is the artifact under the digest it was pushed as.
 	home := t.TempDir()
 
-	err := unpackVerified(bytes.NewReader(body), home, done.Artifacts["out"], true)
+	err := unpackVerified(bytes.NewReader(body), home, done.Artifacts["out"], true, false)
 	if err != nil {
 		t.Fatalf("what the worker pushed does not verify against its digest: %v", err)
 	}

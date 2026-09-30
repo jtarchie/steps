@@ -412,7 +412,7 @@ func (s *session) receiveArtifact(op uint32, cache string, artifact wire.UploadA
 
 	defer func() { _ = os.RemoveAll(staging) }()
 
-	err = unpackVerified(reader, staging, artifact.Digest, s.compression == wire.CompressionZstd)
+	err = unpackVerified(reader, staging, artifact.Digest, s.compression == wire.CompressionZstd, artifact.Foreign)
 
 	// Drained BEFORE the acknowledgement, not after. The far end sends its
 	// next operation as soon as it hears this one landed, so a drain that ran

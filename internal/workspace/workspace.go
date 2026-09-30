@@ -193,6 +193,22 @@ func CloseSpace(space StepSpace, label string) {
 // while still printing an id promising exactly that.
 func (b *isolatingBuild) Root() string { return b.root }
 
+// HasArtifact reports whether name is in the build store here, or held by a
+// worker on this build's behalf.
+func (b *isolatingBuild) HasArtifact(name string) bool {
+	if config.ValidateArtifactName(name) != nil {
+		return false
+	}
+
+	if _, held := b.remoteArtifact(name); held {
+		return true
+	}
+
+	_, err := os.Lstat(filepath.Join(b.artifacts, name))
+
+	return err == nil
+}
+
 // --- isolatingProvider: common lifecycle over a pluggable treeBackend ---
 
 // rejectSymlinkSrc enforces treeBackend.materialize's implicit precondition
@@ -1186,6 +1202,7 @@ func validateStepKindArtifactFlow(cfg *config.Config, jobName string, i int, ste
 		// their pre view is empty.
 		pre := map[string]bool{}
 		available[step.Get] = true
+		available[fetchedByGet(step.Get)] = true
 
 		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
 	case step.Put != "":
@@ -1396,6 +1413,11 @@ func validateAgentArtifactFlow(cfg *config.Config, jobName string, i int, step c
 		return err
 	}
 
+	err = checkImageAvailable(cfg, jobName, i, "agent", step.Agent, step.Image, available)
+	if err != nil {
+		return err
+	}
+
 	// Ahead of the dir: check: an output exists, empty, before the step runs, so dir: may name one nothing earlier produced (as Concourse's run.dir may).
 	for _, out := range step.Outputs {
 		available[out] = true
@@ -1470,6 +1492,11 @@ func validateTaskArtifactFlow(cfg *config.Config, jobName string, i int, step co
 		return err
 	}
 
+	err = checkImageAvailable(cfg, jobName, i, "task", rt.Name, step.Image, available)
+	if err != nil {
+		return err
+	}
+
 	for _, out := range mapArtifacts(rt.Outputs, rt.OutputMapping) {
 		available[out] = true
 	}
@@ -1527,14 +1554,12 @@ func validateHookArtifactFlow(cfg *config.Config, jobName string, i int, hookNam
 		}
 	}
 
-	for _, in := range inputs {
-		if !view[in] {
-			return fmt.Errorf("job %q step %d %s hook (%s %q): input %q is not available to this hook",
-				jobName, i, hookName, kind, name, in)
-		}
+	err := checkHookInputsAvailable(cfg, jobName, i, hookName, kind, name, inputs, hook.Image, view)
+	if err != nil {
+		return err
 	}
 
-	err := checkHookAgentArtifacts(jobName, i, hookName, hook, inputs, view)
+	err = checkHookAgentArtifacts(jobName, i, hookName, hook, inputs, view)
 	if err != nil {
 		return err
 	}
@@ -1542,6 +1567,19 @@ func validateHookArtifactFlow(cfg *config.Config, jobName string, i int, hookNam
 	return hook.Hooks.Each(func(nestedName string, nested *config.Step) error { //nolint:wrapcheck // callback errors carry full job/step/hook context
 		return validateHookArtifactFlow(cfg, jobName, i, hookName+"."+nestedName, *nested, view)
 	})
+}
+
+// checkHookInputsAvailable holds a hook's inputs and artifact image to its
+// view; split out of validateHookArtifactFlow for the cyclomatic budget.
+func checkHookInputsAvailable(cfg *config.Config, jobName string, i int, hookName, kind, name string, inputs []string, image string, view map[string]bool) error {
+	for _, in := range inputs {
+		if !view[in] {
+			return fmt.Errorf("job %q step %d %s hook (%s %q): input %q is not available to this hook",
+				jobName, i, hookName, kind, name, in)
+		}
+	}
+
+	return checkImageAvailable(cfg, jobName, i, hookName+" hook "+kind, name, image, view)
 }
 
 // checkHookAgentArtifacts holds an agent hook to a plan agent's dir: and message_files: rules against the hook's view; split out of validateHookArtifactFlow for the cyclomatic budget.
@@ -1586,6 +1624,27 @@ func checkHookAgentArtifacts(jobName string, i int, hookName string, hook config
 	}
 
 	return nil
+}
+
+// checkImageAvailable holds an image: naming an artifact to the same rule an
+// input is held to: something earlier in the plan must have fetched it. The
+// image need not ALSO be an input, as in Concourse — the daemon pulls it, so
+// the artifact's files are never read. An earlier task's output of the same
+// name does not count: only a get's version names an image.
+func checkImageAvailable(cfg *config.Config, jobName string, i int, kind, name, image string, available map[string]bool) error {
+	if image == "" || available[fetchedByGet(image)] || !cfg.ImageArtifacts(jobName)[image] {
+		return nil
+	}
+
+	return fmt.Errorf("job %q step %d (%s %q): image %q names an artifact no earlier get in the plan fetches: get it first, or rename the resource if you meant the image %s",
+		jobName, i, kind, name, image, image)
+}
+
+// fetchedByGet is the key the flow walk marks a get's own name under, beside
+// the artifact name an output may also claim. ':' is outside the artifact
+// name pattern, so no input or output can collide with it.
+func fetchedByGet(name string) string {
+	return "get:" + name
 }
 
 func checkInputsAvailable(jobName string, i int, kind, name string, inputs []string, available map[string]bool) error {
@@ -1722,6 +1781,13 @@ type Resumable interface {
 // failed run can print the directory a resume will continue in.
 type RootedBuild interface {
 	Root() string
+}
+
+// ArtifactChecker is a BuildWorkspace that can say whether it holds an
+// artifact, so a resume that keeps a get's artifact rather than fetching it
+// again can refuse a tree that lost it instead of continuing without it.
+type ArtifactChecker interface {
+	HasArtifact(name string) bool
 }
 
 // CachingBuild is a BuildWorkspace that can reuse a resource version fetched

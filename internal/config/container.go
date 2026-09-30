@@ -29,6 +29,9 @@ type containerSettings struct {
 	// called "build" reads there as the task called "build", and a rule that
 	// keys on the name alone silently answers about the wrong entry.
 	Entry entryRef
+	// Artifact marks a step image: that names a get's artifact rather than
+	// an image (see ResolveArtifactImage).
+	Artifact bool
 }
 
 // entryRef names one tasks:, agents: or resource_types: entry. The kind is
@@ -95,8 +98,11 @@ func (c *Config) visitContainerSettings(fn func(context string, settings contain
 	}
 
 	for _, job := range c.Jobs {
+		isArtifact := c.lazyImageArtifacts(job)
+
 		err := job.visitSteps(func(label string, step *Step) error {
 			settings := step.containerSettings()
+			settings.Artifact = isArtifact(step.Image)
 			// A step's own image: is usually empty even when it runs
 			// containerized, because the image comes from the tasks:/agents:
 			// entry it references. Resolving it here means every rule reads
@@ -112,6 +118,25 @@ func (c *Config) visitContainerSettings(fn func(context string, settings contain
 	}
 
 	return nil
+}
+
+// lazyImageArtifacts builds job's artifact names on first need: every
+// load-time rule walks visitContainerSettings, and most steps name no image
+// of their own.
+func (c *Config) lazyImageArtifacts(job Job) func(image string) bool {
+	var artifacts map[string]bool
+
+	return func(image string) bool {
+		if image == "" {
+			return false
+		}
+
+		if artifacts == nil {
+			artifacts = c.jobImageArtifacts(job)
+		}
+
+		return artifacts[image]
+	}
 }
 
 // rejectOnGetAndPut is the shared rule for every execution setting but tags:

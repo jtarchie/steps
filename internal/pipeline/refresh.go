@@ -25,7 +25,7 @@ import (
 // poll-based approximation of Concourse's model, where a build is created
 // against a version DB that checks feed continuously.
 //
-// Three deliberate boundaries:
+// Four deliberate boundaries:
 //
 //   - The check CURSOR is read, never advanced. resource_checks doubles as
 //     the watcher's dirty baseline, and a run moving it would suppress
@@ -38,6 +38,12 @@ import (
 //     available" already names it.
 //   - Explain does not refresh: `steps plan` stays read-only and describes
 //     the run that current knowledge implies.
+//   - Under a daemon, a POLLED resource on a worker acquired on demand is not
+//     refreshed: the check would start or launch a machine for an answer the
+//     poller is already keeping fresh. Only when both hold — a resource
+//     nothing polls, or a one-shot command with no poller, would otherwise
+//     never see a new version at all, since a run's own resolution records
+//     history the next run then reuses.
 //
 // Known narrowing, stated here because this is what causes it: history a run
 // records mutes the next poll's new-version signal for those versions. The
@@ -59,6 +65,12 @@ func refreshOneResource(ctx context.Context, cfg *config.Config, st store.Store,
 
 	resourceType, err := cfg.FindResourceType(resource.Type)
 	if err != nil {
+		return
+	}
+
+	if tag, skip := refreshAcquires(ctx, cfg, name); skip {
+		notef(ctx, "not refreshing %s before the plan: worker %s is acquired on demand and the poller keeps its history; building from what it last recorded", name, tag)
+
 		return
 	}
 
@@ -97,6 +109,16 @@ func refreshOneResource(ctx context.Context, cfg *config.Config, st store.Store,
 	if err != nil {
 		warnRefreshFailed(ctx, name, err)
 	}
+}
+
+// refreshAcquires names the tag whose machine a refresh of this resource would have to acquire, when the poller makes that acquisition redundant.
+func refreshAcquires(ctx context.Context, cfg *config.Config, name string) (string, bool) {
+	tag := placementTag(resourceStep(cfg, name))
+	if tag == "" || !SharesWorkers(ctx) || !acquiredOnDemand(ctx, tag) {
+		return "", false
+	}
+
+	return tag, cfg.ResourceIsPolled(name)
 }
 
 // checkCursorFor reads the recorded check cursor, decoded — the same value a
