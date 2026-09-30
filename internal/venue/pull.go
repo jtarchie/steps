@@ -22,28 +22,13 @@ import (
 // crossed. A worker that no longer holds the tree is an error naming it; the
 // caller decides what a lost holder costs.
 func Pull(ctx context.Context, spec shell.RunnerSpec, name, digest, dst string) (int64, error) {
-	worker, err := ParseWorker(spec.Worker)
+	s, err := dialHolder(ctx, spec)
 	if err != nil {
 		return 0, err
 	}
-
-	//nolint:contextcheck // opening the artifact store reads only local config
-	blobs, err := artifactStoreFor(spec.ArtifactStore)
-	if err != nil {
-		return 0, err
-	}
-
-	// No tree of its own, and never redialled: a pull that lost its worker
-	// mid-stream has nothing to re-send, and the caller retries or fails.
-	s := &session{worker: worker, blobs: blobs, tag: spec.WorkerTag, noRedial: true}
 
 	//nolint:contextcheck // close runs under its own bound, deliberately not the caller's context
 	defer func() { _ = s.close() }()
-
-	err = s.ensure(ctx)
-	if err != nil {
-		return 0, err
-	}
 
 	stop := s.watchTransfer(ctx)
 	defer stop()
@@ -60,26 +45,13 @@ func Pull(ctx context.Context, spec shell.RunnerSpec, name, digest, dst string) 
 // as name, at url — a presigned PUT the caller minted. The bytes go from
 // that worker to the store and never through this machine.
 func Push(ctx context.Context, spec shell.RunnerSpec, name, digest, url string) error {
-	worker, err := ParseWorker(spec.Worker)
+	s, err := dialHolder(ctx, spec)
 	if err != nil {
 		return err
 	}
-
-	//nolint:contextcheck // opening the artifact store reads only local config
-	blobs, err := artifactStoreFor(spec.ArtifactStore)
-	if err != nil {
-		return err
-	}
-
-	s := &session{worker: worker, blobs: blobs, tag: spec.WorkerTag, noRedial: true}
 
 	//nolint:contextcheck // close runs under its own bound, deliberately not the caller's context
 	defer func() { _ = s.close() }()
-
-	err = s.ensure(ctx)
-	if err != nil {
-		return err
-	}
 
 	stop := s.watchTransfer(ctx)
 	defer stop()
@@ -97,6 +69,35 @@ func Push(ctx context.Context, spec shell.RunnerSpec, name, digest, url string) 
 	}
 
 	return nil
+}
+
+// dialHolder opens a session to the worker spec names, with no tree of its
+// own, to ask for a tree it holds. The caller closes it.
+func dialHolder(ctx context.Context, spec shell.RunnerSpec) (*session, error) {
+	worker, err := ParseWorker(spec.Worker)
+	if err != nil {
+		return nil, err
+	}
+
+	//nolint:contextcheck // opening the artifact store reads only local config
+	blobs, err := artifactStoreFor(spec.ArtifactStore)
+	if err != nil {
+		return nil, err
+	}
+
+	// Never redialled: a transfer that lost its worker mid-stream has nothing
+	// to re-send, and the caller retries or fails.
+	s := &session{worker: worker, blobs: blobs, tag: spec.WorkerTag, noRedial: true}
+
+	err = s.ensure(ctx)
+	if err != nil {
+		//nolint:contextcheck // close runs under its own bound, deliberately not the caller's context
+		_ = s.close()
+
+		return nil, err
+	}
+
+	return s, nil
 }
 
 // pullInto asks for one held tree and lands it in dst, an existing empty

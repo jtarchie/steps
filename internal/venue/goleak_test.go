@@ -83,6 +83,8 @@ func serveShim() {
 		{crashCountEnv, serveCrashingShim},
 		// A shim on a machine being reclaimed.
 		{drainingShimEnv, serveDrainingShim},
+		// A shim that is one end of a pipe dying, or a real one that counts.
+		{pipeStandInEnv, servePipeStandIn},
 	}
 
 	for _, variant := range variants {

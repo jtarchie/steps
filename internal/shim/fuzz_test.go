@@ -141,16 +141,17 @@ func FuzzSameHostOnly(f *testing.F) {
 	})
 }
 
-// FuzzUnpackVerified: a digest is a proof, so the only tree that is ever accepted is one whose bytes hash to the digest named, under either compression, and nothing lands beside the directory whatever the stream says.
+// FuzzUnpackVerified: a digest is a proof, so the only tree that is ever accepted is one whose bytes hash to the digest named, under either compression and for a foreign tree or this machine's own, and nothing lands beside the directory whatever the stream says.
 func FuzzUnpackVerified(f *testing.F) {
-	f.Add(fuzzTar(f, "out/a.txt", "alpha"), false, false)
-	f.Add(fuzzTar(f, "out/a.txt", "alpha"), true, false)
-	f.Add(fuzzTar(f, "../escaped", "x"), false, false)
-	f.Add(fuzzTar(f, "out/a.txt", "alpha"), false, true)
-	f.Add([]byte{}, false, false)
-	f.Add([]byte("not a tar"), true, false)
+	f.Add(fuzzTar(f, "out/a.txt", "alpha"), false, false, false)
+	f.Add(fuzzTar(f, "out/a.txt", "alpha"), true, false, false)
+	f.Add(fuzzTar(f, "../escaped", "x"), false, false, false)
+	f.Add(fuzzTar(f, "out/a.txt", "alpha"), false, true, false)
+	f.Add([]byte{}, false, false, false)
+	f.Add(fuzzTar(f, "out/a.txt", "alpha"), true, false, true)
+	f.Add([]byte("not a tar"), true, false, false)
 
-	f.Fuzz(func(t *testing.T, stream []byte, zstd, lie bool) {
+	f.Fuzz(func(t *testing.T, stream []byte, zstd, lie, foreign bool) {
 		digest := sha256.Sum256(stream)
 		named := hex.EncodeToString(digest[:])
 
@@ -182,7 +183,7 @@ func FuzzUnpackVerified(f *testing.F) {
 			t.Fatal(err)
 		}
 
-		err = unpackVerified(bytes.NewReader(body), dir, named, zstd)
+		err = unpackVerified(bytes.NewReader(body), dir, named, zstd, foreign)
 
 		entries, readErr := os.ReadDir(parent)
 		if readErr != nil || len(entries) != 1 {

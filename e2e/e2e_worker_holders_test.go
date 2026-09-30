@@ -212,7 +212,7 @@ func TestEndToEndAnotherWorkerIsStillCold(t *testing.T) {
 	}
 
 	// The other half of the ledger: neither step brought its output home at
-	// the time it finished. The consumer on b was fed by a pull from a, and
+	// the time it finished. The consumer on b was fed by a pipe from a, and
 	// the local publish by a pull from b — neither is a placement's own.
 	for _, name := range []string{"seed", "consume"} {
 		if got := placementNamed(t, placements, name).BytesReceived; got != 0 {

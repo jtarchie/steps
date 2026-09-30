@@ -4,6 +4,7 @@ package venue
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 
@@ -20,6 +21,12 @@ import (
 // package existed — same runner, same behavior, nothing wrapped.
 func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 	if spec.Worker == "" {
+		// Refused rather than dropped: a local runner cannot fetch them, so
+		// the step would run against a tree missing those inputs.
+		if len(spec.RemoteInputs) > 0 {
+			return nil, errRemoteInputsHere
+		}
+
 		return shell.NewRunner(spec) //nolint:wrapcheck // the local path is shell's answer, returned as shell phrased it
 	}
 
@@ -56,6 +63,10 @@ func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 		container: spec,
 	}}, nil
 }
+
+// errRemoteInputsHere is a spec naming inputs other workers hold with no
+// worker to offer them to.
+var errRemoteInputsHere = errors.New("inputs held on other workers need a worker to receive them, and this step has none")
 
 // artifactStores caches one client per store URL. Without it every placed
 // step — and every guard, and every SSM bootstrap — rebuilt the client and

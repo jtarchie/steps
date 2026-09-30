@@ -22,6 +22,11 @@ package wire
 // one cannot be told to; the frame either exists for both ends or it kills a
 // session mid-step with "unknown frame type". So it is a version, and a
 // ?binary=-pinned shim from before it says so at the handshake.
+//
+// 9 marks an offered artifact FOREIGN — produced on another worker — so the
+// shim refuses a symlink leaving it; an older shim would ignore the flag and
+// place the link.
+//
 // 8 adds FramePush: a worker holding a tree is asked to put it in the store
 // under a URL the orchestrator minted, so a consumer on another worker can
 // pull it without the bytes ever passing through the orchestrator. An older
@@ -52,7 +57,7 @@ package wire
 // unknown frame type and kills the session mid-step, which is the same reason
 // FrameDraining was a version rather than a negotiation: a frame either
 // exists for both ends or it is a protocol error.
-const Protocol = 8
+const Protocol = 9
 
 // Hello opens a session.
 type Hello struct {
@@ -122,6 +127,15 @@ type UploadArtifact struct {
 	Digest string `json:"digest"`
 	// URL fetches it, and is only used when the worker does not have it.
 	URL string `json:"url"`
+	// Foreign marks a tree produced on another worker, which the shim
+	// unpacks refusing any symlink that leaves it (wire.UnpackFetchedTree):
+	// its target names a path on THIS worker, and the step here would read
+	// it and could ship it home as an output. The orchestrator's own trees
+	// round-trip verbatim, escaping links and all.
+	//
+	// An offer answered from the cache is placed without the check: those
+	// bytes were checked when they arrived, or are this worker's own output.
+	Foreign bool `json:"foreign,omitempty"`
 }
 
 // HelloOK is the shim's answer.

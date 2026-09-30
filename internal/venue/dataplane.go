@@ -186,7 +186,7 @@ func (s *session) presignRemoteArtifact(ctx context.Context, name string, input 
 		return wire.UploadArtifact{}, fmt.Errorf("%w", err)
 	}
 
-	return wire.UploadArtifact{Name: name, Digest: input.Digest, URL: url}, nil
+	return wire.UploadArtifact{Name: name, Digest: input.Digest, URL: url, Foreign: true}, nil
 }
 
 // stagedSize is how big the blob this end just pushed was, or zero if the

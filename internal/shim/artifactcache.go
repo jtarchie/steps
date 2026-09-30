@@ -511,11 +511,16 @@ var errDigestMismatch = errors.New("an artifact does not match the digest it was
 // The stream is consumed as it is unpacked rather than in a second pass, so
 // verification costs one sha256 over bytes already in flight and never buffers
 // an artifact that may be gigabytes.
-func unpackVerified(reader io.Reader, dir, digest string, zstd bool) error {
+func unpackVerified(reader io.Reader, dir, digest string, zstd, foreign bool) error {
 	hasher := sha256.New()
 
+	unpack := wire.UnpackTree
+	if foreign {
+		unpack = wire.UnpackFetchedTree
+	}
+
 	err := compress.Unpack(reader, zstd, func(r io.Reader) error {
-		return wire.UnpackTree(io.TeeReader(r, hasher), dir)
+		return unpack(io.TeeReader(r, hasher), dir)
 	})
 	if err != nil {
 		return fmt.Errorf("%w", err)
