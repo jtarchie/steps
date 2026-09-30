@@ -3,9 +3,13 @@ package venue
 // The acquisition ladder, against a fake EC2.
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"maps"
+	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/smithy-go"
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // fakeEC2 records what was asked of it and answers with the states a test set
@@ -1053,5 +1058,51 @@ func TestRetiredMachineIsReleasedWithoutWaitingOutItsIdleWindow(t *testing.T) {
 
 	if len(fake.stopped) != 1 {
 		t.Errorf("stopped = %v, want the retired machine given back", fake.stopped)
+	}
+}
+
+// TestLaunchTagsTheInstanceItCreates pins that the labels ride in the fleet
+// request itself — a CreateTags afterwards leaves a crash window with an
+// untagged machine billing — and that the transcript names the hash before
+// the launch, the only trace a crash mid-CreateFleet leaves.
+func TestLaunchTagsTheInstanceItCreates(t *testing.T) {
+	fake := &fakeEC2{}
+	seamEC2(t, fake)
+
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde?capacity=spot")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	var notes bytes.Buffer
+
+	ctx := events.WithOutput(context.Background(), events.Output{Stdout: &notes})
+
+	_, err = NewLeases(map[string]Worker{"burst": worker}).Resolve(ctx, "burst")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	specs := fake.fleets[0].TagSpecifications
+	if len(specs) != 1 || specs[0].ResourceType != ec2types.ResourceTypeInstance {
+		t.Fatalf("tag specifications = %+v, want exactly one for the instance", specs)
+	}
+
+	tags := map[string]string{}
+	for _, tag := range specs[0].Tags {
+		tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	}
+
+	want := worker.launchLabels()
+	if !maps.Equal(tags, want) || tags[labelPid] != strconv.Itoa(os.Getpid()) {
+		t.Errorf("tags = %v, want %v", tags, want)
+	}
+
+	pre := "worker " + worker.URL + ": launching from template lt-0def4567890abcde (steps-worker=" + want[labelWorker] + ")"
+	if !strings.Contains(notes.String(), pre) {
+		t.Errorf("notes = %q, want %q before the launch", notes.String(), pre)
 	}
 }

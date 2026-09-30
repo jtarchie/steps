@@ -15,11 +15,16 @@ package venue
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"regexp"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -153,6 +158,66 @@ func (w Worker) registryKey() string {
 		return w.URL
 	}
 }
+
+// The labels every launched machine carries. Dashes rather than the dotted
+// steps.host/steps.pid Docker containers use, because a GCE label key cannot
+// contain a dot, and one spelling on both clouds keeps the cleanup filter the
+// same on each.
+const (
+	labelWorker = "steps-worker"
+	labelHost   = "steps-host"
+	labelPid    = "steps-pid"
+)
+
+// launchLabels are what a launched machine is stamped with at create, so one a
+// crash leaves behind can be found: which machine it is, and which process made
+// it. The machine is a HASH of registryKey because a worker URL can carry
+// ?hostkey= and ?binary= paths, and nothing of the URL leaves this process.
+//
+// ponytail: host+pid repeat across restarts of a pid-1 daemon with a stable hostname — fine for listing leftovers, not for an automatic sweep; add a random per-process id label before one exists.
+func (w Worker) launchLabels() map[string]string {
+	sum := sha256.Sum256([]byte(w.registryKey()))
+
+	// Read per call rather than cached: cheap, and right if a long-running daemon's hostname changes.
+	host, err := os.Hostname()
+	if err != nil {
+		host = ""
+	}
+
+	return map[string]string{
+		labelWorker: hex.EncodeToString(sum[:])[:12],
+		labelHost:   labelValue(host),
+		labelPid:    strconv.Itoa(os.Getpid()),
+	}
+}
+
+// labelValue fits a string to GCE's label-value rules — lowercase, [a-z0-9_-],
+// at most 63 characters — because GCE refuses the whole insert over one bad
+// value, and EC2 takes the same spelling.
+func labelValue(s string) string {
+	mapped := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + ('a' - 'A')
+		default:
+			return '-'
+		}
+	}, s)
+
+	if len(mapped) > maxLabelValue {
+		mapped = mapped[:maxLabelValue]
+	}
+
+	if mapped == "" {
+		return "unknown"
+	}
+
+	return mapped
+}
+
+const maxLabelValue = 63
 
 // ErrWorker is a worker mapping that cannot be reached as written.
 var ErrWorker = errors.New("invalid worker")

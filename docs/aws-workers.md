@@ -2,7 +2,7 @@
 
 How to build, by hand, the AWS side of an `aws://` worker — and then run a pipeline that uses it.
 
-[`hack/aws-fixture.sh`](../hack/aws-fixture.sh) does all of this in one command for this repo's own tests. This page is the same thing typed out, so you can see what each resource is for and adapt it. Every command is `aws` CLI v2 with credentials already configured. Those credentials need the EC2, IAM and S3 rights each step below uses, plus the SSM ones steps itself calls (`ssm:StartSession`, `ssm:SendCommand`, `ssm:GetCommandInvocation`, `ssm:DescribeInstanceInformation`) — and, for the `burst` worker in step 6, **`ec2:CreateFleet`**: the launch rung acquires machines through CreateFleet, never `ec2:RunInstances`. [infra.md](infra.md#remote-workers-tags) has the full set.
+[`hack/aws-fixture.sh`](../hack/aws-fixture.sh) does all of this in one command for this repo's own tests. This page is the same thing typed out, so you can see what each resource is for and adapt it. Every command is `aws` CLI v2 with credentials already configured. Those credentials need the EC2, IAM and S3 rights each step below uses, plus the SSM ones steps itself calls (`ssm:StartSession`, `ssm:SendCommand`, `ssm:GetCommandInvocation`, `ssm:DescribeInstanceInformation`) — and, for the `burst` worker in step 6, **`ec2:CreateFleet`**, plus **`ec2:CreateTags`** on `arn:aws:ec2:*:*:instance/*`: the launch rung acquires machines through CreateFleet, never `ec2:RunInstances`, and labels each one in that same request (see step 7). The tag grant can be narrowed to launch time with a condition of `ec2:CreateAction` in `CreateFleet`/`RunInstances` — both listed because which one an instant fleet reports is unconfirmed, and that narrowed form is untested here. [infra.md](infra.md#remote-workers-tags) has the full set.
 
 ## What you are building, and why it is so small
 
@@ -230,11 +230,22 @@ aws ec2 describe-volumes --filters "Name=status,Values=available" --query 'Volum
 
 The second one matters on its own: a volume that outlives its instance keeps billing with nothing pointing at it.
 
+Every machine the launch rung creates is tagged at creation with `steps-worker` (a short hash naming the machine — template, version, capacity and region as written in the worker mapping, so a region left to the environment is not part of it — and never any part of the worker URL), `steps-host` and `steps-pid` (the process that launched it: a `steps web` daemon or a one-shot `steps run`/`test`). One the process never gave back — it was killed, it ran out of memory, its host died — is listed by the tag, per region, so run it with each worker mapping's `?region=`:
+
+```bash
+aws ec2 describe-instances \
+  --filters Name=tag-key,Values=steps-worker Name=instance-state-name,Values=pending,running,stopping,stopped \
+  --query 'Reservations[].Instances[].[InstanceId,Tags[?Key==`steps-host`]|[0].Value,Tags[?Key==`steps-pid`]|[0].Value,LaunchTime]' \
+  --output text
+```
+
+An instance is a leftover only if no process with that pid is running on that host: a live one, possibly on another machine, may be mid-job on it, so check before terminating. A crashed run's transcript names the same hash (`launching from template … (steps-worker=…)`), which is the way from a dead run to its machine. steps never reads these tags back — a tag never makes a machine steps' to reuse or delete.
+
 ## When it does not work
 
 **`UnauthorizedOperation … explicit deny in a service control policy`** — an AWS Organizations SCP is refusing the call, and **nothing inside the account can override it**, `AdministratorAccess` included. SCPs are often region-scoped, so try another `AWS_REGION` first; if the deny applies everywhere, it has to be changed from the organization's management account, or you need an account outside that organization.
 
-**`UnauthorizedOperation … CreateFleet`, on a `burst` step** — the launch rung acquires with `ec2:CreateFleet` (plus `ec2:DescribeInstances` to read the machine back and `ec2:TerminateInstances` to give it back), and a policy written from the `run-instances` command in step 4 grants none of them. The static worker is unaffected: it acquires nothing.
+**`UnauthorizedOperation … CreateFleet` or `… CreateTags`, on a `burst` step** — the launch rung acquires with `ec2:CreateFleet` and tags the machine in the same request with `ec2:CreateTags` (plus `ec2:DescribeInstances` to read the machine back and `ec2:TerminateInstances` to give it back), and a policy written from the `run-instances` command in step 4 grants none of them. **A policy that worked before steps tagged its machines needs `ec2:CreateTags` added.** The refusal can also arrive as the fleet's own error, reading `no capacity for the requested worker: … not authorized … ec2:CreateTags` — that is the same missing grant, not an empty spot pool. Either way no untagged machine is left behind: EC2 refuses the whole launch. The static worker is unaffected: it acquires nothing.
 
 **The SSM agent never registers** — the instance profile is missing or lacks `AmazonSSMManagedInstanceCore`, or the instance has no route to the internet. Check with `aws ssm describe-instance-information`.
 

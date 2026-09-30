@@ -22,6 +22,7 @@ package venue
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -180,6 +181,8 @@ func TestRealGCPLaunchRungAcquiresAndDeletes(t *testing.T) {
 
 	t.Logf("launched %s", resolved.Instance)
 
+	assertLaunchLabels(ctx, t, fixture, worker, resolved.Instance)
+
 	runner := newLocalRunner(t, shell.RunnerSpec{
 		Cwd:       t.TempDir(),
 		Worker:    resolved.URL,
@@ -197,6 +200,39 @@ func TestRealGCPLaunchRungAcquiresAndDeletes(t *testing.T) {
 	}
 
 	awaitInstanceGone(ctx, t, fixture, resolved.Instance)
+}
+
+// assertLaunchLabels checks the launched instance carries steps' labels AND
+// the template's own: whether GCE merges request labels with an instance
+// template's, rather than replacing them, is something only a real project
+// answers — and the fixture's down finds leaks by the template's label.
+func assertLaunchLabels(ctx context.Context, t *testing.T, fixture gcpFixture, worker Worker, name string) {
+	t.Helper()
+
+	out, err := exec.CommandContext(ctx, "gcloud", "compute", "instances", "describe", name, //nolint:gosec // fixed argv over fixture names
+		"--project", fixture.project, "--zone", fixture.zone,
+		"--format=json(labels)").Output()
+	if err != nil {
+		t.Fatalf("describing %s: %v", name, err)
+	}
+
+	var described struct {
+		Labels map[string]string `json:"labels"`
+	}
+
+	err = json.Unmarshal(out, &described)
+	if err != nil {
+		t.Fatalf("reading %s's labels from %s: %v", name, out, err)
+	}
+
+	want := worker.launchLabels()
+	want["steps-test-fixture"] = "1"
+
+	for key, value := range want {
+		if described.Labels[key] != value {
+			t.Errorf("%s labels = %v, want %s=%s", name, described.Labels, key, value)
+		}
+	}
 }
 
 // awaitInstanceGone polls until the API denies the instance exists — the

@@ -8,6 +8,7 @@ package venue
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -165,5 +166,50 @@ func TestAwaitZoneOperationPacesAnEagerServer(t *testing.T) {
 
 	if calls.Load() > 2 {
 		t.Errorf("an eager server was asked %d times in 300ms — the loop is not pacing itself", calls.Load())
+	}
+}
+
+// TestGCEClientInsertSendsLabels pins that the labels reach the wire, not just
+// the fake: the fake records whatever it is handed, and an adapter that
+// dropped them would launch every machine unfindable.
+func TestGCEClientInsertSendsLabels(t *testing.T) {
+	t.Parallel()
+
+	var (
+		sent     compute.Instance
+		template string
+	)
+
+	client := newTestGCEClient(t, func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/instances"):
+			template = req.URL.Query().Get("sourceInstanceTemplate")
+
+			err := json.NewDecoder(req.Body).Decode(&sent)
+			if err != nil {
+				t.Errorf("decoding the insert: %v", err)
+			}
+
+			operationJSON(t, w, compute.Operation{Name: "op-insert", Status: "RUNNING"})
+		case strings.HasSuffix(req.URL.Path, "/operations/op-insert/wait"):
+			operationJSON(t, w, compute.Operation{Name: "op-insert", Status: "DONE"})
+		default:
+			http.NotFound(w, req)
+		}
+	})
+
+	labels := map[string]string{labelWorker: "abc123", labelHost: "box", labelPid: "42"}
+
+	err := client.InsertFromTemplate(context.Background(), "p", "z", "steps-1", "tmpl", labels)
+	if err != nil {
+		t.Fatalf("InsertFromTemplate: %v", err)
+	}
+
+	if template != "projects/p/global/instanceTemplates/tmpl" {
+		t.Errorf("sourceInstanceTemplate = %q", template)
+	}
+
+	if sent.Name != "steps-1" || !maps.Equal(sent.Labels, labels) {
+		t.Errorf("sent %s with labels %v, want steps-1 with %v", sent.Name, sent.Labels, labels)
 	}
 }
