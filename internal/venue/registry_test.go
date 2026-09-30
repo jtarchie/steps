@@ -236,8 +236,12 @@ func TestParkedRungLeavesAMachineItDidNotStartRunning(t *testing.T) {
 
 	leases := NewLeases(boxWorker(t, "aws://stopped/i-0abc123def456789"))
 
-	resolved := mustResolve(t, leases)
+	var notes bytes.Buffer
+
+	resolved := mustResolveTag(events.WithOutput(context.Background(), events.Output{Stdout: &notes}), t, leases, "box")
 	mustRelease(t, leases)
+
+	assertAdoptedWarning(t, notes.String(), "i-0abc123def456789")
 
 	if resolved.Instance != "i-0abc123def456789" {
 		t.Errorf("resolved = %+v, want the running instance", resolved)
@@ -254,8 +258,12 @@ func TestGCPParkedRungLeavesAMachineItDidNotStartRunning(t *testing.T) {
 
 	leases := NewLeases(boxWorker(t, "gcp://stopped/worker-1?project=test-project&zone=us-central1-a"))
 
-	resolved := mustResolve(t, leases)
+	var notes bytes.Buffer
+
+	resolved := mustResolveTag(events.WithOutput(context.Background(), events.Output{Stdout: &notes}), t, leases, "box")
 	mustRelease(t, leases)
+
+	assertAdoptedWarning(t, notes.String(), "worker-1")
 
 	if resolved.Instance != "worker-1" || resolved.Rung != RungStatic {
 		t.Errorf("resolved = %+v, want worker-1 as a static worker", resolved)
@@ -266,6 +274,15 @@ func TestGCPParkedRungLeavesAMachineItDidNotStartRunning(t *testing.T) {
 
 	if len(fake.starts) != 0 || len(fake.stops) != 0 {
 		t.Errorf("starts = %v, stops = %v on a machine steps did not start — want neither", fake.starts, fake.stops)
+	}
+}
+
+// A crashed steps leaves every machine it started running, and the restarted one adopts them all: nothing but this warning says one is billing.
+func assertAdoptedWarning(t *testing.T, notes, instance string) {
+	t.Helper()
+
+	if !strings.Contains(notes, "warning: ") || !strings.Contains(notes, instance) || !strings.Contains(notes, "still billing") {
+		t.Errorf("notes = %q, want a warning naming %s as adopted and billing", notes, instance)
 	}
 }
 
@@ -280,11 +297,13 @@ type parkedFake struct {
 	landing chan struct{}
 }
 
-func (p *parkedFake) acquire(_ context.Context, worker Worker) (Worker, func(context.Context) error, error) {
+func (p *parkedFake) acquire(ctx context.Context, worker Worker) (Worker, func(context.Context) error, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if p.running {
+		noteAdopted(ctx, worker)
+
 		return worker.asStatic(worker.Instance), nil, nil
 	}
 
@@ -511,9 +530,16 @@ func TestRegistryStillParksAMachineReacquiredRunning(t *testing.T) {
 	job := registry.Leases(boxWorker(t, "aws://stopped/i-0abc123def456789"))
 	dying := mustResolve(t, job)
 
+	var notes bytes.Buffer
+
 	job.Abandon("box", dying.URL)
-	mustResolve(t, job)
+	mustResolveTag(events.WithOutput(context.Background(), events.Output{Stdout: &notes}), t, job, "box")
 	mustRelease(t, job)
+
+	// Not adopted: warning here would tell the operator to stop a machine steps is about to park itself.
+	if strings.Contains(notes.String(), "warning:") || !strings.Contains(notes.String(), "steps' own earlier start") {
+		t.Errorf("notes = %q, want the re-acquisition noted as steps' own, not warned about", notes.String())
+	}
 
 	if running, starts, stops := fake.state(); running || starts != 1 || stops != 1 {
 		t.Errorf("running=%v, %d starts, %d stops — want the machine steps started parked at the end", running, starts, stops)
@@ -1131,5 +1157,86 @@ func TestRegistryNamesTheIdleWindowWithoutRacingAJoiner(t *testing.T) {
 
 	if acquired, released := fake.counts(); acquired != 1 || released["i-1"] != 1 {
 		t.Errorf("%d acquisitions, given back %v — want one machine, given back once", acquired, released)
+	}
+}
+
+// ReusedWarm is what makes a dead machine's first refusal an eviction, so it must be true only for a machine an idle window alone was holding, and only until that machine is abandoned or the scope ends.
+func TestReusedWarmIsOnlyAMachineTakenFromItsIdleWindow(t *testing.T) {
+	fake := &countingAcquirer{}
+	registry := NewRegistryWith(fake.acquire)
+	workers := boxWorker(t, "aws://launch/lt-0def4567890abcde?idle=1h")
+
+	first := registry.Leases(workers)
+	mustResolve(t, first)
+
+	joiner := registry.Leases(workers)
+	mustResolve(t, joiner)
+
+	if first.ReusedWarm("box") || joiner.ReusedWarm("box") {
+		t.Error("a machine acquired, or joined while in use, reads as a warm reuse")
+	}
+
+	mustRelease(t, first)
+	mustRelease(t, joiner)
+
+	reused := registry.Leases(workers)
+	dead := mustResolve(t, reused)
+
+	if !reused.ReusedWarm("box") {
+		t.Fatal("a machine taken from its idle window does not read as a warm reuse")
+	}
+
+	reused.Abandon("box", dead.URL)
+
+	if reused.ReusedWarm("box") {
+		t.Error("an abandoned warm machine still reads as a warm reuse, so its replacement's failure would be re-placed again")
+	}
+
+	mustResolve(t, reused)
+	mustRelease(t, reused)
+
+	again := registry.Leases(workers)
+	mustResolve(t, again)
+	mustRelease(t, again)
+
+	if again.ReusedWarm("box") {
+		t.Error("a scope that released everything still reads a warm reuse")
+	}
+
+	err := registry.Close(context.Background())
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+// The parked rung re-acquires under the SAME entry after an eviction, so only Abandon forgetting the warm reuse keeps the re-placement to once.
+func TestReusedWarmIsForgottenWhenAParkedMachineIsAbandoned(t *testing.T) {
+	fake := &parkedFake{}
+	registry := NewRegistryWith(fake.acquire)
+	workers := boxWorker(t, "aws://stopped/i-0abc123def456789?idle=1h")
+
+	earlier := registry.Leases(workers)
+	mustResolve(t, earlier)
+	mustRelease(t, earlier)
+
+	job := registry.Leases(workers)
+	dead := mustResolve(t, job)
+
+	if !job.ReusedWarm("box") {
+		t.Fatal("a parked machine taken from its idle window does not read as a warm reuse")
+	}
+
+	job.Abandon("box", dead.URL)
+	mustResolve(t, job)
+
+	if job.ReusedWarm("box") {
+		t.Error("the parked machine's re-acquisition still reads as a warm reuse")
+	}
+
+	mustRelease(t, job)
+
+	err := registry.Close(context.Background())
+	if err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }

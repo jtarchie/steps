@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"time"
 
@@ -207,9 +208,26 @@ func adoptRunning(ctx context.Context, api ec2API, worker Worker) (Worker, func(
 		return Worker{}, nil, err
 	}
 
-	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: %s was already running; using it and leaving it running, since steps did not start it", worker.URL, worker.Instance))
+	noteAdopted(ctx, worker)
 
 	return worker.asStatic(worker.Instance), nil, nil
+}
+
+// ownedKey marks an acquisition of a machine this process already owes a park, so finding it running is no news: it is steps' own earlier start.
+type ownedKey struct{}
+
+func withOwned(ctx context.Context) context.Context { return context.WithValue(ctx, ownedKey{}, true) }
+
+// noteAdopted warns every time, because nothing records what a crashed or restarted steps started (#120): each such machine is found running here, and bills until somebody reads this.
+func noteAdopted(ctx context.Context, worker Worker) {
+	if owned, _ := ctx.Value(ownedKey{}).(bool); owned {
+		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: %s is still running from steps' own earlier start; it will be parked when its last user is done", worker.URL, worker.Instance))
+
+		return
+	}
+
+	events.Note(ctx, events.NoteWarn, fmt.Sprintf("worker %s: %s was already running, so steps did not start it and will not stop it — if a steps process that crashed or restarted started it, it is still billing; stop it yourself", worker.URL, worker.Instance))
+	slog.WarnContext(ctx, "worker.adopted", "worker", worker.URL, "instance", worker.Instance)
 }
 
 // cleanupTimeout bounds the API call that gives a machine back on a path

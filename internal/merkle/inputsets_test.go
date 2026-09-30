@@ -4,7 +4,9 @@ package merkle
 
 import (
 	"context"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -130,5 +132,79 @@ func TestPlanChainsEmptySetsPlanNothing(t *testing.T) {
 
 	if len(chains) != 0 {
 		t.Errorf("chains = %d, want none", len(chains))
+	}
+}
+
+// TestPlanChainsResolveArtifactImages: a task whose image: names a get is
+// hashed under the digest that get bound, identically by both walks, so each
+// version of a version: every get gets its own task hash.
+func TestPlanChainsResolveArtifactImages(t *testing.T) {
+	t.Parallel()
+
+	one, two := "sha256:"+strings.Repeat("1", 64), "sha256:"+strings.Repeat("2", 64)
+
+	cfg := &config.Config{
+		ResourceTypes: []config.ResourceType{{
+			Name:   "digests",
+			Config: config.ResourceTypeConfig{Check: fmt.Sprintf(`printf '[{"digest":"%s"},{"digest":"%s"}]'`, one, two), In: "true"},
+		}},
+		Resources: []config.Resource{{Name: "img", Type: "digests", Source: map[string]any{"repository": "ghcr.io/me/img"}}},
+	}
+
+	steps := []config.Step{
+		{Get: "img", Version: "every"},
+		{Task: "work", Run: "true", Image: "img"},
+	}
+	sets := []InputSet{{"img": {"digest": one}}, {"img": {"digest": two}}}
+
+	recursive, err := PlanChains(context.Background(), cfg, "build", steps, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("PlanChains (recursion): %v", err)
+	}
+
+	perSet, err := PlanChains(context.Background(), cfg, "build", steps, nil, nil, sets)
+	if err != nil {
+		t.Fatalf("PlanChains (sets): %v", err)
+	}
+
+	if !reflect.DeepEqual(recursive, perSet) {
+		t.Fatalf("chains diverge:\nrecursion: %+v\nsets:      %+v", recursive, perSet)
+	}
+
+	if len(perSet) != 2 {
+		t.Fatalf("chains = %d, want 2", len(perSet))
+	}
+
+	for i, digest := range []string{one, two} {
+		task := perSet[i].Nodes[1]
+		if want := "ghcr.io/me/img@" + digest; task.Content["image"] != want {
+			t.Errorf("chain %d task image = %v, want %q", i, task.Content["image"], want)
+		}
+	}
+
+	if perSet[0].Nodes[1].Hash == perSet[1].Nodes[1].Hash {
+		t.Error("two digests hashed one task node")
+	}
+}
+
+// TestPlanChainsUnresolvableArtifactImageIsUnskippable: the planner does not
+// fail a plan over an image it cannot bind — the executor reports that in the
+// step's own place — but it must never let such a chain be skipped.
+func TestPlanChainsUnresolvableArtifactImageIsUnskippable(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{Resources: []config.Resource{{Name: "img", Source: map[string]any{"repository": "r"}}}}
+
+	chains, err := PlanChains(context.Background(), cfg, "build", []config.Step{{Task: "work", Run: "true", Image: "img"}}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("PlanChains: %v", err)
+	}
+
+	if len(chains) != 1 || !chains[0].Unskippable {
+		t.Fatalf("chains = %+v, want one unskippable chain", chains)
+	}
+
+	if image := chains[0].Nodes[0].Content["image"]; image != "img" {
+		t.Errorf("task image = %v, want the literal name", image)
 	}
 }

@@ -579,3 +579,82 @@ func TestValidateArtifactFlowLoadVar(t *testing.T) {
 		}
 	})
 }
+
+// TestValidateArtifactFlowArtifactImage holds an image: naming an artifact to
+// the rule an input is held to: an earlier get must fetch it.
+func TestValidateArtifactFlowArtifactImage(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		plan []config.Step
+		want string
+	}{
+		"before its get": {
+			plan: []config.Step{{Task: "build", Run: "true", Image: "toolchain"}, {Get: "toolchain"}},
+			want: `image "toolchain"`,
+		},
+		"after its get": {
+			plan: []config.Step{{Get: "toolchain"}, {Task: "build", Run: "true", Image: "toolchain"}},
+		},
+		"an in_parallel sibling": {
+			plan: []config.Step{{InParallel: &config.InParallel{Steps: []config.Step{
+				{Get: "toolchain"},
+				{Agent: "a", Image: "toolchain"},
+			}}}},
+			want: `image "toolchain"`,
+		},
+		"a step hook after the get": {
+			plan: []config.Step{{Get: "toolchain", Hooks: config.Hooks{
+				OnSuccess: &config.Step{Task: "note", Run: "true", Image: "toolchain"},
+			}}},
+		},
+		"a step hook before the get": {
+			plan: []config.Step{{Task: "t", Run: "true", Hooks: config.Hooks{
+				OnFailure: &config.Step{Task: "note", Run: "true", Image: "toolchain"},
+			}}},
+			want: `image "toolchain"`,
+		},
+		"an earlier task's output of the same name": {
+			plan: []config.Step{
+				{Task: "make", Run: "true", Outputs: []string{"toolchain"}},
+				{Task: "build", Run: "true", Image: "toolchain"},
+			},
+			want: `image "toolchain"`,
+		},
+		"an output shadowing a get": {
+			plan: []config.Step{
+				{Get: "toolchain"},
+				{Task: "make", Run: "true", Outputs: []string{"toolchain"}},
+				{Task: "build", Run: "true", Image: "toolchain"},
+			},
+		},
+		"a resource never fetched": {
+			plan: []config.Step{{Task: "build", Run: "true", Image: "toolchain"}},
+			want: "rename the resource",
+		},
+		"an image that is not an artifact": {
+			plan: []config.Step{{Task: "build", Run: "true", Image: "alpine:3"}},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			job := config.Job{Name: "j", Plan: tc.plan}
+			cfg := &config.Config{
+				Resources: []config.Resource{{Name: "toolchain", Type: "registry-image"}},
+				Jobs:      []config.Job{job},
+			}
+
+			err := ValidateArtifactFlow(cfg, &job)
+
+			switch {
+			case tc.want == "" && err != nil:
+				t.Fatalf("err = %v, want nil", err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Fatalf("err = %v, want one containing %q", err, tc.want)
+			}
+		})
+	}
+}

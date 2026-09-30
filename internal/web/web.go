@@ -21,7 +21,9 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -135,7 +137,9 @@ type Server struct {
 	mu        sync.RWMutex
 	pipelines []*Pipeline
 	bySlug    map[string]*Pipeline
-	echo      *echo.Echo
+	// broken are pipelines the database holds and a restart could not serve, by name: shown rather than dropped, because a daemon that looks healthy while missing one is the failure refusing to start used to prevent.
+	broken map[string]BrokenPipeline
+	echo   *echo.Echo
 	// runner enqueues and executes jobs. nil disables every mutation a
 	// BROWSER can reach, which is what a read-only deployment gets.
 	//
@@ -193,6 +197,8 @@ type SetResult struct {
 	// Created, replaced and unchanged are three outcomes a person reads differently, so the answer says which.
 	Created   bool `json:"created"`
 	Unchanged bool `json:"unchanged"`
+	// Repaired is a set that served a pipeline a restart had left broken.
+	Repaired bool `json:"repaired,omitempty"`
 }
 
 // ErrRevisionMoved is a compare-and-set the daemon refused: the configuration moved between the sender's diff and its set.
@@ -218,7 +224,7 @@ type Runner interface {
 
 // New builds a server over whatever pipelines it is handed, which may be none: a daemon is configured by `steps pipeline set` and by nothing else, so empty is the ordinary starting state rather than an error.
 func New(pipelines []*Pipeline, runner Runner, opts ...Option) (*Server, error) {
-	srv := &Server{bySlug: map[string]*Pipeline{}, runner: runner}
+	srv := &Server{bySlug: map[string]*Pipeline{}, broken: map[string]BrokenPipeline{}, runner: runner}
 
 	// Before routes(), which is where the middleware table is fixed.
 	for _, opt := range opts {
@@ -267,6 +273,8 @@ func (s *Server) Add(pipeline *Pipeline) error {
 
 	s.bySlug[pipeline.Slug] = pipeline
 	s.pipelines = append(s.pipelines, pipeline)
+	// Served is repaired: a set that got this far passed every check the restart failed.
+	delete(s.broken, pipeline.Slug)
 
 	sort.Slice(s.pipelines, func(i, j int) bool { return s.pipelines[i].Slug < s.pipelines[j].Slug })
 
@@ -316,6 +324,73 @@ func (s *Server) Served() []*Pipeline {
 	defer s.mu.RUnlock()
 
 	return append([]*Pipeline(nil), s.pipelines...)
+}
+
+// BrokenPipeline is one the database holds that this daemon could not serve, and why.
+type BrokenPipeline struct {
+	Name   string
+	SHA    string
+	From   string
+	Reason string
+}
+
+// brokenReasonLimit bounds what a page and a JSON row carry: a problem list is a few lines, and one pathological error must not become a megabyte on every page's switcher.
+const brokenReasonLimit = 4 << 10
+
+// MarkBroken lists a pipeline as held and not served.
+func (s *Server) MarkBroken(broken BrokenPipeline) {
+	if len(broken.Reason) > brokenReasonLimit {
+		broken.Reason = strings.ToValidUTF8(broken.Reason[:brokenReasonLimit], "") + "…"
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.broken[broken.Name] = broken
+}
+
+// ClearBroken forgets a broken pipeline, once nothing holds it any more.
+func (s *Server) ClearBroken(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.broken, name)
+}
+
+// Broken is every pipeline held and not served, by name.
+func (s *Server) Broken() []BrokenPipeline {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	broken := slices.Collect(maps.Values(s.broken))
+	slices.SortFunc(broken, func(a, b BrokenPipeline) int { return strings.Compare(a.Name, b.Name) })
+
+	return broken
+}
+
+// BrokenReason is why a pipeline is held and not served, and false when it is not broken.
+func (s *Server) BrokenReason(name string) (string, bool) {
+	broken, ok := s.brokenOf(name)
+
+	return broken.Reason, ok
+}
+
+func (s *Server) brokenOf(name string) (BrokenPipeline, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	broken, ok := s.broken[name]
+
+	return broken, ok
+}
+
+// notServed is the 404 for a name this daemon does not serve, which says why when the name is one it holds broken.
+func (s *Server) notServed(name string) error {
+	if reason, broken := s.BrokenReason(name); broken {
+		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("%s is not being served: %s", name, reason))
+	}
+
+	return echo.NewHTTPError(http.StatusNotFound, ErrNoSuchPipeline.Error())
 }
 
 // routes wires the handler table and the middleware every route shares.
@@ -443,8 +518,13 @@ func startConfig(addr string) echo.StartConfig {
 func (s *Server) resolvePipeline(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		pipeline := s.Lookup(c.Param("pipeline"))
+		// A webhook sender never passed this server's credentials, so it is not told why.
+		if pipeline == nil && isHookRoute(c) {
+			return echo.NewHTTPError(http.StatusNotFound, ErrNoSuchPipeline.Error())
+		}
+
 		if pipeline == nil {
-			return echo.NewHTTPError(http.StatusNotFound, "no such pipeline")
+			return s.notServed(c.Param("pipeline"))
 		}
 
 		c.Set("pipeline", pipeline)
@@ -475,7 +555,7 @@ func sameOriginMutations(next echo.HandlerFunc) echo.HandlerFunc {
 		// has no reason to share this origin. Exempting it here rather than
 		// mounting it outside the group keeps it under /p/<slug>/, which is
 		// what says which pipeline it checks.
-		if strings.HasSuffix(c.Path(), "/hooks/:resource") {
+		if isHookRoute(c) {
 			return next(c)
 		}
 
@@ -571,9 +651,14 @@ func (s *Server) handleError(c *echo.Context, err error) {
 func (s *Server) globalNav(c *echo.Context) navData {
 	nav := s.nav(c)
 
-	if nav.Current == "" && len(nav.Pipelines) > 0 {
-		nav.Current = nav.Pipelines[0].Slug
-		nav.CurrentPath = nav.Pipelines[0].Path
+	for _, first := range nav.Pipelines {
+		// A broken pipeline has no pages to borrow links from.
+		if nav.Current != "" || first.Broken {
+			continue
+		}
+
+		nav.Current = first.Slug
+		nav.CurrentPath = first.Path
 	}
 
 	return nav
@@ -608,6 +693,10 @@ func (s *Server) nav(c *echo.Context) navData {
 			Jobs:      len(pipeline.Config().Jobs),
 			Attention: attentionTotal(items),
 		})
+	}
+
+	for _, broken := range s.Broken() {
+		nav.Pipelines = append(nav.Pipelines, pipelineSummary{Slug: broken.Name, Path: broken.From, Broken: true})
 	}
 
 	sort.Slice(nav.Pipelines, func(i, j int) bool {
@@ -674,4 +763,6 @@ type pipelineSummary struct {
 	Jobs int
 	// Attention is everything that pipeline is waiting on, summed — a switcher row has space for a number, not for six sentences.
 	Attention int
+	// Broken is a pipeline the daemon holds and does not serve. Not its reason: this shell also draws the error page a webhook sender gets, and that sender never passed this server's credentials.
+	Broken bool
 }

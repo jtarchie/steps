@@ -10,6 +10,16 @@
     </thead>
     <tbody>
       {{range .Pipelines}}
+      {{if .Broken}}
+      {{/* Held and not served: no pages behind it, so no links and no pause, and the state said in words rather than only in red. */}}
+      <tr>
+        <td>{{.Slug}}</td>
+        <td class="num"><span class="faint">—</span></td>
+        <td colspan="3" class="broken-reason">{{.Broken}}</td>
+        <td><span class="st st-failed">broken</span> <span class="dim">not serving</span></td>
+        <td class="dim">{{.Path}}</td>
+      </tr>
+      {{else}}
       <tr>
         <td><a href="/p/{{.Slug}}">{{.Slug}}</a></td>
         <td class="num">{{if .Attention}}<a class="badge" href="/p/{{.Slug}}"><span aria-hidden="true">●</span>{{.Attention}}</a>{{else}}<span class="faint">—</span>{{end}}</td>
@@ -29,6 +39,7 @@
         </td>
         <td class="dim">{{.Path}}</td>
       </tr>
+      {{end}}
       {{end}}
     </tbody>
   </table>

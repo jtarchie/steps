@@ -1,0 +1,26 @@
+# A tasks: entry is shared by every step that names it and sees no job's
+# gets, so its image: cannot name an artifact; only a step's own image: can.
+# Refused rather than read as a Docker Hub image called "toolchain".
+# expect: only a step's own image: can name an artifact
+
+resource_types:
+- name: registry-image
+  config:
+    check: echo '[]'
+    in: "true"
+
+resources:
+- name: toolchain
+  type: registry-image
+  source: {repository: ghcr.io/me/toolchain}
+
+tasks:
+- name: build
+  image: toolchain
+  run: go test ./...
+
+jobs:
+- name: build
+  plan:
+  - get: toolchain
+  - task: build

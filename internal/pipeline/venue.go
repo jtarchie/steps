@@ -166,6 +166,13 @@ func workerFor(ctx context.Context, step config.Step) (string, error) {
 	return worker.URL, nil
 }
 
+// reusedWarm is a step whose machine this job took from an idle window, which the venue treats as reclaimed when it will not answer — see shell.RunnerSpec.ReusedWarm.
+func reusedWarm(ctx context.Context, step config.Step) bool {
+	leases := leasesFrom(ctx)
+
+	return leases != nil && leases.ReusedWarm(placementTag(step))
+}
+
 // venueRetries is how many times a step may be re-placed after its worker was
 // taken away, on top of whatever attempts: the author set.
 //
@@ -246,7 +253,7 @@ func replacementRefusal(ctx context.Context, tag string, attempt int, budget tim
 		return fmt.Sprintf("after %d re-placements", attempt)
 	case tag == "":
 		return "the step names no worker"
-	case !canReplace(ctx, tag):
+	case !acquiredOnDemand(ctx, tag):
 		// Nothing to acquire: the tag names a machine that already exists, so
 		// the next resolve would hand back the same address and the step
 		// would re-run against the host that just went away.
@@ -258,9 +265,9 @@ func replacementRefusal(ctx context.Context, tag string, attempt int, budget tim
 	}
 }
 
-// canReplace reports whether a tag names something a fresh machine can be
+// acquiredOnDemand reports whether a tag names something a fresh machine can be
 // acquired for. A worker that already exists has nowhere else to go.
-func canReplace(ctx context.Context, tag string) bool {
+func acquiredOnDemand(ctx context.Context, tag string) bool {
 	worker, ok := workersFrom(ctx)[tag]
 
 	return ok && worker.Acquirable()
@@ -275,18 +282,20 @@ func canReplace(ctx context.Context, tag string) bool {
 // session against a host that dies at the handshake — which sticks, is not an
 // eviction, and fails the build on a machine steps already knew was dying.
 func releaseIfReclaimed(ctx context.Context, step config.Step, runner shell.Runner, dialed string) {
-	reason, reclaimed := venue.ReclaimedBy(runner)
-	if !reclaimed {
-		return
-	}
-
 	tag := placementTag(step)
-	if tag == "" {
-		return
-	}
 
 	leases := leasesFrom(ctx)
-	if leases == nil {
+	if tag == "" || leases == nil {
+		return
+	}
+
+	// A warm reuse is presumed dead only until it answers; after that, a later step's refused dial is its own failure, not a machine that died while kept.
+	if _, answered := venue.PlacementOf(runner); answered {
+		leases.Answered(tag)
+	}
+
+	reason, reclaimed := venue.ReclaimedBy(runner)
+	if !reclaimed {
 		return
 	}
 
