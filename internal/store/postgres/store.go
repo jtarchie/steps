@@ -48,6 +48,10 @@ const (
 	classContent  = 7303
 )
 
+// lockHolderIdleLimit is idle_in_transaction_session_timeout for a
+// transaction holding the pipeline lock; see write.
+const lockHolderIdleLimit = "60s"
+
 // Store is one pipeline's handle on a Postgres state database. The handle is
 // the scope, as it is for sqlite: pipelineID is in every query's predicate.
 type Store struct {
@@ -141,6 +145,13 @@ func connConfig(rawURL string) (*pgx.ConnConfig, string, error) {
 		if first != "" {
 			schema = first
 		}
+	}
+
+	// A url copied from another application's config often says
+	// search_path=public, or libpq's default "$user", public — and either
+	// would put steps' tables beside that application's.
+	if schema == "public" || schema == "$user" {
+		return nil, "", fmt.Errorf("--db names schema %s: steps keeps its tables out of %s; set search_path to a schema of its own, or leave it out for %q", schema, schema, DefaultSchema)
 	}
 
 	config.RuntimeParams["search_path"] = quote(schema)
@@ -257,7 +268,7 @@ func initDB(ctx context.Context, conn connection, pipelineName string) (int64, e
 			return err //nolint:wrapcheck // inTx's caller names the database
 		}
 
-		found, present, err := readSchemaVersion(ctx, tx)
+		found, present, err := readSchemaVersion(ctx, tx, conn.schema)
 		if err != nil {
 			return err
 		}
@@ -316,12 +327,31 @@ func createSchema(ctx context.Context, tx *sql.Tx, schemaName string) error {
 // readSchemaVersion reports the stamp, and whether there is one at all. An
 // older steps schema cannot lack the table — it was there from the first —
 // so absent means this schema has never been written.
-func readSchemaVersion(ctx context.Context, db executor) (int, bool, error) {
-	var present bool
+//
+// It also refuses a session the pinned search_path never reached. A pooler
+// told to drop the startup parameter (PgBouncer's ignore_startup_parameters,
+// the usual answer to its "unsupported startup parameter") leaves the
+// server's default "$user", public — and every unqualified name here would
+// then create and write steps' tables in public, beside another
+// application's. Same round trip as the stamp check, so it costs nothing.
+func readSchemaVersion(ctx context.Context, db executor, schemaName string) (int, bool, error) {
+	var (
+		present bool
+		path    string
+	)
 
-	err := db.QueryRowContext(ctx, `SELECT to_regclass('schema_version') IS NOT NULL`).Scan(&present)
-	if err != nil || !present {
+	err := db.QueryRowContext(ctx,
+		`SELECT to_regclass('schema_version') IS NOT NULL, current_setting('search_path')`).Scan(&present, &path)
+	if err != nil {
 		return 0, false, describe(err)
+	}
+
+	if path != quote(schemaName) {
+		return 0, false, fmt.Errorf("the session's search_path is %q, not %s: something between steps and the server dropped the one steps sets (a pooler's ignore_startup_parameters?), and its tables would land in the wrong schema; add search_path to PgBouncer's track_extra_parameters instead", path, quote(schemaName))
+	}
+
+	if !present {
+		return 0, false, nil
 	}
 
 	var found int
@@ -416,9 +446,17 @@ type executor interface {
 // gives each pipeline its single writer back, for exactly the transactions
 // that read before they write. A plain keyed upsert does not take it: the
 // database already keeps that one atomic.
+//
+// The lock outlives its client if the client vanishes mid-transaction: the
+// server notices a dead peer only through TCP keepalive, hours by default,
+// and every write of the pipeline waits that long behind a backend nobody
+// is driving. lockHolderIdleLimit ends such a session, and nothing a live
+// holder does between statements comes near it.
 func (s *Store) write(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	return inTx(ctx, s.db, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, $2::int)`, classPipeline, s.pipelineID)
+		_, err := tx.ExecContext(ctx,
+			`SELECT set_config('idle_in_transaction_session_timeout', $3, true), pg_advisory_xact_lock($1, $2::int)`,
+			classPipeline, s.pipelineID, lockHolderIdleLimit)
 		if err != nil {
 			return fmt.Errorf("could not lock pipeline %q: %w", s.pipeline, err)
 		}

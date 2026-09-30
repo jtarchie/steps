@@ -145,3 +145,26 @@ func lockWaiters(t *testing.T, db *sql.DB, n int) <-chan struct{} {
 
 	return reached
 }
+
+// TestTheLockHolderCannotIdleForever: a client that vanishes mid-write
+// leaves its backend holding the pipeline lock until the server notices the
+// dead peer — hours, by TCP keepalive — so the transaction bounds its own
+// idleness.
+func TestTheLockHolderCannotIdleForever(t *testing.T) {
+	t.Parallel()
+
+	st := openStore(t, newDatabase(t), "p")
+
+	var limit string
+
+	err := st.write(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT current_setting('idle_in_transaction_session_timeout')`).Scan(&limit)
+	})
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if limit == "0" || limit == "" {
+		t.Errorf("idle_in_transaction_session_timeout is %q inside write, want a bound", limit)
+	}
+}

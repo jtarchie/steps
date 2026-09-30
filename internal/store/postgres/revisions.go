@@ -31,7 +31,7 @@ func (s *Store) RecordRevision(ctx context.Context, sha, source string, includes
 			_, err = tx.ExecContext(ctx, `
 				INSERT INTO revision_includes (revision_id, path, content) VALUES ($1, $2, $3)
 				ON CONFLICT (revision_id, path) DO NOTHING
-			`, revisionID, path, clean(content))
+			`, revisionID, path, []byte(content))
 			if err != nil {
 				return err //nolint:wrapcheck // wrapped below with the pipeline
 			}

@@ -650,8 +650,9 @@ steps runs --db 'postgres://steps@db.internal:5432/ci?sslmode=verify-full'
   `createdb` first. Inside it, steps creates and uses one schema, `steps`, and
   touches nothing outside it — so it can share a database with an application
   that has its own `runs` table. `search_path=<schema>` in the url picks
-  another schema; each schema is its own state database, so two daemons can
-  share a server as long as each has its own.
+  another schema (never `public`, which is refused); each schema is its own
+  state database, so two daemons can share a server as long as each has its
+  own.
 - **Credentials do not belong in the url.** A password in `--db` is kept by
   every process listing and shell history that saw the command, and steps warns
   when it sees one. Set `PGPASSWORD`, or use `~/.pgpass` or `PGSERVICEFILE`.
@@ -661,7 +662,10 @@ steps runs --db 'postgres://steps@db.internal:5432/ci?sslmode=verify-full'
   `prefer`, which quietly falls back to an unencrypted connection.
 - **Behind PgBouncer in transaction mode**, add
   `default_query_exec_mode=simple_protocol`: prepared statements do not survive
-  a pooler that hands each transaction a different server connection.
+  a pooler that hands each transaction a different server connection. List
+  `search_path` in PgBouncer's `track_extra_parameters`, not
+  `ignore_startup_parameters`: a session that lost it is refused on open,
+  since steps' tables would otherwise land in `public`.
 - **Still one `steps web` per state database** — per schema, here. Nothing
   arbitrates two daemons sharing one, exactly as with a file.
 - **The first open creates the schema; every later one only reads its

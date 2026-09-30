@@ -52,7 +52,7 @@ func OpenReader(rawURL string) (*Reader, error) {
 // checkExisting refuses a schema that is absent or another build's, and
 // writes nothing either way.
 func checkExisting(ctx context.Context, conn connection) error {
-	found, present, err := readSchemaVersion(ctx, conn.db)
+	found, present, err := readSchemaVersion(ctx, conn.db, conn.schema)
 	if err != nil {
 		return fmt.Errorf("could not open state db %s: %w", conn.description, err)
 	}

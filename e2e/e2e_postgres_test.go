@@ -244,6 +244,12 @@ func TestPostgresRunsAndCaches(t *testing.T) {
 	if strings.Count(out, "build") < 2 {
 		t.Errorf("runs list printed:\n%s\nwant both runs of build", out)
 	}
+
+	// The pasteable hint is the url as typed: one rebuilt from the resolved
+	// config dropped sslmode, so pasting it fell back to libpq's prefer.
+	if want := "--db " + shellQuoted(db); !strings.Contains(out, want) {
+		t.Errorf("runs list's hint does not carry %s:\n%s", want, out)
+	}
 }
 
 // TestPostgresWithNothingRecorded: a schema steps never wrote is "no runs

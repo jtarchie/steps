@@ -2,7 +2,12 @@ package postgres
 
 import (
 	"context"
+	"errors"
+	"net/url"
+	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestAnotherApplicationsTablesAreNeverAdopted: steps goes into a database
@@ -72,5 +77,43 @@ func TestSearchPathChoosesTheSchema(t *testing.T) {
 	// another application's tables are.
 	if got := queryInt(t, db, `SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public'`); got != 0 {
 		t.Errorf("public holds %d tables, want none", got)
+	}
+}
+
+// TestADroppedSearchPathIsRefused: a pooler told to ignore the startup
+// parameter hands steps a session on the server's default "$user", public.
+// Opening there must refuse, not create steps' tables in public — rawDB is
+// exactly that session.
+func TestADroppedSearchPathIsRefused(t *testing.T) {
+	t.Parallel()
+
+	rawURL := newDatabase(t)
+	conn := connection{db: rawDB(t, rawURL), description: "test", schema: DefaultSchema}
+
+	_, err := initDB(t.Context(), conn, "p")
+	if err == nil || !strings.Contains(err.Error(), "search_path") {
+		t.Fatalf("initDB on a session without steps' search_path = %v, want a refusal naming it", err)
+	}
+
+	err = checkExisting(t.Context(), conn)
+	if err == nil || errors.Is(err, store.ErrNoState) {
+		t.Errorf("checkExisting on a session without steps' search_path = %v, want a refusal rather than nothing recorded", err)
+	}
+
+	if got := queryInt(t, conn.db, `SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public'`); got != 0 {
+		t.Errorf("public holds %d tables, want none", got)
+	}
+}
+
+// TestPublicIsNeverTheSchema: a url copied from another application's
+// config names public, and steps would otherwise write beside its tables.
+func TestPublicIsNeverTheSchema(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{"public", "public,other", "$user,public"} {
+		_, _, err := connConfig("postgres://u@h/db?search_path=" + url.QueryEscape(path))
+		if err == nil {
+			t.Errorf("search_path=%s was accepted, want a refusal", path)
+		}
 	}
 }

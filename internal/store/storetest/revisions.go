@@ -220,3 +220,30 @@ func (s suite) TestResumeKeepsTheConfigurationItCannotName(t *testing.T) {
 			rows[0].ConfigSHA, "sha-recorded")
 	}
 }
+
+// TestIncludesComeBackByteForByte: a daemon restart rebuilds a pipeline from
+// these rows alone, under the sha that covers them, so an include that is not
+// UTF-8 text — a Latin-1 script, a NUL — must come back as it went in. A
+// driver that "cleaned" it would run a script the sha never described.
+func (s suite) TestIncludesComeBackByteForByte(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	script := "echo caf\xe9\x00done\n"
+
+	err := st.RecordRevision(ctx, "sha-one", pipelineSource(1), map[string]string{"ci/build.sh": script})
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	rev, found, err := st.FindRevision(ctx, "sha-one")
+	if err != nil || !found {
+		t.Fatalf("FindRevision: found=%v err=%v", found, err)
+	}
+
+	if got := rev.Includes["ci/build.sh"]; got != script {
+		t.Errorf("the include came back as %q, want %q", got, script)
+	}
+}

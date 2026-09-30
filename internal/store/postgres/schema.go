@@ -65,7 +65,8 @@ CREATE INDEX IF NOT EXISTS idx_pipelines_revision ON pipelines(current_revision_
 CREATE TABLE IF NOT EXISTS revision_includes (
     revision_id BIGINT NOT NULL REFERENCES pipeline_revisions(id) ON DELETE CASCADE,
     path        TEXT NOT NULL,
-    content     TEXT NOT NULL,
+    -- BYTEA: the sha covers these bytes, and a script need not be UTF-8.
+    content     BYTEA NOT NULL,
     PRIMARY KEY (revision_id, path)
 );
 

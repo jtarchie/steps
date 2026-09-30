@@ -559,12 +559,17 @@ func (r *RunsCostCmd) printCostTotals(ctx context.Context, st interface {
 // copies the line after `steps runs cost app.yml --db shared.db` is sent to
 // `.steps/app.yml.db` and told there is nothing there.
 //
-// The store's Description rather than the flag as typed: it is the form the
-// driver calls safe to print, which for a network database means without its
-// credentials.
+// A file is the store's Description, the path it resolved. A url is the flag
+// as typed less its password: Description rebuilds a url from the resolved
+// config, which drops sslmode and sslrootcert, and the pasted hint would then
+// connect on libpq's prefer.
 func dbNote(typed DB, st store.Meta) string {
 	if typed == "" {
 		return ""
+	}
+
+	if location := typed.location(); location.postgres() {
+		return " --db " + shellArg(location.String())
 	}
 
 	return " --db " + shellArg(st.Description())
