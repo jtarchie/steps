@@ -37,34 +37,41 @@ func (p ProgressFlags) draw(ctx context.Context, st store.Usage) (context.Contex
 		return ctx, func() {}
 	}
 
+	live, stop := newLive(ctx, st)
+
+	ctx = events.WithRenderer(ctx, live.Event)
+	ctx = events.WithOutput(ctx, events.Output{Step: live.Stream, Hold: live.Hold})
+
+	return ctx, stop
+}
+
+// newLive starts a live view on stdout, sized to its terminal, and returns what takes it down.
+func newLive(ctx context.Context, st store.Usage) (*runview.Live, func()) {
 	live := runview.NewLive(os.Stdout)
 	live.Width = func() int { return terminalSize(80, func(size *unix.Winsize) uint16 { return size.Col }) }
 	live.Height = func() int { return terminalSize(24, func(size *unix.Winsize) uint16 { return size.Row }) }
 	live.Color = os.Getenv("NO_COLOR") == ""
 	live.Spend = func(runID string) string { return runSpend(ctx, st, runID) }
 
-	ctx = events.WithRenderer(ctx, live.Event)
-	ctx = events.WithOutput(ctx, events.Output{Step: live.Stream, Hold: live.Hold})
-
 	// Log records go above the region too, or the first warning a step logs tears it.
 	previous := slog.Default()
 	slog.SetDefault(slog.New(events.LogHandler(tint.NewTextHandler(live.Log(), &tint.Options{
-		Level:     levelOf(previous.Handler()),
+		Level:     levelOf(ctx, previous.Handler()),
 		AddSource: true,
 		NoColor:   !live.Color,
 	}))))
 
 	live.Start()
 
-	return ctx, func() {
+	return live, func() {
 		live.Stop()
 		slog.SetDefault(previous)
 	}
 }
 
-func levelOf(handler slog.Handler) slog.Level {
+func levelOf(ctx context.Context, handler slog.Handler) slog.Level {
 	for _, level := range []slog.Level{slog.LevelDebug, slog.LevelInfo, slog.LevelWarn} {
-		if handler.Enabled(context.Background(), level) {
+		if handler.Enabled(ctx, level) {
 			return level
 		}
 	}

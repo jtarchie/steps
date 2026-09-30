@@ -176,6 +176,10 @@ linters:
             - "github.com/jtarchie/steps/internal/runview"
             - "github.com/jtarchie/steps/internal/web"
             - "github.com/jtarchie/steps/internal/workspace"
+            # outcome: `steps runs follow` exits as the run it followed did, so
+            # it classifies that run's status with the error `steps run` would
+            # have returned. A stdlib-only leaf main already imports.
+            - "github.com/jtarchie/steps/internal/outcome"
         # e2e is the end-to-end suite: nothing but _test.go files, driving the
         # whole stack through cli.Run the way a user's shell would. It reads
         # back what a run produced (store, web, events) and validates the
@@ -198,6 +202,9 @@ linters:
             - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/web"
+            # outcome.ExitCode is the exit status main would give an error, which
+            # is what a test of a command's exit status asserts.
+            - "github.com/jtarchie/steps/internal/outcome"
             # schema_test.go holds the webhook provider enum to this table.
             - "github.com/jtarchie/steps/internal/webhook"
             # schema_test.go validates every shipped example against
