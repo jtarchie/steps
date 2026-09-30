@@ -99,7 +99,7 @@ func namedPipeline(name, verb string) (string, error) {
 func (p *PipelineSetCmd) upload(name, source string, includes map[string]string) error {
 	client := newDaemonClient(p.Target)
 
-	current, held, err := client.get(name)
+	current, held, broken, err := client.get(name)
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func (p *PipelineSetCmd) upload(name, source string, includes map[string]string)
 		return nil
 	}
 
-	err = p.confirm(name, current, held, source, includes)
+	err = p.confirm(name, current, held, broken, source, includes)
 	if err != nil {
 		return err
 	}
@@ -136,25 +136,33 @@ func (p *PipelineSetCmd) upload(name, source string, includes map[string]string)
 		return err
 	}
 
-	verb := "updated"
-	if result.Created {
-		verb = "created"
-	}
-
-	fmt.Printf("%s: %s is now serving %s\n", verb, name, shortConfig(result.SHA))
+	fmt.Printf("%s: %s is now serving %s\n", setVerb(result), name, shortConfig(result.SHA))
 
 	return nil
 }
 
+func setVerb(result web.SetResult) string {
+	switch {
+	case result.Repaired:
+		return "repaired"
+	case result.Created:
+		return "created"
+	default:
+		return "updated"
+	}
+}
+
 // confirm shows what would change and asks, unless told not to.
 func (p *PipelineSetCmd) confirm(
-	name string, current web.PipelineConfig, held bool, source string, includes map[string]string,
+	name string, current web.PipelineConfig, held bool, broken, source string, includes map[string]string,
 ) error {
 	if p.NonInteractive {
 		return nil
 	}
 
 	switch {
+	case broken != "":
+		fmt.Printf("%s is not being served (%s); this set will repair it.\n", name, broken)
 	case !held && p.Pause:
 		fmt.Printf("%s is new to this daemon; it will be created paused.\n", name)
 	case !held:
@@ -274,7 +282,11 @@ func (p *PipelineListCmd) Run() error {
 
 	for _, row := range rows {
 		state := "running"
-		if row.Paused {
+
+		switch {
+		case row.Broken != "":
+			state = "broken"
+		case row.Paused:
 			state = "paused"
 		}
 
@@ -286,7 +298,19 @@ func (p *PipelineListCmd) Run() error {
 		_, _ = fmt.Fprintf(writer, "%s\t%d\t%s\t%s\t%s\n", row.Name, row.Jobs, shortConfig(row.SHA), state, from)
 	}
 
-	return flush(writer)
+	err = flush(writer)
+	if err != nil {
+		return err
+	}
+
+	// A report, not a failure: the list succeeded, and /api/pipelines is the form a script reads.
+	for _, row := range rows {
+		if row.Broken != "" {
+			fmt.Printf("%s is not being served: %s\n", row.Name, row.Broken)
+		}
+	}
+
+	return nil
 }
 
 // PipelineGetCmd prints what a daemon serves, which after a local edit is the only place that configuration still exists.
@@ -304,9 +328,13 @@ func (p *PipelineGetCmd) Run() error {
 
 	client := newDaemonClient(p.Target)
 
-	current, held, err := client.get(name)
+	current, held, broken, err := client.get(name)
 	if err != nil {
 		return err
+	}
+
+	if broken != "" {
+		return fmt.Errorf("%s holds %q and is not serving it: %s", client.target, name, broken)
 	}
 
 	if !held {
@@ -463,29 +491,39 @@ func splitTargetCredentials(target string) (string, string, string) {
 	return strings.TrimSuffix(parsed.String(), "/"), username, password
 }
 
-// held is false for a pipeline the daemon does not hold, which is a set creating one rather than an error.
-func (c *daemonClient) get(name string) (web.PipelineConfig, bool, error) {
+// held is false for a pipeline the daemon does not serve, which is a set creating one rather than an error; broken is why, when the daemon holds it and a restart could not serve it — a set then repairs it.
+func (c *daemonClient) get(name string) (web.PipelineConfig, bool, string, error) {
 	var current web.PipelineConfig
 
 	status, body, err := c.do(http.MethodGet, "/api/pipelines/"+name, nil)
 	if err != nil {
-		return current, false, err
+		return current, false, "", err
 	}
 
 	if status == http.StatusNotFound {
-		return current, false, nil
+		var missing struct {
+			Broken string `json:"broken"`
+			SHA    string `json:"sha"`
+		}
+
+		_ = json.Unmarshal(body, &missing)
+
+		// The held sha, so a repair is compare-and-set against what the daemon holds rather than a blind overwrite of it.
+		current.SHA = missing.SHA
+
+		return current, false, missing.Broken, nil
 	}
 
 	if status != http.StatusOK {
-		return current, false, daemonError(c.target, status, body)
+		return current, false, "", daemonError(c.target, status, body)
 	}
 
 	err = json.Unmarshal(body, &current)
 	if err != nil {
-		return current, false, fmt.Errorf("could not read the daemon's answer: %w", err)
+		return current, false, "", fmt.Errorf("could not read the daemon's answer: %w", err)
 	}
 
-	return current, true, nil
+	return current, true, "", nil
 }
 
 func (c *daemonClient) list() ([]web.PipelineSummary, error) {

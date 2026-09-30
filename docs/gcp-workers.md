@@ -2,7 +2,7 @@
 
 How to build, by hand, the GCP side of a `gcp://` worker — and then run a pipeline that uses it.
 
-[`hack/gcp-fixture.sh`](../hack/gcp-fixture.sh) does all of this in one command for this repo's own tests. This page is the same thing typed out, so you can see what each resource is for and adapt it. Every command is `gcloud` with a project already configured. Your own account needs two roles on the project: **`roles/compute.instanceAdmin.v1`** (create, start, stop, delete instances; write their metadata; read guest attributes) and **`roles/iap.tunnelResourceAccessor`** (open the tunnel). steps itself authenticates with Application Default Credentials — `gcloud auth application-default login` once, and both the compute calls and the tunnel sign with it.
+[`hack/gcp-fixture.sh`](../hack/gcp-fixture.sh) does all of this in one command for this repo's own tests. This page is the same thing typed out, so you can see what each resource is for and adapt it. Every command is `gcloud` with a project already configured. Your own account needs two roles on the project: **`roles/compute.instanceAdmin.v1`** (create, start, stop, delete instances; write their metadata and labels; read guest attributes) and **`roles/iap.tunnelResourceAccessor`** (open the tunnel). A custom role instead needs `compute.instances.setLabels` among its create permissions, because the launch rung labels each machine as it creates it. steps itself authenticates with Application Default Credentials — `gcloud auth application-default login` once, and both the compute calls and the tunnel sign with it.
 
 ## What you are building, and why it is almost as small as the AWS one
 
@@ -151,6 +151,15 @@ gcloud compute disks list --filter="-users:*"
 ```
 
 The second one matters on its own: a disk that outlives its instance keeps billing with nothing pointing at it — which is exactly what `--instance-termination-action=DELETE` in the template exists to prevent.
+
+Every machine the launch rung creates is labelled at creation with `steps-worker` (a short hash naming the machine — template, project and zone as written in the worker mapping, so ones left to the environment are not part of it — and never any part of the worker URL), `steps-host` and `steps-pid` (the process that launched it: a `steps web` daemon or a one-shot `steps run`/`test`). One the process never gave back — it was killed, it ran out of memory, its host died — is listed by the label:
+
+```bash
+gcloud compute instances list --filter="labels.steps-worker:*" \
+  --format="table(name,zone,labels.steps-host,labels.steps-pid,creationTimestamp)"
+```
+
+An instance is a leftover only if no process with that pid is running on that host: a live one, possibly on another machine, may be mid-job on it, so check before deleting. A crashed run's transcript names the same hash (`creating steps-… from template … (steps-worker=…)`). steps never reads these labels back — a label never makes a machine steps' to reuse or delete.
 
 ## When it does not work
 

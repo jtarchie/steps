@@ -16,6 +16,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store/sqlite"
+	"github.com/jtarchie/steps/internal/web"
 )
 
 // TestPipelineSetServesAndPollsWhatWasSet: an empty daemon, one set, and the poll that set causes.
@@ -258,6 +259,130 @@ jobs:
 	if code != http.StatusOK || !strings.Contains(body, "steps pipeline set") {
 		t.Fatalf("after a refused set the daemon restarted to %d, want the empty index:\n%s", code, body)
 	}
+}
+
+// TestARestartServesTheRestAndShowsTheBrokenOne: a pipeline a restart cannot serve used to stop the daemon from starting at all, taking every healthy pipeline down with it. It is served-or-shown now: never dropped, never the reason the rest are not served, and repaired by setting it again.
+func TestARestartServesTheRestAndShowsTheBrokenOne(t *testing.T) {
+	restarted, root, path := restartWithABrokenPipeline(t)
+	defer restarted.stopIfRunning(t)
+
+	if code, _ := restarted.get(t, "/p/healthy"); code != http.StatusOK {
+		t.Fatalf("/p/healthy = %d after a restart with a broken neighbour, want it served", code)
+	}
+
+	if reason := restarted.onrootBrokenReason(t); !strings.Contains(reason, "workspace") {
+		t.Errorf("/api/pipelines lists onroot broken with %q, want the workspace named", reason)
+	}
+
+	code, page := restarted.get(t, "/")
+	if code != http.StatusOK || !strings.Contains(page, "onroot") || !strings.Contains(page, "not serving") || !strings.Contains(page, "workspace") {
+		t.Errorf("/ = %d, want the overview naming the broken pipeline rather than redirecting past it:\n%s", code, page)
+	}
+
+	err := cli.Run([]string{"pipeline", "get", "-p", "onroot", "--target", restarted.target()})
+	if err == nil || !strings.Contains(err.Error(), "workspace") {
+		t.Errorf("steps pipeline get on the broken pipeline = %v, want the reason", err)
+	}
+
+	assertASetRepairs(t, restarted, root, path)
+
+	restarted.stop(t)
+}
+
+// assertASetRepairs fixes the root and sets the same configuration again, which is the ordinary repair.
+func assertASetRepairs(t *testing.T, restarted *webProcess, root, path string) {
+	t.Helper()
+
+	err := os.Chmod(root, 0o700) //nolint:gosec // the root is the test's own
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() { restarted.set(t, "onroot", path) })
+	if !strings.Contains(out, "repaired") {
+		t.Errorf("the repairing set said %q, want it called a repair", out)
+	}
+
+	if reason := restarted.onrootBrokenReason(t); reason != "" {
+		t.Errorf("/api/pipelines still lists onroot broken after the repair: %s", reason)
+	}
+
+	if code, _ := restarted.get(t, "/p/onroot"); code != http.StatusOK {
+		t.Errorf("/p/onroot = %d after the repair, want it served", code)
+	}
+}
+
+// restartWithABrokenPipeline sets healthy and onroot, stops, makes onroot's workspace root read-only — the workspace probe writes — and restarts, returning the root and onroot's pipeline file.
+func restartWithABrokenPipeline(t *testing.T) (*webProcess, string, string) {
+	t.Helper()
+
+	return restartWithABrokenPipelineOn(t, filepath.Join(t.TempDir(), "state.db"))
+}
+
+// restartWithABrokenPipelineOn is restartWithABrokenPipeline against a state database the caller names.
+func restartWithABrokenPipelineOn(t *testing.T, state string) (*webProcess, string, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	root := filepath.Join(dir, "root")
+
+	err := os.Mkdir(root, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable
+
+	writePipelineFile(t, path, `
+workspace:
+  root: `+root+`
+jobs:
+- name: build
+  plan:
+  - task: compile
+    inputs: []
+    run: echo built
+`)
+
+	healthy := filepath.Join(dir, "healthy.yml")
+	writePipelineFile(t, healthy, "jobs:\n- name: build\n  plan:\n  - task: compile\n    inputs: []\n    run: echo built\n")
+
+	served := startWeb(t, "--db", state, "--interval", "1h")
+	served.set(t, "healthy", healthy)
+	served.set(t, "onroot", path)
+	served.stop(t)
+
+	err = os.Chmod(root, 0o500) //nolint:gosec // read-only is the point
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return startWeb(t, "--db", state, "--interval", "1h"), root, path
+}
+
+// onrootBrokenReason is why /api/pipelines lists onroot as held and not served, empty when it does not.
+func (w *webProcess) onrootBrokenReason(t *testing.T) string {
+	t.Helper()
+
+	_, body := w.get(t, "/api/pipelines")
+
+	var rows []web.PipelineSummary
+
+	err := json.Unmarshal([]byte(body), &rows)
+	if err != nil {
+		t.Fatalf("/api/pipelines: %v: %s", err, body)
+	}
+
+	reason := ""
+
+	for _, row := range rows {
+		if row.Name == "onroot" && row.Broken != "" {
+			reason = row.Broken
+		}
+	}
+
+	return reason
 }
 
 // TestPipelineSetIsCompareAndSet: a set that diffed against a revision that has since moved must be refused, not applied over the newer one.
@@ -535,6 +660,71 @@ func TestPipelineRenameKeepsHistory(t *testing.T) {
 	if !strings.Contains(out, "succeeded") {
 		t.Errorf("steps runs -p renamed does not list the run:\n%s", out)
 	}
+}
+
+// TestPipelineRenameRefusesWhileABuildRuns: a rename rebuilds the served pipeline, which cancels its drain, so one that went ahead mid-build aborted work nobody asked to stop.
+func TestPipelineRenameRefusesWhileABuildRuns(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("HOME", dir)
+
+	started := filepath.Join(dir, "started")
+	release := filepath.Join(dir, "release")
+
+	path := writePipeline(t, dir, `
+jobs:
+- name: slow
+  plan:
+  - task: wait
+    inputs: []
+    run: |
+      touch `+started+`
+      until [ -f `+release+` ]; do sleep 0.05; done
+`)
+
+	served := startWebFor(t, path, "--interval", "1h")
+	defer served.stopIfRunning(t)
+
+	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o600) })
+
+	name := cli.PipelineName(path)
+
+	served.trigger(t, name, "slow")
+	waitForFile(t, started)
+
+	runID := newestRun(t, served.state, name, "slow").ID
+
+	err := cli.Run([]string{"pipeline", "rename", "-p", name, "--to", "renamed", "--target", served.target()})
+	if err == nil {
+		t.Fatal("a rename went ahead with a build running")
+	}
+
+	if !strings.Contains(err.Error(), runID) || !strings.Contains(err.Error(), "steps runs abort") {
+		t.Errorf("the refusal does not name the running build and how to stop it: %v", err)
+	}
+
+	if code, _ := served.get(t, "/p/"+name); code != http.StatusOK {
+		t.Errorf("/p/%s = %d after a refused rename, want it still served", name, code)
+	}
+
+	if got := newestRun(t, served.state, name, "slow").Status; got != "running" {
+		t.Errorf("the build is %q after a refused rename, want still running", got)
+	}
+
+	err = os.WriteFile(release, nil, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waitForRunStatus(t, served.state, name, runID, "succeeded")
+
+	served.pipeline(t, "rename", "-p", name, "--to", "renamed")
+
+	if got := newestRun(t, served.state, "renamed", "slow").ID; got != runID {
+		t.Errorf("the newest run under the new name is %s, want %s — the one that finished", got, runID)
+	}
+
+	served.stop(t)
 }
 
 // TestPipelineSetSurvivesARestart: a restart serves what was set from the database, with nobody setting it again.

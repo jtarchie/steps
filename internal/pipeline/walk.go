@@ -51,6 +51,10 @@ type planWalk struct {
 	// the first get.
 	build string
 
+	// failedRoot is the tree of the last triggered build that failed, which
+	// the run's row is pointed back at once a later build's tree is removed.
+	failedRoot string
+
 	index            int
 	parentHash       string
 	chainUnskippable bool
@@ -179,6 +183,17 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 	return false, nil
 }
 
+// buildSuffix names a resume skip's build. Only inside a triggered build: two
+// builds of a fan-out skip steps of the same name, and the run-level line is
+// matched as-is elsewhere.
+func buildSuffix(runID, build string) string {
+	if set := strings.TrimPrefix(build, runID); set != "" {
+		return " [build " + set + "]"
+	}
+
+	return ""
+}
+
 // skipCompleted skips a plan step a previous attempt of this run already
 // finished, advancing the index. It reports whether it skipped.
 func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) bool {
@@ -189,14 +204,7 @@ func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) bool {
 		return false
 	}
 
-	// Named only inside a triggered build: two builds of a fan-out skip steps
-	// of the same name, and the run-level line is matched as-is elsewhere.
-	suffix := ""
-	if set := strings.TrimPrefix(w.build, resume.id); set != "" {
-		suffix = " [build " + set + "]"
-	}
-
-	notef(ctx, "skip: %s (already succeeded)%s", name, suffix)
+	notef(ctx, "skip: %s (already succeeded)%s", name, buildSuffix(resume.id, w.build))
 	slog.InfoContext(ctx, "job.skip", "index", w.index, "build", w.build, "reason", "resume", "step", name)
 	recordExecution(ctx, name)
 
@@ -350,6 +358,11 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 // step. stepChainSkipped is only ever returned for a cache-matched task step;
 // put/agent steps are never chain-skippable.
 func dispatchNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, skippable map[string]bool, parentHash string) (stepResult, error) {
+	step, err := resolveStepImage(ctx, r.cfg, r.jobName, step)
+	if err != nil {
+		return stepResult{}, fmt.Errorf("step %d: %w", i, err)
+	}
+
 	shouldRun, err := evaluateStepGuard(ctx, r.cfg, step, r.bw)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d (when): %w", i, err)
@@ -364,6 +377,11 @@ func dispatchNonGetStep(ctx context.Context, r stepRunner, i int, step config.St
 	// A captured load_var: value changes what a step runs, so substitute
 	// before anything hashes or executes it.
 	step = renderStepVars(ctx, step)
+
+	err = refuseRenderedArtifactImage(r.cfg, r.jobName, step)
+	if err != nil {
+		return stepResult{}, fmt.Errorf("step %d: %w", i, err)
+	}
 
 	switch {
 	case step.LoadVar != "":

@@ -127,11 +127,22 @@ func runMatchedHook(ctx context.Context, scope hookScope, name string, step *con
 	// record, silently, because an upsert is a success.
 	nested := scope.scope(fmt.Sprintf("%s (%s hook)", scope.label, name))
 
-	hookErr := runHookStep(hookCtx, nested, *step)
+	hookErr := runResolvedHookStep(hookCtx, nested, *step)
 
 	publishHookFinished(hookCtx, scope.jobName, rowName, *step, mark, started, hookErr)
 
 	return runHooks(hookCtx, nested, step.Hooks, hookErr)
+}
+
+// runResolvedHookStep is runHookStep under the image resolveStepImage gives
+// it: a step's hook runs inside the build, so it may run in a fetched image.
+func runResolvedHookStep(ctx context.Context, scope hookScope, step config.Step) error {
+	step, err := resolveStepImage(ctx, scope.cfg, scope.jobName, step)
+	if err != nil {
+		return err
+	}
+
+	return runHookStep(ctx, scope, step)
 }
 
 // runHookStep executes one hook step body — a task, put, or agent — with NO

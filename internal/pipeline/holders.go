@@ -65,11 +65,12 @@ func holdRemoteOutputs(ctx context.Context, bw workspace.BuildWorkspace, outputs
 }
 
 // placedTaskSpace is the step space for a task, leaving inputs on their
-// holders when the step is placed and a store can carry them; otherwise the
-// ordinary space, which pulls what it needs here.
+// holders whenever the step is placed — the venue moves them through the
+// store when one is configured and pipes them through this machine when not;
+// otherwise the ordinary space, which pulls what it needs here.
 func placedTaskSpace(ctx context.Context, bw workspace.BuildWorkspace, step config.Step, rt config.ResolvedTask, outputMapping map[string]string) (workspace.StepSpace, map[string]shell.RemoteInput, error) {
 	placed, ok := bw.(workspace.PlacedSpaces)
-	if !ok || placementTag(step) == "" || artifactStoreFrom(ctx) == "" {
+	if !ok || placementTag(step) == "" {
 		space, err := bw.TaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, outputMapping)
 
 		return space, nil, err //nolint:wrapcheck // the caller names the task
@@ -83,7 +84,7 @@ func placedTaskSpace(ctx context.Context, bw workspace.BuildWorkspace, step conf
 // placedPutSpace is placedTaskSpace for a put.
 func placedPutSpace(ctx context.Context, bw workspace.BuildWorkspace, step config.Step) (workspace.StepSpace, map[string]shell.RemoteInput, error) {
 	placed, ok := bw.(workspace.PlacedSpaces)
-	if !ok || placementTag(step) == "" || artifactStoreFrom(ctx) == "" {
+	if !ok || placementTag(step) == "" {
 		space, err := bw.PutSpace(ctx, step.Put, step.InputNames(), step.InputsAll())
 
 		return space, nil, err //nolint:wrapcheck // the caller names the put

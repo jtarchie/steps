@@ -449,6 +449,17 @@ func rowOf(event events.Event) store.RunEventRow {
 	}
 }
 
+// EventOf is rowOf's inverse, for replaying a recorded run. job is the run's, since run_events does not store it and Live's header and summary name it.
+func EventOf(row store.RunEventRow, job string) events.Event {
+	return events.Event{
+		Seq: row.Seq, RunID: row.RunID, Type: row.Type, Job: job,
+		StepIndex: row.StepIndex, StepName: row.StepName, StepKind: row.StepKind,
+		StepID: row.StepID, ParentStepID: row.ParentStepID,
+		Status: row.Status, Hash: row.Hash, Text: row.Text, Name: row.Name, Detail: row.Detail,
+		DurationMS: row.DurationMS, Worker: row.Worker, At: row.At,
+	}
+}
+
 // tail is the last lines one step printed, with a carriage return treated the way a terminal treats it: the line starts over.
 type tail struct {
 	lines   []string

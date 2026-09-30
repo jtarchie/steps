@@ -1,11 +1,11 @@
 package workspace
 
-// A step space for a step that runs on a worker, with a store to carry trees
-// between workers (steps#138, rung 3).
+// A step space for a step that runs on a worker (steps#138, rung 3; #143).
 //
 // An input another worker holds is left where it is: the space names it and
 // its holder, and the venue offers it to the step's worker by digest, served
-// from the store. Only an input whose declared name IS its artifact name can
+// from the store when one is configured and piped from the holder through
+// this machine when not. Only an input whose declared name IS its artifact name can
 // travel that way — the digest names the tree under the name it was filed
 // as, and a renamed input would hash differently — so a mapped input is
 // pulled here and materialized under its declared name as always.
@@ -15,7 +15,7 @@ import (
 )
 
 // PlacedSpaces is the optional BuildWorkspace capability behind a placed
-// step's space when a store is configured.
+// step's space.
 type PlacedSpaces interface {
 	// PlacedTaskSpace is TaskSpace leaving remote inputs on their holders,
 	// reported by declared name.

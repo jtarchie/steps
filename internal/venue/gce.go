@@ -41,7 +41,7 @@ type gceAPI interface {
 	// template, returning once the create operation has settled enough to
 	// carry a real error — a bad template or an exhausted quota must fail
 	// here, not as a ten-minute wait for a machine that was never coming.
-	InsertFromTemplate(ctx context.Context, project, zone, name, template string) error
+	InsertFromTemplate(ctx context.Context, project, zone, name, template string, labels map[string]string) error
 	Start(ctx context.Context, project, zone, name string) error
 	Stop(ctx context.Context, project, zone, name string) error
 	Delete(ctx context.Context, project, zone, name string) error
@@ -108,10 +108,10 @@ type gceClient struct {
 	service *compute.Service
 }
 
-func (c *gceClient) InsertFromTemplate(ctx context.Context, project, zone, name, template string) error {
+func (c *gceClient) InsertFromTemplate(ctx context.Context, project, zone, name, template string, labels map[string]string) error {
 	templateURL := "projects/" + project + "/global/instanceTemplates/" + template
 
-	op, err := c.service.Instances.Insert(project, zone, &compute.Instance{Name: name}).
+	op, err := c.service.Instances.Insert(project, zone, &compute.Instance{Name: name, Labels: labels}).
 		SourceInstanceTemplate(templateURL).Context(ctx).Do()
 	if err != nil {
 		return fmt.Errorf("creating %s from template %s: %w", name, template, err)
@@ -460,7 +460,7 @@ func gceStartParked(ctx context.Context, api gceAPI, worker Worker, project, zon
 			return Worker{}, nil, err
 		}
 
-		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: %s was already running; using it and leaving it running, since steps did not start it", worker.URL, worker.Instance))
+		noteAdopted(ctx, worker)
 
 		return worker.asStatic(worker.Instance), nil, nil
 	}
@@ -549,13 +549,16 @@ func gceStopInstance(api gceAPI, worker Worker, project, zone, name string) {
 // when the job ends.
 func gceLaunch(ctx context.Context, api gceAPI, worker Worker, project, zone string) (Worker, func(context.Context) error, error) {
 	name := gceWorkerName()
+	labels := worker.launchLabels()
 
 	// Named BEFORE the money is spent: the name is client-chosen, so a crash
 	// anywhere past the insert leaves a findable trace rather than an
 	// anonymous billing machine.
-	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: creating %s from template %s", worker.URL, name, worker.Template))
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: creating %s from template %s (%s=%s)",
+		worker.URL, name, worker.Template, labelWorker, labels[labelWorker]))
 
-	err := api.InsertFromTemplate(ctx, project, zone, name, worker.Template)
+	// Labelled in the insert itself, for the reason fleetRequest tags in the fleet request.
+	err := api.InsertFromTemplate(ctx, project, zone, name, worker.Template, labels)
 	if err != nil {
 		// The insert is two-phased — the create is ACCEPTED before its
 		// operation is waited out — so an error here (the caller's context

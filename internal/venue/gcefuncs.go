@@ -4,7 +4,7 @@ import "context"
 
 // gceFuncs holds gceClient's method values: gceClient in an interface keeps all of compute/v1 linked (~7MB) via its service field.
 type gceFuncs struct {
-	insert     func(ctx context.Context, project, zone, name, template string) error
+	insert     func(ctx context.Context, project, zone, name, template string, labels map[string]string) error
 	start      func(ctx context.Context, project, zone, name string) error
 	stop       func(ctx context.Context, project, zone, name string) error
 	del        func(ctx context.Context, project, zone, name string) error
@@ -25,8 +25,8 @@ func newGCEFuncs(client *gceClient) gceFuncs {
 	}
 }
 
-func (f gceFuncs) InsertFromTemplate(ctx context.Context, project, zone, name, template string) error {
-	return f.insert(ctx, project, zone, name, template)
+func (f gceFuncs) InsertFromTemplate(ctx context.Context, project, zone, name, template string, labels map[string]string) error {
+	return f.insert(ctx, project, zone, name, template, labels)
 }
 
 func (f gceFuncs) Start(ctx context.Context, project, zone, name string) error {

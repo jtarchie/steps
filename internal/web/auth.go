@@ -51,5 +51,10 @@ const MCPCallbackPath = "/mcp/callback"
 
 // Two routes carry their own credential instead of this server's: a webhook sender authenticates with its signature — exempt for exactly the reason it is exempt from the same-origin check and from --read-only — and an oauth redirect with the state its login minted (handleMCPCallback). Neither CAN send a password: one is a machine that was never given it, the other a bare navigation a third party caused.
 func skipAuth(c *echo.Context) bool {
-	return strings.HasSuffix(c.Path(), "/hooks/:resource") || c.Path() == MCPCallbackPath
+	return isHookRoute(c) || c.Path() == MCPCallbackPath
+}
+
+// isHookRoute is a webhook delivery, the one route under /p/ whose sender never passed this server's credentials.
+func isHookRoute(c *echo.Context) bool {
+	return strings.HasSuffix(c.Path(), "/hooks/:resource")
 }

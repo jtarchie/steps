@@ -156,6 +156,36 @@ func TestARefusedRenameLeavesThePipelineWhereItWas(t *testing.T) {
 	}
 }
 
+// A rename is refused while a build runs, but not while one waits: a queued build is a row keyed by the pipeline's id, so it moves with the name and runs under the new one.
+//
+// Not t.Parallel(): a rename moves mcp logins, which live in process environment.
+func TestAQueuedBuildSurvivesARename(t *testing.T) {
+	isolateLogins(t)
+
+	held := servingDaemon(t)
+
+	_, err := held.Set(t.Context(), "app", web.SetRequest{Source: idlePipeline, Pause: true})
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	enqueue(t, held, "app")
+
+	err = held.Rename(t.Context(), "app", "renamed")
+	if err != nil {
+		t.Fatalf("a rename with only a queued build was refused: %v", err)
+	}
+
+	err = served(t, held, "renamed").Store.Unpause(t.Context())
+	if err != nil {
+		t.Fatalf("unpause: %v", err)
+	}
+
+	if status := finishedRun(t, held, "renamed"); status != "succeeded" {
+		t.Errorf("the build queued before the rename %s, want succeeded under the new name", status)
+	}
+}
+
 // Every mid-life close lets go of one pipeline's handle while its neighbours keep writing to the same file, and Close's reclaim holds the file's write lock as long as it takes — 31s measured after a destroy freed a gigabyte, the neighbours' queue writes failing SQLITE_BUSY meanwhile.
 //
 // Not t.Parallel(): a destroy and a rename touch mcp logins, which live in process environment.
@@ -645,6 +675,184 @@ func TestARestartSkipsAPipelineThisMachineCannotRunAndServesTheRest(t *testing.T
 
 	if server.Lookup("needs-key") != nil {
 		t.Error("the pipeline missing its key is served anyway")
+	}
+
+	// Not dropped: a daemon that skipped it silently would look healthy while missing it.
+	broken := server.Broken()
+	if len(broken) != 1 || broken[0].Name != "needs-key" {
+		t.Fatalf("broken = %+v, want needs-key listed", broken)
+	}
+
+	// A set cannot fix this machine's environment, so the reason must not send somebody to try.
+	if reason := broken[0].Reason; !strings.Contains(reason, "DAEMON_RESTART_KEY") || !strings.Contains(reason, "restart the daemon") {
+		t.Errorf("reason = %q, want the missing key named and a restart suggested", reason)
+	}
+}
+
+// brokenOnRestart leaves "app" held and unserved by a restarted daemon, its workspace root read-only.
+func brokenOnRestart(t *testing.T) (*daemon, string) {
+	t.Helper()
+
+	held := servingDaemon(t)
+	root := t.TempDir()
+
+	setPipeline(t, held, "app", onRoot(root, "", "true"))
+	held.Close()
+
+	err := os.Chmod(root, 0o500) //nolint:gosec // read-only is the point: the workspace probe writes, and this root refuses it
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable
+
+	local := web.NewLocalRunner(nil, nil, 1, false)
+
+	server, err := web.New(nil, local)
+	if err != nil {
+		t.Fatalf("web.New: %v", err)
+	}
+
+	restarted := newDaemon(t.Context(), server, local, held.state, ExecFlags{}, HistoryFlags{}, time.Hour)
+	t.Cleanup(restarted.Close)
+
+	err = restarted.load(t.Context())
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if _, broken := server.BrokenReason("app"); !broken {
+		t.Fatal("app is not held broken, so this proves nothing")
+	}
+
+	return restarted, root
+}
+
+// A restore that fails lets go of its handle beside pipelines already restored and writing to the same file, so it must not compact it.
+//
+// Not t.Parallel(): a restart reads mcp logins, which live in process environment.
+func TestAFailedRestoreDoesNotCompactTheFile(t *testing.T) {
+	isolateLogins(t)
+
+	held := servingDaemon(t)
+	root := t.TempDir()
+
+	setPipeline(t, held, "kept", idlePipeline)
+	setPipeline(t, held, "app", onRoot(root, "", "true"))
+	held.Close()
+
+	// Freed after the exit's own compaction, so only a compaction during the restart can reclaim them.
+	scratch, err := sqlite.OpenStore(string(held.state), "scratch")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	for i := range 16 {
+		err = scratch.RecordRevision(t.Context(), fmt.Sprintf("big-%d", i), strconv.Itoa(i)+strings.Repeat("x", 64<<10), nil)
+		if err != nil {
+			t.Fatalf("RecordRevision: %v", err)
+		}
+	}
+
+	err = scratch.Delete(t.Context())
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	_ = scratch.Release()
+
+	err = os.Chmod(root, 0o500) //nolint:gosec // read-only is the point: the workspace probe writes, and this root refuses it
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable
+
+	local := web.NewLocalRunner(nil, nil, 1, false)
+
+	server, err := web.New(nil, local)
+	if err != nil {
+		t.Fatalf("web.New: %v", err)
+	}
+
+	restarted := newDaemon(t.Context(), server, local, held.state, ExecFlags{}, HistoryFlags{}, time.Hour)
+	t.Cleanup(restarted.Close)
+
+	err = restarted.load(t.Context())
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if _, broken := server.BrokenReason("app"); !broken {
+		t.Fatal("app is not held broken, so this proves nothing")
+	}
+
+	assertUncompacted(t, string(held.state), "a restore that failed")
+}
+
+// A root gone for good fails every repairing set the way it failed the restore, so destroy is the only way to stop listing it.
+//
+// Not t.Parallel(): a destroy removes mcp logins, which live in process environment.
+func TestABrokenPipelineCanBeDestroyed(t *testing.T) {
+	isolateLogins(t)
+
+	restarted, _ := brokenOnRestart(t)
+
+	err := restarted.Destroy(t.Context(), "app")
+	if err != nil {
+		t.Fatalf("destroy: %v", err)
+	}
+
+	if slices.Contains(pipelineNames(t, string(restarted.state)), "app") {
+		t.Error("the destroyed broken pipeline is still in the database, so the next restart lists it again")
+	}
+
+	if len(restarted.server.Broken()) != 0 {
+		t.Error("the destroyed broken pipeline is still listed broken")
+	}
+}
+
+// A rename onto a broken name hit the UNIQUE constraint raw; one from it has no served pipeline to move.
+//
+// Not t.Parallel(): a rename consults mcp logins, which live in process environment.
+func TestARenameOntoOrFromABrokenPipelineIsRefused(t *testing.T) {
+	isolateLogins(t)
+
+	restarted, _ := brokenOnRestart(t)
+	setPipeline(t, restarted, "other", idlePipeline)
+
+	for _, rename := range [][2]string{{"other", "app"}, {"app", "renamed"}} {
+		err := restarted.Rename(t.Context(), rename[0], rename[1])
+		if !errors.Is(err, web.ErrRefused) || !strings.Contains(err.Error(), "repair") {
+			t.Errorf("rename %s to %s = %v, want it refused, saying how to repair", rename[0], rename[1], err)
+		}
+	}
+}
+
+// The repairing set is the normal fix, and the terminal says so rather than calling it an update.
+//
+// Not t.Parallel(): brokenOnRestart's restart runs with the environment as the test left it.
+func TestASetRepairsABrokenPipeline(t *testing.T) {
+	isolateLogins(t)
+
+	restarted, root := brokenOnRestart(t)
+
+	err := os.Chmod(root, 0o700) //nolint:gosec // the root is the test's own
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := restarted.Set(t.Context(), "app", web.SetRequest{Source: onRoot(root, "", "true")})
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	if !result.Repaired {
+		t.Errorf("result = %+v, want it called a repair", result)
+	}
+
+	if _, broken := restarted.server.BrokenReason("app"); broken || restarted.server.Lookup("app") == nil {
+		t.Error("the repaired pipeline is still broken, or not served")
 	}
 }
 

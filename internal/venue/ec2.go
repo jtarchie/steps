@@ -19,7 +19,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"maps"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -207,9 +210,26 @@ func adoptRunning(ctx context.Context, api ec2API, worker Worker) (Worker, func(
 		return Worker{}, nil, err
 	}
 
-	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: %s was already running; using it and leaving it running, since steps did not start it", worker.URL, worker.Instance))
+	noteAdopted(ctx, worker)
 
 	return worker.asStatic(worker.Instance), nil, nil
+}
+
+// ownedKey marks an acquisition of a machine this process already owes a park, so finding it running is no news: it is steps' own earlier start.
+type ownedKey struct{}
+
+func withOwned(ctx context.Context) context.Context { return context.WithValue(ctx, ownedKey{}, true) }
+
+// noteAdopted warns every time, because nothing records what a crashed or restarted steps started (#120): each such machine is found running here, and bills until somebody reads this.
+func noteAdopted(ctx context.Context, worker Worker) {
+	if owned, _ := ctx.Value(ownedKey{}).(bool); owned {
+		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: %s is still running from steps' own earlier start; it will be parked when its last user is done", worker.URL, worker.Instance))
+
+		return
+	}
+
+	events.Note(ctx, events.NoteWarn, fmt.Sprintf("worker %s: %s was already running, so steps did not start it and will not stop it — if a steps process that crashed or restarted started it, it is still billing; stop it yourself", worker.URL, worker.Instance))
+	slog.WarnContext(ctx, "worker.adopted", "worker", worker.URL, "instance", worker.Instance)
 }
 
 // cleanupTimeout bounds the API call that gives a machine back on a path
@@ -232,7 +252,13 @@ func stopInstance(api ec2API, worker Worker, instance string) {
 // launchInstance creates one instance from a launch template and terminates
 // it when the job ends.
 func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, func(context.Context) error, error) {
-	out, err := api.CreateFleet(ctx, fleetRequest(worker))
+	labels := worker.launchLabels()
+
+	// Said BEFORE the money is spent, as gceLaunch does: EC2 chooses the id, so a crash past CreateFleet leaves this label as the transcript's only way to the machine.
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: launching from template %s (%s=%s)",
+		worker.URL, worker.Template, labelWorker, labels[labelWorker]))
+
+	out, err := api.CreateFleet(ctx, fleetRequest(worker, labels))
 	if err != nil {
 		return Worker{}, nil, fmt.Errorf("launching a worker for %q: %w", worker.URL, err)
 	}
@@ -293,9 +319,23 @@ func terminateInstance(api ec2API, worker Worker, instance string) {
 // only call that can ask for spot with an on-demand fallback and instance
 // type diversification in ONE request — which is what makes a spot worker
 // something a job can rely on rather than a gamble.
-func fleetRequest(worker Worker) *ec2.CreateFleetInput {
+//
+// The labels ride IN the request, never a CreateTags after it: a separate call
+// leaves a window where a crash strands an untagged, billing machine — the
+// case the labels exist for — while a refused tag here refuses the launch.
+func fleetRequest(worker Worker, labels map[string]string) *ec2.CreateFleetInput {
+	tags := make([]ec2types.Tag, 0, len(labels))
+
+	for _, key := range slices.Sorted(maps.Keys(labels)) {
+		tags = append(tags, ec2types.Tag{Key: aws.String(key), Value: aws.String(labels[key])})
+	}
+
 	request := &ec2.CreateFleetInput{
 		Type: ec2types.FleetTypeInstant,
+		TagSpecifications: []ec2types.TagSpecification{{
+			ResourceType: ec2types.ResourceTypeInstance,
+			Tags:         tags,
+		}},
 		LaunchTemplateConfigs: []ec2types.FleetLaunchTemplateConfigRequest{{
 			LaunchTemplateSpecification: &ec2types.FleetLaunchTemplateSpecificationRequest{
 				LaunchTemplateId: aws.String(worker.Template),

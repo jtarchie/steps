@@ -314,3 +314,27 @@ func TestPostgresPasswordIsNeverPrinted(t *testing.T) {
 }
 
 func shellQuoted(value string) string { return "'" + value + "'" }
+
+// TestPostgresABrokenPipelineCanBeDestroyed: destroying a pipeline nothing is serving opens the store itself, and it must open the one --db names — a sqlite file at a path spelled like the url would take the delete, and the pipeline would be broken again on the next restart.
+func TestPostgresABrokenPipelineCanBeDestroyed(t *testing.T) {
+	db := requirePostgresE2E(t)
+
+	restarted, _, _ := restartWithABrokenPipelineOn(t, db)
+	defer restarted.stopIfRunning(t)
+
+	if restarted.onrootBrokenReason(t) == "" {
+		t.Fatal("onroot is not held broken, so this proves nothing")
+	}
+
+	restarted.pipeline(t, "destroy", "-p", "onroot", "-n")
+	restarted.stop(t)
+
+	again := startWeb(t, "--db", db, "--interval", "1h")
+	defer again.stopIfRunning(t)
+
+	if reason := again.onrootBrokenReason(t); reason != "" {
+		t.Errorf("onroot is broken again after a destroy and a restart, so the destroy missed the database: %s", reason)
+	}
+
+	again.stop(t)
+}

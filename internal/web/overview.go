@@ -67,6 +67,8 @@ type overviewPipeline struct {
 	// latest run — the answer to "which job is red" that a last-run column
 	// cannot give, and each the link to that job's transcript.
 	Chips []jobChip
+	// Broken is why the daemon holds this pipeline and does not serve it; every other field is zero then.
+	Broken string
 }
 
 // jobChip is one job on an overview row: its name and the st-* class the
@@ -106,12 +108,15 @@ func jobChips(ctx context.Context, pipeline *Pipeline) []jobChip {
 func (s *Server) handleIndex(c *echo.Context) error {
 	served := s.Served()
 
-	if len(served) == 0 {
+	// A broken pipeline stops the shortcuts: redirected past, or shown the empty page, nobody would learn the daemon holds one it is not serving.
+	broken := len(s.Broken()) > 0
+
+	if len(served) == 0 && !broken {
 		//nolint:wrapcheck // render errors surface through the shared error handler
 		return c.Render(http.StatusOK, "empty", map[string]any{"Nav": s.globalNav(c)})
 	}
 
-	if len(served) == 1 {
+	if len(served) == 1 && !broken {
 		//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
 		return c.Redirect(http.StatusFound, "/p/"+served[0].Slug)
 	}
@@ -172,6 +177,10 @@ func (s *Server) overviewPipelines(ctx context.Context, nav navData) []overviewP
 		}
 
 		out = append(out, row)
+	}
+
+	for _, broken := range s.Broken() {
+		out = append(out, overviewPipeline{Slug: broken.Name, Path: broken.From, Broken: broken.Reason})
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })

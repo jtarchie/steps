@@ -107,7 +107,8 @@ type session struct {
 	heldMu     sync.Mutex
 	held       map[string]string
 	// remoteInputs are the step's inputs that live on other workers, offered
-	// by digest and served from the store — see shell.RunnerSpec.RemoteInputs.
+	// by digest and served from the store or piped from the holder — see
+	// shell.RunnerSpec.RemoteInputs.
 	remoteInputs map[string]shell.RemoteInput
 	// env carries the values the pipeline's env: opted into, resolved here.
 	env map[string]string
@@ -115,6 +116,8 @@ type session struct {
 	keep bool
 	// noRedial makes a transport death final rather than a reason to dial again — see RunnerSpec.NoRedial.
 	noRedial bool
+	// reusedWarm reads the session's first failed dial as the machine having died while kept warm — see RunnerSpec.ReusedWarm.
+	reusedWarm bool
 
 	mu        sync.Mutex
 	attempted bool
@@ -299,6 +302,7 @@ func (s *session) ensure(ctx context.Context) error {
 		s.abandon()
 	}
 
+	first := !s.attempted
 	s.attempted = true
 	// Cleared before the dial rather than after connect: everything that can
 	// mark it again is scoped to the conversation — the handshake's own reads
@@ -307,14 +311,19 @@ func (s *session) ensure(ctx context.Context) error {
 	// already answered its hello, and the next command redials it. A failure
 	// to dial or to greet leaves the flag clear, and sticks.
 	s.broken.Store(false)
-	s.startErr = s.connect(ctx)
+	s.startErr = s.connect(ctx, first && s.reusedWarm)
 
 	return s.startErr
 }
 
-func (s *session) connect(ctx context.Context) error {
+// connect reads a failed dial of a machine reused from its idle window as an eviction, since nothing proved it alive before it was handed out and a fresh one can be acquired; only the dial, because a failed hello is more often a real mismatch than a dead host, and never under a context already ended, which is the job stopping rather than the machine.
+func (s *session) connect(ctx context.Context, reusedWarm bool) error {
 	transport, err := dial(ctx, s.worker)
 	if err != nil {
+		if reusedWarm && ctx.Err() == nil {
+			return fmt.Errorf("%w (kept warm, and did not answer when reused): worker %q: %w", ErrEvicted, s.worker, err)
+		}
+
 		return fmt.Errorf("worker %q: %w", s.worker, err)
 	}
 

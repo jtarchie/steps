@@ -9,11 +9,13 @@ package web
 // as one started from a terminal.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"time"
 
@@ -69,7 +71,18 @@ type LocalRunner struct {
 	mu     sync.Mutex
 	forced map[string]bool
 	// running is how an abort reaches a run: its cancel, held for exactly as long as RunJob is.
-	running map[runKey]context.CancelCauseFunc
+	running map[runKey]runningBuild
+}
+
+type runningBuild struct {
+	cancel context.CancelCauseFunc
+	job    string
+}
+
+// RunningBuild is a run in flight: what a refusal names so a person can find it and abort it.
+type RunningBuild struct {
+	JobName string
+	RunID   string
 }
 
 // runKey scopes a run id to its pipeline, so a URL naming one pipeline cannot stop another's run.
@@ -99,7 +112,7 @@ func NewLocalRunner(
 		force:      force,
 		grace:      nonInterruptibleGrace,
 		forced:     map[string]bool{},
-		running:    map[runKey]context.CancelCauseFunc{},
+		running:    map[runKey]runningBuild{},
 	}
 }
 
@@ -172,14 +185,34 @@ func (r *LocalRunner) takeForce(slug, jobName string) bool {
 // Abort only cancels: the run still unwinds through its on_abort and ensure hooks, and gives back its serial slot when it actually ends.
 func (r *LocalRunner) Abort(target *Pipeline, runID string) bool {
 	r.mu.Lock()
-	cancel, running := r.running[runKey{target.Slug, runID}]
+	build, running := r.running[runKey{target.Slug, runID}]
 	r.mu.Unlock()
 
 	if running {
-		cancel(errAborted)
+		build.cancel(errAborted)
 	}
 
 	return running
+}
+
+// Running is every run of one pipeline in flight, by job and then run id.
+func (r *LocalRunner) Running(slug string) []RunningBuild {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	builds := []RunningBuild{}
+
+	for key, build := range r.running {
+		if key.slug == slug {
+			builds = append(builds, RunningBuild{JobName: build.job, RunID: key.runID})
+		}
+	}
+
+	slices.SortFunc(builds, func(a, b RunningBuild) int {
+		return cmp.Or(cmp.Compare(a.JobName, b.JobName), cmp.Compare(a.RunID, b.RunID))
+	})
+
+	return builds
 }
 
 // AbortQueued drops a job's queued run before it starts, and the force it was queued with.
@@ -533,7 +566,7 @@ func (r *LocalRunner) runJob(
 	defer end()
 
 	r.mu.Lock()
-	r.running[key] = cancel
+	r.running[key] = runningBuild{cancel: cancel, job: job.Name}
 	r.mu.Unlock()
 
 	defer func() {
