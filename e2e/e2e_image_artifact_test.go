@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -335,5 +336,48 @@ func assertNoCanary(t *testing.T, path, out string) {
 
 	if leaked > 0 {
 		t.Errorf("%d run events carry the source's password", leaked)
+	}
+}
+
+// TestImageArtifactResolvesAfterAResumeKeptTheGet is the seam between #190
+// and #151: a resume keeps a get a later step already built on, and skipping
+// the fetch must still record the get's source, or an image: naming it later
+// in the plan has a digest and no repository to put it on.
+func TestImageArtifactResolvesAfterAResumeKeptTheGet(t *testing.T) {
+	requireDockerE2E(t)
+
+	digest := alpineDigest(t)
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	marker := filepath.Join(dir, "fixed")
+
+	imageArtifactPipeline(t, path, "alpine", digest, "", fmt.Sprintf(`  - task: first
+    run: echo first
+  - task: fragile
+    run: test -f %s
+%s`, marker, imageArtifactTask))
+
+	out := captureStdout(t, func() {
+		err := cli.Run([]string{"run", path, "--job", "build"})
+		if err == nil {
+			t.Fatal("expected the fragile step to fail")
+		}
+	})
+
+	writePipelineFile(t, marker, "")
+
+	out = captureStdout(t, func() {
+		err := cli.Run([]string{"run", path, "--resume", resumeID(t, out)})
+		if err != nil {
+			t.Fatalf("resume failed: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "skip: toolchain (already fetched)") {
+		t.Fatalf("the resume fetched the get again, so this test proves nothing about a kept one:\n%s", out)
+	}
+
+	if !strings.Contains(out, "image: toolchain → alpine@"+digest) || !strings.Contains(out, "release=3.") {
+		t.Errorf("the image step did not run in the kept get's reference:\n%s", out)
 	}
 }

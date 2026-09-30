@@ -318,7 +318,7 @@ func (w *planWalk) runTriggeredBuild(
 	if runID, kept := keptFetch(ctx, buildID, -1); kept {
 		// The get stays the container of its build, so it keeps its
 		// started/finished pair and says why it fetched nothing on its row.
-		err = w.keepFetched(events.WithStepID(ctx, parentStepFrom(ctx)), runID, buildID, step, resource.Name, version, bw)
+		err = w.keepFetched(events.WithStepID(ctx, parentStepFrom(ctx)), runID, buildID, step, resource, version, bw)
 		if err != nil {
 			return err
 		}
@@ -430,14 +430,14 @@ func keptFetch(ctx context.Context, build string, index int) (string, bool) {
 // keepInPlace is keptFetch and keepFetched for an in-place get, reporting
 // whether it kept; a kept get chains the plan on under its own node.
 func (w *planWalk) keepInPlace(
-	ctx context.Context, step config.Step, resourceName string, version map[string]any, hash string,
+	ctx context.Context, step config.Step, resource config.Resource, version map[string]any, hash string,
 ) (stepResult, bool, error) {
 	runID, kept := keptFetch(ctx, w.build, w.index)
 	if !kept {
 		return stepResult{}, false, nil
 	}
 
-	err := w.keepFetched(ctx, runID, w.build, step, resourceName, version, w.bw)
+	err := w.keepFetched(ctx, runID, w.build, step, resource, version, w.bw)
 	if err != nil {
 		return stepResult{}, true, err
 	}
@@ -452,7 +452,7 @@ func (w *planWalk) keepInPlace(
 // attempt did) and no hooks fire, as for any skip. ctx names the get's own
 // step, which the skip line is said on.
 func (w *planWalk) keepFetched(
-	ctx context.Context, runID, build string, step config.Step, resourceName string, version map[string]any, bw workspace.BuildWorkspace,
+	ctx context.Context, runID, build string, step config.Step, resource config.Resource, version map[string]any, bw workspace.BuildWorkspace,
 ) error {
 	// A finished build is exempt: the kept tree is the last unfinished build's,
 	// which need not hold a get it never reached, and nothing of a finished
@@ -472,8 +472,8 @@ func (w *planWalk) keepFetched(
 	notef(ctx, "skip: %s (already fetched)%s", step.Get, buildSuffix(runID, build))
 	slog.InfoContext(ctx, "job.skip", "get", step.Get, "reason", "resume")
 
-	recordFetched(ctx, step.Get, version)
-	recordResolvedVersion(ctx, w.st, w.cfg, resourceName, version, len(w.pinned) > 0)
+	recordFetched(ctx, step.Get, resource.Source, version)
+	recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
 
 	return nil
 }
@@ -609,7 +609,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	// step kind keeps, and hid a get whose fetch failed.
 	recordExecution(ctx, resource.Name)
 
-	if res, kept, err := w.keepInPlace(ctx, step, resource.Name, version, hash); kept {
+	if res, kept, err := w.keepInPlace(ctx, step, *resource, version, hash); kept {
 		return res, err
 	}
 
