@@ -3,7 +3,10 @@ package dockerapi
 // Starting a container and running commands in it.
 
 import (
+	"bufio"
 	"context"
+	"errors"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -278,5 +281,63 @@ func TestSettleForReportsACancelledCaller(t *testing.T) {
 	_, _, err := client.SettleFor(ctx, id, 30*time.Second)
 	if err == nil {
 		t.Error("SettleFor reported a healthy container for a caller that had already given up")
+	}
+}
+
+// TestPublishedPortIsReachableOnLoopback is the seam a test database crosses:
+// a container port published through the spec, found through PublishedPort,
+// and dialled from this process.
+func TestPublishedPortIsReachableOnLoopback(t *testing.T) {
+	client := requireDaemon(t)
+	id := startSession(t, client, ContainerSpec{
+		Cmd:     []string{"sh", "-c", "while true; do echo hello | nc -l -p 8080; done"},
+		Publish: []string{"8080/tcp"},
+	})
+
+	port, err := client.PublishedPort(t.Context(), id, "8080/tcp")
+	if err != nil {
+		t.Fatalf("PublishedPort: %v", err)
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+
+	for {
+		got, err := readLine(net.JoinHostPort("127.0.0.1", port))
+		if err == nil && got == "hello" {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("127.0.0.1:%s answered %q, %v; want hello", port, got, err)
+		}
+
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func readLine(address string) (string, error) {
+	dialer := net.Dialer{Timeout: 2 * time.Second}
+
+	conn, err := dialer.DialContext(context.Background(), "tcp", address)
+	if err != nil {
+		return "", err //nolint:wrapcheck // the test prints it as is
+	}
+
+	defer func() { _ = conn.Close() }()
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+
+	line, err := bufio.NewReader(conn).ReadString('\n')
+
+	return strings.TrimSpace(line), err
+}
+
+func TestPublishedPortRefusesAnUnpublishedPort(t *testing.T) {
+	client := requireDaemon(t)
+	id := startSession(t, client, ContainerSpec{})
+
+	_, err := client.PublishedPort(t.Context(), id, "8080/tcp")
+	if !errors.Is(err, errNotPublished) {
+		t.Fatalf("PublishedPort = %v, want errNotPublished", err)
 	}
 }

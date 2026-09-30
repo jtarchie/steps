@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/jtarchie/steps/internal/pipeline"
-	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // PlanCmd shows which steps a run would execute and which it would skip,
@@ -42,7 +41,7 @@ func (p *PlanCmd) Run() error {
 		return err
 	}
 
-	st, err := sqlite.OpenStore(StatePath(p.Pipeline, p.DB), resolvePipelineName(p.Pipeline, p.Name))
+	st, err := openState(StatePath(p.Pipeline, p.DB), resolvePipelineName(p.Pipeline, p.Name))
 	if err != nil {
 		return fmt.Errorf("could not open state store: %w", err)
 	}

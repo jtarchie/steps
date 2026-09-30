@@ -573,8 +573,8 @@ steps pipeline set -p infra -c infra/pipeline.yml
 ```
 
 A bare path is a sqlite file, and so is `sqlite:///var/lib/steps/state.db`
-— the scheme is how a second driver will be chosen, the way `--worker` takes
-`ssh://` and `aws://`, and sqlite is the only one today. A scheme no driver
+— the scheme chooses the driver, the way `--worker` takes `ssh://` and
+`aws://`, and `postgres://` is the other one (below). A scheme no driver
 answers to is refused before anything is opened.
 
 One file to back up, and one file to delete. What it is *not* is a merge:
@@ -630,6 +630,48 @@ pipeline's plan.
 There is no migration path. A database written by a different schema is refused
 on open with a message saying so; the answer is to delete the file, which costs
 run history and cache and nothing else.
+
+### Postgres
+
+History can live in a Postgres server you already run instead of a file on the
+daemon's disk — same commands, same web UI, same pipelines:
+
+```bash
+export PGPASSWORD=…
+steps web --db 'postgres://steps@db.internal:5432/ci?sslmode=verify-full'
+steps runs --db 'postgres://steps@db.internal:5432/ci?sslmode=verify-full'
+```
+
+`postgresql://` is the same thing, and a unix socket is
+`postgres:///ci?host=/var/run/postgresql`. Only the url form is accepted, not a
+`key=value` string. Quote the url: its `?` and `&` mean something to a shell.
+
+- **The database must exist; steps never creates it.** Create it with
+  `createdb` first. Inside it, steps creates and uses one schema, `steps`, and
+  touches nothing outside it — so it can share a database with an application
+  that has its own `runs` table. `search_path=<schema>` in the url picks
+  another schema; each schema is its own state database, so two daemons can
+  share a server as long as each has its own.
+- **Credentials do not belong in the url.** A password in `--db` is kept by
+  every process listing and shell history that saw the command, and steps warns
+  when it sees one. Set `PGPASSWORD`, or use `~/.pgpass` or `PGSERVICEFILE`.
+  Nothing steps prints — a banner, an error, a pasteable hint — carries the
+  password, and the hints drop it from the url they print.
+- **Off the machine, use `sslmode=verify-full`.** The default is libpq's
+  `prefer`, which quietly falls back to an unencrypted connection.
+- **Behind PgBouncer in transaction mode**, add
+  `default_query_exec_mode=simple_protocol`: prepared statements do not survive
+  a pooler that hands each transaction a different server connection.
+- **Still one `steps web` per state database** — per schema, here. Nothing
+  arbitrates two daemons sharing one, exactly as with a file.
+- **The first open creates the schema; every later one only reads its
+  version**, so once it exists the role steps connects as needs no `CREATE`
+  privilege — `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the schema's tables
+  (and `USAGE` on its sequences) are enough, and a role with only `SELECT` can
+  run the read commands.
+- **A schema another version of steps wrote is refused, not migrated.** The
+  message says so; `DROP SCHEMA steps CASCADE` and run again, which loses
+  steps' run history and cache and nothing else in the database.
 
 ## Security
 
@@ -707,7 +749,8 @@ on this side is everything that changes what a pipeline IS.
 --keep-workspace leave build workspaces on disk
 --answer         answer an ask_user question in advance (repeatable)
 --worker         map a step tag to a machine, e.g. --worker gpu=ssh://jt@box
---db             state database: a sqlite path or sqlite:// url (default .steps/steps.db)
+--db             state database: a sqlite path, sqlite:// or postgres:// url
+                 (default .steps/steps.db; see Postgres above)
 ```
 
 `steps pipeline <verb>` — facts about one pipeline:

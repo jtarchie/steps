@@ -25,7 +25,7 @@ func TestTheDaemonSharesAcquiredMachinesAcrossItsLoops(t *testing.T) {
 	t.Parallel()
 
 	held := newDaemon(t.Context(), nil, web.NewLocalRunner(nil, nil, 1, false),
-		filepath.Join(t.TempDir(), "steps.db"), ExecFlags{}, HistoryFlags{}, time.Hour)
+		State(filepath.Join(t.TempDir(), "steps.db")), ExecFlags{}, HistoryFlags{}, time.Hour)
 	defer held.Close()
 
 	if !pipeline.SharesWorkers(held.base) {
@@ -140,7 +140,7 @@ func TestARefusedRenameLeavesThePipelineWhereItWas(t *testing.T) {
 		t.Error("a refused rename serves the new name")
 	}
 
-	if names := pipelineNames(t, held.state); !slices.Contains(names, "app") || slices.Contains(names, "renamed") {
+	if names := pipelineNames(t, string(held.state)); !slices.Contains(names, "app") || slices.Contains(names, "renamed") {
 		t.Errorf("after a refused rename the database holds %v, want app and not renamed", names)
 	}
 
@@ -181,25 +181,25 @@ func TestOnlyTheDaemonsExitCompactsTheFile(t *testing.T) {
 		t.Fatalf("destroy: %v", err)
 	}
 
-	assertUncompacted(t, held.state, "a destroy")
+	assertUncompacted(t, string(held.state), "a destroy")
 
 	_, err = held.Set(t.Context(), "refused", web.SetRequest{Source: idlePipeline, ExpectSHA: "stale"})
 	if !errors.Is(err, web.ErrRevisionMoved) {
 		t.Fatalf("a set against a sha nothing serves = %v, want refused", err)
 	}
 
-	assertUncompacted(t, held.state, "a refused set")
+	assertUncompacted(t, string(held.state), "a refused set")
 
 	err = held.Rename(t.Context(), "kept", "renamed")
 	if err != nil {
 		t.Fatalf("rename: %v", err)
 	}
 
-	assertUncompacted(t, held.state, "a rename")
+	assertUncompacted(t, string(held.state), "a rename")
 
 	held.Close()
 
-	if free := freePages(t, held.state); free != 0 {
+	if free := freePages(t, string(held.state)); free != 0 {
 		t.Errorf("the daemon's exit left %d freed pages unreclaimed", free)
 	}
 }
@@ -214,7 +214,7 @@ func TestASetTheSenderHangsUpOnStillServesWhatTheDatabaseNames(t *testing.T) {
 
 			held := servingDaemon(t)
 
-			raw, err := sqlite.OpenStore(held.state, "app")
+			raw, err := sqlite.OpenStore(string(held.state), "app")
 			if err != nil {
 				t.Fatalf("OpenStore: %v", err)
 			}
@@ -351,7 +351,7 @@ func servingDaemon(t testing.TB) *daemon {
 		t.Fatalf("web.New: %v", err)
 	}
 
-	held := newDaemon(t.Context(), server, local, filepath.Join(t.TempDir(), "steps.db"), ExecFlags{}, HistoryFlags{}, time.Hour)
+	held := newDaemon(t.Context(), server, local, State(filepath.Join(t.TempDir(), "steps.db")), ExecFlags{}, HistoryFlags{}, time.Hour)
 	t.Cleanup(held.Close)
 
 	return held
@@ -694,7 +694,7 @@ func TestAParkedStepUnderTheDaemonNamesItsDatabase(t *testing.T) {
 		held.runner.Close()
 	})
 
-	if !strings.Contains(out, "--db "+held.state) {
+	if !strings.Contains(out, "--db "+shellArg(string(held.state))) {
 		t.Errorf("the printed answer command does not name the daemon's database %s:\n%s", held.state, out)
 	}
 }

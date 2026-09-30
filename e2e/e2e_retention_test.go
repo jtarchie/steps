@@ -461,7 +461,7 @@ jobs:
 	// grew this without limit, and a real pipeline's builds are far bigger.
 	const ceiling = 1 << 20
 
-	info, err := os.Stat(cli.StatePath(path, ""))
+	info, err := os.Stat(string(cli.StatePath(path, "")))
 	if err != nil {
 		t.Fatalf("stat state.db: %v", err)
 	}

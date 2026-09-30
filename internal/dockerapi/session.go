@@ -9,12 +9,14 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 )
 
@@ -65,6 +67,10 @@ type ContainerSpec struct {
 	// OpenStdin keeps the container's stdin open for a caller that attaches
 	// to it, which a foreground run does and a session container does not.
 	OpenStdin bool
+	// Publish are container ports ("5432/tcp") bound to an ephemeral port on
+	// 127.0.0.1 only; PublishedPort says which. Loopback because nothing
+	// that asks for one wants it reachable from another host.
+	Publish []string
 }
 
 // CreateContainer defines a container without starting it, returning its id.
@@ -103,6 +109,11 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 		hostConfig.Init = &enabled
 	}
 
+	err := spec.publish(config, hostConfig)
+	if err != nil {
+		return "", err
+	}
+
 	created, err := c.api.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name:       spec.Name,
 		Config:     config,
@@ -118,6 +129,56 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 
 	return created.ID, nil
 }
+
+// publish fills in Publish, which needs both halves of the request: a port
+// must be exposed to be bound.
+func (spec ContainerSpec) publish(config *container.Config, hostConfig *container.HostConfig) error {
+	if len(spec.Publish) == 0 {
+		return nil
+	}
+
+	config.ExposedPorts = network.PortSet{}
+	hostConfig.PortBindings = network.PortMap{}
+
+	for _, published := range spec.Publish {
+		port, err := network.ParsePort(published)
+		if err != nil {
+			return fmt.Errorf("publishing %q: %w", published, err)
+		}
+
+		config.ExposedPorts[port] = struct{}{}
+		hostConfig.PortBindings[port] = []network.PortBinding{{HostIP: netip.AddrFrom4([4]byte{127, 0, 0, 1})}}
+	}
+
+	return nil
+}
+
+// PublishedPort is the host port a started container's port was bound to.
+func (c *Client) PublishedPort(ctx context.Context, id, port string) (string, error) {
+	parsed, err := network.ParsePort(port)
+	if err != nil {
+		return "", fmt.Errorf("container %s port %q: %w", id, port, err)
+	}
+
+	inspected, err := c.api.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if err != nil {
+		return "", fmt.Errorf("inspecting container %s: %w", id, err)
+	}
+
+	if inspected.Container.NetworkSettings != nil {
+		for _, binding := range inspected.Container.NetworkSettings.Ports[parsed] {
+			if binding.HostPort != "" {
+				return binding.HostPort, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("container %s: %w", id, errNotPublished)
+}
+
+// errNotPublished is a port the daemon bound to nothing: never asked for, or a
+// container that is not running.
+var errNotPublished = errors.New("the port is not published")
 
 // binds is the working directory plus whatever else the caller asked for.
 //

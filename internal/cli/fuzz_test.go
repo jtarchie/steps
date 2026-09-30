@@ -7,9 +7,13 @@ import (
 	"testing"
 )
 
-// FuzzDBUnmarshalText holds --db to what the driver can open: no query string for it to swallow the pragmas with, no scheme but sqlite, and never a value that silently reads as the flag not given.
+// FuzzDBUnmarshalText holds --db to what a driver can open: a sqlite path with no query string for it to swallow the pragmas with, or a postgres url; no other scheme; and never a value that silently reads as the flag not given.
 func FuzzDBUnmarshalText(f *testing.F) {
-	for _, seed := range []string{"", "state.db", "sqlite://state.db", "sqlite://", "sqlite:state.db", "postgres://u:p@h/db", "a.db?_busy_timeout=1", "://"} {
+	for _, seed := range []string{
+		"", "state.db", "sqlite://state.db", "sqlite://", "sqlite:state.db", "postgres://u:p@h/db",
+		"postgresql://h/db?sslmode=verify-full&password=p", "postgres:db", "mysql://u:p@h/db", "a.db?_busy_timeout=1", "://",
+		"postgres://u:p@h:port/db",
+	} {
 		f.Add(seed)
 	}
 
@@ -23,24 +27,47 @@ func FuzzDBUnmarshalText(f *testing.F) {
 			return
 		}
 
-		scheme, _, isURL := strings.Cut(raw, "://")
-		if string(db) != raw || strings.Contains(raw, "?") || (isURL && scheme != "sqlite") {
-			t.Fatalf("UnmarshalText(%q) accepted %q", raw, db)
-		}
-
-		if raw != "" && db.path() == "" {
-			t.Fatalf("UnmarshalText(%q) names no file, which reads as the default database", raw)
-		}
+		checkAccepted(t, raw, db)
 	})
 }
 
-// checkRefusalHidesURL pins that an unknown driver is refused by scheme alone: past it, a network url carries credentials, and a usage error lands in shell history.
+// checkAccepted pins what an accepted value may be: itself, a sqlite path with no query string or a postgres url, and never the default.
+func checkAccepted(t *testing.T, raw string, db DB) {
+	t.Helper()
+
+	scheme, _, isURL := strings.Cut(raw, "://")
+	postgresURL := isURL && postgresScheme(scheme)
+
+	if string(db) != raw || (strings.Contains(raw, "?") && !postgresURL) || (isURL && scheme != "sqlite" && !postgresURL) {
+		t.Fatalf("UnmarshalText(%q) accepted %q", raw, db)
+	}
+
+	if raw != "" && db.location() == "" {
+		t.Fatalf("UnmarshalText(%q) names no database, which reads as the default", raw)
+	}
+}
+
+// checkRefusalHidesURL pins that a refusal never repeats what follows the scheme: past it, a network url carries credentials, and a usage error lands in shell history.
 func checkRefusalHidesURL(t *testing.T, raw string, err error) {
 	t.Helper()
 
 	scheme, rest, isURL := strings.Cut(raw, "://")
 	if !isURL || scheme == "sqlite" || !strings.Contains(rest, "@") || strings.Contains(scheme, rest) {
 		return
+	}
+
+	// A refusal that does not depend on the password cannot be carrying it:
+	// the same url with another password is refused in the same words.
+	userinfo, _, _ := strings.Cut(rest, "@")
+	if user, password, ok := strings.Cut(userinfo, ":"); ok && password != "" {
+		var other DB
+
+		masked := scheme + "://" + user + ":" + strings.Repeat("\x01", len(password)) + strings.TrimPrefix(rest, userinfo)
+
+		otherErr := other.UnmarshalText([]byte(masked))
+		if otherErr == nil || otherErr.Error() != err.Error() {
+			t.Fatalf("refusing %q depends on its password: %v", raw, err)
+		}
 	}
 
 	if strings.Contains(err.Error(), rest) {

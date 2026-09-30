@@ -294,18 +294,40 @@ func TestDBRefusesAnUnknownScheme(t *testing.T) {
 	log := filepath.Join(dir, "build.log")
 	pipeline := sharedStatePipeline(t, filepath.Join(dir, "only.yml"), log)
 
-	err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", "postgres://steps:hunter2@db.internal/steps"})
+	err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", "mysql://steps:hunter2@db.internal/steps"})
 	if err == nil {
-		t.Fatal("a postgres:// database was accepted with no driver to open it")
+		t.Fatal("a mysql:// database was accepted with no driver to open it")
 	}
 
 	msg := err.Error()
-	if !strings.Contains(msg, "postgres") || !strings.Contains(msg, "sqlite") {
-		t.Errorf("the refusal names neither the scheme it got nor the one it takes: %q", msg)
+	if !strings.Contains(msg, "mysql") || !strings.Contains(msg, "sqlite") || !strings.Contains(msg, "postgres") {
+		t.Errorf("the refusal names neither the scheme it got nor the ones it takes: %q", msg)
 	}
 
-	// The scheme is refused, not the URL echoed: a credential in it must not
-	// come back through a usage error that lands in a shell log.
+	assertRefusedCleanly(t, dir, log, msg)
+}
+
+// TestDBThatCannotBeReachedRunsNothing: a postgres:// the flag accepts but no
+// server answers fails at open — before the job runs, without a sqlite file
+// standing in for it, and without the password in what it prints.
+func TestDBThatCannotBeReachedRunsNothing(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "build.log")
+	pipeline := sharedStatePipeline(t, filepath.Join(dir, "only.yml"), log)
+
+	err := cli.Run([]string{"run", pipeline, "--job", "build", "--db", "postgres://steps:hunter2@db.invalid/steps?connect_timeout=2"})
+	if err == nil {
+		t.Fatal("a job ran against a postgres server that is not there")
+	}
+
+	assertRefusedCleanly(t, dir, log, err.Error())
+}
+
+func assertRefusedCleanly(t *testing.T, dir, log, msg string) {
+	t.Helper()
+
+	// A credential in the url must not come back through an error that lands
+	// in a shell log.
 	if strings.Contains(msg, "hunter2") {
 		t.Errorf("the refusal echoes the URL's credentials: %q", msg)
 	}

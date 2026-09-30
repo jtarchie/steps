@@ -2,11 +2,11 @@
 // types every driver returns, the errors every driver raises, and the Store
 // interface every driver implements.
 //
-// It runs no SQL and opens no connection. A driver — internal/store/sqlite
-// today — owns its schema, its version stamp and its queries end to end, so
-// each can use what its database is good at rather than the intersection of
-// two. What keeps them honest with each other is this file plus the tests
-// written against it.
+// It runs no SQL and opens no connection. A driver — internal/store/sqlite or
+// internal/store/postgres — owns its schema, its version stamp and its
+// queries end to end, so each can use what its database is good at rather
+// than the intersection of two. What keeps them honest with each other is
+// this file plus the tests written against it (internal/store/storetest).
 //
 // Only internal/cli names a driver; every other package takes a Store it was
 // handed.

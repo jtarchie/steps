@@ -36,7 +36,7 @@ type WebCmd struct {
 	ExecFlags    `embed:""`
 	HistoryFlags `embed:""`
 	// Its own --db rather than StateFlags, whose --name binds nothing here: a name is chosen by `steps pipeline set -p`, and a flag that parses and threads nowhere reads as configured.
-	DB            DB                `help:"state database: a sqlite file path or sqlite:// url (default: .steps/steps.db)"                                          name:"db"                                                          placeholder:"URL"`
+	DB            DB                `help:"state database: a sqlite file path, sqlite:// or postgres:// url (default: .steps/steps.db)"                             name:"db"                                                          placeholder:"URL"`
 	Listen        string            `default:"127.0.0.1:8088"                                                                                                       help:"address to serve on"`
 	Interval      time.Duration     `default:"30s"                                                                                                                  help:"how often to check trigger: true resources"`
 	MaxConcurrent int               `default:"1"                                                                                                                    help:"maximum number of queued jobs running at once, per pipeline"`

@@ -321,7 +321,7 @@ func awaitPendingQuestion(t *testing.T, pipelinePath string) string {
 		// steps, so a reader arriving between them finds no `questions` table
 		// at all — the same window sqlite.HasNothingRecorded exists to answer,
 		// and which the file check alone walked straight into.
-		if !recordedYet(cli.StatePath(pipelinePath, "")) {
+		if !recordedYet(string(cli.StatePath(pipelinePath, ""))) {
 			time.Sleep(50 * time.Millisecond)
 
 			continue

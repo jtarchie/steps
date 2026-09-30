@@ -62,7 +62,7 @@ jobs:
 func checkedVersions(t *testing.T, pipelinePath string) []map[string]any {
 	t.Helper()
 
-	return checkedVersionsIn(t, cli.StatePath(pipelinePath, ""), cli.PipelineName(pipelinePath))
+	return checkedVersionsIn(t, string(cli.StatePath(pipelinePath, "")), cli.PipelineName(pipelinePath))
 }
 
 // checkedVersionsIn reads what a daemon's poll recorded, which is in the
