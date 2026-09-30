@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/store"
 )
 
 var sgr = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
@@ -295,5 +296,25 @@ func TestLiveRegionFitsTheScreen(t *testing.T) {
 
 	if live.drawn != 3 {
 		t.Errorf("region drew %d rows on a 4-row terminal, want 3", live.drawn)
+	}
+}
+
+// TestEventOfIsRowOfsInverse: a follower replays rows through EventOf into the Live that rowOf folds, so a field only one of them carries is lost on the way.
+func TestEventOfIsRowOfsInverse(t *testing.T) {
+	t.Parallel()
+
+	row := store.RunEventRow{
+		Seq: 7, RunID: "R", Type: events.TypeStepFinished, StepIndex: 2, StepName: "lint", StepKind: "task",
+		StepID: 5, ParentStepID: 3, Status: "failed", Hash: "h", Text: "t", Name: "n", Detail: "d",
+		DurationMS: 42, Worker: "w (addr)", At: time.Date(2026, 9, 29, 1, 2, 3, 4, time.UTC),
+	}
+
+	event := EventOf(row, "build")
+	if event.Job != "build" {
+		t.Errorf("Job = %q, want build", event.Job)
+	}
+
+	if back := rowOf(event); back != row {
+		t.Errorf("rowOf(EventOf(row)) = %+v, want %+v", back, row)
 	}
 }

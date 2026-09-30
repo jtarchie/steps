@@ -826,6 +826,48 @@ jobs:
 	}
 }
 
+// A rename refuses on what Running lists, so a build of another pipeline must not appear, and a finished one must not hold the rename up forever.
+func TestRunningListsOnlyThatPipelinesBuildsInFlight(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	release := filepath.Join(dir, "release")
+
+	runner, target, _ := drainable(t, dir, fmt.Sprintf(`
+jobs:
+  - name: build
+    plan:
+      - task: hold
+        inputs: []
+        run: |
+          touch %s
+          until [ -f %s ]; do sleep 0.02; done
+`, started, release))
+
+	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o600) })
+
+	done := drainInBackground(t.Context(), runner, target)
+
+	waitForFile(t, started)
+
+	running := runner.Running("demo")
+	if len(running) != 1 || running[0].JobName != "build" || running[0].RunID == "" {
+		t.Fatalf("Running(demo) = %+v, want the one build in flight", running)
+	}
+
+	if other := runner.Running("other"); len(other) != 0 {
+		t.Errorf("Running(other) = %+v, want nothing: another pipeline's build is not this one's", other)
+	}
+
+	writeFile(t, release, "")
+	waitForDrain(t, done, 20*time.Second)
+
+	if left := runner.Running("demo"); len(left) != 0 {
+		t.Errorf("Running(demo) = %+v after the build finished, want nothing", left)
+	}
+}
+
 // A person's trigger gets past the breaker an automatic one is held by, and the force it carried is spent by that run: left behind, the flag forces the job's next ordinary build, re-running from scratch what the cache would have skipped.
 func TestAHeldJobsManualTriggerRunsAndSpendsItsForce(t *testing.T) {
 	t.Parallel()

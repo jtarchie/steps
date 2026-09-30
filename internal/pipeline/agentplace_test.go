@@ -3,6 +3,7 @@ package pipeline
 // The crossing between resolving a worker and dialling it.
 
 import (
+	"context"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -59,5 +60,32 @@ func TestPlaceAgentSpecLeavesAnUntaggedStepAlone(t *testing.T) {
 
 	if got.Worker != "" || got.WorkerTag != "" {
 		t.Errorf("Worker/WorkerTag = %q/%q, want empty for a step that named no tag", got.Worker, got.WorkerTag)
+	}
+}
+
+// A conversation is never re-placed, so reading its dead warm machine as reclaimed would only relabel the failure.
+func TestPlaceAgentSpecDoesNotPresumeAWarmMachineReclaimed(t *testing.T) {
+	fake := &sequenced{machines: []string{"local:"}}
+	ctx, _ := WithLeases(warmRegistry(t, warmRungs["launch"], fake, true))
+	t.Cleanup(func() { _ = leasesFrom(ctx).ReleaseAll(context.WithoutCancel(ctx)) })
+
+	step := config.Step{Agent: "hand", Tags: []string{"box"}}
+
+	_, err := leasesFrom(ctx).Resolve(ctx, "box")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if !reusedWarm(ctx, step) {
+		t.Fatal("the fixture's machine is not a warm reuse, so this proves nothing")
+	}
+
+	got, err := placeAgentSpec(ctx, step, shell.RunnerSpec{Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatalf("placeAgentSpec: %v", err)
+	}
+
+	if got.ReusedWarm {
+		t.Error("an agent's spec is marked a warm reuse, and nothing would re-place it")
 	}
 }

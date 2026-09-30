@@ -30,12 +30,13 @@ import (
 // command that distinction was a runtime table of which combinations to
 // refuse; as subcommands it is the grammar, and kong enforces it.
 type RunsCmd struct {
-	List  RunsListCmd  `cmd:"" default:"withargs"                                            help:"runs, newest first"`
-	Steps RunsStepsCmd `cmd:"" help:"individual steps, with what each one recorded"`
-	Queue RunsQueueCmd `cmd:"" help:"what the trigger loop has queued"`
-	Cost  RunsCostCmd  `cmd:"" help:"what a pipeline's agent steps spent"`
-	Where RunsWhereCmd `cmd:"" help:"the machines a run's placed steps ran on"`
-	Abort RunsAbortCmd `cmd:"" help:"stop a run on a steps web daemon, or drop a queued one"`
+	List   RunsListCmd   `cmd:"" default:"withargs"                                                 help:"runs, newest first"`
+	Steps  RunsStepsCmd  `cmd:"" help:"individual steps, with what each one recorded"`
+	Queue  RunsQueueCmd  `cmd:"" help:"what the trigger loop has queued"`
+	Cost   RunsCostCmd   `cmd:"" help:"what a pipeline's agent steps spent"`
+	Where  RunsWhereCmd  `cmd:"" help:"the machines a run's placed steps ran on"`
+	Abort  RunsAbortCmd  `cmd:"" help:"stop a run on a steps web daemon, or drop a queued one"`
+	Follow RunsFollowCmd `cmd:"" help:"watch a run to its end: live on a terminal, lines elsewhere"`
 }
 
 // RunsListCmd is the default view: runs, newest first — and the one
@@ -187,12 +188,20 @@ func (r *RunsWhereCmd) Run() error {
 // exactly what a sixth `runs` subcommand written by copying the other five
 // would forget.
 func nothingRecorded(flags ReadFlags, answer string) bool {
+	if !stateEmpty(flags) {
+		return false
+	}
+
+	fmt.Println(answer)
+
+	return true
+}
+
+func stateEmpty(flags ReadFlags) bool {
 	path := flags.state()
 
 	_, err := os.Stat(path)
 	if err != nil {
-		fmt.Println(answer)
-
 		return true
 	}
 
@@ -200,13 +209,7 @@ func nothingRecorded(flags ReadFlags, answer string) bool {
 	// creates the database before it fills it in, so a reader arriving in
 	// that window must not report the operator's brand new database as one
 	// written by a different version of steps.
-	if sqlite.HasNothingRecorded(path) {
-		fmt.Println(answer)
-
-		return true
-	}
-
-	return false
+	return sqlite.HasNothingRecorded(path)
 }
 
 // noRunsYet is the sentence every `steps runs` view says when the pipeline has

@@ -243,7 +243,7 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 	//nolint:contextcheck // NewRunner takes no context; opening the artifact store reads only local config
 	runner, err := venue.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env, User: rt.User, Network: rt.Network,
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes(),
-		Worker: worker, WorkerTag: placementTag(step), Fetch: rt.Outputs,
+		Worker: worker, WorkerTag: placementTag(step), Fetch: rt.Outputs, ReusedWarm: reusedWarm(ctx, step),
 		DeferFetch:    deferrable(step, rt),
 		RemoteInputs:  remote,
 		ArtifactStore: artifactStoreFrom(ctx),

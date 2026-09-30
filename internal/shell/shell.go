@@ -196,6 +196,8 @@ type RunnerSpec struct {
 	//
 	// A redial is right for a task: its command re-runs from the top, so a tree restored to the state it was pushed in is exactly what the retry wants. It is wrong for a conversation. An agent's edits outside its outputs: are not re-fetched, its container's installed packages are not reinstated, and the model is told none of it — so the retry would resume against a tree silently rewound to the step's inputs. Read only by the venue; meaningless without a Worker.
 	NoRedial bool
+	// ReusedWarm is a worker taken from its idle window (?idle=) with nothing proving it still alive. Read only by the venue: a first connection it refuses is treated as the machine having been reclaimed, so the step is re-placed rather than failed.
+	ReusedWarm bool
 	// DeferFetch keeps the declared outputs (or, with FetchAll, the whole
 	// tree) ON the worker after each command instead of bringing them home:
 	// the worker files them under their digests and reports the digests, and

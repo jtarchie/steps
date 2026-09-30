@@ -7,6 +7,8 @@ package web
 import (
 	"errors"
 	"net/http"
+	"slices"
+	"strings"
 
 	"github.com/labstack/echo/v5"
 
@@ -21,6 +23,8 @@ type PipelineSummary struct {
 	From   string `json:"from,omitempty"`
 	Jobs   int    `json:"jobs"`
 	Paused bool   `json:"paused"`
+	// Broken is why a pipeline the daemon holds is not being served — a restart could not restore it — and empty for one that is.
+	Broken string `json:"broken,omitempty"`
 }
 
 // PipelineConfig is what get prints and what set diffs against: the source, its includes (bytes, for the reason SetRequest's are), and the sha that names both.
@@ -54,14 +58,28 @@ func (s *Server) handleAPIList(c *echo.Context) error {
 		rows = append(rows, row)
 	}
 
+	for _, broken := range s.Broken() {
+		rows = append(rows, PipelineSummary{Name: broken.Name, SHA: broken.SHA, From: broken.From, Broken: broken.Reason})
+	}
+
+	slices.SortFunc(rows, func(a, b PipelineSummary) int { return strings.Compare(a.Name, b.Name) })
+
 	//nolint:wrapcheck // echo writes the response; an encoding failure is reported verbatim
 	return c.JSON(http.StatusOK, rows)
 }
 
 // handleAPIGet answers with what is being served, which is what a set diffs against and what compare-and-set then names.
 func (s *Server) handleAPIGet(c *echo.Context) error {
-	target := s.Lookup(c.Param("pipeline"))
+	name := c.Param("pipeline")
+
+	target := s.Lookup(name)
 	if target == nil {
+		// Its own body rather than notServed's, so a set can tell a pipeline it would repair from one it would create, and names the sha it would replace so the repair is compare-and-set like any other.
+		if broken, held := s.brokenOf(name); held {
+			//nolint:wrapcheck // as below
+			return c.JSON(http.StatusNotFound, map[string]string{"message": name + " is not being served: " + broken.Reason, "broken": broken.Reason, "sha": broken.SHA})
+		}
+
 		return echo.NewHTTPError(http.StatusNotFound, ErrNoSuchPipeline.Error())
 	}
 
@@ -211,7 +229,7 @@ func (s *Server) setPaused(c *echo.Context, pause bool) error {
 
 	target := s.Lookup(c.Param("pipeline"))
 	if target == nil {
-		return echo.NewHTTPError(http.StatusNotFound, ErrNoSuchPipeline.Error())
+		return s.notServed(c.Param("pipeline"))
 	}
 
 	var err error

@@ -20,7 +20,7 @@ import (
 )
 
 // evictionCtx is a context whose tag maps to an acquisition-rung worker, so
-// canReplace answers true and the loop's own refusals are what get exercised.
+// acquiredOnDemand answers true and the loop's own refusals are what get exercised.
 func evictionCtx(t *testing.T) context.Context {
 	t.Helper()
 

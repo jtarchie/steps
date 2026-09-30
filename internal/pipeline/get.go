@@ -296,20 +296,12 @@ func (w *planWalk) runTriggeredBuild(
 	// every subsequent step live — the job-level build recorded at RunJob
 	// holds none of it. An UPDATE of the row RunJob already wrote, never a
 	// mint: this is the same run with a better answer about where it lives.
+	root := ""
 	if rooted, ok := bw.(workspace.RootedBuild); ok {
-		if resume := resumeFrom(ctx); resume != nil {
-			// The same configuration the run is already recorded under: this
-			// is a workspace correction, not a change of what is executing.
-			err := w.st.ResumeRun(ctx, resume.id, rooted.Root(), w.cfg.Revision.SHA)
-			if err != nil {
-				// Logged, not returned: the row exists by the time a get runs,
-				// so this cannot fail for a reason the get can act on, and a
-				// version fetched is not made wrong by a workspace column that
-				// still names the job-level build.
-				slog.WarnContext(ctx, "job.run_workspace_unrecorded", "run", resume.id, "error", err)
-			}
-		}
+		root = rooted.Root()
 	}
+
+	w.pointRunAt(ctx, root)
 
 	recordExecution(ctx, resource.Name)
 
@@ -321,7 +313,81 @@ func (w *planWalk) runTriggeredBuild(
 	// loud the moment resolution started reading job_versions for real.
 	recordBuildVersion(ctx, resource.Name, version)
 
-	_, err = runPlaced(ctx, build, node, step.Get, noResult(func(placedCtx context.Context) error {
+	buildID := buildIDForSet(ctx, setIndex)
+
+	if runID, kept := keptFetch(ctx, buildID, -1); kept {
+		// The get stays the container of its build, so it keeps its
+		// started/finished pair and says why it fetched nothing on its row.
+		err = w.keepFetched(events.WithStepID(ctx, parentStepFrom(ctx)), runID, buildID, step, resource.Name, version, bw)
+		if err != nil {
+			return err
+		}
+	} else {
+		err = w.fetchTriggered(ctx, build, bw, step, resource, resourceType, version, node)
+		if err != nil {
+			return err
+		}
+	}
+
+	remainderWalk := *w
+	remainderWalk.stepRunner = build
+	remainderWalk.build = buildID
+	remainderWalk.parentHash = node.Hash
+	remainderWalk.allowGetTrigger = false
+	// Every get in the remainder binds this build's set — see
+	// fetchGetStepInPlace, which reads it before anything else.
+	remainderWalk.assigned = set
+
+	err = runSteps(ctx, remainderWalk, remainder)
+	buildOK = err == nil
+
+	// A green build's tree is removed as this returns, so the row goes back
+	// to the last build that failed: left naming the deleted tree, a resume
+	// of an earlier failure behind a later success had nothing to continue.
+	if buildOK {
+		w.pointRunAt(context.WithoutCancel(ctx), w.failedRoot)
+	} else {
+		w.failedRoot = root
+	}
+
+	// Green is per BUILD, recorded when that build succeeds — Concourse
+	// records a build's inputs against the build, and a later set failing
+	// says nothing about an earlier one that passed. Waiting for the whole
+	// job instead lost every set but the last, and stranded all of them when
+	// any one set failed: taken at build start, never green, never retried.
+	if buildOK {
+		recordPassedVersions(ctx, w.st, w.jobName, buildID, fetched)
+		noteGreenBuild(runCtx, buildID)
+	}
+
+	return err
+}
+
+// pointRunAt re-points the run's row at a build's tree; "" leaves it alone.
+func (w *planWalk) pointRunAt(ctx context.Context, root string) {
+	resume := resumeFrom(ctx)
+	if resume == nil || root == "" {
+		return
+	}
+
+	// The same configuration the run is already recorded under: this is a
+	// workspace correction, not a change of what is executing.
+	err := w.st.ResumeRun(ctx, resume.id, root, w.cfg.Revision.SHA)
+	if err != nil {
+		// Logged, not returned: the row exists by the time a get runs, so
+		// this cannot fail for a reason the get can act on, and a version
+		// fetched is not made wrong by a stale workspace column.
+		slog.WarnContext(ctx, "job.run_workspace_unrecorded", "run", resume.id, "error", err)
+	}
+}
+
+// fetchTriggered fetches a triggered build's first get into its workspace,
+// with the get's hooks.
+func (w *planWalk) fetchTriggered(
+	ctx context.Context, build stepRunner, bw workspace.BuildWorkspace, step config.Step,
+	resource config.Resource, resourceType config.ResourceType, version map[string]any, node merkle.Node,
+) error {
+	_, err := runPlaced(ctx, build, node, step.Get, noResult(func(placedCtx context.Context) error {
 		// Notes and log lines about the fetch are the get's, and the context here is its CHILDREN'S (ctx holds the get as their parent), so name the get itself: recorded against no step, the version it fetched was drawn apart from its row.
 		fetchCtx := withStepLogger(events.WithStepID(placedCtx, parentStepFrom(ctx)), w.index, step)
 
@@ -344,35 +410,72 @@ func (w *planWalk) runTriggeredBuild(
 
 		return nil
 	}))
-	if err != nil {
-		return err
-	}
-
-	buildID := buildIDForSet(ctx, setIndex)
-
-	remainderWalk := *w
-	remainderWalk.stepRunner = build
-	remainderWalk.build = buildID
-	remainderWalk.parentHash = node.Hash
-	remainderWalk.allowGetTrigger = false
-	// Every get in the remainder binds this build's set — see
-	// fetchGetStepInPlace, which reads it before anything else.
-	remainderWalk.assigned = set
-
-	err = runSteps(ctx, remainderWalk, remainder)
-	buildOK = err == nil
-
-	// Green is per BUILD, recorded when that build succeeds — Concourse
-	// records a build's inputs against the build, and a later set failing
-	// says nothing about an earlier one that passed. Waiting for the whole
-	// job instead lost every set but the last, and stranded all of them when
-	// any one set failed: taken at build start, never green, never retried.
-	if buildOK {
-		recordPassedVersions(ctx, w.st, w.jobName, buildID, fetched)
-		noteGreenBuild(runCtx, buildID)
-	}
 
 	return err
+}
+
+// keptFetch reports whether a resumed get must keep what an earlier attempt
+// of its run fetched: a later step of its build completed, so the fetch
+// succeeded and that step may have changed the artifact — fetching again
+// would replace the work the resume is about to skip.
+func keptFetch(ctx context.Context, build string, index int) (string, bool) {
+	resume := resumeFrom(ctx)
+	if resume == nil || resume.refetch || !resume.progressedPast(build, index) {
+		return "", false
+	}
+
+	return resume.id, true
+}
+
+// keepInPlace is keptFetch and keepFetched for an in-place get, reporting
+// whether it kept; a kept get chains the plan on under its own node.
+func (w *planWalk) keepInPlace(
+	ctx context.Context, step config.Step, resourceName string, version map[string]any, hash string,
+) (stepResult, bool, error) {
+	runID, kept := keptFetch(ctx, w.build, w.index)
+	if !kept {
+		return stepResult{}, false, nil
+	}
+
+	err := w.keepFetched(ctx, runID, w.build, step, resourceName, version, w.bw)
+	if err != nil {
+		return stepResult{}, true, err
+	}
+
+	return stepResult{hash: hash, nodeHash: hash}, true, nil
+}
+
+// keepFetched stands in for a fetch keptFetch ruled out: it records what the
+// fetch would have, so a put's version() and resource_checks read the same,
+// and refuses a tree that lost the artifact rather than fetching over the
+// steps' work or continuing without it. No node is recorded (the earlier
+// attempt did) and no hooks fire, as for any skip. ctx names the get's own
+// step, which the skip line is said on.
+func (w *planWalk) keepFetched(
+	ctx context.Context, runID, build string, step config.Step, resourceName string, version map[string]any, bw workspace.BuildWorkspace,
+) error {
+	// A finished build is exempt: the kept tree is the last unfinished build's,
+	// which need not hold a get it never reached, and nothing of a finished
+	// build runs to read it.
+	checker, ok := bw.(workspace.ArtifactChecker)
+	if ok && !checker.HasArtifact(step.Get) && !resumeFrom(ctx).buildFinished(build) {
+		root := ""
+		if rooted, ok := bw.(workspace.RootedBuild); ok {
+			root = rooted.Root()
+		}
+
+		return fmt.Errorf(
+			"cannot resume run %q: get %q was already fetched and changed by later steps, but artifacts/%s is not in the kept workspace %s — start a new run, with --pin <field>=<value> to rebuild a version the cursor already took",
+			runID, step.Get, step.Get, root)
+	}
+
+	notef(ctx, "skip: %s (already fetched)%s", step.Get, buildSuffix(runID, build))
+	slog.InfoContext(ctx, "job.skip", "get", step.Get, "reason", "resume")
+
+	recordFetched(ctx, step.Get, version)
+	recordResolvedVersion(ctx, w.st, w.cfg, resourceName, version, len(w.pinned) > 0)
+
+	return nil
 }
 
 // buildIDForSet names one build of a run, for correlating the versions it
@@ -497,8 +600,6 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 		return stepResult{hash: w.parentHash, nodeHash: hash, disposition: stepChainSkipped}, nil
 	}
 
-	node := merkle.Node{Hash: hash, ParentHash: w.parentHash, Kind: merkle.NodeKindGet, StepIndex: i, Resource: resource.Name, Content: content}
-
 	// Recorded on the same terms as the fan-out path (see runTriggeredBuild):
 	// once the step is known to run, BEFORE the fetch and its hooks. A get
 	// that fetched appears in assert.execution under its resource's name, and
@@ -507,6 +608,12 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	// its own hooks, inverting the [step, its hooks...] order every other
 	// step kind keeps, and hid a get whose fetch failed.
 	recordExecution(ctx, resource.Name)
+
+	if res, kept, err := w.keepInPlace(ctx, step, resource.Name, version, hash); kept {
+		return res, err
+	}
+
+	node := merkle.Node{Hash: hash, ParentHash: w.parentHash, Kind: merkle.NodeKindGet, StepIndex: i, Resource: resource.Name, Content: content}
 
 	return runPlaced(ctx, w.stepRunner, node, step.Get, noResult(func(ctx context.Context) error {
 		err := fetchGetStepWithStep(ctx, w.cfg, w.st, step, step.Get, *resource, *resourceType, version, w.bw)

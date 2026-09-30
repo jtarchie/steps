@@ -193,6 +193,22 @@ func CloseSpace(space StepSpace, label string) {
 // while still printing an id promising exactly that.
 func (b *isolatingBuild) Root() string { return b.root }
 
+// HasArtifact reports whether name is in the build store here, or held by a
+// worker on this build's behalf.
+func (b *isolatingBuild) HasArtifact(name string) bool {
+	if config.ValidateArtifactName(name) != nil {
+		return false
+	}
+
+	if _, held := b.remoteArtifact(name); held {
+		return true
+	}
+
+	_, err := os.Lstat(filepath.Join(b.artifacts, name))
+
+	return err == nil
+}
+
 // --- isolatingProvider: common lifecycle over a pluggable treeBackend ---
 
 // rejectSymlinkSrc enforces treeBackend.materialize's implicit precondition
@@ -1765,6 +1781,13 @@ type Resumable interface {
 // failed run can print the directory a resume will continue in.
 type RootedBuild interface {
 	Root() string
+}
+
+// ArtifactChecker is a BuildWorkspace that can say whether it holds an
+// artifact, so a resume that keeps a get's artifact rather than fetching it
+// again can refuse a tree that lost it instead of continuing without it.
+type ArtifactChecker interface {
+	HasArtifact(name string) bool
 }
 
 // CachingBuild is a BuildWorkspace that can reuse a resource version fetched

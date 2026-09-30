@@ -132,6 +132,46 @@ func TestVenueUnreachableWorkerIsNotAVerdict(t *testing.T) {
 	}
 }
 
+// A machine reused from its idle window that will not answer is read as reclaimed, so the pipeline re-places it — but only on the first dial, and never when the step's own context has ended, which is the job stopping rather than the machine.
+func TestVenueReadsADeadWarmMachineAsReclaimed(t *testing.T) {
+	t.Parallel()
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for name, c := range map[string]struct {
+		warm    bool
+		ctx     context.Context //nolint:containedctx // a test table's input
+		evicted bool
+	}{
+		"reused warm":          {warm: true, ctx: context.Background(), evicted: true},
+		"acquired fresh":       {ctx: context.Background()},
+		"reused warm, aborted": {warm: true, ctx: cancelled},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			spec := shell.RunnerSpec{Cwd: t.TempDir(), Worker: "local:?binary=" + filepath.Join(t.TempDir(), "no-such-binary"), ReusedWarm: c.warm}
+
+			runner, err := NewRunner(spec)
+			if err != nil {
+				t.Fatalf("NewRunner: %v", err)
+			}
+
+			t.Cleanup(func() { _ = runner.Close() })
+
+			_, err = runner.RunCapture(c.ctx, "true")
+			if err == nil {
+				t.Fatal("RunCapture succeeded against a worker that cannot be started")
+			}
+
+			if got := errors.Is(err, ErrEvicted); got != c.evicted {
+				t.Errorf("evicted = %v, want %v: %v", got, c.evicted, err)
+			}
+		})
+	}
+}
+
 // TestVenueCapturesAndStreams pins the two halves of RunStreamedCapture.
 func TestVenueCapturesAndStreams(t *testing.T) {
 	t.Parallel()
