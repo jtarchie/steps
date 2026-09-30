@@ -92,7 +92,12 @@ there is nothing to log in to — see [Security](#security).
   switch than the per-job breaker `steps jobs` reports, and unrelated to it.
 - **`rename` keeps history**, because every recorded row reaches its pipeline
   by row id rather than by name. That is new: while a pipeline's identity came
-  from its filename, renaming was a different pipeline with empty state.
+  from its filename, renaming was a different pipeline with empty state. It
+  is **refused while a build of the pipeline is running**, naming the builds
+  — the served pipeline is rebuilt under the new name, which would cancel
+  them — so wait for them, or stop them with `steps runs abort`. Queued
+  builds are not a reason to refuse: they are kept, and run under the new
+  name.
 - **`destroy` is not recoverable.** The runs, the resource versions, the queue
   and the merkle cache go with the row. It asks unless given `-n`.
 
@@ -103,11 +108,25 @@ database at startup and serves it, so a restart picks up where the last process
 left off — including on a machine where the YAML never existed. A daemon that
 holds nothing serves an index saying how to set one.
 
+A pipeline the restart **cannot** serve — its `workspace.root:` is gone or
+read-only, a variable it needs is unset in the daemon's environment — does not
+stop the others. Every pipeline that restores is served, and each one that did
+not is listed as **broken**, with the reason, on `/`, in `/api/pipelines` and
+in `steps pipeline list` (and printed as the daemon starts). Nothing about it
+is served: its pages and its API verbs answer 404 naming the reason, and a
+webhook delivery to it a bare 404, since a sender never passed the daemon's
+credentials. `steps pipeline set -p <name>` with the same configuration
+repairs it once the cause is fixed, and says `repaired:`; a missing variable is
+the daemon's own environment, so that one needs a restart with it set, or a
+configuration that does not need it. `steps pipeline destroy` removes a broken
+pipeline whose cause cannot be fixed, and a rename onto or from one is refused.
+Only a state file the daemon cannot read at all stops it from starting.
+
 ## What it shows
 
 | Route | Answers |
 |---|---|
-| `/` | With several pipelines served: what this process holds — each with its jobs colored by their latest run (a red one is one click from its transcript), its last run, what its queue still owes, whether it is paused, and a button to pause or unpause it — and one run feed across all of them, newest first. With one, it redirects straight through |
+| `/` | With several pipelines served, or any held [broken](#what-a-restart-does): what this process holds — each with its jobs colored by their latest run (a red one is one click from its transcript), its last run, what its queue still owes, whether it is paused, and a button to pause or unpause it — and one run feed across all of them, newest first; a broken pipeline is a row with its reason and no links. With one served and none broken, it redirects straight through |
 | `/p/:pipeline` | Which jobs exist, how each last run went, and which jobs feed which — as a list, or as a dependency graph laid out from the `passed:` constraints, each node carrying its latest status |
 | `…/runs` | One run history across every job of the pipeline, newest first — the cross-job view the per-job history can't give |
 | `…/jobs/:job` | Where the job stands, without another click: it forwards to the job's **latest run**, running included; with no run but a trigger queued, to the [follow page](#following-a-run-you-started) for that trigger; with neither, to the detail page. Every link that names a job goes here, so a job is one click from its transcript from anywhere. It is a temporary redirect on purpose — a bookmark to it re-resolves on every visit |

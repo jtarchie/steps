@@ -12,9 +12,10 @@ import (
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
-// TestAResumedPutStillReadsItsVersions: a resume re-fetches rather than
-// skipping gets, so the versions a put reads are there again without any
-// resume-specific bookkeeping — including an in-place get's.
+// TestAResumedPutStillReadsItsVersions: a resume keeps a get whose build
+// already got past it rather than fetching it again, so the versions a put
+// reads have to be recorded by the keep itself — the fan-out get's and an
+// in-place get's alike. prepare succeeding is what puts both on that path.
 func TestAResumedPutStillReadsItsVersions(t *testing.T) {
 	dir := t.TempDir()
 	fixed := filepath.Join(dir, "fixed")
@@ -45,6 +46,8 @@ jobs:
   - get: ticks
     version: every
   - get: more
+  - task: prepare
+    run: "true"
   - task: fragile
     run: test -f %[1]s
   - put: read

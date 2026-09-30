@@ -234,7 +234,7 @@ tr.checkfail pre { margin: 0 0 4px; }
   z-index: 30;
 }
 .pipemenu.open { display: block; }
-.pipemenu a {
+.pipemenu a, .pipemenu .broken {
   display: flex;
   gap: 12px;
   align-items: baseline;
@@ -243,7 +243,9 @@ tr.checkfail pre { margin: 0 0 4px; }
   padding: 8px 12px;
   border-bottom: 1px solid var(--line-soft);
 }
-.pipemenu a:last-child { border-bottom: 0; }
+.pipemenu a:last-child, .pipemenu .broken:last-child { border-bottom: 0; }
+.pipemenu .broken { color: var(--faint); cursor: default; }
+.broken-reason { white-space: pre-line; }
 .pipemenu a:hover { background: var(--panel2); text-decoration: none; }
 .pipemenu a[aria-selected="true"]::before { content: "› "; color: var(--green); }
 .pipemenu .hint { margin-left: auto; color: var(--faint); font-size: 11px; }

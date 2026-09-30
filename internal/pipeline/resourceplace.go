@@ -69,6 +69,8 @@ func placedRunner(ctx context.Context, step config.Step, spec shell.RunnerSpec) 
 	// An in: fills a directory nothing here reads until a later step does,
 	// so the tree stays on the worker. An out: fetches nothing.
 	spec.DeferFetch = spec.FetchAll
+	// Recomputed rather than inherited: a check's re-placement copies the spec of the machine that just died.
+	spec.ReusedWarm = reusedWarm(ctx, step)
 
 	//nolint:contextcheck // NewRunner takes no context; opening the artifact store reads only local config
 	runner, err := venue.NewRunner(spec)
@@ -120,6 +122,8 @@ func (c *checkRunner) RunCapture(ctx context.Context, command string) ([]byte, e
 	var out []byte
 
 	current := c.Runner
+	// The machine current dials, handed to the retry because Abandon is identity-checked: after a re-placement it is no longer the spec's.
+	dialed := c.spec.Worker
 
 	err := withVenueRetry(ctx, c.step, 0, func(retryCtx context.Context) (string, error) {
 		if current == nil {
@@ -127,6 +131,8 @@ func (c *checkRunner) RunCapture(ctx context.Context, command string) ([]byte, e
 			if err != nil {
 				return "", err
 			}
+
+			dialed = worker
 
 			spec := c.spec
 			spec.Worker = worker
@@ -150,10 +156,10 @@ func (c *checkRunner) RunCapture(ctx context.Context, command string) ([]byte, e
 		out = captured
 
 		if err != nil {
-			return c.spec.Worker, fmt.Errorf("%w", err)
+			return dialed, fmt.Errorf("%w", err)
 		}
 
-		return c.spec.Worker, nil
+		return dialed, nil
 	})
 
 	// The stage closes what it was handed; hand it whatever survived.

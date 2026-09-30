@@ -77,6 +77,7 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 		}
 
 		spec.Worker = worker
+		spec.ReusedWarm = reusedWarm(ctx, step)
 
 		//nolint:contextcheck // NewRunner takes no context; opening the artifact store reads only local config
 		runner, runnerErr := venue.NewRunner(spec)

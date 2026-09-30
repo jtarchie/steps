@@ -5,6 +5,7 @@ package cli
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -172,5 +173,89 @@ func TestTheDiffShownBeforeApplyingNamesAChangedInclude(t *testing.T) {
 
 	if diffIncludes(map[string]string{"a": "1"}, map[string]string{"a": "1"}) != "" {
 		t.Error("an unchanged include was reported as a change")
+	}
+}
+
+// A broken pipeline is part of what the daemon holds, so the list says so and why — as a report that succeeds, since /api/pipelines is what a script reads.
+//
+// Not t.Parallel(): captureStdout swaps os.Stdout.
+func TestPipelineListShowsABrokenPipelineAndWhy(t *testing.T) {
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"name":"gone","sha":"0123456789abcdef","jobs":0,"broken":"workspace: root is not writable"}]`))
+	}))
+	t.Cleanup(daemon.Close)
+
+	var err error
+
+	out := captureStdout(t, func() { err = (&PipelineListCmd{TargetFlags{Target: daemon.URL}}).Run() })
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	if !strings.Contains(out, "broken") || !strings.Contains(out, "gone is not being served: workspace: root is not writable") {
+		t.Errorf("list printed:\n%s\nwant the broken state and its reason", out)
+	}
+}
+
+// The set that repairs a broken pipeline is usually the same YAML again, and "is new to this daemon; it will be created" is wrong on both counts.
+//
+// Not t.Parallel(): it swaps os.Stdin and os.Stdout.
+func TestSetConfirmsARepairAsARepair(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = writer.Close()
+
+	stdin := os.Stdin
+	os.Stdin = reader
+
+	t.Cleanup(func() {
+		os.Stdin = stdin
+		_ = reader.Close()
+	})
+
+	out := captureStdout(t, func() {
+		_ = (&PipelineSetCmd{}).confirm("app", web.PipelineConfig{}, false, "workspace: root is not writable", idlePipeline, nil)
+	})
+
+	if !strings.Contains(out, "app is not being served (workspace: root is not writable); this set will repair it") || strings.Contains(out, "new to this daemon") {
+		t.Errorf("confirm printed:\n%s\nwant it called a repair", out)
+	}
+}
+
+// A repair is a set like any other, so it is compare-and-set against what the daemon holds: another set landing between this one's read and its upload is refused rather than silently overwritten.
+//
+// Not t.Parallel(): brokenOnRestart's restart runs with the environment as the test left it.
+func TestARepairIsCompareAndSet(t *testing.T) {
+	isolateLogins(t)
+
+	restarted, root := brokenOnRestart(t)
+	restarted.server.SetManager(restarted)
+
+	daemon := httptest.NewServer(restarted.server.Handler())
+	t.Cleanup(daemon.Close)
+
+	client := newDaemonClient(daemon.URL)
+
+	current, _, broken, err := client.get("app")
+	if err != nil || broken == "" {
+		t.Fatalf("get = %q, %v; want app held broken", broken, err)
+	}
+
+	err = os.Chmod(root, 0o700) //nolint:gosec // the root is the test's own
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = restarted.Set(t.Context(), "app", web.SetRequest{Source: onRoot(root, "", "echo theirs")})
+	if err != nil {
+		t.Fatalf("the other repair: %v", err)
+	}
+
+	_, err = client.set("app", web.SetRequest{Source: onRoot(root, "", "echo mine"), ExpectSHA: current.SHA})
+	if err == nil {
+		t.Error("a repair read before another set overwrote it, uncompared")
 	}
 }
