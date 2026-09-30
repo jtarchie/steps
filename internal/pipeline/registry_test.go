@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -70,6 +71,13 @@ func (b *borrowed) counts() (int, int) {
 func borrowedRun(t *testing.T, yaml string) (context.Context, *config.Config, workspace.Provider, store.Store, *borrowed) {
 	t.Helper()
 
+	return borrowedRunWith(t, yaml, nil)
+}
+
+// borrowedRunWith adds tags of the test's own beside box.
+func borrowedRunWith(t *testing.T, yaml string, extra map[string]string) (context.Context, *config.Config, workspace.Provider, store.Store, *borrowed) {
+	t.Helper()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pipeline.yml")
 
@@ -97,7 +105,10 @@ func borrowedRun(t *testing.T, yaml string) (context.Context, *config.Config, wo
 
 	t.Cleanup(func() { _ = st.Close() })
 
-	ctx, err := WithWorkers(context.Background(), map[string]string{"box": borrowedWorker})
+	mappings := map[string]string{"box": borrowedWorker}
+	maps.Copy(mappings, extra)
+
+	ctx, err := WithWorkers(context.Background(), mappings)
 	if err != nil {
 		t.Fatalf("WithWorkers: %v", err)
 	}
@@ -218,13 +229,15 @@ jobs:
 	}
 }
 
-// A job's pre-plan check on a borrowed machine runs; skipped, as it had to be while a check and a job could not share one, the second run builds the version history already had rather than the one upstream has now.
-func TestAJobChecksAResourceOnABorrowedMachine(t *testing.T) {
+// preplanFixture is a resource on the borrowed machine whose history reads v1 while upstream has moved to v2, fetched here by a get that overrides its tag — so the fetch acquires nothing, and any acquisition is the pre-plan refresh's.
+func preplanFixture(t *testing.T, trigger string) (context.Context, *config.Config, workspace.Provider, store.Store, *borrowed, string) {
+	t.Helper()
+
 	dir := t.TempDir()
 	upstream := filepath.Join(dir, "upstream")
 	fetched := filepath.Join(dir, "fetched")
 
-	ctx, cfg, provider, st, fake := borrowedRun(t, fmt.Sprintf(`
+	ctx, cfg, provider, st, fake := borrowedRunWith(t, fmt.Sprintf(`
 resource_types:
 - name: probe
   config:
@@ -241,7 +254,9 @@ jobs:
 - name: build
   plan:
   - get: repo
-`, upstream, fetched))
+    tags: [here]
+%s
+`, upstream, fetched, trigger), map[string]string{"here": "local:"})
 
 	// What a poll left behind: history reads v1, while upstream has since moved on. With no history at all the get checks for itself, and the refresh would not be what decides.
 	_, err := st.RecordVersions(context.Background(), "repo", []map[string]any{{"ref": "v1"}}, 0)
@@ -254,32 +269,97 @@ jobs:
 		t.Fatal(err)
 	}
 
-	runID := NewRunID()
+	return ctx, cfg, provider, st, fake, fetched
+}
 
-	err = RunJob(WithNewRun(ctx, runID), cfg, &cfg.Jobs[0], nil, provider, st, false)
-	if err != nil {
-		t.Fatalf("RunJob: %v", err)
-	}
-
-	// The acquisition alone proves nothing: runPlacedStage resolves the worker itself, so only a placement record says the stage ran there rather than here.
-	if tag := placementTags(t, st, runID)["repo"]; tag != "box" {
-		t.Errorf("the fetch was recorded on %q, want box", tag)
-	}
+func fetchedRef(t *testing.T, fetched string) string {
+	t.Helper()
 
 	log, err := os.ReadFile(fetched) //nolint:gosec // a t.TempDir() file this test's pipeline wrote
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if got := strings.TrimSpace(string(log)); got != "v2" {
-		t.Errorf("fetched %q, want v2 — the check was skipped and the run built what history had", got)
+	return strings.TrimSpace(string(log))
+}
+
+// The poller keeps a polled resource's history, so a job's pre-plan refresh of one on a machine acquired on demand would start that machine for nothing the job needs.
+func TestAJobAcquiresNoMachineToRefreshAPolledResource(t *testing.T) {
+	ctx, cfg, provider, st, fake, fetched := preplanFixture(t, "    trigger: true")
+
+	var err error
+
+	out := captureStdout(t, func() { err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false) })
+	if err != nil {
+		t.Fatalf("RunJob: %v", err)
 	}
 
-	if starts, stops := fake.counts(); starts != 1 || stops != 1 {
-		t.Errorf("%d starts, %d stops — want the check and the fetch sharing one machine, given back once", starts, stops)
+	if starts, _ := fake.counts(); starts != 0 {
+		t.Errorf("%d starts — want none: the only thing on box is a check the poller already makes", starts)
 	}
 
-	err = ValidatePipelinePlacement(ctx, cfg, []string{"repo"})
+	if got := fetchedRef(t, fetched); got != "v1" {
+		t.Errorf("fetched %q, want v1 — what the poller last recorded", got)
+	}
+
+	versions, err := st.ResourceVersionsJSON(context.Background(), "repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(versions) != 1 {
+		t.Errorf("history has %d versions, want only the poller's v1", len(versions))
+	}
+
+	if !strings.Contains(out, "not refreshing repo before the plan: worker box is acquired on demand") {
+		t.Errorf("the skip was not said:\n%s", out)
+	}
+}
+
+// Nothing polls this one, so the refresh is the only thing that ever moves its history: skipped, every run would build the first run's version forever.
+func TestARefreshStillChecksAResourceNothingPolls(t *testing.T) {
+	ctx, cfg, provider, st, fake, fetched := preplanFixture(t, "")
+
+	err := RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
+	if err != nil {
+		t.Fatalf("RunJob: %v", err)
+	}
+
+	if starts, _ := fake.counts(); starts != 1 {
+		t.Errorf("%d starts, want the refresh's one", starts)
+	}
+
+	if got := fetchedRef(t, fetched); got != "v2" {
+		t.Errorf("fetched %q, want v2 — the refresh was skipped with nothing else to keep history fresh", got)
+	}
+}
+
+// A one-shot command has no poller, so nothing but the refresh would keep a polled resource's history fresh either.
+func TestARefreshWithoutAPollerStillChecks(t *testing.T) {
+	_, cfg, _, _, _, _ := preplanFixture(t, "    trigger: true")
+
+	ctx, err := WithWorkers(context.Background(), map[string]string{"box": borrowedWorker})
+	if err != nil {
+		t.Fatalf("WithWorkers: %v", err)
+	}
+
+	if tag, skip := refreshAcquires(ctx, cfg, "repo"); skip {
+		t.Errorf("skipped the refresh on %s with no poller to keep the history", tag)
+	}
+
+	shared, done := withRegistry(ctx, venue.NewRegistryWith((&borrowed{}).acquire))
+	t.Cleanup(done)
+
+	if _, skip := refreshAcquires(shared, cfg, "repo"); !skip {
+		t.Error("the same resource under a daemon was refreshed; the fixture no longer proves the difference is the poller")
+	}
+}
+
+// Polling a resource on a borrowed machine is what #103 allowed: the poll shares the machine through the registry.
+func TestAPolledResourceOnABorrowedMachineIsAllowed(t *testing.T) {
+	ctx, cfg, _, _, _, _ := preplanFixture(t, "    trigger: true")
+
+	err := ValidatePipelinePlacement(ctx, cfg, []string{"repo"})
 	if err != nil {
 		t.Errorf("a polled resource on a borrowed machine was refused: %v", err)
 	}
@@ -539,5 +619,221 @@ jobs:
 
 	if starts, _ := fake.counts(); starts != 1 {
 		t.Errorf("%d machines acquired, want one replacement", starts)
+	}
+}
+
+// deadWorker is a machine that will not answer: its shim binary is not there, so the dial itself fails.
+const deadWorker = "local:?binary=/nonexistent/steps"
+
+// sequenced hands out the machines it is given in order, the last one for every acquisition after, and counts what it gave back.
+type sequenced struct {
+	mu       sync.Mutex
+	machines []string
+	starts   int
+	stops    int
+}
+
+func (s *sequenced) acquire(context.Context, venue.Worker) (venue.Worker, func(context.Context) error, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	machine, err := venue.ParseWorker(s.machines[min(s.starts, len(s.machines)-1)])
+	if err != nil {
+		return venue.Worker{}, nil, fmt.Errorf("sequenced: %w", err)
+	}
+
+	s.starts++
+
+	return machine, func(context.Context) error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		s.stops++
+
+		return nil
+	}, nil
+}
+
+func (s *sequenced) counts() (int, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.starts, s.stops
+}
+
+// warmRegistry is a daemon's context whose box tag names worker, acquired through fake; warm leaves the first machine in its idle window, as a job before this one would have.
+func warmRegistry(t *testing.T, worker string, fake *sequenced, warm bool) context.Context {
+	t.Helper()
+
+	ctx, err := WithWorkers(context.Background(), map[string]string{"box": worker})
+	if err != nil {
+		t.Fatalf("WithWorkers: %v", err)
+	}
+
+	ctx, closeRegistry := withRegistry(ctx, venue.NewRegistryWith(fake.acquire))
+	t.Cleanup(closeRegistry)
+
+	if warm {
+		earlier, release := WithLeases(ctx)
+
+		_, err = leasesFrom(earlier).Resolve(earlier, "box")
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+
+		release(context.Background())
+	}
+
+	return ctx
+}
+
+const warmTask = `
+jobs:
+- name: build
+  plan:
+  - task: work
+    tags: [box]
+    attempts: 3
+    inputs: []
+    run: "true"
+`
+
+// warmRungs are both acquisition rungs, since they re-place differently: a launched machine is retired and a fresh one launched, while a parked one is the same entry started again.
+var warmRungs = map[string]string{ //nolint:gochecknoglobals // a test table
+	"stopped": "aws://stopped/i-0abc123def456789?shim=/usr/local/bin/steps&idle=1h",
+	"launch":  "aws://launch/lt-0def4567890abcde?shim=/usr/local/bin/steps&idle=1h",
+}
+
+// A machine that died inside its idle window was handed to the next job as if alive, and the job failed on a plain dial error while a fresh machine was one acquisition away.
+func TestADeadWarmMachineIsReplacedOnce(t *testing.T) {
+	for rung, worker := range warmRungs {
+		t.Run(rung, func(t *testing.T) {
+			fake := &sequenced{machines: []string{deadWorker, "local:"}}
+			ctx := warmRegistry(t, worker, fake, true)
+			cfg, provider, st := warmJob(t)
+
+			var err error
+
+			out := captureStdout(t, func() { err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false) })
+			if err != nil {
+				t.Fatalf("RunJob: %v", err)
+			}
+
+			starts, stops := fake.counts()
+			if starts != 2 {
+				t.Errorf("%d acquisitions, want the dead machine and one replacement", starts)
+			}
+
+			if rung == "launch" && stops != 1 {
+				t.Errorf("%d give-backs, want the dead launched machine given back once", stops)
+			}
+
+			if strings.Contains(out, "attempt 2/3") {
+				t.Errorf("the dead machine spent the step's attempts:\n%s", out)
+			}
+		})
+	}
+}
+
+// The twins: only a machine reused from its idle window is presumed reclaimed, only once, and a broken machine acquired fresh is still the plain failure it always was.
+func TestAMachineThatWillNotAnswerIsNotAlwaysAnEviction(t *testing.T) {
+	for name, c := range map[string]struct {
+		machines []string
+		warm     bool
+		starts   int
+	}{
+		"acquired fresh":            {machines: []string{deadWorker, "local:"}, starts: 1},
+		"warm, and its replacement": {machines: []string{deadWorker}, warm: true, starts: 2},
+	} {
+		for rung, worker := range warmRungs {
+			t.Run(name+"/"+rung, func(t *testing.T) {
+				fake := &sequenced{machines: c.machines}
+				ctx := warmRegistry(t, worker, fake, c.warm)
+				cfg, provider, st := warmJob(t)
+
+				var err error
+
+				_ = captureStdout(t, func() { err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false) })
+				if err == nil {
+					t.Fatal("RunJob succeeded on a machine that never answered")
+				}
+
+				if starts, _ := fake.counts(); starts != c.starts {
+					t.Errorf("%d acquisitions, want %d", starts, c.starts)
+				}
+			})
+		}
+	}
+}
+
+func warmJob(t *testing.T) (*config.Config, workspace.Provider, store.Store) {
+	t.Helper()
+
+	_, cfg, provider, st, _ := borrowedRun(t, warmTask)
+
+	return cfg, provider, st
+}
+
+// A warm reuse is presumed dead only until it answers: once a step's session has shaken hands with it, a later step's refused dial on the same machine is that step's failure, and reading it as an eviction would launch a replacement and move every sharer off a live machine.
+func TestAWarmMachineThatAnsweredIsNoLongerPresumedDead(t *testing.T) {
+	fake := &sequenced{machines: []string{"local:"}}
+	ctx, release := WithLeases(warmRegistry(t, warmRungs["launch"], fake, true))
+	t.Cleanup(func() { release(context.WithoutCancel(ctx)) })
+
+	step := config.Step{Task: "work", Tags: []string{"box"}}
+
+	worker, err := workerFor(ctx, step)
+	if err != nil {
+		t.Fatalf("workerFor: %v", err)
+	}
+
+	if !reusedWarm(ctx, step) {
+		t.Fatal("the fixture's machine is not a warm reuse, so this proves nothing")
+	}
+
+	runner, err := venue.NewRunner(shell.RunnerSpec{Cwd: t.TempDir(), Worker: worker, WorkerTag: "box", ReusedWarm: true})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	err = runner.Run(ctx, "true")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	releaseIfReclaimed(ctx, step, runner, worker)
+	_ = runner.Close()
+
+	if reusedWarm(ctx, step) {
+		t.Error("a warm machine that answered is still presumed dead, so the next step's failed dial would re-place it")
+	}
+}
+
+// Abandon is identity-checked against the machine a failed attempt dialled, so a check re-placed onto a machine that then fails too must name THAT machine: naming the one its stage was built on matched nothing, and every remaining re-placement redialled the same dead host.
+func TestARePlacedCheckAbandonsTheMachineItActuallyDialled(t *testing.T) {
+	fake := &sequenced{machines: []string{deadWorker, "local:"}}
+	ctx, release := WithLeases(warmRegistry(t, warmRungs["launch"], fake, true))
+	t.Cleanup(func() { release(context.WithoutCancel(ctx)) })
+
+	ctx, _ = withPlacementSink(ctx)
+
+	stage := &checkRunner{
+		step: config.Step{Get: "repo", Tags: []string{"box"}},
+		spec: shell.RunnerSpec{Worker: "local:?binary=/the/machine/the/stage/was/built/on", WorkerTag: "box"},
+	}
+
+	out, err := stage.RunCapture(ctx, "echo fresh")
+	if err != nil {
+		t.Fatalf("RunCapture: %v", err)
+	}
+
+	_ = stage.Close()
+
+	if got := strings.TrimSpace(string(out)); got != "fresh" {
+		t.Errorf("the check answered %q, want the fresh machine's answer", got)
+	}
+
+	if starts, _ := fake.counts(); starts != 2 {
+		t.Errorf("%d acquisitions, want the dead warm machine and one replacement", starts)
 	}
 }

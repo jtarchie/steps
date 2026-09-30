@@ -460,7 +460,7 @@ func gceStartParked(ctx context.Context, api gceAPI, worker Worker, project, zon
 			return Worker{}, nil, err
 		}
 
-		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: %s was already running; using it and leaving it running, since steps did not start it", worker.URL, worker.Instance))
+		noteAdopted(ctx, worker)
 
 		return worker.asStatic(worker.Instance), nil, nil
 	}

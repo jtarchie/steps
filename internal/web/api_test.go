@@ -323,3 +323,60 @@ func TestAnOversizedSetIsRefusedAsOversized(t *testing.T) {
 		t.Errorf("the manager was asked to set %v", manager.set)
 	}
 }
+
+// TestABrokenPipelineIsListedAndSaysWhy: a restart that could not serve a pipeline lists it with its reason rather than dropping it.
+func TestABrokenPipelineIsListedAndSaysWhy(t *testing.T) {
+	t.Parallel()
+
+	server, _ := managedServer(t)
+	server.MarkBroken(BrokenPipeline{Name: "gone", SHA: "sha-gone", From: "/src/gone.yml", Reason: "workspace: root is not writable"})
+
+	_, body := call(t, server, http.MethodGet, "/api/pipelines", "")
+
+	var rows []PipelineSummary
+
+	err := json.Unmarshal([]byte(body), &rows)
+	if err != nil {
+		t.Fatalf("list: %v: %s", err, body)
+	}
+
+	if len(rows) != 1 || rows[0].Name != "gone" || rows[0].SHA != "sha-gone" || !strings.Contains(rows[0].Broken, "not writable") {
+		t.Errorf("list = %+v, want the broken pipeline with its reason", rows)
+	}
+}
+
+// TestAVerbOnABrokenPipelineSaysWhy: "no such pipeline" about a pipeline the daemon lists is a lie, and the get's body is what a set reads to call itself a repair.
+func TestAVerbOnABrokenPipelineSaysWhy(t *testing.T) {
+	t.Parallel()
+
+	server, _ := managedServer(t)
+	server.MarkBroken(BrokenPipeline{Name: "gone", Reason: "workspace: root is not writable"})
+
+	code, body := call(t, server, http.MethodGet, "/api/pipelines/gone", "")
+
+	var missing struct {
+		Broken string `json:"broken"`
+	}
+
+	if code != http.StatusNotFound || json.Unmarshal([]byte(body), &missing) != nil || !strings.Contains(missing.Broken, "not writable") {
+		t.Errorf("get = %d %s, want 404 carrying the reason", code, body)
+	}
+
+	code, body = call(t, server, http.MethodPost, "/api/pipelines/gone/pause", "")
+	if code != http.StatusNotFound || !strings.Contains(body, "not writable") {
+		t.Errorf("pause = %d %s, want 404 naming the reason", code, body)
+	}
+}
+
+// A reason rides on every overview render and every list row, so one pathological error is capped rather than carried whole.
+func TestABrokenReasonIsCapped(t *testing.T) {
+	t.Parallel()
+
+	server, _ := managedServer(t)
+	server.MarkBroken(BrokenPipeline{Name: "gone", Reason: strings.Repeat("x", 3*brokenReasonLimit)})
+
+	reason, _ := server.BrokenReason("gone")
+	if len(reason) > brokenReasonLimit+len("…") || !strings.HasSuffix(reason, "…") {
+		t.Errorf("reason is %d bytes, want it capped at %d and marked as cut", len(reason), brokenReasonLimit)
+	}
+}

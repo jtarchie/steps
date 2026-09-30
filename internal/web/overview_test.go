@@ -1688,3 +1688,35 @@ func TestRootShowsEachPipelinesJobsAsChips(t *testing.T) {
 		}
 	}
 }
+
+// TestTheRootShowsABrokenPipeline: with one served and one broken, redirecting straight to the served one hid the broken one from everybody who opened the root. Its reason is new browser-visible text, so it is escaped, and it has no page, so the switcher entry is no link.
+func TestTheRootShowsABrokenPipeline(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipelines(t, "app")
+	server.MarkBroken(BrokenPipeline{Name: "gone", From: "/src/gone.yml", Reason: "<script>alert(1)</script>\nsecond line"})
+
+	code, body := get(t, server, "/")
+	if code != http.StatusOK {
+		t.Fatalf("GET / = %d, want the overview rather than a redirect past the broken pipeline", code)
+	}
+
+	if !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") || strings.Contains(body, "<script>alert(1)") {
+		t.Error("the broken pipeline's reason is not on the root, or is not escaped")
+	}
+
+	if !strings.Contains(body, `role="option" aria-disabled="true"`) || strings.Contains(body, `href="/p/gone"`) {
+		t.Error("the broken pipeline's switcher entry is a link, or is not marked disabled")
+	}
+
+	code, body = get(t, server, "/p/gone")
+	if code != http.StatusNotFound || !strings.Contains(body, "not being served") {
+		t.Errorf("GET /p/gone = %d, want 404 saying it is not being served", code)
+	}
+
+	// The webhook route skips this server's credentials, so the reason — paths, variable names — must not reach whoever can post to it.
+	code, body = call(t, server, http.MethodPost, "/p/gone/hooks/repo", "{}")
+	if code != http.StatusNotFound || strings.Contains(body, "second line") {
+		t.Errorf("a webhook delivery to the broken pipeline = %d %s, want a bare 404", code, body)
+	}
+}

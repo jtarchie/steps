@@ -46,6 +46,7 @@ func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 		tag:          spec.WorkerTag,
 		keep:         spec.Keep,
 		noRedial:     spec.NoRedial,
+		reusedWarm:   spec.ReusedWarm,
 		blobs:        blobs,
 		// The container half of a placed step, if it has one. Kept as the
 		// caller's own spec so nothing about what a container means is
