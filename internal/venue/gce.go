@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -541,7 +542,7 @@ func gceStopInstance(api gceAPI, worker Worker, project, zone, name string) {
 
 	err := api.Stop(ctx, project, zone, name)
 	if err != nil {
-		events.Announce(events.NoteWarn, fmt.Sprintf("could not stop %s after a failed acquisition for %q: %v", name, worker.URL, err))
+		slog.Warn("venue.stop_failed", "instance", name, "worker", worker.URL, "after", "a failed acquisition", "error", err)
 	}
 }
 
@@ -608,7 +609,7 @@ func gceDeleteInstance(api gceAPI, worker Worker, project, zone, name string) {
 
 	err := api.Delete(ctx, project, zone, name)
 	if err != nil {
-		events.Announce(events.NoteWarn, fmt.Sprintf("could not delete %s after a failed acquisition for %q: %v", name, worker.URL, err))
+		slog.Warn("venue.delete_failed", "instance", name, "worker", worker.URL, "after", "a failed acquisition", "error", err)
 	}
 }
 

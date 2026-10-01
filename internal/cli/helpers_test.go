@@ -6,9 +6,12 @@ package cli
 // one would have to be a non-test package compiled into every build.
 
 import (
+	"bytes"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -44,6 +47,38 @@ func captureStdout(t *testing.T, fn func()) string {
 	}
 
 	return string(data)
+}
+
+// captureLog installs a text logger for the rest of the test and returns what it has logged so far. Not for a parallel test: the default logger is process-wide.
+func captureLog(t *testing.T) func() string {
+	t.Helper()
+
+	buf := &lockedBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	return buf.String
+}
+
+// lockedBuffer is written by whatever goroutine logs and read by the test.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.Write(p) //nolint:wrapcheck // a bytes.Buffer write never fails
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.String()
 }
 
 // writePipelineFile writes a pipeline fixture to path.

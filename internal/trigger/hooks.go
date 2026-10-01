@@ -63,7 +63,7 @@ func receive(w http.ResponseWriter, r *http.Request, cfg *config.Config, st Hook
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(result.Handshake)
 	case result.Filtered:
-		printf("webhook: %s filtered out a delivery\n", name)
+		slog.InfoContext(ctx, "webhook.filtered", "resource", name)
 		ok(w)
 	default:
 		record(ctx, w, cfg, st, name, result.Delivery)
@@ -148,11 +148,11 @@ func record(ctx context.Context, w http.ResponseWriter, cfg *config.Config, st H
 
 	switch {
 	case !recorded:
-		printf("webhook: %s received a delivery it already has (%v); nothing enqueued\n", name, delivery.Version["id"])
+		slog.InfoContext(ctx, "webhook.duplicate", "resource", name, "id", delivery.Version["id"])
 	case dispatch.Held:
-		printf("webhook: %s recorded %v while the pipeline is paused; it builds on unpause\n", name, delivery.Version["id"])
+		slog.InfoContext(ctx, "webhook.recorded_paused", "resource", name, "id", delivery.Version["id"])
 	default:
-		printf("webhook: %s recorded %v, enqueued %v\n", name, delivery.Version["id"], dispatch.Jobs)
+		slog.InfoContext(ctx, "webhook.recorded", "resource", name, "id", delivery.Version["id"], "enqueued", dispatch.Jobs)
 	}
 
 	ok(w)
@@ -275,7 +275,7 @@ func DeliverLocally(ctx context.Context, cfg *config.Config, st HookStore, name 
 	}
 
 	if !recorded {
-		printf("webhook: %s already has delivery %v; the job builds the newest recorded one, which may not be it\n", name, delivery.Version["id"])
+		slog.WarnContext(ctx, "webhook.duplicate", "resource", name, "id", delivery.Version["id"], "builds", "the newest recorded delivery, which may not be this one")
 	}
 
 	return nil

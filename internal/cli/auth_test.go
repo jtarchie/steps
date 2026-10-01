@@ -190,13 +190,13 @@ func TestLoopbackOnly(t *testing.T) {
 // A port NAME nothing resolves, so the listen fails after the banner and the warning without ever serving. A low port is not that: macOS lets an ordinary user bind port 1, which serves until the suite times out and takes the address other tests treat as dead.
 func unservable(host string) string { return host + ":not-a-port" }
 
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+// Not t.Parallel(): captureLog swaps the process-wide default logger.
 func TestAnUnauthenticatedPublicListenWarnsOnce(t *testing.T) {
-	out := captureStdout(t, func() {
-		_ = (&WebCmd{Listen: unservable("0.0.0.0"), Interval: time.Second, DB: DB(filepath.Join(t.TempDir(), "steps.db"))}).Run()
-	})
+	logs := captureLog(t)
+	_ = (&WebCmd{Listen: unservable("0.0.0.0"), Interval: time.Second, DB: DB(filepath.Join(t.TempDir(), "steps.db"))}).Run()
+	out := logs()
 
-	if strings.Count(out, "WARNING") != 1 {
+	if strings.Count(out, "msg=web.no_auth") != 1 {
 		t.Errorf("a public listen with no credentials did not warn exactly once:\n%s", out)
 	}
 
@@ -205,15 +205,17 @@ func TestAnUnauthenticatedPublicListenWarnsOnce(t *testing.T) {
 	}
 }
 
-// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+// Not t.Parallel(): captureLog swaps the process-wide default logger.
 func TestALoopbackListenAndAnAuthedPublicOneAreQuiet(t *testing.T) {
 	for _, cmd := range []*WebCmd{
 		{Listen: unservable("127.0.0.1"), Interval: time.Second, DB: DB(filepath.Join(t.TempDir(), "steps.db"))},
 		{Listen: unservable("0.0.0.0"), Interval: time.Second, DB: DB(filepath.Join(t.TempDir(), "steps.db")), BasicAuthUsername: "ops", BasicAuthPassword: "s3cret"},
 	} {
-		out := captureStdout(t, func() { _ = cmd.Run() })
+		logs := captureLog(t)
+		_ = cmd.Run()
+		out := logs()
 
-		if strings.Contains(out, "WARNING") {
+		if strings.Contains(out, "msg=web.no_auth") {
 			t.Errorf("%s warned:\n%s", cmd.Listen, out)
 		}
 

@@ -331,6 +331,26 @@ func TestOutputDefaultsToTheProcessStreams(t *testing.T) {
 	}
 }
 
+// TestHeadlessOutputReachesNobody: a daemon's runs are read from their record, so a headless context discards every writer — even ones also set — and says there is no one to prompt.
+func TestHeadlessOutputReachesNobody(t *testing.T) {
+	t.Parallel()
+
+	var out strings.Builder
+
+	ctx := WithOutput(context.Background(), Output{Stdout: &out, Headless: true})
+
+	w, release := Hold(ctx)
+	release()
+
+	if Stdout(ctx) != io.Discard || Stderr(ctx) != io.Discard || w != io.Discard {
+		t.Error("a headless context still writes somewhere")
+	}
+
+	if !Headless(ctx) || Headless(context.Background()) {
+		t.Error("Headless does not answer from the installed output")
+	}
+}
+
 // TestNoteWithNoBusIsStillSaid covers the code that runs outside any run — a worker given back at shutdown, a replay being forked — where a published note would reach nobody.
 func TestNoteWithNoBusIsStillSaid(t *testing.T) {
 	t.Parallel()

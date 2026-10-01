@@ -68,6 +68,28 @@ func impatient(defaultAnswer string) askGrant {
 	return askGrant{defaultAnswer: defaultAnswer, wait: time.Millisecond}
 }
 
+// TestAskUserPutsNothingToAHeadlessTerminal: a daemon's questions are answered in the browser, and a prompt nobody can see would still be reading its stdin.
+func TestAskUserPutsNothingToAHeadlessTerminal(t *testing.T) {
+	t.Parallel()
+
+	for _, headless := range []bool{false, true} {
+		fixture := newAskFixture(t)
+		fixture.env.ask.prompt = func(context.Context, store.Question) (string, bool) { return "typed", true }
+		fixture.ctx = events.WithOutput(fixture.ctx, events.Output{Headless: headless})
+
+		result := fixture.ask(askGrant{defaultAnswer: "fallback", wait: 200 * time.Millisecond}, "Ship it?")
+
+		want := "typed"
+		if headless {
+			want = "fallback"
+		}
+
+		if result["answer"] != want {
+			t.Errorf("headless=%v: answer = %v, want %q", headless, result, want)
+		}
+	}
+}
+
 // TestAskUserSeededAnswerSkipsEveryoneElse: a seeded answer is the first rung,
 // and it resolves the row rather than only the call — so the next asker (an
 // across: cell, a retried attempt) finds it recorded.

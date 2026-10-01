@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
@@ -856,53 +857,68 @@ func TestASetRepairsABrokenPipeline(t *testing.T) {
 	}
 }
 
-// Not t.Parallel(), as captureStdout swaps os.Stdout: the read commands open .steps/steps.db unless told otherwise, so a daemon on any other file must name it in a parked step's printed answer command.
+// The read commands open .steps/steps.db unless told otherwise, so a daemon on any other file must name it in the answer command a parked step records for its page.
 func TestAParkedStepUnderTheDaemonNamesItsDatabase(t *testing.T) {
 	isolateLogins(t)
 
 	held := servingDaemon(t)
 
-	out := captureStdout(t, func() {
-		setPipeline(t, held, "app", "jobs:\n- name: build\n  plan:\n  - approval:\n      message: ship it?\n")
-		enqueue(t, held, "app")
+	setPipeline(t, held, "app", "jobs:\n- name: build\n  plan:\n  - approval:\n      message: ship it?\n")
+	enqueue(t, held, "app")
 
-		st := served(t, held, "app").Store
-		deadline := time.Now().Add(30 * time.Second)
+	st := served(t, held, "app").Store
+	deadline := time.Now().Add(30 * time.Second)
 
-		var pending []store.Approval
+	var pending []store.Approval
 
-		for len(pending) == 0 && time.Now().Before(deadline) {
-			var err error
+	for len(pending) == 0 && time.Now().Before(deadline) {
+		var err error
 
-			pending, err = st.Approvals(t.Context(), true, 0)
-			if err != nil {
-				t.Fatalf("Approvals: %v", err)
-			}
-
-			time.Sleep(20 * time.Millisecond)
-		}
-
-		if len(pending) == 0 {
-			t.Fatal("the approval never parked")
-		}
-
-		err := st.DecideApproval(t.Context(), pending[0].ID, "rejected", "test", "")
+		pending, err = st.Approvals(t.Context(), true, 0)
 		if err != nil {
-			t.Fatalf("DecideApproval: %v", err)
+			t.Fatalf("Approvals: %v", err)
 		}
 
-		finishedRun(t, held, "app")
-
-		// Destroy waits out the loops but retires the provider in the background, and its Close prints too: the runner's Close waits for that, so nothing still reads os.Stdout when captureStdout puts it back.
-		err = held.Destroy(t.Context(), "app")
-		if err != nil {
-			t.Fatalf("destroy: %v", err)
-		}
-
-		held.runner.Close()
-	})
-
-	if !strings.Contains(out, "--db "+shellArg(string(held.state))) {
-		t.Errorf("the printed answer command does not name the daemon's database %s:\n%s", held.state, out)
+		time.Sleep(20 * time.Millisecond)
 	}
+
+	if len(pending) == 0 {
+		t.Fatal("the approval never parked")
+	}
+
+	err := st.DecideApproval(t.Context(), pending[0].ID, "rejected", "test", "")
+	if err != nil {
+		t.Fatalf("DecideApproval: %v", err)
+	}
+
+	finishedRun(t, held, "app")
+
+	if notes := recordedNotes(t, st); !strings.Contains(notes, "--db "+shellArg(string(held.state))) {
+		t.Errorf("the recorded answer command does not name the daemon's database %s:\n%s", held.state, notes)
+	}
+}
+
+// recordedNotes is every step_note the newest build recorded, one per line.
+func recordedNotes(t *testing.T, st store.Store) string {
+	t.Helper()
+
+	runs, err := st.ListRuns(t.Context(), "build", 1)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("ListRuns: %v (%d runs)", err, len(runs))
+	}
+
+	rows, err := st.RunEvents(t.Context(), runs[0].ID, 0, 500)
+	if err != nil {
+		t.Fatalf("RunEvents: %v", err)
+	}
+
+	var notes strings.Builder
+
+	for _, row := range rows {
+		if row.Type == events.TypeStepNote {
+			notes.WriteString(row.Text + "\n")
+		}
+	}
+
+	return notes.String()
 }

@@ -366,11 +366,6 @@ func Note(ctx context.Context, level, text string) {
 	}
 }
 
-// Announce says something to the process rather than to a run: for code with no step's context to say it under — a worker's teardown, a drain arriving on a session's read loop.
-func Announce(level, text string) {
-	say(os.Stdout, level, text)
-}
-
 func say(w io.Writer, level, text string) {
 	if level == NoteWarn {
 		text = "warning: " + text
@@ -549,6 +544,8 @@ type Output struct {
 	Step func(stepID int64, stderr bool) io.Writer
 	// Hold, when set, stops the renderer drawing and hands back the raw terminal until release is called — for a prompt a person has to read and answer.
 	Hold func() (w io.Writer, release func())
+	// Headless says nobody reads this process's streams — a daemon, whose runs are read from their record — so every writer here is io.Discard and nothing prompts.
+	Headless bool
 }
 
 type outputKey struct{}
@@ -572,6 +569,8 @@ func stream(ctx context.Context, stderr bool) io.Writer {
 	out, _ := ctx.Value(outputKey{}).(Output)
 
 	switch {
+	case out.Headless:
+		return io.Discard
 	case out.Step != nil:
 		return out.Step(StepID(ctx), stderr)
 	case stderr && out.Stderr != nil:
@@ -583,6 +582,13 @@ func stream(ctx context.Context, stderr bool) io.Writer {
 	default:
 		return os.Stdout
 	}
+}
+
+// Headless reports whether ctx's output reaches nobody, so there is no person to prompt.
+func Headless(ctx context.Context) bool {
+	out, _ := ctx.Value(outputKey{}).(Output)
+
+	return out.Headless
 }
 
 // Hold takes the terminal for a prompt: the returned writer reaches the person directly, and nothing else draws until release. With no renderer to pause it is Stdout.

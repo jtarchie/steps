@@ -121,20 +121,18 @@ jobs:
 	}
 }
 
-// A daemon on any --db but the default parks the same line, and without that --db in it the command opens the default database and finds nothing.
+// A daemon on any --db but the default records the same line on the run's page, and without that --db in it the command opens the default database and finds nothing.
 func TestParkedApprovalUnderADaemonNamesItsDatabase(t *testing.T) {
 	dir := t.TempDir()
 	path := approvalPipeline(t, dir, "30s")
 	name := cli.PipelineName(path)
-
-	lines := watchStdout(t)
 
 	served := startWebFor(t, path, "--interval", "1h")
 	defer served.stopIfRunning(t)
 
 	served.trigger(t, name, "publish")
 
-	approve, _, found := strings.Cut(printedCommand(t, lines, "approval "), "  |  ")
+	approve, _, found := strings.Cut(recordedCommand(t, served.state, name, "publish", "approval "), "  |  ")
 	if !found {
 		t.Fatalf("the approval line offers no reject command: %q", approve)
 	}
@@ -316,6 +314,44 @@ func printedCommand(t *testing.T, lines <-chan string, prefix string) string {
 			t.Fatalf("nothing printed a parked %q line", prefix)
 		}
 	}
+}
+
+// recordedCommand is printedCommand for a daemon, whose parked line is a note in the run's record rather than anything on its terminal.
+func recordedCommand(t *testing.T, state, name, job, prefix string) string {
+	t.Helper()
+
+	st := waitForStore(t, state, name)
+	defer func() { _ = st.Close() }()
+
+	deadline := time.Now().Add(30 * time.Second)
+
+	for time.Now().Before(deadline) {
+		runs, err := st.ListRuns(t.Context(), job, 1)
+		if err != nil {
+			t.Fatalf("ListRuns: %v", err)
+		}
+
+		if len(runs) == 1 {
+			rows, err := st.RunEvents(t.Context(), runs[0].ID, 0, 500)
+			if err != nil {
+				t.Fatalf("RunEvents: %v", err)
+			}
+
+			for _, row := range rows {
+				if row.Type == events.TypeStepNote && strings.HasPrefix(row.Text, prefix) && strings.Contains(row.Text, "waiting up to") {
+					_, commands, _ := strings.Cut(row.Text, " — ")
+
+					return commands
+				}
+			}
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatalf("no run of %s recorded a parked %q line", job, prefix)
+
+	return ""
 }
 
 // The <answer> placeholder is the only part a person pasting the line fills in.

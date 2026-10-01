@@ -21,6 +21,12 @@ Each served pipeline is routed under `/p/<name>/`, where the name is the one
 unless `--db` says otherwise — and stay strangers inside it; see
 [One database, several pipelines](#one-database-several-pipelines).
 
+**Its terminal is log lines, nothing else.** A run is read on its page, so
+what a step prints, its notes and its prompts never reach the daemon's
+stdout. Stderr carries the log: where it serves, what polling enqueued, each
+job starting and finishing, workers and failures. `--log-level debug` adds
+each step starting, skipping and noting.
+
 ## Setting a pipeline
 
 ```bash

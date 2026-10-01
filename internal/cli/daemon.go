@@ -136,7 +136,7 @@ func (d *daemon) load(ctx context.Context) error {
 			}
 
 			d.server.MarkBroken(web.BrokenPipeline{Name: row.Name, SHA: row.CurrentSHA, From: row.Path, Reason: err.Error() + "\n" + hint})
-			_, _ = fmt.Fprintf(events.Stderr(d.base), "steps web: NOT serving %s: %v; %s\n", row.Name, err, hint)
+			slog.ErrorContext(ctx, "web.not_serving", "pipeline", row.Name, "error", err, "hint", hint)
 		}
 	}
 
@@ -182,7 +182,7 @@ func (d *daemon) restore(ctx context.Context, name, from string) error {
 		return fmt.Errorf("web: %q cannot run here: %w", name, err)
 	}
 
-	fmt.Printf("steps web: serving %s (config %s)\n", name, shortConfig(revision.SHA))
+	slog.InfoContext(ctx, "web.pipeline.serving", "pipeline", name, "config", shortConfig(revision.SHA))
 
 	d.start(name, cfg, st, provider, from)
 
@@ -239,7 +239,7 @@ func (d *daemon) Set(ctx context.Context, name string, req web.SetRequest) (web.
 		d.start(name, cfg, st, provider, req.From)
 	}
 
-	fmt.Printf("steps web: %s set to config %s\n", name, shortConfig(cfg.Revision.SHA))
+	slog.InfoContext(ctx, "web.pipeline.set", "pipeline", name, "config", shortConfig(cfg.Revision.SHA))
 
 	result.Repaired = repairing
 
@@ -444,15 +444,15 @@ func (d *daemon) start(
 	name string, cfg *config.Config, st store.Store,
 	provider workspace.Provider, from string,
 ) {
-	bus := events.New(pipeline.StoreSink(st))
-	// The daemon's stdout reads as a terminal run always has; RunJob prints only on a bus it attached itself, and this one is ours.
-	bus.Observe(runview.Plain(events.Stdout(d.base)))
-
-	target := web.NewPipeline(name, from, cfg, st, bus)
-
 	// Rooted in the daemon's lifetime rather than the request's: a set is over in milliseconds and what it starts has to outlive it.
 	loopCtx, cancel := context.WithCancel(d.base)
 	loopCtx = events.WithLogAttrs(loopCtx, "pipeline", name)
+
+	bus := events.New(pipeline.StoreSink(st))
+	// A daemon's runs are read in the browser, so its terminal gets them as debug log lines; RunJob prints only on a bus it attached itself, and this one is ours.
+	bus.Observe(runview.Log(loopCtx, nil))
+
+	target := web.NewPipeline(name, from, cfg, st, bus)
 
 	target.Hooks = trigger.HookHandler(target.Config, st)
 
@@ -559,7 +559,7 @@ func (d *daemon) Destroy(ctx context.Context, name string) error {
 		return fmt.Errorf("%q destroyed, but its mcp logins at %s were not removed: %w", name, dir, err)
 	}
 
-	fmt.Printf("steps web: %s destroyed\n", name)
+	slog.InfoContext(ctx, "web.pipeline.destroyed", "pipeline", name)
 
 	return nil
 }
@@ -596,7 +596,7 @@ func (d *daemon) destroyBroken(ctx context.Context, name string) error {
 		return fmt.Errorf("%q destroyed, but its mcp logins at %s were not removed: %w", name, dir, err)
 	}
 
-	fmt.Printf("steps web: %s destroyed\n", name)
+	slog.InfoContext(ctx, "web.pipeline.destroyed", "pipeline", name)
 
 	return nil
 }
@@ -671,7 +671,7 @@ func (d *daemon) Rename(ctx context.Context, from, to string) error {
 		return fmt.Errorf("renamed %q to %q, but its mcp logins stay at %s: %w; move them to %s or log in again", from, to, stay, moveErr, dest)
 	}
 
-	fmt.Printf("steps web: %s renamed to %s\n", from, to)
+	slog.InfoContext(ctx, "web.pipeline.renamed", "from", from, "to", to)
 
 	return nil
 }

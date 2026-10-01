@@ -19,17 +19,18 @@ import (
 )
 
 // runKept runs a pipeline with --keep-workspace and answers what it printed,
-// the kept build tree, and the run's error.
+// the kept build tree (which a passing run names only in its log), and the run's error.
 func runKept(t *testing.T, path string, args []string) (string, string, error) {
 	t.Helper()
 
 	var err error
 
+	logs := captureStderr(t)
 	out := captureStdout(t, func() {
 		err = cli.Run(append([]string{path, "--keep-workspace"}, args...))
 	})
 
-	return out, keptWorkspaceDir(t, out), err
+	return out, keptWorkspaceDir(t, out+logs()), err
 }
 
 // assertNeverLanded fails if any blob.bin sits under the kept build tree:

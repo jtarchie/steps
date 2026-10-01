@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -300,6 +301,7 @@ jobs:
     run: echo hi > artifact.txt
 `)
 
+	logs := captureStderr(t)
 	out := captureStdout(t, func() {
 		err := cli.Run([]string{path})
 		if err != nil {
@@ -307,25 +309,24 @@ jobs:
 		}
 	})
 
-	if strings.Contains(out, "workspace kept") {
-		t.Errorf("output = %q, want no kept-workspace line without the flag", out)
+	if said := out + logs(); strings.Contains(said, "workspace kept") || strings.Contains(said, "workspace.kept") {
+		t.Errorf("output = %q, want no kept-workspace line without the flag", said)
 	}
 }
 
-// keptWorkspaceDir extracts the directory from the "workspace kept: <dir>"
-// line the run printed.
+// keptWorkspaceDir extracts the directory from the workspace.kept log line or
+// the "workspace kept at <dir>" line the run printed.
 func keptWorkspaceDir(t *testing.T, out string) string {
 	t.Helper()
 
 	for line := range strings.SplitSeq(out, "\n") {
 		trimmed := strings.TrimSpace(line)
 
-		// Either announcement will do: --keep-workspace says so directly, and
-		// a FAILED run keeps its workspace regardless (so it can be resumed)
-		// and says where alongside the resume id.
-		dir, found := strings.CutPrefix(trimmed, "workspace kept: ")
-		if found {
-			return dir
+		// Either will do: --keep-workspace logs it, and a FAILED run keeps
+		// its workspace regardless (so it can be resumed) and says where
+		// alongside the resume id.
+		if slices.Contains(strings.Fields(trimmed), "workspace.kept") {
+			return logField(trimmed, "dir")
 		}
 
 		_, isResume, _ := strings.Cut(trimmed, "workspace kept at ")

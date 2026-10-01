@@ -245,7 +245,7 @@ func stopInstance(api ec2API, worker Worker, instance string) {
 
 	_, err := api.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{instance}})
 	if err != nil {
-		events.Announce(events.NoteWarn, fmt.Sprintf("could not stop %s after a failed acquisition for %q: %v", instance, worker.URL, err))
+		slog.Warn("venue.stop_failed", "instance", instance, "worker", worker.URL, "after", "a failed acquisition", "error", err)
 	}
 }
 
@@ -309,7 +309,7 @@ func terminateInstance(api ec2API, worker Worker, instance string) {
 
 	_, err := api.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{instance}})
 	if err != nil {
-		events.Announce(events.NoteWarn, fmt.Sprintf("could not terminate %s after a failed acquisition for %q: %v", instance, worker.URL, err))
+		slog.Warn("venue.terminate_failed", "instance", instance, "worker", worker.URL, "after", "a failed acquisition", "error", err)
 	}
 }
 

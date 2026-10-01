@@ -494,8 +494,8 @@ func (g askGrant) recordTerminal(ctx context.Context, env toolEnv, row store.Que
 
 // promptTerminal starts the terminal channel, if there is one, and returns the
 // channel its answer arrives on. A nil prompter (no TTY, which is every CI run)
-// yields a channel nothing ever sends on, which the select below simply never
-// takes.
+// or a headless output (a daemon, answered in the browser) yields a channel
+// nothing ever sends on, which the select below simply never takes.
 //
 // Buffered by one and never closed on purpose: when another channel answers
 // first, this goroutine is still blocked reading a line nobody will now use,
@@ -504,7 +504,7 @@ func (g askGrant) recordTerminal(ctx context.Context, env toolEnv, row store.Que
 func (g askGrant) promptTerminal(ctx context.Context, env toolEnv, row store.Question) <-chan string {
 	answers := make(chan string, 1)
 
-	if env.ask.prompt == nil {
+	if env.ask.prompt == nil || events.Headless(ctx) {
 		return answers
 	}
 

@@ -150,7 +150,6 @@ func preflightTriggers(ctx context.Context, cfg *config.Config, resources []stri
 
 	for _, problem := range problems {
 		if problem.Transient {
-			printf("trigger preflight: %s: %s (transient — polling anyway)\n", problem.Target, problem.Detail)
 			slog.WarnContext(ctx, "watch.preflight_transient", "target", problem.Target, "detail", problem.Detail)
 
 			continue
@@ -254,7 +253,7 @@ func (a *admission) decide(ctx context.Context, cfg *config.Config) bool {
 	if len(resources) == 0 {
 		// Not a failure: plenty of pipelines are run by hand, and an edit may
 		// add a trigger later — which is why the loop stays.
-		printf("trigger: %s: nothing to poll — no get step sets trigger: true\n", name)
+		slog.InfoContext(ctx, "trigger.nothing_to_poll", "reason", "no get step sets trigger: true")
 
 		return false
 	}
@@ -273,7 +272,7 @@ func (a *admission) decide(ctx context.Context, cfg *config.Config) bool {
 		return false
 	}
 
-	printf("trigger: %s: polling %d resource(s)\n", name, len(resources))
+	slog.InfoContext(ctx, "trigger.polling", "resources", len(resources))
 
 	return true
 }
@@ -296,7 +295,7 @@ func pollAndLog(ctx context.Context, cfg *config.Config, st PollStore) {
 	}
 
 	for _, name := range enqueued {
-		printf("trigger: enqueued %s\n", name)
+		slog.InfoContext(ctx, "trigger.enqueued", "job", name)
 	}
 }
 
@@ -657,7 +656,6 @@ func jobReadyFor(ctx context.Context, st PollStore, job *config.Job) (bool, erro
 		if !passed {
 			names := slices.Sorted(maps.Keys(want))
 
-			printf("trigger: %s waiting — %s has not gone green against this combination of %v yet\n", job.Name, upstreamJob, names)
 			slog.InfoContext(ctx, "trigger.waiting_on_passed", "job", job.Name, "upstream", upstreamJob, "resources", names)
 
 			return false, nil

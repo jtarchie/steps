@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"sync"
 	"time"
@@ -162,7 +163,7 @@ func (r *Registry) expire(held *entry, gen int) {
 	// Nothing that could cancel this is still around, and the release bounds its own calls.
 	err := r.giveBack(context.Background(), held)
 	if err != nil {
-		events.Announce(events.NoteWarn, fmt.Sprintf("worker %s could not be given back after its idle window: %v", held.source.URL, err))
+		slog.Warn("worker.release_failed", "worker", held.source.URL, "after", "its idle window", "error", err)
 	}
 }
 

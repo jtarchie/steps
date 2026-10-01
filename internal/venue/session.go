@@ -982,21 +982,16 @@ func (s *session) noteDrain(frame wire.Frame) {
 		reason = "no reason given"
 	}
 
-	kind := "is draining"
+	msg := "worker.draining"
 	if notice.Terminal {
-		kind = "is being reclaimed"
+		msg = "worker.reclaimed"
 	}
 
 	// The deadline is said, not just carried. It is the one fact that tells an
 	// operator whether the command in flight can finish inside the grace, and
 	// the field's own contract is that it reaches them with the reason.
-	when := ""
-	if notice.Deadline != "" {
-		when = " (expected gone by " + notice.Deadline + ")"
-	}
-
-	// ponytail: a drain arrives on the session's read loop, which holds no step's context, so it is said to the process; thread the step's context through the reader if a live view should place it under a step.
-	events.Announce(events.NoteWarn, fmt.Sprintf("worker %s %s: %s%s", s.worker.Address(), kind, reason, when))
+	// ponytail: a drain arrives on the session's read loop, which holds no step's context, so it is logged by the process; thread the step's context through the reader if a run's record should place it under a step.
+	slog.Warn(msg, "worker", s.worker.Address(), "reason", reason, "deadline", notice.Deadline)
 }
 
 // read is readFrame, marking the conversation broken on a transport failure so

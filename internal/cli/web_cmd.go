@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -124,8 +124,8 @@ func (w *WebCmd) Run() error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	// Read once, before anything is spawned: every build and poll the daemon runs writes where it was started, rather than reading the process's streams from a goroutine while something else reassigns them.
-	ctx = events.WithOutput(ctx, events.Output{Stdout: os.Stdout, Stderr: os.Stderr})
+	// A daemon's runs are read in the browser, from their record: its terminal is log lines, so a step's bytes, a note's fallback and a prompt reach nobody here.
+	ctx = events.WithOutput(ctx, events.Output{Headless: true})
 
 	ctx, err = w.ExecFlags.Apply(ctx)
 	if err != nil {
@@ -186,15 +186,17 @@ func (w *WebCmd) serve(ctx context.Context) error {
 		return err
 	}
 
-	fmt.Printf("steps web: http://%s (state: %s)\n", w.Listen, state)
+	slog.InfoContext(ctx, "web.serving", "url", "http://"+w.Listen, "state", state)
 
 	// A pipeline is arbitrary commands and a set is the endpoint that installs them, so an address anybody can reach with no credentials is worth saying out loud once.
 	if len(opts) == 0 && !loopbackOnly(w.Listen) {
-		fmt.Printf("steps web: WARNING serving %s with no authentication — anyone who can reach it can set a pipeline, which is arbitrary command execution; set --basic-auth-username and --basic-auth-password\n", w.Listen)
+		slog.WarnContext(ctx, "web.no_auth", "listen", w.Listen,
+			"risk", "anyone who can reach it can set a pipeline, which is arbitrary command execution",
+			"fix", "set --basic-auth-username and --basic-auth-password")
 	}
 
 	if len(server.Served()) == 0 {
-		fmt.Println("steps web: no pipelines set — upload one with: steps pipeline set -c pipeline.yml")
+		slog.InfoContext(ctx, "web.no_pipelines", "hint", "steps pipeline set -c pipeline.yml")
 	}
 
 	err = server.Start(ctx, w.Listen)
@@ -213,7 +215,7 @@ func (w *WebCmd) withExternalURL(ctx context.Context) (context.Context, error) {
 	}
 
 	if published == "" {
-		fmt.Printf("steps web: %s is a wildcard address, so STEPS_URL is unset for steps; set --external-url\n", w.Listen)
+		slog.WarnContext(ctx, "web.steps_url_unset", "listen", w.Listen, "reason", "a wildcard address", "fix", "set --external-url")
 	}
 
 	return pipeline.WithExternalURL(ctx, published), nil

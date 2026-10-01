@@ -3,13 +3,11 @@ package trigger
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -17,73 +15,6 @@ import (
 	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/workspace"
 )
-
-// captureMu serializes captures against each other; see captureStdout.
-//
-//nolint:gochecknoglobals // one capture at a time, for one process-wide destination
-var captureMu sync.Mutex
-
-// captureStdout reads what fn printed through this package's own output
-// destination.
-//
-// It used to assign the os.Stdout GLOBAL, which the package's parallel tests
-// read concurrently through every fmt.Printf in the code under test — a data
-// race -race reported intermittently. Swapping trigger's own writer under its
-// lock is the same capture without the race; see output.go.
-//
-// The swap is released BEFORE fn runs: printf takes the read lock, and an
-// RWMutex is not reentrant, so holding the write lock across fn would deadlock
-// on the first line it tried to print.
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-
-	// One capture at a time. The lock above makes the SWAP safe; it does not
-	// make two captures independent, because there is one destination to swap.
-	// Two parallel tests capturing at once both point `out` at their own pipe,
-	// the second swap wins, and the first test's own line is delivered to the
-	// second test's pipe — so the first fails saying it never printed
-	// something it did print.
-	//
-	// Serializing captures is enough because it is only the CAPTURING tests
-	// that must not overlap: a test that merely prints has nothing to lose,
-	// and its lines landing in someone's capture is the interleaving that
-	// TestCaptureDoesNotRaceConcurrentOutput documents as acceptable.
-	captureMu.Lock()
-	defer captureMu.Unlock()
-
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-
-	outMu.Lock()
-	orig := out
-	out = w
-	outMu.Unlock()
-
-	// Drained WHILE fn runs, not after. printf holds outMu.RLock across its
-	// Fprintf, so a writer that fills the pipe's 64KiB buffer blocks holding
-	// the read lock — and the restore below takes the write lock, which then
-	// never acquires. w.Close() would unstick it, but it is sequenced after
-	// the restore, so the deadlock is permanent and takes the whole package
-	// out to the go-test timeout.
-	captured := make(chan []byte, 1)
-
-	go func() {
-		data, _ := io.ReadAll(r)
-		captured <- data
-	}()
-
-	fn()
-
-	outMu.Lock()
-	out = orig
-	outMu.Unlock()
-
-	_ = w.Close()
-
-	return string(<-captured)
-}
 
 // loadConfig writes yaml to a pipeline.yml under dir and parses it.
 func loadConfig(t *testing.T, dir, yaml string) *config.Config {
@@ -611,8 +542,6 @@ jobs:
 
 // The line is the operator's only sign a poll enqueued anything.
 func TestPollAndLogSaysWhatItEnqueued(t *testing.T) {
-	t.Parallel()
-
 	dir := t.TempDir()
 	versionsPath := filepath.Join(dir, "versions.json")
 	writeVersions(t, versionsPath, `[{"ref":"v1"}]`)
@@ -620,9 +549,12 @@ func TestPollAndLogSaysWhatItEnqueued(t *testing.T) {
 	cfg := loadConfig(t, dir, dummyPipeline(versionsPath, filepath.Join(dir, "task-counter.txt")))
 	st := mustOpenStore(t, dir)
 
-	printed := captureStdout(t, func() { pollAndLog(context.Background(), cfg, st) })
-	if !strings.Contains(printed, "trigger: enqueued build\n") {
-		t.Errorf("printed %q, want the job the poll enqueued named", printed)
+	out := captureLog(t)
+
+	pollAndLog(context.Background(), cfg, st)
+
+	if line := logLine(out.String(), "trigger.enqueued"); !strings.Contains(line, "job=build") {
+		t.Errorf("logged %q, want the job the poll enqueued named", out)
 	}
 }
 
