@@ -171,7 +171,7 @@ func TestAgoCompactIsOneUnitWithASpokenTwin(t *testing.T) {
 	}
 }
 
-var compactTimeTag = regexp.MustCompile(`<time datetime="[^"]+" data-ago-compact><span aria-hidden="true">(?:now|\d+[smhd])</span><span class="visually-hidden">(?:just now|\d+ (?:second|minute|hour|day)s? ago)</span></time>`)
+var compactTimeTag = regexp.MustCompile(`<time datetime="[^"]+"><span aria-hidden="true">(?:now|\d+[smhd])</span><span class="visually-hidden">(?:just now|\d+ (?:second|minute|hour|day)s? ago)</span></time>`)
 
 // TestRunPageStripIsAnnouncedAsWords: a chip's status is a CSS glyph and its
 // time an abbreviation, neither of which a screen reader reads reliably. The
@@ -199,10 +199,62 @@ func TestRunPageStripIsAnnouncedAsWords(t *testing.T) {
 	// Matched by shape rather than as "now": the run started when the test
 	// did, and a loaded machine can put a second between that and the render.
 	if !compactTimeTag.MatchString(strip) {
-		t.Errorf("the time is not a machine-readable instant the ticker can find, an abbreviation hidden from assistive tech, and its spoken twin: %s", strip)
+		t.Errorf("the time is not a machine-readable instant, an abbreviation hidden from assistive tech, and its spoken twin: %s", strip)
 	}
 
 	if strings.Contains(strip, " ago</time>") {
 		t.Error("the strip still renders the long relative time it was shortened from")
 	}
+}
+
+// TestRunStripSilencesEveryStatusGlyph: the strip's chips already say their
+// status in words, so each glyph is given empty alt text there — which only
+// holds if every glyph the status block defines is mirrored, plus the
+// default. A status added to the block and forgotten here would be read
+// aloud as "black circle" or worse before the word it duplicates.
+func TestRunStripSilencesEveryStatusGlyph(t *testing.T) {
+	t.Parallel()
+
+	css, err := assets.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatalf("read app.css: %v", err)
+	}
+
+	sheet := regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllString(string(css), "")
+	glyphs := statusGlyphs(sheet, regexp.MustCompile(`^\.st((?:\.st-[a-z]+)?)::before$`), false)
+	silenced := statusGlyphs(sheet, regexp.MustCompile(`^\.striplist \.st((?:\.st-[a-z]+)?)::before$`), true)
+
+	if len(glyphs) < 2 {
+		t.Fatalf("found %d status glyphs; the pattern no longer matches the status block", len(glyphs))
+	}
+
+	for status, glyph := range glyphs {
+		if silenced[status] != glyph {
+			t.Errorf("the strip does not silence .st%s %s: want .striplist .st%s::before { content: %s / \"\"; }", status, glyph, status, glyph)
+		}
+	}
+}
+
+// statusGlyphs maps each status a selector names to the glyph its rule draws,
+// with or without empty alt text. Rule by rule and selector by selector, so a
+// grouped selector or a declaration beside content: cannot hide a glyph.
+func statusGlyphs(sheet string, selector *regexp.Regexp, silent bool) map[string]string {
+	rule := regexp.MustCompile(`([^{}]+)\{([^{}]*)\}`)
+	content := regexp.MustCompile(`content:\s*("[^"]*")\s*(/\s*""\s*)?;`)
+	glyphs := map[string]string{}
+
+	for _, match := range rule.FindAllStringSubmatch(sheet, -1) {
+		declared := content.FindStringSubmatch(match[2])
+		if declared == nil || (declared[2] != "") != silent {
+			continue
+		}
+
+		for _, each := range strings.Split(match[1], ",") {
+			if status := selector.FindStringSubmatch(strings.Join(strings.Fields(each), " ")); status != nil {
+				glyphs[status[1]] = declared[1]
+			}
+		}
+	}
+
+	return glyphs
 }

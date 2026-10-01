@@ -466,26 +466,10 @@
     return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
   }
 
-  var units = [[86400000, 'd', 'day'], [3600000, 'h', 'hour'], [60000, 'm', 'minute'], [1000, 's', 'second']];
-  function compact(ms) {
-    for (var i = 0; i < units.length; i++) {
-      var n = Math.floor(ms / units[i][0]);
-      if (n >= 1) return [n + units[i][1], n + ' ' + units[i][2] + (n === 1 ? '' : 's') + ' ago'];
-    }
-    return ['now', 'just now'];
-  }
-
   function tick() {
     var now = Date.now();
     document.querySelectorAll('time[data-ago]').forEach(function (node) {
       node.textContent = fmt(now - Date.parse(node.dataset.ago)) + ' ago';
-    });
-    // agoCompact in render.go: one unit for the eye, words for assistive tech.
-    // Not a live region, so rewriting the hidden words announces nothing.
-    document.querySelectorAll('time[data-ago-compact]').forEach(function (node) {
-      var parts = compact(now - Date.parse(node.dateTime));
-      node.firstElementChild.textContent = parts[0];
-      node.lastElementChild.textContent = parts[1];
     });
     document.querySelectorAll('time[data-elapsed-since]').forEach(function (node) {
       node.textContent = fmt(now - Date.parse(node.dataset.elapsedSince));

@@ -555,8 +555,7 @@ func agoText(stamp string) template.HTML {
 
 // agoCompact is a relative time in one coarse unit ("5d"), for places where
 // width is the constraint, plus the words a screen reader should say for it:
-// an abbreviation is read unpredictably ("5 d", "21 meters"). The ticker in
-// layout.html mirrors these thresholds.
+// an abbreviation is read unpredictably ("5 d", "21 meters").
 func agoCompact(elapsed time.Duration) (short, spoken string) {
 	units := []struct {
 		size        time.Duration
@@ -586,7 +585,9 @@ func agoCompact(elapsed time.Duration) (short, spoken string) {
 }
 
 // agoCompactTag is agoTag for the run strip: the abbreviation for the eye,
-// the words for assistive tech, and the instant for the ticker.
+// the words for assistive tech. No ticker attribute, unlike agoTag: the strip
+// re-renders from the server every 2.5s it is visible, so a second copy of
+// these thresholds in JavaScript would only be kept in step for nothing.
 func agoCompactTag(t time.Time) template.HTML {
 	if t.IsZero() {
 		return `<span class="dim">—</span>`
@@ -595,7 +596,7 @@ func agoCompactTag(t time.Time) template.HTML {
 	short, spoken := agoCompact(time.Since(t))
 
 	//nolint:gosec // G203: every interpolation is machine-formatted, not input
-	return template.HTML(fmt.Sprintf(`<time datetime=%q data-ago-compact><span aria-hidden="true">%s</span><span class="visually-hidden">%s</span></time>`,
+	return template.HTML(fmt.Sprintf(`<time datetime=%q><span aria-hidden="true">%s</span><span class="visually-hidden">%s</span></time>`,
 		t.UTC().Format(time.RFC3339Nano), short, spoken))
 }
 

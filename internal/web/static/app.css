@@ -454,13 +454,19 @@ td.faint, .faint { color: var(--faint); }
 /* Each chip already says its status in words to assistive tech, so the glyph
    and the id's brackets get empty alt text rather than being read as "check
    mark" and "left bracket". A browser without the alt syntax drops these
-   declarations and keeps the ones above. */
+   declarations and keeps the ones above. Every glyph in the status block is
+   mirrored, plus the default: a status missing here is still silent, but
+   drawn as the dot rather than its own glyph. */
+.striplist .st::before { content: "● " / ""; }
 .striplist .st.st-passed::before, .striplist .st.st-succeeded::before { content: "✓ " / ""; }
 .striplist .st.st-failed::before { content: "✗ " / ""; }
 .striplist .st.st-errored::before { content: "! " / ""; }
 .striplist .st.st-aborted::before { content: "■ " / ""; }
 .striplist .st.st-running::before { content: "◐ " / ""; }
 .striplist .st.st-queued::before { content: "○ " / ""; }
+.striplist .st.st-paused::before { content: "⏸ " / ""; }
+.striplist .st.st-held::before { content: "⊘ " / ""; }
+.striplist .st.st-skipped::before { content: "– " / ""; }
 .striplist .hash::before { content: "[" / ""; }
 .striplist .hash::after { content: "]" / ""; }
 
