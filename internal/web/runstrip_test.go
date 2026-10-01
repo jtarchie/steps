@@ -2,9 +2,11 @@ package web
 
 import (
 	"context"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // stripOf cuts the run strip out of a run page, so an assertion about a chip
@@ -135,5 +137,72 @@ func TestRunPageStripDropsTheQueuedChipOnceItsRunStarts(t *testing.T) {
 
 	if !strings.Contains(strip, `href="/p/demo/runs/run-2"`) {
 		t.Error("the run the row became is not on the strip")
+	}
+}
+
+// TestAgoCompactIsOneUnitWithASpokenTwin: the strip's label is one coarse
+// unit so twenty runs fit on a line, and "5d" is not something a screen
+// reader can be trusted to say — so every short form has a spelled-out twin,
+// pluralized, that is what the chip is announced as.
+func TestAgoCompactIsOneUnitWithASpokenTwin(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []struct {
+		elapsed       time.Duration
+		short, spoken string
+	}{
+		{-time.Second, "now", "just now"},
+		{0, "now", "just now"},
+		{999 * time.Millisecond, "now", "just now"},
+		{time.Second, "1s", "1 second ago"},
+		{59 * time.Second, "59s", "59 seconds ago"},
+		{time.Minute, "1m", "1 minute ago"},
+		{21*time.Minute + 26*time.Second, "21m", "21 minutes ago"},
+		{59*time.Minute + 59*time.Second, "59m", "59 minutes ago"},
+		{time.Hour, "1h", "1 hour ago"},
+		{22*time.Hour + 55*time.Minute, "22h", "22 hours ago"},
+		{24 * time.Hour, "1d", "1 day ago"},
+		{120*time.Hour + 11*time.Minute, "5d", "5 days ago"},
+	} {
+		short, spoken := agoCompact(want.elapsed)
+		if short != want.short || spoken != want.spoken {
+			t.Errorf("agoCompact(%s) = %q, %q; want %q, %q", want.elapsed, short, spoken, want.short, want.spoken)
+		}
+	}
+}
+
+var compactTimeTag = regexp.MustCompile(`<time datetime="[^"]+" data-ago-compact><span aria-hidden="true">(?:now|\d+[smhd])</span><span class="visually-hidden">(?:just now|\d+ (?:second|minute|hour|day)s? ago)</span></time>`)
+
+// TestRunPageStripIsAnnouncedAsWords: a chip's status is a CSS glyph and its
+// time an abbreviation, neither of which a screen reader reads reliably. The
+// chip therefore carries the status WORD and the spelled-out time as hidden
+// text, hides the abbreviation from assistive tech so it is not read twice,
+// and sits in a list so "20 items" is announced before the first one.
+func TestRunPageStripIsAnnouncedAsWords(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	startFinishedRun(t, pipeline, "run-a", "build", "failed")
+
+	_, body := get(t, server, "/p/demo/runs/run-a")
+	strip := stripOf(t, body)
+
+	for want, cost := range map[string]string{
+		`<ol class="striplist" id="strip-runs" role="list">`: "runs are not a list a screen reader can count",
+		`<span class="visually-hidden">failed, </span>`:      "the status is only a glyph to a screen reader",
+	} {
+		if !strings.Contains(strip, want) {
+			t.Errorf("%s: missing %s in %s", cost, want, strip)
+		}
+	}
+
+	// Matched by shape rather than as "now": the run started when the test
+	// did, and a loaded machine can put a second between that and the render.
+	if !compactTimeTag.MatchString(strip) {
+		t.Errorf("the time is not a machine-readable instant the ticker can find, an abbreviation hidden from assistive tech, and its spoken twin: %s", strip)
+	}
+
+	if strings.Contains(strip, " ago</time>") {
+		t.Error("the strip still renders the long relative time it was shortened from")
 	}
 }

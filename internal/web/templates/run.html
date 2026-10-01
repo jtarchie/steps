@@ -29,11 +29,19 @@
 {{/* This job's recent runs, newest first, so hopping between them never
      leaves the transcript. A live region of its own: the SSE stream draws
      nothing outside the transcript, and its closing reload fires only when
-     THIS run ends, so a sibling run appearing needs the poll. */}}
+     THIS run ends, so a sibling run appearing needs the poll. One line that
+     scrolls sideways, as Concourse's build tabs do, with "all runs" pinned
+     outside the scroller so the way to the rest never scrolls away. A list,
+     with role="list" because Safari drops the semantics of an unstyled one,
+     so a screen reader says how many before reading the first. Each chip
+     speaks its status and time as words; the glyph and abbreviation are for
+     the eye. */}}
 <nav class="runstrip" id="run-strip" aria-label="Runs of {{$run.Run.JobName}}" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#run-strip" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#statusline:outerMorph">
-  {{if .Strip.Queued}}<a class="st st-queued" id="strip-queued" href="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/follow?since={{.Strip.QueuedSince}}">queued</a>{{end}}
-  {{range .Strip.Runs}}<a class="st st-{{statusWord .Status}}" id="strip-{{short .ID}}" href="/p/{{$.Nav.Current}}/runs/{{.ID}}"{{if eq .ID $run.Run.ID}} aria-current="page"{{end}} title="[{{short .ID}}] · {{.Duration}}">{{if eq .ID $run.Run.ID}}<span class="hash">{{short .ID}}</span> {{end}}{{agoTag .StartedAt}}</a>
-  {{end}}<a class="stripmore" href="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/detail">all runs</a>
+  <ol class="striplist" id="strip-runs" role="list">
+  {{if .Strip.Queued}}<li><a class="st st-queued" id="strip-queued" href="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/follow?since={{.Strip.QueuedSince}}">queued</a></li>{{end}}
+  {{range .Strip.Runs}}<li><a class="st st-{{statusWord .Status}}" id="strip-{{short .ID}}" href="/p/{{$.Nav.Current}}/runs/{{.ID}}"{{if eq .ID $run.Run.ID}} aria-current="page"{{end}} title="[{{short .ID}}] · {{.Duration}}"><span class="visually-hidden">{{statusWord .Status}}, </span>{{if eq .ID $run.Run.ID}}<span class="hash">{{short .ID}}</span> {{end}}{{agoCompact .StartedAt}}</a></li>
+  {{end}}</ol>
+  <a class="stripmore" href="/p/{{.Nav.Current}}/jobs/{{$run.Run.JobName}}/detail">all runs</a>
 </nav>
 
 {{/* Only an error no step holds: a failing step's error is what the job error
@@ -174,6 +182,20 @@
 })();
 </script>
 {{end}}
+<script>
+// The run on the page can be an old one, off the strip's right edge. Scroll
+// the strip — not the page, which scrollIntoView would also move when the
+// reader arrived at a step's anchor — so the current chip clears the fade.
+// Once, at load: the morph keeps the element and its scroll position after.
+(function () {
+  var list = document.getElementById('strip-runs');
+  var current = list && list.querySelector('[aria-current="page"]');
+  if (!current || list.scrollWidth <= list.clientWidth) return;
+  var fade = 28;
+  var right = current.parentElement.offsetLeft + current.parentElement.offsetWidth + fade;
+  if (right > list.clientWidth) list.scrollLeft = right - list.clientWidth;
+})();
+</script>
 {{end}}
 
 {{/* One step, and everything that ran inside it.
