@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -100,10 +99,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = pipeline.RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
-	if err != nil {
-		t.Fatalf("RunJob: %v", err)
-	}
+	runBacklog(ctx, t, cfg, &cfg.Jobs[0], provider, st)
 
 	data, err := os.ReadFile(processed) //nolint:gosec // a t.TempDir()-scoped file this test wrote itself
 	if err != nil {

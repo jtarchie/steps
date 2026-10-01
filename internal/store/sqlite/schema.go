@@ -70,10 +70,12 @@ package sqlite
 // 4 put pipeline_id into the keys of run_placements and agent_usage. Without
 // it, two pipelines sharing a state file collided on (run_id, node_hash) and
 // one upserted over the other's row.
+// 17 dropped run_inputs.build_id, runs.rerun_of_build and trigger_queue.rerun_build: a run is one build, so there is no build of a run to name.
+//
 // 16 added runs.rerun_of and rerun_of_build, which say which build a retry re-ran, and trigger_queue's rerun columns, which queue one.
 //
 // 15 added trigger_queue.manual, which is how a person's trigger gets past the breaker an automatic one is held by.
-const schemaVersion = 16
+const schemaVersion = 17
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -270,11 +272,10 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
     job_name    TEXT NOT NULL,
     reason      TEXT NOT NULL,
     manual      INTEGER NOT NULL DEFAULT 0,
-    -- A retry of one build of a recorded run (fly rerun-build); NULL for every
-    -- other row. CASCADE because a queued retry of a reaped run has no versions
-    -- left to rebuild against.
+    -- A retry of a recorded run (fly rerun-build); NULL for every other row.
+    -- CASCADE because a queued retry of a reaped run has no versions left to
+    -- rebuild against.
     rerun_of    TEXT REFERENCES runs(id) ON DELETE CASCADE,
-    rerun_build INTEGER,
     status      TEXT NOT NULL,
     enqueued_at TEXT NOT NULL,
     started_at  TEXT,
@@ -288,7 +289,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_job
 -- A retry builds different versions from the job's ordinary trigger, so it is
 -- its own pending row; the same retry asked twice is still one.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_rerun
-    ON trigger_queue(pipeline_id, rerun_of, rerun_build) WHERE status = 'pending' AND rerun_of IS NOT NULL;
+    ON trigger_queue(pipeline_id, rerun_of) WHERE status = 'pending' AND rerun_of IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_trigger_queue_rerun_of ON trigger_queue(rerun_of);
 -- ClaimNextJob counts a job's running rows once per pending row, and a held-back job retries that claim every drain tick; unindexed, each count scanned every pipeline's history. The partial index above cannot serve it, nor the pipeline cascade.
 CREATE INDEX IF NOT EXISTS idx_trigger_queue_job_status ON trigger_queue(pipeline_id, job_name, status);
@@ -486,11 +487,10 @@ CREATE TABLE IF NOT EXISTS runs (
     -- right — retention reaping its parent must not reach forward and delete
     -- the child too.
     parent_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-    -- NULL for any run but a rerun; otherwise the run, and the build of it,
-    -- whose recorded versions it re-ran (fly rerun-build's rerun_of). SET NULL
-    -- for parent_run_id's reason: reaping the original must not reap a rerun.
+    -- NULL for any run but a rerun; otherwise the run whose recorded versions
+    -- it re-ran (fly rerun-build's rerun_of). SET NULL for parent_run_id's
+    -- reason: reaping the original must not reap a rerun.
     rerun_of       TEXT REFERENCES runs(id) ON DELETE SET NULL,
-    rerun_of_build INTEGER,
     -- WHICH configuration this run executed. NULL for a run started by a
     -- caller that loaded no pipeline file — a test building a Config in
     -- memory — because there is no revision to point at, not because the
@@ -516,9 +516,9 @@ CREATE INDEX IF NOT EXISTS idx_runs_revision ON runs(revision_id);
 
 CREATE TABLE IF NOT EXISTS run_steps (
     run_id     TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    -- "<run>#<set>" for a step inside a triggered build, the bare run id for
-    -- one outside any. The index alone collided: each build's remainder, and
-    -- the walk after a get, counts from 0 again.
+    -- "<run>#0" for a step inside the build a get triggers, the bare run id
+    -- for one before it. The index alone collided: the walk after a get
+    -- counts from 0 again.
     build_id   TEXT NOT NULL,
     step_index INTEGER NOT NULL,
     step_name  TEXT NOT NULL,
@@ -751,9 +751,6 @@ CREATE INDEX IF NOT EXISTS idx_agent_usage_node ON agent_usage(pipeline_id, node
 -- row that fails to record costs a resume, never a running build.
 CREATE TABLE IF NOT EXISTS run_inputs (
     run_id        TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    -- Which build, so a resume rebuilds each build against exactly what it
-    -- was created with before trusting that build's run_steps.
-    build_id      TEXT NOT NULL,
     -- The get the version was bound under, as Concourse keys
     -- build_resource_config_version_inputs by input name: two gets of one
     -- resource in a build each keep their own version.
@@ -762,7 +759,7 @@ CREATE TABLE IF NOT EXISTS run_inputs (
     -- Canonical JSON, the same encoding the cursor keys on, so a version
     -- recorded here compares equal to one a later check returns.
     version_json  TEXT NOT NULL,
-    PRIMARY KEY (run_id, build_id, input_name)
+    PRIMARY KEY (run_id, input_name)
 ) WITHOUT ROWID;
 
 -- Where a placed step actually ran, and what it cost in bytes rather than in

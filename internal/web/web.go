@@ -214,8 +214,8 @@ var ErrNoSuchPipeline = errors.New("no such pipeline")
 type Runner interface {
 	// Enqueue queues a person's trigger of a job, returning the queue row id.
 	Enqueue(ctx context.Context, pipeline *Pipeline, jobName, reason string, force bool) (int64, error)
-	// EnqueueRerun queues a retry of one build of a recorded run.
-	EnqueueRerun(ctx context.Context, pipeline *Pipeline, jobName, runID string, build int) error
+	// EnqueueRerun queues a retry of a recorded run.
+	EnqueueRerun(ctx context.Context, pipeline *Pipeline, jobName, runID string) error
 	// Abort cancels a run this process is executing, and reports false when it is not running here.
 	Abort(pipeline *Pipeline, runID string) bool
 	// AbortQueued drops a job's queued run before it starts, and reports false when nothing was queued.

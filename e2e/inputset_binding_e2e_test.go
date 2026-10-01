@@ -15,8 +15,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/cli"
 )
 
 // bindingFixture is a pipeline over one cursor-driven feed, run through the
@@ -76,13 +74,13 @@ func (f *bindingFixture) items(t *testing.T, n int) {
 func (f *bindingFixture) run(t *testing.T, job string) {
 	t.Helper()
 
-	mustRun(t, "run", f.pipeline, "--job", job)
+	mustRunBacklog(t, "run", f.pipeline, "--job", job)
 }
 
 func (f *bindingFixture) runExpectingFailure(t *testing.T, job string) {
 	t.Helper()
 
-	err := cli.Run([]string{"run", f.pipeline, "--job", job})
+	err := runBacklog(t, "run", f.pipeline, "--job", job)
 	if err == nil {
 		t.Fatalf("job %q was supposed to fail; it succeeded", job)
 	}

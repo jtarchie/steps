@@ -222,13 +222,12 @@ jobs:
 `, versions, ran, published, flag, defaults)
 }
 
-// TestResumeRerunsTheBuildThatFailedNotItsSibling is #144: run_steps was keyed
-// by (run, index), and every build of a version: every fan-out walks its
-// remainder from index 0 — so build #1's steps collided with build #0's, and a
-// resume asked build #1 whether index 0 was done and heard build #0's yes.
-// It skipped the failed task AND the put, and exited green having retried
-// nothing.
-func TestResumeRerunsTheBuildThatFailedNotItsSibling(t *testing.T) {
+// TestResumeRerunsTheFailedRunNotItsSibling: each version is its own run, so
+// resuming the one that failed retries its task and put and leaves the green
+// run of its sibling alone — #144's collision, where a resume asked the failed
+// build whether a step was done and heard its sibling's yes, has no shared run
+// left to happen in.
+func TestResumeRerunsTheFailedRunNotItsSibling(t *testing.T) {
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -240,38 +239,33 @@ func TestResumeRerunsTheBuildThatFailedNotItsSibling(t *testing.T) {
 
 	path := writePipeline(t, dir, fanOutPipeline(versions, ran, published, flag, ""))
 
+	mustRun(t, "run", path, "--job", "build")
+
 	out := captureStdout(t, func() {
 		err := cli.Run([]string{"run", path, "--job", "build"})
 		if err == nil {
-			t.Fatal("expected build #1 to fail")
+			t.Fatal("expected the run of two to fail")
 		}
 	})
 
 	runID := resumeID(t, out)
 
-	// Two, or the fan-out never happened and everything below is vacuous.
 	assertLineCount(t, ran, 2)
 	assertLineCount(t, published, 1)
 
 	writePipelineFile(t, flag, "")
 
-	out = captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--resume", runID})
-		if err != nil {
-			t.Fatalf("resume failed: %v", err)
-		}
-	})
+	err := cli.Run([]string{"run", path, "--resume", runID})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
 
 	assertLineCount(t, published, 2)
 	assertLineCount(t, ran, 3)
 
 	lines := strings.Fields(readFileString(t, ran))
 	if lines[len(lines)-1] != "two" || strings.Count(readFileString(t, ran), "one") != 1 {
-		t.Errorf("the resume re-ran the wrong build: ran.log = %q", lines)
-	}
-
-	if !strings.Contains(out, "skip: fragile (already succeeded) [build #0]") {
-		t.Errorf("the resume did not say which build's step it skipped:\n%s", out)
+		t.Errorf("the resume re-ran the wrong version: ran.log = %q", lines)
 	}
 
 	assertRunStepsPerBuild(t, path, runID)
@@ -290,9 +284,7 @@ func assertRunStepsPerBuild(t *testing.T, path, runID string) {
 		}
 	})
 
-	for _, want := range []string{
-		`#0\s+fragile`, `#0\s+publication`, `#1\s+fragile`, `#1\s+publication`,
-	} {
+	for _, want := range []string{`(?m)^fragile\s*$`, `(?m)^publication\s*$`} {
 		if !regexp.MustCompile(want).MatchString(listing) {
 			t.Errorf("runs steps did not list %q:\n%s", want, listing)
 		}
@@ -305,7 +297,7 @@ func assertRunStepsPerBuild(t *testing.T, path, runID string) {
 		}
 	})
 
-	if !regexp.MustCompile(`#0\s+fragile`).MatchString(limited) || strings.Contains(limited, "publication") {
+	if !regexp.MustCompile(`(?m)^fragile\s*$`).MatchString(limited) || strings.Contains(limited, "publication") {
 		t.Errorf("runs steps --limit 1 did not stop after the first row:\n%s", limited)
 	}
 
@@ -370,12 +362,11 @@ jobs:
 	assertLineCount(t, fragile, 2)
 }
 
-// TestResumeRefusesABuildWhoseVersionIsGone: a resume rebuilds each build
+// TestResumeRefusesABuildWhoseVersionIsGone: a resume rebuilds the build
 // against the versions it was created with, so a version version_history:
-// has since pruned leaves that build with nothing to rebuild. Concourse
-// aborts the rerun ("chosen version of input X not available") rather than
-// choose another; so does this, naming the build and the version, and it
-// runs nothing — not even the builds whose versions survive.
+// has since pruned leaves it with nothing to rebuild. Concourse aborts the
+// rerun ("chosen version of input X not available") rather than choose
+// another; so does this, naming the version, and it runs nothing.
 func TestResumeRefusesABuildWhoseVersionIsGone(t *testing.T) {
 	dir := t.TempDir()
 
@@ -388,10 +379,12 @@ func TestResumeRefusesABuildWhoseVersionIsGone(t *testing.T) {
 
 	path := writePipeline(t, dir, fanOutPipeline(versions, ran, published, flag, "defaults:\n  version_history: 2"))
 
+	mustRun(t, "run", path, "--job", "build")
+
 	out := captureStdout(t, func() {
 		err := cli.Run([]string{"run", path, "--job", "build"})
 		if err == nil {
-			t.Fatal("expected build #1 to fail")
+			t.Fatal("expected the run of two to fail")
 		}
 	})
 
@@ -400,9 +393,9 @@ func TestResumeRefusesABuildWhoseVersionIsGone(t *testing.T) {
 	assertLineCount(t, ran, 2)
 	assertLineCount(t, published, 1)
 
-	// The refresh at the start of the resume records "three" and, capped at
-	// two, prunes "one" — build #0's version.
-	writePipelineFile(t, versions, `[{"n":"three"}]`)
+	// The refresh at the start of the resume records "three" and "four" and,
+	// capped at two, prunes "two" — the failed run's version.
+	writePipelineFile(t, versions, `[{"n":"three"},{"n":"four"}]`)
 	writePipelineFile(t, flag, "")
 
 	var err error
@@ -415,7 +408,7 @@ func TestResumeRefusesABuildWhoseVersionIsGone(t *testing.T) {
 		t.Fatalf("the resume ran a build whose version is gone:\n%s", out)
 	}
 
-	for _, want := range []string{"#0", `"one"`, "no longer"} {
+	for _, want := range []string{`"two"`, "no longer"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not name %q: %v", want, err)
 		}

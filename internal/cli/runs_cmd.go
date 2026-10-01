@@ -72,7 +72,7 @@ func (r *RunsListCmd) Run() error {
 // asking for the deeper view — what that run completed, per build.
 type RunsStepsCmd struct {
 	ReadFlags `embed:""`
-	RunID     string `arg:""                             help:"what this run completed, per build — the steps a --resume skips"   optional:""`
+	RunID     string `arg:""                             help:"what this run completed — the steps a --resume skips"   optional:""`
 	Job       string `help:"only show steps of this job"`
 	Limit     int    `default:"20"                       help:"maximum number of rows to show in the listing"`
 }
@@ -445,10 +445,10 @@ func (r *RunsStepsCmd) printSteps(ctx context.Context, st store.Cache) error {
 	return flush(writer)
 }
 
-// printRunSteps lists what one run completed, build by build.
+// printRunSteps lists what one run completed, in completion order.
 //
-// No index column: a build's remainder counts from 0, so an index would read
-// as a plan position it is not. Checked with FindRunRow first, which is
+// No index column: the walk after a get counts from 0 again, so an index
+// would read as a plan position it is not. Checked with FindRunRow first, which is
 // scoped, so another pipeline's run — or a typo — is an error rather than an
 // empty table that reads as "completed nothing".
 func (r *RunsStepsCmd) printRunSteps(ctx context.Context, st interface {
@@ -482,15 +482,10 @@ func (r *RunsStepsCmd) printRunSteps(ctx context.Context, st interface {
 	fmt.Printf("run %s  %s  %s: steps a --resume skips\n", run.ID, run.JobName, run.Status)
 
 	writer := newTabWriter()
-	_, _ = fmt.Fprintln(writer, "BUILD\tSTEP")
+	_, _ = fmt.Fprintln(writer, "STEP")
 
 	for _, step := range steps {
-		build := strings.TrimPrefix(step.BuildID, run.ID)
-		if build == "" {
-			build = "-"
-		}
-
-		_, _ = fmt.Fprintf(writer, "%s\t%s\n", build, step.Name)
+		_, _ = fmt.Fprintln(writer, step.Name)
 	}
 
 	return flush(writer)

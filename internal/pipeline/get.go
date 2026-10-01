@@ -1,7 +1,7 @@
 package pipeline
 
-// get: — resolving a resource's versions and materializing them, either as a
-// fan-out of triggered builds or in place inside one.
+// get: — resolving a resource's versions and materializing them, either as
+// the run's triggered build or in place inside it.
 
 import (
 	"context"
@@ -23,19 +23,13 @@ import (
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
-// fanOutGet resolves and (unless skippable) fetches step's resource
-// version(s), then runs the remainder of the plan for each — see
+// fanOutGet resolves and (unless skippable) fetches the version this run's
+// build was created with, then runs the remainder of the plan against it — see
 // runTriggeredBuild. It always terminates the calling walk, since a get step
-// delegates the rest of the plan to its triggered build(s).
+// delegates the rest of the plan to its triggered build.
 //
-// A version whose triggered build fails does NOT stop the remaining versions
-// from being attempted (see TestConformanceGetVersionEveryContinuesPastFailure):
-// Concourse's own version-selection cursor (atc/db/versions_db.go's
-// NextEveryVersion) advances regardless of a prior build's status, and every
-// version here already gets its own isolated workspace/hooks/store-recording.
-// Structural errors (bad template, unmarshalable version) are the one
-// exception: those depend only on static step/version content, so they recur
-// identically for every version and aborting immediately is still right.
+// One run is one build (see backlog.go): RunJob has already narrowed the
+// resolution to a single set and taken it, so there is at most one here.
 func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []config.Step) error {
 	i := w.index
 
@@ -56,106 +50,68 @@ func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []
 
 	if len(sets) == 0 {
 		w.reportNoVersions(getCtx, step, resource.Name, len(remainder))
+
+		return nil
 	}
 
-	var buildErrs []error
+	set := sets[0]
 
-	// A pinned run consumes nothing. Naming a version is an instruction
-	// outside the every-flow — the consumed filter already exempts pinned
-	// runs (Cache.unconsumed), and the recording side has to match, because
-	// the cursor is a high-water mark over discovery order: a pin resolved
-	// outside history is minted at the TOP order, and taking it would leap
-	// the mark over every unbuilt version below it. The set-based cursor
-	// recorded pins harmlessly; a mark cannot.
-	pinnedRun := len(w.pinned) > 0
-
-	for setIndex, set := range sets {
-		// Stop starting NEW triggered builds on cancellation; don't let one
-		// abandon itself mid-flight. Mirrors internal/trigger's worker loop.
-		if ctx.Err() != nil {
-			break
-		}
-
-		version := set[step.Get]
-		if version == nil {
-			return fmt.Errorf("step %d (get %q): the input set binds no version for it", i, step.Get)
-		}
-
-		content, err := merkle.GetNodeContent(w.cfg, step, *resourceType, resource.Env, resource.Source, version)
-		if err != nil {
-			return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
-		}
-
-		hash, err := merkle.HashNode(merkle.NodeKindGet, content, w.parentHash)
-		if err != nil {
-			return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
-		}
-
-		if w.skippable[hash] {
-			slog.InfoContext(getCtx, "job.skip", "resource", resource.Name, "reason", "cached", "hash", hash)
-
-			skipMark := markStep(getCtx)
-			publishStepSkipped(getCtx, w.jobName, i, step, skipMark, hash, skipReason(stepChainSkipped))
-
-			// Nested and numbered as this set's triggered build would have
-			// published them, so the most common fully-cached run — one whose
-			// plan opens with a get — still names every step it replayed.
-			w.reportChainSkipped(withChildrenOf(ctx, skipMark), hash, 0, remainder)
-
-			// A skip means this exact chain already succeeded once — the version
-			// was genuinely fetched, just not by this run. Mirrors
-			// fetchGetStepInPlace's own skip branch: without this, a job whose
-			// FIRST get is unpolled goes stale in resource_checks the moment its
-			// chain starts being cached, because this is the only skip path for
-			// that get and nothing else ever calls recordResolvedVersion again.
-			recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version, pinnedRun)
-
-			// Taken, even though nothing ran: the cache skipped it because
-			// this exact chain already succeeded, which is the definition of
-			// a set this job is done with. All of the set's bindings advance,
-			// not just this get's — consecutive sets can share a HELD first
-			// get's hash, and each skip must still move the other cursors.
-			w.takeSet(ctx, pinnedRun, set, setIndex)
-
-			continue
-		}
-
-		node := merkle.Node{Hash: hash, ParentHash: w.parentHash, Kind: merkle.NodeKindGet, StepIndex: i, Resource: resource.Name, Content: content}
-
-		// A fan-out get publishes per VERSION: each one triggers its own build
-		// of the remaining plan, so each is its own start/finish pair rather
-		// than one event for the step as a whole.
-		getStarted := time.Now()
-
-		mark := publishStepStarted(getCtx, w.jobName, i, step)
-
-		// Taken BEFORE the build, not after it succeeds — Concourse's own
-		// rule. NextEveryVersion reads build_resource_config_version_inputs, a
-		// table of the versions a build was CREATED with, with no filter on
-		// build status: a version consumed by a failed build is consumed, and
-		// the cursor moves on. Re-running one is an explicit act there
-		// (concourse/concourse#413), which here is --resume (that build) or --pin (that version).
-		//
-		// The tempting alternative — take it only on success, so a failure is
-		// retried — was tried and reverted. It makes a version that fails
-		// forever re-run forever, on every trigger, with an agent's bill
-		// attached, and it means "every version, once" quietly is not true.
-		w.takeSet(ctx, pinnedRun, set, setIndex)
-
-		// The get is the container of everything the version it selected goes
-		// on to build — which is what it already IS, since runTriggeredBuild
-		// runs the whole remainder of the plan and this step does not finish
-		// until that does. Only the tree was missing.
-		err = w.runTriggeredBuild(withChildrenOf(ctx, mark), step, *resource, *resourceType, set, setIndex, remainder, node)
-
-		publishStepFinished(getCtx, w.jobName, i, step, mark, hash, getStarted, err)
-
-		if err != nil {
-			buildErrs = append(buildErrs, fmt.Errorf("step %d (get %q) version %v: %w", i, step.Get, version, err))
-		}
+	version := set[step.Get]
+	if version == nil {
+		return fmt.Errorf("step %d (get %q): the input set binds no version for it", i, step.Get)
 	}
 
-	return errors.Join(buildErrs...)
+	content, err := merkle.GetNodeContent(w.cfg, step, *resourceType, resource.Env, resource.Source, version)
+	if err != nil {
+		return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+	}
+
+	hash, err := merkle.HashNode(merkle.NodeKindGet, content, w.parentHash)
+	if err != nil {
+		return fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+	}
+
+	if w.skippable[hash] {
+		slog.InfoContext(getCtx, "job.skip", "resource", resource.Name, "reason", "cached", "hash", hash)
+
+		skipMark := markStep(getCtx)
+		publishStepSkipped(getCtx, w.jobName, i, step, skipMark, hash, skipReason(stepChainSkipped))
+
+		// Nested and numbered as the triggered build would have published
+		// them, so the most common fully-cached run — one whose plan opens
+		// with a get — still names every step it replayed.
+		w.reportChainSkipped(withChildrenOf(ctx, skipMark), hash, 0, remainder)
+
+		// A skip means this exact chain already succeeded once — the version
+		// was genuinely fetched, just not by this run. Mirrors
+		// fetchGetStepInPlace's own skip branch: without this, a job whose
+		// FIRST get is unpolled goes stale in resource_checks the moment its
+		// chain starts being cached, because this is the only skip path for
+		// that get and nothing else ever calls recordResolvedVersion again.
+		recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
+
+		return nil
+	}
+
+	node := merkle.Node{Hash: hash, ParentHash: w.parentHash, Kind: merkle.NodeKindGet, StepIndex: i, Resource: resource.Name, Content: content}
+
+	getStarted := time.Now()
+
+	mark := publishStepStarted(getCtx, w.jobName, i, step)
+
+	// The get is the container of everything the version it selected goes
+	// on to build — which is what it already IS, since runTriggeredBuild
+	// runs the whole remainder of the plan and this step does not finish
+	// until that does.
+	err = w.runTriggeredBuild(withChildrenOf(ctx, mark), step, *resource, *resourceType, set, remainder, node)
+
+	publishStepFinished(getCtx, w.jobName, i, step, mark, hash, getStarted, err)
+
+	if err != nil {
+		return fmt.Errorf("step %d (get %q) version %v: %w", i, step.Get, version, err)
+	}
+
+	return nil
 }
 
 // reportNoVersions explains a get that selected nothing.
@@ -194,63 +150,6 @@ func (w *planWalk) reportNoVersions(ctx context.Context, step config.Step, resou
 	slog.WarnContext(ctx, "job.get.no_versions", "resource", resourceName, "skipped_steps", remaining)
 }
 
-// takeSet advances the cursor of every fanning get to its binding in this set
-// — a set is consumed as a unit, whatever its first get's fate — and records
-// what the build was created with: EVERY get's version, fixed gets and pins
-// included, which is what a resume rebuilds it against (fly rerun-build's
-// build_resource_config_version_inputs). The binding is looked up by GET name
-// and the cursor advanced by RESOURCE, which is where it lives.
-//
-// A resumed build records nothing and takes nothing: the run it continues did
-// both when it created the build. A pinned run records and does not take —
-// naming a version is an instruction outside the every-flow (the consumed
-// filter already exempts pinned runs, Cache.unconsumed), and the cursor is a
-// high-water mark over discovery order, so a pin resolved outside history is
-// minted at the TOP order and taking it would leap the mark over every
-// unbuilt version below it. Re-taking a held version is a MAX no-op.
-func (w *planWalk) takeSet(ctx context.Context, pinnedRun bool, set merkle.InputSet, setIndex int) {
-	if w.resolution.recorded {
-		return
-	}
-
-	buildID := buildIDForSet(ctx, setIndex)
-
-	for input, version := range set {
-		w.recordRunInput(ctx, buildID, input, w.resolution.resources[input], version)
-	}
-
-	if pinnedRun || w.resolution.rerun {
-		return
-	}
-
-	for _, every := range w.resolution.everyInputs {
-		if version := set[every.input]; version != nil {
-			w.cursor.take(ctx, w.st, w.jobName, every.resource, version)
-		}
-	}
-}
-
-// recordRunInput files the version this build was created with, so --resume
-// can reach it after the cursor has moved past it. The cursor mark beside it
-// says the version is spent; this says which run spent it, which is the half
-// a recovery needs.
-//
-// Best-effort, and detached for the same reason take is: a build already under
-// way must not fail over bookkeeping, and the cost of a lost row is a resume
-// that cannot re-open one version — which is where this path started, so it is
-// no worse than not recording at all.
-func (w *planWalk) recordRunInput(ctx context.Context, buildID, inputName, resourceName string, version map[string]any) {
-	key, ok := encodeVersion(version)
-	if !ok {
-		return
-	}
-
-	err := w.st.RecordRunInput(context.WithoutCancel(ctx), events.RunID(ctx), buildID, inputName, resourceName, key)
-	if err != nil {
-		slog.WarnContext(ctx, "job.run_input_unrecorded", "get", inputName, "resource", resourceName, "error", err)
-	}
-}
-
 // runTriggeredBuild runs the build that a single resource version triggers:
 // per Concourse's model, the version triggering a get is what starts a build,
 // and every build gets its own isolated working directory. So this creates a
@@ -260,15 +159,13 @@ func (w *planWalk) recordRunInput(ctx context.Context, buildID, inputName, resou
 // fanned out by version:every.
 func (w *planWalk) runTriggeredBuild(
 	ctx context.Context, step config.Step, resource config.Resource, resourceType config.ResourceType,
-	set merkle.InputSet, setIndex int, remainder []config.Step, node merkle.Node,
+	set merkle.InputSet, remainder []config.Step, node merkle.Node,
 ) error {
 	version := set[step.Get]
 
-	// The versions THIS build fetches, kept apart from its siblings'. A run
-	// fans out into one build per input set, and passed: asks whether some
-	// one build was green against a combination — so a job-wide record would
-	// both correlate versions that never ran together and, being keyed per
-	// resource, keep only the last set's. See recordPassedVersions.
+	// The versions THIS build fetches. passed: asks whether some one build
+	// was green against a combination, so they are recorded under the build.
+	// See recordPassedVersions.
 	runCtx := ctx
 	ctx, fetched := withBuildVersions(ctx)
 
@@ -313,12 +210,12 @@ func (w *planWalk) runTriggeredBuild(
 	// loud the moment resolution started reading job_versions for real.
 	recordBuildVersion(ctx, resource.Name, version)
 
-	buildID := buildIDForSet(ctx, setIndex)
+	buildID := currentBuild(ctx)
 
 	if runID, kept := keptFetch(ctx, buildID, -1); kept {
 		// The get stays the container of its build, so it keeps its
 		// started/finished pair and says why it fetched nothing on its row.
-		err = w.keepFetched(events.WithStepID(ctx, parentStepFrom(ctx)), runID, buildID, step, resource, version, bw)
+		err = w.keepFetched(events.WithStepID(ctx, parentStepFrom(ctx)), runID, step, resource, version, bw)
 		if err != nil {
 			return err
 		}
@@ -340,15 +237,6 @@ func (w *planWalk) runTriggeredBuild(
 
 	err = runSteps(ctx, remainderWalk, remainder)
 	buildOK = err == nil
-
-	// A green build's tree is removed as this returns, so the row goes back
-	// to the last build that failed: left naming the deleted tree, a resume
-	// of an earlier failure behind a later success had nothing to continue.
-	if buildOK {
-		w.pointRunAt(context.WithoutCancel(ctx), w.failedRoot)
-	} else {
-		w.failedRoot = root
-	}
 
 	// Green is per BUILD, recorded when that build succeeds — Concourse
 	// records a build's inputs against the build, and a later set failing
@@ -437,7 +325,7 @@ func (w *planWalk) keepInPlace(
 		return stepResult{}, false, nil
 	}
 
-	err := w.keepFetched(ctx, runID, w.build, step, resource, version, w.bw)
+	err := w.keepFetched(ctx, runID, step, resource, version, w.bw)
 	if err != nil {
 		return stepResult{}, true, err
 	}
@@ -452,13 +340,10 @@ func (w *planWalk) keepInPlace(
 // attempt did) and no hooks fire, as for any skip. ctx names the get's own
 // step, which the skip line is said on.
 func (w *planWalk) keepFetched(
-	ctx context.Context, runID, build string, step config.Step, resource config.Resource, version map[string]any, bw workspace.BuildWorkspace,
+	ctx context.Context, runID string, step config.Step, resource config.Resource, version map[string]any, bw workspace.BuildWorkspace,
 ) error {
-	// A finished build is exempt: the kept tree is the last unfinished build's,
-	// which need not hold a get it never reached, and nothing of a finished
-	// build runs to read it.
 	checker, ok := bw.(workspace.ArtifactChecker)
-	if ok && !checker.HasArtifact(step.Get) && !resumeFrom(ctx).buildFinished(build) {
+	if ok && !checker.HasArtifact(step.Get) {
 		root := ""
 		if rooted, ok := bw.(workspace.RootedBuild); ok {
 			root = rooted.Root()
@@ -469,7 +354,7 @@ func (w *planWalk) keepFetched(
 			runID, step.Get, step.Get, root)
 	}
 
-	notef(ctx, "skip: %s (already fetched)%s", step.Get, buildSuffix(runID, build))
+	notef(ctx, "skip: %s (already fetched)", step.Get)
 	slog.InfoContext(ctx, "job.skip", "get", step.Get, "reason", "resume")
 
 	recordFetched(ctx, step.Get, resource.Source, version)
@@ -478,17 +363,15 @@ func (w *planWalk) keepFetched(
 	return nil
 }
 
-// buildIDForSet names one build of a run, for correlating the versions it
-// fetched. Scoped to the run id so two runs never look like one build, and
-// numbered within it because sets that HOLD a shared first get otherwise
-// produce identical node hashes.
-func buildIDForSet(ctx context.Context, setIndex int) string {
+// currentBuild is the build id of the run on ctx's triggered build — see
+// triggeredBuild.
+func currentBuild(ctx context.Context) string {
 	run := ""
 	if resume := resumeFrom(ctx); resume != nil {
 		run = resume.id
 	}
 
-	return fmt.Sprintf("%s#%d", run, setIndex)
+	return triggeredBuild(run)
 }
 
 // fetchInPlace fetches one version of a get step's resource into the existing

@@ -635,6 +635,10 @@ jobs:
 		if !runner.drainOne(ctx, target) {
 			t.Fatal("nothing was claimed from a queue with a pending row")
 		}
+
+		// Each version is its own run, queued by the one before it.
+		for runner.drainOne(ctx, target) {
+		}
 	}
 
 	drain(false)

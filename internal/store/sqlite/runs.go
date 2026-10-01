@@ -32,8 +32,8 @@ const revisionBySHA = `(SELECT id FROM pipeline_revisions WHERE pipeline_id = ? 
 // is the same list for a query that aliases runs as r). scanRunRow decodes
 // exactly this order.
 const (
-	runColumns  = `id, job_name, workspace, status, started_at, COALESCE(finished_at, ''), COALESCE(parent_run_id, ''), ` + configSHA + `, COALESCE(rerun_of, ''), COALESCE(rerun_of_build, 0)`
-	runColumnsR = `r.id, r.job_name, r.workspace, r.status, r.started_at, COALESCE(r.finished_at, ''), COALESCE(r.parent_run_id, ''), ` + configSHAR + `, COALESCE(r.rerun_of, ''), COALESCE(r.rerun_of_build, 0)`
+	runColumns  = `id, job_name, workspace, status, started_at, COALESCE(finished_at, ''), COALESCE(parent_run_id, ''), ` + configSHA + `, COALESCE(rerun_of, '')`
+	runColumnsR = `r.id, r.job_name, r.workspace, r.status, r.started_at, COALESCE(r.finished_at, ''), COALESCE(r.parent_run_id, ''), ` + configSHAR + `, COALESCE(r.rerun_of, '')`
 	// A subselect rather than a join, so adding the column changed no query's
 	// shape: several of the reads above already join, group and alias, and a
 	// second join would have had to be threaded correctly through each one
@@ -52,7 +52,7 @@ func scanRunRow(sc rowScanner) (store.RunRow, error) {
 		startedAt, finishedAt string
 	)
 
-	err := sc.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt, &row.ParentRunID, &row.ConfigSHA, &row.RerunOf, &row.RerunOfBuild)
+	err := sc.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &startedAt, &finishedAt, &row.ParentRunID, &row.ConfigSHA, &row.RerunOf)
 
 	row.StartedAt = parseTimestamp(startedAt)
 	row.FinishedAt = parseTimestamp(finishedAt)
@@ -193,9 +193,9 @@ func (s *Store) RecordRunParent(ctx context.Context, runID, parentID string) err
 }
 
 // RecordRunRerun is RecordRunParent's twin, and a statement of its own for the same reason.
-func (s *Store) RecordRunRerun(ctx context.Context, runID, originalID string, build int) error {
+func (s *Store) RecordRunRerun(ctx context.Context, runID, originalID string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE runs SET rerun_of = ?, rerun_of_build = ? WHERE id = ? AND pipeline_id = ?`, originalID, build, runID, s.pipelineID)
+		`UPDATE runs SET rerun_of = ? WHERE id = ? AND pipeline_id = ?`, originalID, runID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not record what run %q reran: %w", runID, err)
 	}
@@ -204,7 +204,7 @@ func (s *Store) RecordRunRerun(ctx context.Context, runID, originalID string, bu
 }
 
 // CompletedRunSteps returns the steps a run already finished, in the order
-// they finished — by rowid, since the build id as text sorts #10 before #2.
+// they finished — by rowid, the order they were recorded in.
 func (s *Store) CompletedRunSteps(ctx context.Context, runID string) ([]store.RunStep, error) {
 	// Joined to runs for the pipeline, which run_steps has no column of its
 	// own for. StartRun refuses an id another pipeline holds, so this is

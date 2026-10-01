@@ -174,7 +174,7 @@ func runQueued(ctx context.Context, t *testing.T, cfg *config.Config, st store.S
 			t.Fatalf("FindJob: %v", err)
 		}
 
-		runErr := pipeline.RunJob(ctx, cfg, job, nil, provider, st, false)
+		runErr := pipeline.RunJob(requeueBacklog(ctx, t, st, jobName), cfg, job, nil, provider, st, false)
 		if runErr != nil && !mayFail {
 			t.Fatalf("%s: %v", jobName, runErr)
 		}
@@ -191,6 +191,41 @@ func runQueued(ctx context.Context, t *testing.T, cfg *config.Config, st store.S
 	}
 
 	t.Fatal("queue did not drain")
+}
+
+// requeueBacklog queues the job again while versions wait, as the daemon's
+// runner.go does.
+func requeueBacklog(ctx context.Context, t *testing.T, st store.Store, jobName string) context.Context {
+	t.Helper()
+
+	return pipeline.WithBacklog(ctx, func(ctx context.Context, _ int) {
+		err := st.EnqueueJob(ctx, jobName, "backlog")
+		if err != nil {
+			t.Errorf("EnqueueJob: %v", err)
+		}
+	})
+}
+
+// runBacklog runs job once per waiting version, as the daemon's queue would,
+// for a test that drives RunJob directly rather than through the queue.
+func runBacklog(ctx context.Context, t *testing.T, cfg *config.Config, job *config.Job, provider workspace.Provider, st store.Store) {
+	t.Helper()
+
+	for range 20 {
+		queued := false
+		runCtx := pipeline.WithBacklog(ctx, func(context.Context, int) { queued = true })
+
+		err := pipeline.RunJob(runCtx, cfg, job, nil, provider, st, false)
+		if err != nil {
+			t.Fatalf("RunJob %s: %v", job.Name, err)
+		}
+
+		if !queued {
+			return
+		}
+	}
+
+	t.Fatal("the backlog did not drain")
 }
 
 func writeLines(t *testing.T, path string, to int) {

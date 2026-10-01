@@ -1,13 +1,8 @@
 package web
 
 import (
-	"fmt"
 	"net/http"
-	"strings"
 	"testing"
-
-	"github.com/jtarchie/steps/internal/events"
-	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestRetryIsRefusedWhereATriggerIs: a paused pipeline starts nothing new, however it is asked (Concourse would hold it pending; steps refuses, as it refuses a trigger), a running run is aborted rather than retried, and a read-only server changes nothing.
@@ -50,47 +45,5 @@ func TestRetryIsRefusedWhereATriggerIs(t *testing.T) {
 
 	if code := post(t, server, "/p/demo/runs/nosuch/rerun", nil); code != http.StatusNotFound {
 		t.Errorf("retry of an unknown run = %d, want 404", code)
-	}
-}
-
-// TestAFanOutRunOffersOneRetry: Retry is this run again with the same inputs, every build of it; a button per build read as something else.
-func TestAFanOutRunOffersOneRetry(t *testing.T) {
-	t.Parallel()
-
-	server, pipeline := writableServerWithPipeline(t)
-	ctx := t.Context()
-
-	err := pipeline.Store.StartRun(ctx, "fan", "build", "/tmp/ws", "")
-	if err != nil {
-		t.Fatalf("StartRun: %v", err)
-	}
-
-	for build, version := range []string{`{"n":"1"}`, `{"n":"2"}`} {
-		err = pipeline.Store.RecordRunInput(ctx, "fan", fmt.Sprintf("fan#%d", build), "repo", "repo", version)
-		if err != nil {
-			t.Fatalf("RecordRunInput: %v", err)
-		}
-	}
-
-	appendEvents(t, pipeline.Store, "fan", []store.RunEventRow{
-		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "repo", StepKind: "get", StepID: 1},
-		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "repo", StepKind: "get", StepID: 1, Status: "succeeded"},
-		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "repo", StepKind: "get", StepID: 2},
-		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "repo", StepKind: "get", StepID: 2, Status: "failed"},
-	})
-
-	err = pipeline.Store.FinishRun(ctx, "fan", "failed")
-	if err != nil {
-		t.Fatalf("FinishRun: %v", err)
-	}
-
-	_, page := get(t, server, "/p/demo/runs/fan")
-
-	if !strings.Contains(actionBar(t, page), `action="/p/demo/runs/fan/rerun"`) {
-		t.Error("the bar offers no Retry for a run of several builds")
-	}
-
-	if n := strings.Count(page, "⟲ Retry"); n != 1 {
-		t.Errorf("the page offers %d Retry buttons, want the bar's one", n)
 	}
 }

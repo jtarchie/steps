@@ -16,12 +16,12 @@ type Runs interface {
 	// otherwise.
 	ResumeRun(ctx context.Context, id, workspaceDir, configSHA string) error
 	FinishRun(ctx context.Context, id, status string) error
-	// RecordRunStep marks a step of one build of a run done. buildID is
-	// "<run>#<set>" inside a triggered build and the bare run id outside one.
+	// RecordRunStep marks a step of a run done. buildID is "<run>#0" inside
+	// the build a get triggers and the bare run id before it.
 	RecordRunStep(ctx context.Context, runID, buildID string, index int, name string) error
 	RecordRunParent(ctx context.Context, runID, parentID string) error
-	// RecordRunRerun marks a run as a rerun of one build of another (fly rerun-build).
-	RecordRunRerun(ctx context.Context, runID, originalID string, build int) error
+	// RecordRunRerun marks a run as a rerun of another (fly rerun-build).
+	RecordRunRerun(ctx context.Context, runID, originalID string) error
 	// CompletedRunSteps returns what a run finished, in completion order.
 	CompletedRunSteps(ctx context.Context, runID string) ([]RunStep, error)
 	// ListRuns returns a job's runs newest first. Zero means no limit, the
@@ -34,7 +34,7 @@ type Runs interface {
 }
 
 // RunStep is one step a run finished. Index is relative to the walk it ran
-// in — a build's remainder counts from zero — so it names a step only
+// in — the walk after a get counts from zero again — so it names a step only
 // together with BuildID.
 type RunStep struct {
 	BuildID string
@@ -65,12 +65,11 @@ type RunRow struct {
 	// started by a caller that loaded no pipeline file. Selected by every
 	// RunRow query for the same reason ParentRunID is.
 	ConfigSHA string
-	// RerunOf is the run whose build RerunOfBuild this one re-ran against the versions it was created with, empty for any other run. Selected by every RunRow query for the same reason ParentRunID is.
-	RerunOf      string
-	RerunOfBuild int
+	// RerunOf is the run this one re-ran against the versions it was created with, empty for any other run. Selected by every RunRow query for the same reason ParentRunID is.
+	RerunOf string
 }
 
-// Rerun reports a run made by retrying one build of another.
+// Rerun reports a run made by retrying another.
 func (r RunRow) Rerun() bool { return r.RerunOf != "" }
 
 // Replayed reports a run forked from another by --replay.

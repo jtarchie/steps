@@ -77,7 +77,7 @@ func (s suite) TestRunEventsAreScopedToTheirPipeline(t *testing.T) {
 		t.Fatalf("AppendRunEvent web: %v", err)
 	}
 
-	err = web.RecordRunInput(ctx, shared, shared+"#0", "repo", "repo", `{"ref":"abc"}`)
+	err = web.RecordRunInput(ctx, shared, "repo", "repo", `{"ref":"abc"}`)
 	if err != nil {
 		t.Fatalf("RecordRunInput web: %v", err)
 	}
@@ -101,10 +101,10 @@ func (s suite) TestRunEventsAreScopedToTheirPipeline(t *testing.T) {
 	}
 }
 
-// TestRunStepsAreKeptPerBuild is #144: every build of a fan-out walks its
-// remainder from index 0, so a key of (run, index) kept build #0's step and
-// dropped every later build's — and a resume read build #0's as all of them.
-func (s suite) TestRunStepsAreKeptPerBuild(t *testing.T) {
+// TestRunStepsAreKeptPerWalk is #144's key: the walk after a get counts from
+// index 0 again, so a key of (run, index) kept the step before the get and
+// dropped the one after it — and a resume read the first as both.
+func (s suite) TestRunStepsAreKeptPerWalk(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -118,12 +118,11 @@ func (s suite) TestRunStepsAreKeptPerBuild(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	// #1 first, so completion order and build-id order disagree.
+	// The build's step first, so completion order and build-id order disagree.
 	for _, step := range []store.RunStep{
-		{BuildID: run + "#1", Index: 0, Name: "compile"},
 		{BuildID: run + "#0", Index: 0, Name: "compile"},
 		{BuildID: run, Index: 0, Name: "prep"},
-		{BuildID: run + "#1", Index: 0, Name: "compile"},
+		{BuildID: run + "#0", Index: 0, Name: "compile"},
 	} {
 		err = web.RecordRunStep(ctx, run, step.BuildID, step.Index, step.Name)
 		if err != nil {
@@ -137,7 +136,6 @@ func (s suite) TestRunStepsAreKeptPerBuild(t *testing.T) {
 	}
 
 	want := []store.RunStep{
-		{BuildID: run + "#1", Index: 0, Name: "compile"},
 		{BuildID: run + "#0", Index: 0, Name: "compile"},
 		{BuildID: run, Index: 0, Name: "prep"},
 	}
@@ -162,12 +160,10 @@ func (s suite) TestRunStepsAreKeptPerBuild(t *testing.T) {
 	}
 }
 
-// TestRunInputsAreKeptPerBuildAndGet: two builds created with the same
-// version are two records, because a resume rebuilds each build from its
-// own; two gets of one resource in a build are two as well, each under its
-// own name; and a build is created once, so recording a get again is the
-// same row.
-func (s suite) TestRunInputsAreKeptPerBuildAndGet(t *testing.T) {
+// TestRunInputsAreKeptPerGet: two gets of one resource in a run are two
+// records, each under its own name; and a run is created once, so recording
+// a get again is the same row.
+func (s suite) TestRunInputsAreKeptPerGet(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -181,12 +177,11 @@ func (s suite) TestRunInputsAreKeptPerBuildAndGet(t *testing.T) {
 	}
 
 	for _, input := range []store.RunInput{
-		{BuildID: run + "#0", Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
-		{BuildID: run + "#0", Input: "baseline", Resource: "repo", Version: `{"ref":"v1"}`},
-		{BuildID: run + "#1", Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
-		{BuildID: run + "#1", Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
+		{Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
+		{Input: "baseline", Resource: "repo", Version: `{"ref":"v1"}`},
+		{Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
 	} {
-		err = st.RecordRunInput(ctx, run, input.BuildID, input.Input, input.Resource, input.Version)
+		err = st.RecordRunInput(ctx, run, input.Input, input.Resource, input.Version)
 		if err != nil {
 			t.Fatalf("RecordRunInput %+v: %v", input, err)
 		}
@@ -203,13 +198,12 @@ func (s suite) TestRunInputsAreKeptPerBuildAndGet(t *testing.T) {
 	}
 
 	want := []store.RunInput{
-		{BuildID: run + "#0", Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
-		{BuildID: run + "#0", Input: "baseline", Resource: "repo", Version: `{"ref":"v1"}`},
-		{BuildID: run + "#1", Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
+		{Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
+		{Input: "baseline", Resource: "repo", Version: `{"ref":"v1"}`},
 	}
 
 	if len(inputs) != len(want) {
-		t.Fatalf("RunInputs = %+v, want one row per build and get", inputs)
+		t.Fatalf("RunInputs = %+v, want one row per get", inputs)
 	}
 
 	for _, input := range want {

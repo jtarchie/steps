@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -30,7 +29,7 @@ type RunCmd struct {
 	Resume        string            `help:"continue a failed run from the step that failed"                                                                         name:"resume"`
 	Replay        string            `help:"fork a recorded run and re-run it from --from onward"                                                                    name:"replay"`
 	From          string            `help:"with --replay, the step name to re-run from"                                                                             name:"from"`
-	Rerun         string            `help:"run a recorded run again against the versions it was created with: <run>, or one build of it with <run>#<build>"         name:"rerun"`
+	Rerun         string            `help:"run a recorded run again against the versions it was created with"                                                       name:"rerun"`
 }
 
 // applyContinuation handles the flags that point this invocation at a previous
@@ -69,38 +68,18 @@ func (r *RunCmd) applyContinuation(
 	return ctx, jobName, nil
 }
 
-// applyRerun points this invocation at one build of a recorded run; the job is that run's.
+// applyRerun points this invocation at a recorded run; the job is that run's.
 func (r *RunCmd) applyRerun(ctx context.Context, st store.Store) (context.Context, string, error) {
 	if r.Resume != "" || r.Replay != "" {
-		return ctx, "", errors.New("--rerun cannot be combined with --resume or --replay: it starts a new run of one build from the top")
+		return ctx, "", errors.New("--rerun cannot be combined with --resume or --replay: it starts a new run from the top")
 	}
 
-	runID, build, err := parseRerun(r.Rerun)
-	if err != nil {
-		return ctx, "", err
-	}
-
-	ctx, jobName, err := pipeline.PrepareRerun(ctx, st, runID, build)
+	ctx, jobName, err := pipeline.PrepareRerun(ctx, st, r.Rerun)
 	if err != nil {
 		return ctx, "", fmt.Errorf("could not rerun: %w", err)
 	}
 
 	return ctx, jobName, nil
-}
-
-// parseRerun reads <run>, every build of it, or <run>#<build>, one of them.
-func parseRerun(value string) (string, int, error) {
-	runID, index, found := strings.Cut(value, "#")
-	if !found {
-		return runID, -1, nil
-	}
-
-	build, err := strconv.Atoi(index)
-	if err != nil || build < 0 {
-		return "", 0, fmt.Errorf("--rerun %q: the build after # must be a number, as in %s#0", value, runID)
-	}
-
-	return runID, build, nil
 }
 
 // applyReplay forks a recorded run once the job is known.
@@ -172,6 +151,11 @@ func (r *RunCmd) Run() error {
 	}
 
 	slog.Info("pipeline.run", "pipeline", r.Pipeline, "job", job.Name)
+
+	// One invocation is one build, as `fly trigger-job` is; the rest wait for the next.
+	ctx = pipeline.WithBacklog(ctx, func(ctx context.Context, sets int) {
+		events.Note(ctx, events.NoteInfo, fmt.Sprintf("%d more version(s) of %s waiting; run it again to build the next", sets, job.Name))
+	})
 
 	ctx, undraw := r.draw(ctx, st)
 	runErr := pipeline.RunJob(ctx, cfg, job, r.Pin, provider, st, r.Force)
@@ -268,7 +252,9 @@ func (t *TestCmd) Run() error {
 		job := &cfg.Jobs[i]
 		executed = append(executed, job.Name)
 
-		jobErr := pipeline.RunJob(ctx, cfg, job, nil, provider, st, true)
+		jobErr := pipeline.BuildEveryVersion(ctx, job, func(ctx context.Context) error {
+			return pipeline.RunJob(ctx, cfg, job, nil, provider, st, true)
+		})
 		if jobErr != nil {
 			_, _ = fmt.Fprintf(events.Stdout(ctx), "FAIL %s: %v\n", job.Name, jobErr)
 

@@ -57,7 +57,7 @@ jobs:
 
 // TestResumeBindsAFixedGetToTheVersionItsBuildWasCreatedWith: only the
 // fan-out's versions were recorded per build, so a resume re-resolved every
-// other get to whatever the check reports now — and build #1's completed
+// other get to whatever the check reports now — and the failed run's completed
 // steps, recorded against config@c1, would have been trusted inside a build
 // binding config@c2. Concourse records every input of a build and reruns
 // against exactly those.
@@ -74,10 +74,12 @@ func TestResumeBindsAFixedGetToTheVersionItsBuildWasCreatedWith(t *testing.T) {
 
 	path := writePipeline(t, dir, recordedInputsPipeline(ticks, config, published, flag))
 
+	mustRun(t, "run", path, "--job", "build")
+
 	out := captureStdout(t, func() {
 		err := cli.Run([]string{"run", path, "--job", "build"})
 		if err == nil {
-			t.Fatal("expected build #1 to fail")
+			t.Fatal("expected the build of two to fail")
 		}
 	})
 
@@ -95,7 +97,7 @@ func TestResumeBindsAFixedGetToTheVersionItsBuildWasCreatedWith(t *testing.T) {
 
 	got := readFileString(t, published)
 	if got != "c1 one\nc1 two\n" {
-		t.Errorf("published:\n%s\nwant build #1 rebuilt with the config it was created with", got)
+		t.Errorf("published:\n%s\nwant the failed run rebuilt with the config it was created with", got)
 	}
 }
 
@@ -197,9 +199,9 @@ func TestResumeOfAPinnedRunKeepsItsPin(t *testing.T) {
 	}
 
 	// The cursor never took the pin, so an ordinary run still owes every version.
-	err = cli.Run([]string{"run", path, "--job", "build"})
+	err = runBacklog(t, "run", path, "--job", "build")
 	if err != nil {
-		t.Fatalf("the ordinary run after the pinned one failed: %v", err)
+		t.Fatalf("the ordinary runs after the pinned one failed: %v", err)
 	}
 
 	if got := readFileString(t, ran); !strings.HasSuffix(got, "one\ntwo\nthree\n") {

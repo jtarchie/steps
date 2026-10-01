@@ -124,9 +124,9 @@ func (r *LocalRunner) SetProvider(slug string, provider workspace.Provider) {
 	r.providers.set(slug, provider)
 }
 
-// EnqueueRerun puts a person's retry of one build on the pipeline's queue.
-func (r *LocalRunner) EnqueueRerun(ctx context.Context, target *Pipeline, jobName, runID string, build int) error {
-	err := target.Store.EnqueueRerunJob(ctx, jobName, "retry (web)", runID, build)
+// EnqueueRerun puts a person's retry of a run on the pipeline's queue.
+func (r *LocalRunner) EnqueueRerun(ctx context.Context, target *Pipeline, jobName, runID string) error {
+	err := target.Store.EnqueueRerunJob(ctx, jobName, "retry (web)", runID)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
@@ -592,11 +592,19 @@ func (r *LocalRunner) runJob(
 	if trigger.RerunOf != "" {
 		var err error
 
-		runCtx, _, err = pipeline.PrepareRerun(runCtx, target.Store, trigger.RerunOf, trigger.RerunBuild)
+		runCtx, _, err = pipeline.PrepareRerun(runCtx, target.Store, trigger.RerunOf)
 		if err != nil {
 			return false, fmt.Errorf("web: %w", err)
 		}
 	}
+
+	// The next version waits on the queue, not in this run — see pipeline.WithBacklog.
+	runCtx = pipeline.WithBacklog(runCtx, func(ctx context.Context, sets int) {
+		err := target.Store.EnqueueJob(ctx, job.Name, fmt.Sprintf("%d more version(s) to build", sets))
+		if err != nil {
+			slog.WarnContext(ctx, "web.job.backlog_unqueued", "pipeline", target.Slug, "job", job.Name, "waiting", sets, "error", err)
+		}
+	})
 
 	runErr := pipeline.RunJob(
 		events.WithBus(runCtx, target.Bus), cfg, job, r.pinned, provider, target.Store, force)

@@ -93,11 +93,11 @@ jobs:
 	ctx := context.Background()
 	job := &cfg.Jobs[0]
 
-	runErr := RunJob(ctx, cfg, job, nil, provider, st, false)
+	runErr := drainJob(ctx, cfg, job, nil, provider, st)
 
-	// All three versions must have been attempted in this one invocation —
-	// under the bug this test guards against, only "ran v1" would appear
-	// (v2 fails, v3 is never attempted).
+	// All three versions must have been attempted, one run each — under the
+	// bug this test guards against, only "ran v1" would appear (v2 fails, v3
+	// is never attempted).
 	assertConformanceLineCount(t, taskCounter, 3)
 
 	if runErr == nil {

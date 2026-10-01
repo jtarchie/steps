@@ -16,8 +16,8 @@ import (
 // runColumns is the one column list every RunRow query selects (runColumnsR
 // is the same list for a query aliasing runs as r); scanRunRow decodes it.
 const (
-	runColumns  = `id, job_name, workspace, status, started_at, finished_at, COALESCE(parent_run_id, ''), ` + configSHA + `, COALESCE(rerun_of, ''), COALESCE(rerun_of_build, 0)`
-	runColumnsR = `r.id, r.job_name, r.workspace, r.status, r.started_at, r.finished_at, COALESCE(r.parent_run_id, ''), ` + configSHAR + `, COALESCE(r.rerun_of, ''), COALESCE(r.rerun_of_build, 0)`
+	runColumns  = `id, job_name, workspace, status, started_at, finished_at, COALESCE(parent_run_id, ''), ` + configSHA + `, COALESCE(rerun_of, '')`
+	runColumnsR = `r.id, r.job_name, r.workspace, r.status, r.started_at, r.finished_at, COALESCE(r.parent_run_id, ''), ` + configSHAR + `, COALESCE(r.rerun_of, '')`
 	configSHA   = `COALESCE((SELECT sha FROM pipeline_revisions WHERE id = revision_id), '')`
 	configSHAR  = `COALESCE((SELECT sha FROM pipeline_revisions WHERE id = r.revision_id), '')`
 )
@@ -31,7 +31,7 @@ func scanRunRow(sc rowScanner) (store.RunRow, error) {
 		finished sql.NullTime
 	)
 
-	err := sc.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &started, &finished, &row.ParentRunID, &row.ConfigSHA, &row.RerunOf, &row.RerunOfBuild)
+	err := sc.Scan(&row.ID, &row.JobName, &row.Workspace, &row.Status, &started, &finished, &row.ParentRunID, &row.ConfigSHA, &row.RerunOf)
 
 	row.StartedAt = started.UTC()
 	row.FinishedAt = utc(finished)
@@ -126,10 +126,10 @@ func (s *Store) RecordRunParent(ctx context.Context, runID, parentID string) err
 	return nil
 }
 
-// RecordRunRerun notes which build of which run a retry re-ran.
-func (s *Store) RecordRunRerun(ctx context.Context, runID, originalID string, build int) error {
+// RecordRunRerun notes which run a retry re-ran.
+func (s *Store) RecordRunRerun(ctx context.Context, runID, originalID string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE runs SET rerun_of = $1, rerun_of_build = $2 WHERE id = $3 AND pipeline_id = $4`, originalID, build, runID, s.pipelineID)
+		`UPDATE runs SET rerun_of = $1 WHERE id = $2 AND pipeline_id = $3`, originalID, runID, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not record what run %q reran: %w", runID, err)
 	}

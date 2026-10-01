@@ -187,9 +187,6 @@ func runHookStep(ctx context.Context, scope hookScope, step config.Step) error {
 		recordPlacement(ctx, scope.stepRunner, placed, 0, step.Put, scope.label, "")
 
 		if err == nil {
-			// ponytail: a job-level put after a fan-out correlates with the
-			// LAST green set only (buildVersions.lastGreen). Upgrade: one
-			// job_versions row per (version, build).
 			recordPutOrder(ctx, scope.st, step.Put, result)
 			recordBuildVersion(ctx, step.Put, result)
 		}

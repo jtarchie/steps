@@ -770,7 +770,7 @@ jobs:
     inputs: [build]
     run: cat build/number.txt      # no stdout assert: this runs once per version
   assert:
-    execution: [build, show, build, show]   # the fan-out, one pass per version
+    execution: [build, show, build, show]   # one run per version, judged together
     outcome: succeeded
 - name: pinned
   plan:
@@ -789,11 +789,11 @@ assert:
   execution: [latest-only, each-in-turn, pinned]
 ```
 
-Under `every`, a failing version does not stop the remaining ones from being attempted.
+Under `every`, **each version is a run of its own**, as each is a build of its own in Concourse — so `max_in_flight:`, `serial:`, the job's history and **Retry** all count versions. `steps web` builds the oldest version the job has not taken and queues the job again while more wait, so a backlog drains one run per version and, under `max_in_flight: 2`, two at a time. `steps run` builds one version per invocation, as `fly trigger-job` does, and says how many still wait; `steps test` builds every version, each as its own run, and judges the job's `assert:` over all of them, which is why the example above asserts two passes. A failing version does not stop the ones behind it.
 
 ### `every` takes each version once
 
-A check reports what *exists*, not what is new — the same twenty Slack messages, the same page of builds, on every poll. So `every` remembers: once a version's fan-out has **started**, that version is not taken again, and a later run fans out only over what is left. Without that, a plan ending in a `put:` or an `agent:` — the two steps the cache deliberately never skips, because their worth is an effect rather than an artifact — repeats every effect it has ever performed each time anything new shows up.
+A check reports what *exists*, not what is new — the same twenty Slack messages, the same page of builds, on every poll. So `every` remembers: once a version's run has **started**, that version is not taken again, and a later run takes only what is left. Without that, a plan ending in a `put:` or an `agent:` — the two steps the cache deliberately never skips, because their worth is an effect rather than an artifact — repeats every effect it has ever performed each time anything new shows up.
 
 - **Recorded per (job, resource)**, so another job reading the same resource keeps its own place.
 - **A version is taken when its build STARTS**, not when it succeeds — so a version whose build failed is not retried on the next run. This is Concourse's rule (`NextEveryVersion` reads the versions a build was *created* with and never looks at build status), and it is what stops one bad input failing forever, on every trigger, with an agent's bill attached. Re-running it is a deliberate act: `--resume` (the run that took it) or `--pin` (the version), or a new version.
@@ -807,7 +807,7 @@ A check reports what *exists*, not what is new — the same twenty Slack message
 
 ### Several `every` gets: input sets
 
-When more than one get says `every`, a run resolves **input sets**, Concourse's model: each `every` get advances one step per set through its own unbuilt versions, in lockstep with its siblings, and one build runs per set. A get whose versions run out **holds** at the newest version it has already covered while the others keep moving. There is no cross product — 3 new versions on one input and 2 on another mean three builds, not six.
+When more than one get says `every`, a run resolves **input sets**, Concourse's model: each `every` get advances one step per set through its own unbuilt versions, in lockstep with its siblings, and each set is a run of its own. A get whose versions run out **holds** at the newest version it has already covered while the others keep moving. There is no cross product — 3 new versions on one input and 2 on another mean three builds, not six.
 
 The hold rule is what makes the steady state right, not just the burst: updates rarely arrive in matched pairs. `config` moving alone builds `(code@held, config@new)`; `code` catching up later builds `(code@new, config@held)`.
 

@@ -414,7 +414,7 @@ jobs:
 	}
 
 	mustRun(t, "validate", path)
-	mustRun(t, "run", path, "--job", "answer")
+	mustRunBacklog(t, "run", path, "--job", "answer")
 
 	posted := workspace.postedMessages()
 	if len(posted) != 3 {
@@ -613,7 +613,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	mustRun(t, "run", path, "--job", "answer")
+	mustRunBacklog(t, "run", path, "--job", "answer")
 
 	// The same three replies the un-rate-limited run produces: every 429 was
 	// absorbed, none of them cost a message.
@@ -660,7 +660,7 @@ jobs:
 	}
 
 	mustRun(t, "validate", path)
-	mustRun(t, "run", path, "--job", "announce")
+	mustRunBacklog(t, "run", path, "--job", "announce")
 
 	posted := workspace.postedMessages()
 	if len(posted) != 1 {
@@ -719,7 +719,7 @@ jobs:
 	}
 
 	mustRun(t, "validate", path)
-	mustRun(t, "run", path, "--job", "announce")
+	mustRunBacklog(t, "run", path, "--job", "announce")
 
 	posted := workspace.postedMessages()
 	if len(posted) != 1 {
@@ -770,7 +770,7 @@ jobs:
 
 	mustRun(t, "validate", path)
 
-	err = cli.Run([]string{"run", path, "--job", "announce"})
+	err = runBacklog(t, "run", path, "--job", "announce")
 	if err == nil {
 		t.Fatal("run: want an error, SECOND_BOT_TOKEN is not in this resource's env:")
 	}
@@ -814,7 +814,7 @@ jobs:
 	}
 
 	mustRun(t, "validate", path)
-	mustRun(t, "run", path, "--job", "mark")
+	mustRunBacklog(t, "run", path, "--job", "mark")
 
 	calls := workspace.reactions()
 	if len(calls) != 3 {
@@ -894,7 +894,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	mustRun(t, "run", path, "--job", "mark")
+	mustRunBacklog(t, "run", path, "--job", "mark")
 
 	if calls := workspace.reactions(); len(calls) != 2 {
 		t.Fatalf("made %d reaction calls, want 2: %v", len(calls), calls)
@@ -940,7 +940,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = cli.Run([]string{"run", path, "--job", "mark"})
+	err = runBacklog(t, "run", path, "--job", "mark")
 	if err == nil {
 		t.Fatal("run succeeded, want the put to fail on a refusal that is not a settled state")
 	}
@@ -1002,7 +1002,7 @@ jobs:
 
 	mustRun(t, "validate", path)
 
-	err = cli.Run([]string{"run", path, "--job", "answer"})
+	err = runBacklog(t, "run", path, "--job", "answer")
 	if err == nil {
 		t.Fatal("run succeeded, want the failing task to fail it")
 	}
@@ -1081,7 +1081,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	mustRun(t, "run", path, "--job", "answer")
+	mustRunBacklog(t, "run", path, "--job", "answer")
 
 	posted := workspace.postedMessages()
 	if len(posted) != 1 || posted[0]["channel"] == nil || posted[0]["thread_ts"] == nil {
@@ -1096,7 +1096,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = cli.Run([]string{"run", path, "--job", "answer"})
+	err = runBacklog(t, "run", path, "--job", "answer")
 	if err == nil {
 		t.Fatal("run succeeded, want version() to refuse to pick between two fetched inputs")
 	}
@@ -1144,7 +1144,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = cli.Run([]string{"run", path, "--job", "answer"})
+	err = runBacklog(t, "run", path, "--job", "answer")
 	if err == nil {
 		t.Fatal("run succeeded, want the put to fail with no channel")
 	}

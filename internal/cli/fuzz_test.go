@@ -2,7 +2,6 @@ package cli
 
 import (
 	"net/url"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -73,41 +72,6 @@ func checkRefusalHidesURL(t *testing.T, raw string, err error) {
 	if strings.Contains(err.Error(), rest) {
 		t.Fatalf("refusing %q echoed the url past its scheme: %v", raw, err)
 	}
-}
-
-// FuzzParseRerun pins --rerun: no # is every build, and a build after # is a non-negative number of the run before the FIRST #.
-func FuzzParseRerun(f *testing.F) {
-	for _, seed := range []string{"run", "run#0", "run#12", "run#-1", "run#x", "a#b#1", "#3", "run#"} {
-		f.Add(seed)
-	}
-
-	f.Fuzz(func(t *testing.T, value string) {
-		runID, build, err := parseRerun(value)
-
-		wantRun, wantBuild, valid := expectedRerun(value)
-		if !valid {
-			if err == nil {
-				t.Fatalf("parseRerun(%q) accepted build %d", value, build)
-			}
-
-			return
-		}
-
-		if err != nil || runID != wantRun || build != wantBuild {
-			t.Fatalf("parseRerun(%q) = %q, %d, %v; want %q, %d", value, runID, build, err, wantRun, wantBuild)
-		}
-	})
-}
-
-func expectedRerun(value string) (string, int, bool) {
-	runID, after, found := strings.Cut(value, "#")
-	if !found {
-		return runID, -1, true
-	}
-
-	build, err := strconv.Atoi(after)
-
-	return runID, build, err == nil && build >= 0
 }
 
 // FuzzSplitTargetCredentials pins that credentials come off a parseable target exactly as it held them, and that the address left behind does not carry them.
