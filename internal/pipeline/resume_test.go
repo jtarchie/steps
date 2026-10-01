@@ -30,12 +30,11 @@ func ticksHistory(versions ...string) *resourceHistory {
 	return history
 }
 
-// recordedRun is a two-build record, #1 recorded first so completion order and build order disagree, with a fixed get beside the fanning one in #0.
+// recordedRun is a run's record: the fanning get and a fixed get beside it.
 func recordedRun() []store.RunInput {
 	return []store.RunInput{
-		{BuildID: "R#1", Input: "ticks", Resource: "ticks", Version: `{"n":"two"}`},
-		{BuildID: "R#0", Input: "ticks", Resource: "ticks", Version: `{"n":"one"}`},
-		{BuildID: "R#0", Input: "config", Resource: "config", Version: `{"n":"c1"}`},
+		{Input: "ticks", Resource: "ticks", Version: `{"n":"one"}`},
+		{Input: "config", Resource: "config", Version: `{"n":"c1"}`},
 	}
 }
 
@@ -49,8 +48,8 @@ func resumeRecorded(done map[doneKey]string, inputs []store.RunInput, history *r
 // The e2e covers a version moving and one pruned; these cover the shapes a
 // record can be in.
 
-// A resume's sets are the run's own record, in build order, every get bound.
-func TestResumeInputSetsRebuildsTheRecordedBuilds(t *testing.T) {
+// A resume's set is the run's own record, every get bound.
+func TestResumeInputSetsRebuildsTheRecordedBuild(t *testing.T) {
 	t.Parallel()
 
 	got, err := resumeRecorded(map[doneKey]string{{"R#0", 0}: "fragile"}, recordedRun(), ticksHistory("one", "two", "three"))
@@ -58,16 +57,16 @@ func TestResumeInputSetsRebuildsTheRecordedBuilds(t *testing.T) {
 		t.Fatalf("a recorded run was refused: %v", err)
 	}
 
-	if !got.recorded || len(got.sets) != 2 {
-		t.Fatalf("sets = %v, want the two recorded builds", got.sets)
+	if !got.recorded || len(got.sets) != 1 {
+		t.Fatalf("sets = %v, want the recorded build", got.sets)
 	}
 
-	if got.sets[0]["ticks"]["n"] != "one" || got.sets[0]["config"]["n"] != "c1" || got.sets[1]["ticks"]["n"] != "two" {
-		t.Errorf("sets = %v, want each build in order with every get bound", got.sets)
+	if got.sets[0]["ticks"]["n"] != "one" || got.sets[0]["config"]["n"] != "c1" {
+		t.Errorf("sets = %v, want every get bound to its record", got.sets)
 	}
 }
 
-// A run that failed before any build was created has nothing to rebuild and resolves afresh.
+// A run that failed before its build was created has nothing to rebuild and resolves afresh.
 func TestResumeInputSetsResolvesAfreshBeforeTheFirstBuild(t *testing.T) {
 	t.Parallel()
 
@@ -81,19 +80,19 @@ func TestResumeInputSetsResolvesAfreshBeforeTheFirstBuild(t *testing.T) {
 func TestResumeInputSetsRefusesABuildWithStepsButNoRecord(t *testing.T) {
 	t.Parallel()
 
-	_, err := resumeRecorded(map[doneKey]string{{"R#2", 0}: "fragile"}, recordedRun(), ticksHistory("one", "two"))
-	if err == nil || !strings.Contains(err.Error(), "build #2") {
-		t.Errorf("want a refusal naming build #2, got %v", err)
+	_, err := resumeRecorded(map[doneKey]string{{"R#0", 0}: "fragile"}, nil, ticksHistory("one", "two"))
+	if err == nil || !strings.Contains(err.Error(), "not recorded") {
+		t.Errorf("want a refusal naming the missing record, got %v", err)
 	}
 }
 
-// A version history no longer holds is refused, naming the build and the version.
+// A version history no longer holds is refused, naming the version.
 func TestResumeInputSetsRefusesAPrunedVersion(t *testing.T) {
 	t.Parallel()
 
 	_, err := resumeRecorded(nil, recordedRun(), ticksHistory("two", "three"))
-	if err == nil || !strings.Contains(err.Error(), "build #0") || !strings.Contains(err.Error(), `{"n":"one"}`) {
-		t.Errorf("want a refusal naming build #0 and the version, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), `{"n":"one"}`) {
+		t.Errorf("want a refusal naming the version, got %v", err)
 	}
 }
 
@@ -108,12 +107,12 @@ func TestProgressedPast(t *testing.T) {
 		index int
 		want  bool
 	}{
-		"no state":          {nil, "R#0", -1, false},
-		"not resuming":      {&resumeState{id: "R", done: done}, "R#0", -1, false},
-		"another build":     {&resumeState{id: "R", done: done, resuming: true}, "R#1", -1, false},
-		"the step itself":   {&resumeState{id: "R", done: done, resuming: true}, "R#0", 2, false},
-		"a step after it":   {&resumeState{id: "R", done: done, resuming: true}, "R#0", 1, true},
-		"a fan-out's build": {&resumeState{id: "R", done: done, resuming: true}, "R#0", -1, true},
+		"no state":                {nil, "R#0", -1, false},
+		"not resuming":            {&resumeState{id: "R", done: done}, "R#0", -1, false},
+		"the walk before the get": {&resumeState{id: "R", done: done, resuming: true}, "R", -1, false},
+		"the step itself":         {&resumeState{id: "R", done: done, resuming: true}, "R#0", 2, false},
+		"a step after it":         {&resumeState{id: "R", done: done, resuming: true}, "R#0", 1, true},
+		"the triggered build":     {&resumeState{id: "R", done: done, resuming: true}, "R#0", -1, true},
 	} {
 		if got := tc.state.progressedPast(tc.build, tc.index); got != tc.want {
 			t.Errorf("%s: progressedPast(%s, %d) = %v, want %v", name, tc.build, tc.index, got, tc.want)
@@ -121,78 +120,22 @@ func TestProgressedPast(t *testing.T) {
 	}
 }
 
-// TestRefuseSharedWorkspace holds the one-tree rule: builds that finished
-// plus one unfinished LAST build continue, and anything else that got
-// partway is refused, naming the build.
-func TestRefuseSharedWorkspace(t *testing.T) {
+func TestBuildFinished(t *testing.T) {
 	t.Parallel()
 
-	// A remainder of get, change, fragile: indices 1 and 2 finish a build.
-	needed := []int{1, 2}
-
-	finished := func(n string) map[doneKey]string {
-		return map[doneKey]string{{"R#" + n, 1}: "change", {"R#" + n, 2}: "fragile"}
-	}
-	partway := func(n string) map[doneKey]string { return map[doneKey]string{{"R#" + n, 1}: "change"} }
-	merge := func(maps ...map[doneKey]string) map[doneKey]string {
-		all := map[doneKey]string{}
-		for _, m := range maps {
-			for k, v := range m {
-				all[k] = v
-			}
-		}
-
-		return all
-	}
+	done := map[doneKey]string{{"R#0", 1}: "change", {"R", 2}: "prep"}
 
 	for name, tc := range map[string]struct {
-		done   map[doneKey]string
-		builds int
-		refuse string
-	}{
-		"no builds":                          {nil, 0, ""},
-		"one build partway":                  {partway("0"), 1, ""},
-		"one build untouched":                {nil, 1, ""},
-		"finished then partway last":         {merge(finished("0"), partway("1")), 2, ""},
-		"none progressed":                    {map[doneKey]string{{"R", 0}: "prep"}, 3, ""},
-		"all finished":                       {merge(finished("0"), finished("1")), 2, ""},
-		"finished then untouched last":       {finished("0"), 2, ""},
-		"an earlier build partway":           {merge(partway("0"), partway("1")), 2, "#0"},
-		"an earlier build partway alone":     {partway("0"), 2, "#0"},
-		"a partway last behind an untouched": {partway("1"), 2, "#1"},
-		"a partway last behind one of two":   {merge(finished("0"), partway("2")), 3, "#1"},
-		"partway then finished":              {merge(partway("0"), finished("1")), 2, ""},
-		"partway, untouched, finished":       {merge(partway("0"), finished("2")), 3, "#0"},
-		"untouched, partway, finished":       {merge(partway("1"), finished("2")), 3, "#0"},
-	} {
-		err := refuseSharedWorkspace("R", tc.done, tc.builds, needed)
-
-		switch {
-		case tc.refuse == "" && err != nil:
-			t.Errorf("%s: refused: %v", name, err)
-		case tc.refuse != "" && (err == nil || !strings.Contains(err.Error(), tc.refuse) || !strings.Contains(err.Error(), "--pin")):
-			t.Errorf("%s: want a refusal naming %s and --pin, got %v", name, tc.refuse, err)
-		}
-	}
-}
-
-func TestAllFinished(t *testing.T) {
-	t.Parallel()
-
-	done := map[doneKey]string{{"R#0", 1}: "change", {"R#1", 1}: "change", {"R#1", 2}: "fragile"}
-
-	for name, tc := range map[string]struct {
-		builds int
 		needed []int
 		want   bool
 	}{
-		"no builds":               {0, []int{1}, false},
-		"one finished build":      {1, []int{1}, true},
-		"every build finished":    {2, []int{1}, true},
-		"a build left unfinished": {2, []int{1, 2}, false},
+		"every needed step":                 {[]int{1}, true},
+		"a step left":                       {[]int{1, 2}, false},
+		"the same index before the get":     {[]int{2}, false},
+		"a plan with nothing after the get": {nil, true},
 	} {
-		if got := (runRecord{runID: "R", done: done, needed: tc.needed}).allFinished(tc.builds); got != tc.want {
-			t.Errorf("%s: allFinished = %v, want %v", name, got, tc.want)
+		if got := buildFinished(done, "R#0", tc.needed); got != tc.want {
+			t.Errorf("%s: buildFinished = %v, want %v", name, got, tc.want)
 		}
 	}
 }

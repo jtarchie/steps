@@ -98,9 +98,9 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	ctx = WithResourcePlacement(ctx)
 
 	// One register of step decisions per job run, for context: from: readers.
-	// Installed here rather than in runSteps because a get: version: every
-	// fan-out re-enters runSteps per version, and a decision made before the
-	// get is still this run's.
+	// Installed here rather than in runSteps because the build a get triggers
+	// re-enters runSteps, and a decision made before the get is still this
+	// run's.
 	ctx = agent.WithOutcomes(ctx)
 
 	err = prepareImages(ctx, cfg, job.Name)
@@ -192,7 +192,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 
 	// A job assert is the final word: it runs after hooks so the log includes
 	// them. A mismatch fails the job regardless, and is never itself cleared.
-	finalErr = checkJobAssert(job, log, finalErr)
+	finalErr = judgeJob(ctx, job, log, finalErr)
 	if finalErr != nil {
 		// Keep the workspace on failure rather than destroying it: the files a
 		// step had just written when it failed are the most useful thing to
@@ -216,6 +216,16 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	slog.InfoContext(ctx, "job.done")
 
 	return nil
+}
+
+// judgeJob applies the job's assert:, unless BuildEveryVersion is judging it
+// over every run of the job.
+func judgeJob(ctx context.Context, job *config.Job, log *execLog, planErr error) error {
+	if deferJobAssert(ctx, log) {
+		return planErr
+	}
+
+	return checkJobAssert(job, log, planErr)
 }
 
 // failedStatus is Concourse's split: somebody stopping a build is not the build saying no, and a reader deciding whether to look for a bug has to tell them apart.
@@ -305,6 +315,17 @@ func runJobPlan(
 	// builds from recorded history either way.
 	refreshResourceHistory(ctx, r.cfg, r.st, job)
 
+	// From reading what the job has taken to taking this build's set — see
+	// cursorLocks.
+	unlock := lockJobCursor(r.cfg.Name, job.Name)
+	locked := true
+
+	defer func() {
+		if locked {
+			unlock()
+		}
+	}()
+
 	cursor, err := loadVersionCursor(ctx, r.st, job, !takenVersionsReopened(ctx))
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
@@ -334,6 +355,10 @@ func runJobPlan(
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
+	resolution, waiting := oneBuild(ctx, resolution)
+
+	resolvedSets()
+
 	// A resume rebuilds the builds the run it continues was created with,
 	// and nothing else. This is fly rerun-build: Concourse re-runs a build
 	// against build_resource_config_version_inputs — every version that
@@ -355,23 +380,15 @@ func runJobPlan(
 		runBuild = resume.id
 	}
 
-	skippable := map[string]bool{}
-
-	var replay [][]string
-
-	if !skipCache {
-		chains, planErr := merkle.PlanChains(ctx, r.cfg, job.Name, job.Plan, pinned, cache, resolution.sets)
-		if planErr != nil {
-			return fmt.Errorf("job %q: planning: %w", job.Name, planErr)
-		}
-
-		skippable, err = buildSkippableIndex(ctx, r.st, job.Name, chains)
-		if err != nil {
-			return fmt.Errorf("job %q: %w", job.Name, err)
-		}
-
-		replay = chainHashes(chains)
+	skippable, replay, err := planJob(ctx, r, job, pinned, cache, resolution, skipCache)
+	if err != nil {
+		return err
 	}
+
+	takeBuild(ctx, r.st, job.Name, cursor, resolution, len(pinned) > 0, waiting)
+
+	unlock()
+	locked = false
 
 	return runSteps(ctx, planWalk{
 		stepRunner:      r,
@@ -385,6 +402,29 @@ func runJobPlan(
 		allowGetTrigger: true,
 		build:           runBuild,
 	}, job.Plan)
+}
+
+// planJob plans the chains the build could resolve to and reports which
+// already succeeded; --force (skipCache) plans nothing and skips nothing.
+func planJob(
+	ctx context.Context, r stepRunner, job *config.Job, pinned map[string]string,
+	cache *rsrc.Cache, resolution setResolution, skipCache bool,
+) (map[string]bool, [][]string, error) {
+	if skipCache {
+		return map[string]bool{}, nil, nil
+	}
+
+	chains, err := merkle.PlanChains(ctx, r.cfg, job.Name, job.Plan, pinned, cache, resolution.sets)
+	if err != nil {
+		return nil, nil, fmt.Errorf("job %q: planning: %w", job.Name, err)
+	}
+
+	skippable, err := buildSkippableIndex(ctx, r.st, job.Name, chains)
+	if err != nil {
+		return nil, nil, fmt.Errorf("job %q: %w", job.Name, err)
+	}
+
+	return skippable, chainHashes(chains), nil
 }
 
 // pruneHistory trims what this job has accumulated: runs past the cap, with

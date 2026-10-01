@@ -639,9 +639,8 @@ func (s *Server) handleTrigger(c *echo.Context) error {
 		pipeline.Slug, name, since.UnixMilli()))
 }
 
-// handleRerun is Retry: fly rerun-build (#146), a recorded run — every build of
-// it unless the form names one — against the versions it was created with, as
-// a new run. Refused where a
+// handleRerun is Retry: fly rerun-build (#146), a recorded run against the
+// versions it was created with, as a new run. Refused where a
 // trigger is — a read-only server, a paused pipeline, a job the config dropped
 // — and for a run still going, which the page offers Abort for instead.
 func (s *Server) handleRerun(c *echo.Context) error {
@@ -666,18 +665,9 @@ func (s *Server) handleRerun(c *echo.Context) error {
 		return err
 	}
 
-	build := -1
-
-	if raw := c.FormValue("build"); raw != "" {
-		build, err = strconv.Atoi(raw)
-		if err != nil || build < 0 {
-			return echo.NewHTTPError(http.StatusBadRequest, "build must be a number")
-		}
-	}
-
 	since := time.Now().UTC()
 
-	err = s.runner.EnqueueRerun(ctx, pipeline, run.JobName, run.ID, build)
+	err = s.runner.EnqueueRerun(ctx, pipeline, run.JobName, run.ID)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}

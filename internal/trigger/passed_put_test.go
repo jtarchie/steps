@@ -130,10 +130,7 @@ jobs:
 
 	t.Cleanup(func() { _ = provider.Close() })
 
-	err = pipeline.RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
-	if err != nil {
-		t.Fatalf("RunJob: %v", err)
-	}
+	runBacklog(ctx, t, cfg, &cfg.Jobs[0], provider, st)
 
 	for _, tc := range []struct {
 		repo, image string

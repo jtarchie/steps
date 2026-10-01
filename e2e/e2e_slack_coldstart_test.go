@@ -81,7 +81,7 @@ func TestEndToEndBuiltinSlackColdStartStillAnswersTheNewestThreadMention(t *test
 		})
 	}
 
-	mustRun(t, "run", coldStartPipeline(t, server.URL), "--job", "answer")
+	mustRunBacklog(t, "run", coldStartPipeline(t, server.URL), "--job", "answer")
 
 	posted := workspace.postedMessages()
 

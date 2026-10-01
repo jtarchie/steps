@@ -56,12 +56,12 @@ func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason string) er
 }
 
 // EnqueueRerunJob keeps the row even when the job has an ordinary one pending: they build different versions.
-func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID string, build int) error {
+func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID string) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO trigger_queue (pipeline_id, job_name, reason, manual, rerun_of, rerun_build, status, enqueued_at)
-		VALUES (?, ?, ?, 1, ?, ?, 'pending', ?)
-		ON CONFLICT (pipeline_id, rerun_of, rerun_build) WHERE status = 'pending' AND rerun_of IS NOT NULL DO NOTHING
-	`, s.pipelineID, jobName, reason, runID, build, nowNano())
+		INSERT INTO trigger_queue (pipeline_id, job_name, reason, manual, rerun_of, status, enqueued_at)
+		VALUES (?, ?, ?, 1, ?, 'pending', ?)
+		ON CONFLICT (pipeline_id, rerun_of) WHERE status = 'pending' AND rerun_of IS NOT NULL DO NOTHING
+	`, s.pipelineID, jobName, reason, runID, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not queue a rerun of %q: %w", runID, err)
 	}
@@ -74,17 +74,16 @@ func (s *Store) QueuedTrigger(ctx context.Context, id int64) (store.QueuedTrigge
 	var (
 		trigger store.QueuedTrigger
 		rerun   sql.NullString
-		build   sql.NullInt64
 	)
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT manual, rerun_of, rerun_build FROM trigger_queue WHERE id = ? AND pipeline_id = ?
-	`, id, s.pipelineID).Scan(&trigger.Manual, &rerun, &build)
+		SELECT manual, rerun_of FROM trigger_queue WHERE id = ? AND pipeline_id = ?
+	`, id, s.pipelineID).Scan(&trigger.Manual, &rerun)
 	if err != nil {
 		return store.QueuedTrigger{}, fmt.Errorf("could not read queue row %d: %w", id, err)
 	}
 
-	trigger.RerunOf, trigger.RerunBuild = rerun.String, int(build.Int64)
+	trigger.RerunOf = rerun.String
 
 	return trigger, nil
 }
@@ -227,7 +226,7 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 		      SELECT 1 FROM trigger_queue AS p
 		      WHERE p.pipeline_id = trigger_queue.pipeline_id
 		        AND p.job_name = trigger_queue.job_name AND p.status = 'pending'
-		        AND p.rerun_of IS trigger_queue.rerun_of AND p.rerun_build IS trigger_queue.rerun_build
+		        AND p.rerun_of IS trigger_queue.rerun_of
 		  )
 	`, s.pipelineID)
 	if err != nil {
@@ -236,13 +235,13 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 
 	// Whatever is left goes back to pending so it is claimed again. Several
 	// builds of one job may have been in flight (max_in_flight), and only one
-	// pending row per job — and per retried build — is allowed, so they
+	// pending row per job — and per retried run — is allowed, so they
 	// collapse into one — which is right: the job needs to run, not to run N times.
 	_, err = s.db.ExecContext(ctx, `
 		DELETE FROM trigger_queue
 		WHERE pipeline_id = ? AND status = 'running' AND rowid NOT IN (
 			SELECT MIN(rowid) FROM trigger_queue
-			WHERE pipeline_id = ? AND status = 'running' GROUP BY job_name, rerun_of, rerun_build
+			WHERE pipeline_id = ? AND status = 'running' GROUP BY job_name, rerun_of
 		)
 	`, s.pipelineID, s.pipelineID)
 	if err != nil {

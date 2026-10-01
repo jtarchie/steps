@@ -268,14 +268,14 @@ func (s *Store) RecordConsumedMark(ctx context.Context, jobName, resourceName st
 	return nil
 }
 
-// RecordRunInput remembers that one build of a run was created with this
-// version, bound under this get.
-func (s *Store) RecordRunInput(ctx context.Context, runID, buildID, inputName, resourceName, versionJSON string) error {
+// RecordRunInput remembers that a run was created with this version, bound
+// under this get.
+func (s *Store) RecordRunInput(ctx context.Context, runID, inputName, resourceName, versionJSON string) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO run_inputs (run_id, build_id, input_name, resource_name, version_json)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (run_id, build_id, input_name) DO NOTHING
-	`, runID, buildID, inputName, resourceName, versionJSON)
+		INSERT INTO run_inputs (run_id, input_name, resource_name, version_json)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (run_id, input_name) DO NOTHING
+	`, runID, inputName, resourceName, versionJSON)
 	if err != nil {
 		return fmt.Errorf("could not record the inputs of run %q: %w", runID, err)
 	}
@@ -283,15 +283,15 @@ func (s *Store) RecordRunInput(ctx context.Context, runID, buildID, inputName, r
 	return nil
 }
 
-// RunInputs reports the versions a run's builds were created with.
+// RunInputs reports the versions a run was created with.
 func (s *Store) RunInputs(ctx context.Context, runID string) ([]store.RunInput, error) {
 	return collect(ctx, s.db, "the inputs of run "+runID, `
-		SELECT i.build_id, i.input_name, i.resource_name, i.version_json FROM run_inputs i
+		SELECT i.input_name, i.resource_name, i.version_json FROM run_inputs i
 		JOIN runs r ON r.id = i.run_id
 		WHERE i.run_id = $1 AND r.pipeline_id = $2
 	`, []any{runID, s.pipelineID}, func(rows *sql.Rows) (store.RunInput, error) {
 		var one store.RunInput
 
-		return one, rows.Scan(&one.BuildID, &one.Input, &one.Resource, &one.Version)
+		return one, rows.Scan(&one.Input, &one.Resource, &one.Version)
 	})
 }

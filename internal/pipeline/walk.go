@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/jtarchie/steps/internal/agent"
@@ -47,13 +46,9 @@ type planWalk struct {
 	allowGetTrigger bool
 
 	// build names the build this walk's steps belong to, for the resume
-	// record: "<run>#<set>" inside a triggered build, the bare run id before
+	// record: "<run>#0" inside the triggered build, the bare run id before
 	// the first get.
 	build string
-
-	// failedRoot is the tree of the last triggered build that failed, which
-	// the run's row is pointed back at once a later build's tree is removed.
-	failedRoot string
 
 	index            int
 	parentHash       string
@@ -66,11 +61,9 @@ type planWalk struct {
 	visits map[int]int
 }
 
-// runSteps executes steps in order. A `get` step fans out: for each version
-// it selects (a single version normally, or every version returned by check
-// when version:every is set), that version triggers its own build of the
-// remainder of the plan — see runTriggeredBuild. It always terminates this
-// loop, since it delegates the rest of the plan to its triggered build(s).
+// runSteps executes steps in order. A `get` step triggers the build of the
+// version this run was created with — see runTriggeredBuild — and always
+// terminates this loop, since it delegates the rest of the plan to it.
 // A `task`/`put`/`agent` step is handled by runNonGetStep; `put`/`agent`
 // steps are never looked up in skippable and always execute.
 func runSteps(ctx context.Context, w planWalk, steps []config.Step) error {
@@ -183,17 +176,6 @@ func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config
 	return false, nil
 }
 
-// buildSuffix names a resume skip's build. Only inside a triggered build: two
-// builds of a fan-out skip steps of the same name, and the run-level line is
-// matched as-is elsewhere.
-func buildSuffix(runID, build string) string {
-	if set := strings.TrimPrefix(build, runID); set != "" {
-		return " [build " + set + "]"
-	}
-
-	return ""
-}
-
 // skipCompleted skips a plan step a previous attempt of this run already
 // finished, advancing the index. It reports whether it skipped.
 func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) bool {
@@ -204,7 +186,7 @@ func (w *planWalk) skipCompleted(ctx context.Context, step config.Step) bool {
 		return false
 	}
 
-	notef(ctx, "skip: %s (already succeeded)%s", name, buildSuffix(resume.id, w.build))
+	notef(ctx, "skip: %s (already succeeded)", name)
 	slog.InfoContext(ctx, "job.skip", "index", w.index, "build", w.build, "reason", "resume", "step", name)
 	recordExecution(ctx, name)
 

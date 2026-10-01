@@ -44,13 +44,13 @@ func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason string) er
 	return nil
 }
 
-// EnqueueRerunJob queues a retry of one build of a recorded run.
-func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID string, build int) error {
+// EnqueueRerunJob queues a retry of a recorded run.
+func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID string) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO trigger_queue (pipeline_id, job_name, reason, manual, rerun_of, rerun_build, status, enqueued_at)
-		VALUES ($1, $2, $3, TRUE, $4, $5, 'pending', $6)
-		ON CONFLICT (pipeline_id, rerun_of, rerun_build) WHERE status = 'pending' AND rerun_of IS NOT NULL DO NOTHING
-	`, s.pipelineID, jobName, clean(reason), runID, build, now())
+		INSERT INTO trigger_queue (pipeline_id, job_name, reason, manual, rerun_of, status, enqueued_at)
+		VALUES ($1, $2, $3, TRUE, $4, 'pending', $5)
+		ON CONFLICT (pipeline_id, rerun_of) WHERE status = 'pending' AND rerun_of IS NOT NULL DO NOTHING
+	`, s.pipelineID, jobName, clean(reason), runID, now())
 	if err != nil {
 		return fmt.Errorf("could not queue a rerun of %q: %w", runID, err)
 	}
@@ -63,17 +63,16 @@ func (s *Store) QueuedTrigger(ctx context.Context, id int64) (store.QueuedTrigge
 	var (
 		trigger store.QueuedTrigger
 		rerun   sql.NullString
-		build   sql.NullInt64
 	)
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT manual, rerun_of, rerun_build FROM trigger_queue WHERE id = $1 AND pipeline_id = $2
-	`, id, s.pipelineID).Scan(&trigger.Manual, &rerun, &build)
+		SELECT manual, rerun_of FROM trigger_queue WHERE id = $1 AND pipeline_id = $2
+	`, id, s.pipelineID).Scan(&trigger.Manual, &rerun)
 	if err != nil {
 		return store.QueuedTrigger{}, fmt.Errorf("could not read queue row %d: %w", id, err)
 	}
 
-	trigger.RerunOf, trigger.RerunBuild = rerun.String, int(build.Int64)
+	trigger.RerunOf = rerun.String
 
 	return trigger, nil
 }
@@ -184,7 +183,6 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 			      WHERE p.pipeline_id = trigger_queue.pipeline_id
 			        AND p.job_name = trigger_queue.job_name AND p.status = 'pending'
 			        AND p.rerun_of IS NOT DISTINCT FROM trigger_queue.rerun_of
-			        AND p.rerun_build IS NOT DISTINCT FROM trigger_queue.rerun_build
 			  )
 		`, s.pipelineID)
 		if err != nil {
@@ -195,7 +193,7 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 			DELETE FROM trigger_queue
 			WHERE pipeline_id = $1 AND status = 'running' AND id NOT IN (
 				SELECT MIN(id) FROM trigger_queue
-				WHERE pipeline_id = $1 AND status = 'running' GROUP BY job_name, rerun_of, rerun_build
+				WHERE pipeline_id = $1 AND status = 'running' GROUP BY job_name, rerun_of
 			)
 		`, s.pipelineID)
 		if err != nil {

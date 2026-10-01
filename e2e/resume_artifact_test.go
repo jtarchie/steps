@@ -133,80 +133,10 @@ func TestResumeContinuesFromTheArtifactTheSkippedStepsChanged(t *testing.T) {
 				t.Errorf("the retried step did not see the change the skipped step made: seen.log = %q", got)
 			}
 
-			if n := strings.Count(out, "skip: repo (already fetched) [build #0]\n"); n != 1 {
+			if n := strings.Count(out, "skip: repo (already fetched)\n"); n != 1 {
 				t.Errorf("the kept get was reported %d times in the documented form, want once:\n%s", n, out)
 			}
 		})
-	}
-}
-
-// TestResumeKeepsTheLastBuildsArtifactWhenEarlierBuildsFinished: a resume
-// has one tree, the last build's, and every build of it is handed that tree.
-// A finished earlier build fetching again would put ITS version over the
-// artifact the last build is continuing from.
-//
-// The put keeps build #0's chain out of the step cache, which would otherwise
-// skip it whole and hide a fetch it should not make.
-func TestResumeKeepsTheLastBuildsArtifactWhenEarlierBuildsFinished(t *testing.T) {
-	dir := t.TempDir()
-
-	versions := filepath.Join(dir, "versions.json")
-	writePipelineFile(t, versions, `[{"n":"one"},{"n":"two"}]`)
-
-	path := writePipeline(t, dir, artifactResumePipeline(dir, versions,
-		"  - get: repo\n    resource: ticks\n    version: every", "  - put: publication\n    inputs: [repo]"))
-
-	runID, _ := failThenCapture(t, path)
-	assertLineCount(t, filepath.Join(dir, "fetches.log"), 2)
-
-	writePipelineFile(t, filepath.Join(dir, "fixed"), "")
-
-	err := cli.Run([]string{"run", path, "--resume", runID})
-	if err != nil {
-		t.Fatalf("resume failed: %v", err)
-	}
-
-	assertLineCount(t, filepath.Join(dir, "fetches.log"), 2)
-	assertLineCount(t, filepath.Join(dir, "change.log"), 2)
-
-	lines := strings.Split(strings.TrimSpace(readFileString(t, filepath.Join(dir, "seen.log"))), "\n")
-	if last := lines[len(lines)-1]; last != "changed two" {
-		t.Errorf("build #1 continued from %q, want its own changed artifact; seen.log = %q", last, lines)
-	}
-}
-
-// TestResumeContinuesAnEarlierBuildALaterGreenOneFollowed: a green build's
-// tree is removed, so the run has to name the failed build's tree again, or a
-// resume of the failure has nothing to continue from.
-func TestResumeContinuesAnEarlierBuildALaterGreenOneFollowed(t *testing.T) {
-	dir := t.TempDir()
-
-	versions := filepath.Join(dir, "versions.json")
-	writePipelineFile(t, versions, `[{"n":"two"},{"n":"one"}]`)
-
-	path := writePipeline(t, dir, artifactResumePipeline(dir, versions, "  - get: repo\n    resource: ticks\n    version: every", ""))
-
-	runID, root := failThenCapture(t, path)
-	assertLineCount(t, filepath.Join(dir, "fetches.log"), 2)
-
-	_, err := os.Stat(filepath.Join(root, "artifacts", "repo", "changed.txt"))
-	if err != nil {
-		t.Fatalf("the run names a tree without the failed build's change: %v", err)
-	}
-
-	writePipelineFile(t, filepath.Join(dir, "fixed"), "")
-
-	err = cli.Run([]string{"run", path, "--resume", runID})
-	if err != nil {
-		t.Fatalf("resume failed: %v", err)
-	}
-
-	assertLineCount(t, filepath.Join(dir, "fetches.log"), 2)
-	assertLineCount(t, filepath.Join(dir, "change.log"), 2)
-
-	lines := strings.Split(strings.TrimSpace(readFileString(t, filepath.Join(dir, "seen.log"))), "\n")
-	if last := lines[len(lines)-1]; last != "changed two" {
-		t.Errorf("build #0 continued from %q, want its own changed artifact; seen.log = %q", last, lines)
 	}
 }
 
@@ -245,7 +175,7 @@ func TestResumeRerunsAJobHookAfterEveryBuildFinished(t *testing.T) {
 	assertLineCount(t, filepath.Join(dir, "seen.log"), 1)
 	assertLineCount(t, filepath.Join(dir, "fetches.log"), 2)
 
-	for _, want := range []string{"skip: change (already succeeded) [build #0]\n", "skip: fragile (already succeeded) [build #0]\n"} {
+	for _, want := range []string{"skip: change (already succeeded)\n", "skip: fragile (already succeeded)\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the resume did not say %q:\n%s", want, out)
 		}
@@ -260,77 +190,6 @@ func TestResumeRerunsAJobHookAfterEveryBuildFinished(t *testing.T) {
 	_, err := os.Stat(root)
 	if err == nil {
 		t.Errorf("the resume recreated the removed tree %s rather than fetching into a fresh one", root)
-	}
-}
-
-// TestResumeDoesNotFailAFinishedBuildOverAGetItsTreeLacks: the kept tree is
-// the last unfinished build's, which stopped before its second get, so that
-// get's artifact is not in it. A finished build keeping that get runs nothing
-// that reads it, and must not fail the resume over it.
-func TestResumeDoesNotFailAFinishedBuildOverAGetItsTreeLacks(t *testing.T) {
-	dir := t.TempDir()
-
-	versions := filepath.Join(dir, "versions.json")
-	writePipelineFile(t, versions, `[{"n":"one"},{"n":"two"}]`)
-
-	path := writePipeline(t, dir, artifactResumePipeline(dir, versions,
-		"  - get: repo\n    resource: ticks\n    version: every",
-		"  - get: other\n    resource: ticks\n  - put: publication\n    inputs: [repo]"))
-
-	runID, _ := failThenCapture(t, path)
-
-	writePipelineFile(t, filepath.Join(dir, "fixed"), "")
-
-	out := captureStdout(t, func() {
-		err := cli.Run([]string{"run", path, "--resume", runID})
-		if err != nil {
-			t.Errorf("resume failed: %v", err)
-		}
-	})
-
-	if !strings.Contains(out, "skip: other (already fetched) [build #0]\n") {
-		t.Errorf("build #0 did not keep its second get:\n%s", out)
-	}
-}
-
-// TestResumeRefusesTwoBuildsWithWorkLeft: two builds that both got partway
-// cannot continue in the one tree a run keeps. The refusal comes before the
-// run is put back in flight, so the job's on_failure does not page anybody
-// over a command that was turned away.
-func TestResumeRefusesTwoBuildsWithWorkLeft(t *testing.T) {
-	dir := t.TempDir()
-
-	versions := filepath.Join(dir, "versions.json")
-	writePipelineFile(t, versions, `[{"n":"two"},{"n":"three"}]`)
-
-	path := writePipeline(t, dir, artifactResumePipeline(dir, versions, "  - get: repo\n    resource: ticks\n    version: every", ""))
-
-	runID, _ := failThenCapture(t, path)
-	assertLineCount(t, filepath.Join(dir, "fetches.log"), 2)
-	assertLineCount(t, filepath.Join(dir, "notified.log"), 1)
-
-	var err error
-
-	out := captureStdout(t, func() {
-		err = cli.Run([]string{"run", path, "--resume", runID})
-	})
-
-	if err == nil {
-		t.Fatalf("the resume continued two unfinished builds in one tree:\n%s", out)
-	}
-
-	for _, want := range []string{"#0", "--pin"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not name %q: %v", want, err)
-		}
-	}
-
-	assertLineCount(t, filepath.Join(dir, "fetches.log"), 2)
-	assertLineCount(t, filepath.Join(dir, "change.log"), 2)
-	assertLineCount(t, filepath.Join(dir, "notified.log"), 1)
-
-	if strings.Contains(out, "resume with:") {
-		t.Errorf("a refused resume offered itself again:\n%s", out)
 	}
 }
 

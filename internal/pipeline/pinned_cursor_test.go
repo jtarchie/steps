@@ -79,7 +79,7 @@ jobs:
 	// The check reports v1..v3; the job builds them all (mark = 3).
 	writeFixture(t, feed, `[{"n":"v1"},{"n":"v2"},{"n":"v3"}]`)
 
-	err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
+	err = drainJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st)
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
@@ -88,7 +88,7 @@ jobs:
 	// v4 and v5 arrive. An operator pins v4 — owed work, above the mark.
 	writeFixture(t, feed, `[{"n":"v1"},{"n":"v2"},{"n":"v3"},{"n":"v4"},{"n":"v5"}]`)
 
-	err = RunJob(ctx, cfg, &cfg.Jobs[0], map[string]string{"n": "v4"}, provider, st, false)
+	err = drainJob(ctx, cfg, &cfg.Jobs[0], map[string]string{"n": "v4"}, provider, st)
 	if err != nil {
 		t.Fatalf("pinned run: %v", err)
 	}
@@ -109,7 +109,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
+	err = drainJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st)
 	if err != nil {
 		t.Fatalf("final run: %v", err)
 	}
@@ -186,7 +186,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
+	err = drainJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st)
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
 	}

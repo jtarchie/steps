@@ -127,16 +127,17 @@ func replayIndex(job *config.Job, fromStep string) (int, error) {
 }
 
 // refuseReplayAcrossGet refuses a --from that sits after a get: every step
-// behind a get runs inside one build per version, and a replay has no way to
-// say which build it means.
+// behind a get runs inside the build that get triggered, which a replay does
+// not rebuild.
 //
-// ponytail: refused rather than chosen. Upgrade: a --build N that forks that
-// build's steps.
+// ponytail: refused rather than rebuilt. Upgrade: a run is one build now, so a
+// replay could bind the run's recorded inputs (as resumeInputSets does) and
+// start inside that build.
 func refuseReplayAcrossGet(job *config.Job, from int, fromStep string) error {
 	for i := range from {
 		if get := job.Plan[i].Get; get != "" {
 			return fmt.Errorf(
-				"cannot replay from %q: it runs after step %d (get %q), which builds once per version, and a replay cannot choose one of those builds",
+				"cannot replay from %q: it runs after step %d (get %q), inside the build that get triggered, and a replay can only start before the plan's first get",
 				fromStep, i, get)
 		}
 	}

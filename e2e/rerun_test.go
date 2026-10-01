@@ -61,8 +61,8 @@ jobs:
 		t.Fatalf("FindRunRow(%s) = %v, %v", second, ok, err)
 	}
 
-	if second == first || run.RerunOf != first || run.RerunOfBuild != -1 {
-		t.Errorf("rerun %s records rerun of %q build %d, want all of %q (-1)", second, run.RerunOf, run.RerunOfBuild, first)
+	if second == first || run.RerunOf != first {
+		t.Errorf("rerun %s records rerun of %q, want %q", second, run.RerunOf, first)
 	}
 
 	// Rerunning a rerun reruns the original, as Concourse's RerunBuild does.
@@ -109,7 +109,7 @@ jobs:
 
 	mustRun(t, "run", path, "--job", "build", "--pin", "n=3")
 	mustRun(t, "run", path, "--rerun", latestRunID(t, path))
-	mustRun(t, "run", path, "--job", "build")
+	mustRunBacklog(t, "run", path, "--job", "build")
 
 	// 3 is not built again: its chain is green, so the cache skips it.
 	if got := strings.Join(strings.Fields(readFileString(t, ran)), " "); got != "3 3 1 2" {
@@ -232,8 +232,8 @@ jobs:
 	}
 }
 
-// TestRerunOfAFanOutRunRebuildsEveryBuild: a version: every run holds a build per version, and Retry is "this run again, with the same inputs" — every build, each against its own version, nothing that arrived since. <run>#<n> narrows it to one build, which is Concourse's rerun of one build.
-func TestRerunOfAFanOutRunRebuildsEveryBuild(t *testing.T) {
+// TestRerunOfAnEveryRunRebuildsItsOneVersion: a version: every run is one build of one version, so Retry is that version again — not its siblings, which are runs of their own, and nothing that arrived since.
+func TestRerunOfAnEveryRunRebuildsItsOneVersion(t *testing.T) {
 	dir := t.TempDir()
 
 	versions := filepath.Join(dir, "versions.json")
@@ -266,12 +266,13 @@ jobs:
 	mustRun(t, "run", path, "--job", "build")
 	first := latestRunID(t, path)
 
+	mustRun(t, "run", path, "--job", "build")
+
 	writePipelineFile(t, versions, `[{"n":"1"},{"n":"2"},{"n":"3"}]`)
 
 	mustRun(t, "run", path, "--rerun", first)
-	mustRun(t, "run", path, "--rerun", first+"#1")
 
-	if got := strings.Join(strings.Fields(readFileString(t, ran)), " "); got != "1 2 1 2 2" {
-		t.Errorf("builds read %q, want %q: the whole run again, then its second build alone, and never 3", got, "1 2 1 2 2")
+	if got := strings.Join(strings.Fields(readFileString(t, ran)), " "); got != "1 2 1" {
+		t.Errorf("builds read %q, want %q: the first run's one version again, never its sibling or 3", got, "1 2 1")
 	}
 }

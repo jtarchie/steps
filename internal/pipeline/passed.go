@@ -208,7 +208,7 @@ func recordPutOrder(ctx context.Context, st store.Versions, resource string, ver
 // there would either suppress a real trigger or show a stale-looking
 // "latest" for a resource the poller already tracks correctly.
 //
-// pinned is the same skip fanOutGet's takeSet gives a --pin'd run (see
+// pinned is the same skip takeBuild gives a --pin'd run (see
 // planWalk.pinned): naming a version is an instruction outside the normal
 // discovery flow, so an older, explicitly-pinned fetch must not overwrite an
 // unpolled resource's displayed "last checked" version with something older
@@ -245,8 +245,8 @@ func recordResolvedVersion(ctx context.Context, st store.Store, cfg *config.Conf
 // downstream fan-in can ask whether they were green TOGETHER rather than
 // merely each-at-some-point.
 //
-// A run fans out into one build per input set, and each records its own
-// versions under its own id (see runTriggeredBuild). Recording once per JOB
+// A run is one build of one input set, and records its versions under its
+// own id (see runTriggeredBuild). Recording once per JOB
 // instead was wrong in both directions: it correlated versions from different
 // sets that never ran together, and — the map being keyed per resource — it
 // kept only the last set's, so every earlier set's versions stayed invisible

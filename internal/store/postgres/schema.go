@@ -9,7 +9,7 @@ package postgres
 //
 // Its own counter, not the sqlite one: the two schemas are written separately
 // and change separately.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -187,7 +187,6 @@ CREATE TABLE IF NOT EXISTS runs (
     finished_at TIMESTAMPTZ,
     parent_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
     rerun_of       TEXT REFERENCES runs(id) ON DELETE SET NULL,
-    rerun_of_build INTEGER,
     revision_id BIGINT REFERENCES pipeline_revisions(id) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(pipeline_id, job_name, started_at);
@@ -203,7 +202,6 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
     reason      TEXT NOT NULL,
     manual      BOOLEAN NOT NULL DEFAULT FALSE,
     rerun_of    TEXT REFERENCES runs(id) ON DELETE CASCADE,
-    rerun_build INTEGER,
     status      TEXT NOT NULL,
     enqueued_at TIMESTAMPTZ NOT NULL,
     started_at  TIMESTAMPTZ,
@@ -213,7 +211,7 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_job
     ON trigger_queue(pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_rerun
-    ON trigger_queue(pipeline_id, rerun_of, rerun_build) WHERE status = 'pending' AND rerun_of IS NOT NULL;
+    ON trigger_queue(pipeline_id, rerun_of) WHERE status = 'pending' AND rerun_of IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_trigger_queue_rerun_of ON trigger_queue(rerun_of);
 CREATE INDEX IF NOT EXISTS idx_trigger_queue_job_status ON trigger_queue(pipeline_id, job_name, status);
 
@@ -332,11 +330,10 @@ CREATE INDEX IF NOT EXISTS idx_agent_usage_node ON agent_usage(pipeline_id, node
 
 CREATE TABLE IF NOT EXISTS run_inputs (
     run_id        TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    build_id      TEXT NOT NULL,
     input_name    TEXT NOT NULL,
     resource_name TEXT NOT NULL,
     version_json  TEXT NOT NULL,
-    PRIMARY KEY (run_id, build_id, input_name)
+    PRIMARY KEY (run_id, input_name)
 );
 
 -- node_hash is NULL for a hook, and MATCH SIMPLE exempts a row whose key has

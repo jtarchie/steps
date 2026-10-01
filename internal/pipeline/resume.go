@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strconv"
-	"strings"
 	"sync/atomic"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -30,14 +28,10 @@ type resumeState struct {
 	done map[doneKey]string
 	// resuming is true when this run continues a previous one.
 	resuming bool
-	// refetch is set when every build of the run being resumed finished, so
+	// refetch is set when the build of the run being resumed finished, so
 	// only the job's own steps failed: no get keeps its artifact then (see
 	// CheckResumable).
 	refetch bool
-	// finished names the builds CheckResumable found complete: nothing of
-	// theirs runs again, so an artifact missing from the kept tree is no
-	// reason to fail one.
-	finished map[string]bool
 	// nextStepID mints display-tree ids for this run (see steptree.go).
 	// Atomic because a fan-out block starts its cells concurrently.
 	nextStepID atomic.Int64
@@ -46,8 +40,8 @@ type resumeState struct {
 type resumeKey struct{}
 
 // doneKey is a step's position: an index is relative to the walk it ran in,
-// and every triggered build's remainder counts from 0, so it names a step only
-// together with its build.
+// and the walk after a get counts from 0 again, so it names a step only
+// together with the walk's build id.
 type doneKey struct {
 	build string
 	index int
@@ -102,10 +96,6 @@ func (r *resumeState) progressedPast(build string, index int) bool {
 	return false
 }
 
-func (r *resumeState) buildFinished(build string) bool {
-	return r != nil && r.finished[build]
-}
-
 // resumeFacets is what CheckResumable reads: the run, its steps, and the
 // builds it was created with.
 type resumeFacets interface {
@@ -113,29 +103,17 @@ type resumeFacets interface {
 	store.Versions
 }
 
-// CheckResumable refuses, before anything runs, a resume the one tree it
-// continues in cannot serve, and tells the resume on ctx which builds
-// finished. It reports fresh when every build did: the gets fetch again rather
-// than keep, into a new tree rather than the removed one the row still names.
-//
-// A run keeps ONE tree: every build of a fan-out re-points the run at its
-// own, the fan-out is sequential, and a green build's tree is removed and the
-// row pointed back at the last one that failed — so the row names the last
-// unfinished build's, and a resume hands that tree to every build it
-// continues. A build that got partway keeps its gets' artifacts rather than
-// fetching again (the steps it skips changed them), so two such builds, or one
-// plus an earlier build that would fetch into the tree ahead of it, would each
-// run on bytes that are not theirs. What is allowed: finished builds around
-// one unfinished build that is the last unfinished, or builds none of which
-// got anywhere.
+// CheckResumable refuses, before anything runs, a resume whose kept tree is
+// gone while its build still has work left — a get kept rather than fetched
+// again needs the artifact the skipped steps changed. It reports fresh when
+// the build finished and only the job's own steps failed (a hook, an
+// assertion): a green build's tree is removed, so there is nothing to keep,
+// and the gets fetch again into a new tree rather than the removed one the
+// row still names.
 //
 // It can refuse falsely, loudly: a to: jump, a tolerated try: failure or a
 // chain skip (a cache hit records only the step it hit on) leaves a step
 // unrecorded, so a finished build reads as unfinished.
-//
-// ponytail: one tree per run. Upgrade: record each build's root (a run_builds
-// row, a schemaVersion bump) and have Reuse map build id to tree, which
-// retires this check.
 func CheckResumable(ctx context.Context, st resumeFacets, runID string, job *config.Job) (bool, error) {
 	run, err := findRun(ctx, st, runID)
 	if err != nil {
@@ -152,35 +130,18 @@ func CheckResumable(ctx context.Context, st resumeFacets, runID string, job *con
 		return false, fmt.Errorf("could not read what run %q was created with: %w", runID, err)
 	}
 
-	builds := countBuilds(runID, inputs)
 	done := foldRunSteps(steps)
-	needed := remainderSteps(job)
+	build := triggeredBuild(runID)
 
-	err = refuseSharedWorkspace(runID, done, builds, needed)
-	if err != nil {
-		return false, err
-	}
-
-	record := runRecord{runID: runID, done: done, needed: needed}
-	state := resumeFrom(ctx)
-
-	if state != nil {
-		state.finished = record.finishedBuilds(builds)
-	}
-
-	// Every build finished, so what failed was the job's own — a hook, an
-	// assertion. A green build's tree is removed, so there is nothing to keep
-	// and nothing to refuse over: the gets fetch again, no step runs on what
-	// they fetch, and the job's hooks see real artifacts.
-	if record.allFinished(builds) {
-		if state != nil {
+	if len(inputs) > 0 && buildFinished(done, build, remainderSteps(job)) {
+		if state := resumeFrom(ctx); state != nil {
 			state.refetch = true
 		}
 
 		return true, nil
 	}
 
-	return false, refuseMissingWorkspace(runID, run.Workspace, done, builds)
+	return false, refuseMissingWorkspace(runID, run.Workspace, done, build)
 }
 
 // remainderSteps is the indices a triggered build records, relative to the
@@ -206,29 +167,10 @@ func remainderSteps(job *config.Job) []int {
 	return nil
 }
 
-// runRecord is one run's completed steps, read per build: a progressed build
-// has a recorded step, a finished one has every needed step recorded.
-type runRecord struct {
-	runID  string
-	done   map[doneKey]string
-	needed []int
-}
-
-func (r runRecord) progressed(n int) bool {
-	build := fmt.Sprintf("%s#%d", r.runID, n)
-	for key := range r.done {
-		if key.build == build {
-			return true
-		}
-	}
-
-	return false
-}
-
-func (r runRecord) finished(n int) bool {
-	build := fmt.Sprintf("%s#%d", r.runID, n)
-	for _, i := range r.needed {
-		if _, ok := r.done[doneKey{build, i}]; !ok {
+// buildFinished reports whether every needed step of build is recorded done.
+func buildFinished(done map[doneKey]string, build string, needed []int) bool {
+	for _, i := range needed {
+		if _, ok := done[doneKey{build, i}]; !ok {
 			return false
 		}
 	}
@@ -236,87 +178,13 @@ func (r runRecord) finished(n int) bool {
 	return true
 }
 
-func (r runRecord) finishedBuilds(builds int) map[string]bool {
-	finished := map[string]bool{}
-
-	for n := range builds {
-		if r.finished(n) {
-			finished[fmt.Sprintf("%s#%d", r.runID, n)] = true
-		}
-	}
-
-	return finished
-}
-
-// countBuilds is how many builds the run created, counted as
-// recordedInputSets rebuilds them: from #0 to the first one with no inputs.
-func countBuilds(runID string, inputs []store.RunInput) int {
-	recorded := map[string]bool{}
-	for _, input := range inputs {
-		recorded[input.BuildID] = true
-	}
-
-	builds := 0
-	for recorded[fmt.Sprintf("%s#%d", runID, builds)] {
-		builds++
-	}
-
-	return builds
-}
-
-// allFinished is false for a run with no builds: one that failed before its
-// first get has no tree to keep either way.
-func (r runRecord) allFinished(builds int) bool {
-	for n := range builds {
-		if !r.finished(n) {
-			return false
-		}
-	}
-
-	return builds > 0
-}
-
-// refuseSharedWorkspace is CheckResumable's rule over one run's record. The
-// tree it continues in is the last unfinished build's: finished builds after
-// it had theirs removed.
-func refuseSharedWorkspace(runID string, done map[doneKey]string, builds int, needed []int) error {
-	record := runRecord{runID: runID, done: done, needed: needed}
-
-	last := builds - 1
-	for last >= 0 && record.finished(last) {
-		last--
-	}
-
-	for n := range last {
-		if record.progressed(n) && !record.finished(n) {
-			return fmt.Errorf(
-				"cannot resume run %q: build #%d stopped partway, and a run keeps only its last unfinished build's workspace — start a new run with --pin <field>=<value> to rebuild that version",
-				runID, n)
-		}
-	}
-
-	if last < 0 || !record.progressed(last) {
-		return nil
-	}
-
-	for n := range last {
-		if !record.finished(n) {
-			return fmt.Errorf(
-				"cannot resume run %q: build #%d stopped partway and build #%d has not run, and both would continue in the one workspace a run keeps — start a new run with --pin <field>=<value> to rebuild those versions",
-				runID, last, n)
-		}
-	}
-
-	return nil
-}
-
 // refuseMissingWorkspace refuses a resume that would keep artifacts from a
 // tree that is no longer there.
-func refuseMissingWorkspace(runID, root string, done map[doneKey]string, builds int) error {
+func refuseMissingWorkspace(runID, root string, done map[doneKey]string, build string) error {
 	kept := false
 
 	for key := range done {
-		if n, ok := buildIndex(runID, key.build); ok && n < builds {
+		if key.build == build {
 			kept = true
 
 			break
@@ -520,7 +388,7 @@ func recordRunIdentity(
 	}
 
 	if rerun := rerunFrom(ctx); rerun != nil {
-		err = st.RecordRunRerun(ctx, resume.id, rerun.of, rerun.build)
+		err = st.RecordRunRerun(ctx, resume.id, rerun.of)
 		if err != nil {
 			return fmt.Errorf("job %q: %w", jobName, err)
 		}
@@ -529,23 +397,22 @@ func recordRunIdentity(
 	return nil
 }
 
-// resumeInputSets replaces a resume's freshly resolved sets with the builds
-// the run was created with, each binding every get to the version its record
-// holds — fixed gets and pins included. This is fly rerun-build's
+// resumeInputSets replaces a resume's freshly resolved set with the one the
+// run was created with, binding every get to the version its record holds —
+// fixed gets and pins included. This is fly rerun-build's
 // AdoptRerunInputsAndPipes: a rerun copies every row of the original build's
 // build_resource_config_version_inputs and starts from them, never from what
-// the check reports now. It is also what makes a build's completed steps
-// trustworthy — they are filed under "<run>#<set>", and are that build's only
-// if set n binds what build n was created with.
+// the check reports now. It is also what makes the build's completed steps
+// trustworthy: they are its only if the set binds what it was created with.
 //
 // A recorded version no longer in the resource's history — version_history:
-// pruned it — leaves that build with nothing to rebuild; Concourse marks the
-// rerun aborted ("chosen version of input X not available") rather than
-// choose another, and so does this, before anything runs. A build that
-// completed steps but recorded no inputs is refused the same way: its record
-// cannot be placed, so nothing may be skipped on its behalf. A run that
-// failed before it created any build has no record and resolves as a new run
-// would, taking and recording as it goes.
+// pruned it — leaves nothing to rebuild; Concourse marks the rerun aborted
+// ("chosen version of input X not available") rather than choose another,
+// and so does this, before anything runs. A build that completed steps but
+// recorded no inputs is refused the same way: its record cannot be placed, so
+// nothing may be skipped on its behalf. A run that failed before its first get
+// has no record and resolves as a new run would, taking and recording as it
+// goes.
 //
 // The read is NOT best-effort, unlike the write that fills the table: a resume
 // that cannot tell which versions it is continuing would silently select the
@@ -562,81 +429,52 @@ func resumeInputSets(ctx context.Context, st store.Versions, resolution setResol
 		return setResolution{}, fmt.Errorf("could not read what run %q was created with: %w", state.id, err)
 	}
 
-	sets, err := recordedInputSets(ctx, state.id, inputs, history)
+	if len(inputs) == 0 {
+		return resolution, refuseUnrecordedBuild(state)
+	}
+
+	set, err := recordedInputSet(state.id, inputs, history)
 	if err != nil {
 		return setResolution{}, err
 	}
 
-	err = refuseUnrecordedBuilds(state, len(sets))
-	if err != nil {
-		return setResolution{}, err
-	}
-
-	if len(sets) == 0 {
-		return resolution, nil
-	}
-
-	resolution.sets = sets
+	resolution.sets = []merkle.InputSet{set}
 	resolution.recorded = true
 
 	return resolution, nil
 }
 
-// recordedInputSets rebuilds the run's builds from their records, in build
-// order, stopping at the first index nothing recorded.
-func recordedInputSets(ctx context.Context, runID string, inputs []store.RunInput, history *resourceHistory) ([]merkle.InputSet, error) {
-	recorded := map[string][]store.RunInput{}
-	for _, input := range inputs {
-		recorded[input.BuildID] = append(recorded[input.BuildID], input)
-	}
+// refuseUnrecordedBuild refuses a resume when the build completed steps but
+// what it was created with was not recorded — the steps before the first get
+// are the bare run id's and bind nothing, so they are not the question.
+func refuseUnrecordedBuild(state *resumeState) error {
+	build := triggeredBuild(state.id)
 
-	var sets []merkle.InputSet
-
-	for i := 0; ; i++ {
-		bindings, ok := recorded[buildIDForSet(ctx, i)]
-		if !ok {
-			return sets, nil
-		}
-
-		set, err := recordedInputSet(runID, i, bindings, history)
-		if err != nil {
-			return nil, err
-		}
-
-		sets = append(sets, set)
-	}
-}
-
-// refuseUnrecordedBuilds refuses a resume when a build completed steps that no
-// rebuilt set could place — the steps before the first get are the bare run
-// id's and bind nothing, so they are not the question.
-func refuseUnrecordedBuilds(state *resumeState, rebuilt int) error {
 	for key := range state.done {
-		if n, ok := buildIndex(state.id, key.build); ok && n >= rebuilt {
+		if key.build == build {
 			return fmt.Errorf(
-				"cannot resume run %q: build #%d completed steps but what it was created with was not recorded — start a new run",
-				state.id, n)
+				"cannot resume run %q: it completed steps but what it was created with was not recorded — start a new run", state.id)
 		}
 	}
 
 	return nil
 }
 
-// recordedInputSet rebuilds one build's set from its record, refusing a
-// version the resource's history no longer holds.
-func recordedInputSet(runID string, index int, bindings []store.RunInput, history *resourceHistory) (merkle.InputSet, error) {
+// recordedInputSet rebuilds the run's set from its record, refusing a version
+// the resource's history no longer holds.
+func recordedInputSet(runID string, bindings []store.RunInput, history *resourceHistory) (merkle.InputSet, error) {
 	set := merkle.InputSet{}
 
 	for _, binding := range bindings {
 		if !history.holds(binding.Resource, binding.Version) {
 			return nil, fmt.Errorf(
-				"cannot resume run %q: build #%d was created with %s %s, which is no longer in the resource's history — start a new run",
-				runID, index, binding.Resource, binding.Version)
+				"cannot resume run %q: it was created with %s %s, which is no longer in the resource's history — start a new run",
+				runID, binding.Resource, binding.Version)
 		}
 
 		version, err := store.DecodeVersion(binding.Version)
 		if err != nil {
-			return nil, fmt.Errorf("cannot resume run %q: build #%d's recorded %s version: %w", runID, index, binding.Resource, err)
+			return nil, fmt.Errorf("cannot resume run %q: its recorded %s version: %w", runID, binding.Resource, err)
 		}
 
 		set[binding.Input] = version
@@ -645,18 +483,10 @@ func recordedInputSet(runID string, index int, bindings []store.RunInput, histor
 	return set, nil
 }
 
-// buildIndex reads the set index out of a build id buildIDForSet named, and
-// reports false for the bare run id — the steps before the first get, which
-// bind no version and belong to no set.
-func buildIndex(runID, buildID string) (int, bool) {
-	rest, ok := strings.CutPrefix(buildID, runID+"#")
-	if !ok {
-		return 0, false
-	}
-
-	n, err := strconv.Atoi(rest)
-
-	return n, err == nil
+// triggeredBuild is the build id run_steps files the steps after a run's get
+// under — the bare run id is the steps before it, and both walks count from 0.
+func triggeredBuild(runID string) string {
+	return runID + "#0"
 }
 
 // findRun reads the run a --resume or --replay names, turning "this pipeline

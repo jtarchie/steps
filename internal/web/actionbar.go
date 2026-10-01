@@ -9,7 +9,7 @@ type barView struct {
 	// Job is the job Trigger starts a new run of; empty offers no Trigger.
 	Job  string
 	Held bool
-	// RunID is the run Retry re-runs, every build of it; Retry is false when
+	// RunID is the run Retry re-runs; Retry is false when
 	// it cannot be: the run is live, or its job is gone.
 	RunID string
 	Retry bool

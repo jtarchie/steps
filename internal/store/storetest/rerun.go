@@ -7,8 +7,8 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// TestARerunRecordsWhichBuildItReran: every RunRow read carries it, since the job's status and the run page both ask; and reaping the original must not take the rerun with it, because a rerun is a run in its own right.
-func (s suite) TestARerunRecordsWhichBuildItReran(t *testing.T) {
+// TestARerunRecordsWhichRunItReran: every RunRow read carries it, since the job's status and the run page both ask; and reaping the original must not take the rerun with it, because a rerun is a run in its own right.
+func (s suite) TestARerunRecordsWhichRunItReran(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -16,14 +16,14 @@ func (s suite) TestARerunRecordsWhichBuildItReran(t *testing.T) {
 
 	startRuns(t, st, "ORIGINAL", "RERUN")
 
-	err := st.RecordRunRerun(ctx, "RERUN", "ORIGINAL", 2)
+	err := st.RecordRunRerun(ctx, "RERUN", "ORIGINAL")
 	if err != nil {
 		t.Fatalf("RecordRunRerun: %v", err)
 	}
 
 	row, ok, err := st.FindRunRow(ctx, "RERUN")
-	if err != nil || !ok || row.RerunOf != "ORIGINAL" || row.RerunOfBuild != 2 {
-		t.Fatalf("FindRunRow = %+v, %v, %v: want a rerun of ORIGINAL build 2", row, ok, err)
+	if err != nil || !ok || row.RerunOf != "ORIGINAL" {
+		t.Fatalf("FindRunRow = %+v, %v, %v: want a rerun of ORIGINAL", row, ok, err)
 	}
 
 	runs, err := st.ListRuns(ctx, "build", 10)
@@ -50,7 +50,7 @@ func (s suite) TestARerunOfAnOldBuildDoesNotBecomeTheJobsStatus(t *testing.T) {
 
 	startRuns(t, st, "OLD", "CURRENT", "RETRYOLD")
 
-	err := st.RecordRunRerun(ctx, "RETRYOLD", "OLD", 0)
+	err := st.RecordRunRerun(ctx, "RETRYOLD", "OLD")
 	if err != nil {
 		t.Fatalf("RecordRunRerun: %v", err)
 	}
@@ -64,7 +64,7 @@ func (s suite) TestARerunOfAnOldBuildDoesNotBecomeTheJobsStatus(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = st.RecordRunRerun(ctx, "RETRYCURRENT", "CURRENT", 0)
+	err = st.RecordRunRerun(ctx, "RETRYCURRENT", "CURRENT")
 	if err != nil {
 		t.Fatalf("RecordRunRerun: %v", err)
 	}
