@@ -170,8 +170,8 @@ func (s *Store) AbortQueuedJob(ctx context.Context, jobName string) (bool, error
 	return affected > 0, nil
 }
 
-// ResetStaleRunning flips this pipeline's running rows back to pending, at
-// daemon startup. Like the sqlite driver's, it assumes it is ALONE: one
+// ResetStaleRunning flips this pipeline's running rows back to pending, and
+// closes its running runs as aborted, at daemon startup. Like the sqlite driver's, it assumes it is ALONE: one
 // `steps web` per state database, and nothing here arbitrates a second.
 func (s *Store) ResetStaleRunning(ctx context.Context) error {
 	err := s.write(ctx, func(tx *sql.Tx) error {
@@ -206,6 +206,14 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 		`, s.pipelineID)
 		if err != nil {
 			return fmt.Errorf("could not reset stale running jobs: %w", err)
+		}
+
+		_, err = tx.ExecContext(ctx, `
+			UPDATE runs SET status = 'aborted', finished_at = $1
+			WHERE pipeline_id = $2 AND status = 'running'
+		`, now(), s.pipelineID)
+		if err != nil {
+			return fmt.Errorf("could not close stale running runs: %w", err)
 		}
 
 		return nil

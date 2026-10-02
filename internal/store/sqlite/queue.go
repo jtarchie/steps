@@ -186,9 +186,10 @@ func (s *Store) AbortQueuedJob(ctx context.Context, jobName string) (bool, error
 	return affected > 0, nil
 }
 
-// ResetStaleRunning flips this pipeline's running rows back to pending —
-// called once at daemon startup so a killed (or gracefully but incompletely
-// shut down) process doesn't strand claimed work forever.
+// ResetStaleRunning flips this pipeline's running rows back to pending, and
+// closes its running runs as aborted — called once at daemon startup so a
+// killed (or gracefully but incompletely shut down) process doesn't strand
+// claimed work, or a run page, forever.
 //
 // It assumes ONE steps process owns a pipeline's queue at a time, and that
 // assumption is now the whole guard. A file lock used to enforce it, so that a
@@ -254,6 +255,18 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 	`, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not reset stale running jobs: %w", err)
+	}
+
+	// The queue row is re-queued; the RUN that held it is over, since its
+	// process is gone, and left running it draws a live build forever.
+	// aborted is what the same process would have written had it been
+	// stopped gently rather than killed.
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE runs SET status = 'aborted', finished_at = ?
+		WHERE pipeline_id = ? AND status = 'running'
+	`, nowNano(), s.pipelineID)
+	if err != nil {
+		return fmt.Errorf("could not close stale running runs: %w", err)
 	}
 
 	return nil

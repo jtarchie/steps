@@ -434,6 +434,50 @@ func (s suite) TestStoreResetStaleRunning(t *testing.T) {
 	mustClaimJob(t, st, "build")
 }
 
+// TestStoreResetStaleRunningClosesRuns: the queue row is re-queued, but the
+// run that held it is over — its process is gone — and a row left "running"
+// keeps a live spinner on it forever. Scoped like the queue: another
+// pipeline's run in the same state file may really be in flight.
+func (s suite) TestStoreResetStaleRunningClosesRuns(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+	neighbour := s.open(t, "neighbour")
+
+	mustStartRuns(ctx, t, st, "build", "STALE001", "DONE0001")
+	mustStartRuns(ctx, t, neighbour, "build", "OTHER001")
+
+	err := st.FinishRun(ctx, "DONE0001", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	err = st.ResetStaleRunning(ctx)
+	if err != nil {
+		t.Fatalf("ResetStaleRunning: %v", err)
+	}
+
+	for _, want := range []struct {
+		st     store.Store
+		id     string
+		status string
+	}{{st, "STALE001", "aborted"}, {st, "DONE0001", "succeeded"}, {neighbour, "OTHER001", "running"}} {
+		run, ok, err := want.st.FindRunRow(ctx, want.id)
+		if err != nil || !ok {
+			t.Fatalf("FindRunRow %s: %v (found %v)", want.id, err, ok)
+		}
+
+		if run.Status != want.status {
+			t.Errorf("run %s is %q, want %q", want.id, run.Status, want.status)
+		}
+
+		if want.status == "aborted" && run.FinishedAt.IsZero() {
+			t.Errorf("run %s was closed with no finish time", want.id)
+		}
+	}
+}
+
 // TestNodeTranscriptRoundTrip covers the transcript store: absent before any
 // save, returned verbatim after, and replaced (not duplicated) on a re-save
 // under the same hash — the same replace-on-re-record shape nodes has.

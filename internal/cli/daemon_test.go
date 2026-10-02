@@ -690,6 +690,52 @@ func TestARestartSkipsAPipelineThisMachineCannotRunAndServesTheRest(t *testing.T
 	}
 }
 
+// A daemon killed mid-build used to leave that run's row reading "running" forever: startup re-queued the job but never closed the run, so the page kept a live spinner on a build no process was running.
+//
+// Not t.Parallel(): a restart reads mcp logins, which live in process environment.
+func TestARestartClosesTheRunAKilledDaemonLeftRunning(t *testing.T) {
+	held := servingDaemon(t)
+	setPipeline(t, held, "app", idlePipeline)
+	held.Close()
+
+	// What a SIGKILL leaves: StartRun happened, FinishRun never did.
+	st, err := sqlite.OpenStore(string(held.state), "app")
+	if err != nil {
+		t.Fatalf("open state store: %v", err)
+	}
+
+	err = st.StartRun(t.Context(), "LEFTOVER", "build", t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	_ = st.Close()
+
+	local := web.NewLocalRunner(nil, nil, 1, false)
+
+	server, err := web.New(nil, local)
+	if err != nil {
+		t.Fatalf("web.New: %v", err)
+	}
+
+	restarted := newDaemon(t.Context(), server, local, held.state, ExecFlags{}, HistoryFlags{}, time.Hour)
+	t.Cleanup(restarted.Close)
+
+	err = restarted.load(t.Context())
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	run, ok, err := served(t, restarted, "app").Store.FindRunRow(t.Context(), "LEFTOVER")
+	if err != nil || !ok {
+		t.Fatalf("FindRunRow: %v (found %v)", err, ok)
+	}
+
+	if run.Status != "aborted" || run.FinishedAt.IsZero() {
+		t.Errorf("the run the killed daemon left behind reads %q (finished %v), want aborted with a finish time", run.Status, run.FinishedAt)
+	}
+}
+
 // brokenOnRestart leaves "app" held and unserved by a restarted daemon, its workspace root read-only.
 func brokenOnRestart(t *testing.T) (*daemon, string) {
 	t.Helper()
