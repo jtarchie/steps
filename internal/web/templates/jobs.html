@@ -15,7 +15,8 @@
     {{end}}{{range .Graph.Nodes}}<a class="dagnode {{.StatusClass}}{{if .Running}} running{{end}}" href="/p/{{$.Nav.Current}}/jobs/{{.Name}}">
       <rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}"></rect>
       <text class="dagname" x="{{.TextX}}" y="{{.NameY}}">{{.Name}}</text>
-      <text class="dagstatus" x="{{.TextX}}" y="{{.StatusY}}">{{.Glyph}} {{.Status}}</text>
+      <text class="dagstatus" x="{{.TextX}}" y="{{.StatusY}}">{{.Glyph}} {{.Status}}{{with .Queued}}<tspan class="dagqueued"> · ○ queued</tspan>{{end}}</text>
+      {{with .Queued}}<title>a run is queued{{if .WaitingOn}}, waiting: {{.WaitingOn}}{{else}}, starting{{end}}</title>{{end}}
     </a>
     {{end}}
   </svg>
@@ -28,12 +29,13 @@
       <tr><th>Job</th><th>Latest run</th><th>Started</th><th class="num">Duration</th><th>Depends on</th><th>State</th></tr>
     </thead>
     <tbody>
-      {{range .Jobs}}
+      {{range $job := .Jobs}}
       <tr>
         <td><a href="/p/{{$.Nav.Current}}/jobs/{{.Name}}">{{.Name}}</a></td>
         <td>
           {{if .HasRun}}<a class="st st-{{statusWord .Latest.Status}}" href="/p/{{$.Nav.Current}}/runs/{{.Latest.ID}}">{{statusWord .Latest.Status}}</a>
-          {{else}}<span class="faint">never ran</span>{{end}}
+          {{else if not .Queued}}<span class="faint">never ran</span>{{end}}
+          {{with .Queued}}{{if $job.HasRun}}<span class="faint" aria-hidden="true">·</span> {{end}}<a class="st st-queued" href="/p/{{$.Nav.Current}}/jobs/{{$job.Name}}/follow?since={{.Since}}" title="{{if .WaitingOn}}waiting: {{.WaitingOn}}{{else}}starting{{end}}">queued<span class="visually-hidden">, {{if .WaitingOn}}waiting: {{.WaitingOn}}{{else}}starting{{end}}</span></a>{{end}}
         </td>
         <td class="dim">{{if .HasRun}}{{agoTag .Latest.StartedAt}}{{else}}—{{end}}</td>
         <td class="num dim">{{if .HasRun}}{{elapsedTag .Latest}}{{else}}—{{end}}</td>
@@ -52,13 +54,14 @@
 <h2 class="eyebrow">Trigger queue</h2>
 <div class="tablewrap">
   <table>
-    <thead><tr><th>Job</th><th>Reason</th><th>Status</th><th>Enqueued</th></tr></thead>
+    <thead><tr><th>Job</th><th>Status</th><th>Waiting on</th><th>Reason</th><th>Enqueued</th></tr></thead>
     <tbody>
       {{range .Queue}}
       <tr>
         <td><a href="/p/{{$.Nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a></td>
-        <td class="dim">{{.Reason}}</td>
         <td><span class="st st-{{statusWord .Status}}">{{statusWord .Status}}</span></td>
+        <td>{{if .WaitingOn}}<span class="waiton"><span aria-hidden="true">⟳ </span>{{.WaitingOn}}</span>{{else}}<span class="faint">—</span>{{end}}</td>
+        <td class="dim">{{.Reason}}</td>
         <td class="dim">{{agoTag .EnqueuedAt}}</td>
       </tr>
       {{end}}

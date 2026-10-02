@@ -520,6 +520,14 @@ type jobView struct {
 	// Upstream and Downstream are the passed: constraint graph, per resource.
 	Upstream   []edgeView
 	Downstream []edgeView
+	// Queued is the trigger that has not become a run yet; nil when there is none.
+	Queued *queuedJob
+}
+
+// queuedJob is a job's queued run: when it was enqueued, for the follow page's since=, and the first check holding it back (empty once a worker has claimed it).
+type queuedJob struct {
+	Since     int64
+	WaitingOn string
 }
 
 // edgeView is one passed: dependency: a resource that must be green in some

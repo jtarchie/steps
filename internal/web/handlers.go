@@ -41,14 +41,84 @@ func (s *Server) handleJobs(c *echo.Context) error {
 
 	views := buildJobViews(pipeline.Config(), latest, paused)
 
+	rows, err := s.markQueued(ctx, pipeline, queue, views)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "jobs", map[string]any{
 		"Nav":   s.nav(c),
 		"Jobs":  views,
 		"Graph": buildGraph(views),
-		"Queue": pendingQueue(queue),
+		"Queue": rows,
 		"SHA":   pipeline.Config().Revision.SHA,
 	})
+}
+
+// markQueued fills in each job's queued run and what holds it back, and the queue table's rows with the same reasons, asked once per job.
+func (s *Server) markQueued(ctx context.Context, pipeline *Pipeline, queue []store.QueueRow, views []jobView) ([]queueRowView, error) {
+	reasons := map[string]string{}
+
+	reason := func(name string) (string, error) {
+		if text, seen := reasons[name]; seen {
+			return text, nil
+		}
+
+		text, err := waitingOn(ctx, pipeline, s.capacity, queue, name)
+		reasons[name] = text
+
+		return text, err
+	}
+
+	for i := range views {
+		row, queued, err := queuedRow(ctx, pipeline, queue, views[i].Name)
+		if err != nil {
+			return nil, err
+		}
+
+		if !queued {
+			continue
+		}
+
+		next := &queuedJob{Since: row.EnqueuedAt.UnixMilli()}
+
+		// A claimed row with no run yet is starting, and every limit has already let it through.
+		if row.Status == "pending" {
+			next.WaitingOn, err = reason(views[i].Name)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		views[i].Queued = next
+	}
+
+	outstanding := pendingQueue(queue)
+	rows := make([]queueRowView, 0, len(outstanding))
+
+	for _, row := range outstanding {
+		view := queueRowView{QueueRow: row}
+
+		if row.Status == "pending" {
+			waiting, err := reason(row.JobName)
+			if err != nil {
+				return nil, err
+			}
+
+			view.WaitingOn = waiting
+		}
+
+		rows = append(rows, view)
+	}
+
+	return rows, nil
+}
+
+// queueRowView is an outstanding queue row and, while it is pending, what holds it back.
+type queueRowView struct {
+	store.QueueRow
+	WaitingOn string
 }
 
 // pendingQueue filters the queue to what is still outstanding — a finished
@@ -785,7 +855,7 @@ func (s *Server) handleLatestRun(c *echo.Context) error {
 	var checks []followCheck
 
 	if state != "waiting" {
-		checks, err = followChecks(ctx, pipeline, name, state == "running", inFlight)
+		checks, err = followChecks(ctx, pipeline, s.capacity, name, state == "running", inFlight)
 		if err != nil {
 			return err
 		}
@@ -824,7 +894,7 @@ type followCheck struct {
 }
 
 // followChecks asks only what the drain itself asks (admits, then ClaimNextJob's limits), so a line never blames something that is not holding the run back. The limits stop mattering once a worker has claimed it.
-func followChecks(ctx context.Context, pipeline *Pipeline, name string, claimed bool, inFlight int) ([]followCheck, error) {
+func followChecks(ctx context.Context, pipeline *Pipeline, capacity Capacity, name string, claimed bool, inFlight int) ([]followCheck, error) {
 	paused, err := pipeline.Store.Paused(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("web: %w", err)
@@ -858,16 +928,47 @@ func followChecks(ctx context.Context, pipeline *Pipeline, name string, claimed 
 		checks = append(checks, check)
 	}
 
-	if limit := job.EffectiveMaxInFlight(); limit != config.UnlimitedInFlight {
-		check := followCheck{Text: fmt.Sprintf("its max_in_flight (%d) has room", limit), Clear: true}
-		if inFlight >= limit {
-			check = followCheck{Text: fmt.Sprintf("its max_in_flight (%d) is full", limit)}
-		}
+	if check, limited := maxInFlightCheck(job, inFlight); limited {
+		checks = append(checks, check)
+	}
 
+	if check, limited := maxRunsCheck(capacity); limited {
 		checks = append(checks, check)
 	}
 
 	return append(checks, followCheck{Text: "no worker has claimed it yet"}), nil
+}
+
+// maxInFlightCheck is the follow line for the job's max_in_flight, and false when it has none.
+func maxInFlightCheck(job *config.Job, inFlight int) (followCheck, bool) {
+	limit := job.EffectiveMaxInFlight()
+	if limit == config.UnlimitedInFlight {
+		return followCheck{}, false
+	}
+
+	if inFlight >= limit {
+		return followCheck{Text: fmt.Sprintf("its max_in_flight (%d) is full", limit)}, true
+	}
+
+	return followCheck{Text: fmt.Sprintf("its max_in_flight (%d) has room", limit), Clear: true}, true
+}
+
+// maxRunsCheck is the follow line for --max-runs, and false when the daemon has no such limit.
+func maxRunsCheck(capacity Capacity) (followCheck, bool) {
+	if capacity == nil {
+		return followCheck{}, false
+	}
+
+	limit, active := capacity.RunCapacity()
+	if limit <= 0 {
+		return followCheck{}, false
+	}
+
+	if active >= limit {
+		return followCheck{Text: fmt.Sprintf("the server's --max-runs (%d) is full", limit)}, true
+	}
+
+	return followCheck{Text: fmt.Sprintf("the server's --max-runs (%d) has room", limit), Clear: true}, true
 }
 
 // handleDecideApproval records a human decision, through the same row the
@@ -1245,6 +1346,21 @@ func (s *Server) runStrip(ctx context.Context, pipeline *Pipeline, jobName strin
 		return runStripView{}, err //nolint:wrapcheck // the caller wraps with its own context
 	}
 
+	row, queued, err := queuedRow(ctx, pipeline, queue, jobName)
+	if err != nil {
+		return runStripView{}, err
+	}
+
+	if queued {
+		view.Queued = true
+		view.QueuedSince = row.EnqueuedAt.UnixMilli()
+	}
+
+	return view, nil
+}
+
+// queuedRow is the job's newest outstanding queue row, while no run has started since it was enqueued.
+func queuedRow(ctx context.Context, pipeline *Pipeline, queue []store.QueueRow, jobName string) (store.QueueRow, bool, error) {
 	for _, row := range queue {
 		if row.JobName != jobName || (row.Status != "pending" && row.Status != "running") {
 			continue
@@ -1252,16 +1368,34 @@ func (s *Server) runStrip(ctx context.Context, pipeline *Pipeline, jobName strin
 
 		_, served, err := pipeline.Store.FirstRunSince(ctx, jobName, row.EnqueuedAt)
 		if err != nil {
-			return runStripView{}, err //nolint:wrapcheck // the caller wraps with its own context
+			return store.QueueRow{}, false, err //nolint:wrapcheck // the caller wraps with its own context
 		}
 
-		if !served {
-			view.Queued = true
-			view.QueuedSince = row.EnqueuedAt.UnixMilli()
-		}
-
-		break
+		return row, !served, nil
 	}
 
-	return view, nil
+	return store.QueueRow{}, false, nil
+}
+
+// waitingOn is the first check holding a job's pending row back, the line the follow page leads with. A job the configuration no longer names has nothing to check, which reads as empty rather than as a 404 for the whole board.
+func waitingOn(ctx context.Context, pipeline *Pipeline, capacity Capacity, queue []store.QueueRow, name string) (string, error) {
+	_, err := pipeline.Config().FindJob(name)
+	if err != nil {
+		return "", nil //nolint:nilerr // a dropped job is a row with no reason, not a broken page
+	}
+
+	_, inFlight := queuedState(queue, name)
+
+	checks, err := followChecks(ctx, pipeline, capacity, name, false, inFlight)
+	if err != nil {
+		return "", err
+	}
+
+	for _, check := range checks {
+		if !check.Clear {
+			return check.Text, nil
+		}
+	}
+
+	return "", nil
 }

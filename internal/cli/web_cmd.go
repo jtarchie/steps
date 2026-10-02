@@ -36,10 +36,11 @@ type WebCmd struct {
 	ExecFlags    `embed:""`
 	HistoryFlags `embed:""`
 	// Its own --db rather than StateFlags, whose --name binds nothing here: a name is chosen by `steps pipeline set -p`, and a flag that parses and threads nowhere reads as configured.
-	DB            DB                `help:"state database: a sqlite file path, sqlite:// or postgres:// url (default: .steps/steps.db)"                             name:"db"                                                          placeholder:"URL"`
+	DB            DB                `help:"state database: a sqlite file path, sqlite:// or postgres:// url (default: .steps/steps.db)"                             name:"db"                                                                   placeholder:"URL"`
 	Listen        string            `default:"127.0.0.1:8088"                                                                                                       help:"address to serve on"`
 	Interval      time.Duration     `default:"30s"                                                                                                                  help:"how often to check trigger: true resources"`
 	MaxConcurrent int               `default:"1"                                                                                                                    help:"maximum number of queued jobs running at once, per pipeline"`
+	MaxRuns       int               `default:"0"                                                                                                                    help:"maximum number of runs at once across every pipeline (0 is no limit)"`
 	Pin           map[string]string `help:"pin a version field, e.g. number=87 (repeatable)"                                                                        name:"pin"`
 	Force         bool              `help:"ignore the step cache and re-run every step, even if unchanged (version: every still takes only versions not yet built)"`
 	// A statement about the BROWSER's surface only; `steps pipeline set` is the deployment path and is deliberately not withheld — see docs/web.md.
@@ -145,6 +146,7 @@ func (w *WebCmd) Run() error {
 func (w *WebCmd) serve(ctx context.Context) error {
 	local := web.NewLocalRunner(nil, w.Pin, w.MaxConcurrent, w.Force)
 	local.StopWith(ctx)
+	local.LimitRuns(w.MaxRuns)
 
 	var runner web.Runner
 	if !w.ReadOnly {
@@ -161,7 +163,7 @@ func (w *WebCmd) serve(ctx context.Context) error {
 		return err
 	}
 
-	server, err := web.New(nil, runner, append(opts, web.WithVersion(BuildVersion))...)
+	server, err := web.New(nil, runner, append(opts, web.WithVersion(BuildVersion), web.WithCapacity(local))...)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}

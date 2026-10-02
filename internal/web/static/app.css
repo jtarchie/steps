@@ -533,6 +533,7 @@ svg.dag { display: block; }
 .dagnode.st-running rect { stroke: var(--yellow); }
 .dagnode.st-running .dagstatus { fill: var(--yellow); }
 .dagnode.st-queued .dagstatus { fill: var(--faint); }
+.dagnode .dagqueued { fill: var(--faint); }
 .dagnode.st-none .dagstatus { fill: var(--faint); }
 .dagnode.running rect { animation: dagpulse 1.6s ease-in-out infinite; }
 @keyframes dagpulse { 50% { stroke-opacity: 0.35; } }
@@ -1121,6 +1122,9 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
 .followchecks .clear { color: var(--dim); }
 .followchecks .blocking { color: var(--fg); }
 .followchecks .blocking span[aria-hidden] { color: var(--yellow); }
+/* The queue table's reason is the follow page's first blocking line, drawn the same way. */
+.waiton { color: var(--fg); }
+.waiton span[aria-hidden] { color: var(--yellow); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .waiting p:last-child { margin-bottom: 0; }
 

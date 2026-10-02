@@ -34,8 +34,10 @@ type graphNode struct {
 	// badge uses; "st-none" for a job that never ran.
 	StatusClass string
 	Running     bool
-	Layer       int
-	X, Y, W, H  int
+	// Queued is a run waiting behind the latest one; a job that never ran says so in Status instead.
+	Queued     *queuedJob
+	Layer      int
+	X, Y, W, H int
 	// Text anchors, precomputed so the template stays arithmetic-free.
 	TextX, NameY, StatusY int
 }
@@ -257,6 +259,7 @@ func placeNodes(views []jobView, columns map[int][]int, deepest int) []graphNode
 				Glyph:       glyph,
 				StatusClass: class,
 				Running:     view.HasRun && statusWord(view.Latest.Status) == "running",
+				Queued:      queuedBehind(view),
 				Layer:       layer,
 				X:           x,
 				Y:           y,
@@ -280,7 +283,13 @@ func nodeWidth(view jobView) int {
 	word, glyph, _ := nodeStatus(view)
 
 	chars := len(view.Name)
-	if l := len(word) + len(glyph); l > chars {
+
+	status := len(word) + len(glyph)
+	if queuedBehind(view) != nil {
+		status += len(queuedSuffix)
+	}
+
+	if l := status; l > chars {
 		chars = l
 	}
 
@@ -294,6 +303,10 @@ func nodeWidth(view jobView) int {
 // nodeStatus is the graph's reading of a job's latest run: the shared status
 // word, its glyph, and the st-* class that colors the node.
 func nodeStatus(view jobView) (word, glyph, class string) {
+	if !view.HasRun && view.Queued != nil {
+		return "queued", "○", "st-queued"
+	}
+
 	if !view.HasRun {
 		return "never ran", "○", "st-none"
 	}
@@ -307,6 +320,18 @@ func nodeStatus(view jobView) (word, glyph, class string) {
 	}
 
 	return word, glyph, "st-" + word
+}
+
+// queuedSuffix is what a queued run adds to a node's status line, counted for its width.
+const queuedSuffix = " · ○ queued"
+
+// queuedBehind is the run queued behind a job's latest one, nil when there is none or when it is the only thing the node has to say.
+func queuedBehind(view jobView) *queuedJob {
+	if !view.HasRun {
+		return nil
+	}
+
+	return view.Queued
 }
 
 // edgePath draws one constraint as a cubic from the upstream node's right

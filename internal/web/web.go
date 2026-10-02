@@ -149,6 +149,8 @@ type Server struct {
 	// most of what a read-only build box is for. A pipeline that wants no such
 	// endpoint declares no type: webhook resource, and the route 404s.
 	runner Runner
+	// capacity is nil when nothing told this server about --max-runs, which reads as no limit.
+	capacity Capacity
 	// renderer is held rather than only handed to echo because the live
 	// stream renders one step with the SAME templates the page renders, which
 	// is what keeps a row drawn live and a row drawn on reload identical.
@@ -165,6 +167,16 @@ type Server struct {
 // same default steps --version has.
 func WithVersion(version string) Option {
 	return func(s *Server) { s.version = version }
+}
+
+// WithCapacity is where the follow page reads --max-runs from. A separate option rather than part of Runner because a read-only server has no Runner and still drains under the same limit.
+func WithCapacity(capacity Capacity) Option {
+	return func(s *Server) { s.capacity = capacity }
+}
+
+// Capacity is the daemon-wide run limit (0 when unlimited) and how many builds hold it.
+type Capacity interface {
+	RunCapacity() (limit, active int)
 }
 
 // Manager applies what a `steps pipeline` verb asks for. An interface for the reason Runner is one: this package serves the surface and chooses neither a store driver nor a workspace provider.

@@ -42,6 +42,7 @@ Two families of controls say one thing and do another.
 9. **A manual trigger on a held job runs.** The breaker stops only automatic triggers, as the existing copy already says ("will not auto-trigger"). Today the queue row is claimed and dropped by `skipIfPaused`; that is the bug. Release stays a separate act that resets the count.
 10. **A manual trigger in a paused pipeline stays refused**, a deliberate divergence from Concourse, which accepts it and leaves the build pending. The refusal is shown as a disabled button with its reason, never a 409 page.
 11. **The follow page says what a queued run is waiting on**, as Concourse's "preparing build" checklist does, instead of guessing after two minutes.
+12. **A queued run is visible where its job is, with its reason.** The jobs list draws `· ○ queued` after the latest run (linking to the follow page, the reason in its title and screen-reader text), the graph node's status line gains `· ○ queued`, and the trigger queue table's "Waiting on" column — placed after Status so it survives a phone width — shows the follow page's first blocking line verbatim. Not on the overview: its queued count stays a count. The word stays `queued`, not Concourse's "pending": `runs abort --queued` and `/queued/abort` already say it.
 
 ## State vocabulary
 
@@ -106,6 +107,7 @@ Read-only: the `[Undo]` becomes the CLI command, as the paused banner does today
 2. A waiting-on checklist, each line `⟳` (blocking) or `✓` (clear), modelled on Concourse's "preparing build":
    - `pipeline is not paused`
    - `serial / max_in_flight allows another run`
+   - `the server's --max-runs (N) has room` (only when the daemon has one; it spans every pipeline)
    - `a worker has claimed it`
    The first blocking line is the answer to "why hasn't it started?". It replaces the two-minute "Is a runner draining this queue?" guess. `held` is not a line, since a manual trigger bypasses it (decision 9).
 3. `■ Abort before it starts`

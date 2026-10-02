@@ -515,8 +515,16 @@ and two processes against one state database claim each other's work.
 ```bash
 steps web                      # serve, and poll every 30s
 steps web --interval 5m        # slower
-steps web --max-concurrent 4   # up to four queued jobs at a time
+steps web --max-concurrent 4   # up to four queued jobs at a time, per pipeline
+steps web --max-runs 6         # and at most six runs at once across all of them
 ```
+
+`--max-concurrent` is per pipeline; `--max-runs` is the whole daemon's. A
+triggered run that a limit holds back — either flag, a job's `serial:` or
+`max_in_flight:`, a paused pipeline — stays **pending**: a row in the queue,
+not a run yet, and the follow page names which limit is holding it. A pending
+run has not started, so a restart keeps it and runs it — unlike a build that
+was going, which the restart closes as aborted and queues again.
 
 **There is no `--once`.** It was the cron form of a runner: load a file, poll
 once, exit, never bind. A process that never binds has nothing to be set into,
@@ -767,6 +775,7 @@ on this side is everything that changes what a pipeline IS.
                  query or fragment: credentials would land in every step's environment
 --interval       how often to poll trigger: true resources (default 30s)
 --max-concurrent maximum queued jobs running at once, per pipeline (default 1)
+--max-runs       maximum runs at once across every pipeline (default 0, no limit)
 --pin / --force  pin a version field; ignore the step cache (not the every-cursor)
 --no-preflight   skip the pre-poll health check of models and MCP servers
 --read-only      serve without trigger, approval, answer, resume, pause, abort,

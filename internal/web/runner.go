@@ -17,6 +17,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -53,6 +54,10 @@ type LocalRunner struct {
 	// pipeline's own limits and are enforced in SQL by ClaimNextJob, below
 	// whatever this allows.
 	concurrent int
+	// slots is --max-runs, one token per build the whole daemon may have going across every pipeline; nil is no limit. In memory because one daemon owns the database: a token is held only for as long as this process is running something.
+	slots chan struct{}
+	// active counts claimed builds, which slots cannot: a worker also holds a token for the instant it probes an empty queue.
+	active atomic.Int64
 	// force is --force: every job this process drains ignores the cache,
 	// however it was enqueued. A property of the process like pinned, and
 	// separate from `forced` below, which is one browser request asking for
@@ -113,6 +118,32 @@ func NewLocalRunner(
 		grace:      nonInterruptibleGrace,
 		forced:     map[string]bool{},
 		running:    map[runKey]runningBuild{},
+	}
+}
+
+// LimitRuns is --max-runs. Call it before draining; n <= 0 is no limit.
+func (r *LocalRunner) LimitRuns(n int) {
+	if n > 0 {
+		r.slots = make(chan struct{}, n)
+	}
+}
+
+// RunCapacity is the --max-runs limit (0 when unlimited) and how many builds hold a slot.
+func (r *LocalRunner) RunCapacity() (int, int) {
+	return cap(r.slots), int(r.active.Load())
+}
+
+// takeSlot waits for a --max-runs slot, reporting false when ctx ended first.
+func (r *LocalRunner) takeSlot(ctx context.Context) (func(), bool) {
+	if r.slots == nil {
+		return func() {}, true
+	}
+
+	select {
+	case r.slots <- struct{}{}:
+		return func() { <-r.slots }, true
+	case <-ctx.Done():
+		return nil, false
 	}
 }
 
@@ -349,6 +380,16 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 		return false
 	}
 
+	// Before the claim, never after: a worker waiting here leaves the row
+	// pending, so it counts against no max_in_flight, reads as not started,
+	// and a restart keeps it rather than reading it as an interrupted build.
+	release, ok := r.takeSlot(ctx)
+	if !ok {
+		return false
+	}
+
+	defer release()
+
 	id, jobName, claimed, err := target.Store.ClaimNextJob(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "web.claim", "pipeline", target.Slug, "error", err)
@@ -359,6 +400,9 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 	if !claimed {
 		return false
 	}
+
+	r.active.Add(1)
+	defer r.active.Add(-1)
 
 	trigger, err := target.Store.QueuedTrigger(ctx, id)
 	if err != nil {
