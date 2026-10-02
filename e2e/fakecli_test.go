@@ -164,6 +164,22 @@ func cliToolUseEvent(id, name, argsJSON string) string {
 	return fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":%q,"name":%q,"input":%s}]}}`, id, name, argsJSON)
 }
 
+// cliForkStartedEvent is what the CLI prints when a typed slash command
+// (`/code-review`) runs as a forked subagent: no tool_use_id, because no tool
+// call started it, and nothing the fork does reaches stdout after it. Printed
+// BEFORE init, which is where the real CLI puts it.
+func cliForkStartedEvent(id, description, prompt string) string {
+	return fmt.Sprintf(
+		`{"type":"system","subtype":"task_started","task_id":%q,"description":%q,"prompt":%q,"is_backgrounded":false,"skip_transcript":true}`,
+		id, description, prompt)
+}
+
+// cliForkFinishedEvent closes the fork cliForkStartedEvent opened.
+func cliForkFinishedEvent(id, summary string) string {
+	return fmt.Sprintf(`{"type":"system","subtype":"task_notification","task_id":%q,"status":"completed","summary":%q,"skip_transcript":true}`,
+		id, summary)
+}
+
 // callBridgeScript is shell that calls one tool on the steps MCP bridge,
 // reading the bridge's URL and bearer token out of the --mcp-config file the
 // driver generated. It is how a fake CLI reaches a tool the parent process

@@ -56,6 +56,8 @@ type transcriptRecorder struct {
 	// mu guards events: on the CLI path the stream parser appends from the driver goroutine while bridged tool calls — a sub-agent delegation, which nests a whole child transcript — append from the HTTP server's.
 	mu     sync.Mutex
 	events []transcriptEvent
+	// fork is the CLI subagent currently open, if any — see openFork.
+	fork *cliFork
 	// live carries the bus plus the identity every published event needs.
 	// Zero value publishes nowhere, which is what a test or a terminal run
 	// gets.

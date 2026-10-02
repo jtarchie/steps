@@ -104,6 +104,13 @@ type cliEvent struct {
 	// tokens and leave pricing to whoever knows the rate card.
 	TotalCostUSD float64  `json:"total_cost_usd"`
 	Usage        cliUsage `json:"usage"`
+	// The task_started/task_notification pair bracketing a forked subagent —
+	// see recordCLIFork.
+	TaskID         string `json:"task_id"`
+	ToolUseID      string `json:"tool_use_id"`
+	Description    string `json:"description"`
+	Prompt         string `json:"prompt"`
+	IsBackgrounded bool   `json:"is_backgrounded"`
 }
 
 // cliUsage is one bill in the CLI's own units. It appears twice in the schema
@@ -185,6 +192,10 @@ func parseCLIStream(reader io.Reader, rec *transcriptRecorder, expected []string
 	// block arriving several events later can mark the right one.
 	index := map[string]int{}
 
+	// A fork still open when the stream ends was cut off with the child —
+	// the aborted review is the one whose work most needs keeping.
+	defer rec.closeFork("")
+
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64<<10), cliStreamMaxLine)
 
@@ -242,6 +253,8 @@ func parseCLILine(
 		markCLIToolResults(result, index, event)
 		recordCLIResults(rec, result.trajectory, index, event)
 	case "system":
+		recordCLIFork(rec, event)
+
 		return recordCLIInit(result, event, expected, attesting)
 	case "result":
 		recordCLIResult(result, event)
@@ -279,6 +292,27 @@ func recordCLIInit(result *cliRunResult, event cliEvent, expected []string, atte
 	}
 
 	return nil
+}
+
+// recordCLIFork tracks a subagent the CLI forks for a typed slash command
+// (`/code-review`). Such a fork writes its turns to a file under ~/.claude and
+// never to stdout, so the bridge — which every call it makes still crosses —
+// is the only place its work is visible from; see cliBridge.handler.
+//
+// Two forks are left to the stream. One started by a tool call carries that
+// call's tool_use_id and streams its own messages. A backgrounded one runs
+// beside the parent, so a bridged call could belong to either.
+func recordCLIFork(rec *transcriptRecorder, event cliEvent) {
+	switch event.Subtype {
+	case "task_started":
+		if event.ToolUseID != "" || event.IsBackgrounded {
+			return
+		}
+
+		rec.openFork(event.TaskID, event.Description, truncateToolOutputLimit(event.Prompt, maxRecordedResultBytes))
+	case "task_notification":
+		rec.closeFork(event.TaskID)
+	}
 }
 
 // recordCLIResult handles the terminal result event — extracted from
@@ -361,7 +395,8 @@ func recordCLIToolCalls(result *cliRunResult, index map[string]int, event cliEve
 // authoritative for order (the same rule mergeCLITrajectory follows), so
 // recording the bridge's view as well would show every bridged call twice
 // and race the stdout reader for the position it appears at. De-namespaced
-// exactly as recordCLIToolCalls is, for the same reason.
+// exactly as recordCLIToolCalls is, for the same reason. The one exception is
+// a fork the stream never narrates — see recordCLIFork.
 func recordCLITurn(rec *transcriptRecorder, event cliEvent) {
 	for _, block := range event.Message.Content {
 		switch block.Type {

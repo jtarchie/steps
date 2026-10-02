@@ -110,6 +110,55 @@ func TestE2ECLIAgentRecordsABridgedCallExactlyOnce(t *testing.T) {
 	}
 }
 
+// TestE2ECLIAgentPublishesAForkedSlashCommand is the run that showed nothing
+// for five minutes: a prompt of `/code-review high` makes the CLI fork before
+// its first turn, and the fork's turns go to a file on disk, never to stdout.
+// Every call it made still crossed the bridge, which is the only place this
+// process can see them from.
+func TestE2ECLIAgentPublishesAForkedSlashCommand(t *testing.T) {
+	dir := t.TempDir()
+
+	writeFakeClaude(t, strings.Join([]string{
+		"echo '" + cliForkStartedEvent("f1", "/code-review", "Review the diff.") + "'",
+		// ponytail: margin for the parser to read the line above before the
+		// bridge call lands. The real CLI's margin is a model round trip.
+		"sleep 1",
+		callBridgeScript("count_lines", `{"path":"main.go"}`),
+		"echo '" + cliForkFinishedEvent("f1", "/code-review") + "'",
+		"echo '" + cliInitEvent(cliPipelineGrantedTools()...) + "'",
+		callBridgeScript("verdict", `{"choice":"approve"}`),
+		"echo '" + cliResultEvent("Reviewed.", 1) + "'",
+	}, "\n"))
+
+	requireCurl(t)
+
+	path := cliPipeline(t, dir)
+	mustRun(t, "run", path, "--job", "review")
+
+	rows := agentEventsFor(t, path, "reviewer")
+
+	call := findEvent(rows, events.TypeAgentCall, "count_lines")
+	if call == nil {
+		t.Fatal("the fork's bridged call never reached the event bus")
+	}
+
+	if call.Status != "depth:1" {
+		t.Errorf("the fork's call is published at %q, want depth:1 so it nests under the fork", call.Status)
+	}
+
+	if result := findEvent(rows, events.TypeAgentResult, "count_lines"); result == nil || result.Status != "depth:1" {
+		t.Errorf("the fork's tool result was not published nested: %+v", result)
+	}
+
+	if fork := findEvent(rows, events.TypeAgentSubagent, "/code-review"); fork == nil {
+		t.Error("no delegation event names the fork")
+	}
+
+	if verdict := findEvent(rows, events.TypeAgentCall, "verdict"); verdict != nil {
+		t.Errorf("a bridged call after the fork closed was published as the fork's: %+v", verdict)
+	}
+}
+
 // TestE2ECLIAgentStoresItsTranscript is the other half of the same record: a
 // run read back an hour later has to say what a run watched live said. The
 // node page's Conversation section reads this row.

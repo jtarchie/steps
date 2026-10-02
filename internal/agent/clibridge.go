@@ -200,16 +200,23 @@ func (b *cliBridge) handler(name string, impl toolImpl, env toolEnv) sdkmcp.Tool
 
 		slog.DebugContext(ctx, "agent.cli.bridge.call", "tool", name, "args", args)
 
+		// Recorded here only while a fork the stream does not narrate is open;
+		// otherwise the stream records the call, and doing it here too would
+		// show it twice (see recordCLITurn).
+		fork := env.transcript.forkRecorder()
+		fork.call(name, args)
+
 		// Rejected before the impl runs, never after: the point of a budget is
 		// bounding the side effect, which for ask_user is interrupting
 		// somebody. The refusal goes back as ordinary tool-result data, the
 		// same contract the HTTP path's executeBudgetedTool honours, so the
 		// child reacts to it instead of the attempt aborting.
 		if exhausted, budget := b.overBudget(name); exhausted {
+			refusal := fmt.Sprintf(`{"error": %q}`, fmt.Sprintf("%s: call budget (%d) exhausted for this attempt", name, budget))
+			fork.result(name, refusal)
+
 			return &sdkmcp.CallToolResult{
-				Content: []sdkmcp.Content{&sdkmcp.TextContent{
-					Text: fmt.Sprintf(`{"error": %q}`, fmt.Sprintf("%s: call budget (%d) exhausted for this attempt", name, budget)),
-				}},
+				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: refusal}},
 				IsError: true,
 			}, nil
 		}
@@ -217,6 +224,7 @@ func (b *cliBridge) handler(name string, impl toolImpl, env toolEnv) sdkmcp.Tool
 		result := impl(ctx, args, env)
 
 		b.capture(name, args, result)
+		fork.result(name, renderResultContent(result))
 
 		payload, err := json.Marshal(result)
 		if err != nil {
