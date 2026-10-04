@@ -9,11 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -56,10 +58,14 @@ type plusSession struct {
 	volumes []string
 	// outputs are the declared outputs that got a plain volume of their own: only those can be held, since an overlay's data is visible only while something mounts it.
 	outputs map[string]string
+	// fresh are the volumes this session made empty, whose roots it opens to the step's user.
+	fresh []string
 	// kept are volumes now named by a digest, which outlive the session.
-	kept   map[string]bool
-	heldMu sync.Mutex
-	held   map[string]string
+	kept map[string]bool
+	// fetchMu serializes fetches: an agent's concurrent tool calls would otherwise swap the same local paths and write kept at once.
+	fetchMu sync.Mutex
+	heldMu  sync.Mutex
+	held    map[string]string
 
 	sent, received atomic.Int64
 }
@@ -212,6 +218,11 @@ func (s *plusSession) connect(ctx context.Context) error {
 		return err
 	}
 
+	err = s.openRoots(ctx)
+	if err != nil {
+		return err
+	}
+
 	s.holder, err = s.docker.CreateHolder(ctx, "steps-holder-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), mounts)
 	if err != nil {
 		return fmt.Errorf("%w", err)
@@ -243,7 +254,7 @@ func (s *plusSession) connect(ctx context.Context) error {
 
 // compose lays the step's tree out as volumes: each input directory a copy-on-write view of a cached tree, each empty output a plain volume of its own, and the work volume under them for whatever else the tree holds.
 func (s *plusSession) compose(ctx context.Context) ([]string, []string, error) {
-	mounts := []string{s.work + ":" + plusWorkdir}
+	mounts := []string{volumeMount(s.work, plusWorkdir, false)}
 	s.outputs = map[string]string{}
 
 	declared := map[string]bool{}
@@ -283,7 +294,7 @@ func (s *plusSession) compose(ctx context.Context) ([]string, []string, error) {
 			return nil, nil, err
 		}
 
-		mounts = append(mounts, volume+":"+path.Join(plusWorkdir, name))
+		mounts = append(mounts, volumeMount(volume, path.Join(plusWorkdir, name), false))
 	}
 
 	return mounts, files, nil
@@ -301,7 +312,7 @@ func (s *plusSession) mountFor(ctx context.Context, name, local string, output b
 
 		s.outputs[name] = volume.Name
 
-		return volume.Name + ":" + target, nil
+		return volumeMount(volume.Name, target, false), nil
 	}
 
 	volume, err := s.placeLocal(ctx, local)
@@ -309,7 +320,16 @@ func (s *plusSession) mountFor(ctx context.Context, name, local string, output b
 		return "", fmt.Errorf("input %q: %w", name, err)
 	}
 
-	return volume + ":" + target, nil
+	return volumeMount(volume, target, false), nil
+}
+
+// volumeMount always says nocopy: docker otherwise fills an empty volume, mode and contents, from whatever the image has at the mount path, on every first mount, undoing openRoots.
+func volumeMount(volume, target string, readOnly bool) string {
+	if readOnly {
+		return volume + ":" + target + ":ro,nocopy"
+	}
+
+	return volume + ":" + target + ":nocopy"
 }
 
 func isEmptyDir(dir string) bool {
@@ -344,7 +364,7 @@ func (s *plusSession) dialDaemon(ctx context.Context) (func(context.Context) (ne
 
 	s.ssh = client
 
-	dial := func(context.Context) (net.Conn, error) { return client.Dial("unix", s.worker.Socket) }
+	dial := func(ctx context.Context) (net.Conn, error) { return client.DialContext(ctx, "unix", s.worker.Socket) }
 
 	s.docker, err = dockerapi.NewDialer(s.daemonName(), dial)
 	if err != nil {
@@ -375,13 +395,48 @@ func (s *plusSession) newVolume(ctx context.Context, kind string) (dockerapi.Vol
 
 	s.volumes = append(s.volumes, created.Name)
 
+	if kind != "ovl" {
+		s.fresh = append(s.fresh, created.Name)
+	}
+
 	return created, nil
+}
+
+// openRoots makes every fresh volume's root writable by any user, before anything mounts it: the daemon creates them root-owned 0755, and a step with a non-root user: could not write its own outputs. An overlay takes its root from its upper, so an input dir opens up too.
+//
+// ponytail: an input's files arrive root-owned with the modes they had, so a non-root user: reads what is world-readable and adds to an input but cannot overwrite it; the cache is shared across users, so ownership cannot follow the step. Concourse has the same limit.
+func (s *plusSession) openRoots(ctx context.Context) error {
+	mounts := make([]string, 0, len(s.fresh))
+	for i, name := range s.fresh {
+		mounts = append(mounts, volumeMount(name, "/v/"+strconv.Itoa(i), false))
+	}
+
+	code, _, stderr, err := s.docker.RunOnce(ctx, dockerapi.ContainerSpec{
+		Image:   treedigest.Image,
+		Cmd:     []string{"sh", "-c", "chmod 0777 /v/*"},
+		Name:    "steps-chmod-" + randomSuffix(),
+		Labels:  shell.OwnershipLabels(),
+		Network: "none",
+		Mounts:  mounts,
+	})
+	if err != nil {
+		return fmt.Errorf("opening the step's volumes: %w", err)
+	}
+
+	if code != 0 {
+		return fmt.Errorf("opening the step's volumes: exit %d: %s", code, stderr)
+	}
+
+	return nil
 }
 
 func (s *plusSession) fetch(ctx context.Context) error {
 	if s.spec.Cwd == "" || (len(s.spec.Fetch) == 0 && !s.spec.FetchAll) || shell.IsReadOnly(ctx) {
 		return nil
 	}
+
+	s.fetchMu.Lock()
+	defer s.fetchMu.Unlock()
 
 	if s.spec.FetchAll {
 		// ponytail: a FetchAll tree always comes home; holding it needs the work volume free of input mounts, which only a get's empty tree is.
@@ -395,8 +450,9 @@ func (s *plusSession) fetchDeclared(ctx context.Context) error {
 	held := map[string]string{}
 
 	for _, name := range s.spec.Fetch {
+		// Digested now, so HeldOf can answer; published only at close, once nothing writes the volume.
 		if volume, ok := s.outputs[name]; ok && s.spec.DeferFetch {
-			digest, err := s.hold(ctx, volume)
+			digest, err := s.digestOf(ctx, volume)
 			if err != nil {
 				return fmt.Errorf("holding output %q: %w", name, err)
 			}
@@ -427,12 +483,7 @@ func (r plusRunner) heldOutputs() (map[string]string, string, bool) {
 		return nil, "", false
 	}
 
-	held := make(map[string]string, len(r.s.held))
-	for name, digest := range r.s.held {
-		held[name] = digest
-	}
-
-	return held, r.s.worker.URL, true
+	return maps.Clone(r.s.held), r.s.worker.URL, true
 }
 
 // fetchInto unpacks src beside dst first and swaps it in, so a failed transfer never leaves an output half-replaced; name empty means dst's whole contents.
@@ -546,6 +597,10 @@ func (s *plusSession) close() error {
 		errs = append(errs, s.inner.Close())
 	}
 
+	if s.docker != nil {
+		errs = append(errs, s.publishHeld(ctx)...)
+	}
+
 	if s.docker != nil && !s.spec.Keep {
 		errs = append(errs, s.removeOwned(ctx)...)
 	}
@@ -564,6 +619,24 @@ func (s *plusSession) close() error {
 	}
 
 	return nil
+}
+
+// publishHeld files each held output under the digest HeldOf reported. At close, after the step's container is gone: an alias published mid-step names a volume still being written, which a concurrent build could mount as an overlay's lower.
+func (s *plusSession) publishHeld(ctx context.Context) []error {
+	s.heldMu.Lock()
+	held := maps.Clone(s.held)
+	s.heldMu.Unlock()
+
+	var errs []error
+
+	for name, digest := range held {
+		err := s.hold(ctx, s.outputs[name], digest)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("holding output %q: %w", name, err))
+		}
+	}
+
+	return errs
 }
 
 // removeOwned drops what only this session used: the holder, and every volume not now named by a digest. Newest first, so an overlay goes before its upper.

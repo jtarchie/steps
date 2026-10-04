@@ -276,30 +276,25 @@ func unkept(paths []string, artifact string, kept map[string]string) ([]string, 
 // a later Pull can dial the same machine. False for a runner that is not
 // placed, or whose worker kept nothing.
 func HeldOf(r shell.Runner) (map[string]string, string, bool) {
-	if plus, ok := r.(interface {
+	placed, ok := r.(interface {
 		heldOutputs() (map[string]string, string, bool)
-	}); ok {
-		return plus.heldOutputs()
-	}
-
-	placed, ok := r.(runner)
+	})
 	if !ok {
 		return nil, "", false
 	}
 
-	placed.session.heldMu.Lock()
-	defer placed.session.heldMu.Unlock()
+	return placed.heldOutputs()
+}
 
-	if len(placed.session.held) == 0 {
+func (r runner) heldOutputs() (map[string]string, string, bool) {
+	r.session.heldMu.Lock()
+	defer r.session.heldMu.Unlock()
+
+	if len(r.session.held) == 0 {
 		return nil, "", false
 	}
 
-	held := make(map[string]string, len(placed.session.held))
-	for name, digest := range placed.session.held {
-		held[name] = digest
-	}
-
-	return held, placed.session.worker.URL, true
+	return maps.Clone(r.session.held), r.session.worker.URL, true
 }
 
 // fetchOnTunnel brings the named outputs — or the whole tree, as artifact —

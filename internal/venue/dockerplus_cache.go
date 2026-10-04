@@ -32,16 +32,7 @@ var (
 
 // cached finds the data volume holding digest, re-hashing it on the worker first: a volume someone edited, or an alias left pointing at a removed one, is a miss rather than the wrong tree.
 func (s *plusSession) cached(ctx context.Context, digest string) (dockerapi.Volume, bool, error) {
-	alias, err := s.docker.InspectVolume(ctx, aliasPrefix+digest)
-	if dockerapi.IsNotFound(err) {
-		return dockerapi.Volume{}, false, nil
-	}
-
-	if err != nil {
-		return dockerapi.Volume{}, false, fmt.Errorf("%w", err)
-	}
-
-	data, err := s.docker.InspectVolume(ctx, alias.Labels[cacheData])
+	alias, data, err := s.lookup(ctx, digest)
 	if err == nil {
 		var actual string
 
@@ -51,14 +42,32 @@ func (s *plusSession) cached(ctx context.Context, digest string) (dockerapi.Volu
 		}
 	}
 
-	if err != nil && !dockerapi.IsNotFound(err) {
+	// A tree the digest script cannot read is as untrustworthy as one that hashes wrong; erroring instead would fail every placement of this digest until someone removed the alias by hand.
+	if err != nil && !dockerapi.IsNotFound(err) && !errors.Is(err, errDigestRunFailed) {
 		return dockerapi.Volume{}, false, err
 	}
 
 	// Stale: forget it, so the next placement fills a fresh one rather than re-checking this.
-	_ = s.docker.RemoveVolume(ctx, alias.Name)
+	if alias.Name != "" {
+		_ = s.docker.RemoveVolume(ctx, alias.Name)
+	}
 
 	return dockerapi.Volume{}, false, nil
+}
+
+// lookup follows digest's alias to its data volume without re-hashing it; alias is zero when there is none.
+func (s *plusSession) lookup(ctx context.Context, digest string) (dockerapi.Volume, dockerapi.Volume, error) {
+	alias, err := s.docker.InspectVolume(ctx, aliasPrefix+digest)
+	if err != nil {
+		return dockerapi.Volume{}, dockerapi.Volume{}, fmt.Errorf("%w", err)
+	}
+
+	data, err := s.docker.InspectVolume(ctx, alias.Labels[cacheData])
+	if err != nil {
+		return alias, dockerapi.Volume{}, fmt.Errorf("%w", err)
+	}
+
+	return alias, data, nil
 }
 
 // fill pours a tree into a new data volume and publishes it under digest; if another session published first, its volume wins and this one is dropped.
@@ -83,7 +92,7 @@ func (s *plusSession) fill(ctx context.Context, digest string, pack func(io.Writ
 }
 
 func (s *plusSession) pour(ctx context.Context, volume string, pack func(io.Writer) error) error {
-	holder, err := s.docker.CreateHolder(ctx, "steps-fill-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), []string{volume + ":" + holderMount})
+	holder, err := s.docker.CreateHolder(ctx, "steps-fill-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), []string{volumeMount(volume, holderMount, false)})
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
@@ -138,7 +147,7 @@ func (s *plusSession) digestOf(ctx context.Context, volume string) (string, erro
 		Name:    "steps-digest-" + randomSuffix(),
 		Labels:  shell.OwnershipLabels(),
 		Network: "none",
-		Mounts:  []string{volume + ":" + holderMount + ":ro"},
+		Mounts:  []string{volumeMount(volume, holderMount, true)},
 	})
 	if err != nil {
 		return "", fmt.Errorf("%w", err)
@@ -225,20 +234,29 @@ func (s *plusSession) placeRemote(ctx context.Context, name string, input shell.
 }
 
 // hold files an output volume under its digest and keeps it past close, so the next step here finds it and nothing comes home.
-func (s *plusSession) hold(ctx context.Context, volume string) (string, error) {
-	digest, err := s.digestOf(ctx, volume)
+func (s *plusSession) hold(ctx context.Context, volume, digest string) error {
+	// Through cached, which drops an alias whose volume changed since it was filed; publish alone would hand back that volume and drop this one, the real tree.
+	existing, hit, err := s.cached(ctx, digest)
 	if err != nil {
-		return "", err
+		return err
+	}
+
+	if hit {
+		if existing.Name == volume {
+			s.kept[volume] = true
+		}
+
+		return nil
 	}
 
 	data, err := s.docker.InspectVolume(ctx, volume)
 	if err != nil {
-		return "", fmt.Errorf("%w", err)
+		return fmt.Errorf("%w", err)
 	}
 
 	kept, err := s.publish(ctx, digest, data)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	// An identical tree already held elsewhere wins the name; this volume then goes with the session.
@@ -246,7 +264,7 @@ func (s *plusSession) hold(ctx context.Context, volume string) (string, error) {
 		s.kept[volume] = true
 	}
 
-	return digest, nil
+	return nil
 }
 
 // pullPlus brings a held tree home from a docker+ worker and checks it against the digest it was asked for.
@@ -260,16 +278,17 @@ func pullPlus(ctx context.Context, worker Worker, digest, dst string) (int64, er
 		return 0, err
 	}
 
-	data, hit, err := s.cached(ctx, digest)
+	// No worker-side re-hash: the digest of what lands in dst below is the check, and hashing first would read the whole tree on the worker one extra time.
+	_, data, err := s.lookup(ctx, digest)
+	if dockerapi.IsNotFound(err) {
+		return 0, fmt.Errorf("%s: %w", digest, errNotHeld)
+	}
+
 	if err != nil {
 		return 0, err
 	}
 
-	if !hit {
-		return 0, fmt.Errorf("%s: %w", digest, errNotHeld)
-	}
-
-	holder, err := s.docker.CreateHolder(ctx, "steps-pull-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), []string{data.Name + ":" + holderMount + ":ro"})
+	holder, err := s.docker.CreateHolder(ctx, "steps-pull-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), []string{volumeMount(data.Name, holderMount, true)})
 	if err != nil {
 		return 0, fmt.Errorf("%w", err)
 	}

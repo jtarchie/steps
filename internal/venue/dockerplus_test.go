@@ -202,9 +202,12 @@ func cleanCache(t *testing.T) {
 		ctx := context.WithoutCancel(t.Context())
 
 		//nolint:gosec // a filter built from this process's own pid
-		out, _ := exec.CommandContext(ctx, "docker", "volume", "ls", "-q", "--filter", "label="+cacheLabel, "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid())).Output()
+		out, _ := exec.CommandContext(ctx, "docker", "volume", "ls", "-q", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid())).Output()
 		for _, name := range strings.Fields(string(out)) {
-			_ = exec.CommandContext(ctx, "docker", "volume", "rm", name).Run() //nolint:gosec // a name the daemon listed
+			// The cache, and the outputs it names: everything a closed session leaves on purpose.
+			if strings.HasPrefix(name, aliasPrefix) || strings.HasPrefix(name, "steps-d-") || strings.HasPrefix(name, "steps-out-") {
+				_ = exec.CommandContext(ctx, "docker", "volume", "rm", name).Run() //nolint:gosec // a name the daemon listed
+			}
 		}
 	})
 }
@@ -319,4 +322,198 @@ func TestDockerPlusRefusesATamperedCacheEntry(t *testing.T) {
 	if second.BytesSent < 1024 {
 		t.Fatalf("the tampered entry was reused (%d bytes sent)", second.BytesSent)
 	}
+}
+
+// An alias an earlier command filed names a volume its step went on writing to; a later step whose output hashes to that old digest must keep its own tree, not be handed the changed one.
+func TestDockerPlusHoldsPastAStaleAlias(t *testing.T) {
+	socket := hostDockerSocket(t)
+	cleanCache(t)
+
+	worker := dockerPlusURL(testsshd.New(t), socket)
+	hold := func(commands ...string) string { return holdOnce(t, worker, commands...) }
+
+	content := "echo same-" + randomSuffix() + " > out/f"
+	first := hold(content)
+
+	// The held volume changed under its alias, as a volume can outside any step.
+	alias, err := exec.CommandContext(t.Context(), "docker", "volume", "inspect", "--format", "{{index .Labels \""+cacheData+"\"}}", aliasPrefix+first).Output() //nolint:gosec // a digest this test was handed
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	//nolint:gosec // a volume the daemon named
+	err = exec.CommandContext(t.Context(), "docker", "run", "--rm", "-v", strings.TrimSpace(string(alias))+":/d", "alpine:3", "sh", "-c", "echo tampered > /d/f").Run()
+	if err != nil {
+		t.Fatalf("tampering: %v", err)
+	}
+
+	second := hold(content)
+	if second != first {
+		t.Fatalf("the same output digested %s then %s", first, second)
+	}
+
+	_, err = Pull(t.Context(), shell.RunnerSpec{Worker: worker}, "out", second, t.TempDir())
+	if err != nil {
+		t.Fatalf("pulling the second step's own output: %v", err)
+	}
+}
+
+func aliasExists(t *testing.T, digest string) bool {
+	t.Helper()
+
+	return exec.CommandContext(t.Context(), "docker", "volume", "inspect", aliasPrefix+digest).Run() == nil //nolint:gosec // a digest this test was handed
+}
+
+// An alias published between commands names a volume the step is still writing, which another build could mount as a lower; HeldOf answers early, the alias waits for close.
+func TestDockerPlusPublishesHeldOutputsOnlyAtClose(t *testing.T) {
+	socket := hostDockerSocket(t)
+	cleanCache(t)
+
+	runner := deferredRunner(t, dockerPlusURL(testsshd.New(t), socket))
+	runAll(t, runner, "echo first-"+randomSuffix()+" > out/f")
+
+	first, _, _ := HeldOf(runner)
+
+	runAll(t, runner, "echo second-"+randomSuffix()+" > out/f")
+
+	final, _, ok := HeldOf(runner)
+	if !ok || final["out"] == "" || final["out"] == first["out"] {
+		t.Fatalf("HeldOf after each command: %v then %v", first, final)
+	}
+
+	if aliasExists(t, first["out"]) || aliasExists(t, final["out"]) {
+		t.Fatal("an alias was published while the step could still write its volume")
+	}
+
+	err := runner.Close()
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if !aliasExists(t, final["out"]) {
+		t.Fatal("the final output was not held after close")
+	}
+
+	if aliasExists(t, first["out"]) {
+		t.Fatal("an intermediate digest was held: it names a tree that no longer exists")
+	}
+}
+
+// A non-root user: must still write its outputs and the top of its tree; fresh volume roots are created root-owned.
+func TestDockerPlusNonRootUserWritesItsOutputs(t *testing.T) {
+	socket := hostDockerSocket(t)
+	cleanCache(t)
+
+	cwd := payloadDir(t, 1024)
+
+	// 0644, as a checkout's files are: inputs reach the worker root-owned with the modes they had, so only a world-readable file is readable to a non-root user:.
+	err := os.Chmod(filepath.Join(cwd, "src", "blob.bin"), 0o644) //nolint:gosec // the point of the test
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.Mkdir(filepath.Join(cwd, "out"), 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner, err := NewRunner(shell.RunnerSpec{Image: "alpine:3", User: "1000:1000", Cwd: cwd, Fetch: []string{"out"}, Worker: dockerPlusURL(testsshd.New(t), socket), WorkerTag: "box"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = runner.Close() })
+
+	err = runner.Run(t.Context(), "id -u > out/uid && cat src/blob.bin > /dev/null && touch scratch && touch src/new")
+	if err != nil {
+		t.Fatalf("Run as 1000: %v", err)
+	}
+
+	if got := mustRead(t, filepath.Join(cwd, "out", "uid")); got != "1000\n" {
+		t.Fatalf("out/uid = %q", got)
+	}
+}
+
+// An agent's tool calls run concurrently; each fetch swaps the same local paths.
+func TestDockerPlusConcurrentCommandsFetchSafely(t *testing.T) {
+	socket := hostDockerSocket(t)
+	cleanCache(t)
+
+	cwd := t.TempDir()
+
+	err := os.Mkdir(filepath.Join(cwd, "out"), 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner := plusRunnerFor(t, dockerPlusURL(testsshd.New(t), socket), cwd, "out")
+
+	err = runner.Run(t.Context(), "echo x > out/f")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The fetches themselves, sixteen at once: a command takes tens of milliseconds and a fetch a few, so racing whole commands rarely overlaps the part that swaps paths.
+	session := runner.(plusRunner).s
+
+	errs := make(chan error, 16)
+	for range 16 {
+		go func() { errs <- session.fetch(t.Context()) }()
+	}
+
+	for range 16 {
+		err := <-errs
+		if err != nil {
+			t.Errorf("a concurrent command: %v", err)
+		}
+	}
+}
+
+// deferredRunner is a step with one empty output, held on the worker rather than fetched.
+func deferredRunner(t *testing.T, worker string) shell.Runner {
+	t.Helper()
+
+	cwd := t.TempDir()
+
+	err := os.Mkdir(filepath.Join(cwd, "out"), 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner, err := NewRunner(shell.RunnerSpec{Image: "alpine:3", Cwd: cwd, Fetch: []string{"out"}, DeferFetch: true, Worker: worker, WorkerTag: "box"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = runner.Close() })
+
+	return runner
+}
+
+func runAll(t *testing.T, runner shell.Runner, commands ...string) {
+	t.Helper()
+
+	for _, command := range commands {
+		err := runner.Run(t.Context(), command)
+		if err != nil {
+			t.Fatalf("Run(%q): %v", command, err)
+		}
+	}
+}
+
+// holdOnce runs a deferred step to its close and returns the digest its output was held under.
+func holdOnce(t *testing.T, worker string, commands ...string) string {
+	t.Helper()
+
+	runner := deferredRunner(t, worker)
+	runAll(t, runner, commands...)
+
+	held, _, _ := HeldOf(runner)
+
+	err := runner.Close()
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	return held["out"]
 }

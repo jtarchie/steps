@@ -151,12 +151,15 @@ func removeCacheVolumes(t *testing.T) {
 	ctx := context.WithoutCancel(t.Context())
 
 	//nolint:gosec // a filter built from this process's own pid
-	out, err := exec.CommandContext(ctx, "docker", "volume", "ls", "-q", "--filter", "label=steps.cache", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid())).Output()
+	out, err := exec.CommandContext(ctx, "docker", "volume", "ls", "-q", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid())).Output()
 	if err != nil {
 		return
 	}
 
+	// The cache, and the held outputs it names: everything a closed session leaves on purpose.
 	for _, name := range strings.Fields(string(out)) {
-		_ = exec.CommandContext(ctx, "docker", "volume", "rm", name).Run() //nolint:gosec // a name the daemon listed
+		if strings.HasPrefix(name, "steps-a-") || strings.HasPrefix(name, "steps-d-") || strings.HasPrefix(name, "steps-out-") {
+			_ = exec.CommandContext(ctx, "docker", "volume", "rm", name).Run() //nolint:gosec // a name the daemon listed
+		}
 	}
 }
