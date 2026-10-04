@@ -71,6 +71,9 @@ type plusSession struct {
 	sent, received atomic.Int64
 }
 
+// swept remembers which workers this process has already swept for what dead processes left.
+var swept sync.Map //nolint:gochecknoglobals // per-process memory of a once-per-worker chore
+
 func newPlusRunner(worker Worker, spec shell.RunnerSpec) (shell.Runner, error) {
 	if spec.Image == "" {
 		return nil, fmt.Errorf("%w %q: %w", ErrWorker, worker.URL, errNoImageOnDocker)
@@ -380,7 +383,9 @@ func (s *plusSession) dialDaemon(ctx context.Context) (func(context.Context) (ne
 	}
 
 	// Containers a dead steps process on this machine left on the worker; nothing else would ever reclaim them.
-	shell.SweepOrphanedContainersOn(ctx, s.docker)
+	if _, done := swept.LoadOrStore("docker "+s.daemonName(), true); !done {
+		shell.SweepOrphanedContainersOn(ctx, s.docker)
+	}
 
 	if !s.docker.ImagePresent(ctx, treedigest.Image) {
 		err = s.docker.Pull(ctx, treedigest.Image, io.Discard)

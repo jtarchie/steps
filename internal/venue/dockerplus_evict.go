@@ -46,19 +46,26 @@ func (s *plusSession) evict(ctx context.Context) {
 			named[volume.Labels[cacheData]] = true
 		}
 
-		if lower := volume.Labels[lowerLabel]; lower != "" {
-			layered[lower] = true
+		for _, label := range []string{lowerLabel, upperLabel, ovlLabel} {
+			if name := volume.Labels[label]; name != "" {
+				layered[name] = true
+			}
 		}
 	}
 
+	s.reclaim(ctx, volumes, named, layered)
+	s.trim(ctx, aliases, layered)
+}
+
+// reclaim drops session volumes nothing names or layers on, once past orphanAge.
+func (s *plusSession) reclaim(ctx context.Context, volumes []dockerapi.Volume, named, layered map[string]bool) {
 	for _, volume := range volumes {
-		if isSessionVolume(volume.Name) && !named[volume.Name] && !layered[volume.Name] && time.Since(volume.CreatedAt) > orphanAge {
+		// A zero CreatedAt is a daemon that did not say, not an old volume: taking it would reap a live session's unmounted volumes on sight.
+		if isSessionVolume(volume.Name) && !named[volume.Name] && !layered[volume.Name] && !volume.CreatedAt.IsZero() && time.Since(volume.CreatedAt) > orphanAge {
 			// Refused while mounted, which is the protection a live session needs.
 			_ = s.docker.RemoveVolume(ctx, volume.Name)
 		}
 	}
-
-	s.trim(ctx, aliases, layered)
 }
 
 func (s *plusSession) trim(ctx context.Context, aliases []dockerapi.Volume, layered map[string]bool) {

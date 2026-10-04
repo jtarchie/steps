@@ -104,6 +104,32 @@ func TestSSHWorkerSendsNoEnvRequests(t *testing.T) {
 	}
 }
 
+// Build metadata rides each command over ssh:// too, and the step's env stays off the worker's command line.
+func TestSSHWorkerSendsBuildMetadataOffTheCommandLine(t *testing.T) {
+	server := newTestSSHD(t)
+
+	spec := sshSpec(t, server, t.TempDir())
+	spec.Env = []string{"STEPS_TEST_SSH_SECRET"}
+
+	t.Setenv("STEPS_TEST_SSH_SECRET", "hunter2")
+
+	runner := newLocalRunner(t, spec)
+	ctx := shell.WithBuildMetadata(t.Context(), shell.BuildMetadata{RunID: "run-42"})
+
+	stdout, _, err := runner.RunStreamedCapture(ctx, `echo "$STEPS_RUN_ID $STEPS_TEST_SSH_SECRET"; ps -o args= -p $$`, 0)
+	if err != nil {
+		t.Fatalf("RunStreamedCapture: %v", err)
+	}
+
+	if !strings.HasPrefix(stdout, "run-42 hunter2\n") {
+		t.Errorf("stdout = %q, want the run id and the env value", stdout)
+	}
+
+	if strings.Count(stdout, "hunter2") != 1 {
+		t.Errorf("the env value is in the command's argv: %q", stdout)
+	}
+}
+
 // TestSSHWorkerNonzeroExitIsAStepFailure pins the classification across the
 // real transport, not just the local one.
 func TestSSHWorkerNonzeroExitIsAStepFailure(t *testing.T) {
@@ -278,7 +304,8 @@ func TestSSHWorkerCancellationEndsAWedgedCommand(t *testing.T) {
 		t.Fatalf("error = %v, want it to carry the deadline", err)
 	}
 
-	if elapsed := time.Since(started); elapsed > 15*time.Second {
+	// Well under killGrace: TERM ended it, so nothing waits out the grace.
+	if elapsed := time.Since(started); elapsed > killGrace {
 		t.Fatalf("the cancel took %s to come back", elapsed)
 	}
 }
@@ -322,5 +349,39 @@ func TestSSHWorkerSweepsWhatADeadProcessLeft(t *testing.T) {
 	_, err = os.Stat(live + ".owner")
 	if err != nil {
 		t.Error("a live process's step directory was swept")
+	}
+}
+
+// --keep-workspace keeps the directory and drops its owner file: left in place, the next session from this machine would sweep it once this process exits.
+func TestSSHWorkerKeepsADirectoryNothingWillSweep(t *testing.T) {
+	t.Parallel()
+
+	server := newTestSSHD(t)
+
+	spec := sshSpec(t, server, t.TempDir())
+	spec.Keep = true
+
+	runner := newLocalRunner(t, spec)
+
+	err := runner.Run(t.Context(), "touch kept")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	placement, _ := PlacementOf(runner)
+
+	err = runner.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = os.Stat(filepath.Join(placement.Workdir, "kept"))
+	if err != nil {
+		t.Fatalf("the kept directory is gone: %v", err)
+	}
+
+	_, err = os.Stat(placement.Workdir + ".owner")
+	if err == nil {
+		t.Fatal("the kept directory still has an owner file a later sweep would act on")
 	}
 }

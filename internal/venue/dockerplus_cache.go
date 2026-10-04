@@ -24,6 +24,8 @@ const (
 	cacheDigest = "steps.digest"
 	cacheSize   = "steps.size"
 	lowerLabel  = "steps.lower"
+	upperLabel  = "steps.upper"
+	ovlLabel    = "steps.ovl"
 	aliasPrefix = "steps-a-"
 	holderMount = "/d"
 )
@@ -150,17 +152,22 @@ func (s *plusSession) publish(ctx context.Context, digest string, data dockerapi
 	return data, nil
 }
 
+// digestOf is measure without the weighing: a cache hit's re-hash need not walk the tree a second time for a size nobody reads.
 func (s *plusSession) digestOf(ctx context.Context, volume string) (string, error) {
-	digest, _, err := s.measure(ctx, volume)
+	digest, _, err := s.runDigest(ctx, volume, "")
 
 	return digest, err
 }
 
 // measure runs treedigest's script against a volume on the worker, read-only and with no network, and weighs it in the same run.
 func (s *plusSession) measure(ctx context.Context, volume string) (string, int64, error) {
+	return s.runDigest(ctx, volume, ` && du -sk `+holderMount)
+}
+
+func (s *plusSession) runDigest(ctx context.Context, volume, weigh string) (string, int64, error) {
 	code, stdout, stderr, err := s.docker.RunOnce(ctx, dockerapi.ContainerSpec{
 		Image:   treedigest.Image,
-		Cmd:     []string{"sh", "-c", `sh -c "$1" sh ` + holderMount + ` && du -sk ` + holderMount, "sh", treedigest.Script},
+		Cmd:     []string{"sh", "-c", `sh -c "$1" sh ` + holderMount + weigh, "sh", treedigest.Script},
 		Name:    "steps-digest-" + randomSuffix(),
 		Labels:  shell.OwnershipLabels(),
 		Network: "none",
@@ -173,8 +180,12 @@ func (s *plusSession) measure(ctx context.Context, volume string) (string, int64
 	digest, weight, _ := strings.Cut(stdout, "\n")
 	fields := strings.Fields(weight)
 
-	if code != 0 || len(fields) == 0 {
+	if code != 0 || (weigh != "" && len(fields) == 0) {
 		return "", 0, fmt.Errorf("%w (exit %d): %s", errDigestRunFailed, code, stderr)
+	}
+
+	if weigh == "" {
+		return digest, 0, nil
 	}
 
 	kib, err := strconv.ParseInt(fields[0], 10, 64)
@@ -197,9 +208,11 @@ func (s *plusSession) overlay(ctx context.Context, data dockerapi.Volume) (strin
 		return "", err
 	}
 
-	// Named on the child because docker tracks no dependency between volumes: eviction reads this to leave a lower alone while anything is layered on it.
+	// Named on the child because docker tracks no dependency between volumes: eviction reads these to leave a lower, and the upper and work dirs no container mounts, alone while the overlay exists.
 	labels := shell.OwnershipLabels()
 	labels[lowerLabel] = data.Name
+	labels[upperLabel] = upper.Name
+	labels[ovlLabel] = work.Name
 
 	child, err := s.docker.CreateVolume(ctx, "steps-in-"+randomSuffix(), labels,
 		dockerapi.OverlayOptions(data.Mountpoint, upper.Mountpoint, work.Mountpoint))

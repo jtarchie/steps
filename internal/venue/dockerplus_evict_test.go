@@ -110,6 +110,31 @@ func TestDockerPlusNeverEvictsALowerInUse(t *testing.T) {
 	}
 }
 
+// An overlay's upper and work volumes are mounted by no container, only by the overlay's options: an orphan pass that judged them by docker's refusal alone would wipe a long step's writes.
+func TestDockerPlusNeverReclaimsALiveOverlaysUpper(t *testing.T) {
+	socket := hostDockerSocket(t)
+	cleanCache(t)
+	scopeEviction(t, 8<<30, time.Hour)
+
+	worker := dockerPlusURL(testsshd.New(t), socket)
+
+	open := plusRunnerFor(t, worker, payloadDir(t, 1024))
+
+	err := open.Run(t.Context(), "echo kept > src/written.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	scopeEviction(t, 8<<30, 0)
+	runAndClose(t, worker, payloadDir(t, 1024), "true")
+
+	// ls, not test -s: a removed upper still answers a stat from the dentry cache, but its listing comes back empty.
+	err = open.Run(t.Context(), "ls src | grep -qx written.txt")
+	if err != nil {
+		t.Fatalf("an open session's write into its input was reclaimed: %v", err)
+	}
+}
+
 func TestDockerPlusReclaimsOrphansButNotWhatIsMounted(t *testing.T) {
 	socket := hostDockerSocket(t)
 	cleanCache(t)

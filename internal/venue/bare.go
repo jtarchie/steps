@@ -23,8 +23,11 @@ import (
 	"github.com/jtarchie/steps/internal/wire"
 )
 
-// killGrace is how long a cancelled command gets between TERM and KILL.
-const killGrace = 2 * time.Second
+const (
+	// killGrace is how long a cancelled command gets between TERM and KILL.
+	killGrace = 2 * time.Second
+	killPoll  = 100 * time.Millisecond
+)
 
 var (
 	errImageOnSSH   = errors.New("an ssh:// worker runs steps bare and cannot run image:; map the tag to docker+ssh:// for containers")
@@ -180,7 +183,10 @@ func (s *bareSession) connect(ctx context.Context) error {
 
 	s.client = client
 
-	s.sweep(ctx)
+	// Once per process per worker: what a dead process left does not appear mid-run, and this is an extra round trip per step.
+	if _, done := swept.LoadOrStore("ssh "+s.worker.Address(), true); !done {
+		s.sweep(ctx)
+	}
 
 	err = s.probe(ctx)
 	if err != nil {
@@ -247,7 +253,7 @@ func (s *bareSession) sweep(ctx context.Context) {
 		}
 
 		dir := strings.TrimSuffix(fields[0], ".owner")
-		stale = append(stale, shellQuote(dir), shellQuote(dir+".owner"), shellQuote(dir+".pid"))
+		stale = append(stale, shellQuote(dir), shellQuote(dir+".owner"), pidFiles(dir))
 	}
 
 	if len(stale) > 0 {
@@ -324,9 +330,13 @@ func (s *bareSession) run(ctx context.Context, command string, sinks outputSinks
 		workdir = path.Join(s.dir, s.spec.Subdir)
 	}
 
+	// One pid file per command: an agent's concurrent tool calls share this session, and a cancel must signal its own command's group, not whichever started last.
+	pidfile := s.dir + ".pid." + randomSuffix()
+
 	// Only execs: sshd made this session's shell a session leader, so the pid it records is also the group cancel signals.
-	script := `exec sh -c 'echo $$ > "$1"; cd "$2" || exit 1; exec sh -c "$3"' sh ` +
-		shellQuote(s.dir+".pid") + " " + shellQuote(workdir) + " " + shellQuote(s.envPrefix()+command)
+	// The env arrives on stdin, never in argv: a passed-through secret on the command line is readable by every user on the worker for as long as the command runs.
+	script := `exec sh -c 'echo $$ > "$1"; eval "$(cat)"; cd "$2" || exit 1; exec sh -c "$3"' sh ` +
+		shellQuote(pidfile) + " " + shellQuote(workdir) + " " + shellQuote(command)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -339,11 +349,11 @@ func (s *bareSession) run(ctx context.Context, command string, sinks outputSinks
 		<-runCtx.Done()
 
 		if ctx.Err() != nil {
-			s.kill(context.WithoutCancel(ctx))
+			s.kill(context.WithoutCancel(ctx), pidfile)
 		}
 	}()
 
-	code, err := s.exec(runCtx, script, nil, sinks.stdout, sinks.stderr)
+	code, err := s.exec(runCtx, script, strings.NewReader(s.envScript(ctx)), sinks.stdout, sinks.stderr)
 
 	cancel()
 	<-stopped
@@ -355,32 +365,43 @@ func (s *bareSession) run(ctx context.Context, command string, sinks outputSinks
 	return code, err
 }
 
-func (s *bareSession) envPrefix() string {
+// envScript is the command's env as shell exports: the step's, its worker tag, and this command's build metadata, as the shim's execEnv sends it.
+func (s *bareSession) envScript(ctx context.Context) string {
 	env := withWorkerTag(resolveEnv(s.spec.Env), s.spec.WorkerTag)
-	if len(env) == 0 {
-		return ""
+
+	var script strings.Builder
+
+	for _, vars := range []map[string]string{env, shell.BuildEnv(ctx)} {
+		for name, value := range vars {
+			script.WriteString("export " + name + "=" + shellQuote(value) + "\n")
+		}
 	}
 
-	parts := make([]string, 0, len(env))
-	for name, value := range env {
-		parts = append(parts, name+"="+shellQuote(value))
-	}
-
-	return "export " + strings.Join(parts, " ") + "; "
+	return script.String()
 }
 
+// pidFiles globs every command's pid file beside dir.
+func pidFiles(dir string) string { return shellQuote(dir) + ".pid.*" }
+
 // kill ends the command's process group: TERM, then KILL if it is still there after a grace period.
-func (s *bareSession) kill(ctx context.Context) {
-	pidfile := shellQuote(s.dir + ".pid")
+func (s *bareSession) kill(ctx context.Context, pidfile string) {
+	pidfile = shellQuote(pidfile)
 	signal := func(sig string) {
 		_, _ = s.exec(ctx, `p=$(cat `+pidfile+` 2>/dev/null) && { kill -`+sig+` -- -"$p" 2>/dev/null || kill -`+sig+` "$p" 2>/dev/null; }; true`, nil, io.Discard, io.Discard)
 	}
 
 	signal("TERM")
 
-	select {
-	case <-time.After(killGrace):
-	case <-ctx.Done():
+	// Polled from here rather than slept on the worker: fractional sleep is not POSIX, and a cancel that always waits the whole grace slows every race: and fail_fast.
+	deadline := time.Now().Add(killGrace)
+
+	for time.Now().Before(deadline) && ctx.Err() == nil {
+		code, err := s.exec(ctx, `p=$(cat `+pidfile+` 2>/dev/null) && kill -0 -- -"$p" 2>/dev/null`, nil, io.Discard, io.Discard)
+		if err != nil || code != 0 {
+			return
+		}
+
+		time.Sleep(killPoll)
 	}
 
 	signal("KILL")
@@ -567,13 +588,16 @@ func (s *bareSession) close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 	defer cancel()
 
+	owner, pids := shellQuote(s.dir+".owner"), pidFiles(s.dir)
+
+	// The directory stays; its owner file goes, or the next session from this machine sweeps it once this process exits.
 	if s.spec.Keep {
+		_, _ = s.exec(ctx, "rm -f "+owner+" "+pids, nil, io.Discard, io.Discard)
+
 		return nil
 	}
 
-	dir := shellQuote(s.dir)
-
-	code, err := s.exec(ctx, `p=$(cat `+shellQuote(s.dir+".pid")+` 2>/dev/null) && kill -KILL -- -"$p" 2>/dev/null; rm -rf `+dir+" "+shellQuote(s.dir+".owner")+" "+shellQuote(s.dir+".pid"), nil, io.Discard, io.Discard)
+	code, err := s.exec(ctx, `for f in `+pids+`; do p=$(cat "$f" 2>/dev/null) && kill -KILL -- -"$p" 2>/dev/null; done; rm -rf `+shellQuote(s.dir)+" "+owner+" "+pids, nil, io.Discard, io.Discard)
 	if err == nil && code != 0 {
 		err = fmt.Errorf("%w: rm exited %d", errBareTransfer, code)
 	}

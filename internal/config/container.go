@@ -179,6 +179,11 @@ func (c *Config) rejectOnGetAndPut(field string, set func(*Step) bool) error {
 
 // PlacedImage is the image a placed step runs in: its own or its task's or agent's, or for a get or put its resource type's; "" runs bare.
 func (c *Config) PlacedImage(step Step) string {
+	// A try: wrapper is visited as well as what it wraps, and carries the wrapped step's tag: its image is the wrapped step's too.
+	for step.Try != nil {
+		step = *step.Try
+	}
+
 	if image := c.resolvedStepImage(step); image != "" {
 		return image
 	}
