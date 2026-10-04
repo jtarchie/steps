@@ -164,6 +164,11 @@ func (s *Server) handleHTMXSSE(c *echo.Context) error {
 	return serveAsset(c, "static/hx-sse.min.js", "text/javascript; charset=utf-8")
 }
 
+// handleAppJS serves the layout's own script, a file rather than inline so a page and each of its polls carry only markup.
+func (s *Server) handleAppJS(c *echo.Context) error {
+	return serveAsset(c, "static/app.js", "text/javascript; charset=utf-8")
+}
+
 // serveAsset serves one embedded file with a validator, so a browser that
 // already holds it asks and is told 304 instead of taking the ~80KB of
 // stylesheet and library again on every navigation. The tag is the content's

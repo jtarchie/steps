@@ -596,7 +596,8 @@ func TestEmptyTranscriptPlaceholderIsNotAStepToWalk(t *testing.T) {
 		t.Fatal("the placeholder is no longer a .step, so the walk needs no exception — drop it")
 	}
 
-	if !strings.Contains(page, `querySelectorAll('.step:not(#run-empty)')`) {
+	_, script := get(t, server, "/static/app.js")
+	if !strings.Contains(script, `querySelectorAll('.step:not(#run-empty)')`) {
 		t.Error("the step walk collects the hidden placeholder, so j/k lands on a row nobody can see")
 	}
 }

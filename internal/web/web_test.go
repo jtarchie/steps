@@ -2080,6 +2080,11 @@ func TestRunPageKeepsWhatTheReaderOpened(t *testing.T) {
 	}
 
 	_, page := get(t, server, "/p/demo/runs/run-folds")
+	if !strings.Contains(page, `<script src="/static/app.js" defer>`) {
+		t.Fatal("the run page does not load the layout script")
+	}
+
+	_, script := get(t, server, "/static/app.js")
 
 	for want, why := range map[string]string{
 		`'steps.folds:'`:                         "folds are not kept across the reload that ends a live run",
@@ -2088,8 +2093,8 @@ func TestRunPageKeepsWhatTheReaderOpened(t *testing.T) {
 		`addEventListener('focusin'`:             "a focused row vanishes when the block around it passes",
 		`closest('.step.container:not(.open)')`:  "j/k walks into rows inside closed blocks",
 	} {
-		if !strings.Contains(page, want) {
-			t.Errorf("the page lacks %s: %s", want, why)
+		if !strings.Contains(script, want) {
+			t.Errorf("the layout script lacks %s: %s", want, why)
 		}
 	}
 }

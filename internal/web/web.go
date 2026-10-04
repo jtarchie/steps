@@ -437,6 +437,7 @@ func (s *Server) routes() error {
 	e.GET("/static/app.css", s.handleCSS)
 	e.GET("/static/htmx.min.js", s.handleHTMX)
 	e.GET("/static/hx-sse.min.js", s.handleHTMXSSE)
+	e.GET("/static/app.js", s.handleAppJS)
 	e.GET("/docs", s.handleDocsIndex)
 	e.GET("/docs/:page", s.handleDocs)
 
