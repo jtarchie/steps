@@ -186,6 +186,8 @@ func serveAsset(c *echo.Context, path, contentType string) error {
 	header.Set("ETag", `"`+hex.EncodeToString(sum[:8])+`"`)
 	header.Set("Cache-Control", "no-cache")
 
+	// A range ServeContent computes is offsets into the plain file, which a gzipped response makes wrong; assets are small enough to always send whole.
+	c.Request().Header.Del("Range")
 	http.ServeContent(c.Response(), c.Request(), path, time.Time{}, bytes.NewReader(data))
 
 	return nil

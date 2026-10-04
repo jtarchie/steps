@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"io"
@@ -124,5 +125,41 @@ func TestRunStreamIsNotGzipped(t *testing.T) {
 
 	if !strings.HasPrefix(rec.Body.String(), "id: ") {
 		t.Errorf("the event stream is not plain SSE:\n%.200q", rec.Body.String())
+	}
+}
+
+// TestAssetRangeIsNotGzipped: a range ServeContent computes is offsets into the plain file, but under gzip a client reads them as offsets into the encoded one, so a resumed or stitched download assembles garbage.
+func TestAssetRangeIsNotGzipped(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+
+	whole, err := assets.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/static/app.css", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("Range", "bytes=1000-1999")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Range") != "" {
+		t.Fatalf("status %d, Content-Range %q: want the whole file", rec.Code, rec.Header().Get("Content-Range"))
+	}
+
+	reader, err := gzip.NewReader(rec.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plain, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(plain, whole) {
+		t.Errorf("decompressed to %d bytes, want the %d-byte file", len(plain), len(whole))
 	}
 }
