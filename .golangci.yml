@@ -500,6 +500,8 @@ linters:
             # replica catches up, and telling that lag apart from a bad id means
             # reading ErrorCode() rather than matching on message text.
             - "github.com/aws/smithy-go"
+            # testsshd is test-only: the in-process sshd the ssh venues are tested against.
+            - "github.com/jtarchie/steps/internal/testsshd"
         # shim is the remote half of a placed step: it runs as `steps _shim` on
         # a worker, reads frames from stdin and writes them to stdout, and
         # knows nothing about pipelines — no config, no store, no workspace,
@@ -534,6 +536,23 @@ linters:
             - "**/internal/wire/**"
           allow:
             - "$gostd"
+        # testsshd is a test fixture other packages' tests import, so it is a package rather than a _test.go file.
+        TestSSHD:
+          files:
+            - "**/internal/testsshd/**"
+          allow:
+            - "$gostd"
+            - "github.com/jtarchie/steps/internal/testsshd"
+            - "golang.org/x/crypto/ssh"
+            - "github.com/pkg/sftp/v2"
+            - "go.uber.org/goleak"
+        # treedigest must stay stdlib-only: its twin is a busybox script with nothing else to lean on (steps#206).
+        TreeDigest:
+          files:
+            - "**/internal/treedigest/**"
+          allow:
+            - "$gostd"
+            - "github.com/jtarchie/steps/internal/treedigest"
         # blobstore is the content-addressed artifact store on S3: trees by
         # digest, packed exactly as they cross a venue's wire (compress over
         # wire's tar), reaching S3 through the pure-Go SDK — GET/PUT by key,

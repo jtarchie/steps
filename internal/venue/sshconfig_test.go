@@ -609,7 +609,7 @@ func aliasWorker(t *testing.T, alias string, server *testSSHD, config string) st
 func hostPortOf(t *testing.T, server *testSSHD) (string, string) {
 	t.Helper()
 
-	host, port, err := net.SplitHostPort(server.listener.Addr().String())
+	host, port, err := net.SplitHostPort(server.Addr())
 	if err != nil {
 		t.Fatalf("splitting the server address: %v", err)
 	}

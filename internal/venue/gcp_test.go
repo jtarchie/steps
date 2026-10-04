@@ -30,6 +30,7 @@ import (
 	"google.golang.org/api/googleapi"
 
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/testsshd"
 	"github.com/jtarchie/steps/internal/venue/iapdial"
 )
 
@@ -167,14 +168,6 @@ func newGCPSSHD(t *testing.T) *testSSHD {
 func newGCPSSHDRejectingFirst(t *testing.T, n int, configure ...func(*testing.T, *ssh.ServerConfig)) *testSSHD {
 	t.Helper()
 
-	dir := t.TempDir()
-	server := &testSSHD{Root: filepath.Join(dir, "worker")}
-
-	err := os.MkdirAll(server.Root, 0o750)
-	if err != nil {
-		t.Fatalf("making the worker root: %v", err)
-	}
-
 	hostSigner, hostPub, _ := generateKey(t)
 
 	clientKey, err := gcpKey()
@@ -207,24 +200,7 @@ func newGCPSSHDRejectingFirst(t *testing.T, n int, configure ...func(*testing.T,
 		apply(t, config)
 	}
 
-	var listenConfig net.ListenConfig
-
-	server.listener, err = listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listening: %v", err)
-	}
-
-	server.HostKey = hostPub
-
-	go server.accept(config)
-
-	t.Cleanup(func() {
-		server.closed.Store(true)
-		_ = server.listener.Close()
-		server.conns.Wait()
-	})
-
-	return server
+	return testsshd.NewWithConfig(t, config, hostPub)
 }
 
 // addECDSAHostKey gives a test sshd a SECOND host key of a type the client
@@ -311,7 +287,7 @@ func seamGCP(t *testing.T, fake *fakeGCE, sshd *testSSHD) *dialedTargets {
 			return nil, fmt.Errorf("the dial carried token %q", token)
 		}
 
-		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", sshd.listener.Addr().String())
+		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", sshd.Addr())
 		if err != nil {
 			return nil, fmt.Errorf("reaching the test sshd: %w", err)
 		}
