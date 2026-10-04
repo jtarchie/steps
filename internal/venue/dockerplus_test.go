@@ -1,6 +1,7 @@
 package venue
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/url"
@@ -171,4 +172,151 @@ func deadAddress(t *testing.T) string {
 	_ = listener.Close()
 
 	return address
+}
+
+// sessionVolumes counts this process's non-cache volumes: what a closed session must not leave.
+func sessionVolumes(t *testing.T) int {
+	t.Helper()
+
+	//nolint:gosec // a filter this test built from its own pid
+	out, err := exec.CommandContext(t.Context(), "docker", "volume", "ls", "--format", "{{.Name}} {{.Labels}}", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid())).Output()
+	if err != nil {
+		t.Fatalf("listing volumes: %v", err)
+	}
+
+	count := 0
+
+	for line := range strings.Lines(string(out)) {
+		if !strings.Contains(line, cacheLabel+"=") {
+			count++
+		}
+	}
+
+	return count
+}
+
+func cleanCache(t *testing.T) {
+	t.Helper()
+
+	t.Cleanup(func() {
+		ctx := context.WithoutCancel(t.Context())
+
+		//nolint:gosec // a filter built from this process's own pid
+		out, _ := exec.CommandContext(ctx, "docker", "volume", "ls", "-q", "--filter", "label="+cacheLabel, "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid())).Output()
+		for _, name := range strings.Fields(string(out)) {
+			_ = exec.CommandContext(ctx, "docker", "volume", "rm", name).Run() //nolint:gosec // a name the daemon listed
+		}
+	})
+}
+
+func payloadDir(t *testing.T, size int) string {
+	t.Helper()
+
+	cwd := t.TempDir()
+
+	err := os.Mkdir(filepath.Join(cwd, "src"), 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile(t, filepath.Join(cwd, "src", "blob.bin"), strings.Repeat(randomSuffix(), size/16))
+
+	return cwd
+}
+
+func runAndClose(t *testing.T, worker, cwd, command string) Placement {
+	t.Helper()
+
+	runner, err := NewRunner(shell.RunnerSpec{Image: "alpine:3", Cwd: cwd, Worker: worker, WorkerTag: "box"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Also a cleanup: a Fatal below skips the explicit Close, and an open session holds the test sshd's cleanup forever.
+	t.Cleanup(func() { _ = runner.Close() })
+
+	err = runner.Run(t.Context(), command)
+	if err != nil {
+		t.Fatalf("Run(%q): %v", command, err)
+	}
+
+	placement, _ := PlacementOf(runner)
+
+	err = runner.Close()
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	return placement
+}
+
+// The per-artifact cache: an input the worker has already seen is offered by digest and not sent again.
+func TestDockerPlusSendsAnUnchangedInputOnce(t *testing.T) {
+	socket := hostDockerSocket(t)
+	cleanCache(t)
+
+	worker := dockerPlusURL(testsshd.New(t), socket)
+	cwd := payloadDir(t, 1<<20)
+
+	first := runAndClose(t, worker, cwd, "test -s src/blob.bin")
+	second := runAndClose(t, worker, cwd, "test -s src/blob.bin")
+
+	if first.BytesSent < 1<<20 {
+		t.Fatalf("the first run sent %d bytes, want the whole input", first.BytesSent)
+	}
+
+	if second.BytesSent >= 1<<20 {
+		t.Fatalf("the second run sent %d bytes for an input the worker already holds", second.BytesSent)
+	}
+}
+
+// Copy-on-write: a step that writes into its input changes its own view, never the cached tree the next step is handed.
+func TestDockerPlusStepWritesNeverReachTheCache(t *testing.T) {
+	socket := hostDockerSocket(t)
+	cleanCache(t)
+
+	before := sessionVolumes(t)
+	worker := dockerPlusURL(testsshd.New(t), socket)
+	cwd := payloadDir(t, 1024)
+
+	runAndClose(t, worker, cwd, "echo vandal > src/blob.bin && touch src/extra")
+	second := runAndClose(t, worker, cwd, "test ! -e src/extra && ! grep -q vandal src/blob.bin")
+
+	if second.BytesSent >= 1024 {
+		t.Fatalf("the second run re-sent the input (%d bytes): the cache was not reused", second.BytesSent)
+	}
+
+	if after := sessionVolumes(t); after != before {
+		t.Fatalf("closed sessions left %d volumes beyond the cache", after-before)
+	}
+}
+
+// A cached tree is re-hashed before reuse: one changed under the alias is a miss and is sent again, never handed to a step as the tree it asked for.
+func TestDockerPlusRefusesATamperedCacheEntry(t *testing.T) {
+	socket := hostDockerSocket(t)
+	cleanCache(t)
+
+	worker := dockerPlusURL(testsshd.New(t), socket)
+	cwd := payloadDir(t, 1024)
+
+	runAndClose(t, worker, cwd, "true")
+
+	//nolint:gosec // a filter built from this process's own pid
+	out, err := exec.CommandContext(t.Context(), "docker", "volume", "ls", "-q", "--filter", "label="+cacheLabel+"=data", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid())).Output()
+	if err != nil || len(strings.Fields(string(out))) != 1 {
+		t.Fatalf("want one data volume, got %q (%v)", out, err)
+	}
+
+	data := strings.TrimSpace(string(out))
+
+	//nolint:gosec // a volume the daemon named
+	err = exec.CommandContext(t.Context(), "docker", "run", "--rm", "-v", data+":/d", "alpine:3", "sh", "-c", "echo tampered > /d/blob.bin").Run()
+	if err != nil {
+		t.Fatalf("tampering: %v", err)
+	}
+
+	second := runAndClose(t, worker, cwd, "! grep -q tampered src/blob.bin")
+	if second.BytesSent < 1024 {
+		t.Fatalf("the tampered entry was reused (%d bytes sent)", second.BytesSent)
+	}
 }

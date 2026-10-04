@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 
 	"github.com/containerd/errdefs"
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	volumetypes "github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
@@ -139,4 +141,46 @@ func (c *Client) GetArchive(ctx context.Context, id, src string) (io.ReadCloser,
 	}
 
 	return copied.Content, nil
+}
+
+// RunOnce runs spec to completion and removes it: its exit code, and stdout kept apart from stderr so a one-line answer can be read as one.
+func (c *Client) RunOnce(ctx context.Context, spec ContainerSpec) (int, string, string, error) {
+	id, err := c.CreateContainer(ctx, spec)
+	if err != nil {
+		return 0, "", "", err
+	}
+
+	defer func() { _ = c.RemoveContainer(context.WithoutCancel(ctx), id) }()
+
+	err = c.StartContainer(ctx, id)
+	if err != nil {
+		return 0, "", "", err
+	}
+
+	// Not-running is safe here, unlike on a container never started: it answers with the real exit even if the container already finished.
+	result := c.api.ContainerWait(ctx, id, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
+
+	var code int
+
+	select {
+	case status := <-result.Result:
+		code = int(status.StatusCode)
+	case err = <-result.Error:
+		return 0, "", "", fmt.Errorf("waiting on container %s: %w", id, err)
+	}
+
+	logs, err := c.api.ContainerLogs(ctx, id, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
+	if err != nil {
+		return code, "", "", fmt.Errorf("reading container %s's output: %w", id, err)
+	}
+	defer func() { _ = logs.Close() }()
+
+	var stdout, stderr strings.Builder
+
+	_, err = stdcopy.StdCopy(&stdout, &stderr, logs)
+	if err != nil {
+		return code, "", "", fmt.Errorf("reading container %s's output: %w", id, err)
+	}
+
+	return code, strings.TrimSpace(stdout.String()), stderr.String(), nil
 }

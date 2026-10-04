@@ -276,6 +276,12 @@ func unkept(paths []string, artifact string, kept map[string]string) ([]string, 
 // a later Pull can dial the same machine. False for a runner that is not
 // placed, or whose worker kept nothing.
 func HeldOf(r shell.Runner) (map[string]string, string, bool) {
+	if plus, ok := r.(interface {
+		heldOutputs() (map[string]string, string, bool)
+	}); ok {
+		return plus.heldOutputs()
+	}
+
 	placed, ok := r.(runner)
 	if !ok {
 		return nil, "", false

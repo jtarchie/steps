@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -51,7 +52,14 @@ type plusSession struct {
 	docker  *dockerapi.Client
 	inner   shell.Runner
 	holder  string
+	work    string
 	volumes []string
+	// outputs are the declared outputs that got a plain volume of their own: only those can be held, since an overlay's data is visible only while something mounts it.
+	outputs map[string]string
+	// kept are volumes now named by a digest, which outlive the session.
+	kept   map[string]bool
+	heldMu sync.Mutex
+	held   map[string]string
 
 	sent, received atomic.Int64
 }
@@ -61,12 +69,7 @@ func newPlusRunner(worker Worker, spec shell.RunnerSpec) (shell.Runner, error) {
 		return nil, fmt.Errorf("%w %q: %w", ErrWorker, worker.URL, errNoImageOnDocker)
 	}
 
-	// ponytail: an input held on another worker needs the 2d pipe; refused until then rather than run against a tree missing it.
-	if len(spec.RemoteInputs) > 0 {
-		return nil, fmt.Errorf("%w %q: %w", ErrWorker, worker.URL, errRemoteInputsHere)
-	}
-
-	return plusRunner{s: &plusSession{worker: worker, spec: spec}}, nil
+	return plusRunner{s: &plusSession{worker: worker, spec: spec, kept: map[string]bool{}}}, nil
 }
 
 func (r plusRunner) Run(ctx context.Context, command string) error {
@@ -202,13 +205,20 @@ func (s *plusSession) connect(ctx context.Context) error {
 		return err
 	}
 
-	s.holder, err = s.docker.CreateHolder(ctx, "steps-holder-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), []string{work + ":" + plusWorkdir})
+	s.work = work.Name
+
+	mounts, files, err := s.compose(ctx)
+	if err != nil {
+		return err
+	}
+
+	s.holder, err = s.docker.CreateHolder(ctx, "steps-holder-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), mounts)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
 
-	if s.spec.Cwd != "" {
-		err = s.upload(ctx)
+	if len(files) > 0 {
+		err = s.pourFiles(ctx, files)
 		if err != nil {
 			return err
 		}
@@ -220,12 +230,106 @@ func (s *plusSession) connect(ctx context.Context) error {
 	spec.DockerHost = s.daemonName()
 	spec.DockerDial = dial
 	spec.EnvValues = withWorkerTag(resolveEnv(spec.Env), s.spec.WorkerTag)
-	spec.Volumes = []string{work + ":" + plusWorkdir}
+	spec.Volumes = mounts
 	spec.MountPath = plusWorkdir
 
 	s.inner, err = shell.NewRunner(spec)
 	if err != nil {
 		return fmt.Errorf("%w", err)
+	}
+
+	return nil
+}
+
+// compose lays the step's tree out as volumes: each input directory a copy-on-write view of a cached tree, each empty output a plain volume of its own, and the work volume under them for whatever else the tree holds.
+func (s *plusSession) compose(ctx context.Context) ([]string, []string, error) {
+	mounts := []string{s.work + ":" + plusWorkdir}
+	s.outputs = map[string]string{}
+
+	declared := map[string]bool{}
+	for _, name := range s.spec.Fetch {
+		declared[name] = true
+	}
+
+	var files []string
+
+	if s.spec.Cwd != "" {
+		entries, err := os.ReadDir(s.spec.Cwd)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w", err)
+		}
+
+		for _, entry := range entries {
+			name, local := entry.Name(), filepath.Join(s.spec.Cwd, entry.Name())
+
+			if !entry.IsDir() {
+				files = append(files, name)
+
+				continue
+			}
+
+			mount, err := s.mountFor(ctx, name, local, declared[name])
+			if err != nil {
+				return nil, nil, err
+			}
+
+			mounts = append(mounts, mount)
+		}
+	}
+
+	for name, input := range s.spec.RemoteInputs {
+		volume, err := s.placeRemote(ctx, name, input)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		mounts = append(mounts, volume+":"+path.Join(plusWorkdir, name))
+	}
+
+	return mounts, files, nil
+}
+
+// mountFor places one top-level directory; an empty declared output gets a fresh volume, which is what lets it be held afterwards without a copy.
+func (s *plusSession) mountFor(ctx context.Context, name, local string, output bool) (string, error) {
+	target := path.Join(plusWorkdir, name)
+
+	if output && isEmptyDir(local) {
+		volume, err := s.newVolume(ctx, "out")
+		if err != nil {
+			return "", err
+		}
+
+		s.outputs[name] = volume.Name
+
+		return volume.Name + ":" + target, nil
+	}
+
+	volume, err := s.placeLocal(ctx, local)
+	if err != nil {
+		return "", fmt.Errorf("input %q: %w", name, err)
+	}
+
+	return volume + ":" + target, nil
+}
+
+func isEmptyDir(dir string) bool {
+	entries, err := os.ReadDir(dir)
+
+	return err == nil && len(entries) == 0
+}
+
+// pourFiles sends the tree's top-level files, which no volume can be mounted over, into the work volume.
+func (s *plusSession) pourFiles(ctx context.Context, names []string) error {
+	reader, writer := io.Pipe()
+
+	go func() { writer.CloseWithError(wire.PackPaths(writer, s.spec.Cwd, names)) }()
+
+	err := s.docker.PutArchive(ctx, s.holder, plusWorkdir, &byteCounter{r: reader, n: &s.sent})
+
+	_ = reader.CloseWithError(io.ErrClosedPipe)
+
+	if err != nil {
+		return fmt.Errorf("sending the step's files: %w", err)
 	}
 
 	return nil
@@ -263,33 +367,15 @@ func (s *plusSession) dialDaemon(ctx context.Context) (func(context.Context) (ne
 	return dial, nil
 }
 
-func (s *plusSession) newVolume(ctx context.Context, kind string) (string, error) {
+func (s *plusSession) newVolume(ctx context.Context, kind string) (dockerapi.Volume, error) {
 	created, err := s.docker.CreateVolume(ctx, "steps-"+kind+"-"+randomSuffix(), shell.OwnershipLabels(), nil)
 	if err != nil {
-		return "", fmt.Errorf("%w", err)
+		return dockerapi.Volume{}, fmt.Errorf("%w", err)
 	}
 
 	s.volumes = append(s.volumes, created.Name)
 
-	return created.Name, nil
-}
-
-func (s *plusSession) upload(ctx context.Context) error {
-	reader, writer := io.Pipe()
-
-	go func() { writer.CloseWithError(wire.PackTree(writer, s.spec.Cwd)) }()
-
-	counted := &byteCounter{r: reader, n: &s.sent}
-
-	err := s.docker.PutArchive(ctx, s.holder, plusWorkdir, counted)
-
-	_ = reader.CloseWithError(io.ErrClosedPipe)
-
-	if err != nil {
-		return fmt.Errorf("sending the step's tree: %w", err)
-	}
-
-	return nil
+	return created, nil
 }
 
 func (s *plusSession) fetch(ctx context.Context) error {
@@ -298,17 +384,55 @@ func (s *plusSession) fetch(ctx context.Context) error {
 	}
 
 	if s.spec.FetchAll {
+		// ponytail: a FetchAll tree always comes home; holding it needs the work volume free of input mounts, which only a get's empty tree is.
 		return s.fetchInto(ctx, plusWorkdir+"/.", s.spec.Cwd, "")
 	}
 
+	return s.fetchDeclared(ctx)
+}
+
+func (s *plusSession) fetchDeclared(ctx context.Context) error {
+	held := map[string]string{}
+
 	for _, name := range s.spec.Fetch {
+		if volume, ok := s.outputs[name]; ok && s.spec.DeferFetch {
+			digest, err := s.hold(ctx, volume)
+			if err != nil {
+				return fmt.Errorf("holding output %q: %w", name, err)
+			}
+
+			held[name] = digest
+
+			continue
+		}
+
 		err := s.fetchInto(ctx, path.Join(plusWorkdir, name), s.spec.Cwd, name)
 		if err != nil {
 			return err
 		}
 	}
 
+	s.heldMu.Lock()
+	s.held = held
+	s.heldMu.Unlock()
+
 	return nil
+}
+
+func (r plusRunner) heldOutputs() (map[string]string, string, bool) {
+	r.s.heldMu.Lock()
+	defer r.s.heldMu.Unlock()
+
+	if len(r.s.held) == 0 {
+		return nil, "", false
+	}
+
+	held := make(map[string]string, len(r.s.held))
+	for name, digest := range r.s.held {
+		held[name] = digest
+	}
+
+	return held, r.s.worker.URL, true
 }
 
 // fetchInto unpacks src beside dst first and swaps it in, so a failed transfer never leaves an output half-replaced; name empty means dst's whole contents.
@@ -423,13 +547,7 @@ func (s *plusSession) close() error {
 	}
 
 	if s.docker != nil && !s.spec.Keep {
-		if s.holder != "" {
-			errs = append(errs, s.docker.RemoveContainer(ctx, s.holder))
-		}
-
-		for _, name := range s.volumes {
-			errs = append(errs, s.docker.RemoveVolume(ctx, name))
-		}
+		errs = append(errs, s.removeOwned(ctx)...)
 	}
 
 	if s.docker != nil {
@@ -446,6 +564,23 @@ func (s *plusSession) close() error {
 	}
 
 	return nil
+}
+
+// removeOwned drops what only this session used: the holder, and every volume not now named by a digest. Newest first, so an overlay goes before its upper.
+func (s *plusSession) removeOwned(ctx context.Context) []error {
+	var errs []error
+
+	if s.holder != "" {
+		errs = append(errs, s.docker.RemoveContainer(ctx, s.holder))
+	}
+
+	for _, name := range slices.Backward(s.volumes) {
+		if !s.kept[name] {
+			errs = append(errs, s.docker.RemoveVolume(ctx, name))
+		}
+	}
+
+	return errs
 }
 
 type byteCounter struct {

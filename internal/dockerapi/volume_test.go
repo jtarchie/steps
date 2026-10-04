@@ -317,3 +317,39 @@ func TestCreateVolumeReturnsAnExistingOneUntouched(t *testing.T) {
 		t.Fatalf("the second create emptied the volume: %q", got)
 	}
 }
+
+// A worker-side digest is a one-shot container whose stdout is the answer and whose exit says whether to trust it.
+func TestRunOnceReportsStdoutApartFromStderrAndTheExitCode(t *testing.T) {
+	client := requireDaemon(t)
+
+	if !client.ImagePresent(t.Context(), testImage) {
+		t.Skipf("%s is not present", testImage)
+	}
+
+	data := volume(t, client, "data", nil)
+
+	err := client.PutArchive(t.Context(), holder(t, client, "fill", data.Name+":/d"), "/d", tarOf(t, map[string]entry{"f": {mode: 0o644, body: "inside"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr, err := client.RunOnce(t.Context(), ContainerSpec{
+		Image:  testImage,
+		Cmd:    []string{"sh", "-c", "cat /d/f; echo noise >&2; exit 5"},
+		Name:   uniqueName(t, "once"),
+		Labels: map[string]string{"steps.once": t.Name()},
+		Mounts: []string{data.Name + ":/d:ro"},
+	})
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	if code != 5 || stdout != "inside" || stderr != "noise\n" {
+		t.Fatalf("RunOnce = %d, %q, %q; want 5, the file, and stderr kept apart", code, stdout, stderr)
+	}
+
+	listed, err := client.ListContainers(t.Context(), map[string]string{"steps.once": t.Name()})
+	if err != nil || len(listed) != 0 {
+		t.Fatalf("RunOnce left %d containers: %v", len(listed), err)
+	}
+}

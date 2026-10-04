@@ -1,8 +1,12 @@
 package e2e
 
 import (
+	"context"
 	"net/url"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -25,6 +29,9 @@ func dockerSSHWorker(t *testing.T) (string, *testsshd.Server) {
 	if !ok {
 		t.Skipf("docker endpoint %q is not a unix socket", host)
 	}
+
+	// The worker keeps what it sees past the run, so this process's cache is removed with the test.
+	t.Cleanup(func() { removeCacheVolumes(t) })
 
 	server := testsshd.New(t)
 	query := url.Values{
@@ -87,7 +94,69 @@ jobs:
 		t.Errorf("placement address = %q", remote.Address)
 	}
 
-	if remote.BytesSent == 0 || remote.BytesReceived == 0 {
-		t.Errorf("placement bytes sent %d, received %d: the tree did not cross both ways", remote.BytesSent, remote.BytesReceived)
+	if remote.BytesSent == 0 {
+		t.Errorf("placement sent nothing: the step's input never reached the worker")
+	}
+}
+
+// The issue's test (#206): a placed task writes an output, a second placed step on the same worker reads it, and the shared input crosses once — when the local publish pulls it, never between the two.
+func TestDockerSSHWorkerKeepsWhatItProduces(t *testing.T) {
+	worker, _ := dockerSSHWorker(t)
+
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: seed
+    tags: [a]
+    image: `+dockerE2EImage+`
+    outputs: [src]
+    run: |
+      head -c `+strconv.Itoa(payloadBytes)+` /dev/urandom > src/blob.bin
+      printf '%s' "$STEPS_WORKER" > src/where.txt
+  - task: consume
+    tags: [a]
+    image: `+dockerE2EImage+`
+    inputs: [src]
+    outputs: [out]
+    run: |
+      wc -c < src/blob.bin | tr -d ' ' > out/size.txt
+      cp src/where.txt out/where.txt
+  - task: publish
+    inputs: [out]
+    run: cp out/size.txt `+filepath.Join(dir, "size.txt")+` && cp out/where.txt `+filepath.Join(dir, "where.txt")+`
+`)
+
+	mustRun(t, path, "--worker", "a="+worker)
+
+	assertPublished(t, dir)
+
+	placements := runPlacements(t, path)
+
+	if sent := placementNamed(t, placements, "consume").BytesSent; sent >= payloadBytes {
+		t.Errorf("consume sent %d bytes to the worker that produced them; want under the payload", sent)
+	}
+
+	for _, name := range []string{"seed", "consume"} {
+		if got := placementNamed(t, placements, name).BytesReceived; got != 0 {
+			t.Errorf("%s brought %d bytes home when it finished; a held output comes home only when read here", name, got)
+		}
+	}
+}
+
+func removeCacheVolumes(t *testing.T) {
+	t.Helper()
+
+	ctx := context.WithoutCancel(t.Context())
+
+	//nolint:gosec // a filter built from this process's own pid
+	out, err := exec.CommandContext(ctx, "docker", "volume", "ls", "-q", "--filter", "label=steps.cache", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid())).Output()
+	if err != nil {
+		return
+	}
+
+	for _, name := range strings.Fields(string(out)) {
+		_ = exec.CommandContext(ctx, "docker", "volume", "rm", name).Run() //nolint:gosec // a name the daemon listed
 	}
 }

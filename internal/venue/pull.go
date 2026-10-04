@@ -22,6 +22,20 @@ import (
 // crossed. A worker that no longer holds the tree is an error naming it; the
 // caller decides what a lost holder costs.
 func Pull(ctx context.Context, spec shell.RunnerSpec, name, digest, dst string) (int64, error) {
+	worker, err := ParseWorker(spec.Worker)
+	if err != nil {
+		return 0, err
+	}
+
+	if worker.Scheme == SchemeDockerSSH {
+		received, err := pullPlus(ctx, worker, digest, dst)
+		if err != nil {
+			return 0, fmt.Errorf("worker %q: %w", spec.Worker, err)
+		}
+
+		return received, nil
+	}
+
 	s, err := dialHolder(ctx, spec)
 	if err != nil {
 		return 0, err
@@ -45,6 +59,16 @@ func Pull(ctx context.Context, spec shell.RunnerSpec, name, digest, dst string) 
 // as name, at url — a presigned PUT the caller minted. The bytes go from
 // that worker to the store and never through this machine.
 func Push(ctx context.Context, spec shell.RunnerSpec, name, digest, url string) error {
+	worker, err := ParseWorker(spec.Worker)
+	if err != nil {
+		return err
+	}
+
+	// ponytail: a docker+ holder reaches the store only through this machine once the store path is ported; refused by name until then.
+	if worker.Scheme == SchemeDockerSSH {
+		return fmt.Errorf("worker %q: %w", spec.Worker, errStoreOnDocker)
+	}
+
 	s, err := dialHolder(ctx, spec)
 	if err != nil {
 		return err
