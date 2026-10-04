@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -282,9 +283,11 @@ func TestEndToEndAgentContainerLeavesNothingRunning(t *testing.T) {
 
 	mustRun(t, path)
 
-	after := runningStepsContainers(t)
-	if len(after) != len(before) {
-		t.Errorf("containers named steps-* before = %v, after = %v — the run left one behind", before, after)
+	// A leak is a container that was not there before; one that went away is an earlier test's teardown finishing, which a count comparison misread as this run's.
+	for _, id := range runningStepsContainers(t) {
+		if !slices.Contains(before, id) {
+			t.Errorf("the run left container %s behind (before: %v)", id, before)
+		}
 	}
 }
 
