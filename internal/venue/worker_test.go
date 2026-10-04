@@ -85,13 +85,18 @@ func TestParseWorkerDockerSocket(t *testing.T) {
 func TestParseWorkerOptions(t *testing.T) {
 	t.Parallel()
 
-	worker, err := ParseWorker("ssh://jt@box?identity=/k&known_hosts=/kh&binary=/b")
+	worker, err := ParseWorker("ssh://jt@box?identity=/k&known_hosts=/kh")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
 
-	if worker.Identity != "/k" || worker.KnownHosts != "/kh" || worker.Binary != "/b" {
-		t.Errorf("options = %+v, want all three carried", worker)
+	if worker.Identity != "/k" || worker.KnownHosts != "/kh" {
+		t.Errorf("options = %+v, want both carried", worker)
+	}
+
+	_, err = ParseWorker("ssh://box?binary=/b")
+	if err == nil {
+		t.Error("ssh:// accepted ?binary=, which nothing pushes any more")
 	}
 }
 

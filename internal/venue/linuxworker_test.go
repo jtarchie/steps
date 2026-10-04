@@ -19,6 +19,7 @@ package venue
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"os"
 	"os/exec"
@@ -33,16 +34,16 @@ import (
 
 // linuxWorker is a running container reachable as root over ssh.
 type linuxWorker struct {
-	url      string
-	identity string
-	binary   string
+	// url reaches it bare, over ssh://; dockerURL reaches its daemon, over docker+ssh://, for the variant that has one.
+	url       string
+	dockerURL string
+	identity  string
 	// container is the worker itself, for a fixture that has to reach past
 	// ssh — seeding the worker's own daemon with an image, for one.
 	container string
 }
 
-// startLinuxWorker builds the image, generates a keypair, runs the container
-// and cross-compiles the shim it will be sent.
+// startLinuxWorker builds the image, generates a keypair and runs the container.
 func startLinuxWorker(t *testing.T) linuxWorker {
 	t.Helper()
 
@@ -189,8 +190,6 @@ func startLinuxWorkerWith(t *testing.T, dockerfile string, extraRunArgs ...strin
 
 	port := hostPort(t, dir, id)
 
-	binary := buildLinuxShim(t, dir)
-
 	// Encoded, never concatenated: a SHA256 fingerprint is base64 and a "+" in
 	// a raw query decodes to a SPACE, so the pin arrived mangled and the
 	// worker was refused for a typo nobody made.
@@ -198,13 +197,12 @@ func startLinuxWorkerWith(t *testing.T, dockerfile string, extraRunArgs ...strin
 		"identity":   {identity},
 		"hostkey":    {hostKeyFingerprint(t, dir, port)},
 		"ssh_config": {"none"},
-		"binary":     {binary},
 	}
 
 	return linuxWorker{
 		url:       "ssh://root@127.0.0.1:" + port + workerScratchRoot + "?" + query.Encode(),
+		dockerURL: "docker+ssh://root@127.0.0.1:" + port + "?" + query.Encode(),
 		identity:  identity,
-		binary:    binary,
 		container: id,
 	}
 }
@@ -238,12 +236,15 @@ CMD ["/usr/sbin/sshd", "-D", "-e"]
 // socket is the whole interface here: the shim dials it directly and the venue
 // forwards the bytes. Nothing ever speaks to this daemon over the network.
 //
+// AllowTcpForwarding is opened because OpenSSH denies a direct-streamlocal channel (the docker+ssh:// data plane) unless TCP forwarding is allowed too, AllowStreamLocalForwarding notwithstanding; alpine ships it off, upstream ships it on. Replaced in place: sshd keeps the first value it reads.
+//
 // sshd is started in the background and the dind entrypoint keeps the
 // container alive, so the two survive together — a container whose PID 1 is
 // sshd would have no daemon, and one whose PID 1 is dockerd would have no way
 // in.
 const dindWorkerDockerfile = `FROM docker:27-dind
 RUN apk add --no-cache --upgrade openssh-server openssh-client-default && \
+    sed -i 's/^AllowTcpForwarding.*/AllowTcpForwarding local/' /etc/ssh/sshd_config && \
     ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/ssh_host_ed25519_key && \
     mkdir -p /root/.ssh && chmod 700 /root/.ssh
 COPY authorized_keys /root/.ssh/authorized_keys
@@ -253,30 +254,6 @@ ENV DOCKER_TLS_CERTDIR=""
 EXPOSE 22
 CMD ["sh", "-c", "/usr/sbin/sshd -e && exec dockerd-entrypoint.sh dockerd --host=unix:///var/run/docker.sock"]
 `
-
-// buildLinuxShim cross-compiles the steps binary the worker will run.
-//
-// steps has no Go toolchain in the field, which is why ?binary= exists at all;
-// here the toolchain is the one running the tests. CGO_ENABLED=0 is what makes
-// the result pushable, and is the same guard `task build` keeps.
-func buildLinuxShim(t *testing.T, dir string) string {
-	t.Helper()
-
-	binary := filepath.Join(dir, "steps-linux")
-
-	//nolint:gosec // binary is a path under this test's own TempDir
-	cmd := exec.CommandContext(t.Context(), "go", "build", "-o", binary, ".")
-	// The repo root, where the main package is: this file is two levels down.
-	cmd.Dir = filepath.Join("..", "..")
-	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+runtime.GOARCH, "CGO_ENABLED=0")
-
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("cross-compiling the shim for linux/%s: %v\n%s", runtime.GOARCH, err, out)
-	}
-
-	return binary
-}
 
 // hostPort is where the container's sshd is published.
 func hostPort(t *testing.T, dir, id string) string {
@@ -433,64 +410,7 @@ func TestLinuxRootWorkerReportsItsOwnIdentity(t *testing.T) {
 	}
 
 	if placement.UID == nil || *placement.UID != 0 {
-		t.Errorf("uid = %v, want a reported 0 — the shim runs as root here and every other worker in this package does not", placement.UID)
-	}
-}
-
-// TestLinuxRootWorkerDecidesTheContainerUser is the seam the unit test could
-// only approximate: a REAL hello from a root Linux shim, feeding the decision
-// that a container on that worker writes as root.
-//
-// Computed from this machine instead, it produced --user 501:20 on darwin or
-// --user 1000:1000 from a Linux orchestrator — over a root-owned tree the
-// container then could not write, and in the second case could not even read.
-func TestLinuxRootWorkerDecidesTheContainerUser(t *testing.T) {
-	t.Parallel()
-
-	worker := startLinuxWorker(t)
-
-	cwd := t.TempDir()
-	mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), "seed\n")
-
-	// No Image on the spec: what is being asserted is the DECISION, not the
-	// daemon — the same facts, from the same live hello, through the same
-	// function the containerized path calls, without paying for a worker that
-	// can actually run a container. TestLinuxRootWorkerRunsAContainerizedStep
-	// pays for one and runs the whole thing.
-	built, err := NewRunner(shell.RunnerSpec{
-		Cwd:    cwd,
-		Worker: worker.url,
-	})
-	if err != nil {
-		t.Fatalf("NewRunner: %v", err)
-	}
-
-	t.Cleanup(func() { _ = built.Close() })
-
-	// The handshake has to have happened: a session dials lazily, so nothing
-	// is known about the worker until it has been asked to do something.
-	err = built.Run(context.Background(), "true")
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	placed, ok := built.(runner)
-	if !ok {
-		t.Fatalf("expected a venue runner, got %T", built)
-	}
-
-	placed.session.container.Image = "alpine"
-
-	spec := placed.session.containerSpec("unix:///tmp/x.sock")
-
-	if spec.User != "0:0" {
-		t.Errorf("container user = %q, want 0:0 from the worker's own hello", spec.User)
-	}
-
-	// And the tree it would mount is the one on the WORKER, which is the other
-	// answer this machine cannot give.
-	if !strings.HasPrefix(spec.MountPath, "/var/tmp/steps/") {
-		t.Errorf("mount = %q, want the worker's tree under the root its URL named", spec.MountPath)
+		t.Errorf("uid = %v, want a reported 0: the ssh user here is root", placement.UID)
 	}
 }
 
@@ -539,7 +459,7 @@ func TestLinuxRootWorkerRunsAContainerizedStep(t *testing.T) {
 
 	runner, err := NewRunner(shell.RunnerSpec{
 		Cwd:       cwd,
-		Worker:    worker.url,
+		Worker:    worker.dockerURL,
 		WorkerTag: "linux",
 		Image:     containerizedStepImage,
 		Fetch:     []string{"out"},
@@ -598,7 +518,7 @@ func TestLinuxRootWorkerPullsAPlacedImage(t *testing.T) {
 
 	runner, err := NewRunner(shell.RunnerSpec{
 		Cwd:       cwd,
-		Worker:    worker.url,
+		Worker:    worker.dockerURL,
 		WorkerTag: "linux",
 		Image:     containerizedStepImage,
 		Fetch:     []string{"out"},
@@ -616,5 +536,37 @@ func TestLinuxRootWorkerPullsAPlacedImage(t *testing.T) {
 
 	if report := mustRead(t, filepath.Join(cwd, "out", "report.txt")); report != "seed\n" {
 		t.Errorf("report = %q, want the step to have run in the pulled image", report)
+	}
+}
+
+// Cancelling a bare step ends everything it started, not only its own shell: sshd sends a non-pty session no signal when the channel closes, so a background child would otherwise outlive the step.
+func TestLinuxRootWorkerCancelEndsTheWholeProcessGroup(t *testing.T) {
+	t.Parallel()
+
+	worker := startLinuxWorker(t)
+	runner := newLocalRunner(t, shell.RunnerSpec{Cwd: t.TempDir(), Worker: worker.url, WorkerTag: "linux"})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	err := runner.Run(ctx, "sleep 301 & sleep 302; wait")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run: %v, want the deadline", err)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+
+	for {
+		//nolint:gosec // an id this test just minted
+		out, _ := exec.CommandContext(t.Context(), "docker", "exec", worker.container, "ps", "-o", "args").Output()
+		if !strings.Contains(string(out), "sleep 30") {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("the step's processes outlived its cancel:\n%s", out)
+		}
+
+		time.Sleep(250 * time.Millisecond)
 	}
 }

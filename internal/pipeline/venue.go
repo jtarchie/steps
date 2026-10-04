@@ -376,6 +376,11 @@ func ValidateWorkerPlacement(ctx context.Context, cfg *config.Config, job *confi
 			if checkErr != nil {
 				return fmt.Errorf("--worker %s: %w", tag, checkErr)
 			}
+
+			checkErr = worker.ImageCheck(cfg.PlacedImage(*step) != "")
+			if checkErr != nil {
+				return fmt.Errorf("%s on --worker %s: %w", label, tag, checkErr)
+			}
 		}
 
 		return nil

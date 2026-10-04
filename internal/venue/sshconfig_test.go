@@ -598,12 +598,7 @@ func writeSSHConfig(t *testing.T, contents string) string {
 func aliasWorker(t *testing.T, alias string, server *testSSHD, config string) string {
 	t.Helper()
 
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatalf("locating the test binary: %v", err)
-	}
-
-	return fmt.Sprintf("ssh://%s%s?ssh_config=%s&binary=%s", alias, server.Root, config, self)
+	return fmt.Sprintf("ssh://%s%s?ssh_config=%s", alias, server.Root, config)
 }
 
 func hostPortOf(t *testing.T, server *testSSHD) (string, string) {

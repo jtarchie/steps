@@ -126,6 +126,12 @@ func SweepOrphanedContainersOn(ctx context.Context, client *dockerapi.Client) {
 	}
 }
 
+// OwnerHost is the hostname this process labels what it leaves on other machines with.
+func OwnerHost() string { return ownerHostname() }
+
+// ProcessAlive reports whether pid names a live process on this machine.
+func ProcessAlive(pid int) bool { return processAlive(pid) }
+
 // listOrphanedContainers returns the ids of our containers whose owning
 // process is gone.
 func listOrphanedContainers(ctx context.Context, client *dockerapi.Client) []string {

@@ -5,7 +5,6 @@ package venue
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
@@ -107,17 +106,11 @@ func TestWorkerPinAndKnownHostsConflict(t *testing.T) {
 	}
 }
 
-// pinnedRunner builds a runner for a mapping that already names its own
-// credentials, pushing this test binary as the shim.
+// pinnedRunner builds a runner for a mapping that already names its own credentials.
 func pinnedRunner(t *testing.T, mapping, cwd string) shell.Runner {
 	t.Helper()
 
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatalf("locating the test binary: %v", err)
-	}
-
-	runner, err := NewRunner(shell.RunnerSpec{Cwd: cwd, Worker: mapping + "&binary=" + self})
+	runner, err := NewRunner(shell.RunnerSpec{Cwd: cwd, Worker: mapping})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}

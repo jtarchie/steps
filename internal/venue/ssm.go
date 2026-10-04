@@ -503,6 +503,18 @@ func (w Worker) PlacementCheck(hasArtifactStore bool) error {
 	return nil
 }
 
+// ImageCheck refuses a step whose need for a container this worker cannot meet, while the run can still refuse before any step: ssh:// runs bare and docker+ runs nothing else.
+func (w Worker) ImageCheck(hasImage bool) error {
+	switch {
+	case w.Scheme == SchemeSSH && hasImage:
+		return fmt.Errorf("%w %q: %w", ErrWorker, w.URL, errImageOnSSH)
+	case w.Scheme == SchemeDockerSSH && !hasImage:
+		return fmt.Errorf("%w %q: %w", ErrWorker, w.URL, errNoImageOnDocker)
+	default:
+		return nil
+	}
+}
+
 // awsPlacementCheck is PlacementCheck's aws:// arm: the shim has to come from
 // somewhere, and ?binary= only reaches an SSM tunnel through the store.
 func (w Worker) awsPlacementCheck(hasArtifactStore bool) error {

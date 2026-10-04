@@ -39,6 +39,10 @@ func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 		return newPlusRunner(worker, spec)
 	}
 
+	if worker.Scheme == SchemeSSH {
+		return newBareRunner(worker, spec)
+	}
+
 	blobs, err := artifactStoreFor(spec.ArtifactStore)
 	if err != nil {
 		return nil, err

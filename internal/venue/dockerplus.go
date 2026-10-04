@@ -376,7 +376,7 @@ func (s *plusSession) dialDaemon(ctx context.Context) (func(context.Context) (ne
 	// Named here: a socket nothing listens on is otherwise the first PutArchive's opaque failure.
 	err = s.docker.Ping(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("the docker daemon at %s did not answer: %w", s.worker.Socket, err)
+		return nil, fmt.Errorf("the docker daemon at %s did not answer: %w (the worker's sshd must allow AllowTcpForwarding local and AllowStreamLocalForwarding, and the ssh user must be able to open the socket — usually the docker group)", s.worker.Socket, err)
 	}
 
 	// Containers a dead steps process on this machine left on the worker; nothing else would ever reclaim them.

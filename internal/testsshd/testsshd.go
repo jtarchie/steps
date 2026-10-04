@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -289,6 +290,8 @@ func (s *Server) runExec(channel ssh.Channel, command string) {
 	cmd := exec.CommandContext(context.Background(), "sh", "-c", command) //nolint:gosec // a test server running the command the venue asked for
 	cmd.Stdout = channel
 	cmd.Stderr = channel.Stderr()
+	// A session leader, as sshd makes every session's shell: a venue that signals the session's group must reach what the command started.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	// A pipe, not cmd.Stdin = channel: exec.Cmd waits on its stdin copy, which never ends while the client holds the channel open.
 	stdin, err := cmd.StdinPipe()

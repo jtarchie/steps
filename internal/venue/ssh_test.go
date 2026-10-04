@@ -12,9 +12,12 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/shell"
 )
@@ -22,16 +25,9 @@ import (
 func sshSpec(t *testing.T, server *testSSHD, cwd string, outputs ...string) shell.RunnerSpec {
 	t.Helper()
 
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatalf("locating the test binary: %v", err)
-	}
-
 	return shell.RunnerSpec{
-		Cwd: cwd,
-		// binary= names what to push. Under `go test` this process IS the test
-		// binary, which is exactly what a worker needs to run.
-		Worker:    server.URL + "&binary=" + self,
+		Cwd:       cwd,
+		Worker:    server.URL,
 		WorkerTag: "gpu",
 		Fetch:     outputs,
 	}
@@ -68,40 +64,6 @@ func TestSSHWorkerRoundTripsAStep(t *testing.T) {
 
 	if !strings.Contains(got, "gpu") {
 		t.Errorf("out/report.txt = %q, want STEPS_WORKER to have reached the command", got)
-	}
-}
-
-// TestSSHWorkerPushesTheBinaryOnceAndReusesIt pins the cache. A ~50MB upload
-// per step would make the feature unusable on anything but a LAN, and the
-// content-keyed path is what stops it.
-func TestSSHWorkerPushesTheBinaryOnceAndReusesIt(t *testing.T) {
-	t.Parallel()
-
-	server := newTestSSHD(t)
-
-	for range 2 {
-		runner, err := NewRunner(sshSpec(t, server, t.TempDir()))
-		if err != nil {
-			t.Fatalf("NewRunner: %v", err)
-		}
-
-		err = runner.Run(context.Background(), "true")
-		if err != nil {
-			t.Fatalf("Run: %v", err)
-		}
-
-		err = runner.Close()
-		if err != nil {
-			t.Fatalf("Close: %v", err)
-		}
-	}
-
-	if pushed := uploadsUnder(t, server.Root); pushed != 1 {
-		t.Errorf("%d binaries on the worker, want exactly 1 — the second session did not reuse the first push", pushed)
-	}
-
-	if server.Execs.Load() < 2 {
-		t.Errorf("Execs = %d, want at least one per session", server.Execs.Load())
 	}
 }
 
@@ -188,21 +150,14 @@ func TestSSHWorkerCleansUpItsScratch(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// The binary stays — it is the cache. Nothing else should.
-	sessions := filepath.Join(server.Root, "steps-shim")
-
-	entries, err := os.ReadDir(sessions)
+	// A bare worker keeps nothing: no build directory, no owner or pid file beside it.
+	entries, err := os.ReadDir(server.Root)
 	if err != nil {
-		t.Fatalf("reading %q: %v", sessions, err)
+		t.Fatalf("reading %q: %v", server.Root, err)
 	}
 
 	for _, entry := range entries {
-		work := filepath.Join(sessions, entry.Name(), "work")
-
-		_, err = os.Stat(work)
-		if err == nil {
-			t.Errorf("a session work directory outlived the step: %s", work)
-		}
+		t.Errorf("left on the worker after close: %s", entry.Name())
 	}
 }
 
@@ -239,44 +194,6 @@ func TestSSHWorkerRefusesAnUnknownHostKey(t *testing.T) {
 
 	if shell.IsExitError(err) {
 		t.Error("a rejected host key classified as the command's own failure")
-	}
-}
-
-// TestSSHWorkerReportsAPushedBinaryThatCannotRun covers the failure an
-// architecture mismatch produces. The worker's shell writes to the channel's
-// stderr, which carries no protocol bytes precisely so this message survives
-// to be reported.
-func TestSSHWorkerReportsAPushedBinaryThatCannotRun(t *testing.T) {
-	t.Parallel()
-
-	server := newTestSSHD(t)
-
-	// A "binary" that is not one, standing in for one built for another
-	// architecture: the far end refuses to exec it either way.
-	bogus := filepath.Join(t.TempDir(), "steps")
-
-	err := os.WriteFile(bogus, []byte("not a binary\n"), 0o700) //nolint:gosec // the point is a file the worker will try to exec
-	if err != nil {
-		t.Fatalf("writing a bogus binary: %v", err)
-	}
-
-	spec := sshSpec(t, server, t.TempDir())
-	spec.Worker = server.URL + "&binary=" + bogus
-
-	runner, err := NewRunner(spec)
-	if err != nil {
-		t.Fatalf("NewRunner: %v", err)
-	}
-
-	t.Cleanup(func() { _ = runner.Close() })
-
-	err = runner.Run(context.Background(), "true")
-	if err == nil {
-		t.Fatal("a worker running a binary that cannot exec reported success")
-	}
-
-	if shell.IsExitError(err) {
-		t.Error("a shim that never started classified as the command's own exit")
 	}
 }
 
@@ -323,4 +240,87 @@ func stripQuery(worker string) string {
 	base, _, _ := strings.Cut(worker, "?")
 
 	return base
+}
+
+// An ssh:// worker runs steps bare; image: there is refused before anything is dialled rather than run somewhere it was not asked to.
+func TestSSHWorkerRefusesAnImage(t *testing.T) {
+	t.Parallel()
+
+	server := newTestSSHD(t)
+
+	spec := sshSpec(t, server, t.TempDir())
+	spec.Image = "alpine:3"
+
+	_, err := NewRunner(spec)
+	if !errors.Is(err, errImageOnSSH) {
+		t.Fatalf("want errImageOnSSH, got %v", err)
+	}
+
+	if server.Execs.Load() != 0 {
+		t.Fatal("the worker was reached before the refusal")
+	}
+}
+
+// A command that never ends must still end the step when its deadline does, and take what it started with it.
+func TestSSHWorkerCancellationEndsAWedgedCommand(t *testing.T) {
+	t.Parallel()
+
+	server := newTestSSHD(t)
+	runner := newLocalRunner(t, sshSpec(t, server, t.TempDir()))
+
+	ctx, cancel := context.WithTimeout(t.Context(), shortWait)
+	defer cancel()
+
+	started := time.Now()
+	err := runner.Run(ctx, "sleep 60")
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want it to carry the deadline", err)
+	}
+
+	if elapsed := time.Since(started); elapsed > 15*time.Second {
+		t.Fatalf("the cancel took %s to come back", elapsed)
+	}
+}
+
+// A step directory a dead steps process on this machine left is removed by the next session there.
+func TestSSHWorkerSweepsWhatADeadProcessLeft(t *testing.T) {
+	t.Parallel()
+
+	server := newTestSSHD(t)
+
+	dead := exec.CommandContext(t.Context(), "true")
+
+	err := dead.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stale := filepath.Join(server.Root, "steps-build.stale")
+	writeFile(t, stale+".owner", shell.OwnerHost()+" "+strconv.Itoa(dead.Process.Pid)+"\n")
+
+	err = os.Mkdir(stale, 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	live := filepath.Join(server.Root, "steps-build.live")
+	writeFile(t, live+".owner", shell.OwnerHost()+" "+strconv.Itoa(os.Getpid())+"\n")
+
+	runner := newLocalRunner(t, sshSpec(t, server, t.TempDir()))
+
+	err = runner.Run(t.Context(), "true")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = os.Stat(stale)
+	if err == nil {
+		t.Error("a dead process's step directory survived the sweep")
+	}
+
+	_, err = os.Stat(live + ".owner")
+	if err != nil {
+		t.Error("a live process's step directory was swept")
+	}
 }

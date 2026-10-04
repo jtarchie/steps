@@ -340,7 +340,7 @@ func applyQuery(worker Worker, parsed *url.URL) (Worker, error) {
 //
 //nolint:gochecknoglobals // a fact about the grammar, not state
 var queryKeys = map[string][]Scheme{
-	"binary":      {SchemeLocal, SchemeSSH, SchemeAWS, SchemeGCP},
+	"binary":      {SchemeLocal, SchemeAWS, SchemeGCP},
 	"identity":    {SchemeSSH, SchemeDockerSSH},
 	"known_hosts": {SchemeSSH, SchemeDockerSSH},
 	"hostkey":     {SchemeSSH, SchemeGCP, SchemeDockerSSH},

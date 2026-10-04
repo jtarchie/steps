@@ -177,6 +177,34 @@ func (c *Config) rejectOnGetAndPut(field string, set func(*Step) bool) error {
 	return nil
 }
 
+// PlacedImage is the image a placed step runs in: its own or its task's or agent's, or for a get or put its resource type's; "" runs bare.
+func (c *Config) PlacedImage(step Step) string {
+	if image := c.resolvedStepImage(step); image != "" {
+		return image
+	}
+
+	name := step.GetResourceName()
+	if step.Put != "" {
+		name = step.Put
+	}
+
+	if name == "" {
+		return ""
+	}
+
+	resource, err := c.FindResource(name)
+	if err != nil {
+		return ""
+	}
+
+	resourceType, err := c.FindResourceType(resource.Type)
+	if err != nil {
+		return ""
+	}
+
+	return resourceType.Image
+}
+
 // resolvedStepImage reports the image a task/agent step would actually run
 // under, merging the step's own image: over the entry it references. It
 // answers "" for anything it cannot resolve, leaving that error to whichever

@@ -305,20 +305,24 @@ func (r runner) exchangeContained(ctx context.Context, command string, p plan) (
 }
 
 // sinks builds the two streams a plan asks for.
-func (r runner) sinks(ctx context.Context, p plan) (stdout, stderr stream, out outputSinks) {
-	stdout = r.stream(p.streamStdout, p.capture, p.maxBytes, p.spillDir, events.Stdout(ctx))
-	stderr = r.stream(p.streamStderr, p.capture, p.maxBytes, p.spillDir, events.Stderr(ctx))
+func (r runner) sinks(ctx context.Context, p plan) (stream, stream, outputSinks) {
+	return sinksFor(ctx, r.label, p)
+}
+
+func sinksFor(ctx context.Context, label string, p plan) (stdout, stderr stream, out outputSinks) {
+	stdout = newStream(label, p.streamStdout, p.capture, p.maxBytes, p.spillDir, events.Stdout(ctx))
+	stderr = newStream(label, p.streamStderr, p.capture, p.maxBytes, p.spillDir, events.Stderr(ctx))
 
 	return stdout, stderr, outputSinks{stdout: stdout.writer, stderr: stderr.writer, flushes: []func(){stdout.flush, stderr.flush}}
 }
 
-func (r runner) stream(live, capture bool, maxBytes int, spillDir string, dst io.Writer) stream {
+func newStream(label string, live, capture bool, maxBytes int, spillDir string, dst io.Writer) stream {
 	s := stream{flush: func() {}}
 
 	writers := make([]io.Writer, 0, 2)
 
 	if live {
-		w, flush := shell.NewPrefixedStream(r.label, dst)
+		w, flush := shell.NewPrefixedStream(label, dst)
 		writers = append(writers, w)
 		s.flush = flush
 	}
