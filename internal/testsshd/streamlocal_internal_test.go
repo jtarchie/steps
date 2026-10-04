@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"golang.org/x/crypto/ssh"
 )
 
 // A peer that never answers EOF must not pin the server: OpenSSH closes the socket when the channel closes.
@@ -49,7 +47,7 @@ func TestStreamLocalLetsGoOfASilentPeer(t *testing.T) {
 		}
 	})
 
-	client := clientOf(t, server)
+	client := server.Dial(t)
 
 	conn, err := client.Dial("unix", filepath.Join(dir, "s"))
 	if err != nil {
@@ -71,29 +69,4 @@ func TestStreamLocalLetsGoOfASilentPeer(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the server still holds a connection whose client hung up")
 	}
-}
-
-func clientOf(t *testing.T, server *Server) *ssh.Client {
-	t.Helper()
-
-	pem, err := os.ReadFile(server.Identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	signer, err := ssh.ParsePrivateKey(pem)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	client, err := ssh.Dial("tcp", server.Addr(), &ssh.ClientConfig{
-		User:            "steps",
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.FixedHostKey(server.HostKey),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return client
 }

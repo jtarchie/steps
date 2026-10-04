@@ -2,12 +2,14 @@ package dockerapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 
 	"github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
+	volumetypes "github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
 )
 
@@ -31,10 +33,17 @@ func NewDialer(name string, dial func(ctx context.Context) (net.Conn, error)) (*
 	return &Client{api: api, host: name}, nil
 }
 
+var errNoLabels = errors.New("no labels to select by")
+
+func volumeOf(v volumetypes.Volume) Volume {
+	return Volume{Name: v.Name, Mountpoint: v.Mountpoint, Labels: v.Labels}
+}
+
 // IsNotFound reports a daemon answering that the thing asked about does not exist.
 func IsNotFound(err error) bool { return errdefs.IsNotFound(err) }
 
 // OverlayOptions are the local driver's options for a copy-on-write child of lower; all three are daemon-side paths, and upper and work must share a filesystem.
+// ponytail: paths are joined unescaped, safe while they are daemon Mountpoints; validate ',' and ':' if a caller ever passes its own.
 func OverlayOptions(lower, upper, work string) map[string]string {
 	return map[string]string{
 		"type":   "overlay",
@@ -43,14 +52,14 @@ func OverlayOptions(lower, upper, work string) map[string]string {
 	}
 }
 
-// CreateVolume makes a local-driver volume; driver options are checked only when it is first mounted, not here.
+// CreateVolume makes a local-driver volume, or returns an existing one of that name untouched, old contents and old options alike (the daemon's answer, not an error); options are checked only at first mount.
 func (c *Client) CreateVolume(ctx context.Context, name string, labels, driverOpts map[string]string) (Volume, error) {
 	created, err := c.api.VolumeCreate(ctx, client.VolumeCreateOptions{Name: name, Driver: "local", DriverOpts: driverOpts, Labels: labels})
 	if err != nil {
 		return Volume{}, fmt.Errorf("creating volume %s on %s: %w", name, c.host, err)
 	}
 
-	return Volume{Name: created.Volume.Name, Mountpoint: created.Volume.Mountpoint, Labels: created.Volume.Labels}, nil
+	return volumeOf(created.Volume), nil
 }
 
 // InspectVolume errors with IsNotFound for a volume the daemon does not have.
@@ -60,11 +69,15 @@ func (c *Client) InspectVolume(ctx context.Context, name string) (Volume, error)
 		return Volume{}, fmt.Errorf("inspecting volume %s on %s: %w", name, c.host, err)
 	}
 
-	return Volume{Name: inspected.Volume.Name, Mountpoint: inspected.Volume.Mountpoint, Labels: inspected.Volume.Labels}, nil
+	return volumeOf(inspected.Volume), nil
 }
 
-// ListVolumes returns the volumes carrying every one of labels.
+// ListVolumes returns the volumes carrying every one of labels; no labels is refused, since a sweep over the result would reach every volume on the daemon.
 func (c *Client) ListVolumes(ctx context.Context, labels map[string]string) ([]Volume, error) {
+	if len(labels) == 0 {
+		return nil, fmt.Errorf("listing volumes on %s: %w", c.host, errNoLabels)
+	}
+
 	filters := client.Filters{}
 	for key, value := range labels {
 		filters = filters.Add("label", key+"="+value)
@@ -77,7 +90,7 @@ func (c *Client) ListVolumes(ctx context.Context, labels map[string]string) ([]V
 
 	volumes := make([]Volume, 0, len(listed.Items))
 	for _, item := range listed.Items {
-		volumes = append(volumes, Volume{Name: item.Name, Mountpoint: item.Mountpoint, Labels: item.Labels})
+		volumes = append(volumes, volumeOf(item))
 	}
 
 	return volumes, nil
@@ -126,16 +139,4 @@ func (c *Client) GetArchive(ctx context.Context, id, src string) (io.ReadCloser,
 	}
 
 	return copied.Content, nil
-}
-
-// Wait blocks until the container stops and returns its exit code; unlike SettleFor it has no bound but ctx.
-func (c *Client) Wait(ctx context.Context, id string) (int, error) {
-	result := c.api.ContainerWait(ctx, id, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
-
-	select {
-	case status := <-result.Result:
-		return int(status.StatusCode), nil
-	case err := <-result.Error:
-		return 0, fmt.Errorf("waiting on container %s: %w", id, err)
-	}
 }

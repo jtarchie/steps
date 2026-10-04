@@ -20,34 +20,6 @@ import (
 	"github.com/jtarchie/steps/internal/testsshd"
 )
 
-func dial(t *testing.T, server *testsshd.Server) *ssh.Client {
-	t.Helper()
-
-	pem, err := os.ReadFile(server.Identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	signer, err := ssh.ParsePrivateKey(pem)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	client, err := ssh.Dial("tcp", server.Addr(), &ssh.ClientConfig{
-		User:            "steps",
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.FixedHostKey(server.HostKey),
-		Timeout:         10 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("dialing the test sshd: %v", err)
-	}
-
-	t.Cleanup(func() { _ = client.Close() })
-
-	return client
-}
-
 // shortSocketPath stays under macOS's 104-byte sun_path limit, which t.TempDir's long names overrun.
 func shortSocketPath(t *testing.T) string {
 	t.Helper()
@@ -95,7 +67,7 @@ func TestStreamLocalReachesAUnixSocket(t *testing.T) {
 
 	server := testsshd.New(t)
 
-	conn, err := dial(t, server).Dial("unix", path)
+	conn, err := server.Dial(t).Dial("unix", path)
 	if err != nil {
 		t.Fatalf("direct-streamlocal: %v", err)
 	}
@@ -123,7 +95,7 @@ func TestStreamLocalRefusesAMissingSocket(t *testing.T) {
 
 	server := testsshd.New(t)
 
-	_, err := dial(t, server).Dial("unix", shortSocketPath(t))
+	_, err := server.Dial(t).Dial("unix", shortSocketPath(t))
 
 	var openErr *ssh.OpenChannelError
 	if !errors.As(err, &openErr) || openErr.Reason != ssh.ConnectionFailed {
@@ -140,7 +112,7 @@ func TestStreamLocalCarriesTheDockerEngineAPI(t *testing.T) {
 	t.Parallel()
 
 	socket := dockerSocket(t)
-	client := dial(t, testsshd.New(t))
+	client := testsshd.New(t).Dial(t)
 
 	httpClient := &http.Client{Transport: &http.Transport{
 		DialContext: func(context.Context, string, string) (net.Conn, error) {

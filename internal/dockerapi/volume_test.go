@@ -8,11 +8,9 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
-	"time"
-
-	"golang.org/x/crypto/ssh"
 
 	"github.com/jtarchie/steps/internal/testsshd"
 )
@@ -80,14 +78,19 @@ func untar(t *testing.T, r io.Reader) map[string]entry {
 	}
 }
 
+// The pid keeps two processes running the same test (shards, a second worktree) off each other's names and label counts: the daemon is shared.
 func uniqueName(t *testing.T, suffix string) string {
-	return "steps-test-" + strings.NewReplacer("/", "-", "#", "-").Replace(t.Name()) + "-" + suffix
+	return "steps-test-" + strconv.Itoa(os.Getpid()) + "-" + strings.NewReplacer("/", "-", "#", "-").Replace(t.Name()) + "-" + suffix
+}
+
+func testLabels(t *testing.T) map[string]string {
+	return map[string]string{"steps.test": t.Name(), "steps.pid": strconv.Itoa(os.Getpid())}
 }
 
 func volume(t *testing.T, client *Client, suffix string, driverOpts map[string]string) Volume {
 	t.Helper()
 
-	created, err := client.CreateVolume(t.Context(), uniqueName(t, suffix), map[string]string{"steps.test": t.Name()}, driverOpts)
+	created, err := client.CreateVolume(t.Context(), uniqueName(t, suffix), testLabels(t), driverOpts)
 	if err != nil {
 		t.Fatalf("CreateVolume: %v", err)
 	}
@@ -100,7 +103,11 @@ func volume(t *testing.T, client *Client, suffix string, driverOpts map[string]s
 func holder(t *testing.T, client *Client, suffix string, mounts ...string) string {
 	t.Helper()
 
-	id, err := client.CreateHolder(t.Context(), uniqueName(t, suffix), testImage, map[string]string{"steps.test": t.Name()}, mounts)
+	if !client.ImagePresent(t.Context(), testImage) {
+		t.Skipf("%s is not on this daemon; this test must not depend on a network", testImage)
+	}
+
+	id, err := client.CreateHolder(t.Context(), uniqueName(t, suffix), testImage, testLabels(t), mounts)
 	if err != nil {
 		t.Fatalf("CreateHolder: %v", err)
 	}
@@ -126,7 +133,7 @@ func TestVolumeRoundTripsThroughAnSSHForward(t *testing.T) {
 	}
 
 	server := testsshd.New(t)
-	sshClient := sshClientOf(t, server)
+	sshClient := server.Dial(t)
 
 	client, err := NewDialer("ssh://"+server.Addr()+socket, func(context.Context) (net.Conn, error) {
 		return sshClient.Dial("unix", socket)
@@ -174,7 +181,7 @@ func roundTrip(t *testing.T, client *Client) {
 		}
 	}
 
-	listed, err := client.ListVolumes(t.Context(), map[string]string{"steps.test": t.Name()})
+	listed, err := client.ListVolumes(t.Context(), testLabels(t))
 	if err != nil || len(listed) != 1 || listed[0].Name != data.Name {
 		t.Errorf("ListVolumes by label: %+v, %v", listed, err)
 	}
@@ -261,27 +268,6 @@ func TestRemoveVolumeRefusesOneInUse(t *testing.T) {
 	}
 }
 
-func TestWaitReturnsTheExitCode(t *testing.T) {
-	client := requireDaemon(t)
-
-	id, err := client.CreateContainer(t.Context(), ContainerSpec{Image: testImage, Cmd: []string{"sh", "-c", "sleep 1; exit 7"}, Name: uniqueName(t, "c")})
-	if err != nil {
-		t.Skipf("cannot create a fixture container: %v", err)
-	}
-
-	t.Cleanup(func() { _ = client.RemoveContainer(context.WithoutCancel(t.Context()), id) })
-
-	err = client.StartContainer(t.Context(), id)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	code, err := client.Wait(t.Context(), id)
-	if err != nil || code != 7 {
-		t.Fatalf("Wait: %d, %v; want 7", code, err)
-	}
-}
-
 func readFile(t *testing.T, client *Client, id, path string) string {
 	t.Helper()
 
@@ -300,30 +286,34 @@ func readFile(t *testing.T, client *Client, id, path string) string {
 	return ""
 }
 
-func sshClientOf(t *testing.T, server *testsshd.Server) *ssh.Client {
-	t.Helper()
+func TestListVolumesRefusesNoLabels(t *testing.T) {
+	client := requireDaemon(t)
 
-	pem, err := os.ReadFile(server.Identity)
+	for _, labels := range []map[string]string{nil, {}} {
+		_, err := client.ListVolumes(t.Context(), labels)
+		if !errors.Is(err, errNoLabels) {
+			t.Errorf("ListVolumes(%v): %v, want a refusal", labels, err)
+		}
+	}
+}
+
+// The daemon answers a second create with the first volume, contents and options unchanged: a cache wants that, a one-off volume must use a fresh name.
+func TestCreateVolumeReturnsAnExistingOneUntouched(t *testing.T) {
+	client := requireDaemon(t)
+
+	first := volume(t, client, "reused", nil)
+
+	err := client.PutArchive(t.Context(), holder(t, client, "fill", first.Name+":/v"), "/v", tarOf(t, map[string]entry{"f": {mode: 0o644, body: "stale"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	signer, err := ssh.ParsePrivateKey(pem)
+	again, err := client.CreateVolume(t.Context(), first.Name, nil, map[string]string{"type": "tmpfs", "device": "tmpfs"})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("CreateVolume again: %v", err)
 	}
 
-	client, err := ssh.Dial("tcp", server.Addr(), &ssh.ClientConfig{
-		User:            "steps",
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.FixedHostKey(server.HostKey),
-		Timeout:         10 * time.Second,
-	})
-	if err != nil {
-		t.Fatal(err)
+	if got := readFile(t, client, holder(t, client, "read", again.Name+":/v"), "/v/f"); got != "stale" {
+		t.Fatalf("the second create emptied the volume: %q", got)
 	}
-
-	t.Cleanup(func() { _ = client.Close() })
-
-	return client
 }

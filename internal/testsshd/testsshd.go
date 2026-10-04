@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/pkg/sftp/v2"
 	"github.com/pkg/sftp/v2/localfs"
@@ -104,6 +105,35 @@ func NewWithConfig(t testing.TB, config *ssh.ServerConfig, hostKey ssh.PublicKey
 
 // Addr is host:port, for a test that builds its own mapping.
 func (s *Server) Addr() string { return s.listener.Addr().String() }
+
+// Dial is an ssh client authenticated as New's generated key, closed with the test.
+func (s *Server) Dial(t testing.TB) *ssh.Client {
+	t.Helper()
+
+	pem, err := os.ReadFile(s.Identity)
+	if err != nil {
+		t.Fatalf("reading the identity: %v", err)
+	}
+
+	signer, err := ssh.ParsePrivateKey(pem)
+	if err != nil {
+		t.Fatalf("parsing the identity: %v", err)
+	}
+
+	client, err := ssh.Dial("tcp", s.Addr(), &ssh.ClientConfig{
+		User:            "steps",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: ssh.FixedHostKey(s.HostKey),
+		Timeout:         10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("dialing the test sshd: %v", err)
+	}
+
+	t.Cleanup(func() { _ = client.Close() })
+
+	return client
+}
 
 // URLWithPin verifies the server by fingerprint instead of known_hosts, as a venue with no history does.
 func (s *Server) URLWithPin(t testing.TB, fingerprint string) string {

@@ -261,7 +261,6 @@ linters:
             - "go.uber.org/goleak"
             # Test-only: the volume round trip through an ssh streamlocal forward, the docker+ssh:// data plane.
             - "github.com/jtarchie/steps/internal/testsshd"
-            - "golang.org/x/crypto/ssh"
         # Leaves: no internal deps, stdlib only apart from the engine client
         # that container execution is now built on.
         Shell:
