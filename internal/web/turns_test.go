@@ -305,8 +305,9 @@ func TestTurnFragmentVariesOnHTMX(t *testing.T) {
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Vary"), "HX-Request") {
-		t.Errorf("GET = %d, Vary %q: want 200 varying on HX-Request", rec.Code, rec.Header().Get("Vary"))
+	vary := strings.Join(rec.Header().Values("Vary"), ", ")
+	if rec.Code != http.StatusOK || !strings.Contains(vary, "HX-Request") {
+		t.Errorf("GET = %d, Vary %q: want 200 varying on HX-Request", rec.Code, vary)
 	}
 }
 

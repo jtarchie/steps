@@ -254,6 +254,8 @@ func (s *Server) handleRunHistory(c *echo.Context) error {
 // on it to answer with a line of text rather than a page.
 const turnRoute = "/p/:pipeline/runs/:run/turns/:seq"
 
+const eventsRoute = "/p/:pipeline/runs/:run/events"
+
 // handleTurn renders one tool result's body, which the run page draws only as
 // a summary until it is opened (resultValue). htmx gets the <pre>'s inner
 // HTML; the link a reader follows with JavaScript off gets a styled page.

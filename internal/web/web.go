@@ -419,6 +419,11 @@ func (s *Server) routes() error {
 	e.HTTPErrorHandler = s.handleError
 
 	e.Use(middleware.Recover())
+	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{
+		// A gzip writer holds bytes until a block fills, which is the one thing a live stream must not do; matched by route because htmx's sse extension adds text/event-stream to the Accept of every request.
+		Skipper:   func(c *echo.Context) bool { return c.Path() == eventsRoute },
+		MinLength: 1024,
+	}))
 
 	// Above the origin check, so an unauthenticated cross-origin request is told the one thing it can act on.
 	if s.auth != nil {
@@ -441,7 +446,7 @@ func (s *Server) routes() error {
 	group.GET("/jobs/:job/detail", s.handleJobDetail)
 	group.GET("/runs", s.handleRunHistory)
 	group.GET("/runs/:run", s.handleRun)
-	group.GET("/runs/:run/events", s.handleRunEvents)
+	group.GET(strings.TrimPrefix(eventsRoute, "/p/:pipeline"), s.handleRunEvents)
 	group.GET(strings.TrimPrefix(turnRoute, "/p/:pipeline"), s.handleTurn)
 	group.GET("/nodes/:hash", s.handleNode)
 	group.GET("/config/:sha", s.handleConfig)
