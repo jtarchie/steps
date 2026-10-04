@@ -63,8 +63,10 @@ func (c *Client) ListContainers(ctx context.Context, labels map[string]string) (
 // for a self-removing container whose caller also reclaims it by name — the
 // belt and the braces arriving together — and calling it a failure fills the
 // log of a perfectly clean run with warnings about the cleanup working twice.
+//
+// RemoveVolumes takes the container's anonymous volumes with it (an image's VOLUME, like postgres's PGDATA); named volumes are never touched.
 func (c *Client) RemoveContainer(ctx context.Context, id string) error {
-	_, err := c.api.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
+	_, err := c.api.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	if err != nil && !errdefs.IsNotFound(err) && !errdefs.IsConflict(err) {
 		return fmt.Errorf("removing container %s: %w", id, err)
 	}

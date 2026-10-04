@@ -182,7 +182,7 @@ func startLinuxWorkerWith(t *testing.T, dockerfile string, extraRunArgs ...strin
 		defer cancel()
 
 		//nolint:gosec // id and image are strings this test just minted
-		_ = exec.CommandContext(ctx, "docker", "rm", "-f", id).Run()
+		_ = exec.CommandContext(ctx, "docker", "rm", "-f", "-v", id).Run()
 		//nolint:gosec // as above
 		_ = exec.CommandContext(ctx, "docker", "rmi", "-f", image).Run()
 	})

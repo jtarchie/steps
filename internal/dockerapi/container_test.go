@@ -190,3 +190,41 @@ func TestRemoveContainerToleratesAnAbsentOne(t *testing.T) {
 		t.Errorf("RemoveContainer: %v, want a container that is already gone to be a success", err)
 	}
 }
+
+// An anonymous volume dies with its container; leaving it filled a dev VM's disk with 1,600 (postgres's PGDATA, dind's /var/lib/docker).
+func TestRemoveContainerTakesItsAnonymousVolumes(t *testing.T) {
+	client := requireDaemon(t)
+
+	name := "steps-test-" + t.Name()
+
+	//nolint:gosec // a name this test generated
+	out, err := exec.CommandContext(t.Context(), "docker", "create", "--name", name, "-v", "/data", testImage, "true").CombinedOutput()
+	if err != nil {
+		t.Skipf("cannot create a fixture container: %v\n%s", err, out)
+	}
+
+	t.Cleanup(func() { removeFixture(name) })
+
+	//nolint:gosec // a name this test generated
+	out, err = exec.CommandContext(t.Context(), "docker", "inspect", "--format", "{{range .Mounts}}{{.Name}}{{end}}", name).Output()
+	if err != nil {
+		t.Fatalf("inspecting the fixture: %v", err)
+	}
+
+	volume := strings.TrimSpace(string(out))
+	if volume == "" {
+		t.Fatal("the fixture has no anonymous volume to lose")
+	}
+
+	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "volume", "rm", "-f", volume).Run() }) //nolint:gosec // the daemon named it
+
+	err = client.RemoveContainer(t.Context(), name)
+	if err != nil {
+		t.Fatalf("RemoveContainer: %v", err)
+	}
+
+	//nolint:gosec // the daemon named it
+	if exec.CommandContext(t.Context(), "docker", "volume", "inspect", volume).Run() == nil {
+		t.Errorf("anonymous volume %s outlived its container", volume)
+	}
+}
