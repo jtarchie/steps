@@ -21,6 +21,7 @@ func FuzzParseWorker(f *testing.F) {
 		"gcp://stopped/worker-1?hostkey=SHA256:" + strings.Repeat("B", 43),
 		"aws://launch/lt-0def456789abcdef/a%3Fb",
 		"ssh://box/%zz",
+		"docker+ssh://jt@box:2222?sock=/run/docker.sock&identity=/k&hostkey=SHA256:" + strings.Repeat("c", 43),
 		"aws://launch/lt-0def456789abcdef?capac%zz=spot&shim=/s",
 	} {
 		f.Add(seed)
@@ -32,7 +33,7 @@ func FuzzParseWorker(f *testing.F) {
 			return
 		}
 
-		if !slices.Contains([]Scheme{SchemeLocal, SchemeSSH, SchemeAWS, SchemeGCP}, worker.Scheme) {
+		if !slices.Contains([]Scheme{SchemeLocal, SchemeSSH, SchemeAWS, SchemeGCP, SchemeDockerSSH}, worker.Scheme) {
 			t.Fatalf("ParseWorker(%q) accepted scheme %q", raw, worker.Scheme)
 		}
 

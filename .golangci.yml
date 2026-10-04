@@ -225,6 +225,8 @@ linters:
             # variants do. The shipped code still reaches workers only through
             # internal/pipeline.
             - "github.com/jtarchie/steps/internal/wire"
+            # testsshd is test-only: the sshd a docker+ssh:// worker mapping is pointed at.
+            - "github.com/jtarchie/steps/internal/testsshd"
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             # go/ast, go/parser and go/token are test-only and stay that way:
             # captureguard_test.go reads every _test.go in the module to hold
@@ -510,6 +512,9 @@ linters:
             # replica catches up, and telling that lag apart from a bad id means
             # reading ErrorCode() rather than matching on message text.
             - "github.com/aws/smithy-go"
+            # A docker+ worker's daemon, driven through the engine API, and the digest its busybox computes.
+            - "github.com/jtarchie/steps/internal/dockerapi"
+            - "github.com/jtarchie/steps/internal/treedigest"
             # testsshd is test-only: the in-process sshd the ssh venues are tested against.
             - "github.com/jtarchie/steps/internal/testsshd"
         # shim is the remote half of a placed step: it runs as `steps _shim` on

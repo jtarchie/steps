@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -122,6 +123,10 @@ type RunnerSpec struct {
 	// DockerHost is the daemon to run this step's containers on. Empty is
 	// this machine's; a venue sets it to a socket it forwards to a worker.
 	DockerHost string
+	// DockerDial reaches DockerHost through a connection the caller makes, for a socket with no address here (a docker+ worker's, over ssh); DockerHost then only names it in errors.
+	DockerDial func(ctx context.Context) (net.Conn, error)
+	// Volumes are daemon-side named volumes as `name:target`; with MountPath they REPLACE the tree bind, because a docker+ worker's tree lives in volumes and never at a path.
+	Volumes []string
 	// EnvValues are variables the CALLER supplies with their values rather
 	// than by name, for the ones that exist nowhere in this process's own
 	// environment. A venue's STEPS_WORKER is the case: it names the tag a
@@ -270,6 +275,8 @@ func NewRunner(spec RunnerSpec) (Runner, error) {
 			resolvedCwd: resolvedCwd,
 			subdir:      spec.Subdir,
 			dockerHost:  spec.DockerHost,
+			dockerDial:  spec.DockerDial,
+			volumes:     spec.Volumes,
 			envNames:    spec.Env,
 			envValues:   spec.EnvValues,
 			user:        containerUser(spec.User, spec.DockerHost == ""),

@@ -127,7 +127,7 @@ func acquire(ctx context.Context, worker Worker) (Worker, func(context.Context) 
 		return acquireEC2(ctx, worker)
 	case SchemeGCP:
 		return acquireGCE(ctx, worker)
-	case SchemeLocal, SchemeSSH:
+	case SchemeLocal, SchemeSSH, SchemeDockerSSH:
 		// Machines that already exist by definition; nothing to acquire.
 		return worker, nil, nil
 	default:

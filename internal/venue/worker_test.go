@@ -31,6 +31,9 @@ func TestParseWorkerForms(t *testing.T) {
 		{name: "local naming a host", raw: "local://box", wantErr: true},
 		{name: "local with root", raw: "local:/srv/steps", scheme: SchemeLocal, root: "/srv/steps"},
 		{name: "local with a relative root", raw: "local:srv/steps", wantErr: true},
+		{name: "docker+ssh", raw: "docker+ssh://jt@box:2222", scheme: SchemeDockerSSH, user: "jt", host: "box:2222"},
+		{name: "docker+ssh naming a disk", raw: "docker+ssh://box/mnt/fast", wantErr: true},
+		{name: "docker+ssh without host", raw: "docker+ssh://", wantErr: true},
 		{name: "unknown scheme", raw: "http://box", wantErr: true},
 		{name: "empty", raw: "", wantErr: true},
 	} {
@@ -55,6 +58,25 @@ func TestParseWorkerForms(t *testing.T) {
 					tc.raw, worker, tc.scheme, tc.user, tc.host, tc.root)
 			}
 		})
+	}
+}
+
+func TestParseWorkerDockerSocket(t *testing.T) {
+	t.Parallel()
+
+	for raw, want := range map[string]string{
+		"docker+ssh://box": defaultDockerSocket,
+		"docker+ssh://box?sock=/run/user/1000/docker.sock": "/run/user/1000/docker.sock",
+	} {
+		worker, err := ParseWorker(raw)
+		if err != nil || worker.Socket != want {
+			t.Errorf("ParseWorker(%q).Socket = %q, %v; want %q", raw, worker.Socket, err, want)
+		}
+	}
+
+	_, err := ParseWorker("ssh://box?sock=/s")
+	if err == nil {
+		t.Error("ssh:// accepted ?sock=, which only a docker+ worker reads")
 	}
 }
 

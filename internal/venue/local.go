@@ -28,6 +28,8 @@ func dial(ctx context.Context, worker Worker) (*transport, error) {
 		return dialSSM(ctx, worker)
 	case SchemeGCP:
 		return dialGCP(ctx, worker)
+	case SchemeDockerSSH:
+		return nil, fmt.Errorf("%w %q: a docker+ worker runs no shim", ErrWorker, worker.URL)
 	default:
 		return nil, fmt.Errorf("%w: unknown scheme %q", ErrWorker, worker.Scheme)
 	}

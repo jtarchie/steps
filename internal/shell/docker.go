@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -88,6 +89,8 @@ type dockerSession struct {
 	// dockerHost is the daemon this session's containers live on. Empty is
 	// this machine's.
 	dockerHost string
+	dockerDial func(ctx context.Context) (net.Conn, error)
+	volumes    []string
 	// envNames are the variables the pipeline's env: opted this command into.
 	// They are passed at container start, so every exec in the session
 	// inherits them.
@@ -170,7 +173,7 @@ func (s *dockerSession) ensure(ctx context.Context) (*dockerapi.Client, string, 
 		return nil, "", "", err
 	}
 
-	client, err := dockerapi.New(s.dockerHost)
+	client, err := s.dial()
 	if err != nil {
 		s.startErr = fmt.Errorf("connecting to the daemon for image %q: %w", s.image, err)
 
@@ -227,6 +230,14 @@ func (s *dockerSession) workingDir() string {
 	return path.Join(s.resolvedCwd, s.subdir)
 }
 
+func (s *dockerSession) dial() (*dockerapi.Client, error) {
+	if s.dockerDial != nil {
+		return dockerapi.NewDialer(s.dockerHost, s.dockerDial) //nolint:wrapcheck // the caller wraps with the image
+	}
+
+	return dockerapi.New(s.dockerHost) //nolint:wrapcheck // as above
+}
+
 // dockerDaemonRefusedCode is the status a daemon-side refusal reports. 125 is
 // what `docker run` exits with for one, and the value is load-bearing rather
 // than cosmetic: docs/infra.md documents it, and an agent shown this as a tool
@@ -241,6 +252,7 @@ func (s *dockerSession) start(ctx context.Context, name string) (string, error) 
 		Name:       name,
 		WorkingDir: s.workingDir(),
 		MountDir:   s.resolvedCwd,
+		Volumes:    s.volumes,
 		// The container is per runner and a runner lives within one step of one run, so fixing the metadata here is correct.
 		Env:         s.containerEnv(BuildEnv(ctx)),
 		Labels:      OwnershipLabels(),

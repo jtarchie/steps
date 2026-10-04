@@ -41,6 +41,23 @@ var (
 )
 
 func dialSSH(ctx context.Context, worker Worker) (*transport, error) {
+	client, err := sshClientFor(ctx, worker)
+	if err != nil {
+		return nil, err
+	}
+
+	remote, build, err := pushShim(ctx, client, worker)
+	if err != nil {
+		_ = client.Close()
+
+		return nil, err
+	}
+
+	return startShim(client, remote, build)
+}
+
+// sshClientFor authenticates to worker's sshd, host key checked, for any scheme whose transport is ssh.
+func sshClientFor(ctx context.Context, worker Worker) (*ssh.Client, error) {
 	// Resolution first, and once: an alias out of the operator's ssh_config
 	// is not a hostname, so everything below -- the address, the credentials,
 	// the file host keys are checked against -- is downstream of it.
@@ -68,16 +85,7 @@ func dialSSH(ctx context.Context, worker Worker) (*transport, error) {
 		return nil, fmt.Errorf("connecting: %w", err)
 	}
 
-	client := ssh.NewClient(sshConn, channels, requests)
-
-	remote, build, err := pushShim(ctx, client, worker)
-	if err != nil {
-		_ = client.Close()
-
-		return nil, err
-	}
-
-	return startShim(client, remote, build)
+	return ssh.NewClient(sshConn, channels, requests), nil
 }
 
 // startShim execs the pushed binary and hands back its stdio as the transport.

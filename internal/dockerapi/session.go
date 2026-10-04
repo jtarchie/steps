@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +65,8 @@ type ContainerSpec struct {
 	ExtraHosts []string
 	// Mounts are bind mounts beyond WorkingDir, as `source:target[:ro]`.
 	Mounts []string
+	// Volumes are named volumes as `name:target`; set, they replace the tree bind, since their tree is on the daemon already.
+	Volumes []string
 	// OpenStdin keeps the container's stdin open for a caller that attaches
 	// to it, which a foreground run does and a session container does not.
 	OpenStdin bool
@@ -186,6 +189,10 @@ var errNotPublished = errors.New("the port is not published")
 // readers of the same tree stay coherent with what a containerized command
 // wrote.
 func (spec ContainerSpec) binds() []string {
+	if len(spec.Volumes) > 0 {
+		return append(slices.Clone(spec.Volumes), spec.Mounts...)
+	}
+
 	tree := spec.MountDir
 	if tree == "" {
 		tree = spec.WorkingDir

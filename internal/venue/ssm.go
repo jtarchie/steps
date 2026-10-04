@@ -496,7 +496,7 @@ func (w Worker) PlacementCheck(hasArtifactStore bool) error {
 		return w.gcpPlacementCheck()
 	case SchemeAWS:
 		return w.awsPlacementCheck(hasArtifactStore)
-	case SchemeLocal, SchemeSSH:
+	case SchemeLocal, SchemeSSH, SchemeDockerSSH:
 		return nil
 	}
 

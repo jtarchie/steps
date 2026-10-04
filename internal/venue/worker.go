@@ -51,7 +51,12 @@ const (
 	// relay range. GCP has no SSM-shaped exec channel, so the SSH contract is
 	// the transport — the tunnel is just how the connection gets there.
 	SchemeGCP Scheme = "gcp"
+	// SchemeDockerSSH drives the worker's docker daemon through its socket, forwarded over ssh: every placed step is a container, and nothing but the step's files reaches the machine (steps#206).
+	SchemeDockerSSH Scheme = "docker+ssh"
 )
+
+// defaultDockerSocket is where dockerd listens unless ?sock= says otherwise.
+const defaultDockerSocket = "/var/run/docker.sock"
 
 // Worker is a parsed worker URL: where a tagged step goes.
 type Worker struct {
@@ -124,6 +129,8 @@ type Worker struct {
 	// it started) can carry its connection options into the URL it is dialed
 	// by. See asStatic.
 	Query string
+	// Socket is the daemon's unix socket on a docker+ssh worker.
+	Socket string
 	// HostKey pins the worker's host key by SHA256 fingerprint, for a machine
 	// that has no known_hosts entry and never will: one acquired on demand,
 	// used, and destroyed. Whatever created it attested its key out of band,
@@ -275,7 +282,7 @@ func checkScheme(worker Worker) error {
 		return checkAWS(worker)
 	case SchemeGCP:
 		return checkGCP(worker)
-	case SchemeLocal, SchemeSSH:
+	case SchemeLocal, SchemeSSH, SchemeDockerSSH:
 		return nil
 	default:
 		return nil
@@ -308,6 +315,11 @@ func applyQuery(worker Worker, parsed *url.URL) (Worker, error) {
 	worker.Project = query.Get("project")
 	worker.Zone = query.Get("zone")
 
+	worker.Socket = query.Get("sock")
+	if worker.Scheme == SchemeDockerSSH && worker.Socket == "" {
+		worker.Socket = defaultDockerSocket
+	}
+
 	worker.Version, err = parseTemplateVersion(worker, query)
 	if err != nil {
 		return Worker{}, err
@@ -329,10 +341,11 @@ func applyQuery(worker Worker, parsed *url.URL) (Worker, error) {
 //nolint:gochecknoglobals // a fact about the grammar, not state
 var queryKeys = map[string][]Scheme{
 	"binary":      {SchemeLocal, SchemeSSH, SchemeAWS, SchemeGCP},
-	"identity":    {SchemeSSH},
-	"known_hosts": {SchemeSSH},
-	"hostkey":     {SchemeSSH, SchemeGCP},
-	"ssh_config":  {SchemeSSH},
+	"identity":    {SchemeSSH, SchemeDockerSSH},
+	"known_hosts": {SchemeSSH, SchemeDockerSSH},
+	"hostkey":     {SchemeSSH, SchemeGCP, SchemeDockerSSH},
+	"ssh_config":  {SchemeSSH, SchemeDockerSSH},
+	"sock":        {SchemeDockerSSH},
 	"region":      {SchemeAWS},
 	"shim":        {SchemeAWS},
 	"capacity":    {SchemeAWS},
@@ -467,18 +480,9 @@ func applyScheme(worker Worker, parsed *url.URL) (Worker, error) {
 	case SchemeGCP:
 		return applyGCP(worker, parsed)
 	case SchemeSSH:
-		if parsed.Host == "" {
-			return Worker{}, fmt.Errorf("%w %q: ssh needs a host, as in ssh://user@box", ErrWorker, worker.URL)
-		}
-
-		worker.Host = parsed.Host
-		if parsed.User != nil {
-			worker.User = parsed.User.Username()
-		}
-
-		worker.Root = parsed.Path
-
-		return worker, nil
+		return applySSH(worker, parsed)
+	case SchemeDockerSSH:
+		return applyDockerSSH(worker, parsed)
 	case SchemeLocal:
 		// local://something is a mapping that looks like it names a machine
 		// and does not. Refusing beats running it here and letting the author
@@ -495,8 +499,41 @@ func applyScheme(worker Worker, parsed *url.URL) (Worker, error) {
 
 		return worker, nil
 	default:
-		return Worker{}, fmt.Errorf("%w %q: unknown scheme %q, want local:, ssh://, aws:// or gcp://", ErrWorker, worker.URL, parsed.Scheme)
+		return Worker{}, fmt.Errorf("%w %q: unknown scheme %q, want local:, ssh://, docker+ssh://, aws:// or gcp://", ErrWorker, worker.URL, parsed.Scheme)
 	}
+}
+
+func applySSH(worker Worker, parsed *url.URL) (Worker, error) {
+	if parsed.Host == "" {
+		return Worker{}, fmt.Errorf("%w %q: ssh needs a host, as in ssh://user@box", ErrWorker, worker.URL)
+	}
+
+	worker.Host = parsed.Host
+	if parsed.User != nil {
+		worker.User = parsed.User.Username()
+	}
+
+	worker.Root = parsed.Path
+
+	return worker, nil
+}
+
+func applyDockerSSH(worker Worker, parsed *url.URL) (Worker, error) {
+	if parsed.Host == "" {
+		return Worker{}, fmt.Errorf("%w %q: docker+ssh needs a host, as in docker+ssh://user@box", ErrWorker, worker.URL)
+	}
+
+	// Its trees live in volumes the daemon owns, so there is no disk on the worker for a path to name.
+	if parsed.Path != "" && parsed.Path != "/" {
+		return Worker{}, fmt.Errorf("%w %q: docker+ssh takes no path — its trees live in the daemon's volumes; name a socket with ?sock=", ErrWorker, worker.URL)
+	}
+
+	worker.Host = parsed.Host
+	if parsed.User != nil {
+		worker.User = parsed.User.Username()
+	}
+
+	return worker, nil
 }
 
 // String is the mapping as the operator wrote it.
