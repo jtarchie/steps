@@ -323,7 +323,6 @@ func localGCPWorker(t *testing.T, _ *testSSHD, cwd string, outputs ...string) sh
 	t.Helper()
 
 	seamCloudSocket(t, hostDockerSocket(t))
-	cleanCache(t)
 
 	return shell.RunnerSpec{
 		Cwd:    cwd,

@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
@@ -61,10 +62,12 @@ func TestMain(m *testing.M) {
 	// different value still calls t.Setenv and stays serial, which is the
 	// same bargain it made before.
 	for key, value := range map[string]string{
-		"STEPS_TEST_AGENT_API_KEY": "test-key",
-		"OPENROUTER_API_KEY":       "test-key-not-used-for-any-call",
-		"OPENCODE_API_KEY":         "test-key-not-used-for-any-call",
-		"ANTHROPIC_API_KEY":        "test-key-not-used-for-any-call",
+		// One docker+ cache namespace per shard process, which share a daemon.
+		"STEPS_TEST_CACHE_NAMESPACE": strconv.Itoa(os.Getpid()) + "-",
+		"STEPS_TEST_AGENT_API_KEY":   "test-key",
+		"OPENROUTER_API_KEY":         "test-key-not-used-for-any-call",
+		"OPENCODE_API_KEY":           "test-key-not-used-for-any-call",
+		"ANTHROPIC_API_KEY":          "test-key-not-used-for-any-call",
 		// The fake GitHub answers to exactly this token, so a doc example and an
 		// e2e test reach it without a t.Setenv each.
 		"GH_TOKEN": fakeGitHubToken,
@@ -95,6 +98,7 @@ func TestMain(m *testing.M) {
 	// replaces the exit, so it exits.
 	options = append(options, goleak.Cleanup(func(code int) {
 		stopPostgresE2E()
+		removeCacheVolumes()
 		os.Exit(code)
 	}))
 

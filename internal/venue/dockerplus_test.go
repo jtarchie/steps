@@ -195,21 +195,17 @@ func sessionVolumes(t *testing.T) int {
 	return count
 }
 
-func cleanCache(t *testing.T) {
-	t.Helper()
+// removeProcessCache drops the cache entries and held outputs this test process left, once every test in it is done: removed per test, they could go from under a parallel test still mounting them.
+func removeProcessCache() {
+	ctx := context.Background()
 
-	t.Cleanup(func() {
-		ctx := context.WithoutCancel(t.Context())
-
-		//nolint:gosec // a filter built from this process's own pid
-		out, _ := exec.CommandContext(ctx, "docker", "volume", "ls", "-q", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid())).Output()
-		for _, name := range strings.Fields(string(out)) {
-			// The cache, and the outputs it names: everything a closed session leaves on purpose.
-			if strings.HasPrefix(name, aliasPrefix) || strings.HasPrefix(name, "steps-d-") || strings.HasPrefix(name, "steps-out-") {
-				_ = exec.CommandContext(ctx, "docker", "volume", "rm", name).Run() //nolint:gosec // a name the daemon listed
-			}
+	//nolint:gosec // a filter built from this process's own pid
+	out, _ := exec.CommandContext(ctx, "docker", "volume", "ls", "-q", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid())).Output()
+	for _, name := range strings.Fields(string(out)) {
+		if strings.HasPrefix(name, aliasPrefix) || strings.HasPrefix(name, "steps-d-") || strings.HasPrefix(name, "steps-out-") {
+			_ = exec.CommandContext(ctx, "docker", "volume", "rm", name).Run() //nolint:gosec // a name the daemon listed
 		}
-	})
+	}
 }
 
 func payloadDir(t *testing.T, size int) string {
@@ -256,7 +252,6 @@ func runAndClose(t *testing.T, worker, cwd, command string) Placement {
 // The per-artifact cache: an input the worker has already seen is offered by digest and not sent again.
 func TestDockerPlusSendsAnUnchangedInputOnce(t *testing.T) {
 	socket := hostDockerSocket(t)
-	cleanCache(t)
 
 	worker := dockerPlusURL(testsshd.New(t), socket)
 	cwd := payloadDir(t, 1<<20)
@@ -276,7 +271,6 @@ func TestDockerPlusSendsAnUnchangedInputOnce(t *testing.T) {
 // Copy-on-write: a step that writes into its input changes its own view, never the cached tree the next step is handed.
 func TestDockerPlusStepWritesNeverReachTheCache(t *testing.T) {
 	socket := hostDockerSocket(t)
-	cleanCache(t)
 
 	before := sessionVolumes(t)
 	worker := dockerPlusURL(testsshd.New(t), socket)
@@ -297,23 +291,16 @@ func TestDockerPlusStepWritesNeverReachTheCache(t *testing.T) {
 // A cached tree is re-hashed before reuse: one changed under the alias is a miss and is sent again, never handed to a step as the tree it asked for.
 func TestDockerPlusRefusesATamperedCacheEntry(t *testing.T) {
 	socket := hostDockerSocket(t)
-	cleanCache(t)
 
 	worker := dockerPlusURL(testsshd.New(t), socket)
 	cwd := payloadDir(t, 1024)
 
 	runAndClose(t, worker, cwd, "true")
 
-	//nolint:gosec // a filter built from this process's own pid
-	out, err := exec.CommandContext(t.Context(), "docker", "volume", "ls", "-q", "--filter", "label="+cacheLabel+"=data", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid())).Output()
-	if err != nil || len(strings.Fields(string(out))) != 1 {
-		t.Fatalf("want one data volume, got %q (%v)", out, err)
-	}
-
-	data := strings.TrimSpace(string(out))
+	data := dataOf(t, aliasOf(t, cwd))
 
 	//nolint:gosec // a volume the daemon named
-	err = exec.CommandContext(t.Context(), "docker", "run", "--rm", "-v", data+":/d", "alpine:3", "sh", "-c", "echo tampered > /d/blob.bin").Run()
+	err := exec.CommandContext(t.Context(), "docker", "run", "--rm", "-v", data+":/d", "alpine:3", "sh", "-c", "echo tampered > /d/blob.bin").Run()
 	if err != nil {
 		t.Fatalf("tampering: %v", err)
 	}
@@ -327,7 +314,6 @@ func TestDockerPlusRefusesATamperedCacheEntry(t *testing.T) {
 // An alias an earlier command filed names a volume its step went on writing to; a later step whose output hashes to that old digest must keep its own tree, not be handed the changed one.
 func TestDockerPlusHoldsPastAStaleAlias(t *testing.T) {
 	socket := hostDockerSocket(t)
-	cleanCache(t)
 
 	worker := dockerPlusURL(testsshd.New(t), socket)
 	hold := func(commands ...string) string { return holdOnce(t, worker, commands...) }
@@ -336,7 +322,7 @@ func TestDockerPlusHoldsPastAStaleAlias(t *testing.T) {
 	first := hold(content)
 
 	// The held volume changed under its alias, as a volume can outside any step.
-	alias, err := exec.CommandContext(t.Context(), "docker", "volume", "inspect", "--format", "{{index .Labels \""+cacheData+"\"}}", aliasPrefix+first).Output() //nolint:gosec // a digest this test was handed
+	alias, err := exec.CommandContext(t.Context(), "docker", "volume", "inspect", "--format", "{{index .Labels \""+cacheData+"\"}}", aliasName(first)).Output() //nolint:gosec // a digest this test was handed
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,13 +347,12 @@ func TestDockerPlusHoldsPastAStaleAlias(t *testing.T) {
 func aliasExists(t *testing.T, digest string) bool {
 	t.Helper()
 
-	return exec.CommandContext(t.Context(), "docker", "volume", "inspect", aliasPrefix+digest).Run() == nil //nolint:gosec // a digest this test was handed
+	return exec.CommandContext(t.Context(), "docker", "volume", "inspect", aliasName(digest)).Run() == nil //nolint:gosec // a digest this test was handed
 }
 
 // An alias published between commands names a volume the step is still writing, which another build could mount as a lower; HeldOf answers early, the alias waits for close.
 func TestDockerPlusPublishesHeldOutputsOnlyAtClose(t *testing.T) {
 	socket := hostDockerSocket(t)
-	cleanCache(t)
 
 	runner := deferredRunner(t, dockerPlusURL(testsshd.New(t), socket))
 	runAll(t, runner, "echo first-"+randomSuffix()+" > out/f")
@@ -402,7 +387,6 @@ func TestDockerPlusPublishesHeldOutputsOnlyAtClose(t *testing.T) {
 // A non-root user: must still write its outputs and the top of its tree; fresh volume roots are created root-owned.
 func TestDockerPlusNonRootUserWritesItsOutputs(t *testing.T) {
 	socket := hostDockerSocket(t)
-	cleanCache(t)
 
 	cwd := payloadDir(t, 1024)
 
@@ -437,7 +421,6 @@ func TestDockerPlusNonRootUserWritesItsOutputs(t *testing.T) {
 // An agent's tool calls run concurrently; each fetch swaps the same local paths.
 func TestDockerPlusConcurrentCommandsFetchSafely(t *testing.T) {
 	socket := hostDockerSocket(t)
-	cleanCache(t)
 
 	cwd := t.TempDir()
 
@@ -521,7 +504,6 @@ func holdOnce(t *testing.T, worker string, commands ...string) string {
 // A container a dead steps process on this machine left on the worker is reclaimed by the next session there.
 func TestDockerPlusSweepsAContainerADeadProcessLeft(t *testing.T) {
 	socket := hostDockerSocket(t)
-	cleanCache(t)
 
 	dead := exec.CommandContext(t.Context(), "true")
 

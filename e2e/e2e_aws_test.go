@@ -39,7 +39,7 @@ func TestRealAWSPipelineStepRunsOnAnInstance(t *testing.T) {
 	// only thing that says where the instance lives.
 	if region != "" {
 		store += "?region=" + region
-		worker += "&region=" + region
+		worker += "?region=" + region
 	}
 
 	dir := t.TempDir()
@@ -102,7 +102,7 @@ func TestRealAWSPlacedStepRunsInAContainer(t *testing.T) {
 
 	if region != "" {
 		store += "?region=" + region
-		worker += "&region=" + region
+		worker += "?region=" + region
 	}
 
 	dir := t.TempDir()

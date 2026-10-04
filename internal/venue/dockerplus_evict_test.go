@@ -39,12 +39,11 @@ func aliasOf(t *testing.T, cwd string) string {
 		t.Fatal(err)
 	}
 
-	return aliasPrefix + digest
+	return aliasName(digest)
 }
 
 func TestDockerPlusEvictsTheOldestPastTheBound(t *testing.T) {
 	socket := hostDockerSocket(t)
-	cleanCache(t)
 	scopeEviction(t, 8<<30, time.Hour)
 
 	worker := dockerPlusURL(testsshd.New(t), socket)
@@ -84,7 +83,6 @@ func TestDockerPlusEvictsTheOldestPastTheBound(t *testing.T) {
 // Docker tracks no dependency between volumes, so removing a lower under a mounted overlay would succeed; eviction must read the child's label instead.
 func TestDockerPlusNeverEvictsALowerInUse(t *testing.T) {
 	socket := hostDockerSocket(t)
-	cleanCache(t)
 	scopeEviction(t, 8<<30, time.Hour)
 
 	worker := dockerPlusURL(testsshd.New(t), socket)
@@ -113,7 +111,6 @@ func TestDockerPlusNeverEvictsALowerInUse(t *testing.T) {
 // An overlay's upper and work volumes are mounted by no container, only by the overlay's options: an orphan pass that judged them by docker's refusal alone would wipe a long step's writes.
 func TestDockerPlusNeverReclaimsALiveOverlaysUpper(t *testing.T) {
 	socket := hostDockerSocket(t)
-	cleanCache(t)
 	scopeEviction(t, 8<<30, time.Hour)
 
 	worker := dockerPlusURL(testsshd.New(t), socket)
@@ -137,7 +134,6 @@ func TestDockerPlusNeverReclaimsALiveOverlaysUpper(t *testing.T) {
 
 func TestDockerPlusReclaimsOrphansButNotWhatIsMounted(t *testing.T) {
 	socket := hostDockerSocket(t)
-	cleanCache(t)
 
 	labels := make([]string, 0, 6)
 	labels = append(labels, "--label", "steps.owner=steps", "--label", "steps.pid="+strconv.Itoa(os.Getpid()))

@@ -73,7 +73,9 @@ func awsConnect(ctx context.Context, api ssmdial.API, worker Worker, platform ss
 		User:            awsSSHUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: ssh.FixedHostKey(hostKey),
-		Timeout:         dialTimeout,
+		// Only the pinned key's type: an sshd offering several would otherwise negotiate one the pin cannot match.
+		HostKeyAlgorithms: hostKeyAlgorithms(hostKey),
+		Timeout:           dialTimeout,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("connecting to %s for %q: %w", worker.Instance, worker.URL, err)
@@ -123,6 +125,8 @@ func awsInstallScript(key ssh.PublicKey) string {
 
 	return `set -e
 u=` + awsSSHUser + `
+# A machine just launched registers with SSM before its user data has installed docker; the docker group must exist before the user is put in it.
+i=0; until docker info >/dev/null 2>&1 || [ "$i" -ge 120 ]; do i=$((i + 1)); sleep 2; done
 id "$u" >/dev/null 2>&1 || useradd -m -s /bin/sh "$u" 2>/dev/null || adduser -D -s /bin/sh "$u"
 # A new account's password is "!", locked, and an sshd without PAM refuses a key for a locked account; "*" is no password and not locked.
 sed -i "s/^$u:!/$u:*/" /etc/shadow 2>/dev/null || true
@@ -168,3 +172,12 @@ func (ssmAddr) Network() string                  { return "ssm" }
 func (ssmAddr) String() string                   { return "ssm" }
 
 type ssmAddr struct{}
+
+// hostKeyAlgorithms are the signature algorithms a pinned key can verify; an RSA key signs as rsa-sha2-*, never as its own type name.
+func hostKeyAlgorithms(key ssh.PublicKey) []string {
+	if key.Type() == ssh.KeyAlgoRSA {
+		return []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256}
+	}
+
+	return []string{key.Type()}
+}

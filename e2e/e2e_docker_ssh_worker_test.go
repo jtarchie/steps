@@ -30,9 +30,6 @@ func dockerSSHWorker(t *testing.T) (string, *testsshd.Server) {
 		t.Skipf("docker endpoint %q is not a unix socket", host)
 	}
 
-	// The worker keeps what it sees past the run, so this process's cache is removed with the test.
-	t.Cleanup(func() { removeCacheVolumes(t) })
-
 	server := testsshd.New(t)
 	query := url.Values{
 		"identity":    {server.Identity},
@@ -145,10 +142,9 @@ jobs:
 	}
 }
 
-func removeCacheVolumes(t *testing.T) {
-	t.Helper()
-
-	ctx := context.WithoutCancel(t.Context())
+// removeCacheVolumes drops what this process's docker+ workers kept, once its tests are done.
+func removeCacheVolumes() {
+	ctx := context.Background()
 
 	//nolint:gosec // a filter built from this process's own pid
 	out, err := exec.CommandContext(ctx, "docker", "volume", "ls", "-q", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid())).Output()

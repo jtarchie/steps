@@ -37,6 +37,11 @@ var (
 	errDigestRunFailed = errors.New("the worker could not digest the tree")
 )
 
+// aliasName is where digest is published. STEPS_TEST_CACHE_NAMESPACE keeps test processes that share one daemon from sharing entries: one test's cleanup would otherwise remove a lower another process is mounting.
+func aliasName(digest string) string {
+	return aliasPrefix + os.Getenv("STEPS_TEST_CACHE_NAMESPACE") + digest
+}
+
 // cached finds the data volume holding digest, re-hashing it on the worker first: a volume someone edited, or an alias left pointing at a removed one, is a miss rather than the wrong tree.
 func (s *plusSession) cached(ctx context.Context, digest string) (dockerapi.Volume, bool, error) {
 	alias, data, err := s.lookup(ctx, digest)
@@ -64,7 +69,7 @@ func (s *plusSession) cached(ctx context.Context, digest string) (dockerapi.Volu
 
 // lookup follows digest's alias to its data volume without re-hashing it; alias is zero when there is none.
 func (s *plusSession) lookup(ctx context.Context, digest string) (dockerapi.Volume, dockerapi.Volume, error) {
-	alias, err := s.docker.InspectVolume(ctx, aliasPrefix+digest)
+	alias, err := s.docker.InspectVolume(ctx, aliasName(digest))
 	if err != nil {
 		return dockerapi.Volume{}, dockerapi.Volume{}, fmt.Errorf("%w", err)
 	}
@@ -133,7 +138,7 @@ func (s *plusSession) publish(ctx context.Context, digest string, data dockerapi
 	labels[cacheDigest] = digest
 	labels[cacheSize] = strconv.FormatInt(size, 10)
 
-	alias, err := s.docker.CreateVolume(ctx, aliasPrefix+digest, labels, nil)
+	alias, err := s.docker.CreateVolume(ctx, aliasName(digest), labels, nil)
 	if err != nil {
 		return dockerapi.Volume{}, fmt.Errorf("%w", err)
 	}

@@ -164,7 +164,6 @@ func localSSMWorker(t *testing.T, fake *fakeSSM, cwd string, outputs ...string) 
 	socket := hostDockerSocket(t)
 	seamSSMToSSHD(t, fake, newSSMSSHD(t, fake))
 	seamCloudSocket(t, socket)
-	cleanCache(t)
 
 	return shell.RunnerSpec{
 		Cwd:    cwd,
@@ -206,6 +205,8 @@ func newSSMSSHD(t *testing.T, fake *fakeSSM) *testSSHD {
 		},
 	}
 	config.AddHostKey(hostSigner)
+	// A second host key of a type the client prefers, as a real sshd offers several: the install reports ed25519, and the dial must not negotiate the other.
+	addECDSAHostKey(t, config)
 
 	server := testsshd.NewWithConfig(t, config, hostPub)
 

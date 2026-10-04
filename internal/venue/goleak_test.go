@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -34,7 +35,13 @@ func TestMain(m *testing.M) {
 		serveShim()
 	}
 
-	goleak.VerifyTestMain(m, sdkPoolIgnores()...)
+	// One cache namespace per process: test shards share a daemon, and content-addressed entries would otherwise be shared across them.
+	_ = os.Setenv("STEPS_TEST_CACHE_NAMESPACE", strconv.Itoa(os.Getpid())+"-")
+
+	goleak.VerifyTestMain(m, append(sdkPoolIgnores(), goleak.Cleanup(func(code int) {
+		removeProcessCache()
+		os.Exit(code)
+	}))...)
 }
 
 // sdkPoolIgnores relaxes the leak check for the cloud SDKs' own connection
