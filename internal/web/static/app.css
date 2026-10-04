@@ -418,7 +418,7 @@ td.faint, .faint { color: var(--faint); }
 
 /* ---- overview job chips ---- */
 .jobchips { white-space: normal; }
-.jobchips a { display: inline-block; margin-right: 10px; line-height: 22px; text-decoration: none; }
+.jobchips a { display: inline-block; margin-right: 10px; line-height: 24px; text-decoration: none; }
 .jobchips a:hover { text-decoration: underline; }
 
 /* ---- run strip ----
@@ -1139,6 +1139,7 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
  * (internal/web/docs.go), never a stock theme. */
 .docsnav { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 10px 0 8px; font-family: var(--sans); font-size: 12px; }
 .docsnav a, .docstoc a { color: var(--dim); }
+.docsnav a { display: inline-block; padding: 3px 0; }
 .docsnav a:hover, .docstoc a:hover { color: var(--fg); }
 .docsnav a[aria-current="page"] { color: var(--green); }
 .docsgroup { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
