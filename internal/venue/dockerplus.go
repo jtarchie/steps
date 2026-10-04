@@ -63,9 +63,10 @@ type plusSession struct {
 	// kept are volumes now named by a digest, which outlive the session.
 	kept map[string]bool
 	// fetchMu serializes fetches: an agent's concurrent tool calls would otherwise swap the same local paths and write kept at once.
-	fetchMu sync.Mutex
-	heldMu  sync.Mutex
-	held    map[string]string
+	fetchMu   sync.Mutex
+	heldMu    sync.Mutex
+	held      map[string]string
+	heldSizes map[string]int64
 
 	sent, received atomic.Int64
 }
@@ -205,6 +206,8 @@ func (s *plusSession) connect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	s.evict(ctx)
 
 	work, err := s.newVolume(ctx, "work")
 	if err != nil {
@@ -447,17 +450,18 @@ func (s *plusSession) fetch(ctx context.Context) error {
 }
 
 func (s *plusSession) fetchDeclared(ctx context.Context) error {
-	held := map[string]string{}
+	held, sizes := map[string]string{}, map[string]int64{}
 
 	for _, name := range s.spec.Fetch {
 		// Digested now, so HeldOf can answer; published only at close, once nothing writes the volume.
 		if volume, ok := s.outputs[name]; ok && s.spec.DeferFetch {
-			digest, err := s.digestOf(ctx, volume)
+			digest, size, err := s.measure(ctx, volume)
 			if err != nil {
 				return fmt.Errorf("holding output %q: %w", name, err)
 			}
 
 			held[name] = digest
+			sizes[name] = size
 
 			continue
 		}
@@ -469,7 +473,7 @@ func (s *plusSession) fetchDeclared(ctx context.Context) error {
 	}
 
 	s.heldMu.Lock()
-	s.held = held
+	s.held, s.heldSizes = held, sizes
 	s.heldMu.Unlock()
 
 	return nil
@@ -624,13 +628,13 @@ func (s *plusSession) close() error {
 // publishHeld files each held output under the digest HeldOf reported. At close, after the step's container is gone: an alias published mid-step names a volume still being written, which a concurrent build could mount as an overlay's lower.
 func (s *plusSession) publishHeld(ctx context.Context) []error {
 	s.heldMu.Lock()
-	held := maps.Clone(s.held)
+	held, sizes := maps.Clone(s.held), maps.Clone(s.heldSizes)
 	s.heldMu.Unlock()
 
 	var errs []error
 
 	for name, digest := range held {
-		err := s.hold(ctx, s.outputs[name], digest)
+		err := s.hold(ctx, s.outputs[name], digest, sizes[name])
 		if err != nil {
 			errs = append(errs, fmt.Errorf("holding output %q: %w", name, err))
 		}

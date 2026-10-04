@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
+	"sync/atomic"
 
 	"github.com/jtarchie/steps/internal/dockerapi"
 	"github.com/jtarchie/steps/internal/shell"
@@ -19,6 +22,8 @@ const (
 	cacheLabel  = "steps.cache"
 	cacheData   = "steps.data"
 	cacheDigest = "steps.digest"
+	cacheSize   = "steps.size"
+	lowerLabel  = "steps.lower"
 	aliasPrefix = "steps-a-"
 	holderMount = "/d"
 )
@@ -81,20 +86,21 @@ func (s *plusSession) fill(ctx context.Context, digest string, pack func(io.Writ
 		return dockerapi.Volume{}, fmt.Errorf("%w", err)
 	}
 
-	err = s.pour(ctx, data.Name, pack)
+	size, err := s.pour(ctx, data.Name, pack)
 	if err != nil {
 		_ = s.docker.RemoveVolume(context.WithoutCancel(ctx), data.Name)
 
 		return dockerapi.Volume{}, err
 	}
 
-	return s.publish(ctx, digest, data)
+	return s.publish(ctx, digest, data, size)
 }
 
-func (s *plusSession) pour(ctx context.Context, volume string, pack func(io.Writer) error) error {
+// pour reports the bytes it sent, which is what the entry is weighed at for eviction.
+func (s *plusSession) pour(ctx context.Context, volume string, pack func(io.Writer) error) (int64, error) {
 	holder, err := s.docker.CreateHolder(ctx, "steps-fill-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), []string{volumeMount(volume, holderMount, false)})
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return 0, fmt.Errorf("%w", err)
 	}
 	defer func() { _ = s.docker.RemoveContainer(context.WithoutCancel(ctx), holder) }()
 
@@ -102,23 +108,28 @@ func (s *plusSession) pour(ctx context.Context, volume string, pack func(io.Writ
 
 	go func() { writer.CloseWithError(pack(writer)) }()
 
-	err = s.docker.PutArchive(ctx, holder, holderMount, &byteCounter{r: reader, n: &s.sent})
+	var poured atomic.Int64
+
+	err = s.docker.PutArchive(ctx, holder, holderMount, &byteCounter{r: reader, n: &poured})
 
 	_ = reader.CloseWithError(io.ErrClosedPipe)
 
+	s.sent.Add(poured.Load())
+
 	if err != nil {
-		return fmt.Errorf("sending a tree: %w", err)
+		return 0, fmt.Errorf("sending a tree: %w", err)
 	}
 
-	return nil
+	return poured.Load(), nil
 }
 
 // publish names data by digest. CreateVolume answers an existing name with that volume, so a lost race shows up as an alias pointing elsewhere.
-func (s *plusSession) publish(ctx context.Context, digest string, data dockerapi.Volume) (dockerapi.Volume, error) {
+func (s *plusSession) publish(ctx context.Context, digest string, data dockerapi.Volume, size int64) (dockerapi.Volume, error) {
 	labels := shell.OwnershipLabels()
 	labels[cacheLabel] = "alias"
 	labels[cacheData] = data.Name
 	labels[cacheDigest] = digest
+	labels[cacheSize] = strconv.FormatInt(size, 10)
 
 	alias, err := s.docker.CreateVolume(ctx, aliasPrefix+digest, labels, nil)
 	if err != nil {
@@ -139,25 +150,39 @@ func (s *plusSession) publish(ctx context.Context, digest string, data dockerapi
 	return data, nil
 }
 
-// digestOf runs treedigest's script against a volume on the worker, read-only and with no network.
 func (s *plusSession) digestOf(ctx context.Context, volume string) (string, error) {
+	digest, _, err := s.measure(ctx, volume)
+
+	return digest, err
+}
+
+// measure runs treedigest's script against a volume on the worker, read-only and with no network, and weighs it in the same run.
+func (s *plusSession) measure(ctx context.Context, volume string) (string, int64, error) {
 	code, stdout, stderr, err := s.docker.RunOnce(ctx, dockerapi.ContainerSpec{
 		Image:   treedigest.Image,
-		Cmd:     []string{"sh", "-c", treedigest.Script, "sh", holderMount},
+		Cmd:     []string{"sh", "-c", `sh -c "$1" sh ` + holderMount + ` && du -sk ` + holderMount, "sh", treedigest.Script},
 		Name:    "steps-digest-" + randomSuffix(),
 		Labels:  shell.OwnershipLabels(),
 		Network: "none",
 		Mounts:  []string{volumeMount(volume, holderMount, true)},
 	})
 	if err != nil {
-		return "", fmt.Errorf("%w", err)
+		return "", 0, fmt.Errorf("%w", err)
 	}
 
-	if code != 0 {
-		return "", fmt.Errorf("%w (exit %d): %s", errDigestRunFailed, code, stderr)
+	digest, weight, _ := strings.Cut(stdout, "\n")
+	fields := strings.Fields(weight)
+
+	if code != 0 || len(fields) == 0 {
+		return "", 0, fmt.Errorf("%w (exit %d): %s", errDigestRunFailed, code, stderr)
 	}
 
-	return stdout, nil
+	kib, err := strconv.ParseInt(fields[0], 10, 64)
+	if err != nil {
+		return "", 0, fmt.Errorf("%w: du said %q", errDigestRunFailed, weight)
+	}
+
+	return digest, kib * 1024, nil
 }
 
 // overlay gives the step a copy-on-write view of data, so its writes land in a volume of its own and the cached tree stays as it was.
@@ -172,7 +197,11 @@ func (s *plusSession) overlay(ctx context.Context, data dockerapi.Volume) (strin
 		return "", err
 	}
 
-	child, err := s.docker.CreateVolume(ctx, "steps-in-"+randomSuffix(), shell.OwnershipLabels(),
+	// Named on the child because docker tracks no dependency between volumes: eviction reads this to leave a lower alone while anything is layered on it.
+	labels := shell.OwnershipLabels()
+	labels[lowerLabel] = data.Name
+
+	child, err := s.docker.CreateVolume(ctx, "steps-in-"+randomSuffix(), labels,
 		dockerapi.OverlayOptions(data.Mountpoint, upper.Mountpoint, work.Mountpoint))
 	if err != nil {
 		return "", fmt.Errorf("%w", err)
@@ -234,7 +263,7 @@ func (s *plusSession) placeRemote(ctx context.Context, name string, input shell.
 }
 
 // hold files an output volume under its digest and keeps it past close, so the next step here finds it and nothing comes home.
-func (s *plusSession) hold(ctx context.Context, volume, digest string) error {
+func (s *plusSession) hold(ctx context.Context, volume, digest string, size int64) error {
 	// Through cached, which drops an alias whose volume changed since it was filed; publish alone would hand back that volume and drop this one, the real tree.
 	existing, hit, err := s.cached(ctx, digest)
 	if err != nil {
@@ -254,7 +283,7 @@ func (s *plusSession) hold(ctx context.Context, volume, digest string) error {
 		return fmt.Errorf("%w", err)
 	}
 
-	kept, err := s.publish(ctx, digest, data)
+	kept, err := s.publish(ctx, digest, data, size)
 	if err != nil {
 		return err
 	}

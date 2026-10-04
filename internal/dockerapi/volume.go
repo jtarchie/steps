@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/containerd/errdefs"
 	"github.com/moby/moby/api/pkg/stdcopy"
@@ -20,6 +21,8 @@ type Volume struct {
 	Name       string
 	Mountpoint string
 	Labels     map[string]string
+	// CreatedAt is zero when the daemon did not say or said something unparseable.
+	CreatedAt time.Time
 }
 
 // NewDialer reaches a daemon through dial, for a socket with no address of its own here (one forwarded over ssh); name is what errors call it.
@@ -38,7 +41,9 @@ func NewDialer(name string, dial func(ctx context.Context) (net.Conn, error)) (*
 var errNoLabels = errors.New("no labels to select by")
 
 func volumeOf(v volumetypes.Volume) Volume {
-	return Volume{Name: v.Name, Mountpoint: v.Mountpoint, Labels: v.Labels}
+	created, _ := time.Parse(time.RFC3339Nano, v.CreatedAt)
+
+	return Volume{Name: v.Name, Mountpoint: v.Mountpoint, Labels: v.Labels, CreatedAt: created}
 }
 
 // IsNotFound reports a daemon answering that the thing asked about does not exist.
