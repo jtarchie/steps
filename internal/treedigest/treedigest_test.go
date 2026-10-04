@@ -382,7 +382,7 @@ func TestTreeNamesWhatTheNextCommandSees(t *testing.T) {
 	}
 }
 
-// os.DirFS is what production walks; it must agree with the MapFS the busybox comparison is built from.
+// rawFS is what production walks; it must agree with the MapFS the busybox comparison is built from.
 func TestTreeOnDiskMatchesTheSameTreeInMemory(t *testing.T) {
 	t.Parallel()
 
@@ -430,6 +430,22 @@ func TestTreeOnDiskMatchesTheSameTreeInMemory(t *testing.T) {
 	}
 }
 
+func TestTreeRefusesAFileRoot(t *testing.T) {
+	t.Parallel()
+
+	file := filepath.Join(t.TempDir(), "f")
+
+	err := os.WriteFile(file, nil, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sum, err := treedigest.Tree(file)
+	if err == nil {
+		t.Fatalf("a file root digested as %s", sum)
+	}
+}
+
 func TestTreeFailsOnUnreadableFile(t *testing.T) {
 	t.Parallel()
 
@@ -470,5 +486,20 @@ func TestRawFSHandsNamesToTheOS(t *testing.T) {
 	_, err := treedigest.RawFS(t.TempDir()).Open("\xff")
 	if errors.Is(err, fs.ErrInvalid) {
 		t.Fatalf("a name that is not UTF-8 was refused before the OS saw it: %v", err)
+	}
+}
+
+func TestScriptRefusesScratchInsideTheRoot(t *testing.T) {
+	requireDocker(t)
+
+	trees := []fstest.MapFS{{"a": {Data: []byte("x"), Mode: 0o644}}, {"a": {Data: []byte("x"), Mode: 0o644}}}
+	sums := busyboxDigests(t, trees, "0", "export TMPDIR=/tmp/t/00000")
+
+	if sums[0] != "FAILED" {
+		t.Errorf("scratch inside the root: printed %q", sums[0])
+	}
+
+	if want := digest(t, trees[1]); sums[1] != want {
+		t.Errorf("scratch outside the root: busybox %s, Go %s", sums[1], want)
 	}
 }

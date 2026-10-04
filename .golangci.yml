@@ -415,6 +415,14 @@ linters:
               desc: "test-only outside internal/cli: production code takes the store.Store it was handed"
             - pkg: "github.com/jtarchie/steps/internal/store/postgres"
               desc: "test-only outside internal/cli: production code takes the store.Store it was handed"
+        # Venue's allow list admits testsshd for its tests; this is what keeps it out of venue's production files.
+        TestSSHDTestOnly:
+          files:
+            - "$all"
+            - "!$test"
+          deny:
+            - pkg: "github.com/jtarchie/steps/internal/testsshd"
+              desc: "test fixture: an in-process sshd that runs whatever it is sent"
         # config is the shared data-model root: it must not depend on any
         # other internal package (see CLAUDE.md's package-seam plan).
         Config:
@@ -546,6 +554,8 @@ linters:
             - "golang.org/x/crypto/ssh"
             - "github.com/pkg/sftp/v2"
             - "go.uber.org/goleak"
+            # dockerapi for the streamlocal test's socket, found the way a docker CLI finds it.
+            - "github.com/jtarchie/steps/internal/dockerapi"
         # treedigest must stay stdlib-only: its twin is a busybox script with nothing else to lean on (steps#206).
         TreeDigest:
           files:

@@ -38,7 +38,6 @@ type Server struct {
 
 	listener net.Listener
 	conns    sync.WaitGroup
-	closed   atomic.Bool
 }
 
 // New accepts only the generated client key, and its URL names that key and the known_hosts holding this server's.
@@ -96,7 +95,6 @@ func NewWithConfig(t testing.TB, config *ssh.ServerConfig, hostKey ssh.PublicKey
 	go server.accept(config)
 
 	t.Cleanup(func() {
-		server.closed.Store(true)
 		_ = server.listener.Close()
 		server.conns.Wait()
 	})
@@ -204,7 +202,11 @@ func (s *Server) streamLocal(newChannel ssh.NewChannel) {
 
 	s.StreamLocals.Add(1)
 
-	go ssh.DiscardRequests(channelRequests)
+	// Requests close with the channel, not on EOF: a client that hangs up closes the socket as OpenSSH does, while a half-close still only half-closes.
+	go func() {
+		ssh.DiscardRequests(channelRequests)
+		_ = socket.Close()
+	}()
 
 	var copies sync.WaitGroup
 

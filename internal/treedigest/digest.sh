@@ -1,12 +1,18 @@
 # Prints treedigest.Tree of $1 with busybox alone; forks per batch, never per entry (per-entry forking took >10 min on 50k files).
 set -eu
 set -o pipefail
-cd "$1"
+# Unset CDPATH: a relative root found through it makes cd print the path, which would land ahead of the digest.
+unset CDPATH
+cd -- "$1"
 export LC_ALL=C
 nl='
 '
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+tmp=$(cd -- "$tmp" && pwd -P)
+root=$(pwd -P)
+# Scratch under the root (a root of / or $TMPDIR) would be hashed while being written; refuse rather than print a digest nothing matches.
+case "$tmp" in "${root%/}"/*) echo "digest.sh: scratch $tmp is inside $root" >&2 && exit 1 ;; esac
 
 hexnames() {
 	od -An -v -tx1 | awk '{ for (i = 1; i <= NF; i++) { if ($i == "00") { print substr(h, 5); h = "" } else h = h $i } }'

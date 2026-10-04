@@ -36,6 +36,11 @@ func treeOf(fsys fs.FS) (string, error) {
 		}
 
 		if path == "." {
+			// WalkDir hands a file root to fn and stops, which would name a file exactly as an empty directory; the script's cd refuses one.
+			if !entry.IsDir() {
+				return fmt.Errorf("%w: root is not a directory", fs.ErrInvalid)
+			}
+
 			return nil
 		}
 

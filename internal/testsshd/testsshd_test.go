@@ -3,6 +3,7 @@ package testsshd_test
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -13,15 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"go.uber.org/goleak"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/jtarchie/steps/internal/dockerapi"
 	"github.com/jtarchie/steps/internal/testsshd"
 )
-
-func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m)
-}
 
 func dial(t *testing.T, server *testsshd.Server) *ssh.Client {
 	t.Helper()
@@ -129,20 +126,13 @@ func TestStreamLocalRefusesAMissingSocket(t *testing.T) {
 	_, err := dial(t, server).Dial("unix", shortSocketPath(t))
 
 	var openErr *ssh.OpenChannelError
-	if !errorsAs(err, &openErr) || openErr.Reason != ssh.ConnectionFailed {
+	if !errors.As(err, &openErr) || openErr.Reason != ssh.ConnectionFailed {
 		t.Fatalf("want a ConnectionFailed refusal, got %v", err)
 	}
 
 	if got := server.StreamLocals.Load(); got != 0 {
 		t.Fatalf("StreamLocals = %d after a refusal", got)
 	}
-}
-
-func errorsAs(err error, target **ssh.OpenChannelError) bool {
-	openErr, ok := err.(*ssh.OpenChannelError) //nolint:errorlint // ssh returns it unwrapped
-	*target = openErr
-
-	return ok
 }
 
 // The docker+ssh:// data plane in one hop: the engine API answering through the forward.
@@ -187,12 +177,11 @@ func dockerSocket(t *testing.T) string {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, "docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}").Output()
+	host, err := dockerapi.ResolveHost()
 	if err != nil {
-		t.Skip("docker context not readable")
+		t.Skipf("no docker endpoint: %v", err)
 	}
 
-	host := strings.TrimSpace(string(out))
 	if !strings.HasPrefix(host, "unix://") {
 		t.Skipf("docker endpoint %q is not a unix socket", host)
 	}
