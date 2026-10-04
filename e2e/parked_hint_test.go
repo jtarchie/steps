@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -127,14 +128,23 @@ func TestParkedApprovalUnderADaemonNamesItsDatabase(t *testing.T) {
 	path := approvalPipeline(t, dir, "30s")
 	name := cli.PipelineName(path)
 
+	logs := captureStderr(t)
+
 	served := startWebFor(t, path, "--interval", "1h")
 	defer served.stopIfRunning(t)
 
 	served.trigger(t, name, "publish")
 
-	approve, _, found := strings.Cut(recordedCommand(t, served.state, name, "publish", "approval "), "  |  ")
+	recorded := recordedCommand(t, served.state, name, "publish", "approval ")
+
+	approve, _, found := strings.Cut(recorded, "  |  ")
 	if !found {
 		t.Fatalf("the approval line offers no reject command: %q", approve)
+	}
+
+	// The daemon's terminal is slog only, and the answer command is one an operator acts on, so it is logged as well as recorded.
+	if logged := loggedCommand(t, logs, "approval "); logged != recorded {
+		t.Errorf("the daemon logged %q, recorded %q", logged, recorded)
 	}
 
 	err := runPrinted(approve, "")
@@ -375,4 +385,44 @@ func runPrinted(printed, answer string) error {
 	}
 
 	return nil
+}
+
+// loggedCommand is recordedCommand read from a daemon's log: the parked line is a step.note record's text.
+func loggedCommand(t *testing.T, logs func() string, prefix string) string {
+	t.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+
+	for time.Now().Before(deadline) {
+		for line := range strings.SplitSeq(logs(), "\n") {
+			_, quoted, found := strings.Cut(line, " step.note ")
+			if !found {
+				continue
+			}
+
+			_, quoted, _ = strings.Cut(quoted, "text=")
+
+			text, err := strconv.Unquote(quoted)
+			if err != nil {
+				text = quoted
+			}
+
+			if !strings.HasPrefix(text, prefix) || !strings.Contains(text, "waiting up to") {
+				continue
+			}
+
+			_, commands, found := strings.Cut(text, " — ")
+			if !found {
+				t.Fatalf("the parked line offers no command: %q", text)
+			}
+
+			return commands
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	t.Fatalf("nothing logged a parked %q line", prefix)
+
+	return ""
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/jtarchie/steps/internal/events"
 )
 
-// TestLogIsDebugDetail pins the daemon's terminal: a step's lifecycle and notes are debug lines naming their run, job and step, and nothing else is logged, because the job's own start and end already are and every byte is in the record.
+// TestLogIsDebugDetail pins the daemon's terminal: a step's lifecycle is debug lines naming their run, job and step, a note is logged at its own level because a parked approval's answer command is one an operator acts on, and nothing else is logged, because the job's own start and end already are and every byte is in the record.
 func TestLogIsDebugDetail(t *testing.T) {
 	t.Parallel()
 
@@ -24,6 +24,7 @@ func TestLogIsDebugDetail(t *testing.T) {
 		{Type: events.TypeStepOutput, RunID: "R", Job: "build", StepName: "compile", Text: "secret-bytes"},
 		{Type: events.TypeStepSkipped, RunID: "R", Job: "build", StepName: "test", Text: "when: guard was false"},
 		{Type: events.TypeStepNote, RunID: "R", Job: "build", Status: events.NoteWarn, Text: "could not refresh repo"},
+		{Type: events.TypeStepNote, RunID: "R", Job: "build", Status: events.NoteInfo, Text: "approval parked"},
 		{Type: events.TypeJobFinished, RunID: "R", Job: "build", Status: "failed"},
 	} {
 		logged(event)
@@ -32,7 +33,8 @@ func TestLogIsDebugDetail(t *testing.T) {
 	want := strings.Join([]string{
 		`level=DEBUG msg=step.started run=R job=build kind=task step=compile`,
 		`level=DEBUG msg=step.skipped run=R job=build step=test reason="when: guard was false"`,
-		`level=DEBUG msg=step.note run=R job=build status=warn text="could not refresh repo"`,
+		`level=WARN msg=step.note run=R job=build status=warn text="could not refresh repo"`,
+		`level=INFO msg=step.note run=R job=build status=info text="approval parked"`,
 	}, "\n") + "\n"
 
 	if out.String() != want {

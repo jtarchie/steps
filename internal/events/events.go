@@ -354,16 +354,30 @@ func Publish(ctx context.Context, event Event) {
 	FromContext(ctx).Publish(event)
 }
 
-// Note publishes a TypeStepNote under the run and step ctx names, or the job (StepIndex -1) outside a step. With no bus to tell — none installed, or one already closed, which is where a job's deferred worker release speaks — it writes the line to Stdout(ctx) instead, because a note is often the only record of what it says.
+// Note publishes a TypeStepNote under the run and step ctx names, or the job (StepIndex -1) outside a step. With no bus to tell — none installed, or one already closed, which is where a job's deferred worker release speaks — it writes the line to Stdout(ctx) instead, or logs it when ctx is Headless, because a note is often the only record of what it says.
 func Note(ctx context.Context, level, text string) {
 	event := Event{Type: TypeStepNote, RunID: RunID(ctx), StepID: StepID(ctx), Status: level, Text: text}
 	if event.StepID == 0 {
 		event.StepIndex = -1
 	}
 
-	if !FromContext(ctx).publish(event) {
-		say(Stdout(ctx), level, text)
+	if FromContext(ctx).publish(event) {
+		return
 	}
+
+	// A headless process's stdout is discarded, and the note is often the only record of what it says.
+	if Headless(ctx) {
+		logLevel := slog.LevelInfo
+		if level == NoteWarn {
+			logLevel = slog.LevelWarn
+		}
+
+		slog.Log(ctx, logLevel, "note", "text", text)
+
+		return
+	}
+
+	say(Stdout(ctx), level, text)
 }
 
 func say(w io.Writer, level, text string) {

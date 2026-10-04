@@ -563,3 +563,23 @@ func TestLogHandlerToleratesANilContext(t *testing.T) {
 		t.Fatalf("line = %q", buf.String())
 	}
 }
+
+// A daemon's terminal is slog only, so a note with no bus to tell is logged there rather than discarded with the daemon's stdout, and printed as before anywhere a person reads the streams. Not parallel: slog's default is the process's.
+func TestHeadlessNoteWithNoBusIsLogged(t *testing.T) {
+	var logged, printed bytes.Buffer
+
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	Note(WithOutput(context.Background(), Output{Headless: true}), NoteWarn, "under the daemon")
+	Note(WithOutput(context.Background(), Output{Stdout: &printed}), NoteInfo, "under steps run")
+
+	if !strings.Contains(logged.String(), `level=WARN msg=note text="under the daemon"`) {
+		t.Errorf("a headless note with no bus was not logged: %q", logged.String())
+	}
+
+	if printed.String() != "under steps run\n" || strings.Contains(logged.String(), "under steps run") {
+		t.Errorf("a note under steps run: logged %q, printed %q", logged.String(), printed.String())
+	}
+}

@@ -7,7 +7,7 @@ import (
 	"github.com/jtarchie/steps/internal/events"
 )
 
-// Log renders a run as log lines, for a process whose runs are read in the browser rather than on its terminal: what Plain prints becomes debug detail, and nothing else is said — the job's start and end are logged where the drain runs it, and every byte a step wrote is in the run's record.
+// Log renders a run as log lines, for a process whose runs are read in the browser rather than on its terminal: what Plain prints becomes debug detail, except a note, which keeps its level, and nothing else is said — the job's start and end are logged where the drain runs it, and every byte a step wrote is in the run's record.
 //
 // A nil logger is whichever slog.Default() is current when each line is written, rather than the one current when the observer was made.
 func Log(ctx context.Context, logger *slog.Logger) func(events.Event) {
@@ -25,7 +25,13 @@ func Log(ctx context.Context, logger *slog.Logger) func(events.Event) {
 		case events.TypeStepSkipped:
 			logger.DebugContext(ctx, "step.skipped", append(run, "step", event.StepName, "reason", event.Text)...)
 		case events.TypeStepNote:
-			logger.DebugContext(ctx, "step.note", append(run, "status", event.Status, "text", event.Text)...)
+			level := slog.LevelInfo
+			if event.Status == events.NoteWarn {
+				level = slog.LevelWarn
+			}
+
+			// A note is logged at its own level, not as debug detail: a parked approval's answer command is one an operator acts on.
+			logger.Log(ctx, level, "step.note", append(run, "status", event.Status, "text", event.Text)...)
 		}
 	}
 }

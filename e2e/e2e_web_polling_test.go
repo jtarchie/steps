@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -648,6 +649,48 @@ func TestDaemonLogLinesNameTheirPipeline(t *testing.T) {
 
 	assertNoDuplicateKeys(t, out)
 }
+
+// The daemon's terminal is slog and nothing else: a step's bytes, its lifecycle lines and the daemon's own announcements are read from the store or the browser, never echoed. Asked for repeatedly and regressed repeatedly, hence the test.
+func TestDaemonTerminalIsOnlySlog(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: speak
+    inputs: []
+    run: |
+      echo stdout-marker
+      echo stderr-marker >&2
+`)
+	name := cli.PipelineName(path)
+	logs := captureStderr(t)
+
+	stdout := captureStdout(t, func() {
+		served := startWebFor(t, path, "--interval", "1h")
+		defer served.stopIfRunning(t)
+
+		served.trigger(t, name, "build")
+		waitForLogLine(t, logs, "web.job.done", "pipeline", name)
+		served.stop(t)
+	})
+
+	// The set client shares this process's stdout; its lines are the only ones allowed.
+	for line := range strings.SplitSeq(strings.TrimSpace(stdout), "\n") {
+		if line != "" && !strings.HasPrefix(line, "created: ") {
+			t.Errorf("daemon wrote to stdout: %q", line)
+		}
+	}
+
+	for line := range strings.SplitSeq(strings.TrimSpace(logs()), "\n") {
+		if !slogLine.MatchString(line) {
+			t.Errorf("daemon wrote a non-slog line to stderr: %q", line)
+		}
+	}
+}
+
+// slogLine is tint's uncolored layout: time, level, then the record.
+var slogLine = regexp.MustCompile(`^[A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d\.\d{3} (DBG|INF|WRN|ERR) `)
 
 // assertNoDuplicateKeys: a key the call site passed beats the context's, so
 // no line says the same thing twice.
