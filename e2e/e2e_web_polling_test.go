@@ -51,7 +51,8 @@ func startWeb(t *testing.T, args ...string) *webProcess {
 
 	go func() { served.done <- cli.Run(argv) }()
 
-	deadline := time.Now().Add(10 * time.Second)
+	// 30s, not 10: a --db postgres:// server opens a container's database first, and under the full suite's docker load that alone passed 10s three runs in six.
+	deadline := time.Now().Add(30 * time.Second)
 
 	for time.Now().Before(deadline) {
 		// Any answer proves the listener is up; which status it is belongs to
