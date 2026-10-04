@@ -29,6 +29,14 @@ import (
 // works only for runs that were being watched at the time.
 func StoreSink(st store.Events) func(events.Event) {
 	return func(event events.Event) {
+		// Here, on the sink's one goroutine, so no chunk still queued behind this record can outlive it.
+		if event.Type == events.TypeStepOutput && event.StepID != 0 {
+			err := st.DeleteStepEvents(context.Background(), event.RunID, event.StepID, events.TypeStepOutputChunk)
+			if err != nil {
+				slog.Warn("run.event_collapse", "run", event.RunID, "step", event.StepID, "error", err)
+			}
+		}
+
 		err := st.AppendRunEvent(context.Background(), store.RunEventRow{
 			RunID:        event.RunID,
 			Type:         event.Type,
@@ -288,47 +296,6 @@ func currentStepRef(ctx context.Context) (jobName string, index int) {
 // an identity on the context. A hook body's output goes to the hook's own
 // row, named and kinded like the row runMatchedHook opened.
 func publishOutputForCurrentStep(ctx context.Context, stdout, stderr string) {
-	identity, ok := ctx.Value(stepIdentityKey{}).(stepIdentity)
-	if !ok {
-		return
-	}
-
-	if identity.label != "" {
-		publishStepOutput(ctx, identity.job, identity.index, identity.label, hookKind, stdout, stderr)
-
-		return
-	}
-
-	publishStepOutput(ctx, identity.job, identity.index, eventStepName(identity.step), stepKindName(identity.step), stdout, stderr)
-}
-
-// maxPublishedOutputBytes bounds what one step contributes to a run's event
-// log. Generous enough for the output a person actually reads — 32KB, the
-// same bound a tool result gets inline, so a failing command's tail is not
-// cut shorter in the UI than the model itself would have seen — while a
-// runaway command still cannot turn the transcript into a copy of its own
-// stdout.
-const maxPublishedOutputBytes = 32_000
-
-// publishStepOutput records what a step printed, whichever way the step ended.
-//
-// Especially when it failed. Nothing else carries a failing command's output:
-// the error a task returns is "command %q failed: exit status N", and an
-// assert mismatch names the expectation rather than the output that missed
-// it. (taskFailureOutput does fold output into text, but only into the prompt
-// runFixTask hands the fix agent — it never reaches the transcript.) A step
-// that printed nothing publishes nothing: an empty log block is worse than
-// no log block.
-//
-// Callers arrive with different budgets and that is NOT reconciled here. The
-// plain task path bounds its own capture (RunStreamedCapture takes
-// maxPublishedOutputBytes per stream, and appends its own "... [truncated N
-// bytes]" marker); assert:/fix: tasks capture with the unbounded
-// RunCaptureFull because assert.stdout has to see the whole stream, so their
-// rows are bounded only by store.MaxEventTextBytes. A cap applied here cannot
-// fix that without also clipping the marker off an already-compliant stream —
-// the budget belongs in runCaptured, which is where the capture happens.
-func publishStepOutput(ctx context.Context, jobName string, i int, name, kind, stdout, stderr string) {
 	combined := strings.TrimRight(stdout, "\n")
 
 	if trimmed := strings.TrimRight(stderr, "\n"); trimmed != "" {
@@ -339,21 +306,41 @@ func publishStepOutput(ctx context.Context, jobName string, i int, name, kind, s
 		combined += trimmed
 	}
 
-	if combined == "" {
+	publishForCurrentStep(ctx, events.TypeStepOutput, "", combined)
+}
+
+// publishForCurrentStep publishes text of one output type against whichever step the context says is running — see publishOutputForCurrentStep. An empty text publishes nothing: an empty log block is worse than no log block.
+func publishForCurrentStep(ctx context.Context, eventType, status, text string) {
+	identity, ok := ctx.Value(stepIdentityKey{}).(stepIdentity)
+	if !ok || text == "" {
 		return
 	}
 
+	name, kind := eventStepName(identity.step), stepKindName(identity.step)
+	if identity.label != "" {
+		name, kind = identity.label, hookKind
+	}
+
 	events.Publish(ctx, events.Event{
-		Type:      events.TypeStepOutput,
+		Type:      eventType,
 		RunID:     runIDFrom(ctx),
-		Job:       jobName,
-		StepIndex: i,
+		Job:       identity.job,
+		StepIndex: identity.index,
 		StepName:  name,
 		StepKind:  kind,
 		StepID:    events.StepID(ctx),
-		Text:      combined,
+		Status:    status,
+		Text:      text,
 	})
 }
+
+// maxPublishedOutputBytes bounds what one step contributes to a run's event
+// log. Generous enough for the output a person actually reads — 32KB, the
+// same bound a tool result gets inline, so a failing command's tail is not
+// cut shorter in the UI than the model itself would have seen — while a
+// runaway command still cannot turn the transcript into a copy of its own
+// stdout.
+const maxPublishedOutputBytes = 32_000
 
 // publishJobStarted / publishJobFinished bracket a whole run.
 func publishJobStarted(ctx context.Context, jobName string) {

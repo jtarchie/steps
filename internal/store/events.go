@@ -9,6 +9,8 @@ import (
 type Events interface {
 	AppendRunEvent(ctx context.Context, row RunEventRow) error
 	RunEvents(ctx context.Context, runID string, afterSeq int64, limit int) ([]RunEventRow, error)
+	// DeleteStepEvents removes every event of one type a step recorded, which is how a step's output chunks make way for its one output record (events.TypeStepOutputChunk).
+	DeleteStepEvents(ctx context.Context, runID string, stepID int64, eventType string) error
 }
 
 // RunEventRow is one persisted run event — the stored form of events.Event,

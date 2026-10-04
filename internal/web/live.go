@@ -479,11 +479,9 @@ func (f *framer) visit(step *stepView, parent *stepView) error {
 		return f.morphRow(step)
 	}
 
-	if f.changes[step.Key()].Turns > 0 {
-		err := f.appendTurns(step)
-		if err != nil {
-			return err
-		}
+	err := f.appendNew(step)
+	if err != nil {
+		return err
 	}
 
 	// Decided before the children are visited: a visit marks what it sends
@@ -518,6 +516,11 @@ func (f *framer) wantsWhole(step *stepView) bool {
 	}
 
 	if change.Turns > 0 && (f.drawn.turns[step.Key()] == 0 || !step.Running()) {
+		return true
+	}
+
+	// The same for chunks: their copy has no live block until the first one is drawn with the row.
+	if change.Streamed > 0 && (f.drawn.streamed[step.Key()] == 0 || !step.Running()) {
 		return true
 	}
 
@@ -595,6 +598,41 @@ func (f *framer) appendTurns(step *stepView) error {
 	return nil
 }
 
+// appendNew sends what a row the reader already has can take by append alone: an agent's new turns, a task's new chunks.
+func (f *framer) appendNew(step *stepView) error {
+	if f.changes[step.Key()].Turns > 0 {
+		err := f.appendTurns(step)
+		if err != nil {
+			return err
+		}
+	}
+
+	if f.changes[step.Key()].Streamed > 0 {
+		return f.appendStreamed(step)
+	}
+
+	return nil
+}
+
+// appendStreamed sends the output chunks the reader has not seen, appended to the live block of a running step's row — the row itself would carry every chunk so far, and re-sending it per chunk is quadratic in the output.
+func (f *framer) appendStreamed(step *stepView) error {
+	shown := f.drawn.streamed[step.Key()]
+
+	fmt.Fprintf(&f.out, `<div hx-swap-oob="beforeend:#%s_live">`, step.Anchor())
+
+	for _, chunk := range step.Streaming[shown:] {
+		err := f.render("chunk", chunk)
+		if err != nil {
+			return err
+		}
+	}
+
+	f.out.WriteString(`</div>`)
+	f.drawn.streamed[step.Key()] = len(step.Streaming)
+
+	return nil
+}
+
 // firstChildren reports a step whose children are all new to the reader:
 // their copy of the row was drawn with none, so it carries no substeps
 // element for an append to land in.
@@ -667,10 +705,12 @@ type sentRows struct {
 	// where the next append starts. Seeded from the fold for the rows the
 	// page drew, and set by every whole-row send after that.
 	turns map[string]int
+	// streamed is turns' twin for output chunks.
+	streamed map[string]int
 }
 
 func newSentRows(origin int64) *sentRows {
-	return &sentRows{origin: origin, sent: map[string]bool{}, turns: map[string]int{}}
+	return &sentRows{origin: origin, sent: map[string]bool{}, turns: map[string]int{}, streamed: map[string]int{}}
 }
 
 // has reports whether the reader's page already carries this row.
@@ -684,6 +724,7 @@ func (s *sentRows) has(step *stepView) bool {
 func (s *sentRows) drew(step *stepView) {
 	s.sent[step.Key()] = true
 	s.turns[step.Key()] = len(step.Turns)
+	s.streamed[step.Key()] = len(step.Streaming)
 
 	for _, child := range step.Children {
 		s.drew(child)
@@ -695,6 +736,7 @@ func (s *sentRows) drew(step *stepView) {
 func (s *sentRows) seed(steps []*stepView) {
 	for _, step := range steps {
 		s.turns[step.Key()] = len(step.Turns)
+		s.streamed[step.Key()] = len(step.Streaming)
 	}
 }
 

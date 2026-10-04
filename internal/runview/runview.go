@@ -130,6 +130,8 @@ type Step struct {
 	// a single overwritten string, the page a reader watched three attempts on
 	// would silently drop two of them at the closing reload.
 	Outputs []string
+	// Streaming is what a running step has printed so far, a chunk per event (TypeStepOutputChunk). Emptied by the step's TypeStepOutput, which records the same bytes whole.
+	Streaming []string
 	// Notes is what the step's machinery said about it, in order.
 	Notes []Note
 	// unreported is set by settle, never by the fold: see Unreported.
@@ -521,6 +523,7 @@ func (s Step) HasBody() bool {
 	return len(s.Turns) > 0 ||
 		len(s.Trajectory()) > 0 ||
 		len(s.Outputs) > 0 ||
+		len(s.Streaming) > 0 ||
 		len(s.Notes) > 0 ||
 		s.Error != "" ||
 		s.Response() != "" ||
@@ -828,20 +831,23 @@ type Change struct {
 	Closed bool
 	Other  bool
 	Turns  int
+	// Streamed counts output chunks that arrived, which like Turns a reader's copy can be appended to rather than redrawn.
+	Streamed int
 }
 
 // Merge folds a later change on the same row into this one.
 func (c Change) Merge(other Change) Change {
 	return Change{
-		Opened: c.Opened || other.Opened,
-		Closed: c.Closed || other.Closed,
-		Other:  c.Other || other.Other,
-		Turns:  c.Turns + other.Turns,
+		Opened:   c.Opened || other.Opened,
+		Closed:   c.Closed || other.Closed,
+		Other:    c.Other || other.Other,
+		Turns:    c.Turns + other.Turns,
+		Streamed: c.Streamed + other.Streamed,
 	}
 }
 
 // Any reports whether the change moved anything a reader would see.
-func (c Change) Any() bool { return c.Opened || c.Closed || c.Other || c.Turns > 0 }
+func (c Change) Any() bool { return c.Opened || c.Closed || c.Other || c.Turns > 0 || c.Streamed > 0 }
 
 // Add folds one batch of events in, in order, reporting what changed on
 // which steps' rows as a result.
@@ -889,6 +895,11 @@ func (f *Folder) fold(row store.RunEventRow, results map[string]store.NodeRow) (
 		attachOutput(&f.run, f.index, row)
 
 		return f.index[stepKey(row)], Change{Other: true}
+	case events.TypeStepOutputChunk:
+		position := attachStep(&f.run, f.index, row)
+		f.run.Steps[position].Streaming = append(f.run.Steps[position].Streaming, row.Text)
+
+		return position, Change{Streamed: 1}
 	case events.TypeStepNote:
 		return attachNote(&f.run, f.index, row)
 	default:
@@ -920,13 +931,22 @@ func (f *Folder) View(run store.RunRow) Transcript {
 // arrive before the step finishes, so the step is opened if it is not on the
 // list yet — the same tolerance closeStep has for a chain-skipped step.
 func attachOutput(view *Transcript, index map[string]int, row store.RunEventRow) {
+	position := attachStep(view, index, row)
+
+	// The record holds what the chunks showed, so the chunks go: a reader keeps one copy of the output, and a reload — where the store has already dropped the chunks — draws the same.
+	view.Steps[position].Streaming = nil
+	view.Steps[position].Outputs = append(view.Steps[position].Outputs, row.Text)
+}
+
+// attachStep finds the row an event belongs on, opening one when the event arrived before the step's start did.
+func attachStep(view *Transcript, index map[string]int, row store.RunEventRow) int {
 	position, seen := index[stepKey(row)]
 	if !seen {
 		openStep(view, index, row)
 		position = index[stepKey(row)]
 	}
 
-	view.Steps[position].Outputs = append(view.Steps[position].Outputs, row.Text)
+	return position
 }
 
 // attachNote hangs a note on the step it names, or on the run when it names none the fold has seen, reporting the row it changed.

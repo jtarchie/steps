@@ -81,6 +81,7 @@ func TestStreamAppliedToThePageIsTheReloadedPage(t *testing.T) {
 
 			if batch == 1 {
 				assertTurnsWereAppended(t, raw)
+				assertChunksWereAppended(t, raw)
 			}
 
 			// The comparison is only worth anything if the stream sent
@@ -112,6 +113,22 @@ func assertTurnsWereAppended(t *testing.T, raw string) {
 	}
 }
 
+// assertChunksWereAppended: the chunks that arrived while a task was printing went over as appends into its live block, and the page's own copy of warm — drawn with one chunk — had the next appended, not the row again, which is what the page says it already shows.
+func assertChunksWereAppended(t *testing.T, raw string) {
+	t.Helper()
+
+	for _, want := range []string{`hx-swap-oob="beforeend:#step-4-cell-b_live"`, `hx-swap-oob="beforeend:#step-40-warm_live"`} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("a printing step's new chunk re-sent the whole row instead of appending (%s):\n%s", want, sseHTML(raw))
+		}
+	}
+
+	// Whole twice: the record, and the finish. A third is the chunk the page already had.
+	if got := strings.Count(raw, `<div id="step-40-warm" hx-swap-oob="outerMorph"`); got != 2 {
+		t.Errorf("warm's row went over whole %d times, want its record and its finish:\n%s", got, sseHTML(raw))
+	}
+}
+
 // eventsBeforeThePage is what the reader's page was drawn from: an agent
 // step already talking, and a container the reader holds with nothing in it
 // yet.
@@ -121,6 +138,9 @@ func eventsBeforeThePage() []store.RunEventRow {
 		{Type: events.TypeAgentText, StepIndex: 0, StepName: "review", StepID: 1, Text: "Reading the diff first."},
 		{Type: events.TypeAgentCall, StepIndex: 0, StepName: "review", StepID: 1, Name: "read_file", Detail: `{"path":"main.go"}`},
 		{Type: events.TypeStepStarted, StepIndex: 7, StepName: "block", StepKind: "do", StepID: 20},
+		// A task printing when the page was drawn: the reader's copy already holds this chunk, so the next one is appended after it.
+		{Type: events.TypeStepStarted, StepIndex: 10, StepName: "warm", StepKind: "task", StepID: 40},
+		{Type: events.TypeStepOutputChunk, StepIndex: 10, StepName: "warm", StepKind: "task", StepID: 40, Status: "stdout", Text: "warming up\n"},
 	}
 }
 
@@ -142,6 +162,13 @@ func eventsAfterThePage() []store.RunEventRow {
 		{Type: events.TypeStepOutput, StepIndex: 2, StepName: "cell-a", StepKind: "task", StepID: 3, ParentStepID: 2, Text: "second attempt\n"},
 		{Type: events.TypeStepFinished, StepIndex: 2, StepName: "cell-a", StepKind: "task", StepID: 3, ParentStepID: 2, Status: "failed", Text: "exit 1", Worker: "gpu (ssh://jt@box)"},
 		{Type: events.TypeStepStarted, StepIndex: 2, StepName: "cell-b", StepKind: "task", StepID: 4, ParentStepID: 2},
+		// A step drawn BEFORE it printed has no live block to append into, so its first chunk re-sends the row; the second is appended; the record then replaces both, and a reload — where the chunks are gone — draws the same row.
+		{Type: events.TypeStepOutputChunk, StepIndex: 2, StepName: "cell-b", StepKind: "task", StepID: 4, ParentStepID: 2, Status: "stdout", Text: "linking <b>\n"},
+		{Type: events.TypeStepOutputChunk, StepIndex: 2, StepName: "cell-b", StepKind: "task", StepID: 4, ParentStepID: 2, Status: "stderr", Text: "warning: slow\n"},
+		{Type: events.TypeStepOutputChunk, StepIndex: 10, StepName: "warm", StepKind: "task", StepID: 40, Status: "stdout", Text: "still warming\n"},
+		{Type: events.TypeStepOutput, StepIndex: 10, StepName: "warm", StepKind: "task", StepID: 40, Text: "warming up\nstill warming"},
+		{Type: events.TypeStepFinished, StepIndex: 10, StepName: "warm", StepKind: "task", StepID: 40, Status: "succeeded"},
+		{Type: events.TypeStepOutput, StepIndex: 2, StepName: "cell-b", StepKind: "task", StepID: 4, ParentStepID: 2, Text: "linking <b>\nwarning: slow"},
 		{Type: events.TypeAgentText, StepIndex: 0, StepName: "review", StepID: 1, Text: "Looks fine."},
 		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "review", StepKind: "agent", StepID: 1, Status: "succeeded", Hash: "beef7654321", DurationMS: 4200},
 		// Nothing publishes a turn after its step's finish today; the

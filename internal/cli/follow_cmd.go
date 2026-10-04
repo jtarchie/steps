@@ -88,7 +88,16 @@ func (r *RunsFollowCmd) renderer(ctx context.Context, st store.Usage) (func(even
 
 	live, stop := newLive(ctx, st)
 
-	return live.Event, sync.OnceFunc(stop)
+	// A follower has no byte stream of its own: a chunk is the bytes a local run's Stream would have carried into the step's tail.
+	return func(event events.Event) {
+		if event.Type == events.TypeStepOutputChunk {
+			_, _ = io.WriteString(live.Stream(event.StepID, event.Status == "stderr"), event.Text)
+
+			return
+		}
+
+		live.Event(event)
+	}, sync.OnceFunc(stop)
 }
 
 // ended is the command's result: a detach says how to come back, anything else is how the run came out.
@@ -300,16 +309,24 @@ func took(run store.RunRow, lastAt time.Time) time.Duration {
 }
 
 // followPlain is runview.Plain plus what a local plain run never prints because the bytes streamed live: a step's output, and how the job ended.
-//
-// ponytail: no tail of a running step — output is recorded once, when the step ends (TypeStepOutput); persisting it as it streams is a footprint decision.
 func followPlain(w io.Writer) func(events.Event) {
 	plain := runview.Plain(w)
+	streamed := map[int64]bool{}
 
 	return func(event events.Event) {
 		plain(event)
 
 		switch event.Type {
+		case events.TypeStepOutputChunk:
+			streamed[event.StepID] = true
+
+			_, _ = io.WriteString(w, event.Text)
 		case events.TypeStepOutput:
+			// The record repeats what the chunks already printed, less its elided middle; a follower who was there for the chunks has seen more than it holds.
+			if streamed[event.StepID] {
+				return
+			}
+
 			_, _ = io.WriteString(w, event.Text+"\n")
 		case events.TypeJobFinished:
 			_, _ = fmt.Fprintf(w, "%s %s in %s\n", event.Job, event.Status,

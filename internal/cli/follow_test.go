@@ -425,3 +425,27 @@ func TestScrubLeavesOnlyText(t *testing.T) {
 		t.Errorf("scrub left escapes in a field: %+v", event)
 	}
 }
+
+// TestFollowPlainPrintsChunksOnceAndNotTheRecordAgain: a follower prints a step's chunks as they are recorded; the record that replaces them repeats what it printed, less the elided middle, so it is skipped for a step the follower saw print — and printed for one it did not, which is every step of a run that had finished before the follower attached.
+func TestFollowPlainPrintsChunksOnceAndNotTheRecordAgain(t *testing.T) {
+	t.Parallel()
+
+	var out strings.Builder
+
+	render := followPlain(&out)
+
+	for _, event := range []events.Event{
+		{Type: events.TypeStepStarted, Job: "build", StepKind: "task", StepName: "slow", StepID: 1},
+		{Type: events.TypeStepOutputChunk, StepID: 1, Status: "stdout", Text: "first\n"},
+		{Type: events.TypeStepOutputChunk, StepID: 1, Status: "stderr", Text: "second\n"},
+		{Type: events.TypeStepOutput, StepID: 1, Text: "first\nsecond"},
+		{Type: events.TypeStepStarted, Job: "build", StepKind: "task", StepName: "done", StepID: 2},
+		{Type: events.TypeStepOutput, StepID: 2, Text: "recorded before we attached"},
+	} {
+		render(event)
+	}
+
+	if want := "task: slow\nfirst\nsecond\ntask: done\nrecorded before we attached\n"; out.String() != want {
+		t.Errorf("printed %q, want %q", out.String(), want)
+	}
+}

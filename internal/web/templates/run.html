@@ -214,6 +214,7 @@
     {{if $step.Reason}}<div class="log">{{$step.Reason}}{{if $step.Hash}} · content hash {{short $step.Hash}}{{end}}</div>{{end}}
     {{range $step.Notes}}{{template "notice" .}}{{end}}
     {{range $step.Outputs}}<pre class="log output">{{jsonPre .}}</pre>{{end}}
+    {{if $step.Streaming}}<pre class="log output" id="{{$anchor}}_live">{{range $step.Streaming}}{{template "chunk" .}}{{end}}</pre>{{end}}
 
     {{range $step.Conversation}}{{template "turn" (turnctx $page $step .)}}{{end}}
     {{with pendingctx $step}}{{if .Took}}<div class="turn pending{{if .Nested}} nested{{end}}">
@@ -333,4 +334,5 @@
 {{define "mcphint"}}{{if and .Run.MCPBlamed .Nav.HasMCP}}<div class="errhint">mcp server <code>{{.Run.MCPBlamed}}</code> — <a href="/p/{{.Nav.Current}}/mcp#mcp-{{.Run.MCPBlamed}}">is it connected?</a></div>{{end}}{{end}}
 
 {{/* One note a step's machinery left. A warning says so in words, not only in colour. */}}
+{{define "chunk"}}<span>{{.}}</span>{{end}}
 {{define "notice"}}<div class="log notice{{if .Warn}} warn{{end}}">{{if .Warn}}warning: {{end}}{{.Text}}</div>{{end}}

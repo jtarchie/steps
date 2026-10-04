@@ -35,6 +35,20 @@ func (s *Store) AppendRunEvent(ctx context.Context, row store.RunEventRow) error
 	return nil
 }
 
+// DeleteStepEvents removes a step's events of one type. Called from the sink goroutine ahead of the record that replaces them, so the two never interleave with a chunk still queued.
+func (s *Store) DeleteStepEvents(ctx context.Context, runID string, stepID int64, eventType string) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM run_events
+		WHERE run_id = ? AND step_id = ? AND type = ?
+		  AND run_id IN (SELECT id FROM runs WHERE pipeline_id = ?)
+	`, runID, stepID, eventType, s.pipelineID)
+	if err != nil {
+		return fmt.Errorf("could not delete %s events of step %d in %q: %w", eventType, stepID, runID, err)
+	}
+
+	return nil
+}
+
 // RunEvents replays a run's events in order, from afterSeq exclusive. Pass 0
 // for the whole run — which is also how a reconnecting live view catches up
 // on what it missed without re-reading what it already has.

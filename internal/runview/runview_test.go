@@ -1,6 +1,7 @@
 package runview
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -320,5 +321,44 @@ func TestTheFoldDoesNotReadTheLastView(t *testing.T) {
 
 	if turns := folder.Steps()[0].Turns; len(turns) != 1 {
 		t.Errorf("sub-agent turn hung on %d turns, want 1 on the open agent step", len(turns))
+	}
+}
+
+// TestChunksStreamUntilTheRecordReplacesThem: a running step's chunks pile up on its row and are reported as appendable; its output record then stands alone, so a reader keeps one copy and a reload — which never sees the chunks — draws the same.
+func TestChunksStreamUntilTheRecordReplacesThem(t *testing.T) {
+	t.Parallel()
+
+	folder := NewFolder()
+
+	changes := folder.Add([]store.RunEventRow{
+		{Seq: 1, Type: events.TypeStepStarted, StepName: "build", StepKind: "task", StepID: 1},
+		{Seq: 2, Type: events.TypeStepOutputChunk, StepName: "build", StepID: 1, Status: "stdout", Text: "compiling\n"},
+		{Seq: 3, Type: events.TypeStepOutputChunk, StepName: "build", StepID: 1, Status: "stderr", Text: "warning: slow\n"},
+	}, nil)
+
+	build := folder.View(store.RunRow{ID: "R"}).Steps[0]
+	if got := strings.Join(build.Streaming, "|"); got != "compiling\n|warning: slow\n" {
+		t.Errorf("streaming = %q, want both chunks in order", got)
+	}
+
+	if !build.HasBody() {
+		t.Error("a step that is printing has nothing to show")
+	}
+
+	if change := changes[build.Key()]; change.Streamed != 2 || change.Other {
+		t.Errorf("change = %+v, want two appendable chunks and no redraw", change)
+	}
+
+	changes = folder.Add([]store.RunEventRow{
+		{Seq: 4, Type: events.TypeStepOutput, StepName: "build", StepID: 1, Text: "compiling\nwarning: slow"},
+	}, nil)
+
+	build = folder.View(store.RunRow{ID: "R"}).Steps[0]
+	if len(build.Streaming) != 0 || len(build.Outputs) != 1 {
+		t.Errorf("after the record: streaming = %q, outputs = %q; want the record alone", build.Streaming, build.Outputs)
+	}
+
+	if change := changes[build.Key()]; !change.Other || change.Streamed != 0 {
+		t.Errorf("change = %+v, want the row redrawn", change)
 	}
 }

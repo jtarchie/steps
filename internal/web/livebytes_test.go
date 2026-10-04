@@ -65,6 +65,55 @@ func TestStreamBytesGrowLinearlyWithTurns(t *testing.T) {
 	}
 }
 
+// streamedChunkBytes is what one connection receives for a task that prints `chunks` times before its record, each chunk a flush of its own.
+func streamedChunkBytes(t *testing.T, chunks int) int {
+	t.Helper()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+	runID := fmt.Sprintf("run-chunks-%d", chunks)
+
+	err := pipeline.Store.StartRun(ctx, runID, "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	rows := make([]store.RunEventRow, 0, 1+chunks)
+	rows = append(rows, store.RunEventRow{Type: events.TypeStepStarted, StepIndex: 0, StepName: "build", StepKind: "task", StepID: 1})
+
+	for i := range chunks {
+		rows = append(rows, store.RunEventRow{
+			Type: events.TypeStepOutputChunk, StepIndex: 0, StepName: "build", StepKind: "task", StepID: 1, Status: "stdout",
+			Text: fmt.Sprintf("line %d: compiled another file and linked it against the rest of the tree\n", i),
+		})
+	}
+
+	appendEvents(t, pipeline.Store, runID, rows)
+
+	err = pipeline.Store.FinishRun(ctx, runID, "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	return len(streamOf(t, server, "/p/demo/runs/"+runID+"/events?after=1"))
+}
+
+// TestStreamBytesGrowLinearlyWithChunks is the printing step's version of the curve: an output event re-sends its whole row, so a chunk sent that way ships every chunk before it, again.
+func TestStreamBytesGrowLinearlyWithChunks(t *testing.T) {
+	shrinkRunEventLimit(t, 5000, 1)
+
+	at50, at100, at200 := streamedChunkBytes(t, 50), streamedChunkBytes(t, 100), streamedChunkBytes(t, 200)
+	t.Logf("chunks= 50  streamed=%9d bytes", at50)
+	t.Logf("chunks=100  streamed=%9d bytes", at100)
+	t.Logf("chunks=200  streamed=%9d bytes", at200)
+
+	for _, pair := range []struct{ small, big int }{{at50, at100}, {at100, at200}} {
+		if ratio := float64(pair.big) / float64(pair.small); ratio > 2.5 {
+			t.Errorf("doubling the chunks multiplied the bytes by %.2f: the stream is re-shipping the output", ratio)
+		}
+	}
+}
+
 // streamedChildBytes is what one connection receives for a container holding
 // `children` tasks that start and finish one flush at a time — the shape of a
 // plan whose steps sit under one do:/in_parallel:.

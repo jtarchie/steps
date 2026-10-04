@@ -274,13 +274,10 @@ func runTaskCommand(
 		return runAssertedTask(ctx, runner, rt, workspaceDir)
 	}
 
-	stdout, stderr, err := runner.RunStreamedCapture(ctx, rt.Run, maxPublishedOutputBytes)
-
-	// Published whether or not the command succeeded. A failing step is the
-	// one whose output is actually wanted, and nothing else carries it: the
-	// error this returns is "command %q failed: exit status N", with no trace
-	// of what the command said on its way out.
-	publishOutputForCurrentStep(ctx, stdout, stderr)
+	// Recorded whether or not the command succeeds: a failing step is the one whose output is wanted, and the error below is "command %q failed: exit status N" with no trace of what it said on its way out.
+	ctx, recorder := recordTaskOutput(ctx, rt.Name)
+	err := runner.WithLabel("").Run(ctx, rt.Run)
+	recorder.finish(ctx)
 
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, classifyRunError(ctx, err))

@@ -43,6 +43,8 @@ const (
 	// output, and one bounded event per step costs a row instead of
 	// thousands.
 	TypeStepOutput = "step_output"
+	// TypeStepOutputChunk is a piece of what a RUNNING step is printing, Status naming the stream (stdout/stderr). Temporary by design: the step's TypeStepOutput replaces every chunk recorded for it, so a finished build costs what it did before chunks existed, and a build that died mid-step keeps them as the only record.
+	TypeStepOutputChunk = "step_output_chunk"
 	// TypeStepNote is what a step's machinery said about it, not its own output — an image pulled, a worker acquired; Status is the level, Text the message. These were fmt.Printf lines once, told to the terminal alone.
 	TypeStepNote = "step_note"
 	// Agent conversation traffic, mirroring the persisted transcript's own
@@ -567,6 +569,23 @@ type outputKey struct{}
 // WithOutput installs a renderer's writers, so nothing below it writes to the process's streams behind the renderer's back.
 func WithOutput(ctx context.Context, out Output) context.Context {
 	return context.WithValue(ctx, outputKey{}, out)
+}
+
+// Tee installs wrap over each of ctx's output streams: it is handed the writer the stream resolves to today and returns the one to use instead, so a caller can watch a step's bytes on their way to whatever renderer is installed. Hold is kept.
+func Tee(ctx context.Context, wrap func(stderr bool, inner io.Writer) io.Writer) context.Context {
+	out, _ := ctx.Value(outputKey{}).(Output)
+	stdout, stderr := wrap(false, stream(ctx, false)), wrap(true, stream(ctx, true))
+
+	return WithOutput(ctx, Output{
+		Step: func(_ int64, isStderr bool) io.Writer {
+			if isStderr {
+				return stderr
+			}
+
+			return stdout
+		},
+		Hold: out.Hold,
+	})
 }
 
 // Stdout is where ctx's human-facing output goes, the process's own stdout when no renderer installed one.

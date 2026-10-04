@@ -370,6 +370,19 @@ Recording is the runner's job, not the UI's: **every** run persists its events
 (`run_events`), whether or not anything is watching. A job started from a
 terminal leaves the same record as one started from the browser.
 
+A task's output arrives the same way. While the command runs, what it prints is
+recorded a line at a time (a line nobody finishes waits at most a second) and
+appended to the step's row as it lands, so a six-hour build is readable while
+it builds. When the command exits, those pieces are replaced by one record of
+its output, bounded at 32KB: the first 8KB and the last 24KB, with a line
+between them saying how much was left out. The end is kept because the end is
+where a failing command explains itself; the pieces are dropped because a
+finished build should cost the same on disk however much it printed. A build
+that dies mid-step keeps them, as the only record of what that step said. A
+progress bar's carriage returns are collapsed to the value a terminal would
+show, one per piece, rather than kept as the thousands of lines they would
+otherwise be.
+
 ## Following a run you started
 
 Triggering does not drop you back on a list to refresh. A trigger lands on a

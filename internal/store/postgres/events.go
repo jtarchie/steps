@@ -43,6 +43,21 @@ func (s *Store) AppendRunEvent(ctx context.Context, row store.RunEventRow) error
 	return nil
 }
 
+// DeleteStepEvents removes a step's events of one type. One statement that reads nothing first, so it needs no write() lock.
+func (s *Store) DeleteStepEvents(ctx context.Context, runID string, stepID int64, eventType string) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM run_events e
+		USING runs r
+		WHERE r.id = e.run_id AND r.pipeline_id = $1
+		  AND e.run_id = $2 AND e.step_id = $3 AND e.type = $4
+	`, s.pipelineID, runID, stepID, eventType)
+	if err != nil {
+		return fmt.Errorf("could not delete %s events of step %d in %q: %w", eventType, stepID, runID, err)
+	}
+
+	return nil
+}
+
 // RunEvents replays a run's events in order, from afterSeq exclusive.
 func (s *Store) RunEvents(ctx context.Context, runID string, afterSeq int64, limit int) ([]store.RunEventRow, error) {
 	return collect(ctx, s.db, "run events", `
