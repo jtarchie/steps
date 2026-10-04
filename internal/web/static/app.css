@@ -57,6 +57,8 @@ body {
 
 a { color: var(--blue); text-decoration: none; }
 a:hover { text-decoration: underline; }
+/* A link inside running text is underlined, because its color alone does not set it apart from the words around it. */
+.crumbs a, .metaline a:not(.hash), .deps a, .md a, .docs a { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); text-underline-offset: 3px; }
 :focus-visible { outline: 1px solid var(--yellow); outline-offset: 1px; }
 
 code { font-family: var(--mono); color: var(--fg); }
