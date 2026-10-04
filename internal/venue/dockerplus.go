@@ -238,7 +238,6 @@ func (s *plusSession) connect(ctx context.Context) error {
 		}
 	}
 
-	// ponytail: the shim path sweeps orphaned containers on the worker's daemon first; that sweep takes a host string, and this daemon is reached by dialer only.
 	spec := s.spec
 	spec.Worker, spec.WorkerTag = "", ""
 	spec.DockerHost = s.daemonName()
@@ -379,6 +378,9 @@ func (s *plusSession) dialDaemon(ctx context.Context) (func(context.Context) (ne
 	if err != nil {
 		return nil, fmt.Errorf("the docker daemon at %s did not answer: %w", s.worker.Socket, err)
 	}
+
+	// Containers a dead steps process on this machine left on the worker; nothing else would ever reclaim them.
+	shell.SweepOrphanedContainersOn(ctx, s.docker)
 
 	if !s.docker.ImagePresent(ctx, treedigest.Image) {
 		err = s.docker.Pull(ctx, treedigest.Image, io.Discard)

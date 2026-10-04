@@ -517,3 +517,42 @@ func holdOnce(t *testing.T, worker string, commands ...string) string {
 
 	return held["out"]
 }
+
+// A container a dead steps process on this machine left on the worker is reclaimed by the next session there.
+func TestDockerPlusSweepsAContainerADeadProcessLeft(t *testing.T) {
+	socket := hostDockerSocket(t)
+	cleanCache(t)
+
+	dead := exec.CommandContext(t.Context(), "true")
+
+	err := dead.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	name := "steps-test-orphan-" + randomSuffix()
+	labels := shell.OwnershipLabels()
+	args := make([]string, 0, 4+2*len(labels)+3)
+	args = append(args, "run", "-d", "--name", name)
+
+	for key, value := range labels {
+		if key == "steps.pid" {
+			value = strconv.Itoa(dead.Process.Pid)
+		}
+
+		args = append(args, "--label", key+"="+value)
+	}
+
+	err = exec.CommandContext(t.Context(), "docker", append(args, "alpine:3", "sleep", "60")...).Run() //nolint:gosec // names this test built
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "rm", "-f", "-v", name).Run() }) //nolint:gosec // as above
+
+	runAndClose(t, dockerPlusURL(testsshd.New(t), socket), t.TempDir(), "true")
+
+	if exec.CommandContext(t.Context(), "docker", "inspect", name).Run() == nil { //nolint:gosec // as above
+		t.Fatal("the orphaned container is still on the worker")
+	}
+}

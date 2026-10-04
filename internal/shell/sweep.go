@@ -103,6 +103,14 @@ func SweepOrphanedContainers(ctx context.Context, dockerHost string) {
 
 	defer func() { _ = client.Close() }()
 
+	SweepOrphanedContainersOn(ctx, client)
+}
+
+// SweepOrphanedContainersOn is SweepOrphanedContainers through a client the caller already holds, for a daemon with no address here (a docker+ worker's, over ssh).
+func SweepOrphanedContainersOn(ctx context.Context, client *dockerapi.Client) {
+	ctx, cancel := context.WithTimeout(ctx, dockerSweepTimeout)
+	defer cancel()
+
 	orphans := listOrphanedContainers(ctx, client)
 	if len(orphans) == 0 {
 		return
