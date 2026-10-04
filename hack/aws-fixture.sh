@@ -60,9 +60,9 @@ NAME=steps-test
 TAG_KEY=steps-test-fixture
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 
-# t4g.small: the free-trial size, and arm64 — which also exercises the
-# ?binary= path, since this repo is developed on a machine whose binaries a
-# Graviton instance cannot run.
+# t4g.small: the free-trial size, and arm64 — a docker+ worker whose architecture
+# differs from the orchestrator's, which pulls its own images and needs nothing
+# built here (steps#206).
 INSTANCE_TYPE=t4g.small
 AMI_PARAM=/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
 
@@ -357,24 +357,13 @@ create_bucket() {
   printf '%s\n' "$bucket"
 }
 
-build_worker_binary() {
-  local out="$PWD/.aws-fixture/steps-linux-arm64"
-  mkdir -p "$(dirname "$out")"
-  say "  cross-compiling the worker binary (linux/arm64)"
-  # CGO_ENABLED=0 is what makes this possible at all — the guard the build
-  # task documents, load-bearing here.
-  ( cd "$PWD" && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o "$out" . )
-  printf '%s\n' "$out"
-}
-
 up() {
   need aws
-  need go
 
   say "region $REGION"
   say "identity $(account_id)"
 
-  local vpc subnet sg lt id bucket binary fis
+  local vpc subnet sg lt id bucket fis
   vpc=$(find_vpc); [ "$vpc" != "None" ] || die "no default VPC in $REGION — create one or pick another region"
   subnet=$(find_subnet "$vpc"); [ "$subnet" != "None" ] || die "no public subnet in $vpc"
   say "vpc $vpc subnet $subnet"
@@ -384,7 +373,6 @@ up() {
   lt=$(create_lt "$sg" "$subnet")
   id=$(create_instance "$lt")
   bucket=$(create_bucket)
-  binary=$(build_worker_binary)
 
   cat <<ENV
 
@@ -393,7 +381,6 @@ export STEPS_TEST_AWS_REGION=$REGION
 export STEPS_TEST_AWS_INSTANCE=$id
 export STEPS_TEST_AWS_TEMPLATE=$lt
 export STEPS_TEST_AWS_BUCKET=$bucket
-export STEPS_TEST_AWS_BINARY=$binary
 export STEPS_TEST_AWS_FIS_ROLE=$fis
 
 #   go test ./internal/venue/ssmdial -run TestRealAWS -v      # protocol conformance
@@ -478,7 +465,6 @@ export STEPS_TEST_AWS_REGION=$REGION
 export STEPS_TEST_AWS_INSTANCE=$id
 export STEPS_TEST_AWS_TEMPLATE=$lt
 export STEPS_TEST_AWS_BUCKET=$bucket
-export STEPS_TEST_AWS_BINARY=$PWD/.aws-fixture/steps-linux-arm64
 export STEPS_TEST_AWS_FIS_ROLE=arn:aws:iam::$(account_id):role/$NAME-fis
 ENV
 }

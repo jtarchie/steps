@@ -18,10 +18,8 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -30,8 +28,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/testsshd"
 	"github.com/jtarchie/steps/internal/venue/ssmdial"
 )
 
@@ -54,6 +54,9 @@ type fakeSSM struct {
 	// the machine is stopped, so the record is there the whole time the agent
 	// is reconnecting, and only the ping says so.
 	lostBefore int
+
+	// answer stands in for running a script, for a fake whose "instance" is a test sshd rather than this machine.
+	answer func(script string) string
 
 	mu        sync.Mutex
 	described int
@@ -105,6 +108,14 @@ func (f *fakeSSM) SendCommand(
 	f.commands++
 	f.mu.Unlock()
 
+	if f.answer != nil {
+		f.mu.Lock()
+		f.output = f.answer(script)
+		f.mu.Unlock()
+
+		return &ssm.SendCommandOutput{Command: &ssmtypes.Command{CommandId: aws.String("c-1")}}, nil
+	}
+
 	out, err := exec.CommandContext(ctx, "sh", "-c", script).CombinedOutput() //nolint:gosec // the script under test
 
 	f.mu.Lock()
@@ -146,51 +157,93 @@ func (f *fakeSSM) StartSession(
 // errNotForwardedHere marks the seam these tests deliberately do not cross.
 var errNotForwardedHere = errors.New("StartSession is seamed out in venue tests; see ssmForward")
 
-// localSSMWorker builds a spec pointing at an aws:// worker whose bootstrap
-// starts this test binary as a shim.
+// localSSMWorker is an aws:// step whose "instance" is a test sshd in front of this machine's docker daemon: SSM's control plane and tunnel are faked, the ssh and the engine API are real.
 func localSSMWorker(t *testing.T, fake *fakeSSM, cwd string, outputs ...string) shell.RunnerSpec {
 	t.Helper()
 
-	fake.t = t
+	socket := hostDockerSocket(t)
+	seamSSMToSSHD(t, fake, newSSMSSHD(t, fake))
+	seamCloudSocket(t, socket)
+	cleanCache(t)
 
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatalf("locating the test binary: %v", err)
-	}
-
-	seamSSM(t, fake)
-
-	// ?shim= names a binary already on the "instance", which here is this
-	// test binary — so the bootstrap script runs for real without needing an
-	// artifact store to fetch from.
 	return shell.RunnerSpec{
 		Cwd:    cwd,
-		Worker: "aws://i-0abc123def456789?shim=" + self,
+		Image:  "alpine:3",
+		Worker: "aws://i-0abc123def456789",
 		Fetch:  outputs,
 	}
 }
 
-// seamSSM points aws:// dials at the fake control plane, and forwards
-// sessions by dialling the port the bootstrap actually reported — a real TCP
-// connection to a real shim, with only AWS itself replaced.
-func seamSSM(t *testing.T, fake *fakeSSM) {
+func seamCloudSocket(t *testing.T, socket string) {
+	t.Helper()
+
+	previous := cloudDockerSocket
+	cloudDockerSocket = socket
+
+	t.Cleanup(func() { cloudDockerSocket = previous })
+}
+
+// newSSMSSHD accepts the steps user with exactly a key some SendCommand installed, which is what proves the install carried the key the dial then uses.
+func newSSMSSHD(t *testing.T, fake *fakeSSM) *testSSHD {
+	t.Helper()
+
+	hostSigner, hostPub, _ := generateKey(t)
+
+	config := &ssh.ServerConfig{
+		PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))
+
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+
+			for _, script := range fake.scripts {
+				if meta.User() == awsSSHUser && strings.Contains(script, line) {
+					return &ssh.Permissions{}, nil
+				}
+			}
+
+			return nil, errors.New("no install carried this key")
+		},
+	}
+	config.AddHostKey(hostSigner)
+
+	server := testsshd.NewWithConfig(t, config, hostPub)
+
+	fake.answer = func(string) string {
+		return awsHostKeyMarker + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostPub))) + "\n"
+	}
+
+	return server
+}
+
+func seamSSMToSSHD(t *testing.T, fake *fakeSSM, server *testSSHD) {
 	t.Helper()
 
 	fake.t = t
 
 	previousAPI, previousForward := ssmAPIFor, ssmForward
 
+	// A fresh install per test: the cache is keyed by instance id, which every test here shares.
+	awsInstalled.Clear()
+
 	ssmAPIFor = func(context.Context, Worker) (ssmdial.API, error) { return fake, nil }
 	ssmForward = func(ctx context.Context, _ ssmdial.API, _ string, port int) (io.ReadWriteCloser, error) {
-		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", "127.0.0.1:"+strconv.Itoa(port))
+		if port != 22 {
+			return nil, fmt.Errorf("forwarded to port %d; a docker+ worker is reached through sshd on 22", port)
+		}
+
+		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", server.Addr())
 		if err != nil {
-			return nil, fmt.Errorf("reaching the bootstrapped shim: %w", err)
+			return nil, fmt.Errorf("reaching the test sshd: %w", err)
 		}
 
 		return conn, nil
 	}
 
-	t.Cleanup(func() { ssmAPIFor, ssmForward = previousAPI, previousForward })
+	t.Cleanup(func() {
+		ssmAPIFor, ssmForward = previousAPI, previousForward
+		awsInstalled.Clear()
+	})
 }
 
 // TestVenueRunsAStepOnAnSSMWorker is the feature: a step placed on an aws://
@@ -220,25 +273,35 @@ func TestVenueRunsAStepOnAnSSMWorker(t *testing.T) {
 	defer fake.mu.Unlock()
 
 	if fake.commands != 1 {
-		t.Errorf("the venue sent %d bootstrap commands, want 1 for one session", fake.commands)
+		t.Errorf("the venue sent %d install commands, want 1 for one session", fake.commands)
 	}
 
-	// The listener is loopback, which is the property that makes an aws://
-	// worker need no inbound port at all.
-	if !strings.Contains(fake.scripts[0], "127.0.0.1:0") {
-		t.Errorf("the bootstrap did not bind loopback with a chosen port:\n%s", fake.scripts[0])
+	if !strings.Contains(fake.scripts[0], "restrict,port-forwarding") || !strings.Contains(fake.scripts[0], "expiry-time") {
+		t.Errorf("the installed key is not restricted to forwarding and set to expire:\n%s", fake.scripts[0])
+	}
+}
+
+// The install costs a SendCommand, seconds each; a second step on the same instance must not pay it again.
+func TestSSMWorkerInstallsItsKeyOncePerInstance(t *testing.T) {
+	fake := &fakeSSM{}
+	spec := localSSMWorker(t, fake, t.TempDir())
+
+	for range 2 {
+		runner := newLocalRunner(t, spec)
+
+		err := runner.Run(context.Background(), "true")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_ = runner.Close()
 	}
 
-	if !strings.Contains(fake.scripts[0], "--once") {
-		t.Errorf("the bootstrap left a shim that outlives its session:\n%s", fake.scripts[0])
-	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
 
-	// --once only ends a shim somebody DIALLED. The dial happens after this
-	// script returns, so a failure in between — SSM throttling the session, a
-	// websocket that will not open — leaves a root process in Accept holding
-	// a port, with nothing on this end still referring to it.
-	if !strings.Contains(fake.scripts[0], "--linger") {
-		t.Errorf("the bootstrap left a shim nothing would ever reap:\n%s", fake.scripts[0])
+	if fake.commands != 1 {
+		t.Errorf("two sessions sent %d install commands, want 1", fake.commands)
 	}
 }
 
@@ -255,8 +318,8 @@ func TestVenueRefusesAWindowsSSMWorker(t *testing.T) {
 		t.Fatal("a Windows instance was accepted")
 	}
 
-	if !strings.Contains(err.Error(), "executable bit") {
-		t.Errorf("error = %v, want the reason the filesystem cannot hold the tree", err)
+	if !strings.Contains(err.Error(), "Windows") {
+		t.Errorf("error = %v, want it to name Windows", err)
 	}
 
 	fake.mu.Lock()
@@ -315,54 +378,6 @@ func TestParseAWSWorker(t *testing.T) {
 		if !errors.Is(err, ErrWorker) {
 			t.Errorf("ParseWorker(%q) = %v, want ErrWorker", raw, err)
 		}
-	}
-}
-
-// TestSSMWorkerNeedsABinary pins that a mapping with no way to get a shim
-// onto the instance says so, naming both answers.
-func TestSSMWorkerNeedsABinary(t *testing.T) {
-	fake := &fakeSSM{}
-	seamSSM(t, fake)
-
-	runner := newLocalRunner(t, shell.RunnerSpec{
-		Cwd:    t.TempDir(),
-		Worker: "aws://i-0abc123def456789",
-	})
-
-	err := runner.Run(context.Background(), "true")
-	if err == nil {
-		t.Fatal("a worker with no shim binary was accepted")
-	}
-
-	if !strings.Contains(err.Error(), "?binary=") || !strings.Contains(err.Error(), "?shim=") {
-		t.Errorf("error = %v, want both ways of supplying a binary named", err)
-	}
-}
-
-// A ?binary= has nowhere to travel without a store, and reaching the upload with none would dereference a nil store.
-func TestSSMWorkerWithABinaryNeedsAnArtifactStore(t *testing.T) {
-	fake := &fakeSSM{}
-	seamSSM(t, fake)
-
-	binary := filepath.Join(t.TempDir(), "steps-linux-arm64")
-
-	err := os.WriteFile(binary, []byte("not a real shim"), 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	runner := newLocalRunner(t, shell.RunnerSpec{
-		Cwd:    t.TempDir(),
-		Worker: "aws://i-0abc123def456789?binary=" + binary,
-	})
-
-	err = runner.Run(context.Background(), "true")
-	if err == nil {
-		t.Fatal("a ?binary= worker with no artifact store was accepted")
-	}
-
-	if !errors.Is(err, ErrWorker) || !strings.Contains(err.Error(), "--artifact-store") {
-		t.Errorf("error = %v, want an ErrWorker naming --artifact-store", err)
 	}
 }
 

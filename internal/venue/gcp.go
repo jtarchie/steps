@@ -33,7 +33,6 @@ import (
 	"net/url"
 	"os"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -98,18 +97,6 @@ func checkGCP(worker Worker) error {
 	if !gcpName.MatchString(target) {
 		return fmt.Errorf("%w %q: %q cannot name %s — GCP names are lowercase letters, digits and hyphens, starting with a letter",
 			ErrWorker, worker.URL, target, kind)
-	}
-
-	return nil
-}
-
-// gcpPlacementCheck refuses a mapping whose dial is certain to fail, before
-// an acquisition rung bills a machine finding out. A GCE instance runs
-// Linux, so an orchestrator on any other OS can never push its own binary.
-func (w Worker) gcpPlacementCheck() error {
-	if runtime.GOOS != "linux" && w.Binary == "" {
-		return fmt.Errorf("%w %q: a gcp:// worker runs Linux and this machine's own binary is %s — build one with CGO_ENABLED=0 GOOS=linux and name it with ?binary=",
-			ErrWorker, w.URL, runtime.GOOS)
 	}
 
 	return nil
@@ -266,6 +253,23 @@ var (
 
 // dialGCP reaches an instance through the relay and starts a shim over SSH.
 func dialGCP(ctx context.Context, worker Worker) (*transport, error) {
+	client, err := gcpSSHClient(ctx, worker)
+	if err != nil {
+		return nil, err
+	}
+
+	remote, build, err := pushShim(ctx, client, worker)
+	if err != nil {
+		_ = client.Close()
+
+		return nil, err
+	}
+
+	return startShim(client, remote, build)
+}
+
+// gcpSSHClient reaches an instance's sshd through the relay, with this process's key installed and the host key attested by the guest agent.
+func gcpSSHClient(ctx context.Context, worker Worker) (*ssh.Client, error) {
 	api, err := gceFor(ctx, worker)
 	if err != nil {
 		return nil, err
@@ -294,19 +298,7 @@ func dialGCP(ctx context.Context, worker Worker) (*transport, error) {
 		Timeout:           dialTimeout,
 	}
 
-	client, err := gcpConnect(ctx, api, worker, project, zone, config)
-	if err != nil {
-		return nil, err
-	}
-
-	remote, build, err := pushShim(ctx, client, worker)
-	if err != nil {
-		_ = client.Close()
-
-		return nil, err
-	}
-
-	return startShim(client, remote, build)
+	return gcpConnect(ctx, api, worker, project, zone, config)
 }
 
 // gcpConnect opens the tunnel and completes the SSH handshake, retrying an
@@ -488,8 +480,8 @@ var (
 	gcpInstalled sync.Map
 )
 
-// gcpKey is this process's SSH identity for GCP workers.
-func gcpKey() (ssh.Signer, error) {
+// sshIdentity is this process's SSH identity for workers it installs a key on (gcp://, aws://), made once and never written to disk.
+func sshIdentity() (ssh.Signer, error) {
 	gcpKeyOnce.Do(func() {
 		_, private, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
@@ -533,7 +525,7 @@ const gcpKeyExpiryLayout = "2006-01-02T15:04:05-0700"
 // the TTL, and mergeSSHKey prunes what expired the next time a key is
 // installed — the agent itself has no credentials to clean metadata with.
 func gcpEnsureKey(ctx context.Context, api gceAPI, worker Worker, project, zone string) (ssh.Signer, error) {
-	signer, err := gcpKey()
+	signer, err := sshIdentity()
 	if err != nil {
 		return nil, err
 	}

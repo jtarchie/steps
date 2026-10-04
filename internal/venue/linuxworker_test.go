@@ -20,6 +20,9 @@ package venue
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -30,10 +33,13 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/venue/ssmdial"
 )
 
 // linuxWorker is a running container reachable as root over ssh.
 type linuxWorker struct {
+	// port is where the container's sshd is published on this machine.
+	port string
 	// url reaches it bare, over ssh://; dockerURL reaches its daemon, over docker+ssh://, for the variant that has one.
 	url       string
 	dockerURL string
@@ -200,6 +206,7 @@ func startLinuxWorkerWith(t *testing.T, dockerfile string, extraRunArgs ...strin
 	}
 
 	return linuxWorker{
+		port:      port,
 		url:       "ssh://root@127.0.0.1:" + port + workerScratchRoot + "?" + query.Encode(),
 		dockerURL: "docker+ssh://root@127.0.0.1:" + port + "?" + query.Encode(),
 		identity:  identity,
@@ -568,5 +575,73 @@ func TestLinuxRootWorkerCancelEndsTheWholeProcessGroup(t *testing.T) {
 		}
 
 		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// The aws:// install script for real: run as root in the worker the way SSM runs it, then the dial it enables, as the user it made, over a real OpenSSH, to a real dockerd. Only AWS itself is faked.
+func TestAWSInstallReachesARealSSHDAndItsDaemon(t *testing.T) {
+	worker := startLinuxWorkerWithDocker(t, true)
+
+	fake := &fakeSSM{t: t}
+	fake.answer = func(script string) string {
+		//nolint:gosec // the install script under test, in a container this test owns
+		out, err := exec.CommandContext(context.Background(), "docker", "exec", worker.container, "sh", "-c", script).CombinedOutput()
+		if err != nil {
+			t.Errorf("the install script failed: %v\n%s", err, out)
+		}
+
+		return string(out)
+	}
+
+	previousAPI, previousForward := ssmAPIFor, ssmForward
+	ssmAPIFor = func(context.Context, Worker) (ssmdial.API, error) { return fake, nil }
+	ssmForward = func(ctx context.Context, _ ssmdial.API, _ string, port int) (io.ReadWriteCloser, error) {
+		if port != 22 {
+			return nil, fmt.Errorf("forwarded to %d, want sshd's 22", port)
+		}
+
+		return (&net.Dialer{}).DialContext(ctx, "tcp", "127.0.0.1:"+worker.port)
+	}
+
+	awsInstalled.Clear()
+	t.Cleanup(func() {
+		ssmAPIFor, ssmForward = previousAPI, previousForward
+		awsInstalled.Clear()
+	})
+
+	for range 2 {
+		cwd := t.TempDir()
+		mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), "seed\n")
+		mustMkdir(t, filepath.Join(cwd, "out"))
+
+		runner := newLocalRunner(t, shell.RunnerSpec{Cwd: cwd, Image: containerizedStepImage, Worker: "aws://i-0abc123def456789", Fetch: []string{"out"}})
+
+		err := runner.Run(context.Background(), "cat data/seed.txt > out/report.txt")
+		if err != nil {
+			t.Fatalf("Run on the aws:// path: %v", err)
+		}
+
+		if got := mustRead(t, filepath.Join(cwd, "out", "report.txt")); got != "seed\n" {
+			t.Errorf("report = %q", got)
+		}
+
+		_ = runner.Close()
+
+		// A second install, as a restarted orchestrator would make, must replace this key's line rather than add one.
+		awsInstalled.Clear()
+	}
+
+	//nolint:gosec // a container this test owns
+	keys, err := exec.CommandContext(t.Context(), "docker", "exec", worker.container, "sh", "-c", `cat "$(getent passwd steps | cut -d: -f6)/.ssh/authorized_keys"`).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if lines := strings.Count(string(keys), "steps-ephemeral-"); lines != 1 {
+		t.Errorf("authorized_keys holds %d of this process's lines after two installs:\n%s", lines, keys)
+	}
+
+	if !strings.Contains(string(keys), "restrict,port-forwarding") {
+		t.Errorf("the installed key is not restricted:\n%s", keys)
 	}
 }

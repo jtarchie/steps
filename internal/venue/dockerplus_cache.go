@@ -311,7 +311,7 @@ func (s *plusSession) hold(ctx context.Context, volume, digest string, size int6
 
 // pullPlus brings a held tree home from a docker+ worker and checks it against the digest it was asked for.
 func pullPlus(ctx context.Context, worker Worker, digest, dst string) (int64, error) {
-	s := &plusSession{worker: worker, kept: map[string]bool{}}
+	s := newPlusSession(worker, shell.RunnerSpec{})
 	//nolint:contextcheck // close runs under its own bound
 	defer func() { _ = s.close() }()
 

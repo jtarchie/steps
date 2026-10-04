@@ -24,16 +24,15 @@ import (
 func TestRealAWSPipelineStepRunsOnAnInstance(t *testing.T) {
 	instance := os.Getenv("STEPS_TEST_AWS_INSTANCE")
 	bucket := os.Getenv("STEPS_TEST_AWS_BUCKET")
-	binary := os.Getenv("STEPS_TEST_AWS_BINARY")
 
-	if instance == "" || bucket == "" || binary == "" {
+	if instance == "" || bucket == "" {
 		t.Skip("no AWS fixture — run hack/aws-fixture.sh up and export what it prints")
 	}
 
 	region := os.Getenv("STEPS_TEST_AWS_REGION")
 
 	store := "s3://" + bucket + "/steps-test"
-	worker := "aws://" + instance + "?binary=" + binary
+	worker := "aws://" + instance
 
 	// The instance's region, named on the mapping: it need not match the
 	// caller's default, and on a profile with no default at all it is the
@@ -53,6 +52,7 @@ jobs:
     run: echo seed > data/seed.txt
   - task: remote
     tags: [aws]
+    image: public.ecr.aws/docker/library/alpine:3
     inputs: [data]
     outputs: [model]
     run: |
@@ -87,9 +87,8 @@ jobs:
 func TestRealAWSPlacedStepRunsInAContainer(t *testing.T) {
 	instance := os.Getenv("STEPS_TEST_AWS_INSTANCE")
 	bucket := os.Getenv("STEPS_TEST_AWS_BUCKET")
-	binary := os.Getenv("STEPS_TEST_AWS_BINARY")
 
-	if instance == "" || bucket == "" || binary == "" {
+	if instance == "" || bucket == "" {
 		t.Skip("no AWS fixture — run hack/aws-fixture.sh up and export what it prints")
 	}
 
@@ -99,7 +98,7 @@ func TestRealAWSPlacedStepRunsInAContainer(t *testing.T) {
 	// A real disk, not the worker's tmpfs /tmp: the daemon bind-mounts this
 	// tree, and the fixture's own warning about memory applies double when a
 	// container is holding it open.
-	worker := "aws://" + instance + "/var/tmp/steps?binary=" + binary
+	worker := "aws://" + instance
 
 	if region != "" {
 		store += "?region=" + region

@@ -43,8 +43,8 @@ LABEL_KEY=steps-test-fixture
 ZONE="${STEPS_TEST_GCP_ZONE:-${CLOUDSDK_COMPUTE_ZONE:-us-central1-a}}"
 PROJECT="${STEPS_TEST_GCP_PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 
-# e2-small amd64: cheap, available everywhere, and x86 — which still
-# exercises the ?binary= path from an arm64 dev machine.
+# e2-small amd64: cheap, available everywhere, and x86 — a docker+ worker of
+# another architecture than an arm64 dev machine (steps#206).
 MACHINE_TYPE=e2-small
 
 say() { printf '%s\n' "$*" >&2; }
@@ -156,17 +156,8 @@ apt-get update -q && apt-get install -y -q docker.io' >/dev/null
   done
 }
 
-build_worker_binary() {
-  local out="$PWD/.gcp-fixture/steps-linux-amd64"
-  mkdir -p "$(dirname "$out")"
-  say "  cross-compiling the worker binary (linux/amd64)"
-  ( cd "$PWD" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$out" . )
-  printf '%s\n' "$out"
-}
-
 up() {
   need gcloud
-  need go
 
   [ -n "$PROJECT" ] || die "no project — set STEPS_TEST_GCP_PROJECT or gcloud config set project"
 
@@ -175,11 +166,9 @@ up() {
   gcloud_ services enable compute.googleapis.com iap.googleapis.com >/dev/null 2>&1 || \
     say "  (could not enable APIs — fine if they already are)"
 
-  local binary
   create_firewall
   create_template
   create_instance
-  binary=$(build_worker_binary)
 
   cat <<ENV
 
@@ -188,7 +177,6 @@ export STEPS_TEST_GCP_PROJECT=$PROJECT
 export STEPS_TEST_GCP_ZONE=$ZONE
 export STEPS_TEST_GCP_INSTANCE=$NAME-worker
 export STEPS_TEST_GCP_TEMPLATE=$NAME-template
-export STEPS_TEST_GCP_BINARY=$binary
 
 #   go test ./internal/venue/iapdial -run TestRealGCP -v      # relay protocol conformance
 #   go test ./internal/venue -run TestRealGCP -v              # dial, acquisition rungs
@@ -247,7 +235,6 @@ export STEPS_TEST_GCP_PROJECT=$PROJECT
 export STEPS_TEST_GCP_ZONE=$ZONE
 export STEPS_TEST_GCP_INSTANCE=$id
 export STEPS_TEST_GCP_TEMPLATE=$(find_template)
-export STEPS_TEST_GCP_BINARY=$PWD/.gcp-fixture/steps-linux-amd64
 ENV
 }
 

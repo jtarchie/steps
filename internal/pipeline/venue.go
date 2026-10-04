@@ -369,15 +369,8 @@ func ValidateWorkerPlacement(ctx context.Context, cfg *config.Config, job *confi
 				continue
 			}
 
-			// With what the invocation already knows: a dial certain to
-			// fail is refused before any step runs — and before an
-			// acquisition rung launches a billed machine to discover it.
-			checkErr := worker.PlacementCheck(artifactStoreFrom(ctx) != "")
-			if checkErr != nil {
-				return fmt.Errorf("--worker %s: %w", tag, checkErr)
-			}
-
-			checkErr = worker.ImageCheck(cfg.PlacedImage(*step) != "")
+			// Before any step runs, and before an acquisition rung launches a billed machine to discover it.
+			checkErr := worker.ImageCheck(cfg.PlacedImage(*step) != "")
 			if checkErr != nil {
 				return fmt.Errorf("%s on --worker %s: %w", label, tag, checkErr)
 			}

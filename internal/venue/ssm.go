@@ -478,31 +478,6 @@ func checkAWS(worker Worker) error {
 	return nil
 }
 
-// PlacementCheck refuses a mapping whose dial is certain to fail, with what
-// the invocation knows before any step runs. It belongs to run-start
-// validation rather than to ParseWorker, because whether an artifact store is
-// configured is a fact about the INVOCATION, not the URL.
-//
-// The alternative was the shape money dislikes: an acquisition-rung worker
-// launches a real, billed instance before the dial discovers a condition that
-// was decidable while kong was still parsing.
-//
-// A switch rather than an if-chain, for the reason acquire is one: this is
-// the check that stands between a mapping and a billed machine, so the next
-// scheme has to decide whether it has one instead of inheriting silence.
-func (w Worker) PlacementCheck(hasArtifactStore bool) error {
-	switch w.Scheme {
-	case SchemeGCP:
-		return w.gcpPlacementCheck()
-	case SchemeAWS:
-		return w.awsPlacementCheck(hasArtifactStore)
-	case SchemeLocal, SchemeSSH, SchemeDockerSSH:
-		return nil
-	}
-
-	return nil
-}
-
 // ImageCheck refuses a step whose need for a container this worker cannot meet, while the run can still refuse before any step: ssh:// runs bare and docker+ runs nothing else.
 func (w Worker) ImageCheck(hasImage bool) error {
 	switch {
@@ -513,22 +488,6 @@ func (w Worker) ImageCheck(hasImage bool) error {
 	default:
 		return nil
 	}
-}
-
-// awsPlacementCheck is PlacementCheck's aws:// arm: the shim has to come from
-// somewhere, and ?binary= only reaches an SSM tunnel through the store.
-func (w Worker) awsPlacementCheck(hasArtifactStore bool) error {
-	if w.Shim == "" && w.Binary == "" {
-		return fmt.Errorf("%w %q: an aws:// worker needs a shim binary built for it — name a local one with ?binary=/path/to/steps-linux-amd64, or one already on the instance with ?shim=/usr/local/bin/steps",
-			ErrWorker, w.URL)
-	}
-
-	if w.Binary != "" && !hasArtifactStore {
-		return fmt.Errorf("%w %q: ?binary= reaches an aws:// worker through the artifact store, so --artifact-store must be set — or name a binary already on the instance with ?shim=",
-			ErrWorker, w.URL)
-	}
-
-	return nil
 }
 
 // checkAWSTarget refuses a rung whose target is not the kind of id it needs.

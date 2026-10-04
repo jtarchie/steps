@@ -40,7 +40,6 @@ type gcpFixture struct {
 	zone     string
 	instance string
 	template string
-	binary   string
 }
 
 func realGCP(t *testing.T) gcpFixture {
@@ -51,16 +50,10 @@ func realGCP(t *testing.T) gcpFixture {
 		zone:     os.Getenv("STEPS_TEST_GCP_ZONE"),
 		instance: os.Getenv("STEPS_TEST_GCP_INSTANCE"),
 		template: os.Getenv("STEPS_TEST_GCP_TEMPLATE"),
-		binary:   os.Getenv("STEPS_TEST_GCP_BINARY"),
 	}
 
-	if fixture.project == "" || fixture.zone == "" || fixture.instance == "" || fixture.binary == "" {
+	if fixture.project == "" || fixture.zone == "" || fixture.instance == "" {
 		t.Skip("no GCP fixture — run hack/gcp-fixture.sh up and export what it prints")
-	}
-
-	_, err := os.Stat(fixture.binary) //nolint:gosec,nolintlint // the fixture's own binary, named by an opt-in env var; nolintlint because only newer gosec builds flag it
-	if err != nil {
-		t.Fatalf("the worker binary %s is missing: %v", fixture.binary, err)
 	}
 
 	return fixture
@@ -68,7 +61,7 @@ func realGCP(t *testing.T) gcpFixture {
 
 // options is the query every fixture worker URL carries.
 func (f gcpFixture) options() string {
-	return "project=" + f.project + "&zone=" + f.zone + "&binary=" + f.binary
+	return "project=" + f.project + "&zone=" + f.zone
 }
 
 func (f gcpFixture) spec(cwd, worker string, outputs ...string) shell.RunnerSpec {
@@ -79,6 +72,7 @@ func (f gcpFixture) spec(cwd, worker string, outputs ...string) shell.RunnerSpec
 
 	return shell.RunnerSpec{
 		Cwd:       cwd,
+		Image:     realCloudImage,
 		Worker:    worker + sep + f.options(),
 		WorkerTag: "gcp",
 		Fetch:     outputs,
@@ -185,6 +179,7 @@ func TestRealGCPLaunchRungAcquiresAndDeletes(t *testing.T) {
 
 	runner := newLocalRunner(t, shell.RunnerSpec{
 		Cwd:       t.TempDir(),
+		Image:     realCloudImage,
 		Worker:    resolved.URL,
 		WorkerTag: "burst",
 	})
@@ -388,6 +383,7 @@ func TestRealGCPPreemption(t *testing.T) {
 
 	runner := newLocalRunner(t, shell.RunnerSpec{
 		Cwd:       t.TempDir(),
+		Image:     realCloudImage,
 		Worker:    resolved.URL,
 		WorkerTag: "spot",
 	})

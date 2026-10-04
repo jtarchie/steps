@@ -306,7 +306,7 @@ func ValidatePipelinePlacement(ctx context.Context, cfg *config.Config, names []
 				name, tag, tag)
 		}
 
-		err := worker.PlacementCheck(artifactStoreFrom(ctx) != "")
+		err := worker.ImageCheck(cfg.PlacedImage(resourceStep(cfg, name)) != "")
 		if err != nil {
 			return fmt.Errorf("resource %q: --worker %s: %w", name, tag, err)
 		}

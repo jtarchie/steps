@@ -18,7 +18,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -170,7 +169,7 @@ func newGCPSSHDRejectingFirst(t *testing.T, n int, configure ...func(*testing.T,
 
 	hostSigner, hostPub, _ := generateKey(t)
 
-	clientKey, err := gcpKey()
+	clientKey, err := sshIdentity()
 	if err != nil {
 		t.Fatalf("gcpKey: %v", err)
 	}
@@ -319,19 +318,17 @@ func shrinkGCPWaits(t *testing.T) {
 	t.Cleanup(func() { gcpReadyTimeout, gcpReadyPoll = previousTimeout, previousPoll })
 }
 
-// localGCPWorker builds a spec pointing at a gcp:// worker served by the
-// local sshd, pushing this test binary as the shim.
-func localGCPWorker(t *testing.T, sshd *testSSHD, cwd string, outputs ...string) shell.RunnerSpec {
+// localGCPWorker builds a spec pointing at a gcp:// worker served by the local sshd, in front of this machine's docker daemon.
+func localGCPWorker(t *testing.T, _ *testSSHD, cwd string, outputs ...string) shell.RunnerSpec {
 	t.Helper()
 
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatalf("locating the test binary: %v", err)
-	}
+	seamCloudSocket(t, hostDockerSocket(t))
+	cleanCache(t)
 
 	return shell.RunnerSpec{
 		Cwd:    cwd,
-		Worker: "gcp://worker-1" + sshd.Root + "?project=test-project&zone=us-central1-a&binary=" + self,
+		Image:  "alpine:3",
+		Worker: "gcp://worker-1?project=test-project&zone=us-central1-a",
 		Fetch:  outputs,
 	}
 }
@@ -484,21 +481,15 @@ func TestGCPHostKeyPinBypassesGuestAttributes(t *testing.T) {
 
 	cwd := t.TempDir()
 
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatalf("locating the test binary: %v", err)
-	}
-
 	// Escaped, because a SHA256 fingerprint's base64 can contain '+', which
 	// query decoding would otherwise read as a space.
 	pin := url.QueryEscape(ssh.FingerprintSHA256(sshd.HostKey))
-	runner := newLocalRunner(t, shell.RunnerSpec{
-		Cwd: cwd,
-		Worker: "gcp://worker-1" + sshd.Root +
-			"?project=test-project&zone=us-central1-a&hostkey=" + pin + "&binary=" + self,
-	})
+	spec := localGCPWorker(t, sshd, cwd)
+	spec.Worker = "gcp://worker-1?project=test-project&zone=us-central1-a&hostkey=" + pin
 
-	err = runner.Run(context.Background(), "true")
+	runner := newLocalRunner(t, spec)
+
+	err := runner.Run(context.Background(), "true")
 	if err != nil {
 		t.Fatalf("Run with a pinned host key: %v", err)
 	}
@@ -992,38 +983,6 @@ func TestGCPProjectFallbackChain(t *testing.T) {
 	_, _, err = gcpLocation(context.Background(), bare)
 	if err == nil || !strings.Contains(err.Error(), "?project=") {
 		t.Errorf("gcpLocation with no project = %v, want the fix named", err)
-	}
-}
-
-// TestGCPPlacementCheck pins the pre-run refusal of a dial that can never
-// work: a non-Linux orchestrator's own binary cannot run on a GCE instance.
-func TestGCPPlacementCheck(t *testing.T) {
-	t.Parallel()
-
-	bare, err := ParseWorker("gcp://worker-1?zone=us-central1-a")
-	if err != nil {
-		t.Fatalf("ParseWorker: %v", err)
-	}
-
-	withBinary, err := ParseWorker("gcp://worker-1?zone=us-central1-a&binary=/tmp/steps-linux-amd64")
-	if err != nil {
-		t.Fatalf("ParseWorker: %v", err)
-	}
-
-	err = withBinary.PlacementCheck(false)
-	if err != nil {
-		t.Errorf("PlacementCheck with ?binary= = %v, want accepted", err)
-	}
-
-	// The refusal is a fact about the orchestrator's own OS, so the test
-	// asserts whichever side of it this machine is on.
-	err = bare.PlacementCheck(false)
-	if runtime.GOOS == "linux" {
-		if err != nil {
-			t.Errorf("PlacementCheck on linux = %v, want this binary accepted", err)
-		}
-	} else if err == nil || !strings.Contains(err.Error(), "?binary=") {
-		t.Errorf("PlacementCheck off linux = %v, want the fix named", err)
 	}
 }
 

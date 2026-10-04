@@ -33,12 +33,14 @@ import (
 	"github.com/jtarchie/steps/internal/shell"
 )
 
+// realCloudImage is what fixture steps run in: on a public registry the fixture instances can reach, and multi-arch for the Graviton one.
+const realCloudImage = "public.ecr.aws/docker/library/alpine:3"
+
 // awsFixture is what hack/aws-fixture.sh exported, or a skip.
 type awsFixture struct {
 	instance string
 	template string
 	bucket   string
-	binary   string
 	region   string
 	fisRole  string
 }
@@ -50,18 +52,12 @@ func realAWS(t *testing.T) awsFixture {
 		instance: os.Getenv("STEPS_TEST_AWS_INSTANCE"),
 		template: os.Getenv("STEPS_TEST_AWS_TEMPLATE"),
 		bucket:   os.Getenv("STEPS_TEST_AWS_BUCKET"),
-		binary:   os.Getenv("STEPS_TEST_AWS_BINARY"),
 		region:   os.Getenv("STEPS_TEST_AWS_REGION"),
 		fisRole:  os.Getenv("STEPS_TEST_AWS_FIS_ROLE"),
 	}
 
-	if fixture.instance == "" || fixture.bucket == "" || fixture.binary == "" {
+	if fixture.instance == "" || fixture.bucket == "" {
 		t.Skip("no AWS fixture — run hack/aws-fixture.sh up and export what it prints")
-	}
-
-	_, err := os.Stat(fixture.binary) //nolint:gosec,nolintlint // the fixture's own binary, named by an opt-in env var; nolintlint because only newer gosec builds flag it
-	if err != nil {
-		t.Fatalf("the worker binary %s is missing: %v", fixture.binary, err)
 	}
 
 	return fixture
@@ -77,20 +73,16 @@ func (f awsFixture) store() string {
 	return url
 }
 
-// options is the query every fixture worker URL carries: the binary to push,
-// and the instance's region — which is NOT necessarily the caller's default,
-// and is exactly what ?region= exists to say.
+// options is the instance's region, which is NOT necessarily the caller's default and is exactly what ?region= exists to say.
 func (f awsFixture) options() string {
-	options := "binary=" + f.binary
 	if f.region != "" {
-		options += "&region=" + f.region
+		return "region=" + f.region
 	}
 
-	return options
+	return ""
 }
 
-// spec builds a RunnerSpec pointing at a worker URL, with the fixture's
-// binary pushed through the fixture's artifact store.
+// spec builds a RunnerSpec for a step in a container on the fixture's daemon: an aws:// worker is docker+ (steps#206).
 func (f awsFixture) spec(cwd, worker string, outputs ...string) shell.RunnerSpec {
 	sep := "?"
 	if strings.Contains(worker, "?") {
@@ -99,6 +91,7 @@ func (f awsFixture) spec(cwd, worker string, outputs ...string) shell.RunnerSpec
 
 	return shell.RunnerSpec{
 		Cwd:           cwd,
+		Image:         realCloudImage,
 		Worker:        worker + sep + f.options(),
 		WorkerTag:     "aws",
 		Fetch:         outputs,
@@ -106,11 +99,7 @@ func (f awsFixture) spec(cwd, worker string, outputs ...string) shell.RunnerSpec
 	}
 }
 
-// TestRealAWSRunsAStepOnAManagedInstance is the whole aws:// path against
-// reality: the bootstrap command runs on a real Amazon Linux AMI, fetches the
-// binary from a real presigned URL, starts a shim on loopback, and a real SSM
-// port-forwarding session carries the protocol to it — with the step's tree
-// travelling through real S3 rather than the tunnel.
+// TestRealAWSRunsAStepOnAManagedInstance is the whole aws:// path against reality: the key install runs on a real Amazon Linux AMI through SendCommand, a real SSM port-forward carries ssh to its sshd, and the step runs in a container on its real dockerd.
 //
 // Every layer this exercises has a fake elsewhere. This is the only place all
 // of them are the real thing at once.
@@ -136,8 +125,7 @@ func TestRealAWSRunsAStepOnAManagedInstance(t *testing.T) {
 		t.Errorf("out/report.txt = %q, want the input the worker consumed", got)
 	}
 
-	// The fixture is Graviton, so this also proves the ?binary= foreign-arch
-	// path: a binary this machine cannot run, pushed and executed there.
+	// The fixture is Graviton: the container reports the machine it runs on, not this one.
 	if !strings.Contains(got, "aarch64") {
 		t.Errorf("out/report.txt = %q, want it to name the worker's architecture", got)
 	}
@@ -228,6 +216,7 @@ func TestRealAWSLaunchRungAcquiresAndTerminates(t *testing.T) {
 	// the break no reviewer caught, worth proving against reality.
 	runner := newLocalRunner(t, shell.RunnerSpec{
 		Cwd:           t.TempDir(),
+		Image:         realCloudImage,
 		Worker:        resolved.URL,
 		ArtifactStore: fixture.store(),
 	})
@@ -330,6 +319,7 @@ func TestRealAWSSpotEviction(t *testing.T) {
 
 	runner := newLocalRunner(t, shell.RunnerSpec{
 		Cwd:           t.TempDir(),
+		Image:         realCloudImage,
 		Worker:        resolved.URL,
 		ArtifactStore: fixture.store(),
 	})

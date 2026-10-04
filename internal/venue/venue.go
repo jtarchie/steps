@@ -35,7 +35,8 @@ func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 		return nil, err
 	}
 
-	if worker.Scheme == SchemeDockerSSH {
+	// aws:// and gcp:// are docker+ by construction: steps' own provisioning installs docker on them.
+	if worker.Scheme == SchemeDockerSSH || worker.Scheme == SchemeAWS || worker.Scheme == SchemeGCP {
 		return newPlusRunner(worker, spec)
 	}
 

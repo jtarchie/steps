@@ -217,35 +217,6 @@ func TestAPollRefusesOnlyATaggedResourceNobodyMapped(t *testing.T) {
 	}
 }
 
-// ?binary= reaches an aws:// worker only through the artifact store, so whether one is set decides the refusal, for a job and for a poll alike.
-func TestPlacementChecksKnowWhetherAnArtifactStoreIsSet(t *testing.T) {
-	t.Parallel()
-
-	ctx, err := WithWorkers(context.Background(), map[string]string{"gpu": "aws://i-0abc123def456789?binary=/tmp/steps-linux-amd64"})
-	if err != nil {
-		t.Fatalf("WithWorkers: %v", err)
-	}
-
-	cfg := &config.Config{Resources: []config.Resource{{Name: "remote", Tags: []string{"gpu"}}}}
-	job := &config.Job{Name: "build", Plan: []config.Step{{Task: "work", Tags: []string{"gpu"}}}}
-
-	for _, withStore := range []bool{false, true} {
-		checked := ctx
-		if withStore {
-			checked = WithArtifactStore(ctx, "s3://bucket/steps")
-		}
-
-		for check, err := range map[string]error{
-			"poll": ValidatePipelinePlacement(checked, cfg, []string{"remote"}),
-			"job":  ValidateWorkerPlacement(checked, cfg, job),
-		} {
-			if (err == nil) != withStore || (err != nil && !errors.Is(err, venue.ErrWorker)) {
-				t.Errorf("artifact store set=%v, %s: err = %v, want refused=%v by the placement check", withStore, check, err, !withStore)
-			}
-		}
-	}
-}
-
 // TestABlockTagEveryChildOverridesNeedsNoWorker: a do:'s tags: are handed to
 // its children at load and cleared from the block, which runs nothing — so a
 // block tag no child ends up using demands no --worker mapping.

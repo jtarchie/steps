@@ -55,11 +55,20 @@ func TestACancelledCommandStillRemovesItsContainer(t *testing.T) {
 
 	_ = placed.Close()
 
+	// Rechecked for a while: a parallel test's container carries this process's pid too and goes when that test closes, where a leak stays.
 	var leaked []string
 
-	for _, id := range ownContainers(t) {
-		if !slices.Contains(before, id) {
-			leaked = append(leaked, id)
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(250 * time.Millisecond) {
+		leaked = leaked[:0]
+
+		for _, id := range ownContainers(t) {
+			if !slices.Contains(before, id) {
+				leaked = append(leaked, id)
+			}
+		}
+
+		if len(leaked) == 0 || time.Now().After(deadline) {
+			break
 		}
 	}
 

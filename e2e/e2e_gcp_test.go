@@ -24,13 +24,12 @@ func TestRealGCPPipelineStepRunsOnAnInstance(t *testing.T) {
 	project := os.Getenv("STEPS_TEST_GCP_PROJECT")
 	zone := os.Getenv("STEPS_TEST_GCP_ZONE")
 	instance := os.Getenv("STEPS_TEST_GCP_INSTANCE")
-	binary := os.Getenv("STEPS_TEST_GCP_BINARY")
 
-	if project == "" || zone == "" || instance == "" || binary == "" {
+	if project == "" || zone == "" || instance == "" {
 		t.Skip("no GCP fixture — run hack/gcp-fixture.sh up and export what it prints")
 	}
 
-	worker := "gcp://" + instance + "/var/tmp/steps?project=" + project + "&zone=" + zone + "&binary=" + binary
+	worker := "gcp://" + instance + "?project=" + project + "&zone=" + zone
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
@@ -42,6 +41,7 @@ jobs:
     run: echo seed > data/seed.txt
   - task: remote
     tags: [gcp]
+    image: public.ecr.aws/docker/library/alpine:3
     inputs: [data]
     outputs: [model]
     run: |

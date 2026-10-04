@@ -204,12 +204,13 @@ func (r runner) exchange(ctx context.Context, command string, p plan) (outText, 
 // case. So a signalled exit on a worker under a reclamation notice is
 // infrastructure; every other exit stays the step's own verdict.
 func (r runner) asEviction(err error) error {
-	if err == nil {
-		return nil
-	}
-
 	reason, reclaimed := r.session.reclaimedBy()
-	if !reclaimed {
+
+	return asEvictionOf(err, reason, reclaimed)
+}
+
+func asEvictionOf(err error, reason string, reclaimed bool) error {
+	if err == nil || !reclaimed {
 		return err
 	}
 

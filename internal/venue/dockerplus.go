@@ -44,6 +44,11 @@ type plusRunner struct {
 type plusSession struct {
 	worker Worker
 	spec   shell.RunnerSpec
+	reach  func(context.Context, Worker) (*ssh.Client, error)
+	socket string
+	// drainScript watches the machine's metadata for its own reclamation; empty for a machine nobody reclaims.
+	drainScript string
+	drain       atomic.Pointer[string]
 
 	mu        sync.Mutex
 	attempted bool
@@ -71,6 +76,22 @@ type plusSession struct {
 	sent, received atomic.Int64
 }
 
+// newPlusSession picks how the worker's sshd is reached, and for a machine steps provisioned, how it hears of its own reclamation.
+func newPlusSession(worker Worker, spec shell.RunnerSpec) *plusSession {
+	s := &plusSession{worker: worker, spec: spec, kept: map[string]bool{}, socket: worker.Socket}
+
+	switch worker.Scheme {
+	case SchemeAWS:
+		s.reach, s.drainScript, s.socket = awsSSHClient, awsDrainScript(), cloudDockerSocket
+	case SchemeGCP:
+		s.reach, s.drainScript, s.socket = gcpSSHClient, gcpDrainScript(), cloudDockerSocket
+	case SchemeLocal, SchemeSSH, SchemeDockerSSH:
+		s.reach = sshClientFor
+	}
+
+	return s
+}
+
 // swept remembers which workers this process has already swept for what dead processes left.
 var swept sync.Map //nolint:gochecknoglobals // per-process memory of a once-per-worker chore
 
@@ -79,7 +100,7 @@ func newPlusRunner(worker Worker, spec shell.RunnerSpec) (shell.Runner, error) {
 		return nil, fmt.Errorf("%w %q: %w", ErrWorker, worker.URL, errNoImageOnDocker)
 	}
 
-	return plusRunner{s: &plusSession{worker: worker, spec: spec, kept: map[string]bool{}}}, nil
+	return plusRunner{s: newPlusSession(worker, spec)}, nil
 }
 
 func (r plusRunner) Run(ctx context.Context, command string) error {
@@ -140,6 +161,15 @@ func (r plusRunner) Close() error { return r.s.close() }
 
 func (r plusRunner) placement() (Placement, bool) { return r.s.placement() }
 
+func (r plusRunner) reclaimed() (string, bool) {
+	reason := r.s.drain.Load()
+	if reason == nil {
+		return "", false
+	}
+
+	return *reason, true
+}
+
 func (r plusRunner) full(ctx context.Context, run func(shell.Runner) (string, string, int, error)) (string, string, int, error) {
 	var (
 		stdout, stderr string
@@ -158,7 +188,12 @@ func (r plusRunner) full(ctx context.Context, run func(shell.Runner) (string, st
 }
 
 // around runs one command and then brings the outputs home, even after a nonzero exit, because the local tree must reflect the worker the moment a Run* returns (an assert: reads it).
-func (r plusRunner) around(ctx context.Context, run func(shell.Runner) error) error {
+func (r plusRunner) around(ctx context.Context, run func(shell.Runner) error) (err error) {
+	defer func() {
+		reason, reclaimed := r.reclaimed()
+		err = asEvictionOf(err, reason, reclaimed)
+	}()
+
 	inner, err := r.s.ensure(ctx)
 	if err != nil {
 		return err
@@ -202,13 +237,15 @@ func (s *plusSession) ensure(ctx context.Context) (shell.Runner, error) {
 	return s.inner, s.startErr
 }
 
-func (s *plusSession) daemonName() string { return s.worker.Address() + ":" + s.worker.Socket }
+func (s *plusSession) daemonName() string { return s.worker.Address() + ":" + s.socket }
 
 func (s *plusSession) connect(ctx context.Context) error {
 	dial, err := s.dialDaemon(ctx)
 	if err != nil {
 		return err
 	}
+
+	s.watchDrain()
 
 	s.evict(ctx)
 
@@ -362,14 +399,14 @@ func (s *plusSession) pourFiles(ctx context.Context, names []string) error {
 
 // dialDaemon reaches the daemon and readies the busybox every holder and digest runs on, all before any file moves.
 func (s *plusSession) dialDaemon(ctx context.Context) (func(context.Context) (net.Conn, error), error) {
-	client, err := sshClientFor(ctx, s.worker)
+	client, err := s.reach(ctx, s.worker)
 	if err != nil {
 		return nil, err
 	}
 
 	s.ssh = client
 
-	dial := func(ctx context.Context) (net.Conn, error) { return client.DialContext(ctx, "unix", s.worker.Socket) }
+	dial := func(ctx context.Context) (net.Conn, error) { return client.DialContext(ctx, "unix", s.socket) }
 
 	s.docker, err = dockerapi.NewDialer(s.daemonName(), dial)
 	if err != nil {
@@ -379,7 +416,7 @@ func (s *plusSession) dialDaemon(ctx context.Context) (func(context.Context) (ne
 	// Named here: a socket nothing listens on is otherwise the first PutArchive's opaque failure.
 	err = s.docker.Ping(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("the docker daemon at %s did not answer: %w (the worker's sshd must allow AllowTcpForwarding local and AllowStreamLocalForwarding, and the ssh user must be able to open the socket — usually the docker group)", s.worker.Socket, err)
+		return nil, fmt.Errorf("the docker daemon at %s did not answer: %w (the worker's sshd must allow AllowTcpForwarding local and AllowStreamLocalForwarding, and the ssh user must be able to open the socket — usually the docker group)", s.socket, err)
 	}
 
 	// Containers a dead steps process on this machine left on the worker; nothing else would ever reclaim them.
