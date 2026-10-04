@@ -49,6 +49,7 @@ func (s *Server) handleJobs(c *echo.Context) error {
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "jobs", map[string]any{
 		"Nav":   s.nav(c),
+		"Title": c.Param("pipeline"),
 		"Jobs":  views,
 		"Graph": buildGraph(views),
 		"Queue": rows,
@@ -245,8 +246,9 @@ func (s *Server) handleRunHistory(c *echo.Context) error {
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "runs", map[string]any{
-		"Nav":  s.nav(c),
-		"Runs": runs,
+		"Nav":   s.nav(c),
+		"Title": "runs",
+		"Runs":  runs,
 	})
 }
 
@@ -486,6 +488,7 @@ func (s *Server) handleNode(c *echo.Context) error {
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "node", map[string]any{
 		"Nav":        s.nav(c),
+		"Title":      "node " + shortID(hash),
 		"Crumbs":     crumbs,
 		"Node":       node,
 		"Content":    node.Content,
@@ -507,6 +510,7 @@ func (s *Server) handleApprovals(c *echo.Context) error {
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "approvals", map[string]any{
 		"Nav":       s.nav(c),
+		"Title":     "approvals",
 		"Approvals": approvals,
 	})
 }
@@ -525,6 +529,7 @@ func (s *Server) handleQuestions(c *echo.Context) error {
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "questions", map[string]any{
 		"Nav":       s.nav(c),
+		"Title":     "questions",
 		"Questions": questions,
 	})
 }
@@ -551,6 +556,7 @@ func (s *Server) handleResources(c *echo.Context) error {
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "resources", map[string]any{
 		"Nav":       s.nav(c),
+		"Title":     "resources",
 		"Resources": pipeline.Config().Resources,
 		"Checked":   checkedByName(checked),
 		"Failing":   failingByName(failing),
