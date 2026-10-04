@@ -182,6 +182,7 @@ func (s *bareSession) connect(ctx context.Context) error {
 	}
 
 	s.client = client
+	keepAlive(client)
 
 	// Once per process per worker: what a dead process left does not appear mid-run, and this is an extra round trip per step.
 	if _, done := swept.LoadOrStore("ssh "+s.worker.Address(), true); !done {

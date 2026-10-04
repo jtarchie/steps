@@ -405,6 +405,7 @@ func (s *plusSession) dialDaemon(ctx context.Context) (func(context.Context) (ne
 	}
 
 	s.ssh = client
+	keepAlive(client)
 
 	dial := func(ctx context.Context) (net.Conn, error) { return client.DialContext(ctx, "unix", s.socket) }
 
