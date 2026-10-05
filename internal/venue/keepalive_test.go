@@ -84,10 +84,14 @@ func silentProxy(t *testing.T, target string) (string, *atomic.Bool) {
 func shortKeepalive(t *testing.T) {
 	t.Helper()
 
-	previousInterval, previousTimeout := keepaliveInterval, keepaliveTimeout
+	previousInterval, previousTimeout, previousClose := keepaliveInterval, keepaliveTimeout, closeTimeout
 	keepaliveInterval, keepaliveTimeout = 200*time.Millisecond, 200*time.Millisecond
+	// Close redials, and a tunnel still frozen answers that handshake with nothing until the bound.
+	closeTimeout = 2 * time.Second
 
-	t.Cleanup(func() { keepaliveInterval, keepaliveTimeout = previousInterval, previousTimeout })
+	t.Cleanup(func() {
+		keepaliveInterval, keepaliveTimeout, closeTimeout = previousInterval, previousTimeout, previousClose
+	})
 }
 
 func proxiedSSHRunner(t *testing.T) (shell.Runner, *atomic.Bool) {

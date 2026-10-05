@@ -225,13 +225,15 @@ func (r plusRunner) around(ctx context.Context, run func(shell.Runner) error) (e
 
 	err = r.s.fetch(ctx)
 	if err != nil {
+		r.s.conn.suspect.Store(true)
+
 		return err
 	}
 
 	return runErr
 }
 
-// A failure sticks: a dead worker costs one timeout, not one per command.
+// A failed first connection sticks: a worker that never answered costs one timeout, not one per command.
 func (s *plusSession) ensure(ctx context.Context) (shell.Runner, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -471,7 +473,7 @@ func (s *plusSession) daemonDialer(ctx context.Context) (func(context.Context) (
 // redial replaces a connection that ended (a dropped tunnel, a keepalive that gave up): the volumes, holder and container live on the daemon, so the step's tree is where it was.
 func (s *plusSession) redial(ctx context.Context) error {
 	// ponytail: a command the drop interrupted may still run in the container until it goes; keeping its exec id would let ExecInspect take its exit code instead of a rerun (steps#208).
-	redialed, err := s.conn.redial(ctx, func(ctx context.Context) (*ssh.Client, error) { return s.reach(ctx, s.worker) })
+	redialed, err := s.conn.redial(ctx, s.dialSSH)
 	if err != nil {
 		return fmt.Errorf("%w %q: dialling again after the connection dropped: %w", ErrWorker, s.worker.URL, err)
 	}
@@ -481,6 +483,10 @@ func (s *plusSession) redial(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (s *plusSession) dialSSH(ctx context.Context) (*ssh.Client, error) {
+	return s.reach(ctx, s.worker)
 }
 
 // localNamespace is "" for a bare local: and a short hash of the root otherwise.
@@ -751,6 +757,12 @@ func (s *plusSession) close() error {
 
 	var errs []error
 
+	// A drop since the last command would otherwise leave the container, the volumes and every held output out of reach.
+	_, err := s.conn.redial(ctx, s.dialSSH)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("dialling again after the connection dropped: %w", err))
+	}
+
 	if s.inner != nil {
 		errs = append(errs, s.inner.Close())
 	}
@@ -771,7 +783,7 @@ func (s *plusSession) close() error {
 		_ = client.Close()
 	}
 
-	err := errors.Join(errs...)
+	err = errors.Join(errs...)
 	if err != nil {
 		return fmt.Errorf("%w %q: releasing: %w", ErrWorker, s.worker.URL, err)
 	}

@@ -14,7 +14,6 @@ import (
 
 	"github.com/jtarchie/steps/internal/dockerapi"
 	"github.com/jtarchie/steps/internal/shell"
-
 	"github.com/jtarchie/steps/internal/testsshd"
 )
 
@@ -617,5 +616,67 @@ func TestDockerPlusRedialsADroppedConnection(t *testing.T) {
 
 	if string(out) != "kept\n" {
 		t.Errorf("marker = %q, want the tree the first command left", out)
+	}
+}
+
+// Close after a drop with no command since still reaches the daemon: the step's volumes and container would otherwise outlive it on the worker.
+func TestDockerPlusReleasesItsVolumesAfterADroppedConnection(t *testing.T) {
+	t.Parallel()
+
+	runner := plusRunnerFor(t, dockerPlusURL(testsshd.New(t), hostDockerSocket(t)), t.TempDir())
+
+	err := runner.Run(t.Context(), "true")
+	if err != nil {
+		t.Fatalf("first command: %v", err)
+	}
+
+	made := volumesMadeBy(t, runner)
+	for _, name := range made {
+		t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "volume", "rm", "-f", name).Run() }) //nolint:gosec // a name the session made
+	}
+
+	dropAndWait(t, &runner.(plusRunner).s.conn)
+
+	err = runner.Close()
+	if err != nil {
+		t.Fatalf("closing after the connection dropped: %v", err)
+	}
+
+	for _, name := range made {
+		if volumeExists(t, name) {
+			t.Errorf("%s survived its session's close", name)
+		}
+	}
+}
+
+// An output fetch that failed after the command answered leaves the connection suspect, like the command failing would.
+func TestDockerPlusSuspectsAConnectionAFetchFailedOn(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+
+	err := os.Mkdir(filepath.Join(cwd, "out"), 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner := plusRunnerFor(t, dockerPlusURL(testsshd.New(t), hostDockerSocket(t)), cwd, "out")
+
+	plus, ok := runner.(plusRunner)
+	if !ok {
+		t.Fatalf("runner is %T, want a docker+ runner", runner)
+	}
+
+	err = plus.around(t.Context(), func(shell.Runner) error {
+		_ = plus.s.conn.current().Close()
+
+		return nil
+	})
+	if err == nil {
+		t.Fatal("a fetch over a closed connection succeeded")
+	}
+
+	if !plus.s.conn.suspect.Load() {
+		t.Error("the failed fetch left the connection unsuspected")
 	}
 }

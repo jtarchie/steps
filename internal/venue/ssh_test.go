@@ -9,6 +9,8 @@ package venue
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -17,6 +19,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/jtarchie/steps/internal/shell"
 )
@@ -418,5 +422,123 @@ func TestSSHWorkerRedialsADroppedConnection(t *testing.T) {
 
 	if string(out) != "kept\n" {
 		t.Errorf("marker = %q, want the tree the first command left", out)
+	}
+}
+
+// Close after a drop with no command since still reaches the worker: the directory, and any command the drop interrupted, would otherwise outlive the step.
+func TestSSHWorkerRemovesItsDirectoryAfterADroppedConnection(t *testing.T) {
+	t.Parallel()
+
+	runner, err := NewRunner(sshSpec(t, newTestSSHD(t), t.TempDir()))
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	err = runner.Run(t.Context(), "true")
+	if err != nil {
+		t.Fatalf("first command: %v", err)
+	}
+
+	bare, ok := runner.(bareRunner)
+	if !ok {
+		t.Fatalf("runner is %T, want an ssh:// runner", runner)
+	}
+
+	dir := bare.s.dir
+	dropAndWait(t, &bare.s.conn)
+
+	err = runner.Close()
+	if err != nil {
+		t.Fatalf("closing after the connection dropped: %v", err)
+	}
+
+	_, err = os.Stat(dir)
+	if err == nil {
+		t.Errorf("%s survived its session's close", dir)
+	}
+}
+
+// A connection that died under any exchange, an output fetch included, is suspect: the retry can arrive before the connection reports its end.
+func TestSSHWorkerSuspectsAConnectionAnyExchangeFailedOn(t *testing.T) {
+	t.Parallel()
+
+	runner := newLocalRunner(t, sshSpec(t, newTestSSHD(t), t.TempDir()))
+
+	err := runner.Run(t.Context(), "true")
+	if err != nil {
+		t.Fatalf("first command: %v", err)
+	}
+
+	bare, ok := runner.(bareRunner)
+	if !ok {
+		t.Fatalf("runner is %T, want an ssh:// runner", runner)
+	}
+
+	_ = bare.s.conn.current().Close()
+
+	_, err = bare.s.exec(t.Context(), "true", nil, io.Discard, io.Discard)
+	if err == nil {
+		t.Fatal("an exec over a closed connection succeeded")
+	}
+
+	if !bare.s.conn.suspect.Load() {
+		t.Error("the failed exchange left the connection unsuspected")
+	}
+}
+
+// A redial meets the tunnel that just went silent: a handshake nobody answers ends with the caller's context, not never.
+func TestSSHDialGivesUpOnASilentHandshake(t *testing.T) {
+	t.Parallel()
+
+	server := newTestSSHD(t)
+
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = listener.Close() })
+
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+
+			t.Cleanup(func() { _ = conn.Close() })
+		}
+	}()
+
+	worker, err := ParseWorker("ssh://" + listener.Addr().String() + server.Root + "?" + url.Values{
+		"identity":   {server.Identity},
+		"hostkey":    {ssh.FingerprintSHA256(server.HostKey)},
+		"ssh_config": {"none"},
+	}.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+
+	answered := make(chan error, 1)
+
+	go func() {
+		client, dialErr := sshClientFor(ctx, worker)
+		if client != nil {
+			_ = client.Close()
+		}
+
+		answered <- dialErr
+	}()
+
+	select {
+	case err = <-answered:
+		if err == nil {
+			t.Error("a handshake nobody answered succeeded")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the dial outlived its context by seconds")
 	}
 }

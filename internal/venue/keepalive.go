@@ -15,8 +15,8 @@ var (
 // keepaliveMisses is OpenSSH's ServerAliveCountMax: one slow answer is a busy tunnel (a reply queued behind a large transfer on SSM's), three in a row are a dead one.
 const keepaliveMisses = 3
 
-// keepAlive closes client when the far end stops answering: a tunnel, SSM's above all, can sit silent forever after the machine behind it is gone, and every channel read waits with it. Any reply counts, since OpenSSH answers an unknown request with a refusal.
-func keepAlive(client *ssh.Client) {
+// keepAlive closes client when the far end stops answering, and returns what closes when it has ended: a tunnel, SSM's above all, can sit silent forever after the machine behind it is gone, and every channel read waits with it. Any reply counts, since OpenSSH answers an unknown request with a refusal.
+func keepAlive(client *ssh.Client) <-chan struct{} {
 	// Read once, here: a goroutine that read the seams on every tick would race a later test that sets them.
 	interval, timeout := keepaliveInterval, keepaliveTimeout
 	ended := make(chan struct{})
@@ -63,4 +63,6 @@ func keepAlive(client *ssh.Client) {
 			}
 		}
 	}()
+
+	return ended
 }

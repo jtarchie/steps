@@ -49,14 +49,21 @@ func sshClientFor(ctx context.Context, worker Worker) (*ssh.Client, error) {
 		return nil, err
 	}
 
-	dialer := net.Dialer{Timeout: dialTimeout}
+	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
+	defer cancel()
 
-	conn, err := dialer.DialContext(ctx, "tcp", settings.address)
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", settings.address)
 	if err != nil {
 		return nil, fmt.Errorf("dialing: %w", err)
 	}
 
+	// The handshake takes no context, and a tunnel gone silent accepts the TCP connect and then answers nothing.
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+
 	sshConn, channels, requests, err := ssh.NewClientConn(conn, settings.address, config)
+
+	stop()
+
 	if err != nil {
 		_ = conn.Close()
 

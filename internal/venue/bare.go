@@ -144,8 +144,6 @@ func (r bareRunner) exchange(ctx context.Context, command string, p plan) (strin
 	sinks.flush()
 
 	if err != nil {
-		r.s.conn.suspect.Store(true)
-
 		return stdout.result(), stderr.result(), 0, err
 	}
 
@@ -181,7 +179,7 @@ func (s *bareSession) ensure(ctx context.Context) error {
 	}
 
 	// A command the drop interrupted may still run on the worker; its pid file is what close kills it by.
-	_, err := s.conn.redial(ctx, func(ctx context.Context) (*ssh.Client, error) { return sshClientFor(ctx, s.worker) })
+	_, err := s.conn.redial(ctx, s.dial)
 	if err != nil {
 		return fmt.Errorf("%w %q: dialling again after the connection dropped: %w", ErrWorker, s.worker.URL, err)
 	}
@@ -189,8 +187,12 @@ func (s *bareSession) ensure(ctx context.Context) error {
 	return nil
 }
 
+func (s *bareSession) dial(ctx context.Context) (*ssh.Client, error) {
+	return sshClientFor(ctx, s.worker)
+}
+
 func (s *bareSession) connect(ctx context.Context) error {
-	client, err := sshClientFor(ctx, s.worker)
+	client, err := s.dial(ctx)
 	if err != nil {
 		return err
 	}
@@ -514,7 +516,14 @@ func (s *bareSession) tarInto(ctx context.Context, script, staging string) error
 }
 
 // exec runs one command over a fresh session channel and reports its exit status; an error means it never ran or the connection died under it.
-func (s *bareSession) exec(ctx context.Context, command string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+func (s *bareSession) exec(ctx context.Context, command string, stdin io.Reader, stdout, stderr io.Writer) (_ int, err error) {
+	// Every exchange, not only the step's command: an output fetch the drop cut short races the connection reporting its end just the same.
+	defer func() {
+		if err != nil {
+			s.conn.suspect.Store(true)
+		}
+	}()
+
 	session, err := s.conn.current().NewSession()
 	if err != nil {
 		return 0, fmt.Errorf("opening a session: %w", err)
@@ -589,12 +598,11 @@ func (s *bareSession) close() error {
 
 	s.closed = true
 
-	client := s.conn.current()
-	if client == nil {
+	if s.conn.current() == nil {
 		return nil
 	}
 
-	defer func() { _ = client.Close() }()
+	defer func() { _ = s.conn.current().Close() }()
 
 	if s.dir == "" {
 		return nil
@@ -602,6 +610,12 @@ func (s *bareSession) close() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 	defer cancel()
+
+	// A drop since the last command would otherwise leave the directory, and whatever the drop interrupted, on the worker.
+	_, err := s.conn.redial(ctx, s.dial)
+	if err != nil {
+		return fmt.Errorf("%w %q: removing %s: dialling again after the connection dropped: %w", ErrWorker, s.worker.URL, s.dir, err)
+	}
 
 	owner, pids := shellQuote(s.dir+".owner"), pidFiles(s.dir)
 

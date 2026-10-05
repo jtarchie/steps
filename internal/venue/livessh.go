@@ -28,19 +28,17 @@ func (l *liveSSH) current() *ssh.Client {
 
 // adopt makes client the connection, and notes when it ends so the next command can dial again.
 func (l *liveSSH) adopt(client *ssh.Client) {
-	ended := make(chan struct{})
-
-	go func() {
-		_ = client.Wait()
-
-		close(ended)
-	}()
-
-	keepAlive(client)
+	ended := keepAlive(client)
 
 	l.mu.Lock()
+	previous := l.client
 	l.client, l.ended = client, ended
 	l.mu.Unlock()
+
+	// Ended or refused a probe, and nothing else holds it: closing it is what stops its keepalive and the drain loop riding it.
+	if previous != nil {
+		_ = previous.Close()
+	}
 }
 
 // redial dials again when the connection ended, reporting whether it did; a connection never adopted is left to the session's own first dial.
@@ -88,6 +86,7 @@ func (l *liveSSH) gone(ended <-chan struct{}) bool {
 	case <-ended:
 		return true
 	case <-time.After(keepaliveTimeout):
-		return true
+		// Slow is not dead: keepalive closes a connection that misses keepaliveMisses in a row, and ended says so.
+		return false
 	}
 }
