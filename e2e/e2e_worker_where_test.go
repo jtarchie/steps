@@ -9,6 +9,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/testsshd"
 )
 
 // stepEvents returns the recorded events of the most recent run.
@@ -39,7 +40,7 @@ func stepEvents(t *testing.T, pipelinePath string) []store.RunEventRow {
 // "It passes on my laptop and fails in CI" is the whole class of bug this
 // feature introduces, and the record had no column to answer it with.
 func TestEndToEndRecordsWhereAStepRan(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
@@ -50,11 +51,10 @@ jobs:
     run: "true"
   - task: there
     tags: [gpu]
-    image: `+dockerE2EImage+`
     run: "true"
 `)
 
-	err := cli.Run([]string{path, "--worker", "gpu=local:"})
+	err := cli.Run([]string{path, "--worker", "gpu=" + worker})
 	if err != nil {
 		t.Fatalf("running: %v", err)
 	}

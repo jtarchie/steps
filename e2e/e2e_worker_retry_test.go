@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/testsshd"
 )
 
 // TestEndToEndWorkerRetryKeepsScratch is the invariant: attempts: means the
@@ -25,12 +26,12 @@ func TestEndToEndWorkerRetryKeepsScratch(t *testing.T) {
 	for _, placed := range []bool{false, true} {
 		name, tags, args := "local", "", []string(nil)
 		if placed {
-			name, tags, args = "placed", "    tags: [gpu]\n    image: "+dockerE2EImage+"\n", []string{"--worker", "gpu=local:"}
+			name, tags = "placed", "    tags: [gpu]\n"
 		}
 
 		t.Run(name, func(t *testing.T) {
 			if placed {
-				requireDockerE2E(t)
+				args = []string{"--worker", "gpu=" + testsshd.New(t).URL}
 			}
 
 			dir := t.TempDir()

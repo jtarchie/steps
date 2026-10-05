@@ -1,12 +1,12 @@
 package e2e
 
 // End-to-end placement of RESOURCES: a resource's check, in and out on a
-// worker, through the real CLI, onto this machine's docker daemon.
+// worker, through the real CLI.
 //
-// Same transport as the task tests (local: drives the local daemon as a
-// docker+ worker), and the same proof: STEPS_WORKER is set only inside a
-// placed command, so a command that reports it ran through a venue rather
-// than here.
+// The worker is a bare ssh:// one against an in-process sshd: placement is
+// the subject, and docker+ is proven by its own tests. The proof is that
+// STEPS_WORKER is set only inside a placed command, so a command that reports
+// it ran through a venue rather than here.
 
 import (
 	"context"
@@ -19,6 +19,7 @@ import (
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
+	"github.com/jtarchie/steps/internal/testsshd"
 )
 
 // probeType is a resource type whose every stage reports where it ran: the
@@ -28,7 +29,6 @@ import (
 const probeType = `
 resource_types:
 - name: probe
-  image: ` + dockerE2EImage + `
   config:
     check: printf '[{"ref":"v1","where":"%s"}]' "${STEPS_WORKER:-here}"
     in: printf '%s/%s' {{ .version.where | shellquote }} "${STEPS_WORKER:-here}" > where.txt
@@ -97,12 +97,12 @@ func checkedVersionsIn(t *testing.T, state, name string) []map[string]any {
 // worker, and the fetched bytes still come home for the local step that
 // reads them.
 func TestEndToEndResourceTagPlacesCheckInAndOut(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	path := resourceWorkerPipeline(t, dir)
 
-	mustRun(t, path, "--worker", "vpc=local:")
+	mustRun(t, path, "--worker", "vpc="+worker)
 
 	// The check the get resolved its version with ran there, the in: ran
 	// there, and its tree came back here.
@@ -159,7 +159,7 @@ func assertRecordedOnWorker(t *testing.T, path string) {
 // TestEndToEndStepTagOverridesResourceTag: the step's own tags: wins over the
 // resource's, so one pipeline can fetch a resource from two places.
 func TestEndToEndStepTagOverridesResourceTag(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, probeType+`
@@ -180,7 +180,7 @@ jobs:
     run: cp src/where.txt `+filepath.Join(dir, "fetched.txt")+`
 `)
 
-	mustRun(t, path, "--worker", "vpc=local:", "--worker", "other=local:")
+	mustRun(t, path, "--worker", "vpc="+worker, "--worker", "other="+worker)
 
 	// The check is the resource's and runs where the resource says; the
 	// fetch is the step's.
@@ -194,7 +194,7 @@ jobs:
 // out of the hash holds for a get too — a second run skips the placed fetch
 // and everything under it.
 func TestEndToEndPlacedGetCachesLikeALocalOne(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, probeType+`
@@ -214,7 +214,7 @@ jobs:
     run: cp src/where.txt `+filepath.Join(dir, "fetched.txt")+`
 `)
 
-	mustRun(t, path, "--worker", "vpc=local:")
+	mustRun(t, path, "--worker", "vpc="+worker)
 
 	first := readFileString(t, filepath.Join(dir, "fetched.txt"))
 
@@ -225,7 +225,7 @@ jobs:
 
 	// Same version, same inputs: the get is a cache hit and the chain under
 	// it is skipped, so nothing is refetched and nothing rewritten.
-	mustRun(t, path, "--worker", "vpc=local:")
+	mustRun(t, path, "--worker", "vpc="+worker)
 
 	assertNoFile(t, filepath.Join(dir, "fetched.txt"))
 
@@ -257,7 +257,7 @@ func TestEndToEndUnmappedResourceTagRefusesBeforeRunning(t *testing.T) {
 // only reachable from a worker has to be polled from there. One poll, through
 // the CLI, with a lease of its own.
 func TestEndToEndPollerChecksOnTheResourceWorker(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, probeType+`
@@ -274,7 +274,7 @@ jobs:
     trigger: true
 `)
 
-	served := startWebFor(t, path, "--interval", "50ms", "--worker", "vpc=local:")
+	served := startWebFor(t, path, "--interval", "50ms", "--worker", "vpc="+worker)
 	defer served.stop(t)
 
 	settle(t, served.state, cli.PipelineName(path), "repo")
@@ -327,7 +327,7 @@ jobs:
 // get's OWN check rather than by recorded history, so this is the one run
 // where the check inside version resolution has to be placed too.
 func TestEndToEndPinnedGetChecksOnTheResourceWorker(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, probeType+`
@@ -347,7 +347,7 @@ jobs:
     run: cp src/where.txt `+filepath.Join(dir, "fetched.txt")+`
 `)
 
-	mustRun(t, path, "--worker", "vpc=local:", "--pin", "where=vpc")
+	mustRun(t, path, "--worker", "vpc="+worker, "--pin", "where=vpc")
 
 	fetched := readFileString(t, filepath.Join(dir, "fetched.txt"))
 	if fetched != "vpc/vpc" {
@@ -359,7 +359,7 @@ jobs:
 // resource's tag like a plan put, and is recorded under the hook's own scope
 // — a hook has no node — so the machine it billed is not lost.
 func TestEndToEndPutHookIsRecordedOnTheResourceWorker(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, probeType+`
@@ -380,7 +380,7 @@ jobs:
       inputs: [src]
 `)
 
-	mustRun(t, path, "--worker", "vpc=local:")
+	mustRun(t, path, "--worker", "vpc="+worker)
 
 	for _, row := range runPlacements(t, path) {
 		if row.Tag == "vpc" && strings.Contains(row.Slot, "hook") {
@@ -414,7 +414,7 @@ jobs:
     run: cp src/where.txt `+filepath.Join(dir, "fetched.txt")+`
 `)
 
-	err := cli.Run([]string{path, "--worker", "edge=local:"})
+	err := cli.Run([]string{path, "--worker", "edge=" + testsshd.New(t).URL})
 	if err == nil {
 		t.Fatal("a get whose resource carries an unmapped tag ran anyway")
 	}
@@ -430,14 +430,13 @@ jobs:
 // live checks, so a tagged resource's check has to go where a run's would —
 // and be refused, not quietly run here, when nothing maps the tag.
 func TestEndToEndPlanChecksOnTheResourceWorker(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	// The check runs in a container, so it says where it ran in its streamed stderr rather than in a host file.
 	path := writePipeline(t, dir, `
 resource_types:
 - name: probe
-  image: `+dockerE2EImage+`
   config:
     check: echo "checked-on-${STEPS_WORKER:-here}" >&2 && printf '[{"ref":"v1"}]'
     in: "true"
@@ -472,7 +471,7 @@ jobs:
 		t.Errorf("the refused plan ran the check anyway:\n%s", stderr())
 	}
 
-	_ = captureStdout(t, func() { err = cli.Run([]string{"plan", path, "--worker", "vpc=local:"}) })
+	_ = captureStdout(t, func() { err = cli.Run([]string{"plan", path, "--worker", "vpc=" + worker}) })
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}

@@ -4,12 +4,13 @@ package e2e
 
 import (
 	"context"
-	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/testsshd"
 )
 
 // runPlacements returns the placement rows of the most recent run.
@@ -44,7 +45,7 @@ func runPlacements(t *testing.T, pipelinePath string) []store.Placement {
 // something this process can honestly know, and a wrong number in a cost
 // column is worse than no column.
 func TestEndToEndRecordsWhatRanTheStep(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
@@ -56,12 +57,11 @@ jobs:
     run: head -c 4096 /dev/urandom > seed/blob
   - task: there
     tags: [gpu]
-    image: `+dockerE2EImage+`
     inputs: [seed]
     run: test -s seed/blob
 `)
 
-	err := cli.Run([]string{path, "--worker", "gpu=local:"})
+	err := cli.Run([]string{path, "--worker", "gpu=" + worker})
 	if err != nil {
 		t.Fatalf("running: %v", err)
 	}
@@ -98,26 +98,14 @@ jobs:
 func assertMachineFacts(t *testing.T, placement store.Placement) {
 	t.Helper()
 
-	// The daemon's platform, not this process's: a placed step runs in the worker's containers, which on a Mac are linux.
-	if got := placement.GOOS + "/" + placement.GOARCH; got != daemonPlatform(t) {
-		t.Errorf("platform = %s, want the daemon's %s", got, daemonPlatform(t))
+	// The machine's own answer to uname: the in-process sshd runs where this test does.
+	if got, want := placement.GOOS+"/"+placement.GOARCH, runtime.GOOS+"/"+runtime.GOARCH; got != want {
+		t.Errorf("platform = %s, want the worker's %s", got, want)
 	}
 
 	if placement.Workdir == "" {
 		t.Error("workdir is empty — the record cannot say where on the machine the tree landed")
 	}
-}
-
-// daemonPlatform is what the local daemon runs its containers on, in Go's spelling.
-func daemonPlatform(t *testing.T) string {
-	t.Helper()
-
-	out, err := exec.CommandContext(t.Context(), "docker", "version", "--format", "{{.Server.Os}}/{{.Server.Arch}}").Output()
-	if err != nil {
-		t.Fatalf("asking the daemon its platform: %v", err)
-	}
-
-	return strings.TrimSpace(string(out))
 }
 
 // assertBytesCrossed is separate from the facts above because zero is an
@@ -135,7 +123,7 @@ func assertBytesCrossed(t *testing.T, placement store.Placement) {
 // TestEndToEndReportsWhereStepsRan is the other half: a row nothing can read
 // is not a record. `steps runs --where` is the CLI that answers it.
 func TestEndToEndReportsWhereStepsRan(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
@@ -147,12 +135,11 @@ jobs:
     run: head -c 4096 /dev/urandom > seed/blob
   - task: there
     tags: [gpu]
-    image: `+dockerE2EImage+`
     inputs: [seed]
     run: test -s seed/blob
 `)
 
-	err := cli.Run([]string{path, "--worker", "gpu=local:"})
+	err := cli.Run([]string{path, "--worker", "gpu=" + worker})
 	if err != nil {
 		t.Fatalf("running: %v", err)
 	}
@@ -164,7 +151,7 @@ jobs:
 		t.Fatalf("steps runs --where: %v", err)
 	}
 
-	for _, want := range []string{"there", "gpu", daemonPlatform(t)} {
+	for _, want := range []string{"there", "gpu", runtime.GOOS + "/" + runtime.GOARCH} {
 		if !strings.Contains(out, want) {
 			t.Errorf("steps runs --where did not mention %q:\n%s", want, out)
 		}
@@ -190,7 +177,7 @@ jobs:
 // worker is the ordinary case, and an empty table for it reads as "the
 // record is broken" rather than "nothing was placed".
 func TestEndToEndWhereNamesOneRunAndSaysWhenNoneWerePlaced(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
@@ -199,7 +186,6 @@ jobs:
   plan:
   - task: on-a-worker
     tags: [gpu]
-    image: `+dockerE2EImage+`
     run: "true"
 - name: unplaced
   plan:
@@ -207,7 +193,7 @@ jobs:
     run: "true"
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "placed", "--worker", "gpu=local:"})
+	err := cli.Run([]string{"run", path, "--job", "placed", "--worker", "gpu=" + worker})
 	if err != nil {
 		t.Fatalf("running the placed job: %v", err)
 	}
@@ -270,7 +256,7 @@ func latestRunID(t *testing.T, pipelinePath string) string {
 // and bills an instance, and `steps runs --where` reported that the run never
 // left this machine.
 func TestEndToEndRecordsWhereAHookRan(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
@@ -282,12 +268,11 @@ jobs:
     on_failure:
       task: tell-someone
       tags: [gpu]
-      image: `+dockerE2EImage+`
       run: "true"
 `)
 
 	// The job fails: the point is the hook that ran because it did.
-	err := cli.Run([]string{path, "--worker", "gpu=local:"})
+	err := cli.Run([]string{path, "--worker", "gpu=" + worker})
 	if err == nil {
 		t.Fatal("the pipeline was supposed to fail so its on_failure hook would run")
 	}
@@ -327,7 +312,7 @@ jobs:
 // first, and one of two billed machines vanishes from the record — silently,
 // because an upsert is a success.
 func TestEndToEndRecordsEveryTaggedHookSeparately(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
@@ -339,18 +324,16 @@ jobs:
     on_failure:
       task: notify
       tags: [gpu]
-      image: `+dockerE2EImage+`
       run: "true"
     ensure:
       task: cleanup
       tags: [gpu]
-      image: `+dockerE2EImage+`
       run: "true"
 `)
 
 	// The job fails: the step runs `false`, which is what makes on_failure
 	// fire. Its error is the point, not a problem.
-	_ = cli.Run([]string{path, "--worker", "gpu=local:"})
+	_ = cli.Run([]string{path, "--worker", "gpu=" + worker})
 
 	placements := runPlacements(t, path)
 

@@ -6,13 +6,14 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/testsshd"
 )
 
 // TestEndToEndJobTagsPlaceEveryStep: a job's tags: place an untagged step and
 // the job's own hook, a do: block's tags: override it for the steps inside,
 // and the block itself — which runs nothing — records no placement.
 func TestEndToEndJobTagsPlaceEveryStep(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
@@ -21,20 +22,17 @@ jobs:
   tags: [gpu]
   plan:
   - task: a
-    image: `+dockerE2EImage+`
     run: "true"
   - tags: [disk]
     do:
     - task: b
-      image: `+dockerE2EImage+`
       run: "true"
   ensure:
     task: tidy
-    image: `+dockerE2EImage+`
     run: "true"
 `)
 
-	err := cli.Run([]string{path, "--worker", "gpu=local:", "--worker", "disk=local:"})
+	err := cli.Run([]string{path, "--worker", "gpu=" + worker, "--worker", "disk=" + worker})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -60,7 +58,7 @@ jobs:
 // what the step resolved to, as in Concourse — the tagged step's on_failure:
 // is placed on the step's worker, not run here.
 func TestEndToEndAStepsHookGoesWhereTheStepWent(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
@@ -69,15 +67,13 @@ jobs:
   plan:
   - task: work
     tags: [gpu]
-    image: `+dockerE2EImage+`
     run: "false"
     on_failure:
       task: tell-someone
-      image: `+dockerE2EImage+`
       run: "true"
 `)
 
-	err := cli.Run([]string{path, "--worker", "gpu=local:"})
+	err := cli.Run([]string{path, "--worker", "gpu=" + worker})
 	if err == nil {
 		t.Fatal("the pipeline was supposed to fail so its on_failure hook would run")
 	}

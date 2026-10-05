@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/testsshd"
 )
 
 // The seam from the minted run id and recorded revision to the environment a step sees. The second run being a cache hit is the "never hashed" claim: the merkle key did not move though the run id did.
@@ -93,7 +94,7 @@ jobs:
 
 // Crosses the orchestrator-to-worker seam through the real transport: build metadata rides each exec, not the container.
 func TestBuildMetadataReachesAPlacedStep(t *testing.T) {
-	requireDockerE2E(t)
+	worker := testsshd.New(t).URL
 
 	dir := t.TempDir()
 	out := filepath.Join(dir, "seen")
@@ -104,7 +105,6 @@ jobs:
   plan:
   - task: stamp
     tags: [gpu]
-    image: `+dockerE2EImage+`
     inputs: []
     outputs: [seen]
     run: echo "$STEPS_RUN_ID ${STEPS_WORKER-none}" > seen/ids
@@ -113,7 +113,7 @@ jobs:
     run: cp seen/ids `+out+`
 `)
 
-	err := cli.Run([]string{"run", path, "--job", "placed", "--db", filepath.Join(dir, "p.db"), "--worker", "gpu=local:"})
+	err := cli.Run([]string{"run", path, "--job", "placed", "--db", filepath.Join(dir, "p.db"), "--worker", "gpu=" + worker})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
