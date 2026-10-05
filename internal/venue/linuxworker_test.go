@@ -176,7 +176,16 @@ func startLinuxWorkerWith(t *testing.T, dockerfile string, extraRunArgs ...strin
 
 	run(t, dir, "docker", "build", "-q", "-t", image, ".")
 
-	runArgs := append([]string{"run", "-d", "-P"}, extraRunArgs...)
+	// Owned like a step's container, so a killed run's worker (a privileged dind, for some) is swept by the next one rather than left running.
+	labels := shell.OwnershipLabels()
+	runArgs := make([]string, 0, 3+2*len(labels)+len(extraRunArgs)+1)
+	runArgs = append(runArgs, "run", "-d", "-P")
+
+	for key, value := range labels {
+		runArgs = append(runArgs, "--label", key+"="+value)
+	}
+
+	runArgs = append(runArgs, extraRunArgs...)
 	runArgs = append(runArgs, image)
 
 	id := strings.TrimSpace(run(t, dir, "docker", runArgs...))
