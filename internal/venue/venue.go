@@ -3,12 +3,9 @@ package venue
 // The decision one tier above shell's.
 
 import (
-	"context"
 	"errors"
 	"os"
-	"sync"
 
-	"github.com/jtarchie/steps/internal/blobstore"
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -39,78 +36,12 @@ func NewRunner(spec shell.RunnerSpec) (shell.Runner, error) {
 		return newPlusRunner(worker, spec)
 	}
 
-	if worker.Scheme == SchemeSSH {
-		return newBareRunner(worker, spec)
-	}
-
-	blobs, err := artifactStoreFor(spec.ArtifactStore)
-	if err != nil {
-		return nil, err
-	}
-
-	worker.ArtifactStore = spec.ArtifactStore
-
-	return runner{session: &session{
-		worker:       worker,
-		cwd:          spec.Cwd,
-		outputs:      spec.Fetch,
-		fetchAll:     spec.FetchAll,
-		deferFetch:   spec.DeferFetch,
-		remoteInputs: spec.RemoteInputs,
-		env:          withWorkerTag(resolveEnv(spec.Env), spec.WorkerTag),
-		tag:          spec.WorkerTag,
-		keep:         spec.Keep,
-		noRedial:     spec.NoRedial,
-		reusedWarm:   spec.ReusedWarm,
-		blobs:        blobs,
-		// The container half of a placed step, if it has one. Kept as the
-		// caller's own spec so nothing about what a container means is
-		// re-decided here: the tree still travels the venue's way, and the
-		// command runs through the same code every local containerized step
-		// uses, pointed at the worker's daemon.
-		container: spec,
-	}}, nil
+	return newBareRunner(worker, spec)
 }
 
 // errRemoteInputsHere is a spec naming inputs other workers hold with no
 // worker to offer them to.
 var errRemoteInputsHere = errors.New("inputs held on other workers need a worker to receive them, and this step has none")
-
-// artifactStores caches one client per store URL. Without it every placed
-// step — and every guard, and every SSM bootstrap — rebuilt the client and
-// re-resolved credentials from scratch: on EC2 that is an IMDS round trip per
-// step, and on SSO a token dance, for the same answer every time.
-//
-//nolint:gochecknoglobals // a cache over a config-derived singleton, not state
-var artifactStores sync.Map
-
-// artifactStoreFor opens the blob store a spec names, or nothing — trees then
-// ride the tunnel, which is always the floor.
-func artifactStoreFor(raw string) (*blobstore.Store, error) {
-	if raw == "" {
-		return nil, nil //nolint:nilnil // absence is the documented answer: no store, use the tunnel
-	}
-
-	if cached, ok := artifactStores.Load(raw); ok {
-		return cached.(*blobstore.Store), nil //nolint:forcetypeassert // this map holds one type
-	}
-
-	opts, err := blobstore.Parse(raw)
-	if err != nil {
-		return nil, err //nolint:wrapcheck // blobstore's errors name the URL and the rule it broke
-	}
-
-	// Opening reads only local configuration, so the constructor's missing
-	// context is not hiding a network round trip.
-	store, err := blobstore.New(context.Background(), opts)
-	if err != nil {
-		return nil, err //nolint:wrapcheck // as above
-	}
-
-	cached, _ := artifactStores.LoadOrStore(raw, store)
-
-	return cached.(*blobstore.Store), nil //nolint:forcetypeassert // as above
-}
 
 // resolveEnv reads the values of the variables a pipeline's env: opted into.
 //

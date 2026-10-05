@@ -13,10 +13,13 @@ package e2e
 // the bytes the worker kept are the bytes the pipeline saw.
 
 import (
-	"io/fs"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -36,6 +39,7 @@ func holderPipeline(t *testing.T, dir, consumerTag string, get bool) string {
 	producer := `
   - task: seed
     tags: [a]
+    image: ` + dockerE2EImage + `
     outputs: [src]
     run: |
       head -c ` + strconv.Itoa(payloadBytes) + ` /dev/urandom > src/blob.bin
@@ -47,6 +51,7 @@ func holderPipeline(t *testing.T, dir, consumerTag string, get bool) string {
 		resources = `
 resource_types:
 - name: blob
+  image: ` + dockerE2EImage + `
   config:
     check: printf '[{"ref":"v1"}]'
     in: |
@@ -71,6 +76,7 @@ jobs:
   plan:`+producer+`
   - task: consume
     tags: [`+consumerTag+`]
+    image: `+dockerE2EImage+`
     inputs: [src]
     outputs: [out]
     run: |
@@ -82,10 +88,7 @@ jobs:
 `)
 }
 
-// twoWorkers maps a= and b= to two local: workers with separate roots, so
-// each has its own artifact cache — with one shared root both shims would
-// file under the same directory and "the other worker is cold" could never be
-// true.
+// twoWorkers maps a= and b= to two local: workers with separate roots, so each has its own cache namespace on the one daemon; with one root "the other worker is cold" could never be true.
 func twoWorkers(t *testing.T) (rootA, rootB string, args []string) {
 	t.Helper()
 
@@ -111,27 +114,40 @@ func placementNamed(t *testing.T, placements []store.Placement, name string) sto
 	return store.Placement{}
 }
 
-// cacheHoldsPayload reports whether a worker root's artifact cache holds a
-// blob.bin of the payload's size — the tree the producer packed, filed.
+// cacheHoldsPayload reports whether the docker+ cache of the local: worker rooted at root holds a tree at least the payload's size: its alias volumes are named for this process's namespace and a hash of the root.
 func cacheHoldsPayload(t *testing.T, root string) bool {
 	t.Helper()
 
-	held := false
+	prefix := cachePrefix(root)
 
-	_ = filepath.WalkDir(filepath.Join(root, "steps-shim", "artifacts"), func(path string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() || entry.Name() != "blob.bin" {
-			return nil //nolint:nilerr // an absent cache is "not held", not an error
+	//nolint:gosec // a filter this test built
+	out, err := exec.CommandContext(t.Context(), "docker", "volume", "ls", "--filter", "name="+prefix, "--format", `{{.Name}} {{.Label "steps.size"}}`).Output()
+	if err != nil {
+		t.Fatalf("listing the worker's cache: %v", err)
+	}
+
+	for line := range strings.Lines(string(out)) {
+		name, size, _ := strings.Cut(strings.TrimSpace(line), " ")
+
+		bytes, err := strconv.Atoi(size)
+		if strings.HasPrefix(name, prefix) && err == nil && bytes >= payloadBytes {
+			return true
 		}
+	}
 
-		info, statErr := os.Stat(path)
-		if statErr == nil && info.Size() == payloadBytes {
-			held = true
-		}
+	return false
+}
 
-		return nil
-	})
+// cachePrefix names the alias volumes of the local: worker rooted at root: this process's namespace, then a hash of the root.
+func cachePrefix(root string) string {
+	sum := sha256.Sum256([]byte(root))
 
-	return held
+	return "steps-a-" + os.Getenv("STEPS_TEST_CACHE_NAMESPACE") + hex.EncodeToString(sum[:4]) + "-"
+}
+
+// sweepCache is a local step that empties that worker's cache, as an eviction pass or an operator could.
+func sweepCache(root string) string {
+	return "docker volume ls -q --filter name=" + cachePrefix(root) + " | xargs docker volume rm -f"
 }
 
 // assertPublished checks the local step saw the producer's tree: the payload
@@ -152,6 +168,8 @@ func assertPublished(t *testing.T, dir string) {
 // stays on the worker, so the consumer's offer for it is answered "already
 // here" and only the consumer's empty output directory crosses.
 func TestEndToEndPlacedGetFeedsThePlacedTaskWithoutResending(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	rootA, _, workers := twoWorkers(t)
 	path := holderPipeline(t, dir, "a", true)
@@ -174,6 +192,8 @@ func TestEndToEndPlacedGetFeedsThePlacedTaskWithoutResending(t *testing.T) {
 // only a get's — a task's declared outputs come home and are consumed by the
 // next placed step exactly the same way.
 func TestEndToEndPlacedTaskOutputFeedsTheNextPlacedTask(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	rootA, _, workers := twoWorkers(t)
 	path := holderPipeline(t, dir, "a", false)
@@ -196,6 +216,8 @@ func TestEndToEndPlacedTaskOutputFeedsTheNextPlacedTask(t *testing.T) {
 // placed elsewhere gets the whole tree, which is what makes the two
 // assertions above mean "kept on the worker" rather than "kept somewhere".
 func TestEndToEndAnotherWorkerIsStillCold(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	rootA, rootB, workers := twoWorkers(t)
 	path := holderPipeline(t, dir, "b", false)

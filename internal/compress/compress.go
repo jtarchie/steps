@@ -3,8 +3,7 @@
 // internal/wire stays stdlib-only so the framed protocol cannot drift by
 // acquiring a dependency, and there is no zstd in the standard library — so
 // the compressing wrap lives one package over, shared by every path that
-// ships a tar stream: the venue's upload, the shim's fetch, and any blob a
-// content-addressed store holds. Compression here is a transparent stream
+// ships a tar stream: any blob a content-addressed store holds. Compression here is a transparent stream
 // wrapper: what comes out of a Reader is byte-for-byte what went into a
 // Writer, so the digest contract stays owned by the tar codec alone.
 package compress

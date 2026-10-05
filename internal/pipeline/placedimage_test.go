@@ -40,9 +40,15 @@ jobs:
 	// A worker nothing can reach, so the run has to get as far as dialling for
 	// its error to say so — which is exactly what distinguishes "went further
 	// than preflight" from "passed for the right reason by accident".
-	ctx, err := WithWorkers(context.Background(), map[string]string{"box": "ssh://nobody@127.0.0.1:1"})
+	ctx, err := WithWorkers(context.Background(), map[string]string{"box": "docker+ssh://nobody@127.0.0.1:1"})
 	if err != nil {
 		t.Fatalf("WithWorkers: %v", err)
+	}
+
+	// ssh:// refuses image: here, before any dial, which once let this test pass without the run getting anywhere near the worker.
+	err = ValidateWorkerPlacement(ctx, cfg, job)
+	if err != nil {
+		t.Fatalf("preflight refused the placement, so the run cannot reach the dial: %v", err)
 	}
 
 	t.Setenv("PATH", t.TempDir()) // empty PATH: docker cannot be found

@@ -135,12 +135,7 @@ func PackTreeAs(w io.Writer, dir, name string) error {
 
 // packName refuses a name that would pack a tree from outside root.
 //
-// unpackName's twin, and needed for the same reason on the other side: these
-// names arrive from the PEER — the shim tars whatever a fetch frame asked for
-// — so without this a FrameFetch for "../../.ssh" walks a tree outside the
-// work directory and ships it back as data frames. unpackName cannot help
-// there: it runs on the orchestrator, and whoever sent the frame is reading
-// the raw stream.
+// unpackName's twin: the names come from a pipeline's declared inputs and outputs, so without this an output named "../../.ssh" would pack a tree outside the work directory.
 func packName(root, name string) error {
 	clean := filepath.Clean(name)
 	if clean == "" || clean == "." || clean == ".." ||
@@ -155,11 +150,10 @@ func packName(root, name string) error {
 //
 // The lexical check above is not enough on its own, and the gap is reachable:
 // a step's own tree can contain a symlink — the codec round-trips one, target
-// unvalidated, so the peer can plant it with an upload — and filepath.WalkDir
+// unvalidated, so a step can plant one in its outputs — and filepath.WalkDir
 // Lstats only what it DISCOVERS. A symlink in the argument's own path is
 // resolved by the kernel before the walk begins, so "esc/id_rsa" behind
-// `esc -> /root/.ssh` packs a tree from outside the work directory and ships
-// it back as data frames, which is exactly what packName's own contract says
+// `esc -> /root/.ssh` packs a tree from outside the work directory, which is exactly what packName's own contract says
 // cannot happen.
 //
 // Resolved against the nearest EXISTING ancestor, because a named output that

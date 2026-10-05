@@ -39,6 +39,8 @@ func stepEvents(t *testing.T, pipelinePath string) []store.RunEventRow {
 // "It passes on my laptop and fails in CI" is the whole class of bug this
 // feature introduces, and the record had no column to answer it with.
 func TestEndToEndRecordsWhereAStepRan(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -48,6 +50,7 @@ jobs:
     run: "true"
   - task: there
     tags: [gpu]
+    image: `+dockerE2EImage+`
     run: "true"
 `)
 

@@ -26,13 +26,6 @@ var rootExecBit = rootExecBitAt
 
 // rootExecBitAt creates a file in dir, sets 0700 on it, reads the mode back,
 // and removes it — answering nil when it could not do that at all.
-//
-// A second copy of the probe internal/shim runs on a worker, rather than a
-// shared one, because the two answer for different machines and the
-// dependency graph keeps them apart: shim speaks the venue's wire protocol
-// and workspace does not import it outside tests. The duplication is the
-// twenty lines below; sharing it would be a new package for one function on
-// either side of a boundary that exists on purpose.
 func rootExecBitAt(dir string) *bool {
 	return rootExecBitVia(dir, func(name string) (fs.FileMode, error) {
 		info, err := os.Stat(name)

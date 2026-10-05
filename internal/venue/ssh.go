@@ -11,13 +11,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -35,26 +32,7 @@ const defaultSSHPort = "22"
 var (
 	// errNoAuth is a worker with no way to authenticate to it.
 	errNoAuth = errors.New("no SSH credentials: start an agent (ssh-add) or name a key with ?identity=")
-	// errShimDidNotStart is a pushed binary that could not run on the worker,
-	// which is nearly always an architecture mismatch.
-	errShimDidNotStart = errors.New("the pushed steps binary did not start on the worker")
 )
-
-func dialSSH(ctx context.Context, worker Worker) (*transport, error) {
-	client, err := sshClientFor(ctx, worker)
-	if err != nil {
-		return nil, err
-	}
-
-	remote, build, err := pushShim(ctx, client, worker)
-	if err != nil {
-		_ = client.Close()
-
-		return nil, err
-	}
-
-	return startShim(client, remote, build)
-}
 
 // sshClientFor authenticates to worker's sshd, host key checked, for any scheme whose transport is ssh.
 func sshClientFor(ctx context.Context, worker Worker) (*ssh.Client, error) {
@@ -86,127 +64,6 @@ func sshClientFor(ctx context.Context, worker Worker) (*ssh.Client, error) {
 	}
 
 	return ssh.NewClient(sshConn, channels, requests), nil
-}
-
-// startShim execs the pushed binary and hands back its stdio as the transport.
-func startShim(client *ssh.Client, remote, build string) (*transport, error) {
-	session, err := client.NewSession()
-	if err != nil {
-		_ = client.Close()
-
-		return nil, fmt.Errorf("opening a session: %w", err)
-	}
-
-	stdin, err := session.StdinPipe()
-	if err != nil {
-		_ = session.Close()
-		_ = client.Close()
-
-		return nil, fmt.Errorf("opening a pipe to the shim: %w", err)
-	}
-
-	stdout, err := session.StdoutPipe()
-	if err != nil {
-		_ = session.Close()
-		_ = client.Close()
-
-		return nil, fmt.Errorf("opening a pipe from the shim: %w", err)
-	}
-
-	// The channel's stderr is reserved for diagnostics and carries no protocol
-	// bytes, ever. It is the only place a binary that could not exec — the
-	// wrong architecture, a stripped loader — gets to say so, and keeping it
-	// clear is what turns that into a usable message instead of a hang.
-	diagnostics := &diagnosticBuffer{left: diagnosticBytes}
-	session.Stderr = diagnostics
-
-	// The remote login shell runs this string, so the path is quoted: it can
-	// contain anything the worker URL's path did, and a disk mounted with a
-	// space in its name would otherwise become two arguments. Everything else
-	// the shim needs arrives in the hello frame rather than as an argument,
-	// which is one fewer thing to quote in a dialect this end cannot see.
-	err = session.Start(shellQuote(remote) + " _shim")
-	if err != nil {
-		_ = session.Close()
-		_ = client.Close()
-
-		return nil, fmt.Errorf("starting the shim: %w", err)
-	}
-
-	// One waiter, started now rather than at close, for a reason that only
-	// shows up on the failure path: a binary the worker cannot exec dies
-	// immediately, and nothing else would notice. Reads on the channel do not
-	// reliably end when the remote command does, so without this the handshake
-	// waits out its whole timeout for a shim that was never going to speak.
-	//
-	// CLOSED rather than sent to. Two places ask whether the process ended —
-	// the handshake, and the teardown — and a one-shot value is consumed by
-	// whichever asks first, leaving the other waiting on something that will
-	// never arrive again. A closed channel answers everyone, forever.
-	exit := &sessionExit{done: make(chan struct{})}
-
-	go func() {
-		exit.err = session.Wait()
-		_ = session.Close()
-		close(exit.done)
-	}()
-
-	return &transport{
-		in:          io.NopCloser(stdout),
-		out:         stdin,
-		diagnostics: diagnostics.String,
-		exited:      exit.done,
-		build:       build,
-		// The session, not the pipes: stdout here is a plain Reader whose
-		// NopCloser close enforces nothing, and a blocked write needs the
-		// channel itself torn down. Closing the SSH session errors both
-		// directions at once.
-		interrupt: func() { _ = session.Close() },
-		close: func(ctx context.Context) error {
-			return closeSession(ctx, client, stdin, exit, diagnostics)
-		},
-	}, nil
-}
-
-// sessionExit is the remote process's ending, readable by everyone who asks.
-// err is written before done is closed, so a reader that saw the close sees a
-// settled value.
-type sessionExit struct {
-	done chan struct{}
-	err  error
-}
-
-// closeSession says goodbye and collects the shim's exit.
-func closeSession(ctx context.Context, client *ssh.Client, stdin io.WriteCloser, exit *sessionExit, diagnostics *diagnosticBuffer) error {
-	// Closing stdin is the goodbye the shim listens for: it removes its
-	// scratch and exits. It is also the ONLY cancellation that reliably
-	// crosses SSH — sshd does not forward signal requests to an exec channel,
-	// so a shim waiting on anything else would simply never hear.
-	_ = stdin.Close()
-
-	var err error
-
-	select {
-	case <-exit.done:
-		err = exit.err
-	case <-ctx.Done():
-		// The connection goes rather than the process: the remote side sees
-		// its stdin die either way, and this end must not hold a build open on
-		// a machine that stopped answering.
-		err = ctx.Err()
-	}
-
-	_ = client.Close()
-
-	if err != nil && !errors.Is(err, io.EOF) {
-		if note := diagnostics.String(); note != "" {
-			return fmt.Errorf("the shim exited badly: %w (worker said: %s)", err, note)
-		}
-
-		return fmt.Errorf("the shim exited badly: %w", err)
-	}
-
-	return nil
 }
 
 // sshConfig assembles credentials and host-key verification for a worker.
@@ -409,16 +266,6 @@ func pinnedHostKey(want string) ssh.HostKeyCallback {
 // errHostKeyMismatch is a worker that is not the machine it was pinned to.
 var errHostKeyMismatch = errors.New("the worker's host key does not match its hostkey= pin")
 
-// remoteShimPath is where a build of the binary lives on a worker.
-func remoteShimPath(worker Worker, build string) string {
-	root := worker.Root
-	if root == "" {
-		root = "/tmp"
-	}
-
-	return path.Join(root, "steps-shim", build, "steps")
-}
-
 // shellQuote wraps a path for the remote login shell.
 //
 // An SSH exec request is a string the far end hands to a shell, so an
@@ -428,48 +275,4 @@ func remoteShimPath(worker Worker, build string) string {
 // name should mount that disk, not fail obscurely.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// diagnosticBytes bounds how much of a worker's stderr is kept for an error
-// message. Enough for a loader's complaint, not enough for a runaway.
-const diagnosticBytes = 4 << 10
-
-// diagnosticBuffer keeps the first few kilobytes a worker wrote outside the
-// protocol, and drops the rest.
-//
-// Guarded, because the two ends of it genuinely race: the stderr copier writes
-// whenever the worker says anything, and the handshake reads it the moment it
-// decides the shim is not going to answer. That is precisely the moment a
-// worker is most likely to be mid-complaint.
-type diagnosticBuffer struct {
-	mu   sync.Mutex
-	buf  strings.Builder
-	left int
-}
-
-func (d *diagnosticBuffer) Write(p []byte) (int, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	if d.left > 0 {
-		chunk := p
-		if len(chunk) > d.left {
-			chunk = chunk[:d.left]
-		}
-
-		n, _ := d.buf.Write(chunk)
-		d.left -= n
-	}
-
-	// Always the full length: a diagnostic that could not be stored must not
-	// look like a short write to whatever is copying it.
-	return len(p), nil
-}
-
-// String is what the worker said, trimmed.
-func (d *diagnosticBuffer) String() string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	return strings.TrimSpace(d.buf.String())
 }

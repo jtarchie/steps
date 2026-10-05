@@ -25,10 +25,14 @@ func TestEndToEndWorkerRetryKeepsScratch(t *testing.T) {
 	for _, placed := range []bool{false, true} {
 		name, tags, args := "local", "", []string(nil)
 		if placed {
-			name, tags, args = "placed", "    tags: [gpu]\n", []string{"--worker", "gpu=local:"}
+			name, tags, args = "placed", "    tags: [gpu]\n    image: "+dockerE2EImage+"\n", []string{"--worker", "gpu=local:"}
 		}
 
 		t.Run(name, func(t *testing.T) {
+			if placed {
+				requireDockerE2E(t)
+			}
+
 			dir := t.TempDir()
 			path := writePipeline(t, dir, `
 jobs:

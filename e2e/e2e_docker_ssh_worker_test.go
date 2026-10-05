@@ -48,13 +48,14 @@ func TestDockerSSHWorkerRunsAPlacedStep(t *testing.T) {
 	dir := t.TempDir()
 	published := filepath.Join(dir, "published.txt")
 
+	// Unique to this test: a tree another test already placed on this daemon is a cache hit, and sends nothing.
 	path := writePipeline(t, dir, `
 jobs:
 - name: build
   plan:
   - task: prepare
     outputs: [data]
-    run: echo seed > data/seed.txt
+    run: echo seed-`+filepath.Base(dir)+` > data/seed.txt
 
   - task: remote
     tags: [box]

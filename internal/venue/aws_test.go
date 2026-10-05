@@ -40,7 +40,6 @@ const realCloudImage = "public.ecr.aws/docker/library/alpine:3"
 type awsFixture struct {
 	instance string
 	template string
-	bucket   string
 	region   string
 	fisRole  string
 }
@@ -51,26 +50,15 @@ func realAWS(t *testing.T) awsFixture {
 	fixture := awsFixture{
 		instance: os.Getenv("STEPS_TEST_AWS_INSTANCE"),
 		template: os.Getenv("STEPS_TEST_AWS_TEMPLATE"),
-		bucket:   os.Getenv("STEPS_TEST_AWS_BUCKET"),
 		region:   os.Getenv("STEPS_TEST_AWS_REGION"),
 		fisRole:  os.Getenv("STEPS_TEST_AWS_FIS_ROLE"),
 	}
 
-	if fixture.instance == "" || fixture.bucket == "" {
+	if fixture.instance == "" {
 		t.Skip("no AWS fixture — run hack/aws-fixture.sh up and export what it prints")
 	}
 
 	return fixture
-}
-
-// store is the --artifact-store URL for the fixture bucket.
-func (f awsFixture) store() string {
-	url := "s3://" + f.bucket + "/steps-test"
-	if f.region != "" {
-		url += "?region=" + f.region
-	}
-
-	return url
 }
 
 // options is the instance's region, which is NOT necessarily the caller's default and is exactly what ?region= exists to say.
@@ -90,12 +78,11 @@ func (f awsFixture) spec(cwd, worker string, outputs ...string) shell.RunnerSpec
 	}
 
 	return shell.RunnerSpec{
-		Cwd:           cwd,
-		Image:         realCloudImage,
-		Worker:        worker + sep + f.options(),
-		WorkerTag:     "aws",
-		Fetch:         outputs,
-		ArtifactStore: f.store(),
+		Cwd:       cwd,
+		Image:     realCloudImage,
+		Worker:    worker + sep + f.options(),
+		WorkerTag: "aws",
+		Fetch:     outputs,
 	}
 }
 
@@ -178,8 +165,6 @@ func TestRealAWSLaunchRungAcquiresAndTerminates(t *testing.T) {
 		t.Fatalf("ParseWorker: %v", err)
 	}
 
-	worker.ArtifactStore = fixture.store()
-
 	leases := NewLeases(map[string]Worker{"burst": worker})
 
 	t.Cleanup(func() {
@@ -215,10 +200,9 @@ func TestRealAWSLaunchRungAcquiresAndTerminates(t *testing.T) {
 	// The URL a runner re-parses has to dial the machine that was launched —
 	// the break no reviewer caught, worth proving against reality.
 	runner := newLocalRunner(t, shell.RunnerSpec{
-		Cwd:           t.TempDir(),
-		Image:         realCloudImage,
-		Worker:        resolved.URL,
-		ArtifactStore: fixture.store(),
+		Cwd:    t.TempDir(),
+		Image:  realCloudImage,
+		Worker: resolved.URL,
 	})
 
 	err = runner.Run(ctx, "true")
@@ -243,8 +227,6 @@ func TestRealAWSParkedRungStartsAndStops(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
-
-	worker.ArtifactStore = fixture.store()
 
 	leases := NewLeases(map[string]Worker{"parked": worker})
 
@@ -272,8 +254,8 @@ func TestRealAWSParkedRungStartsAndStops(t *testing.T) {
 // TestRealAWSSpotEviction is the one this whole fixture exists for.
 //
 // A spot reclamation is the only way to prove the chain end to end: the SSM
-// agent's own metadata service publishes the notice, our shim's IMDS watcher
-// sees it, relays a draining frame, and the orchestrator re-reads the failure
+// instance's metadata service publishes the notice, the IMDS watcher steps
+// runs over ssh sees it, and the orchestrator re-reads the failure
 // that follows as infrastructure rather than as the step's verdict. Every
 // link has a fake; none of the fakes can produce a real interruption.
 //
@@ -296,8 +278,6 @@ func TestRealAWSSpotEviction(t *testing.T) {
 		t.Fatalf("ParseWorker: %v", err)
 	}
 
-	worker.ArtifactStore = fixture.store()
-
 	leases := NewLeases(map[string]Worker{"spot": worker})
 
 	t.Cleanup(func() {
@@ -318,10 +298,9 @@ func TestRealAWSSpotEviction(t *testing.T) {
 	t.Logf("spot instance %s — interrupting it", resolved.Instance)
 
 	runner := newLocalRunner(t, shell.RunnerSpec{
-		Cwd:           t.TempDir(),
-		Image:         realCloudImage,
-		Worker:        resolved.URL,
-		ArtifactStore: fixture.store(),
+		Cwd:    t.TempDir(),
+		Image:  realCloudImage,
+		Worker: resolved.URL,
 	})
 
 	// Open the session first: the watcher only polls while a session is
@@ -334,7 +313,7 @@ func TestRealAWSSpotEviction(t *testing.T) {
 	interrupt(ctx, t, fixture, resolved.Instance)
 
 	// The notice reaches IMDS about two minutes before the machine goes, and
-	// the shim polls every five seconds — so a command started now should
+	// the watcher polls every five seconds — so a command started now should
 	// meet a session that has already heard, or hear it mid-run.
 	err = runner.Run(ctx, "sleep 240")
 	if err == nil {
@@ -481,8 +460,6 @@ func TestRealAWSRegistryParksOnlyAfterTheLastUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
-
-	worker.ArtifactStore = fixture.store()
 
 	registry := NewRegistry()
 	first := registry.Leases(map[string]Worker{"parked": worker})

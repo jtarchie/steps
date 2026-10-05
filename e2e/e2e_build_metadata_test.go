@@ -91,8 +91,10 @@ jobs:
 	}
 }
 
-// Crosses the orchestrator-to-shim seam through the real transport.
+// Crosses the orchestrator-to-worker seam through the real transport: build metadata rides each exec, not the container.
 func TestBuildMetadataReachesAPlacedStep(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	out := filepath.Join(dir, "seen")
 
@@ -102,8 +104,13 @@ jobs:
   plan:
   - task: stamp
     tags: [gpu]
+    image: `+dockerE2EImage+`
     inputs: []
-    run: echo "$STEPS_RUN_ID ${STEPS_WORKER-none}" > `+out+`
+    outputs: [seen]
+    run: echo "$STEPS_RUN_ID ${STEPS_WORKER-none}" > seen/ids
+  - task: publish
+    inputs: [seen]
+    run: cp seen/ids `+out+`
 `)
 
 	err := cli.Run([]string{"run", path, "--job", "placed", "--db", filepath.Join(dir, "p.db"), "--worker", "gpu=local:"})

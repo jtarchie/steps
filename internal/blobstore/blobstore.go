@@ -107,8 +107,8 @@ func New(ctx context.Context, opts Options) (*Store, error) {
 		// The SDK's default (WhenSupported) adds x-amz-checksum-mode to a
 		// GetObject and folds it into SignedHeaders. A presigned URL is then
 		// only valid for a client that sends that header — and every client
-		// that matters here sends nothing but Host: curl in the SSM bootstrap
-		// script, and net/http in the shim's data plane. Real S3 answers those
+		// that matters here sends nothing but Host: a plain GET with net/http
+		// or curl. Real S3 answers those
 		// with SignatureDoesNotMatch, 403, every time.
 		//
 		// It survived review and a full fake-backed test suite because the

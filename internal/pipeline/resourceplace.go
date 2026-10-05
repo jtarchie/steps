@@ -38,10 +38,10 @@ func WithResourcePlacement(ctx context.Context) context.Context {
 			return nil, nil
 		}
 
-		store, keep := artifactStoreFrom(ctx), keepFrom(ctx)
+		keep := keepFrom(ctx)
 
 		return func(spec shell.RunnerSpec) (shell.Runner, error) {
-			spec.Worker, spec.WorkerTag, spec.ArtifactStore, spec.Keep = worker, tag, store, keep
+			spec.Worker, spec.WorkerTag, spec.Keep = worker, tag, keep
 			spec.RemoteInputs = remoteInputsFrom(ctx)
 
 			runner, err := placedRunner(ctx, step, spec)
@@ -72,10 +72,9 @@ func placedRunner(ctx context.Context, step config.Step, spec shell.RunnerSpec) 
 	// Recomputed rather than inherited: a check's re-placement copies the spec of the machine that just died.
 	spec.ReusedWarm = reusedWarm(ctx, step)
 
-	//nolint:contextcheck // NewRunner takes no context; opening the artifact store reads only local config
-	runner, err := venue.NewRunner(spec)
+	runner, err := newRunner(spec)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // NewRunner's error already names the cause
+		return nil, err
 	}
 
 	return closingRunner{Runner: runner, onClose: func(r shell.Runner) {

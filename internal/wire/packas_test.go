@@ -9,8 +9,8 @@ import (
 
 // TestPackTreeAsIsPackPathsOfTheTreeUnderThatName pins the equality the
 // worker's cache depends on: a tree packed AS a name produces the same bytes
-// as PackPaths over a directory holding that tree under the name. The shim
-// files the former's digest; the orchestrator offers the latter's.
+// as PackPaths over a directory holding that tree under the name, so one
+// tree reached either way names one cache entry.
 func TestPackTreeAsIsPackPathsOfTheTreeUnderThatName(t *testing.T) {
 	t.Parallel()
 

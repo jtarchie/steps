@@ -13,16 +13,10 @@ import (
 // pipeline's own user: when it set one, otherwise the platform default — and
 // only when the daemon is THIS machine's.
 //
-// localDaemon is the whole subtlety. A venue forwards a socket to a worker and
-// has already made this decision there, from the worker's platform and the
-// identity its shim runs as; an empty answer out of that is a real answer,
-// meaning "defer to the image" — for a darwin worker, or one whose shim cannot
-// vouch for a uid. Read here as "the pipeline said nothing" it was replaced
-// with the ORCHESTRATOR's uid:gid: a --user computed on one machine for a bind
-// mount on another, which is precisely the wrong-machine answer
-// DefaultContainerUserFor exists to prevent. A Linux orchestrator against a
-// root shim yields --user 1000:1000 over a root-owned 0700 workdir, and the
-// step cannot write the outputs it declares.
+// localDaemon is the whole subtlety. A docker+ worker's tree lives in volumes on
+// its daemon, not in a bind mount from this machine, so this machine's uid:gid
+// would be a --user computed on one machine for a tree on another: the image's
+// own user is the answer there.
 func containerUser(configured string, localDaemon bool) string {
 	if configured != "" {
 		return configured
@@ -70,25 +64,11 @@ func containerUser(configured string, localDaemon bool) string {
 //
 //nolint:gochecknoglobals // a test seam over one platform answer, not state
 var defaultContainerUser = func() string {
-	return DefaultContainerUserFor(runtime.GOOS, os.Getuid(), os.Getgid())
+	return containerUserFor(runtime.GOOS, os.Getuid(), os.Getgid())
 }
 
-// DefaultContainerUserFor is defaultContainerUser's rule, applied to a
-// machine's facts rather than this one's.
-//
-// Exported because a PLACED containerized step bind-mounts a tree on the
-// WORKER, so every failure the rule prevents happens there, against the
-// identity the shim runs as — and the platform question is the worker's too.
-// Computing it from this process would answer about the wrong machine
-// entirely: a Linux orchestrator against a root shim yields --user 1000:1000
-// over a root-owned 0700 workdir, which cannot even be read.
-//
-// A negative uid is "cannot say" — Windows has no answer, and neither does a
-// shim too old to send one. That defers to the image, which is what Concourse
-// does with an unset user; it is the right answer wherever the daemon is not
-// bind-mounting a foreign-owned tree, and the only honest one when the
-// identity is unknown.
-func DefaultContainerUserFor(goos string, uid, gid int) string {
+// containerUserFor is defaultContainerUser's rule over a machine's facts. A negative uid is "cannot say" (Windows), which defers to the image, as Concourse does with an unset user.
+func containerUserFor(goos string, uid, gid int) string {
 	if goos != "linux" || uid < 0 || gid < 0 {
 		return ""
 	}

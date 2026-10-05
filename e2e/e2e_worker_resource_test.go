@@ -1,11 +1,12 @@
 package e2e
 
 // End-to-end placement of RESOURCES: a resource's check, in and out on a
-// worker, through the real CLI, onto a real shim.
+// worker, through the real CLI, onto this machine's docker daemon.
 //
-// Same transport as the task tests (local: runs the shim as a child process),
-// and the same proof: STEPS_WORKER is set only inside a placed command, so a
-// command that reports it ran through a venue rather than here.
+// Same transport as the task tests (local: drives the local daemon as a
+// docker+ worker), and the same proof: STEPS_WORKER is set only inside a
+// placed command, so a command that reports it ran through a venue rather
+// than here.
 
 import (
 	"context"
@@ -27,6 +28,7 @@ import (
 const probeType = `
 resource_types:
 - name: probe
+  image: ` + dockerE2EImage + `
   config:
     check: printf '[{"ref":"v1","where":"%s"}]' "${STEPS_WORKER:-here}"
     in: printf '%s/%s' {{ .version.where | shellquote }} "${STEPS_WORKER:-here}" > where.txt
@@ -95,6 +97,8 @@ func checkedVersionsIn(t *testing.T, state, name string) []map[string]any {
 // worker, and the fetched bytes still come home for the local step that
 // reads them.
 func TestEndToEndResourceTagPlacesCheckInAndOut(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	path := resourceWorkerPipeline(t, dir)
 
@@ -155,6 +159,8 @@ func assertRecordedOnWorker(t *testing.T, path string) {
 // TestEndToEndStepTagOverridesResourceTag: the step's own tags: wins over the
 // resource's, so one pipeline can fetch a resource from two places.
 func TestEndToEndStepTagOverridesResourceTag(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, probeType+`
 resources:
@@ -188,6 +194,8 @@ jobs:
 // out of the hash holds for a get too — a second run skips the placed fetch
 // and everything under it.
 func TestEndToEndPlacedGetCachesLikeALocalOne(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, probeType+`
 resources:
@@ -249,6 +257,8 @@ func TestEndToEndUnmappedResourceTagRefusesBeforeRunning(t *testing.T) {
 // only reachable from a worker has to be polled from there. One poll, through
 // the CLI, with a lease of its own.
 func TestEndToEndPollerChecksOnTheResourceWorker(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, probeType+`
 resources:
@@ -317,6 +327,8 @@ jobs:
 // get's OWN check rather than by recorded history, so this is the one run
 // where the check inside version resolution has to be placed too.
 func TestEndToEndPinnedGetChecksOnTheResourceWorker(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, probeType+`
 resources:
@@ -343,47 +355,12 @@ jobs:
 	}
 }
 
-// TestEndToEndPutEvictionSpendsNoAttempts: the eviction promise a task has,
-// held for a resource stage — a put reclaimed mid-command ends its attempts:
-// loop rather than grinding the author's budget against a dead host.
-func TestEndToEndPutEvictionSpendsNoAttempts(t *testing.T) {
-	dir := t.TempDir()
-	count := filepath.Join(dir, "execs")
-	t.Setenv(drainingWorkerEnv, count)
-
-	path := writePipeline(t, dir, probeType+`
-resources:
-- name: repo
-  type: probe
-  tags: [gpu]
-  source: {}
-
-jobs:
-- name: build
-  plan:
-  - put: repo
-    attempts: 5
-`)
-
-	err := cli.Run([]string{path, "--worker", "gpu=local:"})
-	if err == nil {
-		t.Fatal("a put on a permanently reclaimed worker reported success")
-	}
-
-	if !strings.Contains(err.Error(), "reclaimed") {
-		t.Errorf("error = %v, want it to say the worker was reclaimed", err)
-	}
-
-	execs := readFileString(t, count)
-	if len(execs) != 1 {
-		t.Fatalf("the worker saw %d commands, want 1 — the eviction was billed to the author's attempts:", len(execs))
-	}
-}
-
 // TestEndToEndPutHookIsRecordedOnTheResourceWorker: a put hook inherits its
 // resource's tag like a plan put, and is recorded under the hook's own scope
 // — a hook has no node — so the machine it billed is not lost.
 func TestEndToEndPutHookIsRecordedOnTheResourceWorker(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, probeType+`
 resources:
@@ -412,42 +389,6 @@ jobs:
 	}
 
 	t.Fatal("no run_placements row for the put hook — the machine it ran on was not recorded")
-}
-
-// TestEndToEndEvictionIsNotAFailure: a worker the cloud took away is
-// infrastructure, not the step saying no — on_error, never on_failure. The
-// shim reports the reclaimed command as a signalled exit, which used to
-// classify as the step failing.
-//
-// The hooks sit on an untagged do: around the step: on the step itself they
-// would inherit its tag and be sent to the reclaimed worker too.
-func TestEndToEndEvictionIsNotAFailure(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv(drainingWorkerEnv, filepath.Join(dir, "execs"))
-
-	path := writePipeline(t, dir, `
-jobs:
-- name: build
-  plan:
-  - do:
-    - task: doomed
-      tags: [gpu]
-      run: echo never-finishes
-    on_failure:
-      task: note
-      run: echo failed > `+filepath.Join(dir, "on-failure.txt")+`
-    on_error:
-      task: note
-      run: echo errored > `+filepath.Join(dir, "on-error.txt")+`
-`)
-
-	err := cli.Run([]string{path, "--worker", "gpu=local:"})
-	if err == nil {
-		t.Fatal("a step on a permanently reclaimed worker reported success")
-	}
-
-	readFileString(t, filepath.Join(dir, "on-error.txt"))
-	assertNoFile(t, filepath.Join(dir, "on-failure.txt"))
 }
 
 // TestEndToEndOverriddenResourceTagIsStillValidated: a get that overrides its
@@ -489,13 +430,16 @@ jobs:
 // live checks, so a tagged resource's check has to go where a run's would —
 // and be refused, not quietly run here, when nothing maps the tag.
 func TestEndToEndPlanChecksOnTheResourceWorker(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
-	marker := filepath.Join(dir, "checked-from")
+	// The check runs in a container, so it says where it ran in its streamed stderr rather than in a host file.
 	path := writePipeline(t, dir, `
 resource_types:
 - name: probe
+  image: `+dockerE2EImage+`
   config:
-    check: printf '%s' "${STEPS_WORKER:-here}" > `+marker+` && echo '[{"ref":"v1"}]'
+    check: echo "checked-on-${STEPS_WORKER:-here}" >&2 && printf '[{"ref":"v1"}]'
     in: "true"
 
 resources:
@@ -510,6 +454,9 @@ jobs:
   - get: repo
 `)
 
+	// A check's output streams to stderr, prefixed with its name.
+	stderr := captureStderr(t)
+
 	err := cli.Run([]string{"plan", path})
 	if err == nil {
 		t.Fatal("plan checked a resource whose tag maps to nothing")
@@ -521,11 +468,16 @@ jobs:
 		t.Errorf("error = %v, want the same refusal a run gives before it starts", err)
 	}
 
-	assertNoFile(t, marker)
+	if strings.Contains(stderr(), "[probe check]") {
+		t.Errorf("the refused plan ran the check anyway:\n%s", stderr())
+	}
 
-	mustRun(t, "plan", path, "--worker", "vpc=local:")
+	_ = captureStdout(t, func() { err = cli.Run([]string{"plan", path, "--worker", "vpc=local:"}) })
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
 
-	if got := readFileString(t, marker); got != "vpc" {
-		t.Errorf("plan checked from %q, want the worker", got)
+	if !strings.Contains(stderr(), "checked-on-vpc") {
+		t.Errorf("plan did not check from the worker:\n%s", stderr())
 	}
 }

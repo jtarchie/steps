@@ -300,7 +300,7 @@ func TestPresignedURLsWorkWithPlainHTTP(t *testing.T) {
 // The SDK's default checksum behavior adds x-amz-checksum-mode to a GetObject
 // and folds it into SignedHeaders, which makes the URL valid ONLY for a
 // client that sends that header. Everything that ever fetches one of ours
-// sends nothing but Host — curl in the SSM bootstrap, net/http in the shim —
+// sends nothing but Host — a plain GET from net/http or curl —
 // so real S3 answered 403 SignatureDoesNotMatch every time, while the fake
 // above answered 200 to anything request-shaped.
 //

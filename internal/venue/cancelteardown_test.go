@@ -35,13 +35,7 @@ func TestACancelledCommandStillRemovesItsContainer(t *testing.T) {
 
 	before := ownContainers(t)
 
-	previousGrace := dockerHandoffGrace
-	dockerHandoffGrace = time.Nanosecond
-
-	t.Cleanup(func() { dockerHandoffGrace = previousGrace })
-
 	spec := localWorker(t, t.TempDir())
-	spec.Image = "alpine:3"
 
 	placed, err := NewRunner(spec)
 	if err != nil {

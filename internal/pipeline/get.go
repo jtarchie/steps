@@ -626,7 +626,7 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, st store.Deliveries, 
 		// fetch, before the resource cache looks at the directory it filled.
 		held, holder := heldFrom(ctx)
 
-		return holdRemoteOutputs(ctx, bw, []string{artifact}, nil, held, holder)
+		return holdRemoteOutputs(bw, []string{artifact}, nil, held, holder)
 	}
 
 	if resourceType.Config.Backend() == config.BackendWebhook {

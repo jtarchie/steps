@@ -1,30 +1,23 @@
 package venue
 
-// The six Runner methods, over one wire operation.
-//
-// They differ only in what this end does with the bytes — stream them, keep
-// them, bound them — and in whether a nonzero exit is an error or a fact.
-// DockerRunner already proved that shape: five public methods over one private
-// dockerExec. Anything else would be six chances for the remote path to
-// disagree with the local one about what a command did.
+// What every placed runner shares: how one command's output is streamed, captured and bounded, and when a failure is the machine leaving rather than the command answering.
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
-	"github.com/jtarchie/steps/internal/wire"
 )
 
-// runner executes a step's commands on a worker. It holds the session by
-// pointer so a WithLabel copy shares one worker rather than opening a second.
-type runner struct {
-	label   string
-	session *session
-}
+// ErrEvicted is a step whose worker was taken away underneath it: a deliberate divergence from Concourse, which errors the build, because spending an author's attempts: on the cloud reclaiming a machine charges them for what they neither caused nor can fix.
+var ErrEvicted = errors.New("the worker was reclaimed while the step was running")
+
+// closeTimeout bounds a teardown, which runs from deferred paths whose context has usually already ended: leaving scratch on somebody else's machine would be worst exactly then.
+var closeTimeout = 30 * time.Second //nolint:gochecknoglobals // a test seam for a wait on another machine
 
 // plan is what this end does with one command's output.
 type plan struct {
@@ -34,56 +27,6 @@ type plan struct {
 	maxBytes     int
 	spillDir     string
 }
-
-// Run streams live and treats any nonzero exit as an error.
-func (r runner) Run(ctx context.Context, command string) error {
-	_, _, err := r.execute(ctx, command, plan{streamStdout: true, streamStderr: true})
-
-	return err
-}
-
-// RunStreamedCapture is Run, keeping what it streamed.
-func (r runner) RunStreamedCapture(ctx context.Context, command string, maxBytes int) (string, string, error) {
-	return r.execute(ctx, command, plan{streamStdout: true, streamStderr: true, capture: true, maxBytes: maxBytes})
-}
-
-// RunCapture keeps stdout and streams stderr live.
-func (r runner) RunCapture(ctx context.Context, command string) ([]byte, error) {
-	stdout, _, err := r.execute(ctx, command, plan{streamStderr: true, capture: true})
-	if err != nil {
-		return nil, err
-	}
-
-	return []byte(stdout), nil
-}
-
-// RunCaptureFull reports a nonzero exit as data.
-func (r runner) RunCaptureFull(ctx context.Context, command string) (string, string, int, error) {
-	return r.executeFull(ctx, command, plan{capture: true})
-}
-
-// RunCaptureFullLimited is RunCaptureFull with each stream bounded.
-func (r runner) RunCaptureFullLimited(ctx context.Context, command string, maxBytes int, spillDir string) (string, string, int, error) {
-	return r.executeFull(ctx, command, plan{capture: true, maxBytes: maxBytes, spillDir: spillDir})
-}
-
-// RunCaptureFullLimitedStreamed is RunCaptureFullLimited that also streams.
-func (r runner) RunCaptureFullLimitedStreamed(ctx context.Context, command string, maxBytes int, spillDir string) (string, string, int, error) {
-	return r.executeFull(ctx, command, plan{
-		streamStdout: true, streamStderr: true, capture: true, maxBytes: maxBytes, spillDir: spillDir,
-	})
-}
-
-// WithLabel is entirely local: it changes how this end prints what the worker
-// sent, and nothing crosses the wire.
-func (r runner) WithLabel(label string) shell.Runner {
-	r.label = label
-
-	return r
-}
-
-// Close releases the worker.
-func (r runner) Close() error { return r.session.close() }
 
 // ReclaimedBy reports whether the worker a runner used said it was definitely
 // going away, and what it said.
@@ -104,111 +47,7 @@ func ReclaimedBy(runner shell.Runner) (string, bool) {
 	return placed.reclaimed()
 }
 
-// reclaimed is ReclaimedBy's implementation, unexported so the question is
-// asked through the package function rather than by type-asserting a shape.
-func (r runner) reclaimed() (string, bool) { return r.session.reclaimedBy() }
-
-// execute is the error-returning half: a nonzero exit becomes a Go error, as
-// it does for Run, RunStreamedCapture and RunCapture.
-func (r runner) execute(ctx context.Context, command string, p plan) (string, string, error) {
-	stdout, stderr, runErr := r.exchange(ctx, command, p)
-	if runErr != nil {
-		return stdout, stderr, fmt.Errorf("command %q failed: %w", command, shell.WrapIfCanceled(ctx, runErr))
-	}
-
-	return stdout, stderr, nil
-}
-
-// executeFull is the exit-as-data half. It returns an error only when the
-// command never ran, which is the distinction every RunCaptureFull* caller
-// depends on — a guard that could not run is not a guard that said no.
-func (r runner) executeFull(ctx context.Context, command string, p plan) (string, string, int, error) {
-	stdout, stderr, runErr := r.exchange(ctx, command, p)
-	if runErr == nil {
-		return stdout, stderr, 0, nil
-	}
-
-	// Before the exit-as-data conversion, because an eviction can WEAR an
-	// exit: the reclaimed machine's shutdown signals the command, the shim
-	// reports a started-and-signalled exit, and asEviction wraps it — but
-	// errors.As sees the ExitError through the wrap, so converting here
-	// would return the -1 as data and silently drop the classification.
-	// For a guard that is the worst possible reading: the machine dying
-	// would be recorded as the guard saying no, and the work it gates
-	// skipped with no red anywhere.
-	if errors.Is(runErr, ErrEvicted) {
-		return "", "", -1, fmt.Errorf("command %q: %w", command, runErr)
-	}
-
-	if !shell.IsExitError(runErr) {
-		return "", "", -1, fmt.Errorf("command %q failed to start: %w", command, runErr)
-	}
-
-	return stdout, stderr, exitCodeOf(runErr), nil
-}
-
-// exchange runs one command and returns its streams, plus nil, a
-// *shell.ExitError, or an infrastructure error.
-func (r runner) exchange(ctx context.Context, command string, p plan) (outText, errText string, err error) {
-	// Every failure out of this call is re-read once the work is done: a
-	// worker that announced its own end turns an infrastructure failure into
-	// ErrEvicted, which the pipeline retries without spending the author's
-	// attempts: budget. Nothing else about the classification changes — an
-	// ExitError is still the command's own verdict, drained or not.
-	defer func() { err = r.asEviction(err) }()
-
-	err = r.session.ensure(ctx)
-	if err != nil {
-		return "", "", err
-	}
-
-	// A placed step that names an image runs its command in a container ON
-	// the worker. The tree still went out the venue's way and the outputs
-	// still come back it; only what runs the command differs.
-	if r.session.container.Image != "" {
-		return r.exchangeContained(ctx, command, p)
-	}
-
-	stdout, stderr, sinks := r.sinks(ctx, p)
-
-	exit, err := r.session.run(ctx, command, sinks)
-
-	sinks.flush()
-
-	if err != nil {
-		return stdout.result(), stderr.result(), err
-	}
-
-	// Before returning, not at capture time: an assert: on this step is
-	// checked against the local tree the moment this call returns.
-	err = r.session.fetch(ctx)
-	if err != nil {
-		return stdout.result(), stderr.result(), err
-	}
-
-	return stdout.result(), stderr.result(), r.runError(command, exit)
-}
-
-// asEviction re-reads a failure as an eviction when the worker had already
-// said it was definitely going away.
-//
-// The line is what the command's exit code MEANS. A command that ran and
-// chose a nonzero status said something about the step, and a machine
-// disappearing afterwards does not unsay it — re-running there would repeat
-// work whose answer was already given. But a reclaimed instance runs its
-// shutdown, init signals the command, and the shim reports that as an exit
-// with code -1 (see internal/shim's exec: a signalled command reports the
-// same sentinel os/exec uses locally). That is the machine ending the
-// command, not the command answering, and it is the SHAPE A REAL EVICTION
-// USUALLY TAKES — a session dying with no exit frame at all is the rarer
-// case. So a signalled exit on a worker under a reclamation notice is
-// infrastructure; every other exit stays the step's own verdict.
-func (r runner) asEviction(err error) error {
-	reason, reclaimed := r.session.reclaimedBy()
-
-	return asEvictionOf(err, reason, reclaimed)
-}
-
+// asEvictionOf reads a failure on a machine that announced its own reclamation as an eviction, unless the command answered for itself: a signalled exit is the machine ending it, any other exit code is the step's verdict.
 func asEvictionOf(err error, reason string, reclaimed bool) error {
 	if err == nil || !reclaimed {
 		return err
@@ -228,13 +67,11 @@ func asEvictionOf(err error, reason string, reclaimed bool) error {
 // signalledExit reports the codes that mean "the machine ended this command"
 // rather than "the command answered".
 //
-// Two spellings, because a placed step has two runners. Executed directly, the
-// shim reports os/exec's own -1 for a signalled command. Run in a CONTAINER on
-// the worker, the code comes from `docker exec`, which reports a
-// signal-killed process as 128+N and can never say -1 — so the classification
-// this whole function exists for could not fire on the container path at all,
-// and a reclamation was billed to the pipeline author's attempts: budget as
-// the step's own verdict.
+// Two spellings, because a placed step has two runners. Over ssh, a command
+// killed by a signal reports os/exec's own -1. Run in a CONTAINER, the code
+// comes from `docker exec`, which reports a signal-killed process as 128+N
+// and can never say -1 — reading only one spelling billed a reclamation to
+// the pipeline author's attempts: budget as the step's own verdict.
 //
 // Only consulted once the worker has ALREADY said it is being reclaimed, so a
 // container that legitimately exits 137 on a healthy machine — an OOM kill of
@@ -256,23 +93,6 @@ func signalledExit(code int) bool {
 	}
 }
 
-// runError turns the worker's answer into the error shape the pipeline reads.
-func (r runner) runError(command string, exit wire.Exit) error {
-	if !exit.Started {
-		// Deliberately NOT a shell.ExitError. guard.go turns a plain error into
-		// "the guard command could not run" and fails the step; an ExitError
-		// here would let an unreachable worker read as a guard that answered
-		// no, and silently skip the work it was gating.
-		return fmt.Errorf("worker %q: command %q never started: %s", r.session.worker, command, exit.Reason)
-	}
-
-	if exit.Code == 0 {
-		return nil
-	}
-
-	return &shell.ExitError{Command: command, Venue: r.session.worker.String(), Code: exit.Code}
-}
-
 // stream is one of a command's two output streams on this end.
 type stream struct {
 	capture *shell.Capture
@@ -286,28 +106,6 @@ func (s stream) result() string {
 	}
 
 	return s.capture.Result()
-}
-
-// exchangeContained is exchange's other half: the command runs in a container
-// on the worker, and the step's outputs are fetched back exactly as they are
-// for one that ran beside it.
-func (r runner) exchangeContained(ctx context.Context, command string, p plan) (string, string, error) {
-	stdout, stderr, exit, err := r.runContained(ctx, command, p)
-	if err != nil {
-		return stdout, stderr, err
-	}
-
-	err = r.session.fetch(ctx)
-	if err != nil {
-		return stdout, stderr, err
-	}
-
-	return stdout, stderr, r.runError(command, exit)
-}
-
-// sinks builds the two streams a plan asks for.
-func (r runner) sinks(ctx context.Context, p plan) (stream, stream, outputSinks) {
-	return sinksFor(ctx, r.label, p)
 }
 
 func sinksFor(ctx context.Context, label string, p plan) (stdout, stderr stream, out outputSinks) {

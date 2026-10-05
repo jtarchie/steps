@@ -104,10 +104,12 @@ func TestEndToEndGitHubPRFetchesTheTreeAndComments(t *testing.T) {
 // process, and a placed task reads it on the worker — the artifact travels
 // the way any fetched tree does.
 func TestEndToEndGitHubPRTreeReachesAWorker(t *testing.T) {
+	requireDockerE2E(t)
+
 	fake := newFakeGitHub(t)
 	fake.addPR(reviewablePR())
 
-	path := writePipeline(t, t.TempDir(), githubPipeline(fake, "\n    tags: [vpc]"))
+	path := writePipeline(t, t.TempDir(), githubPipeline(fake, "\n    tags: [vpc]\n    image: "+dockerE2EImage))
 	mustRun(t, "run", path, "--job", "review", "--worker", "vpc=local:")
 
 	assertReviewed(t, fake, "vpc")

@@ -41,7 +41,7 @@ func placeAt(ctx context.Context, t *testing.T, st store.Store, placement store.
 // pointers.
 //
 // uid 0 is root, which is the ordinary answer under the aws:// bootstrap, and
-// a shim on a platform that cannot say reports nothing at all. Stored as
+// a worker that cannot say reports nothing at all. Stored as
 // plain integers those two collapse into the same row, and they demand
 // opposite readings: "this ran as root" is a finding, "we do not know who
 // this ran as" is a gap.
@@ -62,7 +62,7 @@ func (s suite) TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 		UID: &root, GID: &root, Image: "golang:1.25", BytesSent: 4096, BytesReceived: 8192,
 	})
 
-	// A machine steps did not acquire, run by a user the shim did not name.
+	// A machine steps did not acquire, run by a user the worker did not name.
 	placeAt(ctx, t, st, store.Placement{
 		RunID: "BBBB2222", StepIndex: 0, StepName: "on-ssh", JobName: "build",
 		NodeHash: hashOf(2), Tag: "box", Address: "ssh://box",
@@ -87,7 +87,7 @@ func (s suite) TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 	}
 
 	if onSSH.UID != nil {
-		t.Errorf("uid = %d for a shim that did not say, want nothing — an invented 0 reads as root", *onSSH.UID)
+		t.Errorf("uid = %d for a worker that did not say, want nothing — an invented 0 reads as root", *onSSH.UID)
 	}
 }
 

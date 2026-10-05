@@ -7,7 +7,7 @@
 # a community Go port), and its own tests use a fake relay written from the
 # same reading — a shared misreading passes both sides. Only Google's real
 # relay settles it. Likewise instances.simulateMaintenanceEvent is the only
-# way to see a real preemption travel metadata → draining frame → eviction.
+# way to see a real preemption travel metadata → drain watcher → eviction.
 #
 #   hack/gcp-fixture.sh up      # create, print the env to export
 #   hack/gcp-fixture.sh env     # re-print the env for an existing fixture
@@ -218,7 +218,6 @@ down() {
     gcloud_ compute firewall-rules delete "$NAME-iap" --quiet >/dev/null
   fi
 
-  rm -rf "$PWD/.gcp-fixture"
   say "done — check 'gcloud compute instances list' and 'gcloud compute disks list' for orphans"
 }
 

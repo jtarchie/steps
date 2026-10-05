@@ -244,7 +244,6 @@ func (e ExecFlags) Apply(ctx context.Context) (context.Context, error) {
 		return nil, fmt.Errorf("%w", err)
 	}
 
-	ctx = pipeline.WithArtifactStore(ctx, e.ArtifactStore)
 	ctx = pipeline.WithKeepWorkspace(ctx, e.KeepWorkspace)
 
 	ctx, err = pipeline.WithAnswers(ctx, e.Answer)

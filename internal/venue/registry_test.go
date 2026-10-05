@@ -1008,8 +1008,6 @@ func TestRegistryKeysALaunchedMachineOnWhatDecidesIt(t *testing.T) {
 		{"on-demand spelled out", lt + "?capacity=od", lt, 1},
 		{"default version spelled out", lt + "?version=default", lt, 1},
 		{"default version in EC2's spelling", lt + "?version=$Default", lt, 1},
-		{"another shim", lt + "?shim=/opt/steps", lt + "?shim=/usr/local/bin/steps", 1},
-		{"another binary", lt + "?binary=/tmp/a", lt + "?binary=/tmp/b", 1},
 		{"gcp idle", "gcp://launch/tpl-1?project=p&zone=us-central1-a&idle=5m", "gcp://launch/tpl-1?zone=us-central1-a&project=p", 1},
 		{"another version", lt + "?version=1", lt + "?version=2", 2},
 		{"latest is not a number", lt + "?version=$Latest", lt + "?version=1", 2},

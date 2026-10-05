@@ -5,6 +5,7 @@ package venue
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -31,6 +33,7 @@ import (
 const plusWorkdir = "/steps/work"
 
 var (
+	errLocalDaemon     = errors.New("local: reaches this machine's docker daemon")
 	errNoImageOnDocker = errors.New("a docker+ worker runs every step in a container, and this step names no image")
 	errPlusClosed      = errors.New("the worker session is closed")
 )
@@ -44,8 +47,13 @@ type plusRunner struct {
 type plusSession struct {
 	worker Worker
 	spec   shell.RunnerSpec
+	// reach is nil for local:, whose daemon is this machine's.
 	reach  func(context.Context, Worker) (*ssh.Client, error)
 	socket string
+	// namespace keeps workers sharing one daemon from sharing its cache.
+	namespace string
+	// goos and goarch are the daemon's own, for the placement record.
+	goos, goarch string
 	// drainScript watches the machine's metadata for its own reclamation; empty for a machine nobody reclaims.
 	drainScript string
 	drain       atomic.Pointer[string]
@@ -55,12 +63,14 @@ type plusSession struct {
 	startErr  error
 	closed    bool
 
-	ssh     *ssh.Client
-	docker  *dockerapi.Client
-	inner   shell.Runner
-	holder  string
-	work    string
-	volumes []string
+	ssh    *ssh.Client
+	docker *dockerapi.Client
+	inner  shell.Runner
+	holder string
+	work   string
+	// emptyTree is a step whose tree began empty with nothing mounted into it, so the work volume alone is the tree.
+	emptyTree bool
+	volumes   []string
 	// outputs are the declared outputs that got a plain volume of their own: only those can be held, since an overlay's data is visible only while something mounts it.
 	outputs map[string]string
 	// fresh are the volumes this session made empty, whose roots it opens to the step's user.
@@ -85,7 +95,10 @@ func newPlusSession(worker Worker, spec shell.RunnerSpec) *plusSession {
 		s.reach, s.drainScript, s.socket = awsSSHClient, awsDrainScript(), cloudDockerSocket
 	case SchemeGCP:
 		s.reach, s.drainScript, s.socket = gcpDockerClient, gcpDrainScript(), cloudDockerSocket
-	case SchemeLocal, SchemeSSH, SchemeDockerSSH:
+	case SchemeLocal:
+		// This machine's own daemon, no ssh; the root names a cache of its own, so two local: workers on one daemon are two caches.
+		s.namespace = localNamespace(worker.Root)
+	case SchemeSSH, SchemeDockerSSH:
 		s.reach = sshClientFor
 	}
 
@@ -239,10 +252,19 @@ func (s *plusSession) ensure(ctx context.Context) (shell.Runner, error) {
 
 func (s *plusSession) daemonName() string { return s.worker.Address() + ":" + s.socket }
 
+// unanswered reads a failed dial. A machine handed out from its idle window with nothing proving it alive that no longer answers was most likely reclaimed while kept warm, so it is re-placed rather than failed; never under a context already ended, which is the job stopping.
+func (s *plusSession) unanswered(ctx context.Context, err error) error {
+	if s.spec.ReusedWarm && ctx.Err() == nil {
+		return fmt.Errorf("%w (the machine kept warm did not answer): %w", ErrEvicted, err)
+	}
+
+	return err
+}
+
 func (s *plusSession) connect(ctx context.Context) error {
 	dial, err := s.dialDaemon(ctx)
 	if err != nil {
-		return err
+		return s.unanswered(ctx, err)
 	}
 
 	s.watchDrain()
@@ -339,6 +361,8 @@ func (s *plusSession) compose(ctx context.Context) ([]string, []string, error) {
 		mounts = append(mounts, volumeMount(volume, path.Join(plusWorkdir, name), false))
 	}
 
+	s.emptyTree = len(mounts) == 1 && len(files) == 0
+
 	return mounts, files, nil
 }
 
@@ -397,8 +421,26 @@ func (s *plusSession) pourFiles(ctx context.Context, names []string) error {
 	return nil
 }
 
-// dialDaemon reaches the daemon and readies the busybox every holder and digest runs on, all before any file moves.
-func (s *plusSession) dialDaemon(ctx context.Context) (func(context.Context) (net.Conn, error), error) {
+// daemonDialer opens what the engine API rides on: a streamlocal channel over ssh, or for local: this machine's own socket.
+func (s *plusSession) daemonDialer(ctx context.Context) (func(context.Context) (net.Conn, error), error) {
+	if s.reach == nil {
+		host, err := dockerapi.ResolveHost()
+		if err != nil {
+			return nil, fmt.Errorf("%w", err)
+		}
+
+		network, address, ok := strings.Cut(host, "://")
+		if !ok || (network != "unix" && network != "tcp") {
+			return nil, fmt.Errorf("%w: this machine's docker host %q is neither a unix socket nor tcp", errLocalDaemon, host)
+		}
+
+		s.socket = address
+
+		return func(ctx context.Context) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, address)
+		}, nil
+	}
+
 	client, err := s.reach(ctx, s.worker)
 	if err != nil {
 		return nil, err
@@ -407,7 +449,26 @@ func (s *plusSession) dialDaemon(ctx context.Context) (func(context.Context) (ne
 	s.ssh = client
 	keepAlive(client)
 
-	dial := func(ctx context.Context) (net.Conn, error) { return client.DialContext(ctx, "unix", s.socket) }
+	return func(ctx context.Context) (net.Conn, error) { return client.DialContext(ctx, "unix", s.socket) }, nil
+}
+
+// localNamespace is "" for a bare local: and a short hash of the root otherwise.
+func localNamespace(root string) string {
+	if root == "" {
+		return ""
+	}
+
+	sum := sha256.Sum256([]byte(root))
+
+	return hex.EncodeToString(sum[:4]) + "-"
+}
+
+// dialDaemon reaches the daemon and readies the busybox every holder and digest runs on, all before any file moves.
+func (s *plusSession) dialDaemon(ctx context.Context) (func(context.Context) (net.Conn, error), error) {
+	dial, err := s.daemonDialer(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	s.docker, err = dockerapi.NewDialer(s.daemonName(), dial)
 	if err != nil {
@@ -416,8 +477,13 @@ func (s *plusSession) dialDaemon(ctx context.Context) (func(context.Context) (ne
 
 	// Named here: a socket nothing listens on is otherwise the first PutArchive's opaque failure.
 	err = s.docker.Ping(ctx)
+	if err == nil {
+		// Recorded, not relied on: a missing answer leaves the placement without a platform.
+		s.goos, s.goarch, _ = s.docker.Platform(ctx)
+	}
+
 	if err != nil {
-		return nil, fmt.Errorf("the docker daemon at %s did not answer: %w (the worker's sshd must allow AllowTcpForwarding local and AllowStreamLocalForwarding, and the ssh user must be able to open the socket — usually the docker group)", s.socket, err)
+		return nil, fmt.Errorf("the docker daemon at %s did not answer: %w (the worker's sshd needs AllowTcpForwarding local or yes — OpenSSH refuses a socket forward without it — and the ssh user must be able to open the socket, usually through the docker group)", s.socket, err)
 	}
 
 	// Containers a dead steps process on this machine left on the worker; nothing else would ever reclaim them.
@@ -486,18 +552,25 @@ func (s *plusSession) fetch(ctx context.Context) error {
 	s.fetchMu.Lock()
 	defer s.fetchMu.Unlock()
 
+	if s.spec.FetchAll && s.spec.DeferFetch && s.emptyTree {
+		// A get's tree is the work volume alone, so it is held whole, under the artifact name the next step offers it by.
+		s.outputs[filepath.Base(s.spec.Cwd)] = s.work
+
+		return s.fetchDeclared(ctx, filepath.Base(s.spec.Cwd))
+	}
+
 	if s.spec.FetchAll {
-		// ponytail: a FetchAll tree always comes home; holding it needs the work volume free of input mounts, which only a get's empty tree is.
+		// A tree with inputs mounted into it is several volumes, not one to hold.
 		return s.fetchInto(ctx, plusWorkdir+"/.", s.spec.Cwd, "")
 	}
 
-	return s.fetchDeclared(ctx)
+	return s.fetchDeclared(ctx, s.spec.Fetch...)
 }
 
-func (s *plusSession) fetchDeclared(ctx context.Context) error {
+func (s *plusSession) fetchDeclared(ctx context.Context, names ...string) error {
 	held, sizes := map[string]string{}, map[string]int64{}
 
-	for _, name := range s.spec.Fetch {
+	for _, name := range names {
 		// Digested now, so HeldOf can answer; published only at close, once nothing writes the volume.
 		if volume, ok := s.outputs[name]; ok && s.spec.DeferFetch {
 			digest, size, err := s.measure(ctx, volume)
@@ -619,6 +692,9 @@ func (s *plusSession) placement() (Placement, bool) {
 	return Placement{
 		Tag:           s.spec.WorkerTag,
 		Address:       s.worker.Address(),
+		Instance:      s.worker.Instance,
+		GOOS:          s.goos,
+		GOARCH:        s.goarch,
 		Workdir:       plusWorkdir,
 		Image:         s.spec.Image,
 		BytesSent:     s.sent.Load(),

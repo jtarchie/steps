@@ -450,7 +450,6 @@ down() {
     fi
   done
 
-  rm -rf "$PWD/.aws-fixture"
   say "done"
 }
 

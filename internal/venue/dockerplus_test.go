@@ -538,3 +538,51 @@ func TestDockerPlusSweepsAContainerADeadProcessLeft(t *testing.T) {
 		t.Fatal("the orphaned container is still on the worker")
 	}
 }
+
+// A get's in: fills its whole, empty tree; that tree stays on the worker under the artifact's name, as a task's output does, so a consumer there is not sent it back.
+func TestDockerPlusHoldsAGetsWholeTree(t *testing.T) {
+	socket := hostDockerSocket(t)
+
+	worker := dockerPlusURL(testsshd.New(t), socket)
+	cwd := filepath.Join(t.TempDir(), "src")
+
+	err := os.Mkdir(cwd, 0o750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner, err := NewRunner(shell.RunnerSpec{Image: "alpine:3", Cwd: cwd, FetchAll: true, DeferFetch: true, Worker: worker, WorkerTag: "box"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = runner.Close() })
+
+	runAll(t, runner, "echo got-"+randomSuffix()+" > blob && mkdir d && echo deep > d/f")
+
+	held, _, ok := HeldOf(runner)
+	if !ok || held["src"] == "" {
+		t.Fatalf("HeldOf = %v, want the tree held under its artifact name", held)
+	}
+
+	if !isEmptyDir(cwd) {
+		t.Error("the held tree also came home")
+	}
+
+	err = runner.Close()
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	dst := t.TempDir()
+
+	_, err = Pull(t.Context(), shell.RunnerSpec{Worker: worker}, "src", held["src"], dst)
+	if err != nil {
+		t.Fatalf("pulling the held tree: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dst, "d", "f")) //nolint:gosec // a path this test built
+	if err != nil || string(got) != "deep\n" {
+		t.Fatalf("pulled d/f = %q (%v), want the tree the in: wrote", got, err)
+	}
+}

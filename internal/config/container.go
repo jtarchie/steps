@@ -190,7 +190,7 @@ func (c *Config) PlacedImage(step Step) string {
 
 	name := step.GetResourceName()
 	if step.Put != "" {
-		name = step.Put
+		name = step.PutResourceName()
 	}
 
 	if name == "" {

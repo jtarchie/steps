@@ -4,27 +4,24 @@ package venue
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
+	"os/exec"
 	"testing"
 )
 
-// scratchOf finds the shim's scratch for a session opened against cwd. The
-// shim names it after the step directory and this process, which is exactly
-// what makes a leftover traceable.
-func scratchOf(t *testing.T, cwd string) []string {
+// volumesMadeBy are the volumes a docker+ session made for itself: on a worker they hold the step's tree, the only copy of anything undeclared.
+func volumesMadeBy(t *testing.T, runner any) []string {
 	t.Helper()
 
-	pattern := filepath.Join(os.TempDir(), "steps-shim",
-		fmt.Sprintf("%s-%d-*", filepath.Base(cwd), os.Getpid()))
-
-	found, err := filepath.Glob(pattern)
-	if err != nil {
-		t.Fatalf("looking for the worker's scratch: %v", err)
+	plus, ok := runner.(plusRunner)
+	if !ok {
+		t.Fatalf("runner is %T, want a docker+ runner", runner)
 	}
 
-	return found
+	if len(plus.s.volumes) == 0 {
+		t.Fatal("the session made no volumes — there is nothing for Keep to leave")
+	}
+
+	return plus.s.volumes
 }
 
 // TestVenueKeepLeavesTheWorkersScratch is --keep-workspace reaching the
@@ -51,18 +48,19 @@ func TestVenueKeepLeavesTheWorkersScratch(t *testing.T) {
 		t.Fatalf("running: %v", err)
 	}
 
+	kept := volumesMadeBy(t, runner)
+
 	err = runner.Close()
 	if err != nil {
 		t.Fatalf("closing: %v", err)
 	}
 
-	kept := scratchOf(t, cwd)
-	if len(kept) == 0 {
-		t.Fatal("the worker removed its scratch under Keep — the postmortem the flag exists for has nothing to look at on the machine that ran the step")
-	}
+	for _, name := range kept {
+		t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "volume", "rm", "-f", name).Run() }) //nolint:gosec // a name the session made
 
-	for _, dir := range kept {
-		t.Cleanup(func() { _ = os.RemoveAll(dir) })
+		if !volumeExists(t, name) {
+			t.Errorf("the worker removed %s under Keep — the postmortem the flag exists for has nothing to look at on the machine that ran the step", name)
+		}
 	}
 }
 
@@ -79,14 +77,17 @@ func TestVenueRemovesTheWorkersScratchByDefault(t *testing.T) {
 		t.Fatalf("running: %v", err)
 	}
 
-	// Explicitly, not via the cleanup: the scratch is removed on the goodbye,
-	// so the check has to come after it.
+	made := volumesMadeBy(t, runner)
+
+	// Explicitly, not via the cleanup: the volumes go on close, so the check has to come after it.
 	err = runner.Close()
 	if err != nil {
 		t.Fatalf("closing: %v", err)
 	}
 
-	if left := scratchOf(t, cwd); len(left) != 0 {
-		t.Errorf("the worker kept %v — every step would accumulate a tree on somebody else's disk", left)
+	for _, name := range made {
+		if volumeExists(t, name) {
+			t.Errorf("the worker kept %s — every step would accumulate a tree on somebody else's disk", name)
+		}
 	}
 }

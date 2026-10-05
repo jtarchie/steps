@@ -112,9 +112,8 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 	}
 }
 
-// TestPlacementStatesWhatTheWorkerCouldNotSay: an empty fstype is a shim that
-// has no answer — an older one, or a platform with no statfs — and never an
-// ordinary disk. A blank cell hides exactly the case the column exists for.
+// TestPlacementStatesWhatTheWorkerCouldNotSay: an empty fstype is a worker
+// that has no answer — a docker+ worker's volumes — and never an ordinary disk. A blank cell hides exactly the case the column exists for.
 func TestPlacementStatesWhatTheWorkerCouldNotSay(t *testing.T) {
 	t.Parallel()
 

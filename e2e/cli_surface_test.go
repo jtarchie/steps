@@ -48,8 +48,7 @@ func TestTopLevelCommandsAreTheDocumentedSet(t *testing.T) {
 			continue
 		}
 
-		// _shim is hidden on purpose: it is the remote half of a placed step,
-		// not a verb anybody types.
+		// A hidden command is machinery, not a verb anybody types.
 		if _, hidden := field.Tag.Lookup("hidden"); hidden {
 			continue
 		}

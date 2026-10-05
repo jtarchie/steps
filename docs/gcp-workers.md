@@ -6,18 +6,20 @@ How to build, by hand, the GCP side of a `gcp://` worker — and then run a pipe
 
 ## What you are building, and why it is almost as small as the AWS one
 
-A worker is **a Compute Engine instance steps can reach through IAP TCP forwarding**. GCP has no SSM-shaped exec channel, so the SSH contract *is* the transport — the tunnel terminates at the instance's own sshd, and everything `ssh://` does (push a binary over sftp, run it for one session) happens over that tunnel unchanged. That decides the shape of everything below:
+A worker is **a Compute Engine instance steps can reach through IAP TCP forwarding, with docker on it**. GCP has no SSM-shaped exec channel, so the SSH contract *is* the transport — the tunnel terminates at the instance's own sshd, and steps reaches the docker socket over that ssh connection exactly as `docker+ssh://` does. Every placed step runs in a container on that daemon. That decides the shape of everything below:
 
 - **No public address.** The client opens an outbound websocket to Google's relay (`tunnel.cloudproxy.app`), and the relay reaches the instance's VPC-internal address. The instance needs no external IP.
 - **One firewall rule, not zero.** The honest difference from `aws://`: the relay connects to a real TCP port, so the firewall must admit Google's IAP range `35.235.240.0/20` to port 22. Nothing else — no internet-reachable port, and that range is Google's relay infrastructure, not the internet.
-- **No keys to manage, no users to create.** steps mints an ephemeral SSH key per orchestrator process, installs its public half through instance metadata in the expiring `google-ssh` form (the guest agent stops honoring it after 12 hours, and steps prunes expired entries whenever it installs a fresh one), and verifies the host against the SSH host keys the instance itself publishes to **guest attributes** — which is how a machine created moments ago can be verified at all.
-- **No GCP credentials on the instance.** The template below attaches no service account. Artifact bytes, when a store is configured, arrive over presigned URLs.
-- **No artifact store required.** Unlike `aws://` — where the bootstrap fetches the binary from a presigned URL — sftp carries the binary here, so `?binary=` works with nothing but the tunnel.
+- **No keys to manage, no users to create.** steps mints an ephemeral SSH key per orchestrator process, installs its public half for a `steps` account through instance metadata in the expiring `google-ssh` form (the guest agent stops honoring it after 12 hours, and steps prunes expired entries whenever it installs a fresh one), and verifies the host against the SSH host keys the instance itself publishes to **guest attributes** — which is how a machine created moments ago can be verified at all.
+- **No GCP credentials on the instance.** The template below attaches no service account; nothing steps does on it needs one.
+- **Nothing of steps' installed.** The instance needs sshd (every stock image runs it), the guest agent, and docker — which the startup script below installs.
 
 ```
-your laptop ──wss──▶ IAP relay (tunnel.cloudproxy.app) ──35.235.240.0/20──▶ sshd ──▶ steps _shim
-     │                                                                                  │
-     └───────────────── presigned URLs (optional store) ──▶ S3 ◀── artifact bytes ──────┘
+your laptop ──wss──▶ IAP relay (tunnel.cloudproxy.app) ──35.235.240.0/20──▶ sshd :22
+                                                                               │
+                                           /var/run/docker.sock ◀── ssh streamlocal
+                                                    │
+                                                 dockerd ──▶ the step's container, its volumes
 ```
 
 Set these once so the commands below are copy-pasteable:
@@ -57,11 +59,11 @@ apt-get update && apt-get install -y docker.io'
 Each flag is a decision:
 
 - **`--no-service-account --no-scopes`** — the worker holds no GCP identity at all. Nothing steps does on it needs one.
-- **`--no-address`** — no external IP. The tunnel is the only way in. (An instance with no external IP also has no route *out* to the internet unless the subnet has Cloud NAT — the docker install above needs one, or drop the startup script for host-only steps. `gcloud compute routers create` + `nats create` is the two-command version.)
+- **`--no-address`** — no external IP. The tunnel is the only way in. (An instance with no external IP also has no route *out* to the internet unless the subnet has Cloud NAT — and both the docker install above and every image pull need one. `gcloud compute routers create` + `nats create` is the two-command version, or bake an image with docker and serve images from Artifact Registry over Private Google Access.)
 - **`--provisioning-model=SPOT --instance-termination-action=DELETE`** — spot is 60–91% off, and **DELETE matters**: a preempted spot instance otherwise stops rather than vanishes, and a stopped instance's disk keeps billing with nothing pointing at it.
 - **`--metadata=enable-guest-attributes=TRUE`** — how the instance attests its SSH host keys. Without it the dial refuses the worker (it cannot verify who it is talking to) and says so; `?hostkey=` is the manual alternative.
 - **`enable-oslogin=FALSE`** — metadata SSH keys are how steps authenticates, and a project that enforces OS Login silently ignores them. This instance-level setting wins over the project's.
-- The **startup script installs docker** — only needed if you want `image:` on a placed step. Omit it and everything else still works. If you would rather have docker preinstalled, `--image-family=cos-stable --image-project=cos-cloud` boots faster — but Container-Optimized OS mounts most writable paths `noexec`, so the worker URL must then name `/var/lib/toolbox` (the one writable-and-executable path) as its root.
+- The **startup script installs docker**, and it is **not optional**: every step placed on a `gcp://` worker runs in a container. An image with docker baked in boots faster and can drop the script. Container-Optimized OS ships docker too, but is untested here.
 
 ## 3. The static instance
 
@@ -73,18 +75,15 @@ gcloud compute instances create "$NAME" \
   --no-service-account --no-scopes \
   --no-address \
   --tags="$NAME" \
-  --metadata=enable-guest-attributes=TRUE,enable-oslogin=FALSE
+  --metadata=enable-guest-attributes=TRUE,enable-oslogin=FALSE,startup-script='#!/bin/bash
+apt-get update && apt-get install -y docker.io'
 ```
 
 One machine you own and steps merely dials — the **static** worker. Deliberately **not** `--source-instance-template="$NAME"`: that template is `SPOT` with `--instance-termination-action=DELETE`, so a machine built from it can be reclaimed and *destroyed* mid-run — and the static rung acquires nothing, so there is no re-placement to fall back on. Spot belongs on the rungs that own the machine's whole life (`gcp://stopped/`, `gcp://launch/`), where an eviction is a re-placement rather than a worker that stopped existing.
 
-## 4. The worker's binary
+## 4. Docker on the instance
 
-```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/steps-linux-amd64 .
-```
-
-Cross-compiles the binary the worker will run. `CGO_ENABLED=0` is what makes it a single static file that can be pushed and executed anywhere. Match `GOARCH` to the machine type — `amd64` for `e2`/`n2`, `arm64` for `t2a`/`c4a`.
+Nothing to build and nothing to push: a `gcp://` worker runs every placed step in a container on the instance's own docker daemon, which the startup script in steps 2 and 3 installs. steps does the rest on its first connection: it waits (up to four minutes) for `docker info` to answer, and where the guest agent created its `steps` account before the `docker` group existed — the usual order on a machine whose startup script is still running — adds the account to the group with the passwordless sudo the guest agent grants every metadata-key account, then reconnects, since only a fresh login picks up a new group.
 
 ## 5. The pipeline
 
@@ -96,8 +95,9 @@ jobs:
     outputs: [big]
     run: dd if=/dev/urandom of=big/blob bs=1M count=64 2>/dev/null
 
-  - task: on-host
+  - task: on-the-static-worker
     tags: [gcp]
+    image: alpine:3
     inputs: [big]
     outputs: [r1]
     run: |
@@ -106,6 +106,7 @@ jobs:
 
   - task: on-a-launched-machine
     tags: [burst]
+    image: alpine:3
     inputs: [big]
     outputs: [r2]
     run: uname -m > r2/out
@@ -121,16 +122,14 @@ The pipeline names **capabilities** (`tags: [gcp]`), never machines — the same
 
 ```bash
 steps run \
-  --worker "gcp=gcp://$NAME/var/tmp/steps?project=$PROJECT&zone=$ZONE&binary=/tmp/steps-linux-amd64" \
-  --worker "burst=gcp://launch/$NAME?project=$PROJECT&zone=$ZONE&binary=/tmp/steps-linux-amd64" \
+  --worker "gcp=gcp://$NAME?project=$PROJECT&zone=$ZONE" \
+  --worker "burst=gcp://launch/$NAME?project=$PROJECT&zone=$ZONE" \
   pipeline.yml
 ```
 
 The invocation names the **machines**. The parts of that worker URL that matter:
 
-- **`/var/tmp/steps`** — the path picks a disk on the worker, exactly as on every other scheme. Leave it off and you get the worker's temp directory, with the same tmpfs hazard the aws page describes.
 - **`?project=` / `?zone=`** — where the instance lives. Omittable when `GOOGLE_CLOUD_PROJECT`/`CLOUDSDK_COMPUTE_ZONE` (or the ADC credentials' own project) already say.
-- **`?binary=`** — pushed over sftp inside the tunnel, cached on the worker by its content hash. No artifact store needed. An orchestrator that is not itself Linux **must** supply one, checked before the run starts.
 - **`gcp://launch/…`** — acquires an instance from that template for the job and deletes it at the end. Acquisition is **per job, not per step**; a job whose placed steps are all cache hits acquires nothing. `gcp://stopped/$NAME` is the middle rung: start a parked instance, use it, stop it again (`?idle=` holds it warm between back-to-back jobs).
 
 There is deliberately **no `?capacity=`**: the template decides its own provisioning model, so a spot job names a spot template.
@@ -171,12 +170,12 @@ An instance is a leftover only if no process with that pid is running on that ho
 
 **`guest attributes are disabled … set enable-guest-attributes=TRUE … or pin the key with ?hostkey=`** — the template did not set the metadata key. Either fix the template or pin: `ssh-keyscan` the machine once from somewhere that can reach it, or read the key out of the serial console log, and put its `SHA256:…` fingerprint in the URL (URL-encode it — the base64 can contain `+`).
 
-**The pushed binary will not run, on Container-Optimized OS** — most COS paths are mounted `noexec`. Name `/var/lib/toolbox` in the worker URL's path.
+**The startup script never installs docker** — a `--no-address` instance has no route to the internet without Cloud NAT. Add NAT to the subnet's region, or bake an image with docker preinstalled. steps waits four minutes for docker on a new machine and then fails the step at the daemon: `the docker daemon at /var/run/docker.sock did not answer`.
 
-**The startup script never installs docker** — a `--no-address` instance has no route to the internet without Cloud NAT. Add NAT to the subnet's region, or bake an image with docker preinstalled.
+**`a docker+ worker runs every step in a container, and this step names no image`** — every step placed on a `gcp://` worker needs an `image:`, including a resource type's. Refused before the run starts, so before a machine is paid for.
 
 ## See also
 
-- [infra.md](infra.md) — `tags:`, every `gcp://` option, the acquisition rungs, preemption, and the artifact store
+- [infra.md](infra.md) — `tags:`, every `gcp://` option, the acquisition rungs, preemption, and what a docker+ worker keeps
 - [aws-workers.md](aws-workers.md) — the same walk on AWS, and how the two transports differ
 - [`hack/gcp-fixture.sh`](../hack/gcp-fixture.sh) — all of the above as one script, for this repo's opt-in real-GCP tests

@@ -233,6 +233,7 @@ jobs:
     do:
     - task: work
       tags: [box]
+      image: alpine:3
       run: "true"
 `), 0o600)
 	if err != nil {

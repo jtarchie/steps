@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/cli"
 	"go.uber.org/goleak"
 )
 
@@ -29,30 +28,6 @@ import (
 // configuration. Re-verified against regexp2 v2.7.1: runClock still loops only
 // while current <= clockEnd and clears running on the way out (fastclock.go).
 func TestMain(m *testing.M) {
-	// A local: worker execs `<this binary> _shim`, and under `go test` this
-	// binary is the test binary — which answers to nothing but the suite, so
-	// without this a placed step would re-run the whole suite as a subprocess
-	// instead of serving one session. Dispatching before goleak and before
-	// m.Run is what makes the documented example an example that runs.
-	//
-	// The os/exec TestHelperProcess pattern: same binary, told which half to
-	// be.
-	if len(os.Args) > 1 && os.Args[1] == "_shim" {
-		// One impersonated worker, for the eviction e2e: environment rather
-		// than argv, because the venue execs a fixed "<binary> _shim" — the
-		// same seam the venue package's own variants use.
-		if count := os.Getenv(drainingWorkerEnv); count != "" {
-			serveEvictedWorker(count)
-		}
-
-		err := cli.Run(os.Args[1:])
-		if err != nil {
-			os.Exit(1)
-		}
-
-		os.Exit(0)
-	}
-
 	// Process-wide rather than a t.Setenv per test, because t.Setenv is what
 	// forbids t.Parallel — and the doc corpus pays for that ~400 times over,
 	// serially, for four variables every one of them sets to the same dummy

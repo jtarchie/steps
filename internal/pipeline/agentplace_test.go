@@ -35,10 +35,6 @@ func TestPlaceAgentSpecCarriesTheResolvedWorker(t *testing.T) {
 		t.Errorf("WorkerTag = %q, want %q so the placement record names the mapping that chose the machine", got.WorkerTag, "box")
 	}
 
-	if !got.NoRedial {
-		t.Error("NoRedial is unset; a worker lost mid-conversation would be redialled and the model's edits rewound under it")
-	}
-
 	if got.Image != "alpine:3" || got.Subdir != "code" {
 		t.Errorf("Image/Subdir = %q/%q, want the agent's own to survive the crossing", got.Image, got.Subdir)
 	}
@@ -80,7 +76,7 @@ func TestPlaceAgentSpecDoesNotPresumeAWarmMachineReclaimed(t *testing.T) {
 		t.Fatal("the fixture's machine is not a warm reuse, so this proves nothing")
 	}
 
-	got, err := placeAgentSpec(ctx, step, shell.RunnerSpec{Cwd: t.TempDir()})
+	got, err := placeAgentSpec(ctx, step, shell.RunnerSpec{Image: "alpine:3", Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatalf("placeAgentSpec: %v", err)
 	}

@@ -1,7 +1,7 @@
 package ssmdial
 
 // Starting a session: the SSM control-plane call that mints a stream URL, and
-// the command call that gets a shim running on the far end.
+// the command call that prepares the far end.
 
 import (
 	"context"
@@ -17,16 +17,10 @@ import (
 )
 
 // portForwardDocument is the AWS-managed document that forwards a local
-// connection to a port on the managed node.
-//
-// Deliberately not AWS-StartSSHSession: that tunnels to sshd, which would
-// re-import the dependency this dialer exists to remove — an sshd, host keys
-// and authorized_keys on every worker, and on Windows a feature-on-demand
-// enterprise images strip.
+// connection to a port on the managed node: the instance's sshd, which steps' own ssh client rides inside.
 const portForwardDocument = "AWS-StartPortForwardingSession"
 
-// runShellDocument and runPowerShellDocument run the bootstrap that starts a
-// shim. Which one is chosen by the node's platform, which SSM reports.
+// runShellDocument and runPowerShellDocument run a command on the node. Which one is chosen by the node's platform, which SSM reports.
 const (
 	runShellDocument      = "AWS-RunShellScript"
 	runPowerShellDocument = "AWS-RunPowerShellScript"

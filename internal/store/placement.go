@@ -14,10 +14,9 @@ type Placements interface {
 // Placement is one placed step's record of the machine that ran it.
 //
 // InstanceID, UID and GID are pointers because absent and zero are different
-// answers. Only an aws:// worker has an instance at all; only a shim that can
-// answer reports an identity, and uid 0 is ROOT — the common case under the
-// aws:// bootstrap — so an int could not tell "ran as root" from "did not
-// say", and those mean opposite things to a reader.
+// answers. Only a cloud worker has an instance at all; only a worker that can
+// answer reports an identity, and uid 0 is ROOT, so an int could not tell
+// "ran as root" from "did not say", and those mean opposite things to a reader.
 type Placement struct {
 	RunID     string
 	StepIndex int

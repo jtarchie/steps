@@ -172,12 +172,6 @@ type RunnerSpec struct {
 	// Empty for a step running on this machine, which is what makes the
 	// variable's absence meaningful.
 	WorkerTag string
-	// ArtifactStore is the --artifact-store URL, when one is configured. A
-	// placed step's venue offers it to the worker as the data plane — trees
-	// by presigned URL instead of through the tunnel. A string here rather
-	// than a client, because this package is a leaf that carries facts, and
-	// the venue is where the fact becomes a connection.
-	ArtifactStore string
 	// Fetch names the directories to bring back after each command, which for
 	// a task step are its declared outputs.
 	//
@@ -197,10 +191,6 @@ type RunnerSpec struct {
 	Keep bool
 	// Subdir is where the command runs, relative to Cwd, for a step whose working directory is below the tree that has to travel. Only a placed agent with dir: sets it: the venue sends and fetches the whole step directory, so the outputs it declares still resolve, while the container works one level down. Empty runs in Cwd itself.
 	Subdir string
-	// NoRedial fails a step whose worker died mid-session instead of dialling a fresh one and re-sending the tree.
-	//
-	// A redial is right for a task: its command re-runs from the top, so a tree restored to the state it was pushed in is exactly what the retry wants. It is wrong for a conversation. An agent's edits outside its outputs: are not re-fetched, its container's installed packages are not reinstated, and the model is told none of it — so the retry would resume against a tree silently rewound to the step's inputs. Read only by the venue; meaningless without a Worker.
-	NoRedial bool
 	// ReusedWarm is a worker taken from its idle window (?idle=) with nothing proving it still alive. Read only by the venue: a first connection it refuses is treated as the machine having been reclaimed, so the step is re-placed rather than failed.
 	ReusedWarm bool
 	// DeferFetch keeps the declared outputs (or, with FetchAll, the whole
@@ -213,10 +203,8 @@ type RunnerSpec struct {
 	DeferFetch bool
 	// RemoteInputs are inputs whose bytes are NOT under Cwd: a worker holds
 	// each, under the digest given, and the venue offers it to the step's
-	// worker by that digest. With an ArtifactStore it is served from the
-	// store, which the holder is asked to push to if the store does not
-	// already have it; without one it is piped through this machine from the
-	// holder, never landing here. Only meaningful with a Worker; the caller
+	// worker by that digest: pulled from the holder into a temporary
+	// directory here and sent on, never into the step's own tree. Only meaningful with a Worker; the caller
 	// leaves this empty otherwise and materializes the input under Cwd.
 	RemoteInputs map[string]RemoteInput
 }
@@ -237,9 +225,8 @@ type RemoteInput struct {
 // opts in explicitly.
 func NewRunner(spec RunnerSpec) (Runner, error) {
 	// Dropping spec.EnvValues here is not a silent loss: a venue only ever
-	// hands this to the CONTAINER path — a placed step with no image runs its
-	// command through the shim, which carries the session's env in the exec
-	// frame instead.
+	// hands this to the CONTAINER path — a placed step with no image runs on
+	// ssh://, whose runner exports the env in the command it sends.
 	if spec.Image == "" {
 		return HostRunner{cwd: joinSubdir(spec.Cwd, spec.Subdir), extraEnv: spec.Env}, nil
 	}
@@ -1039,8 +1026,3 @@ func RunShellCaptureFull(ctx context.Context, command, cwd string) (stdout, stde
 // wants build-tagged files; this bounds the damage portably in one line until
 // something needs the difference between "2 seconds late" and "immediate".
 const cancelWaitDelay = 2 * time.Second
-
-// CancelWaitDelay is cancelWaitDelay, exported for the shim: a command run on
-// a worker has to be cut off on the same terms as one run here, or cancelling
-// a step means two different things depending on where it landed.
-const CancelWaitDelay = cancelWaitDelay

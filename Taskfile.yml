@@ -221,7 +221,7 @@ tasks:
       - go run ./tools/mutants stale
 
   build:
-    desc: Build ./steps. CGO_ENABLED=0 is a guard, not an optimization — the planned remote-worker shim cross-compiles this binary for any GOOS/GOARCH and pushes it over SFTP, so a transitive dep that pulls in cgo must fail the build here.
+    desc: Build ./steps. CGO_ENABLED=0 is a guard, not an optimization — goreleaser cross-compiles every release target from one machine with cgo off, so a transitive dep that pulls in cgo must fail the build here rather than at release.
     env:
       CGO_ENABLED: "0"
     cmds:

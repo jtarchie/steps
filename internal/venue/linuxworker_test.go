@@ -1,10 +1,10 @@
 package venue
 
-// A ROOT shim on Linux, driven from this machine.
+// A ROOT worker on Linux, driven from this machine.
 //
 // The one worker shape nothing here had ever actually run. Every other test
-// drives a worker that is this machine — local: is a child process, and the
-// in-process sshd logs into the account running the tests — so the shim's
+// drives a worker that is this machine — local: is this machine's daemon, and
+// the in-process sshd logs into the account running the tests — so the worker's
 // identity and platform always matched the orchestrator's, and every answer
 // derived from the WORKER was indistinguishable from the same answer derived
 // from here. That is precisely the class of bug the venue keeps producing:
@@ -228,7 +228,7 @@ RUN apk add --no-cache openssh-server && \
     mkdir -p /root/.ssh && chmod 700 /root/.ssh
 COPY authorized_keys /root/.ssh/authorized_keys
 RUN chmod 600 /root/.ssh/authorized_keys && \
-    printf 'PermitRootLogin prohibit-password\nPubkeyAuthentication yes\nSubsystem sftp internal-sftp\nHostKey /etc/ssh/ssh_host_ed25519_key\n' >> /etc/ssh/sshd_config
+    printf 'PermitRootLogin prohibit-password\nPubkeyAuthentication yes\nHostKey /etc/ssh/ssh_host_ed25519_key\n' >> /etc/ssh/sshd_config
 EXPOSE 22
 CMD ["/usr/sbin/sshd", "-D", "-e"]
 `
@@ -240,8 +240,7 @@ CMD ["/usr/sbin/sshd", "-D", "-e"]
 // pair rather than choosing — a build failure that says nothing about ssh.
 //
 // TLS is switched off and the daemon is pinned to the unix socket, because the
-// socket is the whole interface here: the shim dials it directly and the venue
-// forwards the bytes. Nothing ever speaks to this daemon over the network.
+// socket is the whole interface here: the venue reaches it over ssh streamlocal. Nothing ever speaks to this daemon over the network.
 //
 // AllowTcpForwarding is opened because OpenSSH denies a direct-streamlocal channel (the docker+ssh:// data plane) unless TCP forwarding is allowed too, AllowStreamLocalForwarding notwithstanding; alpine ships it off, upstream ships it on. Replaced in place: sshd keeps the first value it reads.
 //
@@ -256,7 +255,7 @@ RUN apk add --no-cache --upgrade openssh-server openssh-client-default && \
     mkdir -p /root/.ssh && chmod 700 /root/.ssh
 COPY authorized_keys /root/.ssh/authorized_keys
 RUN chmod 600 /root/.ssh/authorized_keys && \
-    printf 'PermitRootLogin prohibit-password\nPubkeyAuthentication yes\nSubsystem sftp internal-sftp\nHostKey /etc/ssh/ssh_host_ed25519_key\n' >> /etc/ssh/sshd_config
+    printf 'PermitRootLogin prohibit-password\nPubkeyAuthentication yes\nHostKey /etc/ssh/ssh_host_ed25519_key\n' >> /etc/ssh/sshd_config
 ENV DOCKER_TLS_CERTDIR=""
 EXPOSE 22
 CMD ["sh", "-c", "/usr/sbin/sshd -e && exec dockerd-entrypoint.sh dockerd --host=unix:///var/run/docker.sock"]

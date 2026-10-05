@@ -290,7 +290,7 @@ func (s *bareSession) uploadRemote(ctx context.Context, name string, input shell
 	}
 	defer func() { _ = os.RemoveAll(staged) }()
 
-	_, err = Pull(ctx, shell.RunnerSpec{Worker: input.Holder, ArtifactStore: s.spec.ArtifactStore}, name, input.Digest, staged)
+	_, err = Pull(ctx, shell.RunnerSpec{Worker: input.Holder}, name, input.Digest, staged)
 	if err != nil {
 		return fmt.Errorf("input %q from %s: %w", name, input.Holder, err)
 	}
@@ -366,7 +366,7 @@ func (s *bareSession) run(ctx context.Context, command string, sinks outputSinks
 	return code, err
 }
 
-// envScript is the command's env as shell exports: the step's, its worker tag, and this command's build metadata, as the shim's execEnv sends it.
+// envScript is the command's env as shell exports: the step's, its worker tag, and this command's build metadata.
 func (s *bareSession) envScript(ctx context.Context) string {
 	env := withWorkerTag(resolveEnv(s.spec.Env), s.spec.WorkerTag)
 

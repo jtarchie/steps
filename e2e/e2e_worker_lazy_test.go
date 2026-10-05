@@ -21,6 +21,8 @@ import (
 // producer and a placed consumer on one machine, and nothing here reads
 // either output — so nothing comes home.
 func TestEndToEndPlacedOutputsStayOnTheWorkerWithNoLocalReader(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	_, _, workers := twoWorkers(t)
 	path := writePipeline(t, dir, `
@@ -29,20 +31,19 @@ jobs:
   plan:
   - task: seed
     tags: [a]
+    image: `+dockerE2EImage+`
     outputs: [src]
     run: head -c `+strconv.Itoa(payloadBytes)+` /dev/urandom > src/blob.bin
   - task: consume
     tags: [a]
+    image: `+dockerE2EImage+`
     inputs: [src]
     outputs: [out]
-    run: wc -c < src/blob.bin | tr -d ' ' > out/size.txt && cp out/size.txt `+filepath.Join(dir, "size.txt")+`
+    run: test "$(wc -c < src/blob.bin)" -eq `+strconv.Itoa(payloadBytes)+` && wc -c < src/blob.bin > out/size.txt
 `)
 
+	// The consumer checks the payload's size itself: a host path is not inside its container, and a local step reading it would be the local reader this test excludes.
 	mustRun(t, append([]string{path}, workers...)...)
-
-	if got := readFileString(t, filepath.Join(dir, "size.txt")); got != strconv.Itoa(payloadBytes)+"\n" {
-		t.Errorf("size.txt = %q, want the payload's size", got)
-	}
 
 	placements := runPlacements(t, path)
 
@@ -57,6 +58,8 @@ jobs:
 // a local step at the end. The producer's row still says nothing came home
 // at the time it finished; the local step is what pulled the tree.
 func TestEndToEndALocalStepPullsAPlacedOutputWhenItReadsIt(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	_, _, workers := twoWorkers(t)
 	path := holderPipeline(t, dir, "a", false)
@@ -78,6 +81,8 @@ func TestEndToEndALocalStepPullsAPlacedOutputWhenItReadsIt(t *testing.T) {
 // an in-process reader of the step's own outputs, so that step's tree comes
 // home as it always did.
 func TestEndToEndAssertFilesStillSeesAPlacedTasksOutputs(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	_, _, workers := twoWorkers(t)
 	path := writePipeline(t, dir, `
@@ -86,6 +91,7 @@ jobs:
   plan:
   - task: seed
     tags: [a]
+    image: `+dockerE2EImage+`
     outputs: [src]
     run: echo made > src/made.txt
     assert:
@@ -102,6 +108,8 @@ jobs:
 // TestEndToEndLoadVarReadsAPlacedOutput: load_var: reads a file in this
 // process, from a tree a worker holds.
 func TestEndToEndLoadVarReadsAPlacedOutput(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	_, _, workers := twoWorkers(t)
 	path := writePipeline(t, dir, `
@@ -110,6 +118,7 @@ jobs:
   plan:
   - task: seed
     tags: [a]
+    image: `+dockerE2EImage+`
     outputs: [meta]
     run: printf 'v1.2.3\n' > meta/version.txt
   - load_var: tag
@@ -131,6 +140,8 @@ jobs:
 // reader, and the build fails naming the artifact and the machine rather
 // than running the reader against nothing.
 func TestEndToEndAHolderThatLostTheTreeFailsTheBuildByName(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	rootA, _, workers := twoWorkers(t)
 	path := writePipeline(t, dir, `
@@ -139,10 +150,11 @@ jobs:
   plan:
   - task: seed
     tags: [a]
+    image: `+dockerE2EImage+`
     outputs: [src]
     run: echo made > src/made.txt
   - task: sweep
-    run: rm -rf `+filepath.Join(rootA, "steps-shim", "artifacts")+`
+    run: `+sweepCache(rootA)+`
   - task: read
     inputs: [src]
     run: cat src/made.txt
@@ -166,6 +178,8 @@ jobs:
 // from answering for the whole job, so the get itself has to be the thing
 // that was cached.
 func TestEndToEndPlacedGetWithTheResourceCacheDialsNothingOnTheSecondBuild(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	_, _, workers := twoWorkers(t)
 
@@ -178,10 +192,11 @@ workspace:
 
 resource_types:
 - name: counted
+  image: `+dockerE2EImage+`
   config:
     check: printf '[{"ref":"v1"}]'
     in: |
-      echo ran >> `+filepath.Join(dir, "fetches")+`
+      head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' > fetch.txt
       printf '%s' "${STEPS_WORKER:-here}" > where.txt
 
 resources:
@@ -197,7 +212,7 @@ jobs:
     resource: repo
   - task: publish
     inputs: [src]
-    run: cp src/where.txt `+filepath.Join(dir, publishAs)+`
+    run: cp src/where.txt `+filepath.Join(dir, publishAs)+` && cp src/fetch.txt `+filepath.Join(dir, publishAs+".fetch")+`
 `)
 	}
 
@@ -217,8 +232,10 @@ jobs:
 		t.Errorf("the second build read %q, want the tree the first build fetched on a", got)
 	}
 
-	if fetches := strings.Count(readFileString(t, filepath.Join(dir, "fetches")), "ran"); fetches != 1 {
-		t.Errorf("in: ran %d times, want 1 — the second build fetched again instead of reusing the cached version", fetches)
+	// in: runs in a container on the worker, so it marks each fetch with a fresh nonce rather than a host file: a second fetch is a different nonce.
+	first, second := readFileString(t, filepath.Join(dir, "first.txt.fetch")), readFileString(t, filepath.Join(dir, "second.txt.fetch"))
+	if first == "" || first != second {
+		t.Errorf("fetch nonces %q then %q, want one non-empty nonce — the second build fetched again instead of reusing the cached version", first, second)
 	}
 
 	for _, p := range runPlacements(t, path) {

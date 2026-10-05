@@ -15,11 +15,7 @@ import "github.com/jtarchie/steps/internal/shell"
 // bytes had to be pushed to it. That is also what somebody debugging a step
 // that passed locally and failed placed needs, so the same record serves both.
 //
-// Everything but Tag and Address comes from the worker's own hello: this end
-// asserts nothing about the far one. Instance is empty for every worker that
-// is not an EC2 instance, and UID nil means the shim did not say — never
-// "root", which is the common answer under the aws:// bootstrap and the
-// opposite conclusion.
+// Everything but Tag and Address comes from the worker itself (its uname, its daemon's info): this end asserts nothing about the far one. Instance is empty for every worker that is not a cloud instance, and UID nil means the worker did not say — never "root", which would be the opposite conclusion.
 type Placement struct {
 	Tag      string
 	Address  string
@@ -59,37 +55,4 @@ func PlacementOf(runner shell.Runner) (Placement, bool) {
 	}
 
 	return placed.placement()
-}
-
-// placement is PlacementOf's implementation, unexported so the question is
-// asked through the package function rather than by type-asserting a shape.
-func (r runner) placement() (Placement, bool) { return r.session.placement() }
-
-func (s *session) placement() (Placement, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// An empty workdir is a session that never completed a handshake: connect
-	// refuses a hello without one (errNoWorkdir), so this is the single field
-	// that separates "the worker told us about itself" from "we never got
-	// that far".
-	if s.workdir == "" {
-		return Placement{}, false
-	}
-
-	return Placement{
-		Tag:           s.tag,
-		Address:       s.worker.Address(),
-		Instance:      s.worker.Instance,
-		GOOS:          s.goos,
-		GOARCH:        s.goarch,
-		Workdir:       s.workdir,
-		FSType:        s.fstype,
-		FSFree:        s.fsfree,
-		UID:           s.uid,
-		GID:           s.gid,
-		Image:         s.container.Image,
-		BytesSent:     s.sentArtifactBytes.Load(),
-		BytesReceived: s.receivedArtifactBytes.Load(),
-	}, true
 }

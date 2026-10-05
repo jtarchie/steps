@@ -2,20 +2,22 @@
 
 How to build, by hand, the AWS side of an `aws://` worker — and then run a pipeline that uses it.
 
-[`hack/aws-fixture.sh`](../hack/aws-fixture.sh) does all of this in one command for this repo's own tests. This page is the same thing typed out, so you can see what each resource is for and adapt it. Every command is `aws` CLI v2 with credentials already configured. Those credentials need the EC2, IAM and S3 rights each step below uses, plus the SSM ones steps itself calls (`ssm:StartSession`, `ssm:SendCommand`, `ssm:GetCommandInvocation`, `ssm:DescribeInstanceInformation`) — and, for the `burst` worker in step 6, **`ec2:CreateFleet`**, plus **`ec2:CreateTags`** on `arn:aws:ec2:*:*:instance/*`: the launch rung acquires machines through CreateFleet, never `ec2:RunInstances`, and labels each one in that same request (see step 7). The tag grant can be narrowed to launch time with a condition of `ec2:CreateAction` in `CreateFleet`/`RunInstances` — both listed because which one an instant fleet reports is unconfirmed, and that narrowed form is untested here. [infra.md](infra.md#remote-workers-tags) has the full set.
+[`hack/aws-fixture.sh`](../hack/aws-fixture.sh) does all of this in one command for this repo's own tests. This page is the same thing typed out, so you can see what each resource is for and adapt it. Every command is `aws` CLI v2 with credentials already configured. Those credentials need the EC2 and IAM rights each step below uses, plus the SSM ones steps itself calls (`ssm:StartSession`, `ssm:SendCommand`, `ssm:GetCommandInvocation`, `ssm:DescribeInstanceInformation`) — and, for the `burst` worker in step 6, **`ec2:CreateFleet`**, plus **`ec2:CreateTags`** on `arn:aws:ec2:*:*:instance/*`: the launch rung acquires machines through CreateFleet, never `ec2:RunInstances`, and labels each one in that same request (see step 7). The tag grant can be narrowed to launch time with a condition of `ec2:CreateAction` in `CreateFleet`/`RunInstances` — both listed because which one an instant fleet reports is unconfirmed, and that narrowed form is untested here. [infra.md](infra.md#remote-workers-tags) has the full set.
 
 ## What you are building, and why it is so small
 
-A worker is **an EC2 instance steps can reach through SSM**. That is the whole design, and it decides the shape of everything below:
+A worker is **an EC2 instance steps can reach through SSM, with docker on it**. That is the whole design, and it decides the shape of everything below:
 
-- **No inbound ports.** The instance's own `amazon-ssm-agent` dials *out* to the AWS control plane, and steps opens a session through that. The security group has no ingress rules at all — not "port 22 restricted", none.
-- **No sshd, no agent to install.** steps pushes its own binary and starts it for one session.
-- **No AWS credentials on the instance.** Artifact bytes arrive over presigned URLs the orchestrator mints per transfer, so the instance profile carries exactly one managed policy and nothing else.
+- **No inbound ports.** The instance's own `amazon-ssm-agent` dials *out* to the AWS control plane, and steps opens a session through that — a port-forward to the instance's own sshd on loopback, with steps' ssh riding inside it. The security group has no ingress rules at all — not "port 22 restricted", none.
+- **Nothing of steps' to install.** sshd and the SSM agent are already on the AMI; docker comes from the user data below. The first time a `steps` process reaches the instance, it sends one SSM command that creates a `steps` account in the `docker` group and installs that process's own ssh key for it — `restrict,port-forwarding`, expiring after twelve hours — and reports the instance's ssh host key, which steps then pins. No key to distribute, no `known_hosts` to maintain: IAM is the only door.
+- **No AWS credentials on the instance.** The instance profile carries exactly one managed policy and nothing else.
 
 ```
-your laptop ──ssm:StartSession──▶ AWS control plane ──▶ amazon-ssm-agent ──▶ steps _shim
-     │                                                                            │
-     └────────────────── presigned URLs ──▶ S3 ◀── artifact bytes ────────────────┘
+your laptop ──ssm:StartSession──▶ AWS control plane ──▶ amazon-ssm-agent ──▶ sshd (127.0.0.1:22)
+                                                                                  │
+                                              /var/run/docker.sock ◀── ssh streamlocal
+                                                       │
+                                                    dockerd ──▶ the step's container, its volumes
 ```
 
 Set these once so the commands below are copy-pasteable:
@@ -44,7 +46,7 @@ aws iam attach-role-policy --role-name "$NAME" \
   --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
 ```
 
-The only policy the worker gets. It lets the SSM agent register the instance and carry a session — nothing else. **No S3 access**: the worker reads and writes artifacts through presigned URLs, so it never needs bucket rights of its own.
+The only policy the worker gets. It lets the SSM agent register the instance and carry a session — nothing else. **No S3 access, no ECR access**: steps' trees reach the instance through the session, and a public image needs no credentials. A private image is pulled by the instance's daemon with *your* docker credentials, read from your `~/.docker/config.json` and sent with the pull request, so the instance needs none of its own for that either.
 
 ```bash
 aws iam create-instance-profile --instance-profile-name "$NAME"
@@ -81,7 +83,7 @@ AMI=$(aws ssm get-parameter \
   --query 'Parameter.Value' --output text)
 ```
 
-Picks a subnet that hands out public IPs, and asks AWS for the current Amazon Linux 2023 arm64 AMI id. A public IP is the cheap way for the agent to reach the control plane; a private subnet would need three interface VPC endpoints at about $21/month each.
+Picks a subnet that hands out public IPs, and asks AWS for the current Amazon Linux 2023 arm64 AMI id. A public IP is the cheap way for the agent to reach the control plane, and for the daemon to reach the registries its images come from; a private subnet would need three interface VPC endpoints at about $21/month each, plus a route to those registries.
 
 ```bash
 USERDATA=$(printf '#!/bin/bash\ndnf install -y docker\nsystemctl enable --now docker\n' | base64 | tr -d '\n')
@@ -98,7 +100,7 @@ LT=$(aws ec2 create-launch-template --launch-template-name "$NAME" \
   }" --query 'LaunchTemplate.LaunchTemplateId' --output text)
 ```
 
-The whole machine shape in one object. `tr -d '\n'` on the user data is not decoration: GNU coreutils `base64` wraps at 76 columns, and a newline inside the JSON string makes the whole document invalid. Keep the **id** it prints (`lt-…`) — `aws://launch/` in step 6 takes the id, not the name. The user data installs docker at first boot — **only needed if you want `image:` on a placed step**, which runs the command in a container on the worker. Omit it and everything else still works.
+The whole machine shape in one object. `tr -d '\n'` on the user data is not decoration: GNU coreutils `base64` wraps at 76 columns, and a newline inside the JSON string makes the whole document invalid. Keep the **id** it prints (`lt-…`) — `aws://launch/` in step 6 takes the id, not the name. The user data installs docker at first boot, and it is **not optional**: every step placed on an `aws://` worker runs in a container on that daemon. A stock AL2023 AMI has no docker; one you bake yourself can skip the user data.
 
 Later, to change the shape, append a version instead of editing:
 
@@ -129,20 +131,20 @@ until [ "$(aws ssm describe-instance-information \
 
 Polls until SSM admits it can reach the instance. If this never finishes, the cause is almost always the instance profile (not attached, or missing `AmazonSSMManagedInstanceCore`) or no route out to the internet.
 
-## 5. A bucket, and the worker's binary
+## 5. Docker on the instance
+
+Nothing to build and nothing to upload: an `aws://` worker runs every placed step in a container on the instance's own docker daemon, so the only thing to check is that the user data from step 3 finished installing it.
 
 ```bash
-BUCKET="$NAME-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
-aws s3api create-bucket --bucket "$BUCKET"   # add --create-bucket-configuration LocationConstraint=$AWS_REGION outside us-east-1
+CMD=$(aws ssm send-command --instance-ids "$ID" --document-name AWS-RunShellScript \
+  --parameters 'commands=["docker info >/dev/null 2>&1 && echo docker-ok"]' \
+  --query 'Command.CommandId' --output text)
+sleep 5
+aws ssm get-command-invocation --command-id "$CMD" --instance-id "$ID" \
+  --query StandardOutputContent --output text
 ```
 
-Bucket names are globally unique, hence the random suffix. This is the artifact store: step trees and outputs move through it, and the worker reaches it with presigned URLs rather than credentials.
-
-```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/steps-linux-arm64 .
-```
-
-Cross-compiles the binary the worker will run. `CGO_ENABLED=0` is what makes it a single static file that can be pushed and executed anywhere. Match `GOARCH` to your instance type — `arm64` for `t4g`/Graviton, `amd64` for `t3`/`m5`.
+Prints `docker-ok` once the daemon answers. steps waits for this itself — the first connection to an instance waits up to four minutes for docker before it creates its `steps` account — so this is only a check that the user data worked, not a step steps needs. It is the same `SendCommand` path steps uses for that install, which is also why the credentials above need `ssm:SendCommand` and `ssm:GetCommandInvocation`.
 
 ## 6. The pipeline
 
@@ -154,15 +156,16 @@ jobs:
     outputs: [big]
     run: dd if=/dev/urandom of=big/blob bs=1M count=64 2>/dev/null
 
-  - task: on-host
+  - task: measure
     tags: [aws]
+    image: alpine:3
     inputs: [big]
     outputs: [r1]
     run: |
       wc -c < big/blob > r1/out
       uname -m >> r1/out
 
-  - task: in-container
+  - task: measure-again
     tags: [aws]
     image: alpine:3
     inputs: [big]
@@ -173,6 +176,7 @@ jobs:
 
   - task: on-a-launched-machine
     tags: [burst]
+    image: alpine:3
     inputs: [big]
     outputs: [r3]
     run: uname -m > r3/out
@@ -180,25 +184,23 @@ jobs:
   - task: publish
     inputs: [r1, r2, r3]
     run: |
-      echo "host-placed:";      cat r1/out
-      echo "containerized:";    cat r2/out
+      echo "first:";            cat r1/out
+      echo "second:";           cat r2/out
       echo "launched machine:"; cat r3/out
 ```
 
-The pipeline names **capabilities** (`tags: [aws]`), never machines. That is what lets the same file run on somebody else's fleet.
+The pipeline names **capabilities** (`tags: [aws]`), never machines. That is what lets the same file run on somebody else's fleet. `measure-again` sends nothing for `big`: the worker kept the 64MB input from `measure`, found it by its digest, and gave the second step a copy-on-write view of it.
 
 ```bash
 steps run \
-  --worker "aws=aws://$ID/var/tmp/steps?binary=/tmp/steps-linux-arm64&region=$AWS_REGION" \
-  --worker "burst=aws://launch/$LT?version=1&binary=/tmp/steps-linux-arm64&region=$AWS_REGION" \
-  --artifact-store "s3://$BUCKET/runs?region=$AWS_REGION" \
+  --worker "aws=aws://$ID?region=$AWS_REGION" \
+  --worker "burst=aws://launch/$LT?version=1&region=$AWS_REGION" \
   pipeline.yml
 ```
 
-The invocation names the **machines**. Three parts of that worker URL matter:
+The invocation names the **machines**. Two parts of those worker URLs matter:
 
-- **`/var/tmp/steps`** — the path picks a disk on the worker. Leave it off and you get the worker's temp directory, which on Amazon Linux 2023 is **tmpfs: memory, capped near half the machine's RAM, and cleared on reboot**. steps warns when it detects this, because a build tree competing with the build for RAM is a confusing way to fail.
-- **`?binary=`** — pushes your cross-compiled binary, keyed by its content hash so it uploads once. This **requires `--artifact-store`**, checked before the run starts rather than after a machine has been acquired. Use `?shim=/usr/local/bin/steps` instead if your AMI already bakes one in.
+- **`?region=`** — where the instance lives. It need not match your default region, and on a profile with no default it is the only thing that says.
 - **`aws://launch/…?version=1`** — acquires a machine from that template version for the job and terminates it at the end. The path is the template **id** (`lt-…`, captured as `$LT` in step 3); a name is refused before the run starts. Acquisition is **per job, not per step**: the first placed step pays for the machine and the rest reuse it.
 
 ## 7. Tear it down
@@ -210,7 +212,6 @@ aws ec2 terminate-instances --instance-ids "$ID"
 aws ec2 wait instance-terminated --instance-ids "$ID"
 aws ec2 delete-launch-template --launch-template-id "$LT"
 aws ec2 delete-security-group --group-id "$SG"
-aws s3 rm "s3://$BUCKET" --recursive && aws s3api delete-bucket --bucket "$BUCKET"
 aws iam remove-role-from-instance-profile --instance-profile-name "$NAME" --role-name "$NAME"
 aws iam delete-instance-profile --instance-profile-name "$NAME"
 aws iam detach-role-policy --role-name "$NAME" \
@@ -249,13 +250,13 @@ An instance is a leftover only if no process with that pid is running on that ho
 
 **The SSM agent never registers** — the instance profile is missing or lacks `AmazonSSMManagedInstanceCore`, or the instance has no route to the internet. Check with `aws ssm describe-instance-information`.
 
-**A step succeeds and produces nothing, on a containerized placed step** — the daemon bind-mounts the step's tree, so the tree must be somewhere that daemon can see. Docker answers an unshared mount by silently mounting an **empty directory**. Name a real path in the worker URL.
+**`no docker group after four minutes: docker is not installed on this instance`** — the install step found no docker. The launch template's user data did not run or failed; check `/var/log/cloud-init-output.log` on the instance (through Session Manager), or bake docker into the AMI.
 
-**`is on tmpfs (… free) — that is memory, not disk`** — the warning above. Add a path to the worker URL.
+**`a docker+ worker runs every step in a container, and this step names no image`** — every step placed on an `aws://` worker needs an `image:`, including a resource type's. Refused before the run starts, so before a machine is paid for.
 
-**`?binary=` requires `--artifact-store`** — the binary is uploaded to the store and fetched by the bootstrap from a presigned URL. Checked before the run so you do not discover it after paying for a machine.
+**`ssh: unable to authenticate` after an instance was replaced** — steps notices a stale install (an expired key, or a new root volume under the same instance id, which also changes the host key) and installs once more by itself; seeing this anyway means the `steps` account could not be created. Run the install's own check by hand: `id steps` and `getent group docker` through Session Manager.
 
 ## See also
 
-- [infra.md](infra.md) — `tags:`, every `aws://` option, the acquisition rungs, spot evictions, and the artifact store
+- [infra.md](infra.md) — `tags:`, every `aws://` option, the acquisition rungs, spot evictions, and what a docker+ worker keeps
 - [`hack/aws-fixture.sh`](../hack/aws-fixture.sh) — all of the above as one script, plus a FIS role for testing spot interruptions

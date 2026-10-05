@@ -6,7 +6,7 @@ package pipeline
 // This file is a pass-through and deliberately nothing more: the seeds are
 // parsed and matched in internal/agent, next to the tool that consumes them,
 // and main reaches that package only through here — the same shape as
-// WithArtifactStore.
+// WithKeepWorkspace.
 
 import (
 	"context"

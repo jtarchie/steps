@@ -20,7 +20,6 @@ func placedAgentRunner(step config.Step) agent.RunnerFactory {
 			return nil, err
 		}
 
-		//nolint:contextcheck // NewRunner takes no context; opening the artifact store reads only local config
 		runner, err := venue.NewRunner(placed)
 		if err != nil {
 			return nil, fmt.Errorf("agent %q: %w", step.Agent, err)
@@ -42,9 +41,6 @@ func placeAgentSpec(ctx context.Context, step config.Step, spec shell.RunnerSpec
 
 	spec.Worker = worker
 	spec.WorkerTag = placementTag(step)
-	spec.ArtifactStore = artifactStoreFrom(ctx)
-	// A conversation cannot survive its tree being re-sent underneath it. The venue's redial is right for a task, whose command re-runs from the top, and silently wrong here: it would restore the step's inputs over every edit the model made outside outputs:, start a fresh container, and tell the model nothing about either.
-	spec.NoRedial = true
 
 	return spec, nil
 }

@@ -2,11 +2,10 @@ package venue
 
 // The aws:// venue, against a fake control plane.
 //
-// The fake stands in for SSM itself: SendCommand runs the bootstrap script
-// with a real shell on this machine, and the forwarded session is a real TCP
-// connection to the port that script reported. So everything except AWS is
-// real — a real script, a real shim listening on a real port, a real venue
-// session — and what is faked is exactly the part that needs an AWS account.
+// The fake stands in for SSM itself: SendCommand runs the install script's
+// effects on this machine, and the forwarded session is a real TCP connection
+// to a real sshd. So everything except AWS is real, and what is faked is
+// exactly the part that needs an AWS account.
 //
 // The data channel is seamed out rather than faked here: it has its own tests
 // one package over, against an agent that speaks the real protocol, and
@@ -356,14 +355,14 @@ func TestVenueReportsAnInstanceSSMCannotReach(t *testing.T) {
 func TestParseAWSWorker(t *testing.T) {
 	t.Parallel()
 
-	worker, err := ParseWorker("aws://i-0abc123def456789/mnt/fast?region=us-west-2&shim=/usr/local/bin/steps")
+	worker, err := ParseWorker("aws://i-0abc123def456789/mnt/fast?region=us-west-2")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
 
 	if worker.Instance != "i-0abc123def456789" || worker.Root != "/mnt/fast" ||
-		worker.Region != "us-west-2" || worker.Shim != "/usr/local/bin/steps" {
-		t.Errorf("parsed = %+v, want the instance, root, region and shim path", worker)
+		worker.Region != "us-west-2" {
+		t.Errorf("parsed = %+v, want the instance, root and region", worker)
 	}
 
 	if got := worker.Address(); got != "aws://i-0abc123def456789/mnt/fast" {
@@ -373,7 +372,7 @@ func TestParseAWSWorker(t *testing.T) {
 	for _, raw := range []string{
 		"aws://not-an-instance",
 		"aws://",
-		"aws://i-0abc123def456789?shim=/usr/local/bin/steps&binary=/tmp/steps",
+		"aws://i-0abc123def456789?shim=/usr/local/bin/steps",
 	} {
 		_, err = ParseWorker(raw)
 		if !errors.Is(err, ErrWorker) {

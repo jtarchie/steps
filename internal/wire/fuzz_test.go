@@ -3,127 +3,14 @@ package wire
 import (
 	"archive/tar"
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
-
-// FuzzDecoderRead holds the decoder to the encoder: every frame it accepts re-encodes to exactly the bytes it consumed, and io.EOF means the stream ended on a frame boundary and nowhere else.
-func FuzzDecoderRead(f *testing.F) {
-	var buf bytes.Buffer
-
-	encoder := NewEncoder(&buf)
-	_ = encoder.Write(Frame{Type: FrameHello, Op: 1, Payload: []byte(`{"protocol":8}`)})
-	_ = encoder.Write(Frame{Type: FrameEnd, Op: MaxOp})
-	_ = encoder.Write(Frame{Type: FramePush, Op: 7, Payload: []byte{0, 1, 2}})
-
-	f.Add(buf.Bytes())
-	f.Add([]byte{})
-	f.Add([]byte{byte(FrameData), 0, 0, 1, 0, 0, 0, 9, 'x'})
-	f.Add([]byte{byte(FramePush) + 1, 0, 0, 0, 0, 0, 0, 0})
-	f.Add([]byte{byte(FrameData), 0, 0, 0, 0xff, 0xff, 0xff, 0xff})
-
-	f.Fuzz(func(t *testing.T, data []byte) {
-		decoder := NewDecoder(bytes.NewReader(data))
-		consumed := 0
-
-		for {
-			frame, err := decoder.Read()
-			if err != nil {
-				if (err == io.EOF) != (consumed == len(data)) { //nolint:errorlint // the sentinel is deliberately returned unwrapped
-					t.Fatalf("Read at %d of %d bytes: %v", consumed, len(data), err)
-				}
-
-				return
-			}
-
-			if frame.Type < FrameHello || frame.Type > FramePush {
-				t.Fatalf("accepted frame type %d", frame.Type)
-			}
-
-			if len(frame.Payload) > MaxFrameBytes {
-				t.Fatalf("accepted a %d-byte payload", len(frame.Payload))
-			}
-
-			var again bytes.Buffer
-
-			err = NewEncoder(&again).Write(frame)
-			if err != nil {
-				t.Fatalf("re-encoding a decoded frame: %v", err)
-			}
-
-			end := consumed + again.Len()
-			if end > len(data) || !bytes.Equal(again.Bytes(), data[consumed:end]) {
-				t.Fatalf("frame at %d re-encodes to %x, not the bytes it was read from", consumed, again.Bytes())
-			}
-
-			consumed = end
-		}
-	})
-}
-
-// FuzzDecodeJSON feeds every control message the same payload: a decode that succeeds must be stable, so what one end re-sends is what it understood.
-func FuzzDecodeJSON(f *testing.F) {
-	f.Add([]byte(`{"protocol":8,"session":"s","root":"/r","keep":true}`))
-	f.Add([]byte(`{"artifacts":[{"name":"a","digest":"d","url":"u"}]}`))
-	f.Add([]byte(`{"uid":0,"gid":null,"exec_bit":true,"fs_free":18446744073709551615}`))
-	f.Add([]byte(`{"command":"true","env":{"A":"\u0000"}}`))
-	f.Add([]byte(`{"paths":["a","../b"],"defer":true}`))
-	f.Add([]byte(`null`))
-
-	messages := []func() any{
-		func() any { return &Hello{} },
-		func() any { return &Upload{} },
-		func() any { return &UploadArtifact{} },
-		func() any { return &HelloOK{} },
-		func() any { return &Exec{} },
-		func() any { return &Exit{} },
-		func() any { return &Fetch{} },
-		func() any { return &FetchDone{} },
-		func() any { return &Get{} },
-		func() any { return &Push{} },
-		func() any { return &Draining{} },
-		func() any { return &Error{} },
-	}
-
-	f.Fuzz(func(t *testing.T, payload []byte) {
-		for _, fresh := range messages {
-			first := fresh()
-
-			err := DecodeJSON(Frame{Type: FrameHello, Payload: payload}, first)
-			if err != nil {
-				if !errors.Is(err, ErrProtocol) {
-					t.Fatalf("%T: error %v is not ErrProtocol", first, err)
-				}
-
-				continue
-			}
-
-			encoded, err := json.Marshal(first)
-			if err != nil {
-				t.Fatalf("%T: re-encoding: %v", first, err)
-			}
-
-			second := fresh()
-
-			err = DecodeJSON(Frame{Payload: encoded}, second)
-			if err != nil {
-				t.Fatalf("%T: decoding its own encoding %s: %v", first, encoded, err)
-			}
-
-			again, _ := json.Marshal(second)
-			if !bytes.Equal(encoded, again) {
-				t.Fatalf("%T: %s decodes to %s", first, encoded, again)
-			}
-		}
-	})
-}
 
 // FuzzUnpackName: whatever the name, an accepted one is a local path.
 func FuzzUnpackName(f *testing.F) {

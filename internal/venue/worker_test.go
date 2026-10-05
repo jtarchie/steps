@@ -95,8 +95,8 @@ func TestParseWorkerOptions(t *testing.T) {
 	}
 
 	_, err = ParseWorker("ssh://box?binary=/b")
-	if err == nil {
-		t.Error("ssh:// accepted ?binary=, which nothing pushes any more")
+	if err == nil || !strings.Contains(err.Error(), "runs the step with the worker's own sh") {
+		t.Errorf("ssh:// ?binary= = %v, want a refusal naming what replaced it", err)
 	}
 }
 
@@ -120,8 +120,8 @@ func TestWorkerRootStaysAbsolute(t *testing.T) {
 		t.Fatalf("root = %q, want %q — a relative root resolves against $HOME on the worker", worker.Root, "/mnt/fast")
 	}
 
-	if got := remoteShimPath(worker, "abc123"); !strings.HasPrefix(got, "/mnt/fast/") {
-		t.Errorf("remote shim path = %q, want it under the named root", got)
+	if got := (&bareSession{worker: worker}).root(); got != "'/mnt/fast'" {
+		t.Errorf("step directories go under %s, want the named root", got)
 	}
 }
 
@@ -130,7 +130,7 @@ func TestWorkerRootStaysAbsolute(t *testing.T) {
 //
 // An SSH exec request is a string the far end hands to a shell, so an unquoted
 // path is subject to word splitting: a disk mounted at /mnt/fast disk becomes
-// two arguments and the shim never starts, with nothing in the error naming
+// two arguments and the command fails, with nothing in the error naming
 // the space as the reason.
 func TestShellQuoteSurvivesAPathAShellWouldSplit(t *testing.T) {
 	t.Parallel()
@@ -193,7 +193,7 @@ func TestSSHAddressKeepsTheUserOnlyWhenOneWasWritten(t *testing.T) {
 // TestLaunchLabelNamesTheMachineNotTheSpelling pins that steps-worker follows
 // registryKey — every spelling of one machine carries one label, and anything
 // that makes a different machine a different one — and that nothing of the
-// URL, which can carry ?hostkey= and ?binary= paths, reaches a label.
+// URL, which can carry ?hostkey= values, reaches a label.
 func TestLaunchLabelNamesTheMachineNotTheSpelling(t *testing.T) {
 	t.Parallel()
 
@@ -232,7 +232,6 @@ func TestLaunchLabelNamesTheMachineNotTheSpelling(t *testing.T) {
 	for _, same := range []string{
 		"aws://launch/lt-0def4567890abcde/var/tmp?capacity=spot&version=1&region=us-east-1",
 		"aws://launch/lt-0def4567890abcde?version=1&capacity=spot&region=us-east-1&idle=5m",
-		"aws://launch/lt-0def4567890abcde?version=1&capacity=spot&region=us-east-1&binary=/secret/steps",
 	} {
 		if got := label(same); got != awsBase {
 			t.Errorf("%q labels %q, want the same machine as %q", same, got, awsBase)

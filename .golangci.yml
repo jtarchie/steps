@@ -145,8 +145,7 @@ linters:
             # blobstore is provider setup, like workspace below: the CLI parses
             # --artifact-store, builds the S3 client, and hands it into the
             # workspace's injected interfaces — the one place the SDK is
-            # allowed to meet the step cache, so neither workspace nor the
-            # shim ever imports it.
+            # allowed to meet the step cache, so workspace never imports it.
             - "github.com/jtarchie/steps/internal/blobstore"
             # internal/mcp is a setup/tooling dependency here, not an
             # execution-path one: `steps mcp login`/`steps mcp tools` are
@@ -157,12 +156,6 @@ linters:
             # into resource/agent territory, which pipeline.RunJob still
             # exclusively orchestrates.
             - "github.com/jtarchie/steps/internal/mcp"
-            # shim is the same shape of dependency as mcp: `steps _shim` is a
-            # standalone process mode with no relationship to pipeline.RunJob.
-            # It is what a worker runs after the orchestrator pushes this
-            # binary to it, so the CLI constructs it directly rather than
-            # through a pipeline that, on that machine, does not exist.
-            - "github.com/jtarchie/steps/internal/shim"
             - "github.com/jtarchie/steps/internal/store"
             # cli is where a driver is CHOSEN: it turns the state flag into an
             # open sqlite or postgres database (db.go) and hands the
@@ -459,9 +452,7 @@ linters:
         # shell when the answer is "here". A separate package precisely so
         # internal/shell stays stdlib-only — an ssh client in the leaf every
         # execution path imports would make "Leaves: no internal deps, stdlib
-        # only" false for all of them. It reaches shim because pushing and
-        # starting one is its job, and it is what knows how a shim names
-        # itself.
+        # only" false for all of them.
         Venue:
           files:
             - "**/internal/venue/**"
@@ -473,31 +464,20 @@ linters:
             - "$gostd"
             # events: a step's machinery tells the run what it did (a note), and writes human-facing bytes where the renderer says (Stdout/Stderr).
             - "github.com/jtarchie/steps/internal/events"
-            # The SSH client and its sftp subsystem: the whole remote contract
-            # is sshd plus a pushed binary, so these are what implement it.
-            # Both are pure Go, which is what keeps CGO_ENABLED=0 true and so
-            # keeps a cross-built binary pushable to a foreign worker.
+            # The SSH client: the whole remote contract is sshd, plus a docker daemon behind it for a docker+ worker. Pure Go, which keeps CGO_ENABLED=0 true.
             - "golang.org/x/crypto/ssh"
             - "golang.org/x/crypto/ssh/agent"
             - "golang.org/x/crypto/ssh/knownhosts"
-            - "github.com/pkg/sftp/v2"
             # The ssh_config parser, so a worker can be named by the alias the
             # operator's own ~/.ssh/config already defines. Pure Go for the
-            # same reason the two above are.
+            # same reason.
             - "github.com/kevinburke/ssh_config"
             - "go.uber.org/goleak"
-            # blobstore is the venue's data plane: with --artifact-store set,
-            # trees move as presigned-URL blobs and the tunnel carries control
-            # frames only — the property the SSM dialer's slow tunnels depend
-            # on. Pure Go, like everything a pushed binary carries.
-            - "github.com/jtarchie/steps/internal/blobstore"
-            - "github.com/jtarchie/steps/internal/compress"
             - "github.com/jtarchie/steps/internal/shell"
-            - "github.com/jtarchie/steps/internal/shim"
+            # wire's tar codec is what a tree crosses to a worker in.
             - "github.com/jtarchie/steps/internal/wire"
             # ssmdial is the aws:// transport, and the SSM control plane it is
-            # driven from: start a session, send the bootstrap that gets a shim
-            # listening. Both pure Go.
+            # driven from: start a session, run the install that admits this process's ssh key. Both pure Go.
             - "github.com/jtarchie/steps/internal/venue/ssmdial"
             - "github.com/aws/aws-sdk-go-v2"
             # iapdial is the gcp:// tunnel, and these two are its control
@@ -517,35 +497,7 @@ linters:
             - "github.com/jtarchie/steps/internal/treedigest"
             # testsshd is test-only: the in-process sshd the ssh venues are tested against.
             - "github.com/jtarchie/steps/internal/testsshd"
-        # shim is the remote half of a placed step: it runs as `steps _shim` on
-        # a worker, reads frames from stdin and writes them to stdout, and
-        # knows nothing about pipelines — no config, no store, no workspace,
-        # no merkle. That ignorance IS the contract: a worker runs a binary and
-        # a command in a directory, and every decision about what the command
-        # means stays where the pipeline is. It reaches shell for one reason
-        # only: a command placed on a worker has to run the way HostRunner runs
-        # one, same env allowlist and same cancellation bound, or placement
-        # would quietly change what a step inherits.
-        Shim:
-          files:
-            - "**/internal/shim/**"
-          allow:
-            - "$gostd"
-            - "go.uber.org/goleak"
-            - "github.com/jtarchie/steps/internal/compress"
-            # dockerapi for ONE question — which daemon this machine talks
-            # to — answered the way docker answers it (DOCKER_HOST, then the
-            # context store). An ssh session has no shell profile, so
-            # DOCKER_HOST alone found nothing on a machine whose `docker`
-            # works, and the forwarded socket answered EOF.
-            - "github.com/jtarchie/steps/internal/dockerapi"
-            - "github.com/jtarchie/steps/internal/shell"
-            - "github.com/jtarchie/steps/internal/wire"
-        # wire is the framed protocol and tree codec the orchestrator and a
-        # pushed shim speak across a venue. A stdlib-only leaf on purpose: it
-        # is the one thing both ends of a version skew must agree on byte for
-        # byte, so it must not be able to drift by acquiring a dependency only
-        # one side has.
+        # wire is the tar codec a tree crosses a venue in, and the step cache's blobs are packed with. A stdlib-only leaf on purpose: it decides what a tree's bytes are, so it must not drift by acquiring a dependency.
         Wire:
           files:
             - "**/internal/wire/**"
@@ -559,7 +511,6 @@ linters:
             - "$gostd"
             - "github.com/jtarchie/steps/internal/testsshd"
             - "golang.org/x/crypto/ssh"
-            - "github.com/pkg/sftp/v2"
             - "go.uber.org/goleak"
             # dockerapi for the streamlocal test's socket, found the way a docker CLI finds it.
             - "github.com/jtarchie/steps/internal/dockerapi"
@@ -571,13 +522,11 @@ linters:
             - "$gostd"
             - "github.com/jtarchie/steps/internal/treedigest"
         # blobstore is the content-addressed artifact store on S3: trees by
-        # digest, packed exactly as they cross a venue's wire (compress over
-        # wire's tar), reaching S3 through the pure-Go SDK — GET/PUT by key,
+        # digest, packed as compress over wire's tar, reaching S3 through the pure-Go SDK — GET/PUT by key,
         # never a mounted filesystem. It holds bytes only; which digest means
         # what stays in internal/store's SQLite, which is what makes bucket
         # lifecycle expiry safe. Wired in by main and consumed through
-        # workspace's injected interfaces, so neither workspace nor the shim
-        # ever imports an AWS SDK.
+        # workspace's injected interfaces, so workspace never imports an AWS SDK.
         Blobstore:
           files:
             - "**/internal/blobstore/**"
@@ -594,8 +543,7 @@ linters:
         # (see the package doc for the sources and their licenses). It is a
         # leaf under venue with no steps imports at all — it speaks a wire
         # format and nothing about pipelines — so its allow-list is the
-        # websocket, the SSM SDK, and uuid, all pure Go so a cross-built
-        # binary stays pushable.
+        # websocket, the SSM SDK, and uuid, all pure Go so CGO_ENABLED=0 holds.
         SSMDial:
           files:
             - "**/internal/venue/ssmdial/**"
@@ -610,8 +558,7 @@ linters:
         # importable client (the canonical implementation is gcloud's Python;
         # see the package doc for the sources and their licenses). A leaf
         # under venue with no steps imports at all — its allow-list is the
-        # websocket and nothing else, pure Go so a cross-built binary stays
-        # pushable.
+        # websocket and nothing else, pure Go so CGO_ENABLED=0 holds.
         IAPDial:
           files:
             - "**/internal/venue/iapdial/**"
@@ -619,13 +566,7 @@ linters:
             - "$gostd"
             - "github.com/gorilla/websocket"
             - "go.uber.org/goleak"
-        # compress is the zstd wrap around wire's tar stream — one package so
-        # every path that ships a tree (the venue's upload, the shim's fetch,
-        # a blob store's blobs) holds the same opinion about the encoding, and
-        # so wire itself stays stdlib-only. Compression is negotiated at the
-        # hello, never assumed, which is what keeps a mixed-version pair on
-        # raw rather than on a stream one side cannot decode. Pure Go, like
-        # every dependency a pushed binary carries.
+        # compress is the zstd wrap around wire's tar stream for the step cache's blobs, its own package so wire stays stdlib-only. Pure Go so CGO_ENABLED=0 holds.
         Compress:
           files:
             - "**/internal/compress/**"
@@ -736,8 +677,6 @@ linters:
             - "$gostd"
             # goleak is test-only: TestMain fails the package's tests on a leaked goroutine.
             - "go.uber.org/goleak"
-            # shim is test-only: a local: worker execs this test binary as `_shim`, so TestMain has to answer for a placed step to run.
-            - "github.com/jtarchie/steps/internal/shim"
             - "github.com/jtarchie/steps/internal/agent"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/events"

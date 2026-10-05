@@ -66,7 +66,7 @@
       "timed_out": 0,
       "not_covered": 32,
       "efficacy": 78.13,
-      "note": "First sweep, scoped SINCE=9ea6941 (get.go, task.go, put.go, venue.go, resourceplace.go, holders.go). PARTIAL TRIAGE: the 10 survivors in holders.go (the file steps#138 added) were worked through \u2014 2 real gaps now pinned by holders_test.go, 4 killed by ./e2e when applied by hand (the placedTaskSpace/placedPutSpace tag-and-store guards, the empty-held guard, withRemoteInputs' empty guard), 4 equivalent. The other 25 are PRE-EXISTING lines in files this work happened to touch (get.go 11, task.go 9, venue.go 2, put.go 1, resourceplace.go 1) and are NOT triaged; they belong to a pipeline sweep of its own. Efficacy below counts them all.",
+      "note": "First sweep, scoped SINCE=9ea6941 (get.go, task.go, put.go, venue.go, resourceplace.go, holders.go). PARTIAL TRIAGE: the 10 survivors in holders.go (the file steps#138 added) were worked through — 2 real gaps now pinned by holders_test.go, 4 killed by ./e2e when applied by hand (the placedTaskSpace/placedPutSpace tag-and-store guards, the empty-held guard, withRemoteInputs' empty guard), 4 equivalent. The other 25 are PRE-EXISTING lines in files this work happened to touch (get.go 11, task.go 9, venue.go 2, put.go 1, resourceplace.go 1) and are NOT triaged; they belong to a pipeline sweep of its own. Efficacy below counts them all.",
       "equivalent": [
         {
           "mutant": "holders.go | CONDITIONALS_NEGATION | if err != nil { (after HoldRemote)",
@@ -85,17 +85,6 @@
           "why": "only a log line reads the error; a bookkeeping write must never fail a step that did its work"
         }
       ]
-    },
-    "./internal/shim": {
-      "swept_at": "6645ad0",
-      "date": "2026-09-22",
-      "killed": 84,
-      "lived": 0,
-      "timed_out": 23,
-      "not_covered": 9,
-      "efficacy": 100,
-      "note": "First sweep, scoped SINCE=9ea6941 (shim.go, dataplane.go, produced.go). No survivors. 23 TIMED OUT, every one an err-check negation in the frame loop or the store PUT: the peer harness then waits for a frame that never comes, which is a real kill; spot-checked by hand after the sweep, see the report.",
-      "equivalent": []
     },
     "./internal/store/sqlite": {
       "swept_at": "6645ad0",

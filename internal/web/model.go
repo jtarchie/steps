@@ -333,8 +333,7 @@ func (p PlacementView) Platform() string { return p.GOOS + "/" + p.GOARCH }
 
 // Filesystem is what the tree landed on, or a stated silence.
 //
-// Empty is never drawn as an ordinary disk: a shim on a platform with no
-// statfs genuinely cannot say, and tmpfs — the answer this column exists to
+// Empty is never drawn as an ordinary disk: a docker+ worker's tree is in volumes and does not say, and tmpfs — the answer this column exists to
 // surface — would otherwise hide behind a plausible blank.
 func (p PlacementView) Filesystem() string {
 	if p.FSType == "" {
@@ -358,7 +357,7 @@ func (p PlacementView) Sent() string { return FormatBinaryBytes(p.BytesSent) }
 // wanting the bytes, not of the step having made them.
 func (p PlacementView) Received() string { return FormatBinaryBytes(p.BytesReceived) }
 
-// Identity is who the step ran as, blank when the shim did not say — never an
+// Identity is who the step ran as, blank when the worker did not say — never an
 // invented 0, which would read as root.
 func (p PlacementView) Identity() string {
 	if p.UID == nil || p.GID == nil {
@@ -382,8 +381,8 @@ func (p PlacementView) Machine() string {
 //
 // That one is decimal so an agent's payload is comparable to the byte limits
 // it is bounded by. This is about disks and wire transfers, which every tool
-// a reader will cross-check against — the shim's own tmpfs warning, the EC2
-// console, df — reports in KiB/MiB/GiB.
+// a reader will cross-check against — the EC2 console, df, docker system df —
+// reports in KiB/MiB/GiB.
 func FormatBinaryBytes(n int64) string {
 	const unit = 1024
 

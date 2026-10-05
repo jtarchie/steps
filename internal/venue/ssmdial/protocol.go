@@ -18,7 +18,7 @@
 //   - BASIC port forwarding only. A client advertising version >= 1.1.70 asks
 //     an agent >= 3.0.196.0 to multiplex several TCP streams over one channel
 //     with smux; steps never wants that. A venue session is one byte pipe to
-//     one shim, so the channel IS the pipe — no smux, no local listener, no
+//     one sshd, so the channel IS the pipe — no smux, no local listener, no
 //     stream bookkeeping. Advertising 1.1.0 is what keeps the agent on the
 //     simple path.
 //   - No shell, SSH or RDP session types. Those are what the plugin is for.

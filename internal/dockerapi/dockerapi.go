@@ -107,3 +107,25 @@ func (c *Client) Ping(ctx context.Context) error {
 
 	return nil
 }
+
+// Platform is the daemon's own OS and architecture, in Go's spelling (linux, arm64), for a record of where a step ran.
+func (c *Client) Platform(ctx context.Context) (string, string, error) {
+	info, err := c.api.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return "", "", fmt.Errorf("asking %s what it runs on: %w", c.host, err)
+	}
+
+	return info.Info.OSType, goarchOf(info.Info.Architecture), nil
+}
+
+// goarchOf reads a uname -m machine name, which is what the daemon reports.
+func goarchOf(machine string) string {
+	switch machine {
+	case "x86_64":
+		return "amd64"
+	case "aarch64":
+		return "arm64"
+	default:
+		return machine
+	}
+}

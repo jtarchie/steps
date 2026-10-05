@@ -75,9 +75,8 @@ func windowsModes(t *testing.T, root string) {
 // TestAWorkerWithNoExecutableBitLosesItAcrossTheWire is the answer to #83, and
 // it is worse than the cache miss the question anticipated.
 //
-// digestTree runs only on the orchestrator — the shim imports internal/wire
-// and never internal/workspace — so a Windows worker never disagrees about a
-// digest. What it does instead is silently REMOVE the executable bit from
+// digestTree runs only on the orchestrator, so a worker on a filesystem with
+// no executable bit never disagrees about a digest. What it does instead is silently REMOVE the executable bit from
 // every tree that passes through it: unpack cannot set 0111, the repack on the
 // way home reads 0666 off the filesystem and writes that into the tar, and the
 // tree the orchestrator gets back is not the tree it sent. The step cache sees

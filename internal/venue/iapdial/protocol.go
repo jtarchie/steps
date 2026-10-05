@@ -20,7 +20,7 @@
 //   - CONNECT only, never RECONNECT. gcloud resumes a dropped websocket by
 //     session id, re-sending what the relay had not acknowledged. A venue
 //     session that loses its transport is redialed a layer up with a fresh
-//     shim and a re-sent tree, exactly as an aws:// session is — so resume
+//     ssh connection, exactly as an aws:// session is — so resume
 //     machinery here would be a second, worse copy of that. The cost is that
 //     a mid-step websocket drop fails the running command; the venue's
 //     redial boundary already owns that outcome.

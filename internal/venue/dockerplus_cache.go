@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/jtarchie/steps/internal/dockerapi"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/treedigest"
 	"github.com/jtarchie/steps/internal/wire"
@@ -33,13 +34,16 @@ const (
 var (
 	errNotHeld         = errors.New("the worker no longer holds it")
 	errDigestMismatch  = errors.New("the tree that arrived is not the one asked for")
-	errStoreOnDocker   = errors.New("a docker+ worker cannot push to the artifact store yet")
 	errDigestRunFailed = errors.New("the worker could not digest the tree")
 )
 
 // aliasName is where digest is published. STEPS_TEST_CACHE_NAMESPACE keeps test processes that share one daemon from sharing entries: one test's cleanup would otherwise remove a lower another process is mounting.
 func aliasName(digest string) string {
 	return aliasPrefix + os.Getenv("STEPS_TEST_CACHE_NAMESPACE") + digest
+}
+
+func (s *plusSession) aliasName(digest string) string {
+	return aliasName(s.namespace + digest)
 }
 
 // cached finds the data volume holding digest, re-hashing it on the worker first: a volume someone edited, or an alias left pointing at a removed one, is a miss rather than the wrong tree.
@@ -69,7 +73,7 @@ func (s *plusSession) cached(ctx context.Context, digest string) (dockerapi.Volu
 
 // lookup follows digest's alias to its data volume without re-hashing it; alias is zero when there is none.
 func (s *plusSession) lookup(ctx context.Context, digest string) (dockerapi.Volume, dockerapi.Volume, error) {
-	alias, err := s.docker.InspectVolume(ctx, aliasName(digest))
+	alias, err := s.docker.InspectVolume(ctx, s.aliasName(digest))
 	if err != nil {
 		return dockerapi.Volume{}, dockerapi.Volume{}, fmt.Errorf("%w", err)
 	}
@@ -138,7 +142,7 @@ func (s *plusSession) publish(ctx context.Context, digest string, data dockerapi
 	labels[cacheDigest] = digest
 	labels[cacheSize] = strconv.FormatInt(size, 10)
 
-	alias, err := s.docker.CreateVolume(ctx, aliasName(digest), labels, nil)
+	alias, err := s.docker.CreateVolume(ctx, s.aliasName(digest), labels, nil)
 	if err != nil {
 		return dockerapi.Volume{}, fmt.Errorf("%w", err)
 	}
@@ -263,13 +267,17 @@ func (s *plusSession) placeRemote(ctx context.Context, name string, input shell.
 		return s.overlay(ctx, data)
 	}
 
+	// Said, because the pipe runs before the step's first command and is otherwise a silent pause.
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("piping %q from worker %s to worker %s", name, holderAddress(input.Holder), s.worker.Address()))
+
+	// ponytail: staged on this machine's temp disk, not streamed holder-to-consumer; streaming needs a worker-side re-digest before publish, since the holder is not trusted.
 	staged, err := os.MkdirTemp("", "steps-pipe-")
 	if err != nil {
 		return "", fmt.Errorf("%w", err)
 	}
 	defer func() { _ = os.RemoveAll(staged) }()
 
-	pulled, err := Pull(ctx, shell.RunnerSpec{Worker: input.Holder, ArtifactStore: s.spec.ArtifactStore}, name, input.Digest, staged)
+	pulled, err := Pull(ctx, shell.RunnerSpec{Worker: input.Holder}, name, input.Digest, staged)
 	if err != nil {
 		return "", fmt.Errorf("input %q from %s: %w", name, input.Holder, err)
 	}
@@ -312,6 +320,16 @@ func (s *plusSession) hold(ctx context.Context, volume, digest string, size int6
 	}
 
 	return nil
+}
+
+// holderAddress is a holder's URL without its connection options, which can name key paths.
+func holderAddress(holder string) string {
+	worker, err := ParseWorker(holder)
+	if err != nil {
+		return holder
+	}
+
+	return worker.Address()
 }
 
 // pullPlus brings a held tree home from a docker+ worker and checks it against the digest it was asked for.

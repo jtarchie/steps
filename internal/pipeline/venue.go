@@ -24,6 +24,9 @@ import (
 	"github.com/jtarchie/steps/internal/venue"
 )
 
+// newRunner is venue.NewRunner, swapped by tests for a worker the cloud reclaims mid-command, which no local machine can stage.
+var newRunner = venue.NewRunner //nolint:gochecknoglobals // test seam
+
 // workersKey types the context value carrying the tag-to-worker mapping.
 type workersKey struct{}
 
@@ -56,26 +59,6 @@ func workersFrom(ctx context.Context) map[string]venue.Worker {
 	workers, _ := ctx.Value(workersKey{}).(map[string]venue.Worker)
 
 	return workers
-}
-
-// artifactStoreKey types the context value carrying the --artifact-store URL.
-type artifactStoreKey struct{}
-
-// WithArtifactStore records the --artifact-store URL so a placed step's venue
-// can offer the worker the URL data plane. The URL was already parsed at the
-// CLI edge; this carries the fact, not a client.
-func WithArtifactStore(ctx context.Context, raw string) context.Context {
-	if raw == "" {
-		return ctx
-	}
-
-	return context.WithValue(ctx, artifactStoreKey{}, raw)
-}
-
-func artifactStoreFrom(ctx context.Context) string {
-	raw, _ := ctx.Value(artifactStoreKey{}).(string)
-
-	return raw
 }
 
 // leasesKey types the context value carrying one job's venue leases.

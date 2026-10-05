@@ -13,7 +13,7 @@ import (
 
 //nolint:gochecknoglobals // test seams for a bound on another machine's disk
 var (
-	// cacheBytes bounds what a docker+ worker keeps, by size not age: the shim's artifact cache bound, carried over.
+	// cacheBytes bounds what a docker+ worker keeps, by size not age: a step's inputs are reused by content, however old.
 	cacheBytes int64 = 8 << 30
 	// orphanAge is how long a volume nothing names may sit before it is taken for a crashed session's: long past any session's first mount.
 	orphanAge = time.Hour

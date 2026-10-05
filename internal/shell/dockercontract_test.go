@@ -144,10 +144,16 @@ func TestContractSessionContainerConfiguration(t *testing.T) {
 
 	defer CloseRunner(runner, "test")
 
-	// Starts the container; its own result is not what is under test.
-	_, _, _, err = runner.RunCaptureFull(WithBuildMetadata(context.Background(), BuildMetadata{RunID: "CONTRACTRUN"}), "true")
-	if err != nil {
-		t.Fatalf("RunCaptureFull: %v", err)
+	// Each exec carries its own build metadata: a session outlives the context that started its container.
+	for _, runID := range []string{"CONTRACTRUN", "LATERRUN"} {
+		stdout, _, _, err := runner.RunCaptureFull(WithBuildMetadata(context.Background(), BuildMetadata{RunID: runID}), `printf %s "$STEPS_RUN_ID"`)
+		if err != nil {
+			t.Fatalf("RunCaptureFull: %v", err)
+		}
+
+		if stdout != runID {
+			t.Errorf("STEPS_RUN_ID = %q, want this exec's %q", stdout, runID)
+		}
 	}
 
 	view := inspectContainerOf(t, runner)
@@ -256,10 +262,6 @@ func assertContainerEnv(t *testing.T, view daemonView) {
 		}
 
 		got[name] = value
-	}
-
-	if got["STEPS_RUN_ID"] != "CONTRACTRUN" {
-		t.Errorf("STEPS_RUN_ID = %q, want the build metadata", got["STEPS_RUN_ID"])
 	}
 
 	if got["STEPS_TEST_CONTRACT_SET"] != "visible" {

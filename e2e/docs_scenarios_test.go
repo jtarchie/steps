@@ -42,8 +42,8 @@ type docScenario struct {
 	// workers are passed as --worker flags: the tag-to-machine mapping an
 	// operator supplies for a step's tags:. Built per test, like fake, so a
 	// scenario can point at something it started; a scenario that only needs
-	// placement to HAPPEN names local:, which runs the step through a shim on
-	// this machine and needs no network.
+	// placement to HAPPEN names local:, a docker+ worker on this machine's own
+	// daemon, which needs no network but does need docker.
 	workers map[string]string
 
 	// check runs after a green `steps test`, for assertions the YAML itself
@@ -66,9 +66,6 @@ func scripted(turns ...turn) func(t *testing.T) *fakeLLM {
 // docScenarios maps fence test= ids to their scaffolding. Keep ids
 // page-scoped ("agents-review", not "review") so a rename never collides.
 var docScenarios = map[string]docScenario{
-	// A placed step, run through a shim in a child process on this machine:
-	// no network, no worker, no credentials, and the whole transport — frames,
-	// tree round trip, exit codes — exercised for real rather than stubbed.
 	// Two user turns, so the provider answers twice: the second script entry is
 	// what the model says once it has been asked the follow-up.
 	"agents-two-messages": {
@@ -77,6 +74,9 @@ var docScenarios = map[string]docScenario{
 			says("It turns on parser.go line 42."),
 		),
 	},
+	// A placed step on local:, this machine's own daemon: no network, no
+	// worker, no credentials, and the whole docker+ data plane — volumes, the
+	// digest cache, the tree round trip, exit codes — exercised for real.
 	"infra-worker": {
 		workers: map[string]string{"gpu": "local:"},
 	},

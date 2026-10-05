@@ -202,7 +202,7 @@ func executeTask(
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
 
-	err = holdRemoteOutputs(ctx, bw, rt.Outputs, outputMapping, held, holder)
+	err = holdRemoteOutputs(bw, rt.Outputs, outputMapping, held, holder)
 	if err != nil {
 		return fmt.Errorf("task %q: %w", rt.Name, err)
 	}
@@ -240,13 +240,11 @@ func taskRunner(ctx context.Context, step config.Step, rt config.ResolvedTask, s
 		return "", nil, err
 	}
 
-	//nolint:contextcheck // NewRunner takes no context; opening the artifact store reads only local config
-	runner, err := venue.NewRunner(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env, User: rt.User, Network: rt.Network,
+	runner, err := newRunner(shell.RunnerSpec{Image: rt.Image, Cwd: workspaceDir, Env: rt.Env, User: rt.User, Network: rt.Network,
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes(),
 		Worker: worker, WorkerTag: placementTag(step), Fetch: rt.Outputs, ReusedWarm: reusedWarm(ctx, step),
-		DeferFetch:    deferrable(step, rt),
-		RemoteInputs:  remote,
-		ArtifactStore: artifactStoreFrom(ctx),
+		DeferFetch:   deferrable(step, rt),
+		RemoteInputs: remote,
 		// The same postmortem, on the machine that actually ran the step: a
 		// worker's scratch is the remote half of the step directory, and a
 		// flag whose whole purpose is having the files afterwards would stop

@@ -478,7 +478,7 @@ func awaitLanded(ctx context.Context, landing <-chan struct{}, worker Worker) er
 	}
 }
 
-// dialOf is the machine an entry holds as this spelling reaches it: every mapping of one parked instance or one launched template shares its entry, and each connects its own way — its root, its shim, its binary, its host key — rather than the way of whichever spelling acquired it.
+// dialOf is the machine an entry holds as this spelling reaches it: every mapping of one parked instance or one launched template shares its entry, and each connects its own way — its root, its host key, its ssh options — rather than the way of whichever spelling acquired it.
 func dialOf(spelling, machine Worker) Worker {
 	switch spelling.Rung {
 	case RungStopped:

@@ -13,3 +13,18 @@ func TestPlacedImageSeesThroughTry(t *testing.T) {
 		t.Errorf("PlacedImage = %q, want the wrapped step's image", got)
 	}
 }
+
+// A put names its resource with resource: when the step is named otherwise; looking it up by the step's name found nothing and refused the put on a docker+ worker.
+func TestPlacedImageFindsAPutsRenamedResource(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		ResourceTypes: []ResourceType{{Name: "probe", Image: "alpine"}},
+		Resources:     []Resource{{Name: "repo", Type: "probe"}},
+	}
+
+	got := cfg.PlacedImage(Step{Put: "publish", Resource: "repo"})
+	if got != "alpine" {
+		t.Errorf("PlacedImage = %q, want the resource type's image", got)
+	}
+}

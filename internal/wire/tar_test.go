@@ -207,12 +207,9 @@ func TestTreeRoundTripPreservesPermissions(t *testing.T) {
 	}
 }
 
-// TestPackPathsRefusesAnEscapingName is the read-side trust boundary. The
-// names PackPaths is given arrive from the PEER — the shim tars whatever a
-// FrameFetch asked for — so an unvalidated name walked a tree outside the work
-// directory and shipped it straight back as data frames. unpackName cannot
-// cover it: that guard runs on the orchestrator, and whoever sent the frame is
-// reading the raw stream.
+// TestPackPathsRefusesAnEscapingName is the read-side trust boundary: the
+// names PackPaths is given come from a pipeline's declared outputs, so an
+// unvalidated "../.." would pack a tree from outside the work directory.
 func TestPackPathsRefusesAnEscapingName(t *testing.T) {
 	t.Parallel()
 

@@ -28,15 +28,6 @@
 # task mutate-pkg results; what is worth keeping from them goes in tools/mutation-ledger.json
 /.gremlins/
 
-# hack/aws-fixture.sh's cross-compiled worker binary
-/.aws-fixture/
-
-# hack/gcp-fixture.sh's cross-compiled worker binary
-/.gcp-fixture/
-
-# scratch a shim writes if it is ever handed a relative root
-steps-shim/
-
 # hack/shorts: rendered videos and the browser toolchain
 hack/shorts/node_modules/
 hack/shorts/*/out/

@@ -4,14 +4,11 @@ package venue
 // forwarding to its own sshd.
 //
 // The shape differs from aws:// in one way that matters. GCP has no
-// SSM-shaped exec channel — no way to run a bootstrap command through the
-// control plane — so the SSH contract IS the transport: the relay tunnel
-// terminates at port 22, and everything ssh:// does (push a binary over
-// sftp, exec it, talk over its stdio) happens over that tunnel unchanged.
-// Two consequences an aws:// reader would not expect: ?binary= needs no
-// artifact store, because sftp carries it, and the instance needs sshd —
-// which every stock image runs — plus one firewall rule admitting Google's
-// relay range 35.235.240.0/20 to port 22. No public address is needed.
+// SSM-shaped exec channel, so the SSH contract IS the transport: the relay
+// tunnel terminates at port 22, and the docker daemon is reached over that
+// ssh exactly as docker+ssh:// reaches one. The instance needs sshd — which
+// every stock image runs — plus one firewall rule admitting Google's relay
+// range 35.235.240.0/20 to port 22. No public address is needed.
 //
 // Authentication is minted, not configured. The dial generates an ephemeral
 // key, installs its public half through instance metadata (the google-ssh
@@ -83,7 +80,7 @@ func applyGCP(worker Worker, parsed *url.URL) (Worker, error) {
 }
 
 // checkGCP refuses a gcp:// mapping this venue cannot act on. The options
-// that belong to other schemes — ?capacity=, ?version=, ?shim=, ?region= —
+// that belong to other schemes — ?capacity=, ?version=, ?region= —
 // are already refused by the grammar itself: an instance template is an
 // immutable object with no numbered versions (name a different template),
 // and it owns the capacity decision (provisioningModel lives in the
@@ -250,23 +247,6 @@ var (
 	gcpReadyTimeout = 4 * time.Minute
 	gcpReadyPoll    = 5 * time.Second
 )
-
-// dialGCP reaches an instance through the relay and starts a shim over SSH.
-func dialGCP(ctx context.Context, worker Worker) (*transport, error) {
-	client, err := gcpSSHClient(ctx, worker)
-	if err != nil {
-		return nil, err
-	}
-
-	remote, build, err := pushShim(ctx, client, worker)
-	if err != nil {
-		_ = client.Close()
-
-		return nil, err
-	}
-
-	return startShim(client, remote, build)
-}
 
 // gcpSSHClient reaches an instance's sshd through the relay, with this process's key installed and the host key attested by the guest agent.
 func gcpSSHClient(ctx context.Context, worker Worker) (*ssh.Client, error) {

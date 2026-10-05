@@ -14,15 +14,15 @@ func FuzzParseWorker(f *testing.F) {
 		"local:/mnt/fast",
 		"ssh://ubuntu@box:2222/mnt/fast?identity=/k&known_hosts=/h",
 		"ssh://box?hostkey=SHA256:" + strings.Repeat("a", 43),
-		"aws://i-0abc123def456789/scratch?region=us-east-2&binary=/b",
+		"aws://i-0abc123def456789/scratch?region=us-east-2",
 		"aws://stopped/i-0abc123def456789?idle=5m",
-		"aws://launch/lt-0def456789abcdef/root?version=latest&capacity=spot&shim=/s",
+		"aws://launch/lt-0def456789abcdef/root?version=latest&capacity=spot",
 		"gcp://launch/template-1/work?zone=us-central1-a&project=p&idle=1m",
 		"gcp://stopped/worker-1?hostkey=SHA256:" + strings.Repeat("B", 43),
 		"aws://launch/lt-0def456789abcdef/a%3Fb",
 		"ssh://box/%zz",
 		"docker+ssh://jt@box:2222?sock=/run/docker.sock&identity=/k&hostkey=SHA256:" + strings.Repeat("c", 43),
-		"aws://launch/lt-0def456789abcdef?capac%zz=spot&shim=/s",
+		"aws://launch/lt-0def456789abcdef?capac%zz=spot",
 	} {
 		f.Add(seed)
 	}
@@ -43,7 +43,7 @@ func FuzzParseWorker(f *testing.F) {
 		}
 
 		bare := worker
-		bare.Identity, bare.KnownHosts, bare.SSHConfig, bare.HostKey, bare.Binary, bare.Shim, bare.Query = "", "", "", "", "", "", ""
+		bare.Identity, bare.KnownHosts, bare.SSHConfig, bare.HostKey, bare.Socket, bare.Query = "", "", "", "", "", ""
 
 		if worker.Address() != bare.Address() {
 			t.Fatalf("Address() of %q = %q depends on its connection options", raw, worker.Address())
@@ -146,38 +146,6 @@ func FuzzSplitHostPort(f *testing.F) {
 		h, p, err := net.SplitHostPort(net.JoinHostPort(host, port))
 		if err != nil || h != host || p != port {
 			t.Fatalf("splitHostPort(%q) = %q, %q, which do not re-join", authority, host, port)
-		}
-	})
-}
-
-// FuzzUnkept pins the deferred-fetch arithmetic: what is left is exactly the declared outputs the worker did not keep, in declared order, and a whole-tree request is all or nothing.
-func FuzzUnkept(f *testing.F) {
-	f.Add("a,b,c", "b", "")
-	f.Add("a,b", "", "tree")
-	f.Add("", "tree", "tree")
-
-	f.Fuzz(func(t *testing.T, declared, keptNames, artifact string) {
-		paths := strings.Split(declared, ",")
-		kept := map[string]string{}
-
-		for _, name := range strings.Split(keptNames, ",") {
-			kept[name] = "sha256:x"
-		}
-
-		remaining, tree := unkept(paths, artifact, kept)
-
-		if artifact != "" {
-			_, held := kept[artifact]
-			if remaining != nil || (tree == "") != held || (tree != "" && tree != artifact) {
-				t.Fatalf("unkept(tree %q) = %q, %q", artifact, remaining, tree)
-			}
-
-			return
-		}
-
-		want := slices.DeleteFunc(slices.Clone(paths), func(name string) bool { _, ok := kept[name]; return ok })
-		if tree != "" || !slices.Equal(remaining, want) {
-			t.Fatalf("unkept(%q) = %q, %q, want %q", paths, remaining, tree, want)
 		}
 	})
 }

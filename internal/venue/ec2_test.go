@@ -516,7 +516,7 @@ func TestLeaseResolvedWorkerDialsTheAcquiredInstance(t *testing.T) {
 	// added to the grammar as launch-rung-only without being added to what
 	// the rebuild strips, so the URL a paid-for instance was named by no
 	// longer parsed. Every acquisition-only option belongs in this mapping.
-	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde/mnt/fast?capacity=spot&version=7&region=us-west-2&shim=/usr/local/bin/steps")
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde/mnt/fast?capacity=spot&version=7&region=us-west-2")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
@@ -540,7 +540,7 @@ func TestLeaseResolvedWorkerDialsTheAcquiredInstance(t *testing.T) {
 		t.Errorf("re-parsed = %+v, want the launched instance as a static worker", reparsed)
 	}
 
-	if reparsed.Root != "/mnt/fast" || reparsed.Region != "us-west-2" || reparsed.Shim != "/usr/local/bin/steps" {
+	if reparsed.Root != "/mnt/fast" || reparsed.Region != "us-west-2" {
 		t.Errorf("re-parsed = %+v, want the root and connection options carried over", reparsed)
 	}
 }
@@ -553,7 +553,7 @@ func TestLeaseResolvedWorkerDialsTheAcquiredInstance(t *testing.T) {
 func TestResolvedWorkerDropsEveryAcquisitionOption(t *testing.T) {
 	seamEC2(t, &fakeEC2{})
 
-	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde?capacity=spot&version=7&shim=/usr/local/bin/steps")
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde?capacity=spot&version=7&region=us-west-2")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}

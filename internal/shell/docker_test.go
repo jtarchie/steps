@@ -186,13 +186,24 @@ func TestNewRunnerResolvesCwdOnce(t *testing.T) {
 func ourContainerCount(t *testing.T) int {
 	t.Helper()
 
+	return ourContainerCountOf(t, "")
+}
+
+// ourContainerCountOf narrows ourContainerCount to containers made from image; "" is every image.
+func ourContainerCountOf(t *testing.T, image string) int {
+	t.Helper()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	//nolint:gosec // fixed argv but for this process's own pid
-	out, err := exec.CommandContext(ctx, "docker", "ps", "--all", "--quiet",
-		"--filter", "label="+dockerOwnerLabel+"=steps",
-		"--filter", "label="+dockerPIDLabel+"="+strconv.Itoa(os.Getpid())).Output()
+	args := []string{"ps", "--all", "--quiet",
+		"--filter", "label=" + dockerOwnerLabel + "=steps",
+		"--filter", "label=" + dockerPIDLabel + "=" + strconv.Itoa(os.Getpid())}
+	if image != "" {
+		args = append(args, "--filter", "ancestor="+image)
+	}
+
+	out, err := exec.CommandContext(ctx, "docker", args...).Output() //nolint:gosec // fixed argv but for this process's pid and a test's image
 	if err != nil {
 		t.Fatalf("listing this process's containers: %v", err)
 	}
@@ -637,12 +648,14 @@ func TestRunOnAContainerThatDiedAtBirthIsNotAnExitError(t *testing.T) {
 func TestDockerRunnerRemovesAContainerThatDiedAtBirth(t *testing.T) {
 	requireDocker(t)
 
-	before := ourContainerCount(t)
-	runner := newTestRunner(t, RunnerSpec{Image: entrypointImage(t), Cwd: mountableTempDir(t)})
+	image := entrypointImage(t)
+	// Of this image only: under a loaded daemon another test's container can still be on its way out, and a process-wide count reads it as this one.
+	before := ourContainerCountOf(t, image)
+	runner := newTestRunner(t, RunnerSpec{Image: image, Cwd: mountableTempDir(t)})
 
 	_, _, _, _ = runner.RunCaptureFull(t.Context(), "anything")
 
-	if after := ourContainerCount(t); after != before {
+	if after := ourContainerCountOf(t, image); after != before {
 		t.Errorf("container count went %d -> %d; the dead container was left behind", before, after)
 	}
 }

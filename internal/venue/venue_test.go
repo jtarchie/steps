@@ -11,21 +11,16 @@ import (
 	"github.com/jtarchie/steps/internal/shell"
 )
 
-// localWorker points a spec at this test binary running as a shim. See
-// TestMain: under `go test` the binary a local: venue would exec is the test
-// binary itself, which does not answer to _shim unless something dispatches
-// it.
+// localWorker is a local: worker, a docker+ one on this machine's own daemon, with a root of its own so its cache is its own.
 func localWorker(t *testing.T, cwd string, outputs ...string) shell.RunnerSpec {
 	t.Helper()
 
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatalf("locating the test binary: %v", err)
-	}
+	requireDockerVenue(t)
 
 	return shell.RunnerSpec{
 		Cwd:    cwd,
-		Worker: "local:?binary=" + self,
+		Image:  "alpine:3",
+		Worker: "local:" + t.TempDir(),
 		Fetch:  outputs,
 	}
 }
@@ -107,13 +102,23 @@ func TestVenueReportsExitAsData(t *testing.T) {
 	}
 }
 
+// deadWorker is a docker+ssh:// worker whose sshd was listening and no longer is.
+func deadWorker(t *testing.T) shell.RunnerSpec {
+	t.Helper()
+
+	server := newTestSSHD(t)
+	worker := strings.Replace(dockerPlusURL(server, "/var/run/docker.sock"), server.Addr(), deadAddress(t), 1)
+
+	return shell.RunnerSpec{Cwd: t.TempDir(), Image: "alpine:3", Worker: worker}
+}
+
 // TestVenueUnreachableWorkerIsNotAVerdict is the inverse, and the one that
 // protects guards. A worker that cannot be reached must never look like a
 // command that answered.
 func TestVenueUnreachableWorkerIsNotAVerdict(t *testing.T) {
 	t.Parallel()
 
-	spec := shell.RunnerSpec{Cwd: t.TempDir(), Worker: "local:?binary=" + filepath.Join(t.TempDir(), "no-such-binary")}
+	spec := deadWorker(t)
 
 	runner, err := NewRunner(spec)
 	if err != nil {
@@ -151,7 +156,8 @@ func TestVenueReadsADeadWarmMachineAsReclaimed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			spec := shell.RunnerSpec{Cwd: t.TempDir(), Worker: "local:?binary=" + filepath.Join(t.TempDir(), "no-such-binary"), ReusedWarm: c.warm}
+			spec := deadWorker(t)
+			spec.ReusedWarm = c.warm
 
 			runner, err := NewRunner(spec)
 			if err != nil {
@@ -282,10 +288,7 @@ func TestVenueCancellationStopsTheCommand(t *testing.T) {
 // TestVenueCarriesAnImageToTheWorker pins that a placed step which names an
 // image is accepted and keeps its container settings.
 //
-// This used to be a refusal — a worker ran a step's commands directly, and a
-// container on the worker meant bind-mounting a tree that had just been sent.
-// It now means exactly that, so the spec has to survive: the runner builds
-// its container from it once the handshake reports where the tree landed.
+// The container settings have to survive to the session that builds the container on the worker's daemon.
 func TestVenueCarriesAnImageToTheWorker(t *testing.T) {
 	t.Parallel()
 
@@ -298,17 +301,17 @@ func TestVenueCarriesAnImageToTheWorker(t *testing.T) {
 
 	t.Cleanup(func() { _ = built.Close() })
 
-	placed, ok := built.(runner)
+	placed, ok := built.(plusRunner)
 	if !ok {
-		t.Fatalf("runner is %T, not a placed one", built)
+		t.Fatalf("runner is %T, not a docker+ one", built)
 	}
 
-	if placed.session.container.Image != "alpine" {
-		t.Errorf("image = %q, want the step's image carried to the worker", placed.session.container.Image)
+	if placed.s.spec.Image != "alpine" {
+		t.Errorf("image = %q, want the step's image carried to the worker", placed.s.spec.Image)
 	}
 
-	if placed.session.container.Network != "none" {
-		t.Errorf("network = %q, want the container settings carried with it", placed.session.container.Network)
+	if placed.s.spec.Network != "none" {
+		t.Errorf("network = %q, want the container settings carried with it", placed.s.spec.Network)
 	}
 }
 

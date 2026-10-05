@@ -3,15 +3,15 @@ package e2e
 // What an abort means is Concourse's — its own status, hooks still run, nothing cached, a queued build never starts — and these pin that it survives the trip from outside the process to the RIGHT run.
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -152,8 +152,11 @@ jobs:
 
 // The seam: a cancel that stopped at the orchestrator leaves the worker's process running — on a real worker, billing — under a run that reads aborted.
 func TestAbortReachesAPlacedStepOnAWorker(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
-	pidFile := filepath.Join(dir, "pid")
+	// The step's process lives in a container, so its pid means nothing here: a sleep of a length no other test uses is what finds it in `docker top`.
+	seconds := strconv.FormatInt(3000+time.Now().UnixNano()%1000, 10)
 
 	path := writePipeline(t, dir, `
 jobs:
@@ -161,10 +164,9 @@ jobs:
   plan:
   - task: wait
     tags: [box]
+    image: `+dockerE2EImage+`
     inputs: []
-    run: |
-      echo $$ > `+pidFile+`
-      exec sleep 60
+    run: exec sleep `+seconds+`
 `)
 
 	served := startWebFor(t, path, "--interval", "1h", "--worker", "box=local:")
@@ -173,11 +175,15 @@ jobs:
 	name := cli.PipelineName(path)
 
 	served.trigger(t, name, "placed")
-	waitForFile(t, pidFile)
 
-	pid, err := strconv.Atoi(readTrimmed(t, pidFile))
-	if err != nil {
-		t.Fatalf("pid file: %v", err)
+	deadline := time.Now().Add(60 * time.Second)
+
+	for !containerRunsSleep(t, seconds) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the placed step's sleep %s never started in a container", seconds)
+		}
+
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	runID := newestRun(t, served.state, name, "placed").ID
@@ -189,17 +195,40 @@ jobs:
 
 	waitForRunStatus(t, served.state, name, runID, "aborted")
 
-	deadline := time.Now().Add(10 * time.Second)
+	deadline = time.Now().Add(10 * time.Second)
 
-	for !errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+	for containerRunsSleep(t, seconds) {
 		if time.Now().After(deadline) {
-			t.Fatalf("the placed step's process (pid %d) outlived the abort: the cancel never crossed to the worker", pid)
+			t.Fatalf("the placed step's sleep %s outlived the abort: the cancel never crossed to the worker", seconds)
 		}
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	served.stop(t)
+}
+
+// containerRunsSleep reports whether any container steps made is running `sleep seconds`.
+func containerRunsSleep(t *testing.T, seconds string) bool {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	ids, err := exec.CommandContext(ctx, "docker", "ps", "-q", "--filter", "name=steps-", "--filter", "label=steps.owner=steps").Output()
+	if err != nil {
+		t.Fatalf("docker ps: %v", err)
+	}
+
+	for _, id := range strings.Fields(string(ids)) {
+		// A container that exits between ps and top is not running the sleep.
+		top, _ := exec.CommandContext(ctx, "docker", "top", id).Output() //nolint:gosec // an id docker ps just answered
+		if strings.Contains(string(top), "sleep "+seconds) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Redirects unfollowed, so the answer is the route's own rather than the page it sends the browser to.

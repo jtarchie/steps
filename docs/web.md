@@ -333,15 +333,15 @@ what it spent and where it ran on its own row.
   presented as the whole one is the same lie in the other direction.
 - **Which machine a step ran on**, on that step's own row, for a step that was
   placed: the tag, the platform the worker reported,
-  the filesystem the tree landed on and the space left there, how many bytes
-  had to be pushed to it and how many came back, the identity it ran as, and
-  the machine — plus the
-  image if the step ran in a container on it. A `tmpfs` workdir is marked in
-  warning colour, on the step's header too, because it is *memory* and the reader is scanning for
-  exactly that. A worker that could not report a filesystem reads `not
-  reported` rather than a blank that looks like an ordinary disk, and a shim
-  that named no identity leaves it out rather than inventing `0:0`,
-  which would read as root.
+  how many bytes had to be pushed to it and how many came back, the identity
+  it ran as, and the machine — plus the image if the step ran in a container
+  on it. No worker reports the filesystem its tree landed on — a docker+
+  step's tree is in volumes, and `ssh://` does not measure — so that reads
+  `not reported` rather than a blank that looks like an ordinary disk (a
+  `tmpfs` workdir, from a run recorded when workers still reported one, is
+  still marked in warning colour). A worker that named no identity — every
+  docker+ worker, whose step runs as its image's user — leaves it out rather
+  than inventing `0:0`, which would read as root.
 
   There is deliberately **no cost column**: what an instance-hour actually
   cost is not knowable from inside a run — list prices ignore Savings Plans

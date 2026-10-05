@@ -68,8 +68,7 @@ func TestCopyProviderAcceptsAnOrdinaryRoot(t *testing.T) {
 	}
 }
 
-// TestRootExecBitReadsTheModeBack is the same assertion internal/shim makes
-// about its own copy of this probe, and for the same reason: no filesystem a
+// TestRootExecBitReadsTheModeBack: no filesystem a
 // test can mount disagrees with the chmod it was just given, so a probe that
 // trusted os.Chmod's nil error would pass every other test here while failing
 // only on the filesystems the check exists for.

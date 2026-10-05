@@ -56,7 +56,6 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 	// different machine's answer. Nothing comes back: a guard is closed
 	// without Capture, so it has no outputs to fetch.
 	spec.WorkerTag = placementTag(step)
-	spec.ArtifactStore = artifactStoreFrom(ctx)
 	spec.Keep = workspace.Kept(space)
 
 	var (
@@ -79,7 +78,6 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 		spec.Worker = worker
 		spec.ReusedWarm = reusedWarm(ctx, step)
 
-		//nolint:contextcheck // NewRunner takes no context; opening the artifact store reads only local config
 		runner, runnerErr := venue.NewRunner(spec)
 		if runnerErr != nil {
 			return spec.Worker, runnerErr //nolint:wrapcheck // NewRunner's error already names the cause

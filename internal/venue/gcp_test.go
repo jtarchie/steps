@@ -2,7 +2,7 @@ package venue
 
 // The gcp:// venue against a fake control plane and a real sshd in this
 // process: only Google itself is replaced. The dial's SSH handshake, the
-// binary push, the shim, and the tree round trip all run for real — the
+// docker daemon behind it, and the tree round trip all run for real — the
 // relay protocol has its own tests one package over, and the seam here
 // (iapOpen) is a TCP connection standing in for the whole tunnel.
 
@@ -154,7 +154,7 @@ func (f *fakeGCE) GuestAttributes(_ context.Context, _, _, name, _ string) (map[
 }
 
 // newGCPSSHD is the worker's sshd: the shared harness, configured to accept
-// the process's own gcp:// identity — the key dialGCP mints and installs.
+// the process's own gcp:// identity — the key gcpSSHClient mints and installs.
 func newGCPSSHD(t *testing.T) *testSSHD {
 	t.Helper()
 
@@ -544,12 +544,12 @@ func TestGCPLaunchRungDialsTheMachineItAcquired(t *testing.T) {
 
 	defer func() { _ = release(context.Background()) }()
 
-	tunnel, err := dialGCP(context.Background(), resolved)
+	client, err := gcpSSHClient(context.Background(), resolved)
 	if err != nil {
-		t.Fatalf("dialGCP on the acquired worker: %v", err)
+		t.Fatalf("dialling the acquired worker: %v", err)
 	}
 
-	_ = tunnel.close(context.Background())
+	_ = client.Close()
 
 	fake.mu.Lock()
 	created := strings.TrimPrefix(fake.inserts[0], "steps-workers->")
@@ -886,7 +886,7 @@ func TestParseGCPWorkerRefusals(t *testing.T) {
 		"gcp://launch?zone=us-central1-a":               "needs something to acquire",
 		"gcp://worker-1?zone=z&version=2":               "version= does not describe a gcp worker",
 		"gcp://launch/tmpl?zone=z&capacity=spot":        "capacity= does not describe a gcp worker",
-		"gcp://worker-1?zone=z&shim=/usr/bin/steps":     "shim= does not describe a gcp worker",
+		"gcp://worker-1?zone=z&shim=/usr/bin/steps":     "shim= is gone",
 		"gcp://worker-1?zone=z&region=us-east-1":        "region= does not describe a gcp worker",
 		"gcp://worker-1?zone=z&identity=/tmp/key":       "identity= does not describe a gcp worker",
 		"gcp://worker-1?zone=z&known_hosts=/tmp/kh":     "known_hosts= does not describe a gcp worker",
@@ -1153,12 +1153,7 @@ func TestGCPAuthFailureInvalidatesTheInstallCache(t *testing.T) {
 	fake := &fakeGCE{}
 	seamGCP(t, fake, sshd)
 
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatalf("locating the test binary: %v", err)
-	}
-
-	worker, err := ParseWorker("gcp://worker-1" + sshd.Root + "?project=test-project&zone=us-central1-a&binary=" + self)
+	worker, err := ParseWorker("gcp://worker-1" + sshd.Root + "?project=test-project&zone=us-central1-a")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
@@ -1167,9 +1162,9 @@ func TestGCPAuthFailureInvalidatesTheInstallCache(t *testing.T) {
 	// handshake's refusal, or a redial it cut off — so the assertion that
 	// matters is the cache one below: refusals were seen, and the entry must
 	// not outlive them.
-	_, err = dialGCP(context.Background(), worker)
+	_, err = gcpSSHClient(context.Background(), worker)
 	if err == nil {
-		t.Fatal("dialGCP succeeded against an sshd that refuses every key")
+		t.Fatal("the dial succeeded against an sshd that refuses every key")
 	}
 
 	if _, ok := gcpInstalled.Load("test-project/us-central1-a/worker-1"); ok {
@@ -1223,19 +1218,14 @@ func TestGCPNonAuthFailureAfterARefusalInvalidatesTheInstallCache(t *testing.T) 
 		return (&net.Dialer{}).DialContext(ctx, "tcp", dead.Addr().String())
 	}
 
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatalf("locating the test binary: %v", err)
-	}
-
-	worker, err := ParseWorker("gcp://worker-1" + sshd.Root + "?project=test-project&zone=us-central1-a&binary=" + self)
+	worker, err := ParseWorker("gcp://worker-1" + sshd.Root + "?project=test-project&zone=us-central1-a")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
 
-	_, err = dialGCP(context.Background(), worker)
+	_, err = gcpSSHClient(context.Background(), worker)
 	if err == nil {
-		t.Fatal("dialGCP succeeded against a hung-up handshake")
+		t.Fatal("the dial succeeded against a hung-up handshake")
 	}
 
 	if _, ok := gcpInstalled.Load("test-project/us-central1-a/worker-1"); ok {
@@ -1304,19 +1294,14 @@ func TestGCPDialFailsFastOnAParkedInstance(t *testing.T) {
 		return nil, fmt.Errorf("scripted: %w", iapdial.ErrBackendNotReached)
 	}
 
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatalf("locating the test binary: %v", err)
-	}
-
-	worker, err := ParseWorker("gcp://worker-1?project=test-project&zone=us-central1-a&binary=" + self)
+	worker, err := ParseWorker("gcp://worker-1?project=test-project&zone=us-central1-a")
 	if err != nil {
 		t.Fatalf("ParseWorker: %v", err)
 	}
 
-	_, err = dialGCP(context.Background(), worker)
+	_, err = gcpSSHClient(context.Background(), worker)
 	if err == nil || !strings.Contains(err.Error(), "is TERMINATED") || !strings.Contains(err.Error(), "gcp://stopped/") {
-		t.Fatalf("dialGCP = %v, want the parked state named with the stopped-rung fix", err)
+		t.Fatalf("dial = %v, want the parked state named with the stopped-rung fix", err)
 	}
 }
 

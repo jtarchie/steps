@@ -1,170 +1,33 @@
 package venue
 
-// Bringing a tree home from the worker that holds it (steps#138, rung 2).
-//
-// A deferred fetch leaves a step's outputs on the worker, filed under their
-// digests. This is the other half: a fresh session to that worker, one
-// FrameGet, and the tree lands where the caller says — the same shape as a
-// fetch-all coming home, and verified by the worker before it is sent.
+// Bringing a tree home from the worker that holds it (steps#138, rung 2): a deferred fetch left a step's outputs on a docker+ worker, filed under their digests, and this lands one where the caller says, checked against its digest.
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/jtarchie/steps/internal/shell"
-	"github.com/jtarchie/steps/internal/wire"
 )
 
-// Pull fills dst — an existing, empty directory — with the tree the worker
-// spec names holds under digest, filed as name. It reports the bytes that
-// crossed. A worker that no longer holds the tree is an error naming it; the
-// caller decides what a lost holder costs.
-func Pull(ctx context.Context, spec shell.RunnerSpec, name, digest, dst string) (int64, error) {
+// Pull fills dst, an existing empty directory, with the tree the worker spec names holds under digest, and reports the bytes that crossed. A worker that no longer holds it is an error naming the worker; the caller decides what a lost holder costs.
+func Pull(ctx context.Context, spec shell.RunnerSpec, _, digest, dst string) (int64, error) {
 	worker, err := ParseWorker(spec.Worker)
 	if err != nil {
 		return 0, err
 	}
 
-	if worker.dockerPlus() {
-		received, err := pullPlus(ctx, worker, digest, dst)
-		if err != nil {
-			return 0, fmt.Errorf("worker %q: %w", spec.Worker, err)
-		}
-
-		return received, nil
+	if !worker.dockerPlus() {
+		return 0, fmt.Errorf("worker %q: %w", spec.Worker, errHoldsNothing)
 	}
 
-	s, err := dialHolder(ctx, spec)
-	if err != nil {
-		return 0, err
-	}
-
-	//nolint:contextcheck // close runs under its own bound, deliberately not the caller's context
-	defer func() { _ = s.close() }()
-
-	stop := s.watchTransfer(ctx)
-	defer stop()
-
-	err = s.pullInto(name, digest, dst)
+	received, err := pullPlus(ctx, worker, digest, dst)
 	if err != nil {
 		return 0, fmt.Errorf("worker %q: %w", spec.Worker, err)
 	}
 
-	return s.receivedArtifactBytes.Load(), nil
+	return received, nil
 }
 
-// Push asks the worker spec names to put the tree it holds under digest, filed
-// as name, at url — a presigned PUT the caller minted. The bytes go from
-// that worker to the store and never through this machine.
-func Push(ctx context.Context, spec shell.RunnerSpec, name, digest, url string) error {
-	worker, err := ParseWorker(spec.Worker)
-	if err != nil {
-		return err
-	}
-
-	// ponytail: a docker+ holder reaches the store only through this machine once the store path is ported; refused by name until then.
-	if worker.dockerPlus() {
-		return fmt.Errorf("worker %q: %w", spec.Worker, errStoreOnDocker)
-	}
-
-	s, err := dialHolder(ctx, spec)
-	if err != nil {
-		return err
-	}
-
-	//nolint:contextcheck // close runs under its own bound, deliberately not the caller's context
-	defer func() { _ = s.close() }()
-
-	stop := s.watchTransfer(ctx)
-	defer stop()
-
-	op := s.nextOp()
-
-	err = s.write(wire.Frame{Type: wire.FramePush, Op: op}, wire.Push{Name: name, Digest: digest, URL: url})
-	if err != nil {
-		return err
-	}
-
-	err = s.awaitEnd(op, "confirming the artifact reached the store")
-	if err != nil {
-		return fmt.Errorf("worker %q: %w", spec.Worker, err)
-	}
-
-	return nil
-}
-
-// dialHolder opens a session to the worker spec names, with no tree of its
-// own, to ask for a tree it holds. The caller closes it.
-func dialHolder(ctx context.Context, spec shell.RunnerSpec) (*session, error) {
-	worker, err := ParseWorker(spec.Worker)
-	if err != nil {
-		return nil, err
-	}
-
-	//nolint:contextcheck // opening the artifact store reads only local config
-	blobs, err := artifactStoreFor(spec.ArtifactStore)
-	if err != nil {
-		return nil, err
-	}
-
-	// Never redialled: a transfer that lost its worker mid-stream has nothing
-	// to re-send, and the caller retries or fails.
-	s := &session{worker: worker, blobs: blobs, tag: spec.WorkerTag, noRedial: true}
-
-	err = s.ensure(ctx)
-	if err != nil {
-		//nolint:contextcheck // close runs under its own bound, deliberately not the caller's context
-		_ = s.close()
-
-		return nil, err
-	}
-
-	return s, nil
-}
-
-// pullInto asks for one held tree and lands it in dst, an existing empty
-// directory.
-func (s *session) pullInto(name, digest, dst string) error {
-	// Beside dst, so the swap below is a rename on one filesystem.
-	staging, err := os.MkdirTemp(filepath.Dir(dst), ".steps-pull-")
-	if err != nil {
-		return fmt.Errorf("staging the pulled tree: %w", err)
-	}
-
-	defer func() { _ = os.RemoveAll(staging) }()
-
-	op := s.nextOp()
-
-	err = s.write(wire.Frame{Type: wire.FrameGet, Op: op}, wire.Get{Name: name, Digest: digest})
-	if err != nil {
-		return err
-	}
-
-	err = s.receive(op, staging)
-	if err != nil {
-		return err
-	}
-
-	from := filepath.Join(staging, name)
-
-	err = adoptFetchedDir(from, dst, name)
-	if err != nil {
-		return err
-	}
-
-	entries, err := os.ReadDir(from)
-	if err != nil {
-		return fmt.Errorf("reading the pulled tree: %w", err)
-	}
-
-	for _, entry := range entries {
-		err = os.Rename(filepath.Join(from, entry.Name()), filepath.Join(dst, entry.Name()))
-		if err != nil {
-			return fmt.Errorf("placing the pulled %q: %w", entry.Name(), err)
-		}
-	}
-
-	return nil
-}
+// errHoldsNothing is a Pull from a worker that keeps nothing between steps: an ssh:// worker brings every output home.
+var errHoldsNothing = errors.New("an ssh:// worker holds nothing to pull")

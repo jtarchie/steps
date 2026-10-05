@@ -20,12 +20,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg/sftp/v2"
-	"github.com/pkg/sftp/v2/localfs"
 	"golang.org/x/crypto/ssh"
 )
 
-// Server is a real sshd in every way a venue can observe: key auth, exec through a shell, sftp, exit-status, streamlocal.
+// Server is a real sshd in every way a venue can observe: key auth, exec through a shell, exit-status, streamlocal.
 type Server struct {
 	URL        string
 	Root       string
@@ -265,17 +263,6 @@ func (s *Server) session(channel ssh.Channel, requests <-chan *ssh.Request) {
 			s.runExec(channel, commandOf(request.Payload))
 
 			return
-		case "subsystem":
-			if name := commandOf(request.Payload); name != "sftp" {
-				_ = request.Reply(false, nil)
-
-				continue
-			}
-
-			_ = request.Reply(true, nil)
-			s.runSFTP(channel)
-
-			return
 		case "env":
 			s.EnvRequests.Add(1)
 			_ = request.Reply(false, nil)
@@ -318,13 +305,6 @@ func (s *Server) runExec(channel ssh.Channel, command string) {
 	}
 
 	_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(status)}))
-}
-
-func (s *Server) runSFTP(channel ssh.Channel) {
-	server := &sftp.Server{Handler: &localfs.ServerHandler{}}
-	defer func() { _ = server.GracefulStop() }()
-
-	_ = server.Serve(channel)
 }
 
 // GenerateKey returns one fresh ed25519 key in each form a test needs.

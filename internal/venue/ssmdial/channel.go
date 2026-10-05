@@ -254,7 +254,7 @@ func (c *Channel) send(message *agentMessage, retain bool) error {
 		// net.ErrClosed, never io.EOF. EOF is the READER's answer, and Close
 		// records it as the cause — handing it back from a WRITE makes a dead
 		// tunnel read as an orderly goodbye at every layer above that checks
-		// the sentinel, the shim's own frame loop included.
+		// the sentinel, the ssh client riding the tunnel included.
 		if cause == nil || errors.Is(cause, io.EOF) {
 			return fmt.Errorf("writing to the SSM data channel: %w", net.ErrClosed)
 		}

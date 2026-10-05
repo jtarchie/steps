@@ -81,9 +81,8 @@ func (f gcpFixture) spec(cwd, worker string, outputs ...string) shell.RunnerSpec
 
 // TestRealGCPRunsAStepOnAnInstance is the whole gcp:// path against reality:
 // a key minted and installed through real metadata, host keys read from real
-// guest attributes, the real relay carrying a real SSH session, the binary
-// pushed over sftp inside it, and a step's tree there and back — with no
-// artifact store at all, which is itself part of what is being proven.
+// guest attributes, the real relay carrying a real SSH session, the
+// instance's docker daemon reached inside it, and a step's tree there and back.
 func TestRealGCPRunsAStepOnAnInstance(t *testing.T) {
 	fixture := realGCP(t)
 
@@ -106,8 +105,7 @@ func TestRealGCPRunsAStepOnAnInstance(t *testing.T) {
 		t.Errorf("out/report.txt = %q, want the input the worker consumed", got)
 	}
 
-	// The fixture is x86, so on an arm64 dev machine this also proves the
-	// ?binary= foreign-arch path.
+	// The fixture is x86: the worker's machine, not this one.
 	if !strings.Contains(got, "x86_64") {
 		t.Errorf("out/report.txt = %q, want it to name the worker's architecture", got)
 	}
@@ -338,7 +336,7 @@ func awaitInstanceStatus(ctx context.Context, t *testing.T, fixture gcpFixture, 
 //
 // simulateMaintenanceEvent on a spot instance is Google's own way to trigger
 // a real preemption — the docs frame it as exactly this test. The metadata
-// flag flips, our shim's watcher sees it, relays a draining frame, and the
+// flag flips, the watcher steps runs over ssh sees it, and the
 // orchestrator re-reads the failure that follows as infrastructure rather
 // than the step's verdict. Every link has a fake; none of the fakes can
 // prove the simulated path matches the real one — which is precisely the
@@ -398,7 +396,7 @@ func TestRealGCPPreemption(t *testing.T) {
 	gcloudCLI(ctx, t, fixture, "compute", "instances", "simulate-maintenance-event",
 		resolved.Instance, "--async")
 
-	// GCE's warning is about thirty seconds and the shim polls every five —
+	// GCE's warning is about thirty seconds and the watcher polls every few seconds —
 	// so a command started now should hear the notice mid-run.
 	err = runner.Run(ctx, "sleep 240")
 	if err == nil {

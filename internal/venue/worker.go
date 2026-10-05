@@ -32,15 +32,14 @@ import (
 type Scheme string
 
 const (
-	// SchemeLocal runs the shim as a child process on this machine, talking
-	// over its pipes.
+	// SchemeLocal is a docker+ worker on this machine's own daemon.
 	//
 	// It is not a test seam. It is how a tagged pipeline runs on a laptop with
-	// no worker to reach, and how the protocol gets exercised end to end
-	// without a network — which also happens to make it the thing the docs
-	// corpus can execute.
+	// no worker to reach, and how the docker+ data plane gets exercised end to
+	// end without a network — which also makes it the thing the docs corpus
+	// can execute.
 	SchemeLocal Scheme = "local"
-	// SchemeSSH reaches a worker over SSH, pushing this binary to it first.
+	// SchemeSSH runs a step bare over SSH: the tree goes in as a tar, the command runs in the worker's sh, and the outputs come back as a tar.
 	SchemeSSH Scheme = "ssh"
 	// SchemeAWS reaches an EC2 instance through SSM: no inbound port, no
 	// sshd, no host key. The instance dials the control plane outward, which
@@ -73,11 +72,6 @@ type Worker struct {
 	// home instead -- a machine with a fast disk mounted at /mnt would take
 	// the mapping, put nothing there, and fill the root filesystem.
 	Root string
-	// Binary is a locally-built shim to push instead of this process's own,
-	// for a worker whose platform this machine cannot produce a binary for.
-	// steps has no Go toolchain in the field, so a mismatched worker is an
-	// operator supplying a binary they built rather than a cross-compile.
-	Binary string
 	// Identity is a private key file to authenticate with, on top of whatever
 	// an SSH agent offers. An encrypted key has to go through the agent.
 	Identity string
@@ -117,13 +111,6 @@ type Worker struct {
 	// exactly one, and unlike the project there is no credentials file to
 	// fall back to — only ?zone= or CLOUDSDK_COMPUTE_ZONE can answer.
 	Zone string
-	// Shim is an absolute path to a steps binary ALREADY on the instance —
-	// one baked into an AMI — so nothing is transferred to start a session.
-	Shim string
-	// ArtifactStore is the --artifact-store URL, which an aws:// worker
-	// reaches its binary through. Filled in from the spec rather than the
-	// URL: it describes the fleet, not this machine.
-	ArtifactStore string
 	// Query is the mapping's raw query string, kept so a worker that is
 	// RESOLVED to another machine (an acquisition rung becoming the instance
 	// it started) can carry its connection options into the URL it is dialed
@@ -145,7 +132,7 @@ type Worker struct {
 // has nowhere else to go.
 func (w Worker) Acquirable() bool { return w.needsAcquisition() }
 
-// registryKey keys a machine on what decides it — a parked instance by where it lives, a launched one by the template, version, capacity and location it is born from — so every mapping of it, a root, a shim, an ?idle= or a parameter order apart, is one machine rather than one each.
+// registryKey keys a machine on what decides it — a parked instance by where it lives, a launched one by the template, version, capacity and location it is born from — so every mapping of it, a root, an ?idle= or a parameter order apart, is one machine rather than one each.
 //
 // ponytail: an ambient region, project or zone and the same one spelled out are two keys, so two machines again; resolve the ambient location here, and carry it into each spelling's dial, if mappings ever mix the two.
 func (w Worker) registryKey() string {
@@ -304,13 +291,11 @@ func applyQuery(worker Worker, parsed *url.URL) (Worker, error) {
 	}
 
 	worker.Query = parsed.RawQuery
-	worker.Binary = query.Get("binary")
 	worker.Identity = query.Get("identity")
 	worker.KnownHosts = query.Get("known_hosts")
 	worker.HostKey = query.Get("hostkey")
 	worker.SSHConfig = query.Get("ssh_config")
 	worker.Region = query.Get("region")
-	worker.Shim = query.Get("shim")
 	worker.Capacity = Capacity(query.Get("capacity"))
 	worker.Project = query.Get("project")
 	worker.Zone = query.Get("zone")
@@ -340,19 +325,25 @@ func applyQuery(worker Worker, parsed *url.URL) (Worker, error) {
 //
 //nolint:gochecknoglobals // a fact about the grammar, not state
 var queryKeys = map[string][]Scheme{
-	"binary":      {SchemeLocal, SchemeAWS, SchemeGCP},
 	"identity":    {SchemeSSH, SchemeDockerSSH},
 	"known_hosts": {SchemeSSH, SchemeDockerSSH},
 	"hostkey":     {SchemeSSH, SchemeGCP, SchemeDockerSSH},
 	"ssh_config":  {SchemeSSH, SchemeDockerSSH},
 	"sock":        {SchemeDockerSSH},
 	"region":      {SchemeAWS},
-	"shim":        {SchemeAWS},
 	"capacity":    {SchemeAWS},
 	"idle":        {SchemeAWS, SchemeGCP},
 	"version":     {SchemeAWS},
 	"project":     {SchemeGCP},
 	"zone":        {SchemeGCP},
+}
+
+// removedKeys were the shim's options, gone with it in steps#206; a mapping still carrying one is told what replaced it rather than that the key is unknown.
+//
+//nolint:gochecknoglobals // as queryKeys: a fact about the grammar, not state
+var removedKeys = map[string]string{
+	"binary": "nothing is pushed to a worker any more — ssh:// runs the step with the worker's own sh, and docker+ssh://, aws:// and gcp:// run it in the step's image",
+	"shim":   "nothing is pushed to a worker any more — ssh:// runs the step with the worker's own sh, and docker+ssh://, aws:// and gcp:// run it in the step's image",
 }
 
 // acquisitionKeys are the options that describe how a machine is BROUGHT INTO
@@ -371,6 +362,10 @@ var acquisitionKeys = []string{"capacity", "idle", "version"}
 // describes a different scheme than the mapping uses.
 func checkQueryKeys(worker Worker, query url.Values) error {
 	for key := range query {
+		if replaced, gone := removedKeys[key]; gone {
+			return fmt.Errorf("%w %q: %s= is gone: %s", ErrWorker, worker.URL, key, replaced)
+		}
+
 		schemes, known := queryKeys[key]
 		if !known {
 			return fmt.Errorf("%w %q: unknown option %q", ErrWorker, worker.URL, key)
@@ -491,10 +486,7 @@ func applyScheme(worker Worker, parsed *url.URL) (Worker, error) {
 			return Worker{}, fmt.Errorf("%w %q: local: takes no host — it means this machine; local:/path names the disk", ErrWorker, worker.URL)
 		}
 
-		// The path chooses the disk, exactly as ssh://box/mnt/fast does, and it
-		// is what gives two local: workers separate scratch and separate
-		// artifact caches — without it both shims file under one temp
-		// directory and any test of "the other worker is cold" proves nothing.
+		// The path names the worker, and it is what gives two local: workers separate caches on one daemon — without it any test of "the other worker is cold" proves nothing.
 		worker.Root = parsed.Path
 
 		return worker, nil
@@ -541,7 +533,7 @@ func (w Worker) String() string { return w.URL }
 
 // dockerPlus reports a worker whose every step runs in a container on its own daemon: docker+ssh://, and aws:// and gcp://, whose provisioning installs docker.
 func (w Worker) dockerPlus() bool {
-	return w.Scheme == SchemeDockerSSH || w.Scheme == SchemeAWS || w.Scheme == SchemeGCP
+	return w.Scheme == SchemeDockerSSH || w.Scheme == SchemeAWS || w.Scheme == SchemeGCP || w.Scheme == SchemeLocal
 }
 
 // Address is the machine, without the credentials for reaching it.

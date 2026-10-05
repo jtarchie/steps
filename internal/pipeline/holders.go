@@ -27,13 +27,11 @@ func deferrable(step config.Step, rt config.ResolvedTask) bool {
 // holdRemoteOutputs records each output the worker kept as an artifact held
 // there, with the pull that brings it home. Outputs the worker did not keep
 // came home the ordinary way and are captured as always.
-func holdRemoteOutputs(ctx context.Context, bw workspace.BuildWorkspace, outputs []string, mapping map[string]string, held map[string]string, holder string) error {
+func holdRemoteOutputs(bw workspace.BuildWorkspace, outputs []string, mapping map[string]string, held map[string]string, holder string) error {
 	holding, ok := bw.(workspace.RemoteHolder)
 	if !ok || len(held) == 0 {
 		return nil
 	}
-
-	store := artifactStoreFrom(ctx)
 
 	for _, out := range outputs {
 		digest, kept := held[out]
@@ -51,7 +49,7 @@ func holdRemoteOutputs(ctx context.Context, bw workspace.BuildWorkspace, outputs
 			Digest: digest,
 			Holder: holder,
 			Pull: func(ctx context.Context, dst string) error {
-				_, err := venue.Pull(ctx, shell.RunnerSpec{Worker: holder, ArtifactStore: store}, out, digest, dst)
+				_, err := venue.Pull(ctx, shell.RunnerSpec{Worker: holder}, out, digest, dst)
 
 				return err //nolint:wrapcheck // the workspace names the artifact and the holder around it
 			},

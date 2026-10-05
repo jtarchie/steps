@@ -60,6 +60,7 @@ func TestEndToEndTwoWorkersPipeThroughTheOrchestratorWithNoStore(t *testing.T) {
 
 func assertPiped(t *testing.T, get bool) {
 	t.Helper()
+	requireDockerE2E(t)
 
 	dir := t.TempDir()
 	_, rootB, workers := twoWorkers(t)
@@ -100,16 +101,18 @@ func assertPiped(t *testing.T, get bool) {
 // TestEndToEndAPlacedPutIsPipedWhatAnotherWorkerHolds: a put on b whose
 // input a holds gets it piped, alongside one made here.
 func TestEndToEndAPlacedPutIsPipedWhatAnotherWorkerHolds(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	_, _, workers := twoWorkers(t)
+	// out: runs in a container, so it reports where it ran in the version it returns rather than in a host file.
 	path := writePipeline(t, dir, `
 resource_types:
 - name: sink
+  image: `+dockerE2EImage+`
   config:
     check: printf '[]'
-    out: |
-      test -s big/blob.bin && test -s note/n.txt && printf '%s' "${STEPS_WORKER:-here}" > `+filepath.Join(dir, "pushed.txt")+`
-      printf '{"ref":"pushed"}'
+    out: test -s big/blob.bin && test -s note/n.txt && printf '{"ref":"pushed","where":"%s"}' "${STEPS_WORKER:-here}"
 
 resources:
 - name: target
@@ -122,6 +125,7 @@ jobs:
   plan:
   - task: seed
     tags: [a]
+    image: `+dockerE2EImage+`
     outputs: [big]
     run: head -c `+strconv.Itoa(payloadBytes)+` /dev/urandom > big/blob.bin
   - task: annotate
@@ -136,8 +140,14 @@ jobs:
 		t.Fatalf("run: %v\n%s", err, out)
 	}
 
-	if got := readFileString(t, filepath.Join(dir, "pushed.txt")); got != "b" {
-		t.Errorf("the put ran on %q, want b, with both inputs present", got)
+	said := false
+
+	for _, row := range latestRunEvents(t, path) {
+		said = said || row.Text == `put: target (version: {"ref":"pushed","where":"b"})`
+	}
+
+	if !said {
+		t.Error("the put did not answer a version from b, with both inputs present")
 	}
 
 	assertNeverLanded(t, kept)
@@ -153,6 +163,8 @@ jobs:
 // the build fails naming the input and the holder — with nothing half-placed
 // on the consumer.
 func TestEndToEndAHolderThatLostTheTreeFailsThePipedConsumerByName(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	rootA, rootB, workers := twoWorkers(t)
 	path := writePipeline(t, dir, `
@@ -161,12 +173,14 @@ jobs:
   plan:
   - task: seed
     tags: [a]
+    image: `+dockerE2EImage+`
     outputs: [src]
     run: head -c `+strconv.Itoa(payloadBytes)+` /dev/urandom > src/blob.bin
   - task: sweep
-    run: rm -rf `+filepath.Join(rootA, "steps-shim", "artifacts")+`
+    run: `+sweepCache(rootA)+`
   - task: consume
     tags: [b]
+    image: `+dockerE2EImage+`
     inputs: [src]
     # A pipe that never ends must fail here rather than wedge the shard.
     timeout: 60s
@@ -178,7 +192,7 @@ jobs:
 		t.Fatal("the build passed with its input gone from the only machine that held it")
 	}
 
-	for _, want := range []string{`"src"`, "local:" + rootA, "could not be piped"} {
+	for _, want := range []string{`"src"`, "local:" + rootA, "no longer holds it"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not name %s", err.Error(), want)
 		}
@@ -202,12 +216,18 @@ jobs:
   plan:
   - task: seed
     tags: [a]
+    image: `+dockerE2EImage+`
     outputs: [src]
     run: echo made > src/made.txt && ln -s /etc/hosts src/leak
   - task: consume
     tags: [b]
+    image: `+dockerE2EImage+`
     inputs: [src]
-    run: cat src/leak > `+leaked+`
+    outputs: [out]
+    run: cat src/leak > out/leaked.txt
+  - task: publish
+    inputs: [out]
+    run: cp out/leaked.txt `+leaked+`
 `), leaked
 }
 
@@ -216,21 +236,13 @@ jobs:
 // every such tree landed here first — a worker does not get to name files on
 // another.
 func TestEndToEndAWorkerCannotPlantAnEscapingLinkOnAnother(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	_, _, workers := twoWorkers(t)
 	path, leaked := escapingLinkPipeline(t, dir)
 
 	assertLinkRefused(t, cli.Run(append([]string{path}, workers...)), leaked)
-}
-
-// TestEndToEndAWorkerCannotPlantAnEscapingLinkThroughTheStore is the same
-// refusal on the store plane.
-func TestEndToEndAWorkerCannotPlantAnEscapingLinkThroughTheStore(t *testing.T) {
-	dir := t.TempDir()
-	_, args := storeWorkers(t)
-	path, leaked := escapingLinkPipeline(t, dir)
-
-	assertLinkRefused(t, cli.Run(append([]string{path}, args...)), leaked)
 }
 
 func assertLinkRefused(t *testing.T, err error, leaked string) {

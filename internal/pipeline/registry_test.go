@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -23,8 +25,8 @@ import (
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
-// borrowedWorker is a parked instance as far as every check is concerned; ?shim= satisfies the aws placement check, and the fake acquirer means nothing ever dials AWS.
-const borrowedWorker = "aws://stopped/i-0abc123def456789?shim=/usr/local/bin/steps"
+// borrowedWorker is a parked instance as far as every check is concerned; the fake acquirer means nothing ever dials AWS.
+const borrowedWorker = "aws://stopped/i-0abc123def456789"
 
 type borrowed struct {
 	mu     sync.Mutex
@@ -121,11 +123,70 @@ func borrowedRunWith(t *testing.T, yaml string, extra map[string]string) (contex
 	return ctx, cfg, provider, st, fake
 }
 
+// requireDocker skips a test whose placed step runs in a container on this machine's daemon when there is none.
+func requireDocker(t *testing.T) {
+	t.Helper()
+
+	_, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skip("docker not found on PATH")
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	err = exec.CommandContext(ctx, "docker", "info").Run()
+	if err != nil {
+		t.Skip("docker daemon not reachable (`docker info` failed)")
+	}
+}
+
+// awaitInContainer is the container of this process in which path exists: a placed step's files live in its container, which no host path reaches.
+func awaitInContainer(t *testing.T, path string) string {
+	t.Helper()
+
+	deadline := time.Now().Add(60 * time.Second)
+
+	for time.Now().Before(deadline) {
+		out, err := exec.CommandContext(t.Context(), "docker", "ps", "-q", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid())).Output() //nolint:gosec // this process's own pid
+		if err == nil {
+			for _, id := range strings.Fields(string(out)) {
+				if exec.CommandContext(t.Context(), "docker", "exec", id, "test", "-e", path).Run() == nil { //nolint:gosec // an id docker just listed and a path this test chose
+					return id
+				}
+			}
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	t.Fatalf("no container of this process ever had %s", path)
+
+	return ""
+}
+
+func touchInContainer(t *testing.T, id, path string) {
+	t.Helper()
+
+	err := exec.CommandContext(t.Context(), "docker", "exec", id, "touch", path).Run() //nolint:gosec // an id docker listed and a path this test chose
+	if err != nil {
+		t.Fatalf("touch %s in %s: %v", path, id, err)
+	}
+}
+
+// containerPath is a path unique to this test inside a step's container.
+func containerPath(t *testing.T, name string) string {
+	t.Helper()
+
+	return "/tmp/" + filepath.Base(t.TempDir()) + "-" + name
+}
+
 // The failure the registry exists for, end to end through RunJob: the job that finishes first used to stop the machine the other was mid-step on.
 func TestTwoJobsShareOneBorrowedMachine(t *testing.T) {
-	dir := t.TempDir()
-	started := filepath.Join(dir, "started")
-	release := filepath.Join(dir, "release")
+	requireDocker(t)
+
+	started := containerPath(t, "started")
+	release := containerPath(t, "release")
 
 	ctx, cfg, provider, st, fake := borrowedRun(t, fmt.Sprintf(`
 jobs:
@@ -133,6 +194,7 @@ jobs:
   plan:
   - task: hold
     tags: [box]
+    image: alpine:3
     run: |
       touch %s
       until [ -f %s ]; do sleep 0.05; done
@@ -140,17 +202,19 @@ jobs:
   plan:
   - task: quick
     tags: [box]
+    image: alpine:3
     run: "true"
 `, started, release))
 
-	// However this test ends, the long job has to be let go or its goroutine outlives it.
-	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o600) })
+	// However this test ends, the long job has to be let go or its goroutine outlives it; the release file is inside a container this test may never have found.
+	longCtx, stopLong := context.WithCancel(ctx)
+	t.Cleanup(stopLong)
 
 	long := make(chan error, 1)
 
-	go func() { long <- RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false) }()
+	go func() { long <- RunJob(longCtx, cfg, &cfg.Jobs[0], nil, provider, st, false) }()
 
-	awaitFile(t, started)
+	holder := awaitInContainer(t, started)
 
 	err := RunJob(ctx, cfg, &cfg.Jobs[1], nil, provider, st, false)
 	if err != nil {
@@ -161,10 +225,7 @@ jobs:
 		t.Fatalf("after the short job: %d starts, %d stops — want one machine, still up under the long job", starts, stops)
 	}
 
-	err = os.WriteFile(release, nil, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
+	touchInContainer(t, holder, release)
 
 	err = <-long
 	if err != nil {
@@ -178,8 +239,9 @@ jobs:
 
 // The #106/#103 seam: an abort cancels RunJob's context mid-step, exactly as web's LocalRunner.Abort does (a WithCancelCause over the drain, cancelled with a cause), and the borrowed machine must still be given back once. The likeliest reason a give-back runs is that the caller's context was just cancelled, so a release riding it never reaches the API.
 func TestAnAbortedJobGivesBackItsBorrowedMachine(t *testing.T) {
-	dir := t.TempDir()
-	started := filepath.Join(dir, "started")
+	requireDocker(t)
+
+	started := containerPath(t, "started")
 
 	ctx, cfg, provider, st, fake := borrowedRun(t, fmt.Sprintf(`
 jobs:
@@ -187,6 +249,7 @@ jobs:
   plan:
   - task: hold
     tags: [box]
+    image: alpine:3
     run: |
       touch %s
       while true; do sleep 0.05; done
@@ -199,7 +262,7 @@ jobs:
 
 	go func() { done <- RunJob(runCtx, cfg, &cfg.Jobs[0], nil, provider, st, false) }()
 
-	awaitFile(t, started)
+	awaitInContainer(t, started)
 
 	if starts, stops := fake.counts(); starts != 1 || stops != 0 {
 		t.Fatalf("mid-step: %d starts, %d stops — want the machine up under the job", starts, stops)
@@ -229,20 +292,17 @@ jobs:
 	}
 }
 
-// preplanFixture is a resource on the borrowed machine whose history reads v1 while upstream has moved to v2, fetched here by a get that overrides its tag — so the fetch acquires nothing, and any acquisition is the pre-plan refresh's.
-func preplanFixture(t *testing.T, trigger string) (context.Context, *config.Config, workspace.Provider, store.Store, *borrowed, string) {
+// preplanFixture is a resource on the borrowed machine whose history reads v1 while upstream has moved to v2, fetched here by a get that overrides its tag — so the fetch acquires nothing, and any acquisition is the pre-plan refresh's. The in: says what it fetched on stdout, since its container shares no file with this test.
+func preplanFixture(t *testing.T, trigger string) (context.Context, *config.Config, workspace.Provider, store.Store, *borrowed) {
 	t.Helper()
 
-	dir := t.TempDir()
-	upstream := filepath.Join(dir, "upstream")
-	fetched := filepath.Join(dir, "fetched")
-
-	ctx, cfg, provider, st, fake := borrowedRunWith(t, fmt.Sprintf(`
+	ctx, cfg, provider, st, fake := borrowedRunWith(t, `
 resource_types:
 - name: probe
+  image: alpine:3
   config:
-    check: printf '[{"ref":"%%s"}]' "$(cat %s)"
-    in: echo {{ .version.ref }} >> %s
+    check: printf '[{"ref":"v2"}]'
+    in: echo "fetched={{ .version.ref }}"
 
 resources:
 - name: repo
@@ -255,8 +315,8 @@ jobs:
   plan:
   - get: repo
     tags: [here]
-%s
-`, upstream, fetched, trigger), map[string]string{"here": "local:"})
+`+trigger+`
+`, map[string]string{"here": "local:"})
 
 	// What a poll left behind: history reads v1, while upstream has since moved on. With no history at all the get checks for itself, and the refresh would not be what decides.
 	_, err := st.RecordVersions(context.Background(), "repo", []map[string]any{{"ref": "v1"}}, 0)
@@ -264,28 +324,28 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = os.WriteFile(upstream, []byte("v2"), 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return ctx, cfg, provider, st, fake, fetched
+	return ctx, cfg, provider, st, fake
 }
 
-func fetchedRef(t *testing.T, fetched string) string {
-	t.Helper()
+// fetchedRefs is every ref the in: said it fetched.
+func fetchedRefs(out string) []string {
+	var refs []string
 
-	log, err := os.ReadFile(fetched) //nolint:gosec // a t.TempDir() file this test's pipeline wrote
-	if err != nil {
-		t.Fatal(err)
+	for line := range strings.Lines(out) {
+		_, ref, found := strings.Cut(strings.TrimSpace(line), "fetched=")
+		if found && !strings.Contains(ref, "{{") {
+			refs = append(refs, ref)
+		}
 	}
 
-	return strings.TrimSpace(string(log))
+	return refs
 }
 
 // The poller keeps a polled resource's history, so a job's pre-plan refresh of one on a machine acquired on demand would start that machine for nothing the job needs.
 func TestAJobAcquiresNoMachineToRefreshAPolledResource(t *testing.T) {
-	ctx, cfg, provider, st, fake, fetched := preplanFixture(t, "    trigger: true")
+	requireDocker(t)
+
+	ctx, cfg, provider, st, fake := preplanFixture(t, "    trigger: true")
 
 	var err error
 
@@ -298,7 +358,7 @@ func TestAJobAcquiresNoMachineToRefreshAPolledResource(t *testing.T) {
 		t.Errorf("%d starts — want none: the only thing on box is a check the poller already makes", starts)
 	}
 
-	if got := fetchedRef(t, fetched); got != "v1" {
+	if got := fetchedRefs(out); !slices.Equal(got, []string{"v1"}) {
 		t.Errorf("fetched %q, want v1 — what the poller last recorded", got)
 	}
 
@@ -318,9 +378,13 @@ func TestAJobAcquiresNoMachineToRefreshAPolledResource(t *testing.T) {
 
 // Nothing polls this one, so the refresh is the only thing that ever moves its history: skipped, every run would build the first run's version forever.
 func TestARefreshStillChecksAResourceNothingPolls(t *testing.T) {
-	ctx, cfg, provider, st, fake, fetched := preplanFixture(t, "")
+	requireDocker(t)
 
-	err := RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
+	ctx, cfg, provider, st, fake := preplanFixture(t, "")
+
+	var err error
+
+	out := captureStdout(t, func() { err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false) })
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
 	}
@@ -329,14 +393,14 @@ func TestARefreshStillChecksAResourceNothingPolls(t *testing.T) {
 		t.Errorf("%d starts, want the refresh's one", starts)
 	}
 
-	if got := fetchedRef(t, fetched); got != "v2" {
+	if got := fetchedRefs(out); !slices.Equal(got, []string{"v2"}) {
 		t.Errorf("fetched %q, want v2 — the refresh was skipped with nothing else to keep history fresh", got)
 	}
 }
 
 // A one-shot command has no poller, so nothing but the refresh would keep a polled resource's history fresh either.
 func TestARefreshWithoutAPollerStillChecks(t *testing.T) {
-	_, cfg, _, _, _, _ := preplanFixture(t, "    trigger: true")
+	_, cfg, _, _, _ := preplanFixture(t, "    trigger: true")
 
 	ctx, err := WithWorkers(context.Background(), map[string]string{"box": borrowedWorker})
 	if err != nil {
@@ -357,7 +421,7 @@ func TestARefreshWithoutAPollerStillChecks(t *testing.T) {
 
 // Polling a resource on a borrowed machine is what #103 allowed: the poll shares the machine through the registry.
 func TestAPolledResourceOnABorrowedMachineIsAllowed(t *testing.T) {
-	ctx, cfg, _, _, _, _ := preplanFixture(t, "    trigger: true")
+	ctx, cfg, _, _, _ := preplanFixture(t, "    trigger: true")
 
 	err := ValidatePipelinePlacement(ctx, cfg, []string{"repo"})
 	if err != nil {
@@ -365,28 +429,11 @@ func TestAPolledResourceOnABorrowedMachineIsAllowed(t *testing.T) {
 	}
 }
 
-func awaitFile(t *testing.T, path string) {
-	t.Helper()
-
-	deadline := time.Now().Add(30 * time.Second)
-
-	for time.Now().Before(deadline) {
-		_, err := os.Stat(path)
-		if err == nil {
-			return
-		}
-
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	t.Fatalf("%s never appeared", path)
-}
-
 // A machine that could not be given back bills until somebody notices, so the job's release and the process's each say so, and only when it happened.
 func TestAWorkerThatCannotBeGivenBackIsReported(t *testing.T) {
 	for scope, c := range map[string]struct{ worker, warning string }{
 		"job":     {borrowedWorker, "acquired for this job could not be released"},
-		"process": {borrowedWorker + "&idle=1h", "acquired by this process could not be released"},
+		"process": {borrowedWorker + "?idle=1h", "acquired by this process could not be released"},
 	} {
 		for _, failing := range []bool{false, true} {
 			ctx, err := WithWorkers(context.Background(), map[string]string{"box": c.worker})
@@ -416,6 +463,8 @@ func TestAWorkerThatCannotBeGivenBackIsReported(t *testing.T) {
 }
 
 func TestAPlacedStepIsRecordedWhereItRan(t *testing.T) {
+	requireDocker(t)
+
 	ctx, cfg, provider, st, _ := borrowedRun(t, `
 jobs:
 - name: build
@@ -424,6 +473,7 @@ jobs:
     run: "true"
   - task: there
     tags: [box]
+    image: alpine:3
     run: "true"
 `)
 
@@ -461,13 +511,14 @@ jobs:
 // A placement row can only exist once its node does (run_placements references it), so one per case also proves the node-then-placement order on both outcomes.
 func TestEveryPlacedLeafStepIsRecordedWhereItRanPassOrFail(t *testing.T) {
 	t.Parallel()
+	requireDocker(t)
 
 	cases := []struct {
 		name, plan, step string
 		fails            bool
 	}{
-		{name: "task passes", plan: "- {task: work, tags: [box], run: \"true\"}", step: "work"},
-		{name: "task fails", plan: "- {task: work, tags: [box], run: \"false\"}", step: "work", fails: true},
+		{name: "task passes", plan: "- {task: work, tags: [box], image: alpine:3, run: \"true\"}", step: "work"},
+		{name: "task fails", plan: "- {task: work, tags: [box], image: alpine:3, run: \"false\"}", step: "work", fails: true},
 		{name: "first get passes", plan: "- get: good", step: "good"},
 		{name: "first get fails", plan: "- get: bad", step: "bad", fails: true},
 		{name: "second get passes", plan: "- {get: seed, resource: good}\n  - get: good", step: "good"},
@@ -483,11 +534,13 @@ func TestEveryPlacedLeafStepIsRecordedWhereItRanPassOrFail(t *testing.T) {
 			ctx, cfg, provider, st, _ := borrowedRun(t, `
 resource_types:
 - name: probe
+  image: alpine:3
   config:
     check: printf '[{"ref":"v1"}]'
     in: "true"
     out: printf '{"ref":"v2"}'
 - name: broken
+  image: alpine:3
   config:
     check: printf '[{"ref":"v1"}]'
     in: "false"
@@ -574,6 +627,8 @@ func (e *evictingRunner) Close() error {
 
 // The check stage labels its runner, runs one command and closes what it holds; after a re-placement that must be the machine the check ended on, so it is closed and recorded, rather than the dead one a second time.
 func TestACheckReplacedMidCommandHandsTheStageTheMachineItEndedOn(t *testing.T) {
+	requireDocker(t)
+
 	ctx, _, _, _, fake := borrowedRun(t, `
 jobs:
 - name: build
@@ -592,7 +647,7 @@ jobs:
 	var stage shell.Runner = &checkRunner{
 		Runner: first,
 		step:   config.Step{Get: "repo", Tags: []string{"box"}},
-		spec:   shell.RunnerSpec{Worker: "local:", WorkerTag: "box"},
+		spec:   shell.RunnerSpec{Worker: "local:", WorkerTag: "box", Image: "alpine:3"},
 	}
 
 	stage = stage.WithLabel("probe check")
@@ -622,8 +677,8 @@ jobs:
 	}
 }
 
-// deadWorker is a machine that will not answer: its shim binary is not there, so the dial itself fails.
-const deadWorker = "local:?binary=/nonexistent/steps"
+// deadWorker is a machine that will not answer: nothing listens on port 1, so the dial itself fails.
+const deadWorker = "docker+ssh://127.0.0.1:1?ssh_config=none"
 
 // sequenced hands out the machines it is given in order, the last one for every acquisition after, and counts what it gave back.
 type sequenced struct {
@@ -693,6 +748,7 @@ jobs:
   plan:
   - task: work
     tags: [box]
+    image: alpine:3
     attempts: 3
     inputs: []
     run: "true"
@@ -700,12 +756,14 @@ jobs:
 
 // warmRungs are both acquisition rungs, since they re-place differently: a launched machine is retired and a fresh one launched, while a parked one is the same entry started again.
 var warmRungs = map[string]string{ //nolint:gochecknoglobals // a test table
-	"stopped": "aws://stopped/i-0abc123def456789?shim=/usr/local/bin/steps&idle=1h",
-	"launch":  "aws://launch/lt-0def4567890abcde?shim=/usr/local/bin/steps&idle=1h",
+	"stopped": "aws://stopped/i-0abc123def456789?idle=1h",
+	"launch":  "aws://launch/lt-0def4567890abcde?idle=1h",
 }
 
 // A machine that died inside its idle window was handed to the next job as if alive, and the job failed on a plain dial error while a fresh machine was one acquisition away.
 func TestADeadWarmMachineIsReplacedOnce(t *testing.T) {
+	requireDocker(t)
+
 	for rung, worker := range warmRungs {
 		t.Run(rung, func(t *testing.T) {
 			fake := &sequenced{machines: []string{deadWorker, "local:"}}
@@ -737,6 +795,8 @@ func TestADeadWarmMachineIsReplacedOnce(t *testing.T) {
 
 // The twins: only a machine reused from its idle window is presumed reclaimed, only once, and a broken machine acquired fresh is still the plain failure it always was.
 func TestAMachineThatWillNotAnswerIsNotAlwaysAnEviction(t *testing.T) {
+	requireDocker(t)
+
 	for name, c := range map[string]struct {
 		machines []string
 		warm     bool
@@ -776,6 +836,8 @@ func warmJob(t *testing.T) (*config.Config, workspace.Provider, store.Store) {
 
 // A warm reuse is presumed dead only until it answers: once a step's session has shaken hands with it, a later step's refused dial on the same machine is that step's failure, and reading it as an eviction would launch a replacement and move every sharer off a live machine.
 func TestAWarmMachineThatAnsweredIsNoLongerPresumedDead(t *testing.T) {
+	requireDocker(t)
+
 	fake := &sequenced{machines: []string{"local:"}}
 	ctx, release := WithLeases(warmRegistry(t, warmRungs["launch"], fake, true))
 	t.Cleanup(func() { release(context.WithoutCancel(ctx)) })
@@ -791,7 +853,7 @@ func TestAWarmMachineThatAnsweredIsNoLongerPresumedDead(t *testing.T) {
 		t.Fatal("the fixture's machine is not a warm reuse, so this proves nothing")
 	}
 
-	runner, err := venue.NewRunner(shell.RunnerSpec{Cwd: t.TempDir(), Worker: worker, WorkerTag: "box", ReusedWarm: true})
+	runner, err := venue.NewRunner(shell.RunnerSpec{Cwd: t.TempDir(), Worker: worker, WorkerTag: "box", ReusedWarm: true, Image: "alpine:3"})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -811,6 +873,8 @@ func TestAWarmMachineThatAnsweredIsNoLongerPresumedDead(t *testing.T) {
 
 // Abandon is identity-checked against the machine a failed attempt dialled, so a check re-placed onto a machine that then fails too must name THAT machine: naming the one its stage was built on matched nothing, and every remaining re-placement redialled the same dead host.
 func TestARePlacedCheckAbandonsTheMachineItActuallyDialled(t *testing.T) {
+	requireDocker(t)
+
 	fake := &sequenced{machines: []string{deadWorker, "local:"}}
 	ctx, release := WithLeases(warmRegistry(t, warmRungs["launch"], fake, true))
 	t.Cleanup(func() { release(context.WithoutCancel(ctx)) })
@@ -819,7 +883,7 @@ func TestARePlacedCheckAbandonsTheMachineItActuallyDialled(t *testing.T) {
 
 	stage := &checkRunner{
 		step: config.Step{Get: "repo", Tags: []string{"box"}},
-		spec: shell.RunnerSpec{Worker: "local:?binary=/the/machine/the/stage/was/built/on", WorkerTag: "box"},
+		spec: shell.RunnerSpec{Worker: "ssh://nobody@the-machine-the-stage-was-built-on", WorkerTag: "box", Image: "alpine:3"},
 	}
 
 	out, err := stage.RunCapture(ctx, "echo fresh")

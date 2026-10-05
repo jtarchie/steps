@@ -253,8 +253,8 @@ func (s *dockerSession) start(ctx context.Context, name string) (string, error) 
 		WorkingDir: s.workingDir(),
 		MountDir:   s.resolvedCwd,
 		Volumes:    s.volumes,
-		// The container is per runner and a runner lives within one step of one run, so fixing the metadata here is correct.
-		Env:         s.containerEnv(BuildEnv(ctx)),
+		// Build metadata is NOT fixed here but sent with each exec: a session can outlive the context that started it.
+		Env:         s.containerEnv(nil),
 		Labels:      OwnershipLabels(),
 		User:        s.user,
 		Network:     s.network,
@@ -563,6 +563,7 @@ func (d DockerRunner) dockerExec(
 		Cmd:    []string{"sh", "-c", command},
 		Stdout: outTarget,
 		Stderr: errTarget,
+		Env:    buildEnvPairs(ctx),
 	}
 
 	if stdin {

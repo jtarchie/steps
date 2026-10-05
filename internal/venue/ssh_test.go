@@ -2,10 +2,9 @@ package venue
 
 // The ssh: venue against a real SSH server, running in this process.
 //
-// Every one of these pushes a binary over sftp for real, execs it through a
-// shell for real, and speaks the protocol over a real SSH channel. The binary
-// pushed is this test binary, which answers to _shim (see TestMain) — the
-// os/exec helper-process pattern, so nothing about the transport is stubbed.
+// Every one of these sends a tree in as a tar for real, execs the command
+// through a shell for real, and brings the outputs back over a real SSH
+// channel, so nothing about the transport is stubbed.
 
 import (
 	"context"

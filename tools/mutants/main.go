@@ -481,7 +481,7 @@ func writeLedger(book ledger) error {
 // serialPackages are the ones whose tests bind ports, spawn containers or share the docker daemon: parallel mutants there fail each other's tests and are scored KILLED for the wrong reason. They also take hours, so they go last.
 var serialPackages = map[string]bool{ //nolint:gochecknoglobals // a fixed table
 	"./internal/pipeline": true, "./internal/venue": true, "./internal/shell": true, "./internal/web": true,
-	"./internal/cli": true, "./internal/dockerapi": true, "./internal/shim": true, "./internal/trigger": true,
+	"./internal/cli": true, "./internal/dockerapi": true, "./internal/trigger": true,
 }
 
 // sweepOrder is cheapest first, serial packages last: a night that gets interrupted should leave the most rows behind, and should not have spent itself inside the one package that takes hours.

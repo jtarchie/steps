@@ -1,11 +1,12 @@
 package e2e
 
-// End-to-end placement: a tagged step, through the real CLI, onto a real shim.
+// End-to-end placement: a tagged step, through the real CLI, onto a real
+// docker daemon.
 //
-// These use local:, which runs the shim as a child process on this machine
-// (see TestMain's dispatch). That is not a stub — it is the whole transport:
-// frames, the tree out, the command, the tree back, the exit code. The only
-// thing an ssh:// worker adds underneath is a different pipe.
+// These use local:, which drives this machine's daemon exactly as a
+// docker+ssh:// worker drives a remote one: volumes for the tree, a container
+// for the command, the tree back, the exit code. The only thing
+// docker+ssh:// adds underneath is the ssh hop to the daemon's socket.
 
 import (
 	"os"
@@ -30,6 +31,7 @@ jobs:
     run: echo seed > data/seed.txt
   - task: train
     tags: [gpu]
+    image: `+dockerE2EImage+`
     inputs: [data]
     outputs: [model]
     run: |
@@ -45,6 +47,8 @@ jobs:
 // inputs reach the worker, its outputs come back into the local artifact
 // store, and a LATER step consumes them without knowing any of it happened.
 func TestEndToEndWorkerRoundTripsAStep(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	path := workerPipeline(t, dir)
 
@@ -68,6 +72,8 @@ func TestEndToEndWorkerRoundTripsAStep(t *testing.T) {
 // way. A second run must skip it rather than re-run it, which is only true if
 // the tree that crossed the wire digests identically to one that never left.
 func TestEndToEndWorkerStepCachesLikeALocalOne(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	path := workerPipeline(t, dir)
 
@@ -118,6 +124,8 @@ func TestEndToEndUnmappedTagRefusesBeforeRunning(t *testing.T) {
 // whole stack. A command that ran on a worker and exited nonzero has to reach
 // the pipeline as the step failing, so on_failure fires rather than on_error.
 func TestEndToEndWorkerFailureIsAStepFailure(t *testing.T) {
+	requireDockerE2E(t)
+
 	dir := t.TempDir()
 	path := writePipeline(t, dir, `
 jobs:
@@ -125,13 +133,16 @@ jobs:
   plan:
   - task: compile
     tags: [gpu]
+    image: `+dockerE2EImage+`
     run: exit 3
     on_failure:
-      task: note
-      run: echo failed > `+filepath.Join(dir, "on-failure.txt")+`
+      task: noted-failure
+      image: `+dockerE2EImage+`
+      run: "true"
     on_error:
-      task: note
-      run: echo errored > `+filepath.Join(dir, "on-error.txt")+`
+      task: noted-error
+      image: `+dockerE2EImage+`
+      run: "true"
 `)
 
 	err := cli.Run([]string{path, "--worker", "gpu=local:"})
@@ -139,6 +150,13 @@ jobs:
 		t.Fatal("a step whose command exited 3 reported success")
 	}
 
-	readFileString(t, filepath.Join(dir, "on-failure.txt"))
-	assertNoFile(t, filepath.Join(dir, "on-error.txt"))
+	// The hooks inherit the step's tag, so which one ran is read from where they were placed rather than from a host file a container cannot write.
+	ran := map[string]bool{}
+	for _, placement := range runPlacements(t, path) {
+		ran[placement.StepName] = true
+	}
+
+	if !ran["noted-failure"] || ran["noted-error"] {
+		t.Errorf("hooks that ran = %v, want on_failure's and not on_error's", ran)
+	}
 }
