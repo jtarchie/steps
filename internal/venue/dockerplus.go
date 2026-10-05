@@ -63,7 +63,7 @@ type plusSession struct {
 	startErr  error
 	closed    bool
 
-	ssh    *ssh.Client
+	conn   liveSSH
 	docker *dockerapi.Client
 	inner  shell.Runner
 	holder string
@@ -218,6 +218,8 @@ func (r plusRunner) around(ctx context.Context, run func(shell.Runner) error) (e
 
 	runErr := run(inner)
 	if runErr != nil && !shell.IsExitError(runErr) {
+		r.s.conn.suspect.Store(true)
+
 		return runErr
 	}
 
@@ -245,9 +247,21 @@ func (s *plusSession) ensure(ctx context.Context) (shell.Runner, error) {
 		if err != nil {
 			s.startErr = fmt.Errorf("%w %q: %w", ErrWorker, s.worker.URL, err)
 		}
+
+		return s.inner, s.startErr
 	}
 
-	return s.inner, s.startErr
+	if s.startErr != nil {
+		return nil, s.startErr
+	}
+
+	// Not sticky: a redial that fails leaves the next command free to try again.
+	err := s.redial(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.inner, nil
 }
 
 func (s *plusSession) daemonName() string { return s.worker.Address() + ":" + s.socket }
@@ -446,10 +460,27 @@ func (s *plusSession) daemonDialer(ctx context.Context) (func(context.Context) (
 		return nil, err
 	}
 
-	s.ssh = client
-	keepAlive(client)
+	s.conn.adopt(client)
 
-	return func(ctx context.Context) (net.Conn, error) { return client.DialContext(ctx, "unix", s.socket) }, nil
+	// Through whichever connection is current, so a redial reaches the daemon without rebuilding what was made on it.
+	return func(ctx context.Context) (net.Conn, error) {
+		return s.conn.current().DialContext(ctx, "unix", s.socket)
+	}, nil
+}
+
+// redial replaces a connection that ended (a dropped tunnel, a keepalive that gave up): the volumes, holder and container live on the daemon, so the step's tree is where it was.
+func (s *plusSession) redial(ctx context.Context) error {
+	// ponytail: a command the drop interrupted may still run in the container until it goes; keeping its exec id would let ExecInspect take its exit code instead of a rerun (steps#208).
+	redialed, err := s.conn.redial(ctx, func(ctx context.Context) (*ssh.Client, error) { return s.reach(ctx, s.worker) })
+	if err != nil {
+		return fmt.Errorf("%w %q: dialling again after the connection dropped: %w", ErrWorker, s.worker.URL, err)
+	}
+
+	if redialed {
+		s.watchDrain()
+	}
+
+	return nil
 }
 
 // localNamespace is "" for a bare local: and a short hash of the root otherwise.
@@ -736,8 +767,8 @@ func (s *plusSession) close() error {
 		errs = append(errs, s.docker.Close())
 	}
 
-	if s.ssh != nil {
-		_ = s.ssh.Close()
+	if client := s.conn.current(); client != nil {
+		_ = client.Close()
 	}
 
 	err := errors.Join(errs...)

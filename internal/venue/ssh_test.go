@@ -384,3 +384,39 @@ func TestSSHWorkerKeepsADirectoryNothingWillSweep(t *testing.T) {
 		t.Fatal("the kept directory still has an owner file a later sweep would act on")
 	}
 }
+
+// A dropped connection costs one command, not the step: the next one dials again and finds the tree where the worker's directory kept it.
+func TestSSHWorkerRedialsADroppedConnection(t *testing.T) {
+	t.Parallel()
+
+	runner, err := NewRunner(sshSpec(t, newTestSSHD(t), t.TempDir()))
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	t.Cleanup(func() { _ = runner.Close() })
+
+	err = runner.Run(t.Context(), "echo kept > marker")
+	if err != nil {
+		t.Fatalf("first command: %v", err)
+	}
+
+	bare, ok := runner.(bareRunner)
+	if !ok {
+		t.Fatalf("runner is %T, want an ssh:// runner", runner)
+	}
+
+	_ = bare.s.conn.current().Close()
+
+	// Attempt one: may fail on the dropped connection, or already find it gone and dial again.
+	_ = runner.Run(t.Context(), "true")
+
+	out, err := runner.RunCapture(t.Context(), "cat marker")
+	if err != nil {
+		t.Fatalf("a command after the connection dropped: %v", err)
+	}
+
+	if string(out) != "kept\n" {
+		t.Errorf("marker = %q, want the tree the first command left", out)
+	}
+}

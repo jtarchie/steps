@@ -14,6 +14,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/dockerapi"
 	"github.com/jtarchie/steps/internal/shell"
+
 	"github.com/jtarchie/steps/internal/testsshd"
 )
 
@@ -584,5 +585,37 @@ func TestDockerPlusHoldsAGetsWholeTree(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(dst, "d", "f")) //nolint:gosec // a path this test built
 	if err != nil || string(got) != "deep\n" {
 		t.Fatalf("pulled d/f = %q (%v), want the tree the in: wrote", got, err)
+	}
+}
+
+// A dropped ssh connection is the tunnel's failure, not the machine's: the next command dials again and finds the step's tree where the volumes kept it, so a retry under attempts: does not fail against a dead session.
+func TestDockerPlusRedialsADroppedConnection(t *testing.T) {
+	t.Parallel()
+
+	server := testsshd.New(t)
+	runner := plusRunnerFor(t, dockerPlusURL(server, hostDockerSocket(t)), t.TempDir())
+
+	err := runner.Run(t.Context(), "echo kept > marker")
+	if err != nil {
+		t.Fatalf("first command: %v", err)
+	}
+
+	plus, ok := runner.(plusRunner)
+	if !ok {
+		t.Fatalf("runner is %T, want a docker+ runner", runner)
+	}
+
+	_ = plus.s.conn.current().Close()
+
+	// Attempt one: may fail on the dropped connection, or already find it gone and dial again.
+	_ = runner.Run(t.Context(), "true")
+
+	out, err := runner.RunCapture(t.Context(), "cat marker")
+	if err != nil {
+		t.Fatalf("a command after the connection dropped: %v", err)
+	}
+
+	if string(out) != "kept\n" {
+		t.Errorf("marker = %q, want the tree the first command left", out)
 	}
 }

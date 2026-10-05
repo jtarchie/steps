@@ -50,7 +50,7 @@ type bareSession struct {
 	startErr  error
 	closed    bool
 
-	client         *ssh.Client
+	conn           liveSSH
 	dir            string
 	goos, goarch   string
 	uid, gid       *int
@@ -144,6 +144,8 @@ func (r bareRunner) exchange(ctx context.Context, command string, p plan) (strin
 	sinks.flush()
 
 	if err != nil {
+		r.s.conn.suspect.Store(true)
+
 		return stdout.result(), stderr.result(), 0, err
 	}
 
@@ -170,9 +172,21 @@ func (s *bareSession) ensure(ctx context.Context) error {
 		if err != nil {
 			s.startErr = fmt.Errorf("%w %q: %w", ErrWorker, s.worker.URL, err)
 		}
+
+		return s.startErr
 	}
 
-	return s.startErr
+	if s.startErr != nil {
+		return s.startErr
+	}
+
+	// A command the drop interrupted may still run on the worker; its pid file is what close kills it by.
+	_, err := s.conn.redial(ctx, func(ctx context.Context) (*ssh.Client, error) { return sshClientFor(ctx, s.worker) })
+	if err != nil {
+		return fmt.Errorf("%w %q: dialling again after the connection dropped: %w", ErrWorker, s.worker.URL, err)
+	}
+
+	return nil
 }
 
 func (s *bareSession) connect(ctx context.Context) error {
@@ -181,8 +195,7 @@ func (s *bareSession) connect(ctx context.Context) error {
 		return err
 	}
 
-	s.client = client
-	keepAlive(client)
+	s.conn.adopt(client)
 
 	// Once per process per worker: what a dead process left does not appear mid-run, and this is an extra round trip per step.
 	if _, done := swept.LoadOrStore("ssh "+s.worker.Address(), true); !done {
@@ -502,7 +515,7 @@ func (s *bareSession) tarInto(ctx context.Context, script, staging string) error
 
 // exec runs one command over a fresh session channel and reports its exit status; an error means it never ran or the connection died under it.
 func (s *bareSession) exec(ctx context.Context, command string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-	session, err := s.client.NewSession()
+	session, err := s.conn.current().NewSession()
 	if err != nil {
 		return 0, fmt.Errorf("opening a session: %w", err)
 	}
@@ -576,11 +589,12 @@ func (s *bareSession) close() error {
 
 	s.closed = true
 
-	if s.client == nil {
+	client := s.conn.current()
+	if client == nil {
 		return nil
 	}
 
-	defer func() { _ = s.client.Close() }()
+	defer func() { _ = client.Close() }()
 
 	if s.dir == "" {
 		return nil

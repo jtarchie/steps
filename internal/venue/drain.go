@@ -45,7 +45,7 @@ func (s *plusSession) watchDrain() {
 		return
 	}
 
-	session, err := s.ssh.NewSession()
+	session, err := s.conn.current().NewSession()
 	if err != nil {
 		return
 	}
