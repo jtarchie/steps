@@ -200,12 +200,18 @@ func sessionVolumes(t *testing.T) int {
 func removeProcessCache() {
 	ctx := context.Background()
 
+	// Containers first, since a volume a container mounts refuses removal: --keep-workspace leaves a session's holder by design.
+	//nolint:gosec // a filter built from this process's own pid
+	ids, _ := exec.CommandContext(ctx, "docker", "ps", "-aq", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid())).Output()
+	if containers := strings.Fields(string(ids)); len(containers) > 0 {
+		_ = exec.CommandContext(ctx, "docker", append([]string{"rm", "-f"}, containers...)...).Run() //nolint:gosec // ids the daemon listed
+	}
+
 	//nolint:gosec // a filter built from this process's own pid
 	out, _ := exec.CommandContext(ctx, "docker", "volume", "ls", "-q", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid())).Output()
+	// Every volume carrying this pid is this process's: a held get's tree stays in its steps-work- volume, so a prefix list misses one.
 	for _, name := range strings.Fields(string(out)) {
-		if strings.HasPrefix(name, aliasPrefix) || strings.HasPrefix(name, "steps-d-") || strings.HasPrefix(name, "steps-out-") {
-			_ = exec.CommandContext(ctx, "docker", "volume", "rm", name).Run() //nolint:gosec // a name the daemon listed
-		}
+		_ = exec.CommandContext(ctx, "docker", "volume", "rm", name).Run() //nolint:gosec // a name the daemon listed
 	}
 }
 
