@@ -58,6 +58,35 @@ var discGlyphs = map[disc]string{
 	discErrored: "!",
 }
 
+var discWords = map[disc]string{
+	discQueued:  "queued",
+	discAborted: "aborted",
+	discPassed:  "passed",
+	discPaused:  "paused",
+	discFailed:  "failed",
+	discErrored: "errored",
+}
+
+// DiscGlyph and Word are the disc alone, for markup that colors the disc and
+// the ring separately.
+func (m mark) DiscGlyph() string { return discGlyphs[m.Disc] }
+
+func (m mark) Word() string { return discWords[m.Disc] }
+
+// Words is the mark said aloud, for a reader who cannot see the glyphs.
+func (m mark) Words() string {
+	words := m.Word()
+	if m.Ring {
+		if words != "" {
+			words += ", "
+		}
+
+		words += "running"
+	}
+
+	return words
+}
+
 // Glyph is the mark as text: the disc's glyph, then ◐ when something runs.
 func (m mark) Glyph() string {
 	glyph := discGlyphs[m.Disc]
@@ -109,6 +138,22 @@ func finished(status string) bool {
 // runMark is a run page's mark: that run, and nothing else.
 func runMark(run store.RunRow) mark {
 	return mark{Disc: discOf(run.Status), Ring: statusWord(run.Status) == "running"}
+}
+
+// inFlight counts the queue's open rows, the same reading the root's queued
+// column takes; zero when the store cannot say, since a missing count is
+// better than a page that fails to draw.
+func inFlight(ctx context.Context, target *Pipeline) int {
+	if target.Store == nil {
+		return 0
+	}
+
+	queue, err := target.Store.ListTriggerQueue(ctx, overviewLimit)
+	if err != nil {
+		return 0
+	}
+
+	return len(pendingQueue(queue))
 }
 
 // runTitle is a run page's title, which the stream's done frame repeats.

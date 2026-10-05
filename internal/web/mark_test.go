@@ -310,3 +310,79 @@ func TestAMarkRouteAnswersNothingForWhatIsGone(t *testing.T) {
 		}
 	}
 }
+
+// TestTheSwitcherCountsWhatIsInFlight: activity is drawn dim and only while
+// there is some — a quiet pipeline's row is its glyph and its name.
+func TestTheSwitcherCountsWhatIsInFlight(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+
+	_, quiet := get(t, server, "/p/demo")
+	if strings.Contains(quiet, `class="inflight"`) {
+		t.Error("an idle pipeline's switcher row draws an in-flight count")
+	}
+
+	for _, job := range []string{"build", "deploy"} {
+		err := pipeline.Store.EnqueueJob(context.Background(), job, "new version")
+		if err != nil {
+			t.Fatalf("EnqueueJob: %v", err)
+		}
+	}
+
+	_, busy := get(t, server, "/p/demo")
+	if !strings.Contains(busy, `<span class="inflight" title="2 running or queued"><span aria-hidden="true">◐</span>2<span class="visually-hidden"> running or queued</span></span>`) {
+		t.Error("two queued jobs are not counted, dim, on the switcher row")
+	}
+}
+
+// TestTheSwitcherButtonIsAboutThePipeline: on a run page the tab marks the
+// run, but the switcher is about pipelines — an old red run must not paint
+// a pipeline that has since gone green.
+func TestTheSwitcherButtonIsAboutThePipeline(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+
+	finishedRun(t, pipeline, "b-bad", "build", "failed")
+	finishedRun(t, pipeline, "b-ok", "build", "succeeded")
+
+	_, page := get(t, server, "/p/demo/runs/b-bad")
+
+	button := between(t, page, `id="pipebtn"`, "</button>")
+
+	if !strings.Contains(button, `class="st-passed"`) || strings.Contains(button, "st-failed") {
+		t.Errorf("the switcher button on a red run of a green pipeline reads:\n%s", button)
+	}
+
+	if !strings.HasPrefix(titleText(page), "✗ ") {
+		t.Errorf("the tab of a red run reads %q, want ✗", titleText(page))
+	}
+}
+
+// TestABrokenPipelineIsMarkedErrored: a pipeline the daemon cannot serve
+// does no work at all, which the root's tab and the switcher both say.
+func TestABrokenPipelineIsMarkedErrored(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipelines(t, "app", "infra")
+	server.MarkBroken(BrokenPipeline{Name: "gone", Reason: "workspace: root is not writable"})
+
+	_, root := get(t, server, "/")
+
+	if !strings.HasPrefix(titleText(root), "! ") {
+		t.Errorf("the root over a broken pipeline is titled %q, want !", titleText(root))
+	}
+
+	row := between(t, root, `class="broken" role="option"`, "not serving")
+
+	if !strings.Contains(row, `class="st-errored"`) {
+		t.Errorf("the broken pipeline's switcher row reads:\n%s", row)
+	}
+}
+
+func titleText(page string) string {
+	start := strings.Index(page, "<title>") + len("<title>")
+
+	return page[start : start+strings.Index(page[start:], "</title>")]
+}

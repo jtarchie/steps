@@ -93,3 +93,75 @@ func faviconOf(t *testing.T, page string) string {
 
 	return match[1]
 }
+
+// TestTheSwitcherSaysWhichPipelineIsRed: the switcher listed names and job
+// counts, so learning which of a daemon's pipelines was broken took opening
+// each. Every row now leads with its pipeline's mark — read here from the
+// OTHER pipeline's page, which is where the reader who has not looked is.
+func TestTheSwitcherSaysWhichPipelineIsRed(t *testing.T) {
+	dir := t.TempDir()
+	green := filepath.Join(dir, "green.yml")
+	red := filepath.Join(dir, "red.yml")
+
+	writePipelineFile(t, green, `
+jobs:
+- name: ok
+  plan:
+  - task: work
+    run: "true"
+`)
+	writePipelineFile(t, red, `
+jobs:
+- name: broken
+  plan:
+  - task: work
+    run: exit 1
+`)
+
+	mustRun(t, "run", green, "--job", "ok")
+
+	err := cli.Run([]string{"run", red, "--job", "broken"})
+	if err == nil {
+		t.Fatal("the broken job ran green")
+	}
+
+	server := webServerForAll(t, green, red)
+
+	_, page := webGet(t, server, "/p/green")
+
+	for slug, word := range map[string]string{"green": "passed", "red": "failed"} {
+		row := switcherRow(t, page, slug)
+		if !strings.Contains(row, `class="st-`+word+`"`) || !strings.Contains(row, `<span class="visually-hidden">`+word) {
+			t.Errorf("the %s pipeline's switcher row does not say %s:\n%s", slug, word, row)
+		}
+	}
+}
+
+// switcherRow is one pipeline's option in the switcher menu.
+func switcherRow(t *testing.T, page, slug string) string {
+	t.Helper()
+
+	start := strings.Index(page, `role="option"`)
+	for start >= 0 {
+		end := strings.Index(page[start:], "</a>")
+		if end < 0 {
+			break
+		}
+
+		row := page[start : start+end]
+		if strings.Contains(row, `href="/p/`+slug+`"`) {
+			return row
+		}
+
+		next := strings.Index(page[start+end:], `role="option"`)
+		if next < 0 {
+			break
+		}
+
+		start += end + next
+	}
+
+	t.Fatalf("no switcher row for %s", slug)
+
+	return ""
+}

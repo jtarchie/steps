@@ -179,13 +179,17 @@ has no resting state.
 
 The pipeline switcher carries the same count for every pipeline this daemon
 holds, and the root lists it per pipeline — otherwise a daemon holding
-several hides every one but the open tab.
+several hides every one but the open tab. Each switcher row also leads with
+that pipeline's [mark](#the-tab-mark) — `✗` for a failed job, `⏸` paused,
+`◐` while something runs — so a broken pipeline is found by scanning one
+column rather than opening each.
 
-Three things deliberately do **not** appear here, because a signal that is
-never quiet is one nobody reads: how many runs are in flight, how many
-resources exist, and how many runs have failed. The first two are activity
-rather than attention; the third is what the jobs board is for, and a count
-that only clears when somebody fixes the world would be permanent.
+Activity is shown differently from attention, because a signal that is never
+quiet is one nobody reads. Runs in flight appear as a dim `◐N` beside a
+switcher row — quiet the moment nothing is running, and never in the yellow
+of what waits on you. Failures appear as a pipeline's mark and never as a
+count: a count that only clears when somebody fixes the world would be
+permanent. How many resources exist does not appear at all.
 
 Press `/` anywhere for a jump palette over pipelines, jobs, and recent runs — across **every** pipeline this process serves, not only the one whose page you are on. The one you are on ranks first, and a hit from anywhere else says which pipeline it belongs to.
 
@@ -411,6 +415,8 @@ Every status is one word, one glyph and one colour, on every page:
 | paused | pipeline | `⏸` blue | a person paused it; an unpaused pipeline reads *active* |
 | held | job | `⊘` red | the [circuit breaker](infra.md#circuit-breaker-max_consecutive_failures) stopped its automatic triggers |
 | unreported | step | `?` dim | the run ended before this step reported how it did |
+
+### The tab mark
 
 The browser tab carries a **mark** for whatever the page is about: a run page
 marks that run, every other pipeline page marks the pipeline, and the root

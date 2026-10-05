@@ -102,7 +102,7 @@ func TestPipelinesAreListedByName(t *testing.T) {
 
 	for what, pair := range map[string][2]string{
 		"overview": {`<td><a href="/p/app">app</a>`, `<td><a href="/p/infra">infra</a>`},
-		"switcher": {`href="/p/app">app <span class="hint">`, `href="/p/infra">infra <span class="hint">`},
+		"switcher": {`<span class="slug">app</span>`, `<span class="slug">infra</span>`},
 	} {
 		first, second := strings.Index(page, pair[0]), strings.Index(page, pair[1])
 		if first < 0 || second < 0 || first > second {

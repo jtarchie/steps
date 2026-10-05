@@ -43,12 +43,12 @@
        error) the switcher reads as a picker and no tabs are drawn: tabs
        borrowed from the first pipeline looked like the root's own. */}}
   {{if .Nav.Pipelines}}<div class="pipeswitch">
-    <button class="pipebtn" id="pipebtn" type="button" aria-haspopup="listbox" aria-expanded="false">{{if .Nav.Anchored}}<span class="visually-hidden">pipeline </span><b>{{.Nav.Current}}</b>{{else}}pipelines{{end}} <span class="caret" aria-hidden="true">▾</span></button>
+    <button class="pipebtn" id="pipebtn" type="button" aria-haspopup="listbox" aria-expanded="false">{{template "markglyph" .Nav.SwitchMark}}{{if .Nav.Anchored}}<span class="visually-hidden">pipeline </span><b>{{.Nav.Current}}</b>{{else}}pipelines{{end}} <span class="caret" aria-hidden="true">▾</span></button>
     <div class="pipemenu" id="pipemenu" role="listbox" aria-label="Pipelines">
       {{range .Nav.Pipelines}}
       {{/* Not a link: a broken pipeline has no page to go to. Its reason is on the root and not here, because this shell also draws the error page a webhook sender gets, and that sender never passed this server's credentials. */}}
-      {{if .Broken}}<span class="broken" role="option" aria-disabled="true">{{.Slug}} <span class="hint">not serving</span></span>{{else}}
-      <a role="option" {{if and $.Nav.Anchored (eq .Slug $.Nav.Current)}}aria-selected="true"{{end}} href="/p/{{.Slug}}">{{.Slug}} <span class="hint">{{.Jobs}} jobs</span>{{if .Attention}}<span class="badge" title="{{.Attention}} waiting on you"><span aria-hidden="true">●</span>{{.Attention}}</span>{{end}}</a>{{end}}
+      {{if .Broken}}<span class="broken" role="option" aria-disabled="true">{{template "markglyph" .Mark}}<span class="slug">{{.Slug}}</span> <span class="hint">not serving</span></span>{{else}}
+      <a role="option" {{if and $.Nav.Anchored (eq .Slug $.Nav.Current)}}aria-selected="true"{{end}} href="/p/{{.Slug}}">{{template "markglyph" .Mark}}<span class="slug">{{.Slug}}</span>{{template "counts" .}}</a>{{end}}
       {{end}}
     </div>
   </div>
@@ -155,3 +155,12 @@
      not poll the page, so the carrier asks its mark route on its own — and
      declines an error answer, which would replace it and end the poll. */}}
 {{define "markcarrier"}}<span id="mark" hidden data-icon="{{.Mark.Favicon}}" data-prefix="{{.Mark.TitlePrefix}}"{{with .MarkURL}} hx-get="{{.}}" hx-trigger="every[document.hidden] 30000ms" hx-swap="outerMorph" hx-status:4xx="swap:none" hx-status:5xx="swap:none"{{end}}></span>{{end}}
+
+{{/* A mark as glyphs: the disc in its status color and the ring in
+     running's, each a separate span so a red job being rebuilt reads as
+     both. The glyphs are hidden from a screen reader, which hears the words. */}}
+{{define "markglyph"}}<span class="mk"{{with .Words}} title="{{.}}"{{end}}><span aria-hidden="true">{{with .DiscGlyph}}<span class="st-{{$.Word}}">{{.}}</span>{{end}}{{if .Ring}}<span class="st-running">◐</span>{{end}}</span>{{with .Words}}<span class="visually-hidden">{{.}}</span>{{end}}</span>{{end}}
+
+{{/* Attention loud, activity quiet: what waits on a person is the yellow
+     badge, what is merely in flight is dim, and neither draws at zero. */}}
+{{define "counts"}}{{if or .Attention .InFlight}}<span class="counts">{{if .Attention}}<span class="badge" title="{{.Attention}} waiting on you"><span aria-hidden="true">●</span>{{.Attention}}<span class="visually-hidden"> waiting on you</span></span>{{end}}{{if .InFlight}}<span class="inflight" title="{{.InFlight}} running or queued"><span aria-hidden="true">◐</span>{{.InFlight}}<span class="visually-hidden"> running or queued</span></span>{{end}}</span>{{end}}{{end}}

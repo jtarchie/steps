@@ -734,6 +734,7 @@ func (s *Server) nav(c *echo.Context) navData {
 			Jobs:      len(pipeline.Config().Jobs),
 			Attention: attentionTotal(items),
 			Mark:      pipelineMark(ctx, pipeline, attentionTotal(items)),
+			InFlight:  inFlight(ctx, pipeline),
 		})
 	}
 
@@ -748,6 +749,7 @@ func (s *Server) nav(c *echo.Context) navData {
 	}
 
 	nav.MarkURL = "/mark"
+	nav.SwitchMark = nav.Mark
 
 	sort.Slice(nav.Pipelines, func(i, j int) bool {
 		return nav.Pipelines[i].Slug < nav.Pipelines[j].Slug
@@ -767,6 +769,7 @@ func (s *Server) nav(c *echo.Context) navData {
 	for _, summary := range nav.Pipelines {
 		if summary.Slug == current.Slug {
 			nav.Mark = summary.Mark
+			nav.SwitchMark = summary.Mark
 		}
 	}
 	nav.Paused = paused(ctx, current)
@@ -809,6 +812,10 @@ type navData struct {
 	// MarkURL is where a hidden tab asks for Mark again; empty on a page
 	// about nothing, which then never polls.
 	MarkURL string
+	// SwitchMark is what the switcher button wears: the current pipeline's
+	// mark even on a run page, and every pipeline's above one — the switcher
+	// is about pipelines whatever page it sits on.
+	SwitchMark mark
 }
 
 // Answers false when the store cannot say: a page that fails to draw is worse than a missing banner.
@@ -831,4 +838,8 @@ type pipelineSummary struct {
 	// Broken is a pipeline the daemon holds and does not serve. Not its reason: this shell also draws the error page a webhook sender gets, and that sender never passed this server's credentials.
 	Broken bool
 	Mark   mark
+	// InFlight is the trigger queue's open rows, queued and running: every
+	// build the daemon starts is claimed from it. Activity, not attention, so
+	// it is drawn dim and only when nonzero.
+	InFlight int
 }

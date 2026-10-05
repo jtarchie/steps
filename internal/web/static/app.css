@@ -140,7 +140,12 @@ code { font-family: var(--mono); color: var(--fg); }
 
 /* A switcher row's mark: the same badge, about a pipeline you are not looking
    at. */
-.pipemenu .badge { float: right; }
+.mk { display: inline-block; min-width: 2.2ch; margin-right: 6px; }
+.mk:empty, .mk > span:empty { margin-right: 0; }
+.pipemenu .slug { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pipemenu .counts { margin-left: auto; display: flex; gap: 10px; font-variant-numeric: tabular-nums; }
+.pipemenu .counts .badge { margin-left: 0; }
+.inflight { color: var(--dim); }
 
 /* Why a resource stopped checking. Red rather than the attention yellow: by
    the time a reader is on this page the question is no longer "does something
@@ -240,7 +245,7 @@ tr.checkfail pre { margin: 0 0 4px; }
 .pipemenu.open { display: block; }
 .pipemenu a, .pipemenu .broken {
   display: flex;
-  gap: 12px;
+  gap: 0;
   align-items: baseline;
   font-size: 12px;
   color: var(--fg);
@@ -251,7 +256,10 @@ tr.checkfail pre { margin: 0 0 4px; }
 .pipemenu .broken { color: var(--faint); cursor: default; }
 .broken-reason { white-space: pre-line; }
 .pipemenu a:hover { background: var(--panel2); text-decoration: none; }
-.pipemenu a[aria-selected="true"]::before { content: "› "; color: var(--green); }
+/* Every row reserves the marker's width, or the selected row's glyph sits a
+   column right of every other and the glyph column stops being one. */
+.pipemenu a::before, .pipemenu .broken::before { content: ""; display: inline-block; width: 1.5ch; flex: none; }
+.pipemenu a[aria-selected="true"]::before { content: "›"; color: var(--green); }
 .pipemenu .hint { margin-left: auto; color: var(--faint); font-size: 11px; }
 
 /* A finger needs more than 30px of row. Every control in the bar grows to the
