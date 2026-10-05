@@ -3,6 +3,7 @@ package venue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"os"
@@ -423,6 +424,41 @@ func TestDockerPlusNonRootUserWritesItsOutputs(t *testing.T) {
 	if got := mustRead(t, filepath.Join(cwd, "out", "uid")); got != "1000\n" {
 		t.Fatalf("out/uid = %q", got)
 	}
+}
+
+// A step with nothing cached starts one container, its own: opening its volumes to a non-root user: once cost a busybox chmod per step, a third of every container a worker started. Not parallel, so this process starts nothing else while it counts.
+func TestDockerPlusStartsOnlyTheStepsContainer(t *testing.T) {
+	since := time.Now()
+
+	runner := newLocalRunner(t, localWorker(t, t.TempDir()))
+
+	err := runner.Run(t.Context(), "true")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	err = runner.Close()
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	//nolint:gosec // a filter built from this process's own pid and a clock reading
+	out, err := exec.CommandContext(t.Context(), "docker", "events",
+		"--since", eventsTime(since), "--until", eventsTime(time.Now()),
+		"--filter", "type=container", "--filter", "event=start", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid()),
+		"--format", "{{.Actor.Attributes.name}}").Output()
+	if err != nil {
+		t.Fatalf("docker events: %v", err)
+	}
+
+	if started := strings.Fields(string(out)); len(started) != 1 {
+		t.Errorf("the session started %d containers, want only the step's: %v", len(started), started)
+	}
+}
+
+// eventsTime is docker events' fractional-second form; whole seconds would count a container the previous test started in the same second.
+func eventsTime(at time.Time) string {
+	return fmt.Sprintf("%d.%09d", at.Unix(), at.Nanosecond())
 }
 
 // An agent's tool calls run concurrently; each fetch swaps the same local paths.

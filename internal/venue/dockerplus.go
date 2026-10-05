@@ -3,6 +3,8 @@ package venue
 // The docker+ssh:// venue: the worker's own docker daemon, driven through its socket forwarded over ssh (steps#206). No binary is pushed and no command runs over ssh; the step's tree goes into a volume, the step runs in a container that mounts it, and its outputs are read back out.
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -16,7 +18,6 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -73,8 +74,6 @@ type plusSession struct {
 	volumes   []string
 	// outputs are the declared outputs that got a plain volume of their own: only those can be held, since an overlay's data is visible only while something mounts it.
 	outputs map[string]string
-	// fresh are the volumes this session made empty, whose roots it opens to the step's user.
-	fresh []string
 	// kept are volumes now named by a digest, which outlive the session.
 	kept map[string]bool
 	// fetchMu serializes fetches: an agent's concurrent tool calls would otherwise swap the same local paths and write kept at once.
@@ -302,14 +301,14 @@ func (s *plusSession) connect(ctx context.Context) error {
 		return err
 	}
 
-	err = s.openRoots(ctx)
-	if err != nil {
-		return err
-	}
-
 	s.holder, err = s.docker.CreateHolder(ctx, "steps-holder-"+randomSuffix(), treedigest.Image, shell.OwnershipLabels(), mounts)
 	if err != nil {
 		return fmt.Errorf("%w", err)
+	}
+
+	err = s.openRoots(ctx, mounts)
+	if err != nil {
+		return err
 	}
 
 	if len(files) > 0 {
@@ -548,36 +547,36 @@ func (s *plusSession) newVolume(ctx context.Context, kind string) (dockerapi.Vol
 
 	s.volumes = append(s.volumes, created.Name)
 
-	if kind != "ovl" {
-		s.fresh = append(s.fresh, created.Name)
-	}
-
 	return created, nil
 }
 
-// openRoots makes every fresh volume's root writable by any user, before anything mounts it: the daemon creates them root-owned 0755, and a step with a non-root user: could not write its own outputs. An overlay takes its root from its upper, so an input dir opens up too.
+// openRoots makes the root of every volume the holder mounts writable by any user, before the step's container mounts them: the daemon creates volumes root-owned 0755, and a step with a non-root user: could not write its own outputs. Each is fresh (the work volume, an empty output) or an overlay whose root is its fresh upper, so an input dir opens up too.
+//
+// Through the holder's archive endpoint, not a container: unpacking a directory entry over a directory that exists applies the entry's mode to it, a mount point included, and only "." is skipped, so the entries are written from the parent of plusWorkdir.
 //
 // ponytail: an input's files arrive root-owned with the modes they had, so a non-root user: reads what is world-readable and adds to an input but cannot overwrite it; the cache is shared across users, so ownership cannot follow the step. Concourse has the same limit.
-func (s *plusSession) openRoots(ctx context.Context) error {
-	mounts := make([]string, 0, len(s.fresh))
-	for i, name := range s.fresh {
-		mounts = append(mounts, volumeMount(name, "/v/"+strconv.Itoa(i), false))
+func (s *plusSession) openRoots(ctx context.Context, mounts []string) error {
+	var roots bytes.Buffer
+
+	archive := tar.NewWriter(&roots)
+
+	for _, mount := range mounts {
+		target := strings.SplitN(mount, ":", 3)[1]
+
+		err := archive.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: strings.TrimPrefix(target, path.Dir(plusWorkdir)+"/") + "/", Mode: 0o777})
+		if err != nil {
+			return fmt.Errorf("opening the step's volumes: %w", err)
+		}
 	}
 
-	code, _, stderr, err := s.docker.RunOnce(ctx, dockerapi.ContainerSpec{
-		Image:   treedigest.Image,
-		Cmd:     []string{"sh", "-c", "chmod 0777 /v/*"},
-		Name:    "steps-chmod-" + randomSuffix(),
-		Labels:  shell.OwnershipLabels(),
-		Network: "none",
-		Mounts:  mounts,
-	})
+	err := archive.Close()
 	if err != nil {
 		return fmt.Errorf("opening the step's volumes: %w", err)
 	}
 
-	if code != 0 {
-		return fmt.Errorf("opening the step's volumes: exit %d: %s", code, stderr)
+	err = s.docker.PutArchive(ctx, s.holder, path.Dir(plusWorkdir), &roots)
+	if err != nil {
+		return fmt.Errorf("opening the step's volumes: %w", err)
 	}
 
 	return nil
