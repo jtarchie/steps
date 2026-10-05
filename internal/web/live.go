@@ -139,7 +139,15 @@ func (s *Server) handleRunEvents(c *echo.Context) error {
 		// close: the page has everything, and holding the socket open would
 		// only poll a table that can no longer change.
 		if run.Status != "running" {
-			writeSSE(response, "done", map[string]any{"status": run.Status})
+			// The tab's finished mark rides along, rendered here, so a
+			// backgrounded tab whose reload is deferred still reports the
+			// outcome without the page owning a second copy of the rule.
+			finished := runMark(run, 0)
+			writeSSE(response, "done", map[string]any{
+				"status": run.Status,
+				"icon":   string(finished.Favicon()),
+				"title":  finished.TitlePrefix() + runTitle(run) + " — steps",
+			})
 
 			return nil
 		}

@@ -134,28 +134,17 @@
   // status, its duration, what each step spent — and it is also the
   // backstop for a fragment a dropped connection lost.
   window.runFinished = function (event) {
-    var status = '';
+    var done = {};
     // The reload below is the backstop for everything the transcript is not,
     // so nothing before it may throw: an unparseable payload must cost the
-    // mark, not the redraw.
-    try { status = JSON.parse(event.detail.data).status || ''; } catch (err) { /* the mark is a nicety */ }
+    // mark, not the redraw. 'gone' (reaped mid-watch) carries no mark.
+    try { done = JSON.parse(event.detail.data) || {}; } catch (err) { /* the mark is a nicety */ }
 
-    // 'gone' is the run reaped by retention mid-watch: not an outcome, and
-    // the reload below is what shows the reader what happened instead.
-    if (status && status !== 'gone') {
-      // statusMark and faviconDots in render.go, which this must agree with.
-      var marks = { succeeded: ['✓', '%2384c06d'], running: ['◐', '%23d9a94a'], errored: ['!', '%23e0645a'], aborted: ['■', '%2383887b'] };
-      var pick = marks[status] || ['✗', '%23e0645a'];
-      var mark = pick[0];
-      document.title = mark + ' ' + document.title.replace(/^[✓✗◐!■○]\s*/, '');
-
-      var dot = pick[1];
+    if (done.icon) {
       var icon = document.getElementById('favicon');
-      if (icon) {
-        icon.href = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E" +
-          "%3Ccircle cx='8' cy='8' r='6' fill='" + dot + "'/%3E%3C/svg%3E";
-      }
+      if (icon) icon.setAttribute('href', done.icon);
     }
+    if (done.title) document.title = done.title;
 
     window.location.reload();
   };

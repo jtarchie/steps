@@ -98,15 +98,8 @@ func (r *renderer) Render(_ *echo.Context, w io.Writer, name string, data any) e
 	values["Section"] = sectionOf(name)
 	values["Version"] = r.version
 
-	// Title and TitleMark are optional per page, but the layout always reads
-	// them — and `favicon` takes a string, so a missing key would reach it as
-	// a nil interface and fail the render rather than degrade.
 	if _, ok := values["Title"]; !ok {
 		values["Title"] = ""
-	}
-
-	if _, ok := values["TitleMark"]; !ok {
-		values["TitleMark"] = ""
 	}
 
 	err := tmpl.ExecuteTemplate(w, "layout", values)
@@ -243,7 +236,6 @@ func templateFuncs() template.FuncMap {
 		// The tab badges: one lookup into the list nav() already gathered,
 		// rather than six count fields that could each be stale differently.
 		"attentionOn": attentionOn,
-		"favicon":     faviconFor,
 		"rfc3339":     func(t time.Time) string { return t.UTC().Format(time.RFC3339) },
 		// The recursive step template needs both the page (for
 		// pipeline-scoped links) and the step it is drawing; a Go template
@@ -478,10 +470,8 @@ func transcriptEvents(raw string, ok bool) []transcriptEvent {
 	return decoded
 }
 
-// statusMark is the one-glyph status a browser tab can carry. It prefixes the
-// document title and selects the favicon, so a run left in a background tab
-// reports its outcome without being reopened — the single most common way a
-// CI page is actually used.
+// statusMark is a run status as one glyph, the vocabulary every mark and
+// status line here shares.
 func statusMark(status string) string {
 	switch statusWord(status) {
 	case "passed":
@@ -499,39 +489,6 @@ func statusMark(status string) string {
 	default:
 		return ""
 	}
-}
-
-// faviconDots maps a status mark to a self-contained SVG data URI. Inline
-// rather than files: three flat discs cost less as data URIs than as three
-// more embedded assets and three more requests, and the page is already
-// committed to shipping its own chrome.
-var faviconDots = map[string]string{
-	"✓": faviconSVG("%2384c06d"),
-	"✗": faviconSVG("%23e0645a"),
-	"!": faviconSVG("%23e0645a"),
-	"■": faviconSVG("%2383887b"),
-	"○": faviconSVG("%23565b50"),
-	"◐": faviconSVG("%23d9a94a"),
-	"":  faviconSVG("%2383887b"),
-}
-
-// faviconSVG builds a filled-circle favicon in the given (URL-escaped) color.
-func faviconSVG(color string) string {
-	return "data:image/svg+xml," +
-		"%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E" +
-		"%3Ccircle cx='8' cy='8' r='6' fill='" + color + "'/%3E%3C/svg%3E"
-}
-
-// faviconFor resolves a status mark to its icon, falling back to the neutral
-// dot for pages that carry no status at all.
-func faviconFor(marker string) template.URL {
-	icon, ok := faviconDots[marker]
-	if !ok {
-		icon = faviconDots[""]
-	}
-
-	//nolint:gosec // G203: the value is one of four constants built above, never input
-	return template.URL(icon)
 }
 
 // agoTag renders a relative timestamp as a <time> element carrying the

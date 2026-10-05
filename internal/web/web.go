@@ -645,8 +645,10 @@ func (s *Server) handleError(c *echo.Context, err error) {
 	// globalNav, not nav: most errors fire where no pipeline resolved (a bad
 	// slug, a stray 404), and bare nav leaves Current empty — every tab then
 	// links /p//…, which 404s straight back into this handler.
+	nav := s.unscopedNav(c)
+
 	renderErr := c.Render(status, "error", map[string]any{
-		"Nav":     s.globalNav(c),
+		"Nav":     nav,
 		"Status":  status,
 		"Message": message,
 	})
@@ -682,6 +684,15 @@ func (s *Server) globalNav(c *echo.Context) navData {
 	return nav
 }
 
+// unscopedNav is globalNav for a page about no pipeline at all — the docs,
+// an error — whose tab says nothing rather than borrowing every pipeline's.
+func (s *Server) unscopedNav(c *echo.Context) navData {
+	nav := s.globalNav(c)
+	nav.Mark = mark{}
+
+	return nav
+}
+
 // nav is the shell every page renders inside: which pipelines exist, which
 // one is current, and the counts the top bar reports.
 func (s *Server) nav(c *echo.Context) navData {
@@ -710,11 +721,18 @@ func (s *Server) nav(c *echo.Context) navData {
 			Path:      pipeline.Path(),
 			Jobs:      len(pipeline.Config().Jobs),
 			Attention: attentionTotal(items),
+			Mark:      pipelineMark(ctx, pipeline, attentionTotal(items)),
 		})
 	}
 
 	for _, broken := range s.Broken() {
-		nav.Pipelines = append(nav.Pipelines, pipelineSummary{Slug: broken.Name, Path: broken.From, Broken: true})
+		nav.Pipelines = append(nav.Pipelines, pipelineSummary{Slug: broken.Name, Path: broken.From, Broken: true, Mark: mark{Disc: discErrored}})
+	}
+
+	// Above a pipeline the page is about all of them; a pipeline page
+	// replaces this with its own below.
+	for _, summary := range nav.Pipelines {
+		nav.Mark = nav.Mark.fold(summary.Mark)
 	}
 
 	sort.Slice(nav.Pipelines, func(i, j int) bool {
@@ -729,6 +747,13 @@ func (s *Server) nav(c *echo.Context) navData {
 	nav.Current = current.Slug
 	nav.CurrentPath = current.Path()
 	nav.Anchored = true
+	nav.Mark = mark{}
+
+	for _, summary := range nav.Pipelines {
+		if summary.Slug == current.Slug {
+			nav.Mark = summary.Mark
+		}
+	}
 	nav.Paused = paused(ctx, current)
 	nav.Attention = gathered[current.Slug]
 	// The tab appears only for a pipeline that declares servers: most do not, and a dead tab on every one of them is nav space spent on a feature they never use.
@@ -762,6 +787,10 @@ type navData struct {
 	HasMCP bool
 	// Paused is whether the current pipeline is paused, which the action bar says on every page.
 	Paused bool
+	// Mark is what this page's title and favicon say: the narrowest run or
+	// pipeline the page is about, every pipeline above one, zero on a page
+	// that is about none (docs, an error).
+	Mark mark
 }
 
 // Answers false when the store cannot say: a page that fails to draw is worse than a missing banner.
@@ -783,4 +812,5 @@ type pipelineSummary struct {
 	Attention int
 	// Broken is a pipeline the daemon holds and does not serve. Not its reason: this shell also draws the error page a webhook sender gets, and that sender never passed this server's credentials.
 	Broken bool
+	Mark   mark
 }

@@ -147,7 +147,7 @@ func (s *Server) handleDocs(c *echo.Context) error {
 	}
 
 	return c.Render(http.StatusOK, "docs", map[string]any{ //nolint:wrapcheck // render errors surface through the shared error handler
-		"Nav":    s.globalNav(c),
+		"Nav":    s.unscopedNav(c),
 		"Title":  "docs: " + strings.TrimSuffix(name, ".md"),
 		"Groups": docs.Groups(),
 		"Name":   name,

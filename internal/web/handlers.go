@@ -340,16 +340,18 @@ func (s *Server) handleRun(c *echo.Context) error {
 		}
 	}
 
+	nav := s.nav(c)
+	nav.Mark = runMark(view.Run, 0)
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "run", map[string]any{
-		"Nav":         s.nav(c),
+		"Nav":         nav,
 		"Run":         view,
 		"Strip":       strip,
 		"Job":         job,
 		"JobDeclared": jobErr == nil,
 		"Bar":         runBar(pipeline, view.Run, jobErr == nil),
-		"Title":       view.Run.JobName + " #" + shortID(view.Run.ID),
-		"TitleMark":   statusMark(view.Run.Status),
+		"Title":       runTitle(view.Run),
 		"Crumbs": []crumb{
 			{Label: "jobs", URL: "/p/" + pipeline.Slug},
 			{Label: view.Run.JobName, URL: "/p/" + pipeline.Slug + "/jobs/" + view.Run.JobName + "/detail"},
@@ -803,9 +805,8 @@ func (s *Server) handleFollow(c *echo.Context) error {
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "follow", map[string]any{
-		"Nav":       s.nav(c),
-		"Title":     name,
-		"TitleMark": statusMark("running"),
+		"Nav":   s.nav(c),
+		"Title": name,
 		"Crumbs": []crumb{
 			{Label: "jobs", URL: "/p/" + pipeline.Slug},
 			{Label: name, URL: "/p/" + pipeline.Slug + "/jobs/" + name + "/detail"},

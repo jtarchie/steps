@@ -401,6 +401,7 @@ func assertChangesAreLive(t *testing.T, path, before, after string) {
 	}
 
 	regions := liveRegions(t, after)
+	mirror := headMirror(after, regions)
 	fresh := 0
 	at := 0
 
@@ -420,6 +421,13 @@ func assertChangesAreLive(t *testing.T, path, before, after string) {
 
 		fresh++
 
+		// <head> is never swapped; app.js copies #mark into it after every
+		// swap, so a head line is live exactly when it equals what a live
+		// #mark says.
+		if mirror[strings.TrimSpace(line)] {
+			continue
+		}
+
 		if !within(regions, start) {
 			t.Errorf("this line changed but sits outside every region htmx refreshes,\n"+
 				"so a reader only sees it by reloading %s:\n\t%s", path, strings.TrimSpace(line))
@@ -435,6 +443,25 @@ func assertChangesAreLive(t *testing.T, path, before, after string) {
 	// no element at all — regions nothing polls are regions nothing refreshes.
 	if !strings.Contains(after, "hx-trigger=") {
 		t.Error("no hx-trigger on this page, so it never polls at all")
+	}
+}
+
+var markCarrier = regexp.MustCompile(`<span id="mark" hidden data-icon="([^"]*)" data-title="([^"]*)">`)
+
+// headMirror is the head lines a live #mark accounts for: the title and the
+// favicon link it would copy, and nothing at all when #mark is not inside a
+// refreshed region.
+func headMirror(body string, regions [][2]int) map[string]bool {
+	at := markCarrier.FindStringSubmatchIndex(body)
+	if at == nil || !within(regions, at[0]) {
+		return nil
+	}
+
+	icon, title := body[at[2]:at[3]], body[at[4]:at[5]]
+
+	return map[string]bool{
+		"<title>" + title + "</title>":                       true,
+		`<link rel="icon" id="favicon" href="` + icon + `">`: true,
 	}
 }
 

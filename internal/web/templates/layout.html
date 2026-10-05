@@ -9,8 +9,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{with .TitleMark}}{{.}} {{end}}{{with .Title}}{{.}} — {{end}}steps</title>
-<link rel="icon" id="favicon" href="{{favicon .TitleMark}}">
+<title>{{.Nav.Mark.TitlePrefix}}{{with .Title}}{{.}} — {{end}}steps</title>
+<link rel="icon" id="favicon" href="{{.Nav.Mark.Favicon}}">
 <link rel="stylesheet" href="/static/app.css">
 {{/* A fold the reader opened is THEIRS: morph reconciles attributes, so an
      expanded <details> inside a step the stream re-renders would snap shut
@@ -60,6 +60,7 @@
     <a class="tab" {{if eq .Section "questions"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/questions">questions{{template "attbadge" (attentionOn .Nav "questions")}}</a>
   </nav>{{end}}{{end}}
   <div class="right">
+    {{/* What <head> shows, kept where every poll's oob swap reaches it: app.js copies it into the title and favicon after each swap, since nothing swaps <head> itself. */}}<span id="mark" hidden data-icon="{{.Nav.Mark.Favicon}}" data-title="{{.Nav.Mark.TitlePrefix}}{{with .Title}}{{.}} — {{end}}steps"></span>
     {{if .Nav.ReadOnly}}<span class="ro">read-only</span>{{end}}
     {{/* A button, not only a key: on a phone "/" is nowhere to be pressed,
          and the palette was unreachable there. The kbd is the hint for a

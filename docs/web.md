@@ -411,10 +411,16 @@ Every status is one word, one glyph and one colour, on every page:
 | held | job | `⊘` red | the [circuit breaker](infra.md#circuit-breaker-max_consecutive_failures) stopped its automatic triggers |
 | unreported | step | `?` dim | the run ended before this step reported how it did |
 
-While a run is live, the browser tab carries its status glyph, with a matching
-favicon dot. The title updates the instant
-the run ends, so a run left in a background tab reports its outcome without
-being reopened.
+The browser tab carries a **mark** for whatever the page is about: a run page
+marks that run, every other pipeline page marks the pipeline, and the root
+marks every pipeline at once. The favicon is a disc colored by status, with a
+yellow ring around it while something is running — so a red disc with a ring
+reads "broken, and a fix is building". The title leads with the same glyphs.
+A pipeline is colored by each job's latest *finished* run: red when any of
+them failed or errored, blue while paused, green otherwise. The mark follows
+the page as it refreshes, and a run page's mark changes the instant the run
+ends, so a tab left in the background reports the outcome without being
+reopened.
 
 The jobs board refreshes itself every couple of seconds, in place — it keeps
 your list/graph choice and scroll position rather than reloading the page —

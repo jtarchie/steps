@@ -116,7 +116,18 @@
     if (step.dataset.step) remember(step.dataset.step, step.classList.contains('open'));
   }
 
+  // <head> is never swapped, so the tab's title and icon follow the #mark
+  // the server drew into the statusline, copied rather than recomputed.
+  function applyMark() {
+    var mark = document.getElementById('mark');
+    if (!mark) return;
+    var icon = document.getElementById('favicon');
+    if (icon && mark.dataset.icon && icon.getAttribute('href') !== mark.dataset.icon) icon.setAttribute('href', mark.dataset.icon);
+    if (mark.dataset.title && document.title !== mark.dataset.title) document.title = mark.dataset.title;
+  }
+
   document.addEventListener('htmx:after:swap', function () {
+    applyMark();
     paintSwitcher();
     applyFolds();
 
