@@ -603,15 +603,24 @@ func (s *Server) handleResource(c *echo.Context) error {
 		return fmt.Errorf("web: %w", err)
 	}
 
+	consumers := consumersOf(cfg, res.Name)
+
+	rows, err := versionRows(ctx, pipeline.Store, res.Name, lines, consumers)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "resource", map[string]any{
-		"Nav":      s.nav(c),
-		"Title":    res.Name,
-		"Crumbs":   []crumb{{Label: "resources", URL: "/p/" + pipeline.Slug + "/resources"}, {Label: res.Name}},
-		"Resource": res,
-		"Versions": lines,
-		"Checked":  checked,
-		"Failing":  failingByName(failing)[res.Name],
+		"Consumers": consumers,
+		"Rows":      rows,
+		"Span":      len(consumers) + 1,
+		"Nav":       s.nav(c),
+		"Title":     res.Name,
+		"Crumbs":    []crumb{{Label: "resources", URL: "/p/" + pipeline.Slug + "/resources"}, {Label: res.Name}},
+		"Resource":  res,
+		"Checked":   checked,
+		"Failing":   failingByName(failing)[res.Name],
 	})
 }
 

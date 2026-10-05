@@ -304,6 +304,19 @@ func TestNothingThatChangesLivesOutsideALiveRegion(t *testing.T) {
 			},
 		},
 		{
+			// A version already on the page gaining a run: the cell that
+			// changes is inside the region, and so is the job header it sits
+			// under.
+			name:  "resource detail, a run lands",
+			path:  "/p/demo/resources/repo",
+			setup: resourceWithAVersion,
+			change: func(t *testing.T, pipeline *Pipeline) {
+				t.Helper()
+
+				recordRunOf(t, pipeline, "run-live", "build", map[string]any{"ref": "abc123"}, "")
+			},
+		},
+		{
 			// The tab's own changing parts: a login that finishes and a probe that lands, both of which happen after the request that started them and neither of which publishes anything the reader's page would otherwise hear about.
 			name: "mcp tab",
 			path: "/p/demo/mcp",

@@ -295,3 +295,29 @@ func (s *Store) RunInputs(ctx context.Context, runID string) ([]store.RunInput, 
 		return one, rows.Scan(&one.Input, &one.Resource, &one.Version)
 	})
 }
+
+// VersionRuns reports every run that took a version of this resource as an
+// input, newest first. DISTINCT because two gets of one resource in a run may
+// bind the same version, and that is one run of it, not two.
+func (s *Store) VersionRuns(ctx context.Context, resourceName string) ([]store.VersionRun, error) {
+	return collect(ctx, s.db, "the runs of resource "+resourceName, `
+		SELECT i.version_json, `+runColumnsR+`
+		FROM (SELECT DISTINCT run_id, version_json FROM run_inputs WHERE resource_name = $1) i
+		JOIN runs r ON r.id = i.run_id
+		WHERE r.pipeline_id = $2
+		ORDER BY r.started_at DESC, r.seq DESC
+	`, []any{resourceName, s.pipelineID}, func(rows *sql.Rows) (store.VersionRun, error) {
+		var (
+			one      store.VersionRun
+			started  time.Time
+			finished sql.NullTime
+		)
+
+		err := rows.Scan(&one.Version, &one.Run.ID, &one.Run.JobName, &one.Run.Workspace, &one.Run.Status, &started, &finished, &one.Run.ParentRunID, &one.Run.ConfigSHA, &one.Run.RerunOf)
+
+		one.Run.StartedAt = started.UTC()
+		one.Run.FinishedAt = utc(finished)
+
+		return one, err //nolint:wrapcheck // collect names the resource
+	})
+}

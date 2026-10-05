@@ -143,6 +143,7 @@ Only a state file the daemon cannot read at all stops it from starting.
 | `…/approvals` | Pending `approval:` steps, and the decisions already made |
 | `…/questions` | Pending `ask_user` questions, and the answers already given |
 | `…/resources` | Latest checked version per resource, and why any of them is failing its check |
+| `…/resources/:resource` | Every recorded version, newest first, with a column per job that gets the resource: the latest run of that version and how many there were, or why there is none — **queued** (the job has a queue row and will build it), **waiting** (it would, but nothing has queued the job), **superseded** (a latest-mode job only builds the newest version), **not pinned** (the job only builds its `version:` pin), or **reaped** (a `version: every` job took it, and [`run_history:`](infra.md#how-much-history-to-keep-run_history) has since removed the run) |
 | `…/mcp` | Every `mcp_servers:` entry, who depends on it, and whether it is wired up — with **Connect** to finish an oauth login in this browser and **Test** to probe one server. Present only for a pipeline that declares servers; see [mcp.md](mcp.md#authorizing-from-the-browser-the-mcp-tab) |
 | `/docs` | These docs, rendered with syntax-highlighted examples — the same pages `steps docs` shows in a terminal |
 

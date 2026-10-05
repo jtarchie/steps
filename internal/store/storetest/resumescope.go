@@ -212,3 +212,82 @@ func (s suite) TestRunInputsAreKeptPerGet(t *testing.T) {
 		}
 	}
 }
+
+// TestVersionRunsAreTheRunsThatTookEachVersion: the resource page asks, per
+// version, which runs took it — newest first, so the first row for a version
+// is where that version stands now. Scoped like every other read: a second
+// pipeline with the same job and resource names must see none of it.
+func (s suite) TestVersionRunsAreTheRunsThatTookEachVersion(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	web := s.open(t, "web")
+	infra := s.open(t, "infra")
+
+	for _, run := range []struct{ id, version, status string }{
+		{"VRUNS01", `{"ref":"v1"}`, "aborted"},
+		{"VRUNS02", `{"ref":"v1"}`, "succeeded"},
+		{"VRUNS03", `{"ref":"v2"}`, "failed"},
+	} {
+		recordInputRun(t, web, run.id, "repo", run.version, run.status)
+
+		// started_at orders the answer; one run per tick keeps that order
+		// the one this test wrote rather than a tie.
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	recordInputRun(t, web, "VRUNS04", "other", `{"ref":"v1"}`, "succeeded")
+
+	got, err := web.VersionRuns(ctx, "repo")
+	if err != nil {
+		t.Fatalf("VersionRuns: %v", err)
+	}
+
+	want := []store.VersionRun{
+		{Version: `{"ref":"v2"}`, Run: store.RunRow{ID: "VRUNS03", JobName: "build", Status: "failed"}},
+		{Version: `{"ref":"v1"}`, Run: store.RunRow{ID: "VRUNS02", JobName: "build", Status: "succeeded"}},
+		{Version: `{"ref":"v1"}`, Run: store.RunRow{ID: "VRUNS01", JobName: "build", Status: "aborted"}},
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("VersionRuns = %+v, want %d rows, only repo's", got, len(want))
+	}
+
+	for i := range want {
+		g := store.VersionRun{Version: got[i].Version, Run: store.RunRow{ID: got[i].Run.ID, JobName: got[i].Run.JobName, Status: got[i].Run.Status}}
+		if g != want[i] {
+			t.Errorf("VersionRuns[%d] = %+v, want %+v", i, g, want[i])
+		}
+	}
+
+	other, err := infra.VersionRuns(ctx, "repo")
+	if err != nil {
+		t.Fatalf("VersionRuns infra: %v", err)
+	}
+
+	if len(other) != 0 {
+		t.Errorf("infra sees another pipeline's runs: %+v", other)
+	}
+}
+
+// recordInputRun records a finished build run that took version of resource.
+func recordInputRun(t *testing.T, st store.Store, runID, resource, version, status string) {
+	t.Helper()
+
+	ctx := context.Background()
+
+	err := st.StartRun(ctx, runID, "build", "/tmp/web", "")
+	if err != nil {
+		t.Fatalf("StartRun %s: %v", runID, err)
+	}
+
+	err = st.RecordRunInput(ctx, runID, resource, resource, version)
+	if err != nil {
+		t.Fatalf("RecordRunInput %s: %v", runID, err)
+	}
+
+	err = st.FinishRun(ctx, runID, status)
+	if err != nil {
+		t.Fatalf("FinishRun %s: %v", runID, err)
+	}
+}

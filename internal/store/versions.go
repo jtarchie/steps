@@ -43,6 +43,15 @@ type Versions interface {
 	RecordConsumedMark(ctx context.Context, jobName, resourceName string, order int64) error
 	RecordRunInput(ctx context.Context, runID, inputName, resourceName, versionJSON string) error
 	RunInputs(ctx context.Context, runID string) ([]RunInput, error)
+	// VersionRuns is every run that took a version of the resource as an
+	// input, newest first.
+	VersionRuns(ctx context.Context, resourceName string) ([]VersionRun, error)
+}
+
+// VersionRun is one run that took a version of a resource as an input.
+type VersionRun struct {
+	Version string
+	Run     RunRow
 }
 
 // RunInput is a version a run was created with, keyed by the get it was

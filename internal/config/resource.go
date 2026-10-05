@@ -435,6 +435,22 @@ func (j Job) GetsResource(resource string) bool {
 	return found
 }
 
+// ResourceGets returns every get step in this job's plan and hooks that
+// fetches the named resource, resolving aliases the way GetResourceName does.
+func (j Job) ResourceGets(resource string) []Step {
+	var gets []Step
+
+	_ = j.visitSteps(func(_ string, step *Step) error {
+		if step.Get != "" && step.GetResourceName() == resource {
+			gets = append(gets, *step)
+		}
+
+		return nil
+	})
+
+	return gets
+}
+
 // TriggersOn reports whether this job has a trigger:true get step resolving
 // to resourceName, walking the same nested tree PolledResourceNames does (a
 // trigger:true get is legal — just not version:every-eligible — inside an

@@ -402,6 +402,7 @@ td.faint, .faint { color: var(--faint); }
 .st-queued { color: var(--faint); }
 .st-skipped { color: var(--faint); }
 .st-none { color: var(--faint); }
+.st-waiting, .st-reaped { color: var(--faint); }
 .st.st-passed::before, .st.st-succeeded::before { content: "✓ "; }
 .st.st-failed::before { content: "✗ "; }
 .st.st-errored::before { content: "! "; }
@@ -411,6 +412,8 @@ td.faint, .faint { color: var(--faint); }
 .st.st-running::before { content: "◐ "; }
 .st.st-queued::before { content: "○ "; }
 .st.st-skipped::before { content: "– "; }
+.st.st-waiting::before { content: "◌ "; }
+.st.st-reaped::before { content: "· "; }
 
 .hash { color: var(--blue); }
 .hash::before { content: "["; color: var(--faint); }
@@ -462,6 +465,8 @@ td.faint, .faint { color: var(--faint); }
 .striplist .st.st-failed::before { content: "✗ " / ""; }
 .striplist .st.st-errored::before { content: "! " / ""; }
 .striplist .st.st-aborted::before { content: "■ " / ""; }
+.striplist .st.st-waiting::before { content: "◌ " / ""; }
+.striplist .st.st-reaped::before { content: "· " / ""; }
 .striplist .st.st-running::before { content: "◐ " / ""; }
 .striplist .st.st-queued::before { content: "○ " / ""; }
 .striplist .st.st-paused::before { content: "⏸ " / ""; }
@@ -1164,3 +1169,26 @@ pre.json.contentmap { border-color: var(--line); padding: 12px 16px; margin: 0; 
 .docs th { color: var(--dim); font-weight: 500; }
 .docs blockquote { border-left: 2px solid var(--line); margin-left: 0; padding-left: 14px; color: var(--dim); }
 .docs img { max-width: 100%; }
+
+/* ---- resource versions ----
+   A version's row header is data, not a column label: it reads like the
+   cells beside it rather than like the uppercase thead above. */
+table.versions tbody th {
+  font: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+  color: inherit;
+  font-weight: 400;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  white-space: nowrap;
+}
+table.versions tbody tr:last-child th { border-bottom: 0; }
+table.versions thead th a { color: inherit; }
+table.versions td .when { color: var(--dim); font-family: var(--sans); font-size: 12px; }
+/* On a phone the version wraps rather than pushing the job columns — the
+   reason anyone opened the page — off the right edge. */
+@media (max-width: 640px) {
+  table.versions td .when { display: none; }
+  table.versions tbody th { white-space: normal; overflow-wrap: anywhere; min-width: 10em; }
+}

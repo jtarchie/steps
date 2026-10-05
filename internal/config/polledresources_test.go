@@ -200,3 +200,48 @@ jobs:
 		t.Errorf("PolledResourceNames = %v, want empty", cfg.PolledResourceNames())
 	}
 }
+
+// TestResourceGets: the resource page draws one column per job that takes the
+// resource, and reads each get's version: mode — so it needs the steps
+// themselves, nested ones and aliases included, and never a put.
+func TestResourceGets(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+defaults:
+  preflight:
+    disabled: true
+
+resource_types:
+- name: dummy
+  config: {check: "echo []", in: "true", out: "true"}
+resources:
+- name: repo
+  type: dummy
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: code
+    resource: repo
+    version: every
+  - in_parallel:
+      steps:
+      - get: repo
+  - put: repo
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	gets := cfg.Jobs[0].ResourceGets("repo")
+	if len(gets) != 2 || gets[0].Get != "code" || !gets[0].VersionEvery() || gets[1].Get != "repo" {
+		t.Errorf("ResourceGets(repo) = %+v, want the aliased every-version get, then the nested one", gets)
+	}
+
+	if other := cfg.Jobs[0].ResourceGets("code"); len(other) != 0 {
+		t.Errorf("ResourceGets(code) = %+v, want none: code is the alias, not the resource", other)
+	}
+}
