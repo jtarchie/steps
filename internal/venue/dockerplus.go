@@ -84,7 +84,7 @@ func newPlusSession(worker Worker, spec shell.RunnerSpec) *plusSession {
 	case SchemeAWS:
 		s.reach, s.drainScript, s.socket = awsSSHClient, awsDrainScript(), cloudDockerSocket
 	case SchemeGCP:
-		s.reach, s.drainScript, s.socket = gcpSSHClient, gcpDrainScript(), cloudDockerSocket
+		s.reach, s.drainScript, s.socket = gcpDockerClient, gcpDrainScript(), cloudDockerSocket
 	case SchemeLocal, SchemeSSH, SchemeDockerSSH:
 		s.reach = sshClientFor
 	}

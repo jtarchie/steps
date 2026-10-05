@@ -669,3 +669,44 @@ func hostKeysFromAttributes(worker Worker, attributes map[string]string) (ssh.Ho
 			errHostKeyMismatch, remote, ssh.FingerprintSHA256(key), worker.Instance, len(accepted))
 	}, algorithms, nil
 }
+
+// gcpReady remembers instances whose docker this process has already waited for.
+var gcpReady sync.Map //nolint:gochecknoglobals // per-process memory of a once-per-instance wait
+
+// gcpReadyScript waits for the startup script's docker and, where the guest agent made the account before the docker group existed, joins it with the passwordless sudo the agent grants; "regroup" asks for a fresh login, the only thing that picks a new group up.
+const gcpReadyScript = `i=0; until docker info >/dev/null 2>&1; do
+  if sudo -n docker info >/dev/null 2>&1; then sudo -n usermod -aG docker "$(id -un)" && echo regroup; break; fi
+  i=$((i + 1)); [ "$i" -ge 120 ] && break; sleep 2
+done`
+
+// gcpDockerClient is gcpSSHClient for a docker+ session: a machine just launched is still installing docker when its sshd first answers.
+func gcpDockerClient(ctx context.Context, worker Worker) (*ssh.Client, error) {
+	client, err := gcpSSHClient(ctx, worker)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, ready := gcpReady.Load(worker.Instance); ready {
+		return client, nil
+	}
+
+	session, err := client.NewSession()
+	if err != nil {
+		_ = client.Close()
+
+		return nil, fmt.Errorf("worker %q: %w", worker.URL, err)
+	}
+
+	out, _ := session.Output(gcpReadyScript)
+	_ = session.Close()
+
+	gcpReady.Store(worker.Instance, true)
+
+	if !strings.Contains(string(out), "regroup") {
+		return client, nil
+	}
+
+	_ = client.Close()
+
+	return gcpSSHClient(ctx, worker)
+}

@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -112,7 +113,20 @@ type gceClient struct {
 func (c *gceClient) InsertFromTemplate(ctx context.Context, project, zone, name, template string, labels map[string]string) error {
 	templateURL := "projects/" + project + "/global/instanceTemplates/" + template
 
-	op, err := c.service.Instances.Insert(project, zone, &compute.Instance{Name: name, Labels: labels}).
+	// Labels on the request REPLACE the template's rather than merging, so the template's are read and kept under steps' own: an operator's cost or cleanup label would otherwise vanish from every launched worker.
+	source, err := c.service.InstanceTemplates.Get(project, template).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("reading template %s: %w", template, err)
+	}
+
+	merged := map[string]string{}
+	if source.Properties != nil {
+		maps.Copy(merged, source.Properties.Labels)
+	}
+
+	maps.Copy(merged, labels)
+
+	op, err := c.service.Instances.Insert(project, zone, &compute.Instance{Name: name, Labels: merged}).
 		SourceInstanceTemplate(templateURL).Context(ctx).Do()
 	if err != nil {
 		return fmt.Errorf("creating %s from template %s: %w", name, template, err)

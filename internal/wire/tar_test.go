@@ -492,3 +492,32 @@ func symlinkArchive(t *testing.T, name, target string) io.Reader {
 
 	return buf
 }
+
+// An older docker daemon's archive (GCE's docker.io) records a regular file's mode with its file-type bits, 0o100644; the unpacker must keep the permissions and drop the rest rather than refuse the entry.
+func TestUnpackFetchedTreeAcceptsTypeBitsInAMode(t *testing.T) {
+	t.Parallel()
+
+	var archive bytes.Buffer
+
+	w := tar.NewWriter(&archive)
+
+	err := w.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: "out/report.txt", Mode: 0o100755, Size: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _ = w.Write([]byte("ok"))
+	_ = w.Close()
+
+	root := t.TempDir()
+
+	err = UnpackFetchedTree(&archive, root)
+	if err != nil {
+		t.Fatalf("UnpackFetchedTree: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(root, "out", "report.txt"))
+	if err != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("report.txt: %v, %v; want it written with its permissions", info, err)
+	}
+}

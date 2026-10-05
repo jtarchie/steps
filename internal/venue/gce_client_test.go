@@ -180,23 +180,7 @@ func TestGCEClientInsertSendsLabels(t *testing.T) {
 		template string
 	)
 
-	client := newTestGCEClient(t, func(w http.ResponseWriter, req *http.Request) {
-		switch {
-		case req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/instances"):
-			template = req.URL.Query().Get("sourceInstanceTemplate")
-
-			err := json.NewDecoder(req.Body).Decode(&sent)
-			if err != nil {
-				t.Errorf("decoding the insert: %v", err)
-			}
-
-			operationJSON(t, w, compute.Operation{Name: "op-insert", Status: "RUNNING"})
-		case strings.HasSuffix(req.URL.Path, "/operations/op-insert/wait"):
-			operationJSON(t, w, compute.Operation{Name: "op-insert", Status: "DONE"})
-		default:
-			http.NotFound(w, req)
-		}
-	})
+	client := newTestGCEClient(t, fakeInsertAPI(t, &sent, &template))
 
 	labels := map[string]string{labelWorker: "abc123", labelHost: "box", labelPid: "42"}
 
@@ -209,7 +193,36 @@ func TestGCEClientInsertSendsLabels(t *testing.T) {
 		t.Errorf("sourceInstanceTemplate = %q", template)
 	}
 
-	if sent.Name != "steps-1" || !maps.Equal(sent.Labels, labels) {
-		t.Errorf("sent %s with labels %v, want steps-1 with %v", sent.Name, sent.Labels, labels)
+	// The insert's labels replace the template's on GCE, so the template's are sent too, with steps' own winning.
+	want := map[string]string{"team": "infra", labelWorker: "abc123", labelHost: "box", labelPid: "42"}
+	if sent.Name != "steps-1" || !maps.Equal(sent.Labels, want) {
+		t.Errorf("sent %s with labels %v, want steps-1 with %v", sent.Name, sent.Labels, want)
+	}
+}
+
+// fakeInsertAPI answers an insert from template, its operation, and the template, which carries a label of its own and one steps sets too.
+func fakeInsertAPI(t *testing.T, sent *compute.Instance, template *string) http.HandlerFunc {
+	t.Helper()
+
+	return func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/instances"):
+			*template = req.URL.Query().Get("sourceInstanceTemplate")
+
+			err := json.NewDecoder(req.Body).Decode(sent)
+			if err != nil {
+				t.Errorf("decoding the insert: %v", err)
+			}
+
+			operationJSON(t, w, compute.Operation{Name: "op-insert", Status: "RUNNING"})
+		case strings.HasSuffix(req.URL.Path, "/operations/op-insert/wait"):
+			operationJSON(t, w, compute.Operation{Name: "op-insert", Status: "DONE"})
+		case req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/global/instanceTemplates/tmpl"):
+			_ = json.NewEncoder(w).Encode(compute.InstanceTemplate{Name: "tmpl", Properties: &compute.InstanceProperties{
+				Labels: map[string]string{"team": "infra", labelWorker: "from-the-template"},
+			}})
+		default:
+			http.NotFound(w, req)
+		}
 	}
 }

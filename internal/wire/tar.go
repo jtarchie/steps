@@ -575,7 +575,8 @@ func unpackFile(dir *os.Root, reader *tar.Reader, header *tar.Header, name strin
 
 	// O_EXCL so an archive cannot overwrite something it already created, and
 	// so a symlink planted by an earlier entry is never followed.
-	file, err := dir.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fs.FileMode(header.Mode)) //nolint:gosec // packFile records only Perm(); os.Root refuses anything wider
+	// Masked: packFile records only Perm(), but a daemon's archive (older dockers) carries the file-type bits too, and os.Root refuses anything wider.
+	file, err := dir.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fs.FileMode(header.Mode).Perm()) //nolint:gosec // masked to Perm
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
