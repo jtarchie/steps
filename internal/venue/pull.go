@@ -11,7 +11,7 @@ import (
 )
 
 // Pull fills dst, an existing empty directory, with the tree the worker spec names holds under digest, and reports the bytes that crossed. A worker that no longer holds it is an error naming the worker; the caller decides what a lost holder costs.
-func Pull(ctx context.Context, spec shell.RunnerSpec, _, digest, dst string) (int64, error) {
+func Pull(ctx context.Context, spec shell.RunnerSpec, digest, dst string) (int64, error) {
 	worker, err := ParseWorker(spec.Worker)
 	if err != nil {
 		return 0, err

@@ -375,3 +375,23 @@ func mustRead(t *testing.T, path string) string {
 
 	return string(content)
 }
+
+// A local: worker has no ssh in it, so a daemon that does not answer is not an sshd setting to go and change.
+func TestLocalDaemonDownIsNotAnSSHProblem(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "unix://"+filepath.Join(os.TempDir(), "steps-no-daemon-"+randomSuffix()+".sock"))
+
+	runner := newLocalRunner(t, shell.RunnerSpec{Cwd: t.TempDir(), Image: "alpine:3", Worker: "local:"})
+
+	_, err := runner.RunCapture(t.Context(), "true")
+	if err == nil {
+		t.Fatal("a daemon nothing listens for ran the step")
+	}
+
+	if strings.Contains(err.Error(), "sshd") {
+		t.Errorf("error = %v, want no sshd advice for this machine's own daemon", err)
+	}
+
+	if !strings.Contains(err.Error(), "DOCKER_HOST") {
+		t.Errorf("error = %v, want it to name where local: found the daemon", err)
+	}
+}

@@ -500,7 +500,7 @@ func startLabelledContainer(t *testing.T, pid string) string {
 		t.Fatalf("starting a labelled container: %v\n%s", err, out)
 	}
 
-	t.Cleanup(func() { _ = RemoveContainer(context.Background(), "", name) })
+	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "rm", "-f", name).Run() }) //nolint:gosec // a name this test generated
 
 	return name
 }

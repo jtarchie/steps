@@ -49,7 +49,7 @@ func holdRemoteOutputs(bw workspace.BuildWorkspace, outputs []string, mapping ma
 			Digest: digest,
 			Holder: holder,
 			Pull: func(ctx context.Context, dst string) error {
-				_, err := venue.Pull(ctx, shell.RunnerSpec{Worker: holder}, out, digest, dst)
+				_, err := venue.Pull(ctx, shell.RunnerSpec{Worker: holder}, digest, dst)
 
 				return err //nolint:wrapcheck // the workspace names the artifact and the holder around it
 			},

@@ -423,26 +423,6 @@ func removalContext(ctx context.Context) context.Context {
 	return context.WithoutCancel(ctx)
 }
 
-// RemoveContainer deletes a container by name on the daemon dockerHost names (empty is this machine's), for a caller holding a name and no session: internal/venue reclaiming a placed step's container over a fresh connection when the step's own one broke.
-func RemoveContainer(ctx context.Context, dockerHost, name string) error {
-	client, err := dockerapi.New(dockerHost)
-	if err != nil {
-		return fmt.Errorf("removing container %s: %w", name, err)
-	}
-
-	defer func() { _ = client.Close() }()
-
-	return client.RemoveContainer(ctx, name) //nolint:wrapcheck // dockerapi already names the container
-}
-
-// Container is the name of this runner's container, or empty before its first command started one.
-func (d DockerRunner) Container() string {
-	d.session.mu.Lock()
-	defer d.session.mu.Unlock()
-
-	return d.session.name
-}
-
 // reclaim removes a container, best effort.
 //
 // Best effort because every caller is on a teardown path: the container is

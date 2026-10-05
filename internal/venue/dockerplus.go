@@ -477,14 +477,16 @@ func (s *plusSession) dialDaemon(ctx context.Context) (func(context.Context) (ne
 
 	// Named here: a socket nothing listens on is otherwise the first PutArchive's opaque failure.
 	err = s.docker.Ping(ctx)
-	if err == nil {
-		// Recorded, not relied on: a missing answer leaves the placement without a platform.
-		s.goos, s.goarch, _ = s.docker.Platform(ctx)
+	if err != nil && s.reach == nil {
+		return nil, fmt.Errorf("the docker daemon at %s did not answer: %w (local: uses this machine's daemon, found through DOCKER_HOST or the docker context in use)", s.socket, err)
 	}
 
 	if err != nil {
 		return nil, fmt.Errorf("the docker daemon at %s did not answer: %w (the worker's sshd needs AllowTcpForwarding local or yes — OpenSSH refuses a socket forward without it — and the ssh user must be able to open the socket, usually through the docker group)", s.socket, err)
 	}
+
+	// Recorded, not relied on: a missing answer leaves the placement without a platform.
+	s.goos, s.goarch, _ = s.docker.Platform(ctx)
 
 	// Containers a dead steps process on this machine left on the worker; nothing else would ever reclaim them.
 	if _, done := swept.LoadOrStore("docker "+s.daemonName(), true); !done {

@@ -653,39 +653,6 @@ func HostEnv() []string {
 	return hostEnvWith(nil)
 }
 
-// HostEnvWithValues is HostEnv plus variables whose values are supplied
-// rather than resolved from this process's environment — the shape a venue
-// needs, where the pipeline's env: was resolved on the orchestrator and the
-// command runs on a machine that never had those variables set.
-//
-// The baseline still comes from THIS process, deliberately: PATH, HOME and
-// TMPDIR belong to the machine the command runs on, and carrying the
-// orchestrator's across would be wrong in the cases where it differed at all.
-// Only the explicitly named values travel.
-func HostEnvWithValues(values map[string]string) []string {
-	baseline := hostEnvWith(nil)
-	env := make([]string, 0, len(baseline)+len(values))
-
-	// Supplied values FIRST, baseline after, because os/exec keeps the last
-	// duplicate. Appending them the other way round meant naming any
-	// allowlisted variable in env: — PATH, HOME, TMPDIR, USER, SHELL, LANG —
-	// replaced the worker's with the orchestrator's, and a macOS HOME or
-	// TMPDIR names directories a Linux worker does not have, so mktemp, git
-	// and ssh break on them.
-	//
-	// Silent, too: naming a baseline variable is a genuine no-op on the local
-	// path, where both values come from one machine. It only misbehaves once a
-	// step is placed.
-	//
-	// A variable outside the baseline — which is what env: is for — is
-	// unaffected: nothing later shadows it.
-	for name, value := range values {
-		env = append(env, name+"="+value)
-	}
-
-	return append(env, baseline...)
-}
-
 // hostEnvWith is HostEnv plus the variables a pipeline's env: named
 // explicitly (see NewRunner). A named variable that isn't set in the steps
 // process's environment contributes nothing rather than an empty value: the

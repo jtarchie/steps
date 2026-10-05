@@ -338,7 +338,7 @@ func TestDockerPlusHoldsPastAStaleAlias(t *testing.T) {
 		t.Fatalf("the same output digested %s then %s", first, second)
 	}
 
-	_, err = Pull(t.Context(), shell.RunnerSpec{Worker: worker}, "out", second, t.TempDir())
+	_, err = Pull(t.Context(), shell.RunnerSpec{Worker: worker}, second, t.TempDir())
 	if err != nil {
 		t.Fatalf("pulling the second step's own output: %v", err)
 	}
@@ -576,7 +576,7 @@ func TestDockerPlusHoldsAGetsWholeTree(t *testing.T) {
 
 	dst := t.TempDir()
 
-	_, err = Pull(t.Context(), shell.RunnerSpec{Worker: worker}, "src", held["src"], dst)
+	_, err = Pull(t.Context(), shell.RunnerSpec{Worker: worker}, held["src"], dst)
 	if err != nil {
 		t.Fatalf("pulling the held tree: %v", err)
 	}

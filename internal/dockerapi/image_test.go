@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -316,5 +317,24 @@ func TestImagePresentBelievesADaemonThatRejectsAName(t *testing.T) {
 
 	if got := inspects.Load(); got != 1 {
 		t.Errorf("the daemon was asked %d times, want 1", got)
+	}
+}
+
+// The placement record and the web view print this as GOOS/GOARCH, so it is Go's spelling, which /info's uname -m (aarch64, armv7l, i686) is not.
+func TestPlatformIsGoSpelling(t *testing.T) {
+	client := requireDaemon(t)
+
+	out, err := exec.CommandContext(t.Context(), "docker", "version", "--format", "{{.Server.Os}}/{{.Server.Arch}}").Output()
+	if err != nil {
+		t.Skipf("no docker CLI to compare with: %v", err)
+	}
+
+	goos, goarch, err := client.Platform(t.Context())
+	if err != nil {
+		t.Fatalf("Platform: %v", err)
+	}
+
+	if got, want := goos+"/"+goarch, strings.TrimSpace(string(out)); got != want {
+		t.Errorf("Platform = %s, want the daemon's own %s", got, want)
 	}
 }

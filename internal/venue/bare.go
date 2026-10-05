@@ -290,7 +290,7 @@ func (s *bareSession) uploadRemote(ctx context.Context, name string, input shell
 	}
 	defer func() { _ = os.RemoveAll(staged) }()
 
-	_, err = Pull(ctx, shell.RunnerSpec{Worker: input.Holder}, name, input.Digest, staged)
+	_, err = Pull(ctx, shell.RunnerSpec{Worker: input.Holder}, input.Digest, staged)
 	if err != nil {
 		return fmt.Errorf("input %q from %s: %w", name, input.Holder, err)
 	}
