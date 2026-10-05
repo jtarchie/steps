@@ -218,6 +218,103 @@ jobs:
 	}
 }
 
+// reviewWithComments is a pending review whose task writes its comments
+// file with the given JSON.
+func reviewWithComments(fake *fakeGitHub, comments string) string {
+	return `
+resources:
+- name: pr
+  type: github-prs
+  source:
+    repo: ` + fakeRepo + `
+    endpoint: ` + fake.URL() + `
+    checkout: false
+- name: review
+  type: github-pr-review
+  source:
+    repo: ` + fakeRepo + `
+    endpoint: ` + fake.URL() + `
+jobs:
+- name: draft
+  plan:
+  - get: pr
+  - task: write
+    outputs: [draft]
+    run: |
+      echo "Not yet. Details inline." > draft/body.md
+      cat > draft/comments.json <<'JSON'
+      ` + comments + `
+      JSON
+  - put: review
+    inputs: [pr, draft]
+    params:
+      body_file: draft/body.md
+      comments_file: draft/comments.json
+      event: pending
+`
+}
+
+// TestEndToEndGitHubReviewCarriesInlineComments: comments_file puts each
+// comment on its line, in the same review as the body, so the author reads
+// the problem beside the code rather than looking a path:line up.
+func TestEndToEndGitHubReviewCarriesInlineComments(t *testing.T) {
+	fake := newFakeGitHub(t)
+	fake.addPR(reviewablePR())
+
+	path := writePipeline(t, t.TempDir(), reviewWithComments(fake,
+		`[{"path": "app/a.rb", "line": 12, "body": "a suspended one still shows"}, {"path": "app/b.rb", "start_line": 3, "line": 5, "side": "LEFT", "body": "this was the guard"}]`))
+
+	mustRun(t, "run", path, "--job", "draft")
+
+	reviews := fake.reviewsOn(7)
+	if len(reviews) != 1 {
+		t.Fatalf("reviews = %d, want 1", len(reviews))
+	}
+
+	want := []fakeReviewComment{
+		{Path: "app/a.rb", Line: 12, Body: "a suspended one still shows"},
+		{Path: "app/b.rb", StartLine: 3, Line: 5, Side: "LEFT", StartSide: "LEFT", Body: "this was the guard"},
+	}
+	if !slices.Equal(reviews[0].Comments, want) {
+		t.Errorf("comments = %+v, want %+v", reviews[0].Comments, want)
+	}
+}
+
+// TestEndToEndGitHubReviewRefusesABadCommentBeforeDeletingTheDraft: a
+// pending put replaces the last draft by deleting it first, so a comments
+// file that cannot be posted must fail before that, or the next review is
+// lost and the last one with it.
+func TestEndToEndGitHubReviewRefusesABadCommentBeforeDeletingTheDraft(t *testing.T) {
+	for name, comments := range map[string]string{
+		"misnamed field": `[{"file": "app/a.rb", "line": 12, "body": "x"}]`,
+		"no line":        `[{"path": "app/a.rb", "body": "x"}]`,
+		"empty body":     `[{"path": "app/a.rb", "line": 12, "body": " "}]`,
+		"range reversed": `[{"path": "app/a.rb", "start_line": 9, "line": 4, "body": "x"}]`,
+		"not an array":   `{"path": "app/a.rb", "line": 12, "body": "x"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			pr := reviewablePR()
+			pr.Number = 8
+
+			fake := newFakeGitHub(t)
+			fake.addPR(pr)
+			fake.addReview(8, fakeReview{ID: 1, User: fake.login, State: "PENDING", Body: "last draft"})
+
+			path := writePipeline(t, t.TempDir(), reviewWithComments(fake, comments))
+
+			err := cli.Run([]string{"run", path, "--job", "draft"})
+			if err == nil {
+				t.Fatal("run succeeded, want the put refused")
+			}
+
+			reviews := fake.reviewsOn(8)
+			if len(reviews) != 1 || reviews[0].Body != "last draft" {
+				t.Errorf("reviews = %+v, want the last draft untouched", reviews)
+			}
+		})
+	}
+}
+
 // commentPipeline triggers on comments by alice that start with /steps, on
 // every kind GitHub has.
 const commentPipeline = `

@@ -188,6 +188,11 @@ type GitHubReviewParams struct {
 	// a draft only the token's user can see until they submit it, which
 	// replaces that user's own earlier draft.
 	Event string `yaml:"event,omitempty"`
+	// CommentsFile is a JSON array of comments on lines of the diff, posted
+	// as part of the same review: [{path, line, body}], with start_line for
+	// a range and side LEFT for a removed line. A path inside the put's
+	// inputs, like body_file. An empty array posts the body alone.
+	CommentsFile string `yaml:"comments_file,omitempty"`
 }
 
 // Post is the part of a review's params: every put shares.

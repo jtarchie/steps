@@ -326,7 +326,9 @@ jobs:
   plan:
   - task: summarize
     outputs: [report]
-    run: echo "all green" > report/body.md
+    run: |
+      echo "all green" > report/body.md
+      echo '[{"path": "app/a.rb", "line": 12, "body": "nice guard"}]' > report/comments.json
   - put: tracking
     inputs: [report]
     params:
@@ -338,6 +340,7 @@ jobs:
       body_file: report/body.md
       number: "42"
       event: approve
+      comments_file: report/comments.json   # each comment on its line of the diff
   assert:
     execution: [summarize, tracking, verdict]
     outcome: succeeded
@@ -349,8 +352,11 @@ jobs:
 | `from` | both | the input whose version names the pull request, when more than one does |
 | `number` | both | the pull request, when no input names it |
 | `event` | `github-pr-review` | `comment` (the default), `approve`, `request_changes`, or `pending` |
+| `comments_file` | `github-pr-review` | a JSON array of comments on lines of the diff, posted in the same review: `[{"path": "app/a.rb", "line": 12, "body": "..."}]`, with `start_line` for a range and `side: LEFT` for a removed line; an empty array posts the body alone |
 
 `github-pr-comment` posts to the pull request's conversation. `github-pr-review` posts a review on the commit its input fetched when the input is a `github-prs` get, so a push after the fetch does not move the review onto code nobody read. **`event: pending` drafts a review only the token's user can see** until they submit it, and replaces that user's own earlier draft, since GitHub allows one per user per pull request, so a new push's draft takes the old one's place. Nobody else's draft is touched. GitHub refuses an approval or a change request from a pull request's own author; post a comment there instead.
+
+**`comments_file` puts each comment on its line**, so the author reads it beside the code instead of looking a `path:line` up. `line` is the line in the file, not a position in the diff. The file is read and checked before anything is sent, unknown fields included, so a `file:` written for `path:` fails the put by name, and a pending put never deletes the last draft only to fail on the next. Whether a line is in the diff is GitHub's call, since only it knows which lines a review may sit on, and it refuses the whole review if one is not: check the lines against `pr.diff` in a task before the put when a model chose them.
 
 ## The built-in `cron` type
 

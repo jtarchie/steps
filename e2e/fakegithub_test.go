@@ -70,6 +70,17 @@ type fakeReview struct {
 	State    string
 	Body     string
 	CommitID string
+	Comments []fakeReviewComment
+}
+
+// fakeReviewComment is one inline comment a review was created with.
+type fakeReviewComment struct {
+	Path      string `json:"path"`
+	Line      int    `json:"line"`
+	StartLine int    `json:"start_line"`
+	Side      string `json:"side"`
+	StartSide string `json:"start_side"`
+	Body      string `json:"body"`
 }
 
 type postedComment struct {
@@ -614,9 +625,10 @@ var reviewStates = map[string]string{"": "PENDING", "COMMENT": "COMMENTED", "APP
 
 func (f *fakeGitHub) createReview(w http.ResponseWriter, r *http.Request, number int) {
 	var body struct {
-		Body     string `json:"body"`
-		Event    string `json:"event"`
-		CommitID string `json:"commit_id"`
+		Body     string              `json:"body"`
+		Event    string              `json:"event"`
+		CommitID string              `json:"commit_id"`
+		Comments []fakeReviewComment `json:"comments"`
 	}
 
 	err := json.NewDecoder(r.Body).Decode(&body)
@@ -640,7 +652,7 @@ func (f *fakeGitHub) createReview(w http.ResponseWriter, r *http.Request, number
 	}
 
 	f.nextID++
-	f.reviews[number] = append(f.reviews[number], fakeReview{ID: f.nextID, User: f.login, State: state, Body: body.Body, CommitID: body.CommitID})
+	f.reviews[number] = append(f.reviews[number], fakeReview{ID: f.nextID, User: f.login, State: state, Body: body.Body, CommitID: body.CommitID, Comments: body.Comments})
 
 	respondJSON(w, http.StatusOK, map[string]any{"id": f.nextID, "state": state})
 }

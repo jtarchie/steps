@@ -728,7 +728,10 @@ func githubReviewOut(ctx context.Context, raw, rawParams map[string]any, inputs 
 		return nil, err
 	}
 
-	body, err := readPostBody(srcDir, params.BodyFile)
+	// Read and checked before anything is sent: a pending put deletes the
+	// last draft first, and a malformed comment found after that would leave
+	// no draft at all.
+	payload, err := reviewPayload(srcDir, params)
 	if err != nil {
 		return nil, err
 	}
@@ -739,7 +742,6 @@ func githubReviewOut(ctx context.Context, raw, rawParams map[string]any, inputs 
 	}
 
 	reviews := "/repos/" + source.Repo + "/pulls/" + target.number + "/reviews"
-	payload := map[string]any{"body": body}
 
 	// On the commit that was fetched, when the input says which: a review
 	// lands on a commit, and the pull request may have moved since.
@@ -757,6 +759,28 @@ func githubReviewOut(ctx context.Context, raw, rawParams map[string]any, inputs 
 	}
 
 	return postExpecting(ctx, client, reviews, payload, http.StatusOK, target.number)
+}
+
+// reviewPayload is a review's body and inline comments, read from the put's
+// inputs.
+func reviewPayload(srcDir string, params config.GitHubReviewParams) (map[string]any, error) {
+	body, err := readPostBody(srcDir, params.BodyFile)
+	if err != nil {
+		return nil, err
+	}
+
+	comments, err := readReviewComments(srcDir, params.CommentsFile)
+	if err != nil {
+		return nil, err
+	}
+
+	payload := map[string]any{"body": body}
+
+	if len(comments) > 0 {
+		payload["comments"] = comments
+	}
+
+	return payload, nil
 }
 
 func cmpOr(value, fallback string) string {
@@ -915,4 +939,94 @@ func readPostBody(srcDir, name string) (string, error) {
 	}
 
 	return string(body), nil
+}
+
+// reviewComment is one comment on a line of a pull request's diff, as
+// GitHub's create-review call takes it. Line is the line in the file, not a
+// position in the diff; side RIGHT (the default) is the new file.
+type reviewComment struct {
+	Path      string `json:"path"`
+	Line      int    `json:"line"`
+	StartLine int    `json:"start_line,omitempty"`
+	Side      string `json:"side,omitempty"`
+	StartSide string `json:"start_side,omitempty"`
+	Body      string `json:"body"`
+}
+
+// readReviewComments reads params.comments_file, when set. Unknown fields are
+// refused rather than dropped: a model that writes `file:` for `path:` should
+// fail here with the field named, not post a review missing the comment.
+// Whether each line is IN the diff is GitHub's to say, since only it knows
+// which lines a review may anchor to; it refuses the whole review if one
+// is not.
+func readReviewComments(srcDir, name string) ([]reviewComment, error) {
+	if name == "" {
+		return nil, nil
+	}
+
+	root, err := os.OpenRoot(srcDir)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	defer func() { _ = root.Close() }()
+
+	raw, err := root.ReadFile(name)
+	if err != nil {
+		return nil, fmt.Errorf("params.comments_file: %w — is the step that writes it one of this put's inputs?", err)
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+
+	var comments []reviewComment
+
+	err = decoder.Decode(&comments)
+	if err != nil {
+		return nil, fmt.Errorf("params.comments_file: %s is not a JSON array of {path, line, body}: %w", name, err)
+	}
+
+	for i := range comments {
+		err := checkReviewComment(&comments[i])
+		if err != nil {
+			return nil, fmt.Errorf("params.comments_file: comment %d (%s:%d): %w", i+1, comments[i].Path, comments[i].Line, err)
+		}
+	}
+
+	return comments, nil
+}
+
+func checkReviewComment(comment *reviewComment) error {
+	err := checkReviewAnchor(*comment)
+	if err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(comment.Body) == "" {
+		return errors.New("body is empty, so there is nothing to say on that line")
+	}
+
+	// A range sits on one side; GitHub wants both ends told.
+	if comment.StartLine > 0 && comment.StartSide == "" {
+		comment.StartSide = comment.Side
+	}
+
+	return nil
+}
+
+// checkReviewAnchor checks where a comment sits, short of whether GitHub will
+// find that line in the diff.
+func checkReviewAnchor(comment reviewComment) error {
+	switch {
+	case comment.Path == "" || strings.HasPrefix(comment.Path, "/"):
+		return errors.New("path must be the file's path in the repository, relative to its root")
+	case comment.Line < 1:
+		return errors.New("line must be a line number in the file, from 1")
+	case comment.StartLine < 0 || (comment.StartLine > 0 && comment.StartLine >= comment.Line):
+		return errors.New("start_line, for a range, must come before line")
+	case comment.Side != "" && comment.Side != "LEFT" && comment.Side != "RIGHT":
+		return fmt.Errorf("side %q is not LEFT (the old file) or RIGHT (the new one)", comment.Side)
+	}
+
+	return nil
 }

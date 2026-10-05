@@ -79,6 +79,8 @@ var docGitHubFixtures = map[string]docGitHubFixture{ //nolint:gochecknoglobals /
 			reviews := fake.reviewsOn(42)
 			if len(reviews) != 1 || reviews[0].State != "APPROVED" {
 				t.Errorf("reviews on #42 = %+v, want one approval", reviews)
+			} else if want := (fakeReviewComment{Path: "app/a.rb", Line: 12, Body: "nice guard"}); len(reviews[0].Comments) != 1 || reviews[0].Comments[0] != want {
+				t.Errorf("approval's comments = %+v, want %+v", reviews[0].Comments, want)
 			}
 		},
 	},
