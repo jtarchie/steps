@@ -341,7 +341,8 @@ func (s *Server) handleRun(c *echo.Context) error {
 	}
 
 	nav := s.nav(c)
-	nav.Mark = runMark(view.Run, 0)
+	nav.Mark = runMark(view.Run)
+	nav.MarkURL = "/p/" + pipeline.Slug + "/runs/" + view.Run.ID + "/mark"
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "run", map[string]any{

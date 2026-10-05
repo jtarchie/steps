@@ -10,6 +10,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Nav.Mark.TitlePrefix}}{{with .Title}}{{.}} — {{end}}steps</title>
+<meta name="title-base" content="{{with .Title}}{{.}} — {{end}}steps">
 <link rel="icon" id="favicon" href="{{.Nav.Mark.Favicon}}">
 <link rel="stylesheet" href="/static/app.css">
 {{/* A fold the reader opened is THEIRS: morph reconciles attributes, so an
@@ -60,7 +61,7 @@
     <a class="tab" {{if eq .Section "questions"}}aria-current="page" {{end}}href="/p/{{.Nav.Current}}/questions">questions{{template "attbadge" (attentionOn .Nav "questions")}}</a>
   </nav>{{end}}{{end}}
   <div class="right">
-    {{/* What <head> shows, kept where every poll's oob swap reaches it: app.js copies it into the title and favicon after each swap, since nothing swaps <head> itself. */}}<span id="mark" hidden data-icon="{{.Nav.Mark.Favicon}}" data-title="{{.Nav.Mark.TitlePrefix}}{{with .Title}}{{.}} — {{end}}steps"></span>
+    {{template "markcarrier" .Nav}}
     {{if .Nav.ReadOnly}}<span class="ro">read-only</span>{{end}}
     {{/* A button, not only a key: on a phone "/" is nowhere to be pressed,
          and the palette was unreachable there. The kbd is the hint for a
@@ -147,3 +148,10 @@
     {{if .Retry}}<form method="post" action="/p/{{$.Nav.Current}}/runs/{{.RunID}}/rerun"><button class="btn" type="submit"{{if $.Nav.Paused}} disabled title="the pipeline is paused"{{else}} title="run this build again, with the same inputs"{{end}}>⟲ Retry</button></form>{{end}}
     {{if .Abort}}<form method="post" action="{{.Abort}}"><button class="btn danger" type="submit" title="stop it">■ Abort</button></form>{{end}}
   </div>{{end}}{{end}}</div>{{end}}{{end}}
+
+{{/* What <head> shows, kept where every visible poll's oob swap reaches it;
+     app.js copies it into the favicon and the title (prefixed onto the
+     title-base meta), since nothing swaps <head> itself. A hidden tab does
+     not poll the page, so the carrier asks its mark route on its own — and
+     declines an error answer, which would replace it and end the poll. */}}
+{{define "markcarrier"}}<span id="mark" hidden data-icon="{{.Mark.Favicon}}" data-prefix="{{.Mark.TitlePrefix}}"{{with .MarkURL}} hx-get="{{.}}" hx-trigger="every[document.hidden] 30000ms" hx-swap="outerMorph" hx-status:4xx="swap:none" hx-status:5xx="swap:none"{{end}}></span>{{end}}

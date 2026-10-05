@@ -438,6 +438,7 @@ func (s *Server) routes() error {
 	e.GET("/static/htmx.min.js", s.handleHTMX)
 	e.GET("/static/hx-sse.min.js", s.handleHTMXSSE)
 	e.GET("/static/app.js", s.handleAppJS)
+	e.GET("/mark", s.handleMark)
 	e.GET("/docs", s.handleDocsIndex)
 	e.GET("/docs/:page", s.handleDocs)
 
@@ -447,6 +448,8 @@ func (s *Server) routes() error {
 	group.GET("/jobs/:job/detail", s.handleJobDetail)
 	group.GET("/runs", s.handleRunHistory)
 	group.GET("/runs/:run", s.handleRun)
+	group.GET("/mark", s.handleMark)
+	group.GET(strings.TrimPrefix(runMarkRoute, "/p/:pipeline"), s.handleRunMark)
 	group.GET(strings.TrimPrefix(eventsRoute, "/p/:pipeline"), s.handleRunEvents)
 	group.GET(strings.TrimPrefix(turnRoute, "/p/:pipeline"), s.handleTurn)
 	group.GET("/nodes/:hash", s.handleNode)
@@ -636,6 +639,14 @@ func (s *Server) handleError(c *echo.Context, err error) {
 
 	// A result's body is swapped into its box, and htmx swaps an error too:
 	// a whole page there would nest the nav and its scripts in a <pre>.
+	// A mark's carrier declines an error swap, so the body is never read;
+	// empty keeps a page from being rendered for nobody.
+	if isMarkRoute(c.Path()) {
+		_ = c.NoContent(status)
+
+		return
+	}
+
 	if c.Path() == turnRoute {
 		_ = c.HTML(status, template.HTMLEscapeString(message))
 
@@ -689,6 +700,7 @@ func (s *Server) globalNav(c *echo.Context) navData {
 func (s *Server) unscopedNav(c *echo.Context) navData {
 	nav := s.globalNav(c)
 	nav.Mark = mark{}
+	nav.MarkURL = ""
 
 	return nav
 }
@@ -735,6 +747,8 @@ func (s *Server) nav(c *echo.Context) navData {
 		nav.Mark = nav.Mark.fold(summary.Mark)
 	}
 
+	nav.MarkURL = "/mark"
+
 	sort.Slice(nav.Pipelines, func(i, j int) bool {
 		return nav.Pipelines[i].Slug < nav.Pipelines[j].Slug
 	})
@@ -748,6 +762,7 @@ func (s *Server) nav(c *echo.Context) navData {
 	nav.CurrentPath = current.Path()
 	nav.Anchored = true
 	nav.Mark = mark{}
+	nav.MarkURL = "/p/" + current.Slug + "/mark"
 
 	for _, summary := range nav.Pipelines {
 		if summary.Slug == current.Slug {
@@ -791,6 +806,9 @@ type navData struct {
 	// pipeline the page is about, every pipeline above one, zero on a page
 	// that is about none (docs, an error).
 	Mark mark
+	// MarkURL is where a hidden tab asks for Mark again; empty on a page
+	// about nothing, which then never polls.
+	MarkURL string
 }
 
 // Answers false when the store cannot say: a page that fails to draw is worse than a missing banner.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"html"
+	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -217,11 +219,94 @@ func TestTheDoneFrameCarriesTheFinishedMark(t *testing.T) {
 		t.Fatalf("done frame: %v", err)
 	}
 
-	if want := runMark(store.RunRow{Status: "failed"}, 0).Favicon(); done.Icon != string(want) {
+	if want := runMark(store.RunRow{Status: "failed"}).Favicon(); done.Icon != string(want) {
 		t.Errorf("done icon = %q, want the failed run's %q", done.Icon, want)
 	}
 
 	if !strings.Contains(page, "<title>"+html.EscapeString(done.Title)+"</title>") {
 		t.Errorf("done title %q is not the title the reloaded page draws", done.Title)
+	}
+}
+
+var carrierTag = regexp.MustCompile(`<span id="mark"[^>]*></span>`)
+
+// TestAHiddenTabAsksForWhatThePageWouldDraw: the mark route is the page's
+// own #mark and nothing else, so a tab refreshed while hidden ends up exactly
+// where a visible poll would have put it.
+func TestAHiddenTabAsksForWhatThePageWouldDraw(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := testPipelines(t, "app", "infra")
+
+	// Fixed since: the pipeline is green, so only the run's own route can
+	// still answer red.
+	finishedRun(t, pipelines[0], "b-bad", "app-job", "failed")
+	finishedRun(t, pipelines[0], "b-ok", "app-job", "succeeded")
+
+	for _, tc := range []struct{ page, route, color string }{
+		{"/", "/mark", "%2384c06d"},
+		{"/p/app", "/p/app/mark", "%2384c06d"},
+		{"/p/app/runs/b-bad", "/p/app/runs/b-bad/mark", "%23e0645a"},
+	} {
+		_, page := get(t, server, tc.page)
+
+		drawn := carrierTag.FindString(page)
+		if !strings.Contains(drawn, `hx-get="`+tc.route+`"`) {
+			t.Errorf("%s: carrier %q does not ask %s", tc.page, drawn, tc.route)
+		}
+
+		code, answer := get(t, server, tc.route)
+		if code != http.StatusOK || strings.TrimSpace(answer) != drawn {
+			t.Errorf("%s answered %d:\n%s\nwant the page's own carrier:\n%s", tc.route, code, answer, drawn)
+		}
+
+		if !strings.Contains(drawn, tc.color) {
+			t.Errorf("%s: carrier %q is not colored %s", tc.page, drawn, tc.color)
+		}
+	}
+}
+
+// TestTheCarrierPollsOnlyWhileHidden pins the spelling, which is the whole
+// behavior: htmx 4 reads `every 30s` as a nested path (and polls at
+// milliseconds), and a filter detached from the event name is dropped.
+// Visible, the page's own poll carries #mark; hidden, only this asks.
+func TestTheCarrierPollsOnlyWhileHidden(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+
+	_, page := get(t, server, "/p/demo")
+	drawn := carrierTag.FindString(page)
+
+	for _, want := range []string{
+		`hx-trigger="every[document.hidden] 30000ms"`,
+		`hx-swap="outerMorph"`,
+		`hx-status:4xx="swap:none"`,
+		`hx-status:5xx="swap:none"`,
+	} {
+		if !strings.Contains(drawn, want) {
+			t.Errorf("carrier lacks %s:\n%s", want, drawn)
+		}
+	}
+
+	_, docs := get(t, server, "/docs/web.md")
+	if quiet := carrierTag.FindString(docs); quiet == "" || strings.Contains(quiet, "hx-get") {
+		t.Errorf("a page about no pipeline carries %q, want a carrier that never polls", quiet)
+	}
+}
+
+// TestAMarkRouteAnswersNothingForWhatIsGone: htmx swaps error bodies too,
+// and the carrier declines them — but a body would still be rendered and
+// sent for nobody, and an error PAGE over the carrier is what kills its poll.
+func TestAMarkRouteAnswersNothingForWhatIsGone(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+
+	for _, route := range []string{"/p/demo/runs/nosuch/mark", "/p/nosuch/mark"} {
+		code, body := get(t, server, route)
+		if code != http.StatusNotFound || body != "" {
+			t.Errorf("%s = %d %q, want an empty 404", route, code, body)
+		}
 	}
 }

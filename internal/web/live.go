@@ -142,7 +142,7 @@ func (s *Server) handleRunEvents(c *echo.Context) error {
 			// The tab's finished mark rides along, rendered here, so a
 			// backgrounded tab whose reload is deferred still reports the
 			// outcome without the page owning a second copy of the rule.
-			finished := runMark(run, 0)
+			finished := runMark(run)
 			writeSSE(response, "done", map[string]any{
 				"status": run.Status,
 				"icon":   string(finished.Favicon()),

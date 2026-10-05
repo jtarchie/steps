@@ -446,7 +446,10 @@ func assertChangesAreLive(t *testing.T, path, before, after string) {
 	}
 }
 
-var markCarrier = regexp.MustCompile(`<span id="mark" hidden data-icon="([^"]*)" data-title="([^"]*)">`)
+var (
+	markCarrier = regexp.MustCompile(`<span id="mark" hidden data-icon="([^"]*)" data-prefix="([^"]*)"`)
+	titleBase   = regexp.MustCompile(`<meta name="title-base" content="([^"]*)">`)
+)
 
 // headMirror is the head lines a live #mark accounts for: the title and the
 // favicon link it would copy, and nothing at all when #mark is not inside a
@@ -457,7 +460,12 @@ func headMirror(body string, regions [][2]int) map[string]bool {
 		return nil
 	}
 
-	icon, title := body[at[2]:at[3]], body[at[4]:at[5]]
+	base := titleBase.FindStringSubmatch(body)
+	if base == nil {
+		return nil
+	}
+
+	icon, title := body[at[2]:at[3]], body[at[4]:at[5]]+base[1]
 
 	return map[string]bool{
 		"<title>" + title + "</title>":                       true,

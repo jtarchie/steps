@@ -123,7 +123,9 @@
     if (!mark) return;
     var icon = document.getElementById('favicon');
     if (icon && mark.dataset.icon && icon.getAttribute('href') !== mark.dataset.icon) icon.setAttribute('href', mark.dataset.icon);
-    if (mark.dataset.title && document.title !== mark.dataset.title) document.title = mark.dataset.title;
+    var base = document.querySelector('meta[name="title-base"]');
+    var title = (mark.dataset.prefix || '') + (base ? base.content : '');
+    if (base && document.title !== title) document.title = title;
   }
 
   document.addEventListener('htmx:after:swap', function () {

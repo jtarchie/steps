@@ -2,9 +2,13 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"html/template"
+	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/labstack/echo/v5"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -103,8 +107,8 @@ func finished(status string) bool {
 }
 
 // runMark is a run page's mark: that run, and nothing else.
-func runMark(run store.RunRow, needs int) mark {
-	return mark{Disc: discOf(run.Status), Ring: statusWord(run.Status) == "running", Needs: needs}
+func runMark(run store.RunRow) mark {
+	return mark{Disc: discOf(run.Status), Ring: statusWord(run.Status) == "running"}
 }
 
 // runTitle is a run page's title, which the stream's done frame repeats.
@@ -242,4 +246,57 @@ func (m mark) Favicon() template.URL {
 
 	//nolint:gosec // G203: every input is a constant above or a formatted int, never request data
 	return template.URL("data:image/svg+xml," + svgEscaper.Replace(svg.String()))
+}
+
+// runMarkRoute is a run's mark route; handleError keys on it and on the
+// other two, which answer a hidden tab and never a reader.
+const runMarkRoute = "/p/:pipeline/runs/:run/mark"
+
+func isMarkRoute(path string) bool {
+	return path == "/mark" || path == "/p/:pipeline/mark" || path == runMarkRoute
+}
+
+// handleMark answers a hidden tab with its scope's #mark alone: the root's
+// for every pipeline, a pipeline page's for that pipeline — the same scope
+// nav already resolved for the page.
+func (s *Server) handleMark(c *echo.Context) error {
+	return s.writeMark(c, s.nav(c))
+}
+
+func (s *Server) handleRunMark(c *echo.Context) error {
+	pipeline := pipelineOf(c)
+
+	run, ok, err := pipeline.Store.FindRunRow(c.Request().Context(), c.Param("run"))
+	if err != nil {
+		return fmt.Errorf("web: run mark: %w", err)
+	}
+
+	if !ok {
+		return echo.NewHTTPError(http.StatusNotFound, "no such run")
+	}
+
+	nav := s.nav(c)
+	nav.Mark = runMark(run)
+	nav.MarkURL = "/p/" + pipeline.Slug + "/runs/" + run.ID + "/mark"
+
+	return s.writeMark(c, nav)
+}
+
+func (s *Server) writeMark(c *echo.Context, nav navData) error {
+	tmpl, ok := s.renderer.pages["empty"]
+	if !ok {
+		return echo.NewHTTPError(http.StatusInternalServerError, "no layout to draw a mark from")
+	}
+
+	var out strings.Builder
+
+	err := tmpl.ExecuteTemplate(&out, "markcarrier", nav)
+	if err != nil {
+		return fmt.Errorf("web: render mark: %w", err)
+	}
+
+	c.Response().Header().Set("Cache-Control", "no-store")
+
+	//nolint:wrapcheck // echo's write error is returned verbatim by every handler here
+	return c.HTML(http.StatusOK, out.String())
 }
