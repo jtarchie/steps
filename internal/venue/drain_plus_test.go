@@ -115,3 +115,55 @@ func TestAWSDrainWatcherEndsWithItsSession(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+// GCE's notice is a flag that flips; it must reach the runner by poll, since a long-poll can sleep through the flip past the machine's end.
+func TestGCPWorkerHearsItsOwnPreemption(t *testing.T) {
+	shrinkGCPWaits(t)
+
+	var preempted atomic.Bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/computeMetadata/v1/instance/preempted" || r.Header.Get("Metadata-Flavor") != "Google" {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		if preempted.Load() {
+			_, _ = w.Write([]byte("TRUE"))
+		} else {
+			_, _ = w.Write([]byte("FALSE"))
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	previousBase, previousPoll := gcpMetadataBase, drainPoll
+	gcpMetadataBase, drainPoll = server.URL, 0
+
+	t.Cleanup(func() { gcpMetadataBase, drainPoll = previousBase, previousPoll })
+
+	sshd := newGCPSSHD(t)
+	seamGCP(t, &fakeGCE{}, sshd)
+
+	runner := newLocalRunner(t, localGCPWorker(t, sshd, t.TempDir()))
+
+	err := runner.Run(context.Background(), "true")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	preempted.Store(true)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, reclaimed := ReclaimedBy(runner); reclaimed {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatal("the preemption never reached the runner")
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+}

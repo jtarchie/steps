@@ -483,6 +483,7 @@ func (w Worker) ImageCheck(hasImage bool) error {
 	switch {
 	case w.Scheme == SchemeSSH && hasImage:
 		return fmt.Errorf("%w %q: %w", ErrWorker, w.URL, errImageOnSSH)
+	// ponytail: aws:// and gcp:// are docker+ too and belong here; their pipeline tests map a launch rung to a fake local: shim worker running bare steps, which Phase 5's docker+ local: replaces.
 	case w.Scheme == SchemeDockerSSH && !hasImage:
 		return fmt.Errorf("%w %q: %w", ErrWorker, w.URL, errNoImageOnDocker)
 	default:

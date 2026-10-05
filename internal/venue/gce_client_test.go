@@ -226,3 +226,35 @@ func fakeInsertAPI(t *testing.T, sent *compute.Instance, template *string) http.
 		}
 	}
 }
+
+// Inserting from a template needs only instanceTemplates.useReadOnly; a role that cannot read the template still launches, with steps' labels alone.
+func TestGCEClientInsertLaunchesWithoutReadingTheTemplate(t *testing.T) {
+	t.Parallel()
+
+	var (
+		sent     compute.Instance
+		template string
+	)
+
+	inner := fakeInsertAPI(t, &sent, &template)
+	client := newTestGCEClient(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/instanceTemplates/") {
+			http.Error(w, `{"error":{"code":403,"message":"forbidden"}}`, http.StatusForbidden)
+
+			return
+		}
+
+		inner(w, req)
+	})
+
+	labels := map[string]string{labelWorker: "abc123"}
+
+	err := client.InsertFromTemplate(context.Background(), "p", "z", "steps-1", "tmpl", labels)
+	if err != nil {
+		t.Fatalf("InsertFromTemplate without template read access: %v", err)
+	}
+
+	if !maps.Equal(sent.Labels, labels) {
+		t.Errorf("sent labels %v, want steps' own %v", sent.Labels, labels)
+	}
+}

@@ -27,6 +27,9 @@ var errAWSInstall = errors.New("installing steps' ssh key on the instance did no
 // awsInstalled maps an instance to the host key its install reported, so later steps skip a SendCommand that takes seconds.
 var awsInstalled sync.Map //nolint:gochecknoglobals // per-process memory of what this process installed where
 
+// awsInstalling holds a lock per instance, so concurrent dials share one install.
+var awsInstalling sync.Map //nolint:gochecknoglobals // as above
+
 func awsSSHClient(ctx context.Context, worker Worker) (*ssh.Client, error) {
 	api, err := ssmAPIFor(ctx, worker)
 	if err != nil {
@@ -48,8 +51,8 @@ func awsSSHClient(ctx context.Context, worker Worker) (*ssh.Client, error) {
 	}
 
 	client, err := awsConnect(ctx, api, worker, platform, signer)
-	if err != nil && isAuthRefusal(err) {
-		// The likeliest cause is an instance recreated under the same id since the cached install: install again, once.
+	if err != nil && (isAuthRefusal(err) || strings.Contains(err.Error(), "ssh: host key mismatch")) {
+		// The cached install went stale: its key expired, or the root volume was replaced under the same id (new host key, no authorized_keys). Install again, once; the new host key arrives over SSM, which IAM vouches for.
 		awsInstalled.Delete(worker.Instance)
 
 		client, err = awsConnect(ctx, api, worker, platform, signer)
@@ -89,6 +92,11 @@ func isAuthRefusal(err error) bool {
 }
 
 func awsHostKey(ctx context.Context, api ssmdial.API, worker Worker, platform ssmdial.Platform, signer ssh.Signer) (ssh.PublicKey, error) {
+	// One install per instance at a time: parallel steps on a fresh machine would each send a SendCommand that waits minutes for docker.
+	lock, _ := awsInstalling.LoadOrStore(worker.Instance, &sync.Mutex{})
+	lock.(*sync.Mutex).Lock()         //nolint:forcetypeassert // this map holds one type
+	defer lock.(*sync.Mutex).Unlock() //nolint:forcetypeassert // as above
+
 	if cached, ok := awsInstalled.Load(worker.Instance); ok {
 		return cached.(ssh.PublicKey), nil //nolint:forcetypeassert // this map holds one type
 	}
@@ -127,22 +135,26 @@ func awsInstallScript(key ssh.PublicKey) string {
 u=` + awsSSHUser + `
 # A machine just launched registers with SSM before its user data has installed docker; the docker group must exist before the user is put in it.
 i=0; until docker info >/dev/null 2>&1 || [ "$i" -ge 120 ]; do i=$((i + 1)); sleep 2; done
+# Failed, not skipped: a user made outside the group cannot open the socket, and the cached install would never add it.
+getent group docker >/dev/null 2>&1 || { echo "no docker group after four minutes: docker is not installed on this instance" >&2; exit 1; }
 id "$u" >/dev/null 2>&1 || useradd -m -s /bin/sh "$u" 2>/dev/null || adduser -D -s /bin/sh "$u"
 # A new account's password is "!", locked, and an sshd without PAM refuses a key for a locked account; "*" is no password and not locked.
 sed -i "s/^$u:!/$u:*/" /etc/shadow 2>/dev/null || true
-if getent group docker >/dev/null 2>&1; then usermod -aG docker "$u" 2>/dev/null || addgroup "$u" docker; fi
+usermod -aG docker "$u" 2>/dev/null || addgroup "$u" docker
 h=$(getent passwd "$u" | cut -d: -f6)
 mkdir -p "$h/.ssh"
 f="$h/.ssh/authorized_keys"
 touch "$f"
 now=$(date +%Y%m%d%H%M)
+# Its own temp file: parallel steps on a fresh instance each send this install, and a shared one interleaves their writes.
+tmp=$(mktemp "$f.XXXXXX")
 # Drop this key's old line and other steps keys that have expired; a line with no expiry (a host whose date cannot add hours) is another orchestrator's live key and stays.
 awk -v now="$now" -v mine=` + shellQuote(marker) + ` '
   index($0, "steps-ephemeral-") == 0 { print; next }
   index($0, mine) > 0 { next }
   !match($0, /expiry-time="[0-9]+"/) { print; next }
   substr($0, RSTART + 13, 12) > now { print }
-' "$f" > "$f.steps" && mv "$f.steps" "$f"
+' "$f" > "$tmp" && mv "$tmp" "$f"
 if exp=$(date -d '+12 hours' +%Y%m%d%H%M 2>/dev/null); then opts="expiry-time=\"$exp\",restrict,port-forwarding"; else opts="restrict,port-forwarding"; fi
 printf '%s %s\n' "$opts" ` + shellQuote(line) + ` >> "$f"
 chown -R "$u" "$h/.ssh"

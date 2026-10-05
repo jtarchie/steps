@@ -342,7 +342,7 @@ func gcpConnect(ctx context.Context, api gceAPI, worker Worker, project, zone st
 			return client, nil
 		}
 
-		if !strings.Contains(err.Error(), "ssh: unable to authenticate") {
+		if !isAuthRefusal(err) {
 			forgetInstall()
 
 			return nil, fmt.Errorf("connecting to %s for %q: %w", worker.Instance, worker.URL, err)
@@ -677,7 +677,8 @@ var gcpReady sync.Map //nolint:gochecknoglobals // per-process memory of a once-
 const gcpReadyScript = `i=0; until docker info >/dev/null 2>&1; do
   if sudo -n docker info >/dev/null 2>&1; then sudo -n usermod -aG docker "$(id -un)" && echo regroup; break; fi
   i=$((i + 1)); [ "$i" -ge 120 ] && break; sleep 2
-done`
+done
+docker info >/dev/null 2>&1 && echo ready`
 
 // gcpDockerClient is gcpSSHClient for a docker+ session: a machine just launched is still installing docker when its sshd first answers.
 func gcpDockerClient(ctx context.Context, worker Worker) (*ssh.Client, error) {
@@ -700,9 +701,14 @@ func gcpDockerClient(ctx context.Context, worker Worker) (*ssh.Client, error) {
 	out, _ := session.Output(gcpReadyScript)
 	_ = session.Close()
 
-	gcpReady.Store(worker.Instance, true)
+	regroup := strings.Contains(string(out), "regroup")
 
-	if !strings.Contains(string(out), "regroup") {
+	// Remembered only once docker answered: a wait that ran out is waited again by the next step, rather than skipped for the life of the process.
+	if regroup || strings.Contains(string(out), "ready") {
+		gcpReady.Store(worker.Instance, true)
+	}
+
+	if !regroup {
 		return client, nil
 	}
 

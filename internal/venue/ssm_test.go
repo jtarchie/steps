@@ -456,3 +456,26 @@ func TestDialWaitsForAReconnectingSSMAgent(t *testing.T) {
 		t.Errorf("described = %d, want the ConnectionLost answers to have been polled through", fake.described)
 	}
 }
+
+// A cached host key that no longer matches (a root volume replaced under the same instance id) is one reinstall, never a dial that fails for the life of the process.
+func TestSSMWorkerReinstallsPastAStaleHostKey(t *testing.T) {
+	fake := &fakeSSM{}
+	spec := localSSMWorker(t, fake, t.TempDir())
+
+	_, stale, _ := generateKey(t)
+	awsInstalled.Store("i-0abc123def456789", stale)
+
+	runner := newLocalRunner(t, spec)
+
+	err := runner.Run(context.Background(), "true")
+	if err != nil {
+		t.Fatalf("Run past a stale host key: %v", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if fake.commands != 1 {
+		t.Errorf("sent %d installs, want exactly one after the mismatch", fake.commands)
+	}
+}

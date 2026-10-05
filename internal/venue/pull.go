@@ -27,7 +27,7 @@ func Pull(ctx context.Context, spec shell.RunnerSpec, name, digest, dst string) 
 		return 0, err
 	}
 
-	if worker.Scheme == SchemeDockerSSH || worker.Scheme == SchemeAWS || worker.Scheme == SchemeGCP {
+	if worker.dockerPlus() {
 		received, err := pullPlus(ctx, worker, digest, dst)
 		if err != nil {
 			return 0, fmt.Errorf("worker %q: %w", spec.Worker, err)
@@ -65,7 +65,7 @@ func Push(ctx context.Context, spec shell.RunnerSpec, name, digest, url string) 
 	}
 
 	// ponytail: a docker+ holder reaches the store only through this machine once the store path is ported; refused by name until then.
-	if worker.Scheme == SchemeDockerSSH || worker.Scheme == SchemeAWS || worker.Scheme == SchemeGCP {
+	if worker.dockerPlus() {
 		return fmt.Errorf("worker %q: %w", spec.Worker, errStoreOnDocker)
 	}
 

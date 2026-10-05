@@ -114,13 +114,11 @@ func (c *gceClient) InsertFromTemplate(ctx context.Context, project, zone, name,
 	templateURL := "projects/" + project + "/global/instanceTemplates/" + template
 
 	// Labels on the request REPLACE the template's rather than merging, so the template's are read and kept under steps' own: an operator's cost or cleanup label would otherwise vanish from every launched worker.
-	source, err := c.service.InstanceTemplates.Get(project, template).Context(ctx).Do()
-	if err != nil {
-		return fmt.Errorf("reading template %s: %w", template, err)
-	}
-
 	merged := map[string]string{}
-	if source.Properties != nil {
+
+	// Best effort: inserting from a template needs only instanceTemplates.useReadOnly, and a role without .get must still launch, with steps' labels alone.
+	source, err := c.service.InstanceTemplates.Get(project, template).Context(ctx).Do()
+	if err == nil && source.Properties != nil {
 		maps.Copy(merged, source.Properties.Labels)
 	}
 

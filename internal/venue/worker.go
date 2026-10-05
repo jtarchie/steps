@@ -539,6 +539,11 @@ func applyDockerSSH(worker Worker, parsed *url.URL) (Worker, error) {
 // String is the mapping as the operator wrote it.
 func (w Worker) String() string { return w.URL }
 
+// dockerPlus reports a worker whose every step runs in a container on its own daemon: docker+ssh://, and aws:// and gcp://, whose provisioning installs docker.
+func (w Worker) dockerPlus() bool {
+	return w.Scheme == SchemeDockerSSH || w.Scheme == SchemeAWS || w.Scheme == SchemeGCP
+}
+
 // Address is the machine, without the credentials for reaching it.
 //
 // The query string is dropped deliberately: ?identity= and ?hostkey= say how

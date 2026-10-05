@@ -32,11 +32,11 @@ func awsDrainScript() string {
 		`sleep ` + strconv.Itoa(drainPoll) + `; done`)
 }
 
-// gcpDrainScript waits on the preempted flag; GCE's default notice is up to thirty seconds, not EC2's two minutes.
+// gcpDrainScript polls the preempted flag rather than long-polling it: wait_for_change without the last etag misses a flip between two requests until the next timeout, longer than GCE's default thirty-second notice.
 func gcpDrainScript() string {
 	return untilHangup(`while :; do ` +
-		`p=$(curl -sf -m 70 -H 'Metadata-Flavor: Google' ` + shellQuote(gcpMetadataBase+"/computeMetadata/v1/instance/preempted?wait_for_change=true&timeout_sec=60") + `) || { sleep ` + strconv.Itoa(drainPoll) + `; continue; }; ` +
-		`[ "$p" = TRUE ] && { echo preempted; exit 0; }; done`)
+		`p=$(curl -sf -m 2 -H 'Metadata-Flavor: Google' ` + shellQuote(gcpMetadataBase+"/computeMetadata/v1/instance/preempted") + `) && [ "$p" = TRUE ] && { echo preempted; exit 0; }; ` +
+		`sleep ` + strconv.Itoa(drainPoll) + `; done`)
 }
 
 // watchDrain runs the drain script for the session's life; closing the ssh client ends it.
