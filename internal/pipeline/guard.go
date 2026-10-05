@@ -7,7 +7,6 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/shell"
-	"github.com/jtarchie/steps/internal/venue"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -78,9 +77,9 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 		spec.Worker = worker
 		spec.ReusedWarm = reusedWarm(ctx, step)
 
-		runner, runnerErr := venue.NewRunner(spec)
+		runner, runnerErr := newRunner(spec)
 		if runnerErr != nil {
-			return spec.Worker, runnerErr //nolint:wrapcheck // NewRunner's error already names the cause
+			return spec.Worker, runnerErr
 		}
 
 		defer shell.CloseRunner(runner, label)

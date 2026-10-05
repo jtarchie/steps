@@ -480,9 +480,9 @@ func TestContractSweepRemovesOnlyADeadOwnersContainer(t *testing.T) {
 func startLabelledContainer(t *testing.T, pid string) string {
 	t.Helper()
 
-	name, err := NewContainerName()
+	name, err := newContainerName()
 	if err != nil {
-		t.Fatalf("NewContainerName: %v", err)
+		t.Fatalf("newContainerName: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

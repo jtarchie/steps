@@ -185,6 +185,8 @@ type RunnerSpec struct {
 	// resource's in:, which fills an empty directory and declares nothing.
 	// Meaningless without a Worker.
 	FetchAll bool
+	// HoldAs is the artifact name a FetchAll tree kept on its worker (DeferFetch) is held under: the name the next step offers it by. Read only by the venue.
+	HoldAs string
 	// Keep leaves a worker's scratch behind, following --keep-workspace. Read
 	// only by the venue: on this machine the workspace decides its own fate,
 	// and it is the one that answered this.

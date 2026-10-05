@@ -111,6 +111,8 @@ type dockerSession struct {
 	memoryBytes int64
 
 	mu sync.Mutex
+	// orphans are pid files, in the container, of commands whose exec failed under a live caller.
+	orphans []string
 	// client is the connection to the daemon, opened with the container and
 	// released by close. Held rather than reopened per command: connecting is
 	// the expensive half of an exec against a container that is already up.
@@ -166,7 +168,7 @@ func (s *dockerSession) ensure(ctx context.Context) (*dockerapi.Client, string, 
 
 	s.attempted = true
 
-	containerName, err := NewContainerName()
+	containerName, err := newContainerName()
 	if err != nil {
 		s.startErr = err
 
@@ -473,16 +475,11 @@ func (s *dockerSession) close() error {
 	return nil
 }
 
-// NewContainerName mints a random, collision-free container name. Random
+// newContainerName mints a random, collision-free container name. Random
 // rather than derived from the step's name: two runs of the same step (a
 // watch loop, a retried attempt) must never contend for one name, and a name
 // we generated is one Close can remove knowing nothing else could own it.
-//
-// Exported alongside RemoveContainer, for the same reason and with the same
-// history: a caller with no session to hold a name for it needs the "name it
-// so you can always reclaim it" property too. The one that did — internal/
-// agent's containerized CLI run — went away with issue #100.
-func NewContainerName() (string, error) {
+func newContainerName() (string, error) {
 	var buf [8]byte
 
 	_, err := rand.Read(buf[:])
@@ -491,6 +488,49 @@ func NewContainerName() (string, error) {
 	}
 
 	return fmt.Sprintf("steps-%x", buf), nil
+}
+
+// orphan remembers a command whose exec failed under it, to be killed before the next one runs.
+func (s *dockerSession) orphan(pidfile string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.orphans = append(s.orphans, pidfile)
+}
+
+// reapOrphans kills what earlier failed execs may have left running, so a retry does not race the command it replaces in the same tree, and names this exec's pid file.
+func (s *dockerSession) reapOrphans(ctx context.Context, client *dockerapi.Client, id string) (string, error) {
+	pidfile, err := newContainerName()
+	if err != nil {
+		return "", err
+	}
+
+	s.mu.Lock()
+	orphans := s.orphans
+	s.orphans = nil
+	s.mu.Unlock()
+
+	if len(orphans) == 0 {
+		return "/tmp/." + pidfile, nil
+	}
+
+	quoted := make([]string, len(orphans))
+	for i, orphan := range orphans {
+		quoted[i] = "'" + orphan + "'"
+	}
+
+	_, err = client.Exec(ctx, id, dockerapi.ExecOptions{Cmd: []string{"sh", "-c",
+		`for f in ` + strings.Join(quoted, " ") + `; do p=$(cat "$f" 2>/dev/null) && kill -KILL -- -"$p" 2>/dev/null; rm -f "$f"; done; true`}})
+	if err != nil {
+		// Kept for the next exec: the connection that failed this one is likely the one that failed theirs.
+		s.mu.Lock()
+		s.orphans = append(orphans, s.orphans...)
+		s.mu.Unlock()
+
+		return "", fmt.Errorf("ending the commands a failed connection left running: %w", err)
+	}
+
+	return "/tmp/." + pidfile, nil
 }
 
 // dockerExec is the shared plumbing behind Run/RunCapture/RunCaptureFull/
@@ -537,10 +577,14 @@ func (d DockerRunner) dockerExec(
 		errTarget = io.MultiWriter(live, errWriter)
 	}
 
+	pidfile, err := d.session.reapOrphans(ctx, client, id)
+	if err != nil {
+		return "", "", 0, err
+	}
+
 	opts := dockerapi.ExecOptions{
-		// The command is a shell string, so it runs through `sh -c` exactly as
-		// it did — a pipeline writes shell, not an argv.
-		Cmd:    []string{"sh", "-c", command},
+		// A shell string, so through `sh -c`. The exec's sh leads its own session, and exec keeps its pid, so the file names the command's whole group.
+		Cmd:    []string{"sh", "-c", `echo $$ > "$1" 2>/dev/null; exec sh -c "$0"`, command, pidfile},
 		Stdout: outTarget,
 		Stderr: errTarget,
 		Env:    buildEnvPairs(ctx),
@@ -554,6 +598,11 @@ func (d DockerRunner) dockerExec(
 
 	flushStdout()
 	flushStderr()
+
+	// A connection that failed under a live caller says nothing about the command, which may still run; a cancelled one is the session's teardown to end.
+	if execErr != nil && ctx.Err() == nil {
+		d.session.orphan(pidfile)
+	}
 
 	return outWriter.result(), errWriter.result(), code, d.session.diagnose(ctx, client, id, execErr)
 }

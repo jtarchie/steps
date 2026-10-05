@@ -50,7 +50,9 @@ type bareSession struct {
 	startErr  error
 	closed    bool
 
-	conn           liveSSH
+	conn liveSSH
+	// orphans are the pid files of commands whose connection failed under them: still running, for all this end knows.
+	orphans        []string
 	dir            string
 	goos, goarch   string
 	uid, gid       *int
@@ -178,11 +180,17 @@ func (s *bareSession) ensure(ctx context.Context) error {
 		return s.startErr
 	}
 
-	// A command the drop interrupted may still run on the worker; its pid file is what close kills it by.
 	_, err := s.conn.redial(ctx, s.dial)
 	if err != nil {
 		return fmt.Errorf("%w %q: dialling again after the connection dropped: %w", ErrWorker, s.worker.URL, err)
 	}
+
+	// Before this command, not at close: a retry run beside the command it replaces would race it in the same directory.
+	for _, pidfile := range s.orphans {
+		s.kill(ctx, pidfile)
+	}
+
+	s.orphans = nil
 
 	return nil
 }
@@ -376,6 +384,12 @@ func (s *bareSession) run(ctx context.Context, command string, sinks outputSinks
 
 	if ctx.Err() != nil {
 		return 0, fmt.Errorf("%w", ctx.Err())
+	}
+
+	if err != nil {
+		s.mu.Lock()
+		s.orphans = append(s.orphans, pidfile)
+		s.mu.Unlock()
 	}
 
 	return code, err

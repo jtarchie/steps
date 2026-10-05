@@ -41,7 +41,7 @@ func WithResourcePlacement(ctx context.Context) context.Context {
 		keep := keepFrom(ctx)
 
 		return func(spec shell.RunnerSpec) (shell.Runner, error) {
-			spec.Worker, spec.WorkerTag, spec.Keep = worker, tag, keep
+			spec.Worker, spec.WorkerTag, spec.Keep, spec.HoldAs = worker, tag, keep, step.Get
 			spec.RemoteInputs = remoteInputsFrom(ctx)
 
 			runner, err := placedRunner(ctx, step, spec)

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/dockerapi"
 	"github.com/jtarchie/steps/internal/shell"
@@ -551,7 +552,7 @@ func TestDockerPlusHoldsAGetsWholeTree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runner, err := NewRunner(shell.RunnerSpec{Image: "alpine:3", Cwd: cwd, FetchAll: true, DeferFetch: true, Worker: worker, WorkerTag: "box"})
+	runner, err := NewRunner(shell.RunnerSpec{Image: "alpine:3", Cwd: cwd, FetchAll: true, DeferFetch: true, HoldAs: "src", Worker: worker, WorkerTag: "box"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -678,5 +679,86 @@ func TestDockerPlusSuspectsAConnectionAFetchFailedOn(t *testing.T) {
 
 	if !plus.s.conn.suspect.Load() {
 		t.Error("the failed fetch left the connection unsuspected")
+	}
+}
+
+// The command a drop interrupted keeps running in the container; the retry must not race it in the same tree, so the next command on the new connection finds it gone.
+func TestDockerPlusKillsTheCommandADropInterrupted(t *testing.T) {
+	t.Parallel()
+
+	runner := plusRunnerFor(t, dockerPlusURL(testsshd.New(t), hostDockerSocket(t)), t.TempDir())
+	plus, ok := runner.(plusRunner)
+	if !ok {
+		t.Fatalf("runner is %T, want a docker+ runner", runner)
+	}
+
+	assertInterruptedCommandIsKilled(t, runner, "4321", func() { dropAndWait(t, &plus.s.conn) })
+}
+
+// assertInterruptedCommandIsKilled starts a long command, drops the connection under it, and checks the next command finds no trace of it running.
+func assertInterruptedCommandIsKilled(t *testing.T, runner shell.Runner, seconds string, drop func()) {
+	t.Helper()
+
+	err := runner.Run(t.Context(), "true")
+	if err != nil {
+		t.Fatalf("first command: %v", err)
+	}
+
+	interrupted := make(chan error, 1)
+
+	go func() { interrupted <- runner.Run(t.Context(), "touch started; sleep "+seconds) }()
+
+	deadline := time.Now().Add(20 * time.Second)
+	for runner.Run(t.Context(), "test -f started") != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the long command never started")
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	drop()
+
+	err = <-interrupted
+	if err == nil {
+		t.Fatal("the interrupted command reported success")
+	}
+
+	// Attempt one after the drop may fail on the dead connection; the one after runs on the new one.
+	_ = runner.Run(t.Context(), "true")
+
+	// The bracket keeps the pattern from matching the sh that runs it.
+	out, err := runner.RunCapture(t.Context(), "pgrep -f 'slee[p] "+seconds+"' | wc -l")
+	if err != nil {
+		t.Fatalf("checking for the interrupted command: %v", err)
+	}
+
+	if strings.TrimSpace(string(out)) != "0" {
+		t.Errorf("the interrupted command is still running (%s); a retry would race it in the same tree", strings.TrimSpace(string(out)))
+	}
+}
+
+// A get's tree is held under the artifact name the next step offers it by, which the pipeline says rather than the venue inferring it from a directory's basename.
+func TestDockerPlusHoldsAGetsTreeUnderTheNameItWasGiven(t *testing.T) {
+	t.Parallel()
+
+	runner, err := NewRunner(shell.RunnerSpec{
+		Image: "alpine:3", Cwd: t.TempDir(), Worker: localWorker(t, t.TempDir()).Worker,
+		FetchAll: true, DeferFetch: true, HoldAs: "repo",
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	t.Cleanup(func() { _ = runner.Close() })
+
+	err = runner.Run(t.Context(), "echo fetched > version")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	held, _, ok := HeldOf(runner)
+	if !ok || held["repo"] == "" {
+		t.Errorf("held = %v, want the tree under %q, the name the next step offers it by", held, "repo")
 	}
 }

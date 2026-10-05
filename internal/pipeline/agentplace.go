@@ -9,7 +9,6 @@ import (
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/shell"
-	"github.com/jtarchie/steps/internal/venue"
 )
 
 // placedAgentRunner is the factory internal/agent builds its runner through, carrying the one thing that package deliberately cannot know: which machine a tag resolves to. Everything else on the spec is the agent's own and arrives already filled in, and an untagged step still ends at shell.NewRunner by the route a task takes.
@@ -20,7 +19,7 @@ func placedAgentRunner(step config.Step) agent.RunnerFactory {
 			return nil, err
 		}
 
-		runner, err := venue.NewRunner(placed)
+		runner, err := newRunner(placed)
 		if err != nil {
 			return nil, fmt.Errorf("agent %q: %w", step.Agent, err)
 		}

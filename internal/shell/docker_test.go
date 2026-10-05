@@ -33,18 +33,18 @@ import (
 	"github.com/jtarchie/steps/internal/dockerapi"
 )
 
-// TestNewContainerNameIsUnique guards the reason names are random rather than
+// TestContainerNamesAreUnique guards the reason names are random rather than
 // derived from a step's name: two concurrent runs of the same step must never
 // contend for one container.
-func TestNewContainerNameIsUnique(t *testing.T) {
+func TestContainerNamesAreUnique(t *testing.T) {
 	t.Parallel()
 
 	seen := map[string]bool{}
 
 	for range 100 {
-		name, err := NewContainerName()
+		name, err := newContainerName()
 		if err != nil {
-			t.Fatalf("NewContainerName: %v", err)
+			t.Fatalf("newContainerName: %v", err)
 		}
 
 		if !strings.HasPrefix(name, "steps-") {
@@ -52,7 +52,7 @@ func TestNewContainerNameIsUnique(t *testing.T) {
 		}
 
 		if seen[name] {
-			t.Fatalf("NewContainerName returned %q twice", name)
+			t.Fatalf("newContainerName returned %q twice", name)
 		}
 
 		seen[name] = true

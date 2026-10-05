@@ -542,3 +542,22 @@ func TestSSHDialGivesUpOnASilentHandshake(t *testing.T) {
 		t.Fatal("the dial outlived its context by seconds")
 	}
 }
+
+// The same race on ssh://: the command the drop interrupted is killed by its pid file before the retry runs.
+func TestSSHWorkerKillsTheCommandADropInterrupted(t *testing.T) {
+	t.Parallel()
+
+	runner, err := NewRunner(sshSpec(t, newTestSSHD(t), t.TempDir()))
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	t.Cleanup(func() { _ = runner.Close() })
+
+	bare, ok := runner.(bareRunner)
+	if !ok {
+		t.Fatalf("runner is %T, want an ssh:// runner", runner)
+	}
+
+	assertInterruptedCommandIsKilled(t, runner, "4322", func() { dropAndWait(t, &bare.s.conn) })
+}

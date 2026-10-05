@@ -283,6 +283,9 @@ func (s *plusSession) connect(ctx context.Context) error {
 		return s.unanswered(ctx, err)
 	}
 
+	// Here, not in dialDaemon: only a step's session records a placement, and a pull would pay the round trip for nothing. Recorded, not relied on.
+	s.goos, s.goarch, _ = s.docker.Platform(ctx)
+
 	s.watchDrain()
 
 	s.evict(ctx)
@@ -472,7 +475,7 @@ func (s *plusSession) daemonDialer(ctx context.Context) (func(context.Context) (
 
 // redial replaces a connection that ended (a dropped tunnel, a keepalive that gave up): the volumes, holder and container live on the daemon, so the step's tree is where it was.
 func (s *plusSession) redial(ctx context.Context) error {
-	// ponytail: a command the drop interrupted may still run in the container until it goes; keeping its exec id would let ExecInspect take its exit code instead of a rerun (steps#208).
+	// ponytail: the command a drop interrupted is killed before the next one runs (see the shell runner's orphans); taking its exit code by exec id instead of a rerun is steps#208's rung 1.
 	redialed, err := s.conn.redial(ctx, s.dialSSH)
 	if err != nil {
 		return fmt.Errorf("%w %q: dialling again after the connection dropped: %w", ErrWorker, s.worker.URL, err)
@@ -521,9 +524,6 @@ func (s *plusSession) dialDaemon(ctx context.Context) (func(context.Context) (ne
 	if err != nil {
 		return nil, fmt.Errorf("the docker daemon at %s did not answer: %w (the worker's sshd needs AllowTcpForwarding local or yes — OpenSSH refuses a socket forward without it — and the ssh user must be able to open the socket, usually through the docker group)", s.socket, err)
 	}
-
-	// Recorded, not relied on: a missing answer leaves the placement without a platform.
-	s.goos, s.goarch, _ = s.docker.Platform(ctx)
 
 	// Containers a dead steps process on this machine left on the worker; nothing else would ever reclaim them.
 	if _, done := swept.LoadOrStore("docker "+s.daemonName(), true); !done {
@@ -591,11 +591,11 @@ func (s *plusSession) fetch(ctx context.Context) error {
 	s.fetchMu.Lock()
 	defer s.fetchMu.Unlock()
 
-	if s.spec.FetchAll && s.spec.DeferFetch && s.emptyTree {
+	if s.spec.FetchAll && s.spec.DeferFetch && s.emptyTree && s.spec.HoldAs != "" {
 		// A get's tree is the work volume alone, so it is held whole, under the artifact name the next step offers it by.
-		s.outputs[filepath.Base(s.spec.Cwd)] = s.work
+		s.outputs[s.spec.HoldAs] = s.work
 
-		return s.fetchDeclared(ctx, filepath.Base(s.spec.Cwd))
+		return s.fetchDeclared(ctx, s.spec.HoldAs)
 	}
 
 	if s.spec.FetchAll {
