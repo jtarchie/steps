@@ -226,6 +226,12 @@ func (c *Config) Images() []string {
 			return nil
 		}
 
+		// An across: cell renders its image: per cell, so here it is still a template, and pulling the text fails the job before its first step; the cell's container create pulls the rendered image instead.
+		// ponytail: expand static values: axes here, so those cells keep the pre-pull and their pull stays outside the step's timeout.
+		if strings.Contains(settings.Image, "{{") {
+			return nil
+		}
+
 		// A tasks:/agents: entry is visited on its own and knows nothing
 		// about who references it, so its image looks local even when every
 		// step that uses it is placed. Named entries are kept only when some

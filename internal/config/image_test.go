@@ -491,3 +491,19 @@ func TestImageArtifactsNamesResourcesAndTheJobsGets(t *testing.T) {
 		t.Errorf("ImageArtifacts(b) = %v, want the resource and not job a's alias", got)
 	}
 }
+
+// An across: cell's image is rendered per cell, so the step's own image: is a template until it runs: pre-pulling that text failed the job before its first step on "invalid reference format".
+func TestImagesSkipsATemplatedImage(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Jobs: []Job{{Name: "j", Plan: []Step{
+			{Task: "cell", Run: "true", Image: "{{ .vars.image }}", Across: []AcrossVar{{Var: "image", Values: []string{"alpine:3"}}}},
+			{Task: "plain", Run: "true", Image: "golang:1.26"},
+		}}},
+	}
+
+	if got := cfg.Images(); strings.Join(got, ",") != "golang:1.26" {
+		t.Errorf("Images() = %v, want only the untemplated golang:1.26", got)
+	}
+}
