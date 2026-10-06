@@ -59,6 +59,34 @@ func (s suite) TestApprovalsListsTheDecisionsNewestFirst(t *testing.T) {
 	}
 }
 
+// TestApprovalStatusReadsOneDecision: a parked job polls this for its answer, so it must hand back the decision, and a request that does not exist must be an error rather than an empty answer that never resolves.
+func (s suite) TestApprovalStatusReadsOneDecision(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	id, err := st.RequestApproval(ctx, "deploy", "ship it?")
+	if err != nil {
+		t.Fatalf("RequestApproval: %v", err)
+	}
+
+	err = st.DecideApproval(ctx, id, "rejected", "jtarchie", "not today")
+	if err != nil {
+		t.Fatalf("DecideApproval: %v", err)
+	}
+
+	approval, err := st.ApprovalStatus(ctx, id)
+	if err != nil || approval.ID != id || approval.Status != "rejected" || approval.DecidedBy != "jtarchie" || approval.Reason != "not today" {
+		t.Errorf("ApprovalStatus = %+v, %v; want the rejection", approval, err)
+	}
+
+	_, err = st.ApprovalStatus(ctx, id+1000)
+	if err == nil {
+		t.Error("ApprovalStatus of a request nobody made answered without an error")
+	}
+}
+
 // twoApprovals records one decided request and one still waiting.
 func (s suite) twoApprovals(t *testing.T) store.Store {
 	t.Helper()

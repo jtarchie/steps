@@ -171,3 +171,25 @@ jobs:
 		}
 	}
 }
+
+// TestCheckAgentCredentialsTreatsEmptyAsUnset: an exported but empty key authenticates nothing, so it is reported like a missing one.
+func TestCheckAgentCredentialsTreatsEmptyAsUnset(t *testing.T) {
+	t.Setenv("PREFLIGHT_EMPTY_AGENT_KEY", "")
+
+	cfg, err := LoadConfig(writeConfig(t, `
+agents:
+- name: coder
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: PREFLIGHT_EMPTY_AGENT_KEY }
+jobs:
+- name: j
+  plan: [{ agent: coder, messages: [x], inputs: [] }]
+`))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	problems := cfg.CheckEnvironment()
+	if len(problems) != 1 || problems[0].Target != `agent "coder"` || !strings.Contains(problems[0].Detail, "$PREFLIGHT_EMPTY_AGENT_KEY is not set") {
+		t.Errorf("problems = %+v, want the empty key reported for coder", problems)
+	}
+}

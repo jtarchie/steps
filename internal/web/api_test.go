@@ -5,12 +5,14 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // fakeManager lets a route be tested with no store driver and no workspace behind it.
@@ -158,6 +160,24 @@ func TestPipelineVerbsRefuseAPipelineTheDaemonDoesNotHold(t *testing.T) {
 		code, _ := call(t, server, probe.method, probe.target, probe.body)
 		if code != http.StatusNotFound {
 			t.Errorf("%s %s answered %d, want 404", probe.method, probe.target, code)
+		}
+	}
+}
+
+// TestDestroyAndRenameOfAMissingPipelineAre404: the manager's own "not held" and the store's "no such row" are the same answer to the sender, whichever layer noticed.
+func TestDestroyAndRenameOfAMissingPipelineAre404(t *testing.T) {
+	t.Parallel()
+
+	for _, missing := range []error{ErrNoSuchPipeline, fmt.Errorf("renaming: %w", store.ErrNoSuchPipeline)} {
+		server, manager := managedServer(t)
+		manager.otherErr = missing
+
+		if code, _ := call(t, server, http.MethodDelete, "/api/pipelines/absent", ""); code != http.StatusNotFound {
+			t.Errorf("destroy answered %v with %d, want 404", missing, code)
+		}
+
+		if code, _ := call(t, server, http.MethodPost, "/api/pipelines/absent/rename", `{"to":"other"}`); code != http.StatusNotFound {
+			t.Errorf("rename answered %v with %d, want 404", missing, code)
 		}
 	}
 }

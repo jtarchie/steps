@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -475,4 +476,136 @@ func TestReadPostBodyRefusesEmptyAndOutside(t *testing.T) {
 			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
 		}
 	}
+}
+
+// TestGitHubPRsCheckSkipsANodeWithoutBoth: a search hit that is not a pull request comes back as an empty node, and a version with no commit could never be fetched.
+func TestGitHubPRsCheckSkipsANodeWithoutBoth(t *testing.T) {
+	connection := githubServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"search":{"nodes":[{},{"number":3},{"headRefOid":"c"},{"number":2,"headRefOid":"b"}]}}}`))
+	})
+
+	versions, err := githubPRsCheck(context.Background(), map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(versions) != 1 || versions[0]["number"] != "2" || versions[0]["sha"] != "b" {
+		t.Errorf("versions = %v, want only #2 at b", versions)
+	}
+}
+
+// TestGitHubGetRefusesAVersionMissingAField: a get names one thing by every field of its version, and one missing is refused before GitHub is asked anything.
+func TestGitHubGetRefusesAVersionMissingAField(t *testing.T) {
+	var asked atomic.Int32
+
+	connection := githubServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		asked.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	source := map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint}
+
+	for name, tc := range map[string]struct {
+		get     func(context.Context, map[string]any, map[string]any, string) error
+		version map[string]any
+		want    string
+	}{
+		"pr without sha":         {githubPRsIn, map[string]any{"number": "7"}, "names no pull request number and commit"},
+		"pr without number":      {githubPRsIn, map[string]any{"sha": "abc"}, "names no pull request number and commit"},
+		"comment without id":     {githubCommentsIn, map[string]any{"kind": "conversation", "number": "7"}, "names no comment"},
+		"comment without kind":   {githubCommentsIn, map[string]any{"id": "1", "number": "7"}, "names no comment"},
+		"comment without number": {githubCommentsIn, map[string]any{"id": "1", "kind": "conversation"}, "names no comment"},
+	} {
+		err := tc.get(context.Background(), source, tc.version, t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+		}
+	}
+
+	if asked.Load() != 0 {
+		t.Errorf("GitHub was asked %d times about versions that name nothing", asked.Load())
+	}
+}
+
+// TestGitHubPendingReviewReplacesOnlyYourOwnDraft: the token user's draft is found on whichever page it sits, is the only one deleted, and a refused delete stops the review rather than posting a second draft beside it.
+func TestGitHubPendingReviewReplacesOnlyYourOwnDraft(t *testing.T) {
+	t.Run("deleted", func(t *testing.T) {
+		got := pendingReview(t, http.StatusOK)
+		if got.deleted != "500" || got.err != nil || got.version["id"] != "900" || got.version["number"] != "7" || got.posted != 1 {
+			t.Errorf("%+v; want draft 500 deleted and the new review on #7", got)
+		}
+	})
+
+	t.Run("refused", func(t *testing.T) {
+		got := pendingReview(t, http.StatusUnprocessableEntity)
+		if got.deleted != "500" || got.err == nil || !strings.Contains(got.err.Error(), "DELETE") || got.posted != 0 {
+			t.Errorf("%+v; want the refused delete of 500 and nothing posted", got)
+		}
+	})
+}
+
+type pendingReviewResult struct {
+	version map[string]any
+	err     error
+	deleted string
+	posted  int
+}
+
+// pendingReview posts a pending review on #7, whose reviews are a full page of somebody else's drafts and then the token user's own draft (500) beside an approval, answering the delete with deleteStatus.
+func pendingReview(t *testing.T, deleteStatus int) pendingReviewResult {
+	t.Helper()
+	noBackoff(t)
+
+	others := make([]string, githubPageSize)
+	for i := range others {
+		others[i] = `{"id":` + strconv.Itoa(i+1) + `,"state":"PENDING","user":{"login":"someone"}}`
+	}
+
+	pages := map[string]string{
+		"1": "[" + strings.Join(others, ",") + "]",
+		"2": `[{"id":500,"state":"PENDING","user":{"login":"octocat"}},{"id":501,"state":"APPROVED","user":{"login":"octocat"}}]`,
+	}
+
+	var (
+		mu     sync.Mutex
+		result pendingReviewResult
+	)
+
+	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		switch {
+		case r.URL.Path == "/user":
+			_, _ = w.Write([]byte(`{"login":"OctoCat"}`))
+		case r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(cmpOr(pages[r.URL.Query().Get("page")], "[]")))
+		case r.Method == http.MethodDelete:
+			result.deleted += strings.TrimPrefix(r.URL.Path, "/repos/acme/app/pulls/7/reviews/")
+			w.WriteHeader(deleteStatus)
+		default:
+			result.posted++
+			_, _ = w.Write([]byte(`{"id":900}`))
+		}
+	})
+
+	src := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(src, "review.md"), []byte("looks fine"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	version, err := githubReviewOut(context.Background(),
+		map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint},
+		map[string]any{"body_file": "review.md", "event": "pending"},
+		PutInputs{Names: []string{"pr"}, Versions: map[string]map[string]any{"pr": {"number": "7", "sha": "abc"}}},
+		src)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	result.version, result.err = version, err
+
+	return result
 }

@@ -487,3 +487,31 @@ jobs:
 		t.Fatal("LoadConfig accepted a malformed config")
 	}
 }
+
+// TestAPlacedAgentMayGrantAStdioServerThatStaysOutOfTheTree: only a relative cwd: points a stdio server into this machine's copy of the step directory; none, or an absolute one, does not.
+func TestAPlacedAgentMayGrantAStdioServerThatStaysOutOfTheTree(t *testing.T) {
+	t.Parallel()
+
+	for _, cwd := range []string{"", "\n  cwd: /srv/index"} {
+		_, err := LoadConfig(writeConfig(t, `
+mcp_servers:
+- name: lsp
+  command: gopls`+cwd+`
+agents:
+- name: reviewer
+  image: alpine:3.20
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  tools:
+    - mcp: lsp
+jobs:
+- name: review
+  plan:
+  - agent: reviewer
+    tags: [gpu]
+    messages: [hi]
+`))
+		if err != nil {
+			t.Errorf("cwd %q: %v", strings.TrimSpace(cwd), err)
+		}
+	}
+}

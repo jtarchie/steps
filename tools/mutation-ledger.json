@@ -55,6 +55,14 @@
         {
           "mutant": "ere.go | CONDITIONALS_BOUNDARY | if r <= asciiMax && strings.ContainsRune(ereSpecial, r) {",
           "why": "differs only for U+007F, which is not in ereSpecial, so the second half of the conjunction decides either way"
+        },
+        {
+          "mutant": "treepath.go | INVERT_LOGICAL | for ancestor := path.Dir(resolved); ancestor != c.dir && len(ancestor) > len(c.dir); ancestor = path.Dir(ancestor) {",
+          "why": "every ancestor chain of a lexically-confined path reaches c.dir exactly, where both forms are false; the one divergent input (resolved == c.dir with c.dir missing) is unreachable because the exists check returns first (mutants judge, 2026-10-06)"
+        },
+        {
+          "mutant": "treepath.go | INVERT_LOGICAL | return code == 0 && strings.TrimSpace(out) == \"yes\", nil",
+          "why": "the probe is `[ -e p ] && printf yes`, which exits 0 exactly when it printed yes, so the conjuncts never disagree (mutants judge, 2026-10-06)"
         }
       ]
     },
@@ -83,6 +91,18 @@
         {
           "mutant": "venue.go | CONDITIONALS_NEGATION | if err != nil { (RecordPlacement)",
           "why": "only a log line reads the error; a bookkeeping write must never fail a step that did its work"
+        },
+        {
+          "mutant": "approval.go | INVERT_LOGICAL | if err != nil || parsed <= 0 {",
+          "why": "ParseTimeout returns 0 with every error and refuses negatives, and config's approval validation refuses a zero timeout at load, so && and || agree on every loadable input (found by mutants judge, 2026-10-06)"
+        },
+        {
+          "mutant": "deadline.go | INVERT_LOGICAL | if err != nil || timeout <= 0 {",
+          "why": "validateJobTimeouts refuses both an unparseable and a non-positive job timeout at load, and ParseTimeout returns 0 with every error, so the guard is false either way for every config RunJob receives (mutants judge, 2026-10-06)"
+        },
+        {
+          "mutant": "explain.go | INVERT_LOGICAL | if node.StepIndex < 0 || node.StepIndex >= len(job.Plan) {",
+          "why": "a planned StepIndex is never negative and never past the plan, so the guard is false under either operator (mutants judge, 2026-10-06)"
         }
       ]
     },

@@ -58,3 +58,24 @@ jobs:
 		t.Errorf("error = %v, want the duplicate-branch-output rejection naming \"shared\"", err)
 	}
 }
+
+// TestFailsFastOnlyWhenAsked: an in_parallel: that says nothing, or says false, lets its siblings finish.
+func TestFailsFastOnlyWhenAsked(t *testing.T) {
+	t.Parallel()
+
+	yes, no := true, false
+
+	for name, tc := range map[string]struct {
+		block *InParallel
+		want  bool
+	}{
+		"no block": {nil, false},
+		"unset":    {&InParallel{}, false},
+		"false":    {&InParallel{FailFast: &no}, false},
+		"true":     {&InParallel{FailFast: &yes}, true},
+	} {
+		if got := tc.block.FailsFast(); got != tc.want {
+			t.Errorf("%s: FailsFast = %v, want %v", name, got, tc.want)
+		}
+	}
+}

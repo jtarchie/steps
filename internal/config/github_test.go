@@ -1,6 +1,7 @@
 package config
 
 import (
+	"maps"
 	"strings"
 	"testing"
 )
@@ -221,5 +222,35 @@ func TestGitHubTokenIsARequirement(t *testing.T) {
 
 	if problems := cfg.CheckEnvironment(); len(problems) != 0 {
 		t.Errorf("problems with both set = %v, want none", problems)
+	}
+}
+
+// TestGitHubCheckoutDefaultsToTheTree: checkout: is true unless set false, on both resources that can lay a pull request down.
+func TestGitHubCheckoutDefaultsToTheTree(t *testing.T) {
+	t.Parallel()
+
+	for name, extra := range map[string]map[string]any{
+		"unset": {},
+		"true":  {"checkout": true},
+		"false": {"checkout": false},
+	} {
+		raw := map[string]any{"repo": "acme/app"}
+		maps.Copy(raw, extra)
+
+		want := name != "false"
+
+		prs, err := ParseGitHubPRsSource(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+
+		comments, _, err := ParseGitHubCommentsSource(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+
+		if prs.WantsTree() != want || comments.WantsTree() != want {
+			t.Errorf("%s: prs %v, comments %v; want %v", name, prs.WantsTree(), comments.WantsTree(), want)
+		}
 	}
 }
