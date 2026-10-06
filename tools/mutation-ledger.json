@@ -101,8 +101,8 @@
           "why": "validateJobTimeouts refuses both an unparseable and a non-positive job timeout at load, and ParseTimeout returns 0 with every error, so the guard is false either way for every config RunJob receives (mutants judge, 2026-10-06)"
         },
         {
-          "mutant": "explain.go | INVERT_LOGICAL | if node.StepIndex < 0 || node.StepIndex >= len(job.Plan) {",
-          "why": "a planned StepIndex is never negative and never past the plan, so the guard is false under either operator (mutants judge, 2026-10-06)"
+          "mutant": "explain.go | INVERT_LOGICAL | if index < 0 || index >= len(job.Plan) {",
+          "why": "index is a node's position in a chain holding one node per plan step, so it is never negative and never past the plan; the guard is false under either operator (mutants judge, 2026-10-06)"
         }
       ]
     },

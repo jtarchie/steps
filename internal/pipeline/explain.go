@@ -108,7 +108,8 @@ func explainRows(cfg *config.Config, job *config.Job, chains []merkle.Chain, ski
 	var rows []ExplainRow
 
 	for _, chain := range chains {
-		for _, node := range chain.Nodes {
+		// A chain holds one node per plan step, in order, so the position is the plan index; node.StepIndex restarts at zero after every get.
+		for index, node := range chain.Nodes {
 			if seen[node.Hash] {
 				continue
 			}
@@ -116,12 +117,12 @@ func explainRows(cfg *config.Config, job *config.Job, chains []merkle.Chain, ski
 			seen[node.Hash] = true
 
 			rows = append(rows, ExplainRow{
-				StepIndex: node.StepIndex,
+				StepIndex: index,
 				Kind:      string(node.Kind),
 				Name:      node.Resource,
 				ShortHash: shortHash(node.Hash),
 				WouldSkip: skippable[node.Hash],
-				Reason:    explainReason(cfg, job, node, skippable[node.Hash]),
+				Reason:    explainReason(cfg, job, index, skippable[node.Hash]),
 			})
 		}
 	}
@@ -131,16 +132,16 @@ func explainRows(cfg *config.Config, job *config.Job, chains []merkle.Chain, ski
 
 // explainReason says why a node would run or skip, reusing the same
 // vocabulary the run itself prints (see unskippableReason).
-func explainReason(cfg *config.Config, job *config.Job, node merkle.Node, wouldSkip bool) string {
+func explainReason(cfg *config.Config, job *config.Job, index int, wouldSkip bool) string {
 	if wouldSkip {
 		return "cached"
 	}
 
-	if node.StepIndex < 0 || node.StepIndex >= len(job.Plan) {
+	if index < 0 || index >= len(job.Plan) {
 		return "not yet run"
 	}
 
-	step := job.Plan[node.StepIndex]
+	step := job.Plan[index]
 
 	reason := unskippableReason(step)
 	if reason != "" {
