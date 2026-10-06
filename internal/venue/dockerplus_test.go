@@ -1,6 +1,7 @@
 package venue
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,8 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -428,11 +431,30 @@ func TestDockerPlusNonRootUserWritesItsOutputs(t *testing.T) {
 
 // A step with nothing cached starts one container, its own: opening its volumes to a non-root user: once cost a busybox chmod per step, a third of every container a worker started. Not parallel, so this process starts nothing else while it counts.
 func TestDockerPlusStartsOnlyTheStepsContainer(t *testing.T) {
-	since := time.Now()
+	requireDockerVenue(t)
+
+	// Streamed, not replayed afterwards: the daemon keeps only its most recent events, and under a full suite this session's had scrolled out of that log by the time it closed. --since covers the moment before the stream connects.
+	var started lockedBuffer
+
+	//nolint:gosec // a filter built from this process's own pid and a clock reading
+	events := exec.CommandContext(t.Context(), "docker", "events", "--since", eventsTime(time.Now()),
+		"--filter", "type=container", "--filter", "event=start", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid()),
+		"--format", "{{.Actor.Attributes.name}}")
+	events.Stdout = &started
+
+	err := events.Start()
+	if err != nil {
+		t.Fatalf("docker events: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_ = events.Process.Kill()
+		_ = events.Wait()
+	})
 
 	runner := newLocalRunner(t, localWorker(t, t.TempDir()))
 
-	err := runner.Run(t.Context(), "true")
+	err = runner.Run(t.Context(), "true")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -442,18 +464,41 @@ func TestDockerPlusStartsOnlyTheStepsContainer(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	//nolint:gosec // a filter built from this process's own pid and a clock reading
-	out, err := exec.CommandContext(t.Context(), "docker", "events",
-		"--since", eventsTime(since), "--until", eventsTime(time.Now()),
-		"--filter", "type=container", "--filter", "event=start", "--filter", "label=steps.pid="+strconv.Itoa(os.Getpid()),
-		"--format", "{{.Actor.Attributes.name}}").Output()
-	if err != nil {
-		t.Fatalf("docker events: %v", err)
+	// Every helper starts before the step's container, and events arrive in order, so once that one is in, all of them are.
+	stepContainer := regexp.MustCompile(`(?m)^steps-[0-9a-f]+$`)
+	deadline := time.Now().Add(30 * time.Second)
+
+	for !stepContainer.MatchString(started.String()) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the step's container never reported starting; saw %q", started.String())
+		}
+
+		time.Sleep(50 * time.Millisecond)
 	}
 
-	if started := strings.Fields(string(out)); len(started) != 1 {
-		t.Errorf("the session started %d containers, want only the step's: %v", len(started), started)
+	if names := strings.Fields(started.String()); len(names) != 1 {
+		t.Errorf("the session started %d containers, want only the step's: %v", len(names), names)
 	}
+}
+
+// lockedBuffer is a bytes.Buffer a command's output copier writes while the test reads it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.Write(p) //nolint:wrapcheck // a bytes.Buffer never fails
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.String()
 }
 
 // eventsTime is docker events' fractional-second form; whole seconds would count a container the previous test started in the same second.
