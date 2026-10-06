@@ -11,10 +11,12 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v5"
@@ -39,6 +41,21 @@ type renderer struct {
 }
 
 func newRenderer(version string) (*renderer, error) {
+	pages, err := parsedPages()
+	if err != nil {
+		return nil, err
+	}
+
+	if version == "" {
+		version = "dev"
+	}
+
+	// The map is the server's own, the templates in it shared: a caller that drops a page must not drop it for every server.
+	return &renderer{pages: maps.Clone(pages), version: version}, nil
+}
+
+// parsedPages is parsed once per process and shared by every server: the templates are embedded and their funcs hold no state, so each server parsing its own was the same work again, and an executed html/template is safe to share.
+var parsedPages = sync.OnceValues(func() (map[string]*template.Template, error) {
 	layout, err := assets.ReadFile("templates/layout.html")
 	if err != nil {
 		return nil, fmt.Errorf("web: could not read layout: %w", err)
@@ -75,12 +92,8 @@ func newRenderer(version string) (*renderer, error) {
 		pages[name] = tmpl
 	}
 
-	if version == "" {
-		version = "dev"
-	}
-
-	return &renderer{pages: pages, version: version}, nil
-}
+	return pages, nil
+})
 
 // Render executes the named page inside the layout.
 func (r *renderer) Render(_ *echo.Context, w io.Writer, name string, data any) error {
