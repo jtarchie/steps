@@ -200,7 +200,8 @@ func combineBranchErrors(ctx context.Context, results []branchResult) error {
 
 	joined := errors.Join(failures...)
 	if errored {
-		return joined
+		// Escalated, not bare: the join holds the failed branches' markers too, and the first one errors.As met decided the block was failed.
+		return outcome.Escalate(joined) //nolint:wrapcheck // Escalate only marks the classification
 	}
 
 	// Every failure was a step-level one, so the block is a step-level failure

@@ -83,6 +83,12 @@ func TestInParallelClassifiesByItsBranches(t *testing.T) {
       - load_var: version
         file: out/missing.txt
         inputs: [out]`, "errored"},
+		"one said no and another could not run": {`
+      - task: a
+        run: "false"
+      - load_var: version
+        file: out/missing.txt
+        inputs: [out]`, "errored"},
 	} {
 		collected := runFixturePipeline(t, `
 jobs:

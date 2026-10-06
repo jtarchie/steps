@@ -88,3 +88,31 @@ func TestExitCode(t *testing.T) {
 		})
 	}
 }
+
+// The outermost marker decides: an escalated block holding failed branches is errored, a deadline's Failure over that block is failed again, and the process exit follows the same answer.
+func TestTheOutermostMarkerDecides(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	branches := errors.Join(Fail(errors.New("a branch said no")), errors.New("a branch could not run"))
+
+	for name, c := range map[string]struct {
+		err   error
+		class Class
+		exit  int
+	}{
+		"a failed branch, unmarked":     {branches, Failed, ExitFailed},
+		"the block escalated":           {Escalate(branches), Errored, ExitErrored},
+		"wrapped once more":             {fmt.Errorf("in_parallel: %w", Escalate(branches)), Errored, ExitErrored},
+		"a deadline over the block":     {Fail(Escalate(branches)), Failed, ExitFailed},
+		"escalating nothing is nothing": {Escalate(nil), Succeeded, ExitOK},
+	} {
+		if got := Classify(ctx, c.err); got != c.class {
+			t.Errorf("%s: Classify = %s, want %s", name, got, c.class)
+		}
+
+		if got := ExitCode(c.err); got != c.exit {
+			t.Errorf("%s: ExitCode = %d, want %d", name, got, c.exit)
+		}
+	}
+}

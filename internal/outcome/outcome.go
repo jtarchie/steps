@@ -34,6 +34,33 @@ type Failure struct{ Err error }
 
 func (f *Failure) Error() string { return f.Err.Error() }
 func (f *Failure) Unwrap() error { return f.Err }
+func (*Failure) marked() Class   { return Failed }
+
+// Escalation marks an error that holds a Failure yet is Errored: a block one of whose branches errored, which outranks the branches that only said no.
+type Escalation struct{ Err error }
+
+func (e *Escalation) Error() string { return e.Err.Error() }
+func (e *Escalation) Unwrap() error { return e.Err }
+func (*Escalation) marked() Class   { return Errored }
+
+// Escalate wraps err as Errored whatever Failures it holds. It is nil-safe.
+func Escalate(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	return &Escalation{Err: err}
+}
+
+// markedClass is what the outermost marker in err's chain says: errors.As stops at the first it meets, so a Failure wrapped around an Escalation (a deadline over a block) still decides, and an Escalation over Failures does.
+func markedClass(err error) (Class, bool) {
+	var marker interface{ marked() Class }
+	if errors.As(err, &marker) {
+		return marker.marked(), true
+	}
+
+	return "", false
+}
 
 // Fail wraps err as a task-level Failure. It is nil-safe: Fail(nil) is nil.
 func Fail(err error) error {
@@ -95,8 +122,7 @@ func ExitCode(err error) int {
 		return ExitAborted
 	}
 
-	var failure *Failure
-	if errors.As(err, &failure) {
+	if class, ok := markedClass(err); ok && class == Failed {
 		return ExitFailed
 	}
 
@@ -117,9 +143,8 @@ func Classify(ctx context.Context, err error) Class {
 		return Aborted
 	}
 
-	var failure *Failure
-	if errors.As(err, &failure) {
-		return Failed
+	if class, ok := markedClass(err); ok {
+		return class
 	}
 
 	return Errored
