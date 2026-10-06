@@ -307,7 +307,7 @@ func (g askGrant) ask(ctx context.Context, args map[string]any, env toolEnv) map
 	// audit lie with an empty string in place of the fact — so it resolves the
 	// second asker exactly the way it resolved the first.
 	if row.Status != "pending" {
-		return g.memoResult(env, row)
+		return g.alreadyResolved(env, row, existing)
 	}
 
 	if !existing {
@@ -318,6 +318,19 @@ func (g askGrant) ask(ctx context.Context, args map[string]any, env toolEnv) map
 	}
 
 	return g.waitForAnswer(ctx, env, row)
+}
+
+// alreadyResolved reports a row that was resolved before this call read it
+// back. An earlier asker's row is the memo. This call's OWN row — nothing
+// earlier asked it — means somebody answered inside the window between the
+// store's INSERT and its SELECT: not a memo of anything, but the parked
+// wait's answer arriving early, and the row says who gave it.
+func (g askGrant) alreadyResolved(env toolEnv, row store.Question, existing bool) map[string]any {
+	if existing {
+		return g.memoResult(env, row)
+	}
+
+	return resolvedResult(row, answerSource(row))
 }
 
 // memoResult reports a question this run already resolved. An answered one is

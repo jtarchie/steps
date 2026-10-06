@@ -63,7 +63,7 @@ func (s *Store) RecordPlacement(ctx context.Context, placement store.Placement) 
 
 // RunPlacements returns where every placed step of one run ran, in plan order.
 func (s *Store) RunPlacements(ctx context.Context, runID string) ([]store.Placement, error) {
-	return collect(ctx, s.db, "placements", `
+	return collect(ctx, s.reads, "placements", `
 		SELECT `+placementColumns+`
 		FROM run_placements
 		WHERE run_id = ? AND pipeline_id = ?

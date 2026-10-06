@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -309,5 +310,94 @@ func TestLatestRunByJobBreaksATieAsListRunsDoes(t *testing.T) {
 
 	if latest["job"].ID != listed[0].ID {
 		t.Errorf("LatestRunByJob picked %q, ListRuns tops with %q", latest["job"].ID, listed[0].ID)
+	}
+}
+
+// The event sink commits once per event; at synchronous=FULL each of those
+// was a disk flush. Measured in BenchmarkAppendRunEvent.
+func TestWriterSyncsTheLogOnlyAtCheckpoints(t *testing.T) {
+	t.Parallel()
+
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = st.Close() }()
+
+	var synchronous int
+
+	err := st.db.QueryRowContext(t.Context(), "PRAGMA synchronous").Scan(&synchronous)
+	if err != nil {
+		t.Fatalf("PRAGMA synchronous: %v", err)
+	}
+
+	// 1 is NORMAL; 2 is FULL, the default.
+	if synchronous != 1 {
+		t.Errorf("synchronous = %d, want 1 (NORMAL): every event append is paying for an fsync", synchronous)
+	}
+}
+
+// A pool of one connection queued every listing behind whatever write
+// transaction the handle was in — a prune at the end of a build, a check's
+// thousand-row report — though WAL lets a reader proceed beside a writer.
+func TestReadsDoNotWaitOnAWriteTransaction(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	st := mustOpenStore(t, filepath.Join(t.TempDir(), "state.db"))
+
+	defer func() { _ = st.Close() }()
+
+	mustStartRun(t, st, "r1", "build")
+
+	// The writer's one connection, held in an open transaction for the rest
+	// of the test, the way a long prune holds it.
+	tx, err := st.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.ExecContext(ctx, `UPDATE runs SET workspace = '/elsewhere' WHERE id = 'r1'`)
+	if err != nil {
+		t.Fatalf("write inside the transaction: %v", err)
+	}
+
+	bounded, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	runs, err := st.ListRuns(bounded, "", 10)
+	if err != nil {
+		t.Fatalf("ListRuns while a write transaction is open: %v — the read queued behind the writer's connection", err)
+	}
+
+	// A reader sees what is committed and nothing of the open transaction.
+	if len(runs) != 1 || runs[0].Workspace == "/elsewhere" {
+		t.Errorf("ListRuns = %+v, want the one committed run with its committed workspace", runs)
+	}
+}
+
+// What lands in a state database is not public — transcripts, every command's
+// output, webhook bodies — and sqlite would otherwise create it under the
+// umask, 0644 almost everywhere. The log sqlite creates beside it inherits the
+// file's mode, so it is held to the same bit.
+func TestANewStateFileIsPrivateToItsOwner(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.db")
+	st := mustOpenStore(t, path)
+
+	defer func() { _ = st.Close() }()
+
+	mustStartRun(t, st, "r1", "build")
+
+	for _, file := range []string{path, path + "-wal"} {
+		info, err := os.Stat(file)
+		if err != nil {
+			t.Fatalf("stat %s: %v", file, err)
+		}
+
+		if mode := info.Mode().Perm(); mode != 0o600 {
+			t.Errorf("%s is %o, want 0600", file, mode)
+		}
 	}
 }

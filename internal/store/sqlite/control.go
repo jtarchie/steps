@@ -31,7 +31,7 @@ func (s *Store) Unpause(ctx context.Context) error {
 func (s *Store) Paused(ctx context.Context) (bool, error) {
 	var pausedAt sql.NullString
 
-	err := s.db.QueryRowContext(ctx, `SELECT paused_at FROM pipelines WHERE id = ?`, s.pipelineID).Scan(&pausedAt)
+	err := s.reads.QueryRowContext(ctx, `SELECT paused_at FROM pipelines WHERE id = ?`, s.pipelineID).Scan(&pausedAt)
 	if err != nil {
 		return false, fmt.Errorf("could not read whether pipeline %q is paused: %w", s.pipeline, err)
 	}

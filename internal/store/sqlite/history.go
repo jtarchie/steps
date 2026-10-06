@@ -61,21 +61,8 @@ func (s *Store) RecordVersions(ctx context.Context, resourceName string, version
 		return 0, err
 	}
 
-	// Prune only what the check no longer reports. A version still in the
-	// report is still real, whatever the cap says — deleting it means the
-	// next poll "discovers" it again at a fresh top order, and with a cap
-	// smaller than the window the table oscillates forever between halves,
-	// "latest" flipping to an old version on alternate polls and every prune
-	// cascading away consumed marks so jobs re-fan-out each cycle. The cap
-	// therefore bounds what has scrolled AWAY, and a window larger than the
-	// cap is simply kept whole.
-	floor, err := minReportedOrder(ctx, tx, s.pipelineID, resourceName, encoded)
-	if err != nil {
-		return 0, err
-	}
-
 	if limit > 0 {
-		err = pruneVersions(ctx, tx, s.pipelineID, resourceName, limit, floor)
+		err = pruneVersions(ctx, tx, s.pipelineID, resourceName, limit, encoded)
 		if err != nil {
 			return 0, err
 		}
@@ -106,73 +93,61 @@ func encodeVersions(versions []map[string]any) ([]string, error) {
 }
 
 // insertNewVersions files the versions check-history does not hold, each
-// taking the next check_order, and reports how many that was.
+// taking the next check_order in report order, and reports how many.
 //
-// The WHERE on the upsert is what keeps a steady-state poll free: a row a
-// check already filed matches the conflict but not the WHERE, so nothing is
-// written and RowsAffected is 0 — the order neither advances nor gaps. A row
-// only a run had filed matches both, taking a fresh order (see
-// RecordVersions).
+// One statement for the whole report. It was a prepared upsert run once per
+// version, numbering only the rows it changed — and a check re-reports its
+// whole window every poll, so a steady-state poll over a 1000-version window
+// ran a thousand statements under the write lock to change nothing
+// (measured 5.9ms a poll; see BenchmarkRecordVersionsSteadyState). Here
+// `fresh` is the rows that WILL change — reported, and not already filed by
+// a check — numbered from the resource's highest order in report position,
+// so the order neither advances nor gaps on a steady poll; a version
+// reported twice is one row by MIN(key). The upsert's WHERE is what makes
+// a run-filed row (from_check = 0) take the fresh order and a check-filed
+// one stay put (see RecordVersions), and changes() counts both the inserts
+// and those updates.
+//
+// The MAX is read in the caller's transaction, which the DSN opens
+// IMMEDIATE, so it already holds the write lock; and because the SELECT reads
+// the table it inserts into, sqlite runs it to completion before the first
+// row lands, so every number comes from the same MAX.
 func insertNewVersions(
 	ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, encoded []string,
 ) (int, error) {
-	next, err := nextCheckOrder(ctx, tx, pipelineID, resourceName)
-	if err != nil {
-		return 0, err
-	}
-
-	// Prepared once, because the driver otherwise re-prepares per row, and a check re-reporting a 1000-version window paid that 1000 times under the write lock: measured 11.9ms a poll against 2.8ms.
-	upsert, err := tx.PrepareContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
+		WITH reported(version, position) AS (
+		    SELECT value, MIN(key) FROM json_each(?) GROUP BY value
+		), fresh AS (
+		    SELECT version, position FROM reported
+		    WHERE NOT EXISTS (
+		        SELECT 1 FROM resource_versions rv
+		        WHERE rv.pipeline_id = ? AND rv.resource_name = ?
+		          AND rv.version_json = reported.version AND rv.from_check = 1
+		    )
+		)
 		INSERT INTO resource_versions (pipeline_id, resource_name, version_json, check_order, from_check)
-		VALUES (?, ?, ?, ?, 1)
+		SELECT ?, ?, version,
+		       (SELECT COALESCE(MAX(check_order), 0) FROM resource_versions
+		        WHERE pipeline_id = ? AND resource_name = ?)
+		       + ROW_NUMBER() OVER (ORDER BY position),
+		       1
+		FROM fresh
+		WHERE true
 		ON CONFLICT (pipeline_id, resource_name, version_json)
 		DO UPDATE SET from_check = 1, check_order = excluded.check_order
 		WHERE resource_versions.from_check = 0
-	`)
+	`, jsonList(encoded), pipelineID, resourceName, pipelineID, resourceName, pipelineID, resourceName)
 	if err != nil {
 		return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
 	}
 
-	defer func() { _ = upsert.Close() }()
-
-	added := 0
-
-	for _, version := range encoded {
-		result, err := upsert.ExecContext(ctx, pipelineID, resourceName, version, next)
-		if err != nil {
-			return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
-		}
-
-		changed, err := result.RowsAffected()
-		if err == nil && changed > 0 {
-			next++
-			added++
-		}
-	}
-
-	return added, nil
-}
-
-// minReportedOrder is the lowest check_order among the versions a check just
-// reported — the floor below which pruning is safe.
-func minReportedOrder(
-	ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, encoded []string,
-) (int64, error) {
-	var lowest sql.NullInt64
-
-	err := tx.QueryRowContext(ctx,
-		`SELECT MIN(check_order) FROM resource_versions
-		 WHERE pipeline_id = ? AND resource_name = ? AND version_json IN (SELECT value FROM json_each(?))`,
-		pipelineID, resourceName, jsonList(encoded)).Scan(&lowest)
+	changed, err := result.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
 	}
 
-	if !lowest.Valid {
-		return 1<<62 - 1, nil
-	}
-
-	return lowest.Int64, nil
+	return int(changed), nil
 }
 
 // nextCheckOrder is the order to give the next newly-seen version.
@@ -199,23 +174,37 @@ func nextCheckOrder(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceN
 	return highest.Int64 + 1, nil
 }
 
-// pruneVersions drops the oldest versions beyond the cap, but never one at
-// or above floor — the currently-reported set, which is still real however
-// small the cap (see RecordVersions). The cascade takes a pruned version's
-// green record with it, so nothing is left referring to a version that no
-// longer exists.
+// pruneVersions drops the oldest versions beyond the cap, but never one at or
+// above the lowest order the check just reported. A version still in the
+// report is still real, whatever the cap says — deleting it means the next
+// poll "discovers" it again at a fresh top order, and with a cap smaller than
+// the window the table oscillates forever between halves, "latest" flipping
+// to an old version on alternate polls and every prune cascading away
+// consumed marks so jobs re-fan-out each cycle. The cap therefore bounds
+// what has scrolled AWAY, and a window larger than the cap is kept whole. The
+// cascade takes a pruned version's green record with it.
+//
+// The floor is a subquery rather than a value read first: one statement under
+// the lock instead of two. Every caller has just filed the report, so the
+// COALESCE's arm — no floor at all — is never reached.
 func pruneVersions(
-	ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, limit int, floor int64,
+	ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, limit int, reported []string,
 ) error {
 	_, err := tx.ExecContext(ctx, `
 		DELETE FROM resource_versions
-		WHERE pipeline_id = ? AND resource_name = ? AND check_order < ? AND check_order NOT IN (
-			SELECT check_order FROM resource_versions
-			WHERE pipeline_id = ? AND resource_name = ?
-			ORDER BY check_order DESC
-			LIMIT ?
-		)
-	`, pipelineID, resourceName, floor, pipelineID, resourceName, limit)
+		WHERE pipeline_id = ? AND resource_name = ?
+		  AND check_order < COALESCE((
+		      SELECT MIN(check_order) FROM resource_versions
+		      WHERE pipeline_id = ? AND resource_name = ?
+		        AND version_json IN (SELECT value FROM json_each(?))
+		  ), 4611686018427387903)
+		  AND check_order NOT IN (
+		      SELECT check_order FROM resource_versions
+		      WHERE pipeline_id = ? AND resource_name = ?
+		      ORDER BY check_order DESC
+		      LIMIT ?
+		  )
+	`, pipelineID, resourceName, pipelineID, resourceName, jsonList(reported), pipelineID, resourceName, limit)
 	if err != nil {
 		return fmt.Errorf("could not prune versions for %q: %w", resourceName, err)
 	}
@@ -239,7 +228,7 @@ func pruneVersions(
 // buys nothing. A caller that inspects fields runs DecodeVersion, which is
 // where the UseNumber that keeps an id out of exponent notation lives.
 func (s *Store) ResourceVersionsJSON(ctx context.Context, resourceName string) ([]string, error) {
-	return collect(ctx, s.db, "resource versions",
+	return collect(ctx, s.reads, "resource versions",
 		`SELECT version_json FROM resource_versions
 		 WHERE pipeline_id = ? AND resource_name = ? AND from_check = 1
 		 ORDER BY check_order`,
@@ -266,7 +255,7 @@ func (s *Store) VersionOrders(ctx context.Context, resourceName string) (map[str
 		order   int64
 	}
 
-	rows, err := collect(ctx, s.db, "the version order of "+resourceName,
+	rows, err := collect(ctx, s.reads, "the version order of "+resourceName,
 		`SELECT version_json, check_order FROM resource_versions WHERE pipeline_id = ? AND resource_name = ?`,
 		[]any{s.pipelineID, resourceName}, func(rows *sql.Rows) (ordered, error) {
 			var row ordered
@@ -365,7 +354,7 @@ func ensureVersion(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceNa
 // upstream still deploys the newest version that DID pass.
 func (s *Store) GreenVersions(ctx context.Context, resourceName string, upstreamJobs []string) ([]map[string]any, error) {
 	// Every version for which no named upstream lacks a green record: relational division, answered off job_versions' primary key.
-	encoded, err := collect(ctx, s.db, "green versions of "+resourceName, `
+	encoded, err := collect(ctx, s.reads, "green versions of "+resourceName, `
 		SELECT rv.version_json FROM resource_versions rv
 		WHERE rv.pipeline_id = ? AND rv.resource_name = ?
 		  AND NOT EXISTS (

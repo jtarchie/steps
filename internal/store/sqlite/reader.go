@@ -32,7 +32,7 @@ type Reader struct {
 // Reader returns an unscoped reader over the same file this handle is scoped
 // to. Reading through it crosses pipelines by construction, so every method
 // on it names which ones it wants.
-func (s *Store) Reader() store.Reader { return &Reader{db: s.db} }
+func (s *Store) Reader() store.Reader { return &Reader{db: s.reads} }
 
 // OpenReader opens a state file for cross-pipeline reading, with no pipeline
 // to scope to and none to become.
@@ -166,7 +166,7 @@ func OpenExisting(path, pipelineName string) (*Store, error) {
 		return nil, fmt.Errorf("could not resolve pipeline %q in %q: %w", pipelineName, path, err)
 	}
 
-	return &Store{db: reader.db, path: path, pipeline: pipelineName, pipelineID: id, readOnly: true}, nil
+	return &Store{db: reader.db, reads: reader.db, path: path, pipeline: pipelineName, pipelineID: id, readOnly: true}, nil
 }
 
 // names is the "did you mean" half of the refusal above.

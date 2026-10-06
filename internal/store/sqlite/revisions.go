@@ -91,7 +91,7 @@ func (s *Store) SetCurrentRevision(ctx context.Context, sha, from string) error 
 func (s *Store) CurrentRevision(ctx context.Context) (store.Revision, bool, error) {
 	var sha sql.NullString
 
-	err := s.db.QueryRowContext(ctx, `
+	err := s.reads.QueryRowContext(ctx, `
 		SELECT r.sha FROM pipelines p
 		JOIN pipeline_revisions r ON r.id = p.current_revision_id
 		WHERE p.id = ?
@@ -120,7 +120,7 @@ func (s *Store) FindRevision(ctx context.Context, sha string) (store.Revision, b
 		id  int64
 	)
 
-	err := s.db.QueryRowContext(ctx, `
+	err := s.reads.QueryRowContext(ctx, `
 		SELECT id, sha, source FROM pipeline_revisions
 		WHERE pipeline_id = ? AND sha = ?
 	`, s.pipelineID, sha).Scan(&id, &rev.SHA, &rev.Source)
@@ -133,7 +133,7 @@ func (s *Store) FindRevision(ctx context.Context, sha string) (store.Revision, b
 		return store.Revision{}, false, fmt.Errorf("could not read configuration %q of pipeline %q: %w", sha, s.pipeline, err)
 	}
 
-	includes, err := collect(ctx, s.db, "included files", `
+	includes, err := collect(ctx, s.reads, "included files", `
 		SELECT path, content FROM revision_includes WHERE revision_id = ?
 	`, []any{id}, func(rows *sql.Rows) ([2]string, error) {
 		var pair [2]string

@@ -38,7 +38,7 @@ func (s *Store) ForgetChain(ctx context.Context, jobName, rootHash string) error
 // HasSucceededBatch reports which of rootHashes have a prior succeeded run
 // recorded for jobName, in one round trip instead of one query per hash.
 func (s *Store) HasSucceededBatch(ctx context.Context, jobName string, rootHashes []string) (map[string]bool, error) {
-	found, err := collect(ctx, s.db, "job_runs",
+	found, err := collect(ctx, s.reads, "job_runs",
 		`SELECT root_hash FROM job_runs
 		 WHERE pipeline_id = ? AND job_name = ? AND root_hash IN (SELECT value FROM json_each(?))`,
 		[]any{s.pipelineID, jobName, jsonList(rootHashes)}, scanString)

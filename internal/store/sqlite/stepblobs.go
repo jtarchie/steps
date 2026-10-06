@@ -101,7 +101,7 @@ func pruneStepBlobs(ctx context.Context, tx *sql.Tx, pipelineID int64, keep int)
 // declared output name — empty when the key is unknown, which a caller reads
 // as an ordinary miss.
 func (s *Store) StepBlobs(ctx context.Context, actionKey string) (map[string]string, error) {
-	blobs, err := collect(ctx, s.db, "step blobs",
+	blobs, err := collect(ctx, s.reads, "step blobs",
 		`SELECT output, digest FROM step_blobs WHERE pipeline_id = ? AND action_key = ?`,
 		[]any{s.pipelineID, actionKey}, scanPair)
 	if err != nil {

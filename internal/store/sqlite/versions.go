@@ -76,7 +76,7 @@ func (s *Store) LastChecked(ctx context.Context, resourceName string) (store.Che
 		checkedAt string
 	)
 
-	err := s.db.QueryRowContext(ctx,
+	err := s.reads.QueryRowContext(ctx,
 		`SELECT resource_name, version_json, checked_at FROM resource_checks WHERE pipeline_id = ? AND resource_name = ?`,
 		s.pipelineID, resourceName,
 	).Scan(&row.Name, &row.Version, &checkedAt)
@@ -95,7 +95,7 @@ func (s *Store) LastChecked(ctx context.Context, resourceName string) (store.Che
 
 // CheckedResources lists every resource version the watcher has recorded.
 func (s *Store) CheckedResources(ctx context.Context) ([]store.CheckedResource, error) {
-	return collect(ctx, s.db, "resource checks",
+	return collect(ctx, s.reads, "resource checks",
 		`SELECT resource_name, version_json, checked_at FROM resource_checks
 		 WHERE pipeline_id = ? ORDER BY resource_name`,
 		[]any{s.pipelineID}, func(rows *sql.Rows) (store.CheckedResource, error) {
@@ -147,7 +147,7 @@ func (s *Store) RecordCheckError(ctx context.Context, resourceName, message stri
 
 // CheckErrors is every resource this pipeline cannot currently check.
 func (s *Store) CheckErrors(ctx context.Context) ([]store.CheckError, error) {
-	return collect(ctx, s.db, "resource check errors",
+	return collect(ctx, s.reads, "resource check errors",
 		`SELECT resource_name, message, failed_at FROM resource_check_errors
 		 WHERE pipeline_id = ? ORDER BY resource_name`,
 		[]any{s.pipelineID}, func(rows *sql.Rows) (store.CheckError, error) {
@@ -207,7 +207,7 @@ func (s *Store) RecordPassedVersion(ctx context.Context, jobName, resourceName, 
 // PassedVersions lists the resource versions a job has recorded as green —
 // what a downstream passed: constraint is satisfied by.
 func (s *Store) PassedVersions(ctx context.Context, jobName string, limit int) ([]store.PassedVersion, error) {
-	return collect(ctx, s.db, "job versions", `
+	return collect(ctx, s.reads, "job versions", `
 		SELECT resource_name, version_json, recorded_at
 		FROM job_versions WHERE pipeline_id = ? AND job_name = ?
 		ORDER BY recorded_at DESC, rowid DESC LIMIT ?
@@ -268,7 +268,7 @@ func (s *Store) HasPassedVersionSet(ctx context.Context, jobName string, want ma
 
 	var found int
 
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(&found)
+	err := s.reads.QueryRowContext(ctx, query, args...).Scan(&found)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -286,7 +286,7 @@ func (s *Store) HasPassedVersionSet(ctx context.Context, jobName string, want ma
 func (s *Store) ConsumedMark(ctx context.Context, jobName, resourceName string) (int64, error) {
 	var mark sql.NullInt64
 
-	err := s.db.QueryRowContext(ctx,
+	err := s.reads.QueryRowContext(ctx,
 		`SELECT check_order FROM job_version_cursor
 		 WHERE pipeline_id = ? AND job_name = ? AND resource_name = ?`,
 		s.pipelineID, jobName, resourceName).Scan(&mark)
@@ -350,7 +350,7 @@ func (s *Store) RecordRunInput(ctx context.Context, runID, inputName, resourceNa
 // Joined to runs for the pipeline, which run_inputs has no column of its own
 // for — the same shape as CompletedRunSteps, and for the same reason.
 func (s *Store) RunInputs(ctx context.Context, runID string) ([]store.RunInput, error) {
-	return collect(ctx, s.db, "the inputs of run "+runID, `
+	return collect(ctx, s.reads, "the inputs of run "+runID, `
 		SELECT i.input_name, i.resource_name, i.version_json FROM run_inputs i
 		JOIN runs r ON r.id = i.run_id
 		WHERE i.run_id = ? AND r.pipeline_id = ?
@@ -365,7 +365,7 @@ func (s *Store) RunInputs(ctx context.Context, runID string) ([]store.RunInput, 
 // input, newest first. DISTINCT because two gets of one resource in a run may
 // bind the same version, and that is one run of it, not two.
 func (s *Store) VersionRuns(ctx context.Context, resourceName string) ([]store.VersionRun, error) {
-	return collect(ctx, s.db, "the runs of resource "+resourceName, `
+	return collect(ctx, s.reads, "the runs of resource "+resourceName, `
 		SELECT i.version_json, `+runColumnsR+`
 		FROM (SELECT DISTINCT run_id, version_json FROM run_inputs WHERE resource_name = ?) i
 		JOIN runs r ON r.id = i.run_id

@@ -91,7 +91,7 @@ func (s *Store) RecordAgentUsage(ctx context.Context, usage store.AgentUsage) er
 func (s *Store) RunTokensSpent(ctx context.Context, runID string) (int, error) {
 	var total int
 
-	err := s.db.QueryRowContext(ctx,
+	err := s.reads.QueryRowContext(ctx,
 		`SELECT COALESCE(SUM(total_tokens), 0) FROM agent_usage WHERE pipeline_id = ? AND run_id = ?`,
 		s.pipelineID, runID).Scan(&total)
 	if err != nil {
@@ -103,7 +103,7 @@ func (s *Store) RunTokensSpent(ctx context.Context, runID string) (int, error) {
 
 // RunUsage is every agent step's spend for one run, in step order.
 func (s *Store) RunUsage(ctx context.Context, runID string) ([]store.AgentUsage, error) {
-	return collect(ctx, s.db, "usage for run "+runID,
+	return collect(ctx, s.reads, "usage for run "+runID,
 		`SELECT `+usageColumns+` FROM agent_usage
 		 WHERE pipeline_id = ? AND run_id = ? ORDER BY step_index, rowid`,
 		[]any{s.pipelineID, runID}, func(rows *sql.Rows) (store.AgentUsage, error) {
@@ -122,7 +122,7 @@ func (s *Store) RunUsage(ctx context.Context, runID string) ([]store.AgentUsage,
 // Unpriced counts the steps with no reported cost, so a partial dollar total
 // can be shown AS partial rather than presented as the whole bill.
 func (s *Store) RunCostTotals(ctx context.Context, limit int) ([]store.RunTotals, error) {
-	return collect(ctx, s.db, "the usage rollup", `
+	return collect(ctx, s.reads, "the usage rollup", `
 		SELECT run_id,
 		       SUM(total_tokens), SUM(cached_tokens),
 		       SUM(COALESCE(cost_usd, 0)), COUNT(*),

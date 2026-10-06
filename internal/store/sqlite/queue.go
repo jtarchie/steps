@@ -76,7 +76,7 @@ func (s *Store) QueuedTrigger(ctx context.Context, id int64) (store.QueuedTrigge
 		rerun   sql.NullString
 	)
 
-	err := s.db.QueryRowContext(ctx, `
+	err := s.reads.QueryRowContext(ctx, `
 		SELECT manual, rerun_of FROM trigger_queue WHERE id = ? AND pipeline_id = ?
 	`, id, s.pipelineID).Scan(&trigger.Manual, &rerun)
 	if err != nil {
@@ -275,7 +275,7 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 // ListTriggerQueue returns the most recent trigger-queue entries, newest
 // first — what `steps web` has queued, run, or failed to run.
 func (s *Store) ListTriggerQueue(ctx context.Context, limit int) ([]store.QueueRow, error) {
-	return collect(ctx, s.db, "trigger_queue", `
+	return collect(ctx, s.reads, "trigger_queue", `
 		SELECT id, job_name, reason, status, enqueued_at, started_at, finished_at, error
 		FROM trigger_queue
 		WHERE pipeline_id = ?
@@ -373,7 +373,7 @@ func (s *Store) SyncJobLimits(ctx context.Context, groups map[string][]string, l
 func (s *Store) SerialGroupHolder(ctx context.Context, jobName string) (string, error) {
 	var holder string
 
-	err := s.db.QueryRowContext(ctx, `
+	err := s.reads.QueryRowContext(ctx, `
 		SELECT busy.job_name
 		FROM job_serial_groups AS mine
 		JOIN job_serial_groups AS theirs

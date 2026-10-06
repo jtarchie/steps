@@ -20,27 +20,23 @@ func (s *Store) RecordJobOutcome(ctx context.Context, jobName string, succeeded 
 		return false, 0, s.ResetJobFailures(ctx, jobName)
 	}
 
+	// The count and the pause land in one statement, as in the sqlite
+	// driver: a reader between them cannot see a job at its limit and not
+	// yet held, and a failure past the limit is one round trip, not two.
 	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO job_breaker (pipeline_id, job_name, consecutive) VALUES ($1, $2, 1)
-		ON CONFLICT (pipeline_id, job_name) DO UPDATE SET consecutive = job_breaker.consecutive + 1
+		INSERT INTO job_breaker (pipeline_id, job_name, consecutive, paused_at)
+		VALUES ($1, $2, 1, CASE WHEN $3::int = 1 THEN $4::timestamptz END)
+		ON CONFLICT (pipeline_id, job_name) DO UPDATE SET
+			consecutive = job_breaker.consecutive + 1,
+			paused_at = CASE WHEN $3::int > 0 AND job_breaker.consecutive + 1 >= $3::int
+				THEN COALESCE(job_breaker.paused_at, $4::timestamptz) ELSE job_breaker.paused_at END
 		RETURNING consecutive
-	`, s.pipelineID, jobName).Scan(&consecutive)
+	`, s.pipelineID, jobName, maxFailures, now()).Scan(&consecutive)
 	if err != nil {
 		return false, 0, fmt.Errorf("could not record failure for job %q: %w", jobName, err)
 	}
 
-	if maxFailures <= 0 || consecutive < maxFailures {
-		return false, consecutive, nil
-	}
-
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE job_breaker SET paused_at = $1 WHERE pipeline_id = $2 AND job_name = $3 AND paused_at IS NULL`,
-		now(), s.pipelineID, jobName)
-	if err != nil {
-		return false, consecutive, fmt.Errorf("could not pause job %q: %w", jobName, err)
-	}
-
-	return true, consecutive, nil
+	return maxFailures > 0 && consecutive >= maxFailures, consecutive, nil
 }
 
 // ResetJobFailures clears a job's consecutive-failure count and un-pauses it.

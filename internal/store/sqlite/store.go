@@ -38,7 +38,15 @@ var _ store.Store = (*Store)(nil)
 // cannot pass the wrong one; `steps web` serving three pipelines from one file
 // holds three of these.
 type Store struct {
-	db         *sql.DB
+	db *sql.DB
+	// reads is the pool every SELECT-only method runs on, beside the single
+	// writer connection db is. Under WAL a reader never waits on a writer,
+	// but a pool of ONE made it: a listing queued behind whatever write
+	// transaction the handle was in — a prune at the end of a build, a
+	// check's thousand-row report — because the queue was the pool's, not
+	// the database's. For a handle that only resolved its pipeline
+	// (OpenExisting) it is the same pool as db.
+	reads      *sql.DB
 	path       string
 	pipeline   string
 	pipelineID int64
@@ -95,6 +103,16 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 	// Every transaction in this package is a writer, so there is no
 	// read-only transaction paying for the stricter lock.
 	//
+	// synchronous=NORMAL is the other half of choosing WAL. At the default,
+	// FULL, every commit fsyncs the log — and the event sink commits once per
+	// event, so a build paid a disk flush per line of output (measured: 98µs
+	// an append, 62µs at NORMAL). Under WAL, NORMAL syncs the log at
+	// checkpoints and before every truncation, which is enough that a crash
+	// of the process or the machine can never corrupt the database and an
+	// application crash loses nothing; only a power loss can take back the
+	// last few commits, and a build cut off that way is one ResetStaleRunning
+	// aborts at the next start anyway, with or without its final events.
+	//
 	// WAL is recorded in the database file header, so the conversion happens
 	// exactly once and every later connection's pragma is a cheap no-op. No
 	// retry loop guards the conversion: OpenStore is called once per process
@@ -118,6 +136,11 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 	// database, so this takes effect for databases steps creates; an existing one
 	// keeps its mode until it is vacuumed. That is why Close still checkpoints
 	// explicitly rather than relying on the mode alone.
+	err = createPrivate(path)
+	if err != nil {
+		return nil, err
+	}
+
 	db, err := openDB(path)
 	if err != nil {
 		return nil, err
@@ -132,7 +155,36 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 		return nil, err
 	}
 
-	return &Store{db: db, path: path, pipeline: pipelineName, pipelineID: id}, nil
+	reads, err := openReadPool(path)
+	if err != nil {
+		_ = db.Close()
+
+		return nil, err
+	}
+
+	return &Store{db: db, reads: reads, path: path, pipeline: pipelineName, pipelineID: id}, nil
+}
+
+// createPrivate makes a database that is not there yet, owner-only.
+//
+// sqlite creates a file under the process umask, 0644 on most machines, and
+// what lands in this one is not public: agent transcripts, every command's
+// output, and webhook bodies whose contents a sender chose. The mode is set
+// at creation and never again — an operator who widened it meant to — and
+// sqlite gives the -wal and -shm it creates beside the file the file's own
+// mode, so the log is as private as the database.
+func createPrivate(path string) error {
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // the path is the operator's --db
+	if err != nil {
+		return fmt.Errorf("could not create state db %q: %w", path, err)
+	}
+
+	err = file.Close()
+	if err != nil {
+		return fmt.Errorf("could not create state db %q: %w", path, err)
+	}
+
+	return nil
 }
 
 // initDB creates the schema, stamps it, and registers the pipeline under ONE
@@ -194,8 +246,26 @@ type executor interface {
 // and the same busy timeout, and the only thing it does differently is never
 // write.
 func openDB(path string) (*sql.DB, error) {
-	return openDSN(path, "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"+
-		"&_pragma=auto_vacuum(incremental)&_pragma=journal_size_limit(67108864)&_txlock=immediate")
+	return openDSN(path, "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)"+
+		"&_pragma=auto_vacuum(incremental)&_pragma=journal_size_limit(67108864)&_txlock=immediate", 1)
+}
+
+// readPoolSize bounds the reader connections one handle holds. Each is a
+// file descriptor and a page cache of its own, and a daemon holds one handle
+// per pipeline; a few is enough for a browser's parallel requests, and the
+// pool queues the rest where it used to queue everything.
+const readPoolSize = 4
+
+// openReadPool opens the connections a Store's SELECT-only methods run on.
+//
+// The reader's pragmas, since it only ever reads — and above all no
+// _txlock=immediate, which would make every statement here a writer queued
+// behind the real one, undoing the point of a second pool. WAL readers see
+// every committed transaction at the moment their statement starts, and
+// every write in this package has committed before its method returns, so a
+// read after a write through one handle sees it.
+func openReadPool(path string) (*sql.DB, error) {
+	return openDSN(path, "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", readPoolSize)
 }
 
 // openReadOnlyDB opens an existing file for a reader.
@@ -211,20 +281,23 @@ func openDB(path string) (*sql.DB, error) {
 // than failing instantly. foreign_keys stays because it costs nothing and
 // keeps every handle in this package answering the same way.
 func openReadOnlyDB(path string) (*sql.DB, error) {
-	return openDSN(path, "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+	return openDSN(path, "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", 1)
 }
 
-func openDSN(path, dsn string) (*sql.DB, error) {
+// openDSN opens a pool of at most conns connections on the file.
+//
+// The writer's pool is ONE connection: SQLite allows one writer at a time
+// whatever the pool size, so a second connection could only wait on the
+// first through busy_timeout — a sleep-and-retry loop — where the pool's
+// queue hands the connection over the moment it is free. Reads are the pool
+// that may be wider (see openReadPool).
+func openDSN(path, dsn string, conns int) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", path+dsn)
 	if err != nil {
 		return nil, fmt.Errorf("could not open state db %q: %w", path, err)
 	}
 
-	// SQLite only ever allows one writer at a time regardless of pool size, so
-	// a bigger pool adds contention for no write throughput. It also serializes
-	// `steps web --max-concurrent`'s worker goroutines onto one connection.
-	// (Revisit if reads become hot: WAL permits a separate read pool.)
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(conns)
 
 	return db, nil
 }
@@ -382,9 +455,11 @@ func (s *Store) Close() error {
 	// changed the file it was only asked to read, took the write lock a live
 	// daemon holds, and failed outright on a file with the write bit off.
 	if s.readOnly {
-		//nolint:wrapcheck // the caller names the store it was closing
-		return s.db.Close()
+		return s.Release()
 	}
+
+	// Readers first: a read transaction still open past the checkpoint below is what keeps it from truncating the log.
+	s.closeReads()
 
 	// Nothing else ever gives the planner table statistics. SQLite's own advice for a closing connection; bounded by an analysis limit, and a no-op when the tables have not changed much.
 	// ponytail: a daemon only gets fresh statistics at exit; run `PRAGMA optimize` on a timer if a long-lived plan is ever seen going stale.
@@ -403,12 +478,21 @@ func (s *Store) Close() error {
 
 // Release closes the connection without Close's reclaim, which holds the file's write lock as long as it takes: measured 31s after a destroy freed a gigabyte, with other pipelines' writes to the file failing SQLITE_BUSY.
 func (s *Store) Release() error {
+	s.closeReads()
+
 	err := s.db.Close()
 	if err != nil {
 		return fmt.Errorf("could not close state db: %w", err)
 	}
 
 	return nil
+}
+
+// closeReads lets the read pool go; a handle that resolved rather than registered its pipeline reads through its one connection, which Release closes.
+func (s *Store) closeReads() {
+	if s.reads != s.db {
+		_ = s.reads.Close()
+	}
 }
 
 // now is the timestamp format every table but runs/run_events uses.

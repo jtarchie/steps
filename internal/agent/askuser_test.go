@@ -313,6 +313,55 @@ func TestAskUserAnswerFromAnotherProcessEndsTheWait(t *testing.T) {
 	}
 }
 
+// TestAskUserAnswerInsideTheRecordWindowIsNotAMemo: the store records a
+// question and reads it back, and a person can answer between the two. That
+// row is this call's own — nothing earlier in the run asked it — so the answer
+// is the person's, not a memo hit. It read as "memo" once a wider read pool
+// made the window long enough for the test above to land in it.
+func TestAskUserAnswerInsideTheRecordWindowIsNotAMemo(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAskFixture(t)
+	fixture.env.ask.st = answeredOnRecord{questionStore: fixture.store, answer: "minor", by: "jtarchie"}
+
+	result := fixture.ask(askGrant{wait: 5 * time.Second}, "Which bump?")
+
+	if result["answer"] != "minor" || result["answered"] != true || result["source"] != "jtarchie" {
+		t.Errorf("ask answered inside the record window = %v, want the answer attributed to who gave it", result)
+	}
+}
+
+// answeredOnRecord is a store whose every question is answered by somebody
+// else before AskQuestion returns, which is the window a real answer can land
+// in.
+type answeredOnRecord struct {
+	questionStore
+	answer, by string
+}
+
+func (a answeredOnRecord) AskQuestion(ctx context.Context, question store.Question) (store.Question, bool, error) {
+	row, existing, err := a.questionStore.AskQuestion(ctx, question)
+	if err != nil {
+		return store.Question{}, false, fmt.Errorf("ask: %w", err)
+	}
+
+	if existing {
+		return row, true, nil
+	}
+
+	err = a.AnswerQuestion(ctx, row.ID, a.answer, a.by)
+	if err != nil {
+		return store.Question{}, false, fmt.Errorf("answer: %w", err)
+	}
+
+	row, err = a.QuestionStatus(ctx, row.ID)
+	if err != nil {
+		return store.Question{}, false, fmt.Errorf("read back: %w", err)
+	}
+
+	return row, false, nil
+}
+
 // TestAskUserAbandonsItsQuestionWhenTheStepEnds: an unanswerable question left
 // sitting pending forever in `steps questions` is the same class of lie as a
 // default presented as a person's decision.

@@ -25,27 +25,23 @@ func (s *Store) RecordJobOutcome(ctx context.Context, jobName string, succeeded 
 		return false, 0, s.ResetJobFailures(ctx, jobName)
 	}
 
+	// The count and the pause land in one statement, so a reader between
+	// them cannot see a job at its limit and not yet held; it was two, and
+	// the second was a separate write for every failure past the limit.
 	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO job_breaker (pipeline_id, job_name, consecutive) VALUES (?, ?, 1)
-		ON CONFLICT (pipeline_id, job_name) DO UPDATE SET consecutive = job_breaker.consecutive + 1
+		INSERT INTO job_breaker (pipeline_id, job_name, consecutive, paused_at)
+		VALUES (?, ?, 1, CASE WHEN ? = 1 THEN ? END)
+		ON CONFLICT (pipeline_id, job_name) DO UPDATE SET
+			consecutive = job_breaker.consecutive + 1,
+			paused_at = CASE WHEN ? > 0 AND job_breaker.consecutive + 1 >= ?
+				THEN COALESCE(job_breaker.paused_at, ?) ELSE job_breaker.paused_at END
 		RETURNING consecutive
-	`, s.pipelineID, jobName).Scan(&consecutive)
+	`, s.pipelineID, jobName, maxFailures, now(), maxFailures, maxFailures, now()).Scan(&consecutive)
 	if err != nil {
 		return false, 0, fmt.Errorf("could not record failure for job %q: %w", jobName, err)
 	}
 
-	if maxFailures <= 0 || consecutive < maxFailures {
-		return false, consecutive, nil
-	}
-
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE job_breaker SET paused_at = ? WHERE pipeline_id = ? AND job_name = ? AND paused_at IS NULL`,
-		now(), s.pipelineID, jobName)
-	if err != nil {
-		return false, consecutive, fmt.Errorf("could not pause job %q: %w", jobName, err)
-	}
-
-	return true, consecutive, nil
+	return maxFailures > 0 && consecutive >= maxFailures, consecutive, nil
 }
 
 // ResetJobFailures clears a job's consecutive-failure count and un-pauses it.
@@ -67,7 +63,7 @@ func (s *Store) ResetJobFailures(ctx context.Context, jobName string) error {
 func (s *Store) IsJobPaused(ctx context.Context, jobName string) (bool, error) {
 	var pausedAt sql.NullString
 
-	err := s.db.QueryRowContext(ctx,
+	err := s.reads.QueryRowContext(ctx,
 		`SELECT paused_at FROM job_breaker WHERE pipeline_id = ? AND job_name = ?`,
 		s.pipelineID, jobName).Scan(&pausedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -85,7 +81,7 @@ func (s *Store) IsJobPaused(ctx context.Context, jobName string) (bool, error) {
 // first. It backs `steps jobs`, which is how an operator finds out a nightly
 // job stopped without reading a weekend of logs.
 func (s *Store) PausedJobs(ctx context.Context) ([]store.PausedJob, error) {
-	return collect(ctx, s.db, "paused jobs",
+	return collect(ctx, s.reads, "paused jobs",
 		`SELECT job_name, consecutive, paused_at FROM job_breaker
 		 WHERE pipeline_id = ? AND paused_at IS NOT NULL ORDER BY paused_at, rowid`,
 		[]any{s.pipelineID}, func(rows *sql.Rows) (store.PausedJob, error) {

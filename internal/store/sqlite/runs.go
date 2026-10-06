@@ -211,7 +211,7 @@ func (s *Store) CompletedRunSteps(ctx context.Context, runID string) ([]store.Ru
 	// defense in depth — but the rule is categorical, and an unscoped read
 	// here would hand one run another's completed steps and --resume would
 	// skip work it never did.
-	return collect(ctx, s.db, "the steps of run "+runID,
+	return collect(ctx, s.reads, "the steps of run "+runID,
 		`SELECT s.build_id, s.step_index, s.step_name FROM run_steps s
 		 JOIN runs r ON r.id = s.run_id
 		 WHERE s.run_id = ? AND r.pipeline_id = ?
@@ -228,7 +228,7 @@ func (s *Store) CompletedRunSteps(ctx context.Context, runID string) ([]store.Ru
 func (s *Store) ListRuns(ctx context.Context, jobName string, limit int) ([]store.RunRow, error) {
 	filter, args := byJob(jobName, []any{s.pipelineID})
 
-	return collect(ctx, s.db, "runs", `
+	return collect(ctx, s.reads, "runs", `
 		SELECT `+runColumns+`
 		FROM runs
 		WHERE pipeline_id = ?`+filter+`
@@ -245,7 +245,7 @@ func (s *Store) ListRuns(ctx context.Context, jobName string, limit int) ([]stor
 // build must not turn a job that is red today green.
 func (s *Store) LatestRunByJob(ctx context.Context) (map[string]store.RunRow, error) {
 	// Ties broken by rowid, as ListRuns breaks them, so the jobs board and a job's history agree on which run is latest.
-	rows, err := collect(ctx, s.db, "latest runs", `
+	rows, err := collect(ctx, s.reads, "latest runs", `
 		SELECT `+runColumns+` FROM (
 		    SELECT *, ROW_NUMBER() OVER (PARTITION BY job_name ORDER BY started_at DESC, rowid DESC) AS recency
 		    FROM runs
@@ -273,7 +273,7 @@ func (s *Store) LatestRunByJob(ctx context.Context) (map[string]store.RunRow, er
 // RunsUsingNode lists the runs whose events reference a node hash — the
 // "which runs reused this cached step" answer a node page is built on.
 func (s *Store) RunsUsingNode(ctx context.Context, hash string, limit int) ([]store.RunRow, error) {
-	return collect(ctx, s.db, "runs using node", `
+	return collect(ctx, s.reads, "runs using node", `
 		SELECT `+runColumnsR+`
 		FROM runs r
 		WHERE r.pipeline_id = ?
@@ -317,7 +317,7 @@ func (s *Store) FirstRunSince(ctx context.Context, jobName string, since time.Ti
 // oneRun reads a single RunRow, reporting ok=false rather than an error when
 // there is none — both callers want "not yet" to be an ordinary answer.
 func (s *Store) oneRun(ctx context.Context, query, what string, args ...any) (store.RunRow, bool, error) {
-	row, err := scanRunRow(s.db.QueryRowContext(ctx, query, args...))
+	row, err := scanRunRow(s.reads.QueryRowContext(ctx, query, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.RunRow{}, false, nil
 	}

@@ -92,12 +92,7 @@ func (s *Store) pruneAfterDelivery(ctx context.Context, tx *sql.Tx, resourceName
 		return nil
 	}
 
-	floor, err := minReportedOrder(ctx, tx, s.pipelineID, resourceName, []string{encoded})
-	if err != nil {
-		return err
-	}
-
-	return pruneVersions(ctx, tx, s.pipelineID, resourceName, limit, floor)
+	return pruneVersions(ctx, tx, s.pipelineID, resourceName, limit, []string{encoded})
 }
 
 // Delivery reads back the payload recorded with a version.
@@ -107,7 +102,7 @@ func (s *Store) Delivery(ctx context.Context, resourceName, versionJSON string) 
 		headers string
 	)
 
-	err := s.db.QueryRowContext(ctx, `
+	err := s.reads.QueryRowContext(ctx, `
 		SELECT body, headers_json FROM webhook_deliveries
 		WHERE pipeline_id = ? AND resource_name = ? AND version_json = ?
 	`, s.pipelineID, resourceName, versionJSON).Scan(&body, &headers)

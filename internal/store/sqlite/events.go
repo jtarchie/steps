@@ -36,11 +36,13 @@ func (s *Store) AppendRunEvent(ctx context.Context, row store.RunEventRow) error
 }
 
 // DeleteStepEvents removes a step's events of one type. Called from the sink goroutine ahead of the record that replaces them, so the two never interleave with a chunk still queued.
+//
+// Scoped by EXISTS on the one run rather than IN over the pipeline's runs: this runs once per step output, and the IN form built the pipeline's whole run list to answer for one id.
 func (s *Store) DeleteStepEvents(ctx context.Context, runID string, stepID int64, eventType string) error {
 	_, err := s.db.ExecContext(ctx, `
 		DELETE FROM run_events
 		WHERE run_id = ? AND step_id = ? AND type = ?
-		  AND run_id IN (SELECT id FROM runs WHERE pipeline_id = ?)
+		  AND EXISTS (SELECT 1 FROM runs WHERE id = run_events.run_id AND pipeline_id = ?)
 	`, runID, stepID, eventType, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not delete %s events of step %d in %q: %w", eventType, stepID, runID, err)
@@ -58,7 +60,7 @@ func (s *Store) DeleteStepEvents(ctx context.Context, runID string, stepID int64
 // id another pipeline minted must read as nothing here rather than as that
 // pipeline's events.
 func (s *Store) RunEvents(ctx context.Context, runID string, afterSeq int64, limit int) ([]store.RunEventRow, error) {
-	return collect(ctx, s.db, "run events", `
+	return collect(ctx, s.reads, "run events", `
 		SELECT e.seq, e.run_id, e.type, e.step_index, e.step_name, e.step_kind,
 		       e.step_id, e.parent_step_id,
 		       e.status, e.hash, e.text, e.name, e.detail, e.duration_ms, e.worker, e.created_at

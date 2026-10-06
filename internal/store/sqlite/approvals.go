@@ -54,7 +54,7 @@ func (s *Store) DecideApproval(ctx context.Context, id int64, status, by, reason
 func (s *Store) ApprovalStatus(ctx context.Context, id int64) (store.Approval, error) {
 	var approval store.Approval
 
-	err := s.db.QueryRowContext(ctx, `
+	err := s.reads.QueryRowContext(ctx, `
 		SELECT id, job_name, message, status, requested_at,
 		       COALESCE(decided_at, ''), COALESCE(decided_by, ''), COALESCE(reason, '')
 		FROM approvals WHERE id = ? AND pipeline_id = ?
@@ -81,7 +81,7 @@ func (s *Store) Approvals(ctx context.Context, pendingOnly bool, limit int) ([]s
 		where, order, what = ``, `id DESC`, "approvals"
 	}
 
-	return collect(ctx, s.db, what, `
+	return collect(ctx, s.reads, what, `
 		SELECT id, job_name, message, status, requested_at,
 		       COALESCE(decided_at, ''), COALESCE(decided_by, ''), COALESCE(reason, '')
 		FROM approvals WHERE pipeline_id = ? `+where+`

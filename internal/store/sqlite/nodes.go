@@ -119,7 +119,7 @@ func nullable(value string) any {
 func (s *Store) HasNodeSucceeded(ctx context.Context, jobName, hash string) (bool, error) {
 	var count int
 
-	err := s.db.QueryRowContext(ctx,
+	err := s.reads.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM nodes WHERE pipeline_id = ? AND hash = ? AND job_name = ? AND status = 'succeeded'`,
 		s.pipelineID, hash, jobName).Scan(&count)
 	if err != nil {
@@ -134,7 +134,7 @@ func (s *Store) HasNodeSucceeded(ctx context.Context, jobName, hash string) (boo
 func (s *Store) ListNodes(ctx context.Context, jobName string, limit int) ([]store.NodeRow, error) {
 	filter, args := byJob(jobName, []any{s.pipelineID})
 
-	return collect(ctx, s.db, "nodes", `
+	return collect(ctx, s.reads, "nodes", `
 		SELECT hash, kind, job_name, resource, step_index, status, error, result, created_at
 		FROM nodes
 		WHERE pipeline_id = ?`+filter+`
@@ -168,7 +168,7 @@ func (s *Store) NodesByHash(ctx context.Context, hashes []string) (map[string]st
 	// The join is what interning costs on the read side, and this is the only
 	// read that pays it: content is display-only (the node-detail page), while
 	// the list queries and every cache lookup never select it.
-	rows, err := collect(ctx, s.db, "nodes by hash", `
+	rows, err := collect(ctx, s.reads, "nodes by hash", `
 		SELECT n.hash, n.kind, n.job_name, n.resource, n.step_index, n.status, n.error, n.result,
 		       n.created_at, c.content, COALESCE(n.parent_hash, '')
 		FROM nodes n
@@ -312,7 +312,7 @@ func (s *Store) SaveNodeTranscript(ctx context.Context, hash, transcript string)
 func (s *Store) NodeTranscript(ctx context.Context, hash string) (string, bool, error) {
 	var transcript string
 
-	err := s.db.QueryRowContext(ctx,
+	err := s.reads.QueryRowContext(ctx,
 		`SELECT transcript FROM node_transcripts WHERE pipeline_id = ? AND hash = ?`,
 		s.pipelineID, hash).Scan(&transcript)
 	if errors.Is(err, sql.ErrNoRows) {

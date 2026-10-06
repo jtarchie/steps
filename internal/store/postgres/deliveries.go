@@ -94,12 +94,7 @@ func pruneAfterDelivery(ctx context.Context, tx *sql.Tx, pipelineID int64, resou
 		return nil
 	}
 
-	floor, err := minReportedOrder(ctx, tx, pipelineID, resourceName, []string{encoded})
-	if err != nil {
-		return err
-	}
-
-	return pruneVersions(ctx, tx, pipelineID, resourceName, limit, floor)
+	return pruneVersions(ctx, tx, pipelineID, resourceName, limit, []string{encoded})
 }
 
 // Delivery reads back the payload recorded with a version.

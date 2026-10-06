@@ -122,7 +122,7 @@ func (s *Store) closeQuestion(ctx context.Context, id int64, status, answer, by 
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE questions SET status = ?, answered_at = ?, answered_by = ?, answer = ?
 		WHERE id = ? AND status = 'pending'
-		  AND run_id IN (SELECT id FROM runs WHERE pipeline_id = ?)
+		  AND EXISTS (SELECT 1 FROM runs WHERE id = questions.run_id AND pipeline_id = ?)
 	`, status, nowNano(), by, nullable(answer), id, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not resolve question %d: %w", id, err)
@@ -142,7 +142,7 @@ func (s *Store) closeQuestion(ctx context.Context, id int64, status, answer, by 
 
 // QuestionStatus reads one question's current state.
 func (s *Store) QuestionStatus(ctx context.Context, id int64) (store.Question, error) {
-	question, err := s.scanQuestion(s.db.QueryRowContext(ctx, questionColumns+`
+	question, err := s.scanQuestion(s.reads.QueryRowContext(ctx, questionColumns+`
 		WHERE q.id = ? AND r.pipeline_id = ?
 	`, id, s.pipelineID))
 	if err != nil {
@@ -155,7 +155,7 @@ func (s *Store) QuestionStatus(ctx context.Context, id int64) (store.Question, e
 // questionByMemo reads back the row a memo key resolved to, which is the one
 // AskQuestion just inserted or the one that beat it there.
 func (s *Store) questionByMemo(ctx context.Context, runID, memoKey string) (store.Question, error) {
-	question, err := s.scanQuestion(s.db.QueryRowContext(ctx, questionColumns+`
+	question, err := s.scanQuestion(s.reads.QueryRowContext(ctx, questionColumns+`
 		WHERE q.run_id = ? AND q.memo_key = ? AND r.pipeline_id = ?
 	`, runID, memoKey, s.pipelineID))
 	if err != nil {
@@ -183,7 +183,7 @@ func (s *Store) Questions(ctx context.Context, pendingOnly bool, limit int) ([]s
 		where, order, what = `1 = 1`, `(q.status = 'pending') DESC, q.id DESC`, "questions"
 	}
 
-	return collect(ctx, s.db, what, questionColumns+`
+	return collect(ctx, s.reads, what, questionColumns+`
 		WHERE `+where+` AND r.pipeline_id = ?
 		ORDER BY `+order+` LIMIT ?
 	`, []any{s.pipelineID, rowLimit(limit)}, func(rows *sql.Rows) (store.Question, error) {

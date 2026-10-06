@@ -81,7 +81,7 @@ func (s *Store) closeQuestion(ctx context.Context, id int64, status, answer, by 
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE questions SET status = $1, answered_at = $2, answered_by = $3, answer = $4
 		WHERE id = $5 AND status = 'pending'
-		  AND run_id IN (SELECT id FROM runs WHERE pipeline_id = $6)
+		  AND EXISTS (SELECT 1 FROM runs WHERE id = questions.run_id AND pipeline_id = $6)
 	`, status, now(), clean(by), nullable(answer), id, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not resolve question %d: %w", id, err)

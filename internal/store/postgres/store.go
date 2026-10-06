@@ -159,6 +159,13 @@ func connConfig(rawURL string) (*pgx.ConnConfig, string, error) {
 	// here compares them against.
 	config.RuntimeParams["TimeZone"] = "UTC"
 
+	// What pg_stat_activity and the lock views call these sessions, so an
+	// operator reading who holds a pipeline's advisory lock sees steps and
+	// not a bare backend. A url that names one keeps it.
+	if config.RuntimeParams["application_name"] == "" {
+		config.RuntimeParams["application_name"] = "steps"
+	}
+
 	// pgx waits forever by default, and the event sink and Close run on a
 	// context nobody cancels: a blackholed host would hang the open for good.
 	if config.ConnectTimeout == 0 {

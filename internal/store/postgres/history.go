@@ -42,12 +42,7 @@ func (s *Store) RecordVersions(ctx context.Context, resourceName string, version
 			return nil
 		}
 
-		floor, err := minReportedOrder(ctx, tx, s.pipelineID, resourceName, encoded)
-		if err != nil {
-			return err
-		}
-
-		return pruneVersions(ctx, tx, s.pipelineID, resourceName, limit, floor)
+		return pruneVersions(ctx, tx, s.pipelineID, resourceName, limit, encoded)
 	})
 	if err != nil {
 		return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
@@ -121,38 +116,25 @@ func insertNewVersions(ctx context.Context, tx *sql.Tx, pipelineID int64, resour
 	return int(changed), nil
 }
 
-// minReportedOrder is the lowest check_order among the versions a check just
-// reported — the floor below which pruning is safe.
-func minReportedOrder(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, encoded []string) (int64, error) {
-	var lowest sql.NullInt64
-
-	err := tx.QueryRowContext(ctx,
-		`SELECT MIN(check_order) FROM resource_versions
-		 WHERE pipeline_id = $1 AND resource_name = $2 AND version_json = ANY($3::text[])`,
-		pipelineID, resourceName, textArray(encoded)).Scan(&lowest)
-	if err != nil {
-		return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
-	}
-
-	if !lowest.Valid {
-		return 1<<62 - 1, nil
-	}
-
-	return lowest.Int64, nil
-}
-
 // pruneVersions drops the oldest versions beyond the cap, never one at or
-// above floor.
-func pruneVersions(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, limit int, floor int64) error {
+// above the lowest order the check just reported — the floor is a subquery,
+// so it is one statement under the lock rather than two. Every caller has
+// just filed the report, so the COALESCE's arm is never reached.
+func pruneVersions(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, limit int, reported []string) error {
 	_, err := tx.ExecContext(ctx, `
 		DELETE FROM resource_versions
-		WHERE pipeline_id = $1 AND resource_name = $2 AND check_order < $3 AND check_order NOT IN (
-			SELECT check_order FROM resource_versions
-			WHERE pipeline_id = $1 AND resource_name = $2
-			ORDER BY check_order DESC
-			LIMIT $4
-		)
-	`, pipelineID, resourceName, floor, limit)
+		WHERE pipeline_id = $1 AND resource_name = $2
+		  AND check_order < COALESCE((
+		      SELECT MIN(check_order) FROM resource_versions
+		      WHERE pipeline_id = $1 AND resource_name = $2 AND version_json = ANY($3::text[])
+		  ), 4611686018427387903)
+		  AND check_order NOT IN (
+		      SELECT check_order FROM resource_versions
+		      WHERE pipeline_id = $1 AND resource_name = $2
+		      ORDER BY check_order DESC
+		      LIMIT $4
+		  )
+	`, pipelineID, resourceName, textArray(reported), limit)
 	if err != nil {
 		return fmt.Errorf("could not prune versions for %q: %w", resourceName, err)
 	}
