@@ -2,10 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // fakeRunInputs is the Versions facet reduced to the one read a resume makes.
@@ -137,5 +139,61 @@ func TestBuildFinished(t *testing.T) {
 		if got := buildFinished(done, "R#0", tc.needed); got != tc.want {
 			t.Errorf("%s: buildFinished = %v, want %v", name, got, tc.want)
 		}
+	}
+}
+
+// TestRefuseMissingWorkspaceOnlyWhenSomethingWasKept: a resume is refused for a gone tree only when this build kept a step from it and the run named one.
+func TestRefuseMissingWorkspaceOnlyWhenSomethingWasKept(t *testing.T) {
+	t.Parallel()
+
+	present := t.TempDir()
+	gone := filepath.Join(present, "gone")
+	kept := map[doneKey]string{{"R#0", 1}: "change"}
+	elsewhere := map[doneKey]string{{"R#1", 1}: "change"}
+
+	for name, tc := range map[string]struct {
+		root    string
+		done    map[doneKey]string
+		refused bool
+	}{
+		"kept, tree gone":              {gone, kept, true},
+		"kept, tree present":           {present, kept, false},
+		"kept, no tree recorded":       {"", kept, false},
+		"nothing kept, tree gone":      {gone, elsewhere, false},
+		"nothing kept, nothing at all": {gone, nil, false},
+	} {
+		err := refuseMissingWorkspace("R", tc.root, tc.done, "R#0")
+		if (err != nil) != tc.refused {
+			t.Errorf("%s: refuseMissingWorkspace = %v, want refused=%v", name, err, tc.refused)
+		}
+	}
+}
+
+// TestResumeJobNameIsTheRecordedRunsJob is what lets `--resume <id>` name no job.
+func TestResumeJobNameIsTheRecordedRunsJob(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	st, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = st.Close() })
+
+	err = st.StartRun(ctx, "R", "deploy", t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	name, err := ResumeJobName(ctx, st, "R")
+	if err != nil || name != "deploy" {
+		t.Errorf("ResumeJobName = %q, %v; want deploy", name, err)
+	}
+
+	_, err = ResumeJobName(ctx, st, "missing")
+	if err == nil {
+		t.Error("ResumeJobName found a job for a run that was never recorded")
 	}
 }

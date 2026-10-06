@@ -307,3 +307,23 @@ func TestScopedCellSpendStillReachesTheJob(t *testing.T) {
 		t.Errorf("job total = %d, want 1200: a cell's spend must reach the job accumulator exactly once", got)
 	}
 }
+
+// TestBlockBudgetReportNamesWhatAdmissionWeighed: the stop line carries spend AND the reservations still standing, grouped in thousands, since "0 of 3,600,000" would name a number that had no part in the decision.
+func TestBlockBudgetReportNamesWhatAdmissionWeighed(t *testing.T) {
+	t.Parallel()
+
+	budget, usage := newTestBlockBudget(t, 3_600_000, 1_200_000)
+	if !budget.admit() {
+		t.Fatal("first cell refused against an untouched allowance")
+	}
+
+	usage.Add(agent.StepUsage{Total: 1_234_567})
+
+	ctx, printed := plainOutput(t)
+	budget.report(ctx, "j", 1, 6)
+
+	want := "budget: across stopped after 1 of 6 cells (2,434,567 of 3,600,000 tokens committed: 1,234,567 spent, 1,200,000 reserved by cells still running)"
+	if got := printed(); !strings.Contains(got, want) {
+		t.Errorf("printed %q, want it to contain %q", got, want)
+	}
+}

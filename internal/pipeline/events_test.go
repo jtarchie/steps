@@ -328,6 +328,30 @@ jobs:
 	}
 }
 
+// TestAssertedTaskPublishesBothStreams: a task judged by assert: captures its streams rather than streaming them, and publishes stdout then stderr as one block, one line apart.
+func TestAssertedTaskPublishesBothStreams(t *testing.T) {
+	t.Parallel()
+
+	collected := runFixturePipeline(t, `
+jobs:
+- name: build
+  plan:
+  - task: both
+    run: echo out; echo err >&2
+    assert: { code: 0 }
+  - task: errs
+    run: echo err >&2
+    assert: { code: 0 }
+`, false)
+
+	for name, want := range map[string]string{"both": "out\nerr", "errs": "err"} {
+		event := findStepEvent(collected, events.TypeStepOutput, "task", name)
+		if event == nil || event.Text != want {
+			t.Errorf("%s published %+v, want text %q", name, event, want)
+		}
+	}
+}
+
 // runFixturePipeline runs a one-off pipeline and returns everything it
 // published. wantFailure says which outcome the fixture is written to produce,
 // so a fixture that stops failing (or starts) is caught rather than silently
