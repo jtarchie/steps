@@ -107,6 +107,13 @@ func (c *Channel) awaitConnected(ctx context.Context) error {
 	case <-c.connected:
 		return nil
 	case <-c.stop:
+		// A select picks either ready case, and a relay that confirms and ends at once readies both: confirmed is confirmed, and Read drains what arrived before the end.
+		select {
+		case <-c.connected:
+			return nil
+		default:
+		}
+
 		return fmt.Errorf("%w: %w", errConnect, c.err())
 	case <-ctx.Done():
 		return fmt.Errorf("%w: %w", errConnect, ctx.Err())

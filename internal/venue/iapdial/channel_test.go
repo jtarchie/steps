@@ -704,3 +704,19 @@ func TestConnectURLCarriesTheTarget(t *testing.T) {
 		}
 	}
 }
+
+// A relay that confirms and then ends at once (a short session, or a 4003 right after the sid) leaves both channels ready when Open looks: a select picks either, so half of those sessions read as never confirmed and lost what they had already delivered.
+func TestAConfirmedSessionThatAlreadyEndedStillOpens(t *testing.T) {
+	t.Parallel()
+
+	for range 200 {
+		channel := &Channel{connected: make(chan struct{}), stop: make(chan struct{})}
+		close(channel.connected)
+		close(channel.stop)
+
+		err := channel.awaitConnected(context.Background())
+		if err != nil {
+			t.Fatalf("awaitConnected = %v, want the confirmation to win over the end that followed it", err)
+		}
+	}
+}

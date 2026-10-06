@@ -751,3 +751,19 @@ func TestChannelKeepsFlowingPastAPayloadItDrops(t *testing.T) {
 		t.Errorf("read %q, want the bytes after the dropped payload to arrive", got)
 	}
 }
+
+// An agent that completes the handshake and ends at once leaves both channels ready when Open looks: a select picks either, so half of those sessions read as never handshaked and lost what they had already delivered.
+func TestAHandshakedSessionThatAlreadyEndedStillOpens(t *testing.T) {
+	t.Parallel()
+
+	for range 200 {
+		channel := &Channel{handshaked: make(chan struct{}), stop: make(chan struct{})}
+		close(channel.handshaked)
+		close(channel.stop)
+
+		err := channel.awaitHandshake(context.Background())
+		if err != nil {
+			t.Fatalf("awaitHandshake = %v, want the handshake to win over the end that followed it", err)
+		}
+	}
+}

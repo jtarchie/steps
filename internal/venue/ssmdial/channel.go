@@ -178,6 +178,13 @@ func (c *Channel) awaitHandshake(ctx context.Context) error {
 	case <-c.handshaked:
 		return nil
 	case <-c.stop:
+		// A select picks either ready case, and an agent that handshakes and ends at once readies both: handshaked is handshaked, and Read drains what arrived before the end.
+		select {
+		case <-c.handshaked:
+			return nil
+		default:
+		}
+
 		return fmt.Errorf("%w: %w", errHandshake, c.err())
 	case <-ctx.Done():
 		return fmt.Errorf("%w: %w", errHandshake, ctx.Err())
