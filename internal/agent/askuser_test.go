@@ -931,3 +931,24 @@ func TestAnswerFlagsNameTheDatabaseOnlyWhenTold(t *testing.T) {
 		t.Errorf("with a local run's database, AnswerFlags = %q, want it named", got)
 	}
 }
+
+// TestAskUserReadsOptionsAsTheModelSendsThem: through JSON the options arrive as []any, and a blank entry is a choice nobody can type — recorded, it would also let options_required pass a question that offered nothing real.
+func TestAskUserReadsOptionsAsTheModelSendsThem(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAskFixture(t)
+
+	impatient("staging").ask(fixture.ctx, map[string]any{
+		askUserQuestionArg: "Which environment?",
+		askUserOptionsArg:  []any{"staging", "", 7, "prod"},
+	}, fixture.env)
+
+	recorded, err := fixture.store.QuestionStatus(fixture.ctx, 1)
+	if err != nil {
+		t.Fatalf("QuestionStatus: %v", err)
+	}
+
+	if strings.Join(recorded.Options, "|") != "staging|prod" {
+		t.Errorf("recorded options = %q, want only the two real choices", recorded.Options)
+	}
+}

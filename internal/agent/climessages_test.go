@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/config"
 )
 
 // recordingCLI puts a fake CLI on PATH that appends each invocation's stdin to
@@ -189,6 +191,26 @@ func TestCLIAttemptPromptDoesNotConsumeTheMessage(t *testing.T) {
 	second := cliAttemptPrompt(true, true, 1, state, prepared)
 	if !strings.Contains(second, "Name the line.") {
 		t.Errorf("the retry asked %q — the message was consumed by composing the first prompt, so the child is told to continue something it never got", second)
+	}
+}
+
+// TestCLIRetryPromptAlsoNamesWhatIsOwed: a retry that owes a tool call is told both that it died and what it still owes, and one that owes nothing is told exactly the continuation.
+func TestCLIRetryPromptAlsoNamesWhatIsOwed(t *testing.T) {
+	t.Parallel()
+
+	prepared := cliPrepared(t, nil)
+	state := newCLIStepState()
+	continuation := cliContinuationPrompt(state, prepared)
+
+	if got := cliAttemptPrompt(true, true, 0, state, prepared); got != continuation {
+		t.Errorf("retry owing nothing = %q, want exactly %q", got, continuation)
+	}
+
+	prepared.conv.expect = stepExpectation{nudge: true, toolCalls: []config.ExpectedToolCall{{Name: "publish"}}}
+
+	got := cliAttemptPrompt(true, true, 0, state, prepared)
+	if !strings.HasPrefix(got, continuation) || !strings.Contains(got, "publish") {
+		t.Errorf("retry owing a tool call = %q, want the continuation followed by the owed call", got)
 	}
 }
 

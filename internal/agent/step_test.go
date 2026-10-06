@@ -11,6 +11,8 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/merkle"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -59,6 +61,34 @@ func captured() (context.Context, *strings.Builder) {
 	var out strings.Builder
 
 	return events.WithOutput(context.Background(), events.Output{Stdout: &out}), &out
+}
+
+// TestReuseAgentStepRecordsNothingOnAMiss: a miss means the step is about to run, and recording it succeeded first shows it green for its whole run — and leaves it green if the process dies mid-conversation.
+func TestReuseAgentStepRecordsNothingOnAMiss(t *testing.T) {
+	t.Parallel()
+
+	st, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	t.Cleanup(func() { _ = st.Close() })
+
+	node := merkle.Node{Hash: "agent-node", Kind: merkle.NodeKindAgent}
+
+	cached, _, err := reuseAgentStep(t.Context(), &config.Config{}, preparedAgentStep{step: config.Step{Agent: "writer"}}, nil, nil, st, node, "build", "writer")
+	if err != nil || cached.Hit {
+		t.Fatalf("reuseAgentStep = %+v, %v; want a plain miss", cached, err)
+	}
+
+	succeeded, err := st.HasNodeSucceeded(t.Context(), "build", node.Hash)
+	if err != nil {
+		t.Fatalf("HasNodeSucceeded: %v", err)
+	}
+
+	if succeeded {
+		t.Error("a step that missed the cache was recorded as succeeded before it ran")
+	}
 }
 
 func TestNewToolOutputSpillDir(t *testing.T) {

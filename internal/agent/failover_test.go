@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -426,5 +427,29 @@ func TestSelectedSourceIndexSurvivesDuplicateSources(t *testing.T) {
 
 	if selection.index != 1 {
 		t.Errorf("selection index = %d, want 1 — a value scan would have reported 0 and re-tried the dead source", selection.index)
+	}
+}
+
+// TestFallbackIsAnnouncedOnlyWhenTheServingSourceDiffers: the same model name served from somewhere else is still a fallback, and a step on its configured source says nothing about one.
+func TestFallbackIsAnnouncedOnlyWhenTheServingSourceDiffers(t *testing.T) {
+	t.Parallel()
+
+	primary := config.ResolvedInvocation{ModelName: "big-model", BaseURL: "https://primary.example/v1/"}
+
+	ctx, out := captured()
+	noteFallback(ctx, "writer", preparedAgentStep{ri: primary, primary: primary})
+
+	if out.Len() != 0 {
+		t.Errorf("a step on its configured source said %q", out.String())
+	}
+
+	elsewhere := primary
+	elsewhere.BaseURL = "https://backup.example/v1/"
+
+	ctx, out = captured()
+	noteFallback(ctx, "writer", preparedAgentStep{ri: elsewhere, primary: primary})
+
+	if !strings.Contains(out.String(), "agent: writer (fallback: big-model — big-model is unavailable)") {
+		t.Errorf("a step served by another endpoint said %q, want the fallback named", out.String())
 	}
 }

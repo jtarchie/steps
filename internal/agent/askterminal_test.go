@@ -2,8 +2,12 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestTerminalPrompterIsAbsentWithoutATerminal is the fence that decides
@@ -82,5 +86,40 @@ func TestLockTerminalGivesUpWhenItsQuestionIs(t *testing.T) {
 	case <-released:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the terminal stayed claimed by a prompt that gave up")
+	}
+}
+
+// TestPromptOnTerminalTakesWhatWasTyped: the one path a typed answer travels, from the reader to the waiting question. Blank lines are a person pressing enter, not an answer, and the reader has to stop at the end of its input rather than after its first line.
+func TestPromptOnTerminalTakesWhatWasTyped(t *testing.T) {
+	terminalReader.once.Do(func() { terminalReader.lines = make(chan string) })
+
+	finished := make(chan struct{})
+
+	go func() {
+		defer close(finished)
+
+		readTerminalLines(strings.NewReader("\n   \n  staging  \n"), terminalReader.lines)
+	}()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	var out strings.Builder
+
+	ctx = events.WithOutput(ctx, events.Output{Stdout: &out})
+
+	answer, ok := promptOnTerminal(ctx, store.Question{ID: 3})
+	if !ok || answer != "staging" {
+		t.Errorf("promptOnTerminal = %q, %v; want the typed line, trimmed", answer, ok)
+	}
+
+	if !strings.Contains(out.String(), "question 3> ") {
+		t.Errorf("prompt = %q, want the question's id shown to whoever is typing", out.String())
+	}
+
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reader did not stop at the end of its input")
 	}
 }

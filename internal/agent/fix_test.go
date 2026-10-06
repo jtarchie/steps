@@ -3,6 +3,11 @@ package agent
 // What a fix: agent is actually asked.
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -73,5 +78,33 @@ func TestFixWithNoMessagesIsOneTurn(t *testing.T) {
 
 	if !strings.Contains(messages[0], "build") || !strings.Contains(messages[0], "boom") {
 		t.Errorf("turn = %q, want the default prompt naming the task and carrying the failure", messages[0])
+	}
+}
+
+// TestRunFixLeavesNoSpillDirInTheTask: the fix agent works in the failed task's own directory, which the task re-runs in and captures from, so the agent's scratch output must be gone when it returns.
+func TestRunFixLeavesNoSpillDirInTheTask(t *testing.T) {
+	t.Parallel()
+
+	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"fix","object":"chat.completion","model":"m",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"fixed"},"finish_reason":"stop"}]}`)
+	}))
+	t.Cleanup(llm.Close)
+
+	cfg := &config.Config{Agents: []config.Agent{{Name: "fixer", Source: config.AgentSource{Model: "test-model", Endpoint: llm.URL + "/v1/"}}}}
+	task := config.ResolvedTask{Name: "build", Run: "true", Fix: &config.FixSpec{Agent: "fixer"}}
+	dir := t.TempDir()
+
+	ctx, _ := captured()
+
+	err := RunFix(ctx, cfg, "job", 0, task, nil, "boom", dir)
+	if err != nil {
+		t.Fatalf("RunFix: %v", err)
+	}
+
+	_, err = os.Stat(filepath.Join(dir, toolOutputSpillDirName))
+	if !os.IsNotExist(err) {
+		t.Errorf("the fix agent's spill dir is still in the task's directory (stat: %v)", err)
 	}
 }

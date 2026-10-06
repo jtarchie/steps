@@ -15,6 +15,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -78,25 +79,28 @@ func terminalLines() <-chan string {
 	terminalReader.once.Do(func() {
 		terminalReader.lines = make(chan string)
 
-		go func() {
-			reader := bufio.NewReader(os.Stdin)
-
-			for {
-				line, err := reader.ReadString('\n')
-
-				answer := strings.TrimSpace(line)
-				if answer != "" {
-					terminalReader.lines <- answer
-				}
-
-				if err != nil {
-					return
-				}
-			}
-		}()
+		go readTerminalLines(os.Stdin, terminalReader.lines)
 	})
 
 	return terminalReader.lines
+}
+
+// readTerminalLines delivers each non-blank line of r, trimmed, until r ends.
+func readTerminalLines(r io.Reader, lines chan<- string) {
+	reader := bufio.NewReader(r)
+
+	for {
+		line, err := reader.ReadString('\n')
+
+		answer := strings.TrimSpace(line)
+		if answer != "" {
+			lines <- answer
+		}
+
+		if err != nil {
+			return
+		}
+	}
 }
 
 // promptOnTerminal prints the question and waits for a line.

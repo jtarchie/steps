@@ -424,3 +424,64 @@ func TestProbeRefusesAnImageWithoutTheFileUtilities(t *testing.T) {
 		}
 	}
 }
+
+// TestContainerTreeStatMatchesHostTree: a stat answered from the container is the same answer os.Stat gives the host — kind, and a file's size; a directory's size is the filesystem's bookkeeping and no tool reads it — and a missing path is os.ErrNotExist on both.
+func TestContainerTreeStatMatchesHostTree(t *testing.T) {
+	t.Parallel()
+	requireAgentDocker(t)
+
+	dir := daemonVisibleDir(t)
+	writeFixture(t, dir)
+
+	contained := newContainerTree(t, "alpine:3", dir)
+	host := hostTree{dir: dir}
+
+	for _, rel := range []string{"sub", "main.go", "a file with spaces.txt"} {
+		want, err := host.stat(t.Context(), filepath.Join(dir, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := contained.stat(t.Context(), contained.dir+"/"+rel)
+		if err != nil || got.isDir != want.isDir || (!want.isDir && got.size != want.size) {
+			t.Errorf("stat(%q) = %+v, %v; want %+v", rel, got, err, want)
+		}
+	}
+
+	_, err := contained.stat(t.Context(), contained.dir+"/missing.txt")
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stat of a missing path = %v, want os.ErrNotExist", err)
+	}
+}
+
+// TestContainerTreeResolveWriteRefusesLinkEscapes: a write follows links, so a link at the leaf or at any parent that leads out of the tree must be refused even though the file itself does not exist yet.
+func TestContainerTreeResolveWriteRefusesLinkEscapes(t *testing.T) {
+	t.Parallel()
+	requireAgentDocker(t)
+
+	dir := daemonVisibleDir(t)
+	writeFixture(t, dir)
+
+	for link, target := range map[string]string{"escape": "/etc/passwd", "outside": "/etc"} {
+		err := os.Symlink(target, filepath.Join(dir, link))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	contained := newContainerTree(t, "alpine:3", dir)
+
+	for _, rel := range []string{"escape", "outside/steps-new.txt", "outside/deeper/steps-new.txt"} {
+		_, err := contained.resolveWrite(t.Context(), rel)
+		if err == nil || !strings.Contains(err.Error(), "escapes the working directory") {
+			t.Errorf("resolveWrite(%q) = %v, want it refused as an escape", rel, err)
+		}
+	}
+
+	for _, rel := range []string{"main.go", "sub/new.txt", "fresh/dir/new.txt"} {
+		resolved, err := contained.resolveWrite(t.Context(), rel)
+		if err != nil || resolved != contained.dir+"/"+rel {
+			t.Errorf("resolveWrite(%q) = %q, %v; want it allowed in place", rel, resolved, err)
+		}
+	}
+}
