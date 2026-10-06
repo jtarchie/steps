@@ -1149,6 +1149,9 @@ func TestGCPDialRetriesWhileTheKeyPropagates(t *testing.T) {
 func TestGCPAuthFailureInvalidatesTheInstallCache(t *testing.T) {
 	shrinkGCPWaits(t)
 
+	// The sshd refuses every key, so the dial always runs to its deadline: a short one, since the refusal path and the deadline path both drop the entry this asserts on.
+	gcpReadyTimeout = time.Second
+
 	sshd := newGCPSSHDRejectingFirst(t, 1<<30)
 	fake := &fakeGCE{}
 	seamGCP(t, fake, sshd)

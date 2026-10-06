@@ -19,7 +19,8 @@ var (
 // untilHangup runs loop until it prints a notice and exits, or until the session's stdin closes: sshd signals nothing to a non-pty command when its client goes, so without the reader the loop would outlive the session on the machine until reboot.
 func untilHangup(loop string) string {
 	// fd 3, because a non-interactive shell hands every background job /dev/null for stdin: the reader would see EOF at once and stop the loop before it asked anything.
-	return `exec 3<&0; (` + loop + `) & p=$!; (cat <&3 >/dev/null; kill $p 2>/dev/null) >/dev/null 2>&1 & wait $p`
+	// The loop's stderr, and its sleep's stdout, go nowhere: kill $p ends the subshell but not a sleep or curl it is waiting on, and either holding the session's output kept the session open until it finished.
+	return `exec 3<&0; (` + loop + `) 2>/dev/null & p=$!; (cat <&3 >/dev/null; kill $p 2>/dev/null) >/dev/null 2>&1 & wait $p`
 }
 
 // awsDrainScript prints a spot interruption notice and exits once EC2 posts one; a rebalance recommendation is advisory and not a reclamation.
@@ -29,14 +30,14 @@ func awsDrainScript() string {
 	return untilHangup(`while :; do ` +
 		`t=$(curl -sf -m 2 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 300' ` + base + `/latest/api/token) || t=; ` +
 		`if [ -n "$t" ]; then n=$(curl -sf -m 2 -H "X-aws-ec2-metadata-token: $t" ` + base + `/latest/meta-data/spot/instance-action); else n=$(curl -sf -m 2 ` + base + `/latest/meta-data/spot/instance-action); fi && { echo "spot $n"; exit 0; }; ` +
-		`sleep ` + strconv.Itoa(drainPoll) + `; done`)
+		`sleep ` + strconv.Itoa(drainPoll) + ` >/dev/null; done`)
 }
 
 // gcpDrainScript polls the preempted flag rather than long-polling it: wait_for_change without the last etag misses a flip between two requests until the next timeout, longer than GCE's default thirty-second notice.
 func gcpDrainScript() string {
 	return untilHangup(`while :; do ` +
 		`p=$(curl -sf -m 2 -H 'Metadata-Flavor: Google' ` + shellQuote(gcpMetadataBase+"/computeMetadata/v1/instance/preempted") + `) && [ "$p" = TRUE ] && { echo preempted; exit 0; }; ` +
-		`sleep ` + strconv.Itoa(drainPoll) + `; done`)
+		`sleep ` + strconv.Itoa(drainPoll) + ` >/dev/null; done`)
 }
 
 // watchDrain runs the drain script for the session's life; closing the ssh client ends it.

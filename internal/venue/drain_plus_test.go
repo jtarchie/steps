@@ -167,3 +167,38 @@ func TestGCPWorkerHearsItsOwnPreemption(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+// A hung-up drain loop lets go of the session's output at once: kill ended the loop's subshell but not the sleep it was in, and that sleep held stdout open for the rest of its interval, so every session on a cloud worker took up to drainPoll to close.
+func TestADrainLoopLetsGoOfTheSessionWhenItsClientHangsUp(t *testing.T) {
+	previousBase, previousPoll := awsMetadataBase, drainPoll
+	awsMetadataBase, drainPoll = "http://127.0.0.1:1", 30
+
+	t.Cleanup(func() { awsMetadataBase, drainPoll = previousBase, previousPoll })
+
+	loop := exec.CommandContext(t.Context(), "sh", "-c", awsDrainScript()) //nolint:gosec // the script this package ships, against a test address
+
+	stdin, err := loop.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out lockedBuffer
+	loop.Stdout = &out
+
+	err = loop.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Long enough for the first poll to fail and the loop to be asleep.
+	time.Sleep(500 * time.Millisecond)
+
+	hungUp := time.Now()
+	_ = stdin.Close()
+
+	_ = loop.Wait()
+
+	if held := time.Since(hungUp); held > 10*time.Second {
+		t.Errorf("the session's output stayed open %s after its client hung up; want it let go well inside the %ds poll", held.Round(time.Second), drainPoll)
+	}
+}
