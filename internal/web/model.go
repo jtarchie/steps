@@ -519,6 +519,14 @@ type jobView struct {
 	// Upstream and Downstream are the passed: constraint graph, per resource.
 	Upstream   []edgeView
 	Downstream []edgeView
+	// Finished is the latest run that is over, when Latest is still going:
+	// what the graph colors a busy job by.
+	Finished    store.RunRow
+	HasFinished bool
+	// Inputs and Outputs are every resource the job gets and puts, hooks
+	// included: what the graph draws on its left and right.
+	Inputs  []config.JobInput
+	Outputs []string
 	// Queued is the trigger that has not become a run yet; nil when there is none.
 	Queued *queuedJob
 }
@@ -558,7 +566,7 @@ func buildJobViews(cfg *config.Config, latest map[string]store.RunRow, paused []
 // buildJobView assembles one job's row: its latest run, its breaker state, and
 // the passed: constraints it declares.
 func buildJobView(job config.Job, latest map[string]store.RunRow, pausedBy map[string]store.PausedJob) jobView {
-	view := jobView{Name: job.Name}
+	view := jobView{Name: job.Name, Inputs: job.Inputs(), Outputs: job.Outputs()}
 
 	if run, ok := latest[job.Name]; ok {
 		view.Latest, view.HasRun = run, true

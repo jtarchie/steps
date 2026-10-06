@@ -37,20 +37,16 @@ func TestTheJobsBoardSaysWhatIsQueuedAndWhy(t *testing.T) {
 
 	_, page := get(t, server, "/p/demo")
 
-	list := between(t, page, `id="jobs-list"`, `id="queue-region"`)
+	svg := dagSVG(t, page)
 
-	wantAll(t, "build's row", between(t, list, `href="/p/demo/jobs/build"`, "</tr>"),
-		`class="st st-queued" href="/p/demo/jobs/build/follow?since=`,
-		`title="waiting: the pipeline is paused"`,
-		`>queued<span class="visually-hidden">, waiting: the pipeline is paused</span></a>`)
+	wantAll(t, "build's graph node", dagNodeMarkup(t, svg, "job:build"),
+		"○ queued",
+		"<title>latest run took ",
+		"a run is queued, waiting: the pipeline is paused</title>")
 
-	deploy := between(t, list, `href="/p/demo/jobs/deploy"`, "</tr>")
-	if strings.Contains(deploy, "st-queued") {
+	if deploy := dagNodeMarkup(t, svg, "job:deploy"); strings.Contains(deploy, "queued") {
 		t.Errorf("deploy has nothing queued but is marked queued:\n%s", deploy)
 	}
-
-	wantAll(t, "build's graph node", between(t, between(t, page, `id="jobs-graph"`, `id="jobs-list"`), `href="/p/demo/jobs/build"`, "</a>"),
-		"○ queued")
 
 	wantAll(t, "the queue table", between(t, page, `id="queue-region"`, "</table>"),
 		"<th>Waiting on</th>", "the pipeline is paused")

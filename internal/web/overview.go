@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +34,21 @@ import (
 // history opens that pipeline.
 const overviewLimit = 50
 
+// feedLength is how much of that feed the root draws until ?runs= asks for
+// more: the newest few are what a glance is for.
+const feedLength = 10
+
+// feedLimit reads ?runs=, clamped to [feedLength, overviewLimit]; anything
+// that is not a number is the default rather than an error page.
+func feedLimit(asked string) int {
+	n, err := strconv.Atoi(asked)
+	if err != nil {
+		return feedLength
+	}
+
+	return min(max(n, feedLength), overviewLimit)
+}
+
 // overviewRun is one row of the global feed: a run, plus the slug that makes
 // it reachable.
 type overviewRun struct {
@@ -48,21 +65,26 @@ type overviewRun struct {
 // says so on every one of its own pages, but the root is where an operator
 // looks first, and there it read as a quiet one.
 type overviewPipeline struct {
-	Slug   string
-	Path   string
+	Slug string
+	Path string
+	// File is Path's last element: the row has room for a name, and the
+	// whole path is its tooltip.
+	File   string
 	Jobs   int
 	Paused bool
 	// Latest is the pipeline's newest run across every job, zero when it has never run.
 	Latest store.RunRow
 	HasRun bool
-	// Queued is what the trigger queue still owes, which is the difference
-	// between a pipeline with nothing to do and one that is not being drained.
-	Queued int
-	// Attention is what that pipeline is waiting on a person for. The root is
-	// where an operator looks first and the one page that can rank several
-	// pipelines against each other, so the question the header answers for
-	// one of them is a column here.
+	// Mark, Attention and InFlight are the switcher's own reading of the
+	// pipeline, handed over rather than asked again, so the row and the
+	// switcher cannot disagree. InFlight is what the trigger queue still owes
+	// — the difference between a pipeline with nothing to do and one that is
+	// not being drained.
+	Mark      mark
 	Attention int
+	InFlight  int
+	// Held is how many of its jobs the circuit breaker holds.
+	Held int
 	// Chips are the pipeline's jobs in its own order, each colored by its
 	// latest run — the answer to "which job is red" that a last-run column
 	// cannot give, and each the link to that job's transcript.
@@ -121,10 +143,16 @@ func (s *Server) handleIndex(c *echo.Context) error {
 		return c.Redirect(http.StatusFound, "/p/"+served[0].Slug)
 	}
 
-	runs, err := s.recentRunsAcross(c.Request().Context(), overviewLimit)
+	limit := feedLimit(c.QueryParam("runs"))
+
+	// One past the limit, so "more" is drawn only when there is more.
+	runs, err := s.recentRunsAcross(c.Request().Context(), limit+1)
 	if err != nil {
 		return err
 	}
+
+	more := len(runs) > limit && limit < overviewLimit
+	runs = runs[:min(len(runs), limit)]
 
 	// The shell gathered every served pipeline's attention already, to mark
 	// the switcher; handing those counts to the table is what stops the root
@@ -137,12 +165,15 @@ func (s *Server) handleIndex(c *echo.Context) error {
 		"Title":     "pipelines",
 		"Pipelines": s.overviewPipelines(c.Request().Context(), nav),
 		"Runs":      runs,
+		"More":      more,
+		"MoreURL":   fmt.Sprintf("/?runs=%d", overviewLimit),
+		"MoreCount": overviewLimit,
 	})
 }
 
 // overviewPipelines describes what this process serves, sorted by slug.
 //
-// Three reads per pipeline rather than one cross-pipeline query: a daemon
+// Four reads per pipeline rather than one cross-pipeline query: a daemon
 // holds a handful, they need not share a database, and a Reader can only
 // answer what it can name. A read that fails leaves its field zero rather
 // than failing the page — a root that will not render says less about a
@@ -150,20 +181,24 @@ func (s *Server) handleIndex(c *echo.Context) error {
 func (s *Server) overviewPipelines(ctx context.Context, nav navData) []overviewPipeline {
 	served := s.Served()
 
-	waiting := make(map[string]int, len(nav.Pipelines))
+	summaries := make(map[string]pipelineSummary, len(nav.Pipelines))
 	for _, summary := range nav.Pipelines {
-		waiting[summary.Slug] = summary.Attention
+		summaries[summary.Slug] = summary
 	}
 
 	out := make([]overviewPipeline, 0, len(served))
 
 	for _, pipeline := range served {
+		summary := summaries[pipeline.Slug]
 		row := overviewPipeline{
 			Slug:      pipeline.Slug,
 			Path:      pipeline.Path(),
+			File:      filepath.Base(pipeline.Path()),
 			Jobs:      len(pipeline.Config().Jobs),
 			Paused:    paused(ctx, pipeline),
-			Attention: waiting[pipeline.Slug],
+			Mark:      summary.Mark,
+			Attention: summary.Attention,
+			InFlight:  summary.InFlight,
 			Chips:     jobChips(ctx, pipeline),
 		}
 
@@ -172,16 +207,16 @@ func (s *Server) overviewPipelines(ctx context.Context, nav navData) []overviewP
 			row.Latest, row.HasRun = runs[0], true
 		}
 
-		queue, err := pipeline.Store.ListTriggerQueue(ctx, overviewLimit)
+		held, err := pipeline.Store.PausedJobs(ctx)
 		if err == nil {
-			row.Queued = len(pendingQueue(queue))
+			row.Held = len(held)
 		}
 
 		out = append(out, row)
 	}
 
 	for _, broken := range s.Broken() {
-		out = append(out, overviewPipeline{Slug: broken.Name, Path: broken.From, Broken: broken.Reason})
+		out = append(out, overviewPipeline{Slug: broken.Name, Path: broken.From, File: filepath.Base(broken.From), Broken: broken.Reason, Mark: summaries[broken.Name].Mark})
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })

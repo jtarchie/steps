@@ -2,7 +2,10 @@ package config
 
 // The passed: constraint — only run against versions already green upstream.
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // validatePassed enforces that passed: is a get-step field naming real jobs
 // that actually get or put the same resource.
@@ -128,4 +131,66 @@ func (j Job) PassedConstraints() map[string][]string {
 	})
 
 	return constraints
+}
+
+// JobInput is one resource a job's plan gets, as the pipeline graph draws it:
+// whether any get of it triggers the job, and every job it must have passed.
+type JobInput struct {
+	Resource string
+	Trigger  bool
+	Passed   []string
+}
+
+// Inputs is every resource a job gets, in plan order, hooks included — the
+// same walk as Concourse's JobConfig.Inputs. Concourse lists each get step;
+// this folds gets of one resource together (trigger if any triggers, passed
+// unioned), since the graph draws one edge per resource and job either way.
+func (j Job) Inputs() []JobInput {
+	var inputs []JobInput
+
+	at := map[string]int{}
+
+	_ = j.visitSteps(func(_ string, step *Step) error {
+		if step.Get == "" {
+			return nil
+		}
+
+		resource := step.GetResourceName()
+
+		i, seen := at[resource]
+		if !seen {
+			i = len(inputs)
+			at[resource] = i
+			inputs = append(inputs, JobInput{Resource: resource})
+		}
+
+		inputs[i].Trigger = inputs[i].Trigger || step.Trigger
+
+		for _, upstream := range step.Passed {
+			if !slices.Contains(inputs[i].Passed, upstream) {
+				inputs[i].Passed = append(inputs[i].Passed, upstream)
+			}
+		}
+
+		return nil
+	})
+
+	return inputs
+}
+
+// Outputs is every resource a job puts, in plan order and once each, hooks
+// included — a put in on_failure is still something the job can change, and
+// Concourse's JobConfig.Outputs counts it too.
+func (j Job) Outputs() []string {
+	var outputs []string
+
+	_ = j.visitSteps(func(_ string, step *Step) error {
+		if step.Put != "" && !slices.Contains(outputs, step.PutResourceName()) {
+			outputs = append(outputs, step.PutResourceName())
+		}
+
+		return nil
+	})
+
+	return outputs
 }

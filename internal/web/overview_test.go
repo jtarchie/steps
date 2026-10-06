@@ -101,7 +101,7 @@ func TestPipelinesAreListedByName(t *testing.T) {
 	_, page := get(t, server, "/")
 
 	for what, pair := range map[string][2]string{
-		"overview": {`<td><a href="/p/app">app</a>`, `<td><a href="/p/infra">infra</a>`},
+		"overview": {`<a href="/p/app">app</a>`, `<a href="/p/infra">infra</a>`},
 		"switcher": {`<span class="slug">app</span>`, `<span class="slug">infra</span>`},
 	} {
 		first, second := strings.Index(page, pair[0]), strings.Index(page, pair[1])
@@ -1509,10 +1509,11 @@ func TestTheOverviewSaysWhatEachPipelineIsDoing(t *testing.T) {
 	}
 
 	// One queued row, as a number: the count is what says the queue is not
-	// being drained, and nothing else on this page does. The job count rides
-	// on the chips cell, which names the job rather than counting it.
-	if got := strings.Count(app, `<td class="num dim">1</td>`); got != 1 {
-		t.Errorf("the row shows %d numeric cells reading 1, want exactly the queued count:\n\t%s", got, app)
+	// being drained, and nothing else on this page does. It is the switcher's
+	// in-flight count, drawn beside the name. The job count rides on the
+	// chips cell, which names the job rather than counting it.
+	if !strings.Contains(app, `<span class="inflight" title="1 running or queued">`) {
+		t.Errorf("the row does not count its queued run:\n\t%s", app)
 	}
 
 	if !strings.Contains(app, `title="1 jobs"`) {
@@ -1718,5 +1719,84 @@ func TestTheRootShowsABrokenPipeline(t *testing.T) {
 	code, body = call(t, server, http.MethodPost, "/p/gone/hooks/repo", "{}")
 	if code != http.StatusNotFound || strings.Contains(body, "second line") {
 		t.Errorf("a webhook delivery to the broken pipeline = %d %s, want a bare 404", code, body)
+	}
+}
+
+// TestTheOverviewCountsHeldJobs: the breaker holding a job is a pipeline not
+// moving on its own, which the root used to say only on the pipeline's board.
+func TestTheOverviewCountsHeldJobs(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := testPipelines(t, "app", "infra")
+
+	held, _, err := pipelines[0].Store.RecordJobOutcome(t.Context(), "app-job", false, 1)
+	if err != nil || !held {
+		t.Fatalf("RecordJobOutcome = %v, %v: the job was not held", held, err)
+	}
+
+	_, page := get(t, server, "/")
+
+	if !strings.Contains(pipelineRow(t, page, "app"), `<span class="st st-held">1 held</span>`) {
+		t.Errorf("the overview does not count app's held job:\n%s", pipelineRow(t, page, "app"))
+	}
+
+	if strings.Contains(pipelineRow(t, page, "infra"), "held") {
+		t.Error("the overview counts a held job on a pipeline with none")
+	}
+}
+
+// TestTheRootFeedIsTenRunsUntilAskedForMore: the root is the glance, so its
+// feed is the newest ten; ?runs= asks for up to fifty, a refresh keeps what
+// was asked for, and a value that is not a number, or is out of range, is
+// read as the nearest one that is rather than refused.
+func TestTheRootFeedIsTenRunsUntilAskedForMore(t *testing.T) {
+	t.Parallel()
+
+	_, pipelines := testPipelines(t, "app", "infra")
+
+	server, err := New(pipelines, stubRunner{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for i := range 60 {
+		seedRun(t, pipelines[0], fmt.Sprintf("run-%02d", i), "app-job", "succeeded")
+	}
+
+	for _, tc := range []struct {
+		path string
+		rows int
+		more bool
+	}{
+		{"/", 10, true},
+		{"/?runs=abc", 10, true},
+		{"/?runs=3", 10, true},
+		{"/?runs=25", 25, true},
+		{"/?runs=50", 50, false},
+		{"/?runs=999", 50, false},
+	} {
+		_, page := get(t, server, tc.path)
+
+		feed := between(t, page, `id="recent-runs"`, "</table>")
+		if rows := strings.Count(feed, "<tr>") - 1; rows != tc.rows {
+			t.Errorf("%s: %d feed rows, want %d", tc.path, rows, tc.rows)
+		}
+
+		if more := strings.Contains(page, `<a class="more" href="/?runs=50">show 50 runs</a>`); more != tc.more {
+			t.Errorf("%s: more link drawn = %v, want %v", tc.path, more, tc.more)
+		}
+
+		if !strings.Contains(page, fmt.Sprintf("%d recent runs", tc.rows)) {
+			t.Errorf("%s: the metaline does not count the %d runs shown", tc.path, tc.rows)
+		}
+	}
+
+	_, long := get(t, server, "/?runs=50")
+	if !strings.Contains(long, `hx-get="/?runs=50"`) {
+		t.Error("the long feed's refresh does not keep ?runs=50, so it snaps back to ten")
+	}
+
+	if !strings.Contains(pipelineRow(t, long, "app"), `<input type="hidden" name="return" value="/?runs=50">`) {
+		t.Error("pausing from the long feed returns to the short one")
 	}
 }

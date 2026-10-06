@@ -234,7 +234,8 @@ func TestAFailingCheckDoesNotPassItselfOffAsAFreshOne(t *testing.T) {
 
 // TestTheOverviewRanksPipelinesByWhatTheyWant: the root is the one page that
 // can put several pipelines beside each other, so the question the header
-// answers for one of them is a column here.
+// answers for one of them is said on that pipeline's row — and only there,
+// since a column of zeros was most of what made the root hard to read.
 func TestTheOverviewRanksPipelinesByWhatTheyWant(t *testing.T) {
 	t.Parallel()
 
@@ -247,15 +248,11 @@ func TestTheOverviewRanksPipelinesByWhatTheyWant(t *testing.T) {
 
 	_, body := get(t, server, "/")
 
-	if !strings.Contains(body, ">Waiting<") {
-		t.Errorf("the overview has no waiting column:\n%s", body)
+	if !strings.Contains(pipelineRow(t, body, "beta"), `<span class="badge" title="1 waiting on you">`) {
+		t.Errorf("the overview does not mark beta as waiting:\n%s", pipelineRow(t, body, "beta"))
 	}
 
-	if !strings.Contains(body, `<a class="badge" href="/p/beta">`) {
-		t.Errorf("the overview does not mark beta as waiting:\n%s", body)
-	}
-
-	if strings.Contains(body, `<a class="badge" href="/p/alpha">`) {
+	if strings.Contains(pipelineRow(t, body, "alpha"), "waiting on you") {
 		t.Error("the overview marks a clean pipeline as waiting")
 	}
 }

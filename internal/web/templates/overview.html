@@ -4,25 +4,23 @@
 <p class="metaline">{{len .Pipelines}} pipelines<span class="sep">·</span>{{len .Runs}} recent runs</p>
 
 <div class="tablewrap" id="pipelines-table">
-  <table>
+  <table class="pipelines">
     <thead>
-      <tr><th>Pipeline</th><th class="num">Waiting</th><th>Jobs</th><th>Last run</th><th class="num">Queued</th><th>State</th><th>File</th></tr>
+      <tr><th>Pipeline</th><th>Jobs</th><th>Last run</th><th><span class="visually-hidden">Pause and file</span></th></tr>
     </thead>
     <tbody>
       {{range .Pipelines}}
       {{if .Broken}}
       {{/* Held and not served: no pages behind it, so no links and no pause, and the state said in words rather than only in red. */}}
       <tr>
-        <td>{{.Slug}}</td>
-        <td class="num"><span class="faint">—</span></td>
-        <td colspan="3" class="broken-reason">{{.Broken}}</td>
-        <td><span class="st st-failed">broken</span> <span class="dim">not serving</span></td>
-        <td class="dim">{{.Path}}</td>
+        <td class="pname">{{template "markglyph" .Mark}}{{.Slug}} <span class="st st-failed">broken</span></td>
+        <td colspan="2" class="broken-reason">{{.Broken}}</td>
+        <td class="rowextra"><span class="dim" title="{{.Path}}">{{.File}}</span></td>
       </tr>
       {{else}}
       <tr>
-        <td><a href="/p/{{.Slug}}">{{.Slug}}</a></td>
-        <td class="num">{{if .Attention}}<a class="badge" href="/p/{{.Slug}}"><span aria-hidden="true">●</span>{{.Attention}}</a>{{else}}<span class="faint">—</span>{{end}}</td>
+        {{/* Only what is not normal gets a word: a healthy row is its mark, name, jobs and last run. */}}
+        <td class="pname">{{template "markglyph" .Mark}}<a href="/p/{{.Slug}}">{{.Slug}}</a>{{template "counts" .}}{{if .Paused}} <span class="st st-paused">paused</span>{{end}}{{if .Held}} <span class="st st-held">{{.Held}} held</span>{{end}}</td>
         {{/* Every job, colored by its latest run: which one is red, from
              the root, and the link is the transcript. */}}
         <td class="jobchips" title="{{.Jobs}} jobs">{{$slug := .Slug}}{{range .Chips}}<a class="st {{.Class}}" href="/p/{{$slug}}/jobs/{{.Name}}">{{.Name}}</a>{{end}}</td>
@@ -30,14 +28,13 @@
           {{if .HasRun}}<a class="st st-{{statusWord .Latest.Status}}" href="/p/{{.Slug}}/runs/{{.Latest.ID}}">{{statusWord .Latest.Status}}</a> <span class="dim">{{agoTag .Latest.StartedAt}}</span>
           {{else}}<span class="faint">never ran</span>{{end}}
         </td>
-        <td class="num dim">{{if .Queued}}{{.Queued}}{{else}}<span class="faint">—</span>{{end}}</td>
-        <td>
-          {{if .Paused}}<span class="st st-paused">paused</span>{{else}}<span class="dim">active</span>{{end}}
-          {{if not $.Nav.ReadOnly}}
-          <form class="inline" method="post" action="/p/{{.Slug}}/{{if .Paused}}unpause{{else}}pause{{end}}"><input type="hidden" name="return" value="/"><button class="btn{{if .Paused}} primary{{end}}" type="submit">{{if .Paused}}Unpause{{else}}Pause{{end}}</button></form>
-          {{end}}
+        {{/* Out of the way until the row is hovered or focused: neither is
+             what the root is looked at for, and both are a click from the
+             pipeline's own page. */}}
+        <td class="rowextra">
+          {{if not $.Nav.ReadOnly}}<form class="inline" method="post" action="/p/{{.Slug}}/{{if .Paused}}unpause{{else}}pause{{end}}"><input type="hidden" name="return" value="{{$.Nav.URL}}"><button class="btn{{if .Paused}} primary{{end}}" type="submit">{{if .Paused}}Unpause{{else}}Pause{{end}}</button></form>{{end}}
+          <span class="dim" title="{{.Path}}">{{.File}}</span>
         </td>
-        <td class="dim">{{.Path}}</td>
       </tr>
       {{end}}
       {{end}}
@@ -47,7 +44,7 @@
 
 <h2 class="eyebrow">Recent runs</h2>
 {{if .Runs}}
-<div class="tablewrap">
+<div class="tablewrap" id="recent-runs">
   <table>
     <thead>
       <tr><th>Pipeline</th><th>Job</th><th>Run</th><th>Started</th><th class="num">Duration</th></tr>
@@ -65,6 +62,7 @@
     </tbody>
   </table>
 </div>
+{{if .More}}<p class="metaline"><a class="more" href="{{.MoreURL}}">show {{.MoreCount}} runs</a></p>{{end}}
 {{else}}
 <p class="faint">No runs recorded yet.</p>
 {{end}}

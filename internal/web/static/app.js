@@ -128,7 +128,55 @@
     if (base && document.title !== title) document.title = title;
   }
 
+  // Tracing the pipeline graph: hovering or focusing a box lifts it, its
+  // edges and the boxes at their other ends, walking through ghost boxes so a
+  // long edge traces to the node it really reaches. The poll morphs the
+  // graph's classes back to the server's, so the trace is re-applied after
+  // every swap.
+  var traced = null;
+
+  function trace() {
+    var svg = document.querySelector('svg.dag');
+    if (!svg) return;
+    svg.querySelectorAll('.lit').forEach(function (el) { el.classList.remove('lit'); });
+    var start = traced && svg.querySelector('[data-n="' + CSS.escape(traced) + '"]');
+    svg.classList.toggle('tracing', !!start);
+    if (!start) return;
+    start.classList.add('lit');
+    var edges = svg.querySelectorAll('.dagedge');
+
+    function walk(near, far) {
+      var frontier = [traced];
+      while (frontier.length) {
+        var id = frontier.pop();
+        edges.forEach(function (edge) {
+          if (edge.getAttribute(near) !== id) return;
+          edge.classList.add('lit');
+          var other = edge.getAttribute(far);
+          var node = svg.querySelector('[data-n="' + CSS.escape(other) + '"]');
+          if (node) node.classList.add('lit');
+          if (other.indexOf('gap:') === 0) frontier.push(other);
+        });
+      }
+    }
+
+    walk('data-from', 'data-to');
+    walk('data-to', 'data-from');
+  }
+
+  function traceFrom(target) {
+    var node = target.closest && target.closest('svg.dag a[data-n]');
+    var id = node ? node.getAttribute('data-n') : null;
+    if (id === traced) return;
+    traced = id;
+    trace();
+  }
+
+  document.addEventListener('mouseover', function (e) { traceFrom(e.target); });
+  document.addEventListener('focusin', function (e) { traceFrom(e.target); });
+
   document.addEventListener('htmx:after:swap', function () {
+    trace();
     applyMark();
     paintSwitcher();
     applyFolds();

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -162,8 +163,9 @@ func TestAHeldJobIsSaidOnTheJobsBoardAndItsPage(t *testing.T) {
 
 	_, board := get(t, server, "/p/demo")
 
-	if !strings.Contains(board, `<span class="st st-held">held</span> <span class="dim">after 1 failure · <time data-ago=`) {
-		t.Error("the jobs board does not say the job is held, since when")
+	build := dagNodeMarkup(t, dagSVG(t, board), "job:build")
+	if !strings.Contains(build, "· held</text>") || !regexp.MustCompile(`<title>[^<]*held after 1 failure, [^<]* ago[^<]*</title>`).MatchString(build) {
+		t.Errorf("the jobs board does not say the job is held, since when:\n%s", build)
 	}
 
 	_, resources := get(t, server, "/p/demo/resources")
@@ -179,9 +181,10 @@ func TestAHeldJobIsSaidOnTheJobsBoardAndItsPage(t *testing.T) {
 	}
 }
 
-// TestJobsBoardSaysNeverRanInBothViews: the list view said "never run" while
-// the graph said "never ran" — two spellings of one state on one board.
-func TestJobsBoardSaysNeverRanInBothViews(t *testing.T) {
+// TestJobsBoardSaysNeverRan: the list view said "never run" while the graph
+// said "never ran" — two spellings of one state on one board. The list is
+// gone; the spelling it lost to stays.
+func TestJobsBoardSaysNeverRan(t *testing.T) {
 	t.Parallel()
 
 	server, _ := testPipeline(t)
@@ -193,7 +196,7 @@ func TestJobsBoardSaysNeverRanInBothViews(t *testing.T) {
 	}
 
 	if strings.Count(body, "never ran") < 2 {
-		t.Error("expected both the list and the graph to say \"never ran\"")
+		t.Error("expected both of the board's jobs to say \"never ran\"")
 	}
 }
 
@@ -228,8 +231,11 @@ func TestEveryStateHasOneWordGlyphAndColour(t *testing.T) {
 	}
 }
 
-// TestTheOverviewSaysPausedInBlueAndActiveOtherwise: "running" beside a pipeline read as a run in progress, and a paused one was drawn as a failure.
-func TestTheOverviewSaysPausedInBlueAndActiveOtherwise(t *testing.T) {
+// TestTheOverviewSaysPausedInBlueAndNothingOtherwise: "running" beside a
+// pipeline read as a run in progress, and a paused one was drawn as a
+// failure. Then "active" on every healthy row was a column saying nothing,
+// so a healthy row now carries no state word or badge at all.
+func TestTheOverviewSaysPausedInBlueAndNothingOtherwise(t *testing.T) {
 	t.Parallel()
 
 	server, pipelines := testPipelines(t, "held", "live")
@@ -241,16 +247,17 @@ func TestTheOverviewSaysPausedInBlueAndActiveOtherwise(t *testing.T) {
 
 	_, body := get(t, server, "/")
 
-	if !strings.Contains(body, `<span class="st st-paused">paused</span>`) {
+	if !strings.Contains(pipelineRow(t, body, "held"), `<span class="st st-paused">paused</span>`) {
 		t.Error("a paused pipeline is not drawn with the paused chip")
 	}
 
-	if !strings.Contains(body, `<span class="dim">active</span>`) {
-		t.Error("an unpaused pipeline does not read active")
-	}
+	live := pipelineRow(t, body, "live")
+	name := between(t, live, `<td class="pname">`, "</td>")
 
-	if strings.Contains(body, `<span class="dim">running</span>`) {
-		t.Error("an unpaused pipeline still reads running, the word a run in progress uses")
+	for _, noise := range []string{"active", "running", `class="st `, `class="counts"`} {
+		if strings.Contains(name, noise) {
+			t.Errorf("a healthy pipeline's name cell says %q:\n%s", noise, name)
+		}
 	}
 }
 
@@ -270,4 +277,20 @@ func cssRule(css, selector, decl string) bool {
 	}
 
 	return false
+}
+
+// TestAFocusedGraphBoxIsDrawnFocused: the board is a drawing a keyboard
+// tabs through, and an outline on an svg link is not reliably painted, so a
+// focused box carries the page's focus color on its own border.
+func TestAFocusedGraphBoxIsDrawnFocused(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+	_, css := get(t, server, "/static/app.css")
+
+	for _, selector := range []string{".dagnode:focus-visible .dagbox", ".dagres:focus-visible rect"} {
+		if !cssRule(css, selector, "stroke: var(--yellow)") {
+			t.Errorf("%s is not drawn in the focus color", selector)
+		}
+	}
 }
