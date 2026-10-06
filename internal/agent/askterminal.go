@@ -36,19 +36,23 @@ func terminalPrompter() askPrompter {
 	return promptOnTerminal
 }
 
-// stdinIsTerminal reports whether stdin is a character device — a terminal
-// somebody could type into, rather than a pipe, a file, or /dev/null.
+// stdinIsTerminal reports whether stdin is a terminal somebody could type into, rather than a pipe, a file, or /dev/null.
 //
 // Deliberately stat rather than a terminal library: this decides which of two
 // channels to offer, and being wrong in the safe direction (park it) is what a
 // stat gets right on every platform steps runs on.
-func stdinIsTerminal() bool {
-	info, err := os.Stdin.Stat()
-	if err != nil || info == nil {
+func stdinIsTerminal() bool { return isTerminal(os.Stdin) }
+
+// isTerminal is a character device that is not the null device: /dev/null is one too, and it is cron's and systemd's stdin, where a prompt waits on an EOF already read.
+func isTerminal(file *os.File) bool {
+	info, err := file.Stat()
+	if err != nil || info == nil || info.Mode()&os.ModeCharDevice == 0 {
 		return false
 	}
 
-	return info.Mode()&os.ModeCharDevice != 0
+	null, err := os.Stat(os.DevNull)
+
+	return err != nil || !os.SameFile(info, null)
 }
 
 // terminalReader is the process's single stdin reader: started once, on the

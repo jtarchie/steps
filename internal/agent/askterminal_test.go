@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -121,5 +122,21 @@ func TestPromptOnTerminalTakesWhatWasTyped(t *testing.T) {
 	case <-finished:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the reader did not stop at the end of its input")
+	}
+}
+
+// /dev/null is a character device, so a mode check alone offered cron's and systemd's stdin the terminal prompt, which then waited on an EOF already read.
+func TestTheNullDeviceIsNotATerminal(t *testing.T) {
+	t.Parallel()
+
+	null, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = null.Close() }()
+
+	if isTerminal(null) {
+		t.Error("/dev/null was taken for a terminal")
 	}
 }
