@@ -40,6 +40,12 @@ func (s *Server) handleJobs(c *echo.Context) error {
 	}
 
 	views := buildJobViews(pipeline.Config(), latest, paused)
+	withLastFinished(ctx, pipeline, views)
+
+	failing, err := pipeline.Store.CheckErrors(ctx)
+	if err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
 
 	rows, err := s.markQueued(ctx, pipeline, queue, views)
 	if err != nil {
@@ -51,7 +57,7 @@ func (s *Server) handleJobs(c *echo.Context) error {
 		"Nav":   s.nav(c),
 		"Title": c.Param("pipeline"),
 		"Jobs":  views,
-		"Graph": buildGraph(views),
+		"Graph": buildGraph(views, failingByName(failing)),
 		"Queue": rows,
 		"SHA":   pipeline.Config().Revision.SHA,
 	})

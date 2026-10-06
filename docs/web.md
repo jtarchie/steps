@@ -132,8 +132,8 @@ Only a state file the daemon cannot read at all stops it from starting.
 
 | Route | Answers |
 |---|---|
-| `/` | With several pipelines served, or any held [broken](#what-a-restart-does): what this process holds — each with its jobs colored by their latest run (a red one is one click from its transcript), its last run, what its queue still owes, whether it is paused, and a button to pause or unpause it — and one run feed across all of them, newest first; a broken pipeline is a row with its reason and no links. With one served and none broken, it redirects straight through |
-| `/p/:pipeline` | Which jobs exist, how each last run went, and which jobs feed which — as a list, or as a dependency graph laid out from the `passed:` constraints, each node carrying its latest status |
+| `/` | With several pipelines served, or any held [broken](#what-a-restart-does): what this process holds, one quiet row each — its mark, its jobs colored by their latest run (a red one is one click from its transcript), and its last run. A row says more only when something is not normal: what waits on you, what its queue still owes, paused, or how many jobs the breaker holds. Its pause button and file sit at the end of the row, shown when you hover or tab into it. Below is one run feed across every pipeline, newest first: the latest ten, or fifty with `?runs=50` (the **show 50 runs** link). A broken pipeline is a row with its reason and no links. With one served and none broken, it redirects straight through |
+| `/p/:pipeline` | [The pipeline graph](#the-pipeline-graph): which jobs exist, how each last run went and how long ago, and what feeds each one. Hover a job for how long its run took, why the breaker holds it, or what a queued run waits on |
 | `…/runs` | One run history across every job of the pipeline, newest first — the cross-job view the per-job history can't give |
 | `…/jobs/:job` | Where the job stands, without another click: it forwards to the job's **latest run**, running included; with no run but a trigger queued, to the [follow page](#following-a-run-you-started) for that trigger; with neither, to the detail page. Every link that names a job goes here, so a job is one click from its transcript from anywhere. It is a temporary redirect on purpose — a bookmark to it re-resolves on every visit |
 | `…/jobs/:job/detail` | This job's dependencies in both directions, its run history with a duration trend, the resource versions it has passed against, and the resolved limits each agent step runs under. The one job link that leads here rather than to a run is the breadcrumb on a run, a node or the follow page — from inside a run, "latest" is already on the page |
@@ -147,6 +147,23 @@ Only a state file the daemon cannot read at all stops it from starting.
 | `…/mcp` | Every `mcp_servers:` entry, who depends on it, and whether it is wired up — with **Connect** to finish an oauth login in this browser and **Test** to probe one server. Present only for a pipeline that declares servers; see [mcp.md](mcp.md#authorizing-from-the-browser-the-mcp-tab) |
 | `/docs` | These docs, rendered with syntax-highlighted examples — the same pages `steps docs` shows in a terminal |
 | `/mark`, `…/mark`, `…/runs/:run/mark` | Not a page: the tab mark alone, for every pipeline, one pipeline, or one run. A tab in the background stops refreshing its page and asks this every 30 seconds instead, so a pinned tab's icon and title stay current — within about a minute, since browsers slow a background tab's timers |
+
+### The pipeline graph
+
+The graph is drawn the way Concourse draws a pipeline. Resources are boxes: what a
+job gets sits on its left and what it puts sits on its right, including a put
+in a hook. A solid line means the get triggers the job. A dashed line means the
+job only reads it. A `passed:` constraint arrives from the upstream job's
+output, or through a box of its own when that job only gets the resource. A
+job is as tall as the resources landing on it, so each line meets it at its
+own point.
+
+A put in one job and a get of the same resource in another are **not**
+joined, because nothing makes the second job wait for the first. A line on
+this graph promises that ordering, and only `passed:` makes it. So a resource
+read beside two jobs in one column is one box, while the same resource further
+right gets its own box. A line that would cross a column runs through a dashed
+copy of its resource instead.
 
 ### Finding your way
 
@@ -429,9 +446,9 @@ the page as it refreshes, and a run page's mark changes the instant the run
 ends, so a tab left in the background reports the outcome without being
 reopened.
 
-The jobs board refreshes itself every couple of seconds, in place — it keeps
-your list/graph choice and scroll position rather than reloading the page —
-and pauses while the tab is hidden.
+The jobs graph refreshes itself every couple of seconds, in place — it keeps
+your scroll position rather than reloading the page — and pauses while the
+tab is hidden.
 
 ## The action bar
 

@@ -1,52 +1,31 @@
 {{define "page"}}
-<h1 class="prompt"><b>steps jobs</b>
-  <span class="viewtoggle" role="group" aria-label="View">
-    <button aria-pressed="true" data-view="list">list</button>
-    <button aria-pressed="false" data-view="graph">graph</button>
-  </span>
-</h1>
+<h1 class="prompt"><b>steps jobs</b></h1>
 <p class="metaline" id="jobs-meta">{{len .Jobs}} jobs<span class="sep">·</span>{{.Nav.CurrentPath}}{{if .SHA}}<span class="sep">·</span>config <a class="hash" href="/p/{{.Nav.Current}}/config/{{.SHA}}">{{short .SHA}}</a>{{end}}</p>
 
-<div class="dagwrap" id="jobs-graph">
+<div class="dagwrap" id="jobs-graph" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#jobs-graph" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#jobs-meta:outerMorph,#queue-region:outerMorph,#statusline:outerMorph">
   {{/* role=group, not img: an image's children are presentational, which
        would flatten every job link and status word out of the a11y tree. */}}
-  <svg class="dag" width="{{.Graph.W}}" height="{{.Graph.H}}" viewBox="0 0 {{.Graph.W}} {{.Graph.H}}" role="group" aria-label="Job dependency graph">
-    {{range .Graph.Edges}}<path class="dagedge" d="{{.Path}}"><title>{{.Resource}} from {{.From}} must have passed</title></path>
-    {{end}}{{range .Graph.Nodes}}<a class="dagnode {{.StatusClass}}{{if .Running}} running{{end}}" href="/p/{{$.Nav.Current}}/jobs/{{.Name}}">
-      <rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}"></rect>
+  <svg class="dag" width="{{.Graph.W}}" height="{{.Graph.H}}" viewBox="0 0 {{.Graph.W}} {{.Graph.H}}" role="group" aria-label="Pipeline graph">
+    {{range .Graph.Edges}}<path aria-hidden="true" class="dagedge{{if .Manual}} manual{{end}}" d="{{.Path}}" data-from="{{.From}}" data-to="{{.To}}"><title>{{.Title}}</title></path>
+    {{end}}{{range .Graph.Nodes}}{{if eq .Kind "job"}}<a class="dagnode {{.StatusClass}}{{if .Running}} running{{end}}" href="/p/{{$.Nav.Current}}/jobs/{{.Name}}" data-n="{{.ID}}" aria-label="{{.Label}}">
+      {{if .Running}}<rect class="dagring" x="{{.RingX}}" y="{{.RingY}}" width="{{.RingW}}" height="{{.RingH}}"></rect>{{end}}
+      <rect class="dagbox" x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}"></rect>
       <text class="dagname" x="{{.TextX}}" y="{{.NameY}}">{{.Name}}</text>
-      <text class="dagstatus" x="{{.TextX}}" y="{{.StatusY}}">{{.Glyph}} {{.Status}}{{with .Queued}}<tspan class="dagqueued"> · ○ queued</tspan>{{end}}</text>
-      {{with .Queued}}<title>a run is queued{{if .WaitingOn}}, waiting: {{.WaitingOn}}{{else}}, starting{{end}}</title>{{end}}
+      <text class="dagstatus" x="{{.TextX}}" y="{{.StatusY}}">{{.Line}}{{with .Queued}}<tspan class="dagqueued"> · ○ queued</tspan>{{end}}</text>
+      {{with .Title}}<title>{{.}}</title>{{end}}
     </a>
-    {{end}}
+    {{else if eq .Kind "resource"}}<a class="dagres{{if .CheckError}} check-failed{{end}}" href="/p/{{$.Nav.Current}}/resources/{{.Name}}" data-n="{{.ID}}" aria-label="{{.Label}}">
+      {{with .CheckError}}<title>{{.}}</title>{{end}}
+      <rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}"></rect>
+      <text x="{{.TextX}}" y="{{.NameY}}">{{.Text}}</text>
+    </a>
+    {{else}}<g class="dagres ghost" data-n="{{.ID}}" aria-hidden="true">
+      <rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}"></rect>
+      <text x="{{.TextX}}" y="{{.NameY}}">{{.Text}}</text>
+    </g>
+    {{end}}{{end}}
   </svg>
-  <p class="rail">edges are get-step passed: constraints — hover one for the resource it carries</p>
-</div>
-
-<div class="tablewrap" id="jobs-list" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#jobs-list" hx-swap="outerMorph" hx-select-oob="#attention:outerMorph,#jobs-meta:outerMorph,#jobs-graph:outerMorph,#queue-region:outerMorph,#statusline:outerMorph">
-  <table>
-    <thead>
-      <tr><th>Job</th><th>Latest run</th><th>Started</th><th class="num">Duration</th><th>Depends on</th><th>State</th></tr>
-    </thead>
-    <tbody>
-      {{range $job := .Jobs}}
-      <tr>
-        <td><a href="/p/{{$.Nav.Current}}/jobs/{{.Name}}">{{.Name}}</a></td>
-        <td>
-          {{if .HasRun}}<a class="st st-{{statusWord .Latest.Status}}" href="/p/{{$.Nav.Current}}/runs/{{.Latest.ID}}">{{statusWord .Latest.Status}}</a>
-          {{else if not .Queued}}<span class="faint">never ran</span>{{end}}
-          {{with .Queued}}{{if $job.HasRun}}<span class="faint" aria-hidden="true">·</span> {{end}}<a class="st st-queued" href="/p/{{$.Nav.Current}}/jobs/{{$job.Name}}/follow?since={{.Since}}" title="{{if .WaitingOn}}waiting: {{.WaitingOn}}{{else}}starting{{end}}">queued<span class="visually-hidden">, {{if .WaitingOn}}waiting: {{.WaitingOn}}{{else}}starting{{end}}</span></a>{{end}}
-        </td>
-        <td class="dim">{{if .HasRun}}{{agoTag .Latest.StartedAt}}{{else}}—{{end}}</td>
-        <td class="num dim">{{if .HasRun}}{{elapsedTag .Latest}}{{else}}—{{end}}</td>
-        <td class="dim">
-          {{range .Upstream}}<a href="/p/{{$.Nav.Current}}/jobs/{{.Job}}">{{.Job}}</a> <span class="res">[{{.Resource}}]</span> {{else}}<span class="faint">—</span>{{end}}
-        </td>
-        <td>{{if .Held}}<span class="st st-held">held</span> <span class="dim">after {{.Failures}} failure{{if ne .Failures 1}}s{{end}} · {{agoText .HeldAt}}</span>{{else}}<span class="faint">—</span>{{end}}</td>
-      </tr>
-      {{end}}
-    </tbody>
-  </table>
+  <p class="rail">solid edges trigger · dashed are read only · hover or focus a box to trace it</p>
 </div>
 
 <div id="queue-region">
@@ -70,19 +49,4 @@
 </div>
 {{end}}
 </div>
-{{end}}
-
-{{define "scripts"}}
-<script>
-(function () {
-  document.querySelectorAll('.viewtoggle button').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      document.body.dataset.view = btn.dataset.view;
-      document.querySelectorAll('.viewtoggle button').forEach(function (b) {
-        b.setAttribute('aria-pressed', String(b === btn));
-      });
-    });
-  });
-})();
-</script>
 {{end}}

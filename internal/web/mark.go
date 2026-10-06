@@ -199,6 +199,30 @@ func pipelineMark(ctx context.Context, target *Pipeline, needs int) mark {
 	return result
 }
 
+// withLastFinished fills in Finished for every job with a run in flight,
+// one read per busy job, as lastFinishedDisc does for the mark. A store that
+// cannot answer leaves the job uncolored rather than failing the page.
+func withLastFinished(ctx context.Context, target *Pipeline, views []jobView) {
+	for i := range views {
+		if !views[i].HasRun || finished(views[i].Latest.Status) {
+			continue
+		}
+
+		runs, err := target.Store.ListRuns(ctx, views[i].Name, lastFinishedRuns)
+		if err != nil {
+			continue
+		}
+
+		for _, run := range runs {
+			if finished(run.Status) {
+				views[i].Finished, views[i].HasFinished = run, true
+
+				break
+			}
+		}
+	}
+}
+
 // lastFinishedRuns bounds the look-back behind a job's in-flight runs.
 // ponytail: a job with more runs in flight than this reads as never having
 // finished until one does; max_in_flight that high is not a shape seen yet.

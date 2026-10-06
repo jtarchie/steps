@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -61,5 +62,63 @@ jobs:
 				t.Errorf("error %q does not say why", err)
 			}
 		})
+	}
+}
+
+// TestJobInputsAndOutputsAreWhatTheGraphDraws: every get and put a job can
+// run — inside a try:, in a hook — under the RESOURCE's name rather than an
+// alias, each resource once.
+func TestJobInputsAndOutputsAreWhatTheGraphDraws(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+defaults:
+  preflight:
+    disabled: true
+resource_types:
+- name: dummy
+  config: {check: "echo []", in: "true", out: "true"}
+resources:
+- {name: repo, type: dummy, source: {}}
+- {name: docs, type: dummy, source: {}}
+- {name: image, type: dummy, source: {}}
+- {name: alert, type: dummy, source: {}}
+jobs:
+- name: up
+  plan: [{get: repo}]
+- name: build
+  plan:
+  - get: source
+    resource: repo
+    trigger: true
+    passed: [up]
+  - get: repo
+  - get: docs
+  - try: {put: image}
+  - put: shipped
+    resource: image
+  on_failure: {put: alert}
+`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	job, err := cfg.FindJob("build")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []JobInput{
+		{Resource: "repo", Trigger: true, Passed: []string{"up"}},
+		{Resource: "docs"},
+	}
+	if got := job.Inputs(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Inputs() = %+v, want %+v", got, want)
+	}
+
+	if got, want := job.Outputs(), []string{"image", "alert"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Outputs() = %v, want %v", got, want)
 	}
 }

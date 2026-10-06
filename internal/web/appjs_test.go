@@ -42,3 +42,39 @@ func TestLayoutScriptIsACachedAsset(t *testing.T) {
 		t.Errorf("revalidating app.js: %d, want 304", again.Code)
 	}
 }
+
+// TestGraphTraceIsDelegatedAndSurvivesAPoll: hovering or focusing a graph
+// node lifts its edges and neighbours. The graph is morphed every 2.5s, so a
+// listener bound to the nodes would miss the ones that arrive later, and the
+// classes the trace adds are the server's to take back on every swap — so the
+// listeners sit on the document and the trace is re-applied after a swap.
+// No JS runtime runs in this suite; Firefox against a real daemon is the
+// behavioural check (see .design/home-and-graph/TASKS.md task 5).
+func TestGraphTraceIsDelegatedAndSurvivesAPoll(t *testing.T) {
+	t.Parallel()
+
+	js, err := assets.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	script := string(js)
+
+	for _, want := range []string{
+		"document.addEventListener('mouseover', function (e) { traceFrom(e.target); });",
+		"document.addEventListener('focusin', function (e) { traceFrom(e.target); });",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+
+	_, swap, found := strings.Cut(script, "document.addEventListener('htmx:after:swap', function () {")
+	if !found {
+		t.Fatal("app.js has no after-swap handler")
+	}
+
+	if body, _, _ := strings.Cut(swap, "});"); !strings.Contains(body, "trace();") {
+		t.Errorf("the after-swap handler does not re-apply the trace:\n%s", body)
+	}
+}
