@@ -466,6 +466,12 @@ func TestContractSweepRemovesOnlyADeadOwnersContainer(t *testing.T) {
 
 	SweepOrphanedContainers(context.Background(), "")
 
+	// Waited for, not checked once: every RunJob sweeps, so under a full suite another process's sweep can be mid-removal of this orphan, which answers this one's remove with a conflict while the container is still listed.
+	deadline := time.Now().Add(30 * time.Second)
+	for containerExists(t, orphan) && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+	}
+
 	if containerExists(t, orphan) {
 		t.Error("a container whose owning process is gone survived the sweep")
 	}

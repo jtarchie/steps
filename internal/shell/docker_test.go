@@ -648,6 +648,12 @@ func TestRunOnAContainerThatDiedAtBirthIsNotAnExitError(t *testing.T) {
 func TestDockerRunnerRemovesAContainerThatDiedAtBirth(t *testing.T) {
 	requireDocker(t)
 
+	// Widened: this pins the birth path's removal, and a loaded daemon let the corpse outlive 300ms, so diagnose caught it instead and left it for Close. SettleFor returns the moment it dies, so a doomed container costs no more.
+	previous := dockerSettleBound
+	dockerSettleBound = 30 * time.Second
+
+	t.Cleanup(func() { dockerSettleBound = previous })
+
 	image := entrypointImage(t)
 	// Of this image only: under a loaded daemon another test's container can still be on its way out, and a process-wide count reads it as this one.
 	before := ourContainerCountOf(t, image)
