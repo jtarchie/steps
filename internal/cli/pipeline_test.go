@@ -259,3 +259,42 @@ func TestARepairIsCompareAndSet(t *testing.T) {
 		t.Error("a repair read before another set overwrote it, uncompared")
 	}
 }
+
+// A verb the daemon turned away has to fail the command, or `steps pipeline destroy typo && echo gone` reports a destroy that never happened; not parallel, it captures stdout.
+func TestAVerbTheDaemonRefusesFailsTheCommand(t *testing.T) {
+	isolateLogins(t)
+
+	held := servingDaemon(t)
+	held.server.SetManager(held)
+
+	daemon := httptest.NewServer(held.server.Handler())
+	t.Cleanup(daemon.Close)
+
+	setPipeline(t, held, "app", idlePipeline)
+
+	target := TargetFlags{Target: daemon.URL}
+	ghost := PipelineNameFlag{Pipeline: "ghost"}
+
+	for verb, cmd := range map[string]interface{ Run() error }{
+		"destroy": &PipelineDestroyCmd{TargetFlags: target, PipelineNameFlag: ghost, NonInteractive: true},
+		"pause":   &PipelinePauseCmd{TargetFlags: target, PipelineNameFlag: ghost},
+		"unpause": &PipelineUnpauseCmd{TargetFlags: target, PipelineNameFlag: ghost},
+		"abort":   &RunsAbortCmd{TargetFlags: target, PipelineNameFlag: PipelineNameFlag{Pipeline: "app"}, RunID: "NOSUCHRUN"},
+	} {
+		var err error
+
+		out := captureStdout(t, func() { err = cmd.Run() })
+		if err == nil {
+			t.Errorf("%s of something the daemon does not have succeeded, printing %q", verb, out)
+		}
+	}
+
+	var err error
+
+	out := captureStdout(t, func() {
+		err = (&PipelineDestroyCmd{TargetFlags: target, PipelineNameFlag: PipelineNameFlag{Pipeline: "app"}, NonInteractive: true}).Run()
+	})
+	if err != nil || !strings.Contains(out, "destroyed: app") {
+		t.Errorf("destroy app = %v, printing %q; want it destroyed and said so", err, out)
+	}
+}

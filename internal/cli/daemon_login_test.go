@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -437,5 +438,50 @@ func TestMCPLoginRefusesNameWithDashP(t *testing.T) {
 	err := cmd.Run()
 	if err == nil || !strings.Contains(err.Error(), "--name") {
 		t.Fatalf("mcp login -p with --name = %v, want refused naming --name", err)
+	}
+}
+
+// The daemon learns its authorize URL after the login starts and repeats it on every poll, so the terminal announces it once it exists and once only, or each poll opens another browser tab; not parallel, it sets BROWSER and captures stdout.
+func TestARemoteLoginAnnouncesItsURLOnce(t *testing.T) {
+	t.Setenv("BROWSER", "true")
+
+	const authorize = "https://as.example/authorize?state=once"
+
+	var mu sync.Mutex
+
+	polls := []web.LoginStatus{
+		{State: web.LoginPending, AuthorizeURL: authorize},
+		{State: web.LoginPending, AuthorizeURL: authorize},
+		{State: web.LoginAuthorized, TokenPath: "/tokens/tracker.json"},
+	}
+
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		answer := web.LoginStatus{State: web.LoginPending}
+		code := http.StatusAccepted
+
+		if r.Method == http.MethodGet {
+			answer, polls, code = polls[0], polls[1:], http.StatusOK
+		}
+
+		w.WriteHeader(code)
+		_ = json.NewEncoder(w).Encode(answer)
+	}))
+	t.Cleanup(daemon.Close)
+
+	cmd := &MCPLoginCmd{PipelineNameFlag: PipelineNameFlag{Pipeline: "app"}, Server: "tracker"}
+	cmd.Target = daemon.URL
+
+	var err error
+
+	out := captureStdout(t, func() { err = cmd.Run() })
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	if got := strings.Count(out, "Authorize in your browser"); got != 1 || !strings.Contains(out, authorize) {
+		t.Errorf("announced %d times, want once and naming %s:\n%s", got, authorize, out)
 	}
 }

@@ -82,6 +82,12 @@ func levelOf(ctx context.Context, handler slog.Handler) slog.Level {
 // terminalSize is one dimension of stdout's window, or fallback when the terminal will not say.
 func terminalSize(fallback int, dimension func(*unix.Winsize) uint16) int {
 	size, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ)
+
+	return sizeOr(fallback, dimension, size, err)
+}
+
+// sizeOr is split from the ioctl because only a real terminal answers that, and a test has none to ask.
+func sizeOr(fallback int, dimension func(*unix.Winsize) uint16, size *unix.Winsize, err error) int {
 	if err != nil || dimension(size) == 0 {
 		return fallback
 	}

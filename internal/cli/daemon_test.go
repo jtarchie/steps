@@ -68,6 +68,33 @@ func TestANeighbourOnTheSameRootLeavesABuildInFlightAlone(t *testing.T) {
 	}
 }
 
+// The refusal is what somebody reads to decide what to abort, so it names the build in flight and claims no others; not parallel, a rename consults mcp logins in process environment.
+func TestARenameRefusedWhileABuildRunsNamesThatBuild(t *testing.T) {
+	isolateLogins(t)
+
+	held := servingDaemon(t)
+	root := t.TempDir()
+	gate := filepath.Join(t.TempDir(), "gate")
+
+	setPipeline(t, held, "app", onRoot(root, "", "while [ ! -e "+gate+" ]; do sleep 0.02; done; echo built > out/x"))
+	enqueue(t, held, "app")
+	buildInFlight(t, root)
+
+	defer func() {
+		writePipelineFile(t, gate, "")
+		finishedRun(t, held, "app")
+	}()
+
+	err := held.Rename(t.Context(), "app", "renamed")
+	if !errors.Is(err, web.ErrRefused) {
+		t.Fatalf("a rename while a build runs = %v, want refused", err)
+	}
+
+	if msg := err.Error(); !strings.Contains(msg, "builds running: build/") || strings.Contains(msg, "more") {
+		t.Errorf("the refusal reads %q; want the one running build named and nothing more claimed", msg)
+	}
+}
+
 // A set that changed workspace: over a durable root used to install a provider keeping every build, to dodge the sweep — so each run from then on left its tree behind until a restart.
 func TestAChangedWorkspaceBlockStillRemovesItsBuilds(t *testing.T) {
 	t.Parallel()

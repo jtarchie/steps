@@ -31,6 +31,19 @@ func captureStdout(t *testing.T, fn func()) string {
 	orig := os.Stdout
 	os.Stdout = w
 
+	// Drained while fn runs: a pipe holds 64KiB, and a docs page is bigger than that.
+	type read struct {
+		data []byte
+		err  error
+	}
+
+	captured := make(chan read, 1)
+
+	go func() {
+		data, err := io.ReadAll(r)
+		captured <- read{data, err}
+	}()
+
 	// Deferred because a t.Fatal inside fn exits through runtime.Goexit, which would leave every later test writing into this pipe.
 	func() {
 		defer func() {
@@ -41,12 +54,12 @@ func captureStdout(t *testing.T, fn func()) string {
 		fn()
 	}()
 
-	data, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("read captured stdout: %v", err)
+	got := <-captured
+	if got.err != nil {
+		t.Fatalf("read captured stdout: %v", got.err)
 	}
 
-	return string(data)
+	return string(got.data)
 }
 
 // captureLog installs a text logger for the rest of the test and returns what it has logged so far. Not for a parallel test: the default logger is process-wide.
