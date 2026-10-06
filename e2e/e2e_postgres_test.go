@@ -214,10 +214,18 @@ jobs:
 `, log)), log
 }
 
-// TestPostgresRunsAndCaches is the seam: from --db's scheme, through the
+// TestPostgres is one top-level test so that one shard, and one server, runs it all: as four, the shard balancer dealt them apart and every shard started a postgres of its own.
+func TestPostgres(t *testing.T) {
+	t.Run("RunsAndCaches", postgresRunsAndCaches)
+	t.Run("WithNothingRecorded", postgresWithNothingRecorded)
+	t.Run("PasswordIsNeverPrinted", postgresPasswordIsNeverPrinted)
+	t.Run("ABrokenPipelineCanBeDestroyed", postgresABrokenPipelineCanBeDestroyed)
+}
+
+// postgresRunsAndCaches is the seam: from --db's scheme, through the
 // CLI's switch, into the driver — and the cache behind it, which is the
 // point of a state database. A second run of unchanged content is a skip.
-func TestPostgresRunsAndCaches(t *testing.T) {
+func postgresRunsAndCaches(t *testing.T) {
 	db := requirePostgresE2E(t)
 	path, log := postgresPipeline(t)
 
@@ -252,9 +260,9 @@ func TestPostgresRunsAndCaches(t *testing.T) {
 	}
 }
 
-// TestPostgresWithNothingRecorded: a schema steps never wrote is "no runs
+// postgresWithNothingRecorded: a schema steps never wrote is "no runs
 // yet", as a sqlite file that is not there is — and asking creates nothing.
-func TestPostgresWithNothingRecorded(t *testing.T) {
+func postgresWithNothingRecorded(t *testing.T) {
 	db := requirePostgresE2E(t)
 
 	var err error
@@ -273,10 +281,10 @@ func TestPostgresWithNothingRecorded(t *testing.T) {
 	}
 }
 
-// TestPostgresPasswordIsNeverPrinted: a password in --db is warned about,
+// postgresPasswordIsNeverPrinted: a password in --db is warned about,
 // and appears in nothing steps prints — not the run's output, not a parked
 // approval's pasteable command, not a log line.
-func TestPostgresPasswordIsNeverPrinted(t *testing.T) {
+func postgresPasswordIsNeverPrinted(t *testing.T) {
 	db := requirePostgresE2E(t)
 
 	parsed, err := url.Parse(db)
@@ -315,8 +323,8 @@ func TestPostgresPasswordIsNeverPrinted(t *testing.T) {
 
 func shellQuoted(value string) string { return "'" + value + "'" }
 
-// TestPostgresABrokenPipelineCanBeDestroyed: destroying a pipeline nothing is serving opens the store itself, and it must open the one --db names — a sqlite file at a path spelled like the url would take the delete, and the pipeline would be broken again on the next restart.
-func TestPostgresABrokenPipelineCanBeDestroyed(t *testing.T) {
+// postgresABrokenPipelineCanBeDestroyed: destroying a pipeline nothing is serving opens the store itself, and it must open the one --db names — a sqlite file at a path spelled like the url would take the delete, and the pipeline would be broken again on the next restart.
+func postgresABrokenPipelineCanBeDestroyed(t *testing.T) {
 	db := requirePostgresE2E(t)
 
 	restarted, _, _ := restartWithABrokenPipelineOn(t, db)

@@ -29,10 +29,18 @@ func alpineDigest(t *testing.T) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Pulled first so RepoDigests is populated on a daemon that never had it.
-	_ = exec.CommandContext(ctx, "docker", "pull", "-q", dockerE2EImage).Run()
+	inspect := func() ([]byte, error) {
+		return exec.CommandContext(ctx, "docker", "image", "inspect", dockerE2EImage, "--format", "{{index .RepoDigests 0}}").Output()
+	}
 
-	out, err := exec.CommandContext(ctx, "docker", "image", "inspect", dockerE2EImage, "--format", "{{index .RepoDigests 0}}").Output()
+	// Pulled only when the daemon has no digest for it: a pull per test was a registry round trip each, and could move the tag between two tests.
+	out, err := inspect()
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		_ = exec.CommandContext(ctx, "docker", "pull", "-q", dockerE2EImage).Run()
+
+		out, err = inspect()
+	}
+
 	if err != nil {
 		t.Skipf("no repo digest for %s: %v", dockerE2EImage, err)
 	}
