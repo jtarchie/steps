@@ -70,6 +70,9 @@ func TestACancelledCommandStillRemovesItsContainer(t *testing.T) {
 				_ = exec.CommandContext(context.Background(), "docker", "rm", "-f", id).Run() //nolint:gosec // an id docker ps just listed
 			}
 		})
-		t.Fatalf("containers %v outlived Close after a cancelled command; want the step's container removed", leaked)
+		//nolint:gosec // ids docker ps just listed
+		described, _ := exec.CommandContext(context.Background(), "docker", append([]string{"inspect", "--format", "{{.Name}} {{.State.Status}} created {{.Created}}"}, leaked...)...).CombinedOutput()
+
+		t.Fatalf("containers outlived Close after a cancelled command; want the step's container removed:\n%s", described)
 	}
 }

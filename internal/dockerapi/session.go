@@ -117,7 +117,7 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 		return "", err
 	}
 
-	created, err := c.api.ContainerCreate(ctx, client.ContainerCreateOptions{
+	created, err := c.createContainer(ctx, client.ContainerCreateOptions{
 		Name:       spec.Name,
 		Config:     config,
 		HostConfig: hostConfig,
@@ -131,6 +131,32 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 	}
 
 	return created.ID, nil
+}
+
+// createBound is how long a create is given once sent, independent of the caller.
+const createBound = 30 * time.Second
+
+// createContainer makes a container under its own bound rather than the caller's: a create cancelled once the daemon has it still makes the container, and the id it answers with is the only handle to remove it by. Measured: a step cancelled mid-start left its container, or its holder, Created, which no sweep takes while the process that made it lives. A caller gone meanwhile gets its cancellation back and nothing left behind.
+func (c *Client) createContainer(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+	if ctx.Err() != nil {
+		return client.ContainerCreateResult{}, ctx.Err() //nolint:wrapcheck // the callers wrap
+	}
+
+	createCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), createBound)
+	defer cancel()
+
+	created, err := c.api.ContainerCreate(createCtx, options)
+	if err != nil {
+		return created, err //nolint:wrapcheck // the callers wrap
+	}
+
+	if ctx.Err() != nil {
+		_ = c.RemoveContainer(createCtx, created.ID)
+
+		return client.ContainerCreateResult{}, ctx.Err() //nolint:wrapcheck // the callers wrap
+	}
+
+	return created, nil
 }
 
 // publish fills in Publish, which needs both halves of the request: a port
