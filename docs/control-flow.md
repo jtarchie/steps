@@ -527,6 +527,7 @@ Cells that are puts or agents are never skipped, for the same reasons those step
 
 - **Cells run in declaration order, not concurrently** — unless the step says `max_in_flight:` (below). Put an `in_parallel:` inside a cell if a cell's own work should overlap.
 - **A failing cell does not stop the others.** A matrix asks "which of these combinations work", and stopping at the first red one answers that for exactly one cell. Every failure is reported.
+- **Classification follows the worst cell**, as it does for `in_parallel:`: an errored cell (infrastructure) outranks a failed one, so `on_error` fires rather than `on_failure`. Concourse answers the same way.
 - **Cells are named for their coordinates** — `check [mode=fast suite=unit]` — unless you interpolate a variable into the name yourself.
 - **An empty axis, a duplicate `var:`, or a misspelled `{{ .vars.x }}` are load errors.** Each would otherwise mean silently running the wrong matrix.
 

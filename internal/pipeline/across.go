@@ -4,13 +4,13 @@ package pipeline
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
+	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -173,7 +173,10 @@ func runAcrossCells(
 		return runAcrossCellsConcurrently(ctx, r, i, step, cells, cellParent)
 	}
 
-	var failures []error
+	var (
+		failures []error
+		errored  bool
+	)
 
 	cellCtx, spend := newBlockBudget(ctx, r.cfg, step, cells)
 
@@ -190,6 +193,7 @@ func runAcrossCells(
 
 		if err != nil {
 			failures = append(failures, fmt.Errorf("cell %q: %w", executedStepName(cell), err))
+			errored = errored || outcome.Classify(ctx, err) != outcome.Failed
 
 			// A failing cell does not stop the rest. A matrix is asking "which
 			// of these combinations work", and stopping at the first red one
@@ -202,7 +206,7 @@ func runAcrossCells(
 		}
 	}
 
-	return errors.Join(failures...)
+	return joinWorst(failures, errored)
 }
 
 // runAcrossCellsConcurrently runs up to max_in_flight cells at a time.
@@ -279,7 +283,10 @@ func runAcrossCellsConcurrently(
 
 	wg.Wait()
 
-	var failures []error
+	var (
+		failures []error
+		errored  bool
+	)
 
 	for _, result := range results {
 		if logs[result.index] != nil {
@@ -289,12 +296,13 @@ func runAcrossCellsConcurrently(
 		switch {
 		case result.err != nil:
 			failures = append(failures, fmt.Errorf("cell %q: %w", result.name, result.err))
+			errored = errored || outcome.Classify(ctx, result.err) != outcome.Failed
 		case skips[result.index]:
 			notef(ctx, "skip: %s (unchanged)", result.name)
 		}
 	}
 
-	return errors.Join(failures...)
+	return joinWorst(failures, errored)
 }
 
 // runAcrossCell runs one cell unless its exact content already succeeded.

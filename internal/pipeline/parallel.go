@@ -194,18 +194,21 @@ func combineBranchErrors(ctx context.Context, results []branchResult) error {
 		}
 	}
 
+	return joinWorst(failures, errored)
+}
+
+// joinWorst is a block's error from its children's: errored when any child errored, which outranks the ones that only said no, and failed otherwise, so on_failure is the right hook.
+func joinWorst(failures []error, errored bool) error {
 	if len(failures) == 0 {
 		return nil
 	}
 
 	joined := errors.Join(failures...)
 	if errored {
-		// Escalated, not bare: the join holds the failed branches' markers too, and the first one errors.As met decided the block was failed.
+		// Escalated, not bare: the join holds the failed children's markers too, and the first one errors.As met decided the block was failed.
 		return outcome.Escalate(joined) //nolint:wrapcheck // Escalate only marks the classification
 	}
 
-	// Every failure was a step-level one, so the block is a step-level failure
-	// too and on_failure is the right hook.
 	return outcome.Fail(joined) //nolint:wrapcheck // Fail only marks the classification; the joined error is already this package's
 }
 

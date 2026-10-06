@@ -2,6 +2,10 @@ package pipeline
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/events"
@@ -172,4 +176,50 @@ func blockNode(t *testing.T, st store.Store, kind merkle.NodeKind) store.NodeRow
 	t.Fatalf("no %s node recorded among %+v", kind, rows)
 
 	return store.NodeRow{}
+}
+
+// Like in_parallel, a matrix takes its worst cell's class: one cell saying no and another unable to run is errored, so on_error fires rather than on_failure, which is Concourse's answer for across too. The errored cell's image swallows the keepalive, so its container dies at birth.
+func TestAcrossClassifiesByItsWorstCell(t *testing.T) {
+	requireDocker(t)
+
+	dies := "steps-test-dies-at-birth:" + strconv.Itoa(os.Getpid())
+
+	build := exec.CommandContext(t.Context(), "docker", "build", "-q", "-t", dies, "-") //nolint:gosec // a tag this test made
+	build.Stdin = strings.NewReader("FROM alpine:3\nENTRYPOINT [\"/bin/echo\"]\n")
+
+	out, err := build.CombinedOutput()
+	if err != nil {
+		t.Fatalf("building the fixture image: %v\n%s", err, out)
+	}
+
+	t.Cleanup(func() { _ = exec.CommandContext(context.WithoutCancel(t.Context()), "docker", "rmi", "-f", dies).Run() }) //nolint:gosec // as above
+
+	for _, inFlight := range []string{"", "\n    max_in_flight: 2"} {
+		collected := runFixturePipeline(t, `
+jobs:
+- name: build
+  plan:
+  - across:
+    - var: image
+      values: ["alpine:3", "`+dies+`"]`+inFlight+`
+    task: check
+    image: "{{ .vars.image }}"
+    run: "false"
+`, true)
+
+		statuses := map[string]int{}
+		for _, event := range collected {
+			if event.Type == events.TypeStepFinished && event.StepKind == "task" {
+				statuses[event.Status]++
+			}
+		}
+
+		if statuses["failed"] != 1 || statuses["errored"] != 1 {
+			t.Fatalf("max_in_flight %q: cells finished %v, want one failed and one errored, or this proves nothing", inFlight, statuses)
+		}
+
+		if got := blockFinish(t, collected, "across").Status; got != "errored" {
+			t.Errorf("max_in_flight %q: across finished %q, want errored", inFlight, got)
+		}
+	}
 }
