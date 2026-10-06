@@ -172,6 +172,16 @@ tasks:
       - go run ./tools/coverdiff -profile .cover.out -base {{.BASE | default "HEAD"}}
       - rm -f .cover.out
 
+  cover-e2e:
+    desc: "Advisory: which e2e test is the only one executing which statements in internal/. Every package's tests profiled once, then each e2e test in a process of its own; prints the attribution and writes .coverattr/attribution.json. Executing is not asserting — task judge-e2e says which tests notice a change. A few minutes."
+    cmds:
+      - go run ./tools/coverattr {{.CLI_ARGS}}
+
+  judge-e2e:
+    desc: "Advisory: negate each conditional only e2e executes (from task cover-e2e), rebuild ./e2e with it overlaid, and run just the tests that execute it. Writes .coverattr/judge.json and lists the e2e tests never alone in noticing a mutant — the evidence for moving or deleting one. Hours; `task judge-e2e -- .coverattr/attribution.json 4 20` judges a sample of 20."
+    cmds:
+      - go run ./tools/mutants judge {{.CLI_ARGS}}
+
   mutate-pkg:
     desc: "Mutation testing over one package: task mutate-pkg PKG=./internal/venue [SINCE=<rev>] [WORKERS=1] [INTEGRATION=1]. Every LIVED mutant is a code change no test notices. The procedure around it — what to sweep, where to run it, how to triage a survivor — is the mutation-sweep skill; this task is only the mechanics, so a human can run them too. Results land in .gremlins/."
     requires:

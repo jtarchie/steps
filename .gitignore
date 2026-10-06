@@ -25,6 +25,9 @@
 # task cover-diff scratch profile
 /.cover.out
 
+# task cover-e2e and judge-e2e results
+/.coverattr/
+
 # task mutate-pkg results; what is worth keeping from them goes in tools/mutation-ledger.json
 /.gremlins/
 

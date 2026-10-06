@@ -50,7 +50,7 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
-	usage := errors.New("usage: mutants stale | summary | all [package dir...] | excludes <package dir> <since rev, or empty> | record <package dir> <gremlins json>")
+	usage := errors.New("usage: mutants stale | summary | all [package dir...] | excludes <package dir> <since rev, or empty> | record <package dir> <gremlins json> | judge [attribution json] [workers] [limit]")
 
 	if len(args) == 0 {
 		return usage
@@ -65,6 +65,7 @@ func run(ctx context.Context, args []string) error {
 		"all":      {-1, func(only []string) error { return sweepAll(ctx, only) }},
 		"excludes": {2, func(o []string) error { return excludes(ctx, o[0], o[1]) }},   //nolint:mnd // a package and a rev
 		"record":   {2, func(o []string) error { return recordFile(ctx, o[0], o[1]) }}, //nolint:mnd // a package and a report
+		"judge":    {-1, func(o []string) error { return judge(ctx, o) }},
 	}
 
 	verb, known := verbs[args[0]]
