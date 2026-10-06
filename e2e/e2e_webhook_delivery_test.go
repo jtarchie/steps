@@ -22,6 +22,7 @@ import (
 
 const githubSecret = "It's a Secret to Everybody"
 
+// deliveryPipeline publishes what its build fetched into out whole, by one rename: a test that waits for a file there then reads all three, where a cp watched mid-copy handed one back empty.
 func deliveryPipeline(out string) string {
 	return `
 resources:
@@ -38,8 +39,9 @@ jobs:
   - task: build
     inputs: [push]
     run: |
-      mkdir -p ` + out + `
-      cp push/body push/version.json push/headers.json ` + out + `/
+      mkdir -p ` + out + `.tmp
+      cp push/body push/version.json push/headers.json ` + out + `.tmp/
+      mv ` + out + `.tmp ` + out + `
 `
 }
 
