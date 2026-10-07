@@ -5,13 +5,13 @@
 #   snapshot   main: gate, goreleaser snapshot, run the binary. Publishes nothing.
 #   release    new v* tag: gate, approval, goreleaser release, check the published archive.
 #
-#   steps run examples/release.yml --job snapshot
+#   steps run examples/release.yml --job snapshot --worker docker-box=docker+ssh://me@box
 #   git tag v0.1.0 && git push origin v0.1.0
-#   steps run examples/release.yml --job release   # parks at the approval
+#   steps run examples/release.yml --job release --worker ...   # parks at the approval
 #   steps approvals -p release --db .steps/release.yml.db    # ...approve <id>
-#   steps web && steps pipeline set -c examples/release.yml  # polls for the next tag
+#   steps web --worker ... && steps pipeline set -c examples/release.yml  # polls for the next tag
 #
-# Needs: git, task, goreleaser, jq, go, docker (daemon up), gh logged in with
+# Needs: git, task, goreleaser, jq, go, a docker+ssh worker for docker-box, gh logged in with
 # `repo` scope. GITHUB_TOKEN comes from `gh auth token`.
 #
 # The tag is the trigger: pushing it is the decision, and this pipeline never
@@ -71,28 +71,55 @@ resources:
   source: {}
 
 tasks:
+# Runs on a docker+ssh worker (tag docker-box, mapped by --worker): the laptop VM's daemon timed out under the parallel -race shards.
 - name: gate
   inputs: [repo]
-  env: [DOCKER_HOST, DOCKER_CONTEXT]   # not in the step's baseline env
-  timeout: 25m
+  image: docker:dind                   # stock, not prebuilt: a placed step's image is pulled every run, so a worker-local image fails
+  privileged: true                     # the tests bind-mount temp dirs, so they need a daemon inside this container
+  user: root                           # dind's daemon will not start unprivileged
+  network: bridge                      # modules, toolchain, the tests' images
+  timeout: 40m                         # module, build and image caches start cold every run
   run: |
     set -e
-    export PATH="$HOME/go/bin:$PATH"   # govulncheck, nilaway
+    case "$(uname -m)" in
+      x86_64) arch=amd64 ;;
+      aarch64) arch=arm64 ;;
+      *) echo "no toolchain mapping for $(uname -m)" >&2; exit 1 ;;
+    esac
+    # ponytail: toolchain installed per run (~1-2 min); bake it into an image FROM docker:dind when that hurts.
+    apk add -q gcc musl-dev git curl tar   # -race needs cgo
+    go=$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -1)
+    curl -fsSL "https://go.dev/dl/$go.linux-$arch.tar.gz" | tar -xz -C /usr/local
+    curl -fsSL "https://github.com/go-task/task/releases/latest/download/task_linux_$arch.tar.gz" \
+      | tar -xz -C /usr/local/bin task
+    lint=2.14.0   # the laptop's version, so lint answers the same in both places
+    curl -fsSL "https://github.com/golangci/golangci-lint/releases/download/v$lint/golangci-lint-$lint-linux-$arch.tar.gz" \
+      | tar -xz -C /usr/local/bin --strip-components=1 "golangci-lint-$lint-linux-$arch/golangci-lint"
+    export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"   # $HOME/go/bin: govulncheck, nilaway
+
+    dind dockerd --host=unix:///var/run/docker.sock >/tmp/dockerd.log 2>&1 &   # dind nests cgroups; bare dockerd fails on cgroup v2
     # The docker-backed tests skip silently without a daemon. Refuse instead.
-    if ! docker info >/dev/null 2>&1; then
-      echo "no docker daemon reachable" >&2
-      exit 1
-    fi
+    i=0
+    until docker info >/dev/null 2>&1; do
+      i=$((i + 1))
+      if [ "$i" -gt 60 ]; then
+        echo "no docker daemon reachable" >&2
+        tail -20 /tmp/dockerd.log >&2
+        exit 1
+      fi
+      sleep 1
+    done
     cd repo
     task
 
 jobs:
 - name: snapshot
-  timeout: 45m
+  timeout: 60m
   plan:
   - get: repo
     resource: main
   - task: gate
+    tags: [docker-box]
   - task: build
     inputs: [repo]
     outputs: [dist]
@@ -130,6 +157,7 @@ jobs:
     trigger: true
     version: every
   - task: gate
+    tags: [docker-box]
   # Separate artifact: a file in the checkout would dirty the tree for goreleaser.
   - task: name
     inputs: [repo]
