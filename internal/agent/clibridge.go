@@ -231,8 +231,17 @@ func (b *cliBridge) handler(name string, impl toolImpl, env toolEnv) sdkmcp.Tool
 			return nil, fmt.Errorf("tool %q: encoding result: %w", name, err)
 		}
 
+		content := []sdkmcp.Content{&sdkmcp.TextContent{Text: string(payload)}}
+
+		// The image travels as MCP image content beside the JSON, which names
+		// it without its bytes; the CLI hands that content to its model as an
+		// image, which is the one thing a text result cannot be.
+		if img, ok := result[imageKey].(toolImage); ok {
+			content = append(content, &sdkmcp.ImageContent{Data: img.data, MIMEType: img.mime})
+		}
+
 		return &sdkmcp.CallToolResult{
-			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: string(payload)}},
+			Content: content,
 			IsError: !requiredCallSucceeded(result),
 		}, nil
 	}

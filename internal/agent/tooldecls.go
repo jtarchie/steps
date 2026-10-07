@@ -69,7 +69,8 @@ const readFileDescription = "Read a UTF-8 text file's contents, given a path rel
 	" Optionally pass start_line and/or end_line (1-indexed, inclusive) to read only a slice of a large file instead of" +
 	" its capped prefix — useful both for a file too big to read in one call and for output any tool spilled to a file" +
 	" when it exceeded the inline size limit (run_shell, an MCP tool, a sub-agent's answer, ...) — see" +
-	" that tool's own result for the exact path."
+	" that tool's own result for the exact path. A PNG, JPEG, GIF or WebP image comes back as the image itself" +
+	" when you can be shown one, and as a description otherwise; any other binary file is described, not shown."
 
 // writeFileDescription documents write_file's contract.
 const writeFileDescription = "Write text content to a file, given a path relative to the step's working directory." +

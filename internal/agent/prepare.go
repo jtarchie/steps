@@ -255,7 +255,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 
 	lost := &lostTree{}
 
-	contextBlocks, err := prepareContextBlocks(dir, ri.ContextPaths, ri.MaxContextBytes, tools.decls)
+	contextBlocks, err := prepareContextBlocks(ctx, dir, ri, tools.decls)
 	if err != nil {
 		workspace.CloseSpace(space, step.Agent)
 		closeAll(closers)
@@ -277,7 +277,7 @@ func prepareAgentStep(ctx context.Context, cfg *config.Config, step config.Step,
 			agentName: step.DisplayName(),
 			prompt:    terminalPrompter(),
 			state:     &askState{},
-		}},
+		}, sight: sightFor(ri)},
 		tools: tools,
 		params: agentGenParams{
 			temperature: ri.Temperature,
@@ -504,7 +504,7 @@ func prepareStepTree(ctx context.Context, runner shell.Runner, ri config.Resolve
 		return nil, "", nil, err
 	}
 
-	blocks, err := prepareContextBlocks(dir, ri.ContextPaths, ri.MaxContextBytes, decls)
+	blocks, err := prepareContextBlocks(ctx, dir, ri, decls)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -515,8 +515,8 @@ func prepareStepTree(ctx context.Context, runner shell.Runner, ri config.Resolve
 // prepareContextBlocks loads context_paths files and validates that read_file
 // is declared when context paths are present. Extracted from prepareAgentStep
 // to keep its cyclomatic complexity under the linter budget.
-func prepareContextBlocks(dir string, paths []string, limit int, decls *genai.Tool) ([]contextBlock, error) {
-	blocks, err := loadContextBlocks(dir, paths, limit)
+func prepareContextBlocks(ctx context.Context, dir string, ri config.ResolvedInvocation, decls *genai.Tool) ([]contextBlock, error) {
+	blocks, err := loadContextBlocks(ctx, dir, ri.ContextPaths, ri.MaxContextBytes, sightFor(ri))
 	if err != nil {
 		return nil, err
 	}

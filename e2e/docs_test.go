@@ -258,7 +258,7 @@ func writeDocBlock(t *testing.T, dir string, block docs.Block, scenario docScena
 				fallbackEndpoint = scenario.fallbackFake(t).URL
 			}
 
-			body = injectFakeProvider(t, body, scenario.fake(t).URL, fallbackEndpoint)
+			body = injectFakeProvider(t, body, scenario.fake(t).URL, fallbackEndpoint, scenario.keepModel)
 		}
 	}
 
@@ -354,7 +354,10 @@ func usesAgents(t *testing.T, body string) bool {
 // fallback: [0].source the same way — for a doc example whose fallback must
 // actually be reachable rather than the common declared-but-never-dialed
 // case.
-func injectFakeProvider(t *testing.T, body, endpoint, fallbackEndpoint string) string {
+//
+// keepModel leaves each agent's model name as the doc wrote it, still aimed at
+// the fake — for an example whose behavior turns on WHICH model it is.
+func injectFakeProvider(t *testing.T, body, endpoint, fallbackEndpoint string, keepModel bool) string {
 	t.Helper()
 
 	var doc map[string]any
@@ -375,7 +378,7 @@ func injectFakeProvider(t *testing.T, body, endpoint, fallbackEndpoint string) s
 
 		agent["source"] = map[string]any{
 			"endpoint":    endpoint + "/v1/",
-			"model":       "test-model",
+			"model":       fakeModelFor(agent, keepModel),
 			"api_key_env": "STEPS_TEST_AGENT_API_KEY",
 		}
 
@@ -411,6 +414,19 @@ func injectFakeProvider(t *testing.T, body, endpoint, fallbackEndpoint string) s
 	}
 
 	return string(rewritten)
+}
+
+// fakeModelFor is the model name an agent is pointed at the fake under: a
+// placeholder, unless the scenario keeps the doc's own.
+func fakeModelFor(agent map[string]any, keepModel bool) string {
+	source, ok := agent["source"].(map[string]any)
+	if !ok || !keepModel {
+		return "test-model"
+	}
+
+	model, _ := source["model"].(string)
+
+	return model
 }
 
 // injectDocMCPFixture starts the mcp= fixture a block's fence names (leaving

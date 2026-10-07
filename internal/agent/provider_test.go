@@ -114,7 +114,7 @@ func TestLoadContextBlocks(t *testing.T) {
 	t.Run("nil paths resolve to nil", func(t *testing.T) {
 		t.Parallel()
 
-		blocks, err := loadContextBlocks(t.TempDir(), nil, 0)
+		blocks, err := loadContextBlocks(t.Context(), t.TempDir(), nil, 0, imageSight{})
 		if err != nil || blocks != nil {
 			t.Errorf("got (%v, %v), want (nil, nil)", blocks, err)
 		}
@@ -135,7 +135,7 @@ func TestLoadContextBlocks(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		blocks, err := loadContextBlocks(dir, []string{"repo/CLAUDE.md"}, 0)
+		blocks, err := loadContextBlocks(t.Context(), dir, []string{"repo/CLAUDE.md"}, 0, imageSight{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -152,7 +152,7 @@ func TestLoadContextBlocksErrors(t *testing.T) {
 	t.Run("missing file is a preparation error", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := loadContextBlocks(t.TempDir(), []string{"repo/MISSING.md"}, 0)
+		_, err := loadContextBlocks(t.Context(), t.TempDir(), []string{"repo/MISSING.md"}, 0, imageSight{})
 		if err == nil {
 			t.Fatal("expected an error for a missing context file")
 		}
@@ -165,7 +165,7 @@ func TestLoadContextBlocksErrors(t *testing.T) {
 	t.Run("paths escaping the workspace are rejected", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := loadContextBlocks(t.TempDir(), []string{"../../etc/passwd"}, 0)
+		_, err := loadContextBlocks(t.Context(), t.TempDir(), []string{"../../etc/passwd"}, 0, imageSight{})
 		if err == nil {
 			t.Fatal("expected an error for an escaping context path")
 		}
@@ -208,7 +208,7 @@ func TestContextPathLoadAndRunAgree(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			_, runErr := loadContextBlocks(dir, []string{tc.path}, 0)
+			_, runErr := loadContextBlocks(t.Context(), dir, []string{tc.path}, 0, imageSight{})
 			if runErr != nil && !strings.Contains(runErr.Error(), "escapes the working directory") {
 				t.Fatalf("run failed for a reason other than confinement: %v", runErr)
 			}
@@ -285,7 +285,7 @@ func TestContextPathTruncatesInsteadOfFailing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks, err := loadContextBlocks(dir, []string{"big.diff"}, config.DefaultMaxContextBytes)
+	blocks, err := loadContextBlocks(t.Context(), dir, []string{"big.diff"}, config.DefaultMaxContextBytes, imageSight{})
 	if err != nil {
 		t.Fatalf("an oversized context path failed the step: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestContextPathZeroLimitHandsOverTheWholeFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks, err := loadContextBlocks(dir, []string{"big.diff"}, 0)
+	blocks, err := loadContextBlocks(t.Context(), dir, []string{"big.diff"}, 0, imageSight{})
 	if err != nil {
 		t.Fatalf("loadContextBlocks: %v", err)
 	}
@@ -345,13 +345,13 @@ func TestContextPathHonoursAConfiguredLimit(t *testing.T) {
 	}
 
 	// Under the default, so it arrives whole.
-	blocks, err := loadContextBlocks(dir, []string{"diff"}, 0)
+	blocks, err := loadContextBlocks(t.Context(), dir, []string{"diff"}, 0, imageSight{})
 	if err != nil || strings.Contains(blocks[0].content, "[truncated:") {
 		t.Errorf("a 5KB file was truncated under the default ceiling: err=%v", err)
 	}
 
 	// A tighter ceiling truncates it.
-	blocks, err = loadContextBlocks(dir, []string{"diff"}, 1000)
+	blocks, err = loadContextBlocks(t.Context(), dir, []string{"diff"}, 1000, imageSight{})
 	if err != nil {
 		t.Fatalf("loadContextBlocks: %v", err)
 	}

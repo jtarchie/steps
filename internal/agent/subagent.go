@@ -183,7 +183,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 	// c.ri.ContextPaths is always empty here — loadContextBlocks still
 	// resolves nil/empty safely. A bad path arrives as ordinary tool-result
 	// data, the same contract every child failure honours.
-	contextBlocks, err := loadContextBlocks(env.dir, c.ri.ContextPaths, c.ri.MaxContextBytes)
+	contextBlocks, err := loadContextBlocks(ctx, env.dir, c.ri.ContextPaths, c.ri.MaxContextBytes, sightFor(c.ri))
 	if err != nil {
 		return map[string]any{"error": fmt.Sprintf("%s: %s", c.ri.AgentName, err)}
 	}
@@ -204,7 +204,7 @@ func (c preparedSubAgent) run(ctx context.Context, args map[string]any, env tool
 		// this it was told there was nobody to ask on a run that manifestly
 		// had somebody. The NAME is the child's, so a parked question says
 		// which agent wants to know rather than which one delegated.
-		env:   toolEnv{dir: env.dir, runner: runner, tree: childTree, lost: env.lost, spillDir: env.spillDir, ask: env.ask.forAgent(c.ri.AgentName)},
+		env:   toolEnv{dir: env.dir, runner: runner, tree: childTree, lost: env.lost, spillDir: env.spillDir, ask: env.ask.forAgent(c.ri.AgentName), sight: sightFor(c.ri)},
 		tools: c.tools,
 		params: agentGenParams{
 			temperature: c.ri.Temperature,

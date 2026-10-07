@@ -267,6 +267,16 @@ func renderCLIPrompt(conv agentConversation) string {
 	// read exactly like an operator instruction. The tag is drawn fresh
 	// against the content so it cannot be closed early from inside.
 	for _, block := range conv.contextBlocks {
+		// A prompt is text, so an image cannot ride in it the way it rides in
+		// a hosted step's synthetic result. The bridge's read_file can carry
+		// one, so the model is pointed there instead.
+		if block.image != nil {
+			fmt.Fprintf(&out, "%s: %s. Not included here: read_file on this path returns the image.\n\n",
+				block.path, describeImage(block.image.mime, int64(len(block.image.data)), block.image.width, block.image.height))
+
+			continue
+		}
+
 		tag := freshFenceTag(block.content)
 		fmt.Fprintf(&out, "%s:\n<%s>\n%s\n</%s>\n\n", block.path, tag, block.content, tag)
 	}

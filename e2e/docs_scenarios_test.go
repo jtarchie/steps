@@ -46,6 +46,12 @@ type docScenario struct {
 	// daemon, which needs no network but does need docker.
 	workers map[string]string
 
+	// keepModel keeps each agent's model name as the doc wrote it rather than
+	// replacing it with a placeholder, for an example whose behavior depends
+	// on which model it is (whether it can be shown an image). The endpoint is
+	// still the fake.
+	keepModel bool
+
 	// check runs after a green `steps test`, for assertions the YAML itself
 	// can't carry (which branch a verdict took, what a put received). It is
 	// given the pipeline's path as well as its directory, because the state
@@ -169,6 +175,36 @@ var docScenarios = map[string]docScenario{
 					return says("The file could not be read.")
 				default:
 					return callsTool("read_file", map[string]any{"path": "notes/plan.txt"})
+				}
+			})
+		},
+	},
+
+	// Two agents share one fake, so it routes on what arrived: the image itself
+	// (only for the model that takes images), the description (only for the
+	// one that does not), or nothing yet. Whichever arrived, the tool message
+	// must not be carrying the bytes as well.
+	"agents-read-image": {
+		keepModel: true,
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			const png = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAEElEQVR4nGP4z8AARww4OQD1MQv1NXv7ggAAAABJRU5ErkJggg=="
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				if req.toolResultContains(png) {
+					t.Errorf("a tool message carried the image's base64: %v", req.toolResults())
+				}
+
+				switch {
+				case slices.Contains(req.images(), "data:image/png;base64,"+png):
+					return says("It shows a red rectangle.")
+				case req.toolResultContains("PNG image, 4x3") && req.toolResultContains("can't be shown images"):
+					return says("It is a 4x3 PNG I cannot see.")
+				case len(req.toolResults()) > 0:
+					return says("Nothing usable came back.")
+				default:
+					return callsTool("read_file", map[string]any{"path": "shots/login.png"})
 				}
 			})
 		},

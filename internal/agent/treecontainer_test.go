@@ -3,6 +3,7 @@ package agent
 // The container half of the file tools, against real images: they run whenever a daemon is reachable and skip cleanly when one is not, because a test that only runs when somebody opts in is how a shipped feature stays broken without anybody noticing.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -483,5 +484,45 @@ func TestContainerTreeResolveWriteRefusesLinkEscapes(t *testing.T) {
 		if err != nil || resolved != contained.dir+"/"+rel {
 			t.Errorf("resolveWrite(%q) = %q, %v; want it allowed in place", rel, resolved, err)
 		}
+	}
+}
+
+// TestContainerTreeReadsAnImageWhole is the binary half of the container path:
+// the file crosses as a script's stdout, so a byte the shell or the capture
+// mangled — a NUL, a CR, a high byte — would reach the model as a corrupt
+// image the provider refuses. A ranged read goes through it too, since a ranged
+// read of an image is answered with the whole image.
+func TestContainerTreeReadsAnImageWhole(t *testing.T) {
+	t.Parallel()
+	requireAgentDocker(t)
+
+	for _, image := range probeImages {
+		t.Run(image, func(t *testing.T) {
+			t.Parallel()
+
+			dir := daemonVisibleDir(t)
+			data := encodedImage(t, "png", 64, 48)
+			writeBytes(t, dir, "shot.png", data)
+
+			contained := newContainerTree(t, image, dir)
+			env := toolEnv{dir: dir, tree: contained, lost: contained.lost, sight: hostedSight}
+
+			for _, args := range []map[string]any{
+				{"path": "shot.png"},
+				{"path": "shot.png", "start_line": float64(1), "end_line": float64(1)},
+			} {
+				got := execReadFile(t.Context(), args, env)
+
+				img, ok := got[imageKey].(toolImage)
+				if !ok {
+					t.Fatalf("read_file(%v) in %s = %v, want the image", args, image, got)
+				}
+
+				if !bytes.Equal(img.data, data) || img.width != 64 || img.height != 48 {
+					t.Errorf("read_file(%v) in %s returned %d bytes (%dx%d), want the file's own %d (64x48)",
+						args, image, len(img.data), img.width, img.height, len(data))
+				}
+			}
+		})
 	}
 }

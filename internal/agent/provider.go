@@ -6,6 +6,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -43,6 +44,9 @@ const agentTimeoutNote = `This conversation has a wall-clock deadline: it must f
 type contextBlock struct {
 	path    string
 	content string
+	// image is the file itself when it is one the model can be shown; content
+	// then only describes it.
+	image *toolImage
 }
 
 // buildSystemMessage combines an agent's persona with the operating note
@@ -78,7 +82,7 @@ func buildSystemMessage(persona, dir string, timeout time.Duration) string {
 // should fail the step loudly before a token is spent, rather than surface as
 // a surprise mid-conversation. A file that is merely too BIG is not that —
 // see loadContextBlock.
-func loadContextBlocks(dir string, paths []string, limit int) ([]contextBlock, error) {
+func loadContextBlocks(ctx context.Context, dir string, paths []string, limit int, sight imageSight) ([]contextBlock, error) {
 	if len(paths) == 0 {
 		return nil, nil
 	}
@@ -94,7 +98,7 @@ func loadContextBlocks(dir string, paths []string, limit int) ([]contextBlock, e
 	blocks := make([]contextBlock, 0, len(paths))
 
 	for _, p := range paths {
-		block, err := loadContextBlock(dir, p, limit)
+		block, err := loadContextBlock(ctx, dir, p, limit, sight)
 		if err != nil {
 			return nil, err
 		}
@@ -126,7 +130,15 @@ func loadContextBlocks(dir string, paths []string, limit int) ([]contextBlock, e
 // — and then paid for a second copy of it, since the truncating branch
 // converted the entire buffer to a string before slicing. The size in the
 // notice comes from a stat instead, which is where it was always available.
-func loadContextBlock(dir, path string, limit int) (contextBlock, error) {
+//
+// An image, or any binary file, is not truncated text at all: it gets
+// read_file's own answer for it, so a screenshot handed over as context
+// arrives as the image a model that can see one would have read itself — and
+// is bounded by the image limit rather than by max_context_bytes:, which
+// budgets text. That answer is never a preparation error either, an image too
+// big to send included: like a long diff, it is a fact about this run's
+// input, not a mistake in the pipeline.
+func loadContextBlock(ctx context.Context, dir, path string, limit int, sight imageSight) (contextBlock, error) {
 	resolved, err := resolveAgentPath(dir, path)
 	if err != nil {
 		return contextBlock{}, fmt.Errorf("context path %q: %w", path, err)
@@ -156,6 +168,12 @@ func loadContextBlock(dir, path string, limit int) (contextBlock, error) {
 		return contextBlock{}, fmt.Errorf("context path %q: %w", path, err)
 	}
 
+	if isNonText(data) {
+		answer := nonTextResult(ctx, hostTree{dir: dir}, resolved, path, data, info.Size(), sight)
+
+		return nonTextContextBlock(path, answer), nil
+	}
+
 	content := string(data)
 
 	if limit > 0 && info.Size() > int64(limit) {
@@ -164,11 +182,28 @@ func loadContextBlock(dir, path string, limit int) (contextBlock, error) {
 				"Use read_file with start_line/end_line to page through the rest.]",
 			path, info.Size(), limit)
 
-		slog.Warn("agent.context_path_truncated", "path", path,
+		slog.WarnContext(ctx, "agent.context_path_truncated", "path", path,
 			"bytes", info.Size(), "limit", limit)
 	}
 
 	return contextBlock{path: path, content: content}, nil
+}
+
+// nonTextContextBlock turns read_file's answer for a non-text file into a
+// context block, whichever of its three shapes the answer took.
+func nonTextContextBlock(path string, answer map[string]any) contextBlock {
+	block := contextBlock{path: path}
+
+	block.content, _ = answer["content"].(string)
+	if refusal, ok := answer["error"].(string); ok {
+		block.content = refusal
+	}
+
+	if img, ok := answer[imageKey].(toolImage); ok {
+		block.image = &img
+	}
+
+	return block
 }
 
 // lookupAPIKey reads the API key from the OS environment variable named by

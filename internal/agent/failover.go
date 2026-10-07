@@ -142,6 +142,10 @@ func runPreparedWithFailover(ctx context.Context, prepared preparedAgentStep) (c
 		// a resumed conversation against the wrong model's context window.
 		conv.toolChoiceStringOnly = next.StringOnlyToolChoice
 		conv.compactAfterTokens = next.CompactAfterTokens
+		// And whether it can be shown an image: a blind fallback gets the
+		// sighted source's images stripped from what it resumes (see
+		// buildAgentRequest), and its own read_file calls describe them.
+		conv.env.sight = sightFor(next)
 
 		// nextHostedFallback never yields a CLI source, so the hosted constructor is the whole of invocationLLM here.
 		ri, llm, index, swapped = next, newAgentLLM(next, apiKey), nextIndex, true

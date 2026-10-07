@@ -143,7 +143,7 @@ func RunFix(
 		system:        buildSystemMessage(ri.Persona, modelDir, timeout),
 		messages:      messages,
 		contextBlocks: contextBlocks,
-		env:           toolEnv{dir: dir, runner: runner, tree: files, lost: lost, spillDir: spillDir, ask: askContext(st, jobName, fix.Agent)},
+		env:           toolEnv{dir: dir, runner: runner, tree: files, lost: lost, spillDir: spillDir, ask: askContext(st, jobName, fix.Agent), sight: sightFor(ri)},
 		tools:         tools,
 		params: agentGenParams{
 			temperature: ri.Temperature,

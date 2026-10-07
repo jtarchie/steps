@@ -251,8 +251,14 @@ type agentConversation struct {
 //
 // It is how anything reaches a conversation without costing a turn or
 // depending on the model choosing to ask — context_paths files and an
-// upstream step's decision both arrive this way.
-func syntheticToolExchange(callID, name string, args map[string]any, content string) []*genai.Content {
+// upstream step's decision both arrive this way. An image block arrives the
+// way read_file would have returned it, image part and all.
+func syntheticToolExchange(callID, name string, args map[string]any, block contextBlock) []*genai.Content {
+	response := map[string]any{"content": block.content}
+	if block.image != nil {
+		response[imageKey] = *block.image
+	}
+
 	return []*genai.Content{
 		{
 			Role:  genai.RoleModel,
@@ -260,11 +266,11 @@ func syntheticToolExchange(callID, name string, args map[string]any, content str
 		},
 		{
 			Role: genai.RoleUser,
-			Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{
+			Parts: withImageParts([]*genai.Part{{FunctionResponse: &genai.FunctionResponse{
 				ID:       callID,
 				Name:     name,
-				Response: map[string]any{"content": content},
-			}}},
+				Response: response,
+			}}}),
 		},
 	}
 }
@@ -283,7 +289,12 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 	conv.params.applyTo(cfg)
 
 	if conv.resume != nil && conv.resume.contents != nil {
-		return &model.LLMRequest{Contents: conv.resume.contents, Config: cfg}
+		contents := conv.resume.contents
+		if !conv.env.sight.sees() {
+			contents = withoutImages(contents)
+		}
+
+		return &model.LLMRequest{Contents: contents, Config: cfg}
 	}
 
 	// This is the one point a conversation is genuinely fresh: a failover
@@ -314,7 +325,7 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 	// context_paths files below are what this step was handed to work on.
 	for i, block := range conv.upstream {
 		args := map[string]any{"step": block.path}
-		contents = append(contents, syntheticToolExchange(fmt.Sprintf("upstream_%d", i), readStepToolName, args, block.content)...)
+		contents = append(contents, syntheticToolExchange(fmt.Sprintf("upstream_%d", i), readStepToolName, args, block)...)
 		conv.env.transcript.call(readStepToolName, args)
 		// Bounded like every other tool result recorded here (renderResultContent,
 		// recordCLIResults): block.content is a context: {from:} block, uncapped
@@ -325,7 +336,7 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 
 	for i, block := range conv.contextBlocks {
 		args := map[string]any{"path": block.path}
-		contents = append(contents, syntheticToolExchange(fmt.Sprintf("ctx_%d", i), "read_file", args, block.content)...)
+		contents = append(contents, syntheticToolExchange(fmt.Sprintf("ctx_%d", i), "read_file", args, block)...)
 		conv.env.transcript.call("read_file", args)
 		// Bounded for the same reason: context_paths: caps what the MODEL sees
 		// at max_context_bytes (default 100,000, or uncapped at 0), which is a
@@ -666,7 +677,7 @@ func (conv agentConversation) finishToolTurn(
 
 	req.Contents = append(req.Contents, &genai.Content{
 		Role:  genai.RoleUser,
-		Parts: parts,
+		Parts: withImageParts(parts),
 	})
 
 	return detector.respond(req, calls, parts)

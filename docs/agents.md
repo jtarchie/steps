@@ -136,6 +136,60 @@ jobs:
 
 A step's `tools:` **selects from** what the agent already grants — it can narrow, never widen. Naming a tool the agent does not provide is a load error, so one careless step cannot hand a model a capability the pipeline never gave it; an absent step `tools:` means the agent's whole grant, unchanged.
 
+### `read_file` on images and binary files
+
+`read_file` decides what a file is from its **bytes**, not its name. A PNG, JPEG, GIF or WebP comes back as the image itself when the model can be shown one, so an agent can look at the screenshot somebody attached rather than reason from a page of mangled bytes:
+
+```yaml test=agents-read-image
+agents:
+- name: looker
+  source: { model: openrouter/anthropic/claude-sonnet-4.5 }  # takes images
+- name: reader
+  source: { model: openrouter/qwen/qwen3.7-flash }           # does not
+
+jobs:
+- name: triage
+  plan:
+  - task: attach
+    outputs: [shots]
+    # a 4x3 red PNG, standing in for a screenshot from a bug report
+    run: echo iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAEElEQVR4nGP4z8AARww4OQD1MQv1NXv7ggAAAABJRU5ErkJggg== | base64 -d > shots/login.png
+  - agent: looker
+    inputs: [shots]
+    messages:
+      - "What does shots/login.png show?"
+    assert:
+      tool_calls:
+      - name: read_file
+        args: { path: shots/login.png }
+      stdout: a red rectangle        # only the image itself could have said so
+  - agent: reader
+    inputs: [shots]
+    messages:
+      - "What does shots/login.png show?"
+    assert:
+      stdout: 4x3 PNG                # the description, never the bytes
+  assert:
+    execution: [attach, looker, reader]
+    outcome: succeeded
+```
+
+Whether a model is shown the image depends on the path its conversation takes:
+
+| agent | what `read_file` returns for an image |
+|---|---|
+| a CLI agent (`@claude/...`) | the image, as MCP image content beside the usual JSON result — the CLI scales it down itself before its model sees it |
+| a hosted model known to take images: `claude-*`, `gpt-4o`, `gpt-4.1`, `gpt-5`, `o3`, `o4-mini`, `gemini-*`, under any provider prefix | the image, in a user message right after the tool results: Chat Completions — the protocol every hosted provider here speaks, Anthropic's included — has no image in a tool message |
+| any other hosted model | a description: name, format, dimensions and size, and that this model can't be shown images |
+
+Unlisted means a description, deliberately: a model wrongly believed blind loses the picture, while one wrongly believed sighted makes its endpoint refuse the request and fails the step. A `fallback:` that resumes a conversation on a blind model gets the images already in it replaced by a note, for the same reason.
+
+**Limits.** Nothing here resizes an image — that needs an image codec this build does not carry — so the provider's limits are the ones to meet. A hosted model is sent at most **3.75 MB** of file (Anthropic refuses 5 MB of *base64*, a third larger than the file) and **8000 pixels** on a side; a CLI agent, whose CLI resizes for itself, up to **10 MB**. An image over its limit is refused as a tool error asking for a smaller copy — the model can scale or crop one with `run_shell`, if it has it. `start_line`/`end_line` mean nothing to an image and are ignored, with a note saying so.
+
+**Any other binary file** — a NUL byte in its first 8000 bytes *and* not valid UTF-8 — is described the same way (its size and sniffed type) instead of shown. Both tests, not either: NUL-separated text such as `find -print0` output is still text, and so is a Latin-1 file.
+
+A `context_paths:` entry naming an image arrives the same way: as the image on a hosted model that takes them, bounded by the image limit rather than by `max_context_bytes:` (which budgets text), and as the description otherwise. A CLI agent's prompt is text, so there it is listed with a pointer to `read_file`, which returns it. The image's bytes are never stored: the transcript, the debug log and the recorded result carry its type, dimensions, size and SHA-256, and only the request to the model carries the pixels.
+
 ### `edit_file`
 
 Takes `path`, `old_string`, `new_string`, and optional `replace_all`. `old_string` must match **exactly once** unless `replace_all` is set; zero matches and ambiguous matches are both returned as errors phrased as next-turn instructions, since both are recoverable without burning an attempt. The file's mode is preserved. Returns `replacements`, `first_line`, and `match_mode`, never content.
@@ -1153,6 +1207,8 @@ Anything not granted is **absent**, not merely unapproved: `--tools ""` gives th
 **Attestation: the fence is enforced, not merely asked for.** `--tools ""` is policy inside an upstream binary steps does not pin, so each attempt checks the CLI's own stream-json `init` event — which lists the session's tools — against exactly the bridged grant, and kills the child the instant they disagree. This is *detection*, not prevention: the check runs after `init` is parsed, so it cannot stop a single surplus call made in the same breath as `init` itself, but every call after that is refused. A mismatch is an infrastructure condition (it fires `on_error`, not a step failure `to:` can route on) — retrying would just re-trigger the same fence.
 
 A bridged call's trajectory entry is recorded **de-namespaced**: `mcp__steps__read_file` records as `read_file`, identical to what a hosted step's own trajectory shows for the same call, so one `assert.tool_calls: [{name: read_file}]` reads the same on either agent kind. A name this build does not recognize as bridged (`Bash`, `Task`, anything the CLI's own natives could in principle still report despite `--tools ""`) is kept **verbatim** — a second, human-readable signal of the same fence failure the attestation check exists to catch.
+
+**An image `read_file` opens reaches the CLI's model as an image** — MCP image content, which the CLI resizes and hands its model the way its own `Read` would have — rather than as the mangled text a raw read of a PNG used to be. See [`read_file` on images](#read_file-on-images-and-binary-files) for limits and what a hosted agent gets instead.
 
 ### A step is not your session
 

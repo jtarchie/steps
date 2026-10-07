@@ -61,6 +61,10 @@ type toolEnv struct {
 	// The verdict tool reads it to judge a nudge-enabled tool_calls:
 	// contract before it accepts a decision.
 	trajectory func() []recordedToolCall
+	// sight is whether read_file may answer with an image, decided by the
+	// source the conversation talks to (see sightFor). The zero value — every
+	// env a test builds by hand — describes an image instead.
+	sight imageSight
 }
 
 // files is the tree the file tools work against, defaulting to this process's own filesystem so a zero-value env — every unit test that builds one by hand — behaves as it always did.

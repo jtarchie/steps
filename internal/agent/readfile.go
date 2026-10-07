@@ -54,7 +54,7 @@ func execReadFile(ctx context.Context, args map[string]any, env toolEnv) map[str
 	endLine, hasEnd := intArg(args, "end_line")
 
 	if !hasStart && !hasEnd {
-		return readFileFull(ctx, files, resolved)
+		return readFileFull(ctx, files, resolved, rel, env.sight)
 	}
 
 	if !hasStart {
@@ -69,7 +69,40 @@ func execReadFile(ctx context.Context, args map[string]any, env toolEnv) map[str
 		return map[string]any{"error": "read_file: end_line must be >= start_line"}
 	}
 
+	answer, nonText := readFileNonTextRange(ctx, files, resolved, rel, env.sight)
+	if nonText {
+		return answer
+	}
+
 	return readFileRange(ctx, files, resolved, startLine, endLine, hasEnd)
+}
+
+// readFileNonTextRange answers a ranged read of a file that is not text,
+// ignoring the range: lines mean nothing in an image, and refusing would only
+// cost the model a turn to ask again without one. The head is read separately
+// rather than peeked off the range, because the container reads a range with
+// sed, and a PNG's first "line" ends inside its own signature.
+func readFileNonTextRange(ctx context.Context, files tree, resolved, rel string, sight imageSight) (map[string]any, bool) {
+	head, err := files.readBytes(ctx, resolved, sniffBytes)
+	if err != nil {
+		return map[string]any{"error": err.Error()}, true
+	}
+
+	if !isNonText(head) {
+		return nil, false
+	}
+
+	stat, err := files.stat(ctx, resolved)
+	if err != nil {
+		return map[string]any{"error": err.Error()}, true
+	}
+
+	answer := nonTextResult(ctx, files, resolved, rel, head, stat.size, sight)
+	if content, ok := answer["content"].(string); ok {
+		answer["content"] = content + " start_line/end_line do not apply to it and were ignored."
+	}
+
+	return answer, true
 }
 
 // readFileFull is read_file with no start_line/end_line. An over-cap file
@@ -77,7 +110,7 @@ func execReadFile(ctx context.Context, args map[string]any, env toolEnv) map[str
 // shell.SpillPointerMessage's tag style (a leading block, not a trailing
 // marker) so the two "output was cut" shapes read the same way, and pointing
 // the model at start_line/end_line — the file's own paging mechanism.
-func readFileFull(ctx context.Context, files tree, resolved string) map[string]any {
+func readFileFull(ctx context.Context, files tree, resolved, rel string, sight imageSight) map[string]any {
 	stat, err := files.stat(ctx, resolved)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
@@ -91,6 +124,10 @@ func readFileFull(ctx context.Context, files tree, resolved string) map[string]a
 	data, err := files.readBytes(ctx, resolved, maxReadFileBytes)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
+	}
+
+	if isNonText(data) {
+		return nonTextResult(ctx, files, resolved, rel, data, stat.size, sight)
 	}
 
 	content := string(data)

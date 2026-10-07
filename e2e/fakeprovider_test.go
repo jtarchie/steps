@@ -191,12 +191,60 @@ type capturedCallFunction struct {
 
 // capturedMessage is one message from a captured request's history. content
 // arrives as a JSON string (or null on an assistant tool-call message, which
-// unmarshals to "").
+// unmarshals to ""), or — on a user message carrying an image — as an array of
+// parts, whose text is joined into Content and whose image URLs land in Images.
 type capturedMessage struct {
 	Role       string             `json:"role"`
-	Content    string             `json:"content"`
+	Content    string             `json:"-"`
+	Images     []string           `json:"-"`
 	ToolCallID string             `json:"tool_call_id"`
 	ToolCalls  []capturedToolCall `json:"tool_calls"`
+}
+
+func (m *capturedMessage) UnmarshalJSON(data []byte) error {
+	type plain capturedMessage
+
+	var wire struct {
+		plain
+		Content json.RawMessage `json:"content"`
+	}
+
+	err := json.Unmarshal(data, &wire)
+	if err != nil {
+		return err //nolint:wrapcheck // the fake reports the body alongside
+	}
+
+	*m = capturedMessage(wire.plain)
+
+	if len(wire.Content) == 0 || wire.Content[0] != '[' {
+		_ = json.Unmarshal(wire.Content, &m.Content) // null leaves ""
+
+		return nil
+	}
+
+	var parts []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL struct {
+			URL string `json:"url"`
+		} `json:"image_url"`
+	}
+
+	err = json.Unmarshal(wire.Content, &parts)
+	if err != nil {
+		return err //nolint:wrapcheck // the fake reports the body alongside
+	}
+
+	for _, part := range parts {
+		switch part.Type {
+		case "text":
+			m.Content += part.Text
+		case "image_url":
+			m.Images = append(m.Images, part.ImageURL.URL)
+		}
+	}
+
+	return nil
 }
 
 type capturedToolFunction struct {
@@ -270,6 +318,20 @@ func (r capturedRequest) userMessageContains(text string) bool {
 	}
 
 	return false
+}
+
+// images is every image URL the request's user messages carry, in order —
+// how a fake tells that a tool read an image the model was actually shown.
+func (r capturedRequest) images() []string {
+	var urls []string
+
+	for _, msg := range r.Messages {
+		if msg.Role == "user" {
+			urls = append(urls, msg.Images...)
+		}
+	}
+
+	return urls
 }
 
 // toolResultContains reports whether any tool result in the request's history
@@ -515,6 +577,15 @@ func (f *fakeLLM) request(n int) capturedRequest {
 	}
 
 	return f.requests[n-1]
+}
+
+// allRequests is every captured request, in arrival order — for a routed fake,
+// where which request carried something depends on how the run went.
+func (f *fakeLLM) allRequests() []capturedRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return append([]capturedRequest(nil), f.requests...)
 }
 
 // nodeRow is one row of the store's nodes table: a step's recorded outcome.

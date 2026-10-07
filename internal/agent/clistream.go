@@ -25,9 +25,12 @@ import (
 )
 
 // cliStreamMaxLine bounds one event. A single assistant message carrying a
-// large tool argument (a whole file to write) is normal, so this is generous;
-// it exists to stop a runaway line from consuming memory without limit.
-const cliStreamMaxLine = 8 << 20 // 8 MiB
+// large tool argument (a whole file to write) is normal, and a user turn
+// can echo the images its tool results carried, base64 and all — several in one
+// turn when the model read them in parallel. So it is set at the 32 MB a
+// Messages API request may be, which no event describing one can exceed; it
+// exists to stop a runaway line from consuming memory without limit.
+const cliStreamMaxLine = 32 << 20 // 32 MiB
 
 // cliRunResult is one CLI invocation's transcript, reduced.
 type cliRunResult struct {

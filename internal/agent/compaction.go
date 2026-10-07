@@ -542,12 +542,19 @@ func injectContinuation(req *model.LLMRequest, prompt string) {
 // the same ~4-chars-per-token heuristic the rest of this feature is built
 // on. It is the whole count only when the provider reports no usage; otherwise it covers what was appended since the last report (reportedSize).
 // Covers only the Part kinds steps' own conversation loop ever produces
-// (Text, FunctionCall, FunctionResponse); the adk-utils-go reference also
-// accounts for InlineData/ToolCall/ToolResponse/PartMetadata, none of which
-// steps sets anywhere.
+// (Text, FunctionCall, FunctionResponse, and the InlineData an image read_file
+// result carries); the adk-utils-go reference also accounts for
+// ToolCall/ToolResponse/PartMetadata, none of which steps sets anywhere.
 func estimatePartTokens(part *genai.Part) int {
 	if part == nil {
 		return 0
+	}
+
+	// An image costs what its pixels cost, not what its bytes would as text:
+	// len/4 of a megabyte screenshot is a quarter of a million tokens, enough
+	// to compact the conversation on the spot.
+	if part.InlineData != nil {
+		return imageTokenEstimate
 	}
 
 	total := 0
@@ -572,6 +579,11 @@ func estimatePartTokens(part *genai.Part) int {
 
 	return total
 }
+
+// imageTokenEstimate is about what one image costs once a provider has scaled
+// it: Anthropic's ceiling (a long side of 1568 pixels, at width*height/750
+// tokens), which is in the same range as OpenAI's tiled count.
+const imageTokenEstimate = 1600
 
 // reportedSize is what the provider last said the conversation cost: the prompt it read plus the completion now appended to it, covering req.Contents[:upTo]. It counts the system prompt and tool schemas with the provider's own tokenizer, which the len/4 estimate cannot; the estimate only covers what was appended since. Zero tokens means nothing was reported.
 type reportedSize struct {
