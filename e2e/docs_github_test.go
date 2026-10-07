@@ -94,6 +94,26 @@ var docGitHubFixtures = map[string]docGitHubFixture{ //nolint:gochecknoglobals /
 			}
 		},
 	},
+	"thread": {
+		prs: []fakePR{docPR()},
+		comments: []fakeComment{
+			{ID: 701, Number: 42, Kind: "review", Author: "bob", Body: "why retry here?", Updated: time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)},
+			// A reply in 701's thread: the replies route refuses its id, so the answer must go under 701.
+			{ID: 702, Number: 42, Kind: "review", Author: "alice", Body: "/steps explain", Updated: time.Date(2026, 9, 27, 9, 5, 0, 0, time.UTC), InReplyTo: 701},
+		},
+		check: func(t *testing.T, fake *fakeGitHub) {
+			t.Helper()
+
+			thread := fake.threadOf(701)
+			if len(thread) != 2 || thread[1].Author != docGitHubLogin || thread[1].Body != "looking into review comment 702\n" {
+				t.Errorf("thread under 701 = %+v, want alice's command and then the answer", thread)
+			}
+
+			if posted := fake.postedComments(); len(posted) != 0 {
+				t.Errorf("conversation comments = %+v, want none: the answer belongs in the thread", posted)
+			}
+		},
+	},
 	"post-fixed": {
 		prs: []fakePR{docPR()},
 		check: func(t *testing.T, fake *fakeGitHub) {

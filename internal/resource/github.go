@@ -779,7 +779,17 @@ func githubCommentOut(ctx context.Context, raw, rawParams map[string]any, inputs
 		return nil, fmt.Errorf("%w", err)
 	}
 
-	target, err := resolvePullRequest(params, inputs)
+	var answering commentTarget
+
+	if params.InThread {
+		answering, err = resolveComment(params.From, inputs)
+	} else {
+		var target pullRequestTarget
+
+		target, err = resolvePullRequest(params, inputs)
+		answering.number = target.number
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -794,9 +804,43 @@ func githubCommentOut(ctx context.Context, raw, rawParams map[string]any, inputs
 		return nil, err
 	}
 
-	path := "/repos/" + source.Repo + "/issues/" + target.number + "/comments"
+	path := "/repos/" + source.Repo + "/issues/" + answering.number + "/comments"
 
-	return postExpecting(ctx, client, path, map[string]any{"body": body}, http.StatusCreated, target.number)
+	// Only an inline comment has a thread; a conversation or an issue is one,
+	// so its comment is answered there, as without in_thread.
+	if answering.kind == config.GitHubCommentReview {
+		path, err = threadReplies(ctx, client, source.Repo, answering)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return postExpecting(ctx, client, path, map[string]any{"body": body}, http.StatusCreated, answering.number)
+}
+
+// threadReplies is the route a reply under an inline comment posts to.
+// GitHub's reference for it says the id "must be the ID of a top-level review
+// comment, not a reply to that comment. Replies to replies are not
+// supported." A command is as often written as a reply in a thread as at its
+// start, so the comment is read first, and a reply stands in for the
+// thread's first comment, which its in_reply_to_id names: GitHub keeps a
+// review thread flat, every reply pointing at the top, so one read is enough.
+func threadReplies(ctx context.Context, client *githubClient, repo string, comment commentTarget) (string, error) {
+	var read struct {
+		InReplyTo int64 `json:"in_reply_to_id"`
+	}
+
+	_, err := client.getJSON(ctx, commentPath(repo, comment.id, comment.kind), &read)
+	if err != nil {
+		return "", err
+	}
+
+	top := comment.id
+	if read.InReplyTo != 0 {
+		top = strconv.FormatInt(read.InReplyTo, 10)
+	}
+
+	return "/repos/" + repo + "/pulls/" + comment.number + "/comments/" + url.PathEscape(top) + "/replies", nil
 }
 
 func githubReviewOut(ctx context.Context, raw, rawParams map[string]any, inputs PutInputs, srcDir string) (map[string]any, error) {
@@ -1019,13 +1063,14 @@ func removeOwnReaction(ctx context.Context, client *githubClient, path, content 
 }
 
 type commentTarget struct {
-	id   string
-	kind string
+	id     string
+	kind   string
+	number string
 }
 
-// resolveComment finds which comment a reaction marks: the version of the
-// input from names, else the one input whose version is a github-comments
-// get's — the only versions that carry a kind.
+// resolveComment finds which comment a reaction marks or a reply answers:
+// the version of the input from names, else the one input whose version is a
+// github-comments get's — the only versions that carry a kind.
 func resolveComment(from string, inputs PutInputs) (commentTarget, error) {
 	isComment := func(version map[string]any) bool {
 		return versionField(version, "id") != "" && versionField(version, "kind") != ""
@@ -1056,11 +1101,11 @@ func resolveComment(from string, inputs PutInputs) (commentTarget, error) {
 		case 0:
 			return commentTarget{}, errors.New("no input names a comment: give this put its github-comments get as an input")
 		default:
-			return commentTarget{}, fmt.Errorf("several inputs name a comment (%s): set params.from to the one this reacts to", strings.Join(carrying, ", "))
+			return commentTarget{}, fmt.Errorf("several inputs name a comment (%s): set params.from to the one this put is about", strings.Join(carrying, ", "))
 		}
 	}
 
-	target := commentTarget{id: versionField(version, "id"), kind: versionField(version, "kind")}
+	target := commentTarget{id: versionField(version, "id"), kind: versionField(version, "kind"), number: versionField(version, "number")}
 
 	if !slices.Contains([]string{config.GitHubCommentConversation, config.GitHubCommentReview, config.GitHubCommentIssue}, target.kind) {
 		return commentTarget{}, fmt.Errorf("the comment's version names kind %q, which is no comment kind GitHub has", target.kind)

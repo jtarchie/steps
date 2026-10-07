@@ -356,14 +356,56 @@ jobs:
 | `params:` field | put | meaning |
 |---|---|---|
 | `body_file` | both | the text to post, a path inside the put's inputs; an empty file is refused, since posting nothing is how a step that wrote nothing would otherwise look |
-| `from` | both | the input whose version names the pull request, when more than one does |
-| `number` | both | the pull request, when no input names it |
+| `from` | both | the input whose version names the pull request, when more than one does; with `in_thread`, the `github-comments` get whose comment it answers |
+| `number` | both | the pull request, when no input names it; not with `in_thread` |
+| `in_thread` | `github-pr-comment` | `true` answers the comment a `github-comments` get fetched where it was written: an inline comment in its thread, any other kind in the conversation |
 | `event` | `github-pr-review` | `comment` (the default), `approve`, `request_changes`, or `pending` |
 | `comments_file` | `github-pr-review` | a JSON array of comments on lines of the diff, posted in the same review: `[{"path": "app/a.rb", "line": 12, "body": "..."}]`, with `start_line` for a range and `side: LEFT` for a removed line; an empty array posts the body alone |
 
-`github-pr-comment` posts to the pull request's conversation. `github-pr-review` posts a review on the commit its input fetched when the input is a `github-prs` get, so a push after the fetch does not move the review onto code nobody read. **`event: pending` drafts a review only the token's user can see** until they submit it, and replaces that user's own earlier draft, since GitHub allows one per user per pull request, so a new push's draft takes the old one's place. Nobody else's draft is touched. GitHub refuses an approval or a change request from a pull request's own author; post a comment there instead.
+`github-pr-comment` posts to the pull request's conversation, or with `in_thread` to an inline comment's thread, as below. `github-pr-review` posts a review on the commit its input fetched when the input is a `github-prs` get, so a push after the fetch does not move the review onto code nobody read. **`event: pending` drafts a review only the token's user can see** until they submit it, and replaces that user's own earlier draft, since GitHub allows one per user per pull request, so a new push's draft takes the old one's place. Nobody else's draft is touched. GitHub refuses an approval or a change request from a pull request's own author; post a comment there instead.
 
 **`comments_file` puts each comment on its line**, so the author reads it beside the code instead of looking a `path:line` up. `line` is the line in the file, not a position in the diff. The file is read and checked before anything is sent, unknown fields included, so a `file:` written for `path:` fails the put by name, and a pending put never deletes the last draft only to fail on the next. Whether a line is in the diff is GitHub's call, since only it knows which lines a review may sit on, and it refuses the whole review if one is not: check the lines against `pr.diff` in a task before the put when a model chose them.
+
+**`in_thread: true` answers a comment where it was asked.** A command written on a line of the diff gets its answer in that line's thread, beside the code, rather than in a conversation the asker has to go and find:
+
+```yaml github=thread
+resources:
+- name: question
+  type: github-comments
+  source:
+    repo: acme/app
+    body: '^/steps\s+explain\b'
+    checkout: false
+- name: answer
+  type: github-pr-comment
+  source:
+    repo: acme/app
+
+jobs:
+- name: explain
+  plan:
+  - get: question
+    trigger: true
+    version: every
+  - task: write
+    inputs: [question]
+    outputs: [reply]
+    run: |
+      echo "looking into $(cat question/comment.kind) comment $(cat question/comment.id)" | tee reply/body.md
+    assert:
+      stdout: "looking into review comment 702"
+  - put: answer
+    inputs: [question, reply]
+    params:
+      body_file: reply/body.md
+      in_thread: true                # an inline comment's thread; the conversation for any other kind
+      from: question                 # optional here: question is the only input naming a comment
+  assert:
+    execution: [question, write, answer]
+    outcome: succeeded
+```
+
+The comment comes from a `github-comments` input and nothing else, as for [`github-reaction`](#github-reaction-marking-a-comment): a put whose inputs hold no such get is refused at load, as is a `from` naming one that is not, and so is `number`, which names a pull request with no comment in it to answer. **Only an inline comment has a thread.** A pull request's conversation and an issue's are flat, so a comment there is answered in the conversation, exactly as without the flag. That is deliberate: a pipeline watching both kinds sets `in_thread` once and gets the right place for each. GitHub's reply route takes only a thread's first comment, while a command is as often written as a reply further down, so the put reads the comment first and answers under the comment that started its thread; the answer lands at the bottom of the same thread either way. The put's version is `{id, number}` with or without the flag: the comment it posted, and the pull request or issue it is on.
 
 ### `github-reaction`: marking a comment
 

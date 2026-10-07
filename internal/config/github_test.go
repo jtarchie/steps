@@ -100,6 +100,13 @@ func TestGitHubLoadRules(t *testing.T) {
 		"reaction on a pr get":    {plan: "\n  - get: pr\n  - put: mark\n    inputs: [pr]\n    params: {add: eyes}", want: "no github-comments get among its inputs"},
 		"reaction from a pr get":  {plan: "\n  - get: pr\n  - get: said\n  - put: mark\n    inputs: [pr, said]\n    params: {add: eyes, from: pr}", want: `params.from: "pr" is not a github-comments get among this put's inputs (said)`},
 		"reaction unknown param":  {plan: "\n  - get: said\n  - put: mark\n    inputs: [said]\n    params: {add: eyes, emoji: eyes}", want: "emoji"},
+		"in_thread loads":         {plan: "\n  - get: said\n  - put: comment\n    inputs: [said]\n    params: {body_file: a, in_thread: true}", want: ""},
+		"in_thread from all":      {plan: "\n  - get: pr\n  - get: said\n  - put: comment\n    inputs: all\n    params: {body_file: a, in_thread: true, from: said}", want: ""},
+		"in_thread no comment":    {plan: "\n  - get: pr\n  - put: comment\n    inputs: [pr]\n    params: {body_file: a, in_thread: true}", want: "no github-comments get among its inputs names the comment to answer"},
+		"in_thread from a pr get": {plan: "\n  - get: pr\n  - get: said\n  - put: comment\n    inputs: [pr, said]\n    params: {body_file: a, in_thread: true, from: pr}", want: `params.from: "pr" is not a github-comments get among this put's inputs (said)`},
+		"in_thread with number":   {plan: "\n  - get: said\n  - put: comment\n    inputs: [said]\n    params: {body_file: a, in_thread: true, number: '1'}", want: "params.in_thread answers a comment"},
+		"in_thread off, pr get":   {plan: "\n  - get: pr\n  - put: comment\n    inputs: [pr]\n    params: {body_file: a, in_thread: false}", want: ""},
+		"in_thread on a review":   {plan: "\n  - get: said\n  - put: review\n    inputs: [said]\n    params: {body_file: a, in_thread: true}", want: "in_thread"},
 	} {
 		_, err := LoadConfig(writeConfig(t, githubPipeline(tc.extra, tc.plan)))
 

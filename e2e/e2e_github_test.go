@@ -9,6 +9,7 @@ package e2e
 // seams, and the triggers after them are what the types exist for.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -614,5 +615,113 @@ jobs:
 
 	if slices.Contains(fake.listedReactions(), 499) {
 		t.Errorf("reactions listed for %v, want bob's comment, which the author filter drops, never asked about", fake.listedReactions())
+	}
+}
+
+// threadPipeline answers alice's /steps command with a github-pr-comment
+// put; params is spliced into the put's params: after body_file.
+func threadPipeline(fake *fakeGitHub, params string) string {
+	return `
+resources:
+- name: command
+  type: github-comments
+  source:
+    repo: ` + fakeRepo + `
+    endpoint: ` + fake.URL() + `
+    author: alice
+    body: '^/steps\s'
+    checkout: false
+- name: answer
+  type: github-pr-comment
+  source:
+    repo: ` + fakeRepo + `
+    endpoint: ` + fake.URL() + `
+jobs:
+- name: act
+  plan:
+  - get: command
+  - task: write
+    inputs: [command]
+    outputs: [reply]
+    run: |
+      echo "on it: $(cat command/comment.body)" > reply/body.md
+  - put: answer
+    inputs: [command, reply]
+    params:
+      body_file: reply/body.md` + params + `
+`
+}
+
+// TestEndToEndGitHubCommentInThreadAnswersWhereAsked: in_thread puts the
+// answer under an inline command, in its thread — under the thread's first
+// comment when the command was itself a reply, since that is the one id the
+// replies route takes — and a command in the conversation, which has no
+// threads, is answered in the conversation. Without the flag an inline
+// command is answered in the conversation, as before the flag existed.
+func TestEndToEndGitHubCommentInThreadAnswersWhereAsked(t *testing.T) {
+	at := time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)
+	question := fakeComment{ID: 500, Number: 7, Kind: "review", Author: "bob", Body: "why this guard?", Updated: at}
+	command := func(kind string, inReplyTo int64) fakeComment {
+		return fakeComment{ID: 501, Number: 7, Kind: kind, Author: "alice", Body: "/steps explain", Updated: at.Add(time.Minute), InReplyTo: inReplyTo}
+	}
+
+	for name, tc := range map[string]struct {
+		command fakeComment
+		params  string
+		want    string
+	}{
+		"inline":                    {command("review", 0), "\n      in_thread: true", "thread 501"},
+		"inline, itself a reply":    {command("review", 500), "\n      in_thread: true\n      from: command", "thread 500"},
+		"conversation":              {command("conversation", 0), "\n      in_thread: true", "conversation #7"},
+		"inline, without in_thread": {command("review", 0), "", "conversation #7"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeGitHub(t)
+			fake.addPR(reviewablePR())
+			fake.addComment(question)
+			fake.addComment(tc.command)
+
+			mustRun(t, "run", writePipeline(t, t.TempDir(), threadPipeline(fake, tc.params)), "--job", "act")
+
+			if got, want := answers(fake), []string{tc.want + ": on it: /steps explain\n"}; !slices.Equal(got, want) {
+				t.Errorf("answers = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// answers is everything the token's user posted, in the conversation or in
+// the thread under 500 or 501, as where: what.
+func answers(fake *fakeGitHub) []string {
+	var out []string
+
+	for _, posted := range fake.postedComments() {
+		out = append(out, fmt.Sprintf("conversation #%d: %s", posted.Number, posted.Body))
+	}
+
+	for _, top := range []int64{500, 501} {
+		for _, reply := range fake.threadOf(top) {
+			if reply.Author == fake.login {
+				out = append(out, fmt.Sprintf("thread %d: %s", top, reply.Body))
+			}
+		}
+	}
+
+	return out
+}
+
+// TestEndToEndGitHubCommentInThreadFailsOnARefusal: a refused reply fails the
+// put with GitHub's status and words and the route, like every other post.
+func TestEndToEndGitHubCommentInThreadFailsOnARefusal(t *testing.T) {
+	fake := newFakeGitHub(t)
+	fake.addPR(reviewablePR())
+	fake.addComment(fakeComment{ID: 501, Number: 7, Kind: "review", Author: "alice", Body: "/steps explain", Updated: time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)})
+	fake.mu.Lock()
+	fake.refuseReplies = true
+	fake.mu.Unlock()
+
+	err := cli.Run([]string{"run", writePipeline(t, t.TempDir(), threadPipeline(fake, "\n      in_thread: true")), "--job", "act"})
+	if err == nil || !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), "Resource not accessible") || !strings.Contains(err.Error(), "POST /repos/acme/app/pulls/7/comments/501/replies") {
+		t.Fatalf("run = %v, want the put failed naming the 403, GitHub's message and the route", err)
 	}
 }

@@ -184,6 +184,11 @@ type GitHubPostParams struct {
 	From string `yaml:"from,omitempty"`
 	// Number is the pull request, for a put with no input that names one.
 	Number string `yaml:"number,omitempty"`
+	// InThread answers the comment a github-comments get fetched where it was
+	// written: an inline review comment in its thread, any other kind in the
+	// conversation, which has no threads — so a pipeline watching both kinds
+	// sets it once. From then names that get.
+	InThread bool `yaml:"in_thread,omitempty"`
 }
 
 // GitHubReviewParams is a github-pr-review put's params:.
@@ -418,6 +423,10 @@ func validateGitHubPost(params GitHubPostParams) error {
 		return errors.New("params.from and params.number both say which pull request; name one")
 	}
 
+	if params.InThread && params.Number != "" {
+		return errors.New("params.in_thread answers a comment a github-comments get fetched, and params.number names a pull request with no comment to answer; drop one")
+	}
+
 	return nil
 }
 
@@ -522,8 +531,8 @@ func (c *Config) validateGitHubSteps() error {
 }
 
 // githubCommentGets is the name of every get in job that fetches a
-// github-comments resource, aliased or not: the names a reaction's inputs
-// can carry a comment under.
+// github-comments resource, aliased or not: the names a reaction's or a
+// threaded reply's inputs can carry a comment under.
 func (c *Config) githubCommentGets(job Job) []string {
 	var names []string
 
@@ -543,27 +552,40 @@ func (c *Config) githubCommentGets(job Job) []string {
 	return names
 }
 
-// checkReactionStep checks a reaction's params:, then refuses one no input
-// of which can name a comment, and a from: naming one that cannot. Several
-// candidates are left to the put: which of them a build has fetched by then
-// is a run-time fact.
 func checkReactionStep(step *Step, comments []string) error {
 	params, err := ParseGitHubReactionParams(step.Params)
 	if err != nil {
 		return err
 	}
 
+	return checkCommentInput(step, comments, params.From, "react to")
+}
+
+func checkPRCommentStep(step *Step, comments []string) error {
+	params, err := ParseGitHubPostParams(step.Params)
+	if err != nil || !params.InThread {
+		return err
+	}
+
+	return checkCommentInput(step, comments, params.From, "answer")
+}
+
+// checkCommentInput refuses a put that needs a comment when no input of it
+// can name one, and a from: naming one that cannot. Several candidates are
+// left to the put: which of them a build has fetched by then is a run-time
+// fact.
+func checkCommentInput(step *Step, comments []string, from, verb string) error {
 	visible := comments
 	if !step.InputsAll() {
 		visible = slices.DeleteFunc(slices.Clone(step.InputNames()), func(name string) bool { return !slices.Contains(comments, name) })
 	}
 
 	if len(visible) == 0 {
-		return errors.New("no github-comments get among its inputs names the comment to react to; list that get in the put's inputs")
+		return fmt.Errorf("no github-comments get among its inputs names the comment to %s; list that get in the put's inputs", verb)
 	}
 
-	if params.From != "" && !slices.Contains(visible, params.From) {
-		return fmt.Errorf("params.from: %q is not a github-comments get among this put's inputs (%s)", params.From, strings.Join(visible, ", "))
+	if from != "" && !slices.Contains(visible, from) {
+		return fmt.Errorf("params.from: %q is not a github-comments get among this put's inputs (%s)", from, strings.Join(visible, ", "))
 	}
 
 	return nil
@@ -588,7 +610,7 @@ func (c *Config) checkGitHubStep(label string, step *Step, comments []string) er
 	case step.Get != "" && len(step.Params) > 0:
 		return fmt.Errorf("%s: get %q: a %s get takes no params; what it fetches is set on the resource's source instead", label, step.Get, kind)
 	case kind == GitHubPRCommentType:
-		_, err = ParseGitHubPostParams(step.Params)
+		err = checkPRCommentStep(step, comments)
 	case kind == GitHubPRReviewType:
 		_, err = ParseGitHubReviewParams(step.Params)
 	case kind == GitHubReactionType:

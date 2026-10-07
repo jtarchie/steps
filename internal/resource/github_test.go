@@ -625,8 +625,8 @@ func TestResolveComment(t *testing.T) {
 		want   commentTarget
 		err    string
 	}{
-		"the one comment":    {inputs: PutInputs{Versions: map[string]map[string]any{"pr": pr, "said": said}}, want: commentTarget{id: "11", kind: "conversation"}},
-		"from picks":         {from: "inline", inputs: PutInputs{Versions: map[string]map[string]any{"said": said, "inline": inline}}, want: commentTarget{id: "12", kind: "review"}},
+		"the one comment":    {inputs: PutInputs{Versions: map[string]map[string]any{"pr": pr, "said": said}}, want: commentTarget{id: "11", kind: "conversation", number: "7"}},
+		"from picks":         {from: "inline", inputs: PutInputs{Versions: map[string]map[string]any{"said": said, "inline": inline}}, want: commentTarget{id: "12", kind: "review", number: "7"}},
 		"none":               {inputs: PutInputs{Names: []string{"pr"}, Versions: map[string]map[string]any{"pr": pr}}, err: "no input names a comment"},
 		"two":                {inputs: PutInputs{Versions: map[string]map[string]any{"said": said, "inline": inline}}, err: "several inputs name a comment (inline, said)"},
 		"from a pr":          {from: "pr", inputs: PutInputs{Names: []string{"pr", "said"}, Versions: map[string]map[string]any{"pr": pr, "said": said}}, err: `params.from: "pr"`},
@@ -877,5 +877,134 @@ func TestGitHubCommentsAuthorMeIsTheTokensUser(t *testing.T) {
 		if err != nil || len(versions) != 1 || versions[0]["id"] != "2" {
 			t.Errorf("skip_reacted %q: %v, %v; want only octocat's comment", skip, versions, err)
 		}
+	}
+}
+
+// commentPut runs a github-pr-comment put whose input is a comment of kind
+// on #7, with comment 12 a reply under 11, and records every request: method,
+// path and body. A params.from brings a second comment input, on #9, for it
+// to pick past.
+func commentPut(t *testing.T, params map[string]any, kind, id string, replyStatus int) ([]string, map[string]any, error) {
+	t.Helper()
+	noBackoff(t)
+
+	var (
+		mu   sync.Mutex
+		sent []string
+	)
+
+	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+
+		mu.Lock()
+		sent = append(sent, strings.TrimSpace(r.Method+" "+r.URL.Path+" "+string(body)))
+		mu.Unlock()
+
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/app/pulls/comments/12":
+			_, _ = w.Write([]byte(`{"id":12,"in_reply_to_id":11}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/app/pulls/comments/11":
+			_, _ = w.Write([]byte(`{"id":11}`))
+		case strings.HasSuffix(r.URL.Path, "/replies"):
+			w.WriteHeader(replyStatus)
+			_, _ = w.Write([]byte(`{"id":901,"message":"Validation Failed"}`))
+		case r.URL.Path == "/repos/acme/app/issues/7/comments":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":902}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+		}
+	})
+
+	dir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(dir, "body.md"), []byte("on it"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	params["body_file"] = "body.md"
+
+	inputs := PutInputs{Names: []string{"said"}, Versions: map[string]map[string]any{"said": {"id": id, "kind": kind, "number": "7", "updated": "t"}}}
+	if params["from"] != nil {
+		inputs.Names = append(inputs.Names, "other")
+		inputs.Versions["other"] = map[string]any{"id": "99", "kind": "review", "number": "9", "updated": "t"}
+	}
+
+	version, err := githubCommentOut(context.Background(),
+		map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint},
+		params, inputs, dir)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	return slices.Clone(sent), version, err
+}
+
+// TestGitHubCommentRoutes: in_thread answers an inline comment under its
+// thread's first comment, a reply's included, and any other kind in the
+// conversation; without it, every kind is answered in the conversation, the
+// one request it always was.
+func TestGitHubCommentRoutes(t *testing.T) {
+	conversation := []string{`POST /repos/acme/app/issues/7/comments {"body":"on it"}`}
+
+	for name, tc := range map[string]struct {
+		params   map[string]any
+		kind, id string
+		sent     []string
+		reply    string
+	}{
+		"inline": {map[string]any{"in_thread": true}, "review", "11", []string{
+			"GET /repos/acme/app/pulls/comments/11",
+			`POST /repos/acme/app/pulls/7/comments/11/replies {"body":"on it"}`,
+		}, "901"},
+		"inline reply": {map[string]any{"in_thread": true, "from": "said"}, "review", "12", []string{
+			"GET /repos/acme/app/pulls/comments/12",
+			`POST /repos/acme/app/pulls/7/comments/11/replies {"body":"on it"}`,
+		}, "901"},
+		"conversation":       {map[string]any{"in_thread": true}, "conversation", "11", conversation, "902"},
+		"issue":              {map[string]any{"in_thread": true}, "issue", "11", conversation, "902"},
+		"inline, flag off":   {map[string]any{}, "review", "12", conversation, "902"},
+		"inline, flag false": {map[string]any{"in_thread": false}, "review", "12", conversation, "902"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sent, version, err := commentPut(t, tc.params, tc.kind, tc.id, http.StatusCreated)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !slices.Equal(sent, tc.sent) {
+				t.Errorf("sent %q, want %q", sent, tc.sent)
+			}
+
+			if version["id"] != tc.reply || version["number"] != "7" || len(version) != 2 {
+				t.Errorf("version = %v, want {id: %s, number: 7}, the comment posted and its pull request", version, tc.reply)
+			}
+		})
+	}
+}
+
+func TestGitHubCommentInThreadFailsOnARefusal(t *testing.T) {
+	_, _, err := commentPut(t, map[string]any{"in_thread": true}, "review", "12", http.StatusUnprocessableEntity)
+
+	want := "github: POST /repos/acme/app/pulls/7/comments/11/replies: 422 Unprocessable Entity: Validation Failed"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %v, want %q", err, want)
+	}
+}
+
+// TestGitHubCommentInThreadFailsOnAnUnreadableComment: a command deleted
+// before its answer fails the put on the read, and nothing is posted.
+func TestGitHubCommentInThreadFailsOnAnUnreadableComment(t *testing.T) {
+	sent, _, err := commentPut(t, map[string]any{"in_thread": true}, "review", "13", http.StatusCreated)
+
+	want := "github: GET /repos/acme/app/pulls/comments/13: 404 Not Found: Not Found"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %v, want %q", err, want)
+	}
+
+	if want := []string{"GET /repos/acme/app/pulls/comments/13"}; !slices.Equal(sent, want) {
+		t.Errorf("sent %q, want only the read", sent)
 	}
 }

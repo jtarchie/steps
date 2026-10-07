@@ -63,6 +63,8 @@ type fakeComment struct {
 	Body      string
 	Updated   time.Time
 	Reactions []fakeReaction
+	// InReplyTo is the review thread's first comment, on a reply in one.
+	InReplyTo int64
 }
 
 // fakeReaction is one person's emoji on a comment. GitHub keeps at most one
@@ -119,6 +121,8 @@ type fakeGitHub struct {
 	// refuseReactions answers every new reaction as a token without write
 	// access is answered.
 	refuseReactions bool
+	// refuseReplies does the same for every reply in a review thread.
+	refuseReplies bool
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
@@ -201,6 +205,22 @@ func (f *fakeGitHub) listedReactions() []int64 {
 	return slices.Clone(f.reactionLists)
 }
 
+// threadOf is every reply under a review thread's first comment, oldest first.
+func (f *fakeGitHub) threadOf(top int64) []fakeComment {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	var replies []fakeComment
+
+	for _, comment := range f.comments {
+		if comment.InReplyTo == top {
+			replies = append(replies, comment)
+		}
+	}
+
+	return replies
+}
+
 func (f *fakeGitHub) comment(id int64) *fakeComment {
 	for i := range f.comments {
 		if f.comments[i].ID == id {
@@ -276,6 +296,9 @@ func (f *fakeGitHub) routes() http.Handler {
 	// pulls/comments/{id} and pulls/{number}/reviews overlap as patterns, so one route serves both, as GitHub's own router must.
 	handle("GET "+repo+"/pulls/{number}/{sub}", f.servePullSub)
 	handle("GET "+repo+"/pulls/comments", func(w http.ResponseWriter, r *http.Request) { f.serveCommentList(w, r, "review") })
+	handle("POST "+repo+"/pulls/{number}/comments/{id}/replies", func(w http.ResponseWriter, r *http.Request) {
+		f.replyInThread(w, r, atoi(r.PathValue("number")), int64(atoi(r.PathValue("id"))))
+	})
 	handle("POST "+repo+"/pulls/{number}/reviews", func(w http.ResponseWriter, r *http.Request) { f.createReview(w, r, atoi(r.PathValue("number"))) })
 	handle("DELETE "+repo+"/pulls/{number}/reviews/{id}", func(w http.ResponseWriter, r *http.Request) {
 		f.deleteReview(w, atoi(r.PathValue("number")), int64(atoi(r.PathValue("id"))))
@@ -652,6 +675,10 @@ func (f *fakeGitHub) commentJSON(comment fakeComment) map[string]any {
 		out["html_url"] = f.html("pull", comment.Number) + "#discussion_r" + strconv.FormatInt(comment.ID, 10)
 		out["pull_request_url"] = fmt.Sprintf("%s/repos/%s/pulls/%d", f.server.URL, f.repo, comment.Number)
 		out["path"] = "main.go"
+
+		if comment.InReplyTo != 0 {
+			out["in_reply_to_id"] = comment.InReplyTo
+		}
 	case "conversation":
 		out["html_url"] = f.html("pull", comment.Number) + "#issuecomment-" + strconv.FormatInt(comment.ID, 10)
 		out["issue_url"] = fmt.Sprintf("%s/repos/%s/issues/%d", f.server.URL, f.repo, comment.Number)
@@ -800,6 +827,47 @@ func (f *fakeGitHub) postComment(w http.ResponseWriter, r *http.Request, number 
 	f.posted = append(f.posted, postedComment{Number: number, Body: body.Body})
 
 	respondJSON(w, http.StatusCreated, map[string]any{"id": f.nextID, "html_url": f.html("pull", number)})
+}
+
+// replyInThread answers as GitHub's reference says the route does: the id
+// must be an inline comment on that pull request, and the thread's first one
+// — "replies to replies are not supported" — so a put that hands it a reply
+// is refused here rather than passing against a fake kinder than GitHub.
+func (f *fakeGitHub) replyInThread(w http.ResponseWriter, r *http.Request, number int, id int64) {
+	top := f.comment(id)
+	if top == nil || top.Kind != "review" || top.Number != number {
+		respondJSON(w, http.StatusNotFound, map[string]any{"message": "Not Found"})
+
+		return
+	}
+
+	if top.InReplyTo != 0 {
+		respondJSON(w, http.StatusUnprocessableEntity, map[string]any{"message": "Validation Failed", "errors": []map[string]any{{"code": "invalid", "field": "in_reply_to"}}})
+
+		return
+	}
+
+	if f.refuseReplies {
+		respondJSON(w, http.StatusForbidden, map[string]any{"message": "Resource not accessible by personal access token"})
+
+		return
+	}
+
+	var body struct {
+		Body string `json:"body"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil || body.Body == "" {
+		respondJSON(w, http.StatusUnprocessableEntity, map[string]any{"message": "Validation Failed"})
+
+		return
+	}
+
+	f.nextID++
+	f.comments = append(f.comments, fakeComment{ID: f.nextID, Number: number, Kind: "review", Author: f.login, Body: body.Body, Updated: time.Now().UTC(), InReplyTo: id})
+
+	respondJSON(w, http.StatusCreated, map[string]any{"id": f.nextID, "in_reply_to_id": id, "html_url": f.html("pull", number)})
 }
 
 func (f *fakeGitHub) listReviews(w http.ResponseWriter, number int) {
