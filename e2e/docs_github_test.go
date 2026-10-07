@@ -21,6 +21,10 @@ type docGitHubFixture struct {
 	check    func(t *testing.T, fake *fakeGitHub)
 }
 
+// docGitHubLogin is the token's own user on every fake, so a fixture can
+// declare reactions it left.
+const docGitHubLogin = "octocat"
+
 // docGitHubRepo is the repository every GitHub doc example names, which is the one the fake serves.
 const docGitHubRepo = fakeRepo
 
@@ -63,6 +67,30 @@ var docGitHubFixtures = map[string]docGitHubFixture{ //nolint:gochecknoglobals /
 			reviews := fake.reviewsOn(42)
 			if len(reviews) != 1 || reviews[0].State != "PENDING" || !strings.HasPrefix(reviews[0].Body, "asked by alice on #42") {
 				t.Errorf("reviews on #42 = %+v, want one pending draft answering alice", reviews)
+			}
+		},
+	},
+	"reaction": {
+		prs: []fakePR{docPR()},
+		comments: []fakeComment{
+			{ID: 601, Number: 42, Kind: "conversation", Author: "alice", Body: "/steps deploy prod", Updated: time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC),
+				Reactions: []fakeReaction{{ID: 1, User: "carol", Content: "eyes"}}},
+			// Newer, and done already: without skip_reacted it is the one the get fetches.
+			{ID: 602, Number: 42, Kind: "conversation", Author: "alice", Body: "/steps deploy staging", Updated: time.Date(2026, 9, 27, 9, 5, 0, 0, time.UTC),
+				Reactions: []fakeReaction{{ID: 2, User: docGitHubLogin, Content: "rocket"}}},
+		},
+		check: func(t *testing.T, fake *fakeGitHub) {
+			t.Helper()
+
+			want := []fakeReaction{{ID: 1, User: "carol", Content: "eyes"}}
+			got := fake.reactionsOn(601)
+
+			if len(got) != 2 || got[0] != want[0] || got[1].User != docGitHubLogin || got[1].Content != "rocket" {
+				t.Errorf("reactions on 601 = %+v, want carol's eyes kept and the token user's rocket, its own eyes gone", got)
+			}
+
+			if done := fake.reactionsOn(602); len(done) != 1 || done[0].Content != "rocket" {
+				t.Errorf("reactions on 602 = %+v, want the earlier rocket alone, untouched", done)
 			}
 		},
 	},

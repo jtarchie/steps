@@ -1,7 +1,7 @@
 package resource
 
 // The github-* built-ins' check, in and out (see config/github.go for what
-// each type is and why there are four).
+// each type is and why there are five).
 
 import (
 	"context"
@@ -99,6 +99,8 @@ func githubRunOut(ctx context.Context, rt config.ResourceType, source, params ma
 		version, err = githubCommentOut(ctx, source, params, inputs, srcDir)
 	case config.GitHubPRReviewType:
 		version, err = githubReviewOut(ctx, source, params, inputs, srcDir)
+	case config.GitHubReactionType:
+		version, err = githubReactionOut(ctx, source, params, inputs, srcDir)
 	default:
 		err = fmt.Errorf("a %s resource only finds work, so there is nothing to publish to", rt.Config.GitHub)
 	}
@@ -429,6 +431,9 @@ type githubComment struct {
 	} `json:"user"`
 	IssueURL       string `json:"issue_url"`
 	PullRequestURL string `json:"pull_request_url"`
+	// Reactions is GitHub's count of each reaction on the comment, which
+	// says whether one is there but not whose it is.
+	Reactions map[string]any `json:"reactions"`
 }
 
 type commentWatch struct {
@@ -436,6 +441,8 @@ type commentWatch struct {
 	pattern *regexp.Regexp
 	author  string
 	since   string
+	// self is the token's own user, resolved only when skip_reacted needs it.
+	self string
 }
 
 func githubCommentsCheck(ctx context.Context, raw, cursor map[string]any) ([]map[string]any, error) {
@@ -486,11 +493,15 @@ func newCommentWatch(ctx context.Context, raw, cursor map[string]any) (commentWa
 
 	watch := commentWatch{source: source, pattern: pattern, author: source.Author, since: versionField(cursor, "updated")}
 
-	if watch.author == "@me" {
-		watch.author, err = client.login(ctx)
+	if watch.author == "@me" || source.SkipReacted != "" {
+		watch.self, err = client.login(ctx)
 		if err != nil {
 			return commentWatch{}, nil, err
 		}
+	}
+
+	if watch.author == "@me" {
+		watch.author = watch.self
 	}
 
 	return watch, client, nil
@@ -537,7 +548,19 @@ func (w commentWatch) scan(ctx context.Context, client *githubClient, listing st
 		}
 
 		for _, comment := range comments {
-			if version, ok := w.match(comment, review); ok {
+			version, ok := w.match(comment, review)
+			if !ok {
+				continue
+			}
+
+			// After the filters, so only a comment that would otherwise be
+			// work costs a request.
+			done, err := w.markedDone(ctx, client, comment, version)
+			if err != nil {
+				return nil, err
+			}
+
+			if !done {
 				versions = append(versions, version)
 			}
 		}
@@ -598,6 +621,75 @@ func (w commentWatch) match(comment githubComment, review bool) (map[string]any,
 	}, true
 }
 
+// markedDone reports whether the token's own user left skip_reacted on a
+// comment. The comment's own summary answers "nobody did" for free; only a
+// count above zero is worth asking whose they are.
+func (w commentWatch) markedDone(ctx context.Context, client *githubClient, comment githubComment, version map[string]any) (bool, error) {
+	content := w.source.SkipReacted
+	if content == "" {
+		return false, nil
+	}
+
+	if comment.Reactions != nil {
+		count, _ := comment.Reactions[content].(float64)
+		if count == 0 {
+			return false, nil
+		}
+	}
+
+	path := commentPath(w.source.Repo, versionField(version, "id"), versionField(version, "kind")) + "/reactions"
+
+	_, found, err := findOwnReaction(ctx, client, path, content, w.self)
+
+	return found, err
+}
+
+// findOwnReaction is the id of login's content reaction among those path
+// lists. Each page is a conditional request, so a comment polled again
+// unchanged costs no rate limit.
+func findOwnReaction(ctx context.Context, client *githubClient, path, content, login string) (int64, bool, error) {
+	query := url.Values{"content": {content}, "per_page": {strconv.Itoa(githubPageSize)}}
+
+	for page := 1; page <= githubPageLimit; page++ {
+		query.Set("page", strconv.Itoa(page))
+
+		var listed []struct {
+			ID   int64 `json:"id"`
+			User struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		}
+
+		_, err := client.getJSON(ctx, path+"?"+query.Encode(), &listed)
+		if err != nil {
+			return 0, false, err
+		}
+
+		for _, reaction := range listed {
+			if strings.EqualFold(reaction.User.Login, login) {
+				return reaction.ID, true, nil
+			}
+		}
+
+		if len(listed) < githubPageSize {
+			return 0, false, nil
+		}
+	}
+
+	return 0, false, nil
+}
+
+// commentPath is a comment's own route: conversation and issue comments are
+// both issue comments to GitHub, and an inline one is a pull request's.
+func commentPath(repo, id, kind string) string {
+	listing := "/repos/" + repo + "/issues/comments/"
+	if kind == config.GitHubCommentReview {
+		listing = "/repos/" + repo + "/pulls/comments/"
+	}
+
+	return listing + url.PathEscape(id)
+}
+
 func githubCommentsIn(ctx context.Context, raw, version map[string]any, destDir string) error {
 	source, _, err := config.ParseGitHubCommentsSource(raw)
 	if err != nil {
@@ -641,14 +733,9 @@ func githubCommentsIn(ctx context.Context, raw, version map[string]any, destDir 
 
 // fetchComment is one comment, as the files a get writes for it.
 func fetchComment(ctx context.Context, client *githubClient, repo, id, kind string) (map[string][]byte, error) {
-	listing := "/repos/" + repo + "/issues/comments/"
-	if kind == config.GitHubCommentReview {
-		listing = "/repos/" + repo + "/pulls/comments/"
-	}
-
 	var comment githubComment
 
-	commentJSON, err := client.getJSON(ctx, listing+url.PathEscape(id), &comment)
+	commentJSON, err := client.getJSON(ctx, commentPath(repo, id, kind), &comment)
 	if err != nil {
 		return nil, err
 	}
@@ -837,6 +924,149 @@ func discardOwnPendingReview(ctx context.Context, client *githubClient, reviews 
 	}
 
 	return nil
+}
+
+func githubReactionOut(ctx context.Context, raw, rawParams map[string]any, inputs PutInputs, _ string) (map[string]any, error) {
+	source, err := config.ParseGitHubPostSource(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	params, err := config.ParseGitHubReactionParams(rawParams)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	target, err := resolveComment(params.From, inputs)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := newGitHubClient(source.Connection())
+	if err != nil {
+		return nil, err
+	}
+
+	reactions := commentPath(source.Repo, target.id, target.kind) + "/reactions"
+	version := map[string]any{"comment": target.id}
+
+	// Add first: a swap that failed halfway leaves two marks rather than
+	// none, and none reads as "nobody picked this up".
+	if params.Add != "" {
+		err = addReaction(ctx, client, reactions, params.Add)
+		if err != nil {
+			return nil, err
+		}
+
+		version["add"] = params.Add
+	}
+
+	if params.Remove != "" {
+		err = removeOwnReaction(ctx, client, reactions, params.Remove)
+		if err != nil {
+			return nil, err
+		}
+
+		version["remove"] = params.Remove
+	}
+
+	return version, nil
+}
+
+// addReaction puts content on a comment. 200 is GitHub saying this user's
+// reaction is already there, which a replay always finds — the world as
+// asked, like Slack's already_reacted.
+func addReaction(ctx context.Context, client *githubClient, path, content string) error {
+	reply, err := client.send(ctx, http.MethodPost, client.api+path, githubJSON, map[string]any{"content": content})
+	if err != nil {
+		return err
+	}
+
+	if reply.status != http.StatusCreated && reply.status != http.StatusOK {
+		return githubFailure(http.MethodPost, path, reply)
+	}
+
+	return nil
+}
+
+// removeOwnReaction takes the token user's own content reaction off a
+// comment. It is found by user because the delete route takes a reaction's
+// id, and a content alone names everybody's. Not there, or gone by the time
+// the delete lands, is the world as asked.
+func removeOwnReaction(ctx context.Context, client *githubClient, path, content string) error {
+	login, err := client.login(ctx)
+	if err != nil {
+		return err
+	}
+
+	id, found, err := findOwnReaction(ctx, client, path, content, login)
+	if err != nil || !found {
+		return err
+	}
+
+	target := path + "/" + strconv.FormatInt(id, 10)
+
+	reply, err := client.send(ctx, http.MethodDelete, client.api+target, githubJSON, nil)
+	if err != nil {
+		return err
+	}
+
+	if reply.status != http.StatusNoContent && reply.status != http.StatusNotFound {
+		return githubFailure(http.MethodDelete, target, reply)
+	}
+
+	return nil
+}
+
+type commentTarget struct {
+	id   string
+	kind string
+}
+
+// resolveComment finds which comment a reaction marks: the version of the
+// input from names, else the one input whose version is a github-comments
+// get's — the only versions that carry a kind.
+func resolveComment(from string, inputs PutInputs) (commentTarget, error) {
+	isComment := func(version map[string]any) bool {
+		return versionField(version, "id") != "" && versionField(version, "kind") != ""
+	}
+
+	var version map[string]any
+
+	if from != "" {
+		version = inputs.Versions[from]
+		if !isComment(version) {
+			return commentTarget{}, fmt.Errorf("params.from: %q is not an input of this put whose version names a comment (inputs: %s)",
+				from, strings.Join(inputs.Names, ", "))
+		}
+	} else {
+		var carrying []string
+
+		for name, candidate := range inputs.Versions {
+			if isComment(candidate) {
+				carrying = append(carrying, name)
+			}
+		}
+
+		slices.Sort(carrying)
+
+		switch len(carrying) {
+		case 1:
+			version = inputs.Versions[carrying[0]]
+		case 0:
+			return commentTarget{}, errors.New("no input names a comment: give this put its github-comments get as an input")
+		default:
+			return commentTarget{}, fmt.Errorf("several inputs name a comment (%s): set params.from to the one this reacts to", strings.Join(carrying, ", "))
+		}
+	}
+
+	target := commentTarget{id: versionField(version, "id"), kind: versionField(version, "kind")}
+
+	if !slices.Contains([]string{config.GitHubCommentConversation, config.GitHubCommentReview, config.GitHubCommentIssue}, target.kind) {
+		return commentTarget{}, fmt.Errorf("the comment's version names kind %q, which is no comment kind GitHub has", target.kind)
+	}
+
+	return target, nil
 }
 
 func postExpecting(ctx context.Context, client *githubClient, path string, payload map[string]any, want int, number string) (map[string]any, error) {

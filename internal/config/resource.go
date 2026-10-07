@@ -57,7 +57,7 @@ type ResourceTypeConfig struct {
 	Webhook bool `yaml:"-"`
 	// Cron marks the built-in cron type, which no YAML can declare either: its check reads a clock against an expression, and runs nothing.
 	Cron bool `yaml:"-"`
-	// GitHub names which built-in github-* type this is (see github.go), which no YAML can declare: steps calls the API itself. Keyed, unlike Cron and Webhook, because two of the four share a source: shape and fetch different trees from it.
+	// GitHub names which built-in github-* type this is (see github.go), which no YAML can declare: steps calls the API itself. Keyed, unlike Cron and Webhook, because several share a source: shape and do different things with it.
 	GitHub string `yaml:"-"`
 }
 
@@ -84,7 +84,7 @@ const (
 	BackendWebhook ResourceBackend = "webhook"
 	// BackendCron has a check that reads the clock and no out: a version is a moment its expression named.
 	BackendCron ResourceBackend = "cron"
-	// BackendGitHub calls GitHub's API from this process: two of its types find work and have no out, two publish and have no check (see github.go).
+	// BackendGitHub calls GitHub's API from this process: two of its types find work and have no out, three publish and have no check (see github.go).
 	BackendGitHub ResourceBackend = "github"
 )
 

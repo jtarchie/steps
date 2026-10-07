@@ -6,10 +6,12 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -608,4 +610,272 @@ func pendingReview(t *testing.T, deleteStatus int) pendingReviewResult {
 	result.version, result.err = version, err
 
 	return result
+}
+
+func TestResolveComment(t *testing.T) {
+	t.Parallel()
+
+	pr := map[string]any{"number": "7", "sha": "abc"}
+	said := map[string]any{"id": "11", "kind": "conversation", "number": "7", "updated": "t"}
+	inline := map[string]any{"id": "12", "kind": "review", "number": "7", "updated": "t"}
+
+	for name, tc := range map[string]struct {
+		from   string
+		inputs PutInputs
+		want   commentTarget
+		err    string
+	}{
+		"the one comment":    {inputs: PutInputs{Versions: map[string]map[string]any{"pr": pr, "said": said}}, want: commentTarget{id: "11", kind: "conversation"}},
+		"from picks":         {from: "inline", inputs: PutInputs{Versions: map[string]map[string]any{"said": said, "inline": inline}}, want: commentTarget{id: "12", kind: "review"}},
+		"none":               {inputs: PutInputs{Names: []string{"pr"}, Versions: map[string]map[string]any{"pr": pr}}, err: "no input names a comment"},
+		"two":                {inputs: PutInputs{Versions: map[string]map[string]any{"said": said, "inline": inline}}, err: "several inputs name a comment (inline, said)"},
+		"from a pr":          {from: "pr", inputs: PutInputs{Names: []string{"pr", "said"}, Versions: map[string]map[string]any{"pr": pr, "said": said}}, err: `params.from: "pr"`},
+		"from never fetched": {from: "said", inputs: PutInputs{Names: []string{"said"}}, err: `params.from: "said"`},
+		"an unknown kind":    {inputs: PutInputs{Versions: map[string]map[string]any{"said": {"id": "1", "kind": "commit"}}}, err: `kind "commit"`},
+	} {
+		got, err := resolveComment(tc.from, tc.inputs)
+
+		if tc.err != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.err) {
+				t.Errorf("%s: err = %v, want %q", name, err, tc.err)
+			}
+
+			continue
+		}
+
+		if err != nil || got != tc.want {
+			t.Errorf("%s: %+v, %v; want %+v", name, got, err, tc.want)
+		}
+	}
+}
+
+// reactionServer is GitHub's reactions routes for comment 11, as a
+// conversation comment: the token user is octocat, the listing is a full
+// page of other people's reactions before octocat's own eyes (id 500), and
+// add and delete answer with the given statuses.
+type reactionServer struct {
+	mu      sync.Mutex
+	added   []string
+	deleted []string
+	listed  []string
+}
+
+func reactionPut(t *testing.T, params map[string]any, addStatus, deleteStatus int) (*reactionServer, map[string]any, error) {
+	t.Helper()
+	noBackoff(t)
+
+	others := make([]string, githubPageSize)
+	for i := range others {
+		others[i] = `{"id":` + strconv.Itoa(i+1) + `,"content":"eyes","user":{"login":"someone"}}`
+	}
+
+	pages := map[string]string{
+		"1": "[" + strings.Join(others, ",") + "]",
+		"2": `[{"id":500,"content":"eyes","user":{"login":"octocat"}}]`,
+	}
+
+	recorded := &reactionServer{}
+
+	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		recorded.mu.Lock()
+		defer recorded.mu.Unlock()
+
+		switch {
+		case r.URL.Path == "/user":
+			_, _ = w.Write([]byte(`{"login":"OctoCat"}`))
+		case r.URL.Path != "/repos/acme/app/issues/comments/11/reactions" && r.Method != http.MethodDelete:
+			t.Errorf("%s %s, want the conversation comment's reactions", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodGet:
+			recorded.listed = append(recorded.listed, r.URL.Query().Get("content")+"@"+r.URL.Query().Get("page"))
+			_, _ = w.Write([]byte(cmpOr(pages[r.URL.Query().Get("page")], "[]")))
+		case r.Method == http.MethodPost:
+			body, _ := io.ReadAll(r.Body)
+			recorded.added = append(recorded.added, string(body))
+			w.WriteHeader(addStatus)
+			_, _ = w.Write([]byte(`{"id":900,"message":"refused"}`))
+		case r.Method == http.MethodDelete:
+			recorded.deleted = append(recorded.deleted, r.URL.Path)
+			w.WriteHeader(deleteStatus)
+		}
+	})
+
+	version, err := githubReactionOut(context.Background(),
+		map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint},
+		params,
+		PutInputs{Names: []string{"said"}, Versions: map[string]map[string]any{"said": {"id": "11", "kind": "conversation", "number": "7", "updated": "t"}}},
+		t.TempDir())
+
+	recorded.mu.Lock()
+	defer recorded.mu.Unlock()
+
+	return recorded, version, err
+}
+
+// TestGitHubReactionAddsThenRemovesOnlyItsOwn: the add goes first, so the
+// comment never sits with no mark; the remove finds the token user's own
+// reaction on whichever page it is and deletes that one, by id.
+func TestGitHubReactionAddsThenRemovesOnlyItsOwn(t *testing.T) {
+	recorded, version, err := reactionPut(t, map[string]any{"add": "rocket", "remove": "eyes"}, http.StatusCreated, http.StatusNoContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for what, tc := range map[string]struct{ got, want []string }{
+		"added":   {recorded.added, []string{`{"content":"rocket"}`}},
+		"deleted": {recorded.deleted, []string{"/repos/acme/app/issues/comments/11/reactions/500"}},
+		"listed":  {recorded.listed, []string{"eyes@1", "eyes@2"}},
+	} {
+		if !slices.Equal(tc.got, tc.want) {
+			t.Errorf("%s %v, want %v: one rocket, and only octocat's own eyes found across two pages and deleted", what, tc.got, tc.want)
+		}
+	}
+
+	if version["comment"] != "11" || version["add"] != "rocket" || version["remove"] != "eyes" {
+		t.Errorf("version = %v, want the comment and both reactions", version)
+	}
+}
+
+// TestGitHubReactionIsIdempotent: already there and already gone are the
+// world in the state asked for, which a replay or a resume always finds.
+func TestGitHubReactionIsIdempotent(t *testing.T) {
+	_, _, err := reactionPut(t, map[string]any{"add": "rocket", "remove": "eyes"}, http.StatusOK, http.StatusNotFound)
+	if err != nil {
+		t.Errorf("200 on add and 404 on delete: %v, want success", err)
+	}
+}
+
+func TestGitHubReactionFailsOnAnyOtherAnswer(t *testing.T) {
+	for name, tc := range map[string]struct {
+		add, remove int
+		want        string
+	}{
+		"add refused":    {http.StatusForbidden, http.StatusNoContent, "POST /repos/acme/app/issues/comments/11/reactions: 403"},
+		"delete refused": {http.StatusCreated, http.StatusForbidden, "DELETE /repos/acme/app/issues/comments/11/reactions/500: 403"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorded, _, err := reactionPut(t, map[string]any{"add": "rocket", "remove": "eyes"}, tc.add, tc.remove)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want %q", err, tc.want)
+			}
+
+			if tc.add != http.StatusCreated && len(recorded.deleted) != 0 {
+				t.Errorf("deleted %v after the add failed, want the old mark left in place", recorded.deleted)
+			}
+		})
+	}
+}
+
+// TestGitHubCommentsSkipReactedAsksOnlyWhenItMatters: a comment whose summary
+// counts none of the reaction costs no request; one that counts some is
+// asked whose they are, and only the token user's own skip it.
+func TestGitHubCommentsSkipReactedAsksOnlyWhenItMatters(t *testing.T) {
+	var (
+		mu     sync.Mutex
+		listed []string
+	)
+
+	comment := func(id int, rockets int) string {
+		return `{"id":` + strconv.Itoa(id) + `,"body":"/go","updated_at":"2026-09-27T00:00:0` + strconv.Itoa(id) + `Z","user":{"login":"alice"},"html_url":"https://x/pull/7#c","issue_url":"https://x/issues/7","reactions":{"total_count":` + strconv.Itoa(rockets) + `,"rocket":` + strconv.Itoa(rockets) + `,"eyes":0}}`
+	}
+
+	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		switch r.URL.Path {
+		case "/user":
+			_, _ = w.Write([]byte(`{"login":"octocat"}`))
+		case "/repos/acme/app/issues/comments":
+			// 4 carries no summary at all, as an older GitHub Enterprise may answer.
+			_, _ = w.Write([]byte("[" + comment(1, 0) + "," + comment(2, 1) + "," + comment(3, 1) + `,{"id":4,"body":"/go","updated_at":"2026-09-27T00:00:04Z","user":{"login":"alice"},"html_url":"https://x/pull/7#c","issue_url":"https://x/issues/7"}]`))
+		case "/repos/acme/app/issues/comments/2/reactions", "/repos/acme/app/issues/comments/4/reactions":
+			listed = append(listed, r.URL.Path+"?"+r.URL.Query().Get("content"))
+			_, _ = w.Write([]byte(`[{"id":1,"content":"rocket","user":{"login":"OctoCat"}}]`))
+		case "/repos/acme/app/issues/comments/3/reactions":
+			listed = append(listed, r.URL.Path+"?"+r.URL.Query().Get("content"))
+			_, _ = w.Write([]byte(`[{"id":2,"content":"rocket","user":{"login":"carol"}}]`))
+		default:
+			t.Errorf("unexpected %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+
+	versions, err := githubCommentsCheck(context.Background(), map[string]any{
+		"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint,
+		"kinds": []any{"conversation"}, "skip_reacted": "rocket",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ids := make([]string, 0, len(versions))
+	for _, version := range versions {
+		ids = append(ids, versionField(version, "id"))
+	}
+
+	if strings.Join(ids, ",") != "1,3" {
+		t.Errorf("reported %v, want 1 (no rocket) and 3 (carol's rocket), not 2 and 4 (the token user's own)", ids)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	slices.Sort(listed)
+
+	if strings.Join(listed, " ") != "/repos/acme/app/issues/comments/2/reactions?rocket /repos/acme/app/issues/comments/3/reactions?rocket /repos/acme/app/issues/comments/4/reactions?rocket" {
+		t.Errorf("listed %v, want 2, 3 and 4 asked about rockets alone, and 1 not asked", listed)
+	}
+}
+
+// TestGitHubCommentsSkipReactedRefusesHalfAnAnswer: a lookup that fails
+// fails the check, because reporting a done comment as new re-runs work
+// with side effects.
+func TestGitHubCommentsSkipReactedRefusesHalfAnAnswer(t *testing.T) {
+	noBackoff(t)
+
+	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/user":
+			_, _ = w.Write([]byte(`{"login":"octocat"}`))
+		case "/repos/acme/app/issues/comments":
+			_, _ = w.Write([]byte(`[{"id":2,"body":"/go","updated_at":"2026-09-27T00:00:02Z","user":{"login":"alice"},"html_url":"https://x/pull/7#c","issue_url":"https://x/issues/7","reactions":{"rocket":1}}]`))
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+
+	_, err := githubCommentsCheck(context.Background(), map[string]any{
+		"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "kinds": []any{"conversation"}, "skip_reacted": "rocket",
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "/issues/comments/2/reactions") {
+		t.Errorf("err = %v, want the failed lookup named", err)
+	}
+}
+
+// TestGitHubCommentsAuthorMeIsTheTokensUser: @me is resolved once, to the
+// login the token answers to, whether or not skip_reacted needed it too.
+func TestGitHubCommentsAuthorMeIsTheTokensUser(t *testing.T) {
+	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/user" {
+			_, _ = w.Write([]byte(`{"login":"octocat"}`))
+
+			return
+		}
+
+		_, _ = w.Write([]byte(`[{"id":1,"body":"/go","updated_at":"2026-09-27T00:00:01Z","user":{"login":"alice"},"html_url":"https://x/pull/7#c","issue_url":"https://x/issues/7","reactions":{"rocket":0}},` +
+			`{"id":2,"body":"/go","updated_at":"2026-09-27T00:00:02Z","user":{"login":"OctoCat"},"html_url":"https://x/pull/7#c","issue_url":"https://x/issues/7","reactions":{"rocket":0}}]`))
+	})
+
+	for _, skip := range []string{"", "rocket"} {
+		source := map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "author": "@me", "kinds": []any{"conversation"}}
+		if skip != "" {
+			source["skip_reacted"] = skip
+		}
+
+		versions, err := githubCommentsCheck(context.Background(), source, nil)
+		if err != nil || len(versions) != 1 || versions[0]["id"] != "2" {
+			t.Errorf("skip_reacted %q: %v, %v; want only octocat's comment", skip, versions, err)
+		}
+	}
 }

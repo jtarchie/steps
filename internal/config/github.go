@@ -3,15 +3,16 @@ package config
 // The built-in github-* resource types: their names, the shape of each one's
 // source: and put params:, and the load-time rules that need no network.
 //
-// Four types rather than one, split by what they do, the way the Slack
+// Five types rather than one, split by what they do, the way the Slack
 // built-ins are: two that FIND work (a pull request, a comment) and have no
-// out, and two that PUBLISH (a comment, a review) and have no check. A put
+// out, and three that PUBLISH (a comment, a review, a reaction) and have no
+// check. A put
 // records its version in the resource's own history (recordPutOrder), so a
 // type that both watched and posted would mint a comment-shaped version into
 // the history it fans out over — and under trigger: true, a post would
 // trigger the build that posts again.
 //
-// All four are Go rather than YAML: steps calls GitHub itself and unpacks the
+// All five are Go rather than YAML: steps calls GitHub itself and unpacks the
 // tree itself, so nothing needs gh, git or curl on any machine, and a fetched
 // tree is an ordinary artifact on this one — placed and containerized steps
 // read it the way they read any other.
@@ -31,11 +32,12 @@ const (
 	GitHubCommentsType  = "github-comments"
 	GitHubPRCommentType = "github-pr-comment"
 	GitHubPRReviewType  = "github-pr-review"
+	GitHubReactionType  = "github-reaction"
 )
 
 // GitHubTypes is every github-* type, in the order the docs list them.
 func GitHubTypes() []string {
-	return []string{GitHubPRsType, GitHubCommentsType, GitHubPRCommentType, GitHubPRReviewType}
+	return []string{GitHubPRsType, GitHubCommentsType, GitHubPRCommentType, GitHubPRReviewType, GitHubReactionType}
 }
 
 // GitHubFinds reports whether kind is one of the two types a get reads.
@@ -60,7 +62,7 @@ const (
 )
 
 // GitHubConnection is where a github-* resource talks to and as whom, common
-// to all four source: shapes.
+// to every source: shape.
 type GitHubConnection struct {
 	Repo     string
 	TokenEnv string
@@ -135,6 +137,11 @@ type GitHubCommentsSource struct {
 	// Checkout, true unless set false, lays the tree of the pull request a
 	// comment sits on into the artifact. An issue has no tree.
 	Checkout *bool `yaml:"checkout,omitempty"`
+	// SkipReacted is a reaction that, left by the token's own user, marks a
+	// comment done: check does not report it. The mark lives on GitHub, so
+	// it outlasts a wiped state database, whose first check would otherwise
+	// report a page of commands already answered.
+	SkipReacted string `yaml:"skip_reacted,omitempty"`
 }
 
 // Connection is where this resource talks to.
@@ -154,7 +161,7 @@ func (s GitHubCommentsSource) WatchedKinds() []string {
 	return s.Kinds
 }
 
-// GitHubPostSource is the source: of both put-only types: where to post, and
+// GitHubPostSource is the source: of every put-only type: where to post, and
 // as whom.
 type GitHubPostSource struct {
 	Repo     string `yaml:"repo"`
@@ -200,6 +207,24 @@ func (p GitHubReviewParams) Post() GitHubPostParams {
 	return GitHubPostParams{BodyFile: p.BodyFile, From: p.From, Number: p.Number}
 }
 
+// GitHubReactionParams is a github-reaction put's params:. The comment is
+// always a github-comments get's: a reaction marks a command, and only that
+// type's version names one.
+type GitHubReactionParams struct {
+	// Add is the reaction to put on the comment.
+	Add string `yaml:"add,omitempty"`
+	// Remove is a reaction of the token's own user to take off it, after Add
+	// is on, so the comment is never without a mark. Anybody else's stays.
+	Remove string `yaml:"remove,omitempty"`
+	// From names the github-comments get whose comment this marks. Needed
+	// only when more than one input carries one.
+	From string `yaml:"from,omitempty"`
+}
+
+// githubReactions is every reaction GitHub takes on a comment. Its names,
+// not Slack's: there is no white_check_mark.
+var githubReactions = []string{"+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"} //nolint:gochecknoglobals // read-only table
+
 // The review events a put may name, as the params: spell them.
 var githubReviewEvents = []string{"comment", "approve", "request_changes", "pending"} //nolint:gochecknoglobals // read-only table
 
@@ -242,7 +267,12 @@ func ParseGitHubPRsSource(raw map[string]any) (GitHubPRsSource, error) {
 func ParseGitHubCommentsSource(raw map[string]any) (GitHubCommentsSource, *regexp.Regexp, error) {
 	var source GitHubCommentsSource
 
-	err := decodeSource(raw, &source)
+	err := unquotedReaction(raw, "source", "skip_reacted")
+	if err != nil {
+		return source, nil, err
+	}
+
+	err = decodeSource(raw, &source)
 	if err != nil {
 		return source, nil, err
 	}
@@ -270,7 +300,30 @@ func ParseGitHubCommentsSource(raw map[string]any) (GitHubCommentsSource, *regex
 		return source, nil, fmt.Errorf("source.body: %w", err)
 	}
 
-	return source, pattern, nil
+	return source, pattern, validateGitHubReaction("source.skip_reacted", source.SkipReacted)
+}
+
+// unquotedReaction refuses a reaction YAML has already read as a number:
+// +1 and -1 unquoted are integers, and +1 comes back as "1", which is no
+// reaction at all and would be reported as one with no hint why.
+func unquotedReaction(raw map[string]any, section string, fields ...string) error {
+	for _, field := range fields {
+		if value, ok := raw[field]; ok && value != nil {
+			if _, isString := value.(string); !isString {
+				return fmt.Errorf(`%s.%s: %v is a number to YAML, not a reaction; quote it: "+1"`, section, field, value)
+			}
+		}
+	}
+
+	return nil
+}
+
+func validateGitHubReaction(field, reaction string) error {
+	if reaction == "" || slices.Contains(githubReactions, reaction) {
+		return nil
+	}
+
+	return fmt.Errorf("%s: %q is not a GitHub reaction (%s)", field, reaction, strings.Join(githubReactions, ", "))
 }
 
 // ParseGitHubPostSource decodes a put-only type's source: strictly and
@@ -312,6 +365,35 @@ func ParseGitHubReviewParams(raw map[string]any) (GitHubReviewParams, error) {
 	}
 
 	return params, validateGitHubPost(params.Post())
+}
+
+// ParseGitHubReactionParams decodes a github-reaction put's params:.
+func ParseGitHubReactionParams(raw map[string]any) (GitHubReactionParams, error) {
+	var params GitHubReactionParams
+
+	err := unquotedReaction(raw, "params", "add", "remove")
+	if err != nil {
+		return params, err
+	}
+
+	err = decodeParams(raw, &params)
+	if err != nil {
+		return params, err
+	}
+
+	switch {
+	case params.Add == "" && params.Remove == "":
+		return params, errors.New("params.add or params.remove is required: the reaction to put on the comment, or the token user's own one to take off")
+	case params.Add == params.Remove:
+		return params, fmt.Errorf("params.add and params.remove name the same reaction, %q; the remove would undo the add", params.Add)
+	}
+
+	err = validateGitHubReaction("params.add", params.Add)
+	if err != nil {
+		return params, err
+	}
+
+	return params, validateGitHubReaction("params.remove", params.Remove)
 }
 
 func decodeParams(raw map[string]any, out any) error {
@@ -426,7 +508,11 @@ func (c *Config) validateGitHubResource(resource Resource) error {
 // it reaches: a find takes none, a post takes its own.
 func (c *Config) validateGitHubSteps() error {
 	for i := range c.Jobs {
-		err := c.Jobs[i].visitSteps(c.checkGitHubStep)
+		comments := c.githubCommentGets(c.Jobs[i])
+
+		err := c.Jobs[i].visitSteps(func(label string, step *Step) error {
+			return c.checkGitHubStep(label, step, comments)
+		})
 		if err != nil {
 			return err
 		}
@@ -435,7 +521,55 @@ func (c *Config) validateGitHubSteps() error {
 	return nil
 }
 
-func (c *Config) checkGitHubStep(label string, step *Step) error {
+// githubCommentGets is the name of every get in job that fetches a
+// github-comments resource, aliased or not: the names a reaction's inputs
+// can carry a comment under.
+func (c *Config) githubCommentGets(job Job) []string {
+	var names []string
+
+	_ = job.visitSteps(func(_ string, step *Step) error {
+		if step.Get == "" {
+			return nil
+		}
+
+		resource, err := c.FindResource(step.GetResourceName())
+		if err == nil && c.githubKind(resource.Type) == GitHubCommentsType {
+			names = append(names, step.Get)
+		}
+
+		return nil
+	})
+
+	return names
+}
+
+// checkReactionStep checks a reaction's params:, then refuses one no input
+// of which can name a comment, and a from: naming one that cannot. Several
+// candidates are left to the put: which of them a build has fetched by then
+// is a run-time fact.
+func checkReactionStep(step *Step, comments []string) error {
+	params, err := ParseGitHubReactionParams(step.Params)
+	if err != nil {
+		return err
+	}
+
+	visible := comments
+	if !step.InputsAll() {
+		visible = slices.DeleteFunc(slices.Clone(step.InputNames()), func(name string) bool { return !slices.Contains(comments, name) })
+	}
+
+	if len(visible) == 0 {
+		return errors.New("no github-comments get among its inputs names the comment to react to; list that get in the put's inputs")
+	}
+
+	if params.From != "" && !slices.Contains(visible, params.From) {
+		return fmt.Errorf("params.from: %q is not a github-comments get among this put's inputs (%s)", params.From, strings.Join(visible, ", "))
+	}
+
+	return nil
+}
+
+func (c *Config) checkGitHubStep(label string, step *Step, comments []string) error {
 	name, ok := step.resourceName()
 	if !ok {
 		return nil
@@ -457,6 +591,8 @@ func (c *Config) checkGitHubStep(label string, step *Step) error {
 		_, err = ParseGitHubPostParams(step.Params)
 	case kind == GitHubPRReviewType:
 		_, err = ParseGitHubReviewParams(step.Params)
+	case kind == GitHubReactionType:
+		err = checkReactionStep(step, comments)
 	}
 
 	if err != nil {
@@ -474,8 +610,8 @@ func githubPutRefusal(label, put, kind string) error {
 		return nil
 	}
 
-	return fmt.Errorf("%s: put %q targets a %s resource, which only finds work; post with a %s or %s resource instead",
-		label, put, kind, GitHubPRCommentType, GitHubPRReviewType)
+	return fmt.Errorf("%s: put %q targets a %s resource, which only finds work; post with a %s, %s or %s resource instead",
+		label, put, kind, GitHubPRCommentType, GitHubPRReviewType, GitHubReactionType)
 }
 
 // githubKind is the github-* type typeName resolves to, "" for any other.

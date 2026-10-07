@@ -56,13 +56,25 @@ type fakePR struct {
 }
 
 type fakeComment struct {
-	ID      int64
-	Number  int
-	Kind    string // conversation, review or issue
-	Author  string
-	Body    string
-	Updated time.Time
+	ID        int64
+	Number    int
+	Kind      string // conversation, review or issue
+	Author    string
+	Body      string
+	Updated   time.Time
+	Reactions []fakeReaction
 }
+
+// fakeReaction is one person's emoji on a comment. GitHub keeps at most one
+// of each content per user per comment.
+type fakeReaction struct {
+	ID      int64
+	User    string
+	Content string
+}
+
+// fakeReactionContents is every reaction GitHub accepts on a comment.
+var fakeReactionContents = []string{"+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"} //nolint:gochecknoglobals // read-only table
 
 type fakeReview struct {
 	ID       int64
@@ -102,12 +114,17 @@ type fakeGitHub struct {
 	queries  []string
 	nextID   int64
 	requests int
+	// reactionLists is each comment whose reactions were listed, in order.
+	reactionLists []int64
+	// refuseReactions answers every new reaction as a token without write
+	// access is answered.
+	refuseReactions bool
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
 	t.Helper()
 
-	fake := &fakeGitHub{t: t, repo: fakeRepo, login: "octocat", reviews: map[int][]fakeReview{}, nextID: 9000}
+	fake := &fakeGitHub{t: t, repo: fakeRepo, login: docGitHubLogin, reviews: map[int][]fakeReview{}, nextID: 9000}
 	fake.server = httptest.NewServer(fake.routes())
 	t.Cleanup(fake.server.Close)
 
@@ -151,6 +168,47 @@ func (f *fakeGitHub) editComment(id int64, body string, at time.Time) {
 			f.comments[i].Updated = at
 		}
 	}
+}
+
+// react puts user's content on a comment, as that user would by hand.
+func (f *fakeGitHub) react(id int64, user, content string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if comment := f.comment(id); comment != nil {
+		f.nextID++
+		comment.Reactions = append(comment.Reactions, fakeReaction{ID: f.nextID, User: user, Content: content})
+	}
+}
+
+// reactionsOn is a comment's reactions, oldest first.
+func (f *fakeGitHub) reactionsOn(id int64) []fakeReaction {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if comment := f.comment(id); comment != nil {
+		return slices.Clone(comment.Reactions)
+	}
+
+	return nil
+}
+
+// listedReactions is every comment whose reactions were asked for.
+func (f *fakeGitHub) listedReactions() []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.Clone(f.reactionLists)
+}
+
+func (f *fakeGitHub) comment(id int64) *fakeComment {
+	for i := range f.comments {
+		if f.comments[i].ID == id {
+			return &f.comments[i]
+		}
+	}
+
+	return nil
 }
 
 func (f *fakeGitHub) addReview(number int, review fakeReview) {
@@ -231,6 +289,17 @@ func (f *fakeGitHub) routes() http.Handler {
 		number := atoi(r.PathValue("number"))
 		respondJSON(w, http.StatusOK, map[string]any{"number": number, "title": "an issue", "html_url": f.html("issues", number)})
 	})
+	for listing, kinds := range map[string][]string{"/issues/comments/": {"conversation", "issue"}, "/pulls/comments/": {"review"}} {
+		reactions := repo + listing + "{id}/reactions"
+		id := func(r *http.Request) int64 { return int64(atoi(r.PathValue("id"))) }
+
+		handle("GET "+reactions, func(w http.ResponseWriter, r *http.Request) { f.listReactions(w, r, id(r), kinds) })
+		handle("POST "+reactions, func(w http.ResponseWriter, r *http.Request) { f.createReaction(w, r, id(r), kinds) })
+		handle("DELETE "+reactions+"/{reaction}", func(w http.ResponseWriter, r *http.Request) {
+			f.deleteReaction(w, id(r), int64(atoi(r.PathValue("reaction"))), kinds)
+		})
+	}
+
 	handle("GET "+repo+"/compare/{basehead...}", func(w http.ResponseWriter, r *http.Request) { f.serveCompare(w, r, r.PathValue("basehead")) })
 	// GitHub answers a tarball with a redirect to codeload; following one is part of the contract. Under the repo prefix, so the one auth check covers it.
 	handle("GET "+repo+"/tarball/{sha}", func(w http.ResponseWriter, r *http.Request) {
@@ -575,6 +644,7 @@ func (f *fakeGitHub) commentJSON(comment fakeComment) map[string]any {
 		"body":       comment.Body,
 		"user":       map[string]any{"login": comment.Author},
 		"updated_at": comment.Updated.UTC().Format(time.RFC3339),
+		"reactions":  f.rollup(comment),
 	}
 
 	switch comment.Kind {
@@ -591,6 +661,127 @@ func (f *fakeGitHub) commentJSON(comment fakeComment) map[string]any {
 	}
 
 	return out
+}
+
+// rollup is the reaction summary GitHub writes into every comment it lists:
+// a count per content, and no word on whose they are.
+func (f *fakeGitHub) rollup(comment fakeComment) map[string]any {
+	out := map[string]any{"total_count": len(comment.Reactions)}
+	for _, content := range fakeReactionContents {
+		out[content] = 0
+	}
+
+	for _, reaction := range comment.Reactions {
+		out[reaction.Content] = out[reaction.Content].(int) + 1 //nolint:forcetypeassert // every content was set to an int above
+	}
+
+	return out
+}
+
+// reactable is the comment id names, when it is one of kinds: an issue
+// comment's id means nothing on the review comment route, and the other way.
+func (f *fakeGitHub) reactable(w http.ResponseWriter, id int64, kinds []string) *fakeComment {
+	comment := f.comment(id)
+	if comment == nil || !slices.Contains(kinds, comment.Kind) {
+		respondJSON(w, http.StatusNotFound, map[string]any{"message": "Not Found"})
+
+		return nil
+	}
+
+	return comment
+}
+
+func (f *fakeGitHub) listReactions(w http.ResponseWriter, r *http.Request, id int64, kinds []string) {
+	comment := f.reactable(w, id, kinds)
+	if comment == nil {
+		return
+	}
+
+	f.reactionLists = append(f.reactionLists, id)
+
+	content := r.URL.Query().Get("content")
+	out := []map[string]any{}
+
+	for _, reaction := range comment.Reactions {
+		if content == "" || reaction.Content == content {
+			out = append(out, map[string]any{"id": reaction.ID, "content": reaction.Content, "user": map[string]any{"login": reaction.User}})
+		}
+	}
+
+	perPage := max(atoi(r.URL.Query().Get("per_page")), 1)
+	page := max(atoi(r.URL.Query().Get("page")), 1)
+	start := min((page-1)*perPage, len(out))
+
+	respondJSON(w, http.StatusOK, out[start:min(start+perPage, len(out))])
+}
+
+// createReaction answers as GitHub does: 201 for a new reaction, 200 with
+// the existing one when this user already left that content.
+func (f *fakeGitHub) createReaction(w http.ResponseWriter, r *http.Request, id int64, kinds []string) {
+	comment := f.reactable(w, id, kinds)
+	if comment == nil {
+		return
+	}
+
+	if f.refuseReactions {
+		respondJSON(w, http.StatusForbidden, map[string]any{"message": "Resource not accessible by personal access token"})
+
+		return
+	}
+
+	var body struct {
+		Content string `json:"content"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil || !slices.Contains(fakeReactionContents, body.Content) {
+		respondJSON(w, http.StatusUnprocessableEntity, map[string]any{"message": "Validation Failed", "errors": []map[string]any{{"code": "invalid", "field": "content"}}})
+
+		return
+	}
+
+	for _, reaction := range comment.Reactions {
+		if reaction.User == f.login && reaction.Content == body.Content {
+			respondJSON(w, http.StatusOK, map[string]any{"id": reaction.ID, "content": reaction.Content})
+
+			return
+		}
+	}
+
+	f.nextID++
+	comment.Reactions = append(comment.Reactions, fakeReaction{ID: f.nextID, User: f.login, Content: body.Content})
+
+	respondJSON(w, http.StatusCreated, map[string]any{"id": f.nextID, "content": body.Content})
+}
+
+// deleteReaction removes one of the token user's own reactions. Being asked
+// to delete anybody else's is a test failure, not just a refusal: the type
+// must never try.
+func (f *fakeGitHub) deleteReaction(w http.ResponseWriter, id, reactionID int64, kinds []string) {
+	comment := f.reactable(w, id, kinds)
+	if comment == nil {
+		return
+	}
+
+	for i, reaction := range comment.Reactions {
+		if reaction.ID != reactionID {
+			continue
+		}
+
+		if reaction.User != f.login {
+			f.t.Errorf("asked to delete %s's %s reaction on comment %d", reaction.User, reaction.Content, id)
+			respondJSON(w, http.StatusForbidden, map[string]any{"message": "Must have admin rights to Repository."})
+
+			return
+		}
+
+		comment.Reactions = slices.Delete(comment.Reactions, i, i+1)
+		w.WriteHeader(http.StatusNoContent)
+
+		return
+	}
+
+	respondJSON(w, http.StatusNotFound, map[string]any{"message": "Not Found"})
 }
 
 func (f *fakeGitHub) postComment(w http.ResponseWriter, r *http.Request, number int) {

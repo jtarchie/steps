@@ -36,6 +36,9 @@ resources:
 - name: said
   type: github-comments
   source: {repo: acme/app}
+- name: mark
+  type: github-reaction
+  source: {repo: acme/app}
 jobs:
 - name: build
   plan:` + plan + `
@@ -84,6 +87,19 @@ func TestGitHubLoadRules(t *testing.T) {
 		"put with both targets":   {plan: "\n  - put: comment\n    params: {body_file: a, from: pr, number: '1'}", want: "name one"},
 		"put with unknown params": {plan: "\n  - put: comment\n    params: {body_file: a, bodyfile: b}", want: "bodyfile"},
 		"review with a bad event": {plan: "\n  - put: review\n    params: {body_file: a, event: merge}", want: `params.event: "merge"`},
+		"get of a reaction":       {plan: "\n  - get: mark", want: "only publishes"},
+		"put to a reaction loads": {plan: "\n  - get: said\n  - put: mark\n    inputs: [said]\n    params: {add: rocket, remove: eyes}", want: ""},
+		"reaction quoted +1":      {plan: "\n  - get: said\n  - put: mark\n    inputs: [said]\n    params: {add: '+1'}", want: ""},
+		"reaction from all":       {plan: "\n  - get: pr\n  - get: said\n  - put: mark\n    inputs: all\n    params: {remove: eyes, from: said}", want: ""},
+		"reaction aliased get":    {plan: "\n  - get: asked\n    resource: said\n  - put: mark\n    inputs: [asked]\n    params: {add: eyes}", want: ""},
+		"reaction not in the set": {plan: "\n  - get: said\n  - put: mark\n    inputs: [said]\n    params: {add: white_check_mark}", want: `params.add: "white_check_mark" is not a GitHub reaction (+1, -1, laugh, confused, heart, hooray, rocket, eyes)`},
+		"reaction unquoted +1":    {plan: "\n  - get: said\n  - put: mark\n    inputs: [said]\n    params: {add: +1}", want: `quote it`},
+		"reaction says nothing":   {plan: "\n  - get: said\n  - put: mark\n    inputs: [said]\n    params: {from: said}", want: "params.add or params.remove is required"},
+		"reaction add is remove":  {plan: "\n  - get: said\n  - put: mark\n    inputs: [said]\n    params: {add: eyes, remove: eyes}", want: "same reaction"},
+		"reaction no inputs":      {plan: "\n  - get: said\n  - put: mark\n    params: {add: eyes}", want: "no github-comments get among its inputs"},
+		"reaction on a pr get":    {plan: "\n  - get: pr\n  - put: mark\n    inputs: [pr]\n    params: {add: eyes}", want: "no github-comments get among its inputs"},
+		"reaction from a pr get":  {plan: "\n  - get: pr\n  - get: said\n  - put: mark\n    inputs: [pr, said]\n    params: {add: eyes, from: pr}", want: `params.from: "pr" is not a github-comments get among this put's inputs (said)`},
+		"reaction unknown param":  {plan: "\n  - get: said\n  - put: mark\n    inputs: [said]\n    params: {add: eyes, emoji: eyes}", want: "emoji"},
 	} {
 		_, err := LoadConfig(writeConfig(t, githubPipeline(tc.extra, tc.plan)))
 
@@ -120,10 +136,13 @@ jobs:
 	}
 
 	for name, tc := range map[string]struct{ source, want string }{
-		"bad pattern":               {"    body: '(unclosed'", "source.body"},
-		"unknown kind":              {"    kinds: [commit]", `source.kinds: "commit"`},
-		"bad author":                {"    author: 'a b'", "source.author"},
-		"enterprise endpoint loads": {"    endpoint: https://x.example/api/v3", ""},
+		"bad pattern":                 {"    body: '(unclosed'", "source.body"},
+		"unknown kind":                {"    kinds: [commit]", `source.kinds: "commit"`},
+		"bad author":                  {"    author: 'a b'", "source.author"},
+		"skip_reacted loads":          {"    skip_reacted: rocket", ""},
+		"skip_reacted not a reaction": {"    skip_reacted: white_check_mark", `source.skip_reacted: "white_check_mark" is not a GitHub reaction`},
+		"skip_reacted unquoted -1":    {"    skip_reacted: -1", "quote it"},
+		"enterprise endpoint loads":   {"    endpoint: https://x.example/api/v3", ""},
 	} {
 		_, err := LoadConfig(writeConfig(t, pipeline(tc.source)))
 

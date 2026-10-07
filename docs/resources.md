@@ -137,11 +137,11 @@ There is deliberately no `check:`/`in:` on `slack-reply` and no `out:` on `slack
 
 ## The built-in GitHub types
 
-Four built-ins, split by what they do, the way the Slack ones are. `github-prs` and `github-comments` **find work**: they have a check and an in, and no out. `github-pr-comment` and `github-pr-review` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
+Five built-ins, split by what they do, the way the Slack ones are. `github-prs` and `github-comments` **find work**: they have a check and an in, and no out. `github-pr-comment`, `github-pr-review` and `github-reaction` **publish**: they have an out and nothing else. The split is not tidiness. A put records its version in its own resource's history, so one type that both watched pull requests and commented on them would put every comment it posted into the history it triggers from.
 
-steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under [`image:`](infra.md#container-execution-image) or [`tags:`](infra.md#remote-workers-tags) reads it the way it reads any other. That also means none of the four can be placed with `tags:` themselves, as for every type that runs inside this process.
+steps talks to GitHub itself. Nothing needs `gh`, `git` or `curl`, on this machine or any other, and the tree a get fetches is an ordinary artifact here: a task under [`image:`](infra.md#container-execution-image) or [`tags:`](infra.md#remote-workers-tags) reads it the way it reads any other. That also means none of the five can be placed with `tags:` themselves, as for every type that runs inside this process.
 
-All four read a token from `GH_TOKEN`, the variable `gh` reads first, so `export GH_TOKEN=$(gh auth token)` is the whole setup on a machine where `gh` is logged in. `source.token_env` names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. `steps validate` refuses a pipeline whose token variable is unset, before anything runs.
+All five read a token from `GH_TOKEN`, the variable `gh` reads first, so `export GH_TOKEN=$(gh auth token)` is the whole setup on a machine where `gh` is logged in. `source.token_env` names a different variable, for a second identity. The token is required, not optional: GitHub gives an unauthenticated caller sixty requests an hour, which a poller spends in minutes. `steps validate` refuses a pipeline whose token variable is unset, before anything runs.
 
 ### `github-prs`: open pull requests
 
@@ -296,6 +296,7 @@ jobs:
 | `body` | no | an [RE2](https://github.com/google/re2/wiki/Syntax) pattern the text must contain a match for; `^` anchors it to the start |
 | `kinds` | no | `conversation` (a pull request's timeline), `review` (inline, on a line of its diff), `issue` (an issue's timeline); default the first two |
 | `checkout` | no | `false` skips the pull request's tree; default `true`. An issue has no tree |
+| `skip_reacted` | no | a reaction (`+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes`) that, left by the token's own user, marks a comment done: it is not reported |
 | `token_env`, `endpoint` | no | as for `github-prs` |
 
 A get writes `comment.json`, `comment.body`, `comment.id`, `comment.kind`, `comment.author` and `comment.url`. A comment on a pull request brings the pull request with it, every `pr.*` file above plus the tree at its current head, because a get cannot be told which pull request to fetch by another get's output. A comment on an issue writes `issue.json` and `issue.number` instead.
@@ -303,6 +304,12 @@ A get writes `comment.json`, `comment.body`, `comment.id`, `comment.kind`, `comm
 **The version is `{id, kind, number, updated}`**, and `updated` is there on purpose, against the usual rule that a version carries identity only. The text is the payload here, so a comment edited from one instruction to another is new work, and an edit that stops matching `body` is not. It is also the [cursor](#the-check-cursor): each check asks GitHub only for comments written since the newest version it last reported, newest first, one page when there is no cursor yet. Every page is a conditional request, and GitHub answers an unchanged listing without charging the rate limit, so a quiet repository costs nothing to poll. Review summaries, the text a reviewer writes when submitting, are not watched: GitHub has no listing of them across a repository.
 
 A pipeline that comments as the same user it watches must make sure what it posts cannot match `body`, or its own reply is the next build.
+
+**`skip_reacted` makes a mark on GitHub the record of what is done.** The cursor keeps a running daemon from reporting a comment twice, but the cursor lives in the state database, and a check with no cursor reads a page of recent comments and builds the newest of them. That is a command already answered — a deploy, a model run, a reply — run again because a file was deleted. A reaction the job leaves on its comment outlasts any database, so a comment carrying `skip_reacted` from the token's own user is not reported at all. Put it on with a [`github-reaction`](#github-reaction-marking-a-comment) put as the job's last step. Only the token's own user counts, because anybody can react with anything.
+
+It stays cheap. A comment is looked at only after it has passed `author` and `body`, and only when GitHub's own summary on it counts at least one of that reaction; only then are its reactions of that kind listed, to see whose they are, as a conditional request like every other page. A lookup that fails fails the check, since reporting a done comment as new is exactly what the field is there to prevent. While every comment on a cursorless first page carries the mark, the check reports nothing and so keeps no cursor, and each poll reads that page again until a new command arrives.
+
+**A reaction does not change a comment's `updated`.** Adding the mark makes no new version, so marking a comment never triggers the job again. Removing it does not bring the comment back by itself either: with a cursor, the check asks only for comments written since the newest version it reported, and an older comment is not among them. It is work again when it is edited, which is a new version anyway, or when a check with no cursor finds it on its first page.
 
 ### `github-pr-comment` and `github-pr-review`: publishing
 
@@ -357,6 +364,68 @@ jobs:
 `github-pr-comment` posts to the pull request's conversation. `github-pr-review` posts a review on the commit its input fetched when the input is a `github-prs` get, so a push after the fetch does not move the review onto code nobody read. **`event: pending` drafts a review only the token's user can see** until they submit it, and replaces that user's own earlier draft, since GitHub allows one per user per pull request, so a new push's draft takes the old one's place. Nobody else's draft is touched. GitHub refuses an approval or a change request from a pull request's own author; post a comment there instead.
 
 **`comments_file` puts each comment on its line**, so the author reads it beside the code instead of looking a `path:line` up. `line` is the line in the file, not a position in the diff. The file is read and checked before anything is sent, unknown fields included, so a `file:` written for `path:` fails the put by name, and a pending put never deletes the last draft only to fail on the next. Whether a line is in the diff is GitHub's call, since only it knows which lines a review may sit on, and it refuses the whole review if one is not: check the lines against `pr.diff` in a task before the put when a model chose them.
+
+### `github-reaction`: marking a comment
+
+A reaction is how a bot says "seen" and "done" on the comment that asked, without a reply in the conversation for every command. `github-reaction` puts one on, takes the token's own one off, or both in one put, on the comment a `github-comments` get fetched:
+
+```yaml github=reaction
+resources:
+- name: command
+  type: github-comments
+  source:
+    repo: acme/app
+    author: alice
+    body: '^/steps\s+deploy\b'
+    checkout: false
+    skip_reacted: rocket             # the done mark, when the token's own user left it
+- name: mark
+  type: github-reaction
+  source:
+    repo: acme/app
+    token_env: GH_TOKEN              # the default; whose reactions these are
+    endpoint: https://api.github.com # the default
+
+jobs:
+- name: deploy
+  plan:
+  - get: command
+    trigger: true
+    version: every
+  - put: seen
+    resource: mark
+    inputs: [command]
+    params:
+      add: eyes                      # picked up, before the work starts
+  - task: work
+    inputs: [command]
+    run: |
+      echo "deploying for $(cat command/comment.author): $(cat command/comment.body)"
+    assert:
+      stdout: "deploying for alice: /steps deploy prod"
+  - put: done
+    resource: mark
+    inputs: [command]
+    params:
+      add: rocket                    # done, and the mark skip_reacted reads
+      remove: eyes                   # the token's own eyes; anybody else's stay
+      from: command                  # optional here: command is the only input naming a comment
+  assert:
+    execution: [command, seen, work, done]
+    outcome: succeeded
+```
+
+| `params:` field | meaning |
+|---|---|
+| `add` | a reaction to put on: `+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket` or `eyes`. Quote `"+1"` and `"-1"`: unquoted, YAML reads them as numbers |
+| `remove` | a reaction of the token's own user to take off, from the same set |
+| `from` | the `github-comments` get whose comment this marks, when more than one input names one |
+
+At least one of `add` and `remove` is required, and the set is GitHub's, not Slack's: `white_check_mark` is a load error naming the eight there are. **The comment comes from a `github-comments` input and nothing else**, so a put whose inputs hold no such get is refused at load, as is a `from` naming one that is not. The version carries the comment's kind as well as its id, and the kind picks the route: an inline review comment's reactions live under the pull request's comments, every other kind's under the issue's, and the same id on the wrong route is somebody else's comment or none.
+
+**`add` goes before `remove`**, so a swap from `eyes` to `rocket` that fails halfway leaves both marks rather than neither, and a comment with no mark reads as one nobody picked up. **`remove` touches only the token user's own reaction**: the put lists that reaction on the comment, finds the one the token's user left, and deletes that one by id, so somebody else's `eyes` stays where they put it. **Marking twice is not an error.** GitHub answers an add that is already there with the reaction that is, and a remove finds nothing when it is already gone; both are the comment in the state asked for, which a replay or a resume always finds, the way `slack-reaction` reads `already_reacted`. Any other answer fails the put with GitHub's status, its words and the route.
+
+A put's version is `{comment, add, remove}`, recorded in the reaction resource's own history and never in the comments one, which is why a mark cannot trigger anything.
 
 ## The built-in `cron` type
 

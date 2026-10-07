@@ -390,6 +390,10 @@
         "checkout": {
           "type": "boolean",
           "description": "Lay the tree of the pull request a comment sits on into the artifact. True unless set false; an issue has no tree."
+        },
+        "skip_reacted": {
+          "enum": ["+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"],
+          "description": "A reaction that, left by the token's own user, marks a comment done: check does not report it. It lives on GitHub, so it outlasts a wiped state database. Quote \"+1\" and \"-1\"."
         }
       }
     },
@@ -520,7 +524,7 @@
           "then": { "properties": { "source": { "$ref": "#/$defs/githubCommentsSource" } } }
         },
         {
-          "if": { "properties": { "type": { "enum": ["github-pr-comment", "github-pr-review"] } }, "required": ["type"] },
+          "if": { "properties": { "type": { "enum": ["github-pr-comment", "github-pr-review", "github-reaction"] } }, "required": ["type"] },
           "then": { "properties": { "source": { "$ref": "#/$defs/githubPostSource" } } }
         }
       ]

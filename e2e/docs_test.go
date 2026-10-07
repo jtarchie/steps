@@ -663,6 +663,7 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"GitHubPostSource":     reflect.TypeOf(config.GitHubPostSource{}),
 		"GitHubPostParams":     reflect.TypeOf(config.GitHubPostParams{}),
 		"GitHubReviewParams":   reflect.TypeOf(config.GitHubReviewParams{}),
+		"GitHubReactionParams": reflect.TypeOf(config.GitHubReactionParams{}),
 	}
 }
 
@@ -772,7 +773,7 @@ func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 			record(used, "GitHubPRsSource", source)
 		case config.GitHubCommentsType:
 			record(used, "GitHubCommentsSource", source)
-		case config.GitHubPRCommentType, config.GitHubPRReviewType:
+		case config.GitHubPRCommentType, config.GitHubPRReviewType, config.GitHubReactionType:
 			record(used, "GitHubPostSource", source)
 		}
 	})
@@ -828,6 +829,8 @@ func collectGitHubParamKeys(doc map[string]any, used map[string]map[string]bool)
 				record(used, "GitHubPostParams", step["params"])
 			case config.GitHubPRReviewType:
 				record(used, "GitHubReviewParams", step["params"])
+			case config.GitHubReactionType:
+				record(used, "GitHubReactionParams", step["params"])
 			}
 
 			for _, group := range nestedStepGroups(step) {

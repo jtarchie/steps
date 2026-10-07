@@ -9,6 +9,7 @@ package e2e
 // seams, and the triggers after them are what the types exist for.
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -429,5 +430,189 @@ func TestValidateGitHubRefusesAnUnsetToken(t *testing.T) {
 	err := cli.Run([]string{"validate", path})
 	if err == nil || !strings.Contains(err.Error(), "$GH_TOKEN is not set") {
 		t.Fatalf("validate = %v, want it to name the unset $GH_TOKEN", err)
+	}
+}
+
+// reactionPipeline marks the one comment alice wrote that starts with
+// /steps: rocket on, the token user's own eyes off.
+func reactionPipeline(fake *fakeGitHub) string {
+	return `
+resources:
+- name: command
+  type: github-comments
+  source:
+    repo: ` + fakeRepo + `
+    endpoint: ` + fake.URL() + `
+    author: alice
+    body: '^/steps\s'
+    kinds: [conversation, review, issue]
+    checkout: false
+- name: mark
+  type: github-reaction
+  source:
+    repo: ` + fakeRepo + `
+    endpoint: ` + fake.URL() + `
+jobs:
+- name: act
+  plan:
+  - get: command
+  - put: mark
+    inputs: [command]
+    params: {add: rocket, remove: eyes}
+`
+}
+
+// TestEndToEndGitHubReactionSwapsOnlyItsOwn: a put marks the comment its
+// github-comments get fetched, on whichever route that comment's kind lives
+// under, takes off only the token user's own reaction, and a second run —
+// a replay — finds the world already as asked and stays green.
+func TestEndToEndGitHubReactionSwapsOnlyItsOwn(t *testing.T) {
+	for _, kind := range []string{"conversation", "review", "issue"} {
+		t.Run(kind, func(t *testing.T) {
+			fake := newFakeGitHub(t)
+			fake.addPR(reviewablePR())
+			fake.addComment(fakeComment{ID: 501, Number: 7, Kind: kind, Author: "alice", Body: "/steps go", Updated: time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)})
+			fake.react(501, "carol", "eyes")
+			fake.react(501, fake.login, "eyes")
+
+			path := writePipeline(t, t.TempDir(), reactionPipeline(fake))
+
+			for range 2 {
+				mustRun(t, "run", path, "--job", "act")
+
+				got := map[string]bool{}
+				for _, reaction := range fake.reactionsOn(501) {
+					got[reaction.User+":"+reaction.Content] = true
+				}
+
+				want := map[string]bool{"carol:eyes": true, fake.login + ":rocket": true}
+				if len(got) != len(want) || !got["carol:eyes"] || !got[fake.login+":rocket"] {
+					t.Errorf("reactions on 501 = %v, want %v: rocket added once, the token user's eyes gone, carol's kept", got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestEndToEndGitHubReactionFailsOnARefusal: anything but already-there or
+// already-gone is a failure naming GitHub's answer and the route — here a
+// token that may read the repository but not react in it.
+func TestEndToEndGitHubReactionFailsOnARefusal(t *testing.T) {
+	fake := newFakeGitHub(t)
+	fake.addPR(reviewablePR())
+	fake.addComment(fakeComment{ID: 501, Number: 7, Kind: "conversation", Author: "alice", Body: "/steps go", Updated: time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)})
+	fake.mu.Lock()
+	fake.refuseReactions = true
+	fake.mu.Unlock()
+
+	err := cli.Run([]string{"run", writePipeline(t, t.TempDir(), reactionPipeline(fake)), "--job", "act"})
+	if err == nil || !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), "/issues/comments/501/reactions") {
+		t.Fatalf("run = %v, want the put failed naming the 403 and the route", err)
+	}
+}
+
+// TestWatchGitHubCommentsSkipReactedSurvivesAWipe is what skip_reacted is
+// for: the reaction a build leaves on its comment is the record that the
+// comment was done, and it lives on GitHub, so deleting the state database
+// does not re-run a command already answered. Only the token user's own
+// reaction counts — anybody can react with anything.
+func TestWatchGitHubCommentsSkipReactedSurvivesAWipe(t *testing.T) {
+	fake := newFakeGitHub(t)
+	fake.addPR(reviewablePR())
+
+	at := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	command := func(id int64, offset time.Duration) fakeComment {
+		return fakeComment{ID: id, Number: 7, Kind: "conversation", Author: "alice", Body: "/steps go", Updated: at.Add(offset)}
+	}
+
+	fake.addComment(command(500, 0))
+	// Bob's comment never passes the author filter, so its reactions are
+	// never worth asking about, whatever its summary counts.
+	fake.addComment(fakeComment{ID: 499, Number: 7, Kind: "conversation", Author: "bob", Body: "/steps go", Updated: at.Add(-time.Minute)})
+	fake.react(499, fake.login, "rocket")
+
+	// A check that reports nothing records nothing, and the run this test is
+	// about reports nothing — so the daemon's polls are read off clock, a
+	// resource that always has a version, checked in the same poll.
+	fixture := newWatchFixture(t, strings.ReplaceAll(`
+defaults:
+  preflight:
+    disabled: true
+resource_types:
+- name: constant
+  config:
+    check: echo '[{"v":"1"}]'
+    in: "true"
+resources:
+- name: command
+  type: github-comments
+  source:
+    repo: `+fakeRepo+`
+    endpoint: ENDPOINT
+    author: alice
+    body: '^/steps\s'
+    checkout: false
+    skip_reacted: rocket
+- name: done
+  type: github-reaction
+  source:
+    repo: `+fakeRepo+`
+    endpoint: ENDPOINT
+- name: clock
+  type: constant
+  source: {}
+jobs:
+- name: act
+  plan:
+  - get: command
+    trigger: true
+    version: every
+  - task: record
+    inputs: [command]
+    run: cat command/comment.id >> PROCESSED && echo >> PROCESSED
+  - put: done
+    inputs: [command]
+    params: {add: rocket}
+- name: tick
+  plan:
+  - get: clock
+    trigger: true
+`, "ENDPOINT", fake.URL()))
+	fixture.resources = []string{"clock"}
+	fixture.coldStart(t)
+
+	fake.addComment(command(501, time.Second))
+	fake.addComment(command(502, 2*time.Second))
+	fixture.watch(t)
+	fixture.assertDid(t, "501", "502")
+
+	for _, id := range []int64{500, 501, 502} {
+		if reactions := fake.reactionsOn(id); len(reactions) != 1 || reactions[0].Content != "rocket" {
+			t.Errorf("reactions on %d = %+v, want the build's rocket", id, reactions)
+		}
+	}
+
+	fixture.served.stop(t)
+	fixture.served = nil
+
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		err := os.Remove(fixture.db + suffix)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+
+	// A first check again, with no cursor: every command it would report is
+	// marked done, so nothing is built — without the marker, 502 would be.
+	fixture.watch(t)
+	fixture.assertDid(t, "501", "502")
+
+	fake.addComment(command(503, 3*time.Second))
+	fake.react(503, "carol", "rocket")
+	fixture.watch(t)
+	fixture.assertDid(t, "501", "502", "503")
+
+	if slices.Contains(fake.listedReactions(), 499) {
+		t.Errorf("reactions listed for %v, want bob's comment, which the author filter drops, never asked about", fake.listedReactions())
 	}
 }
