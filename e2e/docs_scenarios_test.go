@@ -457,6 +457,21 @@ var docScenarios = map[string]docScenario{
 		},
 	},
 
+	// Both files arrive only if neither path was confined out by a dir:.
+	"agents-context-paths-root": {
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				if req.toolResultContains("skip vet") && req.toolResultContains("always run go vet") {
+					return says("It should not: the conventions say always run go vet.")
+				}
+
+				return says("A context file never arrived.")
+			})
+		},
+	},
+
 	// Two serial cells, one reply each — each cell's context_paths rendered
 	// to its own file.
 	"agents-across-context": {

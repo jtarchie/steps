@@ -343,7 +343,7 @@ jobs:
     outcome: succeeded
 ```
 
-Every tool path the model uses is relative to `dir:`, which is the point: a model handed the subdirectory it is meant to work in does not spend turns navigating to it, and cannot wander out — the file tools stay confined to the step's workspace regardless.
+Every tool path the model uses is relative to `dir:`, which is the point: a model handed the subdirectory it is meant to work in does not spend turns navigating to it, and cannot wander out: the file tools are confined to `dir:` itself, not merely to the step's workspace, and so is `context_paths:` (below).
 
 ## Custom tools, `required:`, and call guards
 
@@ -742,7 +742,36 @@ jobs:
 
 The point is not convenience but **guarantee**: conventions every invocation must follow are present from the first turn, instead of costing a `read_file` round trip the model might not bother with.
 
-Paths are relative to the step's working directory and confined to its workspace, so in practice the file lives inside a declared input. They are read at **run time** (per attempt), which is what distinguishes them from `system_file:`: the persona is the pipeline author's own text, resolved once at load; `context_paths:` is content that arrives with a fetched artifact and can change between runs. A missing or escaping file fails the step at preparation, before a token is spent. A file that is merely too big (over `max_context_bytes:`, default 100KB — `0` lifts the ceiling entirely) is **truncated** instead, with a note pointing at `read_file`'s paging — the author writes a path, not a size, and `pr/pr.diff` is a correct path that would otherwise start failing the day the pull request grew.
+Paths are relative to the step's working directory and confined to that same directory. Without `dir:` that is the step root, where every declared input is a directory, so a path names its input first (`repo/CONVENTIONS.md`). **With `dir:` it is that directory and nothing above it**: beside `dir: repo`, `CLAUDE.md` means `repo/CLAUDE.md`, and a sibling input is out of reach. `../ask/comment.json` is refused at load, as is any absolute path, so `steps validate` names the step, the path and the `dir:` before anything runs. To hand over files from more than one input, drop `dir:` and name each from the step root; otherwise move the file inside the `dir:`:
+
+```yaml test=agents-context-paths-root
+agents:
+- name: worker
+  source: { model: openrouter/qwen/qwen3.7-flash }
+
+jobs:
+- name: answer
+  plan:
+  - task: fetch
+    outputs: [ask, repo]
+    run: |
+      echo 'Why does the build skip vet?' > ask/comment.txt
+      echo 'always run go vet before committing' > repo/CONVENTIONS.md
+  - agent: worker
+    inputs: [ask, repo]
+    # No dir:, so both inputs are in reach. With dir: repo the first entry
+    # would have to be ../ask/comment.txt, which load refuses.
+    context_paths: [ask/comment.txt, repo/CONVENTIONS.md]
+    messages:
+      - "Answer the comment against the conventions."
+    assert:
+      stdout: go vet
+  assert:
+    execution: [fetch, worker]
+    outcome: succeeded
+```
+
+Load can only check the spelling. A symlink inside a fetched input that leads out is caught when the step is prepared, since the link does not exist until the build fetches it. Paths are read at **run time** (per attempt), which is what distinguishes them from `system_file:`: the persona is the pipeline author's own text, resolved once at load; `context_paths:` is content that arrives with a fetched artifact and can change between runs. A missing or escaping file fails the step at preparation, before a token is spent. A file that is merely too big (over `max_context_bytes:`, default 100KB — `0` lifts the ceiling entirely) is **truncated** instead, with a note pointing at `read_file`'s paging — the author writes a path, not a size, and `pr/pr.diff` is a correct path that would otherwise start failing the day the pull request grew.
 
 `context_paths:` is a step-level field, not agent-level — the agent definition has no notion of which inputs are available. It requires `read_file` in the tool grant (which it is by default). Sub-agents and fix agents do not inherit the parent step's `context_paths:`. `max_context_bytes:` is spelled on **either**, and the step's wins (as above) — two steps sharing one agent routinely hand it different evidence. `context_window:` deliberately has no step spelling for the mirror-image reason: it describes the *model*, and the model belongs to the agent.
 

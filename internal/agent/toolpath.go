@@ -7,7 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"github.com/jtarchie/steps/internal/config"
 )
 
 // resolveAgentPath resolves rel (as given by the model) against dir and
@@ -25,29 +26,21 @@ import (
 // worked: the containment check below is what makes an absolute path safe, so
 // restricting rel to a relative spelling was never load-bearing — it only
 // blocked the legitimate case along with the escaping one.
+//
+// The lexical half is config.ConfinedPath, the same predicate load asks of
+// context_paths:, so a path load accepts is one this accepts.
 func resolveAgentPath(dir, rel string) (string, error) {
-	resolved := filepath.Clean(rel)
-	if !filepath.IsAbs(resolved) {
-		resolved = filepath.Clean(filepath.Join(dir, rel))
-	}
-
-	base := filepath.Clean(dir)
-
-	if !within(base, resolved) {
+	resolved, inside := config.ConfinedPath(dir, rel)
+	if !inside {
 		return "", fmt.Errorf("path %q escapes the working directory", rel)
 	}
 
-	err := rejectSymlinkEscape(base, resolved, rel)
+	err := rejectSymlinkEscape(filepath.Clean(dir), resolved, rel)
 	if err != nil {
 		return "", err
 	}
 
 	return resolved, nil
-}
-
-// within reports whether path is base itself or sits under it.
-func within(base, path string) bool {
-	return path == base || strings.HasPrefix(path, base+string(os.PathSeparator))
 }
 
 // rejectSymlinkEscape re-validates resolved (already confined lexically by
@@ -78,7 +71,8 @@ func rejectSymlinkEscape(base, resolved, rel string) error {
 		return fmt.Errorf("%w", err)
 	}
 
-	if !within(realBase, realResolved) {
+	_, inside := config.ConfinedPath(realBase, realResolved)
+	if !inside {
 		return fmt.Errorf("path %q escapes the working directory (resolves to %q via a symlink)", rel, realResolved)
 	}
 

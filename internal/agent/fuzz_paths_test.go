@@ -212,6 +212,11 @@ func checkConfined(t *testing.T, dir, rel, resolved string) {
 	}
 }
 
+// within is the fuzzers' oracle for containment, spelled out here rather than borrowed from config.ConfinedPath, the code under test.
+func within(base, p string) bool {
+	return p == base || strings.HasPrefix(p, base+string(os.PathSeparator))
+}
+
 func hasDotDot(p string) bool {
 	for _, part := range strings.Split(p, "/") {
 		if part == ".." {

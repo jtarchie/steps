@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"path"
 	"strings"
 )
 
@@ -336,6 +337,11 @@ func (c *Config) validateStepContextPaths() error {
 				if strings.TrimSpace(p) == "" {
 					return fmt.Errorf("%s: context_paths must not contain an empty path", label)
 				}
+
+				err := checkContextPathConfined(label, step, p)
+				if err != nil {
+					return err
+				}
 			}
 
 			return nil
@@ -346,6 +352,88 @@ func (c *Config) validateStepContextPaths() error {
 	}
 
 	return nil
+}
+
+// checkContextPathConfined refuses at load the entry the run refuses at
+// preparation (internal/agent's loadContextBlock), which is otherwise reached
+// only after every step before this one has run, puts included. It asks
+// ConfinedPath, the predicate the run asks, of the step's dir: as a
+// workspace-relative path.
+//
+// Only the lexical half can be asked here. The run also follows symlinks out
+// of the tree, and a link inside a fetched input does not exist until the
+// build fetches it, so that half stays the run's.
+//
+// An absolute entry is refused outright: the run accepts one only when it
+// lands inside this build's workspace, whose path carries a per-build token
+// nobody can write down ahead of time. A `{{ }}` entry, or a dir: still
+// holding a `{{ }}` or `((var))`, is left to the run, since what it renders
+// to is a per-cell or per-run answer and a guess here could refuse a path the
+// run would take.
+func checkContextPathConfined(label string, step *Step, entry string) error {
+	where := "the step root"
+	if step.Dir != "" {
+		where = fmt.Sprintf("dir: %q", step.Dir)
+	}
+
+	if path.IsAbs(entry) {
+		return fmt.Errorf("%s (agent %q): context_paths entry %q is absolute — context paths are relative to %s, so name the file from there",
+			label, step.Agent, entry, where)
+	}
+
+	if strings.Contains(entry, "{{") || strings.Contains(step.Dir, "{{") || len(UnresolvedVars(step.Dir)) > 0 {
+		return nil
+	}
+
+	base := step.Dir
+	if base == "" {
+		base = "."
+	}
+
+	_, inside := ConfinedPath(base, entry)
+	if inside {
+		return nil
+	}
+
+	if step.Dir == "" {
+		return fmt.Errorf("%s (agent %q): context_paths entry %q escapes the step root — every declared input is a directory there, so name the file inside one (inputs: [repo] → repo/CLAUDE.md)",
+			label, step.Agent, entry)
+	}
+
+	return fmt.Errorf("%s (agent %q): context_paths entry %q escapes dir: %q — with dir: set, context paths are relative to and confined to that directory, so a sibling input is out of reach; drop dir: and name every context path from the step root (this one is %q), or move the file inside %q",
+		label, step.Agent, entry, step.Dir, path.Join(step.Dir, entry), step.Dir)
+}
+
+// ConfinedPath joins rel onto dir and reports whether the cleaned result is
+// dir itself or under it. An absolute rel is taken as it is, so it is inside
+// only when it already names a place under an absolute dir.
+//
+// It is the one confinement predicate for an agent's paths: internal/agent's
+// file tools and context_paths: ask it at run time, and load asks it of a
+// workspace-relative dir: ("." for the step root), which is why it lives here
+// rather than beside the tools: this package imports nothing internal, so the
+// run can call load's answer but not the other way round. Lexical only;
+// symlinks are the caller's.
+//
+// POSIX path rather than filepath: pipeline paths are written with "/", a
+// container's tree is POSIX whatever runs steps, and steps ships for linux and
+// darwin, where the two agree.
+func ConfinedPath(dir, rel string) (string, bool) {
+	resolved := path.Clean(rel)
+	if !path.IsAbs(resolved) {
+		resolved = path.Join(dir, rel)
+	}
+
+	base := path.Clean(dir)
+
+	switch {
+	case resolved == base:
+		return resolved, true
+	case base == ".":
+		return resolved, !path.IsAbs(resolved) && resolved != ".." && !strings.HasPrefix(resolved, "../")
+	default:
+		return resolved, strings.HasPrefix(resolved, base+"/")
+	}
 }
 
 // validateAgentCompaction checks every agents: entry's compact_after_tokens:

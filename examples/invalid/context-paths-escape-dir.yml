@@ -1,0 +1,26 @@
+# With dir: set, context_paths: are relative to that directory and confined
+# to it, so a sibling input is out of reach. This used to load, validate and
+# plan cleanly, then fail at the agent's preparation, after every step before
+# it (puts included) had already run. The fix is to drop dir: and name both
+# files from the step root (ask/comment.json, repo/CLAUDE.md), or to move the
+# file inside repo.
+# expect: context_paths entry "../ask/comment.json" escapes dir: "repo"
+
+agents:
+- name: worker
+  source: { model: openrouter/qwen/qwen3.7-flash }
+
+jobs:
+- name: answer
+  plan:
+  - task: fetch
+    outputs: [ask, repo]
+    run: |
+      echo '{}' > ask/comment.json
+      echo 'conventions' > repo/CLAUDE.md
+  - agent: worker
+    inputs: [ask, repo]
+    dir: repo
+    context_paths: [../ask/comment.json, CLAUDE.md]
+    messages:
+      - "Answer the comment."

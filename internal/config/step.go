@@ -346,10 +346,12 @@ type Step struct {
 	// start as synthetic read_file tool results — the agent sees the file
 	// contents as if it had called read_file itself, without consuming a
 	// turn. Paths are relative to the step's working directory and confined
-	// to its workspace (resolveAgentPath); in practice each file lives
-	// inside a declared input, e.g. ["repo/CLAUDE.md"]. Only valid on agent
-	// steps. A missing or escaping file fails the step at preparation, before
-	// a token is spent; one merely over MaxContextBytes is truncated, with a
+	// to it (ConfinedPath): the step root without Dir, where each input is a
+	// directory (["repo/CLAUDE.md"]), and Dir itself with one, so a sibling
+	// input is out of reach. Only valid on agent steps. An absolute or
+	// escaping spelling is refused at load (checkContextPathConfined); a
+	// missing file, or a symlink out, fails the step at preparation, before a
+	// token is spent; one merely over MaxContextBytes is truncated, with a
 	// note saying so.
 	ContextPaths []string `yaml:"context_paths,omitempty"`
 	// MaxContextBytes overrides the agent's max_context_bytes: for this step

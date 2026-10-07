@@ -9,9 +9,11 @@ import (
 	"os"
 	"path"
 	"strings"
+
+	"github.com/jtarchie/steps/internal/config"
 )
 
-// resolve confines rel to the container's tree. The lexical half is the same string work the host does and stays here; the symlink half has to be asked of the container, because a link resolves against ITS root — where /etc/passwd is the image's, not this machine's.
+// resolve confines rel to the container's tree. The lexical half is the same predicate the host asks; the symlink half has to be asked of the container, because a link resolves against ITS root — where /etc/passwd is the image's, not this machine's.
 func (c containerTree) resolve(ctx context.Context, rel string) (string, error) {
 	resolved, err := lexicalResolve(c.dir, rel)
 	if err != nil {
@@ -51,16 +53,10 @@ func (c containerTree) resolveWrite(ctx context.Context, rel string) (string, er
 	return resolved, c.rejectLinkEscape(ctx, c.dir, rel)
 }
 
-// lexicalResolve is resolveAgentPath's string half, written against POSIX paths because the tree it confines is a container's and a container's paths are always POSIX, whatever this process is running on.
+// lexicalResolve is resolveAgentPath's string half for a container's tree. config.ConfinedPath is POSIX already, which a container's paths always are whatever this process is running on.
 func lexicalResolve(dir, rel string) (string, error) {
-	resolved := path.Clean(rel)
-	if !path.IsAbs(resolved) {
-		resolved = path.Clean(path.Join(dir, rel))
-	}
-
-	base := path.Clean(dir)
-
-	if resolved != base && !strings.HasPrefix(resolved, base+"/") {
+	resolved, inside := config.ConfinedPath(dir, rel)
+	if !inside {
 		return "", fmt.Errorf("path %q escapes the working directory", rel)
 	}
 
@@ -83,7 +79,8 @@ func (c containerTree) rejectLinkEscape(ctx context.Context, resolved, rel strin
 		return err
 	}
 
-	if target != realBase && !strings.HasPrefix(target, realBase+"/") {
+	_, inside := config.ConfinedPath(realBase, target)
+	if !inside {
 		return fmt.Errorf("path %q escapes the working directory (resolves to %q via a symlink)", rel, target)
 	}
 

@@ -840,6 +840,75 @@ func TestStepContextPathsValidation(t *testing.T) {
 	})
 }
 
+// TestStepContextPathsConfinedToDir refuses at load the context_paths: entry
+// the run would refuse at preparation, after the steps before it had already
+// run. dir: is the confinement root when set: `../ask/comment.json` beside
+// `dir: repo` is the real case that only failed mid-build.
+func TestStepContextPathsConfinedToDir(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		dir   string
+		paths []string
+		want  []string // substrings of the error; nil means the step loads
+	}{
+		{name: "escape with dir", dir: "repo", paths: []string{"../ask/comment.json", "CLAUDE.md"},
+			want: []string{`agent "worker"`, `"../ask/comment.json"`, `dir: "repo"`, "drop dir:", `"ask/comment.json"`}},
+		{name: "escape without dir", paths: []string{"../outside.md"},
+			want: []string{`"../outside.md"`, "step root"}},
+		{name: "absolute", paths: []string{"/etc/passwd"},
+			want: []string{`"/etc/passwd"`, "absolute"}},
+		{name: "absolute with dir", dir: "repo", paths: []string{"/etc/passwd"},
+			want: []string{`"/etc/passwd"`, "absolute", `dir: "repo"`}},
+		{name: "subpath with dir", dir: "repo", paths: []string{"CLAUDE.md", "docs/CONVENTIONS.md"}},
+		{name: "dot-dot that stays inside dir", dir: "repo", paths: []string{"a/../b"}},
+		{name: "dot-dot that stays inside the root", paths: []string{"repo/a/../b"}},
+		// The run joins and cleans before it compares, so climbing out of dir:
+		// and straight back in is inside; refusing it here would be a
+		// load/run disagreement in the other direction.
+		{name: "out of dir and back in", dir: "repo/cmd", paths: []string{"../cmd/main.go"}},
+		// dir: is the root, not the artifact it names: the run refuses this too.
+		{name: "deeper dir, climbing to its own artifact", dir: "repo/cmd", paths: []string{"../CLAUDE.md"},
+			want: []string{`"../CLAUDE.md"`, `dir: "repo/cmd"`, `"repo/CLAUDE.md"`}},
+		// What these render to is decided per cell or per run, so the load
+		// check leaves them to the run rather than guess.
+		{name: "templated path", dir: "repo", paths: []string{"../{{ .vars.dim }}/f.go"}},
+		{name: "dir from a var", dir: "((where))", paths: []string{"../ask/comment.json"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Config{
+				Agents: []Agent{{Name: "worker", Source: AgentSource{Model: "openai/gpt-4o"}}},
+				Jobs: []Job{{
+					Name: "test",
+					Plan: []Step{{Agent: "worker", Dir: tc.dir, ContextPaths: tc.paths}},
+				}},
+			}
+
+			err := cfg.validateStepContextPaths()
+			if tc.want == nil {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("context_paths %v with dir %q loaded; want an error", tc.paths, tc.dir)
+			}
+
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %q", err, want)
+				}
+			}
+		})
+	}
+}
+
 // TestResolveAgentInvocationCompaction covers CompactAfterTokens' resolution
 // specifically — split out from TestResolveAgentInvocation (mirroring how
 // TestResolveAgentInvocationImageOverride is its own function) to keep each

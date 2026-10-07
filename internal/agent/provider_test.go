@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -169,6 +170,101 @@ func TestLoadContextBlocksErrors(t *testing.T) {
 			t.Fatal("expected an error for an escaping context path")
 		}
 	})
+}
+
+// TestContextPathLoadAndRunAgree carries one dir:/context_paths: pair across
+// both checks: the pipeline loader, and the run's preparation against a
+// materialized workspace where every named file exists. Load refusing exactly
+// what the run refuses is the point; a load that let one through is the
+// mid-build failure this guards, and one that refused more would reject a
+// working pipeline. The one deliberate gap is an absolute path into this
+// build's own workspace, which the run takes and load refuses: the path
+// carries a per-build token, so no pipeline can spell it (see
+// config.checkContextPathConfined).
+func TestContextPathLoadAndRunAgree(t *testing.T) {
+	t.Parallel()
+
+	space := t.TempDir()
+	writeTree(t, space, "ask/comment.json", "repo/CLAUDE.md", "repo/cmd/main.go")
+
+	for _, tc := range []struct{ dir, path string }{
+		{"repo", "../ask/comment.json"},
+		{"repo", "CLAUDE.md"},
+		{"repo", "cmd/../CLAUDE.md"},
+		{"repo", "../repo/CLAUDE.md"},
+		{"repo/cmd", "../CLAUDE.md"},
+		{"repo/cmd", "../cmd/main.go"},
+		{"", "ask/comment.json"},
+		{"", "../ask/comment.json"},
+		{"", "/etc/hosts"},
+	} {
+		t.Run(tc.dir+"|"+tc.path, func(t *testing.T) {
+			t.Parallel()
+
+			_, loadErr := config.LoadConfig(contextPathPipeline(t, tc.dir, tc.path))
+
+			dir, err := resolveAgentDir(space, tc.dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, runErr := loadContextBlocks(dir, []string{tc.path}, 0)
+			if runErr != nil && !strings.Contains(runErr.Error(), "escapes the working directory") {
+				t.Fatalf("run failed for a reason other than confinement: %v", runErr)
+			}
+
+			if (loadErr != nil) != (runErr != nil) {
+				t.Fatalf("load and run disagree\n  load: %v\n  run:  %v", loadErr, runErr)
+			}
+		})
+	}
+}
+
+func writeTree(t *testing.T, root string, files ...string) {
+	t.Helper()
+
+	for _, file := range files {
+		err := os.MkdirAll(filepath.Join(root, filepath.Dir(file)), 0o750)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = os.WriteFile(filepath.Join(root, file), []byte("x"), 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// contextPathPipeline writes a pipeline whose agent step has inputs ask and repo, the given dir:, and one context path.
+func contextPathPipeline(t *testing.T, dir, contextPath string) string {
+	t.Helper()
+
+	dirLine := ""
+	if dir != "" {
+		dirLine = fmt.Sprintf("    dir: %q\n", dir)
+	}
+
+	pipeline := filepath.Join(t.TempDir(), "pipeline.yml")
+
+	err := os.WriteFile(pipeline, []byte(`agents:
+- name: worker
+  source: { model: openai/gpt-4o }
+jobs:
+- name: answer
+  plan:
+  - task: fetch
+    outputs: [ask, repo]
+    run: "true"
+  - agent: worker
+    inputs: [ask, repo]
+`+dirLine+fmt.Sprintf("    context_paths: [%q]\n", contextPath)+`    messages: [hi]
+`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return pipeline
 }
 
 // TestContextPathTruncatesInsteadOfFailing pins the degradation an oversized
