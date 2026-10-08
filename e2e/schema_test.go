@@ -154,6 +154,7 @@ func schemaDefsByType() map[string]reflect.Type {
 		"exprResourceConfig":   reflect.TypeOf(config.ExprResourceConfig{}),
 		"assert":               reflect.TypeOf(config.Assert{}),
 		"defaults":             reflect.TypeOf(config.Defaults{}),
+		"stepMemory":           reflect.TypeOf(config.StepMemory{}),
 		"workspace":            reflect.TypeOf(config.WorkspaceConfig{}),
 		"webhookSource":        reflect.TypeOf(config.WebhookSource{}),
 		"webhookSignature":     reflect.TypeOf(config.WebhookSignature{}),

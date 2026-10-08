@@ -75,6 +75,11 @@ type Defaults struct {
 	// skipped. `--run-history` supplies a default when this is unset, and
 	// DefaultRunHistory when neither is.
 	RunHistory *int `yaml:"run_history,omitempty"`
+	// MemoryEntries is how many entries each memory: scope keeps, the oldest
+	// going first. Its own bound rather than run_history:'s, because memory
+	// outlives the runs that wrote it — that is what it is for — and
+	// DefaultMemoryEntries when unset.
+	MemoryEntries *int `yaml:"memory_entries,omitempty"`
 }
 
 // DefaultRunHistory is how many runs of each job steps keeps when neither the

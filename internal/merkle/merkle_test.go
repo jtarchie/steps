@@ -1534,3 +1534,41 @@ func TestAskUserDialsChangeTheAgentHash(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentContentMapKeysMemoryOnlyWhenDeclared: which file names the scope
+// changes what the model is handed, so it moves the key — and a step with no
+// memory: keeps the key it had before memory existed.
+func TestAgentContentMapKeysMemoryOnlyWhenDeclared(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{Agents: []config.Agent{{Name: "bot", Source: config.AgentSource{Model: "m"}}}}
+	ri := config.ResolvedInvocation{AgentName: "bot", ModelName: "m", ToolSpecs: []config.ToolSpec{}}
+
+	hashOf := func(memory *config.StepMemory) (string, map[string]any) {
+		t.Helper()
+
+		content, err := AgentContentMap(cfg, config.Step{Agent: "bot", Memory: memory}, ri)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		hash, err := HashNode(NodeKindAgent, content, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return hash, content
+	}
+
+	_, unset := hashOf(nil)
+	if _, ok := unset["memory"]; ok {
+		t.Error("a step with no memory: carries a memory key, which re-keys every cached agent step")
+	}
+
+	byUser, _ := hashOf(&config.StepMemory{ScopeFrom: "mentions/user"})
+	byChannel, _ := hashOf(&config.StepMemory{ScopeFrom: "mentions/channel"})
+
+	if byUser == byChannel {
+		t.Error("two scope_from: files hashed alike, so a step scoped by channel replays one scoped by user")
+	}
+}

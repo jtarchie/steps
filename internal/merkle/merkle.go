@@ -1033,6 +1033,15 @@ func withAskUserContent(spec config.ToolSpec, content map[string]any) {
 	}
 }
 
+// withMemoryContent keys the file naming the scope, not the scope or what it
+// holds: both are read when the step runs, and internal/agent folds a digest
+// of them in under memory_preload before the node is hashed.
+func withMemoryContent(step config.Step, content map[string]any) {
+	if step.Memory != nil {
+		content["memory"] = step.Memory.ScopeFrom
+	}
+}
+
 // AgentContentMap is the content hashed for an agent node: everything that
 // determines the model's output (agent, prompt, dir, resolved model/endpoint,
 // persona, dials, and the effective tool set — including any sub-agent tools,
@@ -1075,6 +1084,8 @@ func AgentContentMap(cfg *config.Config, step config.Step, ri config.ResolvedInv
 
 	content["inputs"] = config.StableStrings(step.InputNames())
 	content["outputs"] = config.StableStrings(step.Outputs)
+
+	withMemoryContent(step, content)
 
 	if len(ri.ContextPaths) > 0 {
 		// Paths, not file contents: the files live inside the step's

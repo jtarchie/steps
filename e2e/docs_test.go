@@ -668,6 +668,7 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"MCPServer":        reflect.TypeOf(config.MCPServer{}),
 		"Assert":           reflect.TypeOf(config.Assert{}),
 		"Defaults":         reflect.TypeOf(config.Defaults{}),
+		"StepMemory":       reflect.TypeOf(config.StepMemory{}),
 		"WorkspaceConfig":  reflect.TypeOf(config.WorkspaceConfig{}),
 		"WebhookSource":    reflect.TypeOf(config.WebhookSource{}),
 		"WebhookSignature": reflect.TypeOf(config.WebhookSignature{}),
@@ -873,6 +874,7 @@ func collectStepKeys(steps []any, used map[string]map[string]bool) {
 
 		record(used, "Step", step)
 		record(used, "Assert", step["assert"])
+		record(used, "StepMemory", step["memory"])
 
 		for _, group := range nestedStepGroups(step) {
 			collectStepKeys(group.steps, used)

@@ -206,6 +206,9 @@ type agentConversation struct {
 	// read_step results because this step declared context: { from: ... }.
 	// See upstream.go.
 	upstream []contextBlock
+	// memory is what the step's memory: scope holds, delivered as a synthetic
+	// recall result; nil when it holds nothing. See memory.go.
+	memory   *contextBlock
 	env      toolEnv
 	tools    agentTools
 	params   agentGenParams
@@ -305,7 +308,7 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 	// inside the HTTP transport).
 	conv.env.transcript.system(conv.system)
 
-	contents := make([]*genai.Content, 0, 3+(len(conv.contextBlocks)+len(conv.upstream))*2)
+	contents := make([]*genai.Content, 0, 5+(len(conv.contextBlocks)+len(conv.upstream))*2)
 
 	// The task comes first, because everything below it is a tool exchange
 	// and a tool exchange only follows a request. An assistant that reaches
@@ -319,6 +322,15 @@ func buildAgentRequest(conv agentConversation) *model.LLMRequest {
 		Parts: []*genai.Part{{Text: opening}},
 	})
 	conv.env.transcript.user(opening)
+
+	// Memory comes first of everything injected: it is older than this run,
+	// where the upstream decisions below are what happened earlier IN it.
+	if conv.memory != nil {
+		args := map[string]any{}
+		contents = append(contents, syntheticToolExchange("memory_0", recallToolName, args, *conv.memory)...)
+		conv.env.transcript.call(recallToolName, args)
+		conv.env.transcript.result(recallToolName, truncateToolOutputLimit(conv.memory.content, maxRecordedResultBytes))
+	}
 
 	// The decisions this step asked upstream steps for come first of the
 	// injected pair: they are what happened BEFORE this step, and the

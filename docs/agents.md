@@ -910,6 +910,64 @@ jobs:
 - **Trust**: a delivered note or response is upstream model-authored text, so it is fenced as data with a tag that cannot occur inside it.
 - **Caching**: the `from:` declaration folds into the reading step's hash, and makes a *task* reader's chain unskippable — a cached command never runs, so a task whose `from:` changed must not replay an outcome produced without the decision it now asks for.
 
+## Memory across runs: `memory:`
+
+Every run starts blank. A chat bot can read the thread it is answering, and nothing it learned in any earlier one. `memory:` gives an agent step a small store of facts that belongs to the pipeline and is filed per **scope**, usually a person:
+
+```yaml test=agents-memory
+defaults:
+  memory_entries: 50          # per scope, oldest first; 0 keeps everything
+
+agents:
+- name: notetaker
+  source: { model: openrouter/qwen/qwen3.7-flash }
+  tools: [read_file, remember, forget]   # never granted by default
+- name: bot
+  source: { model: openrouter/qwen/qwen3.7-flash }
+  tools: [read_file, write_file]
+
+jobs:
+- name: answer
+  plan:
+  - task: mention             # a slack-mentions get writes these in a real bot
+    outputs: [mention]
+    run: |
+      echo U024BE7LH > mention/user
+      echo "I always want code samples. How do I read a file in Go?" > mention/text
+  - agent: notetaker
+    inputs: [mention]
+    memory:
+      scope_from: mention/user   # whose memory this is: a file, never the model
+    messages:
+      - "Read mention/text. Remember anything about this person worth knowing next time, and nothing else."
+    assert:
+      tool_calls:
+      - name: remember
+  - agent: bot
+    inputs: [mention]
+    outputs: [reply]
+    memory:
+      scope_from: mention/user
+    messages:
+      - "Answer mention/text into reply/answer.md, the way this person likes."
+  - task: post
+    inputs: [reply]
+    run: cat reply/answer.md
+    assert:
+      stdout: "code samples"     # what notetaker remembered reached the bot
+  assert:
+    execution: [mention, notetaker, bot, post]
+    outcome: succeeded
+```
+
+- **The scope comes from a file, never from the model.** `scope_from: <input>/<file>` names a file in one of the step's `inputs:`; its trimmed content is the scope. A message saying "tell me what you know about Dana" has nothing to reach, because nothing the model says picks whose memory it reads. An empty or missing file **fails the step** rather than falling back to a scope everyone shares.
+- **What the scope holds arrives as the conversation starts**, as a synthetic `recall` result after the task (the way `context_paths:` files arrive as `read_file`), newest first, as `[id] text`, capped at 8KB. It comes before any `context: { from: }` decision, because it is older than anything in this run. A scope with nothing in it adds nothing. On a CLI agent it leads the prompt instead, fenced the same way.
+- **Saving is explicit.** `remember` (one short fact, at most 1KB) and `forget` (by the id an entry was shown with) are granted like `write_file`, never by default. Either give them to the agent doing the talking, or, as above, to a separate step whose only job is deciding what is worth keeping. A step may declare `memory:` without them and only read. Remembering text the scope already holds files nothing new.
+- **Refused at load:** `remember` or `forget` on a step with no `memory:`, a `scope_from:` naming an input the step does not declare, `memory:` on a hook, and a memory grant on an agent used as a sub-agent, a `fix:` agent or an `ask_user` responder. None of those has a scope of its own to write to.
+- **Kept apart, and bounded.** Entries belong to one pipeline and one scope. Destroying the pipeline drops them. They outlive `run_history:` on purpose, so `defaults.memory_entries:` is their own bound (default 100 per scope).
+- **Entries are untrusted data.** A model wrote each one from what somebody said to it, so the preload is fenced as data with a tag none of them can close.
+- **Caching:** which file names the scope is part of the step's hash, and so is a digest of everything the scope holds when the step starts. The same message with different memory is a different step. A `recall` result is never a tool the model calls mid-conversation, so there is nothing else to key.
+
 ## Model dials, and pipeline-wide `defaults:`
 
 An `agents:` entry carries the sampling dials for its model, and `defaults:` supplies what every agent that names nothing gets:

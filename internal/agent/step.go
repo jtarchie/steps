@@ -124,6 +124,7 @@ type StepStore interface {
 	store.Cache
 	store.Usage
 	store.Questions
+	store.Memories
 }
 
 // recordAgentFailure records a failed agent step the same way the
@@ -208,7 +209,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 	// resolveDeferredPrompt) while step.Prompt is still empty — hashing step
 	// here would hash an empty prompt for every such pipeline, colliding all
 	// of them onto the same node regardless of what the file actually said.
-	content, err := merkle.AgentContentMap(cfg, prepared.step, prepared.primary)
+	content, err := agentStepContent(ctx, cfg, &prepared, st)
 	if err != nil {
 		return StepOutcome{}, fmt.Errorf("step %d (agent %q): %w", i, step.Agent, err)
 	}
@@ -376,6 +377,17 @@ func reuseAgentStep(
 	}
 
 	return cached, StepOutcome{Hash: node.Hash, Cached: true}, nil
+}
+
+// agentStepContent is what the step is keyed on: its configuration, and what
+// its memory: scope holds as it starts (see applyStepMemory).
+func agentStepContent(ctx context.Context, cfg *config.Config, prepared *preparedAgentStep, st store.Memories) (map[string]any, error) {
+	content, err := merkle.AgentContentMap(cfg, prepared.step, prepared.primary)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	return content, applyStepMemory(ctx, cfg, prepared, content, st)
 }
 
 // lookupStepCache reports whether this agent step's declared outputs were

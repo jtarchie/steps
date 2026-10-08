@@ -185,12 +185,19 @@ func TestRenderCLIPrompt(t *testing.T) {
 	t.Parallel()
 
 	conv := agentConversation{
+		memory:        &contextBlock{path: "memory", content: "<fence>\n[1] prefers code samples\n</fence>"},
 		upstream:      []contextBlock{{path: "critic", content: "<fence>\nverdict: revise\n</fence>"}},
 		contextBlocks: []contextBlock{{path: "repo/NOTES.md", content: "some notes"}},
 		messages:      []string{"Review the diff."},
 	}
 
 	rendered := renderCLIPrompt(conv)
+
+	// A CLI agent has no transcript for a recall exchange either, so what its
+	// scope holds leads the prompt, older than everything below it.
+	if memoryAt := strings.Index(rendered, "prefers code samples"); memoryAt < 0 || memoryAt > strings.Index(rendered, "verdict: revise") {
+		t.Errorf("memory is missing or not first:\n%s", rendered)
+	}
 
 	// Same content, same order as the HTTP path's synthetic tool exchanges —
 	// there is just no transcript to fabricate them into here. A CLI agent

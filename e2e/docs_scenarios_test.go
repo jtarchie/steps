@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -249,6 +250,31 @@ var docScenarios = map[string]docScenario{
 	// answer it was GIVEN into the file the next step reads — which a
 	// positional script could not show, since it would be echoing a constant
 	// the fixture already wrote.
+	// memory: across two steps of one run, the saver then the reader. The
+	// bot writes back what its preload told it, so a preload that never
+	// arrived, or arrived from another scope, is an empty reply the post
+	// step's stdout assertion catches.
+	"agents-memory": {
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				saver := slices.Contains(req.toolNames(), "remember")
+
+				switch {
+				case saver && !req.historyCalled("remember"):
+					return callsTool("remember", map[string]any{"text": "wants code samples in every answer"})
+				case !saver && !req.historyCalled("write_file"):
+					return callsTool("write_file", map[string]any{
+						"path":    "reply/answer.md",
+						"content": rememberedLine(req.toolResults(), "code samples"),
+					})
+				default:
+					return says("Done.")
+				}
+			})
+		},
+	},
 	"agents-ask-user": {
 		answers: []string{"which bump=minor", "storage migration=yes"},
 		fake: func(t *testing.T) *fakeLLM {
@@ -702,4 +728,27 @@ var docScenarios = map[string]docScenario{
 			says("api boundaries look fine").spending(2000),
 		),
 	},
+}
+
+// rememberedLine is the line of a recall preload that mentions want, or
+// nothing — what a routed fake echoes so an answer depends on memory having
+// actually arrived.
+func rememberedLine(results []string, want string) string {
+	for _, result := range results {
+		var payload struct {
+			Content string `json:"content"`
+		}
+
+		if json.Unmarshal([]byte(result), &payload) != nil {
+			continue
+		}
+
+		for line := range strings.SplitSeq(payload.Content, "\n") {
+			if strings.Contains(line, want) {
+				return line
+			}
+		}
+	}
+
+	return ""
 }

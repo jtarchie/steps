@@ -108,6 +108,9 @@ var stepOperators = []stepOperator{
 	// Remove the decision the reader was handed and its consumer has
 	// nothing to read.
 	{tag: "context", apply: deleteKey("context")},
+	// Remove a step's memory and either its remember has nowhere to file
+	// (a load error) or the reader is handed nothing to answer from.
+	{tag: "memory", apply: deleteKey("memory")},
 
 	{tag: "when", apply: setString("when", "false")},
 	{tag: "to", apply: mutateRouteTargets("to")},

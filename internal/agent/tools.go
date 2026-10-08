@@ -43,6 +43,9 @@ type toolEnv struct {
 	// every caller with no run to record against, which that tool reports as
 	// data rather than pretending to park (see askEnv).
 	ask askEnv
+	// memory is the step's memory: scope, for remember and forget. Zero for
+	// every conversation that is not a step declaring memory:.
+	memory memoryEnv
 	// transcript is the enclosing conversation's recorder, set by
 	// runAgentConversation. It rides in the env because the env is what
 	// already reaches every toolImpl — the sub-agent tool uses it to nest the

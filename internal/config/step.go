@@ -400,6 +400,10 @@ type Step struct {
 	// CollectedOutputMapping. Empty on an ordinary step, and ignored on a cell
 	// that declares no outputs.
 	OutputSubdir string `yaml:"-"`
+	// Memory, on an agent step, is the scope it keeps facts under between
+	// runs: what that scope holds is handed to the model as it starts, and the
+	// remember/forget builtins write to it. See StepMemory and docs/agents.md.
+	Memory *StepMemory `yaml:"memory,omitempty"`
 	// Context, on an agent or task step, opts into reading named earlier
 	// steps' decisions: `context: { from: { <step>: verdict|note|full } }`.
 	// Never a hook — see validateContextSteps and contextfrom.go.

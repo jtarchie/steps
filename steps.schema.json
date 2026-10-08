@@ -78,6 +78,11 @@
           "minimum": 0,
           "description": "How many runs of each job steps keeps, with their events, agent transcripts and cached step nodes. Default 100, or --run-history; 0 keeps everything. Reaping a run also drops the cached nodes no surviving run refers to, so a step whose content has not changed since before the window runs once more instead of being skipped."
         },
+        "memory_entries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many entries each agent memory: scope keeps, the oldest going first. Default 100; 0 keeps everything. Memory outlives run_history: on purpose, so it has its own bound."
+        },
         "preflight": {
           "type": "object",
           "additionalProperties": false,
@@ -706,7 +711,9 @@
             "edit_file",
             "search_files",
             "web_fetch",
-            "ask_user"
+            "ask_user",
+            "remember",
+            "forget"
           ]
         },
         {
@@ -1246,6 +1253,9 @@
           },
           "description": "Names the worker the step's commands run on; the invocation maps the name to a machine with --worker. One entry: there is no worker pool to intersect against. On a get or put it overrides the resource's own tags:. On a do: or in_parallel: block it places the steps inside that name none of their own, overriding the job's tags:. Composes with image:, which runs the command in a container on that worker. Invalid on try:, race: and ensemble: steps, on an agent without image: or a CLI agent, on a task with fix:, and on a get/put of a type that is not shell-backed \u2014 whether declared or inherited."
         },
+        "memory": {
+          "$ref": "#/$defs/stepMemory"
+        },
         "context_paths": {
           "type": "array",
           "items": {
@@ -1600,6 +1610,20 @@
             }
           }
         ]
+      }
+    },
+    "stepMemory": {
+      "type": "object",
+      "description": "What an agent step keeps between runs, filed under a scope read from a file the pipeline names.",
+      "additionalProperties": false,
+      "required": [
+        "scope_from"
+      ],
+      "properties": {
+        "scope_from": {
+          "type": "string",
+          "description": "<input>/<file>: a file in one of the step's inputs whose content is the scope, such as a Slack user id. An empty or missing file fails the step."
+        }
       }
     },
     "fileRef": {

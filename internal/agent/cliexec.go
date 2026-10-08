@@ -252,6 +252,11 @@ func cliToolPermissions(conv agentConversation) []string {
 func renderCLIPrompt(conv agentConversation) string {
 	var out strings.Builder
 
+	// Memory first, as on the HTTP path. Already fenced by renderMemoryPreload.
+	if conv.memory != nil {
+		fmt.Fprintf(&out, "%s:\n%s\n\n", conv.memory.path, conv.memory.content)
+	}
+
 	// The decisions this step asked upstream steps for come first, as they do
 	// on the HTTP path: they are what happened BEFORE this step, and the
 	// context_paths files below are what it works on. Already fenced by

@@ -1,0 +1,16 @@
+# remember and forget write to a memory: scope, and this step names none —
+# so there is nowhere for a fact to go, and nothing that says whose it is.
+# expect: remember and forget need memory: on the step
+
+agents:
+- name: bot
+  source:
+    model: test-model
+    endpoint: http://127.0.0.1:1/v1/
+  tools: [remember]
+
+jobs:
+- name: answer
+  plan:
+  - agent: bot
+    messages: [hello]
