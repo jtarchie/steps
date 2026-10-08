@@ -112,9 +112,9 @@ func webServerForAll(t *testing.T, paths ...string) *web.Server {
 // TestRootRowsSayOnlyWhatIsNotNormal: the root is the glance, so a healthy
 // pipeline's row is its mark, its name, its jobs and its last run — no
 // column of dashes and "active" — and the one thing that is not normal, a
-// pause, is said in a word on that row alone. The file path stays in the
-// row, out of the way until it is hovered or focused, and the mark is
-// the switcher's own, so the two cannot disagree.
+// pause, is said once, by the mark, on that row alone. A daemon's pipeline is
+// the name it was set under, so its file is not drawn, and the mark is the
+// switcher's own, so the two cannot disagree.
 func TestRootRowsSayOnlyWhatIsNotNormal(t *testing.T) {
 	dir := t.TempDir()
 	running := filepath.Join(dir, "running.yml")
@@ -139,7 +139,7 @@ jobs:
 	_, root := webGet(t, webServerForAll(t, running, stopped), "/")
 
 	table := between(t, root, `id="pipelines-table"`, "</table>")
-	for _, gone := range []string{">active<", ">Waiting</th>", ">Queued</th>", ">State</th>", ">File</th>"} {
+	for _, gone := range []string{">active<", ">Waiting</th>", ">Queued</th>", ">State</th>", ">File</th>", "running.yml", "stopped.yml"} {
 		if strings.Contains(table, gone) {
 			t.Errorf("the root still draws %s", gone)
 		}
@@ -147,17 +147,11 @@ jobs:
 
 	rows := map[string]string{"running": rootRow(t, table, "running"), "stopped": rootRow(t, table, "stopped")}
 
-	if strings.Contains(rows["running"], "st-paused") || !strings.Contains(rows["stopped"], `<span class="st st-paused">paused</span>`) {
+	if strings.Contains(rows["running"], "st-paused") || !strings.Contains(rows["stopped"], `<span class="st-paused">⏸</span>`) || strings.Contains(rows["stopped"], `class="st st-paused"`) {
 		t.Errorf("the pause is not said on the paused row alone:\nrunning: %s\nstopped: %s", rows["running"], rows["stopped"])
 	}
 
 	for slug, row := range rows {
-		// A read-only server (no runner, as here) draws no button, and a
-		// package test holds the button for a server that has one.
-		if extra := between(t, row, `<td class="rowextra">`, "</td>"); !strings.Contains(extra, slug+".yml") {
-			t.Errorf("%s's row lost its file:\n%s", slug, row)
-		}
-
 		switcher := between(t, root, `href="/p/`+slug+`">`, `<span class="slug">`)
 		if !strings.Contains(row, switcher) {
 			t.Errorf("%s's row does not wear the switcher's mark %q:\n%s", slug, switcher, row)

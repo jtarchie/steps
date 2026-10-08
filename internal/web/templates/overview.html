@@ -1,12 +1,13 @@
 {{define "page"}}
 <h1 class="prompt"><b>steps</b></h1>
 <div id="overview-region" hx-get="{{.Nav.URL}}" hx-trigger="every[!document.hidden] 2500ms" hx-select="#overview-region" hx-swap="outerMorph" hx-select-oob="#statusline:outerMorph">
-<p class="metaline">{{len .Pipelines}} pipelines<span class="sep">·</span>{{len .Runs}} recent runs</p>
+{{/* The feed below shows its own length; the header counts only what wants a person. */}}
+<p class="metaline">{{len .Pipelines}} pipelines{{with .Tally.Paused}}<span class="sep">·</span><span class="st-paused">{{.}} paused</span>{{end}}{{with .Tally.Failing}}<span class="sep">·</span><span class="st-failed">{{.}} failing</span>{{end}}{{with .Tally.Broken}}<span class="sep">·</span><span class="st-failed">{{.}} broken</span>{{end}}</p>
 
 <div class="tablewrap" id="pipelines-table">
   <table class="pipelines">
     <thead>
-      <tr><th>Pipeline</th><th>Jobs</th><th>Last run</th><th><span class="visually-hidden">Pause and file</span></th></tr>
+      <tr><th>Pipeline</th><th>Jobs</th><th>Last run</th><th><span class="visually-hidden">Pause</span></th></tr>
     </thead>
     <tbody>
       {{range .Pipelines}}
@@ -14,13 +15,12 @@
       {{/* Held and not served: no pages behind it, so no links and no pause, and the state said in words rather than only in red. */}}
       <tr>
         <td class="pname">{{template "markglyph" .Mark}}{{.Slug}} <span class="st st-failed">broken</span></td>
-        <td colspan="2" class="broken-reason">{{.Broken}}</td>
-        <td class="rowextra"><span class="dim" title="{{.Path}}">{{.File}}</span></td>
+        <td colspan="3" class="broken-reason">{{.Broken}}</td>
       </tr>
       {{else}}
-      <tr>
-        {{/* Only what is not normal gets a word: a healthy row is its mark, name, jobs and last run. */}}
-        <td class="pname">{{template "markglyph" .Mark}}<a href="/p/{{.Slug}}">{{.Slug}}</a>{{template "counts" .}}{{if .Paused}} <span class="st st-paused">paused</span>{{end}}{{if .Held}} <span class="st st-held">{{.Held}} held</span>{{end}}</td>
+      <tr{{if .Paused}} class="paused"{{end}}>
+        {{/* Only what is not normal gets a word: a healthy row is its mark, name, jobs and last run. The mark already draws a pause unless a failure outranks it, so the chip is only for then. */}}
+        <td class="pname">{{template "markglyph" .Mark}}<a href="/p/{{.Slug}}">{{.Slug}}</a>{{template "counts" .}}{{if and .Paused (ne .Mark.Word "paused")}} <span class="st st-paused">paused</span>{{end}}{{if .Held}} <span class="st st-held">{{.Held}} held</span>{{end}}</td>
         {{/* Every job, colored by its latest run: which one is red, from
              the root, and the link is the transcript. */}}
         <td class="jobchips" title="{{.Jobs}} jobs">{{$slug := .Slug}}{{range .Chips}}<a class="st {{.Class}}" href="/p/{{$slug}}/jobs/{{.Name}}">{{.Name}}</a>{{end}}</td>
@@ -28,12 +28,10 @@
           {{if .HasRun}}<a class="st st-{{statusWord .Latest.Status}}" href="/p/{{.Slug}}/runs/{{.Latest.ID}}">{{statusWord .Latest.Status}}</a> <span class="dim">{{agoTag .Latest.StartedAt}}</span>
           {{else}}<span class="faint">never ran</span>{{end}}
         </td>
-        {{/* Out of the way until the row is hovered or focused: neither is
-             what the root is looked at for, and both are a click from the
-             pipeline's own page. */}}
+        {{/* Out of the way until the row is hovered or focused: not what the
+             root is looked at for, and a click from the pipeline's own page. */}}
         <td class="rowextra">
           {{if not $.Nav.ReadOnly}}<form class="inline" method="post" action="/p/{{.Slug}}/{{if .Paused}}unpause{{else}}pause{{end}}"><input type="hidden" name="return" value="{{$.Nav.URL}}"><button class="btn{{if .Paused}} primary{{end}}" type="submit">{{if .Paused}}Unpause{{else}}Pause{{end}}</button></form>{{end}}
-          <span class="dim" title="{{.Path}}">{{.File}}</span>
         </td>
       </tr>
       {{end}}

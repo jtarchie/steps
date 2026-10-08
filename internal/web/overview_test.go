@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
@@ -1533,6 +1534,123 @@ func TestTheOverviewSaysWhatEachPipelineIsDoing(t *testing.T) {
 	}
 }
 
+// TestTheOverviewDoesNotPrintTheFileName: a daemon's pipeline is the name
+// somebody set it under, so the file it was read from is noise on the root —
+// and on a broken row as much as a served one.
+func TestTheOverviewDoesNotPrintTheFileName(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipelines(t, "app")
+	server.MarkBroken(BrokenPipeline{Name: "gone", From: "/src/gone.yml", Reason: "workspace: root is not writable"})
+
+	_, page := get(t, server, "/")
+
+	table := between(t, page, `id="pipelines-table"`, "</table>")
+	if !strings.Contains(table, "gone") || strings.Contains(table, ".yml") {
+		t.Errorf("the overview's pipeline table names a file, or lost the broken row:\n\t%s", table)
+	}
+}
+
+// TestTheOverviewHeaderCountsOnlyWhatIsNotNormal: "10 recent runs" counted
+// the feed's own page size, which the feed below already shows. The line
+// says how many pipelines there are and then only the states that want a
+// person — none at all when nothing does.
+func TestTheOverviewHeaderCountsOnlyWhatIsNotNormal(t *testing.T) {
+	t.Parallel()
+
+	server, pipelines := testPipelines(t, "held", "red", "fine")
+	server.MarkBroken(BrokenPipeline{Name: "gone", From: "/src/gone.yml", Reason: "workspace: root is not writable"})
+
+	err := pipelines[0].Store.Pause(t.Context())
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	seedRun(t, pipelines[1], "run-red", "red-job", "failed")
+	seedRun(t, pipelines[2], "run-fine", "fine-job", "succeeded")
+
+	_, page := get(t, server, "/")
+
+	line := between(t, page, `<p class="metaline">`, "</p>")
+	for _, want := range []string{"4 pipelines", "1 paused", "1 failing", "1 broken"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the overview's header lacks %q: %s", want, line)
+		}
+	}
+
+	if strings.Contains(line, "recent runs") {
+		t.Errorf("the overview's header still counts the feed's page size: %s", line)
+	}
+
+	quiet, _ := testPipelines(t, "a", "b")
+
+	_, page = get(t, quiet, "/")
+	if line := between(t, page, `<p class="metaline">`, "</p>"); strings.Contains(line, "0 ") || !strings.Contains(line, "2 pipelines") {
+		t.Errorf("a healthy daemon's header should say only how many pipelines it holds: %s", line)
+	}
+}
+
+// TestAPausedRowKeepsItsUnpauseInView: the row's controls hide until hover
+// because a healthy pipeline's Pause is rarely wanted, but Unpause is the
+// one thing a paused row is for.
+func TestAPausedRowKeepsItsUnpauseInView(t *testing.T) {
+	t.Parallel()
+
+	_, pipelines := testPipelines(t, "held", "live")
+
+	server, err := New(pipelines, stubRunner{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	err = pipelines[0].Store.Pause(t.Context())
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	_, page := get(t, server, "/")
+	table := between(t, page, `id="pipelines-table"`, "</table>")
+
+	if !strings.Contains(table, `<tr class="paused">`) || strings.Count(table, `<tr class="paused">`) != 1 {
+		t.Errorf("exactly the paused row should be marked paused:\n%s", table)
+	}
+
+	_, css := get(t, server, "/static/app.css")
+	if !cssRule(css, ".pipelines tr.paused .rowextra", "opacity: 1") {
+		t.Error("a paused row's Unpause still hides until hover")
+	}
+}
+
+// TestLongDurationsCountDays: "110h 13m ago" makes a reader divide by 24.
+// The script re-renders every ago on a timer, so it carries the same tier or
+// the server's text is replaced thirty seconds later.
+func TestLongDurationsCountDays(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		in   time.Duration
+		want string
+	}{
+		{59*time.Minute + 59*time.Second, "59m 59s"},
+		{23*time.Hour + 59*time.Minute, "23h 59m"},
+		{24 * time.Hour, "1d 00h"},
+		{110*time.Hour + 13*time.Minute, "4d 14h"},
+	} {
+		if got := formatDuration(tc.in); got != tc.want {
+			t.Errorf("formatDuration(%v) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	js, err := assets.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(js), `+ 'd ' +`) {
+		t.Error("app.js's relative-time formatter has no day tier, so it undoes the server's")
+	}
+}
+
 // pausedWithHistory is a pipeline in every state the overview's row reports at once: stopped, having run, and owing the queue a job the pause is holding back.
 func pausedWithHistory(t *testing.T, pipeline *Pipeline) {
 	t.Helper()
@@ -1784,10 +1902,6 @@ func TestTheRootFeedIsTenRunsUntilAskedForMore(t *testing.T) {
 
 		if more := strings.Contains(page, `<a class="more" href="/?runs=50">show 50 runs</a>`); more != tc.more {
 			t.Errorf("%s: more link drawn = %v, want %v", tc.path, more, tc.more)
-		}
-
-		if !strings.Contains(page, fmt.Sprintf("%d recent runs", tc.rows)) {
-			t.Errorf("%s: the metaline does not count the %d runs shown", tc.path, tc.rows)
 		}
 	}
 

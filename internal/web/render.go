@@ -308,7 +308,12 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dm %02ds", minutes, seconds)
 	}
 
-	return fmt.Sprintf("%dh %02dm", minutes/60, minutes%60)
+	hours := minutes / 60
+	if hours < 24 {
+		return fmt.Sprintf("%dh %02dm", hours, minutes%60)
+	}
+
+	return fmt.Sprintf("%dd %02dh", hours/24, hours%24)
 }
 
 // formatAgo renders how long ago something happened.

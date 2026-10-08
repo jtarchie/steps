@@ -444,13 +444,14 @@ td.faint, .faint { color: var(--faint); }
    hidden button cannot take focus, so a keyboard could never reveal it. A
    touch screen has no hover, so there they are always shown. */
 .pipelines .rowextra { text-align: right; white-space: nowrap; opacity: 0; }
-.pipelines .rowextra .dim { margin-left: 10px; }
 .pipelines tr:hover .rowextra, .pipelines tr:focus-within .rowextra { opacity: 1; }
+/* Pause is rarely wanted from a healthy row; Unpause is what a paused row is for. */
+.pipelines tr.paused .rowextra { opacity: 1; }
 @media (hover: none) {
   .pipelines .rowextra { opacity: 1; }
 }
 /* On a phone a row stacks rather than scrolls: the name and its last run on
-   one line, the chips under them, then pause and file — shown, since a
+   one line, the chips under them, then pause — shown, since a
    hidden line here would only be a gap. The header row says nothing a
    stacked row does not, so it is kept for assistive tech only. */
 @media (max-width: 640px) {
@@ -462,8 +463,6 @@ td.faint, .faint { color: var(--faint); }
   .pipelines .pname ~ td:nth-child(3) { grid-row: 1; grid-column: 2; text-align: right; }
   .pipelines .jobchips, .pipelines .rowextra, .pipelines .broken-reason { grid-column: 1 / -1; width: auto; }
   .pipelines .rowextra { text-align: left; opacity: 1; }
-  .pipelines .rowextra .dim { margin-left: 0; }
-  .pipelines .rowextra form + .dim { margin-left: 10px; }
 }
 
 /* ---- run strip ----

@@ -411,7 +411,9 @@
     var m = Math.floor(ms / 60000);
     var s = Math.floor(ms / 1000) % 60;
     if (m < 60) return m + 'm ' + String(s).padStart(2, '0') + 's';
-    return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+    var h = Math.floor(m / 60);
+    if (h < 24) return h + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+    return Math.floor(h / 24) + 'd ' + String(h % 24).padStart(2, '0') + 'h';
   }
 
   function tick() {

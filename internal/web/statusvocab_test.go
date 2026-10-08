@@ -238,17 +238,38 @@ func TestEveryStateHasOneWordGlyphAndColour(t *testing.T) {
 func TestTheOverviewSaysPausedInBlueAndNothingOtherwise(t *testing.T) {
 	t.Parallel()
 
-	server, pipelines := testPipelines(t, "held", "live")
+	server, pipelines := testPipelines(t, "held", "red", "live")
 
-	err := pipelines[0].Store.Pause(t.Context())
+	for _, pipeline := range pipelines[:2] {
+		err := pipeline.Store.Pause(t.Context())
+		if err != nil {
+			t.Fatalf("Pause: %v", err)
+		}
+	}
+
+	err := pipelines[1].Store.StartRun(t.Context(), "run-red", "red-job", "/tmp/ws", "")
 	if err != nil {
-		t.Fatalf("Pause: %v", err)
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	err = pipelines[1].Store.FinishRun(t.Context(), "run-red", "failed")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
 	}
 
 	_, body := get(t, server, "/")
 
-	if !strings.Contains(pipelineRow(t, body, "held"), `<span class="st st-paused">paused</span>`) {
-		t.Error("a paused pipeline is not drawn with the paused chip")
+	// The mark already draws ⏸ when pause is the loudest thing about the
+	// pipeline; a chip beside it said the same thing twice.
+	held := between(t, pipelineRow(t, body, "held"), `<td class="pname">`, "</td>")
+	if !strings.Contains(held, `<span class="st-paused">⏸</span>`) || strings.Contains(held, `class="st st-paused"`) {
+		t.Errorf("a paused pipeline's name cell should say paused once, by its mark:\n%s", held)
+	}
+
+	// A failure outranks the pause in the mark, so the chip is then the only
+	// place the row says it is stopped.
+	if !strings.Contains(pipelineRow(t, body, "red"), `<span class="st st-paused">paused</span>`) {
+		t.Error("a paused pipeline whose mark is a failure does not say it is paused")
 	}
 
 	live := pipelineRow(t, body, "live")

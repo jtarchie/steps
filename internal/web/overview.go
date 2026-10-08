@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -65,11 +64,7 @@ type overviewRun struct {
 // says so on every one of its own pages, but the root is where an operator
 // looks first, and there it read as a quiet one.
 type overviewPipeline struct {
-	Slug string
-	Path string
-	// File is Path's last element: the row has room for a name, and the
-	// whole path is its tooltip.
-	File   string
+	Slug   string
 	Jobs   int
 	Paused bool
 	// Latest is the pipeline's newest run across every job, zero when it has never run.
@@ -91,6 +86,36 @@ type overviewPipeline struct {
 	Chips []jobChip
 	// Broken is why the daemon holds this pipeline and does not serve it; every other field is zero then.
 	Broken string
+}
+
+// overviewTally is the overview header's count of rows that want a person.
+// Failing is read off the mark, so it agrees with the glyph on each row.
+type overviewTally struct {
+	Paused  int
+	Failing int
+	Broken  int
+}
+
+func tallyOverview(rows []overviewPipeline) overviewTally {
+	var tally overviewTally
+
+	for _, row := range rows {
+		if row.Broken != "" {
+			tally.Broken++
+
+			continue
+		}
+
+		if row.Paused {
+			tally.Paused++
+		}
+
+		if row.Mark.Disc >= discFailed {
+			tally.Failing++
+		}
+	}
+
+	return tally
 }
 
 // jobChip is one job on an overview row: its name and the st-* class the
@@ -159,11 +184,14 @@ func (s *Server) handleIndex(c *echo.Context) error {
 	// asking the same six questions of the same databases twice per render.
 	nav := s.globalNav(c)
 
+	pipelines := s.overviewPipelines(c.Request().Context(), nav)
+
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "overview", map[string]any{
 		"Nav":       nav,
 		"Title":     "pipelines",
-		"Pipelines": s.overviewPipelines(c.Request().Context(), nav),
+		"Pipelines": pipelines,
+		"Tally":     tallyOverview(pipelines),
 		"Runs":      runs,
 		"More":      more,
 		"MoreURL":   fmt.Sprintf("/?runs=%d", overviewLimit),
@@ -192,8 +220,6 @@ func (s *Server) overviewPipelines(ctx context.Context, nav navData) []overviewP
 		summary := summaries[pipeline.Slug]
 		row := overviewPipeline{
 			Slug:      pipeline.Slug,
-			Path:      pipeline.Path(),
-			File:      filepath.Base(pipeline.Path()),
 			Jobs:      len(pipeline.Config().Jobs),
 			Paused:    paused(ctx, pipeline),
 			Mark:      summary.Mark,
@@ -216,7 +242,7 @@ func (s *Server) overviewPipelines(ctx context.Context, nav navData) []overviewP
 	}
 
 	for _, broken := range s.Broken() {
-		out = append(out, overviewPipeline{Slug: broken.Name, Path: broken.From, File: filepath.Base(broken.From), Broken: broken.Reason, Mark: summaries[broken.Name].Mark})
+		out = append(out, overviewPipeline{Slug: broken.Name, Broken: broken.Reason, Mark: summaries[broken.Name].Mark})
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
