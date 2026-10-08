@@ -43,6 +43,21 @@ jobs:
   ensure:
     agent: saver
 `, "remember and forget are not valid on a hook step"},
+		"a memory grant with no memory:": {agents + `
+jobs:
+- name: j
+  plan:
+  - agent: saver
+    messages: [hi]
+`, "remember and forget need memory: on the step"},
+		"a scope from an undeclared input": {agents + `
+jobs:
+- name: j
+  plan:
+  - agent: bot
+    inputs: [who]
+    memory: {scope_from: mentions/user}
+`, `names input "mentions", which is not in this step's inputs:`},
 		"no file": {agents + `
 jobs:
 - name: j
