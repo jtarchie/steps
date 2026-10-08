@@ -123,8 +123,9 @@ func readMemoryScope(spaceDir, scopeFrom string) (string, error) {
 		return "", fmt.Errorf("memory.scope_from %q is empty, so there is no scope to remember under", scopeFrom)
 	}
 
-	if len(scope) > store.MaxMemoryScopeBytes {
-		return "", fmt.Errorf("memory.scope_from %q holds %d bytes, over the %d a scope may be — it should hold an id", scopeFrom, len(scope), store.MaxMemoryScopeBytes)
+	err = store.CheckMemoryScope(scope)
+	if err != nil {
+		return "", fmt.Errorf("memory.scope_from %q should hold an id: %w", scopeFrom, err)
 	}
 
 	return scope, nil

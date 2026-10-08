@@ -43,9 +43,12 @@ func (s *Store) Remember(ctx context.Context, memory store.Memory, limit int) (s
 
 		added = affected > 0
 
-		err = evictMemories(ctx, tx, s.pipelineID, memory.Scope, limit)
-		if err != nil {
-			return err
+		// Only when something was filed: see the sqlite driver's Remember.
+		if added {
+			err = evictMemories(ctx, tx, s.pipelineID, memory.Scope, limit)
+			if err != nil {
+				return err
+			}
 		}
 
 		stored, err = scanMemory(tx.QueryRowContext(ctx, memoryColumns+`

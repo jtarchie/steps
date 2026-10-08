@@ -44,9 +44,14 @@ func (s *Store) Remember(ctx context.Context, memory store.Memory, limit int) (s
 		return store.Memory{}, false, fmt.Errorf("could not remember for %q: %w", memory.Scope, err)
 	}
 
-	err = evictMemories(ctx, tx, s.pipelineID, memory.Scope, limit)
-	if err != nil {
-		return store.Memory{}, false, err
+	// Only when something was filed: a duplicate grows nothing, and under a
+	// limit lowered since, the entry it matched may be one the cap deletes —
+	// leaving nothing for the read below to hand back.
+	if affected > 0 {
+		err = evictMemories(ctx, tx, s.pipelineID, memory.Scope, limit)
+		if err != nil {
+			return store.Memory{}, false, err
+		}
 	}
 
 	stored, err := scanMemory(tx.QueryRowContext(ctx, memoryColumns+`

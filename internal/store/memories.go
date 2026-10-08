@@ -73,20 +73,38 @@ var ErrMemoryRefused = errors.New("memory refused")
 // CheckMemory is what every driver refuses before writing, so the refusal is
 // the contract's rather than one driver's.
 func CheckMemory(memory Memory) error {
+	err := CheckMemoryScope(memory.Scope)
+	if err != nil {
+		return err
+	}
+
 	switch {
-	case memory.Scope == "":
-		return fmt.Errorf("%w: the scope is empty", ErrMemoryRefused)
-	case len(memory.Scope) > MaxMemoryScopeBytes:
-		return fmt.Errorf("%w: the scope is %d bytes, over the %d a scope may be", ErrMemoryRefused, len(memory.Scope), MaxMemoryScopeBytes)
-	case !storable(memory.Scope) || !storable(memory.Text):
-		// Refused rather than cleaned: Postgres stores neither a NUL nor
-		// invalid UTF-8 in text, and a driver that quietly repaired them would
-		// file different text from the other driver, and dedupe it differently.
+	case !storable(memory.Text):
 		return fmt.Errorf("%w: it is not UTF-8 text without NUL bytes", ErrMemoryRefused)
 	case memory.Text == "":
 		return fmt.Errorf("%w: the text is empty", ErrMemoryRefused)
 	case len(memory.Text) > MaxMemoryBytes:
 		return fmt.Errorf("%w: the text is %d bytes, over the %d one memory may be", ErrMemoryRefused, len(memory.Text), MaxMemoryBytes)
+	}
+
+	return nil
+}
+
+// CheckMemoryScope is the scope half of CheckMemory, for a reader to refuse
+// before it lists: Postgres cannot even compare against a scope it could not
+// store, so a scope only sqlite accepted would fail one driver's step and not
+// the other's.
+func CheckMemoryScope(scope string) error {
+	switch {
+	case scope == "":
+		return fmt.Errorf("%w: the scope is empty", ErrMemoryRefused)
+	case len(scope) > MaxMemoryScopeBytes:
+		return fmt.Errorf("%w: the scope is %d bytes, over the %d a scope may be", ErrMemoryRefused, len(scope), MaxMemoryScopeBytes)
+	case !storable(scope):
+		// Refused rather than cleaned: Postgres stores neither a NUL nor
+		// invalid UTF-8 in text, and a driver that quietly repaired them would
+		// file different text from the other driver, and dedupe it differently.
+		return fmt.Errorf("%w: the scope is not UTF-8 text without NUL bytes", ErrMemoryRefused)
 	}
 
 	return nil

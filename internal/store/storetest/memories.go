@@ -230,6 +230,29 @@ func (s suite) TestTheMemoryCapEvictsTheOldest(t *testing.T) {
 	}
 }
 
+// TestRememberingAnEvictableDuplicateHandsItBack: a scope over a cap that was
+// lowered since, re-told its oldest fact. Evicting before the read lost the row
+// the read was for, and the model was told remember had failed.
+func (s suite) TestRememberingAnEvictableDuplicateHandsItBack(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	oldest := remember(ctx, t, st, "U1", "a", 0)
+	remember(ctx, t, st, "U1", "b", 0)
+	remember(ctx, t, st, "U1", "c", 0)
+
+	again, added, err := st.Remember(ctx, store.Memory{Scope: "U1", Text: "a"}, 1)
+	if err != nil {
+		t.Fatalf("Remember of a duplicate under a lowered cap: %v", err)
+	}
+
+	if added || again.ID != oldest.ID {
+		t.Errorf("Remember = %+v added=%v, want entry %d back, not filed", again, added, oldest.ID)
+	}
+}
+
 // TestMemoriesBelongToTheirPipeline: two pipelines in one database, each with
 // a user U1, are two different people.
 func (s suite) TestMemoriesBelongToTheirPipeline(t *testing.T) {

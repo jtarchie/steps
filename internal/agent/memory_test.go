@@ -54,6 +54,9 @@ func TestAScopeFileThatNamesNothingFailsTheStep(t *testing.T) {
 		"empty":    writeScope(t, " \n"),
 		"missing":  t.TempDir(),
 		"too long": writeScope(t, strings.Repeat("U", store.MaxMemoryScopeBytes+1)),
+		// sqlite would list under either and find nothing; Postgres cannot.
+		"not UTF-8": writeScope(t, "U\xff1"),
+		"a NUL":     writeScope(t, "U\x001"),
 	} {
 		_, err := loadStepMemory(t.Context(), &config.Config{}, scopedStep, dir, memoryStore(t), false)
 		if err == nil {
