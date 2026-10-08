@@ -749,6 +749,9 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 		{"runs", "revision_id", "pipeline_revisions", "RESTRICT"},
 		{"job_versions", "resource_name", "resource_versions", "CASCADE"},
 		{"webhook_deliveries", "version_json", "resource_versions", "CASCADE"},
+		// SET NULL: a memory outlives run_history:, so reaping the run that
+		// remembered a fact must clear the pointer and keep the fact.
+		{"memories", "run_id", "runs", "SET NULL"},
 		// Every pipeline-scoped table cascades off the pipelines row, which is
 		// what makes forgetting a pipeline one DELETE rather than fourteen.
 		// The run-scoped tables are absent on purpose: they reach the pipeline
@@ -768,6 +771,7 @@ func TestFootprintForeignKeysAreDeclared(t *testing.T) {
 		// RESTRICT, because pruneRevisions' hand-written exemption would otherwise be the only thing between a sweep and a daemon that restarts into nothing.
 		{"pipelines", "current_revision_id", "pipeline_revisions", "RESTRICT"},
 		{"revision_includes", "revision_id", "pipeline_revisions", "CASCADE"},
+		{"memories", "pipeline_id", "pipelines", "CASCADE"},
 	} {
 		if !hasForeignKey(ctx, t, st, want.table, want.column, want.target, want.onDelete) {
 			t.Errorf("%s.%s does not declare REFERENCES %s ... ON DELETE %s",

@@ -9,7 +9,7 @@ package postgres
 //
 // Its own counter, not the sqlite one: the two schemas are written separately
 // and change separately.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -236,6 +236,18 @@ CREATE TABLE IF NOT EXISTS approvals (
     reason       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_pipeline ON approvals(pipeline_id);
+
+CREATE TABLE IF NOT EXISTS memories (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pipeline_id BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    scope       TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    run_id      TEXT REFERENCES runs(id) ON DELETE SET NULL,
+    created_at  TIMESTAMPTZ NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_text ON memories(pipeline_id, scope, text);
+CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(pipeline_id, scope, id);
+CREATE INDEX IF NOT EXISTS idx_memories_run ON memories(run_id);
 
 CREATE TABLE IF NOT EXISTS questions (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

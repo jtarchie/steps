@@ -84,6 +84,7 @@ type Store interface {
 	Control
 	Pruning
 	Deliveries
+	Memories
 }
 
 // ErrSchemaVersion is a database some other build of steps wrote.

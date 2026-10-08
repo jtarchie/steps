@@ -70,12 +70,14 @@ package sqlite
 // 4 put pipeline_id into the keys of run_placements and agent_usage. Without
 // it, two pipelines sharing a state file collided on (run_id, node_hash) and
 // one upserted over the other's row.
+// 18 added memories, what an agent step keeps about a scope between runs.
+//
 // 17 dropped run_inputs.build_id, runs.rerun_of_build and trigger_queue.rerun_build: a run is one build, so there is no build of a run to name.
 //
 // 16 added runs.rerun_of and rerun_of_build, which say which build a retry re-ran, and trigger_queue's rerun columns, which queue one.
 //
 // 15 added trigger_queue.manual, which is how a person's trigger gets past the breaker an automatic one is held by.
-const schemaVersion = 17
+const schemaVersion = 18
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -539,6 +541,26 @@ CREATE TABLE IF NOT EXISTS approvals (
     reason       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_pipeline ON approvals(pipeline_id);
+
+-- What an agent step remembers about one scope — a person, usually — from one
+-- run to the next (store.Memories). It outlives run_history: on purpose, so its
+-- bound is its own: defaults.memory_entries: per scope, oldest first. run_id is
+-- which run remembered it, and goes NULL when retention reaps that run rather
+-- than taking the fact along. AUTOINCREMENT because a model forgets by id, and
+-- an id it read in an earlier preload must never come to name a newer entry.
+CREATE TABLE IF NOT EXISTS memories (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    scope       TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    run_id      TEXT REFERENCES runs(id) ON DELETE SET NULL,
+    created_at  TEXT NOT NULL
+);
+-- Both the dedupe Remember relies on and the pipeline_id cascade's child key.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_text ON memories(pipeline_id, scope, text);
+-- A scope's entries in age order: the preload's listing and the cap's eviction.
+CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(pipeline_id, scope, id);
+CREATE INDEX IF NOT EXISTS idx_memories_run ON memories(run_id);
 
 -- Questions an agent step asked its end user, and what came back.
 --

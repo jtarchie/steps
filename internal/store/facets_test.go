@@ -28,6 +28,7 @@ var facets = map[string]reflect.Type{
 	"Control":    reflect.TypeOf((*Control)(nil)).Elem(),
 	"Pruning":    reflect.TypeOf((*Pruning)(nil)).Elem(),
 	"Deliveries": reflect.TypeOf((*Deliveries)(nil)).Elem(),
+	"Memories":   reflect.TypeOf((*Memories)(nil)).Elem(),
 }
 
 func methodNames(iface reflect.Type) []string {
