@@ -403,7 +403,7 @@ jobs:
     inputs: [mentions]
     outputs: [answer]
     run: |
-      printf 'read %s messages' "$(grep -c '"ts":' mentions/thread.json)" > answer/reply.md
+      printf 'read %s messages from %s' "$(grep -c '"ts":' mentions/thread.json)" "$(cat mentions/user)" > answer/reply.md
   - put: reply
     inputs: [mentions, answer]
 `
@@ -441,10 +441,13 @@ jobs:
 		got[channel+"/"+ts] = text
 	}
 
+	// The author is the MENTION's, not the thread's: U3 replied inside U2's
+	// thread, and a memory: scoped by the parent would file U3's facts under
+	// U2.
 	want := map[string]string{
-		"C1/100.000": "read 1 messages",
-		"C1/101.000": "read 2 messages",
-		"D1/50.000":  "read 1 messages",
+		"C1/100.000": "read 1 messages from U2",
+		"C1/101.000": "read 2 messages from U3",
+		"D1/50.000":  "read 1 messages from U2",
 	}
 
 	for key, wantText := range want {
@@ -455,6 +458,18 @@ jobs:
 
 	if len(got) != len(want) {
 		t.Errorf("posted to %v, want exactly %v", got, want)
+	}
+
+	// The author rides in the version rather than being found in the thread
+	// alone: a thread longer than in:'s limit is cut at the end the mention
+	// is at.
+	versions, err := openStoreFor(t, path).ResourceVersionsJSON(t.Context(), "mentions")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.ContainsFunc(versions, func(v string) bool { return strings.Contains(v, `"user":"U3"`) }) {
+		t.Errorf("recorded versions = %v, want the author in each", versions)
 	}
 }
 

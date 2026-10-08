@@ -274,16 +274,25 @@ config:
         | filter(float(#.msg.ts) > since)
         | filter(!("subtype" in #.msg) && !("bot_id" in #.msg) && #.msg.user != me)
         | filter(hasPrefix(#.ch, "D") || ((#.msg.text ?? "") contains ("<@" + me + ">")))
-        | map(({channel: #.ch, ts: #.msg.ts, thread_ts: #.root}));
+        | map(({channel: #.ch, ts: #.msg.ts, thread_ts: #.root, user: #.msg.user}));
 
       // Oldest first, the ordering a check owes: Slack answers newest-first,
       // and across channels there is no single reversal that would do it. A
       // Slack ts is a STRING, so sorting it as one silently misorders.
       versions | sortBy(float(#.ts))
 
-    # Both files are written here: a downstream put needs the ids, and an
-    # agent step reads the thread as Slack's own JSON rather than a
-    # rendering of it.
+    # Three files are written here: a downstream put needs the ids, an agent
+    # step reads the thread as Slack's own JSON rather than a rendering of
+    # it, and `user` is who asked — the file an agent step's memory:
+    # scope_from names, so what a bot remembers is filed per person.
+    #
+    # The author rides in the version, as thread_ts does, rather than being
+    # looked up in the thread here: the thread is truncated at its NEW end
+    # (see below), which is exactly where the mention is, so a lookup fails
+    # on the long threads people most want a bot to remember. The lookup is
+    # only the fallback for a version recorded before the field existed, and
+    # an author neither knows is an EMPTY file, which a memory: step refuses
+    # rather than filing under a scope everyone shares.
     #
     # thread_ts, NOT ts: conversations.replies is a thread endpoint, and the
     # ts of a reply is not a thread id — asked for one it answers with that
@@ -307,7 +316,10 @@ config:
         query: {channel: version.channel, ts: version.thread_ts ?? version.ts, limit: "1000"},
       }).json;
 
+      let author = version.user ?? ((thread.messages ?? []) | filter(#.ts == version.ts) | map(#.user ?? "") | first()) ?? "";
+
       thread.ok ? {
         "version.json": toJSON(version),
         "thread.json": toJSON(thread),
+        "user": author,
       } : fail("slack conversations.replies " + version.channel + ": " + (thread.error ?? "failed"))
