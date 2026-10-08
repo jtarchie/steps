@@ -116,8 +116,8 @@ func resolveAgentDir(workspaceDir, stepDir string) (string, error) {
 }
 
 // StepStore is the part of the state database an agent step touches: its node
-// in the merkle cache, its spend in the usage ledger, and the questions it
-// parks for a person. It is not the run history, the trigger queue or the
+// in the merkle cache, its spend in the usage ledger, the questions it parks
+// for a person, and what its memory: scope keeps. It is not the run history, the trigger queue or the
 // resource versions — an agent step has no business in any of those, and this
 // is where the type says so.
 type StepStore interface {

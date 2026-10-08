@@ -67,6 +67,9 @@ steps approvals -p <name>   list approval: steps waiting for a decision
                             (steps approvals approve|reject <id> -p <name>)
 steps questions -p <name>   list ask_user questions waiting for an answer
                             (steps questions answer <id> <answer> -p <name>)
+steps memory -p <name>      list what agent steps remember, by scope
+                            (--scope <s> for its entries; steps memory rm
+                            --scope <s> <id>...|--all -p <name> deletes)
 steps mcp tools|login       inspect or authorize mcp_servers: entries
                             (login <server> -c f.yml authorizes this machine;
                             -p <name> --target <url> authorizes a daemon)

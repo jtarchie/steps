@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/cli"
 )
 
 // memoryPipeline is a bot answering one message from one user: a task writes
@@ -145,5 +147,60 @@ func assertNoMemories(t *testing.T, path, scope string) {
 
 	if len(memories) != 0 {
 		t.Errorf("%s still holds %+v", scope, memories)
+	}
+}
+
+// TestEndToEndMemoryCommand: what a bot knows about somebody is readable, and
+// deletable, from the command line — one entry, or a whole person.
+//
+// Not t.Parallel(): captureStdout swaps the package-global os.Stdout.
+func TestEndToEndMemoryCommand(t *testing.T) {
+	fake := newRoutedFakeLLM(t, memoryBot)
+	path := writePipeline(t, t.TempDir(), memoryPipeline(fake.URL, t.TempDir()))
+	run := memoryRunner(t, fake, path)
+
+	run("U1", "I prefer code samples")
+	run("U2", "I prefer code samples")
+
+	memory := func(args ...string) string {
+		t.Helper()
+
+		var err error
+
+		out := captureStdout(t, func() { err = cli.Run(append(append([]string{"memory"}, args...), readArgs(path)...)) })
+		if err != nil {
+			t.Fatalf("steps memory %v: %v", args, err)
+		}
+
+		return out
+	}
+
+	if scopes := memory(); !strings.Contains(scopes, "U1") || !strings.Contains(scopes, "U2") {
+		t.Errorf("steps memory = %q, want both scopes listed", scopes)
+	}
+
+	entries := memory("--scope", "U1")
+
+	found := regexp.MustCompile(`(?m)^(\d+)\s.*prefers code samples`).FindStringSubmatch(entries)
+	if found == nil {
+		t.Fatalf("steps memory --scope U1 = %q, want the entry with its id", entries)
+	}
+
+	err := cli.Run(append([]string{"memory", "rm", "--scope", "U2", found[1]}, readArgs(path)...))
+	if err == nil || !strings.Contains(err.Error(), "not in scope U2") {
+		t.Errorf("removing U1's entry under U2: err = %v, want it refused", err)
+	}
+
+	memory("rm", "--scope", "U1", found[1])
+	assertNoMemories(t, path, "U1")
+
+	if out := memory("rm", "--scope", "U2", "--all"); !strings.Contains(out, "forgot 1") {
+		t.Errorf("rm --all printed %q", out)
+	}
+
+	assertNoMemories(t, path, "U2")
+
+	if out := memory(); !strings.Contains(out, "no memories are kept") {
+		t.Errorf("steps memory with nothing kept = %q", out)
 	}
 }

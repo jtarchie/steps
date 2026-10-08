@@ -33,7 +33,7 @@ func TestTopLevelCommandsAreTheDocumentedSet(t *testing.T) {
 	want := map[string]bool{
 		"Run": true, "Test": true, "Validate": true,
 		"Runs": true, "Plan": true, "MCP": true,
-		"Jobs": true, "Approvals": true, "Questions": true,
+		"Jobs": true, "Approvals": true, "Questions": true, "Memory": true,
 		"Web": true, "Pipeline": true, "Docs": true,
 	}
 
@@ -171,6 +171,7 @@ func TestGroupedVerbsKeepTheirBareForm(t *testing.T) {
 		{append([]string{"approvals"}, readArgs(path)...), append([]string{"approvals", "list"}, readArgs(path)...), "no approvals are waiting"},
 		{append([]string{"questions"}, readArgs(path)...), append([]string{"questions", "list"}, readArgs(path)...), "no questions are waiting"},
 		{append([]string{"jobs"}, readArgs(path)...), append([]string{"jobs", "list"}, readArgs(path)...), "no jobs are held"},
+		{append([]string{"memory"}, readArgs(path)...), append([]string{"memory", "list"}, readArgs(path)...), "no memories are kept"},
 	} {
 		t.Run(group.bare[0], func(t *testing.T) {
 			for _, args := range [][]string{group.bare, group.full} {

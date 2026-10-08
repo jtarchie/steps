@@ -47,6 +47,7 @@ type CLI struct {
 	Jobs      JobsCmd          `cmd:""                                  help:"jobs the circuit breaker has paused, and taking one out of it"`
 	Approvals ApprovalsCmd     `cmd:""                                  help:"approval: steps waiting for a decision, and deciding them"`
 	Questions QuestionsCmd     `cmd:""                                  help:"ask_user questions waiting for an answer, and answering them"`
+	Memory    MemoryCmd        `cmd:""                                  help:"what agent steps remember between runs, and deleting it"`
 	Web       WebCmd           `cmd:""                                  help:"serve the UI, poll trigger: true resources, and run affected jobs"`
 	Pipeline  PipelineCmd      `cmd:""                                  help:"tell a steps web daemon which pipelines to serve"`
 	Docs      DocsCmd          `cmd:""                                  help:"read the docs in the terminal (no page name lists them)"`
