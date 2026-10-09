@@ -1,27 +1,5 @@
 {
   "packages": {
-    "./internal/merkle": {
-      "swept_at": "fc9bbc9",
-      "date": "2026-09-19",
-      "killed": 161,
-      "lived": 5,
-      "timed_out": 0,
-      "not_covered": 30,
-      "efficacy": 96.99,
-      "note": "Was 78.31 with 36 survivors. 31 were one class - a field folded into the key only when set, with nothing proving that setting it moves the key or that leaving it unset does not - and keyfields_test.go now kills them. The 5 left are plan-time control flow on three lines (planNonGetNode's across: dispatch, planTaskNode's dynamic flag, acrossNode's error path): NOT triaged. They are the kind ./e2e usually kills and package mode never runs; nobody has applied them and looked.",
-      "equivalent": []
-    },
-    "./internal/outcome": {
-      "swept_at": "fc9bbc9",
-      "date": "2026-09-19",
-      "killed": 4,
-      "lived": 0,
-      "timed_out": 0,
-      "not_covered": 3,
-      "efficacy": 100,
-      "note": "",
-      "equivalent": []
-    },
     "./internal/agent": {
       "swept_at": "b7c68ec",
       "date": "2026-09-21",
@@ -66,6 +44,229 @@
         }
       ]
     },
+    "./internal/blobstore": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 22,
+      "lived": 4,
+      "timed_out": 0,
+      "not_covered": 0,
+      "efficacy": 84.62,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": []
+    },
+    "./internal/compress": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 5,
+      "lived": 1,
+      "timed_out": 0,
+      "not_covered": 0,
+      "efficacy": 83.33,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": []
+    },
+    "./internal/config": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 1218,
+      "lived": 155,
+      "timed_out": 0,
+      "not_covered": 157,
+      "efficacy": 88.71,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "parallelism.go | CONDITIONALS_BOUNDARY | return s.Parallelism != nil && *s.Parallelism > 0",
+          "why": "desugarStepParallelism rejects parallelism <= 0 at load, so no loaded step ever holds 0."
+        },
+        {
+          "mutant": "tags.go | CONDITIONALS_BOUNDARY | if len(job.Tags) > 0 {",
+          "why": "It yields an empty placement that carries a from label, and every reader of from (describe/hint) is behind a len(placed.tags)==0 early return."
+        },
+        {
+          "mutant": "tags.go | CONDITIONALS_BOUNDARY | if resolved.from == \"\" && len(resolved.tags) > 0 {",
+          "why": "Same reason: from is only read once placed.tags is non-empty."
+        },
+        {
+          "mutant": "tags.go | CONDITIONALS_BOUNDARY | if len(step.Tags) == 0 && len(placed.tags) > 0 {",
+          "why": "Cloning an empty placement into a step whose Tags is already empty changes nothing any len-based reader can see."
+        },
+        {
+          "mutant": "mcpvalidate.go | INCREMENT_DECREMENT | declared++",
+          "why": "declared is only compared to 0, and counting down from 0 never reaches 0 either."
+        },
+        {
+          "mutant": "git.go | CONDITIONALS_BOUNDARY | if index < 0 || c.ResourceTypes[index].Config.Check != builtin.Config.Check {",
+          "why": "Index 0 is always a user-declared type (builtins are appended after), and a user type gets git's rules only if its check: is byte-identical to the builtin's."
+        },
+        {
+          "mutant": "git.go | CONDITIONALS_BOUNDARY | if r < ' ' {",
+          "why": "A space is already rejected by the ContainsAny check just above."
+        },
+        {
+          "mutant": "acrossvalidate.go | CONDITIONALS_BOUNDARY | if step.MaxInFlight < 0 {",
+          "why": "MaxInFlight == 0 returns early above, so 0 never reaches this comparison."
+        },
+        {
+          "mutant": "lines.go | CONDITIONALS_BOUNDARY | if i >= len(c.Jobs) {",
+          "why": "The node tree and the decoded slice come from the same document, so their lengths always match."
+        },
+        {
+          "mutant": "lines.go | CONDITIONALS_BOUNDARY | if j >= len(c.Jobs[i].Plan) {",
+          "why": "The node tree and the decoded slice come from the same document, so their lengths always match."
+        },
+        {
+          "mutant": "lines.go | CONDITIONALS_BOUNDARY | for i := 0; i+1 < len(node.Content); i += 2 {",
+          "why": "A mapping node's Content always has even length, so i+1 never equals len."
+        },
+        {
+          "mutant": "lines.go | CONDITIONALS_BOUNDARY | if line <= 0 {",
+          "why": "Every decoded job and plan step has a line of at least 1; line 0 exists only on configs built in Go."
+        },
+        {
+          "mutant": "strictyaml.go | CONDITIONALS_BOUNDARY | for i := 0; i+1 < len(node.Content); i += 2 {",
+          "why": "A mapping node's Content always has even length, so i+1 never equals len."
+        },
+        {
+          "mutant": "across.go | CONDITIONALS_BOUNDARY | if i := strings.Index(cleaned, \"/\"); i >= 0 {",
+          "why": "An absolute from_file is rejected at load (checkFromFilePath), so a cleaned path never starts with '/'."
+        },
+        {
+          "mutant": "across.go | ARITHMETIC_BASE | vars: make(map[string]string, len(combo.vars)+1),",
+          "why": "Only a map capacity hint; Go treats a negative hint as 0."
+        },
+        {
+          "mutant": "across.go | ARITHMETIC_BASE | merged := make(map[string]string, len(combo.vars)+1)",
+          "why": "Only a map capacity hint; Go treats a negative hint as 0."
+        },
+        {
+          "mutant": "builtin.go | CONDITIONALS_BOUNDARY | if len(name) > 4 && name[len(name)-4:] == \".yml\" {",
+          "why": "The embedded built-in dir has no file named exactly '.yml'."
+        },
+        {
+          "mutant": "builtin.go | CONDITIONALS_BOUNDARY | if c.findResourceTypeIndex(WebhookType) < 0 {",
+          "why": "A user-declared webhook type is refused at load either way (validateWebhookResources), so a duplicate builtin entry is never observed."
+        },
+        {
+          "mutant": "builtin.go | CONDITIONALS_BOUNDARY | if c.findResourceTypeIndex(CronType) < 0 {",
+          "why": "A user-declared cron type is refused at load either way (validateCronResources)."
+        },
+        {
+          "mutant": "builtin.go | CONDITIONALS_BOUNDARY | if c.findResourceTypeIndex(name) < 0 {",
+          "why": "A user-declared github-* type is refused at load either way (validateGitHubResources)."
+        },
+        {
+          "mutant": "agentvision.go | CONDITIONALS_BOUNDARY | if at := strings.LastIndex(name, \"/\"); at >= 0 {",
+          "why": "Differs only for a model name starting with '/', which has an empty provider segment and is not a real model id."
+        },
+        {
+          "mutant": "config.go | CONDITIONALS_BOUNDARY | if len(includes) > 0 {",
+          "why": "Only changes Revision.Includes from nil to an empty map, and every consumer ranges over it, takes len, or uses maps.Equal."
+        }
+      ]
+    },
+    "./internal/dockerapi": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 89,
+      "lived": 8,
+      "timed_out": 0,
+      "not_covered": 11,
+      "efficacy": 91.75,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": []
+    },
+    "./internal/events": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 18,
+      "lived": 2,
+      "timed_out": 1,
+      "not_covered": 6,
+      "efficacy": 90,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "events.go | INCREMENT_DECREMENT | b.nextID++",
+          "why": "ids are only map keys; counting down keeps them unique"
+        },
+        {
+          "mutant": "events.go | INCREMENT_DECREMENT | b.nextObserver++",
+          "why": "ids are only map keys; counting down keeps them unique"
+        }
+      ]
+    },
+    "./internal/exprlang": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 71,
+      "lived": 12,
+      "timed_out": 8,
+      "not_covered": 3,
+      "efficacy": 85.54,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "exprlang.go | ARITHMETIC_BASE | options := make([]expr.Option, 0, 1+len(funcs)+len(bans))",
+          "why": "Only a capacity hint: the second + flipped never goes negative. The first + flipped panics and is killed, so keying the line loses nothing."
+        },
+        {
+          "mutant": "http.go | CONDITIONALS_BOUNDARY | if seconds > int(maxRetryAfter/time.Second) {",
+          "why": "At exactly the cap both branches return maxRetryAfter."
+        }
+      ]
+    },
+    "./internal/mcp": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 156,
+      "lived": 20,
+      "timed_out": 2,
+      "not_covered": 16,
+      "efficacy": 88.64,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "loopback.go | ARITHMETIC_BASE | cb.server = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}",
+          "why": "A slowloris bound on a loopback callback; only a peer that stalls mid-header could ever observe it."
+        },
+        {
+          "mutant": "stdio.go | CONDITIONALS_BOUNDARY | if w.buf.Len() > stderrLoggerMaxLine {",
+          "why": "A memory cap on a debug-log partial line; flushing at exactly 8KiB rather than 8KiB+1 is no contract."
+        },
+        {
+          "mutant": "challenge.go | CONDITIONALS_BOUNDARY | for pos < len(header) {",
+          "why": "The pos >= len(header) check right after skipSeparators breaks before the extra iteration does anything."
+        },
+        {
+          "mutant": "oauth.go | CONDITIONALS_BOUNDARY | if len(safe) > 64 {",
+          "why": "Slicing a 64-byte slice to [:64] is the identity."
+        }
+      ]
+    },
+    "./internal/merkle": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 170,
+      "lived": 3,
+      "timed_out": 0,
+      "not_covered": 30,
+      "efficacy": 98.27,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": []
+    },
+    "./internal/outcome": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 6,
+      "lived": 0,
+      "timed_out": 0,
+      "not_covered": 3,
+      "efficacy": 100,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": []
+    },
     "./internal/pipeline": {
       "swept_at": "6645ad0",
       "date": "2026-09-22",
@@ -106,15 +307,180 @@
         }
       ]
     },
-    "./internal/store/sqlite": {
-      "swept_at": "6645ad0",
-      "date": "2026-09-22",
-      "killed": 7,
-      "lived": 0,
+    "./internal/resource": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 357,
+      "lived": 43,
       "timed_out": 1,
+      "not_covered": 93,
+      "efficacy": 89.25,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "github.go | CONDITIONALS_BOUNDARY | return a < b",
+          "why": "guarded by a != b, so a == b never reaches the comparison"
+        },
+        {
+          "mutant": "github.go | CONDITIONALS_BOUNDARY | return versionField(versions[i], \"id\") < versionField(versions[j], \"id\")",
+          "why": "only differs for versions tied on both updated and id, whose input order already comes from map iteration over the listings"
+        },
+        {
+          "mutant": "resource.go | ARITHMETIC_BASE | seen := make(map[string]bool, len(typeEnv)+len(extraEnv))",
+          "why": "a map size hint only; a negative hint does not panic and changes no result"
+        }
+      ]
+    },
+    "./internal/retry": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 6,
+      "lived": 5,
+      "timed_out": 0,
+      "not_covered": 2,
+      "efficacy": 54.55,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "retry.go | CONDITIONALS_BOUNDARY | if attempts < 1 {",
+          "why": "at attempts == 1 the branch assigns 1, the value it already had"
+        },
+        {
+          "mutant": "retry.go | CONDITIONALS_BOUNDARY | if attempt > 0 {",
+          "why": "adds only a zero-length wait before attempt 0; it differs only for an already-cancelled ctx, where it races time.After(0) nondeterministically and fn would receive that cancelled ctx anyway"
+        },
+        {
+          "mutant": "retry.go | ARITHMETIC_BASE | slog.WarnContext(ctx, \"retry.not_retryable\", \"attempt\", attempt+1, \"attempts\", attempts, \"error\", stop.Err)",
+          "why": "changes only a number in a log line"
+        },
+        {
+          "mutant": "retry.go | ARITHMETIC_BASE | slog.WarnContext(ctx, \"retry.attempt_failed\", \"attempt\", attempt+1, \"attempts\", attempts, \"error\", lastErr)",
+          "why": "changes only a number in a log line"
+        }
+      ]
+    },
+    "./internal/runview": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 153,
+      "lived": 46,
+      "timed_out": 0,
+      "not_covered": 39,
+      "efficacy": 76.88,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "live.go | CONDITIONALS_BOUNDARY | if rows := max(l.Height()-1, 1); len(region) > rows {",
+          "why": "When len(region) == rows, region[:rows] is the whole slice, so >= changes nothing."
+        },
+        {
+          "mutant": "live.go | CONDITIONALS_BOUNDARY | if len(t.lines) > tailLines {",
+          "why": "When len == tailLines, keeping the last tailLines lines keeps all of them, so >= changes nothing."
+        },
+        {
+          "mutant": "live.go | CONDITIONALS_BOUNDARY | if len(shown) > tailLines {",
+          "why": "When len == tailLines, keeping the last tailLines lines keeps all of them, so >= changes nothing."
+        },
+        {
+          "mutant": "runview.go | CONDITIONALS_BOUNDARY | if !found || sent.After(newest) || (sent.Equal(newest) && d > depth) {",
+          "why": "Map keys are unique, so after the first pick d never equals depth and >= cannot behave differently from >."
+        },
+        {
+          "mutant": "runview.go | CONDITIONALS_BOUNDARY | if row.Seq > f.run.LastSeq {",
+          "why": "On equality, >= assigns LastSeq the value it already has."
+        }
+      ]
+    },
+    "./internal/store": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 1,
+      "lived": 1,
+      "timed_out": 0,
+      "not_covered": 15,
+      "efficacy": 50,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": []
+    },
+    "./internal/store/sqlite": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 348,
+      "lived": 23,
+      "timed_out": 9,
+      "not_covered": 6,
+      "efficacy": 93.8,
+      "note": "Fell from 100 (6645ad0) to 93.80: 23 survivors on code added since — transcript truncation past the cap (its fuzz seed skipped itself), zero-history prune and delivery paths, the memory cap. Triaged 2026-10-09: tests in storetest and sqlite for each real gap, equivalents below; the 9 TIMED OUT confirmed as real hangs (a transaction left open holds the write lock).",
+      "equivalent": [
+        {
+          "mutant": "versions.go | CONDITIONALS_BOUNDARY | if order <= 0 {",
+          "why": "Recording a mark of 0 stores a row that ConsumedMark reads back as 0, the same answer as no row, and MAX keeps every later advance unchanged."
+        },
+        {
+          "mutant": "revisions.go | CONDITIONALS_BOUNDARY | if len(includes) > 0 {",
+          "why": "Only changes nil vs an empty map for Includes; every consumer ranges or looks up, which behaves the same on both."
+        },
+        {
+          "mutant": "revisions.go | CONDITIONALS_BOUNDARY | return deleted > 0, nil",
+          "why": "Always-true only commits an empty transaction instead of rolling it back; same rows, and the IMMEDIATE lock was already taken at BeginTx."
+        },
+        {
+          "mutant": "retention.go | CONDITIONALS_BOUNDARY | return affected > 0, nil",
+          "why": "Always-true only commits an empty transaction or runs the post-node-prune sweeps over nothing; the stored rows are identical (covers pruneRunRows and pruneNodes)."
+        },
+        {
+          "mutant": "retention.go | CONDITIONALS_BOUNDARY | return deleted > 0, nil",
+          "why": "Always-true only commits an empty transaction instead of rolling it back; the stored rows are identical."
+        }
+      ]
+    },
+    "./internal/template": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 3,
+      "lived": 0,
+      "timed_out": 0,
       "not_covered": 0,
       "efficacy": 100,
-      "note": "First sweep, scoped SINCE=9ea6941 (placement.go only). The one TIMED OUT (RunPlacements' err check negated) was applied by hand: it hangs the conformance suite, a real kill.",
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": []
+    },
+    "./internal/testsshd": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 15,
+      "lived": 1,
+      "timed_out": 3,
+      "not_covered": 4,
+      "efficacy": 93.75,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "testsshd.go | ARITHMETIC_BASE | Timeout:         10 * time.Second,",
+          "why": "10/time.Second is 0, meaning no dial timeout; only a test sshd that never answers the handshake would show the difference, and that would hang to the test's own -timeout instead of failing after 10s."
+        }
+      ]
+    },
+    "./internal/treedigest": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 18,
+      "lived": 0,
+      "timed_out": 0,
+      "not_covered": 2,
+      "efficacy": 100,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": []
+    },
+    "./internal/trigger": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 75,
+      "lived": 2,
+      "timed_out": 0,
+      "not_covered": 14,
+      "efficacy": 97.4,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
       "equivalent": []
     },
     "./internal/venue": {
@@ -145,15 +511,83 @@
         }
       ]
     },
-    "./internal/wire": {
-      "swept_at": "6645ad0",
-      "date": "2026-09-22",
-      "killed": 65,
-      "lived": 7,
+    "./internal/venue/iapdial": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 30,
+      "lived": 12,
+      "timed_out": 3,
+      "not_covered": 11,
+      "efficacy": 71.43,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "channel.go | INVERT_NEGATIVES | return nil, fmt.Errorf(\"the length prefix says %d bytes and %d follow\", length, len(body)-4)",
+          "why": "Changes only a number in diagnostic text."
+        },
+        {
+          "mutant": "channel.go | ARITHMETIC_BASE | return nil, fmt.Errorf(\"the length prefix says %d bytes and %d follow\", length, len(body)-4)",
+          "why": "Changes only a number in diagnostic text."
+        },
+        {
+          "mutant": "dial.go | CONDITIONALS_NEGATION | if response != nil && response.Body != nil {",
+          "why": "gorilla/websocket v1.5.3 always returns the response body as an io.NopCloser, so skipping its Close changes nothing; the response==nil variant panics and TestAnUnreachableRelayIsAnError kills it."
+        }
+      ]
+    },
+    "./internal/venue/ssmdial": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 36,
+      "lived": 17,
+      "timed_out": 12,
+      "not_covered": 27,
+      "efficacy": 67.92,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "message.go | INVERT_NEGATIVES | errMalformedMessage, len(data)-lengthEnd, m.payloadLength)",
+          "why": "Changes only a number in diagnostic text."
+        },
+        {
+          "mutant": "message.go | ARITHMETIC_BASE | errMalformedMessage, len(data)-lengthEnd, m.payloadLength)",
+          "why": "Changes only a number in diagnostic text."
+        },
+        {
+          "mutant": "channel.go | ARITHMETIC_BASE | dialer := websocket.Dialer{HandshakeTimeout: 30 * time.Second}",
+          "why": "A zero handshake timeout only matters against a peer that hangs mid-upgrade, and Open's ctx still bounds the dial."
+        },
+        {
+          "mutant": "channel.go | CONDITIONALS_NEGATION | if response != nil && response.Body != nil {",
+          "why": "Only reached after a successful dial, where gorilla always returns a non-nil response with an io.NopCloser body, so neither negation changes anything."
+        }
+      ]
+    },
+    "./internal/webhook": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 30,
+      "lived": 5,
       "timed_out": 0,
       "not_covered": 11,
-      "efficacy": 90.28,
-      "note": "First sweep, scoped SINCE=9ea6941 (frame.go, tar.go, message.go). 7 survivors: 5 boundary checks now pinned by TestFrameLimitsAcceptTheValueItself and TestFrameLimitsRefuseOnePast, the withinRoot climb by TestPackPathsRefusesASymlinkedName's esc/never case; 1 equivalent.",
+      "efficacy": 85.71,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "webhook.go | CONDITIONALS_BOUNDARY | if len(vals) > 0 {",
+          "why": "No parser that builds a Request (net/http, url.ParseQuery, ParseRequest) produces a key with zero values, so vals[0] is never reached on an empty slice."
+        }
+      ]
+    },
+    "./internal/wire": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 60,
+      "lived": 2,
+      "timed_out": 0,
+      "not_covered": 1,
+      "efficacy": 96.77,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
       "equivalent": [
         {
           "mutant": "tar.go | CONDITIONALS_NEGATION | if err == nil && closeErr != nil {",
@@ -162,14 +596,14 @@
       ]
     },
     "./internal/workspace": {
-      "swept_at": "6645ad0",
-      "date": "2026-09-22",
-      "killed": 129,
-      "lived": 9,
-      "timed_out": 0,
-      "not_covered": 25,
-      "efficacy": 93.48,
-      "note": "First sweep, scoped SINCE=9ea6941 (workspace.go, stepcache.go, remote.go, placed.go, cache.go). 9 survivors: validateCachedNames' mapped-path check and discardStaged's committed skip now pinned by stepcache_sweep_test.go; 7 equivalent.",
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 197,
+      "lived": 12,
+      "timed_out": 8,
+      "not_covered": 52,
+      "efficacy": 94.26,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
       "equivalent": [
         {
           "mutant": "stepcache.go | CONDITIONALS_NEGATION | if err != nil { (StoreStep best-effort, SaveStepCache)",
@@ -198,6 +632,30 @@
         {
           "mutant": "workspace.go | INCREMENT_DECREMENT | b.generations[name]++",
           "why": "rememberDigest compares generations for equality, so any change of the counter invalidates a walk in flight"
+        },
+        {
+          "mutant": "digest.go | CONDITIONALS_NEGATION | if info.Mode()&0o111 != 0 {",
+          "why": "inverts the exec byte for every file, a consistent relabelling; this digest is only compared with itself, so executable and non-executable files still digest differently"
+        },
+        {
+          "mutant": "entrystore.go | CONDITIONALS_BOUNDARY | if len(dirs) <= s.maxEntries {",
+          "why": "when len equals max the loop evicts dirs[:0], which is nothing"
+        }
+      ]
+    },
+    "./tools/sqlscope": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 17,
+      "lived": 3,
+      "timed_out": 0,
+      "not_covered": 5,
+      "efficacy": 85,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "sqlscope.go | CONDITIONALS_BOUNDARY | if !ok || depth > maxConstDepth {",
+          "why": "The bound is an arbitrary guard for non-compiling cycles; off by one only changes whether a chain of exactly nine const-to-const references folds, which no real source has."
         }
       ]
     }
