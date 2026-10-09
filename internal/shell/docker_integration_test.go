@@ -146,6 +146,12 @@ func TestDockerRunnerIntegrationCancellationTerminatesWithinGrace(t *testing.T) 
 
 	defer CloseRunner(runner, "test")
 
+	// The container is started first, untimed: a cancel that lands during create waits out createBound by design (a cancelled create still has to remove what it made), and a loaded daemon put the 500ms there and measured 22s.
+	_, _, _, err = runner.RunCaptureFull(t.Context(), "true")
+	if err != nil {
+		t.Fatalf("starting the session: %v", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 

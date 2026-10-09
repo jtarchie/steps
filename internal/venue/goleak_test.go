@@ -19,6 +19,9 @@ func TestMain(m *testing.M) {
 	// One cache namespace per process: test shards share a daemon, and content-addressed entries would otherwise be shared across them.
 	_ = os.Setenv("STEPS_TEST_CACHE_NAMESPACE", strconv.Itoa(os.Getpid())+"-")
 
+	// Four shards share one docker VM, and a saturated one was measured taking over 30s to tear a docker+ session down; the bound is margin for a loaded machine, not a claim about teardown speed. A close that hangs still fails.
+	closeTimeout = 2 * time.Minute
+
 	goleak.VerifyTestMain(m, append(sdkPoolIgnores(), goleak.Cleanup(func(code int) {
 		removeProcessCache()
 		os.Exit(code)

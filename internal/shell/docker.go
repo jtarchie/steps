@@ -400,6 +400,14 @@ func (s *dockerSession) postmortem(ctx context.Context, client *dockerapi.Client
 // A var only so a test can take the window away and prove diagnose catches what it misses.
 var dockerSettleBound = 300 * time.Millisecond
 
+// WidenSettleBoundForTest is that seam for a test outside this package whose fixture image must be caught dying at birth on a loaded daemon, where 300ms loses the bet and the step's command runs in the dying container instead. Not safe beside a parallel test; restore with the func it returns.
+func WidenSettleBoundForTest(bound time.Duration) (restore func()) {
+	previous := dockerSettleBound
+	dockerSettleBound = bound
+
+	return func() { dockerSettleBound = previous }
+}
+
 // dockerLogTailLines is how much of a dead container's output is quoted back.
 // Enough for an image's own error message, short enough to read in a step's
 // failure.
