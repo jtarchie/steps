@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -153,5 +154,31 @@ func TestSweepOrderIsCheapFirstAndSerialPackagesLast(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("order = %v, want %v: an interrupted night should leave the most rows, and the hours-long serial packages should not be what it was interrupted in", got, want)
+	}
+}
+
+func TestOnlyPackagesWithTestsOfTheirOwnAreSwept(t *testing.T) {
+	t.Chdir("../..")
+
+	tested, err := packageDirs(t.Context(), testedPackages)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := packageDirs(t.Context(), allPackages)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if slices.Contains(tested, "./internal/store/storetest") {
+		t.Error("storetest has no tests of its own; package mode scores every mutant NOT COVERED")
+	}
+
+	if !slices.Contains(all, "./internal/store/storetest") {
+		t.Error("storetest must stay known, or ./internal/store's sweep stops excluding it")
+	}
+
+	if !slices.Contains(tested, "./internal/merkle") {
+		t.Errorf("tested = %v, want ./internal/merkle among them", tested)
 	}
 }

@@ -108,7 +108,7 @@ func stalenessOfAll(ctx context.Context) ([]staleness, error) {
 		return nil, err
 	}
 
-	dirs, err := packageDirs(ctx)
+	dirs, err := packageDirs(ctx, testedPackages)
 	if err != nil {
 		return nil, err
 	}
@@ -268,8 +268,14 @@ func readLedger() (ledger, error) {
 	return book, nil
 }
 
-func packageDirs(ctx context.Context) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "go", "list", "-f", `{{if .GoFiles}}{{.Dir}}{{end}}`, "./...")
+// allPackages is every package with source; testedPackages only those with tests of their own. A package with none (storetest, docs) has every mutant NOT COVERED in package mode, so measuring it records a meaningless row and nagging about it is noise — its killers live in the packages that import it.
+const (
+	allPackages    = `{{if .GoFiles}}{{.Dir}}{{end}}`
+	testedPackages = `{{if and .GoFiles (or .TestGoFiles .XTestGoFiles)}}{{.Dir}}{{end}}`
+)
+
+func packageDirs(ctx context.Context, filter string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "go", "list", "-f", filter, "./...") //nolint:gosec // filter is one of the two constants above
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -482,7 +488,8 @@ func writeLedger(book ledger) error {
 // serialPackages are the ones whose tests bind ports, spawn containers or share the docker daemon: parallel mutants there fail each other's tests and are scored KILLED for the wrong reason. They also take hours, so they go last.
 var serialPackages = map[string]bool{ //nolint:gochecknoglobals // a fixed table
 	"./internal/pipeline": true, "./internal/venue": true, "./internal/shell": true, "./internal/web": true,
-	"./internal/cli": true, "./internal/dockerapi": true, "./internal/trigger": true,
+	"./internal/cli": true, "./internal/dockerapi": true, "./internal/trigger": true, "./internal/agent": true,
+	"./internal/store/postgres": true, "./internal/treedigest": true, "./internal/testsshd": true,
 }
 
 // sweepOrder is cheapest first, serial packages last: a night that gets interrupted should leave the most rows behind, and should not have spent itself inside the one package that takes hours.
@@ -523,13 +530,17 @@ func childExcludes(dir string, all []string) []string {
 
 // sweepAll MEASURES every package and triages none. Measuring is machine time and can run unattended; triage is judgment and cannot, so the two are kept apart — this fills the ledger with real floors and a survivor count per package, and the mutation-sweep skill works through them afterwards. Resumable: a package already measured at this commit is skipped.
 func sweepAll(ctx context.Context, only []string) error {
-	dirs, err := packageDirs(ctx)
+	dirs, err := packageDirs(ctx, allPackages)
 	if err != nil {
 		return err
 	}
 
 	// Every package is still needed to know a parent's children; `only` narrows what is swept, not what is known.
-	targets := dirs
+	targets, err := packageDirs(ctx, testedPackages)
+	if err != nil {
+		return err
+	}
+
 	if len(only) > 0 {
 		targets = only
 	}
