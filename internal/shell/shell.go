@@ -62,12 +62,13 @@ type Runner interface {
 	// RunCaptureFullLimitedStreamed behaves exactly like RunCaptureFullLimited,
 	// except stdout/stderr are ALSO streamed live (prefixed, when WithLabel
 	// was used) while being captured — unlike every other RunCaptureFull*
-	// variant, which never streams. Used only by run_shell/custom tools
-	// (internal/agent's shellToolResult): a model-directed command was
-	// previously invisible until the agent's final text response, which this
-	// fixes. RunCaptureFull/RunCaptureFullLimited stay silent for their other
-	// callers (a when: guard, an assert-mode task's own command) where the
-	// command's output isn't meant to be user-facing on its own.
+	// variant, which never streams. Used by run_shell/custom tools
+	// (internal/agent's shellToolResult), whose model-directed commands were
+	// otherwise invisible until the agent's final text response, and by a
+	// task judged by assert:/fix:, which needs its output both live and in
+	// hand. RunCaptureFull/RunCaptureFullLimited stay silent for their other
+	// callers (a when: guard) where the command's output isn't meant to be
+	// user-facing on its own.
 	RunCaptureFullLimitedStreamed(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error)
 	// WithLabel returns a copy of the runner that prefixes every line of
 	// whatever it streams live (Run, RunCapture's stderr,

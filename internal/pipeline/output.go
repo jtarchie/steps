@@ -34,6 +34,15 @@ type outputRecorder struct {
 
 // recordTaskOutput installs a recorder over ctx's output for a command about to run under label, returning the ctx to run it with. finish publishes the record.
 func recordTaskOutput(ctx context.Context, label string) (context.Context, *outputRecorder) {
+	return recordOutput(ctx, label, true)
+}
+
+// recordResourceOutput is recordTaskOutput for a get's in: or a put's out:, recording stderr only: out:'s stdout is the version the protocol parses, and Concourse records neither script's stdout for the same reason. Both streams still reach the terminal, prefixed.
+func recordResourceOutput(ctx context.Context, label string) (context.Context, *outputRecorder) {
+	return recordOutput(ctx, label, false)
+}
+
+func recordOutput(ctx context.Context, label string, withStdout bool) (context.Context, *outputRecorder) {
 	rec := &outputRecorder{}
 
 	ctx = events.Tee(ctx, func(stderr bool, inner io.Writer) io.Writer {
@@ -54,6 +63,10 @@ func recordTaskOutput(ctx context.Context, label string) (context.Context, *outp
 		prefixed, flush := shell.NewPrefixedStream(label, inner)
 		rec.flushes = append(rec.flushes, flush)
 
+		if !stderr && !withStdout {
+			return prefixed
+		}
+
 		if stderr {
 			rec.stderr = chunks
 		} else {
@@ -68,8 +81,11 @@ func recordTaskOutput(ctx context.Context, label string) (context.Context, *outp
 
 // finish publishes the record once the command has exited: whatever the chunkers still hold, then the whole as one output event, which the store takes as the signal to drop the chunks.
 func (r *outputRecorder) finish(ctx context.Context) {
-	r.stdout.close()
-	r.stderr.close()
+	for _, c := range []*chunker{r.stdout, r.stderr} {
+		if c != nil {
+			c.close()
+		}
+	}
 
 	for _, flush := range r.flushes {
 		flush()

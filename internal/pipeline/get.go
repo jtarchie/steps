@@ -279,7 +279,8 @@ func (w *planWalk) fetchTriggered(
 		// Notes and log lines about the fetch are the get's, and the context here is its CHILDREN'S (ctx holds the get as their parent), so name the get itself: recorded against no step, the version it fetched was drawn apart from its row.
 		fetchCtx := withStepLogger(events.WithStepID(placedCtx, parentStepFrom(ctx)), w.index, step)
 
-		err := fetchGetStepWithStep(fetchCtx, w.cfg, w.st, step, step.Get, resource, resourceType, version, bw)
+		// The identity rides only into the fetch, so the script's output is the get's and never reaches the remainder this get contains.
+		err := fetchGetStepWithStep(withStepIdentity(fetchCtx, w.jobName, w.index, step), w.cfg, w.st, step, step.Get, resource, resourceType, version, bw)
 
 		// Get-step hooks fire once per triggered build, in that build's own
 		// workspace, observing the fetch outcome. A fetch failure (or a hook that
@@ -499,7 +500,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	node := merkle.Node{Hash: hash, ParentHash: w.parentHash, Kind: merkle.NodeKindGet, StepIndex: i, Resource: resource.Name, Content: content}
 
 	return runPlaced(ctx, w.stepRunner, node, step.Get, noResult(func(ctx context.Context) error {
-		err := fetchGetStepWithStep(ctx, w.cfg, w.st, step, step.Get, *resource, *resourceType, version, w.bw)
+		err := fetchGetStepWithStep(withStepIdentity(ctx, w.jobName, i, step), w.cfg, w.st, step, step.Get, *resource, *resourceType, version, w.bw)
 
 		// Get-step hooks fire in the same workspace the resource was fetched into.
 		if err == nil && !step.Hooks.Empty() {
@@ -616,7 +617,10 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, st store.Deliveries, 
 	notef(ctx, "get: %s (version: %s)", artifact, versionText(version))
 
 	fetch := func(dir string) error {
-		err := rsrc.RunIn(ctx, cfg, resourceType, resource.Env, resource.Source, version, params, dir)
+		runCtx, recorder := recordResourceOutput(ctx, resourceType.Name+" in")
+		err := rsrc.RunIn(runCtx, cfg, resourceType, resource.Env, resource.Source, version, params, dir)
+		recorder.finish(ctx)
+
 		if err != nil {
 			return err //nolint:wrapcheck // the caller classifies and names the resource
 		}

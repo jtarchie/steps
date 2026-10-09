@@ -127,7 +127,10 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 			notef(ctx, "put: %s (attempt %d/%d)", putLabel(step), attempt, total)
 			slog.InfoContext(ctx, "job.put.attempt", "put", step.Put, "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
-			runResult, runErr := rsrc.RunOut(attemptCtx, cfg, *resourceType, resource.Env, resource.Source, step.Params, inputs, space.Dir())
+			runCtx, recorder := recordResourceOutput(attemptCtx, resourceType.Name+" out")
+			runResult, runErr := rsrc.RunOut(runCtx, cfg, *resourceType, resource.Env, resource.Source, step.Params, inputs, space.Dir())
+			recorder.finish(attemptCtx)
+
 			if runErr != nil {
 				// An eviction ends the attempts loop rather than spending
 				// it — the machine is gone, and the venue retry re-places.

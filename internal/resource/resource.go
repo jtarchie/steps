@@ -314,7 +314,7 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, extr
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
-	runner = runner.WithLabel(rt.Name + " in")
+	// Unlabeled: the caller prefixes what it streams, so a recorder between them keeps the script's own bytes.
 	defer shell.CloseRunner(runner, rt.Name+" in")
 
 	err = runner.Run(ctx, command)
@@ -375,7 +375,7 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, ext
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
 
-	runner = runner.WithLabel(rt.Name + " out")
+	// Unlabeled: the caller prefixes what it streams, so a recorder between them keeps the script's own bytes.
 	defer shell.CloseRunner(runner, rt.Name+" out")
 
 	out, err := runner.RunCapture(ctx, command)

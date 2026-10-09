@@ -6,14 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
-	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/retry"
@@ -332,7 +330,7 @@ func runFixTask(
 
 	failure := taskVerdict(rt, stdout, exitCode, workspaceDir)
 	if failure == nil {
-		return finishTask(ctx, rt, stdout, stderr, exitCode, workspaceDir, "")
+		return finishTask(rt, stdout, exitCode, workspaceDir, "")
 	}
 
 	notef(ctx, "task %q failed (%s); invoking fix agent %q", rt.Name, failure, rt.Fix.Agent)
@@ -355,12 +353,12 @@ func runFixTask(
 	}
 
 	// Verdict: re-run the command (its run:, not its fix:) and judge that.
-	stdout, stderr, exitCode, err = runCaptured(ctx, runner, rt)
+	stdout, _, exitCode, err = runCaptured(ctx, runner, rt)
 	if err != nil {
 		return err
 	}
 
-	return finishTask(ctx, rt, stdout, stderr, exitCode, workspaceDir,
+	return finishTask(rt, stdout, exitCode, workspaceDir,
 		fmt.Sprintf("still failing after fix agent %q", rt.Fix.Agent))
 }
 
@@ -383,18 +381,14 @@ func taskVerdict(rt config.ResolvedTask, stdout string, exitCode int, workspaceD
 	return nil
 }
 
-// finishTask publishes a completed run's output and turns the step's verdict
-// on it into the step's error. The publish comes first — a mismatch names the
-// expectation that failed and never the output that missed it, so suppressing
-// the output on failure would hide exactly what the reader needs.
+// finishTask turns the step's verdict on a completed run into the step's
+// error; runCaptured already published the run's output.
 //
 // attribution, when set, names what already tried and failed to make this run
 // pass, so a step its fixer could not rescue does not read like a step that
 // never had one. That distinction is the first thing an operator wants from a
 // red build of a feature that costs money per invocation.
-func finishTask(ctx context.Context, rt config.ResolvedTask, stdout, stderr string, exitCode int, workspaceDir, attribution string) error {
-	publishOutputForCurrentStep(ctx, stdout, stderr)
-
+func finishTask(rt config.ResolvedTask, stdout string, exitCode int, workspaceDir, attribution string) error {
 	failure := taskVerdict(rt, stdout, exitCode, workspaceDir)
 	if failure == nil {
 		return nil
@@ -412,22 +406,27 @@ func finishTask(ctx context.Context, rt config.ResolvedTask, stdout, stderr stri
 // task's own working directory, read before the caller (executeTask) captures
 // it into the artifact store.
 func runAssertedTask(ctx context.Context, runner shell.Runner, rt config.ResolvedTask, workspaceDir string) error {
-	stdout, stderr, exitCode, err := runCaptured(ctx, runner, rt)
+	stdout, _, exitCode, err := runCaptured(ctx, runner, rt)
 	if err != nil {
 		return err
 	}
 
-	return finishTask(ctx, rt, stdout, stderr, exitCode, workspaceDir, "")
+	return finishTask(rt, stdout, exitCode, workspaceDir, "")
 }
 
-// runCaptured runs rt.Run buffering both streams, echoes them (RunCaptureFull
-// does not stream live the way Run does), and returns the exit code as data.
+// runCaptured runs rt.Run buffering both streams for the verdict while
+// recording and streaming them as a plain task does, and returns the exit
+// code as data. The record is published here, before any verdict, so a
+// mismatch never hides the output that missed it.
 //
 // A signal-killed process — from a canceled ctx — is reported as data too, not
 // as err, so the cancellation is checked here rather than left for the caller
 // to misread as a genuine nonzero verdict.
 func runCaptured(ctx context.Context, runner shell.Runner, rt config.ResolvedTask) (stdout, stderr string, exitCode int, err error) {
-	stdout, stderr, exitCode, err = runner.RunCaptureFull(ctx, rt.Run)
+	ctx, recorder := recordTaskOutput(ctx, rt.Name)
+	stdout, stderr, exitCode, err = runner.WithLabel("").RunCaptureFullLimitedStreamed(ctx, rt.Run, 0, "")
+	recorder.finish(ctx)
+
 	if err != nil {
 		return "", "", 0, fmt.Errorf("task %q: %w", rt.Name, err)
 	}
@@ -435,14 +434,6 @@ func runCaptured(ctx context.Context, runner shell.Runner, rt config.ResolvedTas
 	cancelErr := shell.CanceledError(ctx)
 	if cancelErr != nil {
 		return "", "", 0, fmt.Errorf("task %q: %w", rt.Name, cancelErr)
-	}
-
-	if stdout != "" {
-		_, _ = io.WriteString(events.Stdout(ctx), shell.PrefixLines(rt.Name, stdout))
-	}
-
-	if stderr != "" {
-		_, _ = io.WriteString(events.Stderr(ctx), shell.PrefixLines(rt.Name, stderr))
 	}
 
 	return stdout, stderr, exitCode, nil

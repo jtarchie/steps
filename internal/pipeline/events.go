@@ -10,7 +10,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -291,25 +290,7 @@ func currentStepRef(ctx context.Context) (jobName string, index int) {
 	return identity.job, identity.index
 }
 
-// publishOutputForCurrentStep publishes a command's output against whichever
-// step the context says is running, and does nothing at all when no run put
-// an identity on the context. A hook body's output goes to the hook's own
-// row, named and kinded like the row runMatchedHook opened.
-func publishOutputForCurrentStep(ctx context.Context, stdout, stderr string) {
-	combined := strings.TrimRight(stdout, "\n")
-
-	if trimmed := strings.TrimRight(stderr, "\n"); trimmed != "" {
-		if combined != "" {
-			combined += "\n"
-		}
-
-		combined += trimmed
-	}
-
-	publishForCurrentStep(ctx, events.TypeStepOutput, "", combined)
-}
-
-// publishForCurrentStep publishes text of one output type against whichever step the context says is running — see publishOutputForCurrentStep. An empty text publishes nothing: an empty log block is worse than no log block.
+// publishForCurrentStep publishes text of one output type against whichever step the context says is running, and does nothing at all when no run put an identity on the context; a hook body's output goes to the hook's own row, named and kinded like the row runMatchedHook opened. An empty text publishes nothing: an empty log block is worse than no log block.
 func publishForCurrentStep(ctx context.Context, eventType, status, text string) {
 	identity, ok := ctx.Value(stepIdentityKey{}).(stepIdentity)
 	if !ok || text == "" {

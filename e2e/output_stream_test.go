@@ -82,6 +82,57 @@ jobs:
 		t.Fatalf("run: %v", err)
 	}
 
+	assertOneOutputRecord(t, path, "first\nsecond")
+}
+
+// TestACheckedTasksOutputIsRecordedAsItPrints: a task whose output is judged (assert:, fix:) streams like any other, rather than staying blank until it ends (steps#207).
+func TestACheckedTasksOutputIsRecordedAsItPrints(t *testing.T) {
+	const run = "echo first; sleep 3; echo second"
+
+	pipelines := map[string]func(dir string) string{
+		"assert": func(dir string) string {
+			return writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: slow
+    run: "`+run+`"
+    assert:
+      stdout: second
+`)
+		},
+		"fix": func(dir string) string {
+			return writeFixPipeline(t, dir, fixAgentServer(t).URL, `"`+run+`"`)
+		},
+	}
+
+	for name, write := range pipelines {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("STEPS_TEST_AGENT_API_KEY", "test-key")
+
+			path := write(t.TempDir())
+			done := make(chan error, 1)
+
+			go func() { done <- runSilently(path) }()
+
+			if !chunkSeenWhileRunning(t, path, "first", time.Now().Add(20*time.Second)) {
+				t.Error("the step's first line was never recorded while the step was still running")
+			}
+
+			err := <-done
+			if err != nil {
+				t.Fatalf("run: %v", err)
+			}
+
+			assertOneOutputRecord(t, path, "first\nsecond")
+		})
+	}
+}
+
+// assertOneOutputRecord: once the step ends, its live pieces are gone and one output record holding want stands in their place.
+func assertOneOutputRecord(t *testing.T, path, want string) {
+	t.Helper()
+
 	rows := recordedEvents(t, path)
 
 	var outputs []string
@@ -95,8 +146,8 @@ jobs:
 		}
 	}
 
-	if len(outputs) != 1 || outputs[0] != "first\nsecond" {
-		t.Errorf("recorded output = %q, want the two lines as one record", outputs)
+	if len(outputs) != 1 || outputs[0] != want {
+		t.Errorf("recorded output = %q, want %q as one record", outputs, want)
 	}
 }
 
@@ -164,5 +215,63 @@ jobs:
 		t.Errorf("the record does not say that its middle is missing")
 	case len(text) > 40_000:
 		t.Errorf("the record is %d bytes; the bound is the point", len(text))
+	}
+}
+
+// TestAResourceScriptsStderrIsRecordedAsItPrints: what a get's in: or a put's out: says on stderr is recorded while it runs and kept afterwards, and stdout is not — for out: it is the version the protocol parses, not something to show (steps#207).
+func TestAResourceScriptsStderrIsRecordedAsItPrints(t *testing.T) {
+	path := writePipeline(t, t.TempDir(), `
+resource_types:
+- name: slow
+  config:
+    check: echo '[{"ref":"v1"}]'
+    in: "echo fetching >&2; echo in-stdout; sleep 3; echo fetched >&2"
+    out: "echo pushing >&2; sleep 3; echo pushed >&2; echo '{\"ref\":\"v2\"}'"
+
+resources:
+- name: src
+  type: slow
+  source: {}
+- name: dep
+  type: slow
+  source: {}
+
+jobs:
+- name: build
+  plan:
+  - get: src
+  - get: dep
+  - put: src
+`)
+
+	done := make(chan error, 1)
+
+	go func() { done <- runSilently(path) }()
+
+	for _, first := range []string{"fetching", "pushing"} {
+		if !chunkSeenWhileRunning(t, path, first, time.Now().Add(20*time.Second)) {
+			t.Errorf("%q was never recorded while its step was still running", first)
+		}
+	}
+
+	err := <-done
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	outputs := map[string][]string{}
+
+	for _, row := range recordedEvents(t, path) {
+		if row.Type == events.TypeStepOutput {
+			step := row.StepKind + " " + row.StepName
+			outputs[step] = append(outputs[step], row.Text)
+		}
+	}
+
+	// dep is the second get, fetched in place rather than as the build's trigger: the other way a get reaches its script.
+	for step, want := range map[string]string{"get src": "fetching\nfetched", "get dep": "fetching\nfetched", "put src": "pushing\npushed"} {
+		if got := outputs[step]; len(got) != 1 || got[0] != want {
+			t.Errorf("%s recorded %q, want %q as one record", step, got, want)
+		}
 	}
 }

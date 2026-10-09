@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -328,7 +329,7 @@ jobs:
 	}
 }
 
-// TestAssertedTaskPublishesBothStreams: a task judged by assert: captures its streams rather than streaming them, and publishes stdout then stderr as one block, one line apart.
+// TestAssertedTaskPublishesBothStreams: a task judged by assert: records both its streams, as a plain task does — in arrival order, which across two pipes is not fixed, so only membership is asserted.
 func TestAssertedTaskPublishesBothStreams(t *testing.T) {
 	t.Parallel()
 
@@ -344,10 +345,20 @@ jobs:
     assert: { code: 0 }
 `, false)
 
-	for name, want := range map[string]string{"both": "out\nerr", "errs": "err"} {
+	for name, want := range map[string][]string{"both": {"out", "err"}, "errs": {"err"}} {
 		event := findStepEvent(collected, events.TypeStepOutput, "task", name)
-		if event == nil || event.Text != want {
-			t.Errorf("%s published %+v, want text %q", name, event, want)
+		if event == nil {
+			t.Errorf("%s published no output", name)
+
+			continue
+		}
+
+		got := strings.Split(event.Text, "\n")
+		slices.Sort(got)
+		slices.Sort(want)
+
+		if !slices.Equal(got, want) {
+			t.Errorf("%s published %q, want the lines %q", name, event.Text, want)
 		}
 	}
 }
