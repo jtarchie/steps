@@ -21,6 +21,7 @@ import (
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
+	"github.com/jtarchie/steps/internal/testdocker"
 	"github.com/jtarchie/steps/internal/venue"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -123,24 +124,6 @@ func borrowedRunWith(t *testing.T, yaml string, extra map[string]string) (contex
 	return ctx, cfg, provider, st, fake
 }
 
-// requireDocker skips a test whose placed step runs in a container on this machine's daemon when there is none.
-func requireDocker(t *testing.T) {
-	t.Helper()
-
-	_, err := exec.LookPath("docker")
-	if err != nil {
-		t.Skip("docker not found on PATH")
-	}
-
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-
-	err = exec.CommandContext(ctx, "docker", "info").Run()
-	if err != nil {
-		t.Skip("docker daemon not reachable (`docker info` failed)")
-	}
-}
-
 // awaitInContainer is the container of this process in which path exists: a placed step's files live in its container, which no host path reaches.
 func awaitInContainer(t *testing.T, path string) string {
 	t.Helper()
@@ -183,7 +166,7 @@ func containerPath(t *testing.T, name string) string {
 
 // The failure the registry exists for, end to end through RunJob: the job that finishes first used to stop the machine the other was mid-step on.
 func TestTwoJobsShareOneBorrowedMachine(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	started := containerPath(t, "started")
 	release := containerPath(t, "release")
@@ -239,7 +222,7 @@ jobs:
 
 // The #106/#103 seam: an abort cancels RunJob's context mid-step, exactly as web's LocalRunner.Abort does (a WithCancelCause over the drain, cancelled with a cause), and the borrowed machine must still be given back once. The likeliest reason a give-back runs is that the caller's context was just cancelled, so a release riding it never reaches the API.
 func TestAnAbortedJobGivesBackItsBorrowedMachine(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	started := containerPath(t, "started")
 
@@ -343,7 +326,7 @@ func fetchedRefs(out string) []string {
 
 // The poller keeps a polled resource's history, so a job's pre-plan refresh of one on a machine acquired on demand would start that machine for nothing the job needs.
 func TestAJobAcquiresNoMachineToRefreshAPolledResource(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	ctx, cfg, provider, st, fake := preplanFixture(t, "    trigger: true")
 
@@ -378,7 +361,7 @@ func TestAJobAcquiresNoMachineToRefreshAPolledResource(t *testing.T) {
 
 // Nothing polls this one, so the refresh is the only thing that ever moves its history: skipped, every run would build the first run's version forever.
 func TestARefreshStillChecksAResourceNothingPolls(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	ctx, cfg, provider, st, fake := preplanFixture(t, "")
 
@@ -463,7 +446,7 @@ func TestAWorkerThatCannotBeGivenBackIsReported(t *testing.T) {
 }
 
 func TestAPlacedStepIsRecordedWhereItRan(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	ctx, cfg, provider, st, _ := borrowedRun(t, `
 jobs:
@@ -511,7 +494,7 @@ jobs:
 // A placement row can only exist once its node does (run_placements references it), so one per case also proves the node-then-placement order on both outcomes.
 func TestEveryPlacedLeafStepIsRecordedWhereItRanPassOrFail(t *testing.T) {
 	t.Parallel()
-	requireDocker(t)
+	testdocker.Require(t)
 
 	cases := []struct {
 		name, plan, step string
@@ -627,7 +610,7 @@ func (e *evictingRunner) Close() error {
 
 // The check stage labels its runner, runs one command and closes what it holds; after a re-placement that must be the machine the check ended on, so it is closed and recorded, rather than the dead one a second time.
 func TestACheckReplacedMidCommandHandsTheStageTheMachineItEndedOn(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	ctx, _, _, _, fake := borrowedRun(t, `
 jobs:
@@ -762,7 +745,7 @@ var warmRungs = map[string]string{ //nolint:gochecknoglobals // a test table
 
 // A machine that died inside its idle window was handed to the next job as if alive, and the job failed on a plain dial error while a fresh machine was one acquisition away.
 func TestADeadWarmMachineIsReplacedOnce(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	for rung, worker := range warmRungs {
 		t.Run(rung, func(t *testing.T) {
@@ -795,7 +778,7 @@ func TestADeadWarmMachineIsReplacedOnce(t *testing.T) {
 
 // The twins: only a machine reused from its idle window is presumed reclaimed, only once, and a broken machine acquired fresh is still the plain failure it always was.
 func TestAMachineThatWillNotAnswerIsNotAlwaysAnEviction(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	for name, c := range map[string]struct {
 		machines []string
@@ -836,7 +819,7 @@ func warmJob(t *testing.T) (*config.Config, workspace.Provider, store.Store) {
 
 // A warm reuse is presumed dead only until it answers: once a step's session has shaken hands with it, a later step's refused dial on the same machine is that step's failure, and reading it as an eviction would launch a replacement and move every sharer off a live machine.
 func TestAWarmMachineThatAnsweredIsNoLongerPresumedDead(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	fake := &sequenced{machines: []string{"local:"}}
 	ctx, release := WithLeases(warmRegistry(t, warmRungs["launch"], fake, true))
@@ -873,7 +856,7 @@ func TestAWarmMachineThatAnsweredIsNoLongerPresumedDead(t *testing.T) {
 
 // Abandon is identity-checked against the machine a failed attempt dialled, so a check re-placed onto a machine that then fails too must name THAT machine: naming the one its stage was built on matched nothing, and every remaining re-placement redialled the same dead host.
 func TestARePlacedCheckAbandonsTheMachineItActuallyDialled(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	fake := &sequenced{machines: []string{deadWorker, "local:"}}
 	ctx, release := WithLeases(warmRegistry(t, warmRungs["launch"], fake, true))

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/testdocker"
 )
 
 // TestPrepareImagesAnnouncesOnlyTheMissingOne is the property that keeps this
@@ -24,7 +26,7 @@ import (
 // not one: a re-pull of an image whose layers are all cached returns in
 // milliseconds.
 func TestPrepareImagesAnnouncesOnlyTheMissingOne(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 	requireImagePresent(t, testImage)
 
 	const missing = "steps-test-no-such-image:definitely-not-here"
@@ -50,7 +52,7 @@ func TestPrepareImagesAnnouncesOnlyTheMissingOne(t *testing.T) {
 // pull of it CANNOT succeed, so this fails loudly rather than subtly if the
 // check ever regresses.
 func TestPrepareImagesLocallyBuiltImageIsNotPulled(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 	requireImagePresent(t, testImage)
 
 	const local = "steps-test-local-build:dev"
@@ -111,7 +113,7 @@ func TestPrepareImagesNoImagesNeedsNoDaemon(t *testing.T) {
 // keeping is the OUTCOME: such a value is looked up as the (invalid) image
 // name it is, and never changes how the daemon is asked.
 func TestPrepareImagesTreatsAFlagShapedNameAsAnImage(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	err := PrepareImages(context.Background(), []string{"--privileged"})
 	if err == nil {

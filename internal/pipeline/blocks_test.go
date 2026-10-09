@@ -13,6 +13,7 @@ import (
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/testdocker"
 )
 
 // TestBlockNodesRecordWhatTheBlockConcluded: a container's own node row is what `steps runs` and the node page read, so its status has to be the block's outcome rather than a constant.
@@ -182,7 +183,7 @@ func blockNode(t *testing.T, st store.Store, kind merkle.NodeKind) store.NodeRow
 
 // Like in_parallel, a matrix takes its worst cell's class: one cell saying no and another unable to run is errored, so on_error fires rather than on_failure, which is Concourse's answer for across too. The errored cell's image swallows the keepalive, so its container dies at birth — caught only inside the settle window, which a loaded daemon outlasts at 300ms and the cell then reads failed.
 func TestAcrossClassifiesByItsWorstCell(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 	t.Cleanup(shell.WidenSettleBoundForTest(5 * time.Second))
 
 	dies := "steps-test-dies-at-birth:" + strconv.Itoa(os.Getpid())

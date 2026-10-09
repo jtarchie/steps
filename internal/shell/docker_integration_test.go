@@ -8,69 +8,20 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/testdocker"
 )
 
-// requireDocker skips the calling test unless a usable Docker daemon is
-// reachable. Not opt-in: a test guarding a shipped feature does not get to be
-// optional, and one that was is how a containerized placed step shipped not
-// working. A test that BIND-MOUNTS needs mountableTempDir as well — the
-// daemon may be in a VM that cannot see this process's temp directory.
-func requireDocker(t *testing.T) {
-	t.Helper()
-
-	_, err := exec.LookPath("docker")
-	if err != nil {
-		t.Skip("docker not found on PATH")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	err = exec.CommandContext(ctx, "docker", "info").Run()
-	if err != nil {
-		t.Skip("docker daemon not reachable (`docker info` failed)")
-	}
-}
-
 const testImage = "alpine:3"
-
-// mountableTempDir returns a temp directory the docker daemon can actually
-// see, for a test that bind-mounts one.
-//
-// t.TempDir() is not good enough, and the reason is worth stating because the
-// failure is silent. When the daemon runs in a VM (Docker Desktop, colima)
-// only some host paths are shared into it: the user's home is, macOS's own
-// $TMPDIR (/var/folders/...) is not. Bind-mounting an unshared path does not
-// error — docker creates an empty directory at the mount target — so the
-// container writes happily into a phantom directory and the host sees
-// nothing. A real run is under the same constraint; see docs/infra.md on
-// TMPDIR.
-func mountableTempDir(t *testing.T) string {
-	t.Helper()
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("no home directory to root a daemon-visible temp dir in")
-	}
-
-	dir, err := os.MkdirTemp(home, ".steps-test-*")
-	if err != nil {
-		t.Skipf("cannot create a daemon-visible temp dir under %s: %v", home, err)
-	}
-
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-
-	return dir
-}
 
 // TestDockerRunnerIntegrationBindMountPersists and its siblings below are
 // split into separate top-level functions (rather than t.Run subtests of
 // one function) to stay under the linter's per-function
 // cyclomatic-complexity budget.
 func TestDockerRunnerIntegrationBindMountPersists(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	dir := mountableTempDir(t)
+	dir := testdocker.MountableDir(t)
 
 	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: dir})
 	if err != nil {
@@ -95,9 +46,9 @@ func TestDockerRunnerIntegrationBindMountPersists(t *testing.T) {
 }
 
 func TestDockerRunnerIntegrationExitCodeRoundTrips(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -115,11 +66,11 @@ func TestDockerRunnerIntegrationExitCodeRoundTrips(t *testing.T) {
 }
 
 func TestDockerRunnerIntegrationHostEnvNotVisible(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	t.Setenv("STEPS_TEST_HOST_SECRET", "leak-me-not")
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -137,9 +88,9 @@ func TestDockerRunnerIntegrationHostEnvNotVisible(t *testing.T) {
 }
 
 func TestDockerRunnerIntegrationCancellationTerminatesWithinGrace(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -180,9 +131,9 @@ func TestDockerRunnerIntegrationCancellationTerminatesWithinGrace(t *testing.T) 
 // `pip install x` followed by `python y` as two run_shell calls has to work.
 // Under the old fresh-container-per-command shape every assertion here failed.
 func TestDockerRunnerIntegrationStatePersistsAcrossCommands(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -219,9 +170,9 @@ func TestDockerRunnerIntegrationStatePersistsAcrossCommands(t *testing.T) {
 // daemon that a step leaves nothing running behind it — the orphaned-container
 // caveat the session shape was meant to retire.
 func TestDockerRunnerIntegrationCloseRemovesContainer(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	runnerIface, err := NewRunner(RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runnerIface, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -260,7 +211,7 @@ func TestDockerRunnerIntegrationCloseRemovesContainer(t *testing.T) {
 }
 
 func TestValidateDockerIntegration(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	err := ValidateDocker(context.Background())
 	if err != nil {

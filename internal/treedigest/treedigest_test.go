@@ -22,25 +22,9 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/jtarchie/steps/internal/testdocker"
 	"github.com/jtarchie/steps/internal/treedigest"
 )
-
-func requireDocker(t *testing.T) {
-	t.Helper()
-
-	_, err := exec.LookPath("docker")
-	if err != nil {
-		t.Skip("docker not found on PATH")
-	}
-
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-
-	err = exec.CommandContext(ctx, "docker", "info").Run()
-	if err != nil {
-		t.Skip("docker daemon not reachable (`docker info` failed)")
-	}
-}
 
 func digest(t *testing.T, fsys fs.FS) string {
 	t.Helper()
@@ -278,7 +262,7 @@ func busyboxDigests(t *testing.T, trees []fstest.MapFS, user string, prepare ...
 
 // The worker and the orchestrator must name a tree alike, or a held output is never found again.
 func TestScriptAgreesWithTree(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	const random = 300
 
@@ -316,7 +300,7 @@ func TestScriptAgreesWithTree(t *testing.T) {
 
 // An entry the worker cannot read must fail the digest, never hash as absent.
 func TestScriptFailsOnUnreadableFile(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	trees := []fstest.MapFS{
 		{"secret": {Data: []byte("x"), Mode: 0o000}},
@@ -468,7 +452,7 @@ func TestTreeFailsOnUnreadableFile(t *testing.T) {
 
 // MapFS cannot hold a name that is not UTF-8, so busybox's answer is checked against the manifest written out by hand.
 func TestScriptHexesBytesNotRunes(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	content := sha256.Sum256([]byte("x"))
 	manifest := "fffe d\n" + "fffe2f80 f - " + hex.EncodeToString(content[:]) + "\n"
@@ -490,7 +474,7 @@ func TestRawFSHandsNamesToTheOS(t *testing.T) {
 }
 
 func TestScriptRefusesScratchInsideTheRoot(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	trees := []fstest.MapFS{{"a": {Data: []byte("x"), Mode: 0o644}}, {"a": {Data: []byte("x"), Mode: 0o644}}}
 	sums := busyboxDigests(t, trees, "0", "export TMPDIR=/tmp/t/00000")

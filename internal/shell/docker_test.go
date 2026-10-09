@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/dockerapi"
+	"github.com/jtarchie/steps/internal/testdocker"
 )
 
 // TestContainerNamesAreUnique guards the reason names are random rather than
@@ -215,11 +216,11 @@ func ourContainerCountOf(t *testing.T, image string) int {
 // must cost nothing. A step whose command is skipped, or which fails before
 // running anything, should never have paid for a container.
 func TestNewRunnerDoesNotStartAContainer(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	before := ourContainerCount(t)
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -235,9 +236,9 @@ func TestNewRunnerDoesNotStartAContainer(t *testing.T) {
 // depends on: both streams kept apart, and a nonzero exit reported as data
 // rather than as a Go error.
 func TestDockerRunnerCaptureFull(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
 	stdout, stderr, exitCode, err := runner.RunCaptureFull(context.Background(),
 		"printf 'out text'; printf 'err text' >&2; exit 3")
@@ -276,10 +277,10 @@ func newTestRunner(t *testing.T, spec RunnerSpec) Runner {
 // commands from one runner land in the SAME container, so state a model
 // established in one run_shell call is still there for the next.
 func TestDockerRunnerReusesOneContainer(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	before := ourContainerCount(t)
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
 	for _, command := range []string{"echo one > /tmp/marker", "cat /tmp/marker"} {
 		_, _, code, err := runner.RunCaptureFull(context.Background(), command)
@@ -297,10 +298,10 @@ func TestDockerRunnerReusesOneContainer(t *testing.T) {
 // same step's container and not a second one — WithLabel changes how output is
 // printed, nothing else.
 func TestDockerRunnerWithLabelSharesOneContainer(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	before := ourContainerCount(t)
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
 	_, _, _, err := runner.RunCaptureFull(context.Background(), "true")
 	if err != nil {
@@ -320,9 +321,9 @@ func TestDockerRunnerWithLabelSharesOneContainer(t *testing.T) {
 // TestDockerRunnerCloseWithoutCommandsRemovesNothing pins that closing a
 // runner that never ran anything is safe — there was no container to remove.
 func TestDockerRunnerCloseWithoutCommandsRemovesNothing(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -336,9 +337,9 @@ func TestDockerRunnerCloseWithoutCommandsRemovesNothing(t *testing.T) {
 // TestDockerRunnerCloseIsIdempotent pins that a second Close is harmless, so
 // a deferred one beside an explicit one cannot report a failure.
 func TestDockerRunnerCloseIsIdempotent(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -364,11 +365,11 @@ func TestDockerRunnerCloseIsIdempotent(t *testing.T) {
 // one connection, and a reader that mishandled the framing would mangle
 // exactly this kind of content.
 func TestDockerRunnerCaptureFullPreservesAdversarialOutput(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	const adversarial = `it's a "test" with \backslashes\ and 'quotes'`
 
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
 	stdout, _, _, err := runner.RunCaptureFull(context.Background(), "cat /tmp/adversarial 2>/dev/null || printf '%s' "+singleQuote(adversarial))
 	if err != nil {
@@ -386,9 +387,9 @@ func singleQuote(value string) string {
 }
 
 func TestDockerRunnerRunErrorsOnNonzeroExit(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
 	err := runner.Run(context.Background(), "false")
 	if err == nil {
@@ -402,9 +403,9 @@ func TestDockerRunnerRunErrorsOnNonzeroExit(t *testing.T) {
 }
 
 func TestDockerRunnerRunCaptureReturnsStdout(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
 	out, err := runner.RunCapture(context.Background(), "printf 'captured output'")
 	if err != nil {
@@ -421,9 +422,9 @@ func TestDockerRunnerRunCaptureReturnsStdout(t *testing.T) {
 // log, unlike HostRunner.RunCapture — which exists so a failing check/out
 // command's output is available for debugging rather than discarded.
 func TestDockerRunnerRunCaptureLogsStderrOnFailure(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
 	var logBuf bytes.Buffer
 
@@ -498,7 +499,7 @@ func awaitExited(t *testing.T, client *dockerapi.Client, id string) {
 
 // The settle window is a bet on how fast a doomed container dies, and a loaded daemon loses it: the container outlives the window, the session calls it up, and the first command was answered with the daemon's bare "is not running" — naming neither the image nor the reason, which is the whole diagnosis. Reproduced on purpose: no window at all, and the container confirmed dead before the first command is sent.
 func TestDockerRunnerDiagnosesAContainerThatOutlivedTheSettleWindow(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	previous := dockerSettleBound
 	dockerSettleBound = 0
@@ -506,7 +507,7 @@ func TestDockerRunnerDiagnosesAContainerThatOutlivedTheSettleWindow(t *testing.T
 	t.Cleanup(func() { dockerSettleBound = previous })
 
 	image := entrypointImage(t)
-	runner := newTestRunner(t, RunnerSpec{Image: image, Cwd: mountableTempDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: image, Cwd: testdocker.MountableDir(t)})
 
 	docker, ok := runner.(DockerRunner)
 	if !ok {
@@ -538,9 +539,9 @@ func TestDockerRunnerDiagnosesAContainerThatOutlivedTheSettleWindow(t *testing.T
 
 // The same question asked later has a different answer: a container that ran a command and was then killed (an OOM, an operator, a daemon restart) did not die at birth, and telling its owner about ENTRYPOINTs would send them looking in the wrong place.
 func TestDockerRunnerSaysAContainerKilledMidStepStoppedRatherThanNeverStarted(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
 	_, _, _, err := runner.RunCaptureFull(t.Context(), "true")
 	if err != nil {
@@ -583,10 +584,10 @@ func TestDockerRunnerSaysAContainerKilledMidStepStoppedRatherThanNeverStarted(t 
 // Trusting that success left every later exec saying the container did not
 // exist, which names neither the image nor the reason.
 func TestDockerRunnerDetectsAContainerThatDiedAtBirth(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	image := entrypointImage(t)
-	runner := newTestRunner(t, RunnerSpec{Image: image, Cwd: mountableTempDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: image, Cwd: testdocker.MountableDir(t)})
 
 	_, _, _, err := runner.RunCaptureFull(t.Context(), "anything")
 	if err == nil {
@@ -618,9 +619,9 @@ func TestDockerRunnerDetectsAContainerThatDiedAtBirth(t *testing.T) {
 // reads as "the guard said false", and the work it gates is skipped with
 // nothing red anywhere.
 func TestRunOnAContainerThatDiedAtBirthIsNotAnExitError(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	runner := newTestRunner(t, RunnerSpec{Image: entrypointImage(t), Cwd: mountableTempDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: entrypointImage(t), Cwd: testdocker.MountableDir(t)})
 
 	runErr := runner.Run(t.Context(), "true")
 	if runErr == nil {
@@ -646,7 +647,7 @@ func TestRunOnAContainerThatDiedAtBirthIsNotAnExitError(t *testing.T) {
 // precisely so the postmortem survives long enough to read, which makes
 // taking it away afterwards our job.
 func TestDockerRunnerRemovesAContainerThatDiedAtBirth(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	// Widened: this pins the birth path's removal, and a loaded daemon let the corpse outlive 300ms, so diagnose caught it instead and left it for Close. SettleFor returns the moment it dies, so a doomed container costs no more.
 	previous := dockerSettleBound
@@ -657,7 +658,7 @@ func TestDockerRunnerRemovesAContainerThatDiedAtBirth(t *testing.T) {
 	image := entrypointImage(t)
 	// Of this image only: under a loaded daemon another test's container can still be on its way out, and a process-wide count reads it as this one.
 	before := ourContainerCountOf(t, image)
-	runner := newTestRunner(t, RunnerSpec{Image: image, Cwd: mountableTempDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: image, Cwd: testdocker.MountableDir(t)})
 
 	_, _, _, _ = runner.RunCaptureFull(t.Context(), "anything")
 
@@ -671,9 +672,9 @@ func TestDockerRunnerRemovesAContainerThatDiedAtBirth(t *testing.T) {
 // next command would exec against an empty one and report a malformed request
 // as an ordinary exit code.
 func TestDockerRunnerRejectsCommandsAfterClose(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner, err := NewRunner(RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -698,7 +699,7 @@ func TestDockerRunnerRejectsCommandsAfterClose(t *testing.T) {
 // working directory — a resource check: — which must run in the image's own
 // workdir rather than mounting something arbitrary.
 func TestDockerRunnerEmptyCwdMountsNothing(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	runner := newTestRunner(t, RunnerSpec{Image: testImage})
 
@@ -723,7 +724,7 @@ func TestDockerRunnerEmptyCwdMountsNothing(t *testing.T) {
 // containerized pipeline perfectly well, and an orchestrator with neither
 // still runs placed ones.
 func TestValidateDockerNeedsOnlyADaemon(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	t.Setenv("PATH", t.TempDir()) // no docker binary anywhere
 

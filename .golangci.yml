@@ -184,6 +184,8 @@ linters:
           files:
             - "**/e2e/**"
           allow:
+            # testdocker is test-only: whether a daemon is reachable, and a directory it can bind-mount.
+            - "github.com/jtarchie/steps/internal/testdocker"
             - "$gostd"
             - "github.com/jtarchie/steps/internal/cli"
             - "github.com/alecthomas/kong"
@@ -262,6 +264,8 @@ linters:
           files:
             - "**/internal/shell/**"
           allow:
+            # testdocker is test-only: whether a daemon is reachable, and a directory it can bind-mount.
+            - "github.com/jtarchie/steps/internal/testdocker"
             - "$gostd"
             # events: a step's machinery tells the run what it did (a note), and writes human-facing bytes where the renderer says (Stdout/Stderr).
             - "github.com/jtarchie/steps/internal/events"
@@ -412,7 +416,7 @@ linters:
               desc: "test-only outside internal/cli: production code takes the store.Store it was handed"
             - pkg: "github.com/jtarchie/steps/internal/store/postgres"
               desc: "test-only outside internal/cli: production code takes the store.Store it was handed"
-        # Venue's allow list admits testsshd for its tests; this is what keeps it out of venue's production files.
+        # Allow lists admit testsshd and testdocker for their packages' tests; this is what keeps them out of production files.
         TestSSHDTestOnly:
           files:
             - "$all"
@@ -420,6 +424,8 @@ linters:
           deny:
             - pkg: "github.com/jtarchie/steps/internal/testsshd"
               desc: "test fixture: an in-process sshd that runs whatever it is sent"
+            - pkg: "github.com/jtarchie/steps/internal/testdocker"
+              desc: "test fixture: skips a test when no docker daemon is reachable"
         # config is the shared data-model root: it must not depend on any
         # other internal package (see CLAUDE.md's package-seam plan).
         Config:
@@ -461,6 +467,8 @@ linters:
             - "!**/internal/venue/ssmdial/**"
             - "!**/internal/venue/iapdial/**"
           allow:
+            # testdocker is test-only: whether a daemon is reachable, and a directory it can bind-mount.
+            - "github.com/jtarchie/steps/internal/testdocker"
             - "$gostd"
             # events: a step's machinery tells the run what it did (a note), and writes human-facing bytes where the renderer says (Stdout/Stderr).
             - "github.com/jtarchie/steps/internal/events"
@@ -514,11 +522,19 @@ linters:
             - "go.uber.org/goleak"
             # dockerapi for the streamlocal test's socket, found the way a docker CLI finds it.
             - "github.com/jtarchie/steps/internal/dockerapi"
+        # testdocker is a test fixture other packages' tests import, so it is a package rather than a _test.go file.
+        TestDocker:
+          files:
+            - "**/internal/testdocker/**"
+          allow:
+            - "$gostd"
         # treedigest must stay stdlib-only: its twin is a busybox script with nothing else to lean on (steps#206).
         TreeDigest:
           files:
             - "**/internal/treedigest/**"
           allow:
+            # testdocker is test-only: whether a daemon is reachable, and a directory it can bind-mount.
+            - "github.com/jtarchie/steps/internal/testdocker"
             - "$gostd"
             - "github.com/jtarchie/steps/internal/treedigest"
         # blobstore is the content-addressed artifact store on S3: trees by
@@ -632,6 +648,8 @@ linters:
           files:
             - "**/internal/agent/**"
           allow:
+            # testdocker is test-only: whether a daemon is reachable, and a directory it can bind-mount.
+            - "github.com/jtarchie/steps/internal/testdocker"
             - "$gostd"
             - "google.golang.org/adk/v2"
             - "google.golang.org/genai"
@@ -667,6 +685,8 @@ linters:
           files:
             - "**/internal/pipeline/**"
           allow:
+            # testdocker is test-only: whether a daemon is reachable, and a directory it can bind-mount.
+            - "github.com/jtarchie/steps/internal/testdocker"
             # venue is the tier ABOVE shell: shell decides host vs container,
             # venue decides this machine vs a worker and hands back to shell
             # when the answer is here. pipeline is what turns a step's tags:

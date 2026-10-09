@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/testdocker"
 	"github.com/jtarchie/steps/internal/venue/ssmdial"
 )
 
@@ -155,7 +156,7 @@ func loadImageIntoWorker(t *testing.T, container, image string) {
 func startLinuxWorkerWith(t *testing.T, dockerfile string, extraRunArgs ...string) linuxWorker {
 	t.Helper()
 
-	requireDockerVenue(t)
+	testdocker.Require(t)
 
 	_, err := exec.LookPath("ssh-keygen")
 	if err != nil {

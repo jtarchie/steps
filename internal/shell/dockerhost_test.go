@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/testdocker"
 )
 
 // currentDockerHost is the daemon this machine talks to, in DOCKER_HOST form.
@@ -39,9 +41,9 @@ func currentDockerHost(t *testing.T) string {
 // and the part that matters, since a venue's forwarded socket is just another
 // address in that same field.
 func TestRunnerTargetsANamedDaemon(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	dir := mountableTempDir(t)
+	dir := testdocker.MountableDir(t)
 
 	err := os.WriteFile(filepath.Join(dir, "seed.txt"), []byte("seed\n"), 0o600)
 	if err != nil {
@@ -100,9 +102,9 @@ func TestRunnerTargetsANamedDaemon(t *testing.T) {
 // fail on that Cwd, so a runner that still resolved locally cannot reach the
 // assertion at all.
 func TestRunnerMountsAPathItDidNotResolve(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	dir := mountableTempDir(t)
+	dir := testdocker.MountableDir(t)
 
 	err := os.WriteFile(filepath.Join(dir, "seed.txt"), []byte("seed\n"), 0o600)
 	if err != nil {
@@ -154,13 +156,13 @@ func TestRunnerMountsAPathItDidNotResolve(t *testing.T) {
 // the value the pipeline chose — because a fix that made the variable
 // unsettable would pass a test that only checked the daemon.
 func TestStepEnvCannotRedirectTheSessionsDaemon(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	const decoy = "unix:///orchestrator-should-not-be-used.sock"
 
 	runner, err := NewRunner(RunnerSpec{
 		Image:      testImage,
-		Cwd:        mountableTempDir(t),
+		Cwd:        testdocker.MountableDir(t),
 		DockerHost: currentDockerHost(t),
 		Env:        []string{"DOCKER_HOST"},
 		EnvValues:  map[string]string{"DOCKER_HOST": decoy},

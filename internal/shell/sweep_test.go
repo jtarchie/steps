@@ -1,10 +1,12 @@
 package shell
 
 import (
-	"github.com/jtarchie/steps/internal/dockerapi"
 	"os"
 	"strconv"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/dockerapi"
+	"github.com/jtarchie/steps/internal/testdocker"
 )
 
 // TestOwnershipLabelsIdentifyThisRun is what makes an orphan recoverable at
@@ -109,7 +111,7 @@ func TestSweepOrphanedContainersToleratesNoDocker(t *testing.T) {
 // sweep would still be tidying this machine — the parameter accepted, ignored,
 // and the leak untouched.
 func TestSweepHonoursTheDaemonItIsGiven(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	// A daemon that is not there. Honoured, the listing fails and answers
 	// nothing; ignored, this reaches the real local daemon and answers about

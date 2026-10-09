@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/testdocker"
 )
 
 // ownContainers lists every container this test process owns on the local daemon, running or not.
@@ -29,7 +31,7 @@ func ownContainers(t *testing.T) []string {
 
 // TestACancelledCommandStillRemovesItsContainer is a placed step's timeout landing mid-command: Close must still remove the worker's container, where a handoff outrunning its grace marked the session broken and teardown then declined the removal (measured: a timed-out self-build implementer's container still running eight hours later); compared before/after so another test's container is not read as this one's leak.
 func TestACancelledCommandStillRemovesItsContainer(t *testing.T) {
-	requireDockerVenue(t)
+	testdocker.Require(t)
 
 	before := ownContainers(t)
 

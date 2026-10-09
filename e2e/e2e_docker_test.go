@@ -26,56 +26,18 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/testdocker"
 )
 
 const dockerE2EImage = "alpine:3"
 
-// requireDockerE2E mirrors internal/shell's requireDocker; the root package
-// can't reach that one, and duplicating six lines beats exporting a test
-// helper from a package that has no other reason to.
+// requireDockerE2E is testdocker.Require plus TMPDIR moved where the daemon can bind-mount: every docker-backed e2e here builds its workspace under TMPDIR, so the move belongs beside the daemon check rather than in each test.
 func requireDockerE2E(t *testing.T) {
 	t.Helper()
 
-	_, err := exec.LookPath("docker")
-	if err != nil {
-		t.Skip("docker not found on PATH")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	err = exec.CommandContext(ctx, "docker", "info").Run()
-	if err != nil {
-		t.Skip("docker daemon not reachable (`docker info` failed)")
-	}
-
-	daemonVisibleTemp(t)
-}
-
-// daemonVisibleTemp points TMPDIR somewhere the daemon can bind-mount.
-//
-// A step's tree is mounted into the container BY THE DAEMON, so it has to
-// live where the daemon can see it. On macOS the daemon runs in a VM that
-// shares the home directory and not /var/folders, where TMPDIR points — and
-// docker answers an unshared mount by silently mounting an EMPTY directory,
-// so the step succeeds and produces nothing. Every docker-backed e2e here
-// builds its workspace under TMPDIR, so this belongs beside the daemon check
-// rather than repeated in each test.
-func daemonVisibleTemp(t *testing.T) {
-	t.Helper()
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("no home directory to root a daemon-visible workspace in")
-	}
-
-	shared, err := os.MkdirTemp(home, ".steps-e2e-*")
-	if err != nil {
-		t.Skipf("cannot create a daemon-visible temp dir under %s: %v", home, err)
-	}
-
-	t.Cleanup(func() { _ = os.RemoveAll(shared) })
-	t.Setenv("TMPDIR", shared)
+	testdocker.Require(t)
+	t.Setenv("TMPDIR", testdocker.MountableDir(t))
 }
 
 // lastToolResult returns the most recent tool result in a captured request.

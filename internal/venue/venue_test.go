@@ -9,13 +9,14 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/testdocker"
 )
 
 // localWorker is a local: worker, a docker+ one on this machine's own daemon, with a root of its own so its cache is its own.
 func localWorker(t *testing.T, cwd string, outputs ...string) shell.RunnerSpec {
 	t.Helper()
 
-	requireDockerVenue(t)
+	testdocker.Require(t)
 
 	return shell.RunnerSpec{
 		Cwd:    cwd,

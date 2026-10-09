@@ -4,57 +4,19 @@ package agent
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/testdocker"
 )
 
 // probeImages are the two userlands worth disagreeing: busybox, where grep has no -P and accepts -I without honouring it, and GNU, where -E reads `\d` as a literal d. Anything that behaves the same in both behaves the same nearly everywhere.
 var probeImages = []string{"alpine:3", "debian:13-slim"}
-
-func requireAgentDocker(t *testing.T) {
-	t.Helper()
-
-	_, err := exec.LookPath("docker")
-	if err != nil {
-		t.Skip("docker not found on PATH")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	err = exec.CommandContext(ctx, "docker", "info").Run()
-	if err != nil {
-		t.Skip("docker daemon not reachable (`docker info` failed)")
-	}
-}
-
-// daemonVisibleDir is a directory the daemon can actually bind-mount. On macOS the daemon runs in a VM that shares the user's home and not $TMPDIR, and an unshared bind mount is answered with an EMPTY directory rather than an error — so a test using t.TempDir() would pass while proving nothing.
-func daemonVisibleDir(t *testing.T) string {
-	t.Helper()
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("no home directory to root a daemon-visible workspace in")
-	}
-
-	dir, err := os.MkdirTemp(home, ".steps-agent-test-*")
-	if err != nil {
-		t.Skipf("cannot create a daemon-visible temp dir under %s: %v", home, err)
-	}
-
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-
-	return dir
-}
 
 // newContainerTree starts a container over dir and returns the tree its file tools would use.
 func newContainerTree(t *testing.T, image, dir string) containerTree {
@@ -123,9 +85,9 @@ func writeFixture(t *testing.T, dir string) {
 // TestContainerTreeMatchesHostTree is the guarantee the shell-out puts at risk. The same fixture, the same call, the same answer — from Go walking this filesystem and from find and grep walking the container's. Anything that differs here is a pipeline whose results depend on where its agent ran, which is the one thing placement must not change.
 func TestContainerTreeMatchesHostTree(t *testing.T) {
 	t.Parallel()
-	requireAgentDocker(t)
+	testdocker.Require(t)
 
-	dir := daemonVisibleDir(t)
+	dir := testdocker.MountableDir(t)
 	writeFixture(t, dir)
 
 	host := hostTree{dir: dir}
@@ -277,9 +239,9 @@ func compareStringSets(t *testing.T, label string, want, got []string) {
 // TestContainerTreeConfinesPaths is the security half. A container's root holds a real /etc/passwd, so a symlink planted in the tree resolves to something — and the answer has to be the same refusal the host gives, not a file.
 func TestContainerTreeConfinesPaths(t *testing.T) {
 	t.Parallel()
-	requireAgentDocker(t)
+	testdocker.Require(t)
 
-	dir := daemonVisibleDir(t)
+	dir := testdocker.MountableDir(t)
 	writeFixture(t, dir)
 
 	err := os.Symlink("/etc/passwd", filepath.Join(dir, "escape"))
@@ -313,9 +275,9 @@ func TestContainerTreeConfinesPaths(t *testing.T) {
 // TestContainerTreeRoundTripsFiles covers the write half in both directions, including the mode an edit must not strip: a rename would have replaced the inode and quietly dropped the executable bit off a checked-in script.
 func TestContainerTreeRoundTripsFiles(t *testing.T) {
 	t.Parallel()
-	requireAgentDocker(t)
+	testdocker.Require(t)
 
-	dir := daemonVisibleDir(t)
+	dir := testdocker.MountableDir(t)
 	writeFixture(t, dir)
 
 	script := filepath.Join(dir, "run.sh")
@@ -371,9 +333,9 @@ func TestContainerTreeRoundTripsFiles(t *testing.T) {
 // TestContainerWriteRefusesNUL covers the byte no argv can carry. The content crosses into the container as one shell word, and a NUL in it is not an error the shell reports — it is where the shell stops reading, so the file would be written silently truncated. A NUL at the very start is the case a length check gets wrong.
 func TestContainerWriteRefusesNUL(t *testing.T) {
 	t.Parallel()
-	requireAgentDocker(t)
+	testdocker.Require(t)
 
-	dir := daemonVisibleDir(t)
+	dir := testdocker.MountableDir(t)
 	contained := newContainerTree(t, "alpine:3", dir)
 
 	for name, content := range map[string][]byte{
@@ -397,9 +359,9 @@ func TestContainerWriteRefusesNUL(t *testing.T) {
 // TestProbeRefusesAnImageWithoutTheFileUtilities is why the probe runs at preparation. An image too thin to answer a read_file has to say so before a token is spent, naming itself and what it lacks, rather than failing the model's first call with whatever the shell said.
 func TestProbeRefusesAnImageWithoutTheFileUtilities(t *testing.T) {
 	t.Parallel()
-	requireAgentDocker(t)
+	testdocker.Require(t)
 
-	dir := daemonVisibleDir(t)
+	dir := testdocker.MountableDir(t)
 
 	runner, err := shell.NewRunner(shell.RunnerSpec{Image: "alpine:3", Cwd: dir})
 	if err != nil {
@@ -429,9 +391,9 @@ func TestProbeRefusesAnImageWithoutTheFileUtilities(t *testing.T) {
 // TestContainerTreeStatMatchesHostTree: a stat answered from the container is the same answer os.Stat gives the host — kind, and a file's size; a directory's size is the filesystem's bookkeeping and no tool reads it — and a missing path is os.ErrNotExist on both.
 func TestContainerTreeStatMatchesHostTree(t *testing.T) {
 	t.Parallel()
-	requireAgentDocker(t)
+	testdocker.Require(t)
 
-	dir := daemonVisibleDir(t)
+	dir := testdocker.MountableDir(t)
 	writeFixture(t, dir)
 
 	contained := newContainerTree(t, "alpine:3", dir)
@@ -458,9 +420,9 @@ func TestContainerTreeStatMatchesHostTree(t *testing.T) {
 // TestContainerTreeResolveWriteRefusesLinkEscapes: a write follows links, so a link at the leaf or at any parent that leads out of the tree must be refused even though the file itself does not exist yet.
 func TestContainerTreeResolveWriteRefusesLinkEscapes(t *testing.T) {
 	t.Parallel()
-	requireAgentDocker(t)
+	testdocker.Require(t)
 
-	dir := daemonVisibleDir(t)
+	dir := testdocker.MountableDir(t)
 	writeFixture(t, dir)
 
 	for link, target := range map[string]string{"escape": "/etc/passwd", "outside": "/etc"} {
@@ -494,13 +456,13 @@ func TestContainerTreeResolveWriteRefusesLinkEscapes(t *testing.T) {
 // read of an image is answered with the whole image.
 func TestContainerTreeReadsAnImageWhole(t *testing.T) {
 	t.Parallel()
-	requireAgentDocker(t)
+	testdocker.Require(t)
 
 	for _, image := range probeImages {
 		t.Run(image, func(t *testing.T) {
 			t.Parallel()
 
-			dir := daemonVisibleDir(t)
+			dir := testdocker.MountableDir(t)
 			data := encodedImage(t, "png", 64, 48)
 			writeBytes(t, dir, "shot.png", data)
 

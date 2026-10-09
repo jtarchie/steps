@@ -19,6 +19,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/dockerapi"
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/testdocker"
 	"github.com/jtarchie/steps/internal/testsshd"
 )
 
@@ -34,7 +35,7 @@ func dockerPlusURL(server *testsshd.Server, socket string) string {
 func hostDockerSocket(t *testing.T) string {
 	t.Helper()
 
-	requireDockerVenue(t)
+	testdocker.Require(t)
 
 	host, err := dockerapi.ResolveHost()
 	if err != nil {
@@ -431,7 +432,7 @@ func TestDockerPlusNonRootUserWritesItsOutputs(t *testing.T) {
 
 // A step with nothing cached starts one container, its own: opening its volumes to a non-root user: once cost a busybox chmod per step, a third of every container a worker started. Not parallel, so this process starts nothing else while it counts.
 func TestDockerPlusStartsOnlyTheStepsContainer(t *testing.T) {
-	requireDockerVenue(t)
+	testdocker.Require(t)
 
 	// Streamed, not replayed afterwards: the daemon keeps only its most recent events, and under a full suite this session's had scrolled out of that log by the time it closed. --since covers the moment before the stream connects.
 	var started lockedBuffer

@@ -23,6 +23,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/testdocker"
 )
 
 // daemonView is the daemon's own account of a container, as `docker inspect`
@@ -92,12 +94,12 @@ func inspectContainerOf(t *testing.T, runner Runner) daemonView {
 
 // Two live containers owned by one process is the state the old pid-label lookup could not survive, reproduced on purpose rather than waited for.
 func TestContractInspectionFindsEachRunnersOwnContainer(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	names := make([]string, 0, 2)
 
 	for range 2 {
-		runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+		runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
 		_, _, _, err := runner.RunCaptureFull(t.Context(), "true")
 		if err != nil {
@@ -120,9 +122,9 @@ func TestContractInspectionFindsEachRunnersOwnContainer(t *testing.T) {
 // can write survives the trip — a port that dropped one would otherwise be
 // caught only by whichever knob happened to have its own test.
 func TestContractSessionContainerConfiguration(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	dir := mountableTempDir(t)
+	dir := testdocker.MountableDir(t)
 
 	t.Setenv("STEPS_TEST_CONTRACT_SET", "visible")
 	_ = os.Unsetenv("STEPS_TEST_CONTRACT_UNSET")
@@ -296,14 +298,14 @@ func assertContainerEnv(t *testing.T, view daemonView) {
 // from inside, because the daemon's record and the process's environment are
 // not the same claim.
 func TestContractEnvValueIsReadableInsideTheContainer(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	t.Setenv("STEPS_TEST_CONTRACT_READ", "read-me")
 	_ = os.Unsetenv("STEPS_TEST_CONTRACT_ABSENT")
 
 	runner, err := NewRunner(RunnerSpec{
 		Image:     testImage,
-		Cwd:       mountableTempDir(t),
+		Cwd:       testdocker.MountableDir(t),
 		Env:       []string{"STEPS_TEST_CONTRACT_READ", "STEPS_TEST_CONTRACT_ABSENT"},
 		EnvValues: map[string]string{"STEPS_TEST_CONTRACT_WORKER": "worker-1"},
 	})
@@ -348,11 +350,11 @@ func TestContractEnvValueIsReadableInsideTheContainer(t *testing.T) {
 // error satisfies IsExitError". The existing tests for it drive a fake docker
 // on PATH, so they pin the shape of a script's exit status, not the daemon's.
 func TestContractBadImageSurfacesAsData(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	runner, err := NewRunner(RunnerSpec{
 		Image: "steps-test-no-such-image:definitely-not-here",
-		Cwd:   mountableTempDir(t),
+		Cwd:   testdocker.MountableDir(t),
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -381,11 +383,11 @@ func TestContractBadImageSurfacesAsData(t *testing.T) {
 // TestContractBadImageIsAnExitError is the other half: the same failure,
 // reached through Run, has to classify as the step's own verdict.
 func TestContractBadImageIsAnExitError(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	runner, err := NewRunner(RunnerSpec{
 		Image: "steps-test-no-such-image:definitely-not-here",
-		Cwd:   mountableTempDir(t),
+		Cwd:   testdocker.MountableDir(t),
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -410,11 +412,11 @@ func TestContractBadImageIsAnExitError(t *testing.T) {
 // same missing image dozens of times — which is a re-PULL against a registry
 // in the case that matters.
 func TestContractStartFailureIsSticky(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	runner, err := NewRunner(RunnerSpec{
 		Image: "steps-test-no-such-image:definitely-not-here",
-		Cwd:   mountableTempDir(t),
+		Cwd:   testdocker.MountableDir(t),
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -454,7 +456,7 @@ func TestContractStartFailureIsSticky(t *testing.T) {
 // from how it was meant. Both directions are asserted because a sweep that
 // removes everything passes a one-sided test and destroys a concurrent run.
 func TestContractSweepRemovesOnlyADeadOwnersContainer(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	// A pid that cannot be running: the sweep's whole rule is "the owning
 	// process is gone". Chosen far above any plausible live pid rather than
@@ -542,7 +544,7 @@ func containerExists(t *testing.T, name string) bool {
 // between a warm run adding milliseconds and a warm run hitting a registry
 // once per image per job.
 func TestContractPrepareImagesSkipsAPresentImage(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	requireImagePresent(t, testImage)
 
@@ -565,7 +567,7 @@ func TestContractPrepareImagesSkipsAPresentImage(t *testing.T) {
 // TestContractPrepareImagesReportsAMissingImage pins that a name no registry
 // can answer for fails startup rather than the first step that needs it.
 func TestContractPrepareImagesReportsAMissingImage(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	err := PrepareImages(context.Background(), []string{"steps-test-no-such-image:definitely-not-here"})
 	if err == nil {
@@ -607,10 +609,10 @@ func requireImagePresent(t *testing.T, image string) {
 // DOCKER_CONFIG points the whole lookup at a directory this test writes, so
 // the operator's own configuration is neither read nor disturbed.
 func TestContractResolvesTheDaemonFromADockerContext(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	host := currentDockerHost(t)
-	dir := mountableTempDir(t)
+	dir := testdocker.MountableDir(t)
 
 	writeDockerContext(t, "steps-test-context", host)
 
@@ -643,7 +645,7 @@ func TestContractResolvesTheDaemonFromADockerContext(t *testing.T) {
 // TestContractValidateDockerUsesTheContextToo is the same question asked of
 // preflight, which is where the failure would actually be reported.
 func TestContractValidateDockerUsesTheContextToo(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
 	writeDockerContext(t, "steps-test-context", currentDockerHost(t))
 
@@ -718,9 +720,9 @@ func writeJSON(t *testing.T, path string, value any) {
 // evidence of what the step managed to do before its deadline, and the
 // classification decides whether the author's on_failure: or on_error: runs.
 func TestContractCancelledCommandKeepsItsOutput(t *testing.T) {
-	requireDocker(t)
+	testdocker.Require(t)
 
-	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: mountableTempDir(t)})
+	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
 	// Started first, so the container exists and the cancel lands on the
 	// command rather than on the session start.

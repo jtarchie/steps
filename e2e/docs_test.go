@@ -1,18 +1,15 @@
 package e2e
 
 import (
-	"context"
 	"fmt"
 	"hash/fnv"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
@@ -20,6 +17,7 @@ import (
 	"github.com/jtarchie/steps/docs"
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/testdocker"
 )
 
 // The docs ARE the tests: every fenced ```yaml block in docs/*.md is
@@ -158,7 +156,7 @@ func runDocBlock(t *testing.T, schema *jsonschema.Schema, block docs.Block) {
 
 	// local: is a docker+ worker on this machine's daemon, so a placed example runs only where one answers; it is validated everywhere above.
 	if len(scenario.workers) > 0 {
-		requireDockerDaemon(t)
+		testdocker.Require(t)
 	}
 
 	executeDocBlock(t, block, scenario, dir, path, varFlags, runFlags)
@@ -992,17 +990,5 @@ func TestDocsPagesListed(t *testing.T) {
 		if !strings.Contains(string(index), fmt.Sprintf("(%s)", page)) {
 			t.Errorf("docs/README.md has no link to %s", page)
 		}
-	}
-}
-
-// requireDockerDaemon is requireDockerE2E without its TMPDIR move, which t.Parallel forbids and a docker+ worker does not need: its trees are in volumes, never bind-mounted.
-func requireDockerDaemon(t *testing.T) {
-	t.Helper()
-
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-
-	if exec.CommandContext(ctx, "docker", "info").Run() != nil {
-		t.Skip("docker daemon not reachable (`docker info` failed)")
 	}
 }
