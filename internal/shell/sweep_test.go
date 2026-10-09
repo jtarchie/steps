@@ -128,3 +128,17 @@ func TestSweepHonoursTheDaemonItIsGiven(t *testing.T) {
 		t.Errorf("a sweep aimed at a daemon that does not exist listed %d containers — it is reading the local one", len(orphans))
 	}
 }
+
+// The steps.host label is what keeps a sweep off another machine's containers, so it must name this one.
+func TestOwnerHostIsThisMachine(t *testing.T) {
+	t.Parallel()
+
+	want, err := os.Hostname()
+	if err != nil {
+		t.Skipf("os.Hostname: %v", err)
+	}
+
+	if got := OwnerHost(); got != want {
+		t.Errorf("OwnerHost() = %q, want %q", got, want)
+	}
+}

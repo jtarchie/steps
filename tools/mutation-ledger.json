@@ -391,6 +391,50 @@
         }
       ]
     },
+    "./internal/shell": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 131,
+      "lived": 37,
+      "timed_out": 2,
+      "not_covered": 22,
+      "efficacy": 77.98,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "shell.go | CONDITIONALS_BOUNDARY | if remaining := w.max - w.buf.Len(); remaining > 0 {",
+          "why": "remaining is never negative, and at 0 the slice is p[:0], so the write is a no-op either way"
+        },
+        {
+          "mutant": "shell.go | CONDITIONALS_BOUNDARY | if remaining < len(p) {",
+          "why": "when equal, slicing to remaining keeps all of p"
+        },
+        {
+          "mutant": "shell.go | CONDITIONALS_BOUNDARY | if w.file != nil && len(p) > 0 {",
+          "why": "writeToFile returns at once on an empty p"
+        },
+        {
+          "mutant": "shell.go | CONDITIONALS_BOUNDARY | if remaining <= 0 {",
+          "why": "at 0, toBuffer is p[:0], so nothing is buffered and all of p is returned, the same as the early return"
+        },
+        {
+          "mutant": "shell.go | CONDITIONALS_BOUNDARY | if remaining < len(toBuffer) {",
+          "why": "when equal, slicing to remaining keeps all of toBuffer"
+        },
+        {
+          "mutant": "shell.go | CONDITIONALS_BOUNDARY | if w.spillErr != nil || w.fileBytes >= SpillMaxBytes {",
+          "why": "at equality remaining is 0, p becomes empty, and the len(p)==0 guard returns"
+        },
+        {
+          "mutant": "shell.go | CONDITIONALS_BOUNDARY | if len(preview) > SpillPreviewBytes {",
+          "why": "at equality the slice is the whole preview"
+        },
+        {
+          "mutant": "shell.go | CONDITIONALS_BOUNDARY | if len(preview) > 0 {",
+          "why": "unreachable: every caller only spills content longer than a positive cap, so the preview is never empty"
+        }
+      ]
+    },
     "./internal/store": {
       "swept_at": "824ba22",
       "date": "2026-10-09",

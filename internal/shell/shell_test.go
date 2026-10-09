@@ -3,12 +3,15 @@ package shell
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/events"
 )
 
 func TestRunShellCaptureFull(t *testing.T) {
@@ -369,5 +372,102 @@ func TestHostEnvWithSkipsUnsetNames(t *testing.T) {
 func TestHostEnvUnchangedWithoutOptIn(t *testing.T) {
 	if got, want := strings.Join(hostEnvWith(nil), "\n"), strings.Join(HostEnv(), "\n"); got != want {
 		t.Errorf("hostEnvWith(nil) = %q, want it identical to HostEnv() = %q", got, want)
+	}
+}
+
+// A step's dir: is where its commands run, not merely where its tree is.
+func TestHostRunnerRunsInItsDir(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+
+	err := os.MkdirAll(filepath.Join(cwd, "repo", "cmd"), 0o750)
+	if err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	runner, err := NewRunner(RunnerSpec{Cwd: cwd, Subdir: "repo/cmd"})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	stdout, _, _, err := runner.RunCaptureFull(t.Context(), "pwd -P")
+	if err != nil {
+		t.Fatalf("RunCaptureFull: %v", err)
+	}
+
+	want, err := filepath.EvalSymlinks(filepath.Join(cwd, "repo", "cmd"))
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+
+	if got := strings.TrimSpace(stdout); got != want {
+		t.Errorf("ran in %q, want the dir: %q", got, want)
+	}
+}
+
+// -1 is the exit code of a command that never ran; any other number reads as the command having answered.
+func TestHostRunnerCommandThatNeverStartedHasNoExitCode(t *testing.T) {
+	t.Parallel()
+
+	runner := HostRunner{cwd: filepath.Join(t.TempDir(), "missing")}
+
+	_, _, exitCode, err := runner.RunCaptureFull(t.Context(), "true")
+	if err == nil {
+		t.Fatal("a command whose working directory does not exist started")
+	}
+
+	if exitCode != -1 {
+		t.Errorf("exitCode = %d, want -1 for a command that never started", exitCode)
+	}
+}
+
+func TestHostRunnerRunStreamedCaptureKeepsOnlyWhenAsked(t *testing.T) {
+	t.Parallel()
+
+	ctx := events.WithOutput(t.Context(), events.Output{Stdout: io.Discard, Stderr: io.Discard})
+	runner := HostRunner{cwd: t.TempDir()}
+
+	stdout, stderr, err := runner.RunStreamedCapture(ctx, "echo out; echo err >&2", 100)
+	if err != nil {
+		t.Fatalf("RunStreamedCapture: %v", err)
+	}
+
+	if stdout != "out\n" || stderr != "err\n" {
+		t.Errorf("captured (%q, %q), want what the command streamed", stdout, stderr)
+	}
+
+	stdout, stderr, err = runner.RunStreamedCapture(ctx, "echo out; echo err >&2", 0)
+	if err != nil {
+		t.Fatalf("RunStreamedCapture: %v", err)
+	}
+
+	if stdout != "" || stderr != "" {
+		t.Errorf("captured (%q, %q) with maxBytes 0, which captures nothing", stdout, stderr)
+	}
+}
+
+type closeFails struct {
+	Runner
+
+	err error
+}
+
+func (c closeFails) Close() error { return c.err }
+
+// A runner that could not be closed may have stranded a container, and the log is the only trace of it.
+func TestCloseRunnerLogsOnlyAFailure(t *testing.T) {
+	logs := captureLogs(t)
+
+	CloseRunner(closeFails{err: nil}, "clean")
+
+	if strings.Contains(logs.String(), "shell.runner_close") {
+		t.Errorf("a clean close was logged as a failure: %s", logs.String())
+	}
+
+	CloseRunner(closeFails{err: errors.New("container still there")}, "leaky")
+
+	if !strings.Contains(logs.String(), "shell.runner_close") || !strings.Contains(logs.String(), "leaky") {
+		t.Errorf("logs = %q, want the failed close named", logs.String())
 	}
 }

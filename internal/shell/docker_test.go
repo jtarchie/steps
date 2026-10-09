@@ -594,7 +594,8 @@ func TestDockerRunnerDetectsAContainerThatDiedAtBirth(t *testing.T) {
 		t.Fatal("expected an error when the container did not stay up")
 	}
 
-	for _, want := range []string{image, "exited immediately"} {
+	// What the entrypoint echoed is the image's own account of why it died.
+	for _, want := range []string{image, "exited immediately", "sh -c " + keepAliveCommand()} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %v, want it to mention %q", err, want)
 		}
@@ -777,5 +778,65 @@ func TestDefaultContainerUserIsPlatformSpecific(t *testing.T) {
 
 	if got != "" {
 		t.Errorf("defaultContainerUser() = %q, want empty off linux (the image's own user)", got)
+	}
+}
+
+func TestContainerUserForEachPlatform(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		goos     string
+		uid, gid int
+		want     string
+	}{
+		{goos: "linux", uid: 1000, gid: 1001, want: "1000:1001"},
+		{goos: "linux", uid: 0, gid: 0, want: "0:0"},
+		{goos: "linux", uid: -1, gid: 1001, want: ""},
+		{goos: "linux", uid: 1000, gid: -1, want: ""},
+		{goos: "darwin", uid: 501, gid: 20, want: ""},
+	} {
+		if got := containerUserFor(tc.goos, tc.uid, tc.gid); got != tc.want {
+			t.Errorf("containerUserFor(%q, %d, %d) = %q, want %q", tc.goos, tc.uid, tc.gid, got, tc.want)
+		}
+	}
+}
+
+// Why only local: a remote daemon's tree lives in its own volumes, where this machine's uid:gid names nobody.
+func TestNewRunnerDefaultsTheUserOnlyForALocalDaemon(t *testing.T) {
+	previous := defaultContainerUser
+	defaultContainerUser = func() string { return "4242:4343" }
+
+	t.Cleanup(func() { defaultContainerUser = previous })
+
+	for host, want := range map[string]string{"": "4242:4343", "tcp://127.0.0.1:1": ""} {
+		runner, err := NewRunner(RunnerSpec{Image: testImage, DockerHost: host})
+		if err != nil {
+			t.Fatalf("NewRunner: %v", err)
+		}
+
+		docker, ok := runner.(DockerRunner)
+		if !ok {
+			t.Fatalf("runner is %T, want a DockerRunner", runner)
+		}
+
+		if docker.session.user != want {
+			t.Errorf("DockerHost %q: user = %q, want %q", host, docker.session.user, want)
+		}
+	}
+}
+
+// A daemon that cannot even be dialled ran nothing, so there is no exit code to report.
+func TestDockerRunnerWithNoDaemonHasNoExitCode(t *testing.T) {
+	t.Parallel()
+
+	runner := newTestRunner(t, RunnerSpec{Image: testImage, DockerHost: "ssh://refused.invalid"})
+
+	_, _, exitCode, err := runner.RunCaptureFull(t.Context(), "true")
+	if err == nil {
+		t.Fatal("a command ran without a daemon")
+	}
+
+	if exitCode != -1 {
+		t.Errorf("exitCode = %d, want -1 for a container that never started", exitCode)
 	}
 }

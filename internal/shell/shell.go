@@ -533,10 +533,8 @@ func (w *spillWriter) resultFromHead() string {
 func (w *spillWriter) resultFromFile() string {
 	overflow := w.total - w.fileBytes
 	if overflow > 0 {
-		_, err := fmt.Fprintf(w.file, "\n... [truncated %d bytes]", overflow)
-		if err != nil {
-			w.spillErr = err
-		}
+		// Best effort: the pointer message below is what the model reads, and nothing after this point would report a failed marker.
+		_, _ = fmt.Fprintf(w.file, "\n... [truncated %d bytes]", overflow)
 	}
 
 	path := w.filePath

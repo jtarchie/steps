@@ -82,6 +82,45 @@ func TestPrefixedWriter(t *testing.T) {
 			t.Errorf("dst = %q, want %q", got, "[x] end of one\n[x] start of two")
 		}
 	})
+
+	t.Run("a chunk opening with a newline still prefixes the line after it", func(t *testing.T) {
+		t.Parallel()
+
+		var dst bytes.Buffer
+
+		pw := newPrefixedWriter("[x] ", &dst)
+
+		_, _ = pw.Write([]byte("\nnext"))
+
+		if got := dst.String(); got != "[x] \n[x] next" {
+			t.Errorf("dst = %q, want %q", got, "[x] \n[x] next")
+		}
+	})
+
+	t.Run("a destination that fails mid-line fails the write", func(t *testing.T) {
+		t.Parallel()
+
+		pw := newPrefixedWriter("[x] ", &failAfterWrites{remaining: 1})
+
+		_, err := pw.Write([]byte("no newline"))
+		if err == nil {
+			t.Error("Write swallowed the destination's error")
+		}
+	})
+}
+
+type failAfterWrites struct {
+	remaining int
+}
+
+func (f *failAfterWrites) Write(p []byte) (int, error) {
+	if f.remaining == 0 {
+		return 0, io.ErrClosedPipe
+	}
+
+	f.remaining--
+
+	return len(p), nil
 }
 
 func TestPrefixedWriterFlush(t *testing.T) {

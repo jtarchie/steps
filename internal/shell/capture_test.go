@@ -247,6 +247,21 @@ func TestSpillWriterMultipleWrites(t *testing.T) {
 	}
 }
 
+// With nowhere to spill, the writer degrades to boundedWriter: the head stays capped at max however the stream was chunked.
+func TestSpillWriterWithNowhereToSpillKeepsOnlyTheCap(t *testing.T) {
+	t.Parallel()
+
+	w := &spillWriter{max: 4, dir: filepath.Join(t.TempDir(), "missing")}
+
+	_, _ = w.Write([]byte("ab"))
+	_, _ = w.Write([]byte("cdefgh"))
+
+	got := w.result()
+	if !strings.HasPrefix(got, "abcd\n... [truncated 4 bytes] (could not save full output: ") {
+		t.Errorf("result() = %q, want the first 4 bytes, the overflow count, and why nothing was saved", got)
+	}
+}
+
 func TestSpillWriterExactlyAtCap(t *testing.T) {
 	t.Parallel()
 
