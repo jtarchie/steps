@@ -693,10 +693,35 @@ func assertRendersAsTranscript(t *testing.T, transcript string) {
 func TestTranscriptUnderTheCapIsStoredVerbatim(t *testing.T) {
 	t.Parallel()
 
-	original := storetest.TranscriptJSON(1_024)
+	exactly := storetest.TranscriptJSON(store.MaxTranscriptBytes - len(storetest.TranscriptJSON(0)))
 
-	if got := truncateTranscript(original); got != original {
-		t.Errorf("a transcript under the cap was rewritten:\n got %d bytes\nwant %d", len(got), len(original))
+	for _, original := range []string{storetest.TranscriptJSON(1_024), exactly} {
+		if got := truncateTranscript(original); got != original {
+			t.Errorf("a transcript of %d bytes, at most the cap, was rewritten to %d", len(original), len(got))
+		}
+	}
+}
+
+// TestTranscriptTruncationKeepsAsMuchAsFits: the head kept is the longest run of whole events the cap has room for beside the notice. A budget off by a few bytes passes every check that only asks for "under the cap".
+func TestTranscriptTruncationKeepsAsMuchAsFits(t *testing.T) {
+	t.Parallel()
+
+	// One-byte events after the first, so each one more costs exactly two; two widths of the first, so one of them fills the cap to the byte.
+	for _, first := range []string{"1", "12"} {
+		events := []string{first}
+		for len(events) < store.MaxTranscriptBytes {
+			events = append(events, "1")
+		}
+
+		got := truncateTranscript("[" + strings.Join(events, ",") + "]")
+
+		if !json.Valid([]byte(got)) || !strings.HasPrefix(got, "["+first+",1,") || !strings.HasSuffix(got, ","+truncationEvent+"]") {
+			t.Fatalf("first event %s: truncated to %.60q…, want the head, then the notice, as one array", first, got)
+		}
+
+		if len(got) > store.MaxTranscriptBytes || len(got) < store.MaxTranscriptBytes-1 {
+			t.Errorf("first event %s: kept %d bytes, want %d or one less — one more event costs two", first, len(got), store.MaxTranscriptBytes)
+		}
 	}
 }
 

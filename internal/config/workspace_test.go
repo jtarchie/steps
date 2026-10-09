@@ -73,3 +73,17 @@ func TestCacheHelpersDefaultSafely(t *testing.T) {
 		t.Errorf("CacheMaxEntries() = %d, want the default when unset", got)
 	}
 }
+
+func TestCacheHelpersReadTheConfiguredCache(t *testing.T) {
+	t.Parallel()
+
+	ws := &WorkspaceConfig{Cache: &CacheConfig{Resources: true, MaxEntries: 7}}
+
+	if !ws.CacheEnabled() {
+		t.Error("cache.resources: true should report the cache as enabled")
+	}
+
+	if got := ws.CacheMaxEntries(); got != 7 {
+		t.Errorf("CacheMaxEntries() = %d, want the configured 7", got)
+	}
+}

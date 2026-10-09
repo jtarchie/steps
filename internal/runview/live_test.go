@@ -1,6 +1,7 @@
 package runview
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -252,14 +253,13 @@ func TestLiveScrollsWhatNoRunningStepOwns(t *testing.T) {
 	live.Event(events.Event{Type: events.TypeStepFinished, RunID: "R", Job: "build", StepKind: "task", StepName: "unit", StepID: 1, Status: "succeeded", At: now})
 
 	_, _ = live.Stream(1, false).Write([]byte("[notify] sent\n"))
+	_, _ = live.Stream(1, false).Write([]byte("\n"))
 
 	live.Stop()
 
 	got := strings.Join(screen(t, out.String()), "\n")
-	for _, want := range []string{"pulling image: alpine", "partial line", "[notify] sent"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("screen lacks %q:\n%s", want, got)
-		}
+	if want := strings.Join([]string{"pulling image: alpine", "partial line", "✓ task unit · 0.0s", "[notify] sent", ""}, "\n"); got != want {
+		t.Errorf("screen:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -276,6 +276,14 @@ func TestTailReadsLikeATerminal(t *testing.T) {
 	got := strings.Join(tl.last("unit"), "|")
 	if want := "one|two|[INFO] three|four|90%"; got != want {
 		t.Errorf("tail = %q, want %q", got, want)
+	}
+
+	var ended tail
+
+	ended.write([]byte("one\ntwo\n"))
+
+	if got := strings.Join(ended.last("unit"), "|"); got != "one|two" {
+		t.Errorf("a tail ending on a newline = %q, want no empty line after it", got)
 	}
 }
 
@@ -316,5 +324,136 @@ func TestEventOfIsRowOfsInverse(t *testing.T) {
 
 	if back := rowOf(event); back != row {
 		t.Errorf("rowOf(EventOf(row)) = %+v, want %+v", back, row)
+	}
+}
+
+// TestLiveAsksSpendWhenAnAgentFinishes: spend is recorded when an agent step finishes, so that is the only time asking it can change the answer.
+func TestLiveAsksSpendWhenAnAgentFinishes(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+
+	var out strings.Builder
+
+	live := liveAt(&out, &now)
+
+	var asked []string
+
+	finished := 0
+	live.Spend = func(runID string) string {
+		asked = append(asked, runID)
+
+		return fmt.Sprintf("spent after %d steps", finished)
+	}
+
+	for _, e := range []events.Event{
+		{Type: events.TypeStepStarted, StepKind: "task", StepName: "unit", StepID: 1},
+		{Type: events.TypeStepFinished, StepKind: "task", StepName: "unit", StepID: 1, Status: "succeeded"},
+		{Type: events.TypeStepStarted, StepKind: "agent", StepName: "review", StepID: 2},
+		{Type: events.TypeStepFinished, StepKind: "agent", StepName: "review", StepID: 2, Status: "succeeded"},
+		{Type: events.TypeJobFinished, StepIndex: -1, Status: "succeeded", DurationMS: 400},
+	} {
+		if e.Type == events.TypeStepFinished {
+			finished++
+		}
+
+		e.RunID, e.Job, e.At = "R", "build", now
+		live.Event(e)
+	}
+
+	if strings.Join(asked, ",") != "R" {
+		t.Errorf("spend was asked for %q, want once, for R", asked)
+	}
+
+	got := screen(t, out.String())
+	if want := "✓ build succeeded in 0.4s · 2 steps · spent after 2 steps"; got[len(got)-1] != want {
+		t.Errorf("summary = %q, want %q", got[len(got)-1], want)
+	}
+}
+
+// TestLiveKeepsDrawingTheRunsStillGoing: two jobs share the region, and the one that finished first must take only itself down.
+func TestLiveKeepsDrawingTheRunsStillGoing(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+
+	var out strings.Builder
+
+	live := liveAt(&out, &now)
+
+	for _, e := range []events.Event{
+		{RunID: "A", Job: "build", Type: events.TypeStepStarted, StepKind: "task", StepName: "unit", StepID: 1},
+		{RunID: "B", Job: "deploy", Type: events.TypeStepStarted, StepKind: "task", StepName: "push", StepID: 1},
+		{RunID: "A", Job: "build", Type: events.TypeStepFinished, StepKind: "task", StepName: "unit", StepID: 1, Status: "succeeded"},
+		{RunID: "A", Job: "build", Type: events.TypeJobFinished, StepIndex: -1, Status: "succeeded"},
+	} {
+		e.At = now
+		live.Event(e)
+	}
+
+	got := screen(t, out.String())
+	if want := []string{"[+] deploy 0.0s  0/1 steps", "  ▸ task push  0.0s"}; strings.Join(got[len(got)-2:], "\n") != strings.Join(want, "\n") {
+		t.Errorf("the run still going is not drawn:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+// TestLiveHeaderCountsAndRowsClip: the header counts what finished, and a running row stops a column short of the terminal's width.
+func TestLiveHeaderCountsAndRowsClip(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+
+	var out strings.Builder
+
+	live := liveAt(&out, &now)
+
+	for _, e := range []events.Event{
+		{Type: events.TypeStepStarted, StepKind: "task", StepName: "unit", StepID: 1},
+		{Type: events.TypeStepFinished, StepKind: "task", StepName: "unit", StepID: 1, Status: "succeeded"},
+		{Type: events.TypeStepStarted, StepKind: "task", StepName: strings.Repeat("x", 80), StepID: 2},
+	} {
+		e.RunID, e.Job, e.At = "R", "build", now
+		live.Event(e)
+	}
+
+	got := screen(t, out.String())
+	want := []string{
+		"✓ task unit · 0.0s",
+		"[+] build 0.0s  1/2 steps",
+		"  ▸ task " + strings.Repeat("x", 50),
+	}
+
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("screen:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// TestLiveColoursAWarningAndNothingElseOfANote: a warning is the note a reader should not scroll past.
+func TestLiveColoursAWarningAndNothingElseOfANote(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+
+	var out strings.Builder
+
+	live := liveAt(&out, &now)
+	live.Color = true
+
+	live.Event(events.Event{Type: events.TypeStepNote, RunID: "R", StepIndex: -1, Status: events.NoteWarn, Text: "slow disk"})
+	live.Event(events.Event{Type: events.TypeStepNote, RunID: "R", StepIndex: -1, Status: events.NoteInfo, Text: "fyi"})
+
+	if want := "\x1b[33mwarning: slow disk\x1b[0m\n" + "fyi\n"; out.String() != want {
+		t.Errorf("wrote %q, want %q", out.String(), want)
+	}
+}
+
+// TestClockTurnsToMinutesAtAMinute: "60.0s" is a reading a person has to convert.
+func TestClockTurnsToMinutesAtAMinute(t *testing.T) {
+	t.Parallel()
+
+	for d, want := range map[time.Duration]string{59900 * time.Millisecond: "59.9s", time.Minute: "1m00s", 61 * time.Second: "1m01s"} {
+		if got := clock(d); got != want {
+			t.Errorf("clock(%s) = %q, want %q", d, got, want)
+		}
 	}
 }

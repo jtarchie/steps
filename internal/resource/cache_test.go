@@ -51,6 +51,29 @@ func countLines(t *testing.T, path string) int {
 	return count
 }
 
+func TestCacheSuppressedCountsWhatTheConsumedFilterDropped(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		ResourceTypes: []config.ResourceType{{Name: "dummy"}},
+		Resources:     []config.Resource{{Name: "thing", Type: "dummy"}},
+	}
+
+	cache := NewCache(
+		WithResolvedVersions(func(string) []map[string]any {
+			return []map[string]any{{"ref": "a"}, {"ref": "b"}, {"ref": "c"}}
+		}),
+		WithConsumed(func(_ string, version map[string]any) bool { return version["ref"] == "a" }),
+	)
+
+	step := config.Step{Get: "thing", Version: "every"}
+
+	_, _, versions, err := cache.ResolveVersionsCached(context.Background(), cfg, step, nil)
+	if err != nil || len(versions) != 2 || cache.Suppressed(step) != 1 {
+		t.Errorf("versions = %v, %v, suppressed %d; want b and c, with a counted as taken", versions, err, cache.Suppressed(step))
+	}
+}
+
 func TestCacheResolveVersionsCachedReusesResult(t *testing.T) {
 	t.Parallel()
 

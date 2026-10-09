@@ -82,6 +82,16 @@ func TestRepairChallenges(t *testing.T) {
 			},
 		},
 		{
+			name:  "a trailing comma does not stop the repair",
+			given: []string{`Bearer realm="mcp" error=invalid_token,`},
+			want:  []string{`Bearer realm="mcp", error=invalid_token`},
+		},
+		{
+			name:  "an empty trailing value is left for the SDK to report",
+			given: []string{`Bearer realm="mcp" error=`},
+			want:  []string{`Bearer realm="mcp" error=`},
+		},
+		{
 			name:  "a whitespace-only value is not emptied",
 			given: []string{"   "},
 			want:  []string{"   "},
@@ -209,5 +219,15 @@ func TestRepairChallengesDropsAnOversizedValue(t *testing.T) {
 
 	if len(parsed) == 0 {
 		t.Fatalf("ParseWWWAuthenticate(%q) returned no challenges", got)
+	}
+
+	atLimit := `Bearer realm="` + strings.Repeat("x", maxChallengeBytes-len(`Bearer realm=""`)) + `"`
+
+	header = http.Header{}
+	header.Add("WWW-Authenticate", atLimit)
+	repairChallenges(header)
+
+	if got := header.Values("WWW-Authenticate"); len(got) != 1 {
+		t.Fatalf("a value exactly at the limit was dropped")
 	}
 }

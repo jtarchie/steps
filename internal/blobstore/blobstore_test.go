@@ -333,3 +333,61 @@ func TestPresignedURLsSignOnlyHost(t *testing.T) {
 		}
 	}
 }
+
+// TestRegionQueryOverridesTheAmbientRegion: ?region= is the knob for a bucket outside the operator's default region, and real S3 refuses a request signed for the wrong one. The credential scope names the region the URL was signed for.
+func TestRegionQueryOverridesTheAmbientRegion(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	t.Setenv("AWS_REGION", "eu-west-1")
+	t.Setenv("AWS_DEFAULT_REGION", "eu-west-1")
+
+	opts, err := Parse("s3://cas/team?region=us-west-2&endpoint=http://127.0.0.1:1")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	store, err := New(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	raw, err := store.PresignGet(context.Background(), "wire/probe", time.Minute)
+	if err != nil {
+		t.Fatalf("PresignGet: %v", err)
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("unparseable presigned URL: %v", err)
+	}
+
+	credential := parsed.Query().Get("X-Amz-Credential")
+	if !strings.Contains(credential, "/us-west-2/s3/") {
+		t.Fatalf("credential scope %q, want the ?region= override us-west-2", credential)
+	}
+}
+
+// TestTransportTimeoutsAreBounded: zero on any of these means wait forever, and the blob mirror runs outside every step's timeout, so an endpoint that accepts and then says nothing hangs the build after the step reported success.
+func TestTransportTimeoutsAreBounded(t *testing.T) {
+	store, _ := newTestStore(t)
+
+	client, ok := store.client.Options().HTTPClient.(*http.Client)
+	if !ok {
+		t.Fatalf("HTTPClient is %T, want the *http.Client New installs", store.client.Options().HTTPClient)
+	}
+
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport is %T, want *http.Transport", client.Transport)
+	}
+
+	for name, timeout := range map[string]time.Duration{
+		"ResponseHeaderTimeout": transport.ResponseHeaderTimeout,
+		"TLSHandshakeTimeout":   transport.TLSHandshakeTimeout,
+		"IdleConnTimeout":       transport.IdleConnTimeout,
+	} {
+		if timeout <= 0 {
+			t.Errorf("%s = %v, want a positive bound", name, timeout)
+		}
+	}
+}

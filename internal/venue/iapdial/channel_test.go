@@ -467,6 +467,7 @@ func TestUnknownTagsAreDiscarded(t *testing.T) {
 	channel := dialFake(t, func(conn *relayConn) {
 		conn.sendSID([]byte("sid"))
 		conn.sendRaw([]byte{0x00, 0xFF, 1, 2, 3})
+		conn.sendRaw([]byte{0x00, 0xFE})
 		conn.sendData([]byte("still here"))
 		conn.readFrames()
 	})
@@ -480,6 +481,139 @@ func TestUnknownTagsAreDiscarded(t *testing.T) {
 
 	if string(got) != "still here" {
 		t.Fatalf("Read = %q, want %q", got, "still here")
+	}
+}
+
+func TestAnEmptyDataFrameIsSkipped(t *testing.T) {
+	t.Parallel()
+
+	channel := dialFake(t, func(conn *relayConn) {
+		conn.sendSID([]byte("sid"))
+		conn.sendData(nil)
+		conn.sendData([]byte("after"))
+		conn.readFrames()
+	})
+
+	got := make([]byte, 5)
+
+	_, err := io.ReadFull(channel, got)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	if string(got) != "after" {
+		t.Fatalf("Read = %q, want %q", got, "after")
+	}
+}
+
+// TestAcksAreBatched: acking every frame once past the first window would double the relay's upstream traffic. The 1-byte frames are handled strictly after the window-crossing frame, and this end's "done" goes out after any ack the first of them provoked.
+func TestAcksAreBatched(t *testing.T) {
+	t.Parallel()
+
+	relay := make(chan *relayConn, 1)
+	channel := dialFake(t, func(conn *relayConn) {
+		conn.sendSID([]byte("sid"))
+		relay <- conn
+
+		for range 3 {
+			conn.sendData(bytes.Repeat([]byte("y"), maxDataFrame))
+		}
+
+		conn.sendData([]byte("a"))
+		conn.sendData([]byte("b"))
+		conn.readFrames()
+	})
+
+	_, err := io.ReadFull(channel, make([]byte, 3*maxDataFrame+2))
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	_, err = channel.Write([]byte("done"))
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	conn := <-relay
+	deadline := time.Now().Add(5 * time.Second)
+
+	for {
+		conn.mu.Lock()
+		done := string(conn.received) == "done"
+		acks := append([]uint64(nil), conn.acks...)
+		conn.mu.Unlock()
+
+		if done {
+			if len(acks) != 1 || acks[0] != 3*maxDataFrame {
+				t.Fatalf("acks before done = %v, want exactly [%d]", acks, 3*maxDataFrame)
+			}
+
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatal("the relay never received done")
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestWritesNeverSendAnEmptyFrame: a write that ends on a frame boundary, or carries nothing, adds no zero-length DATA frame the canonical client never sends.
+func TestWritesNeverSendAnEmptyFrame(t *testing.T) {
+	t.Parallel()
+
+	frames := make(chan int, 16)
+	channel := dialFake(t, func(conn *relayConn) {
+		conn.sendSID([]byte("sid"))
+
+		for {
+			_, msg, err := conn.ws.ReadMessage()
+			if err != nil {
+				return
+			}
+
+			if len(msg) >= headerLen && binary.BigEndian.Uint16(msg) == tagData {
+				frames <- int(binary.BigEndian.Uint32(msg[tagLen:]))
+			}
+		}
+	})
+
+	for _, write := range [][]byte{nil, bytes.Repeat([]byte("x"), maxDataFrame), []byte("z")} {
+		_, err := channel.Write(write)
+		if err != nil {
+			t.Fatalf("Write(%d bytes): %v", len(write), err)
+		}
+	}
+
+	first, second := <-frames, <-frames
+	if first != maxDataFrame || second != 1 {
+		t.Fatalf("frame sizes = %d, %d — want %d, 1", first, second, maxDataFrame)
+	}
+}
+
+// TestWriteAfterAProtocolFailureReportsTheCause: only an orderly end reads as net.ErrClosed; a session the relay broke tells the writer why.
+func TestWriteAfterAProtocolFailureReportsTheCause(t *testing.T) {
+	t.Parallel()
+
+	channel := dialFake(t, func(conn *relayConn) {
+		conn.sendSID([]byte("sid"))
+
+		frame := make([]byte, tagLen+8)
+		binary.BigEndian.PutUint16(frame, tagReconnectSuccessAck)
+		conn.sendRaw(frame)
+
+		conn.readFrames()
+	})
+
+	_, err := channel.Read(make([]byte, 1))
+	if err == nil {
+		t.Fatal("Read succeeded on a broken session")
+	}
+
+	_, err = channel.Write([]byte("late"))
+	if !errors.Is(err, errProtocol) {
+		t.Fatalf("Write = %v, want the protocol failure", err)
 	}
 }
 
@@ -578,17 +712,52 @@ func TestReauthenticationIsExplained(t *testing.T) {
 func TestARefusedHandshakeNamesThePermission(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "permission denied", http.StatusForbidden)
-	}))
-	t.Cleanup(server.Close)
+	for status, namesPermission := range map[int]bool{
+		http.StatusUnauthorized: true,
+		http.StatusForbidden:    true,
+		http.StatusBadGateway:   false,
+	} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "no", status)
+			}))
+			t.Cleanup(server.Close)
+
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+
+			_, err := Open(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), "test-token")
+			if err == nil {
+				t.Fatal("Open succeeded against a refusing relay")
+			}
+
+			if got := strings.Contains(err.Error(), "iap.tunnelInstances.accessViaIAP"); got != namesPermission {
+				t.Fatalf("Open = %v; names the permission = %v, want %v", err, got, namesPermission)
+			}
+		})
+	}
+}
+
+// TestAnUnreachableRelayIsAnError: a dial that never reaches HTTP has no response at all, and the error path must not read one.
+func TestAnUnreachableRelayIsAnError(t *testing.T) {
+	t.Parallel()
+
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	address := listener.Addr().String()
+	_ = listener.Close()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
-	_, err := Open(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), "test-token")
-	if err == nil || !strings.Contains(err.Error(), "iap.tunnelInstances.accessViaIAP") {
-		t.Fatalf("Open = %v, want the missing permission named", err)
+	_, err = Open(ctx, "ws://"+address+"/v4/connect", "test-token")
+	if err == nil || !strings.Contains(err.Error(), "dialling the IAP relay") {
+		t.Fatalf("Open = %v, want the dial failure", err)
 	}
 }
 

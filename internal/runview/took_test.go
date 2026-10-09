@@ -329,3 +329,20 @@ func TestAnUntimedBoundaryIsNotTimedFromTheOneBeforeIt(t *testing.T) {
 		t.Errorf("Took = %v, want nothing: the request's send time is unknown", got)
 	}
 }
+
+// TestUnansweredTakesTheDeeperRequestOnATie: a delegation's request goes out after its parent's, so at one instant the deeper one is the one in flight.
+func TestUnansweredTakesTheDeeperRequestOnATie(t *testing.T) {
+	t.Parallel()
+
+	step := Step{
+		Status:  "failed",
+		Ended:   tookT0.Add(time.Minute),
+		pending: map[int]time.Time{0: tookT0, 1: tookT0},
+	}
+
+	for range 64 {
+		if got := step.Unanswered(); got.Depth != 1 {
+			t.Fatalf("Unanswered = %+v, want depth 1", got)
+		}
+	}
+}

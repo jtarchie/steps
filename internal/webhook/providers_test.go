@@ -136,6 +136,19 @@ func TestEveryFixtureNamesAProvider(t *testing.T) {
 	}
 }
 
+// TestSlackEventNamesWhatHappened: every Events API delivery's envelope says event_callback, so the event worth filtering on is the one inside it.
+func TestSlackEventNamesWhatHappened(t *testing.T) {
+	event := Providers["slack"].Event
+
+	if got := event(Request{Body: []byte(`{"type":"event_callback","event":{"type":"app_mention"}}`)}); got != "app_mention" {
+		t.Errorf("event_callback event = %q, want the inner app_mention", got)
+	}
+
+	if got := event(Request{Body: []byte(`{"type":"app_rate_limited"}`)}); got != "app_rate_limited" {
+		t.Errorf("envelope event = %q, want app_rate_limited", got)
+	}
+}
+
 // TestSlackAnswersItsURLVerification: Slack will not save an Events API URL until it echoes the challenge — signed like any delivery, so it is verified first.
 func TestSlackAnswersItsURLVerification(t *testing.T) {
 	body := []byte(`{"token":"x","challenge":"3eZbrw1aBm2rZgRNFdxV2595E9CY3gmdALWMmHkvFXO7tYXAYM8P","type":"url_verification"}`)

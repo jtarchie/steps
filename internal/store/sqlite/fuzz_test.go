@@ -14,6 +14,9 @@ func FuzzTruncateUTF8(f *testing.F) {
 	f.Add("日本語", 4)
 	f.Add("\xff"+strings.Repeat("a", 64), 32)
 	f.Add("ab\xe6\x97", 3)
+	f.Add("abc", 3)
+	f.Add("\x80\x80\x80\x80", 2)
+	f.Add("a\x80\x80\x80\x80\x80\x80", 6)
 
 	f.Fuzz(func(t *testing.T, s string, limit int) {
 		if limit < 0 || limit > 1<<16 {

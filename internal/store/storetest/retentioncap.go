@@ -46,27 +46,21 @@ func (s suite) TestPruneBoundsTheTriggerQueue(t *testing.T) {
 	// One row left in flight, which retention must leave alone.
 	mustEnqueueJob(t, st, "build", "resource-b")
 
-	err := st.Prune(ctx, store.Retention{JobName: "build", TriggerQueue: keep}, "")
+	err := st.Prune(ctx, store.Retention{JobName: "build"}, "")
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	rows, err := st.ListTriggerQueue(ctx, 100)
+	if kept, _ := queueCounts(ctx, t, st); kept != finished {
+		t.Errorf("%d of %d finished rows survive a zero cap, want all — zero means no limit", kept, finished)
+	}
+
+	err = st.Prune(ctx, store.Retention{JobName: "build", TriggerQueue: keep}, "")
 	if err != nil {
-		t.Fatalf("ListTriggerQueue: %v", err)
+		t.Fatalf("Prune: %v", err)
 	}
 
-	var kept, pending int
-
-	for _, row := range rows {
-		if row.Status == "pending" {
-			pending++
-
-			continue
-		}
-
-		kept++
-	}
+	kept, pending := queueCounts(ctx, t, st)
 
 	if kept != keep {
 		t.Errorf("%d finished rows survive a cap of %d", kept, keep)
@@ -75,4 +69,27 @@ func (s suite) TestPruneBoundsTheTriggerQueue(t *testing.T) {
 	if pending != 1 {
 		t.Errorf("%d pending rows survive, want the one still queued — retention took work off the list", pending)
 	}
+}
+
+func queueCounts(ctx context.Context, t *testing.T, st store.Store) (int, int) {
+	t.Helper()
+
+	rows, err := st.ListTriggerQueue(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListTriggerQueue: %v", err)
+	}
+
+	var finished, pending int
+
+	for _, row := range rows {
+		if row.Status == "pending" {
+			pending++
+
+			continue
+		}
+
+		finished++
+	}
+
+	return finished, pending
 }

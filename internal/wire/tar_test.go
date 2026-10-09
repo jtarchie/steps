@@ -470,6 +470,50 @@ func TestUnpackFetchedRefusesASymlinkOutOfTheTree(t *testing.T) {
 	}
 }
 
+// TestUnpackFetchedJudgesLinksWhereTheyLand: each link below passes the lexical check on its own, so only resolving the finished tree tells the escape apart from the ordinary link to a file that exists.
+func TestUnpackFetchedJudgesLinksWhereTheyLand(t *testing.T) {
+	t.Parallel()
+
+	archive := func(t *testing.T, headers ...*tar.Header) io.Reader {
+		t.Helper()
+
+		buf := new(bytes.Buffer)
+		w := tar.NewWriter(buf)
+
+		for _, header := range headers {
+			err := w.WriteHeader(header)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, _ = w.Write(make([]byte, header.Size))
+		}
+
+		err := w.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return buf
+	}
+
+	err := UnpackFetchedTree(archive(t,
+		&tar.Header{Typeflag: tar.TypeReg, Name: "real.txt", Mode: 0o644, Size: 1},
+		&tar.Header{Typeflag: tar.TypeSymlink, Name: "dir/link", Linkname: "../real.txt"},
+	), t.TempDir())
+	if err != nil {
+		t.Errorf("link to a file inside the tree = %v, want it accepted", err)
+	}
+
+	err = UnpackFetchedTree(archive(t,
+		&tar.Header{Typeflag: tar.TypeSymlink, Name: "b", Linkname: "."},
+		&tar.Header{Typeflag: tar.TypeSymlink, Name: "c", Linkname: "b/../outside"},
+	), t.TempDir())
+	if !errors.Is(err, ErrUnsafeLink) {
+		t.Errorf("c -> b/../outside with b -> . = %v, want ErrUnsafeLink", err)
+	}
+}
+
 // symlinkArchive is a tar holding one symlink.
 func symlinkArchive(t *testing.T, name, target string) io.Reader {
 	t.Helper()

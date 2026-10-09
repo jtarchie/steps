@@ -273,3 +273,21 @@ func TestLoginsExistWhenItCannotLook(t *testing.T) {
 		t.Errorf("LoginsExist(%s) behind an unreadable directory = absent, want treated as present", dir)
 	}
 }
+
+// A hashed segment keeps the readable part of the name, so a person looking in the logins directory can still tell whose it is.
+func TestASegmentStaysRecognizable(t *testing.T) {
+	t.Parallel()
+
+	if got := segment("App az09._-/Z"); !strings.HasPrefix(got, "app-az09._--z~") {
+		t.Errorf("segment = %q, want the safe alphabet kept and everything else a dash", got)
+	}
+
+	longest := strings.Repeat("x", 200)
+	if got := segment(longest); got != longest {
+		t.Errorf("a 200-byte safe name = %q, want it kept verbatim", got)
+	}
+
+	if got := segment(longest + "x"); !strings.Contains(got, "~") {
+		t.Errorf("a 201-byte safe name = %q, want it hashed", got)
+	}
+}

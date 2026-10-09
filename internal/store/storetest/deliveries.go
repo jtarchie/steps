@@ -4,6 +4,8 @@ package storetest
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -90,13 +92,16 @@ func (s suite) TestADeliveryDispatchesInTheSameCall(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	_, err := st.RecordDelivery(ctx, "push", delivery("a"), store.Dispatch{Jobs: []string{"build"}}, 0)
+	_, err := st.RecordDelivery(ctx, "push", delivery("a"), store.Dispatch{Jobs: []string{"build", "deploy"}}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if pending := pendingJobs(t, st); len(pending) != 1 || pending[0] != "build" {
-		t.Errorf("pending = %v, want build queued by the same call", pending)
+	pending := pendingJobs(t, st)
+	slices.Sort(pending)
+
+	if !slices.Equal(pending, []string{"build", "deploy"}) {
+		t.Errorf("pending = %v, want every job it triggers queued by the same call", pending)
 	}
 
 	version := encoded(t, delivery("a").Version)
@@ -166,6 +171,43 @@ func (s suite) TestPruningAVersionTakesItsPayload(t *testing.T) {
 
 	if _, found := recordedPayload(t, st, encoded(t, delivery("b").Version)); !found {
 		t.Error("the newest delivery's payload was pruned, want kept")
+	}
+}
+
+// TestADeliveryUnderZeroHistoryPrunesNothing: version_history: 0 means no limit for a webhook resource too, not the default cap.
+func (s suite) TestADeliveryUnderZeroHistoryPrunesNothing(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	// Filed by earlier calls: a prune never touches the version the current call reports, so only these can show a cap.
+	const perCheck = 200
+
+	for check := range store.DefaultResourceVersionCap / perCheck {
+		versions := make([]map[string]any, 0, perCheck)
+		for i := range perCheck {
+			versions = append(versions, map[string]any{"id": fmt.Sprintf("v%04d", check*perCheck+i)})
+		}
+
+		_, err := st.RecordVersions(ctx, "push", versions, 0)
+		if err != nil {
+			t.Fatalf("RecordVersions: %v", err)
+		}
+	}
+
+	_, err := st.RecordDelivery(ctx, "push", delivery("over"), store.Dispatch{}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	orders, err := st.VersionOrders(ctx, "push")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(orders) != store.DefaultResourceVersionCap+1 {
+		t.Errorf("kept %d versions after a delivery under version_history: 0, want all %d", len(orders), store.DefaultResourceVersionCap+1)
 	}
 }
 

@@ -27,6 +27,31 @@ func TestDoFailsAfterExhaustingAttempts(t *testing.T) {
 	}
 }
 
+// A job aborted mid-attempt must not start another attempt: the backoff wait is where Do notices.
+func TestDoAbortsBetweenAttemptsOnCancel(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	calls := 0
+
+	err := Do(ctx, 3, func(_ int) error {
+		calls++
+		cancel()
+
+		return errors.New("boom")
+	})
+
+	if calls != 1 {
+		t.Errorf("calls = %d, want 1 (a canceled ctx must not be retried)", calls)
+	}
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+}
+
 // TestDoStopsOnStopError checks that a Stop-wrapped error ends the loop after
 // one call and comes back unwrapped, so callers see the original error chain
 // (and their own errors.Is/errors.As checks) exactly as if Stop were absent.

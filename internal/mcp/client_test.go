@@ -95,6 +95,11 @@ func TestConnectListToolsCallTool(t *testing.T) {
 	if !ok || sc["text"] != "hi" {
 		t.Fatalf("StructuredContent = %+v, want {text: hi}", result.StructuredContent)
 	}
+
+	err = client.Close()
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 }
 
 func TestConnectBearerAuth(t *testing.T) {
@@ -235,7 +240,7 @@ func TestListToolsStopsOnAnEndlessCursor(t *testing.T) {
 	}, {
 		name:       "a cursor that cycles",
 		nextCursor: func(page int) string { return fmt.Sprintf("page-%d", page%2) },
-		wantErr:    "not advancing",
+		wantErr:    "after 3 pages — it is not advancing",
 	}}
 
 	for _, test := range tests {

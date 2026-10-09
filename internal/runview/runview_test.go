@@ -22,6 +22,7 @@ func TestSlugify(t *testing.T) {
 		{"a//b", "a-b"},
 		{"...", ""},
 		{"", ""},
+		{"az09", "az09"},
 	} {
 		if got := Slug(tc.in); got != tc.want {
 			t.Errorf("Slug(%q) = %q, want %q", tc.in, got, tc.want)
@@ -99,6 +100,11 @@ func TestAnswerIsNotPrintedTwice(t *testing.T) {
 	other := Step{Result: map[string]any{"response": "different"}, Turns: step.Turns}
 	if len(other.Conversation()) != len(step.Turns) {
 		t.Error("a non-matching response dropped a turn anyway")
+	}
+
+	only := Step{Result: map[string]any{"response": answer}, Turns: step.Turns[1:2]}
+	if kept := only.Conversation(); len(kept) != 0 {
+		t.Errorf("an answer that is the first turn was kept: %+v", kept)
 	}
 }
 
@@ -360,5 +366,40 @@ func TestChunksStreamUntilTheRecordReplacesThem(t *testing.T) {
 
 	if change := changes[build.Key()]; !change.Other || change.Streamed != 0 {
 		t.Errorf("change = %+v, want the row redrawn", change)
+	}
+}
+
+// TestRollupCountsCellsAndFoldsOnlyAQuietSingleStep: a container's tally is its direct children, and is furniture only when it holds one that did not fail.
+func TestRollupCountsCellsAndFoldsOnlyAQuietSingleStep(t *testing.T) {
+	t.Parallel()
+
+	passed := &Step{Status: "succeeded", Ended: time.Now()}
+
+	pair := Step{Children: []*Step{passed, passed}}
+	if got := pair.Rollup(); got.Cells != 2 || got.Passed != 2 || got.Empty() {
+		t.Errorf("two passed children rolled up to %+v (empty %v)", got, got.Empty())
+	}
+
+	if single := (Step{Children: []*Step{passed}}).Rollup(); !single.Empty() {
+		t.Errorf("one passed child is said aloud: %+v", single)
+	}
+}
+
+// TestTrajectoryIsTheRecordOnlyWithoutTurns: a CLI agent publishes no turns, so its calls come from the result; a hosted one's turns already show them.
+func TestTrajectoryIsTheRecordOnlyWithoutTurns(t *testing.T) {
+	t.Parallel()
+
+	result := map[string]any{"trajectory": []any{map[string]any{"name": "Read", "ok": false}}}
+
+	if got := (Step{Result: result}).Trajectory(); len(got) != 1 || got[0] != (Call{Name: "Read"}) {
+		t.Errorf("Trajectory = %+v, want the recorded Read call", got)
+	}
+
+	if got := (Step{Result: result, Turns: []Turn{{Type: events.TypeAgentCall, Name: "Read"}}}).Trajectory(); got != nil {
+		t.Errorf("Trajectory = %+v alongside turns, want nil", got)
+	}
+
+	if got := (Step{}).Trajectory(); got != nil {
+		t.Errorf("Trajectory = %+v with no result, want nil", got)
 	}
 }

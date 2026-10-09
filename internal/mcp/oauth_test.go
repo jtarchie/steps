@@ -200,6 +200,62 @@ func assertPersistedRotatedToken(t *testing.T, path, wantTokenURL string) {
 	}
 }
 
+// TestOAuthTokenSourceWritesOnlyARotation: a token source hands out the same cached token on every call, and rewriting the file each time would clobber a newer login another process saved.
+func TestOAuthTokenSourceWritesOnlyARotation(t *testing.T) {
+	// Not t.Parallel(): uses t.Setenv.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "fresh", "refresh_token": "fresh-refresh", "token_type": "Bearer", "expires_in": 3600,
+		})
+	}))
+	t.Cleanup(ts.Close)
+
+	useConfigDir(t)
+
+	path, err := TokenPath(testPipeline, "linear")
+	if err != nil {
+		t.Fatalf("TokenPath: %v", err)
+	}
+
+	srv := config.MCPServer{Name: "linear", Endpoint: "https://mcp.linear.app/mcp", Auth: config.MCPServerAuth{Type: "oauth"}}
+	tf := &TokenFile{
+		Endpoint: srv.Endpoint, ClientID: "client-id", TokenURL: ts.URL,
+		AccessToken: "stale", RefreshToken: "stale-refresh", Expiry: time.Now().Add(-time.Hour),
+	}
+
+	err = tf.Save(path)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	source, err := oauthTokenSource(context.Background(), testPipeline, srv)
+	if err != nil {
+		t.Fatalf("oauthTokenSource: %v", err)
+	}
+
+	refreshAndCheck(t, source, "fresh")
+
+	newer := *tf
+	newer.AccessToken = "another-process"
+
+	err = newer.Save(path)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	refreshAndCheck(t, source, "fresh")
+
+	onDisk, err := LoadTokenFile(path)
+	if err != nil {
+		t.Fatalf("LoadTokenFile: %v", err)
+	}
+
+	if onDisk.AccessToken != "another-process" {
+		t.Fatalf("persisted access token = %q, want the unrotated token left unwritten", onDisk.AccessToken)
+	}
+}
+
 func TestOAuthTokenSourceMissingFile(t *testing.T) {
 	// Not t.Parallel(): uses t.Setenv.
 	dir := t.TempDir()

@@ -339,6 +339,39 @@ func TestRunInMCPMaterializesToolResult(t *testing.T) {
 	}
 }
 
+func TestMaterializeContentWritesEveryBlock(t *testing.T) {
+	t.Parallel()
+
+	destDir := t.TempDir()
+
+	err := materializeContent(&sdkmcp.CallToolResult{Content: []sdkmcp.Content{
+		&sdkmcp.TextContent{Text: "first"},
+		&sdkmcp.TextContent{Text: "second"},
+	}}, destDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, want := range map[string]string{"content-0.txt": "first", "content-1.txt": "second"} {
+		got, err := os.ReadFile(filepath.Join(destDir, name)) //nolint:gosec // test-owned temp file
+		if err != nil || string(got) != want {
+			t.Errorf("%s = %q, %v; want %q", name, got, err, want)
+		}
+	}
+}
+
+func TestParseVersionObjectSkipsProseBeforeTheObject(t *testing.T) {
+	t.Parallel()
+
+	got := parseVersionObject(&sdkmcp.CallToolResult{Content: []sdkmcp.Content{
+		&sdkmcp.TextContent{Text: "Created:"},
+		&sdkmcp.TextContent{Text: `{"id":"new-1"}`},
+	}})
+	if got["id"] != "new-1" {
+		t.Errorf("version = %v, want the object from the second block", got)
+	}
+}
+
 func TestRunOutMCP(t *testing.T) {
 	t.Parallel()
 

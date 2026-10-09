@@ -1056,6 +1056,42 @@ func TestPlanChainsTryStepIsUnskippable(t *testing.T) {
 	}
 }
 
+// TestPlanChainsAcrossNodeKeysItsCells: the matrix is one plan node, and what its cells run must reach the chain's hash.
+func TestPlanChainsAcrossNodeKeysItsCells(t *testing.T) {
+	t.Parallel()
+
+	plan := func(values ...string) Chain {
+		t.Helper()
+
+		steps := []config.Step{{
+			Across: []config.AcrossVar{{Var: "item", Values: values}},
+			Task:   "work",
+			Run:    "echo {{ .vars.item }}",
+			Inputs: config.Inputs(),
+		}}
+
+		chains, err := PlanChains(context.Background(), &config.Config{}, "build", steps, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("PlanChains: %v", err)
+		}
+
+		if len(chains) != 1 || len(chains[0].Nodes) != 1 {
+			t.Fatalf("chains = %#v, want one chain of one node", chains)
+		}
+
+		return chains[0]
+	}
+
+	chain := plan("a", "b")
+	if node := chain.Nodes[0]; node.Kind != NodeKindAcross || node.Hash == "" {
+		t.Errorf("node = %+v, want a hashed %s node", node, NodeKindAcross)
+	}
+
+	if chain.RootHash == plan("a", "c").RootHash {
+		t.Error("changing a matrix value left the chain's hash unchanged")
+	}
+}
+
 // TestAgentContentMapCLI pins both halves of the CLI key: an HTTP agent must
 // hash exactly as it did before CLI sources existed (the key is value-gated,
 // so no cache entry anywhere is invalidated by this feature shipping), and

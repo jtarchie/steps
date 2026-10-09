@@ -211,11 +211,13 @@ func (s suite) TestTheMemoryCapEvictsTheOldest(t *testing.T) {
 		t.Errorf("another scope = %v, want it untouched by U1's cap", got)
 	}
 
-	remember(ctx, t, st, "U1", "d", 0)
-	remember(ctx, t, st, "U1", "e", 0)
+	// Past the default, or zero read as "the default" passes too.
+	for i := range store.DefaultMemoryEntries {
+		remember(ctx, t, st, "U1", "unbounded "+strings.Repeat("x", i), 0)
+	}
 
-	if got := memoryTexts(ctx, t, st, "U1"); len(got) != 4 {
-		t.Errorf("memories = %v under no limit, want all four", got)
+	if got := memoryTexts(ctx, t, st, "U1"); len(got) != store.DefaultMemoryEntries+2 {
+		t.Errorf("memories = %d under no limit, want all %d", len(got), store.DefaultMemoryEntries+2)
 	}
 
 	for i := range store.DefaultMemoryEntries {

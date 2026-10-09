@@ -2,11 +2,125 @@ package resource
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 )
+
+// TestPreflightIgnoresTheOutToolOfAJobThatOnlyGets: a typo in an out: tool the job never publishes through must not block it.
+func TestPreflightIgnoresTheOutToolOfAJobThatOnlyGets(t *testing.T) {
+	t.Parallel()
+
+	cfg := preflightConfig(t, &config.MCPResourceConfig{
+		Server: "test",
+		Check:  &config.MCPToolCall{Tool: "list_issues"},
+		Out:    &config.MCPToolCall{Tool: "post_isue"},
+	}, nil)
+	cfg.Jobs = []config.Job{{Name: "notify", Plan: []config.Step{{Get: "eng-bugs"}}}}
+
+	problems := Preflight(context.Background(), cfg, &cfg.Jobs[0], []string{"eng-bugs"}, nil)
+	if len(problems) != 0 {
+		t.Fatalf("problems = %+v, want none: `notify` never puts", problems)
+	}
+}
+
+func TestToolListCacheTrustsAnEntryForItsWindow(t *testing.T) {
+	t.Parallel()
+
+	cache := &toolListCache{entries: map[string]toolListEntry{}}
+	at := time.Unix(1000, 0)
+	cache.store("k", toolListEntry{at: at})
+
+	for name, tc := range map[string]struct {
+		ttl  time.Duration
+		now  time.Time
+		want bool
+	}{
+		"fresh":              {time.Minute, at.Add(time.Second), true},
+		"exactly the window": {time.Minute, at.Add(time.Minute), true},
+		"past the window":    {time.Minute, at.Add(time.Minute + 1), false},
+		"no window":          {0, at, false},
+	} {
+		if _, found := cache.lookup("k", tc.ttl, tc.now); found != tc.want {
+			t.Errorf("%s: found = %v, want %v", name, found, tc.want)
+		}
+	}
+}
+
+func TestArgAdviceNamesTheKnobThatSuppliesTheArgument(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		stage string
+		args  map[string]any
+		want  string
+	}{
+		{"out", map[string]any{"team": "ENG"}, "add it to the resource type's mcp.out.args:"},
+		{"out", nil, "the put's params: ARE the arguments"},
+		{"check", nil, "the resource's source: IS the argument object"},
+	} {
+		if got := argAdvice(tc.stage, config.MCPToolCall{Tool: "t", Args: tc.args}); !strings.Contains(got, tc.want) {
+			t.Errorf("%s with args %v: %q, want %q", tc.stage, tc.args, got, tc.want)
+		}
+	}
+}
+
+// TestListToolsNamesItsOwnDeadline: "did not answer" is reported for our deadline, and only for it.
+func TestListToolsNamesItsOwnDeadline(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	silent := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(silent.Close)
+	t.Cleanup(func() { close(release) })
+
+	cfg := &config.Config{MCPServers: []config.MCPServer{{Name: "test", Endpoint: silent.URL}}}
+
+	_, err := listToolsCached(context.Background(), cfg, "test", &config.Preflight{Timeout: "200ms"})
+	if err == nil || !strings.Contains(err.Error(), "did not answer within 200ms") {
+		t.Errorf("err = %v, want the probe deadline named", err)
+	}
+}
+
+func TestListToolsDoesNotCallARefusalATimeout(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{MCPServers: []config.MCPServer{{Name: "test", Endpoint: "http://127.0.0.1:1/mcp"}}}
+
+	_, err := listToolsCached(context.Background(), cfg, "test", &config.Preflight{})
+	if err == nil || strings.Contains(err.Error(), "did not answer") {
+		t.Errorf("err = %v, want the refused connection, not a timeout", err)
+	}
+}
+
+// TestListToolsDoesNotHoldACallersCancelAgainstTheServer: one Ctrl-C must not fail every later job touching a healthy server for the cache window.
+func TestListToolsDoesNotHoldACallersCancelAgainstTheServer(t *testing.T) {
+	t.Parallel()
+
+	cfg := mcpFixtureConfig(t)
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := listToolsCached(canceled, cfg, "test", &config.Preflight{})
+	if err == nil || strings.Contains(err.Error(), "did not answer") {
+		t.Errorf("err = %v, want the cancel, not a timeout", err)
+	}
+
+	tools, err := listToolsCached(context.Background(), cfg, "test", &config.Preflight{})
+	if err != nil || len(tools) == 0 {
+		t.Errorf("after a canceled caller: %d tools, %v; want the healthy server's tools", len(tools), err)
+	}
+}
 
 // preflightConfig builds a pipeline whose one resource is backed by the
 // fixture MCP server, with tools whose schemas declare what they require —

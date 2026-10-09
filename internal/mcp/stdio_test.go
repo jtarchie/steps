@@ -195,6 +195,15 @@ func TestStderrLoggerLogsLinesAtDebug(t *testing.T) {
 	if !bytes.Contains(buf.Bytes(), []byte("partial line")) {
 		t.Errorf("expected the completed partial line to be logged, got: %s", buf.String())
 	}
+
+	_, err = w.Write([]byte("\nafter a blank\n"))
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if !bytes.Contains(buf.Bytes(), []byte("after a blank")) {
+		t.Errorf("expected a blank line not to stall the lines after it, got: %s", buf.String())
+	}
 }
 
 func TestStderrLoggerSilentAboveDebug(t *testing.T) {

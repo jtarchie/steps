@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -409,6 +410,13 @@ func TestHTTPMaxResponseBytes(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "max_response_bytes") {
 		t.Fatalf("err = %v, want a message naming the limit", err)
 	}
+
+	_, err = RunCheck(context.Background(), fmt.Sprintf(`http([{url: %q}], {max_response_bytes: 4096}) | map((
+	  {a: "b"}
+	))`, server.URL), Input{})
+	if err != nil {
+		t.Fatalf("a body exactly at the limit: %v, want it accepted", err)
+	}
 }
 
 // TestHTTPRejectsUnknownKeys: a misspelled `header:` that silently sent no
@@ -522,5 +530,39 @@ func TestHTTPRetryOnValidation(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v, want it to mention %q", settings, err, want)
 		}
+	}
+
+	options, err := parseOptions(nil, map[string]any{"retry": map[string]any{"on": []any{100.0, 599.0}, "max": 1.0}})
+	if err != nil {
+		t.Fatalf("the first and last status codes: %v, want both accepted", err)
+	}
+
+	if !slices.Equal(options.retryOn, []int{100, 599}) {
+		t.Errorf("retry.on = %v, want [100 599]", options.retryOn)
+	}
+}
+
+// TestRetryDelayHonorsWhatTheServerSaid: Retry-After in seconds or as a date is the wait, and anything else backs off.
+func TestRetryDelayHonorsWhatTheServerSaid(t *testing.T) {
+	t.Parallel()
+
+	delay := func(after string, attempt int) time.Duration {
+		return retryDelay(map[string]any{"headers": map[string]string{"Retry-After": after}}, attempt)
+	}
+
+	if got := delay("0", 3); got != 0 {
+		t.Errorf("Retry-After 0 waited %s, want no wait", got)
+	}
+
+	if got := delay("7", 0); got != 7*time.Second {
+		t.Errorf("Retry-After 7 waited %s, want 7s", got)
+	}
+
+	if got := delay(time.Now().Add(20*time.Second).UTC().Format(http.TimeFormat), 0); got < 10*time.Second || got > 20*time.Second {
+		t.Errorf("Retry-After 20s from now waited %s", got)
+	}
+
+	if got := delay("soon", 2); got != 4*time.Second {
+		t.Errorf("an unreadable Retry-After waited %s, want the 4s backoff of attempt 2", got)
 	}
 }

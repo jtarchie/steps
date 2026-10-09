@@ -333,6 +333,31 @@ func TestFailFunc(t *testing.T) {
 	}
 }
 
+// A resource type with no env: is told so, rather than shown an empty list to look for the name in.
+func TestEnvFuncWithNoAllowList(t *testing.T) {
+	t.Parallel()
+
+	_, err := RunCheck(context.Background(), `[{token: env("HOME")}]`, Input{})
+	if err == nil || !strings.Contains(err.Error(), "declares no env:") {
+		t.Fatalf("err = %v, want it to say no variable is readable at all", err)
+	}
+}
+
+func TestFailFuncMessage(t *testing.T) {
+	t.Parallel()
+
+	_, err := RunCheck(context.Background(), `fail("a", "b")`, Input{})
+	if err == nil || !strings.Contains(err.Error(), "takes one message") {
+		t.Fatalf("err = %v, want two messages refused", err)
+	}
+
+	// A computed float, so the source text the error quotes cannot supply the digits.
+	_, err = RunCheck(context.Background(), `fail(5 / 4)`, Input{})
+	if err == nil || !strings.Contains(err.Error(), "1.25") {
+		t.Fatalf("err = %v, want every digit of the number", err)
+	}
+}
+
 // TestVersionFunc covers version(): what it answers, and each refusal.
 func TestVersionFunc(t *testing.T) {
 	t.Parallel()

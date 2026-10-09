@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 )
@@ -153,6 +154,31 @@ func TestUnpackTarballIsBounded(t *testing.T) {
 	err := unpackTarballWithin(tarball(t, file("r/a", strings.Repeat("x", 10), 0o644), file("r/b", strings.Repeat("x", 10), 0o644)), t.TempDir(), 15)
 	if !errors.Is(err, errTreeTooLarge) {
 		t.Errorf("err = %v, want the unpack limit", err)
+	}
+}
+
+func TestUnpackTarballFitsExactlyItsLimit(t *testing.T) {
+	t.Parallel()
+
+	err := unpackTarballWithin(tarball(t, file("r/a", strings.Repeat("x", 10), 0o644), file("r/b", strings.Repeat("x", 10), 0o644)), t.TempDir(), 20)
+	if err != nil {
+		t.Errorf("a 20-byte tree under a 20-byte limit: %v", err)
+	}
+}
+
+func TestReviewPayloadSendsNoCommentsKeyWithoutComments(t *testing.T) {
+	t.Parallel()
+
+	src := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(src, "review.md"), []byte("looks fine"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload, err := reviewPayload(src, config.GitHubReviewParams{BodyFile: "review.md"})
+	if _, sent := payload["comments"]; err != nil || sent {
+		t.Errorf("payload = %v, %v; want a body and no comments key", payload, err)
 	}
 }
 
@@ -315,6 +341,257 @@ func TestGitHubClientNeedsItsToken(t *testing.T) {
 	_, err := newGitHubClient(config.GitHubConnection{Repo: "acme/app", TokenEnv: "RESOURCE_TEST_MISSING_TOKEN"})
 	if !errors.Is(err, errGitHubToken) || !strings.Contains(err.Error(), "$RESOURCE_TEST_MISSING_TOKEN") {
 		t.Errorf("err = %v, want the missing variable named", err)
+	}
+}
+
+func TestGitHubClientGivesUpAfterItsRetries(t *testing.T) {
+	noBackoff(t)
+
+	var gets atomic.Int32
+
+	connection := githubServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		// Answers eventually, so a client that never stops retrying fails on the count instead of hanging.
+		if gets.Add(1) > githubRetries+2 {
+			_, _ = w.Write([]byte(`{}`))
+
+			return
+		}
+
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+
+	client, err := newGitHubClient(connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reply, err := client.get(context.Background(), "/user", "")
+	if err != nil || reply.status != http.StatusServiceUnavailable || gets.Load() != githubRetries+1 {
+		t.Errorf("get = %d, %v after %d sends; want the 503 after the first send and %d retries", reply.status, err, gets.Load(), githubRetries)
+	}
+}
+
+func TestGitHubClientTypesOnlyABody(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		types []string
+	)
+
+	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		types = append(types, r.Method+" "+r.Header.Get("Content-Type"))
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	client, err := newGitHubClient(connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.send(context.Background(), http.MethodPost, client.api+"/x", "", map[string]any{"body": "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.get(context.Background(), "/y", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if !slices.Equal(types, []string{"POST application/json", "GET "}) {
+		t.Errorf("content types %q, want JSON on the post and none on the get", types)
+	}
+}
+
+func TestRetryDelayHonorsUpToTheLongestWait(t *testing.T) {
+	t.Parallel()
+
+	for after, want := range map[string]time.Duration{
+		"":     time.Second,
+		"soon": time.Second,
+		"5":    5 * time.Second,
+		strconv.Itoa(int(githubMaxWait.Seconds())):     githubMaxWait,
+		strconv.Itoa(int(githubMaxWait.Seconds()) + 1): -1,
+	} {
+		header := http.Header{}
+		if after != "" {
+			header.Set("Retry-After", after)
+		}
+
+		if got := retryDelay(header, time.Second); got != want {
+			t.Errorf("Retry-After %q: %s, want %s", after, got, want)
+		}
+	}
+}
+
+// TestGitHubClientRefusesAnOversizedAnswer: an answer cut short at the bound would be a truncated document read as a whole one.
+func TestGitHubClientRefusesAnOversizedAnswer(t *testing.T) {
+	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		size, _ := strconv.ParseInt(r.URL.Query().Get("size"), 10, 64)
+		_, _ = io.CopyN(w, zeros{}, size)
+	})
+
+	client, err := newGitHubClient(connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reply, err := client.get(context.Background(), "/x?size="+strconv.Itoa(githubMaxBody), githubDiff)
+	if err != nil || len(reply.body) != githubMaxBody {
+		t.Errorf("an answer of exactly %d bytes: %d bytes, %v; want all of it", githubMaxBody, len(reply.body), err)
+	}
+
+	_, err = client.get(context.Background(), "/x?size="+strconv.Itoa(githubMaxBody+1), githubDiff)
+	if err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("an answer one byte over: %v, want it refused", err)
+	}
+}
+
+type zeros struct{}
+
+func (zeros) Read(p []byte) (int, error) {
+	clear(p)
+
+	return len(p), nil
+}
+
+func TestGitHubFailureTrimsOnlyALongMessage(t *testing.T) {
+	t.Parallel()
+
+	exact := strings.Repeat("x", 500)
+
+	err := githubFailure(http.MethodGet, "/x", githubReply{status: http.StatusForbidden, body: []byte(exact)})
+	if !strings.HasSuffix(err.Error(), ": "+exact) {
+		t.Errorf("err = %v, want a 500-byte message whole", err)
+	}
+
+	err = githubFailure(http.MethodGet, "/x", githubReply{status: http.StatusForbidden, body: []byte(exact + "y")})
+	if !strings.HasSuffix(err.Error(), ": "+exact+"…") {
+		t.Errorf("err = %v, want a 501-byte message cut at 500", err)
+	}
+}
+
+// TestETagCacheDropsWholeOnlyWhenFull: a miss costs a request, so nothing is dropped before the limit.
+func TestETagCacheDropsWholeOnlyWhenFull(t *testing.T) {
+	t.Parallel()
+
+	cache := &etagCache{entries: map[string]etagEntry{}}
+
+	for i := range etagCacheLimit {
+		cache.store(strconv.Itoa(i), etagEntry{etag: strconv.Itoa(i)})
+	}
+
+	for i := range etagCacheLimit {
+		if _, ok := cache.lookup(strconv.Itoa(i)); !ok {
+			t.Fatalf("entry %d of %d gone before the cache was full", i, etagCacheLimit)
+		}
+	}
+
+	cache.store("next", etagEntry{etag: "next"})
+
+	if _, ok := cache.lookup("0"); ok {
+		t.Error("a full cache kept its old entries when another arrived")
+	}
+
+	if _, ok := cache.lookup("next"); !ok {
+		t.Error("the entry that overflowed the cache was not kept")
+	}
+}
+
+func TestGitHubListingsStopAtThePageLimit(t *testing.T) {
+	noBackoff(t)
+
+	item := `{"id":1,"state":"APPROVED","body":"x","updated_at":"2026-09-27T00:00:00Z","user":{"login":"someone"},"html_url":"https://x/pull/7#c","issue_url":"https://x/issues/7"}`
+	full := "[" + strings.Repeat(item+",", githubPageSize-1) + item + "]"
+
+	want := make([]string, githubPageLimit)
+	for i := range want {
+		want[i] = strconv.Itoa(i + 1)
+	}
+
+	for name, list := range map[string]func(*githubClient, config.GitHubConnection) error{
+		"comments": func(_ *githubClient, connection config.GitHubConnection) error {
+			_, err := githubCommentsCheck(context.Background(), map[string]any{
+				"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "kinds": []any{"conversation"},
+			}, map[string]any{"updated": "2026-09-26T00:00:00Z"})
+
+			return err
+		},
+		"reactions": func(client *githubClient, _ config.GitHubConnection) error {
+			_, _, err := findOwnReaction(context.Background(), client, "/repos/acme/app/issues/comments/11/reactions", "eyes", "octocat")
+
+			return err
+		},
+		"pending reviews": func(client *githubClient, _ config.GitHubConnection) error {
+			return discardOwnPendingReview(context.Background(), client, "/repos/acme/app/pulls/7/reviews")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var (
+				mu    sync.Mutex
+				pages []string
+			)
+
+			connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/user" {
+					_, _ = w.Write([]byte(`{"login":"octocat"}`))
+
+					return
+				}
+
+				mu.Lock()
+				defer mu.Unlock()
+
+				pages = append(pages, r.URL.Query().Get("page"))
+				if len(pages) > 2*githubPageLimit {
+					w.WriteHeader(http.StatusTeapot)
+
+					return
+				}
+
+				_, _ = w.Write([]byte(full))
+			})
+
+			client, err := newGitHubClient(connection)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = list(client, connection)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err != nil || !slices.Equal(pages, want) {
+				t.Errorf("pages %v, %v; want %v", pages, err, want)
+			}
+		})
+	}
+}
+
+func TestSortCommentVersionsIsByUpdatedThenID(t *testing.T) {
+	t.Parallel()
+
+	versions := []map[string]any{
+		{"id": "1", "updated": "2026-09-27T00:00:02Z"},
+		{"id": "3", "updated": "2026-09-27T00:00:01Z"},
+		{"id": "2", "updated": "2026-09-27T00:00:01Z"},
+	}
+
+	sortCommentVersions(versions)
+
+	ids := make([]string, 0, len(versions))
+	for _, version := range versions {
+		ids = append(ids, versionField(version, "id"))
+	}
+
+	if strings.Join(ids, ",") != "2,3,1" {
+		t.Errorf("order %v, want 2,3 (one second, by id) then 1 (the newest)", ids)
 	}
 }
 

@@ -2,8 +2,11 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 )
 
 // TestLoopbackCallbackRejectsUnrecognizedRequests covers the two ways the
@@ -76,6 +79,36 @@ func TestLoopbackCallbackDoesNotBlockOnASecondRedirect(t *testing.T) {
 		// The second call is the one that used to deadlock. http.Get has no
 		// timeout of its own, so a hang here fails the test by timing out.
 		getStatus(t, cb.redirectURL+"?code=c&state=s")
+	}
+}
+
+type lineSink chan string
+
+func (s lineSink) Write(p []byte) (int, error) {
+	s <- string(p)
+
+	return len(p), nil
+}
+
+// A browser that would not open leaves the printed URL as the only way forward, and the person has to be told so.
+func TestPrintAndOpenSaysWhenTheBrowserDidNotOpen(t *testing.T) {
+	t.Parallel()
+
+	out := make(lineSink, 4)
+
+	PrintAndOpen(out, func(string) error { return errors.New("no display") }, "https://as.test/authorize")
+
+	if got := <-out; !strings.Contains(got, "https://as.test/authorize") {
+		t.Fatalf("first line = %q, want the URL", got)
+	}
+
+	select {
+	case got := <-out:
+		if !strings.Contains(got, "could not open a browser") || !strings.Contains(got, "no display") {
+			t.Fatalf("second line = %q, want the failure named", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing said the browser did not open")
 	}
 }
 

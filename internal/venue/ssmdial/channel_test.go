@@ -767,3 +767,269 @@ func TestAHandshakedSessionThatAlreadyEndedStillOpens(t *testing.T) {
 		}
 	}
 }
+
+// bareChannel is a Channel with no loops running, wired to a far end that only records what it is sent, on a clock the test owns: timing and sequencing the fake agent's own pacing would blur.
+func bareChannel(t *testing.T, clock *time.Time) (*Channel, <-chan *agentMessage) {
+	t.Helper()
+
+	seen := make(chan *agentMessage, 1024)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+
+		defer func() { _ = conn.Close() }()
+
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+
+			message := new(agentMessage)
+			if message.unmarshal(data) == nil {
+				seen <- message
+			}
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	conn, response, err := websocket.DefaultDialer.DialContext(t.Context(), "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if response != nil {
+		_ = response.Body.Close()
+	}
+
+	if err != nil {
+		t.Fatalf("dialling the recorder: %v", err)
+	}
+
+	channel := &Channel{
+		ws:         conn,
+		unacked:    map[int64]*unackedMessage{},
+		delivered:  make(chan []byte, 64),
+		handshaked: make(chan struct{}),
+		inBuf:      map[int64][]byte{},
+		stop:       make(chan struct{}),
+		now:        func() time.Time { return *clock },
+	}
+	t.Cleanup(func() { _ = channel.Close() })
+
+	return channel, seen
+}
+
+func nextMessage(t *testing.T, seen <-chan *agentMessage) *agentMessage {
+	t.Helper()
+
+	select {
+	case message := <-seen:
+		return message
+	case <-time.After(5 * time.Second):
+		t.Fatal("the far end received nothing")
+
+		return nil
+	}
+}
+
+func sendMarker(t *testing.T, channel *Channel) {
+	t.Helper()
+
+	marker := newAgentMessage(channel.now())
+	marker.messageType = msgInputStreamData
+	marker.payloadType = payloadOutput
+	marker.payload = []byte("marker")
+
+	err := channel.send(marker, false)
+	if err != nil {
+		t.Fatalf("sending the marker: %v", err)
+	}
+}
+
+// TestResendWaitsAFullInterval: an unconfirmed message goes out again once it has had a whole resendInterval for its ack, and not before — earlier floods a channel a chunked write filled, never stalls a lost frame forever.
+func TestResendWaitsAFullInterval(t *testing.T) {
+	t.Parallel()
+
+	clock := time.UnixMilli(1_700_000_000_000)
+	channel, seen := bareChannel(t, &clock)
+
+	_, err := channel.Write([]byte("once"))
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	nextMessage(t, seen)
+
+	clock = clock.Add(resendInterval - time.Nanosecond)
+	channel.resendUnacked()
+	sendMarker(t, channel)
+
+	if got := nextMessage(t, seen); string(got.payload) != "marker" {
+		t.Fatalf("re-sent %q before its ack had a full interval", got.payload)
+	}
+
+	clock = clock.Add(time.Nanosecond)
+	channel.resendUnacked()
+
+	if got := nextMessage(t, seen); string(got.payload) != "once" {
+		t.Fatalf("after a full interval the far end saw %q, want the unconfirmed message again", got.payload)
+	}
+}
+
+// TestAnAckClearsTheSequenceItsPayloadNames: the acknowledged number is in the payload and the header's is not guaranteed to match it, so a message confirmed only by its payload must stop being re-sent.
+func TestAnAckClearsTheSequenceItsPayloadNames(t *testing.T) {
+	t.Parallel()
+
+	clock := time.UnixMilli(1_700_000_000_000)
+	channel, seen := bareChannel(t, &clock)
+
+	_, err := channel.Write([]byte("confirmed"))
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	sent := nextMessage(t, seen)
+
+	payload, err := json.Marshal(acknowledgeContent{
+		MessageType:         sent.messageType,
+		MessageID:           sent.messageID.String(),
+		SequenceNumber:      sent.sequenceNumber,
+		IsSequentialMessage: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ack := newAgentMessage(clock)
+	ack.messageType = msgAcknowledge
+	ack.flags = flagAck
+	ack.sequenceNumber = sent.sequenceNumber + 99
+	ack.payload = payload
+
+	data, err := ack.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = channel.handle(data)
+	if err != nil {
+		t.Fatalf("handle(ack): %v", err)
+	}
+
+	clock = clock.Add(resendInterval)
+	channel.resendUnacked()
+	sendMarker(t, channel)
+
+	if got := nextMessage(t, seen); string(got.payload) != "marker" {
+		t.Fatalf("re-sent %q the agent had already acknowledged", got.payload)
+	}
+}
+
+// TestOutboundSequenceNumbersCount: the agent orders and acknowledges by sequence number, so the stream opens at 0 and each message after is the next one.
+func TestOutboundSequenceNumbersCount(t *testing.T) {
+	t.Parallel()
+
+	clock := time.UnixMilli(1_700_000_000_000)
+	channel, seen := bareChannel(t, &clock)
+
+	for _, write := range []string{"a", "b", "c"} {
+		_, err := channel.Write([]byte(write))
+		if err != nil {
+			t.Fatalf("Write(%q): %v", write, err)
+		}
+	}
+
+	for want := range int64(3) {
+		if got := nextMessage(t, seen).sequenceNumber; got != want {
+			t.Fatalf("message %d went out as sequence %d", want, got)
+		}
+	}
+}
+
+// TestWritesNeverSendAnEmptyMessage: a write ending on the chunk boundary, or carrying nothing, adds no empty message — one would spend a sequence number and wait on an ack for nothing.
+func TestWritesNeverSendAnEmptyMessage(t *testing.T) {
+	t.Parallel()
+
+	clock := time.UnixMilli(1_700_000_000_000)
+	channel, seen := bareChannel(t, &clock)
+
+	for _, write := range [][]byte{nil, bytes.Repeat([]byte("x"), maxOutboundPayload), []byte("z")} {
+		_, err := channel.Write(write)
+		if err != nil {
+			t.Fatalf("Write(%d bytes): %v", len(write), err)
+		}
+	}
+
+	first, second := nextMessage(t, seen), nextMessage(t, seen)
+	if len(first.payload) != maxOutboundPayload || string(second.payload) != "z" {
+		t.Fatalf("payload sizes = %d, %d — want %d, 1", len(first.payload), len(second.payload), maxOutboundPayload)
+	}
+}
+
+// closedFrame is channel_closed as the agent writes it: a 112-byte header, with no payload type field.
+func closedFrame(t *testing.T, payload []byte) []byte {
+	t.Helper()
+
+	message := newAgentMessage(time.Now())
+	message.messageType = msgChannelClosed
+	message.payload = payload
+
+	full, err := message.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	frame := append([]byte(nil), full[:headerLen-4]...)
+	binary.BigEndian.PutUint32(frame, headerLen-4)
+	frame = binary.BigEndian.AppendUint32(frame, uint32(len(payload))) //nolint:gosec // a test payload
+
+	return append(frame, payload...)
+}
+
+// TestMessageReadsTheShortChannelClosedHeader: with nothing to say, a channel_closed frame is exactly as long as a full header, and still a message.
+func TestMessageReadsTheShortChannelClosedHeader(t *testing.T) {
+	t.Parallel()
+
+	for _, payload := range []string{`{"Output":"bye"}`, ""} {
+		decoded := new(agentMessage)
+
+		err := decoded.unmarshal(closedFrame(t, []byte(payload)))
+		if err != nil || decoded.messageType != msgChannelClosed || string(decoded.payload) != payload {
+			t.Errorf("unmarshal(channel_closed %q) = %v, type %q, payload %q", payload, err, decoded.messageType, decoded.payload)
+		}
+	}
+}
+
+// TestWriteAfterTheAgentClosedReportsWhy: only an orderly end reads as net.ErrClosed; a session the agent ended tells the writer the agent's own reason.
+func TestWriteAfterTheAgentClosedReportsWhy(t *testing.T) {
+	t.Parallel()
+
+	clock := time.UnixMilli(1_700_000_000_000)
+	channel, _ := bareChannel(t, &clock)
+
+	err := channel.handle(closedFrame(t, []byte(`{"Output":"nothing listens on 22"}`)))
+	if !errors.Is(err, ErrChannelClosed) {
+		t.Fatalf("handle(channel_closed) = %v, want ErrChannelClosed", err)
+	}
+
+	channel.fail(err)
+
+	_, err = channel.Write([]byte("late"))
+	if !errors.Is(err, ErrChannelClosed) || !strings.Contains(err.Error(), "nothing listens on 22") {
+		t.Fatalf("Write = %v, want the agent's reason", err)
+	}
+}
+
+// TestChannelCarriesTheLargestPayloadItAllows: the websocket read limit and unmarshal's payload cap describe one bound, so a frame at it must pass both.
+func TestChannelCarriesTheLargestPayloadItAllows(t *testing.T) {
+	t.Parallel()
+
+	channel, agent := openFake(t, &fakeAgent{})
+
+	largest := bytes.Repeat([]byte("L"), maxPayloadBytes)
+	agent.write(msgOutputStreamData, payloadOutput, largest)
+
+	if got := readAtLeast(t, channel, len(largest)); got != string(largest) {
+		t.Fatalf("read %d bytes, want the %d-byte payload intact", len(got), len(largest))
+	}
+}
