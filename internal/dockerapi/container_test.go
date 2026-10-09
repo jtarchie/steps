@@ -4,7 +4,9 @@ package dockerapi
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -47,11 +49,12 @@ func startLabelled(t *testing.T, labels map[string]string) string {
 func TestListContainersMatchesEveryLabel(t *testing.T) {
 	client := requireDaemon(t)
 
-	name := startLabelled(t, map[string]string{"steps.test.owner": "sweep", "steps.test.run": t.Name()})
+	run := uniqueName(t, "run")
+	name := startLabelled(t, map[string]string{"steps.test.owner": "sweep", "steps.test.run": run})
 
 	found, err := client.ListContainers(context.Background(), map[string]string{
 		"steps.test.owner": "sweep",
-		"steps.test.run":   t.Name(),
+		"steps.test.run":   run,
 	})
 	if err != nil {
 		t.Fatalf("ListContainers: %v", err)
@@ -64,7 +67,7 @@ func TestListContainersMatchesEveryLabel(t *testing.T) {
 	// The labels come back structured. That is the point of asking this way:
 	// the old shape formatted them into a line and parsed them out again, and
 	// a label whose value contained a space could not survive the round trip.
-	if found[0].Labels["steps.test.run"] != t.Name() {
+	if found[0].Labels["steps.test.run"] != run {
 		t.Errorf("labels = %v, want the values the container was started with", found[0].Labels)
 	}
 
@@ -113,8 +116,9 @@ func TestListContainersIncludesStoppedOnes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	//nolint:gosec // a fixture name and this process's pid
 	out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--name", name,
-		"--label", "steps.test.owner=exited", "--", testImage, "true").CombinedOutput()
+		"--label", "steps.test.owner=exited", "--label", "steps.pid="+strconv.Itoa(os.Getpid()), "--", testImage, "true").CombinedOutput()
 	if err != nil {
 		t.Fatalf("cannot start a fixture container: %v\n%s", err, out)
 	}
@@ -125,7 +129,7 @@ func TestListContainersIncludesStoppedOnes(t *testing.T) {
 	// recorded as exited rather than racing the daemon.
 	waitForExit(t, name)
 
-	found, err := client.ListContainers(context.Background(), map[string]string{"steps.test.owner": "exited"})
+	found, err := client.ListContainers(context.Background(), map[string]string{"steps.test.owner": "exited", "steps.pid": strconv.Itoa(os.Getpid())})
 	if err != nil {
 		t.Fatalf("ListContainers: %v", err)
 	}

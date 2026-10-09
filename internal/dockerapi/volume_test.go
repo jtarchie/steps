@@ -333,11 +333,14 @@ func TestRunOnceReportsStdoutApartFromStderrAndTheExitCode(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The label is this process's own name for the container: a test-name label also matched one another process (a killed mutant) left behind.
+	once := uniqueName(t, "once")
+
 	code, stdout, stderr, err := client.RunOnce(t.Context(), ContainerSpec{
 		Image:  testImage,
 		Cmd:    []string{"sh", "-c", "cat /d/f; echo noise >&2; exit 5"},
-		Name:   uniqueName(t, "once"),
-		Labels: map[string]string{"steps.once": t.Name()},
+		Name:   once,
+		Labels: map[string]string{"steps.once": once},
 		Mounts: []string{data.Name + ":/d:ro"},
 	})
 	if err != nil {
@@ -348,7 +351,7 @@ func TestRunOnceReportsStdoutApartFromStderrAndTheExitCode(t *testing.T) {
 		t.Fatalf("RunOnce = %d, %q, %q; want 5, the file, and stderr kept apart", code, stdout, stderr)
 	}
 
-	listed, err := client.ListContainers(t.Context(), map[string]string{"steps.once": t.Name()})
+	listed, err := client.ListContainers(t.Context(), map[string]string{"steps.once": once})
 	if err != nil || len(listed) != 0 {
 		t.Fatalf("RunOnce left %d containers: %v", len(listed), err)
 	}
