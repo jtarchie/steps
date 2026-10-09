@@ -140,10 +140,16 @@ func TestAHookWithAnUnsetSecretRefusesEverything(t *testing.T) {
 	f := newHookFixture(t, nil)
 	t.Setenv("STEPS_TEST_HOOK_SECRET", "")
 
+	out := captureLog(t)
 	body := []byte(`{}`)
 
 	if code := f.deliver(t, "push", signed("", "d1", body), body); code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", code)
+	}
+
+	// The 401 alone sends an operator to the sender's signing; only this line names the variable that is actually empty.
+	if line := logLine(out.String(), "webhook.secret_unset"); !strings.Contains(line, "env=STEPS_TEST_HOOK_SECRET") {
+		t.Errorf("webhook.secret_unset = %q, want it to name the unset variable", line)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -200,5 +201,64 @@ func TestResolveHostIgnoresAContextWithoutADockerEndpoint(t *testing.T) {
 	_, err = ResolveHost()
 	if err == nil {
 		t.Fatal("ResolveHost succeeded for a context that names no docker endpoint")
+	}
+}
+
+// TestResolveHostReadsTheStoreUnderHome is what most machines have: no DOCKER_CONFIG, and `docker context use` writing under ~/.docker.
+func TestResolveHostReadsTheStoreUnderHome(t *testing.T) {
+	clearDockerEnv(t)
+
+	root := writeContextStore(t, "colima", map[string]string{"colima": "unix:///from/home.sock"})
+	home := t.TempDir()
+
+	err := os.Rename(root, filepath.Join(home, ".docker"))
+	if err != nil {
+		t.Fatalf("moving the store under home: %v", err)
+	}
+
+	t.Setenv("DOCKER_CONFIG", "")
+	t.Setenv("HOME", home)
+
+	got, err := ResolveHost()
+	if err != nil {
+		t.Fatalf("ResolveHost: %v", err)
+	}
+
+	if got != "unix:///from/home.sock" {
+		t.Errorf("ResolveHost() = %q, want the context selected under $HOME/.docker", got)
+	}
+}
+
+func TestCloseReportsNoErrorForAHealthyClient(t *testing.T) {
+	client, err := New("unix:///nonexistent/docker.sock")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	err = client.Close()
+	if err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+func TestBindsMountTheTreeUnlessVolumesStandIn(t *testing.T) {
+	tests := []struct {
+		name string
+		spec ContainerSpec
+		want []string
+	}{
+		{"tree at its own path", ContainerSpec{WorkingDir: "/w", Mounts: []string{"/a:/a"}}, []string{"/w:/w", "/a:/a"}},
+		{"mount dir outranks the working dir", ContainerSpec{MountDir: "/m", WorkingDir: "/m/sub"}, []string{"/m:/m"}},
+		{"volumes replace the tree", ContainerSpec{WorkingDir: "/w", Volumes: []string{"v:/w"}, Mounts: []string{"/a:/a"}}, []string{"v:/w", "/a:/a"}},
+		{"no tree", ContainerSpec{Mounts: []string{"/a:/a"}}, []string{"/a:/a"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.spec.binds()
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("binds() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

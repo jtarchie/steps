@@ -327,10 +327,7 @@ func (c *Client) ContainerLogTail(ctx context.Context, id string, lines int) str
 
 	// Demultiplexed into one buffer on purpose: what is wanted is what the
 	// container said, in the order it said it, not which stream it chose.
-	_, err = stdcopy.StdCopy(&combined, &combined, logs)
-	if err != nil {
-		return strings.TrimSpace(combined.String())
-	}
+	_, _ = stdcopy.StdCopy(&combined, &combined, logs)
 
 	return strings.TrimSpace(combined.String())
 }

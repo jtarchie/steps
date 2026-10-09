@@ -98,6 +98,45 @@ func TestExecCarriesStdin(t *testing.T) {
 	}
 }
 
+type cancelOnWrite struct {
+	strings.Builder
+
+	cancel context.CancelFunc
+}
+
+func (w *cancelOnWrite) Write(p []byte) (int, error) {
+	defer w.cancel()
+
+	return w.Builder.Write(p) //nolint:wrapcheck // a pass-through
+}
+
+// TestExecCutOffByItsCallerIsSignalled: a caller giving up is the step being cut off, not the machinery failing, and what arrived before stays.
+func TestExecCutOffByItsCallerIsSignalled(t *testing.T) {
+	client := requireDaemon(t)
+	id := startSession(t, client, ContainerSpec{})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	stdout := &cancelOnWrite{cancel: cancel}
+
+	code, err := client.Exec(ctx, id, ExecOptions{
+		Cmd:    []string{"sh", "-c", "echo started; sleep 60"},
+		Stdout: stdout,
+	})
+	if err != nil {
+		t.Fatalf("Exec: %v, want the cut-off reported as a status", err)
+	}
+
+	if code != SignalledExitCode {
+		t.Errorf("exit code = %d, want %d", code, SignalledExitCode)
+	}
+
+	if strings.TrimSpace(stdout.String()) != "started" {
+		t.Errorf("stdout = %q, want what arrived before the cut-off", stdout.String())
+	}
+}
+
 // TestExecWithoutStdinDoesNotHang pins the other half: a command that reads
 // stdin when nothing is attached must see an immediate end of file rather than
 // waiting out the step's timeout.

@@ -101,6 +101,27 @@ func TestAnUnrecordedVersionNamesItsResource(t *testing.T) {
 	}
 }
 
+type refusingCheckErrors struct{ store.Store }
+
+func (refusingCheckErrors) RecordCheckError(context.Context, string, string) error {
+	return os.ErrPermission
+}
+
+// TestAnUnrecordedCheckOutcomeIsLogged: the outcome is a diagnostic and its own failure is not returned, so the log is the only place it can show.
+func TestAnUnrecordedCheckOutcomeIsLogged(t *testing.T) {
+	dir := t.TempDir()
+	cfg := loadConfig(t, dir, strings.Replace(pollFeed, "VERSIONS", filepath.Join(dir, "missing.json"), 1))
+	st := mustOpenStore(t, dir)
+	out := captureLog(t)
+
+	_, _ = pollOnce(t.Context(), cfg, refusingCheckErrors{st})
+
+	line := logLine(out.String(), "trigger.check_error_record")
+	if !strings.Contains(line, "resource=items") || !strings.Contains(line, os.ErrPermission.Error()) {
+		t.Errorf("trigger.check_error_record = %q, want the resource and the store's refusal", line)
+	}
+}
+
 // TestARefusedDeliveryNamesItsPipelineAndRevision: webhook lines come from a
 // request, not the daemon's poll loop, so they are stamped where the request
 // resolves its resource.
