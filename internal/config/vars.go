@@ -107,7 +107,7 @@ func (c *Config) validateVars() error {
 // validateLoadVarStep checks a load_var: step names a var and a file.
 func validateLoadVarStep(label string, step *Step) error {
 	if step.LoadVar == "" {
-		if step.VarFile != "" && step.Task == "" && step.Get == "" {
+		if step.VarFile != "" {
 			return fmt.Errorf("%s: file: without load_var: has no meaning here", label)
 		}
 
