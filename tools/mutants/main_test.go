@@ -157,7 +157,7 @@ func TestSweepOrderIsCheapFirstAndSerialPackagesLast(t *testing.T) {
 	}
 }
 
-func TestOnlyPackagesWithTestsOfTheirOwnAreSwept(t *testing.T) {
+func TestOnlyPackagesGremlinsCanJudgeAreSwept(t *testing.T) {
 	t.Chdir("../..")
 
 	tested, err := packageDirs(t.Context(), testedPackages)
@@ -172,6 +172,10 @@ func TestOnlyPackagesWithTestsOfTheirOwnAreSwept(t *testing.T) {
 
 	if slices.Contains(tested, "./internal/store/storetest") {
 		t.Error("storetest has no tests of its own; package mode scores every mutant NOT COVERED")
+	}
+
+	if slices.Contains(tested, "./tools/stamp") {
+		t.Error("a package main is judged by the module root's tests under gremlins v0.6.0, so every mutant lives")
 	}
 
 	if !slices.Contains(all, "./internal/store/storetest") {

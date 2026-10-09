@@ -268,10 +268,10 @@ func readLedger() (ledger, error) {
 	return book, nil
 }
 
-// allPackages is every package with source; testedPackages only those with tests of their own. A package with none (storetest, docs) has every mutant NOT COVERED in package mode, so measuring it records a meaningless row and nagging about it is noise — its killers live in the packages that import it.
+// allPackages is every package with source; testedPackages only those gremlins can judge. A package with no tests of its own (storetest, docs) has every mutant NOT COVERED in package mode, its killers living in the packages that import it. A package main is out too: gremlins v0.6.0 picks the package to test by walking up for a directory named like the Go package, finds none named "main", and runs the module root's tests instead — none — so every mutant in tools/ scored LIVED or TIMED OUT, never KILLED.
 const (
 	allPackages    = `{{if .GoFiles}}{{.Dir}}{{end}}`
-	testedPackages = `{{if and .GoFiles (or .TestGoFiles .XTestGoFiles)}}{{.Dir}}{{end}}`
+	testedPackages = `{{if and .GoFiles (or .TestGoFiles .XTestGoFiles) (ne .Name "main")}}{{.Dir}}{{end}}`
 )
 
 func packageDirs(ctx context.Context, filter string) ([]string, error) {
