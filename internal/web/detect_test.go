@@ -56,6 +56,37 @@ func TestEntryPointsSkipHighlightingAboveTheLimit(t *testing.T) {
 	}
 }
 
+// TestEntryPointsStillHighlightAtTheLimit: the limit is the largest size highlighted, not the smallest skipped.
+func TestEntryPointsStillHighlightAtTheLimit(t *testing.T) {
+	t.Parallel()
+
+	head := "--- a/x\n+++ b/x\n@@ -1 +1 @@\n"
+	exact := head + "+" + strings.Repeat("b", highlightLimit-len(head)-2) + "\n"
+
+	if len(exact) != highlightLimit || detectLanguage(exact) != "diff" {
+		t.Fatalf("test input is %d bytes detected as %q, want %d bytes of diff", len(exact), detectLanguage(exact), highlightLimit)
+	}
+
+	for name, got := range map[string]string{
+		"highlightMessage": string(highlightMessage(exact)),
+		"highlightPayload": string(highlightPayload(exact)),
+		"renderModelText":  string(renderModelText(exact)),
+	} {
+		if !strings.Contains(got, "<span style=") {
+			t.Errorf("%s skipped highlighting an input exactly at the limit", name)
+		}
+	}
+}
+
+// TestAMessageIsHighlightedAsWhatItWasDetectedAs: markdown is the fallback for a message nothing recognised, never a replacement for what something did.
+func TestAMessageIsHighlightedAsWhatItWasDetectedAs(t *testing.T) {
+	t.Parallel()
+
+	if got := string(highlightMessage(`{"path": "main.go"}`)); !strings.Contains(got, `class="j-key"`) {
+		t.Errorf("a JSON message was not drawn as JSON:\n%s", got)
+	}
+}
+
 // TestModelTextRendersWhatAModelWroteForAReader is the regression guard on
 // the one detection renderModelText must NOT act on. An answer with a fenced
 // block, or a heading beside a list or a table, detects as markdown — and

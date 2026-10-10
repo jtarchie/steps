@@ -62,6 +62,24 @@ func TestMarkTitlePrefix(t *testing.T) {
 	}
 }
 
+// TestMarkWordsSayTheRingWithoutALeadingComma: Words is the screen reader's copy of the glyphs, and a running scope with no finished disc yet has only the ring to say.
+func TestMarkWordsSayTheRingWithoutALeadingComma(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		mark mark
+		want string
+	}{
+		{mark{Ring: true}, "running"},
+		{mark{Disc: discFailed, Ring: true}, "failed, running"},
+		{mark{Disc: discFailed}, "failed"},
+	} {
+		if got := tc.mark.Words(); got != tc.want {
+			t.Errorf("%+v.Words() = %q, want %q", tc.mark, got, tc.want)
+		}
+	}
+}
+
 // TestMarkFavicon reads the icon's parts back out of its URI: the disc's
 // color, the ring only while something runs, and a needs-you count that
 // takes the disc yellow and caps at 9+.
@@ -81,6 +99,9 @@ func TestMarkFavicon(t *testing.T) {
 		{"paused", mark{Disc: discPaused}, []string{"fill=%27%237aa4d9%27"}, nil},
 		{"waiting", mark{Disc: discFailed, Needs: 3}, []string{"fill=%27%23d9a94a%27", "%3E3%3C/text%3E"}, []string{"%23e0645a"}},
 		{"overflowing", mark{Needs: 12}, []string{"%3E9+%3C/text%3E"}, []string{"12"}},
+		{"nine still fits", mark{Needs: 9}, []string{"font-size=%279%27", "%3E9%3C/text%3E"}, []string{"9+"}},
+		{"ringed count", mark{Ring: true, Needs: 9}, []string{ring, "font-size=%277%27", "%3E9%3C/text%3E"}, nil},
+		{"ringed overflow", mark{Ring: true, Needs: 10}, []string{ring, "font-size=%275%27", "%3E9+%3C/text%3E"}, nil},
 	} {
 		icon := string(tc.mark.Favicon())
 

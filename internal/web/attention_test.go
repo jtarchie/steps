@@ -1,6 +1,7 @@
 package web
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -100,6 +101,10 @@ func TestEachBadgeSitsOnTheTabThatFixesIt(t *testing.T) {
 			t.Errorf("no badge on the tab for %q:\n%s", want, body)
 		}
 	}
+
+	if !strings.Contains(body, `nothing is polled until it succeeds"><span aria-hidden="true">●</span>1</span>`) {
+		t.Errorf("the resources badge does not count its one failing check:\n%s", body)
+	}
 }
 
 // TestNothingWaitingDrawsNothing: the surface's presence IS the signal, so it
@@ -179,6 +184,10 @@ func TestAnMCPServerNeedingALoginReachesTheHeader(t *testing.T) {
 
 	if !strings.Contains(body, `>mcp<span class="badge"`) {
 		t.Error("no badge on the mcp tab")
+	}
+
+	if negative := regexp.MustCompile(`●</span>-\d|-\d+ mcp server`).FindString(body); negative != "" {
+		t.Errorf("the mcp count went negative (%q):\n%s", negative, body)
 	}
 }
 

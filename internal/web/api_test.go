@@ -399,4 +399,42 @@ func TestABrokenReasonIsCapped(t *testing.T) {
 	if len(reason) > brokenReasonLimit+len("…") || !strings.HasSuffix(reason, "…") {
 		t.Errorf("reason is %d bytes, want it capped at %d and marked as cut", len(reason), brokenReasonLimit)
 	}
+
+	exact := strings.Repeat("y", brokenReasonLimit)
+	server.MarkBroken(BrokenPipeline{Name: "full", Reason: exact})
+
+	if reason, _ := server.BrokenReason("full"); reason != exact {
+		t.Errorf("a reason of exactly the cap was cut: %d bytes, suffix %q", len(reason), reason[len(reason)-4:])
+	}
+}
+
+// TestTheListNamesTheConfigurationEachPipelineServes: the sha is what `steps pipeline list` prints to tell two configurations apart, so a served pipeline must carry the one it runs.
+func TestTheListNamesTheConfigurationEachPipelineServes(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	revision := pipeline.Config().Revision
+
+	err := pipeline.Store.RecordRevision(t.Context(), revision.SHA, revision.Source, revision.Includes)
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	err = pipeline.Store.SetCurrentRevision(t.Context(), revision.SHA, pipeline.Path())
+	if err != nil {
+		t.Fatalf("SetCurrentRevision: %v", err)
+	}
+
+	_, body := call(t, server, http.MethodGet, "/api/pipelines", "")
+
+	var rows []PipelineSummary
+
+	err = json.Unmarshal([]byte(body), &rows)
+	if err != nil {
+		t.Fatalf("list: %v: %s", err, body)
+	}
+
+	if len(rows) != 1 || revision.SHA == "" || rows[0].SHA != revision.SHA {
+		t.Errorf("list = %+v, want demo serving %q", rows, revision.SHA)
+	}
 }

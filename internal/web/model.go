@@ -79,7 +79,6 @@ type runView struct {
 type spendSummary struct {
 	Tokens    int
 	Cached    int
-	Steps     int
 	Truncated int
 	// USD is what the run cost, summed over the steps that reported a price.
 	// Zero when nothing did, which is not the same as free — see Priced.
@@ -130,7 +129,6 @@ func (r runView) Spend() spendSummary {
 	for _, step := range r.Usage {
 		summary.Tokens += step.Total
 		summary.Cached += step.Cached
-		summary.Steps++
 
 		if step.CostUSD != nil {
 			summary.USD += *step.CostUSD

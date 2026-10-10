@@ -34,6 +34,10 @@ func TestNodePageLinksItsJob(t *testing.T) {
 	if !strings.Contains(body, `job <a href="/p/demo/jobs/build">build</a>`) {
 		t.Error("node page does not link its job")
 	}
+
+	if !strings.Contains(body, `<a href="/p/demo/jobs/build/detail">build</a><span class="csep">`) {
+		t.Error("node page's crumbs do not climb through its job")
+	}
 }
 
 // TestNodePageDropsJobLinkForAJoblessNode: handleNode's crumbs already guard
@@ -60,6 +64,10 @@ func TestNodePageDropsJobLinkForAJoblessNode(t *testing.T) {
 
 	if strings.Contains(body, `href="/p/demo/jobs/"`) {
 		t.Error("jobless node page renders an empty job link")
+	}
+
+	if strings.Contains(body, `href="/p/demo/jobs//detail"`) {
+		t.Error("jobless node page's crumbs climb through a job with no name")
 	}
 }
 

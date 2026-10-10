@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -444,5 +445,139 @@ func assertResultValueAgrees(t *testing.T, raw string) {
 	if got.HTML != "" || got.Src != "/src" || got.Target != "result-7" {
 		t.Errorf("resultValue(%.40q) folded without deferring its body: html %d bytes, src %q, target %q",
 			raw, len(got.HTML), got.Src, got.Target)
+	}
+}
+
+// TestJSONInlineWidthIsTheRenderedWidth: the fold's budget is the one-line spelling's exact width — jsonInlineWidth stays on the row, one column more folds.
+func TestJSONInlineWidthIsTheRenderedWidth(t *testing.T) {
+	t.Parallel()
+
+	const shape = `{ "a": [ 1, "x" ], "b": [], "pad": "%s" }`
+
+	base := len(fmt.Sprintf(shape, ""))
+
+	for _, width := range []int{jsonInlineWidth - 1, jsonInlineWidth, jsonInlineWidth + 1} {
+		pad := strings.Repeat("p", width-base)
+		view := jsonValue(`{"a":[1,"x"],"b":[],"pad":"` + pad + `"}`)
+
+		if want := width <= jsonInlineWidth; view.Inline != want {
+			t.Errorf("width %d: Inline = %v, want %v", width, view.Inline, want)
+
+			continue
+		}
+
+		if !view.Inline {
+			continue
+		}
+
+		if got, want := stripTags(string(view.HTML)), fmt.Sprintf(shape, pad); got != want {
+			t.Errorf("width %d rendered\n%q\nwant\n%q", width, got, want)
+		}
+	}
+}
+
+// TestJSONBlockLayout pins what a folded payload opens to: two spaces a level, nested documents and multi-line strings indented under their quotes, no trailing comma.
+func TestJSONBlockLayout(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("l", 100)
+
+	inner, err := json.Marshal(map[string]string{"k": long})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"outer": map[string]any{
+			"doc":  string(inner),
+			"list": []any{long, 2},
+			"text": "one\ntwo",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	view := jsonValue(string(payload))
+	if view.Inline {
+		t.Fatal("a payload wider than a row stayed inline")
+	}
+
+	want := strings.Join([]string{
+		`{`,
+		`  "outer": {`,
+		`    "doc": "`,
+		`      {`,
+		`        "k": "` + long + `"`,
+		`      }`,
+		`    ",`,
+		`    "list": [`,
+		`      "` + long + `",`,
+		`      2`,
+		`    ],`,
+		`    "text": "`,
+		`      one`,
+		`      two`,
+		`    "`,
+		`  }`,
+		`}`,
+	}, "\n")
+
+	if got := stripTags(string(view.HTML)); got != want {
+		t.Errorf("block rendered\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestWriteStringBlockHighlightsAtTheLineLimit: the limit is the most lines
+// still highlighted, not the first count that is not.
+func TestWriteStringBlockHighlightsAtTheLineLimit(t *testing.T) {
+	t.Parallel()
+
+	source := "package main\n" + strings.Repeat("func f() {}\n", jsonDocLineLimit-1)
+
+	payload, err := json.Marshal(map[string]string{"content": source})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	html := string(jsonValue(string(payload)).HTML)
+
+	if strings.Contains(html, `class="j-doc"`) || !strings.Contains(html, "<span style=") {
+		t.Errorf("a document of exactly jsonDocLineLimit lines was not highlighted:\n%.300s", html)
+	}
+}
+
+func TestJSONSummaryAtItsBoundaries(t *testing.T) {
+	t.Parallel()
+
+	for raw, want := range map[string]string{
+		`{}`:                  "object · 0 keys · 2 B",
+		`{"a":1,"b":2,"c":3}`: "a, b, c · 19 B",
+	} {
+		node, ok := parseJSONDocument(raw, 0)
+		if !ok {
+			t.Fatalf("%s did not parse", raw)
+		}
+
+		if got := jsonSummary(node, raw); got != want {
+			t.Errorf("jsonSummary(%s) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+func TestFormatBytesChangesUnitAtAThousand(t *testing.T) {
+	t.Parallel()
+
+	for size, want := range map[int]string{
+		999:       "999 B",
+		1000:      "1.0 kB",
+		1500:      "1.5 kB",
+		999_999:   "1000.0 kB",
+		1_000_000: "1.0 MB",
+		2_500_000: "2.5 MB",
+	} {
+		if got := formatBytes(size); got != want {
+			t.Errorf("formatBytes(%d) = %q, want %q", size, got, want)
+		}
 	}
 }

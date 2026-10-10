@@ -5,6 +5,8 @@ package web
 import (
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/docs"
 )
 
 // renderDocs is what handleDocs itself calls, over source a test chooses rather than an embedded page.
@@ -56,6 +58,43 @@ func TestDocHeadingIDsDoNotLeakBetweenRenders(t *testing.T) {
 
 	if strings.Contains(second, `id="caching-1"`) {
 		t.Errorf("the second render inherited the first render's ids:\n%s", second)
+	}
+}
+
+// TestTheDocsMapIsTheSectionsOfALongPage: the "on this page" list is the h2s alone, and a page of two sections gets none.
+func TestTheDocsMapIsTheSectionsOfALongPage(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+
+	_, long := get(t, server, "/docs/resources.md")
+	toc := between(t, long, `class="docstoc"`, "</nav>")
+
+	source, err := docs.Page("resources.md")
+	if err != nil {
+		t.Fatalf("docs.Page: %v", err)
+	}
+
+	var want []string
+
+	for _, heading := range docs.Headings(string(source)) {
+		if heading.Level == 2 {
+			want = append(want, `href="#`+heading.ID+`"`)
+		}
+	}
+
+	if got := strings.Count(toc, `href="#`); len(want) < 3 || got != len(want) {
+		t.Errorf("the map has %d entries, want the page's %d h2s:\n%s", got, len(want), toc)
+	}
+
+	for _, entry := range want {
+		if !strings.Contains(toc, entry) {
+			t.Errorf("the map lacks the section %s:\n%s", entry, toc)
+		}
+	}
+
+	if _, short := get(t, server, "/docs/templating.md"); strings.Contains(short, `class="docstoc"`) {
+		t.Error("a page of two sections is given a map")
 	}
 }
 

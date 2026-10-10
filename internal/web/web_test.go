@@ -1069,6 +1069,37 @@ func TestFollowSaysWhatAQueuedRunIsWaitingOn(t *testing.T) {
 	}
 }
 
+// TestFollowCountsOnlyTheLimitsAJobHas: a second build of a job whose one slot is taken is held by max_in_flight, and a job in no serial group is never told one is free.
+func TestFollowCountsOnlyTheLimitsAJobHas(t *testing.T) {
+	t.Parallel()
+
+	server, st := serialGroupServer(t)
+
+	enqueueAndClaim(t, st, "deploy-staging")
+
+	for _, job := range []string{"deploy-staging", "lint"} {
+		err := st.EnqueueJob(t.Context(), job, "test")
+		if err != nil {
+			t.Fatalf("EnqueueJob %s: %v", job, err)
+		}
+	}
+
+	since := time.Now().UTC().Add(-time.Minute).UnixMilli()
+
+	answer, body := latestRun(t, server, fmt.Sprintf("/p/demo/jobs/deploy-staging/latest-run?since=%d", since))
+	if !slices.Contains(answer.Checks, followCheck{Text: "its max_in_flight (1) is full"}) {
+		t.Errorf("deploy-staging: checks = %s, want its one slot reported full by the build holding it", body)
+	}
+
+	answer, body = latestRun(t, server, fmt.Sprintf("/p/demo/jobs/lint/latest-run?since=%d", since))
+	if want := []followCheck{
+		{Text: "the pipeline is not paused", Clear: true},
+		{Text: "no worker has claimed it yet"},
+	}; !slices.Equal(answer.Checks, want) {
+		t.Errorf("lint: checks = %s, want %v", body, want)
+	}
+}
+
 // TestFollowPageSpeaksTheRunPagesLanguage: its heading was `steps trigger <job>`, a command that does not exist.
 func TestFollowPageSpeaksTheRunPagesLanguage(t *testing.T) {
 	t.Parallel()

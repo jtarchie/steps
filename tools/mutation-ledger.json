@@ -739,6 +739,150 @@
         }
       ]
     },
+    "./internal/web": {
+      "swept_at": "824ba22",
+      "date": "2026-10-10",
+      "killed": 825,
+      "lived": 199,
+      "timed_out": 6,
+      "not_covered": 56,
+      "efficacy": 80.57,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "graph.go | INVERT_NEGATIVES | out := g.add(\"out:\"+view.Name+\":\"+resource, kindOutput, resource, -1)",
+          "why": "the view index is only read for kindJob nodes, so a resource node's index is never used"
+        },
+        {
+          "mutant": "graph.go | ARITHMETIC_BASE | out := g.add(\"out:\"+view.Name+\":\"+resource, kindOutput, resource, -1)",
+          "why": "the view index is only read for kindJob nodes, so a resource node's index is never used"
+        },
+        {
+          "mutant": "graph.go | INVERT_NEGATIVES | in := g.add(\"in:\"+view.Name+\":\"+input.Resource, kindInput, input.Resource, -1)",
+          "why": "the view index is only read for kindJob nodes"
+        },
+        {
+          "mutant": "graph.go | ARITHMETIC_BASE | in := g.add(\"in:\"+view.Name+\":\"+input.Resource, kindInput, input.Resource, -1)",
+          "why": "the view index is only read for kindJob nodes"
+        },
+        {
+          "mutant": "graph.go | INVERT_NEGATIVES | source = g.add(\"via:\"+upstream+\":\"+input.Resource, kindVia, input.Resource, -1)",
+          "why": "the view index is only read for kindJob nodes"
+        },
+        {
+          "mutant": "graph.go | ARITHMETIC_BASE | source = g.add(\"via:\"+upstream+\":\"+input.Resource, kindVia, input.Resource, -1)",
+          "why": "the view index is only read for kindJob nodes"
+        },
+        {
+          "mutant": "graph.go | INVERT_NEGATIVES | gap := g.add(fmt.Sprintf(\"gap:%d:%d\", at, step), kindSpacer, edge.key, -1)",
+          "why": "the view index is only read for kindJob nodes"
+        },
+        {
+          "mutant": "graph.go | ARITHMETIC_BASE | gap := g.add(fmt.Sprintf(\"gap:%d:%d\", at, step), kindSpacer, edge.key, -1)",
+          "why": "the view index is only read for kindJob nodes"
+        },
+        {
+          "mutant": "graph.go | CONDITIONALS_BOUNDARY | if d := visit(g.edges[at].from) + 1; d > depth {",
+          "why": "on a tie it assigns the value depth already holds"
+        },
+        {
+          "mutant": "graph.go | CONDITIONALS_BOUNDARY | if r := g.nodes[g.edges[at].to].rank - 1; latest == -1 || r < latest {",
+          "why": "on a tie it assigns the value latest already holds"
+        },
+        {
+          "mutant": "graph.go | CONDITIONALS_BOUNDARY | if latest > node.rank {",
+          "why": "on a tie it reassigns the same rank and only costs one more bounded no-op pass of pullRight"
+        },
+        {
+          "mutant": "graph.go | CONDITIONALS_BOUNDARY | if !node.dead && node.rank > deepest {",
+          "why": "on a tie it assigns the value deepest already holds"
+        },
+        {
+          "mutant": "graph.go | CONDITIONALS_BOUNDARY | if !node.dead && (top == -1 || node.y < top) {",
+          "why": "on a tie it assigns the value top already holds"
+        },
+        {
+          "mutant": "graph.go | CONDITIONALS_BOUNDARY | sort.SliceStable(ports, func(a, b int) bool { return ports[a].slot < ports[b].slot })",
+          "why": "a job's ports on one side all lead to distinct nodes in one adjacent column (one edge per pair, spacers make every span 1), so slots never tie; 3000 random acyclic pipelines matched exactly, and only a self-referential cycle, which validation refuses, ties"
+        },
+        {
+          "mutant": "model.go | CONDITIONALS_BOUNDARY | if at := strings.LastIndex(stepName, \" [\"); at > 0 && strings.HasSuffix(stepName, \"]\") {",
+          "why": "at == 0 would look up the empty name, and no agent can be named \"\"."
+        },
+        {
+          "mutant": "model.go | CONDITIONALS_BOUNDARY | for size >= unit-0.05 && exp < len(units)-1 {",
+          "why": "n/1024^k is a short dyadic fraction and can never equal the float64 nearest 1023.95, so the two comparisons never disagree."
+        },
+        {
+          "mutant": "live.go | CONDITIONALS_BOUNDARY | for at := int64(0); at < seq; {",
+          "why": "At at == seq the extra read returns only rows past seq, which are all trimmed, so the seed ends unchanged."
+        },
+        {
+          "mutant": "overview.go | CONDITIONALS_BOUNDARY | sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })",
+          "why": "Slugs are unique and sort.Slice is unstable anyway, so a non-strict comparator gives the same order."
+        },
+        {
+          "mutant": "overview.go | CONDITIONALS_BOUNDARY | if len(runs) > limit {",
+          "why": "Truncating a slice of exactly limit rows to limit is a no-op."
+        },
+        {
+          "mutant": "web.go | CONDITIONALS_BOUNDARY | sort.Slice(s.pipelines, func(i, j int) bool { return s.pipelines[i].Slug < s.pipelines[j].Slug })",
+          "why": "A slug clash is refused above, so slugs are unique."
+        },
+        {
+          "mutant": "web.go | CONDITIONALS_BOUNDARY | return nav.Pipelines[i].Slug < nav.Pipelines[j].Slug",
+          "why": "Switcher slugs are unique (a served slug is deleted from broken on add), so a non-strict comparator gives the same order."
+        },
+        {
+          "mutant": "detect.go | CONDITIONALS_BOUNDARY | if len(text) > detectBudget {",
+          "why": "Truncating text of exactly detectBudget bytes to detectBudget is a no-op."
+        },
+        {
+          "mutant": "docs.go | CONDITIONALS_BOUNDARY | if len(toc) < 3 {",
+          "why": "No embedded doc page has exactly three h2s (measured via docs.Headings), so the boundary is unreachable today."
+        },
+        {
+          "mutant": "runner.go | CONDITIONALS_BOUNDARY | if concurrent < 1 {",
+          "why": "concurrent == 1 is set to 1."
+        },
+        {
+          "mutant": "runner.go | CONDITIONALS_BOUNDARY | if runErr == nil || job.MaxConsecutiveFailures <= 0 || !paused {",
+          "why": "RecordJobOutcome reports paused only when maxFailures > 0 (the store contract), so at max == 0 !paused already returns."
+        },
+        {
+          "mutant": "jsonview.go | CONDITIONALS_BOUNDARY | if budget < 0 || n.block() {",
+          "why": "Only a child is ever entered with budget 0, and every value costs at least 1 column, so it is refused either way."
+        },
+        {
+          "mutant": "jsonview.go | CONDITIONALS_BOUNDARY | if budget < 0 || cost > budget {",
+          "why": "Every spend costs at least 1, so with budget 0 the cost > budget check already returns -1."
+        },
+        {
+          "mutant": "render.go | CONDITIONALS_BOUNDARY | if elapsed < 0 {",
+          "why": "time.Since of a past timestamp is exactly 0 only if the monotonic clock fails to advance, which no test can arrange."
+        },
+        {
+          "mutant": "render.go | CONDITIONALS_BOUNDARY | if len(id) <= shortLen {",
+          "why": "When len(id) == shortLen, id[:shortLen] is id."
+        },
+        {
+          "mutant": "render.go | CONDITIONALS_BOUNDARY | if len(runs) > maxBars {",
+          "why": "When len(runs) == maxBars, runs[:maxBars] is runs."
+        },
+        {
+          "mutant": "render.go | CONDITIONALS_BOUNDARY | if d := run.Duration(); d > slowest {",
+          "why": "Assigning an equal duration to slowest changes nothing."
+        },
+        {
+          "mutant": "render.go | CONDITIONALS_BOUNDARY | if slowest > 0 {",
+          "why": "With slowest 0 the 0/0 NaN converts to 0 or MinInt, and the height<1 clamp makes it 1, the same as the default."
+        },
+        {
+          "mutant": "render.go | CONDITIONALS_BOUNDARY | if height < 1 {",
+          "why": "Clamping a height of 1 to 1 changes nothing."
+        }
+      ]
+    },
     "./internal/webhook": {
       "swept_at": "824ba22",
       "date": "2026-10-09",

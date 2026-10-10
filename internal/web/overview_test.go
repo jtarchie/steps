@@ -1914,3 +1914,44 @@ func TestTheRootFeedIsTenRunsUntilAskedForMore(t *testing.T) {
 		t.Error("pausing from the long feed returns to the short one")
 	}
 }
+
+// TestAFeedOfExactlyTenOffersNoMore: "show 50 runs" promises runs the feed is not showing, and with exactly ten there are none.
+func TestAFeedOfExactlyTenOffersNoMore(t *testing.T) {
+	t.Parallel()
+
+	_, pipelines := testPipelines(t, "app", "infra")
+
+	server, err := New(pipelines, stubRunner{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for i := range feedLength {
+		seedRun(t, pipelines[0], fmt.Sprintf("run-%02d", i), "app-job", "succeeded")
+	}
+
+	_, page := get(t, server, "/")
+	if strings.Contains(page, `class="more"`) {
+		t.Error("a feed showing every run there is offers more")
+	}
+
+	if row := pipelineRow(t, page, "app"); !strings.Contains(row, `href="/p/app/runs/run-09"`) {
+		t.Errorf("the pipeline's row does not link its latest run:\n%s", row)
+	}
+}
+
+// TestTheOverviewTalliesEachRowThatWantsAPerson: a broken row counts as broken and nothing else, because it has no state of its own to be paused or failing in.
+func TestTheOverviewTalliesEachRowThatWantsAPerson(t *testing.T) {
+	t.Parallel()
+
+	got := tallyOverview([]overviewPipeline{
+		{Slug: "gone", Broken: "workspace: root is not writable", Paused: true, Mark: mark{Disc: discFailed}},
+		{Slug: "held", Paused: true, Mark: mark{Disc: discFailed}},
+		{Slug: "red", Mark: mark{Disc: discErrored}},
+		{Slug: "green", Mark: mark{Disc: discPassed}},
+	})
+
+	if want := (overviewTally{Paused: 1, Failing: 2, Broken: 1}); got != want {
+		t.Errorf("tally = %+v, want %+v", got, want)
+	}
+}

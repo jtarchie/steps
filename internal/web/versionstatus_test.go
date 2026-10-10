@@ -82,3 +82,42 @@ func TestResourceDetailSaysWhenNoJobGetsIt(t *testing.T) {
 		t.Errorf("a resource no job gets does not say so:\n%s", body)
 	}
 }
+
+// TestAnEveryJobsCellIsReadAgainstWhatItConsumed: a `version: every` job will build every version past its own consumed mark, so one behind the mark with no run is reaped history — not one still waiting its turn.
+func TestAnEveryJobsCellIsReadAgainstWhatItConsumed(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	pipeline.Config().Jobs[0].Plan[0].Version = "every"
+
+	_, err := pipeline.Store.RecordVersions(ctx, "repo", []map[string]any{{"ref": "aaa"}, {"ref": "bbb"}}, 0)
+	if err != nil {
+		t.Fatalf("RecordVersions: %v", err)
+	}
+
+	err = pipeline.Store.RecordConsumedMark(ctx, "build", "repo", 1<<40)
+	if err != nil {
+		t.Fatalf("RecordConsumedMark: %v", err)
+	}
+
+	_, body := get(t, server, "/p/demo/resources/repo")
+
+	if got := strings.Count(body, ">reaped</span>"); got != 2 {
+		t.Errorf("%d of build's two cells read as reaped, want both: it consumed past them:\n%s", got, body)
+	}
+}
+
+// TestANeverCheckedResourceSpansEveryColumn: the placeholder row is one cell across the version column and one per consuming job, or the table draws it ragged.
+func TestANeverCheckedResourceSpansEveryColumn(t *testing.T) {
+	t.Parallel()
+
+	server, _ := testPipeline(t)
+
+	_, body := get(t, server, "/p/demo/resources/repo")
+
+	if !strings.Contains(body, `<td class="faint" colspan="3">never checked</td>`) {
+		t.Errorf("never-checked row does not span the version column and build's and deploy's:\n%s", body)
+	}
+}

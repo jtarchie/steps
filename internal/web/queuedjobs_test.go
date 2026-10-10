@@ -88,6 +88,33 @@ func TestTheQueueTableBlamesMaxRuns(t *testing.T) {
 	}
 }
 
+// TestAnUnlimitedServerBlamesNoMaxRuns: zero is --max-runs unset, and a limit of zero with zero running is not a full one.
+func TestAnUnlimitedServerBlamesNoMaxRuns(t *testing.T) {
+	t.Parallel()
+
+	_, pipeline := testPipeline(t)
+
+	server, err := New([]*Pipeline{pipeline}, stubRunner{}, WithCapacity(unlimitedCapacity{}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	err = pipeline.Store.EnqueueJob(context.Background(), "build", "new version")
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+
+	_, page := get(t, server, "/p/demo")
+
+	if queue := between(t, page, `id="queue-region"`, "</table>"); strings.Contains(queue, "--max-runs") {
+		t.Errorf("a server with no --max-runs blames it:\n%s", queue)
+	}
+}
+
+type unlimitedCapacity struct{}
+
+func (unlimitedCapacity) RunCapacity() (int, int) { return 0, 0 }
+
 type fullCapacity struct{}
 
 func (fullCapacity) RunCapacity() (int, int) { return 1, 1 }

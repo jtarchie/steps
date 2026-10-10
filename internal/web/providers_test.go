@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -160,3 +162,25 @@ func waitForClose(t *testing.T, provider *countingProvider) {
 
 	t.Fatalf("the provider was closed %d times; want 1", provider.closes())
 }
+
+// A provider that cannot remove its tree has left a workspace on disk, and the log is the only place that says which pipeline's. Serial: the logger is the process's.
+func TestAProviderThatFailsToCloseIsLoggedAndOnlyThatOne(t *testing.T) {
+	logs := captureLogs(t)
+
+	held := newProviders()
+	held.set("clean", newCountingProvider())
+	held.set("stuck", refusingProvider{newCountingProvider()})
+	held.Close()
+
+	if !strings.Contains(logs.String(), "pipeline=stuck") {
+		t.Errorf("a provider that failed to close was not logged:\n%s", logs.String())
+	}
+
+	if strings.Contains(logs.String(), "pipeline=clean") {
+		t.Errorf("a provider that closed cleanly was logged as failing:\n%s", logs.String())
+	}
+}
+
+type refusingProvider struct{ *countingProvider }
+
+func (refusingProvider) Close() error { return errors.New("workspace: root is busy") }

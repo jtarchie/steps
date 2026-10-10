@@ -352,13 +352,12 @@ func (s *Server) handleRun(c *echo.Context) error {
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "run", map[string]any{
-		"Nav":         nav,
-		"Run":         view,
-		"Strip":       strip,
-		"Job":         job,
-		"JobDeclared": jobErr == nil,
-		"Bar":         runBar(pipeline, view.Run, jobErr == nil),
-		"Title":       runTitle(view.Run),
+		"Nav":   nav,
+		"Run":   view,
+		"Strip": strip,
+		"Job":   job,
+		"Bar":   runBar(pipeline, view.Run, jobErr == nil),
+		"Title": runTitle(view.Run),
 		"Crumbs": []crumb{
 			{Label: "jobs", URL: "/p/" + pipeline.Slug},
 			{Label: view.Run.JobName, URL: "/p/" + pipeline.Slug + "/jobs/" + view.Run.JobName + "/detail"},

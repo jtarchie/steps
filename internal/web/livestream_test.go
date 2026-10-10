@@ -1000,6 +1000,116 @@ func TestIdleStreamClosesWithoutAWord(t *testing.T) {
 	}
 }
 
+// TestABusyStreamOutlivesTheIdleDeadline: the deadline bounds silence, so a run that keeps printing past it is watched to the end. Serial, for shrinkIdleTimeout.
+func TestABusyStreamOutlivesTheIdleDeadline(t *testing.T) {
+	shrinkIdleTimeout(t, 1500*time.Millisecond)
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-busy", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-busy", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+	})
+
+	// Faster than the poll, so every tick finds something new, for well past one deadline.
+	go func() {
+		for range 40 {
+			time.Sleep(100 * time.Millisecond)
+
+			_ = pipeline.Store.AppendRunEvent(context.WithoutCancel(ctx), store.RunEventRow{
+				RunID: "run-busy", Type: events.TypeStepOutputChunk, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1,
+				Status: "stdout", Text: "working\n", At: time.Now().UTC(),
+			})
+		}
+
+		_ = pipeline.Store.FinishRun(context.WithoutCancel(ctx), "run-busy", "succeeded")
+	}()
+
+	raw := streamOf(t, server, "/p/demo/runs/run-busy/events")
+
+	if !strings.Contains(raw, "event: done") {
+		t.Errorf("a stream with something new on every poll was cut as idle:\n%s", raw)
+	}
+}
+
+// TestARowTakesEveryAppendItWasOwed: one flush can owe a row new turns and new output at once, and sending the first must not stand in for the second.
+func TestARowTakesEveryAppendItWasOwed(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-both", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-both", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "review", StepKind: "agent", StepID: 1},
+		{Type: events.TypeAgentText, StepIndex: 0, StepName: "review", StepID: 1, Text: "Reading the diff first."},
+		{Type: events.TypeStepOutputChunk, StepIndex: 0, StepName: "review", StepKind: "agent", StepID: 1, Status: "stderr", Text: "started\n"},
+	})
+
+	_, page := get(t, server, "/p/demo/runs/run-both")
+
+	after := regexp.MustCompile(`events\?after=(\d+)`).FindStringSubmatch(page)
+	if after == nil {
+		t.Fatalf("the page does not say what sequence it was drawn from:\n%s", page)
+	}
+
+	appendEvents(t, pipeline.Store, "run-both", []store.RunEventRow{
+		{Type: events.TypeAgentText, StepIndex: 0, StepName: "review", StepID: 1, Text: "Now the tests."},
+		{Type: events.TypeStepOutputChunk, StepIndex: 0, StepName: "review", StepKind: "agent", StepID: 1, Status: "stderr", Text: "progress\n"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-both", "failed")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	raw := streamOf(t, server, "/p/demo/runs/run-both/events?after="+after[1])
+
+	for _, want := range []string{`hx-swap-oob="beforeend:#step-1-review_body"`, `hx-swap-oob="beforeend:#step-1-review_live"`} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("the flush owed %s and did not send it:\n%s", want, sseHTML(raw))
+		}
+	}
+}
+
+// TestAResumeFromPastTheLastEventStillCloses:a Last-Event-ID beyond what the run recorded (a reader on a run retention reaped and recorded again) leaves the seed nothing to read, which is an empty page and not a fault.
+func TestAResumeFromPastTheLastEventStillCloses(t *testing.T) {
+	t.Parallel()
+
+	server, pipeline := testPipeline(t)
+	ctx := t.Context()
+
+	err := pipeline.Store.StartRun(ctx, "run-short", "build", "/tmp/ws", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	appendEvents(t, pipeline.Store, "run-short", []store.RunEventRow{
+		{Type: events.TypeStepStarted, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1},
+		{Type: events.TypeStepFinished, StepIndex: 0, StepName: "compile", StepKind: "task", StepID: 1, Status: "succeeded"},
+	})
+
+	err = pipeline.Store.FinishRun(ctx, "run-short", "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	raw := streamOf(t, server, "/p/demo/runs/run-short/events?after=999")
+
+	if !strings.Contains(raw, "event: done") {
+		t.Errorf("a resume past the last event did not close with the outcome:\n%s", raw)
+	}
+}
+
 // cancellingRecorder cancels the request the moment the handler flushes a
 // frame — the deterministic version of a reader closing the tab while the
 // stream is mid-tick, so the next store call sees a cancelled context.
@@ -1087,7 +1197,12 @@ func TestStreamReportsAFailureOnce(t *testing.T) {
 	// The one post-commit failure a test can arrange: nothing to render with.
 	delete(server.renderer.pages, "run")
 
-	streamOf(t, server, "/p/demo/runs/run-broken/events")
+	raw := streamOf(t, server, "/p/demo/runs/run-broken/events")
+
+	// The stream is already an event-stream with its 200 sent; an error page written after it is markup no frame carries.
+	if strings.Contains(raw, "<!doctype html>") {
+		t.Errorf("the error page was written into a committed stream:\n%s", raw)
+	}
 
 	if got := strings.Count(logs.String(), "stream_failed"); got != 1 {
 		t.Errorf("one failure was reported %d times:\n%s", got, logs.String())

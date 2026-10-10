@@ -139,6 +139,14 @@ func TestRenderProseKeepsFencedCodeHighlighted(t *testing.T) {
 	if !strings.Contains(got, "<span style=") {
 		t.Errorf("fenced code is not highlighted: %s", got)
 	}
+
+	if !strings.Contains(got, `<span class="codelang">go</span>`) {
+		t.Errorf("fenced code does not say the language it declared: %s", got)
+	}
+
+	if bare := string(renderProse("```\nplain\n```")); strings.Contains(bare, "codelang") {
+		t.Errorf("a fence that declared no language is labelled anyway: %s", bare)
+	}
 }
 
 // TestRenderProseIsEmptyForEmptyInput keeps an answerless step from rendering
