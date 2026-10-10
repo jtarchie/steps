@@ -787,6 +787,9 @@ func TestDockerPlusKillsTheCommandADropInterrupted(t *testing.T) {
 func assertInterruptedCommandIsKilled(t *testing.T, runner shell.Runner, seconds string, drop func()) {
 	t.Helper()
 
+	// An ssh:// worker runs on this machine, so pgrep below sees every process on it — including the same test in another test process; the pid makes the duration this process's own.
+	seconds += fmt.Sprintf("%07d", os.Getpid())
+
 	err := runner.Run(t.Context(), "true")
 	if err != nil {
 		t.Fatalf("first command: %v", err)
