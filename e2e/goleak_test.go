@@ -14,6 +14,12 @@ import (
 // means a spawned process, watcher, or HTTP client wasn't shut down before
 // the test returned.
 //
+// streamableServerConn.Read is ignored: it's the go-sdk's server-side
+// streamable-HTTP read loop, which does not exit when a client sends the
+// session-termination DELETE (verified in isolation, both with and without
+// the client's standalone SSE stream — go-sdk@v1.7.0; still seen at v1.8.0, no fix in a later
+// release as of this writing). Not steps' leak to fix.
+//
 // regexp2's runClock is ignored for the reason internal/web's TestMain sets
 // out in full: chroma's lexers match with regexp2, whose match-timeout support
 // runs a shared background clock that exits on its own about a second after
@@ -48,6 +54,7 @@ func TestMain(m *testing.M) {
 	}
 
 	options := []goleak.Option{
+		goleak.IgnoreTopFunction("github.com/modelcontextprotocol/go-sdk/mcp.(*streamableServerConn).Read"),
 		goleak.IgnoreAnyFunction("github.com/dlclark/regexp2/v2.runClock"),
 	}
 
