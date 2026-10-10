@@ -1,9 +1,12 @@
 package pipeline
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // TestDeferrableRefusesACollectingCell: a cell captures under its coordinates
@@ -57,4 +60,47 @@ func withFix(rt config.ResolvedTask) config.ResolvedTask {
 	rt.Fix = &config.FixSpec{}
 
 	return rt
+}
+
+type recordingHolder struct {
+	workspace.BuildWorkspace
+	held    map[string]workspace.RemoteArtifact
+	refuses string
+}
+
+func (h *recordingHolder) HoldRemote(name string, remote workspace.RemoteArtifact) error {
+	if name == h.refuses {
+		return errors.New("refused " + name)
+	}
+
+	h.held[name] = remote
+
+	return nil
+}
+
+// Every output the worker kept is recorded under the name it is captured as, not just the first — and a hold the workspace refuses fails the step rather than leaving a consumer an empty directory.
+func TestHoldRemoteOutputsRecordsEveryKeptOutput(t *testing.T) {
+	t.Parallel()
+
+	outputs := []string{"report", "bin", "local"}
+	mapping := map[string]string{"bin": "binaries"}
+	kept := map[string]string{"report": "sha-r", "bin": "sha-b"}
+
+	ws := &recordingHolder{held: map[string]workspace.RemoteArtifact{}}
+
+	err := holdRemoteOutputs(ws, outputs, mapping, kept, "ssh://w1")
+	if err != nil {
+		t.Fatalf("holdRemoteOutputs: %v", err)
+	}
+
+	if len(ws.held) != 2 || ws.held["report"].Digest != "sha-r" || ws.held["binaries"].Digest != "sha-b" || ws.held["binaries"].Holder != "ssh://w1" {
+		t.Errorf("held %+v, want report and binaries (bin mapped) held on ssh://w1, and the output the worker did not keep left alone", ws.held)
+	}
+
+	refusing := &recordingHolder{held: map[string]workspace.RemoteArtifact{}, refuses: "binaries"}
+
+	err = holdRemoteOutputs(refusing, outputs, mapping, kept, "ssh://w1")
+	if err == nil || !strings.Contains(err.Error(), "refused binaries") {
+		t.Errorf("a refused hold returned %v, want the workspace's error", err)
+	}
 }

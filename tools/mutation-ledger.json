@@ -320,14 +320,14 @@
       "equivalent": []
     },
     "./internal/pipeline": {
-      "swept_at": "6645ad0",
-      "date": "2026-09-22",
-      "killed": 125,
-      "lived": 35,
-      "timed_out": 0,
-      "not_covered": 32,
-      "efficacy": 78.13,
-      "note": "First sweep, scoped SINCE=9ea6941 (get.go, task.go, put.go, venue.go, resourceplace.go, holders.go). PARTIAL TRIAGE: the 10 survivors in holders.go (the file steps#138 added) were worked through — 2 real gaps now pinned by holders_test.go, 4 killed by ./e2e when applied by hand (the placedTaskSpace/placedPutSpace tag-and-store guards, the empty-held guard, withRemoteInputs' empty guard), 4 equivalent. The other 25 are PRE-EXISTING lines in files this work happened to touch (get.go 11, task.go 9, venue.go 2, put.go 1, resourceplace.go 1) and are NOT triaged; they belong to a pipeline sweep of its own. Efficacy below counts them all.",
+      "swept_at": "824ba22",
+      "date": "2026-10-10",
+      "killed": 491,
+      "lived": 148,
+      "timed_out": 12,
+      "not_covered": 162,
+      "efficacy": 76.84,
+      "note": "Fell from 78.13 (6645ad0) to 76.84, measured 2026-10-10: about 50 of 160 survivors sit on code added since — the output.go chunker (a96d720, all 16), chain-skipped plan indexes, across classification of only-failed cells, resume-time gets, passed: counting puts. Package mode never runs ./e2e, where most of the rest die. Triaged the same day: real gaps got tests, one bug fixed (reportNoVersions asked the first get rather than the every-get), equivalents below. Left open on purpose: cursor.go take()'s in-memory orders/marks updates and the five-times-repeated recordResolvedVersion(... len(w.pinned) > 0) boundary, which one key would mask.",
       "equivalent": [
         {
           "mutant": "holders.go | CONDITIONALS_NEGATION | if err != nil { (after HoldRemote)",
@@ -356,6 +356,110 @@
         {
           "mutant": "explain.go | INVERT_LOGICAL | if index < 0 || index >= len(job.Plan) {",
           "why": "index is a node's position in a chain holding one node per plan step, so it is never negative and never past the plan; the guard is false under either operator (mutants judge, 2026-10-06)"
+        },
+        {
+          "mutant": "events.go | INVERT_NEGATIVES | return publishStarted(ctx, jobName, -1, label, hookKind)",
+          "why": "a hook row is keyed by its step id; its index is read only by the id-less fallback, and the hook's row name never matches a placement or usage name"
+        },
+        {
+          "mutant": "events.go | ARITHMETIC_BASE | return publishStarted(ctx, jobName, -1, label, hookKind)",
+          "why": "same as INVERT_NEGATIVES on this line"
+        },
+        {
+          "mutant": "events.go | INVERT_NEGATIVES | publishFinished(ctx, jobName, -1, label, hookKind, placementOf(ctx, body), mark, \"\", started, err)",
+          "why": "same: hook rows fold by step id, the index is unread"
+        },
+        {
+          "mutant": "events.go | ARITHMETIC_BASE | publishFinished(ctx, jobName, -1, label, hookKind, placementOf(ctx, body), mark, \"\", started, err)",
+          "why": "same"
+        },
+        {
+          "mutant": "events.go | INVERT_NEGATIVES | StepIndex: -1,",
+          "why": "job_started/job_finished events are folded by Type; no consumer reads their StepIndex (pipeline, cli, web and runview suites pass under the mutant)"
+        },
+        {
+          "mutant": "events.go | ARITHMETIC_BASE | StepIndex: -1,",
+          "why": "same"
+        },
+        {
+          "mutant": "events.go | INVERT_NEGATIVES | StepIndex:  -1,",
+          "why": "same"
+        },
+        {
+          "mutant": "events.go | ARITHMETIC_BASE | StepIndex:  -1,",
+          "why": "same"
+        },
+        {
+          "mutant": "output.go | CONDITIONALS_BOUNDARY | if cut > chunkBytes {",
+          "why": "a flushed piece either ends in a newline or holds none, so at exactly chunkBytes both branches cut at chunkBytes"
+        },
+        {
+          "mutant": "output.go | CONDITIONALS_BOUNDARY | if room := publishedHeadBytes - len(h.head); room > 0 {",
+          "why": "room 0 takes zero bytes"
+        },
+        {
+          "mutant": "output.go | INVERT_NEGATIVES | tailMax := maxPublishedOutputBytes - publishedHeadBytes",
+          "why": "write() only uses tailMax as a trim threshold; String() recomputes it, so a larger value only holds more memory"
+        },
+        {
+          "mutant": "output.go | ARITHMETIC_BASE | tailMax := maxPublishedOutputBytes - publishedHeadBytes",
+          "why": "same"
+        },
+        {
+          "mutant": "output.go | CONDITIONALS_BOUNDARY | if len(h.tail) > 2*tailMax {",
+          "why": "trimming one write earlier keeps the same last tailMax bytes"
+        },
+        {
+          "mutant": "job.go | CONDITIONALS_BOUNDARY | if len(digits) <= 3 {",
+          "why": "a 3-digit number takes the loop and gets no separator"
+        },
+        {
+          "mutant": "budget.go | INCREMENT_DECREMENT | b.inFlight++",
+          "why": "inFlight only feeds the inFlight == 0 guard, which is unreachable: reaching it needs reserved > 0, which means an admitted cell has not settled, and the counter is never 0 then whichever way it moves."
+        },
+        {
+          "mutant": "budget.go | INCREMENT_DECREMENT | b.inFlight--",
+          "why": "Same as admit's increment: the inFlight == 0 guard it feeds cannot be reached while reserved > 0."
+        },
+        {
+          "mutant": "task.go | CONDITIONALS_BOUNDARY | if parsed <= 0 {",
+          "why": "At parsed == 0 the fall-through returns 0 * attempts, which is the same 0, nil."
+        },
+        {
+          "mutant": "parallel.go | CONDITIONALS_BOUNDARY | if limit <= 0 || limit >= branches {",
+          "why": "When limit == branches, a channel with one slot per branch never blocks, so it behaves exactly like no limit."
+        },
+        {
+          "mutant": "parallel.go | CONDITIONALS_BOUNDARY | if winner < 0 {",
+          "why": "It only differs when a second branch succeeds after the winner cancelled the race context; every step kind reports a cancelled run as aborted, so only a near-simultaneous finish reaches it, and no deterministic test can pin that scheduling race."
+        },
+        {
+          "mutant": "across.go | CONDITIONALS_BOUNDARY | if step.MaxInFlight > 1 {",
+          "why": "max_in_flight: 1 through the concurrent walk admits cells in declaration order one at a time, which is the serial walk; the one difference is a true budget-unbindable warning on a single-cell budgeted block."
+        },
+        {
+          "mutant": "inputsets.go | CONDITIONALS_BOUNDARY | if best == nil || order > bestOrder {",
+          "why": "distinct versions of one resource never share an order, so equal orders cannot occur"
+        },
+        {
+          "mutant": "preflight.go | CONDITIONALS_BOUNDARY | if names := job.AgentNames(); len(names) > 0 {",
+          "why": "agent.Preflight over no names loops over nothing and returns no problems"
+        },
+        {
+          "mutant": "explain.go | CONDITIONALS_BOUNDARY | if index < 0 || index >= len(job.Plan) {",
+          "why": "a chain holds one node per plan step, so index never reaches len(job.Plan); the guard is defensive"
+        },
+        {
+          "mutant": "explain.go | CONDITIONALS_BOUNDARY | if len(hash) <= width {",
+          "why": "at exactly width, hash and hash[:width] are the same string"
+        },
+        {
+          "mutant": "vars.go | CONDITIONALS_BOUNDARY | if len(step.Messages) > 0 {",
+          "why": "nil vs empty Messages: merkle hashes through config.StableStrings (which turns nil into empty) and every consumer reads len()"
+        },
+        {
+          "mutant": "venue.go | ARITHMETIC_BASE | slog.InfoContext(ctx, \"job.worker_evicted\", \"tag\", tag, \"attempt\", attempt+1, \"error\", err)",
+          "why": "the value reaches only a log attribute"
         }
       ]
     },

@@ -37,4 +37,10 @@ func TestReplayedHashesNameNoOtherBuildsNode(t *testing.T) {
 	if got := replayedHashes(chains, "", 2); !slices.Equal(got, []string{"", ""}) {
 		t.Errorf("an unnamed skip point replayed as %q, want nothing named", got)
 	}
+
+	// A skip point deeper in the chain: only the steps after it are replayed.
+	deeper := chainHashes([]merkle.Chain{chain("get", "prep", "test")})
+	if got := replayedHashes(deeper, "prep", 1); !slices.Equal(got, []string{"test"}) {
+		t.Errorf("replayedHashes past a skip point at index 1 = %q, want [test]", got)
+	}
 }

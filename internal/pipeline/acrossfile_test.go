@@ -109,4 +109,12 @@ func TestDecodeAcrossItemsCapsTheList(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "above the limit") {
 		t.Fatalf("error = %v, want the item cap to refuse the list", err)
 	}
+
+	// The cap is the most a list may hold, not the first length refused.
+	atCap := "[" + strings.Join(items[:config.MaxAcrossItems], ",") + "]"
+
+	got, err := decodeAcrossItems("findings/items.json", []byte(atCap))
+	if err != nil || len(got) != config.MaxAcrossItems {
+		t.Fatalf("a list of exactly %d items: %d items, err %v; want it accepted", config.MaxAcrossItems, len(got), err)
+	}
 }

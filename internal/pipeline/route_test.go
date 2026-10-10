@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -317,5 +318,48 @@ func TestApplyRoutingNextOffTheEndOfASegment(t *testing.T) {
 
 	if consumed != nil {
 		t.Errorf("error = %v, want it consumed by the route", consumed)
+	}
+}
+
+// The uncacheable note names the step's own reason; "fix: agent" is only the fallback for a task whose fix: is what makes it so.
+func TestTheUncacheableNoteNamesAPutAsAPut(t *testing.T) {
+	out := captureStdout(t, func() {
+		_, err := foldStepUnskippable(t.Context(), &config.Config{}, config.Step{Put: "repo"}, false)
+		if err != nil {
+			t.Error(err)
+		}
+	})
+
+	if want := "note: repo makes this chain uncacheable (put step)"; !strings.Contains(out, want) {
+		t.Errorf("note %q, want %q", out, want)
+	}
+}
+
+// A step routing to itself is the tightest loop there is, and max_visits bounds it like any other backward route.
+func TestResolveTransitionSelfRouteExhausts(t *testing.T) {
+	t.Parallel()
+
+	steps := routeSteps()
+	step := config.Step{Task: "a", To: map[string]string{"failure": "a"}, MaxVisits: 2}
+
+	_, routed, _, exhausted := resolveTransition(context.Background(), steps, 0, step, outcome.Fail(errors.New("no")), "", map[int]int{0: 2})
+	if exhausted == nil || routed {
+		t.Errorf("a self-route at its visit cap: routed=%v exhausted=%v, want exhaustion", routed, exhausted)
+	}
+}
+
+// The route line shows the cap only when one is set: a forward route has none, and "visit 1/0" reads as already over it.
+func TestReportRouteShowsTheVisitCapOnlyWhenSet(t *testing.T) {
+	steps := routeSteps()
+
+	for maxVisits, want := range map[int]string{0: "(visit 1)\n", 3: "(visit 1/3)\n"} {
+		step := config.Step{Task: "a", To: map[string]string{"success": "c"}, MaxVisits: maxVisits}
+
+		out := captureStdout(t, func() {
+			reportRoute(context.Background(), steps, 0, step, 2, "success", map[int]int{0: 1})
+		})
+		if !strings.Contains(out, "route: a --success--> c "+want) {
+			t.Errorf("max_visits %d: route line %q, want it to end %q", maxVisits, out, want)
+		}
 	}
 }

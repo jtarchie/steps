@@ -134,7 +134,13 @@ func (w *planWalk) reportNoVersions(ctx context.Context, step config.Step, resou
 		return
 	}
 
-	if taken := w.cache.Suppressed(step); taken > 0 {
+	// Summed over every every-get, not asked of step: step is the build's first get, which need not be the one fanning out.
+	taken := 0
+	for _, every := range w.resolution.everyInputs {
+		taken += w.cache.Suppressed(config.Step{Get: every.input})
+	}
+
+	if taken > 0 {
 		reason := fmt.Sprintf("no new versions; all %d already taken", taken)
 		if forced(ctx) {
 			reason += " — --force skips the step cache, not versions this job already took; to redo one, resume the run that took it or pin the version"

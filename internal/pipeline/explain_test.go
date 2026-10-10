@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -133,4 +134,18 @@ jobs:
 	}
 
 	t.Fatalf("no row for check: %+v", rows)
+}
+
+// `steps plan` prints a node hash at a width a person compares by eye, and a hash already that short whole.
+func TestShortHashAbbreviatesOnlyWhatIsLonger(t *testing.T) {
+	t.Parallel()
+
+	full := strings.Repeat("ab", 32)
+	if got := shortHash(full); got != full[:12] {
+		t.Errorf("shortHash(64 chars) = %q, want %q", got, full[:12])
+	}
+
+	if got := shortHash("abc"); got != "abc" {
+		t.Errorf("shortHash(%q) = %q, want it whole", "abc", got)
+	}
 }

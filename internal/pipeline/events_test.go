@@ -968,3 +968,84 @@ func TestAnUnpersistedEventNamesItsRun(t *testing.T) {
 		t.Fatalf("line = %q", buf.String())
 	}
 }
+
+// TestARunningStepKeepsEveryChunkUntilItsOutput: a reader following a running step sees everything it has printed so far — only the step's one output record replaces its chunks, not the next chunk or a note.
+func TestARunningStepKeepsEveryChunkUntilItsOutput(t *testing.T) {
+	t.Parallel()
+
+	st, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "state.db"), "test")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	ctx := context.Background()
+
+	err = st.StartRun(ctx, "run-1", "build", "", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	sink := StoreSink(st)
+	step := events.Event{RunID: "run-1", StepID: 1, StepName: "compile", StepKind: "task"}
+
+	for _, e := range []events.Event{
+		{Type: events.TypeStepOutputChunk, Status: "stdout", Text: "first\n"},
+		{Type: events.TypeStepOutputChunk, Status: "stdout", Text: "second\n"},
+		{Type: events.TypeStepNote, Text: "still going"},
+	} {
+		e.RunID, e.StepID, e.StepName, e.StepKind = step.RunID, step.StepID, step.StepName, step.StepKind
+		sink(e)
+	}
+
+	chunks := func() []string {
+		rows, err := st.RunEvents(ctx, "run-1", 0, 0)
+		if err != nil {
+			t.Fatalf("RunEvents: %v", err)
+		}
+
+		var texts []string
+
+		for _, row := range rows {
+			if row.Type == events.TypeStepOutputChunk {
+				texts = append(texts, row.Text)
+			}
+		}
+
+		return texts
+	}
+
+	if got := chunks(); !slices.Equal(got, []string{"first\n", "second\n"}) {
+		t.Errorf("chunks while running = %q, want both", got)
+	}
+
+	step.Type, step.Text = events.TypeStepOutput, "first\nsecond"
+	sink(step)
+
+	if got := chunks(); len(got) != 0 {
+		t.Errorf("chunks after the output record = %q, want none", got)
+	}
+}
+
+type collapseRefusingEvents struct{ store.Events }
+
+func (collapseRefusingEvents) DeleteStepEvents(context.Context, string, int64, string) error {
+	return os.ErrPermission
+}
+
+func (collapseRefusingEvents) AppendRunEvent(context.Context, store.RunEventRow) error { return nil }
+
+// TestAFailedChunkCollapseIsLogged: a step whose chunks could not be dropped leaves its transcript doubled, and the operator is told which run.
+func TestAFailedChunkCollapseIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	StoreSink(collapseRefusingEvents{})(events.Event{RunID: "r-7", StepID: 3, Type: events.TypeStepOutput})
+
+	if line := buf.String(); !strings.Contains(line, "run.event_collapse") || !strings.Contains(line, "run=r-7") {
+		t.Fatalf("line = %q", line)
+	}
+}

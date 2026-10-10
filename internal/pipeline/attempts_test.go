@@ -373,3 +373,28 @@ func TestTaskHooksFireOnce(t *testing.T) {
 func ptrString(s string) *string {
 	return &s
 }
+
+// The retry marker is the "(attempt 2/3)" line a user reads: never on the first try, and 1-based on each retry.
+func TestRetryMarkerNamesEachRetry(t *testing.T) {
+	var marks []string
+
+	calls := 0
+
+	err := retryWithTimeout(context.Background(), intPtr(3), "", func(attempt, total int) {
+		marks = append(marks, fmt.Sprintf("%d/%d", attempt, total))
+	}, func(context.Context) error {
+		calls++
+		if calls < 3 {
+			return errors.New("not yet")
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("retryWithTimeout: %v", err)
+	}
+
+	if got := strings.Join(marks, " "); got != "2/3 3/3" {
+		t.Errorf("markers = %q, want %q", got, "2/3 3/3")
+	}
+}
