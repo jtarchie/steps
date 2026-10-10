@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"runtime"
 	"strings"
@@ -1155,6 +1156,55 @@ func TestRegistryNamesTheIdleWindowWithoutRacingAJoiner(t *testing.T) {
 
 	if acquired, released := fake.counts(); acquired != 1 || released["i-1"] != 1 {
 		t.Errorf("%d acquisitions, given back %v — want one machine, given back once", acquired, released)
+	}
+}
+
+// With no ?idle= the machine goes back before the last user's release returns, so a failed give-back reaches that user instead of a log line.
+func TestRegistryGivesBackAMachineWithNoWindowBeforeReleaseReturns(t *testing.T) {
+	refused := errors.New("terminate refused")
+	registry := NewRegistryWith(func(_ context.Context, worker Worker) (Worker, func(context.Context) error, error) {
+		return worker.asStatic("i-1"), func(context.Context) error { return refused }, nil
+	})
+	leases := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde"))
+
+	mustResolve(t, leases)
+
+	err := leases.ReleaseAll(context.Background())
+	if !errors.Is(err, refused) {
+		t.Errorf("ReleaseAll = %v, want the give-back's own failure", err)
+	}
+
+	_ = registry.Close(context.Background())
+}
+
+// A give-back the idle timer makes has no caller to return its failure to, and a machine that failed to go back bills until somebody finds it: the log line is how.
+func TestRegistryLogsAGiveBackItsIdleWindowFailed(t *testing.T) {
+	var logged bytes.Buffer
+
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	given := make(chan struct{})
+	registry := NewRegistryWith(func(_ context.Context, worker Worker) (Worker, func(context.Context) error, error) {
+		return worker.asStatic("i-1"), func(context.Context) error {
+			close(given)
+
+			return errors.New("terminate refused")
+		}, nil
+	})
+	leases := registry.Leases(boxWorker(t, "aws://launch/lt-0def4567890abcde?idle=10ms"))
+
+	mustResolve(t, leases)
+	mustRelease(t, leases)
+	within(t, "the idle window's give-back", given)
+
+	// Waits out the timer's goroutine, so the buffer is read after its last write.
+	_ = registry.Close(context.Background())
+
+	if !strings.Contains(logged.String(), "worker.release_failed") || !strings.Contains(logged.String(), "terminate refused") {
+		t.Errorf("log = %q, want the failed give-back recorded", logged.String())
 	}
 }
 

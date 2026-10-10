@@ -11,13 +11,16 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -408,6 +411,58 @@ func TestGCPSecondSessionReusesTheInstalledKey(t *testing.T) {
 	}
 }
 
+// refusingGCE refuses to give anything back.
+type refusingGCE struct{ *fakeGCE }
+
+func (refusingGCE) Stop(context.Context, string, string, string) error {
+	return errors.New("stop refused")
+}
+
+func (refusingGCE) Delete(context.Context, string, string, string) error {
+	return errors.New("delete refused")
+}
+
+// A failed acquisition's give-back has no caller left to report to, and a machine it failed to stop bills until somebody finds it: the log line is how.
+func TestGCECleanupThatFailsIsLogged(t *testing.T) {
+	var logged strings.Builder
+
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	api := refusingGCE{&fakeGCE{}}
+	worker := Worker{URL: "gcp://launch/tmpl"}
+
+	gceStopInstance(api, worker, "p", "z", "steps-stop")
+	gceDeleteInstance(api, worker, "p", "z", "steps-delete")
+
+	for _, want := range []string{"venue.stop_failed instance=steps-stop", "venue.delete_failed instance=steps-delete"} {
+		if !strings.Contains(logged.String(), want) {
+			t.Errorf("log = %q, want %q", logged.String(), want)
+		}
+	}
+}
+
+// Reuse stops at half the TTL: a key installed longer ago than that could expire on the guest mid-session.
+func TestGCPReinstallsAKeyPastHalfItsTTL(t *testing.T) {
+	fake := &fakeGCE{}
+	worker := Worker{URL: "gcp://test-project/us-central1-a/half-ttl", Instance: "half-ttl"}
+	cacheKey := "test-project/us-central1-a/half-ttl"
+
+	gcpInstalled.Store(cacheKey, time.Now().Add(-gcpKeyTTL*3/4))
+	t.Cleanup(func() { gcpInstalled.Delete(cacheKey) })
+
+	_, err := gcpEnsureKey(context.Background(), fake, worker, "test-project", "us-central1-a")
+	if err != nil {
+		t.Fatalf("gcpEnsureKey: %v", err)
+	}
+
+	if len(fake.sshKeys) != 1 {
+		t.Errorf("installed %d keys for an install three quarters of the TTL old, want it written again", len(fake.sshKeys))
+	}
+}
+
 // TestGCPDialWaitsOutABootingSSHD pins the retry on the relay's "could not
 // reach the backend": for a machine acquired seconds ago it means "not yet",
 // and failing on it would make every launch a race with systemd.
@@ -681,11 +736,15 @@ func TestGCPParkedRungWaitsOutTheTerminatedStateAfterStarting(t *testing.T) {
 	}
 
 	fake.mu.Lock()
-	stops := len(fake.stops)
+	stops, last := len(fake.stops), fake.lastStatus
 	fake.mu.Unlock()
 
 	if stops != 0 {
 		t.Errorf("%d stops, want the machine it just started left running", stops)
+	}
+
+	if last != "RUNNING" {
+		t.Errorf("acquired on a %s status, want it to wait for RUNNING", last)
 	}
 
 	_ = release(context.Background())
@@ -1257,6 +1316,33 @@ func TestGCPDialNegotiatesOnlyAttestedHostKeyAlgorithms(t *testing.T) {
 	err := runner.Run(context.Background(), "true")
 	if err != nil {
 		t.Fatalf("Run against a partially-attested instance: %v", err)
+	}
+}
+
+// An attested RSA key signs under the SHA-2 names a modern sshd offers, and only an RSA key does.
+func TestGCPAttestedRSAKeyAllowsItsSHA2Algorithms(t *testing.T) {
+	t.Parallel()
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rsaPub, err := ssh.NewPublicKey(&rsaKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, edPub, _ := generateKey(t)
+
+	_, algorithms, err := hostKeysFromAttributes(Worker{}, hostKeyAttributes(t, rsaPub))
+	if err != nil || !slices.Contains(algorithms, ssh.KeyAlgoRSASHA256) || !slices.Contains(algorithms, ssh.KeyAlgoRSASHA512) {
+		t.Errorf("RSA algorithms = %v (%v), want the SHA-2 names", algorithms, err)
+	}
+
+	_, algorithms, err = hostKeysFromAttributes(Worker{}, hostKeyAttributes(t, edPub))
+	if err != nil || !slices.Equal(algorithms, []string{ssh.KeyAlgoED25519}) {
+		t.Errorf("ed25519 algorithms = %v (%v), want only its own", algorithms, err)
 	}
 }
 

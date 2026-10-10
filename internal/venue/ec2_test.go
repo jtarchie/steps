@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"maps"
 	"os"
 	"slices"
@@ -208,6 +209,39 @@ func shrinkAcquireWaits(t *testing.T) {
 
 // TestLeaseStartsAndParksAWorker is the stopped rung: the first step starts
 // the machine, and the job's end parks it again.
+// refusingEC2 refuses to give anything back.
+type refusingEC2 struct{ *fakeEC2 }
+
+func (refusingEC2) StopInstances(context.Context, *ec2.StopInstancesInput, ...func(*ec2.Options)) (*ec2.StopInstancesOutput, error) {
+	return nil, errors.New("stop refused")
+}
+
+func (refusingEC2) TerminateInstances(context.Context, *ec2.TerminateInstancesInput, ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error) {
+	return nil, errors.New("terminate refused")
+}
+
+// A failed acquisition's give-back has no caller left to report to, and a machine it failed to stop bills until somebody finds it: the log line is how.
+func TestEC2CleanupThatFailsIsLogged(t *testing.T) {
+	var logged bytes.Buffer
+
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	api := refusingEC2{&fakeEC2{}}
+	worker := Worker{URL: "aws://launch/lt-0def4567890abcde"}
+
+	stopInstance(api, worker, "i-0stop")
+	terminateInstance(api, worker, "i-0term")
+
+	for _, want := range []string{"venue.stop_failed instance=i-0stop", "venue.terminate_failed instance=i-0term"} {
+		if !strings.Contains(logged.String(), want) {
+			t.Errorf("log = %q, want %q", logged.String(), want)
+		}
+	}
+}
+
 func TestLeaseStartsAndParksAWorker(t *testing.T) {
 	fake := &fakeEC2{}
 	seamEC2(t, fake)

@@ -22,6 +22,23 @@ func TestHolderAddressDropsConnectionOptions(t *testing.T) {
 	}
 }
 
+// Two local: roots on one daemon are two caches; a bare local: keeps the unprefixed names.
+func TestLocalRootsNameSeparateCaches(t *testing.T) {
+	t.Parallel()
+
+	alias := func(root string) string {
+		return newPlusSession(Worker{Scheme: SchemeLocal, Root: root}, shell.RunnerSpec{}).aliasName("digest")
+	}
+
+	if alias("/a") == alias("/b") {
+		t.Errorf("roots /a and /b both publish %q; they would share one cache", alias("/a"))
+	}
+
+	if got, want := alias(""), aliasName("digest"); got != want {
+		t.Errorf("bare local: publishes %q, want %q", got, want)
+	}
+}
+
 // Two sessions filling one digest race to publish it; the loser must be handed the winner's volume to mount, not nothing.
 func TestDockerPlusALostPublishHandsBackTheWinner(t *testing.T) {
 	hostDockerSocket(t)

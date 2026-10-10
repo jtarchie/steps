@@ -53,6 +53,37 @@ jobs:
 	}
 }
 
+// env: names a variable from the orchestrator's environment, and a placed step must see it on the worker just as a local one would.
+func TestSSHWorkerPassesEnvThrough(t *testing.T) {
+	server := testsshd.New(t)
+
+	t.Setenv("STEPS_E2E_PASSED", "from-the-orchestrator")
+
+	dir := t.TempDir()
+	published := filepath.Join(dir, "published.txt")
+
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: remote
+    tags: [box]
+    env: [STEPS_E2E_PASSED]
+    outputs: [report]
+    run: printf '%s' "$STEPS_E2E_PASSED" > report/out.txt
+
+  - task: publish
+    inputs: [report]
+    run: cp report/out.txt `+published+`
+`)
+
+	mustRun(t, path, "--worker", "box="+server.URL)
+
+	if got := readFileString(t, published); got != "from-the-orchestrator" {
+		t.Errorf("published = %q, want the env: variable's value", got)
+	}
+}
+
 // refusedBeforeAnyStep runs a pipeline whose first, local step leaves a marker; a refusal at placement must come before it.
 func refusedBeforeAnyStep(t *testing.T, worker, placed, want string) {
 	t.Helper()

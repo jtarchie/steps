@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -212,7 +213,7 @@ func TestSSHConfigRefusesWhatItCannotHonour(t *testing.T) {
 	}{
 		"named for the alias": {
 			config: "Host box\n\tProxyJump bastion\n",
-			want:   "ProxyJump",
+			want:   "ProxyJump for box",
 		},
 		"a command instead of a socket": {
 			config: "Host box\n\tProxyCommand nc %h %p\n",
@@ -357,6 +358,46 @@ func TestSSHConfigDefaultFileIsOptional(t *testing.T) {
 
 	if conn.address != "box:22" {
 		t.Errorf("address = %q, want the mapping as written", conn.address)
+	}
+}
+
+// With no ?ssh_config= the user's own ~/.ssh/config is read, which is what makes `ssh://box` mean what `ssh box` does.
+func TestSSHConfigDefaultFileIsRead(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mustWrite(t, filepath.Join(home, ".ssh", "config"), "Host box\n  HostName real.example\n  Port 2200\n")
+
+	conn, err := connectionFor(mustParseWorker(t, "ssh://box?known_hosts=/somewhere/known_hosts"))
+	if err != nil {
+		t.Fatalf("connectionFor: %v", err)
+	}
+
+	if conn.address != "real.example:2200" {
+		t.Errorf("address = %q, want the alias resolved through ~/.ssh/config", conn.address)
+	}
+}
+
+// The account comes from the passwd entry, as ssh(1) takes it: $USER is unset under systemd and $HOME can name a directory OpenSSH would not look in.
+func TestSSHConfigTakesTheAccountFromPasswdNotTheEnvironment(t *testing.T) {
+	account, err := user.Current()
+	if err != nil || account.Username == "" || account.HomeDir == "" {
+		t.Skipf("no passwd entry to compare against: %v", err)
+	}
+
+	t.Setenv("USER", "")
+	t.Setenv("HOME", t.TempDir())
+
+	conn, err := connectionFor(mustParseWorker(t, "ssh://box?ssh_config="+writeSSHConfig(t, "Host box\n\tIdentityFile ~/key\n")))
+	if err != nil {
+		t.Fatalf("connectionFor: %v", err)
+	}
+
+	if conn.user != account.Username {
+		t.Errorf("user = %q, want %q from passwd", conn.user, account.Username)
+	}
+
+	if len(conn.identities) != 1 || conn.identities[0].path != filepath.Join(account.HomeDir, "key") {
+		t.Errorf("identities = %+v, want ~ expanded against %s", conn.identities, account.HomeDir)
 	}
 }
 

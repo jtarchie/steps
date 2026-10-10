@@ -2,8 +2,10 @@ package venue
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -249,6 +251,22 @@ func TestLaunchLabelNamesTheMachineNotTheSpelling(t *testing.T) {
 		"gcp://launch/tmpl?project=q&zone=z",
 		"gcp://launch/tmpl?project=p&zone=y",
 	)
+}
+
+// A leftover is found by which machine and process made it, so the labels must name this one.
+func TestLaunchLabelsNameThisProcess(t *testing.T) {
+	t.Parallel()
+
+	host, err := os.Hostname()
+	if err != nil {
+		t.Skipf("no hostname to compare against: %v", err)
+	}
+
+	labels := mustParse(t, "aws://launch/lt-0def4567890abcde").launchLabels()
+
+	if labels[labelHost] != labelValue(host) || labels[labelPid] != strconv.Itoa(os.Getpid()) {
+		t.Errorf("labels = %v, want host %q and pid %d", labels, labelValue(host), os.Getpid())
+	}
 }
 
 func TestLabelValue(t *testing.T) {

@@ -47,15 +47,16 @@ func TestSSHWorkerRoundTripsAStep(t *testing.T) {
 	cwd := t.TempDir()
 	mustWrite(t, filepath.Join(cwd, "data", "seed.txt"), "seed\n")
 	mustMkdir(t, filepath.Join(cwd, "out"))
+	mustMkdir(t, filepath.Join(cwd, "logs"))
 
-	runner, err := NewRunner(sshSpec(t, server, cwd, "out"))
+	runner, err := NewRunner(sshSpec(t, server, cwd, "out", "logs"))
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
 	t.Cleanup(func() { _ = runner.Close() })
 
-	err = runner.Run(context.Background(), `cat data/seed.txt > out/report.txt; echo "$STEPS_WORKER" >> out/report.txt`)
+	err = runner.Run(context.Background(), `cat data/seed.txt > out/report.txt; echo "$STEPS_WORKER" >> out/report.txt; echo done > logs/run.log`)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -67,6 +68,10 @@ func TestSSHWorkerRoundTripsAStep(t *testing.T) {
 
 	if !strings.Contains(got, "gpu") {
 		t.Errorf("out/report.txt = %q, want STEPS_WORKER to have reached the command", got)
+	}
+
+	if got := mustRead(t, filepath.Join(cwd, "logs", "run.log")); got != "done\n" {
+		t.Errorf("logs/run.log = %q, want every declared output brought back, not only the first", got)
 	}
 }
 
@@ -155,6 +160,12 @@ func TestSSHWorkerNonzeroExitIsAStepFailure(t *testing.T) {
 	if !shell.IsExitError(err) {
 		t.Errorf("IsExitError = false over ssh: %v", err)
 	}
+
+	// A guard reads the status itself, so it must be the command's own and not a stand-in.
+	_, _, code, err := runner.RunCaptureFull(context.Background(), "exit 3")
+	if err != nil || code != 3 {
+		t.Errorf("RunCaptureFull = %d, %v; want exit 3 as data", code, err)
+	}
 }
 
 // TestSSHWorkerCleansUpItsScratch pins the promise that makes this safe to
@@ -187,6 +198,33 @@ func TestSSHWorkerCleansUpItsScratch(t *testing.T) {
 
 	for _, entry := range entries {
 		t.Errorf("left on the worker after close: %s", entry.Name())
+	}
+}
+
+// A scratch directory close could not remove is reported, or it sits on somebody's machine unnoticed.
+func TestSSHWorkerReportsScratchItCouldNotRemove(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("root removes a file under a read-only directory")
+	}
+
+	runner, err := NewRunner(sshSpec(t, newTestSSHD(t), t.TempDir()))
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	err = runner.Run(t.Context(), "mkdir -p locked && touch locked/file && chmod 555 locked")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	placement, _ := runner.(bareRunner).placement()
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(placement.Workdir, "locked"), 0o755) }) //nolint:gosec // a directory the test must be able to remove
+
+	err = runner.Close()
+	if !errors.Is(err, errBareTransfer) {
+		t.Errorf("Close = %v, want the failed removal reported", err)
 	}
 }
 
@@ -300,8 +338,11 @@ func TestSSHWorkerCancellationEndsAWedgedCommand(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), shortWait)
 	defer cancel()
 
+	// The worker is this machine, so the duration carries this process's pid to tell its sleep from another test process's.
+	seconds := "6" + strconv.Itoa(os.Getpid())
+
 	started := time.Now()
-	err := runner.Run(ctx, "sleep 60")
+	err := runner.Run(ctx, "sleep "+seconds)
 
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v, want it to carry the deadline", err)
@@ -310,6 +351,126 @@ func TestSSHWorkerCancellationEndsAWedgedCommand(t *testing.T) {
 	// Well under killGrace: TERM ended it, so nothing waits out the grace.
 	if elapsed := time.Since(started); elapsed > killGrace {
 		t.Fatalf("the cancel took %s to come back", elapsed)
+	}
+
+	out, err := runner.RunCapture(t.Context(), "pgrep -f 'slee[p] "+seconds+"' | wc -l")
+	if err != nil {
+		t.Fatalf("checking for the cancelled command: %v", err)
+	}
+
+	if count := strings.TrimSpace(string(out)); count != "0" {
+		t.Errorf("the cancelled command is still running (%s)", count)
+	}
+}
+
+// A worker whose tar fails sending the tree must fail the step, not run it on whatever arrived.
+func TestSSHWorkerFailsWhenTheTreeDoesNotUnpack(t *testing.T) {
+	// Not parallel: it puts a tar that refuses to extract first on PATH, which the in-process sshd's commands inherit.
+	realTar, err := exec.LookPath("tar")
+	if err != nil {
+		t.Skipf("no tar: %v", err)
+	}
+
+	bin := t.TempDir()
+	mustWrite(t, filepath.Join(bin, "tar"), "#!/bin/sh\nif [ \"$1\" = -xf ]; then cat >/dev/null; echo 'disk full' >&2; exit 2; fi\nexec "+realTar+" \"$@\"\n")
+
+	err = os.Chmod(filepath.Join(bin, "tar"), 0o755) //nolint:gosec // an executable the test runs
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cwd := t.TempDir()
+	mustWrite(t, filepath.Join(cwd, "seed.txt"), "seed\n")
+
+	err = newLocalRunner(t, sshSpec(t, newTestSSHD(t), cwd)).Run(t.Context(), "true")
+	if !errors.Is(err, errBareTransfer) || !strings.Contains(err.Error(), "disk full") {
+		t.Errorf("Run = %v, want the failed unpack reported", err)
+	}
+}
+
+// A worker whose tar fails packing the outputs must fail the step, not bring home part of them.
+func TestSSHWorkerFailsWhenTheOutputsDoNotPack(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 file, so tar does not fail on it")
+	}
+
+	cwd := t.TempDir()
+	mustMkdir(t, filepath.Join(cwd, "out"))
+
+	runner := newLocalRunner(t, sshSpec(t, newTestSSHD(t), cwd, "out"))
+
+	// Readable again afterwards, or the session's own cleanup cannot remove it.
+	err := runner.Run(t.Context(), "echo kept > out/kept; echo x > out/unreadable; chmod 000 out/unreadable")
+	_ = runner.Run(context.Background(), "chmod 644 out/unreadable")
+
+	if !errors.Is(err, errBareTransfer) {
+		t.Errorf("Run = %v, want the failed pack reported", err)
+	}
+}
+
+// cancelOnceStarted runs command until it has touched started, then cancels it and waits for the cancel to come back.
+func cancelOnceStarted(t *testing.T, runner shell.Runner, command string) {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+
+	go func() { done <- runner.Run(ctx, command) }()
+
+	deadline := time.Now().Add(20 * time.Second)
+	for runner.Run(t.Context(), "test -f started") != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the command never started")
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	cancel()
+
+	err := <-done
+	if err == nil {
+		t.Fatal("the cancelled command reported success")
+	}
+}
+
+// TERM comes first and gets its grace: a command cleaning up on TERM must be allowed to finish before KILL.
+func TestSSHWorkerCancelGivesTERMItsGrace(t *testing.T) {
+	t.Parallel()
+
+	runner := newLocalRunner(t, sshSpec(t, newTestSSHD(t), t.TempDir()))
+
+	cancelOnceStarted(t, runner, `trap 'sleep 0.5; touch cleaned; exit 0' TERM; touch started; while :; do sleep 1; done`)
+
+	if runner.Run(t.Context(), "test -f cleaned") != nil {
+		t.Error("the command's TERM handler never finished: KILL came before its grace ran out")
+	}
+}
+
+// KILL follows the grace: a command that ignores TERM must not outlive its cancel.
+func TestSSHWorkerCancelKillsACommandIgnoringTERM(t *testing.T) {
+	t.Parallel()
+
+	runner := newLocalRunner(t, sshSpec(t, newTestSSHD(t), t.TempDir()))
+	// The worker is this machine; the pid tells this process's command from another test process's.
+	token := "ignoresterm" + strconv.Itoa(os.Getpid())
+
+	cancelOnceStarted(t, runner, `: `+token+`; trap '' TERM; touch started; while :; do sleep 1; done`)
+
+	// The bracket keeps the pattern from matching the sh that runs it.
+	out, err := runner.RunCapture(t.Context(), "pgrep -f 'ignoreste[r]m"+strconv.Itoa(os.Getpid())+"' | wc -l")
+	if err != nil {
+		t.Fatalf("checking for the cancelled command: %v", err)
+	}
+
+	if count := strings.TrimSpace(string(out)); count != "0" {
+		t.Errorf("a command ignoring TERM is still running (%s) after its cancel", count)
 	}
 }
 
@@ -474,6 +635,11 @@ func TestSSHWorkerSuspectsAConnectionAnyExchangeFailedOn(t *testing.T) {
 		t.Fatalf("runner is %T, want an ssh:// runner", runner)
 	}
 
+	// A suspect connection costs the next command a probe, so exchanges that succeeded must not leave one.
+	if bare.s.conn.suspect.Load() {
+		t.Fatal("exchanges that succeeded left the connection suspected")
+	}
+
 	_ = bare.s.conn.current().Close()
 
 	_, err = bare.s.exec(t.Context(), "true", nil, io.Discard, io.Discard)
@@ -559,5 +725,5 @@ func TestSSHWorkerKillsTheCommandADropInterrupted(t *testing.T) {
 		t.Fatalf("runner is %T, want an ssh:// runner", runner)
 	}
 
-	assertInterruptedCommandIsKilled(t, runner, "4322", func() { dropAndWait(t, &bare.s.conn) })
+	assertInterruptedCommandIsKilled(t, runner, "42", func() { dropAndWait(t, &bare.s.conn) })
 }

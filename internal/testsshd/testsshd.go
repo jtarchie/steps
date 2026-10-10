@@ -275,6 +275,7 @@ func (s *Server) session(channel ssh.Channel, requests <-chan *ssh.Request) {
 func (s *Server) runExec(channel ssh.Channel, command string) {
 	// Through a shell, as sshd does, so a quoting bug in the venue surfaces here.
 	cmd := exec.CommandContext(context.Background(), "sh", "-c", command) //nolint:gosec // a test server running the command the venue asked for
+	cmd.Env = sessionEnv()
 	cmd.Stdout = channel
 	cmd.Stderr = channel.Stderr()
 	// A session leader, as sshd makes every session's shell: a venue that signals the session's group must reach what the command started.
@@ -305,6 +306,19 @@ func (s *Server) runExec(channel ssh.Channel, command string) {
 	}
 
 	_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(status)}))
+}
+
+// sessionEnv is what sshd gives a session: the login basics, never the server process's own environment — inheriting the test process's would hand every command whatever the test set, and a venue that dropped a step's env: would pass here. TMPDIR stays so a worker's default root is still the harness's temp dir.
+func sessionEnv() []string {
+	var env []string
+
+	for _, name := range []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR"} {
+		if value, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+value)
+		}
+	}
+
+	return env
 }
 
 // GenerateKey returns one fresh ed25519 key in each form a test needs.

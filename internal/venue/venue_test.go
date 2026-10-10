@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/testdocker"
 )
@@ -233,15 +234,23 @@ func TestVenueSharesOneSessionAcrossLabels(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
+	var streamed strings.Builder
+
+	ctx := events.WithOutput(context.Background(), events.Output{Stdout: &streamed})
+
 	// The second command runs in the SAME work directory on the worker, which
 	// is only true if the labelled copy shares the session rather than dialing
 	// its own.
-	err = labelled.Run(context.Background(), "test -f out/one.txt && echo two > out/two.txt")
+	err = labelled.Run(ctx, "test -f out/one.txt && echo two > out/two.txt && echo two")
 	if err != nil {
 		t.Fatalf("the labelled copy did not see the first command's work: %v", err)
 	}
 
 	mustRead(t, filepath.Join(cwd, "out", "two.txt"))
+
+	if streamed.String() != "[build] two\n" {
+		t.Errorf("streamed = %q, want the labelled copy's output under its label", streamed.String())
+	}
 }
 
 // TestVenueCloseIsSafeWhenNothingRan covers the ordinary path for a step that
@@ -394,5 +403,17 @@ func TestLocalDaemonDownIsNotAnSSHProblem(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "DOCKER_HOST") {
 		t.Errorf("error = %v, want it to name where local: found the daemon", err)
+	}
+}
+
+// A tcp DOCKER_HOST is a daemon local: dials as it is, not a host it refuses.
+func TestLocalDaemonOverTCPIsDialled(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1")
+
+	runner := newLocalRunner(t, shell.RunnerSpec{Cwd: t.TempDir(), Image: "alpine:3", Worker: "local:"})
+
+	_, err := runner.RunCapture(t.Context(), "true")
+	if err == nil || !strings.Contains(err.Error(), "127.0.0.1:1 did not answer") {
+		t.Errorf("error = %v, want the tcp daemon dialled and found not answering", err)
 	}
 }

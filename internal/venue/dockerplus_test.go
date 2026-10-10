@@ -132,6 +132,8 @@ func TestDockerPlusFetchesOutputsAfterANonzeroExit(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	writeFile(t, filepath.Join(cwd, "input.txt"), "kept")
+
 	runner := plusRunnerFor(t, dockerPlusURL(testsshd.New(t), socket), cwd, "out")
 
 	_, _, code, err := runner.RunCaptureFull(t.Context(), "echo partial > out/log.txt; exit 3")
@@ -141,6 +143,11 @@ func TestDockerPlusFetchesOutputsAfterANonzeroExit(t *testing.T) {
 
 	if got := mustRead(t, filepath.Join(cwd, "out", "log.txt")); got != "partial\n" {
 		t.Fatalf("out/log.txt = %q after the failed command", got)
+	}
+
+	// A declared output replaces only itself; the rest of the tree is the step's inputs.
+	if got := mustRead(t, filepath.Join(cwd, "input.txt")); got != "kept" {
+		t.Fatalf("input.txt = %q after fetching out", got)
 	}
 
 	// Run reports the exit as an error rather than as data, which is the branch that must still fetch.
@@ -371,7 +378,7 @@ func TestDockerPlusPublishesHeldOutputsOnlyAtClose(t *testing.T) {
 
 	first, _, _ := HeldOf(runner)
 
-	runAll(t, runner, "echo second-"+randomSuffix()+" > out/f")
+	runAll(t, runner, "echo second-"+randomSuffix()+" > out/f; head -c 65536 /dev/zero > out/pad")
 
 	final, _, ok := HeldOf(runner)
 	if !ok || final["out"] == "" || final["out"] == first["out"] {
@@ -389,6 +396,11 @@ func TestDockerPlusPublishesHeldOutputsOnlyAtClose(t *testing.T) {
 
 	if !aliasExists(t, final["out"]) {
 		t.Fatal("the final output was not held after close")
+	}
+
+	// Eviction weighs entries by this label, so a held output must carry its real size in bytes.
+	if size := sizeOf(inspect(t, aliasName(final["out"]))); size < 65536 {
+		t.Errorf("held output's size = %d bytes, want at least the 64KiB it holds", size)
 	}
 
 	if aliasExists(t, first["out"]) {
@@ -780,15 +792,25 @@ func TestDockerPlusKillsTheCommandADropInterrupted(t *testing.T) {
 		t.Fatalf("runner is %T, want a docker+ runner", runner)
 	}
 
-	assertInterruptedCommandIsKilled(t, runner, "4321", func() { dropAndWait(t, &plus.s.conn) })
+	assertInterruptedCommandIsKilled(t, runner, "41", func() { dropAndWait(t, &plus.s.conn) })
 }
 
 // assertInterruptedCommandIsKilled starts a long command, drops the connection under it, and checks the next command finds no trace of it running.
 func assertInterruptedCommandIsKilled(t *testing.T, runner shell.Runner, seconds string, drop func()) {
 	t.Helper()
 
-	// An ssh:// worker runs on this machine, so pgrep below sees every process on it — including the same test in another test process; the pid makes the duration this process's own.
+	// An ssh:// worker runs on this machine, so pgrep below sees every process on it — including the same test in another test process; the pid makes the duration this process's own. Nine digits at most: macOS sleep refuses anything past a 32-bit int, which once made this whole test vacuous.
 	seconds += fmt.Sprintf("%07d", os.Getpid())
+
+	// The bracket keeps the pattern from matching the sh that runs it.
+	sleeping := func() string {
+		out, err := runner.RunCapture(t.Context(), "pgrep -f 'slee[p] "+seconds+"' | wc -l")
+		if err != nil {
+			t.Fatalf("checking for the interrupted command: %v", err)
+		}
+
+		return strings.TrimSpace(string(out))
+	}
 
 	err := runner.Run(t.Context(), "true")
 	if err != nil {
@@ -797,10 +819,10 @@ func assertInterruptedCommandIsKilled(t *testing.T, runner shell.Runner, seconds
 
 	interrupted := make(chan error, 1)
 
-	go func() { interrupted <- runner.Run(t.Context(), "touch started; sleep "+seconds) }()
+	go func() { interrupted <- runner.Run(t.Context(), "sleep "+seconds) }()
 
 	deadline := time.Now().Add(20 * time.Second)
-	for runner.Run(t.Context(), "test -f started") != nil {
+	for sleeping() != "1" {
 		if time.Now().After(deadline) {
 			t.Fatal("the long command never started")
 		}
@@ -818,14 +840,8 @@ func assertInterruptedCommandIsKilled(t *testing.T, runner shell.Runner, seconds
 	// Attempt one after the drop may fail on the dead connection; the one after runs on the new one.
 	_ = runner.Run(t.Context(), "true")
 
-	// The bracket keeps the pattern from matching the sh that runs it.
-	out, err := runner.RunCapture(t.Context(), "pgrep -f 'slee[p] "+seconds+"' | wc -l")
-	if err != nil {
-		t.Fatalf("checking for the interrupted command: %v", err)
-	}
-
-	if strings.TrimSpace(string(out)) != "0" {
-		t.Errorf("the interrupted command is still running (%s); a retry would race it in the same tree", strings.TrimSpace(string(out)))
+	if count := sleeping(); count != "0" {
+		t.Errorf("the interrupted command is still running (%s); a retry would race it in the same tree", count)
 	}
 }
 

@@ -160,7 +160,14 @@ func TestDockerPlusReclaimsOrphansButNotWhatIsMounted(t *testing.T) {
 
 	worker := dockerPlusURL(testsshd.New(t), socket)
 	cached := payloadDir(t, 1024)
+
+	scopeEviction(t, 8<<30, time.Hour)
 	runAndClose(t, worker, cached, "true")
+
+	// Younger than orphanAge is what a live session's not-yet-mounted volume looks like.
+	if !volumeExists(t, orphan) {
+		t.Fatal("a volume younger than orphanAge was reclaimed")
+	}
 
 	scopeEviction(t, 8<<30, 0)
 	runAndClose(t, worker, payloadDir(t, 1024), "true")

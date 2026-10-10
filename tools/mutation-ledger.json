@@ -608,14 +608,14 @@
       "equivalent": []
     },
     "./internal/venue": {
-      "swept_at": "6645ad0",
-      "date": "2026-09-22",
-      "killed": 60,
-      "lived": 6,
-      "timed_out": 5,
-      "not_covered": 3,
-      "efficacy": 90.91,
-      "note": "PARTIAL: scoped SINCE=9ea6941 and stopped after 74 mutants (dataplane.go, exec.go, placement.go, pull.go, and session.go up to short()); transfer.go, venue.go, worker.go and the rest of session.go are unswept. Serialized (WORKERS=1) at ~50s a mutant, and every negated handshake err-check hangs the peer for the full 12-minute timeout, so the rest is a day of machine time: do it file-group by file-group. Of the 6 survivors, 2 were real and are pinned (TestPushWaitsForTheStoreToHaveIt, TestStoreUploadsLeaveNoPackedCopyBehind); 4 equivalent. The 5 TIMED OUT are handshake and command-loop err-negations: a hung peer, a real kill.",
+      "swept_at": "824ba22",
+      "date": "2026-10-10",
+      "killed": 610,
+      "lived": 45,
+      "timed_out": 9,
+      "not_covered": 71,
+      "efficacy": 93.13,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
       "equivalent": [
         {
           "mutant": "dataplane.go | ARITHMETIC_BASE | artifacts := make([]wire.UploadArtifact, 0, len(names)+len(s.remoteInputs))",
@@ -632,6 +632,58 @@
         {
           "mutant": "session.go | CONDITIONALS_NEGATION | if len(build) > 12 {",
           "why": "short() only trims a hash in an error message"
+        },
+        {
+          "mutant": "lease.go | CONDITIONALS_BOUNDARY | if worker.Idle > held.window {",
+          "why": "At equal windows only windowBy changes, and either URL names the same ?idle= value in the note."
+        },
+        {
+          "mutant": "lease.go | INCREMENT_DECREMENT | held.gen++",
+          "why": "gen only has to change between timers; decrementing yields distinct values too."
+        },
+        {
+          "mutant": "sshconfig.go | CONDITIONALS_BOUNDARY | if separator < 0 {",
+          "why": "separator 0 only for a line starting '='; both keywords ('' and '=x') are outside the subset and ignored alike."
+        },
+        {
+          "mutant": "gcp.go | CONDITIONALS_BOUNDARY | if len(credentials.JSON) > 0 && json.Unmarshal(credentials.JSON, &quota) == nil {",
+          "why": "Unmarshal of empty JSON errors, so the guard falls through either way."
+        },
+        {
+          "mutant": "gcp.go | CONDITIONALS_BOUNDARY | if installed, ok := at.(time.Time); ok && time.Since(installed) < gcpKeyTTL/2 {",
+          "why": "time.Since never lands exactly on the nanosecond bound."
+        },
+        {
+          "mutant": "gcp.go | CONDITIONALS_BOUNDARY | if installed, ok := at.(time.Time); !ok || time.Since(installed) > gcpKeyTTL {",
+          "why": "time.Since never lands exactly on the nanosecond bound."
+        },
+        {
+          "mutant": "ssm.go | CONDITIONALS_BOUNDARY | if slash < 0 {",
+          "why": "slash 0 only for a '//' path; both versions refuse the mapping at parse, via empty target or the instance/name pattern."
+        },
+        {
+          "mutant": "worker.go | CONDITIONALS_BOUNDARY | if len(mapped) > maxLabelValue {",
+          "why": "Truncating a 63-character value to 63 is a no-op."
+        },
+        {
+          "mutant": "bare.go | CONDITIONALS_BOUNDARY | if convErr != nil || pid <= 0 || shell.ProcessAlive(pid) {",
+          "why": "Owner files are written with os.Getpid(), never 0."
+        },
+        {
+          "mutant": "bare.go | CONDITIONALS_BOUNDARY | if len(stale) > 0 {",
+          "why": "With nothing stale it adds one 'rm -rf' with no operands, which exits 0."
+        },
+        {
+          "mutant": "bare.go | CONDITIONALS_NEGATION | if s.spec.Subdir != \"\" {",
+          "why": "Unreachable: only a placed agent with dir: sets Subdir, an agent needs image:, and ssh:// refuses image:."
+        },
+        {
+          "mutant": "dockerplus_evict.go | CONDITIONALS_BOUNDARY | if isSessionVolume(volume.Name) && !named[volume.Name] && !layered[volume.Name] && !volume.CreatedAt.IsZero() && time.Since(volume.CreatedAt) > orphanAge {",
+          "why": "Volume age never lands exactly on orphanAge."
+        },
+        {
+          "mutant": "keepalive.go | CONDITIONALS_BOUNDARY | if missed >= keepaliveMisses {",
+          "why": "Telling 3 misses from 4 needs a wall-clock assertion with sub-interval margin, which CLAUDE.md rules out on a loaded machine."
         }
       ]
     },

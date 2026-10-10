@@ -310,7 +310,8 @@ func newestRun(t *testing.T, state, name, job string) store.RunRow {
 func waitForRunStatus(t *testing.T, state, name, runID, want string) {
 	t.Helper()
 
-	deadline := time.Now().Add(30 * time.Second)
+	// A run reads aborted only once its step is torn down, and a loaded daemon was measured spending a whole 30s removal bound on that: margin past it, never a retry.
+	deadline := time.Now().Add(2 * time.Minute)
 	last := ""
 
 	for time.Now().Before(deadline) {
