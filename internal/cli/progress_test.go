@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"os"
 	"regexp"
 	"testing"
 
@@ -15,6 +16,38 @@ func TestProgressAutoIsPlainOffATerminal(t *testing.T) {
 	for mode, want := range map[string]bool{"auto": false, "plain": false, "tty": true} {
 		if got := (ProgressFlags{Progress: mode}).wantsLive(); got != want {
 			t.Errorf("--progress=%s live = %v, want %v", mode, got, want)
+		}
+	}
+}
+
+// On a terminal auto is live, except where CI or TERM=dumb says nobody is watching a redraw. /dev/null stands in for the terminal: a character device is what the check asks for. Not parallel: it swaps os.Stdout and sets the environment.
+func TestProgressAutoIsLiveOnATerminal(t *testing.T) {
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stdout := os.Stdout
+	os.Stdout = devNull
+
+	t.Cleanup(func() {
+		os.Stdout = stdout
+		_ = devNull.Close()
+	})
+
+	for _, tc := range []struct {
+		ci, term string
+		want     bool
+	}{
+		{"", "xterm-256color", true},
+		{"true", "xterm-256color", false},
+		{"", "dumb", false},
+	} {
+		t.Setenv("CI", tc.ci)
+		t.Setenv("TERM", tc.term)
+
+		if got := (ProgressFlags{Progress: "auto"}).wantsLive(); got != tc.want {
+			t.Errorf("CI=%q TERM=%q: live = %v, want %v", tc.ci, tc.term, got, tc.want)
 		}
 	}
 }

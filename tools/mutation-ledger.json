@@ -55,6 +55,58 @@
       "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
       "equivalent": []
     },
+    "./internal/cli": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 416,
+      "lived": 43,
+      "timed_out": 10,
+      "not_covered": 200,
+      "efficacy": 90.63,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "daemon_login.go | CONDITIONALS_BOUNDARY | if len(l.stale) > staleLogins {",
+          "why": "at exactly staleLogins entries the trim is l.stale[0:], the same slice"
+        },
+        {
+          "mutant": "follow_cmd.go | INVERT_NEGATIVES | Type: events.TypeJobFinished, RunID: run.ID, Job: run.JobName, StepIndex: -1,",
+          "why": "the synthesized job_finished is only rendered, never stored, and no renderer reads StepIndex for it"
+        },
+        {
+          "mutant": "follow_cmd.go | ARITHMETIC_BASE | Type: events.TypeJobFinished, RunID: run.ID, Job: run.JobName, StepIndex: -1,",
+          "why": "the synthesized job_finished is only rendered, never stored, and no renderer reads StepIndex for it"
+        },
+        {
+          "mutant": "follow_cmd.go | INVERT_NEGATIVES | Type: events.TypeStepNote, RunID: run.ID, Job: run.JobName, StepIndex: -1, Status: events.NoteWarn,",
+          "why": "Live and plain print a note as a line without reading StepIndex, and a Folder files notes by StepID only"
+        },
+        {
+          "mutant": "follow_cmd.go | ARITHMETIC_BASE | Type: events.TypeStepNote, RunID: run.ID, Job: run.JobName, StepIndex: -1, Status: events.NoteWarn,",
+          "why": "Live and plain print a note as a line without reading StepIndex, and a Folder files notes by StepID only"
+        },
+        {
+          "mutant": "follow_cmd.go | ARITHMETIC_BASE | return skipString(text, i+1)",
+          "why": "starting one byte earlier only re-reads the introducer (] P X ^ _), which is never BEL, newline or ESC"
+        },
+        {
+          "mutant": "mcp_cmd.go | CONDITIONALS_BOUNDARY | if err == nil && len(schema) > 0 {",
+          "why": "json.MarshalIndent never returns empty bytes with a nil error"
+        },
+        {
+          "mutant": "cli.go | CONDITIONALS_BOUNDARY | if len(sha) <= shown {",
+          "why": "at exactly shown bytes sha[:shown] equals sha"
+        },
+        {
+          "mutant": "flags.go | CONDITIONALS_BOUNDARY | if versions <= 0 && runs <= 0 {",
+          "why": "falling through only allocates an empty Defaults, which every reader treats the same as nil"
+        },
+        {
+          "mutant": "daemon_mcp_creds.go | CONDITIONALS_BOUNDARY | if e.endpoint != srv.Endpoint || time.Since(e.readAt) >= credentialMaxAge {",
+          "why": "time.Since landing exactly on credentialMaxAge is unreachable in practice"
+        }
+      ]
+    },
     "./internal/compress": {
       "swept_at": "824ba22",
       "date": "2026-10-09",
@@ -445,6 +497,34 @@
       "efficacy": 50,
       "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
       "equivalent": []
+    },
+    "./internal/store/postgres": {
+      "swept_at": "824ba22",
+      "date": "2026-10-09",
+      "killed": 313,
+      "lived": 37,
+      "timed_out": 0,
+      "not_covered": 8,
+      "efficacy": 89.43,
+      "note": "Measured 2026-10-09 at 824ba22 with every other package; every LIVED and TIMED OUT mutant triaged the same day — real gaps got tests that fail with the mutant applied, equivalents are listed, the rest die in ./e2e or another package.",
+      "equivalent": [
+        {
+          "mutant": "revisions.go | CONDITIONALS_BOUNDARY | if len(includes) > 0 {",
+          "why": "an empty Includes map instead of nil reads identically to every consumer (range/len/index); Revision is never serialized"
+        },
+        {
+          "mutant": "versions.go | CONDITIONALS_BOUNDARY | if order <= 0 {",
+          "why": "writing a cursor row at order 0 reads back the same 0 that no row does, and GREATEST only moves it forward"
+        },
+        {
+          "mutant": "store.go | ARITHMETIC_BASE | db.SetConnMaxIdleTime(5 * time.Minute)",
+          "why": "pool recycling interval; only connection churn changes, no test can observe it short of a dead peer over minutes"
+        },
+        {
+          "mutant": "store.go | ARITHMETIC_BASE | db.SetConnMaxLifetime(30 * time.Minute)",
+          "why": "pool recycling interval; only connection churn changes, no test can observe it short of a dead peer over minutes"
+        }
+      ]
     },
     "./internal/store/sqlite": {
       "swept_at": "824ba22",

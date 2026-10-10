@@ -410,6 +410,7 @@ func TestScrubLeavesOnlyText(t *testing.T) {
 		"b\x1b[31":                                     "b",
 		"stray\x1b[\nERROR kept":                       "stray\nERROR kept",
 		"osc\x1b]0;unterminated\nFAIL kept":            "osc\nFAIL kept",
+		"osc\x1b]0;ends on\x1b":                        "osc",
 	} {
 		if got := scrubText(input); got != want {
 			t.Errorf("scrubText(%q) = %q, want %q", input, got, want)
@@ -441,11 +442,12 @@ func TestFollowPlainPrintsChunksOnceAndNotTheRecordAgain(t *testing.T) {
 		{Type: events.TypeStepOutput, StepID: 1, Text: "first\nsecond"},
 		{Type: events.TypeStepStarted, Job: "build", StepKind: "task", StepName: "done", StepID: 2},
 		{Type: events.TypeStepOutput, StepID: 2, Text: "recorded before we attached"},
+		{Type: events.TypeJobFinished, Job: "build", Status: "failed", StepIndex: -1, DurationMS: 1234},
 	} {
 		render(event)
 	}
 
-	if want := "task: slow\nfirst\nsecond\ntask: done\nrecorded before we attached\n"; out.String() != want {
+	if want := "task: slow\nfirst\nsecond\ntask: done\nrecorded before we attached\nbuild failed in 1.2s\n"; out.String() != want {
 		t.Errorf("printed %q, want %q", out.String(), want)
 	}
 }

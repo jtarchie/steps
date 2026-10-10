@@ -683,9 +683,19 @@ jobs:
 		}
 	}
 
+	// Started on an empty database, the terminal is the only place the daemon can say how to give it work.
+	if !strings.Contains(logs(), " web.no_pipelines ") {
+		t.Errorf("an empty daemon did not say how to set a pipeline:\n%s", logs())
+	}
+
 	for line := range strings.SplitSeq(strings.TrimSpace(logs()), "\n") {
 		if !slogLine.MatchString(line) {
 			t.Errorf("daemon wrote a non-slog line to stderr: %q", line)
+		}
+
+		// A set, a green build and a stop by SIGINT, which is the one warning it earns: an operator reads any other WRN or ERR here as something to act on.
+		if (strings.Contains(line, " WRN ") || strings.Contains(line, " ERR ")) && !strings.Contains(line, " signal.received ") {
+			t.Errorf("a clean daemon life logged a problem: %q", line)
 		}
 	}
 }

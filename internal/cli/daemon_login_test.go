@@ -428,6 +428,33 @@ func TestForgetWaitsOutAReplacedLogin(t *testing.T) {
 	}
 }
 
+// The held login is what a page polls for its status and what a callback is matched against, so forgetting one pipeline must leave another's answerable.
+func TestForgetLetsGoOfOnlyItsOwnHeldLogins(t *testing.T) {
+	t.Parallel()
+
+	l := newLogins(t.Context())
+	app := &pendingLogin{pipeline: "app"}
+	other := &pendingLogin{pipeline: "other"}
+
+	l.mu.Lock()
+	l.held[loginKey("app", "tracker")] = app
+	l.held[loginKey("other", "tracker")] = other
+	l.mu.Unlock()
+
+	l.forget("app")
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.held[loginKey("app", "tracker")] != nil {
+		t.Error("the forgotten pipeline's login is still held")
+	}
+
+	if l.held[loginKey("other", "tracker")] != other {
+		t.Error("forget let go of another pipeline's login")
+	}
+}
+
 // -p names the pipeline a daemon login is filed under, so a --name beside it could only be ignored.
 func TestMCPLoginRefusesNameWithDashP(t *testing.T) {
 	t.Parallel()

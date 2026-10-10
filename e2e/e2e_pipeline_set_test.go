@@ -42,8 +42,8 @@ func TestPipelineSetServesAndPollsWhatWasSet(t *testing.T) {
 	waitForDid(t, fixture, "1")
 
 	out = captureStdout(t, func() { served.pipeline(t, "list") })
-	if !strings.Contains(out, "items") {
-		t.Errorf("pipeline list does not name the pipeline that was set:\n%s", out)
+	if !strings.Contains(out, "items") || !strings.Contains(out, fixture.pipeline) {
+		t.Errorf("pipeline list does not name the pipeline that was set, and the file it was set from:\n%s", out)
 	}
 
 	// Served under its name.

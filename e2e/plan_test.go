@@ -53,7 +53,7 @@ jobs:
 		}
 	})
 
-	if !strings.Contains(out, "skip") || !strings.Contains(out, "cached") {
+	if !strings.Contains(out, "skip") || !strings.Contains(out, "1 step(s): 0 would run, 1 cached") {
 		t.Errorf("plan output %q, want compile reported as cached", out)
 	}
 }

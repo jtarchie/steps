@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
@@ -93,6 +94,71 @@ func TestARenameRefusedWhileABuildRunsNamesThatBuild(t *testing.T) {
 	if msg := err.Error(); !strings.Contains(msg, "builds running: build/") || strings.Contains(msg, "more") {
 		t.Errorf("the refusal reads %q; want the one running build named and nothing more claimed", msg)
 	}
+}
+
+// Exactly as many builds as a refusal lists: every one is named, so there is no "more" to claim.
+func TestARefusalListingEveryRunningBuildClaimsNoMore(t *testing.T) {
+	isolateLogins(t)
+
+	local := web.NewLocalRunner(nil, nil, runningListed, false)
+
+	server, err := web.New(nil, local)
+	if err != nil {
+		t.Fatalf("web.New: %v", err)
+	}
+
+	held := newDaemon(t.Context(), server, local, State(filepath.Join(t.TempDir(), "steps.db")), ExecFlags{}, HistoryFlags{}, time.Hour)
+	t.Cleanup(held.Close)
+
+	gate := filepath.Join(t.TempDir(), "gate")
+	setPipeline(t, held, "app", gatedJobs(gate, runningListed))
+
+	for i := range runningListed {
+		err = served(t, held, "app").Store.EnqueueJob(t.Context(), fmt.Sprintf("j%d", i), "test")
+		if err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+	}
+
+	// Finished rather than cancelled by Close, which keeps a cancelled build's tree for a resume.
+	defer func() {
+		writePipelineFile(t, gate, "")
+
+		for len(local.Running("app")) > 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	deadline := time.Now().Add(30 * time.Second)
+	for len(local.Running("app")) < runningListed {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of %d builds started", len(local.Running("app")), runningListed)
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	err = held.Rename(t.Context(), "app", "renamed")
+	if !errors.Is(err, web.ErrRefused) {
+		t.Fatalf("a rename while builds run = %v, want refused", err)
+	}
+
+	if msg := err.Error(); strings.Contains(msg, "more") || strings.Count(msg, "/") < runningListed {
+		t.Errorf("the refusal reads %q; want all %d builds named and nothing more claimed", msg, runningListed)
+	}
+}
+
+// gatedJobs is n jobs, j0 onwards, each waiting for gate to exist.
+func gatedJobs(gate string, n int) string {
+	var source strings.Builder
+
+	source.WriteString("jobs:\n")
+
+	for i := range n {
+		fmt.Fprintf(&source, "- name: j%d\n  plan:\n  - task: wait\n    run: %s\n", i, strconv.Quote("while [ ! -e "+gate+" ]; do sleep 0.02; done"))
+	}
+
+	return source.String()
 }
 
 // A set that changed workspace: over a durable root used to install a provider keeping every build, to dodge the sweep — so each run from then on left its tree behind until a restart.
@@ -632,18 +698,18 @@ func TestAHistoryFlagGivenAloneReachesASetPipeline(t *testing.T) {
 			t.Fatalf("accept: %v", err)
 		}
 
-		var got HistoryFlags
-
-		if cfg.Defaults != nil && cfg.Defaults.VersionHistory != nil {
-			got.VersionHistory = *cfg.Defaults.VersionHistory
+		// The flag NOT given must leave its limit at the default: written as zero it would mean no limit at all.
+		want := HistoryFlags{VersionHistory: config.DefaultVersionHistory, RunHistory: config.DefaultRunHistory}
+		if flags.VersionHistory != 0 {
+			want.VersionHistory = flags.VersionHistory
 		}
 
-		if cfg.Defaults != nil && cfg.Defaults.RunHistory != nil {
-			got.RunHistory = *cfg.Defaults.RunHistory
+		if flags.RunHistory != 0 {
+			want.RunHistory = flags.RunHistory
 		}
 
-		if got != flags {
-			t.Errorf("flags %+v reached the set pipeline as %+v", flags, got)
+		if got := (HistoryFlags{VersionHistory: cfg.VersionHistoryLimit(), RunHistory: cfg.RunHistoryLimit()}); got != want {
+			t.Errorf("flags %+v reached the set pipeline as limits %+v, want %+v", flags, got, want)
 		}
 	}
 }

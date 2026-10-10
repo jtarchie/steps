@@ -299,6 +299,45 @@ func waitForProbe(t *testing.T, held *daemon, target *web.Pipeline, server strin
 	return web.MCPProbe{}
 }
 
+// A second click while a probe of the same configuration is in flight is the same question again: it must not cancel the first and dial the server a second time.
+func TestASecondClickWhileAProbeRunsIsNotASecondProbe(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	stalled := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(stalled.Close)
+
+	held := servingDaemon(t)
+	setPipeline(t, held, "app", probePipeline(stalled.URL))
+
+	target := held.server.Lookup("app")
+	key := probeKey(target, "tracker")
+
+	// Before the daemon's Close: a probe cancelled mid-request takes seconds to give up, where one answered ends at once.
+	defer close(release)
+
+	running := func() *probeResult {
+		err := held.StartProbe(target, "tracker")
+		if err != nil {
+			t.Fatalf("StartProbe: %v", err)
+		}
+
+		held.probes.mu.Lock()
+		defer held.probes.mu.Unlock()
+
+		return held.results[key]
+	}
+
+	if first, second := running(), running(); first != second {
+		t.Error("a second click replaced the probe already in flight")
+	}
+}
+
 // tokenFixtureServer is the one oauth server every fixture in this package declares, so writeTokenFile names it rather than taking it.
 const tokenFixtureServer = "tracker"
 

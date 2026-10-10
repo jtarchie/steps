@@ -225,6 +225,31 @@ func TestSetConfirmsARepairAsARepair(t *testing.T) {
 	}
 }
 
+// Not t.Parallel(): it swaps os.Stdin and os.Stdout.
+func TestAskTakesAYesAndNothingElse(t *testing.T) {
+	for typed, agreed := range map[string]bool{"y\n": true, "Y\n": true, "n\n": false, "yes\n": false, "": false} {
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, _ = writer.WriteString(typed)
+		_ = writer.Close()
+
+		stdin := os.Stdin
+		os.Stdin = reader
+
+		_ = captureStdout(t, func() { err = ask("go?", "not done") })
+
+		os.Stdin = stdin
+		_ = reader.Close()
+
+		if (err == nil) != agreed {
+			t.Errorf("answering %q: err = %v, want agreed=%v", typed, err, agreed)
+		}
+	}
+}
+
 // A repair is a set like any other, so it is compare-and-set against what the daemon holds: another set landing between this one's read and its upload is refused rather than silently overwritten.
 //
 // Not t.Parallel(): brokenOnRestart's restart runs with the environment as the test left it.

@@ -1257,3 +1257,65 @@ jobs:
 	// it was told, and a tool deadline is not a step failure.
 	assertSucceeded(t, storeNodes(t, path), "agent", "watcher")
 }
+
+// A green run's terminal carries no ERROR or WARN line: an operator reads either as something to act on, and a teardown that reports success as a failure trains them to stop reading.
+func TestAGreenRunLogsNoProblem(t *testing.T) {
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: build
+  plan:
+  - task: speak
+    inputs: []
+    run: echo hello
+`)
+	logs := captureStderr(t)
+
+	_ = captureStdout(t, func() {
+		err := cli.Run([]string{"run", path, "--job", "build", "--progress", "plain"})
+		if err != nil {
+			t.Errorf("run: %v", err)
+		}
+	})
+
+	for line := range strings.SplitSeq(logs(), "\n") {
+		if strings.Contains(line, " ERR ") || strings.Contains(line, " WRN ") {
+			t.Errorf("a green run logged a problem: %q", line)
+		}
+	}
+}
+
+// Running a job by hand is how somebody confirms a fix, so a green manual run lets the breaker go rather than leaving the job held until a separate resume.
+func TestAGreenManualRunReleasesTheBreaker(t *testing.T) {
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: build
+  plan:
+  - task: speak
+    inputs: []
+    run: echo hello
+`)
+	build := func() {
+		_ = captureStdout(t, func() {
+			err := cli.Run([]string{"run", path, "--job", "build", "--progress", "plain"})
+			if err != nil {
+				t.Fatalf("run: %v", err)
+			}
+		})
+	}
+
+	build()
+
+	st := openStoreFor(t, path)
+
+	paused, _, err := st.RecordJobOutcome(t.Context(), "build", false, 1)
+	if err != nil || !paused {
+		t.Fatalf("RecordJobOutcome = %v, %v; want the breaker tripped", paused, err)
+	}
+
+	build()
+
+	paused, err = st.IsJobPaused(t.Context(), "build")
+	if err != nil || paused {
+		t.Errorf("IsJobPaused after a green manual run = %v, %v; want released", paused, err)
+	}
+}
