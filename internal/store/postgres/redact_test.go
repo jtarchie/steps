@@ -65,6 +65,10 @@ func TestADescriptionCarriesNoPassword(t *testing.T) {
 		t.Errorf("Description() = %q carries the password", st.Description())
 	}
 
+	if !strings.HasPrefix(st.Description(), "postgres://"+parsed.User.Username()+"@") {
+		t.Errorf("Description() = %q does not name the user it connects as", st.Description())
+	}
+
 	if !strings.Contains(st.Description(), "search_path=steps") {
 		t.Errorf("Description() = %q does not name its schema", st.Description())
 	}

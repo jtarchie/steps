@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -881,5 +882,82 @@ func (s suite) TestNodeTranscriptIsCapped(t *testing.T) {
 
 	if !json.Valid([]byte(transcript)) {
 		t.Error("the truncated transcript is not valid JSON")
+	}
+}
+
+func roundTripTranscript(t *testing.T, st store.Store, hash, transcript string) string {
+	t.Helper()
+
+	ctx := context.Background()
+
+	mustRecordNode(t, st, "job", hash)
+
+	err := st.SaveNodeTranscript(ctx, hash, transcript)
+	if err != nil {
+		t.Fatalf("SaveNodeTranscript: %v", err)
+	}
+
+	stored, ok, err := st.NodeTranscript(ctx, hash)
+	if err != nil || !ok {
+		t.Fatalf("NodeTranscript: ok=%v err=%v", ok, err)
+	}
+
+	return stored
+}
+
+// TestATranscriptAtTheCapIsStoredVerbatim: a truncation path that rewrites transcripts that were never too big silently changes what a node page shows.
+func (s suite) TestATranscriptAtTheCapIsStoredVerbatim(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+	exactly := TranscriptJSON(store.MaxTranscriptBytes - len(TranscriptJSON(0)))
+
+	for i, original := range []string{TranscriptJSON(1_024), exactly} {
+		if got := roundTripTranscript(t, st, hashOf(i+1), original); got != original {
+			t.Errorf("a transcript of %d bytes, at most the cap, was stored as %d", len(original), len(got))
+		}
+	}
+}
+
+// TestTranscriptTruncationKeepsAsMuchAsFits: the head kept is the longest run of whole events the cap has room for beside the notice. A budget off by a few bytes passes every check that only asks for "under the cap".
+func (s suite) TestTranscriptTruncationKeepsAsMuchAsFits(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+
+	// One-byte events after the first, so each one more costs exactly two; two widths of the first, so one of them fills the cap to the byte.
+	for i, first := range []string{"1", "12"} {
+		events := []string{first}
+		for len(events) < store.MaxTranscriptBytes {
+			events = append(events, "1")
+		}
+
+		got := roundTripTranscript(t, st, hashOf(i+1), "["+strings.Join(events, ",")+"]")
+
+		var parsed []json.RawMessage
+
+		err := json.Unmarshal([]byte(got), &parsed)
+		if err != nil || !strings.HasPrefix(got, "["+first+",1,") || !strings.Contains(string(parsed[len(parsed)-1]), "truncated") {
+			t.Fatalf("first event %s: truncated to %.60q…, want the head, then the notice, as one array", first, got)
+		}
+
+		if len(got) > store.MaxTranscriptBytes || len(got) < store.MaxTranscriptBytes-1 {
+			t.Errorf("first event %s: kept %d bytes, want %d or one less — one more event costs two", first, len(got), store.MaxTranscriptBytes)
+		}
+	}
+}
+
+// TestTranscriptTruncationSurvivesNonJSON: the cap is a storage bound, not a validator, and a byte-offset cut must not split a multi-byte rune.
+func (s suite) TestTranscriptTruncationSurvivesNonJSON(t *testing.T) {
+	t.Parallel()
+
+	got := roundTripTranscript(t, s.open(t, "test"), hashOf(1), strings.Repeat("日本語", store.MaxTranscriptBytes))
+
+	if len(got) > store.MaxTranscriptBytes || len(got) < store.MaxTranscriptBytes-(utf8.UTFMax-1) {
+		t.Errorf("non-JSON transcript stored %d bytes, want the longest whole-rune prefix of the %d cap", len(got), store.MaxTranscriptBytes)
+	}
+
+	if !utf8.ValidString(got) {
+		t.Error("truncation split a multi-byte rune, leaving invalid UTF-8")
 	}
 }

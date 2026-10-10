@@ -231,9 +231,13 @@ func (s suite) TestIncludesComeBackByteForByte(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	script := "echo caf\xe9\x00done\n"
+	includes := map[string]string{
+		"ci/build.sh": "echo caf\xe9\x00done\n",
+		"ci/test.sh":  "echo test\n",
+		"ci/lint.sh":  "echo lint\n",
+	}
 
-	err := st.RecordRevision(ctx, "sha-one", pipelineSource(1), map[string]string{"ci/build.sh": script})
+	err := st.RecordRevision(ctx, "sha-one", pipelineSource(1), includes)
 	if err != nil {
 		t.Fatalf("RecordRevision: %v", err)
 	}
@@ -243,7 +247,13 @@ func (s suite) TestIncludesComeBackByteForByte(t *testing.T) {
 		t.Fatalf("FindRevision: found=%v err=%v", found, err)
 	}
 
-	if got := rev.Includes["ci/build.sh"]; got != script {
-		t.Errorf("the include came back as %q, want %q", got, script)
+	if len(rev.Includes) != len(includes) {
+		t.Errorf("%d includes came back, want all %d", len(rev.Includes), len(includes))
+	}
+
+	for path, content := range includes {
+		if got := rev.Includes[path]; got != content {
+			t.Errorf("include %s came back as %q, want %q", path, got, content)
+		}
 	}
 }

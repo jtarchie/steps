@@ -21,6 +21,9 @@ import (
 // it — so it is contract, and a driver with another multiplier fails here.
 const nodesPerRetainedRun = 20
 
+// chainsPerRetainedRun is the chain index's multiple, observable the same way through HasSucceededBatch.
+const chainsPerRetainedRun = 5
+
 // build records one finished run of a job the way a build does: the run, a
 // node, the step that recorded it, and the events naming it.
 func build(ctx context.Context, t *testing.T, st store.Store, jobName, runID string, n int) {
@@ -384,5 +387,162 @@ func (s suite) TestPruneNodesKeepsTheNewestAndWhatAnEventNames(t *testing.T) {
 		if _, ok := found[hash]; ok != want {
 			t.Errorf("node %s… survived = %v, want %v", hash[len(hash)-8:], ok, want)
 		}
+	}
+}
+
+// TestPruneBoundsTheChainCache: the chain index is capped at a multiple of run_history: like the node cache, newest kept; unbounded, it grows one row per green build forever.
+func (s suite) TestPruneBoundsTheChainCache(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	const (
+		keep  = 1
+		total = keep*chainsPerRetainedRun + 3
+	)
+
+	roots := make([]string, 0, total)
+	for i := range total {
+		roots = append(roots, hashOf(i+1))
+		mustRecordChainSucceeded(t, st, "build", roots[i])
+	}
+
+	err := st.Prune(ctx, store.Retention{JobName: "build", Runs: keep}, "")
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+
+	succeeded, err := st.HasSucceededBatch(ctx, "build", roots)
+	if err != nil {
+		t.Fatalf("HasSucceededBatch: %v", err)
+	}
+
+	kept := 0
+
+	for _, root := range roots {
+		if succeeded[root] {
+			kept++
+		}
+	}
+
+	if kept != keep*chainsPerRetainedRun || succeeded[roots[0]] || !succeeded[roots[total-1]] {
+		t.Errorf("%d of %d chains survive (oldest %v, newest %v), want the newest %d",
+			kept, total, succeeded[roots[0]], succeeded[roots[total-1]], keep*chainsPerRetainedRun)
+	}
+}
+
+func finishedRunUnder(ctx context.Context, t *testing.T, st store.Store, jobName, runID, sha string, edit int) {
+	t.Helper()
+
+	err := st.RecordRevision(ctx, sha, pipelineSource(edit), nil)
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	err = st.StartRun(ctx, runID, jobName, "/tmp/ws", sha)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	err = st.FinishRun(ctx, runID, "succeeded")
+	if err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+}
+
+func revisionExists(ctx context.Context, t *testing.T, st store.Store, sha string) bool {
+	t.Helper()
+
+	_, found, err := st.FindRevision(ctx, sha)
+	if err != nil {
+		t.Fatalf("FindRevision(%s): %v", sha, err)
+	}
+
+	return found
+}
+
+// TestPruneSweepsWhatTheReapedRowsLeftBehind: reaping runs orphans the configuration only they named, and reaping nodes leaves a survivor naming a parent that is gone. Both are swept in the same prune, including when the node cap deleted something.
+func (s suite) TestPruneSweepsWhatTheReapedRowsLeftBehind(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	const (
+		jobName = "deploy"
+		keep    = 1
+	)
+
+	finishedRunUnder(ctx, t, st, jobName, "run-old", "sha-old", 1)
+
+	parent, child := hashOf(500), hashOf(501)
+	mustRecordNode(t, st, jobName, parent)
+
+	err := st.RecordNode(ctx, store.NodeRecord{
+		Hash: child, ParentHash: parent, Kind: "task", Resource: "step", Content: map[string]any{"hash": child},
+	}, jobName, "succeeded", nil, nil)
+	if err != nil {
+		t.Fatalf("RecordNode: %v", err)
+	}
+
+	// One past the cap, so the parent, the oldest, is the one node that goes.
+	fillNodeCache(t, st, jobName, keep*nodesPerRetainedRun-1)
+
+	finishedRunUnder(ctx, t, st, jobName, "run-new", "sha-new", 2)
+
+	err = st.Prune(ctx, store.Retention{JobName: jobName, Runs: keep}, "run-new")
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+
+	for sha, want := range map[string]bool{"sha-old": false, "sha-new": true} {
+		if found := revisionExists(ctx, t, st, sha); found != want {
+			t.Errorf("configuration %s survived = %v, want %v", sha, found, want)
+		}
+	}
+
+	nodes, err := st.NodesByHash(ctx, []string{parent, child})
+	if err != nil {
+		t.Fatalf("NodesByHash: %v", err)
+	}
+
+	if _, ok := nodes[parent]; ok {
+		t.Fatal("the oldest node survived a prune past the cap; this test proves nothing")
+	}
+
+	if got := nodes[child].ParentHash; got != "" {
+		t.Errorf("the surviving child still names its reaped parent %s…", got[len(got)-8:])
+	}
+}
+
+// TestPruneUnderTheCapLeavesParentLinksAlone: a container records its node AFTER its children, so a child naming a parent no row holds yet is an in-flight build, not debris; a prune that reaped no node has no business clearing it.
+func (s suite) TestPruneUnderTheCapLeavesParentLinksAlone(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	parent, child := hashOf(1), hashOf(2)
+
+	err := st.RecordNode(ctx, store.NodeRecord{
+		Hash: child, ParentHash: parent, Kind: "task", Resource: "step", Content: map[string]any{"hash": child},
+	}, "build", "succeeded", nil, nil)
+	if err != nil {
+		t.Fatalf("RecordNode: %v", err)
+	}
+
+	err = st.Prune(ctx, store.Retention{JobName: "build", Runs: 1}, "")
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+
+	nodes, err := st.NodesByHash(ctx, []string{child})
+	if err != nil {
+		t.Fatalf("NodesByHash: %v", err)
+	}
+
+	if got := nodes[child].ParentHash; got != parent {
+		t.Errorf("a prune that reaped nothing left the in-flight child naming parent %q, want %s…", got, parent[len(parent)-8:])
 	}
 }

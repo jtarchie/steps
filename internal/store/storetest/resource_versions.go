@@ -39,6 +39,37 @@ func recordN(t *testing.T, st store.Store, resource string, names ...string) {
 	}
 }
 
+// TestRecordVersionOrderAnswersWithTheOrderFiled: a cursor advances to the order this returns, so a zero for a version just filed reads as "consumed nothing" and the same version is built again.
+func (s suite) TestRecordVersionOrderAnswersWithTheOrderFiled(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+	ctx := context.Background()
+
+	recordN(t, st, "items", "1", "2")
+
+	for _, name := range []string{"9", "2", "9"} {
+		version, err := store.EncodeVersion(map[string]any{"n": name})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := st.RecordVersionOrder(ctx, "items", version)
+		if err != nil {
+			t.Fatalf("RecordVersionOrder(%s): %v", name, err)
+		}
+
+		orders, err := st.VersionOrders(ctx, "items")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if want := orders[version]; got != want || got <= 0 {
+			t.Errorf("RecordVersionOrder(%s) = %d, want the order it is filed at, %d", name, got, want)
+		}
+	}
+}
+
 // TestRecordVersionsKeepsDiscoveryOrder: a version's place in history is when
 // it was first seen, and re-reporting it does not move it. A check that
 // returns its whole window every poll is the common case, and it has to be

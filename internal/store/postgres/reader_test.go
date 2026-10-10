@@ -89,6 +89,33 @@ func TestAReaderNeverWrites(t *testing.T) {
 	}
 }
 
+// TestClosingAHealthyHandleIsNotAnError: callers report what Close returns, and a clean shutdown that reports a failure is one an operator learns to ignore.
+func TestClosingAHealthyHandleIsNotAnError(t *testing.T) {
+	t.Parallel()
+
+	rawURL := newDatabase(t)
+
+	st, err := OpenStore(rawURL, "p")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	reader, err := OpenReader(rawURL)
+	if err != nil {
+		t.Fatalf("OpenReader: %v", err)
+	}
+
+	err = reader.Close()
+	if err != nil {
+		t.Errorf("Reader.Close = %v", err)
+	}
+
+	err = st.Close()
+	if err != nil {
+		t.Errorf("Store.Close = %v", err)
+	}
+}
+
 // TestAReaderNeedsOnlySelect: `steps runs` against a database whose operator
 // granted a reporting role nothing but SELECT.
 func TestAReaderNeedsOnlySelect(t *testing.T) {
