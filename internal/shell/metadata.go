@@ -4,6 +4,8 @@ import (
 	"context"
 	"slices"
 	"strings"
+
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // BuildMetadata is which build a command is part of, handed to every command
@@ -55,6 +57,15 @@ func BuildEnv(ctx context.Context) map[string]string {
 		}
 
 		env[buildEnvNames[i]] = value
+	}
+
+	// Not in buildEnvNames, so env: may still name it (config refuses those) and is overridden only while tracing, where the trace a command continues has to be its step's.
+	if parent := events.Traceparent(ctx); parent != "" {
+		if env == nil {
+			env = map[string]string{}
+		}
+
+		env["TRACEPARENT"] = parent
 	}
 
 	return env

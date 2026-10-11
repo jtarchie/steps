@@ -1,9 +1,12 @@
 package e2e
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -139,4 +142,125 @@ func TestOTelRefusesAProtocolItWouldIgnore(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "grpc") {
 		t.Fatalf("validate with OTLP over grpc = %v, want a refusal naming grpc", err)
 	}
+}
+
+// TestOTelTracesARunAsItsStepTree: a run is one trace — the job's span at the root, each step under the container it ran in, a skip and a tolerated failure each saying so — and a command sees TRACEPARENT naming its own step's span.
+func TestOTelTracesARunAsItsStepTree(t *testing.T) {
+	collector := newOTLPCollector(t)
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	seen := filepath.Join(dir, "traceparent")
+
+	writePipelineFile(t, path, `jobs:
+- name: build
+  plan:
+  - do:
+    - task: hello
+      run: echo "$TRACEPARENT" > `+seen+`
+  - task: guarded
+    when: "false"
+    run: echo never
+  - try:
+      task: broken
+      run: "false"
+`)
+
+	err := cli.Run([]string{"run", path, "--job", "build"})
+	if err != nil {
+		t.Fatalf("steps run: %v", err)
+	}
+
+	spans, _ := collector.snapshot()
+	job := findSpan(t, spans, tracepb.Span_SPAN_KIND_SERVER, "RUN build")
+	do := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "do")
+	hello := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "task hello")
+	guarded := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "task guarded")
+	broken := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "task broken")
+
+	assertUnder(t, job, job, do)
+	assertUnder(t, job, do, hello)
+	assertUnder(t, job, job, guarded)
+	assertUnder(t, job, nil, broken)
+
+	if got := spanAttr(job, "cicd.pipeline.result"); got != "success" {
+		t.Errorf("the run's result = %q, want success", got)
+	}
+
+	if got := spanAttr(guarded, "cicd.pipeline.task.run.result"); got != "skip" {
+		t.Errorf("the guarded step's result = %q, want skip", got)
+	}
+
+	if got := spanAttr(broken, "cicd.pipeline.task.run.result"); got != "failure" || broken.GetStatus().GetCode() != tracepb.Status_STATUS_CODE_ERROR {
+		t.Errorf("the tolerated failure reads result=%q status=%s, want failure and an error status", got, broken.GetStatus().GetCode())
+	}
+
+	raw, err := os.ReadFile(seen) //nolint:gosec // this test's own temp file
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := fmt.Sprintf("00-%x-%x-01", hello.GetTraceId(), hello.GetSpanId())
+	if got := strings.TrimSpace(string(raw)); got != want {
+		t.Errorf("the command saw TRACEPARENT=%q, want its own step's span %q", got, want)
+	}
+}
+
+// assertUnder checks child is in the run's trace and, when parent is given, directly under it.
+func assertUnder(t *testing.T, run, parent, child *tracepb.Span) {
+	t.Helper()
+
+	if string(child.GetTraceId()) != string(run.GetTraceId()) {
+		t.Errorf("%s is not in the run's trace", child.GetName())
+	}
+
+	if parent != nil && string(child.GetParentSpanId()) != string(parent.GetSpanId()) {
+		t.Errorf("%s is not under %s", child.GetName(), parent.GetName())
+	}
+}
+
+func spanAttr(span *tracepb.Span, key string) string {
+	for _, attr := range span.GetAttributes() {
+		if attr.GetKey() == key {
+			return attr.GetValue().GetStringValue()
+		}
+	}
+
+	return ""
+}
+
+// TestOTelPutsADockerCallUnderItsStep: the docker client traces itself against whatever span the context carries, so the exec a containerized step makes must land under that step, not as a trace of its own.
+func TestOTelPutsADockerCallUnderItsStep(t *testing.T) {
+	requireDockerE2E(t)
+
+	collector := newOTLPCollector(t)
+
+	path := pipelinePath(t, t.TempDir())
+	writePipelineFile(t, path, `jobs:
+- name: build
+  plan:
+  - task: boxed
+    image: alpine:3.20
+    run: echo hi
+`)
+
+	err := cli.Run([]string{"run", path, "--job", "build"})
+	if err != nil {
+		t.Fatalf("steps run: %v", err)
+	}
+
+	spans, _ := collector.snapshot()
+	boxed := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "task boxed")
+
+	for _, span := range spans {
+		if span.GetKind() == tracepb.Span_SPAN_KIND_CLIENT && strings.HasSuffix(span.GetName(), "/exec") {
+			if string(span.GetParentSpanId()) != string(boxed.GetSpanId()) {
+				t.Errorf("the step's exec (%s) is not under the step's span", span.GetName())
+			}
+
+			return
+		}
+	}
+
+	t.Fatal("no docker exec span was exported")
 }

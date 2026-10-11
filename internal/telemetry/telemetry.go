@@ -18,6 +18,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/jtarchie/steps/internal/events"
 )
 
 // shutdownBound caps the final flush: an unreachable collector must not hold a finished command's exit hostage.
@@ -86,12 +88,15 @@ func Start(ctx context.Context, version string) (func(context.Context), error) {
 	provider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter), sdktrace.WithResource(res))
 
 	otel.SetTracerProvider(provider)
+	previous := events.SetTracer(newRunTracer(provider.Tracer("github.com/jtarchie/steps")))
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
 
 	return func(ctx context.Context) {
 		// The likeliest reason this runs is a cancelled command, so the flush gets a context of its own.
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownBound)
 		defer cancel()
+
+		events.SetTracer(previous)
 
 		err := provider.Shutdown(ctx)
 		if err != nil {

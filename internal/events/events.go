@@ -353,7 +353,7 @@ func FromContext(ctx context.Context) *Bus {
 // Publish publishes to whatever bus ctx carries. It is the form the
 // execution packages use: one call, no nil checks, no-op off the web path.
 func Publish(ctx context.Context, event Event) {
-	FromContext(ctx).Publish(event)
+	FromContext(ctx).Publish(traceEvent(ctx, event))
 }
 
 // Note publishes a TypeStepNote under the run and step ctx names, or the job (StepIndex -1) outside a step. With no bus to tell — none installed, or one already closed, which is where a job's deferred worker release speaks — it writes the line to Stdout(ctx) instead, or logs it when ctx is Headless, because a note is often the only record of what it says.
@@ -419,7 +419,7 @@ type stepIDKey struct{}
 // under. Without it every turn a nested agent produced had to be matched back
 // to a step by (index, name), which a try: and the agent it wraps share.
 func WithStepID(ctx context.Context, id int64) context.Context {
-	return context.WithValue(ctx, stepIDKey{}, id)
+	return traceScope(context.WithValue(ctx, stepIDKey{}, id), id)
 }
 
 // StepID returns the step id carried by ctx, or 0 outside a step.
