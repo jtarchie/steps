@@ -3,7 +3,6 @@ module github.com/jtarchie/steps
 go 1.26.6
 
 tool (
-	github.com/go-gremlins/gremlins/cmd/gremlins
 	go.uber.org/nilaway/cmd/nilaway
 	golang.org/x/vuln/cmd/govulncheck
 )

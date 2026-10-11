@@ -1,4 +1,4 @@
-// Command mutants is the bookkeeping around a gremlins sweep: which package is stalest, and which files a scoped run may skip. See .claude/skills/mutation-sweep.
+// Command mutants measures mutation testing (sweep, all), keeps the ledger of it (stale, summary, record), and judges e2e (judge). See .claude/skills/mutation-sweep.
 package main
 
 import (
@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -50,7 +49,7 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
-	usage := errors.New("usage: mutants stale | summary | all [package dir...] | excludes <package dir> <since rev, or empty> | record <package dir> <gremlins json> | judge [attribution json] [workers] [limit]")
+	usage := errors.New("usage: mutants stale | summary | all [package dir...] | sweep <package dir> [workers] [since rev] | record <package dir> <gremlins json> | judge [attribution json] [workers] [limit]")
 
 	if len(args) == 0 {
 		return usage
@@ -60,12 +59,12 @@ func run(ctx context.Context, args []string) error {
 		operands int
 		run      func(operands []string) error
 	}{
-		"stale":    {0, func([]string) error { return stale(ctx) }},
-		"summary":  {0, func([]string) error { return printSummary(ctx) }},
-		"all":      {-1, func(only []string) error { return sweepAll(ctx, only) }},
-		"excludes": {2, func(o []string) error { return excludes(ctx, o[0], o[1]) }},   //nolint:mnd // a package and a rev
-		"record":   {2, func(o []string) error { return recordFile(ctx, o[0], o[1]) }}, //nolint:mnd // a package and a report
-		"judge":    {-1, func(o []string) error { return judge(ctx, o) }},
+		"stale":   {0, func([]string) error { return stale(ctx) }},
+		"summary": {0, func([]string) error { return printSummary(ctx) }},
+		"all":     {-1, func(only []string) error { return sweepAll(ctx, only) }},
+		"sweep":   {-1, func(o []string) error { return sweepVerb(ctx, o) }},
+		"record":  {2, func(o []string) error { return recordFile(ctx, o[0], o[1]) }}, //nolint:mnd // a package and a report
+		"judge":   {-1, func(o []string) error { return judge(ctx, o) }},
 	}
 
 	verb, known := verbs[args[0]]
@@ -202,52 +201,6 @@ func rank(rows []staleness) {
 	})
 }
 
-func excludes(ctx context.Context, dir, since string) error {
-	if since == "" {
-		return nil
-	}
-
-	all, err := sourceFiles(dir)
-	if err != nil {
-		return err
-	}
-
-	out, err := git(ctx, "diff", "--name-only", since, "--", dir)
-	if err != nil {
-		return err
-	}
-
-	changed := map[string]bool{}
-	for _, name := range strings.Fields(out) {
-		changed[name] = true
-	}
-
-	fmt.Println(strings.Join(excludeFlags(dir, all, changed), " "))
-
-	return nil
-}
-
-// excludeFlags stands in for gremlins' --diff, which is broken in package mode: it compares repo-relative diff paths against package-relative mutant paths and so skips every mutant. The patterns are package-relative for the same reason.
-func excludeFlags(dir string, all []string, changed map[string]bool) []string {
-	var flags []string
-
-	for _, file := range all {
-		if changed[file] {
-			continue
-		}
-
-		rel, err := filepath.Rel(dir, file)
-		if err != nil {
-			rel = file
-		}
-
-		// Unquoted: the Taskfile splices this in with $(...), and a shell does not re-parse quotes that arrive by substitution — they would become part of the pattern.
-		flags = append(flags, "-E", "(^|/)"+regexp.QuoteMeta(filepath.ToSlash(rel))+"$")
-	}
-
-	return flags
-}
-
 func readLedger() (ledger, error) {
 	book := ledger{Packages: map[string]row{}}
 
@@ -268,14 +221,12 @@ func readLedger() (ledger, error) {
 	return book, nil
 }
 
-// allPackages is every package with source; testedPackages only those gremlins can judge. A package with no tests of its own (storetest, docs) has every mutant NOT COVERED in package mode, its killers living in the packages that import it. A package main is out too: gremlins v0.6.0 picks the package to test by walking up for a directory named like the Go package, finds none named "main", and runs the module root's tests instead — none — so every mutant in tools/ scored LIVED or TIMED OUT, never KILLED.
-const (
-	allPackages    = `{{if .GoFiles}}{{.Dir}}{{end}}`
-	testedPackages = `{{if and .GoFiles (or .TestGoFiles .XTestGoFiles) (ne .Name "main")}}{{.Dir}}{{end}}`
-)
+// testedPackages are those a sweep can judge. A package with no tests of its own (storetest, docs) has every mutant NOT COVERED, its killers living in the packages that import it.
+// ponytail: package main is out because gremlins could not test one (it ran the module root's tests instead); sweep can, so tools/ could join the ledger once someone wants the nag for them.
+const testedPackages = `{{if and .GoFiles (or .TestGoFiles .XTestGoFiles) (ne .Name "main")}}{{.Dir}}{{end}}`
 
 func packageDirs(ctx context.Context, filter string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "go", "list", "-f", filter, "./...") //nolint:gosec // filter is one of the two constants above
+	cmd := exec.CommandContext(ctx, "go", "list", "-f", filter, "./...") //nolint:gosec // filter is testedPackages
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -299,28 +250,6 @@ func packageDirs(ctx context.Context, filter string) ([]string, error) {
 	}
 
 	return dirs, nil
-}
-
-// sourceFiles is every non-test Go file under dir, recursively, because gremlins' package mode walks subdirectories too.
-func sourceFiles(dir string) ([]string, error) {
-	var files []string
-
-	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error { //nolint:gosec // dir is a package directory of this repository, named on the command line by whoever runs the sweep
-		if err != nil {
-			return err
-		}
-
-		if !entry.IsDir() && strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") {
-			files = append(files, filepath.ToSlash(filepath.Clean(path)))
-		}
-
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("walking %s: %w", dir, err)
-	}
-
-	return files, nil
 }
 
 func sourceLines(dir string) (int, error) {
@@ -485,7 +414,7 @@ func writeLedger(book ledger) error {
 	return nil
 }
 
-// serialPackages are the ones whose tests bind ports, spawn containers or share the docker daemon: parallel mutants there fail each other's tests and are scored KILLED for the wrong reason. They also take hours, so they go last.
+// serialPackages are the ones whose tests bind ports, spawn containers or share the docker daemon. sweep runs their docker tests one at a time on its own; they still take longest, so they go last.
 var serialPackages = map[string]bool{ //nolint:gochecknoglobals // a fixed table
 	"./internal/pipeline": true, "./internal/venue": true, "./internal/shell": true, "./internal/web": true,
 	"./internal/cli": true, "./internal/dockerapi": true, "./internal/trigger": true, "./internal/agent": true,
@@ -507,35 +436,8 @@ func sweepOrder(dirs []string, sizes map[string]int) []string {
 	return ordered
 }
 
-// childExcludes keeps a parent package's sweep to its own files. gremlins' package mode walks subdirectories, so ./internal/store alone re-sweeps sqlite and storetest and reports their mutants as its own.
-func childExcludes(dir string, all []string) []string {
-	var flags []string
-
-	for _, other := range all {
-		rel, ok := strings.CutPrefix(other, dir+"/")
-		if !ok {
-			continue
-		}
-
-		child, _, _ := strings.Cut(rel, "/")
-		flag := "^" + regexp.QuoteMeta(child) + "/"
-
-		if !slices.Contains(flags, flag) {
-			flags = append(flags, "-E", flag)
-		}
-	}
-
-	return flags
-}
-
 // sweepAll MEASURES every package and triages none. Measuring is machine time and can run unattended; triage is judgment and cannot, so the two are kept apart — this fills the ledger with real floors and a survivor count per package, and the mutation-sweep skill works through them afterwards. Resumable: a package already measured at this commit is skipped.
 func sweepAll(ctx context.Context, only []string) error {
-	dirs, err := packageDirs(ctx, allPackages)
-	if err != nil {
-		return err
-	}
-
-	// Every package is still needed to know a parent's children; `only` narrows what is swept, not what is known.
 	targets, err := packageDirs(ctx, testedPackages)
 	if err != nil {
 		return err
@@ -564,7 +466,7 @@ func sweepAll(ctx context.Context, only []string) error {
 	var failed []string
 
 	for _, dir := range sweepOrder(targets, sizes) {
-		err = measure(ctx, dir, dirs, head, sizes[dir])
+		err = measure(ctx, dir, head, sizes[dir])
 		if err != nil {
 			// One package failing to measure must not cost the night the rest of them.
 			fmt.Fprintf(os.Stderr, "mutants: %v\n", err)
@@ -581,7 +483,7 @@ func sweepAll(ctx context.Context, only []string) error {
 }
 
 // measure sweeps one package unless the ledger says it was already measured at this commit, which is what makes an interrupted night resumable.
-func measure(ctx context.Context, dir string, all []string, head string, lines int) error {
+func measure(ctx context.Context, dir string, head string, lines int) error {
 	book, err := readLedger()
 	if err != nil {
 		return err
@@ -595,35 +497,7 @@ func measure(ctx context.Context, dir string, all []string, head string, lines i
 
 	fmt.Printf("== %s (%d lines)\n", dir, lines)
 
-	return sweepOne(ctx, dir, all)
-}
-
-func sweepOne(ctx context.Context, dir string, all []string) error {
-	// A cached coverage run gives gremlins a one-second baseline, its timeout is that baseline times a coefficient, and TIMED OUT scores as KILLED.
-	err := runLoud(ctx, "go", "clean", "-testcache")
-	if err != nil {
-		return err
-	}
-
-	err = os.MkdirAll(".gremlins", 0o750)
-	if err != nil {
-		return fmt.Errorf("creating .gremlins: %w", err)
-	}
-
-	report := filepath.Join(".gremlins", strings.ReplaceAll(strings.TrimPrefix(dir, "./"), "/", "_")+".json")
-
-	workers := "0"
-	if serialPackages[dir] {
-		workers = "1"
-	}
-
-	args := slices.Concat(
-		[]string{"tool", "-modfile=go.tool.mod", "gremlins", "unleash", "--timeout-coefficient", "15", "--workers", workers, "-o", report},
-		childExcludes(dir, all),
-		[]string{dir},
-	)
-
-	err = runLoud(ctx, "go", args...)
+	report, err := sweepPackage(ctx, dir, sweepWorkers(), "")
 	if err != nil {
 		return err
 	}
@@ -631,14 +505,14 @@ func sweepOne(ctx context.Context, dir string, all []string) error {
 	return recordFile(ctx, dir, report)
 }
 
-func runLoud(ctx context.Context, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed commands; the variable arguments are package directories from go list
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-
-	err := cmd.Run()
+// sweepVerb measures one package and leaves the report for triage; recording it is `record`'s, because a scoped run (a rev given) is not a measurement of the package.
+func sweepVerb(ctx context.Context, args []string) error {
+	dir, workers, since, err := sweepArgs(args)
 	if err != nil {
-		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+		return err
 	}
 
-	return nil
+	_, err = sweepPackage(ctx, dir, workers, since)
+
+	return err
 }

@@ -1,15 +1,15 @@
 ---
 name: mutation-sweep
-description: Periodic gremlins mutation-testing sweep of the steps repo — picks the package that has churned most since it was last swept, runs it in an isolated worktree, triages every surviving mutant (killed by e2e / equivalent / real gap), writes the missing tests, and updates tools/mutation-ledger.json. Use when the user asks for a mutation sweep, a gremlins run, "which tests are vacuous", or to check how stale mutation coverage is. Not for the doc-corpus mutation suites in ./e2e (those run in `task test`; see steps-tests).
+description: Periodic mutation-testing sweep of the steps repo — picks the package that has churned most since it was last swept, measures it, triages every surviving mutant (killed by e2e / equivalent / real gap), writes the missing tests, and updates tools/mutation-ledger.json. Use when the user asks for a mutation sweep, a gremlins or mutants run, "which tests are vacuous", or to check how stale mutation coverage is. Not for the doc-corpus mutation suites in ./e2e (those run in `task test`; see steps-tests).
 ---
 
 # steps: the mutation sweep
 
-Gremlins cannot gate a commit — a heavy package costs hours and a survivor needs judgment — so it runs as a sweep, by hand, and **`tools/mutation-ledger.json` is what makes "periodic" mean something without a scheduler**: one row per package with the commit it was last swept at, so staleness is a `git diff --stat`, not a memory.
+Mutation testing cannot gate a commit — a heavy package costs hours and a survivor needs judgment — so it runs as a sweep, by hand, and **`tools/mutation-ledger.json` is what makes "periodic" mean something without a scheduler**: one row per package with the commit it was last swept at, so staleness is a `git diff --stat`, not a memory.
 
 ## Measuring is not sweeping
 
-**Measuring** a package is machine time: run gremlins, write the ledger row. **Triaging** its survivors is judgment. They cost differently by two orders of magnitude (merkle: two minutes to measure, ninety to triage), so they are separate commands. `task mutate-all` measures EVERY package unattended and triages none — it is how the ledger gets a real floor and a survivor count for each package, and it belongs to a night the machine sits idle. This skill is the other half: one package's survivors, worked through.
+**Measuring** a package is machine time: run `tools/mutants sweep`, write the ledger row. **Triaging** its survivors is judgment. They cost differently by two orders of magnitude (merkle: two minutes to measure, ninety to triage), so they are separate commands. `task mutate-all` measures EVERY package unattended and triages none — it is how the ledger gets a real floor and a survivor count for each package, and it belongs to a night the machine sits idle. This skill is the other half: one package's survivors, worked through.
 
 `tools/mutants record` refuses to write an efficacy LOWER than the row already holds. That refusal is the finding: triage what now survives, and change the number by hand only once the drop is understood.
 
@@ -22,21 +22,20 @@ Gremlins cannot gate a commit — a heavy package costs hours and a survivor nee
 
 ## 2. Run it where nothing else is
 
-- **In a git worktree** (`EnterWorktree`, or an `isolation: worktree` agent), never the main checkout. Gremlins mutates copies, but its coverage phase runs in the tree it was started from, and another session editing that tree mid-run breaks the run. A worktree also holds only tracked files, so gremlins stops copying `.claude/worktrees/` into every mutant directory.
-- **Not while `task` is running anywhere on the machine** (`pgrep -fl 'go test|golangci-lint'`). Load makes mutants time out, and gremlins scores TIMED OUT as KILLED — a loaded run reports tests that do not exist.
-- `task mutate-pkg PKG=./internal/foo` does the mechanics: cleans the test cache first (a cached coverage run gives a ~1s baseline, and then every mutant "times out"), coefficient 15, results to `.gremlins/<pkg>.json`. Measured: `./internal/merkle`, 166 mutants, 2m14s, zero timeouts.
-  - **Package mode is the default, and `INTEGRATION=1` is not a sweep.** It runs `go test ./...` — docker e2e included — once per mutant, several at a time: merkle did not finish in ten minutes that way. Use it only to get a final answer on a handful of named survivors, and prefer step 3's targeted `go test ./e2e -run` even then.
-  - `WORKERS=1` for a package whose tests bind ports, spawn containers or share the docker daemon (`venue`, `shell`, `web`, `cli`, `pipeline`): parallel mutants otherwise fail each other's tests and score KILLED for the wrong reason.
-  - **Heavy packages get scoped, because `--diff` is broken in package mode** (it compares repo-relative diff paths to package-relative mutant paths and skips everything). `task mutate-pkg PKG=./internal/venue SINCE=<swept_at>` generates `-E` excludes for every file unchanged since that commit. First sweep of a heavy package: do it file-group by file-group across several sweeps, recording which in the ledger row's `note`.
-  - Package mode walks subdirectories: `./internal/store` ALONE reports exactly `sqlite`'s 343 mutants as its own. `task mutate-all` excludes children for you; by hand, pass `-E '^sqlite/' -E '^storetest/'`.
-  - **A `package main` cannot be measured** (every `tools/` checker): gremlins v0.6.0 finds the package to test by walking up for a directory named like the Go package, finds none called `main`, and runs the module root's (absent) tests instead — so every mutant scores LIVED or TIMED OUT and none KILLED. `task mutate-all` and `task mutate-stale` leave them out; a 0% row for one is this bug, not a finding.
-- **Stopping it**: SIGTERM is ignored while its `go test` child runs. `pkill -9 -x gremlins`, then kill the children; check with `pgrep -x gremlins`, never `pgrep -f` (it matches your own shell). Remove `$TMPDIR/gremlins-*` afterwards. **A SIGKILLed test binary runs no cleanup**: if the killed tests were docker-backed, `docker ps` afterwards and remove the `steps-<hash>` containers that are minutes old — they are yours.
+- **How it works, because triage leans on it**: `tools/mutants sweep` (behind `task mutate-pkg`) profiles every test of the package in a process of its own, first all of them in parallel with `DOCKER_HOST` pointed nowhere — a test that SKIPS there is a docker test, which is how tests are classified without a list — then the docker ones serially for real. Each mutant (gremlins v0.6.0's five default operators, gremlins' coverage rule) is overlaid with `go test -c -overlay` and run against ONLY the tests whose profile executes its line: the non-docker ones in parallel, then the docker ones one at a time for survivors. The report is `.gremlins/<pkg>.json` in gremlins' shape plus `killed_by`. It replaced gremlins, which ran the whole suite per mutant: venue 11h, pipeline 8.7h, agent 7.5h.
+- **Not while `task` is running anywhere on the machine** (`pgrep -fl 'go test|golangci-lint'`). Load makes mutants time out, and a timeout is not a verdict.
+- **A test failing unmutated stops the sweep**, in either profiling pass: a mutant it "killed" would be a lie. The parallel pass is also the check that this package's tests survive running beside each other; one that does not needs fixing (or `WORKERS=1`), not ignoring.
+- **The main checkout is fine**: nothing is copied, a mutant is an overlay. Do not edit the package's files mid-run — the profiles and the overlays both read them.
+- `SINCE=<swept_at>` restricts the mutants to files changed since that commit; a scoped run is not a measurement of the package, so record its row by hand if at all. A subdirectory is its own package and never swept with its parent.
+- Timeouts are 15× what the covering tests took unmutated, plus 10s: a mutant that loops dies in seconds rather than under a whole-suite budget (a retry-loop mutant once reached 174GB under gremlins').
+- **Stopping it**: Ctrl-C/SIGTERM reaches `go run`, not necessarily the test binaries. `pkill -f 'mutants-sweep-'` takes the rest (their binaries live under `$TMPDIR/mutants-sweep-*`, which you then remove). **A SIGKILLed test binary runs no cleanup**: if it was a docker test, `docker ps` and remove the `steps-<hash>` containers minutes old — they are yours.
+- **What it cannot see**: a statement executed only when tests run TOGETHER (state one leaves for the next) is covered by no single test and scores NOT COVERED where gremlins would have run it. Rare; a NOT COVERED line a test plainly reaches is that.
 
 ## 3. Triage every LIVED mutant — three outcomes, no fourth
 
 Read `.gremlins/<pkg>.json`; for each `LIVED` (and spot-check `TIMED OUT` — confirm a hang by stack, not by assumption):
 
-1. **e2e kills it.** Package mode never runs `./e2e`, and most survivors on old lines die there. Apply the mutant by hand, run `go test ./e2e -run <the nearest test> -count=1 -timeout 300s`. Fails → covered; record nothing.
+1. **e2e kills it.** A package's sweep never runs `./e2e`, and most survivors on old lines die there. Apply the mutant by hand, run `go test ./e2e -run <the nearest test> -count=1 -timeout 300s`. Fails → covered; record nothing.
 2. **Equivalent.** The mutant changes no observable behaviour (`<` vs `<=` on a value that is never equal; a changed constant only a log line reads). Add it to the ledger row's `equivalent` list with the reason, keyed `file | mutator | trimmed source line` — line numbers rot, source text mostly does not. The next sweep skips anything still matching.
 3. **A real gap.** Write the test. The applied mutant IS the sabotage CLAUDE.md requires: watch the new test fail against it, restore, watch it pass. Follow the repo's outside-in order — if the behaviour is user-visible, the test is an e2e, not a unit test next to the line.
 

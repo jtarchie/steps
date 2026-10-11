@@ -7,18 +7,6 @@ import (
 	"testing"
 )
 
-func TestExcludeFlagsSkipOnlyWhatDidNotChange(t *testing.T) {
-	all := []string{"internal/store/runs.go", "internal/store/sqlite/runs.go", "internal/store/sqlite/nodes.go"}
-	changed := map[string]bool{"internal/store/sqlite/runs.go": true}
-
-	got := excludeFlags("./internal/store", all, changed)
-	want := []string{"-E", `(^|/)runs\.go$`, "-E", `(^|/)sqlite/nodes\.go$`}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("flags = %v, want %v", got, want)
-	}
-}
-
 func TestSumNumstatCountsThePackagesOwnSourceOnly(t *testing.T) {
 	numstat := "10\t2\tinternal/store/runs.go\n" +
 		"40\t0\tinternal/store/runs_test.go\n" +
@@ -134,18 +122,6 @@ func TestSummaryIsOneLineAndSilentWhenThereIsNothingToSay(t *testing.T) {
 	}
 }
 
-// A parent package silently re-sweeps its children: ./internal/store alone reports exactly sqlite's mutants. Measured, which is the only reason this exists.
-func TestChildPackagesAreExcludedFromTheirParent(t *testing.T) {
-	all := []string{"./internal/store", "./internal/store/sqlite", "./internal/store/storetest", "./internal/storefront", "./internal/venue"}
-
-	got := childExcludes("./internal/store", all)
-	want := []string{"-E", "^sqlite/", "-E", "^storetest/"}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("excludes = %v, want %v", got, want)
-	}
-}
-
 func TestSweepOrderIsCheapFirstAndSerialPackagesLast(t *testing.T) {
 	sizes := map[string]int{"./internal/pipeline": 100, "./internal/config": 9000, "./internal/merkle": 2000, "./internal/web": 50}
 
@@ -157,7 +133,7 @@ func TestSweepOrderIsCheapFirstAndSerialPackagesLast(t *testing.T) {
 	}
 }
 
-func TestOnlyPackagesGremlinsCanJudgeAreSwept(t *testing.T) {
+func TestOnlyPackagesWithTestsOfTheirOwnAreSwept(t *testing.T) {
 	t.Chdir("../..")
 
 	tested, err := packageDirs(t.Context(), testedPackages)
@@ -165,21 +141,8 @@ func TestOnlyPackagesGremlinsCanJudgeAreSwept(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	all, err := packageDirs(t.Context(), allPackages)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	if slices.Contains(tested, "./internal/store/storetest") {
-		t.Error("storetest has no tests of its own; package mode scores every mutant NOT COVERED")
-	}
-
-	if slices.Contains(tested, "./tools/stamp") {
-		t.Error("a package main is judged by the module root's tests under gremlins v0.6.0, so every mutant lives")
-	}
-
-	if !slices.Contains(all, "./internal/store/storetest") {
-		t.Error("storetest must stay known, or ./internal/store's sweep stops excluding it")
+		t.Error("storetest has no tests of its own, so every mutant in it would be NOT COVERED")
 	}
 
 	if !slices.Contains(tested, "./internal/merkle") {

@@ -41,10 +41,13 @@ type mutant struct {
 	File   string   `json:"file"`
 	Line   int      `json:"line"`
 	Column int      `json:"column"`
+	Type   string   `json:"type,omitempty"`
 	From   string   `json:"from"`
 	To     string   `json:"to"`
 	Tests  []string `json:"tests"`
 	offset int
+
+	fast, slow []string // sweep's covering tests, without and with docker
 
 	Outcome string   `json:"outcome"`
 	Killers []string `json:"killers,omitempty"`
