@@ -335,6 +335,12 @@ func TestSSHWorkerCancellationEndsAWedgedCommand(t *testing.T) {
 	server := newTestSSHD(t)
 	runner := newLocalRunner(t, sshSpec(t, server, t.TempDir()))
 
+	// Connected first: the session's dial, sweep and upload ride the first command's context, so under load they spent shortWait themselves, the "deadline" was the connect's, and no sleep ever ran.
+	err := runner.Run(t.Context(), "true")
+	if err != nil {
+		t.Fatalf("connecting: %v", err)
+	}
+
 	ctx, cancel := context.WithTimeout(t.Context(), shortWait)
 	defer cancel()
 
@@ -342,7 +348,7 @@ func TestSSHWorkerCancellationEndsAWedgedCommand(t *testing.T) {
 	seconds := "6" + strconv.Itoa(os.Getpid())
 
 	started := time.Now()
-	err := runner.Run(ctx, "sleep "+seconds)
+	err = runner.Run(ctx, "sleep "+seconds)
 
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v, want it to carry the deadline", err)
