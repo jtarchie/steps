@@ -104,6 +104,21 @@ func TestBlockAnchorBoundaries(t *testing.T) {
 
 		editfileMustReplace(t, content, find, "block-anchor", "if err != nil {\n\talpha()\n\tbeta()\n}\nREPLACED\n")
 	})
+
+	t.Run("of two candidates the better one at exactly the threshold matches", func(t *testing.T) {
+		t.Parallel()
+
+		content := "start {\n" + strings.Repeat("c", 20) + "\nend }\nstart {\n" + strings.Repeat("a", 20) + "\nend }\n"
+		find := "start {\n" + strings.Repeat("a", 13) + strings.Repeat("b", 7) + "\nend }"
+
+		editfileMustReplace(t, content, find, "block-anchor", "start {\n"+strings.Repeat("c", 20)+"\nend }\nREPLACED\n")
+	})
+
+	t.Run("of two equally similar candidates the first wins", func(t *testing.T) {
+		t.Parallel()
+
+		editfileMustReplace(t, "begin\n\tab()\nend\nbegin\n\tba()\nend\n", "begin\n\taa()\nend", "block-anchor", "REPLACED\nbegin\n\tba()\nend\n")
+	})
 }
 
 func TestLineSimilarityLevenshteinCap(t *testing.T) {

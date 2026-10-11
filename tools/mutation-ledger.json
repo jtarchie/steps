@@ -1,14 +1,14 @@
 {
   "packages": {
     "./internal/agent": {
-      "swept_at": "824ba22",
-      "date": "2026-10-10",
-      "killed": 1283,
-      "lived": 303,
+      "swept_at": "aae67fc",
+      "date": "2026-10-11",
+      "killed": 1527,
+      "lived": 82,
       "timed_out": 7,
-      "not_covered": 186,
-      "efficacy": 80.9,
-      "note": "First whole-package sweep (the previous row covered only the ten steps#137 files, 75.27), measured 2026-10-10 at 824ba22: 7h28m at WORKERS=1, two requests.go retry mutants grew without bound until the timeout killed them. Every LIVED and TIMED OUT mutant triaged the same day; real gaps got *_mutation_test.go tests that fail with the mutant applied, equivalents below. Left open on purpose: ere.go complementASCII loop boundary (the line repeats three times, so one key would mask the others) and search.go content/path default branch (equivalent only while the two defaults happen to be equal).",
+      "not_covered": 163,
+      "efficacy": 94.9,
+      "note": "Re-measured 2026-10-11 by `tools/mutants sweep` (coverage-selected tests, 2h37m under load; gremlins took 7h28m at 824ba22). Of its 82 LIVED, 69 match the equivalents below and 13 were new to it: 8 are killed by ./e2e (step cache reuse, assert.verdict, web_fetch allow, context_paths read_file guard, CLI abort latch, nudge bound, pooled attempts budget), 3 are equivalent (added below), 2 got TestBlockAnchorBoundaries cases (multi-candidate threshold and tie). The 7 TIMED OUT are the loop and retry negations triaged at 824ba22. Left open on purpose, unchanged: ere.go complementASCII loop boundary (the line repeats three times, so one key would mask the others) and search.go content/path default branch (equivalent only while the two defaults happen to be equal). First whole-package sweep was 2026-10-10 at 824ba22 (80.9, gremlins); its real gaps got *_mutation_test.go tests.",
       "equivalent": [
         {
           "mutant": "ere.go | CONDITIONALS_BOUNDARY | if len(out) > 1 && out[1] < out[0] {",
@@ -285,6 +285,18 @@
         {
           "mutant": "transcript.go | CONDITIONALS_BOUNDARY | if at < 0 || at > len(r.events) {",
           "why": "Clamping at == len to len changes nothing."
+        },
+        {
+          "mutant": "cli.go | ARITHMETIC_BASE | \"round\", nudges+1,",
+          "why": "a slog attribute value only"
+        },
+        {
+          "mutant": "cli.go | CONDITIONALS_NEGATION | if err != nil {",
+          "why": "cleanupCLISession's os.Remove check guards only a slog.Debug line"
+        },
+        {
+          "mutant": "tools.go | CONDITIONALS_NEGATION | if err != nil {",
+          "why": "multiCloser still closes every closer either way, and its only consumer is closeAll, which discards the joined error"
         }
       ]
     },
