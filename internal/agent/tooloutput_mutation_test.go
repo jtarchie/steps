@@ -1,0 +1,62 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/jtarchie/steps/internal/shell"
+)
+
+type tooloutputBrokenRunner struct{ shell.Runner }
+
+func (tooloutputBrokenRunner) RunCaptureFullLimitedStreamed(context.Context, string, int, string) (string, string, int, error) {
+	return "", "", 0, errors.New("no such container")
+}
+
+func TestARunnerFailureOnALiveStepIsALostTree(t *testing.T) {
+	t.Parallel()
+
+	runner := tooloutputBrokenRunner{}
+	lost := &lostTree{}
+	env := toolEnv{dir: t.TempDir(), runner: runner, tree: containerTree{runner: runner, lost: lost}, lost: lost}
+
+	result := shellToolResult(context.Background(), "true", env, maxToolOutputBytes)
+	if result["error"] == nil {
+		t.Errorf("result = %v; want the runner's error", result)
+	}
+
+	if !errors.Is(lost.taken(), errNoTreeAccess) {
+		t.Errorf("lost = %v; want the tree marked lost so the attempt ends", lost.taken())
+	}
+
+	hostLost := &lostTree{}
+	shellToolResult(context.Background(), "true", toolEnv{dir: t.TempDir(), runner: runner, lost: hostLost}, maxToolOutputBytes)
+
+	if hostLost.taken() != nil {
+		t.Errorf("lost = %v; a host runner's failure is not a lost container", hostLost.taken())
+	}
+}
+
+func TestTruncationAtExactlyTheLimit(t *testing.T) {
+	t.Parallel()
+
+	s := strings.Repeat("a", 16)
+	if got := truncateToolOutputLimit(s, len(s)); got != s {
+		t.Errorf("truncateToolOutputLimit at exactly the limit = %q; want it unchanged", got)
+	}
+
+	if got := spillOrTruncateLimit(s, len(s), t.TempDir()); got != s {
+		t.Errorf("spillOrTruncateLimit at exactly the limit = %q; want it inline, not spilled", got)
+	}
+}
+
+func TestTruncationOfInvalidUTF8NeverCutsBelowZero(t *testing.T) {
+	t.Parallel()
+
+	got := truncateToolOutputLimit(strings.Repeat("\x80", 10), 5)
+	if !strings.HasPrefix(got, "\n... [truncated 10 bytes]") {
+		t.Errorf("got %q; want an empty head and every byte counted as truncated", got)
+	}
+}

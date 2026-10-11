@@ -187,7 +187,7 @@ func TestReplaceEditSpanBlockAnchor(t *testing.T) {
 		}
 	})
 
-	t.Run("the most similar of several anchor candidates wins", func(t *testing.T) {
+	t.Run("a corrupted middle line falls through to block-anchor", func(t *testing.T) {
 		t.Parallel()
 
 		multi := strings.Join([]string{
@@ -202,9 +202,7 @@ func TestReplaceEditSpanBlockAnchor(t *testing.T) {
 			"",
 		}, "\n")
 
-		// Anchors match BOTH blocks; the middle matches only b's, and one
-		// middle line is corrupted so exact/line-trimmed both fail and
-		// block-anchor is the strategy under test.
+		// Only the closing anchor matches both blocks, so this is ONE candidate (the several-candidate pick is TestBlockAnchorBoundaries'); a corrupted middle line makes exact/line-trimmed both fail, leaving block-anchor as the strategy under test.
 		find := strings.Join([]string{
 			"func b() {",
 			"\tgamma()",

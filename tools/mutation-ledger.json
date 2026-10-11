@@ -1,14 +1,14 @@
 {
   "packages": {
     "./internal/agent": {
-      "swept_at": "b7c68ec",
-      "date": "2026-09-21",
-      "killed": 140,
-      "lived": 46,
-      "timed_out": 0,
-      "not_covered": 35,
-      "efficacy": 75.27,
-      "note": "PARTIAL: only the ten files steps#137 added were swept (ere, tree, treecontainer, treehost, treepath, treesearch, treesetup, probe, fatal, runnerfactory). The other 41 files in the package are unmeasured, so this row is not a statement about internal/agent as a whole. An unscoped first attempt reached editfile.go and conversation.go before it was stopped and showed ~35 survivors in editfile.go's edit-matching heuristics alone - unrelated to this change, and the obvious next group to sweep. Was 73.12 with 50 survivors. Four were real gaps and are now tested: the lexical half of the container path confinement (every case in the confinement test resolved to a real path, so rejectLinkEscape answered them all and inverting the string check left the test green - a path that escapes lexically with a nonexistent target was the missing case, and it is the security-relevant one); caseFolds indexing out[1] on a one-rune fold set, which only happens for a case-insensitive pattern holding a caseless character like (?i)v2; a NUL at position 0 slipping the container write guard; and a blind spot in the Go-based differential itself, which claimed ERE was a subset of RE2 - it is not, because RE2 reads a backslash inside a bracket as an escape where POSIX reads it as a literal, so the correct rendering of [a\\\\b] is [a-b\\] which both real greps accept and Go rejects. That case moved to the docker parity test. WORKERS=1 throughout: this package now spawns containers in its own tests.",
+      "swept_at": "824ba22",
+      "date": "2026-10-10",
+      "killed": 1283,
+      "lived": 303,
+      "timed_out": 7,
+      "not_covered": 186,
+      "efficacy": 80.9,
+      "note": "First whole-package sweep (the previous row covered only the ten steps#137 files, 75.27), measured 2026-10-10 at 824ba22: 7h28m at WORKERS=1, two requests.go retry mutants grew without bound until the timeout killed them. Every LIVED and TIMED OUT mutant triaged the same day; real gaps got *_mutation_test.go tests that fail with the mutant applied, equivalents below. Left open on purpose: ere.go complementASCII loop boundary (the line repeats three times, so one key would mask the others) and search.go content/path default branch (equivalent only while the two defaults happen to be equal).",
       "equivalent": [
         {
           "mutant": "ere.go | CONDITIONALS_BOUNDARY | if len(out) > 1 && out[1] < out[0] {",
@@ -41,6 +41,250 @@
         {
           "mutant": "treepath.go | INVERT_LOGICAL | return code == 0 && strings.TrimSpace(out) == \"yes\", nil",
           "why": "the probe is `[ -e p ] && printf yes`, which exits 0 exactly when it printed yes, so the conjuncts never disagree (mutants judge, 2026-10-06)"
+        },
+        {
+          "mutant": "compaction.go | CONDITIONALS_BOUNDARY | for i := len(contents) - 1; i >= 0; i-- {",
+          "why": "skipping index 0 falls through to safeSplitIndex(contents, 0), the same call reaching the budget at index 0 makes"
+        },
+        {
+          "mutant": "compaction.go | CONDITIONALS_BOUNDARY | if idx < 0 {",
+          "why": "clamping 0 to 0 is a no-op (both the entry and exit clamp in safeSplitIndex)"
+        },
+        {
+          "mutant": "compaction.go | CONDITIONALS_BOUNDARY | if idx > len(contents) {",
+          "why": "clamping len(contents) to len(contents) is a no-op (both the entry and exit clamp in safeSplitIndex)"
+        },
+        {
+          "mutant": "compaction.go | CONDITIONALS_BOUNDARY | for idx > 0 {",
+          "why": "walking back past 0 returns -1 or 0, and the only caller treats both as <= 0 and walks forward from the original index"
+        },
+        {
+          "mutant": "compaction.go | CONDITIONALS_BOUNDARY | if r.tokens <= 0 || r.upTo > len(contents) {",
+          "why": "tokens == 0 only in the zero value, where upTo is 0, so 0 + estimate(contents[0:]) equals the estimate"
+        },
+        {
+          "mutant": "usage.go | CONDITIONALS_BOUNDARY | if costUSD > 0 {",
+          "why": "adding a cost of exactly 0 leaves the total unchanged"
+        },
+        {
+          "mutant": "usage.go | CONDITIONALS_BOUNDARY | if own > 0 && own < share {",
+          "why": "when own == share both branches return the same value"
+        },
+        {
+          "mutant": "clistream.go | CONDITIONALS_BOUNDARY | if !ok || at >= len(trajectory) {",
+          "why": "the index only holds len(trajectory)-1 at the time of append and trajectory only grows, so at == len(trajectory) never occurs"
+        },
+        {
+          "mutant": "cli.go | CONDITIONALS_NEGATION | if attemptErr != nil {",
+          "why": "guards only a slog.Warn line"
+        },
+        {
+          "mutant": "cli.go | ARITHMETIC_BASE | \"attempt\", attempt+1,",
+          "why": "a slog attribute value only"
+        },
+        {
+          "mutant": "cli.go | CONDITIONALS_BOUNDARY | if i > 0 {",
+          "why": "at i == 0 the reset writes zeroes and an empty map over values that are already zero and empty"
+        },
+        {
+          "mutant": "cli.go | CONDITIONALS_BOUNDARY | if sent <= 0 || sent >= len(prepared.conv.messages) {",
+          "why": "sent == 0 is still refused by state.asked >= sent because asked starts at 0, and sent never equals len(messages) since it ranges over message indices (an empty list is caught by sent <= 0)"
+        },
+        {
+          "mutant": "cli.go | CONDITIONALS_BOUNDARY | if i := strings.IndexAny(s, \"\\r\\n\"); i >= 0 {",
+          "why": "s was TrimSpaced just above, so a newline can never be at index 0"
+        },
+        {
+          "mutant": "cli.go | CONDITIONALS_BOUNDARY | for cut > 0 && !utf8.RuneStart(s[cut]) {",
+          "why": "strings.Map has already re-encoded invalid bytes as U+FFFD, so a rune start always lies within 3 bytes of the cap and cut never reaches 0"
+        },
+        {
+          "mutant": "askuser.go | CONDITIONALS_BOUNDARY | if err == nil && wait > 0 {",
+          "why": "buildAskUserTool refuses a non-positive ask_user timeout before any run, so wait == 0 never reaches here"
+        },
+        {
+          "mutant": "askuser.go | CONDITIONALS_NEGATION | if err != nil && !errors.Is(err, store.ErrQuestionNotPending) {",
+          "why": "guards only a slog.Warn line on a best-effort close"
+        },
+        {
+          "mutant": "clibridge.go | CONDITIONALS_NEGATION | if err != nil && !errors.Is(err, http.ErrServerClosed) {",
+          "why": "guards only a slog.Debug line in the serve goroutine"
+        },
+        {
+          "mutant": "clibridge.go | CONDITIONALS_BOUNDARY | if !capped || budget <= 0 {",
+          "why": "budgets come from maxCallsByName and applyQuestionBudget, which store only positive values"
+        },
+        {
+          "mutant": "cliexec.go | CONDITIONALS_NEGATION | if waitErr != nil {",
+          "why": "guards only a slog.Debug line"
+        },
+        {
+          "mutant": "cliexec.go | CONDITIONALS_BOUNDARY | if ask := askUserWait(ri.ToolSpecs) + cliToolTimeoutMargin; ask > bound {",
+          "why": "when ask == bound, assigning bound = ask changes nothing"
+        },
+        {
+          "mutant": "search.go | CONDITIONALS_BOUNDARY | if opts.mode == \"content\" && len(matches) < opts.headLimit {",
+          "why": "the one extra match kept per file is discarded by addMatches, which enforces headLimit across all files"
+        },
+        {
+          "mutant": "readfile.go | ARITHMETIC_BASE | scanner.Buffer(make([]byte, 0, 64*1024), maxReadFileScanBytes)",
+          "why": "only the scanner's initial capacity changes; bufio grows the buffer up to the max either way"
+        },
+        {
+          "mutant": "editfile.go | CONDITIONALS_BOUNDARY | if linesToCheck <= 0 {",
+          "why": "linesToCheck is never 0: finds under 3 lines are rejected earlier and candidates span at least 3 lines, so it is always >= 1"
+        },
+        {
+          "mutant": "editfile.go | CONDITIONALS_BOUNDARY | if len(lines) > 0 && lines[len(lines)-1] == \"\" {",
+          "why": "strings.Split never returns an empty slice, so len(lines) is always >= 1"
+        },
+        {
+          "mutant": "readimage.go | CONDITIONALS_BOUNDARY | for i := len(head) - 1; i >= max(0, len(head)-utf8.UTFMax); i-- {",
+          "why": "a rune start found at the lowest index checked always has at least UTFMax bytes after it (or is a complete NUL at index 0), so FullRune is true and nothing is trimmed"
+        },
+        {
+          "mutant": "readimage.go | CONDITIONALS_BOUNDARY | if int64(len(read)) < size {",
+          "why": "when everything is already read, the mutant only re-reads the same bytes: one extra I/O, no different result"
+        },
+        {
+          "mutant": "readimage.go | CONDITIONALS_NEGATION | if content == nil || !slices.ContainsFunc(content.Parts, func(p *genai.Part) bool { return p != nil && p.InlineData != nil }) {",
+          "why": "the only image parts are the ones withImageParts adds, always after the function responses and a label, so a content with an image always also has a non-image part; the mutant only changes which contents get copied unchanged (the content and p != nil negations are killed by TestResumeOnABlindSourceDropsTheImages)"
+        },
+        {
+          "mutant": "tools.go | CONDITIONALS_BOUNDARY | if spec.Builtin == config.WebFetchBuiltinName && len(spec.Allow) > 0 {",
+          "why": "webFetchTool with an empty allow list builds exactly the bare builtin web_fetch (tooldecls.go uses webFetchTool(nil))."
+        },
+        {
+          "mutant": "tools.go | CONDITIONALS_BOUNDARY | if expected := visibleParams(params, spec.Args); len(expected) > 0 {",
+          "why": "missing is a subset of the unpinned params, so when anything is missing expected is never empty."
+        },
+        {
+          "mutant": "tools.go | ARITHMETIC_BASE | merged := make(map[string]any, len(args)+len(pinned))",
+          "why": "Only a capacity hint; a negative map size hint does not panic (checked)."
+        },
+        {
+          "mutant": "treecontainer.go | ARITHMETIC_BASE | scripts := make([]string, 0, len(quoted)+1)",
+          "why": "Only a capacity hint; chunkQuoted always returns at least one chunk, so the capacity is never negative."
+        },
+        {
+          "mutant": "treecontainer.go | CONDITIONALS_BOUNDARY | if size+cost > maxWriteChunkBytes && i > start {",
+          "why": "For the i > start operand: i == start only right after a split, when size is 0 and one rune's cost cannot exceed the limit. The size+cost operand's boundary mutant is killed by TestChunkQuotedSplitsPastTheLimitOnly."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if lo > next {",
+          "why": "When lo == next the extra pair is the empty range (next, next-1), which liftClassSpecials drops."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if hi+1 > next {",
+          "why": "When hi+1 == next the assignment writes the value next already holds."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if next > asciiMax {",
+          "why": "next == 0x7F means the following range starts at 0x80 (RE2 merges adjacent ranges), and the early break appends the same (0x7F,0x7F) pair."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if next <= asciiMax {",
+          "why": "The loop always breaks with next > asciiMax, so the tail check never runs with next == 0x7F."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_NEGATION | if next <= asciiMax {",
+          "why": "After the loop next is always unicodeMax+1, so the flipped branch appends an inverted range that liftClassSpecials drops."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | for lo <= hi && strings.ContainsRune(classSpecials, hi) {",
+          "why": "After the lo loop, lo == hi implies the rune is not special, so the loop body cannot run either way."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if lo < '\\n' {",
+          "why": "When lo == '\\n' the extra pair is the empty range ('\\n', '\\n'-1), which liftClassSpecials drops."
+        },
+        {
+          "mutant": "ere.go | CONDITIONALS_BOUNDARY | if hi > '\\n' {",
+          "why": "When hi == '\\n' the extra pair is the empty range ('\\n'+1, '\\n'), which liftClassSpecials drops."
+        },
+        {
+          "mutant": "treepath.go | CONDITIONALS_BOUNDARY | for ancestor := path.Dir(resolved); ancestor != c.dir && len(ancestor) > len(c.dir); ancestor = path.Dir(ancestor) {",
+          "why": "An ancestor of a path under c.dir with the same length as c.dir is c.dir, which the first operand already stops on."
+        },
+        {
+          "mutant": "treesearch.go | CONDITIONALS_BOUNDARY | return walkOrderKey(paths[i]) < walkOrderKey(paths[j])",
+          "why": "find prints each path once, so no two keys are equal."
+        },
+        {
+          "mutant": "treesearch.go | CONDITIONALS_BOUNDARY | if len(full) > len(best) && strings.HasPrefix(row, full+\":\") {",
+          "why": "Two equal-length paths that are both followed by ':' as prefixes of one row are the same path."
+        },
+        {
+          "mutant": "treesearch.go | CONDITIONALS_BOUNDARY | if len(out) >= headLimit {",
+          "why": "addMatches caps result.matches at headLimit itself, and total counts len(rows), so one extra row per file is never shown."
+        },
+        {
+          "mutant": "conversation.go | ARITHMETIC_BASE | contents := make([]*genai.Content, 0, 5+(len(conv.contextBlocks)+len(conv.upstream))*2)",
+          "why": "*2 to /2 only shrinks a non-negative capacity hint; append grows the slice, so contents are identical."
+        },
+        {
+          "mutant": "conversation.go | CONDITIONALS_BOUNDARY | if p.maxTokens > 0 {",
+          "why": "At 0 it sets MaxOutputTokens to 0, a plain int32 tagged omitempty, which is the same as unset."
+        },
+        {
+          "mutant": "loop.go | CONDITIONALS_BOUNDARY | if i < len(parts) && parts[i].FunctionResponse != nil {",
+          "why": "toolResponseParts returns exactly one part per call, so i never reaches len(parts)."
+        },
+        {
+          "mutant": "loop.go | CONDITIONALS_BOUNDARY | if len(d.turns) > loopDetectionWindow {",
+          "why": "At len == window, the slice [len-window:] is the whole slice, so trimming does nothing."
+        },
+        {
+          "mutant": "openrouter.go | CONDITIONALS_BOUNDARY | if len(base) > maxSessionIDLen {",
+          "why": "At len == max, base[:max] is base unchanged."
+        },
+        {
+          "mutant": "preflight.go | CONDITIONALS_BOUNDARY | if ttl <= 0 {",
+          "why": "A zero ttl only differs when lookup's clock reads the exact nanosecond the entry was stored, which a real probe in between never allows."
+        },
+        {
+          "mutant": "preflight.go | CONDITIONALS_BOUNDARY | if !ok || now.Sub(entry.at) > ttl {",
+          "why": "Differs only when the age equals ttl to the nanosecond, a boundary with no meaning."
+        },
+        {
+          "mutant": "preflight.go | CONDITIONALS_BOUNDARY | expired := ok && now.Sub(record.decided) >= pinLifetime",
+          "why": "Differs only when the age equals pinLifetime to the nanosecond, a boundary with no meaning."
+        },
+        {
+          "mutant": "repair.go | CONDITIONALS_NEGATION | if stripped != s && validJSONObject(stripped) {",
+          "why": "tryParse's only caller, repairJSONArgs, retries with tryParse(stripTrailingCommas(closed)), which yields the same repair."
+        },
+        {
+          "mutant": "repair.go | CONDITIONALS_BOUNDARY | if len(s.stack) > 0 {",
+          "why": "Every caller lexes text that starts at '{' and scanJSONObject stops at the closer that empties the stack, so a closer never meets an empty stack."
+        },
+        {
+          "mutant": "repair.go | ARITHMETIC_BASE | out.Grow(len(s) + len(state.stack) + 6)",
+          "why": "With the other two operators flipped the hint stays positive (stack is at most len(s)), so only capacity changes; the + 6 flip is killed by TestRepairJSONArgsEdges."
+        },
+        {
+          "mutant": "repair.go | CONDITIONALS_BOUNDARY | for j := i + 1; j < len(s); j++ {",
+          "why": "The inputs stripTrailingCommas gets from repairJSONArgs always end in a closer, so a comma followed only by whitespace to the end never occurs."
+        },
+        {
+          "mutant": "step.go | CONDITIONALS_BOUNDARY | if remaining := time.Until(deadline); remaining > 0 {",
+          "why": "Differs only when the deadline is exactly now to the nanosecond."
+        },
+        {
+          "mutant": "stepassert.go | CONDITIONALS_BOUNDARY | if len(assert.ToolCalls) > 0 {",
+          "why": "matchToolCallTrajectory with no wanted calls returns nil."
+        },
+        {
+          "mutant": "subagent.go | CONDITIONALS_BOUNDARY | if len(childClosers) > 0 {",
+          "why": "An empty multiCloser closes nothing, so it is the same as no closer."
+        },
+        {
+          "mutant": "tooloutput.go | CONDITIONALS_BOUNDARY | if len(preview) > shell.SpillPreviewBytes {",
+          "why": "At len == cap, preview[:cap] is preview unchanged."
+        },
+        {
+          "mutant": "transcript.go | CONDITIONALS_BOUNDARY | if at < 0 || at > len(r.events) {",
+          "why": "Clamping at == len to len changes nothing."
         }
       ]
     },
