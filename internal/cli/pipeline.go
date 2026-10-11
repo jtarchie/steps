@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/telemetry"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -470,7 +471,7 @@ func newDaemonClient(target string) *daemonClient {
 		// holding a socket for a terminal that has gone.
 		http: &http.Client{
 			Timeout:   daemonTimeout,
-			Transport: &http.Transport{DisableKeepAlives: true},
+			Transport: telemetry.Transport(&http.Transport{DisableKeepAlives: true}),
 		},
 	}
 }

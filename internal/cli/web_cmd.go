@@ -13,6 +13,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
+	"github.com/jtarchie/steps/internal/telemetry"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -163,7 +164,7 @@ func (w *WebCmd) serve(ctx context.Context) error {
 		return err
 	}
 
-	server, err := web.New(nil, runner, append(opts, web.WithVersion(BuildVersion), web.WithCapacity(local))...)
+	server, err := web.New(nil, runner, append(opts, web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithMiddleware(telemetry.Handler))...)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}

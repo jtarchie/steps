@@ -12,6 +12,7 @@ import (
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/telemetry"
 )
 
 // ProgressFlags chooses how a run is drawn on the terminal that started it.
@@ -55,11 +56,11 @@ func newLive(ctx context.Context, st store.Usage) (*runview.Live, func()) {
 
 	// Log records go above the region too, or the first warning a step logs tears it.
 	previous := slog.Default()
-	slog.SetDefault(slog.New(events.LogHandler(tint.NewTextHandler(live.Log(), &tint.Options{
+	slog.SetDefault(slog.New(telemetry.LogHandler(events.LogHandler(tint.NewTextHandler(live.Log(), &tint.Options{
 		Level:     levelOf(ctx, previous.Handler()),
 		AddSource: true,
 		NoColor:   !live.Color,
-	}))))
+	})))))
 
 	live.Start()
 

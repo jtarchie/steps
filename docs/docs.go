@@ -212,7 +212,7 @@ func Groups() []Group {
 			"templating.md", "mcp.md", "complete.md",
 		}},
 		{Title: "Reference", Pages: []string{
-			"web.md", "authentication.md", "agents-internals.md", "aws-workers.md", "gcp-workers.md", "conformance.md",
+			"web.md", "observability.md", "authentication.md", "agents-internals.md", "aws-workers.md", "gcp-workers.md", "conformance.md",
 		}},
 	}
 }

@@ -161,6 +161,8 @@ type Server struct {
 	auth *basicAuth
 	// version is what the footer prints, so a bug report can name the build.
 	version string
+	// wrap is applied to the router when it is served and never in Handler(), so page tests keep talking to echo itself.
+	wrap func(http.Handler) http.Handler
 }
 
 // WithVersion is the build version the footer prints; "dev" when unset, the
@@ -172,6 +174,11 @@ func WithVersion(version string) Option {
 // WithCapacity is where the follow page reads --max-runs from. A separate option rather than part of Runner because a read-only server has no Runner and still drains under the same limit.
 func WithCapacity(capacity Capacity) Option {
 	return func(s *Server) { s.capacity = capacity }
+}
+
+// WithMiddleware wraps the served router; it is how internal/cli traces requests without this package importing a telemetry SDK.
+func WithMiddleware(wrap func(http.Handler) http.Handler) Option {
+	return func(s *Server) { s.wrap = wrap }
 }
 
 // Capacity is the daemon-wide run limit (0 when unlimited) and how many builds hold it.
@@ -509,8 +516,13 @@ func (s *Server) Handler() http.Handler { return s.echo }
 
 // Start serves until ctx is canceled, then shuts down gracefully.
 func (s *Server) Start(ctx context.Context, addr string) error {
+	var handler http.Handler = s.echo
+	if s.wrap != nil {
+		handler = s.wrap(handler)
+	}
+
 	//nolint:wrapcheck // start and shutdown errors are reported verbatim by the caller
-	return startConfig(addr).Start(ctx, s.echo)
+	return startConfig(addr).Start(ctx, handler)
 }
 
 // startConfig is the server this daemon runs, separate from Start so a test can read the timeouts back off it.

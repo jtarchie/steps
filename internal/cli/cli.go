@@ -25,6 +25,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/telemetry"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -141,11 +142,11 @@ func parseLogLevel(level string) slog.Level {
 // CLI.LogLevel) makes that opt-in, via --log-level debug or
 // STEPS_LOG_LEVEL=debug, rather than the permanent default.
 func InitLogging(level string) {
-	slog.SetDefault(slog.New(events.LogHandler(tint.NewTextHandler(os.Stderr, &tint.Options{
+	slog.SetDefault(slog.New(telemetry.LogHandler(events.LogHandler(tint.NewTextHandler(os.Stderr, &tint.Options{
 		Level:     parseLogLevel(level),
 		AddSource: true,
 		NoColor:   wantNoColor(),
-	}))))
+	})))))
 }
 
 // wantNoColor reports whether log output should skip ANSI color: either
@@ -190,6 +191,12 @@ func Run(args []string) error {
 	InitLogging(cli.LogLevel)
 
 	slog.Debug("cli.parse", "args", args)
+
+	flush, err := telemetry.Start(context.Background(), BuildVersion)
+	if err != nil {
+		return err //nolint:wrapcheck // telemetry already says it is telemetry
+	}
+	defer flush(context.Background())
 
 	return kctx.Run() //nolint:wrapcheck // the Run methods above already wrap their own errors via wrapRunErr
 }

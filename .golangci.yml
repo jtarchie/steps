@@ -174,6 +174,24 @@ linters:
             # it classifies that run's status with the error `steps run` would
             # have returned. A stdlib-only leaf main already imports.
             - "github.com/jtarchie/steps/internal/outcome"
+            # telemetry is where the OpenTelemetry SDK is installed and the one
+            # package that imports it: the CLI starts it, and hands its HTTP and
+            # log wrappers to web and the daemon client.
+            - "github.com/jtarchie/steps/internal/telemetry"
+        # telemetry installs the OpenTelemetry SDK from the OTEL_* environment.
+        # Only internal/cli imports it, so the SDK never becomes an edge of the
+        # execution packages: they reach the global provider through the
+        # clients that already instrument themselves (docker, GCE).
+        Telemetry:
+          files:
+            - "**/internal/telemetry/**"
+          allow:
+            - "$gostd"
+            - "go.opentelemetry.io/otel"
+            - "go.opentelemetry.io/contrib/exporters/autoexport"
+            - "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+            # goleak is test-only: a provider's batch processor is a goroutine until Shutdown.
+            - "go.uber.org/goleak"
         # e2e is the end-to-end suite: nothing but _test.go files, driving the
         # whole stack through cli.Run the way a user's shell would. It reads
         # back what a run produced (store, web, events) and validates the
@@ -215,6 +233,9 @@ linters:
             - "github.com/santhosh-tekuri/jsonschema/v6"
             - "gopkg.in/yaml.v3"
             - "go.uber.org/goleak"
+            # a fake OTLP collector decodes what the CLI exports, to check the trace that crossed the wire.
+            - "go.opentelemetry.io/proto/otlp"
+            - "google.golang.org/protobuf/proto"
             # wire: the eviction e2e impersonates a reclaimed worker at the
             # frame level, the same way the venue package's own helper-process
             # variants do. The shipped code still reaches workers only through
