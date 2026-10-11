@@ -4,8 +4,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/cli"
 
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
@@ -122,4 +125,18 @@ func findSpan(t *testing.T, spans []*tracepb.Span, kind tracepb.Span_SpanKind, n
 	t.Fatalf("no %s span named %q among %q", kind, name, names)
 
 	return nil
+}
+
+// TestOTelRefusesAProtocolItWouldIgnore: a grpc setting would otherwise be ignored by the HTTP exporter, and a misconfigured backend would look configured while receiving nothing.
+func TestOTelRefusesAProtocolItWouldIgnore(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+	t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
+
+	path := pipelinePath(t, t.TempDir())
+	reloadPipeline(t, path, "build")
+
+	err := cli.Run([]string{"validate", path})
+	if err == nil || !strings.Contains(err.Error(), "grpc") {
+		t.Fatalf("validate with OTLP over grpc = %v, want a refusal naming grpc", err)
+	}
 }

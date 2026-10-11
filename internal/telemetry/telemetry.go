@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"go.opentelemetry.io/contrib/exporters/autoexport"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -23,7 +23,7 @@ import (
 // shutdownBound caps the final flush: an unreachable collector must not hold a finished command's exit hostage.
 const shutdownBound = 5 * time.Second
 
-// Enabled answers whether the environment asks for traces. autoexport alone would default to OTLP at localhost:4318 with nothing set, which is a dial on every run nobody asked for, so an exporter or an endpoint has to be named.
+// Enabled answers whether the environment asks for traces. The exporter would default to localhost:4318 with nothing set, which is a dial on every run nobody asked for, so an exporter or an endpoint has to be named.
 func Enabled(getenv func(string) string) bool {
 	if strings.EqualFold(getenv("OTEL_SDK_DISABLED"), "true") {
 		return false
@@ -36,13 +36,36 @@ func Enabled(getenv func(string) string) bool {
 	return getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" || getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") != ""
 }
 
+// ponytail: OTLP over HTTP only, what Honeycomb and every collector take, so a setting that exporter would silently ignore is refused rather than read as a setup that works and sends nothing; add the grpc exporter if a backend ever needs it.
+func unsupported(getenv func(string) string) error {
+	if exporter := getenv("OTEL_TRACES_EXPORTER"); exporter != "" && exporter != "otlp" && exporter != "none" {
+		return fmt.Errorf("telemetry: OTEL_TRACES_EXPORTER=%s is not supported, only otlp", exporter)
+	}
+
+	protocol := getenv("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")
+	if protocol == "" {
+		protocol = getenv("OTEL_EXPORTER_OTLP_PROTOCOL")
+	}
+
+	if protocol != "" && protocol != "http/protobuf" {
+		return fmt.Errorf("telemetry: OTLP protocol %s is not supported, only http/protobuf", protocol)
+	}
+
+	return nil
+}
+
 // Start returns the flush a command must run before it exits, a no-op when telemetry is off.
 func Start(ctx context.Context, version string) (func(context.Context), error) {
 	if !Enabled(os.Getenv) {
 		return func(context.Context) {}, nil
 	}
 
-	exporter, err := autoexport.NewSpanExporter(ctx)
+	err := unsupported(os.Getenv)
+	if err != nil {
+		return nil, err
+	}
+
+	exporter, err := otlptracehttp.New(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("telemetry: %w", err)
 	}

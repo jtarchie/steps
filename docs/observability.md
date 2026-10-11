@@ -4,19 +4,24 @@ steps exports traces with [OpenTelemetry](https://opentelemetry.io), configured 
 
 It is **off unless the environment names an exporter or an endpoint**. With neither set, nothing is installed and nothing is dialled.
 
-```sh
-# a collector, or any backend that accepts OTLP (Honeycomb, Grafana, Datadog, Jaeger)
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 steps web
+It exports OTLP over HTTP (`http/protobuf`), which Honeycomb and every OpenTelemetry collector accept:
 
-# spans printed to stdout, for a quick look
-OTEL_TRACES_EXPORTER=console steps run pipeline.yml
+```sh
+# Honeycomb (api.eu1.honeycomb.io for the EU region); the dataset is the service name, steps
+OTEL_EXPORTER_OTLP_ENDPOINT=https://api.honeycomb.io \
+OTEL_EXPORTER_OTLP_HEADERS=x-honeycomb-team=<your API key> \
+steps web
+
+# a local collector
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 steps run pipeline.yml
 ```
 
 | Variable | Effect |
 |---|---|
 | `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Turns tracing on, exporting OTLP there |
-| `OTEL_TRACES_EXPORTER` | `otlp`, `console`, or `none`; naming one turns tracing on, and `none` keeps it off whatever else is set |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` (the default) or `grpc` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Headers sent with every export, such as Honeycomb's `x-honeycomb-team` |
+| `OTEL_TRACES_EXPORTER` | `otlp` turns tracing on (to `localhost:4318` with no endpoint); `none` keeps it off whatever else is set; anything else is refused |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf`, the default and the only one; `grpc` is refused rather than silently ignored |
 | `OTEL_SDK_DISABLED=true` | Off, whatever else is set |
 | `OTEL_SERVICE_NAME` | Overrides the default service name, `steps` |
 

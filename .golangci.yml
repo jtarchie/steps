@@ -188,7 +188,6 @@ linters:
           allow:
             - "$gostd"
             - "go.opentelemetry.io/otel"
-            - "go.opentelemetry.io/contrib/exporters/autoexport"
             - "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
             # goleak is test-only: a provider's batch processor is a goroutine until Shutdown.
             - "go.uber.org/goleak"
