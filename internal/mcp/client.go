@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"net/http"
 	"os"
 	"time"
@@ -206,24 +207,29 @@ func newTransport(ctx context.Context, pipeline string, srv config.MCPServer) (s
 func authorizedHTTPClient(ctx context.Context, pipeline string, srv config.MCPServer) (*http.Client, error) {
 	switch srv.Auth.Type {
 	case "", "none":
-		return http.DefaultClient, nil
+		return tracedClient(), nil
 	case "bearer":
 		token, err := lookupBearerToken(srv.Auth.APIKeyEnv)
 		if err != nil {
 			return nil, fmt.Errorf("mcp server %q: %w", srv.Name, err)
 		}
 
-		return oauth2.NewClient(ctx, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})), nil
+		return oauth2.NewClient(context.WithValue(ctx, oauth2.HTTPClient, tracedClient()), oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})), nil
 	case "oauth":
 		ts, err := oauthTokenSource(ctx, pipeline, srv)
 		if err != nil {
 			return nil, err
 		}
 
-		return oauth2.NewClient(ctx, ts), nil
+		return oauth2.NewClient(context.WithValue(ctx, oauth2.HTTPClient, tracedClient()), ts), nil
 	default:
 		return nil, fmt.Errorf("mcp server %q: unknown auth.type %q", srv.Name, srv.Auth.Type)
 	}
+}
+
+// tracedClient is the base every MCP request goes through, so a call made under a tool's span is traced beneath it.
+func tracedClient() *http.Client {
+	return &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)}
 }
 
 // lookupBearerToken reads a bearer token from the OS environment variable

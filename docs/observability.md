@@ -36,6 +36,7 @@ Everything else the OpenTelemetry SDK reads (headers, sampling, resource attribu
 - **Commands continue the trace.** While tracing, every command a step runs — a task's `run:`, a resource's check/get/put, a CLI agent — gets `TRACEPARENT` naming its step's span, locally, in a container and on a worker, so anything in it that speaks OpenTelemetry joins the same trace.
 - **Every request `steps web` answers**, named by route, such as `PUT /api/pipelines/:pipeline`.
 - **The CLI's requests to a daemon** (`steps pipeline set` and the other verbs). The trace context travels with the request, so a set and the daemon's handling of it are one trace.
+- **Agent steps, by the OpenTelemetry GenAI conventions.** Each model call is a `chat <model>` span under its step, with the model, the provider's host, the finish reason and the tokens the provider reported (`gen_ai.usage.input_tokens`/`output_tokens`); each HTTP attempt it made, retries included, is a span under that. Each tool call is an `execute_tool <tool>` span, marked as an error when the tool returned one, and a remote MCP server's request sits under the tool call that made it. Prompts and responses are never exported — they belong to the [web transcript](web.md), and can carry secrets.
 - **Docker engine calls and GCE calls**, from the clients steps already uses, which trace themselves once a provider is installed. A call a step makes sits under that step's span, named by the client's raw path (container ids included).
 
 Log lines written under a traced request carry `trace_id` and `span_id`, so a line can be found from its trace and back.
@@ -48,6 +49,8 @@ Log lines written under a traced request carry `trace_id` and `span_id`, so a li
 | `cicd.pipeline.run.active` | up-down counter | `steps.pipeline`, `cicd.pipeline.name` | How many runs are executing now |
 | `steps.step.duration` | histogram, seconds | `steps.pipeline`, `steps.step.kind`, `cicd.pipeline.task.run.result`, `steps.skip.reason` on a skip | Which kinds of step are slow, and how often the cache saves work: the share of steps whose result is `skip` with a cache reason |
 | `steps.queue.pending` | gauge | `steps.pipeline` | Builds `steps web` has queued and not yet started |
+| `gen_ai.client.token.usage` | histogram, tokens | `gen_ai.request.model`, `gen_ai.token.type` (`input`/`output`) | What agents spend, per model; recorded only when the provider reported usage |
+| `gen_ai.client.operation.duration` | histogram, seconds | `gen_ai.request.model`, `error.type` on failure | How long model calls take |
 
 No metric carries a run id or a step name, whose every value is new; a trace has both. The daemon's HTTP requests and the docker client's calls are measured too, under OpenTelemetry's standard `http.server.*` and `http.client.*` names.
 

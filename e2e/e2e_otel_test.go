@@ -433,3 +433,187 @@ func gaugeValue(metric *metricpb.Metric, want map[string]string) int64 {
 
 	return -1
 }
+
+// TestOTelTracesAnAgentsTurnsAndTools: each model call is a GenAI chat span under the agent's step, the HTTP request it made sits under that, each tool call is an execute_tool span, and the provider's reported tokens become both span attributes and gen_ai.client.token.usage.
+func TestOTelTracesAnAgentsTurnsAndTools(t *testing.T) {
+	collector := newOTLPCollector(t)
+
+	dir := t.TempDir()
+	fake := newFakeLLM(t,
+		callsTool("write_file", map[string]any{"path": "answer/reply.md", "content": "hi"}).spending(100),
+		says("Written.").spending(50),
+	)
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: responder
+  source:
+    endpoint: %s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+  tools: [write_file]
+
+jobs:
+- name: build
+  plan:
+  - agent: responder
+    outputs: [answer]
+    messages:
+      - Write hi to answer/reply.md.
+`, fake.URL))
+
+	mustRun(t, path)
+
+	spans, _ := collector.snapshot()
+	step := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "agent responder")
+	tool := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "execute_tool write_file")
+
+	var chats []*tracepb.Span
+
+	for _, span := range spans {
+		if span.GetKind() == tracepb.Span_SPAN_KIND_CLIENT && span.GetName() == "chat test-model" {
+			chats = append(chats, span)
+		}
+	}
+
+	if len(chats) != 2 {
+		t.Fatalf("want a chat span per model call (2), got %d", len(chats))
+	}
+
+	for _, chat := range chats {
+		assertUnder(t, step, step, chat)
+
+		if !hasChild(spans, chat, tracepb.Span_SPAN_KIND_CLIENT, "HTTP POST") {
+			t.Errorf("chat span %x has no HTTP request under it", chat.GetSpanId())
+		}
+	}
+
+	assertUnder(t, step, step, tool)
+
+	if got := intAttr(chats[0], "gen_ai.usage.input_tokens") + intAttr(chats[1], "gen_ai.usage.input_tokens"); got != 120 {
+		t.Errorf("the chat spans report %d input tokens, want 120 (80 + 40)", got)
+	}
+
+	usage := collector.latest("gen_ai.client.token.usage")
+	if got := histogramSum(usage, map[string]string{"gen_ai.token.type": "input", "gen_ai.request.model": "test-model"}); got != 120 {
+		t.Errorf("gen_ai.client.token.usage input = %v, want 120", got)
+	}
+
+	if got := histogramSum(usage, map[string]string{"gen_ai.token.type": "output"}); got != 30 {
+		t.Errorf("gen_ai.client.token.usage output = %v, want 30", got)
+	}
+}
+
+func hasChild(spans []*tracepb.Span, parent *tracepb.Span, kind tracepb.Span_SpanKind, name string) bool {
+	for _, span := range spans {
+		if span.GetKind() == kind && span.GetName() == name && string(span.GetParentSpanId()) == string(parent.GetSpanId()) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func intAttr(span *tracepb.Span, key string) int64 {
+	for _, attr := range span.GetAttributes() {
+		if attr.GetKey() == key {
+			return attr.GetValue().GetIntValue()
+		}
+	}
+
+	return 0
+}
+
+func histogramSum(metric *metricpb.Metric, want map[string]string) float64 {
+	var sum float64
+
+	for _, point := range metric.GetHistogram().GetDataPoints() {
+		if pointMatches(point.GetAttributes(), want) {
+			sum += point.GetSum()
+		}
+	}
+
+	return sum
+}
+
+// TestOTelRecordsNoTokensAProviderDidNotReport: a provider that omits usage must not read as a call that cost nothing, so its call is timed and its tokens are left unrecorded.
+func TestOTelRecordsNoTokensAProviderDidNotReport(t *testing.T) {
+	collector := newOTLPCollector(t)
+
+	fake := newFakeLLM(t, says("Nothing to do."))
+	path := writePipeline(t, t.TempDir(), fmt.Sprintf(`
+defaults:
+  preflight:
+    disabled: true
+
+agents:
+- name: quiet
+  source:
+    endpoint: %s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+
+jobs:
+- name: build
+  plan:
+  - agent: quiet
+    messages:
+      - Say nothing.
+`, fake.URL))
+
+	mustRun(t, path)
+
+	if got := histogramCount(collector.latest("gen_ai.client.operation.duration"), map[string]string{"gen_ai.request.model": "test-model"}); got != 1 {
+		t.Fatalf("gen_ai.client.operation.duration counted %d calls, want 1", got)
+	}
+
+	if usage := collector.latest("gen_ai.client.token.usage"); usage != nil {
+		t.Errorf("a call that reported no usage recorded tokens: %v", usage)
+	}
+}
+
+// TestOTelPutsAnMCPCallUnderItsTool: a remote MCP tool's HTTP request sits under the execute_tool span that made it, so a slow tool call shows which server it waited on.
+func TestOTelPutsAnMCPCallUnderItsTool(t *testing.T) {
+	collector := newOTLPCollector(t)
+
+	srv := startDocMCPServer(t, docMCPTool{name: "echo", reply: func(map[string]any) string { return "echoed" }})
+	fake := newFakeLLM(t,
+		callsTool("hb__echo", map[string]any{}),
+		says("done"),
+	)
+
+	path := writePipeline(t, t.TempDir(), `
+defaults:
+  preflight:
+    disabled: true
+
+mcp_servers:
+- name: hb
+  endpoint: `+srv.URL+`
+
+agents:
+- name: oncall
+  source: { model: openai/test-model, endpoint: `+fake.URL+`/v1/, api_key_env: STEPS_TEST_AGENT_API_KEY }
+  tools:
+  - mcp: hb
+
+jobs:
+- name: triage
+  plan:
+  - agent: oncall
+    messages:
+      - Echo.
+`)
+	mustRun(t, "run", path)
+
+	spans, _ := collector.snapshot()
+	tool := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "execute_tool hb__echo")
+
+	if !hasChild(spans, tool, tracepb.Span_SPAN_KIND_CLIENT, "HTTP POST") {
+		t.Error("the MCP tool call made no HTTP request under its execute_tool span")
+	}
+}

@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"log/slog"
 	"math"
 	"sort"
@@ -1306,6 +1310,9 @@ func executeBudgetedTool(ctx context.Context, call *genai.FunctionCall, env tool
 
 	start := time.Now()
 
+	ctx, span := startToolSpan(ctx, call)
+	defer span.End()
+
 	var response map[string]any
 
 	if budget, ok := maxCalls[call.Name]; ok && callCounts[call.Name] >= budget {
@@ -1320,7 +1327,19 @@ func executeBudgetedTool(ctx context.Context, call *genai.FunctionCall, env tool
 		"duration", time.Since(start), "error", response["error"], "exit_code", response["exit_code"],
 		"result", lazyToolResultPreview{response: response})
 
+	if failure, ok := response["error"]; ok && failure != nil {
+		span.SetStatus(codes.Error, fmt.Sprint(failure))
+	}
+
 	return response
+}
+
+func startToolSpan(ctx context.Context, call *genai.FunctionCall) (context.Context, trace.Span) {
+	return otel.Tracer(telemetryScope).Start(ctx, "execute_tool "+call.Name, trace.WithAttributes(
+		attribute.String("gen_ai.operation.name", "execute_tool"),
+		attribute.String("gen_ai.tool.name", call.Name),
+		attribute.String("gen_ai.tool.call.id", call.ID),
+	))
 }
 
 // lazyToolResultPreview defers rendering a tool result until a handler

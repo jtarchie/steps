@@ -642,6 +642,8 @@ linters:
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             - "github.com/modelcontextprotocol/go-sdk/oauthex"
             - "golang.org/x/oauth2"
+            # otelhttp traces a remote server's requests under the tool call that made them; a no-op until internal/telemetry installs a provider.
+            - "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
             # goleak is test-only: stdio_test.go's TestMain fails this
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
@@ -682,6 +684,9 @@ linters:
             # adk-utils-go's wrapper around it. Already an indirect
             # dependency via adk-utils-go; this makes the direct use honest.
             - "github.com/openai/openai-go/v3"
+            # The OpenTelemetry API, never the SDK (internal/telemetry installs that): a model call's GenAI span and token metrics are data the run's events never carry, and the API is a no-op until a provider is installed. otelhttp traces each attempt under its turn.
+            - "go.opentelemetry.io/otel"
+            - "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             # goleak is test-only: goleak_test.go's TestMain fails this
             # package's tests if any leaves a goroutine running.

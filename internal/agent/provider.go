@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"io"
 	"log/slog"
 	"net/http"
@@ -258,7 +259,7 @@ func newAgentLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
 		},
 	}
 
-	return newLLMFuncs(genaiopenai.New(cfg))
+	return newLLMFuncs(genaiopenai.New(cfg), ri.BaseURL)
 }
 
 // agentHTTPClient returns the *http.Client an invocation's LLM uses. Its
@@ -272,7 +273,8 @@ func newAgentLLM(ri config.ResolvedInvocation, apiKey string) model.LLM {
 // scoped by AgentName, not ModelName — is directly assertable in a test.
 func agentHTTPClient(ri config.ResolvedInvocation) *http.Client {
 	retrying := &requestRetryTransport{
-		base:     agentBaseTransport(),
+		// Under the retries, so each attempt is its own HTTP span inside the turn's chat span.
+		base:     otelhttp.NewTransport(agentBaseTransport()),
 		agent:    ri.AgentName,
 		model:    ri.ModelName,
 		attempts: ri.Attempts,
