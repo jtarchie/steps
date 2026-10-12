@@ -49,9 +49,12 @@ func (a *basicAuth) middleware() echo.MiddlewareFunc {
 // MCPCallbackPath is where an authorization server redirects the browser to finish a login this daemon started; the CLI builds the redirect URI from it, so it is one constant.
 const MCPCallbackPath = "/mcp/callback"
 
-// Two routes carry their own credential instead of this server's: a webhook sender authenticates with its signature — exempt for exactly the reason it is exempt from the same-origin check and from --read-only — and an oauth redirect with the state its login minted (handleMCPCallback). Neither CAN send a password: one is a machine that was never given it, the other a bare navigation a third party caused.
+// HealthPath answers ok to anything that can reach the listener; a platform's health check sends no credentials, and liveness is all it can learn.
+const HealthPath = "/healthz"
+
+// Two routes carry their own credential instead of this server's: a webhook sender authenticates with its signature — exempt for exactly the reason it is exempt from the same-origin check and from --read-only — and an oauth redirect with the state its login minted (handleMCPCallback). Neither CAN send a password: one is a machine that was never given it, the other a bare navigation a third party caused. HealthPath is the third exemption, and says nothing.
 func skipAuth(c *echo.Context) bool {
-	return isHookRoute(c) || c.Path() == MCPCallbackPath
+	return isHookRoute(c) || c.Path() == MCPCallbackPath || c.Path() == HealthPath
 }
 
 // isHookRoute is a webhook delivery, the one route under /p/ whose sender never passed this server's credentials.

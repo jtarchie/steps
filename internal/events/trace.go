@@ -10,6 +10,10 @@ import (
 
 // Tracer turns a run's lifecycle events into spans. It is an interface here so every package that runs a step reaches tracing through this leaf, and only the one package that implements it imports a tracing SDK.
 type Tracer interface {
+	// StartRun opens a run's span the moment the run begins, before it has published anything, so a run refused by validation or preflight is still a trace; work under the returned context is traced beneath it.
+	StartRun(ctx context.Context, runID, job string) context.Context
+	// EndRun closes a run's span with the status its job finished on, and anything of it still open.
+	EndRun(ctx context.Context, runID, status, text string)
 	// Event is told every event a run publishes, inline and in order, before it reaches the bus.
 	Event(ctx context.Context, event Event)
 	// Scope returns ctx under the span for a run's step (0 for the run itself), so work the step does is traced beneath it.
@@ -59,6 +63,22 @@ func LogAttrs(ctx context.Context) []slog.Attr {
 	attrs, _ := ctx.Value(logAttrsKey{}).([]slog.Attr)
 
 	return slices.Clone(attrs)
+}
+
+// StartRun opens the run ctx names (WithRunID) as a span, when a tracer is installed.
+func StartRun(ctx context.Context, job string) context.Context {
+	if t := currentTracer(); t != nil {
+		return t.StartRun(ctx, RunID(ctx), job)
+	}
+
+	return ctx
+}
+
+// EndRun closes what StartRun opened.
+func EndRun(ctx context.Context, status, text string) {
+	if t := currentTracer(); t != nil {
+		t.EndRun(ctx, RunID(ctx), status, text)
+	}
 }
 
 func traceEvent(ctx context.Context, event Event) Event {

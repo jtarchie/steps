@@ -141,10 +141,20 @@ func TestOTelTracesASetAcrossTheWire(t *testing.T) {
 	reloadPipeline(t, path, "build")
 
 	served := startWebFor(t, path)
+	served.get(t, "/healthz")
+	// After the set's own command ended in this process: its shutdown must hand the daemon back its provider, or everything after is traced into a dead one and the health check above passes for nothing.
+	served.get(t, "/p/"+cli.PipelineName(path))
 	// Stopping is what flushes the daemon's spans; the set's were flushed when its command returned.
 	served.stop(t)
 
 	spans, service := collector.snapshot()
+
+	for _, span := range spans {
+		if strings.Contains(span.GetName(), "/healthz") {
+			t.Errorf("a health check was traced (%s): a platform polls it every few seconds", span.GetName())
+		}
+	}
+	findSpan(t, spans, tracepb.Span_SPAN_KIND_SERVER, "GET /p/:pipeline")
 	server := findSpan(t, spans, tracepb.Span_SPAN_KIND_SERVER, "PUT /api/pipelines/:pipeline")
 	client := findSpan(t, spans, tracepb.Span_SPAN_KIND_CLIENT, "HTTP PUT")
 
@@ -616,4 +626,79 @@ jobs:
 	if !hasChild(spans, tool, tracepb.Span_SPAN_KIND_CLIENT, "HTTP POST") {
 		t.Error("the MCP tool call made no HTTP request under its execute_tool span")
 	}
+}
+
+// TestOTelTracesARunThatFailsBeforeItsFirstStep: a run refused by preflight never publishes an event, and is still a trace — an errored RUN span with the probe that failed it underneath, counted in the run metrics.
+func TestOTelTracesARunThatFailsBeforeItsFirstStep(t *testing.T) {
+	collector := newOTLPCollector(t)
+
+	fake := newRepeatingFakeLLM(t, failsWith(http.StatusUnauthorized))
+	path := writePipeline(t, t.TempDir(), fmt.Sprintf(`
+agents:
+- name: locked
+  source:
+    endpoint: %s/v1/
+    model: test-model
+    api_key_env: STEPS_TEST_AGENT_API_KEY
+
+jobs:
+- name: build
+  plan:
+  - agent: locked
+    messages:
+      - Hello.
+`, fake.URL))
+
+	err := cli.Run([]string{"run", path, "--job", "build"})
+	if err == nil || !strings.Contains(err.Error(), "preflight") {
+		t.Fatalf("steps run = %v, want the preflight refusal", err)
+	}
+
+	spans, _ := collector.snapshot()
+	run := findSpan(t, spans, tracepb.Span_SPAN_KIND_SERVER, "RUN build")
+
+	if run.GetStatus().GetCode() != tracepb.Status_STATUS_CODE_ERROR || spanAttr(run, "cicd.pipeline.result") == "success" {
+		t.Errorf("the refused run reads status=%s result=%q, want an error", run.GetStatus().GetCode(), spanAttr(run, "cicd.pipeline.result"))
+	}
+
+	if !hasChild(spans, run, tracepb.Span_SPAN_KIND_CLIENT, "chat test-model") {
+		t.Error("the preflight probe is not under the run it refused")
+	}
+
+	if got := histogramCount(collector.latest("cicd.pipeline.run.duration"), map[string]string{"cicd.pipeline.name": "build", "cicd.pipeline.result": spanAttr(run, "cicd.pipeline.result")}); got != 1 {
+		t.Errorf("the refused run was counted %d times in cicd.pipeline.run.duration, want 1", got)
+	}
+}
+
+// TestOTelPutsAStepsNotesOnItsSpan: what a step says while it runs (here, a retry) is a span event on that step, so a slow step's trace shows that it was retried.
+func TestOTelPutsAStepsNotesOnItsSpan(t *testing.T) {
+	collector := newOTLPCollector(t)
+
+	dir := t.TempDir()
+	path := pipelinePath(t, dir)
+	marker := filepath.Join(dir, "tried")
+
+	writePipelineFile(t, path, `jobs:
+- name: build
+  plan:
+  - task: flaky
+    attempts: 2
+    run: test -f `+marker+` || { touch `+marker+`; exit 1; }
+`)
+
+	err := cli.Run([]string{"run", path, "--job", "build"})
+	if err != nil {
+		t.Fatalf("steps run: %v", err)
+	}
+
+	spans, _ := collector.snapshot()
+	flaky := findSpan(t, spans, tracepb.Span_SPAN_KIND_INTERNAL, "task flaky")
+
+	for _, event := range flaky.GetEvents() {
+		if strings.Contains(event.GetName(), "attempt") {
+			return
+		}
+	}
+
+	t.Errorf("the retried step's span carries no note of the retry: %v", flaky.GetEvents())
 }

@@ -62,6 +62,17 @@ jobs:
 	setGoesThroughWithThem(t, served, name, path, user, pass)
 	everyPageIsBehindThePrompt(t, served, name, user, pass)
 	theDeliveryRouteIsNot(t, served, name, signingKey)
+	theHealthCheckIsNot(t, served)
+}
+
+// theHealthCheckIsNot: a platform's health check carries no credentials, and liveness is all it learns.
+func theHealthCheckIsNot(t *testing.T, served *webProcess) {
+	t.Helper()
+
+	code, body := served.get(t, "/healthz")
+	if code != http.StatusOK || strings.TrimSpace(body) != "ok" {
+		t.Errorf("GET /healthz without credentials = %d %q, want 200 ok", code, body)
+	}
 }
 
 func setIsRefusedWithoutCredentials(t *testing.T, served *webProcess, name, path, user, pass string) {

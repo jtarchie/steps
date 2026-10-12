@@ -25,11 +25,20 @@ func recordRun(t *testing.T, published ...events.Event) map[string]sdktrace.Read
 	}
 
 	at := time.Now()
+	ctx := events.WithRunID(context.Background(), "r1")
 
 	for i, event := range published {
 		event.RunID = "r1"
 		event.At = at.Add(time.Duration(i) * time.Millisecond)
-		tracer.Event(context.Background(), event)
+
+		switch event.Type {
+		case events.TypeJobStarted:
+			ctx = tracer.StartRun(ctx, event.RunID, event.Job)
+		case events.TypeJobFinished:
+			tracer.EndRun(ctx, event.RunID, event.Status, event.Text)
+		default:
+			tracer.Event(ctx, event)
+		}
 	}
 
 	spans := map[string]sdktrace.ReadOnlySpan{}

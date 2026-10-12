@@ -363,7 +363,7 @@ func Note(ctx context.Context, level, text string) {
 		event.StepIndex = -1
 	}
 
-	if FromContext(ctx).publish(event) {
+	if FromContext(ctx).publish(traceEvent(ctx, event)) {
 		return
 	}
 

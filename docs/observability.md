@@ -54,4 +54,6 @@ Log lines written under a traced request carry `trace_id` and `span_id`, so a li
 
 No metric carries a run id or a step name, whose every value is new; a trace has both. The daemon's HTTP requests and the docker client's calls are measured too, under OpenTelemetry's standard `http.server.*` and `http.client.*` names.
 
-What happens before a run's first event — validation, worker leases, image checks, preflight — is not yet inside its trace.
+A run's span opens before validation, worker leases, image pulls and preflight, so a run any of them refuses is still a trace — an errored `RUN` span, with whatever the refusal called (a preflight's model probe, an image pull) underneath — and is counted in the run metrics. What a step says while it runs (a retry's `attempt 2/3`, a worker starting, an image being pulled) is an event on its span.
+
+`GET /healthz` answers `ok` to a platform's health check, without credentials, and is not traced.

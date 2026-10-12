@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -141,10 +142,16 @@ func startTraces(ctx context.Context, res *resource.Resource, on bool) (trace.Tr
 	}
 
 	provider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter), sdktrace.WithResource(res))
+	previous := otel.GetTracerProvider()
 	otel.SetTracerProvider(provider)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
 
-	return provider.Tracer(scope), provider.Shutdown, nil
+	// Put back, as events.SetTracer is: otelhttp resolves the global provider per request, so a command ending in-process would otherwise leave another still running tracing into a provider that has shut down.
+	return provider.Tracer(scope), func(ctx context.Context) error {
+		otel.SetTracerProvider(previous)
+
+		return provider.Shutdown(ctx)
+	}, nil
 }
 
 func startMetrics(ctx context.Context, res *resource.Resource, on bool) (metric.Meter, func(context.Context) error, error) {
@@ -158,9 +165,14 @@ func startMetrics(ctx context.Context, res *resource.Resource, on bool) (metric.
 	}
 
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exporter)), sdkmetric.WithResource(res))
+	previous := otel.GetMeterProvider()
 	otel.SetMeterProvider(provider)
 
-	return provider.Meter(scope), provider.Shutdown, nil
+	return provider.Meter(scope), func(ctx context.Context) error {
+		otel.SetMeterProvider(previous)
+
+		return provider.Shutdown(ctx)
+	}, nil
 }
 
 // scope names this program as the instrumentation behind every span and metric it records itself.
@@ -194,9 +206,13 @@ func ObserveQueue(pending func(context.Context) map[string]int64) func() {
 	return func() { _ = registration.Unregister() }
 }
 
-// Handler traces every request a server answers. echo stamps the matched route onto the request, which otelhttp reads back to name the span by route rather than by URL.
-func Handler(next http.Handler) http.Handler {
-	return otelhttp.NewHandler(next, "steps")
+// Handler traces every request a server answers but those to untraced paths, which a platform polls every few seconds. echo stamps the matched route onto the request, which otelhttp reads back to name the span by route rather than by URL.
+func Handler(untraced ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return otelhttp.NewHandler(next, "steps", otelhttp.WithFilter(func(r *http.Request) bool {
+			return !slices.Contains(untraced, r.URL.Path)
+		}))
+	}
 }
 
 // Transport traces every request a client makes and carries the trace context to the server.

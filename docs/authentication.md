@@ -31,6 +31,8 @@ Every route: the pages, the static assets, `/docs`, the live-run SSE streams, an
 
 **A second route is exempt for the same reason: `GET /mcp/callback`**, where an authorization server sends the browser to finish a [`steps mcp login` against this daemon](mcp.md#authorizing-a-daemon). A redirect is a navigation a third party caused and carries no credential of yours; it is authenticated by the single-use `state` its login minted, and anything else is a `404`. Starting that login, and reading the URL that carries the state, both need credentials.
 
+**A third answers anyone: `GET /healthz`**, which says `ok` and nothing else, for a platform's health check — which sends no credentials. Liveness is all it reveals, and it is never traced (see [observability.md](observability.md)).
+
 ## What a browser may start
 
 `/api` refuses anything browser-shaped, so until the **mcp** tab existed a browser could not begin an oauth login at all — only the CLI could, over `/api`. The tab's **Connect** and **Test** buttons deliberately open a browser-reachable way to do both: `POST /p/<pipeline>/mcp/<server>/connect` starts a login, and `POST /p/<pipeline>/mcp/<server>/test` connects to a declared server. This is a real change in posture and not a side effect, so it is stated here rather than discovered.

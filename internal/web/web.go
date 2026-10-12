@@ -506,6 +506,8 @@ func (s *Server) routes() error {
 	// Top level rather than under /api, whose refuseBrowsers turns away exactly what this is: a browser, sent here by an authorization server.
 	e.GET(MCPCallbackPath, s.handleMCPCallback)
 
+	e.GET(HealthPath, func(c *echo.Context) error { return c.String(http.StatusOK, "ok") })
+
 	s.echo = e
 
 	return nil

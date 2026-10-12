@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -26,8 +27,14 @@ type runTracer struct {
 	mu sync.Mutex
 	// Keyed by step 0 for the run's own span, which no step can collide with because pipeline mints step ids from 1.
 	open map[stepKey]trace.Span
-	// pipelineOf is read off a run's start, since only the job's context carries the pipeline's name.
-	pipelineOf map[string]string
+	// runs holds what a run's metrics need at its end, read off its start, since only the job's context carries the pipeline's name.
+	runs map[string]runInfo
+}
+
+type runInfo struct {
+	pipeline string
+	job      string
+	started  time.Time
 }
 
 type stepKey struct {
@@ -61,7 +68,7 @@ func newRunTracer(tracer trace.Tracer, meter metric.Meter) (*runTracer, error) {
 		runsActive:   runsActive,
 		stepDuration: stepDuration,
 		open:         map[stepKey]trace.Span{},
-		pipelineOf:   map[string]string{},
+		runs:         map[string]runInfo{},
 	}, nil
 }
 
@@ -69,42 +76,57 @@ func (t *runTracer) Event(ctx context.Context, event events.Event) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	//kindswitch:ignore only the lifecycle is a span; notes, output and agent turns stay in the transcript
+	//kindswitch:ignore steps and their notes are the trace; the run's own span is StartRun/EndRun's, and output and agent turns stay in the transcript
 	switch event.Type {
-	case events.TypeJobStarted:
-		t.startJob(ctx, event)
 	case events.TypeStepStarted:
 		t.startStep(ctx, event)
 	case events.TypeStepFinished, events.TypeStepSkipped:
 		t.endStep(ctx, event)
-	case events.TypeJobFinished:
-		t.endJob(ctx, event)
+	case events.TypeStepNote:
+		t.note(event)
 	}
 }
 
-func (t *runTracer) startJob(ctx context.Context, event events.Event) {
+// note puts what a step said on its span, or the run's for a note made outside any step.
+func (t *runTracer) note(event events.Event) {
+	span, ok := t.open[stepKey{event.RunID, event.StepID}]
+	if !ok {
+		return
+	}
+
+	span.AddEvent(event.Text, trace.WithTimestamp(event.At), trace.WithAttributes(attribute.String("steps.note.level", event.Status)))
+}
+
+func (t *runTracer) StartRun(ctx context.Context, runID, job string) context.Context {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	info := runInfo{job: job, started: time.Now()}
 	identity := events.LogAttrs(ctx)
 	attrs := make([]attribute.KeyValue, 0, 3+len(identity))
 	attrs = append(attrs,
 		attribute.String("cicd.pipeline.action.name", "RUN"),
-		attribute.String("cicd.pipeline.name", event.Job),
-		attribute.String("cicd.pipeline.run.id", event.RunID),
+		attribute.String("cicd.pipeline.name", job),
+		attribute.String("cicd.pipeline.run.id", runID),
 	)
 
 	for _, attr := range identity {
 		attrs = append(attrs, attribute.String("steps."+attr.Key, attr.Value.String()))
 
 		if attr.Key == "pipeline" {
-			t.pipelineOf[event.RunID] = attr.Value.String()
+			info.pipeline = attr.Value.String()
 		}
 	}
 
-	t.runsActive.Add(ctx, 1, metric.WithAttributes(t.runAttrs(event)...))
+	t.runs[runID] = info
+	t.runsActive.Add(ctx, 1, metric.WithAttributes(info.attrs()...))
 
-	_, span := t.tracer.Start(ctx, "RUN "+event.Job,
-		trace.WithSpanKind(trace.SpanKindServer), trace.WithTimestamp(event.At), trace.WithAttributes(attrs...))
+	ctx, span := t.tracer.Start(ctx, "RUN "+job,
+		trace.WithSpanKind(trace.SpanKindServer), trace.WithTimestamp(info.started), trace.WithAttributes(attrs...))
 
-	t.open[stepKey{event.RunID, 0}] = span
+	t.open[stepKey{runID, 0}] = span
+
+	return ctx
 }
 
 func (t *runTracer) startStep(ctx context.Context, event events.Event) {
@@ -141,7 +163,7 @@ func (t *runTracer) endStep(ctx context.Context, event events.Event) {
 	}
 
 	measured := []attribute.KeyValue{
-		attribute.String("steps.pipeline", t.pipelineOf[event.RunID]),
+		attribute.String("steps.pipeline", t.runs[event.RunID].pipeline),
 		attribute.String("steps.step.kind", event.StepKind),
 		attribute.String("cicd.pipeline.task.run.result", result),
 	}
@@ -158,26 +180,36 @@ func (t *runTracer) endStep(ctx context.Context, event events.Event) {
 	span.End(trace.WithTimestamp(event.At))
 }
 
-func (t *runTracer) endJob(ctx context.Context, event events.Event) {
-	result := resultOf(event.Status)
-	attrs := t.runAttrs(event)
+func (t *runTracer) EndRun(ctx context.Context, runID, status, text string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
-	t.runsActive.Add(ctx, -1, metric.WithAttributes(attrs...))
-	t.runDuration.Record(ctx, seconds(event.DurationMS), metric.WithAttributes(append(attrs, attribute.String("cicd.pipeline.result", result))...))
-	delete(t.pipelineOf, event.RunID)
+	info, ok := t.runs[runID]
+	if !ok {
+		return
+	}
+
+	delete(t.runs, runID)
+
+	result := resultOf(status)
+	ended := time.Now()
+
+	t.runsActive.Add(ctx, -1, metric.WithAttributes(info.attrs()...))
+	t.runDuration.Record(ctx, ended.Sub(info.started).Seconds(),
+		metric.WithAttributes(append(info.attrs(), attribute.String("cicd.pipeline.result", result))...))
 
 	for key, span := range t.open {
-		if key.run != event.RunID {
+		if key.run != runID {
 			continue
 		}
 
-		// A step still open when its job ends was cut off by it; the job's own status says how.
+		// A step still open when its run ends was cut off by it; the run's own status says how.
 		if key.step == 0 {
 			span.SetAttributes(attribute.String("cicd.pipeline.result", result))
-			failed(span, result, event.Text)
+			failed(span, result, text)
 		}
 
-		span.End(trace.WithTimestamp(event.At))
+		span.End(trace.WithTimestamp(ended))
 		delete(t.open, key)
 	}
 }
@@ -214,11 +246,11 @@ func (t *runTracer) Traceparent(ctx context.Context) string {
 	return carrier.Get("traceparent")
 }
 
-// runAttrs is a run's identity as a metric sees it: never the run id, whose every value is new.
-func (t *runTracer) runAttrs(event events.Event) []attribute.KeyValue {
+// attrs is a run's identity as a metric sees it: never the run id, whose every value is new.
+func (r runInfo) attrs() []attribute.KeyValue {
 	return []attribute.KeyValue{
-		attribute.String("steps.pipeline", t.pipelineOf[event.RunID]),
-		attribute.String("cicd.pipeline.name", event.Job),
+		attribute.String("steps.pipeline", r.pipeline),
+		attribute.String("cicd.pipeline.name", r.job),
 	}
 }
 

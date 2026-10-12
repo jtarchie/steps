@@ -333,14 +333,17 @@ func publishJobStarted(ctx context.Context, jobName string) {
 	})
 }
 
-func publishJobFinished(ctx context.Context, jobName string, started time.Time, err error) {
-	status := "succeeded"
-	text := ""
-
+// runOutcome is how a run ended, as its finish event and its span both report it.
+func runOutcome(ctx context.Context, err error) (string, string) {
 	if err != nil {
-		status = string(outcome.Classify(ctx, err))
-		text = err.Error()
+		return string(outcome.Classify(ctx, err)), err.Error()
 	}
+
+	return "succeeded", ""
+}
+
+func publishJobFinished(ctx context.Context, jobName string, started time.Time, err error) {
+	status, text := runOutcome(ctx, err)
 
 	events.Publish(ctx, events.Event{
 		Type:       events.TypeJobFinished,

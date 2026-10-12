@@ -40,7 +40,7 @@ const WorkerReleaseTimeout = 15 * time.Minute
 // get/task work can be skipped entirely. put steps are never skipped — see
 // runSteps. skipCache (--force) bypasses only the chain-skip planning and
 // re-runs everything, though results are still recorded as usual.
-func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string, provider workspace.Provider, st store.Store, skipCache bool) error {
+func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string, provider workspace.Provider, st store.Store, skipCache bool) (err error) {
 	// A run identifies itself so a failure can be continued rather than
 	// restarted, and so every log line below — including this one — can be
 	// correlated to one invocation. Minted first, before validation or
@@ -65,12 +65,20 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 
 	ctx = withRunLogger(ctx, cfg, resume.id, job.Name)
 
+	// Before validation, leases, images and preflight, each of which can refuse the run before it publishes a single event.
+	ctx = events.StartRun(ctx, job.Name)
+
+	defer func() {
+		status, text := runOutcome(ctx, err)
+		events.EndRun(ctx, status, text)
+	}()
+
 	slog.InfoContext(ctx, "job.run", "steps", len(job.Plan))
 
 	// Before anything runs, beside the artifact-flow check and for the same
 	// reason: a plan that cannot be carried out should say so instead of
 	// failing partway through.
-	err := ValidateWorkerPlacement(ctx, cfg, job)
+	err = ValidateWorkerPlacement(ctx, cfg, job)
 	if err != nil {
 		return err
 	}
