@@ -2,24 +2,32 @@ package telemetry
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/jtarchie/steps/internal/events"
 )
 
-// runTracer draws a run as its display tree: the job's span is the root, and each step's span sits under the step whose id is its ParentStepID, which is the tree the web transcript draws from the same events.
+// runTracer draws a run as its display tree, and measures it: the job's span is the root, and each step's span sits under the step whose id is its ParentStepID, which is the tree the web transcript draws from the same events.
 type runTracer struct {
 	tracer trace.Tracer
+
+	runDuration  metric.Float64Histogram
+	runsActive   metric.Int64UpDownCounter
+	stepDuration metric.Float64Histogram
 
 	mu sync.Mutex
 	// Keyed by step 0 for the run's own span, which no step can collide with because pipeline mints step ids from 1.
 	open map[stepKey]trace.Span
+	// pipelineOf is read off a run's start, since only the job's context carries the pipeline's name.
+	pipelineOf map[string]string
 }
 
 type stepKey struct {
@@ -27,8 +35,34 @@ type stepKey struct {
 	step int64
 }
 
-func newRunTracer(tracer trace.Tracer) *runTracer {
-	return &runTracer{tracer: tracer, open: map[stepKey]trace.Span{}}
+// Run metrics use the CI/CD conventions' names; a step has no conventional metric, hence steps.step.duration.
+func newRunTracer(tracer trace.Tracer, meter metric.Meter) (*runTracer, error) {
+	runDuration, err := meter.Float64Histogram("cicd.pipeline.run.duration", metric.WithUnit("s"),
+		metric.WithDescription("How long a run of a job took, by result"))
+	if err != nil {
+		return nil, fmt.Errorf("telemetry: %w", err)
+	}
+
+	runsActive, err := meter.Int64UpDownCounter("cicd.pipeline.run.active", metric.WithUnit("{run}"),
+		metric.WithDescription("Runs executing now"))
+	if err != nil {
+		return nil, fmt.Errorf("telemetry: %w", err)
+	}
+
+	stepDuration, err := meter.Float64Histogram("steps.step.duration", metric.WithUnit("s"),
+		metric.WithDescription("How long a step took, by kind and result; a skip counts at zero, with its reason"))
+	if err != nil {
+		return nil, fmt.Errorf("telemetry: %w", err)
+	}
+
+	return &runTracer{
+		tracer:       tracer,
+		runDuration:  runDuration,
+		runsActive:   runsActive,
+		stepDuration: stepDuration,
+		open:         map[stepKey]trace.Span{},
+		pipelineOf:   map[string]string{},
+	}, nil
 }
 
 func (t *runTracer) Event(ctx context.Context, event events.Event) {
@@ -44,7 +78,7 @@ func (t *runTracer) Event(ctx context.Context, event events.Event) {
 	case events.TypeStepFinished, events.TypeStepSkipped:
 		t.endStep(ctx, event)
 	case events.TypeJobFinished:
-		t.endJob(event)
+		t.endJob(ctx, event)
 	}
 }
 
@@ -59,7 +93,13 @@ func (t *runTracer) startJob(ctx context.Context, event events.Event) {
 
 	for _, attr := range identity {
 		attrs = append(attrs, attribute.String("steps."+attr.Key, attr.Value.String()))
+
+		if attr.Key == "pipeline" {
+			t.pipelineOf[event.RunID] = attr.Value.String()
+		}
 	}
+
+	t.runsActive.Add(ctx, 1, metric.WithAttributes(t.runAttrs(event)...))
 
 	_, span := t.tracer.Start(ctx, "RUN "+event.Job,
 		trace.WithSpanKind(trace.SpanKindServer), trace.WithTimestamp(event.At), trace.WithAttributes(attrs...))
@@ -100,17 +140,31 @@ func (t *runTracer) endStep(ctx context.Context, event events.Event) {
 		span.SetAttributes(attribute.String("steps.worker", event.Worker))
 	}
 
+	measured := []attribute.KeyValue{
+		attribute.String("steps.pipeline", t.pipelineOf[event.RunID]),
+		attribute.String("steps.step.kind", event.StepKind),
+		attribute.String("cicd.pipeline.task.run.result", result),
+	}
+
 	if event.Type == events.TypeStepSkipped {
 		span.SetAttributes(attribute.String("steps.skip.reason", event.Text))
+		measured = append(measured, attribute.String("steps.skip.reason", event.Text))
 	} else {
 		failed(span, result, event.Text)
 	}
 
+	t.stepDuration.Record(ctx, seconds(event.DurationMS), metric.WithAttributes(measured...))
+
 	span.End(trace.WithTimestamp(event.At))
 }
 
-func (t *runTracer) endJob(event events.Event) {
+func (t *runTracer) endJob(ctx context.Context, event events.Event) {
 	result := resultOf(event.Status)
+	attrs := t.runAttrs(event)
+
+	t.runsActive.Add(ctx, -1, metric.WithAttributes(attrs...))
+	t.runDuration.Record(ctx, seconds(event.DurationMS), metric.WithAttributes(append(attrs, attribute.String("cicd.pipeline.result", result))...))
+	delete(t.pipelineOf, event.RunID)
 
 	for key, span := range t.open {
 		if key.run != event.RunID {
@@ -158,6 +212,18 @@ func (t *runTracer) Traceparent(ctx context.Context) string {
 	propagation.TraceContext{}.Inject(ctx, carrier)
 
 	return carrier.Get("traceparent")
+}
+
+// runAttrs is a run's identity as a metric sees it: never the run id, whose every value is new.
+func (t *runTracer) runAttrs(event events.Event) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		attribute.String("steps.pipeline", t.pipelineOf[event.RunID]),
+		attribute.String("cicd.pipeline.name", event.Job),
+	}
+}
+
+func seconds(ms int64) float64 {
+	return float64(ms) / 1000
 }
 
 func stepSpanName(event events.Event) string {

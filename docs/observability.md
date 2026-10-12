@@ -1,15 +1,16 @@
 # Observability
 
-steps exports traces with [OpenTelemetry](https://opentelemetry.io), configured the standard way: the `OTEL_*` environment variables every collector and hosted backend documents. Nothing in a pipeline file and no flag turns it on, because where telemetry goes is the operator's decision, not the pipeline author's.
+steps exports traces and metrics with [OpenTelemetry](https://opentelemetry.io), configured the standard way: the `OTEL_*` environment variables every collector and hosted backend documents. Nothing in a pipeline file and no flag turns it on, because where telemetry goes is the operator's decision, not the pipeline author's.
 
-It is **off unless the environment names an exporter or an endpoint**. With neither set, nothing is installed and nothing is dialled.
+It is **off unless the environment names an exporter or an endpoint**, per signal. With neither set, nothing is installed and nothing is dialled.
 
 It exports OTLP over HTTP (`http/protobuf`), which Honeycomb and every OpenTelemetry collector accept:
 
 ```sh
-# Honeycomb (api.eu1.honeycomb.io for the EU region); the dataset is the service name, steps
+# Honeycomb (api.eu1.honeycomb.io for the EU region); traces land in the dataset named by the service, steps
 OTEL_EXPORTER_OTLP_ENDPOINT=https://api.honeycomb.io \
 OTEL_EXPORTER_OTLP_HEADERS=x-honeycomb-team=<your API key> \
+OTEL_EXPORTER_OTLP_METRICS_HEADERS=x-honeycomb-team=<your API key>,x-honeycomb-dataset=steps-metrics \
 steps web
 
 # a local collector
@@ -18,10 +19,12 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 steps run pipeline.yml
 
 | Variable | Effect |
 |---|---|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Turns tracing on, exporting OTLP there |
-| `OTEL_EXPORTER_OTLP_HEADERS` | Headers sent with every export, such as Honeycomb's `x-honeycomb-team` |
-| `OTEL_TRACES_EXPORTER` | `otlp` turns tracing on (to `localhost:4318` with no endpoint); `none` keeps it off whatever else is set; anything else is refused |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Turns traces and metrics on, exporting OTLP there |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `…_METRICS_ENDPOINT` | Turns on just that signal |
+| `OTEL_EXPORTER_OTLP_HEADERS` / `…_METRICS_HEADERS` | Headers sent with every export, such as Honeycomb's `x-honeycomb-team`; Honeycomb also needs `x-honeycomb-dataset` on metrics |
+| `OTEL_TRACES_EXPORTER` / `OTEL_METRICS_EXPORTER` | `otlp` turns the signal on (to `localhost:4318` with no endpoint); `none` keeps it off whatever else is set; anything else is refused |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf`, the default and the only one; `grpc` is refused rather than silently ignored |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Milliseconds between metric exports (default 60000) |
 | `OTEL_SDK_DISABLED=true` | Off, whatever else is set |
 | `OTEL_SERVICE_NAME` | Overrides the default service name, `steps` |
 
@@ -36,5 +39,16 @@ Everything else the OpenTelemetry SDK reads (headers, sampling, resource attribu
 - **Docker engine calls and GCE calls**, from the clients steps already uses, which trace themselves once a provider is installed. A call a step makes sits under that step's span, named by the client's raw path (container ids included).
 
 Log lines written under a traced request carry `trace_id` and `span_id`, so a line can be found from its trace and back.
+
+## What is measured
+
+| Metric | Kind | Attributes | What it answers |
+|---|---|---|---|
+| `cicd.pipeline.run.duration` | histogram, seconds | `steps.pipeline`, `cicd.pipeline.name` (the job), `cicd.pipeline.result` | How long runs take, and — its count — how many finished, by result |
+| `cicd.pipeline.run.active` | up-down counter | `steps.pipeline`, `cicd.pipeline.name` | How many runs are executing now |
+| `steps.step.duration` | histogram, seconds | `steps.pipeline`, `steps.step.kind`, `cicd.pipeline.task.run.result`, `steps.skip.reason` on a skip | Which kinds of step are slow, and how often the cache saves work: the share of steps whose result is `skip` with a cache reason |
+| `steps.queue.pending` | gauge | `steps.pipeline` | Builds `steps web` has queued and not yet started |
+
+No metric carries a run id or a step name, whose every value is new; a trace has both. The daemon's HTTP requests and the docker client's calls are measured too, under OpenTelemetry's standard `http.server.*` and `http.client.*` names.
 
 What happens before a run's first event — validation, worker leases, image checks, preflight — is not yet inside its trace.

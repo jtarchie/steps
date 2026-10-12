@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
@@ -18,7 +19,11 @@ func recordRun(t *testing.T, published ...events.Event) map[string]sdktrace.Read
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
 
-	tracer := newRunTracer(provider.Tracer("test"))
+	tracer, err := newRunTracer(provider.Tracer("test"), metricnoop.NewMeterProvider().Meter("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	at := time.Now()
 
 	for i, event := range published {

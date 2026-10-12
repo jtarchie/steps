@@ -3,6 +3,7 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,11 +14,16 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/metric"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/jtarchie/steps/internal/events"
 )
@@ -25,26 +31,26 @@ import (
 // shutdownBound caps the final flush: an unreachable collector must not hold a finished command's exit hostage.
 const shutdownBound = 5 * time.Second
 
-// Enabled answers whether the environment asks for traces. The exporter would default to localhost:4318 with nothing set, which is a dial on every run nobody asked for, so an exporter or an endpoint has to be named.
-func Enabled(getenv func(string) string) bool {
+// Enabled answers whether the environment asks for a signal, TRACES or METRICS. The exporter would default to localhost:4318 with nothing set, which is a dial on every run nobody asked for, so an exporter or an endpoint has to be named.
+func Enabled(getenv func(string) string, signal string) bool {
 	if strings.EqualFold(getenv("OTEL_SDK_DISABLED"), "true") {
 		return false
 	}
 
-	if exporter := getenv("OTEL_TRACES_EXPORTER"); exporter != "" {
+	if exporter := getenv("OTEL_" + signal + "_EXPORTER"); exporter != "" {
 		return exporter != "none"
 	}
 
-	return getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" || getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") != ""
+	return getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" || getenv("OTEL_EXPORTER_OTLP_"+signal+"_ENDPOINT") != ""
 }
 
-// ponytail: OTLP over HTTP only, what Honeycomb and every collector take, so a setting that exporter would silently ignore is refused rather than read as a setup that works and sends nothing; add the grpc exporter if a backend ever needs it.
-func unsupported(getenv func(string) string) error {
-	if exporter := getenv("OTEL_TRACES_EXPORTER"); exporter != "" && exporter != "otlp" && exporter != "none" {
-		return fmt.Errorf("telemetry: OTEL_TRACES_EXPORTER=%s is not supported, only otlp", exporter)
+// ponytail: OTLP over HTTP only, what Honeycomb and every collector take, so a setting that exporter would silently ignore is refused rather than read as a setup that works and sends nothing; add the grpc exporters if a backend ever needs them.
+func unsupported(getenv func(string) string, signal string) error {
+	if exporter := getenv("OTEL_" + signal + "_EXPORTER"); exporter != "" && exporter != "otlp" && exporter != "none" {
+		return fmt.Errorf("telemetry: OTEL_%s_EXPORTER=%s is not supported, only otlp", signal, exporter)
 	}
 
-	protocol := getenv("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")
+	protocol := getenv("OTEL_EXPORTER_OTLP_" + signal + "_PROTOCOL")
 	if protocol == "" {
 		protocol = getenv("OTEL_EXPORTER_OTLP_PROTOCOL")
 	}
@@ -56,20 +62,24 @@ func unsupported(getenv func(string) string) error {
 	return nil
 }
 
+func unsupportedIf(on bool, signal string) error {
+	if !on {
+		return nil
+	}
+
+	return unsupported(os.Getenv, signal)
+}
+
 // Start returns the flush a command must run before it exits, a no-op when telemetry is off.
 func Start(ctx context.Context, version string) (func(context.Context), error) {
-	if !Enabled(os.Getenv) {
+	traces, metrics := Enabled(os.Getenv, "TRACES"), Enabled(os.Getenv, "METRICS")
+	if !traces && !metrics {
 		return func(context.Context) {}, nil
 	}
 
-	err := unsupported(os.Getenv)
+	err := errors.Join(unsupportedIf(traces, "TRACES"), unsupportedIf(metrics, "METRICS"))
 	if err != nil {
 		return nil, err
-	}
-
-	exporter, err := otlptracehttp.New(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("telemetry: %w", err)
 	}
 
 	// Attributes first so OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES, read after, override them.
@@ -85,11 +95,22 @@ func Start(ctx context.Context, version string) (func(context.Context), error) {
 		return nil, fmt.Errorf("telemetry: %w", err)
 	}
 
-	provider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter), sdktrace.WithResource(res))
+	tracer, stopTraces, err := startTraces(ctx, res, traces)
+	if err != nil {
+		return nil, err
+	}
 
-	otel.SetTracerProvider(provider)
-	previous := events.SetTracer(newRunTracer(provider.Tracer("github.com/jtarchie/steps")))
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	meter, stopMetrics, err := startMetrics(ctx, res, metrics)
+	if err != nil {
+		return nil, err
+	}
+
+	recorder, err := newRunTracer(tracer, meter)
+	if err != nil {
+		return nil, err
+	}
+
+	previous := events.SetTracer(recorder)
 
 	return func(ctx context.Context) {
 		// The likeliest reason this runs is a cancelled command, so the flush gets a context of its own.
@@ -98,11 +119,79 @@ func Start(ctx context.Context, version string) (func(context.Context), error) {
 
 		events.SetTracer(previous)
 
-		err := provider.Shutdown(ctx)
-		if err != nil {
-			slog.WarnContext(ctx, "telemetry.shutdown", "error", err)
+		for _, shutdown := range []func(context.Context) error{stopTraces, stopMetrics} {
+			err := shutdown(ctx)
+			if err != nil {
+				slog.WarnContext(ctx, "telemetry.shutdown", "error", err)
+			}
 		}
 	}, nil
+}
+
+func noShutdown(context.Context) error { return nil }
+
+func startTraces(ctx context.Context, res *resource.Resource, on bool) (trace.Tracer, func(context.Context) error, error) {
+	if !on {
+		return tracenoop.NewTracerProvider().Tracer(""), noShutdown, nil
+	}
+
+	exporter, err := otlptracehttp.New(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("telemetry: %w", err)
+	}
+
+	provider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter), sdktrace.WithResource(res))
+	otel.SetTracerProvider(provider)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+
+	return provider.Tracer(scope), provider.Shutdown, nil
+}
+
+func startMetrics(ctx context.Context, res *resource.Resource, on bool) (metric.Meter, func(context.Context) error, error) {
+	if !on {
+		return metricnoop.NewMeterProvider().Meter(""), noShutdown, nil
+	}
+
+	exporter, err := otlpmetrichttp.New(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("telemetry: %w", err)
+	}
+
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exporter)), sdkmetric.WithResource(res))
+	otel.SetMeterProvider(provider)
+
+	return provider.Meter(scope), provider.Shutdown, nil
+}
+
+// scope names this program as the instrumentation behind every span and metric it records itself.
+const scope = "github.com/jtarchie/steps"
+
+// ObserveQueue reports pending builds per pipeline as steps.queue.pending, asking pending at each export; the returned func stops it, and must run before whatever pending reads from is closed.
+func ObserveQueue(pending func(context.Context) map[string]int64) func() {
+	meter := otel.Meter(scope)
+
+	gauge, err := meter.Int64ObservableGauge("steps.queue.pending", metric.WithUnit("{build}"),
+		metric.WithDescription("Builds queued and not yet started, per pipeline"))
+	if err != nil {
+		otel.Handle(err)
+
+		return func() {}
+	}
+
+	registration, err := meter.RegisterCallback(func(ctx context.Context, observer metric.Observer) error {
+		for pipeline, count := range pending(ctx) {
+			observer.ObserveInt64(gauge, count, metric.WithAttributes(attribute.String("steps.pipeline", pipeline)))
+		}
+
+		return nil
+	}, gauge)
+	if err != nil {
+		otel.Handle(err)
+
+		return func() {}
+	}
+
+	return func() { _ = registration.Unregister() }
 }
 
 // Handler traces every request a server answers. echo stamps the matched route onto the request, which otelhttp reads back to name the span by route rather than by URL.

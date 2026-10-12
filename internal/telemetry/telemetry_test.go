@@ -25,11 +25,31 @@ func TestEnabledNeedsAnExporterOrAnEndpoint(t *testing.T) {
 		{"unrelated otel var", map[string]string{"OTEL_SERVICE_NAME": "ci"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := Enabled(func(key string) string { return tc.env[key] })
+			got := Enabled(func(key string) string { return tc.env[key] }, "TRACES")
 			if got != tc.want {
 				t.Errorf("Enabled = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// Each signal answers to its own exporter and endpoint variables, so metrics can be turned off while traces stay on.
+func TestEnabledIsPerSignal(t *testing.T) {
+	env := map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "https://api.honeycomb.io", "OTEL_METRICS_EXPORTER": "none"}
+	getenv := func(key string) string { return env[key] }
+
+	if !Enabled(getenv, "TRACES") || Enabled(getenv, "METRICS") {
+		t.Errorf("OTEL_METRICS_EXPORTER=none: traces=%v metrics=%v, want traces only", Enabled(getenv, "TRACES"), Enabled(getenv, "METRICS"))
+	}
+
+	env = map[string]string{"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "http://collector:4318/v1/metrics"}
+	if Enabled(getenv, "TRACES") || !Enabled(getenv, "METRICS") {
+		t.Errorf("a metrics endpoint alone: traces=%v metrics=%v, want metrics only", Enabled(getenv, "TRACES"), Enabled(getenv, "METRICS"))
+	}
+
+	env = map[string]string{"OTEL_METRICS_EXPORTER": "prometheus"}
+	if unsupported(getenv, "METRICS") == nil {
+		t.Error("OTEL_METRICS_EXPORTER=prometheus was not refused")
 	}
 }
 
@@ -48,7 +68,7 @@ func TestUnsupportedRefusesWhatWouldExportNothing(t *testing.T) {
 		{"traces protocol overrides the general one", map[string]string{"OTEL_EXPORTER_OTLP_PROTOCOL": "grpc", "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "http/protobuf"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := unsupported(func(key string) string { return tc.env[key] })
+			err := unsupported(func(key string) string { return tc.env[key] }, "TRACES")
 			if (err != nil) != tc.refused {
 				t.Errorf("unsupported = %v, want refused=%v", err, tc.refused)
 			}

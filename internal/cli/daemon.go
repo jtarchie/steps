@@ -53,6 +53,32 @@ type daemon struct {
 // daemonWriteBound is what a give-back write gets on its own context, since the request's is likeliest to be cancelled exactly when one runs.
 const daemonWriteBound = 30 * time.Second
 
+// pending counts each served pipeline's queued builds, for the steps.queue.pending gauge.
+func (d *daemon) pending(ctx context.Context) map[string]int64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	counts := make(map[string]int64, len(d.served))
+
+	for name, served := range d.served {
+		// ponytail: newest rows first, and enqueue coalesces to one pending row per job, so a pipeline would need over a thousand jobs to undercount; a COUNT query on the Queue facet is the upgrade.
+		rows, err := served.target.Store.ListTriggerQueue(ctx, 1000)
+		if err != nil {
+			slog.WarnContext(ctx, "telemetry.queue", "pipeline", name, "error", err)
+
+			continue
+		}
+
+		for _, row := range rows {
+			if row.Status == "pending" {
+				counts[name]++
+			}
+		}
+	}
+
+	return counts
+}
+
 // servedPipeline is one pipeline plus what has to be shut down when it goes.
 type servedPipeline struct {
 	target *web.Pipeline

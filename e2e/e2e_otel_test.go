@@ -10,19 +10,24 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/cli"
 
+	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	metricpb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/proto"
 )
 
-// otlpCollector is a fake OTLP/HTTP trace endpoint: it keeps every span it is sent, and the service.name each came under.
+// otlpCollector is a fake OTLP/HTTP endpoint: it keeps every span it is sent and the service.name each came under, and every metric export.
 type otlpCollector struct {
 	mu      sync.Mutex
 	spans   []*tracepb.Span
 	service map[*tracepb.Span]string
+	metrics []*metricpb.Metric
 }
 
 func newOTLPCollector(t *testing.T) *otlpCollector {
@@ -32,22 +37,37 @@ func newOTLPCollector(t *testing.T) *otlpCollector {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		if err != nil || r.URL.Path != "/v1/traces" {
-			http.Error(w, "bad request", http.StatusBadRequest)
-
-			return
-		}
-
-		var req collectortrace.ExportTraceServiceRequest
-
-		err = proto.Unmarshal(body, &req)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 
 			return
 		}
 
-		collector.add(&req)
+		switch r.URL.Path {
+		case "/v1/traces":
+			var req collectortrace.ExportTraceServiceRequest
+
+			err = proto.Unmarshal(body, &req)
+			if err == nil {
+				collector.add(&req)
+			}
+		case "/v1/metrics":
+			var req collectormetrics.ExportMetricsServiceRequest
+
+			err = proto.Unmarshal(body, &req)
+			if err == nil {
+				collector.addMetrics(&req)
+			}
+		default:
+			err = fmt.Errorf("no such signal %s", r.URL.Path)
+		}
+
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(server.Close)
@@ -78,6 +98,31 @@ func (c *otlpCollector) add(req *collectortrace.ExportTraceServiceRequest) {
 			}
 		}
 	}
+}
+
+func (c *otlpCollector) addMetrics(req *collectormetrics.ExportMetricsServiceRequest) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, rm := range req.GetResourceMetrics() {
+		for _, sm := range rm.GetScopeMetrics() {
+			c.metrics = append(c.metrics, sm.GetMetrics()...)
+		}
+	}
+}
+
+// latest is the newest export of the named metric; exports are cumulative, so it holds the totals.
+func (c *otlpCollector) latest(name string) *metricpb.Metric {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for i := len(c.metrics) - 1; i >= 0; i-- {
+		if c.metrics[i].GetName() == name {
+			return c.metrics[i]
+		}
+	}
+
+	return nil
 }
 
 func (c *otlpCollector) snapshot() ([]*tracepb.Span, map[*tracepb.Span]string) {
@@ -263,4 +308,128 @@ func TestOTelPutsADockerCallUnderItsStep(t *testing.T) {
 	}
 
 	t.Fatal("no docker exec span was exported")
+}
+
+// TestOTelMeasuresARun: a run's duration and outcome, how many runs are active, and each step's duration by kind and result — which is where a cache's hit ratio comes from.
+func TestOTelMeasuresARun(t *testing.T) {
+	collector := newOTLPCollector(t)
+
+	path := pipelinePath(t, t.TempDir())
+	writePipelineFile(t, path, `jobs:
+- name: build
+  plan:
+  - task: hello
+    run: echo hi
+  - task: guarded
+    when: "false"
+    run: echo never
+`)
+
+	err := cli.Run([]string{"run", path, "--job", "build"})
+	if err != nil {
+		t.Fatalf("steps run: %v", err)
+	}
+
+	runs := histogramCount(collector.latest("cicd.pipeline.run.duration"), map[string]string{"cicd.pipeline.name": "build", "cicd.pipeline.result": "success", "steps.pipeline": cli.PipelineName(path)})
+	if runs != 1 {
+		t.Errorf("cicd.pipeline.run.duration counted %d successful runs of build, want 1", runs)
+	}
+
+	if active := sumValue(collector.latest("cicd.pipeline.run.active"), map[string]string{"cicd.pipeline.name": "build"}); active != 0 {
+		t.Errorf("cicd.pipeline.run.active = %d after the run ended, want 0", active)
+	}
+
+	steps := collector.latest("steps.step.duration")
+	if got := histogramCount(steps, map[string]string{"steps.step.kind": "task", "cicd.pipeline.task.run.result": "success"}); got != 1 {
+		t.Errorf("steps.step.duration counted %d task successes, want 1", got)
+	}
+
+	if got := histogramCount(steps, map[string]string{"cicd.pipeline.task.run.result": "skip", "steps.skip.reason": "when: guard was false"}); got != 1 {
+		t.Errorf("steps.step.duration counted %d guard skips, want 1", got)
+	}
+}
+
+// TestOTelGaugesTheDaemonsQueue: a build waiting behind a running one is visible as it waits, per pipeline.
+func TestOTelGaugesTheDaemonsQueue(t *testing.T) {
+	collector := newOTLPCollector(t)
+	t.Setenv("OTEL_METRIC_EXPORT_INTERVAL", "100")
+
+	path := pipelinePath(t, t.TempDir())
+	writePipelineFile(t, path, `jobs:
+- name: build
+  plan:
+  - task: hold
+    run: sleep 30
+- name: lint
+  plan:
+  - task: check
+    run: echo ok
+`)
+
+	served := startWebFor(t, path)
+	defer served.stopIfRunning(t)
+
+	name := cli.PipelineName(path)
+	// One build runs and holds the pipeline's only slot; a second build and a lint wait behind it, so pending (2) cannot be mistaken for running (1).
+	served.trigger(t, name, "build")
+	served.trigger(t, name, "build")
+	served.trigger(t, name, "lint")
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if gaugeValue(collector.latest("steps.queue.pending"), map[string]string{"steps.pipeline": name}) == 2 {
+			return
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatalf("steps.queue.pending never read 2 for %s: %v", name, collector.latest("steps.queue.pending"))
+}
+
+func pointMatches(attrs []*commonpb.KeyValue, want map[string]string) bool {
+	matched := 0
+
+	for _, attr := range attrs {
+		if value, ok := want[attr.GetKey()]; ok && attr.GetValue().GetStringValue() == value {
+			matched++
+		}
+	}
+
+	return matched == len(want)
+}
+
+func histogramCount(metric *metricpb.Metric, want map[string]string) uint64 {
+	var count uint64
+
+	for _, point := range metric.GetHistogram().GetDataPoints() {
+		if pointMatches(point.GetAttributes(), want) {
+			count += point.GetCount()
+		}
+	}
+
+	return count
+}
+
+// sumValue is -1 when no point matches, so a missing metric never reads as a zero.
+func sumValue(metric *metricpb.Metric, want map[string]string) int64 {
+	total := int64(-1)
+
+	for _, point := range metric.GetSum().GetDataPoints() {
+		if pointMatches(point.GetAttributes(), want) {
+			total = max(total, 0) + point.GetAsInt()
+		}
+	}
+
+	return total
+}
+
+func gaugeValue(metric *metricpb.Metric, want map[string]string) int64 {
+	for _, point := range metric.GetGauge().GetDataPoints() {
+		if pointMatches(point.GetAttributes(), want) {
+			return point.GetAsInt()
+		}
+	}
+
+	return -1
 }

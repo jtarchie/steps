@@ -177,6 +177,9 @@ func (w *WebCmd) serve(ctx context.Context) error {
 	held := newDaemon(ctx, server, local, state, w.ExecFlags, w.HistoryFlags, w.Interval)
 	defer held.Close()
 
+	// Deferred after Close, so it stops first: a collection must never read a store Close has shut.
+	defer telemetry.ObserveQueue(held.pending)()
+
 	// NOT withheld by --read-only, which has always been a statement about
 	// the BROWSER's surface: `steps pipeline set` is the deployment path, and
 	// a box that could never be configured is not a deployment. It is also
