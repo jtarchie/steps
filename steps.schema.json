@@ -1376,30 +1376,41 @@
           }
         },
         "in_parallel": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "steps"
-          ],
-          "description": "Run several steps at the same time instead of one after another.",
-          "properties": {
-            "steps": {
+          "description": "Run several steps at the same time instead of one after another. A bare list of steps is shorthand for {steps: [...]}, as in Concourse.",
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "steps"
+              ],
+              "properties": {
+                "steps": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "$ref": "#/$defs/step"
+                  }
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Maximum branches in flight at once. Omit for unbounded."
+                },
+                "fail_fast": {
+                  "type": "boolean",
+                  "description": "Cancel the remaining branches as soon as one fails. The block fails either way."
+                }
+              }
+            },
+            {
               "type": "array",
               "minItems": 1,
               "items": {
                 "$ref": "#/$defs/step"
               }
-            },
-            "limit": {
-              "type": "integer",
-              "minimum": 1,
-              "description": "Maximum branches in flight at once. Omit for unbounded."
-            },
-            "fail_fast": {
-              "type": "boolean",
-              "description": "Cancel the remaining branches as soon as one fails. The block fails either way."
             }
-          }
+          ]
         },
         "ensemble": {
           "type": "object",

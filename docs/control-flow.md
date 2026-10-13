@@ -417,6 +417,22 @@ jobs:
     outcome: succeeded             # outcome: is what catches a SWALLOWED branch
 ```
 
+A bare list is shorthand for a block with only `steps:`, as in Concourse — the form to reach for when there is no `limit:` or `fail_fast:` to set:
+
+```yaml
+jobs:
+- name: verify
+  plan:
+  - in_parallel:
+    - task: lint
+      run: echo linting
+    - task: test
+      run: echo testing
+  assert:
+    execution: [lint, test]
+    outcome: succeeded
+```
+
 - **The block fails when any branch fails.** `fail_fast:` decides only whether the siblings are cancelled or allowed to finish — never whether the failure counts. That distinction is not hypothetical: the first implementation swallowed a child failure under `fail_fast: false`, and a job containing a failing parallel step reported PASS.
 - **Every failure is reported**, not just the first. Debugging a parallel block, the useful question is whether one branch broke or all of them did.
 - **Classification follows the worst branch.** An errored branch (infrastructure) outranks a failed one (the step said no), so `on_error` fires rather than `on_failure`.
