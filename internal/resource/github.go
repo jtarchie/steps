@@ -796,12 +796,91 @@ func githubCommentsIn(ctx context.Context, raw, version map[string]any, destDir 
 		return writeMetadata(destDir, files)
 	}
 
-	err = fetchCommentedPR(ctx, client, source, number, destDir)
+	err = fetchCommentedPR(ctx, client, source, number, kind, files, destDir)
 	if err != nil {
 		return err
 	}
 
 	return writeMetadata(destDir, files)
+}
+
+// reviewThreadLink is how a review comment names its thread: GitHub keeps
+// one flat, every reply pointing at the first comment.
+type reviewThreadLink struct {
+	ID        int64 `json:"id"`
+	InReplyTo int64 `json:"in_reply_to_id"`
+}
+
+// keep appends to thread the comments in this link's thread.
+func (l reviewThreadLink) keep(thread, comments []json.RawMessage) ([]json.RawMessage, error) {
+	top := l.ID
+	if l.InReplyTo != 0 {
+		top = l.InReplyTo
+	}
+
+	for _, raw := range comments {
+		var link reviewThreadLink
+
+		err := json.Unmarshal(raw, &link)
+		if err != nil {
+			return nil, fmt.Errorf("%w", err)
+		}
+
+		if link.ID == top || link.InReplyTo == top {
+			thread = append(thread, raw)
+		}
+	}
+
+	return thread, nil
+}
+
+// fetchThread is the review thread an inline comment sits in, first comment
+// to last, the comment itself included. A command written as a reply says
+// "this" about what the thread's first comment said, and the comment alone
+// carries only that comment's id. GitHub has no listing of one thread, so
+// the pull request's inline comments are read in creation order and kept
+// when they are the first comment or point at it.
+func fetchThread(ctx context.Context, client *githubClient, repo, number string, commentJSON []byte) ([]byte, error) {
+	var self reviewThreadLink
+
+	err := json.Unmarshal(commentJSON, &self)
+	if err != nil {
+		return nil, fmt.Errorf("github: comment: %w", err)
+	}
+
+	listing := "/repos/" + repo + "/pulls/" + url.PathEscape(number) + "/comments"
+	query := url.Values{"sort": {"created"}, "direction": {"asc"}, "per_page": {strconv.Itoa(githubPageSize)}}
+	thread := []json.RawMessage{}
+	complete := false
+
+	for page := 1; page <= githubPageLimit && !complete; page++ {
+		query.Set("page", strconv.Itoa(page))
+
+		var comments []json.RawMessage
+
+		_, err := client.getJSON(ctx, listing+"?"+query.Encode(), &comments)
+		if err != nil {
+			return nil, err
+		}
+
+		thread, err = self.keep(thread, comments)
+		if err != nil {
+			return nil, fmt.Errorf("github: GET %s: %w", listing, err)
+		}
+
+		complete = len(comments) < githubPageSize
+	}
+
+	if !complete {
+		slog.WarnContext(ctx, "resource.github.thread.truncated", "listing", listing, "pages", githubPageLimit)
+	}
+
+	encoded, err := json.Marshal(thread)
+	if err != nil {
+		return nil, fmt.Errorf("github: thread: %w", err)
+	}
+
+	return encoded, nil
 }
 
 // fetchComment is one comment, as the files a get writes for it.
@@ -825,8 +904,18 @@ func fetchComment(ctx context.Context, client *githubClient, repo, id, kind stri
 
 // fetchCommentedPR lays down the pull request a comment sits on. The version
 // names a comment, not a commit, so the pull request comes as it is now: a
-// command written on it is about what it says today.
-func fetchCommentedPR(ctx context.Context, client *githubClient, source config.GitHubCommentsSource, number, destDir string) error {
+// command written on it is about what it says today. An inline comment's
+// thread is added to files.
+func fetchCommentedPR(ctx context.Context, client *githubClient, source config.GitHubCommentsSource, number, kind string, files map[string][]byte, destDir string) error {
+	if kind == config.GitHubCommentReview {
+		thread, err := fetchThread(ctx, client, source.Repo, number, files["comment.json"])
+		if err != nil {
+			return err
+		}
+
+		files["thread.json"] = thread
+	}
+
 	var pull struct {
 		Head struct {
 			SHA string `json:"sha"`

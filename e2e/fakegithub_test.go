@@ -339,6 +339,8 @@ func (f *fakeGitHub) servePullSub(w http.ResponseWriter, r *http.Request) {
 		f.serveComment(w, int64(atoi(r.PathValue("sub"))), "review")
 	case r.PathValue("sub") == "reviews":
 		f.listReviews(w, atoi(r.PathValue("number")))
+	case r.PathValue("sub") == "comments":
+		f.servePullComments(w, r, atoi(r.PathValue("number")))
 	default:
 		respondJSON(w, http.StatusNotFound, map[string]any{"message": "Not Found"})
 	}
@@ -617,6 +619,38 @@ func (f *fakeGitHub) serveCommentList(w http.ResponseWriter, r *http.Request, ki
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(encoded)
+}
+
+// servePullComments is one pull request's inline comments, GitHub's order
+// for them: by id, which is creation order, newest last unless
+// direction=desc asks otherwise. Paged like the repo-wide listings.
+func (f *fakeGitHub) servePullComments(w http.ResponseWriter, r *http.Request, number int) {
+	var picked []fakeComment
+
+	for _, comment := range f.comments {
+		if comment.Kind == "review" && comment.Number == number {
+			picked = append(picked, comment)
+		}
+	}
+
+	sort.SliceStable(picked, func(i, j int) bool { return picked[i].ID < picked[j].ID })
+
+	query := r.URL.Query()
+	if query.Get("direction") == "desc" {
+		slices.Reverse(picked)
+	}
+
+	perPage := max(atoi(query.Get("per_page")), 1)
+	page := max(atoi(query.Get("page")), 1)
+	start := min((page-1)*perPage, len(picked))
+	end := min(start+perPage, len(picked))
+
+	body := make([]map[string]any, 0, end-start)
+	for _, comment := range picked[start:end] {
+		body = append(body, f.commentJSON(comment))
+	}
+
+	respondJSON(w, http.StatusOK, body)
 }
 
 // listed is the comments of these kinds written at or after since, in update order.

@@ -690,6 +690,76 @@ func TestEndToEndGitHubCommentInThreadAnswersWhereAsked(t *testing.T) {
 	}
 }
 
+// TestEndToEndGitHubCommentBringsItsThread: an inline command arrives with
+// the thread it was written in, first comment to last and itself included,
+// because "this" in a reply means whatever the thread's first comment said.
+// Another thread on the same pull request stays out, however many pages of
+// it come first. A conversation has no threads, so a command there writes no
+// thread.json.
+func TestEndToEndGitHubCommentBringsItsThread(t *testing.T) {
+	at := time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)
+	elsewhere := fakeComment{ID: 499, Number: 7, Kind: "review", Author: "carol", Body: "another thread", Updated: at}
+	question := fakeComment{ID: 500, Number: 7, Kind: "review", Author: "bob", Body: "why this guard?", Updated: at}
+	aside := fakeComment{ID: 502, Number: 7, Kind: "review", Author: "carol", Body: "seconded", Updated: at.Add(2 * time.Minute), InReplyTo: 500}
+	command := func(kind string, inReplyTo int64) fakeComment {
+		return fakeComment{ID: 501, Number: 7, Kind: kind, Author: "alice", Body: "/steps explain", Updated: at.Add(time.Minute), InReplyTo: inReplyTo}
+	}
+
+	for name, tc := range map[string]struct {
+		command fakeComment
+		before  int
+		want    string
+	}{
+		"inline, itself a reply": {command("review", 500), 0, `"body":"why this guard?" "body":"/steps explain" "body":"seconded" `},
+		"inline, a page in":      {command("review", 500), 150, `"body":"why this guard?" "body":"/steps explain" "body":"seconded" `},
+		"inline, starting one":   {command("review", 0), 0, `"body":"/steps explain" `},
+		"conversation":           {command("conversation", 0), 0, "no thread"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeGitHub(t)
+			fake.addPR(reviewablePR())
+			fake.addComment(elsewhere)
+
+			for i := range tc.before {
+				fake.addComment(fakeComment{ID: int64(300 + i), Number: 7, Kind: "review", Author: "carol", Body: "earlier", Updated: at, InReplyTo: 499})
+			}
+
+			fake.addComment(question)
+			fake.addComment(tc.command)
+			fake.addComment(aside)
+
+			pipeline := `
+resources:
+- name: command
+  type: github-comments
+  source:
+    repo: ` + fakeRepo + `
+    endpoint: ` + fake.URL() + `
+    author: alice
+    body: '^/steps\s'
+    checkout: false
+jobs:
+- name: act
+  plan:
+  - get: command
+  - task: read
+    inputs: [command]
+    run: |
+      if [ -e command/thread.json ]; then
+        echo "thread: $(grep -o '"body":"[^"]*"' command/thread.json | tr '\n' ' ')."
+      else
+        echo "thread: no thread."
+      fi
+`
+			out := captureStdout(t, func() { mustRun(t, "run", writePipeline(t, t.TempDir(), pipeline), "--job", "act") })
+
+			if want := "thread: " + tc.want + "."; !strings.Contains(out, want) {
+				t.Errorf("output = %q, want it to contain %q", out, want)
+			}
+		})
+	}
+}
+
 // answers is everything the token's user posted, in the conversation or in
 // the thread under 500 or 501, as where: what.
 func answers(fake *fakeGitHub) []string {
