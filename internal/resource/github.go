@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -451,33 +452,116 @@ func githubCommentsCheck(ctx context.Context, raw, cursor map[string]any) ([]map
 		return nil, err
 	}
 
-	kinds := watch.source.WatchedKinds()
-	listings := map[string]bool{}
-
-	// Conversation and issue comments share one listing; inline review
-	// comments have their own.
-	if slices.Contains(kinds, config.GitHubCommentConversation) || slices.Contains(kinds, config.GitHubCommentIssue) {
-		listings["/repos/"+watch.source.Repo+"/issues/comments"] = false
-	}
-
-	if slices.Contains(kinds, config.GitHubCommentReview) {
-		listings["/repos/"+watch.source.Repo+"/pulls/comments"] = true
+	found, err := watch.snapshot(ctx, client)
+	if err != nil {
+		return nil, err
 	}
 
 	var versions []map[string]any
 
-	for listing, review := range listings {
-		found, err := watch.scan(ctx, client, listing, review)
+	for _, match := range found {
+		// After the filters, so only a comment that would otherwise be work
+		// costs a request.
+		done, err := watch.markedDone(ctx, client, match.comment, match.version)
 		if err != nil {
 			return nil, err
 		}
 
-		versions = append(versions, found...)
+		if !done {
+			versions = append(versions, match.version)
+		}
 	}
 
 	sortCommentVersions(versions)
 
 	return versions, nil
+}
+
+type commentMatch struct {
+	comment githubComment
+	version map[string]any
+}
+
+type commentFeed struct {
+	path   string
+	review bool
+}
+
+// listings is what the watched kinds are read from.
+func (w commentWatch) listings() []commentFeed {
+	kinds := w.source.WatchedKinds()
+
+	var listings []commentFeed
+
+	if slices.Contains(kinds, config.GitHubCommentConversation) || slices.Contains(kinds, config.GitHubCommentIssue) {
+		listings = append(listings, commentFeed{"/repos/" + w.source.Repo + "/issues/comments", false})
+	}
+
+	if slices.Contains(kinds, config.GitHubCommentReview) {
+		listings = append(listings, commentFeed{"/repos/" + w.source.Repo + "/pulls/comments", true})
+	}
+
+	return listings
+}
+
+// commentSnapshotRounds bounds how many times a check reads its listings
+// looking for two rounds that agree.
+const commentSnapshotRounds = 5
+
+// snapshot is every listing's matches as they all stood at one instant.
+//
+// Conversation and issue comments share one listing; inline review comments
+// have their own, and GitHub has no read of both at once. Read one after the
+// other, a comment landing in the first after it was read can be older than
+// one the second then shows — and the newest version is the next since:, so
+// that comment would be behind the cursor for good. Two consecutive rounds
+// that agree are a moment both listings held (the end of the first round sits
+// inside every listing's unchanged interval). The repeat round is conditional
+// requests, which an untouched listing answers without charging the rate
+// limit.
+func (w commentWatch) snapshot(ctx context.Context, client *githubClient) ([]commentMatch, error) {
+	listings := w.listings()
+
+	read := func() ([][]commentMatch, error) {
+		round := make([][]commentMatch, 0, len(listings))
+
+		for _, one := range listings {
+			found, err := w.scan(ctx, client, one.path, one.review)
+			if err != nil {
+				return nil, err
+			}
+
+			round = append(round, found)
+		}
+
+		return round, nil
+	}
+
+	previous, err := read()
+	if err != nil || len(listings) < 2 {
+		return slices.Concat(previous...), err
+	}
+
+	for range commentSnapshotRounds {
+		next, err := read()
+		if err != nil {
+			return nil, err
+		}
+
+		if slices.EqualFunc(previous, next, sameMatches) {
+			return slices.Concat(next...), nil
+		}
+
+		previous = next
+	}
+
+	return nil, fmt.Errorf("github: comments kept changing across %d reads of %s; the next check tries again", commentSnapshotRounds, w.source.Repo)
+}
+
+func sameMatches(a, b []commentMatch) bool {
+	return slices.EqualFunc(a, b, func(x, y commentMatch) bool {
+		return maps.Equal(x.version, y.version)
+	})
 }
 
 func newCommentWatch(ctx context.Context, raw, cursor map[string]any) (commentWatch, *githubClient, error) {
@@ -529,8 +613,8 @@ func sortCommentVersions(versions []map[string]any) {
 // one, since: asks GitHub for exactly what changed after it. Every page is a
 // conditional request, and a listing nothing touched answers 304, which
 // costs no rate limit — so an idle repository is polled for free.
-func (w commentWatch) scan(ctx context.Context, client *githubClient, listing string, review bool) ([]map[string]any, error) {
-	var versions []map[string]any
+func (w commentWatch) scan(ctx context.Context, client *githubClient, listing string, review bool) ([]commentMatch, error) {
+	var matches []commentMatch
 
 	query := url.Values{"sort": {"updated"}, "direction": {"desc"}, "per_page": {strconv.Itoa(githubPageSize)}}
 	if w.since != "" {
@@ -549,30 +633,19 @@ func (w commentWatch) scan(ctx context.Context, client *githubClient, listing st
 
 		for _, comment := range comments {
 			version, ok := w.match(comment, review)
-			if !ok {
-				continue
-			}
-
-			// After the filters, so only a comment that would otherwise be
-			// work costs a request.
-			done, err := w.markedDone(ctx, client, comment, version)
-			if err != nil {
-				return nil, err
-			}
-
-			if !done {
-				versions = append(versions, version)
+			if ok {
+				matches = append(matches, commentMatch{comment, version})
 			}
 		}
 
 		if len(comments) < githubPageSize || w.since == "" {
-			return versions, nil
+			return matches, nil
 		}
 	}
 
 	slog.WarnContext(ctx, "resource.github.comments.truncated", "listing", listing, "since", w.since, "pages", githubPageLimit)
 
-	return versions, nil
+	return matches, nil
 }
 
 // match is one comment against the filter, and the version it becomes.

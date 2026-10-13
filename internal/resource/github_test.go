@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1283,5 +1284,124 @@ func TestGitHubCommentInThreadFailsOnAnUnreadableComment(t *testing.T) {
 
 	if want := []string{"GET /repos/acme/app/pulls/comments/13"}; !slices.Equal(sent, want) {
 		t.Errorf("sent %q, want only the read", sent)
+	}
+}
+
+// TestGitHubCommentsCheckSkipsNothingWrittenBetweenItsListings: the two
+// listings are separate reads, so a comment can land in the one already read
+// while a NEWER one lands in the one still to read. Taking that newer one as
+// the cursor would put the first behind since: for good.
+func TestGitHubCommentsCheckSkipsNothingWrittenBetweenItsListings(t *testing.T) {
+	connection := racingListings(t)
+
+	source := map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "body": "^/go", "kinds": []any{"review", "issue"}}
+	cursor := map[string]any{"id": "1", "kind": "issue", "number": "9", "updated": "2026-09-27T00:00:00Z"}
+
+	var discovered []string
+
+	for range 3 {
+		versions, err := githubCommentsCheck(context.Background(), source, cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, version := range versions {
+			if id := versionField(version, "id"); !slices.Contains(discovered, id) {
+				discovered = append(discovered, id)
+			}
+		}
+
+		if len(versions) > 0 {
+			cursor = versions[len(versions)-1]
+		}
+	}
+
+	if strings.Join(discovered, ",") != "1,2,3,4,5" {
+		t.Errorf("discovered %v across three checks, want 1 to 5 in the order they were written", discovered)
+	}
+}
+
+// racingListings serves both comment listings, honoring since:, starting
+// from one issue comment (id 1).
+func racingListings(t *testing.T) config.GitHubConnection {
+	t.Helper()
+
+	const (
+		issues = "/repos/acme/app/issues/comments"
+		pulls  = "/repos/acme/app/pulls/comments"
+	)
+
+	type stored struct {
+		id      int
+		updated string
+	}
+
+	var (
+		mu       sync.Mutex
+		listings = map[string][]stored{issues: {{id: 1, updated: "2026-09-27T00:00:00Z"}}}
+		reads    int
+	)
+
+	render := func(path string, comment stored) string {
+		parent := `"issue_url":"https://x/issues/9","html_url":"https://x/issues/9#c"`
+		if path == pulls {
+			parent = `"pull_request_url":"https://x/pulls/7","html_url":"https://x/pull/7#c"`
+		}
+
+		return `{"id":` + strconv.Itoa(comment.id) + `,"body":"/go","updated_at":"` + comment.updated + `","user":{"login":"alice"},` + parent + `}`
+	}
+
+	return githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		since := r.URL.Query().Get("since")
+
+		var page []string
+
+		listed := listings[r.URL.Path]
+		for i := len(listed) - 1; i >= 0; i-- {
+			if listed[i].updated >= since {
+				page = append(page, render(r.URL.Path, listed[i]))
+			}
+		}
+
+		_, _ = w.Write([]byte("[" + strings.Join(page, ",") + "]"))
+
+		// Right after the first listing of each of the first check's first
+		// two rounds: one comment in it, and a newer one in the other. The
+		// second race is what a re-read that does not compare would miss.
+		reads++
+		if reads == 1 || reads == 3 {
+			other := pulls
+			if r.URL.Path == pulls {
+				other = issues
+			}
+
+			listings[r.URL.Path] = append(listings[r.URL.Path], stored{id: reads + 1, updated: fmt.Sprintf("2026-09-27T00:00:0%dZ", reads)})
+			listings[other] = append(listings[other], stored{id: reads + 2, updated: fmt.Sprintf("2026-09-27T00:00:0%dZ", reads+1)})
+		}
+	})
+}
+
+// TestGitHubCommentsCheckGivesUpOnListingsThatNeverSettle: rather than report
+// a moment no listing pair agreed on, the check fails and the next one tries.
+func TestGitHubCommentsCheckGivesUpOnListingsThatNeverSettle(t *testing.T) {
+	var reads atomic.Int32
+
+	connection := githubServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		id := reads.Add(1)
+		_, _ = fmt.Fprintf(w, `[{"id":%d,"body":"/go","updated_at":"2026-09-27T00:00:00Z","user":{"login":"alice"},"issue_url":"https://x/issues/9","html_url":"https://x/issues/9#c"}]`, id)
+	})
+
+	source := map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "body": "^/go", "kinds": []any{"review", "issue"}}
+
+	versions, err := githubCommentsCheck(context.Background(), source, map[string]any{"updated": "2026-09-26T00:00:00Z"})
+	if err == nil || !strings.Contains(err.Error(), "kept changing") || versions != nil {
+		t.Errorf("%v, %v; want the check refused", versions, err)
+	}
+
+	if want := int32(2 * (commentSnapshotRounds + 1)); reads.Load() != want {
+		t.Errorf("%d reads, want %d: every round, and no more", reads.Load(), want)
 	}
 }
