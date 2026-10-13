@@ -173,6 +173,11 @@ func parseSource(source []byte, name string, label string, fsys Files) (*Config,
 
 	cfg.stampLines(source)
 
+	err = cfg.validateUniqueNames(source)
+	if err != nil {
+		return nil, fmt.Errorf("pipeline YAML %q: %w", label, err)
+	}
+
 	slog.Info("config.loaded",
 		"pipeline", label,
 		"resource_types", len(cfg.ResourceTypes),

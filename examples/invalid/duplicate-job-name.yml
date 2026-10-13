@@ -1,0 +1,11 @@
+# Two jobs under one name: the second would never run (every lookup finds the
+# first) and both would write one history. Concourse refuses this at
+# set-pipeline, and so does steps — for resources, resource_types, tasks and
+# agents too.
+# expect: jobs[0] (line 8) and jobs[1] (line 10) have the same name "build"
+
+jobs:
+- name: build
+  plan: [{ task: compile, run: "true" }]
+- name: build
+  plan: [{ task: package, run: "true" }]
