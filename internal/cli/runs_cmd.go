@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -174,6 +176,48 @@ func (r *RunsWhereCmd) Run() error {
 	defer done()
 
 	return r.printPlacements(context.Background(), st)
+}
+
+// RunsAbortCmd goes over HTTP rather than writing a row, because what it stops is a context inside the daemon's process that no database write can reach.
+type RunsAbortCmd struct {
+	TargetFlags      `embed:""`
+	PipelineNameFlag `embed:""`
+	RunID            string `arg:""                                                      help:"the run to stop" optional:""`
+	Queued           string `help:"instead, drop this job's queued run before it starts" name:"queued"          placeholder:"JOB"`
+}
+
+// Run stops the named run, or drops the job's queued one.
+func (a *RunsAbortCmd) Run() error {
+	name, err := namedPipeline(a.Pipeline, "runs abort")
+	if err != nil {
+		return err
+	}
+
+	if (a.RunID == "") == (a.Queued == "") {
+		return errors.New("steps runs abort needs a run id or --queued <job>, and not both")
+	}
+
+	client := newDaemonClient(a.Target)
+
+	if a.Queued != "" {
+		err = client.post("/api/pipelines/"+name+"/jobs/"+url.PathEscape(a.Queued)+"/queued/abort", http.StatusNoContent)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("aborted: the queued run of %s will not start\n", a.Queued)
+
+		return nil
+	}
+
+	err = client.post("/api/pipelines/"+name+"/runs/"+url.PathEscape(a.RunID)+"/abort", http.StatusAccepted)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("aborting: %s stops once its on_abort and ensure hooks have run\n", a.RunID)
+
+	return nil
 }
 
 // nothingRecorded reports — and says — that a pipeline has no state file yet.

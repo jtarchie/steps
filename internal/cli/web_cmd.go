@@ -113,12 +113,12 @@ func (w *WebCmd) Run() error {
 	}
 
 	// Before anything is opened or bound, so a half-configured credential pair costs nothing.
-	_, err := w.authOptions()
+	opts, err := w.authOptions()
 	if err != nil {
 		return err
 	}
 
-	_, err = externalURL(w.Listen, w.ExternalURL)
+	published, err := externalURL(w.Listen, w.ExternalURL)
 	if err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ func (w *WebCmd) Run() error {
 		return err
 	}
 
-	return w.serve(ctx)
+	return w.serve(ctx, opts, published)
 }
 
 // serve runs the UI, the set endpoint, and a poller and drainer per served
@@ -144,7 +144,7 @@ func (w *WebCmd) Run() error {
 // front end that drains a queue nothing fills is a runner that looks alive
 // and notices nothing, and a second `steps web` on the same state database is
 // the deployment mistake the one-process-per-file rule already names.
-func (w *WebCmd) serve(ctx context.Context) error {
+func (w *WebCmd) serve(ctx context.Context, opts []web.Option, published string) error {
 	local := web.NewLocalRunner(nil, w.Pin, w.MaxConcurrent, w.Force)
 	local.StopWith(ctx)
 	local.LimitRuns(w.MaxRuns)
@@ -154,15 +154,7 @@ func (w *WebCmd) serve(ctx context.Context) error {
 		runner = local
 	}
 
-	opts, err := w.authOptions()
-	if err != nil {
-		return err
-	}
-
-	ctx, err = w.withExternalURL(ctx)
-	if err != nil {
-		return err
-	}
+	ctx = w.withExternalURL(ctx, published)
 
 	server, err := web.New(nil, runner, append(opts, web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithMiddleware(telemetry.Handler(web.HealthPath)))...)
 	if err != nil {
@@ -214,17 +206,12 @@ func (w *WebCmd) serve(ctx context.Context) error {
 }
 
 // withExternalURL carries STEPS_URL to every run this daemon starts: each drain loop derives from newDaemon's base, so browser-, webhook- and trigger-started runs all see it.
-func (w *WebCmd) withExternalURL(ctx context.Context) (context.Context, error) {
-	published, err := externalURL(w.Listen, w.ExternalURL)
-	if err != nil {
-		return ctx, err
-	}
-
+func (w *WebCmd) withExternalURL(ctx context.Context, published string) context.Context {
 	if published == "" {
 		slog.WarnContext(ctx, "web.steps_url_unset", "listen", w.Listen, "reason", "a wildcard address", "fix", "set --external-url")
 	}
 
-	return pipeline.WithExternalURL(ctx, published), nil
+	return pipeline.WithExternalURL(ctx, published)
 }
 
 // loopbackOnly answers whether this listen address can only be reached from this machine. An unparseable or name-based address answers false: the warning is the safe side of a guess.

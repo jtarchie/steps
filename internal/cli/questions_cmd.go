@@ -31,7 +31,7 @@ func (q *QuestionsListCmd) Run() error {
 		return nil
 	}
 
-	st, cleanup, err := openStore(q.ReadFlags)
+	st, cleanup, err := openRecorded(q.ReadFlags)
 	if err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ type AnswerCmd struct {
 
 // Run answers the named question.
 func (a *AnswerCmd) Run() error {
-	st, cleanup, err := openStore(a.ReadFlags)
+	st, cleanup, err := openRecorded(a.ReadFlags)
 	if err != nil {
 		return err
 	}

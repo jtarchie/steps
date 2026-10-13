@@ -1,8 +1,7 @@
 // Package cli implements steps' command-line grammar and every command
-// behind it: check discovers resource versions, get fetches one via a
-// rendered shell command, and task runs a plan step's command. `run`
-// executes one job once; `web` serves the UI, polls trigger: true resources
-// and auto-runs every job a changed resource affects.
+// behind it. `run` executes one job once and `test` every job; `web` is the
+// daemon that holds the pipelines `pipeline set` uploads, serves the UI, polls
+// trigger: true resources and auto-runs every job a changed resource affects.
 //
 // It lives below main rather than in it so the end-to-end suite in ./e2e can
 // drive the whole stack through Run, which is the only entry point that
@@ -236,8 +235,8 @@ func setup(
 		return nil, nil, nil, fmt.Errorf("could not open state store: %w", err)
 	}
 
-	// This is the funnel every command that LOADS a pipeline comes through
-	// (run, test, web, jobs, approvals), and the only place holding
+	// This is the funnel every command that RUNS a local pipeline file comes
+	// through (run, test), and the only place holding
 	// both the YAML path and the handle to record it against.
 	err = st.SetSourcePath(context.Background(), pipelinePath)
 	if err != nil {
@@ -260,20 +259,8 @@ func setup(
 		return nil, nil, nil, fmt.Errorf("could not build workspace provider: %w", err)
 	}
 
-	err = provider.Validate()
+	err = readyProvider(provider, workspace.Provider.Validate, st, exec.ArtifactStore)
 	if err != nil {
-		// The provider owns a temp root it created; only its Close removes
-		// one. Closing the store alone left a steps-* directory behind on
-		// every attempt, with nothing to reap it.
-		_ = provider.Close()
-		_ = st.Close()
-
-		return nil, nil, nil, fmt.Errorf("workspace: %w", err)
-	}
-
-	err = attachArtifactStore(provider, st, exec.ArtifactStore)
-	if err != nil {
-		_ = provider.Close()
 		_ = st.Close()
 
 		return nil, nil, nil, err
@@ -292,6 +279,28 @@ func setup(
 	}
 
 	return st, provider, cleanup, nil
+}
+
+// readyProvider checks a freshly built provider and attaches --artifact-store
+// to it, closing it on any failure: the provider owns a temp root it created
+// and only its Close removes one, so a caller that closed its store alone left
+// a steps-* directory behind on every attempt, with nothing to reap it.
+func readyProvider(provider workspace.Provider, check func(workspace.Provider) error, st store.Blobs, artifactStore string) error {
+	err := check(provider)
+	if err != nil {
+		_ = provider.Close()
+
+		return fmt.Errorf("workspace: %w", err)
+	}
+
+	err = attachArtifactStore(provider, st, artifactStore)
+	if err != nil {
+		_ = provider.Close()
+
+		return err
+	}
+
+	return nil
 }
 
 // attachArtifactStore wires --artifact-store into the provider's step cache:

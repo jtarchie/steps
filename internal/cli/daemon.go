@@ -50,6 +50,11 @@ type daemon struct {
 	*probes
 }
 
+var (
+	_ web.Manager    = (*daemon)(nil)
+	_ web.Authorizer = (*daemon)(nil)
+)
+
 // daemonWriteBound is what a give-back write gets on its own context, since the request's is likeliest to be cancelled exactly when one runs.
 const daemonWriteBound = 30 * time.Second
 
@@ -425,28 +430,23 @@ func (d *daemon) provider(cfg *config.Config, st store.Store) (workspace.Provide
 		return nil, fmt.Errorf("%w: workspace: %w", web.ErrRefused, err)
 	}
 
-	root, swept := d.sweptRoot(cfg.Workspace)
-	if swept {
-		err = workspace.Probe(provider)
-	} else {
-		err = provider.Validate()
+	check := func(provider workspace.Provider) error {
+		root, swept := d.sweptRoot(cfg.Workspace)
+		if swept {
+			return workspace.Probe(provider)
+		}
+
+		err := provider.Validate()
+		if err == nil && root != "" {
+			d.swept[root] = true
+		}
+
+		return err //nolint:wrapcheck // readyProvider wraps it
 	}
 
+	// readyProvider also attaches --artifact-store, the half the setup() path this replaced did: without it the flag mirrors nothing and warns about nothing, which reads as configured and binds nothing.
+	err = readyProvider(provider, check, st, d.exec.ArtifactStore)
 	if err != nil {
-		_ = provider.Close()
-
-		return nil, fmt.Errorf("%w: workspace: %w", web.ErrRefused, err)
-	}
-
-	if root != "" {
-		d.swept[root] = true
-	}
-
-	// The other half of --artifact-store, which the setup() path this replaced did here: without it the flag mirrors nothing and warns about nothing, which reads as configured and binds nothing.
-	err = attachArtifactStore(provider, st, d.exec.ArtifactStore)
-	if err != nil {
-		_ = provider.Close()
-
 		return nil, fmt.Errorf("%w: %w", web.ErrRefused, err)
 	}
 
@@ -577,20 +577,7 @@ func (d *daemon) Destroy(ctx context.Context, name string) error {
 		return fmt.Errorf("could not destroy %q: %w", name, err)
 	}
 
-	loginsOf := served.target.Config().Name
-	d.forget(loginsOf)
-	d.dropProbes(name)
-
-	err = stepsmcp.ForgetLogins(loginsOf)
-	if err != nil {
-		dir, _ := stepsmcp.LoginsExist(loginsOf)
-
-		return fmt.Errorf("%q destroyed, but its mcp logins at %s were not removed: %w", name, dir, err)
-	}
-
-	slog.InfoContext(ctx, "web.pipeline.destroyed", "pipeline", name)
-
-	return nil
+	return d.forgetPipeline(ctx, name, served.target.Config().Name)
 }
 
 // destroyBroken forgets a pipeline nothing is serving, which is the only way out for one whose repair fails the check its restore did — a workspace root gone for good.
@@ -614,13 +601,19 @@ func (d *daemon) destroyBroken(ctx context.Context, name string) error {
 	}
 
 	d.server.ClearBroken(name)
-	d.forget(name)
-	d.dropProbes(name)
 
 	// The slug is the name a served pipeline's Config().Name would have been.
-	err = stepsmcp.ForgetLogins(name)
+	return d.forgetPipeline(ctx, name, name)
+}
+
+// forgetPipeline is what a destroy drops once the rows are gone: the logins, filed under loginsOf (the Config's name), and the probes, under the slug.
+func (d *daemon) forgetPipeline(ctx context.Context, name, loginsOf string) error {
+	d.forget(loginsOf)
+	d.dropProbes(name)
+
+	err := stepsmcp.ForgetLogins(loginsOf)
 	if err != nil {
-		dir, _ := stepsmcp.LoginsExist(name)
+		dir, _ := stepsmcp.LoginsExist(loginsOf)
 
 		return fmt.Errorf("%q destroyed, but its mcp logins at %s were not removed: %w", name, dir, err)
 	}

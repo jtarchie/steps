@@ -165,7 +165,7 @@ func (s State) postgres() bool {
 
 // VarFlags carry ((name)) substitutions into a pipeline load.
 //
-// Declared once and embedded rather than repeated, because seven commands
+// Declared once and embedded rather than repeated, because five commands
 // take them and a copy that drifts is a flag that silently means something
 // else on one verb. Load is part of the embed for the same reason: a command
 // that takes these flags and loads the pipeline some other way has declared
@@ -442,22 +442,4 @@ func resolveVars(flags map[string]string, varsFile string) (map[string]string, e
 	}
 
 	return vars, nil
-}
-
-// openStore opens a pipeline's already-recorded state for the approval,
-// question and paused-job commands.
-//
-// The same resolve-never-register path `steps runs` takes, and for the same
-// reason one level along: every caller here acts on a row that must already
-// exist — an approval to decide, a question to answer, a breaker to read — so
-// none of them has any business CREATING the pipeline it was named. It used
-// to go through setup, which opened the store the writer's way and minted a
-// pipelines row for a typo; worse, it did so in a state file `steps runs` had
-// just learned to refuse that name in, so one listing quietly made the
-// refusal stop working.
-//
-// It also builds no workspace provider, which setup did — a listing that
-// creates and removes a temp root to print three rows.
-func openStore(flags ReadFlags) (store.Store, func(), error) {
-	return openRecorded(flags)
 }

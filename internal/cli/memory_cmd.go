@@ -28,7 +28,7 @@ func (m *MemoryListCmd) Run() error {
 		return nil
 	}
 
-	st, cleanup, err := openStore(m.ReadFlags)
+	st, cleanup, err := openRecorded(m.ReadFlags)
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func (m *MemoryRmCmd) Run() error {
 		return errors.New("name entry ids, or pass --all for the whole scope: steps memory rm --scope <scope> <id>... -p <pipeline>")
 	}
 
-	st, cleanup, err := openStore(m.ReadFlags)
+	st, cleanup, err := openRecorded(m.ReadFlags)
 	if err != nil {
 		return err
 	}

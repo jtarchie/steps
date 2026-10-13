@@ -32,7 +32,7 @@ func (a *ApprovalsListCmd) Run() error {
 		return nil
 	}
 
-	st, cleanup, err := openStore(a.ReadFlags)
+	st, cleanup, err := openRecorded(a.ReadFlags)
 	if err != nil {
 		return err
 	}
@@ -98,7 +98,7 @@ func (r *RejectCmd) Run() error {
 
 // decideApproval records a decision against a pipeline's store.
 func decideApproval(flags ReadFlags, id int64, status, reason string) error {
-	st, cleanup, err := openStore(flags)
+	st, cleanup, err := openRecorded(flags)
 	if err != nil {
 		return err
 	}

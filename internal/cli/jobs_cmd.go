@@ -30,7 +30,7 @@ func (j *JobsListCmd) Run() error {
 		return nil
 	}
 
-	st, cleanup, err := openStore(j.ReadFlags)
+	st, cleanup, err := openRecorded(j.ReadFlags)
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ type JobsReleaseCmd struct {
 
 // Run releases the named job.
 func (j *JobsReleaseCmd) Run() error {
-	st, cleanup, err := openStore(j.ReadFlags)
+	st, cleanup, err := openRecorded(j.ReadFlags)
 	if err != nil {
 		return err
 	}
