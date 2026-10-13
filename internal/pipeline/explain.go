@@ -151,14 +151,9 @@ func explainReason(cfg *config.Config, job *config.Job, index int, wouldSkip, ch
 
 	step := job.Plan[index]
 
-	reason := unskippableReason(step)
-	if reason != "" {
+	reason, err := uncacheableReason(cfg, step)
+	if err == nil && reason != "" {
 		return reason
-	}
-
-	unskippable, err := stepForcesUnskippable(cfg, step)
-	if err == nil && unskippable {
-		return "fix: agent"
 	}
 
 	return notCached

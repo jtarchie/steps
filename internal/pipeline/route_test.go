@@ -335,10 +335,10 @@ func TestTheUncacheableNoteNamesAPutAsAPut(t *testing.T) {
 	}
 }
 
-// A container has no name of its own, and the note read "note:  makes this chain uncacheable", naming nothing; it names the block's kind instead.
+// A container has no name of its own, and the note read "note:  makes this chain uncacheable", naming nothing; it names the block's kind, and what inside it is the reason.
 func TestTheUncacheableNoteNamesAContainerByItsKind(t *testing.T) {
 	out := captureStdout(t, func() {
-		block := config.Step{InParallel: &config.InParallel{Steps: []config.Step{{Task: "branch", Run: "true"}}}}
+		block := config.Step{InParallel: &config.InParallel{Steps: []config.Step{{Task: "branch", Run: "true"}, {Put: "repo"}}}}
 
 		_, err := foldStepUnskippable(t.Context(), &config.Config{}, block, false)
 		if err != nil {
@@ -346,7 +346,7 @@ func TestTheUncacheableNoteNamesAContainerByItsKind(t *testing.T) {
 		}
 	})
 
-	if want := "note: in_parallel makes this chain uncacheable (in_parallel block)"; !strings.Contains(out, want) {
+	if want := "note: in_parallel makes this chain uncacheable (in_parallel block: put step)"; !strings.Contains(out, want) {
 		t.Errorf("note %q, want %q", out, want)
 	}
 }

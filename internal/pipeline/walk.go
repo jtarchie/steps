@@ -402,7 +402,7 @@ func dispatchByKind(
 	case config.StepKindAgent:
 		return runAgentStep(ctx, r, i, step, parentHash)
 	default:
-		return dispatchContainerKind(ctx, r, kind, i, step, parentHash)
+		return dispatchContainerKind(ctx, r, kind, i, step, skippable, parentHash)
 	}
 }
 
@@ -433,8 +433,24 @@ func runAgentStep(ctx context.Context, r stepRunner, i int, step config.Step, pa
 // steps rather than doing work themselves. Split from dispatchByKind so
 // neither switch has to carry both halves.
 func dispatchContainerKind(
-	ctx context.Context, r stepRunner, kind config.StepKind, i int, step config.Step, parentHash string,
+	ctx context.Context, r stepRunner, kind config.StepKind, i int, step config.Step,
+	skippable map[string]bool, parentHash string,
 ) (stepResult, error) {
+	// A block whose branches are all cacheable is a chain node like a task,
+	// and a chain through it that already succeeded is skipped from here.
+	if len(skippable) > 0 {
+		node, err := merkle.ContainerNode(r.cfg, step, kind, i, parentHash)
+		if err != nil {
+			return stepResult{}, fmt.Errorf("step %d (%s): %w", i, kind, err)
+		}
+
+		if skippable[node.Hash] {
+			slog.InfoContext(ctx, "job.skip", "kind", kind, "reason", "cached", "hash", node.Hash)
+
+			return stepResult{hash: parentHash, nodeHash: node.Hash, disposition: stepChainSkipped}, nil
+		}
+	}
+
 	switch kind { //nolint:exhaustive // the leaf kinds are handled by dispatchByKind; default catches config.StepKindGet, which never reaches here
 	case config.StepKindTry:
 		return runTryStep(ctx, r, i, step, parentHash)

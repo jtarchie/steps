@@ -150,10 +150,10 @@ func TestShortHashAbbreviatesOnlyWhatIsLonger(t *testing.T) {
 	}
 }
 
-// Every container makes its chain uncacheable, and `steps plan` said "not yet
-// run" for every step of such a job however many times it had run — the
-// planner knew and the explanation did not, so a job that never caches read as
-// one that simply had not been tried.
+// A block holding an uncacheable step makes its chain uncacheable, and `steps
+// plan` said "not yet run" for every step of such a job however many times it
+// had run — the planner knew and the explanation did not, so a job that never
+// caches read as one that simply had not been tried.
 func TestExplainSaysAContainerMakesTheChainUncacheable(t *testing.T) {
 	t.Parallel()
 
@@ -161,6 +161,14 @@ func TestExplainSaysAContainerMakesTheChainUncacheable(t *testing.T) {
 	path := filepath.Join(dir, "pipe.yml")
 
 	err := os.WriteFile(path, []byte(`
+resource_types:
+- name: sink
+  config:
+    out: "echo '{\"v\": \"1\"}'"
+resources:
+- name: out
+  type: sink
+  source: {}
 jobs:
 - name: build
   plan:
@@ -170,6 +178,7 @@ jobs:
       steps:
       - task: branch
         run: "true"
+      - put: out
   - task: last
     run: "true"
 `), 0o600)
@@ -201,7 +210,7 @@ jobs:
 
 	for name, want := range map[string]string{
 		"task first":   "chain uncacheable",
-		"in_parallel ": "in_parallel block",
+		"in_parallel ": "in_parallel block: put step",
 		"task last":    "chain uncacheable",
 	} {
 		if reasons[name] != want {

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
 )
 
@@ -139,37 +140,54 @@ func reportRoute(ctx context.Context, steps []config.Step, i int, step config.St
 	slog.InfoContext(ctx, "job.route", "from", from, "key", key, "to", to, "visit", visits[i], "max_visits", step.MaxVisits)
 }
 
-// stepForcesUnskippable reports whether a step makes its chain unskippable: a
-// put/agent (side effects / non-determinism), a task with a fix: — including
-// one inherited from a referenced tasks: entry, resolved the same way
-// merkle.planNonGetNode resolves it at plan time, so the two can't disagree —
-// or a when:/to: whose runtime outcome the planner cannot know. Such a chain
-// is never recorded as a reusable "this whole chain succeeded" hash.
-func stepForcesUnskippable(cfg *config.Config, step config.Step) (bool, error) {
-	if unskippableReason(step) != "" {
-		return true, nil
-	}
-
-	if step.Task == "" {
-		return false, nil
-	}
-
-	rt, err := cfg.ResolveTask(step)
-	if err != nil {
-		return false, fmt.Errorf("resolve task: %w", err)
-	}
-
-	return rt.Fix != nil, nil
-}
-
-// unskippableReason names why a step makes its chain uncacheable, or "" when
-// it doesn't (or when the reason is a fix:, which needs task resolution — see
-// stepForcesUnskippable).
+// uncacheableReason names why a step makes its chain uncacheable, or "" when
+// it doesn't: unskippableReason's own kinds, a task whose fix: — including one
+// inherited from a referenced tasks: entry — makes its success depend on what
+// a model did, and a block holding any of those. It mirrors
+// merkle.planNonGetNode, so the run and the planner cannot disagree about a
+// chain the skip index is asked about.
 //
 // It exists so the run can SAY so. That a when: guard or a to: route silently
 // disables caching for everything downstream is real, documented behavior that
 // produced no output at all: the user saw steps re-running and had to infer
 // the rule.
+func uncacheableReason(cfg *config.Config, step config.Step) (string, error) {
+	reason := unskippableReason(step)
+	if reason != "" {
+		return reason, nil
+	}
+
+	if step.Task != "" {
+		rt, err := cfg.ResolveTask(step)
+		if err != nil {
+			return "", fmt.Errorf("resolve task: %w", err)
+		}
+
+		if rt.Fix != nil {
+			return "fix: agent", nil
+		}
+
+		return "", nil
+	}
+
+	kind, _ := step.Kind()
+
+	for _, branch := range merkle.ContainerBranches(step) {
+		if branch.Get != "" {
+			return fmt.Sprintf("%s block: get %s inside it", kind, branch.Get), nil
+		}
+
+		inner, err := uncacheableReason(cfg, branch)
+		if err != nil || inner != "" {
+			return fmt.Sprintf("%s block: %s", kind, inner), err
+		}
+	}
+
+	return "", nil
+}
+
+// unskippableReason names the kinds of step that are uncacheable whatever they
+// hold — see uncacheableReason for the rest.
 func unskippableReason(step config.Step) string {
 	switch {
 	case step.Put != "":
@@ -184,30 +202,21 @@ func unskippableReason(step config.Step) string {
 		return "to: routing"
 	case step.ReadsFrom():
 		return "context: from"
+	default:
+		return runTimeReason(step)
+	}
+}
+
+// runTimeReason names the steps whose result does not exist until the run
+// produces it: nothing the planner can hash stands in for them.
+func runTimeReason(step config.Step) string {
+	switch {
 	case step.LoadVar != "":
 		return "load_var step"
 	case step.Approval != nil:
 		return "approval step"
-	default:
-		return containerReason(step)
-	}
-}
-
-// containerReason is the planner's rule that every block is unskippable (its
-// branches are not chain nodes, so no cached success can be said to cover
-// them), named so the run and `steps plan` agree with it.
-func containerReason(step config.Step) string {
-	switch {
 	case len(step.Across) > 0:
 		return "across block"
-	case step.InParallel != nil:
-		return "in_parallel block"
-	case len(step.Do) > 0:
-		return "do block"
-	case step.Race != nil:
-		return "race block"
-	case step.Ensemble != nil:
-		return "ensemble block"
 	default:
 		return ""
 	}
@@ -218,17 +227,14 @@ func containerReason(step config.Step) string {
 // transition it prints why, once — the point at which the rest of this chain
 // stopped being cacheable.
 func foldStepUnskippable(ctx context.Context, cfg *config.Config, step config.Step, chainUnskippable bool) (bool, error) {
-	unskippable, err := stepForcesUnskippable(cfg, step)
+	reason, err := uncacheableReason(cfg, step)
 	if err != nil {
 		return chainUnskippable, err
 	}
 
-	if unskippable && !chainUnskippable {
-		reason := unskippableReason(step)
-		if reason == "" {
-			reason = "fix: agent"
-		}
+	unskippable := reason != ""
 
+	if unskippable && !chainUnskippable {
 		name := executedStepName(step)
 		if kind, ok := step.Kind(); name == "" && ok {
 			name = string(kind)

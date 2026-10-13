@@ -1409,13 +1409,14 @@ func planKindNode(cfg *config.Config, step config.Step, i int, parentHash string
 
 		return node, true, err
 	case config.StepKindTry, config.StepKindRace, config.StepKindInParallel, config.StepKindEnsemble, config.StepKindDo:
-		// Every container is unskippable. Its branches run inside it rather
-		// than as chain nodes of their own, so the planner cannot reason about
-		// which of them a cached success covers — and a branch may be a put or
-		// an agent, which are never skippable anyway.
 		node, err := planContainerNode(cfg, step, kind, i, parentHash)
+		if err != nil {
+			return node, true, err
+		}
 
-		return node, true, err
+		unskippable, err := containerUnskippable(cfg, step, kind)
+
+		return node, unskippable, err
 	default: // config.StepKindGet — planNonGetNode is only ever called for non-get steps
 		return Node{}, false, fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
 	}
@@ -1686,6 +1687,56 @@ func parallelNode(cfg *config.Config, step config.Step, i int, parentHash string
 	}
 
 	return Node{Hash: hash, ParentHash: parentHash, Kind: NodeKindParallel, StepIndex: i, Content: content}, nil
+}
+
+// ContainerNode is the node a block hashes to, which the executor asks the
+// skip index about before running the block.
+func ContainerNode(cfg *config.Config, step config.Step, kind config.StepKind, i int, parentHash string) (Node, error) {
+	return planContainerNode(cfg, step, kind, i, parentHash)
+}
+
+// containerUnskippable reports whether a block keeps its chain from being
+// cached. Its branches run inside it rather than as chain nodes, but the block's
+// hash folds in every branch's content, so a cached success of the block is a
+// success of exactly those branches — as long as each one would itself be
+// cacheable. A get inside a block is not: the version it fetches is not part of
+// the block's content. A try: is never cacheable (a tolerated failure is not a
+// success to replay), and a guard or route on the block is a run-time outcome.
+func containerUnskippable(cfg *config.Config, step config.Step, kind config.StepKind) (bool, error) {
+	if kind == config.StepKindTry || step.When != nil || step.Routes() {
+		return true, nil
+	}
+
+	for _, branch := range ContainerBranches(step) {
+		if branch.Get != "" {
+			return true, nil
+		}
+
+		_, unskippable, err := planNonGetNode(cfg, branch, 0, "")
+		if err != nil || unskippable {
+			return true, err
+		}
+	}
+
+	return false, nil
+}
+
+// ContainerBranches is the steps a do:, in_parallel:, race: or ensemble: block
+// runs; nil for anything else.
+func ContainerBranches(step config.Step) []config.Step {
+	//kindswitch:ignore only the blocks with branches answer; every other kind, try: included, has none
+	switch {
+	case len(step.Do) > 0:
+		return step.Do
+	case step.InParallel != nil:
+		return step.InParallel.Steps
+	case step.Race != nil:
+		return step.Race.Steps
+	case step.Ensemble != nil:
+		return step.Ensemble.Agents
+	default:
+		return nil
+	}
 }
 
 // planContainerNode builds the plan node for whichever container kind step is.
