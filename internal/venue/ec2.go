@@ -260,8 +260,11 @@ func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, fun
 	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: launching from template %s (%s=%s)",
 		worker.URL, worker.Template, labelWorker, labels[labelWorker]))
 
+	token := launchToken(labels)
+	labels[labelLaunch] = token
+
 	request := fleetRequest(worker, labels)
-	request.ClientToken = aws.String(launchToken(labels))
+	request.ClientToken = aws.String(token)
 
 	// Not the caller's context: cancelled once AWS has accepted, the SDK
 	// returns an error and no instance id, leaving a billing machine nothing
@@ -271,6 +274,11 @@ func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, fun
 
 	out, err := api.CreateFleet(fleetCtx, request)
 	if err != nil {
+		if !refused(err) {
+			//nolint:contextcheck // as stopInstance: the caller's context may be the problem
+			terminateLostLaunch(api, worker, token)
+		}
+
 		return Worker{}, nil, fmt.Errorf("launching a worker for %q: %w", worker.URL, err)
 	}
 
@@ -328,6 +336,87 @@ func launchToken(labels map[string]string) string {
 	_, _ = rand.Read(nonce)
 
 	return labels[labelWorker] + "-" + hex.EncodeToString(nonce)
+}
+
+// labelLaunch tags an instance with its launch's ClientToken, the one value
+// unique to a launch: the other labels are shared by every launch of a worker
+// from this process, so a search by them could terminate a sibling's machine.
+const labelLaunch = "steps-launch"
+
+// lostLaunchSearches is how many acquirePoll-spaced searches a lost launch
+// gets, because a tag search reads a replica that lags a launch it has not
+// yet seen.
+const lostLaunchSearches = 12
+
+// refused reports whether AWS answered CreateFleet with a client fault, which
+// is a request it refused rather than one it may have acted on.
+func refused(err error) bool {
+	var apiErr smithy.APIError
+
+	return errors.As(err, &apiErr) && apiErr.ErrorFault() == smithy.FaultClient
+}
+
+// terminateLostLaunch finds and terminates what a CreateFleet with no answer
+// launched.
+//
+// Searched by tag rather than re-sent with the same ClientToken: AWS documents
+// a retry of a request that COMPLETED, not what a re-send returns while the
+// original is in flight or after it failed, nor how long a token is kept.
+func terminateLostLaunch(api ec2API, worker Worker, token string) {
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(acquirePoll)
+	defer ticker.Stop()
+
+	input := &ec2.DescribeInstancesInput{Filters: []ec2types.Filter{
+		{Name: aws.String("tag:" + labelLaunch), Values: []string{token}},
+		{Name: aws.String("instance-state-name"), Values: []string{"pending", "running", "stopping", "stopped"}},
+	}}
+
+search:
+	for range lostLaunchSearches {
+		out, err := api.DescribeInstances(ctx, input)
+		if err != nil {
+			slog.Warn("venue.lost_launch_search_failed", labelLaunch, token, "worker", worker.URL, "error", err)
+		}
+
+		if ids := describedIDs(out); len(ids) > 0 {
+			slog.Warn("venue.lost_launch_terminated", labelLaunch, token, "worker", worker.URL, "instances", ids)
+
+			for _, id := range ids {
+				terminateInstance(api, worker, id)
+			}
+
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			break search
+		case <-ticker.C:
+		}
+	}
+
+	slog.Warn("venue.lost_launch_not_found", labelLaunch, token, "worker", worker.URL,
+		"advice", "if an instance carries this tag, nothing will terminate it")
+}
+
+// describedIDs lists the instances a describe response names.
+func describedIDs(out *ec2.DescribeInstancesOutput) []string {
+	var ids []string
+
+	if out == nil {
+		return ids
+	}
+
+	for _, reservation := range out.Reservations {
+		for _, instance := range reservation.Instances {
+			ids = append(ids, aws.ToString(instance.InstanceId))
+		}
+	}
+
+	return ids
 }
 
 // terminateInstance is stopInstance for a machine that should not exist at

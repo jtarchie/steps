@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -60,6 +61,11 @@ type fakeEC2 struct {
 	// onFleet runs as CreateFleet is answered; an error it returns is what
 	// the SDK would have returned instead of the fleet.
 	onFleet func(ctx context.Context) error
+	// fleetLostAnswer is CreateFleet failing AFTER AWS launched the machine:
+	// the instance exists, tagged as asked, and the caller gets this error
+	// and no id. hiddenFor is how many tag-filtered describes miss it first.
+	fleetLostAnswer error
+	hiddenFor       int
 
 	started    []string
 	stopped    []string
@@ -70,6 +76,9 @@ type fakeEC2 struct {
 	describes int
 	probes    int
 	fleets    []*ec2.CreateFleetInput
+	// launched is every instance a lost answer left behind, by its tags.
+	launched map[string]map[string]string
+	searches int
 }
 
 func (f *fakeEC2) StartInstances(_ context.Context, in *ec2.StartInstancesInput, _ ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error) {
@@ -109,6 +118,10 @@ func (f *fakeEC2) TerminateInstances(_ context.Context, in *ec2.TerminateInstanc
 func (f *fakeEC2) DescribeInstances(_ context.Context, in *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	if len(in.Filters) > 0 {
+		return f.search(in.Filters), nil
+	}
 
 	f.probes++
 	f.describes++
@@ -157,6 +170,35 @@ func (f *fakeEC2) DescribeInstances(_ context.Context, in *ec2.DescribeInstances
 	return describeOne(state), nil
 }
 
+// search answers a tag-filtered describe from what lost answers launched.
+func (f *fakeEC2) search(filters []ec2types.Filter) *ec2.DescribeInstancesOutput {
+	f.searches++
+
+	out := &ec2.DescribeInstancesOutput{}
+	if f.searches <= f.hiddenFor {
+		return out
+	}
+
+	for _, id := range slices.Sorted(maps.Keys(f.launched)) {
+		matches := !slices.Contains(f.terminated, id)
+
+		for _, filter := range filters {
+			key, ok := strings.CutPrefix(aws.ToString(filter.Name), "tag:")
+			if ok && !slices.Contains(filter.Values, f.launched[id][key]) {
+				matches = false
+			}
+		}
+
+		if matches {
+			out.Reservations = append(out.Reservations, ec2types.Reservation{
+				Instances: []ec2types.Instance{{InstanceId: aws.String(id)}},
+			})
+		}
+	}
+
+	return out
+}
+
 // describeOne is a describe response naming one instance in one state.
 func describeOne(state ec2types.InstanceStateName) *ec2.DescribeInstancesOutput {
 	return &ec2.DescribeInstancesOutput{
@@ -177,6 +219,23 @@ func (f *fakeEC2) CreateFleet(ctx context.Context, in *ec2.CreateFleetInput, _ .
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	if f.fleetLostAnswer != nil {
+		tags := map[string]string{}
+		for _, spec := range in.TagSpecifications {
+			for _, tag := range spec.Tags {
+				tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+			}
+		}
+
+		if f.launched == nil {
+			f.launched = map[string]map[string]string{}
+		}
+
+		f.launched["i-0lost0123456789"] = tags
+
+		return nil, f.fleetLostAnswer
 	}
 
 	if f.fleetEmpty {
@@ -1145,6 +1204,8 @@ func TestLaunchTagsTheInstanceItCreates(t *testing.T) {
 	}
 
 	want := worker.launchLabels()
+	want[labelLaunch] = aws.ToString(fake.fleets[0].ClientToken)
+
 	if !maps.Equal(tags, want) || tags[labelPid] != strconv.Itoa(os.Getpid()) {
 		t.Errorf("tags = %v, want %v", tags, want)
 	}
@@ -1203,6 +1264,125 @@ func TestLaunchCancelledMidFleetTerminatesTheInstance(t *testing.T) {
 
 	if !strings.Contains(logs.String(), "i-0faced0123456789") {
 		t.Errorf("logs = %q, want the acquired instance named", logs.String())
+	}
+}
+
+// TestLaunchWhoseAnswerWasLostTerminatesTheInstance is CreateFleet failing
+// after AWS launched the machine — the bound expiring, the connection dropping
+// on the way back. No id comes back, so the launch's own tag is the only way
+// to the machine, and it must be found and terminated rather than left
+// billing. Hidden from the first search, as a tag search reads a replica that
+// may not have seen the launch yet.
+func TestLaunchWhoseAnswerWasLostTerminatesTheInstance(t *testing.T) {
+	lost := &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset by peer")}
+	fake := &fakeEC2{fleetLostAnswer: lost, hiddenFor: 1}
+	shrinkAcquireWaits(t)
+
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	var logs bytes.Buffer
+
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, release, err := launchInstance(ctx, fake, worker)
+	if !errors.Is(err, lost) {
+		t.Fatalf("err = %v, want CreateFleet's own error surfaced", err)
+	}
+
+	if release != nil {
+		t.Error("a launch with no answer returned a release")
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.terminated) != 1 || fake.terminated[0] != "i-0lost0123456789" {
+		t.Errorf("terminated = %v, want the instance the lost answer launched", fake.terminated)
+	}
+
+	token := aws.ToString(fake.fleets[0].ClientToken)
+	if fake.launched["i-0lost0123456789"][labelLaunch] != token {
+		t.Errorf("launch tag = %q, want the request's ClientToken %q", fake.launched["i-0lost0123456789"][labelLaunch], token)
+	}
+
+	if !strings.Contains(logs.String(), "i-0lost0123456789") {
+		t.Errorf("logs = %q, want the recovered instance named", logs.String())
+	}
+}
+
+// TestLaunchRefusedTerminatesNothing is AWS saying no: a client fault means
+// the request was refused, so nothing launched and there is nothing to look
+// for — a search would only hold the refusal back from the caller.
+func TestLaunchRefusedTerminatesNothing(t *testing.T) {
+	refused := &smithy.GenericAPIError{Code: "InvalidLaunchTemplateId.NotFound", Message: "no such template", Fault: smithy.FaultClient}
+	fake := &fakeEC2{onFleet: func(context.Context) error { return refused }}
+	shrinkAcquireWaits(t)
+
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	_, release, err := launchInstance(context.Background(), fake, worker)
+	if !errors.Is(err, refused) || release != nil {
+		t.Fatalf("err = %v, release = %v; want the refusal surfaced and no release", err, release != nil)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.terminated) != 0 || fake.searches != 0 {
+		t.Errorf("terminated = %v after %d searches, want a refusal left alone", fake.terminated, fake.searches)
+	}
+}
+
+// TestLaunchLostWithNothingLaunchedTerminatesNothing is the same lost answer
+// for a request AWS never acted on: the search comes back empty however long
+// it looks, nothing is terminated, and the tag it searched for is logged so a
+// launch that lands after the search gave up is still findable.
+func TestLaunchLostWithNothingLaunchedTerminatesNothing(t *testing.T) {
+	lost := context.DeadlineExceeded
+	fake := &fakeEC2{onFleet: func(context.Context) error { return lost }}
+	shrinkAcquireWaits(t)
+
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	var logs bytes.Buffer
+
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	_, _, err = launchInstance(context.Background(), fake, worker)
+	if !errors.Is(err, lost) {
+		t.Fatalf("err = %v, want CreateFleet's own error surfaced", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.terminated) != 0 {
+		t.Errorf("terminated = %v, want nothing", fake.terminated)
+	}
+
+	if fake.searches < 2 {
+		t.Errorf("searched %d times, want the search to outlast one lagging replica", fake.searches)
+	}
+
+	token := aws.ToString(fake.fleets[0].ClientToken)
+	if !strings.Contains(logs.String(), token) {
+		t.Errorf("logs = %q, want the launch tag %q named", logs.String(), token)
 	}
 }
 
