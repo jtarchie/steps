@@ -364,12 +364,21 @@ func TestOTelGaugesTheDaemonsQueue(t *testing.T) {
 	collector := newOTLPCollector(t)
 	t.Setenv("OTEL_METRIC_EXPORT_INTERVAL", "100")
 
-	path := pipelinePath(t, t.TempDir())
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	hold := filepath.Join(dir, "hold")
+
+	err := os.WriteFile(hold, nil, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := pipelinePath(t, dir)
 	writePipelineFile(t, path, `jobs:
 - name: build
   plan:
   - task: hold
-    run: sleep 30
+    run: touch `+started+`; while [ -e `+hold+` ]; do sleep 0.05; done
 - name: lint
   plan:
   - task: check
@@ -378,14 +387,26 @@ func TestOTelGaugesTheDaemonsQueue(t *testing.T) {
 
 	served := startWebFor(t, path)
 	defer served.stopIfRunning(t)
+	// Deferred after the stop so it runs first: the held build ends before SIGINT instead of outliving the shutdown wait.
+	defer func() { _ = os.Remove(hold) }()
 
 	name := cli.PipelineName(path)
-	// One build runs and holds the pipeline's only slot; a second build and a lint wait behind it, so pending (2) cannot be mistaken for running (1).
 	served.trigger(t, name, "build")
+
+	deadline := time.Now().Add(10 * time.Second)
+	for !fileExists(started) {
+		if time.Now().After(deadline) {
+			t.Fatal("the first build never started")
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Only once the first build holds the pipeline's one worker: a build triggered while another is still pending merges into it (idx_trigger_queue_pending_job), so pending would read 1.
 	served.trigger(t, name, "build")
 	served.trigger(t, name, "lint")
 
-	deadline := time.Now().Add(10 * time.Second)
+	deadline = time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if gaugeValue(collector.latest("steps.queue.pending"), map[string]string{"steps.pipeline": name}) == 2 {
 			return
