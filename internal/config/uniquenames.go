@@ -30,11 +30,11 @@ func (c *Config) validateUniqueNames(source []byte) error {
 		key   string
 		names []string
 	}{
-		{"resource_types", namesOf(c.ResourceTypes, func(r ResourceType) string { return r.Name })},
-		{"resources", namesOf(c.Resources, func(r Resource) string { return r.Name })},
-		{"agents", namesOf(c.Agents, func(a Agent) string { return a.Name })},
-		{"tasks", namesOf(c.Tasks, func(t Task) string { return t.Name })},
-		{"jobs", namesOf(c.Jobs, func(j Job) string { return j.Name })},
+		{"resource_types", names(c.ResourceTypes, func(r ResourceType) string { return r.Name })},
+		{"resources", names(c.Resources, func(r Resource) string { return r.Name })},
+		{"agents", names(c.Agents, func(a Agent) string { return a.Name })},
+		{"tasks", names(c.Tasks, func(t Task) string { return t.Name })},
+		{"jobs", names(c.Jobs, func(j Job) string { return j.Name })},
 	}
 
 	var errs []error
@@ -61,15 +61,6 @@ func (c *Config) validateUniqueNames(source []byte) error {
 	}
 
 	return errors.Join(errs...)
-}
-
-func namesOf[T any](items []T, name func(T) string) []string {
-	names := make([]string, len(items))
-	for i, item := range items {
-		names[i] = name(item)
-	}
-
-	return names
 }
 
 // entryLabel renders `jobs[2] (line 9)`, dropping the line when the node tree does not reach that entry.

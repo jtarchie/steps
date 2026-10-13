@@ -639,7 +639,7 @@ var httpClient = &http.Client{}
 
 // CloseIdleConnections releases the keep-alive connections a run left behind.
 // Called when an evaluation finishes so a test's goroutine leak check sees a
-// quiet package, and so a long watch loop does not hold sockets to an API it
+// quiet package, and so a long-running poll loop does not hold sockets to an API it
 // polls every few minutes.
 func CloseIdleConnections() {
 	httpClient.CloseIdleConnections()

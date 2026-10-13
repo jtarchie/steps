@@ -280,8 +280,10 @@ linters:
             - "go.uber.org/goleak"
             # Test-only: the volume round trip through an ssh streamlocal forward, the docker+ssh:// data plane.
             - "github.com/jtarchie/steps/internal/testsshd"
-        # Leaves: no internal deps, stdlib only apart from the engine client
-        # that container execution is now built on.
+        # shell runs a step's commands, on the host or in a container. Its
+        # only internal edges are two leaves: dockerapi, the engine client
+        # container execution is built on, and events, for notes and the
+        # renderer's output streams.
         Shell:
           files:
             - "**/internal/shell/**"
@@ -332,10 +334,12 @@ linters:
             # goleak is test-only: goleak_test.go's TestMain fails this
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
-        # runview folds recorded run events into the step tree a reader sees.
-        # Shared by both front ends (web, and the terminal renderer in cli) so
-        # the two cannot drift; it reads rows and renders nothing, which is
-        # why it needs the store's row types and the event names and no more.
+        # runview folds recorded run events into the step tree a reader sees,
+        # and holds the bus observers that draw a run (Plain, Live, Log).
+        # Shared by both front ends (web, and the terminal in cli) so the two
+        # cannot drift; it writes to the io.Writer or logger it is handed and
+        # opens nothing, which is why it needs the store's row types and the
+        # event names and no more.
         Runview:
           files:
             - "**/internal/runview/**"

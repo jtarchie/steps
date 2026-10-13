@@ -53,7 +53,7 @@ type CacheConfig struct {
 	Resources bool `yaml:"resources"`
 	// MaxEntries bounds how many cached versions are kept, oldest-used
 	// evicted first. 0 takes defaultCacheMaxEntries. A cache with no ceiling
-	// grows until the disk does not, which on a long-lived watch host is a
+	// grows until the disk does not, which on a long-lived daemon host is a
 	// question of when, not whether.
 	MaxEntries int `yaml:"max_entries,omitempty"`
 }

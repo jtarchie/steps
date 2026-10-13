@@ -4,7 +4,6 @@ package config
 
 import (
 	"fmt"
-	"log/slog"
 
 	"gopkg.in/yaml.v3"
 )
@@ -147,15 +146,5 @@ func (f *FixSpec) UnmarshalYAML(value *yaml.Node) error {
 
 // FindTask returns the task with the given name, or an error if not found.
 func (c *Config) FindTask(name string) (*Task, error) {
-	slog.Debug("task.find", "name", name)
-
-	for i := range c.Tasks {
-		if c.Tasks[i].Name == name {
-			slog.Debug("task.find", "name", name, "found", true)
-
-			return &c.Tasks[i], nil
-		}
-	}
-
-	return nil, notFound("task", name, names(c.Tasks, func(t Task) string { return t.Name }))
+	return findNamed("task", name, c.Tasks, func(t Task) string { return t.Name })
 }

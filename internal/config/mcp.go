@@ -5,7 +5,6 @@ package config
 // grant, and a resource type's check/in/out backend.
 
 import (
-	"log/slog"
 	"path/filepath"
 	"slices"
 )
@@ -140,7 +139,7 @@ func (s MCPServer) IsStdio() bool {
 // read from an OS environment variable named by APIKeyEnv — mirrors
 // AgentSource.APIKeyEnv exactly: the credential is never stored in YAML),
 // or "oauth" (interactive authorization-code + PKCE via `steps mcp login`,
-// with silent refresh at run/watch time — see internal/mcp).
+// with silent refresh at run time — see internal/mcp).
 //
 // ClientID/ClientSecretEnv are the oauth-only escape hatch for an
 // authorization server that does not offer dynamic client registration —
@@ -173,17 +172,7 @@ type MCPServerAuth struct {
 // FindMCPServer returns the mcp_servers: entry with the given name, or an
 // error if not found.
 func (c *Config) FindMCPServer(name string) (*MCPServer, error) {
-	slog.Debug("mcp_server.find", "name", name)
-
-	for i := range c.MCPServers {
-		if c.MCPServers[i].Name == name {
-			slog.Debug("mcp_server.find", "name", name, "found", true)
-
-			return &c.MCPServers[i], nil
-		}
-	}
-
-	return nil, notFound("mcp_servers entry", name, names(c.MCPServers, func(s MCPServer) string { return s.Name }))
+	return findNamed("mcp_servers entry", name, c.MCPServers, func(s MCPServer) string { return s.Name })
 }
 
 // MCPServerUsers names everything that references the mcp_servers: entry

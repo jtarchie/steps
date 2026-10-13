@@ -19,13 +19,7 @@ type WebhookEnv struct {
 
 // Webhook compiles an expression over one webhook delivery into a plain func; it is pure (no env(), http(), file(), fail() or clock), so compiling once when the pipeline is set is safe, and wantBool makes a non-boolean filter: a compile error.
 func Webhook(src string, wantBool bool) (func(env WebhookEnv) (any, error), error) {
-	options := []expr.Option{
-		expr.Env(WebhookEnv{}),
-		expr.DisableBuiltin("now"),
-		expr.DisableBuiltin("date"),
-		expr.DisableBuiltin("duration"),
-		expr.DisableBuiltin("timezone"),
-	}
+	options := append([]expr.Option{expr.Env(WebhookEnv{})}, clockBans()...)
 
 	if wantBool {
 		options = append(options, expr.AsBool())

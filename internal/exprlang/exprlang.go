@@ -70,7 +70,7 @@ type Input struct {
 
 // Compile parses and type-checks one slot's expression without running it, so
 // a syntax error is reported by `steps validate` and by preflight rather than
-// halfway through a watch loop.
+// halfway through a poll loop.
 //
 // It cannot be reported at LOAD time: internal/config depends on nothing
 // internal and imports no third-party code but the YAML parser (enforced by
@@ -176,6 +176,12 @@ func slotBuiltinBans(slot Slot) []expr.Option {
 		return nil
 	}
 
+	return clockBans()
+}
+
+// clockBans disables expr's clock builtins for an expression that must be a
+// pure function of its inputs.
+func clockBans() []expr.Option {
 	return []expr.Option{
 		expr.DisableBuiltin("now"),
 		expr.DisableBuiltin("date"),
@@ -187,7 +193,7 @@ func slotBuiltinBans(slot Slot) []expr.Option {
 // run compiles and evaluates one slot, returning the raw result.
 //
 // Idle connections are released when the expression finishes rather than
-// held: a watch loop polls minutes apart, so a kept-alive socket is more
+// held: the poll loop polls minutes apart, so a kept-alive socket is more
 // likely to be a dead one the next poll has to notice than a saved
 // handshake. It also leaves the package quiet enough for a goroutine leak
 // check to be meaningful.

@@ -38,9 +38,9 @@ type Problem struct {
 	// It exists because the same problem deserves opposite reactions from the
 	// two callers. `steps run` refuses either way: a person is waiting, and
 	// starting a run that cannot finish wastes their time and money. `steps
-	// watch` is a daemon, and quitting because a VPN was not up yet — or
+	// web` is a daemon, and quitting because a VPN was not up yet — or
 	// because a token needed the refresh the next poll would have done — is
-	// how a watcher that should have recovered on its own ends up dead all
+	// how a daemon that should have recovered on its own ends up dead all
 	// weekend.
 	Transient bool
 }

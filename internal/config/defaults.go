@@ -88,7 +88,7 @@ type Defaults struct {
 // Smaller than DefaultVersionHistory by an order of magnitude, and deliberately:
 // a version is a few dozen bytes and a run is tens of kilobytes, so the same
 // number would make these two caps mean very different things. A hundred runs
-// is far more than anyone scrolls back through while keeping a busy watch's
+// is far more than anyone scrolls back through while keeping a busy daemon's
 // database in the low tens of megabytes.
 const DefaultRunHistory = 100
 

@@ -24,8 +24,9 @@ type Config struct {
 	MCPServers    []MCPServer    `yaml:"mcp_servers,omitempty"`
 	Tasks         []Task         `yaml:"tasks"`
 	Jobs          []Job          `yaml:"jobs"`
-	// Defaults supplies pipeline-wide fallbacks — currently just the model
-	// every agent uses when it names none. See Defaults.
+	// Defaults supplies pipeline-wide fallbacks and bounds: the model an
+	// agent uses when it names none, preflight tuning, the delegation budget,
+	// and the version/run/memory caps. See Defaults.
 	Defaults *Defaults `yaml:"defaults,omitempty"`
 	// Workspace opts the pipeline into Concourse-style per-step isolation.
 	// Absent (the default) keeps every step in a triggered build sharing one
@@ -39,8 +40,8 @@ type Config struct {
 	// Name is WHICH pipeline this is, stamped by the loader. Not YAML, never
 	// hashed: it is identity, not content.
 	//
-	// It exists because one process can serve several pipelines (`steps web
-	// app.yml infra.yml`), and process-wide state keyed by a name a pipeline
+	// It exists because one daemon serves several pipelines (each uploaded by
+	// `steps pipeline set`), and process-wide state keyed by a name a pipeline
 	// chose — an agent, a job — collides across them. The Config holds it for
 	// the same reason a store.Store handle holds its pipeline: the scope has to be
 	// impossible to forget.
@@ -295,10 +296,8 @@ func (c *Config) validate() error {
 }
 
 // validateCredentialHandling groups validateAgentEndpoints and every
-// mcp_servers:-related check — split out of validate() itself to keep that
-// function's branch count down (cyclop); all of it is trust-boundary
-// validation around how a config references an external system's endpoint
-// and credentials.
+// mcp_servers:-related check: all of it is trust-boundary validation around
+// how a config references an external system's endpoint and credentials.
 func (c *Config) validateCredentialHandling() error {
 	err := c.validateAgentEndpoints()
 	if err != nil {

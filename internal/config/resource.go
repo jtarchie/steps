@@ -5,7 +5,6 @@ package config
 
 import (
 	"fmt"
-	"log/slog"
 	"slices"
 	"strings"
 )
@@ -339,17 +338,7 @@ func (c *Config) validateStepResource() error {
 
 // FindResource returns the resource with the given name, or an error if not found.
 func (c *Config) FindResource(name string) (*Resource, error) {
-	slog.Debug("resource.find", "name", name)
-
-	for i := range c.Resources {
-		if c.Resources[i].Name == name {
-			slog.Debug("resource.find", "name", name, "type", c.Resources[i].Type, "found", true)
-
-			return &c.Resources[i], nil
-		}
-	}
-
-	return nil, notFound("resource", name, names(c.Resources, func(r Resource) string { return r.Name }))
+	return findNamed("resource", name, c.Resources, func(r Resource) string { return r.Name })
 }
 
 // ResourceNames lists every resource this job's plan touches — the resource
@@ -488,8 +477,8 @@ func (j Job) TriggersOn(resourceName string) bool {
 //
 // Job-scoped is the useful scope for a `steps run`: whether THIS job can work
 // cannot depend on how some other job spells its own put to a resource this
-// one only gets. Config.PutSteps is the whole-pipeline form, for `steps
-// watch`, which is going to run every job.
+// one only gets. Config.PutSteps is the whole-pipeline form, for the
+// daemon, which is going to run every job.
 func (j Job) PutSteps(resource string) []Step {
 	var steps []Step
 
@@ -586,15 +575,5 @@ func stepIsPolled(step Step) bool {
 
 // FindResourceType returns the resource type with the given name, or an error if not found.
 func (c *Config) FindResourceType(name string) (*ResourceType, error) {
-	slog.Debug("resource_type.find", "name", name)
-
-	for i := range c.ResourceTypes {
-		if c.ResourceTypes[i].Name == name {
-			slog.Debug("resource_type.find", "name", name, "found", true)
-
-			return &c.ResourceTypes[i], nil
-		}
-	}
-
-	return nil, notFound("resource_type", name, names(c.ResourceTypes, func(rt ResourceType) string { return rt.Name }))
+	return findNamed("resource_type", name, c.ResourceTypes, func(rt ResourceType) string { return rt.Name })
 }

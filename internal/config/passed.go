@@ -10,8 +10,8 @@ import (
 // validatePassed enforces that passed: is a get-step field naming real jobs
 // that actually get or put the same resource.
 //
-// This is a correctness gap rather than a convenience: without it, `steps
-// watch` can trigger `deploy` on a commit that the `test` job already FAILED
+// This is a correctness gap rather than a convenience: without it, the
+// daemon can trigger `deploy` on a commit that the `test` job already FAILED
 // on, and there is no way to express "don't deploy unless the tests were green
 // for this exact commit".
 func (c *Config) validatePassed() error {

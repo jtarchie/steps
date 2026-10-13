@@ -5,7 +5,6 @@ package config
 
 import (
 	"fmt"
-	"log/slog"
 	"net/url"
 	"path"
 	"strings"
@@ -461,17 +460,7 @@ func (c *Config) validateAgentCompaction() error {
 
 // FindAgent returns the agent with the given name, or an error if not found.
 func (c *Config) FindAgent(name string) (*Agent, error) {
-	slog.Debug("agent.find", "name", name)
-
-	for i := range c.Agents {
-		if c.Agents[i].Name == name {
-			slog.Debug("agent.find", "name", name, "found", true)
-
-			return &c.Agents[i], nil
-		}
-	}
-
-	return nil, notFound("agent", name, names(c.Agents, func(a Agent) string { return a.Name }))
+	return findNamed("agent", name, c.Agents, func(a Agent) string { return a.Name })
 }
 
 // validateAgentEndpoints rejects an agents: entry whose source.endpoint:

@@ -19,6 +19,28 @@ func notFound(kind, name string, available []string) error {
 	return fmt.Errorf("no %s named %q%s (available: %v)", kind, name, suggestion(name, available), available)
 }
 
+// findNamed is every Find* lookup but FindJob's: the entry called name, or
+// notFound naming kind.
+func findNamed[T any](kind, name string, entries []T, get func(T) string) (*T, error) {
+	found := lookup(entries, name, get)
+	if found == nil {
+		return nil, notFound(kind, name, names(entries, get))
+	}
+
+	return found, nil
+}
+
+// lookup is the entry called name, or nil.
+func lookup[T any](entries []T, name string, get func(T) string) *T {
+	for i := range entries {
+		if get(entries[i]) == name {
+			return &entries[i]
+		}
+	}
+
+	return nil
+}
+
 // names collects the Name field of every entry, in declaration order, via get.
 func names[T any](entries []T, get func(T) string) []string {
 	out := make([]string, 0, len(entries))

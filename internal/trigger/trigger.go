@@ -68,36 +68,25 @@ type PollStore interface {
 	store.Control
 }
 
-// Poll is the producer half of a watching process: it validates and preflights
-// the pipeline, then checks every trigger: true resource on an interval and
-// enqueues the jobs a version change affects, until ctx is canceled. It never
-// drains the queue.
+// Poll is the producer half of the daemon: it checks every trigger: true
+// resource on an interval and enqueues the jobs a version change affects,
+// until ctx is canceled. It never drains the queue — `steps web` drains it
+// through its own in-process runner, and a second set of workers here would
+// claim rows out from under it.
 //
-// The split exists because `steps web` drains the same queue through its own
-// in-process runner: a second set of workers here would claim rows out from
-// under it, and the two would report each other's runs. It was once paired
-// with a Watch that did both halves in this package; there is one daemon now,
-// so only the producer half remains here.
-//
-// Three things stay the caller's, because the answer differs by front end:
+// Two things stay the caller's:
 //
 //   - startup reconciliation (ResetStaleRunning and the serial-group /
-//     max-in-flight syncs). Whoever owns the drain owns
-//     that, since it is the drain's admission it repairs.
-//   - the store handle. Pass the one the drain already uses: a Store is a
-//     single pooled connection (SetMaxOpenConns(1)), so sharing it serializes
-//     this loop's writes behind that pool instead of putting a second
-//     connection on the same file to contend for its write lock. One handle
-//     per pipeline, never one per loop.
-//   - the configuration, as a SOURCE rather than a value. The daemon reloads
-//     its pipeline file while this loop runs, and a loop holding the config
-//     it started with would go on checking resources the operator deleted and
-//     never check the ones they added — a poller quietly polling a file that
-//     no longer exists. Each cycle takes the current one; only the startup
-//     checks below read it once, because that is when they run.
+//     max-in-flight syncs). Whoever owns the drain owns that, since it is the
+//     drain's admission it repairs.
+//   - the configuration, as a SOURCE rather than a value. A `steps pipeline
+//     set` replaces it while this loop runs, and a loop holding the config it
+//     started with would go on checking resources the operator deleted and
+//     never check the ones they added. Each cycle reads the current one, and
+//     admission re-validates and re-preflights whenever it changes.
 func Poll(ctx context.Context, current ConfigSource, st PollStore, interval time.Duration) error {
 	if interval <= 0 {
-		return fmt.Errorf("watch: interval must be positive, got %s", interval)
+		return fmt.Errorf("trigger: interval must be positive, got %s", interval)
 	}
 
 	runPoller(ctx, current, st, interval)
@@ -106,7 +95,7 @@ func Poll(ctx context.Context, current ConfigSource, st PollStore, interval time
 }
 
 // ConfigSource hands out the configuration to poll against, which the daemon
-// swaps under this loop when its pipeline file changes.
+// swaps under this loop when the pipeline is set again.
 type ConfigSource func() *config.Config
 
 // preflightTriggers proves every trigger resource can actually be checked,
@@ -116,9 +105,9 @@ type ConfigSource func() *config.Config
 // A trigger resource whose check can never succeed — an mcp: tool the server
 // does not expose, or one whose required arguments this pipeline never sends
 // — is a permanent misconfiguration, and the poll loop's own reaction to it
-// (log the error, wait, try again) hides that for as long as the watcher
+// (log the error, wait, try again) hides that for as long as the daemon
 // runs: nothing red, nothing running, nothing enqueued, forever. Say it once,
-// at the top, and exit non-zero.
+// up front, and leave the configuration unpolled until it changes.
 //
 // The agents are checked here for the same reason and against a quieter
 // failure: their servers were only ever probed by the per-job preflight, so
@@ -135,12 +124,12 @@ func preflightTriggers(ctx context.Context, cfg *config.Config, resources []stri
 		return nil
 	}
 
-	// A watcher is a daemon, so only a problem that WAITING cannot fix earns
-	// an exit. A server that did not answer, or a token a refresh would have
+	// Only a problem that WAITING cannot fix stops this configuration being
+	// polled. A server that did not answer, or a token a refresh would have
 	// renewed, is said once and then left to the poll loop, which retries by
-	// its very nature — quitting there is how a watcher that should have come
-	// back on its own is found dead on Monday. A tool the server does not
-	// expose still exits: no interval will grow it one.
+	// its very nature — refusing there is how a poller that should have come
+	// back on its own is found idle on Monday. A tool the server does not
+	// expose still refuses: no interval will grow it one.
 	var (
 		out      strings.Builder
 		terminal bool
@@ -150,7 +139,7 @@ func preflightTriggers(ctx context.Context, cfg *config.Config, resources []stri
 
 	for _, problem := range problems {
 		if problem.Transient {
-			slog.WarnContext(ctx, "watch.preflight_transient", "target", problem.Target, "detail", problem.Detail)
+			slog.WarnContext(ctx, "trigger.preflight_transient", "target", problem.Target, "detail", problem.Detail)
 
 			continue
 		}
@@ -194,19 +183,19 @@ func runPoller(ctx context.Context, current ConfigSource, st PollStore, interval
 // Once per CONFIGURATION is the whole design. The check it gates —
 // preflightTriggers — proves a trigger resource can be checked at all, and it
 // used to run once before the loop started, which was right when a
-// configuration lasted as long as the process. Under a daemon that reloads it
-// was wrong in both directions: a resource added by an edit was never
+// configuration lasted as long as the process. Under a daemon whose pipelines
+// are set again while it runs, it was wrong in both directions: a resource added by an edit was never
 // preflighted, so an unsatisfiable one logged the same error every cycle
 // forever — exactly the failure the check exists to prevent — and a pipeline
 // that gained its FIRST trigger: true get was never polled at all, because
 // the decision not to poll had been taken at startup and never revisited.
 //
 // A configuration that cannot be polled is not an error the loop exits on. It
-// is a state the loop sits in until the file changes, which is the only thing
-// that can change the answer.
+// is a state the loop sits in until the pipeline is set again, which is the
+// only thing that can change the answer.
 type admission struct {
 	// decided is the configuration this verdict is about, compared by
-	// identity: a reload stores a new pointer, and nothing else does.
+	// identity: a set stores a new pointer, and nothing else does.
 	decided  *config.Config
 	pollable bool
 }
@@ -332,7 +321,7 @@ type observedResource struct {
 // (at-least-once) rather than silently consumed. A resource checked for the
 // first time ever seeds a baseline and is never itself considered dirty on
 // that first check — this keeps a fresh (or freshly lost) state db from
-// mass-triggering every job on watch startup.
+// mass-triggering every job on daemon startup.
 func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, error) {
 	observed := map[string]observedResource{}
 
@@ -610,7 +599,7 @@ func jobAlreadyRanThese(
 // jobReadyFor reports whether every passed: constraint the job declares is
 // satisfied by some recorded version — the newest green one per resource.
 //
-// This is the correctness gap passed: exists to close: without it, watch can
+// This is the correctness gap passed: exists to close: without it, the poll loop can
 // trigger `deploy` on a commit the `test` job ALREADY FAILED on, and there is
 // no way to say "don't deploy unless the tests were green for this exact
 // commit".
@@ -874,7 +863,7 @@ func recordHistory(
 
 	// Said out loud because the check's own "versions=N" line reads as N
 	// pending triggers to anyone who doesn't know the cold-start rule — and
-	// a first watch after deleting the state db is exactly when someone is
+	// a first poll after deleting the state db is exactly when someone is
 	// staring at the log deciding whether to ^C.
 	slog.InfoContext(ctx, "trigger.cold_start", "resource", resourceName, "versions_recorded", len(obs.versions),
 		"note", "first-ever check: everything below the newest recorded as already taken; the newest triggers once")
@@ -925,7 +914,7 @@ func seedColdStart(ctx context.Context, cfg *config.Config, st PollStore, resour
 // Marking the whole window (which this did until the rule changed) meant a
 // fresh — or freshly deleted — state database could never build anything
 // until something new arrived, which for a resource that changes slowly is
-// indistinguishable from a watcher that does not work. Concourse builds the
+// indistinguishable from a poll loop that does not work. Concourse builds the
 // version its first check reports; this is the same outcome for a check that
 // reports a window rather than only its current version.
 //

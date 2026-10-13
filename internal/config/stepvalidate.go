@@ -80,9 +80,6 @@ func (c *Config) validateStepReferences() error {
 // validateStepKinds reports that on its own rather than having every caller
 // repeat it.
 func (c *Config) resolveStepReference(step *Step) error {
-	// A load_var: names a file, not a pipeline entity, so there is nothing to
-	// resolve against resources, tasks, or agents — same as a malformed step,
-	// whose kind another validator reports.
 	// A load_var: names a file and an approval: names a person; neither
 	// references a pipeline entity, same as a malformed step whose kind
 	// another validator reports.
@@ -186,11 +183,7 @@ func checkStepFieldPlacement(label string, step *Step) error {
 }
 
 // checkResourceOnlyFields places the fields that only a get or a put can act
-// on. params: is valid on BOTH, matching Concourse: a put's params reach out:,
-// a get's reach in: (concourse-ci.org/docs/steps/get/). A get's params are how
-// a resource is told HOW to fetch — git's depth: and submodules:, s3's unpack:
-// — which is per-get rather than per-resource, and so cannot live in source:
-// without forcing two resources for two fetch styles of one repository.
+// on; why params: is valid on both is on validateStepFieldPlacement.
 func checkResourceOnlyFields(label string, step *Step) error {
 	isGet, isPut := step.Get != "", step.Put != ""
 

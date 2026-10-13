@@ -4,7 +4,6 @@ package config
 
 import (
 	"fmt"
-	"log/slog"
 )
 
 // Job is a named sequence of steps to run.
@@ -144,14 +143,9 @@ func (j Job) label() string {
 
 // FindJob returns the job with the given name, or an error if not found.
 func (c *Config) FindJob(name string) (*Job, error) {
-	slog.Debug("job.find", "name", name)
-
-	for i := range c.Jobs {
-		if c.Jobs[i].Name == name {
-			slog.Debug("job.find", "name", name, "steps", len(c.Jobs[i].Plan), "found", true)
-
-			return &c.Jobs[i], nil
-		}
+	job := lookup(c.Jobs, name, func(j Job) string { return j.Name })
+	if job != nil {
+		return job, nil
 	}
 
 	return nil, fmt.Errorf("no job named %q (available: %v)", name, c.JobNames())

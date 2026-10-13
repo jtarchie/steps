@@ -8,11 +8,12 @@ import (
 	"time"
 )
 
-// agentRetryBackoffUnit is the linear-backoff step between attempts. It's
-// deliberately coarse: these attempts wrap a network round trip to an LLM
-// endpoint (rate limiting, transient 5xx), where a short pause is more
-// likely to help than to waste time.
-const agentRetryBackoffUnit = 500 * time.Millisecond
+// backoffUnit is the linear-backoff step between attempts, for every
+// `attempts:` loop — task, get, put and agent steps alike. It's deliberately
+// coarse: the faults worth retrying are transient (a rate limit, a 5xx, a
+// flaky network), where a short pause is more likely to help than to waste
+// time.
+const backoffUnit = 500 * time.Millisecond
 
 // stopError marks an error as not worth retrying. It wraps, so errors.As sees
 // through fmt.Errorf chains — the same shape as outcome.Failure.
@@ -64,7 +65,7 @@ func StopOnDeadline(ctx, attemptCtx context.Context, err error) error {
 
 // Do calls fn up to attempts times (attempts < 1 is treated as 1),
 // stopping at the first success. Between attempts it sleeps
-// attempt*agentRetryBackoffUnit, growing the pause linearly with each
+// attempt*backoffUnit, growing the pause linearly with each
 // retry. ctx cancellation aborts immediately. An error fn wrapped with Stop
 // ends the loop at once (see Stop). The last error is returned if every
 // attempt fails.
@@ -80,7 +81,7 @@ func Do(ctx context.Context, attempts int, fn func(attempt int) error) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err() //nolint:wrapcheck // ctx.Err() is a well-known sentinel (context.Canceled/DeadlineExceeded), wrapping adds no information
-			case <-time.After(time.Duration(attempt) * agentRetryBackoffUnit):
+			case <-time.After(time.Duration(attempt) * backoffUnit):
 			}
 		}
 
