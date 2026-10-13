@@ -4,6 +4,8 @@ package shell
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
@@ -91,9 +93,6 @@ func ownerHostname() string {
 // Entirely best-effort: every failure is logged and none is returned. Running
 // the pipeline matters more than tidying up before it.
 func SweepOrphanedContainers(ctx context.Context, dockerHost string) {
-	ctx, cancel := context.WithTimeout(ctx, dockerSweepTimeout)
-	defer cancel()
-
 	client, err := dockerapi.New(dockerHost)
 	if err != nil {
 		slog.DebugContext(ctx, "shell.docker.sweep_unavailable", "error", err)
@@ -129,8 +128,8 @@ func SweepOrphanedContainersOn(ctx context.Context, client *dockerapi.Client) {
 // OwnerHost is the hostname this process labels what it leaves on other machines with.
 func OwnerHost() string { return ownerHostname() }
 
-// ProcessAlive reports whether pid names a live process on this machine.
-func ProcessAlive(pid int) bool { return processAlive(pid) }
+// ProcessGone reports whether pid definitely names no process on this machine; a pid it cannot check is not gone.
+func ProcessGone(pid int) bool { return processGone(pid) }
 
 // listOrphanedContainers returns the ids of our containers whose owning
 // process is gone.
@@ -153,7 +152,7 @@ func listOrphanedContainers(ctx context.Context, client *dockerapi.Client) []str
 			continue
 		}
 
-		if processAlive(pid) {
+		if !processGone(pid) {
 			continue
 		}
 
@@ -175,27 +174,39 @@ func ownerPID(label string) (int, bool) {
 	return pid, true
 }
 
-// processAlive reports whether pid names a live process on this machine.
+type liveness int
+
+const (
+	alive liveness = iota
+	gone
+	unknown
+)
+
+// signalZero performs the existence and permission checks without delivering anything. A variable so a test can stand in for a platform (Windows) where the probe cannot answer.
 //
-// Signal 0 performs the existence and permission checks without delivering
-// anything — the standard way to ask. os.FindProcess never fails on unix, so
-// the signal is the whole test. EPERM counts as alive: the process exists,
-// it just is not ours, and a container belonging to another user's live run is
-// emphatically not an orphan.
-func processAlive(pid int) bool {
+//nolint:gochecknoglobals // a test seam over one syscall, not state
+var signalZero = func(pid int) error {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
-		return false
+		return fmt.Errorf("find process %d: %w", pid, err)
 	}
 
-	err = proc.Signal(syscall.Signal(0))
-	if err == nil {
-		return true
-	}
-
-	return errorIsPermission(err)
+	return proc.Signal(syscall.Signal(0))
 }
 
-func errorIsPermission(err error) bool {
-	return strings.Contains(err.Error(), "operation not permitted") || os.IsPermission(err)
+// classifyProbe reads signalZero's answer. EPERM is alive: the process exists and is not ours, and another user's live run is not an orphan. Anything other than a definite "no such process" is unknown, which callers must treat as alive.
+func classifyProbe(err error) liveness {
+	switch {
+	case err == nil, errors.Is(err, syscall.EPERM):
+		return alive
+	case errors.Is(err, syscall.ESRCH), errors.Is(err, os.ErrProcessDone):
+		return gone
+	default:
+		return unknown
+	}
+}
+
+// processGone reports whether pid definitely names no process on this machine.
+func processGone(pid int) bool {
+	return classifyProbe(signalZero(pid)) == gone
 }

@@ -1,8 +1,12 @@
 package shell
 
 import (
+	"errors"
+	"net/http"
 	"os"
 	"strconv"
+	"sync/atomic"
+	"syscall"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/dockerapi"
@@ -74,12 +78,12 @@ func TestOwnerPID(t *testing.T) {
 func TestProcessAliveRecognizesThisProcess(t *testing.T) {
 	t.Parallel()
 
-	if !processAlive(os.Getpid()) {
-		t.Error("processAlive said this very process is dead")
+	if ProcessGone(os.Getpid()) {
+		t.Error("ProcessGone said this very process is dead")
 	}
 
-	if !processAlive(1) {
-		t.Error("processAlive said pid 1 is dead; a permission error must count as alive")
+	if ProcessGone(1) {
+		t.Error("ProcessGone said pid 1 is dead; a permission error must count as alive")
 	}
 }
 
@@ -88,8 +92,8 @@ func TestProcessAliveRecognizesThisProcess(t *testing.T) {
 func TestProcessAliveRejectsAnImpossiblePid(t *testing.T) {
 	t.Parallel()
 
-	if processAlive(1 << 30) {
-		t.Error("processAlive said an impossible pid is alive")
+	if !ProcessGone(1 << 30) {
+		t.Error("ProcessGone said an impossible pid is alive")
 	}
 }
 
@@ -140,5 +144,64 @@ func TestOwnerHostIsThisMachine(t *testing.T) {
 
 	if got := OwnerHost(); got != want {
 		t.Errorf("OwnerHost() = %q, want %q", got, want)
+	}
+}
+
+// A probe the platform cannot answer (Windows has no signal 0) is not a dead process: removing on it sweeps containers out from under running steps.
+func TestClassifyProbe(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		err  error
+		want liveness
+	}{
+		{name: "answered", err: nil, want: alive},
+		{name: "not ours", err: syscall.EPERM, want: alive},
+		{name: "not ours, wrapped", err: &os.SyscallError{Syscall: "kill", Err: syscall.EPERM}, want: alive},
+		{name: "no such process", err: syscall.ESRCH, want: gone},
+		{name: "already reaped", err: os.ErrProcessDone, want: gone},
+		{name: "unsupported", err: errors.New("not supported by windows"), want: unknown},
+		{name: "permission-shaped text only", err: errors.New("operation not permitted"), want: unknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := classifyProbe(tc.err); got != tc.want {
+				t.Errorf("classifyProbe(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSweepLeavesAContainerWhoseOwnerCannotBeChecked(t *testing.T) {
+	previous := signalZero
+	signalZero = func(int) error { return errors.New("not supported by windows") }
+
+	t.Cleanup(func() { signalZero = previous })
+
+	var removed atomic.Bool
+
+	client := fakeEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			writeJSONResponse(t, w, http.StatusOK, []map[string]any{{
+				"Id":     "in-use",
+				"Labels": map[string]string{dockerOwnerLabel: "steps", dockerHostLabel: ownerHostname(), dockerPIDLabel: "4194303"},
+			}})
+		case http.MethodDelete:
+			removed.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	SweepOrphanedContainersOn(t.Context(), client)
+
+	if removed.Load() {
+		t.Error("the sweep removed a container whose owner it could not check")
+	}
+
+	if ProcessGone(4194303) {
+		t.Error("ProcessGone answered yes for a pid it could not check")
 	}
 }

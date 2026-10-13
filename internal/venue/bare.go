@@ -272,7 +272,7 @@ func (s *bareSession) sweep(ctx context.Context) {
 		}
 
 		pid, convErr := strconv.Atoi(fields[2])
-		if convErr != nil || pid <= 0 || shell.ProcessAlive(pid) {
+		if convErr != nil || pid <= 0 || !shell.ProcessGone(pid) {
 			continue
 		}
 
