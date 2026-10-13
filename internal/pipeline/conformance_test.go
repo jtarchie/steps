@@ -268,6 +268,7 @@ jobs:
 func TestConformanceAbortFiresOnAbortHook(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "hooks-fired.txt")
+	started := filepath.Join(dir, "started")
 	path := filepath.Join(dir, "pipeline.yml")
 
 	pipelineYAML := fmt.Sprintf(`
@@ -275,14 +276,14 @@ jobs:
 - name: build
   plan:
   - task: slow
-    run: sleep 30
+    run: touch %s && sleep 30
     on_abort:
       task: note-abort
       run: echo aborted >> %s
     on_failure:
       task: note-failure
       run: echo failed >> %s
-`, marker, marker)
+`, started, marker, marker)
 
 	err := os.WriteFile(path, []byte(pipelineYAML), 0o600)
 	if err != nil {
@@ -308,13 +309,11 @@ jobs:
 	// Cancelled while the step is in flight, which is what SIGINT does. The
 	// hook itself still runs: hooks reached after cancellation get a grace
 	// period on a context detached from the cancelled one, or an abort could
-	// never have a reaction at all.
+	// never have a reaction at all. The cancel waits for the step to start;
+	// a fixed delay landed before it on a loaded machine and fired no hook.
 	ctx, cancel := context.WithCancel(context.Background())
 
-	go func() {
-		time.Sleep(300 * time.Millisecond)
-		cancel()
-	}()
+	go cancelOnceExists(started, cancel)
 
 	runErr := RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
 	if runErr == nil {
@@ -692,5 +691,20 @@ func TestAForcedIdleEveryRunSaysWhyOnTheRunPage(t *testing.T) {
 		!strings.Contains(plainTexts[0], "already taken") ||
 		strings.Contains(plainTexts[0], "--force") {
 		t.Errorf("ordinary idle run skip events = %q", plainTexts)
+	}
+}
+
+// cancelOnceExists cancels when path appears, or after 30s so a step that
+// never starts still ends the test.
+func cancelOnceExists(path string, cancel context.CancelFunc) {
+	defer cancel()
+
+	for range 600 {
+		_, err := os.Stat(path)
+		if err == nil {
+			return
+		}
+
+		time.Sleep(50 * time.Millisecond)
 	}
 }
