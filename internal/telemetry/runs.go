@@ -76,7 +76,7 @@ func (t *runTracer) Event(ctx context.Context, event events.Event) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	//kindswitch:ignore steps and their notes are the trace; the run's own span is StartRun/EndRun's, and output and agent turns stay in the transcript
+	// Steps and their notes are the trace; the run's own span is StartRun/EndRun's, and output and agent turns stay in the transcript
 	switch event.Type {
 	case events.TypeStepStarted:
 		t.startStep(ctx, event)

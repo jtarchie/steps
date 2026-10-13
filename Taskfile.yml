@@ -111,7 +111,7 @@ tasks:
         exit 3
 
   kindswitch:
-    desc: Report tagless step-kind switches (tools/kindswitch) that golangci-lint's exhaustive check can't see. Must exit 0.
+    desc: Report tagless switches over config.Step kind fields (tools/kindswitch), which exhaustive cannot check. Must exit 0.
     cmds:
       - go run ./tools/kindswitch ./...
 

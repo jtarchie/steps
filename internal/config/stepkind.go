@@ -24,11 +24,11 @@ const (
 	StepKindPut   StepKind = "put"
 	StepKindAgent StepKind = "agent"
 	StepKindTry   StepKind = "try"
-	// StepKindInParallel is a block of steps that run concurrently. Adding it
-	// to stepKinds is what makes `go run ./tools/kindswitch ./...` demand an
-	// answer from every dispatch site — the tagged ones via `exhaustive`, the
-	// tagless ones via that analyzer. Story 001 added a kind and shipped ten
-	// defects, six of them a dispatch site that silently did nothing for it.
+	// StepKindInParallel is a block of steps that run concurrently. Adding a
+	// constant here is what makes `exhaustive` demand an answer from every
+	// dispatch site; tools/kindswitch keeps dispatch tagged so it can. Story
+	// 001 added a kind and shipped ten defects, six of them a dispatch site
+	// that silently did nothing for it.
 	StepKindInParallel StepKind = "in_parallel"
 	// StepKindRace is a block whose first successful branch wins.
 	StepKindRace StepKind = "race"
@@ -74,8 +74,8 @@ type stepKindSpec struct {
 // it nests and how that nesting is spelled in YAML. Kind, both kind errors,
 // the tree walkers and the in_parallel: shorthand rewrite all read it, so a
 // kind cannot be known to one and missing from another — which is how a do: +
-// task: step came to be reported as setting only task:. tools/kindswitch reads
-// the Step fields these rows test as the kind set, in this order.
+// task: step came to be reported as setting only task:. Each field a row tests
+// carries a `kind:` tag on Step, which is how tools/kindswitch recognizes it.
 //
 //nolint:gochecknoglobals // a read-only table
 var stepKinds = [...]stepKindSpec{

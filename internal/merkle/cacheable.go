@@ -151,17 +151,21 @@ func containerUnskippable(cfg *config.Config, step config.Step, kind config.Step
 // ContainerBranches is the steps a do:, in_parallel:, race: or ensemble: block
 // runs; nil for anything else.
 func ContainerBranches(step config.Step) []config.Step {
-	//kindswitch:ignore only the blocks with branches answer; every other kind, try: included, has none
-	switch {
-	case len(step.Do) > 0:
-		return step.Do
-	case step.InParallel != nil:
+	switch kind, _ := step.Kind(); kind {
+	case config.StepKindDo:
+		if len(step.Do) > 0 {
+			return step.Do
+		}
+	case config.StepKindInParallel:
 		return step.InParallel.Steps
-	case step.Race != nil:
+	case config.StepKindRace:
 		return step.Race.Steps
-	case step.Ensemble != nil:
+	case config.StepKindEnsemble:
 		return step.Ensemble.Agents
-	default:
-		return nil
+	case config.StepKindGet, config.StepKindTask, config.StepKindPut, config.StepKindAgent,
+		config.StepKindTry, config.StepKindLoadVar, config.StepKindApproval:
+		// Only the blocks with branches answer; every other kind, try: included, has none.
 	}
+
+	return nil
 }

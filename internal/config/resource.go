@@ -69,12 +69,9 @@ type ResourceBackend string
 // fails the build at each site that has not answered for it, rather than
 // leaving one to silently take a default arm.
 //
-// This is the same defect class tools/kindswitch was built for on
-// config.Step, reached by a cheaper road: kindswitch models the TAGLESS
-// spelling (`switch { case s.Put != "": }`), which Step needs because its
-// kind is spread across eleven fields on the step itself. A resource
-// backend has one natural name, so naming it turns the whole question over
-// to a linter that already runs.
+// config.Step reaches the same place through Step.Kind(), with
+// tools/kindswitch refusing the tagless spelling (`switch { case s.Put !=
+// "": }`) that exhaustive cannot see.
 const (
 	BackendShell ResourceBackend = "shell"
 	BackendMCP   ResourceBackend = "mcp"

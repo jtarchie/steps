@@ -6,13 +6,10 @@ import (
 	"golang.org/x/tools/go/analysis/analysistest"
 )
 
-// TestAnalyzer runs the pass over testdata/src/dispatch, whose `// want`
-// comments pin both halves of the contract: it fires on a tagless switch that
-// omits a kind from the type's own Kind() table, and stays silent on the
-// tagless switches that are not kind dispatch at all — ordinary boolean
-// switches, ones mixing a kind field with something else, and ones over two
-// variables. The second half is the reason this analyzer is scoped the way it
-// is: a checker that fired on every tagless switch would be turned off.
+// TestAnalyzer pins both halves: a tagless switch whose cases read a
+// `kind:`-tagged field is reported (compound cases, mixed with modifiers,
+// through embedding), and one that reads no kind field — or reads one only in
+// a case body — is not, nor is one carrying a reasoned ignore directive.
 func TestAnalyzer(t *testing.T) {
-	analysistest.Run(t, analysistest.TestData(), Analyzer, "dispatch", "tabled", "unreadable")
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "dispatch")
 }

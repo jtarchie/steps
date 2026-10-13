@@ -603,17 +603,20 @@ func (c *Config) checkGitHubStep(label string, step *Step, comments []string) er
 	}
 
 	kind := c.githubKind(resource.Type)
-
-	switch {
-	case kind == "":
+	if kind == "" {
 		return nil
-	case step.Get != "" && len(step.Params) > 0:
+	}
+
+	if stepKind, _ := step.Kind(); stepKind == StepKindGet && len(step.Params) > 0 {
 		return fmt.Errorf("%s: get %q: a %s get takes no params; what it fetches is set on the resource's source instead", label, step.Get, kind)
-	case kind == GitHubPRCommentType:
+	}
+
+	switch kind {
+	case GitHubPRCommentType:
 		err = checkPRCommentStep(step, comments)
-	case kind == GitHubPRReviewType:
+	case GitHubPRReviewType:
 		_, err = ParseGitHubReviewParams(step.Params)
-	case kind == GitHubReactionType:
+	case GitHubReactionType:
 		err = checkReactionStep(step, comments)
 	}
 

@@ -84,23 +84,31 @@ func runSteps(ctx context.Context, w planWalk, steps []config.Step) error {
 
 		step := steps[w.index]
 
-		switch {
-		case step.Get != "" && !w.allowGetTrigger:
+		switch kind, _ := step.Kind(); kind {
+		case config.StepKindGet:
+			if w.allowGetTrigger {
+				return w.triggerBuild(ctx, step, steps[w.index+1:])
+			}
+
 			done, err := w.fetchInPlace(ctx, step, steps)
 			if done {
 				w.forgetUnfinishedChains(ctx, err)
 
 				return err
 			}
-		case step.Get != "":
-			return w.triggerBuild(ctx, step, steps[w.index+1:])
-		default:
-			done, err := w.runStep(ctx, step, steps)
-			if done {
-				w.forgetUnfinishedChains(ctx, err)
 
-				return err
-			}
+			continue
+		case config.StepKindTask, config.StepKindPut, config.StepKindAgent, config.StepKindTry,
+			config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble,
+			config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
+			// Run below, as is a step naming no kind, which runStep refuses.
+		}
+
+		done, err := w.runStep(ctx, step, steps)
+		if done {
+			w.forgetUnfinishedChains(ctx, err)
+
+			return err
 		}
 	}
 
@@ -392,21 +400,26 @@ func dispatchNonGetStep(ctx context.Context, r stepRunner, i int, step config.St
 		return stepResult{}, fmt.Errorf("step %d: %w", i, err)
 	}
 
-	switch {
-	case step.LoadVar != "":
+	kind, ok := step.Kind()
+
+	switch kind {
+	case config.StepKindLoadVar:
 		return runLoadVarStep(ctx, r, i, step, parentHash)
-	case step.Approval != nil:
+	case config.StepKindApproval:
 		return runApprovalStep(ctx, r, i, step, parentHash)
-	case len(step.Across) > 0:
-		// across: is a MODIFIER, not a kind: the step it sits on is still a
-		// task (or a put, or an agent), it just runs once per combination.
-		// Checking it before resolving the kind is what keeps it off
-		// Step.Kind()'s table, where it would read as a second kind on every
-		// step that uses it.
+	case config.StepKindGet, config.StepKindTask, config.StepKindPut, config.StepKindAgent, config.StepKindTry,
+		config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble, config.StepKindDo:
+		// Dispatched below, once across: has had its say.
+	}
+
+	// across: is a MODIFIER, not a kind: the step it sits on is still a task
+	// (or a put, or an agent), it just runs once per combination. Checking it
+	// before dispatching on the kind is what keeps it off Step.Kind()'s table,
+	// where it would read as a second kind on every step that uses it.
+	if len(step.Across) > 0 {
 		return runAcrossStep(ctx, r, i, step, parentHash)
 	}
 
-	kind, ok := step.Kind()
 	if !ok {
 		return stepResult{}, unrecognizedStep(i)
 	}

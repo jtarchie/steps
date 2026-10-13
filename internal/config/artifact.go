@@ -61,15 +61,14 @@ func (c *Config) validateStepArtifactDecls(label string, step Step) error {
 		return err
 	}
 
-	//kindswitch:ignore Task, Agent and a try: wrapper all declare inputs/outputs the same way, which is what default: validates
-	switch {
-	case step.Get != "":
+	switch kind, _ := step.Kind(); kind {
+	case StepKindGet:
 		if step.InputsDeclared() || step.Outputs != nil {
 			return fmt.Errorf("%s (get %q): inputs/outputs are not valid on get steps", label, step.Get)
 		}
 
 		return nil
-	case step.Put != "":
+	case StepKindPut:
 		if step.Outputs != nil {
 			return fmt.Errorf("%s (put %q): outputs are not valid on put steps", label, step.Put)
 		}
@@ -81,13 +80,16 @@ func (c *Config) validateStepArtifactDecls(label string, step Step) error {
 		}
 
 		return validateArtifactNames(fmt.Sprintf("%s (put %q)", label, step.Put), step.InputNames(), nil)
-	default:
-		if step.InputsAll() {
-			return fmt.Errorf("%s: inputs: all is only valid on put steps", label)
-		}
-
-		return validateArtifactNames(label, step.InputNames(), step.Outputs)
+	case StepKindTask, StepKindAgent, StepKindTry, StepKindInParallel, StepKindRace,
+		StepKindEnsemble, StepKindLoadVar, StepKindApproval, StepKindDo:
+		// Task, Agent and a try: wrapper all declare inputs/outputs the same way, validated below.
 	}
+
+	if step.InputsAll() {
+		return fmt.Errorf("%s: inputs: all is only valid on put steps", label)
+	}
+
+	return validateArtifactNames(label, step.InputNames(), step.Outputs)
 }
 
 // validateMappingPlacement enforces that input_mapping/output_mapping — which

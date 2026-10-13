@@ -182,15 +182,16 @@ func (c *Config) validateTagsRejectNonShell() error {
 // resourceName is the resource a get or put step names, and false for every
 // other kind.
 func (s Step) resourceName() (string, bool) {
-	//kindswitch:ignore only a get or a put names a resource; the other kinds are the false answer
-	switch {
-	case s.Get != "":
+	switch kind, _ := s.Kind(); kind {
+	case StepKindGet:
 		return s.GetResourceName(), true
-	case s.Put != "":
+	case StepKindPut:
 		return s.PutResourceName(), true
-	default:
-		return "", false
+	case StepKindTask, StepKindAgent, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble,
+		StepKindLoadVar, StepKindApproval, StepKindDo:
 	}
+
+	return "", false
 }
 
 func (c *Config) rejectNonShellPlacement(label, typeName string) error {

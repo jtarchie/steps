@@ -157,14 +157,16 @@ func (c *Config) rejectOnGetAndPut(field string, set func(*Step) bool) error {
 				return nil
 			}
 
-			//kindswitch:ignore Task and Agent are the kinds these settings are FOR — the cases here are the rejections
-			switch {
-			case step.Get != "":
+			switch kind, _ := step.Kind(); kind {
+			case StepKindGet:
 				return fmt.Errorf("%s (get %q): %s is not valid on get steps; set it on the resource_type instead", label, step.Get, field)
-			case step.Put != "":
+			case StepKindPut:
 				return fmt.Errorf("%s (put %q): %s is not valid on put steps; set it on the resource_type instead", label, step.Put, field)
-			case step.Try != nil:
+			case StepKindTry:
 				return fmt.Errorf("%s: %s is not valid on a try: step; set it on the step try: wraps", label, field)
+			case StepKindTask, StepKindAgent, StepKindInParallel, StepKindRace, StepKindEnsemble,
+				StepKindLoadVar, StepKindApproval, StepKindDo:
+				// Task and Agent are the kinds these settings are FOR; the blocks are refused by their own placement rules.
 			}
 
 			return nil
@@ -215,23 +217,25 @@ func (c *Config) resolvedStepImage(step Step) string {
 		return step.Image
 	}
 
-	//kindswitch:ignore only task/agent reference an entry carrying an image; a put's comes from its resource type and every rule that consults this rejects put/get first
-	switch {
-	case step.Task != "":
+	switch kind, _ := step.Kind(); kind {
+	case StepKindTask:
 		task, err := c.FindTask(step.Task)
 		if err != nil {
 			return ""
 		}
 
 		return task.Image
-	case step.Agent != "":
+	case StepKindAgent:
 		agent, err := c.FindAgent(step.Agent)
 		if err != nil {
 			return ""
 		}
 
 		return agent.Image
-	default:
-		return ""
+	case StepKindGet, StepKindPut, StepKindTry, StepKindInParallel, StepKindRace, StepKindEnsemble,
+		StepKindLoadVar, StepKindApproval, StepKindDo:
+		// Only task/agent reference an entry carrying an image; a put's comes from its resource type and every rule that consults this rejects put/get first.
 	}
+
+	return ""
 }

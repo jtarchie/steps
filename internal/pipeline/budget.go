@@ -122,19 +122,21 @@ func soleAgentBody(cell config.Step) (config.Step, bool) {
 
 // cellBranches is the steps a container cell wraps, for soleAgentBody's walk.
 func cellBranches(cell config.Step) []config.Step {
-	//kindswitch:ignore only the container kinds wrap steps; the leaf kinds are the point of the default
-	switch {
-	case cell.Do != nil:
+	switch kind, _ := cell.Kind(); kind {
+	case config.StepKindDo:
 		return cell.Do
-	case cell.InParallel != nil:
+	case config.StepKindInParallel:
 		return cell.InParallel.Steps
-	case cell.Race != nil:
+	case config.StepKindRace:
 		return cell.Race.Steps
-	case cell.Ensemble != nil:
+	case config.StepKindEnsemble:
 		return cell.Ensemble.Agents
-	default:
-		return nil
+	case config.StepKindGet, config.StepKindTask, config.StepKindPut, config.StepKindAgent,
+		config.StepKindTry, config.StepKindLoadVar, config.StepKindApproval:
+		// Only the container kinds wrap steps; the leaf kinds are the point of the nil.
 	}
+
+	return nil
 }
 
 // cellReserve is what admission assumes one unfinished cell will spend, in

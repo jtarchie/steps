@@ -403,15 +403,17 @@ func planGetStep(
 func stepResourceName(step config.Step) string {
 	inner := step.Unwrap()
 
-	//kindswitch:ignore Unwrap() already resolved Try away, and a get node takes its name from the resource, not here
-	switch {
-	case inner.Task != "":
+	switch kind, _ := inner.Kind(); kind {
+	case config.StepKindTask:
 		return inner.Task
-	case inner.Put != "":
+	case config.StepKindPut:
 		return inner.Put
-	case inner.Agent != "":
+	case config.StepKindAgent:
 		return inner.Agent
-	default:
-		return ""
+	case config.StepKindGet, config.StepKindTry, config.StepKindInParallel, config.StepKindRace,
+		config.StepKindEnsemble, config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
+		// Unwrap() already resolved Try away, and a get node takes its name from the resource, not here.
 	}
+
+	return ""
 }

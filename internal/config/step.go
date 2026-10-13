@@ -10,9 +10,11 @@ import (
 )
 
 // Step is a flat union of the step kinds this interpreter supports: get,
-// task, put, and agent.
+// task, put, and agent. Each field that selects a kind is tagged
+// `kind:"<yaml key>"`, which is how tools/kindswitch finds tagless dispatch on
+// it; a new kind field takes the tag too.
 type Step struct {
-	Get     string `yaml:"get,omitempty"`
+	Get     string `kind:"get"               yaml:"get,omitempty"`
 	Trigger bool   `yaml:"trigger,omitempty"`
 	// Version selects which version(s) a get step fetches: unset/"latest"
 	// (default) picks the single latest version; "every" runs the rest of
@@ -27,7 +29,7 @@ type Step struct {
 	// Run/Fix below are used as-is. If Run is empty, Task instead names a
 	// tasks: entry (see Task) to resolve run/fix from; this step's own Fix,
 	// if set, overrides the referenced task's Fix for this step only.
-	Task string `yaml:"task,omitempty"`
+	Task string `kind:"task"          yaml:"task,omitempty"`
 	Run  string `yaml:"run,omitempty"`
 	// RunFile loads Run's text from a file at a path relative to the pipeline
 	// file's directory, instead of writing it inline (see LoadConfig's
@@ -41,7 +43,7 @@ type Step struct {
 	// never constructs the agent. See FixSpec.
 	Fix *FixSpec `yaml:"fix,omitempty"`
 	// Put names a resource to run its out command against.
-	Put string `yaml:"put,omitempty"`
+	Put string `kind:"put" yaml:"put,omitempty"`
 	// Params are passed through to the resource command this step runs, as
 	// {{ .params.x }}: a put's reach out:, a get's reach in:. Mirrors
 	// Concourse, where params on a get are how a resource is told HOW to
@@ -63,7 +65,7 @@ type Step struct {
 	// default retry count (attempts: 3 = up to 3 total tries, including the
 	// first); 0/unset inherits the agent's default (which itself defaults
 	// to 1).
-	Agent string `yaml:"agent,omitempty"`
+	Agent string `kind:"agent" yaml:"agent,omitempty"`
 	// Messages is what this step says to the agent: one user turn per entry.
 	//
 	// A list rather than a single string because a conversation is a list, and
@@ -145,7 +147,7 @@ type Step struct {
 	// and are rejected on the step it wraps; verdicts: stays on the agent step
 	// being wrapped, since that is what internal/agent reads. Also
 	// valid as a hook body, where it tolerates the hook's failure the same way.
-	Try *Step `yaml:"try,omitempty"`
+	Try *Step `kind:"try" yaml:"try,omitempty"`
 	// Do runs several steps one after another, as a single plan step.
 	//
 	// Sequential execution is what a plan does anyway, so the ordering is not
@@ -158,23 +160,23 @@ type Step struct {
 	// fields of its own (no inputs:, run:, image: — those belong on the steps
 	// inside), and it carries hooks, when:, try: and to: as any positioned
 	// step does.
-	Do []Step `yaml:"do,omitempty"`
+	Do []Step `kind:"do" yaml:"do,omitempty"`
 	// InParallel runs several steps at the same time instead of one after
 	// another. See InParallel.
-	InParallel *InParallel `yaml:"in_parallel,omitempty"`
+	InParallel *InParallel `kind:"in_parallel" yaml:"in_parallel,omitempty"`
 	// Race runs several steps at once and keeps whichever finishes
 	// successfully first. See Race.
-	Race *Race `yaml:"race,omitempty"`
+	Race *Race `kind:"race" yaml:"race,omitempty"`
 	// Ensemble asks several agents the same question and combines their
 	// answers into one verdict to route on. See Ensemble.
-	Ensemble *Ensemble `yaml:"ensemble,omitempty"`
+	Ensemble *Ensemble `kind:"ensemble" yaml:"ensemble,omitempty"`
 	// Approval pauses the plan until a person approves or rejects. See
 	// Approval.
-	Approval *Approval `yaml:"approval,omitempty"`
+	Approval *Approval `kind:"approval" yaml:"approval,omitempty"`
 	// LoadVar captures a value produced DURING the run — the contents of
 	// VarFile, trimmed — into a pipeline var that later steps reference as
 	// ((name)). See validateVars.
-	LoadVar string `yaml:"load_var,omitempty"`
+	LoadVar string `kind:"load_var" yaml:"load_var,omitempty"`
 	// VarFile is the workspace-relative file a load_var: step reads.
 	VarFile string `yaml:"file,omitempty"`
 	// Passed, on a get step, names upstream jobs this version must ALREADY

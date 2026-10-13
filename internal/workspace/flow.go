@@ -64,9 +64,8 @@ func validateStepArtifactFlow(cfg *config.Config, jobName string, i int, step co
 // validateStepKindArtifactFlow is validateStepArtifactFlow's kind dispatch,
 // split out so neither half carries the other's branch count.
 func validateStepKindArtifactFlow(cfg *config.Config, jobName string, i int, step config.Step, available map[string]bool) error {
-	//kindswitch:ignore the container kinds are handled together in the default, via blockBranches
-	switch {
-	case step.Get != "":
+	switch kind, _ := step.Kind(); kind {
+	case config.StepKindGet:
 		// A get inside an existing build fetches into the same workspace,
 		// so its resource accumulates alongside earlier artifacts.
 		// Failure-path hooks run before the fetch has landed anything, so
@@ -76,33 +75,35 @@ func validateStepKindArtifactFlow(cfg *config.Config, jobName string, i int, ste
 		available[fetchedByGet(step.Get)] = true
 
 		return validateStepHooks(cfg, jobName, i, step, pre, maps.Clone(available))
-	case step.Put != "":
+	case config.StepKindPut:
 		return validatePutArtifactFlow(cfg, jobName, i, step, available)
-	case step.Task != "":
+	case config.StepKindTask:
 		return validateTaskArtifactFlow(cfg, jobName, i, step, available)
-	case step.Agent != "":
+	case config.StepKindAgent:
 		return validateAgentArtifactFlow(cfg, jobName, i, step, available)
-	case step.Try != nil:
+	case config.StepKindTry:
 		return validateTryArtifactFlow(cfg, jobName, i, step, available)
-	case step.Do != nil:
+	case config.StepKindDo:
 		return validateDoArtifactFlow(cfg, jobName, i, step, available)
-	case step.LoadVar != "":
+	case config.StepKindLoadVar:
 		return validateLoadVarArtifactFlow(cfg, jobName, i, step, available)
-	default:
-		// A concurrent block (in_parallel:, race:, ensemble:) validates its
-		// branches; anything else declares no artifacts of its own.
-		//
-		// A race's branches all declare the SAME outputs (config rejects
-		// anything else) and only the winner's are produced, so the block's
-		// effect on the view is one branch's rather than the union — which
-		// falls out of the shared walk without a special case.
-		branches := blockBranches(step)
-		if branches == nil {
-			return nil
-		}
-
-		return validateBlockArtifactFlow(cfg, jobName, i, step, branches, available)
+	case config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble, config.StepKindApproval:
+		// Handled together below, via blockBranches.
 	}
+
+	// A concurrent block (in_parallel:, race:, ensemble:) validates its
+	// branches; anything else declares no artifacts of its own.
+	//
+	// A race's branches all declare the SAME outputs (config rejects
+	// anything else) and only the winner's are produced, so the block's
+	// effect on the view is one branch's rather than the union — which
+	// falls out of the shared walk without a special case.
+	branches := blockBranches(step)
+	if branches == nil {
+		return nil
+	}
+
+	return validateBlockArtifactFlow(cfg, jobName, i, step, branches, available)
 }
 
 // validateTryArtifactFlow walks the step a try: wraps.
@@ -202,17 +203,19 @@ func validateDoArtifactFlow(cfg *config.Config, jobName string, i int, step conf
 // blockBranches returns a concurrent block's branches, or nil for an ordinary
 // step.
 func blockBranches(step config.Step) []config.Step {
-	//kindswitch:ignore only the container kinds have branches; the leaf kinds are the point of the default
-	switch {
-	case step.InParallel != nil:
+	switch kind, _ := step.Kind(); kind {
+	case config.StepKindInParallel:
 		return step.InParallel.Steps
-	case step.Race != nil:
+	case config.StepKindRace:
 		return step.Race.Steps
-	case step.Ensemble != nil:
+	case config.StepKindEnsemble:
 		return step.Ensemble.Agents
-	default:
-		return nil
+	case config.StepKindGet, config.StepKindTask, config.StepKindPut, config.StepKindAgent,
+		config.StepKindTry, config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
+		// Only the concurrent blocks have branches; do: is walked as a sequence instead.
 	}
+
+	return nil
 }
 
 // validatePutArtifactFlow checks a put step's declared inputs. A put produces
@@ -401,20 +404,22 @@ func validateHookArtifactFlow(cfg *config.Config, jobName string, i int, hookNam
 		kind, name string
 	)
 
-	//kindswitch:ignore get: is the one kind rejected in a hook body at load time (see config's validateHookStep)
-	switch {
-	case hook.Task != "":
+	switch hookKind, _ := hook.Kind(); hookKind {
+	case config.StepKindTask:
 		rt, err := cfg.ResolveTask(hook)
 		if err != nil {
 			return fmt.Errorf("job %q step %d %s hook: %w", jobName, i, hookName, err)
 		}
 
 		inputs, kind, name = rt.Inputs, "task", rt.Name
-	case hook.Put != "":
+	case config.StepKindPut:
 		inputs, kind, name = hook.InputNames(), "put", hook.Put
-	case hook.Agent != "":
+	case config.StepKindAgent:
 		inputs, kind, name = hook.InputNames(), "agent", hook.Agent
-	case hook.Try != nil:
+	case config.StepKindGet, config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble,
+		config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
+		// get: is rejected in a hook body at load time (see config's validateHookStep); these declare no inputs checked here.
+	case config.StepKindTry:
 		// try: is a legal hook body, and a wrapper declares no inputs of its
 		// own — the step it wraps does, against this same view. Falling into
 		// the no-case branch left those inputs entirely unchecked, which is

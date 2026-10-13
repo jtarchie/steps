@@ -189,13 +189,19 @@ func uncacheableReason(cfg *config.Config, step config.Step) (string, error) {
 // unskippableReason names the kinds of step that are uncacheable whatever they
 // hold — see uncacheableReason for the rest.
 func unskippableReason(step config.Step) string {
-	switch {
-	case step.Put != "":
+	switch kind, _ := step.Kind(); kind {
+	case config.StepKindPut:
 		return "put step"
-	case step.Agent != "":
+	case config.StepKindAgent:
 		return "agent step"
-	case step.Try != nil:
+	case config.StepKindTry:
 		return "try step"
+	case config.StepKindGet, config.StepKindTask, config.StepKindInParallel, config.StepKindRace,
+		config.StepKindEnsemble, config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
+		// Uncacheable only for what they carry, checked below.
+	}
+
+	switch {
 	case step.When != nil:
 		return "when: guard"
 	case step.Routes():
@@ -210,16 +216,21 @@ func unskippableReason(step config.Step) string {
 // runTimeReason names the steps whose result does not exist until the run
 // produces it: nothing the planner can hash stands in for them.
 func runTimeReason(step config.Step) string {
-	switch {
-	case step.LoadVar != "":
+	switch kind, _ := step.Kind(); kind {
+	case config.StepKindLoadVar:
 		return "load_var step"
-	case step.Approval != nil:
+	case config.StepKindApproval:
 		return "approval step"
-	case len(step.Across) > 0:
-		return "across block"
-	default:
-		return ""
+	case config.StepKindGet, config.StepKindTask, config.StepKindPut, config.StepKindAgent,
+		config.StepKindTry, config.StepKindInParallel, config.StepKindRace, config.StepKindEnsemble, config.StepKindDo:
+		// Known at plan time, unless across: below fans them out.
 	}
+
+	if len(step.Across) > 0 {
+		return "across block"
+	}
+
+	return ""
 }
 
 // foldStepUnskippable ORs step's own unskippability into chainUnskippable in

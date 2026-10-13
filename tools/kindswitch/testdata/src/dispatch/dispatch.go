@@ -1,5 +1,5 @@
 // Package dispatch is analyzer fixture code: a miniature of config.Step and
-// the shapes of tagless switch this analyzer must and must not report.
+// the tagless switches the analyzer must and must not report.
 package dispatch
 
 type Kind string
@@ -7,56 +7,31 @@ type Kind string
 const (
 	KindGet  Kind = "get"
 	KindTask Kind = "task"
-	KindPut  Kind = "put"
-	KindTry  Kind = "try"
 )
 
-type Step struct { // want Step:`kinds\(Get,Task,Put,Try\)`
-	Get  string
-	Task string
-	Put  string
-	Try  *Step
+type Step struct {
+	Get  string `yaml:"get" kind:"get"`
+	Task string `yaml:"task" kind:"task"`
+	Try  *Step  `kind:"try"`
 
-	// Not a kind field: present so a switch can mix kind and non-kind cases.
-	When *string
+	When *string `yaml:"when"`
 }
 
-// Kind is the table the analyzer reads. Its four field tests ARE the kind set.
 func (s Step) Kind() (Kind, bool) {
-	var (
-		kind Kind
-		ok   bool
-	)
-
-	for _, candidate := range [...]struct {
-		kind Kind
-		set  bool
-	}{
-		{KindGet, s.Get != ""},
-		{KindTask, s.Task != ""},
-		{KindPut, s.Put != ""},
-		{KindTry, s.Try != nil},
-	} {
-		if !candidate.set {
-			continue
-		}
-
-		if ok {
-			return "", false
-		}
-
-		kind, ok = candidate.kind, true
+	if s.Get != "" {
+		return KindGet, true
 	}
 
-	return kind, ok
+	return "", false
 }
 
-// missesTwoKinds is the defect shape: handles some kinds, silently does
-// nothing for the rest.
-func missesTwoKinds(step Step) string {
-	switch { // want "never tests Put, Try"
-	case step.Get != "":
-		return "get"
+// wrapper reaches the kind fields through an embedded Step.
+type wrapper struct {
+	Step
+}
+
+func taglessOnKind(step Step) string {
+	switch { // want "tagless switch tests kind field Task"
 	case step.Task != "":
 		return "task"
 	}
@@ -64,30 +39,19 @@ func missesTwoKinds(step Step) string {
 	return ""
 }
 
-// aDefaultIsNotCoverage matches golangci-lint's own exhaustive setting, where
-// a default clause does not make a switch exhaustive.
-func aDefaultIsNotCoverage(step Step) string {
-	switch { // want "never tests Try"
-	case step.Get != "":
+func compoundCase(step Step, allow bool) string {
+	switch { // want "tagless switch tests kind field Get"
+	case step.Get != "" && !allow:
 		return "get"
-	case step.Task != "":
-		return "task"
-	case step.Put != "":
-		return "put"
-	default:
-		return "?"
 	}
+
+	return ""
 }
 
-// handlesEveryKind is clean.
-func handlesEveryKind(step Step) string {
-	switch {
-	case step.Get != "":
-		return "get"
-	case step.Task != "":
-		return "task"
-	case step.Put != "":
-		return "put"
+func mixedWithModifier(step Step) string {
+	switch { // want "tagless switch tests kind field Try"
+	case step.When != nil:
+		return "when"
 	case step.Try != nil:
 		return "try"
 	}
@@ -95,62 +59,54 @@ func handlesEveryKind(step Step) string {
 	return ""
 }
 
-// suppressed states why a kind is skipped, so it is not reported.
-func suppressed(step Step) string {
-	//kindswitch:ignore Try cannot reach here, the caller unwraps first
-	switch {
-	case step.Get != "":
+func throughEmbedding(w wrapper) string {
+	switch { // want "tagless switch tests kind field Get"
+	case w.Get != "":
 		return "get"
-	case step.Task != "":
-		return "task"
-	case step.Put != "":
-		return "put"
 	}
 
 	return ""
 }
 
-// bareDirectiveIsNotSuppression: a directive with no reason keeps reporting.
+func suppressed(step Step) string {
+	//kindswitch:ignore the fixture's reason
+	switch {
+	case step.Get != "":
+		return "get"
+	}
+
+	return ""
+}
+
+func trailingSuppression(step Step) string {
+	switch { //kindswitch:ignore the fixture's reason
+	case step.Get != "":
+		return "get"
+	}
+
+	return ""
+}
+
 func bareDirectiveIsNotSuppression(step Step) string {
 	//kindswitch:ignore
-	switch { // want "never tests Put, Try"
+	switch { // want "tagless switch tests kind field Get"
 	case step.Get != "":
 		return "get"
-	case step.Task != "":
-		return "task"
 	}
 
 	return ""
 }
 
-// notKindDispatch mixes a kind field with an unrelated one, so it is not a
-// dispatch over the kind table and reporting its "missing" kinds would be
-// wrong. (This is internal/pipeline's unskippableReason in miniature.)
-func notKindDispatch(step Step) string {
+// Untagged fields are not kinds.
+func modifierOnly(step Step) string {
 	switch {
-	case step.Put != "":
-		return "put step"
 	case step.When != nil:
-		return "when: guard"
+		return "when"
 	}
 
 	return ""
 }
 
-// twoVariables is not one dispatch.
-func twoVariables(a, b Step) string {
-	switch {
-	case a.Get != "":
-		return "a"
-	case b.Task != "":
-		return "b"
-	}
-
-	return ""
-}
-
-// ordinaryTaglessSwitch has nothing to do with a kind table. These are common
-// and fine, and the analyzer must stay off them.
 func ordinaryTaglessSwitch(n int) string {
 	switch {
 	case n < 0:
@@ -162,13 +118,23 @@ func ordinaryTaglessSwitch(n int) string {
 	return "positive"
 }
 
-// taggedSwitch is exhaustive's job, not this analyzer's.
+// Tagged dispatch is exhaustive's job.
 func taggedSwitch(step Step) string {
-	kind, _ := step.Kind()
-
-	switch kind {
+	switch kind, _ := step.Kind(); kind {
 	case KindGet:
 		return "get"
+	case KindTask:
+		return "task"
+	}
+
+	return ""
+}
+
+// A kind field read in a case BODY is not dispatch.
+func fieldInBody(step Step, n int) string {
+	switch {
+	case n > 0:
+		return step.Get
 	}
 
 	return ""

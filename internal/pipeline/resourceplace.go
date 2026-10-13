@@ -223,15 +223,16 @@ func stepPlacementTags(cfg *config.Config, step config.Step) []string {
 
 // stepResourceName is the resource a get or put names, and false otherwise.
 func stepResourceName(step config.Step) (string, bool) {
-	//kindswitch:ignore only a get or a put names a resource; the other kinds are the false answer
-	switch {
-	case step.Get != "":
+	switch kind, _ := step.Kind(); kind {
+	case config.StepKindGet:
 		return step.GetResourceName(), true
-	case step.Put != "":
+	case config.StepKindPut:
 		return step.PutResourceName(), true
-	default:
-		return "", false
+	case config.StepKindTask, config.StepKindAgent, config.StepKindTry, config.StepKindInParallel,
+		config.StepKindRace, config.StepKindEnsemble, config.StepKindLoadVar, config.StepKindApproval, config.StepKindDo:
 	}
+
+	return "", false
 }
 
 // resourceStep is the step a check outside any plan stands in for: a get of

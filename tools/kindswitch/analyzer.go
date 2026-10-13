@@ -1,32 +1,16 @@
-// Package kindswitch reports tagless kind dispatch that silently ignores a
-// step kind.
+// Package kindswitch keeps step-kind dispatch where golangci-lint's
+// `exhaustive` can check it.
 //
-// golangci-lint's `exhaustive` already catches the tagged spelling:
+// exhaustive checks `switch kind, _ := step.Kind(); kind { ... }`: adding a
+// StepKind makes every such switch that does not answer it fail lint. It
+// cannot see the tagless spelling, `switch { case step.Get != "": ... }` —
+// that is `switch true` over boolean cases, with no enum to reason about —
+// and adding a kind once shipped six defects that were tagless sites silently
+// doing nothing for it.
 //
-//	switch kind {          // exhaustive CAN see this
-//	case config.StepKindPut:
-//	}
-//
-// It cannot see the other half of how this codebase dispatches:
-//
-//	switch {               // exhaustive CANNOT see this
-//	case step.Put != "":
-//	case step.Get != "":
-//	}
-//
-// The tagless form is `switch true`: the tag is an untyped bool and the cases
-// are boolean expressions, so there is no enum type for the analyzer to reason
-// about. That is not a configuration gap, it is outside exhaustive's model —
-// verified empirically, not assumed. The consequence is not hypothetical
-// either: adding one StepKind once shipped six defects that were a dispatch
-// site handling every other kind and silently doing nothing for the new one,
-// and one of the misses (workspace.validateStepArtifactFlow, a tagless site)
-// made a whole job statically unrunnable.
-//
-// The kind table is not hardcoded here. It is read out of the type's own
-// Kind() method — the same table Kind() dispatches on — and published as an
-// analysis Fact, so adding a kind to that table is the single edit that
-// widens what this checks.
+// So this pass reports any tagless switch whose cases read a struct field
+// tagged `kind:"..."` (config.Step's kind fields). The tag, not a list here,
+// is what names a kind field.
 //
 // Usage:
 //
@@ -36,6 +20,7 @@ package main
 import (
 	"go/ast"
 	"go/types"
+	"reflect"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -46,265 +31,22 @@ import (
 
 func main() { singlechecker.Main(Analyzer) }
 
-// ignoreDirective suppresses a report on the switch it precedes (or sits on
-// the same line as). A reason is mandatory — an unexplained suppression is the
-// state this analyzer exists to end, since the current tagless sites are
-// neither linted nor suppressed and therefore read as covered.
+// ignoreDirective suppresses a report on the switch it precedes or trails.
+// A bare directive is not honored: the reason is the point.
 const ignoreDirective = "//kindswitch:ignore"
 
-// Analyzer is the go/analysis pass. Run it over the module:
-//
-//	go run ./tools/kindswitch ./...
+// Analyzer is the go/analysis pass.
 var Analyzer = &analysis.Analyzer{
-	Name:      "kindswitch",
-	Doc:       "report tagless kind dispatch that omits a kind from the type's own Kind() table",
-	Requires:  []*analysis.Analyzer{inspect.Analyzer},
-	FactTypes: []analysis.Fact{(*kindTable)(nil)},
-	Run:       run,
+	Name:     "kindswitch",
+	Doc:      "report tagless switches over kind-tagged fields, which exhaustive cannot check",
+	Requires: []*analysis.Analyzer{inspect.Analyzer},
+	Run:      run,
 }
-
-// kindTable is the set of fields a type's Kind() method tests, in declaration
-// order, attached as a Fact to that type so importing packages can read it.
-type kindTable struct {
-	Fields []string
-}
-
-func (*kindTable) AFact() {}
-
-func (k *kindTable) String() string { return "kinds(" + strings.Join(k.Fields, ",") + ")" }
 
 func run(pass *analysis.Pass) (any, error) {
-	publishKindTables(pass)
-	checkTaglessSwitches(pass)
-
-	return nil, nil //nolint:nilnil // an analysis pass with no result type returns nil, nil
-}
-
-// publishKindTables finds each `func (s T) Kind() (..., bool)` in this package
-// and exports the fields its body tests as a Fact on T.
-func publishKindTables(pass *analysis.Pass) {
-	for _, file := range pass.Files {
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok {
-				continue
-			}
-
-			named, fields := kindTableOf(pass, fn)
-			if named != nil {
-				pass.ExportObjectFact(named, &kindTable{Fields: fields})
-
-				continue
-			}
-
-			// A table this pass cannot read is a linter that checks nothing and
-			// still exits 0, which is how moving Kind() onto a shared table once
-			// went unnoticed.
-			if fn.Name.Name == "Kind" && fn.Recv != nil && fn.Type.Results != nil && fn.Type.Results.NumFields() == 2 {
-				pass.Reportf(fn.Pos(), "kindswitch cannot read the kinds this Kind() tests, so it checks no dispatch on its type; teach kindTableOf its shape")
-			}
-		}
-	}
-}
-
-// kindTableOf recognizes a kind-table method — `func (s T) Kind() (K, bool)`
-// testing two or more of its receiver's fields — and returns T with the fields
-// its body tests. Anything else yields a nil type.
-//
-// The table may instead be a package-level var the body ranges over, its rows
-// testing T's fields through a parameter (`isSet: func(s *T) bool { return
-// s.Get != "" }`): config.Step's is, because the same rows also feed its kind
-// errors and tree walkers. Those fields are read out of the var's initializer.
-func kindTableOf(pass *analysis.Pass, fn *ast.FuncDecl) (*types.TypeName, []string) {
-	if fn.Name.Name != "Kind" || fn.Recv == nil || fn.Body == nil {
-		return nil, nil
-	}
-
-	if fn.Type.Results == nil || fn.Type.Results.NumFields() != 2 {
-		return nil, nil
-	}
-
-	recv := receiverName(fn)
-	if recv == "" {
-		return nil, nil
-	}
-
-	named := receiverTypeName(pass, fn)
-
-	fields := selectedFields(fn.Body, recv)
-	if len(fields) < 2 && named != nil {
-		fields = tableVarFields(pass, fn.Body, named)
-	}
-
-	if len(fields) < 2 {
-		return nil, nil // not a dispatch table, whatever else it is
-	}
-
-	return named, fields
-}
-
-// tableVarFields lists, in first-seen order, the fields of named that the
-// initializers of package-level vars referenced from body select.
-func tableVarFields(pass *analysis.Pass, body *ast.BlockStmt, named *types.TypeName) []string {
-	var (
-		fields []string
-		seen   = map[string]bool{}
-	)
-
-	for _, init := range packageVarInits(pass, body) {
-		for _, field := range fieldsOf(pass, init, named) {
-			if !seen[field] {
-				seen[field] = true
-				fields = append(fields, field)
-			}
-		}
-	}
-
-	return fields
-}
-
-// packageVarInits returns, in declaration order, the initializers of the
-// package-level vars body references.
-func packageVarInits(pass *analysis.Pass, body *ast.BlockStmt) []ast.Expr {
-	referenced := packageVarsUsed(pass, body)
-
-	var inits []ast.Expr
-
-	for _, file := range pass.Files {
-		for _, decl := range file.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok {
-				continue
-			}
-
-			for _, spec := range gen.Specs {
-				value, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
-
-				for i, name := range value.Names {
-					if referenced[pass.TypesInfo.Defs[name]] && i < len(value.Values) {
-						inits = append(inits, value.Values[i])
-					}
-				}
-			}
-		}
-	}
-
-	return inits
-}
-
-func packageVarsUsed(pass *analysis.Pass, body *ast.BlockStmt) map[types.Object]bool {
-	referenced := map[types.Object]bool{}
-
-	ast.Inspect(body, func(node ast.Node) bool {
-		ident, ok := node.(*ast.Ident)
-		if !ok {
-			return true
-		}
-
-		if variable, ok := pass.TypesInfo.Uses[ident].(*types.Var); ok && variable.Parent() == pass.Pkg.Scope() {
-			referenced[variable] = true
-		}
-
-		return true
-	})
-
-	return referenced
-}
-
-// fieldsOf lists the fields of named that expr selects off a plain variable.
-func fieldsOf(pass *analysis.Pass, expr ast.Expr, named *types.TypeName) []string {
-	var fields []string
-
-	ast.Inspect(expr, func(node ast.Node) bool {
-		sel, ok := node.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-
-		variable := fieldOwner(pass, sel)
-		if variable == nil {
-			return true
-		}
-
-		owner, ok := types.Unalias(deref(variable.Type())).(*types.Named)
-		if ok && owner.Obj() == named {
-			fields = append(fields, sel.Sel.Name)
-		}
-
-		return true
-	})
-
-	return fields
-}
-
-// receiverName is the receiver's identifier, or "" for an unnamed receiver.
-func receiverName(fn *ast.FuncDecl) string {
-	names := fn.Recv.List[0].Names
-	if len(names) == 0 || names[0].Name == "_" {
-		return ""
-	}
-
-	return names[0].Name
-}
-
-// receiverTypeName resolves the TypeName object a method is declared on,
-// looking through a pointer receiver.
-func receiverTypeName(pass *analysis.Pass, fn *ast.FuncDecl) *types.TypeName {
-	obj, ok := pass.TypesInfo.Defs[fn.Name].(*types.Func)
-	if !ok {
-		return nil
-	}
-
-	sig, ok := obj.Type().(*types.Signature)
-	if !ok || sig.Recv() == nil {
-		return nil
-	}
-
-	named, ok := types.Unalias(deref(sig.Recv().Type())).(*types.Named)
-	if !ok {
-		return nil
-	}
-
-	return named.Obj()
-}
-
-// selectedFields lists, in first-seen order, the field names a body selects off
-// the named receiver — `s.Get`, `s.Try`, and so on.
-func selectedFields(body *ast.BlockStmt, recv string) []string {
-	var (
-		fields []string
-		seen   = map[string]bool{}
-	)
-
-	ast.Inspect(body, func(node ast.Node) bool {
-		sel, ok := node.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-
-		ident, ok := sel.X.(*ast.Ident)
-		if !ok || ident.Name != recv || seen[sel.Sel.Name] {
-			return true
-		}
-
-		seen[sel.Sel.Name] = true
-		fields = append(fields, sel.Sel.Name)
-
-		return true
-	})
-
-	return fields
-}
-
-// checkTaglessSwitches reports every `switch { case v.Field ... }` over a
-// kind-table type that never tests one of the table's fields.
-func checkTaglessSwitches(pass *analysis.Pass) {
 	inspected, ok := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 	if !ok {
-		return
+		return nil, nil //nolint:nilnil // an analysis pass with no result type returns nil, nil
 	}
 
 	ignored := ignoredLines(pass)
@@ -312,31 +54,11 @@ func checkTaglessSwitches(pass *analysis.Pass) {
 	inspected.Preorder([]ast.Node{(*ast.SwitchStmt)(nil)}, func(node ast.Node) {
 		stmt, ok := node.(*ast.SwitchStmt)
 		if !ok || stmt.Tag != nil {
-			return // tagged: exhaustive already covers it
-		}
-
-		subject, tested := switchSubject(pass, stmt)
-		if subject == nil {
 			return
 		}
 
-		table := new(kindTable)
-		if !pass.ImportObjectFact(subject, table) {
-			return // not a type with a Kind() table — an ordinary tagless switch
-		}
-
-		// Scoping: every case must test kind fields and nothing else. A switch
-		// mixing kind fields with other conditions (pipeline's
-		// unskippableReason tests Put/Agent/Try alongside When/To) is not kind
-		// dispatch, and reporting the kinds it "omits" would be wrong.
-		for field := range tested {
-			if !contains(table.Fields, field) {
-				return
-			}
-		}
-
-		missing := missingFields(table.Fields, tested)
-		if len(missing) == 0 {
+		field := kindFieldTested(pass, stmt)
+		if field == "" {
 			return
 		}
 
@@ -346,179 +68,92 @@ func checkTaglessSwitches(pass *analysis.Pass) {
 		}
 
 		pass.Reportf(stmt.Switch,
-			"tagless dispatch on %s never tests %s (in %s's Kind() table); handle it, or suppress with `%s <reason>`",
-			subject.Name(), strings.Join(missing, ", "), subject.Name(), ignoreDirective)
+			"tagless switch tests kind field %s; dispatch on the kind with `switch kind, _ := s.Kind(); kind` so exhaustive checks it, or suppress with `%s <reason>`",
+			field, ignoreDirective)
 	})
+
+	return nil, nil //nolint:nilnil // an analysis pass with no result type returns nil, nil
 }
 
-// switchSubject identifies the single variable a tagless switch dispatches on,
-// plus the set of its fields the cases test. It returns nil unless every
-// non-default case tests at least one field of exactly one variable — the
-// scoping that keeps this off ordinary tagless switches, which are common and
-// fine.
-func switchSubject(pass *analysis.Pass, stmt *ast.SwitchStmt) (*types.TypeName, map[string]bool) {
-	var (
-		variable types.Object
-		tested   = map[string]bool{}
-	)
+// kindFieldTested names the first kind-tagged field any case expression of
+// stmt reads, or "".
+func kindFieldTested(pass *analysis.Pass, stmt *ast.SwitchStmt) string {
+	var found string
 
 	for _, clause := range stmt.Body.List {
 		caseClause, ok := clause.(*ast.CaseClause)
-		if !ok || len(caseClause.List) == 0 {
-			continue // default: doesn't signify exhaustive here, matching exhaustive's own default
+		if !ok {
+			continue
 		}
 
-		owner, fields := caseSubject(pass, caseClause.List)
-		if owner == nil || (variable != nil && variable != owner) {
-			return nil, nil // tests nothing about the subject, or a second variable
-		}
+		for _, expr := range caseClause.List {
+			ast.Inspect(expr, func(node ast.Node) bool {
+				sel, ok := node.(*ast.SelectorExpr)
+				if !ok || found != "" {
+					return found == ""
+				}
 
-		variable = owner
+				if isKindField(pass.TypesInfo.Selections[sel]) {
+					found = sel.Sel.Name
+				}
 
-		for _, field := range fields {
-			tested[field] = true
+				return found == ""
+			})
 		}
 	}
 
-	if variable == nil {
-		return nil, nil
-	}
-
-	named, ok := types.Unalias(deref(variable.Type())).(*types.Named)
-	if !ok {
-		return nil, nil
-	}
-
-	return named.Obj(), tested
+	return found
 }
 
-// caseSubject reports the single variable one case clause tests fields of,
-// plus those field names. A clause touching no field, or fields of more than
-// one variable, yields a nil object.
-func caseSubject(pass *analysis.Pass, exprs []ast.Expr) (types.Object, []string) {
-	var (
-		owner  types.Object
-		fields []string
-		mixed  bool
-	)
-
-	for _, expr := range exprs {
-		ast.Inspect(expr, func(node ast.Node) bool {
-			sel, ok := node.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-
-			found := fieldOwner(pass, sel)
-			if found == nil {
-				return true
-			}
-
-			if owner != nil && owner != found {
-				mixed = true
-
-				return false
-			}
-
-			owner = found
-			fields = append(fields, sel.Sel.Name)
-
-			return true
-		})
+// isKindField reports whether selection reads a struct field carrying a
+// `kind:` tag, following the index path through embedded fields.
+func isKindField(selection *types.Selection) bool {
+	if selection == nil || selection.Kind() != types.FieldVal {
+		return false
 	}
 
-	if mixed {
-		return nil, nil
-	}
+	typ := selection.Recv()
 
-	return owner, fields
-}
+	var tag string
 
-// fieldOwner resolves the VARIABLE a selector reads a field from, or nil when
-// the selector isn't a field read on a plain variable. The variable, not its
-// type: two Step-typed variables in one switch are two dispatches, and
-// answering with the type would silently merge them.
-func fieldOwner(pass *analysis.Pass, sel *ast.SelectorExpr) types.Object {
-	ident, ok := sel.X.(*ast.Ident)
-	if !ok {
-		return nil
-	}
-
-	variable, ok := pass.TypesInfo.Uses[ident].(*types.Var)
-	if !ok {
-		return nil
-	}
-
-	if _, ok := pass.TypesInfo.Selections[sel]; !ok {
-		return nil // a qualified identifier (pkg.Name), not a field
-	}
-
-	if _, ok := types.Unalias(deref(variable.Type())).(*types.Named); !ok {
-		return nil
-	}
-
-	return variable
-}
-
-// missingFields lists table entries no case tested, preserving table order so
-// the message reads in the same order the type declares its kinds.
-func missingFields(table []string, tested map[string]bool) []string {
-	var missing []string
-
-	for _, field := range table {
-		if !tested[field] {
-			missing = append(missing, field)
+	for _, index := range selection.Index() {
+		structType, ok := deref(typ).Underlying().(*types.Struct)
+		if !ok || index >= structType.NumFields() {
+			return false
 		}
+
+		tag = structType.Tag(index)
+		typ = structType.Field(index).Type()
 	}
 
-	return missing
-}
+	_, ok := reflect.StructTag(tag).Lookup("kind")
 
-func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-
-	return false
+	return ok
 }
 
 func deref(typ types.Type) types.Type {
-	pointer, ok := types.Unalias(typ).(*types.Pointer)
-	if !ok {
-		return typ
+	if pointer, ok := types.Unalias(typ).(*types.Pointer); ok {
+		return pointer.Elem()
 	}
 
-	return pointer.Elem()
+	return typ
 }
 
-// ignoreKey addresses one suppressible line.
 type ignoreKey struct {
 	file string
 	line int
 }
 
 // ignoredLines collects the lines a `//kindswitch:ignore <reason>` comment
-// suppresses: the comment's own line (trailing form) and the line after it
-// (preceding form).
-//
-// The reason is mandatory, enforced by simply not honoring a bare directive —
-// the switch keeps reporting until someone writes down why the omitted kind is
-// deliberate. An unexplained suppression would recreate the state this
-// analyzer exists to end, where a dispatch site that ignores a kind is neither
-// checked nor marked and therefore reads as covered.
+// covers: its own line and the next.
 func ignoredLines(pass *analysis.Pass) map[ignoreKey]bool {
 	ignored := map[ignoreKey]bool{}
 
 	for _, file := range pass.Files {
 		for _, group := range file.Comments {
 			for _, comment := range group.List {
-				if !strings.HasPrefix(comment.Text, ignoreDirective) {
-					continue
-				}
-
-				if strings.TrimSpace(strings.TrimPrefix(comment.Text, ignoreDirective)) == "" {
+				reason, ok := strings.CutPrefix(comment.Text, ignoreDirective)
+				if !ok || strings.TrimSpace(reason) == "" {
 					continue
 				}
 
