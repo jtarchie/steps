@@ -82,6 +82,11 @@ func HasRuntimeAxis(step Step) bool {
 // what to do beats discovering it halfway through.
 const MaxAcrossItems = 1000
 
+// MaxAcrossCells bounds the PRODUCT of a matrix's axes, which MaxAcrossItems
+// alone does not: two model-written arrays each under the per-axis cap
+// multiply to a million cells. Checked before any combination is built.
+const MaxAcrossCells = 1000
+
 // ExpandAcross renders an across: step into its cells: one step per
 // combination of values, with `{{ .vars.<name> }}` substituted into the
 // templatable fields, in row-major order over the axes as declared.
@@ -131,6 +136,11 @@ func ExpandAcrossValues(label string, step Step, runtime map[string][]string) ([
 		}
 	}
 
+	err = checkCellCount(label, axes)
+	if err != nil {
+		return nil, err
+	}
+
 	combos := combinations(axes)
 
 	// A parallelism: matrix renders one var no axis carries: count, the
@@ -144,6 +154,7 @@ func ExpandAcrossValues(label string, step Step, runtime map[string][]string) ([
 	}
 
 	cells := make([]Step, 0, len(combos))
+	parsed := templateCache{}
 
 	// Every cell is rendered HERE, before any of them runs. That is what makes
 	// a field reference an all-or-nothing check: an author's typo fails the
@@ -153,7 +164,7 @@ func ExpandAcrossValues(label string, step Step, runtime map[string][]string) ([
 		cell := step
 		cell.Across, cell.Parallelism = nil, nil
 
-		err = renderCell(label, &cell, combo)
+		err = renderCell(label, &cell, combo, parsed)
 		if err != nil {
 			return nil, err
 		}
@@ -222,6 +233,26 @@ func resolveAxes(label string, declared []AcrossVar, runtime map[string][]string
 	}
 
 	return axes, nil
+}
+
+func checkCellCount(label string, axes []acrossAxis) error {
+	cells := 1
+	for _, axis := range axes {
+		// Once over the cap the exact figure no longer matters, and
+		// multiplying on would overflow given enough axes.
+		if cells > MaxAcrossCells {
+			break
+		}
+
+		cells *= len(axis.values)
+	}
+
+	if cells > MaxAcrossCells {
+		return fmt.Errorf("%s: across expands to %d cells, above the limit of %d; filter the lists where they are written, or split the matrix across steps",
+			label, cells, MaxAcrossCells)
+	}
+
+	return nil
 }
 
 // combinations returns every combination of the axes' values, row-major: the
@@ -302,7 +333,7 @@ func renderableFields(cell *Step) []renderableField {
 
 // renderCell substitutes `{{ .vars.<name> }}` into the fields where a matrix
 // value can meaningfully differ per cell.
-func renderCell(label string, cell *Step, combo acrossCombo) error {
+func renderCell(label string, cell *Step, combo acrossCombo, parsed templateCache) error {
 	// A try: cell keeps every renderable field on the step it wraps rather
 	// than on itself, so render through the wrapper. Without this a matrix
 	// whose body is a try: rendered NOTHING: each cell ran the literal
@@ -318,7 +349,7 @@ func renderCell(label string, cell *Step, combo acrossCombo) error {
 	if cell.Try != nil {
 		inner := *cell.Try
 
-		err := renderCell(label, &inner, combo)
+		err := renderCell(label, &inner, combo, parsed)
 		if err != nil {
 			return err
 		}
@@ -344,7 +375,7 @@ func renderCell(label string, cell *Step, combo acrossCombo) error {
 	cell.Messages = slices.Clone(cell.Messages)
 
 	for _, field := range renderableFields(cell) {
-		rendered, err := renderVars(*field.value, combo)
+		rendered, err := renderVars(*field.value, combo, parsed)
 		if err != nil {
 			return fmt.Errorf("%s: across %s: %w", label, field.name, err)
 		}
@@ -407,7 +438,7 @@ func nameCell(cell *Step, templateName string, vars map[string]string) {
 // name is decided, so this only happens for a name no substitution touches,
 // where the suffix is the safe answer.
 func templateReferencesAxis(templateName string, vars map[string]string) bool {
-	parsed, err := template.New("across").Parse(templateName)
+	parsed, err := newAcrossTemplate().Parse(templateName)
 	if err != nil || parsed.Tree == nil || parsed.Root == nil {
 		return false
 	}
@@ -438,15 +469,26 @@ func coordinates(vars map[string]string) string {
 	return strings.Join(parts, " ")
 }
 
+// templateCache holds each distinct field template parsed once per matrix,
+// keyed by its source text: every cell renders the same templates.
+type templateCache map[string]*template.Template
+
 // renderVars applies `{{ .vars.<name> }}` substitution to one field.
-func renderVars(value string, combo acrossCombo) (string, error) {
+func renderVars(value string, combo acrossCombo, cache templateCache) (string, error) {
 	if !strings.Contains(value, "{{") {
 		return value, nil
 	}
 
-	parsed, err := template.New("across").Option("missingkey=error").Parse(value)
-	if err != nil {
-		return "", fmt.Errorf("could not parse the template: %w", err)
+	parsed, ok := cache[value]
+	if !ok {
+		var err error
+
+		parsed, err = newAcrossTemplate().Option("missingkey=error").Parse(value)
+		if err != nil {
+			return "", fmt.Errorf("could not parse the template: %w", err)
+		}
+
+		cache[value] = parsed
 	}
 
 	var out bytes.Buffer
@@ -459,7 +501,7 @@ func renderVars(value string, combo acrossCombo) (string, error) {
 		data = merged
 	}
 
-	err = parsed.Execute(&out, map[string]any{"vars": data})
+	err := parsed.Execute(&out, map[string]any{"vars": data})
 	if err != nil {
 		return "", fmt.Errorf("could not render the template: %w", err)
 	}

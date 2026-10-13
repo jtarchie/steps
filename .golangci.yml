@@ -456,6 +456,16 @@ linters:
           allow:
             - "$gostd"
             - "gopkg.in/yaml.v3"
+            # test-only (ConfigShellquoteTestOnly): shellquote_test.go holds
+            # across:'s ported shellquote to the one internal/template calls.
+            - "github.com/frioux/leatherman/pkg/shellquote"
+        ConfigShellquoteTestOnly:
+          files:
+            - "**/internal/config/**"
+            - "!$test"
+          deny:
+            - pkg: "github.com/frioux/leatherman/pkg/shellquote"
+              desc: "test-only in config: the reference the ported shellquote is checked against"
         Resource:
           files:
             - "**/internal/resource/**"

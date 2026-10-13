@@ -564,7 +564,7 @@ jobs:
       from_file: findings/items.json    # instead of values:
     task: investigate
     inputs: [findings]
-    run: echo investigating {{ .vars.item }}
+    run: echo investigating {{ .vars.item | shellquote }}
   assert:
     execution:                     # width decided by what scan wrote, not by the file
     - scan
@@ -580,7 +580,8 @@ This is "the step plans, the pipeline executes": one step produces a work list, 
 - **A JSON array of strings.** Anything else — an object, a list of objects, numbers, unparsable text — fails the block naming the file. An item that needs structure carries a *path*: the producer writes one file per item, the array holds the paths, and cells take `context_paths: ["{{ .vars.item }}"]` (which renders per cell).
 - **`values:` and `from_file:` are mutually exclusive per axis**, and an axis needs one of them. Otherwise a file axis is an ordinary axis: it may sit beside static axes or other file axes; the product is taken as usual.
 - **An empty array runs nothing, and says so** — `across: 0 cells (findings/items.json is empty); nothing to run` — and the plan carries on. "The scan found nothing" is a legitimate success; a pipeline that wants an empty list to fail asserts that where the file is written.
-- **At most 1000 items**, and the file itself is capped at 1 MiB. Nobody reviewed the length of an array a model wrote, and an unbounded one turns an upstream typo into an unbounded bill.
+- **Quote an item before it reaches the shell.** `run:` is handed to `sh -c`, and an item a model wrote is untrusted text — `{{ .vars.item | shellquote }}` keeps `$(...)`, backticks and `;` inert, exactly as [templating.md](templating.md)'s `shellquote` does. It is the one function an `across:` template has.
+- **At most 1000 items per axis, and 1000 cells per matrix**, and the file itself is capped at 1 MiB. Nobody reviewed the length of an array a model wrote, and an unbounded one turns an upstream typo into an unbounded bill. The cell cap is the product of every axis, static ones included, so two file axes of 40 items each are refused before any cell runs.
 - **The path is confined at load**: absolute paths and any `..` that climbs out of the workspace are load errors.
 - **Planning**: a static matrix expands at load, so `steps plan` shows every cell. A file matrix can't — its width isn't knowable until the producing step runs — so it hashes its *declaration* at plan time, and its templates are still checked at load. A chain through any `across:` block is unskippable, which here is load-bearing: **the producing step re-runs every run**, so the file the axis reads is always the file this run wrote. The cells themselves still hash and cache individually.
 

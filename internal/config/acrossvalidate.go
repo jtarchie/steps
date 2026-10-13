@@ -9,7 +9,6 @@ import (
 	"path"
 	"slices"
 	"strings"
-	"text/template"
 	"text/template/parse"
 )
 
@@ -206,7 +205,7 @@ func validateAcrossTemplates(label string, step Step) error {
 			continue
 		}
 
-		parsed, err := template.New("across").Option("missingkey=error").Parse(*field.value)
+		parsed, err := newAcrossTemplate().Option("missingkey=error").Parse(*field.value)
 		if err != nil {
 			return fmt.Errorf("%s: across %s: could not parse the template: %w", label, field.name, err)
 		}
