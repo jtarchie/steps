@@ -226,10 +226,16 @@ func refuseFencedAddr(_, address string, _ syscall.RawConn) error {
 	return nil
 }
 
+// sharedAddressSpace is RFC 6598's carrier-grade NAT range, which netip does
+// not count as private but clouds use for internal endpoints.
+//
+//nolint:gochecknoglobals // a constant prefix, parsed once
+var sharedAddressSpace = netip.MustParsePrefix("100.64.0.0/10")
+
 // fencedAddr reports whether addr is one web_fetch refuses without an
 // explicit allow:. The netip predicates see through IPv4-mapped IPv6, which
 // TestWebFetchFencedAddr pins.
 func fencedAddr(addr netip.Addr) bool {
 	return addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsPrivate() ||
-		addr.IsUnspecified() || addr.IsMulticast()
+		addr.IsUnspecified() || addr.IsMulticast() || sharedAddressSpace.Contains(addr.Unmap())
 }
