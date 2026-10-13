@@ -28,12 +28,6 @@ const stepCacheDirName = "steps-cache"
 // tuned by guesswork.
 const defaultStepCacheMaxEntries = 200
 
-// stagedSuffix names the directory an output is materialized into before it
-// replaces the artifact it is going to. It ends in a character
-// config.ValidateArtifactName refuses, so a staged directory can never collide
-// with a legitimate artifact of its own.
-const stagedSuffix = ".steps-staged"
-
 // stepCacheDomain separates this cache's keys from every other hash in the
 // codebase, so a merkle node hash can never be mistaken for an action key even
 // if one were passed to the wrong function.
@@ -292,14 +286,10 @@ func (c *stepCache) stageOutputs(ctx context.Context, path, artifacts string, re
 		}
 
 		dst := filepath.Join(artifacts, mappedName(out, req.OutputMapping))
-		tmp := dst + stagedSuffix
 
-		err = c.backend.remove(tmp)
-		if err != nil {
-			return staged, fmt.Errorf("clearing staged output %q: %w", out, err)
-		}
-
-		err = c.backend.materialize(ctx, src, tmp)
+		tmp, err := stageTree(dst, c.backend.remove, func(tmp string) error {
+			return c.backend.materialize(ctx, src, tmp)
+		})
 		if err != nil {
 			return staged, fmt.Errorf("staging output %q: %w", out, err)
 		}
@@ -310,17 +300,12 @@ func (c *stepCache) stageOutputs(ctx context.Context, path, artifacts string, re
 	return staged, nil
 }
 
-// commitStaged swaps each staged output into place. Only local remove/rename
-// work remains here, so the window in which an artifact is absent is as short
-// as this design can make it.
+// commitStaged swaps each staged output into place. Only local renames remain
+// here, so the window in which an artifact is absent is as short as this
+// design can make it.
 func (c *stepCache) commitStaged(staged []stagedOutput) error {
 	for i, out := range staged {
-		err := c.backend.remove(out.dst)
-		if err != nil {
-			return fmt.Errorf("replacing artifact %q: %w", filepath.Base(out.dst), err)
-		}
-
-		err = os.Rename(out.tmp, out.dst)
+		err := swapIn(out.tmp, out.dst, c.backend.remove)
 		if err != nil {
 			return fmt.Errorf("installing artifact %q: %w", filepath.Base(out.dst), err)
 		}
@@ -334,42 +319,43 @@ func (c *stepCache) commitStaged(staged []stagedOutput) error {
 // discardStaged removes whatever is left staged, on every path out of restore.
 func (c *stepCache) discardStaged(staged []stagedOutput) {
 	for _, out := range staged {
-		if out.tmp == "" {
-			continue
-		}
-
-		err := c.backend.remove(out.tmp)
-		if err != nil {
-			slog.Warn("workspace.step_cache_staging_cleanup", "dir", out.tmp, "error", err)
+		if out.tmp != "" {
+			discardTree(out.tmp, c.backend.remove)
 		}
 	}
 }
 
 // store files a succeeded step's captured outputs under key, then mirrors
 // the entry to the blob store when one is attached.
+//
+// Built whole beside path and renamed into place, because restore reads an
+// output's mere presence as cached: an entry filled in place and interrupted
+// mid-copy would serve an empty output as a hit.
 func (c *stepCache) store(ctx context.Context, key, path, artifacts string, digests func(string) (string, error), req StepCacheRequest) error {
-	err := c.backend.removeTree(path)
-	if err != nil {
-		return fmt.Errorf("replacing cache entry: %w", err)
-	}
-
-	err = os.MkdirAll(path, 0o750)
-	if err != nil {
-		return fmt.Errorf("creating cache entry: %w", err)
-	}
-
-	for _, out := range req.Outputs {
-		src := filepath.Join(artifacts, mappedName(out, req.OutputMapping))
-
-		err = rejectSymlinkSrc(src)
-		if err != nil {
-			return fmt.Errorf("output %q: %w", out, err)
+	err := replaceTree(path, c.backend.removeTree, func(staged string) error {
+		mkErr := os.MkdirAll(staged, 0o750)
+		if mkErr != nil {
+			return fmt.Errorf("creating cache entry: %w", mkErr)
 		}
 
-		err = c.backend.materialize(ctx, src, filepath.Join(path, out))
-		if err != nil {
-			return fmt.Errorf("caching output %q: %w", out, err)
+		for _, out := range req.Outputs {
+			src := filepath.Join(artifacts, mappedName(out, req.OutputMapping))
+
+			symErr := rejectSymlinkSrc(src)
+			if symErr != nil {
+				return fmt.Errorf("output %q: %w", out, symErr)
+			}
+
+			matErr := c.backend.materialize(ctx, src, filepath.Join(staged, out))
+			if matErr != nil {
+				return fmt.Errorf("caching output %q: %w", out, matErr)
+			}
 		}
+
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
 	c.entries.prune()

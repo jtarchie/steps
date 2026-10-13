@@ -197,7 +197,7 @@ func TestDiscardStagedLogsNoFailureWhenItWorks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	leftover := filepath.Join(root, "out"+stagedSuffix)
+	leftover := stagingPath(filepath.Join(root, "out"))
 
 	err = os.MkdirAll(leftover, 0o750)
 	if err != nil {

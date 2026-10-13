@@ -78,10 +78,8 @@ func (c *resourceCache) Fetch(ctx context.Context, key, dst string, fetch func()
 }
 
 // restore replaces dst with a copy of the cached entry, reporting whether it
-// managed to. dst already exists (the caller created it), and materialize
-// requires its destination not to — so the empty directory is removed first.
-// If anything goes wrong the caller must still be able to fetch into dst, so
-// a failed restore recreates it empty.
+// managed to. Staged beside dst, so a failed restore leaves the empty
+// directory the caller created for its fetch exactly as it was.
 func (c *resourceCache) restore(ctx context.Context, path, dst string) bool {
 	_, err := os.Stat(path)
 	if err != nil {
@@ -101,23 +99,11 @@ func (c *resourceCache) restore(ctx context.Context, path, dst string) bool {
 		return false
 	}
 
-	err = c.backend.remove(dst)
+	err = replaceTree(dst, c.backend.remove, func(staged string) error {
+		return c.backend.materialize(ctx, path, staged)
+	})
 	if err != nil {
 		slog.WarnContext(ctx, "workspace.cache_restore_failed", "entry", path, "error", err)
-
-		return false
-	}
-
-	err = c.backend.materialize(ctx, path, dst)
-	if err != nil {
-		slog.WarnContext(ctx, "workspace.cache_restore_failed", "entry", path, "error", err)
-
-		// dst is gone and the snapshot did not land. Put an empty directory
-		// back so the caller's fetch has somewhere to write.
-		createErr := c.backend.createEmpty(ctx, dst)
-		if createErr != nil {
-			slog.ErrorContext(ctx, "workspace.cache_restore_recovery_failed", "dir", dst, "error", createErr)
-		}
 
 		return false
 	}
@@ -143,14 +129,12 @@ func (c *resourceCache) store(ctx context.Context, path, src string) {
 		return
 	}
 
-	err = c.backend.remove(path)
-	if err != nil {
-		slog.WarnContext(ctx, "workspace.cache_store_failed", "entry", path, "error", err)
-
-		return
-	}
-
-	err = c.backend.materialize(ctx, src, path)
+	// Staged and renamed into place: restore takes an entry's existence as
+	// the whole of "cached", so one filled in place and interrupted would be
+	// served, empty, to every later build.
+	err = replaceTree(path, c.backend.remove, func(staged string) error {
+		return c.backend.materialize(ctx, src, staged)
+	})
 	if err != nil {
 		slog.WarnContext(ctx, "workspace.cache_store_failed", "entry", path, "error", err)
 

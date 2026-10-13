@@ -187,6 +187,13 @@ func TestStepCacheRefusesABlobThatDigestsWrong(t *testing.T) {
 	if res.Hit {
 		t.Fatal("a blob whose bytes do not match its digest was served as a hit")
 	}
+
+	// The refused bytes must not have landed in the entry either, where the
+	// next lookup would take their presence as cached.
+	res = LookupStepCache(context.Background(), mirroredBuild(t, root, blobs, index), req)
+	if res.Hit {
+		t.Fatal("a refused blob was served as a hit on the next lookup")
+	}
 }
 
 // TestStepCacheMissesWhenTheMirrorHasNoAnswer covers the two quiet ends: an

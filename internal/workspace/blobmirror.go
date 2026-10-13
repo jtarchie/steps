@@ -14,11 +14,16 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 )
+
+// errBlobDigestMismatch is a fetch whose mismatch was already logged as one,
+// so the generic fetch-failure line does not say it twice.
+var errBlobDigestMismatch = errors.New("blob digest mismatch")
 
 // BlobStore is remote bytes by content digest: internal/blobstore's shape,
 // declared where it is consumed. The digest is digestTree's, which is what
@@ -119,46 +124,31 @@ func (c *stepCache) fetchOutput(ctx context.Context, path, out, digest string) b
 		return false
 	}
 
-	tmp := filepath.Join(path, out+stagedSuffix)
-
-	cleanup := func() {
-		removeErr := c.backend.remove(tmp)
-		if removeErr != nil {
-			slog.WarnContext(ctx, "workspace.blob_staging_cleanup", "dir", tmp, "error", removeErr)
+	err = replaceTree(filepath.Join(path, out), c.backend.remove, func(tmp string) error {
+		buildErr := c.backend.createEmpty(ctx, tmp)
+		if buildErr != nil {
+			return fmt.Errorf("staging: %w", buildErr)
 		}
-	}
 
-	cleanup()
+		buildErr = c.blobs.GetTree(ctx, digest, tmp)
+		if buildErr != nil {
+			return fmt.Errorf("fetching: %w", buildErr)
+		}
 
-	err = c.backend.createEmpty(ctx, tmp)
-	if err == nil {
-		err = c.blobs.GetTree(ctx, digest, tmp)
-	}
+		got, buildErr := digestTree(tmp)
+		if buildErr != nil || got != digest {
+			slog.WarnContext(ctx, "workspace.blob_digest_mismatch", "output", out, "want", digest, "got", got, "error", buildErr)
 
-	if err != nil {
+			return errBlobDigestMismatch
+		}
+
+		return nil
+	})
+	if err != nil && !errors.Is(err, errBlobDigestMismatch) {
 		slog.WarnContext(ctx, "workspace.blob_fetch_failed", "output", out, "digest", digest, "error", err)
-		cleanup()
-
-		return false
 	}
 
-	got, err := digestTree(tmp)
-	if err != nil || got != digest {
-		slog.WarnContext(ctx, "workspace.blob_digest_mismatch", "output", out, "want", digest, "got", got, "error", err)
-		cleanup()
-
-		return false
-	}
-
-	err = os.Rename(tmp, filepath.Join(path, out))
-	if err != nil {
-		slog.WarnContext(ctx, "workspace.blob_fetch_failed", "output", out, "error", err)
-		cleanup()
-
-		return false
-	}
-
-	return true
+	return err == nil
 }
 
 // publish mirrors a just-stored entry to the blob store and records the

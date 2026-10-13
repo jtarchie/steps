@@ -769,7 +769,7 @@ func (b *isolatingBuild) allArtifacts() ([]string, error) {
 
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() && !strings.Contains(entry.Name(), stagedMarker) {
 			names = append(names, entry.Name())
 		}
 	}
@@ -1061,12 +1061,11 @@ func (s *isolatingSpace) Capture(ctx context.Context) error {
 		artifact := mappedName(out, s.outputMapping)
 		dst := filepath.Join(s.artifacts, artifact)
 
-		err = s.backend.remove(dst)
-		if err != nil {
-			return fmt.Errorf("replacing existing artifact %q: %w", artifact, err)
-		}
-
-		err = s.backend.materialize(ctx, src, dst)
+		// Staged, so an interrupted capture leaves the previous artifact for a
+		// --resume rather than an empty one.
+		err = replaceTree(dst, s.backend.remove, func(staged string) error {
+			return s.backend.materialize(ctx, src, staged)
+		})
 		if err != nil {
 			return fmt.Errorf("capturing output %q: %w", out, err)
 		}

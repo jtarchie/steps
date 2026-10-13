@@ -43,7 +43,7 @@ func TestDiscardStagedRemovesOnlyWhatWasNotCommitted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	leftover := filepath.Join(root, "out"+stagedSuffix)
+	leftover := stagingPath(filepath.Join(root, "out"))
 	committed := filepath.Join(root, "done")
 
 	for _, dir := range []string{leftover, committed} {
