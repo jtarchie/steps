@@ -43,7 +43,7 @@ func (s *Store) DecideApproval(ctx context.Context, id int64, status, by, reason
 	}
 
 	if affected == 0 {
-		return fmt.Errorf("approval %d is not pending (already decided, expired, or never existed)", id)
+		return fmt.Errorf("approval %d: %w (already decided, expired, or never existed)", id, store.ErrApprovalNotPending)
 	}
 
 	return nil

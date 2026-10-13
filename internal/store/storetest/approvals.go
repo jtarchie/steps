@@ -2,10 +2,45 @@ package storetest
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
 )
+
+// TestDecidingTwiceIsNotPending: the second decision on a row is a
+// resubmission, and every caller tells it apart from a write that failed by
+// the sentinel — so it must carry it, and must not overwrite the first.
+func (s suite) TestDecidingTwiceIsNotPending(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	id, err := st.RequestApproval(ctx, "deploy", "ship it?")
+	if err != nil {
+		t.Fatalf("RequestApproval: %v", err)
+	}
+
+	err = st.DecideApproval(ctx, id, "approved", "jtarchie", "")
+	if err != nil {
+		t.Fatalf("DecideApproval: %v", err)
+	}
+
+	err = st.DecideApproval(ctx, id, "rejected", "someone-else", "")
+	if !errors.Is(err, store.ErrApprovalNotPending) {
+		t.Errorf("deciding an already-decided approval = %v, want store.ErrApprovalNotPending", err)
+	}
+
+	err = st.DecideApproval(ctx, id+1000, "approved", "jtarchie", "")
+	if !errors.Is(err, store.ErrApprovalNotPending) {
+		t.Errorf("deciding an approval nobody requested = %v, want store.ErrApprovalNotPending", err)
+	}
+
+	if again, _ := st.ApprovalStatus(ctx, id); again.Status != "approved" || again.DecidedBy != "jtarchie" {
+		t.Errorf("the second decision overwrote the first: %+v", again)
+	}
+}
 
 // TestApprovalsListsOnlyWhatIsWaiting: the waiting list is what a job is
 // parked behind and what the nav badge counts, so a decided request must drop

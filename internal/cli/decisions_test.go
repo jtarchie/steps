@@ -32,6 +32,35 @@ func TestADecisionAndAnAnswerAreRecordedUnderWhoMadeThem(t *testing.T) {
 	assertDecidedBy(t, state, approval, question, "release-captain")
 }
 
+// A second decision on a row is refused with who got there first, not as a
+// broken database: the person needs to know their "reject" did not land on an
+// approval somebody else already allowed; not parallel, it sets the environment.
+func TestASecondDecisionSaysWhoAlreadyDecided(t *testing.T) {
+	t.Setenv("STEPS_APPROVER", "release-captain")
+
+	state := filepath.Join(t.TempDir(), "steps.db")
+	approval, _ := pendingDecisions(t, state)
+	id := strconv.FormatInt(approval, 10)
+
+	captureStdout(t, func() {
+		err := Run([]string{"approvals", "approve", id, "-p", "app", "--db", state})
+		if err != nil {
+			t.Fatalf("first decision: %v", err)
+		}
+	})
+
+	t.Setenv("STEPS_APPROVER", "late-comer")
+
+	err := Run([]string{"approvals", "reject", id, "-p", "app", "--db", state})
+	if err == nil {
+		t.Fatal("a second decision succeeded")
+	}
+
+	if !strings.Contains(err.Error(), "already approved by release-captain") || strings.Contains(err.Error(), "could not record") {
+		t.Errorf("second decision = %q; want it to name the decision already recorded, not a failure", err)
+	}
+}
+
 func assertDecidedBy(t *testing.T, state string, approval, question int64, who string) {
 	t.Helper()
 

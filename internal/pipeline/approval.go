@@ -4,6 +4,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -104,9 +105,17 @@ func awaitApproval(ctx context.Context, st store.Store, id int64, timeout time.D
 		}
 
 		if time.Now().After(deadline) {
-			_ = st.DecideApproval(context.WithoutCancel(ctx), id, "expired", "", "nobody answered within "+timeout.String())
+			err = st.DecideApproval(context.WithoutCancel(ctx), id, "expired", "", "nobody answered within "+timeout.String())
+			if errors.Is(err, store.ErrApprovalNotPending) {
+				// Somebody decided between the read and this write; theirs stands.
+				continue
+			}
 
-			// Aborted, not failed: nobody decided anything.
+			if err != nil {
+				return approval, fmt.Errorf("approval %d expired unanswered after %s, but recording the expiry failed: %w", id, timeout, err)
+			}
+
+			// Errored, not failed: nobody decided anything.
 			slog.WarnContext(ctx, "job.approval_expired", "approval", id, "timeout", timeout.String())
 
 			return approval, fmt.Errorf("approval %d expired unanswered after %s", id, timeout)

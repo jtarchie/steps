@@ -2,7 +2,14 @@ package store
 
 import (
 	"context"
+	"errors"
 )
+
+// ErrApprovalNotPending is a decision aimed at a row that no longer waits —
+// a double click, a second approver, or the deadline getting there first. A
+// sentinel so every caller can settle on the decision already recorded while
+// still reporting a write that failed as a failure.
+var ErrApprovalNotPending = errors.New("approval is not pending")
 
 // Approvals is a build waiting on a person for PERMISSION.
 //

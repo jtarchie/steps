@@ -1017,10 +1017,19 @@ func (s *Server) handleDecideApproval(c *echo.Context) error {
 	// A decision that no longer matches a pending row is a resubmission — a
 	// double click, or a refresh re-POSTing the form. The first one recorded
 	// the audit trail correctly, so settle on it rather than reporting a 500
-	// for work that succeeded.
+	// for work that succeeded. Any other failure recorded nothing, and a
+	// redirect would tell the person their decision landed while the build
+	// stays parked on it.
 	err = pipeline.Store.DecideApproval(c.Request().Context(), id, status, "web", c.FormValue("reason"))
-	if err != nil {
+
+	switch {
+	case err == nil:
+	case errors.Is(err, store.ErrApprovalNotPending):
 		slog.Info("web.approval_not_pending", "id", id, "error", err)
+	default:
+		slog.Error("web.approval_decide_failed", "id", id, "error", err)
+
+		return echo.NewHTTPError(http.StatusInternalServerError, "could not record the decision").Wrap(err)
 	}
 
 	//nolint:wrapcheck // echo's redirect error is returned verbatim

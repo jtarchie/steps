@@ -56,7 +56,7 @@ func TestParkedApprovalPrintsACommandThatDecidesIt(t *testing.T) {
 
 			// Only a command that parsed and opened the run's own database can be refused as already decided.
 			err = runPrinted(reject, "")
-			if err == nil || !strings.Contains(err.Error(), "could not record the decision") {
+			if err == nil || !strings.Contains(err.Error(), "already approved by") {
 				t.Errorf("the printed reject command = %v, want it refused as already decided", err)
 			}
 		})

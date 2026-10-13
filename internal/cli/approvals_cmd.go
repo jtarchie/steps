@@ -2,8 +2,11 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // ApprovalsCmd lists approval: steps waiting for a decision.
@@ -102,6 +105,10 @@ func decideApproval(flags ReadFlags, id int64, status, reason string) error {
 	defer cleanup()
 
 	err = st.DecideApproval(context.Background(), id, status, currentUser(), reason)
+	if errors.Is(err, store.ErrApprovalNotPending) {
+		return alreadyDecided(st, id, err)
+	}
+
 	if err != nil {
 		return fmt.Errorf("could not record the decision: %w", err)
 	}
@@ -109,6 +116,23 @@ func decideApproval(flags ReadFlags, id int64, status, reason string) error {
 	fmt.Printf("%s: approval %d\n", status, id)
 
 	return nil
+}
+
+// alreadyDecided names the decision that got there first, because "not
+// pending" alone leaves a person who typed reject unsure whether the deploy
+// they meant to stop was allowed.
+func alreadyDecided(st store.Approvals, id int64, notPending error) error {
+	approval, err := st.ApprovalStatus(context.Background(), id)
+	if err != nil {
+		return fmt.Errorf("your decision was not recorded: %w", notPending)
+	}
+
+	by := ""
+	if approval.DecidedBy != "" {
+		by = " by " + approval.DecidedBy
+	}
+
+	return fmt.Errorf("approval %d was already %s%s; your decision was not recorded: %w", id, approval.Status, by, notPending)
 }
 
 // currentUser is the audit record's "who". It is deliberately not an
