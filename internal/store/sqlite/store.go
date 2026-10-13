@@ -271,17 +271,23 @@ func openReadPool(path string) (*sql.DB, error) {
 // openReadOnlyDB opens an existing file for a reader.
 //
 // Every pragma the writer sets that WRITES is dropped: journal_mode and
-// auto_vacuum are recorded in the file header, journal_size_limit sizes a log
-// only a writer creates, and _txlock=immediate takes the write lock at BEGIN.
-// They are set on connect, so a reader carrying them modifies the database
-// before it has read anything — which is both a broken promise and, against a
-// file the operator has made read-only, an outright failure to open.
+// auto_vacuum are recorded in the file header and journal_size_limit sizes a
+// log only a writer creates. They are set on connect, so a reader carrying
+// them modifies the database before it has read anything — which is both a
+// broken promise and, against a file the operator has made read-only, an
+// outright failure to open.
+//
+// _txlock=immediate stays, because it is not set on connect: it only changes
+// what BEGIN takes, and no read here begins a transaction. OpenExisting's
+// handle is also the one approve, answer and release write through while a
+// daemon writes the same file, and a deferred transaction there that read
+// before writing would be refused SQLITE_BUSY at once rather than wait.
 //
 // busy_timeout stays: a reader still waits behind a daemon's writer rather
 // than failing instantly. foreign_keys stays because it costs nothing and
 // keeps every handle in this package answering the same way.
 func openReadOnlyDB(path string) (*sql.DB, error) {
-	return openDSN(path, "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", 1)
+	return openDSN(path, "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate", 1)
 }
 
 // openDSN opens a pool of at most conns connections on the file.

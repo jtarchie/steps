@@ -146,6 +146,43 @@ func lockWaiters(t *testing.T, db *sql.DB, n int) <-chan struct{} {
 	return reached
 }
 
+// TestAnEmptyQueueTakesNoPipelineLock: every pipeline's drain worker claims
+// four times a second, and on an idle daemon the answer is almost always
+// "nothing". Taking the pipeline lock to find that out contended with every
+// RecordNode, Prune and RecordVersions on the same key, so an empty queue is
+// answered without it — proven by holding the lock and claiming anyway.
+func TestAnEmptyQueueTakesNoPipelineLock(t *testing.T) {
+	t.Parallel()
+
+	rawURL := newDatabase(t)
+	st := openStore(t, rawURL, "p")
+	db := rawDB(t, rawURL)
+
+	holder, err := db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = holder.Rollback() })
+
+	_, err = holder.ExecContext(t.Context(), `SELECT pg_advisory_xact_lock($1, $2::int)`, classPipeline, st.pipelineID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	_, found, err := st.ClaimNextJob(ctx)
+	if err != nil {
+		t.Fatalf("claiming from an empty queue while another writer held the pipeline lock: %v", err)
+	}
+
+	if found {
+		t.Error("claimed a job from an empty queue")
+	}
+}
+
 // TestTheLockHolderCannotIdleForever: a client that vanishes mid-write
 // leaves its backend holding the pipeline lock until the server notices the
 // dead peer — hours, by TCP keepalive — so the transaction bounds its own

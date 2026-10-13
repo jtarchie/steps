@@ -111,13 +111,21 @@ func open(rawURL string, readOnly bool) (connection, error) {
 	db := stdlib.OpenDB(*config)
 
 	// A reader's own pool; a writable handle's is widened and shared (see pools.go).
-	db.SetMaxOpenConns(4)
+	sizePool(db, 4)
 	// A server restart or a NAT dropping an idle flow leaves a pool holding
 	// dead connections; recycling them bounds how long that lasts.
 	db.SetConnMaxIdleTime(5 * time.Minute)
 	db.SetConnMaxLifetime(30 * time.Minute)
 
 	return connection{db: db, description: describeConfig(config, schema), schema: schema}, nil
+}
+
+// sizePool bounds a pool and keeps every connection it opens: database/sql's
+// default keeps two idle, so a burst past that closed the rest and the next
+// burst redialled them — TCP, TLS and auth each time.
+func sizePool(db *sql.DB, conns int) {
+	db.SetMaxOpenConns(conns)
+	db.SetMaxIdleConns(conns)
 }
 
 // connConfig turns a --db URL into a connection config pinned to this

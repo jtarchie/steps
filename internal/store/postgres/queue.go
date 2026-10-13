@@ -17,13 +17,29 @@ func (s *Store) EnqueueJob(ctx context.Context, jobName, reason string) error {
 }
 
 func enqueueJob(ctx context.Context, db executor, pipelineID int64, jobName, reason string) error {
+	return enqueueJobs(ctx, db, pipelineID, []string{jobName}, reason)
+}
+
+// enqueueJobs is enqueueJob for several jobs in one statement, queued in the
+// order given.
+func enqueueJobs(ctx context.Context, db executor, pipelineID int64, jobNames []string, reason string) error {
+	if len(jobNames) == 0 {
+		return nil
+	}
+
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO trigger_queue (pipeline_id, job_name, reason, status, enqueued_at)
-		VALUES ($1, $2, $3, 'pending', $4)
+		SELECT $1, job_name, $3, 'pending', $4
+		FROM unnest($2::text[]) WITH ORDINALITY AS j(job_name, position)
+		ORDER BY position
 		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL DO NOTHING
-	`, pipelineID, jobName, clean(reason), now())
+	`, pipelineID, jobNames, clean(reason), now())
+	if err != nil && len(jobNames) == 1 {
+		return fmt.Errorf("could not enqueue job %q: %w", jobNames[0], err)
+	}
+
 	if err != nil {
-		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
+		return fmt.Errorf("could not enqueue jobs %q: %w", jobNames, err)
 	}
 
 	return nil
@@ -69,12 +85,28 @@ func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID stri
 // claim pass over a row some other statement holds rather than wait on it.
 func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error) {
 	var (
-		claim store.ClaimedJob
-		rerun sql.NullString
-		found bool
+		claim   store.ClaimedJob
+		rerun   sql.NullString
+		found   bool
+		pending bool
 	)
 
-	err := s.write(ctx, func(tx *sql.Tx) error {
+	// Asked outside the lock first: every pipeline's drain worker asks this
+	// four times a second, and an empty queue's answer must not take the
+	// pipeline lock that RecordNode, Prune and RecordVersions wait on. A row
+	// enqueued after this read is claimed on the worker's next pass.
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM trigger_queue WHERE pipeline_id = $1 AND status = 'pending')`,
+		s.pipelineID).Scan(&pending)
+	if err != nil {
+		return store.ClaimedJob{}, false, fmt.Errorf("could not claim next job: %w", describe(err))
+	}
+
+	if !pending {
+		return store.ClaimedJob{}, false, nil
+	}
+
+	err = s.write(ctx, func(tx *sql.Tx) error {
 		err := tx.QueryRowContext(ctx, `
 			UPDATE trigger_queue
 			SET status = 'running', started_at = $1

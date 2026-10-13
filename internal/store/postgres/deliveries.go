@@ -73,14 +73,7 @@ func (s *Store) dispatchDelivery(ctx context.Context, tx *sql.Tx, resourceName s
 		return err
 	}
 
-	for _, job := range dispatch.Jobs {
-		err = enqueueJob(ctx, tx, s.pipelineID, job, resourceName)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return enqueueJobs(ctx, tx, s.pipelineID, dispatch.Jobs, resourceName)
 }
 
 // pruneAfterDelivery is RecordVersions' cap, with the delivery as the whole

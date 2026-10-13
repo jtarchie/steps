@@ -27,17 +27,25 @@ func (s *Store) RecordRevision(ctx context.Context, sha, source string, includes
 
 		// The sha covers the includes too, so a conflicting row already holds
 		// byte-identical ones.
-		for path, content := range includes {
-			_, err = tx.ExecContext(ctx, `
-				INSERT INTO revision_includes (revision_id, path, content) VALUES ($1, $2, $3)
-				ON CONFLICT (revision_id, path) DO NOTHING
-			`, revisionID, path, []byte(content))
-			if err != nil {
-				return err //nolint:wrapcheck // wrapped below with the pipeline
-			}
+		if len(includes) == 0 {
+			return nil
 		}
 
-		return nil
+		paths := make([]string, 0, len(includes))
+		contents := make([][]byte, 0, len(includes))
+
+		for path, content := range includes {
+			paths = append(paths, path)
+			contents = append(contents, []byte(content))
+		}
+
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO revision_includes (revision_id, path, content)
+			SELECT $1, path, content FROM unnest($2::text[], $3::bytea[]) AS i(path, content)
+			ON CONFLICT (revision_id, path) DO NOTHING
+		`, revisionID, paths, contents)
+
+		return err //nolint:wrapcheck // wrapped below with the pipeline
 	})
 	if err != nil {
 		return fmt.Errorf("could not record the configuration of pipeline %q: %w", s.pipeline, err)

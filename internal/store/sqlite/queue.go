@@ -212,14 +212,22 @@ func (s *Store) AbortQueuedJob(ctx context.Context, jobName string) (bool, error
 // pending successor is deleted instead of flipped — that later pending row
 // already covers re-running the job, and the interrupted build's own outputs
 // were never captured, so there is nothing to preserve. Called once at
-// startup before any worker/poller goroutine exists, so the two statements
-// run without concurrent writers.
+// startup before any worker/poller goroutine exists. One transaction, so a
+// failure part way leaves the queue and the runs as they were rather than
+// re-queued jobs whose runs still read as running.
 func (s *Store) ResetStaleRunning(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("could not reset stale running jobs: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
 	// A running row superseded by a pending one is simply dropped: both mean
 	// "run this job", and the pending one is the later word. Nothing is lost
 	// with it, because the row no longer carries the work — what the job
 	// builds is read from resource_versions when it runs.
-	_, err := s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		DELETE FROM trigger_queue
 		WHERE pipeline_id = ? AND status = 'running'
 		  AND EXISTS (
@@ -237,7 +245,7 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 	// builds of one job may have been in flight (max_in_flight), and only one
 	// pending row per job — and per retried run — is allowed, so they
 	// collapse into one — which is right: the job needs to run, not to run N times.
-	_, err = s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		DELETE FROM trigger_queue
 		WHERE pipeline_id = ? AND status = 'running' AND rowid NOT IN (
 			SELECT MIN(rowid) FROM trigger_queue
@@ -248,7 +256,7 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 		return fmt.Errorf("could not collapse stale running jobs: %w", err)
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		UPDATE trigger_queue SET status = 'pending', started_at = NULL
 		WHERE pipeline_id = ? AND status = 'running'
 	`, s.pipelineID)
@@ -260,12 +268,17 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 	// process is gone, and left running it draws a live build forever.
 	// aborted is what the same process would have written had it been
 	// stopped gently rather than killed.
-	_, err = s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		UPDATE runs SET status = 'aborted', finished_at = ?
 		WHERE pipeline_id = ? AND status = 'running'
 	`, nowNano(), s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not close stale running runs: %w", err)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("could not reset stale running jobs: %w", err)
 	}
 
 	return nil

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -559,5 +560,65 @@ func TestHasNothingRecorded(t *testing.T) {
 	// reported as "nothing recorded" by a helper that could not open it.
 	if HasNothingRecorded(filepath.Join(dir, "absent.db")) {
 		t.Error("a missing file reads as an empty database")
+	}
+}
+
+// TestExistingHandleTransactionsWaitForTheDaemon: OpenExisting's handle is
+// what approve, answer and release write through while a daemon writes the
+// same file. A deferred transaction there that reads and then writes must
+// UPGRADE its lock, and SQLite refuses that at once rather than honoring
+// busy_timeout — so BEGIN takes the write lock up front, as the writer's does.
+// Every write through that handle today is one statement, which BEGIN never
+// touches; this holds the handle to it before a transaction arrives.
+func TestExistingHandleTransactionsWaitForTheDaemon(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	daemon := sharedFile(t, "app")[0]
+
+	existing, err := OpenExisting(daemon.Description(), "app")
+	if err != nil {
+		t.Fatalf("OpenExisting: %v", err)
+	}
+
+	t.Cleanup(func() { _ = existing.Close() })
+
+	tx, err := existing.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	var queued int
+
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM trigger_queue WHERE pipeline_id = ?`, existing.pipelineID).Scan(&queued)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	enqueued := make(chan error, 1)
+
+	go func() { enqueued <- daemon.EnqueueJob(ctx, "build", "poll") }()
+
+	// Long enough for the daemon's write to land if nothing holds it off.
+	select {
+	case err = <-enqueued:
+		enqueued <- err
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	_, err = tx.ExecContext(ctx, `UPDATE pipelines SET path = path WHERE id = ?`, existing.pipelineID)
+	if err == nil {
+		err = tx.Commit()
+	}
+
+	if err != nil {
+		t.Errorf("a read-then-write through OpenExisting's handle while the daemon wrote: %v", err)
+	}
+
+	err = <-enqueued
+	if err != nil {
+		t.Errorf("the daemon's enqueue: %v", err)
 	}
 }

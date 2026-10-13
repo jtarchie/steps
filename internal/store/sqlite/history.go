@@ -150,30 +150,6 @@ func insertNewVersions(
 	return int(changed), nil
 }
 
-// nextCheckOrder is the order to give the next newly-seen version.
-//
-// MAX+1 inside the caller's transaction rather than an AUTOINCREMENT column,
-// because the sequence is PER RESOURCE: one global counter would still order
-// correctly but leave gaps that make "the 50 oldest of this resource" a
-// scan rather than a range. Safe against a concurrent writer because the DSN
-// opens transactions IMMEDIATE, so this read already holds the write lock.
-func nextCheckOrder(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string) (int64, error) {
-	var highest sql.NullInt64
-
-	err := tx.QueryRowContext(ctx,
-		`SELECT MAX(check_order) FROM resource_versions WHERE pipeline_id = ? AND resource_name = ?`,
-		pipelineID, resourceName).Scan(&highest)
-	if err != nil {
-		return 0, fmt.Errorf("could not read version order for %q: %w", resourceName, err)
-	}
-
-	if !highest.Valid {
-		return 1, nil
-	}
-
-	return highest.Int64 + 1, nil
-}
-
 // pruneVersions drops the oldest versions beyond the cap, but never one at or
 // above the lowest order the check just reported. A version still in the
 // report is still real, whatever the cap says — deleting it means the next
@@ -317,19 +293,21 @@ func (s *Store) RecordVersionOrder(ctx context.Context, resourceName string, ver
 // path goes near the poller. Recording that a job used a version implies the
 // version existed, so the implication is made explicit here rather than
 // left to fail as a constraint violation.
+//
+// The order is MAX+1 rather than an AUTOINCREMENT column because the sequence
+// is PER RESOURCE: one global counter would still order correctly but leave
+// gaps that make "the 50 oldest of this resource" a scan rather than a range.
+// Safe against a concurrent writer because the DSN opens transactions
+// IMMEDIATE, so the read already holds the write lock.
 func ensureVersion(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, versionJSON store.VersionKey) error {
-	next, err := nextCheckOrder(ctx, tx, pipelineID, resourceName)
-	if err != nil {
-		return err
-	}
-
 	// from_check stays 0: this records that a version was USED, which is not
 	// the same as a check reporting what exists. See ResourceVersionsJSON.
-	_, err = tx.ExecContext(ctx, `
+	_, err := tx.ExecContext(ctx, `
 		INSERT INTO resource_versions (pipeline_id, resource_name, version_json, check_order, from_check)
-		VALUES (?, ?, ?, ?, 0)
+		SELECT ?, ?, ?, COALESCE(MAX(check_order), 0) + 1, 0
+		FROM resource_versions WHERE pipeline_id = ? AND resource_name = ?
 		ON CONFLICT (pipeline_id, resource_name, version_json) DO NOTHING
-	`, pipelineID, resourceName, versionJSON, next)
+	`, pipelineID, resourceName, versionJSON, pipelineID, resourceName)
 	if err != nil {
 		return fmt.Errorf("could not record version for %q: %w", resourceName, err)
 	}

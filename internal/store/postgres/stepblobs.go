@@ -24,13 +24,20 @@ func (s *Store) RecordStepBlobs(ctx context.Context, actionKey string, outputs m
 			return err //nolint:wrapcheck // wrapped below
 		}
 
+		names := make([]string, 0, len(outputs))
+		digests := make([]string, 0, len(outputs))
+
 		for output, digest := range outputs {
-			_, err = tx.ExecContext(ctx,
-				`INSERT INTO step_blobs (pipeline_id, action_key, output, digest) VALUES ($1, $2, $3, $4)`,
-				s.pipelineID, actionKey, output, digest)
-			if err != nil {
-				return err //nolint:wrapcheck // wrapped below
-			}
+			names = append(names, output)
+			digests = append(digests, digest)
+		}
+
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO step_blobs (pipeline_id, action_key, output, digest)
+			SELECT $1, $2, output, digest FROM unnest($3::text[], $4::text[]) AS o(output, digest)
+		`, s.pipelineID, actionKey, names, digests)
+		if err != nil {
+			return err //nolint:wrapcheck // wrapped below
 		}
 
 		// Whole entries, ordered by each entry's newest row, so eviction

@@ -42,7 +42,7 @@ func acquirePool(rawURL string) (*pool, error) {
 		return nil, err
 	}
 
-	conn.db.SetMaxOpenConns(sharedPoolSize)
+	sizePool(conn.db, sharedPoolSize)
 
 	held := &pool{connection: conn, key: rawURL, holders: 1}
 	poolsByURL[rawURL] = held
