@@ -571,21 +571,20 @@ func WithOutput(ctx context.Context, out Output) context.Context {
 	return context.WithValue(ctx, outputKey{}, out)
 }
 
-// Tee installs wrap over each of ctx's output streams: it is handed the writer the stream resolves to today and returns the one to use instead, so a caller can watch a step's bytes on their way to whatever renderer is installed. Hold is kept.
+// Tee installs wrap over each of ctx's output streams: it is handed the writer the stream resolves to today and returns the one to use instead, so a caller can watch a step's bytes on their way to whatever renderer is installed. Only Step is replaced; Hold, Headless and the rest are kept.
 func Tee(ctx context.Context, wrap func(stderr bool, inner io.Writer) io.Writer) context.Context {
 	out, _ := ctx.Value(outputKey{}).(Output)
 	stdout, stderr := wrap(false, stream(ctx, false)), wrap(true, stream(ctx, true))
 
-	return WithOutput(ctx, Output{
-		Step: func(_ int64, isStderr bool) io.Writer {
-			if isStderr {
-				return stderr
-			}
+	out.Step = func(_ int64, isStderr bool) io.Writer {
+		if isStderr {
+			return stderr
+		}
 
-			return stdout
-		},
-		Hold: out.Hold,
-	})
+		return stdout
+	}
+
+	return WithOutput(ctx, out)
 }
 
 // Stdout is where ctx's human-facing output goes, the process's own stdout when no renderer installed one.
@@ -601,11 +600,12 @@ func Stderr(ctx context.Context) io.Writer {
 func stream(ctx context.Context, stderr bool) io.Writer {
 	out, _ := ctx.Value(outputKey{}).(Output)
 
+	// Step before Headless: under a daemon Step is only ever a Tee, whose writers already end in io.Discard but must see the bytes on the way.
 	switch {
-	case out.Headless:
-		return io.Discard
 	case out.Step != nil:
 		return out.Step(StepID(ctx), stderr)
+	case out.Headless:
+		return io.Discard
 	case stderr && out.Stderr != nil:
 		return out.Stderr
 	case stderr:

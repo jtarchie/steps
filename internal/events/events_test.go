@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -582,4 +583,97 @@ func TestHeadlessNoteWithNoBusIsLogged(t *testing.T) {
 	if printed.String() != "under steps run\n" || strings.Contains(logged.String(), "under steps run") {
 		t.Errorf("a note under steps run: logged %q, printed %q", logged.String(), printed.String())
 	}
+}
+
+// A task's command runs under Tee, so a Tee that forgot Headless sent the daemon's bus-less notes to a discarded stdout instead of slog — and the recording wrapper must still see the bytes it then discards. Not parallel: slog's default is the process's.
+func TestTeeUnderHeadlessStillLogsAndRecords(t *testing.T) {
+	var logged bytes.Buffer
+
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	var recorded strings.Builder
+
+	ctx := Tee(WithOutput(context.Background(), Output{Headless: true}), func(_ bool, inner io.Writer) io.Writer {
+		return io.MultiWriter(&recorded, inner)
+	})
+
+	if !Headless(ctx) {
+		t.Error("Tee dropped Headless")
+	}
+
+	Note(ctx, NoteWarn, "inside a task")
+
+	if !strings.Contains(logged.String(), `text="inside a task"`) {
+		t.Errorf("a teed headless note with no bus was not logged: %q", logged.String())
+	}
+
+	_, _ = io.WriteString(Stdout(ctx), "bytes")
+	if recorded.String() != "bytes" {
+		t.Errorf("the tee recorded %q under a headless context", recorded.String())
+	}
+}
+
+// Tee replaces Step and nothing else, so a field added to Output later is carried through without anyone remembering to.
+func TestTeeKeepsEveryOtherOutputField(t *testing.T) {
+	t.Parallel()
+
+	out := everyFieldSet(t)
+	v := reflect.ValueOf(out)
+
+	got, _ := Tee(WithOutput(context.Background(), out), func(_ bool, inner io.Writer) io.Writer { return inner }).Value(outputKey{}).(Output)
+
+	g := reflect.ValueOf(got)
+	for i := range v.NumField() {
+		name := v.Type().Field(i).Name
+		if name == "Step" {
+			continue
+		}
+
+		want, have := v.Field(i), g.Field(i)
+
+		var same bool
+		if want.Kind() == reflect.Func {
+			same = !have.IsNil() && want.Pointer() == have.Pointer()
+		} else {
+			same = want.Interface() == have.Interface()
+		}
+
+		if !same {
+			t.Errorf("Tee dropped Output.%s", name)
+		}
+	}
+}
+
+func everyFieldSet(t *testing.T) Output {
+	t.Helper()
+
+	var out Output
+
+	v := reflect.ValueOf(&out).Elem()
+	for i := range v.NumField() {
+		f := v.Field(i)
+
+		switch f.Kind() { //nolint:exhaustive // the default fails the test for any kind not taught here
+		case reflect.Bool:
+			f.SetBool(true)
+		case reflect.Func:
+			typ := f.Type()
+			f.Set(reflect.MakeFunc(typ, func([]reflect.Value) []reflect.Value {
+				results := make([]reflect.Value, typ.NumOut())
+				for j := range results {
+					results[j] = reflect.Zero(typ.Out(j))
+				}
+
+				return results
+			}))
+		case reflect.Interface:
+			f.Set(reflect.ValueOf(&strings.Builder{}))
+		default:
+			t.Fatalf("Output.%s: teach this test to set a %s", v.Type().Field(i).Name, f.Kind())
+		}
+	}
+
+	return out
 }
