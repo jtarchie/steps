@@ -2,10 +2,14 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -26,7 +30,7 @@ func TestWebFetchReturnsBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result := fetchResult(t, nil, map[string]any{"url": server.URL})
+	result := fetchResult(t, []string{"127.0.0.1"}, map[string]any{"url": server.URL})
 
 	if result["status"] != http.StatusOK || result["body"] != "hello from the spec" || result["truncated"] != false {
 		t.Errorf("result = %v, want status 200 with the body untruncated", result)
@@ -45,7 +49,7 @@ func TestWebFetchTruncatesAtCap(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result := fetchResult(t, nil, map[string]any{"url": server.URL})
+	result := fetchResult(t, []string{"127.0.0.1"}, map[string]any{"url": server.URL})
 
 	if body, _ := result["body"].(string); len(body) != maxWebFetchBytes || result["truncated"] != true {
 		t.Errorf("body length = %d, truncated = %v; want the cap with truncated true", len(result["body"].(string)), result["truncated"])
@@ -166,5 +170,83 @@ func TestWebFetchDeclarationCarriesAllow(t *testing.T) {
 	bare, _ := webFetchTool(nil)
 	if strings.Contains(bare.Description, "Restricted") {
 		t.Errorf("bare-grant description = %q, want no restriction claim", bare.Description)
+	}
+}
+
+// TestWebFetchRefusesLoopbackByDefault is the SSRF fence: a bare grant reaches
+// the public web, not the daemon's own API or a cloud metadata endpoint.
+func TestWebFetchRefusesLoopbackByDefault(t *testing.T) {
+	t.Parallel()
+
+	var hit atomic.Bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { hit.Store(true) }))
+	defer server.Close()
+
+	result := fetchResult(t, nil, map[string]any{"url": server.URL})
+
+	got, _ := result["error"].(string)
+	if !strings.Contains(got, "127.0.0.1") || !strings.Contains(got, "allow") {
+		t.Errorf("error = %q, want a refusal naming the address and how to opt in", got)
+	}
+
+	if hit.Load() {
+		t.Error("the loopback server was reached; the fence must refuse before the request is sent")
+	}
+}
+
+// TestWebFetchRefusesHostnameResolvingToLoopback proves the fence judges the
+// address actually dialed, not the name — the property DNS rebinding attacks.
+func TestWebFetchRefusesHostnameResolvingToLoopback(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	defer server.Close()
+
+	addr, ok := server.Listener.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("listener address %v is not TCP", server.Listener.Addr())
+	}
+
+	target := fmt.Sprintf("http://localhost:%d/", addr.Port)
+
+	result := fetchResult(t, nil, map[string]any{"url": target})
+	if got, _ := result["error"].(string); !strings.Contains(got, "private or local address") {
+		t.Errorf("bare grant: error = %q, want localhost refused by the address fence", got)
+	}
+
+	result = fetchResult(t, []string{"localhost"}, map[string]any{"url": target})
+	if result["status"] != http.StatusOK {
+		t.Errorf("allow: [localhost]: result = %v, want the explicitly named host reached", result)
+	}
+}
+
+func TestWebFetchFencedAddr(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]bool{
+		"127.0.0.1":        true,
+		"::1":              true,
+		"169.254.169.254":  true,
+		"fe80::1":          true,
+		"10.0.0.1":         true,
+		"172.16.0.1":       true,
+		"192.168.1.1":      true,
+		"fd00:ec2::254":    true,
+		"0.0.0.0":          true,
+		"::":               true,
+		"224.0.0.1":        true,
+		"ff02::1":          true,
+		"::ffff:127.0.0.1": true,
+		"::ffff:10.0.0.1":  true,
+		"93.184.216.34":    false,
+		"2606:4700::1111":  false,
+		"172.32.0.1":       false,
+	}
+
+	for raw, want := range cases {
+		if got := fencedAddr(netip.MustParseAddr(raw)); got != want {
+			t.Errorf("fencedAddr(%s) = %v, want %v", raw, got, want)
+		}
 	}
 }

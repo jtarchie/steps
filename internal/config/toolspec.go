@@ -67,9 +67,10 @@ type ToolSpec struct {
 	Args map[string]string
 	// Allow narrows the web_fetch builtin to the named hosts: an entry
 	// matches its exact hostname and any subdomain of it, and every hop of a
-	// redirect chain is re-checked. Empty means any http(s) URL — the same
-	// trust level as run_shell, which can already curl anywhere; the list is
-	// for the agent that is granted a browser but not a shell. Invalid on
+	// redirect chain is re-checked. Empty means any PUBLIC http(s) URL:
+	// loopback, link-local, private and multicast addresses are refused at
+	// connect time unless an entry names the host, which is the only opt-in
+	// (internal/agent webFetchTransport). Invalid on
 	// every other tool form (validateWebFetchAllowShape).
 	Allow []string
 	// AnsweredBy names an agents: entry that answers this grant's ask_user

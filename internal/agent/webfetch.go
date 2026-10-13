@@ -7,14 +7,24 @@ package agent
 // reads, and this tool exists to read untrusted pages. Every redirect hop is
 // re-checked, since a permitted host that 302s elsewhere would otherwise be
 // an open door through the list.
+//
+// Beneath the list sits an address fence: loopback, link-local, private,
+// unspecified and multicast addresses are refused at connect time, on the IP
+// actually dialed, so neither a hostname that resolves there nor a rebinding
+// DNS answer nor a redirect hop reaches the daemon's own API or a cloud
+// metadata endpoint. Only a host the allow: list names lifts it.
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
+	"syscall"
 	"time"
 
 	"google.golang.org/genai"
@@ -114,7 +124,8 @@ func doWebFetch(ctx context.Context, target *url.URL, allow []string) map[string
 	}
 
 	client := &http.Client{
-		Timeout: webFetchTimeout,
+		Timeout:   webFetchTimeout,
+		Transport: webFetchTransport(allow),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxWebFetchRedirects {
 				return fmt.Errorf("stopped after %d redirects", maxWebFetchRedirects)
@@ -153,18 +164,72 @@ func doWebFetch(ctx context.Context, target *url.URL, allow []string) map[string
 // matches its exact hostname and any subdomain, case-insensitively. An empty
 // list allows everything (the bare-grant semantic; see config.ToolSpec.Allow).
 func checkWebFetchHost(u *url.URL, allow []string) error {
-	if len(allow) == 0 {
+	if len(allow) == 0 || allowNames(u.Hostname(), allow) {
 		return nil
 	}
 
-	host := strings.ToLower(u.Hostname())
+	return fmt.Errorf("web_fetch: host %q is not in this tool's allow: list (%s)", strings.ToLower(u.Hostname()), strings.Join(allow, ", "))
+}
+
+func allowNames(host string, allow []string) bool {
+	host = strings.ToLower(host)
 
 	for _, entry := range allow {
 		entry = strings.ToLower(entry)
 		if host == entry || strings.HasSuffix(host, "."+entry) {
-			return nil
+			return true
 		}
 	}
 
-	return fmt.Errorf("web_fetch: host %q is not in this tool's allow: list (%s)", host, strings.Join(allow, ", "))
+	return false
+}
+
+var errWebFetchFenced = errors.New("a private or local address — name the host in this tool's allow: list to reach it")
+
+// webFetchTransport dials with the address fence on every connection,
+// redirect hops included. A host matched by allow: dials unfenced: naming it
+// is the pipeline author's explicit opt-in, and the only one — an empty list
+// cannot lift the fence. Proxy is nil because a proxied dial would put the
+// proxy's address, not the target's, in front of the fence.
+func webFetchTransport(allow []string) *http.Transport {
+	transport := &http.Transport{
+		ForceAttemptHTTP2:     true,
+		DisableKeepAlives:     true,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+	}
+
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		dialer := &net.Dialer{Timeout: webFetchTimeout}
+
+		host, _, err := net.SplitHostPort(address)
+		if err != nil || !allowNames(host, allow) {
+			dialer.Control = refuseFencedAddr
+		}
+
+		return dialer.DialContext(ctx, network, address)
+	}
+
+	return transport
+}
+
+func refuseFencedAddr(_, address string, _ syscall.RawConn) error {
+	addrPort, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return fmt.Errorf("web_fetch: unrecognized dial address %q: %w", address, err)
+	}
+
+	if fencedAddr(addrPort.Addr()) {
+		return errWebFetchFenced
+	}
+
+	return nil
+}
+
+// fencedAddr reports whether addr is one web_fetch refuses without an
+// explicit allow:. The netip predicates see through IPv4-mapped IPv6, which
+// TestWebFetchFencedAddr pins.
+func fencedAddr(addr netip.Addr) bool {
+	return addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsPrivate() ||
+		addr.IsUnspecified() || addr.IsMulticast()
 }

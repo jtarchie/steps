@@ -214,7 +214,7 @@ Unlike every other tool, `search_files` **never spills**: its bound is arithmeti
 
 Takes one argument, `url` (`http://` or `https://` only), and returns `{status, content_type, body, truncated}`. The body is capped at 100KB inline and cut off past it (`truncated: true`) — the overflow is not spilled, because the page is still on the web and a narrower URL fetches the rest.
 
-A bare grant reaches any http(s) URL — the same trust level as `run_shell`, which can already `curl` anywhere. The mapping form's `allow:` is for the agent granted a browser but **not** a shell: each entry matches its exact hostname and any subdomain, case-insensitively, and every hop of a redirect chain is re-checked, so a permitted host that 302s elsewhere is refused mid-flight. The fence is enforced in steps, not in prompt language — a refused fetch comes back as `{"error": ...}` data naming the host and the list, which matters precisely because this tool exists to read pages the pipeline does not control:
+A bare grant reaches any **public** http(s) URL. Loopback, link-local (including the `169.254.169.254` cloud metadata endpoint), private (RFC 1918, `fc00::/7`), unspecified and multicast addresses are refused — judged on the IP actually connected to, so a hostname that resolves there, a DNS answer that changes between lookups, and a redirect hop are all caught — because a model steered by a page it read should not reach the daemon's own API or the worker's cloud credentials. The one way through is to name the host in `allow:`: a fetch whose host an entry matches (an IP literal such as `127.0.0.1`, or a hostname such as `localhost` or `wiki.corp.internal`) connects wherever that host resolves. web_fetch ignores `HTTP_PROXY`/`HTTPS_PROXY`, since a proxied connection would put the proxy's address, not the target's, in front of the fence. The mapping form's `allow:` is for the agent granted a browser but **not** a shell: each entry matches its exact hostname and any subdomain, case-insensitively, and every hop of a redirect chain is re-checked, so a permitted host that 302s elsewhere is refused mid-flight. The fence is enforced in steps, not in prompt language — a refused fetch comes back as `{"error": ...}` data naming the host and the list, which matters precisely because this tool exists to read pages the pipeline does not control:
 
 ```yaml test=agents-web-fetch
 agents:
@@ -223,7 +223,7 @@ agents:
   tools:
   - write_file
   - builtin: web_fetch
-    allow: [specification.website]   # this host and its subdomains; empty/absent = any http(s) URL
+    allow: [specification.website]   # this host and its subdomains; empty/absent = any public http(s) URL
 
 jobs:
 - name: audit

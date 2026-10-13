@@ -33,12 +33,12 @@ func TestWebFetchRedirectLimitMatchesNetHTTP(t *testing.T) {
 
 	server := webfetchRedirectChain(t)
 
-	result := fetchResult(t, nil, map[string]any{"url": server.URL + "/" + strconv.Itoa(maxWebFetchRedirects-1)})
+	result := fetchResult(t, []string{"127.0.0.1"}, map[string]any{"url": server.URL + "/" + strconv.Itoa(maxWebFetchRedirects-1)})
 	if result["body"] != "landed" {
 		t.Errorf("%d redirects: result = %v, want them followed", maxWebFetchRedirects-1, result)
 	}
 
-	result = fetchResult(t, nil, map[string]any{"url": server.URL + "/" + strconv.Itoa(maxWebFetchRedirects)})
+	result = fetchResult(t, []string{"127.0.0.1"}, map[string]any{"url": server.URL + "/" + strconv.Itoa(maxWebFetchRedirects)})
 	if got, _ := result["error"].(string); !strings.Contains(got, "stopped after") {
 		t.Errorf("%d redirects: result = %v, want the chain refused", maxWebFetchRedirects, result)
 	}
@@ -52,7 +52,7 @@ func TestWebFetchBodyExactlyAtCapIsNotTruncated(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result := fetchResult(t, nil, map[string]any{"url": server.URL})
+	result := fetchResult(t, []string{"127.0.0.1"}, map[string]any{"url": server.URL})
 
 	if body, _ := result["body"].(string); len(body) != maxWebFetchBytes || result["truncated"] != false {
 		t.Errorf("body length = %d, truncated = %v; want the whole body with truncated false", len(body), result["truncated"])
