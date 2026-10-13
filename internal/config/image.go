@@ -6,7 +6,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -451,9 +450,17 @@ func ResolveArtifactImage(step Step, artifacts map[string]bool, fetched map[stri
 // step naming it there would read the alias as an artifact, and the entry
 // would silently pull a Docker Hub image of that name.
 func (c *Config) validateArtifactImageEntries() error {
+	// One set for every job, built once: a copy of every resource per job was
+	// jobs x resources, a second of a 3000-job pipeline's validate.
 	artifacts := c.jobImageArtifacts(Job{})
 	for _, job := range c.Jobs {
-		maps.Copy(artifacts, c.jobImageArtifacts(job))
+		_ = job.visitSteps(func(_ string, step *Step) error {
+			if step.Get != "" {
+				artifacts[step.Get] = true
+			}
+
+			return nil
+		})
 	}
 
 	err := c.visitContainerSettings(func(context string, settings containerSettings) error {
@@ -469,11 +476,11 @@ func (c *Config) validateArtifactImageEntries() error {
 	}
 
 	for _, job := range c.Jobs {
-		artifacts := c.jobImageArtifacts(job)
+		isArtifact := c.lazyImageArtifacts(job)
 
 		err := job.Hooks.Each(func(name string, hook *Step) error {
 			return visitStepTree(fmt.Sprintf("%s %s hook", job.label(), name), hook, func(label string, step *Step) error {
-				if artifacts[step.Image] {
+				if isArtifact(step.Image) {
 					return fmt.Errorf("%s: image %q names an artifact, but a job-level hook runs outside any build and has no fetched gets; move it to a step's hook", label, step.Image)
 				}
 
