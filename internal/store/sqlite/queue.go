@@ -109,9 +109,25 @@ func (s *Store) ClaimNextJob(ctx context.Context) (int64, string, bool, error) {
 	var (
 		id      int64
 		jobName string
+		pending bool
 	)
 
-	err := s.db.QueryRowContext(ctx, `
+	// Asked on the read pool first: a drain worker asks this four times a
+	// second per pipeline, and an empty queue's answer must not queue for the
+	// file's one writer behind every build's real writes. A row enqueued after
+	// this read is claimed on the worker's next pass.
+	err := s.reads.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM trigger_queue WHERE pipeline_id = ? AND status = 'pending')`,
+		s.pipelineID).Scan(&pending)
+	if err != nil {
+		return 0, "", false, fmt.Errorf("could not claim next job: %w", err)
+	}
+
+	if !pending {
+		return 0, "", false, nil
+	}
+
+	err = s.db.QueryRowContext(ctx, `
 		UPDATE trigger_queue
 		SET status = 'running', started_at = ?
 		WHERE id = (

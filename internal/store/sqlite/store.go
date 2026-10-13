@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver name used by sql.Open below
@@ -46,7 +48,11 @@ type Store struct {
 	// check's thousand-row report — because the queue was the pool's, not
 	// the database's. For a handle that only resolved its pipeline
 	// (OpenExisting) it is the same pool as db.
-	reads      *sql.DB
+	reads *sql.DB
+	// shared is the per-file pools db and reads came from, nil for a handle
+	// that opened its own connection (OpenExisting).
+	shared     *pools
+	released   atomic.Bool
 	path       string
 	pipeline   string
 	pipelineID int64
@@ -96,9 +102,10 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 	// rather than honoring busy_timeout, because waiting there could
 	// deadlock two transactions against each other. Taking the write lock up
 	// front turns that into an ordinary wait. Within one process this cannot
-	// arise for one HANDLE (SetMaxOpenConns(1) below), but a --db file
-	// holding several pipelines gets one handle per pipeline — separate pools
-	// on one file, inside one process — and every one of them enqueues.
+	// arise at all — every handle on a file shares its one writer (see
+	// pools) — but a second process on the file, `steps pipeline set`'s
+	// enqueue or a `steps run --db`, is a second writer, and every one of
+	// them enqueues.
 	//
 	// Every transaction in this package is a writer, so there is no
 	// read-only transaction paying for the stricter lock.
@@ -141,28 +148,22 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 		return nil, err
 	}
 
-	db, err := openDB(path)
+	held, err := acquirePools(path)
 	if err != nil {
 		return nil, err
 	}
 
-	ctx := context.Background()
-
-	id, err := initDB(ctx, db, path, pipelineName)
+	id, err := initDB(context.Background(), held.db, path, pipelineName)
 	if err != nil {
-		_ = db.Close()
+		if held.release() {
+			_ = held.reads.Close()
+			_ = held.db.Close()
+		}
 
 		return nil, err
 	}
 
-	reads, err := openReadPool(path)
-	if err != nil {
-		_ = db.Close()
-
-		return nil, err
-	}
-
-	return &Store{db: db, reads: reads, path: path, pipeline: pipelineName, pipelineID: id}, nil
+	return &Store{db: held.db, reads: held.reads, shared: held, path: path, pipeline: pipelineName, pipelineID: id}, nil
 }
 
 // createPrivate makes a database that is not there yet, owner-only.
@@ -250,11 +251,12 @@ func openDB(path string) (*sql.DB, error) {
 		"&_pragma=auto_vacuum(incremental)&_pragma=journal_size_limit(67108864)&_txlock=immediate", 1)
 }
 
-// readPoolSize bounds the reader connections one handle holds. Each is a
-// file descriptor and a page cache of its own, and a daemon holds one handle
-// per pipeline; a few is enough for a browser's parallel requests, and the
-// pool queues the rest where it used to queue everything.
-const readPoolSize = 4
+// readPoolSize bounds the reader connections one FILE holds in this process,
+// every pipeline's handle sharing them (see pools). The driver is pure Go, so a
+// read is CPU on this process: past a connection per core one more only queues
+// somewhere else, and under four a browser's parallel requests wait on a
+// daemon's own polls and drains.
+var readPoolSize = max(4, runtime.GOMAXPROCS(0))
 
 // openReadPool opens the connections a Store's SELECT-only methods run on.
 //
@@ -298,6 +300,9 @@ func openDSN(path, dsn string, conns int) (*sql.DB, error) {
 	}
 
 	db.SetMaxOpenConns(conns)
+	// database/sql's default keeps two: a wider pool closed every connection a
+	// burst opened past that, and reopened it, pragmas and all, for the next.
+	db.SetMaxIdleConns(conns)
 
 	return db, nil
 }
@@ -458,6 +463,11 @@ func (s *Store) Close() error {
 		return s.Release()
 	}
 
+	// The file's last holder compacts it; anyone earlier would do it under the write lock its neighbours are still using.
+	if !s.detach() {
+		return nil
+	}
+
 	// Readers first: a read transaction still open past the checkpoint below is what keeps it from truncating the log.
 	s.closeReads()
 
@@ -473,13 +483,31 @@ func (s *Store) Close() error {
 	// large the log grew during a long watch.
 	_, _ = s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
 
-	return s.Release()
+	return s.closeDB()
 }
 
 // Release closes the connection without Close's reclaim, which holds the file's write lock as long as it takes: measured 31s after a destroy freed a gigabyte, with other pipelines' writes to the file failing SQLITE_BUSY.
 func (s *Store) Release() error {
+	if !s.detach() {
+		return nil
+	}
+
 	s.closeReads()
 
+	return s.closeDB()
+}
+
+// detach lets go of this handle's claim on the connections, once however often
+// it is called, and reports whether they are now the caller's to close.
+func (s *Store) detach() bool {
+	if s.released.Swap(true) {
+		return false
+	}
+
+	return s.shared == nil || s.shared.release()
+}
+
+func (s *Store) closeDB() error {
 	err := s.db.Close()
 	if err != nil {
 		return fmt.Errorf("could not close state db: %w", err)
