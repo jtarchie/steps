@@ -93,6 +93,15 @@ func publishKindTables(pass *analysis.Pass) {
 			named, fields := kindTableOf(pass, fn)
 			if named != nil {
 				pass.ExportObjectFact(named, &kindTable{Fields: fields})
+
+				continue
+			}
+
+			// A table this pass cannot read is a linter that checks nothing and
+			// still exits 0, which is how moving Kind() onto a shared table once
+			// went unnoticed.
+			if fn.Name.Name == "Kind" && fn.Recv != nil && fn.Type.Results != nil && fn.Type.Results.NumFields() == 2 {
+				pass.Reportf(fn.Pos(), "kindswitch cannot read the kinds this Kind() tests, so it checks no dispatch on its type; teach kindTableOf its shape")
 			}
 		}
 	}

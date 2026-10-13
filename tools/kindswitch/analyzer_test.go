@@ -14,5 +14,5 @@ import (
 // variables. The second half is the reason this analyzer is scoped the way it
 // is: a checker that fired on every tagless switch would be turned off.
 func TestAnalyzer(t *testing.T) {
-	analysistest.Run(t, analysistest.TestData(), Analyzer, "dispatch", "tabled")
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "dispatch", "tabled", "unreadable")
 }
