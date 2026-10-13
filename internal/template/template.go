@@ -28,9 +28,17 @@ import (
 var funcMap = newFuncMap()
 
 // newFuncMap builds funcMap: slim-sprig's text/template functions, with our
-// shellquote added (and taking precedence on any name clash).
+// shellquote added (and taking precedence on any name clash), minus the funcs
+// that reach the host. Templates render in the daemon and a pipeline is
+// uploaded by anyone who can call its API, so env/expandenv would hand them the
+// daemon's credentials and getHostByName a DNS channel out of it; shell and
+// exprlang already confine a pipeline to an env allowlist.
 func newFuncMap() template.FuncMap {
 	fm := sprig.TxtFuncMap()
+	for _, name := range []string{"env", "expandenv", "getHostByName"} {
+		delete(fm, name)
+	}
+
 	fm["shellquote"] = shellQuote
 
 	return fm

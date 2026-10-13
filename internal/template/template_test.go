@@ -1,6 +1,9 @@
 package template
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRender(t *testing.T) {
 	t.Parallel()
@@ -95,5 +98,23 @@ func TestRenderShellquote(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestRenderCannotReachTheHost pins that the funcs which read the rendering
+// process's environment or reach the network are absent: templates render in
+// the daemon, and a pipeline is uploaded by whoever can call its API.
+func TestRenderCannotReachTheHost(t *testing.T) {
+	t.Setenv("STEPS_TEST_TEMPLATE_SECRET", "s3cr3t")
+
+	for _, tmpl := range []string{
+		`{{ env "STEPS_TEST_TEMPLATE_SECRET" }}`,
+		`{{ expandenv "$STEPS_TEST_TEMPLATE_SECRET" }}`,
+		`{{ getHostByName "localhost" }}`,
+	} {
+		got, err := Render(tmpl, nil)
+		if err == nil || !strings.Contains(err.Error(), "not defined") {
+			t.Errorf("Render(%s) = %q, %v; want a not-defined error", tmpl, got, err)
+		}
 	}
 }
