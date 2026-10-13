@@ -108,6 +108,8 @@ jobs:
 
 The `inputs:` on the `load_var` step is not optional bookkeeping: a step's directory holds only the artifacts it declares, so a bare `file: version.txt` names nothing that exists. Both halves are checked at plan time — the file must sit inside a declared input, and that input must be something an earlier step produced.
 
+The file is read on the machine running the pipeline, so it may not leave the step's directory: an absolute `file:`, or one whose `..` climbs out, is a load error. A `file:` built from a `((var))` is checked again once rendered, a symlink pointing outside the directory is refused, and a file above 1 MiB fails the step — a var is a value, not a data transfer.
+
 `load_var:` names share the one `((var))` namespace, so a name both passed with `--var` and captured by a `load_var:` goes to `--var`: supplied vars substitute textually before the file is parsed, leaving no `((name))` for the captured value to fill — the `load_var:` step still runs, but substitutes nothing. (Concourse keeps run-captured vars in a separate `((.:name))` namespace instead; see [conformance.md](conformance.md).)
 
 ### ⚠️ Vars are config, not secrets

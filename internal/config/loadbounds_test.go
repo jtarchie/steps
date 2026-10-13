@@ -323,3 +323,48 @@ jobs:
 		})
 	}
 }
+
+// The file is read on the orchestrator host, so a literal path that leaves the
+// step's workspace names a file the pipeline does not own.
+func TestLoadVarFileMustStayInsideTheWorkspace(t *testing.T) {
+	t.Parallel()
+
+	for name, file := range map[string]string{
+		"absolute":       "/etc/passwd",
+		"parent":         "../secret",
+		"climbs-through": "meta/../../secret",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			wantLoadError(t, writeConfig(t, `
+jobs:
+- name: j
+  plan:
+  - load_var: tag
+    file: `+file+`
+`), `load_var "tag" file "`+file+`" escapes the workspace`)
+		})
+	}
+}
+
+// A file: still carrying a ((var)) is only knowable at run time; the run checks
+// the rendered path.
+func TestLoadVarFileWithAVarIsLeftToTheRun(t *testing.T) {
+	t.Parallel()
+
+	loadOK(t, `
+jobs:
+- name: j
+  plan:
+  - task: t
+    outputs: [meta]
+    run: "true"
+  - load_var: dir
+    file: meta/dir
+    inputs: [meta]
+  - load_var: tag
+    file: ((dir))/../../x
+    inputs: [meta]
+`)
+}

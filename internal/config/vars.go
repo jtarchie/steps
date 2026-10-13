@@ -118,6 +118,17 @@ func validateLoadVarStep(label string, step *Step) error {
 		return fmt.Errorf("%s: load_var %q needs a file: to read the value from", label, step.LoadVar)
 	}
 
+	// The read happens on the orchestrator host, so a path leaving the step's
+	// workspace names a file the pipeline does not own. One still carrying a
+	// ((var)) is checked by the run once rendered.
+	if len(UnresolvedVars(step.VarFile)) > 0 {
+		return nil
+	}
+
+	if _, ok := ConfinedPath(".", step.VarFile); !ok {
+		return fmt.Errorf("%s: load_var %q file %q escapes the workspace; it must be a path inside a declared input, like meta/version.txt", label, step.LoadVar, step.VarFile)
+	}
+
 	return nil
 }
 

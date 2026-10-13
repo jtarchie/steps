@@ -1,7 +1,10 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -50,4 +53,24 @@ func renderWith(t *testing.T, step config.Step, name, value string) config.Step 
 	runVarsFrom(ctx).set(name, value)
 
 	return renderStepVars(ctx, step)
+}
+
+// TestReadVarFileAcceptsExactlyTheLimit pins the cap's boundary: the e2e
+// refuses a byte over, which a `>=` would also satisfy.
+func TestReadVarFileAcceptsExactlyTheLimit(t *testing.T) {
+	dir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(dir, "at"), bytes.Repeat([]byte("a"), maxVarFileBytes), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := readVarFile(dir, "at")
+	if err != nil {
+		t.Fatalf("a file of exactly %d bytes was refused: %v", maxVarFileBytes, err)
+	}
+
+	if len(body) != maxVarFileBytes {
+		t.Errorf("read %d bytes, want %d", len(body), maxVarFileBytes)
+	}
 }

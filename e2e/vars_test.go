@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -171,5 +172,143 @@ jobs:
 				t.Errorf("`steps %s` cannot resolve vars: %v", args[0], err)
 			}
 		})
+	}
+}
+
+// TestLoadVarFileOutsideTheWorkspaceIsALoadError covers a literal file: that
+// climbs out of the step's directory: the read happens on this machine, so it
+// would otherwise capture whatever sits beside the workspace.
+func TestLoadVarFileOutsideTheWorkspaceIsALoadError(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: pick-tag
+    inputs: []
+    outputs: [meta]
+    run: "true"
+  - load_var: tag
+    file: meta/../../something
+    inputs: [meta]
+`)
+
+	err := cli.Run([]string{"run", path, "--job", "build"})
+	if err == nil {
+		t.Fatal("a load_var whose file: leaves the workspace ran")
+	}
+
+	if !strings.Contains(err.Error(), `load_var "tag" file "meta/../../something" escapes the workspace`) {
+		t.Errorf("error does not name the step and the path: %v", err)
+	}
+}
+
+// TestLoadVarFileSteeredOutByAVarFailsTheStep covers the path load cannot see:
+// a file: rendered from a value an earlier step captured. The target exists
+// and the read would succeed, so only the confinement can fail it.
+func TestLoadVarFileSteeredOutByAVarFailsTheStep(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "secret.txt")
+	writePipelineFile(t, secret, "TOPSECRET\n")
+
+	log := filepath.Join(dir, "stolen.log")
+	climb := strings.Repeat("../", 64) + strings.TrimPrefix(secret, "/")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: aim
+    inputs: []
+    outputs: [meta]
+    run: printf '%%s' '%s' > meta/up
+  - load_var: up
+    file: meta/up
+    inputs: [meta]
+  - load_var: stolen
+    file: meta/((up))
+    inputs: [meta]
+  - task: leak
+    inputs: []
+    run: echo "((stolen))" >> %s
+`, climb, log))
+
+	err := cli.Run([]string{"run", path, "--job", "build"})
+	if err == nil {
+		t.Fatal("a load_var steered out of its workspace by a var ran")
+	}
+
+	if !strings.Contains(err.Error(), `load_var "stolen"`) || !strings.Contains(err.Error(), "escapes the workspace") {
+		t.Errorf("error does not name the step and say the path escapes: %v", err)
+	}
+
+	if got, _ := os.ReadFile(log); strings.Contains(string(got), "TOPSECRET") { //nolint:gosec // a t.TempDir() file the test's own pipeline wrote
+		t.Errorf("the file outside the workspace was captured: %q", got)
+	}
+}
+
+// TestLoadVarRefusesAnOversizeFile covers the unbounded read: a var is a value
+// substituted into later steps, not a data transfer.
+func TestLoadVarRefusesAnOversizeFile(t *testing.T) {
+	dir := t.TempDir()
+	path := writePipeline(t, dir, `
+jobs:
+- name: build
+  plan:
+  - task: pick-tag
+    inputs: []
+    outputs: [meta]
+    run: head -c 1048577 /dev/zero | tr '\0' a > meta/big
+  - load_var: tag
+    file: meta/big
+    inputs: [meta]
+`)
+
+	err := cli.Run([]string{"run", path, "--job", "build"})
+	if err == nil {
+		t.Fatal("a load_var read a file above the limit")
+	}
+
+	if !strings.Contains(err.Error(), `load_var "tag"`) || !strings.Contains(err.Error(), "meta/big") || !strings.Contains(err.Error(), "above the limit") {
+		t.Errorf("error does not name the step, the path and the limit: %v", err)
+	}
+}
+
+// TestLoadVarRefusesASymlinkOutOfTheWorkspace covers what a lexical check
+// cannot see: a file: inside the workspace that is a link to one outside it.
+func TestLoadVarRefusesASymlinkOutOfTheWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "secret.txt")
+	writePipelineFile(t, secret, "TOPSECRET\n")
+
+	log := filepath.Join(dir, "stolen.log")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: aim
+    inputs: []
+    outputs: [meta]
+    run: ln -s %s meta/link
+  - load_var: stolen
+    file: meta/link
+    inputs: [meta]
+  - task: leak
+    inputs: []
+    run: echo "((stolen))" >> %s
+`, secret, log))
+
+	err := cli.Run([]string{"run", path, "--job", "build"})
+	if err == nil {
+		t.Fatal("a load_var followed a symlink out of its workspace")
+	}
+
+	if !strings.Contains(err.Error(), `load_var "stolen"`) || !strings.Contains(err.Error(), "meta/link") {
+		t.Errorf("error does not name the step and the path: %v", err)
+	}
+
+	if got, _ := os.ReadFile(log); strings.Contains(string(got), "TOPSECRET") { //nolint:gosec // a t.TempDir() file the test's own pipeline wrote
+		t.Errorf("the file outside the workspace was captured: %q", got)
 	}
 }

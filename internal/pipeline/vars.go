@@ -5,7 +5,9 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -120,11 +122,9 @@ func runLoadVarStep(ctx context.Context, r stepRunner, i int, step config.Step, 
 
 	defer workspace.CloseSpace(space, step.LoadVar)
 
-	path := filepath.Join(space.Dir(), step.VarFile)
-
-	body, err := os.ReadFile(path) //nolint:gosec // the path is a pipeline-declared file inside this step's own workspace
+	body, err := readVarFile(space.Dir(), step.VarFile)
 	if err != nil {
-		return stepResult{}, fmt.Errorf("step %d (load_var %q): %w", i, step.LoadVar, err)
+		return stepResult{}, fmt.Errorf("step %d (load_var %q) file %q: %w", i, step.LoadVar, step.VarFile, err)
 	}
 
 	value := strings.TrimSpace(string(body))
@@ -149,4 +149,36 @@ func runLoadVarStep(ctx context.Context, r stepRunner, i int, step config.Step, 
 	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, "succeeded", nil, nil)
 
 	return ran(hash), nil
+}
+
+// maxVarFileBytes caps what a load_var: reads, for the reason from_file:'s cap
+// exists: a var is a value substituted into later steps, not a data transfer.
+const maxVarFileBytes = maxAcrossFileBytes
+
+// readVarFile reads a load_var: file from inside dir. Load confines a literal
+// file:, but a rendered one can be steered by a captured var, so the lexical
+// check repeats here; OpenInRoot also refuses a symlink in the tree that
+// points out of it.
+func readVarFile(dir, file string) ([]byte, error) {
+	if _, ok := config.ConfinedPath(".", file); !ok {
+		return nil, errors.New("escapes the workspace; it must be a path inside a declared input")
+	}
+
+	f, err := os.OpenInRoot(dir, filepath.FromSlash(file))
+	if err != nil {
+		return nil, fmt.Errorf("open: %w", err)
+	}
+
+	defer func() { _ = f.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(f, maxVarFileBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+
+	if len(body) > maxVarFileBytes {
+		return nil, fmt.Errorf("is above the limit of %d bytes", maxVarFileBytes)
+	}
+
+	return body, nil
 }
