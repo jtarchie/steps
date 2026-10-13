@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -55,7 +56,11 @@ const lockHolderIdleLimit = "60s"
 // Store is one pipeline's handle on a Postgres state database. The handle is
 // the scope, as it is for sqlite: pipelineID is in every query's predicate.
 type Store struct {
-	db          *sql.DB
+	db *sql.DB
+	// shared is the per-URL pool db came from (see pools.go), nil for a
+	// handle with a reader's connection of its own (OpenExisting).
+	shared      *pool
+	released    atomic.Bool
 	description string
 	pipeline    string
 	pipelineID  int64
@@ -67,19 +72,21 @@ type Store struct {
 // steps never creates the DATABASE: that is the operator's, with its owner,
 // encoding and backups. The schema inside it is steps'.
 func OpenStore(rawURL, pipelineName string) (*Store, error) {
-	conn, err := open(rawURL, false)
+	held, err := acquirePool(rawURL)
 	if err != nil {
 		return nil, err
 	}
 
-	id, err := initDB(context.Background(), conn, pipelineName)
+	id, err := initDB(context.Background(), held.connection, pipelineName)
 	if err != nil {
-		_ = conn.db.Close()
+		if held.release() {
+			_ = held.db.Close()
+		}
 
 		return nil, err
 	}
 
-	return &Store{db: conn.db, description: conn.description, pipeline: pipelineName, pipelineID: id}, nil
+	return &Store{db: held.db, shared: held, description: held.description, pipeline: pipelineName, pipelineID: id}, nil
 }
 
 // connection is an open pool and what it is a pool on.
@@ -103,9 +110,7 @@ func open(rawURL string, readOnly bool) (connection, error) {
 
 	db := stdlib.OpenDB(*config)
 
-	// ponytail: one pool per handle, so a daemon serving N pipelines holds up
-	// to 4N connections; share one pool per URL if that ever meets
-	// max_connections.
+	// A reader's own pool; a writable handle's is widened and shared (see pools.go).
 	db.SetMaxOpenConns(4)
 	// A server restart or a NAT dropping an idle flow leaves a pool holding
 	// dead connections; recycling them bounds how long that lasts.
@@ -427,6 +432,11 @@ func (s *Store) Close() error { return s.Release() }
 // Release is Close; the sqlite driver distinguishes them, this one has no
 // reclaim to skip.
 func (s *Store) Release() error {
+	// Once however often it is called, and only the URL's last holder closes the pool.
+	if s.released.Swap(true) || (s.shared != nil && !s.shared.release()) {
+		return nil
+	}
+
 	err := s.db.Close()
 	if err != nil {
 		return fmt.Errorf("could not close state db: %w", err)
