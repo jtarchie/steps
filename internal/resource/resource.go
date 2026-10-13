@@ -83,8 +83,22 @@ func shellCheckVersions(ctx context.Context, rt config.ResourceType, extraEnv []
 	}
 
 	// No Cwd: a check has no tree, here or on a worker.
-	runner, err := newRunner(ctx, shell.RunnerSpec{Image: rt.Image, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
-		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()})
+	spec := shell.RunnerSpec{Image: rt.Image, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
+		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()}
+
+	share, key := sharedCheckFor(ctx, command, spec)
+	if share != nil {
+		return share.do(ctx, key, func() ([]map[string]any, error) {
+			return runShellCheck(ctx, rt, spec, command)
+		})
+	}
+
+	return runShellCheck(ctx, rt, spec, command)
+}
+
+// runShellCheck runs a rendered check and parses what it printed.
+func runShellCheck(ctx context.Context, rt config.ResourceType, spec shell.RunnerSpec, command string) ([]map[string]any, error) {
+	runner, err := newRunner(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}

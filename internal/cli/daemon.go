@@ -34,6 +34,8 @@ type daemon struct {
 	exec     ExecFlags
 	history  HistoryFlags
 	interval time.Duration
+	// One answer for every pipeline's poll asking the identical check.
+	checks *trigger.SharedChecks
 	// Every pipeline's loops hang off a child of the process's own lifetime, so destroying one stops its loops and no others.
 	base context.Context //nolint:containedctx // the daemon outlives any one request, and a set started from a request must not die with it
 	// The verbs are serialized because each rebuilds a pipeline's world: interleaved, a destroy closes a store a concurrent set just handed to a poller.
@@ -80,6 +82,7 @@ func newDaemon(
 		exec:           exec,
 		history:        history,
 		interval:       interval,
+		checks:         trigger.NewSharedChecks(interval),
 		base:           base,
 		served:         map[string]*servedPipeline{},
 		swept:          map[string]bool{},
@@ -485,7 +488,7 @@ func (d *daemon) start(
 		defer loops.Done()
 
 		// The METHOD, not its result: a later set swaps the configuration under this loop, and a value would pin it to whatever was set first.
-		pollErr := trigger.Poll(loopCtx, target.Config, st, d.interval)
+		pollErr := trigger.Poll(d.checks.Context(loopCtx), target.Config, st, d.interval)
 		if pollErr != nil {
 			slog.ErrorContext(loopCtx, "web.poll_stopped", "pipeline", name, "error", pollErr)
 		}

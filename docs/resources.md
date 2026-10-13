@@ -584,6 +584,7 @@ Runs when a plan is built, and on every `steps web` poll.
 
   These say a check came back empty — they cannot say *why*, so a type should still **fail loudly** (exit non-zero) when it can't answer, rather than printing nothing.
 - **Exit non-zero** to fail the step.
+- **Identical checks are run once.** When `steps web` polls several pipelines whose checks render to the same command, run the same way (image, `env:` names, user, network, limits), it runs that command once and hands every pipeline the answer for half a poll interval. The cursor is part of the rendered command, so pipelines that have seen different versions never share. Each pipeline still keeps its own history and triggers its own jobs; only the run is shared. A check placed on a worker with `tags:` is never shared, and neither is the one a build runs for itself, so a build someone triggers right after a push sees what exists now. Unlike Concourse's opt-in global resources, pipelines never share a version history.
 
 ```json
 [{"ref": "9fceb02"}, {"ref": "d7b22a6"}]
