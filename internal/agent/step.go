@@ -241,20 +241,7 @@ func RunStep(ctx context.Context, cfg *config.Config, jobName string, i int, ste
 
 	noteFallback(ctx, name, prepared)
 
-	// Give the conversation its live identity, so every turn it takes is
-	// publishable as belonging to this run, job, and step. Set here rather
-	// than in prepareAgentStep because only RunStep knows the plan index —
-	// a hook or fix conversation has none, and publishes nothing.
-	// Where a question this step asks is recorded, and under which job. Set
-	// here rather than in prepareAgentStep for the reason the recorder is:
-	// only RunStep holds the store handle and the job's name, and a hook or
-	// fix conversation has neither.
-	prepared.conv.env.ask.st = st
-	prepared.conv.env.ask.jobName = jobName
-
-	prepared.conv.recorder = &transcriptRecorder{live: liveContext{
-		bus: events.FromContext(ctx), runID: events.RunID(ctx), stepID: events.StepID(ctx), job: jobName, stepIndex: i, stepName: name,
-	}}
+	bindRun(ctx, &prepared, st, jobName, i, name)
 
 	// The node is recorded BEFORE the conversation, as running, because the
 	// usage and transcript rows written below reference it: agent_usage.node_hash
@@ -593,17 +580,11 @@ func RunHook(ctx context.Context, cfg *config.Config, jobName string, step confi
 
 	events.Note(ctx, events.NoteInfo, "agent: "+step.Agent+fallbackBanner(prepared))
 
-	// Give the conversation its live identity, matching RunStep (see its own
-	// comment above): a hook's conversation is nested inside a job that DOES
-	// have one, so its tool calls and any mid-run failover it triggers are
+	// A hook's conversation is nested inside a job that DOES have a live
+	// identity, so its tool calls and any mid-run failover it triggers are
 	// attributable the same way a plan step's are, instead of publishing (and
 	// logging) nowhere. stepIndex is -1: a hook is not a plan position.
-	prepared.conv.env.ask.st = st
-	prepared.conv.env.ask.jobName = jobName
-
-	prepared.conv.recorder = &transcriptRecorder{live: liveContext{
-		bus: events.FromContext(ctx), runID: events.RunID(ctx), stepID: events.StepID(ctx), job: jobName, stepIndex: -1, stepName: step.DisplayName(),
-	}}
+	bindRun(ctx, &prepared, st, jobName, -1, step.DisplayName())
 
 	res, err := runAndAnnounceFailover(ctx, step.Agent, &prepared)
 
@@ -628,6 +609,21 @@ func RunHook(ctx context.Context, cfg *config.Config, jobName string, step confi
 	}
 
 	return nil
+}
+
+// bindRun says where a question the conversation asks is recorded, and under
+// which job, then gives the conversation its live identity, so every turn it
+// takes is publishable as belonging to this run, job, and step. Not done in
+// prepareAgentStep because only RunStep and RunHook hold the store handle,
+// the job's name and the step's position; a fix conversation has none of
+// them, and publishes nothing.
+func bindRun(ctx context.Context, p *preparedAgentStep, st StepStore, jobName string, stepIndex int, stepName string) {
+	p.conv.env.ask.st = st
+	p.conv.env.ask.jobName = jobName
+
+	p.conv.recorder = &transcriptRecorder{live: liveContext{
+		bus: events.FromContext(ctx), runID: events.RunID(ctx), stepID: events.StepID(ctx), job: jobName, stepIndex: stepIndex, stepName: stepName,
+	}}
 }
 
 // noteFallback warns when a step is served by a fallback model; the step's start line already names the agent.

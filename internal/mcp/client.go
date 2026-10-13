@@ -233,7 +233,7 @@ func tracedClient() *http.Client {
 }
 
 // lookupBearerToken reads a bearer token from the OS environment variable
-// named by envVar — mirrors internal/agent/provider.go's lookupAPIKey
+// named by envVar — mirrors internal/agent/llmclient.go's lookupAPIKey
 // exactly (a missing/empty variable is a hard error, not a silently blank
 // Authorization header).
 func lookupBearerToken(envVar string) (string, error) {

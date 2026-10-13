@@ -81,8 +81,8 @@ type StepUsage struct {
 	FinishReason string
 	// Raw is the provider's usage block for the LAST response of the
 	// conversation, as JSON — the fields nobody has asked for yet. The store
-	// has no schema versioning, so a field not captured today cannot be
-	// backfilled tomorrow; keeping the block whole costs a column and buys
+	// has no migration, so a field not captured today cannot be backfilled
+	// tomorrow; keeping the block whole costs a column and buys
 	// every future question about spend.
 	//
 	// One response, deliberately, while every count beside it is the whole

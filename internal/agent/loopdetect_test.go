@@ -93,7 +93,7 @@ func TestLoopDetectionDifferentResultsNoTrigger(t *testing.T) {
 }
 
 // sawLoopNudge reports whether any request's conversation thread carries the
-// loop.go warning text.
+// loopdetect.go warning text.
 func sawLoopNudge(requests []*model.LLMRequest) bool {
 	for _, req := range requests {
 		for _, c := range req.Contents {

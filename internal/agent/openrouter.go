@@ -23,7 +23,7 @@
 //
 // Scope: the mutating transport is installed on the agent's HTTP client only
 // when the resolved base URL is actually OpenRouter (see agentHTTPClient in
-// provider.go), layered outside the every-provider repair transport
+// llmclient.go), layered outside the every-provider repair transport
 // (repair.go) on the shared process-wide base transport.
 //
 // The reference implementation this is ported from

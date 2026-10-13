@@ -195,7 +195,7 @@ func TestRunAgentConversationExceedsMaxTurns(t *testing.T) {
 	dir := t.TempDir()
 
 	// Each turn's call must differ from the last: an IDENTICAL call with an
-	// identical result is what the loop detector (loop.go) watches for, and
+	// identical result is what the loop detector (loopdetect.go) watches for, and
 	// it would kill the conversation before maxTurns — which is what this
 	// test is for. Varying the (harmless) command keeps every interaction's
 	// signature distinct.

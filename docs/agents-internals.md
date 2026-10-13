@@ -17,7 +17,7 @@ Transport-level only, like the OpenRouter caching levers: no config surface, no 
 
 ## Loop detection
 
-`max_turns` bounds how long a conversation can run, but it is a blunt backstop: an agent that re-issues the *identical* tool call and gets the *identical* result — re-reading a file it has already read, re-running a command whose output cannot change — is stuck, and before loop detection it would spin out its entire turn budget producing nothing. The conversation loop now hashes each tool **interaction** (tool name + arguments + result; `internal/agent/loop.go`, copied from crush's `loop_detection.go`) and counts repeats within a sliding window of the last 10 tool-executing turns.
+`max_turns` bounds how long a conversation can run, but it is a blunt backstop: an agent that re-issues the *identical* tool call and gets the *identical* result — re-reading a file it has already read, re-running a command whose output cannot change — is stuck, and before loop detection it would spin out its entire turn budget producing nothing. The conversation loop now hashes each tool **interaction** (tool name + arguments + result; `internal/agent/loopdetect.go`, copied from crush's `loop_detection.go`) and counts repeats within a sliding window of the last 10 tool-executing turns.
 
 The result is part of the hash so that *productive* repetition never trips the detector: re-reading a file after an edit returns different bytes, and a verify command's output changes as the tree is fixed. Only call-and-result-both-identical accumulates.
 

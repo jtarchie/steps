@@ -1,4 +1,4 @@
-// loop.go detects an agent stuck repeating itself and breaks the cycle,
+// loopdetect.go detects an agent stuck repeating itself and breaks the cycle,
 // copying the shape of crush's loop_detection.go: a tool INTERACTION (the
 // call plus the result it produced) is hashed, and one identical interaction
 // seen too often inside a sliding window of recent turns means the model is

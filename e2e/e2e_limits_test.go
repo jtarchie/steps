@@ -38,7 +38,7 @@ func TestAgentMaxTurnsZeroIsUnlimited(t *testing.T) {
 
 	// Each turn searches for a DIFFERENT string. Repeating one identical
 	// interaction would trip the loop detector at five copies (see
-	// internal/agent/loop.go) and fail the attempt long before turn 30,
+	// internal/agent/loopdetect.go) and fail the attempt long before turn 30,
 	// which would prove nothing about the cap.
 	fake := newRoutedFakeLLM(t, func(_ capturedRequest) turn {
 		n := seen.Add(1)

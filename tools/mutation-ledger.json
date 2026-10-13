@@ -223,15 +223,15 @@
           "why": "*2 to /2 only shrinks a non-negative capacity hint; append grows the slice, so contents are identical."
         },
         {
-          "mutant": "conversation.go | CONDITIONALS_BOUNDARY | if p.maxTokens > 0 {",
+          "mutant": "genparams.go | CONDITIONALS_BOUNDARY | if p.maxTokens > 0 {",
           "why": "At 0 it sets MaxOutputTokens to 0, a plain int32 tagged omitempty, which is the same as unset."
         },
         {
-          "mutant": "loop.go | CONDITIONALS_BOUNDARY | if i < len(parts) && parts[i].FunctionResponse != nil {",
+          "mutant": "loopdetect.go | CONDITIONALS_BOUNDARY | if i < len(parts) && parts[i].FunctionResponse != nil {",
           "why": "toolResponseParts returns exactly one part per call, so i never reaches len(parts)."
         },
         {
-          "mutant": "loop.go | CONDITIONALS_BOUNDARY | if len(d.turns) > loopDetectionWindow {",
+          "mutant": "loopdetect.go | CONDITIONALS_BOUNDARY | if len(d.turns) > loopDetectionWindow {",
           "why": "At len == window, the slice [len-window:] is the whole slice, so trimming does nothing."
         },
         {

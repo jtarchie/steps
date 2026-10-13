@@ -23,7 +23,7 @@
 // existed: repair can only recover a call, never alter a valid one.
 //
 // Scope: installed on every agent LLM client (see agentHTTPClient in
-// provider.go), since malformed arguments are an OpenAI-compat-wide hazard,
+// llmclient.go), since malformed arguments are an OpenAI-compat-wide hazard,
 // not a provider-specific one.
 
 package agent
@@ -36,16 +36,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
 )
-
-// agentResponseHeaderTimeout mirrors the bound openai-go's own
-// defaultHTTPClient applies when the caller supplies no client. Supplying
-// one (which every agent now does, for the repair transport) opts out of
-// that default, so it is re-applied here rather than silently dropping
-// stuck-connection protection.
-const agentResponseHeaderTimeout = 10 * time.Minute
 
 // maxRepairResponseBytes caps how large a chat-completion response body the
 // repair transport buffers. Responses are a few KB of choices in practice;
@@ -508,26 +499,3 @@ func nextNonSpaceIsCloser(s string, i int) bool {
 
 	return false
 }
-
-// agentBaseTransport is the transport every agent LLM client shares, built
-// once. It reproduces openai-go's defaultHTTPClient (clone
-// http.DefaultTransport, bound the wait for response headers) and is
-// process-wide rather than per-client: only the thin per-agent wrappers
-// (repair, and for OpenRouter the session/cache transport) differ per
-// agent, so every agent step, sub-agent, and fix agent reuses one
-// connection pool instead of paying a fresh TLS handshake each.
-//
-// Cloning once (rather than using http.DefaultTransport directly) keeps the
-// response-header bound off every other HTTP user in the process
-// (internal/mcp, resource types shelling out, ...).
-var agentBaseTransport = sync.OnceValue(func() http.RoundTripper { //nolint:gochecknoglobals // process-wide connection pool, built lazily on first agent
-	transport, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		return http.DefaultTransport
-	}
-
-	transport = transport.Clone()
-	transport.ResponseHeaderTimeout = agentResponseHeaderTimeout
-
-	return transport
-})
