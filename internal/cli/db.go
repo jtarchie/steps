@@ -4,7 +4,7 @@ package cli
 // url, and everything below internal/cli takes the store.Store opened here.
 
 import (
-	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -61,12 +61,14 @@ func stateIsEmpty(state State) bool {
 	return sqlite.HasNothingRecorded(string(state))
 }
 
-// warnPasswordInURL says, on stderr, that a password in --db is kept by every
-// process listing and shell history that saw the command. Called as the flag
-// is parsed, which is once per command however many handles it opens.
+// warnPasswordInURL says that a password in --db is kept by every process
+// listing and shell history that saw the command. Called once the logger is
+// installed rather than as the flag parses, which is before any logger
+// exists and would put a bare line on a daemon's slog-only terminal.
 func warnPasswordInURL(raw string) {
 	if postgres.HasPassword(raw) {
-		_, _ = fmt.Fprintln(os.Stderr, "steps: warning: --db carries a password, which process listings and shell history keep; set PGPASSWORD, or use ~/.pgpass or PGSERVICEFILE, instead")
+		slog.Warn("db.password_in_url",
+			"why", "--db carries a password, which process listings and shell history keep; set PGPASSWORD, or use ~/.pgpass or PGSERVICEFILE, instead")
 	}
 }
 

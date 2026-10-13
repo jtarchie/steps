@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/outcome"
@@ -64,16 +62,16 @@ func (r *RunsFollowCmd) Run() error {
 		return err
 	}
 
-	fmt.Printf("following %s · %s · %s\n", run.ID, scrubText(run.JobName), scrubText(run.Status))
+	fmt.Printf("following %s · %s · %s\n", run.ID, runview.Scrub(run.JobName), runview.Scrub(run.Status))
 
 	if run.Status != "running" {
-		fmt.Printf("run %s already %s, replaying\n", run.ID, scrubText(run.Status))
+		fmt.Printf("run %s already %s, replaying\n", run.ID, runview.Scrub(run.Status))
 	}
 
 	render, stop := r.renderer(ctx, st)
 	defer stop()
 
-	last, err := followRun(ctx, st, run, func(event events.Event) { render(scrub(event)) })
+	last, err := followRun(ctx, st, run, func(event events.Event) { render(runview.ScrubEvent(event)) })
 
 	stop()
 
@@ -333,94 +331,4 @@ func followPlain(w io.Writer) func(events.Event) {
 				(time.Duration(event.DurationMS) * time.Millisecond).Round(100*time.Millisecond))
 		}
 	}
-}
-
-// scrub makes a recorded event safe to print to somebody else's terminal: its text can come from untrusted input — a PR under review — and an OSC sequence in it writes the viewer's clipboard or retitles their window.
-//
-// Every printed field, not only the free-text ones: a job name is unvalidated YAML, and the pipeline can come from the same untrusted branch.
-func scrub(event events.Event) events.Event {
-	event.Job = scrubText(event.Job)
-	event.StepKind = scrubText(event.StepKind)
-	event.Status = scrubText(event.Status)
-	event.Text = scrubText(event.Text)
-	event.Name = scrubText(event.Name)
-	event.Detail = scrubText(event.Detail)
-	event.StepName = scrubText(event.StepName)
-	event.Worker = scrubText(event.Worker)
-
-	return event
-}
-
-// scrubText drops every escape sequence and control character but tab and newline, with web.frameLines' rule for carriage returns.
-func scrubText(text string) string {
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-
-	var out strings.Builder
-
-	for i := 0; i < len(text); {
-		r, size := utf8.DecodeRuneInString(text[i:])
-		i += size
-
-		switch {
-		case r == 0x1b:
-			i = skipEscape(text, i)
-		case r == '\t' || r == '\n':
-			out.WriteRune(r)
-		case r == utf8.RuneError && size == 1, r < 0x20, r >= 0x7f && r < 0xa0:
-		default:
-			out.WriteRune(r)
-		}
-	}
-
-	return out.String()
-}
-
-// skipEscape returns where the sequence introduced by an ESC just before i ends.
-func skipEscape(text string, i int) int {
-	if i >= len(text) {
-		return i
-	}
-
-	switch text[i] {
-	case '[':
-		return skipCSI(text, i+1)
-	case ']', 'P', 'X', '^', '_':
-		return skipString(text, i+1)
-	default:
-		return i + 1
-	}
-}
-
-// skipCSI passes parameters and intermediates, then one final byte. A byte no CSI can hold ends it unconsumed, so a stray "ESC [" cannot eat the lines after it.
-func skipCSI(text string, i int) int {
-	for ; i < len(text); i++ {
-		switch c := text[i]; {
-		case c >= 0x40 && c <= 0x7e:
-			return i + 1
-		case c < 0x20 || c > 0x7e:
-			return i
-		}
-	}
-
-	return i
-}
-
-// skipString passes an OSC or one of the other string sequences, which run to BEL or ST — or, here, a newline, so an unterminated one hides one line rather than every line after it.
-func skipString(text string, i int) int {
-	for ; i < len(text); i++ {
-		if text[i] == 0x07 {
-			return i + 1
-		}
-
-		if text[i] == '\n' {
-			return i
-		}
-
-		if text[i] == 0x1b && i+1 < len(text) && text[i+1] == '\\' {
-			return i + 2
-		}
-	}
-
-	return i
 }

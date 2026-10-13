@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/url"
 	"os"
@@ -82,7 +83,7 @@ func (d *DB) UnmarshalText(text []byte) error {
 
 // checkPostgresURL refuses a url that will not parse — by url.Parse's
 // standard rather than pgx's, and without url.Parse's own error, which quotes
-// the url — and warns about a password in it.
+// the url.
 func checkPostgresURL(raw string) error {
 	if !strings.Contains(raw, "://") {
 		// Otherwise a sqlite FILE of that name, created beside the YAML.
@@ -93,8 +94,6 @@ func checkPostgresURL(raw string) error {
 	if err != nil {
 		return errors.New("--db: the postgres url does not parse; check its syntax (not repeated here, as it may carry a password)")
 	}
-
-	warnPasswordInURL(raw)
 
 	return nil
 }
@@ -154,6 +153,9 @@ func (s State) String() string {
 
 	return string(s)
 }
+
+// LogValue is String for slog, whose JSON handler would otherwise write the raw string a State is.
+func (s State) LogValue() slog.Value { return slog.StringValue(s.String()) }
 
 func (s State) postgres() bool {
 	scheme, _, isURL := strings.Cut(string(s), "://")

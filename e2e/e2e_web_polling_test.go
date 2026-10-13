@@ -11,6 +11,7 @@ package e2e
 // which is also the only thing that exercises its shutdown path.
 
 import (
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -696,6 +697,35 @@ jobs:
 		// A set, a green build and a stop by SIGINT, which is the one warning it earns: an operator reads any other WRN or ERR here as something to act on.
 		if (strings.Contains(line, " WRN ") || strings.Contains(line, " ERR ")) && !strings.Contains(line, " signal.received ") {
 			t.Errorf("a clean daemon life logged a problem: %q", line)
+		}
+	}
+}
+
+// The --db password warning is said while the flag is parsed, before any logger exists, and is the one daemon line that used to be bare stderr. --interval 0 stops the daemon before it dials, so no server is needed.
+func TestDaemonPasswordWarningIsSlog(t *testing.T) {
+	logs := captureStderr(t)
+
+	// A fresh process's default logger, which an earlier test in this one has long since replaced.
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	err := cli.Run([]string{"web", "--interval", "0", "--db", "postgres://ops:s3cret@127.0.0.1:1/steps"})
+	if err == nil || !strings.Contains(err.Error(), "--interval") {
+		t.Fatalf("web = %v, want the --interval refusal", err)
+	}
+
+	if !strings.Contains(logs(), "--db carries a password") {
+		t.Errorf("no warning about the password in --db:\n%s", logs())
+	}
+
+	for line := range strings.SplitSeq(strings.TrimSpace(logs()), "\n") {
+		if !slogLine.MatchString(line) {
+			t.Errorf("daemon wrote a non-slog line to stderr: %q", line)
+		}
+
+		if strings.Contains(line, "s3cret") {
+			t.Errorf("the warning repeated the password: %q", line)
 		}
 	}
 }

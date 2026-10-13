@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
-	"text/tabwriter"
 )
 
 // QuestionsCmd is the "what is waiting on me?" command for questions, the way
@@ -50,7 +48,7 @@ func (q *QuestionsListCmd) Run() error {
 		return nil
 	}
 
-	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	writer := newTabWriter()
 
 	_, _ = fmt.Fprintln(writer, "ID\tJOB\tSTEP\tASKED\tQUESTION")
 

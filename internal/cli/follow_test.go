@@ -391,42 +391,6 @@ func TestFollowRunDetachesOnCancel(t *testing.T) {
 	}
 }
 
-// TestScrubLeavesOnlyText: a followed run prints bytes somebody else's input chose, onto a viewer's terminal.
-func TestScrubLeavesOnlyText(t *testing.T) {
-	t.Parallel()
-
-	for input, want := range map[string]string{
-		"a\x1b]52;c;ZXZpbA==\x07b":                     "ab",
-		"a\x1b]0;pwned\x1b\\b":                         "ab",
-		"\x1b]8;;http://evil\x1b\\click\x1b]8;;\x1b\\": "click",
-		"\x1b[31mred\x1b[0m":                           "red",
-		"one\rtwo\r\nthree":                            "one\ntwo\nthree",
-		"nul\x00bell\x07c1\x9b31mdel\x7f":              "nulbellc131mdel",
-		"c1rune\u009b31m":                              "c1rune31m",
-		"tab\tkept\x1bcx":                              "tab\tkeptx",
-		"ünïcode ✓":                                    "ünïcode ✓",
-		"trail\x1b":                                    "trail",
-		"a\x1b]0;never ends":                           "a",
-		"b\x1b[31":                                     "b",
-		"stray\x1b[\nERROR kept":                       "stray\nERROR kept",
-		"osc\x1b]0;unterminated\nFAIL kept":            "osc\nFAIL kept",
-		"osc\x1b]0;ends on\x1b":                        "osc",
-	} {
-		if got := scrubText(input); got != want {
-			t.Errorf("scrubText(%q) = %q, want %q", input, got, want)
-		}
-	}
-
-	event := scrub(events.Event{
-		Text: "\x1b]0;t\x07x", Name: "\x1b[1mn", Detail: "d\x00", StepName: "s\x1b[K", Worker: "w\x07",
-		Job: "j\x1b]52;c;ZXZpbA==\x07", StepKind: "k\x1b[2J", Status: "f\x07",
-	})
-	want := events.Event{Text: "x", Name: "n", Detail: "d", StepName: "s", Worker: "w", Job: "j", StepKind: "k", Status: "f"}
-	if event != want {
-		t.Errorf("scrub left escapes in a field: %+v", event)
-	}
-}
-
 // TestFollowPlainPrintsChunksOnceAndNotTheRecordAgain: a follower prints a step's chunks as they are recorded; the record that replaces them repeats what it printed, less the elided middle, so it is skipped for a step the follower saw print — and printed for one it did not, which is every step of a run that had finished before the follower attached.
 func TestFollowPlainPrintsChunksOnceAndNotTheRecordAgain(t *testing.T) {
 	t.Parallel()

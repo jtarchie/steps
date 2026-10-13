@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"text/tabwriter"
 )
 
 // ApprovalsCmd lists approval: steps waiting for a decision.
@@ -47,7 +46,7 @@ func (a *ApprovalsListCmd) Run() error {
 		return nil
 	}
 
-	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	writer := newTabWriter()
 
 	_, _ = fmt.Fprintln(writer, "ID\tJOB\tREQUESTED\tMESSAGE")
 

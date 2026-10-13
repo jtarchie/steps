@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
-	"text/tabwriter"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -55,7 +53,7 @@ func printMemoryScopes(st store.Memories) error {
 		return nil
 	}
 
-	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	writer := newTabWriter()
 
 	_, _ = fmt.Fprintln(writer, "SCOPE\tENTRIES\tLAST REMEMBERED")
 
@@ -78,7 +76,7 @@ func printMemories(st store.Memories, scope string) error {
 		return nil
 	}
 
-	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	writer := newTabWriter()
 
 	_, _ = fmt.Fprintln(writer, "ID\tREMEMBERED\tRUN\tTEXT")
 
@@ -94,7 +92,7 @@ func printMemories(st store.Memories, scope string) error {
 	return flushTable(writer, "memories")
 }
 
-func flushTable(writer *tabwriter.Writer, what string) error {
+func flushTable(writer table, what string) error {
 	err := writer.Flush()
 	if err != nil {
 		return fmt.Errorf("could not write the %s table: %w", what, err)

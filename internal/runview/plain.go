@@ -9,7 +9,7 @@ import (
 // Plain renders a run as the terminal has always read it, one line per thing that happened, for a bus observer to call. Output is not among them: it streams as it is written.
 func Plain(w io.Writer) func(events.Event) {
 	return func(event events.Event) {
-		if line := plainLine(event); line != "" {
+		if line := plainLine(ScrubEvent(event)); line != "" {
 			_, _ = io.WriteString(w, line+"\n")
 		}
 	}

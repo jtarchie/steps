@@ -190,6 +190,12 @@ func Run(args []string) error {
 
 	InitLogging(cli.LogLevel)
 
+	for _, flag := range kctx.Flags() {
+		if db, ok := flag.Target.Interface().(DB); ok {
+			warnPasswordInURL(string(db))
+		}
+	}
+
 	slog.Debug("cli.parse", "args", args)
 
 	flush, err := telemetry.Start(context.Background(), BuildVersion)

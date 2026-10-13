@@ -3,7 +3,6 @@ package runview
 import (
 	"fmt"
 	"io"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -11,8 +10,6 @@ import (
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
-
-var escapes = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
 
 // tailLines is how much of a running step's output the region shows: enough to see it move, few enough that eight parallel steps fit a screen.
 const tailLines = 6
@@ -113,6 +110,8 @@ func (l *Live) Stop() {
 
 // Event is the bus observer.
 func (l *Live) Event(event events.Event) {
+	event = ScrubEvent(event)
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -505,7 +504,7 @@ func (t *tail) last(label string) []string {
 
 	for i, text := range shown {
 		// A command's own colours would be cut through by clip, and bleed into every row below.
-		text = escapes.ReplaceAllString(text, "")
+		text = Scrub(text)
 
 		shown[i] = strings.TrimPrefix(text, "["+label+"] ")
 	}

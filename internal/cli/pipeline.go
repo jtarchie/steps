@@ -38,6 +38,16 @@ type TargetFlags struct {
 	Target string `default:"http://127.0.0.1:8088" env:"STEPS_TARGET" help:"the steps web daemon to talk to, optionally http://user:password@host" name:"target"`
 }
 
+// Validate is kong's hook. A target that does not parse cannot have its credentials taken off, and every message after this one would quote it whole — url.Parse's own error included.
+func (f TargetFlags) Validate() error {
+	_, err := url.Parse(strings.TrimSuffix(f.Target, "/"))
+	if err != nil {
+		return errors.New("--target does not parse as a URL; check its syntax, percent-encoding any / : @ in the password (not repeated here, as it may carry one)")
+	}
+
+	return nil
+}
+
 // PipelineNameFlag is which pipeline on that daemon a verb is about.
 type PipelineNameFlag struct {
 	Pipeline string `help:"the pipeline's name on the daemon" name:"pipeline" short:"p"`
@@ -476,7 +486,7 @@ func newDaemonClient(target string) *daemonClient {
 	}
 }
 
-// splitTargetCredentials takes the userinfo off a target URL, returning the address to talk to and the credentials to send. A target that does not parse comes back untouched and credential-free: the request that follows fails with the URL in it, which says more than a parse error here would.
+// splitTargetCredentials takes the userinfo off a target URL, returning the address to talk to and the credentials to send. A target that does not parse comes back untouched and credential-free; TargetFlags.Validate refuses one before it gets here.
 func splitTargetCredentials(target string) (string, string, string) {
 	trimmed := strings.TrimSuffix(target, "/")
 

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -65,6 +66,19 @@ func TestStatePrintsWithoutItsPassword(t *testing.T) {
 		if got := State(raw).String(); got != want {
 			t.Errorf("State(%q).String() = %q, want %q", raw, got, want)
 		}
+	}
+}
+
+// A handler that renders by kind rather than by Stringer — JSON marshals a string-kinded value as its bytes — must not be what decides whether a password is logged.
+func TestStateLogsWithoutItsPassword(t *testing.T) {
+	t.Parallel()
+
+	var out strings.Builder
+
+	slog.New(slog.NewJSONHandler(&out, nil)).Info("opened", "db", State("postgres://ci:hunter22@db/steps"))
+
+	if strings.Contains(out.String(), "hunter22") || !strings.Contains(out.String(), `"db":"postgres://ci@db/steps"`) {
+		t.Errorf("logged %s", out.String())
 	}
 }
 

@@ -120,6 +120,26 @@ func TestNoMessageCarriesThePasswordOutOfTheTarget(t *testing.T) {
 	}
 }
 
+// A target that does not parse is the one shape the client cannot take the credentials off, so it is refused before anything quotes it: an unencoded / in the password is enough.
+func TestAnUnparseableTargetIsRefusedWithoutRepeatingIt(t *testing.T) {
+	t.Parallel()
+
+	const password = "s3cret/w"
+
+	for _, verb := range [][]string{{"pipeline", "list"}, {"pipeline", "get", "-p", "demo"}, {"runs", "abort", "RUN", "-p", "demo"}} {
+		err := Run(append(verb, "--target", "http://ops:"+password+"@127.0.0.1:1"))
+		if err == nil || !strings.Contains(err.Error(), "--target") {
+			t.Errorf("steps %s = %v, want --target refused", strings.Join(verb, " "), err)
+
+			continue
+		}
+
+		if strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("steps %s repeated the password: %v", strings.Join(verb, " "), err)
+		}
+	}
+}
+
 // echo's own 401 body is "Unauthorized", which names neither what is missing nor where it goes.
 func TestA401NamesTheFix(t *testing.T) {
 	t.Parallel()

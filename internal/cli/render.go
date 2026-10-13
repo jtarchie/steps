@@ -6,15 +6,27 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/jtarchie/steps/internal/runview"
 )
 
-// newTabWriter returns the aligned-column writer every runs view prints
-// through.
-func newTabWriter() *tabwriter.Writer {
-	return tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+// table is the aligned-column writer every listing prints through. A cell can hold text an untrusted PR chose — an approval's message, an agent's question, a run's error — so each row is scrubbed on its way in, before tabwriter measures it.
+type table struct{ *tabwriter.Writer }
+
+func (t table) Write(p []byte) (int, error) {
+	_, err := t.Writer.Write([]byte(runview.Scrub(string(p))))
+	if err != nil {
+		return 0, err //nolint:wrapcheck // an io.Writer passes its writer's error through
+	}
+
+	return len(p), nil
 }
 
-func flush(writer *tabwriter.Writer) error {
+func newTabWriter() table {
+	return table{tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)}
+}
+
+func flush(writer table) error {
 	err := writer.Flush()
 	if err != nil {
 		return fmt.Errorf("could not write output: %w", err)
