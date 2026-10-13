@@ -286,27 +286,32 @@ func (w *planWalk) fetchTriggered(
 		fetchCtx := withStepLogger(events.WithStepID(placedCtx, parentStepFrom(ctx)), w.index, step)
 
 		// The identity rides only into the fetch, so the script's output is the get's and never reaches the remainder this get contains.
-		err := fetchGetStepWithStep(withStepIdentity(fetchCtx, w.jobName, w.index, step), w.cfg, w.st, step, step.Get, resource, resourceType, version, bw)
-
-		// Get-step hooks fire once per triggered build, in that build's own
-		// workspace, observing the fetch outcome. A fetch failure (or a hook that
-		// fails an otherwise-green fetch) fails this build.
-		if !step.Hooks.Empty() {
-			err = runHooks(ctx, build.scope(stepLabel(w.index, step)), step.Hooks, err)
-		}
-
-		if err != nil {
-			return err
-		}
-
-		// Only now that the fetch (and its hooks) actually succeeded: recording
-		// it earlier would show resource_checks a version nothing ever fetched.
-		recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
-
-		return nil
+		return w.fetchWithHooks(fetchCtx, ctx, build, step, resource, resourceType, version, bw)
 	}))
 
 	return err
+}
+
+// fetchWithHooks is the one hook rule for both get paths: the get's hooks
+// observe the fetch's outcome, whatever it was, in the workspace it fetched
+// into — so a failed fetch fires on_failure/on_error and ensure, as Concourse
+// does. fetchCtx names the get itself; hookCtx is where its hooks hang.
+func (w *planWalk) fetchWithHooks(
+	fetchCtx, hookCtx context.Context, runner stepRunner, step config.Step,
+	resource config.Resource, resourceType config.ResourceType, version map[string]any, bw workspace.BuildWorkspace,
+) error {
+	err := fetchGetStepWithStep(withStepIdentity(fetchCtx, w.jobName, w.index, step), w.cfg, w.st, step, step.Get, resource, resourceType, version, bw)
+
+	err = runHooks(hookCtx, runner.scope(stepLabel(w.index, step)), step.Hooks, err)
+	if err != nil {
+		return err
+	}
+
+	// Only now that the fetch (and its hooks) actually succeeded: recording
+	// it earlier would show resource_checks a version nothing ever fetched.
+	recordResolvedVersion(hookCtx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
+
+	return nil
 }
 
 // keptFetch reports whether a resumed get must keep what an earlier attempt
@@ -506,22 +511,7 @@ func (w *planWalk) fetchGetStepInPlace(ctx context.Context, step config.Step) (s
 	node := merkle.Node{Hash: hash, ParentHash: w.parentHash, Kind: merkle.NodeKindGet, StepIndex: i, Resource: resource.Name, Content: content}
 
 	return runPlaced(ctx, w.stepRunner, node, step.Get, noResult(func(ctx context.Context) error {
-		err := fetchGetStepWithStep(withStepIdentity(ctx, w.jobName, i, step), w.cfg, w.st, step, step.Get, *resource, *resourceType, version, w.bw)
-
-		// Get-step hooks fire in the same workspace the resource was fetched into.
-		if err == nil && !step.Hooks.Empty() {
-			err = runHooks(ctx, w.scope(stepLabel(i, step)), step.Hooks, err)
-		}
-
-		if err != nil {
-			return err
-		}
-
-		// Only now that the fetch (and its hooks) actually succeeded: recording
-		// it earlier would show resource_checks a version nothing ever fetched.
-		recordResolvedVersion(ctx, w.st, w.cfg, resource.Name, version, len(w.pinned) > 0)
-
-		return nil
+		return w.fetchWithHooks(ctx, ctx, w.stepRunner, step, *resource, *resourceType, version, w.bw)
 	}))
 }
 

@@ -127,3 +127,79 @@ func TestResumeRefusesWhenAnInPlaceGetsKeptArtifactIsGone(t *testing.T) {
 		t.Errorf("the refusal does not name the in-place get: %v", err)
 	}
 }
+
+// inPlaceGetHooksPipeline is a build whose SECOND get — fetched in place, not
+// the one the build is triggered by — carries every outcome hook; in is that
+// get's resource script.
+func inPlaceGetHooksPipeline(p hookPaths, in string) string {
+	return fmt.Sprintf(`
+resource_types:
+- name: fixed
+  config:
+    check: printf '[{"ref":"r1"}]'
+    in: echo r1 > ref.txt
+- name: second
+  config:
+    check: printf '[{"ref":"r1"}]'
+    in: %s
+resources:
+- name: first
+  type: fixed
+  source: {}
+- name: second
+  type: second
+  source: {}
+jobs:
+- name: build
+  plan:
+  - get: first
+  - get: second
+    on_success:
+      task: ok
+      run: echo ok >> %s
+    on_failure:
+      task: bad
+      run: echo bad >> %s
+    on_error:
+      task: errored
+      run: echo errored >> %s
+    ensure:
+      task: cleanup
+      run: echo done >> %s
+`, in, p.onSuccess, p.onFailure, p.onError, p.ensure)
+}
+
+// TestAnInPlaceGetThatFailsFiresItsFailureHooks: Concourse fires a step's
+// on_failure and ensure when that step fails, whichever get of the plan it is.
+// The in-place path ran hooks only on a successful fetch, so a second get that
+// failed fired nothing.
+func TestAnInPlaceGetThatFailsFiresItsFailureHooks(t *testing.T) {
+	dir := t.TempDir()
+	p := newHookPaths(dir)
+	path := writePipeline(t, dir, inPlaceGetHooksPipeline(p, "exit 1"))
+
+	err := cli.Run([]string{"run", path, "--job", "build"})
+	if err == nil {
+		t.Fatal("the build succeeded with a get whose in: exits 1")
+	}
+
+	assertLineCount(t, p.onFailure, 1)
+	assertLineCount(t, p.ensure, 1)
+	assertLineCount(t, p.onSuccess, 0)
+	assertLineCount(t, p.onError, 0)
+}
+
+// TestAnInPlaceGetThatSucceedsFiresItsSuccessHooks is the green half of the
+// same rule.
+func TestAnInPlaceGetThatSucceedsFiresItsSuccessHooks(t *testing.T) {
+	dir := t.TempDir()
+	p := newHookPaths(dir)
+	path := writePipeline(t, dir, inPlaceGetHooksPipeline(p, "echo r1 > ref.txt"))
+
+	mustRun(t, "run", path, "--job", "build")
+
+	assertLineCount(t, p.onSuccess, 1)
+	assertLineCount(t, p.ensure, 1)
+	assertLineCount(t, p.onFailure, 0)
+	assertLineCount(t, p.onError, 0)
+}
