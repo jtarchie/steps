@@ -25,6 +25,10 @@ type prefixedWriter struct {
 	prefix      string
 	dst         io.Writer
 	atLineStart bool
+	// buf assembles one Write's prefixed bytes so dst sees a single write per
+	// chunk: dst is usually the terminal's *os.File, where forwarding prefix
+	// and line separately cost two syscalls per line.
+	buf []byte
 }
 
 func newPrefixedWriter(prefix string, dst io.Writer) *prefixedWriter {
@@ -33,36 +37,37 @@ func newPrefixedWriter(prefix string, dst io.Writer) *prefixedWriter {
 
 func (p *prefixedWriter) Write(b []byte) (int, error) {
 	n := len(b)
+	if n == 0 {
+		return 0, nil
+	}
+
+	out := p.buf[:0]
 
 	for len(b) > 0 {
 		if p.atLineStart {
-			_, err := io.WriteString(p.dst, p.prefix)
-			if err != nil {
-				return n, err //nolint:wrapcheck // passes the underlying writer's own error through unchanged
-			}
-
+			out = append(out, p.prefix...)
 			p.atLineStart = false
 		}
 
 		idx := bytes.IndexByte(b, '\n')
 		if idx < 0 {
 			// No newline in what's left: stream it all now, stay mid-line.
-			_, err := p.dst.Write(b)
-			if err != nil {
-				return n, err //nolint:wrapcheck // passes the underlying writer's own error through unchanged
-			}
+			out = append(out, b...)
 
 			break
 		}
 
-		// Stream through the newline; the next byte begins a fresh line.
-		_, err := p.dst.Write(b[:idx+1])
-		if err != nil {
-			return n, err //nolint:wrapcheck // passes the underlying writer's own error through unchanged
-		}
-
+		// Through the newline; the next byte begins a fresh line.
+		out = append(out, b[:idx+1]...)
 		p.atLineStart = true
 		b = b[idx+1:]
+	}
+
+	p.buf = out
+
+	_, err := p.dst.Write(out)
+	if err != nil {
+		return n, err //nolint:wrapcheck // passes the underlying writer's own error through unchanged
 	}
 
 	return n, nil

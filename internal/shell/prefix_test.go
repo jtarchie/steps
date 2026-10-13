@@ -97,16 +97,49 @@ func TestPrefixedWriter(t *testing.T) {
 		}
 	})
 
-	t.Run("a destination that fails mid-line fails the write", func(t *testing.T) {
+	t.Run("a destination that fails fails the write", func(t *testing.T) {
 		t.Parallel()
 
-		pw := newPrefixedWriter("[x] ", &failAfterWrites{remaining: 1})
+		pw := newPrefixedWriter("[x] ", &failAfterWrites{remaining: 0})
 
 		_, err := pw.Write([]byte("no newline"))
 		if err == nil {
 			t.Error("Write swallowed the destination's error")
 		}
 	})
+}
+
+// dst is usually the terminal's *os.File, so every dst.Write is a write(2):
+// forwarding prefix and line separately cost two syscalls per line, which was
+// most of a chatty task's wall time.
+func TestPrefixedWriterMakesOneWritePerChunk(t *testing.T) {
+	t.Parallel()
+
+	dst := &countingWriter{}
+	pw := newPrefixedWriter("[x] ", dst)
+
+	_, _ = pw.Write([]byte("one\ntwo\nthree\nfour"))
+	_, _ = pw.Write([]byte(" more\n"))
+
+	if dst.writes != 2 {
+		t.Errorf("dst saw %d writes for 2 chunks, want 2", dst.writes)
+	}
+
+	if want := "[x] one\n[x] two\n[x] three\n[x] four more\n"; dst.String() != want {
+		t.Errorf("dst = %q, want %q", dst.String(), want)
+	}
+}
+
+type countingWriter struct {
+	bytes.Buffer
+
+	writes int
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	c.writes++
+
+	return c.Buffer.Write(p) //nolint:wrapcheck // a bytes.Buffer never errors
 }
 
 type failAfterWrites struct {
