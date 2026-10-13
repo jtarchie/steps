@@ -413,16 +413,24 @@ func runJobPlan(
 }
 
 // planJob plans the chains the build could resolve to and reports which
-// already succeeded; --force (skipCache) plans nothing and skips nothing.
+// already succeeded. --force (skipCache) skips nothing but still plans: a
+// forced run that fails must forget the chains it could have completed (see
+// forgetUnfinishedChains). It never failed on planning, so it still does not.
 func planJob(
 	ctx context.Context, r stepRunner, job *config.Job, pinned map[string]string,
 	cache *rsrc.Cache, resolution setResolution, skipCache bool,
 ) (map[string]bool, [][]string, error) {
+	chains, err := merkle.PlanChains(ctx, r.cfg, job.Name, job.Plan, pinned, cache, resolution.sets)
 	if skipCache {
-		return map[string]bool{}, nil, nil
+		if err != nil {
+			slog.WarnContext(ctx, "job.plan_failed", "job", job.Name, "error", err)
+
+			return map[string]bool{}, nil, nil
+		}
+
+		return map[string]bool{}, chainHashes(chains), nil
 	}
 
-	chains, err := merkle.PlanChains(ctx, r.cfg, job.Name, job.Plan, pinned, cache, resolution.sets)
 	if err != nil {
 		return nil, nil, fmt.Errorf("job %q: planning: %w", job.Name, err)
 	}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/jtarchie/steps/internal/agent"
@@ -86,6 +87,8 @@ func runSteps(ctx context.Context, w planWalk, steps []config.Step) error {
 		case step.Get != "" && !w.allowGetTrigger:
 			done, err := w.fetchInPlace(ctx, step, steps)
 			if done {
+				w.forgetUnfinishedChains(ctx, err)
+
 				return err
 			}
 		case step.Get != "":
@@ -93,6 +96,8 @@ func runSteps(ctx context.Context, w planWalk, steps []config.Step) error {
 		default:
 			done, err := w.runStep(ctx, step, steps)
 			if done {
+				w.forgetUnfinishedChains(ctx, err)
+
 				return err
 			}
 		}
@@ -108,6 +113,27 @@ func runSteps(ctx context.Context, w planWalk, steps []config.Step) error {
 	}
 
 	return recordChainSucceeded(ctx, w.stepRunner, w.parentHash, w.chainUnskippable)
+}
+
+// forgetUnfinishedChains drops, once the walk has failed, every chain it could
+// still have completed: those through parentHash, the last step that ran.
+// Forgetting only the failed node is not enough — the index is keyed by a
+// chain's LEAF, so a failure anywhere before the leaf would leave the older
+// success standing for the next run to skip on.
+func (w *planWalk) forgetUnfinishedChains(ctx context.Context, err error) {
+	if err == nil {
+		return
+	}
+
+	ctx = context.WithoutCancel(ctx)
+
+	for _, chain := range w.chains {
+		if len(chain) == 0 || (w.parentHash != "" && !slices.Contains(chain, w.parentHash)) {
+			continue
+		}
+
+		_ = w.st.ForgetChain(ctx, w.jobName, chain[len(chain)-1])
+	}
 }
 
 // runStep runs one non-get (task/put/agent) step through execution, routing
