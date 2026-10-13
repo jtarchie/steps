@@ -46,6 +46,42 @@ func (s suite) TestHasNodeSucceededIsPerJobAndStatus(t *testing.T) {
 	}
 }
 
+// TestHasNodesSucceededAnswersAWholeMatrix: a matrix asks about every cell at
+// once, and gets HasNodeSucceeded's answer for each — only a green node of its
+// own job, in its own pipeline.
+func (s suite) TestHasNodesSucceededAnswersAWholeMatrix(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+	other := s.open(t, "other")
+
+	mustRecordNode(t, st, "build", hashOf(1))
+	mustRecordNode(t, st, "build", hashOf(4))
+	mustRecordNode(t, st, "lint", hashOf(5))
+	mustRecordNode(t, other, "build", hashOf(6))
+
+	err := st.RecordNode(ctx, store.NodeRecord{Hash: hashOf(2), Kind: "task", Content: map[string]any{"n": 2}},
+		"build", "failed", nil, errors.New("boom"))
+	if err != nil {
+		t.Fatalf("RecordNode: %v", err)
+	}
+
+	got, err := st.HasNodesSucceeded(ctx, "build", []string{hashOf(1), hashOf(2), hashOf(3), hashOf(4), hashOf(5), hashOf(6)})
+	if err != nil {
+		t.Fatalf("HasNodesSucceeded: %v", err)
+	}
+
+	if len(got) != 2 || !got[hashOf(1)] || !got[hashOf(4)] {
+		t.Errorf("HasNodesSucceeded = %v; want only 1 and 4 (2 failed, 3 unknown, 5 another job's, 6 another pipeline's)", got)
+	}
+
+	got, err = st.HasNodesSucceeded(ctx, "build", nil)
+	if err != nil || len(got) != 0 {
+		t.Errorf("HasNodesSucceeded(nil) = %v, %v; want an empty map", got, err)
+	}
+}
+
 func (s suite) TestListNodes(t *testing.T) {
 	t.Parallel()
 

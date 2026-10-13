@@ -217,7 +217,7 @@ func recordPutOrder(ctx context.Context, st store.Versions, resource string, ver
 //
 // Best-effort, same posture as recordBuildVersion: this is bookkeeping for
 // a page, not the work the step was asked to do.
-func recordResolvedVersion(ctx context.Context, st store.Store, cfg *config.Config, resourceName string, version map[string]any, pinned bool) {
+func recordResolvedVersion(ctx context.Context, st store.Versions, cfg *config.Config, resourceName string, version map[string]any, pinned bool) {
 	if pinned || cfg.ResourceIsPolled(resourceName) {
 		return
 	}
@@ -252,19 +252,21 @@ func recordResolvedVersion(ctx context.Context, st store.Store, cfg *config.Conf
 // to a downstream gate forever. They could not be recovered later either: an
 // exhausted input holds at its NEWEST covered version, so a version
 // superseded within one run is never bound again.
-func recordPassedVersions(ctx context.Context, st store.Store, jobName, buildID string, fetched *buildVersions) {
+func recordPassedVersions(ctx context.Context, st store.Versions, jobName, buildID string, fetched *buildVersions) {
 	fetched.mu.Lock()
 	defer fetched.mu.Unlock()
 
-	recCtx := context.WithoutCancel(ctx)
+	var passes []store.Pass
 
 	for resource, versions := range fetched.by {
 		for version := range versions {
-			err := st.RecordPassedVersion(recCtx, store.Pass{JobName: jobName, Resource: resource, Version: version, BuildID: buildID})
-			if err != nil {
-				slog.WarnContext(ctx, "job.passed_unrecorded", "job", jobName, "resource", resource, "error", err)
-			}
+			passes = append(passes, store.Pass{JobName: jobName, Resource: resource, Version: version, BuildID: buildID})
 		}
+	}
+
+	err := st.RecordPassedVersions(context.WithoutCancel(ctx), passes)
+	if err != nil {
+		slog.WarnContext(ctx, "job.passed_unrecorded", "job", jobName, "versions", len(passes), "error", err)
 	}
 }
 

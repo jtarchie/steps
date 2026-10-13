@@ -37,15 +37,20 @@ type Versions interface {
 	// successfully has an error and no version at all.
 	CheckErrors(ctx context.Context) ([]CheckError, error)
 	RecordPassedVersion(ctx context.Context, pass Pass) error
+	// RecordPassedVersions is RecordPassedVersion for a whole build's
+	// versions in one transaction: all of them land or none does.
+	RecordPassedVersions(ctx context.Context, passes []Pass) error
 	PassedVersions(ctx context.Context, jobName string, limit int) ([]PassedVersion, error)
 	HasPassedVersionSet(ctx context.Context, jobName string, want map[string]VersionKey) (bool, error)
 	ConsumedMark(ctx context.Context, jobName, resourceName string) (int64, error)
 	RecordConsumedMark(ctx context.Context, jobName, resourceName string, order int64) error
 	RecordRunInput(ctx context.Context, runID string, input RunInput) error
 	RunInputs(ctx context.Context, runID string) ([]RunInput, error)
-	// VersionRuns is every run that took a version of the resource as an
-	// input, newest first.
-	VersionRuns(ctx context.Context, resourceName string) ([]VersionRun, error)
+	// VersionRuns is every run that took one of versions of the resource as
+	// an input, newest first. Naming the versions bounds the read by what a
+	// caller shows rather than by run history, which zero leaves unbounded;
+	// none named is none read.
+	VersionRuns(ctx context.Context, resourceName string, versions []VersionKey) ([]VersionRun, error)
 }
 
 // CheckedSwap moves a resource's checked version from Expected to Next.

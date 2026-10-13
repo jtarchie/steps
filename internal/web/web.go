@@ -753,7 +753,8 @@ func (s *Server) nav(c *echo.Context) navData {
 	gathered := make(map[string][]attentionItem, len(served))
 
 	for _, pipeline := range served {
-		items := s.attention(ctx, pipeline)
+		reads := readsOf(c, pipeline)
+		items := s.attention(ctx, reads)
 		gathered[pipeline.Slug] = items
 
 		nav.Pipelines = append(nav.Pipelines, pipelineSummary{
@@ -761,8 +762,8 @@ func (s *Server) nav(c *echo.Context) navData {
 			Path:      pipeline.Path(),
 			Jobs:      len(pipeline.Config().Jobs),
 			Attention: attentionTotal(items),
-			Mark:      pipelineMark(ctx, pipeline, attentionTotal(items)),
-			InFlight:  inFlight(ctx, pipeline),
+			Mark:      pipelineMark(ctx, reads, attentionTotal(items)),
+			InFlight:  inFlight(ctx, reads),
 		})
 	}
 
@@ -800,7 +801,7 @@ func (s *Server) nav(c *echo.Context) navData {
 			nav.SwitchMark = summary.Mark
 		}
 	}
-	nav.Paused = paused(ctx, current)
+	nav.Paused = readsOf(c, current).Paused(ctx)
 	nav.Attention = gathered[current.Slug]
 	// The tab appears only for a pipeline that declares servers: most do not, and a dead tab on every one of them is nav space spent on a feature they never use.
 	nav.HasMCP = len(current.Config().MCPServers) > 0
@@ -844,17 +845,6 @@ type navData struct {
 	// mark even on a run page, and every pipeline's above one — the switcher
 	// is about pipelines whatever page it sits on.
 	SwitchMark mark
-}
-
-// Answers false when the store cannot say: a page that fails to draw is worse than a missing banner.
-func paused(ctx context.Context, target *Pipeline) bool {
-	if target.Store == nil {
-		return false
-	}
-
-	is, err := target.Store.Paused(ctx)
-
-	return err == nil && is
 }
 
 type pipelineSummary struct {

@@ -124,9 +124,15 @@ func runlessState(c consumer, order, mark, newest int64, pinned, queued bool) st
 	}
 }
 
+// versionReader is what the version matrix reads.
+type versionReader interface {
+	store.Versions
+	store.Queue
+}
+
 // versionRows builds the matrix: versions newest first, one cell per
 // consumer.
-func versionRows(ctx context.Context, st store.Store, resource string, versions []store.VersionKey, consumers []consumer) ([]versionRow, error) {
+func versionRows(ctx context.Context, st versionReader, resource string, versions []store.VersionKey, consumers []consumer) ([]versionRow, error) {
 	rows := make([]versionRow, len(versions))
 	for i, version := range versions {
 		rows[i] = versionRow{Version: version, Cells: make([]versionCell, len(consumers))}
@@ -136,7 +142,7 @@ func versionRows(ctx context.Context, st store.Store, resource string, versions 
 		return rows, nil
 	}
 
-	runs, err := st.VersionRuns(ctx, resource)
+	runs, err := st.VersionRuns(ctx, resource, versions)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // VersionRuns names the resource
 	}

@@ -88,7 +88,7 @@ func (j *JobsReleaseCmd) Run() error {
 // against. The paused list is the better check anyway: it catches the typo
 // this exists to catch, and it also catches releasing something that was never
 // held, which used to report success having done nothing.
-func releaseJob(ctx context.Context, st store.Store, name string) error {
+func releaseJob(ctx context.Context, st store.Queue, name string) error {
 	paused, err := st.HeldJobs(ctx)
 	if err != nil {
 		return fmt.Errorf("could not read held jobs: %w", err)

@@ -457,7 +457,7 @@ func planJob(
 // the time this fires.
 // keepRunID is this build's own run, which retention must never delete — see
 // store.Prune, where a resumed run reaped itself.
-func pruneHistory(ctx context.Context, st store.Store, cfg *config.Config, jobName, keepRunID string) {
+func pruneHistory(ctx context.Context, st store.Pruning, cfg *config.Config, jobName, keepRunID string) {
 	err := st.Prune(context.WithoutCancel(ctx), store.Retention{
 		JobName:      jobName,
 		Runs:         cfg.RunHistoryLimit(),
@@ -513,7 +513,7 @@ func jobBudgetTokens(job *config.Job) int {
 // Best-effort by design: a store that cannot answer must not stop the run.
 // Failing open costs at most one budget's overshoot on a resume, where failing
 // closed would refuse to continue work that has already been paid for.
-func priorSpend(ctx context.Context, st store.Store, resume *resumeState) int {
+func priorSpend(ctx context.Context, st store.Usage, resume *resumeState) int {
 	if st == nil || resume == nil || !resume.resuming {
 		return 0
 	}

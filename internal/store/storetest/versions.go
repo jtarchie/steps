@@ -195,6 +195,45 @@ func (s suite) TestHasPassedVersionSetNeedsOneBuild(t *testing.T) {
 	assertPassedSet(want, true, "one build passed both")
 }
 
+// TestRecordPassedVersionsRecordsAWholeBuild: a build's versions recorded in
+// one call land exactly as the same calls one at a time would — each green,
+// each in history, and green together under the build.
+func (s suite) TestRecordPassedVersionsRecordsAWholeBuild(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	err := st.RecordPassedVersions(ctx, nil)
+	if err != nil {
+		t.Fatalf("RecordPassedVersions(nil): %v", err)
+	}
+
+	err = st.RecordPassedVersions(ctx, []store.Pass{
+		{JobName: "unit", Resource: "repo", Version: `{"ref":"a"}`, BuildID: "b1"},
+		{JobName: "unit", Resource: "repo", Version: `{"ref":"b"}`, BuildID: "b1"},
+		{JobName: "unit", Resource: "image", Version: `{"digest":"c"}`, BuildID: "b1"},
+	})
+	if err != nil {
+		t.Fatalf("RecordPassedVersions: %v", err)
+	}
+
+	passed, err := st.PassedVersions(ctx, "unit", 0)
+	if err != nil || len(passed) != 3 {
+		t.Fatalf("PassedVersions = %+v, %v; want all 3", passed, err)
+	}
+
+	together, err := st.HasPassedVersionSet(ctx, "unit", map[string]store.VersionKey{"repo": `{"ref":"b"}`, "image": `{"digest":"c"}`})
+	if err != nil || !together {
+		t.Errorf("HasPassedVersionSet = %v, %v; want the build's versions green together", together, err)
+	}
+
+	history, err := st.VersionOrders(ctx, "repo")
+	if err != nil || len(history) != 2 {
+		t.Errorf("repo history = %v, %v; want both versions the build used", history, err)
+	}
+}
+
 // TestTheCheckedVersionMovesOnlyFromWhatWasRead: a compare-and-set that loses leaves the newer version in place, including when the expectation was that none existed.
 func (s suite) TestTheCheckedVersionMovesOnlyFromWhatWasRead(t *testing.T) {
 	t.Parallel()
@@ -964,7 +1003,7 @@ func (s suite) TestVersionRunsAreTheRunsThatTookEachVersion(t *testing.T) {
 
 	recordInputRun(t, web, "VRUNS04", "other", `{"ref":"v1"}`, "succeeded")
 
-	got, err := web.VersionRuns(ctx, "repo")
+	got, err := web.VersionRuns(ctx, "repo", []store.VersionKey{`{"ref":"v1"}`, `{"ref":"v2"}`})
 	if err != nil {
 		t.Fatalf("VersionRuns: %v", err)
 	}
@@ -986,13 +1025,36 @@ func (s suite) TestVersionRunsAreTheRunsThatTookEachVersion(t *testing.T) {
 		}
 	}
 
-	other, err := infra.VersionRuns(ctx, "repo")
+	other, err := infra.VersionRuns(ctx, "repo", []store.VersionKey{`{"ref":"v1"}`, `{"ref":"v2"}`})
 	if err != nil {
 		t.Fatalf("VersionRuns infra: %v", err)
 	}
 
 	if len(other) != 0 {
 		t.Errorf("infra sees another pipeline's runs: %+v", other)
+	}
+}
+
+// TestVersionRunsReadOnlyTheNamedVersions: the resource page names the
+// versions it shows, and the read is bounded by them rather than by run
+// history, which run_history: 0 leaves unbounded.
+func (s suite) TestVersionRunsReadOnlyTheNamedVersions(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	web := s.open(t, "web")
+
+	recordInputRun(t, web, "VNAMED01", "repo", `{"ref":"v1"}`, "succeeded")
+	recordInputRun(t, web, "VNAMED02", "repo", `{"ref":"v2"}`, "failed")
+
+	only, err := web.VersionRuns(ctx, "repo", []store.VersionKey{`{"ref":"v2"}`, `{"ref":"v9"}`})
+	if err != nil || len(only) != 1 || only[0].Run.ID != "VNAMED02" {
+		t.Errorf("VersionRuns(v2, v9) = %+v, %v; want only v2's run", only, err)
+	}
+
+	none, err := web.VersionRuns(ctx, "repo", nil)
+	if err != nil || len(none) != 0 {
+		t.Errorf("VersionRuns(none) = %+v, %v; want nothing", none, err)
 	}
 }
 

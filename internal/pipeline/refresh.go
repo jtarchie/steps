@@ -124,7 +124,7 @@ func refreshAcquires(ctx context.Context, cfg *config.Config, name string) (stri
 // checkCursorFor reads the recorded check cursor, decoded — the same value a
 // watch poll hands the check, so a cursor-driven type answers the refresh as
 // cheaply as it answers a poll.
-func checkCursorFor(ctx context.Context, st store.Store, name string) (map[string]any, error) {
+func checkCursorFor(ctx context.Context, st store.Versions, name string) (map[string]any, error) {
 	last, found, err := st.LastChecked(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("reading the check cursor for %q: %w", name, err)

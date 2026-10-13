@@ -139,7 +139,7 @@ func TestARedJobBeingRebuiltStaysRed(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	got := pipelineMark(ctx, pipeline, 0)
+	got := pipelineMark(ctx, newReads(pipeline), 0)
 	if got.Disc != discFailed || !got.Ring {
 		t.Errorf("rebuilding a red job reads %q, want ✗◐", got.Glyph())
 	}
@@ -149,7 +149,7 @@ func TestARedJobBeingRebuiltStaysRed(t *testing.T) {
 		t.Fatalf("FinishRun: %v", err)
 	}
 
-	if got := pipelineMark(ctx, pipeline, 0); got.Disc != discPassed || got.Ring {
+	if got := pipelineMark(ctx, newReads(pipeline), 0); got.Disc != discPassed || got.Ring {
 		t.Errorf("the fix landing reads %q, want ✓", got.Glyph())
 	}
 }
@@ -164,7 +164,7 @@ func TestAJobGoneFromTheConfigIsNotFolded(t *testing.T) {
 	finishedRun(t, pipeline, "b-1", "build", "succeeded")
 	finishedRun(t, pipeline, "r-1", "retired", "failed")
 
-	if got := pipelineMark(context.Background(), pipeline, 0); got.Disc != discPassed {
+	if got := pipelineMark(context.Background(), newReads(pipeline), 0); got.Disc != discPassed {
 		t.Errorf("a removed job's failure reads %q, want ✓", got.Glyph())
 	}
 }
@@ -184,13 +184,13 @@ func TestPausedSitsBetweenGreenAndRed(t *testing.T) {
 		t.Fatalf("Pause: %v", err)
 	}
 
-	if got := pipelineMark(ctx, pipeline, 0); got.Disc != discPaused {
+	if got := pipelineMark(ctx, newReads(pipeline), 0); got.Disc != discPaused {
 		t.Errorf("a paused green pipeline reads %q, want ⏸", got.Glyph())
 	}
 
 	finishedRun(t, pipeline, "d-1", "deploy", "failed")
 
-	if got := pipelineMark(ctx, pipeline, 0); got.Disc != discFailed {
+	if got := pipelineMark(ctx, newReads(pipeline), 0); got.Disc != discFailed {
 		t.Errorf("a paused pipeline with a red job reads %q, want ✗", got.Glyph())
 	}
 }

@@ -274,6 +274,29 @@ func (s *Store) LatestRunByJob(ctx context.Context) (map[string]store.RunRow, er
 	return latest, nil
 }
 
+// LatestFinishedRunByJob returns every job's newest run that is no longer
+// running, keyed by job name — one query for a board rather than one per busy
+// job. Reruns count, as they do in ListRuns.
+func (s *Store) LatestFinishedRunByJob(ctx context.Context) (map[string]store.RunRow, error) {
+	rows, err := collect(ctx, s.reads, "latest finished runs", `
+		SELECT `+runColumns+` FROM (
+		    SELECT *, ROW_NUMBER() OVER (PARTITION BY job_name ORDER BY started_at DESC, rowid DESC) AS recency
+		    FROM runs
+		    WHERE pipeline_id = ? AND status <> 'running'
+		) WHERE recency = 1
+	`, []any{s.pipelineID}, scanRunRowFrom)
+	if err != nil {
+		return nil, err
+	}
+
+	latest := make(map[string]store.RunRow, len(rows))
+	for _, row := range rows {
+		latest[row.JobName] = row
+	}
+
+	return latest, nil
+}
+
 // RunsUsingNode lists the runs whose events reference a node hash — the
 // "which runs reused this cached step" answer a node page is built on.
 func (s *Store) RunsUsingNode(ctx context.Context, hash string, limit int) ([]store.RunRow, error) {

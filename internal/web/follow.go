@@ -95,7 +95,7 @@ func (s *Server) handleLatestRun(c *echo.Context) error {
 	var checks []followCheck
 
 	if state != "waiting" {
-		checks, err = followChecks(ctx, pipeline, s.capacity, name, state == "running", inFlight)
+		checks, err = followChecks(ctx, readsOf(c, pipeline), s.capacity, name, state == "running", inFlight)
 		if err != nil {
 			return err
 		}
@@ -134,8 +134,10 @@ type followCheck struct {
 }
 
 // followChecks asks only what the drain itself asks (admits, then ClaimNextJob's limits), so a line never blames something that is not holding the run back. The limits stop mattering once a worker has claimed it.
-func followChecks(ctx context.Context, pipeline *Pipeline, capacity Capacity, name string, claimed bool, inFlight int) ([]followCheck, error) {
-	paused, err := pipeline.Store.Paused(ctx)
+func followChecks(ctx context.Context, reads *pipelineReads, capacity Capacity, name string, claimed bool, inFlight int) ([]followCheck, error) {
+	pipeline := reads.target
+
+	paused, err := reads.PausedErr(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("web: %w", err)
 	}
@@ -212,15 +214,15 @@ func maxRunsCheck(capacity Capacity) (followCheck, bool) {
 }
 
 // waitingOn is the first check holding a job's pending row back, the line the follow page leads with. A job the configuration no longer names has nothing to check, which reads as empty rather than as a 404 for the whole board.
-func waitingOn(ctx context.Context, pipeline *Pipeline, capacity Capacity, queue []store.QueueRow, name string) (string, error) {
-	_, err := pipeline.Config().FindJob(name)
+func waitingOn(ctx context.Context, reads *pipelineReads, capacity Capacity, queue []store.QueueRow, name string) (string, error) {
+	_, err := reads.target.Config().FindJob(name)
 	if err != nil {
 		return "", nil //nolint:nilerr // a dropped job is a row with no reason, not a broken page
 	}
 
 	_, inFlight := queuedState(queue, name)
 
-	checks, err := followChecks(ctx, pipeline, capacity, name, false, inFlight)
+	checks, err := followChecks(ctx, reads, capacity, name, false, inFlight)
 	if err != nil {
 		return "", err
 	}

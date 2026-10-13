@@ -168,7 +168,16 @@ func (s *Store) CheckErrors(ctx context.Context) ([]store.CheckError, error) {
 // RecordPassedVersion records that jobName completed successfully against this
 // exact version of a resource. It is what a downstream job's passed: reads.
 func (s *Store) RecordPassedVersion(ctx context.Context, pass store.Pass) error {
-	jobName, resourceName, versionJSON, buildID := pass.JobName, pass.Resource, pass.Version, pass.BuildID
+	return s.RecordPassedVersions(ctx, []store.Pass{pass})
+}
+
+// RecordPassedVersions records every pass in one transaction.
+func (s *Store) RecordPassedVersions(ctx context.Context, passes []store.Pass) error {
+	if len(passes) == 0 {
+		return nil
+	}
+
+	jobName := passes[0].JobName
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -177,27 +186,30 @@ func (s *Store) RecordPassedVersion(ctx context.Context, pass store.Pass) error 
 
 	defer func() { _ = tx.Rollback() }()
 
-	// The version has to exist in history before anything may reference it.
-	// A `steps run` resolves its own versions and never goes near the poller,
-	// so this is the path by which a manually-run job's versions enter
-	// history at all.
-	err = ensureVersion(ctx, tx, s.pipelineID, resourceName, versionJSON)
-	if err != nil {
-		return err
-	}
+	for _, pass := range passes {
+		// The version has to exist in history before anything may reference
+		// it. A `steps run` resolves its own versions and never goes near the
+		// poller, so this is the path by which a manually-run job's versions
+		// enter history at all.
+		err = ensureVersion(ctx, tx, s.pipelineID, pass.Resource, pass.Version)
+		if err != nil {
+			return err
+		}
 
-	// On conflict the build_id is UPDATED rather than left alone: re-running a
-	// job against versions it has already passed should refresh which build
-	// vouches for them, or the row would keep pointing at the oldest build
-	// that saw it and a newer coherent set would be invisible.
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO job_versions (pipeline_id, job_name, resource_name, version_json, recorded_at, build_id)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT (pipeline_id, job_name, resource_name, version_json)
-		DO UPDATE SET build_id = excluded.build_id, recorded_at = excluded.recorded_at
-	`, s.pipelineID, jobName, resourceName, versionJSON, now(), buildID)
-	if err != nil {
-		return fmt.Errorf("could not record a passed version for job %q: %w", jobName, err)
+		// On conflict the build_id is UPDATED rather than left alone:
+		// re-running a job against versions it has already passed should
+		// refresh which build vouches for them, or the row would keep pointing
+		// at the oldest build that saw it and a newer coherent set would be
+		// invisible.
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO job_versions (pipeline_id, job_name, resource_name, version_json, recorded_at, build_id)
+			VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT (pipeline_id, job_name, resource_name, version_json)
+			DO UPDATE SET build_id = excluded.build_id, recorded_at = excluded.recorded_at
+		`, s.pipelineID, pass.JobName, pass.Resource, pass.Version, now(), pass.BuildID)
+		if err != nil {
+			return fmt.Errorf("could not record a passed version for job %q: %w", pass.JobName, err)
+		}
 	}
 
 	err = tx.Commit()
@@ -367,17 +379,23 @@ func (s *Store) RunInputs(ctx context.Context, runID string) ([]store.RunInput, 
 	})
 }
 
-// VersionRuns reports every run that took a version of this resource as an
-// input, newest first. DISTINCT because two gets of one resource in a run may
-// bind the same version, and that is one run of it, not two.
-func (s *Store) VersionRuns(ctx context.Context, resourceName string) ([]store.VersionRun, error) {
+// VersionRuns reports every run that took one of these versions of this
+// resource as an input, newest first. DISTINCT because two gets of one
+// resource in a run may bind the same version, and that is one run of it, not
+// two.
+func (s *Store) VersionRuns(ctx context.Context, resourceName string, versions []store.VersionKey) ([]store.VersionRun, error) {
+	if len(versions) == 0 {
+		return nil, nil
+	}
+
 	return collect(ctx, s.reads, "the runs of resource "+resourceName, `
 		SELECT i.version_json, `+runColumnsR+`
-		FROM (SELECT DISTINCT run_id, version_json FROM run_inputs WHERE resource_name = ?) i
+		FROM (SELECT DISTINCT run_id, version_json FROM run_inputs
+		      WHERE resource_name = ? AND version_json IN (SELECT value FROM json_each(?))) i
 		JOIN runs r ON r.id = i.run_id
 		WHERE r.pipeline_id = ?
 		ORDER BY r.started_at DESC, r.rowid DESC
-	`, []any{resourceName, s.pipelineID}, scanVersionRun)
+	`, []any{resourceName, jsonList(versions), s.pipelineID}, scanVersionRun)
 }
 
 func scanVersionRun(rows *sql.Rows) (store.VersionRun, error) {

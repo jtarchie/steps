@@ -229,3 +229,25 @@ func (s *Store) NodeTranscript(ctx context.Context, hash string) (string, bool, 
 
 	return transcript, true, nil
 }
+
+// HasNodesSucceeded is HasNodeSucceeded for many hashes in one query.
+func (s *Store) HasNodesSucceeded(ctx context.Context, jobName string, hashes []string) (map[string]bool, error) {
+	result := map[string]bool{}
+	if len(hashes) == 0 {
+		return result, nil
+	}
+
+	found, err := collect(ctx, s.reads, "nodes",
+		`SELECT hash FROM nodes
+		 WHERE pipeline_id = ? AND job_name = ? AND status = 'succeeded' AND hash IN (SELECT value FROM json_each(?))`,
+		[]any{s.pipelineID, jobName, jsonList(hashes)}, scanString)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, hash := range found {
+		result[hash] = true
+	}
+
+	return result, nil
+}

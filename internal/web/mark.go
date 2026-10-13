@@ -143,12 +143,12 @@ func runMark(run store.RunRow) mark {
 // inFlight counts the queue's open rows, the same reading the root's queued
 // column takes; zero when the store cannot say, since a missing count is
 // better than a page that fails to draw.
-func inFlight(ctx context.Context, target *Pipeline) int {
-	if target.Store == nil {
+func inFlight(ctx context.Context, reads *pipelineReads) int {
+	if reads.target.Store == nil {
 		return 0
 	}
 
-	queue, err := target.Store.ListTriggerQueue(ctx, overviewLimit)
+	queue, err := reads.TriggerQueue(ctx, overviewLimit)
 	if err != nil {
 		return 0
 	}
@@ -165,17 +165,18 @@ func runTitle(run store.RunRow) string {
 // run — Concourse's dashboard rule — so a red job being rebuilt stays red
 // and wears the ring, rather than reading as merely busy. A job no longer in
 // the config is not folded: its last failure would otherwise be permanent.
-func pipelineMark(ctx context.Context, target *Pipeline, needs int) mark {
+func pipelineMark(ctx context.Context, reads *pipelineReads, needs int) mark {
 	result := mark{Needs: needs}
-	if paused(ctx, target) {
+	if reads.Paused(ctx) {
 		result.Disc = discPaused
 	}
 
+	target := reads.target
 	if target.Store == nil {
 		return result
 	}
 
-	latest, err := target.Store.LatestRunByJob(ctx)
+	latest, err := reads.LatestRunByJob(ctx)
 	if err != nil {
 		return result
 	}
@@ -193,56 +194,44 @@ func pipelineMark(ctx context.Context, target *Pipeline, needs int) mark {
 		}
 
 		result.Ring = result.Ring || statusWord(run.Status) == "running"
-		result.Disc = max(result.Disc, lastFinishedDisc(ctx, target, job.Name))
+		result.Disc = max(result.Disc, lastFinishedDisc(ctx, reads, job.Name))
 	}
 
 	return result
 }
 
-// withLastFinished fills in Finished for every job with a run in flight,
-// one read per busy job, as lastFinishedDisc does for the mark. A store that
-// cannot answer leaves the job uncolored rather than failing the page.
-func withLastFinished(ctx context.Context, target *Pipeline, views []jobView) {
+// withLastFinished fills in Finished for every job with a run in flight, from
+// the same one read lastFinishedDisc takes for the mark. A store that cannot
+// answer leaves the job uncolored rather than failing the page.
+func withLastFinished(ctx context.Context, reads *pipelineReads, views []jobView) {
 	for i := range views {
 		if !views[i].HasRun || finished(views[i].Latest.Status) {
 			continue
 		}
 
-		runs, err := target.Store.ListRuns(ctx, views[i].Name, lastFinishedRuns)
+		latest, err := reads.LatestFinishedRunByJob(ctx)
 		if err != nil {
-			continue
+			return
 		}
 
-		for _, run := range runs {
-			if finished(run.Status) {
-				views[i].Finished, views[i].HasFinished = run, true
-
-				break
-			}
-		}
+		views[i].Finished, views[i].HasFinished = latest[views[i].Name]
 	}
 }
 
-// lastFinishedRuns bounds the look-back behind a job's in-flight runs.
-// ponytail: a job with more runs in flight than this reads as never having
-// finished until one does; max_in_flight that high is not a shape seen yet.
-const lastFinishedRuns = 5
-
-// lastFinishedDisc is asked only of a job with a run in flight, so the read
-// costs one query per BUSY job, not per job.
-func lastFinishedDisc(ctx context.Context, target *Pipeline, job string) disc {
-	runs, err := target.Store.ListRuns(ctx, job, lastFinishedRuns)
+// lastFinishedDisc is asked only of a job with a run in flight, so a board
+// with nothing running never reads it.
+func lastFinishedDisc(ctx context.Context, reads *pipelineReads, job string) disc {
+	latest, err := reads.LatestFinishedRunByJob(ctx)
 	if err != nil {
 		return discNone
 	}
 
-	for _, run := range runs {
-		if finished(run.Status) {
-			return discOf(run.Status)
-		}
+	run, ok := latest[job]
+	if !ok {
+		return discNone
 	}
 
-	return discNone
+	return discOf(run.Status)
 }
 
 const (

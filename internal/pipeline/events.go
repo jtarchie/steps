@@ -67,7 +67,7 @@ func StoreSink(st store.Events) func(events.Event) {
 //
 // The returned func must be called when the run ends: it drains the sink so
 // the last events land before the process moves on.
-func attachEventBus(ctx context.Context, st store.Store) (context.Context, func()) {
+func attachEventBus(ctx context.Context, st store.Events) (context.Context, func()) {
 	if events.FromContext(ctx) != nil {
 		return ctx, func() {}
 	}

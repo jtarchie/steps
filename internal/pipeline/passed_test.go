@@ -72,7 +72,7 @@ func (refusingVersions) RecordCheckedVersion(context.Context, string, store.Vers
 	return os.ErrPermission
 }
 
-func (refusingVersions) RecordPassedVersion(context.Context, store.Pass) error {
+func (refusingVersions) RecordPassedVersions(context.Context, []store.Pass) error {
 	return os.ErrPermission
 }
 

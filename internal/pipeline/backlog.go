@@ -91,7 +91,7 @@ func oneBuild(ctx context.Context, resolution setResolution) (setResolution, int
 // minted at the TOP order, so taking it would leap the mark over every
 // unbuilt version below it.
 func takeBuild(
-	ctx context.Context, st store.Store, jobName string, cursor *versionCursor,
+	ctx context.Context, st store.Versions, jobName string, cursor *versionCursor,
 	resolution setResolution, pinnedRun bool, waiting int,
 ) {
 	if resolution.recorded || len(resolution.sets) == 0 {

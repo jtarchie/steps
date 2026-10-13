@@ -164,6 +164,45 @@ func (s suite) TestARerunOfAnOldBuildDoesNotBecomeTheJobsStatus(t *testing.T) {
 	}
 }
 
+// TestLatestFinishedRunByJobLooksPastWhatIsRunning: a board colors a busy job
+// by its last finished run, however many of its runs are in flight; a job with
+// none finished is absent, and another pipeline's runs are never an answer.
+func (s suite) TestLatestFinishedRunByJobLooksPastWhatIsRunning(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+	other := s.open(t, "other")
+
+	mustStartRuns(ctx, t, st, "build", "B1", "B2")
+
+	for id, status := range map[string]store.RunStatus{"B1": store.RunFailed, "B2": store.RunSucceeded} {
+		err := st.FinishRun(ctx, id, status)
+		if err != nil {
+			t.Fatalf("FinishRun(%s): %v", id, err)
+		}
+	}
+
+	// More in flight than the board's old five-run look-back reached past.
+	mustStartRuns(ctx, t, st, "build", "B3", "B4", "B5", "B6", "B7", "B8")
+	mustStartRuns(ctx, t, st, "lint", "L1")
+	mustStartRuns(ctx, t, other, "build", "O1")
+
+	err := other.FinishRun(ctx, "O1", store.RunAborted)
+	if err != nil {
+		t.Fatalf("FinishRun(O1): %v", err)
+	}
+
+	latest, err := st.LatestFinishedRunByJob(ctx)
+	if err != nil {
+		t.Fatalf("LatestFinishedRunByJob: %v", err)
+	}
+
+	if len(latest) != 1 || latest["build"].ID != "B2" || latest["build"].Status != store.RunSucceeded {
+		t.Errorf("LatestFinishedRunByJob = %+v; want only build's B2, succeeded", latest)
+	}
+}
+
 func mustLatest(t *testing.T, st interface {
 	LatestRunByJob(ctx context.Context) (map[string]store.RunRow, error)
 },

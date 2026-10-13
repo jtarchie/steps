@@ -28,6 +28,9 @@ type Runs interface {
 	// convention everywhere here.
 	ListRuns(ctx context.Context, jobName string, limit int) ([]RunRow, error)
 	LatestRunByJob(ctx context.Context) (map[string]RunRow, error)
+	// LatestFinishedRunByJob is each job's newest run that is no longer
+	// running, reruns included, as ListRuns includes them.
+	LatestFinishedRunByJob(ctx context.Context) (map[string]RunRow, error)
 	RunsUsingNode(ctx context.Context, hash string, limit int) ([]RunRow, error)
 	FindRunRow(ctx context.Context, id string) (RunRow, bool, error)
 	FirstRunSince(ctx context.Context, jobName string, since time.Time) (RunRow, bool, error)

@@ -13,31 +13,32 @@ import (
 func (s *Server) handleJobs(c *echo.Context) error {
 	pipeline := pipelineOf(c)
 	ctx := c.Request().Context()
+	reads := readsOf(c, pipeline)
 
-	latest, err := pipeline.Store.LatestRunByJob(ctx)
+	latest, err := reads.LatestRunByJob(ctx)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
-	paused, err := pipeline.Store.HeldJobs(ctx)
+	paused, err := reads.HeldJobs(ctx)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
-	queue, err := pipeline.Store.ListTriggerQueue(ctx, 25)
+	queue, err := reads.TriggerQueue(ctx, 25)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
 	views := buildJobViews(pipeline.Config(), latest, paused)
-	withLastFinished(ctx, pipeline, views)
+	withLastFinished(ctx, reads, views)
 
-	failing, err := pipeline.Store.CheckErrors(ctx)
+	failing, err := reads.CheckErrors(ctx)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
-	rows, err := s.markQueued(ctx, pipeline, queue, views)
+	rows, err := s.markQueued(ctx, reads, queue, views)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
@@ -54,7 +55,9 @@ func (s *Server) handleJobs(c *echo.Context) error {
 }
 
 // markQueued fills in each job's queued run and what holds it back, and the queue table's rows with the same reasons, asked once per job.
-func (s *Server) markQueued(ctx context.Context, pipeline *Pipeline, queue []store.QueueRow, views []jobView) ([]queueRowView, error) {
+func (s *Server) markQueued(ctx context.Context, reads *pipelineReads, queue []store.QueueRow, views []jobView) ([]queueRowView, error) {
+	pipeline := reads.target
+
 	reasons := map[string]string{}
 
 	reason := func(name string) (string, error) {
@@ -62,7 +65,7 @@ func (s *Server) markQueued(ctx context.Context, pipeline *Pipeline, queue []sto
 			return text, nil
 		}
 
-		text, err := waitingOn(ctx, pipeline, s.capacity, queue, name)
+		text, err := waitingOn(ctx, reads, s.capacity, queue, name)
 		reasons[name] = text
 
 		return text, err

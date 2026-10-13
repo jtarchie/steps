@@ -164,8 +164,10 @@ func emptyAxisSource(step config.Step) string {
 func runAcrossCells(
 	ctx context.Context, r stepRunner, i int, step config.Step, cells []config.Step, cellParent string,
 ) error {
+	plans := planCells(ctx, r, cells, cellParent)
+
 	if step.MaxInFlight > 1 {
-		return runAcrossCellsConcurrently(ctx, r, i, step, cells, cellParent)
+		return runAcrossCellsConcurrently(ctx, r, i, step, cells, plans, cellParent)
 	}
 
 	var (
@@ -180,7 +182,7 @@ func runAcrossCells(
 			break
 		}
 
-		skipped, err := runAcrossCell(cellCtx, r, i, cell, cellParent)
+		skipped, err := runAcrossCell(cellCtx, r, i, cell, plans[index], cellParent)
 
 		// Settled here rather than deferred: the serial walk holds one cell at
 		// a time, and its spend is in the accumulator the moment this returns.
@@ -214,7 +216,7 @@ func runAcrossCells(
 // exactly one cell. Every cell runs, every failure is reported, same as the
 // serial walk.
 func runAcrossCellsConcurrently(
-	ctx context.Context, r stepRunner, i int, step config.Step, cells []config.Step, cellParent string,
+	ctx context.Context, r stepRunner, i int, step config.Step, cells []config.Step, plans []cellPlan, cellParent string,
 ) error {
 	var (
 		wg      sync.WaitGroup
@@ -271,7 +273,7 @@ func runAcrossCellsConcurrently(
 			runCtx, cellLog := forkExecLog(cellCtx)
 			logs[index] = cellLog
 
-			skipped, err := runAcrossCell(runCtx, r, i, cells[index], cellParent)
+			skipped, err := runAcrossCell(runCtx, r, i, cells[index], plans[index], cellParent)
 			results[index].err, skips[index] = err, skipped
 		}()
 	}
@@ -300,17 +302,84 @@ func runAcrossCellsConcurrently(
 	return joinWorst(failures, errored)
 }
 
-// runAcrossCell runs one cell unless its exact content already succeeded.
-func runAcrossCell(ctx context.Context, r stepRunner, i int, cell config.Step, cellParent string) (bool, error) {
-	cellHash, cacheable, err := merkle.CellHash(r.cfg, cell, cellParent)
-	if err != nil {
-		return false, err //nolint:wrapcheck // CellHash names the cell
+// cellPlan is a cell's cache identity, worked out for the whole matrix before
+// any cell runs so the matrix asks the store once rather than once per cell.
+type cellPlan struct {
+	hash      string
+	cacheable bool
+	err       error
+	// known is whether done was prefetched; a cell without it asks at its own
+	// turn.
+	known, done bool
+}
+
+// planCells hashes every cell and reads which cacheable ones already
+// succeeded in one query. A hash two cells share is not prefetched: the first
+// may record it before the second looks, so the second still asks at its own
+// turn. A failed prefetch prefetches nothing, leaving each cell to ask — and
+// fail — on its own, as it did before there was a prefetch.
+func planCells(ctx context.Context, r stepRunner, cells []config.Step, cellParent string) []cellPlan {
+	plans, seen := hashCells(r, cells, cellParent)
+	hashes := make([]string, 0, len(seen))
+
+	for hash, count := range seen {
+		if count == 1 {
+			hashes = append(hashes, hash)
+		}
 	}
 
-	if cacheable && !forced(ctx) {
-		done, lookupErr := r.st.HasNodeSucceeded(ctx, r.jobName, cellHash)
-		if lookupErr != nil {
-			return false, fmt.Errorf("cell cache: %w", lookupErr)
+	if forced(ctx) || len(hashes) == 0 {
+		return plans
+	}
+
+	done, err := r.st.HasNodesSucceeded(ctx, r.jobName, hashes)
+	if err != nil {
+		return plans
+	}
+
+	for index, plan := range plans {
+		if seen[plan.hash] == 1 && plan.err == nil && plan.cacheable {
+			plans[index].known, plans[index].done = true, done[plan.hash]
+		}
+	}
+
+	return plans
+}
+
+// hashCells is each cell's plan without a prefetch, and how many cacheable
+// cells hold each hash.
+func hashCells(r stepRunner, cells []config.Step, cellParent string) ([]cellPlan, map[string]int) {
+	plans := make([]cellPlan, len(cells))
+	seen := map[string]int{}
+
+	for index, cell := range cells {
+		hash, cacheable, err := merkle.CellHash(r.cfg, cell, cellParent)
+		plans[index] = cellPlan{hash: hash, cacheable: cacheable, err: err}
+
+		if err == nil && cacheable {
+			seen[hash]++
+		}
+	}
+
+	return plans, seen
+}
+
+// runAcrossCell runs one cell unless its exact content already succeeded.
+func runAcrossCell(ctx context.Context, r stepRunner, i int, cell config.Step, plan cellPlan, cellParent string) (bool, error) {
+	if plan.err != nil {
+		return false, plan.err
+	}
+
+	if plan.cacheable && !forced(ctx) {
+		done := plan.done
+
+		if !plan.known {
+			var lookupErr error
+
+			done, lookupErr = r.st.HasNodeSucceeded(ctx, r.jobName, plan.hash)
+			if lookupErr != nil {
+				return false, fmt.Errorf("cell cache: %w", lookupErr)
+			}
 		}
 
 		if done {
@@ -318,7 +387,7 @@ func runAcrossCell(ctx context.Context, r stepRunner, i int, cell config.Step, c
 		}
 	}
 
-	_, err = runNonGetStep(ctx, r, i, cell, nil, cellParent)
+	_, err := runNonGetStep(ctx, r, i, cell, nil, cellParent)
 
 	return false, err
 }

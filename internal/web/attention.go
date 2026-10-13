@@ -47,7 +47,8 @@ type attentionItem struct {
 // Every probe answers nil rather than an error, and a read that fails answers
 // nil too. This runs on every render of every page, including the 2.5s
 // self-poll — a store hiccup must cost a line of the banner, never the page.
-func (s *Server) attention(ctx context.Context, target *Pipeline) []attentionItem {
+func (s *Server) attention(ctx context.Context, reads *pipelineReads) []attentionItem {
+	target := reads.target
 	if target == nil || target.Store == nil {
 		return nil
 	}
@@ -55,11 +56,11 @@ func (s *Server) attention(ctx context.Context, target *Pipeline) []attentionIte
 	base := "/p/" + target.Slug
 
 	found := []*attentionItem{
-		pausedJobsItem(ctx, target, base),
-		failingChecksItem(ctx, target, base),
+		pausedJobsItem(ctx, reads, base),
+		failingChecksItem(ctx, reads, base),
 		s.mcpItem(target, base),
-		approvalsItem(ctx, target, base),
-		questionsItem(ctx, target, base),
+		approvalsItem(ctx, reads, base),
+		questionsItem(ctx, reads, base),
 	}
 
 	items := make([]attentionItem, 0, len(found))
@@ -75,8 +76,8 @@ func (s *Server) attention(ctx context.Context, target *Pipeline) []attentionIte
 
 // pausedJobsItem: the breaker took these out of rotation on their own, and
 // nothing puts them back without a person.
-func pausedJobsItem(ctx context.Context, target *Pipeline, base string) *attentionItem {
-	jobs, err := target.Store.HeldJobs(ctx)
+func pausedJobsItem(ctx context.Context, reads *pipelineReads, base string) *attentionItem {
+	jobs, err := reads.HeldJobs(ctx)
 	if err != nil || len(jobs) == 0 {
 		return nil
 	}
@@ -90,11 +91,13 @@ func pausedJobsItem(ctx context.Context, target *Pipeline, base string) *attenti
 // failingChecksItem names the CONSEQUENCE, not the row: a poll aborts on the
 // first resource that errors, so one broken check stops the pipeline
 // triggering at all — which is the part a reader could not have guessed.
-func failingChecksItem(ctx context.Context, target *Pipeline, base string) *attentionItem {
-	failing, err := target.Store.CheckErrors(ctx)
+func failingChecksItem(ctx context.Context, reads *pipelineReads, base string) *attentionItem {
+	failing, err := reads.CheckErrors(ctx)
 	if err != nil {
 		return nil
 	}
+
+	target := reads.target
 
 	// Only what the pipeline still declares. A cleared error is a DELETE by
 	// the POLLER, and nothing polls a resource a `steps pipeline set` removed
@@ -155,8 +158,8 @@ func (s *Server) mcpItem(target *Pipeline, base string) *attentionItem {
 }
 
 // approvalsItem: a run is parked and a person is the gate.
-func approvalsItem(ctx context.Context, target *Pipeline, base string) *attentionItem {
-	pending, err := target.Store.Approvals(ctx, true, 0)
+func approvalsItem(ctx context.Context, reads *pipelineReads, base string) *attentionItem {
+	pending, err := reads.PendingApprovals(ctx)
 	if err != nil || len(pending) == 0 {
 		return nil
 	}
@@ -168,8 +171,8 @@ func approvalsItem(ctx context.Context, target *Pipeline, base string) *attentio
 }
 
 // questionsItem: an agent is parked on an answer.
-func questionsItem(ctx context.Context, target *Pipeline, base string) *attentionItem {
-	pending, err := target.Store.Questions(ctx, true, 0)
+func questionsItem(ctx context.Context, reads *pipelineReads, base string) *attentionItem {
+	pending, err := reads.PendingQuestions(ctx)
 	if err != nil || len(pending) == 0 {
 		return nil
 	}

@@ -124,8 +124,10 @@ type jobChip struct {
 
 // jobChips reads a pipeline's jobs through the board's own view of them, so
 // the root and the graph cannot color one job two ways.
-func jobChips(ctx context.Context, pipeline *Pipeline) []jobChip {
-	latest, err := pipeline.Store.LatestRunByJob(ctx)
+func jobChips(ctx context.Context, reads *pipelineReads) []jobChip {
+	pipeline := reads.target
+
+	latest, err := reads.LatestRunByJob(ctx)
 	if err != nil {
 		latest = nil
 	}
@@ -181,7 +183,7 @@ func (s *Server) handleIndex(c *echo.Context) error {
 	// asking the same six questions of the same databases twice per render.
 	nav := s.globalNav(c)
 
-	pipelines := s.overviewPipelines(c.Request().Context(), nav)
+	pipelines := s.overviewPipelines(c, nav)
 
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(http.StatusOK, "overview", map[string]any{
@@ -203,7 +205,8 @@ func (s *Server) handleIndex(c *echo.Context) error {
 // answer what it can name. A read that fails leaves its field zero rather
 // than failing the page — a root that will not render says less about a
 // pipeline than a row missing one column.
-func (s *Server) overviewPipelines(ctx context.Context, nav navData) []overviewPipeline {
+func (s *Server) overviewPipelines(c *echo.Context, nav navData) []overviewPipeline {
+	ctx := c.Request().Context()
 	served := s.Served()
 
 	summaries := make(map[string]pipelineSummary, len(nav.Pipelines))
@@ -215,14 +218,15 @@ func (s *Server) overviewPipelines(ctx context.Context, nav navData) []overviewP
 
 	for _, pipeline := range served {
 		summary := summaries[pipeline.Slug]
+		reads := readsOf(c, pipeline)
 		row := overviewPipeline{
 			Slug:      pipeline.Slug,
 			Jobs:      len(pipeline.Config().Jobs),
-			Paused:    paused(ctx, pipeline),
+			Paused:    reads.Paused(ctx),
 			Mark:      summary.Mark,
 			Attention: summary.Attention,
 			InFlight:  summary.InFlight,
-			Chips:     jobChips(ctx, pipeline),
+			Chips:     jobChips(ctx, reads),
 		}
 
 		runs, err := pipeline.Store.ListRuns(ctx, "", 1)
@@ -230,7 +234,7 @@ func (s *Server) overviewPipelines(ctx context.Context, nav navData) []overviewP
 			row.Latest, row.HasRun = runs[0], true
 		}
 
-		held, err := pipeline.Store.HeldJobs(ctx)
+		held, err := reads.HeldJobs(ctx)
 		if err == nil {
 			row.Held = len(held)
 		}

@@ -30,6 +30,9 @@ type Cache interface {
 	HasSucceededBatch(ctx context.Context, jobName string, rootHashes []string) (map[string]bool, error)
 	RecordNode(ctx context.Context, node NodeRecord, jobName, status string, result map[string]any, execErr error) error
 	HasNodeSucceeded(ctx context.Context, jobName, hash string) (bool, error)
+	// HasNodesSucceeded is HasNodeSucceeded for many hashes in one read; a
+	// hash that has not succeeded is absent rather than false.
+	HasNodesSucceeded(ctx context.Context, jobName string, hashes []string) (map[string]bool, error)
 	ListNodes(ctx context.Context, jobName string, limit int) ([]NodeRow, error)
 	NodesByHash(ctx context.Context, hashes []string) (map[string]NodeRow, error)
 	// SaveNodeTranscript replaces the transcript of a node, truncated to

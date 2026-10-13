@@ -241,3 +241,25 @@ func (s *Store) HasSucceededBatch(ctx context.Context, jobName string, rootHashe
 
 	return result, nil
 }
+
+// HasNodesSucceeded is HasNodeSucceeded for many hashes in one query.
+func (s *Store) HasNodesSucceeded(ctx context.Context, jobName string, hashes []string) (map[string]bool, error) {
+	result := map[string]bool{}
+	if len(hashes) == 0 {
+		return result, nil
+	}
+
+	found, err := collect(ctx, s.db, "nodes",
+		`SELECT hash FROM nodes
+		 WHERE pipeline_id = $1 AND job_name = $2 AND status = 'succeeded' AND hash = ANY($3::text[])`,
+		[]any{s.pipelineID, jobName, textArray(hashes)}, scanString)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, hash := range found {
+		result[hash] = true
+	}
+
+	return result, nil
+}
