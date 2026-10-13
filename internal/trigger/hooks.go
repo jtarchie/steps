@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -27,16 +28,56 @@ type HookStore interface {
 
 // HookHandler answers deliveries to one pipeline's webhook resources. The configuration is read per request, as Poll reads it per cycle, because a set swaps it while this stays mounted.
 func HookHandler(current ConfigSource, st HookStore) func(w http.ResponseWriter, r *http.Request, resource string) {
+	return hookHandler(current, st, rsrc.Receiver)
+}
+
+func hookHandler(current ConfigSource, st HookStore, compile func(config.Resource) (*webhook.Receiver, error)) func(w http.ResponseWriter, r *http.Request, resource string) {
+	compiled := &receivers{compile: compile}
+
 	return func(w http.ResponseWriter, r *http.Request, resource string) {
-		receive(w, r, current(), st, resource)
+		cfg := current()
+		receive(w, r, cfg, compiled.of(cfg), st, resource)
 	}
 }
 
+// receivers compiles a configuration's webhook resources once rather than per request: a delivery's expressions are compiled before its signature can be checked, so per request an unsigned POST bought every compile. Keyed by the configuration's identity, as admission is — a set stores a new pointer, and nothing else does.
+type receivers struct {
+	compile func(config.Resource) (*webhook.Receiver, error)
+
+	mu     sync.Mutex
+	cfg    *config.Config
+	byName map[string]compiledReceiver
+}
+
+type compiledReceiver struct {
+	receiver *webhook.Receiver
+	err      error
+}
+
+func (c *receivers) of(cfg *config.Config) map[string]compiledReceiver {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if cfg != c.cfg {
+		c.cfg = cfg
+		c.byName = map[string]compiledReceiver{}
+
+		for _, res := range cfg.Resources {
+			if res.Type == config.WebhookType {
+				receiver, err := c.compile(res)
+				c.byName[res.Name] = compiledReceiver{receiver: receiver, err: err}
+			}
+		}
+	}
+
+	return c.byName
+}
+
 // receive runs a delivery in the order that keeps an unverified one from reaching anything the pipeline wrote: verify, then the pipeline's expressions, then one transaction.
-func receive(w http.ResponseWriter, r *http.Request, cfg *config.Config, st HookStore, name string) {
+func receive(w http.ResponseWriter, r *http.Request, cfg *config.Config, compiled map[string]compiledReceiver, st HookStore, name string) {
 	ctx := events.WithLogAttrs(r.Context(), "pipeline", cfg.Name, "revision", cfg.Revision.SHA)
 
-	receiver, found := receiverFor(ctx, w, cfg, name)
+	receiver, found := receiverFor(ctx, w, compiled, name)
 	if !found {
 		return
 	}
@@ -70,22 +111,22 @@ func receive(w http.ResponseWriter, r *http.Request, cfg *config.Config, st Hook
 	}
 }
 
-func receiverFor(ctx context.Context, w http.ResponseWriter, cfg *config.Config, name string) (*webhook.Receiver, bool) {
-	if !hasWebhookResources(cfg) {
+func receiverFor(ctx context.Context, w http.ResponseWriter, compiled map[string]compiledReceiver, name string) (*webhook.Receiver, bool) {
+	if len(compiled) == 0 {
 		http.Error(w, "no webhook resources in this pipeline", http.StatusNotFound)
 
 		return nil, false
 	}
 
 	// Unknown and not-a-webhook answer exactly as a bad signature does, so the route does not enumerate a pipeline's resources for whoever asks.
-	res, err := cfg.FindResource(name)
-	if err != nil || res.Type != config.WebhookType {
+	entry, found := compiled[name]
+	if !found {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 
 		return nil, false
 	}
 
-	receiver, err := rsrc.Receiver(*res)
+	receiver, err := entry.receiver, entry.err
 	if err != nil {
 		slog.ErrorContext(ctx, "webhook.config", "resource", name, "error", err)
 		http.Error(w, "webhook misconfigured", http.StatusInternalServerError)
@@ -217,16 +258,6 @@ func isWebhook(cfg *config.Config, name string) bool {
 	for _, res := range cfg.Resources {
 		if res.Name == name {
 			return res.Type == config.WebhookType
-		}
-	}
-
-	return false
-}
-
-func hasWebhookResources(cfg *config.Config) bool {
-	for _, res := range cfg.Resources {
-		if res.Type == config.WebhookType {
-			return true
 		}
 	}
 
