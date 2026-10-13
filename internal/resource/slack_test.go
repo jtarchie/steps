@@ -43,7 +43,7 @@ func TestSlackMentionsUserFromAnOlderVersion(t *testing.T) {
 			fields["user"] = version[2]
 		}
 
-		err := RunIn(context.Background(), nil, rt, nil, map[string]any{"base_url": server.URL}, fields, nil, dir)
+		err := RunIn(context.Background(), Call{Type: rt, Resource: config.Resource{Source: map[string]any{"base_url": server.URL}}, Version: fields, Dir: dir})
 		if err != nil {
 			t.Fatalf("RunIn(%v): %v", fields, err)
 		}

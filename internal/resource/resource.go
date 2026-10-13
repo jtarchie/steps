@@ -16,15 +16,15 @@ import (
 	"github.com/jtarchie/steps/internal/template"
 )
 
-// CheckVersions renders rt.Config.Check against {"source": source,
-// "version": version}, runs it, and parses stdout as a JSON array into
+// CheckVersions renders c.Type.Config.Check against {"source": source,
+// "version": c.Version}, runs it, and parses stdout as a JSON array into
 // []map[string]any. Ordering (oldest-first) is entirely the check command's
 // responsibility, per Concourse convention — no sorting happens here (see
 // docs/conformance.md and internal/resource/resource_test.go's
 // TestSelectVersion/"latest when unpinned"; Concourse doc:
 // concourse-ci.org/docs/resource-types/implementing/, "check" section).
 //
-// version is the last version this pipeline recorded for the resource —
+// c.Version is the last version this pipeline recorded for the resource —
 // Concourse's "current version", which lets a check ask its API for exactly
 // what it has not seen (Slack's oldest:, GitHub's since:) instead of guessing
 // a window. It is nil-normalized to an empty map HERE, the single place both
@@ -39,42 +39,33 @@ import (
 // advances past items nobody saw). The run and plan paths read it and never
 // write it.
 //
-// extraEnv is the resource INSTANCE's own env: (config.Resource.Env) —
+// c.Resource.Env is the resource INSTANCE's own env: —
 // additional names unioned with the resource TYPE's env: for this call only,
 // so one resource of a shared type can read a credential the type itself
 // doesn't name. See config.Resource.Env for why this is additive, never a
 // replacement.
 //
-// When rt.Config.MCP is set, this calls its check: tool instead (see
-// mcpCheckVersions) — cfg is needed only for that path, to resolve the
-// referenced mcp_servers: entry; the shell path below ignores it, so a nil
-// cfg is fine whenever the caller knows rt isn't mcp-backed.
-func CheckVersions(
-	ctx context.Context, cfg *config.Config, rt config.ResourceType, extraEnv []string, source, version map[string]any,
-) ([]map[string]any, error) {
-	if version == nil {
-		version = map[string]any{}
+// The backend is chosen once, by backendFor; mcp is the one that reads
+// c.Config, to resolve the referenced mcp_servers: entry.
+func CheckVersions(ctx context.Context, c Call) ([]map[string]any, error) {
+	if c.Version == nil {
+		c.Version = map[string]any{}
 	}
 
-	switch rt.Config.Backend() {
-	case config.BackendMCP:
-		return mcpCheckVersions(ctx, cfg, rt, source, version)
-	case config.BackendExpr:
-		return exprCheckVersions(ctx, rt, extraEnv, source, version)
-	case config.BackendWebhook:
-		// No check: a webhook resource's versions are the deliveries it was sent, so asking finds nothing new — and a get with none recorded fails as "no versions available", which is the truth.
-		return nil, nil
-	case config.BackendCron:
-		return cronCheckVersions(ctx, rt, source, version)
-	case config.BackendGitHub:
-		return githubCheckVersions(ctx, rt, source, version)
-	case config.BackendShell:
-	}
-
-	return shellCheckVersions(ctx, rt, extraEnv, source, version)
+	return backendFor(c.Type).check(ctx, c)
 }
 
-func shellCheckVersions(ctx context.Context, rt config.ResourceType, extraEnv []string, source, version map[string]any) ([]map[string]any, error) {
+// runnerSpec is how every shell stage of rt runs, before the stage adds its
+// own tree: a check has none.
+func runnerSpec(rt config.ResourceType, extraEnv []string) shell.RunnerSpec {
+	return shell.RunnerSpec{Image: rt.Image, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
+		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()}
+}
+
+type shellBackend struct{}
+
+func (shellBackend) check(ctx context.Context, c Call) ([]map[string]any, error) {
+	rt, source, version := c.Type, c.Resource.Source, c.Version
 	slog.DebugContext(ctx, "resource.check", "resource_type", rt.Name, "source", source, "version", version)
 
 	command, err := template.Render(rt.Config.Check, map[string]any{"source": source, "version": version})
@@ -82,9 +73,7 @@ func shellCheckVersions(ctx context.Context, rt config.ResourceType, extraEnv []
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
 
-	// No Cwd: a check has no tree, here or on a worker.
-	spec := shell.RunnerSpec{Image: rt.Image, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
-		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()}
+	spec := runnerSpec(rt, c.Resource.Env)
 
 	share, key := sharedCheckFor(ctx, command, spec)
 	if share != nil {
@@ -169,32 +158,42 @@ func UnionEnv(typeEnv, extraEnv []string) []string {
 	return union
 }
 
-// VersionMode returns a get step's version selection mode ("latest",
-// "every", or "pinned" with its pinned map), per Concourse's get.version
-// field convention: unset or the string "latest" means latest, the string
-// "every" means every version, and a map means pinned to a specific version.
-func VersionMode(step config.Step) (mode string, pinned map[string]string) {
+// Mode is how a get step picks among its resource's versions.
+type Mode string
+
+// The modes, spelled as get.version: spells them.
+const (
+	ModeLatest Mode = "latest"
+	ModeEvery  Mode = "every"
+	ModePinned Mode = "pinned"
+)
+
+// VersionMode returns how a get step picks its version, and the pin when that
+// is ModePinned, per Concourse's get.version field convention: unset or
+// the string "latest" means latest, the string "every" means every version,
+// and a map means pinned to a specific version.
+func VersionMode(step config.Step) (mode Mode, pinned map[string]string) {
 	// The one mode config also has to recognize (to reject it where it cannot
 	// fan out — see validateVersionEvery), so both read the same predicate
 	// rather than each spelling the comparison.
 	if step.VersionEvery() {
-		return "every", nil
+		return ModeEvery, nil
 	}
 
 	switch v := step.Version.(type) {
 	case string:
-		return "latest", nil
+		return ModeLatest, nil
 	case map[string]any:
 		m := make(map[string]string, len(v))
 		for k, val := range v {
 			m[k] = fmt.Sprint(val)
 		}
 
-		return "pinned", m
+		return ModePinned, m
 	case map[string]string:
-		return "pinned", v
+		return ModePinned, v
 	default:
-		return "latest", nil
+		return ModeLatest, nil
 	}
 }
 
@@ -213,7 +212,7 @@ func versionsFor(
 ) ([]map[string]any, error) {
 	mode, _ := VersionMode(step)
 
-	if supplied != nil && len(cliPinned) == 0 && mode != "pinned" {
+	if supplied != nil && len(cliPinned) == 0 && mode != ModePinned {
 		// nil means nobody supplied any; a non-nil empty slice means the
 		// caller resolved none, and is honored rather than re-derived.
 		if versions := supplied(res.Name); versions != nil {
@@ -231,7 +230,7 @@ func versionsFor(
 		return nil, fmt.Errorf("get %q: %w", step.Get, err)
 	}
 
-	versions, err := CheckVersions(ctx, cfg, *resourceType, res.Env, res.Source, nil)
+	versions, err := CheckVersions(ctx, Call{Config: cfg, Type: *resourceType, Resource: *res})
 	if err != nil {
 		return nil, fmt.Errorf("get %q: %w", step.Get, err)
 	}
@@ -281,38 +280,29 @@ func matchesPin(version map[string]any, pinned map[string]string) bool {
 	return true
 }
 
-// RunIn renders rt.Config.In against {"source": source, "version": version,
-// "params": params} and executes it with cwd = destDir (caller ensures
-// destDir exists).
+// RunIn renders c.Type.Config.In against {"source": source, "version":
+// c.Version, "params": c.Params} and executes it with cwd = c.Dir (caller
+// ensures it exists).
 //
-// params is the get step's own params:, mirroring Concourse, where a get's
+// c.Params is the get step's own params:, mirroring Concourse, where a get's
 // params tell the resource HOW to fetch — git's depth:/submodules:, s3's
 // unpack: (concourse-ci.org/docs/steps/get/; see docs/conformance.md). It is
 // nil for a get that declares none, which renders as an empty map so
 // {{ .params.x }} on an unset key is empty rather than an error — the same
 // treatment out: already gives a put with no params:.
 //
-// extraEnv is the resource instance's own env: — see CheckVersions' doc
-// comment.
+// c.Resource.Env is the resource instance's own env: — see CheckVersions'
+// doc comment.
 //
-// When rt.Config.MCP is set, this calls mcpRunIn instead — see its doc
-// comment for the in:-omitted default (writing version.json) and the
-// materialization convention when in: is set.
-func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, extraEnv []string, source, version, params map[string]any, destDir string) error {
-	switch rt.Config.Backend() {
-	case config.BackendMCP:
-		return mcpRunIn(ctx, cfg, rt, source, version, params, destDir)
-	case config.BackendExpr:
-		return exprRunIn(ctx, rt, extraEnv, source, version, params, destDir)
-	case config.BackendWebhook:
-		return errWebhookIn
-	case config.BackendCron:
-		return cronRunIn(rt, source, version, destDir)
-	case config.BackendGitHub:
-		return githubRunIn(ctx, rt, source, version, destDir)
-	case config.BackendShell:
-	}
+// An mcp-backed type goes to mcpRunIn — see its doc comment for the
+// in:-omitted default (writing version.json) and the materialization
+// convention when in: is set.
+func RunIn(ctx context.Context, c Call) error {
+	return backendFor(c.Type).in(ctx, c)
+}
 
+func (shellBackend) in(ctx context.Context, c Call) error {
+	rt, source, version, params, destDir := c.Type, c.Resource.Source, c.Version, c.Params, c.Dir
 	slog.DebugContext(ctx, "resource.in", "resource_type", rt.Name, "source", source, "version", version, "params", params, "dest_dir", destDir)
 
 	command, err := template.Render(rt.Config.In, map[string]any{"source": source, "version": version, "params": params})
@@ -322,8 +312,10 @@ func RunIn(ctx context.Context, cfg *config.Config, rt config.ResourceType, extr
 
 	// FetchAll: the directory IS the output, so a worker sends the whole of
 	// it home — there is no declared outputs: list to name a subset.
-	runner, err := newRunner(ctx, shell.RunnerSpec{Image: rt.Image, Cwd: destDir, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
-		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes(), FetchAll: true})
+	spec := runnerSpec(rt, c.Resource.Env)
+	spec.Cwd, spec.FetchAll = destDir, true
+
+	runner, err := newRunner(ctx, spec)
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
@@ -349,32 +341,26 @@ type PutInputs struct {
 	Versions map[string]map[string]any
 }
 
-// RunOut renders rt.Config.Out against {"source": source, "params": params}
-// and executes it with cwd = srcDir. If stdout parses as a JSON object it's
-// returned as result (loosely mirroring check's convention of emitting the
-// version produced); unparsable or empty stdout is not an error — result
-// is simply nil, since many out scripts won't emit anything (see
+// RunOut renders c.Type.Config.Out against {"source": source, "params":
+// c.Params} and executes it with cwd = c.Dir. If stdout parses as a JSON
+// object it's returned as result (loosely mirroring check's convention of
+// emitting the version produced); unparsable or empty stdout is not an error
+// — result is simply nil, since many out scripts won't emit anything (see
 // docs/conformance.md and TestConformanceRunOutUnparsableStdoutIsNilNotError
 // in resource_test.go).
 //
-// extraEnv is the resource instance's own env: — see CheckVersions' doc
-// comment.
+// c.Resource.Env is the resource instance's own env: — see CheckVersions'
+// doc comment.
 //
-// When rt.Config.MCP is set, this calls mcpRunOut instead. rt.Config.MCP.Out
-// is itself optional (see validateMCPResourcePuts, which rejects a put step
-// targeting an mcp-backed type with no out: at load time), so this is only
-// ever reached with it set.
-func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, extraEnv []string, source, params map[string]any, inputs PutInputs, srcDir string) (map[string]any, error) {
-	switch rt.Config.Backend() {
-	case config.BackendMCP:
-		return mcpRunOut(ctx, cfg, rt, source, params, srcDir)
-	case config.BackendExpr:
-		return exprRunOut(ctx, rt, extraEnv, source, params, inputs, srcDir)
-	case config.BackendWebhook, config.BackendCron, config.BackendGitHub:
-		return builtinRunOut(ctx, rt, source, params, inputs, srcDir)
-	case config.BackendShell:
-	}
+// An mcp-backed type goes to mcpRunOut. Its out: is itself optional (see
+// validateMCPResourcePuts, which rejects a put step targeting an mcp-backed
+// type with no out: at load time), so this is only ever reached with it set.
+func RunOut(ctx context.Context, c Call) (map[string]any, error) {
+	return backendFor(c.Type).out(ctx, c)
+}
 
+func (shellBackend) out(ctx context.Context, c Call) (map[string]any, error) {
+	rt, source, params, srcDir := c.Type, c.Resource.Source, c.Params, c.Dir
 	slog.DebugContext(ctx, "resource.out", "resource_type", rt.Name, "source", source, "params", params, "src_dir", srcDir)
 
 	command, err := template.Render(rt.Config.Out, map[string]any{"source": source, "params": params})
@@ -383,8 +369,10 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, ext
 	}
 
 	// Nothing fetched back: an out publishes elsewhere and answers on stdout.
-	runner, err := newRunner(ctx, shell.RunnerSpec{Image: rt.Image, Cwd: srcDir, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
-		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()})
+	spec := runnerSpec(rt, c.Resource.Env)
+	spec.Cwd = srcDir
+
+	runner, err := newRunner(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
@@ -407,21 +395,6 @@ func RunOut(ctx context.Context, cfg *config.Config, rt config.ResourceType, ext
 	slog.InfoContext(ctx, "resource.put", "resource_type", rt.Name, "src_dir", srcDir, "result", result)
 
 	return result, nil
-}
-
-// builtinRunOut is RunOut for the types written in Go.
-func builtinRunOut(ctx context.Context, rt config.ResourceType, source, params map[string]any, inputs PutInputs, srcDir string) (map[string]any, error) {
-	switch rt.Config.Backend() {
-	case config.BackendWebhook:
-		return nil, fmt.Errorf("out %q: a webhook resource cannot be put to", rt.Name)
-	case config.BackendCron:
-		return nil, fmt.Errorf("out %q: %w", rt.Name, errCronOut)
-	case config.BackendGitHub:
-		return githubRunOut(ctx, rt, source, params, inputs, srcDir)
-	case config.BackendMCP, config.BackendExpr, config.BackendShell:
-	}
-
-	return nil, fmt.Errorf("out %q: not a built-in type", rt.Name)
 }
 
 // decodeOutVersion parses an out: command's stdout with exact digits, as
@@ -493,7 +466,7 @@ func ResolveVersions(
 		mode, stepPinned := VersionMode(step)
 		slog.DebugContext(ctx, "resource.version_mode", "resource", res.Name, "mode", mode)
 
-		if mode == "every" {
+		if mode == ModeEvery {
 			return res, resourceType, versions, nil
 		}
 

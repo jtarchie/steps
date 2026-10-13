@@ -21,7 +21,7 @@ func cronCheck(t *testing.T, source map[string]any, version map[string]any, now 
 
 	ctx := WithNow(context.Background(), func() time.Time { return now })
 
-	versions, err := CheckVersions(ctx, nil, cronType(), nil, source, version)
+	versions, err := CheckVersions(ctx, Call{Type: cronType(), Resource: config.Resource{Source: source}, Version: version})
 	if err != nil {
 		t.Fatalf("check at %s: %v", now, err)
 	}
@@ -175,7 +175,7 @@ func TestCronRefusesACursorItCannotRead(t *testing.T) {
 		"not a moment": {"time": "yesterday"},
 		"not a string": {"time": 1758780000},
 	} {
-		_, err := CheckVersions(context.Background(), nil, cronType(), nil, map[string]any{"expression": "@hourly"}, cursor)
+		_, err := CheckVersions(context.Background(), Call{Type: cronType(), Resource: config.Resource{Source: map[string]any{"expression": "@hourly"}}, Version: cursor})
 		if err == nil || !strings.Contains(err.Error(), "version.time") {
 			t.Errorf("%s: err = %v, want the unreadable cursor named", name, err)
 		}
@@ -193,7 +193,7 @@ func TestCronInRefusesWhatItCannotWrite(t *testing.T) {
 		"no version": {map[string]any{"expression": "@hourly"}, map[string]any{}, "version has no time"},
 		"bad moment": {map[string]any{"expression": "@hourly"}, map[string]any{"time": "noon"}, "version.time"},
 	} {
-		err := RunIn(context.Background(), nil, cronType(), nil, tc.source, tc.version, nil, t.TempDir())
+		err := RunIn(context.Background(), Call{Type: cronType(), Resource: config.Resource{Source: tc.source}, Version: tc.version, Dir: t.TempDir()})
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
 		}
@@ -207,7 +207,7 @@ func TestCronInWritesTheMomentThreeWays(t *testing.T) {
 	dir := t.TempDir()
 	source := map[string]any{"expression": "0 2 * * *", "location": "America/New_York"}
 
-	err := RunIn(context.Background(), nil, cronType(), nil, source, map[string]any{"time": "2026-09-25T06:00:00Z"}, nil, dir)
+	err := RunIn(context.Background(), Call{Type: cronType(), Resource: config.Resource{Source: source}, Version: map[string]any{"time": "2026-09-25T06:00:00Z"}, Dir: dir})
 	if err != nil {
 		t.Fatalf("RunIn: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestCronInWritesTheMomentThreeWays(t *testing.T) {
 func TestCronCannotBePutTo(t *testing.T) {
 	t.Parallel()
 
-	_, err := RunOut(context.Background(), nil, cronType(), nil, map[string]any{"expression": "@hourly"}, nil, PutInputs{}, t.TempDir())
+	_, err := RunOut(context.Background(), Call{Type: cronType(), Resource: config.Resource{Source: map[string]any{"expression": "@hourly"}}, Dir: t.TempDir()})
 	if err == nil || !strings.Contains(err.Error(), "only tells time") {
 		t.Errorf("err = %v, want the put refused", err)
 	}

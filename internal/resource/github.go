@@ -42,23 +42,42 @@ const (
 	prURLFile       = "pr.url"
 )
 
-func githubCheckVersions(ctx context.Context, rt config.ResourceType, source, version map[string]any) ([]map[string]any, error) {
-	var (
-		versions []map[string]any
-		err      error
-	)
+// githubStages is what one github-* type implements: a finder has a check
+// and an in, a publisher only an out. A nil stage is one the type does not
+// have.
+type githubStages struct {
+	check func(ctx context.Context, source, cursor map[string]any) ([]map[string]any, error)
+	in    func(ctx context.Context, source, version map[string]any, destDir string) error
+	out   func(ctx context.Context, source, params map[string]any, inputs PutInputs, srcDir string) (map[string]any, error)
+}
 
-	switch rt.Config.GitHub {
-	case config.GitHubPRsType:
-		versions, err = githubPRsCheck(ctx, source)
-	case config.GitHubCommentsType:
-		versions, err = githubCommentsCheck(ctx, source, version)
-	default:
+// githubTypes is the one dispatch over the github-* types.
+var githubTypes = map[string]githubStages{
+	config.GitHubPRsType: {
+		check: func(ctx context.Context, source, _ map[string]any) ([]map[string]any, error) {
+			return githubPRsCheck(ctx, source)
+		},
+		in: githubPRsIn,
+	},
+	config.GitHubCommentsType:  {check: githubCommentsCheck, in: githubCommentsIn},
+	config.GitHubPRCommentType: {out: githubCommentOut},
+	config.GitHubPRReviewType:  {out: githubReviewOut},
+	config.GitHubReactionType:  {out: githubReactionOut},
+}
+
+type githubBackend struct{}
+
+func (githubBackend) check(ctx context.Context, c Call) ([]map[string]any, error) {
+	rt := c.Type
+
+	stage := githubTypes[rt.Config.GitHub].check
+	if stage == nil {
 		// No check: a put-only type has nothing to find, and the load rule
 		// refuses a get of one before this is reached.
 		return nil, nil
 	}
 
+	versions, err := stage(ctx, c.Resource.Source, c.Version)
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
@@ -68,49 +87,38 @@ func githubCheckVersions(ctx context.Context, rt config.ResourceType, source, ve
 	return versions, nil
 }
 
-func githubRunIn(ctx context.Context, rt config.ResourceType, source, version map[string]any, destDir string) error {
-	var err error
+func (githubBackend) in(ctx context.Context, c Call) error {
+	rt := c.Type
 
-	switch rt.Config.GitHub {
-	case config.GitHubPRsType:
-		err = githubPRsIn(ctx, source, version, destDir)
-	case config.GitHubCommentsType:
-		err = githubCommentsIn(ctx, source, version, destDir)
-	default:
-		err = fmt.Errorf("a %s resource only publishes, so there is nothing to fetch", rt.Config.GitHub)
+	stage := githubTypes[rt.Config.GitHub].in
+	if stage == nil {
+		return fmt.Errorf("in %q: a %s resource only publishes, so there is nothing to fetch", rt.Name, rt.Config.GitHub)
 	}
 
+	err := stage(ctx, c.Resource.Source, c.Version, c.Dir)
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
 
-	slog.InfoContext(ctx, "resource.fetched", "resource_type", rt.Name, "dest_dir", destDir)
+	slog.InfoContext(ctx, "resource.fetched", "resource_type", rt.Name, "dest_dir", c.Dir)
 
 	return nil
 }
 
-func githubRunOut(ctx context.Context, rt config.ResourceType, source, params map[string]any, inputs PutInputs, srcDir string) (map[string]any, error) {
-	var (
-		version map[string]any
-		err     error
-	)
+func (githubBackend) out(ctx context.Context, c Call) (map[string]any, error) {
+	rt := c.Type
 
-	switch rt.Config.GitHub {
-	case config.GitHubPRCommentType:
-		version, err = githubCommentOut(ctx, source, params, inputs, srcDir)
-	case config.GitHubPRReviewType:
-		version, err = githubReviewOut(ctx, source, params, inputs, srcDir)
-	case config.GitHubReactionType:
-		version, err = githubReactionOut(ctx, source, params, inputs, srcDir)
-	default:
-		err = fmt.Errorf("a %s resource only finds work, so there is nothing to publish to", rt.Config.GitHub)
+	stage := githubTypes[rt.Config.GitHub].out
+	if stage == nil {
+		return nil, fmt.Errorf("out %q: a %s resource only finds work, so there is nothing to publish to", rt.Name, rt.Config.GitHub)
 	}
 
+	version, err := stage(ctx, c.Resource.Source, c.Params, c.Inputs, c.Dir)
 	if err != nil {
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}
 
-	slog.InfoContext(ctx, "resource.put", "resource_type", rt.Name, "src_dir", srcDir, "result", version)
+	slog.InfoContext(ctx, "resource.put", "resource_type", rt.Name, "src_dir", c.Dir, "result", version)
 
 	return version, nil
 }

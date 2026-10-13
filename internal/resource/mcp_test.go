@@ -177,7 +177,7 @@ func TestCheckVersionsMCPStructuredContent(t *testing.T) {
 	cfg := mcpFixtureConfig(t)
 	rt := mcpResourceType("list_issues")
 
-	versions, err := CheckVersions(context.Background(), cfg, rt, nil, map[string]any{"team": "ENG"}, nil)
+	versions, err := CheckVersions(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{"team": "ENG"}}})
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestCheckVersionsMCPTextContentFallback(t *testing.T) {
 	cfg := mcpFixtureConfig(t)
 	rt := mcpResourceType("list_issues_text")
 
-	versions, err := CheckVersions(context.Background(), cfg, rt, nil, map[string]any{}, nil)
+	versions, err := CheckVersions(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{}}})
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestCheckVersionsMCPObjectStructuredContentFallsBackToText(t *testing.T) {
 	cfg := mcpFixtureConfig(t)
 	rt := mcpResourceType("list_issues_object_structured")
 
-	versions, err := CheckVersions(context.Background(), cfg, rt, nil, map[string]any{}, nil)
+	versions, err := CheckVersions(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{}}})
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestCheckVersionsMCPScansEveryTextBlock(t *testing.T) {
 	cfg := mcpFixtureConfig(t)
 	rt := mcpResourceType("list_issues_prose_then_json")
 
-	versions, err := CheckVersions(context.Background(), cfg, rt, nil, map[string]any{}, nil)
+	versions, err := CheckVersions(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{}}})
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestCheckVersionsMCPToolError(t *testing.T) {
 	cfg := mcpFixtureConfig(t)
 	rt := mcpResourceType("list_issues_error")
 
-	_, err := CheckVersions(context.Background(), cfg, rt, nil, map[string]any{}, nil)
+	_, err := CheckVersions(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{}}})
 	if err == nil {
 		t.Fatal("CheckVersions: expected an error when the mcp tool returns IsError")
 	}
@@ -264,7 +264,7 @@ func TestRunInMCPDefaultsToVersionJSON(t *testing.T) {
 	rt := mcpResourceType("list_issues") // In left nil
 	destDir := t.TempDir()
 
-	err := RunIn(context.Background(), cfg, rt, nil, map[string]any{"team": "ENG"}, map[string]any{"id": "1"}, nil, destDir)
+	err := RunIn(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{"team": "ENG"}}, Version: map[string]any{"id": "1"}, Dir: destDir})
 	if err != nil {
 		t.Fatalf("RunIn: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestRunInMCPMaterializesToolResult(t *testing.T) {
 	rt.Config.MCP.In = &config.MCPToolCall{Tool: "get_issue"}
 	destDir := t.TempDir()
 
-	err := RunIn(context.Background(), cfg, rt, nil, map[string]any{"team": "ENG"}, map[string]any{"id": "1"}, nil, destDir)
+	err := RunIn(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{"team": "ENG"}}, Version: map[string]any{"id": "1"}, Dir: destDir})
 	if err != nil {
 		t.Fatalf("RunIn: %v", err)
 	}
@@ -384,7 +384,7 @@ func TestRunOutMCP(t *testing.T) {
 	rt := mcpResourceType("list_issues")
 	rt.Config.MCP.Out = &config.MCPToolCall{Tool: "create_issue"}
 
-	result, err := RunOut(context.Background(), cfg, rt, nil, map[string]any{"team": "ENG"}, map[string]any{"title": "Triage needed"}, PutInputs{}, t.TempDir())
+	result, err := RunOut(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{"team": "ENG"}}, Params: map[string]any{"title": "Triage needed"}, Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("RunOut: %v", err)
 	}
@@ -406,7 +406,7 @@ func TestCheckVersionsMCPSendsSourceVerbatim(t *testing.T) {
 	cfg := mcpFixtureConfig(t)
 	rt := mcpResourceType("list_issues_echo")
 
-	versions, err := CheckVersions(context.Background(), cfg, rt, nil, map[string]any{"query": "to:me"}, nil)
+	versions, err := CheckVersions(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{"query": "to:me"}}})
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -429,9 +429,7 @@ func TestCheckVersionsMCPFallbackStaysSourceOnlyWithVersion(t *testing.T) {
 	cfg := mcpFixtureConfig(t)
 	rt := mcpResourceType("list_issues_echo")
 
-	versions, err := CheckVersions(context.Background(), cfg, rt,
-		nil,
-		map[string]any{"query": "to:me"}, map[string]any{"id": "42"})
+	versions, err := CheckVersions(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{"query": "to:me"}}, Version: map[string]any{"id": "42"}})
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -468,7 +466,7 @@ func TestCheckVersionsMCPArgsTemplateSeesVersion(t *testing.T) {
 		t.Fatalf("ParseVersionJSON: %v", err)
 	}
 
-	versions, err := CheckVersions(context.Background(), cfg, rt, nil, map[string]any{}, cursor)
+	versions, err := CheckVersions(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{}}, Version: cursor})
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -481,7 +479,7 @@ func TestCheckVersionsMCPArgsTemplateSeesVersion(t *testing.T) {
 	}
 
 	// And the first-ever check, where there is no cursor at all.
-	versions, err = CheckVersions(context.Background(), cfg, rt, nil, map[string]any{}, nil)
+	versions, err = CheckVersions(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{}}})
 	if err != nil {
 		t.Fatalf("CheckVersions (no cursor): %v", err)
 	}
@@ -505,7 +503,7 @@ func TestCheckVersionsMCPArgsTemplate(t *testing.T) {
 		"limit": 20,
 	}
 
-	versions, err := CheckVersions(context.Background(), cfg, rt, nil, map[string]any{"channel": "eng"}, nil)
+	versions, err := CheckVersions(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{"channel": "eng"}}})
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -545,7 +543,7 @@ func TestRunInMCPArgsTemplate(t *testing.T) {
 	}
 	destDir := t.TempDir()
 
-	err := RunIn(context.Background(), cfg, rt, nil, map[string]any{"team": "ENG"}, map[string]any{"id": "42"}, nil, destDir)
+	err := RunIn(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{"team": "ENG"}}, Version: map[string]any{"id": "42"}, Dir: destDir})
 	if err != nil {
 		t.Fatalf("RunIn: %v", err)
 	}
@@ -581,7 +579,7 @@ func TestRunInMCPArgsMissingKeyErrors(t *testing.T) {
 		Args: map[string]any{"issue_id": "{{ .version.nope }}"},
 	}
 
-	err := RunIn(context.Background(), cfg, rt, nil, map[string]any{}, map[string]any{"id": "42"}, nil, t.TempDir())
+	err := RunIn(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{}}, Version: map[string]any{"id": "42"}, Dir: t.TempDir()})
 	if err == nil {
 		t.Fatal("RunIn: want an error naming the unresolvable args template")
 	}
@@ -604,9 +602,7 @@ func TestRunOutMCPArgsTemplate(t *testing.T) {
 		Args: map[string]any{"title": "{{ .params.text }}", "team": "{{ .source.team }}"},
 	}
 
-	result, err := RunOut(context.Background(), cfg, rt,
-		nil,
-		map[string]any{"team": "ENG"}, map[string]any{"text": "Triage needed"}, PutInputs{}, t.TempDir())
+	result, err := RunOut(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{"team": "ENG"}}, Params: map[string]any{"text": "Triage needed"}, Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("RunOut: %v", err)
 	}
@@ -623,7 +619,7 @@ func TestRunOutMCPUnparsableResultIsNilNotError(t *testing.T) {
 	rt := mcpResourceType("list_issues")
 	rt.Config.MCP.Out = &config.MCPToolCall{Tool: "create_issue_unparsable"}
 
-	result, err := RunOut(context.Background(), cfg, rt, nil, map[string]any{}, map[string]any{}, PutInputs{}, t.TempDir())
+	result, err := RunOut(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{}}, Params: map[string]any{}, Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("RunOut: %v, want a nil result instead of an error (mirrors the shell backend's own convention)", err)
 	}
@@ -643,7 +639,7 @@ func TestRunOutMCPKeepsNumbersExact(t *testing.T) {
 	rt := mcpResourceType("list_issues")
 	rt.Config.MCP.Out = &config.MCPToolCall{Tool: "create_issue_snowflake"}
 
-	result, err := RunOut(context.Background(), cfg, rt, nil, map[string]any{}, map[string]any{}, PutInputs{}, t.TempDir())
+	result, err := RunOut(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{}}, Params: map[string]any{}, Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("RunOut: %v", err)
 	}
@@ -668,7 +664,7 @@ func TestShellBackendUnaffectedByMCPBranch(t *testing.T) {
 		Config: config.ResourceTypeConfig{Check: `printf '[{"ref":"1"}]'`},
 	}
 
-	versions, err := CheckVersions(context.Background(), nil, rt, nil, map[string]any{}, nil)
+	versions, err := CheckVersions(context.Background(), Call{Type: rt, Resource: config.Resource{Source: map[string]any{}}})
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -713,12 +709,7 @@ func TestRunOutMCPResolvesParamFile(t *testing.T) {
 	rt := mcpResourceType("list_issues")
 	rt.Config.MCP.Out = &config.MCPToolCall{Tool: "create_issue"}
 
-	result, err := RunOut(context.Background(), cfg, rt,
-		nil,
-		map[string]any{"team": "ENG"},
-		map[string]any{"title": map[string]any{"file": "answer/reply.md"}},
-		PutInputs{},
-		srcDir)
+	result, err := RunOut(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{"team": "ENG"}}, Params: map[string]any{"title": map[string]any{"file": "answer/reply.md"}}, Dir: srcDir})
 	if err != nil {
 		t.Fatalf("RunOut: %v", err)
 	}
@@ -741,12 +732,7 @@ func TestRunOutMCPLeavesMultiKeyObjectAlone(t *testing.T) {
 	rt := mcpResourceType("list_issues")
 	rt.Config.MCP.Out = &config.MCPToolCall{Tool: "create_issue"}
 
-	result, err := RunOut(context.Background(), cfg, rt,
-		nil,
-		map[string]any{},
-		map[string]any{"title": map[string]any{"file": "report.pdf", "label": "Q3"}},
-		PutInputs{},
-		t.TempDir())
+	result, err := RunOut(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{}}, Params: map[string]any{"title": map[string]any{"file": "report.pdf", "label": "Q3"}}, Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("RunOut: %v", err)
 	}
@@ -844,7 +830,7 @@ func TestRunInMCPArgsKeepNumbersExact(t *testing.T) {
 		t.Fatalf("unmarshal version: %v", err)
 	}
 
-	err = RunIn(context.Background(), cfg, rt, nil, map[string]any{}, version, nil, destDir)
+	err = RunIn(context.Background(), Call{Config: cfg, Type: rt, Resource: config.Resource{Source: map[string]any{}}, Version: version, Dir: destDir})
 	if err != nil {
 		t.Fatalf("RunIn: %v", err)
 	}

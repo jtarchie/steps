@@ -25,7 +25,7 @@ func TestVersionMode(t *testing.T) {
 	tests := []struct {
 		name       string
 		version    any
-		wantMode   string
+		wantMode   Mode
 		wantPinned map[string]string
 	}{
 		{"unset", nil, "latest", nil},
@@ -133,7 +133,7 @@ func TestConformanceRunOutUnparsableStdoutIsNilNotError(t *testing.T) {
 		Config: config.ResourceTypeConfig{Out: "echo not-json"},
 	}
 
-	result, err := RunOut(context.Background(), nil, rt, nil, map[string]any{}, map[string]any{}, PutInputs{}, t.TempDir())
+	result, err := RunOut(context.Background(), Call{Type: rt, Resource: config.Resource{Source: map[string]any{}}, Params: map[string]any{}, Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("RunOut: %v, want nil error for unparsable stdout", err)
 	}
@@ -180,7 +180,7 @@ func TestConformanceCheckReceivesCurrentVersion(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			versions, err := CheckVersions(context.Background(), nil, rt, nil, map[string]any{}, test.version)
+			versions, err := CheckVersions(context.Background(), Call{Type: rt, Resource: config.Resource{Source: map[string]any{}}, Version: test.version})
 			if err != nil {
 				t.Fatalf("CheckVersions: %v", err)
 			}
@@ -210,7 +210,7 @@ func TestShellExtraEnvUnionsWithTypeEnv(t *testing.T) {
 		},
 	}
 
-	versions, err := CheckVersions(context.Background(), nil, rt, nil, map[string]any{}, nil)
+	versions, err := CheckVersions(context.Background(), Call{Type: rt, Resource: config.Resource{Source: map[string]any{}}})
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestShellExtraEnvUnionsWithTypeEnv(t *testing.T) {
 		t.Fatalf("versions = %+v, want STEPS_TEST_SHELL_EXTRA_TOKEN invisible without extraEnv", versions)
 	}
 
-	versions, err = CheckVersions(context.Background(), nil, rt, []string{"STEPS_TEST_SHELL_EXTRA_TOKEN"}, map[string]any{}, nil)
+	versions, err = CheckVersions(context.Background(), Call{Type: rt, Resource: config.Resource{Env: []string{"STEPS_TEST_SHELL_EXTRA_TOKEN"}, Source: map[string]any{}}})
 	if err != nil {
 		t.Fatalf("CheckVersions with extraEnv: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestRunOutKeepsExactDigits(t *testing.T) {
 
 		rt := config.ResourceType{Name: "dummy", Config: config.ResourceTypeConfig{Out: "echo '" + out + "'"}}
 
-		result, err := RunOut(context.Background(), nil, rt, nil, map[string]any{}, map[string]any{}, PutInputs{}, t.TempDir())
+		result, err := RunOut(context.Background(), Call{Type: rt, Resource: config.Resource{Source: map[string]any{}}, Params: map[string]any{}, Dir: t.TempDir()})
 		if err != nil {
 			t.Fatal(err)
 		}

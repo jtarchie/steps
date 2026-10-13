@@ -167,7 +167,7 @@ func (c *Cache) unconsumed(
 		return versions
 	}
 
-	if mode, _ := VersionMode(step); mode != "every" {
+	if mode, _ := VersionMode(step); mode != ModeEvery {
 		return versions
 	}
 

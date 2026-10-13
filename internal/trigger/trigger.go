@@ -736,7 +736,7 @@ func checkResource(ctx context.Context, cfg *config.Config, st PollStore, resour
 		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
 
-	versions, err := rsrc.CheckVersions(ctx, cfg, *resourceType, resource.Env, resource.Source, cursor)
+	versions, err := rsrc.CheckVersions(ctx, rsrc.Call{Config: cfg, Type: *resourceType, Resource: *resource, Version: cursor})
 	if err != nil {
 		return observedResource{}, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}

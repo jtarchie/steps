@@ -128,7 +128,7 @@ func executePut(ctx context.Context, cfg *config.Config, step config.Step, bw wo
 			slog.InfoContext(ctx, "job.put.attempt", "put", step.Put, "attempt", attempt, "total_attempts", total)
 		}, func(attemptCtx context.Context) error {
 			runCtx, recorder := recordResourceOutput(attemptCtx, resourceType.Name+" out")
-			runResult, runErr := rsrc.RunOut(runCtx, cfg, *resourceType, resource.Env, resource.Source, step.Params, inputs, space.Dir())
+			runResult, runErr := rsrc.RunOut(runCtx, rsrc.Call{Config: cfg, Type: *resourceType, Resource: *resource, Params: step.Params, Inputs: inputs, Dir: space.Dir()})
 			recorder.finish(attemptCtx)
 
 			if runErr != nil {

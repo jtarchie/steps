@@ -223,7 +223,7 @@ func (h *resourceHistory) holds(resourceName string, encoded store.VersionKey) b
 func fansOutOverEveryVersion(step config.Step) bool {
 	mode, _ := rsrc.VersionMode(step)
 
-	return mode == "every"
+	return mode == rsrc.ModeEvery
 }
 
 // has reports whether this job has already taken the version. A nil cursor

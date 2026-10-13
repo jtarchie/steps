@@ -133,7 +133,7 @@ func gatherOneInput(
 	// resource.ResolveVersions), so a pinned run builds exactly one set and —
 	// via the existing take exemption — consumes nothing.
 	mode, _ := rsrc.VersionMode(step)
-	if mode != "every" || len(pinned) > 0 {
+	if mode != rsrc.ModeEvery || len(pinned) > 0 {
 		// Narrowing to one version is SelectVersion's job and it errors on an
 		// empty list, so this list has an entry; say so rather than index
 		// into the promise.

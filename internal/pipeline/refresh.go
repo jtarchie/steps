@@ -94,7 +94,7 @@ func refreshOneResource(ctx context.Context, cfg *config.Config, st store.Store,
 
 	ctx = placedCtx
 
-	versions, err := rsrc.CheckVersions(ctx, cfg, *resourceType, resource.Env, resource.Source, cursor)
+	versions, err := rsrc.CheckVersions(ctx, rsrc.Call{Config: cfg, Type: *resourceType, Resource: *resource, Version: cursor})
 	if err != nil {
 		warnRefreshFailed(ctx, name, err)
 

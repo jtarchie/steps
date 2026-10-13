@@ -614,7 +614,7 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, st store.Deliveries, 
 
 	fetch := func(dir string) error {
 		runCtx, recorder := recordResourceOutput(ctx, resourceType.Name+" in")
-		err := rsrc.RunIn(runCtx, cfg, resourceType, resource.Env, resource.Source, version, params, dir)
+		err := rsrc.RunIn(runCtx, rsrc.Call{Config: cfg, Type: resourceType, Resource: resource, Version: version, Params: params, Dir: dir})
 		recorder.finish(ctx)
 
 		if err != nil {

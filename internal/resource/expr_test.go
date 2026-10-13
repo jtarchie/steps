@@ -35,8 +35,7 @@ func TestExprCheckVersionsThroughCheckVersions(t *testing.T) {
 	  {id: #.id}
 	))`, "", "")
 
-	versions, err := CheckVersions(context.Background(), nil, rt, nil,
-		map[string]any{"url": server.URL}, nil)
+	versions, err := CheckVersions(context.Background(), Call{Type: rt, Resource: config.Resource{Source: map[string]any{"url": server.URL}}})
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -54,7 +53,7 @@ func TestExprCheckSeesTheCursor(t *testing.T) {
 
 	rt := exprType(`[{since: version.ts ?? "0"}]`, "", "")
 
-	versions, err := CheckVersions(context.Background(), nil, rt, nil, nil, map[string]any{"ts": "100"})
+	versions, err := CheckVersions(context.Background(), Call{Type: rt, Version: map[string]any{"ts": "100"}})
 	if err != nil {
 		t.Fatalf("CheckVersions: %v", err)
 	}
@@ -63,7 +62,7 @@ func TestExprCheckSeesTheCursor(t *testing.T) {
 		t.Errorf("since = %v, want the cursor", versions[0]["since"])
 	}
 
-	versions, err = CheckVersions(context.Background(), nil, rt, nil, nil, nil)
+	versions, err = CheckVersions(context.Background(), Call{Type: rt})
 	if err != nil {
 		t.Fatalf("CheckVersions (first poll): %v", err)
 	}
@@ -82,8 +81,7 @@ func TestExprRunInWritesFiles(t *testing.T) {
 	  "nested/note.txt": params.note,
 	}`, "")
 
-	err := RunIn(context.Background(), nil, rt, nil, nil,
-		map[string]any{"id": "42"}, map[string]any{"note": "hi"}, dir)
+	err := RunIn(context.Background(), Call{Type: rt, Version: map[string]any{"id": "42"}, Params: map[string]any{"note": "hi"}, Dir: dir})
 	if err != nil {
 		t.Fatalf("RunIn: %v", err)
 	}
@@ -115,8 +113,7 @@ func TestExprRunInOmittedWritesVersionJSON(t *testing.T) {
 
 	dir := t.TempDir()
 
-	err := RunIn(context.Background(), nil, exprType(`[]`, "", ""), nil, nil,
-		map[string]any{"id": "7"}, nil, dir)
+	err := RunIn(context.Background(), Call{Type: exprType(`[]`, "", ""), Version: map[string]any{"id": "7"}, Dir: dir})
 	if err != nil {
 		t.Fatalf("RunIn: %v", err)
 	}
@@ -136,8 +133,7 @@ func TestExprRunInPathGuard(t *testing.T) {
 	for _, path := range []string{"../escaped.txt", "a/../../escaped.txt", "/tmp/escaped.txt"} {
 		dir := t.TempDir()
 
-		err := RunIn(context.Background(), nil,
-			exprType("", `{`+quoteExpr(path)+`: "x"}`, ""), nil, nil, nil, nil, dir)
+		err := RunIn(context.Background(), Call{Type: exprType("", `{`+quoteExpr(path)+`: "x"}`, ""), Dir: dir})
 		if err == nil {
 			t.Errorf("RunIn(%q): want an error, the path escapes the artifact directory", path)
 
@@ -176,8 +172,7 @@ func TestExprRunOutReadsThePutsInputs(t *testing.T) {
 	  {ts: posted.json.ts}
 	`)
 
-	version, err := RunOut(context.Background(), nil, rt, nil,
-		map[string]any{"url": server.URL}, nil, PutInputs{}, dir)
+	version, err := RunOut(context.Background(), Call{Type: rt, Resource: config.Resource{Source: map[string]any{"url": server.URL}}, Dir: dir})
 	if err != nil {
 		t.Fatalf("RunOut: %v", err)
 	}
@@ -196,8 +191,7 @@ func TestExprRunOutReadsThePutsInputs(t *testing.T) {
 func TestExprRunOutNilVersionTolerated(t *testing.T) {
 	t.Parallel()
 
-	version, err := RunOut(context.Background(), nil, exprType("", "", `nil`), nil,
-		nil, nil, PutInputs{}, t.TempDir())
+	version, err := RunOut(context.Background(), Call{Type: exprType("", "", `nil`), Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("RunOut: %v", err)
 	}
@@ -260,12 +254,12 @@ func TestExtraEnvUnionsWithTypeEnv(t *testing.T) {
 	rt := exprType(`[{a: env("STEPS_TEST_TYPE_TOKEN"), b: env("STEPS_TEST_EXTRA_TOKEN")}]`, "", "")
 	rt.Env = []string{"STEPS_TEST_TYPE_TOKEN"}
 
-	_, err := CheckVersions(context.Background(), nil, rt, nil, nil, nil)
+	_, err := CheckVersions(context.Background(), Call{Type: rt})
 	if err == nil {
 		t.Fatal("CheckVersions with no extraEnv: want an error, STEPS_TEST_EXTRA_TOKEN is not in the type's own env:")
 	}
 
-	versions, err := CheckVersions(context.Background(), nil, rt, []string{"STEPS_TEST_EXTRA_TOKEN"}, nil, nil)
+	versions, err := CheckVersions(context.Background(), Call{Type: rt, Resource: config.Resource{Env: []string{"STEPS_TEST_EXTRA_TOKEN"}}})
 	if err != nil {
 		t.Fatalf("CheckVersions with extraEnv: %v", err)
 	}
@@ -277,7 +271,7 @@ func TestExtraEnvUnionsWithTypeEnv(t *testing.T) {
 	unlisted := exprType(`[{a: env("STEPS_TEST_UNLISTED_TOKEN")}]`, "", "")
 	unlisted.Env = []string{"STEPS_TEST_TYPE_TOKEN"}
 
-	_, err = CheckVersions(context.Background(), nil, unlisted, []string{"STEPS_TEST_EXTRA_TOKEN"}, nil, nil)
+	_, err = CheckVersions(context.Background(), Call{Type: unlisted, Resource: config.Resource{Env: []string{"STEPS_TEST_EXTRA_TOKEN"}}})
 	if err == nil {
 		t.Fatal("CheckVersions: want an error, STEPS_TEST_UNLISTED_TOKEN is in neither the type's env: nor extraEnv")
 	}
