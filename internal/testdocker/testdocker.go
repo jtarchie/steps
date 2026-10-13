@@ -4,25 +4,28 @@ package testdocker
 import (
 	"context"
 	"os"
-	"os/exec"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/dockerapi"
 )
 
-// unreachable is why there is no usable daemon, or "" when there is. Asked once per process: a test binary used to run `docker info` once per test, which a loaded VM answers in seconds.
+// unreachable is why there is no usable daemon, or "" when there is. Asked once per process: a test binary used to run `docker info` once per test, which a loaded VM answers in seconds. Asked through dockerapi, so a test finds the daemon the code under test would — by docker's context rules, with no docker binary on PATH.
 var unreachable = sync.OnceValue(func() string { //nolint:gochecknoglobals // a per-process memo
-	_, err := exec.LookPath("docker")
+	client, err := dockerapi.New("")
 	if err != nil {
-		return "docker not found on PATH"
+		return "no usable docker daemon: " + err.Error()
 	}
+
+	defer func() { _ = client.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err = exec.CommandContext(ctx, "docker", "info").Run()
+	err = client.Ping(ctx)
 	if err != nil {
-		return "docker daemon not reachable (`docker info` failed)"
+		return err.Error()
 	}
 
 	return ""

@@ -20,8 +20,6 @@ package venue
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -446,52 +444,10 @@ func gcpBackendRefusal(ctx context.Context, api gceAPI, worker Worker, project, 
 		ErrWorker, worker.URL, worker.Instance, status, worker.Instance)
 }
 
-// The dial's ephemeral identity: one keypair per process, installed into an
-// instance's metadata at most once per TTL window.
-//
-//nolint:gochecknoglobals // process-lifetime identity, generated once
-var (
-	gcpKeyOnce   sync.Once
-	gcpKeySigner ssh.Signer
-	gcpKeyErr    error
-	// gcpInstalled remembers when this process last installed its key on an
-	// instance (keyed project/zone/instance), so every later step of a job —
-	// and every redial — skips the metadata write.
-	gcpInstalled sync.Map
-)
-
-// sshIdentity is this process's SSH identity for workers it installs a key on (gcp://, aws://), made once and never written to disk.
-func sshIdentity() (ssh.Signer, error) {
-	gcpKeyOnce.Do(func() {
-		_, private, err := ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			gcpKeyErr = fmt.Errorf("generating an SSH key for gcp:// workers: %w", err)
-
-			return
-		}
-
-		signer, err := ssh.NewSignerFromKey(private)
-		if err != nil {
-			gcpKeyErr = fmt.Errorf("wrapping the SSH key for gcp:// workers: %w", err)
-
-			return
-		}
-
-		gcpKeySigner = signer
-	})
-
-	if gcpKeyErr != nil {
-		return nil, gcpKeyErr
-	}
-
-	if gcpKeySigner == nil {
-		// Unreachable while the Once above sets one of the two — stated
-		// locally so a caller's nil check never depends on inferring that.
-		return nil, errors.New("no SSH key was generated for gcp:// workers")
-	}
-
-	return gcpKeySigner, nil
-}
+// gcpInstalled remembers when this process last installed its key on an
+// instance (keyed project/zone/instance), so every later step of a job — and
+// every redial — skips the metadata write.
+var gcpInstalled sync.Map //nolint:gochecknoglobals // per-process memory of what this process installed where
 
 // gcpKeyExpiryLayout renders and parses a google-ssh entry's expireOn — the
 // shape gcloud writes and the guest agent checks. The zone element matters:

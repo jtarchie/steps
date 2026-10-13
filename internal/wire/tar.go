@@ -589,11 +589,11 @@ func checkLandings(dir *os.Root, links []string) error {
 func unpackEntry(dir *os.Root, reader *tar.Reader, header *tar.Header, name string, fetched bool) error {
 	switch header.Typeflag {
 	case tar.TypeDir:
-		return mkdirAll(dir, name)
+		return dir.MkdirAll(name, stagedDirMode) //nolint:wrapcheck // the caller names the entry and the tree
 	case tar.TypeSymlink:
-		err := mkdirAll(dir, filepath.Dir(name))
+		err := dir.MkdirAll(filepath.Dir(name), stagedDirMode)
 		if err != nil {
-			return err
+			return err //nolint:wrapcheck // the caller names the entry and the tree
 		}
 
 		// os.Root.Symlink does not validate the target, so an absolute or
@@ -618,9 +618,9 @@ func unpackEntry(dir *os.Root, reader *tar.Reader, header *tar.Header, name stri
 }
 
 func unpackFile(dir *os.Root, reader *tar.Reader, header *tar.Header, name string) error {
-	err := mkdirAll(dir, filepath.Dir(name))
+	err := dir.MkdirAll(filepath.Dir(name), stagedDirMode)
 	if err != nil {
-		return err
+		return err //nolint:wrapcheck // the caller names the entry and the tree
 	}
 
 	// O_EXCL so an archive cannot overwrite something it already created, and
@@ -628,7 +628,7 @@ func unpackFile(dir *os.Root, reader *tar.Reader, header *tar.Header, name strin
 	// Masked: packFile records only Perm(), but a daemon's archive (older dockers) carries the file-type bits too, and os.Root refuses anything wider.
 	file, err := dir.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fs.FileMode(header.Mode).Perm()) //nolint:gosec // masked to Perm
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return err //nolint:wrapcheck // the caller names the entry and the tree
 	}
 
 	err = writeUnpacked(file, reader, header)
@@ -648,7 +648,7 @@ func unpackFile(dir *os.Root, reader *tar.Reader, header *tar.Header, name strin
 func writeUnpacked(file *os.File, reader *tar.Reader, header *tar.Header) error {
 	_, err := io.Copy(file, reader)
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return fmt.Errorf("writing: %w", err)
 	}
 
 	// Chmod on the open descriptor, after the write: OpenFile's mode argument
@@ -657,28 +657,7 @@ func writeUnpacked(file *os.File, reader *tar.Reader, header *tar.Header) error 
 	// avoids re-resolving the path, so nothing can be swapped underneath.
 	err = file.Chmod(fs.FileMode(header.Mode).Perm()) //nolint:gosec // masked to Perm, as the OpenFile above requires
 	if err != nil {
-		return fmt.Errorf("%w", err)
-	}
-
-	return nil
-}
-
-// mkdirAll creates name and its parents inside dir. os.Root has no MkdirAll,
-// and walking the components is what keeps every level inside the root.
-func mkdirAll(dir *os.Root, name string) error {
-	if name == "." || name == "" {
-		return nil
-	}
-
-	var built string
-
-	for _, part := range strings.Split(name, string(filepath.Separator)) {
-		built = filepath.Join(built, part)
-
-		err := dir.Mkdir(built, stagedDirMode)
-		if err != nil && !errors.Is(err, fs.ErrExist) {
-			return fmt.Errorf("%w", err)
-		}
+		return err //nolint:wrapcheck // the caller names the entry and the tree
 	}
 
 	return nil

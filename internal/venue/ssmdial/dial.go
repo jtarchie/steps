@@ -152,7 +152,7 @@ type errormsg string
 func (e errormsg) Error() string { return string(e) }
 
 // commandTimeout bounds a bootstrap command. Generous: it covers a cold
-// instance downloading a ~56MB binary.
+// instance whose docker is still installing.
 const commandTimeout = 5 * time.Minute
 
 // commandPoll is how often a running bootstrap is asked whether it finished.

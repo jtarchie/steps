@@ -446,25 +446,20 @@ func feedStdin(attached *client.ExecAttachResult, stdin io.Reader) {
 }
 
 // watchForCancel closes conn if ctx ends first, returning a function that
-// stops watching. The returned function must be called, or the watcher
-// outlives the exec it was guarding.
+// stops watching — waiting out a close already under way, so the caller never
+// races it. The returned function must be called, or the watcher outlives the
+// exec it was guarding.
 func watchForCancel(ctx context.Context, conn net.Conn) func() {
-	done := make(chan struct{})
-	stopped := make(chan struct{})
-
-	go func() {
-		defer close(stopped)
-
-		select {
-		case <-ctx.Done():
-			_ = conn.Close()
-		case <-done:
-		}
-	}()
+	closed := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+		close(closed)
+	})
 
 	return func() {
-		close(done)
-		<-stopped
+		if !stop() {
+			<-closed
+		}
 	}
 }
 

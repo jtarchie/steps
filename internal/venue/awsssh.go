@@ -51,7 +51,7 @@ func awsSSHClient(ctx context.Context, worker Worker) (*ssh.Client, error) {
 	}
 
 	client, err := awsConnect(ctx, api, worker, platform, signer)
-	if err != nil && (isAuthRefusal(err) || strings.Contains(err.Error(), "ssh: host key mismatch")) {
+	if err != nil && (isAuthRefusal(err) || errors.Is(err, errHostKeyMismatch)) {
 		// The cached install went stale: its key expired, or the root volume was replaced under the same id (new host key, no authorized_keys). Install again, once; the new host key arrives over SSM, which IAM vouches for.
 		awsInstalled.Delete(worker.Instance)
 
@@ -75,7 +75,7 @@ func awsConnect(ctx context.Context, api ssmdial.API, worker Worker, platform ss
 	client, err := sshHandshake(asConn(channel), worker.Instance+":22", &ssh.ClientConfig{
 		User:            awsSSHUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.FixedHostKey(hostKey),
+		HostKeyCallback: fixedHostKey(hostKey),
 		// Only the pinned key's type: an sshd offering several would otherwise negotiate one the pin cannot match.
 		HostKeyAlgorithms: hostKeyAlgorithms(hostKey),
 		Timeout:           dialTimeout,
@@ -87,6 +87,9 @@ func awsConnect(ctx context.Context, api ssmdial.API, worker Worker, platform ss
 	return client, nil
 }
 
+// ponytail: x/crypto/ssh has no sentinel for a refused login, only this
+// message; matched here and nowhere else, so an upstream rewording breaks one
+// function rather than a scatter of call sites.
 func isAuthRefusal(err error) bool {
 	return strings.Contains(err.Error(), "ssh: unable to authenticate")
 }

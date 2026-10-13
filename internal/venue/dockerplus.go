@@ -1,6 +1,6 @@
 package venue
 
-// The docker+ssh:// venue: the worker's own docker daemon, driven through its socket forwarded over ssh (steps#206). No binary is pushed and no command runs over ssh; the step's tree goes into a volume, the step runs in a container that mounts it, and its outputs are read back out.
+// The docker+ssh:// venue: the worker's own docker daemon, driven through its socket forwarded over ssh (steps#206). No binary is pushed and the step's command never runs over ssh (only the venue's own housekeeping does: a readiness wait, a reclamation watch); the step's tree goes into a volume, the step runs in a container that mounts it, and its outputs are read back out.
 
 import (
 	"archive/tar"

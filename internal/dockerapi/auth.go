@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/distribution/reference"
 )
 
 // dockerHubAuthKey is where a Docker Hub login is filed. Not a hostname:
@@ -51,14 +53,14 @@ type dockerConfig struct {
 	CredHelpers map[string]string `json:"credHelpers"`
 }
 
-// RegistryAuth returns the value to send with a pull of reference, or "" for
+// RegistryAuth returns the value to send with a pull of ref, or "" for
 // an anonymous one.
 //
 // Empty is a real answer, not a failure: most pulls are anonymous, and sending
 // a blank credential is NOT the same as sending none — a registry that serves
 // anonymous reads can reject an empty login outright.
-func RegistryAuth(ctx context.Context, reference string) string {
-	registry := registryFor(reference)
+func RegistryAuth(ctx context.Context, ref string) string {
+	registry := registryFor(ref)
 
 	config, ok := readDockerConfig()
 	if !ok {
@@ -186,25 +188,26 @@ func readDockerConfig() (dockerConfig, bool) {
 }
 
 // registryFor names the registry an image reference is served by, in the
-// spelling credentials are filed under.
+// spelling credentials are filed under. The host rule is docker's own, through
+// reference.Domain: "myteam/myimage" is Docker Hub, "localhost:5000/myimage"
+// is not.
 //
-// The rule is docker's: the first path component is a registry only if it
-// LOOKS like a host — it contains a dot or a colon, or it is localhost.
-// Everything else is Docker Hub, which is why "myteam/myimage" is a Hub image
-// and "localhost:5000/myimage" is not.
-func registryFor(reference string) string {
-	first, _, hasSlash := strings.Cut(reference, "/")
-	if !hasSlash {
+// Only the name is parsed: the digest cannot move an image to another
+// registry, and a malformed one should reach the daemon, which says so, rather
+// than cost the pull its login. A name that does not parse is not one docker
+// would pull either, so Hub's key is as good an answer as any.
+func registryFor(ref string) string {
+	name, _, _ := strings.Cut(ref, "@")
+
+	named, err := reference.ParseNormalizedNamed(name)
+	if err != nil {
 		return dockerHubAuthKey
 	}
 
-	if !strings.Contains(first, ".") && !strings.Contains(first, ":") && first != "localhost" {
+	switch domain := reference.Domain(named); domain {
+	case "docker.io", "registry-1.docker.io":
 		return dockerHubAuthKey
+	default:
+		return domain
 	}
-
-	if first == "docker.io" || first == "index.docker.io" || first == "registry-1.docker.io" {
-		return dockerHubAuthKey
-	}
-
-	return first
 }

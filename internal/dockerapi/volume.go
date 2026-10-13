@@ -28,7 +28,7 @@ type Volume struct {
 // NewDialer reaches a daemon through dial, for a socket with no address of its own here (one forwarded over ssh); name is what errors call it.
 func NewDialer(name string, dial func(ctx context.Context) (net.Conn, error)) (*Client, error) {
 	api, err := client.New(
-		client.WithHost("unix:///var/run/docker.sock"),
+		client.WithHost(DefaultHost),
 		client.WithDialContext(func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx) }),
 	)
 	if err != nil {

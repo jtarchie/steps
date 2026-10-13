@@ -564,6 +564,7 @@ linters:
             - "**/internal/testdocker/**"
           allow:
             - "$gostd"
+            - "github.com/jtarchie/steps/internal/dockerapi"
         # treedigest must stay stdlib-only: its twin is a busybox script with nothing else to lean on (steps#206).
         TreeDigest:
           files:

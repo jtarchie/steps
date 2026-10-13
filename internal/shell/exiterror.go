@@ -2,7 +2,11 @@ package shell
 
 // A command's own nonzero exit, reported from somewhere os/exec cannot see.
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/jtarchie/steps/internal/dockerapi"
+)
 
 // ExitError is a command that started and then exited nonzero (or was killed
 // by a signal) somewhere os/exec cannot see it: on a worker at the far end of
@@ -54,4 +58,4 @@ func (e *ExitError) ExitCode() int { return e.Code }
 // everything downstream. Named because two callers now have to ASK the
 // question — "did this command choose its status, or was it killed?" — and a
 // bare -1 at a call site says neither.
-const SignalledExitCode = -1
+const SignalledExitCode = dockerapi.SignalledExitCode

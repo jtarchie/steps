@@ -2,19 +2,22 @@ package venue
 
 // The ssh: venue: a worker reached over SSH.
 //
-// The remote contract is sshd and a pushed steps binary, and nothing else. No
-// agent to install, no daemon to leave running, no package to add — which is
-// what makes "point it at a machine you already have" true rather than
-// aspirational.
+// The remote contract is sshd, a POSIX shell and tar (or a docker daemon, for
+// docker+ssh://), and nothing else. No agent to install, no daemon to leave
+// running, no package to add — which is what makes "point it at a machine you
+// already have" true rather than aspirational.
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -270,8 +273,69 @@ func pinnedHostKey(want string) ssh.HostKeyCallback {
 	}
 }
 
-// errHostKeyMismatch is a worker that is not the machine it was pinned to.
-var errHostKeyMismatch = errors.New("the worker's host key does not match its hostkey= pin")
+// errHostKeyMismatch is a worker that is not the machine it was pinned to —
+// by a hostkey= pin, by the key its install reported, or by the keys its
+// guest attributes attest.
+var errHostKeyMismatch = errors.New("the worker's host key is not the one it was pinned to")
+
+// fixedHostKey is ssh.FixedHostKey with a mismatch classified, so a caller
+// asks errors.Is rather than matching upstream's message.
+func fixedHostKey(want ssh.PublicKey) ssh.HostKeyCallback {
+	fixed := ssh.FixedHostKey(want)
+
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		err := fixed(hostname, remote, key)
+		if err != nil && want != nil {
+			return fmt.Errorf("%w: %s offered %s, expected %s: %w",
+				errHostKeyMismatch, remote, ssh.FingerprintSHA256(key), ssh.FingerprintSHA256(want), err)
+		}
+
+		return err
+	}
+}
+
+// The ephemeral identity for workers this process installs a key on: one
+// keypair per process, made once and never written to disk.
+//
+//nolint:gochecknoglobals // process-lifetime identity, generated once
+var (
+	sshKeyOnce   sync.Once
+	sshKeySigner ssh.Signer
+	sshKeyErr    error
+)
+
+// sshIdentity is this process's SSH identity for workers it installs a key on (gcp://, aws://).
+func sshIdentity() (ssh.Signer, error) {
+	sshKeyOnce.Do(func() {
+		_, private, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			sshKeyErr = fmt.Errorf("generating this process's SSH key for workers: %w", err)
+
+			return
+		}
+
+		signer, err := ssh.NewSignerFromKey(private)
+		if err != nil {
+			sshKeyErr = fmt.Errorf("wrapping this process's SSH key for workers: %w", err)
+
+			return
+		}
+
+		sshKeySigner = signer
+	})
+
+	if sshKeyErr != nil {
+		return nil, sshKeyErr
+	}
+
+	if sshKeySigner == nil {
+		// Unreachable while the Once above sets one of the two — stated
+		// locally so a caller's nil check never depends on inferring that.
+		return nil, errors.New("no SSH key was generated for workers")
+	}
+
+	return sshKeySigner, nil
+}
 
 // shellQuote wraps a path for the remote login shell.
 //

@@ -6,11 +6,12 @@
 // back to shell unchanged. That split is why an SSH client lives in this
 // package and not in the leaf every execution path imports.
 //
-// A venue is an execution venue and nothing more. The orchestrator's
-// filesystem stays the single artifact store; a worker gets a tree, runs a
-// command against it, and gives back what was asked for. There is no worker
-// registration, no daemon, no worker-to-worker transfer, and no state on the
-// far end that outlives a step.
+// A venue is an execution venue and nothing more. A worker gets a tree, runs
+// a command against it, and gives back what was asked for; a docker+ worker
+// may also keep an output as a content-addressed volume, which a later step
+// reads where it is or which is piped through this process to another
+// worker. There is no worker registration and no daemon of steps' own on the
+// far end.
 package venue
 
 import (
@@ -65,8 +66,8 @@ type Worker struct {
 	Scheme Scheme
 	User   string
 	Host   string
-	// Root overrides where the worker keeps both the pushed binary and the
-	// step's scratch. Empty takes the worker's own temp directory. It is the
+	// Root overrides where an ssh:// worker keeps the step's scratch (and, for
+	// local:, names its cache). Empty takes the worker's own temp directory. It is the
 	// URL's path, kept ABSOLUTE: ssh://box/mnt/fast names /mnt/fast, and
 	// trimming the leading slash silently moved it under the login user's
 	// home instead -- a machine with a fast disk mounted at /mnt would take
