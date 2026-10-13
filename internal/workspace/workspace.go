@@ -545,6 +545,7 @@ type isolatingBuild struct {
 	// name — see remote.go.
 	remoteMu sync.Mutex
 	remote   map[string]RemoteArtifact
+	pulling  map[string]chan struct{}
 }
 
 // artifactDigest is the content hash of one artifact in the build store, for

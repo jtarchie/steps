@@ -118,11 +118,62 @@ func (b *isolatingBuild) remoteNames() []string {
 // follows can read it from the artifact store as it always has. A holder
 // that no longer has the tree fails by name — the artifact and the machine —
 // because running the reader against nothing is the worse outcome.
+//
+// Concurrent readers (in_parallel: branches sharing an input) pull once: the
+// rest wait, because a second pull starts by removing the directory the first
+// is filling. A waiter whose pull failed tries again rather than inheriting
+// the error, which may have been the first reader's own cancellation.
 func (b *isolatingBuild) ensureLocal(ctx context.Context, name string) error {
-	remote, ok := b.remoteArtifact(name)
-	if !ok {
-		return nil
+	for {
+		remote, pending, ok := b.claimPull(name)
+		if !ok {
+			return nil
+		}
+
+		if pending == nil {
+			return b.pull(ctx, name, remote)
+		}
+
+		select {
+		case <-pending:
+		case <-ctx.Done():
+			return fmt.Errorf("artifact %q: waiting for it to be brought home: %w", name, ctx.Err())
+		}
 	}
+}
+
+// claimPull reports whether name is held elsewhere and, if so, either a pull
+// already in flight to wait for or — pending nil — the caller's turn to pull.
+func (b *isolatingBuild) claimPull(name string) (remote RemoteArtifact, pending <-chan struct{}, ok bool) {
+	b.remoteMu.Lock()
+	defer b.remoteMu.Unlock()
+
+	remote, ok = b.remote[name]
+	if !ok {
+		return remote, nil, false
+	}
+
+	if done, busy := b.pulling[name]; busy {
+		return remote, done, true
+	}
+
+	if b.pulling == nil {
+		b.pulling = map[string]chan struct{}{}
+	}
+
+	b.pulling[name] = make(chan struct{})
+
+	return remote, nil, true
+}
+
+func (b *isolatingBuild) pull(ctx context.Context, name string, remote RemoteArtifact) error {
+	defer func() {
+		b.remoteMu.Lock()
+		defer b.remoteMu.Unlock()
+
+		close(b.pulling[name])
+		delete(b.pulling, name)
+	}()
 
 	dst := filepath.Join(b.artifacts, name)
 

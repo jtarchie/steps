@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // heldTree records src as held elsewhere, with a pull that writes one file
@@ -505,5 +507,156 @@ func TestHasArtifactSeesTheStoreAndWhatAWorkerHolds(t *testing.T) {
 
 	if !checker.HasArtifact("src") || *pulls != 0 {
 		t.Errorf("a held artifact: present = %v after %d pulls, want present without one", checker.HasArtifact("src"), *pulls)
+	}
+}
+
+// concurrentReader opens a task space reading src in the background and
+// reports whether it saw the whole tree.
+func concurrentReader(ctx context.Context, bw BuildWorkspace, step string) <-chan error {
+	done := make(chan error, 1)
+
+	go func() {
+		space, err := bw.TaskSpace(ctx, step, []string{"src"}, nil, nil, nil)
+		if err != nil {
+			done <- err
+
+			return
+		}
+
+		defer func() { _ = space.Close() }()
+
+		content, err := os.ReadFile(filepath.Join(space.Dir(), "src", "f.txt"))
+		if err == nil && string(content) != "held\n" {
+			err = errors.New("read " + string(content))
+		}
+
+		done <- err
+	}()
+
+	return done
+}
+
+// earlyResult is what done delivered within a short wait, if anything — a
+// margin, not a bound: a slow machine can only hide the race, never make a
+// working gate look broken.
+func earlyResult(done <-chan error) (finished bool, err error) {
+	select {
+	case err = <-done:
+		return true, err
+	case <-time.After(300 * time.Millisecond):
+		return false, nil
+	}
+}
+
+// TestConcurrentReadersOfAHeldArtifactShareOnePull: two in_parallel branches
+// reading one held artifact. The second waits for the first's pull rather
+// than deleting the directory it is filling and pulling again.
+func TestConcurrentReadersOfAHeldArtifactShareOnePull(t *testing.T) {
+	t.Parallel()
+
+	bw := newBuild(t)
+	holder, _ := bw.(RemoteHolder)
+
+	var pulls atomic.Int32
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	err := holder.HoldRemote("src", RemoteArtifact{
+		Digest: strings.Repeat("ab", 32),
+		Holder: "local:/somewhere",
+		Pull: func(_ context.Context, dst string) error {
+			if pulls.Add(1) == 1 {
+				close(started)
+				<-release
+			}
+
+			return os.WriteFile(filepath.Join(dst, "f.txt"), []byte("held\n"), 0o600)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := concurrentReader(context.Background(), bw, "a")
+	<-started
+
+	second := concurrentReader(context.Background(), bw, "b")
+	finished, secondErr := earlyResult(second)
+
+	close(release)
+
+	if finished {
+		t.Errorf("the second reader finished (%v) while the first pull was still in flight", secondErr)
+	} else {
+		secondErr = <-second
+	}
+
+	firstErr := <-first
+	if firstErr != nil {
+		t.Errorf("first reader: %v", firstErr)
+	}
+
+	if secondErr != nil {
+		t.Errorf("second reader: %v", secondErr)
+	}
+
+	if n := pulls.Load(); n != 1 {
+		t.Errorf("pulled %d times for two concurrent readers, want once", n)
+	}
+}
+
+// TestAWaitingReaderPullsItselfWhenTheFirstPullIsAbandoned: the pull a reader
+// waited on failed for the first reader's own reason — its branch cancelled
+// under fail_fast — so the waiter pulls rather than inheriting that failure.
+func TestAWaitingReaderPullsItselfWhenTheFirstPullIsAbandoned(t *testing.T) {
+	t.Parallel()
+
+	bw := newBuild(t)
+	holder, _ := bw.(RemoteHolder)
+
+	var pulls atomic.Int32
+
+	started := make(chan struct{})
+
+	err := holder.HoldRemote("src", RemoteArtifact{
+		Digest: strings.Repeat("ab", 32),
+		Holder: "local:/somewhere",
+		Pull: func(ctx context.Context, dst string) error {
+			if pulls.Add(1) == 1 {
+				close(started)
+				<-ctx.Done()
+
+				return ctx.Err()
+			}
+
+			return os.WriteFile(filepath.Join(dst, "f.txt"), []byte("held\n"), 0o600)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	first := concurrentReader(ctx, bw, "a")
+	<-started
+
+	second := concurrentReader(context.Background(), bw, "b")
+	finished, secondErr := earlyResult(second)
+
+	cancel()
+
+	if !finished {
+		secondErr = <-second
+	}
+
+	firstErr := <-first
+	if !errors.Is(firstErr, context.Canceled) {
+		t.Errorf("first reader: %v, want its own cancellation", firstErr)
+	}
+
+	if secondErr != nil {
+		t.Errorf("second reader inherited the first's failure: %v", secondErr)
 	}
 }
