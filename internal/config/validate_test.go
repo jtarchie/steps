@@ -71,6 +71,8 @@ jobs:
 func TestValidateStepKinds(t *testing.T) {
 	t.Parallel()
 
+	const everyKind = "get/task/put/agent/try/in_parallel/race/ensemble/load_var/approval/do"
+
 	tests := []struct {
 		name     string
 		pipeline string
@@ -91,7 +93,23 @@ jobs:
     agent: a
     run: "true"
 `,
-			want: "step sets task and agent, but a step is exactly one of get/task/put/agent",
+			want: "step sets task and agent, but a step is exactly one of " + everyKind,
+		},
+		{
+			// Was "step sets task, but a step is exactly one of ...": the
+			// field list behind the message knew five kinds of eleven.
+			name: "a container kind and a leaf kind",
+			pipeline: `
+jobs:
+- name: j
+  plan:
+  - task: t
+    run: "true"
+    do:
+    - task: u
+      run: "true"
+`,
+			want: "step sets task and do, but a step is exactly one of " + everyKind,
 		},
 		{
 			name: "no kind at all",
@@ -101,7 +119,7 @@ jobs:
   plan:
   - run: "true"
 `,
-			want: "step names no kind, set one of get/task/put/agent",
+			want: "step names no kind, set one of " + everyKind,
 		},
 	}
 

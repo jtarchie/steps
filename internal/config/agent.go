@@ -403,38 +403,6 @@ func checkContextPathConfined(label string, step *Step, entry string) error {
 		label, step.Agent, entry, step.Dir, path.Join(step.Dir, entry), step.Dir)
 }
 
-// ConfinedPath joins rel onto dir and reports whether the cleaned result is
-// dir itself or under it. An absolute rel is taken as it is, so it is inside
-// only when it already names a place under an absolute dir.
-//
-// It is the one confinement predicate for an agent's paths: internal/agent's
-// file tools and context_paths: ask it at run time, and load asks it of a
-// workspace-relative dir: ("." for the step root), which is why it lives here
-// rather than beside the tools: this package imports nothing internal, so the
-// run can call load's answer but not the other way round. Lexical only;
-// symlinks are the caller's.
-//
-// POSIX path rather than filepath: pipeline paths are written with "/", a
-// container's tree is POSIX whatever runs steps, and steps ships for linux and
-// darwin, where the two agree.
-func ConfinedPath(dir, rel string) (string, bool) {
-	resolved := path.Clean(rel)
-	if !path.IsAbs(resolved) {
-		resolved = path.Join(dir, rel)
-	}
-
-	base := path.Clean(dir)
-
-	switch {
-	case resolved == base:
-		return resolved, true
-	case base == ".":
-		return resolved, !path.IsAbs(resolved) && resolved != ".." && !strings.HasPrefix(resolved, "../")
-	default:
-		return resolved, strings.HasPrefix(resolved, base+"/")
-	}
-}
-
 // validateAgentCompaction checks every agents: entry's compact_after_tokens:
 // is not negative. Nil (unset) and 0 (explicitly disabled) are both valid;
 // only a negative value has no meaning — mirrors ParseTimeout's own "reject

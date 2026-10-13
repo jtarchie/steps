@@ -77,19 +77,37 @@ func (s *shorthands) walkStep(step *yaml.Node) {
 	}
 }
 
-// walkKey follows one key of a step (or a job) to the steps under it.
+// walkKey follows one key of a step (or a job) to the steps under it. A kind's
+// key is followed by its nesting in stepKinds.
 func (s *shorthands) walkKey(key, value *yaml.Node) {
 	switch key.Value {
-	case "plan", "do":
+	case "plan":
 		s.walkSteps(value)
-	case "try", "on_success", "on_failure", "on_error", "on_abort", "ensure":
+
+		return
+	case "on_success", "on_failure", "on_error", "on_abort", "ensure":
 		s.walkStep(value)
-	case "in_parallel":
+
+		return
+	case string(StepKindInParallel):
 		s.walkInParallel(key, value)
-	case "race":
-		s.walkSteps(mappingValue(value, "steps"))
-	case "ensemble":
-		s.walkSteps(mappingValue(value, "agents"))
+
+		return
+	}
+
+	spec, ok := stepKindByKey(key.Value)
+	if !ok {
+		return
+	}
+
+	switch spec.nest {
+	case wraps:
+		s.walkStep(value)
+	case sequence:
+		s.walkSteps(value)
+	case branches:
+		s.walkSteps(mappingValue(value, spec.branchesKey))
+	case leaf:
 	}
 }
 

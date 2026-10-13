@@ -7,7 +7,6 @@ package config
 import (
 	"fmt"
 	"regexp"
-	"strings"
 )
 
 // artifactNamePattern constrains input/output/resource names used to build
@@ -100,35 +99,6 @@ func (c *Config) validateMappingPlacement(label string, step Step) error {
 
 	if step.Task == "" {
 		return fmt.Errorf("%s: input_mapping/output_mapping are only valid on task steps", label)
-	}
-
-	return nil
-}
-
-// ValidateArtifactPath accepts what a capture may materialize to: an artifact
-// name, optionally followed by /-separated segments inside it — a collecting
-// matrix captures a cell's output at findings/alpha/fast (see
-// CollectedOutputMapping). The first segment is a full artifact name,
-// reservations included; later segments need only the charset, since they
-// name directories inside an artifact rather than artifacts. Every segment
-// matching the pattern is what makes the path safe to join: no segment can be
-// empty, "..", or absolute.
-//
-// USER-authored mapping values never reach this looser rule — they are pinned
-// to ValidateArtifactName at load (see validateArtifactMappings), so the only
-// slash-carrying paths are machine-composed from already-validated parts.
-func ValidateArtifactPath(artifactPath string) error {
-	segments := strings.Split(artifactPath, "/")
-
-	err := ValidateArtifactName(segments[0])
-	if err != nil {
-		return err
-	}
-
-	for _, segment := range segments[1:] {
-		if !artifactNamePattern.MatchString(segment) {
-			return fmt.Errorf("invalid artifact path %q: segment %q must match %s", artifactPath, segment, artifactNamePattern.String())
-		}
 	}
 
 	return nil

@@ -38,9 +38,9 @@ func (c *Config) resolvePutReference(step *Step) error {
 // resolveBranchReferences resolves every branch of an in_parallel: block. A
 // block references nothing itself; its branches are ordinary steps and
 // reference exactly what they always did.
-func (c *Config) resolveBranchReferences(steps []Step) error {
-	for i := range steps {
-		err := c.resolveStepReference(&steps[i])
+func (c *Config) resolveBranchReferences(steps []*Step) error {
+	for _, step := range steps {
+		err := c.resolveStepReference(step)
 		if err != nil {
 			return err
 		}
@@ -100,9 +100,8 @@ func (c *Config) resolveStepReference(step *Step) error {
 	case StepKindTry:
 		err = c.resolveStepReference(step.Try)
 	case StepKindInParallel, StepKindRace, StepKindEnsemble:
-		for _, branches := range branchesOf(step) {
-			err = c.resolveBranchReferences(branches)
-		}
+		_, branches := branchesOf(step)
+		err = c.resolveBranchReferences(branches)
 	case StepKindTask:
 		return c.resolveTaskReference(step)
 	}

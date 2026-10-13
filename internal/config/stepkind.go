@@ -16,7 +16,8 @@ func (k StepKind) ReferencesEntities() bool {
 // StepKind is which of Get/Task/Put/Agent a Step is. See Step.Kind.
 type StepKind string
 
-// The StepKind values, one per Step field Kind can resolve to.
+// The StepKind values, one per Step field Kind can resolve to. Each is also
+// the YAML key that selects it.
 const (
 	StepKindGet   StepKind = "get"
 	StepKindTask  StepKind = "task"
@@ -24,7 +25,7 @@ const (
 	StepKindAgent StepKind = "agent"
 	StepKindTry   StepKind = "try"
 	// StepKindInParallel is a block of steps that run concurrently. Adding it
-	// to this table is what makes `go run ./tools/kindswitch ./...` demand an
+	// to stepKinds is what makes `go run ./tools/kindswitch ./...` demand an
 	// answer from every dispatch site — the tagged ones via `exhaustive`, the
 	// tagless ones via that analyzer. Story 001 added a kind and shipped ten
 	// defects, six of them a dispatch site that silently did nothing for it.
@@ -44,28 +45,136 @@ const (
 	StepKindDo StepKind = "do"
 )
 
+// nesting is how a kind holds the steps nested under it.
+type nesting int
+
+const (
+	leaf nesting = iota
+	// wraps is try:, one step it runs and tolerates the failure of.
+	wraps
+	// sequence is do:, steps that run one after another as one step.
+	sequence
+	// branches is a concurrent block: in_parallel:, race:, ensemble:.
+	branches
+)
+
+type stepKindSpec struct {
+	kind  StepKind
+	isSet func(s *Step) bool
+	nest  nesting
+	// children points at the nested steps in place, so a walker may rewrite
+	// them. Nil for a leaf.
+	children func(s *Step) []*Step
+	// branchesKey is the key under a branches kind's mapping that holds its
+	// list.
+	branchesKey string
+}
+
+// stepKinds is the one description of every step kind: what selects it, what
+// it nests and how that nesting is spelled in YAML. Kind, both kind errors,
+// the tree walkers and the in_parallel: shorthand rewrite all read it, so a
+// kind cannot be known to one and missing from another — which is how a do: +
+// task: step came to be reported as setting only task:. tools/kindswitch reads
+// the Step fields these rows test as the kind set, in this order.
+//
+//nolint:gochecknoglobals // a read-only table
+var stepKinds = [...]stepKindSpec{
+	{kind: StepKindGet, isSet: func(s *Step) bool { return s.Get != "" }},
+	{kind: StepKindTask, isSet: func(s *Step) bool { return s.Task != "" }},
+	{kind: StepKindPut, isSet: func(s *Step) bool { return s.Put != "" }},
+	{kind: StepKindAgent, isSet: func(s *Step) bool { return s.Agent != "" }},
+	{
+		kind: StepKindTry, isSet: func(s *Step) bool { return s.Try != nil }, nest: wraps,
+		children: func(s *Step) []*Step {
+			if s.Try == nil {
+				return nil
+			}
+
+			return []*Step{s.Try}
+		},
+	},
+	{
+		kind: StepKindInParallel, isSet: func(s *Step) bool { return s.InParallel != nil },
+		nest: branches, branchesKey: "steps",
+		children: func(s *Step) []*Step {
+			if s.InParallel == nil {
+				return nil
+			}
+
+			return stepPointers(s.InParallel.Steps)
+		},
+	},
+	{
+		kind: StepKindRace, isSet: func(s *Step) bool { return s.Race != nil },
+		nest: branches, branchesKey: "steps",
+		children: func(s *Step) []*Step {
+			if s.Race == nil {
+				return nil
+			}
+
+			return stepPointers(s.Race.Steps)
+		},
+	},
+	{
+		kind: StepKindEnsemble, isSet: func(s *Step) bool { return s.Ensemble != nil },
+		nest: branches, branchesKey: "agents",
+		children: func(s *Step) []*Step {
+			if s.Ensemble == nil {
+				return nil
+			}
+
+			return stepPointers(s.Ensemble.Agents)
+		},
+	},
+	{kind: StepKindLoadVar, isSet: func(s *Step) bool { return s.LoadVar != "" }},
+	{kind: StepKindApproval, isSet: func(s *Step) bool { return s.Approval != nil }},
+	{
+		kind: StepKindDo, isSet: func(s *Step) bool { return s.Do != nil }, nest: sequence,
+		children: func(s *Step) []*Step { return stepPointers(s.Do) },
+	},
+}
+
+func stepPointers(steps []Step) []*Step {
+	out := make([]*Step, len(steps))
+	for i := range steps {
+		out[i] = &steps[i]
+	}
+
+	return out
+}
+
+func stepKindByKey(key string) (stepKindSpec, bool) {
+	for _, spec := range stepKinds {
+		if string(spec.kind) == key {
+			return spec, true
+		}
+	}
+
+	return stepKindSpec{}, false
+}
+
+// childLabel is how a validation error names the i'th step nested under spec.
+func (spec stepKindSpec) childLabel(parent string, i int) string {
+	switch spec.nest {
+	case wraps:
+		return fmt.Sprintf("%s (%s)", parent, spec.kind)
+	case sequence:
+		return fmt.Sprintf("%s (%s step %d)", parent, spec.kind, i)
+	case branches:
+		return fmt.Sprintf("%s (%s branch %d)", parent, spec.kind, i)
+	case leaf:
+	}
+
+	return parent
+}
+
 // Kind reports which single kind of step s is. ok is false when zero, or
-// more than one, of Get/Task/Put/Agent is set — a malformed step every call
-// site should reject the same way, rather than each silently picking
-// whichever field its own historical check order happened to test first.
+// more than one, of the kinds is set — a malformed step every call site
+// should reject the same way, rather than each silently picking whichever
+// field its own historical check order happened to test first.
 func (s Step) Kind() (kind StepKind, ok bool) {
-	for _, candidate := range [...]struct {
-		kind StepKind
-		set  bool
-	}{
-		{StepKindGet, s.Get != ""},
-		{StepKindTask, s.Task != ""},
-		{StepKindPut, s.Put != ""},
-		{StepKindAgent, s.Agent != ""},
-		{StepKindTry, s.Try != nil},
-		{StepKindInParallel, s.InParallel != nil},
-		{StepKindRace, s.Race != nil},
-		{StepKindEnsemble, s.Ensemble != nil},
-		{StepKindLoadVar, s.LoadVar != ""},
-		{StepKindApproval, s.Approval != nil},
-		{StepKindDo, s.Do != nil},
-	} {
-		if !candidate.set {
+	for _, spec := range stepKinds {
+		if !spec.isSet(&s) {
 			continue
 		}
 
@@ -73,7 +182,7 @@ func (s Step) Kind() (kind StepKind, ok bool) {
 			return "", false // a second kind field was set — reject, don't silently keep the first
 		}
 
-		kind, ok = candidate.kind, true
+		kind, ok = spec.kind, true
 	}
 
 	return kind, ok
@@ -95,11 +204,11 @@ func (c *Config) validateStepKinds() error {
 
 			set := step.kindFieldsSet()
 			if len(set) == 0 {
-				return fmt.Errorf("%s: step names no kind, set one of get/task/put/agent", label)
+				return fmt.Errorf("%s: step names no kind, set one of %s", label, allStepKinds())
 			}
 
-			return fmt.Errorf("%s: step sets %s, but a step is exactly one of get/task/put/agent",
-				label, strings.Join(set, " and "))
+			return fmt.Errorf("%s: step sets %s, but a step is exactly one of %s",
+				label, strings.Join(set, " and "), allStepKinds())
 		})
 		if err != nil {
 			return err
@@ -109,50 +218,48 @@ func (c *Config) validateStepKinds() error {
 	return nil
 }
 
-// kindFieldsSet names the kind-selecting fields this step sets, in schema
-// order, for the "sets task and agent" half of validateStepKinds' message.
-func (s Step) kindFieldsSet() []string {
-	set := make([]string, 0, 5)
-
-	for _, candidate := range [...]struct {
-		name  string
-		value string
-	}{
-		{"get", s.Get},
-		{"task", s.Task},
-		{"put", s.Put},
-		{"agent", s.Agent},
-	} {
-		if candidate.value != "" {
-			set = append(set, candidate.name)
-		}
+func allStepKinds() string {
+	keys := make([]string, 0, len(stepKinds))
+	for _, spec := range stepKinds {
+		keys = append(keys, string(spec.kind))
 	}
 
-	if s.Try != nil {
-		set = append(set, "try")
+	return strings.Join(keys, "/")
+}
+
+// kindFieldsSet names the kinds this step sets, in table order, for the
+// "sets task and agent" half of validateStepKinds' message.
+func (s Step) kindFieldsSet() []string {
+	var set []string
+
+	for _, spec := range stepKinds {
+		if spec.isSet(&s) {
+			set = append(set, string(spec.kind))
+		}
 	}
 
 	return set
 }
 
-// branchesOf returns a concurrent block's branches keyed by which kind of
-// block they belong to, or nothing for an ordinary step. It exists so the
-// walkers below treat in_parallel: and race: identically — they differ in what
-// their branches' outcomes MEAN, never in the fact that they have branches,
-// and a walker that knew about one but not the other is precisely the silent
-// gap this codebase has shipped before.
-func branchesOf(step *Step) map[string][]Step {
-	//kindswitch:ignore only the container kinds have branches; the leaf kinds are the point of the default
-	switch {
-	case step.InParallel != nil:
-		return map[string][]Step{"in_parallel": step.InParallel.Steps}
-	case step.Race != nil:
-		return map[string][]Step{"race": step.Race.Steps}
-	case step.Ensemble != nil:
-		return map[string][]Step{"ensemble": step.Ensemble.Agents}
-	default:
-		return nil
+// branchesOf returns a concurrent block's kind and branches, or nothing for
+// any other step. It exists so the walkers below treat in_parallel:, race:
+// and ensemble: identically — they differ in what their branches' outcomes
+// MEAN, never in the fact that they have branches, and a walker that knew
+// about one but not the other is precisely the silent gap this codebase has
+// shipped before.
+//
+// do: is deliberately not a branches kind: this function's callers (context
+// scoping, handoff-note fan-in/broadcast, var flow) attach concurrency
+// semantics to whatever it returns, and a do: block is sequential, so its
+// children behave like ordinary consecutive plan steps.
+func branchesOf(step *Step) (StepKind, []*Step) {
+	for _, spec := range stepKinds {
+		if spec.nest == branches && spec.isSet(step) {
+			return spec.kind, spec.children(step)
+		}
 	}
+
+	return "", nil
 }
 
 // visitStepTree calls fn for a step and everything nested inside it: what a
@@ -181,35 +288,18 @@ func walkStepTree[T any](label string, step *Step, carried T, pass func(string, 
 		return err
 	}
 
-	if step.Try != nil {
-		err = walkStepTree(label+" (try)", step.Try, inner, pass, fn)
-		if err != nil {
-			return err
+	// Without this every validator in this package would silently stop at a
+	// container, and what it holds could carry anything at all.
+	for _, spec := range stepKinds {
+		if spec.children == nil {
+			continue
 		}
-	}
 
-	// Descend into a concurrent block's branches. Without this every
-	// validator in this package would silently stop at the block, and a
-	// branch could carry anything at all.
-	for kind, branches := range branchesOf(step) {
-		for i := range branches {
-			err = walkStepTree(fmt.Sprintf("%s (%s branch %d)", label, kind, i), &branches[i], inner, pass, fn)
+		for i, child := range spec.children(step) {
+			err = walkStepTree(spec.childLabel(label, i), child, inner, pass, fn)
 			if err != nil {
 				return err
 			}
-		}
-	}
-
-	// A do: block's children are visited too, but deliberately NOT through
-	// branchesOf: that function means "concurrent branches", and its other
-	// callers (context scoping, handoff-note fan-in/broadcast) attach
-	// concurrency semantics to whatever it returns. A do: block is sequential,
-	// so its children behave like ordinary consecutive plan steps — which is
-	// the entire reason those semantics must not reach them.
-	for i := range step.Do {
-		err = walkStepTree(fmt.Sprintf("%s (do step %d)", label, i), &step.Do[i], inner, pass, fn)
-		if err != nil {
-			return err
 		}
 	}
 

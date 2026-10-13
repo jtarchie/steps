@@ -166,12 +166,12 @@ func checkFromFilePath(label string, i int, axis AcrossVar) error {
 		return nil
 	}
 
-	cleaned := path.Clean(axis.FromFile)
+	cleaned, inside := ConfinedPath(".", axis.FromFile)
 
 	switch {
 	case path.IsAbs(axis.FromFile):
 		return fmt.Errorf("%s: across[%d] (%s) from_file %q is absolute; it must be a path inside an artifact, like findings/items.json", label, i, axis.Var, axis.FromFile)
-	case cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../"):
+	case !inside || cleaned == ".":
 		return fmt.Errorf("%s: across[%d] (%s) from_file %q escapes the workspace; it must be a path inside an artifact, like findings/items.json", label, i, axis.Var, axis.FromFile)
 	case !strings.Contains(cleaned, "/"):
 		return fmt.Errorf("%s: across[%d] (%s) from_file %q names no artifact; the first path component is the artifact holding the file, as in findings/items.json", label, i, axis.Var, axis.FromFile)

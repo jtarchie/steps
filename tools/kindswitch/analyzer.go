@@ -101,6 +101,11 @@ func publishKindTables(pass *analysis.Pass) {
 // kindTableOf recognizes a kind-table method — `func (s T) Kind() (K, bool)`
 // testing two or more of its receiver's fields — and returns T with the fields
 // its body tests. Anything else yields a nil type.
+//
+// The table may instead be a package-level var the body ranges over, its rows
+// testing T's fields through a parameter (`isSet: func(s *T) bool { return
+// s.Get != "" }`): config.Step's is, because the same rows also feed its kind
+// errors and tree walkers. Those fields are read out of the var's initializer.
 func kindTableOf(pass *analysis.Pass, fn *ast.FuncDecl) (*types.TypeName, []string) {
 	if fn.Name.Name != "Kind" || fn.Recv == nil || fn.Body == nil {
 		return nil, nil
@@ -115,12 +120,115 @@ func kindTableOf(pass *analysis.Pass, fn *ast.FuncDecl) (*types.TypeName, []stri
 		return nil, nil
 	}
 
+	named := receiverTypeName(pass, fn)
+
 	fields := selectedFields(fn.Body, recv)
+	if len(fields) < 2 && named != nil {
+		fields = tableVarFields(pass, fn.Body, named)
+	}
+
 	if len(fields) < 2 {
 		return nil, nil // not a dispatch table, whatever else it is
 	}
 
-	return receiverTypeName(pass, fn), fields
+	return named, fields
+}
+
+// tableVarFields lists, in first-seen order, the fields of named that the
+// initializers of package-level vars referenced from body select.
+func tableVarFields(pass *analysis.Pass, body *ast.BlockStmt, named *types.TypeName) []string {
+	var (
+		fields []string
+		seen   = map[string]bool{}
+	)
+
+	for _, init := range packageVarInits(pass, body) {
+		for _, field := range fieldsOf(pass, init, named) {
+			if !seen[field] {
+				seen[field] = true
+				fields = append(fields, field)
+			}
+		}
+	}
+
+	return fields
+}
+
+// packageVarInits returns, in declaration order, the initializers of the
+// package-level vars body references.
+func packageVarInits(pass *analysis.Pass, body *ast.BlockStmt) []ast.Expr {
+	referenced := packageVarsUsed(pass, body)
+
+	var inits []ast.Expr
+
+	for _, file := range pass.Files {
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+
+			for _, spec := range gen.Specs {
+				value, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+
+				for i, name := range value.Names {
+					if referenced[pass.TypesInfo.Defs[name]] && i < len(value.Values) {
+						inits = append(inits, value.Values[i])
+					}
+				}
+			}
+		}
+	}
+
+	return inits
+}
+
+func packageVarsUsed(pass *analysis.Pass, body *ast.BlockStmt) map[types.Object]bool {
+	referenced := map[types.Object]bool{}
+
+	ast.Inspect(body, func(node ast.Node) bool {
+		ident, ok := node.(*ast.Ident)
+		if !ok {
+			return true
+		}
+
+		if variable, ok := pass.TypesInfo.Uses[ident].(*types.Var); ok && variable.Parent() == pass.Pkg.Scope() {
+			referenced[variable] = true
+		}
+
+		return true
+	})
+
+	return referenced
+}
+
+// fieldsOf lists the fields of named that expr selects off a plain variable.
+func fieldsOf(pass *analysis.Pass, expr ast.Expr, named *types.TypeName) []string {
+	var fields []string
+
+	ast.Inspect(expr, func(node ast.Node) bool {
+		sel, ok := node.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+
+		variable := fieldOwner(pass, sel)
+		if variable == nil {
+			return true
+		}
+
+		owner, ok := types.Unalias(deref(variable.Type())).(*types.Named)
+		if ok && owner.Obj() == named {
+			fields = append(fields, sel.Sel.Name)
+		}
+
+		return true
+	})
+
+	return fields
 }
 
 // receiverName is the receiver's identifier, or "" for an unnamed receiver.

@@ -277,11 +277,10 @@ func (c *Config) containerChildOutput(step *Step, prefix string) (name, site str
 		}
 	}
 
-	for kind, branches := range branchesOf(step) {
-		for i := range branches {
-			if n, s, ok := c.subtreeOutput(&branches[i], prefix+kind+" branch"); ok {
-				return n, s, true
-			}
+	kind, branches := branchesOf(step)
+	for _, branch := range branches {
+		if n, s, ok := c.subtreeOutput(branch, prefix+string(kind)+" branch"); ok {
+			return n, s, true
 		}
 	}
 

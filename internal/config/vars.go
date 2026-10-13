@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -179,21 +180,21 @@ func checkVarFlow(label string, step *Step, before varSet) (varSet, error) {
 // checkBranchFlow checks a concurrent block's branches, each from what preceded
 // the block, and adds what the block yields once it has succeeded to after.
 func checkBranchFlow(label string, step *Step, before, after varSet) (varSet, error) {
-	for kind, branches := range branchesOf(step) {
-		var joined varSet
+	kind, branches := branchesOf(step)
 
-		for i := range branches {
-			out, err := checkVarFlow(fmt.Sprintf("%s (%s branch %d)", label, kind, i), &branches[i], before)
-			if err != nil {
-				return nil, err
-			}
+	var joined varSet
 
-			joined = joinBranch(kind, joined, out, i == 0)
+	for i, branch := range branches {
+		out, err := checkVarFlow(fmt.Sprintf("%s (%s branch %d)", label, kind, i), branch, before)
+		if err != nil {
+			return nil, err
 		}
 
-		for name := range joined {
-			after = after.with(name)
-		}
+		joined = joinBranch(kind, joined, out, i == 0)
+	}
+
+	for name := range joined {
+		after = after.with(name)
 	}
 
 	return after, nil
@@ -217,12 +218,12 @@ func checkHookFlow(hooks Hooks, before, after varSet, label func(name string) st
 // joinBranch folds one branch's captures into what its block yields: all of
 // them for in_parallel:, only the common ones for a block whose outcome is
 // whichever branch won.
-func joinBranch(kind string, joined, branch varSet, first bool) varSet {
+func joinBranch(kind StepKind, joined, branch varSet, first bool) varSet {
 	if first {
 		return branch
 	}
 
-	if kind == "in_parallel" {
+	if kind == StepKindInParallel {
 		for name := range joined {
 			branch = branch.with(name)
 		}
@@ -271,14 +272,14 @@ func validateLoadVarStep(label string, step *Step) error {
 
 // checkStepVars rejects references a step makes to vars nothing supplies.
 //
-// The field list must match what renderStepVars actually substitutes, or a
+// The field list must match what Step.RenderVars actually substitutes, or a
 // reference passes validation and then reaches the outside world verbatim: a
 // `((version))` in a put's params: was neither rejected here nor rendered
 // there, so the resource's out: published a release literally named
 // "((version))".
 func checkStepVars(label string, step *Step, produced map[string]bool) error {
 	for _, field := range varFields(step) {
-		for _, name := range UnresolvedVars(field.value) {
+		for _, name := range UnresolvedVars(*field.value) {
 			if !produced[name] {
 				return fmt.Errorf("%s: %s references ((%s)), which is neither passed with --var/--vars-file nor produced by an earlier load_var: step",
 					label, field.name, name)
@@ -298,26 +299,63 @@ func checkStepVars(label string, step *Step, produced map[string]bool) error {
 	return nil
 }
 
-// varField is one string field a var may appear in.
-type varField struct{ name, value string }
+// varField is one string field a var may appear in, addressed in place so
+// RenderVars can substitute through it.
+type varField struct {
+	name  string
+	value *string
+}
 
-// VarFields lists a step's substitutable string fields, so validation and
-// run-time rendering cannot drift apart. Adding a field here is what makes it
-// both checked and rendered.
+// varFields lists a step's substitutable string fields, so validation
+// (checkStepVars) and run-time rendering (Step.RenderVars) cannot drift apart.
+// Adding a field here is what makes it both checked and rendered.
 func varFields(step *Step) []varField {
 	fields := make([]varField, 0, 4+len(step.Messages))
 	fields = append(fields,
-		varField{"run", step.Run},
-		varField{"image", step.Image},
-		varField{"dir", step.Dir},
-		varField{"file", step.VarFile},
+		varField{"run", &step.Run},
+		varField{"image", &step.Image},
+		varField{"dir", &step.Dir},
+		varField{"file", &step.VarFile},
 	)
 
-	for i, message := range step.Messages {
-		fields = append(fields, varField{fmt.Sprintf("messages[%d]", i), message})
+	for i := range step.Messages {
+		fields = append(fields, varField{fmt.Sprintf("messages[%d]", i), &step.Messages[i]})
 	}
 
 	return fields
+}
+
+// RenderVars returns s with every ((name)) in its var fields and params:
+// substituted from values, unknown references left in place.
+//
+// Slices are cloned before rendering, never written through: s is a copy of
+// the config's step, but a slice field still points at the config's own
+// array — so rendering through it would substitute into the LOADED pipeline,
+// and a long-lived process (steps web) hands that same config to every run.
+// The second run would then find no placeholder left, send the first run's
+// values, and — because the substituted text is what gets hashed — hash
+// identically to it: a false cache hit.
+func (s Step) RenderVars(values map[string]string) Step {
+	if len(values) == 0 {
+		return s
+	}
+
+	if len(s.Messages) > 0 {
+		s.Messages = slices.Clone(s.Messages)
+	}
+
+	for _, field := range varFields(&s) {
+		*field.value = RenderVars(*field.value, values)
+	}
+
+	// params: is where a captured version most often belongs — it is what a
+	// put hands the resource. The literal text `((version))` used to reach the
+	// out: command and publish a release by that name.
+	if rendered, ok := RenderValue(s.Params, values).(map[string]any); ok {
+		s.Params = rendered
+	}
+
+	return s
 }
 
 // unresolvedInValue walks a decoded YAML value — a params: mapping, a nested
