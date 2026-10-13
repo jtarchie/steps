@@ -425,6 +425,7 @@ jobs:
 - **A branch cannot consume a sibling's output.** Concurrent branches have no order between them, so that would be a race; the plan-time answer is "that artifact is not available here" rather than "sometimes". Everything the branches produce IS available to the steps after the block. Two branches declaring the same output name is a load error, including across nested blocks.
 - **The block itself takes no operation fields**, same as `do:`.
 - **`limit:` and `fail_fast:` are hashed**, unlike `attempts:`/`timeout:`/`budget:`. They are not "how hard to try": they change which steps run at all, so a cached result from one setting must not satisfy the other.
+- **A block makes its chain uncacheable** — this one, and every other container (`do:`, `try:`, `race:`, `ensemble:`, `across:`). Its branches run inside it rather than as chain nodes, so the planner cannot tell which of them a cached success covers; every step of the job, before the block as well as after, runs on every build. The run prints `note: in_parallel makes this chain uncacheable (in_parallel block)`, and `steps plan` reads `chain uncacheable` against the steps around it.
 
 To regression-test a parallel block, use `assert.outcome` — `assert.execution` alone structurally cannot catch a swallowed branch failure (both builds run the same branches, so the assert matches either way and then *clears* the difference under test). This is that fixture, the exact shape of the original bug:
 

@@ -335,6 +335,22 @@ func TestTheUncacheableNoteNamesAPutAsAPut(t *testing.T) {
 	}
 }
 
+// A container has no name of its own, and the note read "note:  makes this chain uncacheable", naming nothing; it names the block's kind instead.
+func TestTheUncacheableNoteNamesAContainerByItsKind(t *testing.T) {
+	out := captureStdout(t, func() {
+		block := config.Step{InParallel: &config.InParallel{Steps: []config.Step{{Task: "branch", Run: "true"}}}}
+
+		_, err := foldStepUnskippable(t.Context(), &config.Config{}, block, false)
+		if err != nil {
+			t.Error(err)
+		}
+	})
+
+	if want := "note: in_parallel makes this chain uncacheable (in_parallel block)"; !strings.Contains(out, want) {
+		t.Errorf("note %q, want %q", out, want)
+	}
+}
+
 // A step routing to itself is the tightest loop there is, and max_visits bounds it like any other backward route.
 func TestResolveTransitionSelfRouteExhausts(t *testing.T) {
 	t.Parallel()

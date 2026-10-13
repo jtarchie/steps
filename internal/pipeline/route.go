@@ -182,6 +182,32 @@ func unskippableReason(step config.Step) string {
 		return "when: guard"
 	case step.Routes():
 		return "to: routing"
+	case step.ReadsFrom():
+		return "context: from"
+	case step.LoadVar != "":
+		return "load_var step"
+	case step.Approval != nil:
+		return "approval step"
+	default:
+		return containerReason(step)
+	}
+}
+
+// containerReason is the planner's rule that every block is unskippable (its
+// branches are not chain nodes, so no cached success can be said to cover
+// them), named so the run and `steps plan` agree with it.
+func containerReason(step config.Step) string {
+	switch {
+	case len(step.Across) > 0:
+		return "across block"
+	case step.InParallel != nil:
+		return "in_parallel block"
+	case len(step.Do) > 0:
+		return "do block"
+	case step.Race != nil:
+		return "race block"
+	case step.Ensemble != nil:
+		return "ensemble block"
 	default:
 		return ""
 	}
@@ -204,6 +230,9 @@ func foldStepUnskippable(ctx context.Context, cfg *config.Config, step config.St
 		}
 
 		name := executedStepName(step)
+		if kind, ok := step.Kind(); name == "" && ok {
+			name = string(kind)
+		}
 
 		notef(ctx, "note: %s makes this chain uncacheable (%s)", name, reason)
 		slog.DebugContext(ctx, "job.uncacheable", "step", name, "reason", reason)

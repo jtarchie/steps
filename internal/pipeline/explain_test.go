@@ -11,7 +11,7 @@ import (
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
-// TestExplainNamesWhyAStepWouldRun: `steps plan` says a fix: task can never be cached, and says nothing of the kind about a plain task.
+// TestExplainNamesWhyAStepWouldRun: `steps plan` says a fix: task can never be cached, and that a plain task upstream of it is uncacheable only because of its chain.
 func TestExplainNamesWhyAStepWouldRun(t *testing.T) {
 	t.Parallel()
 
@@ -60,7 +60,7 @@ jobs:
 		reasons[row.Name] = row.Reason
 	}
 
-	for name, want := range map[string]string{"plain": "not yet run", "check": "fix: agent"} {
+	for name, want := range map[string]string{"plain": "chain uncacheable", "check": "fix: agent"} {
 		if reasons[name] != want {
 			t.Errorf("%s: reason %q, want %q (all rows: %+v)", name, reasons[name], want, rows)
 		}
@@ -147,5 +147,65 @@ func TestShortHashAbbreviatesOnlyWhatIsLonger(t *testing.T) {
 
 	if got := shortHash("abc"); got != "abc" {
 		t.Errorf("shortHash(%q) = %q, want it whole", "abc", got)
+	}
+}
+
+// Every container makes its chain uncacheable, and `steps plan` said "not yet
+// run" for every step of such a job however many times it had run — the
+// planner knew and the explanation did not, so a job that never caches read as
+// one that simply had not been tried.
+func TestExplainSaysAContainerMakesTheChainUncacheable(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipe.yml")
+
+	err := os.WriteFile(path, []byte(`
+jobs:
+- name: build
+  plan:
+  - task: first
+    run: "true"
+  - in_parallel:
+      steps:
+      - task: branch
+        run: "true"
+  - task: last
+    run: "true"
+`), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	st, err := sqlite.OpenStore(filepath.Join(dir, "state.db"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = st.Close() })
+
+	rows, err := Explain(context.Background(), cfg, &cfg.Jobs[0], nil, st)
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+
+	reasons := map[string]string{}
+	for _, row := range rows {
+		reasons[row.Kind+" "+row.Name] = row.Reason
+	}
+
+	for name, want := range map[string]string{
+		"task first":   "chain uncacheable",
+		"in_parallel ": "in_parallel block",
+		"task last":    "chain uncacheable",
+	} {
+		if reasons[name] != want {
+			t.Errorf("%s: reason %q, want %q (all rows: %+v)", name, reasons[name], want, rows)
+		}
 	}
 }

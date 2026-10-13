@@ -122,7 +122,7 @@ func explainRows(cfg *config.Config, job *config.Job, chains []merkle.Chain, ski
 				Name:      node.Resource,
 				ShortHash: shortHash(node.Hash),
 				WouldSkip: skippable[node.Hash],
-				Reason:    explainReason(cfg, job, index, skippable[node.Hash]),
+				Reason:    explainReason(cfg, job, index, skippable[node.Hash], chain.Unskippable),
 			})
 		}
 	}
@@ -132,13 +132,21 @@ func explainRows(cfg *config.Config, job *config.Job, chains []merkle.Chain, ski
 
 // explainReason says why a node would run or skip, reusing the same
 // vocabulary the run itself prints (see unskippableReason).
-func explainReason(cfg *config.Config, job *config.Job, index int, wouldSkip bool) string {
+func explainReason(cfg *config.Config, job *config.Job, index int, wouldSkip, chainUnskippable bool) string {
 	if wouldSkip {
 		return "cached"
 	}
 
+	// A step with nothing against it of its own still never caches when
+	// something else on its chain cannot; "not yet run" read as a job that had
+	// simply not been tried, however often it had.
+	notCached := "not yet run"
+	if chainUnskippable {
+		notCached = "chain uncacheable"
+	}
+
 	if index < 0 || index >= len(job.Plan) {
-		return "not yet run"
+		return notCached
 	}
 
 	step := job.Plan[index]
@@ -153,7 +161,7 @@ func explainReason(cfg *config.Config, job *config.Job, index int, wouldSkip boo
 		return "fix: agent"
 	}
 
-	return "not yet run"
+	return notCached
 }
 
 // shortHash abbreviates a node hash to the leading digits, which is all a
