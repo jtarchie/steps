@@ -6,8 +6,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"strconv"
@@ -17,6 +20,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/smithy-go"
@@ -53,6 +57,9 @@ type fakeEC2 struct {
 	alreadyRunning bool
 	// stopDelay is a slow StopInstances, set before the fake is shared.
 	stopDelay time.Duration
+	// onFleet runs as CreateFleet is answered; an error it returns is what
+	// the SDK would have returned instead of the fleet.
+	onFleet func(ctx context.Context) error
 
 	started    []string
 	stopped    []string
@@ -159,11 +166,18 @@ func describeOne(state ec2types.InstanceStateName) *ec2.DescribeInstancesOutput 
 	}
 }
 
-func (f *fakeEC2) CreateFleet(_ context.Context, in *ec2.CreateFleetInput, _ ...func(*ec2.Options)) (*ec2.CreateFleetOutput, error) {
+func (f *fakeEC2) CreateFleet(ctx context.Context, in *ec2.CreateFleetInput, _ ...func(*ec2.Options)) (*ec2.CreateFleetOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	f.fleets = append(f.fleets, in)
+
+	if f.onFleet != nil {
+		err := f.onFleet(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	if f.fleetEmpty {
 		return &ec2.CreateFleetOutput{
@@ -1138,5 +1152,159 @@ func TestLaunchTagsTheInstanceItCreates(t *testing.T) {
 	pre := "worker " + worker.URL + ": launching from template lt-0def4567890abcde (steps-worker=" + want[labelWorker] + ")"
 	if !strings.Contains(notes.String(), pre) {
 		t.Errorf("notes = %q, want %q before the launch", notes.String(), pre)
+	}
+}
+
+// TestLaunchCancelledMidFleetTerminatesTheInstance is the caller leaving
+// while AWS is creating the machine. The SDK would abort the call and hand
+// back an error with no instance id, so nothing could ever terminate what AWS
+// had already accepted: the fleet must outlive the caller, and the machine it
+// made must then be given back rather than handed to a caller that is gone.
+func TestLaunchCancelledMidFleetTerminatesTheInstance(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fake := &fakeEC2{onFleet: func(fleetCtx context.Context) error {
+		cancel()
+
+		if _, ok := fleetCtx.Deadline(); !ok {
+			t.Error("CreateFleet ran with no deadline; want it bounded by acquireTimeout")
+		}
+
+		return fleetCtx.Err()
+	}}
+
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	var logs bytes.Buffer
+
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	_, release, err := launchInstance(ctx, fake, worker)
+	if err == nil {
+		t.Fatal("a launch whose caller left was handed back as usable")
+	}
+
+	if release != nil {
+		t.Error("a launch whose caller left returned a release; the machine is already given back")
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	if len(fake.terminated) != 1 || fake.terminated[0] != "i-0faced0123456789" {
+		t.Errorf("terminated = %v, want the instance the abandoned fleet made", fake.terminated)
+	}
+
+	if !strings.Contains(logs.String(), "i-0faced0123456789") {
+		t.Errorf("logs = %q, want the acquired instance named", logs.String())
+	}
+}
+
+// flakyFleetClient is the real SDK client, retrying without backoff, against
+// an EC2 query API that answers every other CreateFleet with a 500 — plus the
+// ClientToken each CreateFleet carried, read once the server is closed, which
+// waits out its handlers.
+func flakyFleetClient(t *testing.T) (ec2API, func() []string) {
+	t.Helper()
+
+	var tokens []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		err := r.ParseForm()
+		if err != nil {
+			t.Errorf("ParseForm: %v", err)
+		}
+
+		switch r.Form.Get("Action") {
+		case "CreateFleet":
+			tokens = append(tokens, r.Form.Get("ClientToken"))
+
+			if len(tokens)%2 == 1 {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = io.WriteString(w, `<Response><Errors><Error><Code>InternalError</Code><Message>lost</Message></Error></Errors><RequestID>r</RequestID></Response>`)
+
+				return
+			}
+
+			_, _ = io.WriteString(w, `<CreateFleetResponse><requestId>r</requestId><fleetId>fleet-1</fleetId>`+
+				`<fleetInstanceSet><item><instanceIds><item>i-0faced0123456789</item></instanceIds></item></fleetInstanceSet></CreateFleetResponse>`)
+		case "DescribeInstances":
+			_, _ = io.WriteString(w, `<DescribeInstancesResponse><requestId>r</requestId><reservationSet><item><instancesSet><item>`+
+				`<instanceId>i-0faced0123456789</instanceId><instanceState><code>16</code><name>running</name></instanceState>`+
+				`</item></instancesSet></item></reservationSet></DescribeInstancesResponse>`)
+		default:
+			t.Errorf("unexpected action %q", r.Form.Get("Action"))
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := ec2.New(ec2.Options{
+		Region:       "us-east-1",
+		BaseEndpoint: aws.String(server.URL),
+		Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+			return aws.Credentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "fake"}, nil
+		}),
+		Retryer: retry.NewStandard(func(o *retry.StandardOptions) {
+			o.Backoff = retry.BackoffDelayerFunc(func(int, error) (time.Duration, error) { return 0, nil })
+		}),
+	})
+
+	return newEC2Funcs(client), func() []string {
+		server.Close()
+
+		return tokens
+	}
+}
+
+// TestLaunchSendsOneClientTokenPerAttempt drives the real SDK client against
+// a CreateFleet that fails its first answer. The token is what makes AWS treat
+// the SDK's retry as the same request rather than a second machine, so it has
+// to survive the retry unchanged — and it must differ between two launches,
+// or AWS would hand the second launch the first one's machine.
+func TestLaunchSendsOneClientTokenPerAttempt(t *testing.T) {
+	api, tokensSeen := flakyFleetClient(t)
+
+	worker, err := ParseWorker("aws://launch/lt-0def4567890abcde")
+	if err != nil {
+		t.Fatalf("ParseWorker: %v", err)
+	}
+
+	for range 2 {
+		_, _, err = launchInstance(context.Background(), api, worker)
+		if err != nil {
+			t.Fatalf("launchInstance: %v", err)
+		}
+	}
+
+	tokens := tokensSeen()
+
+	if len(tokens) != 4 {
+		t.Fatalf("CreateFleet was asked %d times, want a failure and a retry per launch", len(tokens))
+	}
+
+	// The SDK fills in a random token of its own when none is given, which
+	// would satisfy every check below; the worker's label is how this test
+	// knows the token is the one launchInstance chose.
+	prefix := worker.launchLabels()[labelWorker] + "-"
+
+	malformed := slices.IndexFunc(tokens, func(token string) bool {
+		return !strings.HasPrefix(token, prefix) || len(token) > 64
+	})
+	if malformed >= 0 {
+		t.Fatalf("ClientToken = %q, want at most 64 characters starting %q", tokens[malformed], prefix)
+	}
+
+	if tokens[0] != tokens[1] || tokens[2] != tokens[3] {
+		t.Errorf("tokens = %v, want a retry to repeat its attempt's token", tokens)
+	}
+
+	if tokens[0] == tokens[2] {
+		t.Errorf("tokens = %v, want two launches to send different tokens", tokens)
 	}
 }

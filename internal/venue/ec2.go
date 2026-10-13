@@ -17,6 +17,8 @@ package venue
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -258,7 +260,16 @@ func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, fun
 	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: launching from template %s (%s=%s)",
 		worker.URL, worker.Template, labelWorker, labels[labelWorker]))
 
-	out, err := api.CreateFleet(ctx, fleetRequest(worker, labels))
+	request := fleetRequest(worker, labels)
+	request.ClientToken = aws.String(launchToken(labels))
+
+	// Not the caller's context: cancelled once AWS has accepted, the SDK
+	// returns an error and no instance id, leaving a billing machine nothing
+	// can name. Bounded instead, and the caller checked once the id is known.
+	fleetCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), acquireTimeout)
+	defer cancel()
+
+	out, err := api.CreateFleet(fleetCtx, request)
 	if err != nil {
 		return Worker{}, nil, fmt.Errorf("launching a worker for %q: %w", worker.URL, err)
 	}
@@ -266,6 +277,14 @@ func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, fun
 	instance := firstFleetInstance(out)
 	if instance == "" {
 		return Worker{}, nil, fmt.Errorf("%w %q: %s", errNoCapacity, worker.URL, fleetErrors(out))
+	}
+
+	if ctx.Err() != nil {
+		slog.WarnContext(ctx, "venue.launch_abandoned", "instance", instance, "worker", worker.URL, "error", ctx.Err())
+		//nolint:contextcheck // as stopInstance: the caller's context is the problem
+		terminateInstance(api, worker, instance)
+
+		return Worker{}, nil, fmt.Errorf("launching a worker for %q: %w", worker.URL, ctx.Err())
 	}
 
 	// No state to leave: a fleet's instance did not exist a moment ago.
@@ -299,6 +318,16 @@ func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, fun
 	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: launched %s", worker.URL, instance))
 
 	return worker.asStatic(instance), release, nil
+}
+
+// launchToken is CreateFleet's idempotency key: one per launch, so the SDK's
+// retry of a request whose answer was lost is the same launch rather than a
+// second machine, while the next launch is never answered with this one's.
+func launchToken(labels map[string]string) string {
+	nonce := make([]byte, 8)
+	_, _ = rand.Read(nonce)
+
+	return labels[labelWorker] + "-" + hex.EncodeToString(nonce)
 }
 
 // terminateInstance is stopInstance for a machine that should not exist at
