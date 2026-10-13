@@ -55,7 +55,7 @@ func (a *ApprovalsListCmd) Run() error {
 
 	for _, approval := range pending {
 		_, _ = fmt.Fprintf(writer, "%d\t%s\t%s\t%s\n",
-			approval.ID, approval.JobName, approval.RequestedAt, approval.Message)
+			approval.ID, approval.JobName, stampSeconds(approval.RequestedAt), approval.Message)
 	}
 
 	err = writer.Flush()
@@ -81,7 +81,7 @@ type ApproveCmd struct {
 
 // Run approves the named approval.
 func (a *ApproveCmd) Run() error {
-	return decideApproval(a.ReadFlags, a.ID, "approved", a.Reason)
+	return decideApproval(a.ReadFlags, a.ID, store.ApprovalApproved, a.Reason)
 }
 
 // RejectCmd records a no.
@@ -93,11 +93,11 @@ type RejectCmd struct {
 
 // Run rejects the named approval.
 func (r *RejectCmd) Run() error {
-	return decideApproval(r.ReadFlags, r.ID, "rejected", r.Reason)
+	return decideApproval(r.ReadFlags, r.ID, store.ApprovalRejected, r.Reason)
 }
 
 // decideApproval records a decision against a pipeline's store.
-func decideApproval(flags ReadFlags, id int64, status, reason string) error {
+func decideApproval(flags ReadFlags, id int64, status store.ApprovalStatus, reason string) error {
 	st, cleanup, err := openRecorded(flags)
 	if err != nil {
 		return err

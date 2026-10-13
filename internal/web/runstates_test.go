@@ -16,7 +16,7 @@ func TestALiveRunsSpendSaysSoFar(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-live", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-live", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestAnErroredRunKeepsItsErrorInTheHead(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-errored", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-errored", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

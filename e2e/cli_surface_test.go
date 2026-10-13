@@ -287,9 +287,9 @@ func jobPaused(t *testing.T, path, job string) bool {
 
 	st := openStoreFor(t, path)
 
-	paused, err := st.IsJobPaused(t.Context(), job)
+	paused, err := st.IsJobHeld(t.Context(), job)
 	if err != nil {
-		t.Fatalf("IsJobPaused: %v", err)
+		t.Fatalf("IsJobHeld: %v", err)
 	}
 
 	return paused

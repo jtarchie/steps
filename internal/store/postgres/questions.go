@@ -67,21 +67,21 @@ func (s *Store) AnswerQuestion(ctx context.Context, id int64, answer, by string)
 			id, answer, strings.Join(question.Options, ", "))
 	}
 
-	return s.closeQuestion(ctx, id, "answered", answer, by)
+	return s.closeQuestion(ctx, id, store.QuestionAnswered, answer, by)
 }
 
 // CloseQuestion resolves a question nobody answered; see the sqlite driver's
 // for why this stays apart from AnswerQuestion.
-func (s *Store) CloseQuestion(ctx context.Context, id int64, status, answer, by string) error {
+func (s *Store) CloseQuestion(ctx context.Context, id int64, status store.QuestionStatus, answer, by string) error {
 	return s.closeQuestion(ctx, id, status, answer, by)
 }
 
-func (s *Store) closeQuestion(ctx context.Context, id int64, status, answer, by string) error {
+func (s *Store) closeQuestion(ctx context.Context, id int64, status store.QuestionStatus, answer, by string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE questions SET status = $1, answered_at = $2, answered_by = $3, answer = $4
 		WHERE id = $5 AND status = 'pending'
 		  AND EXISTS (SELECT 1 FROM runs WHERE id = questions.run_id AND pipeline_id = $6)
-	`, status, now(), clean(by), nullable(answer), id, s.pipelineID)
+	`, string(status), now(), clean(by), nullable(answer), id, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not resolve question %d: %w", id, err)
 	}
@@ -146,8 +146,6 @@ const questionColumns = `
 	FROM questions q JOIN runs r ON r.id = q.run_id
 `
 
-// scanQuestion renders the timestamps in the sqlite driver's sortableNano,
-// the layout it stores this table's in.
 func scanQuestion(row rowScanner) (store.Question, error) {
 	var (
 		question store.Question
@@ -163,8 +161,7 @@ func scanQuestion(row rowScanner) (store.Question, error) {
 		return store.Question{}, err //nolint:wrapcheck // every caller wraps with what it was reading
 	}
 
-	question.AskedAt = asked.UTC().Format(sortableNano)
-	question.AnsweredAt = stamp(answered, sortableNano)
+	question.AskedAt, question.AnsweredAt = asked.UTC(), utc(answered)
 	question.Options, err = store.DecodeOptions(options)
 
 	return question, err //nolint:wrapcheck // DecodeOptions says what it was reading

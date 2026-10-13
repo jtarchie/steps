@@ -74,7 +74,7 @@ func seedDrift(t *testing.T, pipeline *Pipeline, before, after, sha, hash string
 		{"green", before, "hash-old", "succeeded"},
 		{"red", sha, hash, "failed"},
 	} {
-		err := pipeline.Store.StartRun(ctx, run.id, "build", "", run.sha)
+		err := pipeline.Store.StartRun(ctx, store.NewRun{ID: run.id, JobName: "build", ConfigSHA: run.sha})
 		if err != nil {
 			t.Fatalf("StartRun %s: %v", run.id, err)
 		}
@@ -84,7 +84,7 @@ func seedDrift(t *testing.T, pipeline *Pipeline, before, after, sha, hash string
 			{Type: events.TypeStepFinished, StepIndex: 0, StepName: "build", StepKind: "task", StepID: 1, Status: run.status, Hash: run.hash},
 		})
 
-		err = pipeline.Store.FinishRun(ctx, run.id, run.status)
+		err = pipeline.Store.FinishRun(ctx, run.id, store.RunStatus(run.status))
 		if err != nil {
 			t.Fatalf("FinishRun %s: %v", run.id, err)
 		}
@@ -223,14 +223,14 @@ func seedRuns(t *testing.T, pipeline *Pipeline, greenSHA, redSHA string, green, 
 		{"green", greenSHA, "succeeded", green},
 		{"red", redSHA, "failed", red},
 	} {
-		err := pipeline.Store.StartRun(ctx, run.id, "build", "", run.sha)
+		err := pipeline.Store.StartRun(ctx, store.NewRun{ID: run.id, JobName: "build", ConfigSHA: run.sha})
 		if err != nil {
 			t.Fatalf("StartRun %s: %v", run.id, err)
 		}
 
 		appendEvents(t, pipeline.Store, run.id, run.rows)
 
-		err = pipeline.Store.FinishRun(ctx, run.id, run.status)
+		err = pipeline.Store.FinishRun(ctx, run.id, store.RunStatus(run.status))
 		if err != nil {
 			t.Fatalf("FinishRun %s: %v", run.id, err)
 		}

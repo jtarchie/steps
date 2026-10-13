@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
@@ -61,12 +62,12 @@ func TestRunsPageScopedToItsPipeline(t *testing.T) {
 
 	t.Cleanup(func() { _ = other.Close() })
 
-	err = other.StartRun(ctx, "run-foreign", "build", "/tmp/ws", "")
+	err = other.StartRun(ctx, store.NewRun{ID: "run-foreign", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun foreign: %v", err)
 	}
 
-	err = pipeline.Store.StartRun(ctx, "run-mine", "build", "/tmp/ws", "")
+	err = pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-mine", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun mine: %v", err)
 	}

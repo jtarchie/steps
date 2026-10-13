@@ -19,7 +19,7 @@ func (s *Server) handleJobs(c *echo.Context) error {
 		return fmt.Errorf("web: %w", err)
 	}
 
-	paused, err := pipeline.Store.PausedJobs(ctx)
+	paused, err := pipeline.Store.HeldJobs(ctx)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
@@ -190,7 +190,7 @@ func (s *Server) handleJobDetail(c *echo.Context) error {
 		return fmt.Errorf("web: %w", err)
 	}
 
-	paused, err := pipeline.Store.PausedJobs(ctx)
+	paused, err := pipeline.Store.HeldJobs(ctx)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}

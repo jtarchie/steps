@@ -145,7 +145,7 @@ func (s suite) TestCheckedResourcesListsEachCursor(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	for name, version := range map[string]string{"repo": `{"ref":"b"}`, "image": `{"digest":"a"}`} {
+	for name, version := range map[string]store.VersionKey{"repo": `{"ref":"b"}`, "image": `{"digest":"a"}`} {
 		err := st.RecordCheckedVersion(ctx, name, version)
 		if err != nil {
 			t.Fatalf("RecordCheckedVersion: %v", err)
@@ -165,18 +165,18 @@ func (s suite) TestHasPassedVersionSetNeedsOneBuild(t *testing.T) {
 
 	ctx := context.Background()
 	st := s.open(t, "test")
-	want := map[string]string{"repo": `{"ref":"a"}`, "image": `{"digest":"b"}`}
+	want := map[string]store.VersionKey{"repo": `{"ref":"a"}`, "image": `{"digest":"b"}`}
 
 	pass := func(resource, build string) {
 		t.Helper()
 
-		err := st.RecordPassedVersion(ctx, "unit", resource, want[resource], build)
+		err := st.RecordPassedVersion(ctx, store.Pass{JobName: "unit", Resource: resource, Version: want[resource], BuildID: build})
 		if err != nil {
 			t.Fatalf("RecordPassedVersion: %v", err)
 		}
 	}
 
-	assertPassedSet := func(set map[string]string, expected bool, why string) {
+	assertPassedSet := func(set map[string]store.VersionKey, expected bool, why string) {
 		t.Helper()
 
 		got, err := st.HasPassedVersionSet(ctx, "unit", set)
@@ -203,9 +203,9 @@ func (s suite) TestTheCheckedVersionMovesOnlyFromWhatWasRead(t *testing.T) {
 	st := s.open(t, "test")
 
 	for _, step := range []struct {
-		expected string
+		expected store.VersionKey
 		found    bool
-		next     string
+		next     store.VersionKey
 		moves    bool
 	}{
 		{"", false, "a", true},
@@ -213,7 +213,7 @@ func (s suite) TestTheCheckedVersionMovesOnlyFromWhatWasRead(t *testing.T) {
 		{"stale", true, "b", false},
 		{"a", true, "b", true},
 	} {
-		moved, err := st.CompareAndSetCheckedVersion(ctx, "push", step.expected, step.found, step.next)
+		moved, err := st.CompareAndSetCheckedVersion(ctx, store.CheckedSwap{Resource: "push", Expected: step.expected, ExpectedFound: step.found, Next: step.next})
 		if err != nil || moved != step.moves {
 			t.Errorf("from %q (found=%v) to %q: moved=%v err=%v, want moved=%v", step.expected, step.found, step.next, moved, err, step.moves)
 		}
@@ -243,7 +243,7 @@ func (s suite) TestPassedVersionsAreNewestFirstWithinASecond(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err = st.RecordPassedVersion(ctx, "build", "repo", encoded, "b1")
+		err = st.RecordPassedVersion(ctx, store.Pass{JobName: "build", Resource: "repo", Version: encoded, BuildID: "b1"})
 		if err != nil {
 			t.Fatalf("RecordPassedVersion %d: %v", i, err)
 		}
@@ -268,7 +268,7 @@ func (s suite) TestPassedVersionsAreNewestFirstWithinASecond(t *testing.T) {
 	}
 
 	for i, row := range page {
-		want := fmt.Sprintf(`{"n":"v%02d"}`, recorded-1-i)
+		want := store.VersionKey(fmt.Sprintf(`{"n":"v%02d"}`, recorded-1-i))
 		if row.Version != want {
 			t.Fatalf("PassedVersions[%d] = %s, want %s — the newest recorded comes first, ties or not", i, row.Version, want)
 		}
@@ -381,7 +381,7 @@ func (s suite) TestResourceVersionsJSONPreservesAWideID(t *testing.T) {
 		t.Fatalf("got %d rows, want 2", len(raw))
 	}
 
-	if !strings.Contains(raw[1], "1234567890123456789") {
+	if !strings.Contains(string(raw[1]), "1234567890123456789") {
 		t.Errorf("raw row 1 = %q, want the wide id preserved exactly", raw[1])
 	}
 
@@ -466,7 +466,7 @@ func (s suite) TestRecordVersionsPrunesOldestAndCascades(t *testing.T) {
 	recordN(t, st, "items", "1", "2", "3")
 
 	// The oldest version has been passed by a job.
-	err = st.RecordPassedVersion(ctx, "build", "items", oldest, "build-1")
+	err = st.RecordPassedVersion(ctx, store.Pass{JobName: "build", Resource: "items", Version: oldest, BuildID: "build-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +527,7 @@ func (s suite) TestUsingAVersionIsNotTheSameAsCheckingForIt(t *testing.T) {
 		t.Fatalf("filing a version nothing had checked: %v", err)
 	}
 
-	err = st.RecordPassedVersion(ctx, "build", "items", version, "build-1")
+	err = st.RecordPassedVersion(ctx, store.Pass{JobName: "build", Resource: "items", Version: version, BuildID: "build-1"})
 	if err != nil {
 		t.Fatalf("recording a passed version nothing had filed: %v", err)
 	}
@@ -621,7 +621,7 @@ func (s suite) TestTheMarkCannotDevelopHoles(t *testing.T) {
 	}
 }
 
-func highestOrder(orders map[string]int64) int64 {
+func highestOrder(orders map[store.VersionKey]int64) int64 {
 	var highest int64
 
 	for _, order := range orders {
@@ -752,7 +752,7 @@ func (s suite) TestPruneNeverEatsTheReportedWindow(t *testing.T) {
 	}
 }
 
-func mustEncode(t *testing.T, version map[string]any) string {
+func mustEncode(t *testing.T, version map[string]any) store.VersionKey {
 	t.Helper()
 
 	encoded, err := store.EncodeVersion(version)
@@ -850,7 +850,7 @@ func (s suite) TestGreenVersionsIsTheIntersection(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			err = st.RecordPassedVersion(ctx, job, "items", encoded, "b")
+			err = st.RecordPassedVersion(ctx, store.Pass{JobName: job, Resource: "items", Version: encoded, BuildID: "b"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -893,7 +893,7 @@ func (s suite) TestRunInputsAreKeptPerGet(t *testing.T) {
 
 	const run = "PERBUILD02"
 
-	err := st.StartRun(ctx, run, "build", "/tmp/web", "")
+	err := st.StartRun(ctx, store.NewRun{ID: run, JobName: "build", Workspace: "/tmp/web"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -903,7 +903,7 @@ func (s suite) TestRunInputsAreKeptPerGet(t *testing.T) {
 		{Input: "baseline", Resource: "repo", Version: `{"ref":"v1"}`},
 		{Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
 	} {
-		err = st.RecordRunInput(ctx, run, input.Input, input.Resource, input.Version)
+		err = st.RecordRunInput(ctx, run, store.RunInput{Input: input.Input, Resource: input.Resource, Version: input.Version})
 		if err != nil {
 			t.Fatalf("RecordRunInput %+v: %v", input, err)
 		}
@@ -946,7 +946,11 @@ func (s suite) TestVersionRunsAreTheRunsThatTookEachVersion(t *testing.T) {
 	web := s.open(t, "web")
 	infra := s.open(t, "infra")
 
-	for _, run := range []struct{ id, version, status string }{
+	for _, run := range []struct {
+		id      string
+		version store.VersionKey
+		status  store.RunStatus
+	}{
 		{"VRUNS01", `{"ref":"v1"}`, "aborted"},
 		{"VRUNS02", `{"ref":"v1"}`, "succeeded"},
 		{"VRUNS03", `{"ref":"v2"}`, "failed"},
@@ -993,17 +997,17 @@ func (s suite) TestVersionRunsAreTheRunsThatTookEachVersion(t *testing.T) {
 }
 
 // recordInputRun records a finished build run that took version of resource.
-func recordInputRun(t *testing.T, st store.Store, runID, resource, version, status string) {
+func recordInputRun(t *testing.T, st store.Store, runID, resource string, version store.VersionKey, status store.RunStatus) {
 	t.Helper()
 
 	ctx := context.Background()
 
-	err := st.StartRun(ctx, runID, "build", "/tmp/web", "")
+	err := st.StartRun(ctx, store.NewRun{ID: runID, JobName: "build", Workspace: "/tmp/web"})
 	if err != nil {
 		t.Fatalf("StartRun %s: %v", runID, err)
 	}
 
-	err = st.RecordRunInput(ctx, runID, resource, resource, version)
+	err = st.RecordRunInput(ctx, runID, store.RunInput{Input: resource, Resource: resource, Version: version})
 	if err != nil {
 		t.Fatalf("RecordRunInput %s: %v", runID, err)
 	}
@@ -1014,7 +1018,7 @@ func recordInputRun(t *testing.T, st store.Store, runID, resource, version, stat
 	}
 }
 
-func assertLastCheckedVersion(t *testing.T, st store.Store, resourceName string, wantFound bool, wantVersion string) {
+func assertLastCheckedVersion(t *testing.T, st store.Store, resourceName string, wantFound bool, wantVersion store.VersionKey) {
 	t.Helper()
 
 	last, found, err := st.LastChecked(context.Background(), resourceName)

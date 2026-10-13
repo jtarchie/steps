@@ -13,7 +13,7 @@ import (
 // versionRow is one version on a resource page with one cell per job that
 // gets the resource, in the order the jobs are configured.
 type versionRow struct {
-	Version string
+	Version store.VersionKey
 	Cells   []versionCell
 }
 
@@ -126,7 +126,7 @@ func runlessState(c consumer, order, mark, newest int64, pinned, queued bool) st
 
 // versionRows builds the matrix: versions newest first, one cell per
 // consumer.
-func versionRows(ctx context.Context, st store.Store, resource string, versions []string, consumers []consumer) ([]versionRow, error) {
+func versionRows(ctx context.Context, st store.Store, resource string, versions []store.VersionKey, consumers []consumer) ([]versionRow, error) {
 	rows := make([]versionRow, len(versions))
 	for i, version := range versions {
 		rows[i] = versionRow{Version: version, Cells: make([]versionCell, len(consumers))}
@@ -176,7 +176,7 @@ func versionRows(ctx context.Context, st store.Store, resource string, versions 
 }
 
 // fillColumn draws one consumer's cell on every row.
-func fillColumn(rows []versionRow, col int, c consumer, runs map[string][]store.RunRow, orders map[string]int64, mark, newest int64, queued bool) {
+func fillColumn(rows []versionRow, col int, c consumer, runs map[store.VersionKey][]store.RunRow, orders map[store.VersionKey]int64, mark, newest int64, queued bool) {
 	for i := range rows {
 		cell := versionCell{Job: c.Job, Runs: runs[rows[i].Version]}
 		if len(cell.Runs) == 0 {
@@ -189,13 +189,13 @@ func fillColumn(rows []versionRow, col int, c consumer, runs map[string][]store.
 
 // runsByJob indexes runs as [job][version], each list newest first because
 // VersionRuns already is.
-func runsByJob(runs []store.VersionRun) map[string]map[string][]store.RunRow {
-	byJob := map[string]map[string][]store.RunRow{}
+func runsByJob(runs []store.VersionRun) map[string]map[store.VersionKey][]store.RunRow {
+	byJob := map[string]map[store.VersionKey][]store.RunRow{}
 
 	for _, run := range runs {
 		job := run.Run.JobName
 		if byJob[job] == nil {
-			byJob[job] = map[string][]store.RunRow{}
+			byJob[job] = map[store.VersionKey][]store.RunRow{}
 		}
 
 		byJob[job][run.Version] = append(byJob[job][run.Version], run.Run)
@@ -206,7 +206,7 @@ func runsByJob(runs []store.VersionRun) map[string]map[string][]store.RunRow {
 
 // matchesPin reports whether a stored version carries every field of a pin,
 // compared as text the way a pin is written.
-func matchesPin(versionJSON string, pin map[string]string) bool {
+func matchesPin(versionJSON store.VersionKey, pin map[string]string) bool {
 	if pin == nil {
 		return false
 	}

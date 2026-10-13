@@ -13,7 +13,6 @@
 package store
 
 import (
-	"context"
 	"errors"
 	"unicode/utf8"
 )
@@ -31,11 +30,6 @@ type Meta interface {
 	// share a database — which is how a caller groups handles before asking
 	// one Reader about several pipelines at once.
 	Description() string
-
-	// SetSourcePath records where this pipeline's YAML lives, so a reader of
-	// the database can tell two checkouts apart. Only a command that LOADED
-	// the pipeline calls it.
-	SetSourcePath(ctx context.Context, source string) error
 
 	// Reader reads across every pipeline in this database, unscoped by
 	// construction.

@@ -73,7 +73,7 @@ func (f *putFixture) passed(t *testing.T, job string) map[string]bool {
 
 	got := map[string]bool{}
 	for _, row := range rows {
-		got[row.Resource+"="+row.Version] = true
+		got[row.Resource+"="+string(row.Version)] = true
 	}
 
 	return got
@@ -139,7 +139,7 @@ jobs:
 	}
 
 	for i := 1; i < 5; i++ {
-		prev, next := fmt.Sprintf(`{"n":"img-%d"}`, i), fmt.Sprintf(`{"n":"img-%d"}`, i+1)
+		prev, next := store.VersionKey(fmt.Sprintf(`{"n":"img-%d"}`, i)), store.VersionKey(fmt.Sprintf(`{"n":"img-%d"}`, i+1))
 		if orders[prev] >= orders[next] {
 			t.Errorf("puts are not ordered by when they ran: %v", orders)
 

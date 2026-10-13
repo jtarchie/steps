@@ -141,7 +141,7 @@ func TestRootFeedSpansPipelines(t *testing.T) {
 		{pipelines[1], "infra-1", "infra-job"},
 		{pipelines[0], "app-2", "app-job"},
 	} {
-		err := seed.pipeline.Store.StartRun(ctx, seed.id, seed.job, t.TempDir(), "")
+		err := seed.pipeline.Store.StartRun(ctx, store.NewRun{ID: seed.id, JobName: seed.job, Workspace: t.TempDir()})
 		if err != nil {
 			t.Fatalf("StartRun(%s): %v", seed.id, err)
 		}
@@ -190,7 +190,7 @@ func TestRootFeedIgnoresUnservedPipelines(t *testing.T) {
 
 	t.Cleanup(func() { _ = other.Close() })
 
-	err = other.StartRun(t.Context(), "unserved-1", "secret", t.TempDir(), "")
+	err = other.StartRun(t.Context(), store.NewRun{ID: "unserved-1", JobName: "secret", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestSearchSpansServedPipelines(t *testing.T) {
 
 	server, pipelines := testPipelines(t, "app", "infra")
 
-	err := pipelines[1].Store.StartRun(t.Context(), "infra-run", "infra-job", t.TempDir(), "")
+	err := pipelines[1].Store.StartRun(t.Context(), store.NewRun{ID: "infra-run", JobName: "infra-job", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestSearchReachesOtherPipelinesPastTheCap(t *testing.T) {
 	for i := range searchHitLimit + 5 {
 		id := fmt.Sprintf("app-run-%02d", i)
 
-		err := pipelines[0].Store.StartRun(t.Context(), id, "app-job", t.TempDir(), "")
+		err := pipelines[0].Store.StartRun(t.Context(), store.NewRun{ID: id, JobName: "app-job", Workspace: t.TempDir()})
 		if err != nil {
 			t.Fatalf("StartRun(%s): %v", id, err)
 		}
@@ -330,7 +330,7 @@ func TestRunPageMarksAWrappedUpStep(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-wrap", "build", t.TempDir(), "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-wrap", JobName: "build", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -360,7 +360,7 @@ func TestRunPageLeavesAnOrdinaryStepAlone(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-ok", "build", t.TempDir(), "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-ok", JobName: "build", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -637,7 +637,7 @@ func TestSpendRowMarksAStepThatFailedAfterItsLastAnswer(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-ceiling", "build", t.TempDir(), "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-ceiling", JobName: "build", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -689,7 +689,7 @@ func TestSpendRowLeavesASucceededStepAlone(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-fine", "build", t.TempDir(), "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-fine", JobName: "build", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -741,7 +741,7 @@ func TestSpendPanelShowsTheCeilingWhenTheConfigStillMatches(t *testing.T) {
 		t.Fatal("the loaded config carries no revision to match against")
 	}
 
-	err := pipeline.Store.StartRun(ctx, "run-cap", "review", t.TempDir(), sha)
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-cap", JobName: "review", Workspace: t.TempDir(), ConfigSHA: sha})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -857,7 +857,7 @@ func TestSpendPanelWithholdsTheCeilingAfterAnEdit(t *testing.T) {
 		t.Fatalf("RecordRevision: %v", err)
 	}
 
-	err = pipeline.Store.StartRun(ctx, "run-old", "review", t.TempDir(), "a-sha-from-an-older-file")
+	err = pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-old", JobName: "review", Workspace: t.TempDir(), ConfigSHA: "a-sha-from-an-older-file"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -913,7 +913,7 @@ func TestLiveStreamCarriesWrappedUp(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-live-wrap", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-live-wrap", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -948,7 +948,7 @@ func TestLiveStreamCarriesWrappedUpForACachedStep(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-cached-wrap", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-cached-wrap", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1015,7 +1015,7 @@ func TestSpendPanelCeilingReachesAnAcrossCell(t *testing.T) {
 
 	sha := pipeline.Config().Revision.SHA
 
-	err := pipeline.Store.StartRun(ctx, "run-cell", "review", t.TempDir(), sha)
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-cell", JobName: "review", Workspace: t.TempDir(), ConfigSHA: sha})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1058,7 +1058,7 @@ func TestSpendPanelDoesNotBlameASiblingCell(t *testing.T) {
 	server, pipeline := agentSpendPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-cells", "review", t.TempDir(), "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-cells", JobName: "review", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1103,7 +1103,7 @@ func TestSpendPanelSaysNothingWithoutAFinishReason(t *testing.T) {
 	server, pipeline := agentSpendPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-quiet", "review", t.TempDir(), "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-quiet", JobName: "review", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1146,7 +1146,7 @@ func TestSpendPanelDoesNotBlameASiblingMember(t *testing.T) {
 	server, pipeline := agentSpendPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-members", "review", t.TempDir(), "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-members", JobName: "review", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1330,7 +1330,7 @@ func TestSpendPanelKnowsTheEnsembleJudgesCeiling(t *testing.T) {
 		t.Fatal("the loaded config carries no revision to match against")
 	}
 
-	err := pipeline.Store.StartRun(ctx, "run-judge", "gate", t.TempDir(), sha)
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-judge", JobName: "gate", Workspace: t.TempDir(), ConfigSHA: sha})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1431,7 +1431,7 @@ func TestRunPageShowsATimeoutCountdownForABoundedRunningAgentStep(t *testing.T) 
 	server, pipeline, sha := timeoutPipelineSHA(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-deadline", "review", t.TempDir(), sha)
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-deadline", JobName: "review", Workspace: t.TempDir(), ConfigSHA: sha})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1462,7 +1462,7 @@ func TestRunPageOmitsTheCountdownOnceAStepHasFinished(t *testing.T) {
 	server, pipeline, sha := timeoutPipelineSHA(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-done", "review", t.TempDir(), sha)
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-done", JobName: "review", Workspace: t.TempDir(), ConfigSHA: sha})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1662,7 +1662,7 @@ func pausedWithHistory(t *testing.T, pipeline *Pipeline) {
 		t.Fatalf("Pause: %v", err)
 	}
 
-	err = pipeline.Store.StartRun(ctx, "run-1", "app-job", "/tmp/ws", "")
+	err = pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-1", JobName: "app-job", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1722,7 +1722,7 @@ func TestRunPageMarksACompactedStep(t *testing.T) {
 		{id: "run-compacted", result: map[string]any{"response": "ok", "compactions": 2, "compaction_stalled": true}},
 		{id: "run-plain", result: map[string]any{"response": "ok"}},
 	} {
-		err := pipeline.Store.StartRun(ctx, run.id, "build", t.TempDir(), "")
+		err := pipeline.Store.StartRun(ctx, store.NewRun{ID: run.id, JobName: "build", Workspace: t.TempDir()})
 		if err != nil {
 			t.Fatalf("StartRun: %v", err)
 		}
@@ -1758,7 +1758,7 @@ func TestLiveStreamCarriesCompacted(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-live-compact", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-live-compact", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

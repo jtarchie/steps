@@ -134,7 +134,7 @@ func TestARedJobBeingRebuiltStaysRed(t *testing.T) {
 
 	finishedRun(t, pipeline, "b-1", "build", "failed")
 
-	err := pipeline.Store.StartRun(ctx, "b-2", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "b-2", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -200,12 +200,12 @@ func finishedRun(t *testing.T, pipeline *Pipeline, id, job, status string) {
 
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, id, job, "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: id, JobName: job})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = pipeline.Store.FinishRun(ctx, id, status)
+	err = pipeline.Store.FinishRun(ctx, id, store.RunStatus(status))
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}

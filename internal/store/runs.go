@@ -11,14 +11,14 @@ import (
 type Runs interface {
 	// StartRun mints a run. An id some run already holds is ErrRunExists,
 	// never an overwrite.
-	StartRun(ctx context.Context, id, jobName, workspaceDir, configSHA string) error
+	StartRun(ctx context.Context, run NewRun) error
 	// ResumeRun continues a run this pipeline already has, ErrNoSuchRun
 	// otherwise.
 	ResumeRun(ctx context.Context, id, workspaceDir, configSHA string) error
-	FinishRun(ctx context.Context, id, status string) error
+	FinishRun(ctx context.Context, id string, status RunStatus) error
 	// RecordRunStep marks a step of a run done. buildID is "<run>#0" inside
 	// the build a get triggers and the bare run id before it.
-	RecordRunStep(ctx context.Context, runID, buildID string, index int, name string) error
+	RecordRunStep(ctx context.Context, runID string, step RunStep) error
 	RecordRunParent(ctx context.Context, runID, parentID string) error
 	// RecordRunRerun marks a run as a rerun of another (fly rerun-build).
 	RecordRunRerun(ctx context.Context, runID, originalID string) error
@@ -31,6 +31,31 @@ type Runs interface {
 	RunsUsingNode(ctx context.Context, hash string, limit int) ([]RunRow, error)
 	FindRunRow(ctx context.Context, id string) (RunRow, bool, error)
 	FirstRunSince(ctx context.Context, jobName string, since time.Time) (RunRow, bool, error)
+}
+
+// RunStatus is where a run is: running until FinishRun records how it ended.
+// There is no errored: a run the machinery broke is recorded failed, and only
+// a step's own status tells the two apart.
+type RunStatus string
+
+// The statuses a run is recorded with.
+const (
+	RunRunning   RunStatus = "running"
+	RunSucceeded RunStatus = "succeeded"
+	RunFailed    RunStatus = "failed"
+	RunAborted   RunStatus = "aborted"
+)
+
+// NewRun is what StartRun mints a run from.
+type NewRun struct {
+	ID      string
+	JobName string
+	// Workspace is the directory the run's steps execute in, and what a
+	// resume continues from.
+	Workspace string
+	// ConfigSHA is the configuration the run executes, empty for a caller
+	// that loaded no pipeline file.
+	ConfigSHA string
 }
 
 // RunStep is one step a run finished. Index is relative to the walk it ran
@@ -48,7 +73,7 @@ type RunRow struct {
 	ID         string
 	JobName    string
 	Workspace  string
-	Status     string
+	Status     RunStatus
 	StartedAt  time.Time
 	FinishedAt time.Time
 	// ParentRunID is the run a replay forked from, empty for an ordinary run.

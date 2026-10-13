@@ -70,7 +70,7 @@ func runVersions(t *testing.T, st store.Store, job, resource string) [][]string 
 
 		for _, input := range inputs {
 			if input.Resource == resource {
-				versions = append(versions, input.Version)
+				versions = append(versions, string(input.Version))
 			}
 		}
 

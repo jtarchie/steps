@@ -181,7 +181,7 @@ func recordRunInput(ctx context.Context, st store.Versions, inputName, resourceN
 		return
 	}
 
-	err := st.RecordRunInput(context.WithoutCancel(ctx), events.RunID(ctx), inputName, resourceName, key)
+	err := st.RecordRunInput(context.WithoutCancel(ctx), events.RunID(ctx), store.RunInput{Input: inputName, Resource: resourceName, Version: key})
 	if err != nil {
 		slog.WarnContext(ctx, "job.run_input_unrecorded", "get", inputName, "resource", resourceName, "error", err)
 	}

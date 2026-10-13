@@ -76,7 +76,7 @@ func (s *Server) attention(ctx context.Context, target *Pipeline) []attentionIte
 // pausedJobsItem: the breaker took these out of rotation on their own, and
 // nothing puts them back without a person.
 func pausedJobsItem(ctx context.Context, target *Pipeline, base string) *attentionItem {
-	jobs, err := target.Store.PausedJobs(ctx)
+	jobs, err := target.Store.HeldJobs(ctx)
 	if err != nil || len(jobs) == 0 {
 		return nil
 	}

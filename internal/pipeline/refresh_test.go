@@ -688,5 +688,5 @@ func lastCheckedVersion(t *testing.T, st store.Store, name string) (string, bool
 		return "", false, fmt.Errorf("reading the check cursor for %q: %w", name, err)
 	}
 
-	return last.Version, found, nil
+	return string(last.Version), found, nil
 }

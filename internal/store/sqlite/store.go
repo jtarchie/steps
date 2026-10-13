@@ -592,13 +592,13 @@ func byJob(jobName string, args []any) (string, []any) {
 }
 
 // jsonList binds a list as ONE argument, read back with `IN (SELECT value FROM json_each(?))`. sqlite has no array binding, and the alternative — a generated "?,?,?" list — needed chunking under the bind-variable limit at every call site.
-func jsonList(values []string) string {
+func jsonList[S ~string](values []S) string {
 	if values == nil {
 		// json_each('null') yields one NULL row rather than none, so an empty list must be an empty array.
 		return "[]"
 	}
 
-	encoded, _ := json.Marshal(values) //nolint:errchkjson // a []string cannot fail to marshal
+	encoded, _ := json.Marshal(values) //nolint:errchkjson // a list of strings cannot fail to marshal
 
 	return string(encoded)
 }

@@ -55,7 +55,8 @@ func TestSerialGroupsBlockConcurrentClaims(t *testing.T) {
 func mustClaim(t *testing.T, st store.Store) string {
 	t.Helper()
 
-	_, name, found, err := st.ClaimNextJob(context.Background())
+	claim, found, err := st.ClaimNextJob(context.Background())
+	name := claim.JobName
 	if err != nil {
 		t.Fatalf("ClaimNextJob: %v", err)
 	}
@@ -97,7 +98,7 @@ func TestSerialGroupHolderNamesWhoHasIt(t *testing.T) {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	_, _, _, err = st.ClaimNextJob(ctx)
+	_, _, err = st.ClaimNextJob(ctx)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}

@@ -16,7 +16,7 @@ func TestTheFailingStepHoldsTheRunsError(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-held", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-held", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestAnErrorNoStepHoldsStaysInTheHead(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-headless", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-headless", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestAnMCPFailureAStepHoldsIsHintedOnTheStep(t *testing.T) {
 	pipeline := server.Lookup("demo")
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-mcp-step", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-mcp-step", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

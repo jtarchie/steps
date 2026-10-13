@@ -16,7 +16,7 @@ type failingRunInputs struct {
 	err error
 }
 
-func (f failingRunInputs) RecordRunInput(context.Context, string, string, string, string) error {
+func (f failingRunInputs) RecordRunInput(context.Context, string, store.RunInput) error {
 	return f.err
 }
 

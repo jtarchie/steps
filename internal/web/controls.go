@@ -119,7 +119,7 @@ func refuseRerun(ctx context.Context, pipeline *Pipeline, run store.RunRow) erro
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("no job %q in this pipeline", run.JobName))
 	}
 
-	if run.Status == "running" {
+	if run.Status == store.RunRunning {
 		return echo.NewHTTPError(http.StatusConflict, "this run is still running; abort it first")
 	}
 

@@ -488,7 +488,7 @@ func within(spans [][2]int, at int) bool {
 func startRunningBuild(t *testing.T, pipeline *Pipeline) {
 	t.Helper()
 
-	err := pipeline.Store.StartRun(context.Background(), "run-1", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(context.Background(), store.NewRun{ID: "run-1", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -605,7 +605,7 @@ func TestResultBoxFetchesItsBodyOnEveryOpen(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-box", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-box", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

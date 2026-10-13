@@ -80,7 +80,7 @@ func TestStreamDrawsTheSameMarkupThePageDoes(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-same", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-same", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestStreamAppendsWhatThePageHasNotDrawnAndMorphsWhatItHas(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-split", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-split", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestLiveStreamShowsATimeoutCountdownForAStepStartedAfterConnecting(t *testi
 	server, pipeline, sha := timeoutPipelineSHA(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-live-deadline", "review", t.TempDir(), sha)
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-live-deadline", JobName: "review", Workspace: t.TempDir(), ConfigSHA: sha})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestLiveStreamClearsTheCountdownOnceAStepFinishes(t *testing.T) {
 	server, pipeline, sha := timeoutPipelineSHA(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-live-deadline-done", "review", t.TempDir(), sha)
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-live-deadline-done", JobName: "review", Workspace: t.TempDir(), ConfigSHA: sha})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestStreamClosesAnAgentWhenItPasses(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-live-open", "build", t.TempDir(), "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-live-open", JobName: "build", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -390,7 +390,7 @@ func TestStreamResumesFromLastEventID(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-resume", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-resume", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -455,7 +455,7 @@ func TestStreamFramesSurviveACarriageReturn(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-cr", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-cr", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -523,7 +523,7 @@ func TestStreamAppendsIntoTheContainerThePageDraws(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-target", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-target", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -574,7 +574,7 @@ func TestEmptyTranscriptPlaceholderIsNotAStepToWalk(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-placeholder", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-placeholder", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -614,7 +614,7 @@ func TestStreamAppendsAChainSkippedRow(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-chain", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-chain", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -656,7 +656,7 @@ func TestOneMessagePerFlush(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-atomic", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-atomic", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -699,7 +699,7 @@ func TestStreamKeepsDrawingPastTheRunEventLimit(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-long", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-long", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -777,7 +777,7 @@ func TestStreamCarriesASubAgentsTurns(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-sub", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-sub", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -814,7 +814,7 @@ func TestStreamRetractsARowItsContainerAdopts(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-adopt", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-adopt", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -876,7 +876,7 @@ func TestStreamRetractsARowItsMorphedContainerAdopts(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-morph-adopt", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-morph-adopt", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -930,7 +930,7 @@ func TestStreamSendsACarriageReturnAsTheLineItIsOnReload(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-bar", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-bar", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -979,7 +979,7 @@ func TestIdleStreamClosesWithoutAWord(t *testing.T) {
 
 	server, pipeline := testPipeline(t)
 
-	err := pipeline.Store.StartRun(t.Context(), "run-quiet", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: "run-quiet", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1007,7 +1007,7 @@ func TestABusyStreamOutlivesTheIdleDeadline(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-busy", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-busy", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1044,7 +1044,7 @@ func TestARowTakesEveryAppendItWasOwed(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-both", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-both", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1088,7 +1088,7 @@ func TestAResumeFromPastTheLastEventStillCloses(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-short", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-short", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1148,7 +1148,7 @@ func TestStreamDoesNotReportAReaderWhoLeft(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-left", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-left", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1180,7 +1180,7 @@ func TestStreamReportsAFailureOnce(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-broken", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-broken", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

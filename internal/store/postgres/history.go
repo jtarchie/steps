@@ -51,8 +51,8 @@ func (s *Store) RecordVersions(ctx context.Context, resourceName string, version
 	return added, nil
 }
 
-func encodeVersions(versions []map[string]any) ([]string, error) {
-	encoded := make([]string, 0, len(versions))
+func encodeVersions(versions []map[string]any) ([]store.VersionKey, error) {
+	encoded := make([]store.VersionKey, 0, len(versions))
 
 	for _, version := range versions {
 		one, err := store.EncodeVersion(version)
@@ -79,7 +79,7 @@ func encodeVersions(versions []map[string]any) ([]string, error) {
 //
 // The MAX it numbers from is a read before a write, which is why every
 // caller holds the pipeline lock (see write).
-func insertNewVersions(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, encoded []string) (int, error) {
+func insertNewVersions(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, encoded []store.VersionKey) (int, error) {
 	result, err := tx.ExecContext(ctx, `
 		WITH reported AS (
 		    SELECT DISTINCT ON (version) version, position
@@ -103,7 +103,7 @@ func insertNewVersions(ctx context.Context, tx *sql.Tx, pipelineID int64, resour
 		ON CONFLICT (pipeline_id, resource_name, version_json)
 		DO UPDATE SET from_check = TRUE, check_order = excluded.check_order
 		WHERE resource_versions.from_check = FALSE
-	`, pipelineID, resourceName, encoded)
+	`, pipelineID, resourceName, textArray(encoded))
 	if err != nil {
 		return 0, fmt.Errorf("could not record versions for %q: %w", resourceName, err)
 	}
@@ -120,7 +120,7 @@ func insertNewVersions(ctx context.Context, tx *sql.Tx, pipelineID int64, resour
 // above the lowest order the check just reported — the floor is a subquery,
 // so it is one statement under the lock rather than two. Every caller has
 // just filed the report, so the COALESCE's arm is never reached.
-func pruneVersions(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, limit int, reported []string) error {
+func pruneVersions(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, limit int, reported []store.VersionKey) error {
 	_, err := tx.ExecContext(ctx, `
 		DELETE FROM resource_versions
 		WHERE pipeline_id = $1 AND resource_name = $2
@@ -144,19 +144,23 @@ func pruneVersions(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceNa
 
 // ResourceVersionsJSON returns the versions a CHECK has reported for a
 // resource, oldest first.
-func (s *Store) ResourceVersionsJSON(ctx context.Context, resourceName string) ([]string, error) {
+func (s *Store) ResourceVersionsJSON(ctx context.Context, resourceName string) ([]store.VersionKey, error) {
 	return collect(ctx, s.db, "resource versions",
 		`SELECT version_json FROM resource_versions
 		 WHERE pipeline_id = $1 AND resource_name = $2 AND from_check
 		 ORDER BY check_order`,
-		[]any{s.pipelineID, resourceName}, scanString)
+		[]any{s.pipelineID, resourceName}, func(rows *sql.Rows) (store.VersionKey, error) {
+			var encoded store.VersionKey
+
+			return encoded, rows.Scan(&encoded)
+		})
 }
 
 // VersionOrders maps every recorded version of a resource to its
 // check_order, including the rows a check did not file.
-func (s *Store) VersionOrders(ctx context.Context, resourceName string) (map[string]int64, error) {
+func (s *Store) VersionOrders(ctx context.Context, resourceName string) (map[store.VersionKey]int64, error) {
 	type ordered struct {
-		encoded string
+		encoded store.VersionKey
 		order   int64
 	}
 
@@ -171,7 +175,7 @@ func (s *Store) VersionOrders(ctx context.Context, resourceName string) (map[str
 		return nil, err
 	}
 
-	orders := make(map[string]int64, len(rows))
+	orders := make(map[store.VersionKey]int64, len(rows))
 	for _, row := range rows {
 		orders[row.encoded] = row.order
 	}
@@ -181,7 +185,7 @@ func (s *Store) VersionOrders(ctx context.Context, resourceName string) (map[str
 
 // RecordVersionOrder files a version if it is not already known and returns
 // the order it sits at.
-func (s *Store) RecordVersionOrder(ctx context.Context, resourceName, versionJSON string) (int64, error) {
+func (s *Store) RecordVersionOrder(ctx context.Context, resourceName string, versionJSON store.VersionKey) (int64, error) {
 	var order int64
 
 	err := s.write(ctx, func(tx *sql.Tx) error {
@@ -207,7 +211,7 @@ func (s *Store) RecordVersionOrder(ctx context.Context, resourceName, versionJSO
 //
 // The MAX it numbers from is a read before a write; callers hold the
 // pipeline lock.
-func ensureVersion(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName, versionJSON string) error {
+func ensureVersion(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, versionJSON store.VersionKey) error {
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO resource_versions (pipeline_id, resource_name, version_json, check_order, from_check)
 		SELECT $1::bigint, $2::text, $3::text, COALESCE(MAX(check_order), 0) + 1, FALSE
@@ -244,7 +248,7 @@ func (s *Store) GreenVersions(ctx context.Context, resourceName string, upstream
 	versions := make([]map[string]any, 0, len(encoded))
 
 	for _, one := range encoded {
-		version, err := store.DecodeVersion(one)
+		version, err := store.DecodeVersion(store.VersionKey(one))
 		if err != nil {
 			return nil, fmt.Errorf("could not read green versions for %q: %w", resourceName, err)
 		}

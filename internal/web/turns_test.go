@@ -77,7 +77,7 @@ func TestTurnFragmentIsWhatThePageUsedToDraw(t *testing.T) {
 
 	plain := strings.Repeat("a line of a command's output\n", 40)
 
-	err := pipeline.Store.StartRun(ctx, "run-frag", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-frag", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestTurnFragmentAnswersOnlyForAResultOfThisRun(t *testing.T) {
 		pipeline *Pipeline
 		id       string
 	}{{alpha, "run-a1"}, {alpha, "run-a2"}, {beta, "run-b1"}} {
-		err := run.pipeline.Store.StartRun(ctx, run.id, run.pipeline.Slug+"-job", "", "")
+		err := run.pipeline.Store.StartRun(ctx, store.NewRun{ID: run.id, JobName: run.pipeline.Slug + "-job"})
 		if err != nil {
 			t.Fatalf("StartRun: %v", err)
 		}
@@ -196,7 +196,7 @@ func TestStreamedResultArrivesAsASummary(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-streamed", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-streamed", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestResultURLEscapesThePipelineName(t *testing.T) {
 	server, pipelines := testPipelines(t, "rev#2")
 	pipeline := pipelines[0]
 
-	err := pipeline.Store.StartRun(t.Context(), "run-escaped", "rev#2-job", "", "")
+	err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: "run-escaped", JobName: "rev#2-job"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestTurnFragmentVariesOnHTMX(t *testing.T) {
 
 	server, pipeline := testPipeline(t)
 
-	err := pipeline.Store.StartRun(t.Context(), "run-vary", "build", "", "")
+	err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: "run-vary", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestTurnFragmentServesTheFirstEvent(t *testing.T) {
 
 	server, pipeline := testPipeline(t)
 
-	err := pipeline.Store.StartRun(t.Context(), "run-first", "build", "", "")
+	err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: "run-first", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

@@ -3,6 +3,8 @@ package web
 import (
 	"net/http"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestRetryIsRefusedWhereATriggerIs: a paused pipeline starts nothing new, however it is asked (Concourse would hold it pending; steps refuses, as it refuses a trigger), a running run is aborted rather than retried, and a read-only server changes nothing.
@@ -12,7 +14,7 @@ func TestRetryIsRefusedWhereATriggerIs(t *testing.T) {
 	server, pipeline := writableServerWithPipeline(t)
 	readOnly, _ := testPipeline(t)
 
-	err := pipeline.Store.StartRun(t.Context(), "live", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: "live", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

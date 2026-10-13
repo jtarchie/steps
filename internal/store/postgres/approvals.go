@@ -28,11 +28,11 @@ func (s *Store) RequestApproval(ctx context.Context, jobName, message string) (i
 }
 
 // DecideApproval records a decision, refusing to overwrite one already made.
-func (s *Store) DecideApproval(ctx context.Context, id int64, status, by, reason string) error {
+func (s *Store) DecideApproval(ctx context.Context, id int64, status store.ApprovalStatus, by, reason string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE approvals SET status = $1, decided_at = $2, decided_by = $3, reason = $4
 		WHERE id = $5 AND pipeline_id = $6 AND status = 'pending'
-	`, status, now(), clean(by), clean(reason), id, s.pipelineID)
+	`, string(status), now(), clean(by), clean(reason), id, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not decide approval %d: %w", id, err)
 	}
@@ -52,8 +52,8 @@ func (s *Store) DecideApproval(ctx context.Context, id int64, status, by, reason
 const approvalColumns = `id, job_name, message, status, requested_at, decided_at,
 		       COALESCE(decided_by, ''), COALESCE(reason, '')`
 
-// scanApproval renders the timestamps RFC3339, as the sqlite driver stores
-// them for this table.
+// scanApproval keeps whole seconds, the resolution the sqlite driver stores
+// this table's timestamps at.
 func scanApproval(row rowScanner) (store.Approval, error) {
 	var (
 		approval  store.Approval
@@ -64,8 +64,8 @@ func scanApproval(row rowScanner) (store.Approval, error) {
 	err := row.Scan(&approval.ID, &approval.JobName, &approval.Message, &approval.Status,
 		&requested, &decided, &approval.DecidedBy, &approval.Reason)
 
-	approval.RequestedAt = requested.UTC().Format(time.RFC3339)
-	approval.DecidedAt = stamp(decided, time.RFC3339)
+	approval.RequestedAt = requested.UTC().Truncate(time.Second)
+	approval.DecidedAt = utc(decided).Truncate(time.Second)
 
 	return approval, err //nolint:wrapcheck // every caller names what it was reading
 }

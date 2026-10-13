@@ -77,8 +77,8 @@ func (s *Store) RecordVersions(ctx context.Context, resourceName string, version
 }
 
 // encodeVersions encodes once for both the upsert and the floor query, which each used to encode every version again.
-func encodeVersions(versions []map[string]any) ([]string, error) {
-	encoded := make([]string, 0, len(versions))
+func encodeVersions(versions []map[string]any) ([]store.VersionKey, error) {
+	encoded := make([]store.VersionKey, 0, len(versions))
 
 	for _, version := range versions {
 		one, err := store.EncodeVersion(version)
@@ -113,7 +113,7 @@ func encodeVersions(versions []map[string]any) ([]string, error) {
 // the table it inserts into, sqlite runs it to completion before the first
 // row lands, so every number comes from the same MAX.
 func insertNewVersions(
-	ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, encoded []string,
+	ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, encoded []store.VersionKey,
 ) (int, error) {
 	result, err := tx.ExecContext(ctx, `
 		WITH reported(version, position) AS (
@@ -188,7 +188,7 @@ func nextCheckOrder(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceN
 // the lock instead of two. Every caller has just filed the report, so the
 // COALESCE's arm — no floor at all — is never reached.
 func pruneVersions(
-	ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, limit int, reported []string,
+	ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, limit int, reported []store.VersionKey,
 ) error {
 	_, err := tx.ExecContext(ctx, `
 		DELETE FROM resource_versions
@@ -227,13 +227,13 @@ func pruneVersions(
 // DISPLAY a version and decoding every row only to re-encode it a moment later
 // buys nothing. A caller that inspects fields runs DecodeVersion, which is
 // where the UseNumber that keeps an id out of exponent notation lives.
-func (s *Store) ResourceVersionsJSON(ctx context.Context, resourceName string) ([]string, error) {
+func (s *Store) ResourceVersionsJSON(ctx context.Context, resourceName string) ([]store.VersionKey, error) {
 	return collect(ctx, s.reads, "resource versions",
 		`SELECT version_json FROM resource_versions
 		 WHERE pipeline_id = ? AND resource_name = ? AND from_check = 1
 		 ORDER BY check_order`,
-		[]any{s.pipelineID, resourceName}, func(rows *sql.Rows) (string, error) {
-			var encoded string
+		[]any{s.pipelineID, resourceName}, func(rows *sql.Rows) (store.VersionKey, error) {
+			var encoded store.VersionKey
 
 			err := rows.Scan(&encoded)
 
@@ -249,9 +249,9 @@ func (s *Store) ResourceVersionsJSON(ctx context.Context, resourceName string) (
 // version sit", and a job that resolved its own versions needs an order for
 // them or its cursor could never advance past them — a `steps run` against an
 // unpolled resource would repeat its whole fan-out every time.
-func (s *Store) VersionOrders(ctx context.Context, resourceName string) (map[string]int64, error) {
+func (s *Store) VersionOrders(ctx context.Context, resourceName string) (map[store.VersionKey]int64, error) {
 	type ordered struct {
-		encoded string
+		encoded store.VersionKey
 		order   int64
 	}
 
@@ -266,7 +266,7 @@ func (s *Store) VersionOrders(ctx context.Context, resourceName string) (map[str
 		return nil, err
 	}
 
-	orders := make(map[string]int64, len(rows))
+	orders := make(map[store.VersionKey]int64, len(rows))
 	for _, row := range rows {
 		orders[row.encoded] = row.order
 	}
@@ -277,7 +277,7 @@ func (s *Store) VersionOrders(ctx context.Context, resourceName string) (map[str
 // RecordVersionOrder files a version if it is not already known and returns
 // the order it sits at, so a caller that resolved its own versions can
 // advance a cursor over them.
-func (s *Store) RecordVersionOrder(ctx context.Context, resourceName, versionJSON string) (int64, error) {
+func (s *Store) RecordVersionOrder(ctx context.Context, resourceName string, versionJSON store.VersionKey) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("could not record version for %q: %w", resourceName, err)
@@ -317,7 +317,7 @@ func (s *Store) RecordVersionOrder(ctx context.Context, resourceName, versionJSO
 // path goes near the poller. Recording that a job used a version implies the
 // version existed, so the implication is made explicit here rather than
 // left to fail as a constraint violation.
-func ensureVersion(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName, versionJSON string) error {
+func ensureVersion(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, versionJSON store.VersionKey) error {
 	next, err := nextCheckOrder(ctx, tx, pipelineID, resourceName)
 	if err != nil {
 		return err
@@ -374,7 +374,7 @@ func (s *Store) GreenVersions(ctx context.Context, resourceName string, upstream
 	versions := make([]map[string]any, 0, len(encoded))
 
 	for _, one := range encoded {
-		version, err := store.DecodeVersion(one)
+		version, err := store.DecodeVersion(store.VersionKey(one))
 		if err != nil {
 			return nil, fmt.Errorf("could not read green versions for %q: %w", resourceName, err)
 		}

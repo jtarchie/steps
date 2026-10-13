@@ -84,7 +84,7 @@ func TestRunStreamIsNotGzipped(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-plain", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-plain", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

@@ -317,7 +317,7 @@ func waitForRunStatus(t *testing.T, state, name, runID, want string) {
 	for time.Now().Before(deadline) {
 		for _, run := range listRuns(t, state, name, "") {
 			if run.ID == runID {
-				last = run.Status
+				last = string(run.Status)
 			}
 		}
 

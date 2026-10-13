@@ -296,7 +296,7 @@ type observedResource struct {
 	// version is the decoded latest version, kept alongside its JSON so a
 	// passed: constraint can be checked without re-parsing.
 	version map[string]any
-	latest  string
+	latest  store.VersionKey
 	dirty   bool
 	// versions is everything this check returned, oldest first.
 	versions []map[string]any
@@ -305,7 +305,7 @@ type observedResource struct {
 	coldStart bool
 	// delivered marks a webhook resource, whose checked version a delivery may move mid-poll; previous is what it read, for the compare-and-set that advances it.
 	delivered     bool
-	previous      string
+	previous      store.VersionKey
 	previousFound bool
 }
 
@@ -446,7 +446,7 @@ func advance(ctx context.Context, st PollStore, resourceName string, obs observe
 	case !obs.delivered:
 		err = st.RecordCheckedVersion(ctx, resourceName, obs.latest)
 	case obs.dirty:
-		_, err = st.CompareAndSetCheckedVersion(ctx, resourceName, obs.previous, obs.previousFound, obs.latest)
+		_, err = st.CompareAndSetCheckedVersion(ctx, store.CheckedSwap{Resource: resourceName, Expected: obs.previous, ExpectedFound: obs.previousFound, Next: obs.latest})
 	}
 
 	if err != nil {
@@ -781,7 +781,7 @@ func checkResource(ctx context.Context, cfg *config.Config, st PollStore, resour
 // resource's current version.
 func recordedVersion(
 	ctx context.Context, st PollStore, resourceName string,
-) (encoded string, version map[string]any, found bool, err error) {
+) (encoded store.VersionKey, version map[string]any, found bool, err error) {
 	last, found, err := st.LastChecked(ctx, resourceName)
 	if err != nil {
 		return "", nil, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
@@ -793,7 +793,7 @@ func recordedVersion(
 
 	encoded = last.Version
 
-	version, err = rsrc.ParseVersionJSON(encoded)
+	version, err = rsrc.ParseVersionJSON(string(encoded))
 	if err != nil {
 		return "", nil, false, fmt.Errorf("trigger resource %q: %w", resourceName, err)
 	}
@@ -879,7 +879,7 @@ func recordHistory(
 // seedColdStart marks a first-seen resource's whole history as taken for
 // every job that reads it, and records the baseline in the same breath — see
 // recordHistory for why neither may wait for the end of the poll.
-func seedColdStart(ctx context.Context, cfg *config.Config, st PollStore, resourceName, latest string) error {
+func seedColdStart(ctx context.Context, cfg *config.Config, st PollStore, resourceName string, latest store.VersionKey) error {
 	orders, err := st.VersionOrders(ctx, resourceName)
 	if err != nil {
 		return fmt.Errorf("trigger resource %q: %w", resourceName, err)
@@ -924,7 +924,7 @@ func seedColdStart(ctx context.Context, cfg *config.Config, st PollStore, resour
 // rather than "highest - 1". A latest that is somehow not the highest order
 // falls back to seeding everything: refusing to build is the safe direction
 // when the ordering says something this function does not understand.
-func coldStartMark(orders map[string]int64, latest string) int64 {
+func coldStartMark(orders map[store.VersionKey]int64, latest store.VersionKey) int64 {
 	var highest, second int64
 
 	for _, order := range orders {

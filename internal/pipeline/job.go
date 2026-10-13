@@ -215,7 +215,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 
 	workspace.CloseBuild(bw, job.Name)
 
-	_ = st.FinishRun(context.WithoutCancel(ctx), resume.id, "succeeded")
+	_ = st.FinishRun(context.WithoutCancel(ctx), resume.id, store.RunSucceeded)
 
 	publishJobFinished(ctx, job.Name, jobStarted, nil)
 
@@ -237,12 +237,12 @@ func judgeJob(ctx context.Context, job *config.Job, log *execLog, planErr error)
 }
 
 // failedStatus is Concourse's split: somebody stopping a build is not the build saying no, and a reader deciding whether to look for a bug has to tell them apart.
-func failedStatus(ctx context.Context, err error) string {
+func failedStatus(ctx context.Context, err error) store.RunStatus {
 	if outcome.Classify(ctx, err) == outcome.Aborted {
-		return "aborted"
+		return store.RunAborted
 	}
 
-	return "failed"
+	return store.RunFailed
 }
 
 // withRunContext installs the per-invocation switches the runners several

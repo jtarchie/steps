@@ -154,7 +154,7 @@ func TestReaderRunsFilterToTheNamedPipelines(t *testing.T) {
 func mustStartRun(t *testing.T, st *Store, id, jobName string) {
 	t.Helper()
 
-	err := st.StartRun(t.Context(), id, jobName, t.TempDir(), "")
+	err := st.StartRun(t.Context(), store.NewRun{ID: id, JobName: jobName, Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("StartRun(%q): %v", id, err)
 	}

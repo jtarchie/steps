@@ -5,7 +5,7 @@
 
 {{range .Questions}}
 <div class="approval {{if ne .Status "pending"}}decided{{end}}">
-  <div class="meta"><a href="/p/{{$.Nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · {{.AgentName}} · asked {{agoText .AskedAt}}{{if .AnsweredAt}} · answered {{agoText .AnsweredAt}} by {{.AnsweredBy}}{{end}}</div>
+  <div class="meta"><a href="/p/{{$.Nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · {{.AgentName}} · asked {{agoTag .AskedAt}}{{if not .AnsweredAt.IsZero}} · answered {{agoTag .AnsweredAt}} by {{.AnsweredBy}}{{end}}</div>
   <div class="msg">{{.Question}}</div>
   {{if eq .Status "pending"}}
     {{if $.Nav.ReadOnly}}

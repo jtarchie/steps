@@ -84,9 +84,9 @@ func TestJobsReleaseAnswersForThePipelineItWasNamed(t *testing.T) {
 
 	defer func() { _ = reopened.Close() }()
 
-	paused, err := reopened.IsJobPaused(t.Context(), "build")
+	paused, err := reopened.IsJobHeld(t.Context(), "build")
 	if err != nil {
-		t.Fatalf("IsJobPaused: %v", err)
+		t.Fatalf("IsJobHeld: %v", err)
 	}
 
 	if paused {

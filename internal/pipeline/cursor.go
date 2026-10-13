@@ -42,7 +42,7 @@ type versionCursor struct {
 	// orders maps a version's canonical JSON to its check_order, for the
 	// resources this job reads. A version with no entry has never been
 	// recorded, so it sits above every mark and is still to do.
-	orders map[string]map[string]int64
+	orders map[string]map[store.VersionKey]int64
 
 	// suppress is false only when a caller asked for taken versions to be
 	// reopened (`steps test`), never under --force (#145). It gates only
@@ -88,7 +88,7 @@ func loadVersionCursor(ctx context.Context, st store.Store, job *config.Job, sup
 
 	cursor := &versionCursor{
 		marks:    make(map[string]int64, len(resources)),
-		orders:   make(map[string]map[string]int64, len(resources)),
+		orders:   make(map[string]map[store.VersionKey]int64, len(resources)),
 		suppress: suppress,
 	}
 
@@ -208,7 +208,7 @@ func (h *resourceHistory) get(resourceName string) []map[string]any {
 // version, by the canonical encoding the record was made in. A resource with
 // no history holds nothing: the refresh that precedes resolution polled it
 // and found nothing, so there is nothing a build could be rebuilt from.
-func (h *resourceHistory) holds(resourceName, encoded string) bool {
+func (h *resourceHistory) holds(resourceName string, encoded store.VersionKey) bool {
 	for _, version := range h.get(resourceName) {
 		if key, ok := encodeVersion(version); ok && key == encoded {
 			return true
@@ -297,7 +297,7 @@ func (c *versionCursor) take(
 	}
 
 	if c.orders[resourceName] == nil {
-		c.orders[resourceName] = map[string]int64{}
+		c.orders[resourceName] = map[store.VersionKey]int64{}
 	}
 
 	c.orders[resourceName][key] = order
@@ -310,7 +310,7 @@ func (c *versionCursor) take(
 // encodeVersion renders a version the canonical way every table keys on. A
 // thin adapter over store.EncodeVersion so the "same version, same string"
 // rule has one implementation.
-func encodeVersion(version map[string]any) (string, bool) {
+func encodeVersion(version map[string]any) (store.VersionKey, bool) {
 	encoded, err := store.EncodeVersion(version)
 	if err != nil {
 		return "", false

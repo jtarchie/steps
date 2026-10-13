@@ -679,7 +679,7 @@ func (r *RunsWhereCmd) printPlacements(ctx context.Context, st placementReader) 
 		// ordinary case for a pipeline that names no worker. Past tense only
 		// about a run that is over: a placement is recorded when the step
 		// finishes, so a run still in flight has nothing recorded YET.
-		if run.Status == "running" {
+		if run.Status == store.RunRunning {
 			fmt.Printf("no placed steps recorded for run %s yet\n", run.ID)
 		} else {
 			fmt.Printf("run %s ran every step on this machine\n", run.ID)

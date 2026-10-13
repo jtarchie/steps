@@ -39,9 +39,9 @@ func TestBreakerPausesAfterConsecutiveFailures(t *testing.T) {
 		t.Fatalf("paused=%v consecutive=%d, want true and 3", paused, consecutive)
 	}
 
-	isPaused, err := st.IsJobPaused(ctx, "nightly")
+	isPaused, err := st.IsJobHeld(ctx, "nightly")
 	if err != nil || !isPaused {
-		t.Fatalf("IsJobPaused = %v, %v; want true", isPaused, err)
+		t.Fatalf("IsJobHeld = %v, %v; want true", isPaused, err)
 	}
 }
 
@@ -120,9 +120,9 @@ func TestResumeClearsTheBreaker(t *testing.T) {
 		t.Fatalf("RecordJobOutcome: %v", err)
 	}
 
-	paused, err := st.PausedJobs(ctx)
+	paused, err := st.HeldJobs(ctx)
 	if err != nil || len(paused) != 1 || paused[0].Name != "nightly" {
-		t.Fatalf("PausedJobs = %v, %v; want one entry for nightly", paused, err)
+		t.Fatalf("HeldJobs = %v, %v; want one entry for nightly", paused, err)
 	}
 
 	err = st.ResetJobFailures(ctx, "nightly")
@@ -130,8 +130,8 @@ func TestResumeClearsTheBreaker(t *testing.T) {
 		t.Fatalf("ResetJobFailures: %v", err)
 	}
 
-	isPaused, err := st.IsJobPaused(ctx, "nightly")
+	isPaused, err := st.IsJobHeld(ctx, "nightly")
 	if err != nil || isPaused {
-		t.Fatalf("IsJobPaused = %v, %v; want false after a resume", isPaused, err)
+		t.Fatalf("IsJobHeld = %v, %v; want false after a resume", isPaused, err)
 	}
 }

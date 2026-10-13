@@ -3,6 +3,8 @@ package web
 import (
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestRunlessStateSaysWhyThereIsNoRun: an empty cell is four different facts,
@@ -46,7 +48,7 @@ func TestMatchesPin(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		version string
+		version store.VersionKey
 		pin     map[string]string
 		want    bool
 	}{

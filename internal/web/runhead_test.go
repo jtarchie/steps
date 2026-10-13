@@ -17,7 +17,7 @@ func startAuditedRun(t *testing.T, pipeline *Pipeline, runID string) {
 
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, runID, "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: runID, JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestTheHeadReadsOutcomeThenProvenance(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-lines", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-lines", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

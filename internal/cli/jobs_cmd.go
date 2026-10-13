@@ -36,7 +36,7 @@ func (j *JobsListCmd) Run() error {
 	}
 	defer cleanup()
 
-	paused, err := st.PausedJobs(context.Background())
+	paused, err := st.HeldJobs(context.Background())
 	if err != nil {
 		return fmt.Errorf("could not list held jobs: %w", err)
 	}
@@ -52,7 +52,7 @@ func (j *JobsListCmd) Run() error {
 	_, _ = fmt.Fprintln(writer, "JOB\tCONSECUTIVE FAILURES\tHELD SINCE")
 
 	for _, job := range paused {
-		_, _ = fmt.Fprintf(writer, "%s\t%d\t%s\n", job.Name, job.Consecutive, job.PausedAt)
+		_, _ = fmt.Fprintf(writer, "%s\t%d\t%s\n", job.Name, job.Consecutive, stampSeconds(job.HeldAt))
 	}
 
 	return flush(writer)
@@ -89,7 +89,7 @@ func (j *JobsReleaseCmd) Run() error {
 // this exists to catch, and it also catches releasing something that was never
 // held, which used to report success having done nothing.
 func releaseJob(ctx context.Context, st store.Store, name string) error {
-	paused, err := st.PausedJobs(ctx)
+	paused, err := st.HeldJobs(ctx)
 	if err != nil {
 		return fmt.Errorf("could not read held jobs: %w", err)
 	}

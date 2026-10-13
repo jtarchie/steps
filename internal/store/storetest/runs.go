@@ -34,7 +34,7 @@ func mustStartRuns(ctx context.Context, t *testing.T, st store.Store, jobName st
 	t.Helper()
 
 	for _, id := range ids {
-		err := st.StartRun(ctx, id, jobName, "/tmp/ws", "")
+		err := st.StartRun(ctx, store.NewRun{ID: id, JobName: jobName, Workspace: "/tmp/ws"})
 		if err != nil {
 			t.Fatalf("StartRun(%q): %v", id, err)
 		}
@@ -149,7 +149,7 @@ func (s suite) TestARerunOfAnOldBuildDoesNotBecomeTheJobsStatus(t *testing.T) {
 		t.Errorf("latest = %s, want CURRENT: a rerun of an older build became the job's status", latest)
 	}
 
-	err = st.StartRun(ctx, "RETRYCURRENT", "build", "/tmp/r", "")
+	err = st.StartRun(ctx, store.NewRun{ID: "RETRYCURRENT", JobName: "build", Workspace: "/tmp/r"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -179,13 +179,13 @@ func mustLatest(t *testing.T, st interface {
 }
 
 func startRuns(t *testing.T, st interface {
-	StartRun(ctx context.Context, id, jobName, workspaceDir, configSHA string) error
+	StartRun(ctx context.Context, run store.NewRun) error
 }, ids ...string,
 ) {
 	t.Helper()
 
 	for _, id := range ids {
-		err := st.StartRun(context.Background(), id, "build", "/tmp/"+id, "")
+		err := st.StartRun(context.Background(), store.NewRun{ID: id, JobName: "build", Workspace: "/tmp/" + id})
 		if err != nil {
 			t.Fatalf("StartRun %s: %v", id, err)
 		}
@@ -204,7 +204,7 @@ func (s suite) TestRunStepsAreKeptPerWalk(t *testing.T) {
 
 	const run = "PERBUILD01"
 
-	err := web.StartRun(ctx, run, "build", "/tmp/web", "")
+	err := web.StartRun(ctx, store.NewRun{ID: run, JobName: "build", Workspace: "/tmp/web"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -215,7 +215,7 @@ func (s suite) TestRunStepsAreKeptPerWalk(t *testing.T) {
 		{BuildID: run, Index: 0, Name: "prep"},
 		{BuildID: run + "#0", Index: 0, Name: "compile"},
 	} {
-		err = web.RecordRunStep(ctx, run, step.BuildID, step.Index, step.Name)
+		err = web.RecordRunStep(ctx, run, store.RunStep{BuildID: step.BuildID, Index: step.Index, Name: step.Name})
 		if err != nil {
 			t.Fatalf("RecordRunStep %+v: %v", step, err)
 		}
@@ -270,17 +270,17 @@ func (s suite) TestStartRunRefusesAnIDSomeRunAlreadyHas(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	err := st.StartRun(ctx, "COLLIDE1", "build", "/tmp/first", "")
+	err := st.StartRun(ctx, store.NewRun{ID: "COLLIDE1", JobName: "build", Workspace: "/tmp/first"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = st.FinishRun(ctx, "COLLIDE1", "succeeded")
+	err = st.FinishRun(ctx, "COLLIDE1", store.RunSucceeded)
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
 
-	err = st.StartRun(ctx, "COLLIDE1", "deploy", "/tmp/second", "")
+	err = st.StartRun(ctx, store.NewRun{ID: "COLLIDE1", JobName: "deploy", Workspace: "/tmp/second"})
 	if !errors.Is(err, store.ErrRunExists) {
 		t.Fatalf("minting a colliding id returned %v, want store.ErrRunExists", err)
 	}
@@ -291,7 +291,7 @@ func (s suite) TestStartRunRefusesAnIDSomeRunAlreadyHas(t *testing.T) {
 		t.Fatalf("FindRunRow: %v (found %v)", err, ok)
 	}
 
-	if run.Status != "succeeded" {
+	if run.Status != store.RunSucceeded {
 		t.Errorf("the first run is now %q — a refused mint still flipped it back to running", run.Status)
 	}
 
@@ -314,12 +314,12 @@ func (s suite) TestResumeRunNeedsARunToResume(t *testing.T) {
 		t.Fatalf("resuming a run that does not exist returned %v, want store.ErrNoSuchRun", err)
 	}
 
-	err = st.StartRun(ctx, "REAL0001", "build", "/tmp/first", "")
+	err = st.StartRun(ctx, store.NewRun{ID: "REAL0001", JobName: "build", Workspace: "/tmp/first"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = st.FinishRun(ctx, "REAL0001", "failed")
+	err = st.FinishRun(ctx, "REAL0001", store.RunFailed)
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
@@ -337,7 +337,7 @@ func (s suite) TestResumeRunNeedsARunToResume(t *testing.T) {
 		t.Fatalf("FindRunRow: %v (found %v)", err, ok)
 	}
 
-	if run.Status != "running" || run.Workspace != "/tmp/second" {
+	if run.Status != store.RunRunning || run.Workspace != "/tmp/second" {
 		t.Errorf("resumed run reads %q at %q, want running at the new workspace", run.Status, run.Workspace)
 	}
 

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
@@ -32,7 +33,7 @@ func TestRecordRevisionSkipsAConfigThatWasNeverLoaded(t *testing.T) {
 		t.Fatalf("recording a config that was never loaded: %v", err)
 	}
 
-	err = st.StartRun(t.Context(), "run-one", "build", "/tmp/ws", "")
+	err = st.StartRun(t.Context(), store.NewRun{ID: "run-one", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

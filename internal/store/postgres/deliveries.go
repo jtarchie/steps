@@ -34,7 +34,7 @@ func (s *Store) RecordDelivery(ctx context.Context, resourceName string, deliver
 	recorded := false
 
 	err = s.write(ctx, func(tx *sql.Tx) error {
-		added, err := insertNewVersions(ctx, tx, s.pipelineID, resourceName, []string{encoded})
+		added, err := insertNewVersions(ctx, tx, s.pipelineID, resourceName, []store.VersionKey{encoded})
 		if err != nil || added == 0 {
 			return err
 		}
@@ -63,7 +63,7 @@ func (s *Store) RecordDelivery(ctx context.Context, resourceName string, deliver
 	return recorded, nil
 }
 
-func (s *Store) dispatchDelivery(ctx context.Context, tx *sql.Tx, resourceName, encoded string, dispatch store.Dispatch) error {
+func (s *Store) dispatchDelivery(ctx context.Context, tx *sql.Tx, resourceName string, encoded store.VersionKey, dispatch store.Dispatch) error {
 	if dispatch.Held {
 		return nil
 	}
@@ -85,7 +85,7 @@ func (s *Store) dispatchDelivery(ctx context.Context, tx *sql.Tx, resourceName, 
 
 // pruneAfterDelivery is RecordVersions' cap, with the delivery as the whole
 // report.
-func pruneAfterDelivery(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName, encoded string, limit int) error {
+func pruneAfterDelivery(ctx context.Context, tx *sql.Tx, pipelineID int64, resourceName string, encoded store.VersionKey, limit int) error {
 	if limit < 0 {
 		limit = store.DefaultResourceVersionCap
 	}
@@ -94,11 +94,11 @@ func pruneAfterDelivery(ctx context.Context, tx *sql.Tx, pipelineID int64, resou
 		return nil
 	}
 
-	return pruneVersions(ctx, tx, pipelineID, resourceName, limit, []string{encoded})
+	return pruneVersions(ctx, tx, pipelineID, resourceName, limit, []store.VersionKey{encoded})
 }
 
 // Delivery reads back the payload recorded with a version.
-func (s *Store) Delivery(ctx context.Context, resourceName, versionJSON string) (store.Delivery, bool, error) {
+func (s *Store) Delivery(ctx context.Context, resourceName string, versionJSON store.VersionKey) (store.Delivery, bool, error) {
 	var (
 		body    []byte
 		headers string

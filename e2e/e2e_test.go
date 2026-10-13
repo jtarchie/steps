@@ -1314,8 +1314,8 @@ jobs:
 
 	build()
 
-	paused, err = st.IsJobPaused(t.Context(), "build")
+	paused, err = st.IsJobHeld(t.Context(), "build")
 	if err != nil || paused {
-		t.Errorf("IsJobPaused after a green manual run = %v, %v; want released", paused, err)
+		t.Errorf("IsJobHeld after a green manual run = %v, %v; want released", paused, err)
 	}
 }

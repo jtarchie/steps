@@ -62,10 +62,10 @@ func (r *RunsFollowCmd) Run() error {
 		return err
 	}
 
-	fmt.Printf("following %s · %s · %s\n", run.ID, runview.Scrub(run.JobName), runview.Scrub(run.Status))
+	fmt.Printf("following %s · %s · %s\n", run.ID, runview.Scrub(run.JobName), runview.Scrub(string(run.Status)))
 
-	if run.Status != "running" {
-		fmt.Printf("run %s already %s, replaying\n", run.ID, runview.Scrub(run.Status))
+	if run.Status != store.RunRunning {
+		fmt.Printf("run %s already %s, replaying\n", run.ID, runview.Scrub(string(run.Status)))
 	}
 
 	render, stop := r.renderer(ctx, st)
@@ -101,7 +101,7 @@ func (r *RunsFollowCmd) renderer(ctx context.Context, st store.Usage) (func(even
 // ended is the command's result: a detach says how to come back, anything else is how the run came out.
 func (r *RunsFollowCmd) ended(last store.RunRow, err error, st store.Meta) error {
 	if errors.Is(err, context.Canceled) {
-		if last.Status == "running" {
+		if last.Status == store.RunRunning {
 			fmt.Printf("detached: %s is still running — steps runs follow -p %s %s%s\n", last.ID, r.Pipeline, last.ID, dbNote(r.DB, st))
 		}
 
@@ -153,12 +153,14 @@ func (r *RunsFollowCmd) target(ctx context.Context, st interface {
 // followedOutcome is the error `steps run` would have returned, so a script wrapping both reads one set of exit codes. runs.status never records "errored", so an errored run exits as failed.
 func followedOutcome(run store.RunRow) error {
 	switch run.Status {
-	case "succeeded":
+	case store.RunSucceeded:
 		return nil
-	case "failed":
+	case store.RunFailed:
 		return outcome.Fail(fmt.Errorf("run %s failed", run.ID)) //nolint:wrapcheck // Fail is the wrap: it marks the error the way RunJob does
-	case "aborted":
+	case store.RunAborted:
 		return fmt.Errorf("run %s aborted: %w", run.ID, context.Canceled)
+	case store.RunRunning:
+		fallthrough
 	default:
 		return fmt.Errorf("run %s ended %q", run.ID, run.Status)
 	}
@@ -258,7 +260,7 @@ func (f *follower) drain(ctx context.Context, run store.RunRow) (int, error) {
 
 // over decides whether the run is done, rendering what the recorded events did not say: a dropped job_finished, or a silence that may be an orphan.
 func (f *follower) over(run store.RunRow, drained int) bool {
-	final := run.Status != "running"
+	final := run.Status != store.RunRunning
 	quiet := time.Since(f.active)
 
 	switch {
@@ -268,7 +270,7 @@ func (f *follower) over(run store.RunRow, drained int) bool {
 		// The sink drops on a full buffer, and without job_finished the live view never prints its summary or takes its region down.
 		f.render(events.Event{
 			Type: events.TypeJobFinished, RunID: run.ID, Job: run.JobName, StepIndex: -1,
-			Status: run.Status, DurationMS: took(run, f.lastAt).Milliseconds(), At: f.lastAt,
+			Status: string(run.Status), DurationMS: took(run, f.lastAt).Milliseconds(), At: f.lastAt,
 		})
 
 		return true

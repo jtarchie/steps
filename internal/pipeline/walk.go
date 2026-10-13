@@ -286,7 +286,7 @@ func recordCompletedStep(ctx context.Context, st store.Store, build string, i in
 		return
 	}
 
-	_ = st.RecordRunStep(context.WithoutCancel(ctx), resume.id, build, i, executedStepName(step))
+	_ = st.RecordRunStep(context.WithoutCancel(ctx), resume.id, store.RunStep{BuildID: build, Index: i, Name: executedStepName(step)})
 }
 
 // runNonGetStep runs a non-get step and dispatches its hooks around the

@@ -47,7 +47,7 @@ type decidedAtTheDeadline struct {
 	store.Store
 }
 
-func (s decidedAtTheDeadline) DecideApproval(ctx context.Context, id int64, status, by, reason string) error {
+func (s decidedAtTheDeadline) DecideApproval(ctx context.Context, id int64, status store.ApprovalStatus, by, reason string) error {
 	err := s.Store.DecideApproval(ctx, id, "approved", "jt", "just in time")
 	if err != nil {
 		return err //nolint:wrapcheck // a double answering what the store answers
@@ -61,7 +61,7 @@ type expiryFails struct {
 	store.Store
 }
 
-func (expiryFails) DecideApproval(context.Context, int64, string, string, string) error {
+func (expiryFails) DecideApproval(context.Context, int64, store.ApprovalStatus, string, string) error {
 	return errors.New("database is locked")
 }
 

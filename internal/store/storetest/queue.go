@@ -7,52 +7,58 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// TestTheBreakerCountsPausesAndResets: consecutive failures up to the limit
-// pause a job, a success releases it, and no limit never pauses.
-func (s suite) TestTheBreakerCountsPausesAndResets(t *testing.T) {
+// TestTheBreakerCountsHoldsAndResets: consecutive failures up to the limit
+// hold a job, a success releases it, and no limit never holds.
+func (s suite) TestTheBreakerCountsHoldsAndResets(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 	st := s.open(t, "test")
 
 	assertOutcome(t, st, "deploy", false, 2, false, 1)
+
+	before := time.Now()
+
 	assertOutcome(t, st, "deploy", false, 2, true, 2)
 
-	held, err := st.PausedJobs(ctx)
-	if err != nil || len(held) != 1 || held[0].Name != "deploy" || held[0].Consecutive != 2 || held[0].PausedAt == "" {
-		t.Fatalf("PausedJobs = %+v, %v; want deploy held after 2 failures, with when", held, err)
+	held, err := st.HeldJobs(ctx)
+	if err != nil || len(held) != 1 || held[0].Name != "deploy" || held[0].Consecutive != 2 {
+		t.Fatalf("HeldJobs = %+v, %v; want deploy held after 2 failures", held, err)
 	}
 
+	assertStamped(t, "HeldAt", held[0].HeldAt, before, time.Now())
+
 	assertOutcome(t, st, "deploy", true, 2, false, 0)
-	assertNotPaused(t, st, "deploy")
+	assertNotHeld(t, st, "deploy")
 
 	for failures := range 5 {
 		assertOutcome(t, st, "unbounded", false, 0, false, failures+1)
 	}
 
-	assertNotPaused(t, st, "unbounded")
+	assertNotHeld(t, st, "unbounded")
 }
 
-func assertOutcome(t *testing.T, st store.Store, job string, succeeded bool, maxFailures int, wantPaused bool, wantConsecutive int) {
+func assertOutcome(t *testing.T, st store.Store, job string, succeeded bool, maxFailures int, wantHeld bool, wantConsecutive int) {
 	t.Helper()
 
-	paused, consecutive, err := st.RecordJobOutcome(context.Background(), job, succeeded, maxFailures)
-	if err != nil || paused != wantPaused || consecutive != wantConsecutive {
-		t.Fatalf("RecordJobOutcome(%q, succeeded=%v) = paused %v, %d in a row, %v; want paused %v, %d in a row",
-			job, succeeded, paused, consecutive, err, wantPaused, wantConsecutive)
+	held, consecutive, err := st.RecordJobOutcome(context.Background(), job, succeeded, maxFailures)
+	if err != nil || held != wantHeld || consecutive != wantConsecutive {
+		t.Fatalf("RecordJobOutcome(%q, succeeded=%v) = held %v, %d in a row, %v; want held %v, %d in a row",
+			job, succeeded, held, consecutive, err, wantHeld, wantConsecutive)
 	}
 }
 
-func assertNotPaused(t *testing.T, st store.Store, job string) {
+func assertNotHeld(t *testing.T, st store.Store, job string) {
 	t.Helper()
 
-	paused, err := st.IsJobPaused(context.Background(), job)
-	if err != nil || paused {
-		t.Fatalf("IsJobPaused(%q) = %v, %v; want false", job, paused, err)
+	held, err := st.IsJobHeld(context.Background(), job)
+	if err != nil || held {
+		t.Fatalf("IsJobHeld(%q) = %v, %v; want false", job, held, err)
 	}
 }
 
@@ -135,7 +141,7 @@ func (s suite) TestAQueueRowKeepsTheInstantItWasEnqueued(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	err := st.StartRun(ctx, "run-before", "build", "", "")
+	err := st.StartRun(ctx, store.NewRun{ID: "run-before", JobName: "build"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +248,7 @@ func mustAbortQueued(t *testing.T, st store.Queue) bool {
 func mustClaimNext(t *testing.T, st store.Queue) bool {
 	t.Helper()
 
-	_, _, claimed, err := st.ClaimNextJob(ctxFor(t))
+	_, claimed, err := st.ClaimNextJob(ctxFor(t))
 	if err != nil {
 		t.Fatalf("ClaimNextJob: %v", err)
 	}
@@ -282,18 +288,13 @@ func (s suite) TestAManualEnqueueIsMarkedWhicheverArrivesFirst(t *testing.T) {
 				}
 			}
 
-			id, _, claimed, err := st.ClaimNextJob(ctxFor(t))
+			claim, claimed, err := st.ClaimNextJob(ctxFor(t))
 			if err != nil || !claimed {
 				t.Fatalf("ClaimNextJob = %v, %v", claimed, err)
 			}
 
-			got, err := st.QueuedTrigger(ctxFor(t), id)
-			if err != nil {
-				t.Fatalf("QueuedTrigger: %v", err)
-			}
-
-			if got.Manual != tc.want {
-				t.Errorf("QueuedTrigger = %+v, want manual %v", got, tc.want)
+			if claim.Manual != tc.want {
+				t.Errorf("ClaimNextJob = %+v, want manual %v", claim, tc.want)
 			}
 		})
 	}
@@ -305,7 +306,7 @@ func (s suite) TestARerunIsQueuedBesideAnOrdinaryTrigger(t *testing.T) {
 
 	st := s.open(t, "test")
 
-	err := st.StartRun(ctxFor(t), "ORIGINAL", "build", "/tmp/o", "")
+	err := st.StartRun(ctxFor(t), store.NewRun{ID: "ORIGINAL", JobName: "build", Workspace: "/tmp/o"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -324,39 +325,34 @@ func (s suite) TestARerunIsQueuedBesideAnOrdinaryTrigger(t *testing.T) {
 		t.Fatalf("queue = %+v (%v), want the trigger and one retry", rows, err)
 	}
 
-	var reruns []store.QueuedTrigger
+	var reruns []store.ClaimedJob
 
 	for range 2 {
-		if trigger := claimAndComplete(t, st); trigger.RerunOf != "" {
-			reruns = append(reruns, trigger)
+		if claim := claimAndComplete(t, st); claim.RerunOf != "" {
+			reruns = append(reruns, claim)
 		}
 	}
 
-	if len(reruns) != 1 || reruns[0] != (store.QueuedTrigger{Manual: true, RerunOf: "ORIGINAL"}) {
+	if len(reruns) != 1 || reruns[0] != (store.ClaimedJob{ID: reruns[0].ID, JobName: "build", Manual: true, RerunOf: "ORIGINAL"}) {
 		t.Errorf("claimed reruns = %+v, want one manual rerun of all of ORIGINAL", reruns)
 	}
 }
 
-// claimAndComplete claims the next row, reads what it asks for, and finishes it, so the job's one in-flight slot frees for the next claim.
-func claimAndComplete(t *testing.T, st store.Queue) store.QueuedTrigger {
+// claimAndComplete claims the next row and finishes it, so the job's one in-flight slot frees for the next claim.
+func claimAndComplete(t *testing.T, st store.Queue) store.ClaimedJob {
 	t.Helper()
 
-	id, _, claimed, err := st.ClaimNextJob(ctxFor(t))
+	claim, claimed, err := st.ClaimNextJob(ctxFor(t))
 	if err != nil || !claimed {
 		t.Fatalf("ClaimNextJob = %v, %v", claimed, err)
 	}
 
-	trigger, err := st.QueuedTrigger(ctxFor(t), id)
-	if err != nil {
-		t.Fatalf("QueuedTrigger: %v", err)
-	}
-
-	err = st.CompleteJob(ctxFor(t), id, "succeeded", nil)
+	err = st.CompleteJob(ctxFor(t), claim.ID, "succeeded", nil)
 	if err != nil {
 		t.Fatalf("CompleteJob: %v", err)
 	}
 
-	return trigger
+	return claim
 }
 
 func mustEnqueueJob(t *testing.T, st store.Store, jobName, reason string) {
@@ -373,7 +369,7 @@ func mustEnqueueJob(t *testing.T, st store.Store, jobName, reason string) {
 func mustClaimJob(t *testing.T, st store.Store, want string) (id int64, jobName string) {
 	t.Helper()
 
-	id, jobName, found, err := st.ClaimNextJob(context.Background())
+	claim, found, err := st.ClaimNextJob(context.Background())
 	if err != nil {
 		t.Fatalf("ClaimNextJob: %v", err)
 	}
@@ -382,17 +378,17 @@ func mustClaimJob(t *testing.T, st store.Store, want string) (id int64, jobName 
 		t.Fatal("ClaimNextJob: expected a pending job, queue was empty")
 	}
 
-	if want != "" && jobName != want {
-		t.Fatalf("ClaimNextJob = %q, want %q", jobName, want)
+	if want != "" && claim.JobName != want {
+		t.Fatalf("ClaimNextJob = %q, want %q", claim.JobName, want)
 	}
 
-	return id, jobName
+	return claim.ID, claim.JobName
 }
 
 func assertQueueEmpty(t *testing.T, st store.Store) {
 	t.Helper()
 
-	_, _, found, err := st.ClaimNextJob(context.Background())
+	_, found, err := st.ClaimNextJob(context.Background())
 	if err != nil {
 		t.Fatalf("ClaimNextJob: %v", err)
 	}
@@ -510,7 +506,8 @@ func (s suite) TestStoreClaimNextJobAtomicity(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			_, jobName, found, err := st.ClaimNextJob(context.Background())
+			claim, found, err := st.ClaimNextJob(context.Background())
+			jobName := claim.JobName
 			if err != nil {
 				t.Errorf("ClaimNextJob: %v", err)
 
@@ -579,7 +576,7 @@ func (s suite) TestStoreResetStaleRunningClosesRuns(t *testing.T) {
 	mustStartRuns(ctx, t, st, "build", "STALE001", "DONE0001")
 	mustStartRuns(ctx, t, neighbour, "build", "OTHER001")
 
-	err := st.FinishRun(ctx, "DONE0001", "succeeded")
+	err := st.FinishRun(ctx, "DONE0001", store.RunSucceeded)
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
@@ -592,8 +589,8 @@ func (s suite) TestStoreResetStaleRunningClosesRuns(t *testing.T) {
 	for _, want := range []struct {
 		st     store.Store
 		id     string
-		status string
-	}{{st, "STALE001", "aborted"}, {st, "DONE0001", "succeeded"}, {neighbour, "OTHER001", "running"}} {
+		status store.RunStatus
+	}{{st, "STALE001", store.RunAborted}, {st, "DONE0001", store.RunSucceeded}, {neighbour, "OTHER001", store.RunRunning}} {
 		run, ok, err := want.st.FindRunRow(ctx, want.id)
 		if err != nil || !ok {
 			t.Fatalf("FindRunRow %s: %v (found %v)", want.id, err, ok)
@@ -603,7 +600,7 @@ func (s suite) TestStoreResetStaleRunningClosesRuns(t *testing.T) {
 			t.Errorf("run %s is %q, want %q", want.id, run.Status, want.status)
 		}
 
-		if want.status == "aborted" && run.FinishedAt.IsZero() {
+		if want.status == store.RunAborted && run.FinishedAt.IsZero() {
 			t.Errorf("run %s was closed with no finish time", want.id)
 		}
 	}

@@ -7,7 +7,7 @@ type Deliveries interface {
 	// RecordDelivery files a delivery as the newest version of resourceName, keeps its payload, and dispatches it, all in one transaction — a sender that was answered 2xx has had all of it happen. A version already recorded (a redelivery) changes nothing and reports false.
 	RecordDelivery(ctx context.Context, resourceName string, delivery Delivery, dispatch Dispatch, limit int) (bool, error)
 	// Delivery is the payload recorded with a version; found is false once version_history: has pruned it.
-	Delivery(ctx context.Context, resourceName, versionJSON string) (Delivery, bool, error)
+	Delivery(ctx context.Context, resourceName string, version VersionKey) (Delivery, bool, error)
 }
 
 // Delivery is one webhook delivery as recorded.

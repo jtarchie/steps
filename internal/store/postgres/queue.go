@@ -58,25 +58,6 @@ func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID stri
 	return nil
 }
 
-// QueuedTrigger reads what EnqueueManualJob and EnqueueRerunJob left on a row.
-func (s *Store) QueuedTrigger(ctx context.Context, id int64) (store.QueuedTrigger, error) {
-	var (
-		trigger store.QueuedTrigger
-		rerun   sql.NullString
-	)
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT manual, rerun_of FROM trigger_queue WHERE id = $1 AND pipeline_id = $2
-	`, id, s.pipelineID).Scan(&trigger.Manual, &rerun)
-	if err != nil {
-		return store.QueuedTrigger{}, fmt.Errorf("could not read queue row %d: %w", id, err)
-	}
-
-	trigger.RerunOf = rerun.String
-
-	return trigger, nil
-}
-
 // ClaimNextJob transitions the oldest claimable pending row to running; see
 // the sqlite driver's ClaimNextJob for what makes a row claimable.
 //
@@ -86,11 +67,11 @@ func (s *Store) QueuedTrigger(ctx context.Context, id int64) (store.QueuedTrigge
 // That is a read-then-write, so it runs under the pipeline lock (see write),
 // which serializes claims within a pipeline; SKIP LOCKED then only lets a
 // claim pass over a row some other statement holds rather than wait on it.
-func (s *Store) ClaimNextJob(ctx context.Context) (int64, string, bool, error) {
+func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error) {
 	var (
-		id      int64
-		jobName string
-		found   bool
+		claim store.ClaimedJob
+		rerun sql.NullString
+		found bool
 	)
 
 	err := s.write(ctx, func(tx *sql.Tx) error {
@@ -121,8 +102,8 @@ func (s *Store) ClaimNextJob(ctx context.Context) (int64, string, bool, error) {
 				ORDER BY tq.id LIMIT 1
 				FOR UPDATE SKIP LOCKED
 			)
-			RETURNING id, job_name
-		`, now(), s.pipelineID).Scan(&id, &jobName)
+			RETURNING id, job_name, manual, rerun_of
+		`, now(), s.pipelineID).Scan(&claim.ID, &claim.JobName, &claim.Manual, &rerun)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -132,10 +113,12 @@ func (s *Store) ClaimNextJob(ctx context.Context) (int64, string, bool, error) {
 		return err //nolint:wrapcheck // wrapped below, as every other failure to claim
 	})
 	if err != nil {
-		return 0, "", false, fmt.Errorf("could not claim next job: %w", err)
+		return store.ClaimedJob{}, false, fmt.Errorf("could not claim next job: %w", err)
 	}
 
-	return id, jobName, found, nil
+	claim.RerunOf = rerun.String
+
+	return claim, found, nil
 }
 
 // CompleteJob marks a claimed row done or failed.

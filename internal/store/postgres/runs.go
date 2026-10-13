@@ -43,7 +43,9 @@ func scanRunRowFrom(rows *sql.Rows) (store.RunRow, error) { return scanRunRow(ro
 
 // StartRun records a NEW run; an id already present anywhere in the schema
 // is store.ErrRunExists, since run ids are global.
-func (s *Store) StartRun(ctx context.Context, id, jobName, workspaceDir, configSHA string) error {
+func (s *Store) StartRun(ctx context.Context, run store.NewRun) error {
+	id, jobName, workspaceDir, configSHA := run.ID, run.JobName, run.Workspace, run.ConfigSHA
+
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO runs (id, pipeline_id, job_name, workspace, status, started_at, revision_id)
 		VALUES ($1, $2, $3, $4, 'running', $5,
@@ -91,10 +93,10 @@ func (s *Store) ResumeRun(ctx context.Context, id, workspaceDir, configSHA strin
 }
 
 // FinishRun records how a run ended, and when.
-func (s *Store) FinishRun(ctx context.Context, id, status string) error {
+func (s *Store) FinishRun(ctx context.Context, id string, status store.RunStatus) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE runs SET status = $1, finished_at = $2 WHERE id = $3 AND pipeline_id = $4`,
-		status, now(), id, s.pipelineID)
+		string(status), now(), id, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not finish run %q: %w", id, err)
 	}
@@ -103,7 +105,9 @@ func (s *Store) FinishRun(ctx context.Context, id, status string) error {
 }
 
 // RecordRunStep marks one step of one build of a run as done.
-func (s *Store) RecordRunStep(ctx context.Context, runID, buildID string, index int, name string) error {
+func (s *Store) RecordRunStep(ctx context.Context, runID string, step store.RunStep) error {
+	buildID, index, name := step.BuildID, step.Index, step.Name
+
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_steps (run_id, build_id, step_index, step_name) VALUES ($1, $2, $3, $4)
 		ON CONFLICT (run_id, build_id, step_index) DO NOTHING

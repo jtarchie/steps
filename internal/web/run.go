@@ -72,7 +72,7 @@ func (s *Server) handleRun(c *echo.Context) error {
 	// A failed run opens by answering the question it prompts: what is
 	// different about this one. Only computed for a failure — on a green run
 	// it is trivia, and it costs a second query.
-	if view.Run.Status == "failed" {
+	if view.Run.Status == store.RunFailed {
 		err = s.attachDiff(c, &view)
 		if err != nil {
 			return fmt.Errorf("web: %w", err)
@@ -165,7 +165,7 @@ func (s *Server) attachDiff(c *echo.Context, view *runView) error {
 	}
 
 	for _, candidate := range runs {
-		if candidate.Status != "succeeded" || !candidate.StartedAt.Before(view.Run.StartedAt) {
+		if candidate.Status != store.RunSucceeded || !candidate.StartedAt.Before(view.Run.StartedAt) {
 			continue
 		}
 

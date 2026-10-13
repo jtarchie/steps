@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -19,7 +20,7 @@ func (s suite) startQuestionRun(t *testing.T) store.Store {
 
 	st := s.open(t, "test")
 
-	err := st.StartRun(context.Background(), "run-1", "release-note", "/tmp/ws", "")
+	err := st.StartRun(context.Background(), store.NewRun{ID: "run-1", JobName: "release-note", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -72,7 +73,7 @@ func (s suite) TestAskQuestionMemoIsPerRun(t *testing.T) {
 
 	st := s.startQuestionRun(t)
 
-	err := st.StartRun(context.Background(), "run-2", "release-note", "/tmp/ws", "")
+	err := st.StartRun(context.Background(), store.NewRun{ID: "run-2", JobName: "release-note", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -155,7 +156,15 @@ func (s suite) TestAnswerQuestionRecordsWhoAndWhat(t *testing.T) {
 
 	ctx := context.Background()
 	st := s.startQuestionRun(t)
+	asking := time.Now()
 	question, _ := askBump(t, st, "run-1")
+	asked := time.Now()
+
+	assertStamped(t, "AskedAt", question.AskedAt, asking, asked)
+
+	if !question.AnsweredAt.IsZero() {
+		t.Errorf("a pending question was answered at %v", question.AnsweredAt)
+	}
 
 	err := st.AnswerQuestion(ctx, question.ID, "minor", "jtarchie")
 	if err != nil {
@@ -167,13 +176,15 @@ func (s suite) TestAnswerQuestionRecordsWhoAndWhat(t *testing.T) {
 		t.Fatalf("QuestionStatus: %v", err)
 	}
 
-	if answered.Status != "answered" || answered.Answer != "minor" || answered.AnsweredBy != "jtarchie" {
+	if answered.Status != store.QuestionAnswered || answered.Answer != "minor" || answered.AnsweredBy != "jtarchie" {
 		t.Errorf("question = status %q answer %q by %q, want answered/minor/jtarchie",
 			answered.Status, answered.Answer, answered.AnsweredBy)
 	}
 
-	if answered.AnsweredAt == "" {
-		t.Error("an answered question recorded no answered_at")
+	assertStamped(t, "AnsweredAt", answered.AnsweredAt, asked, time.Now())
+
+	if !answered.AskedAt.Equal(question.AskedAt) {
+		t.Errorf("answering moved AskedAt from %v to %v", question.AskedAt, answered.AskedAt)
 	}
 
 	err = st.AnswerQuestion(ctx, question.ID, "major", "someone-else")
@@ -209,7 +220,7 @@ func (s suite) TestAnswerQuestionEnforcesOptionsRequired(t *testing.T) {
 		t.Fatal("an off-list answer was accepted for an options_required question")
 	}
 
-	if still, _ := st.QuestionStatus(ctx, question.ID); still.Status != "pending" {
+	if still, _ := st.QuestionStatus(ctx, question.ID); still.Status != store.QuestionPending {
 		t.Errorf("a refused answer resolved the question anyway: %q", still.Status)
 	}
 
@@ -230,7 +241,7 @@ func (s suite) TestCloseQuestionRecordsWhatTheModelWasTold(t *testing.T) {
 
 	expired, _ := askBump(t, st, "run-1")
 
-	err := st.CloseQuestion(ctx, expired.ID, "expired", "minor", "default")
+	err := st.CloseQuestion(ctx, expired.ID, store.QuestionExpired, "minor", "default")
 	if err != nil {
 		t.Fatalf("CloseQuestion: %v", err)
 	}
@@ -240,7 +251,7 @@ func (s suite) TestCloseQuestionRecordsWhatTheModelWasTold(t *testing.T) {
 		t.Fatalf("QuestionStatus: %v", err)
 	}
 
-	if got.Status != "expired" || got.Answer != "minor" || got.AnsweredBy != "default" {
+	if got.Status != store.QuestionExpired || got.Answer != "minor" || got.AnsweredBy != "default" {
 		t.Errorf("expired question = status %q answer %q by %q, want expired/minor/default",
 			got.Status, got.Answer, got.AnsweredBy)
 	}
@@ -253,7 +264,7 @@ func (s suite) TestCloseQuestionRecordsWhatTheModelWasTold(t *testing.T) {
 		t.Fatalf("AskQuestion: %v", err)
 	}
 
-	err = st.CloseQuestion(ctx, aborted.ID, "aborted", "", "step")
+	err = st.CloseQuestion(ctx, aborted.ID, store.QuestionAborted, "", "step")
 	if err != nil {
 		t.Fatalf("CloseQuestion: %v", err)
 	}

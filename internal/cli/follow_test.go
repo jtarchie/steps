@@ -71,7 +71,7 @@ func followStoreFor(t *testing.T) *sqlite.Store {
 
 	t.Cleanup(func() { _ = st.Close() })
 
-	err = st.StartRun(context.Background(), "R", "build", "", "")
+	err = st.StartRun(context.Background(), store.NewRun{ID: "R", JobName: "build"})
 	if err != nil {
 		t.Fatal(err)
 	}

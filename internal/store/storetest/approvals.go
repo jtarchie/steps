@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -18,28 +19,49 @@ func (s suite) TestDecidingTwiceIsNotPending(t *testing.T) {
 
 	ctx := context.Background()
 	st := s.open(t, "test")
+	requesting := time.Now()
 
 	id, err := st.RequestApproval(ctx, "deploy", "ship it?")
 	if err != nil {
 		t.Fatalf("RequestApproval: %v", err)
 	}
 
-	err = st.DecideApproval(ctx, id, "approved", "jtarchie", "")
+	requested := time.Now()
+
+	pending, err := st.ApprovalStatus(ctx, id)
+	if err != nil {
+		t.Fatalf("ApprovalStatus: %v", err)
+	}
+
+	assertStamped(t, "RequestedAt", pending.RequestedAt, requesting, requested)
+
+	if !pending.DecidedAt.IsZero() {
+		t.Errorf("a pending approval was decided at %v", pending.DecidedAt)
+	}
+
+	err = st.DecideApproval(ctx, id, store.ApprovalApproved, "jtarchie", "")
 	if err != nil {
 		t.Fatalf("DecideApproval: %v", err)
 	}
 
-	err = st.DecideApproval(ctx, id, "rejected", "someone-else", "")
+	decided, err := st.ApprovalStatus(ctx, id)
+	if err != nil {
+		t.Fatalf("ApprovalStatus: %v", err)
+	}
+
+	assertStamped(t, "DecidedAt", decided.DecidedAt, requested, time.Now())
+
+	err = st.DecideApproval(ctx, id, store.ApprovalRejected, "someone-else", "")
 	if !errors.Is(err, store.ErrApprovalNotPending) {
 		t.Errorf("deciding an already-decided approval = %v, want store.ErrApprovalNotPending", err)
 	}
 
-	err = st.DecideApproval(ctx, id+1000, "approved", "jtarchie", "")
+	err = st.DecideApproval(ctx, id+1000, store.ApprovalApproved, "jtarchie", "")
 	if !errors.Is(err, store.ErrApprovalNotPending) {
 		t.Errorf("deciding an approval nobody requested = %v, want store.ErrApprovalNotPending", err)
 	}
 
-	if again, _ := st.ApprovalStatus(ctx, id); again.Status != "approved" || again.DecidedBy != "jtarchie" {
+	if again, _ := st.ApprovalStatus(ctx, id); again.Status != store.ApprovalApproved || again.DecidedBy != "jtarchie" {
 		t.Errorf("the second decision overwrote the first: %+v", again)
 	}
 }
@@ -62,7 +84,7 @@ func (s suite) TestApprovalsListsOnlyWhatIsWaiting(t *testing.T) {
 		t.Fatalf("waiting approvals = %+v, want only the undecided one", pending)
 	}
 
-	if pending[0].Status != "pending" || pending[0].Message != "and again?" {
+	if pending[0].Status != store.ApprovalPending || pending[0].Message != "and again?" {
 		t.Errorf("waiting approval = %+v, want the pending request", pending[0])
 	}
 }
@@ -91,7 +113,7 @@ func (s suite) TestApprovalsListsTheDecisionsNewestFirst(t *testing.T) {
 	}
 
 	decided := all[1]
-	if decided.Status != "approved" || decided.DecidedBy != "jtarchie" || decided.Reason != "looks fine" {
+	if decided.Status != store.ApprovalApproved || decided.DecidedBy != "jtarchie" || decided.Reason != "looks fine" {
 		t.Errorf("decided approval = %+v, want approved by jtarchie because it looks fine", decided)
 	}
 }
@@ -108,13 +130,13 @@ func (s suite) TestApprovalStatusReadsOneDecision(t *testing.T) {
 		t.Fatalf("RequestApproval: %v", err)
 	}
 
-	err = st.DecideApproval(ctx, id, "rejected", "jtarchie", "not today")
+	err = st.DecideApproval(ctx, id, store.ApprovalRejected, "jtarchie", "not today")
 	if err != nil {
 		t.Fatalf("DecideApproval: %v", err)
 	}
 
 	approval, err := st.ApprovalStatus(ctx, id)
-	if err != nil || approval.ID != id || approval.Status != "rejected" || approval.DecidedBy != "jtarchie" || approval.Reason != "not today" {
+	if err != nil || approval.ID != id || approval.Status != store.ApprovalRejected || approval.DecidedBy != "jtarchie" || approval.Reason != "not today" {
 		t.Errorf("ApprovalStatus = %+v, %v; want the rejection", approval, err)
 	}
 
@@ -142,7 +164,7 @@ func (s suite) twoApprovals(t *testing.T) store.Store {
 		t.Fatalf("RequestApproval: %v", err)
 	}
 
-	err = st.DecideApproval(ctx, first, "approved", "jtarchie", "looks fine")
+	err = st.DecideApproval(ctx, first, store.ApprovalApproved, "jtarchie", "looks fine")
 	if err != nil {
 		t.Fatalf("DecideApproval: %v", err)
 	}

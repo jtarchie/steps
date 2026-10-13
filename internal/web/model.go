@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/runview"
@@ -513,7 +514,7 @@ type jobView struct {
 	// Held is the circuit breaker's state (max_consecutive_failures), never a person's pause.
 	Held     bool
 	Failures int
-	HeldAt   string
+	HeldAt   time.Time
 	// Upstream and Downstream are the passed: constraint graph, per resource.
 	Upstream   []edgeView
 	Downstream []edgeView
@@ -546,8 +547,8 @@ type edgeView struct {
 
 // buildJobViews assembles the board: every configured job, its latest run,
 // its breaker state, and the dependency edges in both directions.
-func buildJobViews(cfg *config.Config, latest map[string]store.RunRow, paused []store.PausedJob) []jobView {
-	pausedBy := map[string]store.PausedJob{}
+func buildJobViews(cfg *config.Config, latest map[string]store.RunRow, paused []store.HeldJob) []jobView {
+	pausedBy := map[string]store.HeldJob{}
 	for _, job := range paused {
 		pausedBy[job.Name] = job
 	}
@@ -563,7 +564,7 @@ func buildJobViews(cfg *config.Config, latest map[string]store.RunRow, paused []
 
 // buildJobView assembles one job's row: its latest run, its breaker state, and
 // the passed: constraints it declares.
-func buildJobView(job config.Job, latest map[string]store.RunRow, pausedBy map[string]store.PausedJob) jobView {
+func buildJobView(job config.Job, latest map[string]store.RunRow, pausedBy map[string]store.HeldJob) jobView {
 	view := jobView{Name: job.Name, Inputs: job.Inputs(), Outputs: job.Outputs()}
 
 	if run, ok := latest[job.Name]; ok {
@@ -571,7 +572,7 @@ func buildJobView(job config.Job, latest map[string]store.RunRow, pausedBy map[s
 	}
 
 	if breaker, ok := pausedBy[job.Name]; ok {
-		view.Held, view.Failures, view.HeldAt = true, breaker.Consecutive, breaker.PausedAt
+		view.Held, view.Failures, view.HeldAt = true, breaker.Consecutive, breaker.HeldAt
 	}
 
 	for resource, upstream := range job.PassedConstraints() {

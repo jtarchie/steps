@@ -68,7 +68,7 @@ func TestAFailedPollNamesItsResourceAndRevision(t *testing.T) {
 
 type refusingVersions struct{ store.Store }
 
-func (refusingVersions) RecordCheckedVersion(context.Context, string, string) error {
+func (refusingVersions) RecordCheckedVersion(context.Context, string, store.VersionKey) error {
 	return os.ErrPermission
 }
 

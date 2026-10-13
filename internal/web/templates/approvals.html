@@ -5,7 +5,7 @@
 
 {{range .Approvals}}
 <div class="approval {{if ne .Status "pending"}}decided{{end}}">
-  <div class="meta"><a href="/p/{{$.Nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · requested {{agoText .RequestedAt}}{{if .DecidedAt}} · decided {{agoText .DecidedAt}} by {{.DecidedBy}}{{end}}</div>
+  <div class="meta"><a href="/p/{{$.Nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · requested {{agoTag .RequestedAt}}{{if not .DecidedAt.IsZero}} · decided {{agoTag .DecidedAt}} by {{.DecidedBy}}{{end}}</div>
   <div class="msg">{{.Message}}</div>
   {{if eq .Status "pending"}}
     {{if $.Nav.ReadOnly}}

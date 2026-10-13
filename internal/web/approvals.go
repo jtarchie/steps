@@ -63,9 +63,9 @@ func (s *Server) handleDecideApproval(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "approval id must be a number")
 	}
 
-	status := "approved"
+	status := store.ApprovalApproved
 	if c.FormValue("decision") == "reject" {
-		status = "rejected"
+		status = store.ApprovalRejected
 	}
 
 	// A decision that no longer matches a pending row is a resubmission — a

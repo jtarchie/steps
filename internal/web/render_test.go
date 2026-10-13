@@ -47,7 +47,7 @@ func TestSparklineScalesOldestFirstToTheSlowest(t *testing.T) {
 	t.Parallel()
 
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	run := func(took time.Duration, status string) store.RunRow {
+	run := func(took time.Duration, status store.RunStatus) store.RunRow {
 		return store.RunRow{StartedAt: start, FinishedAt: start.Add(took), Status: status}
 	}
 

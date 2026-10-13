@@ -144,7 +144,7 @@ func (s *Store) MemoryScopes(ctx context.Context) ([]store.MemoryScope, error) {
 		)
 
 		err := rows.Scan(&scope.Scope, &scope.Entries, &last)
-		scope.LastAt = last.UTC().Format(sortableNano)
+		scope.LastAt = last.UTC()
 
 		return scope, err //nolint:wrapcheck // collect wraps with what it was reading
 	})
@@ -154,8 +154,6 @@ const memoryColumns = `
 	SELECT id, scope, text, COALESCE(run_id, ''), created_at FROM memories
 `
 
-// scanMemory renders created_at in the sqlite driver's sortableNano, the
-// layout it stores this table's in.
 func scanMemory(row rowScanner) (store.Memory, error) {
 	var (
 		memory  store.Memory
@@ -163,7 +161,7 @@ func scanMemory(row rowScanner) (store.Memory, error) {
 	)
 
 	err := row.Scan(&memory.ID, &memory.Scope, &memory.Text, &memory.RunID, &created)
-	memory.CreatedAt = created.UTC().Format(sortableNano)
+	memory.CreatedAt = created.UTC()
 
 	return memory, err //nolint:wrapcheck // every caller wraps with what it was reading
 }

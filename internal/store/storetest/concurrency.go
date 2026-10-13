@@ -64,7 +64,8 @@ func (s suite) TestConcurrentClaimersHonourSerialGroups(t *testing.T) {
 		)
 
 		concurrently(16, handles, func(st store.Store, _ int) {
-			id, _, found, err := st.ClaimNextJob(ctx)
+			claim, found, err := st.ClaimNextJob(ctx)
+			id := claim.ID
 			if err != nil {
 				t.Errorf("ClaimNextJob: %v", err)
 
@@ -110,7 +111,7 @@ func (s suite) TestConcurrentVersionsGetDistinctOrder(t *testing.T) {
 	const writers = 24
 
 	versions := make([]map[string]any, writers)
-	encoded := make([]string, writers)
+	encoded := make([]store.VersionKey, writers)
 
 	for i := range writers {
 		versions[i] = map[string]any{"ref": fmt.Sprintf("v%d", i)}
@@ -130,7 +131,7 @@ func (s suite) TestConcurrentVersionsGetDistinctOrder(t *testing.T) {
 		case 1:
 			_, err = st.RecordVersionOrder(ctx, "repo", encoded[i])
 		default:
-			err = st.RecordPassedVersion(ctx, "build", "repo", encoded[i], "b1")
+			err = st.RecordPassedVersion(ctx, store.Pass{JobName: "build", Resource: "repo", Version: encoded[i], BuildID: "b1"})
 		}
 
 		if err != nil {
@@ -158,7 +159,7 @@ func assertDistinctOrders(t *testing.T, st store.Store, resource string, want in
 		t.Fatalf("%d versions recorded, want %d", len(orders), want)
 	}
 
-	seen := map[int64]string{}
+	seen := map[int64]store.VersionKey{}
 
 	for version, order := range orders {
 		if other, dup := seen[order]; dup {

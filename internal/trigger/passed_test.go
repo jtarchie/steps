@@ -106,7 +106,7 @@ func TestPassedReleasesOnceUpstreamHasPassedThatVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = st.RecordPassedVersion(ctx, "test", "repo", string(encoded), "b1")
+	err = st.RecordPassedVersion(ctx, store.Pass{JobName: "test", Resource: "repo", Version: store.VersionKey(encoded), BuildID: "b1"})
 	if err != nil {
 		t.Fatalf("RecordPassedVersion: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestVersionPassedUpstreamRequiresEveryJob(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = st.RecordPassedVersion(ctx, "unit", "repo", string(encoded), "b1")
+	err = st.RecordPassedVersion(ctx, store.Pass{JobName: "unit", Resource: "repo", Version: store.VersionKey(encoded), BuildID: "b1"})
 	if err != nil {
 		t.Fatalf("RecordPassedVersion: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestVersionPassedUpstreamRequiresEveryJob(t *testing.T) {
 		t.Error("a version green in one of two required jobs satisfied the constraint")
 	}
 
-	err = st.RecordPassedVersion(ctx, "lint", "repo", string(encoded), "b1")
+	err = st.RecordPassedVersion(ctx, store.Pass{JobName: "lint", Resource: "repo", Version: store.VersionKey(encoded), BuildID: "b1"})
 	if err != nil {
 		t.Fatalf("RecordPassedVersion: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestPassedIsPerVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = st.RecordPassedVersion(ctx, "test", "repo", string(encoded), "b1")
+	err = st.RecordPassedVersion(ctx, store.Pass{JobName: "test", Resource: "repo", Version: store.VersionKey(encoded), BuildID: "b1"})
 	if err != nil {
 		t.Fatalf("RecordPassedVersion: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestPassedReleasesOnALaterPoll(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = st.RecordPassedVersion(ctx, "test", "repo", string(encoded), "b1")
+	err = st.RecordPassedVersion(ctx, store.Pass{JobName: "test", Resource: "repo", Version: store.VersionKey(encoded), BuildID: "b1"})
 	if err != nil {
 		t.Fatalf("RecordPassedVersion: %v", err)
 	}
@@ -333,7 +333,7 @@ func TestPassedOnANonTriggeringGetStillReleases(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = st.RecordPassedVersion(ctx, "build", "artifacts", string(encoded), "b1")
+	err = st.RecordPassedVersion(ctx, store.Pass{JobName: "build", Resource: "artifacts", Version: store.VersionKey(encoded), BuildID: "b1"})
 	if err != nil {
 		t.Fatalf("RecordPassedVersion: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestConformancePassedRequiresVersionsToPassTogether(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err = st.RecordPassedVersion(ctx, "upstream", resource, string(encoded), buildID)
+		err = st.RecordPassedVersion(ctx, store.Pass{JobName: "upstream", Resource: resource, Version: store.VersionKey(encoded), BuildID: buildID})
 		if err != nil {
 			t.Fatalf("RecordPassedVersion: %v", err)
 		}
@@ -450,7 +450,7 @@ func TestConformancePassedRowsWithoutABuildCannotCorrelate(t *testing.T) {
 	}
 
 	// The empty build id is exactly what the ALTER leaves on a pre-upgrade row.
-	err = st.RecordPassedVersion(ctx, "upstream", "repo", string(encoded), "")
+	err = st.RecordPassedVersion(ctx, store.Pass{JobName: "upstream", Resource: "repo", Version: store.VersionKey(encoded), BuildID: ""})
 	if err != nil {
 		t.Fatalf("RecordPassedVersion: %v", err)
 	}

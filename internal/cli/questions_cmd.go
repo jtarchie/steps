@@ -54,7 +54,7 @@ func (q *QuestionsListCmd) Run() error {
 
 	for _, question := range pending {
 		_, _ = fmt.Fprintf(writer, "%d\t%s\t%s\t%s\t%s\n",
-			question.ID, question.JobName, question.AgentName, question.AskedAt, question.Question)
+			question.ID, question.JobName, question.AgentName, stampNano(question.AskedAt), question.Question)
 
 		// Under the question rather than in a column of its own: an option
 		// list is as long as the answers are, and squeezing it into a cell

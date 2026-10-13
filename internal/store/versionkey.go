@@ -22,20 +22,27 @@ import (
 // pipeline, or --version-history on the command line.
 const DefaultResourceVersionCap = 1000
 
-// EncodeVersion renders a version as the canonical JSON every version table
-// keys on. json.Marshal sorts map keys, so the same version always produces
-// the same string.
-func EncodeVersion(version map[string]any) (string, error) {
+// VersionKey is a version as the canonical JSON every version table keys on.
+//
+// A type rather than a string because two spellings of one version are two
+// keys: a version marshalled some other way reaches a table as a version
+// nobody recorded, and a passed: gate waits on it forever. EncodeVersion is
+// the only constructor outside a driver; a driver hands back what it stored.
+type VersionKey string
+
+// EncodeVersion renders a version as its VersionKey. json.Marshal sorts map
+// keys, so the same version always produces the same key.
+func EncodeVersion(version map[string]any) (VersionKey, error) {
 	encoded, err := json.Marshal(version)
 	if err != nil {
 		return "", fmt.Errorf("could not encode version: %w", err)
 	}
 
-	return string(encoded), nil
+	return VersionKey(encoded), nil
 }
 
 // DecodeVersion parses one stored version, keeping numbers as exact digits.
-func DecodeVersion(encoded string) (map[string]any, error) {
+func DecodeVersion(encoded VersionKey) (map[string]any, error) {
 	decoder := json.NewDecoder(bytes.NewReader([]byte(encoded)))
 	decoder.UseNumber()
 
@@ -51,7 +58,7 @@ func DecodeVersion(encoded string) (map[string]any, error) {
 
 // DecodeVersions decodes a stored check history in order — what
 // ResourceVersionsJSON hands back, for the caller that inspects fields.
-func DecodeVersions(encoded []string) ([]map[string]any, error) {
+func DecodeVersions(encoded []VersionKey) ([]map[string]any, error) {
 	versions := make([]map[string]any, 0, len(encoded))
 
 	for _, one := range encoded {

@@ -112,7 +112,7 @@ func (m mark) TitlePrefix() string {
 	return prefix
 }
 
-func discOf(status string) disc {
+func discOf[S ~string](status S) disc {
 	switch statusWord(status) {
 	case "passed":
 		return discPassed
@@ -129,7 +129,7 @@ func discOf(status string) disc {
 	}
 }
 
-func finished(status string) bool {
+func finished[S ~string](status S) bool {
 	word := statusWord(status)
 
 	return word != "running" && word != "queued"

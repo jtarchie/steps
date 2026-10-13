@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -41,7 +42,7 @@ type Memory struct {
 	// RunID is the run that remembered it, "" once run_history: has reaped
 	// that run — the memory outlives it, which is the point of keeping one.
 	RunID     string
-	CreatedAt string
+	CreatedAt time.Time
 }
 
 // MemoryScope is one scope's summary, for listing what is kept without
@@ -50,7 +51,7 @@ type MemoryScope struct {
 	Scope   string
 	Entries int
 	// LastAt is when its newest entry was remembered.
-	LastAt string
+	LastAt time.Time
 }
 
 // DefaultMemoryEntries bounds a scope's entries when nothing says otherwise.

@@ -15,11 +15,11 @@ import (
 )
 
 // RecordCheckedVersion upserts the latest observed version for a resource.
-func (s *Store) RecordCheckedVersion(ctx context.Context, resourceName, versionJSON string) error {
+func (s *Store) RecordCheckedVersion(ctx context.Context, resourceName string, versionJSON store.VersionKey) error {
 	return recordCheckedVersion(ctx, s.db, s.pipelineID, resourceName, versionJSON)
 }
 
-func recordCheckedVersion(ctx context.Context, db executor, pipelineID int64, resourceName, versionJSON string) error {
+func recordCheckedVersion(ctx context.Context, db executor, pipelineID int64, resourceName string, versionJSON store.VersionKey) error {
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO resource_checks (pipeline_id, resource_name, version_json, checked_at)
 		VALUES ($1, $2, $3, $4)
@@ -38,7 +38,9 @@ func recordCheckedVersion(ctx context.Context, db executor, pipelineID int64, re
 // COMMITTED the guarded UPDATE re-reads a row a concurrent writer changed
 // before deciding, so the comparison is against what is committed, not what
 // this statement's snapshot saw.
-func (s *Store) CompareAndSetCheckedVersion(ctx context.Context, resourceName, expected string, expectedFound bool, next string) (bool, error) {
+func (s *Store) CompareAndSetCheckedVersion(ctx context.Context, swap store.CheckedSwap) (bool, error) {
+	resourceName, expected, expectedFound, next := swap.Resource, swap.Expected, swap.ExpectedFound, swap.Next
+
 	query := `UPDATE resource_checks SET version_json = $1, checked_at = $2
 		WHERE pipeline_id = $3 AND resource_name = $4 AND version_json = $5`
 	args := []any{next, now(), s.pipelineID, resourceName, expected}
@@ -152,7 +154,9 @@ func (s *Store) CheckErrors(ctx context.Context) ([]store.CheckError, error) {
 
 // RecordPassedVersion records that jobName completed successfully against
 // this exact version of a resource.
-func (s *Store) RecordPassedVersion(ctx context.Context, jobName, resourceName, versionJSON, buildID string) error {
+func (s *Store) RecordPassedVersion(ctx context.Context, pass store.Pass) error {
+	jobName, resourceName, versionJSON, buildID := pass.JobName, pass.Resource, pass.Version, pass.BuildID
+
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		err := ensureVersion(ctx, tx, s.pipelineID, resourceName, versionJSON)
 		if err != nil {
@@ -197,7 +201,7 @@ func (s *Store) PassedVersions(ctx context.Context, jobName string, limit int) (
 // HasPassedVersionSet reports whether jobName has one build in which EVERY
 // (resource, version) pair in want was green at the same time. Rows with no
 // build id can never satisfy it; an empty want is vacuously true.
-func (s *Store) HasPassedVersionSet(ctx context.Context, jobName string, want map[string]string) (bool, error) {
+func (s *Store) HasPassedVersionSet(ctx context.Context, jobName string, want map[string]store.VersionKey) (bool, error) {
 	if len(want) == 0 {
 		return true, nil
 	}
@@ -207,7 +211,7 @@ func (s *Store) HasPassedVersionSet(ctx context.Context, jobName string, want ma
 
 	for resourceName, versionJSON := range want {
 		resources = append(resources, resourceName)
-		versions = append(versions, versionJSON)
+		versions = append(versions, string(versionJSON))
 	}
 
 	var found bool
@@ -270,7 +274,9 @@ func (s *Store) RecordConsumedMark(ctx context.Context, jobName, resourceName st
 
 // RecordRunInput remembers that a run was created with this version, bound
 // under this get.
-func (s *Store) RecordRunInput(ctx context.Context, runID, inputName, resourceName, versionJSON string) error {
+func (s *Store) RecordRunInput(ctx context.Context, runID string, input store.RunInput) error {
+	inputName, resourceName, versionJSON := input.Input, input.Resource, input.Version
+
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_inputs (run_id, input_name, resource_name, version_json)
 		VALUES ($1, $2, $3, $4)

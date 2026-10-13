@@ -223,7 +223,7 @@ func mustEnqueueJob(t *testing.T, st *Store, jobName, reason string) {
 func mustClaimJob(t *testing.T, st *Store, want string) (id int64, jobName string) {
 	t.Helper()
 
-	id, jobName, found, err := st.ClaimNextJob(context.Background())
+	claim, found, err := st.ClaimNextJob(context.Background())
 	if err != nil {
 		t.Fatalf("ClaimNextJob: %v", err)
 	}
@@ -232,11 +232,11 @@ func mustClaimJob(t *testing.T, st *Store, want string) (id int64, jobName strin
 		t.Fatal("ClaimNextJob: expected a pending job, queue was empty")
 	}
 
-	if want != "" && jobName != want {
-		t.Fatalf("ClaimNextJob = %q, want %q", jobName, want)
+	if want != "" && claim.JobName != want {
+		t.Fatalf("ClaimNextJob = %q, want %q", claim.JobName, want)
 	}
 
-	return id, jobName
+	return claim.ID, claim.JobName
 }
 
 func TestStoreCompleteJob(t *testing.T) {
@@ -287,7 +287,7 @@ func TestLatestRunByJobBreaksATieAsListRunsDoes(t *testing.T) {
 	defer func() { _ = st.Close() }()
 
 	for _, id := range []string{"run-z", "run-a"} {
-		err := st.StartRun(ctx, id, "job", "/tmp/ws", "")
+		err := st.StartRun(ctx, store.NewRun{ID: id, JobName: "job", Workspace: "/tmp/ws"})
 		if err != nil {
 			t.Fatal(err)
 		}

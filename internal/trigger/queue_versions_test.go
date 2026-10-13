@@ -160,7 +160,8 @@ func runQueued(ctx context.Context, t *testing.T, cfg *config.Config, st store.S
 	t.Cleanup(func() { _ = provider.Close() })
 
 	for range 10 {
-		id, jobName, found, err := st.ClaimNextJob(ctx)
+		claim, found, err := st.ClaimNextJob(ctx)
+		id, jobName := claim.ID, claim.JobName
 		if err != nil {
 			t.Fatalf("ClaimNextJob: %v", err)
 		}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -265,14 +266,18 @@ func (s suite) TestAMemoryOutlivesTheRunThatRememberedIt(t *testing.T) {
 
 	build(ctx, t, st, "answer", "run-old", 1)
 
+	before := time.Now()
+
 	memory, _, err := st.Remember(ctx, store.Memory{Scope: "U1", Text: "likes go", RunID: "run-old"}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if memory.RunID != "run-old" || memory.CreatedAt == "" {
-		t.Errorf("Remember = %+v, want the run and a time it was remembered", memory)
+	if memory.RunID != "run-old" {
+		t.Errorf("Remember = %+v, want the run", memory)
 	}
+
+	assertStamped(t, "CreatedAt", memory.CreatedAt, before, time.Now())
 
 	build(ctx, t, st, "answer", "run-new", 2)
 
@@ -338,8 +343,8 @@ func (s suite) TestMemoryScopesSummarizeWhatIsKept(t *testing.T) {
 		t.Fatalf("scopes = %+v, want U1 (2) then U2 (1)", scopes)
 	}
 
-	if scopes[0].LastAt != newest.CreatedAt {
-		t.Errorf("U1 last remembered at %q, want its newest entry's %q", scopes[0].LastAt, newest.CreatedAt)
+	if !scopes[0].LastAt.Equal(newest.CreatedAt) {
+		t.Errorf("U1 last remembered at %v, want its newest entry's %v", scopes[0].LastAt, newest.CreatedAt)
 	}
 }
 

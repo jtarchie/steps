@@ -39,7 +39,7 @@ func TestOpenStoreRefusesAnOlderSchema(t *testing.T) {
 	// indistinguishable from a new one and has nothing to lose, so it is
 	// stamped rather than refused — the refusal is for the file somebody
 	// would be losing something by deleting.
-	err = fresh.StartRun(context.Background(), "R1", "build", t.TempDir(), "")
+	err = fresh.StartRun(context.Background(), store.NewRun{ID: "R1", JobName: "build", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("recording a run: %v", err)
 	}

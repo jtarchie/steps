@@ -64,15 +64,15 @@ func TestAVersionAtTheSizeCapIsRecorded(t *testing.T) {
 // refusingVersions fails every write the build-end bookkeeping makes.
 type refusingVersions struct{ store.Store }
 
-func (refusingVersions) RecordVersionOrder(context.Context, string, string) (int64, error) {
+func (refusingVersions) RecordVersionOrder(context.Context, string, store.VersionKey) (int64, error) {
 	return 0, os.ErrPermission
 }
 
-func (refusingVersions) RecordCheckedVersion(context.Context, string, string) error {
+func (refusingVersions) RecordCheckedVersion(context.Context, string, store.VersionKey) error {
 	return os.ErrPermission
 }
 
-func (refusingVersions) RecordPassedVersion(context.Context, string, string, string, string) error {
+func (refusingVersions) RecordPassedVersion(context.Context, store.Pass) error {
 	return os.ErrPermission
 }
 

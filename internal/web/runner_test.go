@@ -66,7 +66,8 @@ jobs:
 			t.Fatalf("EnqueueJob %d: %v", attempt, err)
 		}
 
-		_, jobName, claimed, err := st.ClaimNextJob(ctx)
+		claim, claimed, err := st.ClaimNextJob(ctx)
+		jobName := claim.JobName
 		if err != nil {
 			t.Fatalf("ClaimNextJob %d: %v", attempt, err)
 		}
@@ -281,9 +282,9 @@ jobs:
 		}
 	}
 
-	paused, err := st.PausedJobs(ctx)
+	paused, err := st.HeldJobs(ctx)
 	if err != nil {
-		t.Fatalf("PausedJobs: %v", err)
+		t.Fatalf("HeldJobs: %v", err)
 	}
 
 	if len(paused) != 1 || paused[0].Name != "build" {
@@ -365,9 +366,9 @@ jobs:
 		t.Fatalf("queue = %q, want failed succeeded failed", got)
 	}
 
-	paused, err := st.PausedJobs(ctx)
+	paused, err := st.HeldJobs(ctx)
 	if err != nil {
-		t.Fatalf("PausedJobs: %v", err)
+		t.Fatalf("HeldJobs: %v", err)
 	}
 
 	if len(paused) != 0 {
@@ -475,9 +476,9 @@ jobs:
 		t.Errorf("queue row status = %q, want running: an interrupted build was finalized, so nothing re-queues it", rows[0].Status)
 	}
 
-	paused, err := st.PausedJobs(t.Context())
+	paused, err := st.HeldJobs(t.Context())
 	if err != nil {
-		t.Fatalf("PausedJobs: %v", err)
+		t.Fatalf("HeldJobs: %v", err)
 	}
 
 	if len(paused) != 0 {
@@ -699,7 +700,7 @@ jobs:
 		t.Errorf("queue = %q, want the timed-out build failed and the next one skipped by the breaker it tripped", got)
 	}
 
-	paused, err := st.PausedJobs(ctx)
+	paused, err := st.HeldJobs(ctx)
 	if err != nil || len(paused) != 1 {
 		t.Errorf("paused = %+v (%v), want build: a timeout is a failure the breaker counts", paused, err)
 	}

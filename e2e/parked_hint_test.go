@@ -222,7 +222,7 @@ func readOnlyDaemon(t *testing.T, path, name string) (*web.Server, store.Store) 
 func parkQuestion(t *testing.T, st store.Store, dir string) int64 {
 	t.Helper()
 
-	err := st.StartRun(t.Context(), "PARKEDRUN", "publish", dir, "")
+	err := st.StartRun(t.Context(), store.NewRun{ID: "PARKEDRUN", JobName: "publish", Workspace: dir})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

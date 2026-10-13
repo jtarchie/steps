@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/store"
 )
 
 const githubSecret = "It's a Secret to Everybody"
@@ -226,7 +227,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	want := `{"branch":"main","event":"push","id":"aaa"}`
+	want := store.VersionKey(`{"branch":"main","event":"push","id":"aaa"}`)
 	if len(versions) != 1 || versions[0] != want {
 		t.Errorf("versions = %v, want only %s: the ping and the feature push filtered out, the second delivery of aaa the same version", versions, want)
 	}

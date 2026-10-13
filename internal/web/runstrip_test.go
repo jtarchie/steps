@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // stripOf cuts the run strip out of a run page, so an assertion about a chip
@@ -123,7 +125,7 @@ func TestRunPageStripDropsTheQueuedChipOnceItsRunStarts(t *testing.T) {
 		t.Fatal("a claimed row with no run yet is not shown as queued")
 	}
 
-	err := pipeline.Store.StartRun(context.Background(), "run-2", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(context.Background(), store.NewRun{ID: "run-2", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

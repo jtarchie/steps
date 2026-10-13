@@ -138,7 +138,7 @@ func (s *Server) handleRunEvents(c *echo.Context) error {
 		// Once the run is over and its events are all delivered, say so and
 		// close: the page has everything, and holding the socket open would
 		// only poll a table that can no longer change.
-		if run.Status != "running" {
+		if run.Status != store.RunRunning {
 			// The tab's finished mark rides along, rendered here, so a
 			// backgrounded tab whose reload is deferred still reports the
 			// outcome without the page owning a second copy of the rule.

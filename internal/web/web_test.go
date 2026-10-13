@@ -136,7 +136,7 @@ func TestRunTranscriptRendersStepsAndAgentTurns(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-1", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestTranscriptHighlightsDetectedContent(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-1", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestPromptIsShownLiterally(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-1", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestDelegateLineStaysAnAnnotation(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-1", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -548,7 +548,7 @@ func TestLiveStreamReplaysThenCloses(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-2", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-2", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -603,7 +603,7 @@ func TestSearchStopsAtTheCap(t *testing.T) {
 	server, pipeline := testPipeline(t)
 
 	for i := range searchHitLimit + 5 {
-		err := pipeline.Store.StartRun(t.Context(), fmt.Sprintf("run-%02d", i), "build", t.TempDir(), "")
+		err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: fmt.Sprintf("run-%02d", i), JobName: "build", Workspace: t.TempDir()})
 		if err != nil {
 			t.Fatalf("StartRun: %v", err)
 		}
@@ -685,12 +685,12 @@ func TestRunPageSaysWhenTheConfigurationChanged(t *testing.T) {
 		{"green-again", after, "succeeded"},
 		{"red-again", after, "failed"},
 	} {
-		err := pipeline.Store.StartRun(ctx, run.id, "build", "", run.sha)
+		err := pipeline.Store.StartRun(ctx, store.NewRun{ID: run.id, JobName: "build", ConfigSHA: run.sha})
 		if err != nil {
 			t.Fatalf("StartRun %s: %v", run.id, err)
 		}
 
-		err = pipeline.Store.FinishRun(ctx, run.id, run.status)
+		err = pipeline.Store.FinishRun(ctx, run.id, store.RunStatus(run.status))
 		if err != nil {
 			t.Fatalf("FinishRun %s: %v", run.id, err)
 		}
@@ -739,7 +739,7 @@ func TestGuardSkippedStepDoesNotStayRunning(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-guard", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-guard", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -780,7 +780,7 @@ func orphanRun(t *testing.T, status string) string {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-orphan", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-orphan", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -790,7 +790,7 @@ func orphanRun(t *testing.T, status string) string {
 	})
 
 	if status != "" {
-		err = pipeline.Store.FinishRun(ctx, "run-orphan", status)
+		err = pipeline.Store.FinishRun(ctx, "run-orphan", store.RunStatus(status))
 		if err != nil {
 			t.Fatalf("FinishRun: %v", err)
 		}
@@ -867,13 +867,13 @@ func TestRunPageTitleCarriesStatus(t *testing.T) {
 		{"t-bad", "failed", "✗"},
 		{"t-live", "running", "◐"},
 	} {
-		err := pipeline.Store.StartRun(ctx, tc.id, "build", "", "")
+		err := pipeline.Store.StartRun(ctx, store.NewRun{ID: tc.id, JobName: "build"})
 		if err != nil {
 			t.Fatalf("StartRun: %v", err)
 		}
 
 		if tc.status != "running" {
-			err = pipeline.Store.FinishRun(ctx, tc.id, tc.status)
+			err = pipeline.Store.FinishRun(ctx, tc.id, store.RunStatus(tc.status))
 			if err != nil {
 				t.Fatalf("FinishRun: %v", err)
 			}
@@ -900,7 +900,7 @@ func TestStepAnchors(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "anchored", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "anchored", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -949,7 +949,7 @@ func TestFollowRedirectAndPolling(t *testing.T) {
 		t.Errorf("expected no run yet, got %s", empty)
 	}
 
-	err := pipeline.Store.StartRun(ctx, "followed", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "followed", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1175,7 +1175,8 @@ func enqueueAndClaim(t *testing.T, st store.Store, job string) (int64, string, b
 		t.Fatalf("EnqueueJob %s: %v", job, err)
 	}
 
-	id, claimed, ok, err := st.ClaimNextJob(t.Context())
+	claim, ok, err := st.ClaimNextJob(t.Context())
+	id, claimed := claim.ID, claim.JobName
 	if err != nil {
 		t.Fatalf("ClaimNextJob: %v", err)
 	}
@@ -1213,7 +1214,7 @@ func TestRelativeTimesAreMachineReadable(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "ticking", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "ticking", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1248,7 +1249,7 @@ func TestTranscriptShowsTaskOutput(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "noisy", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "noisy", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1290,7 +1291,7 @@ func TestTranscriptShowsNotes(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "noted", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "noted", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1352,7 +1353,7 @@ func TestRunTranscriptHighlightsToolJSON(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-json", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-json", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1461,7 +1462,7 @@ func TestLiveViewResumesAfterWhatItRendered(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-live", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-live", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1499,7 +1500,7 @@ func TestEveryOutputEventSurvives(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-retry", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-retry", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1655,7 +1656,7 @@ func TestRunAndNodePagesDrawTheSameConversation(t *testing.T) {
 	summaryText := "SUMMARY-MARKER <script>alert(1)</script> [x](javascript:alert(1)) ![](http://beacon.example/p.gif)"
 	compactLabel := "compacted: 3 older messages summarized, last 2 kept verbatim"
 
-	err := pipeline.Store.StartRun(ctx, "run-1", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-1", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1809,14 +1810,14 @@ func TestFailedRunNamesWhatChangedSinceTheLastGreen(t *testing.T) {
 		{"green", "succeeded", strings.Repeat("b", 16)},
 		{"red", "failed", strings.Repeat("c", 16)},
 	} {
-		err := pipeline.Store.StartRun(ctx, run.id, "build", "", "")
+		err := pipeline.Store.StartRun(ctx, store.NewRun{ID: run.id, JobName: "build"})
 		if err != nil {
 			t.Fatalf("StartRun %s: %v", run.id, err)
 		}
 
 		appendEvents(t, pipeline.Store, run.id, steps(run.hash))
 
-		err = pipeline.Store.FinishRun(ctx, run.id, run.status)
+		err = pipeline.Store.FinishRun(ctx, run.id, store.RunStatus(run.status))
 		if err != nil {
 			t.Fatalf("FinishRun %s: %v", run.id, err)
 		}
@@ -1913,7 +1914,7 @@ func TestRunPageTriggerIsNotForced(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	err = pipeline.Store.StartRun(t.Context(), "r1", "build", "/tmp/ws", "")
+	err = pipeline.Store.StartRun(t.Context(), store.NewRun{ID: "r1", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -1943,7 +1944,7 @@ func TestRunPageOffersNoTriggerForAJobThePipelineDropped(t *testing.T) {
 	}
 
 	for _, job := range []string{"build", "gone"} {
-		err := pipeline.Store.StartRun(t.Context(), "run-"+job, job, "/tmp/ws", "")
+		err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: "run-" + job, JobName: job, Workspace: "/tmp/ws"})
 		if err != nil {
 			t.Fatalf("StartRun: %v", err)
 		}
@@ -1981,7 +1982,7 @@ func TestAPutsRowOpensOnWhatItProduced(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-put", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-put", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -2020,7 +2021,7 @@ func TestARunPageOpensOnlyThePathToAFailure(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-path", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-path", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -2100,7 +2101,7 @@ func TestRunPageKeepsWhatTheReaderOpened(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-folds", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-folds", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

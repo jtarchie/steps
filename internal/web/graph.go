@@ -817,9 +817,8 @@ func nodeTitle(view jobView) string {
 		}
 
 		held := fmt.Sprintf("held after %d failure%s", view.Failures, plural)
-		at, err := time.Parse(time.RFC3339Nano, view.HeldAt)
-		if err == nil {
-			held += ", " + formatAgo(at)
+		if !view.HeldAt.IsZero() {
+			held += ", " + formatAgo(view.HeldAt)
 		}
 
 		parts = append(parts, held)

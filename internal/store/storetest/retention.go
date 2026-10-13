@@ -82,7 +82,7 @@ func build(ctx context.Context, t *testing.T, st store.Store, jobName, runID str
 		t.Fatalf("RecordNode: %v", err)
 	}
 
-	err = st.RecordRunStep(ctx, runID, runID+"#0", 0, "work")
+	err = st.RecordRunStep(ctx, runID, store.RunStep{BuildID: runID + "#0", Index: 0, Name: "work"})
 	if err != nil {
 		t.Fatalf("RecordRunStep: %v", err)
 	}
@@ -97,7 +97,7 @@ func build(ctx context.Context, t *testing.T, st store.Store, jobName, runID str
 		}
 	}
 
-	err = st.FinishRun(ctx, runID, "succeeded")
+	err = st.FinishRun(ctx, runID, store.RunSucceeded)
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
@@ -482,12 +482,12 @@ func finishedRunUnder(ctx context.Context, t *testing.T, st store.Store, jobName
 		t.Fatalf("RecordRevision: %v", err)
 	}
 
-	err = st.StartRun(ctx, runID, jobName, "/tmp/ws", sha)
+	err = st.StartRun(ctx, store.NewRun{ID: runID, JobName: jobName, Workspace: "/tmp/ws", ConfigSHA: sha})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = st.FinishRun(ctx, runID, "succeeded")
+	err = st.FinishRun(ctx, runID, store.RunSucceeded)
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}

@@ -719,7 +719,7 @@ func writeDelivery(ctx context.Context, st store.Deliveries, name string, versio
 // versionText is a version as a reader sees it everywhere else — the JSON a check emits — rather than Go's map[k:v].
 func versionText(version map[string]any) string {
 	if key, ok := encodeVersion(version); ok {
-		return key
+		return string(key)
 	}
 
 	return fmt.Sprint(version)

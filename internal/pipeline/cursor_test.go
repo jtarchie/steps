@@ -35,7 +35,7 @@ func TestALostCursorMarkIsWarned(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	cursor := &versionCursor{marks: map[string]int64{}, orders: map[string]map[string]int64{"repo": {}}}
+	cursor := &versionCursor{marks: map[string]int64{}, orders: map[string]map[store.VersionKey]int64{"repo": {}}}
 	cursor.take(t.Context(), refusingMarks{st}, "build", "repo", map[string]any{"ref": "abc"})
 
 	if !strings.Contains(buf.String(), "job.cursor_unrecorded") {

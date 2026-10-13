@@ -80,7 +80,7 @@ func (s suite) TestAgentUsageAccumulatesAcrossAttempts(t *testing.T) {
 	// agent_usage.run_id references runs(id) as well, so the run has to exist —
 	// which in production it always does: usage is recorded from inside a step
 	// of a run that StartRun already filed.
-	err := st.StartRun(ctx, "r1", "j", "/tmp/ws", "")
+	err := st.StartRun(ctx, store.NewRun{ID: "r1", JobName: "j", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func (s suite) TestAgentUsageCostSurvivesAnUnpricedAttempt(t *testing.T) {
 
 	mustRecordNode(t, st, "j", "node")
 
-	err := st.StartRun(ctx, "r1", "j", "/tmp/ws", "")
+	err := st.StartRun(ctx, store.NewRun{ID: "r1", JobName: "j", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func (s suite) TestAgentUsageNeverPricedStaysNull(t *testing.T) {
 
 	mustRecordNode(t, st, "j", "node")
 
-	err := st.StartRun(ctx, "r1", "j", "/tmp/ws", "")
+	err := st.StartRun(ctx, store.NewRun{ID: "r1", JobName: "j", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func assertAccumulatedRow(t *testing.T, row store.AgentUsage) {
 func ensureRun(ctx context.Context, t *testing.T, st store.Store, runID, jobName string) {
 	t.Helper()
 
-	err := st.StartRun(ctx, runID, jobName, "/tmp/ws", "")
+	err := st.StartRun(ctx, store.NewRun{ID: runID, JobName: jobName, Workspace: "/tmp/ws"})
 	if err != nil && !errors.Is(err, store.ErrRunExists) {
 		t.Fatalf("StartRun: %v", err)
 	}

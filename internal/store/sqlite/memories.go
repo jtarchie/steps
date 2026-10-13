@@ -144,9 +144,15 @@ func (s *Store) MemoryScopes(ctx context.Context) ([]store.MemoryScope, error) {
 		WHERE pipeline_id = ?
 		GROUP BY scope ORDER BY scope
 	`, []any{s.pipelineID}, func(rows *sql.Rows) (store.MemoryScope, error) {
-		var scope store.MemoryScope
+		var (
+			scope store.MemoryScope
+			last  string
+		)
 
-		return scope, rows.Scan(&scope.Scope, &scope.Entries, &scope.LastAt)
+		err := rows.Scan(&scope.Scope, &scope.Entries, &last)
+		scope.LastAt = parseTimestamp(last)
+
+		return scope, err //nolint:wrapcheck // collect wraps with what it was reading
 	})
 }
 
@@ -155,9 +161,13 @@ const memoryColumns = `
 `
 
 func scanMemory(row rowScanner) (store.Memory, error) {
-	var memory store.Memory
+	var (
+		memory  store.Memory
+		created string
+	)
 
-	err := row.Scan(&memory.ID, &memory.Scope, &memory.Text, &memory.RunID, &memory.CreatedAt)
+	err := row.Scan(&memory.ID, &memory.Scope, &memory.Text, &memory.RunID, &created)
+	memory.CreatedAt = parseTimestamp(created)
 
 	return memory, err //nolint:wrapcheck // every caller wraps with what it was reading
 }

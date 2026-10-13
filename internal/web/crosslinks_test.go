@@ -82,7 +82,7 @@ func TestLiveNodeLinkMatchesServerSpelling(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-live", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-live", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestARunThatFailedOnAnMCPServerLinksTheMCPTab(t *testing.T) {
 	pipeline := server.Lookup("demo")
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-mcp", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-mcp", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestAnOrdinaryFailureDoesNotLinkTheMCPTab(t *testing.T) {
 	pipeline := server.Lookup("demo")
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-plain", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-plain", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestAnMCPFailureOnAPipelineWithNoServersLinksNothing(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-gone", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-gone", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

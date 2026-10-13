@@ -981,7 +981,7 @@ func TestARunningStepKeepsEveryChunkUntilItsOutput(t *testing.T) {
 
 	ctx := context.Background()
 
-	err = st.StartRun(ctx, "run-1", "build", "", "")
+	err = st.StartRun(ctx, store.NewRun{ID: "run-1", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

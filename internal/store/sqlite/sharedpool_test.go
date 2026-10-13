@@ -40,7 +40,7 @@ func TestHandlesOnOneFileShareTheirPools(t *testing.T) {
 	}
 
 	// The neighbour's release must not have closed what this handle writes through.
-	err = second.StartRun(context.Background(), "run-1", "build", "/tmp/ws", "")
+	err = second.StartRun(context.Background(), store.NewRun{ID: "run-1", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("second handle after the first released: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestManyHandlesWriteConcurrently(t *testing.T) {
 		wg.Go(func() {
 			ctx := context.Background()
 
-			err := st.StartRun(ctx, runID, "build", "/tmp/ws", "")
+			err := st.StartRun(ctx, store.NewRun{ID: runID, JobName: "build", Workspace: "/tmp/ws"})
 			if err != nil {
 				errs <- err
 
@@ -145,7 +145,7 @@ func TestAnIdleClaimDoesNotWaitForTheWriter(t *testing.T) {
 	bounded, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	_, _, claimed, err := idle.ClaimNextJob(bounded)
+	_, claimed, err := idle.ClaimNextJob(bounded)
 	if err != nil {
 		t.Fatalf("an empty queue's claim waited on the writer: %v", err)
 	}

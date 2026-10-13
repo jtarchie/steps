@@ -38,7 +38,7 @@ func pendingJobs(t *testing.T, st store.Store) []string {
 	return pending
 }
 
-func encoded(t *testing.T, version map[string]any) string {
+func encoded(t *testing.T, version map[string]any) store.VersionKey {
 	t.Helper()
 
 	encoded, err := store.EncodeVersion(version)
@@ -49,7 +49,7 @@ func encoded(t *testing.T, version map[string]any) string {
 	return encoded
 }
 
-func recordedPayload(t *testing.T, st store.Store, version string) (store.Delivery, bool) {
+func recordedPayload(t *testing.T, st store.Store, version store.VersionKey) (store.Delivery, bool) {
 	t.Helper()
 
 	got, found, err := st.Delivery(context.Background(), "push", version)
@@ -124,7 +124,7 @@ func (s suite) TestARedeliveryChangesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, found, err := st.ClaimNextJob(ctx)
+	_, found, err := st.ClaimNextJob(ctx)
 	if err != nil || !found {
 		t.Fatalf("claim: found=%v err=%v", found, err)
 	}

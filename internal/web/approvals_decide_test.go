@@ -15,7 +15,7 @@ type lockedDecisions struct {
 	store.Store
 }
 
-func (lockedDecisions) DecideApproval(context.Context, int64, string, string, string) error {
+func (lockedDecisions) DecideApproval(context.Context, int64, store.ApprovalStatus, string, string) error {
 	return errors.New("database is locked")
 }
 

@@ -69,27 +69,8 @@ func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID stri
 	return nil
 }
 
-// QueuedTrigger reads what EnqueueManualJob and EnqueueRerunJob left on a row.
-func (s *Store) QueuedTrigger(ctx context.Context, id int64) (store.QueuedTrigger, error) {
-	var (
-		trigger store.QueuedTrigger
-		rerun   sql.NullString
-	)
-
-	err := s.reads.QueryRowContext(ctx, `
-		SELECT manual, rerun_of FROM trigger_queue WHERE id = ? AND pipeline_id = ?
-	`, id, s.pipelineID).Scan(&trigger.Manual, &rerun)
-	if err != nil {
-		return store.QueuedTrigger{}, fmt.Errorf("could not read queue row %d: %w", id, err)
-	}
-
-	trigger.RerunOf = rerun.String
-
-	return trigger, nil
-}
-
 // ClaimNextJob atomically transitions the oldest claimable pending row to
-// running and returns its id/jobName; found=false when nothing is claimable.
+// running and returns it; found=false when nothing is claimable.
 //
 // Two rows are not claimable. One whose job already has max_in_flight builds
 // running — see config.Job.EffectiveMaxInFlight, which has already folded
@@ -105,10 +86,10 @@ func (s *Store) QueuedTrigger(ctx context.Context, id int64) (store.QueuedTrigge
 // Both conditions are inside the single UPDATE...RETURNING rather than checked
 // beforehand, so two workers can never claim conflicting rows — a
 // read-then-claim would have a race exactly where the lock is supposed to be.
-func (s *Store) ClaimNextJob(ctx context.Context) (int64, string, bool, error) {
+func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error) {
 	var (
-		id      int64
-		jobName string
+		claim   store.ClaimedJob
+		rerun   sql.NullString
 		pending bool
 	)
 
@@ -120,11 +101,11 @@ func (s *Store) ClaimNextJob(ctx context.Context) (int64, string, bool, error) {
 		`SELECT EXISTS (SELECT 1 FROM trigger_queue WHERE pipeline_id = ? AND status = 'pending')`,
 		s.pipelineID).Scan(&pending)
 	if err != nil {
-		return 0, "", false, fmt.Errorf("could not claim next job: %w", err)
+		return store.ClaimedJob{}, false, fmt.Errorf("could not claim next job: %w", err)
 	}
 
 	if !pending {
-		return 0, "", false, nil
+		return store.ClaimedJob{}, false, nil
 	}
 
 	err = s.db.QueryRowContext(ctx, `
@@ -153,17 +134,19 @@ func (s *Store) ClaimNextJob(ctx context.Context) (int64, string, bool, error) {
 			  )
 			ORDER BY tq.id LIMIT 1
 		)
-		RETURNING id, job_name
-	`, nowNano(), s.pipelineID).Scan(&id, &jobName)
+		RETURNING id, job_name, manual, rerun_of
+	`, nowNano(), s.pipelineID).Scan(&claim.ID, &claim.JobName, &claim.Manual, &rerun)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, "", false, nil
+		return store.ClaimedJob{}, false, nil
 	}
 
 	if err != nil {
-		return 0, "", false, fmt.Errorf("could not claim next job: %w", err)
+		return store.ClaimedJob{}, false, fmt.Errorf("could not claim next job: %w", err)
 	}
 
-	return id, jobName, true, nil
+	claim.RerunOf = rerun.String
+
+	return claim, true, nil
 }
 
 // CompleteJob marks a claimed row done or failed. Callers must not call this

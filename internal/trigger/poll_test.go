@@ -156,7 +156,8 @@ func waitForQueuedJob(ctx context.Context, t *testing.T, st store.Store) (int64,
 	deadline := time.Now().Add(10 * time.Second)
 
 	for time.Now().Before(deadline) {
-		id, jobName, ok, err := st.ClaimNextJob(ctx)
+		claim, ok, err := st.ClaimNextJob(ctx)
+		id, jobName := claim.ID, claim.JobName
 		if err != nil {
 			t.Fatalf("ClaimNextJob: %v", err)
 		}

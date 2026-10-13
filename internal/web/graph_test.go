@@ -432,13 +432,13 @@ func TestJobsBoardDrawsAJobByItsLastFinishedRun(t *testing.T) {
 func seedRun(t *testing.T, pipeline *Pipeline, id, job, status string) {
 	t.Helper()
 
-	err := pipeline.Store.StartRun(t.Context(), id, job, "/tmp/ws", "")
+	err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: id, JobName: job, Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if status != "" {
-		err = pipeline.Store.FinishRun(t.Context(), id, status)
+		err = pipeline.Store.FinishRun(t.Context(), id, store.RunStatus(status))
 		if err != nil {
 			t.Fatal(err)
 		}

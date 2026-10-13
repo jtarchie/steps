@@ -13,19 +13,19 @@ import (
 )
 
 // RecordJobOutcome updates a job's consecutive-failure count and reports
-// whether the job is now paused.
+// whether the job is now held.
 //
 // It counts triggered RUNS, not the retries inside one — conflating the two
 // would trip the breaker on ordinary flakiness that a retry would have
 // absorbed, which is the opposite of the intent. maxFailures of 0 means the
 // job has no breaker: the count is still kept (so turning one on later starts
-// from a real number rather than zero), but it never pauses.
-func (s *Store) RecordJobOutcome(ctx context.Context, jobName string, succeeded bool, maxFailures int) (paused bool, consecutive int, err error) {
+// from a real number rather than zero), but it never holds.
+func (s *Store) RecordJobOutcome(ctx context.Context, jobName string, succeeded bool, maxFailures int) (held bool, consecutive int, err error) {
 	if succeeded {
 		return false, 0, s.ResetJobFailures(ctx, jobName)
 	}
 
-	// The count and the pause land in one statement, so a reader between
+	// The count and the hold land in one statement, so a reader between
 	// them cannot see a job at its limit and not yet held; it was two, and
 	// the second was a separate write for every failure past the limit.
 	err = s.db.QueryRowContext(ctx, `
@@ -44,7 +44,7 @@ func (s *Store) RecordJobOutcome(ctx context.Context, jobName string, succeeded 
 	return maxFailures > 0 && consecutive >= maxFailures, consecutive, nil
 }
 
-// ResetJobFailures clears a job's consecutive-failure count and un-pauses it.
+// ResetJobFailures clears a job's consecutive-failure count and releases it.
 // Any success resets the breaker — including a manual `steps run`, which is
 // the natural way to confirm a fix.
 func (s *Store) ResetJobFailures(ctx context.Context, jobName string) error {
@@ -59,13 +59,13 @@ func (s *Store) ResetJobFailures(ctx context.Context, jobName string) error {
 	return nil
 }
 
-// IsJobPaused reports whether the breaker has taken a job out of the rotation.
-func (s *Store) IsJobPaused(ctx context.Context, jobName string) (bool, error) {
-	var pausedAt sql.NullString
+// IsJobHeld reports whether the breaker has taken a job out of the rotation.
+func (s *Store) IsJobHeld(ctx context.Context, jobName string) (bool, error) {
+	var heldAt sql.NullString
 
 	err := s.reads.QueryRowContext(ctx,
 		`SELECT paused_at FROM job_breaker WHERE pipeline_id = ? AND job_name = ?`,
-		s.pipelineID, jobName).Scan(&pausedAt)
+		s.pipelineID, jobName).Scan(&heldAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -74,19 +74,25 @@ func (s *Store) IsJobPaused(ctx context.Context, jobName string) (bool, error) {
 		return false, fmt.Errorf("could not read the breaker for job %q: %w", jobName, err)
 	}
 
-	return pausedAt.Valid, nil
+	return heldAt.Valid, nil
 }
 
-// PausedJobs lists every job currently out of the rotation, oldest pause
+// HeldJobs lists every job currently out of the rotation, oldest hold
 // first. It backs `steps jobs`, which is how an operator finds out a nightly
 // job stopped without reading a weekend of logs.
-func (s *Store) PausedJobs(ctx context.Context) ([]store.PausedJob, error) {
+func (s *Store) HeldJobs(ctx context.Context) ([]store.HeldJob, error) {
 	return collect(ctx, s.reads, "paused jobs",
 		`SELECT job_name, consecutive, paused_at FROM job_breaker
 		 WHERE pipeline_id = ? AND paused_at IS NOT NULL ORDER BY paused_at, rowid`,
-		[]any{s.pipelineID}, func(rows *sql.Rows) (store.PausedJob, error) {
-			var job store.PausedJob
+		[]any{s.pipelineID}, func(rows *sql.Rows) (store.HeldJob, error) {
+			var (
+				job    store.HeldJob
+				heldAt string
+			)
 
-			return job, rows.Scan(&job.Name, &job.Consecutive, &job.PausedAt)
+			err := rows.Scan(&job.Name, &job.Consecutive, &heldAt)
+			job.HeldAt = parseTimestamp(heldAt)
+
+			return job, err //nolint:wrapcheck // collect wraps with the thing being read
 		})
 }

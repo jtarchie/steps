@@ -27,7 +27,7 @@ func TestAnotherApplicationsTablesAreNeverAdopted(t *testing.T) {
 
 	st := openStore(t, rawURL, "p")
 
-	err := st.StartRun(context.Background(), "r1", "build", "/tmp/ws", "")
+	err := st.StartRun(context.Background(), store.NewRun{ID: "r1", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestSearchPathChoosesTheSchema(t *testing.T) {
 		t.Fatalf("two schemas describe themselves as %q", first.Description())
 	}
 
-	err := second.StartRun(context.Background(), "r1", "build", "/tmp/ws", "")
+	err := second.StartRun(context.Background(), store.NewRun{ID: "r1", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

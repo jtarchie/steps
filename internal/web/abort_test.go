@@ -52,7 +52,7 @@ func TestAbortRefusesARunThisDaemonIsNotExecuting(t *testing.T) {
 	}
 
 	for _, id := range []string{"finished", "orphaned"} {
-		err = pipeline.Store.StartRun(ctx, id, "build", "/tmp/ws", "")
+		err = pipeline.Store.StartRun(ctx, store.NewRun{ID: id, JobName: "build", Workspace: "/tmp/ws"})
 		if err != nil {
 			t.Fatalf("StartRun: %v", err)
 		}
@@ -248,7 +248,7 @@ func assertStoppedCleanly(t *testing.T, st store.Store) {
 		t.Errorf("queue = %+v (%v), want its one row aborted — left running, a restart re-runs what somebody stopped", rows, err)
 	}
 
-	paused, err := st.PausedJobs(t.Context())
+	paused, err := st.HeldJobs(t.Context())
 	if err != nil || len(paused) != 0 {
 		t.Errorf("paused = %+v (%v), want none: stopping a build is an operator's decision, not the job breaking", paused, err)
 	}

@@ -529,7 +529,7 @@ func finishedRun(t *testing.T, held *daemon, name string) string {
 		}
 
 		if len(runs) == 1 && !runs[0].FinishedAt.IsZero() {
-			return runs[0].Status
+			return string(runs[0].Status)
 		}
 
 		time.Sleep(20 * time.Millisecond)
@@ -797,7 +797,7 @@ func TestARestartClosesTheRunAKilledDaemonLeftRunning(t *testing.T) {
 		t.Fatalf("open state store: %v", err)
 	}
 
-	err = st.StartRun(t.Context(), "LEFTOVER", "build", t.TempDir(), "")
+	err = st.StartRun(t.Context(), store.NewRun{ID: "LEFTOVER", JobName: "build", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

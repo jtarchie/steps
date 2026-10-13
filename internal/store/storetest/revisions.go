@@ -141,12 +141,12 @@ func (s suite) TestRunsRecordTheRevisionTheyWereGiven(t *testing.T) {
 
 	// Started under the OLDER one, with the newer already interned — the
 	// daemon reloaded while this run was getting under way.
-	err := st.StartRun(ctx, "run-one", "build", "/tmp/ws-one", "sha-one")
+	err := st.StartRun(ctx, store.NewRun{ID: "run-one", JobName: "build", Workspace: "/tmp/ws-one", ConfigSHA: "sha-one"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = st.StartRun(ctx, "run-two", "build", "/tmp/ws-two", "sha-two")
+	err = st.StartRun(ctx, store.NewRun{ID: "run-two", JobName: "build", Workspace: "/tmp/ws-two", ConfigSHA: "sha-two"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -186,12 +186,12 @@ func (s suite) TestResumeRecordsTheConfigItResumesUnder(t *testing.T) {
 		}
 	}
 
-	err := st.StartRun(ctx, "run-one", "build", "/tmp/ws", "sha-broken")
+	err := st.StartRun(ctx, store.NewRun{ID: "run-one", JobName: "build", Workspace: "/tmp/ws", ConfigSHA: "sha-broken"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = st.FinishRun(ctx, "run-one", "failed")
+	err = st.FinishRun(ctx, "run-one", store.RunFailed)
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
@@ -220,7 +220,7 @@ func (s suite) TestRunWithNoRecordedConfigurationSaysSo(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	err := st.StartRun(ctx, "run-one", "build", "/tmp/ws-one", "")
+	err := st.StartRun(ctx, store.NewRun{ID: "run-one", JobName: "build", Workspace: "/tmp/ws-one"})
 	if err != nil {
 		t.Fatalf("StartRun with no configuration recorded: %v", err)
 	}
@@ -250,7 +250,7 @@ func (s suite) TestResumeKeepsTheConfigurationItCannotName(t *testing.T) {
 		t.Fatalf("RecordRevision: %v", err)
 	}
 
-	err = st.StartRun(ctx, "run-one", "build", "/tmp/ws", "sha-recorded")
+	err = st.StartRun(ctx, store.NewRun{ID: "run-one", JobName: "build", Workspace: "/tmp/ws", ConfigSHA: "sha-recorded"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

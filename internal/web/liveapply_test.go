@@ -48,7 +48,7 @@ func TestStreamAppliedToThePageIsTheReloadedPage(t *testing.T) {
 			ctx := t.Context()
 			runID := fmt.Sprintf("run-apply-%d", batch)
 
-			err := pipeline.Store.StartRun(ctx, runID, "build", "/tmp/ws", "")
+			err := pipeline.Store.StartRun(ctx, store.NewRun{ID: runID, JobName: "build", Workspace: "/tmp/ws"})
 			if err != nil {
 				t.Fatalf("StartRun: %v", err)
 			}

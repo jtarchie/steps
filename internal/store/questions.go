@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Questions is a build waiting on a person for a FACT — the ask_user tool and
@@ -23,7 +24,7 @@ type Questions interface {
 	AnswerQuestion(ctx context.Context, id int64, answer, by string) error
 	// CloseQuestion resolves a question with a status the caller chooses, for
 	// the endings nobody answered.
-	CloseQuestion(ctx context.Context, id int64, status, answer, by string) error
+	CloseQuestion(ctx context.Context, id int64, status QuestionStatus, answer, by string) error
 	QuestionStatus(ctx context.Context, id int64) (Question, error)
 	// Questions is the audit trail, what is still waiting first and then
 	// newest first, capped by limit (zero means no limit). pendingOnly lists
@@ -31,6 +32,20 @@ type Questions interface {
 	// same reason Approvals' do.
 	Questions(ctx context.Context, pendingOnly bool, limit int) ([]Question, error)
 }
+
+// QuestionStatus is where a question is: pending until a person answers it
+// or one of the endings nobody answered closes it.
+type QuestionStatus string
+
+// The statuses a question is recorded with.
+const (
+	QuestionPending  QuestionStatus = "pending"
+	QuestionAnswered QuestionStatus = "answered"
+	// QuestionExpired is the deadline passing, with the default standing in.
+	QuestionExpired QuestionStatus = "expired"
+	// QuestionAborted is the run asking it ending first.
+	QuestionAborted QuestionStatus = "aborted"
+)
 
 // Question is one recorded ask_user call, and what became of it. Like an
 // approval, the row IS the audit trail — but it records a FACT rather than a
@@ -53,11 +68,12 @@ type Question struct {
 	// only the asker knew about would be no fence on either of them.
 	OptionsRequired bool
 	Default         string
-	Status          string // pending, answered, expired, aborted
-	AskedAt         string
-	AnsweredAt      string
-	AnsweredBy      string
-	Answer          string
+	Status          QuestionStatus
+	AskedAt         time.Time
+	// AnsweredAt is zero while the question is pending.
+	AnsweredAt time.Time
+	AnsweredBy string
+	Answer     string
 }
 
 // ErrQuestionNotPending is what every answer path gets when the row it aimed

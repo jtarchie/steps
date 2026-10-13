@@ -7,6 +7,8 @@ import (
 	"net/http"
 
 	"github.com/labstack/echo/v5"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // abortRun is nil when the run was told to stop.
@@ -30,7 +32,7 @@ func (s *Server) abortRun(ctx context.Context, target *Pipeline, runID string) e
 	}
 
 	// Started by a `steps run` against this file, or by a daemon that died mid-build — either way there is no context here to cancel.
-	if run.Status == "running" {
+	if run.Status == store.RunRunning {
 		return echo.NewHTTPError(http.StatusConflict, "this run is not running on this daemon")
 	}
 

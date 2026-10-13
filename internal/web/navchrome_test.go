@@ -18,12 +18,12 @@ func startFinishedRun(t *testing.T, pipeline *Pipeline, id, job, status string) 
 
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, id, job, "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: id, JobName: job, Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun %s: %v", id, err)
 	}
 
-	err = pipeline.Store.FinishRun(ctx, id, status)
+	err = pipeline.Store.FinishRun(ctx, id, store.RunStatus(status))
 	if err != nil {
 		t.Fatalf("FinishRun %s: %v", id, err)
 	}

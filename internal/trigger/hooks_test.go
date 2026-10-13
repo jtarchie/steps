@@ -75,7 +75,7 @@ func (f hookFixture) deliver(t *testing.T, resource string, header http.Header, 
 	return rec.Code
 }
 
-func (f hookFixture) versions(t *testing.T) []string {
+func (f hookFixture) versions(t *testing.T) []store.VersionKey {
 	t.Helper()
 
 	versions, err := f.st.ResourceVersionsJSON(context.Background(), "push")
@@ -113,7 +113,7 @@ func TestAHookRecordsAndQueues(t *testing.T) {
 		t.Fatalf("status = %d, want 200", code)
 	}
 
-	if got := f.versions(t); len(got) != 1 || !strings.Contains(got[0], `"d1"`) {
+	if got := f.versions(t); len(got) != 1 || !strings.Contains(string(got[0]), `"d1"`) {
 		t.Errorf("versions = %v, want the delivery", got)
 	}
 
@@ -190,7 +190,7 @@ func TestARedeliveredHookQueuesNothing(t *testing.T) {
 
 	f.deliver(t, "push", signed(hookSecret, "d1", body), body)
 
-	_, _, _, err := f.st.ClaimNextJob(context.Background())
+	_, _, err := f.st.ClaimNextJob(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ type racingStore struct {
 	race func()
 }
 
-func (r *racingStore) ResourceVersionsJSON(ctx context.Context, name string) ([]string, error) {
+func (r *racingStore) ResourceVersionsJSON(ctx context.Context, name string) ([]store.VersionKey, error) {
 	versions, err := r.Store.ResourceVersionsJSON(ctx, name)
 
 	if r.race != nil {
@@ -318,7 +318,7 @@ func TestAPollDoesNotRewindADeliveryItRaced(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, _, err = f.st.ClaimNextJob(ctx)
+	_, _, err = f.st.ClaimNextJob(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestAPollAfterUnpauseDoesNotRewindADeliveryItRaced(t *testing.T) {
 		t.Fatalf("the poll after unpause enqueued %v (err %v), want build", enqueued, err)
 	}
 
-	_, _, _, err = f.st.ClaimNextJob(ctx)
+	_, _, err = f.st.ClaimNextJob(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -90,7 +90,7 @@ func (s *Store) AnswerQuestion(ctx context.Context, id int64, answer, by string)
 			id, answer, strings.Join(question.Options, ", "))
 	}
 
-	return s.closeQuestion(ctx, id, "answered", answer, by)
+	return s.closeQuestion(ctx, id, store.QuestionAnswered, answer, by)
 }
 
 // CloseQuestion resolves a question nobody answered: 'expired' when the wait
@@ -113,16 +113,16 @@ func (s *Store) AnswerQuestion(ctx context.Context, id int64, answer, by string)
 // the four answering sites each have to spell right to be checked at all. No
 // constraint covers this column, so one misspelling writes a status no reader
 // knows AND skips the fence, in the same silent step.
-func (s *Store) CloseQuestion(ctx context.Context, id int64, status, answer, by string) error {
+func (s *Store) CloseQuestion(ctx context.Context, id int64, status store.QuestionStatus, answer, by string) error {
 	return s.closeQuestion(ctx, id, status, answer, by)
 }
 
-func (s *Store) closeQuestion(ctx context.Context, id int64, status, answer, by string) error {
+func (s *Store) closeQuestion(ctx context.Context, id int64, status store.QuestionStatus, answer, by string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE questions SET status = ?, answered_at = ?, answered_by = ?, answer = ?
 		WHERE id = ? AND status = 'pending'
 		  AND EXISTS (SELECT 1 FROM runs WHERE id = questions.run_id AND pipeline_id = ?)
-	`, status, nowNano(), by, nullable(answer), id, s.pipelineID)
+	`, string(status), nowNano(), by, nullable(answer), id, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not resolve question %d: %w", id, err)
 	}
@@ -203,16 +203,19 @@ const questionColumns = `
 
 func (s *Store) scanQuestion(row rowScanner) (store.Question, error) {
 	var (
-		question store.Question
-		options  string
+		question        store.Question
+		options         string
+		asked, answered string
 	)
 
 	err := row.Scan(&question.ID, &question.RunID, &question.JobName, &question.AgentName,
 		&question.Question, &options, &question.OptionsRequired, &question.Default,
-		&question.Status, &question.AskedAt, &question.AnsweredAt, &question.AnsweredBy, &question.Answer)
+		&question.Status, &asked, &answered, &question.AnsweredBy, &question.Answer)
 	if err != nil {
 		return store.Question{}, err //nolint:wrapcheck // every caller wraps with what it was reading
 	}
+
+	question.AskedAt, question.AnsweredAt = parseTimestamp(asked), parseTimestamp(answered)
 
 	question.Options, err = store.DecodeOptions(options)
 

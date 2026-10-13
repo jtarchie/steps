@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // ErrApprovalNotPending is a decision aimed at a row that no longer waits —
@@ -19,7 +20,7 @@ var ErrApprovalNotPending = errors.New("approval is not pending")
 // authorised.
 type Approvals interface {
 	RequestApproval(ctx context.Context, jobName, message string) (int64, error)
-	DecideApproval(ctx context.Context, id int64, status, by, reason string) error
+	DecideApproval(ctx context.Context, id int64, status ApprovalStatus, by, reason string) error
 	ApprovalStatus(ctx context.Context, id int64) (Approval, error)
 	// Approvals is the audit trail newest first, capped by limit (zero means
 	// no limit). pendingOnly lists only what is still waiting, OLDEST first —
@@ -27,6 +28,19 @@ type Approvals interface {
 	// a waiting build that scrolled off the list waits forever.
 	Approvals(ctx context.Context, pendingOnly bool, limit int) ([]Approval, error)
 }
+
+// ApprovalStatus is where an approval is: pending until somebody, or the
+// deadline, decides it.
+type ApprovalStatus string
+
+// The statuses an approval is recorded with.
+const (
+	ApprovalPending  ApprovalStatus = "pending"
+	ApprovalApproved ApprovalStatus = "approved"
+	ApprovalRejected ApprovalStatus = "rejected"
+	// ApprovalExpired is the deadline deciding: nobody did.
+	ApprovalExpired ApprovalStatus = "expired"
+)
 
 // Approval is one recorded request for a human decision, and what became of
 // it. The row IS the audit trail: who approved a deploy, when, and why a
@@ -36,9 +50,10 @@ type Approval struct {
 	ID          int64
 	JobName     string
 	Message     string
-	Status      string // pending, approved, rejected, expired
-	RequestedAt string
-	DecidedAt   string
-	DecidedBy   string
-	Reason      string
+	Status      ApprovalStatus
+	RequestedAt time.Time
+	// DecidedAt is zero while the approval is pending.
+	DecidedAt time.Time
+	DecidedBy string
+	Reason    string
 }

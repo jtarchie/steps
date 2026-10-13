@@ -339,7 +339,7 @@ jobs:
 }
 
 // A stopped build recorded as failed reads as a bug to chase.
-func assertRunStatus(t *testing.T, st store.Runs, jobName, want string) {
+func assertRunStatus(t *testing.T, st store.Runs, jobName string, want store.RunStatus) {
 	t.Helper()
 
 	runs, err := st.ListRuns(context.Background(), jobName, 1)

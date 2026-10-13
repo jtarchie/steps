@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -93,4 +94,16 @@ func ctxFor(t *testing.T) context.Context {
 	t.Helper()
 
 	return t.Context()
+}
+
+// assertStamped holds a driver to the time it stamped on a write: a UTC
+// instant between the moments either side of that write, at the resolution
+// the column keeps — which may be the whole second. Non-zero is not enough: a
+// driver that parsed the wrong layout, or read another column, is non-zero.
+func assertStamped(t *testing.T, what string, got, before, after time.Time) {
+	t.Helper()
+
+	if got.Location() != time.UTC || got.Before(before.Truncate(time.Second)) || got.After(after) {
+		t.Errorf("%s = %v, want a UTC time between %v and %v", what, got, before, after)
+	}
 }

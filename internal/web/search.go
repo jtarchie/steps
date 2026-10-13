@@ -166,9 +166,9 @@ func (s *Server) addRunHits(ctx context.Context, add func(searchHit), pipeline *
 	}
 
 	for _, run := range runs {
-		hint := run.Status
+		hint := string(run.Status)
 		if elsewhere {
-			hint = pipeline.Slug + " " + run.Status
+			hint = pipeline.Slug + " " + hint
 		}
 
 		add(searchHit{
@@ -176,7 +176,7 @@ func (s *Server) addRunHits(ctx context.Context, add func(searchHit), pipeline *
 			Name:  run.JobName + " " + shortID(run.ID),
 			Hint:  hint,
 			URL:   fmt.Sprintf("/p/%s/runs/%s", pipeline.Slug, run.ID),
-			match: "run " + run.JobName + " " + run.ID + " " + run.Status + " " + pipeline.Slug,
+			match: "run " + run.JobName + " " + run.ID + " " + string(run.Status) + " " + pipeline.Slug,
 		})
 	}
 }

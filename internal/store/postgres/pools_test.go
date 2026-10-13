@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // A daemon holds a handle per pipeline, and each used to open four
@@ -33,7 +35,7 @@ func TestHandlesOnOneURLShareAPool(t *testing.T) {
 	}
 
 	// The neighbour's release must not have closed what this handle writes through.
-	err = second.StartRun(context.Background(), "run-1", "build", "/tmp/ws", "")
+	err = second.StartRun(context.Background(), store.NewRun{ID: "run-1", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("second handle after the first released: %v", err)
 	}

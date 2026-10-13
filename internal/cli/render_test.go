@@ -46,7 +46,7 @@ func recordUntrusted(t *testing.T, state, osc string) {
 		t.Fatalf("RequestApproval: %v", err)
 	}
 
-	err = st.StartRun(t.Context(), "RUN", "build", t.TempDir(), "")
+	err = st.StartRun(t.Context(), store.NewRun{ID: "RUN", JobName: "build", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -63,7 +63,8 @@ func recordUntrusted(t *testing.T, state, osc string) {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	id, _, _, err := st.ClaimNextJob(t.Context())
+	claim, _, err := st.ClaimNextJob(t.Context())
+	id := claim.ID
 	if err != nil {
 		t.Fatalf("ClaimNextJob: %v", err)
 	}

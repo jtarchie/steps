@@ -148,12 +148,12 @@ func recordRunOf(t *testing.T, pipeline *Pipeline, runID, job string, version ma
 		t.Fatalf("EncodeVersion: %v", err)
 	}
 
-	err = pipeline.Store.StartRun(ctx, runID, job, "/tmp/ws", "")
+	err = pipeline.Store.StartRun(ctx, store.NewRun{ID: runID, JobName: job, Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = pipeline.Store.RecordRunInput(ctx, runID, "repo", "repo", encoded)
+	err = pipeline.Store.RecordRunInput(ctx, runID, store.RunInput{Input: "repo", Resource: "repo", Version: encoded})
 	if err != nil {
 		t.Fatalf("RecordRunInput: %v", err)
 	}
@@ -162,7 +162,7 @@ func recordRunOf(t *testing.T, pipeline *Pipeline, runID, job string, version ma
 		return
 	}
 
-	err = pipeline.Store.FinishRun(ctx, runID, status)
+	err = pipeline.Store.FinishRun(ctx, runID, store.RunStatus(status))
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}

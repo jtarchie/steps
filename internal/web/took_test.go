@@ -69,7 +69,7 @@ func TestRunPageShowsHowLongEachModelRequestTook(t *testing.T) {
 	ctx := t.Context()
 	t0 := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 
-	err := pipeline.Store.StartRun(ctx, "run-took", "review", t.TempDir(), sha)
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-took", JobName: "review", Workspace: t.TempDir(), ConfigSHA: sha})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestTimedOutStepSaysHowLongTheModelHadTheLastRequest(t *testing.T) {
 			failedAt(reviewerRow(t0, events.TypeStepFinished, 4*time.Second))), false},
 		{"still running", "run-open", opening, false},
 	} {
-		err := pipeline.Store.StartRun(ctx, tc.run, "review", t.TempDir(), sha)
+		err := pipeline.Store.StartRun(ctx, store.NewRun{ID: tc.run, JobName: "review", Workspace: t.TempDir(), ConfigSHA: sha})
 		if err != nil {
 			t.Fatalf("StartRun: %v", err)
 		}
@@ -204,7 +204,7 @@ func TestStreamedTurnCarriesTheDurationThePageDraws(t *testing.T) {
 	ctx := t.Context()
 	t0 := time.Now().UTC().Truncate(time.Second)
 
-	err := pipeline.Store.StartRun(ctx, "run-live-took", "review", t.TempDir(), sha)
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-live-took", JobName: "review", Workspace: t.TempDir(), ConfigSHA: sha})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

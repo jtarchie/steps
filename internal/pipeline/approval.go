@@ -93,19 +93,12 @@ func awaitApproval(ctx context.Context, st store.Store, id int64, timeout time.D
 			return store.Approval{}, fmt.Errorf("approval %d: %w", id, err)
 		}
 
-		switch approval.Status {
-		case "approved":
-			return approval, nil
-		case "rejected":
-			// A person said no. That is a decision about the work, so it is a
-			// FAILURE — on_failure fires, and a to: route can act on it.
-			//nolint:wrapcheck // Fail only marks the classification; the error is this package's own
-			return approval, outcome.Fail(fmt.Errorf("approval %d rejected by %s: %s",
-				id, approval.DecidedBy, reasonOrNone(approval.Reason)))
+		if decided, err := personDecided(approval); decided {
+			return approval, err
 		}
 
 		if time.Now().After(deadline) {
-			err = st.DecideApproval(context.WithoutCancel(ctx), id, "expired", "", "nobody answered within "+timeout.String())
+			err = st.DecideApproval(context.WithoutCancel(ctx), id, store.ApprovalExpired, "", "nobody answered within "+timeout.String())
 			if errors.Is(err, store.ErrApprovalNotPending) {
 				// Somebody decided between the read and this write; theirs stands.
 				continue
@@ -129,6 +122,24 @@ func awaitApproval(ctx context.Context, st store.Store, id int64, timeout time.D
 	}
 }
 
+// personDecided reports an approval a person settled, and the error the step
+// ends with: none for a yes.
+func personDecided(approval store.Approval) (bool, error) {
+	switch approval.Status {
+	case store.ApprovalApproved:
+		return true, nil
+	case store.ApprovalRejected:
+		// A person said no. That is a decision about the work, so it is a
+		// FAILURE — on_failure fires, and a to: route can act on it.
+		//nolint:wrapcheck // Fail only marks the classification; the error is this package's own
+		return true, outcome.Fail(fmt.Errorf("approval %d rejected by %s: %s",
+			approval.ID, approval.DecidedBy, reasonOrNone(approval.Reason)))
+	case store.ApprovalPending, store.ApprovalExpired:
+	}
+
+	return false, nil
+}
+
 func reasonOrNone(reason string) string {
 	if reason == "" {
 		return "no reason given"
@@ -143,7 +154,7 @@ func approvalRecord(approval store.Approval) map[string]any {
 		return nil
 	}
 
-	record := map[string]any{"approval": approval.ID, "status": approval.Status}
+	record := map[string]any{"approval": approval.ID, "status": string(approval.Status)}
 
 	if approval.DecidedBy != "" {
 		record["decided_by"] = approval.DecidedBy

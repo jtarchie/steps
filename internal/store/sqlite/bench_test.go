@@ -22,7 +22,7 @@ func BenchmarkAppendRunEvent(b *testing.B) {
 
 	defer func() { _ = st.Close() }()
 
-	err = st.StartRun(ctx, "run-1", "build", "/tmp/ws", "")
+	err = st.StartRun(ctx, store.NewRun{ID: "run-1", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		b.Fatal(err)
 	}

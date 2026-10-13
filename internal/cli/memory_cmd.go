@@ -58,7 +58,7 @@ func printMemoryScopes(st store.Memories) error {
 	_, _ = fmt.Fprintln(writer, "SCOPE\tENTRIES\tLAST REMEMBERED")
 
 	for _, scope := range scopes {
-		_, _ = fmt.Fprintf(writer, "%s\t%d\t%s\n", scope.Scope, scope.Entries, scope.LastAt)
+		_, _ = fmt.Fprintf(writer, "%s\t%d\t%s\n", scope.Scope, scope.Entries, stampNano(scope.LastAt))
 	}
 
 	return flushTable(writer, "memory scopes")
@@ -86,7 +86,7 @@ func printMemories(st store.Memories, scope string) error {
 			run = "-"
 		}
 
-		_, _ = fmt.Fprintf(writer, "%d\t%s\t%s\t%s\n", memory.ID, memory.CreatedAt, run, strconv.Quote(memory.Text))
+		_, _ = fmt.Fprintf(writer, "%d\t%s\t%s\t%s\n", memory.ID, stampNano(memory.CreatedAt), run, strconv.Quote(memory.Text))
 	}
 
 	return flushTable(writer, "memories")

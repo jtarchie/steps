@@ -2,6 +2,7 @@ package cli
 
 import (
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -95,7 +96,7 @@ func pendingDecisions(t *testing.T, state string) (int64, int64) {
 		t.Fatalf("RequestApproval: %v", err)
 	}
 
-	err = st.StartRun(t.Context(), "RUN", "build", t.TempDir(), "")
+	err = st.StartRun(t.Context(), store.NewRun{ID: "RUN", JobName: "build", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -111,4 +112,50 @@ func pendingDecisions(t *testing.T, state string) (int64, int64) {
 	}
 
 	return approval, question.ID
+}
+
+// The listings print a row's time as the state database stores it — whole-second RFC3339 for approvals and the breaker, a fixed nine-digit fraction for questions and memories — which is what they printed while rows carried the stored text itself; not parallel, it captures stdout.
+func TestTheListingsPrintStampsAsStored(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "steps.db")
+	pendingDecisions(t, state)
+
+	st, err := sqlite.OpenStore(state, "app")
+	if err != nil {
+		t.Fatalf("open state store: %v", err)
+	}
+
+	_, _, err = st.RecordJobOutcome(t.Context(), "build", false, 1)
+	if err != nil {
+		t.Fatalf("RecordJobOutcome: %v", err)
+	}
+
+	_, _, err = st.Remember(t.Context(), store.Memory{Scope: "U1", Text: "likes go", RunID: "RUN"}, 0)
+	if err != nil {
+		t.Fatalf("Remember: %v", err)
+	}
+
+	err = st.Close()
+	if err != nil {
+		t.Fatalf("close state store: %v", err)
+	}
+
+	const (
+		seconds = `\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ`
+		nano    = `\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{9}Z`
+	)
+
+	for command, want := range map[string]string{
+		"approvals":         `(?m)^1\s+build\s+` + seconds + `\s+ship it\?$`,
+		"questions":         `(?m)^1\s+build\s+fixer\s+` + nano + `\s+which region\?$`,
+		"jobs":              `(?m)^build\s+1\s+` + seconds + `\s*$`,
+		"memory":            `(?m)^U1\s+1\s+` + nano + `\s*$`,
+		"memory --scope U1": `(?m)^1\s+` + nano + `\s+RUN\s+"likes go"$`,
+	} {
+		var err error
+
+		out := captureStdout(t, func() { err = Run(append(strings.Fields(command), "-p", "app", "--db", state)) })
+		if err != nil || !regexp.MustCompile(want).MatchString(out) {
+			t.Errorf("steps %s = %v, printing:\n%s\nwant a line matching %s", command, err, out, want)
+		}
+	}
 }

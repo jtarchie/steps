@@ -306,7 +306,7 @@ func (g askGrant) ask(ctx context.Context, args map[string]any, env toolEnv) map
 	// answer at all, and handing it back as one would be this design's own
 	// audit lie with an empty string in place of the fact — so it resolves the
 	// second asker exactly the way it resolved the first.
-	if row.Status != "pending" {
+	if row.Status != store.QuestionPending {
 		return g.alreadyResolved(env, row, existing)
 	}
 
@@ -337,7 +337,7 @@ func (g askGrant) alreadyResolved(env toolEnv, row store.Question, existing bool
 // simply returned; an unanswered one repeats whatever ending the first asker
 // got, including its abort — never an empty answer dressed up as a default.
 func (g askGrant) memoResult(env toolEnv, row store.Question) map[string]any {
-	if row.Status == "answered" || row.Answer != "" {
+	if row.Status == store.QuestionAnswered || row.Answer != "" {
 		return resolvedResult(row, "memo")
 	}
 
@@ -377,7 +377,7 @@ func (g askGrant) answerFromMachines(ctx context.Context, env toolEnv, row store
 func (g askGrant) record(ctx context.Context, env toolEnv, row store.Question, answer, by, source string) map[string]any {
 	err := env.ask.st.AnswerQuestion(ctx, row.ID, answer, by)
 	if err == nil {
-		row.Answer, row.AnsweredBy, row.Status = answer, by, "answered"
+		row.Answer, row.AnsweredBy, row.Status = answer, by, store.QuestionAnswered
 
 		return resolvedResult(row, source)
 	}
@@ -489,7 +489,7 @@ func (g askGrant) waitForAnswer(ctx context.Context, env toolEnv, row store.Ques
 func (g askGrant) recordTerminal(ctx context.Context, env toolEnv, row store.Question, answer string) (map[string]any, bool) {
 	err := env.ask.st.AnswerQuestion(ctx, row.ID, answer, terminalAnswerer())
 	if err == nil {
-		row.Answer, row.AnsweredBy, row.Status = answer, terminalAnswerer(), "answered"
+		row.Answer, row.AnsweredBy, row.Status = answer, terminalAnswerer(), store.QuestionAnswered
 
 		return resolvedResult(row, "terminal"), true
 	}
@@ -549,7 +549,7 @@ func (g askGrant) expire(ctx context.Context, env toolEnv, row store.Question) m
 	// The write is what decides, not the reading of the clock — which is the
 	// same posture record() takes on the other side of the race.
 	current, err := env.ask.st.QuestionStatus(ctx, row.ID)
-	if err == nil && current.Status != "pending" {
+	if err == nil && current.Status != store.QuestionPending {
 		return resolvedResult(current, answerSource(current))
 	}
 
@@ -557,7 +557,7 @@ func (g askGrant) expire(ctx context.Context, env toolEnv, row store.Question) m
 		"agent", row.AgentName, "timeout", g.wait.String(), "default", g.defaultAnswer)
 
 	if g.defaultAnswer == "" {
-		g.close(ctx, env, row, "expired", "", "")
+		g.close(ctx, env, row, store.QuestionExpired, "", "")
 
 		err := fmt.Errorf("question %d expired unanswered after %s and declared no default: %s",
 			row.ID, g.wait, row.Question)
@@ -566,7 +566,7 @@ func (g askGrant) expire(ctx context.Context, env toolEnv, row store.Question) m
 		return errorResult("ask_user: " + err.Error())
 	}
 
-	g.close(ctx, env, row, "expired", g.defaultAnswer, "default")
+	g.close(ctx, env, row, store.QuestionExpired, g.defaultAnswer, "default")
 
 	return map[string]any{
 		"exit_code": 0,
@@ -593,7 +593,7 @@ func (g askGrant) poll(ctx context.Context, env toolEnv, row store.Question, dea
 		return errorResult("ask_user: " + err.Error())
 	}
 
-	if current.Status != "pending" {
+	if current.Status != store.QuestionPending {
 		events.Note(ctx, events.NoteInfo, fmt.Sprintf("question %d: answered by %s", current.ID, current.AnsweredBy))
 
 		return resolvedResult(current, answerSource(current))
@@ -611,7 +611,7 @@ func (g askGrant) poll(ctx context.Context, env toolEnv, row store.Question, dea
 // an unanswerable question sitting pending forever is the same class of lie
 // as a defaulted answer presented as a person's.
 func (g askGrant) abandon(ctx context.Context, env toolEnv, row store.Question) map[string]any {
-	g.close(ctx, env, row, "aborted", "", "step")
+	g.close(ctx, env, row, store.QuestionAborted, "", "step")
 
 	return errorResult(fmt.Sprintf("ask_user: question %d was abandoned when the step ended", row.ID))
 }
@@ -622,7 +622,7 @@ func (g askGrant) abandon(ctx context.Context, env toolEnv, row store.Question) 
 // runs is that the step's context was just cancelled — and a write that
 // aborted before reaching sqlite would leave behind exactly the pending row it
 // exists to clear.
-func (g askGrant) close(ctx context.Context, env toolEnv, row store.Question, status, answer, by string) {
+func (g askGrant) close(ctx context.Context, env toolEnv, row store.Question, status store.QuestionStatus, answer, by string) {
 	err := env.ask.st.CloseQuestion(context.WithoutCancel(ctx), row.ID, status, answer, by)
 	if err != nil && !errors.Is(err, store.ErrQuestionNotPending) {
 		slog.WarnContext(ctx, "agent.question_unresolved", "question", row.ID, "status", status, "error", err)
@@ -668,12 +668,12 @@ func AnswerFlags(ctx context.Context, pipeline string) string {
 func resolvedResult(row store.Question, source string) map[string]any {
 	result := map[string]any{
 		"exit_code": 0,
-		"answered":  row.Status == "answered",
+		"answered":  row.Status == store.QuestionAnswered,
 		"answer":    row.Answer,
 		"source":    source,
 	}
 
-	if row.Status != "answered" {
+	if row.Status != store.QuestionAnswered {
 		result["note"] = "nobody answered this question; " + row.Answer + " was used because the pipeline declared it as the default"
 	}
 

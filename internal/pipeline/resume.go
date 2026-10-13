@@ -382,7 +382,7 @@ func recordRunIdentity(
 		return nil
 	}
 
-	err := st.StartRun(ctx, resume.id, jobName, workspaceRoot, revision.SHA)
+	err := st.StartRun(ctx, store.NewRun{ID: resume.id, JobName: jobName, Workspace: workspaceRoot, ConfigSHA: revision.SHA})
 	if err != nil {
 		return fmt.Errorf("job %q: %w", jobName, err)
 	}

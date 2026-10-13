@@ -128,7 +128,7 @@ func TestTheNewestRevisionSurvivesRetention(t *testing.T) {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	err = st.StartRun(ctx, "run-after-prune", jobName, "/tmp/ws-after", "sha-current")
+	err = st.StartRun(ctx, store.NewRun{ID: "run-after-prune", JobName: jobName, Workspace: "/tmp/ws-after", ConfigSHA: "sha-current"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestARevertedConfigurationSurvivesTheSweep(t *testing.T) {
 		t.Fatalf("RecordRevision: %v", err)
 	}
 
-	err = st.StartRun(ctx, "run-one", "build", "/tmp/ws", "sha-original")
+	err = st.StartRun(ctx, store.NewRun{ID: "run-one", JobName: "build", Workspace: "/tmp/ws", ConfigSHA: "sha-original"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

@@ -44,6 +44,16 @@ func formatWhen(when time.Time) string {
 	return when.Local().Format("2006-01-02 15:04:05")
 }
 
+// stampSeconds and stampNano print a time in the UTC layout sqlite stores its
+// column in — whole seconds for approvals and the breaker, a fixed nine-digit
+// fraction for questions and memories — which is what these listings printed
+// back when a row carried that stored text rather than a time.Time.
+func stampSeconds(when time.Time) string { return when.UTC().Format(time.RFC3339) }
+
+func stampNano(when time.Time) string {
+	return when.UTC().Format("2006-01-02T15:04:05.000000000Z07:00")
+}
+
 // firstLine truncates an error to its first line and a readable width, since
 // these are columns in a table — the full text is in the run's own output.
 func firstLine(text string) string {

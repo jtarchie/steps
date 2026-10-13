@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // Every action lives in one bar under the nav, in the same place on every page: the pipeline's pause on the left, what this page's job or run can do on the right. They were spread across a banner, the page head and a sentence beside each button, which read as clutter and hid which button acted on what.
@@ -113,7 +115,7 @@ func TestAHeldJobsBarOffersRelease(t *testing.T) {
 		t.Fatalf("POST release = %d, want 303", code)
 	}
 
-	held, err := pipeline.Store.IsJobPaused(t.Context(), "build")
+	held, err := pipeline.Store.IsJobHeld(t.Context(), "build")
 	if err != nil || held {
 		t.Errorf("after Release the job is held = %v (%v), want released", held, err)
 	}
@@ -125,7 +127,7 @@ func TestARunsBarOffersTriggerRetryOrAbort(t *testing.T) {
 
 	server, pipeline := writableServerWithPipeline(t)
 
-	err := pipeline.Store.StartRun(t.Context(), "r1", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(t.Context(), store.NewRun{ID: "r1", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

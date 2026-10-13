@@ -26,7 +26,7 @@ func runBar(pipeline *Pipeline, run store.RunRow, jobDeclared bool) barView {
 		bar.Job = run.JobName
 	}
 
-	if run.Status == "running" {
+	if run.Status == store.RunRunning {
 		bar.Abort = "/p/" + pipeline.Slug + "/runs/" + run.ID + "/abort"
 
 		return bar

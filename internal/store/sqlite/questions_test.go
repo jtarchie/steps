@@ -63,7 +63,7 @@ func TestAskQuestionRefusesARunFromAnotherPipeline(t *testing.T) {
 
 	defer func() { _ = theirs.Close() }()
 
-	err = theirs.StartRun(ctx, "their-run", "build", "/tmp/ws", "")
+	err = theirs.StartRun(ctx, store.NewRun{ID: "their-run", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

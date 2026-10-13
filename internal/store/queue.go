@@ -5,11 +5,12 @@ import (
 	"time"
 )
 
-// Queue is the work list one daemon drains, and the breaker that pauses a job
-// that keeps failing.
+// Queue is the work list one daemon drains, and the breaker that holds a job
+// that keeps failing. Held is the breaker's word, for one job; paused is
+// Control's, for the whole pipeline.
 //
 // The breaker is here rather than beside it because it decides what the queue
-// may hand out: a paused job is a row that will not be claimed, so splitting
+// may hand out: a held job is a row that will not be claimed, so splitting
 // them would give a consumer the queue without the rule that governs it.
 type Queue interface {
 	EnqueueJob(ctx context.Context, jobName, reason string) error
@@ -17,11 +18,11 @@ type Queue interface {
 	EnqueueManualJob(ctx context.Context, jobName, reason string) error
 	// EnqueueRerunJob queues a retry of a recorded run. It is a person's request, so it is manual; it is not merged into the job's ordinary pending row, since it builds different versions.
 	EnqueueRerunJob(ctx context.Context, jobName, reason, runID string) error
-	// QueuedTrigger reads what a claimed row asks for.
-	QueuedTrigger(ctx context.Context, id int64) (QueuedTrigger, error)
 	// ClaimNextJob takes the oldest pending row admitted by serial: and
-	// max_in_flight, atomically, and reports false when nothing is ready.
-	ClaimNextJob(ctx context.Context) (int64, string, bool, error)
+	// max_in_flight, atomically, and reports false when nothing is ready. The
+	// row comes back from the statement that claimed it, so nothing can be
+	// read between the claim and what the trigger asked for.
+	ClaimNextJob(ctx context.Context) (ClaimedJob, bool, error)
 	CompleteJob(ctx context.Context, id int64, status string, runErr error) error
 	// AbortQueuedJob finalizes the job's pending row as aborted so it is never claimed, reporting false when nothing was pending. A running row is not its to touch: that build is stopped through its context, and holds its serial slot until it actually ends.
 	AbortQueuedJob(ctx context.Context, jobName string) (bool, error)
@@ -37,15 +38,21 @@ type Queue interface {
 	// the conservative reading.
 	SyncJobLimits(ctx context.Context, groups map[string][]string, limits map[string]int) error
 	SerialGroupHolder(ctx context.Context, jobName string) (string, error)
-	RecordJobOutcome(ctx context.Context, jobName string, succeeded bool, maxFailures int) (paused bool, consecutive int, err error)
+	RecordJobOutcome(ctx context.Context, jobName string, succeeded bool, maxFailures int) (held bool, consecutive int, err error)
 	ResetJobFailures(ctx context.Context, jobName string) error
-	IsJobPaused(ctx context.Context, jobName string) (bool, error)
-	PausedJobs(ctx context.Context) ([]PausedJob, error)
+	IsJobHeld(ctx context.Context, jobName string) (bool, error)
+	HeldJobs(ctx context.Context) ([]HeldJob, error)
 }
 
-// QueuedTrigger is what a claimed queue row asks for beyond its job: whether a person asked, and whether it retries a recorded run.
-type QueuedTrigger struct {
-	Manual  bool
+// ClaimedJob is a queue row a worker has just taken: its job, and what the
+// trigger asks for beyond it.
+type ClaimedJob struct {
+	ID      int64
+	JobName string
+	// Manual is a person's trigger, which the breaker does not hold back.
+	Manual bool
+	// RerunOf is the run this one retries against the versions it was
+	// created with, empty for any other trigger.
 	RerunOf string
 }
 

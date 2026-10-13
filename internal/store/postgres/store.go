@@ -505,20 +505,6 @@ func now() time.Time {
 	return time.Now().UTC().Truncate(time.Microsecond)
 }
 
-// sortableNano is the sqlite driver's layout for the string fields that
-// carried it, so a row reads the same whichever driver wrote it.
-const sortableNano = "2006-01-02T15:04:05.000000000Z07:00"
-
-// stamp renders a nullable timestamp for the row types that carry a string:
-// "" for NULL, as sqlite's COALESCE did.
-func stamp(value sql.NullTime, layout string) string {
-	if !value.Valid {
-		return ""
-	}
-
-	return value.Time.UTC().Format(layout)
-}
-
 // utc reads a nullable timestamp as the zero Time for NULL.
 func utc(value sql.NullTime) time.Time {
 	if !value.Valid {
@@ -607,12 +593,13 @@ func next(args []any) string { return "$" + strconv.Itoa(len(args)+1) }
 
 // textArray binds a list as one text[] argument. Never NULL: `= ANY(NULL)`
 // and unnest(NULL) happen to answer like an empty list, but only by accident.
-func textArray(values []string) []string {
-	if values == nil {
-		return []string{}
+func textArray[S ~string](values []S) []string {
+	array := make([]string, len(values))
+	for i, value := range values {
+		array[i] = string(value)
 	}
 
-	return values
+	return array
 }
 
 func scanString(rows *sql.Rows) (string, error) {

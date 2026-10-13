@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // slackMsg is one message in a fake workspace's transcript. parent is empty
@@ -468,7 +469,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	if !slices.ContainsFunc(versions, func(v string) bool { return strings.Contains(v, `"user":"U3"`) }) {
+	if !slices.ContainsFunc(versions, func(v store.VersionKey) bool { return strings.Contains(string(v), `"user":"U3"`) }) {
 		t.Errorf("recorded versions = %v, want the author in each", versions)
 	}
 }

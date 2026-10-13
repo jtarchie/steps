@@ -5,7 +5,6 @@ package pipeline
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"maps"
 	"slices"
@@ -24,7 +23,7 @@ import (
 // maps to a set.
 type buildVersions struct {
 	mu sync.Mutex
-	by map[string]map[string]bool
+	by map[string]map[store.VersionKey]bool
 	// lastGreen is the id of the last triggered build that went green inside
 	// this run. What the run itself records (a job hook's put, a put before
 	// the first get) goes under it: recorded under the bare run id, it shared
@@ -76,7 +75,7 @@ func (b *buildVersions) runBuildID(runID string) string {
 const maxRecordedVersionBytes = 4 << 10
 
 func withBuildVersions(ctx context.Context) (context.Context, *buildVersions) {
-	versions := &buildVersions{by: map[string]map[string]bool{}, fetched: map[string]map[string]any{}, sources: map[string]map[string]any{}}
+	versions := &buildVersions{by: map[string]map[store.VersionKey]bool{}, fetched: map[string]map[string]any{}, sources: map[string]map[string]any{}}
 
 	return context.WithValue(ctx, buildVersionsKey{}, versions), versions
 }
@@ -84,7 +83,7 @@ func withBuildVersions(ctx context.Context) (context.Context, *buildVersions) {
 // versionRecordable encodes version for recording, or reports false: nothing
 // printed records nothing, and an oversized version is printed and warned
 // about rather than stored, which keeps the gate shut.
-func versionRecordable(ctx context.Context, resource string, version map[string]any) (string, bool) {
+func versionRecordable(ctx context.Context, resource string, version map[string]any) (store.VersionKey, bool) {
 	if len(version) == 0 {
 		return "", false
 	}
@@ -124,7 +123,7 @@ func recordBuildVersion(ctx context.Context, resource string, version map[string
 	defer versions.mu.Unlock()
 
 	if versions.by[resource] == nil {
-		versions.by[resource] = map[string]bool{}
+		versions.by[resource] = map[store.VersionKey]bool{}
 	}
 
 	versions.by[resource][encoded] = true
@@ -261,7 +260,7 @@ func recordPassedVersions(ctx context.Context, st store.Store, jobName, buildID 
 
 	for resource, versions := range fetched.by {
 		for version := range versions {
-			err := st.RecordPassedVersion(recCtx, jobName, resource, version, buildID)
+			err := st.RecordPassedVersion(recCtx, store.Pass{JobName: jobName, Resource: resource, Version: version, BuildID: buildID})
 			if err != nil {
 				slog.WarnContext(ctx, "job.passed_unrecorded", "job", jobName, "resource", resource, "error", err)
 			}
@@ -283,17 +282,17 @@ func recordPassedVersions(ctx context.Context, st store.Store, jobName, buildID 
 // that has not passed upstream must not enqueue the downstream job at all,
 // rather than starting it and discovering the problem later.
 func VersionSetPassedUpstream(ctx context.Context, st store.Versions, upstreamJob string, versions map[string]map[string]any) (bool, error) {
-	want := make(map[string]string, len(versions))
+	want := make(map[string]store.VersionKey, len(versions))
 
 	for resource, version := range versions {
-		encoded, err := json.Marshal(version)
+		encoded, err := store.EncodeVersion(version)
 		if err != nil {
 			// An unrenderable version cannot be matched against anything, so
 			// the safe answer is "not yet" — passed: exists to hold work back.
 			return false, nil //nolint:nilerr // deliberately conservative; the constraint is a gate, not a hint
 		}
 
-		want[resource] = string(encoded)
+		want[resource] = encoded
 	}
 
 	passed, err := st.HasPassedVersionSet(ctx, upstreamJob, want)

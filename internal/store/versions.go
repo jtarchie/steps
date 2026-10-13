@@ -17,13 +17,13 @@ type Versions interface {
 	// keeps its discovery order. Zero means no limit, as Retention's fields
 	// do; a negative limit prunes at DefaultResourceVersionCap.
 	RecordVersions(ctx context.Context, resourceName string, versions []map[string]any, limit int) (int, error)
-	ResourceVersionsJSON(ctx context.Context, resourceName string) ([]string, error)
-	VersionOrders(ctx context.Context, resourceName string) (map[string]int64, error)
-	RecordVersionOrder(ctx context.Context, resourceName, versionJSON string) (int64, error)
+	ResourceVersionsJSON(ctx context.Context, resourceName string) ([]VersionKey, error)
+	VersionOrders(ctx context.Context, resourceName string) (map[VersionKey]int64, error)
+	RecordVersionOrder(ctx context.Context, resourceName string, version VersionKey) (int64, error)
 	GreenVersions(ctx context.Context, resourceName string, upstreamJobs []string) ([]map[string]any, error)
-	RecordCheckedVersion(ctx context.Context, resourceName, versionJSON string) error
+	RecordCheckedVersion(ctx context.Context, resourceName string, version VersionKey) error
 	// CompareAndSetCheckedVersion moves the checked version to next only if it is still expected — or, with expectedFound false, still absent — reporting whether it moved. It is how a poll advances a resource something else may have advanced since the poll read it.
-	CompareAndSetCheckedVersion(ctx context.Context, resourceName, expected string, expectedFound bool, next string) (bool, error)
+	CompareAndSetCheckedVersion(ctx context.Context, swap CheckedSwap) (bool, error)
 	LastChecked(ctx context.Context, resourceName string) (CheckedResource, bool, error)
 	CheckedResources(ctx context.Context) ([]CheckedResource, error)
 	// RecordCheckError files why a resource's check failed; an empty message
@@ -36,21 +36,40 @@ type Versions interface {
 	// questions about different rows: a resource that has never checked
 	// successfully has an error and no version at all.
 	CheckErrors(ctx context.Context) ([]CheckError, error)
-	RecordPassedVersion(ctx context.Context, jobName, resourceName, versionJSON, buildID string) error
+	RecordPassedVersion(ctx context.Context, pass Pass) error
 	PassedVersions(ctx context.Context, jobName string, limit int) ([]PassedVersion, error)
-	HasPassedVersionSet(ctx context.Context, jobName string, want map[string]string) (bool, error)
+	HasPassedVersionSet(ctx context.Context, jobName string, want map[string]VersionKey) (bool, error)
 	ConsumedMark(ctx context.Context, jobName, resourceName string) (int64, error)
 	RecordConsumedMark(ctx context.Context, jobName, resourceName string, order int64) error
-	RecordRunInput(ctx context.Context, runID, inputName, resourceName, versionJSON string) error
+	RecordRunInput(ctx context.Context, runID string, input RunInput) error
 	RunInputs(ctx context.Context, runID string) ([]RunInput, error)
 	// VersionRuns is every run that took a version of the resource as an
 	// input, newest first.
 	VersionRuns(ctx context.Context, resourceName string) ([]VersionRun, error)
 }
 
+// CheckedSwap moves a resource's checked version from Expected to Next.
+// ExpectedFound false expects no checked version at all, and Expected is
+// then ignored.
+type CheckedSwap struct {
+	Resource      string
+	Expected      VersionKey
+	ExpectedFound bool
+	Next          VersionKey
+}
+
+// Pass is a version a job went green against, and the build it went green
+// in: a downstream fan-in asks whether its versions passed in ONE build.
+type Pass struct {
+	JobName  string
+	Resource string
+	Version  VersionKey
+	BuildID  string
+}
+
 // VersionRun is one run that took a version of a resource as an input.
 type VersionRun struct {
-	Version string
+	Version VersionKey
 	Run     RunRow
 }
 
@@ -59,13 +78,13 @@ type VersionRun struct {
 type RunInput struct {
 	Input    string
 	Resource string
-	Version  string
+	Version  VersionKey
 }
 
 // CheckedResource is a resource's last observed version.
 type CheckedResource struct {
 	Name      string
-	Version   string
+	Version   VersionKey
 	CheckedAt time.Time
 }
 
@@ -83,6 +102,6 @@ type CheckError struct {
 // PassedVersion is one resource version a job succeeded against.
 type PassedVersion struct {
 	Resource   string
-	Version    string
+	Version    VersionKey
 	RecordedAt time.Time
 }

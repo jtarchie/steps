@@ -21,7 +21,7 @@ func streamedBytes(t *testing.T, turns int) int {
 	ctx := t.Context()
 	runID := fmt.Sprintf("run-bytes-%d", turns)
 
-	err := pipeline.Store.StartRun(ctx, runID, "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: runID, JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -73,7 +73,7 @@ func streamedChunkBytes(t *testing.T, chunks int) int {
 	ctx := t.Context()
 	runID := fmt.Sprintf("run-chunks-%d", chunks)
 
-	err := pipeline.Store.StartRun(ctx, runID, "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: runID, JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -124,7 +124,7 @@ func streamedChildBytes(t *testing.T, children int) int {
 	ctx := t.Context()
 	runID := fmt.Sprintf("run-children-%d", children)
 
-	err := pipeline.Store.StartRun(ctx, runID, "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: runID, JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -180,7 +180,7 @@ func resultRun(t *testing.T, results, size int) (string, string) {
 	ctx := t.Context()
 	runID := fmt.Sprintf("run-results-%d", size)
 
-	err := pipeline.Store.StartRun(ctx, runID, "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: runID, JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

@@ -45,14 +45,14 @@ type Transcript struct {
 }
 
 // Running reports a run still in flight, which is what decides whether the page opens a live event stream.
-func (r Transcript) Running() bool { return r.Run.Status == "running" }
+func (r Transcript) Running() bool { return r.Run.Status == store.RunRunning }
 
 // ended reports a run whose status is one FinishRun writes. An allow-list,
 // not !Running: the terminal live view folds against a ZERO RunRow while the
 // run is in flight, and an unknown status must keep a live step live — a
 // stuck clock is the lesser wrong than a running step drawn as dead.
 func (r Transcript) ended() bool {
-	switch r.Run.Status {
+	switch string(r.Run.Status) {
 	case "succeeded", "failed", "errored", "aborted":
 		return true
 	default:

@@ -18,11 +18,11 @@ import (
 // resourceName, independent of whether any job triggered by the change
 // succeeds — version-checking and build outcomes are tracked separately,
 // mirroring how job_runs only ever records succeeded chains.
-func (s *Store) RecordCheckedVersion(ctx context.Context, resourceName, versionJSON string) error {
+func (s *Store) RecordCheckedVersion(ctx context.Context, resourceName string, versionJSON store.VersionKey) error {
 	return recordCheckedVersion(ctx, s.db, s.pipelineID, resourceName, versionJSON)
 }
 
-func recordCheckedVersion(ctx context.Context, db executor, pipelineID int64, resourceName, versionJSON string) error {
+func recordCheckedVersion(ctx context.Context, db executor, pipelineID int64, resourceName string, versionJSON store.VersionKey) error {
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO resource_checks (pipeline_id, resource_name, version_json, checked_at)
 		VALUES (?, ?, ?, ?)
@@ -38,7 +38,9 @@ func recordCheckedVersion(ctx context.Context, db executor, pipelineID int64, re
 }
 
 // CompareAndSetCheckedVersion is one statement either way, so nothing lands between the comparison and the write: an UPDATE guarded by the expected value, or an INSERT that does nothing if a row appeared.
-func (s *Store) CompareAndSetCheckedVersion(ctx context.Context, resourceName, expected string, expectedFound bool, next string) (bool, error) {
+func (s *Store) CompareAndSetCheckedVersion(ctx context.Context, swap store.CheckedSwap) (bool, error) {
+	resourceName, expected, expectedFound, next := swap.Resource, swap.Expected, swap.ExpectedFound, swap.Next
+
 	query := `UPDATE resource_checks SET version_json = ?, checked_at = ?
 		WHERE pipeline_id = ? AND resource_name = ? AND version_json = ?`
 	args := []any{next, now(), s.pipelineID, resourceName, expected}
@@ -165,7 +167,9 @@ func (s *Store) CheckErrors(ctx context.Context) ([]store.CheckError, error) {
 
 // RecordPassedVersion records that jobName completed successfully against this
 // exact version of a resource. It is what a downstream job's passed: reads.
-func (s *Store) RecordPassedVersion(ctx context.Context, jobName, resourceName, versionJSON, buildID string) error {
+func (s *Store) RecordPassedVersion(ctx context.Context, pass store.Pass) error {
+	jobName, resourceName, versionJSON, buildID := pass.JobName, pass.Resource, pass.Version, pass.BuildID
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("could not record a passed version for job %q: %w", jobName, err)
@@ -239,7 +243,7 @@ func (s *Store) PassedVersions(ctx context.Context, jobName string, limit int) (
 // never satisfy a correlated match. Conservative on purpose: passed: is a gate.
 //
 // An empty want is vacuously true — there is no constraint to satisfy.
-func (s *Store) HasPassedVersionSet(ctx context.Context, jobName string, want map[string]string) (bool, error) {
+func (s *Store) HasPassedVersionSet(ctx context.Context, jobName string, want map[string]store.VersionKey) (bool, error) {
 	if len(want) == 0 {
 		return true, nil
 	}
@@ -332,7 +336,9 @@ func (s *Store) RecordConsumedMark(ctx context.Context, jobName, resourceName st
 // under this get — every get of the run, which is what a resume rebuilds it
 // against. See the run_inputs DDL for why the cursor cannot answer it. A run
 // is created once, so a second record of the same get is the same row.
-func (s *Store) RecordRunInput(ctx context.Context, runID, inputName, resourceName, versionJSON string) error {
+func (s *Store) RecordRunInput(ctx context.Context, runID string, input store.RunInput) error {
+	inputName, resourceName, versionJSON := input.Input, input.Resource, input.Version
+
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_inputs (run_id, input_name, resource_name, version_json)
 		VALUES (?, ?, ?, ?)

@@ -3,6 +3,8 @@ package storetest
 import (
 	"slices"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // What a `steps pipeline` verb does to the database, as a caller of the contract sees it.
@@ -51,12 +53,12 @@ func (s suite) TestRenameKeepsTheHistoryUnderTheNewName(t *testing.T) {
 	ctx := ctxFor(t)
 	st := s.open(t, "test")
 
-	err := st.StartRun(ctx, "run-one", "build", "/tmp/ws", "")
+	err := st.StartRun(ctx, store.NewRun{ID: "run-one", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = st.FinishRun(ctx, "run-one", "succeeded")
+	err = st.FinishRun(ctx, "run-one", store.RunSucceeded)
 	if err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
@@ -96,12 +98,12 @@ func (s suite) TestDeleteForgetsThePipelineAndItsHistory(t *testing.T) {
 
 	setRevision(t, doomed, "sha-one", 1, map[string]string{"ci/build.sh": "echo hi\n"})
 
-	err := doomed.StartRun(ctx, "run-one", "build", "/tmp/ws", "sha-one")
+	err := doomed.StartRun(ctx, store.NewRun{ID: "run-one", JobName: "build", Workspace: "/tmp/ws", ConfigSHA: "sha-one"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	err = bystander.StartRun(ctx, "run-two", "build", "/tmp/ws", "")
+	err = bystander.StartRun(ctx, store.NewRun{ID: "run-two", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

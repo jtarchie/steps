@@ -29,11 +29,11 @@ func (s *Store) RequestApproval(ctx context.Context, jobName, message string) (i
 }
 
 // DecideApproval records a decision, refusing to overwrite one already made.
-func (s *Store) DecideApproval(ctx context.Context, id int64, status, by, reason string) error {
+func (s *Store) DecideApproval(ctx context.Context, id int64, status store.ApprovalStatus, by, reason string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE approvals SET status = ?, decided_at = ?, decided_by = ?, reason = ?
 		WHERE id = ? AND pipeline_id = ? AND status = 'pending'
-	`, status, now(), by, reason, id, s.pipelineID)
+	`, string(status), now(), by, reason, id, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not decide approval %d: %w", id, err)
 	}
@@ -52,14 +52,11 @@ func (s *Store) DecideApproval(ctx context.Context, id int64, status, by, reason
 
 // ApprovalStatus reads one approval's current state.
 func (s *Store) ApprovalStatus(ctx context.Context, id int64) (store.Approval, error) {
-	var approval store.Approval
-
-	err := s.reads.QueryRowContext(ctx, `
+	approval, err := scanApproval(s.reads.QueryRowContext(ctx, `
 		SELECT id, job_name, message, status, requested_at,
 		       COALESCE(decided_at, ''), COALESCE(decided_by, ''), COALESCE(reason, '')
 		FROM approvals WHERE id = ? AND pipeline_id = ?
-	`, id, s.pipelineID).Scan(&approval.ID, &approval.JobName, &approval.Message, &approval.Status,
-		&approval.RequestedAt, &approval.DecidedAt, &approval.DecidedBy, &approval.Reason)
+	`, id, s.pipelineID))
 	if err != nil {
 		return store.Approval{}, fmt.Errorf("could not read approval %d: %w", id, err)
 	}
@@ -87,9 +84,19 @@ func (s *Store) Approvals(ctx context.Context, pendingOnly bool, limit int) ([]s
 		FROM approvals WHERE pipeline_id = ? `+where+`
 		ORDER BY `+order+` LIMIT ?
 	`, []any{s.pipelineID, rowLimit(limit)}, func(rows *sql.Rows) (store.Approval, error) {
-		var approval store.Approval
-
-		return approval, rows.Scan(&approval.ID, &approval.JobName, &approval.Message, &approval.Status,
-			&approval.RequestedAt, &approval.DecidedAt, &approval.DecidedBy, &approval.Reason)
+		return scanApproval(rows)
 	})
+}
+
+func scanApproval(row rowScanner) (store.Approval, error) {
+	var (
+		approval           store.Approval
+		requested, decided string
+	)
+
+	err := row.Scan(&approval.ID, &approval.JobName, &approval.Message, &approval.Status,
+		&requested, &decided, &approval.DecidedBy, &approval.Reason)
+	approval.RequestedAt, approval.DecidedAt = parseTimestamp(requested), parseTimestamp(decided)
+
+	return approval, err //nolint:wrapcheck // every caller names what it was reading
 }

@@ -14,6 +14,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -208,11 +209,10 @@ func templateFuncs() template.FuncMap {
 		"ago":        formatAgo,
 		"agoTag":     agoTag,
 		"agoCompact": agoCompactTag,
-		"agoText":    agoText,
 		"elapsedTag": elapsedTag,
 		"stamp":      formatStamp,
 		"short":      shortID,
-		"statusWord": statusWord,
+		"statusWord": templateStatusWord,
 		// The footer's copyright year, read at render so a daemon left running
 		// over new year's eve does not print last year.
 		"year": func() int { return time.Now().Year() },
@@ -224,9 +224,11 @@ func templateFuncs() template.FuncMap {
 		"resultValue": resultValue,
 		// hx-get is a plain attribute to html/template: HTML-escaped, never
 		// URL-encoded, so a name's `#` or `?` would end the path early.
-		"pathseg":  url.PathEscape,
-		"jsonPre":  jsonPre,
-		"jsonLine": jsonLine,
+		"pathseg": url.PathEscape,
+		"jsonPre": jsonPre,
+		// A version arrives as a store.VersionKey and a payload as a string;
+		// a template refuses either for a func taking the other.
+		"jsonLine": func(raw reflect.Value) template.HTML { return jsonLine(raw.String()) },
 		// prose resolves to the hybrid (detect.go) rather than to
 		// renderProse directly: renderProse remains the fallback for text
 		// that detection has nothing to say about, but "prosebody" — the one
@@ -245,7 +247,7 @@ func templateFuncs() template.FuncMap {
 		"mul2":  func(n int) int { return n * 8 },
 		"sub16": func(n int) int { return 16 - n },
 		"slug":  runview.Slug,
-		"mark":  statusMark,
+		"mark":  statusMark[string],
 		// The tab badges: one lookup into the list nav() already gathered,
 		// rather than six count fields that could each be stale differently.
 		"attentionOn": attentionOn,
@@ -352,8 +354,8 @@ func shortID(id string) string {
 // statusWord maps a stored status to the word the UI shows. The vocabulary
 // differs by table (a node says "succeeded", a queue row says "done"), and a
 // reader should not have to know which table they are looking at.
-func statusWord(status string) string {
-	switch status {
+func statusWord[S ~string](status S) string {
+	switch string(status) {
 	case "succeeded", "done":
 		return "passed"
 	case "pending":
@@ -361,8 +363,15 @@ func statusWord(status string) string {
 	case "":
 		return "running"
 	default:
-		return status
+		return string(status)
 	}
+}
+
+// templateStatusWord is statusWord for a template, which hands a field over
+// as the type it has — a run's store.RunStatus, a step's plain string — and
+// refuses, at render, an argument not assignable to the func's parameter.
+func templateStatusWord(status reflect.Value) string {
+	return statusWord(status.String())
 }
 
 // thousands groups a count the way the CLI's own usage summary does
@@ -437,7 +446,7 @@ func sparkline(runs []store.RunRow) []sparkBar {
 
 		bars = append(bars, sparkBar{
 			Height: height,
-			Failed: run.Status == "failed",
+			Failed: run.Status == store.RunFailed,
 			Title:  fmt.Sprintf("%s — %s", formatDuration(run.Duration()), statusWord(run.Status)),
 		})
 	}
@@ -490,7 +499,7 @@ func transcriptEvents(raw string, ok bool) []transcriptEvent {
 
 // statusMark is a run status as one glyph, the vocabulary every mark and
 // status line here shares.
-func statusMark(status string) string {
+func statusMark[S ~string](status S) string {
 	switch statusWord(status) {
 	case "passed":
 		return "✓"
@@ -521,18 +530,6 @@ func agoTag(t time.Time) template.HTML {
 	//nolint:gosec // G203: both interpolations are machine-formatted, not input
 	return template.HTML(fmt.Sprintf(`<time data-ago=%q>%s</time>`,
 		t.UTC().Format(time.RFC3339Nano), template.HTMLEscapeString(formatAgo(t))))
-}
-
-// agoText is agoTag for the tables that store their stamps as TEXT
-// (approvals, questions, the breaker). Falls back to the raw string when it
-// will not parse, which beats hiding a record over a formatting quirk.
-func agoText(stamp string) template.HTML {
-	t, err := time.Parse(time.RFC3339Nano, stamp)
-	if err != nil {
-		return template.HTML(template.HTMLEscapeString(stamp)) //nolint:gosec // G203: escaped above
-	}
-
-	return agoTag(t)
 }
 
 // agoCompact is a relative time in one coarse unit ("5d"), for places where

@@ -230,7 +230,7 @@ func (s *Server) overviewPipelines(ctx context.Context, nav navData) []overviewP
 			row.Latest, row.HasRun = runs[0], true
 		}
 
-		held, err := pipeline.Store.PausedJobs(ctx)
+		held, err := pipeline.Store.HeldJobs(ctx)
 		if err == nil {
 			row.Held = len(held)
 		}

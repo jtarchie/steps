@@ -4,7 +4,7 @@ import (
 	"context"
 )
 
-// Control is the pipeline-level switchboard a `steps pipeline` verb throws: whether it admits work, what it is called, and whether it exists at all.
+// Control is the pipeline-level switchboard a `steps pipeline` verb throws: whether it admits work, what it is called, where its YAML lives, and whether it exists at all.
 type Control interface {
 	// Pause is the circuit breaker for the whole pipeline: nothing polls, nothing is admitted, until Unpause.
 	Pause(ctx context.Context) error
@@ -14,4 +14,8 @@ type Control interface {
 	Rename(ctx context.Context, name string) error
 	// Delete forgets the pipeline and everything that cascades off it; the handle is spent afterwards and must be closed.
 	Delete(ctx context.Context) error
+	// SetSourcePath records where this pipeline's YAML lives, so a reader of
+	// the database can tell two checkouts apart. Only a command that LOADED
+	// the pipeline calls it.
+	SetSourcePath(ctx context.Context, source string) error
 }

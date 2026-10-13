@@ -79,7 +79,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = st.RecordPassedVersion(ctx, "test", "repo", string(encoded), "build-1")
+	err = st.RecordPassedVersion(ctx, store.Pass{JobName: "test", Resource: "repo", Version: store.VersionKey(encoded), BuildID: "build-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = st.RecordPassedVersion(ctx, "test", "repo", string(encoded), "build-1")
+	err = st.RecordPassedVersion(ctx, store.Pass{JobName: "test", Resource: "repo", Version: store.VersionKey(encoded), BuildID: "build-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func recordGreen(t *testing.T, st store.Store, jobName, ref, buildID string) {
 		t.Fatal(err)
 	}
 
-	err = st.RecordPassedVersion(context.Background(), jobName, "repo", string(encoded), buildID)
+	err = st.RecordPassedVersion(context.Background(), store.Pass{JobName: jobName, Resource: "repo", Version: store.VersionKey(encoded), BuildID: buildID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +526,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = st.RecordPassedVersion(ctx, "test", "repo", string(encoded), "build-1")
+	err = st.RecordPassedVersion(ctx, store.Pass{JobName: "test", Resource: "repo", Version: store.VersionKey(encoded), BuildID: "build-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

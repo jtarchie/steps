@@ -79,7 +79,7 @@ func syntheticStepRecords(
 ) {
 	t.Helper()
 
-	err := st.RecordRunStep(ctx, runID, runID+"#0", index, step.name)
+	err := st.RecordRunStep(ctx, runID, store.RunStep{BuildID: runID + "#0", Index: index, Name: step.name})
 	if err != nil {
 		t.Fatalf("RecordRunStep: %v", err)
 	}
@@ -167,7 +167,7 @@ func syntheticBuild(ctx context.Context, t *testing.T, st *Store, jobName string
 
 	sha := syntheticRevision(ctx, t, st, build)
 
-	err := st.StartRun(ctx, runID, jobName, "/tmp/steps-ws-"+runID+"/b-"+runID+"-1-"+jobName, sha)
+	err := st.StartRun(ctx, store.NewRun{ID: runID, JobName: jobName, Workspace: "/tmp/steps-ws-" + runID + "/b-" + runID + "-1-" + jobName, ConfigSHA: sha})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

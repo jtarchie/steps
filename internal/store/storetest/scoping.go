@@ -300,7 +300,7 @@ func (s suite) TestPendingQuestionsAreScopedToTheirPipeline(t *testing.T) {
 
 	theirs := s.open(t, "other")
 
-	err := mine.StartRun(ctx, "run-1", "release-note", "/tmp/ws", "")
+	err := mine.StartRun(ctx, store.NewRun{ID: "run-1", JobName: "release-note", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -321,7 +321,7 @@ func (s suite) TestPendingQuestionsAreScopedToTheirPipeline(t *testing.T) {
 		t.Error("the other pipeline answered this one's question")
 	}
 
-	if mineStill, _ := mine.QuestionStatus(ctx, question.ID); mineStill.Status != "pending" {
+	if mineStill, _ := mine.QuestionStatus(ctx, question.ID); mineStill.Status != store.QuestionPending {
 		t.Errorf("this pipeline's question was resolved from outside: %q", mineStill.Status)
 	}
 }
@@ -362,12 +362,12 @@ func (s suite) TestCompletedRunStepsAreScopedToTheirPipeline(t *testing.T) {
 
 	const shared = "SHARED01"
 
-	err := web.StartRun(ctx, shared, "build", "/tmp/web", "")
+	err := web.StartRun(ctx, store.NewRun{ID: shared, JobName: "build", Workspace: "/tmp/web"})
 	if err != nil {
 		t.Fatalf("StartRun web: %v", err)
 	}
 
-	err = web.RecordRunStep(ctx, shared, shared+"#0", 0, "compile")
+	err = web.RecordRunStep(ctx, shared, store.RunStep{BuildID: shared + "#0", Index: 0, Name: "compile"})
 	if err != nil {
 		t.Fatalf("RecordRunStep web: %v", err)
 	}
@@ -399,7 +399,7 @@ func (s suite) TestRunEventsAreScopedToTheirPipeline(t *testing.T) {
 
 	const shared = "SHARED02"
 
-	err := web.StartRun(ctx, shared, "build", "/tmp/web", "")
+	err := web.StartRun(ctx, store.NewRun{ID: shared, JobName: "build", Workspace: "/tmp/web"})
 	if err != nil {
 		t.Fatalf("StartRun web: %v", err)
 	}
@@ -409,7 +409,7 @@ func (s suite) TestRunEventsAreScopedToTheirPipeline(t *testing.T) {
 		t.Fatalf("AppendRunEvent web: %v", err)
 	}
 
-	err = web.RecordRunInput(ctx, shared, "repo", "repo", `{"ref":"abc"}`)
+	err = web.RecordRunInput(ctx, shared, store.RunInput{Input: "repo", Resource: "repo", Version: `{"ref":"abc"}`})
 	if err != nil {
 		t.Fatalf("RecordRunInput web: %v", err)
 	}
@@ -488,12 +488,12 @@ func (s suite) TestStartRunRefusesAnIDHeldByAnotherPipeline(t *testing.T) {
 
 	infra := s.open(t, "infra")
 
-	err := web.StartRun(ctx, "SHARED01", "build", "/tmp/web", "")
+	err := web.StartRun(ctx, store.NewRun{ID: "SHARED01", JobName: "build", Workspace: "/tmp/web"})
 	if err != nil {
 		t.Fatalf("StartRun web: %v", err)
 	}
 
-	err = infra.StartRun(ctx, "SHARED01", "build", "/tmp/infra", "")
+	err = infra.StartRun(ctx, store.NewRun{ID: "SHARED01", JobName: "build", Workspace: "/tmp/infra"})
 	if !errors.Is(err, store.ErrRunExists) {
 		t.Fatalf("minting an id another pipeline holds returned %v, want store.ErrRunExists", err)
 	}
@@ -510,7 +510,7 @@ func (s suite) TestResumeRunIsScopedToItsPipeline(t *testing.T) {
 
 	infra := s.open(t, "infra")
 
-	err := web.StartRun(ctx, "WEBRUN01", "build", "/tmp/web", "")
+	err := web.StartRun(ctx, store.NewRun{ID: "WEBRUN01", JobName: "build", Workspace: "/tmp/web"})
 	if err != nil {
 		t.Fatalf("StartRun web: %v", err)
 	}

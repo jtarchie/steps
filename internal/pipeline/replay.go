@@ -87,7 +87,7 @@ func PrepareReplay(
 		return ctx, "", err
 	}
 
-	err = st.StartRun(ctx, replayID, job.Name, dir, cfg.Revision.SHA)
+	err = st.StartRun(ctx, store.NewRun{ID: replayID, JobName: job.Name, Workspace: dir, ConfigSHA: cfg.Revision.SHA})
 	if err != nil {
 		return ctx, "", err //nolint:wrapcheck // StartRun already names the run
 	}

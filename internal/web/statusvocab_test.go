@@ -19,7 +19,7 @@ func TestTranscriptStepsCarryStatusGlyph(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-glyph", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-glyph", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestQuestionsUseSharedTimeAndStatusVocabulary(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "run-q", "deploy", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-q", JobName: "deploy", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -116,17 +116,38 @@ func TestQuestionsUseSharedTimeAndStatusVocabulary(t *testing.T) {
 	}
 }
 
-// TestAgoTextFallsBackToTheRawStamp: a stamp that will not parse renders
-// as-is rather than hiding the record.
-func TestAgoTextFallsBackToTheRawStamp(t *testing.T) {
+// TestAWaitingRequestSaysNothingAboutItsEnd: a row's DecidedAt and AnsweredAt
+// are zero times while it waits, and a template's `if` holds every struct
+// true — so a pending row would claim a decision nobody made.
+func TestAWaitingRequestSaysNothingAboutItsEnd(t *testing.T) {
 	t.Parallel()
 
-	if got := string(agoText("not-a-time")); got != "not-a-time" {
-		t.Errorf("agoText fallback = %q, want the raw stamp", got)
+	server, pipeline := testPipeline(t)
+	ctx := context.Background()
+
+	_, err := pipeline.Store.RequestApproval(ctx, "deploy", "ship it?")
+	if err != nil {
+		t.Fatalf("RequestApproval: %v", err)
 	}
 
-	if got := string(agoText("2026-08-31T00:00:00.000000000Z")); !strings.Contains(got, "<time data-ago=") {
-		t.Errorf("agoText did not render a parseable stamp relatively: %q", got)
+	err = pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-q", JobName: "deploy", Workspace: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	_, _, err = pipeline.Store.AskQuestion(ctx, store.Question{
+		RunID: "run-q", JobName: "deploy", AgentName: "reviewer", Question: "which region?",
+	})
+	if err != nil {
+		t.Fatalf("AskQuestion: %v", err)
+	}
+
+	for page, ending := range map[string]string{"/p/demo/approvals": "· decided", "/p/demo/questions": "· answered"} {
+		_, body := get(t, server, page)
+
+		if !strings.Contains(body, `<time data-ago=`) || strings.Contains(body, ending) {
+			t.Errorf("%s = %s\nwant when it was asked and nothing %q", page, body, ending)
+		}
 	}
 }
 
@@ -247,7 +268,7 @@ func TestTheOverviewSaysPausedInBlueAndNothingOtherwise(t *testing.T) {
 		}
 	}
 
-	err := pipelines[1].Store.StartRun(t.Context(), "run-red", "red-job", "/tmp/ws", "")
+	err := pipelines[1].Store.StartRun(t.Context(), store.NewRun{ID: "run-red", JobName: "red-job", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

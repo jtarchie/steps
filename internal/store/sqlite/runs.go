@@ -69,7 +69,9 @@ func scanRunRow(sc rowScanner) (store.RunRow, error) {
 // DO NOTHING plus a row count rather than letting the constraint violation
 // out, so the answer does not depend on how a driver spells its unique-index
 // error.
-func (s *Store) StartRun(ctx context.Context, id, jobName, workspaceDir, configSHA string) error {
+func (s *Store) StartRun(ctx context.Context, run store.NewRun) error {
+	id, jobName, workspaceDir, configSHA := run.ID, run.JobName, run.Workspace, run.ConfigSHA
+
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO runs (id, pipeline_id, job_name, workspace, status, started_at, revision_id)
 		VALUES (?, ?, ?, ?, 'running', ?, `+revisionBySHA+`)
@@ -151,10 +153,10 @@ func (s *Store) ResumeRun(ctx context.Context, id, workspaceDir, configSHA strin
 // from here. --resume continues a FAILED run from the tree deliberately left on
 // disk, and --replay forks a SUCCEEDED one that was kept with --keep-workspace.
 // Clearing it on failure breaks resume; clearing it on success breaks replay.
-func (s *Store) FinishRun(ctx context.Context, id, status string) error {
+func (s *Store) FinishRun(ctx context.Context, id string, status store.RunStatus) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE runs SET status = ?, finished_at = ? WHERE id = ? AND pipeline_id = ?`,
-		status, nowNano(), id, s.pipelineID)
+		string(status), nowNano(), id, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not finish run %q: %w", id, err)
 	}
@@ -164,7 +166,9 @@ func (s *Store) FinishRun(ctx context.Context, id, status string) error {
 
 // RecordRunStep marks one step of one build of a run as done, so a resume
 // skips it.
-func (s *Store) RecordRunStep(ctx context.Context, runID, buildID string, index int, name string) error {
+func (s *Store) RecordRunStep(ctx context.Context, runID string, step store.RunStep) error {
+	buildID, index, name := step.BuildID, step.Index, step.Name
+
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO run_steps (run_id, build_id, step_index, step_name) VALUES (?, ?, ?, ?)
 		ON CONFLICT (run_id, build_id, step_index) DO NOTHING

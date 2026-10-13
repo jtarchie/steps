@@ -23,7 +23,7 @@ func TestLiveStreamDrawsTheWorkerToo(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := t.Context()
 
-	err := pipeline.Store.StartRun(ctx, "run-worker", "build", "/tmp/ws", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "run-worker", JobName: "build", Workspace: "/tmp/ws"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestRunPageDrawsTheMachines(t *testing.T) {
 	server, pipeline := testPipeline(t)
 	ctx := context.Background()
 
-	err := pipeline.Store.StartRun(ctx, "placed", "build", "", "")
+	err := pipeline.Store.StartRun(ctx, store.NewRun{ID: "placed", JobName: "build"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

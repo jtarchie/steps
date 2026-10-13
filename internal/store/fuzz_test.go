@@ -14,7 +14,7 @@ func FuzzVersionCanonical(f *testing.F) {
 	f.Add(`{} trailing`)
 
 	f.Fuzz(func(t *testing.T, raw string) {
-		version, err := DecodeVersion(raw)
+		version, err := DecodeVersion(VersionKey(raw))
 		if err != nil {
 			return
 		}

@@ -182,7 +182,7 @@ func TestResumeJobNameIsTheRecordedRunsJob(t *testing.T) {
 
 	t.Cleanup(func() { _ = st.Close() })
 
-	err = st.StartRun(ctx, "R", "deploy", t.TempDir(), "")
+	err = st.StartRun(ctx, store.NewRun{ID: "R", JobName: "deploy", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
