@@ -69,16 +69,11 @@ func runAcrossStep(ctx context.Context, r stepRunner, i int, step config.Step, p
 	// precisely the whole-matrix re-run this feature exists to avoid.
 	cellErr := runAcrossCells(ctx, r, i, step, cells, parentHash)
 
-	status := "succeeded"
-	if cellErr != nil {
-		status = "failed"
-	}
-
 	node := merkle.Node{
 		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindAcross,
 		StepIndex: i, Resource: executedStepName(step), Content: content,
 	}
-	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, nil, cellErr)
+	recordBlock(ctx, r, node, nil, cellErr)
 
 	return settled(hash, cellErr), cellErr
 }

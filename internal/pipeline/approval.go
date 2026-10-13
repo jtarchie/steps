@@ -71,12 +71,7 @@ func runApprovalStep(ctx context.Context, r stepRunner, i int, step config.Step,
 		StepIndex: i, Resource: fmt.Sprintf("approval-%d", id), Content: content,
 	}
 
-	status := "succeeded"
-	if err != nil {
-		status = "failed"
-	}
-
-	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, approvalRecord(decision), err)
+	recordBlock(ctx, r, node, approvalRecord(decision), err)
 
 	if err != nil {
 		return failedAt(hash), err

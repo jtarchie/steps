@@ -54,16 +54,11 @@ func runParallelStep(ctx context.Context, r stepRunner, i int, step config.Step,
 	results := runBranches(ctx, r, i, step, hash)
 	blockErr := combineBranchErrors(ctx, results)
 
-	status := "succeeded"
-	if blockErr != nil {
-		status = "failed"
-	}
-
 	node := merkle.Node{
 		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindParallel,
 		StepIndex: i, Resource: executedStepName(step), Content: content,
 	}
-	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, nil, blockErr)
+	recordBlock(ctx, r, node, nil, blockErr)
 
 	return settled(hash, blockErr), blockErr
 }
@@ -266,16 +261,11 @@ func runRaceStep(ctx context.Context, r stepRunner, i int, step config.Step, par
 	winner, results := raceBranches(ctx, r, i, branches, hash)
 	raceErr := raceOutcome(ctx, winner, results)
 
-	status := "succeeded"
-	if raceErr != nil {
-		status = "failed"
-	}
-
 	node := merkle.Node{
 		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindRace,
 		StepIndex: i, Resource: executedStepName(step), Content: content,
 	}
-	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, nil, raceErr)
+	recordBlock(ctx, r, node, nil, raceErr)
 
 	return settled(hash, raceErr), raceErr
 }

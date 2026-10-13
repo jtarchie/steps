@@ -4,16 +4,20 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/testdocker"
+	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // TestBlockNodesRecordWhatTheBlockConcluded: a container's own node row is what `steps runs` and the node page read, so its status has to be the block's outcome rather than a constant.
@@ -66,12 +70,103 @@ func TestBlockNodesRecordWhatTheBlockConcluded(t *testing.T) {
   - try:
       task: a
       run: "true"`, false, "succeeded"},
+		"do failing": {merkle.NodeKindDo, `
+  - do:
+    - task: a
+      run: "false"`, true, "failed"},
+		"do erroring": {merkle.NodeKindDo, `
+  - do:
+    - load_var: version
+      file: out/missing.txt
+      inputs: [out]`, true, "errored"},
+		"in_parallel erroring": {merkle.NodeKindParallel, `
+  - in_parallel:
+      steps:
+      - load_var: version
+        file: out/missing.txt
+        inputs: [out]`, true, "errored"},
+		"race erroring": {merkle.NodeKindRace, `
+  - race:
+      steps:
+      - load_var: version
+        file: out/missing.txt
+        inputs: [out]
+      - load_var: other
+        file: out/missing.txt
+        inputs: [out]`, true, "errored"},
 	} {
-		_, st := runFixtureBeside(t, "jobs:\n- name: build\n  plan:"+c.plan+"\n", c.wantFailure, nil)
+		_, st := runFixtureBeside(t, "jobs:\n- name: build\n  plan:\n  - task: make\n    outputs: [out]\n    run: \"true\""+c.plan+"\n", c.wantFailure, nil)
 
 		if got := blockNode(t, st, c.kind).Status; got != c.want {
 			t.Errorf("%s: %s node recorded %q, want %q", name, c.kind, got, c.want)
 		}
+	}
+}
+
+// TestBlockNodesRecordAnAbort: a block stopped by the job's cancellation is aborted in the store, like the leaf inside it, not failed.
+func TestBlockNodesRecordAnAbort(t *testing.T) {
+	t.Parallel()
+
+	for name, c := range map[string]struct {
+		kind merkle.NodeKind
+		plan string
+	}{
+		"do": {merkle.NodeKindDo, `
+  - do:
+    - task: a
+      run: sleep 30`},
+		"in_parallel": {merkle.NodeKindParallel, `
+  - in_parallel:
+      steps:
+      - task: a
+        run: sleep 30`},
+		"try": {merkle.NodeKindTry, `
+  - try:
+      task: a
+      run: sleep 30`},
+		"approval": {merkle.NodeKindApproval, `
+  - approval:
+      message: ship it?`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			path := filepath.Join(dir, "fixture.yml")
+
+			err := os.WriteFile(path, []byte("jobs:\n- name: build\n  plan:"+c.plan+"\n"), 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := config.LoadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			st, err := sqlite.OpenStore(filepath.Join(dir, "state.db"), "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+
+			provider, err := workspace.NewProvider(nil, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = provider.Close() })
+
+			ctx, cancel := context.WithCancel(t.Context())
+			time.AfterFunc(300*time.Millisecond, cancel)
+
+			if RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false) == nil {
+				t.Fatal("RunJob returned nil for a cancelled run")
+			}
+
+			if got := blockNode(t, st, c.kind).Status; got != "aborted" {
+				t.Errorf("%s node recorded %q, want aborted", c.kind, got)
+			}
+		})
 	}
 }
 

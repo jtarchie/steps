@@ -45,15 +45,15 @@ func runTryStep(ctx context.Context, r stepRunner, i int, step config.Step, pare
 
 	// The wrapper's node status is what the plan did with the outcome, not
 	// what the inner step's outcome was (the inner step records that itself):
-	// "succeeded" when the outcome is about to be tolerated, "failed" when it
-	// is the one class try: does not cover (abort) and the job stops here.
-	status := "succeeded"
-	if innerErr != nil && !toleratedByTry(ctx, innerErr) {
-		status = "failed"
+	// "succeeded" when the outcome is about to be tolerated, aborted when it
+	// is the one class try: does not cover and the job stops here.
+	class := outcome.Classify(ctx, innerErr)
+	if toleratedByTry(ctx, innerErr) {
+		class = outcome.Succeeded
 	}
 
 	node := merkle.Node{Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindTry, StepIndex: i, Resource: name, Content: content}
-	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, nil, innerErr)
+	recordBlockAs(ctx, r, node, class, nil, innerErr)
 
 	// The wrapper's row names the try node, not the failure its inner step
 	// recorded — and keeps naming it when the inner step's guard skipped it.

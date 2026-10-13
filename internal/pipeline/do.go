@@ -45,17 +45,12 @@ func runDoStep(ctx context.Context, r stepRunner, i int, step config.Step, paren
 
 	blockErr := runDoChildren(ctx, r, i, step, childParent)
 
-	status := "succeeded"
-	if blockErr != nil {
-		status = "failed"
-	}
-
 	// Recorded like every other block's, so the row's hash names a node.
 	node := merkle.Node{
 		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindDo,
 		StepIndex: i, Resource: executedStepName(step), Content: content,
 	}
-	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, nil, blockErr)
+	recordBlock(ctx, r, node, nil, blockErr)
 
 	return settled(hash, blockErr), blockErr
 }

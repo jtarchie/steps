@@ -47,16 +47,11 @@ func runEnsembleStep(ctx context.Context, r stepRunner, i int, step config.Step,
 
 	verdict, err := decideEnsemble(ctx, r, i, step, hash, votes)
 
-	status := "succeeded"
-	if err != nil {
-		status = "failed"
-	}
-
 	node := merkle.Node{
 		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindEnsemble,
 		StepIndex: i, Resource: executedStepName(step), Content: content,
 	}
-	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, status, ensembleRecord(votes, verdict), err)
+	recordBlock(ctx, r, node, ensembleRecord(votes, verdict), err)
 
 	if err != nil {
 		return failedAt(hash), err

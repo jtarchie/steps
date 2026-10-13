@@ -133,6 +133,18 @@ func recordStepFailure(ctx context.Context, r stepRunner, node merkle.Node, err 
 	_ = r.st.ForgetChain(recCtx, r.jobName, node.Hash)
 }
 
+// recordBlock records a container's own node under the class its outcome
+// earned — the same failed/errored/aborted line a leaf's row draws, so an
+// aborted block is not stored as a failure. Best-effort and detached, like
+// recordStepFailure.
+func recordBlock(ctx context.Context, r stepRunner, node merkle.Node, result map[string]any, err error) {
+	recordBlockAs(ctx, r, node, outcome.Classify(ctx, err), result, err)
+}
+
+func recordBlockAs(ctx context.Context, r stepRunner, node merkle.Node, class outcome.Class, result map[string]any, err error) {
+	_ = r.st.RecordNode(context.WithoutCancel(ctx), nodeRecord(node), r.jobName, string(class), result, err)
+}
+
 // runPlaced owns a leaf step's recording order: the node, then where it ran — run_placements references the node, and a step that FAILED on a worker is the one whose machine somebody wants named.
 func runPlaced(
 	ctx context.Context, r stepRunner, node merkle.Node, placedAs string, work func(context.Context) (map[string]any, error),
