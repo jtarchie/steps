@@ -112,11 +112,11 @@ func (r bareRunner) placement() (Placement, bool) { return r.s.placement() }
 func (r bareRunner) execute(ctx context.Context, command string, p plan) (string, string, error) {
 	stdout, stderr, code, err := r.exchange(ctx, command, p)
 	if err != nil {
-		return stdout, stderr, fmt.Errorf("command %q failed: %w", command, shell.WrapIfCanceled(ctx, err))
+		return stdout, stderr, fmt.Errorf("command %q failed: %w", shell.RedactCommand(command), shell.WrapIfCanceled(ctx, err))
 	}
 
 	if code != 0 {
-		return stdout, stderr, fmt.Errorf("command %q failed: %w", command, &shell.ExitError{Command: command, Venue: r.s.worker.String(), Code: code})
+		return stdout, stderr, fmt.Errorf("command %q failed: %w", shell.RedactCommand(command), &shell.ExitError{Command: command, Venue: r.s.worker.String(), Code: code})
 	}
 
 	return stdout, stderr, nil
@@ -126,7 +126,7 @@ func (r bareRunner) execute(ctx context.Context, command string, p plan) (string
 func (r bareRunner) executeFull(ctx context.Context, command string, p plan) (string, string, int, error) {
 	stdout, stderr, code, err := r.exchange(ctx, command, p)
 	if err != nil {
-		return "", "", -1, fmt.Errorf("command %q failed to start: %w", command, shell.WrapIfCanceled(ctx, err))
+		return "", "", -1, fmt.Errorf("command %q failed to start: %w", shell.RedactCommand(command), shell.WrapIfCanceled(ctx, err))
 	}
 
 	return stdout, stderr, code, nil
@@ -548,7 +548,7 @@ func (s *bareSession) exec(ctx context.Context, command string, stdin io.Reader,
 
 	err = session.Start(command)
 	if err != nil {
-		return 0, fmt.Errorf("starting %q: %w", command, err)
+		return 0, fmt.Errorf("starting %q: %w", shell.RedactCommand(command), err)
 	}
 
 	done := make(chan error, 1)

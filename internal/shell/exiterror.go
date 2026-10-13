@@ -21,7 +21,7 @@ import "fmt"
 // command could not run" and fails the step, where an ExitError would let an
 // unreachable worker read as "the guard said false" and silently skip work.
 type ExitError struct {
-	// Command is the shell string that failed, for the message.
+	// Command is the shell string that failed. Error masks its URL credentials.
 	Command string
 	// Venue names the machine, because a red build on a fleet that does not
 	// say which box sends the operator to look at the wrong one. Empty for a
@@ -36,10 +36,10 @@ type ExitError struct {
 
 func (e *ExitError) Error() string {
 	if e.Venue == "" {
-		return fmt.Sprintf("command %q exited with status %d", e.Command, e.Code)
+		return fmt.Sprintf("command %q exited with status %d", RedactCommand(e.Command), e.Code)
 	}
 
-	return fmt.Sprintf("command %q on worker %q exited with status %d", e.Command, e.Venue, e.Code)
+	return fmt.Sprintf("command %q on worker %q exited with status %d", RedactCommand(e.Command), e.Venue, e.Code)
 }
 
 // ExitCode reports the status the command exited with. Named to match

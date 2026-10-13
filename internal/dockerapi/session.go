@@ -476,3 +476,6 @@ func writerOrDiscard(w io.Writer) io.Writer {
 
 	return w
 }
+
+// removalBound is how long a teardown's removal is given once detached from its caller, so a daemon that never answers cannot hold the caller with it.
+var removalBound = 30 * time.Second

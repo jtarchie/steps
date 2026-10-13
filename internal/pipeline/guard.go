@@ -93,7 +93,7 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 		return spec.Worker, nil
 	})
 	if err != nil {
-		return false, fmt.Errorf("guard command %q could not run: %w", step.When.Run, err)
+		return false, fmt.Errorf("guard command %q could not run: %w", shell.RedactCommand(step.When.Run), err)
 	}
 
 	// RunCaptureFull reports even a signal-killed process (e.g. from a
@@ -102,15 +102,15 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 	// true/false answer the guard never actually got to give.
 	cancelErr := shell.CanceledError(ctx)
 	if cancelErr != nil {
-		return false, fmt.Errorf("guard command %q: %w", step.When.Run, cancelErr)
+		return false, fmt.Errorf("guard command %q: %w", shell.RedactCommand(step.When.Run), cancelErr)
 	}
 
 	slog.DebugContext(ctx, "step.when",
 		"step", executedStepName(step),
-		"command", step.When.Run,
+		"command", shell.RedactCommand(step.When.Run),
 		"exit_code", exitCode,
-		"stdout", stdout,
-		"stderr", stderr,
+		"stdout", shell.RedactCommand(stdout),
+		"stderr", shell.RedactCommand(stderr),
 	)
 
 	return exitCode == 0, nil

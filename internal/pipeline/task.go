@@ -45,7 +45,7 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 		return stepResult{hash: parentHash, nodeHash: hash, disposition: stepChainSkipped}, nil
 	}
 
-	slog.DebugContext(ctx, "job.step", "task", rt.Name, "command", rt.Run)
+	slog.DebugContext(ctx, "job.step", "task", rt.Name, "command", shell.RedactCommand(rt.Run))
 
 	// The name the step is KNOWN by, which for an across: cell is its labelled
 	// identity rather than the task it resolves through — so the run line, the

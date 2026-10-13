@@ -155,7 +155,12 @@ func (c *Client) RunOnce(ctx context.Context, spec ContainerSpec) (int, string, 
 		return 0, "", "", err
 	}
 
-	defer func() { _ = c.RemoveContainer(context.WithoutCancel(ctx), id) }()
+	defer func() {
+		removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), removalBound)
+		defer cancel()
+
+		_ = c.RemoveContainer(removeCtx, id)
+	}()
 
 	err = c.StartContainer(ctx, id)
 	if err != nil {

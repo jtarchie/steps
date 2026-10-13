@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/dockerapi"
 	"github.com/jtarchie/steps/internal/events"
@@ -170,4 +171,62 @@ func TestSweepWarnsOnlyAboutARemovalThatFailed(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A daemon that never answers a removal must not hold the session's lock forever: ensure reclaims under it, and close takes the same lock.
+func TestAHungRemovalDoesNotWedgeTheSession(t *testing.T) {
+	previous := dockerCleanupTimeout
+	dockerCleanupTimeout = 100 * time.Millisecond
+
+	t.Cleanup(func() { dockerCleanupTimeout = previous })
+
+	engine := hungRemovalEngine(t)
+
+	session := &dockerSession{image: "steps-test/hung:1", dockerHost: "tcp://" + engine.Listener.Addr().String()}
+
+	done := make(chan error, 1)
+
+	go func() {
+		_, _, _, err := session.ensure(t.Context())
+		_ = session.close()
+
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if !IsExitError(err) {
+			t.Errorf("ensure = %v, want the daemon's refusal as an exit error", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ensure/close still blocked on a removal the daemon never answered")
+	}
+}
+
+// hungRemovalEngine creates a container, refuses to start it, and never answers the removal that follows until the client gives up or the test ends.
+func hungRemovalEngine(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	release := make(chan struct{})
+
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/_ping"):
+			w.Header().Set("Api-Version", "1.44")
+		case strings.HasSuffix(r.URL.Path, "/containers/create"):
+			writeJSONResponse(t, w, http.StatusCreated, map[string]any{"Id": "never-started", "Warnings": []string{}})
+		case r.Method == http.MethodDelete:
+			select {
+			case <-r.Context().Done():
+			case <-release:
+			}
+		default:
+			writeJSONResponse(t, w, http.StatusInternalServerError, map[string]string{"message": "cannot start"})
+		}
+	}))
+	// Close waits on every request in flight, so the hung removal is released first.
+	t.Cleanup(engine.Close)
+	t.Cleanup(func() { close(release) })
+
+	return engine
 }

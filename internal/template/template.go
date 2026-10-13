@@ -62,7 +62,10 @@ func shellQuote(v any) (string, error) {
 // Render renders a Go template against data (typically
 // map[string]any{"source": ..., "version": ...}).
 func Render(tmpl string, data map[string]any) (string, error) {
-	slog.Debug("template.render", "template", tmpl, "data", data)
+	// Neither the data nor the rendered result is logged: both carry the
+	// source:, credentials included, and this package cannot reach the
+	// redactor in internal/shell.
+	slog.Debug("template.render", "template", tmpl)
 
 	t, err := template.New("step").Funcs(funcMap).Option("missingkey=error").Parse(tmpl)
 	if err != nil {
@@ -78,7 +81,7 @@ func Render(tmpl string, data map[string]any) (string, error) {
 
 	rendered := out.String()
 
-	slog.Debug("template.rendered", "template", tmpl, "rendered", rendered)
+	slog.Debug("template.rendered", "template", tmpl, "rendered_bytes", len(rendered))
 
 	return rendered, nil
 }

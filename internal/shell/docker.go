@@ -24,10 +24,10 @@ import (
 // whose container has already been torn down.
 var errSessionClosed = errors.New("shell: the step's container has been closed")
 
-// dockerCleanupTimeout bounds the removal a session issues at Close, which
-// runs from cleanup paths that must not depend on a caller's (possibly
-// already-canceled) context — mirroring internal/workspace's btrfs backend.
-const dockerCleanupTimeout = 30 * time.Second
+// dockerCleanupTimeout bounds every removal a session issues, which runs from
+// cleanup paths that must not depend on a caller's (possibly already-canceled)
+// context — mirroring internal/workspace's btrfs backend.
+var dockerCleanupTimeout = 30 * time.Second
 
 // dockerSessionLifetime is how long a step's container stays alive on its
 // own. Nothing normally relies on it: Close removes the container as soon as
@@ -213,7 +213,9 @@ func (s *dockerSession) ensure(ctx context.Context) (*dockerapi.Client, string, 
 		// The corpse has told us what we needed; take it away now rather than
 		// leaving it for the next run's sweep. s.id is deliberately left
 		// unset, so close has nothing to do for this session.
-		reclaim(removalContext(ctx), s.client, containerID)
+		removeCtx, cancel := removalContext(ctx)
+		reclaim(removeCtx, s.client, containerID)
+		cancel()
 
 		return s.client, "", s.startOut, s.startErr
 	}
@@ -285,7 +287,9 @@ func (s *dockerSession) start(ctx context.Context, name string) (string, error) 
 	if err != nil {
 		// Created but not running: nothing else will ever name it, so it has
 		// to be reclaimed here.
-		reclaim(removalContext(ctx), s.client, id)
+		removeCtx, cancel := removalContext(ctx)
+		reclaim(removeCtx, s.client, id)
+		cancel()
 
 		return "", fmt.Errorf("%w", err)
 	}
@@ -428,9 +432,11 @@ func logTailOrNothing(logs string) string {
 //
 // The likeliest reason a removal runs is that the caller was just cancelled,
 // and a cleanup using that context would abort before reaching the daemon and
-// leak the container it was reclaiming.
-func removalContext(ctx context.Context) context.Context {
-	return context.WithoutCancel(ctx)
+// leak the container it was reclaiming. The bound matters as much as the
+// detachment: ensure reclaims while holding the session's lock, so a daemon
+// that never answers would otherwise wedge every later command and close.
+func removalContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), dockerCleanupTimeout)
 }
 
 // reclaim removes a container, best effort.
@@ -469,7 +475,7 @@ func (s *dockerSession) close() error {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), dockerCleanupTimeout)
+	ctx, cancel := removalContext(context.Background())
 	defer cancel()
 
 	slog.Debug("shell.docker.session_close", "container", id)
@@ -632,15 +638,15 @@ func (d DockerRunner) RunStreamedCapture(ctx context.Context, command string, ma
 // already returns what it streamed, so Run was discarding it; the only thing
 // maxBytes changes is whether that buffering is bounded.
 func (d DockerRunner) runStreamed(ctx context.Context, command string, maxBytes int) (stdout, stderr string, err error) {
-	slog.DebugContext(ctx, "shell.docker.run", "image", d.Image, "command", command, "cwd", d.session.resolvedCwd)
+	slog.DebugContext(ctx, "shell.docker.run", "image", d.Image, "command", RedactCommand(command), "cwd", d.session.resolvedCwd)
 
 	stdout, stderr, code, runErr := d.dockerExec(ctx, command, true, true, true, maxBytes, "")
 
-	slog.DebugContext(ctx, "shell.docker.run", "image", d.Image, "command", command, "exit_code", code)
+	slog.DebugContext(ctx, "shell.docker.run", "image", d.Image, "command", RedactCommand(command), "exit_code", code)
 
 	failure := commandFailure(command, code, runErr)
 	if failure != nil {
-		return stdout, stderr, fmt.Errorf("command %q failed in image %q: %w", command, d.Image, wrapIfCanceled(ctx, failure))
+		return stdout, stderr, fmt.Errorf("command %q failed in image %q: %w", RedactCommand(command), d.Image, wrapIfCanceled(ctx, failure))
 	}
 
 	return stdout, stderr, nil
@@ -674,16 +680,16 @@ func commandFailure(command string, code int, runErr error) error {
 // a failing containerized check/out command's output is available for
 // debugging. Any nonzero exit is a Go error.
 func (d DockerRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
-	slog.DebugContext(ctx, "shell.docker.capture", "image", d.Image, "command", command, "cwd", d.session.resolvedCwd)
+	slog.DebugContext(ctx, "shell.docker.capture", "image", d.Image, "command", RedactCommand(command), "cwd", d.session.resolvedCwd)
 
 	stdout, stderr, code, runErr := d.dockerExec(ctx, command, true, false, true, 0, "")
 
-	slog.DebugContext(ctx, "shell.docker.capture", "image", d.Image, "command", command,
-		"exit_code", code, "output_bytes", len(stdout), "output", stdout, "stderr", stderr)
+	slog.DebugContext(ctx, "shell.docker.capture", "image", d.Image, "command", RedactCommand(command),
+		"exit_code", code, "output_bytes", len(stdout), "output", RedactCommand(stdout), "stderr", RedactCommand(stderr))
 
 	failure := commandFailure(command, code, runErr)
 	if failure != nil {
-		return nil, fmt.Errorf("command %q failed in image %q: %w", command, d.Image, wrapIfCanceled(ctx, failure))
+		return nil, fmt.Errorf("command %q failed in image %q: %w", RedactCommand(command), d.Image, wrapIfCanceled(ctx, failure))
 	}
 
 	return []byte(stdout), nil
@@ -723,7 +729,7 @@ func (d DockerRunner) RunCaptureFullLimitedStreamed(ctx context.Context, command
 // existed), RunCaptureFullLimited (maxBytes > 0), and
 // RunCaptureFullLimitedStreamed (stream true).
 func (d DockerRunner) runCaptureFull(ctx context.Context, command string, maxBytes int, spillDir string, stream bool) (stdout, stderr string, exitCode int, err error) {
-	slog.DebugContext(ctx, "shell.docker.capture_full", "image", d.Image, "command", command, "cwd", d.session.resolvedCwd)
+	slog.DebugContext(ctx, "shell.docker.capture_full", "image", d.Image, "command", RedactCommand(command), "cwd", d.session.resolvedCwd)
 
 	stdout, stderr, code, runErr := d.dockerExec(ctx, command, false, stream, stream, maxBytes, spillDir)
 
@@ -734,7 +740,7 @@ func (d DockerRunner) runCaptureFull(ctx context.Context, command string, maxByt
 		return "", "", -1, fmt.Errorf("docker failed to start for image %q: %w", d.Image, runErr)
 	}
 
-	slog.DebugContext(ctx, "shell.docker.capture_full", "image", d.Image, "command", command, "exit_code", code)
+	slog.DebugContext(ctx, "shell.docker.capture_full", "image", d.Image, "command", RedactCommand(command), "exit_code", code)
 
 	return stdout, stderr, code, nil
 }
