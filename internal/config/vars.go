@@ -77,31 +77,168 @@ func RenderVars(value string, vars map[string]string) string {
 // Catching it at load is the whole point: an unresolved var otherwise reaches
 // a shell command as the literal text `((repo_uri))`, which fails somewhere
 // far from the mistake.
+//
+// A var counts as produced only where the run GUARANTEES it was captured,
+// because anywhere else the literal text is exactly what arrives:
+//   - sequential steps (the plan, a do: block) see what ran before them;
+//   - concurrent branches see only what preceded the block, since whether one
+//     branch sees another's capture is a race; after the block, an
+//     in_parallel: (which succeeds only when every branch did) yields every
+//     branch's captures, while a race: or ensemble: yields only those common
+//     to all branches, since any one of them may be the one that won;
+//   - a try: body's captures stay inside it, since the try succeeds whether or
+//     not the body did;
+//   - hooks see what preceded the step, and on_success also what the step
+//     captured; nothing a hook captures escapes it.
 func (c *Config) validateVars() error {
 	for _, job := range c.Jobs {
-		produced := map[string]bool{}
+		err := job.visitSteps(validateLoadVarStep)
+		if err != nil {
+			return err
+		}
+
+		produced := varSet{}
 
 		for i := range job.Plan {
-			step := &job.Plan[i]
-			label := fmt.Sprintf("job %q step %d", job.Name, i)
-
-			err := validateLoadVarStep(label, step)
+			produced, err = checkVarFlow(fmt.Sprintf("%s step %d%s", job.label(), i, job.Plan[i].at()), &job.Plan[i], produced)
 			if err != nil {
 				return err
 			}
+		}
 
-			err = checkStepVars(label, step, produced)
-			if err != nil {
-				return err
-			}
-
-			if step.LoadVar != "" {
-				produced[step.LoadVar] = true
-			}
+		err = checkHookFlow(job.Hooks, varSet{}, produced, func(name string) string {
+			return fmt.Sprintf("%s %s hook", job.label(), name)
+		})
+		if err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+type varSet map[string]bool
+
+func (s varSet) with(names ...string) varSet {
+	out := make(varSet, len(s)+len(names))
+	for name := range s {
+		out[name] = true
+	}
+
+	for _, name := range names {
+		out[name] = true
+	}
+
+	return out
+}
+
+// checkVarFlow checks one step and everything nested in it against the vars
+// available when it starts, and returns those available once it has
+// succeeded. Labels follow walkStepTree's, so an error names the same place
+// every other validator would.
+func checkVarFlow(label string, step *Step, before varSet) (varSet, error) {
+	err := checkStepVars(label, step, before)
+	if err != nil {
+		return nil, err
+	}
+
+	after := before
+	if step.LoadVar != "" {
+		after = after.with(step.LoadVar)
+	}
+
+	if step.Try != nil {
+		_, err = checkVarFlow(label+" (try)", step.Try, before)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	after, err = checkBranchFlow(label, step, before, after)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range step.Do {
+		after, err = checkVarFlow(fmt.Sprintf("%s (do step %d)", label, i), &step.Do[i], after)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	err = checkHookFlow(step.Hooks, before, after, func(name string) string {
+		return fmt.Sprintf("%s (%s hook)", label, name)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return after, nil
+}
+
+// checkBranchFlow checks a concurrent block's branches, each from what preceded
+// the block, and adds what the block yields once it has succeeded to after.
+func checkBranchFlow(label string, step *Step, before, after varSet) (varSet, error) {
+	for kind, branches := range branchesOf(step) {
+		var joined varSet
+
+		for i := range branches {
+			out, err := checkVarFlow(fmt.Sprintf("%s (%s branch %d)", label, kind, i), &branches[i], before)
+			if err != nil {
+				return nil, err
+			}
+
+			joined = joinBranch(kind, joined, out, i == 0)
+		}
+
+		for name := range joined {
+			after = after.with(name)
+		}
+	}
+
+	return after, nil
+}
+
+// checkHookFlow checks hooks against what preceded their step, giving
+// on_success alone what the step captured.
+func checkHookFlow(hooks Hooks, before, after varSet, label func(name string) string) error {
+	return hooks.Each(func(name string, hook *Step) error {
+		seen := before
+		if name == "on_success" {
+			seen = after
+		}
+
+		_, err := checkVarFlow(label(name), hook, seen)
+
+		return err
+	})
+}
+
+// joinBranch folds one branch's captures into what its block yields: all of
+// them for in_parallel:, only the common ones for a block whose outcome is
+// whichever branch won.
+func joinBranch(kind string, joined, branch varSet, first bool) varSet {
+	if first {
+		return branch
+	}
+
+	if kind == "in_parallel" {
+		for name := range joined {
+			branch = branch.with(name)
+		}
+
+		return branch
+	}
+
+	common := varSet{}
+
+	for name := range joined {
+		if branch[name] {
+			common[name] = true
+		}
+	}
+
+	return common
 }
 
 // validateLoadVarStep checks a load_var: step names a var and a file.

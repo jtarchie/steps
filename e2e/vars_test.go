@@ -142,6 +142,126 @@ jobs:
 	}
 }
 
+// TestUnresolvedVarNestedInThePlanIsALoadError: the load check used to read
+// only the top-level plan, so a typo inside a hook or a block loaded fine and
+// reached the shell as the literal text.
+func TestUnresolvedVarNestedInThePlanIsALoadError(t *testing.T) {
+	for name, plan := range map[string]string{
+		"step hook": `
+  - task: build
+    run: "true"
+    on_failure:
+      task: notify
+      run: echo ((typo_nested))`,
+		"job hook": `
+  - task: build
+    run: "true"
+  ensure:
+    task: notify
+    run: echo ((typo_nested))`,
+		"do child": `
+  - do:
+    - task: first
+      run: "true"
+    - task: second
+      run: echo ((typo_nested))`,
+		"try body": `
+  - try:
+      task: first
+      run: echo ((typo_nested))`,
+		"in_parallel branch": `
+  - in_parallel:
+      steps:
+      - task: first
+        run: echo ((typo_nested))`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := writePipeline(t, t.TempDir(), "jobs:\n- name: build\n  plan:"+plan+"\n")
+
+			err := cli.Run([]string{"validate", path})
+			if err == nil {
+				t.Fatal("a pipeline with an unsupplied nested var validated")
+			}
+
+			if !strings.Contains(err.Error(), "((typo_nested))") {
+				t.Errorf("error does not name the missing var: %v", err)
+			}
+		})
+	}
+}
+
+// TestNestedLoadVarFeedsLaterSteps: a load_var: inside a do: block or a
+// concurrent branch has run by the time the plan moves past the block, so
+// the steps after it may use the value.
+func TestNestedLoadVarFeedsLaterSteps(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "tag.log")
+
+	path := writePipeline(t, dir, fmt.Sprintf(`
+jobs:
+- name: build
+  plan:
+  - task: pick
+    outputs: [meta]
+    run: printf 'v1.2.3\n' > meta/version.txt && printf 'blue\n' > meta/color.txt
+  - do:
+    - load_var: tag
+      file: meta/version.txt
+      inputs: [meta]
+    - task: inside
+      run: echo "inside ((tag))" >> %[1]s
+  - in_parallel:
+      steps:
+      - load_var: color
+        file: meta/color.txt
+        inputs: [meta]
+      - task: sibling
+        run: "true"
+  - task: after
+    run: echo "after ((tag)) ((color))" >> %[1]s
+`, log))
+
+	err := cli.Run([]string{"run", path, "--job", "build"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	got := readFileString(t, log)
+	if !strings.Contains(got, "inside v1.2.3") || !strings.Contains(got, "after v1.2.3 blue") {
+		t.Errorf("log = %q, want both nested captures substituted", got)
+	}
+}
+
+// TestParallelSiblingCannotUseABranchesLoadVar: in_parallel branches run at
+// once, so whether one sees another's capture is a race. Refused at load
+// rather than left to timing.
+func TestParallelSiblingCannotUseABranchesLoadVar(t *testing.T) {
+	path := writePipeline(t, t.TempDir(), `
+jobs:
+- name: build
+  plan:
+  - task: pick
+    outputs: [meta]
+    run: printf 'v1\n' > meta/version.txt
+  - in_parallel:
+      steps:
+      - load_var: tag
+        file: meta/version.txt
+        inputs: [meta]
+      - task: racer
+        run: echo ((tag))
+`)
+
+	err := cli.Run([]string{"validate", path})
+	if err == nil {
+		t.Fatal("a branch using a sibling branch's load_var validated")
+	}
+
+	if !strings.Contains(err.Error(), "((tag))") || !strings.Contains(err.Error(), "in_parallel branch 1") {
+		t.Errorf("error does not name the var and the branch: %v", err)
+	}
+}
+
 // TestVarsWorkOnEveryCommandThatLoadsAPipeline covers the gap that made the
 // feature unusable: --var and --vars-file existed only on `steps run`, so
 // `steps validate` in CI and `steps web` in production both rejected the
