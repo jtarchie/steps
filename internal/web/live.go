@@ -186,9 +186,7 @@ func (s *Server) handleRunEvents(c *echo.Context) error {
 // has written the 200 and the event-stream header, echo's error handler
 // returns on Committed without so much as a log line, so an unknown run id
 // answered 200 and a `done` frame carrying the zero row's empty status — which
-// the page reloads on, into a 404 it cannot explain. It also keeps seedFold
-// from paging a run this pipeline does not own: RunEvents filters on run_id
-// alone, and FindRunRow is the pipeline-scoped question.
+// the page reloads on, into a 404 it cannot explain.
 func requireRun(c *echo.Context, runID string) (store.RunRow, error) {
 	run, ok, err := pipelineOf(c).Store.FindRunRow(c.Request().Context(), runID)
 	if err != nil {
@@ -378,7 +376,7 @@ func (s *Server) flushBatch(
 
 	view := runView{Transcript: folder.View(inFlight)}
 
-	// The same decoration assembleRun gives a full-page render (handlers.go)
+	// The same decoration assembleRun gives a full-page render (run.go)
 	// — a running agent step's countdown is drawn inside the per-step row,
 	// which this stream sends, so without this a step that starts (or is
 	// re-sent for any other reason) while a connection is already open never
@@ -839,4 +837,25 @@ func writeSSE(response http.ResponseWriter, name string, payload any) {
 // A dropped error rather than echo's Response.Flush, which PANICS on a writer that cannot flush: every writer this sees can, and a live view is not worth a 500 if one someday cannot.
 func flush(response http.ResponseWriter) {
 	_ = http.NewResponseController(response).Flush()
+}
+
+// hashesOf is the node hashes a batch of events names, deduped: a hash
+// repeats across a run's events (and across the steps a chain-skip
+// swallowed), and each repeat would add a redundant bind parameter to the IN
+// clause it feeds.
+func hashesOf(rows []store.RunEventRow) []string {
+	seen := map[string]bool{}
+	hashes := make([]string, 0, len(rows))
+
+	for _, row := range rows {
+		if row.Hash == "" || seen[row.Hash] {
+			continue
+		}
+
+		seen[row.Hash] = true
+
+		hashes = append(hashes, row.Hash)
+	}
+
+	return hashes
 }

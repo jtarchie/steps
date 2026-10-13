@@ -11,8 +11,9 @@ import (
 
 // abortRun is nil when the run was told to stop.
 func (s *Server) abortRun(ctx context.Context, target *Pipeline, runID string) error {
-	if s.runner == nil {
-		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
+	err := s.requireControls()
+	if err != nil {
+		return err
 	}
 
 	if s.runner.Abort(target, runID) {
@@ -38,8 +39,9 @@ func (s *Server) abortRun(ctx context.Context, target *Pipeline, runID string) e
 
 // abortQueued is nil when the job's queued run was dropped.
 func (s *Server) abortQueued(ctx context.Context, target *Pipeline, jobName string) error {
-	if s.runner == nil {
-		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
+	err := s.requireControls()
+	if err != nil {
+		return err
 	}
 
 	dropped, err := s.runner.AbortQueued(ctx, target, jobName)

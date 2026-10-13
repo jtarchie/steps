@@ -221,8 +221,9 @@ func (r *mcpRow) settle() {
 
 // handleMCPConnect starts a login and sends the browser to the provider — the whole of what `steps mcp login` does, minus the two halves that exist only because a terminal is not a browser: printing the authorization URL and polling for the result.
 func (s *Server) handleMCPConnect(c *echo.Context) error {
-	if s.runner == nil {
-		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
+	err := s.requireControls()
+	if err != nil {
+		return err
 	}
 
 	pipeline := pipelineOf(c)
@@ -277,8 +278,9 @@ func awaitAuthorizeURL(c *echo.Context, authorizer Authorizer, pipeline *Pipelin
 
 // handleMCPTest probes one server and comes straight back. The probe is DETACHED because a preflight timeout is 30 seconds by default and a page is never otherwise slow: the click returns at once, the row says it is testing, and the poll that already drives this page swaps in the answer.
 func (s *Server) handleMCPTest(c *echo.Context) error {
-	if s.runner == nil {
-		return echo.NewHTTPError(http.StatusForbidden, "this server is read-only")
+	err := s.requireControls()
+	if err != nil {
+		return err
 	}
 
 	pipeline := pipelineOf(c)
@@ -288,7 +290,7 @@ func (s *Server) handleMCPTest(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotImplemented, "this daemon cannot probe an mcp server")
 	}
 
-	err := authorizer.StartProbe(pipeline, c.Param("server"))
+	err = authorizer.StartProbe(pipeline, c.Param("server"))
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}

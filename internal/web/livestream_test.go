@@ -218,12 +218,12 @@ func TestStreamAppendsWhatThePageHasNotDrawnAndMorphsWhatItHas(t *testing.T) {
 
 // TestLiveStreamShowsATimeoutCountdownForAStepStartedAfterConnecting pins the
 // fix for a real gap: attachStepDeadlines used to be wired into ONLY
-// handlers.go's assembleRun (the full-page render), never into this stream's
+// run.go's assembleRun (the full-page render), never into this stream's
 // own view (folder.view, built fresh in flushBatch) — so a bounded-timeout
 // agent step that started AFTER a reader's SSE connection was already open
 // was appended live with no countdown at all, even though reloading the
 // identical page an instant later would have shown one. See
-// attachStepDeadlines' doc comment in overview.go.
+// attachStepDeadlines' doc comment in dials.go.
 func TestLiveStreamShowsATimeoutCountdownForAStepStartedAfterConnecting(t *testing.T) {
 	t.Parallel()
 

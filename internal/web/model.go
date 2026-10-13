@@ -295,7 +295,7 @@ func (r runView) ceilingFor(stepName string) (string, bool) {
 
 // lookupByCellName resolves stepName against m, falling back to the base
 // agent name when stepName carries an across: cell's "<agent> [k=v]" naming
-// (see nameCell) — shared by ceilingFor and overview.go's timeoutForStep,
+// (see nameCell) — shared by ceilingFor and dials.go's timeoutForStep,
 // which answer the same "which agent does this row belong to" question
 // against two differently-typed per-agent maps (a spend ceiling, a resolved
 // timeout), so the cell-name rule is defined once rather than risking the

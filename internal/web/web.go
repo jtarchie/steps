@@ -189,9 +189,9 @@ type Capacity interface {
 // Manager applies what a `steps pipeline` verb asks for. An interface for the reason Runner is one: this package serves the surface and chooses neither a store driver nor a workspace provider.
 type Manager interface {
 	// Set applies a configuration under name, creating the pipeline if this
-	// daemon does not hold one. expectSHA is the revision the sender diffed
-	// against: empty means "I did not look", and a mismatch is refused rather
-	// than applied over whatever arrived in between.
+	// daemon does not hold one. req.ExpectSHA is the revision the sender
+	// diffed against: empty means "I did not look", and a mismatch is refused
+	// rather than applied over whatever arrived in between.
 	Set(ctx context.Context, name string, req SetRequest) (SetResult, error)
 	Destroy(ctx context.Context, name string) error
 	Rename(ctx context.Context, from, to string) error
