@@ -365,7 +365,7 @@ func pullPlus(ctx context.Context, worker Worker, digest, dst string) (int64, er
 	}
 	defer func() { _ = content.Close() }()
 
-	err = wire.UnpackFetchedTree(&byteCounter{r: content, n: &s.received}, dst)
+	err = wire.UnpackFetchedTree(&byteCounter{r: content, n: &s.received}, dst, fetchLimits())
 	if err != nil {
 		return 0, fmt.Errorf("%w", err)
 	}

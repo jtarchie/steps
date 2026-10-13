@@ -53,7 +53,7 @@ func TestUnpackTreeRefusesEscapes(t *testing.T) {
 
 			root := t.TempDir()
 
-			err := UnpackTree(&buf, root)
+			err := UnpackTree(&buf, root, UnpackOptions{})
 			if err == nil {
 				t.Fatal("UnpackTree accepted an archive that writes outside the tree")
 			}
@@ -78,7 +78,7 @@ func TestUnpackTreeRefusesUnsupportedEntries(t *testing.T) {
 	_ = writer.WriteHeader(&tar.Header{Typeflag: tar.TypeFifo, Name: "queue", Format: tar.FormatPAX})
 	_ = writer.Close()
 
-	err := UnpackTree(&buf, t.TempDir())
+	err := UnpackTree(&buf, t.TempDir(), UnpackOptions{})
 	if !errors.Is(err, ErrUnsupportedEntry) {
 		t.Fatalf("UnpackTree error = %v, want ErrUnsupportedEntry", err)
 	}
@@ -188,7 +188,7 @@ func TestTreeRoundTripPreservesPermissions(t *testing.T) {
 
 	dst := t.TempDir()
 
-	err = UnpackTree(&buf, dst)
+	err = UnpackTree(&buf, dst, UnpackOptions{})
 	if err != nil {
 		t.Fatalf("UnpackTree: %v", err)
 	}
@@ -449,13 +449,13 @@ func TestUnpackFetchedRefusesASymlinkOutOfTheTree(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			err := UnpackFetchedTree(symlinkArchive(t, "dir/link", target), t.TempDir())
+			err := UnpackFetchedTree(symlinkArchive(t, "dir/link", target), t.TempDir(), UnpackOptions{})
 			if !errors.Is(err, ErrUnsafeLink) {
 				t.Errorf("UnpackFetchedTree(link -> %q) = %v, want ErrUnsafeLink", target, err)
 			}
 
 			// The lenient unpack still takes it: a tree going OUT is verbatim.
-			err = UnpackTree(symlinkArchive(t, "dir/link", target), t.TempDir())
+			err = UnpackTree(symlinkArchive(t, "dir/link", target), t.TempDir(), UnpackOptions{})
 			if err != nil {
 				t.Errorf("UnpackTree(link -> %q) = %v, want the verbatim round trip", target, err)
 			}
@@ -464,7 +464,7 @@ func TestUnpackFetchedRefusesASymlinkOutOfTheTree(t *testing.T) {
 
 	// And one that stays inside, so the guard does not refuse the ordinary
 	// relative link a checkout is full of.
-	err := UnpackFetchedTree(symlinkArchive(t, "dir/link", "../sibling"), t.TempDir())
+	err := UnpackFetchedTree(symlinkArchive(t, "dir/link", "../sibling"), t.TempDir(), UnpackOptions{})
 	if err != nil {
 		t.Errorf("UnpackFetchedTree(link -> ../sibling) = %v, want an inside link accepted", err)
 	}
@@ -500,7 +500,7 @@ func TestUnpackFetchedJudgesLinksWhereTheyLand(t *testing.T) {
 	err := UnpackFetchedTree(archive(t,
 		&tar.Header{Typeflag: tar.TypeReg, Name: "real.txt", Mode: 0o644, Size: 1},
 		&tar.Header{Typeflag: tar.TypeSymlink, Name: "dir/link", Linkname: "../real.txt"},
-	), t.TempDir())
+	), t.TempDir(), UnpackOptions{})
 	if err != nil {
 		t.Errorf("link to a file inside the tree = %v, want it accepted", err)
 	}
@@ -508,7 +508,7 @@ func TestUnpackFetchedJudgesLinksWhereTheyLand(t *testing.T) {
 	err = UnpackFetchedTree(archive(t,
 		&tar.Header{Typeflag: tar.TypeSymlink, Name: "b", Linkname: "."},
 		&tar.Header{Typeflag: tar.TypeSymlink, Name: "c", Linkname: "b/../outside"},
-	), t.TempDir())
+	), t.TempDir(), UnpackOptions{})
 	if !errors.Is(err, ErrUnsafeLink) {
 		t.Errorf("c -> b/../outside with b -> . = %v, want ErrUnsafeLink", err)
 	}
@@ -552,7 +552,7 @@ func TestUnpackFetchedTreeAcceptsTypeBitsInAMode(t *testing.T) {
 
 	root := t.TempDir()
 
-	err = UnpackFetchedTree(&archive, root)
+	err = UnpackFetchedTree(&archive, root, UnpackOptions{})
 	if err != nil {
 		t.Fatalf("UnpackFetchedTree: %v", err)
 	}

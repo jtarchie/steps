@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/wire"
 )
 
 // Pull fills dst, an existing empty directory, with the tree the worker spec names holds under digest, and reports the bytes that crossed. A worker that no longer holds it is an error naming the worker; the caller decides what a lost holder costs.
@@ -28,6 +29,9 @@ func Pull(ctx context.Context, spec shell.RunnerSpec, digest, dst string) (int64
 
 	return received, nil
 }
+
+// fetchLimits bounds every tree a worker sends home; a var so a test can make one too large without writing 64GB.
+var fetchLimits = wire.FetchLimits
 
 // errHoldsNothing is a Pull from a worker that keeps nothing between steps: an ssh:// worker brings every output home.
 var errHoldsNothing = errors.New("an ssh:// worker holds nothing to pull")

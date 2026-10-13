@@ -665,7 +665,7 @@ func (s *plusSession) fetchInto(ctx context.Context, src, dst, name string) erro
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
 
-	err = wire.UnpackFetchedTree(&byteCounter{r: content, n: &s.received}, staging)
+	err = wire.UnpackFetchedTree(&byteCounter{r: content, n: &s.received}, staging, fetchLimits())
 	if err != nil {
 		return fmt.Errorf("fetching %s: %w", src, err)
 	}

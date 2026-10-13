@@ -511,7 +511,7 @@ func (s *bareSession) tarInto(ctx context.Context, script, staging string) error
 		result <- err
 	}()
 
-	unpackErr := wire.UnpackFetchedTree(&byteCounter{r: reader, n: &s.received}, staging)
+	unpackErr := wire.UnpackFetchedTree(&byteCounter{r: reader, n: &s.received}, staging, fetchLimits())
 
 	// tar pads past its end-of-archive marker; closing before the padding is read fails the remote write.
 	_, _ = io.Copy(io.Discard, reader)

@@ -59,6 +59,10 @@ type Options struct {
 	// a test. Path-style addressing is used with it, because virtual-host
 	// style needs DNS an alternative endpoint does not have.
 	Endpoint string
+	// Limits bound what GetTree unpacks; zero means wire.FetchLimits. A blob
+	// is unpacked before its digest is checked, so the bound is all that
+	// stands between a bucket writer and this machine's disk.
+	Limits wire.UnpackOptions
 }
 
 // Parse reads one --artifact-store value: s3://bucket/prefix, with ?region=
@@ -150,6 +154,10 @@ func New(ctx context.Context, opts Options) (*Store, error) {
 			o.UsePathStyle = true
 		}
 	})
+
+	if opts.Limits == (wire.UnpackOptions{}) {
+		opts.Limits = wire.FetchLimits()
+	}
 
 	return &Store{client: client, opts: opts}, nil
 }
@@ -341,7 +349,7 @@ func (s *Store) GetTree(ctx context.Context, digest, dir string) error {
 	}
 
 	err = compress.Unpack(object.Body, true, func(r io.Reader) error {
-		return wire.UnpackTree(r, dir)
+		return wire.UnpackTree(r, dir, s.opts.Limits)
 	})
 	if err != nil {
 		return fmt.Errorf("unpacking blob %s from %q: %w", digest, s.opts.URL, err)

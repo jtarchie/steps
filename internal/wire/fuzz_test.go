@@ -101,9 +101,9 @@ func unpackBeside(t *testing.T, archive []byte, fetched bool) {
 	}
 
 	if fetched {
-		err = UnpackFetchedTree(bytes.NewReader(archive), root)
+		err = UnpackFetchedTree(bytes.NewReader(archive), root, UnpackOptions{})
 	} else {
-		err = UnpackTree(bytes.NewReader(archive), root)
+		err = UnpackTree(bytes.NewReader(archive), root, UnpackOptions{})
 	}
 
 	entries, readErr := os.ReadDir(parent)
@@ -150,7 +150,7 @@ func FuzzPackTreeRoundTrip(f *testing.F) {
 
 		to := t.TempDir()
 
-		err = UnpackTree(&first, to)
+		err = UnpackTree(&first, to, UnpackOptions{})
 		if err != nil {
 			t.Fatalf("UnpackTree of a PackTree stream: %v", err)
 		}

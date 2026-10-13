@@ -383,9 +383,32 @@ func writeHeader(writer *tar.Writer, header *tar.Header) error {
 // which is the shape workspace.rejectSymlinkSrc refuses on the way out and
 // which has to be refused on the way in too, or the protection sits on the
 // wrong side of the trust boundary.
-func UnpackTree(r io.Reader, root string) error {
-	return unpackTree(r, root, false)
+func UnpackTree(r io.Reader, root string, opts UnpackOptions) error {
+	return unpackTree(r, root, false, opts)
 }
+
+// UnpackOptions bound what one unpack may write. Zero means no limit, for a
+// tree this machine packed itself; a tree from anywhere else gets FetchLimits.
+type UnpackOptions struct {
+	// MaxBytes caps the regular-file bytes written, summed over the tree.
+	MaxBytes int64
+	// MaxEntries caps the entries of every kind: a tree of empty files costs
+	// inodes and no bytes.
+	MaxEntries int
+}
+
+// FetchLimits is what a tree fetched from a bucket or a worker may cost this
+// machine. Generous on purpose — a step's real outputs (a build tree, a
+// node_modules) must never meet them — so they stop a bucket writer or a
+// worker filling the orchestrator's disk without second-guessing real use.
+func FetchLimits() UnpackOptions {
+	return UnpackOptions{MaxBytes: 64 << 30, MaxEntries: 4 << 20}
+}
+
+// ErrTreeTooLarge is an archive past its UnpackOptions. The entry that crossed
+// the limit is refused before any of its bytes are written; the caller owns
+// discarding what landed before it, as with any failed unpack.
+var ErrTreeTooLarge = errors.New("archive exceeds the unpack limit")
 
 // UnpackFetchedTree is UnpackTree for a tree another machine produced: a
 // symlink whose target leaves the tree is refused (ErrUnsafeLink).
@@ -397,11 +420,11 @@ func UnpackTree(r io.Reader, root string) error {
 // target names a path on this machine, and the copy that materializes the
 // tree into a later step, and whatever that step reads or archives, would
 // follow it. A worker does not get to name files here.
-func UnpackFetchedTree(r io.Reader, root string) error {
-	return unpackTree(r, root, true)
+func UnpackFetchedTree(r io.Reader, root string, opts UnpackOptions) error {
+	return unpackTree(r, root, true, opts)
 }
 
-func unpackTree(r io.Reader, root string, fetched bool) error {
+func unpackTree(r io.Reader, root string, fetched bool, opts UnpackOptions) error {
 	dir, err := os.OpenRoot(root)
 	if err != nil {
 		return fmt.Errorf("unpacking into %q: %w", root, err)
@@ -419,6 +442,8 @@ func unpackTree(r io.Reader, root string, fetched bool) error {
 
 	var links []string
 
+	var spent tally
+
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
@@ -429,7 +454,7 @@ func unpackTree(r io.Reader, root string, fetched bool) error {
 			return fmt.Errorf("unpacking into %q: %w", root, err)
 		}
 
-		name, err := unpackName(header.Name)
+		name, err := spent.admit(header, opts)
 		if err != nil {
 			return fmt.Errorf("unpacking into %q: %w", root, err)
 		}
@@ -447,6 +472,37 @@ func unpackTree(r io.Reader, root string, fetched bool) error {
 			links = append(links, name)
 		}
 	}
+}
+
+type tally struct {
+	entries int
+	written int64
+}
+
+// admit vets one entry's name and charges it against opts, before anything of
+// it is written. tar.Reader yields exactly header.Size bytes for a regular
+// file or fails, so the declared size is what will be written. Compared as a
+// remainder, since a hostile Size near MaxInt64 overflows a sum.
+func (t *tally) admit(header *tar.Header, opts UnpackOptions) (string, error) {
+	name, err := unpackName(header.Name)
+	if err != nil {
+		return "", err
+	}
+
+	t.entries++
+	if opts.MaxEntries > 0 && t.entries > opts.MaxEntries {
+		return "", fmt.Errorf("%q: %w: more than %d entries", name, ErrTreeTooLarge, opts.MaxEntries)
+	}
+
+	if header.Typeflag == tar.TypeReg {
+		if opts.MaxBytes > 0 && header.Size > opts.MaxBytes-t.written {
+			return "", fmt.Errorf("%q: %w: more than %d bytes", name, ErrTreeTooLarge, opts.MaxBytes)
+		}
+
+		t.written += header.Size
+	}
+
+	return name, nil
 }
 
 func finishTree(dir *os.Root, root string, links []string, dirModes map[string]fs.FileMode) error {

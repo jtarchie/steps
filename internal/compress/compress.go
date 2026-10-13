@@ -29,10 +29,23 @@ func NewWriter(w io.Writer) (io.WriteCloser, error) {
 	return encoder, nil
 }
 
+// maxWindow is the most memory a stream's header may make the decoder
+// allocate. 128MB is libzstd's own default (windowLog 27), what `zstd -d`
+// accepts without --long, and 16x the 8MB window NewWriter writes at any level;
+// the library's defaults (a 512MB window, a single-segment frame's content
+// size up to 64GB) are spent on the word of whoever wrote the bucket. It bounds
+// memory only — the bytes a stream decodes to are bounded where they land, by
+// wire.UnpackOptions.
+const maxWindow = 128 << 20
+
 // NewReader wraps r in a zstd decoder. Close releases it; concurrency 1 for
 // the same reason as NewWriter.
+//
+// WithDecoderMaxMemory and not WithDecoderMaxWindow: when streaming it caps
+// the window too, and also the content size a single-segment frame uses as
+// its window, which the max-window check never sees.
 func NewReader(r io.Reader) (io.ReadCloser, error) {
-	decoder, err := zstd.NewReader(r, zstd.WithDecoderConcurrency(1))
+	decoder, err := zstd.NewReader(r, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(maxWindow))
 	if err != nil {
 		return nil, fmt.Errorf("reading a zstd stream: %w", err)
 	}

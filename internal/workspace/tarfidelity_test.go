@@ -254,7 +254,7 @@ func roundTrip(t *testing.T, src, dst string) {
 		t.Fatalf("PackTree: %v", err)
 	}
 
-	err = wire.UnpackTree(&buf, dst)
+	err = wire.UnpackTree(&buf, dst, wire.UnpackOptions{})
 	if err != nil {
 		t.Fatalf("UnpackTree: %v", err)
 	}
@@ -289,7 +289,7 @@ func zstdRoundTrip(t *testing.T, src, dst string) {
 
 	defer func() { _ = reader.Close() }()
 
-	err = wire.UnpackTree(reader, dst)
+	err = wire.UnpackTree(reader, dst, wire.UnpackOptions{})
 	if err != nil {
 		t.Fatalf("UnpackTree: %v", err)
 	}
