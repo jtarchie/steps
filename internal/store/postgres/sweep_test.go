@@ -37,7 +37,7 @@ func TestNoContentOutlivesTheNodesThatNamedIt(t *testing.T) {
 		}
 	}
 
-	for n := range nodesPerRetainedRun + 1 {
+	for n := range store.NodesPerRetainedRun + 1 {
 		record(st, n+1)
 	}
 

@@ -6,7 +6,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -20,9 +19,9 @@ import (
 // to this pipeline; the unique index is what makes concurrent askers share
 // one row.
 func (s *Store) AskQuestion(ctx context.Context, question store.Question) (store.Question, bool, error) {
-	options, err := encodeOptions(question.Options)
+	options, err := store.EncodeOptions(question.Options)
 	if err != nil {
-		return store.Question{}, false, err
+		return store.Question{}, false, err //nolint:wrapcheck // EncodeOptions says what it was recording
 	}
 
 	result, err := s.db.ExecContext(ctx, `
@@ -166,35 +165,7 @@ func scanQuestion(row rowScanner) (store.Question, error) {
 
 	question.AskedAt = asked.UTC().Format(sortableNano)
 	question.AnsweredAt = stamp(answered, sortableNano)
-	question.Options, err = decodeOptions(options)
+	question.Options, err = store.DecodeOptions(options)
 
-	return question, err
-}
-
-func encodeOptions(options []string) (string, error) {
-	if len(options) == 0 {
-		return "[]", nil
-	}
-
-	encoded, err := json.Marshal(options)
-	if err != nil {
-		return "", fmt.Errorf("could not record the question's options: %w", err)
-	}
-
-	return string(encoded), nil
-}
-
-func decodeOptions(encoded string) ([]string, error) {
-	if encoded == "" || encoded == "[]" {
-		return nil, nil
-	}
-
-	var options []string
-
-	err := json.Unmarshal([]byte(encoded), &options)
-	if err != nil {
-		return nil, fmt.Errorf("could not read the question's options: %w", err)
-	}
-
-	return options, nil
+	return question, err //nolint:wrapcheck // DecodeOptions says what it was reading
 }

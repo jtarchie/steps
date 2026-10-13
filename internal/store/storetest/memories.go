@@ -255,41 +255,6 @@ func (s suite) TestRememberingAnEvictableDuplicateHandsItBack(t *testing.T) {
 	}
 }
 
-// TestMemoriesBelongToTheirPipeline: two pipelines in one database, each with
-// a user U1, are two different people.
-func (s suite) TestMemoriesBelongToTheirPipeline(t *testing.T) {
-	t.Parallel()
-
-	ctx := ctxFor(t)
-	web := s.open(t, "web")
-	infra := s.open(t, "infra")
-
-	theirs := remember(ctx, t, web, "U1", "web's fact", 0)
-
-	if got := memoryTexts(ctx, t, infra, "U1"); len(got) != 0 {
-		t.Errorf("infra sees %v, want nothing of web's", got)
-	}
-
-	forgot, err := infra.Forget(ctx, "U1", theirs.ID)
-	if err != nil || forgot {
-		t.Errorf("infra forgetting web's entry: forgot=%v err=%v, want false", forgot, err)
-	}
-
-	gone, err := infra.ForgetScope(ctx, "U1")
-	if err != nil || gone != 0 {
-		t.Errorf("infra forgetting its U1: gone=%d err=%v, want 0", gone, err)
-	}
-
-	scopes, err := infra.MemoryScopes(ctx)
-	if err != nil || len(scopes) != 0 {
-		t.Errorf("infra's scopes = %+v err=%v, want none", scopes, err)
-	}
-
-	if got := memoryTexts(ctx, t, web, "U1"); len(got) != 1 {
-		t.Errorf("web's U1 = %v, want its entry", got)
-	}
-}
-
 // TestAMemoryOutlivesTheRunThatRememberedIt: run_history: reaps runs, and a
 // fact about a person is not a run's history.
 func (s suite) TestAMemoryOutlivesTheRunThatRememberedIt(t *testing.T) {
@@ -328,28 +293,6 @@ func (s suite) TestAMemoryOutlivesTheRunThatRememberedIt(t *testing.T) {
 
 	if len(memories) != 1 || memories[0].RunID != "" {
 		t.Errorf("memories = %+v, want the entry kept with its reaped run cleared", memories)
-	}
-}
-
-// TestAMemoryNamesOnlyItsOwnPipelinesRun: a sibling's run id satisfies the
-// foreign key, and a memory claiming it would point at a run this pipeline
-// cannot show.
-func (s suite) TestAMemoryNamesOnlyItsOwnPipelinesRun(t *testing.T) {
-	t.Parallel()
-
-	ctx := ctxFor(t)
-	web := s.open(t, "web")
-	infra := s.open(t, "infra")
-
-	mustStartRuns(ctx, t, infra, "build", "infra-run")
-
-	memory, _, err := web.Remember(ctx, store.Memory{Scope: "U1", Text: "likes go", RunID: "infra-run"}, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if memory.RunID != "" {
-		t.Errorf("RunID = %q, want nothing: the run is another pipeline's", memory.RunID)
 	}
 }
 

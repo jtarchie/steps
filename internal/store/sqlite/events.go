@@ -22,11 +22,11 @@ func (s *Store) AppendRunEvent(ctx context.Context, row store.RunEventRow) error
 	`, row.RunID, row.Type, row.StepIndex, row.StepName, row.StepKind,
 		row.StepID, row.ParentStepID,
 		row.Status, row.Hash,
-		truncateUTF8(row.Text, store.MaxEventTextBytes),
-		truncateUTF8(row.Name, store.MaxEventTextBytes),
-		truncateUTF8(row.Detail, store.MaxEventTextBytes),
+		store.TruncateUTF8(row.Text, store.MaxEventTextBytes),
+		store.TruncateUTF8(row.Name, store.MaxEventTextBytes),
+		store.TruncateUTF8(row.Detail, store.MaxEventTextBytes),
 		row.DurationMS,
-		truncateUTF8(row.Worker, store.MaxEventTextBytes),
+		store.TruncateUTF8(row.Worker, store.MaxEventTextBytes),
 		row.At.UTC().Format(sortableNano))
 	if err != nil {
 		return fmt.Errorf("could not append run event for %q: %w", row.RunID, err)

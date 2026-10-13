@@ -155,7 +155,7 @@ func (s *Store) ClaimNextJob(ctx context.Context) (int64, string, bool, error) {
 		)
 		RETURNING id, job_name
 	`, nowNano(), s.pipelineID).Scan(&id, &jobName)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return 0, "", false, nil
 	}
 
@@ -176,7 +176,7 @@ func (s *Store) CompleteJob(ctx context.Context, id int64, status string, runErr
 		UPDATE trigger_queue
 		SET status = ?, finished_at = ?, error = ?
 		WHERE id = ? AND pipeline_id = ?
-	`, status, nowNano(), errText(runErr), id, s.pipelineID)
+	`, status, nowNano(), store.ErrText(runErr), id, s.pipelineID)
 	if err != nil {
 		return fmt.Errorf("could not complete job (id %d): %w", id, err)
 	}

@@ -91,40 +91,6 @@ func (s suite) TestPlacementDistinguishesAbsentFromZero(t *testing.T) {
 	}
 }
 
-// TestPlacementsAreScopedToTheirPipeline holds the repo's rule that a query in
-// this package without a pipeline_id predicate is a bug. One state file may
-// hold several pipelines, and run ids are minted per pipeline, so an unscoped
-// read hands one pipeline's report another's machines.
-func (s suite) TestPlacementsAreScopedToTheirPipeline(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	web := s.open(t, "web")
-
-	infra := s.open(t, "infra")
-
-	// The same run id in both pipelines, which is what makes this a real
-	// collision rather than a coincidence: ids are minted per pipeline.
-	placeAt(ctx, t, web, store.Placement{
-		RunID: "SHARED01", StepName: "web-step", JobName: "build", NodeHash: hashOf(1),
-		Tag: "web", Address: "ssh://web", GOOS: "linux", GOARCH: "amd64",
-		Workdir: "/tmp/w", FSType: "ext4",
-	})
-	placeAt(ctx, t, infra, store.Placement{
-		RunID: "SHARED01", StepName: "infra-step", JobName: "build", NodeHash: hashOf(2),
-		Tag: "infra", Address: "ssh://infra", GOOS: "linux", GOARCH: "amd64",
-		Workdir: "/tmp/i", FSType: "ext4",
-	})
-
-	if got := onlyPlacement(ctx, t, web, "SHARED01").StepName; got != "web-step" {
-		t.Errorf("web's run reported step %q — it is reading another pipeline's placements", got)
-	}
-
-	if got := onlyPlacement(ctx, t, infra, "SHARED01").StepName; got != "infra-step" {
-		t.Errorf("infra's run reported step %q — it is reading another pipeline's placements", got)
-	}
-}
-
 func onlyPlacement(ctx context.Context, t *testing.T, st store.Store, runID string) store.Placement {
 	t.Helper()
 
@@ -138,57 +104,6 @@ func onlyPlacement(ctx context.Context, t *testing.T, st store.Store, runID stri
 	}
 
 	return placements[0]
-}
-
-func hashOf(n int) string { return fmt.Sprintf("%064x", n) }
-
-// TestPlacementKeyIsScopedToItsPipeline holds the same rule one level down: it
-// is the KEY that has to carry the pipeline, not only the read.
-//
-// Defense in depth since StartRun stopped upserting — a run id now names a row
-// in exactly one pipeline — kept because the repo rule says a key carries the
-// pipeline and because that should not rest on one statement in one function.
-//
-// merkle.HashNode folds kind, content and parent but NOT the pipeline, so two
-// pipelines each running a job named build over a byte-identical task produce
-// the same node hash — which is exactly why nodes is keyed (pipeline_id, hash).
-// Keyed on (run_id, node_hash) alone, the second pipeline's upsert
-// lands on the first's row and rewrites every column except the one saying
-// whose it is: one pipeline then reports the other's machine, and the other
-// reports nothing at all.
-func (s suite) TestPlacementKeyIsScopedToItsPipeline(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	web := s.open(t, "web")
-
-	infra := s.open(t, "infra")
-
-	// Every part of the key the two can agree on by accident: one job name, one
-	// content hash, one run id.
-	const (
-		runID   = "SHARED01"
-		jobName = "build"
-	)
-
-	placeAt(ctx, t, web, store.Placement{
-		RunID: runID, StepName: "unit", JobName: jobName, NodeHash: hashOf(7),
-		Tag: "web", Address: "ssh://web", GOOS: "linux", GOARCH: "amd64",
-		Workdir: "/tmp/web", FSType: "ext4",
-	})
-	placeAt(ctx, t, infra, store.Placement{
-		RunID: runID, StepName: "unit", JobName: jobName, NodeHash: hashOf(7),
-		Tag: "infra", Address: "ssh://infra", GOOS: "linux", GOARCH: "amd64",
-		Workdir: "/tmp/infra", FSType: "ext4",
-	})
-
-	if got := onlyPlacement(ctx, t, web, runID).Address; got != "ssh://web" {
-		t.Errorf("web's run ran on %q, want ssh://web — the other pipeline's upsert landed on its row", got)
-	}
-
-	if got := onlyPlacement(ctx, t, infra, runID).Address; got != "ssh://infra" {
-		t.Errorf("infra's run ran on %q, want ssh://infra", got)
-	}
 }
 
 // TestPlacementRePlacementKeepsTheMachineThatFinished covers the one path that

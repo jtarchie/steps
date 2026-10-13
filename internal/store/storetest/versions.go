@@ -2,6 +2,9 @@ package storetest
 
 // resource_versions: what steps remembers, in what order, and what goes with
 // a version when it is forgotten.
+//
+// check_errors: why a resource cannot be checked, which is the one thing a
+// failing poll used to leave nowhere but a log line.
 
 import (
 	"context"
@@ -10,9 +13,267 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/store"
 )
+
+func checkErrorNames(t *testing.T, st store.Store) []string {
+	t.Helper()
+
+	errs, err := st.CheckErrors(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	names := make([]string, 0, len(errs))
+	for _, row := range errs {
+		names = append(names, row.Name)
+	}
+
+	return names
+}
+
+// TestACheckErrorIsRecordedAndCleared: the clear is the half that matters. A
+// resource that recovers has to stop being reported, or the surface built on
+// this is a light nobody can turn off.
+func (s suite) TestACheckErrorIsRecordedAndCleared(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+	ctx := t.Context()
+
+	err := st.RecordCheckError(ctx, "repo", "check: exit status 128")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errs, err := st.CheckErrors(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(errs) != 1 || errs[0].Name != "repo" || errs[0].Message != "check: exit status 128" {
+		t.Fatalf("CheckErrors = %+v, want one repo row carrying its message", errs)
+	}
+
+	if errs[0].FailedAt.IsZero() {
+		t.Error("a recorded check error does not say when it failed")
+	}
+
+	err = st.RecordCheckError(ctx, "repo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if names := checkErrorNames(t, st); len(names) != 0 {
+		t.Errorf("CheckErrors = %v after a clear, want none", names)
+	}
+}
+
+// TestClearingACheckErrorThatIsNotThereIsFine: every successful poll of every
+// healthy resource takes this path, so it has to be a no-op rather than a row
+// count somebody checks.
+func (s suite) TestClearingACheckErrorThatIsNotThereIsFine(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+
+	err := st.RecordCheckError(t.Context(), "never-failed", "")
+	if err != nil {
+		t.Fatalf("clearing an absent check error: %v", err)
+	}
+}
+
+// TestARecheckReplacesTheReasonRatherThanAddingOne: a resource down for an
+// hour is one broken resource, not sixty.
+func (s suite) TestARecheckReplacesTheReasonRatherThanAddingOne(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+	ctx := t.Context()
+
+	for _, message := range []string{"dial tcp: connection refused", "exit status 128"} {
+		err := st.RecordCheckError(ctx, "repo", message)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	errs, err := st.CheckErrors(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(errs) != 1 || errs[0].Message != "exit status 128" {
+		t.Fatalf("CheckErrors = %+v, want one row holding the newest reason", errs)
+	}
+}
+
+// TestACheckErrorIsBoundedLikeEveryOtherStoredError: a check reports the whole
+// generated shell script when it fails, and a resource down at a one-minute
+// poll rewrites that row every minute.
+func (s suite) TestACheckErrorIsBoundedLikeEveryOtherStoredError(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+	ctx := t.Context()
+
+	err := st.RecordCheckError(ctx, "repo", strings.Repeat("x", 4*store.MaxStoredErrorBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errs, err := st.CheckErrors(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(errs) != 1 {
+		t.Fatalf("CheckErrors = %+v, want one row", errs)
+	}
+
+	if len(errs[0].Message) > store.MaxStoredErrorBytes {
+		t.Errorf("a stored check error is %d bytes, over the %d cap", len(errs[0].Message), store.MaxStoredErrorBytes)
+	}
+}
+
+// TestCheckedResourcesListsEachCursor, by name.
+func (s suite) TestCheckedResourcesListsEachCursor(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	for name, version := range map[string]string{"repo": `{"ref":"b"}`, "image": `{"digest":"a"}`} {
+		err := st.RecordCheckedVersion(ctx, name, version)
+		if err != nil {
+			t.Fatalf("RecordCheckedVersion: %v", err)
+		}
+	}
+
+	checked, err := st.CheckedResources(ctx)
+	if err != nil || len(checked) != 2 || checked[0].Name != "image" || checked[1].Version != `{"ref":"b"}` || checked[0].CheckedAt.IsZero() {
+		t.Fatalf("CheckedResources = %+v, %v; want image then repo, each with its version and when", checked, err)
+	}
+}
+
+// TestHasPassedVersionSetNeedsOneBuild: versions that each passed in
+// different builds were never proven together.
+func (s suite) TestHasPassedVersionSetNeedsOneBuild(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+	want := map[string]string{"repo": `{"ref":"a"}`, "image": `{"digest":"b"}`}
+
+	pass := func(resource, build string) {
+		t.Helper()
+
+		err := st.RecordPassedVersion(ctx, "unit", resource, want[resource], build)
+		if err != nil {
+			t.Fatalf("RecordPassedVersion: %v", err)
+		}
+	}
+
+	assertPassedSet := func(set map[string]string, expected bool, why string) {
+		t.Helper()
+
+		got, err := st.HasPassedVersionSet(ctx, "unit", set)
+		if err != nil || got != expected {
+			t.Fatalf("HasPassedVersionSet = %v, %v; want %v — %s", got, err, expected, why)
+		}
+	}
+
+	assertPassedSet(nil, true, "no constraint is vacuously met")
+
+	pass("repo", "b1")
+	pass("image", "b2")
+	assertPassedSet(want, false, "each passed, in different builds")
+
+	pass("image", "b1")
+	assertPassedSet(want, true, "one build passed both")
+}
+
+// TestTheCheckedVersionMovesOnlyFromWhatWasRead: a compare-and-set that loses leaves the newer version in place, including when the expectation was that none existed.
+func (s suite) TestTheCheckedVersionMovesOnlyFromWhatWasRead(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	for _, step := range []struct {
+		expected string
+		found    bool
+		next     string
+		moves    bool
+	}{
+		{"", false, "a", true},
+		{"", false, "b", false},
+		{"stale", true, "b", false},
+		{"a", true, "b", true},
+	} {
+		moved, err := st.CompareAndSetCheckedVersion(ctx, "push", step.expected, step.found, step.next)
+		if err != nil || moved != step.moves {
+			t.Errorf("from %q (found=%v) to %q: moved=%v err=%v, want moved=%v", step.expected, step.found, step.next, moved, err, step.moves)
+		}
+	}
+
+	checked, _, err := st.LastChecked(ctx, "push")
+	if err != nil || checked.Version != "b" {
+		t.Errorf("checked = %q (err %v), want b", checked.Version, err)
+	}
+}
+
+// TestPassedVersionsAreNewestFirstWithinASecond: a green build records its
+// versions in one burst, so most of a job's rows share a timestamp. A limit
+// over a timestamp order alone would hand back an arbitrary subset of the
+// tied rows on every page load; insertion order breaks the tie.
+func (s suite) TestPassedVersionsAreNewestFirstWithinASecond(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	const recorded = 30
+
+	for i := range recorded {
+		encoded, err := store.EncodeVersion(map[string]any{"n": fmt.Sprintf("v%02d", i)})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = st.RecordPassedVersion(ctx, "build", "repo", encoded, "b1")
+		if err != nil {
+			t.Fatalf("RecordPassedVersion %d: %v", i, err)
+		}
+	}
+
+	all, err := st.PassedVersions(ctx, "build", 0)
+	if err != nil {
+		t.Fatalf("PassedVersions(0): %v", err)
+	}
+
+	if len(all) != recorded {
+		t.Fatalf("PassedVersions with limit 0 returned %d rows, want all %d", len(all), recorded)
+	}
+
+	page, err := st.PassedVersions(ctx, "build", 25)
+	if err != nil {
+		t.Fatalf("PassedVersions(25): %v", err)
+	}
+
+	if len(page) != 25 {
+		t.Fatalf("PassedVersions with limit 25 returned %d rows", len(page))
+	}
+
+	for i, row := range page {
+		want := fmt.Sprintf(`{"n":"v%02d"}`, recorded-1-i)
+		if row.Version != want {
+			t.Fatalf("PassedVersions[%d] = %s, want %s — the newest recorded comes first, ties or not", i, row.Version, want)
+		}
+	}
+}
 
 func versionNames(t *testing.T, versions []map[string]any) []string {
 	t.Helper()
@@ -618,5 +879,232 @@ func (s suite) TestGreenVersionsIsTheIntersection(t *testing.T) {
 		if got := fmt.Sprint(versionNames(t, green)); got != tc.want {
 			t.Errorf("GreenVersions(%q) = %s, want %s", tc.upstream, got, tc.want)
 		}
+	}
+}
+
+// TestRunInputsAreKeptPerGet: two gets of one resource in a run are two
+// records, each under its own name; and a run is created once, so recording
+// a get again is the same row.
+func (s suite) TestRunInputsAreKeptPerGet(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "web")
+
+	const run = "PERBUILD02"
+
+	err := st.StartRun(ctx, run, "build", "/tmp/web", "")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	for _, input := range []store.RunInput{
+		{Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
+		{Input: "baseline", Resource: "repo", Version: `{"ref":"v1"}`},
+		{Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
+	} {
+		err = st.RecordRunInput(ctx, run, input.Input, input.Resource, input.Version)
+		if err != nil {
+			t.Fatalf("RecordRunInput %+v: %v", input, err)
+		}
+	}
+
+	inputs, err := st.RunInputs(ctx, run)
+	if err != nil {
+		t.Fatalf("RunInputs: %v", err)
+	}
+
+	got := map[store.RunInput]bool{}
+	for _, input := range inputs {
+		got[input] = true
+	}
+
+	want := []store.RunInput{
+		{Input: "code", Resource: "repo", Version: `{"ref":"abc"}`},
+		{Input: "baseline", Resource: "repo", Version: `{"ref":"v1"}`},
+	}
+
+	if len(inputs) != len(want) {
+		t.Fatalf("RunInputs = %+v, want one row per get", inputs)
+	}
+
+	for _, input := range want {
+		if !got[input] {
+			t.Errorf("RunInputs = %+v, missing %+v", inputs, input)
+		}
+	}
+}
+
+// TestVersionRunsAreTheRunsThatTookEachVersion: the resource page asks, per
+// version, which runs took it — newest first, so the first row for a version
+// is where that version stands now. Scoped like every other read: a second
+// pipeline with the same job and resource names must see none of it.
+func (s suite) TestVersionRunsAreTheRunsThatTookEachVersion(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	web := s.open(t, "web")
+	infra := s.open(t, "infra")
+
+	for _, run := range []struct{ id, version, status string }{
+		{"VRUNS01", `{"ref":"v1"}`, "aborted"},
+		{"VRUNS02", `{"ref":"v1"}`, "succeeded"},
+		{"VRUNS03", `{"ref":"v2"}`, "failed"},
+	} {
+		recordInputRun(t, web, run.id, "repo", run.version, run.status)
+
+		// started_at orders the answer; one run per tick keeps that order
+		// the one this test wrote rather than a tie.
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	recordInputRun(t, web, "VRUNS04", "other", `{"ref":"v1"}`, "succeeded")
+
+	got, err := web.VersionRuns(ctx, "repo")
+	if err != nil {
+		t.Fatalf("VersionRuns: %v", err)
+	}
+
+	want := []store.VersionRun{
+		{Version: `{"ref":"v2"}`, Run: store.RunRow{ID: "VRUNS03", JobName: "build", Status: "failed"}},
+		{Version: `{"ref":"v1"}`, Run: store.RunRow{ID: "VRUNS02", JobName: "build", Status: "succeeded"}},
+		{Version: `{"ref":"v1"}`, Run: store.RunRow{ID: "VRUNS01", JobName: "build", Status: "aborted"}},
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("VersionRuns = %+v, want %d rows, only repo's", got, len(want))
+	}
+
+	for i := range want {
+		g := store.VersionRun{Version: got[i].Version, Run: store.RunRow{ID: got[i].Run.ID, JobName: got[i].Run.JobName, Status: got[i].Run.Status}}
+		if g != want[i] {
+			t.Errorf("VersionRuns[%d] = %+v, want %+v", i, g, want[i])
+		}
+	}
+
+	other, err := infra.VersionRuns(ctx, "repo")
+	if err != nil {
+		t.Fatalf("VersionRuns infra: %v", err)
+	}
+
+	if len(other) != 0 {
+		t.Errorf("infra sees another pipeline's runs: %+v", other)
+	}
+}
+
+// recordInputRun records a finished build run that took version of resource.
+func recordInputRun(t *testing.T, st store.Store, runID, resource, version, status string) {
+	t.Helper()
+
+	ctx := context.Background()
+
+	err := st.StartRun(ctx, runID, "build", "/tmp/web", "")
+	if err != nil {
+		t.Fatalf("StartRun %s: %v", runID, err)
+	}
+
+	err = st.RecordRunInput(ctx, runID, resource, resource, version)
+	if err != nil {
+		t.Fatalf("RecordRunInput %s: %v", runID, err)
+	}
+
+	err = st.FinishRun(ctx, runID, status)
+	if err != nil {
+		t.Fatalf("FinishRun %s: %v", runID, err)
+	}
+}
+
+func assertLastCheckedVersion(t *testing.T, st store.Store, resourceName string, wantFound bool, wantVersion string) {
+	t.Helper()
+
+	last, found, err := st.LastChecked(context.Background(), resourceName)
+	if err != nil {
+		t.Fatalf("LastChecked(%q): %v", resourceName, err)
+	}
+
+	if found != wantFound || (found && last.Version != wantVersion) {
+		t.Fatalf("LastChecked(%q) = (%q, %v), want (%q, %v)", resourceName, last.Version, found, wantVersion, wantFound)
+	}
+}
+
+func (s suite) TestStoreCheckedVersionRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+
+	ctx := context.Background()
+
+	assertLastCheckedVersion(t, st, "thing", false, "")
+
+	err := st.RecordCheckedVersion(ctx, "thing", `{"ref":"v1"}`)
+	if err != nil {
+		t.Fatalf("RecordCheckedVersion: %v", err)
+	}
+
+	assertLastCheckedVersion(t, st, "thing", true, `{"ref":"v1"}`)
+
+	// Upsert: recording a new version for the same resource replaces it.
+	err = st.RecordCheckedVersion(ctx, "thing", `{"ref":"v2"}`)
+	if err != nil {
+		t.Fatalf("RecordCheckedVersion (upsert): %v", err)
+	}
+
+	assertLastCheckedVersion(t, st, "thing", true, `{"ref":"v2"}`)
+}
+
+// TestConsumedMarkRoundTrip covers the get: version: every cursor: how far a
+// job has fanned out, per (job, resource).
+func (s suite) TestConsumedMarkRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	st := s.open(t, "test")
+	ctx := context.Background()
+
+	mark, err := st.ConsumedMark(ctx, "answer", "mentions")
+	if err != nil {
+		t.Fatalf("ConsumedMark: %v", err)
+	}
+
+	if mark != 0 {
+		t.Fatalf("a fresh store reports mark %d, want 0 — nothing taken", mark)
+	}
+
+	err = st.RecordConsumedMark(ctx, "answer", "mentions", 5)
+	if err != nil {
+		t.Fatalf("RecordConsumedMark: %v", err)
+	}
+
+	// Re-recording is a no-op, not an error: a resumed or replayed run must
+	// not fail on work it already did.
+	err = st.RecordConsumedMark(ctx, "answer", "mentions", 5)
+	if err != nil {
+		t.Fatalf("RecordConsumedMark (again): %v", err)
+	}
+
+	// And it only moves forward. A backfilled version reaching a job that has
+	// already moved past it must not rewind the mark and hand back everything
+	// in between.
+	err = st.RecordConsumedMark(ctx, "answer", "mentions", 2)
+	if err != nil {
+		t.Fatalf("RecordConsumedMark (older): %v", err)
+	}
+
+	mark, err = st.ConsumedMark(ctx, "answer", "mentions")
+	if err != nil {
+		t.Fatalf("ConsumedMark: %v", err)
+	}
+
+	if mark != 5 {
+		t.Errorf("mark = %d, want 5 — an older version must not rewind it", mark)
+	}
+
+	// Scoped per job and per resource — another job has taken nothing.
+	other, err := st.ConsumedMark(ctx, "other-job", "mentions")
+	if err != nil {
+		t.Fatalf("ConsumedMark: %v", err)
+	}
+
+	if other != 0 {
+		t.Errorf("another job reports mark %d; the cursor is per job", other)
 	}
 }

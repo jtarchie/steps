@@ -77,72 +77,6 @@ func OpenStore(path, pipelineName string) (*Store, error) {
 		return nil, fmt.Errorf("could not create state directory for %q: %w", path, err)
 	}
 
-	// The DSN sets three pragmas on every connection at open time, plus the
-	// transaction mode:
-	//   - busy_timeout makes a writer wait for the write lock instead of
-	//     failing immediately with SQLITE_BUSY.
-	//   - journal_mode=WAL lets readers proceed concurrently with a writer,
-	//     which the default rollback journal serializes.
-	//   - foreign_keys turns on constraint ENFORCEMENT, which SQLite leaves
-	//     off per connection unless asked.
-	//   - _txlock=immediate takes the write lock when a transaction BEGINS
-	//     rather than when it first writes.
-	//
-	// foreign_keys is on so that a declared constraint means something: a
-	// REFERENCES clause is a rule the database keeps, not documentation — and
-	// ON DELETE CASCADE is how a row takes its dependents with it instead of
-	// leaving orphans for application code to remember. Retention leans on
-	// exactly that (see pruneRuns).
-	//
-	// That last one is not a tuning knob. A deferred transaction that reads
-	// and then writes — which is what RecordVersions is, assigning
-	// check_order from a MAX it just read — has to UPGRADE its lock, and
-	// SQLite refuses
-	// an upgrade that would have to wait, returning SQLITE_BUSY immediately
-	// rather than honoring busy_timeout, because waiting there could
-	// deadlock two transactions against each other. Taking the write lock up
-	// front turns that into an ordinary wait. Within one process this cannot
-	// arise at all — every handle on a file shares its one writer (see
-	// pools) — but a second process on the file, `steps pipeline set`'s
-	// enqueue or a `steps run --db`, is a second writer, and every one of
-	// them enqueues.
-	//
-	// Every transaction in this package is a writer, so there is no
-	// read-only transaction paying for the stricter lock.
-	//
-	// synchronous=NORMAL is the other half of choosing WAL. At the default,
-	// FULL, every commit fsyncs the log — and the event sink commits once per
-	// event, so a build paid a disk flush per line of output (measured: 98µs
-	// an append, 62µs at NORMAL). Under WAL, NORMAL syncs the log at
-	// checkpoints and before every truncation, which is enough that a crash
-	// of the process or the machine can never corrupt the database and an
-	// application crash loses nothing; only a power loss can take back the
-	// last few commits, and a build cut off that way is one ResetStaleRunning
-	// aborts at the next start anyway, with or without its final events.
-	//
-	// WAL is recorded in the database file header, so the conversion happens
-	// exactly once and every later connection's pragma is a cheap no-op. No
-	// retry loop guards the conversion: OpenStore is called once per process
-	// at startup, so a single `steps` process is never racing another PROCESS
-	// to convert the same brand-new file — the only scenario in which
-	// busy_timeout fails to cover the conversion's exclusive lock.
-	// Two more pragmas exist for retention rather than for speed, and they are
-	// what turns a delete into free disk:
-	//   - auto_vacuum=incremental marks freed pages for reuse and lets
-	//     PRAGMA incremental_vacuum hand them back to the filesystem. Without
-	//     it a pruned database keeps every page it ever allocated — the file
-	//     never shrinks, it only stops growing, which is not what anyone means
-	//     by bounding a footprint. incremental rather than full: full vacuums on
-	//     every commit, paying for compaction in the middle of a build.
-	//   - journal_size_limit caps the write-ahead log, which is otherwise
-	//     truncated only at a checkpoint no long-lived `steps web` ever
-	//     reaches on its own. An unbounded WAL is a second copy of the database
-	//     growing beside it.
-	//
-	// auto_vacuum is recorded in the file header and can only be SET on an empty
-	// database, so this takes effect for databases steps creates; an existing one
-	// keeps its mode until it is vacuumed. That is why Close still checkpoints
-	// explicitly rather than relying on the mode alone.
 	err = createPrivate(path)
 	if err != nil {
 		return nil, err
@@ -241,11 +175,75 @@ type executor interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// openDB opens the sqlite file with the pragmas above, for a writer and a
-// reader alike. A Reader takes the same connection settings deliberately: it
-// reads the same file a writer may be appending to, so it wants the same WAL
-// and the same busy timeout, and the only thing it does differently is never
-// write.
+// openDB opens the writer's connection. Its DSN sets these pragmas on the
+// connection at open time, plus the transaction mode:
+//   - busy_timeout makes a writer wait for the write lock instead of
+//     failing immediately with SQLITE_BUSY.
+//   - journal_mode=WAL lets readers proceed concurrently with a writer,
+//     which the default rollback journal serializes.
+//   - foreign_keys turns on constraint ENFORCEMENT, which SQLite leaves
+//     off per connection unless asked.
+//   - _txlock=immediate takes the write lock when a transaction BEGINS
+//     rather than when it first writes.
+//
+// foreign_keys is on so that a declared constraint means something: a
+// REFERENCES clause is a rule the database keeps, not documentation — and
+// ON DELETE CASCADE is how a row takes its dependents with it instead of
+// leaving orphans for application code to remember. Retention leans on
+// exactly that (see pruneRuns).
+//
+// _txlock=immediate is not a tuning knob. A deferred transaction that reads
+// and then writes — which is what RecordVersions is, assigning check_order
+// from a MAX it just read — has to UPGRADE its lock, and SQLite refuses an
+// upgrade that would have to wait, returning SQLITE_BUSY immediately rather
+// than honoring busy_timeout, because waiting there could deadlock two
+// transactions against each other. Taking the write lock up
+// front turns that into an ordinary wait. Within one process this cannot
+// arise at all — every handle on a file shares its one writer (see
+// pools) — but a second process on the file, `steps pipeline set`'s
+// enqueue or a `steps run --db`, is a second writer, and every one of
+// them enqueues.
+//
+// Every transaction in this package is a writer, so there is no
+// read-only transaction paying for the stricter lock.
+//
+// synchronous=NORMAL is the other half of choosing WAL. At the default,
+// FULL, every commit fsyncs the log — and the event sink commits once per
+// event, so a build paid a disk flush per line of output (measured: 98µs
+// an append, 62µs at NORMAL). Under WAL, NORMAL syncs the log at
+// checkpoints and before every truncation, which is enough that a crash
+// of the process or the machine can never corrupt the database and an
+// application crash loses nothing; only a power loss can take back the
+// last few commits, and a build cut off that way is one ResetStaleRunning
+// aborts at the next start anyway, with or without its final events.
+//
+// WAL is recorded in the database file header, so the conversion happens
+// exactly once and every later connection's pragma is a cheap no-op. No
+// retry loop guards the conversion: OpenStore is called once per process
+// at startup, so a single `steps` process is never racing another PROCESS
+// to convert the same brand-new file — the only scenario in which
+// busy_timeout fails to cover the conversion's exclusive lock.
+//
+// Two more pragmas exist for retention rather than for speed, and they are
+// what turns a delete into free disk:
+//   - auto_vacuum=incremental marks freed pages for reuse and lets
+//     PRAGMA incremental_vacuum hand them back to the filesystem. Without
+//     it a pruned database keeps every page it ever allocated — the file
+//     never shrinks, it only stops growing, which is not what anyone means
+//     by bounding a footprint. incremental rather than full: full vacuums on
+//     every commit, paying for compaction in the middle of a build.
+//   - journal_size_limit caps the write-ahead log, which is otherwise
+//     truncated only at a checkpoint no long-lived `steps web` ever
+//     reaches on its own. An unbounded WAL is a second copy of the database
+//     growing beside it.
+//
+// auto_vacuum is recorded in the file header and can only be SET on an empty
+// database, so this takes effect for databases steps creates; an existing one
+// keeps its mode until it is vacuumed. That is why Close still checkpoints
+// explicitly rather than relying on the mode alone.
+//
+// A reader does not come through here: openReadPool and openReadOnlyDB drop
+// every pragma that writes.
 func openDB(path string) (*sql.DB, error) {
 	return openDSN(path, "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)"+
 		"&_pragma=auto_vacuum(incremental)&_pragma=journal_size_limit(67108864)&_txlock=immediate", 1)
@@ -523,7 +521,9 @@ func (s *Store) closeReads() {
 	}
 }
 
-// now is the timestamp format every table but runs/run_events uses.
+// now is whole-second RFC3339, for columns nothing orders or subtracts finer
+// than a second (nodes, versions, approvals, usage, placements, the breaker).
+// A column that is ordered or subtracted takes nowNano instead.
 func now() string {
 	return time.Now().UTC().Format(time.RFC3339)
 }
@@ -557,32 +557,6 @@ func nullableString(b []byte) any {
 	}
 
 	return string(b)
-}
-
-// errText renders an error for a nullable error column: NULL when there was
-// none, and never more than MaxStoredErrorBytes of text.
-//
-// Truncated at the head for the reason a transcript is: the message opens with
-// what failed and closes with the detail, and "could not record node X:
-// constraint failed" is worth more than the tail of a shell script.
-func errText(err error) any {
-	if err == nil {
-		return nil
-	}
-
-	return boundedError(err.Error())
-}
-
-// boundedError caps a message at MaxStoredErrorBytes, keeping the head for the
-// reason errText gives.
-func boundedError(text string) string {
-	if len(text) <= store.MaxStoredErrorBytes {
-		return text
-	}
-
-	const notice = "… [truncated]"
-
-	return truncateUTF8(text, store.MaxStoredErrorBytes-len(notice)) + notice
 }
 
 // parseTimestamp turns a stored RFC3339 string into a Time, yielding the zero

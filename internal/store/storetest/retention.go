@@ -16,6 +16,48 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
+// TestRetentionNeverReapsTheConfigurationBeingServed is the guard a restart
+// rests on: a daemon rebuilds every served pipeline from its current
+// revision, so reaping that row leaves the pipeline serving nothing.
+//
+// The case is not hypothetical and not the newest-row exemption in disguise.
+// A `steps run` against the same database interns a revision of its own, and
+// its loaded_at is newer — so the row the daemon is serving stops being the
+// most recently loaded one, which is the only other thing keeping it.
+func (s suite) TestRetentionNeverReapsTheConfigurationBeingServed(t *testing.T) {
+	t.Parallel()
+
+	ctx := ctxFor(t)
+	st := s.open(t, "test")
+
+	setRevision(t, st, "sha-served", 1, map[string]string{"ci/build.sh": "echo served\n"})
+
+	// A local run of the same pipeline, loaded after the set and referenced by
+	// nothing that survives the sweep.
+	err := st.RecordRevision(ctx, "sha-ran-locally", pipelineSource(2), nil)
+	if err != nil {
+		t.Fatalf("RecordRevision: %v", err)
+	}
+
+	err = st.Prune(ctx, store.Retention{}, "")
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+
+	current, found, err := st.CurrentRevision(ctx)
+	if err != nil {
+		t.Fatalf("CurrentRevision: %v", err)
+	}
+
+	if !found {
+		t.Fatal("retention reaped the configuration the daemon is serving; a restart would serve nothing")
+	}
+
+	if current.SHA != "sha-served" || current.Includes["ci/build.sh"] != "echo served\n" {
+		t.Errorf("the served configuration came back as %q with includes %v", current.SHA, current.Includes)
+	}
+}
+
 // nodesPerRetainedRun is the node cache every driver keeps per run
 // run_history: retains. It is observable — a job's node listing is capped at
 // it — so it is contract, and a driver with another multiplier fails here.
@@ -545,4 +587,88 @@ func (s suite) TestPruneUnderTheCapLeavesParentLinksAlone(t *testing.T) {
 	if got := nodes[child].ParentHash; got != parent {
 		t.Errorf("a prune that reaped nothing left the in-flight child naming parent %q, want %s…", got, parent[len(parent)-8:])
 	}
+}
+
+// TestPruneBoundsTheTriggerQueue: the queue is a work list, not a history. A
+// finished row means nothing to anything that reads the table, and a FAILED
+// one carries the error that stopped the job — for a check, the whole
+// generated script, about 1.3KB. A remote that is down at a one-minute poll
+// wrote that same 1.3KB every minute, forever.
+//
+// Pending and running rows are never touched, because those ARE the work list:
+// reaping one loses a job nothing will re-queue.
+func (s suite) TestPruneBoundsTheTriggerQueue(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	const (
+		finished = 6
+		keep     = 2
+	)
+
+	// One pending row per job at a time, so each is claimed and completed
+	// before the next is enqueued — which is how a poller reaches a pile of
+	// finished rows in the first place.
+	for range finished {
+		mustEnqueueJob(t, st, "build", "resource-a")
+
+		id, _ := mustClaimJob(t, st, "build")
+
+		err := st.CompleteJob(ctx, id, "failed", errors.New("the remote is down"))
+		if err != nil {
+			t.Fatalf("CompleteJob: %v", err)
+		}
+	}
+
+	// One row left in flight, which retention must leave alone.
+	mustEnqueueJob(t, st, "build", "resource-b")
+
+	err := st.Prune(ctx, store.Retention{JobName: "build"}, "")
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+
+	if kept, _ := queueCounts(ctx, t, st); kept != finished {
+		t.Errorf("%d of %d finished rows survive a zero cap, want all — zero means no limit", kept, finished)
+	}
+
+	err = st.Prune(ctx, store.Retention{JobName: "build", TriggerQueue: keep}, "")
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+
+	kept, pending := queueCounts(ctx, t, st)
+
+	if kept != keep {
+		t.Errorf("%d finished rows survive a cap of %d", kept, keep)
+	}
+
+	if pending != 1 {
+		t.Errorf("%d pending rows survive, want the one still queued — retention took work off the list", pending)
+	}
+}
+
+func queueCounts(ctx context.Context, t *testing.T, st store.Store) (int, int) {
+	t.Helper()
+
+	rows, err := st.ListTriggerQueue(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListTriggerQueue: %v", err)
+	}
+
+	var finished, pending int
+
+	for _, row := range rows {
+		if row.Status == "pending" {
+			pending++
+
+			continue
+		}
+
+		finished++
+	}
+
+	return finished, pending
 }

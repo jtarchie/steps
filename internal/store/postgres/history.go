@@ -71,11 +71,11 @@ func encodeVersions(versions []map[string]any) ([]string, error) {
 //
 // One statement for the whole report rather than one per version: a check
 // re-reports its whole window every poll, and over a network a round trip per
-// version is a thousand of them a poll for nothing. The sqlite driver's loop
-// numbered only the rows it changed; here ROW_NUMBER over the rows that WILL
-// change does the same, so the order neither advances nor gaps on a steady
-// poll. DISTINCT ON keeps a version reported twice from being two rows of one
-// upsert, which Postgres refuses.
+// version is a thousand of them a poll for nothing. ROW_NUMBER over the rows
+// that WILL change numbers only those, as the sqlite driver's statement does,
+// so the order neither advances nor gaps on a steady poll. DISTINCT ON keeps
+// a version reported twice from being two rows of one upsert, which Postgres
+// refuses.
 //
 // The MAX it numbers from is a read before a write, which is why every
 // caller holds the pipeline lock (see write).

@@ -1,10 +1,65 @@
 package storetest
 
+// agent_usage: what a step's model calls cost, accumulated per attempt.
+
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
 )
+
+// TestRunCostTotalsKeepsUnpricedApartFromFree: a run whose every step went
+// unpriced has no dollar total at all, and one with some priced steps says
+// how many were not.
+func (s suite) TestRunCostTotalsKeepsUnpricedApartFromFree(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+	priced := 0.25
+
+	for _, spend := range []struct {
+		run, hash string
+		cost      *float64
+		tokens    int
+	}{
+		{"mixed", hashOf(1), &priced, 100},
+		{"mixed", hashOf(2), nil, 50},
+		{"unpriced", hashOf(3), nil, 10},
+	} {
+		ensureRun(ctx, t, st, spend.run, "review")
+		mustRecordNode(t, st, "review", spend.hash)
+
+		err := st.RecordAgentUsage(ctx, store.AgentUsage{
+			RunID: spend.run, JobName: "review", NodeHash: spend.hash, Total: spend.tokens, CostUSD: spend.cost,
+		})
+		if err != nil {
+			t.Fatalf("RecordAgentUsage: %v", err)
+		}
+	}
+
+	totals, err := st.RunCostTotals(ctx, 0)
+	if err != nil || len(totals) != 2 {
+		t.Fatalf("RunCostTotals = %+v, %v; want two runs", totals, err)
+	}
+
+	// Newest first: the unpriced run's usage was recorded last.
+	assertTotals(t, totals[0], store.RunTotals{RunID: "unpriced", Tokens: 10, Steps: 1, Unpriced: 1})
+	assertTotals(t, totals[1], store.RunTotals{RunID: "mixed", Tokens: 150, Steps: 2, Unpriced: 1, CostUSD: &priced})
+}
+
+func assertTotals(t *testing.T, got, want store.RunTotals) {
+	t.Helper()
+
+	gotCost, wantCost := got.CostUSD, want.CostUSD
+	got.CostUSD, want.CostUSD = nil, nil
+
+	if got != want || (gotCost == nil) != (wantCost == nil) || (gotCost != nil && *gotCost != *wantCost) {
+		t.Errorf("run totals %+v (cost %v); want %+v (cost %v) — an unpriced run has no cost at all, not $0", got, gotCost, want, wantCost)
+	}
+}
 
 // TestAgentUsageAccumulatesAcrossAttempts pins agent_usage as a LEDGER.
 //
@@ -176,4 +231,61 @@ func assertAccumulatedRow(t *testing.T, row store.AgentUsage) {
 	if row.FinishReason != "stop" || row.ModelServed != "m" {
 		t.Errorf("descriptive fields = %q/%q, want the last attempt's", row.FinishReason, row.ModelServed)
 	}
+}
+
+// ensureRun records the run these tests hang their rows on, reusing one that
+// is already there.
+//
+// runs.id is a single GLOBAL primary key and StartRun refuses an id some run
+// already holds, so a cross-pipeline collision cannot be built by starting the
+// same run twice — that is the whole point of ErrRunExists. What CAN still
+// exist is the shape these tests are about: one run row, and a second pipeline
+// writing its own child rows against that run id. The child tables are what
+// have to survive it.
+func ensureRun(ctx context.Context, t *testing.T, st store.Store, runID, jobName string) {
+	t.Helper()
+
+	err := st.StartRun(ctx, runID, jobName, "/tmp/ws", "")
+	if err != nil && !errors.Is(err, store.ErrRunExists) {
+		t.Fatalf("StartRun: %v", err)
+	}
+}
+
+// recordSpend records one agent step's node and what it spent.
+func recordSpend(ctx context.Context, t *testing.T, st store.Store, runID, jobName, stepName string, tokens int) {
+	t.Helper()
+
+	err := st.RecordNode(ctx, store.NodeRecord{
+		Hash: hashOf(7), Kind: "agent", Resource: "review",
+		Content: map[string]any{"prompt": "identical in both pipelines"},
+	}, jobName, "succeeded", nil, nil)
+	if err != nil {
+		t.Fatalf("RecordNode: %v", err)
+	}
+
+	ensureRun(ctx, t, st, runID, jobName)
+
+	err = st.RecordAgentUsage(ctx, store.AgentUsage{
+		RunID: runID, StepIndex: 0, StepName: stepName, JobName: jobName,
+		NodeHash: hashOf(7), ModelReq: "haiku",
+		Prompt: tokens, Total: tokens, FinishReason: "stop",
+	})
+	if err != nil {
+		t.Fatalf("RecordAgentUsage: %v", err)
+	}
+}
+
+func onlyUsage(ctx context.Context, t *testing.T, st store.Store, runID string) store.AgentUsage {
+	t.Helper()
+
+	rows, err := st.RunUsage(ctx, runID)
+	if err != nil {
+		t.Fatalf("RunUsage: %v", err)
+	}
+
+	if len(rows) != 1 {
+		t.Fatalf("run %s reported %d usage rows, want 1: %+v", runID, len(rows), rows)
+	}
+
+	return rows[0]
 }

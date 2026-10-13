@@ -6,11 +6,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-)
 
-// stepBlobEntryCap bounds how many step entries this index keeps per
-// pipeline, newest inserted first; see the sqlite driver's for why this cap.
-const stepBlobEntryCap = 200
+	"github.com/jtarchie/steps/internal/store"
+)
 
 // RecordStepBlobs files the content digests of a step's outputs under its
 // action key, replacing whatever the key held.
@@ -46,7 +44,7 @@ func (s *Store) RecordStepBlobs(ctx context.Context, actionKey string, outputs m
 			      ORDER BY MAX(seq) DESC
 			      LIMIT $2
 			  )
-		`, s.pipelineID, stepBlobEntryCap)
+		`, s.pipelineID, store.StepBlobEntryCap)
 
 		return err //nolint:wrapcheck // wrapped below
 	})

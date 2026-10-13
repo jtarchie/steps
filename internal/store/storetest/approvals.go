@@ -1,5 +1,7 @@
 package storetest
 
+// Approvals: the gate a person decides, and the audit of what was decided.
+
 import (
 	"context"
 	"errors"
@@ -182,5 +184,37 @@ func (s suite) TestPendingApprovalsAreNotCapped(t *testing.T) {
 		if pending[i-1].ID > pending[i].ID {
 			t.Errorf("waiting approvals are not oldest-first: %d before %d", pending[i-1].ID, pending[i].ID)
 		}
+	}
+}
+
+func (s suite) TestApprovalsAuditHonoursItsLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := s.open(t, "test")
+
+	for range 3 {
+		_, err := st.RequestApproval(ctx, "deploy", "ship it?")
+		if err != nil {
+			t.Fatalf("RequestApproval: %v", err)
+		}
+	}
+
+	all, err := st.Approvals(ctx, false, 0)
+	if err != nil {
+		t.Fatalf("Approvals(false, 0): %v", err)
+	}
+
+	if len(all) != 3 {
+		t.Fatalf("Approvals with limit 0 returned %d rows, want all 3", len(all))
+	}
+
+	two, err := st.Approvals(ctx, false, 2)
+	if err != nil {
+		t.Fatalf("Approvals(false, 2): %v", err)
+	}
+
+	if len(two) != 2 {
+		t.Fatalf("Approvals with limit 2 returned %d rows", len(two))
 	}
 }

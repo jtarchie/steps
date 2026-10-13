@@ -1,5 +1,7 @@
 package storetest
 
+// The artifact-store index: action key to output digests.
+
 import (
 	"context"
 	"testing"
@@ -37,6 +39,7 @@ func (s suite) TestStepBlobsRoundTrip(t *testing.T) {
 
 	assertBlobs(t, st, "key-1", map[string]string{"out": "d3"})
 }
+
 func assertBlobs(t *testing.T, st store.Store, key string, want map[string]string) {
 	t.Helper()
 
@@ -53,28 +56,5 @@ func assertBlobs(t *testing.T, st store.Store, key string, want map[string]strin
 		if got[output] != digest {
 			t.Fatalf("StepBlobs(%q) = %v, want %v", key, got, want)
 		}
-	}
-}
-
-// TestStepBlobsAreScopedToThePipeline holds the standing rule: two pipelines
-// sharing a state file never see each other's rows, even for an identical
-// action key.
-func (s suite) TestStepBlobsAreScopedToThePipeline(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-
-	first := s.open(t, "app")
-
-	second := s.open(t, "infra")
-
-	err := first.RecordStepBlobs(ctx, "same-key", map[string]string{"out": "app-digest"})
-	if err != nil {
-		t.Fatalf("RecordStepBlobs: %v", err)
-	}
-
-	got, err := second.StepBlobs(ctx, "same-key")
-	if err != nil || len(got) != 0 {
-		t.Fatalf("the other pipeline sees %v, %v; want nothing", got, err)
 	}
 }

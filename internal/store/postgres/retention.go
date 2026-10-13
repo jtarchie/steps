@@ -15,13 +15,6 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// nodesPerRetainedRun and chainsPerRetainedRun turn run_history: into the
-// cache caps, as in the sqlite driver.
-const (
-	nodesPerRetainedRun  = 20
-	chainsPerRetainedRun = 5
-)
-
 // Prune applies one build's retention policy. keepRunID survives whatever the
 // cap says: it is the run whose build is calling this.
 func (s *Store) Prune(ctx context.Context, policy store.Retention, keepRunID string) error {
@@ -50,12 +43,12 @@ func (s *Store) pruneRuns(ctx context.Context, jobName string, limit int, keepRu
 			return err
 		}
 
-		prunedNodes, err := pruneNodes(ctx, tx, s.pipelineID, jobName, limit*nodesPerRetainedRun)
+		prunedNodes, err := pruneNodes(ctx, tx, s.pipelineID, jobName, limit*store.NodesPerRetainedRun)
 		if err != nil {
 			return err
 		}
 
-		err = pruneJobRuns(ctx, tx, s.pipelineID, jobName, limit*chainsPerRetainedRun)
+		err = pruneJobRuns(ctx, tx, s.pipelineID, jobName, limit*store.ChainsPerRetainedRun)
 		if err != nil {
 			return err
 		}

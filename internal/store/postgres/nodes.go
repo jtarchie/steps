@@ -5,13 +5,10 @@ package postgres
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jtarchie/steps/internal/store"
@@ -41,7 +38,7 @@ func (s *Store) RecordNode(ctx context.Context, node store.NodeRecord, jobName, 
 		}
 	}
 
-	contentHash := contentKey(content)
+	contentHash := store.ContentKey(content)
 
 	err = s.write(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock_shared($1, 0)`, classContent)
@@ -83,13 +80,6 @@ func (s *Store) RecordNode(ctx context.Context, node store.NodeRecord, jobName, 
 	}
 
 	return nil
-}
-
-// contentKey is the interning key: a hash OF the content bytes.
-func contentKey(content []byte) string {
-	sum := sha256.Sum256(content)
-
-	return hex.EncodeToString(sum[:])
 }
 
 // HasNodeSucceeded reports whether this exact node succeeded for this job.
@@ -172,56 +162,10 @@ func (s *Store) NodesByHash(ctx context.Context, hashes []string) (map[string]st
 	return found, nil
 }
 
-// truncationEvent replaces the events dropped at the cap; see the sqlite
-// driver's truncateTranscript.
-const truncationEvent = `{"type":"text","text":"[transcript truncated: over the stored size limit]"}`
-
-// truncateTranscript cuts a transcript to MaxTranscriptBytes while keeping it
-// valid JSON, dropping whole events off the tail.
-func truncateTranscript(transcript string) string {
-	if len(transcript) <= store.MaxTranscriptBytes {
-		return transcript
-	}
-
-	var events []json.RawMessage
-
-	err := json.Unmarshal([]byte(transcript), &events)
-	if err != nil || len(events) == 0 {
-		return truncateUTF8(transcript, store.MaxTranscriptBytes)
-	}
-
-	budget := store.MaxTranscriptBytes - len(truncationEvent) - len(`[,]`)
-
-	kept, used := 0, 0
-
-	for _, event := range events {
-		cost := len(event)
-		if kept > 0 {
-			cost++
-		}
-
-		if used+cost > budget {
-			break
-		}
-
-		used += cost
-		kept++
-	}
-
-	parts := make([]string, 0, kept+1)
-	for _, event := range events[:kept] {
-		parts = append(parts, string(event))
-	}
-
-	parts = append(parts, truncationEvent)
-
-	return "[" + strings.Join(parts, ",") + "]"
-}
-
 // SaveNodeTranscript stores (or replaces) an agent node's transcript, capped
 // at MaxTranscriptBytes.
 func (s *Store) SaveNodeTranscript(ctx context.Context, hash, transcript string) error {
-	transcript = truncateTranscript(clean(transcript))
+	transcript = store.TruncateTranscript(clean(transcript))
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO node_transcripts (pipeline_id, hash, transcript)

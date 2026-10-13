@@ -15,6 +15,7 @@ package store
 import (
 	"context"
 	"errors"
+	"unicode/utf8"
 )
 
 // Meta is the handle itself: what it is scoped to, what it is backed by, and
@@ -62,10 +63,8 @@ type Meta interface {
 //
 // It is a composition and NOTHING else — facets_test.go holds it to that.
 // The facets are the aggregates the files here are already cut along, and they
-// exist so a consumer can name the parts of the database it touches: agent
-// takes Cache, Usage and Questions, trigger's poll takes Queue and Versions,
-// and only what runs a whole build — pipeline and web — needs
-// all of it. A method declared
+// exist so a consumer can name the parts of the database it touches and no
+// more; only code that runs a whole build needs all of it. A method declared
 // straight on Store would belong to no aggregate, so nobody could ask for it
 // by name and a second driver would have no facet to write it under.
 type Store interface {
@@ -109,3 +108,44 @@ var ErrSchemaVersion = errors.New("the state database was written by a different
 // making the worst case a rounding error rather than the largest thing a failing
 // watch produces.
 const MaxStoredErrorBytes = 2 * 1024
+
+// ErrText renders an error for a nullable error column: nil (NULL) when there
+// was none, and never more than MaxStoredErrorBytes of text.
+//
+// Truncated at the head for the reason a transcript is: the message opens with
+// what failed and closes with the detail, and "could not record node X:
+// constraint failed" is worth more than the tail of a shell script.
+func ErrText(err error) any {
+	if err == nil {
+		return nil
+	}
+
+	return BoundedError(err.Error())
+}
+
+// BoundedError caps a message at MaxStoredErrorBytes, keeping the head for the
+// reason ErrText gives.
+func BoundedError(text string) string {
+	if len(text) <= MaxStoredErrorBytes {
+		return text
+	}
+
+	const notice = "… [truncated]"
+
+	return TruncateUTF8(text, MaxStoredErrorBytes-len(notice)) + notice
+}
+
+// TruncateUTF8 cuts s to at most a byte limit without splitting a rune.
+func TruncateUTF8(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+
+	// Only the rune straddling the cut is examined: validating the whole prefix walked back to any earlier invalid byte, so one stray byte at the start of a command's output stored an empty string, in O(limit²).
+	cut := limit
+	for cut > 0 && cut > limit-(utf8.UTFMax-1) && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+
+	return s[:cut]
+}

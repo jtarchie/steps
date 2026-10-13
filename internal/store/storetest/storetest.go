@@ -9,13 +9,19 @@ package storetest
 
 import (
 	"context"
+	"fmt"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/store"
 )
+
+// Every listing takes a limit, and the limit means the same thing on each:
+// zero is no limit, and anything else is honoured. Each facet's file pins its
+// own listings (the HonoursItsLimit tests), because the one test that once
+// asserted a listing bound went with the method it bounded, and nothing else
+// in the tree noticed a LIMIT clause disappear.
 
 // OpenFunc opens a handle on the named pipeline.
 //
@@ -80,41 +86,11 @@ func Run(t *testing.T, open OpenFunc) {
 	}
 }
 
-// TestTheOpenerSharesOneDatabase holds the contract on OpenFunc itself.
-//
-// Several tests below are about two pipelines in ONE database not seeing each
-// other's rows. Every one of them passes for free against an opener that hands
-// out a separate database per name — the isolation they assert would be the
-// filesystem's rather than the query's. This is the one test that fails there,
-// so the rest mean what they say.
-func (s suite) TestTheOpenerSharesOneDatabase(t *testing.T) {
-	t.Parallel()
+func hashOf(n int) string { return fmt.Sprintf("%064x", n) }
 
-	web := s.open(t, "web")
-	infra := s.open(t, "infra")
+// ctxFor is the test's context, named so the calls above read as one line.
+func ctxFor(t *testing.T) context.Context {
+	t.Helper()
 
-	if web.Pipeline() != "web" || infra.Pipeline() != "infra" {
-		t.Fatalf("the handles are scoped to %q and %q, want web and infra", web.Pipeline(), infra.Pipeline())
-	}
-
-	if web.Description() != infra.Description() {
-		t.Fatalf("the handles are backed by %q and %q, want one database — Description is stable, so two of them means the scoping tests below assert nothing", web.Description(), infra.Description())
-	}
-
-	// The description is a promise; this is the storage. Two private
-	// databases can answer to one description (`:memory:` does), and the
-	// scoping tests would then assert nothing.
-	rows, err := web.Reader().Pipelines(context.Background())
-	if err != nil {
-		t.Fatalf("Pipelines through web: %v", err)
-	}
-
-	names := make([]string, 0, len(rows))
-	for _, row := range rows {
-		names = append(names, row.Name)
-	}
-
-	if !slices.Contains(names, "infra") {
-		t.Fatalf("web's database holds pipelines %q, want infra among them — the descriptions matched but the storage did not", names)
-	}
+	return t.Context()
 }

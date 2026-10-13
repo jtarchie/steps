@@ -559,8 +559,7 @@ func nullableBytes(b []byte) any {
 	return clean(string(b))
 }
 
-// errText renders an error for a nullable error column: NULL when there was
-// none, and never more than MaxStoredErrorBytes.
+// errText is store.ErrText for TEXT that refuses what clean strips.
 func errText(err error) any {
 	if err == nil {
 		return nil
@@ -569,21 +568,15 @@ func errText(err error) any {
 	return boundedError(err.Error())
 }
 
-// boundedError caps a message at MaxStoredErrorBytes, keeping the head.
+// boundedError is store.BoundedError after clean, which must run first: the
+// cap counts the bytes Postgres will actually store.
 func boundedError(text string) string {
-	text = clean(text)
-	if len(text) <= store.MaxStoredErrorBytes {
-		return text
-	}
-
-	const notice = "… [truncated]"
-
-	return truncateUTF8(text, store.MaxStoredErrorBytes-len(notice)) + notice
+	return store.BoundedError(clean(text))
 }
 
 // eventText cleans and caps an event's text columns.
 func eventText(text string) string {
-	return truncateUTF8(clean(text), store.MaxEventTextBytes)
+	return store.TruncateUTF8(clean(text), store.MaxEventTextBytes)
 }
 
 // rowLimit turns "zero means no limit" into LIMIT NULL, which Postgres reads
@@ -660,18 +653,4 @@ func collect[T any](ctx context.Context, db executor, what, query string, args [
 	}
 
 	return out, nil
-}
-
-// truncateUTF8 cuts s to at most a byte limit without splitting a rune.
-func truncateUTF8(s string, limit int) string {
-	if len(s) <= limit {
-		return s
-	}
-
-	cut := limit
-	for cut > 0 && cut > limit-(utf8.UTFMax-1) && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-
-	return s[:cut]
 }

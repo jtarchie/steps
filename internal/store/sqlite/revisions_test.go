@@ -283,7 +283,7 @@ func TestATrimmedChainCacheIsCommitted(t *testing.T) {
 
 	const (
 		keep   = 10
-		chains = keep*chainsPerRetainedRun + 20
+		chains = keep*store.ChainsPerRetainedRun + 20
 	)
 
 	for chain := range chains {
@@ -299,8 +299,8 @@ func TestATrimmedChainCacheIsCommitted(t *testing.T) {
 		t.Fatalf("Prune: %v", err)
 	}
 
-	if rows := countRows(ctx, t, st, "job_runs"); rows != keep*chainsPerRetainedRun {
+	if rows := countRows(ctx, t, st, "job_runs"); rows != keep*store.ChainsPerRetainedRun {
 		t.Errorf("%d chain cache entries survive a cap of %d — the trim was rolled back",
-			rows, keep*chainsPerRetainedRun)
+			rows, keep*store.ChainsPerRetainedRun)
 	}
 }

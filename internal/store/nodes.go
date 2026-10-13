@@ -2,6 +2,10 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -79,3 +83,81 @@ type NodeRow struct {
 // decision, so losing the tail of a very long one costs nothing that the
 // per-step token counts in agent_usage do not still record exactly.
 const MaxTranscriptBytes = 256 * 1024
+
+// ContentKey is the interning key for node_content: a hash OF the content
+// bytes.
+//
+// Its own hash rather than the node's, because a node hash folds in its parent
+// — two byte-identical steps in different chains must share one row, and
+// under a node hash they could not.
+func ContentKey(content []byte) string {
+	sum := sha256.Sum256(content)
+
+	return hex.EncodeToString(sum[:])
+}
+
+// TruncationEvent is appended in place of the entries dropped at the cap, so a
+// reader who reaches the end knows the conversation continued rather than
+// stopped. Spelled as a transcript event because that is what the consumers
+// decode (internal/agent's transcriptEvent, rendered by internal/web).
+const TruncationEvent = `{"type":"text","text":"[transcript truncated: over the stored size limit]"}`
+
+// TruncateTranscript cuts a transcript to at most MaxTranscriptBytes while
+// keeping it VALID JSON, by dropping whole events off the end.
+//
+// The first version sliced the string at a byte offset and appended a plain-text
+// notice. That produced `[{"type":"text","text":"ttt` + a bare newline — invalid
+// JSON, so json.Unmarshal in the renderer failed and every over-cap transcript
+// displayed as NO transcript at all, the exact opposite of keeping the head. It
+// passed a test asserting only that the stored string was non-empty. Byte
+// slicing could also cut a multi-byte rune in half.
+//
+// Events are dropped from the TAIL: the task, the first tool calls and the early
+// decisions are what explain what a step was doing, and a conversation long
+// enough to hit the cap is one whose middle is mostly repetition.
+//
+// Anything that does not parse as a JSON array is passed through untouched under
+// a hard byte cap. This function's job is a storage bound, not validation — a
+// caller that hands over something else has a bug of its own, and silently
+// rewriting it would hide that.
+func TruncateTranscript(transcript string) string {
+	if len(transcript) <= MaxTranscriptBytes {
+		return transcript
+	}
+
+	var events []json.RawMessage
+
+	err := json.Unmarshal([]byte(transcript), &events)
+	if err != nil || len(events) == 0 {
+		return TruncateUTF8(transcript, MaxTranscriptBytes)
+	}
+
+	// Two brackets, the notice, and the comma before it.
+	budget := MaxTranscriptBytes - len(TruncationEvent) - len(`[,]`)
+
+	kept, used := 0, 0
+
+	for _, event := range events {
+		// Each event costs its own bytes plus the comma joining it to the last.
+		cost := len(event)
+		if kept > 0 {
+			cost++
+		}
+
+		if used+cost > budget {
+			break
+		}
+
+		used += cost
+		kept++
+	}
+
+	parts := make([]string, 0, kept+1)
+	for _, event := range events[:kept] {
+		parts = append(parts, string(event))
+	}
+
+	parts = append(parts, TruncationEvent)
+
+	return "[" + strings.Join(parts, ",") + "]"
+}

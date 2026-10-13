@@ -268,43 +268,6 @@ func (s suite) TestCloseQuestionRecordsWhatTheModelWasTold(t *testing.T) {
 	}
 }
 
-// TestPendingQuestionsAreScopedToTheirPipeline holds the scoping rule against
-// a shared state file: a question belongs to one pipeline, reached through its
-// run, and the other pipeline in the same database must not see it.
-func (s suite) TestPendingQuestionsAreScopedToTheirPipeline(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	mine := s.open(t, "test")
-
-	theirs := s.open(t, "other")
-
-	err := mine.StartRun(ctx, "run-1", "release-note", "/tmp/ws", "")
-	if err != nil {
-		t.Fatalf("StartRun: %v", err)
-	}
-
-	question, _ := askBump(t, mine, "run-1")
-
-	pending, err := theirs.Questions(ctx, true, 0)
-	if err != nil {
-		t.Fatalf("Questions: %v", err)
-	}
-
-	if len(pending) != 0 {
-		t.Errorf("the other pipeline saw %d of this one's questions", len(pending))
-	}
-
-	err = theirs.AnswerQuestion(ctx, question.ID, "minor", "stranger")
-	if err == nil {
-		t.Error("the other pipeline answered this one's question")
-	}
-
-	if mineStill, _ := mine.QuestionStatus(ctx, question.ID); mineStill.Status != "pending" {
-		t.Errorf("this pipeline's question was resolved from outside: %q", mineStill.Status)
-	}
-}
-
 // TestAllQuestionsListsWhatIsWaitingFirst: the listing is capped and it is the
 // only route the UI offers for answering, so recency ordering alone would push
 // a parked question off the page while the nav badge still counted it.

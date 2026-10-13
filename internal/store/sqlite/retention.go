@@ -40,28 +40,6 @@ import (
 	"github.com/jtarchie/steps/internal/store"
 )
 
-// nodesPerRetainedRun is how many cached nodes a job may keep per run it
-// retains — the multiplier turning run_history: into a node cap.
-//
-// Not its own DSL knob: run_history: already expresses "how much of this job do
-// you want kept", and a second dial would ask authors to reason about node
-// counts per plan, which is an implementation detail. Scaling off it rather than
-// being a flat number matters because the flat version did not bound anything at
-// realistic scale — a generous constant meant the cache, not the history, was the
-// term that grew, and the footprint measurement caught it.
-//
-// Twenty is a plan-size allowance: enough that a job of twenty steps keeps a
-// full run's worth of nodes for every run it retains, and the nodes of the
-// retained runs themselves are exempt from the cap anyway (see pruneNodes), so
-// this governs only how much EXTRA cache is carried for its hit value.
-const nodesPerRetainedRun = 20
-
-// chainsPerRetainedRun is the same multiplier for job_runs, which holds one row
-// per whole chain rather than one per step — so a run costs a handful of rows
-// rather than a plan's worth. Several because a version: every fan-out runs
-// several chains under one job.
-const chainsPerRetainedRun = 5
-
 // Prune applies one build's retention policy: its job's run history, the
 // caches that job has accumulated, and its finished trigger-queue rows.
 //
@@ -117,12 +95,12 @@ func (s *Store) pruneRuns(ctx context.Context, jobName string, limit int, keepRu
 		return err
 	}
 
-	prunedNodes, err := pruneNodes(ctx, tx, s.pipelineID, jobName, limit*nodesPerRetainedRun)
+	prunedNodes, err := pruneNodes(ctx, tx, s.pipelineID, jobName, limit*store.NodesPerRetainedRun)
 	if err != nil {
 		return err
 	}
 
-	prunedChains, err := pruneJobRuns(ctx, tx, s.pipelineID, jobName, limit*chainsPerRetainedRun)
+	prunedChains, err := pruneJobRuns(ctx, tx, s.pipelineID, jobName, limit*store.ChainsPerRetainedRun)
 	if err != nil {
 		return err
 	}

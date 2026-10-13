@@ -9,6 +9,15 @@ package sqlite
 //
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
+//
+// 18 added memories, what an agent step keeps about a scope between runs.
+//
+// 17 dropped run_inputs.build_id, runs.rerun_of_build and trigger_queue.rerun_build: a run is one build, so there is no build of a run to name.
+//
+// 16 added runs.rerun_of and rerun_of_build, which say which build a retry re-ran, and trigger_queue's rerun columns, which queue one.
+//
+// 15 added trigger_queue.manual, which is how a person's trigger gets past the breaker an automatic one is held by.
+//
 // 14 keyed run_inputs by the GET a version was bound under, and records every
 // get's binding rather than only a version: every one, so a resume rebuilds
 // each build against all of what it was created with. An older file's INSERT
@@ -25,6 +34,10 @@ package sqlite
 // lacks, and the poller records a check failure best-effort — so a pipeline
 // that had stopped triggering would go on looking merely quiet, which is the
 // exact silence the table was added to end.
+//
+// 11 added run_placements.bytes_received. An older file's INSERT names a
+// column it lacks, and a placement is recorded best-effort — so every placed
+// step would have gone unrecorded, silently.
 //
 // 10 made pipelines the thing a daemon HOLDS rather than a name it was handed:
 // current_revision_id, paused_at and set_at on pipelines, and
@@ -46,10 +59,6 @@ package sqlite
 // INSERT naming it failed — recorded best-effort, so silent, and the silence
 // would restore exactly the false green the table exists to remove.
 //
-// 11 added run_placements.bytes_received. An older file's INSERT names a
-// column it lacks, and a placement is recorded best-effort — so every placed
-// step would have gone unrecorded, silently.
-//
 // 7 added pipeline_revisions and runs.revision_id. An older database opened
 // without the table and every INSERT naming it failed — and StartRun's error
 // aborts the run, so this one is loud rather than silent, which is the
@@ -64,19 +73,13 @@ package sqlite
 // nullable, so a tagged HOOK — which has no node, and really does acquire a
 // billed machine — records the machine that ran it.
 //
-// 3 added run_placements. An older database opened without it and every
-// INSERT naming it failed — and the run-event sink only warns, so the build
-// went green having recorded nothing.
 // 4 put pipeline_id into the keys of run_placements and agent_usage. Without
 // it, two pipelines sharing a state file collided on (run_id, node_hash) and
 // one upserted over the other's row.
-// 18 added memories, what an agent step keeps about a scope between runs.
 //
-// 17 dropped run_inputs.build_id, runs.rerun_of_build and trigger_queue.rerun_build: a run is one build, so there is no build of a run to name.
-//
-// 16 added runs.rerun_of and rerun_of_build, which say which build a retry re-ran, and trigger_queue's rerun columns, which queue one.
-//
-// 15 added trigger_queue.manual, which is how a person's trigger gets past the breaker an automatic one is held by.
+// 3 added run_placements. An older database opened without it and every
+// INSERT naming it failed — and the run-event sink only warns, so the build
+// went green having recorded nothing.
 const schemaVersion = 18
 
 const schema = `

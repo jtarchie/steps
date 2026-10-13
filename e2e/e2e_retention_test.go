@@ -162,7 +162,7 @@ jobs:
 func TestRunHistoryReapsCachedNodes(t *testing.T) {
 	dir := t.TempDir()
 
-	// run_history: 1 makes the node cap 1 * nodesPerRetainedRun, so this has to
+	// run_history: 1 makes the node cap 1 * store.NodesPerRetainedRun, so this has to
 	// run more than that many distinct builds for the cap to bind at all.
 	const builds = 40
 

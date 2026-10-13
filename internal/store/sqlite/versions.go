@@ -136,7 +136,7 @@ func (s *Store) RecordCheckError(ctx context.Context, resourceName, message stri
 		`INSERT INTO resource_check_errors (pipeline_id, resource_name, message, failed_at)
 		 VALUES (?, ?, ?, ?)
 		 ON CONFLICT (pipeline_id, resource_name) DO UPDATE SET message = excluded.message, failed_at = excluded.failed_at`,
-		s.pipelineID, resourceName, boundedError(message), now(),
+		s.pipelineID, resourceName, store.BoundedError(message), now(),
 	)
 	if err != nil {
 		return fmt.Errorf("could not record the check error for %q: %w", resourceName, err)

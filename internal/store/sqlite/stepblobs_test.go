@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // TestStepBlobsEvictWholeEntriesByCount pins the bound and its shape: count,
@@ -21,7 +23,7 @@ func TestStepBlobsEvictWholeEntriesByCount(t *testing.T) {
 
 	ctx := context.Background()
 
-	for i := range stepBlobEntryCap + 1 {
+	for i := range store.StepBlobEntryCap + 1 {
 		err := st.RecordStepBlobs(ctx, fmt.Sprintf("key-%d", i), map[string]string{"out": "d", "logs": "d2"})
 		if err != nil {
 			t.Fatalf("RecordStepBlobs %d: %v", i, err)
@@ -33,7 +35,7 @@ func TestStepBlobsEvictWholeEntriesByCount(t *testing.T) {
 		t.Fatalf("the oldest entry = %v, %v; want evicted", oldest, err)
 	}
 
-	newest, err := st.StepBlobs(ctx, fmt.Sprintf("key-%d", stepBlobEntryCap))
+	newest, err := st.StepBlobs(ctx, fmt.Sprintf("key-%d", store.StepBlobEntryCap))
 	if err != nil || len(newest) != 2 {
 		t.Fatalf("the newest entry = %v, %v; want both rows intact", newest, err)
 	}

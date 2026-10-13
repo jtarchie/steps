@@ -5,14 +5,10 @@ package sqlite
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
-	"unicode/utf8"
 
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -46,7 +42,7 @@ func (s *Store) RecordNode(ctx context.Context, node store.NodeRecord, jobName, 
 
 	defer func() { _ = tx.Rollback() }()
 
-	contentHash := contentKey(content)
+	contentHash := store.ContentKey(content)
 
 	// DO NOTHING, not an update: the key IS the content, so a conflict means the
 	// stored bytes already equal what would be written.
@@ -74,7 +70,7 @@ func (s *Store) RecordNode(ctx context.Context, node store.NodeRecord, jobName, 
 			created_at   = excluded.created_at
 	`,
 		s.pipelineID, node.Hash, nullable(node.ParentHash), node.Kind, jobName, node.Resource, node.StepIndex,
-		contentHash, nullableString(resultJSON), status, errText(execErr), now(),
+		contentHash, nullableString(resultJSON), status, store.ErrText(execErr), now(),
 	)
 	if err != nil {
 		return fmt.Errorf("could not record node %q: %w", node.Hash, err)
@@ -86,17 +82,6 @@ func (s *Store) RecordNode(ctx context.Context, node store.NodeRecord, jobName, 
 	}
 
 	return nil
-}
-
-// contentKey is the interning key: a hash OF the content bytes.
-//
-// Its own hash rather than the node's, because a node hash folds in its parent
-// — two byte-identical steps in different chains must share one row here, and
-// under a node hash they could not.
-func contentKey(content []byte) string {
-	sum := sha256.Sum256(content)
-
-	return hex.EncodeToString(sum[:])
 }
 
 // nullable stores an empty string as NULL. A chain root's absent parent needs it because a foreign key reads "" as a node that must exist and exempts only NULL; a question's answer columns need it so deliberate silence stays tellable apart from one nobody reached.
@@ -200,87 +185,6 @@ func (s *Store) NodesByHash(ctx context.Context, hashes []string) (map[string]st
 	return found, nil
 }
 
-// truncationEvent is appended in place of the entries dropped at the cap, so a
-// reader who reaches the end knows the conversation continued rather than
-// stopped. Spelled as a transcript event because that is what the consumers
-// decode (internal/agent's transcriptEvent, rendered by internal/web).
-const truncationEvent = `{"type":"text","text":"[transcript truncated: over the stored size limit]"}`
-
-// truncateTranscript cuts a transcript to at most MaxTranscriptBytes while
-// keeping it VALID JSON, by dropping whole events off the end.
-//
-// The first version sliced the string at a byte offset and appended a plain-text
-// notice. That produced `[{"type":"text","text":"ttt` + a bare newline — invalid
-// JSON, so json.Unmarshal in the renderer failed and every over-cap transcript
-// displayed as NO transcript at all, the exact opposite of keeping the head. It
-// passed a test asserting only that the stored string was non-empty. Byte
-// slicing could also cut a multi-byte rune in half.
-//
-// Events are dropped from the TAIL: the task, the first tool calls and the early
-// decisions are what explain what a step was doing, and a conversation long
-// enough to hit the cap is one whose middle is mostly repetition.
-//
-// Anything that does not parse as a JSON array is passed through untouched under
-// a hard byte cap. This function's job is a storage bound, not validation — a
-// caller that hands over something else has a bug of its own, and silently
-// rewriting it would hide that.
-func truncateTranscript(transcript string) string {
-	if len(transcript) <= store.MaxTranscriptBytes {
-		return transcript
-	}
-
-	var events []json.RawMessage
-
-	err := json.Unmarshal([]byte(transcript), &events)
-	if err != nil || len(events) == 0 {
-		return truncateUTF8(transcript, store.MaxTranscriptBytes)
-	}
-
-	// Two brackets, the notice, and the comma before it.
-	budget := store.MaxTranscriptBytes - len(truncationEvent) - len(`[,]`)
-
-	kept, used := 0, 0
-
-	for _, event := range events {
-		// Each event costs its own bytes plus the comma joining it to the last.
-		cost := len(event)
-		if kept > 0 {
-			cost++
-		}
-
-		if used+cost > budget {
-			break
-		}
-
-		used += cost
-		kept++
-	}
-
-	parts := make([]string, 0, kept+1)
-	for _, event := range events[:kept] {
-		parts = append(parts, string(event))
-	}
-
-	parts = append(parts, truncationEvent)
-
-	return "[" + strings.Join(parts, ",") + "]"
-}
-
-// truncateUTF8 cuts s to at most a byte limit without splitting a rune.
-func truncateUTF8(s string, limit int) string {
-	if len(s) <= limit {
-		return s
-	}
-
-	// Only the rune straddling the cut is examined: validating the whole prefix walked back to any earlier invalid byte, so one stray byte at the start of a command's output stored an empty string, in O(limit²).
-	cut := limit
-	for cut > 0 && cut > limit-(utf8.UTFMax-1) && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-
-	return s[:cut]
-}
-
 // SaveNodeTranscript stores (or replaces) an agent node's full conversation
 // transcript, a JSON array of events. Kept in its own table so nodes.result —
 // which rides along on every node listing — stays bounded; a transcript is
@@ -291,7 +195,7 @@ func truncateUTF8(s string, limit int) string {
 // conversation that ran long enough to hit the cap is one whose middle is
 // mostly repetition.
 func (s *Store) SaveNodeTranscript(ctx context.Context, hash, transcript string) error {
-	transcript = truncateTranscript(transcript)
+	transcript = store.TruncateTranscript(transcript)
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO node_transcripts (pipeline_id, hash, transcript)

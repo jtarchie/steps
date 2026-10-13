@@ -6,7 +6,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -31,9 +30,9 @@ import (
 // else's ask" — they are answered by the same row but reported to the model
 // differently.
 func (s *Store) AskQuestion(ctx context.Context, question store.Question) (store.Question, bool, error) {
-	options, err := encodeOptions(question.Options)
+	options, err := store.EncodeOptions(question.Options)
 	if err != nil {
-		return store.Question{}, false, err
+		return store.Question{}, false, err //nolint:wrapcheck // EncodeOptions says what it was recording
 	}
 
 	// The SELECT is what scopes the insert to this pipeline. The run_id
@@ -215,38 +214,7 @@ func (s *Store) scanQuestion(row rowScanner) (store.Question, error) {
 		return store.Question{}, err //nolint:wrapcheck // every caller wraps with what it was reading
 	}
 
-	question.Options, err = decodeOptions(options)
+	question.Options, err = store.DecodeOptions(options)
 
-	return question, err
-}
-
-// encodeOptions stores the offered list as JSON. Always a JSON array, never
-// NULL: "the model offered nothing" and "we did not record what it offered"
-// are different facts, and an empty array says the first one.
-func encodeOptions(options []string) (string, error) {
-	if len(options) == 0 {
-		return "[]", nil
-	}
-
-	encoded, err := json.Marshal(options)
-	if err != nil {
-		return "", fmt.Errorf("could not record the question's options: %w", err)
-	}
-
-	return string(encoded), nil
-}
-
-func decodeOptions(encoded string) ([]string, error) {
-	if encoded == "" || encoded == "[]" {
-		return nil, nil
-	}
-
-	var options []string
-
-	err := json.Unmarshal([]byte(encoded), &options)
-	if err != nil {
-		return nil, fmt.Errorf("could not read the question's options: %w", err)
-	}
-
-	return options, nil
+	return question, err //nolint:wrapcheck // DecodeOptions says what it was reading
 }

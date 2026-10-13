@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -78,4 +80,36 @@ func (q Question) MemoKey() string {
 	sum := sha256.Sum256([]byte(q.Question + "\x00" + strings.Join(q.Options, "\x00")))
 
 	return hex.EncodeToString(sum[:])
+}
+
+// EncodeOptions stores the offered list as JSON. Always a JSON array, never
+// NULL: "the model offered nothing" and "we did not record what it offered"
+// are different facts, and an empty array says the first one.
+func EncodeOptions(options []string) (string, error) {
+	if len(options) == 0 {
+		return "[]", nil
+	}
+
+	encoded, err := json.Marshal(options)
+	if err != nil {
+		return "", fmt.Errorf("could not record the question's options: %w", err)
+	}
+
+	return string(encoded), nil
+}
+
+// DecodeOptions reads what EncodeOptions stored.
+func DecodeOptions(encoded string) ([]string, error) {
+	if encoded == "" || encoded == "[]" {
+		return nil, nil
+	}
+
+	var options []string
+
+	err := json.Unmarshal([]byte(encoded), &options)
+	if err != nil {
+		return nil, fmt.Errorf("could not read the question's options: %w", err)
+	}
+
+	return options, nil
 }
