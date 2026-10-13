@@ -658,10 +658,11 @@ linters:
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/config"
-            # shell is imported only for HostEnv: a stdio (command:) mcp
-            # server is a host-executed subprocess and must see exactly the
-            # same filtered environment every other host-executed command
-            # does, rather than a second, drifting copy of the allowlist.
+            # shell is imported only for HostEnv and RedactCommand: a stdio
+            # (command:) mcp server is a host-executed subprocess and must see
+            # exactly the same filtered environment every other host-executed
+            # command does, and its argv is logged under the same redaction,
+            # rather than a second, drifting copy of either.
             # shell is a stdlib-only leaf, so this adds no
             # cycle — the same edge internal/resource already has.
             - "github.com/jtarchie/steps/internal/shell"

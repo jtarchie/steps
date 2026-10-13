@@ -47,7 +47,12 @@ func commandTransport(ctx context.Context, srv config.MCPServer) *sdkmcp.Command
 	cmd.WaitDelay = stdioWaitDelay
 	setProcessGroup(cmd)
 
-	slog.DebugContext(ctx, "mcp.stdio.spawn", "server", srv.Name, "command", srv.Command, "args", srv.Args, "cwd", srv.Cwd)
+	args := make([]string, len(srv.Args))
+	for i, arg := range srv.Args {
+		args[i] = shell.RedactCommand(arg)
+	}
+
+	slog.DebugContext(ctx, "mcp.stdio.spawn", "server", srv.Name, "command", shell.RedactCommand(srv.Command), "args", args, "cwd", srv.Cwd)
 
 	return &sdkmcp.CommandTransport{Command: cmd}
 }

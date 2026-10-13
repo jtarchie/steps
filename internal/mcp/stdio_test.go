@@ -232,3 +232,36 @@ func TestStderrLoggerSilentAboveDebug(t *testing.T) {
 		t.Errorf("expected no output at info level, got: %s", buf.String())
 	}
 }
+
+func TestCommandTransportSpawnLogRedactsCredentials(t *testing.T) {
+	// Not t.Parallel(): mutates slog's default logger.
+	var buf bytes.Buffer
+
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	srv := config.MCPServer{ //nolint:gosec // G101: a fake credential, planted so the test can prove it never reaches the log
+		Name:    "remote",
+		Command: "https://cmd-user:cmd-secret@example.com/bin/server",
+		Args:    []string{"--upstream", "https://arg-user:arg-secret@example.com/mcp"},
+	}
+
+	transport := commandTransport(context.Background(), srv)
+
+	if !slices.Contains(transport.Command.Args, "https://arg-user:arg-secret@example.com/mcp") {
+		t.Fatalf("executed argv = %q, want the credential left intact for the process itself", transport.Command.Args)
+	}
+
+	logged := buf.String()
+	for _, secret := range []string{"cmd-secret", "arg-secret"} {
+		if strings.Contains(logged, secret) {
+			t.Errorf("spawn log leaked %q: %s", secret, logged)
+		}
+	}
+
+	if !strings.Contains(logged, "arg-user:***@example.com") {
+		t.Errorf("spawn log should still name the redacted argument, got: %s", logged)
+	}
+}

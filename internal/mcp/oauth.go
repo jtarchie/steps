@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -371,53 +372,116 @@ func saveTemp(tmp *os.File, data []byte, tmpPath string) error {
 // `steps mcp login`). A missing token file, or one persisted for a
 // different endpoint, surfaces an actionable error naming the login command
 // to run.
+//
+// Every connect for one login shares one sharedToken, because a connect is
+// per call (an agent's tools, a resource's poll) and two of them refreshing
+// independently would each spend the same rotating refresh token — the
+// second gets invalid_grant, which classifyRefreshError rightly reads as
+// ErrNeedsLogin, and a working credential demands a human.
 func oauthTokenSource(ctx context.Context, pipeline string, srv config.MCPServer) (oauth2.TokenSource, error) {
 	tf, path, _, err := checkCredential(pipeline, srv)
 	if err != nil {
 		return nil, err
 	}
 
-	cfg := &oauth2.Config{
-		ClientID:     tf.ClientID,
-		ClientSecret: tf.ClientSecret,
-		Endpoint:     oauth2.Endpoint{TokenURL: tf.TokenURL},
-		Scopes:       tf.Scopes,
+	return &connTokenSource{ctx: ctx, shared: sharedTokenFor(path, tf)}, nil
+}
+
+var sharedTokens = struct {
+	mu     sync.Mutex
+	byPath map[string]*sharedToken
+}{byPath: map[string]*sharedToken{}}
+
+// sharedTokenFor returns the process's one sharedToken for the login at path. An existing one re-reads the file, so a `steps mcp login` done while a daemon runs takes effect on the next connect, as it did when every connect read the file afresh.
+func sharedTokenFor(path string, tf *TokenFile) *sharedToken {
+	sharedTokens.mu.Lock()
+	defer sharedTokens.mu.Unlock()
+
+	shared, ok := sharedTokens.byPath[path]
+	if !ok {
+		shared = &sharedToken{path: path, file: tf, onDisk: tf.AccessToken}
+		sharedTokens.byPath[path] = shared
+
+		return shared
 	}
 
-	return &persistingTokenSource{
-		inner:      cfg.TokenSource(ctx, tf.token()),
-		path:       path,
-		base:       tf,
-		lastAccess: tf.AccessToken,
-	}, nil
+	shared.mu.Lock()
+	shared.reload()
+	shared.mu.Unlock()
+
+	return shared
 }
 
-// persistingTokenSource wraps an x/oauth2 refreshing TokenSource and writes
-// a rotated token back to disk. This is not optional: many providers rotate
-// the refresh token on every use, and without write-back the *second*
-// refresh under a long-running `steps web` would fail with a stale
-// refresh token — a silent correctness bug this wrapper exists to prevent.
-// A failed write is logged, not returned — the in-memory token is still
-// valid for this process; only a future process would be affected, and
-// failing the current call over a persistence hiccup would be worse.
-type persistingTokenSource struct {
-	inner      oauth2.TokenSource
-	path       string
-	base       *TokenFile // client_id/secret/token_url/endpoint/scopes to preserve across saves
-	lastAccess string     // last-persisted access token, to skip redundant writes
+// connTokenSource is one connect's handle on a sharedToken, carrying the
+// context a refresh it triggers is made under.
+type connTokenSource struct {
+	ctx    context.Context //nolint:containedctx // oauth2.TokenSource.Token takes no context; x/oauth2's own sources hold one the same way
+	shared *sharedToken
 }
 
-func (p *persistingTokenSource) Token() (*oauth2.Token, error) {
-	tok, err := p.inner.Token()
+func (c *connTokenSource) Token() (*oauth2.Token, error) {
+	return c.shared.token(c.ctx)
+}
+
+// sharedToken is a login's token, refreshed by one caller at a time and
+// written back to disk. The write-back is not optional: many providers
+// rotate the refresh token on every use, so the next process to start must
+// see the new one. A failed write is logged, not returned — the in-memory
+// token is still valid for this process, and failing the current call over
+// a persistence hiccup would be worse.
+//
+// The refresh happens under mu, which is the single flight: a caller that
+// waited finds the token the first one fetched and returns it.
+type sharedToken struct {
+	mu     sync.Mutex
+	path   string
+	file   *TokenFile
+	onDisk string // the access token the file holds as of this process's last read or write of it
+}
+
+func (s *sharedToken) token(ctx context.Context) (*oauth2.Token, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if tok := s.file.token(); tok.Valid() {
+		return tok, nil
+	}
+
+	s.reload()
+
+	if tok := s.file.token(); tok.Valid() {
+		return tok, nil
+	}
+
+	cfg := &oauth2.Config{
+		ClientID:     s.file.ClientID,
+		ClientSecret: s.file.ClientSecret,
+		Endpoint:     oauth2.Endpoint{TokenURL: s.file.TokenURL},
+		Scopes:       s.file.Scopes,
+	}
+
+	tok, err := cfg.TokenSource(ctx, s.file.token()).Token()
 	if err != nil {
 		return nil, fmt.Errorf("refresh access token: %w", classifyRefreshError(err))
 	}
 
-	if tok.AccessToken != p.lastAccess {
-		p.persist(tok)
-	}
+	s.persist(tok)
 
 	return tok, nil
+}
+
+// reload adopts the file when something other than this process has written
+// it — another process's refresh, whose refresh token is now the only live
+// one, or a fresh login. A file still holding what this process last saw is
+// ignored: after a failed write it holds a refresh token already spent.
+func (s *sharedToken) reload() {
+	onDisk, err := LoadTokenFile(s.path)
+	if err != nil || onDisk.AccessToken == s.onDisk {
+		return
+	}
+
+	s.file = onDisk
+	s.onDisk = onDisk.AccessToken
 }
 
 // classifyRefreshError marks a refresh failure the caller cannot wait out.
@@ -464,8 +528,8 @@ func classifyRefreshError(err error) error {
 	return fmt.Errorf("%w — %w", err, ErrNeedsLogin)
 }
 
-func (p *persistingTokenSource) persist(tok *oauth2.Token) {
-	updated := *p.base
+func (s *sharedToken) persist(tok *oauth2.Token) {
+	updated := *s.file
 	updated.AccessToken = tok.AccessToken
 	updated.TokenType = tok.TokenType
 	updated.Expiry = tok.Expiry
@@ -474,14 +538,15 @@ func (p *persistingTokenSource) persist(tok *oauth2.Token) {
 		updated.RefreshToken = tok.RefreshToken
 	}
 
-	err := updated.replace(p.path)
+	s.file = &updated
+
+	err := updated.replace(s.path)
 	if err != nil {
-		slog.Warn("mcp.oauth.persist_failed", "path", p.path, "error", err,
+		slog.Warn("mcp.oauth.persist_failed", "path", s.path, "error", err,
 			"hint", "if the pipeline's login was moved or removed, the rotated token is not saved and it needs a login again")
 
 		return
 	}
 
-	p.lastAccess = tok.AccessToken
-	p.base = &updated
+	s.onDisk = tok.AccessToken
 }
