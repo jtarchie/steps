@@ -35,7 +35,7 @@ type planWalk struct {
 	cursor *versionCursor
 
 	// resolution is the run's input sets — computed once, before planning,
-	// and the only thing fanOutGet fans out over.
+	// and where triggerBuild takes this build's set from.
 	resolution setResolution
 
 	// assigned is the current triggered build's input set: which version
@@ -65,8 +65,9 @@ type planWalk struct {
 // runSteps executes steps in order. A `get` step triggers the build of the
 // version this run was created with — see runTriggeredBuild — and always
 // terminates this loop, since it delegates the rest of the plan to it.
-// A `task`/`put`/`agent` step is handled by runNonGetStep; `put`/`agent`
-// steps are never looked up in skippable and always execute.
+// Every other step is handled by runNonGetStep. Only a task or a block is
+// looked up in skippable; whether its chain could be skipped at all is
+// uncacheableReason's call.
 func runSteps(ctx context.Context, w planWalk, steps []config.Step) error {
 	w.index, w.visits = 0, map[int]int{}
 
@@ -92,7 +93,7 @@ func runSteps(ctx context.Context, w planWalk, steps []config.Step) error {
 				return err
 			}
 		case step.Get != "":
-			return w.fanOutGet(ctx, step, steps[w.index+1:])
+			return w.triggerBuild(ctx, step, steps[w.index+1:])
 		default:
 			done, err := w.runStep(ctx, step, steps)
 			if done {
@@ -136,7 +137,7 @@ func (w *planWalk) forgetUnfinishedChains(ctx context.Context, err error) {
 	}
 }
 
-// runStep runs one non-get (task/put/agent) step through execution, routing
+// runStep runs one non-get step through execution, routing
 // and chain-unskippable folding, advancing the walk. It returns done=true to
 // end the walk — with a nil error for a chain skip.
 func (w *planWalk) runStep(ctx context.Context, step config.Step, steps []config.Step) (bool, error) {
@@ -288,7 +289,7 @@ func recordCompletedStep(ctx context.Context, st store.Store, build string, i in
 	_ = st.RecordRunStep(context.WithoutCancel(ctx), resume.id, build, i, executedStepName(step))
 }
 
-// runNonGetStep runs a task/put/agent step and dispatches its hooks around the
+// runNonGetStep runs a non-get step and dispatches its hooks around the
 // outcome. A skipped (merkle-cached) step fires no hooks — it did not run, so
 // there is nothing for its observers to react to. When a green step is failed
 // by its own on_success/ensure hook, the true (failed) outcome is recorded so
@@ -359,12 +360,12 @@ func runNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, s
 	return res, final
 }
 
-// dispatchNonGetStep dispatches a task/put/agent step — the three kinds that,
-// unlike get, run in place and return a single new parentHash rather than
-// fanning out or delegating the remainder of the plan. It first evaluates the
-// step's when: guard (see evaluateStepGuard): a false guard skips only this
-// step. stepChainSkipped is only ever returned for a cache-matched task step;
-// put/agent steps are never chain-skippable.
+// dispatchNonGetStep dispatches a non-get step — the kinds that, unlike get,
+// run in place and return a single new parentHash rather than delegating the
+// remainder of the plan. It first evaluates the step's when: guard (see
+// evaluateStepGuard): a false guard skips only this step. stepChainSkipped is
+// only ever returned for a cache-matched task or block; which steps can never
+// be chain-skipped is uncacheableReason's call.
 func dispatchNonGetStep(ctx context.Context, r stepRunner, i int, step config.Step, skippable map[string]bool, parentHash string) (stepResult, error) {
 	step, err := resolveStepImage(ctx, r.cfg, r.jobName, step)
 	if err != nil {
@@ -494,5 +495,5 @@ func dispatchContainerKind(
 }
 
 func unrecognizedStep(i int) error {
-	return fmt.Errorf("step %d: unrecognized step (must be get, task, put, or agent)", i)
+	return fmt.Errorf("step %d: unrecognized step kind", i)
 }

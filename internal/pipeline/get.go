@@ -23,14 +23,14 @@ import (
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
-// fanOutGet resolves and (unless skippable) fetches the version this run's
+// triggerBuild resolves and (unless skippable) fetches the version this run's
 // build was created with, then runs the remainder of the plan against it — see
 // runTriggeredBuild. It always terminates the calling walk, since a get step
 // delegates the rest of the plan to its triggered build.
 //
 // One run is one build (see backlog.go): RunJob has already narrowed the
 // resolution to a single set and taken it, so there is at most one here.
-func (w *planWalk) fanOutGet(ctx context.Context, step config.Step, remainder []config.Step) error {
+func (w *planWalk) triggerBuild(ctx context.Context, step config.Step, remainder []config.Step) error {
 	i := w.index
 
 	// getCtx carries this get's own log identity, and deliberately does NOT
@@ -394,7 +394,7 @@ func currentBuild(ctx context.Context) string {
 func (w *planWalk) fetchInPlace(ctx context.Context, step config.Step, steps []config.Step) (bool, error) {
 	started := time.Now()
 
-	// Safe to stamp for the whole function, unlike fanOutGet's: this path
+	// Safe to stamp for the whole function, unlike triggerBuild's: this path
 	// runs no remainder. It advances the walk and returns, and the loop
 	// carries on with its own context.
 	ctx = withStepLogger(ctx, w.index, step)

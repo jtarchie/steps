@@ -443,16 +443,9 @@ func validateCachedNames(req StepCacheRequest) error {
 	}
 
 	for _, name := range req.Outputs {
-		err := config.ValidateArtifactName(name)
+		err := validateOutputName(name, req.OutputMapping)
 		if err != nil {
-			return fmt.Errorf("output %q: %w", name, err)
-		}
-
-		if mapped := mappedName(name, req.OutputMapping); mapped != name {
-			err = config.ValidateArtifactPath(mapped)
-			if err != nil {
-				return fmt.Errorf("output %q (mapped to %q): %w", name, mapped, err)
-			}
+			return err
 		}
 	}
 

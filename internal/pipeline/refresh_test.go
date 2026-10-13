@@ -436,8 +436,8 @@ jobs:
 
 // TestRunRefreshesResolvedVersionOnFanOutCacheSkip proves the OTHER skip path
 // calls recordResolvedVersion too: a job's FIRST get always fetches through
-// fanOutGet (see runTriggeredBuild's own comment on why), so once its chain
-// is cached, fanOutGet's cache-skip branch — not fetchGetStepInPlace's — is
+// triggerBuild (see runTriggeredBuild's own comment on why), so once its chain
+// is cached, triggerBuild's cache-skip branch — not fetchGetStepInPlace's — is
 // the one a second, unchanged run takes. Without the call there, an unpolled
 // resource's resource_checks row goes stale the moment its job starts being
 // skipped, even though the job keeps succeeding on the same version.

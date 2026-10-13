@@ -97,8 +97,8 @@ func resolveTransition(ctx context.Context, steps []config.Step, i int, step con
 // on it. It returns the default i+1 (and routedKey="") when the step has no
 // to: or didn't run, so a routing-free plan behaves exactly as a straight
 // line. A backward route past max_visits yields exhaustedErr (a job-level
-// failure) instead of routing. routedKey, non-empty only when the step
-// actually routed, is what runSteps uses to build the next step's Handoff.
+// failure) instead of routing. routedKey is non-empty only when the step
+// actually routed; the walk discards it, and only tests read it.
 func applyRouting(ctx context.Context, steps []config.Step, i int, step config.Step, disposition stepDisposition, verdict string, stepErr error, visits map[int]int) (nextIndex int, routedKey string, consumedErr, exhaustedErr error) {
 	if !step.Routes() || disposition != stepRan {
 		return i + 1, "", stepErr, nil

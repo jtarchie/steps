@@ -134,7 +134,7 @@ func runBranches(ctx context.Context, r stepRunner, i int, step config.Step, blo
 			branchRes, err := runNonGetStep(runCtx, r, i, branch, nil, blockHash)
 
 			// A try: branch tolerates its own failure HERE, because the plan
-			// walk never sees a branch — executeNonGetStep is where every
+			// walk never sees a branch — planWalk.runStep is where every
 			// other try: is tolerated, and runNonGetStep is as far up as a
 			// branch goes. Without this the identical wrapper was tolerated
 			// in a serial plan and propagated inside a block, which is the

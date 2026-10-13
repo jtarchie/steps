@@ -91,9 +91,9 @@ func chainHashes(chains []merkle.Chain) [][]string {
 
 // buildSkippableIndex returns, for every node hash reachable across chains,
 // whether every leaf merkle.Chain passing through it is already covered by a
-// prior succeeded job_runs row. Any Unskippable chain (contains a put or
-// agent step) is forced non-skippable everywhere along it — those steps
-// (and everything feeding them) must always run. A node hash shared by
+// prior succeeded job_runs row. Any Unskippable chain (one holding a step
+// merkle.planNonGetNode marks so) is forced non-skippable everywhere along it
+// — those steps (and everything feeding them) must always run. A node hash shared by
 // multiple chains is skippable only if ALL chains through it are skippable
 // (AND-rollup), which correctly forces get/task ancestors of an
 // unskippable branch to execute even if a sibling branch is independently

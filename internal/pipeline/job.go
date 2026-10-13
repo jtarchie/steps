@@ -313,11 +313,6 @@ func runJobPlan(
 	ctx context.Context, r stepRunner, job *config.Job, pinned map[string]string,
 	provider workspace.Provider, skipCache bool,
 ) error {
-	// Which versions this job has already fanned out over, read ONCE before
-	// planning so the planner and the executor judge the same set.
-	//
-	// --force (skipCache) skips the cache only; the cursor keeps filtering
-	// and recording (#145).
 	// Whatever triggered this run, its resources are re-checked first — see
 	// refreshResourceHistory. Best-effort by design: the resolution below
 	// builds from recorded history either way.
@@ -334,7 +329,19 @@ func runJobPlan(
 		}
 	}()
 
+	// Which versions this job has already fanned out over, read ONCE before
+	// planning so the planner and the executor judge the same set.
+	//
+	// --force (skipCache) skips the cache only; the cursor keeps filtering
+	// and recording (#145).
 	cursor, err := loadVersionCursor(ctx, r.st, job, !takenVersionsReopened(ctx))
+	if err != nil {
+		return fmt.Errorf("job %q: %w", job.Name, err)
+	}
+
+	// Which versions each of this job's resources has, read once before
+	// planning for the same reason the consumed set is.
+	history, err := loadResourceHistory(ctx, r.st, job)
 	if err != nil {
 		return fmt.Errorf("job %q: %w", job.Name, err)
 	}
@@ -344,13 +351,6 @@ func runJobPlan(
 	// the plan-time and run-time get-step resolution below, so a get step's
 	// check command runs at most once per job run instead of once during
 	// planning and again during execution.
-	// Which versions each of this job's resources has, read once before
-	// planning for the same reason the consumed set is.
-	history, err := loadResourceHistory(ctx, r.st, job)
-	if err != nil {
-		return fmt.Errorf("job %q: %w", job.Name, err)
-	}
-
 	cache := rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithResolvedVersions(history.get))
 
 	// The input sets this run will build — one per unconsumed step of the
@@ -469,8 +469,8 @@ func pruneHistory(ctx context.Context, st store.Store, cfg *config.Config, jobNa
 }
 
 // recordChainSucceeded records the leaf of a fully-executed chain as
-// succeeded, unless it contains a put or agent step (those chains are
-// never skippable, so recording job_runs for them would be unused).
+// succeeded, unless the chain is unskippable (see uncacheableReason): it is
+// never skipped, so a job_runs row for it would be unused.
 func recordChainSucceeded(ctx context.Context, r stepRunner, rootHash string, chainUnskippable bool) error {
 	if chainUnskippable {
 		return nil

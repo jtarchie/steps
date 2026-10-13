@@ -67,7 +67,7 @@ func TestGetStepLogsSayWhichGet(t *testing.T) {
 }
 
 // TestGetStepIdentityStopsAtTheGet is the other half, and the reason
-// fanOutGet stamps a scoped context instead of reassigning its own: a
+// triggerBuild stamps a scoped context instead of reassigning its own: a
 // triggered build runs the REMAINDER of the plan, and if it inherited the
 // get's identity every later step would report itself as that get.
 func TestGetStepIdentityStopsAtTheGet(t *testing.T) {
