@@ -34,6 +34,10 @@ type CheckShare struct {
 
 	mu      sync.Mutex
 	entries map[string]*sharedCheck
+
+	// joined, when set, is called as a caller joins a run already in flight:
+	// a test's way to know waiters are waiting without sleeping on it.
+	joined func()
 }
 
 type sharedCheck struct {
@@ -41,6 +45,8 @@ type sharedCheck struct {
 	at       time.Time
 	versions []map[string]any
 	err      error
+
+	leaderCancelled bool
 }
 
 // NewCheckShare shares answers for ttl.
@@ -91,7 +97,33 @@ func sharedCheckFor(ctx context.Context, command string, spec shell.RunnerSpec) 
 // do answers key from a fresh enough earlier run, from a run already in
 // flight, or by running check itself.
 func (s *CheckShare) do(ctx context.Context, key string, check func() ([]map[string]any, error)) ([]map[string]any, error) {
+	for {
+		entry, leader := s.join(key)
+		if leader {
+			return s.lead(ctx, key, entry, check)
+		}
+
+		select {
+		case <-entry.done:
+		case <-ctx.Done():
+			return nil, ctx.Err() //nolint:wrapcheck // the caller's own cancellation, as it was given
+		}
+
+		// The check ran under the leader's context, so a leader cancelled
+		// mid-check (its pipeline replaced or removed) failed for a reason
+		// that says nothing about the resource. A live waiter asks again.
+		if entry.leaderCancelled && ctx.Err() == nil {
+			continue
+		}
+
+		return cloneVersions(entry.versions), entry.err
+	}
+}
+
+// join answers the entry for key and whether the caller must run it.
+func (s *CheckShare) join(key string) (*sharedCheck, bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	now := time.Now()
 
@@ -101,25 +133,26 @@ func (s *CheckShare) do(ctx context.Context, key string, check func() ([]map[str
 		}
 	}
 
-	if entry, ok := s.entries[key]; ok {
-		s.mu.Unlock()
-
-		select {
-		case <-entry.done:
-			return cloneVersions(entry.versions), entry.err
-		case <-ctx.Done():
-			return nil, ctx.Err() //nolint:wrapcheck // the caller's own cancellation, as it was given
+	if entry, ok := s.entries[key]; ok && entry != nil {
+		if s.joined != nil {
+			s.joined()
 		}
+
+		return entry, false
 	}
 
 	entry := &sharedCheck{done: make(chan struct{})}
 	s.entries[key] = entry
-	s.mu.Unlock()
 
+	return entry, true
+}
+
+func (s *CheckShare) lead(ctx context.Context, key string, entry *sharedCheck, check func() ([]map[string]any, error)) ([]map[string]any, error) {
 	versions, err := check()
 
 	s.mu.Lock()
 	entry.at, entry.versions, entry.err = time.Now(), versions, err
+	entry.leaderCancelled = err != nil && ctx.Err() != nil
 
 	if err != nil {
 		delete(s.entries, key)

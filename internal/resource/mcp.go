@@ -691,9 +691,7 @@ func firstParsableObject(content []sdkmcp.Content) (map[string]any, bool) {
 			continue
 		}
 
-		var obj map[string]any
-
-		err := json.Unmarshal([]byte(tc.Text), &obj)
+		obj, err := decodeOutVersion([]byte(tc.Text))
 		if err == nil {
 			return obj, true
 		}

@@ -139,6 +139,11 @@ func mcpFixtureServer(t *testing.T) *httptest.Server {
 			return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "not json"}}}, nil
 		})
 
+	srv.AddTool(&sdkmcp.Tool{Name: "create_issue_snowflake", InputSchema: map[string]any{"type": "object"}},
+		func(_ context.Context, _ *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+			return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: `{"id": 1234567890123456789}`}}}, nil
+		})
+
 	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
@@ -625,6 +630,31 @@ func TestRunOutMCPUnparsableResultIsNilNotError(t *testing.T) {
 
 	if result != nil {
 		t.Errorf("result = %+v, want nil", result)
+	}
+}
+
+// A version minted by an mcp out: encodes the way one minted by a shell out:
+// does: a float64 cannot hold a snowflake id, and the recorded version would
+// name a different issue than the one the tool created.
+func TestRunOutMCPKeepsNumbersExact(t *testing.T) {
+	t.Parallel()
+
+	cfg := mcpFixtureConfig(t)
+	rt := mcpResourceType("list_issues")
+	rt.Config.MCP.Out = &config.MCPToolCall{Tool: "create_issue_snowflake"}
+
+	result, err := RunOut(context.Background(), cfg, rt, nil, map[string]any{}, map[string]any{}, PutInputs{}, t.TempDir())
+	if err != nil {
+		t.Fatalf("RunOut: %v", err)
+	}
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	if string(encoded) != `{"id":1234567890123456789}` {
+		t.Errorf("recorded %s, want the tool's digits verbatim", encoded)
 	}
 }
 

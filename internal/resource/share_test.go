@@ -90,6 +90,7 @@ func TestCheckShareCoalescesCallersInFlight(t *testing.T) {
 	t.Parallel()
 
 	share := NewCheckShare(time.Hour)
+	joins := countJoins(share)
 
 	var runs atomic.Int32
 
@@ -127,8 +128,7 @@ func TestCheckShareCoalescesCallersInFlight(t *testing.T) {
 		})
 	}
 
-	// Let the waiters reach the in-flight entry before it finishes.
-	time.Sleep(50 * time.Millisecond)
+	awaitJoins(joins, 5)
 	close(release)
 	wg.Wait()
 
@@ -159,5 +159,124 @@ func TestAPlacedCheckDoesNotShare(t *testing.T) {
 
 	if one == two {
 		t.Error("checks in different images shared a key")
+	}
+}
+
+// A shared check runs under its leader's context, so a leader whose pipeline
+// was replaced mid-check fails with ITS cancellation. That is no answer about
+// the resource, and a waiter whose own context is live must not inherit it.
+func TestCheckShareLeaderCancelDoesNotFailWaiters(t *testing.T) {
+	t.Parallel()
+
+	share := NewCheckShare(time.Hour)
+	joins := countJoins(share)
+
+	var runs atomic.Int32
+
+	leaderCtx, cancelLeader := context.WithCancel(t.Context())
+	started := make(chan struct{})
+
+	// The first run is the leader's, and lasts until its pipeline goes.
+	check := func() ([]map[string]any, error) {
+		if runs.Add(1) == 1 {
+			close(started)
+			<-leaderCtx.Done()
+
+			return nil, leaderCtx.Err()
+		}
+
+		return []map[string]any{{"ref": "a"}}, nil
+	}
+
+	var wg sync.WaitGroup
+
+	wg.Go(func() {
+		_, err := share.do(leaderCtx, "k", check)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("the cancelled leader got %v, want its own cancellation", err)
+		}
+	})
+
+	<-started
+
+	for range 3 {
+		wg.Go(func() {
+			got, err := share.do(t.Context(), "k", check)
+			if err != nil || len(got) != 1 {
+				t.Errorf("a live waiter got %v, %v from a cancelled leader", got, err)
+			}
+		})
+	}
+
+	awaitJoins(joins, 3)
+	cancelLeader()
+	wg.Wait()
+
+	if runs.Load() != 2 {
+		t.Errorf("ran %d checks, want 2: the cancelled leader's, then one new leader's for every waiter", runs.Load())
+	}
+}
+
+// A check that fails under a live leader is still every waiter's answer, even
+// when the failure looks like a cancellation: only the leader's own is retried.
+func TestCheckShareLiveLeaderFailureReachesWaiters(t *testing.T) {
+	t.Parallel()
+
+	share := NewCheckShare(time.Hour)
+	joins := countJoins(share)
+
+	var runs atomic.Int32
+
+	release := make(chan struct{})
+	started := make(chan struct{})
+
+	var versions []map[string]any
+
+	check := func() ([]map[string]any, error) {
+		if runs.Add(1) == 1 {
+			close(started)
+		}
+
+		<-release
+
+		return versions, context.DeadlineExceeded
+	}
+
+	var wg sync.WaitGroup
+
+	wg.Go(func() { _, _ = share.do(t.Context(), "k", check) })
+
+	<-started
+
+	for range 3 {
+		wg.Go(func() {
+			_, err := share.do(t.Context(), "k", check)
+			if err == nil {
+				t.Error("a waiter got no error from a failed check")
+			}
+		})
+	}
+
+	awaitJoins(joins, 3)
+	close(release)
+	wg.Wait()
+
+	if runs.Load() != 1 {
+		t.Errorf("ran %d checks, want 1: a live leader's failure is coalesced, not retried", runs.Load())
+	}
+}
+
+// countJoins reports each caller that joins a check already in flight. Its
+// buffer outlasts any test here, so a late join never blocks the share.
+func countJoins(share *CheckShare) <-chan struct{} {
+	joins := make(chan struct{}, 64)
+	share.joined = func() { joins <- struct{}{} }
+
+	return joins
+}
+
+func awaitJoins(joins <-chan struct{}, n int) {
+	for range n {
+		<-joins
 	}
 }
