@@ -425,6 +425,7 @@ func (s *Server) routes() error {
 	e.Renderer = renderer
 	e.HTTPErrorHandler = s.handleError
 
+	e.Use(refuseFraming)
 	e.Use(middleware.Recover())
 	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{
 		// A gzip writer holds bytes until a block fills, which is the one thing a live stream must not do; matched by route because htmx's sse extension adds text/event-stream to the Accept of every request.
@@ -602,6 +603,19 @@ func sameOriginMutations(next echo.HandlerFunc) echo.HandlerFunc {
 		if origin != "http://"+c.Request().Host && origin != "https://"+c.Request().Host {
 			return echo.NewHTTPError(http.StatusForbidden, "cross-origin request refused")
 		}
+
+		return next(c)
+	}
+}
+
+// refuseFraming closes what sameOriginMutations cannot see: a click inside a framed copy of the UI is a same-origin POST carrying the reader's cached credentials. Set before the handler runs, so a stream has them before its first flush. Referrer-Policy keeps a pipeline's and run's names, which are in every path here, out of the Referer sent to a docs link or an MCP authorization server.
+func refuseFraming(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		header := c.Response().Header()
+		header.Set("Content-Security-Policy", "frame-ancestors 'none'")
+		header.Set("X-Frame-Options", "DENY")
+		header.Set("X-Content-Type-Options", "nosniff")
+		header.Set("Referrer-Policy", "same-origin")
 
 		return next(c)
 	}
