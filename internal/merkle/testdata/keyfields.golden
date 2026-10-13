@@ -1,0 +1,289 @@
+{
+  "Agent": {
+    "agent": "reviewer",
+    "cpu_shares": 77,
+    "dir": "",
+    "endpoint": "Source.Endpoint/",
+    "env": [
+      "Env[0]"
+    ],
+    "image": "Image",
+    "inputs": [],
+    "max_questions": 25,
+    "max_tokens": 18,
+    "max_turns": 92,
+    "memory_bytes": 58,
+    "messages": [
+      "do it"
+    ],
+    "model": "qwen",
+    "network": "Network",
+    "outputs": [],
+    "privileged": true,
+    "reasoning_effort": "medium",
+    "system": "System",
+    "temperature": 0.305,
+    "tools": [
+      {
+        "allow": [
+          "Tools[0].Allow[0]"
+        ],
+        "answered_by": "Tools[0].AnsweredBy",
+        "args": {
+          "Tools[0].Args.key": "Tools[0].Args.value"
+        },
+        "builtin": "ask_user",
+        "default": "Tools[0].Default",
+        "description": "Tools[0].Description",
+        "max_calls": 90,
+        "max_output_bytes": 53,
+        "name": "Tools[0].Name",
+        "options_required": true,
+        "required": true,
+        "run": "Tools[0].Run"
+      }
+    ],
+    "top_p": 0.875,
+    "user": "User"
+  },
+  "Agent/as a sub-agent": {
+    "agent": "reviewer",
+    "dir": "",
+    "endpoint": "http://localhost:1234/v1/",
+    "inputs": [],
+    "max_tokens": 0,
+    "max_turns": 30,
+    "messages": [
+      "do it"
+    ],
+    "model": "qwen",
+    "outputs": [],
+    "reasoning_effort": "",
+    "system": "",
+    "temperature": null,
+    "tools": [
+      {
+        "agent": "extra",
+        "description": "",
+        "invocation": {
+          "agent": "extra",
+          "cpu_shares": 77,
+          "endpoint": "Source.Endpoint/",
+          "env": [
+            "Env[0]"
+          ],
+          "image": "Image",
+          "max_tokens": 18,
+          "max_turns": 92,
+          "memory_bytes": 58,
+          "model": "qwen",
+          "network": "Network",
+          "privileged": true,
+          "reasoning_effort": "medium",
+          "system": "System",
+          "temperature": 0.305,
+          "tools": [],
+          "top_p": 0.875,
+          "user": "User"
+        }
+      }
+    ],
+    "top_p": null
+  },
+  "Agent/cli": {
+    "agent": "reviewer",
+    "cli": "claude",
+    "cli_settings": "Settings",
+    "cpu_shares": 77,
+    "dir": "",
+    "endpoint": "",
+    "env": [
+      "Env[0]"
+    ],
+    "image": "Image",
+    "inputs": [],
+    "max_tokens": 18,
+    "max_turns": 92,
+    "memory_bytes": 58,
+    "messages": [
+      "do it"
+    ],
+    "model": "sonnet",
+    "network": "Network",
+    "outputs": [],
+    "privileged": true,
+    "reasoning_effort": "medium",
+    "system": "System",
+    "temperature": 0.305,
+    "tools": [],
+    "top_p": 0.875,
+    "user": "User"
+  },
+  "Assert": {
+    "code": 1,
+    "files": [
+      "Files[0]"
+    ],
+    "stdout": "Stdout",
+    "tool_calls": [
+      {
+        "args": {
+          "ToolCalls[0].Args.key": "ToolCalls[0].Args.value"
+        },
+        "name": "read_file"
+      }
+    ],
+    "verdict": "Verdict"
+  },
+  "ContainerLimits": {
+    "cpu_shares": 52,
+    "memory_bytes": 29
+  },
+  "MCPServer": {
+    "api_key_env": "Auth.APIKeyEnv",
+    "args": [
+      "Args[0]"
+    ],
+    "auth_type": "Auth.Type",
+    "client_id": "Auth.ClientID",
+    "client_secret_env": "Auth.ClientSecretEnv",
+    "command": "Command",
+    "cwd": "Cwd",
+    "endpoint": "http://localhost:1",
+    "name": "github",
+    "scopes": [
+      "Auth.Scopes[0]"
+    ]
+  },
+  "ResourceType/cache key": "062bb351116742146e781f8228661e804126a8f9389ba0ab0133d61bb078b70b",
+  "ResourceType/get": {
+    "cpu_shares": 77,
+    "env": [
+      "Env[0]"
+    ],
+    "expr_in": "Config.Expr.In",
+    "github": "Config.GitHub",
+    "image": "Image",
+    "in_template": "Config.In",
+    "mcp_in_args": {
+      "Config.MCP.In.Args.key": "Config.MCP.In.Args.value"
+    },
+    "mcp_in_tool": "Config.MCP.In.Tool",
+    "mcp_server": {
+      "auth_type": "",
+      "endpoint": "http://localhost:2",
+      "name": "Config.MCP.Server"
+    },
+    "memory_bytes": 58,
+    "network": "Network",
+    "privileged": true,
+    "source": null,
+    "user": "User",
+    "version": null
+  },
+  "ResourceType/put": {
+    "cpu_shares": 77,
+    "env": [
+      "Env[0]"
+    ],
+    "expr_out": "Config.Expr.Out",
+    "github": "Config.GitHub",
+    "image": "Image",
+    "inputs": [],
+    "mcp_out_args": {
+      "Config.MCP.Out.Args.key": "Config.MCP.Out.Args.value"
+    },
+    "mcp_out_tool": "Config.MCP.Out.Tool",
+    "mcp_server": {
+      "auth_type": "",
+      "endpoint": "http://localhost:2",
+      "name": "Config.MCP.Server"
+    },
+    "memory_bytes": 58,
+    "network": "Network",
+    "out_template": "Config.Out",
+    "params": null,
+    "privileged": true,
+    "source": null,
+    "user": "User"
+  },
+  "ToolSpec/builtin": [
+    {
+      "allow": [
+        "Allow[0]"
+      ],
+      "answered_by": "AnsweredBy",
+      "args": {
+        "Args.key": "Args.value"
+      },
+      "builtin": "run_shell",
+      "default": "Default",
+      "description": "Description",
+      "max_calls": 66,
+      "max_output_bytes": 12,
+      "name": "Name",
+      "options_required": true,
+      "required": true,
+      "run": "Run"
+    }
+  ],
+  "ToolSpec/custom": [
+    {
+      "allow": [
+        "Allow[0]"
+      ],
+      "answered_by": "AnsweredBy",
+      "args": {
+        "Args.key": "Args.value"
+      },
+      "builtin": "Builtin",
+      "default": "Default",
+      "description": "lints",
+      "max_calls": 66,
+      "max_output_bytes": 12,
+      "name": "lint",
+      "options_required": true,
+      "required": true,
+      "run": "golangci-lint run"
+    }
+  ],
+  "ToolSpec/mcp": [
+    {
+      "args": {
+        "Args.key": "Args.value"
+      },
+      "description": "Description",
+      "max_calls": 66,
+      "max_output_bytes": 12,
+      "mcp": "github",
+      "mcp_tool": "MCPTool",
+      "mcp_tools": [
+        "MCPTools[0]"
+      ],
+      "required": true,
+      "server": {
+        "auth_type": "",
+        "endpoint": "http://localhost:1",
+        "name": "github"
+      }
+    }
+  ],
+  "ToolSpec/sub-agent": [
+    {
+      "agent": "extra",
+      "description": "a helper",
+      "invocation": {
+        "agent": "extra",
+        "endpoint": "http://localhost:1234/v1/",
+        "max_tokens": 0,
+        "max_turns": 30,
+        "model": "qwen",
+        "reasoning_effort": "",
+        "system": "",
+        "temperature": null,
+        "tools": [],
+        "top_p": null
+      }
+    }
+  ]
+}

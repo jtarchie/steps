@@ -134,26 +134,29 @@ func perturbScalar(v reflect.Value) bool {
 	return true
 }
 
+// render is build's answer as the bytes a key is hashed from, or the error it gave.
+func render[T any](t *testing.T, value T, build func(T) (any, error)) string {
+	t.Helper()
+
+	built, err := build(value)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+
+	raw, err := json.Marshal(built)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(raw)
+}
+
 // unkeyed is every leaf of base that can change without build's answer changing — the fields a cached step would NOT be re-run for.
 func unkeyed[T any](t *testing.T, base T, build func(T) (any, error)) []string {
 	t.Helper()
 
-	render := func(value T) string {
-		built, err := build(value)
-		if err != nil {
-			return "error: " + err.Error()
-		}
-
-		raw, err := json.Marshal(built)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		return string(raw)
-	}
-
 	// The base goes through the same copy as every variant, so a difference is the perturbation and never the round trip.
-	before := render(deepCopy(t, base))
+	before := render(t, deepCopy(t, base), build)
 
 	var paths []string
 
@@ -165,7 +168,7 @@ func unkeyed[T any](t *testing.T, base T, build func(T) (any, error)) []string {
 		changed := deepCopy(t, base)
 		perturb(resolve(reflect.ValueOf(&changed).Elem(), path))
 
-		if render(changed) == before {
+		if render(t, changed, build) == before {
 			silent = append(silent, path)
 		}
 	}
@@ -209,11 +212,53 @@ const (
 type keyProbe struct {
 	name   string
 	silent func(t *testing.T) []string
-	want   map[string]string
+	// filled is the builder's bytes with every keyed leaf but unfilled set at once (fillKeyed), which keyfields.golden pins.
+	filled func(t *testing.T, p keyProbe) string
+	// unfilled are the leaves that select ANOTHER form (a grant's agent: or mcp:): setting one would hash that form instead of this one.
+	unfilled []string
+	// enums are the leaves only a listed value is accepted for, given one here instead of their path.
+	enums map[string]any
+	want  map[string]string
+}
+
+func probeOf[T any](name string, base T, want map[string]string, build func(T) (any, error)) keyProbe {
+	return keyProbe{
+		name:   name,
+		want:   want,
+		silent: func(t *testing.T) []string { return unkeyed(t, base, build) },
+		filled: func(t *testing.T, p keyProbe) string {
+			skip := maps.Clone(want)
+			for _, leaf := range p.unfilled {
+				skip[leaf] = "selects another form"
+			}
+
+			filled := fillKeyed(t, base, skip)
+
+			for path, value := range p.enums {
+				resolve(reflect.ValueOf(&filled).Elem(), path).Set(reflect.ValueOf(value))
+			}
+
+			return render(t, filled, build)
+		},
+	}
+}
+
+func (p keyProbe) leaving(leaves ...string) keyProbe {
+	p.unfilled = leaves
+
+	return p
+}
+
+func (p keyProbe) choosing(enums map[string]any) keyProbe {
+	p.enums = enums
+
+	return p
 }
 
 func keyProbes() []keyProbe {
 	rtype := config.ResourceType{Name: "git", Limits: &config.ContainerLimits{}}
+	// The server is named what fillKeyed writes into Config.MCP.Server, so the filled type's mcp: stage resolves and is pinned too.
+	rtypeCfg := &config.Config{MCPServers: []config.MCPServer{{Name: "Config.MCP.Server", Endpoint: "http://localhost:2"}}}
 	server := config.MCPServer{Name: "github", Endpoint: "http://localhost:1"}
 	source := config.AgentSource{Model: "lmstudio/qwen"}
 	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
@@ -229,17 +274,17 @@ func keyProbes() []keyProbe {
 		return AgentContentMap(cfg, step, ri)
 	}
 
+	agentEnums := map[string]any{"ReasoningEffort": "medium"}
+
 	grants := &config.Config{
 		MCPServers: []config.MCPServer{server},
 		Agents:     []config.Agent{{Name: "extra", Source: source, Description: "a helper"}},
 	}
 
 	grant := func(name string, spec config.ToolSpec, want map[string]string) keyProbe {
-		return keyProbe{name: "ToolSpec/" + name, want: want, silent: func(t *testing.T) []string {
-			return unkeyed(t, spec, func(spec config.ToolSpec) (any, error) {
-				return toolSpecsContent(grants, []config.ToolSpec{spec})
-			})
-		}}
+		return probeOf("ToolSpec/"+name, spec, want, func(spec config.ToolSpec) (any, error) {
+			return toolSpecsContent(grants, []config.ToolSpec{spec})
+		})
 	}
 
 	resourceType := map[string]string{"Name": "source: config.ResourceType — a step is keyed by what the type DOES, so a rename re-runs nothing and two types doing the same thing share an entry", "Config.Check": notThisVerb, "Config.Webhook": derivedFlag, "Config.Cron": derivedFlag}
@@ -281,76 +326,53 @@ func keyProbes() []keyProbe {
 	}
 
 	return []keyProbe{
-		{name: "ContainerLimits", want: map[string]string{}, silent: func(t *testing.T) []string {
-			return unkeyed(t, config.ContainerLimits{}, func(l config.ContainerLimits) (any, error) {
-				content := map[string]any{}
-				withIsolation(false, &l, content)
+		probeOf("ContainerLimits", config.ContainerLimits{}, map[string]string{}, func(l config.ContainerLimits) (any, error) {
+			content := map[string]any{}
+			withIsolation(false, &l, content)
 
-				return content, nil
-			})
-		}},
-		{name: "Assert", want: map[string]string{
+			return content, nil
+		}),
+		probeOf("Assert", config.Assert{ToolCalls: []config.ExpectedToolCall{{Name: "read_file"}}}, map[string]string{
 			"Execution": offTheStep, "Outcome": offTheStep,
 			"Nudge": undocumented + ", and it probably should not be: a nudge puts a message into the live conversation and makes the verdict tool refuse, so it turns a run that would have FAILED into one that succeeds — and that success is cached. Removing nudge: to prove a prompt works unaided (the reason its doc gives for it being opt-in) then serves the cached green without asking the model. An earlier reason recorded here said a nudge only acts on a failed step, which is never a cache hit; that was wrong. Reported 2026-09-19 with a recommendation to key it",
-		}, silent: func(t *testing.T) []string {
-			return unkeyed(t, config.Assert{ToolCalls: []config.ExpectedToolCall{{Name: "read_file"}}}, func(a config.Assert) (any, error) {
-				return assertContent(&a), nil
-			})
-		}},
-		{name: "ResourceType/get", want: with(resourceType, map[string]string{"Config.Out": notThisVerb}), silent: func(t *testing.T) []string {
-			return unkeyed(t, rtype, func(rt config.ResourceType) (any, error) {
-				return GetNodeContent(&config.Config{}, config.Step{Get: "repo"}, rt, nil, nil, nil)
-			})
-		}},
-		{name: "ResourceType/put", want: with(resourceType, map[string]string{"Config.In": notThisVerb}), silent: func(t *testing.T) []string {
-			return unkeyed(t, rtype, func(rt config.ResourceType) (any, error) {
-				return PutNodeContent(&config.Config{}, config.Step{Put: "repo"}, rt, nil, nil, nil, nil, false)
-			})
-		}},
-		{name: "ResourceType/cache key", want: with(resourceType, map[string]string{"Config.Out": notThisVerb}), silent: func(t *testing.T) []string {
-			return unkeyed(t, rtype, func(rt config.ResourceType) (any, error) {
-				return ResourceCacheKey(&config.Config{}, rt, nil, nil, nil, nil)
-			})
-		}},
-		{name: "MCPServer", want: map[string]string{
+		}, func(a config.Assert) (any, error) {
+			return assertContent(&a), nil
+		}),
+		probeOf("ResourceType/get", rtype, with(resourceType, map[string]string{"Config.Out": notThisVerb}), func(rt config.ResourceType) (any, error) {
+			return GetNodeContent(rtypeCfg, config.Step{Get: "repo"}, rt, nil, nil, nil)
+		}),
+		probeOf("ResourceType/put", rtype, with(resourceType, map[string]string{"Config.In": notThisVerb}), func(rt config.ResourceType) (any, error) {
+			return PutNodeContent(rtypeCfg, config.Step{Put: "repo"}, rt, nil, nil, nil, nil, false)
+		}),
+		probeOf("ResourceType/cache key", rtype, with(resourceType, map[string]string{"Config.Out": notThisVerb}), func(rt config.ResourceType) (any, error) {
+			return ResourceCacheKey(rtypeCfg, rt, nil, nil, nil, nil)
+		}),
+		probeOf("MCPServer", server, map[string]string{
 			"Auth.CallbackPort": "source: config.MCPServerAuth — read only by `steps mcp login`, so no step ever runs with it",
-		}, silent: func(t *testing.T) []string {
-			return unkeyed(t, server, func(srv config.MCPServer) (any, error) {
-				return mcpServerContent(&config.Config{MCPServers: []config.MCPServer{srv}}, "github")
-			})
-		}},
-		grant("builtin", config.ToolSpec{Builtin: "run_shell"}, unusedByGrant("MCPTool", "MCPTools")),
-		grant("custom", config.ToolSpec{Name: "lint", Description: "lints", Run: "golangci-lint run"}, unusedByGrant("MCPTool", "MCPTools")),
+		}, func(srv config.MCPServer) (any, error) {
+			return mcpServerContent(&config.Config{MCPServers: []config.MCPServer{srv}}, "github")
+		}),
+		grant("builtin", config.ToolSpec{Builtin: "run_shell"}, unusedByGrant("MCPTool", "MCPTools")).leaving("Agent", "MCP"),
+		grant("custom", config.ToolSpec{Name: "lint", Description: "lints", Run: "golangci-lint run"}, unusedByGrant("MCPTool", "MCPTools")).leaving("Agent", "MCP"),
 		grant("sub-agent", config.ToolSpec{Agent: "extra", Description: "a helper"}, unusedByGrant(
 			"Allow", "AnsweredBy", "Args", "Builtin", "Default", "MCP", "MCPTool", "MCPTools", "MaxCalls", "MaxOutputBytes", "Name", "OptionsRequired", "Required", "Run")),
-		grant("mcp", config.ToolSpec{MCP: "github"}, unusedByGrant("Allow", "AnsweredBy", "Builtin", "Default", "Name", "OptionsRequired", "Run")),
-		{name: "Agent", want: with(agentSilent, map[string]string{
+		grant("mcp", config.ToolSpec{MCP: "github"}, unusedByGrant("Allow", "AnsweredBy", "Builtin", "Default", "Name", "OptionsRequired", "Run")).leaving("Agent"),
+		// ask_user is granted so that max_questions:, which is keyed only for an agent that can ask, is probed rather than skipped.
+		probeOf("Agent", config.Agent{Name: "reviewer", Source: source, Tools: []config.ToolSpec{{Builtin: "ask_user"}}}, with(agentSilent, map[string]string{
 			"Tools[0].Timeout": operational, "Tools[0].MCPTool": otherForm, "Tools[0].MCPTools": otherForm,
-		}), silent: func(t *testing.T) []string {
-			// ask_user is granted so that max_questions:, which is keyed only for an agent that can ask, is probed rather than skipped.
-			agent := config.Agent{Name: "reviewer", Source: source, Tools: []config.ToolSpec{{Builtin: "ask_user"}}}
-
-			return unkeyed(t, agent, func(a config.Agent) (any, error) { return agentContent(a) })
-		}},
-		{name: "Agent/cli", want: func() map[string]string {
+		}), func(a config.Agent) (any, error) { return agentContent(a) }).leaving("Tools[0].Agent", "Tools[0].MCP").choosing(agentEnums),
+		probeOf("Agent/cli", config.Agent{Name: "reviewer", Source: config.AgentSource{Model: "@claude/sonnet"}}, func() map[string]string {
 			// Everything a hosted agent leaves out, MINUS settings: — the one field that exists only here, and must move the key.
 			out := with(agentSilent, map[string]string{"MaxQuestions": "source: AgentContentMap keys max_questions: only for an agent that grants ask_user, and this one grants nothing"})
 			delete(out, "Settings")
 
 			return out
-		}(), silent: func(t *testing.T) []string {
-			agent := config.Agent{Name: "reviewer", Source: config.AgentSource{Model: "@claude/sonnet"}}
-
-			return unkeyed(t, agent, func(a config.Agent) (any, error) { return agentContent(a) })
-		}},
-		{name: "Agent/as a sub-agent", want: with(agentSilent, map[string]string{
+		}(), func(a config.Agent) (any, error) { return agentContent(a) }).choosing(agentEnums).leaving("Source.Endpoint", "Tools"),
+		probeOf("Agent/as a sub-agent", config.Agent{Name: "extra", Source: source, Description: "a helper"}, with(agentSilent, map[string]string{
 			"MaxQuestions": "source: AgentContentMap keys max_questions: only for an agent that grants ask_user, and this child grants nothing",
-		}), silent: func(t *testing.T) []string {
-			parent := config.Agent{Name: "reviewer", Source: source, Tools: []config.ToolSpec{{Agent: "extra"}}}
-			child := config.Agent{Name: "extra", Source: source, Description: "a helper"}
-
-			return unkeyed(t, child, func(a config.Agent) (any, error) { return agentContent(parent, a) })
-		}},
+		}), func(a config.Agent) (any, error) {
+			return agentContent(config.Agent{Name: "reviewer", Source: source, Tools: []config.ToolSpec{{Agent: "extra"}}}, a)
+		}).choosing(agentEnums).leaving("Tools"),
 	}
 }
 
