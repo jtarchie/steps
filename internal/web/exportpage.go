@@ -74,6 +74,9 @@ func startOfDay(now time.Time) time.Time {
 	return time.Date(year, month, day, 0, 0, 0, 0, now.Location())
 }
 
+// exportActions are the verbs whose target is an export's name; a job or a server may share that name and is a different thing.
+var exportActions = []string{"mcp call", "mcp authorize", "mcp disconnect"} //nolint:gochecknoglobals // a fixed vocabulary
+
 // recentExportCalls is how many of an export's calls its page shows before linking the whole log.
 const recentExportCalls = 10
 
@@ -98,7 +101,7 @@ func (s *Server) handleExportPage(c *echo.Context) error {
 	ctx := c.Request().Context()
 	row := s.exportRowFor(ctx, pipeline, export)
 
-	recent, err := pipeline.Store.Reader().Activity(ctx, store.ActivityFilter{Pipeline: pipeline.Slug, Target: export.Name, Limit: recentExportCalls})
+	recent, err := pipeline.Store.Reader().Activity(ctx, store.ActivityFilter{Pipeline: pipeline.Slug, Actions: exportActions, Target: export.Name, Limit: recentExportCalls})
 	if err != nil {
 		return echoError(err)
 	}

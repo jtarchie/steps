@@ -84,7 +84,9 @@ Three roles, Concourse's, each including the one below it:
 | `operator` | trigger, retry, approve, reject, answer, abort, release, pause and unpause |
 | `admin` | set, rename and destroy pipelines, connect and test MCP servers, and read the [activity log](web.md#activity) |
 
-Each `--role` is a rule about the signed-in person, an [expr](https://expr-lang.org) expression over `Provider` (`local`, `github`, `google`), `UserID` (the account name, GitHub login or Google address), `Email`, `Organizations` and `Groups`. A person has the highest role whose rule holds.
+Each `--role` is a rule about the signed-in person, an [expr](https://expr-lang.org) expression over `Provider` (`local`, `github`, `google`), `UserID` (the account name, GitHub login or Google address), `ID` (the provider's own id for the account — GitHub's numeric user id, Google's subject, a local account's name), `Email`, `Organizations` and `Groups`.
+
+`UserID` and `ID` differ only for GitHub, where a login can be renamed and then registered by somebody else. A rule naming `UserID == "alice"` follows the login; one naming `ID == "583231"` follows the account, whatever it is called. Use whichever you mean. A person has the highest role whose rule holds.
 
 - **No `--role` at all** keeps today's behaviour: everyone signed in may do everything.
 - **With any `--role`, an `admin` rule is required**, or nobody could set a pipeline and the daemon would be stuck as it stands. A `viewer` rule left out lets anyone signed in read; `operator` left out means only admins act.

@@ -104,19 +104,23 @@ func (s accountsSuite) TestAUserIsReplacedAtEachSignIn(t *testing.T) {
 
 	accounts := s.open(t)
 
-	err := accounts.SaveUser(ctxFor(t), store.User{Actor: "github:alex", Email: "alex@acme.dev", Organizations: []string{"acme"}, Groups: []string{"acme/eng", "acme/oncall"}, RefreshedAt: time.Now()})
+	err := accounts.SaveUser(ctxFor(t), store.User{Actor: "github:alex", AccountID: "7", Email: "alex@acme.dev", Organizations: []string{"acme"}, Groups: []string{"acme/eng", "acme/oncall"}, RefreshedAt: time.Now()})
 	if err != nil {
 		t.Fatalf("SaveUser: %v", err)
 	}
 
-	err = accounts.SaveUser(ctxFor(t), store.User{Actor: "github:alex", Email: "alex@acme.dev", Organizations: []string{"acme"}, Groups: []string{"acme/eng"}, RefreshedAt: time.Now()})
+	err = accounts.SaveUser(ctxFor(t), store.User{Actor: "github:alex", AccountID: "7", Email: "alex@acme.dev", Organizations: []string{"acme"}, Groups: []string{"acme/eng"}, RefreshedAt: time.Now()})
 	if err != nil {
 		t.Fatalf("SaveUser again: %v", err)
 	}
 
 	user, found, err := accounts.FindUser(ctxFor(t), "github:alex")
-	if err != nil || !found || user.Email != "alex@acme.dev" || strings.Join(user.Groups, ",") != "acme/eng" || len(user.Organizations) != 1 {
-		t.Fatalf("FindUser = %+v, %v, %v; want the second sign-in's groups only", user, found, err)
+	if err != nil || !found {
+		t.Fatalf("FindUser = %v, %v", found, err)
+	}
+
+	if got := user.AccountID + " " + user.Email + " " + strings.Join(user.Organizations, ",") + " " + strings.Join(user.Groups, ","); got != "7 alex@acme.dev acme acme/eng" {
+		t.Fatalf("FindUser = %q; want the second sign-in's account, email, organizations and groups only", got)
 	}
 
 	_, found, err = accounts.FindUser(ctxFor(t), "github:nobody")

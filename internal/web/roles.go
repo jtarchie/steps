@@ -52,7 +52,9 @@ type Identity struct {
 	// Provider is where the name came from: local, github, google.
 	Provider string
 	// UserID is the name within it: a local account, a GitHub login, a Google address.
-	UserID        string
+	UserID string
+	// ID is the provider's own id for the account, which a rename does not change: GitHub's numeric user id, Google's subject, and for a local account its name. A rule that must not follow a renamed GitHub login onto whoever registers it next names this rather than UserID.
+	ID            string
 	Email         string
 	Organizations []string
 	Groups        []string
@@ -134,7 +136,7 @@ func (r Roles) highest(id Identity) Role {
 
 // identityOf is what the rules see of a person: for a provider's account, what it said at their last sign-in, read from the daemon's own record and never from anything the browser carries.
 func (s *Server) identityOf(ctx context.Context, who actor.Actor) Identity {
-	id := Identity{Provider: who.Kind, UserID: who.ID}
+	id := Identity{Provider: who.Kind, UserID: who.ID, ID: who.ID}
 
 	if s.sessions == nil || who.Kind == "local" {
 		return id
@@ -149,6 +151,9 @@ func (s *Server) identityOf(ctx context.Context, who actor.Actor) Identity {
 
 	if found {
 		id.Email, id.Organizations, id.Groups = user.Email, user.Organizations, user.Groups
+		if user.AccountID != "" {
+			id.ID = user.AccountID
+		}
 	}
 
 	return id

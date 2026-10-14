@@ -60,6 +60,7 @@ func (r *Reader) Activity(ctx context.Context, filter store.ActivityFilter) ([]s
 		WHERE (? = '' OR pipeline = ? OR pipeline_id = (SELECT id FROM pipelines WHERE name = ?))
 		  AND (? = '' OR actor = ?)
 		  AND (? = '' OR action = ?)
+		  AND (? = 0 OR action IN (SELECT value FROM json_each(?)))
 		  AND (? = '' OR target = ?)
 		  AND (? = '' OR at >= ?)
 		  AND (? = 0 OR id < ?)
@@ -70,6 +71,7 @@ func (r *Reader) Activity(ctx context.Context, filter store.ActivityFilter) ([]s
 		filter.Pipeline, filter.Pipeline, filter.Pipeline,
 		filter.Actor, filter.Actor,
 		filter.Action, filter.Action,
+		len(filter.Actions), jsonList(filter.Actions),
 		filter.Target, filter.Target,
 		since, since,
 		filter.Before, filter.Before,

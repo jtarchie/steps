@@ -86,3 +86,21 @@ func connect(t *testing.T, server *Server, accounts store.Accounts) {
 
 	server.recordGrantActivity(t.Context(), server.Lookup("ops"), grant, "mcp call", `{"tool":"github__search_issues"}`)
 }
+
+// TestTheExportPageShowsOnlyAgentActivity: a job sharing the export's name is a different thing, and triggering it is not a call to the export.
+func TestTheExportPageShowsOnlyAgentActivity(t *testing.T) {
+	t.Parallel()
+
+	server, accounts := exportServer(t)
+	connect(t, server, accounts)
+
+	err := server.Lookup("ops").Store.RecordActivity(t.Context(), store.ActivityEntry{Actor: "local:alex", Action: "trigger", Target: "support"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page := stripTags(serve(t, server, http.MethodGet, "/p/ops/mcp/exports/support", "", "alex").Body.String())
+	if !strings.Contains(page, "mcp call") || strings.Contains(page, "trigger") {
+		t.Errorf("the export page should list the agent's call and not a job's trigger:\n%s", page)
+	}
+}

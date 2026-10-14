@@ -74,7 +74,7 @@
         },
         "access": {
           "type": "string",
-          "description": "Who may connect: a rule over the signed-in person (Provider, UserID, Email, Organizations, Groups). Required."
+          "description": "Who may connect: a rule over the signed-in person (Provider, UserID, ID, Email, Organizations, Groups). Required."
         },
         "tools": {
           "type": "array",
@@ -93,7 +93,7 @@
     "access": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Narrows who may see and operate this pipeline on a daemon people sign in to. Each rule is an expression over the signed-in person (Provider, UserID, Email, Organizations, Groups) and can only narrow what the daemon's --role rules grant; admins are not narrowed.",
+      "description": "Narrows who may see and operate this pipeline on a daemon people sign in to. Each rule is an expression over the signed-in person (Provider, UserID, ID, Email, Organizations, Groups) and can only narrow what the daemon's --role rules grant; admins are not narrowed.",
       "properties": {
         "viewer": {
           "type": "string",

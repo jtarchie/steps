@@ -47,6 +47,8 @@ type ActivityFilter struct {
 	Pipeline string
 	Actor    string
 	Action   string
+	// Actions keeps entries with any of these actions; empty keeps all. Beside Action because a page about one thing — an export — asks for every verb that thing has.
+	Actions []string
 	// Target matches what the verb was done to: a job, a run, an export.
 	Target string
 	// Since keeps only entries at or after it; zero keeps all.

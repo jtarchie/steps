@@ -89,7 +89,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 26
+const schemaVersion = 27
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -919,6 +919,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- copy, which is what keeps a rule written as an exclusion honest.
 CREATE TABLE IF NOT EXISTS users (
     actor         TEXT PRIMARY KEY,
+    account_id    TEXT NOT NULL,
     email         TEXT NOT NULL,
     organizations TEXT NOT NULL,
     groups_json   TEXT NOT NULL,

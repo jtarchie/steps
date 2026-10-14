@@ -38,6 +38,8 @@ func (s suite) TestActivityIsNewestFirstAndFilters(t *testing.T) {
 		{store.ActivityFilter{Pipeline: "app", Actor: "local:alex"}, 1},
 		{store.ActivityFilter{Limit: 1}, 1},
 		{store.ActivityFilter{Target: "build"}, 1},
+		{store.ActivityFilter{Actions: []string{"pause", "nothing"}}, 1},
+		{store.ActivityFilter{Actions: []string{"pause", "trigger"}}, 3},
 		{store.ActivityFilter{Since: time.Now().Add(time.Hour)}, 0},
 		{store.ActivityFilter{Since: time.Now().Add(-time.Hour)}, 3},
 		{store.ActivityFilter{Before: all[0].ID}, 2},

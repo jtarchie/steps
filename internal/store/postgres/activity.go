@@ -49,9 +49,10 @@ func (r *Reader) Activity(ctx context.Context, filter store.ActivityFilter) ([]s
 		  AND ($4 = '' OR target = $4)
 		  AND ($5::timestamptz IS NULL OR at >= $5)
 		  AND ($6 = 0 OR id < $6)
+		  AND (cardinality($8::text[]) = 0 OR action = ANY($8::text[]))
 		ORDER BY id DESC
 		LIMIT $7
-	`, []any{filter.Pipeline, filter.Actor, filter.Action, filter.Target, sinceArg(filter.Since), filter.Before, rowLimit(filter.Limit)}, func(rows *sql.Rows) (store.ActivityEntry, error) {
+	`, []any{filter.Pipeline, filter.Actor, filter.Action, filter.Target, sinceArg(filter.Since), filter.Before, rowLimit(filter.Limit), nonNilStrings(filter.Actions)}, func(rows *sql.Rows) (store.ActivityEntry, error) {
 		var (
 			entry store.ActivityEntry
 			at    sql.NullTime
@@ -71,4 +72,13 @@ func sinceArg(since time.Time) any {
 	}
 
 	return since.UTC()
+}
+
+// nonNilStrings is an empty array rather than NULL for a list nobody gave.
+func nonNilStrings(list []string) []string {
+	if list == nil {
+		return []string{}
+	}
+
+	return list
 }

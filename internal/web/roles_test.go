@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
@@ -43,7 +44,7 @@ func TestARoleRuleMustCompileAndNameARole(t *testing.T) {
 func TestEachRoleIncludesTheOnesBelow(t *testing.T) {
 	t.Parallel()
 
-	roles, err := CompileRoles([]string{`admin=UserID == "root"`, `operator="acme/eng" in Groups`, `viewer=Email endsWith "@acme.dev"`})
+	roles, err := CompileRoles([]string{`admin=UserID == "root" || ID == "583231"`, `operator="acme/eng" in Groups`, `viewer=Email endsWith "@acme.dev"`})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +57,7 @@ func TestEachRoleIncludesTheOnesBelow(t *testing.T) {
 		{Identity{UserID: "dan", Groups: []string{"acme/eng"}}, RoleOperator},
 		{Identity{UserID: "eve", Email: "eve@acme.dev"}, RoleViewer},
 		{Identity{UserID: "mallory", Email: "m@evil.example"}, 0},
+		{Identity{UserID: "renamed", ID: "583231"}, RoleAdmin},
 	} {
 		if got := roles.highest(tc.id); got != tc.want {
 			t.Errorf("%+v is %v, want %v", tc.id, got, tc.want)
@@ -117,4 +119,38 @@ func postAs(t *testing.T, server *Server, token string) string {
 	server.Handler().ServeHTTP(rec, req)
 
 	return rec.Body.String()
+}
+
+// TestARuleCanNameTheAccountRatherThanTheLogin: the stored account id reaches the rules, so a rule written against GitHub's numeric id holds for that account whatever its login is now, and not for a newcomer who registers the old login.
+func TestARuleCanNameTheAccountRatherThanTheLogin(t *testing.T) {
+	t.Parallel()
+
+	_, pipeline := testPipeline(t)
+
+	accounts, err := sqlite.OpenAccounts(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatalf("OpenAccounts: %v", err)
+	}
+
+	t.Cleanup(func() { _ = accounts.Close() })
+
+	server, err := New([]*Pipeline{pipeline}, nil, WithSessions(accounts), WithSignInProviders(GitHubSignIn("c", "s", "http://x", nil)))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for login, accountID := range map[string]string{"alice-renamed": "583231", "alice": "999999"} {
+		err := accounts.SaveUser(t.Context(), store.User{Actor: "github:" + login, AccountID: accountID, RefreshedAt: time.Now()})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if id := server.identityOf(t.Context(), actor.Actor{Kind: "github", ID: "alice-renamed"}); id.ID != "583231" || id.UserID != "alice-renamed" {
+		t.Errorf("identityOf(alice-renamed) = %+v; want the account id and the current login", id)
+	}
+
+	if id := server.identityOf(t.Context(), actor.Actor{Kind: "github", ID: "alice"}); id.ID != "999999" {
+		t.Errorf("identityOf(alice) = %+v; the newcomer must carry their own account id, not the old one", id)
+	}
 }

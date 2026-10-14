@@ -134,10 +134,10 @@ func (a *Accounts) SaveUser(ctx context.Context, user store.User) error {
 	orgs, groups := jsonStrings(user.Organizations), jsonStrings(user.Groups)
 
 	_, err := a.held.db.ExecContext(ctx, `
-		INSERT INTO users (actor, email, organizations, groups_json, refreshed_at) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT (actor) DO UPDATE SET email = excluded.email, organizations = excluded.organizations,
+		INSERT INTO users (actor, account_id, email, organizations, groups_json, refreshed_at) VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (actor) DO UPDATE SET account_id = excluded.account_id, email = excluded.email, organizations = excluded.organizations,
 			groups_json = excluded.groups_json, refreshed_at = excluded.refreshed_at
-	`, user.Actor, user.Email, orgs, groups, user.RefreshedAt.UTC().Format(sortableNano))
+	`, user.Actor, user.AccountID, user.Email, orgs, groups, user.RefreshedAt.UTC().Format(sortableNano))
 	if err != nil {
 		return fmt.Errorf("could not record user %q: %w", user.Actor, err)
 	}
@@ -153,8 +153,8 @@ func (a *Accounts) FindUser(ctx context.Context, who string) (store.User, bool, 
 	)
 
 	err := a.held.reads.QueryRowContext(ctx, `
-		SELECT actor, email, organizations, groups_json, refreshed_at FROM users WHERE actor = ?
-	`, who).Scan(&user.Actor, &user.Email, &orgs, &groups, &refreshedAt)
+		SELECT actor, account_id, email, organizations, groups_json, refreshed_at FROM users WHERE actor = ?
+	`, who).Scan(&user.Actor, &user.AccountID, &user.Email, &orgs, &groups, &refreshedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.User{}, false, nil
 	}

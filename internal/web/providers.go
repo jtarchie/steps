@@ -68,7 +68,7 @@ func GoogleSignIn(clientID, secret, externalURL string, client *http.Client) Sig
 }
 
 func describeGitHub(ctx context.Context, client *http.Client, user goth.User) (store.User, error) {
-	described := store.User{Actor: actor.Actor{Kind: "github", ID: user.NickName}.String(), Email: user.Email}
+	described := store.User{Actor: actor.Actor{Kind: "github", ID: user.NickName}.String(), AccountID: user.UserID, Email: user.Email}
 
 	var orgs []struct {
 		Login string `json:"login"`
@@ -147,7 +147,7 @@ func describeGoogle(_ context.Context, _ *http.Client, user goth.User) (store.Us
 		return store.User{}, errors.New("google has not verified this account's email address")
 	}
 
-	described := store.User{Actor: actor.Actor{Kind: "google", ID: user.Email}.String(), Email: user.Email}
+	described := store.User{Actor: actor.Actor{Kind: "google", ID: user.Email}.String(), AccountID: user.UserID, Email: user.Email}
 
 	// hd is the Workspace domain, absent for a personal account.
 	if domain, ok := user.RawData["hd"].(string); ok && domain != "" {

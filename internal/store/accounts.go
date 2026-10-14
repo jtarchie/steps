@@ -60,6 +60,8 @@ type Session struct {
 type User struct {
 	// Actor is who they are to every record, actor.Actor's stored form.
 	Actor string
+	// AccountID is the provider's own id for the account, which survives a rename where the name in Actor does not: GitHub's numeric user id, Google's subject.
+	AccountID string
 	// Email is the address the provider gave, empty when it gave none.
 	Email string
 	// Organizations and Groups are what permission rules match on: GitHub

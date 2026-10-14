@@ -11,6 +11,7 @@ import (
 
 	"github.com/markbates/goth"
 
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
@@ -86,10 +87,7 @@ func TestSigningInWithGitHub(t *testing.T) {
 
 	signsInAsAlex(t, server, callback, started)
 
-	user, found, err := accounts.FindUser(t.Context(), "github:alex")
-	if err != nil || !found || user.Email != "alex@acme.dev" || strings.Join(user.Groups, ",") != "acme/eng" || strings.Join(user.Organizations, ",") != "acme" {
-		t.Errorf("FindUser = %+v, %v, %v; want alex with acme and acme/eng", user, found, err)
-	}
+	assertAlexRecorded(t, accounts)
 
 	refusesForgedReturns(t, server, callback, started)
 }
@@ -194,5 +192,14 @@ func TestAGoogleAccountIsItsEmailAndDomain(t *testing.T) {
 	_, err = describeGoogle(t.Context(), nil, goth.User{})
 	if err == nil {
 		t.Error("an account with no email was accepted, and would have signed in as nobody")
+	}
+}
+
+func assertAlexRecorded(t *testing.T, accounts store.Accounts) {
+	t.Helper()
+
+	user, found, err := accounts.FindUser(t.Context(), "github:alex")
+	if err != nil || !found || user.AccountID != "7" || user.Email != "alex@acme.dev" || strings.Join(user.Groups, ",") != "acme/eng" || strings.Join(user.Organizations, ",") != "acme" {
+		t.Errorf("FindUser = %+v, %v, %v; want alex with acme and acme/eng", user, found, err)
 	}
 }
