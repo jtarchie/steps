@@ -151,3 +151,129 @@ func jsonStrings(list []string) string {
 
 	return clean(string(encoded))
 }
+
+// RegisterClient records a self-registered agent, refusing one past limit; the count and the insert share a transaction.
+func (a *Accounts) RegisterClient(ctx context.Context, client store.OAuthClient, limit int) error {
+	err := inTx(ctx, a.held.db, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `LOCK TABLE oauth_clients IN SHARE ROW EXCLUSIVE MODE`)
+		if err != nil {
+			return err //nolint:wrapcheck // wrapped below
+		}
+
+		var count int
+
+		err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oauth_clients`).Scan(&count)
+		if err != nil {
+			return err //nolint:wrapcheck // wrapped below
+		}
+
+		if limit > 0 && count >= limit {
+			return store.ErrTooManyClients
+		}
+
+		_, err = tx.ExecContext(ctx, `INSERT INTO oauth_clients (id, name, redirect_uris, created_at) VALUES ($1, $2, $3, $4)`,
+			clean(client.ID), clean(client.Name), jsonStrings(client.RedirectURIs), client.CreatedAt.UTC())
+
+		return err //nolint:wrapcheck // wrapped below
+	})
+	if errors.Is(err, store.ErrTooManyClients) {
+		return err
+	}
+
+	if err != nil {
+		return fmt.Errorf("could not register a client: %w", err)
+	}
+
+	return nil
+}
+
+// FindClient is a registered agent by its id.
+func (a *Accounts) FindClient(ctx context.Context, id string) (store.OAuthClient, bool, error) {
+	var (
+		client    store.OAuthClient
+		redirects string
+	)
+
+	err := a.held.db.QueryRowContext(ctx, `SELECT id, name, redirect_uris, created_at FROM oauth_clients WHERE id = $1`, id).
+		Scan(&client.ID, &client.Name, &redirects, &client.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.OAuthClient{}, false, nil
+	}
+
+	if err != nil {
+		return store.OAuthClient{}, false, fmt.Errorf("could not read a client: %w", err)
+	}
+
+	_ = json.Unmarshal([]byte(redirects), &client.RedirectURIs)
+	client.CreatedAt = client.CreatedAt.UTC()
+
+	return client, true, nil
+}
+
+// IssueToken records a token by its digest, sweeping ones that ended.
+func (a *Accounts) IssueToken(ctx context.Context, token store.OAuthToken) error {
+	err := inTx(ctx, a.held.db, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DELETE FROM oauth_tokens WHERE expires_at <= $1 OR revoked_at IS NOT NULL`, now())
+		if err != nil {
+			return err //nolint:wrapcheck // wrapped below
+		}
+
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO oauth_tokens (token_hash, kind, client_id, actor, pipeline, export, created_at, expires_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`, clean(token.TokenHash), clean(token.Kind), clean(token.Grant.ClientID), clean(token.Grant.Actor),
+			clean(token.Grant.Pipeline), clean(token.Grant.Export), token.CreatedAt.UTC(), token.ExpiresAt.UTC())
+
+		return err //nolint:wrapcheck // wrapped below
+	})
+	if err != nil {
+		return fmt.Errorf("could not issue a token: %w", err)
+	}
+
+	return nil
+}
+
+// FindToken is the live token with this digest.
+func (a *Accounts) FindToken(ctx context.Context, tokenHash string) (store.OAuthToken, bool, error) {
+	var token store.OAuthToken
+
+	err := a.held.db.QueryRowContext(ctx, `
+		SELECT token_hash, kind, client_id, actor, pipeline, export, created_at, expires_at FROM oauth_tokens
+		WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > $2
+	`, tokenHash, now()).Scan(&token.TokenHash, &token.Kind, &token.Grant.ClientID, &token.Grant.Actor,
+		&token.Grant.Pipeline, &token.Grant.Export, &token.CreatedAt, &token.ExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.OAuthToken{}, false, nil
+	}
+
+	if err != nil {
+		return store.OAuthToken{}, false, fmt.Errorf("could not read a token: %w", err)
+	}
+
+	token.CreatedAt, token.ExpiresAt = token.CreatedAt.UTC(), token.ExpiresAt.UTC()
+
+	return token, true, nil
+}
+
+// RevokeToken ends one token.
+func (a *Accounts) RevokeToken(ctx context.Context, tokenHash string) error {
+	_, err := a.held.db.ExecContext(ctx, `UPDATE oauth_tokens SET revoked_at = $1 WHERE token_hash = $2 AND revoked_at IS NULL`, now(), tokenHash)
+	if err != nil {
+		return fmt.Errorf("could not revoke a token: %w", err)
+	}
+
+	return nil
+}
+
+// RevokeGrant ends every token under one grant.
+func (a *Accounts) RevokeGrant(ctx context.Context, grant store.Grant) error {
+	_, err := a.held.db.ExecContext(ctx, `
+		UPDATE oauth_tokens SET revoked_at = $1
+		WHERE client_id = $2 AND actor = $3 AND pipeline = $4 AND export = $5 AND revoked_at IS NULL
+	`, now(), grant.ClientID, grant.Actor, grant.Pipeline, grant.Export)
+	if err != nil {
+		return fmt.Errorf("could not revoke a grant: %w", err)
+	}
+
+	return nil
+}

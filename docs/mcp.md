@@ -237,6 +237,25 @@ jobs:
 - **A sub-agent export** runs that agent's own conversation for each call, with your model and your tools, and returns its answer — the narrowest thing to share.
 - Never hashed: an export changes nothing a build does.
 
+### Connecting an agent
+
+An export's address is `<external-url>/mcp/x/<pipeline>/<export>`. Give it to an agent that speaks MCP over HTTP with OAuth — Claude, Claude Code, Cursor — and it does the rest: it finds the daemon's sign-in through the address's [protected-resource metadata](https://www.rfc-editor.org/rfc/rfc9728), registers itself, and sends you to the daemon to sign in and agree.
+
+The daemon asks every time, on a page that says plainly what is being agreed to:
+
+- **the client's name, marked unverified** — it is whatever the agent called itself when it registered, and anybody can register;
+- **where your browser will be sent** with the result, the most prominent line on the page;
+- **which export, and every tool in it**, with the arguments fixed for you;
+- that calls are made with the pipeline's credentials and recorded under your name.
+
+**Deny** has the focus. Nothing is issued until you press **Allow**: a site that registered itself cannot collect a token by sending your signed-in browser to the daemon, because all that browser gets is this page.
+
+- You must be allowed the export: its `access:` rule, the pipeline's own [`access:`](authentication.md#one-pipelines-own-rules-access), and a role on the daemon at all. Anybody else is told so, with nothing to press.
+- **PKCE (S256) is required**, and the agent must name the export it wants (the `resource` parameter); the daemon refuses anything else back to the agent.
+- **Tokens are short and checked again.** An access token lasts an hour. Refreshing it asks again whether you may use the export — leave the team that let you in and your agent loses it at its next refresh — and hands out a new refresh token, ending the old one. Tokens are kept on the daemon only as digests.
+- **Registration is open and bounded**: an agent may register return addresses that are `https`, `http` to the same machine, or an app's own scheme, never one that runs something in the browser; the daemon keeps at most 1,000 registered agents.
+- Agreeing is recorded in the [activity log](web.md#activity) as `mcp authorize`.
+
 ## Backing a resource type with MCP
 
 ```yaml mcp=mcp-linear-issues

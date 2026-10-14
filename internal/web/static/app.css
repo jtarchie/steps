@@ -1297,3 +1297,14 @@ table.activity td:first-child { white-space: nowrap; }
 .signin-or::before, .signin-or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
 .rohint.viewonly { max-width: none; text-align: left; }
 .at-signedout a { color: var(--yellow); }
+
+/* ---- consent: the one page that hands out a credential, so it states facts plainly ---- */
+.consent { max-width: 640px; margin: 4vh auto 0; }
+.consent-ask { display: block; margin-top: 6px; font-weight: 400; color: var(--fg); overflow-wrap: anywhere; }
+.consent-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 18px 0; }
+.consent-facts dt { font-family: var(--sans); font-size: 12px; color: var(--dim); }
+.consent-facts dd { margin: 0; overflow-wrap: anywhere; }
+.consent-host { color: var(--fg); font-weight: 700; font-size: 15px; }
+.consent-tools td { white-space: normal; }
+.consent-note { font-family: var(--sans); font-size: 13px; color: var(--dim); margin: 16px 0; }
+.consent-decide { display: flex; gap: 10px; }

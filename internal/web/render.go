@@ -23,6 +23,7 @@ import (
 	"github.com/labstack/echo/v5"
 
 	"github.com/jtarchie/steps/internal/actor"
+	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -257,7 +258,9 @@ func templateFuncs() template.FuncMap {
 		"attentionOn": attentionOn,
 		// The activity page narrowed by one more field: every name in a row is a link that filters by it.
 		"filterURL": withQuery,
-		"rfc3339":   func(t time.Time) string { return t.UTC().Format(time.RFC3339) },
+		// The name a tool is offered under, the same one an agent's grant uses.
+		"toolName": config.ToolSpecName,
+		"rfc3339":  func(t time.Time) string { return t.UTC().Format(time.RFC3339) },
 		// The recursive step template needs both the page (for
 		// pipeline-scoped links) and the step it is drawing; a Go template
 		// passes exactly one argument, so they are paired here.

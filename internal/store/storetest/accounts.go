@@ -1,6 +1,7 @@
 package storetest
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -120,5 +121,103 @@ func (s accountsSuite) TestAUserIsReplacedAtEachSignIn(t *testing.T) {
 	_, found, err = accounts.FindUser(ctxFor(t), "github:nobody")
 	if err != nil || found {
 		t.Fatalf("FindUser(nobody) = %v, %v; want not found", found, err)
+	}
+}
+
+// TestClientRegistrationIsBounded: registration answers anybody, so past the limit it refuses rather than growing.
+func (s accountsSuite) TestClientRegistrationIsBounded(t *testing.T) {
+	t.Parallel()
+
+	accounts := s.open(t)
+
+	err := accounts.RegisterClient(ctxFor(t), store.OAuthClient{ID: "one", Name: "Claude", RedirectURIs: []string{"https://claude.ai/cb"}, CreatedAt: time.Now()}, 1)
+	if err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+
+	err = accounts.RegisterClient(ctxFor(t), store.OAuthClient{ID: "two", Name: "More", RedirectURIs: []string{"https://x/cb"}, CreatedAt: time.Now()}, 1)
+	if !errors.Is(err, store.ErrTooManyClients) {
+		t.Fatalf("RegisterClient past the limit = %v, want ErrTooManyClients", err)
+	}
+
+	client, found, err := accounts.FindClient(ctxFor(t), "one")
+	if err != nil || !found || client.Name != "Claude" || strings.Join(client.RedirectURIs, ",") != "https://claude.ai/cb" {
+		t.Fatalf("FindClient = %+v, %v, %v", client, found, err)
+	}
+}
+
+// TestAGrantCanBeRevokedWhole: disconnecting a client ends every token it holds for that export, and only those.
+func (s accountsSuite) TestAGrantCanBeRevokedWhole(t *testing.T) {
+	t.Parallel()
+
+	accounts := s.open(t)
+	registerClient(t, accounts, "c")
+
+	grant := store.Grant{ClientID: "c", Actor: "github:alex", Pipeline: "ops", Export: "support"}
+	other := store.Grant{ClientID: "c", Actor: "github:alex", Pipeline: "ops", Export: "support-write"}
+	later := time.Now().Add(time.Hour)
+
+	for hash, g := range map[string]store.Grant{"access": grant, "refresh": grant, "elsewhere": other} {
+		err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: hash, Kind: "access", Grant: g, CreatedAt: time.Now(), ExpiresAt: later})
+		if err != nil {
+			t.Fatalf("IssueToken: %v", err)
+		}
+	}
+
+	token, found, err := accounts.FindToken(ctxFor(t), "access")
+	if err != nil || !found || token.Grant != grant || token.Kind != "access" {
+		t.Fatalf("FindToken = %+v, %v, %v", token, found, err)
+	}
+
+	err = accounts.RevokeGrant(ctxFor(t), grant)
+	if err != nil {
+		t.Fatalf("RevokeGrant: %v", err)
+	}
+
+	assertTokensLive(t, accounts, map[string]bool{"access": false, "refresh": false, "elsewhere": true})
+
+	err = accounts.RevokeToken(ctxFor(t), "elsewhere")
+	if err != nil {
+		t.Fatalf("RevokeToken: %v", err)
+	}
+
+	assertTokensLive(t, accounts, map[string]bool{"elsewhere": false})
+}
+
+func assertTokensLive(t *testing.T, accounts store.Accounts, want map[string]bool) {
+	t.Helper()
+
+	for hash, live := range want {
+		_, found, err := accounts.FindToken(ctxFor(t), hash)
+		if err != nil || found != live {
+			t.Errorf("FindToken(%s) = %v, %v; want %v", hash, found, err, live)
+		}
+	}
+}
+
+// TestAnExpiredTokenIsNotFound: a token lasts as long as it said and no longer.
+func (s accountsSuite) TestAnExpiredTokenIsNotFound(t *testing.T) {
+	t.Parallel()
+
+	accounts := s.open(t)
+	registerClient(t, accounts, "c")
+
+	err := accounts.IssueToken(ctxFor(t), store.OAuthToken{TokenHash: "old", Kind: "access", Grant: store.Grant{ClientID: "c", Actor: "a", Pipeline: "p", Export: "e"}, CreatedAt: time.Now().Add(-2 * time.Hour), ExpiresAt: time.Now().Add(-time.Hour)})
+	if err != nil {
+		t.Fatalf("IssueToken: %v", err)
+	}
+
+	_, found, err := accounts.FindToken(ctxFor(t), "old")
+	if err != nil || found {
+		t.Errorf("FindToken(expired) = %v, %v; want not found", found, err)
+	}
+}
+
+func registerClient(t *testing.T, accounts store.Accounts, id string) {
+	t.Helper()
+
+	err := accounts.RegisterClient(ctxFor(t), store.OAuthClient{ID: id, Name: id, RedirectURIs: []string{"https://x/cb"}, CreatedAt: time.Now()}, 0)
+	if err != nil {
+		t.Fatalf("RegisterClient(%s): %v", id, err)
 	}
 }

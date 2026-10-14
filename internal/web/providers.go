@@ -264,6 +264,8 @@ func (s *Server) handleSignInCallback(c *echo.Context) error {
 		return echoError(err)
 	}
 
+	slog.InfoContext(c.Request().Context(), "web.signed_in", "actor", who.String())
+
 	//nolint:wrapcheck // as above
 	return c.Redirect(http.StatusSeeOther, pending.next)
 }

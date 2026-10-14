@@ -265,8 +265,18 @@ func (s *Server) skipsAuth(c *echo.Context) bool {
 		return true
 	}
 
-	return s.sessions != nil && (c.Path() == loginPath || strings.HasPrefix(c.Path(), "/static/") ||
-		c.Path() == signInStartPath || c.Path() == signInCallbackPath)
+	if s.sessions == nil {
+		return false
+	}
+
+	switch c.Path() {
+	case loginPath, signInStartPath, signInCallbackPath,
+		// What an agent asks before anybody has signed in, and the endpoints it authenticates to with its own credentials: a registration, a code, a token.
+		authServerMetadataPath, resourceMetadataPath, registerPath, tokenPath, exportPath:
+		return true
+	default:
+		return strings.HasPrefix(c.Path(), "/static/")
+	}
 }
 
 // isHookRoute is a webhook delivery, the one route under /p/ whose sender never passed this server's credentials.

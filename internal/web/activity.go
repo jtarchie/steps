@@ -101,7 +101,12 @@ var activityRoutes = map[string]activityRoute{
 }
 
 // notRecorded are the mutating routes a person does not drive, with why.
-var notRecorded = map[string]string{
+var notRecorded = map[string]string{ //nolint:gosec // route keys and reasons, not credentials
+	"POST /login":                       "signing in is about the daemon, not a pipeline, and the log is written through a pipeline's handle; the daemon's log line web.signed_in records it",
+	"POST /logout":                      "as POST /login: web.signed_out in the daemon's log",
+	"POST /oauth/register":              "an agent registering itself is nobody acting; the person who later lets it connect is recorded then",
+	"POST /oauth/token":                 "an agent exchanging what a person already granted; the grant was recorded when it was given",
+	"POST /oauth/authorize":             "recorded by handleConsent itself, which knows the export the consent named — this route carries no pipeline in its path",
 	"POST /p/:pipeline/hooks/:resource": "a webhook delivery is automatic: the run it starts already says webhook: <resource>",
 }
 

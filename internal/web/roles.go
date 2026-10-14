@@ -353,3 +353,13 @@ func (s *Server) roleOfPerson(c *echo.Context) Role {
 
 	return s.roles.highest(id)
 }
+
+// compileRule compiles one rule about the signed-in person.
+func compileRule(source string) (*vm.Program, error) {
+	program, err := expr.Compile(source, expr.Env(Identity{}), expr.AsBool())
+	if err != nil {
+		return nil, fmt.Errorf("rule %q: %w", source, err)
+	}
+
+	return program, nil
+}

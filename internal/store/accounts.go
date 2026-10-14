@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -25,6 +26,19 @@ type Accounts interface {
 	SaveUser(ctx context.Context, user User) error
 	// FindUser is the person an actor names, as last recorded.
 	FindUser(ctx context.Context, actor string) (User, bool, error)
+	// RegisterClient records an agent that registered itself to connect to
+	// exports (RFC 7591), refusing one past limit: registration answers
+	// anybody, so its table must not grow without bound.
+	RegisterClient(ctx context.Context, client OAuthClient, limit int) error
+	FindClient(ctx context.Context, id string) (OAuthClient, bool, error)
+	// IssueToken records a token by its digest, never the token.
+	IssueToken(ctx context.Context, token OAuthToken) error
+	// FindToken is the live token with this digest: unexpired, unrevoked.
+	FindToken(ctx context.Context, tokenHash string) (OAuthToken, bool, error)
+	// RevokeToken ends one token, which is what rotating a refresh token does to the old one.
+	RevokeToken(ctx context.Context, tokenHash string) error
+	// RevokeGrant ends every token a person gave one client for one export: disconnecting it.
+	RevokeGrant(ctx context.Context, grant Grant) error
 	Close() error
 }
 
@@ -48,4 +62,34 @@ type User struct {
 	Organizations []string
 	Groups        []string
 	RefreshedAt   time.Time
+}
+
+// ErrTooManyClients is a registration past the limit.
+var ErrTooManyClients = errors.New("too many registered clients")
+
+// OAuthClient is an agent that registered itself to connect to exports.
+type OAuthClient struct {
+	ID string
+	// Name is what the client calls itself, which nothing verifies.
+	Name         string
+	RedirectURIs []string
+	CreatedAt    time.Time
+}
+
+// Grant is one person letting one client use one export.
+type Grant struct {
+	ClientID string
+	Actor    string
+	Pipeline string
+	Export   string
+}
+
+// OAuthToken is a token issued under a grant.
+type OAuthToken struct {
+	TokenHash string
+	// Kind is "access" or "refresh": an access token calls tools, a refresh token only mints the next access token.
+	Kind      string
+	Grant     Grant
+	CreatedAt time.Time
+	ExpiresAt time.Time
 }

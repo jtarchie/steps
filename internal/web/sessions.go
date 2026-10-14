@@ -105,6 +105,8 @@ func (s *Server) handleLogin(c *echo.Context) error {
 		return echoError(err)
 	}
 
+	slog.InfoContext(c.Request().Context(), "web.signed_in", "actor", actor.Local(username).String())
+
 	//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
 	return c.Redirect(http.StatusSeeOther, safeNext(c.FormValue("next")))
 }
@@ -149,6 +151,8 @@ func (s *Server) handleLogout(c *echo.Context) error {
 			return echoError(err)
 		}
 	}
+
+	slog.InfoContext(c.Request().Context(), "web.signed_out", "actor", actor.From(c.Request().Context()).String())
 
 	c.SetCookie(&http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: servedOverTLS(c.Request())}) //nolint:gosec // as handleLogin
 

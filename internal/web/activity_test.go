@@ -13,7 +13,8 @@ import (
 func TestEveryMutatingRouteIsRecordedOrExcused(t *testing.T) {
 	t.Parallel()
 
-	server, _ := testPipeline(t)
+	// Every feature switched on, so every route exists to be held to the table.
+	server, _ := exportServer(t)
 	seen := mutatingRoutes(server)
 
 	for key := range seen {

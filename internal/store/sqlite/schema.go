@@ -89,7 +89,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 25
+const schemaVersion = 26
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -924,6 +924,31 @@ CREATE TABLE IF NOT EXISTS users (
     groups_json   TEXT NOT NULL,
     refreshed_at  TEXT NOT NULL
 );
+
+-- Agents that registered themselves to connect to exports (RFC 7591), and
+-- the tokens issued to them under a person's grant. Daemon-level, like
+-- sessions; a token is kept only as a digest. Registration answers anybody,
+-- so the clients table is bounded by count at insert (store.Accounts).
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    redirect_uris TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+-- client_id names a registered client, and deleting the client takes its
+-- tokens: a client nobody can find again must not keep working.
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    token_hash TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL,
+    client_id  TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+    actor      TEXT NOT NULL,
+    pipeline   TEXT NOT NULL,
+    export     TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_grant ON oauth_tokens(client_id, actor, pipeline, export);
 
 -- What people did: set, trigger, approve, abort, pause and the rest
 -- (store.Activity). One log per database, trimmed by count across every

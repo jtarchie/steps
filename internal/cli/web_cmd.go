@@ -64,6 +64,9 @@ type WebCmd struct {
 	AllowedHost []string `env:"STEPS_ALLOWED_HOSTS" help:"refuse any request whose Host is not this name (repeatable; loopback names are always allowed)" name:"allowed-host" placeholder:"NAME"`
 	// No env: binding: a STEPS_*-shaped name invites confusion with the variable this one sets.
 	ExternalURL string `help:"the URL steps publish to every step as STEPS_URL (default http://<listen>)" name:"external-url"`
+
+	// published is the external URL Run resolved, which every OAuth address the daemon publishes is built from.
+	published string
 }
 
 // externalURL is the STEPS_URL a daemon publishes: the flag, validated, or http://<listen>. Empty means unset — a wildcard listen address is no address a link could use.
@@ -269,6 +272,9 @@ func (w *WebCmd) Run() error {
 		return err
 	}
 
+	// Kept beside opts rather than in it: opts says whether anybody signs in, which the address does not.
+	w.published = published
+
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
@@ -315,7 +321,7 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 		opts = append(opts, web.WithSessions(accounts))
 	}
 
-	server, err := web.New(nil, runner, append(opts, web.WithAllowedHosts(w.AllowedHost), web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithMiddleware(telemetry.Handler(web.HealthPath)), web.WithActivityLog(readLog, w.ActivityHistory))...)
+	server, err := web.New(nil, runner, append(opts, web.WithAllowedHosts(w.AllowedHost), web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithMiddleware(telemetry.Handler(web.HealthPath)), web.WithActivityLog(readLog, w.ActivityHistory), web.WithExternalURL(w.published))...)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}

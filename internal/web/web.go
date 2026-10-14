@@ -139,6 +139,9 @@ type Server struct {
 	pending   pendingSignIns
 	// roles are who may do what, the zero value letting anyone signed in do anything: see roles.go.
 	roles Roles
+	// external is the address the daemon is reached on, which every OAuth URL it publishes is built from; auths are consents and codes in flight: see oauthserver.go.
+	external string
+	auths    pendingAuth
 	// nil answers any Host, which is the default: see hosts.go.
 	allowedHosts map[string]bool
 	// version is what the footer prints, so a bug report can name the build.
@@ -448,6 +451,14 @@ func (s *Server) routes() error {
 		e.POST(logoutPath, s.handleLogout)
 		e.GET(signInStartPath, s.handleSignInStart)
 		e.GET(signInCallbackPath, s.handleSignInCallback)
+
+		// Agents connecting to exports: metadata, registration and tokens answer the agent itself; authorize is a signed-in person's page.
+		e.GET(authServerMetadataPath, s.handleAuthServerMetadata)
+		e.GET(resourceMetadataPath, s.handleResourceMetadata)
+		e.POST(registerPath, s.handleRegister)
+		e.GET(authorizePath, s.handleAuthorize)
+		e.POST(authorizePath, s.handleConsent)
+		e.POST(tokenPath, s.handleToken)
 	}
 
 	group := e.Group("/p/:pipeline", s.resolvePipeline)
