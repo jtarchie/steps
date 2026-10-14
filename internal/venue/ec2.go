@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"net/url"
 	"slices"
 	"time"
 
@@ -33,50 +32,6 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/smithy-go"
 	"github.com/jtarchie/steps/internal/events"
-)
-
-// Rung is how much has to happen before a worker can be dialed.
-type Rung string
-
-const (
-	// RungStatic is a machine that is already running.
-	RungStatic Rung = ""
-	// RungStopped is a parked machine: started for the job, stopped after.
-	RungStopped Rung = "stopped"
-	// RungLaunch is a machine born for the job and terminated with it.
-	RungLaunch Rung = "launch"
-)
-
-// Capacity says which EC2 capacity to ask for on the launch rung.
-type Capacity string
-
-const (
-	// CapacitySpot asks for spot only, and fails when there is none.
-	CapacitySpot Capacity = "spot"
-	// CapacitySpotThenOD asks for spot and falls back to on-demand in the
-	// same call, so a job runs rather than failing on a busy pool.
-	CapacitySpotThenOD Capacity = "spot-then-od"
-	// CapacityOnDemand asks for on-demand only.
-	CapacityOnDemand Capacity = "od"
-)
-
-// defaultIdle is zero because a warm machine is a billed one: ?idle= is the operator choosing to pay to spare the next user a cold start.
-const defaultIdle = 0
-
-// acquireTimeout bounds waiting for a machine to reach a usable state. Cloud
-// acquisition is 20-90 seconds; a Windows instance without fast launch is
-// minutes, which is one more reason Windows is refused earlier.
-// acquirePoll is how often a starting instance is asked whether it is ready.
-//
-// Variables rather than constants so a test can shrink them, exactly as the
-// SSM registration and GCP boot waits are: every branch here is reached by
-// polling at least twice, so against a fake the constants bought nothing but
-// a real five-second sleep per test.
-//
-//nolint:gochecknoglobals // test seams for a wait measured in minutes
-var (
-	acquireTimeout = 10 * time.Minute
-	acquirePoll    = 5 * time.Second
 )
 
 // ec2API is the slice of EC2 this package uses, declared so a test can stand
@@ -110,32 +65,8 @@ var ec2For = func(ctx context.Context, worker Worker) (ec2API, error) {
 	return newEC2Funcs(ec2.NewFromConfig(cfg)), nil
 }
 
-// needsAcquisition reports whether a worker names a machine that has to be
-// brought into existence before it can be dialed.
-func (w Worker) needsAcquisition() bool {
-	return w.Rung == RungStopped || w.Rung == RungLaunch
-}
-
 // errNoCapacity is a launch that produced no instance.
 var errNoCapacity = errors.New("no capacity for the requested worker")
-
-// acquire brings a worker's machine into existence and returns the static
-// worker that names it, plus how to give it back. A scheme switch rather
-// than an if-chain, so the exhaustive linter makes the next scheme decide
-// its acquisition story instead of falling into another cloud's.
-func acquire(ctx context.Context, worker Worker) (Worker, func(context.Context) error, error) {
-	switch worker.Scheme {
-	case SchemeAWS:
-		return acquireEC2(ctx, worker)
-	case SchemeGCP:
-		return acquireGCE(ctx, worker)
-	case SchemeLocal, SchemeSSH, SchemeDockerSSH:
-		// Machines that already exist by definition; nothing to acquire.
-		return worker, nil, nil
-	default:
-		return worker, nil, nil
-	}
-}
 
 // acquireEC2 is acquire for the aws:// rungs.
 func acquireEC2(ctx context.Context, worker Worker) (Worker, func(context.Context) error, error) {
@@ -185,20 +116,7 @@ func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(c
 		return Worker{}, nil, err
 	}
 
-	release := func(ctx context.Context) error {
-		// Its own context: the caller's is likeliest to be spent exactly when this runs, and nothing would ever try the Stop again.
-		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-		defer cancel()
-
-		_, stopErr := api.StopInstances(stopCtx, &ec2.StopInstancesInput{InstanceIds: []string{worker.Instance}})
-		if stopErr != nil {
-			return fmt.Errorf("stopping %s for %q: %w", worker.Instance, worker.URL, stopErr)
-		}
-
-		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: parked %s", worker.URL, worker.Instance))
-
-		return nil
-	}
+	release := cleanupRelease(worker, worker.Instance, "stopping", "parked", stopEC2(api, worker.Instance))
 
 	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: started %s", worker.URL, worker.Instance))
 
@@ -217,37 +135,17 @@ func adoptRunning(ctx context.Context, api ec2API, worker Worker) (Worker, func(
 	return worker.asStatic(worker.Instance), nil, nil
 }
 
-// ownedKey marks an acquisition of a machine this process already owes a park, so finding it running is no news: it is steps' own earlier start.
-type ownedKey struct{}
-
-func withOwned(ctx context.Context) context.Context { return context.WithValue(ctx, ownedKey{}, true) }
-
-// noteAdopted warns every time, because nothing records what a crashed or restarted steps started (#120): each such machine is found running here, and bills until somebody reads this.
-func noteAdopted(ctx context.Context, worker Worker) {
-	if owned, _ := ctx.Value(ownedKey{}).(bool); owned {
-		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: %s is still running from steps' own earlier start; it will be parked when its last user is done", worker.URL, worker.Instance))
-
-		return
-	}
-
-	events.Note(ctx, events.NoteWarn, fmt.Sprintf("worker %s: %s was already running, so steps did not start it and will not stop it — if a steps process that crashed or restarted started it, it is still billing; stop it yourself", worker.URL, worker.Instance))
-	slog.WarnContext(ctx, "worker.adopted", "worker", worker.URL, "instance", worker.Instance)
-}
-
-// cleanupTimeout bounds the API call that gives a machine back on a path
-// whose own context may be spent or cancelled — which is exactly when leaving
-// the machine running would be worst.
-const cleanupTimeout = 2 * time.Minute
-
 // stopInstance is the best-effort stop for a machine a failed acquisition
 // leaves running, under its own context for the reason cleanupTimeout gives.
 func stopInstance(api ec2API, worker Worker, instance string) {
-	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
-	defer cancel()
+	cleanupAfterFailure(worker, instance, "venue.stop_failed", stopEC2(api, instance))
+}
 
-	_, err := api.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{instance}})
-	if err != nil {
-		slog.Warn("venue.stop_failed", "instance", instance, "worker", worker.URL, "after", "a failed acquisition", "error", err)
+func stopEC2(api ec2API, instance string) func(context.Context) error {
+	return func(ctx context.Context) error {
+		_, err := api.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{instance}})
+
+		return err //nolint:wrapcheck // the caller names the instance and the worker
 	}
 }
 
@@ -309,19 +207,7 @@ func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, fun
 		return Worker{}, nil, err
 	}
 
-	release := func(ctx context.Context) error {
-		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-		defer cancel()
-
-		_, stopErr := api.TerminateInstances(stopCtx, &ec2.TerminateInstancesInput{InstanceIds: []string{instance}})
-		if stopErr != nil {
-			return fmt.Errorf("terminating %s for %q: %w", instance, worker.URL, stopErr)
-		}
-
-		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: terminated %s", worker.URL, instance))
-
-		return nil
-	}
+	release := cleanupRelease(worker, instance, "terminating", "terminated", terminateEC2(api, instance))
 
 	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: launched %s", worker.URL, instance))
 
@@ -422,12 +308,14 @@ func describedIDs(out *ec2.DescribeInstancesOutput) []string {
 // terminateInstance is stopInstance for a machine that should not exist at
 // all once this end cannot use it.
 func terminateInstance(api ec2API, worker Worker, instance string) {
-	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
-	defer cancel()
+	cleanupAfterFailure(worker, instance, "venue.terminate_failed", terminateEC2(api, instance))
+}
 
-	_, err := api.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{instance}})
-	if err != nil {
-		slog.Warn("venue.terminate_failed", "instance", instance, "worker", worker.URL, "after", "a failed acquisition", "error", err)
+func terminateEC2(api ec2API, instance string) func(context.Context) error {
+	return func(ctx context.Context) error {
+		_, err := api.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{instance}})
+
+		return err //nolint:wrapcheck // the caller names the instance and the worker
 	}
 }
 
@@ -538,23 +426,12 @@ func fleetErrors(out *ec2.CreateFleetOutput) string {
 // that silently did not take is still bounded by acquireTimeout, and a
 // machine that goes back is terminal exactly as it was.
 func waitForRunning(ctx context.Context, api ec2API, worker Worker, instance string, leaving ec2types.InstanceStateName) error {
-	deadline, cancel := context.WithTimeout(ctx, acquireTimeout)
-	defer cancel()
-
-	ticker := time.NewTicker(acquirePoll)
-	defer ticker.Stop()
-
 	left := leaving == ""
 
-	for {
-		out, err := api.DescribeInstances(deadline, &ec2.DescribeInstancesInput{InstanceIds: []string{instance}})
+	err := pollUntil(ctx, acquireTimeout, acquirePoll, func(ctx context.Context) (bool, error) {
+		out, err := api.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{instance}})
 		if err != nil {
-			err = waitOutInvisible(deadline, ticker, worker, instance, err)
-			if err != nil {
-				return err
-			}
-
-			continue
+			return false, waitOutInvisible(worker, instance, err)
 		}
 
 		state := instanceState(out)
@@ -563,63 +440,45 @@ func waitForRunning(ctx context.Context, api ec2API, worker Worker, instance str
 			// Still reading the state it was asked to leave: a replica lagging
 			// behind a StartInstances that already succeeded, not an answer.
 			if state == leaving {
-				err = awaitTick(deadline, ticker, worker, instance)
-				if err != nil {
-					return err
-				}
-
-				continue
+				return false, nil
 			}
 
 			left = true
 		}
 
-		arrived, err := arrivedOrDead(state, worker, instance)
-		if arrived || err != nil {
-			return err
-		}
+		return arrivedOrDead(state, worker, instance)
+	})
 
-		err = awaitTick(deadline, ticker, worker, instance)
-		if err != nil {
-			return err
-		}
-	}
+	return waitingFor(err, worker, instance)
 }
 
 // awaitParkComplete reports the settled state because a running one is somebody else's machine, not one to start.
 func awaitParkComplete(ctx context.Context, api ec2API, worker Worker) (ec2types.InstanceStateName, error) {
-	deadline, cancel := context.WithTimeout(ctx, acquireTimeout)
-	defer cancel()
+	var state ec2types.InstanceStateName
 
-	ticker := time.NewTicker(acquirePoll)
-	defer ticker.Stop()
-
-	for {
-		out, err := api.DescribeInstances(deadline, &ec2.DescribeInstancesInput{InstanceIds: []string{worker.Instance}})
+	err := pollUntil(ctx, acquireTimeout, acquirePoll, func(ctx context.Context) (bool, error) {
+		out, err := api.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{worker.Instance}})
 		if err != nil {
-			err = waitOutInvisible(deadline, ticker, worker, worker.Instance, err)
-			if err != nil {
-				return "", err
-			}
-
-			continue
+			return false, waitOutInvisible(worker, worker.Instance, err)
 		}
 
-		state := instanceState(out)
+		state = instanceState(out)
 
 		switch state {
 		case ec2types.InstanceStateNameStopping, ec2types.InstanceStateNameShuttingDown:
 		case ec2types.InstanceStateNamePending, ec2types.InstanceStateNameRunning,
 			ec2types.InstanceStateNameStopped, ec2types.InstanceStateNameTerminated:
 			// Settled either way: whether starting it can work is the next call's answer.
-			return state, nil
+			return true, nil
 		}
 
-		err = awaitTick(deadline, ticker, worker, worker.Instance)
-		if err != nil {
-			return "", err
-		}
+		return false, nil
+	})
+	if err != nil {
+		return "", waitingFor(err, worker, worker.Instance)
 	}
+
+	return state, nil
 }
 
 // arrivedOrDead reads a polled state as one of the three answers this loop
@@ -639,18 +498,8 @@ func arrivedOrDead(state ec2types.InstanceStateName, worker Worker, instance str
 	return false, nil
 }
 
-// awaitTick sleeps until the next poll, or reports the acquisition deadline.
-func awaitTick(deadline context.Context, ticker *time.Ticker, worker Worker, instance string) error {
-	select {
-	case <-ticker.C:
-		return nil
-	case <-deadline.Done():
-		return fmt.Errorf("waiting for %s for %q: %w", instance, worker.URL, deadline.Err())
-	}
-}
-
-// waitOutInvisible sleeps through EC2's replica lag, or gives back the error
-// that was not lag.
+// waitOutInvisible reads EC2's replica lag as "keep waiting", and gives back
+// any error that was not lag.
 //
 // The same lag as the departing state waitForRunning tolerates, one step
 // earlier: EC2 hands back an instance id from CreateFleet and then denies the
@@ -659,14 +508,12 @@ func awaitTick(deadline context.Context, ticker *time.Ticker, worker Worker, ins
 // here came from EC2 itself, CreateFleet's answer or one StartInstances
 // already accepted, so lag is the only thing this can be and a guard against
 // a bad id would be one no test could reach.
-func waitOutInvisible(
-	ctx context.Context, ticker *time.Ticker, worker Worker, instance string, cause error,
-) error {
+func waitOutInvisible(worker Worker, instance string, cause error) error {
 	if !notYetVisible(cause) {
 		return fmt.Errorf("waiting for %s for %q: %w", instance, worker.URL, cause)
 	}
 
-	return awaitTick(ctx, ticker, worker, instance)
+	return nil
 }
 
 // notYetVisible reports whether EC2 answered that an instance does not exist.
@@ -692,43 +539,4 @@ func instanceState(out *ec2.DescribeInstancesOutput) ec2types.InstanceStateName 
 	}
 
 	return ec2types.InstanceStateNamePending
-}
-
-// asStatic is this worker as the already-running machine it just became, so
-// everything downstream dials it without knowing how it got there.
-//
-// The URL is REBUILT, and that is the load-bearing part: the pipeline hands a
-// runner the worker's URL as a string, and the venue parses it back — so a
-// launch-rung worker whose URL still said aws://launch/lt-… would re-parse
-// into a template with no instance, and the session would dial nothing at
-// all, on a machine the job had just paid to start. The acquisition-only
-// options are stripped because a static parse refuses them, by design.
-func (w Worker) asStatic(instance string) Worker {
-	w.Rung = RungStatic
-	w.Instance = instance
-	w.URL = staticURL(w.Scheme, instance, w.Root, w.Query)
-
-	return w
-}
-
-// staticURL names a running instance the way ParseWorker reads one, keeping
-// every connection option and dropping the acquisition ones.
-func staticURL(scheme Scheme, instance, root, rawQuery string) string {
-	// Escaped, because root is the DECODED path: a %3F in the mapping comes back as a ? that would start the query.
-	address := string(scheme) + "://" + instance + (&url.URL{Path: root}).EscapedPath()
-
-	query, err := url.ParseQuery(rawQuery)
-	if err != nil {
-		return address
-	}
-
-	for _, key := range acquisitionKeys {
-		query.Del(key)
-	}
-
-	if len(query) == 0 {
-		return address
-	}
-
-	return address + "?" + query.Encode()
 }

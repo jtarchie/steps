@@ -23,7 +23,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"maps"
 	"net/http"
 	"strings"
@@ -499,19 +498,7 @@ func gceStartParked(ctx context.Context, api gceAPI, worker Worker, project, zon
 		return Worker{}, nil, err
 	}
 
-	release := func(ctx context.Context) error {
-		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-		defer cancel()
-
-		stopErr := api.Stop(stopCtx, project, zone, worker.Instance)
-		if stopErr != nil {
-			return fmt.Errorf("stopping %s for %q: %w", worker.Instance, worker.URL, stopErr)
-		}
-
-		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: parked %s", worker.URL, worker.Instance))
-
-		return nil
-	}
+	release := cleanupRelease(worker, worker.Instance, "stopping", "parked", stopGCE(api, project, zone, worker.Instance))
 
 	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: started %s", worker.URL, worker.Instance))
 
@@ -521,41 +508,38 @@ func gceStartParked(ctx context.Context, api gceAPI, worker Worker, project, zon
 // gceAwaitParkComplete waits out an in-flight stop, so Start acts on a
 // machine that has finished parking rather than one still on its way down.
 func gceAwaitParkComplete(ctx context.Context, api gceAPI, worker Worker, project, zone string) (string, error) {
-	deadline, cancel := context.WithTimeout(ctx, acquireTimeout)
-	defer cancel()
+	var status string
 
-	ticker := time.NewTicker(acquirePoll)
-	defer ticker.Stop()
+	err := pollUntil(ctx, acquireTimeout, acquirePoll, func(ctx context.Context) (bool, error) {
+		var err error
 
-	for {
-		status, err := api.Status(deadline, project, zone, worker.Instance)
+		status, err = api.Status(ctx, project, zone, worker.Instance)
 		if err != nil {
-			return "", fmt.Errorf("asking about %s for %q before starting it: %w", worker.Instance, worker.URL, err)
+			return false, fmt.Errorf("asking about %s for %q before starting it: %w", worker.Instance, worker.URL, err)
 		}
 
 		switch status {
 		case "STOPPING", "PENDING_STOP", "DEPROVISIONING", "SUSPENDING":
-		default:
-			return status, nil
+			return false, nil
 		}
 
-		err = awaitTick(deadline, ticker, worker, worker.Instance)
-		if err != nil {
-			return "", err
-		}
+		return true, nil
+	})
+	if err != nil {
+		return "", waitingFor(err, worker, worker.Instance)
 	}
+
+	return status, nil
 }
 
 // gceStopInstance is the best-effort stop for a machine a failed acquisition
 // leaves running, under its own context for the reason cleanupTimeout gives.
 func gceStopInstance(api gceAPI, worker Worker, project, zone, name string) {
-	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
-	defer cancel()
+	cleanupAfterFailure(worker, name, "venue.stop_failed", stopGCE(api, project, zone, name))
+}
 
-	err := api.Stop(ctx, project, zone, name)
-	if err != nil {
-		slog.Warn("venue.stop_failed", "instance", name, "worker", worker.URL, "after", "a failed acquisition", "error", err)
-	}
+func stopGCE(api gceAPI, project, zone, name string) func(context.Context) error {
+	return func(ctx context.Context) error { return api.Stop(ctx, project, zone, name) }
 }
 
 // gceLaunch creates one instance from an instance template and deletes it
@@ -594,19 +578,7 @@ func gceLaunch(ctx context.Context, api gceAPI, worker Worker, project, zone str
 		return Worker{}, nil, err
 	}
 
-	release := func(ctx context.Context) error {
-		deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-		defer cancel()
-
-		deleteErr := api.Delete(deleteCtx, project, zone, name)
-		if deleteErr != nil {
-			return fmt.Errorf("deleting %s for %q: %w", name, worker.URL, deleteErr)
-		}
-
-		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: deleted %s", worker.URL, name))
-
-		return nil
-	}
+	release := cleanupRelease(worker, name, "deleting", "deleted", deleteGCE(api, project, zone, name))
 
 	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: launched %s", worker.URL, name))
 
@@ -616,13 +588,11 @@ func gceLaunch(ctx context.Context, api gceAPI, worker Worker, project, zone str
 // gceDeleteInstance is gceStopInstance for a machine that should not exist
 // at all once this end cannot use it.
 func gceDeleteInstance(api gceAPI, worker Worker, project, zone, name string) {
-	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
-	defer cancel()
+	cleanupAfterFailure(worker, name, "venue.delete_failed", deleteGCE(api, project, zone, name))
+}
 
-	err := api.Delete(ctx, project, zone, name)
-	if err != nil {
-		slog.Warn("venue.delete_failed", "instance", name, "worker", worker.URL, "after", "a failed acquisition", "error", err)
-	}
+func deleteGCE(api gceAPI, project, zone, name string) func(context.Context) error {
+	return func(ctx context.Context) error { return api.Delete(ctx, project, zone, name) }
 }
 
 // gceWorkerName names a launched instance. Compute Engine requires the
@@ -644,12 +614,6 @@ func gceWorkerName() string {
 // machine that did not exist a moment ago — there the tolerated lag is
 // errGCENotFound, an instance the API briefly denies having created.
 func gceWaitForRunning(ctx context.Context, api gceAPI, worker Worker, project, zone, name, leaving string) error {
-	deadline, cancel := context.WithTimeout(ctx, acquireTimeout)
-	defer cancel()
-
-	ticker := time.NewTicker(acquirePoll)
-	defer ticker.Stop()
-
 	left := leaving == ""
 
 	// seen latches once the instance has answered a Status at all — for a
@@ -660,52 +624,36 @@ func gceWaitForRunning(ctx context.Context, api gceAPI, worker Worker, project, 
 	// sighting.
 	seen := leaving != ""
 
-	for {
-		status, err := api.Status(deadline, project, zone, name)
+	err := pollUntil(ctx, acquireTimeout, acquirePoll, func(ctx context.Context) (bool, error) {
+		status, err := api.Status(ctx, project, zone, name)
 		if err != nil {
-			err = gceWaitOutInvisible(deadline, ticker, worker, name, err, seen)
-			if err != nil {
-				return err
-			}
-
-			continue
+			return false, gceWaitOutInvisible(worker, name, err, seen)
 		}
 
 		seen = true
 
 		if !left {
 			if status == leaving {
-				err = awaitTick(deadline, ticker, worker, name)
-				if err != nil {
-					return err
-				}
-
-				continue
+				return false, nil
 			}
 
 			left = true
 		}
 
-		arrived, err := gceArrivedOrDead(status, worker, name)
-		if arrived || err != nil {
-			return err
-		}
+		return gceArrivedOrDead(status, worker, name)
+	})
 
-		err = awaitTick(deadline, ticker, worker, name)
-		if err != nil {
-			return err
-		}
-	}
+	return waitingFor(err, worker, name)
 }
 
-// gceWaitOutInvisible sleeps through the API's replica lag, or gives back
-// the error that was not lag: every name that reaches the wait was accepted
+// gceWaitOutInvisible reads the API's replica lag as "keep waiting", and
+// gives back the error that was not lag: every name that reaches the wait was accepted
 // by the API itself, so "does not exist" BEFORE the first sighting can only
 // mean "not yet". After one, it means the opposite — a machine that existed
 // and now does not was deleted out from under the wait (a preempted spot
 // instance whose template says DELETE, most likely), and waiting longer
 // would spend the whole timeout on a machine that is never coming back.
-func gceWaitOutInvisible(ctx context.Context, ticker *time.Ticker, worker Worker, name string, cause error, seen bool) error {
+func gceWaitOutInvisible(worker Worker, name string, cause error, seen bool) error {
 	if !errors.Is(cause, errGCENotFound) {
 		return fmt.Errorf("waiting for %s for %q: %w", name, worker.URL, cause)
 	}
@@ -714,7 +662,7 @@ func gceWaitOutInvisible(ctx context.Context, ticker *time.Ticker, worker Worker
 		return fmt.Errorf("%w %q: %s vanished while being acquired", ErrWorker, worker.URL, name)
 	}
 
-	return awaitTick(ctx, ticker, worker, name)
+	return nil
 }
 
 // gceArrivedOrDead reads a polled status as one of the three answers the
