@@ -102,7 +102,7 @@ func TestRealAWSRunsAStepOnAManagedInstance(t *testing.T) {
 
 	runner := newLocalRunner(t, fixture.spec(cwd, "aws://"+fixture.instance, "out"))
 
-	err := runner.Run(ctx, "cat data/seed.txt > out/report.txt; uname -m >> out/report.txt")
+	err := shell.Run(ctx, runner, "cat data/seed.txt > out/report.txt; uname -m >> out/report.txt")
 	if err != nil {
 		t.Fatalf("running a step on %s: %v", fixture.instance, err)
 	}
@@ -129,7 +129,7 @@ func TestRealAWSNonzeroExitIsAStepFailure(t *testing.T) {
 
 	runner := newLocalRunner(t, fixture.spec(t.TempDir(), "aws://"+fixture.instance))
 
-	err := runner.Run(ctx, "exit 7")
+	err := shell.Run(ctx, runner, "exit 7")
 	if err == nil {
 		t.Fatal("a failing command on a real worker reported success")
 	}
@@ -205,7 +205,7 @@ func TestRealAWSLaunchRungAcquiresAndTerminates(t *testing.T) {
 		Worker: resolved.URL,
 	})
 
-	err = runner.Run(ctx, "true")
+	err = shell.Run(ctx, runner, "true")
 	if err != nil {
 		t.Fatalf("dialling the launched instance %s: %v", resolved.Instance, err)
 	}
@@ -305,7 +305,7 @@ func TestRealAWSSpotEviction(t *testing.T) {
 
 	// Open the session first: the watcher only polls while a session is
 	// alive, so the interruption has to land on a running conversation.
-	err = runner.Run(ctx, "true")
+	err = shell.Run(ctx, runner, "true")
 	if err != nil {
 		t.Fatalf("opening a session on the spot instance: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestRealAWSSpotEviction(t *testing.T) {
 	// The notice reaches IMDS about two minutes before the machine goes, and
 	// the watcher polls every five seconds — so a command started now should
 	// meet a session that has already heard, or hear it mid-run.
-	err = runner.Run(ctx, "sleep 240")
+	err = shell.Run(ctx, runner, "sleep 240")
 	if err == nil {
 		t.Fatal("the command outlived the interruption — the instance was never reclaimed")
 	}

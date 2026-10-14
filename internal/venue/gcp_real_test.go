@@ -95,7 +95,7 @@ func TestRealGCPRunsAStepOnAnInstance(t *testing.T) {
 
 	runner := newLocalRunner(t, fixture.spec(cwd, "gcp://"+fixture.instance+"/var/tmp/steps", "out"))
 
-	err := runner.Run(ctx, "cat data/seed.txt > out/report.txt; uname -m >> out/report.txt")
+	err := shell.Run(ctx, runner, "cat data/seed.txt > out/report.txt; uname -m >> out/report.txt")
 	if err != nil {
 		t.Fatalf("running a step on %s: %v", fixture.instance, err)
 	}
@@ -121,7 +121,7 @@ func TestRealGCPNonzeroExitIsAStepFailure(t *testing.T) {
 
 	runner := newLocalRunner(t, fixture.spec(t.TempDir(), "gcp://"+fixture.instance+"/var/tmp/steps"))
 
-	err := runner.Run(ctx, "exit 7")
+	err := shell.Run(ctx, runner, "exit 7")
 	if err == nil {
 		t.Fatal("a failing command on a real worker reported success")
 	}
@@ -182,7 +182,7 @@ func TestRealGCPLaunchRungAcquiresAndDeletes(t *testing.T) {
 		WorkerTag: "burst",
 	})
 
-	err = runner.Run(ctx, "true")
+	err = shell.Run(ctx, runner, "true")
 	if err != nil {
 		t.Fatalf("running on the launched instance: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestRealGCPPreemption(t *testing.T) {
 
 	// Open the session first: the watcher only polls while a session is
 	// alive, so the preemption has to land on a running conversation.
-	err = runner.Run(ctx, "true")
+	err = shell.Run(ctx, runner, "true")
 	if err != nil {
 		t.Fatalf("opening a session on the spot instance: %v", err)
 	}
@@ -398,7 +398,7 @@ func TestRealGCPPreemption(t *testing.T) {
 
 	// GCE's warning is about thirty seconds and the watcher polls every few seconds —
 	// so a command started now should hear the notice mid-run.
-	err = runner.Run(ctx, "sleep 240")
+	err = shell.Run(ctx, runner, "sleep 240")
 	if err == nil {
 		t.Fatal("the command outlived the preemption — the instance was never reclaimed")
 	}

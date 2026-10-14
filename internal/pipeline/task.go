@@ -272,7 +272,7 @@ func runTaskCommand(
 
 	// Recorded whether or not the command succeeds: a failing step is the one whose output is wanted, and the error below is "command %q failed: exit status N" with no trace of what it said on its way out.
 	ctx, recorder := recordTaskOutput(ctx, rt.Name)
-	err := runner.WithLabel("").Run(ctx, rt.Run)
+	err := shell.Run(ctx, runner.WithLabel(""), rt.Run)
 	recorder.finish(ctx)
 
 	if err != nil {
@@ -424,7 +424,7 @@ func runAssertedTask(ctx context.Context, runner shell.Runner, rt config.Resolve
 // to misread as a genuine nonzero verdict.
 func runCaptured(ctx context.Context, runner shell.Runner, rt config.ResolvedTask) (stdout, stderr string, exitCode int, err error) {
 	ctx, recorder := recordTaskOutput(ctx, rt.Name)
-	stdout, stderr, exitCode, err = runner.WithLabel("").RunCaptureFullLimitedStreamed(ctx, rt.Run, 0, "")
+	stdout, stderr, exitCode, err = shell.RunCaptureFullLimitedStreamed(ctx, runner.WithLabel(""), rt.Run, 0, "")
 	recorder.finish(ctx)
 
 	if err != nil {

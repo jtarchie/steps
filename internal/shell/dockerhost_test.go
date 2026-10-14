@@ -61,7 +61,7 @@ func TestRunnerTargetsANamedDaemon(t *testing.T) {
 
 	t.Cleanup(func() { _ = runner.Close() })
 
-	out, err := runner.RunCapture(context.Background(), "cat seed.txt")
+	out, err := RunCapture(context.Background(), runner, "cat seed.txt")
 	if err != nil {
 		t.Fatalf("RunCapture: %v\n%s", err, out)
 	}
@@ -87,7 +87,7 @@ func TestRunnerTargetsANamedDaemon(t *testing.T) {
 
 	t.Cleanup(func() { _ = absent.Close() })
 
-	_, err = absent.RunCapture(context.Background(), "true")
+	_, err = RunCapture(context.Background(), absent, "true")
 	if err == nil {
 		t.Error("a runner aimed at a daemon that does not exist succeeded — DockerHost was ignored")
 	}
@@ -127,7 +127,7 @@ func TestRunnerMountsAPathItDidNotResolve(t *testing.T) {
 
 	t.Cleanup(func() { _ = runner.Close() })
 
-	out, err := runner.RunCapture(context.Background(), "cat seed.txt")
+	out, err := RunCapture(context.Background(), runner, "cat seed.txt")
 	if err != nil {
 		t.Fatalf("RunCapture: %v\n%s", err, out)
 	}
@@ -173,7 +173,7 @@ func TestStepEnvCannotRedirectTheSessionsDaemon(t *testing.T) {
 
 	t.Cleanup(func() { CloseRunner(runner, "test") })
 
-	stdout, stderr, code, err := runner.RunCaptureFull(context.Background(), `printf '%s' "$DOCKER_HOST"`)
+	stdout, stderr, code, err := RunCaptureFull(context.Background(), runner, `printf '%s' "$DOCKER_HOST"`)
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v (stderr %q)", err, stderr)
 	}

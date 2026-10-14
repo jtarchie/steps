@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/jtarchie/steps/internal/shell"
 	"net"
 	"os"
 	"os/exec"
@@ -54,7 +55,7 @@ Host gpu-alias
 
 	t.Cleanup(func() { _ = runner.Close() })
 
-	err = runner.Run(context.Background(), `echo resolved > out/report.txt`)
+	err = shell.Run(context.Background(), runner, `echo resolved > out/report.txt`)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -99,7 +100,7 @@ Host gpu-alias
 
 	t.Cleanup(func() { _ = runner.Close() })
 
-	err = runner.Run(context.Background(), "true")
+	err = shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

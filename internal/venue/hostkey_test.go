@@ -36,7 +36,7 @@ func TestWorkerHostKeyPinIsDialable(t *testing.T) {
 
 	runner := pinnedRunner(t, mapping, t.TempDir())
 
-	out, err := runner.RunCapture(context.Background(), "echo pinned")
+	out, err := shell.RunCapture(context.Background(), runner, "echo pinned")
 	if err != nil {
 		t.Fatalf("running against a pinned worker: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestWorkerHostKeyPinRefusesAnotherMachine(t *testing.T) {
 
 	runner := pinnedRunner(t, mapping, t.TempDir())
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err == nil {
 		t.Fatal("a worker whose host key does not match its pin ran the command")
 	}

@@ -14,14 +14,10 @@ import (
 // stallingRunner fails only once its context ends, the way a placed command's docker handoff does when the step's deadline cancels it mid-flight.
 type stallingRunner struct{ shell.Runner }
 
-func (stallingRunner) RunCaptureFullLimitedStreamed(ctx context.Context, _ string, _ int, _ string) (string, string, int, error) {
+func (stallingRunner) Exec(ctx context.Context, _ shell.Command) (shell.Result, error) {
 	<-ctx.Done()
 
-	return "", "", 0, errors.New("the worker did not finish with the docker socket after 2s")
-}
-
-func (r stallingRunner) RunCaptureFullLimited(ctx context.Context, command string, maxBytes int, spillDir string) (string, string, int, error) {
-	return r.RunCaptureFullLimitedStreamed(ctx, command, maxBytes, spillDir)
+	return shell.Result{}, errors.New("the worker did not finish with the docker socket after 2s")
 }
 
 // TestADeadlineEndingACommandIsNotALostTree: a command the step's own timeout: cut off says nothing about the container, and filing it as lost made the step's error "the step's container could not be reached" in place of the deadline (measured: a placed self-build implementer at exactly its 2h ceiling).

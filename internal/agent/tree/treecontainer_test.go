@@ -372,7 +372,7 @@ func TestProbeRefusesAnImageWithoutTheFileUtilities(t *testing.T) {
 	t.Cleanup(func() { shell.CloseRunner(runner, "test") })
 
 	// The image is fine; hiding the binaries is what makes it thin, and it proves the probe reads the container rather than assuming.
-	_, _, _, err = runner.RunCaptureFullLimited(t.Context(), "rm -f /bin/find /usr/bin/find", 4096, "")
+	_, _, _, err = shell.RunCaptureFullLimited(t.Context(), runner, "rm -f /bin/find /usr/bin/find", 4096, "")
 	if err != nil {
 		t.Fatalf("preparing the fixture: %v", err)
 	}

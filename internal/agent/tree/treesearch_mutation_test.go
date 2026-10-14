@@ -17,8 +17,8 @@ type treesearchCannedRunner struct {
 	code   int
 }
 
-func (r treesearchCannedRunner) RunCaptureFullLimited(context.Context, string, int, string) (string, string, int, error) {
-	return r.stdout, "", r.code, nil
+func (r treesearchCannedRunner) Exec(context.Context, shell.Command) (shell.Result, error) {
+	return shell.Result{Stdout: r.stdout, Code: r.code}, nil
 }
 
 // TestFindPathsKeepsWhatAFailingFindPrinted pins find's partial answer: an unreadable directory makes find exit nonzero while still printing everything else it walked, and those paths are the search's to keep.

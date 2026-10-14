@@ -413,7 +413,7 @@ func TestLinuxRootWorkerReportsItsOwnIdentity(t *testing.T) {
 
 	t.Cleanup(func() { _ = runner.Close() })
 
-	err = runner.Run(context.Background(), `cat data/seed.txt > out/report.txt; id -u >> out/report.txt`)
+	err = shell.Run(context.Background(), runner, `cat data/seed.txt > out/report.txt; id -u >> out/report.txt`)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestLinuxRootWorkerRunsAContainerizedStep(t *testing.T) {
 
 	// cat FAILS on an unresolved bind mount, so a wrong mount path fails the
 	// step here rather than producing a report to inspect.
-	err = runner.Run(context.Background(),
+	err = shell.Run(context.Background(), runner,
 		`cat data/seed.txt > out/report.txt; `+
 			`if [ -e /usr/sbin/sshd ]; then echo host; else echo container; fi >> out/report.txt; `+
 			`echo "$STEPS_WORKER" >> out/report.txt`)
@@ -552,7 +552,7 @@ func TestLinuxRootWorkerPullsAPlacedImage(t *testing.T) {
 
 	t.Cleanup(func() { _ = runner.Close() })
 
-	err = runner.Run(context.Background(), `cat data/seed.txt > out/report.txt`)
+	err = shell.Run(context.Background(), runner, `cat data/seed.txt > out/report.txt`)
 	if err != nil {
 		t.Fatalf("Run: %v; the worker's daemon started empty, so the image was never pulled", err)
 	}
@@ -572,7 +572,7 @@ func TestLinuxRootWorkerCancelEndsTheWholeProcessGroup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
-	err := runner.Run(ctx, "sleep 301 & sleep 302; wait")
+	err := shell.Run(ctx, runner, "sleep 301 & sleep 302; wait")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Run: %v, want the deadline", err)
 	}
@@ -632,7 +632,7 @@ func TestAWSInstallReachesARealSSHDAndItsDaemon(t *testing.T) {
 
 		runner := newLocalRunner(t, shell.RunnerSpec{Cwd: cwd, Image: containerizedStepImage, Worker: "aws://i-0abc123def456789", Fetch: []string{"out"}})
 
-		err := runner.Run(context.Background(), "cat data/seed.txt > out/report.txt")
+		err := shell.Run(context.Background(), runner, "cat data/seed.txt > out/report.txt")
 		if err != nil {
 			t.Fatalf("Run on the aws:// path: %v", err)
 		}

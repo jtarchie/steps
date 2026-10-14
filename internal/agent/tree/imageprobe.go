@@ -31,7 +31,7 @@ func probeUserland(ctx context.Context, runner shell.Runner, image string) (user
 	script := `printf 'pwd=%s\n' "$(pwd)"; for b in ` + strings.Join(treeCommands, " ") +
 		`; do command -v "$b" >/dev/null 2>&1 || printf 'missing=%s\n' "$b"; done`
 
-	out, _, code, err := runner.RunCaptureFullLimited(ctx, script, probeOutputBytes, "")
+	out, _, code, err := shell.RunCaptureFullLimited(ctx, runner, script, probeOutputBytes, "")
 	if err != nil {
 		return userland{}, fmt.Errorf("%w %q: %w", errUnusableImage, image, err)
 	}

@@ -297,7 +297,7 @@ func TestHostRunnerWithLabelPrefixesLiveOutput(t *testing.T) {
 	got := captureStdout(t, func() {
 		runner := HostRunner{}.WithLabel("build")
 
-		err := runner.Run(context.Background(), "echo one; echo two")
+		err := Run(context.Background(), runner, "echo one; echo two")
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -324,7 +324,7 @@ func TestHostRunnerRunCaptureFullLimitedStreamedPrefixesAndCaptures(t *testing.T
 	got := captureStdout(t, func() {
 		var err error
 
-		stdout, stderr, exitCode, err = runner.RunCaptureFullLimitedStreamed(context.Background(), "echo hi", 0, "")
+		stdout, stderr, exitCode, err = RunCaptureFullLimitedStreamed(context.Background(), runner, "echo hi", 0, "")
 		if err != nil {
 			t.Fatalf("RunCaptureFullLimitedStreamed: %v", err)
 		}
@@ -356,7 +356,7 @@ func TestHostRunnerRunCaptureFullLimitedStaysSilent(t *testing.T) {
 	runner := HostRunner{}.WithLabel("guard")
 
 	got := captureStdout(t, func() {
-		_, _, _, err := runner.RunCaptureFullLimited(context.Background(), "echo hi", 0, "")
+		_, _, _, err := RunCaptureFullLimited(context.Background(), runner, "echo hi", 0, "")
 		if err != nil {
 			t.Fatalf("RunCaptureFullLimited: %v", err)
 		}

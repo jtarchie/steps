@@ -52,7 +52,7 @@ func TestVenueRunsACommandAndBringsOutputsBack(t *testing.T) {
 
 	runner := newLocalRunner(t, localWorker(t, cwd, "out"))
 
-	err := runner.Run(context.Background(), "cat data/seed.txt > out/report.txt")
+	err := shell.Run(context.Background(), runner, "cat data/seed.txt > out/report.txt")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestVenueNonzeroExitIsAStepFailure(t *testing.T) {
 
 	runner := newLocalRunner(t, localWorker(t, t.TempDir()))
 
-	err := runner.Run(context.Background(), "exit 3")
+	err := shell.Run(context.Background(), runner, "exit 3")
 	if err == nil {
 		t.Fatal("Run succeeded on a command that exited 3")
 	}
@@ -90,7 +90,7 @@ func TestVenueReportsExitAsData(t *testing.T) {
 
 	runner := newLocalRunner(t, localWorker(t, t.TempDir()))
 
-	stdout, stderr, code, err := runner.RunCaptureFull(context.Background(), "echo out; echo err >&2; exit 4")
+	stdout, stderr, code, err := shell.RunCaptureFull(context.Background(), runner, "echo out; echo err >&2; exit 4")
 	if err != nil {
 		t.Fatalf("RunCaptureFull returned an error for a command that ran: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestVenueUnreachableWorkerIsNotAVerdict(t *testing.T) {
 
 	t.Cleanup(func() { _ = runner.Close() })
 
-	_, _, _, err = runner.RunCaptureFull(context.Background(), "true")
+	_, _, _, err = shell.RunCaptureFull(context.Background(), runner, "true")
 	if err == nil {
 		t.Fatal("RunCaptureFull succeeded against a worker that cannot be started")
 	}
@@ -168,7 +168,7 @@ func TestVenueReadsADeadWarmMachineAsReclaimed(t *testing.T) {
 
 			t.Cleanup(func() { _ = runner.Close() })
 
-			_, err = runner.RunCapture(c.ctx, "true")
+			_, err = shell.RunCapture(c.ctx, runner, "true")
 			if err == nil {
 				t.Fatal("RunCapture succeeded against a worker that cannot be started")
 			}
@@ -180,16 +180,18 @@ func TestVenueReadsADeadWarmMachineAsReclaimed(t *testing.T) {
 	}
 }
 
-// TestVenueCapturesAndStreams pins the two halves of RunStreamedCapture.
+// TestVenueCapturesAndStreams pins the two halves of a streamed, captured Exec.
 func TestVenueCapturesAndStreams(t *testing.T) {
 	t.Parallel()
 
 	runner := newLocalRunner(t, localWorker(t, t.TempDir()))
 
-	stdout, _, err := runner.RunStreamedCapture(context.Background(), "echo captured", 0)
+	res, err := runner.Exec(context.Background(), shell.Command{Script: "echo captured", Stream: shell.StreamBoth, Capture: true})
 	if err != nil {
-		t.Fatalf("RunStreamedCapture: %v", err)
+		t.Fatalf("Exec: %v", err)
 	}
+
+	stdout := res.Stdout
 
 	if stdout != "captured\n" {
 		t.Errorf("stdout = %q, want %q", stdout, "captured\n")
@@ -203,7 +205,7 @@ func TestVenueBoundsCapturedOutput(t *testing.T) {
 
 	runner := newLocalRunner(t, localWorker(t, t.TempDir()))
 
-	stdout, _, _, err := runner.RunCaptureFullLimited(context.Background(), "printf '0123456789'", 4, "")
+	stdout, _, _, err := shell.RunCaptureFullLimited(context.Background(), runner, "printf '0123456789'", 4, "")
 	if err != nil {
 		t.Fatalf("RunCaptureFullLimited: %v", err)
 	}
@@ -229,7 +231,7 @@ func TestVenueSharesOneSessionAcrossLabels(t *testing.T) {
 	runner := newLocalRunner(t, localWorker(t, cwd, "out"))
 	labelled := runner.WithLabel("build")
 
-	err := runner.Run(context.Background(), "echo one > out/one.txt")
+	err := shell.Run(context.Background(), runner, "echo one > out/one.txt")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -241,7 +243,7 @@ func TestVenueSharesOneSessionAcrossLabels(t *testing.T) {
 	// The second command runs in the SAME work directory on the worker, which
 	// is only true if the labelled copy shares the session rather than dialing
 	// its own.
-	err = labelled.Run(ctx, "test -f out/one.txt && echo two > out/two.txt && echo two")
+	err = shell.Run(ctx, labelled, "test -f out/one.txt && echo two > out/two.txt && echo two")
 	if err != nil {
 		t.Fatalf("the labelled copy did not see the first command's work: %v", err)
 	}
@@ -285,7 +287,7 @@ func TestVenueCancellationStopsTheCommand(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), shortWait)
 	defer cancel()
 
-	err := runner.Run(ctx, "sleep 60")
+	err := shell.Run(ctx, runner, "sleep 60")
 	if err == nil {
 		t.Fatal("a cancelled command reported success")
 	}
@@ -346,7 +348,7 @@ func TestNoWorkerIsTheLocalRunner(t *testing.T) {
 		t.Error("a spec with no worker produced a venue runner")
 	}
 
-	err = runner.Run(context.Background(), "true")
+	err = shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("the local runner did not run: %v", err)
 	}
@@ -392,7 +394,7 @@ func TestLocalDaemonDownIsNotAnSSHProblem(t *testing.T) {
 
 	runner := newLocalRunner(t, shell.RunnerSpec{Cwd: t.TempDir(), Image: "alpine:3", Worker: "local:"})
 
-	_, err := runner.RunCapture(t.Context(), "true")
+	_, err := shell.RunCapture(t.Context(), runner, "true")
 	if err == nil {
 		t.Fatal("a daemon nothing listens for ran the step")
 	}
@@ -412,7 +414,7 @@ func TestLocalDaemonOverTCPIsDialled(t *testing.T) {
 
 	runner := newLocalRunner(t, shell.RunnerSpec{Cwd: t.TempDir(), Image: "alpine:3", Worker: "local:"})
 
-	_, err := runner.RunCapture(t.Context(), "true")
+	_, err := shell.RunCapture(t.Context(), runner, "true")
 	if err == nil || !strings.Contains(err.Error(), "127.0.0.1:1 did not answer") {
 		t.Errorf("error = %v, want the tcp daemon dialled and found not answering", err)
 	}

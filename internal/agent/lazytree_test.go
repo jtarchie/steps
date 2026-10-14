@@ -18,10 +18,10 @@ type countingRunner struct {
 	commands []string
 }
 
-func (c *countingRunner) RunCaptureFullLimited(_ context.Context, command string, _ int, _ string) (string, string, int, error) {
-	c.commands = append(c.commands, command)
+func (c *countingRunner) Exec(_ context.Context, cmd shell.Command) (shell.Result, error) {
+	c.commands = append(c.commands, cmd.Script)
 
-	return "pwd=/work\n", "", 0, nil
+	return shell.Result{Stdout: "pwd=/work\n"}, nil
 }
 
 func (c *countingRunner) WithLabel(string) shell.Runner { return c }

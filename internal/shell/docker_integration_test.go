@@ -30,7 +30,7 @@ func TestDockerRunnerIntegrationBindMountPersists(t *testing.T) {
 
 	defer CloseRunner(runner, "test")
 
-	err = runner.Run(context.Background(), "echo hello > written.txt")
+	err = Run(context.Background(), runner, "echo hello > written.txt")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestDockerRunnerIntegrationExitCodeRoundTrips(t *testing.T) {
 
 	defer CloseRunner(runner, "test")
 
-	_, _, exitCode, err := runner.RunCaptureFull(context.Background(), "exit 7")
+	_, _, exitCode, err := RunCaptureFull(context.Background(), runner, "exit 7")
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestDockerRunnerIntegrationHostEnvNotVisible(t *testing.T) {
 
 	defer CloseRunner(runner, "test")
 
-	stdout, _, _, err := runner.RunCaptureFull(context.Background(), "echo \"[$STEPS_TEST_HOST_SECRET]\"")
+	stdout, _, _, err := RunCaptureFull(context.Background(), runner, "echo \"[$STEPS_TEST_HOST_SECRET]\"")
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestDockerRunnerIntegrationCancellationTerminatesWithinGrace(t *testing.T) 
 	defer CloseRunner(runner, "test")
 
 	// The container is started first, untimed: a cancel that lands during create waits out createBound by design (a cancelled create still has to remove what it made), and a loaded daemon put the 500ms there and measured 22s.
-	_, _, _, err = runner.RunCaptureFull(t.Context(), "true")
+	_, _, _, err = RunCaptureFull(t.Context(), runner, "true")
 	if err != nil {
 		t.Fatalf("starting the session: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestDockerRunnerIntegrationCancellationTerminatesWithinGrace(t *testing.T) 
 
 	start := time.Now()
 
-	_, _, _, runErr := runner.RunCaptureFull(ctx, "sleep 30")
+	_, _, _, runErr := RunCaptureFull(ctx, runner, "sleep 30")
 
 	// The command itself keeps running in the container until the session is
 	// torn down — the same as before, when the thing being killed was a docker
@@ -143,7 +143,7 @@ func TestDockerRunnerIntegrationStatePersistsAcrossCommands(t *testing.T) {
 	// Written outside the bind mount on purpose: a file under the mounted
 	// working directory would persist even without a shared container, so it
 	// would prove nothing about the container being the same one.
-	_, _, exitCode, err := runner.RunCaptureFull(context.Background(), "echo persisted > /tmp/marker")
+	_, _, exitCode, err := RunCaptureFull(context.Background(), runner, "echo persisted > /tmp/marker")
 	if err != nil {
 		t.Fatalf("RunCaptureFull (write): %v", err)
 	}
@@ -152,7 +152,7 @@ func TestDockerRunnerIntegrationStatePersistsAcrossCommands(t *testing.T) {
 		t.Fatalf("writing the marker exited %d", exitCode)
 	}
 
-	stdout, stderr, exitCode, err := runner.RunCaptureFull(context.Background(), "cat /tmp/marker")
+	stdout, stderr, exitCode, err := RunCaptureFull(context.Background(), runner, "cat /tmp/marker")
 	if err != nil {
 		t.Fatalf("RunCaptureFull (read): %v", err)
 	}
@@ -182,7 +182,7 @@ func TestDockerRunnerIntegrationCloseRemovesContainer(t *testing.T) {
 		t.Fatal("expected a DockerRunner")
 	}
 
-	_, _, _, err = runner.RunCaptureFull(context.Background(), "true")
+	_, _, _, err = RunCaptureFull(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
 	}

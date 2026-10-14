@@ -17,7 +17,7 @@ func TestVenueSendsBuildMetadataPerCommand(t *testing.T) {
 	for _, id := range []string{"RUN-A", "RUN-B"} {
 		ctx := shell.WithBuildMetadata(context.Background(), shell.BuildMetadata{RunID: id})
 
-		out, err := runner.RunCapture(ctx, `printf %s "$STEPS_RUN_ID"`)
+		out, err := shell.RunCapture(ctx, runner, `printf %s "$STEPS_RUN_ID"`)
 		if err != nil {
 			t.Fatalf("RunCapture: %v", err)
 		}
@@ -27,7 +27,7 @@ func TestVenueSendsBuildMetadataPerCommand(t *testing.T) {
 		}
 	}
 
-	out, err := runner.RunCapture(context.Background(), `printf %s "${STEPS_RUN_ID-none}"`)
+	out, err := shell.RunCapture(context.Background(), runner, `printf %s "${STEPS_RUN_ID-none}"`)
 	if err != nil || string(out) != "none" {
 		t.Errorf("a context with no metadata saw %q, %v; want none", out, err)
 	}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/dockerapi"
+	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/testsshd"
 	"github.com/jtarchie/steps/internal/treedigest"
 )
@@ -90,7 +91,7 @@ func TestDockerPlusNeverEvictsALowerInUse(t *testing.T) {
 
 	open := plusRunnerFor(t, worker, cwd)
 
-	err := open.Run(t.Context(), "true")
+	err := shell.Run(t.Context(), open, "true")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +99,7 @@ func TestDockerPlusNeverEvictsALowerInUse(t *testing.T) {
 	scopeEviction(t, 1, time.Hour)
 	runAndClose(t, worker, payloadDir(t, 4096), "true")
 
-	err = open.Run(t.Context(), "test -s src/blob.bin")
+	err = shell.Run(t.Context(), open, "test -s src/blob.bin")
 	if err != nil {
 		t.Fatalf("the open session lost its input to eviction: %v", err)
 	}
@@ -117,7 +118,7 @@ func TestDockerPlusNeverReclaimsALiveOverlaysUpper(t *testing.T) {
 
 	open := plusRunnerFor(t, worker, payloadDir(t, 1024))
 
-	err := open.Run(t.Context(), "echo kept > src/written.txt")
+	err := shell.Run(t.Context(), open, "echo kept > src/written.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +127,7 @@ func TestDockerPlusNeverReclaimsALiveOverlaysUpper(t *testing.T) {
 	runAndClose(t, worker, payloadDir(t, 1024), "true")
 
 	// ls, not test -s: a removed upper still answers a stat from the dentry cache, but its listing comes back empty.
-	err = open.Run(t.Context(), "ls src | grep -qx written.txt")
+	err = shell.Run(t.Context(), open, "ls src | grep -qx written.txt")
 	if err != nil {
 		t.Fatalf("an open session's write into its input was reclaimed: %v", err)
 	}

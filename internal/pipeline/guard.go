@@ -86,7 +86,7 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 		defer shell.CloseRunner(runner, label)
 		defer releaseIfReclaimed(ctx, step, runner, spec.Worker)
 
-		stdout, stderr, exitCode, runnerErr = runner.RunCaptureFull(ctx, step.When.Run)
+		stdout, stderr, exitCode, runnerErr = shell.RunCaptureFull(ctx, runner, step.When.Run)
 		if runnerErr != nil {
 			return spec.Worker, fmt.Errorf("%w", runnerErr)
 		}

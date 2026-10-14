@@ -354,7 +354,7 @@ func TestVenueRunsAStepOnAGCPWorker(t *testing.T) {
 
 	runner := newLocalRunner(t, localGCPWorker(t, sshd, cwd, "out"))
 
-	err := runner.Run(context.Background(), "cat data/seed.txt > out/report.txt")
+	err := shell.Run(context.Background(), runner, "cat data/seed.txt > out/report.txt")
 	if err != nil {
 		t.Fatalf("Run on a gcp:// worker: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestGCPSecondSessionReusesTheInstalledKey(t *testing.T) {
 	for range 2 {
 		runner := newLocalRunner(t, spec)
 
-		err := runner.Run(context.Background(), "true")
+		err := shell.Run(context.Background(), runner, "true")
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -495,7 +495,7 @@ func TestGCPDialWaitsOutABootingSSHD(t *testing.T) {
 	cwd := t.TempDir()
 	runner := newLocalRunner(t, localGCPWorker(t, sshd, cwd))
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("Run after a booting sshd: %v", err)
 	}
@@ -513,7 +513,7 @@ func TestGCPRefusesWhenGuestAttributesAreDisabled(t *testing.T) {
 
 	runner := newLocalRunner(t, localGCPWorker(t, sshd, t.TempDir()))
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err == nil {
 		t.Fatal("a worker with no attestable host key was accepted")
 	}
@@ -543,7 +543,7 @@ func TestGCPHostKeyPinBypassesGuestAttributes(t *testing.T) {
 
 	runner := newLocalRunner(t, spec)
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("Run with a pinned host key: %v", err)
 	}
@@ -563,7 +563,7 @@ func TestGCPWrongHostKeyIsRefused(t *testing.T) {
 
 	runner := newLocalRunner(t, localGCPWorker(t, sshd, t.TempDir()))
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err == nil {
 		t.Fatal("a host offering an unattested key was accepted")
 	}
@@ -1195,7 +1195,7 @@ func TestGCPDialRetriesWhileTheKeyPropagates(t *testing.T) {
 
 	runner := newLocalRunner(t, localGCPWorker(t, sshd, t.TempDir()))
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("Run against a slow guest agent: %v", err)
 	}
@@ -1313,7 +1313,7 @@ func TestGCPDialNegotiatesOnlyAttestedHostKeyAlgorithms(t *testing.T) {
 
 	runner := newLocalRunner(t, localGCPWorker(t, sshd, t.TempDir()))
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("Run against a partially-attested instance: %v", err)
 	}
@@ -1359,7 +1359,7 @@ func TestGCPHostKeyWaitRidesOutAControlPlaneBlip(t *testing.T) {
 
 	runner := newLocalRunner(t, localGCPWorker(t, sshd, t.TempDir()))
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("Run through a control-plane blip: %v", err)
 	}
@@ -1425,7 +1425,7 @@ func TestGCPTokenIsMintedPerDialAttempt(t *testing.T) {
 
 	runner := newLocalRunner(t, localGCPWorker(t, sshd, t.TempDir()))
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

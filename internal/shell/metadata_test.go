@@ -14,7 +14,7 @@ func TestBuildMetadataReachesAHostCommand(t *testing.T) {
 		RunID: "RUN1", JobName: "job", PipelineName: "pipe", PipelineRevision: "abc", URL: "http://x",
 	})
 
-	out, err := HostRunner{cwd: t.TempDir()}.RunCapture(ctx, `echo "$STEPS_RUN_ID $STEPS_JOB_NAME $STEPS_PIPELINE_NAME $STEPS_PIPELINE_REVISION $STEPS_URL"`)
+	out, err := RunCapture(ctx, HostRunner{cwd: t.TempDir()}, `echo "$STEPS_RUN_ID $STEPS_JOB_NAME $STEPS_PIPELINE_NAME $STEPS_PIPELINE_REVISION $STEPS_URL"`)
 	if err != nil {
 		t.Fatalf("RunCapture: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestBuildMetadataUnsetFieldsAreAbsentNotEmpty(t *testing.T) {
 
 	ctx := WithBuildMetadata(context.Background(), BuildMetadata{RunID: "RUN1"})
 
-	out, err := HostRunner{cwd: t.TempDir()}.RunCapture(ctx, `echo "${STEPS_RUN_ID+set} ${STEPS_URL+set}"`)
+	out, err := RunCapture(ctx, HostRunner{cwd: t.TempDir()}, `echo "${STEPS_RUN_ID+set} ${STEPS_URL+set}"`)
 	if err != nil {
 		t.Fatalf("RunCapture: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestBuildMetadataDropsAValueWithNUL(t *testing.T) {
 
 	ctx := WithBuildMetadata(context.Background(), BuildMetadata{RunID: "RUN1", JobName: "bad\x00name"})
 
-	out, err := HostRunner{cwd: t.TempDir()}.RunCapture(ctx, `echo "$STEPS_RUN_ID ${STEPS_JOB_NAME+set}"`)
+	out, err := RunCapture(ctx, HostRunner{cwd: t.TempDir()}, `echo "$STEPS_RUN_ID ${STEPS_JOB_NAME+set}"`)
 	if err != nil {
 		t.Fatalf("a NUL must cost one variable, not the command: %v", err)
 	}

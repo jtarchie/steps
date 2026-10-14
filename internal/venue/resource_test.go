@@ -5,6 +5,7 @@ package venue
 
 import (
 	"context"
+	"github.com/jtarchie/steps/internal/shell"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,7 +23,7 @@ func TestVenueFetchAllBringsTheWholeTreeHome(t *testing.T) {
 
 	runner := newLocalRunner(t, spec)
 
-	err := runner.Run(context.Background(), "mkdir -p nested && echo one > top.txt && echo two > nested/deep.txt")
+	err := shell.Run(context.Background(), runner, "mkdir -p nested && echo one > top.txt && echo two > nested/deep.txt")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -60,7 +61,7 @@ func TestVenueNoTreeRunsACommand(t *testing.T) {
 
 	runner := newLocalRunner(t, spec)
 
-	out, err := runner.RunCapture(context.Background(), `printf '[{"where":"%s"}]' "$STEPS_WORKER"`)
+	out, err := shell.RunCapture(context.Background(), runner, `printf '[{"where":"%s"}]' "$STEPS_WORKER"`)
 	if err != nil {
 		t.Fatalf("RunCapture: %v", err)
 	}
@@ -84,7 +85,7 @@ func TestVenueFetchAllRemovesWhatTheWorkerDeleted(t *testing.T) {
 
 	runner := newLocalRunner(t, spec)
 
-	err := runner.Run(context.Background(), "rm stale.tgz && echo fresh > src.txt")
+	err := shell.Run(context.Background(), runner, "rm stale.tgz && echo fresh > src.txt")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

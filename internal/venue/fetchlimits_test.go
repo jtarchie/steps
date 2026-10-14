@@ -40,7 +40,7 @@ func TestFetchedTreesAreBounded(t *testing.T) { //nolint:paralleltest // swaps f
 
 		tightenFetchLimits(t)
 
-		err = runner.Run(t.Context(), "echo 12345678 > out/big.txt")
+		err = shell.Run(t.Context(), runner, "echo 12345678 > out/big.txt")
 		assertTooLarge(t, err, cwd)
 	})
 
@@ -52,7 +52,7 @@ func TestFetchedTreesAreBounded(t *testing.T) { //nolint:paralleltest // swaps f
 
 		tightenFetchLimits(t)
 
-		err := runner.Run(t.Context(), "echo 12345678 > out/big.txt")
+		err := shell.Run(t.Context(), runner, "echo 12345678 > out/big.txt")
 		assertTooLarge(t, err, cwd)
 	})
 

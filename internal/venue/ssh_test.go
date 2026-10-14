@@ -56,7 +56,7 @@ func TestSSHWorkerRoundTripsAStep(t *testing.T) {
 
 	t.Cleanup(func() { _ = runner.Close() })
 
-	err = runner.Run(context.Background(), `cat data/seed.txt > out/report.txt; echo "$STEPS_WORKER" >> out/report.txt; echo done > logs/run.log`)
+	err = shell.Run(context.Background(), runner, `cat data/seed.txt > out/report.txt; echo "$STEPS_WORKER" >> out/report.txt; echo done > logs/run.log`)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -97,10 +97,12 @@ func TestSSHWorkerSendsNoEnvRequests(t *testing.T) {
 
 	t.Cleanup(func() { _ = runner.Close() })
 
-	stdout, _, err := runner.RunStreamedCapture(context.Background(), `echo "$STEPS_TEST_SSH_VALUE"`, 0)
+	res, err := runner.Exec(context.Background(), shell.Command{Script: `echo "$STEPS_TEST_SSH_VALUE"`, Stream: shell.StreamBoth, Capture: true})
 	if err != nil {
-		t.Fatalf("RunStreamedCapture: %v", err)
+		t.Fatalf("Exec: %v", err)
 	}
+
+	stdout := res.Stdout
 
 	if !strings.Contains(stdout, "carried-in-a-frame") {
 		t.Errorf("stdout = %q, want the opted-in value to have reached the command", stdout)
@@ -124,10 +126,12 @@ func TestSSHWorkerSendsBuildMetadataOffTheCommandLine(t *testing.T) {
 	runner := newLocalRunner(t, spec)
 	ctx := shell.WithBuildMetadata(t.Context(), shell.BuildMetadata{RunID: "run-42"})
 
-	stdout, _, err := runner.RunStreamedCapture(ctx, `echo "$STEPS_RUN_ID $STEPS_TEST_SSH_SECRET"; ps -o args= -p $$`, 0)
+	res, err := runner.Exec(ctx, shell.Command{Script: `echo "$STEPS_RUN_ID $STEPS_TEST_SSH_SECRET"; ps -o args= -p $$`, Stream: shell.StreamBoth, Capture: true})
 	if err != nil {
-		t.Fatalf("RunStreamedCapture: %v", err)
+		t.Fatalf("Exec: %v", err)
 	}
+
+	stdout := res.Stdout
 
 	if !strings.HasPrefix(stdout, "run-42 hunter2\n") {
 		t.Errorf("stdout = %q, want the run id and the env value", stdout)
@@ -152,7 +156,7 @@ func TestSSHWorkerNonzeroExitIsAStepFailure(t *testing.T) {
 
 	t.Cleanup(func() { _ = runner.Close() })
 
-	err = runner.Run(context.Background(), "exit 3")
+	err = shell.Run(context.Background(), runner, "exit 3")
 	if err == nil {
 		t.Fatal("Run succeeded on a command that exited 3")
 	}
@@ -162,7 +166,7 @@ func TestSSHWorkerNonzeroExitIsAStepFailure(t *testing.T) {
 	}
 
 	// A guard reads the status itself, so it must be the command's own and not a stand-in.
-	_, _, code, err := runner.RunCaptureFull(context.Background(), "exit 3")
+	_, _, code, err := shell.RunCaptureFull(context.Background(), runner, "exit 3")
 	if err != nil || code != 3 {
 		t.Errorf("RunCaptureFull = %d, %v; want exit 3 as data", code, err)
 	}
@@ -180,7 +184,7 @@ func TestSSHWorkerCleansUpItsScratch(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	err = runner.Run(context.Background(), "true")
+	err = shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -214,7 +218,7 @@ func TestSSHWorkerReportsScratchItCouldNotRemove(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	err = runner.Run(t.Context(), "mkdir -p locked && touch locked/file && chmod 555 locked")
+	err = shell.Run(t.Context(), runner, "mkdir -p locked && touch locked/file && chmod 555 locked")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -254,7 +258,7 @@ func TestSSHWorkerRefusesAnUnknownHostKey(t *testing.T) {
 
 	t.Cleanup(func() { _ = runner.Close() })
 
-	err = runner.Run(context.Background(), "true")
+	err = shell.Run(context.Background(), runner, "true")
 	if err == nil {
 		t.Fatal("the venue connected to a host whose key it had never seen")
 	}
@@ -336,7 +340,7 @@ func TestSSHWorkerCancellationEndsAWedgedCommand(t *testing.T) {
 	runner := newLocalRunner(t, sshSpec(t, server, t.TempDir()))
 
 	// Connected first: the session's dial, sweep and upload ride the first command's context, so under load they spent shortWait themselves, the "deadline" was the connect's, and no sleep ever ran.
-	err := runner.Run(t.Context(), "true")
+	err := shell.Run(t.Context(), runner, "true")
 	if err != nil {
 		t.Fatalf("connecting: %v", err)
 	}
@@ -348,7 +352,7 @@ func TestSSHWorkerCancellationEndsAWedgedCommand(t *testing.T) {
 	seconds := "6" + strconv.Itoa(os.Getpid())
 
 	started := time.Now()
-	err = runner.Run(ctx, "sleep "+seconds)
+	err = shell.Run(ctx, runner, "sleep "+seconds)
 
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v, want it to carry the deadline", err)
@@ -359,7 +363,7 @@ func TestSSHWorkerCancellationEndsAWedgedCommand(t *testing.T) {
 		t.Fatalf("the cancel took %s to come back", elapsed)
 	}
 
-	out, err := runner.RunCapture(t.Context(), "pgrep -f 'slee[p] "+seconds+"' | wc -l")
+	out, err := shell.RunCapture(t.Context(), runner, "pgrep -f 'slee[p] "+seconds+"' | wc -l")
 	if err != nil {
 		t.Fatalf("checking for the cancelled command: %v", err)
 	}
@@ -390,7 +394,7 @@ func TestSSHWorkerFailsWhenTheTreeDoesNotUnpack(t *testing.T) {
 	cwd := t.TempDir()
 	mustWrite(t, filepath.Join(cwd, "seed.txt"), "seed\n")
 
-	err = newLocalRunner(t, sshSpec(t, newTestSSHD(t), cwd)).Run(t.Context(), "true")
+	err = shell.Run(t.Context(), newLocalRunner(t, sshSpec(t, newTestSSHD(t), cwd)), "true")
 	if !errors.Is(err, errBareTransfer) || !strings.Contains(err.Error(), "disk full") {
 		t.Errorf("Run = %v, want the failed unpack reported", err)
 	}
@@ -410,8 +414,8 @@ func TestSSHWorkerFailsWhenTheOutputsDoNotPack(t *testing.T) {
 	runner := newLocalRunner(t, sshSpec(t, newTestSSHD(t), cwd, "out"))
 
 	// Readable again afterwards, or the session's own cleanup cannot remove it.
-	err := runner.Run(t.Context(), "echo kept > out/kept; echo x > out/unreadable; chmod 000 out/unreadable")
-	_ = runner.Run(context.Background(), "chmod 644 out/unreadable")
+	err := shell.Run(t.Context(), runner, "echo kept > out/kept; echo x > out/unreadable; chmod 000 out/unreadable")
+	_ = shell.Run(context.Background(), runner, "chmod 644 out/unreadable")
 
 	if !errors.Is(err, errBareTransfer) {
 		t.Errorf("Run = %v, want the failed pack reported", err)
@@ -427,10 +431,10 @@ func cancelOnceStarted(t *testing.T, runner shell.Runner, command string) {
 
 	done := make(chan error, 1)
 
-	go func() { done <- runner.Run(ctx, command) }()
+	go func() { done <- shell.Run(ctx, runner, command) }()
 
 	deadline := time.Now().Add(20 * time.Second)
-	for runner.Run(t.Context(), "test -f started") != nil {
+	for shell.Run(t.Context(), runner, "test -f started") != nil {
 		if time.Now().After(deadline) {
 			t.Fatal("the command never started")
 		}
@@ -454,7 +458,7 @@ func TestSSHWorkerCancelGivesTERMItsGrace(t *testing.T) {
 
 	cancelOnceStarted(t, runner, `trap 'sleep 0.5; touch cleaned; exit 0' TERM; touch started; while :; do sleep 1; done`)
 
-	if runner.Run(t.Context(), "test -f cleaned") != nil {
+	if shell.Run(t.Context(), runner, "test -f cleaned") != nil {
 		t.Error("the command's TERM handler never finished: KILL came before its grace ran out")
 	}
 }
@@ -470,7 +474,7 @@ func TestSSHWorkerCancelKillsACommandIgnoringTERM(t *testing.T) {
 	cancelOnceStarted(t, runner, `: `+token+`; trap '' TERM; touch started; while :; do sleep 1; done`)
 
 	// The bracket keeps the pattern from matching the sh that runs it.
-	out, err := runner.RunCapture(t.Context(), "pgrep -f 'ignoreste[r]m"+strconv.Itoa(os.Getpid())+"' | wc -l")
+	out, err := shell.RunCapture(t.Context(), runner, "pgrep -f 'ignoreste[r]m"+strconv.Itoa(os.Getpid())+"' | wc -l")
 	if err != nil {
 		t.Fatalf("checking for the cancelled command: %v", err)
 	}
@@ -506,7 +510,7 @@ func TestSSHWorkerSweepsWhatADeadProcessLeft(t *testing.T) {
 
 	runner := newLocalRunner(t, sshSpec(t, server, t.TempDir()))
 
-	err = runner.Run(t.Context(), "true")
+	err = shell.Run(t.Context(), runner, "true")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,7 +537,7 @@ func TestSSHWorkerKeepsADirectoryNothingWillSweep(t *testing.T) {
 
 	runner := newLocalRunner(t, spec)
 
-	err := runner.Run(t.Context(), "touch kept")
+	err := shell.Run(t.Context(), runner, "touch kept")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -567,7 +571,7 @@ func TestSSHWorkerRedialsADroppedConnection(t *testing.T) {
 
 	t.Cleanup(func() { _ = runner.Close() })
 
-	err = runner.Run(t.Context(), "echo kept > marker")
+	err = shell.Run(t.Context(), runner, "echo kept > marker")
 	if err != nil {
 		t.Fatalf("first command: %v", err)
 	}
@@ -580,9 +584,9 @@ func TestSSHWorkerRedialsADroppedConnection(t *testing.T) {
 	_ = bare.s.conn.current().Close()
 
 	// Attempt one: may fail on the dropped connection, or already find it gone and dial again.
-	_ = runner.Run(t.Context(), "true")
+	_ = shell.Run(t.Context(), runner, "true")
 
-	out, err := runner.RunCapture(t.Context(), "cat marker")
+	out, err := shell.RunCapture(t.Context(), runner, "cat marker")
 	if err != nil {
 		t.Fatalf("a command after the connection dropped: %v", err)
 	}
@@ -601,7 +605,7 @@ func TestSSHWorkerRemovesItsDirectoryAfterADroppedConnection(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	err = runner.Run(t.Context(), "true")
+	err = shell.Run(t.Context(), runner, "true")
 	if err != nil {
 		t.Fatalf("first command: %v", err)
 	}
@@ -631,7 +635,7 @@ func TestSSHWorkerSuspectsAConnectionAnyExchangeFailedOn(t *testing.T) {
 
 	runner := newLocalRunner(t, sshSpec(t, newTestSSHD(t), t.TempDir()))
 
-	err := runner.Run(t.Context(), "true")
+	err := shell.Run(t.Context(), runner, "true")
 	if err != nil {
 		t.Fatalf("first command: %v", err)
 	}

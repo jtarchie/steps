@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/testdocker"
 )
 
@@ -45,7 +46,7 @@ func TestACancelledCommandStillRemovesItsContainer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	_, _, _, _ = placed.RunCaptureFullLimitedStreamed(ctx, "while :; do echo tick; sleep 0.01; done", 1<<20, "")
+	_, _, _, _ = shell.RunCaptureFullLimitedStreamed(ctx, placed, "while :; do echo tick; sleep 0.01; done", 1<<20, "")
 
 	_ = placed.Close()
 

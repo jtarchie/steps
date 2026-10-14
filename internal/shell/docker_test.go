@@ -240,7 +240,7 @@ func TestDockerRunnerCaptureFull(t *testing.T) {
 
 	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
-	stdout, stderr, exitCode, err := runner.RunCaptureFull(context.Background(),
+	stdout, stderr, exitCode, err := RunCaptureFull(context.Background(), runner,
 		"printf 'out text'; printf 'err text' >&2; exit 3")
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
@@ -283,7 +283,7 @@ func TestDockerRunnerReusesOneContainer(t *testing.T) {
 	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
 	for _, command := range []string{"echo one > /tmp/marker", "cat /tmp/marker"} {
-		_, _, code, err := runner.RunCaptureFull(context.Background(), command)
+		_, _, code, err := RunCaptureFull(context.Background(), runner, command)
 		if err != nil || code != 0 {
 			t.Fatalf("%q: exit %d, err %v", command, code, err)
 		}
@@ -303,12 +303,12 @@ func TestDockerRunnerWithLabelSharesOneContainer(t *testing.T) {
 	before := ourContainerCount(t)
 	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
-	_, _, _, err := runner.RunCaptureFull(context.Background(), "true")
+	_, _, _, err := RunCaptureFull(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
 	}
 
-	_, _, _, err = runner.WithLabel("labelled").RunCaptureFull(context.Background(), "true")
+	_, _, _, err = RunCaptureFull(context.Background(), runner.WithLabel("labelled"), "true")
 	if err != nil {
 		t.Fatalf("RunCaptureFull through a labelled runner: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestDockerRunnerCloseIsIdempotent(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	_, _, _, err = runner.RunCaptureFull(context.Background(), "true")
+	_, _, _, err = RunCaptureFull(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestDockerRunnerCaptureFullPreservesAdversarialOutput(t *testing.T) {
 
 	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
-	stdout, _, _, err := runner.RunCaptureFull(context.Background(), "cat /tmp/adversarial 2>/dev/null || printf '%s' "+singleQuote(adversarial))
+	stdout, _, _, err := RunCaptureFull(context.Background(), runner, "cat /tmp/adversarial 2>/dev/null || printf '%s' "+singleQuote(adversarial))
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestDockerRunnerRunErrorsOnNonzeroExit(t *testing.T) {
 
 	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
-	err := runner.Run(context.Background(), "false")
+	err := Run(context.Background(), runner, "false")
 	if err == nil {
 		t.Fatal("expected an error for a nonzero exit from Run (unlike RunCaptureFull)")
 	}
@@ -407,7 +407,7 @@ func TestDockerRunnerRunCaptureReturnsStdout(t *testing.T) {
 
 	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
-	out, err := runner.RunCapture(context.Background(), "printf 'captured output'")
+	out, err := RunCapture(context.Background(), runner, "printf 'captured output'")
 	if err != nil {
 		t.Fatalf("RunCapture: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestDockerRunnerRunCaptureReturnsStdout(t *testing.T) {
 
 // TestDockerRunnerRunCaptureLogsStderrOnFailure guards against a regression
 // where RunCapture streamed stderr live but never captured it for the debug
-// log, unlike HostRunner.RunCapture — which exists so a failing check/out
+// log, unlike RunCapture over a HostRunner — which exists so a failing check/out
 // command's output is available for debugging rather than discarded.
 func TestDockerRunnerRunCaptureLogsStderrOnFailure(t *testing.T) {
 	testdocker.Require(t)
@@ -433,7 +433,7 @@ func TestDockerRunnerRunCaptureLogsStderrOnFailure(t *testing.T) {
 
 	defer slog.SetDefault(prevLogger)
 
-	_, err := runner.RunCapture(context.Background(), "printf 'boom from stderr' >&2; false")
+	_, err := RunCapture(context.Background(), runner, "printf 'boom from stderr' >&2; false")
 	if err == nil {
 		t.Fatal("expected an error for a nonzero exit")
 	}
@@ -521,7 +521,7 @@ func TestDockerRunnerDiagnosesAContainerThatOutlivedTheSettleWindow(t *testing.T
 
 	awaitExited(t, client, id)
 
-	_, _, _, err = runner.RunCaptureFull(t.Context(), "anything")
+	_, _, _, err = RunCaptureFull(t.Context(), runner, "anything")
 	if err == nil {
 		t.Fatal("a command sent to a dead container succeeded")
 	}
@@ -543,7 +543,7 @@ func TestDockerRunnerSaysAContainerKilledMidStepStoppedRatherThanNeverStarted(t 
 
 	runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
-	_, _, _, err := runner.RunCaptureFull(t.Context(), "true")
+	_, _, _, err := RunCaptureFull(t.Context(), runner, "true")
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
 	}
@@ -563,7 +563,7 @@ func TestDockerRunnerSaysAContainerKilledMidStepStoppedRatherThanNeverStarted(t 
 		t.Fatalf("docker kill: %v\n%s", err, out)
 	}
 
-	_, _, _, err = runner.RunCaptureFull(t.Context(), "true")
+	_, _, _, err = RunCaptureFull(t.Context(), runner, "true")
 	if err == nil {
 		t.Fatal("a command sent to a killed container succeeded")
 	}
@@ -589,7 +589,7 @@ func TestDockerRunnerDetectsAContainerThatDiedAtBirth(t *testing.T) {
 	image := entrypointImage(t)
 	runner := newTestRunner(t, RunnerSpec{Image: image, Cwd: testdocker.MountableDir(t)})
 
-	_, _, _, err := runner.RunCaptureFull(t.Context(), "anything")
+	_, _, _, err := RunCaptureFull(t.Context(), runner, "anything")
 	if err == nil {
 		t.Fatal("expected an error when the container did not stay up")
 	}
@@ -624,7 +624,7 @@ func TestRunOnAContainerThatDiedAtBirthIsNotAnExitError(t *testing.T) {
 
 	runner := newTestRunner(t, RunnerSpec{Image: entrypointImage(t), Cwd: testdocker.MountableDir(t)})
 
-	runErr := runner.Run(t.Context(), "true")
+	runErr := Run(t.Context(), runner, "true")
 	if runErr == nil {
 		t.Fatal("Run succeeded against a container that never stayed up")
 	}
@@ -633,7 +633,7 @@ func TestRunOnAContainerThatDiedAtBirthIsNotAnExitError(t *testing.T) {
 		t.Errorf("IsExitError(%v) = true; a guard would read an unusable image as the guard answering no", runErr)
 	}
 
-	_, captureErr := runner.RunCapture(t.Context(), "true")
+	_, captureErr := RunCapture(t.Context(), runner, "true")
 	if captureErr == nil {
 		t.Fatal("RunCapture succeeded against a container that never stayed up")
 	}
@@ -661,7 +661,7 @@ func TestDockerRunnerRemovesAContainerThatDiedAtBirth(t *testing.T) {
 	before := ourContainerCountOf(t, image)
 	runner := newTestRunner(t, RunnerSpec{Image: image, Cwd: testdocker.MountableDir(t)})
 
-	_, _, _, _ = runner.RunCaptureFull(t.Context(), "anything")
+	_, _, _, _ = RunCaptureFull(t.Context(), runner, "anything")
 
 	if after := ourContainerCountOf(t, image); after != before {
 		t.Errorf("container count went %d -> %d; the dead container was left behind", before, after)
@@ -680,7 +680,7 @@ func TestDockerRunnerRejectsCommandsAfterClose(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	_, _, _, err = runner.RunCaptureFull(t.Context(), "true")
+	_, _, _, err = RunCaptureFull(t.Context(), runner, "true")
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
 	}
@@ -690,7 +690,7 @@ func TestDockerRunnerRejectsCommandsAfterClose(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	_, _, _, err = runner.RunCaptureFull(t.Context(), "echo after close")
+	_, _, _, err = RunCaptureFull(t.Context(), runner, "echo after close")
 	if !errors.Is(err, errSessionClosed) {
 		t.Errorf("err = %v, want errSessionClosed", err)
 	}
@@ -704,7 +704,7 @@ func TestDockerRunnerEmptyCwdMountsNothing(t *testing.T) {
 
 	runner := newTestRunner(t, RunnerSpec{Image: testImage})
 
-	stdout, _, code, err := runner.RunCaptureFull(context.Background(), "pwd")
+	stdout, _, code, err := RunCaptureFull(context.Background(), runner, "pwd")
 	if err != nil || code != 0 {
 		t.Fatalf("RunCaptureFull: exit %d, err %v", code, err)
 	}
@@ -831,7 +831,7 @@ func TestDockerRunnerWithNoDaemonHasNoExitCode(t *testing.T) {
 
 	runner := newTestRunner(t, RunnerSpec{Image: testImage, DockerHost: "ssh://refused.invalid"})
 
-	_, _, exitCode, err := runner.RunCaptureFull(t.Context(), "true")
+	_, _, exitCode, err := RunCaptureFull(t.Context(), runner, "true")
 	if err == nil {
 		t.Fatal("a command ran without a daemon")
 	}

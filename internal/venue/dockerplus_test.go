@@ -85,7 +85,7 @@ func TestDockerPlusNamesADeadDaemonBeforeMovingAFile(t *testing.T) {
 	writeFile(t, filepath.Join(cwd, "input.txt"), "x")
 
 	missing := filepath.Join(t.TempDir(), "no-daemon.sock")
-	err := plusRunnerFor(t, dockerPlusURL(testsshd.New(t), missing), cwd).Run(t.Context(), "true")
+	err := shell.Run(t.Context(), plusRunnerFor(t, dockerPlusURL(testsshd.New(t), missing), cwd), "true")
 
 	if err == nil || !strings.Contains(err.Error(), missing) || !strings.Contains(err.Error(), "did not answer") {
 		t.Fatalf("want an error naming %s, got %v", missing, err)
@@ -105,7 +105,7 @@ func TestDockerPlusNamesADeadSSHD(t *testing.T) {
 	// Taken and released: nothing listens there now.
 	worker = strings.Replace(worker, server.Addr(), deadAddress(t), 1)
 
-	err := plusRunnerFor(t, worker, t.TempDir()).Run(t.Context(), "true")
+	err := shell.Run(t.Context(), plusRunnerFor(t, worker, t.TempDir()), "true")
 	if err == nil || !errors.Is(err, ErrWorker) || !strings.Contains(err.Error(), "docker+ssh://") {
 		t.Fatalf("want a worker error naming the mapping, got %v", err)
 	}
@@ -136,7 +136,7 @@ func TestDockerPlusFetchesOutputsAfterANonzeroExit(t *testing.T) {
 
 	runner := plusRunnerFor(t, dockerPlusURL(testsshd.New(t), socket), cwd, "out")
 
-	_, _, code, err := runner.RunCaptureFull(t.Context(), "echo partial > out/log.txt; exit 3")
+	_, _, code, err := shell.RunCaptureFull(t.Context(), runner, "echo partial > out/log.txt; exit 3")
 	if err != nil || code != 3 {
 		t.Fatalf("RunCaptureFull: code %d, %v; want exit 3 as data", code, err)
 	}
@@ -151,7 +151,7 @@ func TestDockerPlusFetchesOutputsAfterANonzeroExit(t *testing.T) {
 	}
 
 	// Run reports the exit as an error rather than as data, which is the branch that must still fetch.
-	err = runner.Run(t.Context(), "echo again > out/run.txt; exit 4")
+	err = shell.Run(t.Context(), runner, "echo again > out/run.txt; exit 4")
 	if !shell.IsExitError(err) {
 		t.Fatalf("Run: %v, want the exit as an ExitError", err)
 	}
@@ -253,7 +253,7 @@ func runAndClose(t *testing.T, worker, cwd, command string) Placement {
 	// Also a cleanup: a Fatal below skips the explicit Close, and an open session holds the test sshd's cleanup forever.
 	t.Cleanup(func() { _ = runner.Close() })
 
-	err = runner.Run(t.Context(), command)
+	err = shell.Run(t.Context(), runner, command)
 	if err != nil {
 		t.Fatalf("Run(%q): %v", command, err)
 	}
@@ -432,7 +432,7 @@ func TestDockerPlusNonRootUserWritesItsOutputs(t *testing.T) {
 
 	t.Cleanup(func() { _ = runner.Close() })
 
-	err = runner.Run(t.Context(), "id -u > out/uid && cat src/blob.bin > /dev/null && touch scratch && touch src/new")
+	err = shell.Run(t.Context(), runner, "id -u > out/uid && cat src/blob.bin > /dev/null && touch scratch && touch src/new")
 	if err != nil {
 		t.Fatalf("Run as 1000: %v", err)
 	}
@@ -467,7 +467,7 @@ func TestDockerPlusStartsOnlyTheStepsContainer(t *testing.T) {
 
 	runner := newLocalRunner(t, localWorker(t, t.TempDir()))
 
-	err = runner.Run(t.Context(), "true")
+	err = shell.Run(t.Context(), runner, "true")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -532,7 +532,7 @@ func TestDockerPlusConcurrentCommandsFetchSafely(t *testing.T) {
 
 	runner := plusRunnerFor(t, dockerPlusURL(testsshd.New(t), socket), cwd, "out")
 
-	err = runner.Run(t.Context(), "echo x > out/f")
+	err = shell.Run(t.Context(), runner, "echo x > out/f")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +578,7 @@ func runAll(t *testing.T, runner shell.Runner, commands ...string) {
 	t.Helper()
 
 	for _, command := range commands {
-		err := runner.Run(t.Context(), command)
+		err := shell.Run(t.Context(), runner, command)
 		if err != nil {
 			t.Fatalf("Run(%q): %v", command, err)
 		}
@@ -695,7 +695,7 @@ func TestDockerPlusRedialsADroppedConnection(t *testing.T) {
 	server := testsshd.New(t)
 	runner := plusRunnerFor(t, dockerPlusURL(server, hostDockerSocket(t)), t.TempDir())
 
-	err := runner.Run(t.Context(), "echo kept > marker")
+	err := shell.Run(t.Context(), runner, "echo kept > marker")
 	if err != nil {
 		t.Fatalf("first command: %v", err)
 	}
@@ -708,9 +708,9 @@ func TestDockerPlusRedialsADroppedConnection(t *testing.T) {
 	_ = plus.s.conn.current().Close()
 
 	// Attempt one: may fail on the dropped connection, or already find it gone and dial again.
-	_ = runner.Run(t.Context(), "true")
+	_ = shell.Run(t.Context(), runner, "true")
 
-	out, err := runner.RunCapture(t.Context(), "cat marker")
+	out, err := shell.RunCapture(t.Context(), runner, "cat marker")
 	if err != nil {
 		t.Fatalf("a command after the connection dropped: %v", err)
 	}
@@ -726,7 +726,7 @@ func TestDockerPlusReleasesItsVolumesAfterADroppedConnection(t *testing.T) {
 
 	runner := plusRunnerFor(t, dockerPlusURL(testsshd.New(t), hostDockerSocket(t)), t.TempDir())
 
-	err := runner.Run(t.Context(), "true")
+	err := shell.Run(t.Context(), runner, "true")
 	if err != nil {
 		t.Fatalf("first command: %v", err)
 	}
@@ -804,7 +804,7 @@ func assertInterruptedCommandIsKilled(t *testing.T, runner shell.Runner, seconds
 
 	// The bracket keeps the pattern from matching the sh that runs it.
 	sleeping := func() string {
-		out, err := runner.RunCapture(t.Context(), "pgrep -f 'slee[p] "+seconds+"' | wc -l")
+		out, err := shell.RunCapture(t.Context(), runner, "pgrep -f 'slee[p] "+seconds+"' | wc -l")
 		if err != nil {
 			t.Fatalf("checking for the interrupted command: %v", err)
 		}
@@ -812,14 +812,14 @@ func assertInterruptedCommandIsKilled(t *testing.T, runner shell.Runner, seconds
 		return strings.TrimSpace(string(out))
 	}
 
-	err := runner.Run(t.Context(), "true")
+	err := shell.Run(t.Context(), runner, "true")
 	if err != nil {
 		t.Fatalf("first command: %v", err)
 	}
 
 	interrupted := make(chan error, 1)
 
-	go func() { interrupted <- runner.Run(t.Context(), "sleep "+seconds) }()
+	go func() { interrupted <- shell.Run(t.Context(), runner, "sleep "+seconds) }()
 
 	deadline := time.Now().Add(20 * time.Second)
 	for sleeping() != "1" {
@@ -838,7 +838,7 @@ func assertInterruptedCommandIsKilled(t *testing.T, runner shell.Runner, seconds
 	}
 
 	// Attempt one after the drop may fail on the dead connection; the one after runs on the new one.
-	_ = runner.Run(t.Context(), "true")
+	_ = shell.Run(t.Context(), runner, "true")
 
 	if count := sleeping(); count != "0" {
 		t.Errorf("the interrupted command is still running (%s); a retry would race it in the same tree", count)
@@ -859,7 +859,7 @@ func TestDockerPlusHoldsAGetsTreeUnderTheNameItWasGiven(t *testing.T) {
 
 	t.Cleanup(func() { _ = runner.Close() })
 
-	err = runner.Run(t.Context(), "echo fetched > version")
+	err = shell.Run(t.Context(), runner, "echo fetched > version")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

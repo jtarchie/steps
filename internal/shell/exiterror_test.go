@@ -14,7 +14,7 @@ import (
 func hostFailure(t *testing.T, command string) error {
 	t.Helper()
 
-	err := HostRunner{cwd: t.TempDir()}.Run(context.Background(), command)
+	err := Run(context.Background(), HostRunner{cwd: t.TempDir()}, command)
 	if err == nil {
 		t.Fatalf("HostRunner.Run(%q) succeeded, want a failure to compare against", command)
 	}

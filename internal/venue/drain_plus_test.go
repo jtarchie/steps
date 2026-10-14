@@ -45,7 +45,7 @@ func TestAWSWorkerHearsItsOwnSpotNotice(t *testing.T) {
 
 	runner := newLocalRunner(t, localSSMWorker(t, &fakeSSM{}, t.TempDir()))
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,12 +74,12 @@ func TestAWSWorkerHearsItsOwnSpotNotice(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	err = runner.Run(context.Background(), "kill -9 $$")
+	err = shell.Run(context.Background(), runner, "kill -9 $$")
 	if !errors.Is(err, ErrEvicted) {
 		t.Errorf("a command the machine killed: %v, want ErrEvicted", err)
 	}
 
-	err = runner.Run(context.Background(), "exit 3")
+	err = shell.Run(context.Background(), runner, "exit 3")
 	if errors.Is(err, ErrEvicted) || !shell.IsExitError(err) {
 		t.Errorf("a command that answered for itself: %v, want its own exit", err)
 	}
@@ -91,7 +91,7 @@ func TestAWSDrainWatcherEndsWithItsSession(t *testing.T) {
 
 	runner := newLocalRunner(t, localSSMWorker(t, &fakeSSM{}, t.TempDir()))
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestGCPWorkerHearsItsOwnPreemption(t *testing.T) {
 
 	runner := newLocalRunner(t, localGCPWorker(t, sshd, t.TempDir()))
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -108,7 +108,7 @@ func proxiedSSHRunner(t *testing.T) (shell.Runner, *atomic.Bool) {
 
 	runner := newLocalRunner(t, shell.RunnerSpec{Cwd: t.TempDir(), Worker: worker})
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestAWorkerThatGoesSilentFailsTheCommand(t *testing.T) {
 	}()
 
 	started := time.Now()
-	err := runner.Run(context.Background(), "sleep 5")
+	err := shell.Run(context.Background(), runner, "sleep 5")
 
 	if err == nil || shell.IsExitError(err) {
 		t.Fatalf("Run over a silent tunnel: %v, want an infrastructure failure", err)
@@ -153,7 +153,7 @@ func TestAWorkerThatPausesKeepsItsSession(t *testing.T) {
 		frozen.Store(false)
 	}()
 
-	err := runner.Run(context.Background(), "sleep 2")
+	err := shell.Run(context.Background(), runner, "sleep 2")
 	if err != nil {
 		t.Fatalf("Run across a brief pause: %v", err)
 	}

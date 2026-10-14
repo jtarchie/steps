@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/jtarchie/steps/internal/redact"
 	"io"
 	"log/slog"
 	"net"
@@ -15,9 +16,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/jtarchie/steps/internal/events"
-	"github.com/jtarchie/steps/internal/redact"
 )
 
 // Runner runs pipeline-defined commands, either on the host or inside a
@@ -27,53 +25,12 @@ import (
 // repeated run_shell calls, a task's fix-loop re-runs) resolves/validates
 // its working directory once, not once per call.
 type Runner interface {
-	// Run streams stdout/stderr live; any nonzero exit is a Go error.
-	Run(ctx context.Context, command string) error
-	// RunStreamedCapture behaves exactly like Run — same streaming, same
-	// inherited stdin, same error on a nonzero exit — and additionally
-	// returns what it streamed, each stream capped at maxBytes.
-	//
-	// It exists because a task's output had exactly one destination: the
-	// terminal watching it. Anything reading a run afterwards (the web UI's
-	// transcript) had nothing to show for a step that succeeded. Distinct
-	// from RunCaptureFullLimitedStreamed, which captures with stdin
-	// DETACHED — correct for a model-directed command, wrong for a task the
-	// pipeline author wrote.
-	RunStreamedCapture(ctx context.Context, command string, maxBytes int) (stdout, stderr string, err error)
-	// RunCapture captures stdout while also streaming stderr live; any
-	// nonzero exit is a Go error.
-	RunCapture(ctx context.Context, command string) ([]byte, error)
-	// RunCaptureFull captures stdout/stderr separately and never streams;
-	// a normal nonzero exit is reported as data (exitCode), not an error —
-	// only a failure to start the command returns a non-nil error.
-	RunCaptureFull(ctx context.Context, command string) (stdout, stderr string, exitCode int, err error)
-	// RunCaptureFullLimited behaves exactly like RunCaptureFull, except each
-	// of stdout/stderr is capped at maxBytes while the command is running —
-	// not just truncated afterward — so a runaway command's output never
-	// fully buffers into memory before being discarded (or, with spillDir
-	// set, before being streamed to disk). When spillDir is "", a stream that
-	// exceeds maxBytes gets a trailing "... [truncated N bytes]" marker,
-	// matching internal/agent's truncateToolOutput format, and the overflow
-	// is dropped. When spillDir is a directory path, a stream that exceeds
-	// maxBytes is instead written in full to a new file under spillDir (up
-	// to SpillMaxBytes, beyond which the file itself is marked truncated the
-	// same way), and the returned string is a short pointer message naming
-	// the file, its size, and a head preview — see spillWriter.
-	RunCaptureFullLimited(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error)
-	// RunCaptureFullLimitedStreamed behaves exactly like RunCaptureFullLimited,
-	// except stdout/stderr are ALSO streamed live (prefixed, when WithLabel
-	// was used) while being captured — unlike every other RunCaptureFull*
-	// variant, which never streams. Used by run_shell/custom tools
-	// (internal/agent's shellToolResult), whose model-directed commands were
-	// otherwise invisible until the agent's final text response, and by a
-	// task judged by assert:/fix:, which needs its output both live and in
-	// hand. RunCaptureFull/RunCaptureFullLimited stay silent for their other
-	// callers (a when: guard) where the command's output isn't meant to be
-	// user-facing on its own.
-	RunCaptureFullLimitedStreamed(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error)
+	// Exec runs one command as cmd describes. Every runner answers the same
+	// matrix (see Command); the package-level Run* helpers name the
+	// combinations callers actually use.
+	Exec(ctx context.Context, cmd Command) (Result, error)
 	// WithLabel returns a copy of the runner that prefixes every line of
-	// whatever it streams live (Run, RunCapture's stderr,
-	// RunCaptureFullLimitedStreamed) with "[label] ". A zero-value/unset
+	// whatever it streams live (see Command.Stream) with "[label] ". A zero-value/unset
 	// label (the default from NewRunner) streams unprefixed, byte-identical
 	// to before this method existed.
 	WithLabel(label string) Runner
@@ -771,178 +728,41 @@ func processStarted(err error) bool {
 	return errors.As(err, &remoteErr)
 }
 
-// Run runs command via `sh -c command` with h.cwd as its working directory,
-// streaming stdout/stderr live to the terminal, prefixed per line when
-// WithLabel was used.
-func (h HostRunner) Run(ctx context.Context, command string) error {
-	_, _, err := h.runStreamed(ctx, command, 0)
+// Exec runs cmd via `sh -c` with h.cwd as its working directory. See Runner.
+func (h HostRunner) Exec(ctx context.Context, cmd Command) (Result, error) {
+	slog.DebugContext(ctx, "shell.exec", "command", redact.Command(cmd.Script), "cwd", h.cwd)
 
-	return err
-}
+	proc := exec.CommandContext(ctx, "sh", "-c", cmd.Script) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
+	proc.WaitDelay = cancelWaitDelay
+	proc.Dir = h.cwd
+	proc.Env = h.environ(ctx)
 
-// RunStreamedCapture is Run, keeping what it streamed. See Runner.
-func (h HostRunner) RunStreamedCapture(ctx context.Context, command string, maxBytes int) (string, string, error) {
-	return h.runStreamed(ctx, command, maxBytes)
-}
-
-// runStreamed is the shared body of Run and RunStreamedCapture. maxBytes <= 0
-// captures nothing, which makes Run byte-identical to before it grew a
-// sibling — no buffering, no allocation, for the callers that never wanted
-// the output back.
-func (h HostRunner) runStreamed(ctx context.Context, command string, maxBytes int) (stdout, stderr string, err error) {
-	slog.DebugContext(ctx, "shell.run", "command", redact.Command(command), "cwd", h.cwd)
-
-	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
-	cmd.WaitDelay = cancelWaitDelay
-	cmd.Dir = h.cwd
-	cmd.Env = h.environ(ctx)
-	cmd.Stdin = os.Stdin
-
-	stdoutW, flushStdout := prefixedStream(h.label, events.Stdout(ctx))
-	stderrW, flushStderr := prefixedStream(h.label, events.Stderr(ctx))
-	cmd.Stdout = stdoutW
-	cmd.Stderr = stderrW
-
-	var outCapture, errCapture captureWriter
-
-	if maxBytes > 0 {
-		outCapture = newCaptureWriter(maxBytes, "")
-		errCapture = newCaptureWriter(maxBytes, "")
-		cmd.Stdout = io.MultiWriter(stdoutW, outCapture)
-		cmd.Stderr = io.MultiWriter(stderrW, errCapture)
+	if cmd.Stdin {
+		proc.Stdin = os.Stdin
 	}
 
-	runErr := cmd.Run()
-	flushStdout()
-	flushStderr()
+	out := cmd.Output(ctx, h.label)
+	proc.Stdout, proc.Stderr = out.Stdout, out.Stderr
 
-	slog.DebugContext(ctx, "shell.run", "command", redact.Command(command), "cwd", h.cwd, "exit_code", exitCodeOf(runErr))
+	runErr := proc.Run()
+	out.Flush()
 
-	if outCapture != nil {
-		stdout, stderr = outCapture.result(), errCapture.result() //nolint:nilaway // errCapture is assigned in the same branch as outCapture, so one being set means both are
+	res := out.Result(exitCodeOf(runErr))
+	logFinished(ctx, "shell.exec", cmd, res, "cwd", h.cwd)
+
+	if cmd.ExitAsData {
+		if !processStarted(runErr) {
+			return Result{Code: -1}, fmt.Errorf("command %q failed to start: %w", redact.Command(cmd.Script), runErr)
+		}
+
+		return res, nil
 	}
 
 	if runErr != nil {
-		return stdout, stderr, fmt.Errorf("command %q failed: %w", redact.Command(command), wrapIfCanceled(ctx, runErr))
+		return res, fmt.Errorf("command %q failed: %w", redact.Command(cmd.Script), wrapIfCanceled(ctx, runErr))
 	}
 
-	return stdout, stderr, nil
-}
-
-// RunCapture runs command via `sh -c command` with h.cwd as its working
-// directory, capturing stdout and stderr while also streaming stderr live,
-// prefixed per line when WithLabel was used. The captured output is logged
-// (at debug level) on both success and failure, so a failing check/out
-// command's output is available for debugging — previously it was discarded
-// the moment the command exited nonzero, leaving only the terse "exit status
-// N" from the wrapped error.
-func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
-	slog.DebugContext(ctx, "shell.capture", "command", redact.Command(command), "cwd", h.cwd)
-
-	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
-	cmd.WaitDelay = cancelWaitDelay
-	cmd.Dir = h.cwd
-	cmd.Env = h.environ(ctx)
-	cmd.Stdin = os.Stdin
-
-	var outBuf, errBuf bytes.Buffer
-
-	stderrW, flushStderr := prefixedStream(h.label, events.Stderr(ctx))
-	cmd.Stdout = &outBuf
-	cmd.Stderr = io.MultiWriter(stderrW, &errBuf)
-
-	err := cmd.Run()
-	flushStderr()
-
-	slog.DebugContext(ctx, "shell.capture", "command", redact.Command(command), "cwd", h.cwd, "exit_code", exitCodeOf(err),
-		"output_bytes", outBuf.Len(), "output", redact.Command(outBuf.String()), "stderr", redact.Command(errBuf.String()))
-
-	if err != nil {
-		return nil, fmt.Errorf("command %q failed: %w", redact.Command(command), wrapIfCanceled(ctx, err))
-	}
-
-	return outBuf.Bytes(), nil
-}
-
-// RunCaptureFull runs command via `sh -c command` with h.cwd as its working
-// directory, capturing stdout and stderr separately. Unlike Run/RunCapture
-// (where any nonzero exit fails the step), a normal nonzero exit is reported
-// as data via exitCode rather than a Go error — callers that need a
-// command's failure to be observable data (e.g. an agent step's tool
-// results) rather than a hard abort use this instead. Only a failure to
-// start the process (not the process's own exit code, even a signal-killed
-// one — e.g. from a canceled ctx) returns a non-nil error. A caller that
-// needs to tell "this result may be incomplete because ctx was canceled
-// while the command ran" apart from an ordinary exit code checks ctx.Err()
-// itself (or CanceledError) after this returns, rather than relying on err —
-// see runFixTask/runAssertedTask/evaluateStepGuard.
-//
-// Unlike Run/RunCapture, stdin is /dev/null, not the parent's: this runs
-// non-interactive, model-generated commands, and inheriting an interactive
-// stdin risks a command (cat with no args, a tool prompting for input)
-// blocking until the step's timeout instead of getting EOF.
-func (h HostRunner) RunCaptureFull(ctx context.Context, command string) (stdout, stderr string, exitCode int, err error) {
-	return h.runCaptureFull(ctx, command, 0, "", false)
-}
-
-// RunCaptureFullLimited is RunCaptureFull with each stream capped at
-// maxBytes (and, with spillDir set, overflow streamed to disk instead of
-// dropped) while the command runs — see the Runner interface doc.
-func (h HostRunner) RunCaptureFullLimited(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error) {
-	return h.runCaptureFull(ctx, command, maxBytes, spillDir, false)
-}
-
-// RunCaptureFullLimitedStreamed is RunCaptureFullLimited, additionally
-// streaming both stdout/stderr live (prefixed, when WithLabel was used) —
-// see the Runner interface doc.
-func (h HostRunner) RunCaptureFullLimitedStreamed(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error) {
-	return h.runCaptureFull(ctx, command, maxBytes, spillDir, true)
-}
-
-// runCaptureFull is the shared implementation behind RunCaptureFull (maxBytes
-// 0, meaning unbounded — byte-identical to before RunCaptureFullLimited
-// existed), RunCaptureFullLimited (maxBytes > 0), and
-// RunCaptureFullLimitedStreamed (stream true, tees both captured streams to
-// the context's output live — see events.Stdout).
-func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes int, spillDir string, stream bool) (stdout, stderr string, exitCode int, err error) {
-	slog.DebugContext(ctx, "shell.capture_full", "command", redact.Command(command), "cwd", h.cwd)
-
-	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
-	cmd.WaitDelay = cancelWaitDelay
-	cmd.Dir = h.cwd
-	cmd.Env = h.environ(ctx)
-	cmd.Stdin = nil
-
-	outWriter := newCaptureWriter(maxBytes, spillDir)
-	errWriter := newCaptureWriter(maxBytes, spillDir)
-
-	flushStdout, flushStderr := func() {}, func() {}
-
-	if stream {
-		var stdoutW, stderrW io.Writer
-
-		stdoutW, flushStdout = prefixedStream(h.label, events.Stdout(ctx))
-		stderrW, flushStderr = prefixedStream(h.label, events.Stderr(ctx))
-		cmd.Stdout = io.MultiWriter(stdoutW, outWriter)
-		cmd.Stderr = io.MultiWriter(stderrW, errWriter)
-	} else {
-		cmd.Stdout = outWriter
-		cmd.Stderr = errWriter
-	}
-
-	runErr := cmd.Run()
-	flushStdout()
-	flushStderr()
-
-	if !processStarted(runErr) {
-		return "", "", -1, fmt.Errorf("command %q failed to start: %w", redact.Command(command), runErr)
-	}
-
-	code := exitCodeOf(runErr)
-
-	slog.DebugContext(ctx, "shell.capture_full", "command", redact.Command(command), "cwd", h.cwd, "exit_code", code)
-
-	return outWriter.result(), errWriter.result(), code, nil
+	return res, nil
 }
 
 // IsExitError reports whether err (however wrapped) stems from a process that
@@ -961,24 +781,24 @@ func IsExitError(err error) bool {
 }
 
 // RunShell runs command on the host via `sh -c command` with cwd as its
-// working directory, streaming stdout/stderr live. Equivalent to
-// HostRunner{cwd: cwd}.Run; kept as a package-level function for callers
+// working directory, streaming stdout/stderr live. Equivalent to Run over
+// HostRunner{cwd: cwd}; kept as a package-level function for callers
 // that never need containerized execution.
 func RunShell(ctx context.Context, command, cwd string) error {
-	return HostRunner{cwd: cwd}.Run(ctx, command)
+	return Run(ctx, HostRunner{cwd: cwd}, command)
 }
 
 // RunShellCapture runs command on the host via `sh -c command`, capturing
-// stdout. Equivalent to HostRunner{cwd: cwd}.RunCapture.
+// stdout. Equivalent to RunCapture over HostRunner{cwd: cwd}.
 func RunShellCapture(ctx context.Context, command, cwd string) ([]byte, error) {
-	return HostRunner{cwd: cwd}.RunCapture(ctx, command)
+	return RunCapture(ctx, HostRunner{cwd: cwd}, command)
 }
 
 // RunShellCaptureFull runs command on the host via `sh -c command`,
 // capturing stdout/stderr separately and reporting a normal nonzero exit as
-// data. Equivalent to HostRunner{cwd: cwd}.RunCaptureFull.
+// data. Equivalent to RunCaptureFull over HostRunner{cwd: cwd}.
 func RunShellCaptureFull(ctx context.Context, command, cwd string) (stdout, stderr string, exitCode int, err error) {
-	return HostRunner{cwd: cwd}.RunCaptureFull(ctx, command)
+	return RunCaptureFull(ctx, HostRunner{cwd: cwd}, command)
 }
 
 // cancelWaitDelay bounds how long a cancelled command is waited on after its

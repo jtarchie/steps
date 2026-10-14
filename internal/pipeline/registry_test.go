@@ -587,17 +587,17 @@ func placementTags(t *testing.T, st store.Store, runID string) map[string]string
 	return tags
 }
 
-// evictingRunner is a check's first machine, reclaimed on its first command; only RunCapture, WithLabel and Close are reached.
+// evictingRunner is a check's first machine, reclaimed on its first command; only Exec, WithLabel and Close are reached.
 type evictingRunner struct {
 	shell.Runner
 
 	calls, closes int
 }
 
-func (e *evictingRunner) RunCapture(context.Context, string) ([]byte, error) {
+func (e *evictingRunner) Exec(context.Context, shell.Command) (shell.Result, error) {
 	e.calls++
 
-	return nil, errTestEvicted
+	return shell.Result{}, errTestEvicted
 }
 
 func (e *evictingRunner) WithLabel(string) shell.Runner { return e }
@@ -635,7 +635,7 @@ jobs:
 
 	stage = stage.WithLabel("probe check")
 
-	out, err := stage.RunCapture(ctx, "echo fresh")
+	out, err := shell.RunCapture(ctx, stage, "echo fresh")
 	closeErr := stage.Close()
 
 	if err != nil || closeErr != nil {
@@ -841,7 +841,7 @@ func TestAWarmMachineThatAnsweredIsNoLongerPresumedDead(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	err = runner.Run(ctx, "true")
+	err = shell.Run(ctx, runner, "true")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -869,7 +869,7 @@ func TestARePlacedCheckAbandonsTheMachineItActuallyDialled(t *testing.T) {
 		spec: shell.RunnerSpec{Worker: "ssh://nobody@the-machine-the-stage-was-built-on", WorkerTag: "box", Image: "alpine:3"},
 	}
 
-	out, err := stage.RunCapture(ctx, "echo fresh")
+	out, err := shell.RunCapture(ctx, stage, "echo fresh")
 	if err != nil {
 		t.Fatalf("RunCapture: %v", err)
 	}

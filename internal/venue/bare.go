@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/jtarchie/steps/internal/redact"
 	"io"
 	"os"
 	"path"
@@ -19,7 +20,6 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/wire"
 )
@@ -69,35 +69,28 @@ func newBareRunner(worker Worker, spec shell.RunnerSpec) (shell.Runner, error) {
 	return bareRunner{s: &bareSession{worker: worker, spec: spec}}, nil
 }
 
-func (r bareRunner) Run(ctx context.Context, command string) error {
-	_, _, err := r.execute(ctx, command, plan{streamStdout: true, streamStderr: true})
+// Exec runs cmd on the worker. Stdin is not honoured: the session's stdin carries the step's env.
+func (r bareRunner) Exec(ctx context.Context, cmd shell.Command) (shell.Result, error) {
+	res, err := r.exchange(ctx, cmd)
 
-	return err
-}
+	// Under ExitAsData an error means the command never ran: a guard that could not run is not a guard that said no.
+	if cmd.ExitAsData {
+		if err != nil {
+			return shell.Result{Code: -1}, fmt.Errorf("command %q failed to start: %w", redact.Command(cmd.Script), shell.WrapIfCanceled(ctx, err))
+		}
 
-func (r bareRunner) RunStreamedCapture(ctx context.Context, command string, maxBytes int) (string, string, error) {
-	return r.execute(ctx, command, plan{streamStdout: true, streamStderr: true, capture: true, maxBytes: maxBytes})
-}
-
-func (r bareRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
-	stdout, _, err := r.execute(ctx, command, plan{streamStderr: true, capture: true})
-	if err != nil {
-		return nil, err
+		return res, nil
 	}
 
-	return []byte(stdout), nil
-}
+	if err != nil {
+		return res, fmt.Errorf("command %q failed: %w", redact.Command(cmd.Script), shell.WrapIfCanceled(ctx, err))
+	}
 
-func (r bareRunner) RunCaptureFull(ctx context.Context, command string) (string, string, int, error) {
-	return r.executeFull(ctx, command, plan{capture: true})
-}
+	if res.Code != 0 {
+		return res, fmt.Errorf("command %q failed: %w", redact.Command(cmd.Script), &shell.ExitError{Command: cmd.Script, Venue: r.s.worker.String(), Code: res.Code})
+	}
 
-func (r bareRunner) RunCaptureFullLimited(ctx context.Context, command string, maxBytes int, spillDir string) (string, string, int, error) {
-	return r.executeFull(ctx, command, plan{capture: true, maxBytes: maxBytes, spillDir: spillDir})
-}
-
-func (r bareRunner) RunCaptureFullLimitedStreamed(ctx context.Context, command string, maxBytes int, spillDir string) (string, string, int, error) {
-	return r.executeFull(ctx, command, plan{streamStdout: true, streamStderr: true, capture: true, maxBytes: maxBytes, spillDir: spillDir})
+	return res, nil
 }
 
 func (r bareRunner) WithLabel(label string) shell.Runner {
@@ -110,52 +103,29 @@ func (r bareRunner) Close() error { return r.s.close() }
 
 func (r bareRunner) placement() (Placement, bool) { return r.s.placement() }
 
-func (r bareRunner) execute(ctx context.Context, command string, p plan) (string, string, error) {
-	stdout, stderr, code, err := r.exchange(ctx, command, p)
-	if err != nil {
-		return stdout, stderr, fmt.Errorf("command %q failed: %w", redact.Command(command), shell.WrapIfCanceled(ctx, err))
-	}
-
-	if code != 0 {
-		return stdout, stderr, fmt.Errorf("command %q failed: %w", redact.Command(command), &shell.ExitError{Command: command, Venue: r.s.worker.String(), Code: code})
-	}
-
-	return stdout, stderr, nil
-}
-
-// executeFull returns an error only when the command never ran: a guard that could not run is not a guard that said no.
-func (r bareRunner) executeFull(ctx context.Context, command string, p plan) (string, string, int, error) {
-	stdout, stderr, code, err := r.exchange(ctx, command, p)
-	if err != nil {
-		return "", "", -1, fmt.Errorf("command %q failed to start: %w", redact.Command(command), shell.WrapIfCanceled(ctx, err))
-	}
-
-	return stdout, stderr, code, nil
-}
-
 // exchange runs one command, then brings the outputs home even after a nonzero exit: an assert: reads the local tree the moment this returns.
-func (r bareRunner) exchange(ctx context.Context, command string, p plan) (string, string, int, error) {
+func (r bareRunner) exchange(ctx context.Context, cmd shell.Command) (shell.Result, error) {
 	err := r.s.ensure(ctx)
 	if err != nil {
-		return "", "", 0, err
+		return shell.Result{}, err
 	}
 
-	stdout, stderr, sinks := sinksFor(ctx, r.label, p)
+	out := cmd.Output(ctx, r.label)
 
-	code, err := r.s.run(ctx, command, sinks)
+	code, err := r.s.run(ctx, cmd.Script, out)
 
-	sinks.flush()
+	out.Flush()
 
 	if err != nil {
-		return stdout.result(), stderr.result(), 0, err
+		return out.Result(0), err
 	}
 
 	err = r.s.fetch(ctx)
 	if err != nil {
-		return stdout.result(), stderr.result(), 0, err
+		return out.Result(0), err
 	}
 
-	return stdout.result(), stderr.result(), code, nil
+	return out.Result(code), nil
 }
 
 func (s *bareSession) ensure(ctx context.Context) error {
@@ -349,7 +319,7 @@ func (s *bareSession) untar(ctx context.Context, dir string, pack func(io.Writer
 	return nil
 }
 
-func (s *bareSession) run(ctx context.Context, command string, sinks outputSinks) (int, error) {
+func (s *bareSession) run(ctx context.Context, command string, out *shell.Output) (int, error) {
 	workdir := s.dir
 	if s.spec.Subdir != "" {
 		workdir = path.Join(s.dir, s.spec.Subdir)
@@ -378,7 +348,7 @@ func (s *bareSession) run(ctx context.Context, command string, sinks outputSinks
 		}
 	}()
 
-	code, err := s.exec(runCtx, script, strings.NewReader(s.envScript(ctx)), sinks.stdout, sinks.stderr)
+	code, err := s.exec(runCtx, script, strings.NewReader(s.envScript(ctx)), out.Stdout, out.Stderr)
 
 	cancel()
 	<-stopped

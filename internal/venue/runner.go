@@ -1,15 +1,12 @@
 package venue
 
-// What every placed runner shares: how one command's output is streamed, captured and bounded, and when a failure is the machine leaving rather than the command answering.
+// What every placed runner shares: when a failure is the machine leaving rather than the command answering.
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"io"
 	"time"
 
-	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -18,15 +15,6 @@ var ErrEvicted = errors.New("the worker was reclaimed while the step was running
 
 // closeTimeout bounds a teardown, which runs from deferred paths whose context has usually already ended: leaving scratch on somebody else's machine would be worst exactly then.
 var closeTimeout = 30 * time.Second //nolint:gochecknoglobals // a test seam for a wait on another machine
-
-// plan is what this end does with one command's output.
-type plan struct {
-	streamStdout bool
-	streamStderr bool
-	capture      bool
-	maxBytes     int
-	spillDir     string
-}
 
 // ReclaimedBy reports whether the worker a runner used said it was definitely
 // going away, and what it said.
@@ -90,69 +78,6 @@ func signalledExit(code int) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-// stream is one of a command's two output streams on this end.
-type stream struct {
-	capture *shell.Capture
-	writer  io.Writer
-	flush   func()
-}
-
-func (s stream) result() string {
-	if s.capture == nil {
-		return ""
-	}
-
-	return s.capture.Result()
-}
-
-func sinksFor(ctx context.Context, label string, p plan) (stdout, stderr stream, out outputSinks) {
-	stdout = newStream(label, p.streamStdout, p.capture, p.maxBytes, p.spillDir, events.Stdout(ctx))
-	stderr = newStream(label, p.streamStderr, p.capture, p.maxBytes, p.spillDir, events.Stderr(ctx))
-
-	return stdout, stderr, outputSinks{stdout: stdout.writer, stderr: stderr.writer, flushes: []func(){stdout.flush, stderr.flush}}
-}
-
-func newStream(label string, live, capture bool, maxBytes int, spillDir string, dst io.Writer) stream {
-	s := stream{flush: func() {}}
-
-	writers := make([]io.Writer, 0, 2)
-
-	if live {
-		w, flush := shell.NewPrefixedStream(label, dst)
-		writers = append(writers, w)
-		s.flush = flush
-	}
-
-	if capture {
-		s.capture = shell.NewCapture(maxBytes, spillDir)
-		writers = append(writers, s.capture)
-	}
-
-	switch len(writers) {
-	case 0:
-		s.writer = io.Discard
-	case 1:
-		s.writer = writers[0]
-	default:
-		s.writer = io.MultiWriter(writers...)
-	}
-
-	return s
-}
-
-// outputSinks is where a running command's frames land.
-type outputSinks struct {
-	stdout  io.Writer
-	stderr  io.Writer
-	flushes []func()
-}
-
-func (o outputSinks) flush() {
-	for _, flush := range o.flushes {
-		flush()
 	}
 }
 

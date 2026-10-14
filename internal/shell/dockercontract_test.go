@@ -101,7 +101,7 @@ func TestContractInspectionFindsEachRunnersOwnContainer(t *testing.T) {
 	for range 2 {
 		runner := newTestRunner(t, RunnerSpec{Image: testImage, Cwd: testdocker.MountableDir(t)})
 
-		_, _, _, err := runner.RunCaptureFull(t.Context(), "true")
+		_, _, _, err := RunCaptureFull(t.Context(), runner, "true")
 		if err != nil {
 			t.Fatalf("RunCaptureFull: %v", err)
 		}
@@ -148,7 +148,7 @@ func TestContractSessionContainerConfiguration(t *testing.T) {
 
 	// Each exec carries its own build metadata: a session outlives the context that started its container.
 	for _, runID := range []string{"CONTRACTRUN", "LATERRUN"} {
-		stdout, _, _, err := runner.RunCaptureFull(WithBuildMetadata(context.Background(), BuildMetadata{RunID: runID}), `printf %s "$STEPS_RUN_ID"`)
+		stdout, _, _, err := RunCaptureFull(WithBuildMetadata(context.Background(), BuildMetadata{RunID: runID}), runner, `printf %s "$STEPS_RUN_ID"`)
 		if err != nil {
 			t.Fatalf("RunCaptureFull: %v", err)
 		}
@@ -315,7 +315,7 @@ func TestContractEnvValueIsReadableInsideTheContainer(t *testing.T) {
 
 	defer CloseRunner(runner, "test")
 
-	stdout, _, _, err := runner.RunCaptureFull(context.Background(),
+	stdout, _, _, err := RunCaptureFull(context.Background(), runner,
 		`echo "[$STEPS_TEST_CONTRACT_READ][$STEPS_TEST_CONTRACT_WORKER]"`)
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
@@ -329,7 +329,7 @@ func TestContractEnvValueIsReadableInsideTheContainer(t *testing.T) {
 	// all. Set-but-empty is a different answer to a script that tests for the
 	// variable's presence, and naming an optional variable is exactly what
 	// env: is for.
-	absent, _, _, err := runner.RunCaptureFull(context.Background(),
+	absent, _, _, err := RunCaptureFull(context.Background(), runner,
 		`if [ -z "${STEPS_TEST_CONTRACT_ABSENT+set}" ]; then echo absent; else echo present; fi`)
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
@@ -362,7 +362,7 @@ func TestContractBadImageSurfacesAsData(t *testing.T) {
 
 	defer CloseRunner(runner, "test")
 
-	stdout, stderr, exitCode, err := runner.RunCaptureFull(context.Background(), "true")
+	stdout, stderr, exitCode, err := RunCaptureFull(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("RunCaptureFull returned a Go error for a bad image: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestContractBadImageIsAnExitError(t *testing.T) {
 
 	defer CloseRunner(runner, "test")
 
-	runErr := runner.Run(context.Background(), "true")
+	runErr := Run(context.Background(), runner, "true")
 	if runErr == nil {
 		t.Fatal("Run succeeded against an image that does not exist")
 	}
@@ -425,12 +425,12 @@ func TestContractStartFailureIsSticky(t *testing.T) {
 	defer CloseRunner(runner, "test")
 
 	first := time.Now()
-	_, _, _, _ = runner.RunCaptureFull(context.Background(), "true")
+	_, _, _, _ = RunCaptureFull(context.Background(), runner, "true")
 	firstElapsed := time.Since(first)
 
 	second := time.Now()
 
-	_, stderr, exitCode, err := runner.RunCaptureFull(context.Background(), "true")
+	_, stderr, exitCode, err := RunCaptureFull(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
 	}
@@ -631,7 +631,7 @@ func TestContractResolvesTheDaemonFromADockerContext(t *testing.T) {
 
 	defer CloseRunner(runner, "test")
 
-	stdout, stderr, exitCode, err := runner.RunCaptureFull(context.Background(), "echo reached")
+	stdout, stderr, exitCode, err := RunCaptureFull(context.Background(), runner, "echo reached")
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
 	}
@@ -726,7 +726,7 @@ func TestContractCancelledCommandKeepsItsOutput(t *testing.T) {
 
 	// Started first, so the container exists and the cancel lands on the
 	// command rather than on the session start.
-	_, _, _, err := runner.RunCaptureFull(context.Background(), "true")
+	_, _, _, err := RunCaptureFull(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
 	}
@@ -740,7 +740,7 @@ func TestContractCancelledCommandKeepsItsOutput(t *testing.T) {
 
 	defer cancel()
 
-	stdout, _, exitCode, err := runner.RunCaptureFull(ctx, "echo partial; sleep 30")
+	stdout, _, exitCode, err := RunCaptureFull(ctx, runner, "echo partial; sleep 30")
 	if err != nil {
 		t.Fatalf("a cancelled command must be reported as data, not a Go error: %v", err)
 	}

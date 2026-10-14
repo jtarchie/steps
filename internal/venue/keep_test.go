@@ -4,6 +4,7 @@ package venue
 
 import (
 	"context"
+	"github.com/jtarchie/steps/internal/shell"
 	"os/exec"
 	"testing"
 )
@@ -43,7 +44,7 @@ func TestVenueKeepLeavesTheWorkersScratch(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	err = runner.Run(context.Background(), "true")
+	err = shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("running: %v", err)
 	}
@@ -72,7 +73,7 @@ func TestVenueRemovesTheWorkersScratchByDefault(t *testing.T) {
 
 	runner := newLocalRunner(t, localWorker(t, cwd))
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("running: %v", err)
 	}

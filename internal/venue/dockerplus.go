@@ -115,52 +115,18 @@ func newPlusRunner(worker Worker, spec shell.RunnerSpec) (shell.Runner, error) {
 	return plusRunner{s: newPlusSession(worker, spec)}, nil
 }
 
-func (r plusRunner) Run(ctx context.Context, command string) error {
-	return r.around(ctx, func(inner shell.Runner) error { return inner.Run(ctx, command) })
-}
-
-func (r plusRunner) RunStreamedCapture(ctx context.Context, command string, maxBytes int) (string, string, error) {
-	var stdout, stderr string
+func (r plusRunner) Exec(ctx context.Context, cmd shell.Command) (shell.Result, error) {
+	var res shell.Result
 
 	err := r.around(ctx, func(inner shell.Runner) error {
 		var runErr error
 
-		stdout, stderr, runErr = inner.RunStreamedCapture(ctx, command, maxBytes)
+		res, runErr = inner.Exec(ctx, cmd)
 
 		return runErr //nolint:wrapcheck // shell's error is the step's
 	})
 
-	return stdout, stderr, err
-}
-
-func (r plusRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
-	var stdout []byte
-
-	err := r.around(ctx, func(inner shell.Runner) error {
-		var runErr error
-
-		stdout, runErr = inner.RunCapture(ctx, command)
-
-		return runErr //nolint:wrapcheck // shell's error is the step's
-	})
-
-	return stdout, err
-}
-
-func (r plusRunner) RunCaptureFull(ctx context.Context, command string) (string, string, int, error) {
-	return r.full(ctx, func(inner shell.Runner) (string, string, int, error) { return inner.RunCaptureFull(ctx, command) })
-}
-
-func (r plusRunner) RunCaptureFullLimited(ctx context.Context, command string, maxBytes int, spillDir string) (string, string, int, error) {
-	return r.full(ctx, func(inner shell.Runner) (string, string, int, error) {
-		return inner.RunCaptureFullLimited(ctx, command, maxBytes, spillDir)
-	})
-}
-
-func (r plusRunner) RunCaptureFullLimitedStreamed(ctx context.Context, command string, maxBytes int, spillDir string) (string, string, int, error) {
-	return r.full(ctx, func(inner shell.Runner) (string, string, int, error) {
-		return inner.RunCaptureFullLimitedStreamed(ctx, command, maxBytes, spillDir)
-	})
+	return res, err
 }
 
 func (r plusRunner) WithLabel(label string) shell.Runner {
@@ -180,23 +146,6 @@ func (r plusRunner) reclaimed() (string, bool) {
 	}
 
 	return *reason, true
-}
-
-func (r plusRunner) full(ctx context.Context, run func(shell.Runner) (string, string, int, error)) (string, string, int, error) {
-	var (
-		stdout, stderr string
-		code           int
-	)
-
-	err := r.around(ctx, func(inner shell.Runner) error {
-		var runErr error
-
-		stdout, stderr, code, runErr = run(inner)
-
-		return runErr
-	})
-
-	return stdout, stderr, code, err
 }
 
 // around runs one command and then brings the outputs home, even after a nonzero exit, because the local tree must reflect the worker the moment a Run* returns (an assert: reads it).

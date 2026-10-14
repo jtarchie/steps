@@ -25,7 +25,7 @@ func TestPlacementIsSilentBeforeTheHandshake(t *testing.T) {
 		t.Errorf("PlacementOf before any command reported %+v, want nothing — the session has not dialed", placement)
 	}
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestPlacementCountsWhatWasPushed(t *testing.T) {
 
 	runner := newLocalRunner(t, localWorker(t, cwd))
 
-	err := runner.Run(context.Background(), "test -s data/seed.txt")
+	err := shell.Run(context.Background(), runner, "test -s data/seed.txt")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

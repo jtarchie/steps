@@ -14,10 +14,10 @@ type treecontainerModeRunner struct {
 	readOnly []bool
 }
 
-func (r *treecontainerModeRunner) RunCaptureFullLimited(ctx context.Context, _ string, _ int, _ string) (string, string, int, error) {
+func (r *treecontainerModeRunner) Exec(ctx context.Context, _ shell.Command) (shell.Result, error) {
 	r.readOnly = append(r.readOnly, shell.IsReadOnly(ctx))
 
-	return "", "", 0, nil
+	return shell.Result{}, nil
 }
 
 // TestContainerWriteLandsOnlyItsLastScript pins the split writeFile makes: every staging script runs as a read, and only the one that lands the file is a write — the one a placed agent pays a transfer of the step's outputs for.

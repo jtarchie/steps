@@ -25,19 +25,8 @@ func (r reclaimedRunner) evicted() error {
 	return fmt.Errorf("%w (EC2 spot terminate): %w", venue.ErrEvicted, &shell.ExitError{Command: "echo never-finishes", Venue: "gpu", Code: 137})
 }
 
-func (r reclaimedRunner) Run(context.Context, string) error { return r.evicted() }
-func (r reclaimedRunner) RunStreamedCapture(context.Context, string, int) (string, string, error) {
-	return "", "", r.evicted()
-}
-func (r reclaimedRunner) RunCapture(context.Context, string) ([]byte, error) { return nil, r.evicted() }
-func (r reclaimedRunner) RunCaptureFull(context.Context, string) (string, string, int, error) {
-	return "", "", 0, r.evicted()
-}
-func (r reclaimedRunner) RunCaptureFullLimited(context.Context, string, int, string) (string, string, int, error) {
-	return "", "", 0, r.evicted()
-}
-func (r reclaimedRunner) RunCaptureFullLimitedStreamed(context.Context, string, int, string) (string, string, int, error) {
-	return "", "", 0, r.evicted()
+func (r reclaimedRunner) Exec(context.Context, shell.Command) (shell.Result, error) {
+	return shell.Result{}, r.evicted()
 }
 func (r reclaimedRunner) WithLabel(string) shell.Runner { return r }
 func (reclaimedRunner) Close() error                    { return nil }

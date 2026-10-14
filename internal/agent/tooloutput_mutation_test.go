@@ -13,8 +13,8 @@ import (
 
 type tooloutputBrokenRunner struct{ shell.Runner }
 
-func (tooloutputBrokenRunner) RunCaptureFullLimitedStreamed(context.Context, string, int, string) (string, string, int, error) {
-	return "", "", 0, errors.New("no such container")
+func (tooloutputBrokenRunner) Exec(context.Context, shell.Command) (shell.Result, error) {
+	return shell.Result{}, errors.New("no such container")
 }
 
 func TestARunnerFailureOnALiveStepIsALostTree(t *testing.T) {

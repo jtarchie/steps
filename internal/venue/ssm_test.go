@@ -259,7 +259,7 @@ func TestVenueRunsAStepOnAnSSMWorker(t *testing.T) {
 
 	runner := newLocalRunner(t, localSSMWorker(t, fake, cwd, "out"))
 
-	err := runner.Run(context.Background(), "cat data/seed.txt > out/report.txt")
+	err := shell.Run(context.Background(), runner, "cat data/seed.txt > out/report.txt")
 	if err != nil {
 		t.Fatalf("Run on an aws:// worker: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestSSMWorkerInstallsItsKeyOncePerInstance(t *testing.T) {
 	for range 2 {
 		runner := newLocalRunner(t, spec)
 
-		err := runner.Run(context.Background(), "true")
+		err := shell.Run(context.Background(), runner, "true")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -313,7 +313,7 @@ func TestVenueRefusesAWindowsSSMWorker(t *testing.T) {
 
 	runner := newLocalRunner(t, localSSMWorker(t, fake, t.TempDir()))
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err == nil {
 		t.Fatal("a Windows instance was accepted")
 	}
@@ -340,7 +340,7 @@ func TestVenueReportsAnInstanceSSMCannotReach(t *testing.T) {
 
 	runner := newLocalRunner(t, localSSMWorker(t, fake, t.TempDir()))
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err == nil {
 		t.Fatal("an unmanaged instance was accepted")
 	}
@@ -412,7 +412,7 @@ func TestDialWaitsForTheSSMAgentToRegister(t *testing.T) {
 	fake := &fakeSSM{unmanagedBefore: 2}
 	runner := newLocalRunner(t, localSSMWorker(t, fake, cwd))
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -443,7 +443,7 @@ func TestDialWaitsForAReconnectingSSMAgent(t *testing.T) {
 	fake := &fakeSSM{lostBefore: 2}
 	runner := newLocalRunner(t, localSSMWorker(t, fake, cwd))
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -466,7 +466,7 @@ func TestSSMWorkerReinstallsPastAStaleHostKey(t *testing.T) {
 
 	runner := newLocalRunner(t, spec)
 
-	err := runner.Run(context.Background(), "true")
+	err := shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("Run past a stale host key: %v", err)
 	}

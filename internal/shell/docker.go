@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"io"
+	"github.com/jtarchie/steps/internal/redact"
 	"log/slog"
 	"net"
 	"os"
@@ -18,7 +18,6 @@ import (
 
 	"github.com/jtarchie/steps/internal/dockerapi"
 	"github.com/jtarchie/steps/internal/events"
-	"github.com/jtarchie/steps/internal/redact"
 )
 
 // errSessionClosed is returned when a command is issued through a runner
@@ -548,113 +547,80 @@ func (s *dockerSession) reapOrphans(ctx context.Context, client *dockerapi.Clien
 	return "/tmp/." + pidfile, nil
 }
 
-// dockerExec is the shared plumbing behind Run/RunCapture/RunCaptureFull/
-// RunCaptureFullLimited/RunCaptureFullLimitedStreamed: it always captures
-// both stdout and stderr — even for Run, which never exposes them, trading a
-// little memory for one less code path to keep in sync across five
-// near-identical methods — additionally streaming either live (to
-// the context's output, prefixed when WithLabel was used) when
-// streamStdout/streamStderr is set. stdin wires the host's stdin through
-// only when set; otherwise cmd.Stdin stays nil (/dev/null), matching
-// RunCaptureFull's non-interactive semantics for model-generated commands.
-// maxBytes caps each captured stream (0 means unbounded — every caller but
-// RunCaptureFullLimited/RunCaptureFullLimitedStreamed passes 0, reproducing
-// today's behavior exactly). spillDir, when set alongside a positive
-// maxBytes, streams overflow to a file under that (host) directory instead
-// of dropping it — see newCaptureWriter/spillWriter. The writer runs
-// host-side regardless of where command executes, so the resulting spill
-// file is always a host path.
-func (d DockerRunner) dockerExec(
-	ctx context.Context, command string, stdin, streamStdout, streamStderr bool, maxBytes int, spillDir string,
-) (stdout, stderr string, exitCode int, runErr error) {
+// Exec runs cmd in the step's container. See Runner.
+//
+// Daemon-level refusals (a bad image) surface as the same 125 `docker run`
+// reports, and a command the container could not run or find as its own
+// 126/127 — like any other nonzero exit, data under ExitAsData. Only a failure
+// to have a container at all is an error there.
+func (d DockerRunner) Exec(ctx context.Context, cmd Command) (Result, error) {
+	slog.DebugContext(ctx, "shell.docker.exec", "image", d.Image, "command", redact.Command(cmd.Script), "cwd", d.session.resolvedCwd)
+
+	res, runErr := d.dockerExec(ctx, cmd)
+
+	logFinished(ctx, "shell.docker.exec", cmd, res, "image", d.Image)
+
+	if cmd.ExitAsData {
+		// processStarted is what separates "the container refused this" — which
+		// is an answer, reported as data — from "there was never a container to
+		// refuse it", which is not.
+		if runErr != nil && !processStarted(runErr) {
+			return Result{Code: -1}, fmt.Errorf("docker failed to start for image %q: %w", d.Image, runErr)
+		}
+
+		return res, nil
+	}
+
+	failure := commandFailure(cmd.Script, res.Code, runErr)
+	if failure != nil {
+		return res, fmt.Errorf("command %q failed in image %q: %w", redact.Command(cmd.Script), d.Image, wrapIfCanceled(ctx, failure))
+	}
+
+	return res, nil
+}
+
+// dockerExec runs one command in the session container. Its output writers
+// run here, wherever the daemon is, so a spill file is always a host path.
+// A start the daemon refused comes back with that refusal's stderr and code.
+func (d DockerRunner) dockerExec(ctx context.Context, cmd Command) (Result, error) {
 	client, id, startStderr, startErr := d.session.ensure(ctx)
 	if startErr != nil {
-		return "", startStderr, exitCodeOf(startErr), startErr
+		return Result{Stderr: startStderr, Code: exitCodeOf(startErr)}, startErr
 	}
 
-	outWriter := newCaptureWriter(maxBytes, spillDir)
-	errWriter := newCaptureWriter(maxBytes, spillDir)
-
-	outTarget, flushStdout := io.Writer(outWriter), func() {}
-	errTarget, flushStderr := io.Writer(errWriter), func() {}
-
-	if streamStdout {
-		var live io.Writer
-
-		live, flushStdout = prefixedStream(d.label, events.Stdout(ctx))
-		outTarget = io.MultiWriter(live, outWriter)
-	}
-
-	if streamStderr {
-		var live io.Writer
-
-		live, flushStderr = prefixedStream(d.label, events.Stderr(ctx))
-		errTarget = io.MultiWriter(live, errWriter)
-	}
+	out := cmd.Output(ctx, d.label)
 
 	pidfile, err := d.session.reapOrphans(ctx, client, id)
 	if err != nil {
-		return "", "", 0, err
+		return Result{}, err
 	}
 
 	opts := dockerapi.ExecOptions{
 		// A shell string, so through `sh -c`. The exec's sh leads its own session, and exec keeps its pid, so the file names the command's whole group.
-		Cmd:    []string{"sh", "-c", `echo $$ > "$1" 2>/dev/null; exec sh -c "$0"`, command, pidfile},
-		Stdout: outTarget,
-		Stderr: errTarget,
+		Cmd:    []string{"sh", "-c", `echo $$ > "$1" 2>/dev/null; exec sh -c "$0"`, cmd.Script, pidfile},
+		Stdout: out.Stdout,
+		Stderr: out.Stderr,
 		Env:    buildEnvPairs(ctx),
 	}
 
-	if stdin {
+	if cmd.Stdin {
 		opts.Stdin = os.Stdin
 	}
 
 	code, execErr := client.Exec(ctx, id, opts)
 
-	flushStdout()
-	flushStderr()
+	out.Flush()
 
 	// A connection that failed under a live caller says nothing about the command, which may still run; a cancelled one is the session's teardown to end.
 	if execErr != nil && ctx.Err() == nil {
 		d.session.orphan(pidfile)
 	}
 
-	return outWriter.result(), errWriter.result(), code, d.session.diagnose(ctx, client, id, execErr)
+	return out.Result(code), d.session.diagnose(ctx, client, id, execErr)
 }
 
-// Run runs command in the step's container, streaming stdout/stderr live and
-// wiring the host's stdin through (-i). Any nonzero exit is a Go error.
-func (d DockerRunner) Run(ctx context.Context, command string) error {
-	_, _, err := d.runStreamed(ctx, command, 0)
-
-	return err
-}
-
-// RunStreamedCapture is Run, keeping what it streamed. See shell.Runner.
-func (d DockerRunner) RunStreamedCapture(ctx context.Context, command string, maxBytes int) (string, string, error) {
-	return d.runStreamed(ctx, command, maxBytes)
-}
-
-// runStreamed is the shared body of Run and RunStreamedCapture. dockerExec
-// already returns what it streamed, so Run was discarding it; the only thing
-// maxBytes changes is whether that buffering is bounded.
-func (d DockerRunner) runStreamed(ctx context.Context, command string, maxBytes int) (stdout, stderr string, err error) {
-	slog.DebugContext(ctx, "shell.docker.run", "image", d.Image, "command", redact.Command(command), "cwd", d.session.resolvedCwd)
-
-	stdout, stderr, code, runErr := d.dockerExec(ctx, command, true, true, true, maxBytes, "")
-
-	slog.DebugContext(ctx, "shell.docker.run", "image", d.Image, "command", redact.Command(command), "exit_code", code)
-
-	failure := commandFailure(command, code, runErr)
-	if failure != nil {
-		return stdout, stderr, fmt.Errorf("command %q failed in image %q: %w", redact.Command(command), d.Image, wrapIfCanceled(ctx, failure))
-	}
-
-	return stdout, stderr, nil
-}
-
-// commandFailure turns a command's outcome into the error Run and RunCapture
-// report, or nil for a clean one.
+// commandFailure turns a command's outcome into the error an exit-as-error Exec
+// reports, or nil for a clean one.
 //
 // The two halves classify differently and it matters. A command that ran and
 // exited nonzero is an *ExitError, so the pipeline reads it as the step
@@ -673,77 +639,6 @@ func commandFailure(command string, code int, runErr error) error {
 	}
 
 	return &ExitError{Command: command, Code: code}
-}
-
-// RunCapture runs command in the step's container, capturing stdout and
-// stderr while also streaming stderr live. The captured output is logged (at
-// debug level) on both success and failure, matching HostRunner.RunCapture, so
-// a failing containerized check/out command's output is available for
-// debugging. Any nonzero exit is a Go error.
-func (d DockerRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
-	slog.DebugContext(ctx, "shell.docker.capture", "image", d.Image, "command", redact.Command(command), "cwd", d.session.resolvedCwd)
-
-	stdout, stderr, code, runErr := d.dockerExec(ctx, command, true, false, true, 0, "")
-
-	slog.DebugContext(ctx, "shell.docker.capture", "image", d.Image, "command", redact.Command(command),
-		"exit_code", code, "output_bytes", len(stdout), "output", redact.Command(stdout), "stderr", redact.Command(stderr))
-
-	failure := commandFailure(command, code, runErr)
-	if failure != nil {
-		return nil, fmt.Errorf("command %q failed in image %q: %w", redact.Command(command), d.Image, wrapIfCanceled(ctx, failure))
-	}
-
-	return []byte(stdout), nil
-}
-
-// RunCaptureFull runs command in the step's container, capturing
-// stdout/stderr separately with no stdin attached. Daemon-level refusals (a
-// bad image) surface as the same 125 `docker run` reports, and a command the
-// container could not run or find as its own 126/127 — exactly like any other
-// nonzero exit, as data via exitCode rather than a Go error, even a
-// signal-killed one (e.g. from a canceled ctx). Only a failure to have a
-// container at all returns a non-nil error. A
-// caller that needs to tell "this result may be incomplete because ctx was
-// canceled while the command ran" apart from an ordinary exit code checks
-// ctx.Err() itself (or CanceledError) after this returns, rather than
-// relying on err.
-func (d DockerRunner) RunCaptureFull(ctx context.Context, command string) (stdout, stderr string, exitCode int, err error) {
-	return d.runCaptureFull(ctx, command, 0, "", false)
-}
-
-// RunCaptureFullLimited is RunCaptureFull with each stream capped at
-// maxBytes (and, with spillDir set, overflow streamed to disk instead of
-// dropped) while the command runs — see the Runner interface doc.
-func (d DockerRunner) RunCaptureFullLimited(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error) {
-	return d.runCaptureFull(ctx, command, maxBytes, spillDir, false)
-}
-
-// RunCaptureFullLimitedStreamed is RunCaptureFullLimited, additionally
-// streaming both stdout/stderr live (prefixed, when WithLabel was used) —
-// see the Runner interface doc.
-func (d DockerRunner) RunCaptureFullLimitedStreamed(ctx context.Context, command string, maxBytes int, spillDir string) (stdout, stderr string, exitCode int, err error) {
-	return d.runCaptureFull(ctx, command, maxBytes, spillDir, true)
-}
-
-// runCaptureFull is the shared implementation behind RunCaptureFull (maxBytes
-// 0, meaning unbounded — byte-identical to before RunCaptureFullLimited
-// existed), RunCaptureFullLimited (maxBytes > 0), and
-// RunCaptureFullLimitedStreamed (stream true).
-func (d DockerRunner) runCaptureFull(ctx context.Context, command string, maxBytes int, spillDir string, stream bool) (stdout, stderr string, exitCode int, err error) {
-	slog.DebugContext(ctx, "shell.docker.capture_full", "image", d.Image, "command", redact.Command(command), "cwd", d.session.resolvedCwd)
-
-	stdout, stderr, code, runErr := d.dockerExec(ctx, command, false, stream, stream, maxBytes, spillDir)
-
-	// processStarted is what separates "the container refused this" — which is
-	// an answer, reported as data — from "there was never a container to
-	// refuse it", which is not.
-	if runErr != nil && !processStarted(runErr) {
-		return "", "", -1, fmt.Errorf("docker failed to start for image %q: %w", d.Image, runErr)
-	}
-
-	slog.DebugContext(ctx, "shell.docker.capture_full", "image", d.Image, "command", redact.Command(command), "exit_code", code)
-
-	return stdout, stderr, code, nil
 }
 
 // containerEnv resolves the pipeline's env: names into the NAME=value pairs

@@ -104,9 +104,9 @@ func (c closingRunner) WithLabel(label string) shell.Runner {
 
 // checkRunner re-places a check whose worker was reclaimed mid-command.
 //
-// Only RunCapture, because that is the one call a check makes; the runner it
-// wraps is the first machine's, and a re-placement builds another from the
-// same spec against the freshly acquired one, closing the dead one first.
+// The runner it wraps is the first machine's, and a re-placement builds
+// another from the same spec against the freshly acquired one, closing the
+// dead one first.
 // The call's context carries the leases and the placement sink, being a
 // descendant of the one the placer was resolved under.
 type checkRunner struct {
@@ -117,8 +117,8 @@ type checkRunner struct {
 }
 
 // A pointer receiver, because the stage closes the runner it holds and a replacement stored on a copy was never closed while the dead machine was closed twice.
-func (c *checkRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
-	var out []byte
+func (c *checkRunner) Exec(ctx context.Context, cmd shell.Command) (shell.Result, error) {
+	var out shell.Result
 
 	current := c.Runner
 	// The machine current dials, handed to the retry because Abandon is identity-checked: after a re-placement it is no longer the spec's.
@@ -144,7 +144,7 @@ func (c *checkRunner) RunCapture(ctx context.Context, command string) ([]byte, e
 			current = runner.WithLabel(c.spec.WorkerTag + " check")
 		}
 
-		captured, err := current.RunCapture(ctx, command)
+		captured, err := current.Exec(ctx, cmd)
 		if errors.Is(err, venue.ErrEvicted) {
 			// Closed here rather than by the stage, which only ever sees
 			// the runner it was handed — the last one.

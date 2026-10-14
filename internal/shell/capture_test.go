@@ -330,9 +330,7 @@ func TestHostRunnerRunCaptureFullLimited(t *testing.T) {
 
 		runner := HostRunner{cwd: t.TempDir()}
 
-		stdout, stderr, exitCode, err := runner.RunCaptureFullLimited(
-			context.Background(), "printf '%0.sA' $(seq 1 50); printf '%0.sB' $(seq 1 50) 1>&2", 10, "",
-		)
+		stdout, stderr, exitCode, err := RunCaptureFullLimited(context.Background(), runner, "printf '%0.sA' $(seq 1 50); printf '%0.sB' $(seq 1 50) 1>&2", 10, "")
 		if err != nil {
 			t.Fatalf("RunCaptureFullLimited: %v", err)
 		}
@@ -350,7 +348,7 @@ func TestHostRunnerRunCaptureFullLimited(t *testing.T) {
 
 		runner := HostRunner{cwd: t.TempDir()}
 
-		stdout, _, _, err := runner.RunCaptureFullLimited(context.Background(), "echo short", 100, "")
+		stdout, _, _, err := RunCaptureFullLimited(context.Background(), runner, "echo short", 100, "")
 		if err != nil {
 			t.Fatalf("RunCaptureFullLimited: %v", err)
 		}
@@ -365,7 +363,7 @@ func TestHostRunnerRunCaptureFullLimited(t *testing.T) {
 
 		runner := HostRunner{cwd: t.TempDir()}
 
-		_, _, exitCode, err := runner.RunCaptureFullLimited(context.Background(), "exit 7", 100, "")
+		_, _, exitCode, err := RunCaptureFullLimited(context.Background(), runner, "exit 7", 100, "")
 		if err != nil {
 			t.Fatalf("RunCaptureFullLimited returned a Go error for a normal nonzero exit: %v", err)
 		}
@@ -385,9 +383,7 @@ func TestHostRunnerRunCaptureFullLimitedSpillDir(t *testing.T) {
 	spillDir := t.TempDir()
 	runner := HostRunner{cwd: t.TempDir()}
 
-	stdout, _, exitCode, err := runner.RunCaptureFullLimited(
-		context.Background(), "printf '%0.sA' $(seq 1 50)", 10, spillDir,
-	)
+	stdout, _, exitCode, err := RunCaptureFullLimited(context.Background(), runner, "printf '%0.sA' $(seq 1 50)", 10, spillDir)
 	if err != nil {
 		t.Fatalf("RunCaptureFullLimited: %v", err)
 	}

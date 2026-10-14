@@ -19,7 +19,7 @@ func TestVenueReadOnlySkipsTheFetch(t *testing.T) {
 
 	runner := newLocalRunner(t, localWorker(t, cwd, "out"))
 
-	err := runner.Run(context.Background(), "echo worker > out/who.txt")
+	err := shell.Run(context.Background(), runner, "echo worker > out/who.txt")
 	if err != nil {
 		t.Fatalf("seeding the worker's copy failed: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestVenueReadOnlySkipsTheFetch(t *testing.T) {
 	mustWrite(t, local, "local\n")
 
 	// A read-only command: the worker's own copy still says "worker", so a fetch would replace what was just written here.
-	_, _, _, err = runner.RunCaptureFullLimited(shell.ReadOnly(context.Background()), "cat out/who.txt", 4096, "")
+	_, _, _, err = shell.RunCaptureFullLimited(shell.ReadOnly(context.Background()), runner, "cat out/who.txt", 4096, "")
 	if err != nil {
 		t.Fatalf("the read-only command failed: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestVenueReadOnlySkipsTheFetch(t *testing.T) {
 	}
 
 	// And an unmarked command still fetches, or the marker above would prove nothing about the marking.
-	err = runner.Run(context.Background(), "true")
+	err = shell.Run(context.Background(), runner, "true")
 	if err != nil {
 		t.Fatalf("the ordinary command failed: %v", err)
 	}

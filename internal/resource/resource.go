@@ -95,7 +95,7 @@ func runShellCheck(ctx context.Context, rt config.ResourceType, spec shell.Runne
 	defer shell.CloseRunner(runner, rt.Name+" check")
 
 	// A check is not part of a build, and a run id in a version would mint one per run.
-	out, err := runner.RunCapture(shell.WithBuildMetadata(ctx, shell.BuildMetadata{}), command)
+	out, err := shell.RunCapture(shell.WithBuildMetadata(ctx, shell.BuildMetadata{}), runner, command)
 	if err != nil {
 		return nil, fmt.Errorf("check %q: %w", rt.Name, err)
 	}
@@ -286,7 +286,7 @@ func (shellBackend) in(ctx context.Context, c Call) error {
 	// Unlabeled: the caller prefixes what it streams, so a recorder between them keeps the script's own bytes.
 	defer shell.CloseRunner(runner, rt.Name+" in")
 
-	err = runner.Run(ctx, command)
+	err = shell.Run(ctx, runner, command)
 	if err != nil {
 		return fmt.Errorf("in %q: %w", rt.Name, err)
 	}
@@ -343,7 +343,7 @@ func (shellBackend) out(ctx context.Context, c Call) (map[string]any, error) {
 	// Unlabeled: the caller prefixes what it streams, so a recorder between them keeps the script's own bytes.
 	defer shell.CloseRunner(runner, rt.Name+" out")
 
-	out, err := runner.RunCapture(ctx, command)
+	out, err := shell.RunCapture(ctx, runner, command)
 	if err != nil {
 		return nil, fmt.Errorf("out %q: %w", rt.Name, err)
 	}

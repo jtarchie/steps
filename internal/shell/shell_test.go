@@ -288,7 +288,7 @@ func TestHostRunnerCancellationIsDetectable(t *testing.T) {
 
 		runner := HostRunner{cwd: t.TempDir()}
 
-		err := runner.Run(ctx, "exec sleep 5")
+		err := Run(ctx, runner, "exec sleep 5")
 		if err == nil {
 			t.Fatal("expected an error for a command killed by a canceled context")
 		}
@@ -306,7 +306,7 @@ func TestHostRunnerCancellationIsDetectable(t *testing.T) {
 
 		runner := HostRunner{cwd: t.TempDir()}
 
-		_, err := runner.RunCapture(ctx, "exec sleep 5")
+		_, err := RunCapture(ctx, runner, "exec sleep 5")
 		if err == nil {
 			t.Fatal("expected an error for a command killed by a canceled context")
 		}
@@ -321,7 +321,7 @@ func TestHostRunnerCancellationIsDetectable(t *testing.T) {
 
 		runner := HostRunner{cwd: t.TempDir()}
 
-		err := runner.Run(context.Background(), "exit 1")
+		err := Run(context.Background(), runner, "exit 1")
 		if err == nil {
 			t.Fatal("expected an error for a nonzero exit")
 		}
@@ -391,7 +391,7 @@ func TestHostRunnerRunsInItsDir(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	stdout, _, _, err := runner.RunCaptureFull(t.Context(), "pwd -P")
+	stdout, _, _, err := RunCaptureFull(t.Context(), runner, "pwd -P")
 	if err != nil {
 		t.Fatalf("RunCaptureFull: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestHostRunnerCommandThatNeverStartedHasNoExitCode(t *testing.T) {
 
 	runner := HostRunner{cwd: filepath.Join(t.TempDir(), "missing")}
 
-	_, _, exitCode, err := runner.RunCaptureFull(t.Context(), "true")
+	_, _, exitCode, err := RunCaptureFull(t.Context(), runner, "true")
 	if err == nil {
 		t.Fatal("a command whose working directory does not exist started")
 	}
@@ -422,28 +422,31 @@ func TestHostRunnerCommandThatNeverStartedHasNoExitCode(t *testing.T) {
 	}
 }
 
-func TestHostRunnerRunStreamedCaptureKeepsOnlyWhenAsked(t *testing.T) {
+func TestHostRunnerStreamedExecKeepsOnlyWhenAsked(t *testing.T) {
 	t.Parallel()
 
 	ctx := events.WithOutput(t.Context(), events.Output{Stdout: io.Discard, Stderr: io.Discard})
 	runner := HostRunner{cwd: t.TempDir()}
+	cmd := Command{Script: "echo out; echo err >&2", Stream: StreamBoth, Capture: true}
 
-	stdout, stderr, err := runner.RunStreamedCapture(ctx, "echo out; echo err >&2", 100)
+	res, err := runner.Exec(ctx, cmd)
 	if err != nil {
-		t.Fatalf("RunStreamedCapture: %v", err)
+		t.Fatalf("Exec: %v", err)
 	}
 
-	if stdout != "out\n" || stderr != "err\n" {
-		t.Errorf("captured (%q, %q), want what the command streamed", stdout, stderr)
+	if res.Stdout != "out\n" || res.Stderr != "err\n" {
+		t.Errorf("captured (%q, %q), want what the command streamed", res.Stdout, res.Stderr)
 	}
 
-	stdout, stderr, err = runner.RunStreamedCapture(ctx, "echo out; echo err >&2", 0)
+	cmd.Capture = false
+
+	res, err = runner.Exec(ctx, cmd)
 	if err != nil {
-		t.Fatalf("RunStreamedCapture: %v", err)
+		t.Fatalf("Exec: %v", err)
 	}
 
-	if stdout != "" || stderr != "" {
-		t.Errorf("captured (%q, %q) with maxBytes 0, which captures nothing", stdout, stderr)
+	if res.Stdout != "" || res.Stderr != "" {
+		t.Errorf("captured (%q, %q) without Capture", res.Stdout, res.Stderr)
 	}
 }
 

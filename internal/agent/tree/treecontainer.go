@@ -52,7 +52,7 @@ func (c Container) run(ctx context.Context, script string) (stdout string, code 
 
 // Execute runs one script in the container. Only a failure to run at all is an error, and it is filed with Lost.
 func (c Container) Execute(ctx context.Context, script string) (stdout, stderr string, code int, err error) {
-	out, errOut, code, err := c.Runner.RunCaptureFullLimited(ctx, script, maxScriptOutputBytes, "")
+	out, errOut, code, err := shell.RunCaptureFullLimited(ctx, c.Runner, script, maxScriptOutputBytes, "")
 	if err != nil {
 		lost := fmt.Errorf("%w: %w", ErrNoAccess, err)
 		// See shellToolResult: a command ctx cut off is not evidence the container is gone.
