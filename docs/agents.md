@@ -443,6 +443,47 @@ jobs:
 - **Only custom tools can be `required:`**, and `max_calls:`/`args:` are rejected at load on builtin and sub-agent tools. A builtin can be written as a mapping (`{builtin: read_file}`) purely so those fields have somewhere to attach.
 - **Quote everything that reaches the shell.** `{{ .args.body | shellquote }}` — an LLM-authored value with backticks in it is otherwise command-substituted. See [templating.md](templating.md).
 
+### `params:` — limits on what an argument may be
+
+A tool's arguments come from a model, and a model can send anything. `params:` says what each one may be — how long, what pattern, which values, a number range, a default — and the limits are held in two places: they are written into the parameter schema the model reads (`maxLength`, `pattern`, `enum`, `minimum`, `maximum`, `default`), so it corrects itself before calling, and they are enforced before the tool runs, so a call that breaks one never reaches the command or the server. The refusal comes back as ordinary tool-result data that names the argument and the limit, never its value.
+
+```yaml test=agents-tool-params
+agents:
+- name: triager
+  source: { model: openrouter/qwen/qwen3.7-flash }
+  tools:
+  - name: file_issue
+    description: File an issue. title is one short line; severity defaults to low.
+    run: |
+      echo filed {{ .args.title | shellquote }} as {{ .args.severity | shellquote }}
+    params:
+      title:
+        max_length: 40
+        pattern: '^[^;]*$'        # unanchored unless you write ^ and $
+      severity:
+        enum: [low, high]
+        default: low              # fills a missing argument, so the model may leave it out
+
+jobs:
+- name: triage
+  plan:
+  - agent: triager
+    messages:
+      - "File an issue for the crash on startup."
+    assert:
+      tool_calls:
+      - name: file_issue
+        args: { title: crash on startup }   # the call that got through the limits
+  assert:
+    execution: [triager]
+    outcome: succeeded
+```
+
+- **Limits by kind**: `max_length`/`min_length` (characters, not bytes) and `pattern` ([Go regular expression](https://pkg.go.dev/regexp/syntax)) are for strings; `min`/`max` are for numbers; `enum` and `default` fit either. A custom tool's arguments are all strings, so `min`/`max` on one is a load error; on an [MCP tool](mcp.md) the server's own schema says which parameters are numbers, and a mismatch is refused when the step prepares.
+- **`default:` fills, then the limits apply.** A default must pass its own limits, and it makes a custom tool's inferred parameter optional where it was required.
+- **Where it is valid**: a custom tool, a sub-agent tool (its one argument is `request`), or a single-tool MCP grant (`{mcp, tool}`), written where the tool is granted. A pinned (`args:`) argument has nothing to limit, so naming one is a load error, as is a name the tool does not take.
+- **Part of the step's hash**: tightening a limit re-runs a step cached under a looser one.
+
 ## Delivering files the pipeline will read
 
 An agent's answer is not its final message. Everything downstream — a `put:`, a task, another agent — reads **files**, and a model that summarizes its work in prose instead of writing it has produced nothing while sounding finished. `assert.files:` already states which files a step owes ([control-flow.md](control-flow.md#assert-self-verification--steps-test)), and `assert.tool_calls:` states the procedure it must follow. Both are checked after the step ends, and the step fails naming what is missing. With **`nudge: true`** on the assert, the model is also told *while it can still act on it*:

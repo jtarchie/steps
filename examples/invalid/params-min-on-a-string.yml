@@ -1,0 +1,20 @@
+# params: limits what an argument may be, and a custom tool's arguments are all
+# strings — they reach a shell as text — so a number range on one cannot ever
+# mean anything. Refused rather than silently never applied.
+# expect: min/max bound a number, and "title" is a string
+
+agents:
+- name: triager
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  tools:
+  - name: file_issue
+    description: File an issue.
+    run: echo {{ .args.title | shellquote }}
+    params:
+      title: { min: 1 }
+
+jobs:
+- name: triage
+  plan:
+  - agent: triager
+    messages: [file one]

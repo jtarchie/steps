@@ -150,6 +150,8 @@ type ToolSpec struct {
 	// web_fetch carries a hard 30s client-side cap of its own, so a timeout:
 	// there can only tighten.
 	Timeout string
+	// Params limits what each argument of this tool may be (see ParamSpec). Keys are the argument names the caller sees; a pinned argument is not one. Valid on a custom tool, a sub-agent tool and a single-tool MCP grant, where the tool is granted.
+	Params map[string]ParamSpec
 }
 
 // UnmarshalYAML decodes a ToolSpec from either a scalar (builtin name) or a
@@ -169,29 +171,30 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 		err := rejectUnknownKeys(value, "agent tool",
 			"builtin", "name", "description", "run", "agent", "mcp", "tool", "tools",
 			"required", "max_calls", "max_output_bytes", "timeout", "args", "allow",
-			"answered_by", "default", "options_required")
+			"answered_by", "default", "options_required", "params")
 		if err != nil {
 			return err
 		}
 
 		var m struct {
-			Builtin         string            `yaml:"builtin"`
-			Name            string            `yaml:"name"`
-			Description     string            `yaml:"description"`
-			Run             string            `yaml:"run"`
-			Agent           string            `yaml:"agent"`
-			MCP             string            `yaml:"mcp"`
-			Tool            string            `yaml:"tool"`
-			Tools           []string          `yaml:"tools"`
-			Required        bool              `yaml:"required"`
-			MaxCalls        int               `yaml:"max_calls"`
-			MaxOutputBytes  int               `yaml:"max_output_bytes"`
-			Timeout         string            `yaml:"timeout"`
-			Args            map[string]string `yaml:"args"`
-			Allow           []string          `yaml:"allow"`
-			AnsweredBy      string            `yaml:"answered_by"`
-			Default         string            `yaml:"default"`
-			OptionsRequired bool              `yaml:"options_required"`
+			Builtin         string               `yaml:"builtin"`
+			Name            string               `yaml:"name"`
+			Description     string               `yaml:"description"`
+			Run             string               `yaml:"run"`
+			Agent           string               `yaml:"agent"`
+			MCP             string               `yaml:"mcp"`
+			Tool            string               `yaml:"tool"`
+			Tools           []string             `yaml:"tools"`
+			Required        bool                 `yaml:"required"`
+			MaxCalls        int                  `yaml:"max_calls"`
+			MaxOutputBytes  int                  `yaml:"max_output_bytes"`
+			Timeout         string               `yaml:"timeout"`
+			Args            map[string]string    `yaml:"args"`
+			Allow           []string             `yaml:"allow"`
+			AnsweredBy      string               `yaml:"answered_by"`
+			Default         string               `yaml:"default"`
+			OptionsRequired bool                 `yaml:"options_required"`
+			Params          map[string]ParamSpec `yaml:"params"`
 		}
 
 		err = value.Decode(&m)
@@ -201,7 +204,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 
 		t.Builtin, t.Name, t.Description, t.Run, t.Agent, t.Required = m.Builtin, m.Name, m.Description, m.Run, m.Agent, m.Required
 		t.MaxCalls, t.Args, t.MaxOutputBytes, t.Allow = m.MaxCalls, m.Args, m.MaxOutputBytes, m.Allow
-		t.Timeout = m.Timeout
+		t.Timeout, t.Params = m.Timeout, m.Params
 		t.MCP, t.MCPTool, t.MCPTools = m.MCP, m.Tool, m.Tools
 		t.AnsweredBy, t.Default, t.OptionsRequired = m.AnsweredBy, m.Default, m.OptionsRequired
 

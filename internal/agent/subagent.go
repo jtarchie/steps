@@ -22,7 +22,7 @@ import (
 
 // subAgentRequestParam is the single argument a sub-agent tool takes: the
 // natural-language instruction the parent model authors for the child.
-const subAgentRequestParam = "request"
+const subAgentRequestParam = config.SubAgentRequestParam
 
 // buildSubAgentTool resolves the child agent named by spec.Agent and returns
 // the declaration the parent model sees plus a toolImpl that, on each call,

@@ -364,6 +364,45 @@ var docScenarios = map[string]docScenario{
 		},
 	},
 
+	// The model is offered the limits, breaks one, is told which, and files a
+	// short title with severity left to its default. Only the second call
+	// reaches the command, and the default arrives as the argument.
+	"agents-tool-params": {
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				schema := string(req.Tools[0].Function.Parameters)
+				for _, published := range []string{`"maxLength":40`, `"pattern":"^[^;]*$"`, `"enum":["low","high"]`, `"default":"low"`} {
+					if !strings.Contains(schema, published) {
+						t.Errorf("the model was not told %s:\n%s", published, schema)
+					}
+				}
+
+				switch {
+				case req.toolResultContains("filed"):
+					return says("Filed.")
+				case req.toolResultContains("at most 40 characters"):
+					return callsTool("file_issue", map[string]any{"title": "crash on startup"})
+				default:
+					return callsTool("file_issue", map[string]any{"title": strings.Repeat("a very long title ", 5)})
+				}
+			})
+		},
+		check: func(t *testing.T, _, path string) {
+			t.Helper()
+
+			transcript := storeTranscript(t, path, "triager")
+			if !strings.Contains(transcript, "filed crash on startup as low") {
+				t.Errorf("the second call should reach the command with the default severity:\n%s", transcript)
+			}
+
+			if strings.Contains(transcript, "filed a very long title") {
+				t.Errorf("a title over the limit reached the command:\n%s", transcript)
+			}
+		},
+	},
+
 	// Parent delegates to the sub-agent tool. The child is the request NOT
 	// offered a `summarizer` tool (only the parent's grant includes it), and
 	// the parent reports only after the child's answer arrives as its tool

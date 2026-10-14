@@ -90,6 +90,50 @@
         }
       }
     },
+    "paramSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What one argument of a tool may be.",
+      "properties": {
+        "max_length": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Longest the value may be, in characters. String arguments only."
+        },
+        "min_length": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Shortest the value may be, in characters. String arguments only."
+        },
+        "pattern": {
+          "type": "string",
+          "description": "A regular expression (Go syntax) the value must match somewhere; anchor with ^ and $ to match all of it. String arguments only."
+        },
+        "enum": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "description": "Every value the argument may take."
+        },
+        "min": {
+          "type": "number",
+          "description": "Smallest the value may be. Number arguments only."
+        },
+        "max": {
+          "type": "number",
+          "description": "Largest the value may be. Number arguments only."
+        },
+        "default": {
+          "type": [
+            "string",
+            "number"
+          ],
+          "description": "Used when the argument is missing, which also makes it optional."
+        }
+      }
+    },
     "access": {
       "type": "object",
       "additionalProperties": false,
@@ -842,6 +886,13 @@
               },
               "description": "Pinned arguments the model can neither see nor set."
             },
+            "params": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/paramSpec"
+              },
+              "description": "Limits on what each argument may be, keyed by argument name. Published in the tool's input schema and enforced before the call. Custom, sub-agent and single-tool MCP forms, where the tool is granted."
+            },
             "timeout": {
               "type": "string",
               "description": "Bounds ONE call of this tool (e.g. 30s, 5m); the step's own deadline still holds. An expired call is reported to the model as an error it can react to, not an aborted step. Only where the tool is granted, except on an inline custom tool."
@@ -861,6 +912,13 @@
             },
             "description": {
               "type": "string"
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/paramSpec"
+              },
+              "description": "Limits on what each argument may be, keyed by argument name. Published in the tool's input schema and enforced before the call. Custom, sub-agent and single-tool MCP forms, where the tool is granted."
             },
             "timeout": {
               "type": "string",
@@ -910,6 +968,13 @@
                 ]
               },
               "description": "Pinned arguments the model can neither see nor set. Single-tool form only; each key must be a property the tool declares."
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/paramSpec"
+              },
+              "description": "Limits on what each argument may be, keyed by argument name. Published in the tool's input schema and enforced before the call. Custom, sub-agent and single-tool MCP forms, where the tool is granted."
             },
             "timeout": {
               "type": "string",

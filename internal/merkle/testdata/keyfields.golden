@@ -39,6 +39,19 @@
         "max_output_bytes": 53,
         "name": "Tools[0].Name",
         "options_required": true,
+        "params": {
+          "Tools[0].Params.key": {
+            "default": "Tools[0].Params.value.Default",
+            "enum": [
+              "Tools[0].Params.value.Enum[0]"
+            ],
+            "max": 0.915,
+            "max_length": 62,
+            "min": 0.315,
+            "min_length": 46,
+            "pattern": "Tools[0].Params.value.Pattern"
+          }
+        },
         "required": true,
         "run": "Tools[0].Run"
       }
@@ -223,6 +236,19 @@
       "max_output_bytes": 12,
       "name": "Name",
       "options_required": true,
+      "params": {
+        "Params.key": {
+          "default": "Params.value.Default",
+          "enum": [
+            "Params.value.Enum[0]"
+          ],
+          "max": 0.985,
+          "max_length": 56,
+          "min": 0.8150000000000001,
+          "min_length": 93,
+          "pattern": "Params.value.Pattern"
+        }
+      },
       "required": true,
       "run": "Run"
     }
@@ -243,6 +269,19 @@
       "max_output_bytes": 12,
       "name": "lint",
       "options_required": true,
+      "params": {
+        "Params.key": {
+          "default": "Params.value.Default",
+          "enum": [
+            "Params.value.Enum[0]"
+          ],
+          "max": 0.985,
+          "max_length": 56,
+          "min": 0.8150000000000001,
+          "min_length": 93,
+          "pattern": "Params.value.Pattern"
+        }
+      },
       "required": true,
       "run": "golangci-lint run"
     }
@@ -260,6 +299,19 @@
       "mcp_tools": [
         "MCPTools[0]"
       ],
+      "params": {
+        "Params.key": {
+          "default": "Params.value.Default",
+          "enum": [
+            "Params.value.Enum[0]"
+          ],
+          "max": 0.985,
+          "max_length": 56,
+          "min": 0.8150000000000001,
+          "min_length": 93,
+          "pattern": "Params.value.Pattern"
+        }
+      },
       "required": true,
       "server": {
         "auth_type": "",
@@ -283,6 +335,19 @@
         "temperature": null,
         "tools": [],
         "top_p": null
+      },
+      "params": {
+        "Params.key": {
+          "default": "Params.value.Default",
+          "enum": [
+            "Params.value.Enum[0]"
+          ],
+          "max": 0.985,
+          "max_length": 56,
+          "min": 0.8150000000000001,
+          "min_length": 93,
+          "pattern": "Params.value.Pattern"
+        }
       }
     }
   ]

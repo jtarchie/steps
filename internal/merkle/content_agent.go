@@ -31,6 +31,8 @@ func toolSpecsContent(cfg *config.Config, specs []config.ToolSpec) ([]map[string
 				"invocation":  invocation,
 			}
 
+			withParamsContent(t, out[i])
+
 			continue
 		}
 
@@ -39,6 +41,8 @@ func toolSpecsContent(cfg *config.Config, specs []config.ToolSpec) ([]map[string
 			if err != nil {
 				return nil, err
 			}
+
+			withParamsContent(t, content)
 
 			out[i] = content
 
@@ -79,11 +83,57 @@ func toolSpecsContent(cfg *config.Config, specs []config.ToolSpec) ([]map[string
 		}
 
 		withAskUserContent(t, content)
+		withParamsContent(t, content)
 
 		out[i] = content
 	}
 
 	return out, nil
+}
+
+// withParamsContent folds params: in. The limits are published to the model and enforced in front of the call, so they decide which calls happen and what the model is told to send: a step cached under looser ones would be skipped when they tighten. Value-gated.
+func withParamsContent(t config.ToolSpec, content map[string]any) {
+	if len(t.Params) == 0 {
+		return
+	}
+
+	params := make(map[string]any, len(t.Params))
+
+	for name, limits := range t.Params {
+		entry := map[string]any{}
+
+		if limits.MaxLength != nil {
+			entry["max_length"] = *limits.MaxLength
+		}
+
+		if limits.MinLength != nil {
+			entry["min_length"] = *limits.MinLength
+		}
+
+		if limits.Pattern != "" {
+			entry["pattern"] = limits.Pattern
+		}
+
+		if len(limits.Enum) != 0 {
+			entry["enum"] = limits.Enum
+		}
+
+		if limits.Min != nil {
+			entry["min"] = *limits.Min
+		}
+
+		if limits.Max != nil {
+			entry["max"] = *limits.Max
+		}
+
+		if limits.Default != nil {
+			entry["default"] = *limits.Default
+		}
+
+		params[name] = entry
+	}
+
+	content["params"] = params
 }
 
 // withRequiredContent folds required: in. It is a success criterion — a required tool's nonzero exit aborts the step instead of being handed to the model as data — and assertContent's argument applies word for word: a step cached BEFORE the line was added would be skipped, and the criterion never evaluated on the run that added it. Value-gated like everything here.

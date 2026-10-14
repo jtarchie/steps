@@ -219,6 +219,9 @@ mcp_exports:
     description: Search issues in the app repository
     args: { owner: acme, repo: app }   # hidden from the caller, sent whatever it asks
     timeout: 20s
+    params:                            # what the caller may send, shown to it and enforced
+      query: { max_length: 200, pattern: '^[^;]*$' }
+      per_page: { max: 50, default: 20 }
   - mcp: github
     tools: [get_issue]
   - agent: oncall                       # the caller gets an answer, not the tools
@@ -234,6 +237,7 @@ jobs:
 - **`access:` is required**, a [role rule](authentication.md#who-may-do-what-roles) about the person connecting. Separate levels of access are separate exports (`support`, `support-write`), so who may do what stays in the file, where it is reviewed.
 - **Only MCP grants and sub-agents.** A built-in has no workspace outside a step, and a custom `run:` tool would put a caller's arguments into a shell on the daemon's machine; both are load errors. `max_calls:`, `max_output_bytes:` and `required:` are about a step's conversation, which an export does not have; `rate:` bounds calls per person instead.
 - **Narrowing works as it does for an agent**: `args:` pins (single-tool form), `description:`, `timeout:`.
+- **`params:` limits what a caller may send**, per argument: `max_length`, `min_length`, `pattern`, `enum`, `min`, `max`, `default`. They are written into the tool's input schema, so Claude or Cursor reads "at most 200 characters" and corrects itself before calling, and the daemon enforces the same limits whether it did or not: a call that breaks one is refused with a tool error naming the argument (never its value) before anything is sent upstream. `default` fills an argument the caller left out. The same `params:` works on an agent's own grant of the tool — see [agents.md](agents.md#params--limits-on-what-an-argument-may-be). Whether a parameter is a number comes from the server's own schema, so `min`/`max` on a string parameter is refused when the export is first built.
 - **A sub-agent export** runs that agent's own conversation for each call, with your model and your tools, and returns its answer — the narrowest thing to share.
 - Never hashed: an export changes nothing a build does.
 

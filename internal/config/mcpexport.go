@@ -109,7 +109,12 @@ func (c *Config) validateExportedTool(spec ToolSpec) error {
 		return err
 	}
 
-	return validateExportedNarrowing(spec)
+	err = validateExportedNarrowing(spec)
+	if err != nil {
+		return err
+	}
+
+	return validateToolParamsShape("export", grantPosition, spec)
 }
 
 func (c *Config) validateExportedKind(spec ToolSpec) error {

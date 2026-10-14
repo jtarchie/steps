@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -207,6 +206,10 @@ func buildAgentTools(ctx context.Context, cfg *config.Config, specs []config.Too
 		}
 
 		if err == nil {
+			err = resolved.limited(spec)
+		}
+
+		if err == nil {
 			err = tools.add(resolved, &decls)
 		}
 
@@ -337,7 +340,7 @@ func one(decl *genai.FunctionDeclaration, impl toolImpl, closer io.Closer) resol
 // template — every {{ .args.NAME }} it references becomes a required string
 // parameter, minus the ones spec.Args pins.
 func customToolDecl(spec config.ToolSpec) (*genai.FunctionDeclaration, toolImpl) {
-	params := inferToolParams(spec.Run)
+	params := config.InferToolParams(spec.Run)
 	schemaParams := visibleParams(params, spec.Args)
 	properties := make(map[string]*genai.Schema, len(schemaParams))
 
@@ -501,44 +504,6 @@ func visibleParams(params []string, pinned map[string]string) []string {
 	}
 
 	return visible
-}
-
-// agentToolArgPattern matches a {{ .args.NAME }} reference and everything up
-// to the closing "}}", so it also matches the project's own documented safe
-// idiom for passing a model-supplied value through a pipeline function —
-// {{ .args.repo | shellquote }} (see docs/templating.md and docs/agents.md's
-// post_review tool) — not just the bare form. [^}]* deliberately doesn't try
-// to parse the pipeline itself; it only needs to not stop matching before the
-// "}}" that ends the reference. A tool written the documented safe way must
-// still have its argument inferred (and therefore checked as present and
-// schema'd for the model), or the project's own recommended mitigation for
-// missing-argument validation is silently defeated for exactly the tools that
-// follow it.
-//
-//nolint:gochecknoglobals // compiled once, read-only
-var agentToolArgPattern = regexp.MustCompile(`\{\{-?\s*\.args\.([A-Za-z_]\w*)[^}]*\}\}`)
-
-// inferToolParams scans a custom tool's run template for {{ .args.NAME }}
-// references (including {{ .args.NAME | shellquote }} and similar piped
-// forms), returning each distinct NAME once, in first-seen order.
-func inferToolParams(run string) []string {
-	matches := agentToolArgPattern.FindAllStringSubmatch(run, -1)
-
-	seen := make(map[string]bool, len(matches))
-	params := make([]string, 0, len(matches))
-
-	for _, m := range matches {
-		name := m[1]
-		if seen[name] {
-			continue
-		}
-
-		seen[name] = true
-
-		params = append(params, name)
-	}
-
-	return params
 }
 
 // execCustomTool renders spec.Run against the model's args (with spec.Args
