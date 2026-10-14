@@ -142,6 +142,9 @@ type Server struct {
 	// external is the address the daemon is reached on, which every OAuth URL it publishes is built from; auths are consents and codes in flight: see oauthserver.go.
 	external string
 	auths    pendingAuth
+	// exporter builds exports and exports holds the built ones: see exports.go.
+	exporter Exporter
+	exports  exportCache
 	// nil answers any Host, which is the default: see hosts.go.
 	allowedHosts map[string]bool
 	// version is what the footer prints, so a bug report can name the build.
@@ -459,6 +462,10 @@ func (s *Server) routes() error {
 		e.GET(authorizePath, s.handleAuthorize)
 		e.POST(authorizePath, s.handleConsent)
 		e.POST(tokenPath, s.handleToken)
+		// The methods MCP's streamable HTTP transport uses: POST a message, GET a stream, DELETE a session.
+		e.POST(exportPath, s.handleExport)
+		e.GET(exportPath, s.handleExport)
+		e.DELETE(exportPath, s.handleExport)
 	}
 
 	group := e.Group("/p/:pipeline", s.resolvePipeline)

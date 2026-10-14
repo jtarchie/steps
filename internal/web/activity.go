@@ -102,6 +102,8 @@ var activityRoutes = map[string]activityRoute{
 
 // notRecorded are the mutating routes a person does not drive, with why.
 var notRecorded = map[string]string{ //nolint:gosec // route keys and reasons, not credentials
+	"POST /mcp/x/:pipeline/:export":     "an agent's call, recorded per tool by the export's own After hook as mcp call",
+	"DELETE /mcp/x/:pipeline/:export":   "ending an MCP session, which a stateless export never holds",
 	"POST /login":                       "signing in is about the daemon, not a pipeline, and the log is written through a pipeline's handle; the daemon's log line web.signed_in records it",
 	"POST /logout":                      "as POST /login: web.signed_out in the daemon's log",
 	"POST /oauth/register":              "an agent registering itself is nobody acting; the person who later lets it connect is recorded then",

@@ -126,6 +126,27 @@ func (w *WebCmd) authOptions() ([]web.Option, error) {
 	return opts, nil
 }
 
+// signedInOptions is what a daemon people sign in to adds: where their sessions are kept and, unless it is read-only, the exports served under their names. A browser on an open daemon has nothing to sign in as, so none of it applies there.
+func (w *WebCmd) signedInOptions(opts []web.Option, state State, local *scheduler.LocalRunner) ([]web.Option, func(), error) {
+	if len(opts) == 0 {
+		return opts, func() {}, nil
+	}
+
+	accounts, err := openAccounts(state)
+	if err != nil {
+		return nil, nil, fmt.Errorf("web: %w", err)
+	}
+
+	opts = append(opts, web.WithSessions(accounts))
+
+	// Not on a read-only daemon, since calling a tool is acting.
+	if !w.ReadOnly {
+		opts = append(opts, web.WithExporter(local))
+	}
+
+	return opts, func() { _ = accounts.Close() }, nil
+}
+
 // accessOptions adds the sign-in providers and the roles to the accounts authOptions read: what lets people in, then what they may do once in.
 func (w *WebCmd) accessOptions(opts []web.Option, published string) ([]web.Option, error) {
 	providers, err := w.signInProviders(published)
@@ -309,22 +330,19 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 	state := DaemonStatePath(w.DB)
 	readLog := func() (store.Reader, error) { return openStateReader(state) } //nolint:contextcheck // opening a store takes none
 
-	// Only where somebody signs in: a browser on an open daemon has nothing to sign in as.
-	if len(opts) > 0 {
-		accounts, err := openAccounts(state) //nolint:contextcheck // opening a store takes none
-		if err != nil {
-			return fmt.Errorf("web: %w", err)
-		}
-
-		defer func() { _ = accounts.Close() }()
-
-		opts = append(opts, web.WithSessions(accounts))
+	opts, closeAccounts, err := w.signedInOptions(opts, state, local) //nolint:contextcheck // opening a store takes none
+	if err != nil {
+		return err
 	}
+
+	defer closeAccounts()
 
 	server, err := web.New(nil, runner, append(opts, web.WithAllowedHosts(w.AllowedHost), web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithMiddleware(telemetry.Handler(web.HealthPath)), web.WithActivityLog(readLog, w.ActivityHistory), web.WithExternalURL(w.published))...)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
+
+	defer func() { _ = server.Close() }()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

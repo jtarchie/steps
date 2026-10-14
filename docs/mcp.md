@@ -256,6 +256,15 @@ The daemon asks every time, on a page that says plainly what is being agreed to:
 - **Registration is open and bounded**: an agent may register return addresses that are `https`, `http` to the same machine, or an app's own scheme, never one that runs something in the browser; the daemon keeps at most 1,000 registered agents.
 - Agreeing is recorded in the [activity log](web.md#activity) as `mcp authorize`.
 
+### What a connected agent can do
+
+- **See and call the export's tools, and nothing else**, under the names an agent's grant would use (`github__search_issues`). A pinned argument is not in the schema it sees, and is sent as written whatever it asks for.
+- **Every call is recorded** in the activity log as `mcp call`, under the name of the person who agreed: which tool, the *names* of the arguments it sent, and whether it worked. Never the values — a caller can paste anything into a query.
+- **Access is checked on every request**, not only when a token is refreshed: an export a later `steps pipeline set` narrows, or a team the person left, stops their agent at its next call.
+- **`rate:`** counts each person's calls to the export; a call past it comes back to the agent as the tool's error, which it can read and wait on.
+- A token is for one export: it opens nothing at another, even in the same pipeline.
+- Exports are served only by a daemon people sign in to, and not by a `--read-only` one, since calling a tool is acting.
+
 ## Backing a resource type with MCP
 
 ```yaml mcp=mcp-linear-issues
