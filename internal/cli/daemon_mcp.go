@@ -84,9 +84,9 @@ func probeKey(pipeline *web.Pipeline, server string) string {
 	return pipeline.Slug + "\x00" + server
 }
 
-// probeFingerprint is the configuration an answer describes, and what invalidates it when a `steps pipeline set` moves the endpoint: the old answer describes a server this pipeline no longer has, and a stale "✓ 7 tools" against a moved endpoint is worse than no answer. It needs no hook on set, rename or destroy — a changed configuration simply misses.
+// probeFingerprint is the configuration an answer describes, and what invalidates it when a `steps pipeline set` moves the endpoint: the old answer describes a server this pipeline no longer has, and a stale "✓ 7 tools" against a moved endpoint is worse than no answer. It needs no hook on set, rename or destroy — a changed configuration simply misses. Built from the raw fields rather than Target(), which masks credentials: a rotated token in an arg is a different server to dial.
 func probeFingerprint(srv *config.MCPServer) string {
-	return srv.Target() + "\x00" + srv.AuthLabel()
+	return strings.Join(append([]string{srv.Endpoint, srv.Command, srv.Cwd}, srv.Args...), "\x00") + "\x00" + srv.AuthLabel()
 }
 
 // probeWorthMaking resolves the server a Test names and refuses the two kinds this daemon will not dial: one it cannot honestly reach from here, and one there is nothing to connect with.

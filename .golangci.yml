@@ -297,6 +297,7 @@ linters:
             # events: a step's machinery tells the run what it did (a note), and writes human-facing bytes where the renderer says (Stdout/Stderr).
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/dockerapi"
+            - "github.com/jtarchie/steps/internal/redact"
         Template:
           files:
             - "**/internal/template/**"
@@ -347,6 +348,15 @@ linters:
             # goleak is test-only: goleak_test.go's TestMain fails this
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
+        # redact masks URL credentials in text that leaves the process. A
+        # stdlib-only leaf rather than part of shell, because config — which
+        # imports nothing internal but this — renders an mcp server's argv for
+        # a page and needs the same rule shell applies to an error.
+        Redact:
+          files:
+            - "**/internal/redact/**"
+          allow:
+            - "$gostd"
         # runview folds recorded run events into the step tree a reader sees,
         # and holds the bus observers that draw a run (Plain, Live, Log).
         # Shared by both front ends (web, and the terminal in cli) so the two
@@ -473,6 +483,8 @@ linters:
           allow:
             - "$gostd"
             - "gopkg.in/yaml.v3"
+            # redact: MCPServer.Target is drawn on the web UI and must not show a token pasted into args:.
+            - "github.com/jtarchie/steps/internal/redact"
             # test-only (ConfigShellquoteTestOnly): shellquote_test.go holds
             # across:'s ported shellquote to the one internal/template calls.
             - "github.com/frioux/leatherman/pkg/shellquote"
@@ -531,6 +543,7 @@ linters:
             - "github.com/kevinburke/ssh_config"
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/shell"
+            - "github.com/jtarchie/steps/internal/redact"
             # wire's tar codec is what a tree crosses to a worker in.
             - "github.com/jtarchie/steps/internal/wire"
             # ssmdial is the aws:// transport, and the SSM control plane it is
@@ -676,14 +689,15 @@ linters:
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/config"
-            # shell is imported only for HostEnv and RedactCommand: a stdio
-            # (command:) mcp server is a host-executed subprocess and must see
-            # exactly the same filtered environment every other host-executed
-            # command does, and its argv is logged under the same redaction,
-            # rather than a second, drifting copy of either.
-            # shell is a stdlib-only leaf, so this adds no
-            # cycle — the same edge internal/resource already has.
+            # shell is imported only for HostEnv: a stdio (command:) mcp
+            # server is a host-executed subprocess and must see exactly the
+            # same filtered environment every other host-executed command
+            # does, rather than a second, drifting copy. shell is a
+            # stdlib-only leaf, so this adds no cycle — the same edge
+            # internal/resource already has.
             - "github.com/jtarchie/steps/internal/shell"
+            # redact: a stdio server's argv is logged under the same masking as every other command.
+            - "github.com/jtarchie/steps/internal/redact"
         # merkle plans/hashes steps from config alone. Get versions are
         # resolved through merkle.VersionResolver, which the caller satisfies
         # with *resource.Cache, so plan time and run time still resolve the
@@ -819,6 +833,7 @@ linters:
             - "github.com/jtarchie/steps/internal/outcome"
             - "github.com/jtarchie/steps/internal/resource"
             - "github.com/jtarchie/steps/internal/retry"
+            - "github.com/jtarchie/steps/internal/redact"
             - "github.com/jtarchie/steps/internal/shell"
             - "github.com/jtarchie/steps/internal/store"
             # store/sqlite is test-only here: a test needs a concrete driver

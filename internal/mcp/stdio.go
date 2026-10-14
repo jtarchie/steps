@@ -10,6 +10,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/shell"
 )
 
@@ -49,10 +50,10 @@ func commandTransport(ctx context.Context, srv config.MCPServer) *sdkmcp.Command
 
 	args := make([]string, len(srv.Args))
 	for i, arg := range srv.Args {
-		args[i] = shell.RedactCommand(arg)
+		args[i] = redact.Command(arg)
 	}
 
-	slog.DebugContext(ctx, "mcp.stdio.spawn", "server", srv.Name, "command", shell.RedactCommand(srv.Command), "args", args, "cwd", srv.Cwd)
+	slog.DebugContext(ctx, "mcp.stdio.spawn", "server", srv.Name, "command", redact.Command(srv.Command), "args", args, "cwd", srv.Cwd)
 
 	return &sdkmcp.CommandTransport{Command: cmd}
 }

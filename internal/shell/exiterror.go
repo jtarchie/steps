@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jtarchie/steps/internal/dockerapi"
+	"github.com/jtarchie/steps/internal/redact"
 )
 
 // ExitError is a command that started and then exited nonzero (or was killed
@@ -40,10 +41,10 @@ type ExitError struct {
 
 func (e *ExitError) Error() string {
 	if e.Venue == "" {
-		return fmt.Sprintf("command %q exited with status %d", RedactCommand(e.Command), e.Code)
+		return fmt.Sprintf("command %q exited with status %d", redact.Command(e.Command), e.Code)
 	}
 
-	return fmt.Sprintf("command %q on worker %q exited with status %d", RedactCommand(e.Command), e.Venue, e.Code)
+	return fmt.Sprintf("command %q on worker %q exited with status %d", redact.Command(e.Command), e.Venue, e.Code)
 }
 
 // ExitCode reports the status the command exited with. Named to match

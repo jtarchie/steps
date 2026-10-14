@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/jtarchie/steps/internal/redact"
 )
 
 // MCPReadiness is what is knowable about a server with no request made, and the reason a status cell says what it says.
@@ -38,10 +40,10 @@ func (s MCPServer) Transport() string {
 	return "http"
 }
 
-// Target renders what the server actually is: the endpoint for HTTP, the argv (plus any pinned working directory) for stdio.
+// Target renders what the server actually is, for a reader: the endpoint for HTTP, the argv (plus any pinned working directory) for stdio. URL credentials are masked, because argv pasted from vendor docs carries tokens as userinfo and this string is drawn on a page every viewer of the daemon can read; nothing spawns from it.
 func (s MCPServer) Target() string {
 	if !s.IsStdio() {
-		return s.Endpoint
+		return redact.Command(s.Endpoint)
 	}
 
 	target := strings.Join(append([]string{s.Command}, s.Args...), " ")
@@ -49,7 +51,7 @@ func (s MCPServer) Target() string {
 		target += fmt.Sprintf(" (cwd: %s)", s.Cwd)
 	}
 
-	return target
+	return redact.Command(target)
 }
 
 // AuthLabel names the auth type and, for bearer, the environment variable the credential is read from — the thing to go check when it is the credential that is missing. Never the value.

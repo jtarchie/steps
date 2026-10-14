@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/workspace"
 )
@@ -93,7 +94,7 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 		return spec.Worker, nil
 	})
 	if err != nil {
-		return false, fmt.Errorf("guard command %q could not run: %w", shell.RedactCommand(step.When.Run), err)
+		return false, fmt.Errorf("guard command %q could not run: %w", redact.Command(step.When.Run), err)
 	}
 
 	// RunCaptureFull reports even a signal-killed process (e.g. from a
@@ -102,15 +103,15 @@ func evaluateStepGuard(ctx context.Context, cfg *config.Config, step config.Step
 	// true/false answer the guard never actually got to give.
 	cancelErr := shell.CanceledError(ctx)
 	if cancelErr != nil {
-		return false, fmt.Errorf("guard command %q: %w", shell.RedactCommand(step.When.Run), cancelErr)
+		return false, fmt.Errorf("guard command %q: %w", redact.Command(step.When.Run), cancelErr)
 	}
 
 	slog.DebugContext(ctx, "step.when",
 		"step", executedStepName(step),
-		"command", shell.RedactCommand(step.When.Run),
+		"command", redact.Command(step.When.Run),
 		"exit_code", exitCode,
-		"stdout", shell.RedactCommand(stdout),
-		"stderr", shell.RedactCommand(stderr),
+		"stdout", redact.Command(stdout),
+		"stderr", redact.Command(stderr),
 	)
 
 	return exitCode == 0, nil

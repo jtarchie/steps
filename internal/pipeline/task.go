@@ -14,6 +14,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
+	"github.com/jtarchie/steps/internal/redact"
 	"github.com/jtarchie/steps/internal/retry"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
@@ -45,7 +46,7 @@ func runTaskStep(ctx context.Context, r stepRunner, i int, step config.Step, ski
 		return stepResult{hash: parentHash, nodeHash: hash, disposition: stepChainSkipped}, nil
 	}
 
-	slog.DebugContext(ctx, "job.step", "task", rt.Name, "command", shell.RedactCommand(rt.Run))
+	slog.DebugContext(ctx, "job.step", "task", rt.Name, "command", redact.Command(rt.Run))
 
 	// The name the step is KNOWN by, which for an across: cell is its labelled
 	// identity rather than the task it resolves through — so the run line, the

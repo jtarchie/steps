@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/config"
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
 	"github.com/jtarchie/steps/internal/web"
 )
@@ -590,5 +591,18 @@ func TestDropProbesWaitsOutAndForgetsOnlyItsPipeline(t *testing.T) {
 
 	if _, found := p.creds.entries[loginKey("other", "tracker")]; !found {
 		t.Error("another pipeline's credential entry went with it")
+	}
+}
+
+// The tab's Target masks a token in an arg, so a fingerprint built from it would keep the old answer across a rotation that changed what the probe would dial.
+func TestProbeFingerprintSeesARotatedArgCredential(t *testing.T) {
+	t.Parallel()
+
+	before := config.MCPServer{Name: "remote", Command: "npx", Args: []string{"mcp-remote", "https://u:old@mcp.example.test/sse"}}
+	after := before
+	after.Args = []string{"mcp-remote", "https://u:new@mcp.example.test/sse"}
+
+	if probeFingerprint(&before) == probeFingerprint(&after) {
+		t.Error("rotating the credential in an arg kept the probe's fingerprint")
 	}
 }

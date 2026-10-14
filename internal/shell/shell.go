@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/redact"
 )
 
 // Runner runs pipeline-defined commands, either on the host or inside a
@@ -789,7 +790,7 @@ func (h HostRunner) RunStreamedCapture(ctx context.Context, command string, maxB
 // sibling — no buffering, no allocation, for the callers that never wanted
 // the output back.
 func (h HostRunner) runStreamed(ctx context.Context, command string, maxBytes int) (stdout, stderr string, err error) {
-	slog.DebugContext(ctx, "shell.run", "command", RedactCommand(command), "cwd", h.cwd)
+	slog.DebugContext(ctx, "shell.run", "command", redact.Command(command), "cwd", h.cwd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.WaitDelay = cancelWaitDelay
@@ -815,14 +816,14 @@ func (h HostRunner) runStreamed(ctx context.Context, command string, maxBytes in
 	flushStdout()
 	flushStderr()
 
-	slog.DebugContext(ctx, "shell.run", "command", RedactCommand(command), "cwd", h.cwd, "exit_code", exitCodeOf(runErr))
+	slog.DebugContext(ctx, "shell.run", "command", redact.Command(command), "cwd", h.cwd, "exit_code", exitCodeOf(runErr))
 
 	if outCapture != nil {
 		stdout, stderr = outCapture.result(), errCapture.result() //nolint:nilaway // errCapture is assigned in the same branch as outCapture, so one being set means both are
 	}
 
 	if runErr != nil {
-		return stdout, stderr, fmt.Errorf("command %q failed: %w", RedactCommand(command), wrapIfCanceled(ctx, runErr))
+		return stdout, stderr, fmt.Errorf("command %q failed: %w", redact.Command(command), wrapIfCanceled(ctx, runErr))
 	}
 
 	return stdout, stderr, nil
@@ -836,7 +837,7 @@ func (h HostRunner) runStreamed(ctx context.Context, command string, maxBytes in
 // the moment the command exited nonzero, leaving only the terse "exit status
 // N" from the wrapped error.
 func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, error) {
-	slog.DebugContext(ctx, "shell.capture", "command", RedactCommand(command), "cwd", h.cwd)
+	slog.DebugContext(ctx, "shell.capture", "command", redact.Command(command), "cwd", h.cwd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.WaitDelay = cancelWaitDelay
@@ -853,11 +854,11 @@ func (h HostRunner) RunCapture(ctx context.Context, command string) ([]byte, err
 	err := cmd.Run()
 	flushStderr()
 
-	slog.DebugContext(ctx, "shell.capture", "command", RedactCommand(command), "cwd", h.cwd, "exit_code", exitCodeOf(err),
-		"output_bytes", outBuf.Len(), "output", RedactCommand(outBuf.String()), "stderr", RedactCommand(errBuf.String()))
+	slog.DebugContext(ctx, "shell.capture", "command", redact.Command(command), "cwd", h.cwd, "exit_code", exitCodeOf(err),
+		"output_bytes", outBuf.Len(), "output", redact.Command(outBuf.String()), "stderr", redact.Command(errBuf.String()))
 
 	if err != nil {
-		return nil, fmt.Errorf("command %q failed: %w", RedactCommand(command), wrapIfCanceled(ctx, err))
+		return nil, fmt.Errorf("command %q failed: %w", redact.Command(command), wrapIfCanceled(ctx, err))
 	}
 
 	return outBuf.Bytes(), nil
@@ -904,7 +905,7 @@ func (h HostRunner) RunCaptureFullLimitedStreamed(ctx context.Context, command s
 // RunCaptureFullLimitedStreamed (stream true, tees both captured streams to
 // the context's output live — see events.Stdout).
 func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes int, spillDir string, stream bool) (stdout, stderr string, exitCode int, err error) {
-	slog.DebugContext(ctx, "shell.capture_full", "command", RedactCommand(command), "cwd", h.cwd)
+	slog.DebugContext(ctx, "shell.capture_full", "command", redact.Command(command), "cwd", h.cwd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command) //nolint:gosec // executing pipeline-defined commands is this tool's entire purpose
 	cmd.WaitDelay = cancelWaitDelay
@@ -934,12 +935,12 @@ func (h HostRunner) runCaptureFull(ctx context.Context, command string, maxBytes
 	flushStderr()
 
 	if !processStarted(runErr) {
-		return "", "", -1, fmt.Errorf("command %q failed to start: %w", RedactCommand(command), runErr)
+		return "", "", -1, fmt.Errorf("command %q failed to start: %w", redact.Command(command), runErr)
 	}
 
 	code := exitCodeOf(runErr)
 
-	slog.DebugContext(ctx, "shell.capture_full", "command", RedactCommand(command), "cwd", h.cwd, "exit_code", code)
+	slog.DebugContext(ctx, "shell.capture_full", "command", redact.Command(command), "cwd", h.cwd, "exit_code", code)
 
 	return outWriter.result(), errWriter.result(), code, nil
 }

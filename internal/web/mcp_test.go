@@ -563,3 +563,54 @@ func TestTestIsOfferedOnlyWhereAConnectionCouldSucceed(t *testing.T) {
 		t.Errorf("a server that needs a login is not offered one:\n%s", body)
 	}
 }
+
+// A stdio server's argv is pasted from vendor docs, which routinely put a token in a URL's userinfo, and the tab draws it for every viewer of the daemon. An endpoint with userinfo is refused at load.
+func TestMCPTabMasksCredentialsInTheTarget(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "demo.yml")
+
+	writeFile(t, path, `
+mcp_servers:
+- name: remote
+  command: npx
+  args: [mcp-remote, "https://u:argsecret@mcp.example.test/sse"]
+
+jobs:
+- name: build
+  plan:
+  - task: compile
+    run: "true"
+`)
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	st, err := sqlite.OpenStore(filepath.Join(dir, ".steps", "state.db"), "test")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	t.Cleanup(func() { _ = st.Close() })
+
+	server, err := New([]*Pipeline{NewPipeline("demo", path, cfg, st, events.New(nil))}, stubRunner{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	code, body := get(t, server, "/p/demo/mcp")
+	if code != http.StatusOK {
+		t.Fatalf("GET /p/demo/mcp = %d", code)
+	}
+
+	if strings.Contains(body, "argsecret") {
+		t.Errorf("the mcp tab shows the credential:\n%s", body)
+	}
+
+	if !strings.Contains(body, "mcp.example.test/sse") {
+		t.Errorf("masking dropped the target itself:\n%s", body)
+	}
+}
