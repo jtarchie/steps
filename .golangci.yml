@@ -661,11 +661,9 @@ linters:
             - "github.com/jtarchie/steps/internal/events"
             - "golang.org/x/sys/unix"
             - "github.com/jtarchie/steps/internal/config"
-            # wire and compress are reached from tests only, and deliberately:
-            # digestTree is unexported, and it is the digest that decides
-            # whether a tree that crossed a wire is still the same content.
-            # The test proving each codec preserves it therefore has to sit
-            # next to the digest, not next to the codecs.
+            # treedigest: an artifact here is named exactly as a worker names the tree it holds, so a step's input digests alike wherever it lives.
+            - "github.com/jtarchie/steps/internal/treedigest"
+            # wire and compress are reached from tests only: the tests proving each codec preserves a tree's digest sit next to the step cache that reads it.
             - "github.com/jtarchie/steps/internal/wire"
             - "github.com/jtarchie/steps/internal/compress"
         # mcp is the shared MCP client layer (internal/agent's tool source and

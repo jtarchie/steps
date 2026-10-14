@@ -30,8 +30,9 @@ const defaultStepCacheMaxEntries = 200
 
 // stepCacheDomain separates this cache's keys from every other hash in the
 // codebase, so a merkle node hash can never be mistaken for an action key even
-// if one were passed to the wrong function.
-const stepCacheDomain = "steps/step-cache/v1"
+// if one were passed to the wrong function. v2: input digests became
+// treedigest's, so every v1 entry is keyed by a name no tree has any more.
+const stepCacheDomain = "steps/step-cache/v2"
 
 // StepCacheRequest is one step's identity for cache purposes: what the plan
 // says the step IS, and which artifacts it reads.

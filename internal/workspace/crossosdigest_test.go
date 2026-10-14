@@ -39,9 +39,8 @@ import (
 // could write it — the only two modes os.Stat produces there.
 //
 // Directories are left alone: Windows reports ModeDir|0111 for them, and
-// digestTree never reads a directory's mode (digestEntry writes only the kind
-// byte for one), so modelling that would be modelling a difference nothing
-// can observe.
+// digestTree never reads a directory's mode, so modelling that would be
+// modelling a difference nothing can observe.
 func windowsModes(t *testing.T, root string) {
 	t.Helper()
 
@@ -75,9 +74,8 @@ func windowsModes(t *testing.T, root string) {
 // TestAWorkerWithNoExecutableBitLosesItAcrossTheWire is the answer to #83, and
 // it is worse than the cache miss the question anticipated.
 //
-// digestTree runs only on the orchestrator, so a worker on a filesystem with
-// no executable bit never disagrees about a digest. What it does instead is silently REMOVE the executable bit from
-// every tree that passes through it: unpack cannot set 0111, the repack on the
+// Beyond any digest disagreement (a worker digests what it holds with the same
+// treedigest), such a worker silently REMOVES the executable bit from every tree that passes through it: unpack cannot set 0111, the repack on the
 // way home reads 0666 off the filesystem and writes that into the tar, and the
 // tree the orchestrator gets back is not the tree it sent. The step cache sees
 // content that changed for no reason a reader could point at, and any later
@@ -193,9 +191,8 @@ func hasExecutable(t *testing.T, root string) bool {
 // TestDigestTreeReadsALinkTargetAsAPath is the symlink half of #83, as far as
 // it is decidable without a Windows machine.
 //
-// A link's target is a path, and digestTree already normalizes the other paths
-// it hashes ("ToSlash so an artifact digested on one platform matches the same
-// bytes digested on another") — but the target text was hashed raw, so the
+// A link's target is a path, and the other paths digestTree hashes are
+// slash-separated on every platform (fs.WalkDir hands them over that way) — but the target text was hashed raw, so the
 // same logical link would hash one way where separators are slashes and
 // another where they are backslashes.
 //
@@ -208,7 +205,7 @@ func TestDigestTreeReadsALinkTargetAsAPath(t *testing.T) {
 	t.Parallel()
 
 	// The SAME link name in both trees, which is the whole discipline here:
-	// digestTree length-prefixes each entry's relative path before its kind
+	// digestTree names each entry's relative path beside its kind
 	// and target, so two trees whose links are named differently hash
 	// differently whatever the targets say — an assertion built that way
 	// passes with the normalization present, absent, or replaced by anything

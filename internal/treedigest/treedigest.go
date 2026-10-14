@@ -79,7 +79,8 @@ func manifestLine(fsys fs.FS, path string, entry fs.DirEntry) (string, error) {
 			return "", fmt.Errorf("%w", err)
 		}
 
-		return name + " l " + hex.EncodeToString([]byte(target)), nil
+		// ToSlash: a target is a path, read with backslashes on Windows; the identity wherever the separator is '/', so the script still agrees.
+		return name + " l " + hex.EncodeToString([]byte(filepath.ToSlash(target))), nil
 	case kind.IsRegular():
 		info, err := entry.Info()
 		if err != nil {

@@ -147,9 +147,7 @@ func TestDigestTreeHashesASymlinkAsItsOwnText(t *testing.T) {
 	}
 }
 
-// TestDigestTreeIsNotAmbiguous is why every variable-length field is
-// length-prefixed: no arrangement of names and bytes may produce another
-// tree's stream.
+// TestDigestTreeIsNotAmbiguous: no arrangement of names and bytes may produce another tree's manifest.
 func TestDigestTreeIsNotAmbiguous(t *testing.T) {
 	t.Parallel()
 

@@ -92,9 +92,7 @@ func PackPaths(w io.Writer, root string, names []string) error {
 		}
 	}
 
-	// Close, not Flush: tar.Writer verifies here that every header's declared
-	// size matched the bytes actually written, which is the same invariant
-	// digestFile enforces when it refuses a file that changed under it.
+	// Close, not Flush: tar.Writer verifies here that every header's declared size matched the bytes actually written, so a file that changed under the packer is refused rather than shipped short.
 	err := writer.Close()
 	if err != nil {
 		return fmt.Errorf("packing %q: %w", root, err)
@@ -350,10 +348,7 @@ func packFile(writer *tar.Writer, path, name string, entry fs.DirEntry) error {
 		return fmt.Errorf("%w", err)
 	}
 
-	// Same reasoning as digestFile's identical check: the header already
-	// committed to a length, so a file that grew or shrank between the stat
-	// and the read would produce a stream that cannot be read back rather than
-	// merely stale bytes.
+	// The header already committed to a length, so a file that grew or shrank between the stat and the read would produce a stream that cannot be read back rather than merely stale bytes.
 	if copied != size {
 		return fmt.Errorf("file %q changed while being packed (%d bytes, expected %d)", name, copied, size)
 	}

@@ -250,3 +250,49 @@ func TestEndToEndAnotherWorkerIsStillCold(t *testing.T) {
 		t.Error("the consuming worker's cache does not hold what it received")
 	}
 }
+
+// TestEndToEndAnInputNamesAlikeLocalOrHeld: a tree has one digest wherever it is, so a step whose input was local last build and is held by a worker this build reuses its cached result rather than missing once.
+func TestEndToEndAnInputNamesAlikeLocalOrHeld(t *testing.T) {
+	requireDockerE2E(t)
+
+	dir := t.TempDir()
+	root := filepath.Join(dir, "cache")
+	ran := filepath.Join(dir, "consume-ran.log")
+
+	// A pipeline per placement, each in its own directory, so neither shares the other's state database and no chain skip stands in for the step cache.
+	pipeline := func(seedTags string) string {
+		return writePipeline(t, t.TempDir(), `
+workspace:
+  strategy: copy
+  root: `+root+`
+
+jobs:
+- name: build
+  plan:
+  - task: seed
+    volatile: true`+seedTags+`
+    image: `+dockerE2EImage+`
+    outputs: [src]
+    run: |
+      mkdir -p src/nested
+      printf 'same bytes' > src/nested/data.txt
+      printf '#!/bin/sh\n' > src/run.sh && chmod +x src/run.sh
+      ln -s nested/data.txt src/link
+  - task: consume
+    inputs: [src]
+    outputs: [out]
+    run: |
+      echo ran >> `+ran+`
+      cat src/nested/data.txt > out/copy.txt
+`)
+	}
+
+	mustRun(t, pipeline(""))
+
+	_, _, workers := twoWorkers(t)
+	mustRun(t, append([]string{pipeline("\n    tags: [a]")}, workers...)...)
+
+	if got := strings.Count(readFileString(t, ran), "ran"); got != 1 {
+		t.Errorf("consume ran %d times, want 1: the held input's digest differs from the local one, so the step cache missed", got)
+	}
+}

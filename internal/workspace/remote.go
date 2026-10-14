@@ -24,8 +24,7 @@ type RemoteArtifact struct {
 	// the step's declared output, and can only be offered by digest under
 	// THAT name.
 	Name string
-	// Digest names the tree as the holder filed it — the wire digest, which
-	// the holder proves before handing it back.
+	// Digest names the tree as the holder filed it: treedigest's, the name a local copy of it has too, which the holder proves before handing it back.
 	Digest string
 	// Holder is the worker, as the mapping was written, for the error that
 	// names it when the tree cannot be brought home.

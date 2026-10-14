@@ -586,11 +586,7 @@ func (b *isolatingBuild) artifactDigest(name string) (string, error) {
 		return digest, nil
 	}
 
-	// A tree a worker holds is identified by the digest it is filed under
-	// rather than pulled to be walked: a cache key is a question about
-	// identity, not a reader of the bytes, and the two names for one tree
-	// cost at most a miss when the same input is met local one build and
-	// remote the next.
+	// A tree a worker holds is identified by the digest it is filed under rather than pulled to be walked: the worker names it with the same treedigest, so the key is the one a local copy would have.
 	if remote, held := b.remoteArtifact(name); held {
 		return remote.Digest, nil
 	}
