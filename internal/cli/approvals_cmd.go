@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -104,7 +105,7 @@ func decideApproval(flags ReadFlags, id int64, status store.ApprovalStatus, reas
 	}
 	defer cleanup()
 
-	err = st.DecideApproval(context.Background(), id, status, currentUser(), reason)
+	err = st.DecideApproval(context.Background(), id, status, actor.OS(currentUser()).String(), reason)
 	if errors.Is(err, store.ErrApprovalNotPending) {
 		return alreadyDecided(st, id, err)
 	}
@@ -129,7 +130,7 @@ func alreadyDecided(st store.Approvals, id int64, notPending error) error {
 
 	by := ""
 	if approval.DecidedBy != "" {
-		by = " by " + approval.DecidedBy
+		by = " by " + actor.Parse(approval.DecidedBy).Label()
 	}
 
 	return fmt.Errorf("approval %d was already %s%s; your decision was not recorded: %w", id, approval.Status, by, notPending)

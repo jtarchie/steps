@@ -3,6 +3,7 @@ package e2e
 // Who started a run is decided at the request and read on the run page, with the queue and the scheduler's claim between them — so this starts at cli.Run, where a test of the handler or the store alone would pass with the hand-off between them broken.
 
 import (
+	"fmt"
 	"html"
 	"io"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
 // Not t.Parallel(): startWeb backgrounds cli.Run in this process and stop signals the whole test binary.
@@ -236,4 +238,96 @@ func TestALocalUserNamedTwiceIsRefused(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `"alex" is given twice`) {
 		t.Fatalf("steps web with alex twice = %v, want a refusal naming alex", err)
 	}
+}
+
+// An approval decided in the browser is recorded under the person who decided it, and the approvals page says so. Not t.Parallel(), for startWeb's reason.
+func TestAnApprovalSaysWhoDecidedIt(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "daemon.db")
+	path := pipelinePath(t, dir)
+	writePipelineFile(t, path, `
+jobs:
+- name: publish
+  plan:
+  - approval:
+      message: ship it?
+      timeout: 1m
+`)
+
+	served := startWeb(t, "--db", state, "--local-user", "alex:"+hashed(t, "a"), "--local-user", "sam:"+hashed(t, "s"))
+	defer served.stopIfRunning(t)
+
+	name := cli.PipelineName(path)
+
+	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
+	if err != nil {
+		t.Fatalf("steps pipeline set: %v", err)
+	}
+
+	if code := authPost(t, served.addr, "alex", "a", "/p/"+name+"/jobs/publish/trigger"); code != http.StatusSeeOther {
+		t.Fatalf("trigger answered %d, want 303", code)
+	}
+
+	id := waitForPendingApproval(t, state, name)
+
+	if code := authPostForm(t, served.addr, "sam", "s", fmt.Sprintf("/p/%s/approvals/%d", name, id), "decision=approve&reason=lgtm"); code != http.StatusSeeOther {
+		t.Fatalf("approve answered %d, want 303", code)
+	}
+
+	waitForAuthedPage(t, served.addr, "alex", "a", "/p/"+name+"/approvals", "by sam (local)")
+}
+
+func waitForPendingApproval(t *testing.T, state, name string) int64 {
+	t.Helper()
+
+	deadline := time.Now().Add(15 * time.Second)
+
+	for time.Now().Before(deadline) {
+		st, err := sqlite.OpenStore(state, name)
+		if err != nil {
+			t.Fatalf("open state store: %v", err)
+		}
+
+		pending, err := st.Approvals(t.Context(), true, 1)
+		_ = st.Close()
+
+		if err == nil && len(pending) == 1 {
+			return pending[0].ID
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatal("no approval was ever requested")
+
+	return 0
+}
+
+func authPostForm(t *testing.T, addr, user, pass, path, form string) int {
+	t.Helper()
+
+	client := &http.Client{
+		Timeout:       5 * time.Second,
+		Transport:     &http.Transport{DisableKeepAlives: true},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+addr+path, strings.NewReader(form))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.SetBasicAuth(user, pass)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", path, err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	return resp.StatusCode
 }

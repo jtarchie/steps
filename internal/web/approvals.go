@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/labstack/echo/v5"
 )
@@ -74,7 +75,7 @@ func (s *Server) handleDecideApproval(c *echo.Context) error {
 	// for work that succeeded. Any other failure recorded nothing, and a
 	// redirect would tell the person their decision landed while the build
 	// stays parked on it.
-	err = pipeline.Store.DecideApproval(c.Request().Context(), id, status, "web", c.FormValue("reason"))
+	err = pipeline.Store.DecideApproval(c.Request().Context(), id, status, decidedBy(c), c.FormValue("reason"))
 
 	switch {
 	case err == nil:
@@ -126,7 +127,7 @@ func (s *Server) handleAnswerQuestion(c *echo.Context) error {
 	// options-fence rejection left the question listed as pending with no
 	// message anywhere, so the person retypes the same thing or concludes the
 	// step is stuck — while the agent is still waiting on them.
-	err = pipeline.Store.AnswerQuestion(c.Request().Context(), id, answer, "web")
+	err = pipeline.Store.AnswerQuestion(c.Request().Context(), id, answer, decidedBy(c))
 
 	switch {
 	case err == nil:
@@ -138,4 +139,14 @@ func (s *Server) handleAnswerQuestion(c *echo.Context) error {
 
 	//nolint:wrapcheck // echo's redirect error is returned verbatim
 	return c.Redirect(http.StatusSeeOther, "/p/"+pipeline.Slug+"/questions")
+}
+
+// decidedBy is who a decision made in the browser is recorded under: the signed-in person, or "web" on a server nobody signs in to, which is all that is known there.
+func decidedBy(c *echo.Context) string {
+	by := actor.From(c.Request().Context()).String()
+	if by == "" {
+		return "web"
+	}
+
+	return by
 }

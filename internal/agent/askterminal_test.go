@@ -32,7 +32,7 @@ func TestTerminalPrompterIsAbsentWithoutATerminal(t *testing.T) {
 func TestTerminalAnswererRecordsWhoIsAtTheKeyboard(t *testing.T) {
 	t.Setenv("STEPS_APPROVER", "jtarchie")
 
-	if got := terminalAnswerer(); got != "jtarchie" {
+	if got := terminalAnswerer(); got != "os:jtarchie" {
 		t.Errorf("terminalAnswerer = %q, want the configured approver", got)
 	}
 

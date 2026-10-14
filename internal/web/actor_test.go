@@ -65,3 +65,31 @@ func TestARerunLinksWhatItRetried(t *testing.T) {
 		t.Errorf("a rerun's header does not link its original and its requester: %s", body)
 	}
 }
+
+// TestADecisionNamesItsDecider: a decision made at a terminal reads as unverified, and one recorded as plain "web" before anyone was named still reads as it was written.
+func TestADecisionNamesItsDecider(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ by, want string }{
+		{"os:jt", `by <span class="actor quiet" title="os:jt">jt (this machine, unverified)</span>`},
+		{"web", `by <span class="actor" title="web">web</span>`},
+	} {
+		server, pipeline := testPipeline(t)
+		ctx := context.Background()
+
+		id, err := pipeline.Store.RequestApproval(ctx, "build", "ship?")
+		if err != nil {
+			t.Fatalf("RequestApproval: %v", err)
+		}
+
+		err = pipeline.Store.DecideApproval(ctx, id, store.ApprovalApproved, tc.by, "")
+		if err != nil {
+			t.Fatalf("DecideApproval: %v", err)
+		}
+
+		_, body := get(t, server, "/p/demo/approvals")
+		if !strings.Contains(body, tc.want) {
+			t.Errorf("decided by %q: the approvals page does not carry %s", tc.by, tc.want)
+		}
+	}
+}

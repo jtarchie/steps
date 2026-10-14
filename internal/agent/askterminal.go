@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -177,7 +178,7 @@ func lockTerminal(ctx context.Context) bool {
 func terminalAnswerer() string {
 	for _, key := range []string{"STEPS_APPROVER", "USER", "LOGNAME"} {
 		if value := os.Getenv(key); value != "" {
-			return value
+			return actor.OS(value).String()
 		}
 	}
 

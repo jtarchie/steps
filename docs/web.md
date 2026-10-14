@@ -489,7 +489,8 @@ Nine controls, each doing what a CLI verb does:
   which on an unchanged pipeline correctly does almost nothing; Retry, or `steps run --force` from a terminal, is how to run unchanged steps again. A job the breaker holds is still triggered, since the breaker stops only automatic triggers.
 - **Retry** is `fly rerun-build`: a new run, the whole plan from the top, against exactly the versions the run was created with — what `steps run --rerun <run>` does. A `version: every` job builds each version as a run of its own, so Retry rebuilds that one version. Nothing that arrived since joins it, `passed:` is not asked again, and it takes no version, so it disturbs no other build. It skips the step cache, since a retry of a run that passed would otherwise do nothing. The new run links the run it retried, and a retry of an old run does not become its job's status — only a retry of the job's latest run does, as in Concourse. See [conformance.md](conformance.md).
 - **Approve / Reject** on an `approval:` step, with the reason recorded — the
-  same row `steps approvals approve` writes.
+  same row `steps approvals approve` writes, under the name of whoever signed
+  in (a decision on a server nobody signs in to reads `by web`).
 - **Answer** an `ask_user` question a step is parked on — one click for an
   offered option, or your own words — the same row `steps questions answer` writes. See
   [agents.md](agents.md).

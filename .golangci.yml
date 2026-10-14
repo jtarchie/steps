@@ -760,6 +760,7 @@ linters:
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/actor"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/mcp"
             - "github.com/jtarchie/steps/internal/outcome"

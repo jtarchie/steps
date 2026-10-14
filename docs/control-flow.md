@@ -804,7 +804,7 @@ Conflating the last two would make a silent expiry indistinguishable from a reje
 
 ### ⚠️ v1 scope: anyone who can run the CLI can approve
 
-Stated deliberately rather than left to be discovered. There is no separate identity system. The recorded approver comes from `$STEPS_APPROVER`, `$USER`, or `$LOGNAME`: it is an **audit record**, not an authorization check.
+Stated deliberately rather than left to be discovered. Who decided is recorded, but not checked against anything: a decision made in a daemon's browser is recorded under the [local user](authentication.md#several-people-local-users) who signed in, and one made with `steps approvals approve` under `$STEPS_APPROVER`, `$USER`, or `$LOGNAME` — shown as `(this machine, unverified)`, because nothing verified that name. It is an **audit record**, not an authorization check: any account can decide any approval.
 
 ### The rest
 
