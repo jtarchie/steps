@@ -220,8 +220,20 @@ func TestAnUnauthenticatedPublicListenWarnsOnce(t *testing.T) {
 		t.Errorf("a public listen with no credentials did not warn exactly once:\n%s", out)
 	}
 
-	if !strings.Contains(out, "--basic-auth-username") {
-		t.Errorf("the warning does not name the flags that fix it:\n%s", out)
+	for _, flag := range []string{"--basic-auth-username", "--allowed-host"} {
+		if !strings.Contains(out, flag) {
+			t.Errorf("the warning does not name %s:\n%s", flag, out)
+		}
+	}
+}
+
+// A URL never equals a Host header, so accepting one would refuse every remote request with nothing saying why.
+func TestAnAllowedHostThatIsAURLIsRefused(t *testing.T) {
+	t.Parallel()
+
+	err := (&WebCmd{Listen: unservable("127.0.0.1"), Interval: time.Second, AllowedHost: []string{"https://steps.example"}, DB: DB(filepath.Join(t.TempDir(), "steps.db"))}).Run()
+	if err == nil || !strings.Contains(err.Error(), "--allowed-host") {
+		t.Errorf("a URL as --allowed-host = %v, want a refusal naming the flag", err)
 	}
 }
 

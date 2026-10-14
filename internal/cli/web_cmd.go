@@ -50,6 +50,8 @@ type WebCmd struct {
 	// Both or neither, refused below: half a pair is a daemon somebody believes is protected. Env vars because a password on a command line is in every ps listing and every shell history.
 	BasicAuthUsername string `env:"STEPS_BASIC_AUTH_USERNAME" help:"require this HTTP Basic username on every route but POST /p/<pipeline>/hooks/<resource>" name:"basic-auth-username"`
 	BasicAuthPassword string `env:"STEPS_BASIC_AUTH_PASSWORD" help:"the password that goes with it"                                                          name:"basic-auth-password"`
+	// Opt-in because a reverse proxy forwards the client's Host, so only the operator knows this daemon's names; see docs/web.md#security.
+	AllowedHost []string `env:"STEPS_ALLOWED_HOSTS" help:"refuse any request whose Host is not this name (repeatable; loopback names are always allowed)" name:"allowed-host" placeholder:"NAME"`
 	// No env: binding: a STEPS_*-shaped name invites confusion with the variable this one sets.
 	ExternalURL string `help:"the URL steps publish to every step as STEPS_URL (default http://<listen>)" name:"external-url"`
 }
@@ -100,6 +102,17 @@ func (w *WebCmd) authOptions() ([]web.Option, error) {
 	return []web.Option{web.WithBasicAuth(w.BasicAuthUsername, w.BasicAuthPassword)}, nil
 }
 
+// allowedHosts refuses a value that is not a bare name: a URL would never equal a Host header, so every remote request would be refused and nothing would say why.
+func (w *WebCmd) allowedHosts() error {
+	for _, host := range w.AllowedHost {
+		if host == "" || strings.ContainsAny(host, "/@?#") {
+			return fmt.Errorf("web: --allowed-host %q must be a host name, optionally with a port, not a URL", host)
+		}
+	}
+
+	return nil
+}
+
 // Run serves until canceled, holding whatever the state database says was set.
 func (w *WebCmd) Run() error {
 	// Rejected rather than shrugged at: a server that quietly served forever
@@ -115,6 +128,11 @@ func (w *WebCmd) Run() error {
 
 	// Before anything is opened or bound, so a half-configured credential pair costs nothing.
 	opts, err := w.authOptions()
+	if err != nil {
+		return err
+	}
+
+	err = w.allowedHosts()
 	if err != nil {
 		return err
 	}
@@ -155,7 +173,7 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 		runner = local
 	}
 
-	server, err := web.New(nil, runner, append(opts, web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithMiddleware(telemetry.Handler(web.HealthPath)))...)
+	server, err := web.New(nil, runner, append(opts, web.WithAllowedHosts(w.AllowedHost), web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithMiddleware(telemetry.Handler(web.HealthPath)))...)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
@@ -189,7 +207,7 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 	if len(opts) == 0 && !loopbackOnly(w.Listen) {
 		slog.WarnContext(ctx, "web.no_auth", "listen", w.Listen,
 			"risk", "anyone who can reach it can set a pipeline, which is arbitrary command execution",
-			"fix", "set --basic-auth-username and --basic-auth-password")
+			"fix", "set --basic-auth-username and --basic-auth-password, and --allowed-host to refuse names that are not this daemon's (DNS rebinding)")
 	}
 
 	if len(server.Served()) == 0 {

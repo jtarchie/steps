@@ -127,6 +127,8 @@ type Server struct {
 	manager Manager
 	// nil is open access, which is what the loopback default is: see auth.go.
 	auth *basicAuth
+	// nil answers any Host, which is the default: see hosts.go.
+	allowedHosts map[string]bool
 	// version is what the footer prints, so a bug report can name the build.
 	version string
 	// wrap is applied to the router when it is served and never in Handler(), so page tests keep talking to echo itself.
@@ -395,6 +397,11 @@ func (s *Server) routes() error {
 
 	e.Use(refuseFraming)
 	e.Use(middleware.Recover())
+
+	// Before auth, so a rebinding page is refused before it is asked for a password it could phish.
+	if s.allowedHosts != nil {
+		e.Use(s.refuseOtherHosts)
+	}
 	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{
 		// A gzip writer holds bytes until a block fills, which is the one thing a live stream must not do; matched by route because htmx's sse extension adds text/event-stream to the Accept of every request.
 		Skipper:   func(c *echo.Context) bool { return c.Path() == eventsRoute },
@@ -589,7 +596,7 @@ func refuseFraming(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-// No page here calls /api, and to the origin check a DNS-rebinding page is same-origin (its own name arrives as both Host and Origin) while a set is a remote shell; not a Host check, because a reverse proxy forwards the client's.
+// No page here calls /api, and to the origin check a DNS-rebinding page is same-origin (its own name arrives as both Host and Origin) while a set is a remote shell; not a Host check by default, because a reverse proxy forwards the client's — --allowed-host is the opt-in one (hosts.go).
 func refuseBrowsers(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		header := c.Request().Header
@@ -600,7 +607,7 @@ func refuseBrowsers(next echo.HandlerFunc) echo.HandlerFunc {
 			return echo.NewHTTPError(http.StatusForbidden, "the /api routes answer the steps CLI, not a browser")
 		}
 
-		// ponytail: a rebinding page's GET carries neither and is answered, showing it nothing the UI's own pages do not; an opt-in Host allow-list would close both.
+		// ponytail: without --allowed-host a rebinding page's GET carries neither and is answered, showing it nothing the UI's own pages do not, and its UI POSTs pass sameOriginMutations; the allow-list closes both.
 		return next(c)
 	}
 }

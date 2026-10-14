@@ -793,16 +793,30 @@ same-origin request looks like. So everything under `/api/` — what
 header only a browser attaches: an `Origin` of any value, which every browser
 sends on the `PUT`, `POST` and `DELETE` those verbs use, or a `Sec-Fetch-Site`
 saying anything but `none`, which is a URL typed into the address bar. The CLI
-sends neither, and no page in the UI calls `/api/`. `Host` is not checked,
-because a reverse proxy in front of the daemon forwards the name the client
-used.
+sends neither, and no page in the UI calls `/api/`. `Host` is not checked by
+default, because a reverse proxy in front of the daemon forwards the name the
+client used — only you know which names are this daemon's.
 
 The browser's own controls — trigger, approve, answer, resume, pause, abort —
 are `POST`s refused when their `Origin` names another host, which stops another
 site aiming a form at your port. A rebinding page is not another host: it can
 read every page, configurations included, and press those controls, unless
-`--read-only` has withheld them. It cannot set, destroy or rename a pipeline:
+`--allowed-host` refuses its name or `--read-only` has withheld them. It cannot set, destroy or rename a pipeline:
 those verbs live under `/api`, which refuses anything browser-shaped.
+
+**`--allowed-host` closes rebinding.** Name every host this daemon is reached
+by — the one in `--external-url`, the one a reverse proxy forwards, the one a
+webhook provider was given — and any request whose `Host` is not one of them,
+or a loopback name (`localhost`, `127.0.0.1`, `::1`), is refused with a 403
+before it reaches a page, a button or `/api`. Repeat the flag, or put a
+comma-separated list in `STEPS_ALLOWED_HOSTS`. A port is ignored, and so is
+case. It applies to every route, webhooks included — a delivery that names
+another host is refused like anything else — except `/healthz`, which a
+platform's probe reaches by IP and which answers `ok` and nothing more.
+
+```
+steps web --listen 0.0.0.0:8088 --allowed-host steps.example.com
+```
 
 **Pause and unpause are on the browser's side of that line, deliberately.**
 They are the one pair a page can reach that `/api` also serves, and the reason
@@ -832,6 +846,9 @@ on this side is everything that changes what a pipeline IS.
                  require HTTP Basic on every route but the webhook one; both or
                  neither, env STEPS_BASIC_AUTH_USERNAME / _PASSWORD
                  (see authentication.md)
+--allowed-host   refuse any request whose Host is not this name (repeatable;
+                 loopback names always pass; env STEPS_ALLOWED_HOSTS,
+                 comma-separated; see Security)
 --keep-workspace leave build workspaces on disk
 --answer         answer an ask_user question in advance (repeatable)
 --worker         map a step tag to a machine, e.g. --worker gpu=ssh://jt@box
