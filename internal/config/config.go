@@ -37,6 +37,9 @@ type Config struct {
 	// `steps test` must have run (see Assert). It's a self-verification
 	// meta-check, never hashed.
 	Assert *Assert `yaml:"assert,omitempty"`
+	// Access narrows who may see and operate this pipeline on a daemon people
+	// sign in to. See Access.
+	Access *Access `yaml:"access,omitempty"`
 	// Name is WHICH pipeline this is, stamped by the loader. Not YAML, never
 	// hashed: it is identity, not content.
 	//
@@ -228,6 +231,7 @@ func parseSource(source []byte, name string, label string, fsys Files) (*Config,
 func (c *Config) validate() error {
 	checks := []func() error{
 		c.validateStepKinds,
+		c.validateAccess,
 		c.validateStepReferences,
 		c.validateTaskInputsAll,
 		c.validateStepFieldPlacement,

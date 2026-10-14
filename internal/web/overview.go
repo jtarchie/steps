@@ -152,10 +152,10 @@ func jobChips(ctx context.Context, reads *pipelineReads) []jobChip {
 // None renders the empty page: a daemon holds nothing until somebody sets a
 // pipeline into it, and the page that says how is the whole of its UI.
 func (s *Server) handleIndex(c *echo.Context) error {
-	served := s.Served()
+	served := s.servedTo(c)
 
 	// A broken pipeline stops the shortcuts: redirected past, or shown the empty page, nobody would learn the daemon holds one it is not serving.
-	broken := len(s.Broken()) > 0
+	broken := len(s.brokenTo(c)) > 0
 
 	if len(served) == 0 && !broken {
 		//nolint:wrapcheck // render errors surface through the shared error handler
@@ -170,7 +170,7 @@ func (s *Server) handleIndex(c *echo.Context) error {
 	limit := feedLimit(c.QueryParam("runs"))
 
 	// One past the limit, so "more" is drawn only when there is more.
-	runs, err := s.recentRunsAcross(c.Request().Context(), limit+1)
+	runs, err := s.recentRunsAcross(c.Request().Context(), served, limit+1)
 	if err != nil {
 		return err
 	}
@@ -207,7 +207,7 @@ func (s *Server) handleIndex(c *echo.Context) error {
 // pipeline than a row missing one column.
 func (s *Server) overviewPipelines(c *echo.Context, nav navData) []overviewPipeline {
 	ctx := c.Request().Context()
-	served := s.Served()
+	served := s.servedTo(c)
 
 	summaries := make(map[string]pipelineSummary, len(nav.Pipelines))
 	for _, summary := range nav.Pipelines {
@@ -242,7 +242,7 @@ func (s *Server) overviewPipelines(c *echo.Context, nav navData) []overviewPipel
 		out = append(out, row)
 	}
 
-	for _, broken := range s.Broken() {
+	for _, broken := range s.brokenTo(c) {
 		out = append(out, overviewPipeline{Slug: broken.Name, Broken: broken.Reason, Mark: summaries[broken.Name].Mark})
 	}
 
@@ -265,7 +265,7 @@ func (s *Server) overviewPipelines(c *echo.Context, nav navData) []overviewPipel
 // pipeline nobody here loaded contributes nothing — a row with no route
 // behind it is worse than a missing one, and the feed is bounded, so it would
 // crowd out rows that do have one.
-func (s *Server) recentRunsAcross(ctx context.Context, limit int) ([]overviewRun, error) {
+func (s *Server) recentRunsAcross(ctx context.Context, served []*Pipeline, limit int) ([]overviewRun, error) {
 	var (
 		handles = map[string]store.Store{}
 		names   = map[string][]string{}
@@ -277,7 +277,7 @@ func (s *Server) recentRunsAcross(ctx context.Context, limit int) ([]overviewRun
 		slugByName = map[string]string{}
 	)
 
-	for _, pipeline := range s.Served() {
+	for _, pipeline := range served {
 		database := pipeline.Store.Description()
 		name := pipeline.Store.Pipeline()
 

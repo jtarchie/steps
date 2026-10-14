@@ -93,6 +93,31 @@ Each `--role` is a rule about the signed-in person, an [expr](https://expr-lang.
 - **Rules read the daemon's own record of the person**, written at their last sign-in — never anything the browser carries. That is what keeps an exclusion honest: `operator=!("acme/contractors" in Groups)` reads the groups GitHub reported, so a contractor cannot pass by arriving with none. Leaving a team takes effect at the next sign-in, within a week.
 - `--read-only` still withholds the controls from everyone, whatever their role.
 
+### One pipeline's own rules: `access:`
+
+A pipeline can narrow who may see and operate it, in the same rule language:
+
+```yaml
+access:
+  viewer: '"acme" in Organizations'      # anybody else is told it does not exist
+  operator: '"acme/oncall" in Groups'    # anybody else who may see it only reads
+
+jobs:
+- name: deploy
+  plan:
+  - task: ship
+    run: echo shipped
+  assert:
+    execution: [ship]
+    outcome: succeeded
+```
+
+- **It only narrows.** A pipeline is a file anybody with a pull request can change, so nothing it says can give a person more than the daemon's `--role` rules do: an `operator: "true"` lets nobody trigger who could not already. Both have to agree.
+- **Admins are not narrowed** — they can set or destroy the pipeline anyway.
+- **Someone it hides is told it does not exist**: its pages answer `404`, and it is missing from the pipeline switcher, the root page and the jump palette. A pipeline that will not load has no rules to read, so only admins see it listed as broken.
+- **A rule that does not compile refuses the set**, naming the field, on the daemon that would have served it.
+- **It applies where people sign in.** A daemon nobody signs in to, and `steps run`, have nobody to narrow.
+
 ## What it covers
 
 Every route: the pages, `/docs`, the live-run SSE streams, and the `/api` endpoints `steps pipeline`, `steps runs abort` and `steps mcp login -p` talk to. A request that is not a browser asking for a page gets a `WWW-Authenticate: basic realm="steps"` challenge. `/login` and the stylesheet and scripts it is drawn with answer anyone: nobody can sign in through a page that needs them signed in first.

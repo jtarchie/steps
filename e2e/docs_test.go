@@ -665,6 +665,7 @@ func docsCoverageTypes() map[string]reflect.Type {
 		"ResourceType":     reflect.TypeOf(config.ResourceType{}),
 		"MCPServer":        reflect.TypeOf(config.MCPServer{}),
 		"Assert":           reflect.TypeOf(config.Assert{}),
+		"Access":           reflect.TypeOf(config.Access{}),
 		"Defaults":         reflect.TypeOf(config.Defaults{}),
 		"StepMemory":       reflect.TypeOf(config.StepMemory{}),
 		"WorkspaceConfig":  reflect.TypeOf(config.WorkspaceConfig{}),
@@ -763,6 +764,7 @@ func collectPipelineKeys(doc map[string]any, used map[string]map[string]bool) {
 	record(used, "Defaults", doc["defaults"])
 	record(used, "WorkspaceConfig", doc["workspace"])
 	record(used, "Assert", doc["assert"])
+	record(used, "Access", doc["access"])
 
 	for key, typeName := range map[string]string{
 		"resource_types": "ResourceType",

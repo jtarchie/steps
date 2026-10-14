@@ -20,6 +20,7 @@ import (
 	"github.com/labstack/echo/v5"
 
 	"github.com/jtarchie/steps/internal/actor"
+	"github.com/jtarchie/steps/internal/config"
 )
 
 // Role is what a person may do. Each includes the ones below it.
@@ -185,7 +186,20 @@ func (s *Server) authorize(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 
 		who := actor.From(c.Request().Context())
-		role := s.roles.highest(s.identityOf(c.Request().Context(), who))
+		id := s.identityOf(c.Request().Context(), who)
+		role := s.roles.highest(id)
+		c.Set(identityKey, id)
+
+		// A pipeline's own rules narrow what the daemon's allow, on that pipeline's routes; somebody it hides is told it does not exist, as they would be for a name nobody set.
+		if name := c.Param("pipeline"); name != "" {
+			if target := s.Lookup(name); target != nil {
+				role = target.narrow(role, id)
+				if role == 0 {
+					return s.notServed(name)
+				}
+			}
+		}
+
 		c.Set(roleKey, role)
 
 		needed := neededRole(c)
@@ -207,4 +221,135 @@ func aOrAn(word string) string {
 	}
 
 	return "a " + word
+}
+
+// pipelineAccess is a pipeline's access: rules, compiled. A nil rule narrows nothing.
+type pipelineAccess struct {
+	viewer, operator *vm.Program
+}
+
+// CheckAccess is whether a pipeline's access: rules compile, which is what a set is refused over when one cannot work.
+func CheckAccess(access *config.Access) error {
+	_, err := compileAccess(access)
+
+	return err
+}
+
+func compileAccess(access *config.Access) (pipelineAccess, error) {
+	var compiled pipelineAccess
+
+	if access == nil {
+		return compiled, nil
+	}
+
+	for _, rule := range []struct {
+		name   string
+		source string
+		into   **vm.Program
+	}{{"viewer", access.Viewer, &compiled.viewer}, {"operator", access.Operator, &compiled.operator}} {
+		if strings.TrimSpace(rule.source) == "" {
+			continue
+		}
+
+		program, err := expr.Compile(rule.source, expr.Env(Identity{}), expr.AsBool())
+		if err != nil {
+			return pipelineAccess{}, fmt.Errorf("access.%s: %w", rule.name, err)
+		}
+
+		*rule.into = program
+	}
+
+	return compiled, nil
+}
+
+func holds(program *vm.Program, id Identity) bool {
+	granted, err := expr.Run(program, id)
+	if err != nil {
+		return false
+	}
+
+	allowed, _ := granted.(bool)
+
+	return allowed
+}
+
+// accessFor is the pipeline's rules as its current configuration states them, compiled once per configuration. One that cannot compile — a set refuses that, so only a configuration held from before could — lets nobody but admins see it.
+func (p *Pipeline) accessFor() (pipelineAccess, bool) {
+	cfg := p.Config()
+
+	if cached := p.access.Load(); cached != nil && cached.cfg == cfg {
+		return cached.compiled, cached.ok
+	}
+
+	compiled, err := compileAccess(cfg.Access)
+	p.access.Store(&compiledAccess{cfg: cfg, compiled: compiled, ok: err == nil})
+
+	return compiled, err == nil
+}
+
+type compiledAccess struct {
+	cfg      *config.Config
+	compiled pipelineAccess
+	ok       bool
+}
+
+// narrow is what role leaves on p: the pipeline can take away, never add, and does not reach admins.
+func (p *Pipeline) narrow(role Role, id Identity) Role {
+	if role >= RoleAdmin || role == 0 {
+		return role
+	}
+
+	access, ok := p.accessFor()
+	if !ok || (access.viewer != nil && !holds(access.viewer, id)) {
+		return 0
+	}
+
+	if access.operator != nil && role > RoleViewer && !holds(access.operator, id) {
+		return RoleViewer
+	}
+
+	return role
+}
+
+const identityKey = "steps.identity"
+
+// visibleTo is the pipelines this request's person may see: every one on a server nobody signs in to.
+func (s *Server) visibleTo(c *echo.Context, pipelines []*Pipeline) []*Pipeline {
+	id, signedIn := c.Get(identityKey).(Identity)
+	if !signedIn {
+		return pipelines
+	}
+
+	role := s.roles.highest(id)
+	visible := make([]*Pipeline, 0, len(pipelines))
+
+	for _, p := range pipelines {
+		if p.narrow(role, id) >= RoleViewer {
+			visible = append(visible, p)
+		}
+	}
+
+	return visible
+}
+
+// servedTo is what this daemon serves that this request's person may see.
+func (s *Server) servedTo(c *echo.Context) []*Pipeline { return s.visibleTo(c, s.Served()) }
+
+// brokenTo is the pipelines held but not served, for a reader who may administer them: one that will not load has no rules to say who may see it, so it is shown to nobody who could not fix it.
+func (s *Server) brokenTo(c *echo.Context) []BrokenPipeline {
+	if s.roleOfPerson(c) < RoleAdmin {
+		return nil
+	}
+
+	return s.Broken()
+}
+
+// roleOfPerson is the daemon-wide role, before any pipeline narrows it; everything on a server nobody signs in to.
+func (s *Server) roleOfPerson(c *echo.Context) Role {
+	id, signedIn := c.Get(identityKey).(Identity)
+	if !signedIn {
+		return RoleAdmin
+	}
+
+	return s.roles.highest(id)
 }

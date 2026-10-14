@@ -73,7 +73,7 @@ func (s *Server) handleSearch(c *echo.Context) error {
 	// pipeline's own history filled every slot, and a pipeline with twenty
 	// recent runs never showed a neighbour again. Jobs are few and are what
 	// somebody is usually jumping to; runs are many and are the tail.
-	order := append([]*Pipeline{pipeline}, s.others(pipeline)...)
+	order := append([]*Pipeline{pipeline}, s.others(c, pipeline)...)
 
 	for _, other := range order {
 		add(searchHit{
@@ -106,8 +106,8 @@ func (s *Server) handleSearch(c *echo.Context) error {
 }
 
 // others is every served pipeline except the one given, in slug order.
-func (s *Server) others(current *Pipeline) []*Pipeline {
-	served := s.Served()
+func (s *Server) others(c *echo.Context, current *Pipeline) []*Pipeline {
+	served := s.servedTo(c)
 
 	out := make([]*Pipeline, 0, len(served))
 

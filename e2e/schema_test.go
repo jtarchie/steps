@@ -153,6 +153,7 @@ func schemaDefsByType() map[string]reflect.Type {
 		// UnmarshalYAML.
 		"exprResourceConfig":   reflect.TypeOf(config.ExprResourceConfig{}),
 		"assert":               reflect.TypeOf(config.Assert{}),
+		"access":               reflect.TypeOf(config.Access{}),
 		"defaults":             reflect.TypeOf(config.Defaults{}),
 		"stepMemory":           reflect.TypeOf(config.StepMemory{}),
 		"workspace":            reflect.TypeOf(config.WorkspaceConfig{}),

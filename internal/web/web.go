@@ -75,6 +75,8 @@ type Pipeline struct {
 	*scheduler.Pipeline
 	// path names a file on the SENDER's machine, recorded for a reader who finds a configuration nobody remembers sending, and never opened here. Behind an atomic because a later set moves it while handlers read it.
 	path atomic.Pointer[string]
+	// access is the configuration's access: rules, compiled for the configuration they came from: see roles.go.
+	access atomic.Pointer[compiledAccess]
 	// Hooks answers POST /p/<slug>/hooks/<resource>, a delivery to a webhook resource. Built by the caller (trigger.HookHandler): this package serves the surface and does not own the queue — internal/scheduler drains it, reached only through Runner. Nil only in a test.
 	Hooks func(w http.ResponseWriter, r *http.Request, resource string)
 }
@@ -755,7 +757,7 @@ func (s *Server) nav(c *echo.Context) navData {
 	// saved oauth token is worth, which is a file — is cached against that
 	// file by whoever holds it (internal/cli's credentials). Give this a
 	// short TTL if it ever shows up in a profile.
-	served := s.Served()
+	served := s.servedTo(c)
 	gathered := make(map[string][]attentionItem, len(served))
 
 	for _, pipeline := range served {
@@ -773,7 +775,7 @@ func (s *Server) nav(c *echo.Context) navData {
 		})
 	}
 
-	for _, broken := range s.Broken() {
+	for _, broken := range s.brokenTo(c) {
 		nav.Pipelines = append(nav.Pipelines, pipelineSummary{Slug: broken.Name, Path: broken.From, Broken: true, Mark: mark{Disc: discErrored}})
 	}
 
