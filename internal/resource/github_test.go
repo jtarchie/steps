@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -688,8 +689,8 @@ func TestGitHubCommentsCheckReadsBackToTheCursor(t *testing.T) {
 	source, pages, since := commentListing(t)
 
 	versions, err := githubCommentsCheck(context.Background(), source, map[string]any{"updated": "2026-09-26T00:00:00Z"})
-	if err != nil || pages.Load() != 2 || since.Load() != "2026-09-26T00:00:00Z" {
-		t.Fatalf("%v, %d pages, since %v; want two pages asked since the cursor", err, pages.Load(), since.Load())
+	if err != nil || pages.Load() != 2 || since.Load() != "2026-09-25T23:55:00Z" {
+		t.Fatalf("%v, %d pages, since %v; want two pages asked since five minutes before the cursor", err, pages.Load(), since.Load())
 	}
 
 	// 999 is on an issue, and only conversation comments are watched.
@@ -1403,5 +1404,69 @@ func TestGitHubCommentsCheckGivesUpOnListingsThatNeverSettle(t *testing.T) {
 
 	if want := int32(2 * (commentSnapshotRounds + 1)); reads.Load() != want {
 		t.Errorf("%d reads, want %d: every round, and no more", reads.Load(), want)
+	}
+}
+
+// TestGitHubCommentsCheckSeesACommentGitHubListsLate: GitHub can list a comment after a newer one is already the cursor, and since: the cursor exactly would pass it for good.
+func TestGitHubCommentsCheckSeesACommentGitHubListsLate(t *testing.T) {
+	newer := `{"id":2,"body":"/go","updated_at":"2026-09-27T00:10:00Z","user":{"login":"alice"},"issue_url":"https://x/issues/9","html_url":"https://x/issues/9#c"}`
+	late := `{"id":1,"body":"/go","updated_at":"2026-09-27T00:08:00Z","user":{"login":"alice"},"issue_url":"https://x/issues/9","html_url":"https://x/issues/9#c"}`
+
+	connection := githubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var page []string
+
+		since := r.URL.Query().Get("since")
+		if since <= "2026-09-27T00:10:00Z" {
+			page = append(page, newer)
+		}
+
+		if since <= "2026-09-27T00:08:00Z" {
+			page = append(page, late)
+		}
+
+		_, _ = w.Write([]byte("[" + strings.Join(page, ",") + "]"))
+	})
+
+	source := map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "body": "^/go", "kinds": []any{"issue"}}
+	cursor := map[string]any{"id": "2", "kind": "issue", "number": "9", "updated": "2026-09-27T00:10:00Z"}
+
+	versions, err := githubCommentsCheck(context.Background(), source, cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ids := make([]string, 0, len(versions))
+	for _, version := range versions {
+		ids = append(ids, versionField(version, "id"))
+	}
+
+	if !slices.Contains(ids, "1") {
+		t.Errorf("versions %v, want the late comment 1 among them", ids)
+	}
+
+	// The cursor stays the newest: the late comment sorts before it, not after.
+	if len(ids) == 0 || ids[len(ids)-1] != "2" {
+		t.Errorf("versions %v, want the cursor's comment 2 last", ids)
+	}
+}
+
+// TestGitHubCommentsCheckKeepsTheCursorAhead: the overlap lists comments older than the cursor, and when the cursor's own comment is no longer listed (deleted, reacted, edited away) the newest of them would be the next cursor, a step back that reads as a change.
+func TestGitHubCommentsCheckKeepsTheCursorAhead(t *testing.T) {
+	older := `{"id":1,"body":"/go","updated_at":"2026-09-27T00:08:00Z","user":{"login":"alice"},"issue_url":"https://x/issues/9","html_url":"https://x/issues/9#c"}`
+
+	connection := githubServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("[" + older + "]"))
+	})
+
+	source := map[string]any{"repo": "acme/app", "token_env": connection.TokenEnv, "endpoint": connection.Endpoint, "body": "^/go", "kinds": []any{"issue"}}
+	cursor := map[string]any{"id": "2", "kind": "issue", "number": "9", "updated": "2026-09-27T00:10:00Z"}
+
+	versions, err := githubCommentsCheck(context.Background(), source, cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(versions) == 0 || !maps.Equal(versions[len(versions)-1], cursor) {
+		t.Errorf("versions %v, want the cursor %v last", versions, cursor)
 	}
 }

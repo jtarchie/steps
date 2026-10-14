@@ -379,6 +379,29 @@ func TestWatchGitHubCommentsTriggerOnAuthorAndContent(t *testing.T) {
 	fixture.assertDid(t, "102:7:conversation", "103:7:review", "104:12:issue", "102:7:conversation")
 }
 
+// TestWatchGitHubCommentsBuildsACommentListedLate: a comment GitHub lists only after a newer one became the cursor is still built, once, and what the look-back lists again builds nothing a second time.
+func TestWatchGitHubCommentsBuildsACommentListedLate(t *testing.T) {
+	fake := newFakeGitHub(t)
+	fake.addPR(reviewablePR())
+
+	at := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+
+	fake.addComment(fakeComment{ID: 99, Number: 7, Kind: "conversation", Author: "alice", Body: "/steps baseline", Updated: at})
+
+	fixture := newWatchFixture(t, strings.ReplaceAll(commentPipeline, "ENDPOINT", fake.URL()))
+	fixture.resources = []string{"command"}
+	fixture.coldStart(t)
+
+	fake.addComment(fakeComment{ID: 102, Number: 7, Kind: "conversation", Author: "alice", Body: "/steps review", Updated: at.Add(2 * time.Minute)})
+	fixture.watch(t)
+	fixture.assertDid(t, "102:7:conversation")
+
+	fake.addComment(fakeComment{ID: 101, Number: 7, Kind: "conversation", Author: "alice", Body: "/steps late", Updated: at.Add(time.Minute)})
+	fixture.watch(t)
+	fixture.watch(t)
+	fixture.assertDid(t, "102:7:conversation", "101:7:conversation")
+}
+
 // TestWatchGitHubPRsTriggerWhenAssigned: an assignment brings a pull request
 // into the filtered set, which is what makes it a new version.
 func TestWatchGitHubPRsTriggerWhenAssigned(t *testing.T) {

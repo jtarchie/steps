@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jtarchie/steps/internal/config"
 )
@@ -482,6 +483,11 @@ func githubCommentsCheck(ctx context.Context, raw, cursor map[string]any) ([]map
 
 	sortCommentVersions(versions)
 
+	// The overlap lists comments older than the cursor; when the cursor's own comment is no longer listed (deleted, reacted, edited away), the newest of them would be the next cursor, a step back the trigger reads as a change.
+	if len(versions) > 0 && versionField(cursor, "updated") != "" && commentOlder(versions[len(versions)-1], cursor) {
+		versions = append(versions, cursor)
+	}
+
 	return versions, nil
 }
 
@@ -572,6 +578,19 @@ func sameMatches(a, b []commentMatch) bool {
 	})
 }
 
+// commentLookback is how far behind the cursor a check asks: GitHub can list a comment after a newer one, and since: the cursor exactly would pass it for good. What the overlap re-reports, version history already holds.
+const commentLookback = 5 * time.Minute
+
+// lookBack is since: for a cursor, commentLookback earlier; a cursor that is no timestamp is asked as it stands.
+func lookBack(updated string) string {
+	at, err := time.Parse(time.RFC3339, updated)
+	if err != nil {
+		return updated
+	}
+
+	return at.Add(-commentLookback).UTC().Format(time.RFC3339)
+}
+
 func newCommentWatch(ctx context.Context, raw, cursor map[string]any) (commentWatch, *githubClient, error) {
 	source, pattern, err := config.ParseGitHubCommentsSource(raw)
 	if err != nil {
@@ -583,7 +602,7 @@ func newCommentWatch(ctx context.Context, raw, cursor map[string]any) (commentWa
 		return commentWatch{}, nil, err
 	}
 
-	watch := commentWatch{source: source, pattern: pattern, author: source.Author, since: versionField(cursor, "updated")}
+	watch := commentWatch{source: source, pattern: pattern, author: source.Author, since: lookBack(versionField(cursor, "updated"))}
 
 	if watch.author == "@me" || source.SkipReacted != "" {
 		watch.self, err = client.login(ctx)
@@ -603,14 +622,16 @@ func newCommentWatch(ctx context.Context, raw, cursor map[string]any) (commentWa
 // last written, which is also what makes the newest version the cursor the
 // next check asks since.
 func sortCommentVersions(versions []map[string]any) {
-	sort.SliceStable(versions, func(i, j int) bool {
-		a, b := versionField(versions[i], "updated"), versionField(versions[j], "updated")
-		if a != b {
-			return a < b
-		}
+	sort.SliceStable(versions, func(i, j int) bool { return commentOlder(versions[i], versions[j]) })
+}
 
-		return versionField(versions[i], "id") < versionField(versions[j], "id")
-	})
+func commentOlder(a, b map[string]any) bool {
+	at, bt := versionField(a, "updated"), versionField(b, "updated")
+	if at != bt {
+		return at < bt
+	}
+
+	return versionField(a, "id") < versionField(b, "id")
 }
 
 // scan reads one comment listing newest first, back to the cursor.
@@ -618,7 +639,7 @@ func sortCommentVersions(versions []map[string]any) {
 // With no cursor it reads one page and stops: a first check is a look at
 // what is recent, not a walk through a repository's whole history, and
 // under steps web a cold start builds only the newest of it anyway. With
-// one, since: asks GitHub for exactly what changed after it. Every page is a
+// one, since: asks GitHub for what changed since commentLookback before it. Every page is a
 // conditional request, and a listing nothing touched answers 304, which
 // costs no rate limit — so an idle repository is polled for free.
 func (w commentWatch) scan(ctx context.Context, client *githubClient, listing string, review bool) ([]commentMatch, error) {
