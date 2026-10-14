@@ -14,6 +14,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.79.3
 	github.com/aws/smithy-go v1.28.5
 	github.com/containerd/errdefs v1.0.0
+	github.com/digitalocean/godo v1.225.0
 	github.com/distribution/reference v0.6.0
 	github.com/expr-lang/expr v1.17.8
 	github.com/frioux/leatherman v0.0.0-20261013114415-75c532343ddb
@@ -100,12 +101,15 @@ require (
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
+	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/s2a-go v0.1.11 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.23 // indirect
 	github.com/googleapis/gax-go/v2 v2.26.2 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.31.0 // indirect
+	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
+	github.com/hashicorp/go-retryablehttp v0.7.7 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.3 // indirect

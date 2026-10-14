@@ -119,6 +119,8 @@ func (r *Registry) Sweep(ctx context.Context, workers map[string]Worker) error {
 			err = sweepEC2(ctx, r.owner, first, here)
 		case SchemeGCP:
 			err = sweepGCE(ctx, r.owner, first, here)
+		case SchemeDO:
+			err = sweepDO(ctx, r.owner, first, here)
 		case SchemeLocal, SchemeSSH, SchemeDockerSSH:
 		}
 

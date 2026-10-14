@@ -557,6 +557,8 @@ linters:
             - "github.com/jtarchie/steps/internal/venue/iapdial"
             - "google.golang.org/api"
             - "golang.org/x/oauth2"
+            # godo is the do:// control plane: create, poll, list and delete droplets. Pure Go; it signs with the oauth2 static token source above.
+            - "github.com/digitalocean/godo"
             # smithy is the SDK's error interface, not a second SDK: EC2 answers
             # a just-created instance with InvalidInstanceID.NotFound until its
             # replica catches up, and telling that lag apart from a bad id means

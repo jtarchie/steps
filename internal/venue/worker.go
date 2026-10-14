@@ -51,6 +51,8 @@ const (
 	// relay range. GCP has no SSM-shaped exec channel, so the SSH contract is
 	// the transport — the tunnel is just how the connection gets there.
 	SchemeGCP Scheme = "gcp"
+	// SchemeDO launches a DigitalOcean droplet for the job and reaches its docker daemon over ssh to its public address.
+	SchemeDO Scheme = "do"
 	// SchemeDockerSSH drives the worker's docker daemon through its socket, forwarded over ssh: every placed step is a container, and nothing but the step's files reaches the machine (steps#206).
 	SchemeDockerSSH Scheme = "docker+ssh"
 )
@@ -106,8 +108,10 @@ type Worker struct {
 	Exclusive bool
 	// Max caps how many machines an exclusive mapping keeps at once; zero is no cap.
 	Max int
-	// Region overrides the ambient AWS region for an aws:// worker.
+	// Region overrides the ambient AWS region for an aws:// worker, and is the region a do:// droplet is created in.
 	Region string
+	// Size is a do:// droplet's size slug.
+	Size string
 	// Project is the GCP project a gcp:// worker lives in. Empty falls back
 	// to the ambient project — the CLOUDSDK/GOOGLE_CLOUD env vars, then what
 	// the application default credentials name.
@@ -162,6 +166,10 @@ func (w Worker) registryKey() string {
 		key := location + w.Template + "?version=" + w.Version + "&capacity=" + string(capacity)
 		if w.Exclusive {
 			key += "&exclusive&max=" + strconv.Itoa(w.Max)
+		}
+
+		if w.Size != "" {
+			key += "&size=" + w.Size
 		}
 
 		return key
@@ -288,6 +296,8 @@ func checkScheme(worker Worker) error {
 		return checkAWS(worker)
 	case SchemeGCP:
 		return checkGCP(worker)
+	case SchemeDO:
+		return checkDO(worker)
 	case SchemeLocal, SchemeSSH, SchemeDockerSSH:
 		return nil
 	default:
@@ -318,6 +328,11 @@ func applyQuery(worker Worker, parsed *url.URL) (Worker, error) {
 	worker.Capacity = Capacity(query.Get("capacity"))
 	worker.Project = query.Get("project")
 	worker.Zone = query.Get("zone")
+	worker.Size = query.Get("size")
+
+	if worker.Scheme == SchemeDO {
+		worker = doDefaults(worker, query)
+	}
 
 	worker.Socket = query.Get("sock")
 	if worker.Scheme == SchemeDockerSSH && worker.Socket == "" {
@@ -385,11 +400,12 @@ var queryKeys = map[string][]Scheme{
 	"hostkey":     {SchemeSSH, SchemeGCP, SchemeDockerSSH},
 	"ssh_config":  {SchemeSSH, SchemeDockerSSH},
 	"sock":        {SchemeDockerSSH},
-	"region":      {SchemeAWS},
+	"region":      {SchemeAWS, SchemeDO},
+	"size":        {SchemeDO},
 	"capacity":    {SchemeAWS},
-	"idle":        {SchemeAWS, SchemeGCP},
-	"exclusive":   {SchemeAWS, SchemeGCP},
-	"max":         {SchemeAWS, SchemeGCP},
+	"idle":        {SchemeAWS, SchemeGCP, SchemeDO},
+	"exclusive":   {SchemeAWS, SchemeGCP, SchemeDO},
+	"max":         {SchemeAWS, SchemeGCP, SchemeDO},
 	"version":     {SchemeAWS},
 	"project":     {SchemeGCP},
 	"zone":        {SchemeGCP},
@@ -399,8 +415,8 @@ var queryKeys = map[string][]Scheme{
 //
 //nolint:gochecknoglobals // as queryKeys: a fact about the grammar, not state
 var removedKeys = map[string]string{
-	"binary": "nothing is pushed to a worker any more — ssh:// runs the step with the worker's own sh, and docker+ssh://, aws:// and gcp:// run it in the step's image",
-	"shim":   "nothing is pushed to a worker any more — ssh:// runs the step with the worker's own sh, and docker+ssh://, aws:// and gcp:// run it in the step's image",
+	"binary": "nothing is pushed to a worker any more — ssh:// runs the step with the worker's own sh, and docker+ssh://, aws://, gcp:// and do:// run it in the step's image",
+	"shim":   "nothing is pushed to a worker any more — ssh:// runs the step with the worker's own sh, and docker+ssh://, aws://, gcp:// and do:// run it in the step's image",
 }
 
 // acquisitionKeys are the options that describe how a machine is BROUGHT INTO
@@ -413,7 +429,7 @@ var removedKeys = map[string]string{
 // resulting URL launched a billed instance and then failed to re-parse.
 //
 //nolint:gochecknoglobals // as queryKeys: a fact about the grammar, not state
-var acquisitionKeys = []string{"capacity", "idle", "version", "exclusive", "max"}
+var acquisitionKeys = []string{"capacity", "idle", "version", "exclusive", "max", "size"}
 
 // checkQueryKeys refuses an option the grammar does not know, or one that
 // describes a different scheme than the mapping uses.
@@ -531,6 +547,8 @@ func applyScheme(worker Worker, parsed *url.URL) (Worker, error) {
 		return applyAWS(worker, parsed)
 	case SchemeGCP:
 		return applyGCP(worker, parsed)
+	case SchemeDO:
+		return applyDO(worker, parsed)
 	case SchemeSSH:
 		return applySSH(worker, parsed)
 	case SchemeDockerSSH:
@@ -548,7 +566,7 @@ func applyScheme(worker Worker, parsed *url.URL) (Worker, error) {
 
 		return worker, nil
 	default:
-		return Worker{}, fmt.Errorf("%w %q: unknown scheme %q, want local:, ssh://, docker+ssh://, aws:// or gcp://", ErrWorker, worker.URL, parsed.Scheme)
+		return Worker{}, fmt.Errorf("%w %q: unknown scheme %q, want local:, ssh://, docker+ssh://, aws://, gcp:// or do://", ErrWorker, worker.URL, parsed.Scheme)
 	}
 }
 
@@ -588,9 +606,9 @@ func applyDockerSSH(worker Worker, parsed *url.URL) (Worker, error) {
 // String is the mapping as the operator wrote it.
 func (w Worker) String() string { return w.URL }
 
-// dockerPlus reports a worker whose every step runs in a container on its own daemon: docker+ssh://, and aws:// and gcp://, whose provisioning installs docker.
+// dockerPlus reports a worker whose every step runs in a container on its own daemon: docker+ssh://, and aws://, gcp:// and do://, whose machines have docker.
 func (w Worker) dockerPlus() bool {
-	return w.Scheme == SchemeDockerSSH || w.Scheme == SchemeAWS || w.Scheme == SchemeGCP || w.Scheme == SchemeLocal
+	return w.Scheme == SchemeDockerSSH || w.Scheme == SchemeAWS || w.Scheme == SchemeGCP || w.Scheme == SchemeDO || w.Scheme == SchemeLocal
 }
 
 // Address is the machine, without the credentials for reaching it.
@@ -604,7 +622,7 @@ func (w Worker) Address() string {
 		return "local:" + w.Root
 	}
 
-	if w.Scheme == SchemeAWS || w.Scheme == SchemeGCP {
+	if w.Scheme == SchemeAWS || w.Scheme == SchemeGCP || w.Scheme == SchemeDO {
 		// The rung is part of the address: a machine that was launched for
 		// this job is a different fact about where a step ran than one that
 		// was already up, and the run record has to be able to say which.

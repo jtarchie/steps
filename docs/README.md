@@ -32,6 +32,7 @@ Read the page for what you're doing. Nothing here needs to be read in order, exc
 | [agents-internals.md](agents-internals.md) | How agent steps work underneath: transport, tool-call repair, compaction, caching |
 | [aws-workers.md](aws-workers.md) | Standing up an `aws://` worker by hand with the AWS CLI: IAM, security group, launch template, instance, bucket — and running a pipeline on it |
 | [gcp-workers.md](gcp-workers.md) | Standing up a `gcp://` worker by hand with gcloud: the IAP firewall rule, instance template, instance — and running a pipeline on it |
+| [do-workers.md](do-workers.md) | A `do://` worker: the droplet defaults, how its host key is trusted, the token and firewall to set up — and running a pipeline on it |
 | [conformance.md](conformance.md) | Which Concourse behaviors steps matches, which it doesn't, and which are verified |
 
 ## Commands

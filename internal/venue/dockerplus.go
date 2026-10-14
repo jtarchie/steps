@@ -94,6 +94,9 @@ func newPlusSession(worker Worker, spec shell.RunnerSpec) *plusSession {
 		s.reach, s.drainScript, s.socket = awsSSHClient, awsDrainScript(), cloudDockerSocket
 	case SchemeGCP:
 		s.reach, s.drainScript, s.socket = gcpDockerClient, gcpDrainScript(), cloudDockerSocket
+	case SchemeDO:
+		// No spot capacity, so no notice to watch for.
+		s.reach, s.socket = doSSHClient, cloudDockerSocket
 	case SchemeLocal:
 		// This machine's own daemon, no ssh; the root names a cache of its own, so two local: workers on one daemon are two caches.
 		s.namespace = localNamespace(worker.Root)
