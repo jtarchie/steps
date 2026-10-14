@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/store"
 )
 
 // Not t.Parallel(): startWeb backgrounds cli.Run in this process and stop signals the whole test binary.
@@ -136,4 +139,101 @@ func waitForAuthedPage(t *testing.T, addr, user, pass, path, want string) {
 	}
 
 	t.Fatalf("GET %s never said %q; last text:\n%s", path, want, last)
+}
+
+// Several people, one daemon: each local user is told apart, so each run says its own name. Not t.Parallel(), for startWeb's reason.
+func TestEachLocalUserIsToldApart(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "daemon.db")
+	path := pipelinePath(t, dir)
+	writePipelineFile(t, path, `
+jobs:
+- name: manual
+  plan:
+  - task: say
+    run: echo hi
+`)
+
+	usersFile := filepath.Join(dir, "users")
+	writePipelineFile(t, usersFile, "# the operators\nsam:"+hashed(t, "sams-password")+"\n")
+
+	served := startWeb(t, "--db", state, "--local-user", "alex:"+hashed(t, "alexs-password"), "--local-users-file", usersFile)
+	defer served.stopIfRunning(t)
+
+	name := cli.PipelineName(path)
+
+	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", authTarget(served.addr, "alex", "alexs-password")})
+	if err != nil {
+		t.Fatalf("steps pipeline set as alex: %v", err)
+	}
+
+	if code, _ := authGet(t, served.addr, "/p/"+name, "alex", "sams-password"); code != http.StatusUnauthorized {
+		t.Errorf("alex with sam's password = %d, want 401", code)
+	}
+
+	for _, who := range []struct{ user, pass string }{{"alex", "alexs-password"}, {"sam", "sams-password"}} {
+		before := len(listRuns(t, state, name, "manual"))
+
+		if code := authPost(t, served.addr, who.user, who.pass, "/p/"+name+"/jobs/manual/trigger"); code != http.StatusSeeOther {
+			t.Fatalf("trigger as %s answered %d, want 303", who.user, code)
+		}
+
+		run := waitForNthRun(t, state, name, "manual", before+1)
+		waitForAuthedPage(t, served.addr, who.user, who.pass, "/p/"+name+"/runs/"+run.ID, "by "+who.user+" (local)")
+	}
+}
+
+// A password written in the clear is refused before the daemon listens: it sits in shell history and ps, and the flag exists so it never has to.
+func TestALocalUserMustBeAHash(t *testing.T) {
+	t.Parallel()
+
+	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--local-user", "alex:hunter2"})
+	if err == nil {
+		t.Fatal("steps web started with a plain-text password")
+	}
+
+	if !strings.Contains(err.Error(), "htpasswd -nbB") || strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("the refusal must name how to hash and must not print the password: %v", err)
+	}
+}
+
+func hashed(t *testing.T, password string) string {
+	t.Helper()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(hash)
+}
+
+// waitForNthRun waits until the job has n runs and returns the newest.
+func waitForNthRun(t *testing.T, state, name, job string, n int) store.RunRow {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for time.Now().Before(deadline) {
+		if runs := listRuns(t, state, name, job); len(runs) >= n {
+			return runs[0]
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	t.Fatalf("job %s never reached %d runs", job, n)
+
+	return store.RunRow{}
+}
+
+// A name given twice would let order decide which password works, so it is refused.
+func TestALocalUserNamedTwiceIsRefused(t *testing.T) {
+	t.Parallel()
+
+	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1",
+		"--local-user", "alex:" + hashed(t, "one"), "--local-user", "alex:" + hashed(t, "two")})
+	if err == nil || !strings.Contains(err.Error(), `"alex" is given twice`) {
+		t.Fatalf("steps web with alex twice = %v, want a refusal naming alex", err)
+	}
 }

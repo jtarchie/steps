@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -48,8 +49,10 @@ type WebCmd struct {
 	// A statement about the BROWSER's surface only; `steps pipeline set` is the deployment path and is deliberately not withheld — see docs/web.md.
 	ReadOnly bool `help:"serve the pages without trigger, approval, answer, resume or abort controls" name:"read-only"`
 	// Both or neither, refused below: half a pair is a daemon somebody believes is protected. Env vars because a password on a command line is in every ps listing and every shell history.
-	BasicAuthUsername string `env:"STEPS_BASIC_AUTH_USERNAME" help:"require this HTTP Basic username on every route but POST /p/<pipeline>/hooks/<resource>" name:"basic-auth-username"`
-	BasicAuthPassword string `env:"STEPS_BASIC_AUTH_PASSWORD" help:"the password that goes with it"                                                          name:"basic-auth-password"`
+	BasicAuthUsername string   `env:"STEPS_BASIC_AUTH_USERNAME"                                                        help:"require this HTTP Basic username on every route but POST /p/<pipeline>/hooks/<resource>" name:"basic-auth-username"`
+	BasicAuthPassword string   `env:"STEPS_BASIC_AUTH_PASSWORD"                                                        help:"the password that goes with it"                                                          name:"basic-auth-password"`
+	LocalUser         []string `help:"a local account as name:bcrypt-hash, the line htpasswd -nbB writes (repeatable)" name:"local-user"                                                                              placeholder:"NAME:HASH"`
+	LocalUsersFile    string   `help:"an htpasswd file of local accounts, bcrypt hashes only"                          name:"local-users-file"                                                                        placeholder:"PATH"         type:"existingfile"`
 	// Opt-in because a reverse proxy forwards the client's Host, so only the operator knows this daemon's names; see docs/web.md#security.
 	AllowedHost []string `env:"STEPS_ALLOWED_HOSTS" help:"refuse any request whose Host is not this name (repeatable; loopback names are always allowed)" name:"allowed-host" placeholder:"NAME"`
 	// No env: binding: a STEPS_*-shaped name invites confusion with the variable this one sets.
@@ -95,11 +98,64 @@ func (w *WebCmd) authOptions() ([]web.Option, error) {
 		return nil, errors.New("web: --basic-auth-username and --basic-auth-password are both or neither — half a pair serves open access to a daemon somebody believes is protected")
 	}
 
-	if w.BasicAuthUsername == "" {
-		return nil, nil
+	var opts []web.Option
+
+	if w.BasicAuthUsername != "" {
+		opts = append(opts, web.WithBasicAuth(w.BasicAuthUsername, w.BasicAuthPassword))
 	}
 
-	return []web.Option{web.WithBasicAuth(w.BasicAuthUsername, w.BasicAuthPassword)}, nil
+	users, err := w.localUsers()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(users) > 0 {
+		opts = append(opts, web.WithLocalUsers(users))
+	}
+
+	return opts, nil
+}
+
+// localUsers is every account --local-user and --local-users-file name; a name given twice is refused, since which password won would be an accident of order.
+func (w *WebCmd) localUsers() ([]web.LocalUser, error) {
+	users := make([]web.LocalUser, 0, len(w.LocalUser))
+
+	for _, entry := range w.LocalUser {
+		user, err := web.ParseLocalUser(entry)
+		if err != nil {
+			return nil, fmt.Errorf("web: --local-user: %w", err)
+		}
+
+		users = append(users, user)
+	}
+
+	if w.LocalUsersFile != "" {
+		file, err := os.Open(w.LocalUsersFile)
+		if err != nil {
+			return nil, fmt.Errorf("web: --local-users-file: %w", err)
+		}
+
+		defer func() { _ = file.Close() }()
+
+		fromFile, err := web.ParseLocalUsers(file)
+		if err != nil {
+			return nil, fmt.Errorf("web: --local-users-file %s: %w", w.LocalUsersFile, err)
+		}
+
+		users = append(users, fromFile...)
+	}
+
+	seen := map[string]bool{w.BasicAuthUsername: w.BasicAuthUsername != ""}
+
+	for _, user := range users {
+		if seen[user.Name] {
+			return nil, fmt.Errorf("web: local user %q is given twice", user.Name)
+		}
+
+		seen[user.Name] = true
+	}
+
+	return users, nil
 }
 
 // allowedHosts refuses a value that is not a bare name: a URL would never equal a Host header, so every remote request would be refused and nothing would say why.
@@ -207,7 +263,7 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 	if len(opts) == 0 && !loopbackOnly(w.Listen) {
 		slog.WarnContext(ctx, "web.no_auth", "listen", w.Listen,
 			"risk", "anyone who can reach it can set a pipeline, which is arbitrary command execution",
-			"fix", "set --basic-auth-username and --basic-auth-password, and --allowed-host to refuse names that are not this daemon's (DNS rebinding)")
+			"fix", "set --local-user (or --basic-auth-username and --basic-auth-password), and --allowed-host to refuse names that are not this daemon's (DNS rebinding)")
 	}
 
 	if len(server.Served()) == 0 {

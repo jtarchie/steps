@@ -238,6 +238,8 @@ linters:
             - "github.com/santhosh-tekuri/jsonschema/v6"
             - "gopkg.in/yaml.v3"
             - "go.uber.org/goleak"
+            # bcrypt is test-only here: the local-user fixtures hash their passwords the way an operator's htpasswd does.
+            - "golang.org/x/crypto/bcrypt"
             # a fake OTLP collector decodes what the CLI exports, to check the trace that crossed the wire.
             - "go.opentelemetry.io/proto/otlp"
             - "google.golang.org/protobuf/proto"
@@ -920,6 +922,8 @@ linters:
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
             - "github.com/labstack/echo/v5"
+            # bcrypt verifies a local user's password against the hash an operator gave, so the daemon never holds the password itself.
+            - "golang.org/x/crypto/bcrypt"
             # goldmark (+ its chroma highlighting extension) renders the
             # embedded docs package at /docs, server-side — the terminal twin
             # (steps docs, via glamour) lives in main. docs itself stays a

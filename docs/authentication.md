@@ -2,7 +2,7 @@
 
 `steps web` asks for nothing by default, and on the loopback address it binds by default that is the right answer: the UI and the terminal that started it are the same trust domain. The moment the daemon is reachable from somewhere else, it is not — **a pipeline is arbitrary commands, so `steps pipeline set` is a remote shell** ([web.md, Security](web.md#security)).
 
-HTTP Basic is what closes that, and it is the whole of the authentication here. No OAuth, no login command, no sessions, no per-pipeline permissions — one username and one password, held by the daemon, carried by the CLI.
+HTTP Basic is what closes that, and it is the whole of the authentication here. No OAuth, no login command, no sessions, no per-pipeline permissions — one or more local accounts, held by the daemon, carried by the CLI, and each request recorded under the account that made it.
 
 ## Turning it on
 
@@ -20,6 +20,22 @@ steps web \
 Prefer the environment variables in a deployment: a password on a command line is in `ps` output and in shell history.
 
 **Both or neither.** A daemon given only one of them refuses to start, rather than serving open access to somebody who believes it is protected.
+
+### Several people: local users
+
+```bash
+htpasswd -nbB alex "$ALEX_PASSWORD" >  users
+htpasswd -nbB sam  "$SAM_PASSWORD"  >> users
+
+steps web --local-users-file users
+steps web --local-user 'alex:$2y$05$…'      # repeatable; the same line htpasswd writes
+```
+
+Each account is a name and a **bcrypt hash** — the daemon never holds the password. A line whose password is not a bcrypt hash is refused at startup, saying how to make one and never repeating what it was given. A name given twice, across both flags or alongside `--basic-auth-username`, is refused too: which password worked would otherwise be an accident of order. Blank lines and `#` comments in the file are skipped.
+
+Everyone signs in the same way — the browser prompts, the CLI carries `name:password@` in `--target` — and what each one does is recorded under their own name: a run they trigger says `by alex (local)` ([web.md](web.md#the-transcript)). The `--basic-auth-*` pair still works, and is one more account beside these.
+
+bcrypt is slow on purpose (tens of milliseconds a check) and a browser sends credentials on every request, so a pair that checked out is remembered for a minute. A changed file reaches a running daemon only on restart.
 
 **Unset is open access**, which is what every existing local workflow is. `steps web` on a routable address with no credentials prints a warning once at startup naming the two flags; it does not refuse, because an operator who has put the daemon behind a tunnel or a reverse proxy has already answered the question.
 
@@ -71,7 +87,7 @@ put them in the target URL: --target http://user:password@host (or STEPS_TARGET)
 
 ## What it is not
 
-- **Not a user model.** One credential pair, shared by everyone who has it. Nothing records *who* triggered a job, and nothing can be permitted to one person and withheld from another.
+- **Not a permission model.** Every account can do everything; nothing can be permitted to one person and withheld from another.
 - **Not a substitute for TLS.** Basic auth sends the password on every request, base64-encoded and not encrypted. Over plain HTTP anything on the path reads it. Terminate TLS in front of the daemon — a platform's own router, a reverse proxy, a tunnel.
 - **Not rate limited.** There is no lockout and no delay on a wrong password. Use a generated password, not one somebody chose.
 - **Not a reason to expose the daemon.** The set endpoint is still a remote shell; authentication decides *who* reaches it, not *what* they can do once they have.
