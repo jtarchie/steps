@@ -13,7 +13,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 8
+const schemaVersion = 9
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -395,6 +395,19 @@ CREATE TABLE IF NOT EXISTS run_placements (
 );
 CREATE INDEX IF NOT EXISTS idx_run_placements_run ON run_placements(run_id, step_index);
 CREATE INDEX IF NOT EXISTS idx_run_placements_node ON run_placements(pipeline_id, node_hash);
+
+-- See the sqlite schema for why pipeline_id is SET NULL and the name is kept.
+CREATE TABLE IF NOT EXISTS activity (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pipeline_id BIGINT REFERENCES pipelines(id) ON DELETE SET NULL,
+    pipeline    TEXT NOT NULL,
+    actor       TEXT NOT NULL,
+    action      TEXT NOT NULL,
+    target      TEXT NOT NULL,
+    detail      TEXT NOT NULL,
+    at          TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_activity_pipeline ON activity(pipeline_id);
 
 CREATE TABLE IF NOT EXISTS node_transcripts (
     pipeline_id BIGINT NOT NULL,

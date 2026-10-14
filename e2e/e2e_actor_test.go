@@ -331,3 +331,77 @@ func authPostForm(t *testing.T, addr, user, pass, path, form string) int {
 
 	return resp.StatusCode
 }
+
+// The activity log names who did each thing, narrows to one person, and keeps the record of a pipeline after it is destroyed. Not t.Parallel(), for startWeb's reason.
+func TestTheActivityLogSaysWhoDidWhat(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "daemon.db")
+	path := pipelinePath(t, dir)
+	writePipelineFile(t, path, `
+jobs:
+- name: manual
+  plan:
+  - task: say
+    run: echo hi
+`)
+
+	served := startWeb(t, "--db", state, "--local-user", "alex:"+hashed(t, "a"), "--local-user", "sam:"+hashed(t, "s"))
+	defer served.stopIfRunning(t)
+
+	name := cli.PipelineName(path)
+	asAlex, asSam := authTarget(served.addr, "alex", "a"), authTarget(served.addr, "sam", "s")
+
+	err := cli.Run([]string{"pipeline", "set", "-p", name, "-c", path, "-n", "--target", asAlex})
+	if err != nil {
+		t.Fatalf("steps pipeline set: %v", err)
+	}
+
+	if code := authPost(t, served.addr, "alex", "a", "/p/"+name+"/jobs/manual/trigger"); code != http.StatusSeeOther {
+		t.Fatalf("trigger answered %d, want 303", code)
+	}
+
+	err = cli.Run([]string{"pipeline", "pause", "-p", name, "--target", asSam})
+	if err != nil {
+		t.Fatalf("steps pipeline pause: %v", err)
+	}
+
+	waitForAuthedPage(t, served.addr, "alex", "a", "/activity", "sam (local) pause")
+	waitForAuthedPage(t, served.addr, "alex", "a", "/activity", "alex (local) trigger manual")
+	waitForAuthedPage(t, served.addr, "alex", "a", "/activity", "alex (local) set")
+
+	err = cli.Run([]string{"pipeline", "destroy", "-p", name, "-n", "--target", asSam})
+	if err != nil {
+		t.Fatalf("steps pipeline destroy: %v", err)
+	}
+
+	waitForAuthedPage(t, served.addr, "alex", "a", "/activity", "sam (local) destroy "+name+" gone")
+
+	_, onlyAlex := authBody(t, served.addr, "alex", "a", "/activity?actor=local:alex")
+	if strings.Contains(onlyAlex, "sam (local)") || !strings.Contains(onlyAlex, "alex (local) trigger") {
+		t.Errorf("the log narrowed to alex still shows sam, or lost alex:\n%s", onlyAlex)
+	}
+}
+
+func authBody(t *testing.T, addr, user, pass, path string) (int, string) {
+	t.Helper()
+
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.SetBasicAuth(user, pass)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	return resp.StatusCode, visibleText(string(body))
+}

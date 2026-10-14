@@ -386,6 +386,32 @@ what it spent and where it ran on its own row.
   the `#` beside its name is a URL you can paste at someone, and it opens the
   step it names.
 
+## Activity
+
+`/activity` is the log of what people did to the daemon's pipelines, newest
+first, across every pipeline: who set one, triggered or retried a job,
+approved or rejected, answered a question, aborted, paused, released,
+renamed, destroyed, or connected an MCP server. Each line says when, who,
+what, and to which pipeline, and the job, run, revision or page it touched
+is a link.
+
+- **Every name narrows it.** Click a person, an action or a pipeline and the
+  log shows only those; what it is narrowed by is said above the table, each
+  with an `×` to drop it, and the URL is the filter — send it to someone.
+- **People, not machinery.** A run a new version started is not here: it says
+  `by new version of repo` on the run itself. Keeping the log to what people
+  did is what stops a busy poll pushing their actions out of a log bounded by
+  count.
+- **Destroying a pipeline does not erase its history.** Its lines stay, under
+  the name it had, marked `gone`, and the destroy is one of them. A rename
+  keeps its history too, and answers to the new name.
+- **Only what happened is recorded.** A refused action — a read-only server,
+  a pipeline that would not load — leaves no line.
+- **Bounded by count**, `--activity-history` (default 10,000), the oldest
+  dropped first, whichever pipeline they belong to. Names in it are personal
+  data; that bound is how long they are kept.
+- On a server nobody signs in to, the who is `—`.
+
 ## Live runs
 
 A run still in flight streams to the page over server-sent events: steps
@@ -856,6 +882,12 @@ on this side is everything that changes what a pipeline IS.
                  require HTTP Basic on every route but the webhook one; both or
                  neither, env STEPS_BASIC_AUTH_USERNAME / _PASSWORD
                  (see authentication.md)
+--local-user / --local-users-file
+                 local accounts as name:bcrypt-hash, or an htpasswd file of them
+                 (see authentication.md)
+--activity-history
+                 how many entries the activity log keeps across every pipeline
+                 (default 10000, 0 is no limit; see Activity)
 --allowed-host   refuse any request whose Host is not this name (repeatable;
                  loopback names always pass; env STEPS_ALLOWED_HOSTS,
                  comma-separated; see Security)

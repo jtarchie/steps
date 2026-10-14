@@ -89,7 +89,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 22
+const schemaVersion = 23
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -900,6 +900,27 @@ CREATE INDEX IF NOT EXISTS idx_run_placements_node ON run_placements(pipeline_id
 -- The largest single value the schema stores, and the one whose bound was
 -- missing: internal/agent caps a single tool RESULT, but a conversation has
 -- unboundedly many turns, so the row itself needs store.MaxTranscriptBytes.
+-- What people did: set, trigger, approve, abort, pause and the rest
+-- (store.Activity). One log per database, trimmed by count across every
+-- pipeline, because who did what is a question about the daemon.
+--
+-- pipeline_id is SET NULL, not CASCADE, and that is the point of the table:
+-- destroying a pipeline must not erase the record that it was destroyed, or
+-- that anything was ever done to it. The name rides beside the id for the
+-- same reason — once the id is gone it is all that is left to read.
+CREATE TABLE IF NOT EXISTS activity (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    pipeline_id INTEGER REFERENCES pipelines(id) ON DELETE SET NULL,
+    pipeline    TEXT NOT NULL,
+    actor       TEXT NOT NULL,
+    action      TEXT NOT NULL,
+    target      TEXT NOT NULL,
+    detail      TEXT NOT NULL,
+    at          TEXT NOT NULL
+);
+-- The SET NULL child key: without it every pipeline destroyed scans the log.
+CREATE INDEX IF NOT EXISTS idx_activity_pipeline ON activity(pipeline_id);
+
 CREATE TABLE IF NOT EXISTS node_transcripts (
     pipeline_id INTEGER NOT NULL,
     hash       TEXT NOT NULL,

@@ -24,6 +24,9 @@ type Reader interface {
 	// the database has never heard of contributes nothing rather than failing:
 	// the caller asked about a set, not about each one.
 	RecentRuns(ctx context.Context, pipelines []string, limit int) ([]CrossRunRow, error)
+	// Activity is the log of what people did, newest first, across every
+	// pipeline — including ones since destroyed, by the name they had.
+	Activity(ctx context.Context, filter ActivityFilter) ([]ActivityEntry, error)
 	// Close releases the connection, unless this Reader borrowed one from a
 	// Store — in which case closing is the Store's to do.
 	Close() error

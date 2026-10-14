@@ -1242,3 +1242,8 @@ table.versions td .when { color: var(--dim); font-family: var(--sans); font-size
   table.versions td .when { display: none; }
   table.versions tbody th { white-space: normal; overflow-wrap: anywhere; min-width: 10em; }
 }
+
+/* ---- activity ---- */
+a.plain { color: inherit; }
+a.plain:hover { color: var(--blue); }
+table.activity td:first-child { white-space: nowrap; }

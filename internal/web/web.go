@@ -127,6 +127,8 @@ type Server struct {
 	manager Manager
 	// nil is open access, which is what the loopback default is: see auth.go.
 	auth *basicAuth
+	// activity is where the activity log is read and how much of it is kept: see activity.go.
+	activity activityLog
 	// nil answers any Host, which is the default: see hosts.go.
 	allowedHosts map[string]bool
 	// version is what the footer prints, so a bug report can name the build.
@@ -416,6 +418,9 @@ func (s *Server) routes() error {
 	// With no authentication there is no session for a cross-site request to ride, but a page on another origin can still aim a form at localhost — and this is the check that costs nothing and closes it.
 	e.Use(sameOriginMutations)
 
+	// After auth, so an entry names who; around every route, so a mutating one cannot go unrecorded by being added without remembering to.
+	e.Use(s.recordActivity)
+
 	e.GET("/", s.handleIndex)
 	e.GET("/static/app.css", s.handleCSS)
 	e.GET("/static/htmx.min.js", s.handleHTMX)
@@ -424,6 +429,7 @@ func (s *Server) routes() error {
 	e.GET("/mark", s.handleMark)
 	e.GET("/docs", s.handleDocsIndex)
 	e.GET("/docs/:page", s.handleDocs)
+	e.GET("/activity", s.handleActivity)
 
 	group := e.Group("/p/:pipeline", s.resolvePipeline)
 	group.GET("", s.handleJobs)

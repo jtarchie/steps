@@ -255,7 +255,9 @@ func templateFuncs() template.FuncMap {
 		// The tab badges: one lookup into the list nav() already gathered,
 		// rather than six count fields that could each be stale differently.
 		"attentionOn": attentionOn,
-		"rfc3339":     func(t time.Time) string { return t.UTC().Format(time.RFC3339) },
+		// The activity page narrowed by one more field: every name in a row is a link that filters by it.
+		"filterURL": withQuery,
+		"rfc3339":   func(t time.Time) string { return t.UTC().Format(time.RFC3339) },
 		// The recursive step template needs both the page (for
 		// pipeline-scoped links) and the step it is drawing; a Go template
 		// passes exactly one argument, so they are paired here.

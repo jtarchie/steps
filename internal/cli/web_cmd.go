@@ -15,6 +15,7 @@ import (
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/scheduler"
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/telemetry"
 	"github.com/jtarchie/steps/internal/web"
 )
@@ -52,6 +53,7 @@ type WebCmd struct {
 	BasicAuthUsername string   `env:"STEPS_BASIC_AUTH_USERNAME"                                                        help:"require this HTTP Basic username on every route but POST /p/<pipeline>/hooks/<resource>" name:"basic-auth-username"`
 	BasicAuthPassword string   `env:"STEPS_BASIC_AUTH_PASSWORD"                                                        help:"the password that goes with it"                                                          name:"basic-auth-password"`
 	LocalUser         []string `help:"a local account as name:bcrypt-hash, the line htpasswd -nbB writes (repeatable)" name:"local-user"                                                                              placeholder:"NAME:HASH"`
+	ActivityHistory   int      `default:"10000"                                                                        help:"how many entries the activity log keeps, across every pipeline (0 is no limit)"          name:"activity-history"`
 	LocalUsersFile    string   `help:"an htpasswd file of local accounts, bcrypt hashes only"                          name:"local-users-file"                                                                        placeholder:"PATH"         type:"existingfile"`
 	// Opt-in because a reverse proxy forwards the client's Host, so only the operator knows this daemon's names; see docs/web.md#security.
 	AllowedHost []string `env:"STEPS_ALLOWED_HOSTS" help:"refuse any request whose Host is not this name (repeatable; loopback names are always allowed)" name:"allowed-host" placeholder:"NAME"`
@@ -229,15 +231,16 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 		runner = local
 	}
 
-	server, err := web.New(nil, runner, append(opts, web.WithAllowedHosts(w.AllowedHost), web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithMiddleware(telemetry.Handler(web.HealthPath)))...)
+	state := DaemonStatePath(w.DB)
+	readLog := func() (store.Reader, error) { return openStateReader(state) } //nolint:contextcheck // opening a store takes none
+
+	server, err := web.New(nil, runner, append(opts, web.WithAllowedHosts(w.AllowedHost), web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithMiddleware(telemetry.Handler(web.HealthPath)), web.WithActivityLog(readLog, w.ActivityHistory))...)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	state := DaemonStatePath(w.DB)
 
 	held := newDaemon(ctx, server, local, state, w.ExecFlags, w.HistoryFlags, w.Interval)
 	defer held.Close()
