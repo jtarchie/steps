@@ -357,6 +357,13 @@ func runIn(t *testing.T, dir string, name string, args ...string) string {
 
 	out, err := cmd.Output()
 	if err != nil {
+		// Output keeps stderr on the ExitError; without it a failed docker
+		// build reported only "exit status 1".
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, exitErr.Stderr)
+		}
+
 		t.Fatalf("%s %s: %v", name, strings.Join(args, " "), err)
 	}
 
