@@ -33,6 +33,7 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/echo/v5/middleware"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/scheduler"
@@ -720,6 +721,10 @@ func (s *Server) nav(c *echo.Context) navData {
 	ctx := c.Request().Context()
 	nav := navData{ReadOnly: s.runner == nil, URL: c.Request().URL.RequestURI()}
 
+	if s.auth != nil {
+		nav.Who = actor.From(ctx).String()
+	}
+
 	// Every served pipeline, not only the request's own: a reader looking at a
 	// clean pipeline has no other way to learn that one of the daemon's others
 	// has stopped, short of opening it.
@@ -826,6 +831,8 @@ type navData struct {
 	// mark even on a run page, and every pipeline's above one — the switcher
 	// is about pipelines whatever page it sits on.
 	SwitchMark mark
+	// Who is the signed-in person's stored actor, which draws the user menu; empty on a server nobody signs in to, where there is nobody to name.
+	Who string
 }
 
 type pipelineSummary struct {

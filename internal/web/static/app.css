@@ -1247,3 +1247,14 @@ table.versions td .when { color: var(--dim); font-family: var(--sans); font-size
 a.plain { color: inherit; }
 a.plain:hover { color: var(--blue); }
 table.activity td:first-child { white-space: nowrap; }
+
+/* ---- user menu: the switcher's control at the line's other end ---- */
+.usermenu { position: relative; display: flex; align-self: stretch; margin: -4px -10px -4px 0; border-left: 1px solid var(--line); }
+.usermenu .pipemenu { left: auto; right: 0; min-width: 200px; }
+.userbtn .who { color: var(--fg); max-width: 16ch; overflow: hidden; text-overflow: ellipsis; }
+.usermenu .menuhead { display: block; padding: 8px 12px; font-size: 11px; color: var(--dim); border-bottom: 1px solid var(--line-soft); }
+@media (max-width: 640px) {
+  .userbtn .who { max-width: 10ch; }
+  .usermenu { position: static; }
+  .usermenu .pipemenu { left: 0; right: 0; min-width: 0; }
+}

@@ -67,6 +67,14 @@
          and the palette was unreachable there. The kbd is the hint for a
          reader with a keyboard and is hidden where there is none. */}}
     {{if .Nav.Current}}<button class="jumpbtn" id="jumpbtn" type="button" title="jump to a job, run or pipeline"><span aria-hidden="true">⌕</span> jump <kbd>/</kbd></button>{{end}}
+    {{/* The signed-in person, last on the line, and the daemon-wide pages that are about people rather than pipelines. Not drawn where nobody signs in. */}}
+    {{with .Nav.Who}}<div class="usermenu">
+      <button class="pipebtn userbtn" id="userbtn" type="button" aria-haspopup="menu" aria-expanded="false" title="{{(actorOf .).Label}}"><span class="visually-hidden">signed in as </span><span class="who">{{(actorOf .).ID}}</span> <span class="caret" aria-hidden="true">▾</span></button>
+      <div class="pipemenu" id="usermenu" role="menu" aria-label="Account">
+        <span class="menuhead">{{template "actor" .}}</span>
+        <a role="menuitem" href="/activity">activity</a>
+      </div>
+    </div>{{end}}
   </div>
   {{template "actionbar" .}}
 </div>

@@ -388,7 +388,8 @@ what it spent and where it ran on its own row.
 
 ## Activity
 
-`/activity` is the log of what people did to the daemon's pipelines, newest
+`/activity` — reached from your name at the right end of the header, on a
+server you sign in to — is the log of what people did to the daemon's pipelines, newest
 first, across every pipeline: who set one, triggered or retried a job,
 approved or rejected, answered a question, aborted, paused, released,
 renamed, destroyed, or connected an MCP server. Each line says when, who,
