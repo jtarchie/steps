@@ -3,6 +3,7 @@ package trigger
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -463,5 +464,65 @@ func TestConformancePassedRowsWithoutABuildCannotCorrelate(t *testing.T) {
 
 	if passed {
 		t.Error("a row with no build id satisfied a correlated lookup; it cannot vouch for a combination, so it must not")
+	}
+}
+
+// TestPassedReleasesFromHistoryWhileTheResourceCheckFails: a passed: gate is
+// judged against durable green records, never this poll's observation, so a
+// constrained resource whose check is failing neither invents a release nor
+// holds back a version it already had and an upstream job already vouched
+// for — Concourse's scheduler reads its version DB the same way.
+func TestPassedReleasesFromHistoryWhileTheResourceCheckFails(t *testing.T) {
+	dir := t.TempDir()
+	versions := dir + "/versions.json"
+	writeVersions(t, versions, `[{"ref":"v1"}]`)
+
+	cfg := passedPipeline(t, versions)
+	st := mustOpenStore(t, dir)
+	ctx := context.Background()
+
+	_, err := pollOnce(ctx, cfg, st)
+	if err != nil {
+		t.Fatalf("pollOnce (baseline): %v", err)
+	}
+
+	writeVersions(t, versions, `[{"ref":"v2"}]`)
+
+	_, err = pollOnce(ctx, cfg, st)
+	if err != nil {
+		t.Fatalf("pollOnce (v2): %v", err)
+	}
+
+	err = os.Remove(versions)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	enqueued, err := pollOnce(ctx, cfg, st)
+	if err == nil {
+		t.Fatal("a check against a missing file succeeded")
+	}
+
+	if contains(enqueued, "deploy") {
+		t.Fatalf("enqueued = %v, want deploy held: nothing has passed test", enqueued)
+	}
+
+	encoded, err := json.Marshal(map[string]any{"ref": "v2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = st.RecordPassedVersion(ctx, store.Pass{JobName: "test", Resource: "repo", Version: store.VersionKey(encoded), BuildID: "b1"})
+	if err != nil {
+		t.Fatalf("RecordPassedVersion: %v", err)
+	}
+
+	enqueued, err = pollOnce(ctx, cfg, st)
+	if err == nil {
+		t.Fatal("a check against a missing file succeeded")
+	}
+
+	if !contains(enqueued, "deploy") {
+		t.Errorf("enqueued = %v, want deploy released on v2, which test passed before repo's check broke", enqueued)
 	}
 }

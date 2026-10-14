@@ -1,9 +1,8 @@
 package trigger
 
 // A failing check used to leave nothing behind but a log line on whichever
-// machine runs the daemon — and because a poll aborts on the first resource
-// that errors, a single broken check silently stops the whole pipeline
-// triggering.
+// machine runs the daemon, and a resource whose last-checked time merely
+// stopped moving reads as a quiet one.
 
 import (
 	"context"

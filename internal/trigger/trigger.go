@@ -271,21 +271,35 @@ func pollAndLog(ctx context.Context, cfg *config.Config, st PollStore) {
 	defer release()
 
 	enqueued, err := pollOnce(ctx, cfg, st)
-	if err != nil {
-		// The failure surfaces here, outside the resource's scope, so it carries its resource back.
-		var failure checkFailure
-		if errors.As(err, &failure) {
-			ctx = events.WithLogAttrs(ctx, "resource", failure.resource)
-		}
-
-		slog.ErrorContext(ctx, "trigger.poll", "error", err)
-
-		return
-	}
 
 	for _, name := range enqueued {
 		slog.InfoContext(ctx, "trigger.enqueued", "job", name)
 	}
+
+	for _, failure := range pollFailures(err) {
+		// The failure surfaces here, outside the resource's scope, so it carries its resource back.
+		failureCtx := ctx
+
+		var named checkFailure
+		if errors.As(failure, &named) {
+			failureCtx = events.WithLogAttrs(ctx, "resource", named.resource)
+		}
+
+		slog.ErrorContext(failureCtx, "trigger.poll", "error", failure)
+	}
+}
+
+// pollFailures splits a poll's error into one per failing resource, so each line names its own.
+func pollFailures(err error) []error {
+	if err == nil {
+		return nil
+	}
+
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		return joined.Unwrap()
+	}
+
+	return []error{err}
 }
 
 // observedResource is one trigger resource's latest version as seen by a
@@ -314,21 +328,36 @@ type observedResource struct {
 // last recorded check. It returns the job names it enqueued, in sorted
 // order.
 //
+// Each resource is checked independently, as Concourse does: one whose check
+// fails is left out of this poll's observations — filed by
+// recordCheckOutcome and never advanced, so what it missed is still dirty
+// when it recovers — and the rest trigger as usual. The failures come back
+// joined, beside whatever was enqueued.
+//
 // Ordering is load-bearing for correctness: the recorded version is advanced
 // only *after* every affected job has been durably enqueued, so if anything
-// fails partway (a later resource's check erroring, or EnqueueJob failing)
-// the resource stays "dirty" and the trigger is retried on the next poll
-// (at-least-once) rather than silently consumed. A resource checked for the
+// fails partway (EnqueueJob failing) every resource stays "dirty" and the
+// trigger is retried on the next poll (at-least-once) rather than silently
+// consumed. A resource checked for the
 // first time ever seeds a baseline and is never itself considered dirty on
 // that first check — this keeps a fresh (or freshly lost) state db from
 // mass-triggering every job on daemon startup.
 func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, error) {
 	observed := map[string]observedResource{}
 
+	var failures []error
+
 	for _, name := range Resources(cfg) {
+		// Shutdown fails every check left; stopping keeps one cancellation from becoming a failure per resource.
+		if ctx.Err() != nil {
+			return nil, errors.Join(append(failures, ctx.Err())...)
+		}
+
 		obs, hasVersion, err := observe(events.WithLogAttrs(ctx, "resource", name), cfg, st, name)
 		if err != nil {
-			return nil, checkFailure{resource: name, err: err}
+			failures = append(failures, checkFailure{resource: name, err: err})
+
+			continue
 		}
 
 		if hasVersion {
@@ -338,7 +367,7 @@ func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, 
 
 	enqueued, err := enqueueAffected(ctx, cfg, st, observed)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(append(failures, err)...)
 	}
 
 	// Then release anything a passed: constraint was holding back. This runs
@@ -350,7 +379,7 @@ func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, 
 	// which is to say, forever.
 	released, err := releaseConstrainedJobs(ctx, cfg, st, enqueued)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(append(failures, err)...)
 	}
 
 	enqueued = append(enqueued, released...)
@@ -361,13 +390,13 @@ func pollOnce(ctx context.Context, cfg *config.Config, st PollStore) ([]string, 
 	for resourceName, obs := range observed {
 		err := advance(ctx, st, resourceName, obs)
 		if err != nil {
-			return enqueued, checkFailure{resource: resourceName, err: err}
+			return enqueued, errors.Join(append(failures, checkFailure{resource: resourceName, err: err})...)
 		}
 	}
 
 	sort.Strings(enqueued)
 
-	return enqueued, nil
+	return enqueued, errors.Join(failures...)
 }
 
 // checkFailure is a resource's turn in a poll failing — its check or its advance — carrying which resource so the line reporting it can say so. Its text is the underlying error's, which already names the resource.
@@ -409,11 +438,11 @@ func observe(ctx context.Context, cfg *config.Config, st PollStore, name string)
 // recordCheckOutcome files why a check failed, or clears what a previous one
 // filed.
 //
-// It exists because the poll ABORTS on the first resource that errors: the
-// recorded version stays exactly where it was, nothing further is checked,
-// and the only trace is a log line on whichever machine runs the daemon. A
-// reader looking at the UI saw a resource whose last-checked time was merely
-// getting older, which is indistinguishable from a quiet one.
+// It exists because a failing check leaves its resource's recorded version
+// exactly where it was — the poll skips it and carries on with the others —
+// and otherwise the only trace is a log line on whichever machine runs the
+// daemon. A reader looking at the UI saw a resource whose last-checked time
+// was merely getting older, which is indistinguishable from a quiet one.
 //
 // Its own failure is logged rather than returned: this is a diagnostic about
 // a poll, and losing the real error to report a bookkeeping one would trade a

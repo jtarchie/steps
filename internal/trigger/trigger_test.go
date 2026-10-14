@@ -466,7 +466,11 @@ jobs:
 	}
 }
 
-func TestPollOnceDoesNotConsumeChangeWhenLaterCheckFails(t *testing.T) {
+// TestPollOnceChecksEachResourceIndependently: a failing check neither stops
+// another resource triggering nor advances its own — Concourse checks each
+// resource on its own, and what the failed one missed is built once it
+// recovers.
+func TestPollOnceChecksEachResourceIndependently(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -475,8 +479,8 @@ func TestPollOnceDoesNotConsumeChangeWhenLaterCheckFails(t *testing.T) {
 	writeVersions(t, versionsA, `[{"ref":"v1"}]`)
 	writeVersions(t, versionsB, `[{"ref":"v1"}]`)
 
-	// thing-a is in the first job, so Resources() lists (and pollOnce checks)
-	// it before thing-b: it is observed dirty before thing-b's error aborts.
+	// thing-b is in the first job, so Resources() lists (and pollOnce checks)
+	// it first: its failure comes before thing-a is even looked at.
 	cfg := loadConfig(t, dir, fmt.Sprintf(`
 defaults:
   preflight:
@@ -495,13 +499,13 @@ resources:
   type: dummy-b
   source: {}
 jobs:
-- name: build-a
-  plan:
-  - get: thing-a
-    trigger: true
 - name: build-b
   plan:
   - get: thing-b
+    trigger: true
+- name: build-a
+  plan:
+  - get: thing-a
     trigger: true
 `, versionsA, versionsB))
 
@@ -521,24 +525,69 @@ jobs:
 		t.Fatalf("remove versions-b: %v", err)
 	}
 
-	_, err = pollOnce(ctx, cfg, st)
-	if err == nil {
-		t.Fatal("pollOnce: expected an error from the failing thing-b check")
+	enqueued, err := pollOnce(ctx, cfg, st)
+	if err == nil || !strings.Contains(err.Error(), "thing-b") {
+		t.Fatalf("pollOnce: err = %v, want thing-b's failing check", err)
 	}
 
-	// Heal thing-b (back to its unchanged baseline). thing-a's change must
-	// still be pending — its version was not advanced by the failed poll.
-	writeVersions(t, versionsB, `[{"ref":"v1"}]`)
+	if !reflect.DeepEqual(enqueued, []string{"build-a"}) {
+		t.Fatalf("enqueued = %v, want [build-a] (thing-b's failure must not hold thing-a back)", enqueued)
+	}
 
-	enqueued, err := pollOnce(ctx, cfg, st)
+	// thing-b recovers with a version it was failing to report. thing-a was
+	// advanced, so it does not trigger again; thing-b was not, so it does.
+	writeVersions(t, versionsB, `[{"ref":"v1"},{"ref":"v2"}]`)
+
+	enqueued, err = pollOnce(ctx, cfg, st)
 	if err != nil {
 		t.Fatalf("pollOnce (healed): %v", err)
 	}
 
-	if !reflect.DeepEqual(enqueued, []string{"build-a"}) {
-		t.Fatalf("enqueued = %v, want [build-a] (thing-a's change must survive the earlier failed poll)", enqueued)
+	if !reflect.DeepEqual(enqueued, []string{"build-b"}) {
+		t.Fatalf("enqueued = %v, want [build-b]", enqueued)
 	}
 }
+
+// TestPollOnceStillAdvancesNothingWhenEnqueueFails: the at-least-once half
+// that independence must not loosen — a failed check beside it changes
+// nothing about a healthy resource staying dirty when its job could not be
+// queued.
+func TestPollOnceStillAdvancesNothingWhenEnqueueFails(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	versions := filepath.Join(dir, "versions.json")
+	writeVersions(t, versions, `[{"ref":"v1"}]`)
+
+	cfg := loadConfig(t, dir, dummyPipeline(versions, filepath.Join(dir, "task-counter.txt")))
+	st := mustOpenStore(t, dir)
+	ctx := context.Background()
+
+	_, err := pollOnce(ctx, cfg, st)
+	if err != nil {
+		t.Fatalf("pollOnce (baseline): %v", err)
+	}
+
+	writeVersions(t, versions, `[{"ref":"v1"},{"ref":"v2"}]`)
+
+	_, err = pollOnce(ctx, cfg, refusingEnqueue{st})
+	if err == nil {
+		t.Fatal("pollOnce: a refused enqueue reported no error")
+	}
+
+	enqueued, err := pollOnce(ctx, cfg, st)
+	if err != nil {
+		t.Fatalf("pollOnce (retry): %v", err)
+	}
+
+	if !reflect.DeepEqual(enqueued, []string{"build"}) {
+		t.Fatalf("enqueued = %v, want [build] (the change must survive the refused enqueue)", enqueued)
+	}
+}
+
+type refusingEnqueue struct{ store.Store }
+
+func (refusingEnqueue) EnqueueJob(context.Context, string, string) error { return os.ErrPermission }
 
 // The line is the operator's only sign a poll enqueued anything.
 func TestPollAndLogSaysWhatItEnqueued(t *testing.T) {

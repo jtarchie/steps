@@ -122,6 +122,64 @@ func TestAnUnrecordedCheckOutcomeIsLogged(t *testing.T) {
 	}
 }
 
+const twoBrokenFeeds = `
+defaults:
+  preflight:
+    disabled: true
+resource_types:
+- name: broken
+  config: {check: "exit 1"}
+resources:
+- {name: first, type: broken, source: {}}
+- {name: second, type: broken, source: {}}
+jobs:
+- name: a
+  plan: [{get: first, trigger: true}]
+- name: b
+  plan: [{get: second, trigger: true}]
+`
+
+// TestEveryFailingCheckGetsItsOwnLine: a poll carries on past a failing check,
+// so several can fail at once, and each line must still say whose it is.
+func TestEveryFailingCheckGetsItsOwnLine(t *testing.T) {
+	dir := t.TempDir()
+	cfg := loadConfig(t, dir, twoBrokenFeeds)
+	st := mustOpenStore(t, dir)
+	out := captureLog(t)
+
+	pollAndLog(t.Context(), cfg, st)
+
+	var named []string
+
+	for line := range strings.SplitSeq(out.String(), "\n") {
+		if strings.Contains(line, "msg=trigger.poll ") {
+			named = append(named, line)
+		}
+	}
+
+	if len(named) != 2 || !strings.Contains(named[0], "resource=first") || !strings.Contains(named[1], "resource=second") {
+		t.Errorf("trigger.poll lines = %q, want one naming each failing resource", named)
+	}
+}
+
+// TestAShutdownIsOneLineNotOnePerResource: cancelling the daemon fails every
+// check still to run, and reporting each would bury the one fact — it stopped.
+func TestAShutdownIsOneLineNotOnePerResource(t *testing.T) {
+	dir := t.TempDir()
+	cfg := loadConfig(t, dir, twoBrokenFeeds)
+	st := mustOpenStore(t, dir)
+	out := captureLog(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	pollAndLog(ctx, cfg, st)
+
+	if got := strings.Count(out.String(), "msg=trigger.poll "); got != 1 {
+		t.Errorf("a cancelled poll logged %d trigger.poll lines, want 1:\n%s", got, out)
+	}
+}
+
 // TestARefusedDeliveryNamesItsPipelineAndRevision: webhook lines come from a
 // request, not the daemon's poll loop, so they are stamped where the request
 // resolves its resource.
