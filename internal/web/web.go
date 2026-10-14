@@ -462,6 +462,8 @@ func (s *Server) routes() error {
 		e.GET(authorizePath, s.handleAuthorize)
 		e.POST(authorizePath, s.handleConsent)
 		e.POST(tokenPath, s.handleToken)
+		e.GET(connectionsPath, s.handleConnections)
+		e.POST(revokePath, s.handleRevoke)
 		// The methods MCP's streamable HTTP transport uses: POST a message, GET a stream, DELETE a session.
 		e.POST(exportPath, s.handleExport)
 		e.GET(exportPath, s.handleExport)

@@ -40,7 +40,7 @@ jobs:
 `
 
 // exportServer is a daemon serving one pipeline with one export, alex and bob signed in, and the accounts behind them.
-func exportServer(t *testing.T) (*Server, store.Accounts) {
+func exportServer(t *testing.T, extra ...Option) (*Server, store.Accounts) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -66,14 +66,15 @@ func exportServer(t *testing.T) (*Server, store.Accounts) {
 
 	t.Cleanup(func() { _ = accounts.Close() })
 
-	server, err := New([]*Pipeline{NewPipeline("ops", path, cfg, st, events.New(nil))}, nil,
-		WithSessions(accounts), WithLocalUsers([]LocalUser{{Name: "alex", Hash: []byte(mustHash(t, "a"))}}), WithExternalURL("https://steps.example"))
+	opts := append([]Option{WithSessions(accounts), WithLocalUsers([]LocalUser{{Name: "alex", Hash: []byte(mustHash(t, "a"))}}), WithExternalURL("https://steps.example")}, extra...)
+
+	server, err := New([]*Pipeline{NewPipeline("ops", path, cfg, st, events.New(nil))}, nil, opts...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
 	for _, who := range []string{"alex", "bob"} {
-		err := accounts.CreateSession(t.Context(), store.Session{TokenHash: tokenDigest(who), Actor: "local:" + who, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)})
+		err := accounts.CreateSession(t.Context(), sessionFor(who))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -349,4 +350,9 @@ func TestARefreshAsksAgain(t *testing.T) {
 	if err != nil || found {
 		t.Errorf("the grant's access token still works after access ended (%v, %v)", found, err)
 	}
+}
+
+// sessionFor is a signed-in local account whose cookie is its own name.
+func sessionFor(who string) store.Session {
+	return store.Session{TokenHash: tokenDigest(who), Actor: "local:" + who, CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
 }

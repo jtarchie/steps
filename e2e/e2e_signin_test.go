@@ -36,7 +36,7 @@ func TestABrowserSignsInAndOut(t *testing.T) {
 	cookies := signedInPageOffersSignOut(t, served.addr, page)
 	signingOutEndsTheSession(t, served.addr, page, cookies)
 
-	_, location, _ := signIn(t, served.addr, "alex", "a", "//evil.example")
+	_, location, _ := signIn(t, served.addr, "//evil.example")
 	if location != "/" {
 		t.Errorf("a sign-in asked to go on to //evil.example went to %q, want /", location)
 	}
@@ -59,7 +59,7 @@ func signingInTakesYouBack(t *testing.T, addr, page string) {
 func signedInPageOffersSignOut(t *testing.T, addr, page string) []*http.Cookie {
 	t.Helper()
 
-	code, location, cookies := signIn(t, addr, "alex", "a", page)
+	code, location, cookies := signIn(t, addr, page)
 	if code != http.StatusSeeOther || location != page || len(cookies) == 0 {
 		t.Fatalf("signing in = %d to %q with %d cookies; want sent on to %s with a session", code, location, len(cookies), page)
 	}
@@ -87,10 +87,11 @@ func signingOutEndsTheSession(t *testing.T, addr, page string, cookies []*http.C
 	}
 }
 
-func signIn(t *testing.T, addr, user, pass, next string) (int, string, []*http.Cookie) {
+// signIn signs alex — whose password every fixture here sets to "a" — in through the form.
+func signIn(t *testing.T, addr, next string) (int, string, []*http.Cookie) {
 	t.Helper()
 
-	form := "username=" + user + "&password=" + pass + "&next=" + url.QueryEscape(next)
+	form := "username=alex&password=a&next=" + url.QueryEscape(next)
 
 	client, req := browserRequest(t, addr, http.MethodPost, "/login", form, nil)
 

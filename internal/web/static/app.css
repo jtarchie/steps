@@ -1320,3 +1320,20 @@ table.mcp-exports td { white-space: nowrap; }
   .consent-facts dd { margin-bottom: 8px; }
   table.consent-tools td:nth-child(2), table.consent-tools td:nth-child(3) { white-space: normal; }
 }
+
+/* ---- connections ---- */
+.connections { list-style: none; padding: 0; margin: 0; border: 1px solid var(--line); background: var(--panel); }
+.connection { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 10px 14px; border-top: 1px solid var(--line-soft); }
+.connection:first-child { border-top: 0; }
+.conn-client { color: var(--fg); font-weight: 600; }
+.conn-meta { grid-column: 1; margin: 0; }
+.conn-revoke { grid-column: 2; grid-row: 1 / span 2; align-self: start; justify-self: end; }
+.conn-revoke summary { list-style: none; cursor: pointer; }
+.conn-revoke summary::-webkit-details-marker { display: none; }
+.conn-revoke[open] summary { opacity: .6; }
+.conn-revoke form { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-family: var(--sans); font-size: 12px; }
+@media (max-width: 640px) {
+  .connection { grid-template-columns: 1fr; }
+  .conn-revoke { grid-column: 1; grid-row: auto; justify-self: end; }
+  .conn-revoke form { flex-wrap: wrap; }
+}

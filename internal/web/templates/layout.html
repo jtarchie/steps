@@ -73,6 +73,7 @@
       <div class="pipemenu" id="usermenu" role="menu" aria-label="Account">
         <span class="menuhead">{{template "actor" .}}</span>
         {{if ge $.Nav.Role 3}}<a role="menuitem" href="/activity">activity</a>{{end}}
+        {{if $.Nav.CanSignOut}}<a role="menuitem" href="/connections">connections</a>{{end}}
         {{if $.Nav.CanSignOut}}<form method="post" action="/logout"><button class="menubtn" role="menuitem" type="submit">sign out</button></form>{{end}}
       </div>
     </div>{{end}}

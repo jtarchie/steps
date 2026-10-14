@@ -129,7 +129,7 @@ func connectAgent(t *testing.T, addr, export string) string {
 	base := "http://" + addr
 	redirect := "http://127.0.0.1:1/callback"
 
-	_, _, cookies := signIn(t, addr, "alex", "a", "/")
+	_, _, cookies := signIn(t, addr, "/")
 
 	client := registerAgent(t, base, redirect)
 	verifier := "e2e-verifier-0123456789-0123456789-0123456789-0123456789"
@@ -270,4 +270,52 @@ func pkceChallenge(verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))
 
 	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+var clientInput = regexp.MustCompile(`name="client" value="([^"]+)"`)
+
+// Disconnecting an agent ends it at its next call, not at its token's expiry. Not t.Parallel(), for startWeb's reason.
+func TestRevokingAConnectionEndsItAtOnce(t *testing.T) {
+	upstream := startDocMCPServer(t, docMCPTool{name: "search_issues", required: []string{"query"}, reply: func(map[string]any) string { return "ok" }})
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ops.yml")
+	writePipelineFile(t, path, "defaults:\n  preflight:\n    disabled: true\nmcp_servers:\n- name: github\n  endpoint: "+upstream.URL+"\nmcp_exports:\n- name: support\n  access: \"true\"\n  tools:\n  - mcp: github\n    tool: search_issues\njobs:\n- name: build\n  plan:\n  - task: say\n    run: echo hi\n")
+
+	served := startWeb(t, "--db", filepath.Join(dir, "daemon.db"), "--local-user", "alex:"+hashed(t, "a"))
+	defer served.stopIfRunning(t)
+
+	err := cli.Run([]string{"pipeline", "set", "-p", "ops", "-c", path, "-n", "--target", authTarget(served.addr, "alex", "a")})
+	if err != nil {
+		t.Fatalf("steps pipeline set: %v", err)
+	}
+
+	token := connectAgent(t, served.addr, "support")
+	session := mcpSession(t, "http://"+served.addr+"/mcp/x/ops/support", token)
+
+	_, err = session.CallTool(t.Context(), &sdkmcp.CallToolParams{Name: "github__search_issues", Arguments: map[string]any{"query": "before"}})
+	if err != nil {
+		t.Fatalf("a call before revoking: %v", err)
+	}
+
+	_, _, cookies := signIn(t, served.addr, "/")
+	_, _, page := browse(t, served.addr, http.MethodGet, "/connections", "", cookies)
+
+	client := clientInput.FindStringSubmatch(page)
+	if len(client) < 2 || !strings.Contains(page, "ops / support") {
+		t.Fatalf("the connections page does not list the agent:\n%s", page)
+	}
+
+	code, _, _ := browse(t, served.addr, http.MethodPost, "/connections/revoke", url.Values{"client": {client[1]}, "pipeline": {"ops"}, "export": {"support"}}.Encode(), cookies)
+	if code != http.StatusSeeOther {
+		t.Fatalf("revoke = %d, want 303", code)
+	}
+
+	if code := bearerPost(t, "http://"+served.addr+"/mcp/x/ops/support", token); code != http.StatusUnauthorized {
+		t.Errorf("the revoked agent's next request = %d, want refused", code)
+	}
+
+	if _, _, after := browse(t, served.addr, http.MethodGet, "/connections", "", cookies); strings.Contains(after, "ops / support") {
+		t.Error("the revoked agent is still listed")
+	}
 }

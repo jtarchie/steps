@@ -269,6 +269,10 @@ The daemon asks every time, on a page that says plainly what is being agreed to:
 - A token is for one export: it opens nothing at another, even in the same pipeline.
 - Exports are served only by a daemon people sign in to, and not by a `--read-only` one, since calling a tool is acting.
 
+### Disconnecting an agent
+
+**connections**, in the menu under your name, lists every agent you have let connect: the name it gave itself (unverified), where it sends people back, which export, when you agreed, when it last called and how many times. **Revoke** asks once more, then ends every token the agent holds for that export — its next call fails, and it cannot refresh its way back. An admin can switch the page to **everyone** and disconnect anybody's agent. Both are recorded in the activity log as `mcp disconnect`.
+
 ## Backing a resource type with MCP
 
 ```yaml mcp=mcp-linear-issues

@@ -104,6 +104,7 @@ var activityRoutes = map[string]activityRoute{
 var notRecorded = map[string]string{ //nolint:gosec // route keys and reasons, not credentials
 	"POST /mcp/x/:pipeline/:export":     "an agent's call, recorded per tool by the export's own After hook as mcp call",
 	"DELETE /mcp/x/:pipeline/:export":   "ending an MCP session, which a stateless export never holds",
+	"POST /connections/revoke":          "recorded by handleRevoke itself as mcp disconnect, against the pipeline the connection was to — this route carries none in its path",
 	"POST /login":                       "signing in is about the daemon, not a pipeline, and the log is written through a pipeline's handle; the daemon's log line web.signed_in records it",
 	"POST /logout":                      "as POST /login: web.signed_out in the daemon's log",
 	"POST /oauth/register":              "an agent registering itself is nobody acting; the person who later lets it connect is recorded then",
@@ -320,19 +321,20 @@ func (s *Server) activityRowFor(entry store.ActivityEntry) activityRow {
 
 // targetPages is where each verb's target lives, under its pipeline.
 var targetPages = map[string]func(target string) string{
-	"trigger":       func(job string) string { return "/jobs/" + job },
-	"release":       func(job string) string { return "/jobs/" + job },
-	"abort queued":  func(job string) string { return "/jobs/" + job },
-	"rerun":         func(run string) string { return "/runs/" + run },
-	"abort":         func(run string) string { return "/runs/" + run },
-	"set":           func(sha string) string { return "/config/" + sha },
-	"approve":       func(string) string { return "/approvals" },
-	"reject":        func(string) string { return "/approvals" },
-	"answer":        func(string) string { return "/questions" },
-	"mcp connect":   func(string) string { return "/mcp" },
-	"mcp test":      func(string) string { return "/mcp" },
-	"mcp call":      func(export string) string { return "/mcp/exports/" + export },
-	"mcp authorize": func(export string) string { return "/mcp/exports/" + export },
+	"trigger":        func(job string) string { return "/jobs/" + job },
+	"release":        func(job string) string { return "/jobs/" + job },
+	"abort queued":   func(job string) string { return "/jobs/" + job },
+	"rerun":          func(run string) string { return "/runs/" + run },
+	"abort":          func(run string) string { return "/runs/" + run },
+	"set":            func(sha string) string { return "/config/" + sha },
+	"approve":        func(string) string { return "/approvals" },
+	"reject":         func(string) string { return "/approvals" },
+	"answer":         func(string) string { return "/questions" },
+	"mcp connect":    func(string) string { return "/mcp" },
+	"mcp test":       func(string) string { return "/mcp" },
+	"mcp call":       func(export string) string { return "/mcp/exports/" + export },
+	"mcp authorize":  func(export string) string { return "/mcp/exports/" + export },
+	"mcp disconnect": func(export string) string { return "/mcp/exports/" + export },
 }
 
 // withQuery is the page's own URL with one parameter set, or removed when empty; paging always restarts, since an older-than cursor belongs to the filter it was read under.
