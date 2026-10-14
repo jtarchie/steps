@@ -21,4 +21,6 @@ type Delivery struct {
 type Dispatch struct {
 	Jobs []string
 	Held bool
+	// By is who the queued rows say asked (actor.Actor's stored form).
+	By string
 }

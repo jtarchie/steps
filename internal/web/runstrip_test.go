@@ -81,7 +81,7 @@ func TestRunPageStripShowsAQueuedTriggerAsItsFollowLink(t *testing.T) {
 
 	ctx := context.Background()
 
-	err := pipeline.Store.EnqueueJob(ctx, "build", "test")
+	err := pipeline.Store.EnqueueJob(ctx, "build", "test", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}

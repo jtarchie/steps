@@ -141,6 +141,7 @@ linters:
             - "go.uber.org/goleak"
             - "github.com/modelcontextprotocol/go-sdk/mcp"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/actor"
             - "github.com/jtarchie/steps/internal/pipeline"
             # blobstore is provider setup, like workspace below: the CLI parses
             # --artifact-store, builds the S3 client, and hands it into the
@@ -385,6 +386,15 @@ linters:
         Outcome:
           files:
             - "**/internal/outcome/**"
+          allow:
+            - "$gostd"
+        # actor names who or what caused a recorded act. A stdlib-only leaf so
+        # the request that learns the person (web) and every package that
+        # enqueues on its behalf (scheduler, trigger) share one vocabulary
+        # without importing each other; the store keeps its string form.
+        Actor:
+          files:
+            - "**/internal/actor/**"
           allow:
             - "$gostd"
         # store is the CONTRACT: row types, error sentinels, and the Store and
@@ -827,6 +837,7 @@ linters:
             # llmclient for one call: a job run's provider session (WithNewRun), which is the client layer's and not a conversation's.
             - "github.com/jtarchie/steps/internal/agent/llmclient"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/actor"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/runview"
             - "github.com/jtarchie/steps/internal/merkle"
@@ -857,6 +868,7 @@ linters:
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/actor"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/pipeline"
             - "github.com/jtarchie/steps/internal/store"
@@ -881,6 +893,7 @@ linters:
             # package's tests if any leaves a goroutine running.
             - "go.uber.org/goleak"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/actor"
             # events carries a line's identity: poll and webhook lines add the
             # revision and resource they concern (events.WithLogAttrs).
             - "github.com/jtarchie/steps/internal/events"
@@ -936,6 +949,7 @@ linters:
             - "github.com/alecthomas/chroma/v3/formatters/html"
             - "github.com/jtarchie/steps/docs"
             - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/actor"
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/runview"
             # scheduler for its Pipeline handle, which web.Pipeline embeds and

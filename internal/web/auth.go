@@ -4,9 +4,12 @@ package web
 
 import (
 	"crypto/subtle"
+	"net/http"
 	"strings"
 
 	"github.com/labstack/echo/v5"
+
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/labstack/echo/v5/middleware"
 )
 
@@ -40,10 +43,23 @@ func (a *basicAuth) middleware() echo.MiddlewareFunc {
 	return middleware.BasicAuthWithConfig(middleware.BasicAuthConfig{
 		Realm:   authRealm,
 		Skipper: skipAuth,
-		Validator: func(_ *echo.Context, username, password string) (bool, error) {
-			return a.matches(username, password), nil
+		Validator: func(c *echo.Context, username, password string) (bool, error) {
+			if !a.matches(username, password) {
+				return false, nil
+			}
+
+			c.SetRequest(actingAs(c.Request(), actor.Local(username)))
+
+			return true, nil
 		},
 	})
+}
+
+// actingAs is r carrying who made it, for everything the handler calls.
+//
+// @contextcheck(req_has_ctx)
+func actingAs(r *http.Request, a actor.Actor) *http.Request {
+	return r.WithContext(actor.With(r.Context(), a))
 }
 
 // MCPCallbackPath is where an authorization server redirects the browser to finish a login this daemon started; the CLI builds the redirect URI from it, so it is one constant.

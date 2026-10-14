@@ -19,7 +19,7 @@ func TestResetStaleRunningIsAllOrNothing(t *testing.T) {
 
 	mustStartRun(t, st, "r1", "build")
 
-	err := st.EnqueueJob(ctx, "build", "test")
+	err := st.EnqueueJob(ctx, "build", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}

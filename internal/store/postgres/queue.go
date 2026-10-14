@@ -12,28 +12,28 @@ import (
 )
 
 // EnqueueJob inserts a pending row for jobName unless one is already pending.
-func (s *Store) EnqueueJob(ctx context.Context, jobName, reason string) error {
-	return enqueueJob(ctx, s.db, s.pipelineID, jobName, reason)
+func (s *Store) EnqueueJob(ctx context.Context, jobName, reason, by string) error {
+	return enqueueJob(ctx, s.db, s.pipelineID, jobName, reason, by)
 }
 
-func enqueueJob(ctx context.Context, db executor, pipelineID int64, jobName, reason string) error {
-	return enqueueJobs(ctx, db, pipelineID, []string{jobName}, reason)
+func enqueueJob(ctx context.Context, db executor, pipelineID int64, jobName, reason, by string) error {
+	return enqueueJobs(ctx, db, pipelineID, []string{jobName}, reason, by)
 }
 
 // enqueueJobs is enqueueJob for several jobs in one statement, queued in the
 // order given.
-func enqueueJobs(ctx context.Context, db executor, pipelineID int64, jobNames []string, reason string) error {
+func enqueueJobs(ctx context.Context, db executor, pipelineID int64, jobNames []string, reason, by string) error {
 	if len(jobNames) == 0 {
 		return nil
 	}
 
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO trigger_queue (pipeline_id, job_name, reason, status, enqueued_at)
-		SELECT $1, job_name, $3, 'pending', $4
+		INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, status, enqueued_at)
+		SELECT $1, job_name, $3, $5, 'pending', $4
 		FROM unnest($2::text[]) WITH ORDINALITY AS j(job_name, position)
 		ORDER BY position
 		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL DO NOTHING
-	`, pipelineID, jobNames, clean(reason), now())
+	`, pipelineID, jobNames, clean(reason), now(), clean(by))
 	if err != nil && len(jobNames) == 1 {
 		return fmt.Errorf("could not enqueue job %q: %w", jobNames[0], err)
 	}
@@ -46,13 +46,13 @@ func enqueueJobs(ctx context.Context, db executor, pipelineID int64, jobNames []
 }
 
 // EnqueueManualJob upserts, so a pending automatic row becomes manual.
-func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason string) error {
+func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason, by string) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO trigger_queue (pipeline_id, job_name, reason, manual, status, enqueued_at)
-		VALUES ($1, $2, $3, TRUE, 'pending', $4)
+		INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, manual, status, enqueued_at)
+		VALUES ($1, $2, $3, $5, TRUE, 'pending', $4)
 		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL
-		DO UPDATE SET manual = TRUE, reason = excluded.reason
-	`, s.pipelineID, jobName, clean(reason), now())
+		DO UPDATE SET manual = TRUE, reason = excluded.reason, requested_by = excluded.requested_by
+	`, s.pipelineID, jobName, clean(reason), now(), clean(by))
 	if err != nil {
 		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
 	}
@@ -61,12 +61,12 @@ func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason string) er
 }
 
 // EnqueueRerunJob queues a retry of a recorded run.
-func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID string) error {
+func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID, by string) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO trigger_queue (pipeline_id, job_name, reason, manual, rerun_of, status, enqueued_at)
-		VALUES ($1, $2, $3, TRUE, $4, 'pending', $5)
+		INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, manual, rerun_of, status, enqueued_at)
+		VALUES ($1, $2, $3, $6, TRUE, $4, 'pending', $5)
 		ON CONFLICT (pipeline_id, rerun_of) WHERE status = 'pending' AND rerun_of IS NOT NULL AND run_id IS NULL DO NOTHING
-	`, s.pipelineID, jobName, clean(reason), runID, now())
+	`, s.pipelineID, jobName, clean(reason), runID, now(), clean(by))
 	if err != nil {
 		return fmt.Errorf("could not queue a rerun of %q: %w", runID, err)
 	}

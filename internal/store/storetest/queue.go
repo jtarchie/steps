@@ -102,7 +102,7 @@ func (s suite) TestListTriggerQueue(t *testing.T) {
 	ctx := context.Background()
 	st := s.open(t, "test")
 
-	err := st.EnqueueJob(ctx, "build", "resource repo changed")
+	err := st.EnqueueJob(ctx, "build", "resource repo changed", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,9 +278,9 @@ func (s suite) TestAManualEnqueueIsMarkedWhicheverArrivesFirst(t *testing.T) {
 			for _, manual := range tc.manual {
 				var err error
 				if manual {
-					err = st.EnqueueManualJob(ctxFor(t), "build", "trigger (web)")
+					err = st.EnqueueManualJob(ctxFor(t), "build", "trigger (web)", "")
 				} else {
-					err = st.EnqueueJob(ctxFor(t), "build", "a new version")
+					err = st.EnqueueJob(ctxFor(t), "build", "a new version", "")
 				}
 
 				if err != nil {
@@ -314,7 +314,7 @@ func (s suite) TestARerunIsQueuedBesideAnOrdinaryTrigger(t *testing.T) {
 	mustEnqueueJob(t, st, "build", "a new version")
 
 	for range 2 {
-		err = st.EnqueueRerunJob(ctxFor(t), "build", "retry (web)", "ORIGINAL")
+		err = st.EnqueueRerunJob(ctxFor(t), "build", "retry (web)", "ORIGINAL", "")
 		if err != nil {
 			t.Fatalf("EnqueueRerunJob: %v", err)
 		}
@@ -358,7 +358,7 @@ func claimAndComplete(t *testing.T, st store.Queue) store.ClaimedJob {
 func mustEnqueueJob(t *testing.T, st store.Store, jobName, reason string) {
 	t.Helper()
 
-	err := st.EnqueueJob(context.Background(), jobName, reason)
+	err := st.EnqueueJob(context.Background(), jobName, reason, "")
 	if err != nil {
 		t.Fatalf("EnqueueJob(%q, %q): %v", jobName, reason, err)
 	}

@@ -366,7 +366,7 @@ func enqueueDirectly(t *testing.T, state, name, job string) {
 
 	defer func() { _ = st.Close() }()
 
-	err = st.EnqueueJob(t.Context(), job, "test")
+	err = st.EnqueueJob(t.Context(), job, "test", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}

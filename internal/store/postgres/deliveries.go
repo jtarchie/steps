@@ -73,7 +73,7 @@ func (s *Store) dispatchDelivery(ctx context.Context, tx *sql.Tx, resourceName s
 		return err
 	}
 
-	return enqueueJobs(ctx, tx, s.pipelineID, dispatch.Jobs, resourceName)
+	return enqueueJobs(ctx, tx, s.pipelineID, dispatch.Jobs, resourceName, dispatch.By)
 }
 
 // pruneAfterDelivery is RecordVersions' cap, with the delivery as the whole

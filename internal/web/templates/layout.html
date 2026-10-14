@@ -118,6 +118,12 @@
 </html>
 {{end}}
 
+{{/* Who or what did something, from its stored form. A person reads in the
+     foreground and anything automatic in the dim tone around it; a name
+     nothing verified says so in words, never in color alone. The stored form
+     rides in the title for a reader who needs the exact id. */}}
+{{define "actor"}}{{if .}}{{$a := actorOf .}}<span class="actor{{if or $a.Automatic $a.Unverified}} quiet{{end}}" title="{{.}}">{{$a.Label}}</span>{{end}}{{end}}
+
 {{/* The way back up from a detail page. A crumb with a URL links; the last
      one — the page the reader is on — is plain text. Collection pages pass
      no Crumbs and render nothing. */}}

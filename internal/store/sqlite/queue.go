@@ -24,16 +24,16 @@ import (
 // hand-queued clear rule to be safe. A job now reads what it should build
 // from resource_versions, so dropping a duplicate enqueue is once again
 // what it looks like: the job is already queued.
-func (s *Store) EnqueueJob(ctx context.Context, jobName, reason string) error {
-	return enqueueJob(ctx, s.db, s.pipelineID, jobName, reason)
+func (s *Store) EnqueueJob(ctx context.Context, jobName, reason, by string) error {
+	return enqueueJob(ctx, s.db, s.pipelineID, jobName, reason, by)
 }
 
-func enqueueJob(ctx context.Context, db executor, pipelineID int64, jobName, reason string) error {
+func enqueueJob(ctx context.Context, db executor, pipelineID int64, jobName, reason, by string) error {
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO trigger_queue (pipeline_id, job_name, reason, status, enqueued_at)
-		VALUES (?, ?, ?, 'pending', ?)
+		INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, status, enqueued_at)
+		VALUES (?, ?, ?, ?, 'pending', ?)
 		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL DO NOTHING
-	`, pipelineID, jobName, reason, nowNano())
+	`, pipelineID, jobName, reason, by, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
 	}
@@ -42,12 +42,13 @@ func enqueueJob(ctx context.Context, db executor, pipelineID int64, jobName, rea
 }
 
 // EnqueueManualJob upserts rather than deduplicates: a pending row an automatic trigger left must still become manual, or the person's click is merged into a row the breaker then skips.
-func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason string) error {
+func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason, by string) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO trigger_queue (pipeline_id, job_name, reason, manual, status, enqueued_at)
-		VALUES (?, ?, ?, 1, 'pending', ?)
-		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL DO UPDATE SET manual = 1, reason = excluded.reason
-	`, s.pipelineID, jobName, reason, nowNano())
+		INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, manual, status, enqueued_at)
+		VALUES (?, ?, ?, ?, 1, 'pending', ?)
+		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL
+		DO UPDATE SET manual = 1, reason = excluded.reason, requested_by = excluded.requested_by
+	`, s.pipelineID, jobName, reason, by, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
 	}
@@ -56,12 +57,12 @@ func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason string) er
 }
 
 // EnqueueRerunJob keeps the row even when the job has an ordinary one pending: they build different versions.
-func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID string) error {
+func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID, by string) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO trigger_queue (pipeline_id, job_name, reason, manual, rerun_of, status, enqueued_at)
-		VALUES (?, ?, ?, 1, ?, 'pending', ?)
+		INSERT INTO trigger_queue (pipeline_id, job_name, reason, requested_by, manual, rerun_of, status, enqueued_at)
+		VALUES (?, ?, ?, ?, 1, ?, 'pending', ?)
 		ON CONFLICT (pipeline_id, rerun_of) WHERE status = 'pending' AND rerun_of IS NOT NULL AND run_id IS NULL DO NOTHING
-	`, s.pipelineID, jobName, reason, runID, nowNano())
+	`, s.pipelineID, jobName, reason, by, runID, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not queue a rerun of %q: %w", runID, err)
 	}

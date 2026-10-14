@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
@@ -497,7 +498,7 @@ func enqueueAffected(ctx context.Context, cfg *config.Config, st PollStore, obse
 	enqueued := make([]string, 0, len(reasons))
 
 	for jobName, reason := range reasons {
-		err := st.EnqueueJob(ctx, jobName, reason)
+		err := st.EnqueueJob(ctx, jobName, reason, actor.Check(reason).String())
 		if err != nil {
 			return nil, fmt.Errorf("enqueue job %q: %w", jobName, err)
 		}
@@ -590,7 +591,7 @@ func releaseConstrainedJobs(
 			continue
 		}
 
-		err = st.EnqueueJob(ctx, job.Name, "upstream jobs passed this version")
+		err = st.EnqueueJob(ctx, job.Name, "upstream jobs passed this version", actor.Upstream().String())
 		if err != nil {
 			return nil, fmt.Errorf("enqueue job %q: %w", job.Name, err)
 		}

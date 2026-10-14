@@ -200,7 +200,7 @@ func requeueBacklog(t *testing.T, st store.Store, jobName string) func(context.C
 	t.Helper()
 
 	return func(ctx context.Context, _ int) {
-		err := st.EnqueueJob(ctx, jobName, "backlog")
+		err := st.EnqueueJob(ctx, jobName, "backlog", "")
 		if err != nil {
 			t.Errorf("EnqueueJob: %v", err)
 		}
@@ -321,7 +321,7 @@ jobs:
 	// Queue the same job again. The task is unchanged content over an
 	// unchanged version, so the planner must find it already recorded and the
 	// run must skip it.
-	err = st.EnqueueJob(ctx, "build", "items")
+	err = st.EnqueueJob(ctx, "build", "items", "")
 	if err != nil {
 		t.Fatal(err)
 	}

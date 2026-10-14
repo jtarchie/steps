@@ -58,7 +58,7 @@ func recordUntrusted(t *testing.T, state, osc string) {
 		t.Fatalf("AskQuestion: %v", err)
 	}
 
-	err = st.EnqueueJob(t.Context(), "build", "manual")
+	err = st.EnqueueJob(t.Context(), "build", "manual", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}

@@ -92,7 +92,7 @@ jobs:
 
 	PrepareQueue(t.Context(), target)
 
-	err = st.EnqueueJob(t.Context(), "build", "test")
+	err = st.EnqueueJob(t.Context(), "build", "test", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}

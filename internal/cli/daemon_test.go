@@ -145,7 +145,7 @@ func TestARefusalListingEveryRunningBuildClaimsNoMore(t *testing.T) {
 	setPipeline(t, held, "app", gatedJobs(gate, runningListed))
 
 	for i := range runningListed {
-		err = served(t, held, "app").Store.EnqueueJob(t.Context(), fmt.Sprintf("j%d", i), "test")
+		err = served(t, held, "app").Store.EnqueueJob(t.Context(), fmt.Sprintf("j%d", i), "test", "")
 		if err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
@@ -541,7 +541,7 @@ func served(t *testing.T, held *daemon, name string) *web.Pipeline {
 func enqueue(t *testing.T, held *daemon, name string) {
 	t.Helper()
 
-	err := served(t, held, name).Store.EnqueueJob(t.Context(), "build", "test")
+	err := served(t, held, name).Store.EnqueueJob(t.Context(), "build", "test", "")
 	if err != nil {
 		t.Fatalf("enqueue %s: %v", name, err)
 	}

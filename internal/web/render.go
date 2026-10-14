@@ -22,6 +22,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/runview"
 	"github.com/jtarchie/steps/internal/store"
 )
@@ -213,6 +214,9 @@ func templateFuncs() template.FuncMap {
 		"stamp":      formatStamp,
 		"short":      shortID,
 		"statusWord": templateStatusWord,
+		// A stored actor read back for the "actor" template, which is the one
+		// place a who is drawn.
+		"actorOf": actor.Parse,
 		// The footer's copyright year, read at render so a daemon left running
 		// over new year's eve does not print last year.
 		"year": func() int { return time.Now().Year() },

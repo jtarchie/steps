@@ -285,6 +285,15 @@ what it spent and where it ran on its own row.
   have), and the line under the header counts them. A step that broke
   because its content moved carries `changed`; one that failed with the same
   content as before does not; hooks are never compared.
+- **Every run says who or what started it**, after when it started: a
+  person by name and where the name came from (`by ops (local)`), or what
+  stood in for one (`by new version of repo`, `by webhook: push`,
+  `by upstream jobs passed`). A retry says what it repeated first
+  (`rerun of #a1b2c3 by ops (local)`), and a restart keeps the run's original
+  starter. A run started from a terminal with `steps run` names whoever ran
+  the command, marked `(this machine, unverified)`: nothing checked that
+  name, and the page says so in words. A run recorded before steps kept this
+  names nobody rather than guessing.
 - **Every run names the configuration it executed**, linking the pipeline as
   it was when that run started — which the file on disk no longer holds once
   anyone edits it. When a failed run's configuration differs from the last

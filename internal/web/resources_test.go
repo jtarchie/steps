@@ -86,7 +86,7 @@ func TestResourceDetailShowsWhatEachJobDidWithEachVersion(t *testing.T) {
 
 	recordRunOf(t, pipeline, "run-v2", "build", map[string]any{"ref": "v2"}, "succeeded")
 
-	err = pipeline.Store.EnqueueJob(ctx, "deploy", "test")
+	err = pipeline.Store.EnqueueJob(ctx, "deploy", "test", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}

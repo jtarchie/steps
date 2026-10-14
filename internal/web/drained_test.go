@@ -47,7 +47,7 @@ func drainable(t *testing.T, dir, yaml string) (*scheduler.LocalRunner, *Pipelin
 	scheduler.PrepareQueue(t.Context(), target.Pipeline)
 	scheduler.SyncQueueLimits(t.Context(), target.Pipeline)
 
-	err = st.EnqueueJob(t.Context(), "build", "test")
+	err = st.EnqueueJob(t.Context(), "build", "test", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}

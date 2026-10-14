@@ -345,7 +345,7 @@ func TestTheSwitcherCountsWhatIsInFlight(t *testing.T) {
 	}
 
 	for _, job := range []string{"build", "deploy"} {
-		err := pipeline.Store.EnqueueJob(context.Background(), job, "new version")
+		err := pipeline.Store.EnqueueJob(context.Background(), job, "new version", "")
 		if err != nil {
 			t.Fatalf("EnqueueJob: %v", err)
 		}

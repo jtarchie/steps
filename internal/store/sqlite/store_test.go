@@ -212,7 +212,7 @@ func TestStoreHasSucceededAndRecordChain(t *testing.T) {
 func mustEnqueueJob(t *testing.T, st *Store, jobName, reason string) {
 	t.Helper()
 
-	err := st.EnqueueJob(context.Background(), jobName, reason)
+	err := st.EnqueueJob(context.Background(), jobName, reason, "")
 	if err != nil {
 		t.Fatalf("EnqueueJob(%q, %q): %v", jobName, reason, err)
 	}

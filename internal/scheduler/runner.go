@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
@@ -163,7 +164,7 @@ func (r *LocalRunner) SetProvider(slug string, provider workspace.Provider) {
 
 // EnqueueRerun puts a person's retry of a run on the pipeline's queue.
 func (r *LocalRunner) EnqueueRerun(ctx context.Context, target *Pipeline, jobName, runID string) error {
-	err := target.Store.EnqueueRerunJob(ctx, jobName, "retry (web)", runID)
+	err := target.Store.EnqueueRerunJob(ctx, jobName, "retry (web)", runID, actor.From(ctx).String())
 	if err != nil {
 		return fmt.Errorf("scheduler: %w", err)
 	}
@@ -179,7 +180,7 @@ func (r *LocalRunner) Close() { r.providers.Close() }
 
 // Enqueue puts a person's trigger on the pipeline's queue.
 func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, reason string, force bool) (int64, error) {
-	err := target.Store.EnqueueManualJob(ctx, jobName, reason)
+	err := target.Store.EnqueueManualJob(ctx, jobName, reason, actor.From(ctx).String())
 	if err != nil {
 		return 0, fmt.Errorf("scheduler: %w", err)
 	}
@@ -655,7 +656,7 @@ func (r *LocalRunner) runJob(
 
 	// The next version waits on the queue, not in this run — see pipeline.Run.Backlog.
 	opts.Backlog = func(ctx context.Context, sets int) {
-		err := target.Store.EnqueueJob(ctx, job.Name, fmt.Sprintf("%d more version(s) to build", sets))
+		err := target.Store.EnqueueJob(ctx, job.Name, fmt.Sprintf("%d more version(s) to build", sets), actor.Backlog().String())
 		if err != nil {
 			slog.WarnContext(ctx, "web.job.backlog_unqueued", "pipeline", target.Slug, "job", job.Name, "waiting", sets, "error", err)
 		}

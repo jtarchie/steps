@@ -587,7 +587,9 @@ func TestPollOnceStillAdvancesNothingWhenEnqueueFails(t *testing.T) {
 
 type refusingEnqueue struct{ store.Store }
 
-func (refusingEnqueue) EnqueueJob(context.Context, string, string) error { return os.ErrPermission }
+func (refusingEnqueue) EnqueueJob(context.Context, string, string, string) error {
+	return os.ErrPermission
+}
 
 // The line is the operator's only sign a poll enqueued anything.
 func TestPollAndLogSaysWhatItEnqueued(t *testing.T) {

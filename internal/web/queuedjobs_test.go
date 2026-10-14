@@ -32,7 +32,7 @@ func TestTheJobsBoardSaysWhatIsQueuedAndWhy(t *testing.T) {
 		t.Fatalf("Pause: %v", err)
 	}
 
-	err = pipeline.Store.EnqueueJob(ctx, "build", "new version")
+	err = pipeline.Store.EnqueueJob(ctx, "build", "new version", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestTheQueueTableBlamesMaxRuns(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	err = pipeline.Store.EnqueueJob(context.Background(), "build", "new version")
+	err = pipeline.Store.EnqueueJob(context.Background(), "build", "new version", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestAnUnlimitedServerBlamesNoMaxRuns(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	err = pipeline.Store.EnqueueJob(context.Background(), "build", "new version")
+	err = pipeline.Store.EnqueueJob(context.Background(), "build", "new version", "")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}

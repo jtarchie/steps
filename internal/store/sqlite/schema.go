@@ -89,7 +89,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 21
+const schemaVersion = 22
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -300,6 +300,8 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
     rerun_of    TEXT REFERENCES runs(id) ON DELETE CASCADE,
     -- The run this row started, written when the run is minted; a restart resumes it while it still reads running. SET NULL: a reaped run leaves nothing to resume, and the row still says the job was built.
     run_id      TEXT REFERENCES runs(id) ON DELETE SET NULL,
+    -- Who or what asked (actor.Actor's stored form), copied onto the run this row starts; '' for nobody recorded.
+    requested_by TEXT NOT NULL DEFAULT '',
     status      TEXT NOT NULL,
     enqueued_at TEXT NOT NULL,
     started_at  TEXT,
@@ -526,7 +528,12 @@ CREATE TABLE IF NOT EXISTS runs (
     -- revision may only go once no run needs it. SET NULL would quietly turn
     -- a reaped revision into "this run ran no configuration", which is the
     -- one thing this column exists to deny.
-    revision_id INTEGER REFERENCES pipeline_revisions(id) ON DELETE RESTRICT
+    revision_id INTEGER REFERENCES pipeline_revisions(id) ON DELETE RESTRICT,
+    -- Who or what started the run (actor.Actor's stored form). A queued run's
+    -- is its queue row's requester, copied when the run is recorded rather
+    -- than joined later: retention trims the queue on its own schedule, and a
+    -- run must keep saying who started it after its row is gone.
+    created_by  TEXT NOT NULL DEFAULT ''
 );
 -- Retention orders a job's runs by recency to find the ones past the cap.
 CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(pipeline_id, job_name, started_at);

@@ -43,7 +43,7 @@ func TestConcurrentEnqueueAcrossProcesses(t *testing.T) {
 			if i%2 == 1 {
 				st = b
 			}
-			err := st.EnqueueJob(ctx, "build", "items")
+			err := st.EnqueueJob(ctx, "build", "items", "")
 			if err != nil {
 				errs <- err
 			}

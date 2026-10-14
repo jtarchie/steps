@@ -203,7 +203,7 @@ jobs:
 		}
 	}
 
-	err = inner.EnqueueJob(t.Context(), "deploy", "test")
+	err = inner.EnqueueJob(t.Context(), "deploy", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
