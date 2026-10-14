@@ -79,6 +79,73 @@ type fakeEC2 struct {
 	// launched is every instance a lost answer left behind, by its tags.
 	launched map[string]map[string]string
 	searches int
+
+	// tags are the parked instance's own, written by CreateTags and read back by every describe; launchTime is its last start, which StartInstances resets as EC2 does.
+	tags       map[string]string
+	launchTime time.Time
+	// tagErr is what CreateTags and DeleteTags answer, standing in for a missing permission.
+	tagErr error
+	// startErr is what StartInstances answers, standing in for a start EC2 refused.
+	startErr error
+	// calls is every mutating call in order, as "verb instance", which is what the tag-before-start and untag-before-stop orders are asserted on.
+	calls []string
+}
+
+func (f *fakeEC2) CreateTags(_ context.Context, in *ec2.CreateTagsInput, _ ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.calls = append(f.calls, "tag "+strings.Join(in.Resources, ","))
+
+	if f.tagErr != nil {
+		return nil, f.tagErr
+	}
+
+	if f.tags == nil {
+		f.tags = map[string]string{}
+	}
+
+	for _, tag := range in.Tags {
+		f.tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	}
+
+	return &ec2.CreateTagsOutput{}, nil
+}
+
+func (f *fakeEC2) DeleteTags(_ context.Context, in *ec2.DeleteTagsInput, _ ...func(*ec2.Options)) (*ec2.DeleteTagsOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.calls = append(f.calls, "untag "+strings.Join(in.Resources, ","))
+
+	if f.tagErr != nil {
+		return nil, f.tagErr
+	}
+
+	for _, tag := range in.Tags {
+		delete(f.tags, aws.ToString(tag.Key))
+	}
+
+	return &ec2.DeleteTagsOutput{}, nil
+}
+
+// withOwnTags dresses a describe answer in the instance's tags and last start.
+func (f *fakeEC2) withOwnTags(out *ec2.DescribeInstancesOutput) *ec2.DescribeInstancesOutput {
+	for i := range out.Reservations {
+		for j := range out.Reservations[i].Instances {
+			instance := &out.Reservations[i].Instances[j]
+
+			for _, key := range slices.Sorted(maps.Keys(f.tags)) {
+				instance.Tags = append(instance.Tags, ec2types.Tag{Key: aws.String(key), Value: aws.String(f.tags[key])})
+			}
+
+			if !f.launchTime.IsZero() {
+				instance.LaunchTime = aws.Time(f.launchTime)
+			}
+		}
+	}
+
+	return out
 }
 
 func (f *fakeEC2) StartInstances(_ context.Context, in *ec2.StartInstancesInput, _ ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error) {
@@ -89,7 +156,15 @@ func (f *fakeEC2) StartInstances(_ context.Context, in *ec2.StartInstancesInput,
 		return nil, &smithy.GenericAPIError{Code: "IncorrectInstanceState", Message: "The instance is not in a state from which it can be started"}
 	}
 
+	if f.startErr != nil {
+		f.calls = append(f.calls, "start "+strings.Join(in.InstanceIds, ","))
+
+		return nil, f.startErr
+	}
+
 	f.started = append(f.started, in.InstanceIds...)
+	f.calls = append(f.calls, "start "+strings.Join(in.InstanceIds, ","))
+	f.launchTime = time.Now()
 	f.describes = 0
 
 	return &ec2.StartInstancesOutput{}, nil
@@ -102,6 +177,7 @@ func (f *fakeEC2) StopInstances(_ context.Context, in *ec2.StopInstancesInput, _
 	defer f.mu.Unlock()
 
 	f.stopped = append(f.stopped, in.InstanceIds...)
+	f.calls = append(f.calls, "stop "+strings.Join(in.InstanceIds, ","))
 
 	return &ec2.StopInstancesOutput{}, nil
 }
@@ -111,6 +187,7 @@ func (f *fakeEC2) TerminateInstances(_ context.Context, in *ec2.TerminateInstanc
 	defer f.mu.Unlock()
 
 	f.terminated = append(f.terminated, in.InstanceIds...)
+	f.calls = append(f.calls, "terminate "+strings.Join(in.InstanceIds, ","))
 
 	return &ec2.TerminateInstancesOutput{}, nil
 }
@@ -141,7 +218,7 @@ func (f *fakeEC2) DescribeInstances(_ context.Context, in *ec2.DescribeInstances
 	// Per instance, so one test's three parked workers are three machines at rest rather than one that a single start woke.
 	if len(f.fleets) == 0 && !slices.ContainsFunc(in.InstanceIds, func(id string) bool { return slices.Contains(f.started, id) }) {
 		if f.alreadyRunning {
-			return describeOne(ec2types.InstanceStateNameRunning), nil
+			return f.withOwnTags(describeOne(ec2types.InstanceStateNameRunning)), nil
 		}
 
 		return describeOne(ec2types.InstanceStateNameStopped), nil
@@ -167,7 +244,7 @@ func (f *fakeEC2) DescribeInstances(_ context.Context, in *ec2.DescribeInstances
 		state = f.endState
 	}
 
-	return describeOne(state), nil
+	return f.withOwnTags(describeOne(state)), nil
 }
 
 // search answers a tag-filtered describe from what lost answers launched.
@@ -305,7 +382,7 @@ func TestEC2CleanupThatFailsIsLogged(t *testing.T) {
 	api := refusingEC2{&fakeEC2{}}
 	worker := Worker{URL: "aws://launch/lt-0def4567890abcde"}
 
-	stopInstance(api, worker, "i-0stop")
+	cleanupAfterFailure(worker, "i-0stop", "venue.stop_failed", stopEC2(api, "i-0stop"))
 	terminateInstance(api, worker, "i-0term")
 
 	for _, want := range []string{"venue.stop_failed instance=i-0stop", "venue.terminate_failed instance=i-0term"} {
@@ -1139,7 +1216,7 @@ func TestRetiredMachineIsReleasedWithoutWaitingOutItsIdleWindow(t *testing.T) {
 		t.Fatalf("ParseWorker: %v", err)
 	}
 
-	leases := NewRegistry().Leases(map[string]Worker{"box": worker})
+	leases := NewRegistry("").Leases(map[string]Worker{"box": worker})
 
 	resolved, err := leases.Resolve(context.Background(), "box")
 	if err != nil {

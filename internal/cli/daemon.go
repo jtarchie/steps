@@ -100,7 +100,7 @@ func newDaemon(
 	state State, exec ExecFlags, history HistoryFlags, interval time.Duration,
 ) *daemon {
 	// One registry for every job, poll and webhook this daemon starts, so the last of them out gives a machine back rather than the first.
-	base, releaseWorkers := pipeline.WithWorkerRegistry(ctx)
+	base, releaseWorkers := pipeline.WithWorkerRegistry(ctx, daemonIdentity(ctx, state))
 
 	// A parked step's printed command must name any database but the default, which is all the read commands open without --db.
 	if !state.isDefaultDaemonState() {
@@ -128,6 +128,9 @@ func newDaemon(
 //
 //nolint:contextcheck // opening a database and closing a handle are not context-taking operations in this driver
 func (d *daemon) load(ctx context.Context) error {
+	// Before any pipeline is restored, so no loop can be using a machine the previous life of this daemon left running.
+	pipeline.SweepWorkers(d.base)
+
 	reader, err := openStateReader(d.state)
 
 	// A database that is not there, or created but not yet filled in, is the

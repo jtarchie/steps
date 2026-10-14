@@ -461,7 +461,7 @@ func TestRealAWSRegistryParksOnlyAfterTheLastUser(t *testing.T) {
 		t.Fatalf("ParseWorker: %v", err)
 	}
 
-	registry := NewRegistry()
+	registry := NewRegistry("")
 	first := registry.Leases(map[string]Worker{"parked": worker})
 	second := registry.Leases(map[string]Worker{"parked": worker})
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -26,6 +27,7 @@ var closeWait = cleanupTimeout //nolint:gochecknoglobals // as parkWait
 // Registry is every machine this process acquired, by the machine each worker mapping names, and how many scopes are using each.
 type Registry struct {
 	acquire Acquirer
+	owner   string
 	mu      sync.Mutex
 	current map[string]*entry
 	// live is every entry a scope still counts toward or that is still being given back, retired or not: what Close waits for.
@@ -59,8 +61,63 @@ type entry struct {
 // parked is an instance that outlives its users: every mapping of it, and every life of it after an eviction, is this one entry.
 func (e *entry) parked() bool { return e.source.Rung == RungStopped }
 
-// NewRegistry acquires through the clouds.
-func NewRegistry() *Registry { return NewRegistryWith(acquire) }
+// NewRegistry acquires through the clouds, stamping what it starts as owner's when owner is not empty.
+func NewRegistry(owner string) *Registry {
+	registry := NewRegistryWith(func(ctx context.Context, worker Worker) (Worker, func(context.Context) error, error) {
+		return acquire(withOwner(ctx, owner), worker)
+	})
+	registry.owner = owner
+
+	return registry
+}
+
+// Owner is the id this registry stamps on the machines it starts.
+func (r *Registry) Owner() string { return r.owner }
+
+// Sweep gives back every running machine stamped with this registry's owner at the locations the workers name, and is for a daemon's start, before any scope could be using one; a location that cannot be listed is reported and the rest are still swept.
+func (r *Registry) Sweep(ctx context.Context, workers map[string]Worker) error {
+	if r.owner == "" {
+		return nil
+	}
+
+	byLocation := map[string][]Worker{}
+
+	for _, tag := range slices.Sorted(maps.Keys(workers)) {
+		worker := workers[tag]
+		if !worker.needsAcquisition() {
+			continue
+		}
+
+		// ponytail: an ambient location and the same one spelled out are two keys, so one location may be listed twice; harmless, since the second finds nothing left running.
+		location := string(worker.Scheme) + "/" + worker.Region + "/" + worker.Project + "/" + worker.Zone
+		byLocation[location] = append(byLocation[location], worker)
+	}
+
+	var failures []error
+
+	for _, location := range slices.Sorted(maps.Keys(byLocation)) {
+		here := byLocation[location]
+		if len(here) == 0 {
+			continue
+		}
+
+		first := here[0]
+
+		var err error
+
+		switch first.Scheme {
+		case SchemeAWS:
+			err = sweepEC2(ctx, r.owner, first, here)
+		case SchemeGCP:
+			err = sweepGCE(ctx, r.owner, first, here)
+		case SchemeLocal, SchemeSSH, SchemeDockerSSH:
+		}
+
+		failures = append(failures, err)
+	}
+
+	return errors.Join(failures...)
+}
 
 // NewRegistryWith exists for a borrowable venue that is not a cloud — the only way to prove sharing without an account.
 func NewRegistryWith(acquirer Acquirer) *Registry {
@@ -387,7 +444,7 @@ func (l *lease) holding() bool {
 
 // NewLeases is a scope with a registry of its own, for a one-shot command: with no later user in the process to keep a machine warm for, everything goes back when the scope ends.
 func NewLeases(workers map[string]Worker) *Leases {
-	leases := NewRegistry().Leases(workers)
+	leases := NewRegistry("").Leases(workers)
 	leases.own = true
 
 	return leases

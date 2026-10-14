@@ -129,6 +129,14 @@ CREATE TABLE IF NOT EXISTS pipelines (
 );
 CREATE INDEX IF NOT EXISTS idx_pipelines_revision ON pipelines(current_revision_id);
 
+-- Who this database's daemon is, minted once by Identity: the value it stamps
+-- on every cloud machine it starts, so a restarted daemon can tell its own
+-- machines from another daemon's. One row, so one database is one daemon.
+CREATE TABLE IF NOT EXISTS identity (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    owner     TEXT NOT NULL
+);
+
 -- The interned merkle preimage: what each node's hash was computed FROM.
 --
 -- Its own table because the same content repeats across builds and used to be

@@ -282,6 +282,22 @@ func describe(err error) error {
 func initDB(ctx context.Context, conn connection, pipelineName string) (int64, error) {
 	var id int64
 
+	err := inSchema(ctx, conn, func(tx *sql.Tx) error {
+		var err error
+
+		id, err = registerPipeline(ctx, tx, pipelineName)
+
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	return id, nil
+}
+
+// inSchema runs fn in a transaction against a schema it has created or checked.
+func inSchema(ctx context.Context, conn connection, fn func(tx *sql.Tx) error) error {
 	err := inTx(ctx, conn.db, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, classSchema)
 		if err != nil {
@@ -304,15 +320,13 @@ func initDB(ctx context.Context, conn connection, pipelineName string) (int64, e
 			return err
 		}
 
-		id, err = registerPipeline(ctx, tx, pipelineName)
-
-		return err
+		return fn(tx)
 	})
 	if err != nil {
-		return 0, fmt.Errorf("could not open state db %s: %w", conn.description, describe(err))
+		return fmt.Errorf("could not open state db %s: %w", conn.description, describe(err))
 	}
 
-	return id, nil
+	return nil
 }
 
 func createSchema(ctx context.Context, tx *sql.Tx, schemaName string) error {

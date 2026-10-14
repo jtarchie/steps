@@ -36,6 +36,36 @@ func TestTheDaemonSharesAcquiredMachinesAcrossItsLoops(t *testing.T) {
 	}
 }
 
+// The registry stamps machines with the database's identity, so a daemon restarted on the same database recognises what it started before (#120).
+func TestTheDaemonStampsMachinesWithItsDatabasesIdentity(t *testing.T) {
+	t.Parallel()
+
+	state := State(filepath.Join(t.TempDir(), "steps.db"))
+
+	first := newDaemon(t.Context(), nil, scheduler.NewLocalRunner(nil, pipeline.Run{}, 1), state, ExecFlags{}, HistoryFlags{}, time.Hour)
+	owner := pipeline.WorkerOwner(first.base)
+	first.Close()
+
+	if owner == "" {
+		t.Fatal("the daemon's registry stamps nothing")
+	}
+
+	restarted := newDaemon(t.Context(), nil, scheduler.NewLocalRunner(nil, pipeline.Run{}, 1), state, ExecFlags{}, HistoryFlags{}, time.Hour)
+	defer restarted.Close()
+
+	if again := pipeline.WorkerOwner(restarted.base); again != owner {
+		t.Errorf("restarted daemon stamps %q, want %q from before the restart", again, owner)
+	}
+
+	other := newDaemon(t.Context(), nil, scheduler.NewLocalRunner(nil, pipeline.Run{}, 1),
+		State(filepath.Join(t.TempDir(), "steps.db")), ExecFlags{}, HistoryFlags{}, time.Hour)
+	defer other.Close()
+
+	if pipeline.WorkerOwner(other.base) == owner {
+		t.Errorf("a daemon on another database stamps %q too", owner)
+	}
+}
+
 // The stale-build sweep removes every b-* directory under a workspace.root: with no ownership check, so a neighbour set, or renamed, onto the same root deleted the build in flight there.
 //
 // Not t.Parallel(): a rename moves mcp logins, which live in process environment.

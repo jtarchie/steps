@@ -9,7 +9,9 @@ package postgres
 //
 // Its own counter, not the sqlite one: the two schemas are written separately
 // and change separately.
-const schemaVersion = 5
+//
+// 6 added identity, which this driver creates only alongside the rest of the schema.
+const schemaVersion = 6
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -47,6 +49,11 @@ CREATE TABLE IF NOT EXISTS pipelines (
     current_revision_id BIGINT,
     paused_at TIMESTAMPTZ,
     set_at    TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS identity (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    owner     TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS pipeline_revisions (

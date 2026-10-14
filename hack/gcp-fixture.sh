@@ -20,7 +20,10 @@
 # ADC, not with your gcloud CLI login, and the two are separate logins.
 #
 # Your account needs roles/compute.instanceAdmin.v1 and
-# roles/iap.tunnelResourceAccessor on the project. The IAP API must be
+# roles/iap.tunnelResourceAccessor on the project. A custom role in place of
+# the first needs compute.instances.setLabels and compute.instances.list for
+# the steps-owner label a `steps web` daemon puts on what it starts
+# (docs/infra.md). The IAP API must be
 # enabled (iap.googleapis.com); `up` enables compute and iap if it can.
 #
 # Cost: e2-small spot is roughly a cent an hour, the ephemeral external IP a

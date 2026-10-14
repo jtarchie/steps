@@ -83,7 +83,7 @@ func TestRegistryStopsAMachineOnlyAfterItsLastUser(t *testing.T) {
 	seamEC2(t, fake)
 
 	workers := boxWorker(t, "aws://stopped/i-0abc123def456789")
-	registry := NewRegistry()
+	registry := NewRegistry("")
 	first := registry.Leases(workers)
 	second := registry.Leases(workers)
 
@@ -108,7 +108,7 @@ func TestRegistryKeepsAnIdleMachineForTheNextUser(t *testing.T) {
 	seamEC2(t, fake)
 
 	workers := boxWorker(t, "aws://stopped/i-0abc123def456789?idle=300ms")
-	registry := NewRegistry()
+	registry := NewRegistry("")
 	poll := registry.Leases(workers)
 
 	mustResolve(t, poll)
@@ -141,7 +141,7 @@ func TestRegistryCloseGivesBackWhatItKeptWarm(t *testing.T) {
 	fake := &fakeEC2{}
 	seamEC2(t, fake)
 
-	registry := NewRegistry()
+	registry := NewRegistry("")
 	leases := registry.Leases(boxWorker(t, "aws://stopped/i-0abc123def456789?idle=1h"))
 
 	mustResolve(t, leases)
@@ -171,7 +171,7 @@ func TestRegistryForgetsAFailedAcquisition(t *testing.T) {
 	seamEC2(t, fake)
 
 	workers := boxWorker(t, "aws://launch/lt-0def4567890abcde?idle=1h")
-	registry := NewRegistry()
+	registry := NewRegistry("")
 
 	t.Cleanup(func() { _ = registry.Close(context.Background()) })
 
@@ -199,7 +199,7 @@ func TestRegistryRetiresAnEvictedMachineForEveryUser(t *testing.T) {
 	seamEC2(t, fake)
 
 	workers := boxWorker(t, "aws://launch/lt-0def4567890abcde")
-	registry := NewRegistry()
+	registry := NewRegistry("")
 	watcher := registry.Leases(workers)
 	sibling := registry.Leases(workers)
 

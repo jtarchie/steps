@@ -11,7 +11,9 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -256,5 +258,123 @@ func TestGCEClientInsertLaunchesWithoutReadingTheTemplate(t *testing.T) {
 
 	if !maps.Equal(sent.Labels, labels) {
 		t.Errorf("sent labels %v, want steps' own %v", sent.Labels, labels)
+	}
+}
+
+// fakeLabelsAPI serves one instance whose labels SetLabels rewrites, refusing the first conflicts writes with 412 as a concurrent writer's fingerprint change would.
+func fakeLabelsAPI(t *testing.T, labels map[string]string, conflicts int, sent *[]compute.InstancesSetLabelsRequest) http.HandlerFunc {
+	t.Helper()
+
+	var mu sync.Mutex
+
+	fingerprint := 0
+
+	return func(w http.ResponseWriter, req *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/instances/worker-1"):
+			_ = json.NewEncoder(w).Encode(compute.Instance{
+				Name: "worker-1", Labels: labels, LabelFingerprint: strconv.Itoa(fingerprint),
+				LastStartTimestamp: "2026-10-14T05:00:00.000-07:00",
+			})
+		case strings.HasSuffix(req.URL.Path, "/instances/worker-1/setLabels"):
+			var body compute.InstancesSetLabelsRequest
+
+			err := json.NewDecoder(req.Body).Decode(&body)
+			if err != nil {
+				t.Errorf("decoding setLabels: %v", err)
+			}
+
+			*sent = append(*sent, body)
+
+			if conflicts > 0 {
+				conflicts--
+				fingerprint++
+
+				w.WriteHeader(http.StatusPreconditionFailed)
+				_, _ = w.Write([]byte(`{"error":{"code":412,"message":"Labels fingerprint either invalid or resource labels have changed"}}`))
+
+				return
+			}
+
+			if body.LabelFingerprint != strconv.Itoa(fingerprint) {
+				t.Errorf("setLabels sent fingerprint %q, want the one just read, %d", body.LabelFingerprint, fingerprint)
+			}
+
+			clear(labels)
+			maps.Copy(labels, body.Labels)
+
+			operationJSON(t, w, compute.Operation{Name: "op-labels", Status: "RUNNING"})
+		case strings.HasSuffix(req.URL.Path, "/operations/op-labels/wait"):
+			operationJSON(t, w, compute.Operation{Name: "op-labels", Status: "DONE"})
+		default:
+			http.NotFound(w, req)
+		}
+	}
+}
+
+// A label write replaces every label on the instance, so it must carry the operator's own and the fingerprint just read, retrying when another writer got there first.
+func TestGCEClientSetOwnerKeepsOtherLabelsAndRetriesALostRace(t *testing.T) {
+	t.Parallel()
+
+	labels := map[string]string{"team": "infra"}
+
+	var sent []compute.InstancesSetLabelsRequest
+
+	client := newTestGCEClient(t, fakeLabelsAPI(t, labels, 1, &sent))
+
+	err := client.SetOwner(context.Background(), "p", "z", "worker-1", "feedfacecafebeef-stopped-1")
+	if err != nil {
+		t.Fatalf("SetOwner: %v", err)
+	}
+
+	if want := map[string]string{"team": "infra", labelOwner: "feedfacecafebeef-stopped-1"}; !maps.Equal(labels, want) {
+		t.Errorf("labels = %v, want %v", labels, want)
+	}
+
+	if len(sent) != 2 {
+		t.Errorf("%d writes, want one refused and one retried", len(sent))
+	}
+
+	owned, err := client.Owner(context.Background(), "p", "z", "worker-1")
+	if err != nil {
+		t.Fatalf("Owner: %v", err)
+	}
+
+	if owned.stamp != "feedfacecafebeef-stopped-1" || !owned.started.Equal(time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)) {
+		t.Errorf("Owner = %+v, want the stamp and the last start", owned)
+	}
+
+	err = client.SetOwner(context.Background(), "p", "z", "worker-1", "")
+	if err != nil {
+		t.Fatalf("SetOwner to remove: %v", err)
+	}
+
+	if want := map[string]string{"team": "infra"}; !maps.Equal(labels, want) {
+		t.Errorf("labels after removal = %v, want %v", labels, want)
+	}
+}
+
+func TestGCEClientListOwnedReadsStampedInstancesOnTheirWayUpOrRunning(t *testing.T) {
+	t.Parallel()
+
+	client := newTestGCEClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(compute.InstanceList{Items: []*compute.Instance{
+			{Name: "steps-0a1b2c", Status: "STAGING", Labels: map[string]string{labelOwner: "x"}, CreationTimestamp: "2026-10-14T12:00:00Z"},
+			{Name: "worker-1", Status: "RUNNING", Labels: map[string]string{labelOwner: "y"}, LastStartTimestamp: "2026-10-14T12:00:00Z"},
+			{Name: "parked", Status: "TERMINATED", Labels: map[string]string{labelOwner: "z"}, LastStartTimestamp: "2026-10-14T12:00:00Z"},
+			{Name: "unrelated", Status: "RUNNING", Labels: map[string]string{"team": "infra"}},
+		}})
+	})
+
+	owned, err := client.ListOwned(context.Background(), "p", "z")
+	if err != nil {
+		t.Fatalf("ListOwned: %v", err)
+	}
+
+	if len(owned) != 2 || owned[0].name != "steps-0a1b2c" || owned[0].stamp != "x" || owned[0].started.IsZero() || owned[1].name != "worker-1" {
+		t.Errorf("ListOwned = %+v, want the booting and the running stamped instances, the first started at its creation", owned)
 	}
 }

@@ -17,6 +17,7 @@ package venue
 // numbered versions — a different shape is a different template.
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -56,6 +57,12 @@ type gceAPI interface {
 	// empty when nothing is published yet and errGuestAttributesDisabled when
 	// the instance does not expose them at all.
 	GuestAttributes(ctx context.Context, project, zone, name, path string) (map[string]string, error)
+	// Owner reads the instance's steps-owner label and its last start.
+	Owner(ctx context.Context, project, zone, name string) (ownedInstance, error)
+	// SetOwner writes the steps-owner label, or removes it when value is empty, returning once the write has landed.
+	SetOwner(ctx context.Context, project, zone, name, value string) error
+	// ListOwned is every instance in the zone on its way up or running and carrying a steps-owner label.
+	ListOwned(ctx context.Context, project, zone string) ([]ownedInstance, error)
 }
 
 // errGCENotFound is an instance the API says does not exist — which for a
@@ -294,6 +301,97 @@ func (c *gceClient) AddSSHKey(ctx context.Context, project, zone, name, entry st
 	return fmt.Errorf("writing metadata on %s: lost the update race %d times: %w", name, attempts, lastErr)
 }
 
+func (c *gceClient) Owner(ctx context.Context, project, zone, name string) (ownedInstance, error) {
+	instance, err := c.service.Instances.Get(project, zone, name).Context(ctx).Do()
+	if err != nil {
+		return ownedInstance{}, fmt.Errorf("asking about %s: %w", name, err)
+	}
+
+	return gceOwned(instance), nil
+}
+
+// gceOwned falls back to creationTimestamp for an instance that reports no last start, which only one never stopped since its create can be.
+func gceOwned(instance *compute.Instance) ownedInstance {
+	// Unparseable is the zero time, which no stamp owns.
+	started, _ := time.Parse(time.RFC3339, cmp.Or(instance.LastStartTimestamp, instance.CreationTimestamp))
+
+	return ownedInstance{name: instance.Name, stamp: instance.Labels[labelOwner], started: started}
+}
+
+// SetOwner is a read-modify-write retried on a lost fingerprint race, as AddSSHKey is, and waits its operation out so a label set before a Start has landed before the Start.
+func (c *gceClient) SetOwner(ctx context.Context, project, zone, name, value string) error {
+	const attempts = 3
+
+	var lastErr error
+
+	for range attempts {
+		instance, err := c.service.Instances.Get(project, zone, name).Context(ctx).Do()
+		if err != nil {
+			return fmt.Errorf("reading labels on %s: %w", name, err)
+		}
+
+		labels := maps.Clone(instance.Labels)
+		if labels == nil {
+			labels = map[string]string{}
+		}
+
+		if value == "" {
+			if _, ok := labels[labelOwner]; !ok {
+				return nil
+			}
+
+			delete(labels, labelOwner)
+		} else {
+			labels[labelOwner] = value
+		}
+
+		op, err := c.service.Instances.SetLabels(project, zone, name, &compute.InstancesSetLabelsRequest{
+			Labels: labels, LabelFingerprint: instance.LabelFingerprint,
+		}).Context(ctx).Do()
+		if err != nil {
+			if isGoogleAPIStatus(err, http.StatusPreconditionFailed) {
+				lastErr = err
+
+				continue
+			}
+
+			return fmt.Errorf("writing labels on %s: %w", name, err)
+		}
+
+		err = c.awaitZoneOperation(ctx, project, zone, op.Name)
+		if err != nil {
+			return fmt.Errorf("writing labels on %s: %w", name, err)
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("writing labels on %s: lost the update race %d times: %w", name, attempts, lastErr)
+}
+
+// sweepable includes the states a machine is booting through, because a daemon restarted seconds after a create finds its machine there, and no later sweep would look again.
+var sweepable = map[string]bool{"PROVISIONING": true, "STAGING": true, "RUNNING": true} //nolint:gochecknoglobals // a constant set
+
+// ListOwned filters client-side: the list filter's grammar for OR and for a hyphenated label key is the part no test here can check.
+func (c *gceClient) ListOwned(ctx context.Context, project, zone string) ([]ownedInstance, error) {
+	var owned []ownedInstance
+
+	err := c.service.Instances.List(project, zone).Pages(ctx, func(page *compute.InstanceList) error {
+		for _, instance := range page.Items {
+			if _, ok := instance.Labels[labelOwner]; ok && sweepable[instance.Status] {
+				owned = append(owned, gceOwned(instance))
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing instances in %s/%s: %w", project, zone, err)
+	}
+
+	return owned, nil
+}
+
 // mergeSSHKey merges one entry into the metadata's ssh-keys item, pruning
 // expired google-ssh entries as it goes, and reports whether anything
 // changed.
@@ -472,33 +570,39 @@ func gceStartParked(ctx context.Context, api gceAPI, worker Worker, project, zon
 			return Worker{}, nil, err
 		}
 
+		if gceOwns(ctx, api, worker, project, zone) {
+			noteReclaimed(ctx, worker)
+
+			return worker.asStatic(worker.Instance), cleanupRelease(worker, worker.Instance, "stopping", "parked", parkGCE(api, worker, project, zone, worker.Instance, true)), nil
+		}
+
 		noteAdopted(ctx, worker)
 
 		return worker.asStatic(worker.Instance), nil, nil
 	}
 
+	// Labelled before the start, for the reason startParked tags first.
+	park := parkGCE(api, worker, project, zone, worker.Instance, labelGCE(ctx, api, worker, project, zone))
+
 	err = api.Start(ctx, project, zone, worker.Instance)
 	if err != nil {
-		// Start is two-phased like the insert is — the call is ACCEPTED
-		// before its operation is waited out — so an error here can be a
-		// machine that is already booting, which nothing later would stop.
+		// Start is two-phased like the insert is — the call is ACCEPTED before its operation is waited out — so an error here can be a machine that is already booting, which nothing later would stop.
 		//nolint:contextcheck // deliberately not the caller's context: its being cancelled is the likeliest reason to be here
-		gceStopInstance(api, worker, project, zone, worker.Instance)
+		cleanupAfterFailure(worker, worker.Instance, "venue.stop_failed", park)
 
 		return Worker{}, nil, fmt.Errorf("starting %s for %q: %w", worker.Instance, worker.URL, err)
 	}
 
 	err = gceWaitForRunning(ctx, api, worker, project, zone, worker.Instance, "TERMINATED")
 	if err != nil {
-		// A machine this end started and cannot use is still a machine
-		// somebody is paying for, and nothing later will stop it.
+		// A machine this end started and cannot use is still a machine somebody is paying for, and nothing later will stop it.
 		//nolint:contextcheck // deliberately not the caller's context: its being cancelled is the likeliest reason to be here
-		gceStopInstance(api, worker, project, zone, worker.Instance)
+		cleanupAfterFailure(worker, worker.Instance, "venue.stop_failed", park)
 
 		return Worker{}, nil, err
 	}
 
-	release := cleanupRelease(worker, worker.Instance, "stopping", "parked", stopGCE(api, project, zone, worker.Instance))
+	release := cleanupRelease(worker, worker.Instance, "stopping", "parked", park)
 
 	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: started %s", worker.URL, worker.Instance))
 
@@ -532,14 +636,81 @@ func gceAwaitParkComplete(ctx context.Context, api gceAPI, worker Worker, projec
 	return status, nil
 }
 
-// gceStopInstance is the best-effort stop for a machine a failed acquisition
-// leaves running, under its own context for the reason cleanupTimeout gives.
-func gceStopInstance(api gceAPI, worker Worker, project, zone, name string) {
-	cleanupAfterFailure(worker, name, "venue.stop_failed", stopGCE(api, project, zone, name))
-}
-
 func stopGCE(api gceAPI, project, zone, name string) func(context.Context) error {
 	return func(ctx context.Context) error { return api.Stop(ctx, project, zone, name) }
+}
+
+// gceOwns is ec2Owns for Compute Engine.
+func gceOwns(ctx context.Context, api gceAPI, worker Worker, project, zone string) bool {
+	if ownerOf(ctx) == "" {
+		return false
+	}
+
+	instance, err := api.Owner(ctx, project, zone, worker.Instance)
+	if err != nil {
+		return false
+	}
+
+	_, ours := ownedBy(ownerOf(ctx), instance.stamp, instance.started)
+
+	return ours
+}
+
+// labelGCE is tagEC2 for Compute Engine.
+func labelGCE(ctx context.Context, api gceAPI, worker Worker, project, zone string) bool {
+	owner := ownerOf(ctx)
+	if owner == "" {
+		return false
+	}
+
+	err := api.SetOwner(ctx, project, zone, worker.Instance, stamp(owner, RungStopped, time.Now()))
+	if err != nil {
+		ownerTagFailed(ctx, worker, worker.Instance, "labelling", err, isGoogleAPIStatus(err, http.StatusForbidden))
+
+		return false
+	}
+
+	return true
+}
+
+// parkGCE is parkEC2 for Compute Engine.
+func parkGCE(api gceAPI, worker Worker, project, zone, name string, labelled bool) func(context.Context) error {
+	stop := stopGCE(api, project, zone, name)
+	if !labelled {
+		return stop
+	}
+
+	return untagThen(func(ctx context.Context) {
+		err := api.SetOwner(ctx, project, zone, name, "")
+		if err != nil {
+			ownerTagFailed(ctx, worker, name, "unlabelling", err, isGoogleAPIStatus(err, http.StatusForbidden))
+		}
+	}, stop)
+}
+
+// sweepGCE is the startup sweep at one worker's zone.
+func sweepGCE(ctx context.Context, owner string, worker Worker, workers []Worker) error {
+	parked, templates := sweepScope(workers)
+
+	api, err := gceFor(ctx, worker)
+	if err != nil {
+		return err
+	}
+
+	project, zone, err := gcpLocation(ctx, worker)
+	if err != nil {
+		return err
+	}
+
+	return sweep(ctx, owner, sweepTarget{
+		worker: worker,
+		parked: parked,
+		// GCE records no template on the instance a label-writer cannot also rewrite, but it names a launch: gceWorkerName's prefix, which nobody can put on an existing instance.
+		launched: func(one ownedInstance) bool { return len(templates) > 0 && strings.HasPrefix(one.name, gceNamePrefix) },
+		list:     func(ctx context.Context) ([]ownedInstance, error) { return api.ListOwned(ctx, project, zone) },
+		park:     func(name string) func(context.Context) error { return parkGCE(api, worker, project, zone, name, true) },
+		remove:   func(name string) func(context.Context) error { return deleteGCE(api, project, zone, name) },
+	})
 }
 
 // gceLaunch creates one instance from an instance template and deletes it
@@ -547,6 +718,10 @@ func stopGCE(api gceAPI, project, zone, name string) func(context.Context) error
 func gceLaunch(ctx context.Context, api gceAPI, worker Worker, project, zone string) (Worker, func(context.Context) error, error) {
 	name := gceWorkerName()
 	labels := worker.launchLabels()
+
+	if owner := ownerOf(ctx); owner != "" {
+		labels[labelOwner] = stamp(owner, RungLaunch, time.Now())
+	}
 
 	// Named BEFORE the money is spent: the name is client-chosen, so a crash
 	// anywhere past the insert leaves a findable trace rather than an
@@ -562,7 +737,7 @@ func gceLaunch(ctx context.Context, api gceAPI, worker Worker, project, zone str
 		// cancelled mid-wait, most likely) can leave a machine being built
 		// that nothing later will delete. Deleting a machine that was never
 		// created answers 404 and is a no-op.
-		//nolint:contextcheck // as gceStopInstance: the caller's context may be the problem
+		//nolint:contextcheck // as cleanupAfterFailure: the caller's context may be the problem
 		gceDeleteInstance(api, worker, project, zone, name)
 
 		return Worker{}, nil, fmt.Errorf("launching a worker for %q: %w", worker.URL, err)
@@ -572,7 +747,7 @@ func gceLaunch(ctx context.Context, api gceAPI, worker Worker, project, zone str
 	if err != nil {
 		// Deleted rather than left behind: a machine this end cannot use is
 		// still a machine somebody is paying for.
-		//nolint:contextcheck // as gceStopInstance: the caller's context may be the problem
+		//nolint:contextcheck // as cleanupAfterFailure: the caller's context may be the problem
 		gceDeleteInstance(api, worker, project, zone, name)
 
 		return Worker{}, nil, err
@@ -585,7 +760,7 @@ func gceLaunch(ctx context.Context, api gceAPI, worker Worker, project, zone str
 	return worker.asStatic(name), release, nil
 }
 
-// gceDeleteInstance is gceStopInstance for a machine that should not exist
+// gceDeleteInstance is the best-effort give-back for a machine that should not exist
 // at all once this end cannot use it.
 func gceDeleteInstance(api gceAPI, worker Worker, project, zone, name string) {
 	cleanupAfterFailure(worker, name, "venue.delete_failed", deleteGCE(api, project, zone, name))
@@ -595,6 +770,8 @@ func deleteGCE(api gceAPI, project, zone, name string) func(context.Context) err
 	return func(ctx context.Context) error { return api.Delete(ctx, project, zone, name) }
 }
 
+const gceNamePrefix = "steps-"
+
 // gceWorkerName names a launched instance. Compute Engine requires the
 // caller to choose, unlike EC2 — random so two concurrent jobs from one
 // template cannot collide.
@@ -602,7 +779,7 @@ func gceWorkerName() string {
 	suffix := make([]byte, 6)
 	_, _ = rand.Read(suffix)
 
-	return "steps-" + hex.EncodeToString(suffix)
+	return gceNamePrefix + hex.EncodeToString(suffix)
 }
 
 // gceWaitForRunning blocks until an instance is RUNNING, or says why it

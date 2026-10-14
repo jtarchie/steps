@@ -68,8 +68,8 @@ type leasesKey struct{}
 type registryKey struct{}
 
 // WithWorkerRegistry makes the last of a daemon's jobs, polls and webhooks out give a machine back, rather than the first; its release belongs after every loop that could hold one has stopped.
-func WithWorkerRegistry(ctx context.Context) (context.Context, func()) {
-	return withRegistry(ctx, venue.NewRegistry())
+func WithWorkerRegistry(ctx context.Context, owner string) (context.Context, func()) {
+	return withRegistry(ctx, venue.NewRegistry(owner))
 }
 
 // SharesWorkers is what a daemon has to arrange, and what its test asserts: without it every scope owns its machine outright again.
@@ -77,6 +77,34 @@ func SharesWorkers(ctx context.Context) bool {
 	_, shared := ctx.Value(registryKey{}).(*venue.Registry)
 
 	return shared
+}
+
+// WorkerOwner is the id the daemon's registry stamps on the machines it starts, empty with no registry.
+func WorkerOwner(ctx context.Context) string {
+	registry, _ := ctx.Value(registryKey{}).(*venue.Registry)
+	if registry == nil {
+		return ""
+	}
+
+	return registry.Owner()
+}
+
+// SweepWorkers gives back what a previous life of this daemon left running, so it belongs before any loop starts: nothing can be using a machine yet.
+func SweepWorkers(ctx context.Context) {
+	registry, _ := ctx.Value(registryKey{}).(*venue.Registry)
+	if registry == nil {
+		return
+	}
+
+	// Cancellable, unlike a release: a listing interrupted by shutdown gives nothing back, and each give-back already runs on its own context.
+	sweepCtx, cancel := context.WithTimeout(ctx, WorkerReleaseTimeout)
+	defer cancel()
+
+	err := registry.Sweep(sweepCtx, workersFrom(ctx))
+	if err != nil {
+		slog.ErrorContext(ctx, "worker.sweep_failed", "error", err,
+			"consequence", "a machine this daemon started before it restarted may still be running and billing")
+	}
 }
 
 func withRegistry(ctx context.Context, registry *venue.Registry) (context.Context, func()) {

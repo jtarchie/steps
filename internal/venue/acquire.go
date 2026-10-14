@@ -88,7 +88,19 @@ type ownedKey struct{}
 
 func withOwned(ctx context.Context) context.Context { return context.WithValue(ctx, ownedKey{}, true) }
 
-// noteAdopted warns every time, because nothing records what a crashed or restarted steps started (#120): each such machine is found running here, and bills until somebody reads this.
+// noteReclaimed is a machine this daemon's own stamp says it started: steps' to park again, so no warning. Only a lease with no earlier start in this process is the restart case.
+func noteReclaimed(ctx context.Context, worker Worker) {
+	if owned, _ := ctx.Value(ownedKey{}).(bool); owned {
+		noteAdopted(ctx, worker)
+
+		return
+	}
+
+	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: %s is still running from this daemon's start before it restarted; it will be parked when its last user is done", worker.URL, worker.Instance))
+	slog.InfoContext(ctx, "worker.reclaimed", "worker", worker.URL, "instance", worker.Instance)
+}
+
+// noteAdopted warns every time, because a machine with no stamp of this daemon's bills until somebody reads this: a one-shot command's, another daemon's, or one started where tagging was refused.
 func noteAdopted(ctx context.Context, worker Worker) {
 	if owned, _ := ctx.Value(ownedKey{}).(bool); owned {
 		events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: %s is still running from steps' own earlier start; it will be parked when its last user is done", worker.URL, worker.Instance))

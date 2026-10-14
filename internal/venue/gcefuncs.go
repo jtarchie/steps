@@ -11,6 +11,9 @@ type gceFuncs struct {
 	status     func(ctx context.Context, project, zone, name string) (string, error)
 	addSSHKey  func(ctx context.Context, project, zone, name, entry string) error
 	guestAttrs func(ctx context.Context, project, zone, name, path string) (map[string]string, error)
+	owner      func(ctx context.Context, project, zone, name string) (ownedInstance, error)
+	setOwner   func(ctx context.Context, project, zone, name, value string) error
+	listOwned  func(ctx context.Context, project, zone string) ([]ownedInstance, error)
 }
 
 func newGCEFuncs(client *gceClient) gceFuncs {
@@ -22,6 +25,9 @@ func newGCEFuncs(client *gceClient) gceFuncs {
 		status:     client.Status,
 		addSSHKey:  client.AddSSHKey,
 		guestAttrs: client.GuestAttributes,
+		owner:      client.Owner,
+		setOwner:   client.SetOwner,
+		listOwned:  client.ListOwned,
 	}
 }
 
@@ -51,4 +57,16 @@ func (f gceFuncs) AddSSHKey(ctx context.Context, project, zone, name, entry stri
 
 func (f gceFuncs) GuestAttributes(ctx context.Context, project, zone, name, path string) (map[string]string, error) {
 	return f.guestAttrs(ctx, project, zone, name, path)
+}
+
+func (f gceFuncs) Owner(ctx context.Context, project, zone, name string) (ownedInstance, error) {
+	return f.owner(ctx, project, zone, name)
+}
+
+func (f gceFuncs) SetOwner(ctx context.Context, project, zone, name, value string) error {
+	return f.setOwner(ctx, project, zone, name, value)
+}
+
+func (f gceFuncs) ListOwned(ctx context.Context, project, zone string) ([]ownedInstance, error) {
+	return f.listOwned(ctx, project, zone)
 }

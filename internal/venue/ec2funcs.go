@@ -13,6 +13,8 @@ type ec2Funcs struct {
 	terminate func(context.Context, *ec2.TerminateInstancesInput, ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error)
 	describe  func(context.Context, *ec2.DescribeInstancesInput, ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
 	fleet     func(context.Context, *ec2.CreateFleetInput, ...func(*ec2.Options)) (*ec2.CreateFleetOutput, error)
+	tag       func(context.Context, *ec2.CreateTagsInput, ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error)
+	untag     func(context.Context, *ec2.DeleteTagsInput, ...func(*ec2.Options)) (*ec2.DeleteTagsOutput, error)
 }
 
 func newEC2Funcs(client *ec2.Client) ec2Funcs {
@@ -22,6 +24,8 @@ func newEC2Funcs(client *ec2.Client) ec2Funcs {
 		terminate: client.TerminateInstances,
 		describe:  client.DescribeInstances,
 		fleet:     client.CreateFleet,
+		tag:       client.CreateTags,
+		untag:     client.DeleteTags,
 	}
 }
 
@@ -43,4 +47,12 @@ func (f ec2Funcs) DescribeInstances(ctx context.Context, in *ec2.DescribeInstanc
 
 func (f ec2Funcs) CreateFleet(ctx context.Context, in *ec2.CreateFleetInput, opts ...func(*ec2.Options)) (*ec2.CreateFleetOutput, error) {
 	return f.fleet(ctx, in, opts...)
+}
+
+func (f ec2Funcs) CreateTags(ctx context.Context, in *ec2.CreateTagsInput, opts ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
+	return f.tag(ctx, in, opts...)
+}
+
+func (f ec2Funcs) DeleteTags(ctx context.Context, in *ec2.DeleteTagsInput, opts ...func(*ec2.Options)) (*ec2.DeleteTagsOutput, error) {
+	return f.untag(ctx, in, opts...)
 }

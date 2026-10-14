@@ -36,6 +36,11 @@
 # no is not the code being wrong — so `ec2:CreateFleet`/`ec2:CreateTags` or FIS being denied
 # costs you the launch-rung and spot-eviction coverage and nothing else.
 #
+# A `steps web` daemon pointed at this fixture also needs ec2:CreateTags and
+# ec2:DeleteTags on the instance: it tags what it starts steps-owner=<its id>
+# so a restart can give back what a crash left running (docs/infra.md). Denied,
+# it says so once (worker.owner_tag_denied) and carries on untagged.
+#
 # Cost, which is the reason for the shape: t4g.small is free through
 # 2026-12-31 (750h/month) on an account created BEFORE the free tier changed
 # on 2025-07-15 — on one created after, EC2 draws down that account's signup

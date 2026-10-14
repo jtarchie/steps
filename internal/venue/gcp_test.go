@@ -55,6 +55,49 @@ type fakeGCE struct {
 	insertErr          error
 	startErr           error
 	lastStatus         string
+
+	// ownerLabel and lastStart are the instance's steps-owner label and last start, which Start resets as GCE does.
+	ownerLabel  string
+	lastStart   time.Time
+	setOwnerErr error
+	// running is what ListOwned answers.
+	running []ownedInstance
+	// calls is every mutating call in order, as "verb name".
+	calls []string
+}
+
+func (f *fakeGCE) Owner(_ context.Context, _, _, name string) (ownedInstance, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return ownedInstance{name: name, stamp: f.ownerLabel, started: f.lastStart}, nil
+}
+
+func (f *fakeGCE) SetOwner(_ context.Context, _, _, name, value string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	verb := "label "
+	if value == "" {
+		verb = "unlabel "
+	}
+
+	f.calls = append(f.calls, verb+name)
+
+	if f.setOwnerErr != nil {
+		return f.setOwnerErr
+	}
+
+	f.ownerLabel = value
+
+	return nil
+}
+
+func (f *fakeGCE) ListOwned(context.Context, string, string) ([]ownedInstance, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.running, nil
 }
 
 func (f *fakeGCE) InsertFromTemplate(_ context.Context, _, _, name, template string, labels map[string]string) error {
@@ -80,6 +123,8 @@ func (f *fakeGCE) Start(_ context.Context, _, _, name string) error {
 	}
 
 	f.starts = append(f.starts, name)
+	f.calls = append(f.calls, "start "+name)
+	f.lastStart = time.Now()
 
 	return f.startErr
 }
@@ -89,6 +134,7 @@ func (f *fakeGCE) Stop(_ context.Context, _, _, name string) error {
 	defer f.mu.Unlock()
 
 	f.stops = append(f.stops, name)
+	f.calls = append(f.calls, "stop "+name)
 
 	return nil
 }
@@ -98,6 +144,7 @@ func (f *fakeGCE) Delete(_ context.Context, _, _, name string) error {
 	defer f.mu.Unlock()
 
 	f.deletes = append(f.deletes, name)
+	f.calls = append(f.calls, "delete "+name)
 
 	return nil
 }
@@ -434,7 +481,7 @@ func TestGCECleanupThatFailsIsLogged(t *testing.T) {
 	api := refusingGCE{&fakeGCE{}}
 	worker := Worker{URL: "gcp://launch/tmpl"}
 
-	gceStopInstance(api, worker, "p", "z", "steps-stop")
+	cleanupAfterFailure(worker, "steps-stop", "venue.stop_failed", stopGCE(api, "p", "z", "steps-stop"))
 	gceDeleteInstance(api, worker, "p", "z", "steps-delete")
 
 	for _, want := range []string{"venue.stop_failed instance=steps-stop", "venue.delete_failed instance=steps-delete"} {

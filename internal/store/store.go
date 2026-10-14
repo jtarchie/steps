@@ -13,9 +13,19 @@
 package store
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"unicode/utf8"
 )
+
+// MintIdentity is a fresh database identity for a driver's Identity to keep. Lowercase hex because the id rides in a GCE label value, which allows nothing else of note.
+func MintIdentity() string {
+	id := make([]byte, 8)
+	_, _ = rand.Read(id)
+
+	return hex.EncodeToString(id)
+}
 
 // Meta is the handle itself: what it is scoped to, what it is backed by, and
 // how it is let go. Every other facet is a table; this one is the identity the

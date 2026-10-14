@@ -42,6 +42,8 @@ type ec2API interface {
 	TerminateInstances(ctx context.Context, in *ec2.TerminateInstancesInput, opts ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error)
 	DescribeInstances(ctx context.Context, in *ec2.DescribeInstancesInput, opts ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
 	CreateFleet(ctx context.Context, in *ec2.CreateFleetInput, opts ...func(*ec2.Options)) (*ec2.CreateFleetOutput, error)
+	CreateTags(ctx context.Context, in *ec2.CreateTagsInput, opts ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error)
+	DeleteTags(ctx context.Context, in *ec2.DeleteTagsInput, opts ...func(*ec2.Options)) (*ec2.DeleteTagsOutput, error)
 }
 
 // ec2For builds the EC2 client for a worker.
@@ -100,34 +102,49 @@ func startParked(ctx context.Context, api ec2API, worker Worker) (Worker, func(c
 		return adoptRunning(ctx, api, worker)
 	}
 
+	// Tagged BEFORE the start, so a crash between the two leaves a stopped machine whose stamp no later start time will match.
+	tagged := tagEC2(ctx, api, worker, worker.Instance)
+	park := parkEC2(api, worker, worker.Instance, tagged)
+
 	_, err = api.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: []string{worker.Instance}})
 	if err != nil {
+		// Untagged but not stopped: a refused start may be somebody else's start racing this one.
+		if tagged {
+			untagCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+			untagEC2(api, worker, worker.Instance)(untagCtx)
+			cancel()
+		}
+
 		return Worker{}, nil, fmt.Errorf("starting %s for %q: %w", worker.Instance, worker.URL, err)
 	}
 
 	err = waitForRunning(ctx, api, worker, worker.Instance, ec2types.InstanceStateNameStopped)
 	if err != nil {
-		// A machine this end started and cannot use is still a machine
-		// somebody is paying for, and nothing later will stop it: the lease
-		// records no release on a failed acquire.
+		// A machine this end started and cannot use is still a machine somebody is paying for, and nothing later will stop it: the lease records no release on a failed acquire.
 		//nolint:contextcheck // deliberately not the caller's context: its being cancelled is the likeliest reason to be here
-		stopInstance(api, worker, worker.Instance)
+		cleanupAfterFailure(worker, worker.Instance, "venue.stop_failed", park)
 
 		return Worker{}, nil, err
 	}
 
-	release := cleanupRelease(worker, worker.Instance, "stopping", "parked", stopEC2(api, worker.Instance))
+	release := cleanupRelease(worker, worker.Instance, "stopping", "parked", park)
 
 	events.Note(ctx, events.NoteInfo, fmt.Sprintf("worker %s: started %s", worker.URL, worker.Instance))
 
 	return worker.asStatic(worker.Instance), release, nil
 }
 
-// adoptRunning gives no release, because a machine steps did not start may be anybody's work in progress — and says so aloud, because an instance nobody stops is one somebody has to find.
+// adoptRunning gives no release unless this daemon's stamp says it started the machine, because one steps did not start may be anybody's work in progress — and says so aloud, because an instance nobody stops is one somebody has to find.
 func adoptRunning(ctx context.Context, api ec2API, worker Worker) (Worker, func(context.Context) error, error) {
 	err := waitForRunning(ctx, api, worker, worker.Instance, "")
 	if err != nil {
 		return Worker{}, nil, err
+	}
+
+	if ec2Owns(ctx, api, worker) {
+		noteReclaimed(ctx, worker)
+
+		return worker.asStatic(worker.Instance), cleanupRelease(worker, worker.Instance, "stopping", "parked", parkEC2(api, worker, worker.Instance, true)), nil
 	}
 
 	noteAdopted(ctx, worker)
@@ -135,10 +152,132 @@ func adoptRunning(ctx context.Context, api ec2API, worker Worker) (Worker, func(
 	return worker.asStatic(worker.Instance), nil, nil
 }
 
-// stopInstance is the best-effort stop for a machine a failed acquisition
-// leaves running, under its own context for the reason cleanupTimeout gives.
-func stopInstance(api ec2API, worker Worker, instance string) {
-	cleanupAfterFailure(worker, instance, "venue.stop_failed", stopEC2(api, instance))
+// ec2Owns reads a describe failure as "not ours", the side that leaves a machine running rather than stopping somebody's.
+func ec2Owns(ctx context.Context, api ec2API, worker Worker) bool {
+	if ownerOf(ctx) == "" {
+		return false
+	}
+
+	out, err := api.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{worker.Instance}})
+	if err != nil {
+		return false
+	}
+
+	for _, instance := range ec2Owned(out) {
+		if _, ours := ownedBy(ownerOf(ctx), instance.stamp, instance.started); ours {
+			return true
+		}
+	}
+
+	return false
+}
+
+// ec2Owned reads every described instance's stamp and last start; LaunchTime is EC2's LAST start, reset by each StartInstances.
+func ec2Owned(out *ec2.DescribeInstancesOutput) []ownedInstance {
+	var owned []ownedInstance
+
+	for _, reservation := range out.Reservations {
+		for _, instance := range reservation.Instances {
+			tags := map[string]string{}
+			for _, tag := range instance.Tags {
+				tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+			}
+
+			if stamped, ok := tags[labelOwner]; ok {
+				// aws: tags are EC2's own, written at launch from a template; no principal can set one.
+				owned = append(owned, ownedInstance{name: aws.ToString(instance.InstanceId), stamp: stamped, started: aws.ToTime(instance.LaunchTime), template: tags["aws:ec2launchtemplate:id"]})
+			}
+		}
+	}
+
+	return owned
+}
+
+// tagEC2 stamps a parked instance as this daemon's, reporting whether it did.
+func tagEC2(ctx context.Context, api ec2API, worker Worker, instance string) bool {
+	owner := ownerOf(ctx)
+	if owner == "" {
+		return false
+	}
+
+	_, err := api.CreateTags(ctx, &ec2.CreateTagsInput{
+		Resources: []string{instance},
+		Tags:      []ec2types.Tag{{Key: aws.String(labelOwner), Value: aws.String(stamp(owner, RungStopped, time.Now()))}},
+	})
+	if err != nil {
+		ownerTagFailed(ctx, worker, instance, "tagging", err, ec2Denied(err))
+
+		return false
+	}
+
+	return true
+}
+
+// parkEC2 is the give-back for a parked instance, untagging first when it was tagged.
+func parkEC2(api ec2API, worker Worker, instance string, tagged bool) func(context.Context) error {
+	stop := stopEC2(api, instance)
+	if !tagged {
+		return stop
+	}
+
+	return untagThen(untagEC2(api, worker, instance), stop)
+}
+
+func untagEC2(api ec2API, worker Worker, instance string) func(context.Context) {
+	return func(ctx context.Context) {
+		_, err := api.DeleteTags(ctx, &ec2.DeleteTagsInput{Resources: []string{instance}, Tags: []ec2types.Tag{{Key: aws.String(labelOwner)}}})
+		if err != nil {
+			ownerTagFailed(ctx, worker, instance, "untagging", err, ec2Denied(err))
+		}
+	}
+}
+
+// ec2Denied is IAM refusing the call, by code rather than message.
+func ec2Denied(err error) bool {
+	var apiErr smithy.APIError
+
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == "UnauthorizedOperation"
+}
+
+// sweepEC2 is the startup sweep at one worker's region.
+func sweepEC2(ctx context.Context, owner string, worker Worker, workers []Worker) error {
+	parked, templates := sweepScope(workers)
+
+	api, err := ec2For(ctx, worker)
+	if err != nil {
+		return err
+	}
+
+	return sweep(ctx, owner, sweepTarget{
+		worker:   worker,
+		parked:   parked,
+		launched: func(one ownedInstance) bool { return templates[one.template] },
+		list: func(ctx context.Context) ([]ownedInstance, error) {
+			input := &ec2.DescribeInstancesInput{Filters: []ec2types.Filter{
+				{Name: aws.String("tag-key"), Values: []string{labelOwner}},
+				{Name: aws.String("instance-state-name"), Values: []string{"pending", "running"}},
+			}}
+
+			var owned []ownedInstance
+
+			for {
+				out, err := api.DescribeInstances(ctx, input)
+				if err != nil {
+					return nil, err //nolint:wrapcheck // sweep names the worker
+				}
+
+				owned = append(owned, ec2Owned(out)...)
+
+				if aws.ToString(out.NextToken) == "" {
+					return owned, nil
+				}
+
+				input.NextToken = out.NextToken
+			}
+		},
+		park:   func(name string) func(context.Context) error { return parkEC2(api, worker, name, true) },
+		remove: func(name string) func(context.Context) error { return terminateEC2(api, name) },
+	})
 }
 
 func stopEC2(api ec2API, instance string) func(context.Context) error {
@@ -161,6 +300,10 @@ func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, fun
 	token := launchToken(labels)
 	labels[labelLaunch] = token
 
+	if owner := ownerOf(ctx); owner != "" {
+		labels[labelOwner] = stamp(owner, RungLaunch, time.Now())
+	}
+
 	request := fleetRequest(worker, labels)
 	request.ClientToken = aws.String(token)
 
@@ -173,7 +316,7 @@ func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, fun
 	out, err := api.CreateFleet(fleetCtx, request)
 	if err != nil {
 		if !refused(err) {
-			//nolint:contextcheck // as stopInstance: the caller's context may be the problem
+			//nolint:contextcheck // as cleanupAfterFailure: the caller's context may be the problem
 			terminateLostLaunch(api, worker, token)
 		}
 
@@ -187,7 +330,7 @@ func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, fun
 
 	if ctx.Err() != nil {
 		slog.WarnContext(ctx, "venue.launch_abandoned", "instance", instance, "worker", worker.URL, "error", ctx.Err())
-		//nolint:contextcheck // as stopInstance: the caller's context is the problem
+		//nolint:contextcheck // as cleanupAfterFailure: the caller's context is the problem
 		terminateInstance(api, worker, instance)
 
 		return Worker{}, nil, fmt.Errorf("launching a worker for %q: %w", worker.URL, ctx.Err())
@@ -201,7 +344,7 @@ func launchInstance(ctx context.Context, api ec2API, worker Worker) (Worker, fun
 		// the likeliest reason to be here is the caller's being cancelled —
 		// and a terminate the SDK aborts before it reaches AWS leaves a
 		// billing instance nothing will ever look for.
-		//nolint:contextcheck // as stopInstance: the caller's context may be the problem
+		//nolint:contextcheck // as cleanupAfterFailure: the caller's context may be the problem
 		terminateInstance(api, worker, instance)
 
 		return Worker{}, nil, err
@@ -305,7 +448,7 @@ func describedIDs(out *ec2.DescribeInstancesOutput) []string {
 	return ids
 }
 
-// terminateInstance is stopInstance for a machine that should not exist at
+// terminateInstance is the best-effort give-back for a machine that should not exist at
 // all once this end cannot use it.
 func terminateInstance(api ec2API, worker Worker, instance string) {
 	cleanupAfterFailure(worker, instance, "venue.terminate_failed", terminateEC2(api, instance))

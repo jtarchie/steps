@@ -4,6 +4,7 @@ package cli
 // url, and everything below internal/cli takes the store.Store opened here.
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"strings"
@@ -39,6 +40,29 @@ func openStateReader(state State) (store.Reader, error) {
 	}
 
 	return sqlite.OpenReader(string(state)) //nolint:wrapcheck // every caller names what it was opening
+}
+
+// daemonIdentity is the id a daemon stamps on the machines it starts, minted into its database; one that cannot be read is logged and stamps nothing, which is how a daemon behaved before stamps, since load reports the database's real problem.
+func daemonIdentity(ctx context.Context, state State) string {
+	var (
+		owner string
+		err   error
+	)
+
+	if state.postgres() {
+		owner, err = postgres.Identity(ctx, string(state))
+	} else {
+		owner, err = sqlite.Identity(ctx, string(state))
+	}
+
+	if err != nil {
+		slog.ErrorContext(ctx, "web.identity_unreadable", "state", state, "error", err,
+			"consequence", "machines this daemon starts are not marked as its own, so one a crash leaves running is not given back after a restart")
+
+		return ""
+	}
+
+	return owner
 }
 
 // stateIsEmpty reports a database with nothing recorded — for sqlite, one
