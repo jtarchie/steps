@@ -191,6 +191,52 @@ jobs:
 - **Aliases are invisible.** A server that accepts the same parameter under two names (`project_id` and `projectId`) will take the unpinned one; pin or withhold both.
 - **Not for secrets.** Pinned values fold into the step's hash and land in the state database, exactly as a custom tool's `args:` do, and a changed pin re-runs the step. Credentials belong in the server's `auth:`.
 
+## Sharing tools with other agents: `mcp_exports:`
+
+A daemon can serve some of a pipeline's tools to agents somewhere else — a teammate's Claude or Cursor — as an MCP server of its own. The calls go out with the pipeline's credentials, which the caller never sees, and every one is recorded under the name of the person who connected.
+
+```yaml noexec=credentials
+mcp_servers:
+- name: github
+  endpoint: https://api.githubcopilot.com/mcp/
+  auth: { type: bearer, api_key_env: GITHUB_PAT }
+
+agents:
+- name: oncall
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  tools:
+  - mcp: github
+    tool: search_issues
+    args: { owner: acme, repo: app }
+
+mcp_exports:
+- name: support
+  access: '"acme/support" in Groups'
+  rate: 60/m
+  tools:
+  - mcp: github
+    tool: search_issues
+    description: Search issues in the app repository
+    args: { owner: acme, repo: app }   # hidden from the caller, sent whatever it asks
+    timeout: 20s
+  - mcp: github
+    tools: [get_issue]
+  - agent: oncall                       # the caller gets an answer, not the tools
+    description: Ask what is failing right now
+
+jobs:
+- name: build
+  plan:
+  - task: say
+    run: echo hi
+```
+
+- **`access:` is required**, a [role rule](authentication.md#who-may-do-what-roles) about the person connecting. Separate levels of access are separate exports (`support`, `support-write`), so who may do what stays in the file, where it is reviewed.
+- **Only MCP grants and sub-agents.** A built-in has no workspace outside a step, and a custom `run:` tool would put a caller's arguments into a shell on the daemon's machine; both are load errors. `max_calls:`, `max_output_bytes:` and `required:` are about a step's conversation, which an export does not have; `rate:` bounds calls per person instead.
+- **Narrowing works as it does for an agent**: `args:` pins (single-tool form), `description:`, `timeout:`.
+- **A sub-agent export** runs that agent's own conversation for each call, with your model and your tools, and returns its answer — the narrowest thing to share.
+- Never hashed: an export changes nothing a build does.
+
 ## Backing a resource type with MCP
 
 ```yaml mcp=mcp-linear-issues

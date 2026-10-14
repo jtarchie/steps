@@ -1,0 +1,18 @@
+# An export is called by an agent somewhere else, with no step around the
+# call: a custom run: tool would put that caller's arguments into a shell on
+# the daemon's own machine. Only MCP grants and sub-agents can be exported.
+# expect: a custom run: tool would put a caller's input into a shell
+
+mcp_exports:
+- name: support
+  access: 'Provider == "github"'
+  tools:
+  - name: lookup
+    description: look a thing up
+    run: grep {{ .args.term }} /etc/hosts
+
+jobs:
+- name: build
+  plan:
+  - task: say
+    run: echo hi

@@ -33,6 +33,12 @@
         "$ref": "#/$defs/mcpServer"
       }
     },
+    "mcp_exports": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/mcpExport"
+      }
+    },
     "tasks": {
       "type": "array",
       "items": {
@@ -56,6 +62,34 @@
     }
   },
   "$defs": {
+    "mcpExport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "access", "tools"],
+      "description": "A bundle of this pipeline's MCP tools and agents that other people's agents may connect to through the daemon, as an MCP server, under the name of a person who signed in. Calls run with the pipeline's credentials; fixed args: are hidden from the caller.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The export's address under the pipeline."
+        },
+        "access": {
+          "type": "string",
+          "description": "Who may connect: a rule over the signed-in person (Provider, UserID, Email, Organizations, Groups). Required."
+        },
+        "tools": {
+          "type": "array",
+          "description": "MCP grants and sub-agents only; built-ins and custom run: tools cannot be exported.",
+          "items": {
+            "$ref": "#/$defs/toolSpec"
+          }
+        },
+        "rate": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*/[smh]$",
+          "description": "Calls per person, as <n>/<s|m|h>, like 60/m. Empty is unbounded."
+        }
+      }
+    },
     "access": {
       "type": "object",
       "additionalProperties": false,
