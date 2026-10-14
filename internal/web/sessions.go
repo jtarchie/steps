@@ -82,11 +82,13 @@ func (s *Server) handleLoginPage(c *echo.Context) error {
 func (s *Server) renderLogin(c *echo.Context, status int, username, problem string) error {
 	//nolint:wrapcheck // render errors surface through the shared error handler
 	return c.Render(status, "login", map[string]any{
-		"Nav":      navData{URL: c.Request().URL.RequestURI()},
-		"Title":    "sign in",
-		"Next":     safeNext(c.QueryParam("next")),
-		"Username": username,
-		"Problem":  problem,
+		"Nav":       navData{URL: c.Request().URL.RequestURI()},
+		"Title":     "sign in",
+		"Next":      safeNext(c.QueryParam("next")),
+		"Username":  username,
+		"Problem":   problem,
+		"Providers": s.providers,
+		"Local":     s.auth.hasAccounts(),
 	})
 }
 
@@ -98,6 +100,17 @@ func (s *Server) handleLogin(c *echo.Context) error {
 		return s.renderLogin(c, http.StatusUnauthorized, username, "couldn't sign you in")
 	}
 
+	err := s.startSession(c, actor.Local(username))
+	if err != nil {
+		return echoError(err)
+	}
+
+	//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
+	return c.Redirect(http.StatusSeeOther, safeNext(c.FormValue("next")))
+}
+
+// startSession signs the browser in as who, whichever way they proved it.
+func (s *Server) startSession(c *echo.Context, who actor.Actor) error {
 	raw := make([]byte, 32)
 	_, _ = rand.Read(raw)
 	token := base64.RawURLEncoding.EncodeToString(raw)
@@ -105,12 +118,12 @@ func (s *Server) handleLogin(c *echo.Context) error {
 
 	err := s.sessions.CreateSession(c.Request().Context(), store.Session{
 		TokenHash: tokenDigest(token),
-		Actor:     actor.Local(username).String(),
+		Actor:     who.String(),
 		CreatedAt: now,
 		ExpiresAt: now.Add(sessionTTL),
 	})
 	if err != nil {
-		return echoError(err)
+		return err //nolint:wrapcheck // the store names what it was recording
 	}
 
 	// Secure exactly when the browser came over https: a daemon on plain-HTTP loopback, the default, would have a Secure cookie dropped and never sign anybody in.
@@ -124,8 +137,7 @@ func (s *Server) handleLogin(c *echo.Context) error {
 		Secure:   servedOverTLS(c.Request()),
 	})
 
-	//nolint:wrapcheck // echo's redirect error is returned verbatim by every handler here
-	return c.Redirect(http.StatusSeeOther, safeNext(c.FormValue("next")))
+	return nil
 }
 
 // handleLogout ends the session on the daemon, not only in this browser: a copied cookie stops working too.

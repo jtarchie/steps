@@ -54,7 +54,11 @@ type WebCmd struct {
 	BasicAuthPassword string   `env:"STEPS_BASIC_AUTH_PASSWORD"                                                        help:"the password that goes with it"                                                          name:"basic-auth-password"`
 	LocalUser         []string `help:"a local account as name:bcrypt-hash, the line htpasswd -nbB writes (repeatable)" name:"local-user"                                                                              placeholder:"NAME:HASH"`
 	ActivityHistory   int      `default:"10000"                                                                        help:"how many entries the activity log keeps, across every pipeline (0 is no limit)"          name:"activity-history"`
-	LocalUsersFile    string   `help:"an htpasswd file of local accounts, bcrypt hashes only"                          name:"local-users-file"                                                                        placeholder:"PATH"         type:"existingfile"`
+	GitHubClientID    string   `help:"sign people in with GitHub: the OAuth app's client id"                           name:"github-client-id"                                                                        placeholder:"ID"`
+	GitHubSecretEnv   string   `default:"STEPS_GITHUB_CLIENT_SECRET"                                                   help:"the environment variable holding that app's client secret"                               name:"github-client-secret-env" placeholder:"NAME"`
+	GoogleClientID    string   `help:"sign people in with Google: the OAuth client id"                                 name:"google-client-id"                                                                        placeholder:"ID"`
+	GoogleSecretEnv   string   `default:"STEPS_GOOGLE_CLIENT_SECRET"                                                   help:"the environment variable holding that client's secret"                                   name:"google-client-secret-env" placeholder:"NAME"`
+	LocalUsersFile    string   `help:"an htpasswd file of local accounts, bcrypt hashes only"                          name:"local-users-file"                                                                        placeholder:"PATH"              type:"existingfile"`
 	// Opt-in because a reverse proxy forwards the client's Host, so only the operator knows this daemon's names; see docs/web.md#security.
 	AllowedHost []string `env:"STEPS_ALLOWED_HOSTS" help:"refuse any request whose Host is not this name (repeatable; loopback names are always allowed)" name:"allowed-host" placeholder:"NAME"`
 	// No env: binding: a STEPS_*-shaped name invites confusion with the variable this one sets.
@@ -116,6 +120,40 @@ func (w *WebCmd) authOptions() ([]web.Option, error) {
 	}
 
 	return opts, nil
+}
+
+// signInProviders is the GitHub and Google sign-in a client id asks for. Each needs its secret, read from the environment so it is never on a command line, and the URL a provider sends the browser back to.
+func (w *WebCmd) signInProviders(published string) ([]web.Option, error) {
+	var providers []web.SignInProvider
+
+	for _, want := range []struct {
+		flag, id, secretEnv string
+		make                func(id, secret, base string) web.SignInProvider
+	}{
+		{"--github-client-id", w.GitHubClientID, w.GitHubSecretEnv, func(id, secret, base string) web.SignInProvider { return web.GitHubSignIn(id, secret, base, nil) }},
+		{"--google-client-id", w.GoogleClientID, w.GoogleSecretEnv, func(id, secret, base string) web.SignInProvider { return web.GoogleSignIn(id, secret, base, nil) }},
+	} {
+		if want.id == "" {
+			continue
+		}
+
+		secret := os.Getenv(want.secretEnv)
+		if secret == "" {
+			return nil, fmt.Errorf("web: %s needs its client secret in $%s, which is unset", want.flag, want.secretEnv)
+		}
+
+		if published == "" {
+			return nil, fmt.Errorf("web: %s needs --external-url, the address a provider sends the browser back to", want.flag)
+		}
+
+		providers = append(providers, want.make(want.id, secret, published))
+	}
+
+	if len(providers) == 0 {
+		return nil, nil
+	}
+
+	return []web.Option{web.WithSignInProviders(providers...)}, nil
 }
 
 // localUsers is every account --local-user and --local-users-file name; a name given twice is refused, since which password won would be an accident of order.
@@ -199,6 +237,13 @@ func (w *WebCmd) Run() error {
 	if err != nil {
 		return err
 	}
+
+	providers, err := w.signInProviders(published)
+	if err != nil {
+		return err
+	}
+
+	opts = append(opts, providers...)
 
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()

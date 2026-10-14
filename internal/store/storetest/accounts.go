@@ -95,3 +95,30 @@ func (s accountsSuite) TestAnExpiredSessionIsNotFound(t *testing.T) {
 		}
 	}
 }
+
+// TestAUserIsReplacedAtEachSignIn: what a provider says now replaces what it said before, so leaving a team takes effect at the next sign-in.
+func (s accountsSuite) TestAUserIsReplacedAtEachSignIn(t *testing.T) {
+	t.Parallel()
+
+	accounts := s.open(t)
+
+	err := accounts.SaveUser(ctxFor(t), store.User{Actor: "github:alex", Email: "alex@acme.dev", Organizations: []string{"acme"}, Groups: []string{"acme/eng", "acme/oncall"}, RefreshedAt: time.Now()})
+	if err != nil {
+		t.Fatalf("SaveUser: %v", err)
+	}
+
+	err = accounts.SaveUser(ctxFor(t), store.User{Actor: "github:alex", Email: "alex@acme.dev", Organizations: []string{"acme"}, Groups: []string{"acme/eng"}, RefreshedAt: time.Now()})
+	if err != nil {
+		t.Fatalf("SaveUser again: %v", err)
+	}
+
+	user, found, err := accounts.FindUser(ctxFor(t), "github:alex")
+	if err != nil || !found || user.Email != "alex@acme.dev" || strings.Join(user.Groups, ",") != "acme/eng" || len(user.Organizations) != 1 {
+		t.Fatalf("FindUser = %+v, %v, %v; want the second sign-in's groups only", user, found, err)
+	}
+
+	_, found, err = accounts.FindUser(ctxFor(t), "github:nobody")
+	if err != nil || found {
+		t.Fatalf("FindUser(nobody) = %v, %v; want not found", found, err)
+	}
+}

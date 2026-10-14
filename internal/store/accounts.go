@@ -19,6 +19,12 @@ type Accounts interface {
 	FindSession(ctx context.Context, tokenHash string) (Session, bool, error)
 	// RevokeSession ends a session at once, which is what signing out is.
 	RevokeSession(ctx context.Context, tokenHash string) error
+	// SaveUser records what a sign-in provider said about a person, replacing
+	// what it said last time: organizations and groups are read at sign-in,
+	// so a person removed from a team loses it at their next.
+	SaveUser(ctx context.Context, user User) error
+	// FindUser is the person an actor names, as last recorded.
+	FindUser(ctx context.Context, actor string) (User, bool, error)
 	Close() error
 }
 
@@ -29,4 +35,17 @@ type Session struct {
 	Actor     string
 	CreatedAt time.Time
 	ExpiresAt time.Time
+}
+
+// User is a person a sign-in provider vouched for, as it last described them.
+type User struct {
+	// Actor is who they are to every record, actor.Actor's stored form.
+	Actor string
+	// Email is the address the provider gave, empty when it gave none.
+	Email string
+	// Organizations and Groups are what permission rules match on: GitHub
+	// organizations and "org/team" teams, a Google Workspace domain.
+	Organizations []string
+	Groups        []string
+	RefreshedAt   time.Time
 }

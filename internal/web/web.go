@@ -132,6 +132,9 @@ type Server struct {
 	activity activityLog
 	// sessions is where signed-in browsers are kept, nil where browsers use the Basic prompt: see sessions.go.
 	sessions store.Accounts
+	// providers are the ways to sign in with somebody else's account, and pending the trips to them not yet back: see providers.go.
+	providers []SignInProvider
+	pending   pendingSignIns
 	// nil answers any Host, which is the default: see hosts.go.
 	allowedHosts map[string]bool
 	// version is what the footer prints, so a bug report can name the build.
@@ -438,6 +441,8 @@ func (s *Server) routes() error {
 		e.GET(loginPath, s.handleLoginPage)
 		e.POST(loginPath, s.handleLogin)
 		e.POST(logoutPath, s.handleLogout)
+		e.GET(signInStartPath, s.handleSignInStart)
+		e.GET(signInCallbackPath, s.handleSignInCallback)
 	}
 
 	group := e.Group("/p/:pipeline", s.resolvePipeline)

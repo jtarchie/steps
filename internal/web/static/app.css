@@ -1291,3 +1291,7 @@ table.activity td:first-child { white-space: nowrap; }
   table.activity td:nth-child(4) { min-width: 0; overflow-wrap: anywhere; }
   .tablewrap:has(> table.activity) { overflow-x: visible; }
 }
+.signin-providers { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+.signin-providers .btn { text-align: center; padding: 8px 12px; }
+.signin-or { display: flex; align-items: center; gap: 10px; font-family: var(--sans); font-size: 12px; color: var(--dim); margin: 0 0 14px; }
+.signin-or::before, .signin-or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }

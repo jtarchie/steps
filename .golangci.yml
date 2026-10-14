@@ -925,6 +925,10 @@ linters:
             - "github.com/labstack/echo/v5"
             # bcrypt verifies a local user's password against the hash an operator gave, so the daemon never holds the password itself.
             - "golang.org/x/crypto/bcrypt"
+            # goth is the OAuth client for signing in with GitHub or Google; the daemon is the client, and only this package talks to the providers.
+            - "github.com/markbates/goth"
+            - "github.com/markbates/goth/providers/github"
+            - "github.com/markbates/goth/providers/google"
             # goldmark (+ its chroma highlighting extension) renders the
             # embedded docs package at /docs, server-side — the terminal twin
             # (steps docs, via glamour) lives in main. docs itself stays a

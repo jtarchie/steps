@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -126,4 +127,59 @@ func (a *Accounts) RevokeSession(ctx context.Context, tokenHash string) error {
 	}
 
 	return nil
+}
+
+// SaveUser replaces what was last recorded about a person.
+func (a *Accounts) SaveUser(ctx context.Context, user store.User) error {
+	orgs, groups := jsonStrings(user.Organizations), jsonStrings(user.Groups)
+
+	_, err := a.held.db.ExecContext(ctx, `
+		INSERT INTO users (actor, email, organizations, groups_json, refreshed_at) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (actor) DO UPDATE SET email = excluded.email, organizations = excluded.organizations,
+			groups_json = excluded.groups_json, refreshed_at = excluded.refreshed_at
+	`, user.Actor, user.Email, orgs, groups, user.RefreshedAt.UTC().Format(sortableNano))
+	if err != nil {
+		return fmt.Errorf("could not record user %q: %w", user.Actor, err)
+	}
+
+	return nil
+}
+
+// FindUser is the person an actor names.
+func (a *Accounts) FindUser(ctx context.Context, who string) (store.User, bool, error) {
+	var (
+		user                      store.User
+		orgs, groups, refreshedAt string
+	)
+
+	err := a.held.reads.QueryRowContext(ctx, `
+		SELECT actor, email, organizations, groups_json, refreshed_at FROM users WHERE actor = ?
+	`, who).Scan(&user.Actor, &user.Email, &orgs, &groups, &refreshedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.User{}, false, nil
+	}
+
+	if err != nil {
+		return store.User{}, false, fmt.Errorf("could not read user %q: %w", who, err)
+	}
+
+	_ = json.Unmarshal([]byte(orgs), &user.Organizations)
+	_ = json.Unmarshal([]byte(groups), &user.Groups)
+	user.RefreshedAt = parseTimestamp(refreshedAt)
+
+	return user, true, nil
+}
+
+// jsonStrings is a list as the JSON array a column keeps, never null.
+func jsonStrings(list []string) string {
+	if len(list) == 0 {
+		return "[]"
+	}
+
+	encoded, err := json.Marshal(list)
+	if err != nil {
+		return "[]"
+	}
+
+	return string(encoded)
 }

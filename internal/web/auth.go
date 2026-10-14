@@ -104,6 +104,11 @@ func WithLocalUsers(users []LocalUser) Option {
 	}
 }
 
+// hasAccounts is whether there is any account kept here to sign in with, which is what draws the password form.
+func (a *basicAuth) hasAccounts() bool {
+	return a != nil && (a.plain != nil || len(a.users) > 0)
+}
+
 func (s *Server) authFor() *basicAuth {
 	if s.auth == nil {
 		s.auth = &basicAuth{users: map[string][]byte{}}
@@ -255,7 +260,8 @@ func (s *Server) skipsAuth(c *echo.Context) bool {
 		return true
 	}
 
-	return s.sessions != nil && (c.Path() == loginPath || strings.HasPrefix(c.Path(), "/static/"))
+	return s.sessions != nil && (c.Path() == loginPath || strings.HasPrefix(c.Path(), "/static/") ||
+		c.Path() == signInStartPath || c.Path() == signInCallbackPath)
 }
 
 // isHookRoute is a webhook delivery, the one route under /p/ whose sender never passed this server's credentials.

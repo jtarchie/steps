@@ -2,7 +2,7 @@
 
 `steps web` asks for nothing by default, and on the loopback address it binds by default that is the right answer: the UI and the terminal that started it are the same trust domain. The moment the daemon is reachable from somewhere else, it is not — **a pipeline is arbitrary commands, so `steps pipeline set` is a remote shell** ([web.md, Security](web.md#security)).
 
-One or more local accounts close that: the CLI carries one as HTTP Basic in its `--target` URL, a browser signs in through a form, and each request is recorded under the account that made it. No OAuth and no per-pipeline permissions yet.
+Accounts close that: local accounts the daemon keeps, or a GitHub or Google account. The CLI carries a local one as HTTP Basic in its `--target` URL, a browser signs in through a form or with GitHub or Google, and each request is recorded under the account that made it. No per-pipeline permissions yet.
 
 ## Turning it on
 
@@ -48,6 +48,24 @@ A browser that is not signed in is sent to **`/login`**, a form asking for an ac
 - The cookie is `HttpOnly` and `SameSite=Lax`, and `Secure` when the daemon is reached over https (directly, or through a proxy that sets `X-Forwarded-Proto`).
 - A page's own refresh is never redirected to the form: an expired session there answers `401`.
 - The CLI is unchanged: it sends its account on every request and never sees the form.
+
+## Signing in with GitHub or Google
+
+```bash
+export STEPS_GITHUB_CLIENT_SECRET=…        # from the OAuth app you registered
+export STEPS_GOOGLE_CLIENT_SECRET=…
+steps web --external-url https://steps.example.com \
+  --github-client-id Iv1.0123456789abcdef \
+  --google-client-id 1234-abc.apps.googleusercontent.com
+```
+
+Each client id adds a **Continue with …** button to the sign-in page. Register the daemon with the provider first, giving it `<external-url>/auth/github/callback` or `<external-url>/auth/google/callback` as the redirect address.
+
+- **The secret is read from the environment**, never a flag: `$STEPS_GITHUB_CLIENT_SECRET` and `$STEPS_GOOGLE_CLIENT_SECRET` by default, or the variable `--github-client-secret-env`/`--google-client-secret-env` name. An id without its secret, or with no `--external-url` to send the browser back to, stops the daemon before it listens.
+- **Who they are**: `alex (github)` by GitHub login, `sam@acme.dev (google)` by email.
+- **What is read about them**, at every sign-in, replacing what was read last time: from GitHub, their organizations and `org/team` teams (the app asks for `read:org`); from Google, their email and, for a Workspace account, its domain. Google says nothing about groups without its admin API, so a rule about a Google account can match its address or domain and nothing else.
+- **Local accounts and providers mix.** The password form is drawn only when the daemon keeps local accounts. The CLI still needs a local account: a GitHub or Google sign-in is a browser's.
+- A sign-in that comes back with a state this daemon did not hand out, or one already used, is refused.
 
 ## What it covers
 

@@ -89,7 +89,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 24
+const schemaVersion = 25
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -911,6 +911,18 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     revoked_at TEXT
+);
+
+-- People a sign-in provider vouched for, as it last described them
+-- (store.Accounts). Replaced at each sign-in, so a team someone left stops
+-- matching at their next. Permission rules read this, never a token's
+-- copy, which is what keeps a rule written as an exclusion honest.
+CREATE TABLE IF NOT EXISTS users (
+    actor         TEXT PRIMARY KEY,
+    email         TEXT NOT NULL,
+    organizations TEXT NOT NULL,
+    groups_json   TEXT NOT NULL,
+    refreshed_at  TEXT NOT NULL
 );
 
 -- What people did: set, trigger, approve, abort, pause and the rest

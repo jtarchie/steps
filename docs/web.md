@@ -886,6 +886,10 @@ on this side is everything that changes what a pipeline IS.
 --local-user / --local-users-file
                  local accounts as name:bcrypt-hash, or an htpasswd file of them
                  (see authentication.md)
+--github-client-id / --google-client-id
+                 sign people in with GitHub or Google; the secret is read from
+                 $STEPS_GITHUB_CLIENT_SECRET / $STEPS_GOOGLE_CLIENT_SECRET (or
+                 --*-client-secret-env), and needs --external-url
 --activity-history
                  how many entries the activity log keeps across every pipeline
                  (default 10000, 0 is no limit; see Activity)

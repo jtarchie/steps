@@ -155,3 +155,13 @@ func browserRequest(t *testing.T, addr, method, path, form string, cookies []*ht
 
 	return client, req
 }
+
+// A provider without its secret is a sign-in button that can only fail, so the daemon does not start; the refusal names the variable to set.
+func TestASignInProviderNeedsItsSecret(t *testing.T) {
+	t.Setenv("STEPS_TEST_UNSET_SECRET", "")
+
+	err := cli.Run([]string{"web", "--listen", "127.0.0.1:1", "--github-client-id", "abc", "--github-client-secret-env", "STEPS_TEST_UNSET_SECRET"})
+	if err == nil || !strings.Contains(err.Error(), "$STEPS_TEST_UNSET_SECRET") {
+		t.Fatalf("steps web with a GitHub client and no secret = %v, want a refusal naming the variable", err)
+	}
+}
