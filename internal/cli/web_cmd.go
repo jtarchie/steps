@@ -234,6 +234,18 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run
 	state := DaemonStatePath(w.DB)
 	readLog := func() (store.Reader, error) { return openStateReader(state) } //nolint:contextcheck // opening a store takes none
 
+	// Only where somebody signs in: a browser on an open daemon has nothing to sign in as.
+	if len(opts) > 0 {
+		accounts, err := openAccounts(state) //nolint:contextcheck // opening a store takes none
+		if err != nil {
+			return fmt.Errorf("web: %w", err)
+		}
+
+		defer func() { _ = accounts.Close() }()
+
+		opts = append(opts, web.WithSessions(accounts))
+	}
+
 	server, err := web.New(nil, runner, append(opts, web.WithAllowedHosts(w.AllowedHost), web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithMiddleware(telemetry.Handler(web.HealthPath)), web.WithActivityLog(readLog, w.ActivityHistory))...)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)

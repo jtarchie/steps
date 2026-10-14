@@ -130,6 +130,8 @@ type Server struct {
 	auth *basicAuth
 	// activity is where the activity log is read and how much of it is kept: see activity.go.
 	activity activityLog
+	// sessions is where signed-in browsers are kept, nil where browsers use the Basic prompt: see sessions.go.
+	sessions store.Accounts
 	// nil answers any Host, which is the default: see hosts.go.
 	allowedHosts map[string]bool
 	// version is what the footer prints, so a bug report can name the build.
@@ -413,7 +415,7 @@ func (s *Server) routes() error {
 
 	// Above the origin check, so an unauthenticated cross-origin request is told the one thing it can act on.
 	if s.auth != nil {
-		e.Use(s.auth.middleware())
+		e.Use(s.authenticate)
 	}
 
 	// With no authentication there is no session for a cross-site request to ride, but a page on another origin can still aim a form at localhost — and this is the check that costs nothing and closes it.
@@ -431,6 +433,12 @@ func (s *Server) routes() error {
 	e.GET("/docs", s.handleDocsIndex)
 	e.GET("/docs/:page", s.handleDocs)
 	e.GET("/activity", s.handleActivity)
+
+	if s.sessions != nil {
+		e.GET(loginPath, s.handleLoginPage)
+		e.POST(loginPath, s.handleLogin)
+		e.POST(logoutPath, s.handleLogout)
+	}
 
 	group := e.Group("/p/:pipeline", s.resolvePipeline)
 	group.GET("", s.handleJobs)
@@ -723,6 +731,7 @@ func (s *Server) nav(c *echo.Context) navData {
 
 	if s.auth != nil {
 		nav.Who = actor.From(ctx).String()
+		nav.CanSignOut = s.hasSession(c)
 	}
 
 	// Every served pipeline, not only the request's own: a reader looking at a
@@ -833,6 +842,8 @@ type navData struct {
 	SwitchMark mark
 	// Who is the signed-in person's stored actor, which draws the user menu; empty on a server nobody signs in to, where there is nobody to name.
 	Who string
+	// CanSignOut is a browser that signed in through the form; one the Basic prompt let in has nothing the daemon can end.
+	CanSignOut bool
 }
 
 type pipelineSummary struct {

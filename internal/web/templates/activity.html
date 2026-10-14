@@ -14,7 +14,8 @@
         <td class="dim">{{agoTag .At}}</td>
         <td>{{if .Actor}}<a class="plain" href="{{filterURL $.Query "actor" .Actor}}">{{template "actor" .Actor}}</a>{{else}}<span class="faint">—</span>{{end}}</td>
         <td><a class="plain" href="{{filterURL $.Query "action" .Action}}">{{.Action}}</a></td>
-        <td>{{if .TargetURL}}<a href="{{.TargetURL}}">{{.Target}}</a>{{else}}{{.Target}}{{end}}{{with .Reason}} <span class="dim">“{{.}}”</span>{{end}}</td>
+        {{$what := .Target}}{{if eq .Action "set"}}{{$what = short .Target}}{{end}}
+        <td>{{if .TargetURL}}<a{{if eq .Action "set"}} class="hash"{{end}} href="{{.TargetURL}}">{{$what}}</a>{{else}}{{$what}}{{end}}{{with .Reason}} <span class="dim">“{{.}}”</span>{{end}}</td>
         <td><a class="plain" href="{{filterURL $.Query "pipeline" .Pipeline}}">{{.Pipeline}}</a>{{if not .Live}} <span class="faint">gone</span>{{end}}</td>
       </tr>
       {{end}}

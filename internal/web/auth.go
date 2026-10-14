@@ -10,12 +10,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/labstack/echo/v5"
-	"github.com/labstack/echo/v5/middleware"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/jtarchie/steps/internal/actor"
@@ -195,21 +195,40 @@ func (c *verifiedCache) add(username, password string) {
 	c.entries[verifiedKey(username, password)] = c.clock().Add(verifiedTTL)
 }
 
-// middleware is echo's own, whose 401 already carries the WWW-Authenticate a browser needs in order to prompt.
-func (a *basicAuth) middleware() echo.MiddlewareFunc {
-	return middleware.BasicAuthWithConfig(middleware.BasicAuthConfig{
-		Realm:   authRealm,
-		Skipper: skipAuth,
-		Validator: func(c *echo.Context, username, password string) (bool, error) {
-			if !a.matches(username, password) {
-				return false, nil
-			}
+// authenticate decides who a request is from, in order: a signed-in browser's session, then HTTP Basic — which is what the CLI carries in its --target URL. Neither, and a browser is sent to sign in where the daemon has sessions; anything else gets the Basic challenge, which is what makes a bare browser prompt where it does not.
+func (s *Server) authenticate(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		if s.skipsAuth(c) {
+			return next(c)
+		}
 
+		if who, found := s.sessionActor(c); found {
+			c.Set(sessionKey, true)
+			c.SetRequest(actingAs(c.Request(), who))
+
+			return next(c)
+		}
+
+		username, password, sent := c.Request().BasicAuth()
+		if sent && s.auth.matches(username, password) {
 			c.SetRequest(actingAs(c.Request(), actor.Local(username)))
 
-			return true, nil
-		},
-	})
+			return next(c)
+		}
+
+		if !sent && s.sessions != nil && wantsPage(c.Request()) {
+			return c.Redirect(http.StatusSeeOther, loginPath+"?next="+url.QueryEscape(c.Request().URL.RequestURI()))
+		}
+
+		c.Response().Header().Set(echo.HeaderWWWAuthenticate, `basic realm="`+authRealm+`"`)
+
+		return echo.ErrUnauthorized
+	}
+}
+
+// wantsPage is a browser navigating, as opposed to the CLI or a page's own poll: a poll redirected to a sign-in form would swap that form into the page it is refreshing.
+func wantsPage(r *http.Request) bool {
+	return r.Header.Get("HX-Request") == "" && strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 
 // actingAs is r carrying who made it, for everything the handler calls.
@@ -228,6 +247,15 @@ const HealthPath = "/healthz"
 // Two routes carry their own credential instead of this server's: a webhook sender authenticates with its signature — exempt for exactly the reason it is exempt from the same-origin check and from --read-only — and an oauth redirect with the state its login minted (handleMCPCallback). Neither CAN send a password: one is a machine that was never given it, the other a bare navigation a third party caused. HealthPath is the third exemption, and says nothing.
 func skipAuth(c *echo.Context) bool {
 	return isHookRoute(c) || c.Path() == MCPCallbackPath || c.Path() == HealthPath
+}
+
+// skipsAuth is skipAuth plus, where browsers sign in through a form, that form and the stylesheet and scripts it is drawn with: nobody can sign in through a page that needs them signed in first. The assets are this binary's own and carry nothing about any pipeline.
+func (s *Server) skipsAuth(c *echo.Context) bool {
+	if skipAuth(c) {
+		return true
+	}
+
+	return s.sessions != nil && (c.Path() == loginPath || strings.HasPrefix(c.Path(), "/static/"))
 }
 
 // isHookRoute is a webhook delivery, the one route under /p/ whose sender never passed this server's credentials.

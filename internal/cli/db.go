@@ -33,6 +33,15 @@ func openExistingState(state State, name string) (store.Store, error) {
 	return sqlite.OpenExisting(string(state), name) //nolint:wrapcheck // every caller names what it was opening
 }
 
+// openAccounts opens the daemon-level handle on who signs in.
+func openAccounts(state State) (store.Accounts, error) {
+	if state.postgres() {
+		return postgres.OpenAccounts(string(state)) //nolint:wrapcheck // every caller names what it was opening
+	}
+
+	return sqlite.OpenAccounts(string(state)) //nolint:wrapcheck // every caller names what it was opening
+}
+
 // openStateReader opens a database for reading across its pipelines.
 func openStateReader(state State) (store.Reader, error) {
 	if state.postgres() {

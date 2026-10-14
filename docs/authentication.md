@@ -2,7 +2,7 @@
 
 `steps web` asks for nothing by default, and on the loopback address it binds by default that is the right answer: the UI and the terminal that started it are the same trust domain. The moment the daemon is reachable from somewhere else, it is not — **a pipeline is arbitrary commands, so `steps pipeline set` is a remote shell** ([web.md, Security](web.md#security)).
 
-HTTP Basic is what closes that, and it is the whole of the authentication here. No OAuth, no login command, no sessions, no per-pipeline permissions — one or more local accounts, held by the daemon, carried by the CLI, and each request recorded under the account that made it.
+One or more local accounts close that: the CLI carries one as HTTP Basic in its `--target` URL, a browser signs in through a form, and each request is recorded under the account that made it. No OAuth and no per-pipeline permissions yet.
 
 ## Turning it on
 
@@ -39,9 +39,19 @@ bcrypt is slow on purpose (tens of milliseconds a check) and a browser sends cre
 
 **Unset is open access**, which is what every existing local workflow is. `steps web` on a routable address with no credentials prints a warning once at startup naming the two flags; it does not refuse, because an operator who has put the daemon behind a tunnel or a reverse proxy has already answered the question.
 
+## Signing in from a browser
+
+A browser that is not signed in is sent to **`/login`**, a form asking for an account and its password, and on to the page it asked for once signed in. The session lasts a week and lives on the daemon — the cookie holds a random token, and the state database holds only a digest of it — so **sign out**, in the menu under your name, ends it everywhere at once: a copied cookie stops working too.
+
+- A wrong name and a wrong password get the same sentence, `couldn't sign you in`, and the name you typed is kept.
+- After signing in you are sent only to a page on this daemon; anything else goes to `/`.
+- The cookie is `HttpOnly` and `SameSite=Lax`, and `Secure` when the daemon is reached over https (directly, or through a proxy that sets `X-Forwarded-Proto`).
+- A page's own refresh is never redirected to the form: an expired session there answers `401`.
+- The CLI is unchanged: it sends its account on every request and never sees the form.
+
 ## What it covers
 
-Every route: the pages, the static assets, `/docs`, the live-run SSE streams, and the `/api` endpoints `steps pipeline`, `steps runs abort` and `steps mcp login -p` talk to. A browser gets a `WWW-Authenticate: basic realm="steps"` challenge, so it prompts.
+Every route: the pages, `/docs`, the live-run SSE streams, and the `/api` endpoints `steps pipeline`, `steps runs abort` and `steps mcp login -p` talk to. A request that is not a browser asking for a page gets a `WWW-Authenticate: basic realm="steps"` challenge. `/login` and the stylesheet and scripts it is drawn with answer anyone: nobody can sign in through a page that needs them signed in first.
 
 **One route is exempt: `POST /p/<pipeline>/hooks/<resource>`**, a [webhook](webhooks.md) delivery. A sender has no credentials to give and authenticates with its own signature instead — the same reason that route is exempt from the same-origin check and is not withheld by `--read-only`. A delivery with a bad signature is still refused by the hook, with a 401 of its own.
 
@@ -88,6 +98,6 @@ put them in the target URL: --target http://user:password@host (or STEPS_TARGET)
 ## What it is not
 
 - **Not a permission model.** Every account can do everything; nothing can be permitted to one person and withheld from another.
-- **Not a substitute for TLS.** Basic auth sends the password on every request, base64-encoded and not encrypted. Over plain HTTP anything on the path reads it. Terminate TLS in front of the daemon — a platform's own router, a reverse proxy, a tunnel.
+- **Not a substitute for TLS.** Basic auth sends the password on every request, base64-encoded and not encrypted, and a session cookie is as good as the password while it lasts. Over plain HTTP anything on the path reads it. Terminate TLS in front of the daemon — a platform's own router, a reverse proxy, a tunnel.
 - **Not rate limited.** There is no lockout and no delay on a wrong password. Use a generated password, not one somebody chose.
 - **Not a reason to expose the daemon.** The set endpoint is still a remote shell; authentication decides *who* reaches it, not *what* they can do once they have.

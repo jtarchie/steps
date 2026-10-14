@@ -89,7 +89,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 23
+const schemaVersion = 24
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -900,6 +900,19 @@ CREATE INDEX IF NOT EXISTS idx_run_placements_node ON run_placements(pipeline_id
 -- The largest single value the schema stores, and the one whose bound was
 -- missing: internal/agent caps a single tool RESULT, but a conversation has
 -- unboundedly many turns, so the row itself needs store.MaxTranscriptBytes.
+-- A browser signed in to the daemon (store.Accounts). Daemon-level, so no
+-- pipeline: a session is somebody's standing with the daemon. The token is
+-- never stored, only its digest, so a copy of this file signs nobody in.
+-- Revocation is a timestamp rather than a DELETE so a sign-out is still
+-- readable as one.
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    actor      TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+
 -- What people did: set, trigger, approve, abort, pause and the rest
 -- (store.Activity). One log per database, trimmed by count across every
 -- pipeline, because who did what is a question about the daemon.

@@ -1,0 +1,14 @@
+{{define "page"}}
+<div class="signin">
+<h1 class="prompt"><b>steps login</b></h1>
+{{with .Problem}}<p class="metaline signin-problem" role="alert">{{.}}</p>{{end}}
+<form class="signin-form" method="post" action="/login">
+  <input type="hidden" name="next" value="{{.Next}}">
+  <label for="signin-user">user</label>
+  <input id="signin-user" name="username" type="text" autocomplete="username" value="{{.Username}}" {{if not .Username}}autofocus{{end}} required>
+  <label for="signin-pass">password</label>
+  <input id="signin-pass" name="password" type="password" autocomplete="current-password" {{if .Username}}autofocus{{end}} required>
+  <button class="btn primary" type="submit">Sign in</button>
+</form>
+</div>
+{{end}}

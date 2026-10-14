@@ -1252,9 +1252,42 @@ table.activity td:first-child { white-space: nowrap; }
 .usermenu { position: relative; display: flex; align-self: stretch; margin: -4px -10px -4px 0; border-left: 1px solid var(--line); }
 .usermenu .pipemenu { left: auto; right: 0; min-width: 200px; }
 .userbtn .who { color: var(--fg); max-width: 16ch; overflow: hidden; text-overflow: ellipsis; }
+/* The switcher's rows reserve a marker column for the current pipeline; nothing here is current. */
+.usermenu .pipemenu a::before { content: none; }
 .usermenu .menuhead { display: block; padding: 8px 12px; font-size: 11px; color: var(--dim); border-bottom: 1px solid var(--line-soft); }
 @media (max-width: 640px) {
   .userbtn .who { max-width: 10ch; }
   .usermenu { position: static; }
   .usermenu .pipemenu { left: 0; right: 0; min-width: 0; }
+}
+
+/* ---- sign in: one narrow column, the prompt above the form ---- */
+.signin { max-width: 360px; margin: 8vh auto 0; }
+.signin-form { display: grid; grid-template-columns: auto 1fr; gap: 10px 12px; align-items: center; }
+.signin-form label { font-family: var(--sans); font-size: 12px; color: var(--dim); }
+.signin-form input[type="text"], .signin-form input[type="password"] {
+  font: inherit; color: var(--fg); background: var(--code-bg);
+  border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; min-width: 0;
+}
+.signin-form input:focus { border-color: var(--yellow); outline: none; }
+.signin-form .btn { grid-column: 2; justify-self: start; }
+.signin-problem { color: var(--red); margin-bottom: 14px; }
+.usermenu form { margin: 0; }
+.menubtn { font: inherit; font-size: 12px; color: var(--fg); background: none; border: 0; width: 100%; text-align: left; padding: 8px 12px; cursor: pointer; }
+.menubtn:hover { background: var(--panel2); }
+@media (max-width: 640px) {
+  .signin { margin-top: 4vh; }
+  .signin-form input[type="text"], .signin-form input[type="password"] { font-size: 16px; }
+}
+/* A phone reads each entry as two lines — when and who, then what was done
+   to what, where — rather than a table that scrolls sideways. */
+@media (max-width: 640px) {
+  table.activity thead { display: none; }
+  table.activity, table.activity tbody { display: block; }
+  table.activity tr { display: grid; grid-template-columns: auto 1fr auto; column-gap: 10px; row-gap: 2px; padding: 8px 12px; border-top: 1px solid var(--line-soft); }
+  table.activity tr:first-child { border-top: 0; }
+  table.activity td { padding: 0; border: 0; }
+  table.activity td:nth-child(2) { grid-column: 2 / -1; }
+  table.activity td:nth-child(4) { min-width: 0; overflow-wrap: anywhere; }
+  .tablewrap:has(> table.activity) { overflow-x: visible; }
 }
