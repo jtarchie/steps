@@ -1,4 +1,4 @@
-package web
+package scheduler
 
 import (
 	"context"
@@ -52,7 +52,7 @@ jobs:
         run: "true"
 `)
 
-	for runner.drainOne(ctx, target) {
+	for runner.DrainOne(ctx, target) {
 	}
 
 	if got := queueStatuses(t, st); got != "succeeded succeeded" {
@@ -73,7 +73,7 @@ jobs:
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	runner.drainOne(ctx, target)
+	runner.DrainOne(ctx, target)
 
 	if got := queueStatuses(t, st); !strings.HasSuffix(got, " skipped") {
 		t.Fatalf("queue = %q, want the held job's row skipped", got)
@@ -100,7 +100,7 @@ jobs:
 	t.Cleanup(func() { _ = provider.Close() })
 
 	runner.SetProvider("demo", &panicsOnce{Provider: provider})
-	runner.drainOne(t.Context(), target)
+	runner.DrainOne(t.Context(), target)
 }
 
 func drainAnAbort(t *testing.T) {
@@ -112,7 +112,7 @@ func drainAnAbort(t *testing.T) {
 	go func() {
 		defer close(done)
 
-		runner.drainOne(context.Background(), target)
+		runner.DrainOne(context.Background(), target)
 	}()
 
 	if !runner.Abort(target, runningRunID(t, st)) {

@@ -35,6 +35,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/scheduler"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -68,41 +69,19 @@ const maxUploadSize int64 = 8 << 20
 // shutdownGrace is how long a cancelled daemon waits for the requests it is already answering.
 const shutdownGrace = 5 * time.Second
 
-// Pipeline is one loaded pipeline the server serves, with its own config and
-// its own store handle. Two served pipelines may now share a state FILE (see
-// --db), but never a store handle: each one is scoped to its own pipeline
-// row, which is what keeps their histories and caches apart.
+// Pipeline is one held pipeline as this server sees it: the scheduler's handle (name, store, bus, served configuration) plus what only the HTTP surface needs.
 type Pipeline struct {
-	// Slug is the name `steps pipeline set` was given: the route, the store's pipelines.name and the Config's name are ONE identity, not three kept in agreement.
-	Slug string
+	*scheduler.Pipeline
 	// path names a file on the SENDER's machine, recorded for a reader who finds a configuration nobody remembers sending, and never opened here. Behind an atomic because a later set moves it while handlers read it.
 	path atomic.Pointer[string]
-	// cfg is the configuration currently being served, swapped when the file
-	// on disk changes (see SetConfig). Unexported behind an atomic pointer
-	// because every reader of it runs concurrently with that swap — handlers
-	// serving requests, the queue drain starting a job, the trigger poller
-	// deciding what to check — and a plain field read while the daemon
-	// reloads is a data race, not a stale read.
-	cfg   atomic.Pointer[config.Config]
-	Store store.Store
-	// Bus carries live run events for runs this process itself executes.
-	// Runs started by a separate `steps run` land in the store but not on
-	// this bus, which is why every live view falls back to replaying the
-	// stored events rather than assuming the bus saw everything.
-	Bus *events.Bus
-	// Hooks answers POST /p/<slug>/hooks/<resource>, a delivery to a webhook resource. Built by the caller (trigger.HookHandler): this package serves the surface and does not own the queue, the division that keeps the runner an interface. Nil only in a test.
+	// Hooks answers POST /p/<slug>/hooks/<resource>, a delivery to a webhook resource. Built by the caller (trigger.HookHandler): this package serves the surface and does not own the queue — internal/scheduler drains it, reached only through Runner. Nil only in a test.
 	Hooks func(w http.ResponseWriter, r *http.Request, resource string)
 }
 
 // NewPipeline builds a served pipeline around the configuration it starts
-// with.
-//
-// A constructor rather than a struct literal because cfg is behind an atomic
-// pointer: it is read by handlers, the drain and the poller at once, and a
-// literal would leave it nil for whatever ran before the caller filled it in.
+// with. A literal would leave the embedded handle nil.
 func NewPipeline(slug, path string, cfg *config.Config, st store.Store, bus *events.Bus) *Pipeline {
-	pipeline := &Pipeline{Slug: slug, Store: st, Bus: bus}
-	pipeline.cfg.Store(cfg)
+	pipeline := &Pipeline{Pipeline: scheduler.NewPipeline(slug, cfg, st, bus)}
 	pipeline.path.Store(&path)
 
 	return pipeline
@@ -120,17 +99,6 @@ func (p *Pipeline) Path() string {
 
 // SetPath records where a set that just landed was sent from.
 func (p *Pipeline) SetPath(path string) { p.path.Store(&path) }
-
-// Config is the configuration being served right now.
-//
-// Every reader goes through here rather than holding the pointer across a
-// swap: a job started before a reload must run the plan it was queued
-// against, which it does by taking this once, while the NEXT job takes the
-// new one.
-func (p *Pipeline) Config() *config.Config { return p.cfg.Load() }
-
-// SetConfig swaps in a configuration a `steps pipeline set` just applied.
-func (p *Pipeline) SetConfig(cfg *config.Config) { p.cfg.Store(cfg) }
 
 // Server serves whatever has been set into it. The registry is behind a lock rather than fixed at construction because a handler, the drain and the poll loop all read it while another request writes it.
 type Server struct {
@@ -228,17 +196,17 @@ var ErrNoSuchPipeline = errors.New("no such pipeline")
 
 // Runner is what the web layer needs in order to act rather than only
 // report: enqueue a job for execution, and report what is currently running.
-// Implemented by the in-process drainer (see runner.go); an interface so the
+// Implemented by scheduler.LocalRunner, which internal/cli installs; an interface so the
 // HTTP layer can be tested without starting real jobs.
 type Runner interface {
 	// Enqueue queues a person's trigger of a job, returning the queue row id.
-	Enqueue(ctx context.Context, pipeline *Pipeline, jobName, reason string, force bool) (int64, error)
+	Enqueue(ctx context.Context, pipeline *scheduler.Pipeline, jobName, reason string, force bool) (int64, error)
 	// EnqueueRerun queues a retry of a recorded run.
-	EnqueueRerun(ctx context.Context, pipeline *Pipeline, jobName, runID string) error
+	EnqueueRerun(ctx context.Context, pipeline *scheduler.Pipeline, jobName, runID string) error
 	// Abort cancels a run this process is executing, and reports false when it is not running here.
-	Abort(pipeline *Pipeline, runID string) bool
+	Abort(pipeline *scheduler.Pipeline, runID string) bool
 	// AbortQueued drops a job's queued run before it starts, and reports false when nothing was queued.
-	AbortQueued(ctx context.Context, pipeline *Pipeline, jobName string) (bool, error)
+	AbortQueued(ctx context.Context, pipeline *scheduler.Pipeline, jobName string) (bool, error)
 }
 
 // New builds a server over whatever pipelines it is handed, which may be none: a daemon is configured by `steps pipeline set` and by nothing else, so empty is the ordinary starting state rather than an error.

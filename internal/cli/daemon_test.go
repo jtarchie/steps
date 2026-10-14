@@ -17,6 +17,7 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
+	"github.com/jtarchie/steps/internal/scheduler"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/web"
@@ -26,7 +27,7 @@ import (
 func TestTheDaemonSharesAcquiredMachinesAcrossItsLoops(t *testing.T) {
 	t.Parallel()
 
-	held := newDaemon(t.Context(), nil, web.NewLocalRunner(nil, pipeline.Run{}, 1),
+	held := newDaemon(t.Context(), nil, scheduler.NewLocalRunner(nil, pipeline.Run{}, 1),
 		State(filepath.Join(t.TempDir(), "steps.db")), ExecFlags{}, HistoryFlags{}, time.Hour)
 	defer held.Close()
 
@@ -100,7 +101,7 @@ func TestARenameRefusedWhileABuildRunsNamesThatBuild(t *testing.T) {
 func TestARefusalListingEveryRunningBuildClaimsNoMore(t *testing.T) {
 	isolateLogins(t)
 
-	local := web.NewLocalRunner(nil, pipeline.Run{}, runningListed)
+	local := scheduler.NewLocalRunner(nil, pipeline.Run{}, runningListed)
 
 	server, err := web.New(nil, local)
 	if err != nil {
@@ -468,7 +469,7 @@ func isolateLogins(t testing.TB) string {
 func servingDaemon(t testing.TB) *daemon {
 	t.Helper()
 
-	local := web.NewLocalRunner(nil, pipeline.Run{}, 1)
+	local := scheduler.NewLocalRunner(nil, pipeline.Run{}, 1)
 
 	server, err := web.New(nil, local)
 	if err != nil {
@@ -748,7 +749,7 @@ func TestARestartSkipsAPipelineThisMachineCannotRunAndServesTheRest(t *testing.T
 
 	t.Setenv("DAEMON_RESTART_KEY", "")
 
-	local := web.NewLocalRunner(nil, pipeline.Run{}, 1)
+	local := scheduler.NewLocalRunner(nil, pipeline.Run{}, 1)
 
 	server, err := web.New(nil, local)
 	if err != nil {
@@ -804,7 +805,7 @@ func TestARestartClosesTheRunAKilledDaemonLeftRunning(t *testing.T) {
 
 	_ = st.Close()
 
-	local := web.NewLocalRunner(nil, pipeline.Run{}, 1)
+	local := scheduler.NewLocalRunner(nil, pipeline.Run{}, 1)
 
 	server, err := web.New(nil, local)
 	if err != nil {
@@ -846,7 +847,7 @@ func brokenOnRestart(t *testing.T) (*daemon, string) {
 
 	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable
 
-	local := web.NewLocalRunner(nil, pipeline.Run{}, 1)
+	local := scheduler.NewLocalRunner(nil, pipeline.Run{}, 1)
 
 	server, err := web.New(nil, local)
 	if err != nil {
@@ -908,7 +909,7 @@ func TestAFailedRestoreDoesNotCompactTheFile(t *testing.T) {
 
 	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable
 
-	local := web.NewLocalRunner(nil, pipeline.Run{}, 1)
+	local := scheduler.NewLocalRunner(nil, pipeline.Run{}, 1)
 
 	server, err := web.New(nil, local)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/scheduler"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
@@ -192,7 +193,7 @@ jobs:
 	t.Cleanup(func() { _ = inner.Close() })
 
 	for _, job := range []string{"build", "lint"} {
-		finishedRun(t, &Pipeline{Store: inner}, job+"-1", job, "failed")
+		finishedRun(t, &Pipeline{Pipeline: &scheduler.Pipeline{Store: inner}}, job+"-1", job, "failed")
 
 		time.Sleep(2 * time.Millisecond)
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/scheduler"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
@@ -631,7 +632,7 @@ type enqueueRecorder struct {
 	forced  []bool
 }
 
-func (r *enqueueRecorder) Enqueue(_ context.Context, _ *Pipeline, _, reason string, force bool) (int64, error) {
+func (r *enqueueRecorder) Enqueue(_ context.Context, _ *scheduler.Pipeline, _, reason string, force bool) (int64, error) {
 	r.reasons = append(r.reasons, reason)
 	r.forced = append(r.forced, force)
 
@@ -1156,7 +1157,7 @@ jobs:
 	t.Cleanup(func() { _ = st.Close() })
 
 	pipeline := NewPipeline("demo", path, cfg, st, events.New(nil))
-	SyncQueueLimits(t.Context(), pipeline)
+	scheduler.SyncQueueLimits(t.Context(), pipeline.Pipeline)
 
 	server, err := New([]*Pipeline{pipeline}, nil)
 	if err != nil {

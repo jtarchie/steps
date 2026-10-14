@@ -1,11 +1,10 @@
-package web
+package scheduler
 
 import (
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +49,7 @@ jobs:
 	t.Cleanup(func() { _ = st.Close() })
 
 	ctx := t.Context()
-	target := NewPipeline("demo", path, cfg, st, events.New(nil))
+	target := NewPipeline("demo", cfg, st, events.New(nil))
 
 	// Recovery and adoption are separate acts now — the daemon does both at
 	// startup, and only the second on a reload. This test is about the
@@ -145,7 +144,7 @@ jobs:
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
-	target := NewPipeline("demo", path, cfg, st, events.New(nil))
+	target := NewPipeline("demo", cfg, st, events.New(nil))
 
 	PrepareQueue(ctx, target)
 
@@ -263,7 +262,7 @@ jobs:
 	t.Cleanup(func() { _ = provider.Close() })
 
 	ctx := t.Context()
-	target := NewPipeline("demo", path, cfg, st, events.New(nil))
+	target := NewPipeline("demo", cfg, st, events.New(nil))
 
 	PrepareQueue(ctx, target)
 
@@ -277,7 +276,7 @@ jobs:
 			t.Fatalf("EnqueueJob: %v", err)
 		}
 
-		if !runner.drainOne(ctx, target) {
+		if !runner.DrainOne(ctx, target) {
 			t.Fatal("nothing was claimed from a queue with a pending row")
 		}
 	}
@@ -308,7 +307,7 @@ jobs:
         run: "exit 1"
 `)
 
-	runner.drainOne(t.Context(), target)
+	runner.DrainOne(t.Context(), target)
 
 	if !strings.Contains(logs.String(), "web.job_held") {
 		t.Errorf("the breaker tripped without a word:\n%s", logs.String())
@@ -340,7 +339,7 @@ jobs:
 `)
 	ctx := t.Context()
 
-	runner.drainOne(ctx, target)
+	runner.DrainOne(ctx, target)
 
 	writeFile(t, pass, "")
 
@@ -357,7 +356,7 @@ jobs:
 			t.Fatalf("Enqueue: %v", err)
 		}
 
-		if !runner.drainOne(ctx, target) {
+		if !runner.DrainOne(ctx, target) {
 			t.Fatal("nothing was claimed from a queue with a pending row")
 		}
 	}
@@ -444,7 +443,7 @@ jobs:
 
 	t.Cleanup(func() { _ = provider.Close() })
 
-	target := NewPipeline("demo", path, cfg, st, events.New(nil))
+	target := NewPipeline("demo", cfg, st, events.New(nil))
 
 	PrepareQueue(t.Context(), target)
 
@@ -454,14 +453,14 @@ jobs:
 	}
 
 	// Cancelled while the step sleeps, which is what a SIGTERM to the daemon
-	// looks like from inside drainOne.
+	// looks like from inside DrainOne.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	time.AfterFunc(2*time.Second, cancel) // cancelled, never timed out: DeadlineExceeded is what a step's own timeout: ends in, which is the job answering
 
 	runner := NewLocalRunner(map[string]workspace.Provider{"demo": provider}, pipeline.Run{}, 1)
-	runner.drainOne(ctx, target)
+	runner.DrainOne(ctx, target)
 
 	rows, err := st.ListTriggerQueue(t.Context(), 10)
 	if err != nil {
@@ -532,7 +531,7 @@ jobs:
 	t.Cleanup(func() { _ = provider.Close() })
 
 	ctx := t.Context()
-	target := NewPipeline("demo", path, cfg, st, events.New(nil))
+	target := NewPipeline("demo", cfg, st, events.New(nil))
 
 	PrepareQueue(ctx, target)
 
@@ -544,7 +543,7 @@ jobs:
 			t.Fatalf("EnqueueJob: %v", enqueueErr)
 		}
 
-		if !runner.drainOne(ctx, target) {
+		if !runner.DrainOne(ctx, target) {
 			t.Fatal("nothing was claimed from a queue with a pending row")
 		}
 	}
@@ -619,7 +618,7 @@ jobs:
 	t.Cleanup(func() { _ = provider.Close() })
 
 	ctx := t.Context()
-	target := NewPipeline("demo", path, cfg, st, events.New(nil))
+	target := NewPipeline("demo", cfg, st, events.New(nil))
 
 	PrepareQueue(ctx, target)
 
@@ -633,12 +632,12 @@ jobs:
 			t.Fatalf("EnqueueJob: %v", enqueueErr)
 		}
 
-		if !runner.drainOne(ctx, target) {
+		if !runner.DrainOne(ctx, target) {
 			t.Fatal("nothing was claimed from a queue with a pending row")
 		}
 
 		// Each version is its own run, queued by the one before it.
-		for runner.drainOne(ctx, target) {
+		for runner.DrainOne(ctx, target) {
 		}
 	}
 
@@ -685,14 +684,14 @@ jobs:
 `)
 	ctx := t.Context()
 
-	runner.drainOne(ctx, target)
+	runner.DrainOne(ctx, target)
 
 	err := st.EnqueueJob(ctx, "build", "next")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	if !runner.drainOne(ctx, target) {
+	if !runner.DrainOne(ctx, target) {
 		t.Fatal("the next build of a serial job could not be claimed: the timed-out build still holds its slot")
 	}
 
@@ -890,7 +889,7 @@ jobs:
 `)
 	ctx := t.Context()
 
-	runner.drainOne(ctx, target)
+	runner.DrainOne(ctx, target)
 
 	_, _, err := st.RecordJobOutcome(ctx, "build", false, 1)
 	if err != nil {
@@ -902,14 +901,14 @@ jobs:
 		t.Fatalf("Enqueue: %v", err)
 	}
 
-	runner.drainOne(ctx, target)
+	runner.DrainOne(ctx, target)
 
 	err = st.EnqueueJob(ctx, "build", "poll")
 	if err != nil {
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	runner.drainOne(ctx, target)
+	runner.DrainOne(ctx, target)
 
 	if got := queueStatuses(t, st); got != "succeeded succeeded succeeded" {
 		t.Fatalf("queue = %q, want the held job's manual row run, and the poll after it run once the pass cleared the breaker", got)
@@ -920,7 +919,7 @@ jobs:
 	}
 }
 
-// drainable is one pipeline with one queued build of "build", for a test that drives drainOne itself.
+// drainable is one pipeline with one queued build of "build", for a test that drives DrainOne itself.
 func drainable(t *testing.T, dir, yaml string) (*LocalRunner, *Pipeline, store.Store) {
 	t.Helper()
 
@@ -946,7 +945,7 @@ func drainable(t *testing.T, dir, yaml string) (*LocalRunner, *Pipeline, store.S
 
 	t.Cleanup(func() { _ = provider.Close() })
 
-	target := NewPipeline("demo", path, cfg, st, events.New(nil))
+	target := NewPipeline("demo", cfg, st, events.New(nil))
 
 	PrepareQueue(t.Context(), target)
 	SyncQueueLimits(t.Context(), target)
@@ -999,7 +998,7 @@ jobs:
 
 	runner.SetProvider("demo", &panicsOnce{Provider: provider})
 
-	if !runner.drainOne(t.Context(), target) {
+	if !runner.DrainOne(t.Context(), target) {
 		t.Fatal("nothing was claimed from a queue with a pending row")
 	}
 
@@ -1017,7 +1016,7 @@ jobs:
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	if !runner.drainOne(t.Context(), target) {
+	if !runner.DrainOne(t.Context(), target) {
 		t.Fatal("the serial slot the panicking run held was never given back")
 	}
 
@@ -1049,7 +1048,7 @@ func drainInBackground(drain context.Context, runner *LocalRunner, target *Pipel
 	go func() {
 		defer close(done)
 
-		runner.drainOne(drain, target)
+		runner.DrainOne(drain, target)
 	}()
 
 	return done
@@ -1061,7 +1060,7 @@ func waitForDrain(t *testing.T, done <-chan struct{}, within time.Duration) {
 	select {
 	case <-done:
 	case <-time.After(within):
-		t.Fatalf("drainOne was still running %s later", within)
+		t.Fatalf("DrainOne was still running %s later", within)
 	}
 }
 
@@ -1080,102 +1079,4 @@ func waitForFile(t *testing.T, path string) {
 	}
 
 	t.Fatalf("%s never appeared", path)
-}
-
-// A hook's output is drawn on a named row of its own that finishes with the
-// run. It used to land in a nameless row nothing closed — the one thing
-// still ticking on a failed run's page — or under the step it guards.
-func TestAFailedRunDrawsItsHooksAsFinishedRows(t *testing.T) {
-	t.Parallel()
-
-	page := drainedRunPage(t, `
-jobs:
-  - name: build
-    plan:
-      - task: build
-        inputs: []
-        run: exit 1
-        on_failure:
-          task: tell
-          run: echo step hook ran
-    on_failure:
-      task: explain-failure
-      run: echo see steps runs
-`)
-
-	hookHead := regexp.MustCompile(`id="(step-\d+-[^"]*)_head"[^>]*>\s*<span class="chev[^"]*"></span>\s*<span class="stmark"[^>]*>[^<]*</span>\s*<span class="kind">hook</span>\s*<span class="name">on_failure · task explain-failure</span>`).FindStringSubmatch(page)
-	if hookHead == nil {
-		t.Fatalf("no row drawn for the job hook, kind hook, named after what it ran:\n%s", page)
-	}
-
-	hook := hookHead[1]
-
-	if tag := openingTag(t, page, hook); !strings.Contains(tag, "passed") || strings.Contains(tag, "running") {
-		t.Errorf("job hook row = %s, want a finished, passed row", tag)
-	}
-
-	if !strings.Contains(between(t, page, `id="`+hook+`"`, "</body>"), "see steps runs") {
-		t.Error("the job hook's output is not on its row")
-	}
-
-	build := assertStepHookUnderBuild(t, page, hook)
-
-	if strings.Contains(page, `data-elapsed-since="`) {
-		t.Error("a finished run's page still has a running clock")
-	}
-
-	if !strings.Contains(page, `failed at <a href="#`+build+`">build</a>`) {
-		t.Error(`the header's "failed at" does not name build`)
-	}
-}
-
-// assertStepHookUnderBuild checks the step hook drew inside build's substeps,
-// which end where the job hook's row begins, and not in build's own body.
-// It returns build's anchor.
-func assertStepHookUnderBuild(t *testing.T, page, jobHook string) string {
-	t.Helper()
-
-	build := regexp.MustCompile(`id="(step-\d+-build)_substeps"`).FindStringSubmatch(page)
-	if build == nil {
-		t.Fatal("build drew no substeps, so its hook is not under it")
-	}
-
-	substeps := between(t, page, `id="`+build[1]+`_substeps"`, `id="`+jobHook+`"`)
-	if !strings.Contains(substeps, "on_failure · task tell") || !strings.Contains(substeps, "step hook ran") {
-		t.Error("the step hook's row and output are not inside build's substeps")
-	}
-
-	if strings.Contains(between(t, page, `id="`+build[1]+`"`, `id="`+build[1]+`_substeps"`), "step hook ran") {
-		t.Error("the step hook's output is filed in build's own body")
-	}
-
-	return build[1]
-}
-
-// drainedRunPage runs the pipeline's one queued build and returns its run
-// page, with the events persisted the way the daemon persists them.
-func drainedRunPage(t *testing.T, yaml string) string {
-	t.Helper()
-
-	runner, target, st := drainable(t, t.TempDir(), yaml)
-
-	bus := events.New(pipeline.StoreSink(st))
-	target = NewPipeline("demo", target.Path(), target.Config(), st, bus)
-
-	runner.drainOne(t.Context(), target)
-	bus.Close()
-
-	runs, err := st.ListRuns(t.Context(), "build", 1)
-	if err != nil || len(runs) != 1 {
-		t.Fatalf("ListRuns = %+v, %v", runs, err)
-	}
-
-	server, err := New([]*Pipeline{target}, nil)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	_, page := get(t, server, "/p/demo/runs/"+runs[0].ID)
-
-	return page
 }

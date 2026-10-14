@@ -416,7 +416,7 @@ func writeLedger(book ledger) error {
 
 // serialPackages are the ones whose tests bind ports, spawn containers or share the docker daemon. sweep runs their docker tests one at a time on its own; they still take longest, so they go last.
 var serialPackages = map[string]bool{ //nolint:gochecknoglobals // a fixed table
-	"./internal/pipeline": true, "./internal/venue": true, "./internal/shell": true, "./internal/web": true,
+	"./internal/pipeline": true, "./internal/venue": true, "./internal/shell": true, "./internal/web": true, "./internal/scheduler": true,
 	"./internal/cli": true, "./internal/dockerapi": true, "./internal/trigger": true, "./internal/agent": true, "./internal/agent/tree": true,
 	"./internal/store/postgres": true, "./internal/treedigest": true, "./internal/testsshd": true,
 }

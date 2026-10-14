@@ -1,4 +1,4 @@
-package web
+package scheduler
 
 import (
 	"context"
@@ -29,7 +29,7 @@ jobs:
 
 	target.Store = panicsOnStep{Store: st}
 
-	if !runner.drainOne(t.Context(), target) {
+	if !runner.DrainOne(t.Context(), target) {
 		t.Fatal("nothing was claimed from a queue with a pending row")
 	}
 

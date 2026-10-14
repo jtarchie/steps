@@ -18,7 +18,7 @@ func (s *Server) abortRun(ctx context.Context, target *Pipeline, runID string) e
 		return err
 	}
 
-	if s.runner.Abort(target, runID) {
+	if s.runner.Abort(target.Pipeline, runID) {
 		return nil
 	}
 
@@ -46,7 +46,7 @@ func (s *Server) abortQueued(ctx context.Context, target *Pipeline, jobName stri
 		return err
 	}
 
-	dropped, err := s.runner.AbortQueued(ctx, target, jobName)
+	dropped, err := s.runner.AbortQueued(ctx, target.Pipeline, jobName)
 	if err != nil {
 		return echoError(err)
 	}

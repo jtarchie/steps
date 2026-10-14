@@ -168,6 +168,9 @@ linters:
             # leaf both need in order to wire a bus to a store sink.
             - "github.com/jtarchie/steps/internal/events"
             - "github.com/jtarchie/steps/internal/runview"
+            # scheduler is the daemon's queue drain: the CLI builds the
+            # LocalRunner and hands it to web as its Runner.
+            - "github.com/jtarchie/steps/internal/scheduler"
             - "github.com/jtarchie/steps/internal/web"
             - "github.com/jtarchie/steps/internal/workspace"
             # outcome: `steps runs follow` exits as the run it followed did, so
@@ -825,7 +828,30 @@ linters:
             - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/usage"
             - "github.com/jtarchie/steps/internal/workspace"
-        # trigger polls get/trigger:true resources and enqueues what they affect for web's runner to drain — the cross-job counterpart to pipeline's single-job orchestration.
+        # scheduler drains each held pipeline's queue: workers, --max-runs
+        # slots, serial/max_in_flight sync, the breaker, pause, abort, and the
+        # leased workspace provider. It sits above pipeline and reaches
+        # execution only through pipeline.RunJob; it knows nothing of HTTP,
+        # which is why web reaches it only through web.Runner.
+        Scheduler:
+          files:
+            - "**/internal/scheduler/**"
+          allow:
+            - "$gostd"
+            # goleak is test-only: goleak_test.go's TestMain fails this
+            # package's tests if any leaves a goroutine running.
+            - "go.uber.org/goleak"
+            - "github.com/jtarchie/steps/internal/config"
+            - "github.com/jtarchie/steps/internal/events"
+            - "github.com/jtarchie/steps/internal/pipeline"
+            - "github.com/jtarchie/steps/internal/store"
+            # store/sqlite is test-only here: a test needs a concrete driver
+            # to open a database with. Production code in this package takes
+            # the store.Store it was handed — internal/cli is the only package
+            # that chooses one.
+            - "github.com/jtarchie/steps/internal/store/sqlite"
+            - "github.com/jtarchie/steps/internal/workspace"
+        # trigger polls get/trigger:true resources and enqueues what they affect for the scheduler to drain — the cross-job counterpart to pipeline's single-job orchestration.
         Trigger:
           files:
             - "**/internal/trigger/**"
@@ -853,8 +879,8 @@ linters:
             - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/webhook"
             - "github.com/jtarchie/steps/internal/workspace"
-        # web serves the UI. Like trigger, it sits above pipeline and reaches
-        # execution territory only through pipeline.RunJob — never into
+        # web serves the UI. It reaches execution only through web.Runner,
+        # which internal/scheduler implements — never into pipeline or
         # agent/resource/merkle directly, which is what keeps the UI a second
         # front end on one model rather than a second model.
         Web:
@@ -896,15 +922,31 @@ linters:
             - "github.com/jtarchie/steps/docs"
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/events"
-            - "github.com/jtarchie/steps/internal/pipeline"
             - "github.com/jtarchie/steps/internal/runview"
+            # scheduler for its Pipeline handle, which web.Pipeline embeds and
+            # web.Runner's methods take; the drain itself is reached only
+            # through that interface.
+            - "github.com/jtarchie/steps/internal/scheduler"
             - "github.com/jtarchie/steps/internal/store"
             # store/sqlite is test-only here: a test needs a concrete driver
             # to open a database with. Production code in this package takes
             # the store.Store it was handed — internal/cli is the only package
             # that chooses one.
             - "github.com/jtarchie/steps/internal/store/sqlite"
+            # pipeline and workspace are test-only (WebExecutionTestOnly): a
+            # page test that needs a run the real drain produced builds a
+            # LocalRunner over a real workspace provider.
+            - "github.com/jtarchie/steps/internal/pipeline"
             - "github.com/jtarchie/steps/internal/workspace"
+        WebExecutionTestOnly:
+          files:
+            - "**/internal/web/**"
+            - "!$test"
+          deny:
+            - pkg: "github.com/jtarchie/steps/internal/pipeline"
+              desc: "test-only in web: execution belongs to internal/scheduler, reached through web.Runner"
+            - pkg: "github.com/jtarchie/steps/internal/workspace"
+              desc: "test-only in web: the workspace provider is internal/scheduler's lease"
 
   exclusions:
     rules:

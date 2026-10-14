@@ -13,6 +13,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/pipeline"
+	"github.com/jtarchie/steps/internal/scheduler"
 	"github.com/jtarchie/steps/internal/telemetry"
 	"github.com/jtarchie/steps/internal/web"
 )
@@ -145,7 +146,7 @@ func (w *WebCmd) Run() error {
 // and notices nothing, and a second `steps web` on the same state database is
 // the deployment mistake the one-process-per-file rule already names.
 func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run) error {
-	local := web.NewLocalRunner(nil, base, w.MaxConcurrent)
+	local := scheduler.NewLocalRunner(nil, base, w.MaxConcurrent)
 	local.StopWith(ctx)
 	local.LimitRuns(w.MaxRuns)
 

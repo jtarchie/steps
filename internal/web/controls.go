@@ -60,7 +60,7 @@ func (s *Server) handleTrigger(c *echo.Context) error {
 	// drainer started in between.
 	since := time.Now().UTC()
 
-	_, err = s.runner.Enqueue(c.Request().Context(), pipeline, name, reason, force)
+	_, err = s.runner.Enqueue(c.Request().Context(), pipeline.Pipeline, name, reason, force)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}
@@ -102,7 +102,7 @@ func (s *Server) handleRerun(c *echo.Context) error {
 
 	since := time.Now().UTC()
 
-	err = s.runner.EnqueueRerun(ctx, pipeline, run.JobName, run.ID)
+	err = s.runner.EnqueueRerun(ctx, pipeline.Pipeline, run.JobName, run.ID)
 	if err != nil {
 		return fmt.Errorf("web: %w", err)
 	}

@@ -1,12 +1,15 @@
-package web
-
-// Making the UI able to act, not only report.
+// Package scheduler is the daemon's job-scheduling engine: it drains each held
+// pipeline's durable queue in this process — workers, the --max-runs slots,
+// the circuit breaker, pause, abort, the shutdown grace — and holds the
+// workspace provider each pipeline's runs materialize in.
 //
-// A trigger from the web goes into the same durable queue `steps web` uses,
-// and is drained by the same pipeline.RunJob every other path calls. There is
-// deliberately no second execution route: a job started from a browser must
-// be the same job, with the same caching, hooks, serial groups, and recording,
-// as one started from a terminal.
+// Every trigger lands in that one queue — a poll, a webhook, a browser click,
+// an approval release — and is drained by the same pipeline.RunJob every other
+// path calls. There is deliberately no second execution route: a job started
+// from a browser must be the same job, with the same caching, hooks, serial
+// groups, and recording, as one started from a terminal. internal/web reaches
+// this package only through its Runner interface; internal/cli wires the two.
+package scheduler
 
 import (
 	"cmp"
@@ -161,7 +164,7 @@ func (r *LocalRunner) SetProvider(slug string, provider workspace.Provider) {
 func (r *LocalRunner) EnqueueRerun(ctx context.Context, target *Pipeline, jobName, runID string) error {
 	err := target.Store.EnqueueRerunJob(ctx, jobName, "retry (web)", runID)
 	if err != nil {
-		return fmt.Errorf("web: %w", err)
+		return fmt.Errorf("scheduler: %w", err)
 	}
 
 	return nil
@@ -177,7 +180,7 @@ func (r *LocalRunner) Close() { r.providers.Close() }
 func (r *LocalRunner) Enqueue(ctx context.Context, target *Pipeline, jobName, reason string, force bool) (int64, error) {
 	err := target.Store.EnqueueManualJob(ctx, jobName, reason)
 	if err != nil {
-		return 0, fmt.Errorf("web: %w", err)
+		return 0, fmt.Errorf("scheduler: %w", err)
 	}
 
 	if !force {
@@ -252,7 +255,7 @@ func (r *LocalRunner) Running(slug string) []RunningBuild {
 func (r *LocalRunner) AbortQueued(ctx context.Context, target *Pipeline, jobName string) (bool, error) {
 	dropped, err := target.Store.AbortQueuedJob(ctx, jobName)
 	if err != nil {
-		return false, fmt.Errorf("web: %w", err)
+		return false, fmt.Errorf("scheduler: %w", err)
 	}
 
 	if dropped {
@@ -316,7 +319,7 @@ func (r *LocalRunner) drainWorker(ctx context.Context, target *Pipeline) {
 			return
 		}
 
-		ran := r.drainOne(ctx, target)
+		ran := r.DrainOne(ctx, target)
 		if ran {
 			continue
 		}
@@ -375,9 +378,9 @@ func SyncQueueLimits(ctx context.Context, target *Pipeline) {
 	}
 }
 
-// drainOne claims at most one queued job and runs it. It reports whether it
+// DrainOne claims at most one queued job and runs it. It reports whether it
 // ran anything, so the caller knows whether to back off.
-func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
+func (r *LocalRunner) DrainOne(ctx context.Context, target *Pipeline) bool {
 	if !admits(ctx, target) {
 		return false
 	}
@@ -595,7 +598,7 @@ func (r *LocalRunner) runJob(
 	provider, release, ok := r.providers.take(target.Slug)
 	if !ok {
 		// Refused rather than inventing a workspace: an unregistered pipeline is a server built by hand, and running somewhere nobody chose is worse than not running.
-		return false, fmt.Errorf("web: no workspace provider registered for pipeline %q", target.Slug)
+		return false, fmt.Errorf("scheduler: no workspace provider registered for pipeline %q", target.Slug)
 	}
 
 	// Held for the life of the run, so a set that swaps the workspace under this pipeline cannot close the tree this build is materializing into.
@@ -638,7 +641,7 @@ func (r *LocalRunner) runJob(
 
 		opts.RerunOf, _, err = pipeline.PrepareRerun(runCtx, target.Store, trigger.RerunOf)
 		if err != nil {
-			return false, fmt.Errorf("web: %w", err)
+			return false, fmt.Errorf("scheduler: %w", err)
 		}
 	}
 

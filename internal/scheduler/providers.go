@@ -1,4 +1,4 @@
-package web
+package scheduler
 
 // Which workspace a pipeline's runs materialize in, while that answer changes underneath them.
 

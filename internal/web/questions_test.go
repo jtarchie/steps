@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jtarchie/steps/internal/scheduler"
 	"github.com/jtarchie/steps/internal/store"
 )
 
@@ -15,17 +16,17 @@ import (
 // read-only server, and nil is what read-only means here.
 type stubRunner struct{}
 
-func (stubRunner) Enqueue(context.Context, *Pipeline, string, string, bool) (int64, error) {
+func (stubRunner) Enqueue(context.Context, *scheduler.Pipeline, string, string, bool) (int64, error) {
 	return 1, nil
 }
 
-func (stubRunner) Abort(*Pipeline, string) bool { return false }
+func (stubRunner) Abort(*scheduler.Pipeline, string) bool { return false }
 
-func (stubRunner) EnqueueRerun(ctx context.Context, pipeline *Pipeline, jobName, runID string) error {
+func (stubRunner) EnqueueRerun(ctx context.Context, pipeline *scheduler.Pipeline, jobName, runID string) error {
 	return pipeline.Store.EnqueueRerunJob(ctx, jobName, "retry (web)", runID) //nolint:wrapcheck // a double answering what the store answers
 }
 
-func (stubRunner) AbortQueued(ctx context.Context, pipeline *Pipeline, jobName string) (bool, error) {
+func (stubRunner) AbortQueued(ctx context.Context, pipeline *scheduler.Pipeline, jobName string) (bool, error) {
 	return pipeline.Store.AbortQueuedJob(ctx, jobName) //nolint:wrapcheck // a double answering what the store answers
 }
 

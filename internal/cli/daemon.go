@@ -19,6 +19,7 @@ import (
 	stepsmcp "github.com/jtarchie/steps/internal/mcp"
 	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/runview"
+	"github.com/jtarchie/steps/internal/scheduler"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/trigger"
@@ -29,7 +30,7 @@ import (
 // daemon holds the pipelines this process serves, and everything started for each one.
 type daemon struct {
 	server   *web.Server
-	runner   *web.LocalRunner
+	runner   *scheduler.LocalRunner
 	state    State
 	exec     ExecFlags
 	history  HistoryFlags
@@ -95,7 +96,7 @@ type servedPipeline struct {
 
 // newDaemon wires the manager into the server it registers pipelines with.
 func newDaemon(
-	ctx context.Context, server *web.Server, runner *web.LocalRunner,
+	ctx context.Context, server *web.Server, runner *scheduler.LocalRunner,
 	state State, exec ExecFlags, history HistoryFlags, interval time.Duration,
 ) *daemon {
 	// One registry for every job, poll and webhook this daemon starts, so the last of them out gives a machine back rather than the first.
@@ -419,7 +420,7 @@ func (d *daemon) replace(existing *servedPipeline, cfg *config.Config, provider 
 	existing.target.SetPath(from)
 
 	// The daemon's context, never the request's: these are what make the queue obey the configuration just applied, and a sender that hung up must not leave serial: unwritten while the drain starts anyway.
-	web.SyncQueueLimits(d.base, existing.target)
+	scheduler.SyncQueueLimits(d.base, existing.target.Pipeline)
 	d.sweep(d.base, existing.target)
 }
 
@@ -497,8 +498,8 @@ func (d *daemon) start(
 	d.runner.SetProvider(name, provider)
 
 	// Before either loop, because ResetStaleRunning reads every running row as abandoned — true for a pipeline nothing here is running yet, false a moment later. On the loops' own context, since a sender that hung up must not leave the queue admitting jobs the pipeline forbade.
-	web.PrepareQueue(loopCtx, target)
-	web.SyncQueueLimits(loopCtx, target)
+	scheduler.PrepareQueue(loopCtx, target.Pipeline)
+	scheduler.SyncQueueLimits(loopCtx, target.Pipeline)
 	d.sweep(loopCtx, target)
 
 	loops := &sync.WaitGroup{}
@@ -507,7 +508,7 @@ func (d *daemon) start(
 	go func() {
 		defer loops.Done()
 
-		d.runner.DrainPipeline(loopCtx, target)
+		d.runner.DrainPipeline(loopCtx, target.Pipeline)
 	}()
 
 	go func() {
