@@ -130,15 +130,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 	ctx, closeBus := attachEventBus(ctx, st)
 	defer closeBus()
 
-	// Recorded for every build, not only a rooted one: the row is this run's
-	// identity — what its events, its history entry, and its resume all key
-	// on. A backend that exposes no root directory records an empty workspace.
-	workspaceRoot := ""
-	if rooted, ok := bw.(workspace.RootedBuild); ok {
-		workspaceRoot = rooted.Root()
-	}
-
-	err = recordRunIdentity(ctx, st, resume, job.Name, workspaceRoot, cfg.Revision)
+	err = recordRunIdentity(ctx, st, resume, job.Name, bw.Root(), cfg.Revision)
 	if err != nil {
 		return err
 	}

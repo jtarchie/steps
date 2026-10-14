@@ -294,9 +294,7 @@ func reportResumable(ctx context.Context, runID string, bw workspace.BuildWorksp
 
 	_, _ = fmt.Fprintf(out, "run: %s  (resume with: steps run <pipeline> --resume %s)\n", runID, runID)
 
-	if rooted, ok := bw.(workspace.RootedBuild); ok {
-		_, _ = fmt.Fprintf(out, "run: %s  workspace kept at %s\n", runID, rooted.Root())
-	}
+	_, _ = fmt.Fprintf(out, "run: %s  workspace kept at %s\n", runID, bw.Root())
 }
 
 // forceKey types the context value carrying --force.

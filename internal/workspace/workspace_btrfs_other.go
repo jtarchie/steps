@@ -30,3 +30,11 @@ func (unsupportedBtrfsProvider) NewBuild(context.Context, string) (BuildWorkspac
 }
 
 func (unsupportedBtrfsProvider) Close() error { return nil }
+
+// Probe answers as Validate does: there is no sweep to leave out.
+func (p unsupportedBtrfsProvider) Probe() error { return p.Validate() }
+
+// Reuse is unreachable: Validate refuses before any run starts.
+func (unsupportedBtrfsProvider) Reuse(string) {}
+
+func (unsupportedBtrfsProvider) AttachArtifactStore(BlobStore, StepIndex) bool { return false }

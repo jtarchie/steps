@@ -13,7 +13,7 @@ import (
 
 // cachingBuild builds a provider with the resource cache enabled over root,
 // returning one build workspace from it.
-func cachingBuild(t *testing.T, root string, maxEntries int) CachingBuild {
+func cachingBuild(t *testing.T, root string, maxEntries int) BuildWorkspace {
 	t.Helper()
 
 	provider, err := NewProvider(&config.WorkspaceConfig{
@@ -32,12 +32,7 @@ func cachingBuild(t *testing.T, root string, maxEntries int) CachingBuild {
 		t.Fatal(err)
 	}
 
-	caching, ok := bw.(CachingBuild)
-	if !ok {
-		t.Fatal("an isolating build should implement CachingBuild")
-	}
-
-	return caching
+	return bw
 }
 
 // TestResourceCacheReusesAcrossBuilds is the whole feature: the second build
@@ -307,12 +302,7 @@ func TestNoCacheWithoutOptIn(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		caching, ok := bw.(CachingBuild)
-		if !ok {
-			t.Fatal("an isolating build should implement CachingBuild even with the cache off")
-		}
-
-		_, err = caching.FetchResource(context.Background(), "repo", "key-abc", fetch)
+		_, err = bw.FetchResource(context.Background(), "repo", "key-abc", fetch)
 		if err != nil {
 			t.Fatal(err)
 		}

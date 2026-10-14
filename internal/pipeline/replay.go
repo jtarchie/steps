@@ -5,7 +5,6 @@ package pipeline
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -197,11 +196,6 @@ func replayDoneSteps(
 // against: a replay that edited it in place would destroy the baseline in the
 // act of measuring against it.
 func forkWorkspace(ctx context.Context, provider workspace.Provider, source, replayID string) (string, error) {
-	resumable, ok := provider.(workspace.Resumable)
-	if !ok {
-		return "", errors.New("--replay is not supported by this workspace provider")
-	}
-
 	dir := filepath.Join(filepath.Dir(source), "replay-"+replayID)
 
 	err := workspace.CopyTree(ctx, source, dir)
@@ -209,7 +203,7 @@ func forkWorkspace(ctx context.Context, provider workspace.Provider, source, rep
 		return "", fmt.Errorf("could not fork the workspace of the replayed run: %w", err)
 	}
 
-	resumable.Reuse(dir)
+	provider.Reuse(dir)
 
 	return dir, nil
 }

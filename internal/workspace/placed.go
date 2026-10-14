@@ -14,17 +14,6 @@ import (
 	"context"
 )
 
-// PlacedSpaces is the optional BuildWorkspace capability behind a placed
-// step's space.
-type PlacedSpaces interface {
-	// PlacedTaskSpace is TaskSpace leaving remote inputs on their holders,
-	// reported by declared name.
-	PlacedTaskSpace(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string) (StepSpace, map[string]RemoteArtifact, error)
-	// PlacedPutSpace is PutSpace, the same way.
-	PlacedPutSpace(ctx context.Context, label string, inputs []string, all bool) (StepSpace, map[string]RemoteArtifact, error)
-}
-
-// PlacedTaskSpace implements PlacedSpaces.
 func (b *isolatingBuild) PlacedTaskSpace(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string) (StepSpace, map[string]RemoteArtifact, error) {
 	remote := b.leaveRemote(inputs, inputMapping)
 
@@ -36,7 +25,6 @@ func (b *isolatingBuild) PlacedTaskSpace(ctx context.Context, label string, inpu
 	return space, remote, nil
 }
 
-// PlacedPutSpace implements PlacedSpaces.
 func (b *isolatingBuild) PlacedPutSpace(ctx context.Context, label string, inputs []string, all bool) (StepSpace, map[string]RemoteArtifact, error) {
 	if all {
 		names, err := b.allArtifacts()

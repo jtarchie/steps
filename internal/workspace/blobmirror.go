@@ -43,26 +43,6 @@ type StepIndex interface {
 	RecordStepBlobs(ctx context.Context, actionKey string, outputs map[string]string) error
 }
 
-// ArtifactStoreAttacher is the optional Provider capability behind
-// AttachArtifactStore, following StepCaching's type-assertion pattern.
-type ArtifactStoreAttacher interface {
-	AttachArtifactStore(blobs BlobStore, index StepIndex) bool
-}
-
-// AttachArtifactStore wires the two halves of the artifact store into p's
-// step cache, reporting whether anything was attached — false for a provider
-// without the capability, or one with no durable root, where there is no
-// local cache to mirror.
-func AttachArtifactStore(p Provider, blobs BlobStore, index StepIndex) bool {
-	attacher, ok := p.(ArtifactStoreAttacher)
-	if !ok {
-		return false
-	}
-
-	return attacher.AttachArtifactStore(blobs, index)
-}
-
-// AttachArtifactStore implements ArtifactStoreAttacher.
 func (p *isolatingProvider) AttachArtifactStore(blobs BlobStore, index StepIndex) bool {
 	if p.stepCache == nil {
 		return false

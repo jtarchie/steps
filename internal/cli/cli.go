@@ -323,7 +323,7 @@ func attachArtifactStore(provider workspace.Provider, st store.Blobs, raw string
 		return err //nolint:wrapcheck // as above
 	}
 
-	if !workspace.AttachArtifactStore(provider, blobs, st) {
+	if !provider.AttachArtifactStore(blobs, st) {
 		slog.Warn("artifact_store.no_step_cache",
 			"store", raw,
 			"why", "no durable workspace.root:, so cached step outputs are not mirrored; placed steps still use the store as their data plane")

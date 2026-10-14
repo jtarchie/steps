@@ -81,12 +81,7 @@ func produceOutput(t *testing.T, bw BuildWorkspace, req StepCacheRequest, conten
 func mustRestore(t *testing.T, bw BuildWorkspace, req StepCacheRequest) StepCacheResult {
 	t.Helper()
 
-	caching, ok := bw.(StepCaching)
-	if !ok {
-		t.Fatal("build does not implement StepCaching")
-	}
-
-	res, err := caching.RestoreStep(context.Background(), req)
+	res, err := bw.RestoreStep(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,9 +114,7 @@ func TestStepCacheRoundTrip(t *testing.T) {
 
 	produceOutput(t, first, req, "the summary")
 
-	caching, _ := first.(StepCaching)
-
-	err := caching.StoreStep(context.Background(), miss.Key, req)
+	err := first.StoreStep(context.Background(), miss.Key, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,9 +195,7 @@ func TestStepCacheIgnoresAPartialEntry(t *testing.T) {
 
 	produceOutput(t, bw, partial, "the summary")
 
-	caching, _ := bw.(StepCaching)
-
-	err := caching.StoreStep(context.Background(), res.Key, partial)
+	err := bw.StoreStep(context.Background(), res.Key, partial)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,9 +226,7 @@ func TestStepCacheRestoreLeavesArtifactsIntactWhenItFails(t *testing.T) {
 
 	produceOutput(t, bw, req, "the summary")
 
-	caching, _ := bw.(StepCaching)
-
-	err := caching.StoreStep(context.Background(), res.Key, req)
+	err := bw.StoreStep(context.Background(), res.Key, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,9 +285,7 @@ func TestStepCacheNeverHitsWithoutOutputs(t *testing.T) {
 		t.Fatal("a request with no outputs reported a hit against an empty cache")
 	}
 
-	caching, _ := bw.(StepCaching)
-
-	err := caching.StoreStep(context.Background(), res.Key, req)
+	err := bw.StoreStep(context.Background(), res.Key, req)
 	if err != nil {
 		t.Fatal(err)
 	}

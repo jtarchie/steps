@@ -581,12 +581,7 @@ jobs:
 		t.Fatalf("PrepareResume: %v", err)
 	}
 
-	resumable, ok := provider.(workspace.Resumable)
-	if !ok {
-		t.Fatal("the default workspace provider cannot resume")
-	}
-
-	resumable.Reuse(workspaceDir)
+	provider.Reuse(workspaceDir)
 
 	out := captureStdout(t, func() { err = RunJob(ctx, cfg, job, st, Run{Provider: provider}) })
 	if err != nil {

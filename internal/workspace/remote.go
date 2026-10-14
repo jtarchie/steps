@@ -36,14 +36,7 @@ type RemoteArtifact struct {
 	Pull func(ctx context.Context, dst string) error
 }
 
-// RemoteHolder is the optional BuildWorkspace capability a placed step uses
-// to record an output it left on its worker. Optional because only the
-// isolating builds have an artifact store to record against.
-type RemoteHolder interface {
-	HoldRemote(name string, remote RemoteArtifact) error
-}
-
-// HoldRemote implements RemoteHolder: whatever this build held locally under
+// HoldRemote: whatever this build held locally under
 // name is superseded by what the worker holds. Called AFTER the step's
 // Capture, which files the local directory — empty, for a deferred output —
 // and drops any older hold; this replaces that copy, and the first reader

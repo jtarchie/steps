@@ -192,8 +192,8 @@ func (r *RunCmd) checkResume(ctx context.Context, st store.Store, provider works
 
 	// The row names a green build's removed tree; reusing that path
 	// recreated it outside any cleanup, and btrfs cannot recreate it.
-	if resumable, ok := provider.(workspace.Resumable); ok && fresh {
-		resumable.Reuse("")
+	if fresh {
+		provider.Reuse("")
 	}
 
 	return nil
@@ -295,20 +295,12 @@ func (t *TestCmd) Run() error {
 func applyResume(
 	ctx context.Context, st store.Store, provider workspace.Provider, runID, jobName string,
 ) (context.Context, string, error) {
-	resumable, ok := provider.(workspace.Resumable)
-	if !ok {
-		// Every provider is resumable today; this stays as the honest answer
-		// for one that is not, rather than resuming into a tree that cannot
-		// hold the previous run's artifacts and calling it a recovery.
-		return ctx, "", errors.New("--resume is not supported by this workspace provider")
-	}
-
 	ctx, dir, err := pipeline.PrepareResume(ctx, st, runID)
 	if err != nil {
 		return ctx, "", fmt.Errorf("could not resume: %w", err)
 	}
 
-	resumable.Reuse(dir)
+	provider.Reuse(dir)
 
 	if jobName == "" {
 		jobName, err = pipeline.ResumeJobName(ctx, st, runID)

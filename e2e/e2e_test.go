@@ -41,12 +41,10 @@ import (
 // step workspaces are torn down when the build closes and are not
 // inspectable after the fact.
 //
-// workspaceBlock is prepended verbatim: "" for the default shared directory,
-// or a workspace: block to run the same fixture under real isolation. The
-// inputs:/outputs: declarations below are a validated contract either way,
-// but only under isolation do they physically scope what each step sees —
-// which is what makes the artifact-flow assertions load-bearing rather than
-// incidentally true (see docs/workspace.md).
+// workspaceBlock is prepended verbatim: "" for the default workspace, or a
+// workspace: block. Either way the inputs:/outputs: declarations physically
+// scope what each step sees, which is what makes the artifact-flow assertions
+// load-bearing rather than incidentally true (see docs/workspace.md).
 func e2ePipeline(t *testing.T, dir, endpoint, workspaceBlock string) string {
 	t.Helper()
 
@@ -148,17 +146,13 @@ func happyPathScript() []turn {
 // verdict routing, artifact flow into the put, and store persistence. It
 // finishes by rerunning the pipeline to pin down the caching contract.
 //
-// It runs the identical fixture under both workspace modes. Shared is the
-// default every pipeline gets; isolated is the mode in which the
-// artifact-flow assertions actually bite — under shared mode every step sees
-// one mutable directory, so a file reaching the put proves nothing about
-// output capture (verified: deleting the agent step's declared outputs from
-// its TaskSpace call leaves the shared run passing and fails only the
-// isolated one).
+// It runs the identical fixture with no workspace: block and with an explicit
+// one, so the default a pipeline gets and the strategy it can name are held
+// to the same artifact flow.
 func TestEndToEndAgentHappyPath(t *testing.T) {
 	for _, mode := range []struct{ name, workspace string }{
-		{"shared workspace", ""},
-		{"isolated workspace", "workspace:\n  strategy: copy\n"},
+		{"default workspace", ""},
+		{"explicit copy workspace", "workspace:\n  strategy: copy\n"},
 	} {
 		t.Run(mode.name, func(t *testing.T) {
 			runHappyPath(t, mode.workspace)

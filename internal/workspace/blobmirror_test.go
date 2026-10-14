@@ -87,7 +87,7 @@ func mirroredBuild(t *testing.T, root string, blobs BlobStore, index StepIndex) 
 
 	provider := stepCacheProvider(t, root)
 
-	if !AttachArtifactStore(provider, blobs, index) {
+	if !provider.AttachArtifactStore(blobs, index) {
 		t.Fatal("AttachArtifactStore reported nothing attached against a durable root")
 	}
 
@@ -239,7 +239,7 @@ func TestAttachArtifactStoreNeedsADurableRoot(t *testing.T) {
 
 	t.Cleanup(func() { _ = provider.Close() })
 
-	if AttachArtifactStore(provider, newMemBlobs(t), newMemIndex()) {
+	if provider.AttachArtifactStore(newMemBlobs(t), newMemIndex()) {
 		t.Fatal("an artifact store attached to a provider with nowhere to mirror from")
 	}
 }

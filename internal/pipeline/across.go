@@ -87,16 +87,8 @@ func resetCollectedArtifacts(ctx context.Context, label string, step config.Step
 		return nil
 	}
 
-	resetter, ok := bw.(workspace.ArtifactResetter)
-	if !ok {
-		// Unreachable through LoadConfig: a collecting matrix requires an
-		// isolating workspace, and the isolating build implements the reset.
-		// A build that doesn't is a wiring bug, not a user error.
-		return fmt.Errorf("%s: collected outputs need a workspace that can reset artifacts; %T cannot", label, bw)
-	}
-
 	for _, name := range artifacts {
-		err := resetter.ResetArtifact(ctx, name)
+		err := bw.ResetArtifact(ctx, name)
 		if err != nil {
 			return fmt.Errorf("%s: %w", label, err)
 		}

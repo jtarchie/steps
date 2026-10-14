@@ -38,8 +38,30 @@ type Provider interface {
 	// it never shares state with a build from a previous call, matching
 	// today's per-triggered-build isolation (see runTriggeredBuild's doc).
 	NewBuild(ctx context.Context, label string) (BuildWorkspace, error)
+	// Probe is Validate without the stale-build sweep, for a provider opened
+	// on a root this process may already be building under: the sweep takes
+	// every build directory there for a crashed process's leftovers.
+	Probe() error
+	// Reuse continues a previous run in an existing build tree, or with ""
+	// stops doing so. It continues in the BUILD tree: what a provider tears
+	// down per step is the step's own view, which a resume does not need —
+	// the artifacts finished steps produced live at the build root, and
+	// per-step views are materialized from them every time a step runs.
+	Reuse(dir string)
+	// AttachArtifactStore wires the two halves of the artifact store into the
+	// step cache, reporting whether anything was attached — false with no
+	// durable workspace.root:, where there is no local cache to mirror.
+	AttachArtifactStore(blobs BlobStore, index StepIndex) bool
 	Close() error
 }
+
+// Every capability is on the interface rather than type-asserted at its call
+// site, so a wrapper that embeds one forwards all of it instead of silently
+// switching caching or placement off.
+var (
+	_ Provider       = (*isolatingProvider)(nil)
+	_ BuildWorkspace = (*isolatingBuild)(nil)
+)
 
 // BuildWorkspace is one triggered build's filesystem view: where get steps
 // land pristine resource contents, and where task/agent/put steps draw
@@ -79,6 +101,40 @@ type BuildWorkspace interface {
 	// and the step's own space still requires every declared input, so a
 	// misspelled name is still an error the moment the step itself runs.
 	GuardSpace(ctx context.Context, label string, inputs []string, inputMapping map[string]string, all bool) (StepSpace, error)
+	// PlacedTaskSpace is TaskSpace for a step that runs on a worker, leaving
+	// inputs other workers hold on their holders, reported by declared name.
+	PlacedTaskSpace(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string) (StepSpace, map[string]RemoteArtifact, error)
+	// PlacedPutSpace is PutSpace, the same way.
+	PlacedPutSpace(ctx context.Context, label string, inputs []string, all bool) (StepSpace, map[string]RemoteArtifact, error)
+	// HoldRemote records an output a placed step left on its worker.
+	HoldRemote(name string, remote RemoteArtifact) error
+	// FetchResource returns the directory for resource name, populated either
+	// from the cache entry for cacheKey or by calling fetch. fetch receives the
+	// directory to populate and is called at most once; when it is not called,
+	// the directory already holds that version's content. With no cache
+	// configured, or an empty cacheKey, it is ResourceDir followed by fetch.
+	//
+	// A cache failure is never a fetch failure: anything that goes wrong with
+	// the cache falls back to calling fetch.
+	FetchResource(ctx context.Context, name, cacheKey string, fetch func(dir string) error) (string, error)
+	// RestoreStep computes a step's action key and, when an entry for it
+	// holds every declared output, materializes them into the artifact store.
+	// With no durable workspace.root: it answers "miss, no key" — there is
+	// nowhere for an entry to outlive the run that wrote it.
+	RestoreStep(ctx context.Context, req StepCacheRequest) (StepCacheResult, error)
+	// StoreStep files the outputs a step just captured under key. Called only
+	// after the step succeeded and space.Capture put its outputs in the store.
+	StoreStep(ctx context.Context, key string, req StepCacheRequest) error
+	// ResetArtifact replaces whatever the store holds under name with a fresh
+	// empty directory, for a collecting across: (see isolatingBuild's).
+	ResetArtifact(ctx context.Context, name string) error
+	// HasArtifact reports whether name is in the build store, or held by a
+	// worker on the build's behalf, so a resume that keeps a get's artifact
+	// can refuse a tree that lost it.
+	HasArtifact(name string) bool
+	// Root is where the build's files are: recorded as the run's workspace,
+	// and printed for a resume to continue in.
+	Root() string
 	Close() error
 }
 
@@ -178,14 +234,8 @@ func CloseSpace(space StepSpace, label string) {
 	}
 }
 
-// Root is where this build's files are, so a failed isolated run can be
-// recorded and reported. Without it the RootedBuild assertion in RunJob
-// failed, StartRun was never called, and a run left no row to resume from —
-// while still printing an id promising exactly that.
 func (b *isolatingBuild) Root() string { return b.root }
 
-// HasArtifact reports whether name is in the build store here, or held by a
-// worker on this build's behalf.
 func (b *isolatingBuild) HasArtifact(name string) bool {
 	if config.ValidateArtifactName(name) != nil {
 		return false
@@ -323,7 +373,7 @@ func (p *isolatingProvider) enableCache(ws *config.WorkspaceConfig) error {
 }
 
 func (p *isolatingProvider) Validate() error {
-	err := p.probe()
+	err := p.Probe()
 	if err != nil {
 		return err
 	}
@@ -333,23 +383,13 @@ func (p *isolatingProvider) Validate() error {
 	return nil
 }
 
-func (p *isolatingProvider) probe() error {
+// Probe is Validate without the stale-build sweep.
+func (p *isolatingProvider) Probe() error {
 	if p.validate == nil {
 		return nil
 	}
 
 	return p.validate()
-}
-
-// Probe is Validate without the stale-build sweep, for a provider opened on a root this process may already be building under: the sweep takes every build directory there for a crashed process's leftovers.
-func Probe(p Provider) error {
-	isolating, ok := p.(*isolatingProvider)
-	if !ok {
-		// Nothing else sweeps, so its Validate is already only a probe.
-		return p.Validate() //nolint:wrapcheck // the provider's own error names the root and the rule it broke
-	}
-
-	return isolating.probe()
 }
 
 // sweepStaleBuilds removes build directories left behind by an earlier run.
@@ -398,11 +438,9 @@ func (p *isolatingProvider) sweepStaleBuilds() {
 	}
 }
 
-// Reuse continues a previous run in an existing build tree.
-//
-// Every NewBuild answers with that tree: a resumed run is one run continuing,
-// and splitting it back into fresh per-build directories would hide the
-// artifacts it is resuming FOR.
+// Reuse makes every NewBuild answer with dir: a resumed run is one run
+// continuing, and splitting it back into fresh per-build directories would
+// hide the artifacts it is resuming FOR.
 func (p *isolatingProvider) Reuse(dir string) { p.reuse = dir }
 
 // retainedBuild names a build directory from THIS invocation that is still on
@@ -635,9 +673,6 @@ func (b *isolatingBuild) forgetDigests(names []string) {
 	}
 }
 
-// FetchResource implements CachingBuild. With no cache configured it is
-// exactly ResourceDir followed by fetch — the behavior every pipeline had
-// before the cache existed.
 func (b *isolatingBuild) FetchResource(ctx context.Context, name, cacheKey string, fetch func(dir string) error) (string, error) {
 	dir, err := b.ResourceDir(ctx, name)
 	if err != nil {
@@ -778,7 +813,7 @@ func (b *isolatingBuild) newSpace(ctx context.Context, label string, inputs, out
 }
 
 // newSpaceLeaving is newSpace with some inputs left on the workers that hold
-// them (PlacedSpaces): those are neither pulled nor materialized, and an
+// them (PlacedTaskSpace): those are neither pulled nor materialized, and an
 // output of the same name is not created empty over the tree the worker
 // will place.
 func (b *isolatingBuild) newSpaceLeaving(ctx context.Context, label string, inputs, outputs []string, inputMapping, outputMapping map[string]string, leaving map[string]RemoteArtifact) (StepSpace, error) {
@@ -911,23 +946,14 @@ func validateOutputName(out string, outputMapping map[string]string) error {
 	return nil
 }
 
-// ArtifactResetter is the optional BuildWorkspace capability a collecting
-// across: block uses (see internal/pipeline): ResetArtifact replaces whatever
-// the store holds under name with a fresh empty directory, before any cell
-// captures. That is what (a) restores the "a later producer replaces an
+// ResetArtifact is what a collecting across: block uses (see
+// internal/pipeline): it replaces whatever the store holds under name with a
+// fresh empty directory, before any cell captures. That is what (a) restores the "a later producer replaces an
 // earlier one's artifact" sequential contract that per-coordinate capture
 // alone cannot — each cell's Capture replaces only its own subdirectory — and
 // (b) guarantees the collected artifact EXISTS even when every cell failed or
 // the matrix expanded to zero cells, so the consumer walks what survived
 // (possibly nothing) instead of failing to materialize a missing input.
-//
-// Optional rather than on BuildWorkspace; every provider's build implements
-// it, so a build that does not is a wiring bug the caller reports.
-type ArtifactResetter interface {
-	ResetArtifact(ctx context.Context, name string) error
-}
-
-// ResetArtifact implements ArtifactResetter.
 func (b *isolatingBuild) ResetArtifact(ctx context.Context, name string) error {
 	err := config.ValidateArtifactName(name)
 	if err != nil {
@@ -1001,7 +1027,7 @@ type isolatingSpace struct {
 	// digest remembered for one of them is not served to the next step's cache
 	// key after the bytes behind it changed.
 	captured func(names []string)
-	// left are the inputs this space left on their holders (PlacedSpaces). One
+	// left are the inputs this space left on their holders (PlacedTaskSpace). One
 	// that is also an output has no directory here when the worker kept the
 	// result: the record of the hold IS the capture.
 	left map[string]RemoteArtifact
@@ -1019,7 +1045,7 @@ func (s *isolatingSpace) Kept() bool { return s.keep }
 // sequentially, so a plain-name capture has no concurrent writer to race;
 // collecting cells under max_in_flight: capture concurrently, and are safe
 // only because CollectedOutputMapping gives every cell a disjoint
-// destination and the block reset (ArtifactResetter) has already created
+// destination and the block reset (ResetArtifact) has already created
 // the shared parent. A collecting cell therefore replaces only its own
 // subdirectory — whole-artifact replacement for the block is the reset's
 // job, before any cell runs. A
@@ -1131,45 +1157,3 @@ func newIsolatingRoot(configuredRoot string) (root string, ownsRoot bool, err er
 }
 
 var errUnsupportedPlatform = errors.New("unsupported platform")
-
-// Resumable is a Provider that can continue a previous run's workspace.
-//
-// It continues in the BUILD tree: what a provider tears down per step is the
-// step's own view, which a resume does not need — the artifacts finished steps
-// produced live at the build root, and per-step views are materialized from
-// them every time a step runs, resumed or not.
-type Resumable interface {
-	Reuse(dir string)
-	Provider
-}
-
-// RootedBuild is a BuildWorkspace that can say where its files are, so a
-// failed run can print the directory a resume will continue in.
-type RootedBuild interface {
-	Root() string
-}
-
-// ArtifactChecker is a BuildWorkspace that can say whether it holds an
-// artifact, so a resume that keeps a get's artifact rather than fetching it
-// again can refuse a tree that lost it instead of continuing without it.
-type ArtifactChecker interface {
-	HasArtifact(name string) bool
-}
-
-// CachingBuild is a BuildWorkspace that can reuse a resource version fetched
-// by an earlier build instead of fetching it again.
-//
-// An optional interface, like Resumable and RootedBuild, rather than a method
-// on BuildWorkspace: callers that do not find it simply fetch, which is what
-// every pipeline did before the cache existed. A build with no cache
-// configured serves it as exactly that — see isolatingBuild.FetchResource.
-type CachingBuild interface {
-	// FetchResource returns the directory for resource name, populated either
-	// from the cache entry for cacheKey or by calling fetch. fetch receives the
-	// directory to populate and is called at most once; when it is not called,
-	// the directory already holds that version's content.
-	//
-	// A cache failure is never a fetch failure: anything that goes wrong with
-	// the cache falls back to calling fetch.
-	FetchResource(ctx context.Context, name, cacheKey string, fetch func(dir string) error) (string, error)
-}

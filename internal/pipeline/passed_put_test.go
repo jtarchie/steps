@@ -206,12 +206,7 @@ jobs:
 		t.Fatal(err)
 	}
 
-	resumable, ok := f.provider.(workspace.Resumable)
-	if !ok {
-		t.Fatal("provider is not resumable")
-	}
-
-	resumable.Reuse(dir)
+	f.provider.Reuse(dir)
 
 	out := captureStdout(t, func() { err = f.run(resumeCtx) })
 	if err != nil {

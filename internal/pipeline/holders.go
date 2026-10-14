@@ -28,8 +28,7 @@ func deferrable(step config.Step, rt config.ResolvedTask) bool {
 // there, with the pull that brings it home. Outputs the worker did not keep
 // came home the ordinary way and are captured as always.
 func holdRemoteOutputs(bw workspace.BuildWorkspace, outputs []string, mapping map[string]string, held map[string]string, holder string) error {
-	holding, ok := bw.(workspace.RemoteHolder)
-	if !ok || len(held) == 0 {
+	if len(held) == 0 {
 		return nil
 	}
 
@@ -44,7 +43,7 @@ func holdRemoteOutputs(bw workspace.BuildWorkspace, outputs []string, mapping ma
 			name = mapped
 		}
 
-		err := holding.HoldRemote(name, workspace.RemoteArtifact{
+		err := bw.HoldRemote(name, workspace.RemoteArtifact{
 			Name:   out,
 			Digest: digest,
 			Holder: holder,
@@ -67,28 +66,26 @@ func holdRemoteOutputs(bw workspace.BuildWorkspace, outputs []string, mapping ma
 // store when one is configured and pipes them through this machine when not;
 // otherwise the ordinary space, which pulls what it needs here.
 func placedTaskSpace(ctx context.Context, bw workspace.BuildWorkspace, step config.Step, rt config.ResolvedTask, outputMapping map[string]string) (workspace.StepSpace, map[string]shell.RemoteInput, error) {
-	placed, ok := bw.(workspace.PlacedSpaces)
-	if !ok || placementTag(step) == "" {
+	if placementTag(step) == "" {
 		space, err := bw.TaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, outputMapping)
 
 		return space, nil, err //nolint:wrapcheck // the caller names the task
 	}
 
-	space, remote, err := placed.PlacedTaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, outputMapping)
+	space, remote, err := bw.PlacedTaskSpace(ctx, rt.Name, rt.Inputs, rt.Outputs, rt.InputMapping, outputMapping)
 
 	return space, remoteInputs(remote), err
 }
 
 // placedPutSpace is placedTaskSpace for a put.
 func placedPutSpace(ctx context.Context, bw workspace.BuildWorkspace, step config.Step) (workspace.StepSpace, map[string]shell.RemoteInput, error) {
-	placed, ok := bw.(workspace.PlacedSpaces)
-	if !ok || placementTag(step) == "" {
+	if placementTag(step) == "" {
 		space, err := bw.PutSpace(ctx, step.Put, step.InputNames(), step.InputsAll())
 
 		return space, nil, err //nolint:wrapcheck // the caller names the put
 	}
 
-	space, remote, err := placed.PlacedPutSpace(ctx, step.Put, step.InputNames(), step.InputsAll())
+	space, remote, err := bw.PlacedPutSpace(ctx, step.Put, step.InputNames(), step.InputsAll())
 
 	return space, remoteInputs(remote), err
 }

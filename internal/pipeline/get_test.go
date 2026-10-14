@@ -10,7 +10,6 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
-	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // TestAResumedPinnedRunLeavesTheCheckedVersionAlone: the pin exemption holds on a resume too — the get kept from a pinned attempt records nothing, or an older pinned version would drag the displayed checked version back.
@@ -72,12 +71,7 @@ jobs:
 		t.Fatalf("PrepareResume: %v", err)
 	}
 
-	resumable, ok := provider.(workspace.Resumable)
-	if !ok {
-		t.Fatal("the default workspace provider cannot resume")
-	}
-
-	resumable.Reuse(workspaceDir)
+	provider.Reuse(workspaceDir)
 
 	out := captureStdout(t, func() { err = RunJob(ctx, cfg, job, st, Run{Provider: provider, Pinned: pin}) })
 	if err != nil {

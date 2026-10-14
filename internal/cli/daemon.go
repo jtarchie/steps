@@ -434,7 +434,7 @@ func (d *daemon) provider(cfg *config.Config, st store.Store) (workspace.Provide
 	check := func(provider workspace.Provider) error {
 		root, swept := d.sweptRoot(cfg.Workspace)
 		if swept {
-			return workspace.Probe(provider)
+			return provider.Probe()
 		}
 
 		err := provider.Validate()

@@ -1,7 +1,6 @@
 package scheduler
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -19,6 +18,9 @@ import (
 // that passes whatever the implementation does. Every assertion below waits on
 // this channel instead.
 type countingProvider struct {
+	// nil: these tests only lease and retire, so any other method panicking is the test reaching past its scope.
+	workspace.Provider
+
 	mu      sync.Mutex
 	closed  int
 	entered chan struct{}
@@ -28,12 +30,6 @@ type countingProvider struct {
 
 func newCountingProvider() *countingProvider {
 	return &countingProvider{entered: make(chan struct{})}
-}
-
-func (p *countingProvider) Validate() error { return nil }
-
-func (p *countingProvider) NewBuild(context.Context, string) (workspace.BuildWorkspace, error) {
-	return nil, nil //nolint:nilnil // never called: these tests only lease and retire
 }
 
 func (p *countingProvider) Close() error {

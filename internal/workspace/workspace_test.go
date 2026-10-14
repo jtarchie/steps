@@ -787,7 +787,7 @@ func TestProbeChecksTheRootWithoutSweepingIt(t *testing.T) {
 
 	defer func() { _ = provider.Close() }()
 
-	err = Probe(provider)
+	err = provider.Probe()
 	if err != nil {
 		t.Fatalf("Probe: %v", err)
 	}
@@ -804,7 +804,7 @@ func TestProbeChecksTheRootWithoutSweepingIt(t *testing.T) {
 
 	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // a directory needs its execute bit to be removable
 
-	if Probe(provider) == nil {
+	if provider.Probe() == nil {
 		t.Error("Probe accepted a root it cannot write to")
 	}
 }

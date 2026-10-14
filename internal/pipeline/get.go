@@ -199,12 +199,7 @@ func (w *planWalk) runTriggeredBuild(
 	// every subsequent step live — the job-level build recorded at RunJob
 	// holds none of it. An UPDATE of the row RunJob already wrote, never a
 	// mint: this is the same run with a better answer about where it lives.
-	root := ""
-	if rooted, ok := bw.(workspace.RootedBuild); ok {
-		root = rooted.Root()
-	}
-
-	w.pointRunAt(ctx, root)
+	w.pointRunAt(ctx, bw.Root())
 
 	recordExecution(ctx, resource.Name)
 
@@ -354,16 +349,10 @@ func (w *planWalk) keepInPlace(
 func (w *planWalk) keepFetched(
 	ctx context.Context, runID string, step config.Step, resource config.Resource, version map[string]any, bw workspace.BuildWorkspace,
 ) error {
-	checker, ok := bw.(workspace.ArtifactChecker)
-	if ok && !checker.HasArtifact(step.Get) {
-		root := ""
-		if rooted, ok := bw.(workspace.RootedBuild); ok {
-			root = rooted.Root()
-		}
-
+	if !bw.HasArtifact(step.Get) {
 		return fmt.Errorf(
 			"cannot resume run %q: get %q was already fetched and changed by later steps, but artifacts/%s is not in the kept workspace %s — start a new run, with --pin <field>=<value> to rebuild a version the cursor already took",
-			runID, step.Get, step.Get, root)
+			runID, step.Get, step.Get, bw.Root())
 	}
 
 	notef(ctx, "skip: %s (already fetched)", step.Get)
@@ -648,24 +637,13 @@ func fetchGetStep(ctx context.Context, cfg *config.Config, st store.Deliveries, 
 //
 // The cache key deliberately is NOT the get node's hash (see
 // merkle.ResourceCacheKey): a node hash carries the step's position in a plan,
-// so keying on it would give every job its own copy of identical bytes. A
-// build workspace that cannot cache (the default shared one, or an isolating
-// one with the cache off) takes the plain path.
+// so keying on it would give every job its own copy of identical bytes. With
+// the cache off, FetchResource is the plain path.
 func resourceDir(
 	ctx context.Context, cfg *config.Config, artifact string,
 	resourceType config.ResourceType, extraEnv []string, source, version, params map[string]any,
 	bw workspace.BuildWorkspace, fetch func(dir string) error,
 ) error {
-	caching, ok := bw.(workspace.CachingBuild)
-	if !ok {
-		dir, err := bw.ResourceDir(ctx, artifact)
-		if err != nil {
-			return fmt.Errorf("could not create resource dir for %q: %w", artifact, err)
-		}
-
-		return fetch(dir)
-	}
-
 	// A key this package cannot compute is not a reason to fail the fetch —
 	// an empty key simply means "do not cache this one".
 	key, err := merkle.ResourceCacheKey(cfg, resourceType, extraEnv, source, version, params)
@@ -678,7 +656,7 @@ func resourceDir(
 	// Not wrapped with the artifact name: this error is either the fetch's own
 	// (which the caller classifies as a task failure via IsExitError) or the
 	// workspace's, which already names the directory it failed on.
-	_, err = caching.FetchResource(ctx, artifact, key, fetch)
+	_, err = bw.FetchResource(ctx, artifact, key, fetch)
 
 	return err //nolint:wrapcheck // see above: the error is the caller-classified fetch error, passed through deliberately
 }

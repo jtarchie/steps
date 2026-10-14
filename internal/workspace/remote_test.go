@@ -19,14 +19,9 @@ import (
 func heldTree(t *testing.T, bw BuildWorkspace) *int {
 	t.Helper()
 
-	holder, ok := bw.(RemoteHolder)
-	if !ok {
-		t.Fatal("an isolating build should implement RemoteHolder")
-	}
-
 	pulls := 0
 
-	err := holder.HoldRemote("src", RemoteArtifact{
+	err := bw.HoldRemote("src", RemoteArtifact{
 		Digest: strings.Repeat("ab", 32),
 		Holder: "local:/somewhere",
 		Pull: func(_ context.Context, dst string) error {
@@ -91,9 +86,7 @@ func TestALostHolderFailsTheReaderByName(t *testing.T) {
 
 	bw := newBuild(t)
 
-	holder, _ := bw.(RemoteHolder)
-
-	err := holder.HoldRemote("src", RemoteArtifact{
+	err := bw.HoldRemote("src", RemoteArtifact{
 		Digest: strings.Repeat("cd", 32),
 		Holder: "local:/gone",
 		Pull:   func(context.Context, string) error { return errors.New("this worker does not hold the artifact") },
@@ -158,9 +151,7 @@ func TestTheResourceCachePullsWhatAPlacedGetLeftBehind(t *testing.T) {
 	pulls := 0
 
 	fetch := func(string) error {
-		holder, _ := first.(RemoteHolder)
-
-		return holder.HoldRemote("src", RemoteArtifact{
+		return first.HoldRemote("src", RemoteArtifact{
 			Digest: strings.Repeat("ef", 32),
 			Holder: "local:/worker",
 			Pull: func(_ context.Context, dst string) error {
@@ -203,9 +194,8 @@ func TestHoldRemoteRefusesAnUnsafeName(t *testing.T) {
 	t.Parallel()
 
 	bw := newBuild(t)
-	holder, _ := bw.(RemoteHolder)
 
-	err := holder.HoldRemote("../escape", RemoteArtifact{Digest: "d", Pull: func(context.Context, string) error { return nil }})
+	err := bw.HoldRemote("../escape", RemoteArtifact{Digest: "d", Pull: func(context.Context, string) error { return nil }})
 	if err == nil {
 		t.Error("HoldRemote accepted a name that leaves the store")
 	}
@@ -223,12 +213,7 @@ func TestAPlacedSpaceLeavesAHeldInputOnItsHolder(t *testing.T) {
 	bw := newBuild(t)
 	pulls := heldTree(t, bw)
 
-	placed, ok := bw.(PlacedSpaces)
-	if !ok {
-		t.Fatal("an isolating build should implement PlacedSpaces")
-	}
-
-	space, remote, err := placed.PlacedTaskSpace(context.Background(), "consumer", []string{"src"}, []string{"out"}, nil, nil)
+	space, remote, err := bw.PlacedTaskSpace(context.Background(), "consumer", []string{"src"}, []string{"out"}, nil, nil)
 	if err != nil {
 		t.Fatalf("PlacedTaskSpace: %v", err)
 	}
@@ -258,9 +243,7 @@ func TestAPlacedSpacePullsAMappedInput(t *testing.T) {
 	bw := newBuild(t)
 	pulls := heldTree(t, bw)
 
-	placed, _ := bw.(PlacedSpaces)
-
-	space, remote, err := placed.PlacedTaskSpace(context.Background(), "consumer", []string{"code"}, nil, map[string]string{"code": "src"}, nil)
+	space, remote, err := bw.PlacedTaskSpace(context.Background(), "consumer", []string{"code"}, nil, map[string]string{"code": "src"}, nil)
 	if err != nil {
 		t.Fatalf("PlacedTaskSpace: %v", err)
 	}
@@ -290,9 +273,7 @@ func TestAPlacedSpaceDoesNotClobberAHeldInputItAlsoOutputs(t *testing.T) {
 	bw := newBuild(t)
 	_ = heldTree(t, bw)
 
-	placed, _ := bw.(PlacedSpaces)
-
-	space, _, err := placed.PlacedTaskSpace(context.Background(), "editor", []string{"src"}, []string{"src"}, nil, nil)
+	space, _, err := bw.PlacedTaskSpace(context.Background(), "editor", []string{"src"}, []string{"src"}, nil, nil)
 	if err != nil {
 		t.Fatalf("PlacedTaskSpace: %v", err)
 	}
@@ -392,9 +373,7 @@ func TestAPlacedSpaceCapturesAnOutputItsWorkerKept(t *testing.T) {
 	bw := newBuild(t)
 	_ = heldTree(t, bw)
 
-	placed, _ := bw.(PlacedSpaces)
-
-	space, _, err := placed.PlacedTaskSpace(context.Background(), "editor", []string{"src"}, []string{"src"}, nil, nil)
+	space, _, err := bw.PlacedTaskSpace(context.Background(), "editor", []string{"src"}, []string{"src"}, nil, nil)
 	if err != nil {
 		t.Fatalf("PlacedTaskSpace: %v", err)
 	}
@@ -406,9 +385,7 @@ func TestAPlacedSpaceCapturesAnOutputItsWorkerKept(t *testing.T) {
 		t.Fatalf("Capture of an output the worker kept: %v", err)
 	}
 
-	holder, _ := bw.(RemoteHolder)
-
-	err = holder.HoldRemote("src", RemoteArtifact{
+	err = bw.HoldRemote("src", RemoteArtifact{
 		Digest: strings.Repeat("ef", 32),
 		Holder: "local:/somewhere",
 		Pull:   func(context.Context, string) error { return nil },
@@ -431,10 +408,9 @@ func TestAPlacedSpacePullsAnInputTheHolderFiledUnderAnotherName(t *testing.T) {
 
 	bw := newBuild(t)
 
-	holder, _ := bw.(RemoteHolder)
 	pulls := 0
 
-	err := holder.HoldRemote("x", RemoteArtifact{
+	err := bw.HoldRemote("x", RemoteArtifact{
 		Name:   "out",
 		Digest: strings.Repeat("ab", 32),
 		Holder: "local:/somewhere",
@@ -448,9 +424,7 @@ func TestAPlacedSpacePullsAnInputTheHolderFiledUnderAnotherName(t *testing.T) {
 		t.Fatalf("HoldRemote: %v", err)
 	}
 
-	placed, _ := bw.(PlacedSpaces)
-
-	space, remote, err := placed.PlacedTaskSpace(context.Background(), "consumer", []string{"x"}, nil, nil, nil)
+	space, remote, err := bw.PlacedTaskSpace(context.Background(), "consumer", []string{"x"}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PlacedTaskSpace: %v", err)
 	}
@@ -479,12 +453,7 @@ func TestHasArtifactSeesTheStoreAndWhatAWorkerHolds(t *testing.T) {
 
 	bw := newBuild(t)
 
-	checker, ok := bw.(ArtifactChecker)
-	if !ok {
-		t.Fatal("an isolating build should implement ArtifactChecker")
-	}
-
-	if checker.HasArtifact("repo") {
+	if bw.HasArtifact("repo") {
 		t.Error("an artifact nothing produced counts as present")
 	}
 
@@ -493,20 +462,20 @@ func TestHasArtifactSeesTheStoreAndWhatAWorkerHolds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !checker.HasArtifact("repo") {
+	if !bw.HasArtifact("repo") {
 		t.Error("an artifact in the store counts as missing")
 	}
 
 	// The build root itself exists, so a name that climbs out of the store
 	// must not read as present.
-	if checker.HasArtifact("..") {
+	if bw.HasArtifact("..") {
 		t.Error("a name escaping the artifact store counts as present")
 	}
 
 	pulls := heldTree(t, bw)
 
-	if !checker.HasArtifact("src") || *pulls != 0 {
-		t.Errorf("a held artifact: present = %v after %d pulls, want present without one", checker.HasArtifact("src"), *pulls)
+	if !bw.HasArtifact("src") || *pulls != 0 {
+		t.Errorf("a held artifact: present = %v after %d pulls, want present without one", bw.HasArtifact("src"), *pulls)
 	}
 }
 
@@ -555,14 +524,13 @@ func TestConcurrentReadersOfAHeldArtifactShareOnePull(t *testing.T) {
 	t.Parallel()
 
 	bw := newBuild(t)
-	holder, _ := bw.(RemoteHolder)
 
 	var pulls atomic.Int32
 
 	started := make(chan struct{})
 	release := make(chan struct{})
 
-	err := holder.HoldRemote("src", RemoteArtifact{
+	err := bw.HoldRemote("src", RemoteArtifact{
 		Digest: strings.Repeat("ab", 32),
 		Holder: "local:/somewhere",
 		Pull: func(_ context.Context, dst string) error {
@@ -613,13 +581,12 @@ func TestAWaitingReaderPullsItselfWhenTheFirstPullIsAbandoned(t *testing.T) {
 	t.Parallel()
 
 	bw := newBuild(t)
-	holder, _ := bw.(RemoteHolder)
 
 	var pulls atomic.Int32
 
 	started := make(chan struct{})
 
-	err := holder.HoldRemote("src", RemoteArtifact{
+	err := bw.HoldRemote("src", RemoteArtifact{
 		Digest: strings.Repeat("ab", 32),
 		Holder: "local:/somewhere",
 		Pull: func(ctx context.Context, dst string) error {

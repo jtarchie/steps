@@ -72,32 +72,10 @@ func (r StepCacheResult) NodeResult() map[string]any {
 	return map[string]any{"reused": true, "cache_key": r.Key}
 }
 
-// StepCaching is the optional BuildWorkspace capability the pipeline package
-// uses to reuse a step's outputs across runs.
-//
-// Optional rather than on BuildWorkspace itself, and absent unless the
-// pipeline configured a durable workspace.root: with no root there is nowhere
-// for an entry to outlive the run that wrote it, and a "cache" discarded at
-// the end of every run is only a slower way to run.
-type StepCaching interface {
-	// RestoreStep computes the step's action key and, when an entry for it
-	// holds every declared output, materializes them into the artifact store.
-	RestoreStep(ctx context.Context, req StepCacheRequest) (StepCacheResult, error)
-	// StoreStep files the outputs a step just captured under key. Called only
-	// after the step succeeded and space.Capture put its outputs in the store.
-	StoreStep(ctx context.Context, key string, req StepCacheRequest) error
-}
-
-// LookupStepCache asks bw to restore a step's outputs, tolerating a build that
-// has no cache at all. A build without the capability answers "miss, no key",
-// which reads at the call site as "run the step, store nothing".
+// LookupStepCache asks bw to restore a step's outputs, reading an error as
+// "miss, no key" — at the call site, "run the step, store nothing".
 func LookupStepCache(ctx context.Context, bw BuildWorkspace, req StepCacheRequest) StepCacheResult {
-	caching, ok := bw.(StepCaching)
-	if !ok {
-		return StepCacheResult{}
-	}
-
-	res, err := caching.RestoreStep(ctx, req)
+	res, err := bw.RestoreStep(ctx, req)
 	if err != nil {
 		// A cache that cannot be read must never fail a build — the step
 		// simply runs, which is what it would have done anyway.
@@ -117,12 +95,7 @@ func SaveStepCache(ctx context.Context, bw BuildWorkspace, key string, req StepC
 		return
 	}
 
-	caching, ok := bw.(StepCaching)
-	if !ok {
-		return
-	}
-
-	err := caching.StoreStep(ctx, key, req)
+	err := bw.StoreStep(ctx, key, req)
 	if err != nil {
 		// Best-effort in the same way the resource cache is: failing to
 		// RECORD work that already succeeded must not fail the run that did
@@ -366,7 +339,6 @@ func (c *stepCache) store(ctx context.Context, key, path, artifacts string, dige
 	return nil
 }
 
-// RestoreStep implements StepCaching.
 func (b *isolatingBuild) RestoreStep(ctx context.Context, req StepCacheRequest) (StepCacheResult, error) {
 	if b.stepCache == nil {
 		return StepCacheResult{}, nil
@@ -403,7 +375,6 @@ func (b *isolatingBuild) RestoreStep(ctx context.Context, req StepCacheRequest) 
 	return StepCacheResult{Key: key, Hit: hit}, nil
 }
 
-// StoreStep implements StepCaching.
 func (b *isolatingBuild) StoreStep(ctx context.Context, key string, req StepCacheRequest) error {
 	if b.stepCache == nil {
 		return nil

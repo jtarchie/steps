@@ -96,9 +96,7 @@ func TestStepCacheInterruptedStoreIsAMiss(t *testing.T) {
 
 	failing.Store(true)
 
-	caching, _ := first.(StepCaching)
-
-	err := caching.StoreStep(context.Background(), res.Key, req)
+	err := first.StoreStep(context.Background(), res.Key, req)
 	if err == nil {
 		t.Fatal("a store whose materialize failed reported success")
 	}
@@ -145,9 +143,7 @@ func resourceFetcher(t *testing.T, root string) (Provider, func() string, *int) 
 
 		t.Cleanup(func() { _ = bw.Close() })
 
-		caching, _ := bw.(CachingBuild)
-
-		dir, fetchErr := caching.FetchResource(context.Background(), "repo", "key-abc", fetch)
+		dir, fetchErr := bw.FetchResource(context.Background(), "repo", "key-abc", fetch)
 		if fetchErr != nil {
 			t.Fatalf("FetchResource: %v", fetchErr)
 		}
