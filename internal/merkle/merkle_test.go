@@ -40,7 +40,7 @@ func testPlanSteps(run string) []config.Step {
 func mustPlanRootHash(t *testing.T, cfg *config.Config, steps []config.Step) string {
 	t.Helper()
 
-	chains, err := PlanChains(context.Background(), cfg, "build", steps, nil, nil, nil)
+	chains, err := PlanChains(context.Background(), cfg, "build", steps, nil, checks, nil)
 	if err != nil {
 		t.Fatalf("PlanChains: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestPlanChainsVersionEveryFansOut(t *testing.T) {
 	cfg := planCfg(`[{"ref":"v1"},{"ref":"v2"}]`, "v1")
 	steps := []config.Step{{Get: "thing", Version: "every"}}
 
-	chains, err := PlanChains(context.Background(), cfg, "build", steps, nil, nil, nil)
+	chains, err := PlanChains(context.Background(), cfg, "build", steps, nil, checks, nil)
 	if err != nil {
 		t.Fatalf("PlanChains: %v", err)
 	}
@@ -1042,7 +1042,7 @@ func TestPlanChainsTryStepIsUnskippable(t *testing.T) {
 		{Try: &config.Step{Task: "work", Run: "echo hi"}},
 	}
 
-	chains, err := PlanChains(context.Background(), cfg, "build", steps, nil, nil, nil)
+	chains, err := PlanChains(context.Background(), cfg, "build", steps, nil, checks, nil)
 	if err != nil {
 		t.Fatalf("PlanChains: %v", err)
 	}
@@ -1070,7 +1070,7 @@ func TestPlanChainsAcrossNodeKeysItsCells(t *testing.T) {
 			Inputs: config.Inputs(),
 		}}
 
-		chains, err := PlanChains(context.Background(), &config.Config{}, "build", steps, nil, nil, nil)
+		chains, err := PlanChains(context.Background(), &config.Config{}, "build", steps, nil, checks, nil)
 		if err != nil {
 			t.Fatalf("PlanChains: %v", err)
 		}

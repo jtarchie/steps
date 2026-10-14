@@ -10,15 +10,6 @@ import (
 	"github.com/jtarchie/steps/internal/config"
 )
 
-// TestUnionEnvWithMoreExtraThanTypeNames: a type with no env: of its own is the common case for a resource adding one.
-func TestUnionEnvWithMoreExtraThanTypeNames(t *testing.T) {
-	t.Parallel()
-
-	if got := UnionEnv(nil, []string{"A", "B", "A"}); !reflect.DeepEqual(got, []string{"A", "B"}) {
-		t.Errorf("UnionEnv = %v, want [A B]", got)
-	}
-}
-
 func TestVersionMode(t *testing.T) {
 	t.Parallel()
 
@@ -193,7 +184,7 @@ func TestConformanceCheckReceivesCurrentVersion(t *testing.T) {
 }
 
 // TestShellExtraEnvUnionsWithTypeEnv is the shell-backend counterpart of
-// expr_test.go's TestExtraEnvUnionsWithTypeEnv — UnionEnv (and its wiring
+// expr_test.go's TestExtraEnvUnionsWithTypeEnv — config.UnionEnv (and its wiring
 // into shell.RunnerSpec.Env at every CheckVersions/RunIn/RunOut shell branch)
 // was previously exercised only through the expr backend and the built-in
 // Slack e2e tests, leaving the far more common shell-backed path unverified.

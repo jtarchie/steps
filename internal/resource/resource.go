@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/shell"
@@ -58,7 +57,7 @@ func CheckVersions(ctx context.Context, c Call) ([]map[string]any, error) {
 // runnerSpec is how every shell stage of rt runs, before the stage adds its
 // own tree: a check has none.
 func runnerSpec(rt config.ResourceType, extraEnv []string) shell.RunnerSpec {
-	return shell.RunnerSpec{Image: rt.Image, Env: UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
+	return shell.RunnerSpec{Image: rt.Image, Env: config.UnionEnv(rt.Env, extraEnv), User: rt.User, Network: rt.Network,
 		Privileged: rt.Privileged, CPUShares: rt.Limits.CPUShares(), MemoryBytes: rt.Limits.MemoryBytes()}
 }
 
@@ -120,42 +119,6 @@ func runShellCheck(ctx context.Context, rt config.ResourceType, spec shell.Runne
 	slog.InfoContext(ctx, "resource.checked", "resource_type", rt.Name, "versions", len(versions))
 
 	return versions, nil
-}
-
-// UnionEnv combines a resource type's own env: with one resource instance's
-// additional env: (config.Resource.Env), without mutating either slice —
-// both are shared config data that later calls (or other resources of the
-// same type) still read.
-//
-// Exported so internal/merkle can fold the identical union into a get/put
-// node's hashed content — the env NAMES are cache identity for the same
-// reason resourceType.Env alone already was (see merkle.GetNodeContent),
-// and the two packages must agree on what that union is.
-// A name repeated between the two lists appears once, in first-occurrence
-// order. It IS a union, and a resource restating a name its type already
-// allows means nothing new — but a duplicate would otherwise reach
-// shell.RunnerSpec.Env twice and, worse, hash differently from the identical
-// effective allow-list without the repeat, missing the merkle cache for no
-// semantic change.
-func UnionEnv(typeEnv, extraEnv []string) []string {
-	if len(extraEnv) == 0 {
-		return typeEnv
-	}
-
-	union := make([]string, 0, len(typeEnv)+len(extraEnv))
-	seen := make(map[string]bool, len(typeEnv)+len(extraEnv))
-
-	for _, name := range slices.Concat(typeEnv, extraEnv) {
-		if seen[name] {
-			continue
-		}
-
-		seen[name] = true
-
-		union = append(union, name)
-	}
-
-	return union
 }
 
 // Mode is how a get step picks among its resource's versions.

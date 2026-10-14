@@ -26,7 +26,7 @@ func exprInput(rt config.ResourceType, extraEnv []string, source, version, param
 		Source:   source,
 		Version:  version,
 		Params:   params,
-		EnvAllow: UnionEnv(rt.Env, extraEnv),
+		EnvAllow: config.UnionEnv(rt.Env, extraEnv),
 		Dir:      dir,
 	}
 }

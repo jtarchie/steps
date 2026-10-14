@@ -67,12 +67,12 @@ func TestPlanChainsSetsMatchRecursion(t *testing.T) {
 
 			ctx := context.Background()
 
-			recursive, err := PlanChains(ctx, cfg, "build", test.steps, nil, nil, nil)
+			recursive, err := PlanChains(ctx, cfg, "build", test.steps, nil, checks, nil)
 			if err != nil {
 				t.Fatalf("PlanChains (recursion): %v", err)
 			}
 
-			perSet, err := PlanChains(ctx, cfg, "build", test.steps, nil, nil, test.sets)
+			perSet, err := PlanChains(ctx, cfg, "build", test.steps, nil, checks, test.sets)
 			if err != nil {
 				t.Fatalf("PlanChains (sets): %v", err)
 			}
@@ -104,7 +104,7 @@ func TestPlanChainsUnboundGetIsAnError(t *testing.T) {
 
 	steps := []config.Step{{Get: "a"}}
 
-	_, err := PlanChains(context.Background(), cfg, "build", steps, nil, nil, []InputSet{{}})
+	_, err := PlanChains(context.Background(), cfg, "build", steps, nil, checks, []InputSet{{}})
 	if err == nil {
 		t.Fatal("PlanChains accepted a set that binds nothing for get \"a\"")
 	}
@@ -125,7 +125,7 @@ func TestPlanChainsEmptySetsPlanNothing(t *testing.T) {
 
 	steps := []config.Step{{Get: "a", Version: "every"}}
 
-	chains, err := PlanChains(context.Background(), cfg, "build", steps, nil, nil, []InputSet{})
+	chains, err := PlanChains(context.Background(), cfg, "build", steps, nil, checks, []InputSet{})
 	if err != nil {
 		t.Fatalf("PlanChains: %v", err)
 	}
@@ -157,12 +157,12 @@ func TestPlanChainsResolveArtifactImages(t *testing.T) {
 	}
 	sets := []InputSet{{"img": {"digest": one}}, {"img": {"digest": two}}}
 
-	recursive, err := PlanChains(context.Background(), cfg, "build", steps, nil, nil, nil)
+	recursive, err := PlanChains(context.Background(), cfg, "build", steps, nil, checks, nil)
 	if err != nil {
 		t.Fatalf("PlanChains (recursion): %v", err)
 	}
 
-	perSet, err := PlanChains(context.Background(), cfg, "build", steps, nil, nil, sets)
+	perSet, err := PlanChains(context.Background(), cfg, "build", steps, nil, checks, sets)
 	if err != nil {
 		t.Fatalf("PlanChains (sets): %v", err)
 	}
@@ -195,7 +195,7 @@ func TestPlanChainsUnresolvableArtifactImageIsUnskippable(t *testing.T) {
 
 	cfg := &config.Config{Resources: []config.Resource{{Name: "img", Source: map[string]any{"repository": "r"}}}}
 
-	chains, err := PlanChains(context.Background(), cfg, "build", []config.Step{{Task: "work", Run: "true", Image: "img"}}, nil, nil, nil)
+	chains, err := PlanChains(context.Background(), cfg, "build", []config.Step{{Task: "work", Run: "true", Image: "img"}}, nil, checks, nil)
 	if err != nil {
 		t.Fatalf("PlanChains: %v", err)
 	}

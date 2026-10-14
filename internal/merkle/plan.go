@@ -2,26 +2,40 @@ package merkle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 
 	"github.com/jtarchie/steps/internal/config"
-	rsrc "github.com/jtarchie/steps/internal/resource"
 )
 
+// VersionResolver is how the planner resolves a get step's resource, type
+// and candidate versions — *resource.Cache in practice, whose
+// ResolveVersionsCached is the same resolution runSteps uses, so that logic
+// stays defined in exactly one place. It is an interface so that hashing does
+// not import the package that runs check commands (and with it shell, docker
+// and mcp); depguard keeps that edge out.
+type VersionResolver interface {
+	ResolveVersionsCached(
+		ctx context.Context, cfg *config.Config, step config.Step, pinned map[string]string,
+	) (*config.Resource, *config.ResourceType, []map[string]any, error)
+}
+
 // PlanChains walks a job's plan exactly like the pipeline's runSteps does
-// (reusing resource.ResolveVersions for get-step version/pin resolution, so
-// that logic stays defined in exactly one place), but never executes
-// anything — no RunIn, RunShell, or RunOut. It returns one Chain per leaf
-// reached, which is more than one only when a get step uses version: every.
+// (resolving get-step versions/pins through cache, the same resolution the
+// executor uses), but never executes anything — no RunIn, RunShell, or
+// RunOut. It returns one Chain per leaf reached, which is more than one only
+// when a get step uses version: every.
 //
-// cache, when non-nil, memoizes each get step's resolved versions so that a
-// later run-time call through the same cache (see resource.Cache) reuses
-// this plan-time check result instead of re-running the check command — pass
-// the same *resource.Cache instance runSteps will use for this same job run.
-// A nil cache reproduces today's behavior exactly (CheckVersions runs again
-// during real execution for any branch that ends up running).
+// cache memoizes each get step's resolved versions so that a later run-time
+// call through the same cache (see resource.Cache) reuses this plan-time
+// check result instead of re-running the check command — pass the same
+// *resource.Cache instance runSteps will use for this same job run. A nil
+// *resource.Cache is a valid resolver that memoizes nothing (CheckVersions
+// runs again during real execution for any branch that ends up running); a
+// nil interface cannot resolve, and a plan that reaches a get with one is an
+// error.
 //
 // sets, when non-nil, is the fan-out: ONE chain per InputSet, each get bound
 // to its set's version. This is what keeps the planner and the executor
@@ -34,7 +48,7 @@ import (
 // pinned by TestPlanChainsSetsMatchRecursion.
 func PlanChains(
 	ctx context.Context, cfg *config.Config, jobName string, steps []config.Step,
-	pinned map[string]string, cache *rsrc.Cache, sets []InputSet,
+	pinned map[string]string, cache VersionResolver, sets []InputSet,
 ) ([]Chain, error) {
 	slog.DebugContext(ctx, "job.plan", "job", jobName, "steps", len(steps), "sets", len(sets))
 
@@ -72,7 +86,7 @@ func PlanChains(
 // sets were made.
 func planChainForSet(
 	ctx context.Context, cfg *config.Config, steps []config.Step,
-	pinned map[string]string, cache *rsrc.Cache, set InputSet, images imagePlan,
+	pinned map[string]string, cache VersionResolver, set InputSet, images imagePlan,
 ) (Chain, error) {
 	var (
 		prefix      []Node
@@ -128,11 +142,11 @@ func planChainForSet(
 // run, which the skip cache then records as done.
 func planBoundGetNode(
 	ctx context.Context, cfg *config.Config, step config.Step, i int,
-	pinned map[string]string, cache *rsrc.Cache, set InputSet, parentHash string,
+	pinned map[string]string, cache VersionResolver, set InputSet, parentHash string,
 ) (Node, config.Fetched, error) {
-	res, resourceType, _, err := cache.ResolveVersionsCached(ctx, cfg, step, pinned)
+	res, resourceType, _, err := resolveGet(ctx, cache, cfg, i, step, pinned)
 	if err != nil {
-		return Node{}, config.Fetched{}, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+		return Node{}, config.Fetched{}, err
 	}
 
 	version := set[step.Get]
@@ -152,7 +166,7 @@ func planBoundGetNode(
 
 func planSteps(
 	ctx context.Context, cfg *config.Config, steps []config.Step, pinned map[string]string,
-	prefix []Node, parentHash string, unskippable bool, cache *rsrc.Cache, images imagePlan,
+	prefix []Node, parentHash string, unskippable bool, cache VersionResolver, images imagePlan,
 ) ([]Chain, error) {
 	for i, step := range steps {
 		if step.Get != "" {
@@ -368,11 +382,11 @@ func newNode(kind NodeKind, what string, i int, parentHash, resource string, bui
 // runGetStep control flow.
 func planGetStep(
 	ctx context.Context, cfg *config.Config, steps []config.Step, i int, step config.Step, pinned map[string]string,
-	prefix []Node, parentHash string, unskippable bool, cache *rsrc.Cache, images imagePlan,
+	prefix []Node, parentHash string, unskippable bool, cache VersionResolver, images imagePlan,
 ) ([]Chain, error) {
-	res, resourceType, versions, err := cache.ResolveVersionsCached(ctx, cfg, step, pinned)
+	res, resourceType, versions, err := resolveGet(ctx, cache, cfg, i, step, pinned)
 	if err != nil {
-		return nil, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+		return nil, err
 	}
 
 	chains := make([]Chain, 0, len(versions))
@@ -416,4 +430,21 @@ func stepResourceName(step config.Step) string {
 	}
 
 	return ""
+}
+
+var errNoResolver = errors.New("no version resolver to resolve a get with")
+
+func resolveGet(
+	ctx context.Context, cache VersionResolver, cfg *config.Config, i int, step config.Step, pinned map[string]string,
+) (*config.Resource, *config.ResourceType, []map[string]any, error) {
+	if cache == nil {
+		return nil, nil, nil, fmt.Errorf("step %d (get %q): %w", i, step.Get, errNoResolver)
+	}
+
+	res, resourceType, versions, err := cache.ResolveVersionsCached(ctx, cfg, step, pinned)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("step %d (get %q): %w", i, step.Get, err)
+	}
+
+	return res, resourceType, versions, nil
 }

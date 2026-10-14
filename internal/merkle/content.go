@@ -6,7 +6,6 @@ import (
 	"slices"
 
 	"github.com/jtarchie/steps/internal/config"
-	rsrc "github.com/jtarchie/steps/internal/resource"
 )
 
 // sortedEnv returns env's names in a stable order. Unlike inputs/outputs
@@ -114,7 +113,7 @@ func withResourceTypeEnv(cfg *config.Config, resourceType config.ResourceType, e
 		content["image"] = resourceType.Image
 	}
 
-	if env := rsrc.UnionEnv(resourceType.Env, extraEnv); len(env) > 0 {
+	if env := config.UnionEnv(resourceType.Env, extraEnv); len(env) > 0 {
 		content["env"] = sortedEnv(env)
 	}
 

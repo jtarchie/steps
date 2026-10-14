@@ -671,16 +671,27 @@ linters:
             # shell is a stdlib-only leaf, so this adds no
             # cycle — the same edge internal/resource already has.
             - "github.com/jtarchie/steps/internal/shell"
-        # merkle plans/hashes steps; it depends on resource (to resolve get
-        # versions the same way at plan time and run time) and config, but
-        # nothing execution-specific (store, workspace, agent).
+        # merkle plans/hashes steps from config alone. Get versions are
+        # resolved through merkle.VersionResolver, which the caller satisfies
+        # with *resource.Cache, so plan time and run time still resolve the
+        # same way without hashing pulling in resource's shell, docker and
+        # mcp. Nothing execution-specific (store, workspace, agent).
         Merkle:
           files:
             - "**/internal/merkle/**"
           allow:
             - "$gostd"
             - "github.com/jtarchie/steps/internal/config"
+            # test-only (MerkleResourceTestOnly): planner tests resolve gets
+            # by running real check commands through a nil *resource.Cache.
             - "github.com/jtarchie/steps/internal/resource"
+        MerkleResourceTestOnly:
+          files:
+            - "**/internal/merkle/**"
+            - "!$test"
+          deny:
+            - pkg: "github.com/jtarchie/steps/internal/resource"
+              desc: "test-only in merkle: resolve gets through merkle.VersionResolver"
         # agent runs an agent step's LLM tool-calling conversation. It needs
         # store/workspace/merkle for step-level hash/materialize/record
         # sequencing (RunStep), but not resource or pipeline.

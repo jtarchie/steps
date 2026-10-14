@@ -574,3 +574,40 @@ func stepIsPolled(step Step) bool {
 func (c *Config) FindResourceType(name string) (*ResourceType, error) {
 	return findNamed("resource_type", name, c.ResourceTypes, func(rt ResourceType) string { return rt.Name })
 }
+
+// UnionEnv combines a resource type's own env: with one resource instance's
+// additional env: (config.Resource.Env), without mutating either slice —
+// both are shared config data that later calls (or other resources of the
+// same type) still read.
+//
+// It lives here rather than in internal/resource because internal/merkle
+// folds the identical union into a get/put node's hashed content — the env
+// NAMES are cache identity for the same reason resourceType.Env alone
+// already was (see merkle.GetNodeContent) — and the two packages must agree
+// on what that union is without merkle importing resource.
+// A name repeated between the two lists appears once, in first-occurrence
+// order. It IS a union, and a resource restating a name its type already
+// allows means nothing new — but a duplicate would otherwise reach
+// shell.RunnerSpec.Env twice and, worse, hash differently from the identical
+// effective allow-list without the repeat, missing the merkle cache for no
+// semantic change.
+func UnionEnv(typeEnv, extraEnv []string) []string {
+	if len(extraEnv) == 0 {
+		return typeEnv
+	}
+
+	union := make([]string, 0, len(typeEnv)+len(extraEnv))
+	seen := make(map[string]bool, len(typeEnv)+len(extraEnv))
+
+	for _, name := range slices.Concat(typeEnv, extraEnv) {
+		if seen[name] {
+			continue
+		}
+
+		seen[name] = true
+
+		union = append(union, name)
+	}
+
+	return union
+}
