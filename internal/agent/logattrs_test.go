@@ -9,6 +9,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/usage"
 )
 
 // An agent step's own lines fire mid-build, so they carry the run's identity
@@ -22,7 +23,7 @@ func TestAgentLinesCarryTheBuildIdentity(t *testing.T) {
 
 	ctx := events.WithLogAttrs(t.Context(), "pipeline", "app", "job", "review")
 
-	logStepUsage(ctx, StepUsage{Step: "a", Total: 3}, 0)
+	logStepUsage(ctx, usage.Step{Step: "a", Total: 3}, 0)
 	logCompactionBudget(ctx, config.ResolvedInvocation{AgentName: "a", CompactAfterTokens: 10})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://x", nil)

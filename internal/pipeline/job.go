@@ -20,6 +20,7 @@ import (
 	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/shell"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/usage"
 	"github.com/jtarchie/steps/internal/workspace"
 )
 
@@ -168,10 +169,10 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 	// (agent_usage, keyed by the run id this invocation reuses). Starting at
 	// zero would make budget: a per-attempt ceiling wearing the name of a
 	// per-run one, and buy another full allowance on every resume.
-	usage := agent.NewResumedRunUsage(jobBudgetTokens(job), priorSpend(ctx, st, resume))
-	ctx = agent.WithRunUsage(ctx, usage)
+	spend := usage.NewResumedRun(jobBudgetTokens(job), priorSpend(ctx, st, resume))
+	ctx = usage.With(ctx, spend)
 
-	defer reportJobUsage(ctx, usage)
+	defer reportJobUsage(ctx, spend)
 
 	runner := stepRunner{cfg: cfg, jobName: job.Name, bw: bw, st: st}
 
@@ -592,15 +593,15 @@ func priorSpend(ctx context.Context, st store.Usage, resume *resumeState) int {
 // job succeeded: seeing "341,204 tokens across 4 agent steps" is what tells an
 // operator which ceilings are even sensible to set. A job with no agent steps
 // prints nothing.
-func reportJobUsage(ctx context.Context, usage *agent.RunUsage) {
-	steps := usage.Steps()
-	prior := usage.Prior()
+func reportJobUsage(ctx context.Context, run *usage.Run) {
+	steps := run.Steps()
+	prior := run.Prior()
 
 	if len(steps) == 0 && prior == 0 {
 		return
 	}
 
-	total := usage.Total()
+	total := run.Total()
 
 	// The per-step lines below are THIS attempt's, so a resumed run says what
 	// the earlier attempts contributed rather than printing a total the
@@ -625,7 +626,7 @@ func reportJobUsage(ctx context.Context, usage *agent.RunUsage) {
 		fields = append(fields, "prior_tokens", prior, "attempt_tokens", total-prior)
 	}
 
-	if budget := usage.Budget(); budget > 0 {
+	if budget := run.Budget(); budget > 0 {
 		fields = append(fields, "budget_tokens", budget)
 	}
 

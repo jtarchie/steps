@@ -6,22 +6,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/usage"
 )
 
 // The usage line appears whenever there is spend to report, this attempt's or an earlier one's, and never for a job that spent nothing.
 func TestJobUsageIsReportedOnlyWhenSomethingWasSpent(t *testing.T) {
-	spentNow := agent.NewRunUsage(0)
-	spentNow.Add(agent.StepUsage{Step: "review", Total: 10})
+	spentNow := usage.NewRun(0)
+	spentNow.Add(usage.Step{Step: "review", Total: 10})
 
 	for name, c := range map[string]struct {
-		usage *agent.RunUsage
+		usage *usage.Run
 		want  string
 	}{
-		"nothing spent":          {agent.NewRunUsage(0), ""},
+		"nothing spent":          {usage.NewRun(0), ""},
 		"spent this attempt":     {spentNow, "usage: 10 tokens across 1 agent step(s)"},
-		"spent only by an older": {agent.NewResumedRunUsage(0, 50), "(50 from earlier attempts)"},
+		"spent only by an older": {usage.NewResumedRun(0, 50), "(50 from earlier attempts)"},
 	} {
 		ctx, printed := plainOutput(t)
 		reportJobUsage(ctx, c.usage)
@@ -47,7 +47,7 @@ func TestBlockBudgetUnbindable(t *testing.T) {
 	t.Parallel()
 
 	budgeted := func(reserve int) *blockBudget {
-		ctx := agent.WithRunUsage(context.Background(), agent.NewRunUsage(0))
+		ctx := usage.With(context.Background(), usage.NewRun(0))
 		step := config.Step{Budget: &config.Budget{Tokens: 1000, ReservePerCell: reserve}}
 
 		_, budget := newBlockBudget(ctx, &config.Config{}, step, nil)
@@ -89,15 +89,15 @@ func TestBlockBudgetUnbindable(t *testing.T) {
 // newTestBlockBudget builds a block budget over a fresh job accumulator, and
 // returns the SCOPED accumulator its cells run under — reporting through that
 // is what a finished cell does, and what the block measures.
-func newTestBlockBudget(t *testing.T, ceiling, reserve int) (*blockBudget, *agent.RunUsage) {
+func newTestBlockBudget(t *testing.T, ceiling, reserve int) (*blockBudget, *usage.Run) {
 	t.Helper()
 
-	ctx := agent.WithRunUsage(context.Background(), agent.NewRunUsage(0))
+	ctx := usage.With(context.Background(), usage.NewRun(0))
 	step := config.Step{Budget: &config.Budget{Tokens: ceiling, ReservePerCell: reserve}}
 
 	cellCtx, budget := newBlockBudget(ctx, &config.Config{}, step, nil)
 
-	return budget, agent.RunUsageFrom(cellCtx)
+	return budget, usage.From(cellCtx)
 }
 
 // TestBlockBudgetReservesOnAdmit is the case a spent()-only ceiling could
@@ -111,7 +111,7 @@ func TestBlockBudgetReservesOnAdmit(t *testing.T) {
 	t.Parallel()
 
 	// Room for exactly three cells at 200 apiece.
-	spend, usage := newTestBlockBudget(t, 600, 200)
+	spend, cells := newTestBlockBudget(t, 600, 200)
 
 	for i := range 3 {
 		if !spend.admit() {
@@ -121,7 +121,7 @@ func TestBlockBudgetReservesOnAdmit(t *testing.T) {
 
 	// They finish having spent the whole allowance.
 	for range 3 {
-		usage.Add(agent.StepUsage{Total: 200})
+		cells.Add(usage.Step{Total: 200})
 		spend.settle()
 	}
 
@@ -141,7 +141,7 @@ func TestBlockBudgetReservesOnAdmit(t *testing.T) {
 func TestBlockBudgetAdmitWaitsForAReservation(t *testing.T) {
 	t.Parallel()
 
-	spend, usage := newTestBlockBudget(t, 600, 200)
+	spend, cells := newTestBlockBudget(t, 600, 200)
 
 	for range 3 {
 		spend.admit()
@@ -157,7 +157,7 @@ func TestBlockBudgetAdmitWaitsForAReservation(t *testing.T) {
 	}
 
 	// A cell finishes far under its reservation, which frees the allowance.
-	usage.Add(agent.StepUsage{Total: 5})
+	cells.Add(usage.Step{Total: 5})
 	spend.settle()
 
 	select {
@@ -177,7 +177,7 @@ func TestBlockBudgetAdmitWaitsForAReservation(t *testing.T) {
 func TestBlockBudgetSettleReleasesUnderspend(t *testing.T) {
 	t.Parallel()
 
-	spend, usage := newTestBlockBudget(t, 600, 200)
+	spend, cells := newTestBlockBudget(t, 600, 200)
 
 	// Three admitted, allowance fully reserved.
 	for range 3 {
@@ -186,7 +186,7 @@ func TestBlockBudgetSettleReleasesUnderspend(t *testing.T) {
 
 	// All three finish having spent 10 each, not the 200 assumed.
 	for range 3 {
-		usage.Add(agent.StepUsage{Total: 10})
+		cells.Add(usage.Step{Total: 10})
 		spend.settle()
 	}
 
@@ -202,7 +202,7 @@ func TestBlockBudgetSettleReleasesUnderspend(t *testing.T) {
 func TestBlockBudgetAdmitsWithoutReservationAsBefore(t *testing.T) {
 	t.Parallel()
 
-	spend, usage := newTestBlockBudget(t, 600, 0)
+	spend, cells := newTestBlockBudget(t, 600, 0)
 
 	for i := range 5 {
 		if !spend.admit() {
@@ -212,7 +212,7 @@ func TestBlockBudgetAdmitsWithoutReservationAsBefore(t *testing.T) {
 		spend.settle()
 	}
 
-	usage.Add(agent.StepUsage{Total: 600})
+	cells.Add(usage.Step{Total: 600})
 
 	if spend.admit() {
 		t.Error("admitted a cell after the ceiling was spent outright")
@@ -230,7 +230,7 @@ func TestBlockBudgetAdmitsWithoutReservationAsBefore(t *testing.T) {
 func TestBlockBudgetRealSpendCatchesAnOverrun(t *testing.T) {
 	t.Parallel()
 
-	spend, usage := newTestBlockBudget(t, 3_600_000, 900_000)
+	spend, cells := newTestBlockBudget(t, 3_600_000, 900_000)
 
 	for i := range 3 {
 		if !spend.admit() {
@@ -240,7 +240,7 @@ func TestBlockBudgetRealSpendCatchesAnOverrun(t *testing.T) {
 
 	// Each overruns its reservation by a third.
 	for range 3 {
-		usage.Add(agent.StepUsage{Total: 1_200_000})
+		cells.Add(usage.Step{Total: 1_200_000})
 		spend.settle()
 	}
 
@@ -260,14 +260,14 @@ func TestBlockBudgetRealSpendCatchesAnOverrun(t *testing.T) {
 func TestBlockBudgetIgnoresConcurrentSiblings(t *testing.T) {
 	t.Parallel()
 
-	job := agent.NewRunUsage(0)
-	ctx := agent.WithRunUsage(context.Background(), job)
+	job := usage.NewRun(0)
+	ctx := usage.With(context.Background(), job)
 	step := config.Step{Budget: &config.Budget{Tokens: 1500, ReservePerCell: 100}}
 
 	cellCtx, spend := newBlockBudget(ctx, &config.Config{}, step, nil)
 
 	// Something else in the job spends more than the block's whole allowance.
-	job.Add(agent.StepUsage{Step: "unrelated-sibling", Total: 2000})
+	job.Add(usage.Step{Step: "unrelated-sibling", Total: 2000})
 
 	if got := spend.spent(); got != 0 {
 		t.Errorf("block spent = %d after a sibling elsewhere spent 2000, want 0", got)
@@ -278,7 +278,7 @@ func TestBlockBudgetIgnoresConcurrentSiblings(t *testing.T) {
 	}
 
 	// Its own cells still count, through the scoped accumulator they run under.
-	agent.RunUsageFrom(cellCtx).Add(agent.StepUsage{Step: "cell", Total: 1500})
+	usage.From(cellCtx).Add(usage.Step{Step: "cell", Total: 1500})
 
 	if got := spend.spent(); got != 1500 {
 		t.Errorf("block spent = %d after one of its own cells spent 1500, want 1500", got)
@@ -291,13 +291,13 @@ func TestBlockBudgetIgnoresConcurrentSiblings(t *testing.T) {
 func TestScopedCellSpendStillReachesTheJob(t *testing.T) {
 	t.Parallel()
 
-	job := agent.NewRunUsage(1000)
-	ctx := agent.WithRunUsage(context.Background(), job)
+	job := usage.NewRun(1000)
+	ctx := usage.With(context.Background(), job)
 	step := config.Step{Budget: &config.Budget{Tokens: 5000}}
 
 	cellCtx, _ := newBlockBudget(ctx, &config.Config{}, step, nil)
 
-	exceeded := agent.RunUsageFrom(cellCtx).Add(agent.StepUsage{Step: "cell", Total: 1200})
+	exceeded := usage.From(cellCtx).Add(usage.Step{Step: "cell", Total: 1200})
 
 	if !exceeded {
 		t.Error("a cell overrunning the JOB ceiling reported no breach through the scoped accumulator")
@@ -312,12 +312,12 @@ func TestScopedCellSpendStillReachesTheJob(t *testing.T) {
 func TestBlockBudgetReportNamesWhatAdmissionWeighed(t *testing.T) {
 	t.Parallel()
 
-	budget, usage := newTestBlockBudget(t, 3_600_000, 1_200_000)
+	budget, cells := newTestBlockBudget(t, 3_600_000, 1_200_000)
 	if !budget.admit() {
 		t.Fatal("first cell refused against an untouched allowance")
 	}
 
-	usage.Add(agent.StepUsage{Total: 1_234_567})
+	cells.Add(usage.Step{Total: 1_234_567})
 
 	ctx, printed := plainOutput(t)
 	budget.report(ctx, "j", 1, 6)

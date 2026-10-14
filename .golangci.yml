@@ -306,6 +306,16 @@ linters:
             - "**/internal/retry/**"
           allow:
             - "$gostd"
+        # usage is the spend domain: a step's reported usage, the job's
+        # accumulator and its ceilings, and the CLI rate card. A stdlib-only
+        # leaf so pipeline (job and across: budgets) and agent (the per-step
+        # meter fed by provider responses) share it without pipeline reaching
+        # into agent for it.
+        Usage:
+          files:
+            - "**/internal/usage/**"
+          allow:
+            - "$gostd"
         # exprlang is the expr: resource backend's evaluator: the language, its
         # three builtins, and nothing else. A leaf by design — it takes what it
         # may read (env names, a directory) as arguments rather than reaching
@@ -732,6 +742,7 @@ linters:
             # that chooses one.
             - "github.com/jtarchie/steps/internal/store/sqlite"
             - "github.com/jtarchie/steps/internal/template"
+            - "github.com/jtarchie/steps/internal/usage"
             - "github.com/jtarchie/steps/internal/workspace"
         # pipeline is the top-level orchestrator: it composes every other
         # internal package to run a job's plan.
@@ -766,6 +777,7 @@ linters:
             # the store.Store it was handed — internal/cli is the only package
             # that chooses one.
             - "github.com/jtarchie/steps/internal/store/sqlite"
+            - "github.com/jtarchie/steps/internal/usage"
             - "github.com/jtarchie/steps/internal/workspace"
         # trigger polls get/trigger:true resources and enqueues what they affect for web's runner to drain — the cross-job counterpart to pipeline's single-job orchestration.
         Trigger:

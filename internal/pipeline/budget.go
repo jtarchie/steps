@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/usage"
 )
 
 // blockBudget is an across: block's token allowance: what its cells may spend
@@ -16,7 +16,7 @@ import (
 //
 // Measured as a delta against the job's own accumulator rather than a counter
 // of its own — every agent step already rolls its provider-reported usage up
-// into RunUsage, so the matrix's spend is simply what the job's total moved by
+// into usage.Run, so the matrix's spend is simply what the job's total moved by
 // while the block ran. No new plumbing, and it counts a cell's retries and
 // sub-agents for free, since those roll up the same way.
 //
@@ -32,7 +32,7 @@ import (
 type blockBudget struct {
 	// usage is the block's OWN accumulator, scoped to its cells (see
 	// newBlockBudget). It starts at zero, so spent() is simply its total.
-	usage   *agent.RunUsage
+	usage   *usage.Run
 	ceiling int
 	// reserve is what one unfinished cell is assumed to cost; 0 means no
 	// reservation source was found, which reduces admission to exactly the
@@ -40,7 +40,7 @@ type blockBudget struct {
 	reserve int
 
 	// mu guards reserved/inFlight, and settled broadcasts on it when a cell
-	// releases its reservation. spent() reads through RunUsage, which has its
+	// releases its reservation. spent() reads through usage.Run, which has its
 	// own lock; these are written by finishing CELL goroutines and read by the
 	// admitting parent, so they need one of their own.
 	mu       sync.Mutex
@@ -54,7 +54,7 @@ type blockBudget struct {
 // newBlockBudget builds the block's ceiling and the context its CELLS must
 // run under.
 //
-// The returned context carries a scoped accumulator (agent.NewScopedRunUsage)
+// The returned context carries a scoped accumulator (usage.NewScopedRun)
 // so spent() counts this block's own cells and nothing else. Measuring it as
 // a delta on the job total instead charged the block for every agent step
 // running concurrently elsewhere in the plan — an in_parallel: sibling could
@@ -67,15 +67,15 @@ func newBlockBudget(
 		return ctx, newIdleBlockBudget()
 	}
 
-	usage := agent.RunUsageFrom(ctx)
-	if usage == nil {
+	job := usage.From(ctx)
+	if job == nil {
 		// No accumulator means no agent step can report anything, so there is
 		// nothing to meter. Not an error: a matrix of tasks with a budget is
 		// pointless, not wrong.
 		return ctx, newIdleBlockBudget()
 	}
 
-	scoped := agent.NewScopedRunUsage(usage)
+	scoped := usage.NewScopedRun(job)
 
 	budget := &blockBudget{
 		usage: scoped, ceiling: ceiling,
@@ -83,7 +83,7 @@ func newBlockBudget(
 	}
 	budget.settled = sync.NewCond(&budget.mu)
 
-	return agent.WithRunUsage(ctx, scoped), budget
+	return usage.With(ctx, scoped), budget
 }
 
 // newIdleBlockBudget is the no-ceiling budget every unbudgeted block gets:

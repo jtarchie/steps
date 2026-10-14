@@ -87,46 +87,6 @@ func TestEstimateCLICostPricesEachInputRate(t *testing.T) {
 	}
 }
 
-// TestEstimateCLICostKeysByModel covers the two spellings that actually reach
-// --model, plus the deliberate residual gap.
-func TestEstimateCLICostKeysByModel(t *testing.T) {
-	t.Parallel()
-
-	usage := cliUsage{OutputTokens: 1_000_000}
-
-	// "@claude/sonnet" reaches the child as the bare alias; a pinned source
-	// reaches it as the full id. Both are the same model at the same rate.
-	alias := estimateCLICost("sonnet", usage)
-
-	full := estimateCLICost("claude-sonnet-5", usage)
-	if !closeEnough(alias, full) {
-		t.Errorf("alias priced at $%v and full id at $%v; they are one model", alias, full)
-	}
-
-	// A dated snapshot prices as its family rather than falling off the table.
-	snapshot := estimateCLICost("claude-sonnet-5-20260101", usage)
-	if !closeEnough(snapshot, full) {
-		t.Errorf("a dated snapshot priced at $%v, want its family's $%v", snapshot, full)
-	}
-
-	// Opus and haiku are not sonnet, so a single shared rate would pass every
-	// assertion above and still be wrong.
-	if opus := estimateCLICost("opus", usage); !closeEnough(opus, 25) {
-		t.Errorf("1M opus output tokens = $%v, want $25", opus)
-	}
-
-	if haiku := estimateCLICost("haiku", usage); !closeEnough(haiku, 5) {
-		t.Errorf("1M haiku output tokens = $%v, want $5", haiku)
-	}
-
-	// The residual gap, deliberate: a model with no rate card debits nothing,
-	// which is how every model behaved before this table existed. Guessing a
-	// rate would fail steps for a number nobody wrote down.
-	if got := estimateCLICost("some-local-model", usage); got != 0 {
-		t.Errorf("an unpriced model estimated $%v, want $0 rather than a guess", got)
-	}
-}
-
 // TestAttemptCostPrefersTheReportedFigure pins which of the two sources wins.
 // The CLI's own total is authoritative — it covers whatever the vendor
 // actually charged and needs no rate card — so the estimate is strictly a

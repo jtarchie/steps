@@ -5,35 +5,9 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/jtarchie/steps/internal/usage"
 )
-
-func TestRunUsageCeilingIsReachableNotExceeded(t *testing.T) {
-	t.Parallel()
-
-	job := NewRunUsage(100)
-
-	if job.wouldExceed(100) {
-		t.Error("100 pending of a 100-token job budget would exceed it")
-	}
-
-	if job.Add(StepUsage{Step: "a", Total: 100}) {
-		t.Error("spending exactly the 100-token job budget exceeded it")
-	}
-
-	if !job.wouldExceed(1) {
-		t.Error("one token past the job budget would not exceed it")
-	}
-
-	if !job.Add(StepUsage{Step: "b", Total: 1}) {
-		t.Error("one token past the job budget did not exceed it")
-	}
-
-	unbounded := NewRunUsage(0)
-
-	if unbounded.wouldExceed(1) || unbounded.Add(StepUsage{Step: "a", Total: 1}) {
-		t.Error("a job with no budget tripped a ceiling")
-	}
-}
 
 func TestStepUsageCeilingIsReachableNotExceeded(t *testing.T) {
 	t.Parallel()
@@ -96,7 +70,7 @@ func TestDelegatedBudgetWithNoFractionIsTheChildsOwn(t *testing.T) {
 func TestExceededErrorNamesTheCeilingThatWasCrossed(t *testing.T) {
 	t.Parallel()
 
-	atItsOwn := &stepUsage{name: "writer", budget: 100, run: NewRunUsage(50)}
+	atItsOwn := &stepUsage{name: "writer", budget: 100, run: usage.NewRun(50)}
 	atItsOwn.record(response(100, 0))
 
 	err := atItsOwn.exceededError().Error()
@@ -104,8 +78,8 @@ func TestExceededErrorNamesTheCeilingThatWasCrossed(t *testing.T) {
 		t.Errorf("an agent at exactly its own budget blamed it rather than the job: %s", err)
 	}
 
-	job := NewRunUsage(150)
-	job.Add(StepUsage{Step: "planner", Total: 120})
+	job := usage.NewRun(150)
+	job.Add(usage.Step{Step: "planner", Total: 120})
 
 	inJob := &stepUsage{name: "coder", run: job}
 	inJob.record(response(40, 0))
@@ -136,14 +110,14 @@ func TestLogStepUsageNamesTheBudgetOnlyWhenThereIsOne(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	logStepUsage(t.Context(), StepUsage{Step: "a", Total: 3}, 0)
+	logStepUsage(t.Context(), usage.Step{Step: "a", Total: 3}, 0)
 
 	if strings.Contains(buf.String(), "budget_tokens") {
 		t.Errorf("an unbudgeted step logged a budget: %s", buf.String())
 	}
 
 	buf.Reset()
-	logStepUsage(t.Context(), StepUsage{Step: "a", Total: 3}, 100)
+	logStepUsage(t.Context(), usage.Step{Step: "a", Total: 3}, 100)
 
 	if !strings.Contains(buf.String(), "budget_tokens=100") {
 		t.Errorf("a budgeted step did not log its budget: %s", buf.String())

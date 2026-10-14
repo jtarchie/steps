@@ -6,6 +6,8 @@ import (
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
+
+	"github.com/jtarchie/steps/internal/usage"
 )
 
 // response builds a scripted LLM response carrying the provider's own usage
@@ -147,8 +149,8 @@ func TestStepUsageWithNoCeilingStillCounts(t *testing.T) {
 func TestRunUsageTripsMidStep(t *testing.T) {
 	t.Parallel()
 
-	run := NewRunUsage(100)
-	run.Add(StepUsage{Step: "planner", Total: 60})
+	run := usage.NewRun(100)
+	run.Add(usage.Step{Step: "planner", Total: 60})
 
 	usage := &stepUsage{name: "coder", run: run}
 
@@ -174,25 +176,6 @@ func TestRunUsageTripsMidStep(t *testing.T) {
 	}
 }
 
-// TestRunUsageWithoutABudgetNeverTrips keeps reporting free of enforcement.
-func TestRunUsageWithoutABudgetNeverTrips(t *testing.T) {
-	t.Parallel()
-
-	run := NewRunUsage(0)
-
-	if run.Add(StepUsage{Step: "planner", Total: 1_000_000}) {
-		t.Error("a job with no budget reported a breach")
-	}
-
-	if run.Total() != 1_000_000 {
-		t.Errorf("Total() = %d, want 1000000 — usage is counted regardless", run.Total())
-	}
-
-	if len(run.Steps()) != 1 {
-		t.Errorf("Steps() = %d entries, want 1", len(run.Steps()))
-	}
-}
-
 // TestRecordSummaryCountsAndTripsBothCeilings: a compaction summary is spend
 // like any response, and a nil counter (a unit test's bare conversation)
 // counts nothing rather than panicking.
@@ -213,7 +196,7 @@ func TestRecordSummaryCountsAndTripsBothCeilings(t *testing.T) {
 		t.Errorf("last = %d, want 0 — a summary is not the conversation's latest turn", own.last)
 	}
 
-	job := &stepUsage{name: "writer", run: NewRunUsage(100)}
+	job := &stepUsage{name: "writer", run: usage.NewRun(100)}
 	if !job.recordSummary(response(90, 20)) {
 		t.Error("110 of a 100-token job budget did not trip the ceiling")
 	}

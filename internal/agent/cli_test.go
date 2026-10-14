@@ -14,6 +14,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/outcome"
+	"github.com/jtarchie/steps/internal/usage"
 )
 
 // firstAttempt is the plan a step's opening invocation runs under.
@@ -268,8 +269,8 @@ func TestMergeCLITrajectory(t *testing.T) {
 func TestRunCLIConversationReportsUsageToTheJob(t *testing.T) {
 	fakeCLIOnPath(t, "claude")
 
-	run := NewRunUsage(0)
-	ctx := WithRunUsage(t.Context(), run)
+	run := usage.NewRun(0)
+	ctx := usage.With(t.Context(), run)
 
 	prepared := cliPrepared(t, []string{"read_file"})
 	prepared.conv.usage = &stepUsage{name: "reviewer"}

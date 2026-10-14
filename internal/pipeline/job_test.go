@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/store"
+	"github.com/jtarchie/steps/internal/usage"
 )
 
 func captureSlog(t *testing.T) *bytes.Buffer {
@@ -46,8 +46,8 @@ func TestAResumedJobsUsageSplitsThisAttemptFromEarlier(t *testing.T) {
 	// Not t.Parallel(): mutates slog's default logger.
 	logged := captureSlog(t)
 
-	resumed := agent.NewResumedRunUsage(700, 50)
-	resumed.Add(agent.StepUsage{Step: "review", Total: 10})
+	resumed := usage.NewResumedRun(700, 50)
+	resumed.Add(usage.Step{Step: "review", Total: 10})
 
 	ctx, printed := plainOutput(t)
 	reportJobUsage(ctx, resumed)
@@ -64,8 +64,8 @@ func TestAResumedJobsUsageSplitsThisAttemptFromEarlier(t *testing.T) {
 
 	logged.Reset()
 
-	fresh := agent.NewRunUsage(0)
-	fresh.Add(agent.StepUsage{Step: "review", Total: 10})
+	fresh := usage.NewRun(0)
+	fresh.Add(usage.Step{Step: "review", Total: 10})
 
 	ctx, printed = plainOutput(t)
 	reportJobUsage(ctx, fresh)

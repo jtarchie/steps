@@ -13,6 +13,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/jtarchie/steps/internal/outcome"
+	"github.com/jtarchie/steps/internal/usage"
 )
 
 // recordedToolCall is one tool invocation the model requested during a
@@ -1025,14 +1026,14 @@ func (conv agentConversation) nextResponse(
 // attachUsage binds a conversation's token accounting to the job it runs in.
 // A nil counter is defaulted rather than required, so a caller that only cares
 // about the conversation (every unit test in this package) needn't build one.
-func attachUsage(ctx context.Context, usage *stepUsage) *stepUsage {
-	if usage == nil {
-		usage = &stepUsage{}
+func attachUsage(ctx context.Context, meter *stepUsage) *stepUsage {
+	if meter == nil {
+		meter = &stepUsage{}
 	}
 
-	usage.run = RunUsageFrom(ctx)
+	meter.run = usage.From(ctx)
 
-	return usage
+	return meter
 }
 
 // opening is the message that starts the conversation, or "" when a caller

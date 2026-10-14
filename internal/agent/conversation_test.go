@@ -17,6 +17,7 @@ import (
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/retry"
 	"github.com/jtarchie/steps/internal/shell"
+	"github.com/jtarchie/steps/internal/usage"
 )
 
 // testMaxTurns bounds the tool-calling loop in these tests. It's a local
@@ -1157,7 +1158,7 @@ func TestRunAgentConversationStopsWhenTheSummaryCrossesABudget(t *testing.T) {
 
 			ctx := context.Background()
 			if tc.job > 0 {
-				ctx = WithRunUsage(ctx, NewRunUsage(tc.job))
+				ctx = usage.With(ctx, usage.NewRun(tc.job))
 			}
 
 			res, err := runAgentConversation(ctx, fake, conv)
