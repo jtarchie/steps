@@ -205,6 +205,14 @@ func buildAgentTools(ctx context.Context, cfg *config.Config, specs []config.Too
 			err = resolved.bound(spec)
 		}
 
+		// Wrapped innermost first: timeout, then the rules, then params — the outermost, so a rule reads an argument as the tool will receive it, defaults filled and limits already held.
+		if err == nil {
+			var judges []io.Closer
+
+			judges, err = resolved.ruled(ctx, cfg, spec)
+			closers = append(closers, judges...)
+		}
+
 		if err == nil {
 			err = resolved.limited(spec)
 		}

@@ -155,6 +155,8 @@ func schemaDefsByType() map[string]reflect.Type {
 		"assert":               reflect.TypeOf(config.Assert{}),
 		"access":               reflect.TypeOf(config.Access{}),
 		"mcpExport":            reflect.TypeOf(config.MCPExport{}),
+		"rule":                 reflect.TypeOf(config.Rule{}),
+		"paramSpec":            reflect.TypeOf(config.ParamSpec{}),
 		"defaults":             reflect.TypeOf(config.Defaults{}),
 		"stepMemory":           reflect.TypeOf(config.StepMemory{}),
 		"workspace":            reflect.TypeOf(config.WorkspaceConfig{}),

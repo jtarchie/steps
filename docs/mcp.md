@@ -253,6 +253,55 @@ jobs:
 - **A sub-agent export** runs that agent's own conversation for each call, with your model and your tools, and returns its answer — the narrowest thing to share.
 - Never hashed: an export changes nothing a build does.
 
+### Rules: checks on each call
+
+`params:` limits what one argument may be; a **rule** decides about the whole call — who is asking, what they are asking for, what came back. A rule is named once at the top of the pipeline and attached by name to an export (it checks every tool in it), to one tool in it, or to a tool an [agent is granted](agents.md#rules--checks-on-each-call).
+
+```yaml noexec=credentials
+mcp_servers:
+- name: github
+  endpoint: https://api.githubcopilot.com/mcp/
+  auth: { type: bearer, api_key_env: GITHUB_PAT }
+
+agents:
+- name: triage-judge
+  source: { model: openrouter/qwen/qwen3.7-flash, api_key_env: OPENROUTER_API_KEY }
+  system: You decide whether a call may go ahead. Reply allow or deny, then one short reason.
+
+rules:
+- name: acme-only
+  when: args.owner in who.Organizations
+- name: no-secrets
+  accept: not (result.text matches "(?i)private key|api[_-]?key")
+- name: sanity
+  judged_by: triage-judge
+
+mcp_exports:
+- name: support
+  access: '"acme/support" in Groups'
+  rules: [no-secrets]             # every tool in the export
+  tools:
+  - mcp: github
+    tool: search_issues
+    args: { owner: acme }
+    params:
+      query: { max_length: 200, pattern: '^[^;]*$' }
+      limit: { max: 50, default: 20 }
+    rules: [acme-only, sanity]    # this tool, after the export's
+
+jobs:
+- name: build
+  plan:
+  - task: say
+    run: echo hi
+```
+
+- **`when:`** runs before the call and **`accept:`** after it, each an [expression](expr.md) that must come out `true`. **`judged_by:`** asks one of the pipeline's agents to answer `allow` or `deny`. The order is: the export's rules, then the tool's; within them every `when:`, then every judge, then the call, then every `accept:`. The cheapest check goes first, so an agent is paid for only by a call nothing cheaper refused.
+- **What an expression sees**: `tool`, `args` (as the tool will receive them — pins and `params:` defaults applied, so `args.owner` above is `acme` whatever the caller sent), and `who`: the person calling, with `Provider`, `UserID`, `ID`, `Email`, `Organizations` and `Groups`, the same things the export's `access:` rule reads. `accept:` also sees `result` — `result.text` is exactly what the caller would receive, `result.content` the same as an object, `result.error` the call's own error. Expressions are pure: no `http()`, `env()` or `file()`. They are compiled when the pipeline is validated or set, so one that cannot compile is refused there.
+- **A refusal tells the caller why.** `fail("why")` gives the reason itself; a plain `false` says "refused by rule <name>"; a judge's reason is passed on. A rule that errors, or a judge that fails, times out or answers neither word, refuses — nothing is let through on a rule's say-so that it did not give. The caller sees a tool error and the upstream is never reached by a `when:` or judge refusal; an `accept:` refusal withholds the result, but the call has already run.
+- **Refusals are recorded under the rule's name**: the activity log shows `mcp refused` with the rule, never what was asked, and the export's page counts the day's refusals apart from the calls that ran.
+- **A judge** is a hosted agent of the pipeline, shown the tool, who is asking and the arguments (framed as data, not instructions), and bounded to two minutes. Its tokens are the pipeline's, so give it a small model and a short `max_turns`. It is not itself judged: a judge whose own tools carry a judged rule is a load error.
+
 ### Where an export is seen
 
 A pipeline's **mcp** tab lists its exports under its servers — what it shares beside what it connects to — with how many tools each offers, how many people and agents are connected, and how many calls came in today. Each export has a page of its own: its address with a copy button, how to give it to Claude Code, Claude or Cursor, its access rule as written, every tool with its fixed arguments and time limit, and its most recent calls. Nothing on it is editable: the pipeline file is where an export changes.

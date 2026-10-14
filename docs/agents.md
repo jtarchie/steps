@@ -484,6 +484,54 @@ jobs:
 - **Where it is valid**: a custom tool, a sub-agent tool (its one argument is `request`), or a single-tool MCP grant (`{mcp, tool}`), written where the tool is granted. A pinned (`args:`) argument has nothing to limit, so naming one is a load error, as is a name the tool does not take.
 - **Part of the step's hash**: tightening a limit re-runs a step cached under a looser one.
 
+### `rules:` — checks on each call
+
+`params:` says what one argument may be. A **rule** says whether this call, by this caller, with these arguments, may go ahead — and whether what came back may be seen. Rules are named once at the top of the pipeline and attached by name to a tool, or to a whole [export](mcp.md#rules-checks-on-each-call):
+
+```yaml test=agents-tool-rules
+rules:
+- name: staging-only
+  when: 'args.env in ["staging", "dev"] ? true : fail("production deploys need a person")'
+- name: no-tokens
+  accept: not (result.text matches "ghp_")
+- name: deploy-sanity
+  judged_by: judge
+
+agents:
+- name: judge
+  source: { model: openrouter/qwen/qwen3.7-flash }
+  system: You decide whether a deploy may go ahead. Reply allow or deny.
+- name: deployer
+  source: { model: openrouter/qwen/qwen3.7-flash }
+  tools:
+  - name: deploy
+    description: Deploy a build to an environment.
+    run: echo deployed {{ .args.build | shellquote }} to {{ .args.env | shellquote }}
+    rules: [staging-only, deploy-sanity, no-tokens]
+
+jobs:
+- name: release
+  plan:
+  - agent: deployer
+    messages:
+      - "Deploy build b2 to production if you can, otherwise to staging."
+    assert:
+      tool_calls:
+      - name: deploy
+        args: { build: b2, env: staging }
+  assert:
+    execution: [deployer]
+    outcome: succeeded
+```
+
+- **Three kinds of check, in this order**: `when:` before the call, `judged_by:` before the call (so a cheap rule refuses before an agent is paid for), then the call, then `accept:` on what came back. Rules on a tool run in the order they are listed.
+- **`when:` and `accept:` are expressions** ([expr](expr.md) syntax, compiled when the pipeline is validated or set, so one that cannot compile is refused there rather than failing every call). `when:` sees `tool` (the tool's name), `args` (as the tool will receive them: pinned values and `params:` defaults applied) and `who` (`Provider`, `UserID`, `ID`, `Email`, `Organizations`, `Groups` — empty for an agent step, which no person is calling). `accept:` also sees `result`: `result.text` is exactly the text the caller will receive, `result.content` the same as an object, `result.error` the call's own error. They are pure — no `http()`, `env()` or `file()` — so a rule can only decide.
+- **Answering `true` lets it through.** `false` refuses with "refused by rule <name>"; `fail("why")` refuses with your reason, which is what the model or the caller reads. An expression that errors (`args.a.b` on a missing `a`) refuses too: a rule that cannot decide has not said yes.
+- **`judged_by:` hands the decision to one of the pipeline's agents**, shown the tool, who is asking and the arguments (as data, not instructions) and asked to reply `allow` or `deny` with an optional reason. Anything else — an error, no answer, rambling — refuses. The judge is a hosted agent, uses the model and tools you gave it, and is not itself judged. Its time is bounded at two minutes.
+- **A refusal is ordinary tool-result data** (`{"error": "...", "rule": "staging-only"}`), so the model reads why and tries something else, exactly as it does for a `params:` refusal.
+- **Where it is valid**: on a tool where it is granted (an `agents:` entry's `tools:`, or an inline custom tool), the same place `timeout:` and `params:` bind. A step that only selects a granted tool by name inherits its rules.
+- **Part of the step's hash**, by what each rule says, not only its name: editing a rule re-runs the steps whose tools it guards.
+
 ## Delivering files the pipeline will read
 
 An agent's answer is not its final message. Everything downstream — a `put:`, a task, another agent — reads **files**, and a model that summarizes its work in prose instead of writing it has produced nothing while sounding finished. `assert.files:` already states which files a step owes ([control-flow.md](control-flow.md#assert-self-verification--steps-test)), and `assert.tool_calls:` states the procedure it must follow. Both are checked after the step ends, and the step fails naming what is missing. With **`nudge: true`** on the assert, the model is also told *while it can still act on it*:

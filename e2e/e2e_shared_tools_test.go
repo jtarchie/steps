@@ -62,6 +62,31 @@ func callTool(t *testing.T, session *sdkmcp.ClientSession, name string, args map
 	return result
 }
 
+// reached is how many calls the upstream received for tool.
+func reached(upstream *docMCPServer, tool string) int {
+	upstream.mu.Lock()
+	defer upstream.mu.Unlock()
+
+	return len(upstream.calls[tool])
+}
+
+func expectRefused(t *testing.T, session *sdkmcp.ClientSession, tool string, args map[string]any, want string) {
+	t.Helper()
+
+	got := callTool(t, session, tool, args)
+	if !got.IsError || !strings.Contains(textOf(got), want) {
+		t.Errorf("%s %v = %q, want a refusal saying %q", tool, args, textOf(got), want)
+	}
+}
+
+func expectJudgeWasTold(t *testing.T, question string) {
+	t.Helper()
+
+	if !strings.Contains(question, `"db__run_query"`) || !strings.Contains(question, "select 1") || !strings.Contains(question, "alex (local)") {
+		t.Errorf("the judge was not told what was being asked and by whom:\n%s", question)
+	}
+}
+
 func marshalled(t *testing.T, v any) string {
 	t.Helper()
 
@@ -148,12 +173,8 @@ mcp_exports:
 		}
 	}
 
-	upstream.mu.Lock()
-	reached := len(upstream.calls["search_issues"])
-	upstream.mu.Unlock()
-
-	if reached != 0 {
-		t.Fatalf("%d refused calls reached the upstream", reached)
+	if got := reached(upstream, "search_issues"); got != 0 {
+		t.Fatalf("%d refused calls reached the upstream", got)
 	}
 
 	result := callTool(t, session, "github__search_issues", map[string]any{"query": "crash"})
@@ -274,5 +295,186 @@ mcp_exports:
 		if !strings.Contains(out.Stdout, "3.") || !strings.Contains(out.Stdout, "offline") || strings.Count(out.Stdout, "marker") != 1 {
 			t.Fatalf("the command did not run in a fresh, offline alpine container:\n%s", out.Stdout)
 		}
+	}
+}
+
+// A when: rule refuses before anything goes upstream and says why; it reads the arguments as the tool will get them (pins applied) and who is asking.
+func TestAWhenRuleRefusesACallBeforeItReachesTheUpstreamAndIsRecordedByName(t *testing.T) {
+	upstream := startDocMCPServer(t, docMCPTool{
+		name:     "search_issues",
+		required: []string{"owner", "query"},
+		reply:    func(args map[string]any) string { return "searched " + args["query"].(string) },
+	})
+
+	served := serveOps(t, `
+mcp_servers:
+- name: github
+  endpoint: `+upstream.URL+`
+rules:
+- name: pinned-org-and-alex
+  when: args.owner == "acme" and who.UserID == "alex" and who.Provider == "local"
+- name: lowercase-words
+  when: 'args.query matches "^[a-z ]+$" ? true : fail("ask in lowercase words only")'
+- name: never
+  when: args.query != "forbidden"
+mcp_exports:
+- name: support
+  access: "true"
+  tools:
+  - mcp: github
+    tool: search_issues
+    args: { owner: acme }
+    rules: [pinned-org-and-alex, lowercase-words, never]
+`)
+
+	session := served.connect(t, "support")
+
+	expectRefused(t, session, "github__search_issues", map[string]any{"query": "HELP $(id)", "owner": "evil"}, "ask in lowercase words only")
+	expectRefused(t, session, "github__search_issues", map[string]any{"query": "forbidden"}, "refused by rule never")
+
+	if got := reached(upstream, "search_issues"); got != 0 {
+		t.Fatalf("%d refused calls reached the upstream", got)
+	}
+
+	allowed := callTool(t, session, "github__search_issues", map[string]any{"query": "crash on start", "owner": "evil"})
+	if allowed.IsError {
+		t.Fatalf("a call every rule allows was refused: %s", textOf(allowed))
+	}
+
+	expectDocMCPCall(t, upstream, "search_issues", map[string]any{"owner": "acme", "query": "crash on start"})
+
+	refusalsAreRecordedByRuleName(t, served)
+}
+
+func refusalsAreRecordedByRuleName(t *testing.T, served servedPipeline) {
+	t.Helper()
+
+	_, activity := authBody(t, served.addr, "alex", "a", "/activity?action=mcp+refused")
+	if !strings.Contains(activity, "lowercase-words") || !strings.Contains(activity, "never") || strings.Contains(activity, "HELP") || strings.Count(activity, "mcp refused") < 2 {
+		t.Errorf("the activity log should name the rules that refused, and never what was asked:\n%s", activity)
+	}
+
+	_, page := authBody(t, served.addr, "alex", "a", "/p/ops/mcp/exports/support")
+	if !strings.Contains(page, "2 refused by a rule today") || !strings.Contains(page, "pinned-org-and-alex") {
+		t.Errorf("the export's page should list its rules and count today's refusals:\n%s", page)
+	}
+}
+
+// An accept: rule withholds a result the caller must not see, however it was produced, and the rule on the export covers every tool in it.
+func TestAnAcceptRuleWithholdsWhatCameBack(t *testing.T) {
+	upstream := startDocMCPServer(t, docMCPTool{
+		name:     "read_note",
+		required: []string{"name"},
+		reply: func(args map[string]any) string {
+			if args["name"] == "keys" {
+				return "-----BEGIN PRIVATE KEY----- abc"
+			}
+
+			return "a harmless note"
+		},
+	})
+
+	served := serveOps(t, `
+mcp_servers:
+- name: notes
+  endpoint: `+upstream.URL+`
+rules:
+- name: no-secrets
+  accept: not (result.text matches "(?i)private key|api[_-]?key")
+mcp_exports:
+- name: support
+  access: "true"
+  rules: [no-secrets]
+  tools:
+  - mcp: notes
+    tool: read_note
+  - name: leak
+    description: Prints a key
+    run: echo api_key=hunter2
+`)
+
+	session := served.connect(t, "support")
+
+	if got := callTool(t, session, "notes__read_note", map[string]any{"name": "ok"}); got.IsError || !strings.Contains(textOf(got), "harmless") {
+		t.Errorf("a clean result = %+v", textOf(got))
+	}
+
+	for _, withheld := range []*sdkmcp.CallToolResult{
+		callTool(t, session, "notes__read_note", map[string]any{"name": "keys"}),
+		callTool(t, session, "leak", nil),
+	} {
+		text := textOf(withheld)
+		if !withheld.IsError || !strings.Contains(text, "withheld by rule no-secrets") || strings.Contains(text, "PRIVATE KEY") || strings.Contains(text, "hunter2") {
+			t.Errorf("a result matching the rule reached the caller: %+v", text)
+		}
+	}
+}
+
+// A judged_by rule asks one of the pipeline's agents, which is told what is being asked and answers allow or deny; a rambling or failing judge is no.
+func TestAJudgedRuleAsksAnAgentAndAnythingButAllowRefuses(t *testing.T) {
+	upstream := startDocMCPServer(t, docMCPTool{
+		name:     "run_query",
+		required: []string{"sql"},
+		reply:    func(args map[string]any) string { return "ran " + args["sql"].(string) },
+	})
+
+	judged := make(chan string, 8)
+
+	fake := newRoutedFakeLLM(t, func(req capturedRequest) turn {
+		var question string
+
+		for _, msg := range req.Messages {
+			if msg.Role == "user" {
+				question = msg.Content
+			}
+		}
+
+		judged <- question
+
+		switch {
+		case strings.Contains(question, "drop table"):
+			return says("Deny. That destroys data.")
+		case strings.Contains(question, "ramble"):
+			return says("Well, it depends on many things.")
+		default:
+			return says("allow")
+		}
+	})
+
+	t.Setenv("STEPS_TEST_AGENT_API_KEY", "test")
+
+	served := serveOps(t, `
+mcp_servers:
+- name: db
+  endpoint: `+upstream.URL+`
+agents:
+- name: triage-judge
+  source: { model: openai/test-model, endpoint: `+fake.URL+`/v1/, api_key_env: STEPS_TEST_AGENT_API_KEY }
+  system: You decide whether a database call may go ahead.
+rules:
+- name: sanity
+  judged_by: triage-judge
+mcp_exports:
+- name: support
+  access: "true"
+  tools:
+  - mcp: db
+    tool: run_query
+    rules: [sanity]
+`)
+
+	session := served.connect(t, "support")
+
+	if got := callTool(t, session, "db__run_query", map[string]any{"sql": "select 1"}); got.IsError {
+		t.Fatalf("a call the judge allowed was refused: %s", textOf(got))
+	}
+
+	expectJudgeWasTold(t, <-judged)
+
+	expectRefused(t, session, "db__run_query", map[string]any{"sql": "drop table users"}, "refused by rule sanity: That destroys data.")
+	expectRefused(t, session, "db__run_query", map[string]any{"sql": "ramble"}, "neither allow nor deny")
+
+	if got := reached(upstream, "run_query"); got != 1 {
+		t.Errorf("%d calls reached the upstream, want only the allowed one", got)
 	}
 }

@@ -102,7 +102,7 @@ var activityRoutes = map[string]activityRoute{
 
 // notRecorded are the mutating routes a person does not drive, with why.
 var notRecorded = map[string]string{ //nolint:gosec // route keys and reasons, not credentials
-	"POST /mcp/x/:pipeline/:export":     "an agent's call, recorded per tool by the export's own After hook as mcp call",
+	"POST /mcp/x/:pipeline/:export":     "an agent's call, recorded per tool by the export's own After hook as mcp call, or mcp refused when a rule turned it away",
 	"DELETE /mcp/x/:pipeline/:export":   "ending an MCP session, which a stateless export never holds",
 	"POST /connections/revoke":          "recorded by handleRevoke itself as mcp disconnect, against the pipeline the connection was to — this route carries none in its path",
 	"POST /login":                       "signing in is about the daemon, not a pipeline, and the log is written through a pipeline's handle; the daemon's log line web.signed_in records it",
@@ -333,6 +333,7 @@ var targetPages = map[string]func(target string) string{
 	"mcp connect":    func(string) string { return "/mcp" },
 	"mcp test":       func(string) string { return "/mcp" },
 	"mcp call":       func(export string) string { return "/mcp/exports/" + export },
+	"mcp refused":    func(export string) string { return "/mcp/exports/" + export },
 	"mcp authorize":  func(export string) string { return "/mcp/exports/" + export },
 	"mcp disconnect": func(export string) string { return "/mcp/exports/" + export },
 }

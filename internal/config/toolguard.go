@@ -49,7 +49,7 @@ func (c *Config) validateAgentToolCallGuards() error {
 	for i := range c.Agents {
 		agent := c.Agents[i]
 
-		err := checkToolCallGuardSpecs(fmt.Sprintf("agent %q", agent.Name), grantPosition, agent.Tools)
+		err := c.checkToolCallGuardSpecs(fmt.Sprintf("agent %q", agent.Name), grantPosition, agent.Tools)
 		if err != nil {
 			return err
 		}
@@ -65,7 +65,7 @@ func (c *Config) validateTaskFixToolCallGuards() error {
 			continue
 		}
 
-		err := checkToolCallGuardSpecs(fmt.Sprintf("task %q fix", c.Tasks[i].Name), selectionPosition, fix.Tools)
+		err := c.checkToolCallGuardSpecs(fmt.Sprintf("task %q fix", c.Tasks[i].Name), selectionPosition, fix.Tools)
 		if err != nil {
 			return err
 		}
@@ -77,7 +77,7 @@ func (c *Config) validateTaskFixToolCallGuards() error {
 func (c *Config) validateStepToolCallGuards() error {
 	for _, job := range c.Jobs {
 		err := job.visitSteps(func(label string, step *Step) error {
-			err := checkToolCallGuardSpecs(label, selectionPosition, step.Tools)
+			err := c.checkToolCallGuardSpecs(label, selectionPosition, step.Tools)
 			if err != nil {
 				return err
 			}
@@ -86,7 +86,7 @@ func (c *Config) validateStepToolCallGuards() error {
 				return nil
 			}
 
-			return checkToolCallGuardSpecs(label+" fix", selectionPosition, step.Fix.Tools)
+			return c.checkToolCallGuardSpecs(label+" fix", selectionPosition, step.Fix.Tools)
 		})
 		if err != nil {
 			return err
@@ -98,7 +98,7 @@ func (c *Config) validateStepToolCallGuards() error {
 
 // checkToolCallGuardSpecs runs validateToolCallGuardShape over every spec in
 // specs, stopping at the first error.
-func checkToolCallGuardSpecs(context string, pos toolPosition, specs []ToolSpec) error {
+func (c *Config) checkToolCallGuardSpecs(context string, pos toolPosition, specs []ToolSpec) error {
 	for _, spec := range specs {
 		err := validateToolCallGuardShape(context, spec)
 		if err != nil {
@@ -121,6 +121,11 @@ func checkToolCallGuardSpecs(context string, pos toolPosition, specs []ToolSpec)
 		}
 
 		err = validateToolParamsShape(context, pos, spec)
+		if err != nil {
+			return err
+		}
+
+		err = c.validateToolRulesShape(context, pos, spec)
 		if err != nil {
 			return err
 		}

@@ -19,76 +19,84 @@ func toolSpecsContent(cfg *config.Config, specs []config.ToolSpec) ([]map[string
 	out := make([]map[string]any, len(specs))
 
 	for i, t := range specs {
-		if t.Agent != "" {
-			invocation, err := subAgentInvocationContent(cfg, t.Agent)
-			if err != nil {
-				return nil, err
-			}
-
-			out[i] = map[string]any{
-				"agent":       t.Agent,
-				"description": t.Description,
-				"invocation":  invocation,
-			}
-
-			withParamsContent(t, out[i])
-
-			continue
+		content, err := toolSpecContent(cfg, t)
+		if err != nil {
+			return nil, err
 		}
 
-		if t.MCP != "" {
-			content, err := mcpToolSpecContent(cfg, t)
-			if err != nil {
-				return nil, err
-			}
-
-			withParamsContent(t, content)
-
-			out[i] = content
-
-			continue
+		err = withGuardContent(cfg, t, content)
+		if err != nil {
+			return nil, err
 		}
-
-		content := map[string]any{
-			"builtin":     t.Builtin,
-			"name":        t.Name,
-			"description": t.Description,
-			"run":         t.Run,
-		}
-
-		// max_calls/args fold in only when set — a tool with neither hashes
-		// byte-identically to before this feature existed. Both change what a
-		// call actually executes with (a budget bounds it; pinned args alter
-		// its arguments), the same argument TaskNodeContent's doc comment
-		// makes for image: over the workspace-gated inputs/outputs.
-		if t.MaxCalls != 0 {
-			content["max_calls"] = t.MaxCalls
-		}
-
-		if len(t.Args) != 0 {
-			content["args"] = t.Args
-		}
-
-		// Same value-gating: max_output_bytes narrows what a call returns to
-		// the model, so it changes the conversation the step produces.
-		if t.MaxOutputBytes != 0 {
-			content["max_output_bytes"] = t.MaxOutputBytes
-		}
-
-		withRequiredContent(t, content)
-
-		// web_fetch's host allow-list decides what the agent can reach at all, so narrowing it must re-run the step that was cached while it was wide. Sorted, because a host list is a set: reordering it changes nothing a fetch can see. Value-gated, and refused at load on every other tool form.
-		if len(t.Allow) != 0 {
-			content["allow"] = config.StableStrings(t.Allow)
-		}
-
-		withAskUserContent(t, content)
-		withParamsContent(t, content)
 
 		out[i] = content
 	}
 
 	return out, nil
+}
+
+// toolSpecContent is one grant's hashed identity, by kind.
+func toolSpecContent(cfg *config.Config, t config.ToolSpec) (map[string]any, error) {
+	if t.Agent != "" {
+		invocation, err := subAgentInvocationContent(cfg, t.Agent)
+		if err != nil {
+			return nil, err
+		}
+
+		return map[string]any{
+			"agent":       t.Agent,
+			"description": t.Description,
+			"invocation":  invocation,
+		}, nil
+	}
+
+	if t.MCP != "" {
+		return mcpToolSpecContent(cfg, t)
+	}
+
+	content := map[string]any{
+		"builtin":     t.Builtin,
+		"name":        t.Name,
+		"description": t.Description,
+		"run":         t.Run,
+	}
+
+	// max_calls/args fold in only when set — a tool with neither hashes
+	// byte-identically to before this feature existed. Both change what a
+	// call actually executes with (a budget bounds it; pinned args alter
+	// its arguments), the same argument TaskNodeContent's doc comment
+	// makes for image: over the workspace-gated inputs/outputs.
+	if t.MaxCalls != 0 {
+		content["max_calls"] = t.MaxCalls
+	}
+
+	if len(t.Args) != 0 {
+		content["args"] = t.Args
+	}
+
+	// Same value-gating: max_output_bytes narrows what a call returns to
+	// the model, so it changes the conversation the step produces.
+	if t.MaxOutputBytes != 0 {
+		content["max_output_bytes"] = t.MaxOutputBytes
+	}
+
+	withRequiredContent(t, content)
+
+	// web_fetch's host allow-list decides what the agent can reach at all, so narrowing it must re-run the step that was cached while it was wide. Sorted, because a host list is a set: reordering it changes nothing a fetch can see. Value-gated, and refused at load on every other tool form.
+	if len(t.Allow) != 0 {
+		content["allow"] = config.StableStrings(t.Allow)
+	}
+
+	withAskUserContent(t, content)
+
+	return content, nil
+}
+
+// withGuardContent folds what limits or checks a call: params: and rules:.
+func withGuardContent(cfg *config.Config, t config.ToolSpec, content map[string]any) error {
+	withParamsContent(t, content)
+
+	return withRulesContent(cfg, t, content)
 }
 
 // withParamsContent folds params: in. The limits are published to the model and enforced in front of the call, so they decide which calls happen and what the model is told to send: a step cached under looser ones would be skipped when they tighten. Value-gated.
@@ -134,6 +142,47 @@ func withParamsContent(t config.ToolSpec, content map[string]any) {
 	}
 
 	content["params"] = params
+}
+
+// withRulesContent folds rules: in by what each rule SAYS, not only its name: editing a rule changes which calls the step makes and what it is told came back, so a step cached under the old text must not be skipped. A judge is keyed as it is as a sub-agent, because its model and persona decide the answer. Value-gated.
+func withRulesContent(cfg *config.Config, t config.ToolSpec, content map[string]any) error {
+	if len(t.Rules) == 0 {
+		return nil
+	}
+
+	rules := make([]map[string]any, 0, len(t.Rules))
+
+	for _, name := range t.Rules {
+		rule, err := cfg.FindRule(name)
+		if err != nil {
+			return fmt.Errorf("tool %q: rules: %w", config.ToolSpecName(t), err)
+		}
+
+		entry := map[string]any{"name": rule.Name}
+
+		if rule.When != "" {
+			entry["when"] = rule.When
+		}
+
+		if rule.Accept != "" {
+			entry["accept"] = rule.Accept
+		}
+
+		if rule.JudgedBy != "" {
+			judge, err := subAgentInvocationContent(cfg, rule.JudgedBy)
+			if err != nil {
+				return err
+			}
+
+			entry["judged_by"] = judge
+		}
+
+		rules = append(rules, entry)
+	}
+
+	content["rules"] = rules
+
+	return nil
 }
 
 // withRequiredContent folds required: in. It is a success criterion — a required tool's nonzero exit aborts the step instead of being handed to the model as data — and assertContent's argument applies word for word: a step cached BEFORE the line was added would be skipped, and the criterion never evaluated on the run that added it. Value-gated like everything here.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -400,6 +401,40 @@ var docScenarios = map[string]docScenario{
 			if strings.Contains(transcript, "filed a very long title") {
 				t.Errorf("a title over the limit reached the command:\n%s", transcript)
 			}
+		},
+	},
+
+	// The model first asks for production, which the when: rule refuses by
+	// itself — so the judge is not consulted for it — then for staging, which
+	// the judge allows. The command ran once, for staging.
+	"agents-tool-rules": {
+		fake: func(t *testing.T) *fakeLLM {
+			t.Helper()
+
+			var judged atomic.Int32
+
+			t.Cleanup(func() {
+				if got := judged.Load(); got != 1 {
+					t.Errorf("the judge was asked %d times; want once, for the staging deploy only", got)
+				}
+			})
+
+			return newRoutedFakeLLM(t, func(req capturedRequest) turn {
+				if !slices.Contains(req.toolNames(), "deploy") {
+					judged.Add(1)
+
+					return says("allow")
+				}
+
+				switch {
+				case req.toolResultContains("deployed b2 to staging"):
+					return says("Deployed b2 to staging; production needs a person.")
+				case req.toolResultContains("production deploys need a person"):
+					return callsTool("deploy", map[string]any{"build": "b2", "env": "staging"})
+				default:
+					return callsTool("deploy", map[string]any{"build": "b2", "env": "production"})
+				}
+			})
 		},
 	},
 

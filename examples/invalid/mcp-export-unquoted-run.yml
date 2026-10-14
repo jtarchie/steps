@@ -1,0 +1,18 @@
+# A caller somewhere else chooses what goes into an exported command, so a
+# value that reaches the shell without shellquote is a command the caller
+# chose: {{ .args.term }} with term set to `$(cat ~/.ssh/id_rsa)` runs it.
+# expect: prints a caller's value into the shell unquoted
+
+mcp_exports:
+- name: support
+  access: 'Provider == "github"'
+  tools:
+  - name: lookup
+    description: look a thing up
+    run: grep {{ .args.term }} /etc/hosts
+
+jobs:
+- name: build
+  plan:
+  - task: say
+    run: echo hi

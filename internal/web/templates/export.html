@@ -8,6 +8,9 @@
   <dt>access</dt>
   <dd><code>{{$e.Access}}</code></dd>
   {{with $e.Rate}}<dt>rate</dt><dd>{{.}} per person</dd>{{end}}
+  {{with $e.Rules}}<dt>rules</dt><dd>{{range .}}<code>{{.}}</code> {{end}}<span class="dim">on every tool</span></dd>{{end}}
+  {{if $e.RefusedToday}}<dt>refused</dt><dd>{{$e.RefusedToday}} refused by a rule today</dd>{{end}}
+  {{with $e.Image}}<dt>commands run in</dt><dd><code>{{.}}</code>{{with $e.Network}} <span class="dim">network {{.}}</span>{{end}}</dd>{{end}}
   <dt>connected</dt>
   <dd>{{if $e.People}}{{$e.People}} {{if eq $e.People 1}}person{{else}}people{{end}} · {{$e.Agents}} {{if eq $e.Agents 1}}agent{{else}}agents{{end}}{{else}}<span class="faint">nobody yet</span>{{end}}{{with $.Nav.Who}} · <a href="/connections">your connections</a>{{end}}</dd>
 </dl>
@@ -31,8 +34,8 @@
     {{range $e.Tools}}
       <tr>
         <td><code>{{if and .MCP (not .MCPTool)}}{{if .MCPTools}}{{$server := .MCP}}{{range $i, $t := .MCPTools}}{{if $i}}, {{end}}{{$server}}__{{$t}}{{end}}{{else}}every tool {{.MCP}} offers{{end}}{{else}}{{toolName .}}{{end}}</code>{{with .Description}}<div class="dim">{{.}}</div>{{end}}</td>
-        <td>{{range $k, $v := .Args}}<code>{{$k}}={{$v}}</code> {{end}}{{with .Timeout}}<span class="dim">{{.}} limit</span>{{end}}</td>
-        <td class="dim">{{if .Agent}}an agent that answers in prose{{else}}mcp · {{.MCP}}{{end}}</td>
+        <td>{{range $k, $v := .Args}}<code>{{$k}}={{$v}}</code> {{end}}{{with .Timeout}}<span class="dim">{{.}} limit</span>{{end}}{{range $k, $_ := .Params}} <span class="dim">{{$k}} limited</span>{{end}}{{range .Rules}} <code>{{.}}</code>{{end}}</td>
+        <td class="dim">{{if .Agent}}an agent that answers in prose{{else if .MCP}}mcp · {{.MCP}}{{else}}a command of this pipeline{{end}}</td>
       </tr>
     {{end}}
     </tbody>

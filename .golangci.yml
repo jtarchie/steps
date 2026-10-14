@@ -762,6 +762,8 @@ linters:
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/actor"
             - "github.com/jtarchie/steps/internal/events"
+            # exprlang for a rule's when:/accept: — pure expressions over one call, which is all it is asked to evaluate here.
+            - "github.com/jtarchie/steps/internal/exprlang"
             - "github.com/jtarchie/steps/internal/mcp"
             - "github.com/jtarchie/steps/internal/outcome"
             - "github.com/jtarchie/steps/internal/retry"
@@ -842,6 +844,8 @@ linters:
             - "github.com/jtarchie/steps/internal/config"
             - "github.com/jtarchie/steps/internal/actor"
             - "github.com/jtarchie/steps/internal/events"
+            # exprlang to compile a rule's expressions when a pipeline is validated or set, which config cannot do.
+            - "github.com/jtarchie/steps/internal/exprlang"
             - "github.com/jtarchie/steps/internal/runview"
             - "github.com/jtarchie/steps/internal/merkle"
             - "github.com/jtarchie/steps/internal/outcome"

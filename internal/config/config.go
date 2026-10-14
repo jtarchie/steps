@@ -24,8 +24,10 @@ type Config struct {
 	MCPServers    []MCPServer    `yaml:"mcp_servers,omitempty"`
 	// MCPExports are bundles of this pipeline's tools other people's agents may connect to through the daemon. See MCPExport.
 	MCPExports []MCPExport `yaml:"mcp_exports,omitempty"`
-	Tasks      []Task      `yaml:"tasks"`
-	Jobs       []Job       `yaml:"jobs"`
+	// Rules are named checks on a call to a shared or granted tool. See Rule.
+	Rules []Rule `yaml:"rules,omitempty"`
+	Tasks []Task `yaml:"tasks"`
+	Jobs  []Job  `yaml:"jobs"`
 	// Defaults supplies pipeline-wide fallbacks and bounds: the model an
 	// agent uses when it names none, preflight tuning, the delegation budget,
 	// and the version/run/memory caps. See Defaults.
@@ -235,6 +237,7 @@ func (c *Config) validate() error {
 		c.validateStepKinds,
 		c.validateAccess,
 		c.validateMCPExports,
+		c.validateRules,
 		c.validateStepReferences,
 		c.validateTaskInputsAll,
 		c.validateStepFieldPlacement,

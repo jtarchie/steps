@@ -12,7 +12,12 @@ type (
 	ExportServer = pipeline.ExportServer
 	// ExportHooks are what the mounting server decides about each call.
 	ExportHooks = pipeline.ExportHooks
+	// ExportWho is the person a call is made as, as the rules checking it see them.
+	ExportWho = pipeline.ExportWho
 )
+
+// WithExportWho carries who is calling to the rules checking the call.
+var WithExportWho = pipeline.WithExportWho //nolint:gochecknoglobals // a re-export, not state
 
 // ErrRateLimited is a call past an export's rate:.
 var ErrRateLimited = pipeline.ErrRateLimited //nolint:gochecknoglobals // a re-export, not state

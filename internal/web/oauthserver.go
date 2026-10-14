@@ -106,21 +106,28 @@ func (s *Server) exportOfResource(resource string) (*Pipeline, config.MCPExport,
 
 // mayUse is whether a person may connect to an export: the daemon must let them see the pipeline, the pipeline must not hide it from them, and the export's own rule must hold. Read from the daemon's record of them every time it is asked.
 func (s *Server) mayUse(ctx context.Context, who actor.Actor, target *Pipeline, export config.MCPExport) bool {
+	_, allowed := s.mayUseAs(ctx, who, target, export)
+
+	return allowed
+}
+
+// mayUseAs is mayUse, and the person the rules saw when it said yes, which a call's own rules are then written against.
+func (s *Server) mayUseAs(ctx context.Context, who actor.Actor, target *Pipeline, export config.MCPExport) (Identity, bool) {
 	if !s.signsIn(who) {
-		return false
+		return Identity{}, false
 	}
 
 	id := s.identityOf(ctx, who)
 	if target.narrow(s.roles.highest(id), id) < RoleViewer {
-		return false
+		return Identity{}, false
 	}
 
 	program, err := compileRule(export.Access)
 	if err != nil {
-		return false
+		return Identity{}, false
 	}
 
-	return holds(program, id)
+	return id, holds(program, id)
 }
 
 func randomToken() string {

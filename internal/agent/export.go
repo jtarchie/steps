@@ -30,8 +30,8 @@ import (
 type ExportHooks struct {
 	// Before may refuse a call — a rate limit — and the refusal reaches the caller as the tool's error result.
 	Before func(ctx context.Context, tool string) error
-	// After is told every call that ran: the tool, the NAMES of the arguments it was sent (never their values, which can hold anything a caller pasted), and whether it succeeded.
-	After func(ctx context.Context, tool string, argNames []string, ok bool)
+	// After is told every call that ran: the tool, the NAMES of the arguments it was sent (never their values, which can hold anything a caller pasted), whether it succeeded, and, when a rule refused it, that rule's name.
+	After func(ctx context.Context, tool string, argNames []string, ok bool, rule string)
 }
 
 // ExportServer is one export, built and connected to its upstreams.
@@ -52,7 +52,7 @@ func NewExportServer(ctx context.Context, cfg *config.Config, export config.MCPE
 		return nil, fmt.Errorf("export %q: %w", export.Name, err)
 	}
 
-	tools, closers, err := buildAgentTools(ctx, cfg, export.Tools, "")
+	tools, closers, err := buildAgentTools(ctx, cfg, withExportRules(export), "")
 	if err != nil {
 		return nil, fmt.Errorf("export %q: %w", export.Name, err)
 	}
@@ -85,6 +85,18 @@ func (e *ExportServer) Close() error {
 	e.closeOnce.Do(func() { closeAll(e.closers) })
 
 	return nil
+}
+
+// withExportRules is the export's tools with the export's own rules ahead of each tool's, so one mechanism holds both and a rule sees the call in the same order wherever it was attached.
+func withExportRules(export config.MCPExport) []config.ToolSpec {
+	specs := make([]config.ToolSpec, len(export.Tools))
+
+	for i, spec := range export.Tools {
+		spec.Rules = append(slices.Clone(export.Rules), spec.Rules...)
+		specs[i] = spec
+	}
+
+	return specs
 }
 
 // CheckExportedCommands refuses an export whose command would put a caller's value into the shell as syntax. The caller is not the pipeline's author, so a value that reaches sh -c bare is a command the caller chose.
@@ -203,7 +215,9 @@ func exportHandler(name string, impl toolImpl, calls callSpace, hooks ExportHook
 			}
 
 			slices.Sort(names)
-			hooks.After(ctx, name, names, ok)
+
+			rule, _ := result[RuleKey].(string)
+			hooks.After(ctx, name, names, ok, rule)
 		}
 
 		payload, err := json.Marshal(result)

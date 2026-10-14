@@ -53,6 +53,12 @@
           }
         },
         "required": true,
+        "rules": [
+          {
+            "name": "Tools[0].Rules[0]",
+            "when": "true"
+          }
+        ],
         "run": "Tools[0].Run"
       }
     ],
@@ -250,6 +256,13 @@
         }
       },
       "required": true,
+      "rules": [
+        {
+          "accept": "true",
+          "name": "Rules[0]",
+          "when": "true"
+        }
+      ],
       "run": "Run"
     }
   ],
@@ -283,6 +296,13 @@
         }
       },
       "required": true,
+      "rules": [
+        {
+          "accept": "true",
+          "name": "Rules[0]",
+          "when": "true"
+        }
+      ],
       "run": "golangci-lint run"
     }
   ],
@@ -313,6 +333,13 @@
         }
       },
       "required": true,
+      "rules": [
+        {
+          "accept": "true",
+          "name": "Rules[0]",
+          "when": "true"
+        }
+      ],
       "server": {
         "auth_type": "",
         "endpoint": "http://localhost:1",
@@ -348,7 +375,14 @@
           "min_length": 93,
           "pattern": "Params.value.Pattern"
         }
-      }
+      },
+      "rules": [
+        {
+          "accept": "true",
+          "name": "Rules[0]",
+          "when": "true"
+        }
+      ]
     }
   ]
 }

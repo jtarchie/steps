@@ -39,6 +39,12 @@
         "$ref": "#/$defs/mcpExport"
       }
     },
+    "rules": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rule"
+      }
+    },
     "tasks": {
       "type": "array",
       "items": {
@@ -62,6 +68,30 @@
     }
   },
   "$defs": {
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "description": "A named check on a call to a shared or granted tool, attached by name to an export, a tool of an export, or a tool an agent is granted. Set at least one of when, accept, judged_by.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "What exports and tools call the rule, and what a refusal and the activity log name."
+        },
+        "when": {
+          "type": "string",
+          "description": "An expression that must hold for the call to go out, over tool, args (after pins and defaults) and who (Provider, UserID, ID, Email, Organizations, Groups; empty for an agent step). fail(\"why\") refuses with a reason; a plain false says refused by rule <name>."
+        },
+        "accept": {
+          "type": "string",
+          "description": "The same, over what came back, with result (text, content, error) in scope as well. Must hold for the caller to see the result."
+        },
+        "judged_by": {
+          "type": "string",
+          "description": "An agents: entry that is shown the call and answers allow or deny. A judge that fails or answers neither refuses the call."
+        }
+      }
+    },
     "mcpExport": {
       "type": "object",
       "additionalProperties": false,
@@ -87,6 +117,13 @@
           "type": "string",
           "pattern": "^[1-9][0-9]*/[smh]$",
           "description": "Calls per person, as <n>/<s|m|h>, like 60/m. Empty is unbounded."
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Names of rules: entries that check every call of every tool in the export, before the rules of the tool itself."
         },
         "image": {
           "type": "string",
@@ -851,6 +888,13 @@
               },
               "description": "web_fetch only, and only where the tool is granted (an agents: entry): bare hostnames the tool may reach \u2014 no scheme, path, port or wildcard. Each entry matches itself and its subdomains, on every redirect hop. Empty/absent means any http(s) URL."
             },
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Names of rules: entries that check each call of this tool, after any of the export it is in. Where the tool is granted."
+            },
             "timeout": {
               "type": "string",
               "description": "Bounds ONE call of this tool (e.g. 30s, 5m); the step's own deadline still holds. An expired call is reported to the model as an error it can react to, not an aborted step. Only where the tool is granted, except on an inline custom tool."
@@ -912,6 +956,13 @@
               },
               "description": "Limits on what each argument may be, keyed by argument name. Published in the tool's input schema and enforced before the call. Custom, sub-agent and single-tool MCP forms, where the tool is granted."
             },
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Names of rules: entries that check each call of this tool, after any of the export it is in. Where the tool is granted."
+            },
             "timeout": {
               "type": "string",
               "description": "Bounds ONE call of this tool (e.g. 30s, 5m); the step's own deadline still holds. An expired call is reported to the model as an error it can react to, not an aborted step. Only where the tool is granted, except on an inline custom tool."
@@ -938,6 +989,13 @@
                 "$ref": "#/$defs/paramSpec"
               },
               "description": "Limits on what each argument may be, keyed by argument name. Published in the tool's input schema and enforced before the call. Custom, sub-agent and single-tool MCP forms, where the tool is granted."
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Names of rules: entries that check each call of this tool, after any of the export it is in. Where the tool is granted."
             },
             "timeout": {
               "type": "string",
@@ -994,6 +1052,13 @@
                 "$ref": "#/$defs/paramSpec"
               },
               "description": "Limits on what each argument may be, keyed by argument name. Published in the tool's input schema and enforced before the call. Custom, sub-agent and single-tool MCP forms, where the tool is granted."
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Names of rules: entries that check each call of this tool, after any of the export it is in. Where the tool is granted."
             },
             "timeout": {
               "type": "string",

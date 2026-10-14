@@ -25,6 +25,8 @@ type exportRow struct {
 	People     int
 	Agents     int
 	CallsToday int
+	// RefusedToday counts calls a rule turned away, which are not among CallsToday.
+	RefusedToday int
 }
 
 func (s *Server) exportRows(c *echo.Context, pipeline *Pipeline) []exportRow {
@@ -54,6 +56,11 @@ func (s *Server) exportRowFor(ctx context.Context, pipeline *Pipeline, export co
 		row.CallsToday = len(calls)
 	}
 
+	refused, err := pipeline.Store.Reader().Activity(ctx, store.ActivityFilter{Pipeline: pipeline.Slug, Action: "mcp refused", Target: export.Name, Since: startOfDay(time.Now())})
+	if err == nil {
+		row.RefusedToday = len(refused)
+	}
+
 	return row
 }
 
@@ -75,7 +82,7 @@ func startOfDay(now time.Time) time.Time {
 }
 
 // exportActions are the verbs whose target is an export's name; a job or a server may share that name and is a different thing.
-var exportActions = []string{"mcp call", "mcp authorize", "mcp disconnect"} //nolint:gochecknoglobals // a fixed vocabulary
+var exportActions = []string{"mcp call", "mcp refused", "mcp authorize", "mcp disconnect"} //nolint:gochecknoglobals // a fixed vocabulary
 
 // recentExportCalls is how many of an export's calls its page shows before linking the whole log.
 const recentExportCalls = 10

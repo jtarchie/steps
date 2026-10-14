@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/pipeline"
 )
 
 // expectMarker introduces the error substring an invalid example must produce.
@@ -47,6 +48,14 @@ func TestExamplesInvalid(t *testing.T) {
 			want := expectedError(t, path)
 
 			cfg, loadErr := config.LoadConfig(path)
+			// What config cannot reach — an expression's syntax, how a command quotes what a caller sends — is refused one step later, by what `steps validate` and a set both run.
+			if loadErr == nil {
+				loadErr = pipeline.ValidateExports(cfg)
+				if loadErr != nil {
+					cfg = nil
+				}
+			}
+
 			if loadErr == nil {
 				t.Fatalf("%s loaded successfully, but examples/invalid/ files must be rejected "+
 					"(expected an error containing %q)", path, want)

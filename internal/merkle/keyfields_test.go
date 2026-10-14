@@ -264,7 +264,8 @@ func keyProbes() []keyProbe {
 	step := config.Step{Agent: "reviewer", Messages: []string{"do it"}}
 
 	agentContent := func(agents ...config.Agent) (any, error) {
-		cfg := &config.Config{Agents: agents}
+		// The rule is named what fillKeyed writes into the first tool's rules:, so the grant resolves.
+		cfg := &config.Config{Agents: agents, Rules: []config.Rule{{Name: "Tools[0].Rules[0]", When: "true"}}}
 
 		ri, err := cfg.ResolveAgentInvocation(step)
 		if err != nil {
@@ -279,6 +280,7 @@ func keyProbes() []keyProbe {
 	grants := &config.Config{
 		MCPServers: []config.MCPServer{server},
 		Agents:     []config.Agent{{Name: "extra", Source: source, Description: "a helper"}},
+		Rules:      []config.Rule{{Name: "Rules[0]", When: "true", Accept: "true"}},
 	}
 
 	grant := func(name string, spec config.ToolSpec, want map[string]string) keyProbe {

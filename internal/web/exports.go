@@ -68,7 +68,8 @@ func (s *Server) handleExport(c *echo.Context) error {
 	who := actor.Parse(grant.Actor)
 
 	// Asked on every request, not only at a refresh: a team someone left, or an export a set narrowed, is known here before the token expires.
-	if !s.mayUse(ctx, who, target, export) {
+	id, allowed := s.mayUseAs(ctx, who, target, export)
+	if !allowed {
 		return echo.NewHTTPError(http.StatusForbidden, "access to this export has ended")
 	}
 
@@ -79,7 +80,12 @@ func (s *Server) handleExport(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadGateway, "this export could not reach its tools")
 	}
 
-	req := c.Request().WithContext(context.WithValue(actor.With(ctx, who), grantKey{}, grant))
+	// The rules on the export's tools are written against this person, as the access: rule just was.
+	called := scheduler.WithExportWho(context.WithValue(actor.With(ctx, who), grantKey{}, grant), scheduler.ExportWho{
+		Provider: id.Provider, UserID: id.UserID, ID: id.ID, Email: id.Email, Organizations: id.Organizations, Groups: id.Groups,
+	})
+
+	req := c.Request().WithContext(called)
 	served.Handler.ServeHTTP(c.Response(), req)
 
 	return nil
@@ -155,15 +161,21 @@ func (s *Server) exportHooks(target *Pipeline, export config.MCPExport) schedule
 		Before: func(ctx context.Context, _ string) error {
 			return s.allowCall(ctx, export)
 		},
-		After: func(ctx context.Context, tool string, argNames []string, ok bool) {
+		After: func(ctx context.Context, tool string, argNames []string, ok bool, rule string) {
 			grant, _ := ctx.Value(grantKey{}).(store.Grant)
 
-			detail, err := json.Marshal(map[string]any{"tool": tool, "args": argNames, "ok": ok})
+			// A call a rule refused is its own verb, so the log and the export's page say which rule and its count is not the calls that ran; only the rule's name is kept, like argument names, because everything else about it is what a caller pasted.
+			action, detail := "mcp call", map[string]any{"tool": tool, "args": argNames, "ok": ok}
+			if rule != "" {
+				action, detail = "mcp refused", map[string]any{"tool": tool, "rule": rule, "reason": "refused by rule " + rule}
+			}
+
+			encoded, err := json.Marshal(detail)
 			if err != nil {
 				return
 			}
 
-			s.recordGrantActivity(ctx, target, grant, "mcp call", string(detail))
+			s.recordGrantActivity(ctx, target, grant, action, string(encoded))
 		},
 	}
 }

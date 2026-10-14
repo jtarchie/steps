@@ -29,6 +29,8 @@ type MCPExport struct {
 	Access string `yaml:"access"`
 	// Tools are what a connected agent may call.
 	Tools []ToolSpec `yaml:"tools"`
+	// Rules names rules: entries that check every call of every tool in the export, before the rules of the tool itself.
+	Rules []string `yaml:"rules,omitempty"`
 	// Rate bounds calls per person, as "<n>/<s|m|h>"; empty is unbounded.
 	Rate string `yaml:"rate,omitempty"`
 	// Image runs the export's custom run: commands in a container from this image, a fresh one per command; empty runs them on the daemon's machine.
@@ -157,7 +159,12 @@ func (c *Config) validateExportedTool(spec ToolSpec) error {
 		return err
 	}
 
-	return validateToolParamsShape("export", grantPosition, spec)
+	err = validateToolParamsShape("export", grantPosition, spec)
+	if err != nil {
+		return err
+	}
+
+	return c.validateToolRulesShape("export", grantPosition, spec)
 }
 
 func (c *Config) validateExportedKind(spec ToolSpec) error {

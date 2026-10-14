@@ -152,6 +152,8 @@ type ToolSpec struct {
 	Timeout string
 	// Params limits what each argument of this tool may be (see ParamSpec). Keys are the argument names the caller sees; a pinned argument is not one. Valid on a custom tool, a sub-agent tool and a single-tool MCP grant, where the tool is granted.
 	Params map[string]ParamSpec
+	// Rules names rules: entries that check each call of this tool (see Rule), in order, after any rules of the export it is in. Where the tool is granted.
+	Rules []string
 }
 
 // UnmarshalYAML decodes a ToolSpec from either a scalar (builtin name) or a
@@ -171,7 +173,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 		err := rejectUnknownKeys(value, "agent tool",
 			"builtin", "name", "description", "run", "agent", "mcp", "tool", "tools",
 			"required", "max_calls", "max_output_bytes", "timeout", "args", "allow",
-			"answered_by", "default", "options_required", "params")
+			"answered_by", "default", "options_required", "params", "rules")
 		if err != nil {
 			return err
 		}
@@ -195,6 +197,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 			Default         string               `yaml:"default"`
 			OptionsRequired bool                 `yaml:"options_required"`
 			Params          map[string]ParamSpec `yaml:"params"`
+			Rules           []string             `yaml:"rules"`
 		}
 
 		err = value.Decode(&m)
@@ -204,7 +207,7 @@ func (t *ToolSpec) UnmarshalYAML(value *yaml.Node) error {
 
 		t.Builtin, t.Name, t.Description, t.Run, t.Agent, t.Required = m.Builtin, m.Name, m.Description, m.Run, m.Agent, m.Required
 		t.MaxCalls, t.Args, t.MaxOutputBytes, t.Allow = m.MaxCalls, m.Args, m.MaxOutputBytes, m.Allow
-		t.Timeout, t.Params = m.Timeout, m.Params
+		t.Timeout, t.Params, t.Rules = m.Timeout, m.Params, m.Rules
 		t.MCP, t.MCPTool, t.MCPTools = m.MCP, m.Tool, m.Tools
 		t.AnsweredBy, t.Default, t.OptionsRequired = m.AnsweredBy, m.Default, m.OptionsRequired
 

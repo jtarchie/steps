@@ -1,0 +1,25 @@
+# An export or a tool names its rules; a name nothing declares is a typo, and a
+# typo here would mean a call nobody meant to leave unchecked goes out unchecked.
+# expect: rules: no rule named "no-secrts"
+
+mcp_servers:
+- name: github
+  endpoint: https://api.githubcopilot.com/mcp/
+
+rules:
+- name: no-secrets
+  accept: not (result.text matches "(?i)private key")
+
+mcp_exports:
+- name: support
+  access: 'true'
+  rules: [no-secrts]
+  tools:
+  - mcp: github
+    tool: search_issues
+
+jobs:
+- name: build
+  plan:
+  - task: say
+    run: echo hi

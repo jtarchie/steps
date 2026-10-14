@@ -1,0 +1,27 @@
+# A rule's when: is an expression checked when the pipeline is set or
+# validated, not when the first call arrives and is refused for it. A typo here
+# would otherwise fail closed — every call refused — for a reason nobody reads
+# until a caller complains.
+# expect: rules "acme-only": when:
+
+mcp_servers:
+- name: github
+  endpoint: https://api.githubcopilot.com/mcp/
+
+rules:
+- name: acme-only
+  when: args.owner in who.Organizations and
+
+mcp_exports:
+- name: support
+  access: 'true'
+  tools:
+  - mcp: github
+    tool: search_issues
+    rules: [acme-only]
+
+jobs:
+- name: build
+  plan:
+  - task: say
+    run: echo hi
