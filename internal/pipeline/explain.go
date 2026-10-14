@@ -4,13 +4,10 @@ package pipeline
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/merkle"
-	rsrc "github.com/jtarchie/steps/internal/resource"
 	"github.com/jtarchie/steps/internal/store"
-	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // ExplainRow is one planned step and what a run would do with it.
@@ -34,66 +31,26 @@ type ExplainRow struct {
 // It resolves get versions the way planning always has (check commands do
 // run), but executes no step and writes no node, job_run, or workspace.
 func Explain(ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string, st store.Store) ([]ExplainRow, error) {
-	err := workspace.ValidateArtifactFlow(cfg, job)
-	if err != nil {
-		return nil, fmt.Errorf("job %q: %w", job.Name, err)
-	}
-
-	// The checks planning runs land where a run's would, refused on the same
-	// terms: a plan that quietly checked a worker-only source from this
-	// machine described a run that could not happen.
-	err = ValidateWorkerPlacement(ctx, cfg, job)
+	err := validateJob(ctx, cfg, job)
 	if err != nil {
 		return nil, err
 	}
 
-	ctx, releaseWorkers := WithLeases(ctx)
+	ctx, releaseWorkers := withJobLeases(ctx)
+	defer func() { releaseWorkers(ctx) }()
 
-	defer func() {
-		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), WorkerReleaseTimeout)
-		defer cancel()
-
-		releaseWorkers(releaseCtx)
-	}()
-
-	ctx = WithResourcePlacement(ctx)
-
-	// Same cursor a run would use, so `steps plan` does not list versions a
-	// version: every fan-out has already taken and would not run.
-	cursor, err := loadVersionCursor(ctx, st, job, true)
+	// RunJob's sequence minus what a run does with it: no refresh (a plan
+	// reports from what is recorded), no cursor lock and no take (a plan takes
+	// nothing), and no narrowing to one build (a plan lists every waiting set,
+	// each of which some later build runs).
+	inputs, err := resolveJobInputs(ctx, cfg, st, job, pinned)
 	if err != nil {
-		return nil, fmt.Errorf("job %q: %w", job.Name, err)
+		return nil, err
 	}
 
-	// And the same history, for the same reason. Without it, plan resolved
-	// by running the live check while the run read stored versions — two
-	// different lists, so the hashes and skip/run verdicts here described a
-	// run that would never happen. For a cursor-driven check it was worse
-	// than drift: the check saw no cursor, answered with everything or with
-	// nothing, and the plan output was fiction either way.
-	history, err := loadResourceHistory(ctx, st, job)
+	chains, skippable, err := planSkippable(ctx, cfg, st, job, pinned, inputs.cache, inputs.resolution)
 	if err != nil {
-		return nil, fmt.Errorf("job %q: %w", job.Name, err)
-	}
-
-	cache := rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithResolvedVersions(history.get))
-
-	// The same sets a run would build, so plan output describes the run that
-	// follows — including the lockstep pairing across several every-gets,
-	// which per-get recursion cannot express.
-	resolution, err := resolveInputSets(ctx, cfg, job.Plan, pinned, cache, cursor, history)
-	if err != nil {
-		return nil, fmt.Errorf("job %q: %w", job.Name, err)
-	}
-
-	chains, err := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned, cache, resolution.sets)
-	if err != nil {
-		return nil, fmt.Errorf("job %q: planning: %w", job.Name, err)
-	}
-
-	skippable, err := buildSkippableIndex(ctx, st, job.Name, chains)
-	if err != nil {
-		return nil, fmt.Errorf("job %q: %w", job.Name, err)
+		return nil, err
 	}
 
 	return explainRows(cfg, job, chains, skippable), nil

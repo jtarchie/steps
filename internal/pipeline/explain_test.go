@@ -2,13 +2,16 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
+	"github.com/jtarchie/steps/internal/workspace"
 )
 
 // TestExplainNamesWhyAStepWouldRun: `steps plan` says a fix: task can never be cached, and that a plain task upstream of it is uncacheable only because of its chain.
@@ -217,4 +220,111 @@ jobs:
 			t.Errorf("%s: reason %q, want %q (all rows: %+v)", name, reasons[name], want, rows)
 		}
 	}
+}
+
+// `steps plan` once resolved through its own copy of RunJob's setup, and the
+// copy drifted: plan judged versions the run would never build. Whatever plan
+// says of a step, the run that follows does — for a version: every job one
+// build into its backlog (the cursor decides what is left) and for a job
+// already cached (the chain index decides what skips).
+func TestExplainVerdictIsWhatTheNextRunDoes(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+	everyLog := filepath.Join(dir, "every.txt")
+	latestLog := filepath.Join(dir, "latest.txt")
+
+	writeFixture(t, path, fmt.Sprintf(`
+resource_types:
+- name: listing
+  config:
+    check: printf '[{"n":"v1"},{"n":"v2"}]'
+    in: echo {{ .version.n | shellquote }} > n.txt
+resources:
+- name: items
+  type: listing
+  source: {}
+jobs:
+- name: every
+  plan:
+  - get: items
+    version: every
+  - task: work
+    inputs: [items]
+    run: cat items/n.txt >> %s
+- name: latest
+  plan:
+  - get: items
+  - task: work
+    inputs: [items]
+    run: cat items/n.txt >> %s
+`, everyLog, latestLog))
+
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := sqlite.OpenStore(filepath.Join(dir, "state.db"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = st.Close() })
+
+	provider, err := workspace.NewProvider(nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for index, logPath := range []string{everyLog, latestLog} {
+		job := &cfg.Jobs[index]
+
+		err = RunJob(context.Background(), cfg, job, nil, provider, st, false)
+		if err != nil {
+			t.Fatalf("%s: first RunJob: %v", job.Name, err)
+		}
+
+		work, ran := explainThenRun(t, cfg, job, provider, st, logPath, "work")
+		if len(work) != 1 || work[0].WouldSkip == ran {
+			t.Errorf("%s: plan said %+v of task work; the next run ran it: %v", job.Name, work, ran)
+		}
+	}
+}
+
+// explainThenRun returns Explain's rows for step, then runs job and reports
+// whether step ran — told by it appending to logPath.
+func explainThenRun(
+	t *testing.T, cfg *config.Config, job *config.Job, provider workspace.Provider, st store.Store, logPath, step string,
+) ([]ExplainRow, bool) {
+	t.Helper()
+
+	lines := func() int {
+		data, _ := os.ReadFile(logPath) //nolint:gosec // a t.TempDir()-scoped file the test wrote itself
+
+		return len(strings.Fields(string(data)))
+	}
+
+	rows, err := Explain(context.Background(), cfg, job, nil, st)
+	if err != nil {
+		t.Fatalf("%s: Explain: %v", job.Name, err)
+	}
+
+	var matched []ExplainRow
+
+	for _, row := range rows {
+		if row.Name == step {
+			matched = append(matched, row)
+		}
+	}
+
+	before := lines()
+
+	err = RunJob(context.Background(), cfg, job, nil, provider, st, false)
+	if err != nil {
+		t.Fatalf("%s: RunJob after Explain: %v", job.Name, err)
+	}
+
+	return matched, lines() > before
 }

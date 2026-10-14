@@ -75,35 +75,15 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 
 	slog.InfoContext(ctx, "job.run", "steps", len(job.Plan))
 
-	// Before anything runs, beside the artifact-flow check and for the same
-	// reason: a plan that cannot be carried out should say so instead of
-	// failing partway through.
-	err = ValidateWorkerPlacement(ctx, cfg, job)
+	err = validateJob(ctx, cfg, job)
 	if err != nil {
 		return err
 	}
 
-	err = workspace.ValidateArtifactFlow(cfg, job)
-	if err != nil {
-		return fmt.Errorf("job %q: %w", job.Name, err)
-	}
+	ctx, releaseWorkers := withJobLeases(ctx)
 
-	// One set of venue leases per job: a worker that has to be acquired is
-	// paid for by the first placed step and given back here, however the job
-	// ends. Released under a context of its own, because a cancelled job is
-	// exactly when a machine left running would be worst.
-	ctx, releaseWorkers := WithLeases(ctx)
-
-	defer func() {
-		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), WorkerReleaseTimeout)
-		defer cancel()
-
-		releaseWorkers(releaseCtx)
-	}()
-
-	// Under the leases, above every check, in: and out: — including the
-	// checks the plan below resolves versions with.
-	ctx = WithResourcePlacement(ctx)
+	// Handed the ctx as it stands when the job ends, not as it stood here.
+	defer func() { releaseWorkers(ctx) }()
 
 	// One register of step decisions per job run, for context: from: readers.
 	// Installed here rather than in runSteps because the build a get triggers
@@ -329,41 +309,14 @@ func runJobPlan(
 		}
 	}()
 
-	// Which versions this job has already fanned out over, read ONCE before
-	// planning so the planner and the executor judge the same set.
-	//
-	// --force (skipCache) skips the cache only; the cursor keeps filtering
-	// and recording (#145).
-	cursor, err := loadVersionCursor(ctx, r.st, job, !takenVersionsReopened(ctx))
+	inputs, err := resolveJobInputs(ctx, r.cfg, r.st, job, pinned)
 	if err != nil {
-		return fmt.Errorf("job %q: %w", job.Name, err)
+		return err
 	}
 
-	// Which versions each of this job's resources has, read once before
-	// planning for the same reason the consumed set is.
-	history, err := loadResourceHistory(ctx, r.st, job)
-	if err != nil {
-		return fmt.Errorf("job %q: %w", job.Name, err)
-	}
+	cursor, history, cache := inputs.cursor, inputs.history, inputs.cache
 
-	// cache is scoped to this one RunJob invocation (never shared across
-	// concurrent invocations — see resource.NewCache) and threaded into both
-	// the plan-time and run-time get-step resolution below, so a get step's
-	// check command runs at most once per job run instead of once during
-	// planning and again during execution.
-	cache := rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithResolvedVersions(history.get))
-
-	// The input sets this run will build — one per unconsumed step of the
-	// widest every-get, each binding EVERY get's version. Computed once,
-	// before planning and unconditionally (--force skips planning, but the
-	// walk still fans out over these), then walked identically by the planner
-	// and the executor, which is what keeps the two describing one shape.
-	resolution, err := resolveInputSets(ctx, r.cfg, job.Plan, pinned, cache, cursor, history)
-	if err != nil {
-		return fmt.Errorf("job %q: %w", job.Name, err)
-	}
-
-	resolution, waiting := oneBuild(ctx, resolution)
+	resolution, waiting := oneBuild(ctx, inputs.resolution)
 
 	resolvedSets()
 
@@ -388,7 +341,7 @@ func runJobPlan(
 		runBuild = resume.id
 	}
 
-	skippable, replay, err := planJob(ctx, r, job, pinned, cache, resolution, skipCache)
+	skippable, replay, err := planJob(ctx, r.cfg, r.st, job, pinned, cache, resolution, skipCache)
 	if err != nil {
 		return err
 	}
@@ -417,11 +370,11 @@ func runJobPlan(
 // forced run that fails must forget the chains it could have completed (see
 // forgetUnfinishedChains). It never failed on planning, so it still does not.
 func planJob(
-	ctx context.Context, r stepRunner, job *config.Job, pinned map[string]string,
+	ctx context.Context, cfg *config.Config, st store.Cache, job *config.Job, pinned map[string]string,
 	cache *rsrc.Cache, resolution setResolution, skipCache bool,
 ) (map[string]bool, [][]string, error) {
-	chains, err := merkle.PlanChains(ctx, r.cfg, job.Name, job.Plan, pinned, cache, resolution.sets)
 	if skipCache {
+		chains, err := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned, cache, resolution.sets)
 		if err != nil {
 			slog.WarnContext(ctx, "job.plan_failed", "job", job.Name, "error", err)
 
@@ -431,16 +384,110 @@ func planJob(
 		return map[string]bool{}, chainHashes(chains), nil
 	}
 
+	chains, skippable, err := planSkippable(ctx, cfg, st, job, pinned, cache, resolution)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return skippable, chainHashes(chains), nil
+}
+
+// validateJob refuses a plan that cannot be carried out before anything runs
+// or is checked, rather than letting it fail partway through.
+func validateJob(ctx context.Context, cfg *config.Config, job *config.Job) error {
+	err := ValidateWorkerPlacement(ctx, cfg, job)
+	if err != nil {
+		return err
+	}
+
+	err = workspace.ValidateArtifactFlow(cfg, job)
+	if err != nil {
+		return fmt.Errorf("job %q: %w", job.Name, err)
+	}
+
+	return nil
+}
+
+// withJobLeases installs one set of venue leases per job, with resource
+// placement under them so every check, in: and out: — including the checks
+// planning resolves versions with — lands where a run's would. A worker that
+// has to be acquired is paid for by the first placed step and given back by
+// the returned release, however the job ends. The release runs under a
+// context of its own, because a cancelled job is exactly when a machine left
+// running would be worst.
+func withJobLeases(ctx context.Context) (context.Context, func(context.Context)) {
+	ctx, release := WithLeases(ctx)
+
+	return WithResourcePlacement(ctx), func(ctx context.Context) {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), WorkerReleaseTimeout)
+		defer cancel()
+
+		release(releaseCtx)
+	}
+}
+
+// jobInputs is what planning a job and running it both start from. Read ONCE
+// before planning, so the planner and the executor judge the same set.
+type jobInputs struct {
+	cursor     *versionCursor
+	history    *resourceHistory
+	cache      *rsrc.Cache
+	resolution setResolution
+}
+
+// resolveJobInputs is the one sequence RunJob and Explain both resolve a
+// job's versions through. Two copies of it drifted once: plan resolved by
+// running the live check while the run read stored versions, so its hashes
+// and verdicts described a run that would never happen.
+func resolveJobInputs(
+	ctx context.Context, cfg *config.Config, st store.Versions, job *config.Job, pinned map[string]string,
+) (jobInputs, error) {
+	// --force skips the cache only; the cursor keeps filtering and recording
+	// (#145).
+	cursor, err := loadVersionCursor(ctx, st, job, !takenVersionsReopened(ctx))
+	if err != nil {
+		return jobInputs{}, fmt.Errorf("job %q: %w", job.Name, err)
+	}
+
+	history, err := loadResourceHistory(ctx, st, job)
+	if err != nil {
+		return jobInputs{}, fmt.Errorf("job %q: %w", job.Name, err)
+	}
+
+	// Scoped to this one invocation (never shared across concurrent ones —
+	// see resource.NewCache) and threaded into both plan-time and run-time
+	// get resolution, so a get's check runs at most once per job run.
+	cache := rsrc.NewCache(rsrc.WithConsumed(cursor.has), rsrc.WithResolvedVersions(history.get))
+
+	// One set per unconsumed step of the widest every-get, each binding EVERY
+	// get's version — the lockstep pairing per-get recursion cannot express.
+	// Computed unconditionally (--force skips planning, but the walk still
+	// fans out over these), then walked identically by planner and executor.
+	resolution, err := resolveInputSets(ctx, cfg, job.Plan, pinned, cache, cursor, history)
+	if err != nil {
+		return jobInputs{}, fmt.Errorf("job %q: %w", job.Name, err)
+	}
+
+	return jobInputs{cursor: cursor, history: history, cache: cache, resolution: resolution}, nil
+}
+
+// planSkippable plans every chain resolution could build and reports which
+// nodes already succeeded with identical content.
+func planSkippable(
+	ctx context.Context, cfg *config.Config, st store.Cache, job *config.Job, pinned map[string]string,
+	cache *rsrc.Cache, resolution setResolution,
+) ([]merkle.Chain, map[string]bool, error) {
+	chains, err := merkle.PlanChains(ctx, cfg, job.Name, job.Plan, pinned, cache, resolution.sets)
 	if err != nil {
 		return nil, nil, fmt.Errorf("job %q: planning: %w", job.Name, err)
 	}
 
-	skippable, err := buildSkippableIndex(ctx, r.st, job.Name, chains)
+	skippable, err := buildSkippableIndex(ctx, st, job.Name, chains)
 	if err != nil {
 		return nil, nil, fmt.Errorf("job %q: %w", job.Name, err)
 	}
 
-	return skippable, chainHashes(chains), nil
+	return chains, skippable, nil
 }
 
 // pruneHistory trims what this job has accumulated: runs past the cap, with
