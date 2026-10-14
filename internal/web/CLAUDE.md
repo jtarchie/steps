@@ -1,6 +1,6 @@
 # internal/web
 
-`internal/web` (echo + `html/template` + one CSS file + a vendored htmx, all `go:embed`ed) serves the browser UI over the same state the CLI writes. The rules that keep this from becoming a second product:
+`internal/web` (echo + `html/template` + one CSS file + a vendored htmx, all `go:embed`ed) serves the browser UI over the same state the CLI writes. The daemon's pipeline-set path (`daemon.go`, implementing `web.Manager`), the closed include bundle and the leased workspace provider (`providers.go`, here) are described in [internal/cli/CLAUDE.md](../cli/CLAUDE.md). The rules that keep this from becoming a second product:
 
 - **web sits above pipeline**, like trigger: it reaches execution only through `pipeline.RunJob`, never into agent/resource/merkle. depguard enforces it.
 - **Recording is the runner's job.** `RunJob` attaches a store-backed bus when the caller supplied none, so EVERY run persists its events, not just watched ones. A run started from a terminal and one started from the browser leave the same record.

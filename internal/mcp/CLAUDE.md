@@ -1,0 +1,3 @@
+# internal/mcp
+
+- **The go-sdk `streamableServerConn.Read` goleak exception is permanent until proven otherwise, and an isolated pass does not prove it.** go-sdk's server-side `streamableServerConn.Read` does not exit on a session-terminating DELETE, so the six packages that serve MCP (this one's `TestMain` is in `stdio_test.go`) ignore it in their `goleak` `TestMain`. It was removed once at v1.8.0 because every package passed in isolation, and was back the next day when a full `task` run leaked it. Re-verify with a full `task`, at the version the comment names, before removing it from any of them.
