@@ -17,8 +17,13 @@ func TestEveryMutatingRouteIsRecordedOrExcused(t *testing.T) {
 	seen := mutatingRoutes(server)
 
 	for key := range seen {
-		if _, recorded := activityRoutes[key]; !recorded && notRecorded[key] == "" {
+		route, recorded := activityRoutes[key]
+		if !recorded && notRecorded[key] == "" {
 			t.Errorf("%s changes something and is neither in activityRoutes nor excused in notRecorded", key)
+		}
+
+		if recorded && route.role < RoleOperator {
+			t.Errorf("%s changes something and asks for no more than reading", key)
 		}
 	}
 

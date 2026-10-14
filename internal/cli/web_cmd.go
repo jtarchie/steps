@@ -50,15 +50,16 @@ type WebCmd struct {
 	// A statement about the BROWSER's surface only; `steps pipeline set` is the deployment path and is deliberately not withheld — see docs/web.md.
 	ReadOnly bool `help:"serve the pages without trigger, approval, answer, resume or abort controls" name:"read-only"`
 	// Both or neither, refused below: half a pair is a daemon somebody believes is protected. Env vars because a password on a command line is in every ps listing and every shell history.
-	BasicAuthUsername string   `env:"STEPS_BASIC_AUTH_USERNAME"                                                        help:"require this HTTP Basic username on every route but POST /p/<pipeline>/hooks/<resource>" name:"basic-auth-username"`
-	BasicAuthPassword string   `env:"STEPS_BASIC_AUTH_PASSWORD"                                                        help:"the password that goes with it"                                                          name:"basic-auth-password"`
-	LocalUser         []string `help:"a local account as name:bcrypt-hash, the line htpasswd -nbB writes (repeatable)" name:"local-user"                                                                              placeholder:"NAME:HASH"`
-	ActivityHistory   int      `default:"10000"                                                                        help:"how many entries the activity log keeps, across every pipeline (0 is no limit)"          name:"activity-history"`
-	GitHubClientID    string   `help:"sign people in with GitHub: the OAuth app's client id"                           name:"github-client-id"                                                                        placeholder:"ID"`
-	GitHubSecretEnv   string   `default:"STEPS_GITHUB_CLIENT_SECRET"                                                   help:"the environment variable holding that app's client secret"                               name:"github-client-secret-env" placeholder:"NAME"`
-	GoogleClientID    string   `help:"sign people in with Google: the OAuth client id"                                 name:"google-client-id"                                                                        placeholder:"ID"`
-	GoogleSecretEnv   string   `default:"STEPS_GOOGLE_CLIENT_SECRET"                                                   help:"the environment variable holding that client's secret"                                   name:"google-client-secret-env" placeholder:"NAME"`
-	LocalUsersFile    string   `help:"an htpasswd file of local accounts, bcrypt hashes only"                          name:"local-users-file"                                                                        placeholder:"PATH"              type:"existingfile"`
+	BasicAuthUsername string   `env:"STEPS_BASIC_AUTH_USERNAME"                                                                                                                                                     help:"require this HTTP Basic username on every route but POST /p/<pipeline>/hooks/<resource>" name:"basic-auth-username"`
+	BasicAuthPassword string   `env:"STEPS_BASIC_AUTH_PASSWORD"                                                                                                                                                     help:"the password that goes with it"                                                          name:"basic-auth-password"`
+	LocalUser         []string `help:"a local account as name:bcrypt-hash, the line htpasswd -nbB writes (repeatable)"                                                                                              name:"local-user"                                                                              placeholder:"NAME:HASH"`
+	ActivityHistory   int      `default:"10000"                                                                                                                                                                     help:"how many entries the activity log keeps, across every pipeline (0 is no limit)"          name:"activity-history"`
+	Role              []string `help:"who may do what, as role=rule: viewer, operator or admin, and an expression over Provider, UserID, Email, Organizations and Groups (repeatable; with any, admin is required)" name:"role"                                                                                    placeholder:"ROLE=RULE"`
+	GitHubClientID    string   `help:"sign people in with GitHub: the OAuth app's client id"                                                                                                                        name:"github-client-id"                                                                        placeholder:"ID"`
+	GitHubSecretEnv   string   `default:"STEPS_GITHUB_CLIENT_SECRET"                                                                                                                                                help:"the environment variable holding that app's client secret"                               name:"github-client-secret-env" placeholder:"NAME"`
+	GoogleClientID    string   `help:"sign people in with Google: the OAuth client id"                                                                                                                              name:"google-client-id"                                                                        placeholder:"ID"`
+	GoogleSecretEnv   string   `default:"STEPS_GOOGLE_CLIENT_SECRET"                                                                                                                                                help:"the environment variable holding that client's secret"                                   name:"google-client-secret-env" placeholder:"NAME"`
+	LocalUsersFile    string   `help:"an htpasswd file of local accounts, bcrypt hashes only"                                                                                                                       name:"local-users-file"                                                                        placeholder:"PATH"              type:"existingfile"`
 	// Opt-in because a reverse proxy forwards the client's Host, so only the operator knows this daemon's names; see docs/web.md#security.
 	AllowedHost []string `env:"STEPS_ALLOWED_HOSTS" help:"refuse any request whose Host is not this name (repeatable; loopback names are always allowed)" name:"allowed-host" placeholder:"NAME"`
 	// No env: binding: a STEPS_*-shaped name invites confusion with the variable this one sets.
@@ -120,6 +121,31 @@ func (w *WebCmd) authOptions() ([]web.Option, error) {
 	}
 
 	return opts, nil
+}
+
+// accessOptions adds the sign-in providers and the roles to the accounts authOptions read: what lets people in, then what they may do once in.
+func (w *WebCmd) accessOptions(opts []web.Option, published string) ([]web.Option, error) {
+	providers, err := w.signInProviders(published)
+	if err != nil {
+		return nil, err
+	}
+
+	opts = append(opts, providers...)
+
+	if len(w.Role) == 0 {
+		return opts, nil
+	}
+
+	if len(opts) == 0 {
+		return nil, errors.New("web: --role decides what signed-in people may do, and nobody can sign in: add --local-user or a sign-in provider")
+	}
+
+	roles, err := web.CompileRoles(w.Role)
+	if err != nil {
+		return nil, fmt.Errorf("web: %w", err)
+	}
+
+	return append(opts, web.WithRoles(roles)), nil
 }
 
 // signInProviders is the GitHub and Google sign-in a client id asks for. Each needs its secret, read from the environment so it is never on a command line, and the URL a provider sends the browser back to.
@@ -238,12 +264,10 @@ func (w *WebCmd) Run() error {
 		return err
 	}
 
-	providers, err := w.signInProviders(published)
+	opts, err = w.accessOptions(opts, published)
 	if err != nil {
 		return err
 	}
-
-	opts = append(opts, providers...)
 
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()

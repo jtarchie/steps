@@ -2,7 +2,7 @@
 
 `steps web` asks for nothing by default, and on the loopback address it binds by default that is the right answer: the UI and the terminal that started it are the same trust domain. The moment the daemon is reachable from somewhere else, it is not — **a pipeline is arbitrary commands, so `steps pipeline set` is a remote shell** ([web.md, Security](web.md#security)).
 
-Accounts close that: local accounts the daemon keeps, or a GitHub or Google account. The CLI carries a local one as HTTP Basic in its `--target` URL, a browser signs in through a form or with GitHub or Google, and each request is recorded under the account that made it. No per-pipeline permissions yet.
+Accounts close that: local accounts the daemon keeps, or a GitHub or Google account. The CLI carries a local one as HTTP Basic in its `--target` URL, a browser signs in through a form or with GitHub or Google, each request is recorded under the account that made it, and roles decide what each account may do.
 
 ## Turning it on
 
@@ -67,6 +67,32 @@ Each client id adds a **Continue with …** button to the sign-in page. Register
 - **Local accounts and providers mix.** The password form is drawn only when the daemon keeps local accounts. The CLI still needs a local account: a GitHub or Google sign-in is a browser's.
 - A sign-in that comes back with a state this daemon did not hand out, or one already used, is refused.
 
+## Who may do what: roles
+
+```bash
+steps web --local-users-file users --github-client-id … \
+  --role 'admin=Provider == "local" && UserID == "jt"' \
+  --role 'operator="acme/eng" in Groups' \
+  --role 'viewer="acme" in Organizations || Email endsWith "@acme.dev"'
+```
+
+Three roles, Concourse's, each including the one below it:
+
+| Role | May |
+|---|---|
+| `viewer` | read every page |
+| `operator` | trigger, retry, approve, reject, answer, abort, release, pause and unpause |
+| `admin` | set, rename and destroy pipelines, connect and test MCP servers, and read the [activity log](web.md#activity) |
+
+Each `--role` is a rule about the signed-in person, an [expr](https://expr-lang.org) expression over `Provider` (`local`, `github`, `google`), `UserID` (the account name, GitHub login or Google address), `Email`, `Organizations` and `Groups`. A person has the highest role whose rule holds.
+
+- **No `--role` at all** keeps today's behaviour: everyone signed in may do everything.
+- **With any `--role`, an `admin` rule is required**, or nobody could set a pipeline and the daemon would be stuck as it stands. A `viewer` rule left out lets anyone signed in read; `operator` left out means only admins act.
+- **A rule that does not compile stops the daemon** before it listens, naming the role.
+- **It is enforced by the daemon, on every request**, not by hiding buttons. A viewer's pages leave the controls out and say once, in the action bar, what the operator role would add; a request for something their role does not cover is refused with `403`, from a browser or from the CLI alike.
+- **Rules read the daemon's own record of the person**, written at their last sign-in — never anything the browser carries. That is what keeps an exclusion honest: `operator=!("acme/contractors" in Groups)` reads the groups GitHub reported, so a contractor cannot pass by arriving with none. Leaving a team takes effect at the next sign-in, within a week.
+- `--read-only` still withholds the controls from everyone, whatever their role.
+
 ## What it covers
 
 Every route: the pages, `/docs`, the live-run SSE streams, and the `/api` endpoints `steps pipeline`, `steps runs abort` and `steps mcp login -p` talk to. A request that is not a browser asking for a page gets a `WWW-Authenticate: basic realm="steps"` challenge. `/login` and the stylesheet and scripts it is drawn with answer anyone: nobody can sign in through a page that needs them signed in first.
@@ -115,7 +141,6 @@ put them in the target URL: --target http://user:password@host (or STEPS_TARGET)
 
 ## What it is not
 
-- **Not a permission model.** Every account can do everything; nothing can be permitted to one person and withheld from another.
 - **Not a substitute for TLS.** Basic auth sends the password on every request, base64-encoded and not encrypted, and a session cookie is as good as the password while it lasts. Over plain HTTP anything on the path reads it. Terminate TLS in front of the daemon — a platform's own router, a reverse proxy, a tunnel.
 - **Not rate limited.** There is no lockout and no delay on a wrong password. Use a generated password, not one somebody chose.
 - **Not a reason to expose the daemon.** The set endpoint is still a remote shell; authentication decides *who* reaches it, not *what* they can do once they have.

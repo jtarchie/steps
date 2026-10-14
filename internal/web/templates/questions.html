@@ -8,7 +8,9 @@
   <div class="meta"><a href="/p/{{$.Nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · {{.AgentName}} · asked {{agoTag .AskedAt}}{{if not .AnsweredAt.IsZero}} · answered {{agoTag .AnsweredAt}}{{with .AnsweredBy}} by {{template "actor" .}}{{end}}{{end}}</div>
   <div class="msg">{{.Question}}</div>
   {{if eq .Status "pending"}}
-    {{if $.Nav.ReadOnly}}
+    {{if $.Nav.ViewOnly}}
+    <div class="meta">Answering needs the operator role.</div>
+    {{else if $.Nav.ReadOnly}}
     <div class="meta">This server is read-only. Answer with <code>steps questions answer {{.ID}} &lt;answer&gt; -p {{$.Nav.Current}}</code>.</div>
     {{else}}
     <!-- The free-text field and its own submit come FIRST, and the ordering is

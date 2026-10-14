@@ -135,6 +135,8 @@ type Server struct {
 	// providers are the ways to sign in with somebody else's account, and pending the trips to them not yet back: see providers.go.
 	providers []SignInProvider
 	pending   pendingSignIns
+	// roles are who may do what, the zero value letting anyone signed in do anything: see roles.go.
+	roles Roles
 	// nil answers any Host, which is the default: see hosts.go.
 	allowedHosts map[string]bool
 	// version is what the footer prints, so a bug report can name the build.
@@ -419,6 +421,7 @@ func (s *Server) routes() error {
 	// Above the origin check, so an unauthenticated cross-origin request is told the one thing it can act on.
 	if s.auth != nil {
 		e.Use(s.authenticate)
+		e.Use(s.authorize)
 	}
 
 	// With no authentication there is no session for a cross-site request to ride, but a page on another origin can still aim a form at localhost — and this is the check that costs nothing and closes it.
@@ -732,11 +735,14 @@ func (s *Server) unscopedNav(c *echo.Context) navData {
 // one is current, and the counts the top bar reports.
 func (s *Server) nav(c *echo.Context) navData {
 	ctx := c.Request().Context()
-	nav := navData{ReadOnly: s.runner == nil, URL: c.Request().URL.RequestURI()}
+	nav := navData{ReadOnly: s.runner == nil, URL: c.Request().URL.RequestURI(), Role: RoleAdmin}
 
 	if s.auth != nil {
 		nav.Who = actor.From(ctx).String()
 		nav.CanSignOut = s.hasSession(c)
+		nav.Role = s.roleOf(c)
+		nav.ViewOnly = s.runner != nil && nav.Role < RoleOperator
+		nav.ReadOnly = nav.ReadOnly || nav.ViewOnly
 	}
 
 	// Every served pipeline, not only the request's own: a reader looking at a
@@ -849,6 +855,9 @@ type navData struct {
 	Who string
 	// CanSignOut is a browser that signed in through the form; one the Basic prompt let in has nothing the daemon can end.
 	CanSignOut bool
+	// Role is what the person reading may do. ViewOnly is a server with controls whose reader may not use them, which ReadOnly then also says, so every page that hides controls for one hides them for the other; the two differ only in the sentence explaining why.
+	Role     Role
+	ViewOnly bool
 }
 
 type pipelineSummary struct {

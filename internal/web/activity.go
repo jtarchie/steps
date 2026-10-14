@@ -23,6 +23,8 @@ type activityRoute struct {
 	action func(c *echo.Context) string
 	target func(c *echo.Context, p *Pipeline) string
 	detail func(c *echo.Context) map[string]string
+	// role is what the route asks of the person calling it.
+	role Role
 	// before records ahead of the handler, for the one verb that leaves no handle to record through afterwards. A destroy that then fails leaves an entry for an attempt; the handler refuses an unknown pipeline before that can matter.
 	before bool
 }
@@ -65,37 +67,37 @@ func currentSHA(c *echo.Context, p *Pipeline) string {
 
 // activityRoutes is every mutating route a person uses, by method and path. TestEveryMutatingRouteIsRecordedOrExcused holds it to the router, so a new one cannot ship unrecorded by accident.
 var activityRoutes = map[string]activityRoute{
-	"POST /p/:pipeline/jobs/:job/trigger": {action: verb("trigger"), target: param("job"), detail: func(c *echo.Context) map[string]string {
+	"POST /p/:pipeline/jobs/:job/trigger": {role: RoleOperator, action: verb("trigger"), target: param("job"), detail: func(c *echo.Context) map[string]string {
 		if c.FormValue("force") == forceAll {
 			return map[string]string{"cache": "skipped"}
 		}
 
 		return nil
 	}},
-	"POST /p/:pipeline/runs/:run/rerun": {action: verb("rerun"), target: param("run")},
-	"POST /p/:pipeline/approvals/:id": {action: func(c *echo.Context) string {
+	"POST /p/:pipeline/runs/:run/rerun": {role: RoleOperator, action: verb("rerun"), target: param("run")},
+	"POST /p/:pipeline/approvals/:id": {role: RoleOperator, action: func(c *echo.Context) string {
 		if c.FormValue("decision") == "reject" {
 			return "reject"
 		}
 
 		return "approve"
 	}, target: numbered("approval", "id"), detail: reasonDetail},
-	"POST /p/:pipeline/questions/:id":                      {action: verb("answer"), target: numbered("question", "id")},
-	"POST /p/:pipeline/jobs/:job/release":                  {action: verb("release"), target: param("job")},
-	"POST /p/:pipeline/pause":                              {action: verb("pause"), target: nothing},
-	"POST /p/:pipeline/unpause":                            {action: verb("unpause"), target: nothing},
-	"POST /p/:pipeline/runs/:run/abort":                    {action: verb("abort"), target: param("run")},
-	"POST /p/:pipeline/jobs/:job/queued/abort":             {action: verb("abort queued"), target: param("job")},
-	"POST /p/:pipeline/mcp/:server/connect":                {action: verb("mcp connect"), target: param("server")},
-	"POST /p/:pipeline/mcp/:server/test":                   {action: verb("mcp test"), target: param("server")},
-	"PUT /api/pipelines/:pipeline":                         {action: verb("set"), target: currentSHA},
-	"DELETE /api/pipelines/:pipeline":                      {action: verb("destroy"), target: nothing, before: true},
-	"POST /api/pipelines/:pipeline/pause":                  {action: verb("pause"), target: nothing},
-	"POST /api/pipelines/:pipeline/unpause":                {action: verb("unpause"), target: nothing},
-	"POST /api/pipelines/:pipeline/rename":                 {action: verb("rename"), target: param("pipeline")},
-	"POST /api/pipelines/:pipeline/runs/:run/abort":        {action: verb("abort"), target: param("run")},
-	"POST /api/pipelines/:pipeline/jobs/:job/queued/abort": {action: verb("abort queued"), target: param("job")},
-	"POST /api/pipelines/:pipeline/mcp/:server/login":      {action: verb("mcp connect"), target: param("server")},
+	"POST /p/:pipeline/questions/:id":                      {role: RoleOperator, action: verb("answer"), target: numbered("question", "id")},
+	"POST /p/:pipeline/jobs/:job/release":                  {role: RoleOperator, action: verb("release"), target: param("job")},
+	"POST /p/:pipeline/pause":                              {role: RoleOperator, action: verb("pause"), target: nothing},
+	"POST /p/:pipeline/unpause":                            {role: RoleOperator, action: verb("unpause"), target: nothing},
+	"POST /p/:pipeline/runs/:run/abort":                    {role: RoleOperator, action: verb("abort"), target: param("run")},
+	"POST /p/:pipeline/jobs/:job/queued/abort":             {role: RoleOperator, action: verb("abort queued"), target: param("job")},
+	"POST /p/:pipeline/mcp/:server/connect":                {role: RoleAdmin, action: verb("mcp connect"), target: param("server")},
+	"POST /p/:pipeline/mcp/:server/test":                   {role: RoleAdmin, action: verb("mcp test"), target: param("server")},
+	"PUT /api/pipelines/:pipeline":                         {role: RoleAdmin, action: verb("set"), target: currentSHA},
+	"DELETE /api/pipelines/:pipeline":                      {role: RoleAdmin, action: verb("destroy"), target: nothing, before: true},
+	"POST /api/pipelines/:pipeline/pause":                  {role: RoleOperator, action: verb("pause"), target: nothing},
+	"POST /api/pipelines/:pipeline/unpause":                {role: RoleOperator, action: verb("unpause"), target: nothing},
+	"POST /api/pipelines/:pipeline/rename":                 {role: RoleAdmin, action: verb("rename"), target: param("pipeline")},
+	"POST /api/pipelines/:pipeline/runs/:run/abort":        {role: RoleOperator, action: verb("abort"), target: param("run")},
+	"POST /api/pipelines/:pipeline/jobs/:job/queued/abort": {role: RoleOperator, action: verb("abort queued"), target: param("job")},
+	"POST /api/pipelines/:pipeline/mcp/:server/login":      {role: RoleAdmin, action: verb("mcp connect"), target: param("server")},
 }
 
 // notRecorded are the mutating routes a person does not drive, with why.

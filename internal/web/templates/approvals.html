@@ -8,7 +8,9 @@
   <div class="meta"><a href="/p/{{$.Nav.Current}}/jobs/{{.JobName}}">{{.JobName}}</a> · requested {{agoTag .RequestedAt}}{{if not .DecidedAt.IsZero}} · decided {{agoTag .DecidedAt}}{{with .DecidedBy}} by {{template "actor" .}}{{end}}{{end}}</div>
   <div class="msg">{{.Message}}</div>
   {{if eq .Status "pending"}}
-    {{if $.Nav.ReadOnly}}
+    {{if $.Nav.ViewOnly}}
+    <div class="meta">Deciding needs the operator role.</div>
+    {{else if $.Nav.ReadOnly}}
     <div class="meta">This server is read-only. Decide with <code>steps approvals approve {{.ID}} -p {{$.Nav.Current}}</code>.</div>
     {{else}}
     <form class="decide" method="post" action="/p/{{$.Nav.Current}}/approvals/{{.ID}}">

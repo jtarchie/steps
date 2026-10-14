@@ -890,6 +890,8 @@ on this side is everything that changes what a pipeline IS.
                  sign people in with GitHub or Google; the secret is read from
                  $STEPS_GITHUB_CLIENT_SECRET / $STEPS_GOOGLE_CLIENT_SECRET (or
                  --*-client-secret-env), and needs --external-url
+--role           who may do what: viewer, operator or admin, each a rule about
+                 the signed-in person (repeatable; see authentication.md)
 --activity-history
                  how many entries the activity log keeps across every pipeline
                  (default 10000, 0 is no limit; see Activity)
