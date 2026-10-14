@@ -810,5 +810,6 @@ Stated deliberately rather than left to be discovered. Who decided is recorded, 
 
 - **The audit trail is a row, not a chat message.** Who approved, when, and why a rejection was a rejection must not depend on external chat history.
 - **A decision cannot be overwritten.** Deciding an already-decided approval is an error; the record is a record.
+- **A restart keeps the approval a run is waiting on.** A daemon that restarts while a run waits on an `approval:` resumes the run onto the approval it already made — the same id, so whoever was shown it can still decide it — instead of asking again. The wait is measured from when it was first asked, so a restart does not give a person a fresh `timeout:`. A decision made while the daemon was down is found when the run resumes. A rejected or expired approval is not carried over: if the step is retried, a person is asked afresh.
 - **Nothing about an approval is cacheable.** A cached "they said yes once" must never stand in for asking again.
 - **Notification is the missing half, and it is not built in.** Today the step prints the message and the exact command to answer it, and logs `job.approval_pending` — put a `put:` to Slack or email in the step *before* the approval to actually reach someone.

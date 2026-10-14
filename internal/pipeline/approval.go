@@ -12,6 +12,7 @@ import (
 	"github.com/jtarchie/steps/internal/actor"
 	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/events"
 	"github.com/jtarchie/steps/internal/merkle"
 	"github.com/jtarchie/steps/internal/outcome"
 	"github.com/jtarchie/steps/internal/store"
@@ -41,7 +42,15 @@ const (
 // rejection, and "the deploy was rejected" is a very different thing to read
 // in a log from "the deploy was never looked at".
 func runApprovalStep(ctx context.Context, r stepRunner, i int, step config.Step, parentHash string) (stepResult, error) {
-	id, err := r.st.RequestApproval(ctx, r.jobName, step.Approval.Message)
+	content := map[string]any{"approval": step.Approval.Message}
+
+	hash, hashErr := merkle.HashNode(merkle.NodeKindApproval, content, parentHash)
+	if hashErr != nil {
+		return stepResult{}, fmt.Errorf("step %d (approval): %w", i, hashErr)
+	}
+
+	// Keyed by the run and where in it this step sits, so a run a restart resumed while this step waited goes back to waiting on the approval it already made: a new one each time left the old ones pending forever, and a decision on them did nothing.
+	id, err := r.st.RequestApprovalFor(ctx, events.RunID(ctx), hash, r.jobName, step.Approval.Message)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %d (approval): %w", i, err)
 	}
@@ -61,13 +70,6 @@ func runApprovalStep(ctx context.Context, r stepRunner, i int, step config.Step,
 
 	decision, err := awaitApproval(ctx, r.st, id, timeout)
 
-	content := map[string]any{"approval": step.Approval.Message}
-
-	hash, hashErr := merkle.HashNode(merkle.NodeKindApproval, content, parentHash)
-	if hashErr != nil {
-		return stepResult{}, fmt.Errorf("step %d (approval): %w", i, hashErr)
-	}
-
 	node := merkle.Node{
 		Hash: hash, ParentHash: parentHash, Kind: merkle.NodeKindApproval,
 		StepIndex: i, Resource: fmt.Sprintf("approval-%d", id), Content: content,
@@ -86,12 +88,17 @@ func runApprovalStep(ctx context.Context, r stepRunner, i int, step config.Step,
 
 // awaitApproval polls for the decision until one is made or the wait expires.
 func awaitApproval(ctx context.Context, st store.Approvals, id int64, timeout time.Duration) (store.Approval, error) {
-	deadline := time.Now().Add(timeout)
+	var deadline time.Time
 
 	for {
 		approval, err := st.ApprovalStatus(ctx, id)
 		if err != nil {
 			return store.Approval{}, fmt.Errorf("approval %d: %w", id, err)
+		}
+
+		// From when it was asked, not from when this process started waiting: a resumed step is still the same wait, and a restart must not give a person a fresh day.
+		if deadline.IsZero() {
+			deadline = approval.RequestedAt.Add(timeout)
 		}
 
 		if decided, err := personDecided(approval); decided {

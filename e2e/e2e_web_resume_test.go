@@ -5,10 +5,12 @@ package e2e
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/jtarchie/steps/internal/cli"
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
 
@@ -153,4 +155,79 @@ func assertStepIDsUnique(t *testing.T, state, name, runID string) {
 	if len(owner) < 4 {
 		t.Errorf("only %d steps started across both attempts, want make, the agent, use and use again", len(owner))
 	}
+}
+
+// A restart while a run waits on an approval resumes the run onto the approval it already made. It used to ask again, leaving one more pending approval per restart that nothing waited on, so deciding the old one did nothing and the run stayed parked.
+func TestARestartKeepsTheApprovalARunWaitsOn(t *testing.T) {
+	dir := t.TempDir()
+	done := filepath.Join(dir, "done")
+
+	path := writePipeline(t, dir, `
+defaults:
+  preflight:
+    disabled: true
+workspace:
+  root: `+filepath.Join(dir, "ws")+`
+jobs:
+- name: deploy
+  interruptible: true
+  plan:
+  - approval:
+      message: ship it?
+      timeout: 1h
+  - task: ship
+    volatile: true
+    run: echo shipped > `+done+`
+`)
+
+	served := startWebFor(t, path, "--interval", "1h")
+	defer served.stopIfRunning(t)
+
+	name := cli.PipelineName(path)
+
+	served.trigger(t, name, "deploy")
+
+	original := waitForPendingApproval(t, served.state, name)
+
+	served.stop(t)
+
+	restarted := startWeb(t, "--db", served.state, "--interval", "1h")
+	restarted.state = served.state
+	defer restarted.stopIfRunning(t)
+
+	// Decided over the CLI, as a person would, against the approval they were shown before the restart.
+	err := cli.Run([]string{"approvals", "approve", strconv.FormatInt(original, 10), "-p", name, "--db", served.state})
+	if err != nil {
+		t.Fatalf("approving approval %d: %v", original, err)
+	}
+
+	waitForFile(t, done)
+
+	if got := waitForQueueStatuses(t, served.state, name, "deploy:succeeded"); got != "deploy:succeeded" {
+		t.Fatalf("queue = %s, want the resumed run carried through the approval it was already waiting on", got)
+	}
+
+	restarted.stop(t)
+
+	if all := listApprovals(t, served.state, name); len(all) != 1 || all[0].ID != original || all[0].Status != "approved" {
+		t.Errorf("approvals = %+v, want only the original, approved: the restart asked again", all)
+	}
+}
+
+func listApprovals(t *testing.T, state, name string) []store.Approval {
+	t.Helper()
+
+	st, err := sqlite.OpenStore(state, name)
+	if err != nil {
+		t.Fatalf("open state store: %v", err)
+	}
+
+	defer func() { _ = st.Close() }()
+
+	all, err := st.Approvals(t.Context(), false, 0)
+	if err != nil {
+		t.Fatalf("Approvals: %v", err)
+	}
+
+	return all
 }

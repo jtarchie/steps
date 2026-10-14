@@ -13,7 +13,7 @@ package postgres
 // 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
 //
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 13
+const schemaVersion = 14
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -246,9 +246,15 @@ CREATE TABLE IF NOT EXISTS approvals (
     requested_at TIMESTAMPTZ NOT NULL,
     decided_at   TIMESTAMPTZ,
     decided_by   TEXT,
-    reason       TEXT
+    reason       TEXT,
+    run_id       TEXT REFERENCES runs(id) ON DELETE SET NULL,
+    step_key     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_pipeline ON approvals(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_approvals_run ON approvals(run_id);
+-- See the sqlite schema: one live approval per step of a run.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_step
+    ON approvals(run_id, step_key) WHERE run_id IS NOT NULL AND status IN ('pending', 'approved');
 
 CREATE TABLE IF NOT EXISTS memories (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

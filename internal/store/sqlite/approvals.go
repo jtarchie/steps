@@ -28,6 +28,34 @@ func (s *Store) RequestApproval(ctx context.Context, jobName, message string) (i
 	return id, nil
 }
 
+// RequestApprovalFor finds the live approval this step of this run already made, or makes one. The insert does nothing on a conflict with the live one, and the read after it is what answers either way.
+func (s *Store) RequestApprovalFor(ctx context.Context, runID, stepKey, jobName, message string) (int64, error) {
+	if runID == "" {
+		return s.RequestApproval(ctx, jobName, message)
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO approvals (pipeline_id, job_name, message, status, requested_at, run_id, step_key)
+		VALUES (?, ?, ?, 'pending', ?, ?, ?)
+		ON CONFLICT (run_id, step_key) WHERE run_id IS NOT NULL AND status IN ('pending', 'approved') DO NOTHING
+	`, s.pipelineID, jobName, message, now(), runID, stepKey)
+	if err != nil {
+		return 0, fmt.Errorf("could not request approval for job %q: %w", jobName, err)
+	}
+
+	var id int64
+
+	err = s.db.QueryRowContext(ctx, `
+		SELECT id FROM approvals
+		WHERE pipeline_id = ? AND run_id = ? AND step_key = ? AND status IN ('pending', 'approved')
+	`, s.pipelineID, runID, stepKey).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("could not request approval for job %q: %w", jobName, err)
+	}
+
+	return id, nil
+}
+
 // DecideApproval records a decision, refusing to overwrite one already made.
 func (s *Store) DecideApproval(ctx context.Context, id int64, status store.ApprovalStatus, by, reason string) error {
 	result, err := s.db.ExecContext(ctx, `
