@@ -1,0 +1,20 @@
+# required: aborts the step whose conversation did not call the tool. An export
+# has no step and no conversation — a caller somewhere else simply calls or
+# does not — so the word has nothing to hold on to and is refused rather than
+# silently ignored.
+# expect: required: aborts a step, which an export does not have
+
+mcp_exports:
+- name: support
+  access: 'Provider == "github"'
+  tools:
+  - name: lookup
+    description: look a thing up
+    run: grep {{ .args.term | shellquote }} /etc/hosts
+    required: true
+
+jobs:
+- name: build
+  plan:
+  - task: say
+    run: echo hi

@@ -91,6 +91,11 @@ func fileProblems(cfg *config.Config) error {
 		errs = append(errs, exprErr)
 	}
 
+	exportErr := pipeline.ValidateExports(cfg)
+	if exportErr != nil {
+		errs = append(errs, exportErr)
+	}
+
 	for i := range cfg.Jobs {
 		flowErr := workspace.ValidateArtifactFlow(cfg, &cfg.Jobs[i])
 		if flowErr != nil {

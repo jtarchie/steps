@@ -213,6 +213,11 @@ mcp_exports:
 - name: support
   access: '"acme/support" in Groups'
   rate: 60/m
+  image: alpine:3                       # where the commands below run, one fresh container each
+  user: nobody
+  network: none
+  privileged: false
+  container_limits: { cpu: 512, memory: 268435456 }
   tools:
   - mcp: github
     tool: search_issues
@@ -226,6 +231,11 @@ mcp_exports:
     tools: [get_issue]
   - agent: oncall                       # the caller gets an answer, not the tools
     description: Ask what is failing right now
+  - name: lookup_owner                  # a command of the pipeline's own
+    description: Who owns this service?
+    run: grep -i {{ .args.service | shellquote }} OWNERS
+    params:
+      service: { max_length: 40, pattern: '^[a-z0-9-]+$' }
 
 jobs:
 - name: build
@@ -235,9 +245,11 @@ jobs:
 ```
 
 - **`access:` is required**, a [role rule](authentication.md#who-may-do-what-roles) about the person connecting. Separate levels of access are separate exports (`support`, `support-write`), so who may do what stays in the file, where it is reviewed.
-- **Only MCP grants and sub-agents.** A built-in has no workspace outside a step, and a custom `run:` tool would put a caller's arguments into a shell on the daemon's machine; both are load errors. `max_calls:`, `max_output_bytes:` and `required:` are about a step's conversation, which an export does not have; `rate:` bounds calls per person instead.
+- **MCP grants, sub-agents and custom `run:` tools.** A built-in has no workspace outside a step, so it is a load error. `max_calls:` and `required:` are about a step's conversation, which an export does not have; `rate:` bounds calls per person instead. `max_output_bytes:` works, and an over-long result is cut at the limit with a note — there is no file for a caller to read the rest from.
 - **Narrowing works as it does for an agent**: `args:` pins (single-tool form), `description:`, `timeout:`.
 - **`params:` limits what a caller may send**, per argument: `max_length`, `min_length`, `pattern`, `enum`, `min`, `max`, `default`. They are written into the tool's input schema, so Claude or Cursor reads "at most 200 characters" and corrects itself before calling, and the daemon enforces the same limits whether it did or not: a call that breaks one is refused with a tool error naming the argument (never its value) before anything is sent upstream. `default` fills an argument the caller left out. The same `params:` works on an agent's own grant of the tool — see [agents.md](agents.md#params--limits-on-what-an-argument-may-be). Whether a parameter is a number comes from the server's own schema, so `min`/`max` on a string parameter is refused when the export is first built.
+- **A custom command** is written as it is for an agent (`name`, `description`, `run`, `args:` pins, `timeout:`), and the caller only supplies values. Every value must go through `shellquote` — `{{ .args.note | shellquote }}` — so a caller sending `$(id)` gets that text, not a command; one that does not is refused when the pipeline is set or validated, and again when the export is built. Each call gets a fresh working directory, removed when it ends, so two callers never see each other's files. The command sees only the daemon's baseline environment, never the pipeline's `env:` or its secrets.
+- **`image:` runs those commands in a container** — a fresh one per command, over the call's directory — with the same `user:`, `network:`, `privileged:` and `container_limits:` a task takes (see [infra.md](infra.md)), which need `image:` as they do there. Without it they run on the daemon's machine as whoever started it, so name an image for anything you would not run yourself. Those settings are refused on an export that has no custom command to apply them to.
 - **A sub-agent export** runs that agent's own conversation for each call, with your model and your tools, and returns its answer — the narrowest thing to share.
 - Never hashed: an export changes nothing a build does.
 

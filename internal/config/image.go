@@ -91,6 +91,11 @@ func (c *Config) validateImageValues() error {
 		}
 	}
 
+	err := c.validateExportImageValues()
+	if err != nil {
+		return err
+	}
+
 	for i := range c.Agents {
 		agent := c.Agents[i]
 
@@ -113,6 +118,17 @@ func (c *Config) validateImageValues() error {
 		err := job.visitSteps(func(label string, step *Step) error {
 			return checkImageValue(label, step.Image)
 		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *Config) validateExportImageValues() error {
+	for i := range c.MCPExports {
+		err := checkImageValue(fmt.Sprintf("mcp_exports %q", c.MCPExports[i].Name), c.MCPExports[i].Image)
 		if err != nil {
 			return err
 		}

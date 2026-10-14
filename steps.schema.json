@@ -78,7 +78,7 @@
         },
         "tools": {
           "type": "array",
-          "description": "MCP grants and sub-agents only; built-ins and custom run: tools cannot be exported.",
+          "description": "MCP grants, sub-agents and custom run: tools; built-ins cannot be exported. A custom tool's caller-supplied values must go through shellquote.",
           "items": {
             "$ref": "#/$defs/toolSpec"
           }
@@ -87,6 +87,25 @@
           "type": "string",
           "pattern": "^[1-9][0-9]*/[smh]$",
           "description": "Calls per person, as <n>/<s|m|h>, like 60/m. Empty is unbounded."
+        },
+        "image": {
+          "type": "string",
+          "description": "Run the export's custom run: commands in a fresh container from this image, in a directory made for each call. Empty runs them on the daemon's machine."
+        },
+        "user": {
+          "type": "string",
+          "description": "The container's user. Needs image."
+        },
+        "network": {
+          "type": "string",
+          "description": "The container's network; none cuts it off. Needs image."
+        },
+        "privileged": {
+          "type": "boolean",
+          "description": "Run the container privileged. Needs image."
+        },
+        "container_limits": {
+          "$ref": "#/$defs/containerLimits"
         }
       }
     },

@@ -6,6 +6,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/jtarchie/steps/internal/cli"
+	"github.com/jtarchie/steps/internal/testdocker"
 )
 
 // servedPipeline is a daemon holding a pipeline named ops, signed in as alex.
@@ -160,4 +162,117 @@ mcp_exports:
 	}
 
 	expectDocMCPCall(t, upstream, "search_issues", map[string]any{"query": "crash", "limit": float64(20)})
+}
+
+// A caller supplies values and only values: whatever it sends reaches the command as one literal word, and every call works in a directory of its own that is gone afterwards.
+func TestAnExportedCommandReceivesWhatTheCallerSendsAsLiteralText(t *testing.T) {
+	served := serveOps(t, `
+mcp_exports:
+- name: shell
+  access: "true"
+  tools:
+  - name: say
+    description: Print a note
+    run: 'pwd; echo note={{ .args.note | shellquote }}; echo kept > marker; ls'
+    params:
+      note: { max_length: 40 }
+`)
+
+	session := served.connect(t, "shell")
+
+	first := callTool(t, session, "say", map[string]any{"note": "$(id -u); echo injected `whoami`"})
+	if first.IsError {
+		t.Fatalf("the call failed: %s", textOf(first))
+	}
+
+	var out struct {
+		Stdout   string `json:"stdout"`
+		ExitCode int    `json:"exit_code"`
+	}
+
+	_ = json.Unmarshal([]byte(textOf(first)), &out)
+
+	if !strings.Contains(out.Stdout, "note=$(id -u); echo injected `whoami`\n") || strings.Count(out.Stdout, "injected") != 1 {
+		t.Errorf("the caller's text was interpreted, not passed through:\n%s", out.Stdout)
+	}
+
+	firstDir := strings.SplitN(out.Stdout, "\n", 2)[0]
+
+	second := callTool(t, session, "say", map[string]any{"note": "again"})
+	_ = json.Unmarshal([]byte(textOf(second)), &out)
+
+	if secondDir := strings.SplitN(out.Stdout, "\n", 2)[0]; secondDir == firstDir {
+		t.Errorf("two calls shared the directory %s", firstDir)
+	}
+
+	if strings.Count(out.Stdout, "marker") != 1 {
+		t.Errorf("the second call saw the first call's files:\n%s", out.Stdout)
+	}
+
+	_, err := os.Stat(firstDir)
+	if !os.IsNotExist(err) {
+		t.Errorf("the first call's directory outlived the call: %v", err)
+	}
+
+	tooLong := callTool(t, session, "say", map[string]any{"note": strings.Repeat("n", 41)})
+	if !tooLong.IsError {
+		t.Errorf("params: did not apply to an exported command: %s", textOf(tooLong))
+	}
+}
+
+// A caller's value that would reach the shell as syntax is refused where the pipeline is set, where somebody reads the reason — not discovered by a caller.
+func TestAnExportedCommandThatLeavesAValueUnquotedIsRefusedAtSet(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ops.yml")
+	writePipelineFile(t, path, `
+mcp_exports:
+- name: shell
+  access: "true"
+  tools:
+  - name: say
+    description: Print a note
+    run: echo {{ .args.note }}
+jobs:
+- name: build
+  plan:
+  - task: say
+    run: echo hi
+`)
+
+	err := cli.Run([]string{"validate", path})
+	if err == nil || !strings.Contains(err.Error(), "unquoted") || !strings.Contains(err.Error(), `mcp_exports "shell"`) {
+		t.Errorf("steps validate = %v, want the unquoted value named", err)
+	}
+}
+
+// An export that names an image runs its commands there, as the container's user and with no network if it says so, each call in a fresh container over a directory of its own.
+func TestAnExportedCommandRunsInTheContainerTheExportNames(t *testing.T) {
+	testdocker.Require(t)
+	t.Setenv("TMPDIR", testdocker.MountableDir(t))
+
+	served := serveOps(t, `
+mcp_exports:
+- name: shell
+  access: "true"
+  image: `+dockerE2EImage+`
+  network: none
+  tools:
+  - name: whereami
+    description: Say where this runs
+    run: 'cat /etc/alpine-release; echo kept > marker; ls; wget -q -T 2 -O- http://example.com >/dev/null 2>&1 && echo online || echo offline'
+`)
+
+	session := served.connect(t, "shell")
+
+	for range 2 {
+		var out struct {
+			Stdout string `json:"stdout"`
+		}
+
+		_ = json.Unmarshal([]byte(textOf(callTool(t, session, "whereami", nil))), &out)
+
+		if !strings.Contains(out.Stdout, "3.") || !strings.Contains(out.Stdout, "offline") || strings.Count(out.Stdout, "marker") != 1 {
+			t.Fatalf("the command did not run in a fresh, offline alpine container:\n%s", out.Stdout)
+		}
+	}
 }

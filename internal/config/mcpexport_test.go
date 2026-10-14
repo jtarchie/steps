@@ -26,7 +26,15 @@ func TestAnExportRefusesWhatItCannotServe(t *testing.T) {
 	for export, want := range map[string]string{
 		"- {name: a, access: 'true', tools: [read_file]}":                                                          "built-in",
 		"- {name: a, access: 'true', tools: [{mcp: github, tool: x, max_calls: 2}]}":                               "rate: instead",
-		"- {name: a, access: 'true', tools: [{mcp: github, tool: x, max_output_bytes: 2}]}":                        "workspace",
+		"- {name: a, access: 'true', tools: [{name: t, run: 'echo hi', max_calls: 1, description: d}]}":            "rate: instead",
+		"- {name: a, access: 'true', tools: [{name: t, run: 'echo hi', required: true, description: d}]}":          "required:",
+		"- {name: a, access: 'true', tools: [{name: t, description: only a name}]}":                                "custom tool with a name and a run",
+		"- {name: a, access: 'true', tools: [{name: 'a b', run: 'echo hi', description: d}]}":                      "not a tool name",
+		"- {name: a, access: 'true', tools: [{agent: oncall, args: {x: y}}]}":                                      "sub-agent",
+		"- {name: a, access: 'true', image: alpine, tools: [{mcp: github}]}":                                       "this export has none",
+		"- {name: a, access: 'true', network: none, tools: [{name: t, run: 'echo hi', description: d}]}":           "requires image",
+		"- {name: a, access: 'true', privileged: true, tools: [{name: t, run: 'echo hi', description: d}]}":        "requires image",
+		"- {name: a, access: 'true', image: '-x', tools: [{name: t, run: 'echo hi', description: d}]}":             "must not start with '-'",
 		"- {name: a, access: 'true', tools: [{mcp: github, tools: [x], args: {o: p}}]}":                            "single-tool form",
 		"- {name: a, access: 'true', tools: [{mcp: nowhere}]}":                                                     "nowhere",
 		"- {name: a, access: 'true', tools: [{agent: nobody}]}":                                                    "nobody",
@@ -39,6 +47,15 @@ func TestAnExportRefusesWhatItCannotServe(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s\n= %v, want refused naming %q", export, err, want)
 		}
+	}
+}
+
+func TestAnExportOfCommandsLoadsWithItsContainer(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]byte(exportBase+"- {name: shell, access: 'true', image: alpine:3, user: nobody, network: none, container_limits: {memory: 1000000}, tools: [{name: say, description: d, run: 'echo {{ .args.x | shellquote }}', args: {y: z}, max_output_bytes: 100, timeout: 5s}]}"), "test", nil)
+	if err != nil || cfg.MCPExports[0].Image != "alpine:3" || cfg.MCPExports[0].Limits == nil {
+		t.Fatalf("Parse = %+v, %v; want the export loaded with its container", cfg, err)
 	}
 }
 

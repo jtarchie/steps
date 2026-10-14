@@ -5,7 +5,9 @@ package pipeline
 
 import (
 	"errors"
+	"fmt"
 
+	"github.com/jtarchie/steps/internal/agent"
 	"github.com/jtarchie/steps/internal/config"
 	rsrc "github.com/jtarchie/steps/internal/resource"
 )
@@ -28,4 +30,18 @@ import (
 // dependency graph.
 func ValidateExpressions(cfg *config.Config) error {
 	return errors.Join(rsrc.CompileExprPrograms(cfg), rsrc.CompileWebhooks(cfg), rsrc.CompileCrons(cfg))
+}
+
+// ValidateExports refuses an export that cannot be served as written. config cannot reach the template parser, so what an export's commands do with a caller's values is checked here, and again where the export is built.
+func ValidateExports(cfg *config.Config) error {
+	var errs []error
+
+	for _, export := range cfg.MCPExports {
+		err := agent.CheckExportedCommands(export)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("mcp_exports %q: %w", export.Name, err))
+		}
+	}
+
+	return errors.Join(errs...)
 }

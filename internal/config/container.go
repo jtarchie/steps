@@ -70,13 +70,9 @@ func (s Step) containerSettings() containerSettings {
 // a concurrent block, a try: body) are covered exactly as they are everywhere
 // else.
 func (c *Config) visitContainerSettings(fn func(context string, settings containerSettings) error) error {
-	for i := range c.ResourceTypes {
-		rt := c.ResourceTypes[i]
-
-		err := fn(fmt.Sprintf("resource_type %q", rt.Name), rt.containerSettings().from("resource_type", rt.Name))
-		if err != nil {
-			return err
-		}
+	err := c.visitTypeAndExportSettings(fn)
+	if err != nil {
+		return err
 	}
 
 	for i := range c.Agents {
@@ -112,6 +108,28 @@ func (c *Config) visitContainerSettings(fn func(context string, settings contain
 
 			return fn(label, settings)
 		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *Config) visitTypeAndExportSettings(fn func(context string, settings containerSettings) error) error {
+	for i := range c.ResourceTypes {
+		rt := c.ResourceTypes[i]
+
+		err := fn(fmt.Sprintf("resource_type %q", rt.Name), rt.containerSettings().from("resource_type", rt.Name))
+		if err != nil {
+			return err
+		}
+	}
+
+	for i := range c.MCPExports {
+		export := c.MCPExports[i]
+
+		err := fn(fmt.Sprintf("mcp_exports %q", export.Name), export.containerSettings().from("mcp_export", export.Name))
 		if err != nil {
 			return err
 		}
