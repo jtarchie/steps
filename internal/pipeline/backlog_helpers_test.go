@@ -20,9 +20,7 @@ func drainJob(
 
 	for {
 		queued := false
-		runCtx := WithBacklog(ctx, func(context.Context, int) { queued = true })
-
-		err := RunJob(runCtx, cfg, job, pinned, provider, st, false)
+		err := RunJob(ctx, cfg, job, st, Run{Provider: provider, Pinned: pinned, Backlog: func(context.Context, int) { queued = true }})
 		if err != nil {
 			errs = append(errs, err)
 		}

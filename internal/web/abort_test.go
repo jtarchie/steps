@@ -10,6 +10,7 @@ import (
 
 	"github.com/jtarchie/steps/internal/config"
 	"github.com/jtarchie/steps/internal/events"
+	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/store"
 	"github.com/jtarchie/steps/internal/store/sqlite"
 	"github.com/jtarchie/steps/internal/workspace"
@@ -237,7 +238,7 @@ jobs:
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	return NewLocalRunner(map[string]workspace.Provider{"demo": provider}, nil, 1, false), target, st
+	return NewLocalRunner(map[string]workspace.Provider{"demo": provider}, pipeline.Run{}, 1), target, st
 }
 
 func assertStoppedCleanly(t *testing.T, st store.Store) {

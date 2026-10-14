@@ -129,12 +129,12 @@ func (w *WebCmd) Run() error {
 	// A daemon's runs are read in the browser, from their record: its terminal is log lines, so a step's bytes, a note's fallback and a prompt reach nobody here.
 	ctx = events.WithOutput(ctx, events.Output{Headless: true})
 
-	ctx, err = w.ExecFlags.Apply(ctx)
+	ctx, base, err := w.ExecFlags.Apply(ctx)
 	if err != nil {
 		return err
 	}
 
-	return w.serve(ctx, opts, published)
+	return w.serve(ctx, opts, w.runBase(ctx, base, published))
 }
 
 // serve runs the UI, the set endpoint, and a poller and drainer per served
@@ -144,8 +144,8 @@ func (w *WebCmd) Run() error {
 // front end that drains a queue nothing fills is a runner that looks alive
 // and notices nothing, and a second `steps web` on the same state database is
 // the deployment mistake the one-process-per-file rule already names.
-func (w *WebCmd) serve(ctx context.Context, opts []web.Option, published string) error {
-	local := web.NewLocalRunner(nil, w.Pin, w.MaxConcurrent, w.Force)
+func (w *WebCmd) serve(ctx context.Context, opts []web.Option, base pipeline.Run) error {
+	local := web.NewLocalRunner(nil, base, w.MaxConcurrent)
 	local.StopWith(ctx)
 	local.LimitRuns(w.MaxRuns)
 
@@ -153,8 +153,6 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, published string)
 	if !w.ReadOnly {
 		runner = local
 	}
-
-	ctx = w.withExternalURL(ctx, published)
 
 	server, err := web.New(nil, runner, append(opts, web.WithVersion(BuildVersion), web.WithCapacity(local), web.WithMiddleware(telemetry.Handler(web.HealthPath)))...)
 	if err != nil {
@@ -205,13 +203,15 @@ func (w *WebCmd) serve(ctx context.Context, opts []web.Option, published string)
 	return nil
 }
 
-// withExternalURL carries STEPS_URL to every run this daemon starts: each drain loop derives from newDaemon's base, so browser-, webhook- and trigger-started runs all see it.
-func (w *WebCmd) withExternalURL(ctx context.Context, published string) context.Context {
+// runBase is what every run this daemon starts shares. Every one goes through the one LocalRunner, so browser-, webhook- and trigger-started runs all see STEPS_URL.
+func (w *WebCmd) runBase(ctx context.Context, base pipeline.Run, published string) pipeline.Run {
 	if published == "" {
 		slog.WarnContext(ctx, "web.steps_url_unset", "listen", w.Listen, "reason", "a wildcard address", "fix", "set --external-url")
 	}
 
-	return pipeline.WithExternalURL(ctx, published)
+	base.Pinned, base.Force, base.ExternalURL = w.Pin, w.Force, published
+
+	return base
 }
 
 // loopbackOnly answers whether this listen address can only be reached from this machine. An unparseable or name-based address answers false: the warning is the safe side of a guess.

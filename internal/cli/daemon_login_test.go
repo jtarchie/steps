@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jtarchie/steps/internal/pipeline"
 	"github.com/jtarchie/steps/internal/web"
 )
 
@@ -273,7 +274,7 @@ func TestASecondLoginStopsTheFirst(t *testing.T) {
 func TestCloseTakesAWaitingLoginDownWithIt(t *testing.T) {
 	t.Parallel()
 
-	local := web.NewLocalRunner(nil, nil, 1, false)
+	local := web.NewLocalRunner(nil, pipeline.Run{}, 1)
 
 	server, err := web.New(nil, local)
 	if err != nil {

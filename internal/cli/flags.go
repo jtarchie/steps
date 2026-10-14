@@ -205,13 +205,13 @@ type ExecFlags struct {
 }
 
 // prepare is Apply plus what needs the loaded pipeline and its store: the --deliver files, recorded before anything runs so the job resolves each as its resource's newest version.
-func (e ExecFlags) prepare(ctx context.Context, cfg *config.Config, st store.Store) (context.Context, error) {
-	ctx, err := e.Apply(ctx)
+func (e ExecFlags) prepare(ctx context.Context, cfg *config.Config, st store.Store) (context.Context, pipeline.Run, error) {
+	ctx, opts, err := e.Apply(ctx)
 	if err != nil {
-		return ctx, err
+		return ctx, opts, err
 	}
 
-	return ctx, e.deliver(ctx, cfg, st)
+	return ctx, opts, e.deliver(ctx, cfg, st)
 }
 
 // deliver records each --deliver file.
@@ -231,29 +231,30 @@ func (e ExecFlags) deliver(ctx context.Context, cfg *config.Config, st store.Sto
 	return nil
 }
 
-// Apply folds these flags into the context every step below reads them from.
+// Apply folds into the context the flags a poll reads as well as a run, and
+// returns the rest as the Run every job this invocation starts begins from.
 //
-// Workers are PARSED here rather than at first use, so a typo in a worker URL
-// is reported with everything else wrong with the invocation instead of
+// Workers and answers are PARSED here rather than at first use, so a typo is
+// reported with everything else wrong with the invocation instead of
 // mid-plan, when some step happens to reach for it.
-func (e ExecFlags) Apply(ctx context.Context) (context.Context, error) {
+func (e ExecFlags) Apply(ctx context.Context) (context.Context, pipeline.Run, error) {
 	if e.NoPreflight {
 		ctx = pipeline.WithoutPreflight(ctx)
 	}
 
 	ctx, err := pipeline.WithWorkers(ctx, e.Worker)
 	if err != nil {
-		return nil, fmt.Errorf("%w", err)
+		return nil, pipeline.Run{}, fmt.Errorf("%w", err)
 	}
 
 	ctx = pipeline.WithKeepWorkspace(ctx, e.KeepWorkspace)
 
-	ctx, err = pipeline.WithAnswers(ctx, e.Answer)
+	answers, err := pipeline.ParseAnswers(e.Answer)
 	if err != nil {
-		return nil, fmt.Errorf("could not read --answer: %w", err)
+		return nil, pipeline.Run{}, fmt.Errorf("could not read --answer: %w", err)
 	}
 
-	return ctx, nil
+	return ctx, pipeline.Run{Answers: answers}, nil
 }
 
 // HistoryFlags bound what a build leaves behind.

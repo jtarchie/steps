@@ -36,32 +36,10 @@ func lockJobCursor(pipelineName, jobName string) func() {
 	return lock.Unlock
 }
 
-type backlogKey struct{}
-
-// WithBacklog is told, as a run takes its version, how many input sets are
-// still waiting behind it. The daemon queues the job again; a caller that
-// installs nothing (`steps run`) builds one version per invocation, as
-// `fly trigger-job` does. Told at the take rather than at the finish, so the
-// next build can start beside this one when max_in_flight allows it.
-func WithBacklog(ctx context.Context, waiting func(ctx context.Context, sets int)) context.Context {
-	return context.WithValue(ctx, backlogKey{}, waiting)
-}
-
-type setIndexKey struct{}
-
-// withSetIndex makes a run build the index-th waiting set instead of the
-// oldest. Only `steps test` asks, through BuildEveryVersion: it re-opens taken
-// versions, so every run resolves the same sets and only the index moves.
-func withSetIndex(ctx context.Context, index int) context.Context {
-	return context.WithValue(ctx, setIndexKey{}, index)
-}
-
-// oneBuild narrows a fresh resolution to the set this run builds, reporting
-// how many wait behind it. A resumed or rerun resolution is left alone: its
-// sets are the record of a run already created.
-func oneBuild(ctx context.Context, resolution setResolution) (setResolution, int) {
-	index, _ := ctx.Value(setIndexKey{}).(int)
-
+// oneBuild narrows a fresh resolution to the index-th set (Run.setIndex),
+// reporting how many wait behind it. A resumed or rerun resolution is left
+// alone: its sets are the record of a run already created.
+func oneBuild(index int, resolution setResolution) (setResolution, int) {
 	if index >= len(resolution.sets) {
 		resolution.sets = nil
 
@@ -92,7 +70,7 @@ func oneBuild(ctx context.Context, resolution setResolution) (setResolution, int
 // unbuilt version below it.
 func takeBuild(
 	ctx context.Context, st store.Versions, jobName string, cursor *versionCursor,
-	resolution setResolution, pinnedRun bool, waiting int,
+	resolution setResolution, pinnedRun bool, waiting int, backlog func(context.Context, int),
 ) {
 	if resolution.recorded || len(resolution.sets) == 0 {
 		return
@@ -114,8 +92,8 @@ func takeBuild(
 		}
 	}
 
-	if next, ok := ctx.Value(backlogKey{}).(func(context.Context, int)); ok && waiting > 0 {
-		next(context.WithoutCancel(ctx), waiting)
+	if backlog != nil && waiting > 0 {
+		backlog(context.WithoutCancel(ctx), waiting)
 	}
 }
 
@@ -124,18 +102,19 @@ func takeBuild(
 // fixture can describe, since it cannot know how a backlog is split into
 // runs. For `steps test`, whose cursor never filters, so walking the backlog
 // one claim at a time would build the oldest version forever.
-func BuildEveryVersion(ctx context.Context, job *config.Job, run func(context.Context) error) error {
+func BuildEveryVersion(ctx context.Context, cfg *config.Config, job *config.Job, st store.Store, opts Run) error {
 	builds := &jobBuilds{}
-	ctx = context.WithValue(ctx, jobBuildsKey{}, builds)
+	opts.builds = builds
 
 	var errs []error
 
 	for index := 0; ; index++ {
 		waiting := 0
 
-		runCtx := WithBacklog(withSetIndex(ctx, index), func(_ context.Context, sets int) { waiting = sets })
+		opts.setIndex = index
+		opts.Backlog = func(_ context.Context, sets int) { waiting = sets }
 
-		err := run(runCtx)
+		err := RunJob(ctx, cfg, job, st, opts)
 		if err != nil {
 			errs = append(errs, err)
 		}
@@ -148,8 +127,6 @@ func BuildEveryVersion(ctx context.Context, job *config.Job, run func(context.Co
 	return checkJobAssert(job, &builds.log, errors.Join(errs...))
 }
 
-type jobBuildsKey struct{}
-
 // jobBuilds is what BuildEveryVersion collects across a job's runs.
 type jobBuilds struct {
 	log execLog
@@ -158,9 +135,8 @@ type jobBuilds struct {
 // deferJobAssert hands a run's execution log to the BuildEveryVersion
 // judging it, reporting whether one is: the run then carries its plan's own
 // outcome rather than an assertion over a fraction of what the job did.
-func deferJobAssert(ctx context.Context, log *execLog) bool {
-	builds, ok := ctx.Value(jobBuildsKey{}).(*jobBuilds)
-	if !ok {
+func deferJobAssert(builds *jobBuilds, log *execLog) bool {
+	if builds == nil {
 		return false
 	}
 

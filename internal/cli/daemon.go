@@ -103,7 +103,7 @@ func newDaemon(
 
 	// A parked step's printed command must name any database but the default, which is all the read commands open without --db.
 	if !state.isDefaultDaemonState() {
-		base = pipeline.WithAnswerDB(base, shellArg(state.String()))
+		runner.NameAnswerDB(shellArg(state.String()))
 	}
 
 	return &daemon{

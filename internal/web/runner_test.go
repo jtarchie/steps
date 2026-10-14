@@ -156,7 +156,7 @@ jobs:
 		}
 	}
 
-	runner := NewLocalRunner(map[string]workspace.Provider{"demo": provider}, nil, 2, false)
+	runner := NewLocalRunner(map[string]workspace.Provider{"demo": provider}, pipeline.Run{}, 2)
 
 	done := make(chan struct{})
 
@@ -267,7 +267,7 @@ jobs:
 
 	PrepareQueue(ctx, target)
 
-	runner := NewLocalRunner(map[string]workspace.Provider{"demo": provider}, nil, 1, false)
+	runner := NewLocalRunner(map[string]workspace.Provider{"demo": provider}, pipeline.Run{}, 1)
 
 	// Two failures is the ceiling; the third row proves a paused job is not
 	// run again.
@@ -460,7 +460,7 @@ jobs:
 
 	time.AfterFunc(2*time.Second, cancel) // cancelled, never timed out: DeadlineExceeded is what a step's own timeout: ends in, which is the job answering
 
-	runner := NewLocalRunner(map[string]workspace.Provider{"demo": provider}, nil, 1, false)
+	runner := NewLocalRunner(map[string]workspace.Provider{"demo": provider}, pipeline.Run{}, 1)
 	runner.drainOne(ctx, target)
 
 	rows, err := st.ListTriggerQueue(t.Context(), 10)
@@ -549,7 +549,7 @@ jobs:
 		}
 	}
 
-	plain := NewLocalRunner(map[string]workspace.Provider{"demo": provider}, nil, 1, false)
+	plain := NewLocalRunner(map[string]workspace.Provider{"demo": provider}, pipeline.Run{}, 1)
 	drain(t, plain)
 
 	// Second time through with no force: the content has not changed, so the
@@ -561,7 +561,7 @@ jobs:
 		t.Fatalf("tally = %d lines after two unforced runs, want 1 (the cache is not doing its job, so this test cannot prove anything)", lines)
 	}
 
-	drain(t, NewLocalRunner(map[string]workspace.Provider{"demo": provider}, nil, 1, true))
+	drain(t, NewLocalRunner(map[string]workspace.Provider{"demo": provider}, pipeline.Run{Force: true}, 1))
 
 	if lines := countLines(t, tally); lines != 2 {
 		t.Errorf("tally = %d lines, want 2: --force did not reach the drainer, so the step ran cached", lines)
@@ -626,7 +626,7 @@ jobs:
 	drain := func(force bool) {
 		t.Helper()
 
-		runner := NewLocalRunner(map[string]workspace.Provider{"demo": provider}, nil, 1, force)
+		runner := NewLocalRunner(map[string]workspace.Provider{"demo": provider}, pipeline.Run{Force: force}, 1)
 
 		enqueueErr := st.EnqueueJob(ctx, "build", "test")
 		if enqueueErr != nil {
@@ -956,7 +956,7 @@ func drainable(t *testing.T, dir, yaml string) (*LocalRunner, *Pipeline, store.S
 		t.Fatalf("EnqueueJob: %v", err)
 	}
 
-	return NewLocalRunner(map[string]workspace.Provider{"demo": provider}, nil, 1, false), target, st
+	return NewLocalRunner(map[string]workspace.Provider{"demo": provider}, pipeline.Run{}, 1), target, st
 }
 
 // panicsOnce panics on its first build, the way a bug deep inside RunJob reaches the drain.

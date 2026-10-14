@@ -119,11 +119,11 @@ jobs:
 	// consumed by a failed build is consumed. Re-running one is deliberate and
 	// manual there (concourse/concourse#413) as it is here: --resume, --pin,
 	// or a new version.
-	_ = RunJob(ctx, cfg, job, nil, provider, st, false)
+	_ = RunJob(ctx, cfg, job, st, Run{Provider: provider})
 	assertConformanceLineCount(t, taskCounter, 3)
 
 	// --force skips the cache only; it does not re-open spent versions (#145).
-	_ = RunJob(ctx, cfg, job, nil, provider, st, true)
+	_ = RunJob(ctx, cfg, job, st, Run{Provider: provider, Force: true})
 	assertConformanceLineCount(t, taskCounter, 3)
 }
 
@@ -239,7 +239,7 @@ jobs:
 	for i := range cfg.Jobs {
 		job := &cfg.Jobs[i]
 
-		runErr := RunJob(ctx, cfg, job, nil, provider, st, false)
+		runErr := RunJob(ctx, cfg, job, st, Run{Provider: provider})
 		if runErr != nil {
 			t.Errorf("job %q: RunJob returned %v, want nil", job.Name, runErr)
 		}
@@ -315,7 +315,7 @@ jobs:
 
 	go cancelOnceExists(started, cancel)
 
-	runErr := RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
+	runErr := RunJob(ctx, cfg, &cfg.Jobs[0], st, Run{Provider: provider})
 	if runErr == nil {
 		t.Fatal("RunJob returned nil; want a non-nil error for an aborted run")
 	}
@@ -478,7 +478,7 @@ jobs:
 	for i := range cfg.Jobs {
 		job := &cfg.Jobs[i]
 
-		runErr := RunJob(ctx, cfg, job, nil, provider, st, false)
+		runErr := RunJob(ctx, cfg, job, st, Run{Provider: provider})
 		if runErr != nil {
 			t.Errorf("job %q: RunJob returned %v, want nil", job.Name, runErr)
 		}
@@ -643,7 +643,7 @@ func mustRunEvery(ctx context.Context, t *testing.T, cfg *config.Config, job *co
 		t.Fatal(err)
 	}
 
-	err = RunJob(ctx, cfg, job, nil, provider, st, force)
+	err = RunJob(ctx, cfg, job, st, Run{Provider: provider, Force: force})
 	if err != nil {
 		t.Fatalf("RunJob(force=%v): %v", force, err)
 	}

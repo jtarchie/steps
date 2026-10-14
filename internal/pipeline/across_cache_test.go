@@ -130,7 +130,7 @@ jobs:
 		}
 	})
 
-	err = RunJob(events.WithBus(context.Background(), bus), cfg, &cfg.Jobs[0], nil, m.provider, st, false)
+	err = RunJob(events.WithBus(context.Background(), bus), cfg, &cfg.Jobs[0], st, Run{Provider: m.provider})
 
 	bus.Close()
 

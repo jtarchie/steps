@@ -4,6 +4,7 @@ package pipeline
 // hooks, and report what it spent.
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -27,10 +28,9 @@ import (
 // be worst, and the release has to outlive the cancellation that triggered it.
 const WorkerReleaseTimeout = 15 * time.Minute
 
-// RunJob executes job's plan steps in order. pinned applies to any `get`
-// step's version selection. provider materializes every build/step
-// workspace the run needs — see workspace.Provider; when cfg.Workspace is
-// nil, provider is the shared, single-mutable-directory implementation.
+// RunJob executes job's plan steps in order, as opts describes — see Run;
+// when cfg.Workspace is nil, opts.Provider is the shared,
+// single-mutable-directory implementation.
 //
 // Before executing anything, it statically validates every task/agent/put
 // step's declared inputs (see workspace.ValidateArtifactFlow — always runs, even
@@ -38,9 +38,11 @@ const WorkerReleaseTimeout = 15 * time.Minute
 // (resolving get versions but running nothing), checking the store for chains
 // that already succeeded with identical content so that already-run
 // get/task work can be skipped entirely. put steps are never skipped — see
-// runSteps. skipCache (--force) bypasses only the chain-skip planning and
-// re-runs everything, though results are still recorded as usual.
-func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map[string]string, provider workspace.Provider, st store.Store, skipCache bool) (err error) {
+// runSteps. opts.Force bypasses only the chain-skip planning and re-runs
+// everything, though results are still recorded as usual.
+func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.Store, opts Run) (err error) {
+	provider := opts.Provider
+
 	// A run identifies itself so a failure can be continued rather than
 	// restarted, and so every log line below — including this one — can be
 	// correlated to one invocation. Minted first, before validation or
@@ -48,11 +50,13 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	// run somebody may want to trace.
 	resume := resumeFrom(ctx)
 	if resume == nil {
-		resume = &resumeState{id: NewRunID(), done: map[doneKey]string{}}
+		resume = newRunState(cmp.Or(opts.ID, NewRunID()))
 		ctx = withResume(ctx, resume)
 	}
 
-	skipCache = rerunSkipsCache(ctx, skipCache)
+	resume.rerunOf = opts.RerunOf
+
+	skipCache := rerunSkipsCache(opts)
 
 	// Publish the run's identity where packages that cannot import this one
 	// can still stamp it on their events — internal/agent, tagging every
@@ -60,8 +64,12 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	ctx = events.WithRunID(ctx, resume.id)
 
 	ctx = shell.WithBuildMetadata(ctx, shell.BuildMetadata{
-		RunID: resume.id, JobName: job.Name, PipelineName: cfg.Name, PipelineRevision: cfg.Revision.SHA, URL: externalURL(ctx),
+		RunID: resume.id, JobName: job.Name, PipelineName: cfg.Name, PipelineRevision: cfg.Revision.SHA, URL: opts.ExternalURL,
 	})
+
+	// internal/agent reads these off the context, the same way approval: does.
+	ctx = agent.WithAnswerDB(ctx, opts.AnswerDB)
+	ctx = agent.WithAnswerSeeds(ctx, opts.Answers)
 
 	ctx = withRunLogger(ctx, cfg, resume.id, job.Name)
 
@@ -174,13 +182,13 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 	// invocation past this point, cached or not; they are never hashed or
 	// skipped. Concourse has no job-level hook construct to compare against
 	// (its hooks are step modifiers) — see docs/conformance.md.
-	runErr := runJobPlan(ctx, runner, job, pinned, provider, skipCache)
+	runErr := runJobPlan(ctx, runner, job, opts, skipCache)
 
 	finalErr := runHooks(ctx, runner.scope(fmt.Sprintf("job %q", job.Name)), job.Hooks, runErr)
 
 	// A job assert is the final word: it runs after hooks so the log includes
 	// them. A mismatch fails the job regardless, and is never itself cleared.
-	finalErr = judgeJob(ctx, job, log, finalErr)
+	finalErr = judgeJob(opts.builds, job, log, finalErr)
 	if finalErr != nil {
 		// Keep the workspace on failure rather than destroying it: the files a
 		// step had just written when it failed are the most useful thing to
@@ -208,8 +216,8 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, pinned map
 
 // judgeJob applies the job's assert:, unless BuildEveryVersion is judging it
 // over every run of the job.
-func judgeJob(ctx context.Context, job *config.Job, log *execLog, planErr error) error {
-	if deferJobAssert(ctx, log) {
+func judgeJob(builds *jobBuilds, job *config.Job, log *execLog, planErr error) error {
+	if deferJobAssert(builds, log) {
 		return planErr
 	}
 
@@ -289,10 +297,9 @@ func prepareImages(ctx context.Context, cfg *config.Config, jobName string) erro
 // aggregate outcome that job-level hooks dispatch on. A planning failure
 // classifies as errored (job on_error); a step failure carries whatever
 // classification its producing site marked it with.
-func runJobPlan(
-	ctx context.Context, r stepRunner, job *config.Job, pinned map[string]string,
-	provider workspace.Provider, skipCache bool,
-) error {
+func runJobPlan(ctx context.Context, r stepRunner, job *config.Job, opts Run, skipCache bool) error {
+	pinned := opts.Pinned
+
 	// Whatever triggered this run, its resources are re-checked first — see
 	// refreshResourceHistory. Best-effort by design: the resolution below
 	// builds from recorded history either way.
@@ -309,14 +316,14 @@ func runJobPlan(
 		}
 	}()
 
-	inputs, err := resolveJobInputs(ctx, r.cfg, r.st, job, pinned)
+	inputs, err := resolveJobInputs(ctx, r.cfg, r.st, job, pinned, opts.ReopenTaken)
 	if err != nil {
 		return err
 	}
 
 	cursor, history, cache := inputs.cursor, inputs.history, inputs.cache
 
-	resolution, waiting := oneBuild(ctx, inputs.resolution)
+	resolution, waiting := oneBuild(opts.setIndex, inputs.resolution)
 
 	resolvedSets()
 
@@ -346,7 +353,7 @@ func runJobPlan(
 		return err
 	}
 
-	takeBuild(ctx, r.st, job.Name, cursor, resolution, len(pinned) > 0, waiting)
+	takeBuild(ctx, r.st, job.Name, cursor, resolution, len(pinned) > 0, waiting, opts.Backlog)
 
 	unlock()
 	locked = false
@@ -354,7 +361,7 @@ func runJobPlan(
 	return runSteps(ctx, planWalk{
 		stepRunner:      r,
 		pinned:          pinned,
-		provider:        provider,
+		provider:        opts.Provider,
 		skippable:       skippable,
 		chains:          replay,
 		cache:           cache,
@@ -440,11 +447,11 @@ type jobInputs struct {
 // running the live check while the run read stored versions, so its hashes
 // and verdicts described a run that would never happen.
 func resolveJobInputs(
-	ctx context.Context, cfg *config.Config, st store.Versions, job *config.Job, pinned map[string]string,
+	ctx context.Context, cfg *config.Config, st store.Versions, job *config.Job, pinned map[string]string, reopenTaken bool,
 ) (jobInputs, error) {
 	// --force skips the cache only; the cursor keeps filtering and recording
 	// (#145).
-	cursor, err := loadVersionCursor(ctx, st, job, !takenVersionsReopened(ctx))
+	cursor, err := loadVersionCursor(ctx, st, job, !reopenTaken)
 	if err != nil {
 		return jobInputs{}, fmt.Errorf("job %q: %w", job.Name, err)
 	}

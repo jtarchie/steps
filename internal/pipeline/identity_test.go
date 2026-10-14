@@ -36,7 +36,7 @@ func TestGetStepLogsSayWhichGet(t *testing.T) {
 	slog.SetDefault(slog.New(events.LogHandler(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	err := RunJob(context.Background(), cfg, job, nil, provider, st, false)
+	err := RunJob(context.Background(), cfg, job, st, Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestGetStepIdentityStopsAtTheGet(t *testing.T) {
 	slog.SetDefault(slog.New(events.LogHandler(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	err := RunJob(context.Background(), cfg, job, nil, provider, st, false)
+	err := RunJob(context.Background(), cfg, job, st, Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
 	}
@@ -113,7 +113,7 @@ func captureRun(t *testing.T, pipeline string) string {
 	slog.SetDefault(slog.New(events.LogHandler(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	err := RunJob(context.Background(), cfg, job, nil, provider, st, false)
+	err := RunJob(context.Background(), cfg, job, st, Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
 	}

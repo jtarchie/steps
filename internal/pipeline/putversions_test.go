@@ -59,7 +59,7 @@ jobs:
 
 	runID := NewRunID()
 
-	err := RunJob(WithNewRun(context.Background(), runID), cfg, job, nil, provider, st, false)
+	err := RunJob(context.Background(), cfg, job, st, Run{ID: runID, Provider: provider})
 	if err == nil {
 		t.Fatal("the fragile step passed before it was fixed")
 	}
@@ -78,7 +78,7 @@ jobs:
 
 	resumable.Reuse(workspaceDir)
 
-	_ = captureStdout(t, func() { err = RunJob(ctx, cfg, job, nil, provider, st, false) })
+	_ = captureStdout(t, func() { err = RunJob(ctx, cfg, job, st, Run{Provider: provider}) })
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -127,7 +127,7 @@ jobs:
 	var err error
 
 	_ = captureStdout(t, func() {
-		err = RunJob(WithNewRun(context.Background(), NewRunID()), cfg, job, nil, provider, st, false)
+		err = RunJob(context.Background(), cfg, job, st, Run{ID: NewRunID(), Provider: provider})
 	})
 	if err != nil {
 		t.Fatalf("a get's on_success could not read what it fetched: %v", err)

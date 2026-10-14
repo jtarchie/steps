@@ -343,7 +343,7 @@ func TestManualRunHonorsPassed(t *testing.T) {
 
 	deploy := &cfg.Jobs[1]
 
-	err = pipeline.RunJob(ctx, cfg, deploy, nil, provider, st, false)
+	err = pipeline.RunJob(ctx, cfg, deploy, st, pipeline.Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestManualRunHonorsPassed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = pipeline.RunJob(ctx, cfg, deploy, nil, provider, fresh, false)
+	err = pipeline.RunJob(ctx, cfg, deploy, fresh, pipeline.Run{Provider: provider})
 	if err == nil {
 		t.Error("a manual run with nothing green succeeded; passed: was bypassed")
 	}
@@ -445,13 +445,13 @@ func TestFanOutJobsRecordGreenVersions(t *testing.T) {
 
 	// unit runs and goes green — through the same path a triggered run
 	// takes, with nothing recorded by hand.
-	err = pipeline.RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
+	err = pipeline.RunJob(ctx, cfg, &cfg.Jobs[0], st, pipeline.Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("unit: %v", err)
 	}
 
 	// That alone must be enough for the gate to open.
-	err = pipeline.RunJob(ctx, cfg, &cfg.Jobs[1], nil, provider, st, false)
+	err = pipeline.RunJob(ctx, cfg, &cfg.Jobs[1], st, pipeline.Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("deploy: %v — unit's green run left no record the gate could see", err)
 	}

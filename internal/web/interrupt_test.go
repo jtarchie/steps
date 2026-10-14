@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jtarchie/steps/internal/config"
+	"github.com/jtarchie/steps/internal/pipeline"
 )
 
 // An interrupted run was never a failure verdict, so a task's fix: agent must not be asked to repair it. Not parallel: t.Setenv.
@@ -70,7 +71,7 @@ jobs:
 func TestARunHasNoDeadlineUntilShutdown(t *testing.T) {
 	t.Parallel()
 
-	runner := NewLocalRunner(nil, nil, 1, false)
+	runner := NewLocalRunner(nil, pipeline.Run{}, 1)
 	runner.StopWith(t.Context())
 
 	runCtx, _, end := runner.runContext(t.Context(), "demo", &config.Job{Name: "build"})

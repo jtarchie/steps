@@ -1,56 +1,35 @@
 package pipeline
 
 // Pre-seeded answers, on their way from the command line to the ask_user
-// tool.
-//
-// This file is a pass-through and deliberately nothing more: the seeds are
-// parsed and matched in internal/agent, next to the tool that consumes them,
-// and main reaches that package only through here — the same shape as
-// WithKeepWorkspace.
+// tool. Parsed and matched in internal/agent, next to the tool that consumes
+// them; the CLI reaches that package only through here.
 
 import (
-	"context"
-
 	"github.com/jtarchie/steps/internal/agent"
 )
 
-// WithAnswers attaches --answer seeds to a run's context, parsing each one
-// and refusing the whole set if any is malformed. A seed nobody can read is a
-// question that parks in the middle of an unattended run, which is exactly
-// what the flag was set to prevent.
-func WithAnswers(ctx context.Context, raw []string) (context.Context, error) {
+// AnswerSeed is one parsed --answer.
+type AnswerSeed = agent.AnswerSeed
+
+// ParseAnswers parses --answer seeds for Run.Answers, refusing the whole set
+// if any is malformed. A seed nobody can read is a question that parks in the
+// middle of an unattended run, which is exactly what the flag was set to
+// prevent.
+func ParseAnswers(raw []string) ([]AnswerSeed, error) {
 	if len(raw) == 0 {
-		return ctx, nil
+		return nil, nil
 	}
 
-	seeds := make([]agent.AnswerSeed, 0, len(raw))
+	seeds := make([]AnswerSeed, 0, len(raw))
 
 	for _, entry := range raw {
 		seed, err := agent.ParseAnswerSeed(entry)
 		if err != nil {
-			return ctx, err //nolint:wrapcheck // ParseAnswerSeed's error already names the flag and the value
+			return nil, err //nolint:wrapcheck // ParseAnswerSeed's error already names the flag and the value
 		}
 
 		seeds = append(seeds, seed)
 	}
 
-	return agent.WithAnswerSeeds(ctx, seeds), nil
-}
-
-// WithAnswerDB is agent.WithAnswerDB for main, which reaches agent only through here; approval: reads the same value.
-func WithAnswerDB(ctx context.Context, db string) context.Context {
-	return agent.WithAnswerDB(ctx, db)
-}
-
-type externalURLKey struct{}
-
-// WithExternalURL carries the daemon's address to RunJob, which publishes it to every step as STEPS_URL.
-func WithExternalURL(ctx context.Context, url string) context.Context {
-	return context.WithValue(ctx, externalURLKey{}, url)
-}
-
-func externalURL(ctx context.Context) string {
-	url, _ := ctx.Value(externalURLKey{}).(string)
-
-	return url
+	return seeds, nil
 }

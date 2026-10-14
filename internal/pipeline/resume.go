@@ -32,6 +32,8 @@ type resumeState struct {
 	// only the job's own steps failed: no get keeps its artifact then (see
 	// CheckResumable).
 	refetch bool
+	// rerunOf is the recorded run this one re-runs (Run.RerunOf).
+	rerunOf string
 	// nextStepID mints display-tree ids for this run (see steptree.go).
 	// Atomic because a fan-out block starts its cells concurrently.
 	nextStepID atomic.Int64
@@ -226,9 +228,9 @@ func NewRunID() string {
 	return rand.Text()[:runIDChars]
 }
 
-// WithNewRun fixes the id RunJob gives the run it starts, so a caller can address that run — to abort it — before it exists.
-func WithNewRun(ctx context.Context, id string) context.Context {
-	return withResume(ctx, &resumeState{id: id, done: map[doneKey]string{}})
+// newRunState is a fresh run under id.
+func newRunState(id string) *resumeState {
+	return &resumeState{id: id, done: map[doneKey]string{}}
 }
 
 // runLookup is a run read that can also name the pipeline it read: Meta beside
@@ -323,24 +325,6 @@ func forced(ctx context.Context) bool {
 	return force
 }
 
-// reopenTakenKey types the context value carrying "re-open taken versions".
-type reopenTakenKey struct{}
-
-// WithTakenVersionsReopened makes a run's `version: every` cursor stop
-// filtering, so versions an earlier run already took are fanned out again.
-// Only `steps test` asks: its execution assertions must hold on every rerun
-// against one state file. --force does not imply it (#145) — replaying a
-// resource's history repeats effects the cache never skips.
-func WithTakenVersionsReopened(ctx context.Context) context.Context {
-	return context.WithValue(ctx, reopenTakenKey{}, true)
-}
-
-func takenVersionsReopened(ctx context.Context) bool {
-	reopened, _ := ctx.Value(reopenTakenKey{}).(bool)
-
-	return reopened
-}
-
 // recordRunIdentity writes the row every event, history entry and resume of
 // this run keys on — minting it, or putting an existing one back in flight.
 //
@@ -387,8 +371,8 @@ func recordRunIdentity(
 		return fmt.Errorf("job %q: %w", jobName, err)
 	}
 
-	if rerun := rerunFrom(ctx); rerun != nil {
-		err = st.RecordRunRerun(ctx, resume.id, rerun.of)
+	if resume.rerunOf != "" {
+		err = st.RecordRunRerun(ctx, resume.id, resume.rerunOf)
 		if err != nil {
 			return fmt.Errorf("job %q: %w", jobName, err)
 		}

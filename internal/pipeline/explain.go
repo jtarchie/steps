@@ -43,7 +43,7 @@ func Explain(ctx context.Context, cfg *config.Config, job *config.Job, pinned ma
 	// reports from what is recorded), no cursor lock and no take (a plan takes
 	// nothing), and no narrowing to one build (a plan lists every waiting set,
 	// each of which some later build runs).
-	inputs, err := resolveJobInputs(ctx, cfg, st, job, pinned)
+	inputs, err := resolveJobInputs(ctx, cfg, st, job, pinned, false)
 	if err != nil {
 		return nil, err
 	}

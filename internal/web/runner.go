@@ -43,11 +43,11 @@ const nonInterruptibleGrace = 10 * time.Minute
 // the `steps web` command installs; a read-only server has none.
 type LocalRunner struct {
 	providers *providers
-	// pinned is --pin, the version fields every run this process starts is
-	// held to. A property of the process, not of a request: the operator
-	// pinned the daemon, and a job triggered from the browser is still that
-	// daemon running it.
-	pinned map[string]string
+	// base is what every run this process starts shares — --pin, --force,
+	// --answer, STEPS_URL, the printed answer command's --db. A property of
+	// the process, not of a request: the operator pinned the daemon, and a
+	// job triggered from the browser is still that daemon running it.
+	base pipeline.Run
 	// concurrent bounds how many of one pipeline's queued jobs run at once.
 	// It was `steps web --max-concurrent`, and it is about keeping a daemon
 	// responsive while a slow build runs — serial:/max_in_flight are the
@@ -58,11 +58,9 @@ type LocalRunner struct {
 	slots chan struct{}
 	// active counts claimed builds, which slots cannot: a worker also holds a token for the instant it probes an empty queue.
 	active atomic.Int64
-	// force is --force: every job this process drains ignores the cache,
-	// however it was enqueued. A property of the process like pinned, and
-	// separate from `forced` below, which is one browser request asking for
-	// one run without the cache.
-	force bool
+	// base.Force is --force: every job this process drains ignores the
+	// cache, however it was enqueued. Separate from `forced` below, which is
+	// one browser request asking for one run without the cache.
 	// Only the end of process (StopWith) is a shutdown, the one thing a build that is not interruptible: waits out.
 	process context.Context //nolint:containedctx // a lifetime to compare against, never one a call runs under
 	// A field rather than the constant so a test can shorten it.
@@ -99,7 +97,7 @@ var errAborted = errors.New("aborted on request")
 // NewLocalRunner builds a runner over per-pipeline workspace providers, keyed
 // by pipeline slug. concurrent below 1 means one job at a time.
 func NewLocalRunner(
-	initial map[string]workspace.Provider, pinned map[string]string, concurrent int, force bool,
+	initial map[string]workspace.Provider, base pipeline.Run, concurrent int,
 ) *LocalRunner {
 	if concurrent < 1 {
 		concurrent = 1
@@ -112,13 +110,17 @@ func NewLocalRunner(
 
 	return &LocalRunner{
 		providers:  held,
-		pinned:     pinned,
+		base:       base,
 		concurrent: concurrent,
-		force:      force,
 		grace:      nonInterruptibleGrace,
 		forced:     map[string]bool{},
 		running:    map[runKey]runningBuild{},
 	}
+}
+
+// NameAnswerDB is the --db a parked step's printed answer command needs. Call it before draining.
+func (r *LocalRunner) NameAnswerDB(db string) {
+	r.base.AnswerDB = db
 }
 
 // LimitRuns is --max-runs. Call it before draining; n <= 0 is no limit.
@@ -407,7 +409,7 @@ func (r *LocalRunner) drainOne(ctx context.Context, target *Pipeline) bool {
 	id, jobName := claim.ID, claim.JobName
 
 	// Before anything can finalize the row without running it (a job the config dropped, one the breaker paused), since the claim is what spends a force. A rerun spends none: it skips the cache anyway, and the flag belongs to the job's ordinary row.
-	force := r.force
+	force := r.base.Force
 	if claim.RerunOf == "" {
 		force = r.takeForce(target.Slug, jobName) || force
 	}
@@ -628,27 +630,28 @@ func (r *LocalRunner) runJob(
 		panic(recovered)
 	}()
 
-	runCtx = pipeline.WithNewRun(runCtx, runID)
+	opts := r.base
+	opts.Provider, opts.Force, opts.ID = provider, force, runID
 
 	if trigger.RerunOf != "" {
 		var err error
 
-		runCtx, _, err = pipeline.PrepareRerun(runCtx, target.Store, trigger.RerunOf)
+		opts.RerunOf, _, err = pipeline.PrepareRerun(runCtx, target.Store, trigger.RerunOf)
 		if err != nil {
 			return false, fmt.Errorf("web: %w", err)
 		}
 	}
 
-	// The next version waits on the queue, not in this run — see pipeline.WithBacklog.
-	runCtx = pipeline.WithBacklog(runCtx, func(ctx context.Context, sets int) {
+	// The next version waits on the queue, not in this run — see pipeline.Run.Backlog.
+	opts.Backlog = func(ctx context.Context, sets int) {
 		err := target.Store.EnqueueJob(ctx, job.Name, fmt.Sprintf("%d more version(s) to build", sets))
 		if err != nil {
 			slog.WarnContext(ctx, "web.job.backlog_unqueued", "pipeline", target.Slug, "job", job.Name, "waiting", sets, "error", err)
 		}
-	})
+	}
 
 	runErr := pipeline.RunJob(
-		events.WithBus(runCtx, target.Bus), cfg, job, r.pinned, provider, target.Store, force)
+		events.WithBus(runCtx, target.Bus), cfg, job, target.Store, opts)
 
 	return errors.Is(context.Cause(runCtx), errAborted), runErr
 }

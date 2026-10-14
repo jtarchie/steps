@@ -281,7 +281,7 @@ jobs:
 	for index, logPath := range []string{everyLog, latestLog} {
 		job := &cfg.Jobs[index]
 
-		err = RunJob(context.Background(), cfg, job, nil, provider, st, false)
+		err = RunJob(context.Background(), cfg, job, st, Run{Provider: provider})
 		if err != nil {
 			t.Fatalf("%s: first RunJob: %v", job.Name, err)
 		}
@@ -321,7 +321,7 @@ func explainThenRun(
 
 	before := lines()
 
-	err = RunJob(context.Background(), cfg, job, nil, provider, st, false)
+	err = RunJob(context.Background(), cfg, job, st, Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("%s: RunJob after Explain: %v", job.Name, err)
 	}

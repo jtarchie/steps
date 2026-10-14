@@ -102,7 +102,7 @@ jobs:
 
 			var err error
 
-			_ = captureStdout(t, func() { err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false) })
+			_ = captureStdout(t, func() { err = RunJob(ctx, cfg, &cfg.Jobs[0], st, Run{Provider: provider}) })
 			if !errors.Is(err, venue.ErrEvicted) {
 				t.Fatalf("RunJob = %v, want the eviction", err)
 			}
@@ -137,7 +137,7 @@ jobs:
 
 	var err error
 
-	_ = captureStdout(t, func() { err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false) })
+	_ = captureStdout(t, func() { err = RunJob(ctx, cfg, &cfg.Jobs[0], st, Run{Provider: provider}) })
 	if err == nil {
 		t.Fatal("a step on a reclaimed worker reported success")
 	}

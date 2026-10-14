@@ -159,7 +159,7 @@ func TestBlockNodesRecordAnAbort(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			time.AfterFunc(300*time.Millisecond, cancel)
 
-			if RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false) == nil {
+			if RunJob(ctx, cfg, &cfg.Jobs[0], st, Run{Provider: provider}) == nil {
 				t.Fatal("RunJob returned nil for a cancelled run")
 			}
 

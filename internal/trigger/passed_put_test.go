@@ -62,7 +62,7 @@ jobs:
 
 	t.Cleanup(func() { _ = provider.Close() })
 
-	err = pipeline.RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
+	err = pipeline.RunJob(ctx, cfg, &cfg.Jobs[0], st, pipeline.Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("RunJob build-toolchain: %v", err)
 	}
@@ -196,7 +196,7 @@ jobs:
 
 	t.Cleanup(func() { _ = provider.Close() })
 
-	err = pipeline.RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
+	err = pipeline.RunJob(ctx, cfg, &cfg.Jobs[0], st, pipeline.Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
 	}

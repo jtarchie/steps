@@ -50,7 +50,7 @@ jobs:
 
 	var err error
 
-	_ = captureStdout(t, func() { err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false) })
+	_ = captureStdout(t, func() { err = RunJob(ctx, cfg, &cfg.Jobs[0], st, Run{Provider: provider}) })
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
 	}

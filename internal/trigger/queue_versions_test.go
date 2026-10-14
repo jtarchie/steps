@@ -175,7 +175,7 @@ func runQueued(ctx context.Context, t *testing.T, cfg *config.Config, st store.S
 			t.Fatalf("FindJob: %v", err)
 		}
 
-		runErr := pipeline.RunJob(requeueBacklog(ctx, t, st, jobName), cfg, job, nil, provider, st, false)
+		runErr := pipeline.RunJob(ctx, cfg, job, st, pipeline.Run{Provider: provider, Backlog: requeueBacklog(t, st, jobName)})
 		if runErr != nil && !mayFail {
 			t.Fatalf("%s: %v", jobName, runErr)
 		}
@@ -196,15 +196,15 @@ func runQueued(ctx context.Context, t *testing.T, cfg *config.Config, st store.S
 
 // requeueBacklog queues the job again while versions wait, as the daemon's
 // runner.go does.
-func requeueBacklog(ctx context.Context, t *testing.T, st store.Store, jobName string) context.Context {
+func requeueBacklog(t *testing.T, st store.Store, jobName string) func(context.Context, int) {
 	t.Helper()
 
-	return pipeline.WithBacklog(ctx, func(ctx context.Context, _ int) {
+	return func(ctx context.Context, _ int) {
 		err := st.EnqueueJob(ctx, jobName, "backlog")
 		if err != nil {
 			t.Errorf("EnqueueJob: %v", err)
 		}
-	})
+	}
 }
 
 // runBacklog runs job once per waiting version, as the daemon's queue would,
@@ -214,9 +214,7 @@ func runBacklog(ctx context.Context, t *testing.T, cfg *config.Config, job *conf
 
 	for range 20 {
 		queued := false
-		runCtx := pipeline.WithBacklog(ctx, func(context.Context, int) { queued = true })
-
-		err := pipeline.RunJob(runCtx, cfg, job, nil, provider, st, false)
+		err := pipeline.RunJob(ctx, cfg, job, st, pipeline.Run{Provider: provider, Backlog: func(context.Context, int) { queued = true }})
 		if err != nil {
 			t.Fatalf("RunJob %s: %v", job.Name, err)
 		}

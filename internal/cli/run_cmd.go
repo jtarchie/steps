@@ -39,7 +39,7 @@ type RunCmd struct {
 // because preparing it needs the job's plan to turn --from into a position —
 // see applyReplay, which runs after selectJob.
 func (r *RunCmd) applyContinuation(
-	ctx context.Context, st store.Store, provider workspace.Provider, jobName string,
+	ctx context.Context, st store.Store, provider workspace.Provider, jobName string, opts *pipeline.Run,
 ) (context.Context, string, error) {
 	if r.Resume != "" && r.Replay != "" {
 		return ctx, "", errors.New("--resume and --replay cannot be combined: one continues a failed run in place, the other forks a recorded one from a step you name")
@@ -48,7 +48,7 @@ func (r *RunCmd) applyContinuation(
 	var err error
 
 	if r.Rerun != "" {
-		return r.applyRerun(ctx, st)
+		return r.applyRerun(ctx, st, opts)
 	}
 
 	if r.Resume != "" {
@@ -69,15 +69,17 @@ func (r *RunCmd) applyContinuation(
 }
 
 // applyRerun points this invocation at a recorded run; the job is that run's.
-func (r *RunCmd) applyRerun(ctx context.Context, st store.Store) (context.Context, string, error) {
+func (r *RunCmd) applyRerun(ctx context.Context, st store.Store, opts *pipeline.Run) (context.Context, string, error) {
 	if r.Resume != "" || r.Replay != "" {
 		return ctx, "", errors.New("--rerun cannot be combined with --resume or --replay: it starts a new run from the top")
 	}
 
-	ctx, jobName, err := pipeline.PrepareRerun(ctx, st, r.Rerun)
+	rerunOf, jobName, err := pipeline.PrepareRerun(ctx, st, r.Rerun)
 	if err != nil {
 		return ctx, "", fmt.Errorf("could not rerun: %w", err)
 	}
+
+	opts.RerunOf = rerunOf
 
 	return ctx, jobName, nil
 }
@@ -121,16 +123,17 @@ func (r *RunCmd) Run() error {
 
 	r.HistoryFlags.Apply(cfg)
 
-	ctx, err = r.prepare(ctx, cfg, st)
+	ctx, opts, err := r.prepare(ctx, cfg, st)
 	if err != nil {
 		return err
 	}
 
-	ctx = pipeline.WithAnswerDB(ctx, answerDB(r.Pipeline, r.DB))
+	opts.Provider, opts.Pinned, opts.Force = provider, r.Pin, r.Force
+	opts.AnswerDB = answerDB(r.Pipeline, r.DB)
 
 	jobName := r.Job
 
-	ctx, jobName, err = r.applyContinuation(ctx, st, provider, jobName)
+	ctx, jobName, err = r.applyContinuation(ctx, st, provider, jobName, &opts)
 	if err != nil {
 		return err
 	}
@@ -153,12 +156,12 @@ func (r *RunCmd) Run() error {
 	slog.Info("pipeline.run", "pipeline", r.Pipeline, "job", job.Name)
 
 	// One invocation is one build, as `fly trigger-job` is; the rest wait for the next.
-	ctx = pipeline.WithBacklog(ctx, func(ctx context.Context, sets int) {
+	opts.Backlog = func(ctx context.Context, sets int) {
 		events.Note(ctx, events.NoteInfo, fmt.Sprintf("%d more version(s) of %s waiting; run it again to build the next", sets, job.Name))
-	})
+	}
 
 	ctx, undraw := r.draw(ctx, st)
-	runErr := pipeline.RunJob(ctx, cfg, job, r.Pin, provider, st, r.Force)
+	runErr := pipeline.RunJob(ctx, cfg, job, st, opts)
 
 	undraw()
 
@@ -230,13 +233,13 @@ func (t *TestCmd) Run() error {
 	ctx, cancel := withSignalCancel(context.Background())
 	defer cancel()
 
-	ctx, err = t.prepare(ctx, cfg, st)
+	ctx, opts, err := t.prepare(ctx, cfg, st)
 	if err != nil {
 		return err
 	}
 
-	ctx = pipeline.WithAnswerDB(ctx, answerDB(t.Pipeline, t.DB))
-	ctx = pipeline.WithTakenVersionsReopened(ctx)
+	opts.Provider, opts.Force, opts.ReopenTaken = provider, true, true
+	opts.AnswerDB = answerDB(t.Pipeline, t.DB)
 
 	var (
 		executed []string
@@ -252,9 +255,7 @@ func (t *TestCmd) Run() error {
 		job := &cfg.Jobs[i]
 		executed = append(executed, job.Name)
 
-		jobErr := pipeline.BuildEveryVersion(ctx, job, func(ctx context.Context) error {
-			return pipeline.RunJob(ctx, cfg, job, nil, provider, st, true)
-		})
+		jobErr := pipeline.BuildEveryVersion(ctx, cfg, job, st, opts)
 		if jobErr != nil {
 			_, _ = fmt.Fprintf(events.Stdout(ctx), "FAIL %s: %v\n", job.Name, jobErr)
 

@@ -37,7 +37,7 @@ func TestRunJobLogsCarryTheRunID(t *testing.T) {
 	slog.SetDefault(slog.New(events.LogHandler(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	err := RunJob(context.Background(), cfg, job, nil, provider, st, false)
+	err := RunJob(context.Background(), cfg, job, st, Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestRunJobPublishesRunEvents(t *testing.T) {
 	bus := events.New(func(e events.Event) { collected = append(collected, e) })
 	ctx := events.WithBus(context.Background(), bus)
 
-	err := RunJob(ctx, cfg, job, nil, provider, st, false)
+	err := RunJob(ctx, cfg, job, st, Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestRunJobPublishesRunEvents(t *testing.T) {
 	collected = nil
 	bus2 := events.New(func(e events.Event) { collected = append(collected, e) })
 
-	err = RunJob(events.WithBus(context.Background(), bus2), cfg, job, nil, provider, st, false)
+	err = RunJob(events.WithBus(context.Background(), bus2), cfg, job, st, Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("second RunJob: %v", err)
 	}
@@ -420,7 +420,7 @@ func runFixtureBeside(t *testing.T, yaml string, wantFailure bool, beside func(s
 
 	bus := events.New(func(e events.Event) { collected = append(collected, e) })
 
-	runErr := RunJob(events.WithBus(context.Background(), bus), cfg, job, nil, provider, st, false)
+	runErr := RunJob(events.WithBus(context.Background(), bus), cfg, job, st, Run{Provider: provider})
 
 	bus.Close()
 
@@ -934,7 +934,7 @@ func fixtureRunner(t *testing.T, yaml string) func() []events.Event {
 
 		bus := events.New(func(e events.Event) { collected = append(collected, e) })
 
-		runErr := RunJob(events.WithBus(context.Background(), bus), cfg, job, nil, provider, st, false)
+		runErr := RunJob(events.WithBus(context.Background(), bus), cfg, job, st, Run{Provider: provider})
 
 		bus.Close()
 

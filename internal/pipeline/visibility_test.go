@@ -134,7 +134,7 @@ jobs:
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = RunJob(context.Background(), cfg, &cfg.Jobs[0], nil, provider, st, false)
+		runErr = RunJob(context.Background(), cfg, &cfg.Jobs[0], st, Run{Provider: provider})
 	})
 
 	if runErr != nil {

@@ -53,7 +53,7 @@ jobs:
 
 	t.Setenv("PATH", t.TempDir()) // empty PATH: docker cannot be found
 
-	err = RunJob(ctx, cfg, job, nil, provider, st, false)
+	err = RunJob(ctx, cfg, job, st, Run{Provider: provider})
 	if err == nil {
 		t.Fatal("the unreachable worker was never dialled; this test can no longer tell how far the job got")
 	}

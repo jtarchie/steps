@@ -52,7 +52,7 @@ jobs:
 		t.Fatalf("RecordRevision: %v", err)
 	}
 
-	err = RunJob(context.Background(), cfg, job, nil, provider, st, false)
+	err = RunJob(context.Background(), cfg, job, st, Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
 	}
@@ -107,7 +107,7 @@ jobs:
 		t.Fatalf("Prune: %v", err)
 	}
 
-	err = RunJob(context.Background(), cfg, job, nil, provider, st, false)
+	err = RunJob(context.Background(), cfg, job, st, Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("RunJob: %v", err)
 	}

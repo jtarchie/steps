@@ -60,7 +60,7 @@ func (f *putFixture) run(ctx context.Context) error {
 		return fmt.Errorf("finding job: %w", err)
 	}
 
-	return RunJob(ctx, f.cfg, j, nil, f.provider, f.st, false)
+	return RunJob(ctx, f.cfg, j, f.st, Run{Provider: f.provider})
 }
 
 func (f *putFixture) passed(t *testing.T, job string) map[string]bool {

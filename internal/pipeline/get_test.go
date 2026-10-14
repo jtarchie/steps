@@ -47,7 +47,7 @@ jobs:
 	defer func() { _ = st.Close() }()
 	defer func() { _ = provider.Close() }()
 
-	err := RunJob(WithNewRun(context.Background(), NewRunID()), cfg, job, nil, provider, st, false)
+	err := RunJob(context.Background(), cfg, job, st, Run{ID: NewRunID(), Provider: provider})
 	if err != nil {
 		t.Fatalf("unpinned run: %v", err)
 	}
@@ -60,7 +60,7 @@ jobs:
 	pin := map[string]string{"n": "v1"}
 	runID := NewRunID()
 
-	err = RunJob(WithNewRun(context.Background(), runID), cfg, job, pin, provider, st, false)
+	err = RunJob(context.Background(), cfg, job, st, Run{ID: runID, Provider: provider, Pinned: pin})
 	if err == nil {
 		t.Fatal("the pinned run passed before it was fixed")
 	}
@@ -79,7 +79,7 @@ jobs:
 
 	resumable.Reuse(workspaceDir)
 
-	out := captureStdout(t, func() { err = RunJob(ctx, cfg, job, pin, provider, st, false) })
+	out := captureStdout(t, func() { err = RunJob(ctx, cfg, job, st, Run{Provider: provider, Pinned: pin}) })
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestAnUnrecordedBuildTreeIsLogged(t *testing.T) {
 	logged := captureSlog(t)
 
 	w := &planWalk{stepRunner: stepRunner{cfg: &config.Config{}, st: resumeRuns{err: os.ErrPermission}}}
-	w.pointRunAt(WithNewRun(context.Background(), "r-9"), "/tmp/build")
+	w.pointRunAt(withResume(context.Background(), newRunState("r-9")), "/tmp/build")
 
 	if line := logged.String(); !strings.Contains(line, "msg=job.run_workspace_unrecorded") || !strings.Contains(line, "run=r-9") {
 		t.Errorf("logged %q, want job.run_workspace_unrecorded naming the run", line)
@@ -120,7 +120,7 @@ func TestAnUnrecordedBuildTreeIsLogged(t *testing.T) {
 	logged.Reset()
 
 	w.st = resumeRuns{}
-	w.pointRunAt(WithNewRun(context.Background(), "r-9"), "/tmp/build")
+	w.pointRunAt(withResume(context.Background(), newRunState("r-9")), "/tmp/build")
 
 	if logged.Len() != 0 {
 		t.Errorf("a recorded tree logged %q", logged.String())

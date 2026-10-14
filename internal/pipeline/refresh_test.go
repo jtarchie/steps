@@ -78,7 +78,7 @@ func runBuild(ctx context.Context, t *testing.T, cfg *config.Config, st store.St
 		t.Fatal(err)
 	}
 
-	return RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
+	return RunJob(ctx, cfg, &cfg.Jobs[0], st, Run{Provider: provider})
 }
 
 // TestRunRefreshesResourceHistory is the requirement in one scene: whatever
@@ -411,12 +411,12 @@ jobs:
 		t.Fatal(err)
 	}
 
-	err = RunJob(ctx, cfg, &cfg.Jobs[0], nil, provider, st, false)
+	err = RunJob(ctx, cfg, &cfg.Jobs[0], st, Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("RunJob(build): %v", err)
 	}
 
-	err = RunJob(ctx, cfg, &cfg.Jobs[1], nil, provider, st, false)
+	err = RunJob(ctx, cfg, &cfg.Jobs[1], st, Run{Provider: provider})
 	if err != nil {
 		t.Fatalf("RunJob(deploy): %v", err)
 	}
@@ -569,7 +569,7 @@ jobs:
 
 	runID := NewRunID()
 
-	err := RunJob(WithNewRun(context.Background(), runID), cfg, job, nil, provider, st, false)
+	err := RunJob(context.Background(), cfg, job, st, Run{ID: runID, Provider: provider})
 	if err == nil {
 		t.Fatal("the fragile step passed before it was fixed")
 	}
@@ -588,7 +588,7 @@ jobs:
 
 	resumable.Reuse(workspaceDir)
 
-	out := captureStdout(t, func() { err = RunJob(ctx, cfg, job, nil, provider, st, false) })
+	out := captureStdout(t, func() { err = RunJob(ctx, cfg, job, st, Run{Provider: provider}) })
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -662,7 +662,7 @@ func TestRunDoesNotRegressResolvedVersionOnAPinnedRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = RunJob(ctx, cfg, &cfg.Jobs[0], map[string]string{"n": "v1"}, provider, st, false)
+	err = RunJob(ctx, cfg, &cfg.Jobs[0], st, Run{Provider: provider, Pinned: map[string]string{"n": "v1"}})
 	if err != nil {
 		t.Fatalf("RunJob (pinned v1): %v", err)
 	}
