@@ -51,6 +51,23 @@ func (s *Store) DeleteStepEvents(ctx context.Context, runID string, stepID int64
 	return nil
 }
 
+// MaxStepID is joined to runs for the pipeline, as RunEvents is.
+func (s *Store) MaxStepID(ctx context.Context, runID string) (int64, error) {
+	var id int64
+
+	err := s.reads.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX(e.step_id), 0)
+		FROM run_events e
+		JOIN runs r ON r.id = e.run_id
+		WHERE e.run_id = ? AND r.pipeline_id = ?
+	`, runID, s.pipelineID).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("could not read the step ids of run %q: %w", runID, err)
+	}
+
+	return id, nil
+}
+
 // RunEvents replays a run's events in order, from afterSeq exclusive. Pass 0
 // for the whole run — which is also how a reconnecting live view catches up
 // on what it missed without re-reading what it already has.

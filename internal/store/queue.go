@@ -29,6 +29,7 @@ type Queue interface {
 	// ResetStaleRunning reclaims every running row as an abandoned leftover.
 	// It is only true when nothing else is alive, which is why steps runs one
 	// daemon per database.
+	// A row whose run is still running goes back to pending carrying that run (ClaimedJob.Resume); a row whose run already finished is closed with the run's status, so a run somebody aborted is never built again.
 	ResetStaleRunning(ctx context.Context) error
 	ListTriggerQueue(ctx context.Context, limit int) ([]QueueRow, error)
 	// SyncJobLimits replaces both admission mirrors from one configuration, in
@@ -54,6 +55,8 @@ type ClaimedJob struct {
 	// RerunOf is the run this one retries against the versions it was
 	// created with, empty for any other trigger.
 	RerunOf string
+	// Resume is the run a restart interrupted, which this claim continues rather than starting a new one; empty for any other trigger.
+	Resume string
 }
 
 // QueueRow is one entry in the downstream-trigger queue.

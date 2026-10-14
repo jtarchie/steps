@@ -46,23 +46,36 @@ func scanRunRowFrom(rows *sql.Rows) (store.RunRow, error) { return scanRunRow(ro
 func (s *Store) StartRun(ctx context.Context, run store.NewRun) error {
 	id, jobName, workspaceDir, configSHA := run.ID, run.JobName, run.Workspace, run.ConfigSHA
 
-	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO runs (id, pipeline_id, job_name, workspace, status, started_at, revision_id)
-		VALUES ($1, $2, $3, $4, 'running', $5,
-		        (SELECT id FROM pipeline_revisions WHERE pipeline_id = $2 AND sha = $6))
-		ON CONFLICT (id) DO NOTHING
-	`, id, s.pipelineID, jobName, clean(workspaceDir), now(), configSHA)
+	err := inTx(ctx, s.db, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, `
+			INSERT INTO runs (id, pipeline_id, job_name, workspace, status, started_at, revision_id)
+			VALUES ($1, $2, $3, $4, 'running', $5,
+			        (SELECT id FROM pipeline_revisions WHERE pipeline_id = $2 AND sha = $6))
+			ON CONFLICT (id) DO NOTHING
+		`, id, s.pipelineID, jobName, clean(workspaceDir), now(), configSHA)
+		if err != nil {
+			return err //nolint:wrapcheck // wrapped below, naming the run
+		}
+
+		inserted, err := result.RowsAffected()
+		if err != nil {
+			return err //nolint:wrapcheck // wrapped below, naming the run
+		}
+
+		if inserted == 0 {
+			return store.ErrRunExists
+		}
+
+		if run.QueueID == 0 {
+			return nil
+		}
+
+		_, err = tx.ExecContext(ctx, `UPDATE trigger_queue SET run_id = $1 WHERE id = $2 AND pipeline_id = $3`, id, run.QueueID, s.pipelineID)
+
+		return err //nolint:wrapcheck // wrapped below, naming the run
+	})
 	if err != nil {
 		return fmt.Errorf("could not record run %q: %w", id, err)
-	}
-
-	inserted, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("could not record run %q: %w", id, err)
-	}
-
-	if inserted == 0 {
-		return fmt.Errorf("%w: %q", store.ErrRunExists, id)
 	}
 
 	return nil
@@ -72,7 +85,7 @@ func (s *Store) StartRun(ctx context.Context, run store.NewRun) error {
 // recorded configuration when the sha names none.
 func (s *Store) ResumeRun(ctx context.Context, id, workspaceDir, configSHA string) error {
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE runs SET status = 'running', workspace = $1,
+		UPDATE runs SET status = 'running', workspace = $1, finished_at = NULL,
 		       revision_id = COALESCE((SELECT id FROM pipeline_revisions WHERE pipeline_id = $2 AND sha = $3), revision_id)
 		WHERE id = $4 AND pipeline_id = $2
 	`, clean(workspaceDir), s.pipelineID, configSHA, id)
@@ -154,6 +167,19 @@ func (s *Store) CompletedRunSteps(ctx context.Context, runID string) ([]store.Ru
 
 			return one, rows.Scan(&one.BuildID, &one.Index, &one.Name)
 		})
+}
+
+// ResumableRuns is every run of this pipeline still recorded running, or that a queue row still waits to resume.
+func (s *Store) ResumableRuns(ctx context.Context) ([]store.RunRow, error) {
+	return collect(ctx, s.db, "runs", `
+		SELECT `+runColumns+`
+		FROM runs
+		WHERE pipeline_id = $1 AND (status = 'running' OR id IN (
+		    SELECT run_id FROM trigger_queue
+		    WHERE pipeline_id = $1 AND status IN ('pending', 'running') AND run_id IS NOT NULL
+		))
+		ORDER BY started_at, seq
+	`, []any{s.pipelineID}, scanRunRowFrom)
 }
 
 // ListRuns returns run invocations, newest first. An empty jobName covers

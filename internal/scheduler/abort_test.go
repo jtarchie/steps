@@ -44,6 +44,7 @@ func TestAbortFinalizesTheRunItStopped(t *testing.T) {
 	}
 
 	assertStoppedCleanly(t, st)
+	assertRunStatus(t, st, runID, store.RunAborted)
 
 	if runner.Abort(target, runID) {
 		t.Error("an ended run could still be aborted: its cancel outlived it")

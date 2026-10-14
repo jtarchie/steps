@@ -58,6 +58,23 @@ func (s *Store) DeleteStepEvents(ctx context.Context, runID string, stepID int64
 	return nil
 }
 
+// MaxStepID is the highest step id a run's events carry, 0 for none.
+func (s *Store) MaxStepID(ctx context.Context, runID string) (int64, error) {
+	var id int64
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX(e.step_id), 0)
+		FROM run_events e
+		JOIN runs r ON r.id = e.run_id
+		WHERE e.run_id = $1 AND r.pipeline_id = $2
+	`, runID, s.pipelineID).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("could not read the step ids of run %q: %w", runID, describe(err))
+	}
+
+	return id, nil
+}
+
 // RunEvents replays a run's events in order, from afterSeq exclusive.
 func (s *Store) RunEvents(ctx context.Context, runID string, afterSeq int64, limit int) ([]store.RunEventRow, error) {
 	return collect(ctx, s.db, "run events", `

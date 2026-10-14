@@ -32,7 +32,7 @@ func enqueueJob(ctx context.Context, db executor, pipelineID int64, jobName, rea
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO trigger_queue (pipeline_id, job_name, reason, status, enqueued_at)
 		VALUES (?, ?, ?, 'pending', ?)
-		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL DO NOTHING
+		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL DO NOTHING
 	`, pipelineID, jobName, reason, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
@@ -46,7 +46,7 @@ func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason string) er
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO trigger_queue (pipeline_id, job_name, reason, manual, status, enqueued_at)
 		VALUES (?, ?, ?, 1, 'pending', ?)
-		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL DO UPDATE SET manual = 1, reason = excluded.reason
+		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL DO UPDATE SET manual = 1, reason = excluded.reason
 	`, s.pipelineID, jobName, reason, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not enqueue job %q: %w", jobName, err)
@@ -60,7 +60,7 @@ func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID stri
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO trigger_queue (pipeline_id, job_name, reason, manual, rerun_of, status, enqueued_at)
 		VALUES (?, ?, ?, 1, ?, 'pending', ?)
-		ON CONFLICT (pipeline_id, rerun_of) WHERE status = 'pending' AND rerun_of IS NOT NULL DO NOTHING
+		ON CONFLICT (pipeline_id, rerun_of) WHERE status = 'pending' AND rerun_of IS NOT NULL AND run_id IS NULL DO NOTHING
 	`, s.pipelineID, jobName, reason, runID, nowNano())
 	if err != nil {
 		return fmt.Errorf("could not queue a rerun of %q: %w", runID, err)
@@ -90,6 +90,7 @@ func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error
 	var (
 		claim   store.ClaimedJob
 		rerun   sql.NullString
+		resume  sql.NullString
 		pending bool
 	)
 
@@ -134,8 +135,8 @@ func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error
 			  )
 			ORDER BY tq.id LIMIT 1
 		)
-		RETURNING id, job_name, manual, rerun_of
-	`, nowNano(), s.pipelineID).Scan(&claim.ID, &claim.JobName, &claim.Manual, &rerun)
+		RETURNING id, job_name, manual, rerun_of, run_id
+	`, nowNano(), s.pipelineID).Scan(&claim.ID, &claim.JobName, &claim.Manual, &rerun, &resume)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.ClaimedJob{}, false, nil
 	}
@@ -145,6 +146,7 @@ func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error
 	}
 
 	claim.RerunOf = rerun.String
+	claim.Resume = resume.String
 
 	return claim, true, nil
 }
@@ -223,18 +225,34 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 
 	defer func() { _ = tx.Rollback() }()
 
+	// A row whose run already ended outlived it only because the process died between the two writes: the run's word is final, and re-queuing it would build again what finished, or what somebody aborted. Ended SINCE this claim: a resume's run reads aborted from the last restart until its claim gets as far as ResumeRun, and a process dying before that is an interruption, not an outcome.
+	_, err = tx.ExecContext(ctx, `
+		UPDATE trigger_queue
+		SET status = (SELECT r.status FROM runs AS r WHERE r.id = trigger_queue.run_id AND r.pipeline_id = trigger_queue.pipeline_id),
+		    finished_at = ?
+		WHERE pipeline_id = ? AND status = 'running'
+		  AND run_id IN (
+		      SELECT id FROM runs
+		      WHERE pipeline_id = ? AND status <> 'running' AND finished_at >= trigger_queue.started_at
+		  )
+	`, nowNano(), s.pipelineID, s.pipelineID)
+	if err != nil {
+		return fmt.Errorf("could not close finished running jobs: %w", err)
+	}
+
+	// Every running row left with a run is one this restart resumes, each its own build; the rules below are for rows that never got as far as a run.
 	// A running row superseded by a pending one is simply dropped: both mean
 	// "run this job", and the pending one is the later word. Nothing is lost
 	// with it, because the row no longer carries the work — what the job
 	// builds is read from resource_versions when it runs.
 	_, err = tx.ExecContext(ctx, `
 		DELETE FROM trigger_queue
-		WHERE pipeline_id = ? AND status = 'running'
+		WHERE pipeline_id = ? AND status = 'running' AND run_id IS NULL
 		  AND EXISTS (
 		      SELECT 1 FROM trigger_queue AS p
 		      WHERE p.pipeline_id = trigger_queue.pipeline_id
 		        AND p.job_name = trigger_queue.job_name AND p.status = 'pending'
-		        AND p.rerun_of IS trigger_queue.rerun_of
+		        AND p.rerun_of IS trigger_queue.rerun_of AND p.run_id IS NULL
 		  )
 	`, s.pipelineID)
 	if err != nil {
@@ -247,9 +265,9 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 	// collapse into one — which is right: the job needs to run, not to run N times.
 	_, err = tx.ExecContext(ctx, `
 		DELETE FROM trigger_queue
-		WHERE pipeline_id = ? AND status = 'running' AND rowid NOT IN (
+		WHERE pipeline_id = ? AND status = 'running' AND run_id IS NULL AND rowid NOT IN (
 			SELECT MIN(rowid) FROM trigger_queue
-			WHERE pipeline_id = ? AND status = 'running' GROUP BY job_name, rerun_of
+			WHERE pipeline_id = ? AND status = 'running' AND run_id IS NULL GROUP BY job_name, rerun_of
 		)
 	`, s.pipelineID, s.pipelineID)
 	if err != nil {
@@ -268,6 +286,7 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 	// process is gone, and left running it draws a live build forever.
 	// aborted is what the same process would have written had it been
 	// stopped gently rather than killed.
+	// A resumed run is put back in flight by ResumeRun once its claim starts it; closed until then, so a resume that never starts (the job left the pipeline, somebody aborted the queued row) leaves no spinner behind.
 	_, err = tx.ExecContext(ctx, `
 		UPDATE runs SET status = 'aborted', finished_at = ?
 		WHERE pipeline_id = ? AND status = 'running'

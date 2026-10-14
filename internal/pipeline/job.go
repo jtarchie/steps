@@ -130,7 +130,7 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 	ctx, closeBus := attachEventBus(ctx, st)
 	defer closeBus()
 
-	err = recordRunIdentity(ctx, st, resume, job.Name, bw.Root(), cfg.Revision)
+	err = recordRunIdentity(ctx, st, resume, job.Name, bw.Root(), cfg.Revision, opts.QueueID)
 	if err != nil {
 		return err
 	}
@@ -187,7 +187,9 @@ func RunJob(ctx context.Context, cfg *config.Config, job *config.Job, st store.S
 		// Keep the workspace on failure rather than destroying it: the files a
 		// step had just written when it failed are the most useful thing to
 		// look at, and they are what a resume continues from.
-		_ = st.FinishRun(context.WithoutCancel(ctx), resume.id, failedStatus(ctx, finalErr))
+		if !interruptedByShutdown(ctx, opts, finalErr) {
+			_ = st.FinishRun(context.WithoutCancel(ctx), resume.id, failedStatus(ctx, finalErr))
+		}
 
 		publishJobFinished(ctx, job.Name, jobStarted, finalErr)
 		reportResumable(ctx, resume.id, bw)
@@ -216,6 +218,11 @@ func judgeJob(builds *jobBuilds, job *config.Job, log *execLog, planErr error) e
 	}
 
 	return checkJobAssert(job, log, planErr)
+}
+
+// interruptedByShutdown leaves the run running for the restart to resume: a deploy stopping the daemon is not the build's outcome, as Concourse's build tracker picks an orphaned build back up.
+func interruptedByShutdown(ctx context.Context, opts Run, err error) bool {
+	return opts.Interrupted != nil && outcome.Classify(ctx, err) == outcome.Aborted && opts.Interrupted()
 }
 
 // failedStatus is Concourse's split: somebody stopping a build is not the build saying no, and a reader deciding whether to look for a bug has to tell them apart.

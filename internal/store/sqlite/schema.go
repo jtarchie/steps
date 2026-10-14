@@ -10,6 +10,8 @@ package sqlite
 // It is a detector, not a migration counter. There is still no upgrade path
 // and deliberately so; the answer to a mismatch remains deleting the file.
 //
+// 21 added trigger_queue.run_id, the run a claimed row started, which is what a restart resumes; the pending indexes now leave such a row out, so an older file would refuse the second pending row a resume needs.
+//
 // 20 added agent_usage.step_id, which joins a hook's or fix's spend to the
 // row the run page draws it on; neither has a node to join by.
 //
@@ -87,7 +89,7 @@ package sqlite
 // 3 added run_placements. An older database opened without it and every
 // INSERT naming it failed — and the run-event sink only warns, so the build
 // went green having recorded nothing.
-const schemaVersion = 20
+const schemaVersion = 21
 
 const schema = `
 -- Which pipelines this database holds. One state file may carry several (see
@@ -296,6 +298,8 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
     -- CASCADE because a queued retry of a reaped run has no versions left to
     -- rebuild against.
     rerun_of    TEXT REFERENCES runs(id) ON DELETE CASCADE,
+    -- The run this row started, written when the run is minted; a restart resumes it while it still reads running. SET NULL: a reaped run leaves nothing to resume, and the row still says the job was built.
+    run_id      TEXT REFERENCES runs(id) ON DELETE SET NULL,
     status      TEXT NOT NULL,
     enqueued_at TEXT NOT NULL,
     started_at  TEXT,
@@ -305,12 +309,13 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
 -- At most one pending row per job at a time; a running row isn't covered,
 -- so a version change mid-run still enqueues a fresh pending row for after.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_job
-    ON trigger_queue(pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL;
+    ON trigger_queue(pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL;
 -- A retry builds different versions from the job's ordinary trigger, so it is
 -- its own pending row; the same retry asked twice is still one.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_rerun
-    ON trigger_queue(pipeline_id, rerun_of) WHERE status = 'pending' AND rerun_of IS NOT NULL;
+    ON trigger_queue(pipeline_id, rerun_of) WHERE status = 'pending' AND rerun_of IS NOT NULL AND run_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_trigger_queue_rerun_of ON trigger_queue(rerun_of);
+CREATE INDEX IF NOT EXISTS idx_trigger_queue_run ON trigger_queue(run_id);
 -- ClaimNextJob counts a job's running rows once per pending row, and a held-back job retries that claim every drain tick; unindexed, each count scanned every pipeline's history. The partial index above cannot serve it, nor the pipeline cascade.
 CREATE INDEX IF NOT EXISTS idx_trigger_queue_job_status ON trigger_queue(pipeline_id, job_name, status);
 

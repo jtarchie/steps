@@ -37,4 +37,8 @@ func (p unsupportedBtrfsProvider) Probe() error { return p.Validate() }
 // Reuse is unreachable: Validate refuses before any run starts.
 func (unsupportedBtrfsProvider) Reuse(string) {}
 
+func (p unsupportedBtrfsProvider) Resuming(string) Provider { return p }
+
+func (unsupportedBtrfsProvider) Spare([]string) {}
+
 func (unsupportedBtrfsProvider) AttachArtifactStore(BlobStore, StepIndex) bool { return false }

@@ -72,7 +72,14 @@ func scanRunRow(sc rowScanner) (store.RunRow, error) {
 func (s *Store) StartRun(ctx context.Context, run store.NewRun) error {
 	id, jobName, workspaceDir, configSHA := run.ID, run.JobName, run.Workspace, run.ConfigSHA
 
-	result, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("could not record run %q: %w", id, err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO runs (id, pipeline_id, job_name, workspace, status, started_at, revision_id)
 		VALUES (?, ?, ?, ?, 'running', ?, `+revisionBySHA+`)
 		ON CONFLICT (id) DO NOTHING
@@ -91,6 +98,19 @@ func (s *Store) StartRun(ctx context.Context, run store.NewRun) error {
 
 	if inserted == 0 {
 		return fmt.Errorf("%w: %q", store.ErrRunExists, id)
+	}
+
+	// In the same transaction: a run its row does not name is one a restart cannot resume, and would start over.
+	if run.QueueID != 0 {
+		_, err = tx.ExecContext(ctx, `UPDATE trigger_queue SET run_id = ? WHERE id = ? AND pipeline_id = ?`, id, run.QueueID, s.pipelineID)
+		if err != nil {
+			return fmt.Errorf("could not record run %q on its queue row: %w", id, err)
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("could not record run %q: %w", id, err)
 	}
 
 	return nil
@@ -122,7 +142,7 @@ func (s *Store) StartRun(ctx context.Context, run store.NewRun) error {
 // the old one.
 func (s *Store) ResumeRun(ctx context.Context, id, workspaceDir, configSHA string) error {
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE runs SET status = 'running', workspace = ?,
+		UPDATE runs SET status = 'running', workspace = ?, finished_at = NULL,
 		                revision_id = COALESCE(`+revisionBySHA+`, revision_id)
 		WHERE id = ? AND pipeline_id = ?
 	`, workspaceDir, s.pipelineID, configSHA, id, s.pipelineID)
@@ -225,6 +245,19 @@ func (s *Store) CompletedRunSteps(ctx context.Context, runID string) ([]store.Ru
 
 			return one, rows.Scan(&one.BuildID, &one.Index, &one.Name)
 		})
+}
+
+// ResumableRuns is read before the restart closes them, so the sweep knows whose tree to keep.
+func (s *Store) ResumableRuns(ctx context.Context) ([]store.RunRow, error) {
+	return collect(ctx, s.reads, "runs", `
+		SELECT `+runColumns+`
+		FROM runs
+		WHERE pipeline_id = ? AND (status = 'running' OR id IN (
+		    SELECT run_id FROM trigger_queue
+		    WHERE pipeline_id = ? AND status IN ('pending', 'running') AND run_id IS NOT NULL
+		))
+		ORDER BY started_at, rowid
+	`, []any{s.pipelineID, s.pipelineID}, scanRunRowFrom)
 }
 
 // ListRuns returns run invocations, newest first. An empty jobName covers

@@ -252,7 +252,7 @@ type runLookup interface {
 // distinction is the whole feature. An agent step is not repeatable, so
 // re-running it does not reproduce the reviewed output — it produces a
 // different one, which makes a restart lossy as well as expensive.
-func PrepareResume(ctx context.Context, st runLookup, runID string) (context.Context, string, error) {
+func PrepareResume(ctx context.Context, st resumeLookup, runID string) (context.Context, string, error) {
 	run, err := findRun(ctx, st, runID)
 	if err != nil {
 		return ctx, "", err
@@ -263,9 +263,25 @@ func PrepareResume(ctx context.Context, st runLookup, runID string) (context.Con
 		return ctx, "", err //nolint:wrapcheck // CompletedRunSteps already names the run
 	}
 
+	minted, err := st.MaxStepID(ctx, runID)
+	if err != nil {
+		return ctx, "", err //nolint:wrapcheck // MaxStepID already names the run
+	}
+
 	slog.InfoContext(ctx, "run.resume", "run", runID, "job", run.JobName, "completed_steps", len(done))
 
-	return withResume(ctx, &resumeState{id: runID, done: foldRunSteps(done), resuming: true}), run.Workspace, nil
+	state := &resumeState{id: runID, done: foldRunSteps(done), resuming: true}
+
+	// Past every id the earlier attempts minted: the run page folds rows by id, so a reused one draws this attempt's step inside that one's.
+	state.nextStepID.Store(minted)
+
+	return withResume(ctx, state), run.Workspace, nil
+}
+
+// resumeLookup is what PrepareResume reads: the run, and the ids its events already carry.
+type resumeLookup interface {
+	runLookup
+	store.Events
 }
 
 // ResumeJobName is the job a recorded run belongs to, so `--resume` alone
@@ -346,7 +362,7 @@ func forced(ctx context.Context) bool {
 // is the only one that records none. The upsert is idempotent, so the common
 // case pays one statement against a row that is already there.
 func recordRunIdentity(
-	ctx context.Context, st store.Store, resume *resumeState, jobName, workspaceRoot string, revision config.Revision,
+	ctx context.Context, st store.Store, resume *resumeState, jobName, workspaceRoot string, revision config.Revision, queueID int64,
 ) error {
 	if revision.Recorded() {
 		err := st.RecordRevision(ctx, revision.SHA, revision.Source, revision.Includes)
@@ -364,7 +380,7 @@ func recordRunIdentity(
 		return nil
 	}
 
-	err := st.StartRun(ctx, store.NewRun{ID: resume.id, JobName: jobName, Workspace: workspaceRoot, ConfigSHA: revision.SHA})
+	err := st.StartRun(ctx, store.NewRun{ID: resume.id, JobName: jobName, Workspace: workspaceRoot, ConfigSHA: revision.SHA, QueueID: queueID})
 	if err != nil {
 		return fmt.Errorf("job %q: %w", jobName, err)
 	}

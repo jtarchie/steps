@@ -44,6 +44,8 @@ type daemon struct {
 	served map[string]*servedPipeline
 	// The durable workspace roots this process has swept; see sweptRoot.
 	swept map[string]bool
+	// spared is every tree a run interrupted by the last process left, which the sweep must not take before the restart resumes it: read for every pipeline before any is restored, since pipelines may share a root.
+	spared []string
 	// releaseWorkers gives back what the shared registry still keeps warm; Close runs it after every loop that could hold a machine is gone.
 	releaseWorkers func()
 	// Embedded so the daemon IS a web.Authorizer, which is how the server finds one; see daemon_login.go and daemon_mcp.go.
@@ -159,6 +161,8 @@ func (d *daemon) load(ctx context.Context) error {
 		return fmt.Errorf("web: could not read %s: %w", d.state, closeErr)
 	}
 
+	d.spared = interruptedTrees(ctx, d.state, rows)
+
 	for _, row := range rows {
 		// Recorded by a `steps run` against this file rather than set into this daemon: history worth keeping, and no configuration to serve.
 		if row.CurrentSHA == "" {
@@ -179,6 +183,38 @@ func (d *daemon) load(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// interruptedTrees is the workspace of every run still recorded running, which a restart resumes. Best-effort: a tree it cannot name is swept, and that run is built again from the top.
+//
+//nolint:contextcheck // opening and closing a store take none
+func interruptedTrees(ctx context.Context, state State, rows []store.PipelineRow) []string {
+	var trees []string
+
+	for _, row := range rows {
+		st, err := openState(state, row.Name)
+		if err != nil {
+			slog.WarnContext(ctx, "web.interrupted_unread", "pipeline", row.Name, "error", err)
+
+			continue
+		}
+
+		runs, err := st.ResumableRuns(ctx)
+
+		release(st)
+
+		if err != nil {
+			slog.WarnContext(ctx, "web.interrupted_unread", "pipeline", row.Name, "error", err)
+
+			continue
+		}
+
+		for _, run := range runs {
+			trees = append(trees, run.Workspace)
+		}
+	}
+
+	return trees
 }
 
 // restore serves a pipeline from the database, which after a restart is the only copy of it there is.
@@ -439,6 +475,8 @@ func (d *daemon) provider(cfg *config.Config, st store.Store) (workspace.Provide
 		if swept {
 			return provider.Probe()
 		}
+
+		provider.Spare(d.spared)
 
 		err := provider.Validate()
 		if err == nil && root != "" {

@@ -50,6 +50,10 @@ type Run struct {
 	// ExternalURL is the daemon's address, published to every step as
 	// STEPS_URL.
 	ExternalURL string
+	// QueueID is the daemon's queue row this run was claimed from, recorded with the run so a restart can resume it; zero for a run no queue started.
+	QueueID int64
+	// Interrupted reports that the run was cancelled because its process is going down, not because anybody stopped it: the run is left running for the next start to resume rather than closed aborted. Nil for a run nothing resumes.
+	Interrupted func() bool
 
 	// setIndex builds the index-th waiting set instead of the oldest, and
 	// builds hands the job assert to the BuildEveryVersion judging every run

@@ -48,6 +48,10 @@ type Provider interface {
 	// the artifacts finished steps produced live at the build root, and
 	// per-step views are materialized from them every time a step runs.
 	Reuse(dir string)
+	// Resuming is Reuse for one run: a provider whose every NewBuild answers with dir, leaving this one as it was, since a daemon builds other runs beside the one it resumes.
+	Resuming(dir string) Provider
+	// Spare keeps dirs out of the stale-build sweep, the trees of runs a restart resumes. Called before Validate, which sweeps.
+	Spare(dirs []string)
 	// AttachArtifactStore wires the two halves of the artifact store into the
 	// step cache, reporting whether anything was attached — false with no
 	// durable workspace.root:, where there is no local cache to mirror.
@@ -324,6 +328,7 @@ type isolatingProvider struct {
 	// reuse, when set, is an existing build directory a resumed run continues
 	// in instead of creating a new one (see Reuse).
 	reuse string
+	spare map[string]bool
 	// token distinguishes this invocation's build directories from any other's
 	// — see newInvocationToken.
 	token string
@@ -429,6 +434,12 @@ func (p *isolatingProvider) sweepStaleBuilds() {
 
 		dir := filepath.Join(p.root, entry.Name())
 
+		if p.spare[absDir(dir)] {
+			slog.Info("workspace.sweep_spared", "dir", dir)
+
+			continue
+		}
+
 		slog.Info("workspace.sweep_stale_build", "dir", dir)
 
 		removeErr := p.backend.removeTree(dir)
@@ -442,6 +453,41 @@ func (p *isolatingProvider) sweepStaleBuilds() {
 // continuing, and splitting it back into fresh per-build directories would
 // hide the artifacts it is resuming FOR.
 func (p *isolatingProvider) Reuse(dir string) { p.reuse = dir }
+
+func (p *isolatingProvider) Spare(dirs []string) {
+	p.spare = map[string]bool{}
+
+	for _, dir := range dirs {
+		p.spare[absDir(dir)] = true
+	}
+}
+
+// absDir is how a spared tree and a swept one are compared: a relative workspace.root: and the absolute path a run recorded name one directory.
+func absDir(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return filepath.Clean(dir)
+	}
+
+	return abs
+}
+
+func (p *isolatingProvider) Resuming(dir string) Provider {
+	return resumingProvider{isolatingProvider: p, dir: dir}
+}
+
+// resumingProvider shares everything with the provider it was made from but the tree its builds continue in.
+type resumingProvider struct {
+	*isolatingProvider
+	dir string
+}
+
+func (r resumingProvider) NewBuild(ctx context.Context, _ string) (BuildWorkspace, error) {
+	return r.reusedBuild(ctx, r.dir), nil
+}
+
+// Close is the shared provider's to call, never one run's.
+func (resumingProvider) Close() error { return nil }
 
 // retainedBuild names a build directory from THIS invocation that is still on
 // disk, or "" when every build was closed. Scoped to the invocation's own
@@ -466,19 +512,7 @@ func (p *isolatingProvider) retainedBuild() string {
 
 func (p *isolatingProvider) NewBuild(ctx context.Context, label string) (BuildWorkspace, error) {
 	if p.reuse != "" {
-		// The tree already has its artifacts/ and steps/ from the run being
-		// continued; per-step directories under steps/ are rebuilt per step
-		// anyway, which is what makes an isolating strategy resumable at all.
-		slog.DebugContext(ctx, "workspace.reuse", "dir", p.reuse, "backend", "isolating")
-
-		return &isolatingBuild{
-			backend: p.backend, root: p.reuse,
-			artifacts: filepath.Join(p.reuse, "artifacts"),
-			stepsDir:  filepath.Join(p.reuse, "steps"),
-			keep:      true, // never tear down a tree we did not create
-			cache:     p.cache,
-			stepCache: p.stepCache,
-		}, nil
+		return p.reusedBuild(ctx, p.reuse), nil
 	}
 
 	// The token comes before the counter because the counter alone is not
@@ -516,6 +550,20 @@ func (p *isolatingProvider) NewBuild(ctx context.Context, label string) (BuildWo
 		backend: p.backend, root: root, artifacts: artifacts, stepsDir: steps,
 		keep: p.keep, cache: p.cache, stepCache: p.stepCache,
 	}, nil
+}
+
+// reusedBuild continues in a tree that already has its artifacts/ and steps/ from the run being continued; per-step directories under steps/ are rebuilt per step anyway, which is what makes an isolating strategy resumable at all.
+func (p *isolatingProvider) reusedBuild(ctx context.Context, dir string) *isolatingBuild {
+	slog.DebugContext(ctx, "workspace.reuse", "dir", dir, "backend", "isolating")
+
+	return &isolatingBuild{
+		backend: p.backend, root: dir,
+		artifacts: filepath.Join(dir, "artifacts"),
+		stepsDir:  filepath.Join(dir, "steps"),
+		keep:      true, // never tear down a tree we did not create
+		cache:     p.cache,
+		stepCache: p.stepCache,
+	}
 }
 
 func (p *isolatingProvider) Close() error {

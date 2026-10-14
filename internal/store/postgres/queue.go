@@ -32,7 +32,7 @@ func enqueueJobs(ctx context.Context, db executor, pipelineID int64, jobNames []
 		SELECT $1, job_name, $3, 'pending', $4
 		FROM unnest($2::text[]) WITH ORDINALITY AS j(job_name, position)
 		ORDER BY position
-		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL DO NOTHING
+		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL DO NOTHING
 	`, pipelineID, jobNames, clean(reason), now())
 	if err != nil && len(jobNames) == 1 {
 		return fmt.Errorf("could not enqueue job %q: %w", jobNames[0], err)
@@ -50,7 +50,7 @@ func (s *Store) EnqueueManualJob(ctx context.Context, jobName, reason string) er
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO trigger_queue (pipeline_id, job_name, reason, manual, status, enqueued_at)
 		VALUES ($1, $2, $3, TRUE, 'pending', $4)
-		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL
+		ON CONFLICT (pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL
 		DO UPDATE SET manual = TRUE, reason = excluded.reason
 	`, s.pipelineID, jobName, clean(reason), now())
 	if err != nil {
@@ -65,7 +65,7 @@ func (s *Store) EnqueueRerunJob(ctx context.Context, jobName, reason, runID stri
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO trigger_queue (pipeline_id, job_name, reason, manual, rerun_of, status, enqueued_at)
 		VALUES ($1, $2, $3, TRUE, $4, 'pending', $5)
-		ON CONFLICT (pipeline_id, rerun_of) WHERE status = 'pending' AND rerun_of IS NOT NULL DO NOTHING
+		ON CONFLICT (pipeline_id, rerun_of) WHERE status = 'pending' AND rerun_of IS NOT NULL AND run_id IS NULL DO NOTHING
 	`, s.pipelineID, jobName, clean(reason), runID, now())
 	if err != nil {
 		return fmt.Errorf("could not queue a rerun of %q: %w", runID, err)
@@ -87,6 +87,7 @@ func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error
 	var (
 		claim   store.ClaimedJob
 		rerun   sql.NullString
+		resume  sql.NullString
 		found   bool
 		pending bool
 	)
@@ -134,8 +135,8 @@ func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error
 				ORDER BY tq.id LIMIT 1
 				FOR UPDATE SKIP LOCKED
 			)
-			RETURNING id, job_name, manual, rerun_of
-		`, now(), s.pipelineID).Scan(&claim.ID, &claim.JobName, &claim.Manual, &rerun)
+			RETURNING id, job_name, manual, rerun_of, run_id
+		`, now(), s.pipelineID).Scan(&claim.ID, &claim.JobName, &claim.Manual, &rerun, &resume)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -149,6 +150,7 @@ func (s *Store) ClaimNextJob(ctx context.Context) (store.ClaimedJob, bool, error
 	}
 
 	claim.RerunOf = rerun.String
+	claim.Resume = resume.String
 
 	return claim, found, nil
 }
@@ -185,19 +187,31 @@ func (s *Store) AbortQueuedJob(ctx context.Context, jobName string) (bool, error
 	return affected > 0, nil
 }
 
-// ResetStaleRunning flips this pipeline's running rows back to pending, and
+// ResetStaleRunning flips this pipeline's running rows back to pending, a row whose run is still running carrying it to resume, and
 // closes its running runs as aborted, at daemon startup. Like the sqlite driver's, it assumes it is ALONE: one
 // `steps web` per state database, and nothing here arbitrates a second.
 func (s *Store) ResetStaleRunning(ctx context.Context) error {
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
+			UPDATE trigger_queue AS q
+			SET status = r.status, finished_at = $1
+			FROM runs AS r
+			WHERE q.pipeline_id = $2 AND q.status = 'running'
+			  AND r.id = q.run_id AND r.pipeline_id = q.pipeline_id AND r.status <> 'running'
+			  AND r.finished_at >= q.started_at
+		`, now(), s.pipelineID)
+		if err != nil {
+			return fmt.Errorf("could not close finished running jobs: %w", err)
+		}
+
+		_, err = tx.ExecContext(ctx, `
 			DELETE FROM trigger_queue
-			WHERE pipeline_id = $1 AND status = 'running'
+			WHERE pipeline_id = $1 AND status = 'running' AND run_id IS NULL
 			  AND EXISTS (
 			      SELECT 1 FROM trigger_queue AS p
 			      WHERE p.pipeline_id = trigger_queue.pipeline_id
 			        AND p.job_name = trigger_queue.job_name AND p.status = 'pending'
-			        AND p.rerun_of IS NOT DISTINCT FROM trigger_queue.rerun_of
+			        AND p.rerun_of IS NOT DISTINCT FROM trigger_queue.rerun_of AND p.run_id IS NULL
 			  )
 		`, s.pipelineID)
 		if err != nil {
@@ -206,9 +220,9 @@ func (s *Store) ResetStaleRunning(ctx context.Context) error {
 
 		_, err = tx.ExecContext(ctx, `
 			DELETE FROM trigger_queue
-			WHERE pipeline_id = $1 AND status = 'running' AND id NOT IN (
+			WHERE pipeline_id = $1 AND status = 'running' AND run_id IS NULL AND id NOT IN (
 				SELECT MIN(id) FROM trigger_queue
-				WHERE pipeline_id = $1 AND status = 'running' GROUP BY job_name, rerun_of
+				WHERE pipeline_id = $1 AND status = 'running' AND run_id IS NULL GROUP BY job_name, rerun_of
 			)
 		`, s.pipelineID)
 		if err != nil {

@@ -15,6 +15,8 @@ type Runs interface {
 	// ResumeRun continues a run this pipeline already has, ErrNoSuchRun
 	// otherwise.
 	ResumeRun(ctx context.Context, id, workspaceDir, configSHA string) error
+	// ResumableRuns is every run of this pipeline still recorded running, or that a queue row still waits to resume (a restart before its resume started): at startup, the ones a restart may resume, whose workspaces must survive the stale-build sweep.
+	ResumableRuns(ctx context.Context) ([]RunRow, error)
 	FinishRun(ctx context.Context, id string, status RunStatus) error
 	// RecordRunStep marks a step of a run done. buildID is "<run>#0" inside
 	// the build a get triggers and the bare run id before it.
@@ -59,6 +61,8 @@ type NewRun struct {
 	// ConfigSHA is the configuration the run executes, empty for a caller
 	// that loaded no pipeline file.
 	ConfigSHA string
+	// QueueID is the trigger_queue row that started this run, zero for a run no queue started; recorded on that row, so a restart knows which run to resume.
+	QueueID int64
 }
 
 // RunStep is one step a run finished. Index is relative to the walk it ran

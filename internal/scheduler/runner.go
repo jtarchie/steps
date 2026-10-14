@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"runtime/debug"
 	"slices"
 	"sync"
@@ -606,6 +607,12 @@ func (r *LocalRunner) runJob(
 
 	// Minted here rather than inside RunJob so the run is addressable before it exists: an abort can land during preflight.
 	runID := pipeline.NewRunID()
+
+	ctx, provider, resumed := resume(ctx, target, job, trigger.Resume, provider)
+	if resumed {
+		runID = trigger.Resume
+	}
+
 	key := runKey{target.Slug, runID}
 
 	runCtx, cancel, end := r.runContext(ctx, target.Slug, job)
@@ -634,7 +641,8 @@ func (r *LocalRunner) runJob(
 	}()
 
 	opts := r.base
-	opts.Provider, opts.Force, opts.ID = provider, force, runID
+	opts.Provider, opts.Force, opts.ID, opts.QueueID = provider, force, runID, trigger.ID
+	opts.Interrupted = func() bool { return ctx.Err() != nil && !errors.Is(context.Cause(runCtx), errAborted) }
 
 	if trigger.RerunOf != "" {
 		var err error
@@ -657,6 +665,41 @@ func (r *LocalRunner) runJob(
 		events.WithBus(runCtx, target.Bus), cfg, job, target.Store, opts)
 
 	return errors.Is(context.Cause(runCtx), errAborted), runErr
+}
+
+// resume continues the run a restart interrupted (#208), reporting false when there is none to continue. One its record cannot vouch for, or whose tree is gone, is built from the top as a new run instead, which is what every restart did before there was a resume.
+func resume(
+	ctx context.Context, target *Pipeline, job *config.Job, runID string, provider workspace.Provider,
+) (context.Context, workspace.Provider, bool) {
+	if runID == "" {
+		return ctx, provider, false
+	}
+
+	resumed, dir, err := pipeline.PrepareResume(ctx, target.Store, runID)
+
+	fresh := false
+	if err == nil {
+		fresh, err = pipeline.CheckResumable(resumed, target.Store, runID, job)
+	}
+
+	// A fresh resume's build finished and took its tree with it; any other continues in that tree, so it has to be there.
+	if err == nil && !fresh {
+		_, err = os.Stat(dir)
+	}
+
+	if err != nil {
+		slog.WarnContext(ctx, "web.job.resume_refused", "pipeline", target.Slug, "job", job.Name, "run", runID, "error", err)
+
+		return ctx, provider, false
+	}
+
+	slog.InfoContext(ctx, "web.job.resume", "pipeline", target.Slug, "job", job.Name, "run", runID, "workspace", dir)
+
+	if fresh {
+		return resumed, provider, true
+	}
+
+	return resumed, provider.Resuming(dir), true
 }
 
 // runContext is interruptible: as Concourse means it (see config.Job): only a shutdown waits for a build that did not opt in.

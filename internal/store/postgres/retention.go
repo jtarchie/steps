@@ -87,6 +87,10 @@ func pruneRunRows(ctx context.Context, tx *sql.Tx, pipelineID int64, jobName str
 		      ORDER BY started_at DESC, seq DESC
 		      LIMIT $4
 		  )
+		  AND id NOT IN (
+		      SELECT run_id FROM trigger_queue
+		      WHERE pipeline_id = $1 AND status = 'pending' AND run_id IS NOT NULL
+		  )
 	`, pipelineID, jobName, keepRunID, limit)
 	if err != nil {
 		return fmt.Errorf("could not prune runs of %q: %w", jobName, err)

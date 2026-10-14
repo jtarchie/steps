@@ -196,7 +196,12 @@ func pruneRunRows(
 		      ORDER BY started_at DESC, rowid DESC
 		      LIMIT ?
 		  )
-	`, pipelineID, jobName, keepRunID, pipelineID, jobName, limit)
+		  -- A run a pending row will resume reads aborted until its claim starts it; reaped, its row's SET NULL collides with the job's next trigger on the pending-job index.
+		  AND id NOT IN (
+		      SELECT run_id FROM trigger_queue
+		      WHERE pipeline_id = ? AND status = 'pending' AND run_id IS NOT NULL
+		  )
+	`, pipelineID, jobName, keepRunID, pipelineID, jobName, limit, pipelineID)
 	if err != nil {
 		return false, fmt.Errorf("could not prune runs of %q: %w", jobName, err)
 	}

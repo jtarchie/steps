@@ -10,8 +10,10 @@ package postgres
 // Its own counter, not the sqlite one: the two schemas are written separately
 // and change separately.
 //
+// 7 added trigger_queue.run_id, the run a claimed row started, which a restart resumes.
+//
 // 6 added identity, which this driver creates only alongside the rest of the schema.
-const schemaVersion = 6
+const schemaVersion = 7
 
 // schema is the sqlite driver's schema in Postgres's own terms; the reason each
 // table and column exists is written there (internal/store/sqlite/schema.go)
@@ -209,6 +211,7 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
     reason      TEXT NOT NULL,
     manual      BOOLEAN NOT NULL DEFAULT FALSE,
     rerun_of    TEXT REFERENCES runs(id) ON DELETE CASCADE,
+    run_id      TEXT REFERENCES runs(id) ON DELETE SET NULL,
     status      TEXT NOT NULL,
     enqueued_at TIMESTAMPTZ NOT NULL,
     started_at  TIMESTAMPTZ,
@@ -216,10 +219,11 @@ CREATE TABLE IF NOT EXISTS trigger_queue (
     error       TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_job
-    ON trigger_queue(pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL;
+    ON trigger_queue(pipeline_id, job_name) WHERE status = 'pending' AND rerun_of IS NULL AND run_id IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_queue_pending_rerun
-    ON trigger_queue(pipeline_id, rerun_of) WHERE status = 'pending' AND rerun_of IS NOT NULL;
+    ON trigger_queue(pipeline_id, rerun_of) WHERE status = 'pending' AND rerun_of IS NOT NULL AND run_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_trigger_queue_rerun_of ON trigger_queue(rerun_of);
+CREATE INDEX IF NOT EXISTS idx_trigger_queue_run ON trigger_queue(run_id);
 CREATE INDEX IF NOT EXISTS idx_trigger_queue_job_status ON trigger_queue(pipeline_id, job_name, status);
 
 CREATE TABLE IF NOT EXISTS run_steps (
