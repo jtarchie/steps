@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtarchie/steps/internal/store/sqlite"
 )
@@ -70,6 +71,10 @@ func TestWatchChecksEachResourceIndependently(t *testing.T) {
 	fixture.write(t, downProcessed, "")
 
 	fixture.write(t, broken, "")
+
+	// The daemon is polling every few milliseconds while this runs. A check already under way when broken appeared has passed its test for it, and would go on to read the feed — so version 2 must not exist until a check has failed on broken, after which every check sees it.
+	waitForCheckError(t, fixture, "down")
+
 	fixture.write(t, downFeed, "1\n2\n")
 	fixture.items(t, 2)
 
@@ -119,4 +124,35 @@ func assertProcessed(t *testing.T, path string, want ...string) {
 	if got := strings.Fields(string(data)); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("%s processed %v, want %v", path, got, want)
 	}
+}
+
+// waitForCheckError waits until the daemon has recorded a failed check of the resource.
+func waitForCheckError(t *testing.T, fixture *watchFixture, resource string) {
+	t.Helper()
+
+	deadline := time.Now().Add(15 * time.Second)
+
+	for time.Now().Before(deadline) {
+		st, err := sqlite.OpenExisting(fixture.db, fixture.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		failing, err := st.CheckErrors(t.Context())
+		_ = st.Close()
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, failure := range failing {
+			if failure.Name == resource {
+				return
+			}
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	t.Fatalf("the daemon never recorded a failed check of %q", resource)
 }
