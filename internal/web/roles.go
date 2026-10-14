@@ -100,6 +100,19 @@ func CompileRoles(specs []string) (Roles, error) {
 	return roles, nil
 }
 
+// AllowsProviders refuses rules too loose for a daemon that signs people in with GitHub or Google. Those let in anybody with an account there, so the default every other daemon gets — everyone signed in may do everything — would make the whole internet an admin, and a missing viewer rule would let all of it read. Checked where the CLI starts and again where the server is built, so neither path can serve a provider without saying who of its accounts may do what.
+func (r Roles) AllowsProviders() error {
+	if r.rules == nil {
+		return errors.New("signing in with GitHub or Google lets in anybody with an account there: add --role rules saying which of them may do what, at least an admin rule and a viewer rule")
+	}
+
+	if r.rules[RoleViewer] == nil {
+		return errors.New("signing in with GitHub or Google lets in anybody with an account there, and with no viewer rule every one of them could read every pipeline: add --role viewer=<rule>")
+	}
+
+	return nil
+}
+
 // WithRoles limits who may do what to these rules.
 func WithRoles(roles Roles) Option {
 	return func(s *Server) { s.roles = roles }

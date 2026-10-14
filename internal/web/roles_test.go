@@ -78,7 +78,7 @@ func TestAnExclusionRuleReadsTheStoredGroups(t *testing.T) {
 
 	t.Cleanup(func() { _ = accounts.Close() })
 
-	roles, err := CompileRoles([]string{`admin=false`, `operator=!("acme/contractors" in Groups)`})
+	roles, err := CompileRoles([]string{`admin=false`, `operator=!("acme/contractors" in Groups)`, `viewer=Provider == "github"`})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestARuleCanNameTheAccountRatherThanTheLogin(t *testing.T) {
 
 	t.Cleanup(func() { _ = accounts.Close() })
 
-	server, err := New([]*Pipeline{pipeline}, nil, WithSessions(accounts), WithSignInProviders(GitHubSignIn("c", "s", "http://x", nil)))
+	server, err := New([]*Pipeline{pipeline}, nil, WithSessions(accounts), WithSignInProviders(GitHubSignIn("c", "s", "http://x", nil)), WithRoles(githubRoles(t)))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -152,5 +152,50 @@ func TestARuleCanNameTheAccountRatherThanTheLogin(t *testing.T) {
 
 	if id := server.identityOf(t.Context(), actor.Actor{Kind: "github", ID: "alice"}); id.ID != "999999" {
 		t.Errorf("identityOf(alice) = %+v; the newcomer must carry their own account id, not the old one", id)
+	}
+}
+
+// githubRoles are the rules a test daemon offering GitHub sign-in needs before it will start: anybody from GitHub may read, nobody administers.
+func githubRoles(t *testing.T) Roles {
+	t.Helper()
+
+	roles, err := CompileRoles([]string{`admin=false`, `viewer=Provider == "github"`})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return roles
+}
+
+// TestAServerWithAProviderNeedsRules: GitHub and Google let in anybody with an account there, so the server refuses to be built with no rules about them — the zero rules make everyone signed in an admin — or with no viewer rule, which would let all of them read.
+func TestAServerWithAProviderNeedsRules(t *testing.T) {
+	t.Parallel()
+
+	_, pipeline := testPipeline(t)
+	github := WithSignInProviders(GitHubSignIn("c", "s", "http://x", nil))
+
+	adminOnly, err := CompileRoles([]string{`admin=UserID == "alex"`})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, opts := range map[string][]Option{
+		"no rules":       {github},
+		"no viewer rule": {github, WithRoles(adminOnly)},
+	} {
+		_, err := New([]*Pipeline{pipeline}, nil, opts...)
+		if err == nil {
+			t.Errorf("%s: a server offering GitHub sign-in was built", name)
+		}
+	}
+
+	_, err = New([]*Pipeline{pipeline}, nil, github, WithRoles(githubRoles(t)))
+	if err != nil {
+		t.Errorf("with admin and viewer rules: %v", err)
+	}
+
+	_, err = New([]*Pipeline{pipeline}, nil, WithLocalUsers([]LocalUser{{Name: "alex", Hash: []byte(mustHash(t, "a"))}}))
+	if err != nil {
+		t.Errorf("local accounts alone need no rules, as before: %v", err)
 	}
 }

@@ -238,6 +238,13 @@ func New(pipelines []*Pipeline, runner Runner, opts ...Option) (*Server, error) 
 		opt(srv)
 	}
 
+	if len(srv.providers) > 0 {
+		err := srv.roles.AllowsProviders()
+		if err != nil {
+			return nil, fmt.Errorf("web: %w", err)
+		}
+	}
+
 	for _, pipeline := range pipelines {
 		err := srv.Add(pipeline)
 		if err != nil {

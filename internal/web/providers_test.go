@@ -72,7 +72,7 @@ func TestSigningInWithGitHub(t *testing.T) {
 
 	t.Cleanup(func() { _ = accounts.Close() })
 
-	server, err := New([]*Pipeline{pipeline}, nil, WithSessions(accounts), WithSignInProviders(GitHubSignIn("client", "secret", "http://steps.example", fakeGitHub(t))))
+	server, err := New([]*Pipeline{pipeline}, nil, WithSessions(accounts), WithSignInProviders(GitHubSignIn("client", "secret", "http://steps.example", fakeGitHub(t))), WithRoles(githubRoles(t)))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

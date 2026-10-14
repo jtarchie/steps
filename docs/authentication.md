@@ -56,10 +56,14 @@ export STEPS_GITHUB_CLIENT_SECRET=…        # from the OAuth app you registered
 export STEPS_GOOGLE_CLIENT_SECRET=…
 steps web --external-url https://steps.example.com \
   --github-client-id Iv1.0123456789abcdef \
-  --google-client-id 1234-abc.apps.googleusercontent.com
+  --google-client-id 1234-abc.apps.googleusercontent.com \
+  --role 'admin=Provider == "github" && ID == "583231"' \
+  --role 'viewer="acme" in Organizations'
 ```
 
 Each client id adds a **Continue with …** button to the sign-in page. Register the daemon with the provider first, giving it `<external-url>/auth/github/callback` or `<external-url>/auth/google/callback` as the redirect address.
+
+**GitHub and Google let in anybody with an account there**, so a daemon offering either refuses to start without [roles](#who-may-do-what-roles) that say which of those accounts may do what: an `admin` rule, and a `viewer` rule. Without them every GitHub or Google account would be an admin, or could read every pipeline.
 
 - **The secret is read from the environment**, never a flag: `$STEPS_GITHUB_CLIENT_SECRET` and `$STEPS_GOOGLE_CLIENT_SECRET` by default, or the variable `--github-client-secret-env`/`--google-client-secret-env` name. An id without its secret, or with no `--external-url` to send the browser back to, stops the daemon before it listens.
 - **Who they are**: `alex (github)` by GitHub login, `sam@acme.dev (google)` by email.
@@ -88,8 +92,8 @@ Each `--role` is a rule about the signed-in person, an [expr](https://expr-lang.
 
 `UserID` and `ID` differ only for GitHub, where a login can be renamed and then registered by somebody else. A rule naming `UserID == "alice"` follows the login; one naming `ID == "583231"` follows the account, whatever it is called. Use whichever you mean. A person has the highest role whose rule holds.
 
-- **No `--role` at all** keeps today's behaviour: everyone signed in may do everything.
-- **With any `--role`, an `admin` rule is required**, or nobody could set a pipeline and the daemon would be stuck as it stands. A `viewer` rule left out lets anyone signed in read; `operator` left out means only admins act.
+- **No `--role` at all** keeps today's behaviour for a daemon with only local accounts: everyone signed in may do everything, because everyone signed in holds a password you gave them. A daemon offering GitHub or Google sign-in refuses to start this way.
+- **With any `--role`, an `admin` rule is required**, or nobody could set a pipeline and the daemon would be stuck as it stands. `operator` left out means only admins act. A `viewer` rule left out lets anyone signed in read — allowed with local accounts only; with GitHub or Google sign-in a `viewer` rule is required too.
 - **A rule that does not compile stops the daemon** before it listens, naming the role.
 - **It is enforced by the daemon, on every request**, not by hiding buttons. A viewer's pages leave the controls out and say once, in the action bar, what the operator role would add; a request for something their role does not cover is refused with `403`, from a browser or from the CLI alike.
 - **Rules read the daemon's own record of the person**, written at their last sign-in — never anything the browser carries. That is what keeps an exclusion honest: `operator=!("acme/contractors" in Groups)` reads the groups GitHub reported, so a contractor cannot pass by arriving with none. Leaving a team takes effect at the next sign-in, within a week.

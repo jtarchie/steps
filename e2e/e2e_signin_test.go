@@ -166,3 +166,23 @@ func TestASignInProviderNeedsItsSecret(t *testing.T) {
 		t.Fatalf("steps web with a GitHub client and no secret = %v, want a refusal naming the variable", err)
 	}
 }
+
+// Signing in with GitHub or Google lets in anybody with an account there, so the daemon refuses to start until rules say who of them may do anything: an admin rule, and a viewer rule, or every account on the internet could read every pipeline.
+func TestASignInProviderNeedsRulesAboutWhoItLetsIn(t *testing.T) {
+	t.Setenv("STEPS_TEST_PROVIDER_SECRET", "set")
+
+	base := []string{"web", "--listen", "127.0.0.1:1", "--db", filepath.Join(t.TempDir(), "daemon.db"), "--github-client-id", "abc", "--github-client-secret-env", "STEPS_TEST_PROVIDER_SECRET"}
+
+	for _, tc := range []struct {
+		roles []string
+		want  string
+	}{
+		{nil, "--role"},
+		{[]string{"--role", `admin=UserID == "alex"`}, "viewer"},
+	} {
+		err := cli.Run(append(append([]string{}, base...), tc.roles...))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("steps web with a provider and roles %v = %v, want refused naming %q", tc.roles, err, tc.want)
+		}
+	}
+}

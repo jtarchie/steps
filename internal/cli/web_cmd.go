@@ -156,17 +156,25 @@ func (w *WebCmd) accessOptions(opts []web.Option, published string) ([]web.Optio
 
 	opts = append(opts, providers...)
 
+	roles, err := web.CompileRoles(w.Role)
+	if err != nil {
+		return nil, fmt.Errorf("web: %w", err)
+	}
+
+	// Before anything is opened: a provider with rules too loose for it is refused here, where the operator reads the reason, rather than by the server after a database was touched.
+	if len(providers) > 0 {
+		err = roles.AllowsProviders()
+		if err != nil {
+			return nil, fmt.Errorf("web: %w", err)
+		}
+	}
+
 	if len(w.Role) == 0 {
 		return opts, nil
 	}
 
 	if len(opts) == 0 {
 		return nil, errors.New("web: --role decides what signed-in people may do, and nobody can sign in: add --local-user or a sign-in provider")
-	}
-
-	roles, err := web.CompileRoles(w.Role)
-	if err != nil {
-		return nil, fmt.Errorf("web: %w", err)
 	}
 
 	return append(opts, web.WithRoles(roles)), nil
