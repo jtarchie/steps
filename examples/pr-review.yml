@@ -51,7 +51,7 @@ resource_types:
       # `checkout <sha> -- .` restores the tree without moving HEAD, so the
       # three files above survive.
       git init -q .
-      git remote add origin "https://github.com/{{ .source.repo }}.git"
+      git remote add origin https://github.com/{{ .source.repo | shellquote }}.git
       git fetch -q --no-tags --depth 1 origin "$sha" 2>/dev/null \
         || git fetch -q --no-tags origin
       git checkout -q --force "$sha" -- . 2>/dev/null \

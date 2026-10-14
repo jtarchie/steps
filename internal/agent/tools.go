@@ -663,3 +663,10 @@ func intArg(args map[string]any, key string) (int, bool) {
 		return 0, false
 	}
 }
+
+// UnquotedToolRefs reports each action in a custom tool's run: that prints a
+// .args value without shellquote — the model-authored half of a tool reaching
+// sh -c as syntax.
+func UnquotedToolRefs(run string) []string {
+	return template.UnquotedRefs(run, "args")
+}

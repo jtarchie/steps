@@ -42,7 +42,7 @@ resource_types:
       git clone -q {{ .source.uri | shellquote }} .
       git checkout -q {{ .version.tag | shellquote }}
       if [ "$(git rev-parse refs/tags/{{ .version.tag | shellquote }})" != {{ .version.ref | shellquote }} ]; then
-        echo "tag {{ .version.tag }} moved since it was checked" >&2
+        echo tag {{ .version.tag | shellquote }} moved since it was checked >&2
         exit 1
       fi
 

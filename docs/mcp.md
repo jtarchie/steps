@@ -342,9 +342,10 @@ resource_types:
   env: [SLACK_BOT_TOKEN]
   config:
     check: |
+      channel={{ .source.channel | shellquote }}
       curl -sS -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-        "https://slack.com/api/conversations.history?channel={{ .source.channel }}&limit=20" |
-      jq -c '[.messages[] | {channel: "{{ .source.channel }}", ts: .ts}] | reverse'
+        "https://slack.com/api/conversations.history?channel=$channel&limit=20" |
+      jq -c --arg ch "$channel" '[.messages[] | {channel: $ch, ts: .ts}] | reverse'
 
 - name: slack-reply             # ACT: publish-only, no check: to write
   config:

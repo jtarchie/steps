@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/jtarchie/steps/internal/config"
@@ -51,6 +52,10 @@ func (v *ValidateCmd) Run() error {
 	cfg, err := v.Load(v.Pipeline, resolvePipelineName(v.Pipeline, v.Name))
 	if err != nil {
 		return err
+	}
+
+	for _, warning := range pipeline.UnquotedShellValues(cfg) {
+		fmt.Fprintln(os.Stderr, "warning: "+warning)
 	}
 
 	err = fileProblems(cfg)

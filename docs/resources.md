@@ -603,7 +603,7 @@ check: |
 
 # ask for exactly what we haven't seen
 check: |
-  curl -sS ... --data-urlencode 'since={{ index .version "ts" | default "0" }}' \
+  curl -sS ... --data-urlencode since={{ index .version "ts" | default "0" | shellquote }} \
                --data-urlencode 'limit=200' https://api.example.com/messages
 ```
 
@@ -702,7 +702,7 @@ resource_types:
     # handed, which is the part worth seeing: on a fresh run there is no
     # cursor, so the default is what the check gets.
     check: |
-      printf '[{"seen": "%s"}]' '{{ index .version "ts" | default "0" }}'
+      printf '[{"seen": "%s"}]' {{ index .version "ts" | default "0" | shellquote }}
     in: echo {{ .version.seen | shellquote }} > seen.txt
 
 resources:
@@ -741,7 +741,7 @@ resource_types:
     check: |
       printf '[{"ref": "v1"}]'
     in: |
-      head -n {{ index .params "lines" | default "100" }} <<'EOF' > notes.txt
+      head -n {{ index .params "lines" | default "100" | shellquote }} <<'EOF' > notes.txt
       first line
       second line
       EOF
