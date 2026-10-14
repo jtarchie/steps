@@ -7,15 +7,15 @@
 {{range .Rows}}
   <li class="connection">
     <div class="conn-head">
-      <span class="conn-client">“{{.Client}}”</span> <span class="dim">unverified name</span>
+      <span class="conn-client">“{{.Client}}”</span> <span class="faint">unverified name</span>
       {{if $.Everyone}}<span class="sep">·</span>{{template "actor" .Actor}}{{end}}
     </div>
     <div class="conn-meta metaline">
       {{range $i, $h := .Hosts}}{{if $i}}, {{end}}{{$h}}{{end}}<span class="sep">·</span>{{if .Live}}<a href="/p/{{.Pipeline}}/mcp/exports/{{.Export}}">{{.Pipeline}} / {{.Export}}</a>{{else}}{{.Pipeline}} / {{.Export}} <span class="faint">gone</span>{{end}}<span class="sep">·</span>authorized {{agoTag .AuthorizedAt}}<span class="sep">·</span>{{if .LastCall.ID}}last call {{agoTag .LastCall.At}}{{else}}never called{{end}}<span class="sep">·</span>{{.Calls}} calls
     </div>
-    {{/* A fold rather than a dialog, so it works with nothing but HTML: the first Revoke asks, the second does it, and closing the fold is the cancel. */}}
+    {{/* A fold rather than a dialog, so it works with nothing but HTML: Revoke opens the question, the button inside answers it, and the summary — now reading Cancel — closes it. */}}
     <details class="conn-revoke">
-      <summary class="btn danger">Revoke</summary>
+      <summary class="btn danger"><span class="when-closed">Revoke</span><span class="when-open">Cancel</span></summary>
       <form method="post" action="/connections/revoke">
         <input type="hidden" name="client" value="{{.ClientID}}">
         <input type="hidden" name="actor" value="{{.Actor}}">

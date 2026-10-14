@@ -1306,6 +1306,7 @@ table.activity td:first-child { white-space: nowrap; }
 .consent-facts dd { margin: 0; overflow-wrap: anywhere; }
 .consent-host { color: var(--fg); font-weight: 700; font-size: 15px; }
 .consent-tools td { white-space: normal; }
+.consent-tools td:last-child { white-space: nowrap; }
 .consent-note { font-family: var(--sans); font-size: 13px; color: var(--dim); margin: 16px 0; }
 .consent-decide { display: flex; gap: 10px; }
 
@@ -1318,7 +1319,14 @@ table.mcp-exports td { white-space: nowrap; }
 @media (max-width: 640px) {
   .consent-facts, .export-facts { grid-template-columns: 1fr; gap: 2px 0; }
   .consent-facts dd { margin-bottom: 8px; }
-  table.consent-tools td:nth-child(2), table.consent-tools td:nth-child(3) { white-space: normal; }
+  /* Each tool as a block: its name, then what is fixed, then what kind it is. */
+  table.consent-tools thead { display: none; }
+  table.consent-tools, table.consent-tools tbody, table.consent-tools tr, table.consent-tools td { display: block; }
+  table.consent-tools tr { padding: 8px 12px; border-top: 1px solid var(--line-soft); }
+  table.consent-tools tr:first-child { border-top: 0; }
+  table.consent-tools td { padding: 0; border: 0; white-space: normal; }
+  table.consent-tools td:empty { display: none; }
+  .tablewrap:has(> table.consent-tools) { overflow-x: visible; }
 }
 
 /* ---- connections ---- */
@@ -1327,13 +1335,19 @@ table.mcp-exports td { white-space: nowrap; }
 .connection:first-child { border-top: 0; }
 .conn-client { color: var(--fg); font-weight: 600; }
 .conn-meta { grid-column: 1; margin: 0; }
-.conn-revoke { grid-column: 2; grid-row: 1 / span 2; align-self: start; justify-self: end; }
-.conn-revoke summary { list-style: none; cursor: pointer; }
+.conn-revoke { grid-column: 2; grid-row: 1 / span 2; align-self: start; text-align: right; }
+/* Open, the question, its Revoke and the Cancel read as one line, Cancel last. */
+.conn-revoke[open] { grid-column: 1 / -1; grid-row: 3; display: flex; flex-direction: row-reverse; justify-content: flex-start; align-items: center; gap: 10px; flex-wrap: wrap; }
+.conn-revoke[open] form { margin-top: 0; }
+.conn-revoke summary { list-style: none; cursor: pointer; display: inline-block; }
 .conn-revoke summary::-webkit-details-marker { display: none; }
-.conn-revoke[open] summary { opacity: .6; }
-.conn-revoke form { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-family: var(--sans); font-size: 12px; }
+.conn-revoke .when-open, .conn-revoke[open] .when-closed { display: none; }
+.conn-revoke[open] .when-open { display: inline; }
+.conn-revoke[open] summary { color: var(--dim); border-color: var(--line); }
+.conn-revoke form { display: flex; gap: 10px; align-items: center; justify-content: flex-end; margin-top: 8px; font-family: var(--sans); font-size: 12px; text-align: left; }
 @media (max-width: 640px) {
   .connection { grid-template-columns: 1fr; }
-  .conn-revoke { grid-column: 1; grid-row: auto; justify-self: end; }
+  .conn-revoke, .conn-revoke[open] { grid-column: 1; grid-row: auto; }
   .conn-revoke form { flex-wrap: wrap; }
 }
+.rohint .sep { margin: 0 8px; color: var(--line); }

@@ -55,3 +55,17 @@ func TestAnExportOfGrantsAndAgentsLoads(t *testing.T) {
 		t.Errorf("ParseRate(60/m) = %d per %v, %v", calls, window, err)
 	}
 }
+
+// TestAnExportUsesTheServersItShares: the mcp tab and steps mcp list say what reaches a server, and an export does.
+func TestAnExportUsesTheServersItShares(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Parse([]byte(exportBase+"- {name: support, access: 'true', tools: [{mcp: github}]}"), "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := cfg.MCPUsers("github"); got != "export support" {
+		t.Errorf("MCPUsers(github) = %q, want the export named", got)
+	}
+}

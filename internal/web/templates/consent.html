@@ -8,7 +8,7 @@
 {{/* The heading is the request in one sentence, so a screen reader hears what is being asked before anything else. */}}
 <h1 class="prompt"><b>steps authorize</b> <span class="consent-ask">“{{$p.Client.Name}}” for {{$p.Pipeline}} / {{$p.Export.Name}}</span></h1>
 <dl class="consent-facts">
-  <dt>client</dt><dd>“{{$p.Client.Name}}” <span class="dim">— the name it gave itself; nothing checked it</span></dd>
+  <dt>client</dt><dd>“{{$p.Client.Name}}” <span class="dim">— unverified: the name it gave itself</span></dd>
   <dt>will be sent to</dt><dd class="consent-host">{{$p.Host}}</dd>
   <dt>wants</dt><dd>{{$p.Pipeline}} / {{$p.Export.Name}}</dd>
 </dl>

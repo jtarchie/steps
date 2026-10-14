@@ -207,7 +207,7 @@ func consentShown(t *testing.T, server *Server, client, redirect string) string 
 		t.Fatalf("authorize with a session = %d to %q; want the consent page and no redirect", page.Code, page.Header().Get("Location"))
 	}
 
-	for _, want := range []string{`“Claude” for ops / support`, "agent.example", "nothing checked it", "owner=acme", `value="deny" autofocus`} {
+	for _, want := range []string{`“Claude” for ops / support`, "agent.example", "unverified: the name it gave itself", "owner=acme", `value="deny" autofocus`} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the consent page does not say %q", want)
 		}
